@@ -10,6 +10,8 @@ repo's src so pysim is importable:
 import PyNEC as nec
 
 from pysim.yagi import YagiPySim
+from pysim.triangular import TriangularPySim
+from pysim.triangular_yagi import TriangularYagiPySim
 from pysim import PySim as NewPySim
 
 
@@ -87,7 +89,7 @@ def main():
     print()
 
     print("=== Single dipole (driver only) ===")
-    print("NewPySim (Python integral):")
+    print("NewPySim (pulse-basis, Python integral):")
     for nsegs in [21, 41, 101]:
         for ntrap in [0, 8]:
             z, _ = NewPySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
@@ -96,6 +98,12 @@ def main():
                 f"Z = {z.real:8.3f} + j{z.imag:8.3f}"
             )
         print()
+
+    print("TriangularPySim (tent-basis Galerkin):")
+    for nsegs in [20, 40, 80, 160]:
+        z, _ = TriangularPySim(nsegs=nsegs).compute_impedance()
+        print(f"  nsegs={nsegs:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")
+    print()
 
     print("NEC2 free space (dipole only):")
     for n_seg in [21, 41, 101]:
@@ -107,7 +115,7 @@ def main():
 
     print()
     print("=== Two-element Yagi (driver + reflector) ===")
-    print("YagiPySim (Python integral):")
+    print("YagiPySim (pulse-basis, Python integral):")
     for nsegs in [21, 41, 101]:
         for ntrap in [0, 8]:
             z, _ = YagiPySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
@@ -116,6 +124,12 @@ def main():
                 f"Z = {z.real:8.3f} + j{z.imag:8.3f}"
             )
         print()
+
+    print("TriangularYagiPySim (tent-basis Galerkin):")
+    for nsegs in [20, 40, 80, 160]:
+        z, _ = TriangularYagiPySim(nsegs=nsegs).compute_impedance()
+        print(f"  nsegs={nsegs:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")
+    print()
 
     print("NEC2 free space:")
     for n_seg in [21, 41, 101]:
