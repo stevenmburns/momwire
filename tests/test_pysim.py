@@ -13,6 +13,7 @@ from pysim import PySim
 from pysim.yagi import YagiPySim
 from pysim.triangular import TriangularPySim
 from pysim.triangular_yagi import TriangularYagiPySim
+from pysim.triangular_bent import BentTriangularPySim
 
 from pysim._util import save_or_show
 from pysim._accelerators import dist_outer_product
@@ -270,3 +271,49 @@ def test_triangular_yagi_smoke(nsegs):
     # spacing = halfdriver).
     assert 65.0 < z.real < 85.0
     assert -10.0 < z.imag < 25.0
+
+
+@pytest.mark.parametrize("nsegs", [20, 40, 80])
+def test_bent_triangular_matches_straight(nsegs):
+    # Default geometry is the straight wire from TriangularPySim; the new
+    # class must reproduce it to floating-point precision.
+    z_ref, c_ref = TriangularPySim(nsegs=nsegs).compute_impedance()
+    z_bent, c_bent = BentTriangularPySim(nsegs=nsegs).compute_impedance()
+    assert abs(z_ref - z_bent) < 1e-9
+    np.testing.assert_allclose(c_bent, c_ref, atol=1e-12, rtol=1e-12)
+
+
+@pytest.mark.parametrize("nsegs", [20, 40, 80])
+def test_bent_triangular_collinear_polyline(nsegs):
+    # A "bent" wire whose polyline anchors happen to be collinear should give
+    # nearly the same answer as TriangularPySim (the only difference is that
+    # cross-edge pairs go through quadrature instead of the analytic formula).
+    L = 2 * 0.962 * 22 / 4
+    polyline = np.array([[0.0, 0.0, 0.0], [0.0, L / 2, 0.0], [0.0, L, 0.0]])
+    z_straight, _ = TriangularPySim(nsegs=nsegs).compute_impedance()
+    z_bent, _ = BentTriangularPySim(
+        polyline=polyline, n_per_edge=nsegs // 2, nsegs=nsegs
+    ).compute_impedance()
+    # Loose tolerance: quadrature error at the shared corner is O(1/n_qp_off).
+    assert abs(z_bent - z_straight) < 0.2
+
+
+def test_bent_triangular_v_dipole_smoke():
+    # 30-deg V-dipole: arms bent away from the y-axis in the y-z plane.
+    L = 2 * 0.962 * 22 / 4
+    half = L / 2
+    alpha = np.radians(30)
+    cos_a = np.cos(alpha)
+    sin_a = np.sin(alpha)
+    polyline = np.array([
+        [0.0, -half * cos_a, -half * sin_a],
+        [0.0, 0.0, 0.0],
+        [0.0, +half * cos_a, -half * sin_a],
+    ])
+    z, c = BentTriangularPySim(polyline=polyline, n_per_edge=40, nsegs=80).compute_impedance()
+    assert c.shape == (79,)
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert np.isfinite(c).all()
+    # Bending lowers R and pushes X more negative compared to straight (69.6 - j18.5).
+    assert 30.0 < z.real < 65.0
+    assert z.imag < -25.0
