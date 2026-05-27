@@ -1,9 +1,11 @@
 import numpy as np
+import pytest
 from pysim.bspline import gen_bspline, fit_bspline
 from matplotlib import pyplot as plt
 from icecream import ic
 
 
+@pytest.mark.plot
 def test_bspline():
 
     KK = 4
@@ -25,6 +27,7 @@ def test_bspline():
     plt.show()
 
 
+@pytest.mark.plot
 def test_sparsity():
 
     N = 8
@@ -40,6 +43,7 @@ def test_sparsity():
     plt.show()
 
 
+@pytest.mark.plot
 def test_fit():
     fig, ax = plt.subplots(1)
 

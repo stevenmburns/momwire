@@ -21,6 +21,12 @@ classifiers = [
 Homepage = "https://github.com/stevenmburns/pysim"
 Issues = "https://github.com/stevenmburns/pysim/issues"
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
+    "plot: tests that produce plots for visual inspection (deselect with -m 'not plot')",
+]
+
 [tool.ruff.lint]
 ignore = ["E741"]
 # Keep "imported but unused" as a warning instead of auto-stripping.

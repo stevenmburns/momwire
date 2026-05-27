@@ -30,15 +30,16 @@ fn = None
 
 
 def test_extension():
-    nsegs = 20000
+    nsegs = 20
     pts = np.array([[0, 0, z] for z in range(nsegs + 1)]) / (2 * nsegs)
 
-    t = time.time()
-    for i in range(10):
-        _ = dist_outer_product(pts, pts)
-    ic("dist_outer_product", time.time() - t)
+    result = dist_outer_product(pts, pts)
+    expected = np.linalg.norm(pts[:, None, :] - pts[None, :, :], axis=-1)
+    np.testing.assert_allclose(result, expected)
 
 
+@pytest.mark.slow
+@pytest.mark.plot
 def test_impedance_nsegs():
     xs = [21, 41, 61, 81, 101, 201, 401, 801]
     xs = np.array(xs)
@@ -78,6 +79,7 @@ def test_impedance_nsegs():
     save_or_show(plt, fn)
 
 
+@pytest.mark.plot
 def test_spline_impedance_nsegs():
     xs = [21]  # , 41, 61, 81, 101, 201, 401, 801]
     xs = np.array(xs)
@@ -119,6 +121,8 @@ def test_spline_impedance_nsegs():
     save_or_show(plt, fn)
 
 
+@pytest.mark.slow
+@pytest.mark.plot
 def test_spline_fit():
     nsegs = 1001
     nsample = 100
@@ -153,6 +157,7 @@ def test_spline_fit():
     plt.show()
 
 
+@pytest.mark.plot
 def test_svd_currents_nsmallest():
 
     nsegs = 101
@@ -175,6 +180,7 @@ def test_svd_currents_nsmallest():
     save_or_show(plt, fn)
 
 
+@pytest.mark.plot
 def test_spline_currents():
 
     fig, ax = plt.subplots(2, 2)
@@ -209,6 +215,7 @@ def test_spline_currents():
     save_or_show(plt, fn)
 
 
+@pytest.mark.plot
 def test_new_currents():
 
     fig, ax = plt.subplots(2, 2)
@@ -242,6 +249,8 @@ def test_iterative_improvement():
     PySim(nsegs=401, run_iterative_improvement=True).compute_impedance(ntrap=0)
 
 
+@pytest.mark.slow
+@pytest.mark.plot
 def test_sweep_halfdriver():
 
     nsegs = 401
@@ -292,3 +301,26 @@ def test_param(engine, ntrap):
         z, i = ps.compute_impedance(ntrap=ntrap, engine=engine)
 
     ic(f"engine {engine}", time.time() - t)
+
+
+@pytest.mark.parametrize("nsegs", [21, 41, 101])
+@pytest.mark.parametrize("ntrap", [0, 4, 8])
+def test_python_vs_accelerated(nsegs, ntrap):
+    ps = PySim(nsegs=nsegs)
+    z_py, i_py = ps.compute_impedance(ntrap=ntrap, engine="python")
+    z_acc, i_acc = ps.compute_impedance(ntrap=ntrap, engine="accelerated")
+
+    np.testing.assert_allclose(z_acc, z_py, rtol=1e-10)
+    np.testing.assert_allclose(i_acc, i_py, rtol=1e-10)
+
+
+@pytest.mark.parametrize("nsegs", [21, 41, 101])
+@pytest.mark.parametrize("ntrap", [0, 4, 8])
+def test_new_vs_legacy(nsegs, ntrap):
+    z_legacy, i_legacy = PySim(nsegs=nsegs).compute_impedance(
+        ntrap=ntrap, engine="python"
+    )
+    z_new, i_new = NewPySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
+
+    np.testing.assert_allclose(z_new, z_legacy, rtol=1e-10)
+    np.testing.assert_allclose(i_new, i_legacy, rtol=1e-10)
