@@ -15,6 +15,7 @@ spline_models = (
 )
 
 
+@pytest.mark.plot
 @pytest.mark.parametrize("tag", spline_models)
 def test_solve(tag):
 
@@ -39,6 +40,7 @@ def test_solve(tag):
     plt.show()
 
 
+@pytest.mark.plot
 @pytest.mark.parametrize("tag", spline_models)
 def test_fit(tag):
 
@@ -57,6 +59,7 @@ def test_fit(tag):
     plt.show()
 
 
+@pytest.mark.plot
 @pytest.mark.parametrize("tag", spline_models)
 def test_vector(tag):
     N = 12

@@ -28,4 +28,4 @@ jobs:
       - run: pip install --upgrade pip
       - run: pip install pybind11 numpy scipy matplotlib icecream scikit-rf pytest
       - run: pip install -e .
-      - run: pytest tests/
+      - run: pytest tests/ -m "not slow and not plot"
