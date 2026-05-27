@@ -1,6 +1,26 @@
 import numpy as np
 
 from .abstract import AbstractPySim
+from ._accelerators import psi_fusion_trapezoid
+
+
+def _interleave_nodes_midpoints(l_endpoints, r_endpoints):
+    """Convert (l_endpoints, r_endpoints) into the interleaved
+    nodes-and-midpoints layout that psi_fusion_trapezoid expects.
+
+    For N segments where l_endpoints[k+1] == r_endpoints[k] (i.e., adjacent
+    segments share endpoints -- single contiguous wire), produces a
+    (2N+1, 3) array:
+        index 2k:   l_endpoints[k]                       (node k)
+        index 2k+1: (l_endpoints[k] + r_endpoints[k])/2  (midpoint of seg k)
+        index 2N:   r_endpoints[-1]                      (final node)
+    """
+    N = l_endpoints.shape[0]
+    out = np.empty((2 * N + 1, l_endpoints.shape[1]), dtype=l_endpoints.dtype)
+    out[0:2 * N:2] = l_endpoints
+    out[2 * N] = r_endpoints[-1]
+    out[1:2 * N + 1:2] = (l_endpoints + r_endpoints) / 2
+    return out
 
 
 def Integral_Standalone(l_endpoints, r_endpoints, *, ntrap, wire_radius, k):
@@ -88,7 +108,22 @@ class PySim(AbstractPySim):
                 k=self.k,
             )
 
-        Integral = Integral_Python
+        def Integral_Accelerated(l_endpoints, r_endpoints, ntrap):
+            interleaved = _interleave_nodes_midpoints(l_endpoints, r_endpoints)
+            return psi_fusion_trapezoid(
+                interleaved,
+                interleaved,
+                wire_radius=self.wire_radius,
+                k=self.k,
+                ntrap=ntrap,
+            )
+
+        if engine == "python":
+            Integral = Integral_Python
+        elif engine == "accelerated":
+            Integral = Integral_Accelerated
+        else:
+            raise ValueError(f"Unknown engine: {engine!r}")
 
         n_endpoints = exnm[1:-1:2, :]
         l_endpoints = n_endpoints[:-1, :]
