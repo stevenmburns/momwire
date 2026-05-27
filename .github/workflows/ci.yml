@@ -26,6 +26,6 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install --upgrade pip
-      - run: pip install pybind11 numpy scipy matplotlib icecream scikit-rf pytest
+      - run: pip install pybind11 numpy scipy matplotlib scikit-rf pytest
       - run: pip install -e .
       - run: pytest tests/ -m "not slow and not plot"

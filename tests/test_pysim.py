@@ -14,16 +14,12 @@ from pysim import PySim as NewPySim
 from pysim.yagi import YagiPySim
 from pysim.triangular import TriangularPySim
 
-
-from pysim.augmented_spline import AugmentedSplinePySim
-
 from pysim._util import save_or_show
 from pysim._accelerators import dist_outer_product
 
 from matplotlib import pyplot as plt
 import numpy as np
 import scipy
-from icecream import ic
 
 import skrf
 
@@ -62,7 +58,7 @@ def test_impedance_nsegs():
         zs = []
         for nsegs in xs:
             z, _ = PySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
-            ic(nsegs, z)
+            print(f"nsegs={nsegs}, z={z}")
             zs.append(z)
 
         zs = np.array(zs)
@@ -78,48 +74,6 @@ def test_impedance_nsegs():
             linestyle="None",
         )
 
-    save_or_show(plt, fn)
-
-
-@pytest.mark.plot
-def test_spline_impedance_nsegs():
-    xs = [21]  # , 41, 61, 81, 101, 201, 401, 801]
-    xs = np.array(xs)
-    z0 = 50
-
-    fig, ax0 = plt.subplots()
-    skrf.plotting.smith(draw_labels=True, chart_type="z")
-
-    # plt.plot(xs, np.abs(zs), marker='s')
-    # plt.plot(xs, np.imag(zs), marker='s')
-
-    for ntrap, color in [
-        (2, "tab:blue"),
-        (4, "tab:green"),
-        #            (8,'tab:red'),
-        #            (16,'tab:purple'),
-    ]:
-        zs = []
-        for nsegs in xs:
-            z, _ = AugmentedSplinePySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
-            ic(nsegs, z)
-            zs.append(z)
-
-        zs = np.array(zs)
-
-        normalized_zs = zs / z0
-        reflection_coefficients = (normalized_zs - 1) / (normalized_zs + 1)
-        skrf.plotting.plot_smith(
-            reflection_coefficients,
-            color=color,
-            label=f"nsegs: {nsegs} ntrap: {ntrap}",
-            draw_labels=True,
-            chart_type="z",
-            marker="s",
-            linestyle="None",
-        )
-
-    plt.legend()
     save_or_show(plt, fn)
 
 
@@ -176,44 +130,9 @@ def test_svd_currents_nsmallest():
         _, (_, i_svd) = PySim(
             nsegs=nsegs, nsmallest=nsmallest, run_svd=True
         ).compute_impedance(ntrap=0)
-        ic(nsmallest, np.linalg.norm(i_svd - i_svd_all))
+        print(f"nsmallest={nsmallest}, |i_svd - i_svd_all|={np.linalg.norm(i_svd - i_svd_all)}")
         plt.plot(np.abs(i_svd), color=color)
 
-    save_or_show(plt, fn)
-
-
-@pytest.mark.plot
-def test_spline_currents():
-
-    fig, ax = plt.subplots(2, 2)
-
-    nsegs = 401
-
-    for N, color in [
-        (4, "tab:green"),
-        (6, "tab:purple"),
-        #            (40,'tab:blue'),
-        #            (80,'tab:orange'),
-    ]:
-        _, (i, orig_i, matched_i) = AugmentedSplinePySim(nsegs=nsegs).compute_impedance(
-            ntrap=2, N=N
-        )
-
-        ax[0][0].plot(np.abs(i), color=color, label=f"{N}")
-        ax[0][1].plot(np.angle(i) * 180 / np.pi, color=color, label=f"{N}")
-
-        ax[1][0].plot(np.abs(orig_i), color=color, label=f"{N} orig")
-        ax[1][1].plot(np.angle(orig_i) * 180 / np.pi, color=color, label=f"{N} orig")
-
-        ax[1][0].plot(np.abs(matched_i), color=color, label=f"{N} matched")
-        ax[1][1].plot(
-            np.angle(matched_i) * 180 / np.pi, color=color, label=f"{N} matched"
-        )
-
-    ax[0][0].legend()
-    ax[0][1].legend()
-    ax[1][0].legend()
-    ax[1][1].legend()
     save_or_show(plt, fn)
 
 
@@ -302,7 +221,7 @@ def test_param(engine, ntrap):
     for i in range(nrepeat):
         z, i = ps.compute_impedance(ntrap=ntrap, engine=engine)
 
-    ic(f"engine {engine}", time.time() - t)
+    print(f"engine {engine}: {time.time() - t:.4f}s")
 
 
 @pytest.mark.parametrize("nsegs", [21, 41, 101])
