@@ -1,10 +1,10 @@
-from pysim import _legacy as pysim
+from pysim import PySim
 import cProfile
 import pstats
 
 with cProfile.Profile() as pr:
     for i in range(1):
-        pysim.PySim(nsegs=4001).augmented_compute_impedance(ntrap=16)
+        PySim(nsegs=4001).compute_impedance(ntrap=16, engine="accelerated")
 
     ps = pstats.Stats(pr).sort_stats(pstats.SortKey.TIME)
     ps.dump_stats("foo")

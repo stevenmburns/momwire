@@ -9,8 +9,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "8"
 
 import time
 
-from pysim._legacy import PySim
-from pysim import PySim as NewPySim
+from pysim import PySim
 from pysim.yagi import YagiPySim
 from pysim.triangular import TriangularPySim
 
@@ -149,7 +148,7 @@ def test_new_currents():
     ]:
         xs = np.linspace(0, 1, nsegs)
 
-        _, i = NewPySim(nsegs=nsegs).compute_impedance(ntrap=2)
+        _, i = PySim(nsegs=nsegs).compute_impedance(ntrap=2)
 
         ax[0][0].plot(xs, np.abs(i), color=color, label=f"{nsegs}")
         ax[0][1].plot(xs, np.angle(i) * 180 / np.pi, color=color, label=f"{nsegs}")
@@ -212,7 +211,7 @@ ntrap = 8
 
 @pytest.mark.parametrize(
     "engine,ntrap",
-    [("python", 0), ("python", ntrap), ("accelerated", ntrap), ("test", ntrap)],
+    [("python", 0), ("python", ntrap), ("accelerated", ntrap)],
 )
 def test_param(engine, ntrap):
     ps = PySim(nsegs=nsegs)
@@ -233,18 +232,6 @@ def test_python_vs_accelerated(nsegs, ntrap):
 
     np.testing.assert_allclose(z_acc, z_py, rtol=1e-10)
     np.testing.assert_allclose(i_acc, i_py, rtol=1e-10)
-
-
-@pytest.mark.parametrize("nsegs", [21, 41, 101])
-@pytest.mark.parametrize("ntrap", [0, 4, 8])
-def test_new_vs_legacy(nsegs, ntrap):
-    z_legacy, i_legacy = PySim(nsegs=nsegs).compute_impedance(
-        ntrap=ntrap, engine="python"
-    )
-    z_new, i_new = NewPySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
-
-    np.testing.assert_allclose(z_new, z_legacy, rtol=1e-10)
-    np.testing.assert_allclose(i_new, i_legacy, rtol=1e-10)
 
 
 @pytest.mark.parametrize("nsegs", [21, 41, 101])

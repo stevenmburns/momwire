@@ -1,11 +1,11 @@
-from pysim import _legacy as pysim
+from pysim import PySim
 
 import pprofile
 
 profiler = pprofile.Profile()
 with profiler:
     for i in range(1):
-        pysim.PySim(nsegs=401).augmented_compute_impedance(ntrap=16)
+        PySim(nsegs=401).compute_impedance(ntrap=16, engine="accelerated")
 
 # You can also write the result to the console:
 profiler.print_stats()
