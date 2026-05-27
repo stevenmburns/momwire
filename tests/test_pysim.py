@@ -11,6 +11,7 @@ import time
 
 from pysim._legacy import PySim
 from pysim import PySim as NewPySim
+from pysim.yagi import YagiPySim
 
 
 from pysim.augmented_spline import AugmentedSplinePySim
@@ -324,3 +325,12 @@ def test_new_vs_legacy(nsegs, ntrap):
 
     np.testing.assert_allclose(z_new, z_legacy, rtol=1e-10)
     np.testing.assert_allclose(i_new, i_legacy, rtol=1e-10)
+
+
+@pytest.mark.parametrize("nsegs", [21, 41, 101])
+@pytest.mark.parametrize("ntrap", [0, 4, 8])
+def test_yagi_smoke(nsegs, ntrap):
+    z, i = YagiPySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
+    assert i.shape == (2 * nsegs,)
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert np.isfinite(i).all()
