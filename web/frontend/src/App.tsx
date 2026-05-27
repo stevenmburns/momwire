@@ -305,24 +305,34 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
       if (!result) return;
 
       // Project knots from (x, z) onto the canvas. Scale is anchored to the
-      // physical arm length so the perceived arm length doesn't change as the
-      // user sweeps the droop angle. Apex stays at a fixed screen position
-      // and the arms swing around it.
+      // design wavelength: one wavelength at f_design maps to a constant
+      // fraction of the canvas. So halfdriver_factor visibly stretches the
+      // antenna (it's a multiplier on physical length), droop changes only
+      // shape, and design-freq changes leave the view in wavelengths --
+      // the antenna's "electrical size" is what's drawn.
       const knots = result.knot_positions;
       const apex = knots[result.feed_knot_index];
-      const armLen = Math.hypot(
-        knots[0][0] - apex[0],
-        knots[0][1] - apex[1],
-        knots[0][2] - apex[2],
-      ) || 1e-9;
+      const C_LIGHT = 299_792_458.0;
+      const lambdaDesign = C_LIGHT / (result.design_freq_mhz * 1e6);
       const pad = 50;
-      // Sized so that a flat dipole (2*armLen wide) fits horizontally and a
-      // fully-drooped V (armLen tall) fits vertically.
-      const scale = Math.min((w - 2 * pad) / 2, h - 2 * pad) / armLen;
+      // Worst-case horizontal extent is hf_max * lambda/2 = 0.6 * lambda (flat).
+      // Worst-case vertical extent is hf_max * lambda/4 ≈ 0.3 * lambda (closed V).
+      // FILL says how much of the usable canvas to fill at those worst cases.
+      const FILL = 0.85;
+      const barReserveBottom = 40;
+      const scale = FILL * Math.min(
+        (w - 2 * pad) / (0.6 * lambdaDesign),
+        (h - pad - barReserveBottom) / (0.3 * lambdaDesign),
+      );
+
+      // Center the antenna vertically: place apex above center by half the
+      // current V's vertical extent so the V's midpoint sits at canvas-center.
+      const zs = result.knot_positions.map((p) => p[2]);
+      const vertExtentPx = (Math.max(...zs) - Math.min(...zs)) * scale;
+      const apexY = Math.max(pad + 20, h / 2 - vertExtentPx / 2);
 
       const project = (p: [number, number, number]) => {
         const cx = w / 2;
-        const apexY = pad + 30;
         return {
           x: cx + (p[0] - apex[0]) * scale,
           y: apexY + (apex[2] - p[2]) * scale, // larger droop hangs further down
@@ -370,6 +380,24 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
       const feedIdx = result.feed_knot_index;
       drawArmEnvelope(ctx!, knots, mags, magMax, project, 0, feedIdx, envScale);
       drawArmEnvelope(ctx!, knots, mags, magMax, project, feedIdx, knots.length - 1, envScale);
+
+      // Scale bar: a λ/4 reference (= arm length at perfect resonance).
+      const barLenPx = (lambdaDesign / 4) * scale;
+      const barX0 = pad;
+      const barY = h - 24;
+      ctx!.strokeStyle = "#7b8493";
+      ctx!.lineWidth = 1;
+      ctx!.beginPath();
+      ctx!.moveTo(barX0, barY);
+      ctx!.lineTo(barX0 + barLenPx, barY);
+      ctx!.moveTo(barX0, barY - 4);
+      ctx!.lineTo(barX0, barY + 4);
+      ctx!.moveTo(barX0 + barLenPx, barY - 4);
+      ctx!.lineTo(barX0 + barLenPx, barY + 4);
+      ctx!.stroke();
+      ctx!.fillStyle = "#9aa3b2";
+      ctx!.font = "11px ui-monospace, monospace";
+      ctx!.fillText(`λ/4 = ${(lambdaDesign / 4).toFixed(2)} m`, barX0, barY - 8);
     }
 
     onResize();
