@@ -250,6 +250,10 @@ export function App() {
             <span className="val">{result ? `${result.solve_ms.toFixed(1)} ms` : "—"}</span>
           </div>
           <div className="row">
+            <span>SWR (50 Ω)</span>
+            <span className="val">{result ? formatSwr(result.z_in_re, result.z_in_im, 50) : "—"}</span>
+          </div>
+          <div className="row">
             <span>rtt</span>
             <span className="val">{rttMs != null ? `${rttMs.toFixed(1)} ms` : "—"}</span>
           </div>
@@ -258,6 +262,9 @@ export function App() {
 
       <main className="stage">
         <CurrentCanvas result={result} />
+        <div className="smith-panel">
+          <SmithChart r={result?.z_in_re ?? 0} x={result?.z_in_im ?? 0} z0={50} size={260} />
+        </div>
         <div className="status">ws: {status}</div>
       </main>
     </div>
@@ -268,6 +275,154 @@ function feedMag(r: SolveResponse): number {
   const re = r.knot_currents_re[r.feed_knot_index];
   const im = r.knot_currents_im[r.feed_knot_index];
   return Math.hypot(re, im);
+}
+
+function reflectionCoefficient(r: number, x: number, z0: number) {
+  // Γ = (Z - Z0) / (Z + Z0), with Z = r + jx (Z0 real).
+  const denom = (r + z0) * (r + z0) + x * x;
+  const gRe = (r * r - z0 * z0 + x * x) / denom;
+  const gIm = (2 * x * z0) / denom;
+  return { gRe, gIm, gMag: Math.hypot(gRe, gIm) };
+}
+
+function formatSwr(r: number, x: number, z0: number): string {
+  const { gMag } = reflectionCoefficient(r, x, z0);
+  if (gMag >= 0.9999) return "∞";
+  const swr = (1 + gMag) / (1 - gMag);
+  if (swr > 99) return swr.toFixed(0);
+  return swr.toFixed(2);
+}
+
+function SmithChart({ r, x, z0, size }: { r: number; x: number; z0: number; size: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(size * dpr);
+    canvas.height = Math.floor(size * dpr);
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    const cx = size / 2;
+    const cy = size / 2;
+    const R = size / 2 - 10;
+
+    ctx.fillStyle = "#0d1015";
+    ctx.fillRect(0, 0, size, size);
+
+    // Constant-r circles in the Γ plane.
+    // Each maps to a circle: center = (r/(r+1), 0), radius = 1/(r+1).
+    const rCircles: { r: number; label?: string }[] = [
+      { r: 0.2 },
+      { r: 0.5, label: "0.5" },
+      { r: 1, label: "1" },
+      { r: 2, label: "2" },
+      { r: 5 },
+    ];
+    ctx.strokeStyle = "#2a313d";
+    ctx.lineWidth = 0.6;
+    for (const { r: rn } of rCircles) {
+      const cxN = rn / (rn + 1);
+      const radN = 1 / (rn + 1);
+      ctx.beginPath();
+      ctx.arc(cx + cxN * R, cy, radN * R, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+
+    // Constant-x arcs: center = (1, 1/x), radius = 1/|x|. Clip to unit disk.
+    const xArcs = [0.2, 0.5, 1, 2, 5];
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+    ctx.clip();
+    for (const xn of xArcs) {
+      const arcCx = cx + R;
+      const rad = (1 / xn) * R;
+      // Inductive (X > 0)
+      ctx.beginPath();
+      ctx.arc(arcCx, cy - (1 / xn) * R, rad, 0, 2 * Math.PI);
+      ctx.stroke();
+      // Capacitive (X < 0)
+      ctx.beginPath();
+      ctx.arc(arcCx, cy + (1 / xn) * R, rad, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // Real axis
+    ctx.strokeStyle = "#3a4150";
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(cx - R, cy);
+    ctx.lineTo(cx + R, cy);
+    ctx.stroke();
+
+    // Outer boundary (|Γ| = 1)
+    ctx.strokeStyle = "#3a4150";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    // Z0 label at center
+    ctx.fillStyle = "#4a5160";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText(`Z₀ = ${z0}`, 6, 14);
+
+    // Reactance sign labels.
+    ctx.fillStyle = "#4a5160";
+    ctx.fillText("+jX", cx + R - 24, cy - R + 14);
+    ctx.fillText("−jX", cx + R - 24, cy + R - 4);
+
+    // Current impedance marker.
+    if (r > 0 || x !== 0) {
+      const { gRe, gIm } = reflectionCoefficient(r, x, z0);
+      // gIm > 0 means inductive (top half); canvas y flips.
+      const px = cx + gRe * R;
+      const py = cy - gIm * R;
+
+      // Line from center
+      ctx.strokeStyle = "rgba(255, 209, 102, 0.45)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(px, py);
+      ctx.stroke();
+
+      // Glow
+      const grad = ctx.createRadialGradient(px, py, 0, px, py, 14);
+      grad.addColorStop(0, "rgba(255, 209, 102, 0.55)");
+      grad.addColorStop(1, "rgba(255, 209, 102, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(px, py, 14, 0, 2 * Math.PI);
+      ctx.fill();
+
+      // Dot
+      ctx.fillStyle = "#ffd166";
+      ctx.beginPath();
+      ctx.arc(px, py, 4, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    // Center match marker
+    ctx.strokeStyle = "#5a6170";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx - 4, cy);
+    ctx.lineTo(cx + 4, cy);
+    ctx.moveTo(cx, cy - 4);
+    ctx.lineTo(cx, cy + 4);
+    ctx.stroke();
+  }, [r, x, z0, size]);
+
+  return <canvas ref={canvasRef} className="smith" />;
 }
 
 function CurrentCanvas({ result }: { result: SolveResponse | null }) {
