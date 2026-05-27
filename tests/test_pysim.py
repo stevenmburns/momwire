@@ -12,6 +12,7 @@ import time
 from pysim._legacy import PySim
 from pysim import PySim as NewPySim
 from pysim.yagi import YagiPySim
+from pysim.triangular import TriangularPySim
 
 
 from pysim.augmented_spline import AugmentedSplinePySim
@@ -334,3 +335,16 @@ def test_yagi_smoke(nsegs, ntrap):
     assert i.shape == (2 * nsegs,)
     assert np.isfinite(z.real) and np.isfinite(z.imag)
     assert np.isfinite(i).all()
+
+
+@pytest.mark.parametrize("nsegs", [20, 40, 80])
+def test_triangular_smoke(nsegs):
+    z, c = TriangularPySim(nsegs=nsegs).compute_impedance()
+    assert c.shape == (nsegs - 1,)
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert np.isfinite(c).all()
+    # NEC reference for the default dipole geometry: 69.64 - j18.21.
+    # Triangular basis converges quickly; even N=20 is within ~2 Ohm on the
+    # real part and ~2 Ohm on the imag.
+    assert abs(z.real - 69.64) < 3.0
+    assert abs(z.imag - (-18.21)) < 6.0
