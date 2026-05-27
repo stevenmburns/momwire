@@ -12,6 +12,7 @@ import time
 from pysim import PySim
 from pysim.yagi import YagiPySim
 from pysim.triangular import TriangularPySim
+from pysim.triangular_yagi import TriangularYagiPySim
 
 from pysim._util import save_or_show
 from pysim._accelerators import dist_outer_product
@@ -254,3 +255,18 @@ def test_triangular_smoke(nsegs):
     # real part and ~2 Ohm on the imag.
     assert abs(z.real - 69.64) < 3.0
     assert abs(z.imag - (-18.21)) < 6.0
+
+
+@pytest.mark.parametrize("nsegs", [20, 40, 80])
+def test_triangular_yagi_smoke(nsegs):
+    z, c = TriangularYagiPySim(nsegs=nsegs).compute_impedance()
+    # Two wires, N-1 interior tents each.
+    assert c.shape == (2 * (nsegs - 1),)
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert np.isfinite(c).all()
+    # Mutual coupling from the reflector pushes the driver impedance well away
+    # from the bare-dipole 69.6 - j18.2: empirically the triangular Yagi
+    # converges to roughly 77 + j6 for the default geometry (refl 1.05x,
+    # spacing = halfdriver).
+    assert 65.0 < z.real < 85.0
+    assert -10.0 < z.imag < 25.0
