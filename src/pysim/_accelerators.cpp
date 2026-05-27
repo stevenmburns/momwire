@@ -154,7 +154,7 @@ py::array_t<double> dist_outer_product(py::array_t<double> input0,
     return result;
 }
 
-PYBIND11_MODULE(pysim_accelerators, m) {
+PYBIND11_MODULE(_accelerators, m) {
     m.def("dist_outer_product", &dist_outer_product, "Compute point to point euclidean distance");
     m.def("psi_fusion_trapezoid", &psi_fusion_trapezoid, "Compute Psi (Integral) from point vectors using trapezoidal method", py::arg("input0"), py::arg("input1"), py::kw_only(), py::arg("wire_radius"), py::arg("k"), py::arg("ntrap"));
 }

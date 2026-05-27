@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "pybind11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pysim"
+version = "0.0.1"
+authors = [
+  { name="Steven M. Burns", email="smburns47@gmail.com" },
+]
+description = "A pure-Python method-of-moments antenna simulator with optional C++ accelerators"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/stevenmburns/pysim"
+Issues = "https://github.com/stevenmburns/pysim/issues"
+
+[tool.ruff.lint]
+ignore = ["E741"]

@@ -1,6 +1,7 @@
-from antenna_designer import pysim
+from pysim import _legacy as pysim
 
 import pprofile
+
 profiler = pprofile.Profile()
 with profiler:
     for i in range(1):

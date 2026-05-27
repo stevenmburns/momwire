@@ -3,25 +3,28 @@ import scipy
 import scipy.linalg
 from icecream import ic
 
-from .abstract_pysim import AbstractPySim
+from .abstract import AbstractPySim
 
-from .spline import NaturalSpline # , PiecewiseLinear
-from .pysim_accelerators import psi_fusion_trapezoid
+from .spline import NaturalSpline  # , PiecewiseLinear
+from ._accelerators import psi_fusion_trapezoid
 
-from .pysim import Integral_Standalone
+from ._legacy import Integral_Standalone
+
 
 class AugmentedSplinePySim(AbstractPySim):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+    def compute_impedance(self, *, ntrap=0, engine="accelerated", N=4):
 
-    def compute_impedance(self, *, ntrap=0, engine='accelerated', N=4):
+        y0, y1 = np.float64(0), np.float64(2 * self.halfdriver)
 
-        y0, y1 = np.float64(0), np.float64(2*self.halfdriver)
+        p0, p1 = (
+            np.array((0, y0, 0), dtype=np.float64),
+            np.array((0, y1, 0), dtype=np.float64),
+        )
 
-        p0, p1 = np.array((0, y0, 0),dtype=np.float64), np.array((0, y1, 0),dtype=np.float64)
-
-        delta_p = (p1-p0)/(2*self.nsegs)
+        delta_p = (p1 - p0) / (2 * self.nsegs)
         """
         exnm - extended nodes and midpoints, there is a point on either end so we can use it to compute delta_l on the boundaries
         for a wire with nseg=3 segments extending 0 to 3 there are three wires:
@@ -42,44 +45,53 @@ class AugmentedSplinePySim(AbstractPySim):
         The points themselves are at indices: [2, 4, 6],
         minus at [1, 3, 5] and plus at [3, 5, 7]
         """
-        exnm = np.linspace(p0-delta_p, p1+delta_p, 2*self.nsegs+3)
+        exnm = np.linspace(p0 - delta_p, p1 + delta_p, 2 * self.nsegs + 3)
 
-        a_pts     = exnm[1:-1,:]
-        assert a_pts.shape == (2*self.nsegs+1,3)
+        a_pts = exnm[1:-1, :]
+        assert a_pts.shape == (2 * self.nsegs + 1, 3)
 
-        vec_delta_l = exnm[1:-3:2,:] - exnm[3:-1:2,:]
-        assert vec_delta_l.shape == (self.nsegs,3)
-
+        vec_delta_l = exnm[1:-3:2, :] - exnm[3:-1:2, :]
+        assert vec_delta_l.shape == (self.nsegs, 3)
 
         def Integral_Test(n, m, ntrap):
             res_python = Integral_Python(n, m, ntrap=ntrap)
             res_accelerated = Integral_Accelerated(n, m, ntrap=ntrap)
-            assert (abs(res_python-res_accelerated) < 0.001).all()
+            assert (abs(res_python - res_accelerated) < 0.001).all()
             return res_accelerated
 
         def Integral_Python(n, m, ntrap):
-            return Integral_Standalone(n, m, ntrap=ntrap, wire_radius=self.wire_radius, k=self.k)
+            return Integral_Standalone(
+                n, m, ntrap=ntrap, wire_radius=self.wire_radius, k=self.k
+            )
 
         def Integral_Accelerated(n, m, ntrap):
-            return psi_fusion_trapezoid(n, m, wire_radius=self.wire_radius, k=self.k, ntrap=ntrap)
+            return psi_fusion_trapezoid(
+                n, m, wire_radius=self.wire_radius, k=self.k, ntrap=ntrap
+            )
 
-        if engine == 'accelerated':
+        if engine == "accelerated":
             Integral = Integral_Accelerated
-        elif engine == 'python':
+        elif engine == "python":
             Integral = Integral_Python
-        elif engine == 'test':
+        elif engine == "test":
             Integral = Integral_Test
         else:
-            assert False # pragma: no cover
+            assert False  # pragma: no cover
 
-        z = self.jomega * self.mu * (vec_delta_l[np.newaxis, :, :] * vec_delta_l[:, np.newaxis, :]).sum(axis=2)
+        z = (
+            self.jomega
+            * self.mu
+            * (vec_delta_l[np.newaxis, :, :] * vec_delta_l[:, np.newaxis, :]).sum(
+                axis=2
+            )
+        )
 
         z *= Integral(a_pts, a_pts, ntrap=ntrap)
 
-        s = 1/(self.jomega*self.eps) * Integral(exnm, exnm, ntrap=ntrap)
+        s = 1 / (self.jomega * self.eps) * Integral(exnm, exnm, ntrap=ntrap)
 
-        z += s[:-1,:-1] + s[1:, 1:] - s[:-1, 1:] - s[1:, :-1]
-        
+        z += s[:-1, :-1] + s[1:, 1:] - s[:-1, 1:] - s[1:, :-1]
+
         self.z = z
 
         factors = scipy.linalg.lu_factor(self.z)
@@ -90,7 +102,7 @@ class AugmentedSplinePySim(AbstractPySim):
         orig_i = scipy.linalg.lu_solve(factors, v)
 
         spl = NaturalSpline(N=N)
-        #spl = PiecewiseLinear(N=N)
+        # spl = PiecewiseLinear(N=N)
         spl.gen_constraint(midderivs_free=True)
         spl.gen_Vandermonde(nsegs=self.nsegs, midpoints=True)
 
@@ -115,11 +127,16 @@ class AugmentedSplinePySim(AbstractPySim):
         ic(i.shape)
         compressed_v = self.z @ i
 
-        ic(np.linalg.norm(matched_i- orig_i), np.linalg.norm(i- orig_i), np.linalg.norm(matched_v - v), np.linalg.norm(compressed_v - v))
+        ic(
+            np.linalg.norm(matched_i - orig_i),
+            np.linalg.norm(i - orig_i),
+            np.linalg.norm(matched_v - v),
+            np.linalg.norm(compressed_v - v),
+        )
 
         i_driver = i[self.driver_seg_idx]
 
-        driver_impedance = v[self.driver_seg_idx]/i_driver
-        ic(np.abs(driver_impedance), np.angle(driver_impedance)*180/np.pi)
+        driver_impedance = v[self.driver_seg_idx] / i_driver
+        ic(np.abs(driver_impedance), np.angle(driver_impedance) * 180 / np.pi)
 
         return driver_impedance, (i, orig_i, matched_i)

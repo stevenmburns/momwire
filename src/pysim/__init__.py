@@ -1,20 +1,20 @@
 import numpy as np
 
-from .abstract_pysim import AbstractPySim
+from .abstract import AbstractPySim
 
 
 def Integral_Standalone(l_endpoints, r_endpoints, *, ntrap, wire_radius, k):
     m_centers = (l_endpoints + r_endpoints) / 2
 
     vec_delta = r_endpoints - l_endpoints
-    delta = np.sqrt((vec_delta*vec_delta).sum(axis=1))
+    delta = np.sqrt((vec_delta * vec_delta).sum(axis=1))
     assert m_centers.shape[0] == delta.shape[0]
 
     def Aux(theta):
-        local_n = l_endpoints*(1-theta) + theta*r_endpoints
+        local_n = l_endpoints * (1 - theta) + theta * r_endpoints
 
         diffs = local_n[np.newaxis, :, :] - m_centers[:, np.newaxis, :]
-        R = np.sqrt((diffs*diffs).sum(axis=2))
+        R = np.sqrt((diffs * diffs).sum(axis=2))
 
         # not always diagonal indices
         diag_indices = np.where(R < 0.00001)
@@ -23,34 +23,40 @@ def Integral_Standalone(l_endpoints, r_endpoints, *, ntrap, wire_radius, k):
         RR = R
         RR[diag_indices] = 1
 
-        local_res = np.exp(-(0+1j)*k*R)/(4*np.pi*RR)
-        diag = 1/(2*np.pi*new_delta) * np.log(new_delta/wire_radius) - (0+1j)*k/(4*np.pi) 
+        local_res = np.exp(-(0 + 1j) * k * R) / (4 * np.pi * RR)
+        diag = 1 / (2 * np.pi * new_delta) * np.log(new_delta / wire_radius) - (
+            0 + 1j
+        ) * k / (4 * np.pi)
         local_res[diag_indices] = diag
 
         return local_res
 
-    res = np.zeros(shape=(m_centers.shape[0], m_centers.shape[0]),dtype=np.complex128)
+    res = np.zeros(shape=(m_centers.shape[0], m_centers.shape[0]), dtype=np.complex128)
     if ntrap == 0:
         res += Aux(0.5)
     else:
-        for i in range(0, ntrap+1):
-            theta = i/ntrap
-            coeff = (2 if i > 0 and i < ntrap else 1)/(2*ntrap)
+        for i in range(0, ntrap + 1):
+            theta = i / ntrap
+            coeff = (2 if i > 0 and i < ntrap else 1) / (2 * ntrap)
             res += coeff * Aux(theta)
 
     return res
+
 
 class PySim(AbstractPySim):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-    def compute_impedance(self, *, ntrap=0, engine='python'):
+    def compute_impedance(self, *, ntrap=0, engine="python"):
 
-        y0, y1 = np.float64(0), np.float64(2*self.halfdriver)
+        y0, y1 = np.float64(0), np.float64(2 * self.halfdriver)
 
-        p0, p1 = np.array((0, y0, 0),dtype=np.float64), np.array((0, y1, 0),dtype=np.float64)
+        p0, p1 = (
+            np.array((0, y0, 0), dtype=np.float64),
+            np.array((0, y1, 0), dtype=np.float64),
+        )
 
-        delta_p = (p1-p0)/(2*self.nsegs)
+        delta_p = (p1 - p0) / (2 * self.nsegs)
         """
         exnm - extended nodes and midpoints, there is a point on either end so we can use it to compute delta_l on the boundaries
         for a wire with nseg=3 segments extending 0 to 3 there are three wires:
@@ -71,30 +77,46 @@ class PySim(AbstractPySim):
         The points themselves are at indices: [2, 4, 6],a
         minus at [1, 3, 5] and plus at [3, 5, 7]
         """
-        exnm = np.linspace(p0-delta_p, p1+delta_p, 2*self.nsegs+3)
+        exnm = np.linspace(p0 - delta_p, p1 + delta_p, 2 * self.nsegs + 3)
 
         def Integral_Python(l_endpoints, r_endpoints, ntrap):
-            return Integral_Standalone(l_endpoints, r_endpoints, ntrap=ntrap, wire_radius=self.wire_radius, k=self.k)
+            return Integral_Standalone(
+                l_endpoints,
+                r_endpoints,
+                ntrap=ntrap,
+                wire_radius=self.wire_radius,
+                k=self.k,
+            )
 
         Integral = Integral_Python
 
-        n_endpoints = exnm[1:-1:2,:]
-        l_endpoints = n_endpoints[:-1,:]
-        r_endpoints = n_endpoints[1:,:]
+        n_endpoints = exnm[1:-1:2, :]
+        l_endpoints = n_endpoints[:-1, :]
+        r_endpoints = n_endpoints[1:, :]
         vec_delta_l = l_endpoints - r_endpoints
 
-        z = self.jomega * self.mu * (vec_delta_l[np.newaxis, :, :] * vec_delta_l[:, np.newaxis, :]).sum(axis=2)
+        z = (
+            self.jomega
+            * self.mu
+            * (vec_delta_l[np.newaxis, :, :] * vec_delta_l[:, np.newaxis, :]).sum(
+                axis=2
+            )
+        )
 
         z *= Integral(l_endpoints, r_endpoints, ntrap=ntrap)
 
-        n_endpoints = exnm[::2,:]
-        l_endpoints = n_endpoints[:-1,:]
-        r_endpoints = n_endpoints[1:,:]
+        n_endpoints = exnm[::2, :]
+        l_endpoints = n_endpoints[:-1, :]
+        r_endpoints = n_endpoints[1:, :]
 
-        s = 1/(self.jomega*self.eps) * Integral(l_endpoints, r_endpoints, ntrap=ntrap)
+        s = (
+            1
+            / (self.jomega * self.eps)
+            * Integral(l_endpoints, r_endpoints, ntrap=ntrap)
+        )
 
-        z += s[:-1,:-1] + s[1:, 1:] - s[:-1, 1:] - s[1:, :-1]
-        
+        z += s[:-1, :-1] + s[1:, 1:] - s[:-1, 1:] - s[1:, :-1]
+
         self.z = z
 
         return self.factor_and_solve()
