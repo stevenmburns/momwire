@@ -10,6 +10,7 @@
 html, body, #root {
   margin: 0;
   height: 100%;
+  overflow: hidden;
   background: var(--bg);
   color: var(--fg);
   font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -18,7 +19,9 @@ html, body, #root {
 .app {
   display: grid;
   grid-template-columns: 320px 1fr;
-  height: 100vh;
+  grid-template-rows: 100%;
+  height: 100%;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -29,6 +32,8 @@ html, body, #root {
   flex-direction: column;
   gap: 14px;
   overflow-y: auto;
+  min-height: 0;
+  min-width: 0;
 }
 
 .sidebar h1 {
@@ -225,6 +230,8 @@ input[type=range]:disabled {
   display: flex;
   flex-direction: row;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 canvas {

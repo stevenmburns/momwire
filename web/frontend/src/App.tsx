@@ -78,22 +78,29 @@ function useSlideSize(maxSize = 720) {
   return { ref, size };
 }
 
-function useThumbColumnSize(maxThumb = 280) {
-  // Vertical thumbstrip on the side: each of 3 thumbs takes ~1/3 of the
-  // available stage height. Fixed overhead per fit:
+function useThumbColumnSize(
+  stripRef: React.RefObject<HTMLDivElement>,
+  maxThumb = 280,
+) {
+  // Vertical thumbstrip: each of 3 thumbs takes ~1/3 of the strip's actual
+  // rendered height. Fixed overhead per fit:
   //   strip padding (10+10) + gaps between thumbs (2*8) +
-  //   per-thumb (button padding 10 + label ~14 + gap 4 + border 2) * 3 ≈ 130
+  //   per-thumb (button padding 10 + label ~14 + gap 4 + border 2) * 3 ≈ 126
   const [size, setSize] = useState(180);
   useEffect(() => {
+    const el = stripRef.current;
+    if (!el) return;
     const update = () => {
-      const total = window.innerHeight;
-      const perThumb = (total - 130) / 3;
+      const h = el.clientHeight;
+      if (h <= 0) return;
+      const perThumb = (h - 130) / 3;
       setSize(Math.max(100, Math.min(maxThumb, Math.floor(perThumb))));
     };
     update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, [maxThumb]);
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [stripRef, maxThumb]);
   return size;
 }
 
@@ -131,7 +138,8 @@ export function App() {
   const [sweepRunning, setSweepRunning] = useState(false);
   const [view, setView] = useState<View>("antenna");
   const { ref: slideRef, size: chartSize } = useSlideSize(720);
-  const thumbSize = useThumbColumnSize(280);
+  const thumbStripRef = useRef<HTMLDivElement>(null);
+  const thumbSize = useThumbColumnSize(thumbStripRef, 280);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -542,7 +550,7 @@ export function App() {
       </aside>
 
       <main className="stage">
-        <div className="thumbstrip">
+        <div className="thumbstrip" ref={thumbStripRef}>
           {VIEWS.filter((v) => v.id !== view).map((v) => (
             <button
               key={v.id}
