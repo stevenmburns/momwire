@@ -13,6 +13,19 @@ Run: uvicorn web.server:app --reload
 
 from __future__ import annotations
 
+# Pin BLAS/OpenMP to a single thread BEFORE numpy/scipy import. The interactive
+# workload is many small solves (≤ 250×250 dense complex matrices), where
+# thread orchestration costs dwarf the per-call work — and the pysim Yagi
+# C++ accelerator already parallelizes internally, so OpenBLAS threads on top
+# of that just thrash the cache. Empirically: 2-director live solve went from
+# 220 ms (8 threads) to 67 ms (1 thread) on an 8-core box.
+import os
+
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
+
+# ruff: noqa: E402 — imports below must follow the env-var setup above so
+# OpenBLAS picks up the thread count at its own import time.
 import json
 import time
 
