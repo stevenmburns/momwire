@@ -18,6 +18,7 @@ type SolveResponse = {
   measurement_freq_mhz: number;
   lambda_design_m: number;
   solve_ms: number;
+  directivity_norm?: number;
   // V-specific
   arm_len_m?: number;
   // Yagi-specific
@@ -548,19 +549,21 @@ function FarFieldChart({ result, size }: { result: SolveResponse | null; size: n
     const cy = size / 2;
     const R = size / 2 - 14;
 
-    // Radial axis: dB relative to per-frame peak (peak = 0 dB at r = R,
-    // floor = −DB_RANGE at r = 0). Rings at every 10 dB.
-    const DB_RANGE = 30;
+    // Radial axis: absolute directivity in dBi. Outer ring = DBI_TOP,
+    // floor = DBI_TOP − DB_SPAN. Rings every 10 dB.
+    const DBI_TOP = 10;
+    const DB_SPAN = 30;
+    const dbiToFrac = (db: number) => Math.max(0, (db - (DBI_TOP - DB_SPAN)) / DB_SPAN);
     ctx.strokeStyle = "#2a313d";
     ctx.lineWidth = 0.6;
     ctx.fillStyle = "#4a5160";
     ctx.font = "9px ui-monospace, monospace";
-    for (let db = -DB_RANGE + 10; db <= 0; db += 10) {
-      const f = (DB_RANGE + db) / DB_RANGE;
+    for (let db = DBI_TOP - DB_SPAN + 10; db <= DBI_TOP; db += 10) {
+      const f = dbiToFrac(db);
       ctx.beginPath();
       ctx.arc(cx, cy, R * f, 0, 2 * Math.PI);
       ctx.stroke();
-      ctx.fillText(`${db}`, cx + 2, cy - R * f - 1);
+      ctx.fillText(`${db > 0 ? "+" : ""}${db}`, cx + 2, cy - R * f - 1);
     }
     ctx.beginPath();
     ctx.moveTo(cx - R, cy);
@@ -573,7 +576,7 @@ function FarFieldChart({ result, size }: { result: SolveResponse | null; size: n
     // the right arm tip lies), +y up (broadside to the wire).
     ctx.fillStyle = "#4a5160";
     ctx.font = "10px ui-monospace, monospace";
-    ctx.fillText("xy plane (dB)", 6, 14);
+    ctx.fillText("xy plane (dBi)", 6, 14);
     ctx.fillStyle = "#7b8493";
     ctx.fillText("+x", cx + R - 14, cy + 11);
     ctx.fillText("−x", cx - R + 2, cy + 11);
@@ -619,8 +622,8 @@ function FarFieldChart({ result, size }: { result: SolveResponse | null; size: n
       }
     }
 
-    const mags = new Array<number>(N_PHI);
-    let maxMag = 0;
+    const mag2s = new Array<number>(N_PHI);
+    let maxMag2 = 0;
 
     for (let pi = 0; pi < N_PHI; pi++) {
       const phi = (2 * Math.PI * pi) / N_PHI;
@@ -661,24 +664,29 @@ function FarFieldChart({ result, size }: { result: SolveResponse | null; size: n
         pxRe * pxRe + pxIm * pxIm +
         pyRe * pyRe + pyIm * pyIm +
         pzRe * pzRe + pzIm * pzIm;
-      const mag = Math.sqrt(mag2);
-      mags[pi] = mag;
-      if (mag > maxMag) maxMag = mag;
+      mag2s[pi] = mag2;
+      if (mag2 > maxMag2) maxMag2 = mag2;
     }
 
-    if (maxMag <= 0) return;
+    if (maxMag2 <= 0) return;
 
-    // Draw pattern as filled polar curve on the dB radial axis.
-    // 20*log10(|M_perp| / max) maps [−DB_RANGE, 0] → [0, R]; below floor clamps to 0.
+    // Absolute directivity: D(φ) = directivity_norm · |M_perp(π/2, φ)|².
+    // If the server omitted the norm (older response), fall back to a
+    // per-frame relative scale that puts the peak at 0 dBi.
+    const norm =
+      result.directivity_norm && result.directivity_norm > 0
+        ? result.directivity_norm
+        : 1 / maxMag2;
+
     ctx.beginPath();
     for (let pi = 0; pi <= N_PHI; pi++) {
       const phi = (2 * Math.PI * pi) / N_PHI;
-      const ratio = mags[pi % N_PHI] / maxMag;
-      const db = ratio > 0 ? 20 * Math.log10(ratio) : -Infinity;
-      const norm = Math.max(0, (DB_RANGE + db) / DB_RANGE);
-      const px = cx + Math.cos(phi) * norm * R;
+      const D = norm * mag2s[pi % N_PHI];
+      const dBi = D > 0 ? 10 * Math.log10(D) : -Infinity;
+      const frac = dbiToFrac(dBi);
+      const px = cx + Math.cos(phi) * frac * R;
       // Canvas y flips: +y on canvas is down, so we negate to put +y at top.
-      const py = cy - Math.sin(phi) * norm * R;
+      const py = cy - Math.sin(phi) * frac * R;
       if (pi === 0) ctx.moveTo(px, py);
       else ctx.lineTo(px, py);
     }
@@ -688,6 +696,14 @@ function FarFieldChart({ result, size }: { result: SolveResponse | null; size: n
     ctx.strokeStyle = "rgba(255, 209, 102, 0.9)";
     ctx.lineWidth = 1.5;
     ctx.stroke();
+
+    // Peak dBi annotation (top-right corner).
+    const peakDbi = 10 * Math.log10(norm * maxMag2);
+    ctx.fillStyle = "#cdd5e0";
+    ctx.font = "10px ui-monospace, monospace";
+    const peakText = `peak ${peakDbi >= 0 ? "+" : ""}${peakDbi.toFixed(1)} dBi`;
+    const tw = ctx.measureText(peakText).width;
+    ctx.fillText(peakText, size - tw - 6, 14);
   }, [result, size]);
 
   return <canvas ref={canvasRef} className="farfield" />;

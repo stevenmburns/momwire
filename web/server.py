@@ -39,6 +39,52 @@ app.add_middleware(
 C_LIGHT = 299_792_458.0  # m/s, matches AbstractPySim's eps*mu derivation to ~1e-9
 
 
+def _compute_directivity_norm(out: dict, n_theta: int = 45, n_phi: int = 90) -> None:
+    """Attach `directivity_norm` = 4π / ∫|M_perp|² dΩ to the response.
+
+    Multiplying this by the frontend's azimuth-cut |M_perp(π/2, φ)|² yields
+    absolute directivity D(φ) (linear); 10·log10(D) is dBi.
+    """
+    k = 2 * np.pi * out["measurement_freq_mhz"] * 1e6 / C_LIGHT
+
+    mids, drs, i_mids = [], [], []
+    for w in out["wires"]:
+        pts = np.asarray(w["knot_positions"], dtype=np.float64)
+        cur = np.asarray(w["knot_currents_re"], dtype=np.float64) + 1j * np.asarray(
+            w["knot_currents_im"], dtype=np.float64
+        )
+        drs.append(pts[1:] - pts[:-1])
+        mids.append(0.5 * (pts[1:] + pts[:-1]))
+        i_mids.append(0.5 * (cur[1:] + cur[:-1]))
+    mid = np.concatenate(mids, axis=0)  # (Nseg, 3)
+    dr = np.concatenate(drs, axis=0)  # (Nseg, 3)
+    i_mid = np.concatenate(i_mids, axis=0)  # (Nseg,)
+
+    # Cell-centered sphere grid: θ in (0, π) at half-cells, φ in [0, 2π).
+    theta = (np.arange(n_theta) + 0.5) * (np.pi / n_theta)
+    phi = np.arange(n_phi) * (2 * np.pi / n_phi)
+    sin_t, cos_t = np.sin(theta), np.cos(theta)
+    cos_p, sin_p = np.cos(phi), np.sin(phi)
+
+    rx = sin_t[:, None] * cos_p[None, :]
+    ry = sin_t[:, None] * sin_p[None, :]
+    rz = np.broadcast_to(cos_t[:, None], (n_theta, n_phi))
+    rhat = np.stack([rx, ry, rz], axis=-1)  # (nθ, nφ, 3)
+
+    phase = k * np.einsum("ijc,nc->ijn", rhat, mid)  # (nθ, nφ, Nseg)
+    expp = np.exp(1j * phase)
+    weighted = i_mid[:, None] * dr  # (Nseg, 3)
+    M = np.einsum("ijn,nc->ijc", expp, weighted)  # (nθ, nφ, 3)
+    m_dot_r = np.sum(M * rhat, axis=-1)
+    M_perp = M - m_dot_r[..., None] * rhat
+    mag2 = np.sum((M_perp.real**2 + M_perp.imag**2), axis=-1)  # (nθ, nφ)
+
+    dtheta = np.pi / n_theta
+    dphi = 2 * np.pi / n_phi
+    p_rad = float(np.sum(mag2 * sin_t[:, None]) * dtheta * dphi)
+    out["directivity_norm"] = (4 * np.pi / p_rad) if p_rad > 0 else 0.0
+
+
 def _wire_record(knots: np.ndarray, coeffs: np.ndarray, label: str) -> dict:
     """Pad interior-knot coefficients with zero endpoints (open-wire BC) and
     package one wire's record for the JSON response.
@@ -217,10 +263,12 @@ def _solve_yagi(req: dict) -> dict:
 
 def solve(req: dict) -> dict:
     if req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC:
-        return pynec_backend.solve(req)
-    geometry = req.get("geometry", "inverted_v")
-    out = _solve_yagi(req) if geometry == "yagi" else _solve_inverted_v(req)
-    out["solver"] = "pysim"
+        out = pynec_backend.solve(req)
+    else:
+        geometry = req.get("geometry", "inverted_v")
+        out = _solve_yagi(req) if geometry == "yagi" else _solve_inverted_v(req)
+        out["solver"] = "pysim"
+    _compute_directivity_norm(out)
     return out
 
 
