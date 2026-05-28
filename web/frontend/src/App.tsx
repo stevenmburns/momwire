@@ -337,6 +337,9 @@ export function App() {
 
       <main className="stage">
         <CurrentCanvas result={result} />
+        <div className="farfield-panel">
+          <FarFieldChart result={result} size={240} />
+        </div>
         <div className="smith-panel">
           <SmithChart
             r={result?.z_in_re ?? 0}
@@ -374,6 +377,161 @@ function formatSwr(r: number, x: number, z0: number): string {
   const swr = (1 + gMag) / (1 - gMag);
   if (swr > 99) return swr.toFixed(0);
   return swr.toFixed(2);
+}
+
+function FarFieldChart({ result, size }: { result: SolveResponse | null; size: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.floor(size * dpr);
+    canvas.height = Math.floor(size * dpr);
+    canvas.style.width = `${size}px`;
+    canvas.style.height = `${size}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+    ctx.fillStyle = "#0d1015";
+    ctx.fillRect(0, 0, size, size);
+
+    const cx = size / 2;
+    const cy = size / 2;
+    const R = size / 2 - 14;
+
+    // Concentric grid (linear |E| normalized).
+    ctx.strokeStyle = "#2a313d";
+    ctx.lineWidth = 0.6;
+    for (const f of [0.25, 0.5, 0.75, 1.0]) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, R * f, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(cx - R, cy);
+    ctx.lineTo(cx + R, cy);
+    ctx.moveTo(cx, cy - R);
+    ctx.lineTo(cx, cy + R);
+    ctx.stroke();
+
+    // Axis labels match the wire-canvas orientation: +x to the right (where
+    // the right arm tip lies), +y up (broadside to the wire).
+    ctx.fillStyle = "#4a5160";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.fillText("xy plane", 6, 14);
+    ctx.fillStyle = "#7b8493";
+    ctx.fillText("+x", cx + R - 14, cy + 11);
+    ctx.fillText("−x", cx - R + 2, cy + 11);
+    ctx.fillText("+y", cx - 8, cy - R + 12);
+    ctx.fillText("−y", cx - 7, cy + R - 2);
+
+    if (!result) return;
+
+    // Azimuth cut: r̂ = (cos φ, sin φ, 0) for φ in [0, 2π).
+    // For each direction compute the moment integral
+    //   M(r̂) = Σ I_mid · (r_{n+1} − r_n) · exp(jk r̂·r_mid)
+    // and take |M_perp|² (component perpendicular to r̂).
+    const N_PHI = 180;
+    const c = 299_792_458;
+    const k = (2 * Math.PI * result.measurement_freq_mhz * 1e6) / c;
+    const knots = result.knot_positions;
+    const cre = result.knot_currents_re;
+    const cim = result.knot_currents_im;
+
+    const mags = new Array<number>(N_PHI);
+    let maxMag = 0;
+
+    // Precompute per-segment quantities.
+    const nSeg = knots.length - 1;
+    const dx = new Float64Array(nSeg);
+    const dy = new Float64Array(nSeg);
+    const dz = new Float64Array(nSeg);
+    const midx = new Float64Array(nSeg);
+    const midy = new Float64Array(nSeg);
+    const Ire = new Float64Array(nSeg);
+    const Iim = new Float64Array(nSeg);
+    for (let n = 0; n < nSeg; n++) {
+      const a = knots[n];
+      const b = knots[n + 1];
+      dx[n] = b[0] - a[0];
+      dy[n] = b[1] - a[1];
+      dz[n] = b[2] - a[2];
+      midx[n] = 0.5 * (a[0] + b[0]);
+      midy[n] = 0.5 * (a[1] + b[1]);
+      // r_mid_z drops out of the phase since r̂_z = 0 in this cut.
+      Ire[n] = 0.5 * (cre[n] + cre[n + 1]);
+      Iim[n] = 0.5 * (cim[n] + cim[n + 1]);
+    }
+
+    for (let pi = 0; pi < N_PHI; pi++) {
+      const phi = (2 * Math.PI * pi) / N_PHI;
+      const rx = Math.cos(phi);
+      const ry = Math.sin(phi);
+
+      let mxRe = 0;
+      let mxIm = 0;
+      let myRe = 0;
+      let myIm = 0;
+      let mzRe = 0;
+      let mzIm = 0;
+      for (let n = 0; n < nSeg; n++) {
+        const phase = k * (rx * midx[n] + ry * midy[n]);
+        const cph = Math.cos(phase);
+        const sph = Math.sin(phase);
+        // I_mid * exp(jphase)
+        const ire = Ire[n] * cph - Iim[n] * sph;
+        const iim = Ire[n] * sph + Iim[n] * cph;
+        mxRe += ire * dx[n];
+        mxIm += iim * dx[n];
+        myRe += ire * dy[n];
+        myIm += iim * dy[n];
+        mzRe += ire * dz[n];
+        mzIm += iim * dz[n];
+      }
+      // Component along r̂: M·r̂ = M_x*rx + M_y*ry  (rz = 0)
+      const mDotRre = mxRe * rx + myRe * ry;
+      const mDotRim = mxIm * rx + myIm * ry;
+      // M_perp = M − (M·r̂) r̂
+      const pxRe = mxRe - mDotRre * rx;
+      const pxIm = mxIm - mDotRim * rx;
+      const pyRe = myRe - mDotRre * ry;
+      const pyIm = myIm - mDotRim * ry;
+      const pzRe = mzRe;
+      const pzIm = mzIm;
+      const mag2 =
+        pxRe * pxRe + pxIm * pxIm +
+        pyRe * pyRe + pyIm * pyIm +
+        pzRe * pzRe + pzIm * pzIm;
+      const mag = Math.sqrt(mag2);
+      mags[pi] = mag;
+      if (mag > maxMag) maxMag = mag;
+    }
+
+    if (maxMag <= 0) return;
+
+    // Draw pattern as filled polar curve.
+    ctx.beginPath();
+    for (let pi = 0; pi <= N_PHI; pi++) {
+      const phi = (2 * Math.PI * pi) / N_PHI;
+      const norm = mags[pi % N_PHI] / maxMag;
+      const px = cx + Math.cos(phi) * norm * R;
+      // Canvas y flips: +y on canvas is down, so we negate to put +y at top.
+      const py = cy - Math.sin(phi) * norm * R;
+      if (pi === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = "rgba(255, 209, 102, 0.12)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 209, 102, 0.9)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }, [result, size]);
+
+  return <canvas ref={canvasRef} className="farfield" />;
 }
 
 function SmithChart({
