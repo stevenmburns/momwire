@@ -25,6 +25,12 @@ type SolveRequest = {
   wire_radius: number;
 };
 
+type SweepData = {
+  freqs_mhz: number[];
+  z_re: number[];
+  z_im: number[];
+};
+
 const WS_URL = `ws://${window.location.host}/ws`;
 
 export function App() {
@@ -49,6 +55,11 @@ export function App() {
   const [result, setResult] = useState<SolveResponse | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "closed">("connecting");
   const [rttMs, setRttMs] = useState<number | null>(null);
+  const [sweep, setSweep] = useState<SweepData | null>(null);
+  const [sweepRunning, setSweepRunning] = useState(false);
+
+  const sweepTimerRef = useRef<number | null>(null);
+  const sweepAbortRef = useRef<AbortController | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const inFlightRef = useRef(false);
@@ -77,6 +88,70 @@ export function App() {
     };
     requestSolve();
   }, [angle, nPerArm, designFreq, measFreq, halfdriverFactor, wireRadius]);
+
+  // Debounced sweep across measurement freq. Re-runs whenever any antenna
+  // parameter changes; measurement-freq slider does NOT trigger a sweep
+  // since the sweep is the locus and the meas-freq marker just walks it.
+  useEffect(() => {
+    if (sweepTimerRef.current) {
+      window.clearTimeout(sweepTimerRef.current);
+    }
+    setSweep(null);
+    setSweepRunning(false);
+    sweepTimerRef.current = window.setTimeout(() => {
+      runSweep(angle, nPerArm, designFreq, halfdriverFactor, wireRadius);
+      sweepTimerRef.current = null;
+    }, 500);
+    return () => {
+      if (sweepTimerRef.current) window.clearTimeout(sweepTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [angle, nPerArm, designFreq, halfdriverFactor, wireRadius]);
+
+  async function runSweep(
+    angle_deg: number,
+    n_per_arm: number,
+    design_freq_mhz: number,
+    halfdriver_factor: number,
+    wire_radius: number,
+  ) {
+    sweepAbortRef.current?.abort();
+    const controller = new AbortController();
+    sweepAbortRef.current = controller;
+
+    // Sweep ±30% of design freq with 41 points (log spacing keeps both
+    // sides of resonance well-sampled).
+    const N = 41;
+    const fLo = Math.max(0.5, design_freq_mhz * 0.7);
+    const fHi = Math.min(60, design_freq_mhz * 1.3);
+    const freqs = Array.from({ length: N }, (_, i) =>
+      Math.exp(Math.log(fLo) + (i / (N - 1)) * (Math.log(fHi) - Math.log(fLo))),
+    );
+
+    setSweepRunning(true);
+    try {
+      const resp = await fetch("/sweep", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          angle_deg, n_per_arm, design_freq_mhz, halfdriver_factor, wire_radius,
+          freqs_mhz: freqs,
+        }),
+        signal: controller.signal,
+      });
+      if (!resp.ok) throw new Error(`sweep failed: ${resp.status}`);
+      const data: SweepData = await resp.json();
+      if (!controller.signal.aborted) setSweep(data);
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      console.error("sweep error", e);
+    } finally {
+      if (sweepAbortRef.current === controller) {
+        sweepAbortRef.current = null;
+        setSweepRunning(false);
+      }
+    }
+  }
 
   function requestSolve() {
     const ws = wsRef.current;
@@ -263,7 +338,15 @@ export function App() {
       <main className="stage">
         <CurrentCanvas result={result} />
         <div className="smith-panel">
-          <SmithChart r={result?.z_in_re ?? 0} x={result?.z_in_im ?? 0} z0={50} size={260} />
+          <SmithChart
+            r={result?.z_in_re ?? 0}
+            x={result?.z_in_im ?? 0}
+            z0={50}
+            size={260}
+            sweep={sweep}
+            measFreqMhz={measFreq}
+            running={sweepRunning}
+          />
         </div>
         <div className="status">ws: {status}</div>
       </main>
@@ -293,7 +376,23 @@ function formatSwr(r: number, x: number, z0: number): string {
   return swr.toFixed(2);
 }
 
-function SmithChart({ r, x, z0, size }: { r: number; x: number; z0: number; size: number }) {
+function SmithChart({
+  r,
+  x,
+  z0,
+  size,
+  sweep,
+  measFreqMhz,
+  running,
+}: {
+  r: number;
+  x: number;
+  z0: number;
+  size: number;
+  sweep: SweepData | null;
+  measFreqMhz: number;
+  running: boolean;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -380,6 +479,66 @@ function SmithChart({ r, x, z0, size }: { r: number; x: number; z0: number; size
     ctx.fillText("+jX", cx + R - 24, cy - R + 14);
     ctx.fillText("−jX", cx + R - 24, cy + R - 4);
 
+    // Sweep locus: continuous curve through Γ-plane samples.
+    if (sweep && sweep.freqs_mhz.length > 1) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+      ctx.clip();
+      ctx.strokeStyle = "rgba(118, 208, 255, 0.75)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      let nearestIdx = 0;
+      let nearestDelta = Infinity;
+      for (let i = 0; i < sweep.freqs_mhz.length; i++) {
+        const g = reflectionCoefficient(sweep.z_re[i], sweep.z_im[i], z0);
+        const px = cx + g.gRe * R;
+        const py = cy - g.gIm * R;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+        const d = Math.abs(sweep.freqs_mhz[i] - measFreqMhz);
+        if (d < nearestDelta) {
+          nearestDelta = d;
+          nearestIdx = i;
+        }
+      }
+      ctx.stroke();
+      ctx.restore();
+
+      // Endpoint markers (low-freq filled, high-freq hollow).
+      const drawEndpoint = (idx: number, filled: boolean) => {
+        const g = reflectionCoefficient(sweep.z_re[idx], sweep.z_im[idx], z0);
+        const px = cx + g.gRe * R;
+        const py = cy - g.gIm * R;
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = "rgba(118, 208, 255, 0.95)";
+        ctx.fillStyle = filled ? "rgba(118, 208, 255, 0.95)" : "rgba(13, 16, 21, 0.95)";
+        ctx.beginPath();
+        ctx.arc(px, py, 3, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+      };
+      drawEndpoint(0, true);
+      drawEndpoint(sweep.freqs_mhz.length - 1, false);
+
+      // Freq range label across the bottom of the panel.
+      ctx.fillStyle = "#9aa3b2";
+      ctx.font = "10px ui-monospace, monospace";
+      const fLoTxt = sweep.freqs_mhz[0].toFixed(2);
+      const fHiTxt = sweep.freqs_mhz[sweep.freqs_mhz.length - 1].toFixed(2);
+      const txt = `${fLoTxt} → ${fHiTxt} MHz`;
+      ctx.fillText(txt, size - 6 - ctx.measureText(txt).width, size - 6);
+
+      // Tick which sweep sample matches the current meas freq (if any).
+      void nearestIdx;
+    }
+
+    if (running) {
+      ctx.fillStyle = "#7b8493";
+      ctx.font = "10px ui-monospace, monospace";
+      ctx.fillText("sweeping…", 6, size - 6);
+    }
+
     // Current impedance marker.
     if (r > 0 || x !== 0) {
       const { gRe, gIm } = reflectionCoefficient(r, x, z0);
@@ -420,7 +579,7 @@ function SmithChart({ r, x, z0, size }: { r: number; x: number; z0: number; size
     ctx.moveTo(cx, cy - 4);
     ctx.lineTo(cx, cy + 4);
     ctx.stroke();
-  }, [r, x, z0, size]);
+  }, [r, x, z0, size, sweep, measFreqMhz, running]);
 
   return <canvas ref={canvasRef} className="smith" />;
 }

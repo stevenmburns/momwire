@@ -120,6 +120,33 @@ def solve(
     }
 
 
+@app.post("/sweep")
+async def sweep_endpoint(req: dict):
+    """Run a measurement-freq sweep across `freqs_mhz` for a fixed antenna.
+
+    Each entry of freqs_mhz becomes one solve at that measurement frequency;
+    the geometry (design freq, halfdriver, droop angle, wire radius) is held
+    constant. Returns parallel arrays for plotting on the Smith chart.
+    """
+    freqs = [float(f) for f in req.get("freqs_mhz", [])]
+    if not freqs:
+        return {"freqs_mhz": [], "z_re": [], "z_im": []}
+    z_re = []
+    z_im = []
+    for f in freqs:
+        result = solve(
+            angle_deg=float(req.get("angle_deg", 30.0)),
+            n_per_arm=int(req.get("n_per_arm", 40)),
+            design_freq_mhz=float(req.get("design_freq_mhz", 13.625)),
+            measurement_freq_mhz=f,
+            halfdriver_factor=float(req.get("halfdriver_factor", 0.962)),
+            wire_radius=float(req.get("wire_radius", 0.0005)),
+        )
+        z_re.append(result["z_in_re"])
+        z_im.append(result["z_in_im"])
+    return {"freqs_mhz": freqs, "z_re": z_re, "z_im": z_im}
+
+
 @app.get("/healthz")
 def healthz():
     return {"ok": True}

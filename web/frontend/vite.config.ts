@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       "/ws": { target: "ws://127.0.0.1:8000", ws: true, changeOrigin: true },
       "/healthz": { target: "http://127.0.0.1:8000", changeOrigin: true },
+      "/sweep": { target: "http://127.0.0.1:8000", changeOrigin: true },
     },
   },
 });
