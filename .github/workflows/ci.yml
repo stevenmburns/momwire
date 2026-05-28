@@ -50,7 +50,7 @@ jobs:
         run: |
           python -m venv .venv
           .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install pybind11 numpy scipy matplotlib scikit-rf pytest fastapi swig
+          .venv/bin/pip install pybind11 numpy scipy matplotlib scikit-rf pytest fastapi swig setuptools wheel
           .venv/bin/pip install -e .
       - name: Build and install PyNEC
         run: scripts/build_pynec.sh
