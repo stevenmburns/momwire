@@ -29,3 +29,30 @@ jobs:
       - run: pip install pybind11 numpy scipy matplotlib scikit-rf pytest
       - run: pip install -e .
       - run: pytest tests/ -m "not slow and not plot"
+
+  test-pynec:
+    # Builds PyNEC from the python-necpp submodule and runs the cross-backend
+    # validation tests in tests/test_pynec_backend.py. ~2 min slower than the
+    # plain `test` job, justified by exercising the build script and the
+    # web.pynec_backend response shape against pysim.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install build-time system deps for necpp
+        run: sudo apt-get update -qq && sudo apt-get install -y autoconf automake libtool m4
+      - name: Create venv and install python deps
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install pybind11 numpy scipy matplotlib scikit-rf pytest fastapi swig
+          .venv/bin/pip install -e .
+      - name: Build and install PyNEC
+        run: scripts/build_pynec.sh
+      - name: Run cross-backend tests
+        run: .venv/bin/pytest tests/test_pynec_backend.py -v
