@@ -5,12 +5,11 @@ nsegs. Fit Z(N) = Z_inf + c/N^p (separately to real and imag parts) and report
 Z_inf, the power-law exponent p, and the fit residuals. Where available,
 compare against the NEC2 free-space reference.
 
-Run with antenna_designer's venv (which has PyNEC):
+Run from the project venv (needs PyNEC — see `scripts/build_pynec.sh`):
 
-    PYTHONPATH=/home/smburns/antennas/pysim/src \
-        /home/smburns/antennas/antenna_designer/.venv/bin/python \
-        scripts/extrapolate.py
+    .venv/bin/python scripts/extrapolate.py
 """
+
 import time
 
 import numpy as np
@@ -56,7 +55,7 @@ def sweep(label, fn, ns):
         t = time.time()
         z, _ = fn(n)
         zs.append(z)
-        print(f"  {n:6d}  {z.real:9.4f} + j{z.imag:9.4f}     {time.time()-t:5.2f}s")
+        print(f"  {n:6d}  {z.real:9.4f} + j{z.imag:9.4f}     {time.time() - t:5.2f}s")
     return np.array(zs)
 
 
@@ -76,7 +75,7 @@ def report(label, ns, zs, nec_ref=None):
 def main():
     # Sweep nsegs (geometric so power-law fit is well-conditioned).
     dipole_ns = [101, 201, 401, 801, 1601]
-    yagi_ns = [101, 201, 401, 801]   # Yagi is 2N×2N so 1601 would be slow.
+    yagi_ns = [101, 201, 401, 801]  # Yagi is 2N×2N so 1601 would be slow.
 
     nec_dipole = complex(69.64, -18.21)
     nec_yagi = complex(77.28, 6.74)

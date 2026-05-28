@@ -31,9 +31,9 @@ Source models tested:
                       the gap midpoint).
 
 Run from the project venv:
-    PYTHONPATH=/home/smburns/antennas/pysim/src .venv/bin/python \\
-        scripts/triangular_convergence.py
+    .venv/bin/python scripts/triangular_convergence.py
 """
+
 import numpy as np
 import scipy.linalg
 
@@ -41,8 +41,9 @@ from pysim.abstract import AbstractPySim
 from pysim.triangular import _seg_seg_static_all, _seg_seg_reg_all
 
 
-def solve_with_source(N, halfdriver, wire_radius, k, omega, eps, mu, n_qp_reg,
-                      source_model):
+def solve_with_source(
+    N, halfdriver, wire_radius, k, omega, eps, mu, n_qp_reg, source_model
+):
     """Build the triangular MoM system and solve with one of three source
     models. Returns the driver impedance Z.
     """
@@ -60,14 +61,17 @@ def solve_with_source(N, halfdriver, wire_radius, k, omega, eps, mu, n_qp_reg,
     J01 = A01 + R01
     J11 = A11 + R11
 
-    S = (J00[: N - 1, : N - 1] + J00[1:, 1:]
-         - J00[: N - 1, 1:] - J00[1:, : N - 1]) / (h * h)
+    S = (J00[: N - 1, : N - 1] + J00[1:, 1:] - J00[: N - 1, 1:] - J00[1:, : N - 1]) / (
+        h * h
+    )
     Z_Phi = S / (1j * omega * eps)
 
     I_A = (
         (J11[: N - 1, : N - 1]) / (h * h)
-        + (J10[: N - 1, 1:] / h) - (J11[: N - 1, 1:] / (h * h))
-        + (J01[1:, : N - 1] / h) - (J11[1:, : N - 1] / (h * h))
+        + (J10[: N - 1, 1:] / h)
+        - (J11[: N - 1, 1:] / (h * h))
+        + (J01[1:, : N - 1] / h)
+        - (J11[1:, : N - 1] / (h * h))
         + (J00[1:, 1:])
         - (J01[1:, 1:] + J10[1:, 1:]) / h
         + (J11[1:, 1:] / (h * h))
@@ -117,11 +121,11 @@ def solve_with_source(N, halfdriver, wire_radius, k, omega, eps, mu, n_qp_reg,
             if h1 > l1:
                 # Phi(s) = 1 - (apex - s)/h = 1 - apex/h + s/h
                 # integral = (h1 - l1) - (apex/h)(h1 - l1) + (h1^2 - l1^2)/(2h)
-                integral += (h1 - l1) * (1 - apex / h) + (h1 ** 2 - l1 ** 2) / (2 * h)
+                integral += (h1 - l1) * (1 - apex / h) + (h1**2 - l1**2) / (2 * h)
             l2, h2 = max(lo, apex), hi
             if h2 > l2:
                 # Phi(s) = 1 - (s - apex)/h = 1 + apex/h - s/h
-                integral += (h2 - l2) * (1 + apex / h) - (h2 ** 2 - l2 ** 2) / (2 * h)
+                integral += (h2 - l2) * (1 + apex / h) - (h2**2 - l2**2) / (2 * h)
             v[m] = integral / h
         coeffs = scipy.linalg.solve(Z, v)
         # Current at L/2: I(L/2) = sum(coeffs[m] * Phi_m(L/2)).
@@ -147,8 +151,13 @@ def loglog_slope(ns, errs):
 def main():
     sim = AbstractPySim()
     cfg = dict(
-        halfdriver=sim.halfdriver, wire_radius=sim.wire_radius, k=sim.k,
-        omega=sim.omega, eps=sim.eps, mu=sim.mu, n_qp_reg=4,
+        halfdriver=sim.halfdriver,
+        wire_radius=sim.wire_radius,
+        k=sim.k,
+        omega=sim.omega,
+        eps=sim.eps,
+        mu=sim.mu,
+        n_qp_reg=4,
     )
 
     even_ns = [10, 20, 40, 80, 160, 320, 640]
@@ -182,24 +191,31 @@ def main():
         even_zs, odd_zs = results[m]
         z_self_ref = even_zs[-1]
         print(f"=== {m} ===")
-        print(f"  asymptote (N={even_ns[-1]}, even): "
-              f"{z_self_ref.real:.5f} + j{z_self_ref.imag:.5f}")
+        print(
+            f"  asymptote (N={even_ns[-1]}, even): "
+            f"{z_self_ref.real:.5f} + j{z_self_ref.imag:.5f}"
+        )
         diff_cross = z_self_ref - z_cross_ref
-        print(f"  vs finite_gap asymptote: "
-              f"{diff_cross.real:+.4f} + j{diff_cross.imag:+.4f}")
+        print(
+            f"  vs finite_gap asymptote: "
+            f"{diff_cross.real:+.4f} + j{diff_cross.imag:+.4f}"
+        )
 
         print(f"  {'N':>5}  {'Z(N)':^24}  {'|err re|':>10}  {'|err im|':>10}")
-        for N, z in zip(even_ns + odd_ns,
-                        list(even_zs) + list(odd_zs)):
+        for N, z in zip(even_ns + odd_ns, list(even_zs) + list(odd_zs)):
             err_r = abs(z.real - z_self_ref.real)
             err_i = abs(z.imag - z_self_ref.imag)
             tag = "even" if N % 2 == 0 else "odd "
-            print(f"  {N:5d} ({tag}) {z.real:8.4f}+j{z.imag:8.4f}  "
-                  f"{err_r:10.5f}  {err_i:10.5f}")
+            print(
+                f"  {N:5d} ({tag}) {z.real:8.4f}+j{z.imag:8.4f}  "
+                f"{err_r:10.5f}  {err_i:10.5f}"
+            )
 
         # Drop the last point (it IS the reference -> err = 0).
-        for label, ns, zs in (("even", even_ns[:-1], even_zs[:-1]),
-                              ("odd", odd_ns[:-1], odd_zs[:-1])):
+        for label, ns, zs in (
+            ("even", even_ns[:-1], even_zs[:-1]),
+            ("odd", odd_ns[:-1], odd_zs[:-1]),
+        ):
             err_r = np.abs(np.array([z.real for z in zs]) - z_self_ref.real)
             err_i = np.abs(np.array([z.imag for z in zs]) - z_self_ref.imag)
             sr = loglog_slope(ns, err_r)
