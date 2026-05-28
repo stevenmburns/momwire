@@ -84,11 +84,9 @@ Ordered by what I'd actually do next, not by what's most ambitious.
 
 - `src/pysim/triangular.py` — the new solver. Look at `_J_static_all` (the closed-form moment integrals) and `compute_impedance` (the assembly).
 - `src/pysim/yagi.py` — the multi-wire pattern. The `node_l_idx`/`node_r_idx` arrays in `compute_impedance` are the trick for handling non-adjacent wire boundaries; this should port to the triangular solver directly.
-- `scripts/compare_yagi_nec.py` — the NEC validation harness (single dipole and 2-element Yagi in free space). Requires PyNEC from antenna_designer's venv:
+- `scripts/compare_yagi_nec.py` — the NEC validation harness (single dipole and 2-element Yagi in free space). Requires PyNEC (build via `scripts/build_pynec.sh` after `git submodule update --init --recursive`):
   ```
-  PYTHONPATH=/home/smburns/antennas/pysim/src \
-      /home/smburns/antennas/antenna_designer/.venv/bin/python \
-      scripts/compare_yagi_nec.py
+  .venv/bin/python scripts/compare_yagi_nec.py
   ```
 - `scripts/bspline_probe.py` — demonstrates scipy `BSpline` operations (design matrix, derivative, mass matrix vs analytic tent formulas). Reference for any future basis-function work.
 - `docs/convergence_analysis.md` — full writeup of the pulse-basis convergence failure that motivated the triangular work. Reference for "why are we doing this."
