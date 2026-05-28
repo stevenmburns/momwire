@@ -51,6 +51,52 @@ type SweepData = {
 
 const WS_URL = `ws://${window.location.host}/ws`;
 
+type View = "antenna" | "azimuth" | "elevation" | "smith";
+const VIEWS: { id: View; label: string }[] = [
+  { id: "antenna", label: "Antenna" },
+  { id: "azimuth", label: "Azimuth (xy)" },
+  { id: "elevation", label: "Elevation (yz)" },
+  { id: "smith", label: "Smith" },
+];
+
+function useSlideSize(maxSize = 720) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState(maxSize);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const update = () => {
+      const rect = el.getBoundingClientRect();
+      const s = Math.min(rect.width, rect.height, maxSize);
+      setSize(Math.max(160, Math.floor(s) - 16));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [maxSize]);
+  return { ref, size };
+}
+
+function useThumbColumnSize(maxThumb = 280) {
+  // Vertical thumbstrip on the side: each of 3 thumbs takes ~1/3 of the
+  // available stage height. Fixed overhead per fit:
+  //   strip padding (10+10) + gaps between thumbs (2*8) +
+  //   per-thumb (button padding 10 + label ~14 + gap 4 + border 2) * 3 ≈ 130
+  const [size, setSize] = useState(180);
+  useEffect(() => {
+    const update = () => {
+      const total = window.innerHeight;
+      const perThumb = (total - 130) / 3;
+      setSize(Math.max(100, Math.min(maxThumb, Math.floor(perThumb))));
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, [maxThumb]);
+  return size;
+}
+
 export function App() {
   const [geometry, setGeometry] = useState<"inverted_v" | "yagi">("inverted_v");
   // V controls
@@ -83,6 +129,21 @@ export function App() {
   const [rttMs, setRttMs] = useState<number | null>(null);
   const [sweep, setSweep] = useState<SweepData | null>(null);
   const [sweepRunning, setSweepRunning] = useState(false);
+  const [view, setView] = useState<View>("antenna");
+  const { ref: slideRef, size: chartSize } = useSlideSize(720);
+  const thumbSize = useThumbColumnSize(280);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      const idx = VIEWS.findIndex((v) => v.id === view);
+      const next = e.key === "ArrowDown" ? (idx + 1) % VIEWS.length : (idx - 1 + VIEWS.length) % VIEWS.length;
+      setView(VIEWS[next].id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [view]);
 
   const sweepTimerRef = useRef<number | null>(null);
   const sweepAbortRef = useRef<AbortController | null>(null);
@@ -481,20 +542,41 @@ export function App() {
       </aside>
 
       <main className="stage">
-        <CurrentCanvas result={result} />
-        <div className="farfield-panel">
-          <FarFieldChart result={result} size={220} cut="xy" />
-          <FarFieldChart result={result} size={220} cut="yz" />
+        <div className="thumbstrip">
+          {VIEWS.filter((v) => v.id !== view).map((v) => (
+            <button
+              key={v.id}
+              className="thumb"
+              onClick={() => setView(v.id)}
+              title={`Switch to ${v.label}`}
+            >
+              <div
+                className="thumb-canvas"
+                style={{ width: thumbSize, height: thumbSize }}
+              >
+                <ViewPanel
+                  view={v.id}
+                  size={thumbSize}
+                  fill={false}
+                  result={result}
+                  sweep={sweep}
+                  measFreqMhz={measFreq}
+                  sweepRunning={sweepRunning}
+                />
+              </div>
+              <div className="thumb-label">{v.label}</div>
+            </button>
+          ))}
         </div>
-        <div className="smith-panel">
-          <SmithChart
-            r={result?.z_in_re ?? 0}
-            x={result?.z_in_im ?? 0}
-            z0={50}
-            size={260}
+        <div className="carousel-slide" ref={slideRef}>
+          <ViewPanel
+            view={view}
+            size={chartSize}
+            fill={view === "antenna"}
+            result={result}
             sweep={sweep}
             measFreqMhz={measFreq}
-            running={sweepRunning}
+            sweepRunning={sweepRunning}
           />
         </div>
         <div className="status">ws: {status}</div>
@@ -525,6 +607,50 @@ function formatSwr(r: number, x: number, z0: number): string {
   const swr = (1 + gMag) / (1 - gMag);
   if (swr > 99) return swr.toFixed(0);
   return swr.toFixed(2);
+}
+
+function ViewPanel({
+  view,
+  size,
+  fill,
+  result,
+  sweep,
+  measFreqMhz,
+  sweepRunning,
+}: {
+  view: View;
+  size: number;
+  fill: boolean;
+  result: SolveResponse | null;
+  sweep: SweepData | null;
+  measFreqMhz: number;
+  sweepRunning: boolean;
+}) {
+  if (view === "antenna") {
+    return (
+      <div className={fill ? "antenna-fill" : "antenna-thumb"}
+           style={fill ? undefined : { width: size, height: size }}>
+        <CurrentCanvas result={result} />
+      </div>
+    );
+  }
+  if (view === "azimuth") {
+    return <FarFieldChart result={result} size={size} cut="xy" />;
+  }
+  if (view === "elevation") {
+    return <FarFieldChart result={result} size={size} cut="yz" />;
+  }
+  return (
+    <SmithChart
+      r={result?.z_in_re ?? 0}
+      x={result?.z_in_im ?? 0}
+      z0={50}
+      size={size}
+      sweep={sweep}
+      measFreqMhz={measFreqMhz}
+      running={sweepRunning}
+    />
+  );
 }
 
 type FarFieldCut = "xy" | "yz";
@@ -1076,9 +1202,9 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
         ctx!.fillText("feed", feed.x + 8, feed.y - 8);
       }
 
-      // λ/4 scale bar.
+      // λ/4 scale bar, centered horizontally under the antenna.
       const barLenPx = (lambdaDesign / 4) * scale;
-      const barX0 = pad;
+      const barX0 = (w - barLenPx) / 2;
       const barY = h - 24;
       ctx!.strokeStyle = "#7b8493";
       ctx!.lineWidth = 1;
@@ -1092,7 +1218,9 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
       ctx!.stroke();
       ctx!.fillStyle = "#9aa3b2";
       ctx!.font = "11px ui-monospace, monospace";
-      ctx!.fillText(`λ/4 = ${(lambdaDesign / 4).toFixed(2)} m`, barX0, barY - 8);
+      const barLabel = `λ/4 = ${(lambdaDesign / 4).toFixed(2)} m`;
+      const labelW = ctx!.measureText(barLabel).width;
+      ctx!.fillText(barLabel, (w - labelW) / 2, barY - 8);
     }
 
     onResize();

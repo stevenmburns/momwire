@@ -132,33 +132,71 @@ html, body, #root {
   font-weight: 600;
 }
 
-.smith-panel,
-.farfield-panel {
-  position: absolute;
-  top: 14px;
-  background: rgba(13, 16, 21, 0.85);
-  padding: 8px;
-  border: 1px solid #2a313d;
-  border-radius: 8px;
-  backdrop-filter: blur(4px);
-}
-
-.smith-panel {
-  right: 14px;
-}
-
-.farfield-panel {
-  left: 14px;
-}
-
 .smith,
 .farfield {
   display: block;
   border-radius: 4px;
 }
 
-.farfield + .farfield {
-  margin-top: 6px;
+.thumbstrip {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border-right: 1px solid #232831;
+  background: var(--panel);
+  overflow-y: auto;
+  justify-content: space-between;
+}
+
+.thumb {
+  background: #0d1015;
+  color: var(--muted);
+  border: 1px solid #2a313d;
+  border-radius: 6px;
+  padding: 6px 6px 4px;
+  cursor: pointer;
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.thumb:hover {
+  color: var(--fg);
+  border-color: var(--accent);
+}
+
+.thumb-canvas {
+  display: block;
+  pointer-events: none;
+}
+
+.thumb-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.carousel-slide {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.antenna-fill {
+  position: absolute;
+  inset: 0;
+}
+
+.antenna-thumb {
+  position: relative;
 }
 
 .link-toggle {
@@ -184,6 +222,9 @@ input[type=range]:disabled {
 
 .stage {
   position: relative;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
 }
 
 canvas {
