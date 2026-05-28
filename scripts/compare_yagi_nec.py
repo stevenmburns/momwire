@@ -1,12 +1,10 @@
 """Compare YagiPySim against NEC2 for a matched 2-element Yagi in free space.
 
-Run with antenna_designer's venv (which has PyNEC), pointing PYTHONPATH at this
-repo's src so pysim is importable:
+Run from the project venv (needs PyNEC — see `scripts/build_pynec.sh`):
 
-    PYTHONPATH=/home/smburns/antennas/pysim/src \
-        /home/smburns/antennas/antenna_designer/.venv/bin/python \
-        scripts/compare_yagi_nec.py
+    .venv/bin/python scripts/compare_yagi_nec.py
 """
+
 import PyNEC as nec
 
 from pysim.yagi import YagiPySim
@@ -39,10 +37,17 @@ def nec_free_space_dipole(*, freq_mhz, halfdriver, wire_radius, n_seg):
     geo = c.get_geometry()
 
     geo.wire(
-        1, n_seg,
-        0.0, -halfdriver, 0.0,
-        0.0, +halfdriver, 0.0,
-        wire_radius, 1.0, 1.0,
+        1,
+        n_seg,
+        0.0,
+        -halfdriver,
+        0.0,
+        0.0,
+        +halfdriver,
+        0.0,
+        wire_radius,
+        1.0,
+        1.0,
     )
     return _run_nec(c, n_seg, freq_mhz)
 
@@ -54,18 +59,32 @@ def nec_free_space_yagi(
     geo = c.get_geometry()
 
     geo.wire(
-        1, n_seg,
-        0.0, -halfdriver, 0.0,
-        0.0, +halfdriver, 0.0,
-        wire_radius, 1.0, 1.0,
+        1,
+        n_seg,
+        0.0,
+        -halfdriver,
+        0.0,
+        0.0,
+        +halfdriver,
+        0.0,
+        wire_radius,
+        1.0,
+        1.0,
     )
 
     refl_h = halfdriver * reflector_factor
     geo.wire(
-        2, n_seg,
-        -spacing, -refl_h, 0.0,
-        -spacing, +refl_h, 0.0,
-        wire_radius, 1.0, 1.0,
+        2,
+        n_seg,
+        -spacing,
+        -refl_h,
+        0.0,
+        -spacing,
+        +refl_h,
+        0.0,
+        wire_radius,
+        1.0,
+        1.0,
     )
     return _run_nec(c, n_seg, freq_mhz)
 
@@ -82,7 +101,7 @@ def main():
     print(f"Geometry: wavelength={wavelength:.3f} m  freq={freq_mhz:.4f} MHz")
     print(
         f"          halfdriver={halfdriver:.4f} m  "
-        f"spacing={spacing:.4f} m ({spacing/wavelength:.3f} lambda)  "
+        f"spacing={spacing:.4f} m ({spacing / wavelength:.3f} lambda)  "
         f"reflector_factor={refl_factor}"
     )
     print(f"          wire_radius={wire_radius:.4f} m")
@@ -108,8 +127,10 @@ def main():
     print("NEC2 free space (dipole only):")
     for n_seg in [21, 41, 101]:
         z = nec_free_space_dipole(
-            freq_mhz=freq_mhz, halfdriver=halfdriver,
-            wire_radius=wire_radius, n_seg=n_seg,
+            freq_mhz=freq_mhz,
+            halfdriver=halfdriver,
+            wire_radius=wire_radius,
+            n_seg=n_seg,
         )
         print(f"  n_seg={n_seg:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")
 
@@ -134,8 +155,12 @@ def main():
     print("NEC2 free space:")
     for n_seg in [21, 41, 101]:
         z = nec_free_space_yagi(
-            freq_mhz=freq_mhz, halfdriver=halfdriver, reflector_factor=refl_factor,
-            spacing=spacing, wire_radius=wire_radius, n_seg=n_seg,
+            freq_mhz=freq_mhz,
+            halfdriver=halfdriver,
+            reflector_factor=refl_factor,
+            spacing=spacing,
+            wire_radius=wire_radius,
+            n_seg=n_seg,
         )
         print(f"  n_seg={n_seg:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")
 

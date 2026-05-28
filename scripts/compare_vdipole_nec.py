@@ -9,12 +9,11 @@ NEC models this as two GW cards joined at the origin (segment 1's end =
 segment 2's start). The feed is at the boundary segment of arm 1
 (NEC fed via EX card at the last segment of arm 1, which abuts arm 2).
 
-Run with antenna_designer's venv (which has PyNEC):
+Run from the project venv (needs PyNEC — see `scripts/build_pynec.sh`):
 
-    PYTHONPATH=/home/smburns/antennas/pysim/src \\
-        /home/smburns/antennas/antenna_designer/.venv/bin/python \\
-        scripts/compare_vdipole_nec.py
+    .venv/bin/python scripts/compare_vdipole_nec.py
 """
+
 import numpy as np
 import PyNEC as nec
 
@@ -33,16 +32,30 @@ def nec_v_dipole(*, freq_mhz, half_arm, alpha_rad, wire_radius, n_per_arm):
     end2 = (0.0, +half_arm * cos_a, -half_arm * sin_a)
 
     geo.wire(
-        1, n_per_arm,
-        end1[0], end1[1], end1[2],
-        0.0, 0.0, 0.0,
-        wire_radius, 1.0, 1.0,
+        1,
+        n_per_arm,
+        end1[0],
+        end1[1],
+        end1[2],
+        0.0,
+        0.0,
+        0.0,
+        wire_radius,
+        1.0,
+        1.0,
     )
     geo.wire(
-        2, n_per_arm,
-        0.0, 0.0, 0.0,
-        end2[0], end2[1], end2[2],
-        wire_radius, 1.0, 1.0,
+        2,
+        n_per_arm,
+        0.0,
+        0.0,
+        0.0,
+        end2[0],
+        end2[1],
+        end2[2],
+        wire_radius,
+        1.0,
+        1.0,
     )
     c.geometry_complete(0)
     c.gn_card(-1, 0, 0, 0, 0, 0, 0, 0)  # free space
@@ -75,24 +88,31 @@ def main():
         alpha = np.radians(alpha_deg)
         cos_a = np.cos(alpha)
         sin_a = np.sin(alpha)
-        polyline = np.array([
-            [0.0, -half_arm * cos_a, -half_arm * sin_a],
-            [0.0, 0.0, 0.0],
-            [0.0, +half_arm * cos_a, -half_arm * sin_a],
-        ])
+        polyline = np.array(
+            [
+                [0.0, -half_arm * cos_a, -half_arm * sin_a],
+                [0.0, 0.0, 0.0],
+                [0.0, +half_arm * cos_a, -half_arm * sin_a],
+            ]
+        )
         print(f"=== alpha = {alpha_deg:3d} deg ===")
         print("BentTriangularPySim:")
         for n_per_edge in [20, 40, 80]:
             z, _ = BentTriangularPySim(
-                polyline=polyline, n_per_edge=n_per_edge, nsegs=2 * n_per_edge,
+                polyline=polyline,
+                n_per_edge=n_per_edge,
+                nsegs=2 * n_per_edge,
             ).compute_impedance()
             print(f"  n_per_arm={n_per_edge:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")
 
         print("NEC2:")
         for n_per_arm in [20, 40, 80]:
             z = nec_v_dipole(
-                freq_mhz=freq_mhz, half_arm=half_arm, alpha_rad=alpha,
-                wire_radius=wire_radius, n_per_arm=n_per_arm,
+                freq_mhz=freq_mhz,
+                half_arm=half_arm,
+                alpha_rad=alpha,
+                wire_radius=wire_radius,
+                n_per_arm=n_per_arm,
             )
             print(f"  n_per_arm={n_per_arm:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")
         print()
