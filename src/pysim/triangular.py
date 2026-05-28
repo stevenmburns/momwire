@@ -25,6 +25,12 @@ import scipy.linalg
 
 from .abstract import AbstractPySim
 
+try:
+    from . import _accelerators as _acc
+    _HAVE_REG_ACCEL = hasattr(_acc, "seg_seg_reg_quad_batch_1d")
+except ImportError:
+    _HAVE_REG_ACCEL = False
+
 
 def _Sigma(u, a):
     return np.sqrt(u * u + a * a)
@@ -127,9 +133,22 @@ def _seg_seg_reg_all_batch(seg_endpoints, a, k_array, n_qp):
     exp(-jk·R) varies over k, which amortizes per-k overhead and keeps R
     in cache across the k-axis reduction.
     """
+    gl_xi, gl_w = np.polynomial.legendre.leggauss(n_qp)
+    if _HAVE_REG_ACCEL:
+        # The C++ kernel uses the [0, 1] mapping (t = (xi+1)/2, w = w_leg/2),
+        # matching seg_seg_quad_batch_3d's convention.
+        gl_t_01 = 0.5 * (gl_xi + 1.0)
+        gl_w_01 = 0.5 * gl_w
+        return _acc.seg_seg_reg_quad_batch_1d(
+            np.ascontiguousarray(seg_endpoints, dtype=np.float64),
+            float(a),
+            np.ascontiguousarray(k_array, dtype=np.float64),
+            np.ascontiguousarray(gl_t_01, dtype=np.float64),
+            np.ascontiguousarray(gl_w_01, dtype=np.float64),
+        )
+
     N = len(seg_endpoints) - 1
     n_k = len(k_array)
-    gl_xi, gl_w = np.polynomial.legendre.leggauss(n_qp)
     sl = seg_endpoints[:-1]
     sr = seg_endpoints[1:]
     half = 0.5 * (sr - sl)
