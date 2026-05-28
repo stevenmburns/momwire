@@ -23,6 +23,12 @@ from .triangular import (
     _seg_seg_reg_all_batch,
 )
 
+try:
+    from . import _accelerators as _acc
+    _HAVE_ACCEL = hasattr(_acc, "seg_seg_quad_batch_3d")
+except ImportError:
+    _HAVE_ACCEL = False
+
 
 def _seg_seg_cross_quad(seg_l_i, seg_r_i, seg_l_j, seg_r_j, k, n_qp):
     """Moment integrals J_pq for segment pairs on different wires.
@@ -46,6 +52,16 @@ def _seg_seg_cross_quad_batch(seg_l_i, seg_r_i, seg_l_j, seg_r_j, k_array, n_qp)
     gl_xi, gl_w = np.polynomial.legendre.leggauss(n_qp)
     t_qp = 0.5 * (gl_xi + 1.0)
     w_qp = 0.5 * gl_w
+    if _HAVE_ACCEL:
+        return _acc.seg_seg_quad_batch_3d(
+            np.ascontiguousarray(seg_l_i, dtype=np.float64),
+            np.ascontiguousarray(seg_r_i, dtype=np.float64),
+            np.ascontiguousarray(seg_l_j, dtype=np.float64),
+            np.ascontiguousarray(seg_r_j, dtype=np.float64),
+            0.0,
+            np.ascontiguousarray(k_array, dtype=np.float64),
+            t_qp, w_qp,
+        )
 
     len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
     len_j = np.linalg.norm(seg_r_j - seg_l_j, axis=1)
