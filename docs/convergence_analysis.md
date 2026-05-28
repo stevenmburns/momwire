@@ -174,11 +174,9 @@ finite limit even with pulse basis.
   fits progressively narrowing trailing windows to test whether the power
   law stabilizes (it doesn't).
 
-All three require PyNEC, which is in the antenna_designer venv but not in
-pysim's venv. Invocation:
+All three require PyNEC. Build it once into the project venv via
+`scripts/build_pynec.sh` (see README), then run:
 
 ```
-PYTHONPATH=/home/smburns/antennas/pysim/src \
-    /home/smburns/antennas/antenna_designer/.venv/bin/python \
-    scripts/<script>.py
+.venv/bin/python scripts/<script>.py
 ```
