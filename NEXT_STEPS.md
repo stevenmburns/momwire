@@ -19,6 +19,8 @@ The legacy `_legacy.py`, the spline experiments (`spline.py`, `bspline.py`, `aug
 - **PR #3** — `TriangularPySim` v1 with full analytic static-kernel extraction; `scripts/bspline_probe.py`; smoke test asserting it matches NEC to a few Ω
 - **PR #4** — Delete spline modules + drop `icecream` dep; wire `engine="accelerated"` into the new `PySim`; delete `_legacy.py`; silence headless-test `FigureCanvasAgg` warnings
 - **PR #5** — `TriangularYagiPySim`: multi-wire triangular Galerkin solver (driver + reflector). Same-wire blocks reuse the analytic static-kernel extraction; cross-wire blocks use direct Gauss-Legendre quadrature on the full kernel. `scripts/compare_yagi_nec.py` updated to show both triangular solvers side-by-side. Matches NEC to ~0.1 Ω on R and X at N=160; resolves the "does the Yagi reactance converge to NEC?" question — it does.
+- **PR #7** — Interactive inverted-V web UI (FastAPI + Vite/React/TS, under `web/`). WebSocket-driven live solve at sliders for droop angle, halfdriver factor, design freq, measurement freq, N. Smith chart overlay with a debounced ±30% sweep across measurement freq. Canvas shows the wire with current-magnitude color + per-arm `|I|` envelope, scaled by design wavelength with a λ/4 reference bar. No changes to the solver.
+- **PR #8** — adds azimuth-plane (xy) far-field polar plot in the top-left of the stage, computed client-side from the segment currents already in the WebSocket response. Shows the figure-8 → fatter-peanut transition as droop closes the V.
 
 ## What's left
 
@@ -45,6 +47,17 @@ Ordered by what I'd actually do next, not by what's most ambitious.
 7. **Coverage for non-default geometries** — sweep `wavelength`, `halfdriver_factor`, `wire_radius`, verify `TriangularPySim` against NEC. Currently only the default (0.481 λ) dipole has been validated end-to-end.
 
 8. **Test against measurements or a third reference** — NEC is a model, not ground truth. Comparison to a published measurement or to `nec4`/MININEC would be more convincing than NEC2 alone. Lower priority; useful as a sanity check.
+
+### Interactive UI follow-ups
+
+10. **Multi-wire UI: Yagi, then bent-wire arrays (hexbeam etc.)** — the current `web/` UI only drives `BentTriangularPySim` (one bent wire). Two natural extensions:
+    - **Yagi UI**: add driver + reflector (and optionally director) using `TriangularYagiPySim`, which already exists. Frontend needs a wire-list data model and per-wire controls (length, spacing). Solver is unchanged.
+    - **Hexbeam UI**: 6 bent elements arranged in a hex. Requires a new solver class first — combine `BentTriangularPySim`'s polyline support with `TriangularYagiPySim`'s wire-boundary tracking. Per item 4's closing note, this is "natural" but unbuilt.
+
+11. **Far-field pattern enhancements** (defers from the `far-field-pattern` branch — keep all three; the first cut only shows the xy plane in linear scale, per-frame normalized):
+    - **Second cut** — add an elevation slice (yz or xz plane) or a 2D `(θ, φ)` heatmap so the take-off-angle change with droop is also visible.
+    - **dB radial axis** with a fixed dynamic range (e.g. 30 dB) — linear hides shallow nulls; dB shows the depth of deep nulls and is the standard radiation-pattern convention.
+    - **Absolute directivity (dBi)** — integrate `|E|²` over the sphere for total radiated power, normalize so the radial axis is gain over isotropic. Lets the user compare antennas across geometries (currently per-frame normalization hides "is this 2 dBi or 8 dBi").
 
 ### Open research
 

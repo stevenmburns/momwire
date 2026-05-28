@@ -103,10 +103,10 @@ html, body, #root {
   font-weight: 600;
 }
 
-.smith-panel {
+.smith-panel,
+.farfield-panel {
   position: absolute;
   top: 14px;
-  right: 14px;
   background: rgba(13, 16, 21, 0.85);
   padding: 8px;
   border: 1px solid #2a313d;
@@ -114,7 +114,16 @@ html, body, #root {
   backdrop-filter: blur(4px);
 }
 
-.smith {
+.smith-panel {
+  right: 14px;
+}
+
+.farfield-panel {
+  left: 14px;
+}
+
+.smith,
+.farfield {
   display: block;
   border-radius: 4px;
 }
