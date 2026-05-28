@@ -284,6 +284,165 @@ seg_seg_reg_quad_batch_1d(
 }
 
 
+// Assemble the (n_k, n_basis, n_basis) Z matrix from the four J tensors,
+// per-segment h, the segment tangent-dot-product table, the left/right
+// segment index of each basis, and omega(k).
+//
+// For each basis pair (m, n) and each wavenumber k:
+//   Z[k, m, n] = (j w mu) * I_A + S / (j w eps)
+// with
+//   m_l = left_seg[m],  m_r = right_seg[m]
+//   n_l = left_seg[n],  n_r = right_seg[n]
+//   h*_m = h[m_*],      h*_n = h[n_*]
+//   td_xy = td_all[m_x, n_y]
+//   S   =  J00_ll/(hl_m hl_n) - J00_lr/(hl_m hr_n)
+//        - J00_rl/(hr_m hl_n) + J00_rr/(hr_m hr_n)
+//   I_A =  td_ll *  J11_ll/(hl_m hl_n)
+//        + td_lr * (J10_lr/hl_m   - J11_lr/(hl_m hr_n))
+//        + td_rl * (J01_rl/hl_n   - J11_rl/(hr_m hl_n))
+//        + td_rr * (J00_rr - J10_rr/hr_m - J01_rr/hr_n + J11_rr/(hr_m hr_n))
+//
+// Loop order: collapse(2) parallel for (k, m); the inner n loop reads
+// contiguous rows of the J tensors (when left_seg/right_seg are consecutive,
+// which is the common case for both V and Yagi within a wire).
+static py::array_t<std::complex<double>>
+assemble_Z(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J00,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J10,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J01,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J11,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_per_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> left_seg,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> right_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> omega_array,
+    double eps,
+    double mu
+) {
+    auto j00_info = J00.request();
+    auto j10_info = J10.request();
+    auto j01_info = J01.request();
+    auto j11_info = J11.request();
+
+    if (j00_info.ndim != 3) throw std::runtime_error("J tensors must be 3D");
+    size_t n_k = (size_t)j00_info.shape[0];
+    size_t N   = (size_t)j00_info.shape[1];
+    if ((size_t)j00_info.shape[2] != N) {
+        throw std::runtime_error("J tensors must be square (n_k, N, N)");
+    }
+
+    auto h   = h_per_seg.unchecked<1>();
+    auto td  = td_all.unchecked<2>();
+    auto ls  = left_seg.unchecked<1>();
+    auto rs  = right_seg.unchecked<1>();
+    auto om  = omega_array.unchecked<1>();
+
+    if ((size_t)h.shape(0) != N) {
+        throw std::runtime_error("h_per_seg length must match J tensor N");
+    }
+    if ((size_t)td.shape(0) != N || (size_t)td.shape(1) != N) {
+        throw std::runtime_error("td_all must be (N, N)");
+    }
+    if (ls.shape(0) != rs.shape(0)) {
+        throw std::runtime_error("left_seg / right_seg must have matching length");
+    }
+    if ((size_t)om.shape(0) != n_k) {
+        throw std::runtime_error("omega_array length must match n_k");
+    }
+    size_t n_basis = (size_t)ls.shape(0);
+
+    py::array_t<std::complex<double>> Z({n_k, n_basis, n_basis});
+    auto z_info = Z.request();
+
+    const std::complex<double>* j00_ptr = static_cast<const std::complex<double>*>(j00_info.ptr);
+    const std::complex<double>* j10_ptr = static_cast<const std::complex<double>*>(j10_info.ptr);
+    const std::complex<double>* j01_ptr = static_cast<const std::complex<double>*>(j01_info.ptr);
+    const std::complex<double>* j11_ptr = static_cast<const std::complex<double>*>(j11_info.ptr);
+    std::complex<double>* z_ptr = static_cast<std::complex<double>*>(z_info.ptr);
+
+    const std::complex<double> j_unit(0.0, 1.0);
+
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (size_t kk = 0; kk < n_k; kk++) {
+        for (size_t m = 0; m < n_basis; m++) {
+            int64_t m_l = ls(m);
+            int64_t m_r = rs(m);
+            double hl_m = h(m_l);
+            double hr_m = h(m_r);
+            double inv_hl_m = 1.0 / hl_m;
+            double inv_hr_m = 1.0 / hr_m;
+
+            double omega_k = om(kk);
+            std::complex<double> jw_mu    = j_unit * (omega_k * mu);
+            std::complex<double> inv_jw_eps = 1.0 / (j_unit * (omega_k * eps));
+
+            size_t base_kk = kk * N * N;
+            const std::complex<double> *j00_ml = j00_ptr + base_kk + (size_t)m_l * N;
+            const std::complex<double> *j00_mr = j00_ptr + base_kk + (size_t)m_r * N;
+            const std::complex<double> *j10_ml = j10_ptr + base_kk + (size_t)m_l * N;
+            const std::complex<double> *j10_mr = j10_ptr + base_kk + (size_t)m_r * N;
+            const std::complex<double> *j01_mr = j01_ptr + base_kk + (size_t)m_r * N;
+            const std::complex<double> *j11_ml = j11_ptr + base_kk + (size_t)m_l * N;
+            const std::complex<double> *j11_mr = j11_ptr + base_kk + (size_t)m_r * N;
+
+            const double *td_ml = &td(m_l, 0);
+            const double *td_mr = &td(m_r, 0);
+
+            std::complex<double> *z_row = z_ptr + kk * n_basis * n_basis + m * n_basis;
+
+            for (size_t n = 0; n < n_basis; n++) {
+                int64_t n_l = ls(n);
+                int64_t n_r = rs(n);
+                double inv_hl_n = 1.0 / h(n_l);
+                double inv_hr_n = 1.0 / h(n_r);
+
+                double td_ll = td_ml[n_l];
+                double td_lr = td_ml[n_r];
+                double td_rl = td_mr[n_l];
+                double td_rr = td_mr[n_r];
+
+                std::complex<double> J00_ll = j00_ml[n_l];
+                std::complex<double> J00_lr = j00_ml[n_r];
+                std::complex<double> J00_rl = j00_mr[n_l];
+                std::complex<double> J00_rr = j00_mr[n_r];
+
+                std::complex<double> J10_lr = j10_ml[n_r];
+                std::complex<double> J10_rr = j10_mr[n_r];
+
+                std::complex<double> J01_rl = j01_mr[n_l];
+                std::complex<double> J01_rr = j01_mr[n_r];
+
+                std::complex<double> J11_ll = j11_ml[n_l];
+                std::complex<double> J11_lr = j11_ml[n_r];
+                std::complex<double> J11_rl = j11_mr[n_l];
+                std::complex<double> J11_rr = j11_mr[n_r];
+
+                double inv_hlm_hln = inv_hl_m * inv_hl_n;
+                double inv_hlm_hrn = inv_hl_m * inv_hr_n;
+                double inv_hrm_hln = inv_hr_m * inv_hl_n;
+                double inv_hrm_hrn = inv_hr_m * inv_hr_n;
+
+                std::complex<double> S =
+                      J00_ll * inv_hlm_hln
+                    - J00_lr * inv_hlm_hrn
+                    - J00_rl * inv_hrm_hln
+                    + J00_rr * inv_hrm_hrn;
+
+                std::complex<double> I_A =
+                      td_ll * (J11_ll * inv_hlm_hln)
+                    + td_lr * (J10_lr * inv_hl_m - J11_lr * inv_hlm_hrn)
+                    + td_rl * (J01_rl * inv_hl_n - J11_rl * inv_hrm_hln)
+                    + td_rr * (J00_rr - J10_rr * inv_hr_m - J01_rr * inv_hr_n + J11_rr * inv_hrm_hrn);
+
+                z_row[n] = jw_mu * I_A + S * inv_jw_eps;
+            }
+        }
+    }
+
+    return Z;
+}
+
+
 std::complex<double> trapezoid_aux(double theta, double delta, double *m_center_ptr, double *n_l_endpoint_ptr, double *n_r_endpoint_ptr, double wire_radius, double k) {
 
   std::complex<double> minus_jk = -1i*k;
@@ -448,4 +607,14 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("seg_endpoints"), py::arg("a"),
           py::arg("k_array"),
           py::arg("gl_t"), py::arg("gl_w"));
+    m.def("assemble_Z", &assemble_Z,
+          "Assemble the (n_k, n_basis, n_basis) Z matrix from the four J "
+          "tensors, per-segment h, tangent-dot table, left/right basis-to-"
+          "segment mappings, and omega(k). Returns Z complex.",
+          py::arg("J00"), py::arg("J10"),
+          py::arg("J01"), py::arg("J11"),
+          py::arg("h_per_seg"), py::arg("td_all"),
+          py::arg("left_seg"), py::arg("right_seg"),
+          py::arg("omega_array"),
+          py::arg("eps"), py::arg("mu"));
 }
