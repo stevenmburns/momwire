@@ -136,6 +136,11 @@ export function App() {
   // Ground plane (PyNEC only). Geometry is lifted by heightM when enabled.
   const [groundEnabled, setGroundEnabled] = useState(false);
   const [heightM, setHeightM] = useState(7.0);
+  // Far-field cut angles. The azimuth plot slices the pattern at elevation
+  // `azElevDeg`; the elevation plot slices the vertical plane at azimuth
+  // bearing `elevAzDeg` (0° = +x). Defaults give the conventional views.
+  const [azElevDeg, setAzElevDeg] = useState(15);
+  const [elevAzDeg, setElevAzDeg] = useState(90);
 
   // When linked, design and measurement freq move together.
   function updateDesignFreq(v: number) {
@@ -599,6 +604,38 @@ export function App() {
           </label>
         </div>
 
+        <div className="group-label">far-field cuts</div>
+
+        <div className="field">
+          <label>
+            <span>azimuth at elevation</span>
+            <span>{azElevDeg.toFixed(0)}°</span>
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={89}
+            step={1}
+            value={azElevDeg}
+            onInput={(e) => setAzElevDeg(Number((e.target as HTMLInputElement).value))}
+          />
+        </div>
+
+        <div className="field">
+          <label>
+            <span>elevation at azimuth</span>
+            <span>{elevAzDeg.toFixed(0)}°</span>
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={359}
+            step={1}
+            value={elevAzDeg}
+            onInput={(e) => setElevAzDeg(Number((e.target as HTMLInputElement).value))}
+          />
+        </div>
+
         <div className="readout">
           <div className="row">
             <span>R</span>
@@ -675,6 +712,8 @@ export function App() {
                   pattern={pattern}
                   measFreqMhz={measFreq}
                   sweepRunning={sweepRunning}
+                  azElevDeg={azElevDeg}
+                  elevAzDeg={elevAzDeg}
                 />
               </div>
               <div className="thumb-label">{v.label}</div>
@@ -691,6 +730,8 @@ export function App() {
             pattern={pattern}
             measFreqMhz={measFreq}
             sweepRunning={sweepRunning}
+            azElevDeg={azElevDeg}
+            elevAzDeg={elevAzDeg}
           />
         </div>
         <div className="status">ws: {status}</div>
@@ -732,6 +773,8 @@ function ViewPanel({
   pattern,
   measFreqMhz,
   sweepRunning,
+  azElevDeg,
+  elevAzDeg,
 }: {
   view: View;
   size: number;
@@ -741,6 +784,8 @@ function ViewPanel({
   pattern: PatternData | null;
   measFreqMhz: number;
   sweepRunning: boolean;
+  azElevDeg: number;
+  elevAzDeg: number;
 }) {
   if (view === "antenna") {
     return (
@@ -751,10 +796,28 @@ function ViewPanel({
     );
   }
   if (view === "azimuth") {
-    return <FarFieldChart result={result} pattern={pattern} size={size} cut="xy" />;
+    return (
+      <FarFieldChart
+        result={result}
+        pattern={pattern}
+        size={size}
+        cut="xy"
+        azElevDeg={azElevDeg}
+        elevAzDeg={elevAzDeg}
+      />
+    );
   }
   if (view === "elevation") {
-    return <FarFieldChart result={result} pattern={pattern} size={size} cut="yz" />;
+    return (
+      <FarFieldChart
+        result={result}
+        pattern={pattern}
+        size={size}
+        cut="yz"
+        azElevDeg={azElevDeg}
+        elevAzDeg={elevAzDeg}
+      />
+    );
   }
   return (
     <SmithChart
@@ -776,11 +839,15 @@ function FarFieldChart({
   pattern,
   size,
   cut,
+  azElevDeg,
+  elevAzDeg,
 }: {
   result: SolveResponse | null;
   pattern: PatternData | null;
   size: number;
   cut: FarFieldCut;
+  azElevDeg: number;
+  elevAzDeg: number;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -805,13 +872,19 @@ function FarFieldChart({
     const R = size / 2 - 14;
 
     const groundOn = !!result?.ground;
-    // When ground is on, the xy cut at z=0 is the horizon — Fresnel grazing
-    // kills the field everywhere there. Tilt the cone up by AZ_ELEV_DEG so
-    // the "azimuth" cut actually shows the pattern lobes.
-    const AZ_ELEV_DEG = 15;
-    const azElev = groundOn && cut === "xy" ? (AZ_ELEV_DEG * Math.PI) / 180 : 0;
-    const azSinT = Math.cos(azElev); // sin(polar θ from +z) = cos(elevation)
-    const azCosT = Math.sin(azElev); // cos(polar θ) = sin(elevation)
+    // Azimuth cut: cone above horizon at elevation azElevDeg. With ground
+    // off, the conventional setting is 0° (the xy plane). With ground on,
+    // 0° is grazing and Fresnel kills the pattern, so something like 15°
+    // gives a useful view — the slider lets the user pick.
+    const azElevRad = (azElevDeg * Math.PI) / 180;
+    const azSinT = Math.cos(azElevRad); // sin(polar θ from +z) = cos(elevation)
+    const azCosT = Math.sin(azElevRad); // cos(polar θ) = sin(elevation)
+    // Elevation cut: vertical great circle through azimuth bearing elevAzDeg.
+    // t=0 lies at +elevAz horizon; t=π/2 is zenith; t=π is at the opposite
+    // horizon; t=3π/2 is nadir (below ground, zeroed when ground is on).
+    const elevAzRad = (elevAzDeg * Math.PI) / 180;
+    const elevAzCos = Math.cos(elevAzRad);
+    const elevAzSin = Math.sin(elevAzRad);
 
     // Radial axis: absolute directivity in dBi over a fixed displayable
     // range of +10 (outer edge) to −20 (origin). Labeled ticks are at the
@@ -837,21 +910,45 @@ function FarFieldChart({
     ctx.lineTo(cx, cy + R);
     ctx.stroke();
 
-    // Axis labels parameterized by cut plane. The "horizontal" axis on the
-    // canvas is whichever world axis lies in the cut and serves as the
-    // 0-angle reference (cos t); "vertical" is the second cut axis (sin t).
-    const horizLabel = cut === "xy" ? "x" : "y";
-    const vertLabel = cut === "xy" ? "y" : "z";
+    // Axis labels: xy cut uses world x/y around the rim; yz cut shows the
+    // azimuth bearing on the horizontal pair and zenith/nadir on vertical.
     ctx.fillStyle = "#4a5160";
     ctx.font = "10px ui-monospace, monospace";
     const cutLabel =
-      cut === "xy" && groundOn ? `az @ ${AZ_ELEV_DEG}° elev (dBi)` : `${cut} plane (dBi)`;
+      cut === "xy"
+        ? `az @ ${azElevDeg}° elev (dBi)`
+        : `elev @ ${elevAzDeg}° az (dBi)`;
     ctx.fillText(cutLabel, 6, 14);
     ctx.fillStyle = "#7b8493";
-    ctx.fillText(`+${horizLabel}`, cx + R - 14, cy + 11);
-    ctx.fillText(`−${horizLabel}`, cx - R + 2, cy + 11);
-    ctx.fillText(`+${vertLabel}`, cx - 8, cy - R + 12);
-    ctx.fillText(`−${vertLabel}`, cx - 7, cy + R - 2);
+    if (cut === "xy") {
+      ctx.fillText("+x", cx + R - 14, cy + 11);
+      ctx.fillText("−x", cx - R + 2, cy + 11);
+      ctx.fillText("+y", cx - 8, cy - R + 12);
+      ctx.fillText("−y", cx - 7, cy + R - 2);
+    } else {
+      ctx.fillText("zen", cx - 9, cy - R + 12);
+      ctx.fillText("nad", cx - 9, cy + R - 2);
+    }
+
+    // Cross-reference: a single dashed spoke showing where the *other* cut
+    // slices this plot. The opposite side is implied by symmetry.
+    const markerStyle = "rgba(180, 140, 250, 0.7)";
+    {
+      const canvasAngleRad =
+        cut === "xy"
+          ? (elevAzDeg * Math.PI) / 180  // azimuth plot: elevation cut's bearing
+          : (azElevDeg * Math.PI) / 180; // elevation plot: azimuth cut's elevation
+      const cosA = Math.cos(canvasAngleRad);
+      const sinA = Math.sin(canvasAngleRad);
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + cosA * R, cy - sinA * R);
+      ctx.strokeStyle = markerStyle;
+      ctx.lineWidth = 0.8;
+      ctx.setLineDash([3, 3]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
 
     if (!result) return;
 
@@ -912,10 +1009,11 @@ function FarFieldChart({
       const t = (2 * Math.PI * pi) / N_DIR;
       const ct = Math.cos(t);
       const st = Math.sin(t);
-      // xy cut: cone at polar angle azCosT (= cos θ_polar) above the xy plane.
-      // yz cut: full great circle through ŷ, ẑ.
-      const rx = cut === "xy" ? azSinT * ct : 0;
-      const ry = cut === "xy" ? azSinT * st : ct;
+      // xy cut: cone at the chosen elevation. yz cut: vertical great circle
+      // through the chosen azimuth bearing (cos t · (cos φ, sin φ) on the
+      // horizontal plane, plus sin t on z).
+      const rx = cut === "xy" ? azSinT * ct : elevAzCos * ct;
+      const ry = cut === "xy" ? azSinT * st : elevAzSin * ct;
       const rz = cut === "xy" ? azCosT : st;
 
       // Rays into the ground (rz < 0) carry no far field.
@@ -1086,8 +1184,8 @@ function FarFieldChart({
         const t = (2 * Math.PI * pi) / N_DIR;
         const ct = Math.cos(t);
         const st = Math.sin(t);
-        const rx = cut === "xy" ? azSinT * ct : 0;
-        const ry = cut === "xy" ? azSinT * st : ct;
+        const rx = cut === "xy" ? azSinT * ct : elevAzCos * ct;
+        const ry = cut === "xy" ? azSinT * st : elevAzSin * ct;
         const rz = cut === "xy" ? azCosT : st;
         if (rz < -1e-9) { started = false; continue; }
 
@@ -1138,7 +1236,7 @@ function FarFieldChart({
     const peakText = `peak ${peakDbi >= 0 ? "+" : ""}${peakDbi.toFixed(1)} dBi`;
     const tw = ctx.measureText(peakText).width;
     ctx.fillText(peakText, size - tw - 6, 14);
-  }, [result, pattern, size, cut]);
+  }, [result, pattern, size, cut, azElevDeg, elevAzDeg]);
 
   return <canvas ref={canvasRef} className="farfield" />;
 }
