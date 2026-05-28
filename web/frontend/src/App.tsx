@@ -694,8 +694,9 @@ function FarFieldChart({
     const cy = size / 2;
     const R = size / 2 - 14;
 
-    // Radial axis: absolute directivity in dBi. Outer ring = DBI_TOP,
-    // floor = DBI_TOP − DB_SPAN. Rings every 10 dB.
+    // Radial axis: absolute directivity in dBi over a fixed displayable
+    // range of +10 (outer edge) to −20 (origin). Labeled ticks are at the
+    // multiples of 6 strictly inside that range: +6, 0, −6, −12, −18.
     const DBI_TOP = 10;
     const DB_SPAN = 30;
     const dbiToFrac = (db: number) => Math.max(0, (db - (DBI_TOP - DB_SPAN)) / DB_SPAN);
@@ -703,7 +704,7 @@ function FarFieldChart({
     ctx.lineWidth = 0.6;
     ctx.fillStyle = "#4a5160";
     ctx.font = "9px ui-monospace, monospace";
-    for (let db = DBI_TOP - DB_SPAN + 10; db <= DBI_TOP; db += 10) {
+    for (const db of [6, 0, -6, -12, -18]) {
       const f = dbiToFrac(db);
       ctx.beginPath();
       ctx.arc(cx, cy, R * f, 0, 2 * Math.PI);
