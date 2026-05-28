@@ -28,6 +28,7 @@ type SolveResponse = {
 
 type SolveRequest = {
   geometry: "inverted_v" | "yagi";
+  solver: "pysim" | "pynec";
   n_per_wire: number;
   design_freq_mhz: number;
   measurement_freq_mhz: number;
@@ -59,6 +60,7 @@ export function App() {
   const [reflectorLengthFactor, setReflectorLengthFactor] = useState(1.01);
   const [spacingWavelengths, setSpacingWavelengths] = useState(0.15);
   // Shared
+  const [solver, setSolver] = useState<"pysim" | "pynec">("pysim");
   const [nPerWire, setNPerWire] = useState(30);
   const [designFreq, setDesignFreq] = useState(14.3);
   const [measFreq, setMeasFreq] = useState(14.3);
@@ -92,6 +94,7 @@ export function App() {
   function buildRequest(): SolveRequest {
     const base: SolveRequest = {
       geometry,
+      solver,
       n_per_wire: nPerWire,
       design_freq_mhz: designFreq,
       measurement_freq_mhz: measFreq,
@@ -117,7 +120,7 @@ export function App() {
     requestSolve();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    geometry,
+    geometry, solver,
     angle, halfdriverFactor,
     driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
     nPerWire, designFreq, measFreq, wireRadius,
@@ -140,7 +143,7 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    geometry,
+    geometry, solver,
     angle, halfdriverFactor,
     driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
     nPerWire, designFreq, wireRadius,
@@ -357,6 +360,31 @@ export function App() {
         </div>
 
         <div className="group-label">simulation</div>
+
+        <div className="field">
+          <label>
+            <span>solver</span>
+            <span>{solver}</span>
+          </label>
+          <div className="geometry-tabs" role="tablist">
+            <button
+              role="tab"
+              aria-selected={solver === "pysim"}
+              className={solver === "pysim" ? "active" : ""}
+              onClick={() => setSolver("pysim")}
+            >
+              pysim
+            </button>
+            <button
+              role="tab"
+              aria-selected={solver === "pynec"}
+              className={solver === "pynec" ? "active" : ""}
+              onClick={() => setSolver("pynec")}
+            >
+              PyNEC
+            </button>
+          </div>
+        </div>
 
         <div className="field">
           <label>

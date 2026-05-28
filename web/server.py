@@ -23,6 +23,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pysim.triangular_bent import BentTriangularPySim
 from pysim.triangular_yagi import TriangularYagiPySim
 
+from . import pynec_backend
+
 
 app = FastAPI(title="pysim interactive")
 
@@ -214,10 +216,12 @@ def _solve_yagi(req: dict) -> dict:
 
 
 def solve(req: dict) -> dict:
+    if req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC:
+        return pynec_backend.solve(req)
     geometry = req.get("geometry", "inverted_v")
-    if geometry == "yagi":
-        return _solve_yagi(req)
-    return _solve_inverted_v(req)
+    out = _solve_yagi(req) if geometry == "yagi" else _solve_inverted_v(req)
+    out["solver"] = "pysim"
+    return out
 
 
 def _sweep_inverted_v(
@@ -286,12 +290,15 @@ async def sweep_endpoint(req: dict):
     freqs = [float(f) for f in req.get("freqs_mhz", [])]
     if not freqs:
         return {"freqs_mhz": [], "z_re": [], "z_im": []}
+    if req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC:
+        z_re, z_im = pynec_backend.sweep(req, freqs)
+        return {"freqs_mhz": freqs, "z_re": z_re, "z_im": z_im, "solver": "pynec"}
     geometry = req.get("geometry", "inverted_v")
     if geometry == "yagi":
         z_re, z_im = _sweep_yagi(req, freqs)
     else:
         z_re, z_im = _sweep_inverted_v(req, freqs)
-    return {"freqs_mhz": freqs, "z_re": z_re, "z_im": z_im}
+    return {"freqs_mhz": freqs, "z_re": z_re, "z_im": z_im, "solver": "pysim"}
 
 
 @app.get("/healthz")
