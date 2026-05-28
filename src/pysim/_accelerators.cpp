@@ -161,6 +161,129 @@ seg_seg_quad_batch_3d(
 }
 
 
+// Batched same-wire Gauss-Legendre quadrature on the *regularized* kernel
+//   G_reg(R, k) = (exp(-j k R) - 1) / (4 pi R),    R = sqrt(diff^2 + a^2)
+// for all segment pairs (i, j) on a shared 1D arc-length line.
+//
+// Inputs:
+//   seg_endpoints : (N+1,) arc-length / position of segment boundaries
+//   a             : wire radius (corner regularization)
+//   k_array       : (n_k,) wavenumbers
+//   gl_t, gl_w    : Gauss-Legendre nodes/weights mapped to [0, 1]
+//                   (i.e. t = (xi + 1)/2 and w = w_legendre / 2)
+//
+// For each pair (i, j) we precompute the per-pair R table once and reuse it
+// across the k axis. OpenMP parallelizes over (i, j).
+//
+// Output:
+//   (J00, J10, J01, J11), each (n_k, N, N) complex.
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+seg_seg_reg_quad_batch_1d(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_endpoints,
+    double a,
+    py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+) {
+    auto se  = seg_endpoints.unchecked<1>();
+    auto ka  = k_array.unchecked<1>();
+    auto glt = gl_t.unchecked<1>();
+    auto glw = gl_w.unchecked<1>();
+
+    if (glt.shape(0) != glw.shape(0)) {
+        throw std::runtime_error("gl_t and gl_w must have matching length");
+    }
+    if (se.shape(0) < 2) {
+        throw std::runtime_error("seg_endpoints must have at least 2 entries");
+    }
+
+    size_t N    = se.shape(0) - 1;
+    size_t n_k  = ka.shape(0);
+    size_t n_qp = glt.shape(0);
+    if (n_qp * n_qp > 64) {
+        throw std::runtime_error("n_qp too large (n_qp^2 must be <= 64)");
+    }
+
+    const double a_sq    = a * a;
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+
+    py::array_t<std::complex<double>> J00({n_k, N, N});
+    py::array_t<std::complex<double>> J10({n_k, N, N});
+    py::array_t<std::complex<double>> J01({n_k, N, N});
+    py::array_t<std::complex<double>> J11({n_k, N, N});
+    auto j00 = J00.mutable_unchecked<3>();
+    auto j10 = J10.mutable_unchecked<3>();
+    auto j01 = J01.mutable_unchecked<3>();
+    auto j11 = J11.mutable_unchecked<3>();
+
+    // Per-segment quadrature positions and lengths.
+    std::vector<double> pos(N * n_qp);
+    std::vector<double> Lvec(N);
+    for (size_t i = 0; i < N; i++) {
+        double sl = se(i);
+        double sr = se(i + 1);
+        double Li = sr - sl;
+        Lvec[i] = Li;
+        for (size_t q = 0; q < n_qp; q++) {
+            pos[i * n_qp + q] = sl + Li * glt(q);
+        }
+    }
+
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (size_t i = 0; i < N; i++) {
+        for (size_t j = 0; j < N; j++) {
+            double R[64];
+            double Li = Lvec[i];
+            double Lj = Lvec[j];
+            const double *pi_q = &pos[i * n_qp];
+            const double *pj_r = &pos[j * n_qp];
+            for (size_t q = 0; q < n_qp; q++) {
+                double piq = pi_q[q];
+                for (size_t r = 0; r < n_qp; r++) {
+                    double d = piq - pj_r[r];
+                    R[q * n_qp + r] = std::sqrt(d * d + a_sq);
+                }
+            }
+
+            for (size_t kk = 0; kk < n_k; kk++) {
+                double k = ka(kk);
+                std::complex<double> s00(0, 0), s10(0, 0), s01(0, 0), s11(0, 0);
+                for (size_t q = 0; q < n_qp; q++) {
+                    double wi = glw(q) * Li;
+                    double ui = glt(q) * Li;
+                    for (size_t r = 0; r < n_qp; r++) {
+                        double wj = glw(r) * Lj;
+                        double uj = glt(r) * Lj;
+                        double Rv = R[q * n_qp + r];
+                        // exp(-j k R) - 1 = (cos(kR) - 1) - j sin(kR)
+                        //   = (cos(-kR) - 1) + j sin(-kR)
+                        double phase = -k * Rv;
+                        double cm1   = std::cos(phase) - 1.0;
+                        double sp    = std::sin(phase);
+                        std::complex<double> Greg(cm1, sp);
+                        Greg *= inv_4pi / Rv;
+                        std::complex<double> wG = (wi * wj) * Greg;
+                        s00 += wG;
+                        s10 += ui * wG;
+                        s01 += uj * wG;
+                        s11 += (ui * uj) * wG;
+                    }
+                }
+                j00(kk, i, j) = s00;
+                j10(kk, i, j) = s10;
+                j01(kk, i, j) = s01;
+                j11(kk, i, j) = s11;
+            }
+        }
+    }
+
+    return std::make_tuple(J00, J10, J01, J11);
+}
+
+
 std::complex<double> trapezoid_aux(double theta, double delta, double *m_center_ptr, double *n_l_endpoint_ptr, double *n_r_endpoint_ptr, double wire_radius, double k) {
 
   std::complex<double> minus_jk = -1i*k;
@@ -317,5 +440,12 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("seg_l_i"), py::arg("seg_r_i"),
           py::arg("seg_l_j"), py::arg("seg_r_j"),
           py::arg("a_squared"), py::arg("k_array"),
+          py::arg("gl_t"), py::arg("gl_w"));
+    m.def("seg_seg_reg_quad_batch_1d", &seg_seg_reg_quad_batch_1d,
+          "Batched same-wire Gauss-Legendre quadrature on the regularized "
+          "kernel (exp(-jkR)-1)/(4 pi R) over a k vector. "
+          "Returns (J00, J10, J01, J11) each (n_k, N, N) complex.",
+          py::arg("seg_endpoints"), py::arg("a"),
+          py::arg("k_array"),
           py::arg("gl_t"), py::arg("gl_w"));
 }
