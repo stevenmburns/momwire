@@ -33,6 +33,10 @@ markers = [
     "plot: tests that produce plots for visual inspection (deselect with -m 'not plot')",
 ]
 
+[tool.ruff]
+# Vendored upstream source (PyNEC + necpp) — never lint.
+extend-exclude = ["python-necpp"]
+
 [tool.ruff.lint]
 ignore = ["E741"]
 # Keep "imported but unused" as a warning instead of auto-stripping.

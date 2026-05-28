@@ -1,0 +1,292 @@
+"""PyNEC drop-in backend for the web UI.
+
+Mirrors the response shape of `web.server`'s pysim solver paths so the
+frontend can swap between solvers via a `solver` field on every request.
+
+PyNEC is optional: `HAVE_PYNEC` is False if the import fails, and the
+server falls back to pysim with a one-time warning.
+"""
+
+from __future__ import annotations
+
+import time
+
+import numpy as np
+
+try:
+    import PyNEC as nec  # type: ignore
+
+    HAVE_PYNEC = True
+except ImportError:
+    HAVE_PYNEC = False
+    nec = None
+
+
+C_LIGHT = 299_792_458.0
+
+
+def _segment_centers_to_knot_currents(
+    cur_per_seg: np.ndarray, n_knots: int
+) -> np.ndarray:
+    """Map NEC's per-segment-center currents onto the (n_knots,)-knot array
+    the UI expects. Currents at the two end-knots are zero (open-wire BC);
+    interior knot k sits between segments k-1 and k, so we average."""
+    full = np.zeros(n_knots, dtype=np.complex128)
+    # cur_per_seg has length n_knots - 1 (one current per segment).
+    if cur_per_seg.shape[0] != n_knots - 1:
+        raise RuntimeError(
+            f"segment-current length {cur_per_seg.shape[0]} doesn't match "
+            f"n_knots-1 = {n_knots - 1}"
+        )
+    full[1:-1] = 0.5 * (cur_per_seg[:-1] + cur_per_seg[1:])
+    return full
+
+
+def _run_solve(c, n_seg_total: int, feed_seg: int, freq_mhz: float):
+    c.gn_card(-1, 0, 0, 0, 0, 0, 0, 0)  # free space
+    c.ex_card(0, 1, feed_seg, 0, 1.0, 0.0, 0, 0, 0, 0)
+    c.fr_card(0, 1, freq_mhz, 0)
+    c.xq_card(0)
+    sc = c.get_structure_currents(0)
+    cur_arr = np.asarray(sc.get_current(), dtype=np.complex128)
+    tag_arr = np.asarray(sc.get_current_segment_tag())
+    return cur_arr, tag_arr
+
+
+def solve_inverted_v(req: dict) -> dict:
+    """Inverted V via two PyNEC wires meeting at the apex."""
+    angle_deg = float(req.get("angle_deg", 30.0))
+    n_per_wire = int(req.get("n_per_wire", 30))
+    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
+    meas_freq_mhz = float(req.get("measurement_freq_mhz", design_freq_mhz))
+    halfdriver_factor = float(req.get("halfdriver_factor", 0.962))
+    wire_radius = float(req.get("wire_radius", 0.0005))
+
+    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
+    arm_len = halfdriver_factor * wavelength_design / 4.0
+    alpha = np.deg2rad(angle_deg)
+    cos_a, sin_a = float(np.cos(alpha)), float(np.sin(alpha))
+    left = (-arm_len * cos_a, 0.0, -arm_len * sin_a)
+    apex = (0.0, 0.0, 0.0)
+    right = (arm_len * cos_a, 0.0, -arm_len * sin_a)
+
+    c = nec.nec_context()
+    geo = c.get_geometry()
+    # Wire 1: left arm, runs from left endpoint to apex.
+    geo.wire(
+        1,
+        n_per_wire,
+        left[0],
+        left[1],
+        left[2],
+        apex[0],
+        apex[1],
+        apex[2],
+        wire_radius,
+        1.0,
+        1.0,
+    )
+    # Wire 2: right arm, runs from apex to right endpoint.
+    geo.wire(
+        2,
+        n_per_wire,
+        apex[0],
+        apex[1],
+        apex[2],
+        right[0],
+        right[1],
+        right[2],
+        wire_radius,
+        1.0,
+        1.0,
+    )
+    c.geometry_complete(0)
+
+    # Feed the segment that contains the apex — the last segment of wire 1.
+    # NEC numbers segments 1..N_total in geometry order; feed_seg refers to
+    # the global index within the tagged wire.
+    feed_seg = n_per_wire  # last segment of wire 1 (touches the apex)
+
+    t0 = time.perf_counter()
+    cur_arr, tag_arr = _run_solve(c, 2 * n_per_wire, feed_seg, meas_freq_mhz)
+    solve_ms = (time.perf_counter() - t0) * 1e3
+
+    # z_in = 1 / current at the fed segment center.
+    wire1_idx = np.where(tag_arr == 1)[0]
+    fed_global_idx = wire1_idx[feed_seg - 1]
+    z_in = complex(1.0 / cur_arr[fed_global_idx])
+
+    # Build knot positions and currents, matching pysim's response shape:
+    # one continuous wire (left arm reversed + right arm), feed at apex.
+    arm1_knots = np.linspace(left, apex, n_per_wire + 1)
+    arm2_knots = np.linspace(apex, right, n_per_wire + 1)
+    knots = np.vstack([arm1_knots[:-1], arm2_knots])  # (2N+1, 3)
+
+    # Per-wire segment currents.
+    wire2_idx = np.where(tag_arr == 2)[0]
+    cur_wire1 = cur_arr[wire1_idx]
+    cur_wire2 = cur_arr[wire2_idx]
+    # Concatenate currents in the same direction as knots.
+    cur_all = np.concatenate([cur_wire1, cur_wire2])
+    knot_currents = _segment_centers_to_knot_currents(cur_all, knots.shape[0])
+    feed_knot_index = n_per_wire  # apex
+
+    return {
+        "geometry": "inverted_v",
+        "wires": [
+            {
+                "label": "wire",
+                "knot_positions": knots.tolist(),
+                "knot_currents_re": knot_currents.real.tolist(),
+                "knot_currents_im": knot_currents.imag.tolist(),
+            }
+        ],
+        "feed_wire_index": 0,
+        "feed_knot_index": feed_knot_index,
+        "z_in_re": float(z_in.real),
+        "z_in_im": float(z_in.imag),
+        "design_freq_mhz": design_freq_mhz,
+        "measurement_freq_mhz": meas_freq_mhz,
+        "lambda_design_m": wavelength_design,
+        "arm_len_m": arm_len,
+        "solve_ms": solve_ms,
+        "solver": "pynec",
+    }
+
+
+def solve_yagi(req: dict) -> dict:
+    """Two-element Yagi (driver + reflector) — driver along x, reflector at -y."""
+    n_per_wire = int(req.get("n_per_wire", 30))
+    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
+    meas_freq_mhz = float(req.get("measurement_freq_mhz", design_freq_mhz))
+    driver_factor = float(req.get("driver_length_factor", 0.962))
+    refl_factor_abs = float(req.get("reflector_length_factor", 1.01))
+    spacing_wavelengths = float(req.get("spacing_wavelengths", 0.15))
+    wire_radius = float(req.get("wire_radius", 0.0005))
+
+    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
+    h_driver = driver_factor * wavelength_design / 4.0
+    h_refl = refl_factor_abs * wavelength_design / 4.0
+    spacing_m = spacing_wavelengths * wavelength_design
+
+    c = nec.nec_context()
+    geo = c.get_geometry()
+    # Driver: along x at y=0, z=0.
+    geo.wire(
+        1,
+        n_per_wire,
+        -h_driver,
+        0.0,
+        0.0,
+        h_driver,
+        0.0,
+        0.0,
+        wire_radius,
+        1.0,
+        1.0,
+    )
+    # Reflector: along x at y=-spacing_m, z=0.
+    geo.wire(
+        2,
+        n_per_wire,
+        -h_refl,
+        -spacing_m,
+        0.0,
+        h_refl,
+        -spacing_m,
+        0.0,
+        wire_radius,
+        1.0,
+        1.0,
+    )
+    c.geometry_complete(0)
+
+    # Feed driver center segment.
+    feed_seg = (n_per_wire + 1) // 2
+
+    t0 = time.perf_counter()
+    cur_arr, tag_arr = _run_solve(c, 2 * n_per_wire, feed_seg, meas_freq_mhz)
+    solve_ms = (time.perf_counter() - t0) * 1e3
+
+    driver_idx = np.where(tag_arr == 1)[0]
+    refl_idx = np.where(tag_arr == 2)[0]
+    fed_global = driver_idx[feed_seg - 1]
+    z_in = complex(1.0 / cur_arr[fed_global])
+
+    N = n_per_wire
+    driver_knots = np.column_stack(
+        [np.linspace(-h_driver, h_driver, N + 1), np.zeros(N + 1), np.zeros(N + 1)]
+    )
+    refl_knots = np.column_stack(
+        [
+            np.linspace(-h_refl, h_refl, N + 1),
+            np.full(N + 1, -spacing_m),
+            np.zeros(N + 1),
+        ]
+    )
+    driver_cur = _segment_centers_to_knot_currents(
+        cur_arr[driver_idx], driver_knots.shape[0]
+    )
+    refl_cur = _segment_centers_to_knot_currents(cur_arr[refl_idx], refl_knots.shape[0])
+    feed_knot_index = (N + 1) // 2 if N % 2 == 0 else N // 2 + 1
+    # Match TriangularYagiPySim's feed logic: middle interior knot of driver.
+    interior_arc = np.linspace(0.0, 2 * h_driver, N + 1)[1:-1]
+    m_center_interior = int(np.argmin(np.abs(interior_arc - h_driver)))
+    feed_knot_index = m_center_interior + 1
+
+    return {
+        "geometry": "yagi",
+        "wires": [
+            {
+                "label": "driver",
+                "knot_positions": driver_knots.tolist(),
+                "knot_currents_re": driver_cur.real.tolist(),
+                "knot_currents_im": driver_cur.imag.tolist(),
+            },
+            {
+                "label": "reflector",
+                "knot_positions": refl_knots.tolist(),
+                "knot_currents_re": refl_cur.real.tolist(),
+                "knot_currents_im": refl_cur.imag.tolist(),
+            },
+        ],
+        "feed_wire_index": 0,
+        "feed_knot_index": feed_knot_index,
+        "z_in_re": float(z_in.real),
+        "z_in_im": float(z_in.imag),
+        "design_freq_mhz": design_freq_mhz,
+        "measurement_freq_mhz": meas_freq_mhz,
+        "lambda_design_m": wavelength_design,
+        "driver_length_m": 2 * h_driver,
+        "reflector_length_m": 2 * h_refl,
+        "spacing_m": spacing_m,
+        "solve_ms": solve_ms,
+        "solver": "pynec",
+    }
+
+
+def solve(req: dict) -> dict:
+    geometry = req.get("geometry", "inverted_v")
+    if geometry == "yagi":
+        return solve_yagi(req)
+    return solve_inverted_v(req)
+
+
+def _sweep_at(req: dict, freq_mhz: float) -> complex:
+    """Single-frequency Z via PyNEC, used to build the swept Z array."""
+    req2 = dict(req)
+    req2["measurement_freq_mhz"] = freq_mhz
+    res = solve(req2)
+    return complex(res["z_in_re"], res["z_in_im"])
+
+
+def sweep(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
+    """Loop-based sweep. PyNEC has no batched API, so we run one solve per
+    frequency. At N=30 each solve is ~1.5 ms — 41 points * 1.5 ms = ~60 ms,
+    fine for an interactive sweep."""
+    z_re, z_im = [], []
+    for f in freqs_mhz:
+        z = _sweep_at(req, f)
+        z_re.append(float(z.real))
+        z_im.append(float(z.imag))
+    return z_re, z_im
