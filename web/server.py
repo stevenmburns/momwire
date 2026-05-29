@@ -48,9 +48,10 @@ import json
 import time
 
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from pysim.triangular_bent import BentTriangularPySim
 from pysim.triangular_yagi import TriangularYagiPySim
@@ -441,24 +442,67 @@ def _sweep_yagi(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[fl
 
 
 @app.post("/sweep")
-async def sweep_endpoint(req: dict):
-    """Run a measurement-freq sweep across freqs_mhz for a fixed antenna.
+async def sweep_endpoint(req: dict, request: Request):
+    """Stream sweep points as NDJSON, one (freq, Z) per line.
 
-    The compute is CPU-bound (sync PyNEC/LAPACK), so dispatch to a worker
-    thread to keep the asyncio loop free for /ws live solves and /pattern.
+    Streaming so the UI can show partial results as they're computed, and
+    so the server can stop mid-sweep when the client disconnects — without
+    this the user's slider drags abort the fetch client-side but the server
+    keeps grinding through all 41 expensive PyNEC ground solves, starving
+    the live /ws solves of CPU.
     """
     freqs = [float(f) for f in req.get("freqs_mhz", [])]
-    if not freqs:
-        return {"freqs_mhz": [], "z_re": [], "z_im": []}
-    if req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC:
-        z_re, z_im = await run_in_threadpool(pynec_backend.sweep, req, freqs)
-        return {"freqs_mhz": freqs, "z_re": z_re, "z_im": z_im, "solver": "pynec"}
-    geometry = req.get("geometry", "inverted_v")
-    if geometry == "yagi":
-        z_re, z_im = await run_in_threadpool(_sweep_yagi, req, freqs)
-    else:
-        z_re, z_im = await run_in_threadpool(_sweep_inverted_v, req, freqs)
-    return {"freqs_mhz": freqs, "z_re": z_re, "z_im": z_im, "solver": "pysim"}
+    use_pynec = req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC
+    solver_name = "pynec" if use_pynec else "pysim"
+
+    async def gen():
+        if not freqs:
+            yield json.dumps({"done": True, "solver": solver_name}) + "\n"
+            return
+
+        if use_pynec:
+            # Per-point loop with disconnect check; lets us bail before the
+            # next ~100 ms PyNEC ground solve when the user moves a slider.
+            for f in freqs:
+                if await request.is_disconnected():
+                    return
+                z = await run_in_threadpool(pynec_backend._sweep_at, req, f)
+                yield (
+                    json.dumps(
+                        {
+                            "freq_mhz": f,
+                            "z_re": float(z.real),
+                            "z_im": float(z.imag),
+                            "solver": solver_name,
+                        }
+                    )
+                    + "\n"
+                )
+        else:
+            # pysim is batched (vectorized); compute once, then stream the
+            # array. Batched is ~10x faster than per-point here, and pysim is
+            # cheap enough that we don't need mid-sweep cancellation.
+            geometry = req.get("geometry", "inverted_v")
+            if geometry == "yagi":
+                z_re, z_im = await run_in_threadpool(_sweep_yagi, req, freqs)
+            else:
+                z_re, z_im = await run_in_threadpool(_sweep_inverted_v, req, freqs)
+            for i, f in enumerate(freqs):
+                yield (
+                    json.dumps(
+                        {
+                            "freq_mhz": f,
+                            "z_re": z_re[i],
+                            "z_im": z_im[i],
+                            "solver": solver_name,
+                        }
+                    )
+                    + "\n"
+                )
+
+        yield json.dumps({"done": True, "solver": solver_name}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @app.post("/pattern")

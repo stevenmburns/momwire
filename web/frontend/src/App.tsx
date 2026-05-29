@@ -290,8 +290,11 @@ export function App() {
     const controller = new AbortController();
     sweepAbortRef.current = controller;
 
-    // Sweep 0.8x to 1.25x of design freq with 41 log-spaced points.
-    const N = 41;
+    // Sweep 0.8x to 1.25x of design freq, log-spaced. Ground mode is ~100x
+    // slower per point (Sommerfeld-Norton solve), so halve the resolution to
+    // keep total sweep time near free-space cost.
+    const groundActive = solver === "pynec" && groundEnabled;
+    const N = groundActive ? 21 : 41;
     const fLo = Math.max(0.5, designFreq * 0.8);
     const fHi = Math.min(60, designFreq * 1.25);
     const freqs = Array.from({ length: N }, (_, i) =>
@@ -300,6 +303,7 @@ export function App() {
 
     const body = { ...buildRequest(), freqs_mhz: freqs };
     setSweepRunning(true);
+    const acc: SweepData = { freqs_mhz: [], z_re: [], z_im: [] };
     try {
       const resp = await fetch("/sweep", {
         method: "POST",
@@ -307,9 +311,34 @@ export function App() {
         body: JSON.stringify(body),
         signal: controller.signal,
       });
-      if (!resp.ok) throw new Error(`sweep failed: ${resp.status}`);
-      const data: SweepData = await resp.json();
-      if (!controller.signal.aborted) setSweep(data);
+      if (!resp.ok || !resp.body) throw new Error(`sweep failed: ${resp.status}`);
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          const pt = JSON.parse(line);
+          if (pt.done) continue;
+          acc.freqs_mhz.push(pt.freq_mhz);
+          acc.z_re.push(pt.z_re);
+          acc.z_im.push(pt.z_im);
+          if (!controller.signal.aborted) {
+            // New object so React re-renders the Smith chart per point.
+            setSweep({
+              freqs_mhz: acc.freqs_mhz.slice(),
+              z_re: acc.z_re.slice(),
+              z_im: acc.z_im.slice(),
+            });
+          }
+        }
+      }
     } catch (e: unknown) {
       if (e instanceof DOMException && e.name === "AbortError") return;
       console.error("sweep error", e);
