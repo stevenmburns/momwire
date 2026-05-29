@@ -11,6 +11,7 @@ Usage:
     python scripts/profile_triangular.py --n 80     # specific N
     python scripts/profile_triangular.py --kind v   # only V (or 'yagi')
 """
+
 from __future__ import annotations
 
 import argparse
@@ -33,11 +34,13 @@ def make_v(n: int, design_freq_mhz: float = 13.625, droop_deg: float = 30.0):
     arm_len = 0.962 * wavelength / 4.0
     alpha = np.deg2rad(droop_deg)
     cos_a, sin_a = float(np.cos(alpha)), float(np.sin(alpha))
-    polyline = np.array([
-        [-arm_len * cos_a, 0.0, -arm_len * sin_a],
-        [0.0, 0.0, 0.0],
-        [arm_len * cos_a, 0.0, -arm_len * sin_a],
-    ])
+    polyline = np.array(
+        [
+            [-arm_len * cos_a, 0.0, -arm_len * sin_a],
+            [0.0, 0.0, 0.0],
+            [arm_len * cos_a, 0.0, -arm_len * sin_a],
+        ]
+    )
     sim = BentTriangularPySim(wavelength=wavelength, halfdriver_factor=0.962, nsegs=n)
     sim.polyline = polyline
     sim.n_per_edge = [n, n]
@@ -80,7 +83,9 @@ def profile_one(sim_factory, n: int, label: str, top: int = 18) -> None:
 
     times = time_runs(sim_factory, n)
     median = times[len(times) // 2]
-    print(f"\n=== {label} N={n}  median={median:.1f} ms  range=[{times[0]:.1f}, {times[-1]:.1f}] ===")
+    print(
+        f"\n=== {label} N={n}  median={median:.1f} ms  range=[{times[0]:.1f}, {times[-1]:.1f}] ==="
+    )
 
     s = io.StringIO()
     ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")

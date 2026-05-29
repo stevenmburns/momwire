@@ -14,6 +14,7 @@ Demonstrates:
 
 Nothing here imports pysim; it's a pure scipy demonstration.
 """
+
 import numpy as np
 from scipy.interpolate import BSpline
 from scipy.integrate import quad
@@ -31,9 +32,7 @@ def make_clamped_basis(L, N, k=1):
     and last, which are nonzero at z=0 and z=L respectively).
     """
     interior_knots = np.linspace(0.0, L, N + 1)
-    knots = np.concatenate(
-        [np.full(k, 0.0), interior_knots, np.full(k, L)]
-    )
+    knots = np.concatenate([np.full(k, 0.0), interior_knots, np.full(k, L)])
     n_basis = len(knots) - k - 1  # = N + k
     interior = slice(1, n_basis - 1)  # = N - 1 interior basis functions
     return knots, n_basis, interior
@@ -112,22 +111,22 @@ def main():
     j = 2  # an interior basis index (in the "all" indexing)
     phi = make_unit_basis_fn(knots, j=j)
     dphi = phi.derivative()
-    print(f"Phi_{j}: support [knots[{j}]={knots[j]}, knots[{j+2}]={knots[j+2]}]")
-    print(f"  apex at knots[{j+1}]={knots[j+1]}")
+    print(f"Phi_{j}: support [knots[{j}]={knots[j]}, knots[{j + 2}]={knots[j + 2]}]")
+    print(f"  apex at knots[{j + 1}]={knots[j + 1]}")
     z_fine = np.linspace(knots[j], knots[j + 2], 9)
     for zi in z_fine:
         v = float(phi(zi))
         d = float(dphi(zi))
         print(f"  z={zi:5.3f}  phi={v:6.3f}  dphi={d:+6.2f}")
-    print(f"\nLeft half: dphi = +1/h = +{1/h}")
-    print(f"Right half: dphi = -1/h = -{1/h}")
+    print(f"\nLeft half: dphi = +1/h = +{1 / h}")
+    print(f"Right half: dphi = -1/h = -{1 / h}")
     print("(For MoM: dPhi/dz gives the per-segment charge-density basis,")
     print(" which is piecewise constant -- exactly the dual relationship")
-    print(" between linear-current and constant-charge that thin-wire MoM"
-          " wants.)")
+    print(" between linear-current and constant-charge that thin-wire MoM wants.)")
 
     # ----------------------------------------------------------------
     section("(3) Galerkin projection g_m = integral Phi_m(z) f(z) dz")
+
     def f(z):
         return np.sin(np.pi * z / L)
 
@@ -163,12 +162,11 @@ def main():
     print(f"  off-diag:    h/6  = {h / 6:.6f}")
     print("  elsewhere:   0")
     diag_err = max(abs(Mass[i, i] - 2 * h / 3) for i in range(n_interior))
-    off_err = max(
-        abs(Mass[i, i + 1] - h / 6) for i in range(n_interior - 1)
-    )
+    off_err = max(abs(Mass[i, i + 1] - h / 6) for i in range(n_interior - 1))
     other_err = max(
         abs(Mass[i, j])
-        for i in range(n_interior) for j in range(n_interior)
+        for i in range(n_interior)
+        for j in range(n_interior)
         if abs(i - j) > 1
     )
     print("\nmax error vs analytic:")
