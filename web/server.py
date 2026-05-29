@@ -49,6 +49,7 @@ import time
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 
 from pysim.triangular_bent import BentTriangularPySim
@@ -441,18 +442,22 @@ def _sweep_yagi(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[fl
 
 @app.post("/sweep")
 async def sweep_endpoint(req: dict):
-    """Run a measurement-freq sweep across freqs_mhz for a fixed antenna."""
+    """Run a measurement-freq sweep across freqs_mhz for a fixed antenna.
+
+    The compute is CPU-bound (sync PyNEC/LAPACK), so dispatch to a worker
+    thread to keep the asyncio loop free for /ws live solves and /pattern.
+    """
     freqs = [float(f) for f in req.get("freqs_mhz", [])]
     if not freqs:
         return {"freqs_mhz": [], "z_re": [], "z_im": []}
     if req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC:
-        z_re, z_im = pynec_backend.sweep(req, freqs)
+        z_re, z_im = await run_in_threadpool(pynec_backend.sweep, req, freqs)
         return {"freqs_mhz": freqs, "z_re": z_re, "z_im": z_im, "solver": "pynec"}
     geometry = req.get("geometry", "inverted_v")
     if geometry == "yagi":
-        z_re, z_im = _sweep_yagi(req, freqs)
+        z_re, z_im = await run_in_threadpool(_sweep_yagi, req, freqs)
     else:
-        z_re, z_im = _sweep_inverted_v(req, freqs)
+        z_re, z_im = await run_in_threadpool(_sweep_inverted_v, req, freqs)
     return {"freqs_mhz": freqs, "z_re": z_re, "z_im": z_im, "solver": "pysim"}
 
 
@@ -461,7 +466,7 @@ async def pattern_endpoint(req: dict):
     """NEC's rp_card-computed gain pattern. PyNEC-only."""
     if req.get("solver") != "pynec" or not pynec_backend.HAVE_PYNEC:
         return {"available": False}
-    return pynec_backend.pattern(req)
+    return await run_in_threadpool(pynec_backend.pattern, req)
 
 
 @app.get("/healthz")
@@ -476,7 +481,7 @@ async def ws_endpoint(ws: WebSocket):
         while True:
             raw = await ws.receive_text()
             req = json.loads(raw)
-            result = solve(req)
+            result = await run_in_threadpool(solve, req)
             await ws.send_text(json.dumps(result))
     except WebSocketDisconnect:
         return
