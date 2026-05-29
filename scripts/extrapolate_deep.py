@@ -1,7 +1,8 @@
 """Push the NewPySim dipole sweep out to nsegs=5001 to disambiguate:
-   (a) power-law extrapolation is reliable -> p stays near 0.25
-   (b) fit is wrong -> p drifts as nsegs grows
+(a) power-law extrapolation is reliable -> p stays near 0.25
+(b) fit is wrong -> p drifts as nsegs grows
 """
+
 import time
 
 import numpy as np
@@ -34,15 +35,17 @@ def main():
         zs.append(z)
         print(
             f"  nsegs={n:5d}  Z = {z.real:9.4f} + j{z.imag:9.4f}   "
-            f"({time.time()-t:6.1f}s)"
+            f"({time.time() - t:6.1f}s)"
         )
     zs = np.array(zs)
 
     nec = complex(69.64, -18.21)
     print(f"\nNEC reference: {nec.real:.3f} + j{nec.imag:.3f}\n")
 
-    print(f"{'window':<22}  {'p (re)':>8}  {'p (im)':>8}  "
-          f"{'Z_inf (re)':>12}  {'Z_inf (im)':>12}")
+    print(
+        f"{'window':<22}  {'p (re)':>8}  {'p (im)':>8}  "
+        f"{'Z_inf (re)':>12}  {'Z_inf (im)':>12}"
+    )
     print("-" * 70)
     # Fit progressively larger trailing windows so we can see if p stabilizes.
     for k in range(3, len(ns) + 1):

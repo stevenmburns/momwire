@@ -17,9 +17,9 @@ def _interleave_nodes_midpoints(l_endpoints, r_endpoints):
     """
     N = l_endpoints.shape[0]
     out = np.empty((2 * N + 1, l_endpoints.shape[1]), dtype=l_endpoints.dtype)
-    out[0:2 * N:2] = l_endpoints
+    out[0 : 2 * N : 2] = l_endpoints
     out[2 * N] = r_endpoints[-1]
-    out[1:2 * N + 1:2] = (l_endpoints + r_endpoints) / 2
+    out[1 : 2 * N + 1 : 2] = (l_endpoints + r_endpoints) / 2
     return out
 
 

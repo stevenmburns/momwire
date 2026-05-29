@@ -20,6 +20,7 @@ Antiderivatives:
 After inner s' integration (the antiderivative of 1/sqrt((s-s')^2+a^2) is
 -asinh((s-s')/a)) the outer integrals are linear combinations of H_p and S_p.
 """
+
 import numpy as np
 import scipy.linalg
 
@@ -27,6 +28,7 @@ from .abstract import AbstractPySim
 
 try:
     from . import _accelerators as _acc
+
     _HAVE_REG_ACCEL = hasattr(_acc, "seg_seg_reg_quad_batch_1d")
 except ImportError:
     _HAVE_REG_ACCEL = False
@@ -45,7 +47,7 @@ def _H1(u, a):
 
 
 def _H2(u, a):
-    return (u ** 3 / 3.0) * np.arcsinh(u / a) - ((u * u - 2 * a * a) / 9.0) * _Sigma(u, a)
+    return (u**3 / 3.0) * np.arcsinh(u / a) - ((u * u - 2 * a * a) / 9.0) * _Sigma(u, a)
 
 
 def _S0(u, a):
@@ -66,11 +68,21 @@ def _J_static_all(alpha, beta, A, B, a):
 
     Each output broadcasts: inputs can be scalars or arrays of matching shape.
     """
-    def br_H0(c): return _bracket(lambda s: _H0(s - c, a), alpha, beta)
-    def br_H1(c): return _bracket(lambda s: _H1(s - c, a), alpha, beta)
-    def br_H2(c): return _bracket(lambda s: _H2(s - c, a), alpha, beta)
-    def br_S0(c): return _bracket(lambda s: _S0(s - c, a), alpha, beta)
-    def br_S1(c): return _bracket(lambda s: _S1(s - c, a), alpha, beta)
+
+    def br_H0(c):
+        return _bracket(lambda s: _H0(s - c, a), alpha, beta)
+
+    def br_H1(c):
+        return _bracket(lambda s: _H1(s - c, a), alpha, beta)
+
+    def br_H2(c):
+        return _bracket(lambda s: _H2(s - c, a), alpha, beta)
+
+    def br_S0(c):
+        return _bracket(lambda s: _S0(s - c, a), alpha, beta)
+
+    def br_S1(c):
+        return _bracket(lambda s: _S1(s - c, a), alpha, beta)
 
     H0_A = br_H0(A)
     H0_B = br_H0(B)
@@ -118,7 +130,10 @@ def _seg_seg_reg_all(seg_endpoints, a, k, n_qp):
     Returns (J00, J10, J01, J11) each of shape (N, N), complex.
     """
     J00, J10, J01, J11 = _seg_seg_reg_all_batch(
-        seg_endpoints, a, np.array([k]), n_qp,
+        seg_endpoints,
+        a,
+        np.array([k]),
+        n_qp,
     )
     return J00[0], J10[0], J01[0], J11[0]
 
@@ -172,7 +187,12 @@ def _seg_seg_reg_all_batch(seg_endpoints, a, k_array, n_qp):
     J10 = np.einsum("iq,iq,kiqjr,jr->kij", w_block, u_block, G_block, w_block)
     J01 = np.einsum("iq,kiqjr,jr,jr->kij", w_block, G_block, w_block, u_block)
     J11 = np.einsum(
-        "iq,iq,kiqjr,jr,jr->kij", w_block, u_block, G_block, w_block, u_block,
+        "iq,iq,kiqjr,jr,jr->kij",
+        w_block,
+        u_block,
+        G_block,
+        w_block,
+        u_block,
     )
     return J00, J10, J01, J11
 
@@ -191,7 +211,7 @@ class TriangularPySim(AbstractPySim):
         h = L / N
 
         seg_edges = np.linspace(0.0, L, N + 1)
-        n_basis = N - 1   # interior tents
+        n_basis = N - 1  # interior tents
 
         # Per-segment-pair moment integrals: static (analytic) + regular (GL).
         A00, A10, A01, A11 = _seg_seg_static_all(seg_edges, a)
@@ -204,8 +224,9 @@ class TriangularPySim(AbstractPySim):
         # --- Scalar potential ---
         # dPhi_m = +1/h on segment m, -1/h on segment m+1
         # Z_Phi[m,n] = (1/(jwe)) * (1/h^2) * (J00[m,n] - J00[m,n+1] - J00[m+1,n] + J00[m+1,n+1])
-        S = (J00[:N - 1, :N - 1] + J00[1:, 1:]
-             - J00[:N - 1, 1:] - J00[1:, :N - 1]) / (h * h)
+        S = (
+            J00[: N - 1, : N - 1] + J00[1:, 1:] - J00[: N - 1, 1:] - J00[1:, : N - 1]
+        ) / (h * h)
         Z_Phi = S / (1j * self.omega * self.eps)
 
         # --- Vector potential ---
@@ -222,9 +243,11 @@ class TriangularPySim(AbstractPySim):
         #                          - (1/h)(J01[m+1, n+1] + J10[m+1, n+1])
         #                          + (1/h^2) J11[m+1, n+1]
         I_A = (
-            (J11[:N - 1, :N - 1]) / (h * h)
-            + (J10[:N - 1, 1:] / h) - (J11[:N - 1, 1:] / (h * h))
-            + (J01[1:, :N - 1] / h) - (J11[1:, :N - 1] / (h * h))
+            (J11[: N - 1, : N - 1]) / (h * h)
+            + (J10[: N - 1, 1:] / h)
+            - (J11[: N - 1, 1:] / (h * h))
+            + (J01[1:, : N - 1] / h)
+            - (J11[1:, : N - 1] / (h * h))
             + (J00[1:, 1:])
             - (J01[1:, 1:] + J10[1:, 1:]) / h
             + (J11[1:, 1:] / (h * h))

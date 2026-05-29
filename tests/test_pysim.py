@@ -131,7 +131,9 @@ def test_svd_currents_nsmallest():
         _, (_, i_svd) = PySim(
             nsegs=nsegs, nsmallest=nsmallest, run_svd=True
         ).compute_impedance(ntrap=0)
-        print(f"nsmallest={nsmallest}, |i_svd - i_svd_all|={np.linalg.norm(i_svd - i_svd_all)}")
+        print(
+            f"nsmallest={nsmallest}, |i_svd - i_svd_all|={np.linalg.norm(i_svd - i_svd_all)}"
+        )
         plt.plot(np.abs(i_svd), color=color)
 
     save_or_show(plt, fn)
@@ -294,7 +296,10 @@ def test_bent_triangular_collinear_polyline(nsegs):
     # Use n_qp_off=8 here so the artificial cross-edge quadrature at the fake
     # corner has the same precision as the analytic same-wire path.
     z_bent, _ = BentTriangularPySim(
-        polyline=polyline, n_per_edge=nsegs // 2, nsegs=nsegs, n_qp_off=8,
+        polyline=polyline,
+        n_per_edge=nsegs // 2,
+        nsegs=nsegs,
+        n_qp_off=8,
     ).compute_impedance()
     assert abs(z_bent - z_straight) < 0.2
 
@@ -306,12 +311,16 @@ def test_bent_triangular_v_dipole_smoke():
     alpha = np.radians(30)
     cos_a = np.cos(alpha)
     sin_a = np.sin(alpha)
-    polyline = np.array([
-        [0.0, -half * cos_a, -half * sin_a],
-        [0.0, 0.0, 0.0],
-        [0.0, +half * cos_a, -half * sin_a],
-    ])
-    z, c = BentTriangularPySim(polyline=polyline, n_per_edge=40, nsegs=80).compute_impedance()
+    polyline = np.array(
+        [
+            [0.0, -half * cos_a, -half * sin_a],
+            [0.0, 0.0, 0.0],
+            [0.0, +half * cos_a, -half * sin_a],
+        ]
+    )
+    z, c = BentTriangularPySim(
+        polyline=polyline, n_per_edge=40, nsegs=80
+    ).compute_impedance()
     assert c.shape == (79,)
     assert np.isfinite(z.real) and np.isfinite(z.imag)
     assert np.isfinite(c).all()
