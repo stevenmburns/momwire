@@ -35,13 +35,18 @@ fi
 cd "$ROOT/python-necpp/necpp_src"
 # Generate configure (idempotent — skip if config.h already exists).
 # Configure with LAPACK enabled. necpp's autoconf checks for clapack_zgetrf
-# via the ATLAS-style symbol, so we point at the multiarch include/lib
-# dirs where libatlas-base-dev installs them on Debian/Ubuntu.
+# in -llapack — that symbol lives in libatlas-base-dev's lapack lib,
+# not the reference / OpenBLAS liblapack. On Debian/Ubuntu the ATLAS
+# variant is installed under the per-vendor /usr/lib/<MULTIARCH>/atlas/
+# subdir; adding that to LDFLAGS first makes -llapack resolve to the
+# ATLAS version even if update-alternatives has the default pointing
+# elsewhere (e.g. because libopenblas-pthread-dev or liblapacke-dev
+# was installed for a different toolchain).
 if [ ! -f config.h ]; then
     make -f Makefile.git
     MULTIARCH=$(gcc -print-multiarch 2>/dev/null || echo x86_64-linux-gnu)
     CPPFLAGS="-I/usr/include/${MULTIARCH}" \
-        LDFLAGS="-L/usr/lib/${MULTIARCH}" \
+        LDFLAGS="-L/usr/lib/${MULTIARCH}/atlas -L/usr/lib/${MULTIARCH}" \
         ./configure --with-lapack
 fi
 
