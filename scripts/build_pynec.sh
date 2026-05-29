@@ -3,12 +3,19 @@
 # Build PyNEC (from the python-necpp submodule) and install it into the
 # local project venv at .venv/.
 #
-# Tool deps (autoconf/automake/libtoolize/m4): system packages, on Ubuntu:
-#     sudo apt install autoconf automake libtool m4 libatlas-base-dev
-# SWIG and numpy come from the local venv. libatlas-base-dev provides
-# clapack.h, libcblas, libatlas — necpp uses these to accelerate the
-# matrix solve (clapack_zgetrf) instead of the hand-rolled Gauss
-# elimination. ~3x speedup on a 100-director Yagi.
+# Backends (set via PYNEC_BACKEND, default lapacke):
+#   lapacke     reference LAPACKE + OpenBLAS pthread
+#   atlas       ATLAS clapack
+#   mkl         MKL LAPACKE + libgomp threading
+#   mkl_intel   MKL LAPACKE + libiomp5 threading
+#
+# System deps on Ubuntu:
+#   common      autoconf automake libtool m4 swig
+#   lapacke     libopenblas-pthread-dev liblapacke-dev
+#   atlas       libatlas-base-dev
+#   mkl,mkl_intel  intel-oneapi-mkl-classic-devel (and sourcing setvars.sh)
+#
+# SWIG and numpy come from the local venv.
 #
 # After this script: `from PyNEC import nec_context` should work in .venv.
 #
@@ -17,6 +24,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 VENV="$ROOT/.venv"
+BACKEND="${PYNEC_BACKEND:-lapacke}"
 
 if [ ! -x "$VENV/bin/python" ]; then
     echo "error: no .venv at $VENV — create one and pip install -e . first." >&2
@@ -32,22 +40,39 @@ if [ ! -x "$VENV/bin/swig" ]; then
     exit 1
 fi
 
+echo "PyNEC backend: $BACKEND"
+
 cd "$ROOT/python-necpp/necpp_src"
 # Generate configure (idempotent — skip if config.h already exists).
-# Configure with LAPACK enabled. necpp's autoconf checks for clapack_zgetrf
-# in -llapack — that symbol lives in libatlas-base-dev's lapack lib,
-# not the reference / OpenBLAS liblapack. On Debian/Ubuntu the ATLAS
-# variant is installed under the per-vendor /usr/lib/<MULTIARCH>/atlas/
-# subdir; adding that to LDFLAGS first makes -llapack resolve to the
-# ATLAS version even if update-alternatives has the default pointing
-# elsewhere (e.g. because libopenblas-pthread-dev or liblapacke-dev
-# was installed for a different toolchain).
+#
+# necpp_src/configure.ac's --with-lapack check is hardcoded to look for
+# ATLAS's clapack_zgetrf symbol in -llapack. That works for the atlas
+# backend but fails for lapacke/mkl: liblapacke-dev and libatlas-base-dev
+# cannot coexist on Ubuntu (they Provide the same libblas.so/liblapack.so
+# alternatives), so a runner with the lapacke deps installed has no ATLAS
+# libraries available and the check fails — even though the runtime code
+# uses LAPACKE_zgetrf from libopenblas+liblapacke, never clapack_zgetrf.
+#
+# We sidestep by configuring --without-lapack (always passes) and then
+# patching config.h to set LAPACK=1 unconditionally. The matrix_algebra.cpp
+# code path gated on LAPACK is then live, and setup.py's PYNEC_BACKEND
+# logic chooses which LAPACK implementation we link to at extension-link
+# time (atlas clapack vs lapacke vs mkl).
+MULTIARCH=$(gcc -print-multiarch 2>/dev/null || echo x86_64-linux-gnu)
 if [ ! -f config.h ]; then
     make -f Makefile.git
-    MULTIARCH=$(gcc -print-multiarch 2>/dev/null || echo x86_64-linux-gnu)
-    CPPFLAGS="-I/usr/include/${MULTIARCH}" \
-        LDFLAGS="-L/usr/lib/${MULTIARCH}/atlas -L/usr/lib/${MULTIARCH}" \
-        ./configure --with-lapack
+    if [ "$BACKEND" = "atlas" ]; then
+        # Real --with-lapack: configure check runs and finds clapack_zgetrf
+        # in libatlas-base-dev's liblapack (under /usr/lib/<MULTIARCH>/atlas/).
+        CPPFLAGS="-I/usr/include/${MULTIARCH}" \
+            LDFLAGS="-L/usr/lib/${MULTIARCH}/atlas -L/usr/lib/${MULTIARCH}" \
+            ./configure --with-lapack
+    else
+        ./configure --without-lapack
+        # Force LAPACK=1 — the runtime symbol comes from LAPACKE.
+        sed -i 's|/\* #undef LAPACK \*/|#define LAPACK 1|' config.h
+        grep '^#define LAPACK ' config.h
+    fi
 fi
 
 cd "$ROOT/python-necpp/PyNEC"
@@ -61,8 +86,8 @@ if [ ! -f PyNEC_wrap.cxx ] || [ PyNEC.i -nt PyNEC_wrap.cxx ]; then
 fi
 
 # Build + install into the venv. --no-build-isolation so setup.py sees
-# numpy from .venv. -e (editable) so re-running just rebuilds in place.
-"$VENV/bin/pip" install --no-build-isolation .
+# numpy from .venv. PYNEC_BACKEND propagates to setup.py for backend choice.
+PYNEC_BACKEND="$BACKEND" "$VENV/bin/pip" install --no-build-isolation .
 
-echo "OK — PyNEC built and installed into $VENV"
+echo "OK — PyNEC ($BACKEND) built and installed into $VENV"
 "$VENV/bin/python" -c "from PyNEC import nec_context; print('PyNEC import OK')"

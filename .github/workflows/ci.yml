@@ -45,9 +45,16 @@ jobs:
           python-version: '3.12'
           cache: pip
       - name: Install build-time system deps for necpp
-        # libatlas-base-dev provides clapack.h + libcblas/libatlas so
-        # necpp can be configured with --with-lapack (see scripts/build_pynec.sh).
-        run: sudo apt-get update -qq && sudo apt-get install -y autoconf automake libtool m4 libatlas-base-dev
+        # PYNEC_BACKEND=lapacke (the default) links against OpenBLAS pthread
+        # + reference LAPACKE. liblapacke-dev cannot coexist with
+        # libatlas-base-dev on Ubuntu — they Provide the same
+        # libblas.so/liblapack.so alternatives — so we install only the
+        # lapacke deps and let scripts/build_pynec.sh patch config.h
+        # directly (no ATLAS configure check required).
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y autoconf automake libtool m4 \
+            libopenblas-pthread-dev liblapacke-dev
       - name: Create venv and install python deps
         run: |
           python -m venv .venv
