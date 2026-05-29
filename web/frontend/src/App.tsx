@@ -368,11 +368,22 @@ export function App() {
     wsRef.current = ws;
     ws.onopen = () => {
       setStatus("open");
+      // A prior socket's pending response can never arrive here; clear the
+      // in-flight flag so this socket can start sending. StrictMode and HMR
+      // both tear down + recreate this socket and would otherwise leave the
+      // flag stuck true, blocking all subsequent slider-driven solves.
+      inFlightRef.current = false;
       pendingRef.current = controlsRef.current;
       requestSolve();
     };
-    ws.onclose = () => setStatus("closed");
-    ws.onerror = () => setStatus("closed");
+    ws.onclose = () => {
+      setStatus("closed");
+      inFlightRef.current = false;
+    };
+    ws.onerror = () => {
+      setStatus("closed");
+      inFlightRef.current = false;
+    };
     ws.onmessage = (ev) => {
       setRttMs(performance.now() - sendStartRef.current);
       const data: SolveResponse = JSON.parse(ev.data);
