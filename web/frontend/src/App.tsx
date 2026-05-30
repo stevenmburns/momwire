@@ -180,7 +180,14 @@ export function App() {
   // `azElevDeg`; the elevation plot slices the vertical plane at azimuth
   // bearing `elevAzDeg` (0° = +x). Defaults give the conventional views.
   const [azElevDeg, setAzElevDeg] = useState(15);
+  // Default elevation-cut azimuth tracks each geometry's beam direction so
+  // the vertical plane actually contains the main lobe: V is broadside to
+  // its wire (±y, 90°); Yagi beams +y (90°); moxon's driver/reflector are
+  // stacked along x and beam +x (0°).
   const [elevAzDeg, setElevAzDeg] = useState(90);
+  useEffect(() => {
+    setElevAzDeg(geometry === "moxon" ? 0 : 90);
+  }, [geometry]);
 
   // When linked, design and measurement freq move together.
   function updateDesignFreq(v: number) {
