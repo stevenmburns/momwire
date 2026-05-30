@@ -62,17 +62,21 @@ type SolveRequest = {
   t0_factor?: number;
 };
 
-// Per-geometry frequency slider defaults + bounds. Moxon's reference design
-// sits in the 10m band (28.57 MHz), where the V/Yagi 20m-band slider range
-// can't even reach — so we adapt min/max per geometry on tab change.
-const FREQ_LIMITS: Record<
-  "inverted_v" | "yagi" | "moxon",
-  { min: number; max: number; default: number }
-> = {
-  inverted_v: { min: 11.44, max: 17.875, default: 14.3 },
-  yagi: { min: 11.44, max: 17.875, default: 14.3 },
-  moxon: { min: 25.0, max: 32.0, default: 28.57 },
-};
+// Amateur HF bands the user can design for. Slider min/max snap to the
+// selected band's edges; the default is the band centre. Geometry choice
+// is independent of band — shape factors are dimensionless and scale to
+// whatever wavelength the design freq picks.
+type Band = "20m" | "17m" | "15m" | "12m" | "10m";
+const BANDS: { id: Band; min: number; max: number; default: number }[] = [
+  { id: "20m", min: 14.000, max: 14.350, default: 14.300 },
+  { id: "17m", min: 18.068, max: 18.168, default: 18.1575 },
+  { id: "15m", min: 21.000, max: 21.450, default: 21.383 },
+  { id: "12m", min: 24.890, max: 24.990, default: 24.970 },
+  { id: "10m", min: 28.000, max: 29.700, default: 28.470 },
+];
+const BAND_BY_ID: Record<Band, (typeof BANDS)[number]> = Object.fromEntries(
+  BANDS.map((b) => [b.id, b]),
+) as Record<Band, (typeof BANDS)[number]>;
 
 type SweepData = {
   freqs_mhz: number[];
@@ -164,8 +168,9 @@ export function App() {
   // Shared
   const [solver, setSolver] = useState<"pysim" | "pynec">("pysim");
   const [nPerWire, setNPerWire] = useState(30);
-  const [designFreq, setDesignFreq] = useState(14.3);
-  const [measFreq, setMeasFreq] = useState(14.3);
+  const [band, setBand] = useState<Band>("20m");
+  const [designFreq, setDesignFreq] = useState(BAND_BY_ID["20m"].default);
+  const [measFreq, setMeasFreq] = useState(BAND_BY_ID["20m"].default);
   const [linkMeas, setLinkMeas] = useState(true);
   const [wireRadius, setWireRadius] = useState(0.0005);
   // Ground plane (PyNEC only). Geometry is lifted by heightM when enabled.
@@ -254,18 +259,13 @@ export function App() {
     return base;
   }
 
-  // Snap design/measurement freq into the new geometry's band when the user
-  // switches tabs — otherwise V's 14.3 MHz default would silently drop into
-  // moxon's 25-32 MHz window as out-of-range.
-  function switchGeometry(next: "inverted_v" | "yagi" | "moxon") {
-    setGeometry(next);
-    const lims = FREQ_LIMITS[next];
-    if (designFreq < lims.min || designFreq > lims.max) {
-      setDesignFreq(lims.default);
-      if (linkMeas) setMeasFreq(lims.default);
-      else if (measFreq < lims.min || measFreq > lims.max) {
-        setMeasFreq(lims.default);
-      }
+  function selectBand(next: Band) {
+    setBand(next);
+    const d = BAND_BY_ID[next].default;
+    setDesignFreq(d);
+    if (linkMeas) setMeasFreq(d);
+    else if (measFreq < BAND_BY_ID[next].min || measFreq > BAND_BY_ID[next].max) {
+      setMeasFreq(d);
     }
   }
 
@@ -490,7 +490,7 @@ export function App() {
             role="tab"
             aria-selected={geometry === "inverted_v"}
             className={geometry === "inverted_v" ? "active" : ""}
-            onClick={() => switchGeometry("inverted_v")}
+            onClick={() => setGeometry("inverted_v")}
           >
             inverted V
           </button>
@@ -498,7 +498,7 @@ export function App() {
             role="tab"
             aria-selected={geometry === "yagi"}
             className={geometry === "yagi" ? "active" : ""}
-            onClick={() => switchGeometry("yagi")}
+            onClick={() => setGeometry("yagi")}
           >
             Yagi
           </button>
@@ -506,7 +506,7 @@ export function App() {
             role="tab"
             aria-selected={geometry === "moxon"}
             className={geometry === "moxon" ? "active" : ""}
-            onClick={() => switchGeometry("moxon")}
+            onClick={() => setGeometry("moxon")}
           >
             Moxon
           </button>
@@ -706,10 +706,23 @@ export function App() {
             <span>design freq</span>
             <span>{designFreq.toFixed(3)} MHz</span>
           </label>
+          <div className="geometry-tabs band-tabs" role="tablist">
+            {BANDS.map((b) => (
+              <button
+                key={b.id}
+                role="tab"
+                aria-selected={band === b.id}
+                className={band === b.id ? "active" : ""}
+                onClick={() => selectBand(b.id)}
+              >
+                {b.id}
+              </button>
+            ))}
+          </div>
           <input
             type="range"
-            min={FREQ_LIMITS[geometry].min}
-            max={FREQ_LIMITS[geometry].max}
+            min={BAND_BY_ID[band].min}
+            max={BAND_BY_ID[band].max}
             step={0.005}
             value={designFreq}
             onInput={(e) => updateDesignFreq(Number((e.target as HTMLInputElement).value))}

@@ -71,6 +71,16 @@ html, body, #root {
   border-color: var(--accent);
 }
 
+.band-tabs {
+  margin-top: 4px;
+  gap: 2px;
+}
+
+.band-tabs button {
+  padding: 3px 4px;
+  font-size: 11px;
+}
+
 .group-label {
   font-size: 11px;
   letter-spacing: 0.12em;
