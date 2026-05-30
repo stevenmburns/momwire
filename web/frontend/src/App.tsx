@@ -8,7 +8,7 @@ type Wire = {
 };
 
 type SolveResponse = {
-  geometry: "inverted_v" | "yagi";
+  geometry: "inverted_v" | "yagi" | "moxon";
   wires: Wire[];
   feed_wire_index: number;
   feed_knot_index: number;
@@ -29,10 +29,16 @@ type SolveResponse = {
   driver_length_m?: number;
   reflector_length_m?: number;
   spacing_m?: number;
+  // Moxon-specific
+  long_m?: number;
+  short_m?: number;
+  tipspacer_m?: number;
+  t0_m?: number;
+  halfdriver_m?: number;
 };
 
 type SolveRequest = {
-  geometry: "inverted_v" | "yagi";
+  geometry: "inverted_v" | "yagi" | "moxon";
   solver: "pysim" | "pynec";
   n_per_wire: number;
   design_freq_mhz: number;
@@ -50,6 +56,22 @@ type SolveRequest = {
   n_directors?: number;
   director_spacing_wavelengths?: number;
   director_size_factor?: number;
+  // Moxon
+  aspect_ratio?: number;
+  tipspacer_factor?: number;
+  t0_factor?: number;
+};
+
+// Per-geometry frequency slider defaults + bounds. Moxon's reference design
+// sits in the 10m band (28.57 MHz), where the V/Yagi 20m-band slider range
+// can't even reach — so we adapt min/max per geometry on tab change.
+const FREQ_LIMITS: Record<
+  "inverted_v" | "yagi" | "moxon",
+  { min: number; max: number; default: number }
+> = {
+  inverted_v: { min: 11.44, max: 17.875, default: 14.3 },
+  yagi: { min: 11.44, max: 17.875, default: 14.3 },
+  moxon: { min: 25.0, max: 32.0, default: 28.57 },
 };
 
 type SweepData = {
@@ -121,7 +143,9 @@ function useThumbColumnSize(
 }
 
 export function App() {
-  const [geometry, setGeometry] = useState<"inverted_v" | "yagi">("inverted_v");
+  const [geometry, setGeometry] = useState<"inverted_v" | "yagi" | "moxon">(
+    "inverted_v",
+  );
   // V controls
   const [angle, setAngle] = useState(30);
   const [halfdriverFactor, setHalfdriverFactor] = useState(0.962);
@@ -132,6 +156,11 @@ export function App() {
   const [nDirectors, setNDirectors] = useState(0);
   const [directorSpacingWavelengths, setDirectorSpacingWavelengths] = useState(0.2);
   const [directorSizeFactor, setDirectorSizeFactor] = useState(0.95);
+  // Moxon controls (matching antenna_designer's canonical 28.57 MHz design).
+  const [moxonHalfdriverFactor, setMoxonHalfdriverFactor] = useState(0.962);
+  const [moxonAspectRatio, setMoxonAspectRatio] = useState(0.3646);
+  const [moxonTipspacerFactor, setMoxonTipspacerFactor] = useState(0.0773);
+  const [moxonT0Factor, setMoxonT0Factor] = useState(0.4078);
   // Shared
   const [solver, setSolver] = useState<"pysim" | "pynec">("pysim");
   const [nPerWire, setNPerWire] = useState(30);
@@ -209,15 +238,35 @@ export function App() {
     if (geometry === "inverted_v") {
       base.angle_deg = angle;
       base.halfdriver_factor = halfdriverFactor;
-    } else {
+    } else if (geometry === "yagi") {
       base.driver_length_factor = driverLengthFactor;
       base.reflector_length_factor = reflectorLengthFactor;
       base.spacing_wavelengths = spacingWavelengths;
       base.n_directors = nDirectors;
       base.director_spacing_wavelengths = directorSpacingWavelengths;
       base.director_size_factor = directorSizeFactor;
+    } else {
+      base.halfdriver_factor = moxonHalfdriverFactor;
+      base.aspect_ratio = moxonAspectRatio;
+      base.tipspacer_factor = moxonTipspacerFactor;
+      base.t0_factor = moxonT0Factor;
     }
     return base;
+  }
+
+  // Snap design/measurement freq into the new geometry's band when the user
+  // switches tabs — otherwise V's 14.3 MHz default would silently drop into
+  // moxon's 25-32 MHz window as out-of-range.
+  function switchGeometry(next: "inverted_v" | "yagi" | "moxon") {
+    setGeometry(next);
+    const lims = FREQ_LIMITS[next];
+    if (designFreq < lims.min || designFreq > lims.max) {
+      setDesignFreq(lims.default);
+      if (linkMeas) setMeasFreq(lims.default);
+      else if (measFreq < lims.min || measFreq > lims.max) {
+        setMeasFreq(lims.default);
+      }
+    }
   }
 
   // The latest control values, used to send a new request when the prior one
@@ -233,6 +282,7 @@ export function App() {
     angle, halfdriverFactor,
     driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
+    moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     nPerWire, designFreq, measFreq, wireRadius,
     groundEnabled, heightM,
   ]);
@@ -258,6 +308,7 @@ export function App() {
     angle, halfdriverFactor,
     driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
+    moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     nPerWire, designFreq, wireRadius,
     groundEnabled, heightM,
   ]);
@@ -281,6 +332,7 @@ export function App() {
     angle, halfdriverFactor,
     driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
+    moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     nPerWire, designFreq, measFreq, wireRadius,
     groundEnabled, heightM,
   ]);
@@ -438,7 +490,7 @@ export function App() {
             role="tab"
             aria-selected={geometry === "inverted_v"}
             className={geometry === "inverted_v" ? "active" : ""}
-            onClick={() => setGeometry("inverted_v")}
+            onClick={() => switchGeometry("inverted_v")}
           >
             inverted V
           </button>
@@ -446,9 +498,17 @@ export function App() {
             role="tab"
             aria-selected={geometry === "yagi"}
             className={geometry === "yagi" ? "active" : ""}
-            onClick={() => setGeometry("yagi")}
+            onClick={() => switchGeometry("yagi")}
           >
-            Yagi (2 elements)
+            Yagi
+          </button>
+          <button
+            role="tab"
+            aria-selected={geometry === "moxon"}
+            className={geometry === "moxon" ? "active" : ""}
+            onClick={() => switchGeometry("moxon")}
+          >
+            Moxon
           </button>
         </div>
 
@@ -580,6 +640,67 @@ export function App() {
           </>
         )}
 
+        {geometry === "moxon" && (
+          <>
+            <div className="field">
+              <label>
+                <span>halfdriver factor</span>
+                <span>{moxonHalfdriverFactor.toFixed(3)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.8}
+                max={1.1}
+                step={0.001}
+                value={moxonHalfdriverFactor}
+                onInput={(e) => setMoxonHalfdriverFactor(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>aspect ratio (short/long)</span>
+                <span>{moxonAspectRatio.toFixed(3)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.2}
+                max={0.6}
+                step={0.001}
+                value={moxonAspectRatio}
+                onInput={(e) => setMoxonAspectRatio(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>tip spacer factor</span>
+                <span>{moxonTipspacerFactor.toFixed(4)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.02}
+                max={0.20}
+                step={0.0005}
+                value={moxonTipspacerFactor}
+                onInput={(e) => setMoxonTipspacerFactor(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>t0 factor (tip length / short)</span>
+                <span>{moxonT0Factor.toFixed(3)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.15}
+                max={0.6}
+                step={0.001}
+                value={moxonT0Factor}
+                onInput={(e) => setMoxonT0Factor(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+          </>
+        )}
+
         <div className="field">
           <label>
             <span>design freq</span>
@@ -587,8 +708,8 @@ export function App() {
           </label>
           <input
             type="range"
-            min={11.44}
-            max={17.875}
+            min={FREQ_LIMITS[geometry].min}
+            max={FREQ_LIMITS[geometry].max}
             step={0.005}
             value={designFreq}
             onInput={(e) => updateDesignFreq(Number((e.target as HTMLInputElement).value))}
@@ -764,6 +885,26 @@ export function App() {
               <div className="row">
                 <span>spacing</span>
                 <span className="val">{result.spacing_m?.toFixed(3)} m</span>
+              </div>
+            </>
+          )}
+          {result?.geometry === "moxon" && (
+            <>
+              <div className="row">
+                <span>long (vertical)</span>
+                <span className="val">{result.long_m?.toFixed(3)} m</span>
+              </div>
+              <div className="row">
+                <span>short (gap)</span>
+                <span className="val">{result.short_m?.toFixed(3)} m</span>
+              </div>
+              <div className="row">
+                <span>tip spacer</span>
+                <span className="val">{result.tipspacer_m?.toFixed(3)} m</span>
+              </div>
+              <div className="row">
+                <span>tip length t0</span>
+                <span className="val">{result.t0_m?.toFixed(3)} m</span>
               </div>
             </>
           )}
@@ -1600,9 +1741,9 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
         (h - pad - barReserveBottom) / (0.5 * lambdaDesign),
       );
 
-      // Per-geometry view: V is a side view (xz plane), Yagi is top-down
-      // (xy plane). vertAxis is the world axis that maps to canvas-y.
-      const vertAxis = result.geometry === "yagi" ? 1 : 2;
+      // Per-geometry view: V is a side view (xz plane); Yagi and moxon are
+      // top-down (xy plane). vertAxis is the world axis that maps to canvas-y.
+      const vertAxis = result.geometry === "inverted_v" ? 2 : 1;
       let xMin = Infinity, xMax = -Infinity;
       let vMin = Infinity, vMax = -Infinity;
       for (const wire of result.wires) {
