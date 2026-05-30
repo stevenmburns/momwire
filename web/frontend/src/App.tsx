@@ -1887,36 +1887,55 @@ function drawArmEnvelope(
   end: number,
   envScale: number,
 ) {
-  ctx.beginPath();
-  for (let i = start; i <= end; i++) {
+  if (end <= start) return;
+
+  // Per-segment normal in canvas space, oriented toward screen-up so V-style
+  // arms put their envelopes "above" the wire. For axis-aligned vertical
+  // segments ny is exactly zero and the flip is a no-op; that's fine — what
+  // matters is that the moxon's adjacent perpendicular segments get
+  // *different* normals so the bend-break below catches the corner.
+  const segN: { nx: number; ny: number }[] = [];
+  for (let i = start; i < end; i++) {
     const p = project(knots[i]);
-    // Tangent from neighbors WITHIN this arm. At the apex (end of one arm,
-    // start of the next) we look inward so each arm gets its own tangent.
-    let dx = 0;
-    let dy = -1;
-    if (i < end) {
-      const q = project(knots[i + 1]);
-      dx = q.x - p.x;
-      dy = q.y - p.y;
-    } else if (i > start) {
-      const q = project(knots[i - 1]);
-      dx = p.x - q.x;
-      dy = p.y - q.y;
-    }
-    const n = Math.hypot(dx, dy) || 1;
-    let nx = -dy / n;
-    let ny = dx / n;
-    // Orient consistently toward screen-up so both arms' envelopes sit above
-    // (outside) the V, mirroring each other.
+    const q = project(knots[i + 1]);
+    const dx = q.x - p.x;
+    const dy = q.y - p.y;
+    const len = Math.hypot(dx, dy) || 1;
+    let nx = -dy / len;
+    let ny = dx / len;
     if (ny > 0) {
       nx = -nx;
       ny = -ny;
     }
-    const offset = (mags[i] / magMax) * envScale;
-    const ex = p.x + nx * offset;
-    const ey = p.y + ny * offset;
-    if (i === start) ctx.moveTo(ex, ey);
-    else ctx.lineTo(ex, ey);
+    segN.push({ nx, ny });
+  }
+
+  // Walk runs of segments whose normals agree (within ~3°), and start a new
+  // sub-path at each bend. Without this, a connected envelope at a 90°
+  // corner zigzags across the corner since the two adjacent segments offset
+  // their knots in perpendicular directions.
+  const BEND_TOL = 0.9986;  // cos(3°)
+  ctx.beginPath();
+  let s = 0;
+  while (s < segN.length) {
+    let e = s;
+    while (
+      e + 1 < segN.length &&
+      segN[e].nx * segN[e + 1].nx + segN[e].ny * segN[e + 1].ny >= BEND_TOL
+    ) {
+      e++;
+    }
+    const { nx, ny } = segN[s];
+    for (let k = s; k <= e + 1; k++) {
+      const ki = start + k;
+      const p = project(knots[ki]);
+      const offset = (mags[ki] / magMax) * envScale;
+      const ex = p.x + nx * offset;
+      const ey = p.y + ny * offset;
+      if (k === s) ctx.moveTo(ex, ey);
+      else ctx.lineTo(ex, ey);
+    }
+    s = e + 1;
   }
   ctx.stroke();
 }
