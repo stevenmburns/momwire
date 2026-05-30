@@ -14,6 +14,7 @@ from pysim.yagi import YagiPySim
 from pysim.triangular import TriangularPySim
 from pysim.triangular_yagi import TriangularYagiPySim
 from pysim.triangular_bent import BentTriangularPySim
+from pysim.triangular_bent_multi import BentMultiPySim
 
 from pysim._util import save_or_show
 from pysim._accelerators import dist_outer_product
@@ -327,3 +328,123 @@ def test_bent_triangular_v_dipole_smoke():
     # Bending lowers R and pushes X more negative compared to straight (69.6 - j18.5).
     assert 30.0 < z.real < 65.0
     assert z.imag < -25.0
+
+
+@pytest.mark.parametrize("nsegs", [20, 40])
+def test_bent_multi_matches_yagi(nsegs):
+    # Two parallel y-directed straight wires must reproduce TriangularYagiPySim
+    # to 1e-5 — the only path difference is wire_radius^2 regularization on
+    # cross-wire pairs (vs Yagi's a^2=0), and at the default 1λ/4 spacing
+    # the shift in cross-wire integrals is 1e-7-scale.
+    sim_y = TriangularYagiPySim(nsegs=nsegs)
+    z_y, _ = sim_y.compute_impedance()
+    hd = sim_y.halfdriver
+    sp = sim_y.spacing_factor * hd
+    driver = np.array([[0.0, -hd, 0.0], [0.0, hd, 0.0]])
+    refl = np.array(
+        [
+            [-sp, -sim_y.reflector_factor * hd, 0.0],
+            [-sp, sim_y.reflector_factor * hd, 0.0],
+        ]
+    )
+    z_m, _ = BentMultiPySim(
+        wires=[driver, refl],
+        n_per_edge_per_wire=[nsegs, nsegs],
+        nsegs=nsegs,
+        halfdriver_factor=sim_y.halfdriver_factor,
+        wavelength=sim_y.wavelength,
+    ).compute_impedance()
+    assert abs(z_y - z_m) < 1e-5
+
+
+@pytest.mark.parametrize("nsegs", [20, 40])
+def test_bent_multi_swept_matches_per_freq(nsegs):
+    # Build a small two-wire moxon-like geometry; the batched solver must
+    # agree with single-freq calls to machine precision.
+    L = 2 * 0.962 * 22 / 4
+    halfL = L / 2
+    driver = np.array(
+        [
+            [-0.1, -halfL, 0.0],
+            [0.3, -halfL, 0.0],
+            [0.3, -0.05, 0.0],
+            [0.3, 0.05, 0.0],
+            [0.3, halfL, 0.0],
+            [-0.1, halfL, 0.0],
+        ]
+    )
+    refl = np.array(
+        [
+            [-0.2, halfL, 0.0],
+            [-0.6, halfL, 0.0],
+            [-0.6, -halfL, 0.0],
+            [-0.2, -halfL, 0.0],
+        ]
+    )
+    sim = BentMultiPySim(
+        wires=[driver, refl],
+        n_per_edge_per_wire=[[4, nsegs, 1, nsegs, 4], [4, nsegs, 4]],
+        nsegs=nsegs,
+        feed_wire_index=0,
+    )
+    z_single, _ = sim.compute_impedance()
+    k_arr = np.array([sim.k])
+    z_swept = sim.compute_impedance_swept(k_arr)
+    assert abs(z_single - z_swept[0]) < 1e-9
+    assert np.isfinite(z_single.real) and np.isfinite(z_single.imag)
+
+
+def test_bent_multi_moxon_smoke():
+    # Approximate moxon at 28.57 MHz with the antenna_designer default
+    # parameters. Sanity-check R/X land in plausible bands and currents
+    # come out finite.
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.57
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    halfdriver = 0.962 * wavelength / 4
+    aspect_ratio = 0.3646
+    tipspacer_factor = 0.0773
+    t0_factor = 0.4078
+    long_ = 2 * halfdriver / (1 + 2 * aspect_ratio * t0_factor)
+    short_ = aspect_ratio * long_
+    tipspacer = short_ * tipspacer_factor
+    t0 = short_ * t0_factor
+    eps = 0.05
+
+    def rx(p):
+        return (-p[0], p[1], p[2])
+
+    def ry(p):
+        return (p[0], -p[1], p[2])
+
+    S = (short_ / 2, eps, 0.0)
+    A = (S[0], long_ / 2, 0.0)
+    B = (A[0] - t0, A[1], 0.0)
+    Cc = (B[0] - tipspacer, B[1], 0.0)
+    D = rx(A)
+    E = ry(D)
+    F = ry(Cc)
+    G = ry(B)
+    H = ry(A)
+    T = ry(S)
+
+    driver = np.array([G, H, T, S, A, B], dtype=float)
+    reflector = np.array([Cc, D, E, F], dtype=float)
+
+    sim = BentMultiPySim(
+        wires=[driver, reflector],
+        n_per_edge_per_wire=[[8, 21, 1, 21, 8], [8, 21, 8]],
+        feed_wire_index=0,
+        nsegs=40,
+        wavelength=wavelength,
+        halfdriver_factor=0.962,
+    )
+    z, c = sim.compute_impedance()
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert np.isfinite(c).all()
+    # Moxons are nominally tuned for ~50 Ω at resonance; with the canonical
+    # antenna_designer factors and 28.57 MHz design freq we see ~70 + j10
+    # which is a reasonable working point (the canonical design is tuned
+    # for a slightly different free-space target than ours).
+    assert 40.0 < z.real < 110.0
+    assert -30.0 < z.imag < 40.0
