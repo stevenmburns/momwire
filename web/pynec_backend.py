@@ -353,7 +353,7 @@ def solve_yagi(req: dict) -> dict:
             )
         )
 
-    # Feed marker: middle interior knot of driver (matches TriangularYagiPySim).
+    # Feed marker: middle interior knot of driver (matches TriangularPySim).
     interior_arc = np.linspace(0.0, 2 * h_driver, N + 1)[1:-1]
     m_center_interior = int(np.argmin(np.abs(interior_arc - h_driver)))
     feed_knot_index = m_center_interior + 1

@@ -1,12 +1,12 @@
 """FastAPI server for the interactive antenna UI.
 
-Supports two geometries:
-- inverted_v: a single bent wire (BentTriangularPySim).
-- yagi:      driver + reflector, parallel straight wires (TriangularYagiPySim).
+Supports four geometries (inverted_v, yagi, moxon, hexbeam), all solved by
+the single TriangularPySim backend: each geometry just builds a list of
+polyline wires + per-edge segment counts and feeds them in.
 
-Both return a uniform "wire list" response so the frontend draws either
-geometry the same way: each wire is a sequence of knots with per-knot complex
-currents; the feed lives on one of the wires.
+The response shape is uniform across geometries — each wire is a sequence of
+knots with per-knot complex currents and the feed lives on one of the wires —
+so the frontend draws every geometry the same way.
 
 Run: uvicorn web.server:app --reload
 """
@@ -53,9 +53,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from pysim.triangular_bent import BentTriangularPySim
-from pysim.triangular_bent_multi import BentMultiPySim
-from pysim.triangular_yagi import TriangularYagiPySim
+from pysim.triangular import TriangularPySim
 
 from . import pynec_backend
 
@@ -70,7 +68,7 @@ app.add_middleware(
 )
 
 
-C_LIGHT = 299_792_458.0  # m/s, matches AbstractPySim's eps*mu derivation to ~1e-9
+C_LIGHT = 299_792_458.0  # m/s, matches TriangularPySim's eps*mu derivation to ~1e-9
 
 
 def _compute_directivity_norm(out: dict, n_theta: int = 45, n_phi: int = 90) -> None:
@@ -186,6 +184,27 @@ def _wire_record(knots: np.ndarray, coeffs: np.ndarray, label: str) -> dict:
     }
 
 
+def _yagi_polylines(
+    h_driver: float,
+    h_refl: float,
+    spacing_m: float,
+    n_directors: int,
+    dir_spacing_m: float,
+    h_dir: float,
+) -> list[np.ndarray]:
+    """Driver + reflector + n_directors directors, all y-directed straight
+    wires expressed as 2-anchor polylines for TriangularPySim.
+    """
+    polylines = [
+        np.array([(0.0, -h_driver, 0.0), (0.0, h_driver, 0.0)]),
+        np.array([(-spacing_m, -h_refl, 0.0), (-spacing_m, h_refl, 0.0)]),
+    ]
+    for i in range(n_directors):
+        x = (i + 1) * dir_spacing_m
+        polylines.append(np.array([(x, -h_dir, 0.0), (x, h_dir, 0.0)]))
+    return polylines
+
+
 def _inverted_v_polyline(arm_len: float, angle_deg: float) -> np.ndarray:
     """Inverted-V with apex at the origin and arms drooping in the yz plane.
 
@@ -214,26 +233,22 @@ def _solve_inverted_v(req: dict) -> dict:
     wavelength_meas = C_LIGHT / (meas_freq_mhz * 1e6)
     arm_len = halfdriver_factor * wavelength_design / 4.0
 
-    sim = BentTriangularPySim(
+    polyline = _inverted_v_polyline(arm_len, angle_deg)
+    sim = TriangularPySim(
+        wires=[polyline],
+        n_per_edge_per_wire=[[n_per_wire, n_per_wire]],
+        feed_wire_index=0,
         wavelength=wavelength_meas,
         halfdriver_factor=halfdriver_factor,
         nsegs=n_per_wire,
     )
     sim.wire_radius = wire_radius
-    polyline = _inverted_v_polyline(arm_len, angle_deg)
-    sim.polyline = polyline
-    sim.n_per_edge = [n_per_wire, n_per_wire]
 
     t0 = time.perf_counter()
     z_in, coeffs = sim.compute_impedance()
     solve_ms = (time.perf_counter() - t0) * 1e3
 
-    knots = np.vstack(
-        [
-            np.linspace(polyline[0], polyline[1], n_per_wire + 1)[:-1],
-            np.linspace(polyline[1], polyline[2], n_per_wire + 1),
-        ]
-    )
+    knots = _polyline_knots(polyline, [n_per_wire, n_per_wire])
     feed_knot_index = n_per_wire  # apex (midpoint of polyline)
 
     return {
@@ -252,7 +267,8 @@ def _solve_inverted_v(req: dict) -> dict:
 
 
 def _solve_yagi(req: dict) -> dict:
-    """Two-element Yagi (driver + reflector).
+    """Yagi (driver + reflector + optional directors), all parallel straight
+    wires built as one-edge polylines and fed to TriangularPySim.
 
     Canonical layout for the UI:
         boom / spacing axis: +x (driver at x=0, reflector at x=-spacing,
@@ -261,9 +277,7 @@ def _solve_yagi(req: dict) -> dict:
                                   along y)
         beam direction:      +x (away from reflector)
         z = 0 everywhere
-    This matches the internal TriangularYagiPySim geometry exactly, so the
-    response wires pass through unchanged. Aligns the Yagi convention with
-    moxon and hexbeam (also +x beam).
+    Aligns the Yagi convention with moxon and hexbeam (also +x beam).
     """
     n_per_wire = int(req.get("n_per_wire", 30))
     design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
@@ -285,35 +299,24 @@ def _solve_yagi(req: dict) -> dict:
     dir_spacing_m = dir_spacing_wl * wavelength_design
     h_dir = dir_size_factor * h_driver
 
-    # TriangularYagiPySim parameters: factors are relative to the driver's
-    # halflength. Director spacing is between consecutive elements.
-    refl_factor_rel = h_refl / h_driver
-    spacing_factor_rel = spacing_m / h_driver
-    dir_spacing_factor_rel = dir_spacing_m / h_driver
+    wires_polylines = _yagi_polylines(
+        h_driver, h_refl, spacing_m, n_directors, dir_spacing_m, h_dir
+    )
 
-    sim = TriangularYagiPySim(
+    sim = TriangularPySim(
+        wires=wires_polylines,
+        n_per_edge_per_wire=[[n_per_wire]] * len(wires_polylines),
+        feed_wire_index=0,
         wavelength=wavelength_meas,
         halfdriver_factor=driver_factor,
         nsegs=n_per_wire,
-        reflector_factor=refl_factor_rel,
-        spacing_factor=spacing_factor_rel,
-        n_directors=n_directors,
-        director_spacing_factor=dir_spacing_factor_rel,
-        director_size_factor=dir_size_factor,
     )
     sim.wire_radius = wire_radius
-    # Decouple geometry from measurement wavelength: the solver computes
-    # halfdriver from `wavelength` at construction time, which by default
-    # ties the antenna size to measurement freq. Override to fix it to
-    # design freq so meas-freq sweeps probe a stationary antenna.
-    sim.halfdriver = h_driver
 
     t0 = time.perf_counter()
     z_in, coeffs = sim.compute_impedance()
     solve_ms = (time.perf_counter() - t0) * 1e3
 
-    # Canonical layout: elements along y, spacing along x — same as
-    # TriangularYagiPySim's internal geometry, so no transpose is needed.
     N = n_per_wire
     nb = N - 1
 
@@ -340,12 +343,11 @@ def _solve_yagi(req: dict) -> dict:
             )
         )
 
-    # Feed: TriangularYagiPySim picks the interior knot of the driver closest
-    # to L_driver/2 — that's the middle interior knot, at full-list index N//2
-    # when interior-list index is (N-2)//2. Reproduce the same logic here.
-    interior_arc = np.linspace(0.0, 2 * h_driver, N + 1)[1:-1]
-    m_center_interior = int(np.argmin(np.abs(interior_arc - h_driver)))
-    feed_knot_index = m_center_interior + 1  # shift past left endpoint
+    # Feed: TriangularPySim picks the interior knot of the driver closest to
+    # the wire midpoint (= h_driver in arc length). For N segments / N+1 knots
+    # along [-h_driver, +h_driver], that's the middle interior knot at full-
+    # list index N//2.
+    feed_knot_index = N // 2
 
     return {
         "geometry": "yagi",
@@ -458,7 +460,7 @@ def _polyline_knots(polyline: np.ndarray, npe_list: list[int]) -> np.ndarray:
 
 
 def _solve_moxon(req: dict) -> dict:
-    """Moxon (driver + reflector, both bent rectangular) via BentMultiPySim."""
+    """Moxon (driver + reflector, both bent rectangular) via TriangularPySim."""
     n_per_wire = int(req.get("n_per_wire", 21))
     design_freq_mhz = float(req.get("design_freq_mhz", 28.57))
     meas_freq_mhz = float(req.get("measurement_freq_mhz", design_freq_mhz))
@@ -480,7 +482,7 @@ def _solve_moxon(req: dict) -> dict:
         n_per_wire,
     )
 
-    sim = BentMultiPySim(
+    sim = TriangularPySim(
         wires=[geom["driver"], geom["reflector"]],
         n_per_edge_per_wire=[geom["npe_driver"], geom["npe_reflector"]],
         feed_wire_index=0,
@@ -634,7 +636,7 @@ def _solve_hexbeam(req: dict) -> dict:
         n_per_wire,
     )
 
-    sim = BentMultiPySim(
+    sim = TriangularPySim(
         wires=[geom["driver"], geom["reflector"]],
         n_per_edge_per_wire=[geom["npe_driver"], geom["npe_reflector"]],
         feed_wire_index=0,
@@ -704,7 +706,7 @@ def solve(req: dict) -> dict:
 def _sweep_inverted_v(
     req: dict, freqs_mhz: list[float]
 ) -> tuple[list[float], list[float]]:
-    """Batched sweep using BentTriangularPySim.compute_impedance_swept."""
+    """Batched sweep using TriangularPySim.compute_impedance_swept."""
     angle_deg = float(req.get("angle_deg", 30.0))
     n_per_wire = int(req.get("n_per_wire", 30))
     design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
@@ -714,16 +716,15 @@ def _sweep_inverted_v(
     wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
     arm_len = halfdriver_factor * wavelength_design / 4.0
 
-    # Use design wavelength for the sim construction; geometry is set via
-    # polyline override so it's independent of the sim's wavelength field.
-    sim = BentTriangularPySim(
+    sim = TriangularPySim(
+        wires=[_inverted_v_polyline(arm_len, angle_deg)],
+        n_per_edge_per_wire=[[n_per_wire, n_per_wire]],
+        feed_wire_index=0,
         wavelength=wavelength_design,
         halfdriver_factor=halfdriver_factor,
         nsegs=n_per_wire,
     )
     sim.wire_radius = wire_radius
-    sim.polyline = _inverted_v_polyline(arm_len, angle_deg)
-    sim.n_per_edge = [n_per_wire, n_per_wire]
 
     k_array = np.array([2 * np.pi * f * 1e6 / C_LIGHT for f in freqs_mhz])
     z_array = sim.compute_impedance_swept(k_array)
@@ -731,7 +732,7 @@ def _sweep_inverted_v(
 
 
 def _sweep_yagi(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
-    """Batched sweep using TriangularYagiPySim.compute_impedance_swept."""
+    """Batched sweep using TriangularPySim.compute_impedance_swept."""
     n_per_wire = int(req.get("n_per_wire", 30))
     design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
     driver_factor = float(req.get("driver_length_factor", 0.962))
@@ -746,22 +747,21 @@ def _sweep_yagi(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[fl
     h_driver = driver_factor * wavelength_design / 4.0
     h_refl = refl_factor_abs * wavelength_design / 4.0
     spacing_m = spacing_wavelengths * wavelength_design
-    refl_factor_rel = h_refl / h_driver
-    spacing_factor_rel = spacing_m / h_driver
-    dir_spacing_factor_rel = (dir_spacing_wl * wavelength_design) / h_driver
+    dir_spacing_m = dir_spacing_wl * wavelength_design
+    h_dir = dir_size_factor * h_driver
 
-    sim = TriangularYagiPySim(
+    wires_polylines = _yagi_polylines(
+        h_driver, h_refl, spacing_m, n_directors, dir_spacing_m, h_dir
+    )
+    sim = TriangularPySim(
+        wires=wires_polylines,
+        n_per_edge_per_wire=[[n_per_wire]] * len(wires_polylines),
+        feed_wire_index=0,
         wavelength=wavelength_design,
         halfdriver_factor=driver_factor,
         nsegs=n_per_wire,
-        reflector_factor=refl_factor_rel,
-        spacing_factor=spacing_factor_rel,
-        n_directors=n_directors,
-        director_spacing_factor=dir_spacing_factor_rel,
-        director_size_factor=dir_size_factor,
     )
     sim.wire_radius = wire_radius
-    sim.halfdriver = h_driver
 
     k_array = np.array([2 * np.pi * f * 1e6 / C_LIGHT for f in freqs_mhz])
     z_array = sim.compute_impedance_swept(k_array)
@@ -769,7 +769,7 @@ def _sweep_yagi(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[fl
 
 
 def _sweep_moxon(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
-    """Batched sweep using BentMultiPySim.compute_impedance_swept."""
+    """Batched sweep using TriangularPySim.compute_impedance_swept."""
     n_per_wire = int(req.get("n_per_wire", 21))
     design_freq_mhz = float(req.get("design_freq_mhz", 28.57))
     halfdriver_factor = float(req.get("halfdriver_factor", 0.962))
@@ -788,7 +788,7 @@ def _sweep_moxon(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[f
         t0_factor,
         n_per_wire,
     )
-    sim = BentMultiPySim(
+    sim = TriangularPySim(
         wires=[geom["driver"], geom["reflector"]],
         n_per_edge_per_wire=[geom["npe_driver"], geom["npe_reflector"]],
         feed_wire_index=0,
@@ -807,7 +807,7 @@ def _sweep_moxon(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[f
 def _sweep_hexbeam(
     req: dict, freqs_mhz: list[float]
 ) -> tuple[list[float], list[float]]:
-    """Batched sweep using BentMultiPySim.compute_impedance_swept."""
+    """Batched sweep using TriangularPySim.compute_impedance_swept."""
     n_per_wire = int(req.get("n_per_wire", 21))
     design_freq_mhz = float(req.get("design_freq_mhz", 28.47))
     halfdriver_factor = float(req.get("halfdriver_factor", 1.071))
@@ -824,7 +824,7 @@ def _sweep_hexbeam(
         t0_factor,
         n_per_wire,
     )
-    sim = BentMultiPySim(
+    sim = TriangularPySim(
         wires=[geom["driver"], geom["reflector"]],
         n_per_edge_per_wire=[geom["npe_driver"], geom["npe_reflector"]],
         feed_wire_index=0,

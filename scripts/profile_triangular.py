@@ -1,7 +1,7 @@
-"""Profile the triangular MoM solvers to see where time is spent.
+"""Profile the TriangularPySim solver to see where time is spent.
 
-Runs BentTriangularPySim (inverted V) and TriangularYagiPySim (driver+reflector)
-at a few segment counts and prints:
+Runs the inverted V (single bent wire) and Yagi (driver+reflector) cases at a
+few segment counts and prints:
 
   1. Wall-clock timing (median of repeats)
   2. cProfile output trimmed to the top consumers
@@ -22,8 +22,7 @@ import time
 
 import numpy as np
 
-from pysim.triangular_bent import BentTriangularPySim
-from pysim.triangular_yagi import TriangularYagiPySim
+from pysim.triangular import TriangularPySim
 
 
 C_LIGHT = 299_792_458.0
@@ -41,22 +40,31 @@ def make_v(n: int, design_freq_mhz: float = 13.625, droop_deg: float = 30.0):
             [arm_len * cos_a, 0.0, -arm_len * sin_a],
         ]
     )
-    sim = BentTriangularPySim(wavelength=wavelength, halfdriver_factor=0.962, nsegs=n)
-    sim.polyline = polyline
-    sim.n_per_edge = [n, n]
-    return sim
+    return TriangularPySim(
+        wires=[polyline],
+        n_per_edge_per_wire=[[n, n]],
+        feed_wire_index=0,
+        wavelength=wavelength,
+        halfdriver_factor=0.962,
+        nsegs=n,
+    )
 
 
 def make_yagi(n: int, design_freq_mhz: float = 13.625):
     wavelength = C_LIGHT / (design_freq_mhz * 1e6)
-    sim = TriangularYagiPySim(
+    halfdriver = 0.962 * wavelength / 4.0
+    spacing = 0.6 * halfdriver
+    refl_h = 1.05 * halfdriver
+    driver = np.array([[0.0, -halfdriver, 0.0], [0.0, halfdriver, 0.0]])
+    refl = np.array([[-spacing, -refl_h, 0.0], [-spacing, refl_h, 0.0]])
+    return TriangularPySim(
+        wires=[driver, refl],
+        n_per_edge_per_wire=[[n], [n]],
+        feed_wire_index=0,
         wavelength=wavelength,
         halfdriver_factor=0.962,
         nsegs=n,
-        reflector_factor=1.05,
-        spacing_factor=0.6,
     )
-    return sim
 
 
 def time_runs(sim_factory, n: int, repeats: int = 7) -> list[float]:
@@ -110,10 +118,10 @@ def main():
 
     if args.kind in ("v", "both"):
         for n in ns:
-            profile_one(make_v, n, "BentTriangularPySim (V)")
+            profile_one(make_v, n, "TriangularPySim (V)")
     if args.kind in ("yagi", "both"):
         for n in ns:
-            profile_one(make_yagi, n, "TriangularYagiPySim (Yagi)")
+            profile_one(make_yagi, n, "TriangularPySim (Yagi)")
 
 
 if __name__ == "__main__":
