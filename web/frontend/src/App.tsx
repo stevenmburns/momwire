@@ -191,14 +191,10 @@ export function App() {
   // `azElevDeg`; the elevation plot slices the vertical plane at azimuth
   // bearing `elevAzDeg` (0° = +x). Defaults give the conventional views.
   const [azElevDeg, setAzElevDeg] = useState(15);
-  // Default elevation-cut azimuth tracks each geometry's beam direction so
-  // the vertical plane actually contains the main lobe. Yagi, moxon, and
-  // hexbeam all beam +x (azimuth 0°); the inverted V is broadside to its
-  // ±x wire and peaks along ±y (azimuth 90°).
+  // Default elevation-cut azimuth is 0° (+x) for every geometry: Yagi,
+  // moxon, and hexbeam beam +x; the inverted V now runs its arms along
+  // ±y so its broadside lobe also peaks at ±x.
   const [elevAzDeg, setElevAzDeg] = useState(0);
-  useEffect(() => {
-    setElevAzDeg(geometry === "inverted_v" ? 90 : 0);
-  }, [geometry]);
 
   // When linked, design and measurement freq move together.
   function updateDesignFreq(v: number) {
@@ -1869,25 +1865,30 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
         (h - pad - barReserveBottom) / (0.5 * lambdaDesign),
       );
 
-      // Per-geometry view: V is a side view (xz plane); Yagi and moxon are
-      // top-down (xy plane). vertAxis is the world axis that maps to canvas-y.
-      const vertAxis = result.geometry === "inverted_v" ? 2 : 1;
-      let xMin = Infinity, xMax = -Infinity;
+      // Per-geometry view: V is a side view from -x looking toward +x
+      // (arms run along ±y, drooping in -z), so canvas-x = world-y and
+      // canvas-y = world-z. Yagi / moxon / hexbeam are top-down: canvas-x
+      // = world-x (boom), canvas-y = world-y (elements). horizAxis and
+      // vertAxis name the world axes that map to canvas-x and canvas-y.
+      const isSideView = result.geometry === "inverted_v";
+      const horizAxis = isSideView ? 1 : 0;
+      const vertAxis = isSideView ? 2 : 1;
+      let hMin = Infinity, hMax = -Infinity;
       let vMin = Infinity, vMax = -Infinity;
       for (const wire of result.wires) {
         for (const p of wire.knot_positions) {
-          if (p[0] < xMin) xMin = p[0];
-          if (p[0] > xMax) xMax = p[0];
+          if (p[horizAxis] < hMin) hMin = p[horizAxis];
+          if (p[horizAxis] > hMax) hMax = p[horizAxis];
           if (p[vertAxis] < vMin) vMin = p[vertAxis];
           if (p[vertAxis] > vMax) vMax = p[vertAxis];
         }
       }
-      const xC = (xMin + xMax) / 2;
+      const hC = (hMin + hMax) / 2;
       const vC = (vMin + vMax) / 2;
       const cx = w / 2;
       const cy = h / 2;
       const project = (p: [number, number, number]) => ({
-        x: cx + (p[0] - xC) * scale,
+        x: cx + (p[horizAxis] - hC) * scale,
         y: cy + (vC - p[vertAxis]) * scale, // higher vert value = higher on screen
       });
 
