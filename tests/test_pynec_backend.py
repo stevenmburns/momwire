@@ -106,6 +106,42 @@ def test_sweep_yagi_agrees():
         )
 
 
+def test_fandipole_two_band_smoke():
+    """Two-band fan dipole (20m + 10m), 2 wires per arm, cone arrangement
+    from the antenna_designer reference. Both bands should land within
+    ~30 Ω of 50+j0 — the design is nominally co-resonant on 14.3 and 28.47.
+    """
+    req = {
+        "geometry": "fan_dipole",
+        "n_per_wire": 21,
+        "n_bands": 2,
+        "design_freq_mhz": 14.3,
+        "band_lengths_m": [10.2551, 5.2691],
+        "band_freqs_mhz": [14.3, 28.47],
+        "slope": 0.5,
+        "cone_radius_m": 0.12,
+        "wire_radius": 0.0005,
+    }
+
+    req_20 = {**req, "measurement_freq_mhz": 14.3}
+    z_20 = _z_complex(pynec_backend.solve_fandipole(req_20))
+    assert 30.0 < z_20.real < 80.0, f"20m R out of range: {z_20}"
+    assert -30.0 < z_20.imag < 30.0, f"20m X out of range: {z_20}"
+
+    req_10 = {**req, "measurement_freq_mhz": 28.47}
+    z_10 = _z_complex(pynec_backend.solve_fandipole(req_10))
+    assert 30.0 < z_10.real < 100.0, f"10m R out of range: {z_10}"
+    assert -30.0 < z_10.imag < 60.0, f"10m X out of range: {z_10}"
+
+    # Wire records: 1 feed + 2 arms * n_bands = 5 wires; feed has 3 knots
+    # (T, midpoint, S) so feed_knot_index=1 lands on the midpoint.
+    res = pynec_backend.solve_fandipole(req_20)
+    assert len(res["wires"]) == 1 + 2 * req["n_bands"]
+    assert res["feed_wire_index"] == 0
+    assert res["feed_knot_index"] == 1
+    assert len(res["wires"][0]["knot_positions"]) == 3
+
+
 def test_response_shape_matches():
     """The frontend reads exact field names; make sure both backends produce
     the same keys with the same types so a backend swap can't silently
