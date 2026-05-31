@@ -22,6 +22,12 @@ web = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
 ]
+# Optional third-party MoM solvers used by the comparator scripts in
+# scripts/. PyNEC is built from the vendored submodule via
+# scripts/build_pynec.sh — not pip-installable here.
+validation = [
+    "pymininec>=1.2",
+]
 
 [project.urls]
 Homepage = "https://github.com/stevenmburns/pysim"
