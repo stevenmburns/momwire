@@ -59,6 +59,13 @@ class TriangularPySim:
         is then only informational.
     wire_radius: thin-wire radius used in the kernel regularization.
     nsegs: default segment count when `n_per_edge_per_wire` doesn't specify.
+    ground_z: if not None, model an infinite PEC ground plane at z = ground_z
+        via the image method. The image contribution is computed by mirroring
+        every segment's position across z = ground_z and adding the reaction
+        of the resulting image current (horizontal components anti-parallel,
+        vertical preserved; image charge density is the negative of the
+        original). All wires must lie at z >= ground_z + wire_radius for the
+        image to be well-separated from the antenna.
     """
 
     eps = 8.8541878188e-12
@@ -77,11 +84,13 @@ class TriangularPySim:
         halfdriver_factor=0.962,
         wire_radius=0.0005,
         nsegs=101,
+        ground_z=None,
     ):
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
         self.wire_radius = wire_radius
         self.nsegs = nsegs
+        self.ground_z = ground_z
 
         self.c = 1 / np.sqrt(self.eps * self.mu)
         self.freq = self.c / self.wavelength
@@ -382,14 +391,57 @@ class TriangularPySim:
 
         return J00, J10, J01, J11
 
-    def compute_impedance(self, *, ntrap=None):
-        geom = self._build_geometry()
-        J00, J10, J01, J11 = self._build_J_blocks(geom, self.k)
+    def _image_positions(self, positions):
+        out = positions.copy()
+        out[..., 2] = 2 * self.ground_z - out[..., 2]
+        return out
 
+    def _image_tangent_dot(self, tangents):
+        """t_m · t_image_n with t_image_n = (t_n_x, t_n_y, -t_n_z).
+
+        Equivalent to td_all with the z-z outer product negated.
+        """
+        return tangents @ (tangents * np.array([1.0, 1.0, -1.0])).T
+
+    def _build_J_image_blocks(self, geom, k):
+        """J integrals with each j-segment mirrored across z = ground_z.
+
+        One quadrature call over all (i, j) pairs — the image is far enough
+        from the original to never be analytically tractable, even for
+        same-edge pairs.
+        """
+        a = self.wire_radius
+        per_wire = geom["per_wire"]
+        seg_l_all = np.vstack([pw["seg_l"] for pw in per_wire])
+        seg_r_all = np.vstack([pw["seg_r"] for pw in per_wire])
+        seg_l_img = self._image_positions(seg_l_all)
+        seg_r_img = self._image_positions(seg_r_all)
+        return _seg_seg_offedge_quad(
+            seg_l_all, seg_r_all, seg_l_img, seg_r_img, a, k, self.n_qp_off
+        )
+
+    def _build_J_image_blocks_batch(self, geom, k_array):
+        a = self.wire_radius
+        per_wire = geom["per_wire"]
+        seg_l_all = np.vstack([pw["seg_l"] for pw in per_wire])
+        seg_r_all = np.vstack([pw["seg_r"] for pw in per_wire])
+        seg_l_img = self._image_positions(seg_l_all)
+        seg_r_img = self._image_positions(seg_r_all)
+        return _seg_seg_offedge_quad_batch(
+            seg_l_all, seg_r_all, seg_l_img, seg_r_img, a, k_array, self.n_qp_off
+        )
+
+    def _assemble_Z_single(self, J00, J10, J01, J11, td_all, geom):
+        """Assemble the single-k (n_basis, n_basis) Z matrix from the four
+        per-segment-pair J tensors and a tangent-dot-product table.
+
+        Identical form for free-space and image contributions — the caller
+        is responsible for negating the result before adding it back to
+        Z_free when ground is present.
+        """
         left_seg = geom["left_seg"]
         right_seg = geom["right_seg"]
         h_per_seg = geom["h_per_seg"]
-        tangents = geom["tangents"]
 
         hl_m = h_per_seg[left_seg][:, None]
         hl_n = h_per_seg[left_seg][None, :]
@@ -404,7 +456,6 @@ class TriangularPySim:
         )
         Z_Phi = S / (1j * self.omega * self.eps)
 
-        td_all = tangents @ tangents.T
         td_ll = td_all[np.ix_(left_seg, left_seg)]
         td_lr = td_all[np.ix_(left_seg, right_seg)]
         td_rl = td_all[np.ix_(right_seg, left_seg)]
@@ -432,7 +483,26 @@ class TriangularPySim:
         )
         Z_A = 1j * self.omega * self.mu * I_A
 
-        Z = Z_A + Z_Phi
+        return Z_A + Z_Phi
+
+    def compute_impedance(self, *, ntrap=None):
+        geom = self._build_geometry()
+        tangents = geom["tangents"]
+
+        J_free = self._build_J_blocks(geom, self.k)
+        td_free = tangents @ tangents.T
+        Z = self._assemble_Z_single(*J_free, td_free, geom)
+
+        if self.ground_z is not None:
+            # PEC image: subtract sub-assembly built with image J tensors and
+            # mirrored tangent dot products. The net image current is
+            # anti-parallel for horizontal components / parallel for vertical;
+            # the basis-function sign flip and the image-charge sign flip
+            # combine to a single minus sign on the entire sub-assembly.
+            J_img = self._build_J_image_blocks(geom, self.k)
+            td_img = self._image_tangent_dot(tangents)
+            Z = Z - self._assemble_Z_single(*J_img, td_img, geom)
+
         self.z = Z
 
         m_center = self._feed_basis_index(geom)
@@ -442,23 +512,18 @@ class TriangularPySim:
         driver_impedance = 1.0 / coeffs[m_center]
         return driver_impedance, coeffs
 
-    def compute_impedance_swept(self, k_array):
-        """Driver impedance over a batch of wavenumbers, sharing all
-        k-independent work (geometry, static kernel, basis stencil).
+    def _assemble_Z_batch(self, J00, J10, J01, J11, td_all, geom, omega_array):
+        """Batched (n_k, n_basis, n_basis) Z assembly, mirroring
+        `_assemble_Z_single` but with a leading k-axis. Uses the C++
+        accelerator when available.
         """
-        k_array = np.asarray(k_array, dtype=float)
-        omega_array = k_array * self.c
-        geom = self._build_geometry()
-        J00, J10, J01, J11 = self._build_J_blocks_batch(geom, k_array)
-
         left_seg = geom["left_seg"]
         right_seg = geom["right_seg"]
         h_per_seg = np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64)
-        tangents = geom["tangents"]
-        td_all = np.ascontiguousarray(tangents @ tangents.T, dtype=np.float64)
+        td_all = np.ascontiguousarray(td_all, dtype=np.float64)
 
         if _HAVE_ASSEMBLE_Z:
-            Z = _acc.assemble_Z(
+            return _acc.assemble_Z(
                 J00,
                 J10,
                 J01,
@@ -471,39 +536,57 @@ class TriangularPySim:
                 float(self.eps),
                 float(self.mu),
             )
-        else:
-            hl_m = h_per_seg[left_seg][:, None]
-            hl_n = h_per_seg[left_seg][None, :]
-            hr_m = h_per_seg[right_seg][:, None]
-            hr_n = h_per_seg[right_seg][None, :]
 
-            ll = (slice(None), left_seg[:, None], left_seg[None, :])
-            lr = (slice(None), left_seg[:, None], right_seg[None, :])
-            rl = (slice(None), right_seg[:, None], left_seg[None, :])
-            rr = (slice(None), right_seg[:, None], right_seg[None, :])
+        hl_m = h_per_seg[left_seg][:, None]
+        hl_n = h_per_seg[left_seg][None, :]
+        hr_m = h_per_seg[right_seg][:, None]
+        hr_n = h_per_seg[right_seg][None, :]
 
-            S = (
-                J00[ll] / (hl_m * hl_n)
-                - J00[lr] / (hl_m * hr_n)
-                - J00[rl] / (hr_m * hl_n)
-                + J00[rr] / (hr_m * hr_n)
-            )
-            Z_Phi = S / (1j * omega_array[:, None, None] * self.eps)
+        ll = (slice(None), left_seg[:, None], left_seg[None, :])
+        lr = (slice(None), left_seg[:, None], right_seg[None, :])
+        rl = (slice(None), right_seg[:, None], left_seg[None, :])
+        rr = (slice(None), right_seg[:, None], right_seg[None, :])
 
-            td_ll = td_all[np.ix_(left_seg, left_seg)][None, ...]
-            td_lr = td_all[np.ix_(left_seg, right_seg)][None, ...]
-            td_rl = td_all[np.ix_(right_seg, left_seg)][None, ...]
-            td_rr = td_all[np.ix_(right_seg, right_seg)][None, ...]
+        S = (
+            J00[ll] / (hl_m * hl_n)
+            - J00[lr] / (hl_m * hr_n)
+            - J00[rl] / (hr_m * hl_n)
+            + J00[rr] / (hr_m * hr_n)
+        )
+        Z_Phi = S / (1j * omega_array[:, None, None] * self.eps)
 
-            I_A = (
-                td_ll * (J11[ll] / (hl_m * hl_n))
-                + td_lr * (J10[lr] / hl_m - J11[lr] / (hl_m * hr_n))
-                + td_rl * (J01[rl] / hl_n - J11[rl] / (hr_m * hl_n))
-                + td_rr
-                * (J00[rr] - J10[rr] / hr_m - J01[rr] / hr_n + J11[rr] / (hr_m * hr_n))
-            )
-            Z_A = 1j * omega_array[:, None, None] * self.mu * I_A
-            Z = Z_A + Z_Phi
+        td_ll = td_all[np.ix_(left_seg, left_seg)][None, ...]
+        td_lr = td_all[np.ix_(left_seg, right_seg)][None, ...]
+        td_rl = td_all[np.ix_(right_seg, left_seg)][None, ...]
+        td_rr = td_all[np.ix_(right_seg, right_seg)][None, ...]
+
+        I_A = (
+            td_ll * (J11[ll] / (hl_m * hl_n))
+            + td_lr * (J10[lr] / hl_m - J11[lr] / (hl_m * hr_n))
+            + td_rl * (J01[rl] / hl_n - J11[rl] / (hr_m * hl_n))
+            + td_rr
+            * (J00[rr] - J10[rr] / hr_m - J01[rr] / hr_n + J11[rr] / (hr_m * hr_n))
+        )
+        Z_A = 1j * omega_array[:, None, None] * self.mu * I_A
+        return Z_A + Z_Phi
+
+    def compute_impedance_swept(self, k_array):
+        """Driver impedance over a batch of wavenumbers, sharing all
+        k-independent work (geometry, static kernel, basis stencil).
+        """
+        k_array = np.asarray(k_array, dtype=float)
+        omega_array = k_array * self.c
+        geom = self._build_geometry()
+        tangents = geom["tangents"]
+
+        J_free = self._build_J_blocks_batch(geom, k_array)
+        td_free = tangents @ tangents.T
+        Z = self._assemble_Z_batch(*J_free, td_free, geom, omega_array)
+
+        if self.ground_z is not None:
+            J_img = self._build_J_image_blocks_batch(geom, k_array)
+            td_img = self._image_tangent_dot(tangents)
+            Z = Z - self._assemble_Z_batch(*J_img, td_img, geom, omega_array)
 
         m_center = self._feed_basis_index(geom)
         v = np.zeros(geom["n_basis_total"], dtype=np.complex128)

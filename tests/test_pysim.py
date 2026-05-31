@@ -259,3 +259,70 @@ def test_triangular_hexbeam_smoke():
     # Hexbeam at the canonical free-space design point lands near 50+j20.
     assert 30.0 < z.real < 75.0
     assert -10.0 < z.imag < 45.0
+
+
+# ---- PEC ground (image method) ----
+
+
+def _h_dipole(L, h):
+    return np.array([[0.0, -L / 2, h], [0.0, L / 2, h]])
+
+
+def test_ground_none_matches_free_space_bit_exact():
+    # ground_z=None must take the same code path as the no-argument case.
+    L = 2 * 0.962 * 22 / 4
+    poly = _h_dipole(L, 0.0)
+    z_no, _ = TriangularPySim(
+        wires=[poly], n_per_edge_per_wire=[[40]], nsegs=40
+    ).compute_impedance()
+    z_none, _ = TriangularPySim(
+        wires=[poly], n_per_edge_per_wire=[[40]], nsegs=40, ground_z=None
+    ).compute_impedance()
+    assert z_no == z_none
+
+
+def test_ground_horizontal_dipole_at_height_recovers_free_space():
+    # As h -> infinity above PEC, the image vanishes and Z -> Z_free.
+    L = 2 * 0.962 * 22 / 4
+    N = 30
+    z_free, _ = TriangularPySim(
+        wires=[_h_dipole(L, 0.0)], n_per_edge_per_wire=[[N]], nsegs=N
+    ).compute_impedance()
+    z_high, _ = TriangularPySim(
+        wires=[_h_dipole(L, 100.0)],  # ~5 wavelengths up
+        n_per_edge_per_wire=[[N]],
+        nsegs=N,
+        ground_z=0.0,
+    ).compute_impedance()
+    # At ~5λ height the image is weak but not negligible — a couple of Ohms
+    # of shift on R and X is expected.
+    assert abs(z_high.real - z_free.real) < 2.0
+    assert abs(z_high.imag - z_free.imag) < 3.0
+
+
+def test_ground_horizontal_dipole_at_zero_height_shorts_out():
+    # As h -> 0 above PEC, the anti-parallel image cancels the antenna and
+    # the radiated power (and hence the input resistance) goes to zero.
+    L = 2 * 0.962 * 22 / 4
+    z_lo, _ = TriangularPySim(
+        wires=[_h_dipole(L, 0.01)],
+        n_per_edge_per_wire=[[40]],
+        nsegs=40,
+        ground_z=0.0,
+    ).compute_impedance()
+    assert abs(z_lo.real) < 0.5  # essentially zero radiation resistance
+
+
+def test_ground_swept_matches_single_freq_with_ground():
+    L = 2 * 0.962 * 22 / 4
+    N = 30
+    h = 5.0
+    sim = TriangularPySim(
+        wires=[_h_dipole(L, h)],
+        n_per_edge_per_wire=[[N]],
+        nsegs=N,
+        ground_z=0.0,
+    )
+    z_single, _ = sim.compute_impedance()
+    z_swept = sim.compute_impedance_swept(np.array([sim.k]))[0]
+    assert abs(z_single - z_swept) < 1e-9
