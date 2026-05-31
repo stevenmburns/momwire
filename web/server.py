@@ -779,10 +779,22 @@ def _solve_hexbeam(req: dict) -> dict:
 
 
 def solve(req: dict) -> dict:
-    if req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC:
+    geometry = req.get("geometry", "inverted_v")
+    # fan_dipole has wire junctions (K wires meeting at the feed nodes);
+    # the pysim triangular solver doesn't yet support junctions, so route
+    # it to PyNEC unconditionally.
+    pynec_required = geometry == "fan_dipole"
+    use_pynec = (
+        req.get("solver") == "pynec" or pynec_required
+    ) and pynec_backend.HAVE_PYNEC
+    if use_pynec:
         out = pynec_backend.solve(req)
+    elif pynec_required:
+        raise RuntimeError(
+            "fan_dipole geometry requires PyNEC; pysim junction support is "
+            "not yet implemented"
+        )
     else:
-        geometry = req.get("geometry", "inverted_v")
         if geometry == "yagi":
             out = _solve_yagi(req)
         elif geometry == "moxon":
@@ -960,7 +972,13 @@ async def sweep_endpoint(req: dict, request: Request):
     the live /ws solves of CPU.
     """
     freqs = [float(f) for f in req.get("freqs_mhz", [])]
-    use_pynec = req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC
+    geometry = req.get("geometry", "inverted_v")
+    # fan_dipole: pysim doesn't yet handle wire junctions, so always sweep
+    # via PyNEC's per-point loop regardless of the requested solver.
+    pynec_required = geometry == "fan_dipole"
+    use_pynec = (
+        req.get("solver") == "pynec" or pynec_required
+    ) and pynec_backend.HAVE_PYNEC
     solver_name = "pynec" if use_pynec else "pysim"
 
     async def gen():
@@ -990,7 +1008,6 @@ async def sweep_endpoint(req: dict, request: Request):
             # pysim is batched (vectorized); compute once, then stream the
             # array. Batched is ~10x faster than per-point here, and pysim is
             # cheap enough that we don't need mid-sweep cancellation.
-            geometry = req.get("geometry", "inverted_v")
             if geometry == "yagi":
                 z_re, z_im = await run_in_threadpool(_sweep_yagi, req, freqs)
             elif geometry == "moxon":
