@@ -1,4 +1,4 @@
-"""Compare BentTriangularPySim against NEC2 for a V-dipole.
+"""Compare TriangularPySim against NEC2 for a V-dipole.
 
 Geometry: two arms of length halfdriver meeting at the feed (origin).
 Each arm bends away from the y-axis by angle alpha in the y-z plane:
@@ -17,7 +17,7 @@ Run from the project venv (needs PyNEC — see `scripts/build_pynec.sh`):
 import numpy as np
 import PyNEC as nec
 
-from pysim.triangular_bent import BentTriangularPySim
+from pysim.triangular import TriangularPySim
 
 
 def nec_v_dipole(*, freq_mhz, half_arm, alpha_rad, wire_radius, n_per_arm):
@@ -74,11 +74,14 @@ def nec_v_dipole(*, freq_mhz, half_arm, alpha_rad, wire_radius, n_per_arm):
 
 
 def main():
-    bt = BentTriangularPySim()
-    wavelength = bt.wavelength
+    # TriangularPySim defaults: wavelength=22m, halfdriver_factor=0.962,
+    # wire_radius=0.0005m. Hard-code so we don't have to construct a sim
+    # just to read them.
+    wavelength = 22.0
+    halfdriver_factor = 0.962
     freq_mhz = 299.792458 / wavelength
-    half_arm = bt.halfdriver
-    wire_radius = bt.wire_radius
+    half_arm = halfdriver_factor * wavelength / 4
+    wire_radius = 0.0005
 
     print(f"Geometry: wavelength={wavelength:.3f} m  freq={freq_mhz:.4f} MHz")
     print(f"          half_arm={half_arm:.4f} m  wire_radius={wire_radius:.4f} m")
@@ -96,11 +99,11 @@ def main():
             ]
         )
         print(f"=== alpha = {alpha_deg:3d} deg ===")
-        print("BentTriangularPySim:")
+        print("TriangularPySim:")
         for n_per_edge in [20, 40, 80]:
-            z, _ = BentTriangularPySim(
-                polyline=polyline,
-                n_per_edge=n_per_edge,
+            z, _ = TriangularPySim(
+                wires=[polyline],
+                n_per_edge_per_wire=[[n_per_edge, n_per_edge]],
                 nsegs=2 * n_per_edge,
             ).compute_impedance()
             print(f"  n_per_arm={n_per_edge:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")

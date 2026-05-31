@@ -1,16 +1,14 @@
-"""Compare YagiPySim against NEC2 for a matched 2-element Yagi in free space.
+"""Compare TriangularPySim against NEC2 for a matched 2-element Yagi in free space.
 
 Run from the project venv (needs PyNEC — see `scripts/build_pynec.sh`):
 
     .venv/bin/python scripts/compare_yagi_nec.py
 """
 
+import numpy as np
 import PyNEC as nec
 
-from pysim.yagi import YagiPySim
 from pysim.triangular import TriangularPySim
-from pysim.triangular_yagi import TriangularYagiPySim
-from pysim import PySim as NewPySim
 
 
 def _run_nec(c, n_seg, freq_mhz):
@@ -90,13 +88,12 @@ def nec_free_space_yagi(
 
 
 def main():
-    ps = YagiPySim()
-    wavelength = ps.wavelength
+    wavelength = 22.0
     freq_mhz = 299.792458 / wavelength
-    halfdriver = ps.halfdriver
+    halfdriver = 0.962 * wavelength / 4
     spacing = halfdriver
     refl_factor = 1.05
-    wire_radius = ps.wire_radius
+    wire_radius = 0.0005
 
     print(f"Geometry: wavelength={wavelength:.3f} m  freq={freq_mhz:.4f} MHz")
     print(
@@ -108,19 +105,14 @@ def main():
     print()
 
     print("=== Single dipole (driver only) ===")
-    print("NewPySim (pulse-basis, Python integral):")
-    for nsegs in [21, 41, 101]:
-        for ntrap in [0, 8]:
-            z, _ = NewPySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
-            print(
-                f"  nsegs={nsegs:3d} ntrap={ntrap:2d}: "
-                f"Z = {z.real:8.3f} + j{z.imag:8.3f}"
-            )
-        print()
-
-    print("TriangularPySim (tent-basis Galerkin):")
+    print("TriangularPySim (tent-basis Galerkin, single straight wire):")
+    dipole_polyline = np.array([[0.0, -halfdriver, 0.0], [0.0, halfdriver, 0.0]])
     for nsegs in [20, 40, 80, 160]:
-        z, _ = TriangularPySim(nsegs=nsegs).compute_impedance()
+        z, _ = TriangularPySim(
+            wires=[dipole_polyline],
+            n_per_edge_per_wire=[[nsegs]],
+            nsegs=nsegs,
+        ).compute_impedance()
         print(f"  nsegs={nsegs:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")
     print()
 
@@ -136,19 +128,20 @@ def main():
 
     print()
     print("=== Two-element Yagi (driver + reflector) ===")
-    print("YagiPySim (pulse-basis, Python integral):")
-    for nsegs in [21, 41, 101]:
-        for ntrap in [0, 8]:
-            z, _ = YagiPySim(nsegs=nsegs).compute_impedance(ntrap=ntrap)
-            print(
-                f"  nsegs={nsegs:3d} ntrap={ntrap:2d}: "
-                f"Z = {z.real:8.3f} + j{z.imag:8.3f}"
-            )
-        print()
-
-    print("TriangularYagiPySim (tent-basis Galerkin):")
+    print("TriangularPySim (tent-basis Galerkin, driver + reflector):")
+    driver_polyline = np.array([[0.0, -halfdriver, 0.0], [0.0, halfdriver, 0.0]])
+    refl_polyline = np.array(
+        [
+            [-spacing, -refl_factor * halfdriver, 0.0],
+            [-spacing, refl_factor * halfdriver, 0.0],
+        ]
+    )
     for nsegs in [20, 40, 80, 160]:
-        z, _ = TriangularYagiPySim(nsegs=nsegs).compute_impedance()
+        z, _ = TriangularPySim(
+            wires=[driver_polyline, refl_polyline],
+            n_per_edge_per_wire=[[nsegs], [nsegs]],
+            nsegs=nsegs,
+        ).compute_impedance()
         print(f"  nsegs={nsegs:3d}: Z = {z.real:8.3f} + j{z.imag:8.3f}")
     print()
 
