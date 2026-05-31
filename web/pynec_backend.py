@@ -31,19 +31,31 @@ GROUND_CONDUCTIVITY = 0.002
 
 
 def _segment_centers_to_knot_currents(
-    cur_per_seg: np.ndarray, n_knots: int
+    cur_per_seg: np.ndarray,
+    n_knots: int,
+    junction_at_start: bool = False,
+    junction_at_end: bool = False,
 ) -> np.ndarray:
     """Map NEC's per-segment-center currents onto the (n_knots,)-knot array
-    the UI expects. Currents at the two end-knots are zero (open-wire BC);
-    interior knot k sits between segments k-1 and k, so we average."""
+    the UI expects.
+
+    Interior knot k sits between segments k-1 and k, so we average. The
+    boundary knots default to zero (open-wire BC), but at a junction with
+    another wire the current is continuous through the endpoint — pass
+    junction_at_start/end=True to carry the adjacent segment-center value
+    onto the boundary knot instead.
+    """
     full = np.zeros(n_knots, dtype=np.complex128)
-    # cur_per_seg has length n_knots - 1 (one current per segment).
     if cur_per_seg.shape[0] != n_knots - 1:
         raise RuntimeError(
             f"segment-current length {cur_per_seg.shape[0]} doesn't match "
             f"n_knots-1 = {n_knots - 1}"
         )
     full[1:-1] = 0.5 * (cur_per_seg[:-1] + cur_per_seg[1:])
+    if junction_at_start:
+        full[0] = cur_per_seg[0]
+    if junction_at_end:
+        full[-1] = cur_per_seg[-1]
     return full
 
 
@@ -944,7 +956,9 @@ def solve_fandipole(req: dict) -> dict:
                 cur_arr[np.where(tag_arr == t_sa)[0]],
             ]
         )
-        knot_cur_pos = _segment_centers_to_knot_currents(cur_pos, knots_pos.shape[0])
+        knot_cur_pos = _segment_centers_to_knot_currents(
+            cur_pos, knots_pos.shape[0], junction_at_start=True
+        )
         wires.append(
             {
                 "label": f"{label} +y",
@@ -961,7 +975,9 @@ def solve_fandipole(req: dict) -> dict:
                 cur_arr[np.where(tag_arr == t_ta)[0]],
             ]
         )
-        knot_cur_neg = _segment_centers_to_knot_currents(cur_neg, knots_neg.shape[0])
+        knot_cur_neg = _segment_centers_to_knot_currents(
+            cur_neg, knots_neg.shape[0], junction_at_start=True
+        )
         wires.append(
             {
                 "label": f"{label} -y",
