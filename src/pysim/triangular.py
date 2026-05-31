@@ -85,6 +85,7 @@ class TriangularPySim:
         wire_radius=0.0005,
         nsegs=101,
         ground_z=None,
+        junctions=None,
     ):
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
@@ -136,6 +137,31 @@ class TriangularPySim:
         self.feed_arclength = feed_arclength
         self.n_qp_reg = n_qp_reg
         self.n_qp_off = n_qp_off
+
+        # Junctions: list of [(wire_idx, "start"|"end"), ...] tuples — each entry
+        # is one junction node where K wire endpoints meet. K directional tent
+        # basis functions are added per junction (one per connected wire-end);
+        # KCL Σ I_k = 0 is enforced at solve time via a Lagrange-multiplier row
+        # so all K directional bases are treated symmetrically.
+        self.junctions = []
+        if junctions is not None:
+            for j, jw in enumerate(junctions):
+                if len(jw) < 2:
+                    raise ValueError(
+                        f"junction {j}: need >= 2 wire-ends, got {len(jw)}"
+                    )
+                normalized = []
+                for w, end in jw:
+                    if not (0 <= w < n_w):
+                        raise ValueError(
+                            f"junction {j}: wire_idx {w} out of range [0, {n_w})"
+                        )
+                    if end not in ("start", "end"):
+                        raise ValueError(
+                            f"junction {j}: end must be 'start' or 'end', got {end!r}"
+                        )
+                    normalized.append((int(w), end))
+                self.junctions.append(normalized)
 
     def _build_geometry(self):
         """Discretize every wire and concatenate into global arrays.
@@ -217,7 +243,7 @@ class TriangularPySim:
         left_seg = np.concatenate(left_segs)
         right_seg = np.concatenate(right_segs)
 
-        return {
+        geom = {
             "per_wire": per_wire,
             "seg_offsets": seg_offsets,
             "basis_offsets": basis_offsets,
@@ -228,6 +254,88 @@ class TriangularPySim:
             "left_seg": left_seg,
             "right_seg": right_seg,
         }
+        if self.junctions:
+            self._add_junction_bases(geom)
+        return geom
+
+    def _add_junction_bases(self, geom):
+        """Append directional tent bases at each junction node.
+
+        Each junction with K wire-ends contributes K directional bases —
+        per (wire_idx, end_pos) tuple, one basis whose single active wing is
+        the tent rising to 1 at the junction node and falling to 0 at the
+        adjacent segment's other end. KCL Σ I_k = 0 across the K bases is
+        recorded in `kcl_A` for Lagrange-augmented solving.
+
+        Mutates `geom` in place to add:
+          support_seg / support_L / support_R   (n_bases_total, 2)
+              Per-basis 2-wing support — interior bases keep their (left, right)
+              stencil (L_left=0, R_left=1; L_right=1, R_right=0), junction
+              directional bases use wing 0 only and zero out wing 1.
+          kcl_A                                  (n_junctions, n_bases_total)
+              Row j has 1.0 at columns of junction j's K directional bases.
+          n_basis_total                          int — updated to include junctions.
+        """
+        seg_off = geom["seg_offsets"]
+        n_interior = geom["n_basis_total"]
+        left_seg = geom["left_seg"]
+        right_seg = geom["right_seg"]
+
+        # For each (wire_idx, end) tuple at a junction we add one directional
+        # basis with tent value +1 at the junction node. KCL "outflow sign":
+        # a wire connected at its polyline-start has arc direction pointing
+        # outward, so the basis coefficient is the current flowing OUT of the
+        # junction (sign +1). A wire connected at its polyline-end has arc
+        # direction pointing inward, so the basis coefficient is the current
+        # flowing INTO the junction; the outflow contribution is its negative
+        # (sign -1).
+        junction_dirs = []  # (junction_idx, seg_idx, L, R, kcl_sign)
+        for j, jw in enumerate(self.junctions):
+            for w, end in jw:
+                if end == "start":
+                    seg_idx = seg_off[w]
+                    L, R = 1.0, 0.0  # junction at seg's left arc end
+                    kcl_sign = +1.0
+                else:  # "end"
+                    seg_idx = seg_off[w + 1] - 1
+                    L, R = 0.0, 1.0  # junction at seg's right arc end
+                    kcl_sign = -1.0
+                junction_dirs.append((j, seg_idx, L, R, kcl_sign))
+
+        n_dir = len(junction_dirs)
+        n_total = n_interior + n_dir
+
+        support_seg = np.zeros((n_total, 2), dtype=np.int64)
+        support_L = np.zeros((n_total, 2), dtype=np.float64)
+        support_R = np.zeros((n_total, 2), dtype=np.float64)
+
+        # Interior bases mirror the existing (left, right) stencil.
+        support_seg[:n_interior, 0] = left_seg
+        support_seg[:n_interior, 1] = right_seg
+        support_L[:n_interior, 0] = 0.0
+        support_R[:n_interior, 0] = 1.0
+        support_L[:n_interior, 1] = 1.0
+        support_R[:n_interior, 1] = 0.0
+
+        # Junction directional bases: wing 0 active, wing 1 inactive (L=R=0
+        # contributes nothing to the assembly's slope or level terms; any valid
+        # segment index works as a filler).
+        for k, (_, seg_idx, L, R, _) in enumerate(junction_dirs):
+            m = n_interior + k
+            support_seg[m, 0] = seg_idx
+            support_L[m, 0] = L
+            support_R[m, 0] = R
+
+        kcl_A = np.zeros((len(self.junctions), n_total), dtype=np.float64)
+        for k, (j, _, _, _, kcl_sign) in enumerate(junction_dirs):
+            kcl_A[j, n_interior + k] = kcl_sign
+
+        geom["support_seg"] = support_seg
+        geom["support_L"] = support_L
+        geom["support_R"] = support_R
+        geom["kcl_A"] = kcl_A
+        geom["n_basis_interior"] = n_interior
+        geom["n_basis_total"] = n_total
 
     def _feed_basis_index(self, geom):
         """Global basis index of the source: closest interior knot on
@@ -485,13 +593,78 @@ class TriangularPySim:
 
         return Z_A + Z_Phi
 
+    def _assemble_Z_general_single(self, J00, J10, J01, J11, td_all, geom):
+        """Single-k Z assembly using per-basis (segment, L, R) support arrays.
+
+        Handles arbitrary 2-wing basis layouts including junction directional
+        bases (where one wing is inactive: L = R = 0 zeroes the slope and
+        level so that wing contributes nothing). Bit-exact with
+        `_assemble_Z_single` when the support arrays encode the standard
+        (left, right) interior-basis stencil.
+        """
+        support_seg = geom["support_seg"]
+        support_L = geom["support_L"]
+        support_R = geom["support_R"]
+        h_per_seg = geom["h_per_seg"]
+        h_supp = h_per_seg[support_seg]
+        slope = (support_R - support_L) / h_supp  # (n_basis, 2)
+
+        n_b = support_seg.shape[0]
+        S = np.zeros((n_b, n_b), dtype=np.complex128)
+        I_A = np.zeros((n_b, n_b), dtype=np.complex128)
+        for a in range(2):
+            sm = support_seg[:, a]
+            Lma, Sma = support_L[:, a], slope[:, a]
+            for b in range(2):
+                sn = support_seg[:, b]
+                Lnb, Snb = support_L[:, b], slope[:, b]
+                J00_blk = J00[np.ix_(sm, sn)]
+                J01_blk = J01[np.ix_(sm, sn)]
+                J10_blk = J10[np.ix_(sm, sn)]
+                J11_blk = J11[np.ix_(sm, sn)]
+                td_blk = td_all[np.ix_(sm, sn)]
+                S += np.outer(Sma, Snb) * J00_blk
+                I_A += td_blk * (
+                    np.outer(Lma, Lnb) * J00_blk
+                    + np.outer(Lma, Snb) * J01_blk
+                    + np.outer(Sma, Lnb) * J10_blk
+                    + np.outer(Sma, Snb) * J11_blk
+                )
+        Z_Phi = S / (1j * self.omega * self.eps)
+        Z_A = 1j * self.omega * self.mu * I_A
+        return Z_A + Z_Phi
+
+    def _solve_with_kcl(self, Z, v, geom):
+        """Lagrange-augmented solve enforcing KCL Σ I_k = 0 at each junction.
+
+        [ Z   Aᵀ ] [ I ]   [ v ]
+        [ A   0  ] [ λ ] = [ 0 ]
+        """
+        A = geom["kcl_A"]
+        n_b = Z.shape[0]
+        n_c = A.shape[0]
+        M = np.zeros((n_b + n_c, n_b + n_c), dtype=np.complex128)
+        M[:n_b, :n_b] = Z
+        M[:n_b, n_b:] = A.T
+        M[n_b:, :n_b] = A
+        rhs = np.zeros(n_b + n_c, dtype=np.complex128)
+        rhs[:n_b] = v
+        x = scipy.linalg.solve(M, rhs)
+        return x[:n_b]
+
     def compute_impedance(self, *, ntrap=None):
         geom = self._build_geometry()
         tangents = geom["tangents"]
+        has_junctions = bool(self.junctions)
+        assemble = (
+            self._assemble_Z_general_single
+            if has_junctions
+            else self._assemble_Z_single
+        )
 
         J_free = self._build_J_blocks(geom, self.k)
         td_free = tangents @ tangents.T
-        Z = self._assemble_Z_single(*J_free, td_free, geom)
+        Z = assemble(*J_free, td_free, geom)
 
         if self.ground_z is not None:
             # PEC image: subtract sub-assembly built with image J tensors and
@@ -501,14 +674,17 @@ class TriangularPySim:
             # combine to a single minus sign on the entire sub-assembly.
             J_img = self._build_J_image_blocks(geom, self.k)
             td_img = self._image_tangent_dot(tangents)
-            Z = Z - self._assemble_Z_single(*J_img, td_img, geom)
+            Z = Z - assemble(*J_img, td_img, geom)
 
         self.z = Z
 
         m_center = self._feed_basis_index(geom)
         v = np.zeros(geom["n_basis_total"], dtype=np.complex128)
         v[m_center] = 1.0
-        coeffs = scipy.linalg.solve(Z, v)
+        if has_junctions:
+            coeffs = self._solve_with_kcl(Z, v, geom)
+        else:
+            coeffs = scipy.linalg.solve(Z, v)
         driver_impedance = 1.0 / coeffs[m_center]
         return driver_impedance, coeffs
 
@@ -570,6 +746,62 @@ class TriangularPySim:
         Z_A = 1j * omega_array[:, None, None] * self.mu * I_A
         return Z_A + Z_Phi
 
+    def _assemble_Z_general_batch(self, J00, J10, J01, J11, td_all, geom, omega_array):
+        """Batched general assembly — same support-array formulation as
+        `_assemble_Z_general_single` with a leading k-axis on the J tensors.
+        """
+        support_seg = geom["support_seg"]
+        support_L = geom["support_L"]
+        support_R = geom["support_R"]
+        h_per_seg = geom["h_per_seg"]
+        h_supp = h_per_seg[support_seg]
+        slope = (support_R - support_L) / h_supp  # (n_basis, 2)
+
+        n_b = support_seg.shape[0]
+        n_k = J00.shape[0]
+        S = np.zeros((n_k, n_b, n_b), dtype=np.complex128)
+        I_A = np.zeros((n_k, n_b, n_b), dtype=np.complex128)
+        td_all = np.asarray(td_all, dtype=np.float64)
+        for a in range(2):
+            sm = support_seg[:, a]
+            Lma, Sma = support_L[:, a], slope[:, a]
+            for b in range(2):
+                sn = support_seg[:, b]
+                Lnb, Snb = support_L[:, b], slope[:, b]
+                idx = (slice(None), sm[:, None], sn[None, :])
+                J00_blk = J00[idx]
+                J01_blk = J01[idx]
+                J10_blk = J10[idx]
+                J11_blk = J11[idx]
+                td_blk = td_all[np.ix_(sm, sn)][None, ...]
+                S += np.outer(Sma, Snb)[None, ...] * J00_blk
+                I_A += td_blk * (
+                    np.outer(Lma, Lnb)[None, ...] * J00_blk
+                    + np.outer(Lma, Snb)[None, ...] * J01_blk
+                    + np.outer(Sma, Lnb)[None, ...] * J10_blk
+                    + np.outer(Sma, Snb)[None, ...] * J11_blk
+                )
+        Z_Phi = S / (1j * omega_array[:, None, None] * self.eps)
+        Z_A = 1j * omega_array[:, None, None] * self.mu * I_A
+        return Z_A + Z_Phi
+
+    def _solve_with_kcl_batch(self, Z, v, geom):
+        """Batched Lagrange-augmented KCL solve — augments per k and uses a
+        batched np.linalg.solve.
+        """
+        A = geom["kcl_A"]
+        n_k = Z.shape[0]
+        n_b = Z.shape[1]
+        n_c = A.shape[0]
+        M = np.zeros((n_k, n_b + n_c, n_b + n_c), dtype=np.complex128)
+        M[:, :n_b, :n_b] = Z
+        M[:, :n_b, n_b:] = A.T[None, :, :]
+        M[:, n_b:, :n_b] = A[None, :, :]
+        rhs = np.zeros((n_b + n_c,), dtype=np.complex128)
+        rhs[:n_b] = v
+        x = np.linalg.solve(M, rhs)
+        return x[:, :n_b]
+
     def compute_impedance_swept(self, k_array):
         """Driver impedance over a batch of wavenumbers, sharing all
         k-independent work (geometry, static kernel, basis stencil).
@@ -578,18 +810,25 @@ class TriangularPySim:
         omega_array = k_array * self.c
         geom = self._build_geometry()
         tangents = geom["tangents"]
+        has_junctions = bool(self.junctions)
+        assemble_batch = (
+            self._assemble_Z_general_batch if has_junctions else self._assemble_Z_batch
+        )
 
         J_free = self._build_J_blocks_batch(geom, k_array)
         td_free = tangents @ tangents.T
-        Z = self._assemble_Z_batch(*J_free, td_free, geom, omega_array)
+        Z = assemble_batch(*J_free, td_free, geom, omega_array)
 
         if self.ground_z is not None:
             J_img = self._build_J_image_blocks_batch(geom, k_array)
             td_img = self._image_tangent_dot(tangents)
-            Z = Z - self._assemble_Z_batch(*J_img, td_img, geom, omega_array)
+            Z = Z - assemble_batch(*J_img, td_img, geom, omega_array)
 
         m_center = self._feed_basis_index(geom)
         v = np.zeros(geom["n_basis_total"], dtype=np.complex128)
         v[m_center] = 1.0
-        coeffs = np.linalg.solve(Z, v)
+        if has_junctions:
+            coeffs = self._solve_with_kcl_batch(Z, v, geom)
+        else:
+            coeffs = np.linalg.solve(Z, v)
         return 1.0 / coeffs[:, m_center]

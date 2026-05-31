@@ -778,32 +778,291 @@ def _solve_hexbeam(req: dict) -> dict:
     }
 
 
+_FANDIPOLE_FEED_GAP = 0.01  # half-gap, matches pynec_backend's eps_feed
+
+# Standard 5-point cone direction ring (36°, 108°, 180°, 252°, 324°).
+_FANDIPOLE_RING_5 = [
+    (np.cos(np.pi * i / 180.0), np.sin(np.pi * i / 180.0)) for i in range(36, 360, 72)
+]
+
+
+def _fandipole_geometry(req: dict):
+    """Build polylines / per-edge segment counts / junctions for the pysim
+    fan dipole solver, matching the geometry the PyNEC backend produces.
+
+    Returns a dict with everything needed to construct a TriangularPySim
+    and unpack the resulting coefficients into wire records.
+    """
+    n_per_wire = int(req.get("n_per_wire", 21))
+    n_bands = int(req.get("n_bands", 2))
+    if not 1 <= n_bands <= 5:
+        raise ValueError(f"n_bands must be in [1, 5], got {n_bands}")
+    band_lengths_m = list(req.get("band_lengths_m", [10.2551, 5.2691]))[:n_bands]
+    if len(band_lengths_m) != n_bands:
+        raise ValueError(
+            f"band_lengths_m has {len(band_lengths_m)} entries, need {n_bands}"
+        )
+    band_freqs_mhz = list(req.get("band_freqs_mhz", []))[:n_bands]
+    slope = float(req.get("slope", 0.5))
+    cone_radius_m = float(req.get("cone_radius_m", 0.12))
+    t0_factor = float(req.get("t0_factor", np.sqrt(2.0)))
+    _, _, z_offset = _read_ground(req)
+
+    eps_feed = _FANDIPOLE_FEED_GAP
+    t0 = cone_radius_m * t0_factor
+    Zc = 1.0 / np.sqrt(1.0 + slope * slope)
+    Zs = slope * Zc
+
+    def ry(p):
+        return (p[0], -p[1], p[2])
+
+    S = (0.0, eps_feed, z_offset)
+    T = ry(S)
+    C = (S[0], S[1] + t0 * Zc, S[2] - t0 * Zs)
+    lst = _FANDIPOLE_RING_5[:n_bands]
+    A_pos = [
+        (
+            C[0] + cone_radius_m * x,
+            C[1] + cone_radius_m * y * Zs,
+            C[2] + cone_radius_m * y * Zc,
+        )
+        for (x, y) in lst
+    ]
+    ls = []
+    for i, (q, a) in enumerate(zip(band_lengths_m, A_pos)):
+        dsa = float(np.linalg.norm(np.subtract(S, a)))
+        l_i = q / 2.0 - dsa
+        if l_i <= 0:
+            raise ValueError(
+                f"band {i}: cone geometry leaves no axial leg "
+                f"(band_length={q:.3f} m, radial leg={dsa:.3f} m)"
+            )
+        ls.append(l_i)
+    B_pos = [(a[0], a[1] + l * Zc, a[2] - l * Zs) for (l, a) in zip(ls, A_pos)]
+    A_neg = [ry(a) for a in A_pos]
+    B_neg = [ry(b) for b in B_pos]
+
+    # Wires:
+    #   0:                              feed wire T -> S (2 segments)
+    #   1 .. n_bands:                   +y arms S -> A_i -> B_i
+    #   n_bands+1 .. 2*n_bands:         -y arms T -> A_neg_i -> B_neg_i
+    wires = [np.array([T, S], dtype=float)]
+    n_per_edge = [[2]]
+    for i in range(n_bands):
+        wires.append(np.array([S, A_pos[i], B_pos[i]], dtype=float))
+        n_per_edge.append([n_per_wire, n_per_wire])
+    for i in range(n_bands):
+        wires.append(np.array([T, A_neg[i], B_neg[i]], dtype=float))
+        n_per_edge.append([n_per_wire, n_per_wire])
+
+    # Junctions: K=1+n_bands wires meeting at each of S and T.
+    j_S = [(0, "end")] + [(1 + i, "start") for i in range(n_bands)]
+    j_T = [(0, "start")] + [(1 + n_bands + i, "start") for i in range(n_bands)]
+
+    return {
+        "wires": wires,
+        "n_per_edge": n_per_edge,
+        "junctions": [j_S, j_T],
+        "feed_arclength": eps_feed,
+        "n_bands": n_bands,
+        "band_lengths_m": band_lengths_m,
+        "band_freqs_mhz": band_freqs_mhz,
+        "slope": slope,
+        "cone_radius_m": cone_radius_m,
+        "t0_m": t0,
+        "S": S,
+        "T": T,
+        "A_pos": A_pos,
+        "B_pos": B_pos,
+        "A_neg": A_neg,
+        "B_neg": B_neg,
+        "z_offset": z_offset,
+        "n_per_wire": n_per_wire,
+    }
+
+
+def _fandipole_pack_wires(g, coeffs):
+    """Turn the pysim coefficient vector into the wire-record list the UI
+    expects, mirroring pynec_backend.solve_fandipole's response shape.
+
+    Layout of the coefficient vector:
+      [0 : nb_feed]                     feed wire's interior bases (1 basis)
+      [nb_feed : nb_feed + 2*nb_arm * n_bands]
+                                        +y arms then -y arms, n_bands each
+      [n_interior : n_interior + K_S + K_T]
+                                        junction directional bases at S then T
+    """
+    n_bands = g["n_bands"]
+    n_per = g["n_per_wire"]
+    nb_feed = 1  # 2 segs, 1 interior knot
+    nb_arm = 2 * n_per - 1  # 2 edges × n_per segments → 2*n_per - 1 interior knots
+    K_S = 1 + n_bands  # K at S and T are equal; only K_S is referenced below
+
+    n_interior = nb_feed + 2 * n_bands * nb_arm
+
+    # Feed wire record: synthetic 3-knot (T, feed_knot, S) so the UI can
+    # mark feed_knot_index=1 at the source location.
+    T, S = g["T"], g["S"]
+    feed_knot = (0.5 * (T[0] + S[0]), 0.5 * (T[1] + S[1]), 0.5 * (T[2] + S[2]))
+    feed_coeff = complex(coeffs[0])
+    feed_knots = np.array([T, feed_knot, S], dtype=float)
+    # Junction-side endpoints (T at index 0, S at index 2) carry the
+    # junction-directional basis amplitudes — the directional bases at T
+    # and S are the first two appended after the interior block.
+    feed_T_directional = complex(coeffs[n_interior + 0])  # first basis at S
+    # Find the feed-end directional at each junction by scanning the
+    # junctions spec: the feed wire is wire 0, connected at S with end="end"
+    # and at T with end="start".
+    a_S_feed_local = 0  # feed_end at S — first entry of j_S
+    a_T_feed_local = 0  # feed_start at T — first entry of j_T
+    base_S = n_interior
+    base_T = n_interior + K_S
+    feed_cur_at_T = complex(coeffs[base_T + a_T_feed_local])
+    feed_cur_at_S = complex(coeffs[base_S + a_S_feed_local])
+    feed_currents = np.array(
+        [feed_cur_at_T, feed_coeff, feed_cur_at_S], dtype=np.complex128
+    )
+    _ = feed_T_directional  # placeholder for potential future use
+    wires_out = [
+        {
+            "label": "feed",
+            "knot_positions": feed_knots.tolist(),
+            "knot_currents_re": feed_currents.real.tolist(),
+            "knot_currents_im": feed_currents.imag.tolist(),
+        }
+    ]
+
+    def _band_label(i):
+        if i < len(g["band_freqs_mhz"]):
+            return f"{g['band_freqs_mhz'][i]:.2f} MHz"
+        return f"band {i} ({g['band_lengths_m'][i]:.2f} m)"
+
+    # +y arms then -y arms. Each arm has 2*n_per+1 knots and nb_arm interior
+    # bases; the inner knot at S or T carries the corresponding directional
+    # basis's coefficient (rather than the open-wire zero).
+    for side, base_arm_idx, junction_base, k_offset_start in [
+        ("+y", nb_feed, base_S, 1),  # +y arms: bases 1..n_bands at S
+        ("-y", nb_feed + n_bands * nb_arm, base_T, 1),  # -y arms at T
+    ]:
+        for i in range(n_bands):
+            arm_label = _band_label(i)
+            if side == "+y":
+                path = [g["S"], g["A_pos"][i], g["B_pos"][i]]
+            else:
+                path = [g["T"], g["A_neg"][i], g["B_neg"][i]]
+            knots = _polyline_knots(np.array(path), [n_per, n_per])
+            arm_coeffs = coeffs[
+                base_arm_idx + i * nb_arm : base_arm_idx + (i + 1) * nb_arm
+            ]
+            full = np.zeros(knots.shape[0], dtype=np.complex128)
+            full[1:-1] = arm_coeffs
+            # Inner-knot current = the arm's directional basis amplitude at
+            # the shared junction; outer-knot stays zero (true wire tip).
+            full[0] = complex(coeffs[junction_base + k_offset_start + i])
+            wires_out.append(
+                {
+                    "label": f"{arm_label} {side}",
+                    "knot_positions": knots.tolist(),
+                    "knot_currents_re": full.real.tolist(),
+                    "knot_currents_im": full.imag.tolist(),
+                }
+            )
+
+    return wires_out
+
+
+def _solve_fandipole(req: dict) -> dict:
+    """Fan dipole via pysim's triangular Galerkin with junction support."""
+    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
+    meas_freq_mhz = float(req.get("measurement_freq_mhz", design_freq_mhz))
+    wire_radius = float(req.get("wire_radius", 0.0005))
+    ground_on, _, z_offset = _read_ground(req)
+    g = _fandipole_geometry(req)
+    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
+    wavelength_meas = C_LIGHT / (meas_freq_mhz * 1e6)
+
+    sim = TriangularPySim(
+        wires=g["wires"],
+        n_per_edge_per_wire=g["n_per_edge"],
+        feed_wire_index=0,
+        feed_arclength=g["feed_arclength"],
+        wavelength=wavelength_meas,
+        nsegs=g["n_per_wire"],
+        ground_z=0.0 if ground_on else None,
+        junctions=g["junctions"],
+    )
+    sim.wire_radius = wire_radius
+
+    t0_clock = time.perf_counter()
+    z_in, coeffs = sim.compute_impedance()
+    solve_ms = (time.perf_counter() - t0_clock) * 1e3
+
+    return {
+        "geometry": "fan_dipole",
+        "wires": _fandipole_pack_wires(g, coeffs),
+        "feed_wire_index": 0,
+        "feed_knot_index": 1,  # midpoint of the 3-knot feed wire record
+        "z_in_re": float(z_in.real),
+        "z_in_im": float(z_in.imag),
+        "design_freq_mhz": design_freq_mhz,
+        "measurement_freq_mhz": meas_freq_mhz,
+        "lambda_design_m": wavelength_design,
+        "n_bands": g["n_bands"],
+        "band_lengths_m": list(g["band_lengths_m"]),
+        "band_freqs_mhz": list(g["band_freqs_mhz"]),
+        "slope": g["slope"],
+        "cone_radius_m": g["cone_radius_m"],
+        "t0_m": g["t0_m"],
+        "solve_ms": solve_ms,
+        "ground": ground_on,
+        "height_m": z_offset,
+        "ground_eps_r": _PEC_GROUND_EPS_R,
+        "ground_sigma": _PEC_GROUND_SIGMA,
+    }
+
+
+def _sweep_fandipole(
+    req: dict, freqs_mhz: list[float]
+) -> tuple[list[float], list[float]]:
+    """Batched sweep using TriangularPySim.compute_impedance_swept."""
+    g = _fandipole_geometry(req)
+    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
+    wire_radius = float(req.get("wire_radius", 0.0005))
+    ground_on, _, _ = _read_ground(req)
+    sim = TriangularPySim(
+        wires=g["wires"],
+        n_per_edge_per_wire=g["n_per_edge"],
+        feed_wire_index=0,
+        feed_arclength=g["feed_arclength"],
+        wavelength=C_LIGHT / (design_freq_mhz * 1e6),
+        nsegs=g["n_per_wire"],
+        ground_z=0.0 if ground_on else None,
+        junctions=g["junctions"],
+    )
+    sim.wire_radius = wire_radius
+    k_array = np.array([2 * np.pi * f * 1e6 / C_LIGHT for f in freqs_mhz])
+    z_array = sim.compute_impedance_swept(k_array)
+    return z_array.real.tolist(), z_array.imag.tolist()
+
+
 def solve(req: dict) -> dict:
     geometry = req.get("geometry", "inverted_v")
-    # fan_dipole has wire junctions (K wires meeting at the feed nodes);
-    # the pysim triangular solver doesn't yet support junctions, so route
-    # it to PyNEC unconditionally.
-    pynec_required = geometry == "fan_dipole"
-    use_pynec = (
-        req.get("solver") == "pynec" or pynec_required
-    ) and pynec_backend.HAVE_PYNEC
+    use_pynec = req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC
     if use_pynec:
         out = pynec_backend.solve(req)
-    elif pynec_required:
-        raise RuntimeError(
-            "fan_dipole geometry requires PyNEC; pysim junction support is "
-            "not yet implemented"
-        )
+        _compute_directivity_norm(out)
+        return out
+    if geometry == "yagi":
+        out = _solve_yagi(req)
+    elif geometry == "moxon":
+        out = _solve_moxon(req)
+    elif geometry == "hexbeam":
+        out = _solve_hexbeam(req)
+    elif geometry == "fan_dipole":
+        out = _solve_fandipole(req)
     else:
-        if geometry == "yagi":
-            out = _solve_yagi(req)
-        elif geometry == "moxon":
-            out = _solve_moxon(req)
-        elif geometry == "hexbeam":
-            out = _solve_hexbeam(req)
-        else:
-            out = _solve_inverted_v(req)
-        out["solver"] = "pysim"
+        out = _solve_inverted_v(req)
+    out["solver"] = "pysim"
     _compute_directivity_norm(out)
     return out
 
@@ -973,12 +1232,7 @@ async def sweep_endpoint(req: dict, request: Request):
     """
     freqs = [float(f) for f in req.get("freqs_mhz", [])]
     geometry = req.get("geometry", "inverted_v")
-    # fan_dipole: pysim doesn't yet handle wire junctions, so always sweep
-    # via PyNEC's per-point loop regardless of the requested solver.
-    pynec_required = geometry == "fan_dipole"
-    use_pynec = (
-        req.get("solver") == "pynec" or pynec_required
-    ) and pynec_backend.HAVE_PYNEC
+    use_pynec = req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC
     solver_name = "pynec" if use_pynec else "pysim"
 
     async def gen():
@@ -1014,6 +1268,8 @@ async def sweep_endpoint(req: dict, request: Request):
                 z_re, z_im = await run_in_threadpool(_sweep_moxon, req, freqs)
             elif geometry == "hexbeam":
                 z_re, z_im = await run_in_threadpool(_sweep_hexbeam, req, freqs)
+            elif geometry == "fan_dipole":
+                z_re, z_im = await run_in_threadpool(_sweep_fandipole, req, freqs)
             else:
                 z_re, z_im = await run_in_threadpool(_sweep_inverted_v, req, freqs)
             for i, f in enumerate(freqs):

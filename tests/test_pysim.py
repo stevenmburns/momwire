@@ -261,6 +261,145 @@ def test_triangular_hexbeam_smoke():
     assert -10.0 < z.imag < 45.0
 
 
+# ---- Junctions (K wires meeting at a node) ----
+
+
+def test_triangular_k2_junction_equivalent_to_single_polyline():
+    """A K=2 junction at a kink is mathematically equivalent to a single
+    polyline with that kink as an interior knot — the Lagrange-augmented
+    KCL constraint reduces the two directional bases to one effective DOF
+    matching the interior tent basis. Should agree to roundoff.
+    """
+    # Bent dipole, kink at (0, 0, -2), feed mid-arm (NOT at the kink).
+    pl_single = np.array([[0.0, -5.0, 0.0], [0.0, 0.0, -2.0], [0.0, 5.0, 0.0]])
+    sim_single = TriangularPySim(
+        wires=[pl_single],
+        n_per_edge_per_wire=[[15, 15]],
+        feed_wire_index=0,
+        feed_arclength=2.5,
+        wavelength=22,
+        nsegs=15,
+        wire_radius=0.0005,
+    )
+    z_single, _ = sim_single.compute_impedance()
+
+    # Same geometry split into 2 wires joined by a K=2 junction at the kink.
+    pl0 = np.array([[0.0, -5.0, 0.0], [0.0, 0.0, -2.0]])
+    pl1 = np.array([[0.0, 0.0, -2.0], [0.0, 5.0, 0.0]])
+    sim_junction = TriangularPySim(
+        wires=[pl0, pl1],
+        n_per_edge_per_wire=[[15], [15]],
+        feed_wire_index=0,
+        feed_arclength=2.5,
+        wavelength=22,
+        nsegs=15,
+        wire_radius=0.0005,
+        junctions=[[(0, "end"), (1, "start")]],
+    )
+    z_junction, _ = sim_junction.compute_impedance()
+    assert abs(z_junction - z_single) < 1e-9, (
+        f"K=2 junction Z={z_junction}, single-polyline Z={z_single}"
+    )
+
+
+def test_triangular_k2_junction_swept_matches_per_freq():
+    """Batched swept solver with junctions should match per-freq solves."""
+    pl0 = np.array([[0.0, -5.0, 0.0], [0.0, 0.0, -2.0]])
+    pl1 = np.array([[0.0, 0.0, -2.0], [0.0, 5.0, 0.0]])
+    common = dict(
+        wires=[pl0, pl1],
+        n_per_edge_per_wire=[[15], [15]],
+        feed_wire_index=0,
+        feed_arclength=2.5,
+        nsegs=15,
+        wire_radius=0.0005,
+        junctions=[[(0, "end"), (1, "start")]],
+    )
+    sim_sweep = TriangularPySim(wavelength=22, **common)
+    C_LIGHT = 299_792_458.0
+    freqs_mhz = np.array([10.0, 14.0, 20.0])
+    k_array = 2 * np.pi * freqs_mhz * 1e6 / C_LIGHT
+    z_swept = sim_sweep.compute_impedance_swept(k_array)
+    for f, zs in zip(freqs_mhz, z_swept):
+        sim_f = TriangularPySim(wavelength=C_LIGHT / (f * 1e6), **common)
+        z_f, _ = sim_f.compute_impedance()
+        assert abs(zs - z_f) < 1e-9, f"f={f}: swept={zs}, single={z_f}"
+
+
+def test_triangular_fandipole_two_band_smoke():
+    """Two-band fan dipole (cone arrangement from antenna_designer) modelled
+    with pysim junctions at S and T. Verifies the K=3 path runs, converges,
+    and produces plausible Z near the design freq (resonant 20m band).
+    """
+    import math
+
+    C_LIGHT = 299_792_458.0
+    band_lengths = [10.2551, 5.2691]
+    slope = 0.5
+    cone_radius = 0.12
+    t0 = cone_radius * math.sqrt(2.0)
+    eps = 0.01
+    Zc = 1.0 / math.sqrt(1.0 + slope**2)
+    Zs = slope * Zc
+    S = (0.0, eps, 0.0)
+    T = (0.0, -eps, 0.0)
+    C = (S[0], S[1] + t0 * Zc, S[2] - t0 * Zs)
+    lst = [
+        (math.cos(math.pi * i / 180), math.sin(math.pi * i / 180))
+        for i in range(36, 360, 72)
+    ][:2]
+    A_pos = [
+        (
+            C[0] + cone_radius * x,
+            C[1] + cone_radius * y * Zs,
+            C[2] + cone_radius * y * Zc,
+        )
+        for (x, y) in lst
+    ]
+    ls = [
+        band_lengths[i] / 2 - math.sqrt(sum((s - a) ** 2 for s, a in zip(S, A_pos[i])))
+        for i in range(2)
+    ]
+    B_pos = [(a[0], a[1] + l * Zc, a[2] - l * Zs) for l, a in zip(ls, A_pos)]
+    A_neg = [(a[0], -a[1], a[2]) for a in A_pos]
+    B_neg = [(b[0], -b[1], b[2]) for b in B_pos]
+
+    N = 21
+    wires = [np.array([T, S], dtype=float)]
+    n_per_edge = [[2]]
+    for i in range(2):
+        wires.append(np.array([S, A_pos[i], B_pos[i]], dtype=float))
+        n_per_edge.append([N, N])
+    for i in range(2):
+        wires.append(np.array([T, A_neg[i], B_neg[i]], dtype=float))
+        n_per_edge.append([N, N])
+    junctions = [
+        [(0, "end"), (1, "start"), (2, "start")],  # at S
+        [(0, "start"), (3, "start"), (4, "start")],  # at T
+    ]
+    for fmhz in [14.3, 28.47]:
+        wavelength = C_LIGHT / (fmhz * 1e6)
+        sim = TriangularPySim(
+            wires=wires,
+            n_per_edge_per_wire=n_per_edge,
+            feed_wire_index=0,
+            feed_arclength=eps,
+            wavelength=wavelength,
+            nsegs=N,
+            wire_radius=0.0005,
+            junctions=junctions,
+        )
+        z, coeffs = sim.compute_impedance()
+        assert np.isfinite(z.real) and np.isfinite(z.imag)
+        assert np.isfinite(coeffs).all()
+        # Triangular Galerkin on this multi-wire cone topology lands ~60+j0
+        # at the design freqs; PyNEC pulse basis gives ~46+j0 — the gap is
+        # the basis-shape difference at K=3 junctions. The smoke window
+        # below tolerates both solvers' typical answers.
+        assert 30.0 < z.real < 90.0, f"f={fmhz}: R={z.real} out of plausible range"
+        assert -50.0 < z.imag < 60.0, f"f={fmhz}: X={z.imag} out of plausible range"
+
+
 # ---- PEC ground (image method) ----
 
 
