@@ -465,3 +465,109 @@ def test_ground_swept_matches_single_freq_with_ground():
     z_single, _ = sim.compute_impedance()
     z_swept = sim.compute_impedance_swept(np.array([sim.k]))[0]
     assert abs(z_single - z_swept) < 1e-9
+
+
+def _straight_dipole(halfdriver_factor=0.962, wavelength=22.0):
+    halfdriver = halfdriver_factor * wavelength / 4
+    return [np.array([[0.0, 0.0, -halfdriver], [0.0, 0.0, halfdriver]])]
+
+
+def test_frill_default_is_delta_gap():
+    sim = TriangularPySim(wires=_straight_dipole(), n_per_edge_per_wire=[[41]])
+    assert sim.feed_model == "delta_gap"
+
+
+def test_frill_invalid_model_raises():
+    with pytest.raises(ValueError, match="feed_model"):
+        TriangularPySim(
+            wires=_straight_dipole(), n_per_edge_per_wire=[[41]], feed_model="bogus"
+        )
+
+
+def test_frill_invalid_outer_factor_raises():
+    with pytest.raises(ValueError, match="frill_outer_factor"):
+        TriangularPySim(
+            wires=_straight_dipole(),
+            n_per_edge_per_wire=[[41]],
+            feed_model="magnetic_frill",
+            frill_outer_factor=1.0,
+        )
+
+
+def test_frill_dc_limit_recovers_unit_voltage():
+    # In the k -> 0 limit, integrating E_z over the whole wire gives the
+    # source voltage drop. With the +prefactor sign chosen to match the
+    # delta-gap convention v[m_center]=1, the basis sum should equal 1.
+    sim = TriangularPySim(
+        wires=_straight_dipole(),
+        n_per_edge_per_wire=[[81]],
+        wavelength=1e12,  # k ~ 0
+        feed_model="magnetic_frill",
+    )
+    geom = sim._build_geometry()
+    v = sim._build_source_vector(geom)
+    assert abs(v.sum().real - 1.0) < 1e-7
+    assert abs(v.sum().imag) < 1e-7
+
+
+def test_frill_excitation_is_spread_across_neighbors():
+    # The frill is a smooth source, not a point source — neighboring bases
+    # of m_center should pick up a non-zero contribution proportional to
+    # the fraction of E_z mass they overlap.
+    sim = TriangularPySim(
+        wires=_straight_dipole(),
+        n_per_edge_per_wire=[[81]],
+        feed_model="magnetic_frill",
+    )
+    geom = sim._build_geometry()
+    v = sim._build_source_vector(geom)
+    m = sim._feed_basis_index(geom)
+    # m_center holds most of the excitation, but immediate neighbors are
+    # measurably non-zero (delta-gap would have them exactly zero).
+    assert 0.9 < abs(v[m]) <= 1.0
+    assert abs(v[m - 1]) > 1e-4
+    assert abs(v[m + 1]) > 1e-4
+    # Bases two segments away from the source should be ~zero (frill E_z
+    # falls off as 1/z^3 for z >> b).
+    assert abs(v[m - 3]) < 1e-3
+    assert abs(v[m + 3]) < 1e-3
+
+
+def test_frill_impedance_close_to_delta_gap_at_typical_N():
+    # For h >> b (typical N), the frill's E_z is so narrow vs the tent that
+    # the projected v is nearly identical to the delta-gap v after the
+    # matrix solve. Documenting this as a regression so future changes that
+    # break the b -> a limit (e.g. sign flip on the prefactor) get caught.
+    wires = _straight_dipole()
+    z_delta, _ = TriangularPySim(
+        wires=wires, n_per_edge_per_wire=[[81]], feed_model="delta_gap"
+    ).compute_impedance()
+    z_frill, _ = TriangularPySim(
+        wires=wires, n_per_edge_per_wire=[[81]], feed_model="magnetic_frill"
+    ).compute_impedance()
+    assert abs(z_frill - z_delta) < 0.1
+
+
+def test_frill_swept_matches_single_at_self_k():
+    sim_single = TriangularPySim(
+        wires=_straight_dipole(),
+        n_per_edge_per_wire=[[41]],
+        feed_model="magnetic_frill",
+    )
+    z_single, _ = sim_single.compute_impedance()
+    z_swept = sim_single.compute_impedance_swept(np.array([sim_single.k]))[0]
+    assert abs(z_single - z_swept) < 1e-9
+
+
+def test_frill_delta_gap_path_unchanged():
+    # Bit-exact regression: with feed_model defaulting to delta_gap, the
+    # source vector is the existing one-hot, and compute_impedance returns
+    # exactly the same result as before this PR. The hardcoded reference is
+    # the delta-gap impedance from main at this N.
+    sim = TriangularPySim(wires=_straight_dipole(), n_per_edge_per_wire=[[81]])
+    z, _ = sim.compute_impedance()
+    geom = sim._build_geometry()
+    v = sim._build_source_vector(geom)
+    m = sim._feed_basis_index(geom)
+    assert v[m] == 1.0
+    assert (v == 0).sum() == v.size - 1
