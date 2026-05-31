@@ -96,9 +96,11 @@ def _build_inverted_v(req: dict):
     # When ground is on, lift the entire geometry by height_m so the arms
     # stay above z=0 (NEC rejects segments at/below the ground plane).
     z_offset = height_m if ground else 0.0
-    left = (-arm_len * cos_a, 0.0, z_offset - arm_len * sin_a)
+    # Arms along ±y in the yz plane so the broadside lobe peaks at +x,
+    # matching the Yagi/moxon/hexbeam convention.
+    left = (0.0, -arm_len * cos_a, z_offset - arm_len * sin_a)
     apex = (0.0, 0.0, z_offset)
-    right = (arm_len * cos_a, 0.0, z_offset - arm_len * sin_a)
+    right = (0.0, arm_len * cos_a, z_offset - arm_len * sin_a)
 
     c = nec.nec_context()
     geo = c.get_geometry()

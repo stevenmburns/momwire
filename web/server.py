@@ -187,16 +187,18 @@ def _wire_record(knots: np.ndarray, coeffs: np.ndarray, label: str) -> dict:
 
 
 def _inverted_v_polyline(arm_len: float, angle_deg: float) -> np.ndarray:
-    """Inverted-V with apex at the origin and arms drooping in the xz plane.
+    """Inverted-V with apex at the origin and arms drooping in the yz plane.
 
-    angle_deg is each arm's droop from horizontal: 0 = flat dipole, larger =
-    more closed V.
+    Arms run along ±y so the broadside null axis is ±x — matching the
+    Yagi/moxon/hexbeam convention where the main lobe peaks at azimuth 0°
+    (along +x). angle_deg is each arm's droop from horizontal: 0 = flat
+    dipole, larger = more closed V.
     """
     alpha = np.deg2rad(angle_deg)
     cos_a, sin_a = float(np.cos(alpha)), float(np.sin(alpha))
-    left = np.array([-arm_len * cos_a, 0.0, -arm_len * sin_a])
+    left = np.array([0.0, -arm_len * cos_a, -arm_len * sin_a])
     apex = np.array([0.0, 0.0, 0.0])
-    right = np.array([arm_len * cos_a, 0.0, -arm_len * sin_a])
+    right = np.array([0.0, arm_len * cos_a, -arm_len * sin_a])
     return np.vstack([left, apex, right])
 
 
