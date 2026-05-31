@@ -7,8 +7,10 @@ type Wire = {
   knot_currents_im: number[];
 };
 
+type Geometry = "inverted_v" | "yagi" | "moxon" | "hexbeam" | "fan_dipole";
+
 type SolveResponse = {
-  geometry: "inverted_v" | "yagi" | "moxon" | "hexbeam";
+  geometry: Geometry;
   wires: Wire[];
   feed_wire_index: number;
   feed_knot_index: number;
@@ -38,10 +40,16 @@ type SolveResponse = {
   // Hexbeam-specific
   radius_m?: number;
   t1_m?: number;
+  // Fan dipole-specific
+  n_bands?: number;
+  band_lengths_m?: number[];
+  band_freqs_mhz?: number[];
+  slope?: number;
+  cone_radius_m?: number;
 };
 
 type SolveRequest = {
-  geometry: "inverted_v" | "yagi" | "moxon" | "hexbeam";
+  geometry: Geometry;
   solver: "pysim" | "pynec";
   n_per_wire: number;
   design_freq_mhz: number;
@@ -64,6 +72,12 @@ type SolveRequest = {
   aspect_ratio?: number;
   tipspacer_factor?: number;
   t0_factor?: number;
+  // Fan dipole
+  n_bands?: number;
+  band_lengths_m?: number[];
+  band_freqs_mhz?: number[];
+  slope?: number;
+  cone_radius_m?: number;
 };
 
 // Amateur HF bands the user can design for. Slider min/max snap to the
@@ -150,10 +164,15 @@ function useThumbColumnSize(
   return size;
 }
 
+// Default fan dipole presets: 5 amateur bands ordered high-band → low-band,
+// so n_bands=2 gives a maximally-distinct visual (20m + 10m) without the
+// user touching any per-band sliders. Lengths from antenna_designer's
+// canonical 5-band cone design.
+const FAN_BAND_FREQS_DEFAULT = [14.30, 28.47, 18.1575, 24.97, 21.383];
+const FAN_BAND_LENGTHS_DEFAULT = [10.2551, 5.2691, 8.2461, 5.9681, 6.9880];
+
 export function App() {
-  const [geometry, setGeometry] = useState<
-    "inverted_v" | "yagi" | "moxon" | "hexbeam"
-  >("inverted_v");
+  const [geometry, setGeometry] = useState<Geometry>("inverted_v");
   // V controls
   const [angle, setAngle] = useState(30);
   const [halfdriverFactor, setHalfdriverFactor] = useState(0.962);
@@ -175,6 +194,14 @@ export function App() {
   const [hexbeamHalfdriverFactor, setHexbeamHalfdriverFactor] = useState(1.071);
   const [hexbeamTipspacerFactor, setHexbeamTipspacerFactor] = useState(0.1312);
   const [hexbeamT0Factor, setHexbeamT0Factor] = useState(0.1243);
+  // Fan dipole. fanBandLengths stays sized at 5 so changing nBands preserves
+  // the inactive sliders' values when the user dials it back up.
+  const [fanNBands, setFanNBands] = useState(2);
+  const [fanBandLengths, setFanBandLengths] = useState<number[]>([
+    ...FAN_BAND_LENGTHS_DEFAULT,
+  ]);
+  const [fanSlope, setFanSlope] = useState(0.5);
+  const [fanConeRadius, setFanConeRadius] = useState(0.12);
   // Shared
   const [solver, setSolver] = useState<"pysim" | "pynec">("pysim");
   const [nPerWire, setNPerWire] = useState(30);
@@ -272,6 +299,12 @@ export function App() {
       base.aspect_ratio = moxonAspectRatio;
       base.tipspacer_factor = moxonTipspacerFactor;
       base.t0_factor = moxonT0Factor;
+    } else if (geometry === "fan_dipole") {
+      base.n_bands = fanNBands;
+      base.band_lengths_m = fanBandLengths.slice(0, fanNBands);
+      base.band_freqs_mhz = FAN_BAND_FREQS_DEFAULT.slice(0, fanNBands);
+      base.slope = fanSlope;
+      base.cone_radius_m = fanConeRadius;
     } else {
       base.halfdriver_factor = hexbeamHalfdriverFactor;
       base.tipspacer_factor = hexbeamTipspacerFactor;
@@ -305,6 +338,7 @@ export function App() {
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
+    fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     nPerWire, designFreq, measFreq, wireRadius,
     groundEnabled, groundFast, heightM,
   ]);
@@ -332,6 +366,7 @@ export function App() {
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
+    fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     nPerWire, designFreq, wireRadius,
     groundEnabled, groundFast, heightM,
   ]);
@@ -357,6 +392,7 @@ export function App() {
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
+    fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     nPerWire, designFreq, measFreq, wireRadius,
     groundEnabled, groundFast, heightM,
   ]);
@@ -542,6 +578,14 @@ export function App() {
             onClick={() => setGeometry("hexbeam")}
           >
             Hexbeam
+          </button>
+          <button
+            role="tab"
+            aria-selected={geometry === "fan_dipole"}
+            className={geometry === "fan_dipole" ? "active" : ""}
+            onClick={() => setGeometry("fan_dipole")}
+          >
+            Fan dipole
           </button>
         </div>
 
@@ -776,6 +820,76 @@ export function App() {
                 step={0.001}
                 value={hexbeamT0Factor}
                 onInput={(e) => setHexbeamT0Factor(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+          </>
+        )}
+
+        {geometry === "fan_dipole" && (
+          <>
+            <div className="field">
+              <label>
+                <span># bands</span>
+                <span>{fanNBands}</span>
+              </label>
+              <input
+                type="range"
+                min={1}
+                max={5}
+                step={1}
+                value={fanNBands}
+                onInput={(e) => setFanNBands(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            {Array.from({ length: fanNBands }, (_, i) => (
+              <div className="field" key={`fan-len-${i}`}>
+                <label>
+                  <span>band {i + 1} length ({FAN_BAND_FREQS_DEFAULT[i].toFixed(2)} MHz)</span>
+                  <span>{fanBandLengths[i].toFixed(3)} m</span>
+                </label>
+                <input
+                  type="range"
+                  min={3.0}
+                  max={12.0}
+                  step={0.001}
+                  value={fanBandLengths[i]}
+                  onInput={(e) => {
+                    const v = Number((e.target as HTMLInputElement).value);
+                    setFanBandLengths((prev) => {
+                      const next = prev.slice();
+                      next[i] = v;
+                      return next;
+                    });
+                  }}
+                />
+              </div>
+            ))}
+            <div className="field">
+              <label>
+                <span>cone slope</span>
+                <span>{fanSlope.toFixed(3)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.0}
+                max={1.5}
+                step={0.01}
+                value={fanSlope}
+                onInput={(e) => setFanSlope(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>cone radius</span>
+                <span>{fanConeRadius.toFixed(3)} m</span>
+              </label>
+              <input
+                type="range"
+                min={0.05}
+                max={0.5}
+                step={0.005}
+                value={fanConeRadius}
+                onInput={(e) => setFanConeRadius(Number((e.target as HTMLInputElement).value))}
               />
             </div>
           </>
@@ -1040,6 +1154,28 @@ export function App() {
               <div className="row">
                 <span>tip spacer</span>
                 <span className="val">{result.tipspacer_m?.toFixed(3)} m</span>
+              </div>
+            </>
+          )}
+          {result?.geometry === "fan_dipole" && (
+            <>
+              <div className="row">
+                <span>bands</span>
+                <span className="val">{result.n_bands}</span>
+              </div>
+              {result.band_lengths_m?.map((L, i) => (
+                <div className="row" key={`fan-out-${i}`}>
+                  <span>band {i + 1} ({result.band_freqs_mhz?.[i]?.toFixed(2)} MHz)</span>
+                  <span className="val">{L.toFixed(3)} m</span>
+                </div>
+              ))}
+              <div className="row">
+                <span>cone slope</span>
+                <span className="val">{result.slope?.toFixed(3)}</span>
+              </div>
+              <div className="row">
+                <span>cone radius</span>
+                <span className="val">{result.cone_radius_m?.toFixed(3)} m</span>
               </div>
             </>
           )}
@@ -1876,12 +2012,13 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
         (h - pad - barReserveBottom) / (0.5 * lambdaDesign),
       );
 
-      // Per-geometry view: V is a side view from -x looking toward +x
-      // (arms run along ±y, drooping in -z), so canvas-x = world-y and
-      // canvas-y = world-z. Yagi / moxon / hexbeam are top-down: canvas-x
-      // = world-x (boom), canvas-y = world-y (elements). horizAxis and
-      // vertAxis name the world axes that map to canvas-x and canvas-y.
-      const isSideView = result.geometry === "inverted_v";
+      // Per-geometry view: V and fan_dipole are side views from -x looking
+      // toward +x (arms run along ±y, drooping in -z), so canvas-x = world-y
+      // and canvas-y = world-z. Yagi / moxon / hexbeam are top-down:
+      // canvas-x = world-x (boom), canvas-y = world-y (elements). horizAxis
+      // and vertAxis name the world axes that map to canvas-x/canvas-y.
+      const isSideView =
+        result.geometry === "inverted_v" || result.geometry === "fan_dipole";
       const horizAxis = isSideView ? 1 : 0;
       const vertAxis = isSideView ? 2 : 1;
       let hMin = Infinity, hMax = -Infinity;
