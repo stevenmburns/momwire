@@ -400,6 +400,133 @@ def test_triangular_fandipole_two_band_smoke():
         assert -50.0 < z.imag < 60.0, f"f={fmhz}: X={z.imag} out of plausible range"
 
 
+def _fandipole_two_band_sim(N, wavelength):
+    """Helper: build the same K=3 two-band fan dipole used in the smoke test.
+    Returned simulator has junctions=[S, T] each connecting 3 wire ends.
+    """
+    import math
+
+    band_lengths = [10.2551, 5.2691]
+    slope = 0.5
+    cone_radius = 0.12
+    t0 = cone_radius * math.sqrt(2.0)
+    eps = 0.01
+    Zc = 1.0 / math.sqrt(1.0 + slope**2)
+    Zs = slope * Zc
+    S = (0.0, eps, 0.0)
+    T = (0.0, -eps, 0.0)
+    C = (S[0], S[1] + t0 * Zc, S[2] - t0 * Zs)
+    lst = [
+        (math.cos(math.pi * i / 180), math.sin(math.pi * i / 180))
+        for i in range(36, 360, 72)
+    ][:2]
+    A_pos = [
+        (
+            C[0] + cone_radius * x,
+            C[1] + cone_radius * y * Zs,
+            C[2] + cone_radius * y * Zc,
+        )
+        for (x, y) in lst
+    ]
+    ls = [
+        band_lengths[i] / 2 - math.sqrt(sum((s - a) ** 2 for s, a in zip(S, A_pos[i])))
+        for i in range(2)
+    ]
+    B_pos = [(a[0], a[1] + l * Zc, a[2] - l * Zs) for l, a in zip(ls, A_pos)]
+    A_neg = [(a[0], -a[1], a[2]) for a in A_pos]
+    B_neg = [(b[0], -b[1], b[2]) for b in B_pos]
+
+    wires = [np.array([T, S], dtype=float)]
+    n_per_edge = [[2]]
+    for i in range(2):
+        wires.append(np.array([S, A_pos[i], B_pos[i]], dtype=float))
+        n_per_edge.append([N, N])
+    for i in range(2):
+        wires.append(np.array([T, A_neg[i], B_neg[i]], dtype=float))
+        n_per_edge.append([N, N])
+    junctions = [
+        [(0, "end"), (1, "start"), (2, "start")],
+        [(0, "start"), (3, "start"), (4, "start")],
+    ]
+    return TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=n_per_edge,
+        feed_wire_index=0,
+        feed_arclength=eps,
+        wavelength=wavelength,
+        nsegs=N,
+        wire_radius=0.0005,
+        junctions=junctions,
+    )
+
+
+def test_assemble_Z_general_cpp_matches_python():
+    """C++ assemble_Z_general must agree bit-for-bit with the pure-Python
+    reference path on a K=3-junction fan dipole. Drives the same J tensors
+    through both paths so any kernel divergence shows up here as ULP-level
+    error.
+    """
+    from pysim import triangular as _trimod
+    from pysim._accelerators import assemble_Z_general as _cpp_general
+
+    C_LIGHT = 299_792_458.0
+    sim = _fandipole_two_band_sim(N=11, wavelength=C_LIGHT / 14.3e6)
+    k_array = 2 * np.pi * np.array([12.0e6, 14.3e6, 18.0e6]) / C_LIGHT
+    omega_array = k_array * sim.c
+
+    geom = sim._build_geometry()
+    tangents = geom["tangents"]
+    td_all = tangents @ tangents.T
+    J00, J10, J01, J11 = sim._build_J_blocks_batch(geom, k_array)
+
+    Z_py = sim._assemble_Z_general_batch_python(
+        J00, J10, J01, J11, td_all, geom, omega_array
+    )
+    Z_cpp = _cpp_general(
+        J00,
+        J10,
+        J01,
+        J11,
+        np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64),
+        np.ascontiguousarray(td_all, dtype=np.float64),
+        np.ascontiguousarray(geom["support_seg"], dtype=np.int64),
+        np.ascontiguousarray(geom["support_L"], dtype=np.float64),
+        np.ascontiguousarray(geom["support_R"], dtype=np.float64),
+        np.ascontiguousarray(omega_array, dtype=np.float64),
+        float(sim.eps),
+        float(sim.mu),
+    )
+    np.testing.assert_allclose(Z_cpp, Z_py, rtol=1e-12, atol=1e-12)
+    # Also exercise the dispatched accelerator-vs-python branch explicitly.
+    saved = _trimod._HAVE_ASSEMBLE_Z_GENERAL
+    try:
+        _trimod._HAVE_ASSEMBLE_Z_GENERAL = False
+        Z_dispatch_py = sim._assemble_Z_general_batch(
+            J00, J10, J01, J11, td_all, geom, omega_array
+        )
+    finally:
+        _trimod._HAVE_ASSEMBLE_Z_GENERAL = saved
+    Z_dispatch_cpp = sim._assemble_Z_general_batch(
+        J00, J10, J01, J11, td_all, geom, omega_array
+    )
+    np.testing.assert_allclose(Z_dispatch_cpp, Z_dispatch_py, rtol=1e-12, atol=1e-12)
+
+
+def test_triangular_fandipole_swept_matches_per_freq():
+    """Batched K=3-junction solve must agree with per-frequency solves to
+    roundoff. Catches any regression in the C++ general-assembly path.
+    """
+    C_LIGHT = 299_792_458.0
+    freqs_mhz = np.array([12.0, 14.3, 21.0, 28.47])
+    k_array = 2 * np.pi * freqs_mhz * 1e6 / C_LIGHT
+    sim_sweep = _fandipole_two_band_sim(N=11, wavelength=22.0)
+    z_swept = sim_sweep.compute_impedance_swept(k_array)
+    for f, zs in zip(freqs_mhz, z_swept):
+        sim_f = _fandipole_two_band_sim(N=11, wavelength=C_LIGHT / (f * 1e6))
+        z_f, _ = sim_f.compute_impedance()
+        assert abs(zs - z_f) < 1e-6, f"f={f} MHz: swept={zs}, single={z_f}"
+
+
 # ---- PEC ground (image method) ----
 
 

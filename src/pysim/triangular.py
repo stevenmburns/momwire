@@ -35,8 +35,10 @@ try:
     from . import _accelerators as _acc
 
     _HAVE_ASSEMBLE_Z = hasattr(_acc, "assemble_Z")
+    _HAVE_ASSEMBLE_Z_GENERAL = hasattr(_acc, "assemble_Z_general")
 except ImportError:
     _HAVE_ASSEMBLE_Z = False
+    _HAVE_ASSEMBLE_Z_GENERAL = False
 
 
 class TriangularPySim:
@@ -749,6 +751,40 @@ class TriangularPySim:
     def _assemble_Z_general_batch(self, J00, J10, J01, J11, td_all, geom, omega_array):
         """Batched general assembly — same support-array formulation as
         `_assemble_Z_general_single` with a leading k-axis on the J tensors.
+        Uses the C++ accelerator when available, otherwise the pure-Python
+        path in `_assemble_Z_general_batch_python`.
+        """
+        support_seg = geom["support_seg"]
+        support_L = geom["support_L"]
+        support_R = geom["support_R"]
+        h_per_seg = np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64)
+        td_all = np.ascontiguousarray(td_all, dtype=np.float64)
+
+        if _HAVE_ASSEMBLE_Z_GENERAL:
+            return _acc.assemble_Z_general(
+                J00,
+                J10,
+                J01,
+                J11,
+                h_per_seg,
+                td_all,
+                np.ascontiguousarray(support_seg, dtype=np.int64),
+                np.ascontiguousarray(support_L, dtype=np.float64),
+                np.ascontiguousarray(support_R, dtype=np.float64),
+                np.ascontiguousarray(omega_array, dtype=np.float64),
+                float(self.eps),
+                float(self.mu),
+            )
+
+        return self._assemble_Z_general_batch_python(
+            J00, J10, J01, J11, td_all, geom, omega_array
+        )
+
+    def _assemble_Z_general_batch_python(
+        self, J00, J10, J01, J11, td_all, geom, omega_array
+    ):
+        """Pure-numpy reference implementation of the general batch assembly.
+        Retained as the C++ fallback and as a bit-exact regression target.
         """
         support_seg = geom["support_seg"]
         support_L = geom["support_L"]
