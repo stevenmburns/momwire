@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Wire = {
   label: string;
@@ -76,6 +76,7 @@ type SolveRequest = {
   n_bands?: number;
   band_lengths_m?: number[];
   band_freqs_mhz?: number[];
+  band_halfdriver_factors?: number[];
   slope?: number;
   cone_radius_m?: number;
 };
@@ -95,6 +96,32 @@ const BANDS: { id: Band; min: number; max: number; default: number }[] = [
 const BAND_BY_ID: Record<Band, (typeof BANDS)[number]> = Object.fromEntries(
   BANDS.map((b) => [b.id, b]),
 ) as Record<Band, (typeof BANDS)[number]>;
+
+// For a given freq, snap to the ham band whose default is closest. If the
+// freq is well outside every band (e.g. user dragged a slider into a gap),
+// returns the band whose center is nearest.
+function nearestBandForFreq(freq: number): Band {
+  let best: Band = BANDS[0].id;
+  let bestDist = Infinity;
+  for (const b of BANDS) {
+    const d = Math.abs(freq - b.default);
+    if (d < bestDist) {
+      bestDist = d;
+      best = b.id;
+    }
+  }
+  return best;
+}
+
+const C_LIGHT = 299_792_458.0;
+// Half-wave dipole tip-to-tip length in metres for a target freq (MHz) and
+// half-arm length factor (typically ~0.95-0.97). Matches the
+// `halfdriver_factor` convention used elsewhere in the codebase:
+// halfdriver = factor * lambda/4, so band_length_m = 2*halfdriver.
+function bandLengthFromFreqFactor(freqMhz: number, halfdriverFactor: number): number {
+  const lambda = C_LIGHT / (freqMhz * 1e6);
+  return (halfdriverFactor * lambda) / 2;
+}
 
 type SweepData = {
   freqs_mhz: number[];
@@ -185,8 +212,9 @@ function useThumbColumnSize(
 // so n_bands=2 gives a maximally-distinct visual (20m + 10m) without the
 // user touching any per-band sliders. Lengths from antenna_designer's
 // canonical 5-band cone design.
-const FAN_BAND_FREQS_DEFAULT = [14.30, 28.47, 18.1575, 24.97, 21.383];
-const FAN_BAND_LENGTHS_DEFAULT = [10.2551, 5.2691, 8.2461, 5.9681, 6.9880];
+const FAN_BAND_IDS_DEFAULT: Band[] = ["20m", "10m", "17m", "12m", "15m"];
+const FAN_BAND_FREQS_DEFAULT = FAN_BAND_IDS_DEFAULT.map((id) => BAND_BY_ID[id].default);
+const FAN_HALFDRIVER_FACTOR_DEFAULT = 0.962;
 
 export function App() {
   const [geometry, setGeometry] = useState<Geometry>("inverted_v");
@@ -211,14 +239,29 @@ export function App() {
   const [hexbeamHalfdriverFactor, setHexbeamHalfdriverFactor] = useState(1.071);
   const [hexbeamTipspacerFactor, setHexbeamTipspacerFactor] = useState(0.1312);
   const [hexbeamT0Factor, setHexbeamT0Factor] = useState(0.1243);
-  // Fan dipole. fanBandLengths stays sized at 5 so changing nBands preserves
-  // the inactive sliders' values when the user dials it back up.
+  // Fan dipole. Per-band state is sized at 5 so changing nBands preserves
+  // inactive sliders' values when the user dials it back up.
   const [fanNBands, setFanNBands] = useState(2);
-  const [fanBandLengths, setFanBandLengths] = useState<number[]>([
-    ...FAN_BAND_LENGTHS_DEFAULT,
-  ]);
+  const [fanBandIds, setFanBandIds] = useState<Band[]>([...FAN_BAND_IDS_DEFAULT]);
+  const [fanBandFreqs, setFanBandFreqs] = useState<number[]>([...FAN_BAND_FREQS_DEFAULT]);
+  const [fanHalfdriverFactors, setFanHalfdriverFactors] = useState<number[]>(
+    Array(5).fill(FAN_HALFDRIVER_FACTOR_DEFAULT)
+  );
   const [fanSlope, setFanSlope] = useState(0.5);
   const [fanConeRadius, setFanConeRadius] = useState(0.12);
+
+  // Derived: band lengths from per-band freq * halfdriver_factor convention.
+  // halfdriver = factor * lambda/4 → band_length_m = factor * lambda/2.
+  // Memoized so the array reference is stable while inputs are — otherwise
+  // the three useEffects below that depend on fanBandLengths would re-fire
+  // on every render, flooding the WS with solve/sweep requests.
+  const fanBandLengths = useMemo(
+    () =>
+      fanBandFreqs.map((f, i) =>
+        bandLengthFromFreqFactor(f, fanHalfdriverFactors[i])
+      ),
+    [fanBandFreqs, fanHalfdriverFactors]
+  );
   // Shared
   const [solver, setSolver] = useState<"pysim" | "pynec">("pysim");
   const [nPerWire, setNPerWire] = useState(30);
@@ -250,6 +293,48 @@ export function App() {
     if (next) setMeasFreq(designFreq);
   }
 
+  // Pick a ham band for fan-dipole slot `i`: snaps that slot's design freq
+  // to the band's default. Length-factor is preserved; user can still drag
+  // the freq slider for fine tuning.
+  function setFanBandSlot(i: number, bandId: Band) {
+    setFanBandIds((prev) => {
+      const next = prev.slice();
+      next[i] = bandId;
+      return next;
+    });
+    setFanBandFreqs((prev) => {
+      const next = prev.slice();
+      next[i] = BAND_BY_ID[bandId].default;
+      return next;
+    });
+  }
+
+  // Freq slider for slot `i`. Also re-snaps the pulldown to whichever band
+  // is closest, so the dropdown's selected option tracks the slider value
+  // even when the user drags freely between bands.
+  function setFanBandFreq(i: number, v: number) {
+    setFanBandFreqs((prev) => {
+      const next = prev.slice();
+      next[i] = v;
+      return next;
+    });
+    setFanBandIds((prev) => {
+      const nearest = nearestBandForFreq(v);
+      if (prev[i] === nearest) return prev;
+      const next = prev.slice();
+      next[i] = nearest;
+      return next;
+    });
+  }
+
+  function setFanHalfdriverFactor(i: number, v: number) {
+    setFanHalfdriverFactors((prev) => {
+      const next = prev.slice();
+      next[i] = v;
+      return next;
+    });
+  }
+
   const [result, setResult] = useState<SolveResponse | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "closed">("connecting");
   const [rttMs, setRttMs] = useState<number | null>(null);
@@ -268,6 +353,19 @@ export function App() {
   useEffect(() => {
     setCameraProjection(defaultProjection(geometry));
   }, [geometry]);
+
+  // For fan_dipole the antenna doesn't have a single "design frequency" —
+  // each band has its own. The global designFreq state is still used by the
+  // canvas (λ/4 reference bar) and by the request builder, so we drive it
+  // from band 0's freq while fan_dipole is selected so the ref bar tracks
+  // the longest/lowest band as the user adjusts it.
+  useEffect(() => {
+    if (geometry === "fan_dipole") {
+      const f0 = fanBandFreqs[0];
+      setDesignFreq(f0);
+      if (linkMeas) setMeasFreq(f0);
+    }
+  }, [geometry, fanBandFreqs[0], linkMeas]);
   // Antenna-canvas current visualization is split into two independent
   // toggles: the per-segment current-magnitude heatmap (wire color/width)
   // and the |I| envelope curve overlay. Either or both can be turned off;
@@ -334,7 +432,8 @@ export function App() {
     } else if (geometry === "fan_dipole") {
       base.n_bands = fanNBands;
       base.band_lengths_m = fanBandLengths.slice(0, fanNBands);
-      base.band_freqs_mhz = FAN_BAND_FREQS_DEFAULT.slice(0, fanNBands);
+      base.band_freqs_mhz = fanBandFreqs.slice(0, fanNBands);
+      base.band_halfdriver_factors = fanHalfdriverFactors.slice(0, fanNBands);
       base.slope = fanSlope;
       base.cone_radius_m = fanConeRadius;
     } else {
@@ -905,29 +1004,59 @@ export function App() {
                 onInput={(e) => setFanNBands(Number((e.target as HTMLInputElement).value))}
               />
             </div>
-            {Array.from({ length: fanNBands }, (_, i) => (
-              <div className="field" key={`fan-len-${i}`}>
-                <label>
-                  <span>band {i + 1} length ({FAN_BAND_FREQS_DEFAULT[i].toFixed(2)} MHz)</span>
-                  <span>{fanBandLengths[i].toFixed(3)} m</span>
-                </label>
-                <input
-                  type="range"
-                  min={3.0}
-                  max={12.0}
-                  step={0.001}
-                  value={fanBandLengths[i]}
-                  onInput={(e) => {
-                    const v = Number((e.target as HTMLInputElement).value);
-                    setFanBandLengths((prev) => {
-                      const next = prev.slice();
-                      next[i] = v;
-                      return next;
-                    });
-                  }}
-                />
-              </div>
-            ))}
+            {Array.from({ length: fanNBands }, (_, i) => {
+              const bandId = fanBandIds[i];
+              const bandSpec = BAND_BY_ID[bandId];
+              return (
+                <div className="fan-band-group" key={`fan-band-${i}`}>
+                  <div className="fan-band-header">
+                    <span className="fan-band-label">band {i}</span>
+                    <select
+                      className="fan-band-select"
+                      value={bandId}
+                      onChange={(e) => setFanBandSlot(i, e.target.value as Band)}
+                    >
+                      {BANDS.map((b) => (
+                        <option key={b.id} value={b.id}>{b.id}</option>
+                      ))}
+                    </select>
+                    <span className="fan-band-readout">{fanBandFreqs[i].toFixed(3)} MHz</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={bandSpec.min}
+                    max={bandSpec.max}
+                    step={0.001}
+                    value={fanBandFreqs[i]}
+                    onInput={(e) =>
+                      setFanBandFreq(i, Number((e.target as HTMLInputElement).value))
+                    }
+                  />
+                  <label className="fan-band-sublabel">
+                    <span>length factor</span>
+                    <span>
+                      {fanHalfdriverFactors[i].toFixed(3)}{" "}
+                      <span className="fan-band-len">
+                        ({fanBandLengths[i].toFixed(2)} m tip-to-tip)
+                      </span>
+                    </span>
+                  </label>
+                  <input
+                    type="range"
+                    min={0.85}
+                    max={1.05}
+                    step={0.001}
+                    value={fanHalfdriverFactors[i]}
+                    onInput={(e) =>
+                      setFanHalfdriverFactor(
+                        i,
+                        Number((e.target as HTMLInputElement).value)
+                      )
+                    }
+                  />
+                </div>
+              );
+            })}
             <div className="field">
               <label>
                 <span>cone slope</span>
@@ -959,33 +1088,35 @@ export function App() {
           </>
         )}
 
-        <div className="field">
-          <label>
-            <span>design freq</span>
-            <span>{designFreq.toFixed(3)} MHz</span>
-          </label>
-          <div className="geometry-tabs band-tabs" role="tablist">
-            {BANDS.map((b) => (
-              <button
-                key={b.id}
-                role="tab"
-                aria-selected={band === b.id}
-                className={band === b.id ? "active" : ""}
-                onClick={() => selectBand(b.id)}
-              >
-                {b.id}
-              </button>
-            ))}
+        {geometry !== "fan_dipole" && (
+          <div className="field">
+            <label>
+              <span>design freq</span>
+              <span>{designFreq.toFixed(3)} MHz</span>
+            </label>
+            <div className="geometry-tabs band-tabs" role="tablist">
+              {BANDS.map((b) => (
+                <button
+                  key={b.id}
+                  role="tab"
+                  aria-selected={band === b.id}
+                  className={band === b.id ? "active" : ""}
+                  onClick={() => selectBand(b.id)}
+                >
+                  {b.id}
+                </button>
+              ))}
+            </div>
+            <input
+              type="range"
+              min={BAND_BY_ID[band].min}
+              max={BAND_BY_ID[band].max}
+              step={0.005}
+              value={designFreq}
+              onInput={(e) => updateDesignFreq(Number((e.target as HTMLInputElement).value))}
+            />
           </div>
-          <input
-            type="range"
-            min={BAND_BY_ID[band].min}
-            max={BAND_BY_ID[band].max}
-            step={0.005}
-            value={designFreq}
-            onInput={(e) => updateDesignFreq(Number((e.target as HTMLInputElement).value))}
-          />
-        </div>
+        )}
 
         <div className="field">
           <label>
