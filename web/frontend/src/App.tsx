@@ -331,6 +331,10 @@ export function App() {
     setFanHalfdriverFactors((prev) => {
       const next = prev.slice();
       next[i] = v;
+      // Diagnostic for the "band 1 length factor doesn't change anything"
+      // bug — keep until verified that the per-slot factor is reaching the
+      // request payload.
+      console.log("setFanHalfdriverFactor", { i, v, prev, next });
       return next;
     });
   }
@@ -665,6 +669,19 @@ export function App() {
     }
     inFlightRef.current = true;
     sendStartRef.current = performance.now();
+    // Diagnostic for the "band 1 length factor doesn't change anything"
+    // bug — log the fan-dipole bits of the outgoing payload so we can see
+    // whether band_lengths_m / band_halfdriver_factors reflect the slider.
+    const r = controlsRef.current;
+    if (r.geometry === "fan_dipole") {
+      console.log("ws send fan_dipole", {
+        n_bands: r.n_bands,
+        band_lengths_m: r.band_lengths_m,
+        band_freqs_mhz: r.band_freqs_mhz,
+        band_halfdriver_factors: r.band_halfdriver_factors,
+        measurement_freq_mhz: r.measurement_freq_mhz,
+      });
+    }
     ws.send(JSON.stringify(controlsRef.current));
   }
 
