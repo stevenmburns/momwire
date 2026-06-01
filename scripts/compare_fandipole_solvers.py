@@ -48,7 +48,12 @@ from web import server as web_server
 from web import pynec_backend
 
 
-def _make_req(n_per_wire: int, n_bands: int, design_freq_mhz: float) -> dict:
+def _make_req(
+    n_per_wire: int,
+    n_bands: int,
+    design_freq_mhz: float,
+    cone_radius_m: float = 0.12,
+) -> dict:
     """Build a fan-dipole request dict matching the web UI's defaults so the
     three solvers all see the same geometry (other than per-solver
     segmentation, which is what we're sweeping)."""
@@ -62,7 +67,7 @@ def _make_req(n_per_wire: int, n_bands: int, design_freq_mhz: float) -> dict:
         "measurement_freq_mhz": design_freq_mhz,
         "wire_radius": 0.0005,
         "slope": 0.5,
-        "cone_radius_m": 0.12,
+        "cone_radius_m": cone_radius_m,
         "t0_factor": float(np.sqrt(2.0)),
         "ground": False,
         "height_m": 0.0,
@@ -180,10 +185,18 @@ def main():
             "its geometry-overlap check at N≥161 for K≥2 bands; default 81."
         ),
     )
+    ap.add_argument(
+        "--cone-radius",
+        type=float,
+        default=0.12,
+        help="cone ring radius in m (default 0.12). Larger values reduce inter-arm proximity effects near the junction.",
+    )
     args = ap.parse_args()
     n_list = [int(x) for x in args.n_list.split(",") if x.strip()]
 
-    _print_geometry_summary(_make_req(n_list[0], args.n_bands, args.freq))
+    _print_geometry_summary(
+        _make_req(n_list[0], args.n_bands, args.freq, cone_radius_m=args.cone_radius)
+    )
 
     header = (
         f"  {'N':>3}  | {'pysim (R + jX) Ω':>22} {'t_ms':>6} | "
@@ -194,7 +207,7 @@ def main():
     print("  " + "-" * (len(header) - 2))
 
     for n in n_list:
-        req = _make_req(n, args.n_bands, args.freq)
+        req = _make_req(n, args.n_bands, args.freq, cone_radius_m=args.cone_radius)
         z_pys, t_pys = solve_pysim(req)
         if n <= args.pynec_max:
             try:
