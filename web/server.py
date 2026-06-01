@@ -96,6 +96,13 @@ from pysim.triangular import TriangularPySim
 
 from . import pynec_backend
 
+# Target per-chunk wall time for the adaptive pysim /sweep chunking. The
+# chunk size is tuned each iteration so a batch takes roughly this long —
+# enough to amortise per-call overhead and benefit from numpy batching,
+# small enough that an aborted fetch only wastes ~this much CPU before the
+# next disconnect check kicks in.
+_CHUNK_TARGET_MS = 500
+
 
 app = FastAPI(title="pysim interactive")
 
@@ -1273,28 +1280,37 @@ async def sweep_endpoint(req: dict, request: Request):
         else:
             # pysim's batched sweep is ~10x faster per-call than per-point,
             # but a 5-band fan dipole sweep at n_per_wire=21, 41 freqs takes
-            # ~6 s — long enough that rapid slider drags would otherwise pile
-            # up concurrent computes in the threadpool (each holding several
-            # hundred MB of J tensors), eventually exhausting threads or
-            # memory and surfacing as a 500 at the Vite proxy.
+            # ~6 s and holds several hundred MB of J tensors — long enough
+            # that rapid slider drags would otherwise pile up concurrent
+            # computes in the threadpool, exhausting threads or memory and
+            # surfacing as a 500 at the Vite proxy.
             #
-            # Chunk the sweep so we can check is_disconnected between batches
-            # and bail when the client aborted. Chunk size 8 keeps per-batch
-            # work small enough to feel responsive (~1 s on 5-band fan dipole,
-            # well under 100 ms on the simpler geometries) while still
-            # benefitting from numpy's vectorization within each batch.
+            # Chunk the sweep so we can check is_disconnected between
+            # batches. Per-freq cost has a bowl curve in chunk size:
+            # tiny chunks pay per-call overhead, huge chunks thrash memory
+            # bandwidth. For the 5-band fan-dipole geometry the sweet spot
+            # is chunk_size ≈ 8 (115 ms/freq); for an inverted V it's much
+            # larger (single-digit ms/freq, all freqs in one go is fine).
+            #
+            # Aim each chunk at roughly _CHUNK_TARGET_MS so the cancellation
+            # granularity is consistent across geometries. Start with an
+            # 8-chunk heuristic, then after each chunk recompute the next
+            # size from observed per-freq cost. Converges in ~1 iteration.
             sweep_fn = {
                 "yagi": _sweep_yagi,
                 "moxon": _sweep_moxon,
                 "hexbeam": _sweep_hexbeam,
                 "fan_dipole": _sweep_fandipole,
             }.get(geometry, _sweep_inverted_v)
-            chunk_size = 8
-            for start in range(0, len(freqs), chunk_size):
+            chunk_size = max(1, len(freqs) // 8)
+            start = 0
+            while start < len(freqs):
                 if await request.is_disconnected():
                     return
                 chunk = freqs[start : start + chunk_size]
+                t0 = time.perf_counter()
                 z_re, z_im = await run_in_threadpool(sweep_fn, req, chunk)
+                chunk_ms = (time.perf_counter() - t0) * 1000
                 for i, f in enumerate(chunk):
                     yield (
                         json.dumps(
@@ -1307,6 +1323,13 @@ async def sweep_endpoint(req: dict, request: Request):
                         )
                         + "\n"
                     )
+                start += len(chunk)
+                # Adapt for the next chunk: target _CHUNK_TARGET_MS per
+                # batch. Per-freq cost is a weak function of chunk size
+                # (bowl curve), so this converges quickly.
+                if chunk_ms > 0 and len(chunk) > 0:
+                    per_freq_ms = chunk_ms / len(chunk)
+                    chunk_size = max(1, round(_CHUNK_TARGET_MS / per_freq_ms))
 
         yield json.dumps({"done": True, "solver": solver_name}) + "\n"
 
