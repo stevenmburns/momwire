@@ -81,6 +81,61 @@ html, body, #root {
   font-size: 11px;
 }
 
+.fan-band-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid #232831;
+  border-radius: 6px;
+  background: #0f1218;
+  font-size: 13px;
+}
+
+.fan-band-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fan-band-label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.fan-band-select {
+  background: #181b22;
+  color: var(--fg);
+  border: 1px solid #2a313d;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.fan-band-readout {
+  margin-left: auto;
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.fan-band-sublabel {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.fan-band-len {
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .group-label {
   font-size: 11px;
   letter-spacing: 0.12em;
