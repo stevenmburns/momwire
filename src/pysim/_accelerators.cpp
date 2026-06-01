@@ -552,6 +552,178 @@ assemble_Z(
 }
 
 
+// Assemble Z from per-basis (segment, L, R) support arrays (n_basis, 2). Each
+// basis has up to 2 wings, with arbitrary level and slope per wing. Interior
+// tent bases encode (left, right) as ((sm_l, 0, 1), (sm_r, 1, 0)); junction
+// directional bases use wing 0 only and zero out wing 1 (L=R=0 → slope=0 → no
+// contribution). The general 2×2 (a, b) sum per (m, n):
+//
+//   slope[m, a] = (R[m, a] - L[m, a]) / h[support_seg[m, a]]
+//   S[k, m, n]   = Σ_a Σ_b slope[m,a]*slope[n,b] * J00[k, sm_a, sn_b]
+//   I_A[k, m, n] = Σ_a Σ_b td_all[sm_a, sn_b] * (
+//                     L[m,a]*L[n,b]*J00 + L[m,a]*slope[n,b]*J01
+//                   + slope[m,a]*L[n,b]*J10 + slope[m,a]*slope[n,b]*J11 )
+//   Z[k, m, n]   = jωμ I_A + S / (jωε)
+//
+// Parallel collapse(2) over (k, m); inner n loop reads contiguous J rows.
+static py::array_t<std::complex<double>>
+assemble_Z_general(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J00,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J10,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J01,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J11,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_per_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> support_L,
+    py::array_t<double, py::array::c_style | py::array::forcecast> support_R,
+    py::array_t<double, py::array::c_style | py::array::forcecast> omega_array,
+    double eps,
+    double mu
+) {
+    auto j00_info = J00.request();
+    auto j10_info = J10.request();
+    auto j01_info = J01.request();
+    auto j11_info = J11.request();
+
+    if (j00_info.ndim != 3) throw std::runtime_error("J tensors must be 3D");
+    size_t n_k = (size_t)j00_info.shape[0];
+    size_t N   = (size_t)j00_info.shape[1];
+    if ((size_t)j00_info.shape[2] != N) {
+        throw std::runtime_error("J tensors must be square (n_k, N, N)");
+    }
+
+    auto h   = h_per_seg.unchecked<1>();
+    auto td  = td_all.unchecked<2>();
+    auto ssg = support_seg.unchecked<2>();
+    auto sL  = support_L.unchecked<2>();
+    auto sR  = support_R.unchecked<2>();
+    auto om  = omega_array.unchecked<1>();
+
+    if ((size_t)h.shape(0) != N) {
+        throw std::runtime_error("h_per_seg length must match J tensor N");
+    }
+    if ((size_t)td.shape(0) != N || (size_t)td.shape(1) != N) {
+        throw std::runtime_error("td_all must be (N, N)");
+    }
+    if (ssg.shape(1) != 2 || sL.shape(1) != 2 || sR.shape(1) != 2) {
+        throw std::runtime_error("support_seg/L/R must have shape (n_basis, 2)");
+    }
+    if (ssg.shape(0) != sL.shape(0) || ssg.shape(0) != sR.shape(0)) {
+        throw std::runtime_error("support_seg/L/R must have matching n_basis");
+    }
+    if ((size_t)om.shape(0) != n_k) {
+        throw std::runtime_error("omega_array length must match n_k");
+    }
+    size_t n_basis = (size_t)ssg.shape(0);
+
+    std::vector<int64_t> ssg_flat(n_basis * 2);
+    std::vector<double>  L_flat(n_basis * 2);
+    std::vector<double>  slope_flat(n_basis * 2);
+    for (size_t m = 0; m < n_basis; m++) {
+        for (size_t a = 0; a < 2; a++) {
+            int64_t s = ssg(m, a);
+            double Lv = sL(m, a);
+            double Rv = sR(m, a);
+            ssg_flat[m * 2 + a] = s;
+            L_flat[m * 2 + a]   = Lv;
+            slope_flat[m * 2 + a] = (Rv - Lv) / h(s);
+        }
+    }
+
+    py::array_t<std::complex<double>> Z({n_k, n_basis, n_basis});
+    auto z_info = Z.request();
+
+    const std::complex<double>* j00_ptr = static_cast<const std::complex<double>*>(j00_info.ptr);
+    const std::complex<double>* j10_ptr = static_cast<const std::complex<double>*>(j10_info.ptr);
+    const std::complex<double>* j01_ptr = static_cast<const std::complex<double>*>(j01_info.ptr);
+    const std::complex<double>* j11_ptr = static_cast<const std::complex<double>*>(j11_info.ptr);
+    std::complex<double>* z_ptr = static_cast<std::complex<double>*>(z_info.ptr);
+
+    const std::complex<double> j_unit(0.0, 1.0);
+
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (size_t kk = 0; kk < n_k; kk++) {
+        for (size_t m = 0; m < n_basis; m++) {
+            double omega_k = om(kk);
+            std::complex<double> jw_mu      = j_unit * (omega_k * mu);
+            std::complex<double> inv_jw_eps = 1.0 / (j_unit * (omega_k * eps));
+
+            int64_t sm0 = ssg_flat[m * 2 + 0];
+            int64_t sm1 = ssg_flat[m * 2 + 1];
+            double Lm0 = L_flat[m * 2 + 0];
+            double Lm1 = L_flat[m * 2 + 1];
+            double Sm0 = slope_flat[m * 2 + 0];
+            double Sm1 = slope_flat[m * 2 + 1];
+
+            size_t base_kk = kk * N * N;
+            const std::complex<double> *j00_m0 = j00_ptr + base_kk + (size_t)sm0 * N;
+            const std::complex<double> *j00_m1 = j00_ptr + base_kk + (size_t)sm1 * N;
+            const std::complex<double> *j10_m0 = j10_ptr + base_kk + (size_t)sm0 * N;
+            const std::complex<double> *j10_m1 = j10_ptr + base_kk + (size_t)sm1 * N;
+            const std::complex<double> *j01_m0 = j01_ptr + base_kk + (size_t)sm0 * N;
+            const std::complex<double> *j01_m1 = j01_ptr + base_kk + (size_t)sm1 * N;
+            const std::complex<double> *j11_m0 = j11_ptr + base_kk + (size_t)sm0 * N;
+            const std::complex<double> *j11_m1 = j11_ptr + base_kk + (size_t)sm1 * N;
+
+            const double *td_m0 = &td(sm0, 0);
+            const double *td_m1 = &td(sm1, 0);
+
+            std::complex<double> *z_row = z_ptr + kk * n_basis * n_basis + m * n_basis;
+
+            for (size_t n = 0; n < n_basis; n++) {
+                int64_t sn0 = ssg_flat[n * 2 + 0];
+                int64_t sn1 = ssg_flat[n * 2 + 1];
+                double Ln0 = L_flat[n * 2 + 0];
+                double Ln1 = L_flat[n * 2 + 1];
+                double Sn0 = slope_flat[n * 2 + 0];
+                double Sn1 = slope_flat[n * 2 + 1];
+
+                std::complex<double> J00_00 = j00_m0[sn0];
+                std::complex<double> J01_00 = j01_m0[sn0];
+                std::complex<double> J10_00 = j10_m0[sn0];
+                std::complex<double> J11_00 = j11_m0[sn0];
+                double td00 = td_m0[sn0];
+
+                std::complex<double> J00_01 = j00_m0[sn1];
+                std::complex<double> J01_01 = j01_m0[sn1];
+                std::complex<double> J10_01 = j10_m0[sn1];
+                std::complex<double> J11_01 = j11_m0[sn1];
+                double td01 = td_m0[sn1];
+
+                std::complex<double> J00_10 = j00_m1[sn0];
+                std::complex<double> J01_10 = j01_m1[sn0];
+                std::complex<double> J10_10 = j10_m1[sn0];
+                std::complex<double> J11_10 = j11_m1[sn0];
+                double td10 = td_m1[sn0];
+
+                std::complex<double> J00_11 = j00_m1[sn1];
+                std::complex<double> J01_11 = j01_m1[sn1];
+                std::complex<double> J10_11 = j10_m1[sn1];
+                std::complex<double> J11_11 = j11_m1[sn1];
+                double td11 = td_m1[sn1];
+
+                std::complex<double> S =
+                      (Sm0 * Sn0) * J00_00
+                    + (Sm0 * Sn1) * J00_01
+                    + (Sm1 * Sn0) * J00_10
+                    + (Sm1 * Sn1) * J00_11;
+
+                std::complex<double> I_A =
+                      td00 * (Lm0*Ln0*J00_00 + Lm0*Sn0*J01_00 + Sm0*Ln0*J10_00 + Sm0*Sn0*J11_00)
+                    + td01 * (Lm0*Ln1*J00_01 + Lm0*Sn1*J01_01 + Sm0*Ln1*J10_01 + Sm0*Sn1*J11_01)
+                    + td10 * (Lm1*Ln0*J00_10 + Lm1*Sn0*J01_10 + Sm1*Ln0*J10_10 + Sm1*Sn0*J11_10)
+                    + td11 * (Lm1*Ln1*J00_11 + Lm1*Sn1*J01_11 + Sm1*Ln1*J10_11 + Sm1*Sn1*J11_11);
+
+                z_row[n] = jw_mu * I_A + S * inv_jw_eps;
+            }
+        }
+    }
+
+    return Z;
+}
+
+
 py::array_t<double> dist_outer_product(py::array_t<double> input0,
 				       py::array_t<double> input1) {
     auto buf0 = input0.request();
@@ -616,6 +788,18 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("J01"), py::arg("J11"),
           py::arg("h_per_seg"), py::arg("td_all"),
           py::arg("left_seg"), py::arg("right_seg"),
+          py::arg("omega_array"),
+          py::arg("eps"), py::arg("mu"));
+    m.def("assemble_Z_general", &assemble_Z_general,
+          "Assemble Z from per-basis (support_seg, support_L, support_R) "
+          "(n_basis, 2) arrays. Handles arbitrary 2-wing basis layouts "
+          "including junction directional bases (one wing inactive with "
+          "L=R=0). Returns Z complex (n_k, n_basis, n_basis).",
+          py::arg("J00"), py::arg("J10"),
+          py::arg("J01"), py::arg("J11"),
+          py::arg("h_per_seg"), py::arg("td_all"),
+          py::arg("support_seg"),
+          py::arg("support_L"), py::arg("support_R"),
           py::arg("omega_array"),
           py::arg("eps"), py::arg("mu"));
 }
