@@ -356,20 +356,30 @@ class TriangularPySim:
     def _build_J_blocks(self, geom, k):
         """Per-segment-pair J integrals for a single wavenumber.
 
-        Same-wire blocks are filled per-edge using the analytic + regular
-        decomposition on same-edge pairs and full 3D quadrature on off-edge
-        pairs. Cross-wire blocks use full 3D quadrature on the whole wire.
+        Fused build: one all-pairs off-edge quadrature call (same `a²`
+        regularization applies uniformly to different-edge and cross-wire
+        pairs), then same-edge blocks are overwritten with the analytic
+        static kernel + regularized GL-quadrature remainder. Same-edge
+        pairs are computed twice (the off-edge result is wrong for them
+        because the kernel is singular), but ~5% redundant compute beats
+        ~N_edges² + N_wires² small Python-side dispatches.
         """
         a = self.wire_radius
-        N = geom["n_segs_total"]
-        J00 = np.zeros((N, N), dtype=np.complex128)
-        J10 = np.zeros_like(J00)
-        J01 = np.zeros_like(J00)
-        J11 = np.zeros_like(J00)
-
         per_wire = geom["per_wire"]
         seg_off = geom["seg_offsets"]
         n_w = len(per_wire)
+
+        seg_l_all = np.vstack([pw["seg_l"] for pw in per_wire])
+        seg_r_all = np.vstack([pw["seg_r"] for pw in per_wire])
+        J00, J10, J01, J11 = _seg_seg_offedge_quad(
+            seg_l_all,
+            seg_r_all,
+            seg_l_all,
+            seg_r_all,
+            a,
+            k,
+            self.n_qp_off,
+        )
 
         for w in range(n_w):
             pw = per_wire[w]
@@ -378,70 +388,37 @@ class TriangularPySim:
             n_edges_w = len(ed_off) - 1
             base = seg_off[w]
             for i_e in range(n_edges_w):
-                for j_e in range(n_edges_w):
-                    sli = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                    slj = slice(base + ed_off[j_e], base + ed_off[j_e + 1])
-                    if i_e == j_e:
-                        A00, A10, A01, A11 = _seg_seg_static_all(ed_arc[i_e], a)
-                        R00, R10, R01, R11 = _seg_seg_reg_all(
-                            ed_arc[i_e], a, k, self.n_qp_reg
-                        )
-                        J00[sli, slj] = A00 + R00
-                        J10[sli, slj] = A10 + R10
-                        J01[sli, slj] = A01 + R01
-                        J11[sli, slj] = A11 + R11
-                    else:
-                        C00, C10, C01, C11 = _seg_seg_offedge_quad(
-                            pw["seg_l"][ed_off[i_e] : ed_off[i_e + 1]],
-                            pw["seg_r"][ed_off[i_e] : ed_off[i_e + 1]],
-                            pw["seg_l"][ed_off[j_e] : ed_off[j_e + 1]],
-                            pw["seg_r"][ed_off[j_e] : ed_off[j_e + 1]],
-                            a,
-                            k,
-                            self.n_qp_off,
-                        )
-                        J00[sli, slj] = C00
-                        J10[sli, slj] = C10
-                        J01[sli, slj] = C01
-                        J11[sli, slj] = C11
-
-        for i_w in range(n_w):
-            for j_w in range(n_w):
-                if i_w == j_w:
-                    continue
-                pwi = per_wire[i_w]
-                pwj = per_wire[j_w]
-                sli = slice(seg_off[i_w], seg_off[i_w + 1])
-                slj = slice(seg_off[j_w], seg_off[j_w + 1])
-                C00, C10, C01, C11 = _seg_seg_offedge_quad(
-                    pwi["seg_l"],
-                    pwi["seg_r"],
-                    pwj["seg_l"],
-                    pwj["seg_r"],
-                    a,
-                    k,
-                    self.n_qp_off,
-                )
-                J00[sli, slj] = C00
-                J10[sli, slj] = C10
-                J01[sli, slj] = C01
-                J11[sli, slj] = C11
+                sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
+                A00, A10, A01, A11 = _seg_seg_static_all(ed_arc[i_e], a)
+                R00, R10, R01, R11 = _seg_seg_reg_all(ed_arc[i_e], a, k, self.n_qp_reg)
+                J00[sl, sl] = A00 + R00
+                J10[sl, sl] = A10 + R10
+                J01[sl, sl] = A01 + R01
+                J11[sl, sl] = A11 + R11
 
         return J00, J10, J01, J11
 
     def _build_J_blocks_batch(self, geom, k_array):
-        """Batched (n_k, N, N) J integrals over a vector of wavenumbers."""
+        """Batched (n_k, N, N) J integrals over a vector of wavenumbers.
+        Fused build — same strategy as `_build_J_blocks`; see that docstring
+        for the rationale.
+        """
         a = self.wire_radius
-        N = geom["n_segs_total"]
-        n_k = len(k_array)
-        J00 = np.zeros((n_k, N, N), dtype=np.complex128)
-        J10 = np.zeros_like(J00)
-        J01 = np.zeros_like(J00)
-        J11 = np.zeros_like(J00)
-
         per_wire = geom["per_wire"]
         seg_off = geom["seg_offsets"]
         n_w = len(per_wire)
+
+        seg_l_all = np.vstack([pw["seg_l"] for pw in per_wire])
+        seg_r_all = np.vstack([pw["seg_r"] for pw in per_wire])
+        J00, J10, J01, J11 = _seg_seg_offedge_quad_batch(
+            seg_l_all,
+            seg_r_all,
+            seg_l_all,
+            seg_r_all,
+            a,
+            k_array,
+            self.n_qp_off,
+        )
 
         for w in range(n_w):
             pw = per_wire[w]
@@ -450,54 +427,15 @@ class TriangularPySim:
             n_edges_w = len(ed_off) - 1
             base = seg_off[w]
             for i_e in range(n_edges_w):
-                for j_e in range(n_edges_w):
-                    sli = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                    slj = slice(base + ed_off[j_e], base + ed_off[j_e + 1])
-                    if i_e == j_e:
-                        A00, A10, A01, A11 = _seg_seg_static_all(ed_arc[i_e], a)
-                        R00, R10, R01, R11 = _seg_seg_reg_all_batch(
-                            ed_arc[i_e], a, k_array, self.n_qp_reg
-                        )
-                        J00[:, sli, slj] = A00[None, :, :] + R00
-                        J10[:, sli, slj] = A10[None, :, :] + R10
-                        J01[:, sli, slj] = A01[None, :, :] + R01
-                        J11[:, sli, slj] = A11[None, :, :] + R11
-                    else:
-                        C00, C10, C01, C11 = _seg_seg_offedge_quad_batch(
-                            pw["seg_l"][ed_off[i_e] : ed_off[i_e + 1]],
-                            pw["seg_r"][ed_off[i_e] : ed_off[i_e + 1]],
-                            pw["seg_l"][ed_off[j_e] : ed_off[j_e + 1]],
-                            pw["seg_r"][ed_off[j_e] : ed_off[j_e + 1]],
-                            a,
-                            k_array,
-                            self.n_qp_off,
-                        )
-                        J00[:, sli, slj] = C00
-                        J10[:, sli, slj] = C10
-                        J01[:, sli, slj] = C01
-                        J11[:, sli, slj] = C11
-
-        for i_w in range(n_w):
-            for j_w in range(n_w):
-                if i_w == j_w:
-                    continue
-                pwi = per_wire[i_w]
-                pwj = per_wire[j_w]
-                sli = slice(seg_off[i_w], seg_off[i_w + 1])
-                slj = slice(seg_off[j_w], seg_off[j_w + 1])
-                C00, C10, C01, C11 = _seg_seg_offedge_quad_batch(
-                    pwi["seg_l"],
-                    pwi["seg_r"],
-                    pwj["seg_l"],
-                    pwj["seg_r"],
-                    a,
-                    k_array,
-                    self.n_qp_off,
+                sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
+                A00, A10, A01, A11 = _seg_seg_static_all(ed_arc[i_e], a)
+                R00, R10, R01, R11 = _seg_seg_reg_all_batch(
+                    ed_arc[i_e], a, k_array, self.n_qp_reg
                 )
-                J00[:, sli, slj] = C00
-                J10[:, sli, slj] = C10
-                J01[:, sli, slj] = C01
-                J11[:, sli, slj] = C11
+                J00[:, sl, sl] = A00[None, :, :] + R00
+                J10[:, sl, sl] = A10[None, :, :] + R10
+                J01[:, sl, sl] = A01[None, :, :] + R01
+                J11[:, sl, sl] = A11[None, :, :] + R11
 
         return J00, J10, J01, J11
 
