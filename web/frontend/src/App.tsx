@@ -295,18 +295,22 @@ export function App() {
 
   // Pick a ham band for fan-dipole slot `i`: snaps that slot's design freq
   // to the band's default. Length-factor is preserved; user can still drag
-  // the freq slider for fine tuning.
+  // the freq slider for fine tuning. When linkMeas is on, the measurement
+  // freq follows the band being adjusted so the user sees the simulation
+  // at the band they're currently tuning.
   function setFanBandSlot(i: number, bandId: Band) {
     setFanBandIds((prev) => {
       const next = prev.slice();
       next[i] = bandId;
       return next;
     });
+    const newFreq = BAND_BY_ID[bandId].default;
     setFanBandFreqs((prev) => {
       const next = prev.slice();
-      next[i] = BAND_BY_ID[bandId].default;
+      next[i] = newFreq;
       return next;
     });
+    if (linkMeas) setMeasFreq(newFreq);
   }
 
   // Freq slider for slot `i`. Also re-snaps the pulldown to whichever band
@@ -325,6 +329,7 @@ export function App() {
       next[i] = nearest;
       return next;
     });
+    if (linkMeas) setMeasFreq(v);
   }
 
   function setFanHalfdriverFactor(i: number, v: number) {
@@ -333,6 +338,10 @@ export function App() {
       next[i] = v;
       return next;
     });
+    // Tuning a band's length factor → user is focused on that band; jump
+    // measurement freq to that band's current design freq so the live
+    // simulation tracks the band being tuned.
+    if (linkMeas) setMeasFreq(fanBandFreqs[i]);
   }
 
   const [result, setResult] = useState<SolveResponse | null>(null);
