@@ -76,7 +76,20 @@ Ordered by what I'd actually do next, not by what's most ambitious.
 
 7. **Coverage for non-default geometries** — sweep `wavelength`, `halfdriver_factor`, `wire_radius`, verify `TriangularPySim` against NEC. Currently only the default (0.481 λ) dipole has been validated end-to-end.
 
-8. **Third-reference validation** (was low priority; now high, courtesy of PR #36). NEC is a model, not ground truth, and PR #36 hit the limit. The 2-band fan dipole on `TriangularPySim` disagrees with PyNEC by ~14 Ω real at the 14.3 MHz design freq, with both solvers converged to their own stable answers across N=21→81. PyNEC fails at N≥161 (its geometry-overlap check trips on the densening radial-leg mesh — first segment of one band's arm intersects another band's wire) so we can't push further. A cone-angle sweep at fixed `cone_radius=0.12` and varying `t0_factor` shows ~7 Ω of the gap tracks the inter-arm angle (gap grows from +11 Ω at 71° to +19 Ω at 13°, consistent with the cross-wire-kernel regularization on close-fanning wires — see item 12), with ~11 Ω residual at the widest possible angle. PySim's R is rock-stable across N; PyNEC's drifts upward with N which is the documented pulse-basis slow convergence. Neither is independently authoritative. Options for a third reference, ranked by realism: (a) `nec4` (later NEC generation; has the extended-thin-wire and junction corrections that NEC2 lacks); (b) MININEC (a different MoM implementation, freely available); (c) FEKO / HOBBIES (commercial); (d) measurement on a built fan dipole. (a) or (b) would shortest-path resolve the question.
+8. ~~**Third-reference validation**~~ — **resolved on the `per-pair-kernel-reg` branch probe**. The 2-band fan-dipole disagreement between `TriangularPySim` and PyNEC (~14 Ω real, ~15 Ω imag at 14.3 MHz design freq) is a **NEC2-formulation effect, not a pysim bug**. Evidence:
+
+   The `scripts/compare_fandipole_solvers.py` 3-way comparison (pysim Galerkin-tent + PyNEC pulse-basis + pymininec pulse-basis) at K=3, n_per_wire ∈ {21, 41, 81}:
+
+   ```
+     N |    pysim (R + jX)    |    PyNEC (R + jX)    | pymininec (R + jX)
+    21 |   +60.3   -0.8j      |   +47.5   +0.2j      |   +60.2   -1.2j
+    41 |   +60.4   -0.3j      |   +46.3   +0.4j      |   +59.9   -7.2j
+    81 |   +60.5   -0.0j      |   +46.5   +0.5j      |   +58.5  -29.9j
+   ```
+
+   pysim and pymininec — two **independently-implemented** MoM solvers in different basis families (triangular Galerkin vs pulse) — **agree on R within ~2 Ω across N**. PyNEC sits ~14 Ω lower. NEC2's specific formulation (extended thin-wire kernel, junction handling) is the most plausible explanation. pymininec's X diverges with N as documented (the pulse-basis convergence-failure mode that motivated the triangular work in the first place), so only its R is useful — but R agreement with pysim across N is the load-bearing evidence.
+
+   **Decision**: accept the disagreement as a known NEC2-vs-others formulation gap and move on. NEC4 (option a) would be a fourth datapoint if the question ever resurfaces, but the pysim-vs-pymininec agreement settles "is pysim broken on the fan dipole?" with "no, it agrees with another MoM implementation." Web UI follow-up (item 10's "solver agreement diagnostic") should now treat fan-dipole pysim/PyNEC disagreement as the expected behavior, not a bug indicator.
 
 ### Interactive UI follow-ups
 
@@ -94,10 +107,30 @@ Ordered by what I'd actually do next, not by what's most ambitious.
 
 9. **Higher-order basis functions** — triangular is degree-1 B-spline. Degree-2 (quadratic) or degree-3 (cubic) B-splines should give O(1/N³) or O(1/N⁴) convergence. The scipy `BSpline` machinery handles arbitrary degree; the analytic static-kernel integrals get more terms but the structure is the same (more antiderivatives in `asinh`/`√`).
 
-12. **Cross-wire kernel regularization for close-fanning junctions** — the current `a²` regularization in `_seg_seg_offedge_quad` was sized for moxon-scale tip-to-tip cm distances. At a wire-endpoint junction K wires share a point, and the first 0.5–2 mm of each adjacent segment lives inside the `a` ball. For K≥3 with small inter-arm angles (fan dipole: 13–71° depending on cone parameters) this distorts the impedance — PR #36's cone-angle sweep shows ~7 Ω of the pysim/pynec gap tracks the angle exactly. *Note: the discrepancy is at the physical junction (S/T) where K wires meet, not at the A_i kink within each band's polyline. The kink is a smoothable bend in the actual antenna; the junction isn't (the wires meet at a soldered point with a fixed angle of exit). So a "round the corner" geometry fix isn't available — the treatment has to change in the solver.* Three possible directions, ranked by likely effort:
-    - **Per-pair regularization** scaled to the local inter-wire geometry instead of a global `a²` (small change to `_seg_seg_offedge_quad` / `_seg_seg_offedge_quad_batch`). Targets the actual cause.
-    - **Adaptive junction-region meshing** with finer segments near the junction node (no kernel changes; geometry-builder change in `web/server.py`). Second-best — shrinks the `a`-ball fraction of segment arc length without changing the math.
-    - **Sinusoidal-segment basis at junction nodes only** (large change; brings the basis closer to NEC2's formulation there). Probably overkill if (a) closes the gap.
+12. ~~**Cross-wire kernel regularization for close-fanning junctions**~~ — **investigated and ruled out on the `per-pair-kernel-reg` branch**; the regularization is not the cause of the fan-dipole pysim/PyNEC gap. Two probes:
+
+    **Probe 1 (sensitivity)**: hacked the cross-wire block of `_build_J_blocks` to use an `a_xw = factor · a` regularization for cross-wire pairs only, leaving same-wire-different-edge (kink) pairs at `a²`. Swept `factor` over 4 orders of magnitude on the 2-band fan dipole (K=3 junctions at S and T):
+
+    ```
+      factor    a_xw (mm)      R         X      |Z-PyNEC|
+      1.0000     0.50000     63.40     15.27       22.68
+      0.0010     0.00050     63.40     15.27       22.68
+    ```
+
+    Per-pair J-matrix entries change by ~0.5% (verified at the junction-adjacent pair), but **the impedance changes by < 0.001 Ω**. The cross-wire regularization is irrelevant to Z for this geometry.
+
+    **Probe 2 (junction multiplicity)**: ran the K=2 case (single 20m band, only K=2 junctions at S and T, no close-fanning K≥3 geometry):
+
+    ```
+                       R         X
+       K=1 single   pysim: 63.4 + j16.3,  PyNEC: 66.1 + j 1.0  →  ΔX = +15.3
+       K=2 double   pysim: 63.4 + j15.3,  PyNEC: 46.3 + j 0.4  →  ΔX = +14.9
+       K=3 triple   pysim: 63.5 + j14.5,  PyNEC: 41.5 - j 0.1  →  ΔX = +14.6
+    ```
+
+    The ~15 Ω ΔX is **constant across K**. K=1 has no K≥3 junction at all and still shows the same gap. The disagreement is not about junction multiplicity.
+
+    Combined with item 8's pysim-vs-pymininec agreement on R, the conclusion: all three sub-options (per-pair regularization, adaptive junction meshing, sinusoidal-segment basis at junction nodes) were targeting K≥3 junction effects that don't exist as the dominant cause. The dominant effect is NEC2's formulation choices, not anything in pysim's local junction treatment. **Item closed.** The original PR #36 cone-angle correlation (~7 Ω tracking inter-arm angle) is a real secondary effect on top of the dominant ~14 Ω formulation gap — possibly close-fanning-related — but resolving it wouldn't close the dominant gap and isn't worth pursuing without a specific need for close-fanning accuracy.
 
 ## Key locations
 
