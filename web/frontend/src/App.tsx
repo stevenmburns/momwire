@@ -119,6 +119,23 @@ const VIEWS: { id: View; label: string }[] = [
   { id: "smith", label: "Smith" },
 ];
 
+// Antenna-canvas camera projections. Pick two world axes to map to canvas
+// (horizontal, vertical) and project. The hidden axis is the camera ray.
+type Projection = "xy" | "xz" | "yz";
+const PROJECTIONS: { id: Projection; label: string; horizAxis: 0|1|2; vertAxis: 0|1|2 }[] = [
+  { id: "xy", label: "Top (xy)",   horizAxis: 0, vertAxis: 1 },
+  { id: "xz", label: "Front (xz)", horizAxis: 0, vertAxis: 2 },
+  { id: "yz", label: "Side (yz)",  horizAxis: 1, vertAxis: 2 },
+];
+
+function defaultProjection(geometry: Geometry): Projection {
+  // V-and-fan-dipole arms run along y and droop in z, so a side (yz) view is
+  // the natural one. Yagi / moxon / hexbeam are top-down (xy) because the
+  // beam axis lives in the xy plane.
+  if (geometry === "inverted_v" || geometry === "fan_dipole") return "yz";
+  return "xy";
+}
+
 function useSlideSize(maxSize = 720) {
   const ref = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState(maxSize);
@@ -242,6 +259,15 @@ export function App() {
   // slider tick. Overlaid on the cuts as a comparison line.
   const [pattern, setPattern] = useState<PatternData | null>(null);
   const [view, setView] = useState<View>("antenna");
+  const [cameraProjection, setCameraProjection] = useState<Projection>(() =>
+    defaultProjection("inverted_v")
+  );
+  // When the user switches antennas, reset the camera to that geometry's
+  // natural view (V/fan_dipole → side; Yagi/moxon/hexbeam → top). Explicit
+  // user override sticks until the next geometry change.
+  useEffect(() => {
+    setCameraProjection(defaultProjection(geometry));
+  }, [geometry]);
   const { ref: slideRef, size: chartSize } = useSlideSize(720);
   const thumbStripRef = useRef<HTMLDivElement>(null);
   const thumbSize = useThumbColumnSize(thumbStripRef, 280);
@@ -1282,6 +1308,7 @@ export function App() {
                   sweepRunning={sweepRunning}
                   azElevDeg={azElevDeg}
                   elevAzDeg={elevAzDeg}
+                  cameraProjection={cameraProjection}
                 />
               </div>
               <div className="thumb-label">{v.label}</div>
@@ -1289,6 +1316,20 @@ export function App() {
           ))}
         </div>
         <div className="carousel-slide" ref={slideRef}>
+          {view === "antenna" && (
+            <div className="projection-toggle">
+              {PROJECTIONS.map((p) => (
+                <button
+                  key={p.id}
+                  className={p.id === cameraProjection ? "active" : ""}
+                  onClick={() => setCameraProjection(p.id)}
+                  title={`Project onto the ${p.id} plane`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          )}
           <ViewPanel
             view={view}
             size={chartSize}
@@ -1300,6 +1341,7 @@ export function App() {
             sweepRunning={sweepRunning}
             azElevDeg={azElevDeg}
             elevAzDeg={elevAzDeg}
+            cameraProjection={cameraProjection}
           />
         </div>
         <div className="status">ws: {status}</div>
@@ -1343,6 +1385,7 @@ function ViewPanel({
   sweepRunning,
   azElevDeg,
   elevAzDeg,
+  cameraProjection,
 }: {
   view: View;
   size: number;
@@ -1354,12 +1397,13 @@ function ViewPanel({
   sweepRunning: boolean;
   azElevDeg: number;
   elevAzDeg: number;
+  cameraProjection: Projection;
 }) {
   if (view === "antenna") {
     return (
       <div className={fill ? "antenna-fill" : "antenna-thumb"}
            style={fill ? undefined : { width: size, height: size }}>
-        <CurrentCanvas result={result} />
+        <CurrentCanvas result={result} projection={cameraProjection} />
       </div>
     );
   }
@@ -2016,7 +2060,13 @@ function SmithChart({
   return <canvas ref={canvasRef} className="smith" />;
 }
 
-function CurrentCanvas({ result }: { result: SolveResponse | null }) {
+function CurrentCanvas({
+  result,
+  projection,
+}: {
+  result: SolveResponse | null;
+  projection: Projection;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -2070,15 +2120,14 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
         (h - pad - barReserveBottom) / (0.5 * lambdaDesign),
       );
 
-      // Per-geometry view: V and fan_dipole are side views from -x looking
-      // toward +x (arms run along ±y, drooping in -z), so canvas-x = world-y
-      // and canvas-y = world-z. Yagi / moxon / hexbeam are top-down:
-      // canvas-x = world-x (boom), canvas-y = world-y (elements). horizAxis
-      // and vertAxis name the world axes that map to canvas-x/canvas-y.
-      const isSideView =
-        result.geometry === "inverted_v" || result.geometry === "fan_dipole";
-      const horizAxis = isSideView ? 1 : 0;
-      const vertAxis = isSideView ? 2 : 1;
+      // Camera projection: pick the two world axes to map to canvas
+      // (horizontal, vertical). The hidden axis is the camera ray. App.tsx
+      // sets a per-geometry default (V/fan_dipole → "yz" side, Yagi/moxon/
+      // hexbeam → "xy" top) but the user can override via the projection
+      // toggle in the stage.
+      const projSpec = PROJECTIONS.find((p) => p.id === projection)!;
+      const horizAxis = projSpec.horizAxis;
+      const vertAxis = projSpec.vertAxis;
       let hMin = Infinity, hMax = -Infinity;
       let vMin = Infinity, vMax = -Infinity;
       for (const wire of result.wires) {
@@ -2194,7 +2243,7 @@ function CurrentCanvas({ result }: { result: SolveResponse | null }) {
     const obs = new ResizeObserver(onResize);
     obs.observe(canvas);
     return () => obs.disconnect();
-  }, [result]);
+  }, [result, projection]);
 
   return <canvas ref={canvasRef} />;
 }
