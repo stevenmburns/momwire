@@ -48,17 +48,9 @@ class TriangularPySim:
         edges; an int means use that count for each edge; a sequence gives a
         per-edge count. If `n_per_edge_per_wire` itself is None, every wire
         uses `nsegs` on every edge.
-    feed_wire_index: index of the wire that carries the source.
+    feed_wire_index: index of the wire that carries the delta-gap source.
     feed_arclength: arc length along the feed wire (from its starting
         anchor) at which to place the source. None picks the midpoint.
-    feed_model: "delta_gap" (default) sets the source vector to a single
-        unit entry at the feed basis. "magnetic_frill" models a coaxial
-        feed (Tsai/Burke-Poggio annular magnetic current ring) and projects
-        the resulting on-axis E_z onto every tent basis on the feed wire
-        by Gauss-Legendre quadrature. Matrix Z is unchanged either way.
-    frill_outer_factor: ratio b/a of the modelled coax outer-to-inner
-        radius; only used when feed_model="magnetic_frill". Default 2.3
-        corresponds to a ~50 Ω feed (matches NEC2's default).
     n_qp_reg: GL points for same-edge regular-kernel integrals.
     n_qp_off: GL points for off-edge / cross-wire integrals.
     wavelength, halfdriver_factor: set the measurement wavenumber k and the
@@ -86,8 +78,6 @@ class TriangularPySim:
         n_per_edge_per_wire=None,
         feed_wire_index=0,
         feed_arclength=None,
-        feed_model="delta_gap",
-        frill_outer_factor=2.3,
         n_qp_reg=4,
         n_qp_off=4,
         wavelength=22,
@@ -97,17 +87,6 @@ class TriangularPySim:
         ground_z=None,
         junctions=None,
     ):
-        if feed_model not in ("delta_gap", "magnetic_frill"):
-            raise ValueError(
-                f"feed_model must be 'delta_gap' or 'magnetic_frill', "
-                f"got {feed_model!r}"
-            )
-        if feed_model == "magnetic_frill" and not (frill_outer_factor > 1.0):
-            raise ValueError(
-                f"frill_outer_factor must be > 1.0, got {frill_outer_factor}"
-            )
-        self.feed_model = feed_model
-        self.frill_outer_factor = float(frill_outer_factor)
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
         self.wire_radius = wire_radius
@@ -371,122 +350,6 @@ class TriangularPySim:
         interior_arc = arc_at_knot[1:-1]
         m_local = int(np.argmin(np.abs(interior_arc - feed_arc)))
         return geom["basis_offsets"][w] + m_local
-
-    def _build_source_vector(self, geom, k_array=None):
-        """Build the MoM source vector v for the current feed_model.
-
-        delta_gap: a single unit entry at the feed basis (k-independent).
-        magnetic_frill: Tsai/Burke-Poggio on-axis E_z projected onto every
-        tent basis on the feed wire by Gauss-Legendre quadrature; varies
-        with k.
-
-        Returns shape (n_b,) when k_array is None, else (n_k, n_b).
-        """
-        n_b = geom["n_basis_total"]
-        single = k_array is None
-        ks = np.array([self.k]) if single else np.asarray(k_array, dtype=float)
-        m_center = self._feed_basis_index(geom)
-
-        if self.feed_model == "delta_gap":
-            # k-independent: return 1D in both single and swept modes so the
-            # callers' broadcasting fast path (no extra trailing axis on RHS)
-            # is preserved.
-            v = np.zeros(n_b, dtype=np.complex128)
-            v[m_center] = 1.0
-            return v
-
-        # Magnetic frill: snap source to the same basis-knot the delta-gap
-        # would use, so the two models share a location and the small-b/a
-        # limit recovers the delta-gap value exactly.
-        feed_w = self.feed_wire_index
-        pw = geom["per_wire"][feed_w]
-        arc_at_knot_w = pw["arc_at_knot"]
-        basis_off_w = geom["basis_offsets"][feed_w]
-        m_local = m_center - basis_off_w
-        s_feed = arc_at_knot_w[m_local + 1]
-
-        a_wire = self.wire_radius
-        b_frill = self.frill_outer_factor * a_wire
-        # Prefactor sign chosen so the b->a delta limit recovers v[m]=+1
-        # matching the delta-gap convention v[m_center]=1.0.
-        prefactor = 0.5 / np.log(b_frill / a_wire)
-
-        # Per-basis 2-wing support: junction geometries already have these;
-        # for the non-junction fast path build them from (left_seg, right_seg).
-        if "support_seg" in geom:
-            support_seg = geom["support_seg"]
-            support_L = geom["support_L"]
-            support_R = geom["support_R"]
-        else:
-            support_seg = np.column_stack([geom["left_seg"], geom["right_seg"]])
-            support_L = np.tile(np.array([0.0, 1.0]), (n_b, 1))
-            support_R = np.tile(np.array([1.0, 0.0]), (n_b, 1))
-
-        seg_off = geom["seg_offsets"]
-        feed_seg_lo = seg_off[feed_w]
-        feed_seg_hi = seg_off[feed_w + 1]
-
-        nq = self.n_qp_reg
-        xi, wq = np.polynomial.legendre.leggauss(nq)
-        xi = 0.5 * (xi + 1.0)
-        wq = 0.5 * wq
-
-        v = np.zeros((ks.shape[0], n_b), dtype=np.complex128)
-        for m in range(n_b):
-            for wing in range(2):
-                seg_idx = int(support_seg[m, wing])
-                L = float(support_L[m, wing])
-                R = float(support_R[m, wing])
-                if L == 0.0 and R == 0.0:
-                    continue
-                if not (feed_seg_lo <= seg_idx < feed_seg_hi):
-                    # NEC2-style axial approximation: bases off the feed
-                    # wire receive zero direct excitation; coupling enters
-                    # only through Z. Adequate for typical multi-wire feeds
-                    # where the frill's E-field falls off with R from the
-                    # source point.
-                    continue
-                local = seg_idx - feed_seg_lo
-                s_l = arc_at_knot_w[local]
-                s_r = arc_at_knot_w[local + 1]
-                h_s = s_r - s_l
-                z_l = s_l - s_feed
-                z_r = s_r - s_feed
-                # Linear basis on this wing: Lambda(z) = alpha + beta * z.
-                beta = (R - L) / h_s
-                alpha = L - beta * z_l
-
-                # DC kernel 1/R is sharply peaked inside |z| ~ b on segments
-                # adjacent to the source — far too narrow for moderate-nq
-                # Gauss-Legendre to resolve. Integrate it analytically
-                # against the linear basis and let GL handle only the
-                # smooth k-remainder (exp(-jkR) - 1) / R.
-                I_alpha_a = np.arcsinh(z_r / a_wire) - np.arcsinh(z_l / a_wire)
-                I_alpha_b = np.arcsinh(z_r / b_frill) - np.arcsinh(z_l / b_frill)
-                I_beta_a = np.sqrt(z_r * z_r + a_wire * a_wire) - np.sqrt(
-                    z_l * z_l + a_wire * a_wire
-                )
-                I_beta_b = np.sqrt(z_r * z_r + b_frill * b_frill) - np.sqrt(
-                    z_l * z_l + b_frill * b_frill
-                )
-                dc_contrib = prefactor * (
-                    alpha * (I_alpha_a - I_alpha_b) + beta * (I_beta_a - I_beta_b)
-                )
-                v[:, m] += dc_contrib  # k-independent
-
-                z_q = z_l + h_s * xi
-                lam_q = alpha + beta * z_q
-                R1 = np.sqrt(z_q * z_q + a_wire * a_wire)
-                R2 = np.sqrt(z_q * z_q + b_frill * b_frill)
-                kR1 = ks[:, None] * R1[None, :]
-                kR2 = ks[:, None] * R2[None, :]
-                rem = prefactor * (
-                    (np.exp(-1j * kR1) - 1.0) / R1[None, :]
-                    - (np.exp(-1j * kR2) - 1.0) / R2[None, :]
-                )
-                v[:, m] += h_s * (rem * lam_q[None, :]) @ wq
-
-        return v[0] if single else v
 
     def _build_J_blocks(self, geom, k):
         """Per-segment-pair J integrals for a single wavenumber.
@@ -816,7 +679,8 @@ class TriangularPySim:
         self.z = Z
 
         m_center = self._feed_basis_index(geom)
-        v = self._build_source_vector(geom)
+        v = np.zeros(geom["n_basis_total"], dtype=np.complex128)
+        v[m_center] = 1.0
         if has_junctions:
             coeffs = self._solve_with_kcl(Z, v, geom)
         else:
@@ -933,15 +797,9 @@ class TriangularPySim:
         M[:, :n_b, :n_b] = Z
         M[:, :n_b, n_b:] = A.T[None, :, :]
         M[:, n_b:, :n_b] = A[None, :, :]
-        if v.ndim == 1:
-            rhs = np.zeros((n_b + n_c,), dtype=np.complex128)
-            rhs[:n_b] = v
-            x = np.linalg.solve(M, rhs)
-            return x[:, :n_b]
-        # k-dependent RHS: shape it as a single-column batch
-        rhs = np.zeros((n_k, n_b + n_c, 1), dtype=np.complex128)
-        rhs[:, :n_b, 0] = v
-        x = np.linalg.solve(M, rhs)[..., 0]
+        rhs = np.zeros((n_b + n_c,), dtype=np.complex128)
+        rhs[:n_b] = v
+        x = np.linalg.solve(M, rhs)
         return x[:, :n_b]
 
     def compute_impedance_swept(self, k_array):
@@ -967,13 +825,10 @@ class TriangularPySim:
             Z = Z - assemble_batch(*J_img, td_img, geom, omega_array)
 
         m_center = self._feed_basis_index(geom)
-        v = self._build_source_vector(geom, k_array=k_array)
+        v = np.zeros(geom["n_basis_total"], dtype=np.complex128)
+        v[m_center] = 1.0
         if has_junctions:
             coeffs = self._solve_with_kcl_batch(Z, v, geom)
-        elif v.ndim == 1:
-            # k-independent RHS — broadcasting fast path
-            coeffs = np.linalg.solve(Z, v)
         else:
-            # k-dependent RHS (frill): treat as single-column RHS per batch
-            coeffs = np.linalg.solve(Z, v[..., None])[..., 0]
+            coeffs = np.linalg.solve(Z, v)
         return 1.0 / coeffs[:, m_center]
