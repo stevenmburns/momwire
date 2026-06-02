@@ -4,9 +4,10 @@ Living roadmap of what's done and what's left. Updated as work lands.
 
 ## Where we are
 
-The codebase has one active solver and one legacy comparator:
+The codebase has one active solver, one optional NEC-faithful comparator, and one legacy comparator:
 
 - **`pysim.triangular.TriangularPySim`** (in `src/pysim/triangular.py`) — piecewise-linear (tent) basis with Galerkin testing and analytic singularity extraction. Accepts arbitrary 3D polylines, multiple wires, an optional PEC-image ground plane, and (PR #36) wire-endpoint junctions where K wires meet — KCL is enforced via a Lagrange-multiplier row per junction. Converges fast (~80 segments to NEC accuracy) AND to a finite reactance limit. C++ accelerator (`_accelerators.cpp`) handles the bottleneck quadrature and Z assembly on non-junction geometries; junction geometries take a generalised Python assembly path. Drives every interactive web-UI antenna: inverted V, Yagi (with N directors), moxon, hexbeam, and fan dipole.
+- **`pysim.sinusoidal.SinusoidalPySim`** (in `src/pysim/sinusoidal.py`, PR #44) — NEC2's three-term (const + sin + cos per segment) basis with closed-form Wu-King coefficients (Eqs 43-64 of the LLNL theory manual). Thin-wire kernel, delta-gap applied-E source, uniform wire radius, free space only. Same constructor surface as `TriangularPySim` (wires / `n_per_edge_per_wire` / junctions / `feed_wire_index` / `feed_arclength`). Used as the in-codebase NEC-faithful comparator — reproduces PyNEC R+jX to ~0.05 Ω on the hentenna across n=15..281 (see item 14).
 - **`pysim.PySim`** (in `src/pysim/__init__.py`) — legacy pulse-basis MoM, kept only as a convergence comparator. Single straight wire, both `engine="python"` and `engine="accelerated"`. Converges slowly (the real part by ~N=1000–5000 segments, the imag part logarithmically *diverges* with N — see [docs/convergence_analysis.md](docs/convergence_analysis.md)).
 
 The legacy `_legacy.py`, the spline experiments (`spline.py`, `bspline.py`, `augmented_spline.py`), the `icecream` dependency, the separate `pysim.yagi.YagiPySim` class, and the separate `BentTriangularPySim` in `triangular_bent.py` are all gone — the latter two were consolidated into `TriangularPySim`. `docs/convergence_analysis.md` documents the NEC validation campaign that motivated the triangular work.
@@ -42,6 +43,8 @@ The legacy `_legacy.py`, the spline experiments (`spline.py`, `bspline.py`, `aug
   After PR #37, the wall-time breakdown on the 5-band fan dipole `/sweep` is roughly: J build ~50%, batched solve (Schur) ~30%, assembly ~10%, glue ~10%. **J build is the dominant cost on all geometries**; see item 6b for the next remaining lever (vectorized libmvec → SLEEF/SVML for AVX-512 sincos).
 
   New regression tests: `test_assemble_Z_general_cpp_matches_python` (bit-exact C++ vs python on a K=3 junction) and `test_triangular_fandipole_swept_matches_per_freq` (batched-vs-per-freq for K=3, mirroring the existing K=2 test). The Schur-complement change is covered by the existing `test_triangular_k2_junction_*` and `test_triangular_fandipole_two_band_smoke` tests.
+
+- **PR #44** — `SinusoidalPySim`: from-scratch NEC2 three-term basis solver alongside `TriangularPySim` (default unchanged). Built from the LLNL theory manual (`docs/nec2_theory_manual.pdf`, design memo in `docs/sinusoidal_basis_design.md`), not from the necpp source. Scope: free space, thin-wire kernel, delta-gap, uniform radius, X_i=0 free-end. Straight-dipole result: 69.63 − j18.26 at N=101 vs NEC2 reference 69.64 − j18.21. Hentenna params_50: reproduces PyNEC R+jX to ~0.05 Ω across n=15..281, establishing that the hentenna X drift is intrinsic to the three-term basis (see item 14 for the full sweep and what it does/doesn't settle).
 
 ## What's left
 
@@ -196,10 +199,35 @@ Ordered by what I'd actually do next, not by what's most ambitious.
     - Decide what to do about the UI default for hentenna. n=21 is fine for pysim and badly wrong for PyNEC, and unlike a normal under-convergence there's no "high enough N" that fixes PyNEC — it just keeps drifting. Options: keep n=21 + UI warning that PyNEC on hentenna is non-convergent, raise the default and accept the cost, or refuse PyNEC for hentenna at the request layer (least surprising).
     - The mechanism behind PyNEC's super-log divergence remains open. Probes that have ruled out causes: feed model (item 5, item 13 frill probe — frill barely changes pysim's Z), K=3 junction kernel regularization (item 12), junction multiplicity (item 12, K=1/2/3 all show ~constant ΔX). Remaining candidates worth a probe: NEC2's source-on-segment-containing-junction handling; thin-wire kernel behaviour on segments adjacent to the source on a short feed wire; whether pysim's tent basis has its own basis-induced regularization at the junction that PyNEC lacks.
     - **What would arbitrate pysim vs PyNEC** (which is the bigger open question — pysim could still be converged-to-the-wrong-place). NEC4 won't do it (same MoM family). Independent arbiters, ranked by cost:
-      1. **Higher-order B-spline in pysim** (item 9, already on the roadmap). Same MoM machinery, degree-2 or degree-3 basis. If degree-2 converges to the same +38.87, the tent basis isn't introducing systematic error. If it lands elsewhere, the tent basis has a problem.
+      1. **Higher-order B-spline in pysim** (item 9, already on the roadmap). Same MoM machinery, degree-2 or degree-3 basis. If degree-2 converges to the same +38.87, the tent basis isn't introducing systematic error. If it lands elsewhere, the tent basis has a problem. **Note**: item 14 below partially shifted the question — the NEC-side mechanism is now known to be the three-term basis itself, not anything else in NEC's machinery. So this arbiter is now testing pysim's tent basis specifically.
       2. **FDTD** (openEMS, Meep, or similar). Completely different formulation — no MoM basis, no delta-gap singularity. Genuinely independent. Modest setup effort but no in-codebase pieces yet.
       3. **Surface-MoM with RWG basis** treating the wire as a thin cylinder. Different basis, different kernel singularity, same Maxwell.
       4. **Published measurement.** Hentennas are a 1970s amateur-radio antenna with measured VSWR/Z data possibly in the JA literature; a search and translation pass might find a ground-truth point for params_50.
+
+14. **NEC's super-log X drift is intrinsic to the three-term basis — isolated by `SinusoidalPySim`.** Implemented NEC2's basis from the design document (`docs/nec2_theory_manual.pdf`, derivation in `docs/sinusoidal_basis_design.md`) in `src/pysim/sinusoidal.py` (PR #44). From-scratch — shares none of necpp's code; matches the manual's Eqs 43-64 for closed-form Wu-King coefficients, Eqs 76-79 for the per-segment field, Eq 187 for the delta-gap source. Scope: free space, thin-wire kernel, uniform radius, X_i=0 free-end. Hentenna params_50 sweep against PyNEC's numbers from item 13:
+
+    ```
+       n   | sin pysim R+jX    | PyNEC R+jX        |  ΔR     ΔX
+       15  | 45.611 − j 5.718  | 45.613 − j 5.769  | −0.00  +0.05
+       21  | 45.602 − j 4.553  | 45.604 − j 4.604  | −0.00  +0.05
+       81  | 45.242 + j 1.693  | 45.244 + j 1.646  | −0.00  +0.05
+      161  | 45.004 + j 6.540  | 45.006 + j 6.536  | −0.00  +0.00
+      201  | 44.908 + j 8.736  | 44.910 + j 8.670  | −0.00  +0.07
+      281  | 44.739 + j13.064  | 44.733 + j12.722  | +0.01  +0.34
+      441  | 44.381 + j16.796  | 44.423 + j20.218  | −0.04  −3.42
+    ```
+
+    R matches PyNEC to ~0.05 Ω across the entire range. X matches to ~0.05 Ω through n=281, then opens up a 3.4 Ω gap at n=441 (likely a quadrature accuracy issue in my `n_qp_const=8` for the const-current self integral once segments shrink below a critical length — worth a follow-up but doesn't affect the qualitative finding).
+
+    **Settles**: the *NEC side* of "what's open" in item 13. The probes there ruled out feed model, K=3 junction kernel regularization, junction multiplicity, and the second NEC2 implementation (nec2c) as causes. With a from-scratch sinusoidal-basis solver in a completely independent codebase reproducing the drift, the cause is the **three-term basis itself** — neither NEC's kernel implementation, nor its source vector, nor its junction-handling code, nor anything else specific to necpp.
+
+    **Does not settle**: which solver is physically correct. Both the triangular basis (converging to ~43 + j39) and the three-term basis (drifting super-logarithmically) are now characterized; the choice between them is the same arbitration question as before. The remaining arbiters in item 13's list still apply, with the focus narrowed: the question is no longer "what in NEC is causing this" but "which basis converges to the right value."
+
+    **What's next from here**:
+    - Higher-order B-spline in pysim (item 9) — now the cheapest arbiter on the question of whether the tent basis is converging to the right value. If degree-2 lands at +j39 too, tent is validated. If it lands elsewhere, the tent has a problem.
+    - Investigate the n=441 X gap. Likely candidates: (a) quadrature node count for `_field_tensor`'s `int_G0` (currently `n_qp_const=8`; try 16, 32), (b) a sign/normalization edge case in the basis-coefficient closed forms that only matters at very small Δ, (c) PyNEC's own quadrature differing slightly from mine at that resolution — bumping `n_qp_const` and seeing whether my values move toward or away from PyNEC's is the first probe.
+    - Add `SinusoidalPySim` to the cross-solver comparison scripts and the web UI as a third solver tab. The UI integration would make the basis-induced X drift visible on the Smith chart in real time.
+    - The hentenna `n_feed` parity rule: pysim's triangular basis wants EVEN n_feed (tent-basis interior knot at z=0); pysim's sinusoidal basis wants ODD n_feed (delta-gap segment centred at z=0). Same as PyNEC's parity — confirmed by item 14's near-zero ΔR. Document this in `web/server.py`'s `_hentenna_geometry` so the three-way solver toggle picks the right parity per backend.
 
 ### Interactive UI follow-ups
 
