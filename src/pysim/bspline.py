@@ -1,66 +1,76 @@
-"""Higher-order B-spline Galerkin MoM solver (first cut).
+"""Higher-order B-spline Galerkin MoM solver.
 
-Triangular basis (`TriangularPySim`) is degree-1 B-spline; this module
-extends to arbitrary degree d, primarily so we can run degree-2 / degree-3
-as an in-codebase arbiter for the hentenna question (see NEXT_STEPS.md
-items 9, 13, 14): does the tent basis converge to the correct value, or
-is it converged-to-the-wrong-place?
+`TriangularPySim` is the degree-1 B-spline (tent) special case; this
+module extends to arbitrary degree d on multi-wire polylines with K-wire
+junctions, primarily as an in-codebase arbiter for the hentenna question
+(NEXT_STEPS.md items 9, 13, 14): does the tent basis converge to the
+correct value, or is it converged-to-the-wrong-place?
 
-Scope of this first cut (deliberately narrow):
-  * single straight single-edge wire (the polyline has 2 anchor points)
-  * uniform N segments
-  * free space, thin-wire kernel with a² regularization on every pair
-    (no analytic same-edge static extraction yet — straight extension of
-    the existing kernels, but unnecessary for the basic arbitration probe)
-  * delta-gap "applied-E" source at the wire midpoint
-  * degree d in {1, 2, 3}  (d=1 reproduces the tent basis up to quadrature)
-  * no junctions, no multi-wire, no ground plane
+Scope:
+  * arbitrary number of wires; each wire is a polyline (M ≥ 2 anchors)
+  * uniform segments per edge, possibly non-uniform across edges
+  * free space, thin-wire kernel with a² wire-radius regularization
+  * delta-gap "applied-E" source on one feed wire
+  * degree d ∈ {1, 2}  (d=1 reproduces the tent basis up to feed convention)
+  * K-wire junctions with KCL constraint (Σ outflow currents = 0)
+  * NO ground plane (yet)
 
-The basis on each physical segment is a polynomial of degree d in the local
-arc length u ∈ [0, h]. With C[m, w, p] = coefficient of u^p on wing w of
-basis m and supp_seg[m, w] = global segment of that wing:
+Same as TriangularPySim, but with a polynomial-of-degree-d on each segment
+instead of just a linear ramp. Each interior basis Φ_m spans up to d+1
+contiguous segments within a single wire; on each segment in its support
+("wing") the basis equals Σ_p C[m, w, p] · u^p with u local arc length.
 
-    Z_A[m,n]   = jωμ Σ_{a,b} (t_a · t_b) · Σ_{p,q} C[m,a,p] C[n,b,q]
+J_pq[i, j] = ∫∫ u^p u'^q · exp(-jkR)/(4πR) du' du
+with R² = |r_i(u) - r_j(u')|² + a²
+
+Galerkin assembly:
+    Z_A[m,n]   = jωμ Σ_{a,b} (t_i · t_j) · Σ_{p,q} C[m,a,p] C[n,b,q]
                  · J_{pq}[supp_seg[m,a], supp_seg[n,b]]
     Z_Φ[m,n]   = (1/jωε) Σ_{a,b} Σ_{p≥1,q≥1} p·q · C[m,a,p] C[n,b,q]
                  · J_{p-1,q-1}[supp_seg[m,a], supp_seg[n,b]]
 
-where
+Junction directional bases: at every junction node with K connected wire-
+ends we add K boundary bases (B_0 or B_{N+d-1} of each connected wire,
+the ones with value 1 at the junction) and enforce KCL via a Lagrange-
+multiplier row, mirroring TriangularPySim's treatment.
 
-    J_{pq}[i,j] = ∫_{seg_i} ∫_{seg_j} u^p u'^q · exp(-jkR)/(4πR) du' du
-    R = √(|r_i(u) - r_j(u')|² + a²)
-
-Feed: pick a sample point s_f on the wire (default: midpoint). The Galerkin
-source vector is v_m = Φ_m(s_f) (absorbing the V=1 convention). The current
-at s_f is I(s_f) = Σ_n c_n Φ_n(s_f) = v^T c, and Z_drive = 1 / I(s_f).
+Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
 import numpy as np
 import scipy.linalg
 from scipy.interpolate import BSpline
 
-from ._bspline_kernels import _seg_seg_reg_moments, _seg_seg_static_moments
+from ._bspline_kernels import (
+    _seg_seg_full_moments_offedge,
+    _seg_seg_reg_moments,
+    _seg_seg_static_moments,
+)
 
 
 class BSplinePySim:
-    """Degree-d B-spline Galerkin MoM, single straight wire.
+    """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
     Parameters
     ----------
-    wires : list of (M, 3) polyline arrays
-        Must contain exactly one polyline with exactly 2 anchor points.
-    n_per_edge_per_wire : list, optional
-        Per-wire segment count list. For the single-edge wire here, must be
-        [[N]] or None (uses `nsegs`).
-    degree : int
-        B-spline degree d ≥ 1. d=1 reproduces the tent basis (up to the
-        quadrature-vs-analytic difference in the same-segment kernel),
-        d=2 / d=3 are the new arbiters.
-    n_qp_pair : int
-        Gauss-Legendre points per segment per axis in the J integrals.
-    wavelength, wire_radius, nsegs : as in TriangularPySim.
-    feed_arclength : arc length from wire start at which to inject the
-        delta-gap source. Default: wire midpoint.
+    wires : list of (M, 3) polyline arrays, M ≥ 2 anchors each.
+    n_per_edge_per_wire : list of (int | sequence | None). Per-wire segment
+        counts per edge. None for a wire ⇒ use `nsegs` on every edge; int ⇒
+        same count for every edge; sequence ⇒ explicit per-edge count.
+    degree : B-spline degree (1 ≤ degree ≤ 2 currently; static-moment file
+        only covers max_d=2). d=1 reproduces the tent basis up to the
+        feed-convention difference.
+    feed_wire_index : index of the wire carrying the delta-gap source.
+    feed_arclength : arc length along the feed wire at which to evaluate
+        Φ_m(s_f). Default: feed wire midpoint.
+    junctions : list of [(wire_idx, "start"|"end"), ...] tuples, each entry
+        one junction node where K wire endpoints meet. Same convention as
+        TriangularPySim.
+    n_qp_pair : Gauss-Legendre nodes per segment per axis for the smooth-
+        kernel piece of same-edge pairs and for all cross-edge / cross-wire
+        pairs (full kernel with a² regularization).
+    wavelength, halfdriver_factor, wire_radius, nsegs : as in
+        TriangularPySim.
     """
 
     eps = 8.8541878188e-12
@@ -74,6 +84,7 @@ class BSplinePySim:
         degree=2,
         feed_wire_index=0,
         feed_arclength=None,
+        junctions=None,
         n_qp_pair=4,
         wavelength=22,
         halfdriver_factor=0.962,
@@ -82,18 +93,13 @@ class BSplinePySim:
     ):
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
+        if degree > 2:
+            raise NotImplementedError(
+                "degree > 2 needs scripts/derive_bspline_static_moments.py "
+                "to be re-run with a larger MAX_D"
+            )
         if not wires:
             raise ValueError("wires must be non-empty")
-        if len(wires) != 1:
-            raise NotImplementedError(
-                f"BSplinePySim first cut: single-wire only (got {len(wires)} wires)"
-            )
-        pl = np.asarray(wires[0], dtype=float)
-        if pl.ndim != 2 or pl.shape != (2, 3):
-            raise NotImplementedError(
-                "BSplinePySim first cut: single straight edge (2 anchors)"
-                f", got polyline shape {pl.shape}"
-            )
 
         self.degree = int(degree)
         self.wavelength = wavelength
@@ -107,206 +113,408 @@ class BSplinePySim:
         self.k = self.omega / self.c
         self.halfdriver = self.halfdriver_factor * self.wavelength / 4
 
-        self.wires_polylines = [pl]
-        if n_per_edge_per_wire is None:
-            n_per_edge_per_wire = [None]
-        if len(n_per_edge_per_wire) != 1:
-            raise ValueError("n_per_edge_per_wire length must equal n_wires (1)")
-        npe = n_per_edge_per_wire[0]
-        if npe is None:
-            npe = self.nsegs
-        if np.isscalar(npe):
-            npe = [int(npe)]
-        npe = list(npe)
-        if len(npe) != 1:
-            raise ValueError("first cut: single edge expected")
-        self.n_per_edge_per_wire = [npe]
-        self.N = int(npe[0])
+        self.wires_polylines = [np.asarray(w, dtype=float) for w in wires]
+        for i, pl in enumerate(self.wires_polylines):
+            if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
+                raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
 
-        if feed_wire_index != 0:
-            raise ValueError("feed_wire_index must be 0 for the single-wire case")
-        self.feed_wire_index = 0
+        n_w = len(self.wires_polylines)
+        if n_per_edge_per_wire is None:
+            n_per_edge_per_wire = [None] * n_w
+        if len(n_per_edge_per_wire) != n_w:
+            raise ValueError(
+                f"n_per_edge_per_wire length {len(n_per_edge_per_wire)} != n_wires {n_w}"
+            )
+
+        self.n_per_edge_per_wire = []
+        for i, (pl, npe) in enumerate(zip(self.wires_polylines, n_per_edge_per_wire)):
+            n_edges_w = pl.shape[0] - 1
+            if npe is None:
+                npe = self.nsegs
+            if np.isscalar(npe):
+                npe = [int(npe)] * n_edges_w
+            npe = list(npe)
+            if len(npe) != n_edges_w:
+                raise ValueError(
+                    f"wire {i}: n_per_edge length {len(npe)} != n_edges {n_edges_w}"
+                )
+            self.n_per_edge_per_wire.append(npe)
+
+        if not (0 <= feed_wire_index < n_w):
+            raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
+        self.feed_wire_index = feed_wire_index
         self.feed_arclength = feed_arclength
         self.n_qp_pair = int(n_qp_pair)
+
+        self.junctions = []
+        if junctions is not None:
+            for j, jw in enumerate(junctions):
+                if len(jw) < 2:
+                    raise ValueError(f"junction {j}: need >= 2 wire-ends")
+                normalized = []
+                for w, end in jw:
+                    if not (0 <= w < n_w):
+                        raise ValueError(
+                            f"junction {j}: wire_idx {w} out of range [0, {n_w})"
+                        )
+                    if end not in ("start", "end"):
+                        raise ValueError(
+                            f"junction {j}: end must be 'start' or 'end', got {end!r}"
+                        )
+                    normalized.append((int(w), end))
+                self.junctions.append(normalized)
 
     # ------------------------------------------------------------------
     # Geometry build
     # ------------------------------------------------------------------
 
     def _build_geometry(self):
-        pl = self.wires_polylines[0]
-        p0, p1 = pl[0], pl[1]
-        edge_vec = p1 - p0
-        edge_len = float(np.linalg.norm(edge_vec))
-        if edge_len < 1e-15:
-            raise ValueError("wire edge has zero length")
-        tan = edge_vec / edge_len
-        N = self.N
-        h = edge_len / N
+        """Discretize all wires, concatenate to global arrays.
 
-        seg_endpoints_arc = np.linspace(0.0, edge_len, N + 1)
-        # 3D positions of segment endpoints
-        seg_pts = p0[None, :] + seg_endpoints_arc[:, None] * tan[None, :]
-        seg_l = seg_pts[:-1]
-        seg_r = seg_pts[1:]
+        Per-wire metadata is preserved so the basis-polynomial extraction
+        (which operates on each wire's clamped knot vector independently)
+        can be done wire-by-wire.
+
+        Returns a `geom` dict with:
+          per_wire: list of per-wire dicts (seg_l, seg_r, tangents, h_per_seg,
+              edge_offsets, edge_arc_edges, arc_at_knot, n_total)
+          seg_offsets: list[n_w+1] of global segment index of wire start
+          n_segs_total: total segment count across all wires
+          h_per_seg: (N_total,) per-segment edge length
+          tangents: (N_total, 3) per-segment tangent unit vector
+          seg_l, seg_r: (N_total, 3) per-segment 3D endpoint
+        """
+        per_wire = []
+        seg_offsets = [0]
+        h_list = []
+        tangents_list = []
+        seg_l_list_all = []
+        seg_r_list_all = []
+        for w_idx, (pl, npe_list) in enumerate(
+            zip(self.wires_polylines, self.n_per_edge_per_wire)
+        ):
+            seg_l_w = []
+            seg_r_w = []
+            tan_w = []
+            h_w_list = []
+            edge_offsets = [0]
+            edge_arc_edges = []
+            for e_idx in range(pl.shape[0] - 1):
+                p0 = pl[e_idx]
+                p1 = pl[e_idx + 1]
+                edge_vec = p1 - p0
+                edge_len = float(np.linalg.norm(edge_vec))
+                if edge_len < 1e-15:
+                    raise ValueError(f"wire {w_idx} edge {e_idx} has zero length")
+                tan = edge_vec / edge_len
+                n_e = npe_list[e_idx]
+                h_e = edge_len / n_e
+
+                t_node = np.linspace(0.0, 1.0, n_e + 1)
+                pts = (1 - t_node[:, None]) * p0[None, :] + t_node[:, None] * p1[
+                    None, :
+                ]
+                seg_l_w.append(pts[:-1])
+                seg_r_w.append(pts[1:])
+                tan_w.append(np.tile(tan, (n_e, 1)))
+                h_w_list.append(np.full(n_e, h_e))
+                edge_arc_edges.append(np.linspace(0.0, edge_len, n_e + 1))
+                edge_offsets.append(edge_offsets[-1] + n_e)
+
+            seg_l = np.vstack(seg_l_w)
+            seg_r = np.vstack(seg_r_w)
+            tangents_w = np.vstack(tan_w)
+            h_per_seg_w = np.concatenate(h_w_list)
+            n_total_w = seg_l.shape[0]
+            arc_at_knot = np.concatenate([[0.0], np.cumsum(h_per_seg_w)])
+
+            per_wire.append(
+                {
+                    "seg_l": seg_l,
+                    "seg_r": seg_r,
+                    "tangents": tangents_w,
+                    "h_per_seg": h_per_seg_w,
+                    "edge_offsets": edge_offsets,
+                    "edge_arc_edges": edge_arc_edges,
+                    "arc_at_knot": arc_at_knot,
+                    "n_total": n_total_w,
+                }
+            )
+            seg_offsets.append(seg_offsets[-1] + n_total_w)
+            h_list.append(h_per_seg_w)
+            tangents_list.append(tangents_w)
+            seg_l_list_all.append(seg_l)
+            seg_r_list_all.append(seg_r)
+
+        h_per_seg_global = np.concatenate(h_list)
+        tangents_global = np.vstack(tangents_list)
+        seg_l_global = np.vstack(seg_l_list_all)
+        seg_r_global = np.vstack(seg_r_list_all)
 
         return {
-            "p0": p0,
-            "p1": p1,
-            "tan": tan,
-            "edge_len": edge_len,
-            "h": h,
-            "N": N,
-            "seg_l": seg_l,
-            "seg_r": seg_r,
-            "seg_endpoints_arc": seg_endpoints_arc,
+            "per_wire": per_wire,
+            "seg_offsets": seg_offsets,
+            "n_segs_total": seg_offsets[-1],
+            "h_per_seg": h_per_seg_global,
+            "tangents": tangents_global,
+            "seg_l": seg_l_global,
+            "seg_r": seg_r_global,
         }
 
     # ------------------------------------------------------------------
-    # B-spline basis polynomial extraction
+    # Endpoint status (free vs junction)
+    # ------------------------------------------------------------------
+
+    def _wire_endpoint_status(self):
+        """For each wire, return ("free" | junction_idx, "free" | junction_idx)
+        for its (start, end) — the index of the junction connecting it, or
+        "free" if the endpoint isn't junctioned.
+        """
+        n_w = len(self.wires_polylines)
+        start_status = ["free"] * n_w
+        end_status = ["free"] * n_w
+        for j_idx, jw in enumerate(self.junctions):
+            for w, end in jw:
+                if end == "start":
+                    start_status[w] = j_idx
+                else:
+                    end_status[w] = j_idx
+        return start_status, end_status
+
+    # ------------------------------------------------------------------
+    # Basis polynomial extraction
     # ------------------------------------------------------------------
 
     def _build_basis_polynomials(self, geom):
-        """Per-basis polynomial-coefficient table.
+        """Extract polynomial coefficients per (basis, wing).
+
+        For each wire:
+          * Build clamped knot vector on the wire's cumulative arc.
+          * Determine which of the d+1 boundary bases per end are kept:
+              - Free end: drop all d+1 boundary bases (Φ(end) = 0 strictly,
+                  AND derivative 0, etc. — for d ≤ 2 this means drop just
+                  B_0 because only B_0 has nonzero value, and the higher
+                  boundary bases are kept as ordinary interior bases since
+                  their value at the end is 0).
+              - Junction end: keep the value-1 boundary basis B_0 as a
+                  directional basis; keep B_1..B_{d-1} as interior bases.
+          * Extract per-segment polynomial coefficients via BSpline +
+            Vandermonde (uniform within each segment's local-u range).
 
         Returns
         -------
-        supp_seg : (n_basis, n_wings) int
-            global segment index of wing w of basis m. n_wings = degree + 1.
-            For boundary bases whose support has fewer than d+1 segments
-            (clamped knot multiplicity), we still allocate n_wings slots but
-            mark the unused ones with seg=0 and zero coefficients so they
-            contribute nothing to the assembly.
-        polys : (n_basis, n_wings, n_poly) float
-            polys[m, w, p] = coefficient of u^p (u ∈ [0, h], local segment
-            arc) on wing w of basis m. Inactive wings have all zeros.
-        knots : (n_knots,) float
-            The clamped knot vector (in arc length).
-        n_basis_total : int
-            Total bases on the clamped spline (= N + d). Includes the two
-            boundary bases that are NOT in the returned tables (they're
-            dropped for the zero-current Dirichlet BC at the wire ends).
+        supp_seg, polys : as in the single-wire case, concatenated globally.
+        kcl_A : (n_junctions, n_basis_total) Lagrange-multiplier rows
+            (+1 / -1 outflow sign per directional basis).
+        wire_knots : list of per-wire knot vectors (for the source vector).
+        wire_basis_global : list of per-wire (kept_idx, global_basis_idx)
+            tuples for the source-vector mapping.
         """
         d = self.degree
-        N = self.N
-        h = geom["h"]
-        edge_len = geom["edge_len"]
         n_wings = d + 1
+        n_poly = d + 1
 
-        interior_knots = np.linspace(0.0, edge_len, N + 1)
-        knots = np.concatenate([np.full(d, 0.0), interior_knots, np.full(d, edge_len)])
-        n_basis_total = len(knots) - d - 1  # = N + d
+        start_status, end_status = self._wire_endpoint_status()
 
-        # Drop bases j=0 and j=n_basis_total-1 (the two clamped-boundary
-        # bases that have nonzero value at the wire endpoint).
-        keep_idx = np.arange(1, n_basis_total - 1)
-        n_basis = len(keep_idx)
+        all_supp_seg = []
+        all_polys = []
+        wire_knots = []
+        wire_basis_global = []
+        # Track per-junction the list of (directional-basis global idx,
+        # outflow sign).
+        junction_dirs = {j: [] for j in range(len(self.junctions))}
 
-        supp_seg = np.zeros((n_basis, n_wings), dtype=np.int64)
-        polys = np.zeros((n_basis, n_wings, d + 1), dtype=np.float64)
+        m_global = 0
+        for w_idx, pw in enumerate(geom["per_wire"]):
+            arc = pw["arc_at_knot"]
+            wire_arc = arc[-1]
+            interior_knots = arc.copy()
+            knots = np.concatenate(
+                [np.full(d, 0.0), interior_knots, np.full(d, wire_arc)]
+            )
+            wire_knots.append(knots)
+            n_basis_w = len(knots) - d - 1  # = N_w + d
 
-        # Per-basis polynomial extraction: evaluate B_j at d+1 points
-        # inside each segment in its support, solve a Vandermonde for the
-        # polynomial coefficients in local-u coordinates.
-        u_eval_local = np.linspace(0.0, h, d + 1)
-        V = np.vander(u_eval_local, d + 1, increasing=True)  # (d+1, d+1)
-        V_inv = np.linalg.inv(V)
+            # Determine kept bases. For d ∈ {1, 2}:
+            #   B_0 is the value-1 boundary basis at the start
+            #   B_{n_basis_w - 1} is the value-1 boundary basis at the end
+            #   B_1, ..., B_{n_basis_w - 2} are interior (value 0 at endpoints)
+            kept = []  # list of (basis_j, kind, junction_idx-or-None)
+            # Start boundary basis (B_0)
+            if start_status[w_idx] == "free":
+                pass  # drop
+            else:
+                kept.append((0, "dir", start_status[w_idx], "start"))
+            # Truly interior bases
+            for j in range(1, n_basis_w - 1):
+                kept.append((j, "int", None, None))
+            # End boundary basis (B_{n_basis_w - 1})
+            if end_status[w_idx] == "free":
+                pass  # drop
+            else:
+                kept.append((n_basis_w - 1, "dir", end_status[w_idx], "end"))
 
-        eps_seg = 1e-9 * h
-        for m, j in enumerate(keep_idx):
-            c_all = np.zeros(n_basis_total, dtype=np.float64)
-            c_all[j] = 1.0
-            bspl = BSpline(knots, c_all, d, extrapolate=False)
+            seg_off = geom["seg_offsets"][w_idx]
+            h_per_seg_w = pw["h_per_seg"]
+            arc_at_knot_w = pw["arc_at_knot"]
+            # build a sample of d+1 uniform points within each segment's
+            # local-u range, in GLOBAL arc length (so we can evaluate the
+            # BSpline at them)
+            # For per-segment extraction, do it inside the loop because h
+            # varies across edges.
 
-            support_lo = knots[j]
-            support_hi = knots[j + d + 1]
+            per_basis_local_to_global = {}
+            for kept_idx, (j, kind, junc_idx, end_pos) in enumerate(kept):
+                c_all = np.zeros(n_basis_w, dtype=np.float64)
+                c_all[j] = 1.0
+                bspl = BSpline(knots, c_all, d, extrapolate=False)
 
-            # Find segments overlapping the support
-            wing = 0
-            for seg in range(N):
-                seg_l_arc = seg * h
-                seg_r_arc = (seg + 1) * h
-                if seg_r_arc < support_lo + eps_seg:
-                    continue
-                if seg_l_arc > support_hi - eps_seg:
-                    break
-                u_eval_global = seg_l_arc + u_eval_local
-                vals = bspl(u_eval_global)
-                coeffs = V_inv @ vals
-                supp_seg[m, wing] = seg
-                polys[m, wing, :] = coeffs
-                wing += 1
-            # remaining wings (if any) stay at zero coefficients
+                support_lo = knots[j]
+                support_hi = knots[j + d + 1]
 
-        return supp_seg, polys, knots, n_basis_total
+                supp_seg_m = np.zeros(n_wings, dtype=np.int64)
+                polys_m = np.zeros((n_wings, n_poly), dtype=np.float64)
+
+                # Find segments overlapping the support
+                wing = 0
+                # iterate over local segments in this wire
+                for seg_local in range(pw["n_total"]):
+                    seg_l_arc = arc_at_knot_w[seg_local]
+                    seg_r_arc = arc_at_knot_w[seg_local + 1]
+                    eps_seg = 1e-9 * max(h_per_seg_w[seg_local], 1e-12)
+                    if seg_r_arc < support_lo + eps_seg:
+                        continue
+                    if seg_l_arc > support_hi - eps_seg:
+                        break
+                    h_seg = h_per_seg_w[seg_local]
+                    # uniform sample for Vandermonde
+                    u_local = np.linspace(0.0, h_seg, d + 1)
+                    u_global = seg_l_arc + u_local
+                    vals = bspl(u_global)
+                    Vmat = np.vander(u_local, d + 1, increasing=True)
+                    coeffs = np.linalg.solve(Vmat, vals)
+                    supp_seg_m[wing] = seg_off + seg_local
+                    polys_m[wing, :] = coeffs
+                    wing += 1
+                    if wing >= n_wings:
+                        break
+
+                all_supp_seg.append(supp_seg_m)
+                all_polys.append(polys_m)
+                per_basis_local_to_global[kept_idx] = m_global
+
+                if kind == "dir":
+                    sign = +1.0 if end_pos == "start" else -1.0
+                    junction_dirs[junc_idx].append((m_global, sign))
+
+                m_global += 1
+
+            wire_basis_global.append((kept, per_basis_local_to_global))
+
+        supp_seg = (
+            np.stack(all_supp_seg, axis=0)
+            if all_supp_seg
+            else (np.zeros((0, n_wings), dtype=np.int64))
+        )
+        polys = (
+            np.stack(all_polys, axis=0)
+            if all_polys
+            else (np.zeros((0, n_wings, n_poly), dtype=np.float64))
+        )
+        n_basis_total = supp_seg.shape[0]
+
+        n_junctions = len(self.junctions)
+        kcl_A = np.zeros((n_junctions, n_basis_total), dtype=np.float64)
+        for j_idx, dirs in junction_dirs.items():
+            for m_g, sign in dirs:
+                kcl_A[j_idx, m_g] = sign
+
+        return supp_seg, polys, kcl_A, wire_knots, wire_basis_global
 
     # ------------------------------------------------------------------
-    # Polynomial-moment quadrature
+    # J moment integrals
     # ------------------------------------------------------------------
 
-    def _J_moments(self, geom, k):
-        """All polynomial moment integrals on every same-edge segment pair.
+    def _build_J_blocks(self, geom, k):
+        """All polynomial moment integrals J_pq[i, j] for p, q ∈ {0..d} and
+        every (i, j) global segment pair. Returns shape (d+1, d+1, N, N).
 
-        Returns J of shape (d+1, d+1, N, N) complex with
-            J[p, q, i, j] = ∫∫ u^p u'^q · exp(-jkR)/(4πR) du' du
-            R = √((s_i(u) - s_j(u'))² + a²)
-
-        Split as J = J_static + J_reg, where the static piece is integrated
-        in closed form (essential on the same-segment diagonal where direct
-        GL converges only logarithmically on the 1/R singularity) and the
-        smooth piece (exp(-jkR) - 1)/R is integrated by Gauss-Legendre.
+        Fused build mirroring TriangularPySim._build_J_blocks: first compute
+        every pair by full GL quadrature on the regularized full kernel
+        G = exp(-jkR)/(4πR), R² = |Δr|² + a²; then overwrite same-edge
+        blocks with the analytic static + GL-regularized split (essential
+        for the log-singular diagonal).
         """
         d = self.degree
         a = self.wire_radius
-        # seg_endpoints_arc are arc lengths from edge start: 0, h, 2h, ..., L
-        seg_endpoints_arc = geom["seg_endpoints_arc"]
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
 
-        # The closed-form kernel uses (s - alpha_i)^p (s' - A_j)^q, where
-        # alpha_i, A_j are segment-LEFT global arc positions. The local-u
-        # coordinate u = s - alpha_i runs from 0 to h on segment i — so
-        # (s - alpha_i)^p is exactly u^p. No reparametrization needed.
-        J_static = _seg_seg_static_moments(
-            seg_endpoints_arc, a, max_d=d
-        )  # (d+1, d+1, N, N) real
-        J_reg = _seg_seg_reg_moments(
-            seg_endpoints_arc, a, k, max_d=d, n_qp=self.n_qp_pair
+        # All-pairs full kernel (same a² regularization handles touching
+        # segments at kink corners and at junctions to within ~1e-5 at
+        # antenna scales; off-segment-pair accuracy is what GL is good at).
+        J = _seg_seg_full_moments_offedge(
+            seg_l, seg_r, seg_l, seg_r, a, k, d, self.n_qp_pair
         )  # (d+1, d+1, N, N) complex
-        return J_static + J_reg
+
+        # Overwrite each same-edge block with analytic static + reg
+        per_wire = geom["per_wire"]
+        seg_off = geom["seg_offsets"]
+        for w in range(len(per_wire)):
+            pw = per_wire[w]
+            ed_off = pw["edge_offsets"]
+            ed_arc = pw["edge_arc_edges"]
+            base = seg_off[w]
+            for i_e in range(len(ed_off) - 1):
+                sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
+                A_st = _seg_seg_static_moments(ed_arc[i_e], a, max_d=d)
+                A_reg = _seg_seg_reg_moments(
+                    ed_arc[i_e], a, k, max_d=d, n_qp=self.n_qp_pair
+                )
+                J[:, :, sl, sl] = A_st + A_reg
+
+        return J
 
     # ------------------------------------------------------------------
     # Z assembly
     # ------------------------------------------------------------------
 
-    def _assemble_Z(self, J, supp_seg, polys, tangent_dot):
-        """(n_basis, n_basis) complex Z from the polynomial-moment tensors."""
+    def _assemble_Z(self, J, supp_seg, polys, geom):
+        """Assemble the (n_basis, n_basis) complex Z matrix.
+
+        For each (wing_a, wing_b) pair of the d+1 wings:
+          * extract J block for the (sm[wing_a], sn[wing_b]) segment pairs
+          * accumulate Z_A = jωμ · (t·t) · Σ_{p,q} C_m,a,p C_n,b,q J[p,q,i,j]
+          * accumulate Z_Φ = (1/jωε) · Σ_{p,q ≥ 1} pq C C J[p-1,q-1,i,j]
+        """
         d = self.degree
         n_basis, n_wings, n_poly = polys.shape
         assert n_wings == d + 1 and n_poly == d + 1
 
+        tangents = geom["tangents"]
+        # tangent_dot[i, j] = t_i · t_j
+        td_all = tangents @ tangents.T
+
         Z_A = np.zeros((n_basis, n_basis), dtype=np.complex128)
         Z_Phi = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        p_vec = np.arange(1, d + 1, dtype=np.float64) if d >= 1 else None
 
         for a in range(n_wings):
             sm = supp_seg[:, a]
             for b in range(n_wings):
                 sn = supp_seg[:, b]
-                # Block J[p, P, i, j] for (i, j) ∈ (sm, sn)
-                # Shape: (d+1, d+1, n_basis, n_basis)
-                J_blk = J[:, :, sm[:, None], sn[None, :]]
-                td_blk = tangent_dot[sm[:, None], sn[None, :]]
+                J_blk = J[:, :, sm[:, None], sn[None, :]]  # (d+1, d+1, n_b, n_b)
+                td_blk = td_all[sm[:, None], sn[None, :]]
 
-                # Z_A: ∑_{p,q} polys[m,a,p] polys[n,b,q] J[p,q,m,n]
                 inner_A = np.einsum(
                     "mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :]
                 )
                 Z_A += td_blk * inner_A
 
-                # Z_Phi: ∑_{p,q ≥ 1} p·q polys[m,a,p] polys[n,b,q] J[p-1,q-1,m,n]
                 if d >= 1:
-                    p_vec = np.arange(1, d + 1, dtype=np.float64)
-                    deriv_m = polys[:, a, 1:] * p_vec[None, :]  # (n_basis, d)
+                    deriv_m = polys[:, a, 1:] * p_vec[None, :]
                     deriv_n = polys[:, b, 1:] * p_vec[None, :]
-                    J_blk_lo = J_blk[:d, :d]  # (d, d, n_basis, n_basis)
+                    J_blk_lo = J_blk[:d, :d]
                     inner_Phi = np.einsum("mp,pPmn,nP->mn", deriv_m, J_blk_lo, deriv_n)
                     Z_Phi += inner_Phi
 
@@ -315,24 +523,53 @@ class BSplinePySim:
         return Z_A + Z_Phi
 
     # ------------------------------------------------------------------
-    # Feed
+    # Source vector
     # ------------------------------------------------------------------
 
-    def _build_source_vector(self, geom, supp_seg, polys, knots, n_basis_total):
-        """Galerkin delta-gap rhs: v_m = Φ_m(s_f) with s_f = feed arclength.
-
-        Also returns the basis-value vector at s_f used to compute
-        I(s_f) = Σ_n c_n Φ_n(s_f) = v^T c, so the driver impedance is
-        Z = 1 / (v^T c) with V=1.
-        """
-        edge_len = geom["edge_len"]
-        s_f = self.feed_arclength if self.feed_arclength is not None else edge_len / 2.0
+    def _build_source_vector(self, geom, wire_knots, wire_basis_global, n_basis_total):
+        """v_m = Φ_m(s_f) on the feed wire, zeros elsewhere."""
         d = self.degree
-        # evaluate ALL bases at s_f via design_matrix
+        w = self.feed_wire_index
+        arc = geom["per_wire"][w]["arc_at_knot"]
+        wire_arc = arc[-1]
+        s_f = self.feed_arclength if self.feed_arclength is not None else wire_arc / 2.0
+
+        # design matrix at s_f, on the full (boundary-kept) basis set for
+        # the feed wire
+        knots = wire_knots[w]
         DM = BSpline.design_matrix(np.array([s_f]), knots, d).toarray()[0]
-        # drop boundary bases (j=0 and j=n_basis_total-1)
-        v_full = DM[1 : n_basis_total - 1]
-        return v_full
+        # n_basis_w_full = len(knots) - d - 1 — includes all boundary bases.
+        # Map back via wire_basis_global[w] = (kept, local_to_global_dict).
+        kept, local_to_global = wire_basis_global[w]
+
+        v = np.zeros(n_basis_total, dtype=np.complex128)
+        for kept_idx, (j, kind, junc_idx, end_pos) in enumerate(kept):
+            m_global = local_to_global[kept_idx]
+            v[m_global] = DM[j]
+        return v
+
+    # ------------------------------------------------------------------
+    # KCL solve (Schur complement)
+    # ------------------------------------------------------------------
+
+    def _solve_with_kcl(self, Z, v, kcl_A):
+        """Constrained solve [Z A^T; A 0] [I; λ] = [v; 0] via Schur.
+
+        Identical structure to TriangularPySim._solve_with_kcl. If kcl_A
+        is empty (no junctions), do a plain solve.
+        """
+        if kcl_A.shape[0] == 0:
+            return scipy.linalg.solve(Z, v)
+        n_b = Z.shape[0]
+        n_c = kcl_A.shape[0]
+        rhs = np.empty((n_b, 1 + n_c), dtype=np.complex128)
+        rhs[:, 0] = v
+        rhs[:, 1:] = kcl_A.T
+        sol = scipy.linalg.solve(Z, rhs)
+        w = sol[:, 0]
+        X = sol[:, 1:]
+        lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ w)
+        return w - X @ lam
 
     # ------------------------------------------------------------------
     # Driver impedance
@@ -340,18 +577,19 @@ class BSplinePySim:
 
     def compute_impedance(self):
         geom = self._build_geometry()
-        supp_seg, polys, knots, n_basis_total = self._build_basis_polynomials(geom)
-        # tangent dot (single straight wire → all 1)
-        N = geom["N"]
-        tangent_dot = np.ones((N, N), dtype=np.float64)
+        supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
+            self._build_basis_polynomials(geom)
+        )
+        n_basis_total = supp_seg.shape[0]
 
-        J = self._J_moments(geom, self.k)
-        Z = self._assemble_Z(J, supp_seg, polys, tangent_dot)
+        J = self._build_J_blocks(geom, self.k)
+        Z = self._assemble_Z(J, supp_seg, polys, geom)
         v = self._build_source_vector(
-            geom, supp_seg, polys, knots, n_basis_total
-        ).astype(np.complex128)
-        coeffs = scipy.linalg.solve(Z, v)
-        I_at_feed = v @ coeffs  # = Σ_n c_n Φ_n(s_f)
+            geom, wire_knots, wire_basis_global, n_basis_total
+        )
+
+        coeffs = self._solve_with_kcl(Z, v, kcl_A)
+        I_at_feed = v @ coeffs
         driver_impedance = 1.0 / I_at_feed
         self.z = Z
         return driver_impedance, coeffs

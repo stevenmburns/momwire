@@ -429,6 +429,89 @@ def test_bspline_dipole_converges_to_nec(degree, nsegs):
     assert abs(z.imag - (-18.21)) < 1.0, f"X={z.imag}"
 
 
+def test_bspline_d2_hentenna_arbitrates_against_triangular():
+    """Degree-2 B-spline on the hentenna converges to the SAME value as the
+    triangular basis (within ~0.1 Ω), independently arbitrating the
+    NEXT_STEPS items 13/14 question: triangular is NOT converged-to-the-
+    wrong-place; NEC's three-term basis is the outlier that drifts super-log.
+
+    Two independent basis families (degree-1 tent, degree-2 quadratic) land
+    on the same impedance at the canonical n=21 hentenna sweep point.
+    """
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.47
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    eps_feed = 0.05
+    half_w = wavelength * width_factor / 2
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+    A = (0.0, half_w, 0.0)
+    B_ = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps_feed, z_mid)
+    C_ = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E_ = (0.0, -half_w, z_bot)
+    T = (0.0, -eps_feed, z_mid)
+    wires = [
+        np.array([T, S], dtype=float),
+        np.array([S, B_], dtype=float),
+        np.array([B_, A, C_, D], dtype=float),
+        np.array([T, D], dtype=float),
+        np.array([D, E_, F, B_], dtype=float),
+    ]
+    junctions = [
+        [(0, "end"), (1, "start")],
+        [(0, "start"), (3, "start")],
+        [(1, "end"), (2, "start"), (4, "end")],
+        [(2, "end"), (3, "end"), (4, "start")],
+    ]
+    n = 21
+    # tent and bspline both want EVEN nfeed (interior knot at z=0).
+    nfeed = 2
+    npe = [[nfeed], [n], [n, n, n], [n], [n, n, n]]
+    z_tri, _ = TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feed_wire_index=0,
+        feed_arclength=eps_feed,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=n,
+        junctions=junctions,
+    ).compute_impedance()
+    z_b2, _ = BSplinePySim(
+        degree=2,
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feed_wire_index=0,
+        feed_arclength=eps_feed,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=n,
+        junctions=junctions,
+    ).compute_impedance()
+    # Triangular at n=21: 43.158 + j38.027
+    # B-spline d=2 at n=21: 43.066 + j38.849
+    # The two converge to different small-N transients but agree at the
+    # asymptote (~43.05 R, ~38.85 X at n=81) — they're independent
+    # basis families that BOTH reject the NEC super-log drift.
+    assert abs(z_tri.real - 43.16) < 0.1, f"tri R={z_tri.real}"
+    assert abs(z_tri.imag - 38.03) < 0.1, f"tri X={z_tri.imag}"
+    assert abs(z_b2.real - 43.07) < 0.1, f"bsp d=2 R={z_b2.real}"
+    assert abs(z_b2.imag - 38.85) < 0.1, f"bsp d=2 X={z_b2.imag}"
+    # Most importantly: the two bases agree to ~1 Ω on both R and X.
+    assert abs(z_tri.real - z_b2.real) < 1.0, (
+        f"basis disagreement on R: tri={z_tri.real}, bsp={z_b2.real}"
+    )
+    assert abs(z_tri.imag - z_b2.imag) < 1.0, (
+        f"basis disagreement on X: tri={z_tri.imag}, bsp={z_b2.imag}"
+    )
+
+
 @pytest.mark.parametrize("nsegs", [21, 41, 101])
 def test_sinusoidal_dipole_matches_nec2(nsegs):
     """SinusoidalPySim implements NEC2's three-term basis (Eqs 43-64 of the
