@@ -7,6 +7,7 @@ os.environ["MKL_NUM_THREADS"] = "8"
 os.environ["VECLIB_MAXIMUM_THREADS"] = "8"
 os.environ["NUMEXPR_NUM_THREADS"] = "8"
 
+from pysim.sinusoidal import SinusoidalPySim
 from pysim.triangular import TriangularPySim
 from pysim._accelerators import dist_outer_product
 
@@ -402,6 +403,82 @@ def test_triangular_hentenna_smoke():
     # generous bands as the moxon/hexbeam smoke tests.
     assert 25.0 < z.real < 110.0, f"R={z.real} out of plausible 50Ω-tuned range"
     assert -40.0 < z.imag < 60.0, f"X={z.imag} out of plausible 50Ω-tuned range"
+
+
+@pytest.mark.parametrize("nsegs", [21, 41, 101])
+def test_sinusoidal_dipole_matches_nec2(nsegs):
+    """SinusoidalPySim implements NEC2's three-term basis (Eqs 43-64 of the
+    LLNL theory manual). On a straight dipole it should match PyNEC/nec2c
+    to <0.1 Ohm — the only differences are floating-point and quadrature.
+    """
+    wires = [np.array([[0.0, 0.0, -5.291], [0.0, 0.0, 5.291]], dtype=float)]
+    sim = SinusoidalPySim(
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs]],
+        wavelength=22.0,
+        wire_radius=0.0005,
+        nsegs=nsegs,
+    )
+    z, _ = sim.compute_impedance()
+    # NEC2 reference at this geometry (docs/convergence_analysis.md):
+    # 69.69 - j18.67 at N=21, 69.64 - j18.21 at N=101.
+    assert 69.5 < z.real < 69.8, f"R={z.real}"
+    assert -19.0 < z.imag < -17.5, f"X={z.imag}"
+
+
+def test_sinusoidal_hentenna_reproduces_pynec():
+    """Sinusoidal-basis pysim reproduces PyNEC's hentenna numbers to
+    ~0.05 Ohm. Validates the K=2/K=3 junction-basis path against the
+    NEXT_STEPS.md item 13 PyNEC reference.
+    """
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.47
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    eps = 0.05
+    half_w = wavelength * width_factor / 2
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+    A = (0.0, half_w, 0.0)
+    B_ = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps, z_mid)
+    C_ = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E_ = (0.0, -half_w, z_bot)
+    T = (0.0, -eps, z_mid)
+    wires = [
+        np.array([T, S], dtype=float),
+        np.array([S, B_], dtype=float),
+        np.array([B_, A, C_, D], dtype=float),
+        np.array([T, D], dtype=float),
+        np.array([D, E_, F, B_], dtype=float),
+    ]
+    junctions = [
+        [(0, "end"), (1, "start")],
+        [(0, "start"), (3, "start")],
+        [(1, "end"), (2, "start"), (4, "end")],
+        [(2, "end"), (3, "end"), (4, "start")],
+    ]
+    n = 21
+    # Sinusoidal basis: ODD n_feed parity → delta-gap segment centred at z=0.
+    nfeed = 3
+    sim = SinusoidalPySim(
+        wires=wires,
+        n_per_edge_per_wire=[[nfeed], [n], [n, n, n], [n], [n, n, n]],
+        feed_wire_index=0,
+        feed_arclength=eps,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=n,
+        junctions=junctions,
+    )
+    z, _ = sim.compute_impedance()
+    # PyNEC reference at n=21 (NEXT_STEPS.md item 13): 45.604 - j4.604.
+    assert abs(z.real - 45.604) < 0.1, f"R={z.real}"
+    assert abs(z.imag - (-4.604)) < 0.1, f"X={z.imag}"
 
 
 def test_triangular_fandipole_two_band_smoke():
