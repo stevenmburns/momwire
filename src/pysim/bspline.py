@@ -47,6 +47,15 @@ from ._bspline_kernels import (
     _seg_seg_static_moments,
 )
 
+try:
+    from . import _accelerators as _acc
+
+    _HAVE_BSPLINE_ASSEMBLE_ACCEL = hasattr(_acc, "assemble_Z_bspline")
+except ImportError:
+    _HAVE_BSPLINE_ASSEMBLE_ACCEL = False
+
+_BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
+
 
 class BSplinePySim:
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
@@ -482,18 +491,29 @@ class BSplinePySim:
     def _assemble_Z(self, J, supp_seg, polys, geom):
         """Assemble the (n_basis, n_basis) complex Z matrix.
 
-        For each (wing_a, wing_b) pair of the d+1 wings:
-          * extract J block for the (sm[wing_a], sn[wing_b]) segment pairs
-          * accumulate Z_A = jωμ · (t·t) · Σ_{p,q} C_m,a,p C_n,b,q J[p,q,i,j]
-          * accumulate Z_Φ = (1/jωε) · Σ_{p,q ≥ 1} pq C C J[p-1,q-1,i,j]
+        Uses the templated C++ accelerator `assemble_Z_bspline` when
+        available and `self.degree` is in its instantiation set; otherwise
+        falls back to a numpy-einsum implementation that's a bit-exact
+        reference target.
         """
         d = self.degree
         n_basis, n_wings, n_poly = polys.shape
         assert n_wings == d + 1 and n_poly == d + 1
 
         tangents = geom["tangents"]
-        # tangent_dot[i, j] = t_i · t_j
         td_all = tangents @ tangents.T
+
+        if _HAVE_BSPLINE_ASSEMBLE_ACCEL and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D:
+            return _acc.assemble_Z_bspline(
+                np.ascontiguousarray(J, dtype=np.complex128),
+                np.ascontiguousarray(supp_seg, dtype=np.int64),
+                np.ascontiguousarray(polys, dtype=np.float64),
+                np.ascontiguousarray(td_all, dtype=np.float64),
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                int(d),
+            )
 
         Z_A = np.zeros((n_basis, n_basis), dtype=np.complex128)
         Z_Phi = np.zeros((n_basis, n_basis), dtype=np.complex128)
@@ -503,7 +523,7 @@ class BSplinePySim:
             sm = supp_seg[:, a]
             for b in range(n_wings):
                 sn = supp_seg[:, b]
-                J_blk = J[:, :, sm[:, None], sn[None, :]]  # (d+1, d+1, n_b, n_b)
+                J_blk = J[:, :, sm[:, None], sn[None, :]]
                 td_blk = td_all[sm[:, None], sn[None, :]]
 
                 inner_A = np.einsum(

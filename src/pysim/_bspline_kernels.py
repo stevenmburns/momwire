@@ -28,6 +28,20 @@ import numpy as np
 
 from ._bspline_static_moments import J_static_moment
 
+try:
+    from . import _accelerators as _acc
+
+    _HAVE_BSPLINE_ACCEL = hasattr(_acc, "seg_seg_full_moments_bspline")
+    _HAVE_BSPLINE_STATIC_ACCEL = hasattr(_acc, "seg_seg_static_moments_bspline_uniform")
+except ImportError:
+    _HAVE_BSPLINE_ACCEL = False
+    _HAVE_BSPLINE_STATIC_ACCEL = False
+
+# Currently the C++ accelerator has explicit instantiations for D in {1, 2}.
+# Extend by adding `seg_seg_full_moments_bspline_kernel<3>(...)` and a switch
+# case in src/pysim/_accelerators.cpp.
+_BSPLINE_ACCEL_MAX_D = 2
+
 MAX_D_SUPPORTED = 2
 
 
@@ -37,6 +51,12 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d):
     seg_endpoints: (N+1,) array of arc lengths along a single straight edge.
     Returns J_static of shape (max_d+1, max_d+1, N, N), with the 1/(4π)
     prefactor folded in.
+
+    Fast path: when the edge segments are uniform-h, J_pq[i, j] depends only
+    on (j-i)·h (the integrand is translation-invariant in the arc-length
+    direction along the straight edge), so the (N, N) matrix is Toeplitz —
+    2N-1 unique values per moment instead of N². At N=21 this is ~10× faster
+    than the dense evaluation; at N=81 it's ~40×.
     """
     if max_d > MAX_D_SUPPORTED:
         raise NotImplementedError(
@@ -45,17 +65,45 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d):
         )
     sl = np.ascontiguousarray(seg_endpoints[:-1], dtype=np.float64)
     sr = np.ascontiguousarray(seg_endpoints[1:], dtype=np.float64)
-    alpha = sl[:, None]
-    beta = sr[:, None]
-    A = sl[None, :]
-    B = sr[None, :]
-    n_d = max_d + 1
     N = len(sl)
-    out = np.empty((n_d, n_d, N, N), dtype=np.float64)
+    h_seg = sr - sl
+    n_d = max_d + 1
     inv4pi = 1.0 / (4 * np.pi)
+
+    uniform = N > 1 and np.allclose(h_seg, h_seg[0], rtol=1e-12, atol=1e-15)
+    if not uniform:
+        alpha = sl[:, None]
+        beta = sr[:, None]
+        A = sl[None, :]
+        B = sr[None, :]
+        out = np.empty((n_d, n_d, N, N), dtype=np.float64)
+        for p in range(n_d):
+            for q in range(n_d):
+                out[p, q] = J_static_moment(p, q, alpha, beta, A, B, a) * inv4pi
+        return out
+
+    # Uniform-h fast paths
+    h = float(h_seg[0])
+    if _HAVE_BSPLINE_STATIC_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D:
+        # C++ inlined sympy-derived closed forms — ~50× faster than numpy
+        # because each call escapes per-op dispatch overhead.
+        return _acc.seg_seg_static_moments_bspline_uniform(
+            float(h), float(a), int(N), int(max_d)
+        )
+
+    # numpy Toeplitz fallback: J_pq[i, j] = vals_pq[j - i + (N - 1)]
+    delta = np.arange(-(N - 1), N, dtype=np.float64)
+    alpha = np.zeros_like(delta)
+    beta = np.full_like(delta, h)
+    A = delta * h
+    B = (delta + 1.0) * h
+    j_minus_i = np.arange(N)[None, :] - np.arange(N)[:, None]
+    gather_idx = j_minus_i + (N - 1)
+    out = np.empty((n_d, n_d, N, N), dtype=np.float64)
     for p in range(n_d):
         for q in range(n_d):
-            out[p, q] = J_static_moment(p, q, alpha, beta, A, B, a) * inv4pi
+            vals = J_static_moment(p, q, alpha, beta, A, B, a) * inv4pi
+            out[p, q] = vals[gather_idx]
     return out
 
 
@@ -102,19 +150,34 @@ def _seg_seg_reg_moments(seg_endpoints, a, k, max_d, n_qp):
 def _seg_seg_full_moments_offedge(
     seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k, max_d, n_qp
 ):
-    """Full-kernel moment integrals on (cross-edge / cross-wire) pairs.
+    """Full-kernel moment integrals on all segment pairs.
 
-    For pairs where the two segments don't share any common arc, R ≥ h > a
-    away from the singular diagonal, so direct GL on the regularized
-    G = exp(-jkR)/(4π R) is accurate.
+    Returns (max_d+1, max_d+1, N_i, N_j) complex. Uses the C++ accelerator
+    when available and `max_d` is in the instantiation set; otherwise falls
+    back to the pure-numpy reference.
 
-    Returns (max_d+1, max_d+1, N_i, N_j) complex. (Provided here for
-    future polyline / multi-wire extension; the single-straight-wire first
-    cut doesn't call it.)
+    The same a² wire-radius regularization handles diagonals (i = j) where
+    R could otherwise vanish, and touching segments at kink corners; the
+    bspline solver overwrites the same-edge blocks with analytic_static +
+    GL_reg afterwards, so the accuracy of this call only needs to be good
+    on far / nearly-far pairs.
     """
     gl_xi, gl_w = np.polynomial.legendre.leggauss(n_qp)
     t01 = 0.5 * (gl_xi + 1.0)
     w01 = 0.5 * gl_w
+
+    if _HAVE_BSPLINE_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D:
+        return _acc.seg_seg_full_moments_bspline(
+            np.ascontiguousarray(seg_l_i, dtype=np.float64),
+            np.ascontiguousarray(seg_r_i, dtype=np.float64),
+            np.ascontiguousarray(seg_l_j, dtype=np.float64),
+            np.ascontiguousarray(seg_r_j, dtype=np.float64),
+            float(a) * float(a),
+            float(k),
+            int(max_d),
+            np.ascontiguousarray(t01, dtype=np.float64),
+            np.ascontiguousarray(w01, dtype=np.float64),
+        )
 
     len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
     len_j = np.linalg.norm(seg_r_j - seg_l_j, axis=1)

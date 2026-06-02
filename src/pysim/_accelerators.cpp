@@ -8,6 +8,8 @@
 #include <tuple>
 #include <vector>
 
+#include "_bspline_static_moments_inline.h"
+
 namespace py = pybind11;
 
 // Ubuntu/glibc <cmath> headers don't carry `omp declare simd` markers for the
@@ -764,6 +766,441 @@ py::array_t<double> dist_outer_product(py::array_t<double> input0,
     return result;
 }
 
+// Templated B-spline moment-integral kernel.
+//
+// For each (i, j) segment pair, compute the (D+1)^2 polynomial moments
+//   J[p, P, i, j] = sum_{q, r} wi[q] * ui[q]^p * wj[r] * uj[r]^P * G(R_qr)
+// where
+//   R_qr = sqrt(|pos_i(t_q) - pos_j(t_r)|^2 + a_squared)
+//   G(R) = exp(-j*k*R) / (4*pi*R)
+//   ui[q] = t_q * len_i,  uj[r] = t_r * len_j  (local arc lengths)
+//
+// Used by BSplinePySim._build_J_blocks for the all-pairs off-edge piece
+// (same a^2 wire-radius regularization handles touching segments at kinks
+// and at junctions). Single-k for now (BSplinePySim hasn't grown a swept
+// path yet); add a batched k_array variant later if/when needed.
+//
+// Template parameter D = B-spline degree (1 or 2 currently — explicit
+// instantiations below). Hardcoding D as a compile-time constant lets the
+// compiler fully unroll the (D+1)^2 polynomial-moment inner loop, getting
+// the same scalar-unrolled tight assembly the d=1 seg_seg_quad_batch_3d
+// achieves with hand-rolled s00 / s10 / s01 / s11 accumulators.
+//
+// n_qp <= 8 assumed (n_qp^2 <= 64 scratch buffer size).
+template<int D>
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_bspline_kernel(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    double k,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+) {
+    static constexpr int NM = D + 1;          // moments per axis
+    static constexpr int NMM = NM * NM;       // total moments
+
+    auto sli = seg_l_i.unchecked<2>();
+    auto sri = seg_r_i.unchecked<2>();
+    auto slj = seg_l_j.unchecked<2>();
+    auto srj = seg_r_j.unchecked<2>();
+    auto glt = gl_t.unchecked<1>();
+    auto glw = gl_w.unchecked<1>();
+
+    if (sli.shape(1) != 3 || sri.shape(1) != 3 ||
+        slj.shape(1) != 3 || srj.shape(1) != 3) {
+        throw std::runtime_error("segment endpoint arrays must have shape (N, 3)");
+    }
+    if (sli.shape(0) != sri.shape(0) || slj.shape(0) != srj.shape(0)) {
+        throw std::runtime_error("seg_l and seg_r must have matching N");
+    }
+    if (glt.shape(0) != glw.shape(0)) {
+        throw std::runtime_error("gl_t and gl_w must have matching length");
+    }
+    size_t n_qp_in = glt.shape(0);
+    if (n_qp_in > 8) {
+        throw std::runtime_error("n_qp > 8 not supported (scratch buffer size)");
+    }
+
+    size_t N_i = sli.shape(0);
+    size_t N_j = slj.shape(0);
+    size_t n_qp = n_qp_in;
+
+    py::array_t<std::complex<double>> J({(size_t)NM, (size_t)NM, N_i, N_j});
+    auto j_view = J.mutable_unchecked<4>();
+
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+
+    // Per-segment quadrature-point positions and lengths -- k-independent,
+    // computed once outside the parallel region.
+    std::vector<double> pos_i(N_i * n_qp * 3);
+    std::vector<double> pos_j(N_j * n_qp * 3);
+    std::vector<double> len_i(N_i);
+    std::vector<double> len_j(N_j);
+    for (size_t i = 0; i < N_i; i++) {
+        double dx = sri(i,0) - sli(i,0);
+        double dy = sri(i,1) - sli(i,1);
+        double dz = sri(i,2) - sli(i,2);
+        len_i[i] = std::sqrt(dx*dx + dy*dy + dz*dz);
+        for (size_t q = 0; q < n_qp; q++) {
+            double t = glt(q);
+            pos_i[(i*n_qp + q)*3 + 0] = (1.0 - t) * sli(i,0) + t * sri(i,0);
+            pos_i[(i*n_qp + q)*3 + 1] = (1.0 - t) * sli(i,1) + t * sri(i,1);
+            pos_i[(i*n_qp + q)*3 + 2] = (1.0 - t) * sli(i,2) + t * sri(i,2);
+        }
+    }
+    for (size_t j = 0; j < N_j; j++) {
+        double dx = srj(j,0) - slj(j,0);
+        double dy = srj(j,1) - slj(j,1);
+        double dz = srj(j,2) - slj(j,2);
+        len_j[j] = std::sqrt(dx*dx + dy*dy + dz*dz);
+        for (size_t r = 0; r < n_qp; r++) {
+            double t = glt(r);
+            pos_j[(j*n_qp + r)*3 + 0] = (1.0 - t) * slj(j,0) + t * srj(j,0);
+            pos_j[(j*n_qp + r)*3 + 1] = (1.0 - t) * slj(j,1) + t * srj(j,1);
+            pos_j[(j*n_qp + r)*3 + 2] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+        }
+    }
+
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (size_t i = 0; i < N_i; i++) {
+        for (size_t j = 0; j < N_j; j++) {
+            alignas(32) double R[64];
+            alignas(32) double inv_R_4pi[64];
+            alignas(32) double phases[64];
+            alignas(32) double cos_phases[64];
+            alignas(32) double sin_phases[64];
+            alignas(32) double G_re[64], G_im[64];
+            // wuwu[pP, qr]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P,
+            // flattened with pP = p*NM + P. For D=2: NMM*64 = 576 doubles = 4.5KB,
+            // fits comfortably in L1.
+            alignas(32) double wuwu[NMM * 64];
+
+            const double *pi = &pos_i[i * n_qp * 3];
+            const double *pj = &pos_j[j * n_qp * 3];
+            for (size_t q = 0; q < n_qp; q++) {
+                double pix = pi[q*3 + 0];
+                double piy = pi[q*3 + 1];
+                double piz = pi[q*3 + 2];
+                for (size_t r = 0; r < n_qp; r++) {
+                    double dx = pix - pj[r*3 + 0];
+                    double dy = piy - pj[r*3 + 1];
+                    double dz = piz - pj[r*3 + 2];
+                    R[q*n_qp + r] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+                }
+            }
+
+            double Li = len_i[i];
+            double Lj = len_j[j];
+            size_t n_pairs = n_qp * n_qp;
+
+            // Build wuwu[pP, qr]: pP indexes the moment (p*NM + P), qr the
+            // quadrature pair (q*n_qp + r). The NM is a template constant so
+            // ui_pow[p] / uj_pow[P] arrays unroll.
+            for (size_t q = 0; q < n_qp; q++) {
+                double wi = glw(q) * Li;
+                double ui = glt(q) * Li;
+                double ui_pow[NM];
+                ui_pow[0] = 1.0;
+                for (int p = 1; p < NM; p++) ui_pow[p] = ui_pow[p-1] * ui;
+                for (size_t r = 0; r < n_qp; r++) {
+                    double wj = glw(r) * Lj;
+                    double uj = glt(r) * Lj;
+                    double uj_pow[NM];
+                    uj_pow[0] = 1.0;
+                    for (int P = 1; P < NM; P++) uj_pow[P] = uj_pow[P-1] * uj;
+                    double wij = wi * wj;
+                    size_t qr = q * n_qp + r;
+                    for (int p = 0; p < NM; p++) {
+                        for (int P = 0; P < NM; P++) {
+                            wuwu[(p * NM + P) * n_pairs + qr] = wij * ui_pow[p] * uj_pow[P];
+                        }
+                    }
+                }
+            }
+
+            // Stage 1: phases = -k * R, then sincos via libmvec.
+            #pragma omp simd
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                phases[qr] = -k * R[qr];
+            }
+            #pragma omp simd
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                cos_phases[qr] = std::cos(phases[qr]);
+            }
+            #pragma omp simd
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                sin_phases[qr] = std::sin(phases[qr]);
+            }
+            #pragma omp simd
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                inv_R_4pi[qr] = inv_4pi / R[qr];
+                G_re[qr] = cos_phases[qr] * inv_R_4pi[qr];
+                G_im[qr] = sin_phases[qr] * inv_R_4pi[qr];
+            }
+
+            // Stage 2: NMM moment reductions, each a vectorizable sum over qr.
+            for (int pP = 0; pP < NMM; pP++) {
+                double sr = 0.0, si = 0.0;
+                const double *w_row = &wuwu[pP * n_pairs];
+                #pragma omp simd reduction(+:sr,si)
+                for (size_t qr = 0; qr < n_pairs; qr++) {
+                    sr += w_row[qr] * G_re[qr];
+                    si += w_row[qr] * G_im[qr];
+                }
+                j_view(pP / NM, pP % NM, i, j) = std::complex<double>(sr, si);
+            }
+        }
+    }
+
+    return J;
+}
+
+// Templated B-spline Z assembly kernel.
+//
+// For each (m, n) basis pair, assembles the EFIE Galerkin entry from the
+// polynomial-moment tensor J and the per-(basis, wing, poly-degree)
+// coefficient table:
+//   Z[m,n] = j*omega*mu * sum_{a,b} (t·t)[sm, sn]
+//            * sum_{p, q} polys[m, a, p] * polys[n, b, q] * J[p, q, sm, sn]
+//          + (1/jωε)    * sum_{a,b}
+//            * sum_{p≥1, q≥1} p*q * polys[m, a, p] * polys[n, b, q]
+//                           * J[p-1, q-1, sm, sn]
+// where sm = support_seg[m, a], sn = support_seg[n, b].
+//
+// Inactive wings of boundary / junction-directional bases have polys = 0
+// at every p, so they contribute nothing — no special handling needed.
+//
+// Template parameter D = B-spline degree (1 or 2). NM = D+1 wings per basis
+// and D+1 polynomial moments per wing. Hardcoding NM as a compile-time
+// constant unrolls the (D+1)^4 inner muladd loop.
+//
+// Single-k for now (BSplinePySim doesn't have a swept path yet); the inputs
+// are scalar omega instead of an omega_array.
+template<int D>
+static py::array_t<std::complex<double>>
+assemble_Z_bspline_kernel(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    double omega,
+    double eps_,
+    double mu_
+) {
+    static constexpr int NM = D + 1;
+
+    auto j_view = J.unchecked<4>();
+    auto ss_view = support_seg.unchecked<2>();
+    auto p_view = polys.unchecked<3>();
+    auto td_view = td_all.unchecked<2>();
+
+    size_t n_basis = (size_t)support_seg.shape(0);
+    if (support_seg.shape(1) != NM) {
+        throw std::runtime_error("support_seg.shape(1) must equal D+1");
+    }
+    if (polys.shape(0) != (long)n_basis || polys.shape(1) != NM ||
+        polys.shape(2) != NM) {
+        throw std::runtime_error("polys.shape must be (n_basis, D+1, D+1)");
+    }
+    if (J.shape(0) != NM || J.shape(1) != NM) {
+        throw std::runtime_error("J.shape(0:2) must be (D+1, D+1)");
+    }
+
+    py::array_t<std::complex<double>> Z({n_basis, n_basis});
+    auto z_view = Z.mutable_unchecked<2>();
+
+    // Z = j*omega*mu * Z_A_accum + (1/(j*omega*eps)) * Z_Phi_accum
+    // For Z_A_accum = re + j*im:    j*omega*mu * (re + j*im) = -omega*mu*im + j*omega*mu*re
+    // For Z_Phi_accum = re + j*im:  (re + j*im)/(j*omega*eps) = im/(omega*eps) - j*re/(omega*eps)
+    const double omega_mu = omega * mu_;
+    const double inv_omega_eps = 1.0 / (omega * eps_);
+
+    #pragma omp parallel for collapse(2) schedule(static)
+    for (size_t m = 0; m < n_basis; m++) {
+        for (size_t n = 0; n < n_basis; n++) {
+            double zA_re = 0.0, zA_im = 0.0;
+            double zPhi_re = 0.0, zPhi_im = 0.0;
+
+            for (int a = 0; a < NM; a++) {
+                int64_t sm = ss_view(m, a);
+                for (int b = 0; b < NM; b++) {
+                    int64_t sn = ss_view(n, b);
+                    double td = td_view(sm, sn);
+
+                    double wA_re = 0.0, wA_im = 0.0;
+                    double wPhi_re = 0.0, wPhi_im = 0.0;
+
+                    for (int p = 0; p < NM; p++) {
+                        double mp_ap = p_view(m, a, p);
+                        for (int q = 0; q < NM; q++) {
+                            double nq_bq = p_view(n, b, q);
+                            std::complex<double> Jpq = j_view(p, q, sm, sn);
+                            double prod = mp_ap * nq_bq;
+                            wA_re += prod * Jpq.real();
+                            wA_im += prod * Jpq.imag();
+                            // p, q in {1..D}: Z_Phi contribution
+                            if (p >= 1 && q >= 1) {
+                                std::complex<double> Jpm1qm1 = j_view(p - 1, q - 1, sm, sn);
+                                double pq = (double)(p * q) * prod;
+                                wPhi_re += pq * Jpm1qm1.real();
+                                wPhi_im += pq * Jpm1qm1.imag();
+                            }
+                        }
+                    }
+
+                    zA_re += td * wA_re;
+                    zA_im += td * wA_im;
+                    zPhi_re += wPhi_re;
+                    zPhi_im += wPhi_im;
+                }
+            }
+
+            double Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
+            double Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            z_view(m, n) = std::complex<double>(Zre, Zim);
+        }
+    }
+
+    return Z;
+}
+
+static py::array_t<std::complex<double>>
+assemble_Z_bspline(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    double omega,
+    double eps_,
+    double mu_,
+    int max_d
+) {
+    switch (max_d) {
+        case 1:
+            return assemble_Z_bspline_kernel<1>(J, support_seg, polys, td_all, omega, eps_, mu_);
+        case 2:
+            return assemble_Z_bspline_kernel<2>(J, support_seg, polys, td_all, omega, eps_, mu_);
+        default:
+            throw std::runtime_error(
+                "assemble_Z_bspline: max_d must be 1 or 2");
+    }
+}
+
+
+// Runtime dispatch wrapper. Picks the right template instantiation based on
+// max_d (the maximum polynomial moment degree, == B-spline degree D).
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_bspline(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    double k,
+    int max_d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+) {
+    switch (max_d) {
+        case 1:
+            return seg_seg_full_moments_bspline_kernel<1>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w);
+        case 2:
+            return seg_seg_full_moments_bspline_kernel<2>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w);
+        default:
+            throw std::runtime_error(
+                "seg_seg_full_moments_bspline: max_d must be 1 or 2 "
+                "(add an explicit template instantiation in _accelerators.cpp)");
+    }
+}
+
+
+// Toeplitz fast-path B-spline static-moment evaluation.
+//
+// For a single straight edge with uniform-h segments, the J_pq^static[i, j]
+// integrals are translation-invariant in the arc direction — the matrix is
+// Toeplitz with 2N-1 unique values per (p, q) moment. This function computes
+// those 2N-1 values via the sympy-derived closed forms (inlined from
+// _bspline_static_moments_inline.h) and gathers them to the (max_d+1,
+// max_d+1, N, N) output.
+//
+// Replaces the per-edge numpy loop in `_seg_seg_static_moments` — that path
+// took ~5 ms / call mainly from numpy dispatch overhead; the C++ inlined
+// closed forms run in ~0.1 ms / call. Big win on multi-edge polylines like
+// the hentenna where the static moments dominate after the all-pairs J kernel.
+//
+// max_d ∈ {0, 1, 2} currently — extends automatically when the header file
+// is regenerated for larger MAX_D in scripts/derive_bspline_static_moments.py
+// (and the case-list in J_static_dispatch below is extended).
+static double J_static_dispatch(int p, int q,
+                                double alpha, double beta,
+                                double A, double B, double a) {
+    int pq = p * 3 + q;
+    switch (pq) {
+        case 0: return J_static_pq_0_0(alpha, beta, A, B, a);
+        case 1: return J_static_pq_0_1(alpha, beta, A, B, a);
+        case 2: return J_static_pq_0_2(alpha, beta, A, B, a);
+        case 3: return J_static_pq_1_0(alpha, beta, A, B, a);
+        case 4: return J_static_pq_1_1(alpha, beta, A, B, a);
+        case 5: return J_static_pq_1_2(alpha, beta, A, B, a);
+        case 6: return J_static_pq_2_0(alpha, beta, A, B, a);
+        case 7: return J_static_pq_2_1(alpha, beta, A, B, a);
+        case 8: return J_static_pq_2_2(alpha, beta, A, B, a);
+        default:
+            throw std::runtime_error("J_static: (p, q) out of inline range");
+    }
+}
+
+static py::array_t<double>
+seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d) {
+    if (max_d < 0 || max_d > 2) {
+        throw std::runtime_error("max_d out of range [0, 2]");
+    }
+    size_t NM = (size_t)(max_d + 1);
+    py::array_t<double> out({NM, NM, N, N});
+    auto v = out.mutable_unchecked<4>();
+
+    // 2N-1 unique Toeplitz values per moment, indexed by Δ = j - i ∈ [-(N-1), N-1].
+    // delta_idx = Δ + (N - 1) ∈ [0, 2N-2].
+    size_t n_delta = 2 * N - 1;
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+
+    // Build (NM, NM, n_delta) Toeplitz table
+    std::vector<double> table(NM * NM * n_delta);
+    for (size_t p = 0; p < NM; p++) {
+        for (size_t q = 0; q < NM; q++) {
+            for (size_t di = 0; di < n_delta; di++) {
+                long long delta = (long long)di - (long long)(N - 1);
+                double alpha = 0.0;
+                double beta = h;
+                double A_ = (double)delta * h;
+                double B_ = ((double)delta + 1.0) * h;
+                double val = J_static_dispatch((int)p, (int)q, alpha, beta, A_, B_, a);
+                table[(p * NM + q) * n_delta + di] = val * inv_4pi;
+            }
+        }
+    }
+
+    // Gather: v(p, q, i, j) = table[p, q, j - i + (N - 1)]
+    for (size_t p = 0; p < NM; p++) {
+        for (size_t q = 0; q < NM; q++) {
+            const double *row = &table[(p * NM + q) * n_delta];
+            for (size_t i = 0; i < N; i++) {
+                for (size_t j = 0; j < N; j++) {
+                    size_t di = (size_t)((long long)j - (long long)i + (long long)(N - 1));
+                    v(p, q, i, j) = row[di];
+                }
+            }
+        }
+    }
+    return out;
+}
+
+
 PYBIND11_MODULE(_accelerators, m) {
     m.def("dist_outer_product", &dist_outer_product, "Compute point to point euclidean distance");
     m.def("seg_seg_quad_batch_3d", &seg_seg_quad_batch_3d,
@@ -802,4 +1239,31 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("support_L"), py::arg("support_R"),
           py::arg("omega_array"),
           py::arg("eps"), py::arg("mu"));
+    m.def("seg_seg_full_moments_bspline", &seg_seg_full_moments_bspline,
+          "Single-k full-kernel polynomial moment integrals for the B-spline "
+          "Galerkin MoM. Returns J of shape (max_d+1, max_d+1, N_i, N_j) "
+          "complex. Templated on max_d at compile time; currently "
+          "instantiated for max_d in {1, 2}.",
+          py::arg("seg_l_i"), py::arg("seg_r_i"),
+          py::arg("seg_l_j"), py::arg("seg_r_j"),
+          py::arg("a_squared"), py::arg("k"),
+          py::arg("max_d"),
+          py::arg("gl_t"), py::arg("gl_w"));
+    m.def("seg_seg_static_moments_bspline_uniform",
+          &seg_seg_static_moments_bspline_uniform,
+          "Closed-form same-edge static-kernel polynomial moments J_pq for a "
+          "uniform-h edge with N segments. Uses Toeplitz structure (2N-1 "
+          "unique values per moment) and inlined sympy-derived closed forms. "
+          "Returns J_static of shape (max_d+1, max_d+1, N, N), with the "
+          "1/(4π) prefactor folded in.",
+          py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"));
+    m.def("assemble_Z_bspline", &assemble_Z_bspline,
+          "Assemble the (n_basis, n_basis) Z matrix from the polynomial-"
+          "moment tensor J, per-basis polynomial coefficients, support-segment "
+          "map, and tangent-dot table. Templated on max_d at compile time; "
+          "currently instantiated for max_d in {1, 2}. Single-k.",
+          py::arg("J"), py::arg("support_seg"),
+          py::arg("polys"), py::arg("td_all"),
+          py::arg("omega"), py::arg("eps"), py::arg("mu"),
+          py::arg("max_d"));
 }

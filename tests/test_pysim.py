@@ -406,6 +406,90 @@ def test_triangular_hentenna_smoke():
     assert -40.0 < z.imag < 60.0, f"X={z.imag} out of plausible 50Ω-tuned range"
 
 
+def test_bspline_cpp_assemble_z_matches_numpy():
+    """The C++ assemble_Z_bspline accelerator must agree with the numpy
+    reference path bit-exactly (modulo floating-point reduction order ~1e-12
+    relative). Run by toggling the dispatch flag in pysim.bspline.
+    """
+    import pysim.bspline as bmod
+    from pysim.bspline import BSplinePySim
+
+    if not bmod._HAVE_BSPLINE_ASSEMBLE_ACCEL:
+        pytest.skip("Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    wires = [np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])]
+    sim = BSplinePySim(wires=wires, n_per_edge_per_wire=[[21]], nsegs=21, degree=2)
+
+    # Driver impedance via C++ path
+    z_cpp, _ = sim.compute_impedance()
+
+    # Force numpy fallback by flipping the module flag
+    saved = bmod._HAVE_BSPLINE_ASSEMBLE_ACCEL
+    try:
+        bmod._HAVE_BSPLINE_ASSEMBLE_ACCEL = False
+        # Re-build sim to invalidate any cached Z (compute_impedance is stateless re Z)
+        z_np, _ = BSplinePySim(
+            wires=wires, n_per_edge_per_wire=[[21]], nsegs=21, degree=2
+        ).compute_impedance()
+    finally:
+        bmod._HAVE_BSPLINE_ASSEMBLE_ACCEL = saved
+
+    rel = abs(z_cpp - z_np) / abs(z_np)
+    assert rel < 1e-12, f"C++ vs numpy Z assembly disagreement: rel diff {rel}"
+
+
+def test_bspline_cpp_kernel_matches_numpy():
+    """The C++ B-spline moment-integral and static-moments accelerators must
+    agree with the pure-numpy reference to ~1e-9 relative (the floating-point
+    reduction-order error is below GL quadrature precision and the closed-form
+    arithmetic precision).
+    """
+    from pysim._bspline_kernels import (
+        _seg_seg_full_moments_offedge,
+        _seg_seg_static_moments,
+        _HAVE_BSPLINE_ACCEL,
+        _HAVE_BSPLINE_STATIC_ACCEL,
+    )
+
+    if not _HAVE_BSPLINE_ACCEL or not _HAVE_BSPLINE_STATIC_ACCEL:
+        pytest.skip("C++ accelerators not built")
+
+    # Force the numpy reference paths via monkeypatching the module-level flags
+    import pysim._bspline_kernels as kmod
+
+    N = 12
+    seg = np.linspace(0, 6.0, N + 1)
+    seg_l = np.column_stack([np.zeros(N), seg[:-1], np.zeros(N)])
+    seg_r = np.column_stack([np.zeros(N), seg[1:], np.zeros(N)])
+
+    J_cpp = _seg_seg_full_moments_offedge(seg_l, seg_r, seg_l, seg_r, 0.0005, 0.3, 2, 4)
+    S_cpp = _seg_seg_static_moments(seg, 0.0005, max_d=2)
+
+    # Force numpy paths
+    saved_full = kmod._HAVE_BSPLINE_ACCEL
+    saved_static = kmod._HAVE_BSPLINE_STATIC_ACCEL
+    try:
+        kmod._HAVE_BSPLINE_ACCEL = False
+        kmod._HAVE_BSPLINE_STATIC_ACCEL = False
+        J_np = _seg_seg_full_moments_offedge(
+            seg_l, seg_r, seg_l, seg_r, 0.0005, 0.3, 2, 4
+        )
+        S_np = _seg_seg_static_moments(seg, 0.0005, max_d=2)
+    finally:
+        kmod._HAVE_BSPLINE_ACCEL = saved_full
+        kmod._HAVE_BSPLINE_STATIC_ACCEL = saved_static
+
+    rel_J = np.max(np.abs(J_cpp - J_np) / (np.abs(J_np) + 1e-30))
+    rel_S = np.max(np.abs(S_cpp - S_np) / (np.abs(S_np) + 1e-30))
+    # Both paths evaluate sympy-derived closed forms but through different
+    # math libraries (numpy / libm), so float-precision differences in
+    # arcsinh / sqrt cause ~1e-9 relative deviation. Well below the
+    # GL-quadrature precision and the antenna-Z noise floor.
+    assert rel_J < 1e-8, f"J kernel rel diff {rel_J}"
+    assert rel_S < 1e-7, f"Static kernel rel diff {rel_S}"
+
+
 @pytest.mark.parametrize("degree,nsegs", [(2, 21), (2, 81)])
 def test_bspline_dipole_converges_to_nec(degree, nsegs):
     """BSplinePySim degree-2 (quadratic) on the default half-wave dipole.
