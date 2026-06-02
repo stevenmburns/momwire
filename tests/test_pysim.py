@@ -596,6 +596,91 @@ def test_bspline_d2_hentenna_arbitrates_against_triangular():
     )
 
 
+def test_bspline_d2_hentenna_singular_enrichment():
+    """Singular basis enrichment at K≥3 junctions flips the hentenna R-rate
+    from O(1/N) to ~O(1/N^(d+1)). Pin the converged R/X at n=81 and assert
+    that the fitted convergence rate p in Z(N) = Z_inf + C/N^p satisfies
+    p > 2.5 on R — both checks catch silent regressions.
+
+    Reference values (productized C++ path, 2026-06):
+      n=21  → 42.8574 + j44.2296
+      n=41  → 43.0766 + j39.2185
+      n=81  → 43.0858 + j38.9038
+      n=161 → 43.0845 + j38.8749
+    Rate fit on R over the four points gives p ≈ 2.74.
+    """
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.47
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    eps_feed = 0.05
+    half_w = wavelength * width_factor / 2
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+    A = (0.0, half_w, 0.0)
+    B_ = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps_feed, z_mid)
+    C_ = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E_ = (0.0, -half_w, z_bot)
+    T = (0.0, -eps_feed, z_mid)
+    wires = [
+        np.array([T, S], dtype=float),
+        np.array([S, B_], dtype=float),
+        np.array([B_, A, C_, D], dtype=float),
+        np.array([T, D], dtype=float),
+        np.array([D, E_, F, B_], dtype=float),
+    ]
+    junctions = [
+        [(0, "end"), (1, "start")],
+        [(0, "start"), (3, "start")],
+        [(1, "end"), (2, "start"), (4, "end")],
+        [(2, "end"), (3, "end"), (4, "start")],
+    ]
+
+    nfeed = 3
+    ns = [21, 41, 81]
+    Rs = []
+    Xs = []
+    for n in ns:
+        npe = [[nfeed], [n], [n, n, n], [n], [n, n, n]]
+        z, _ = BSplinePySim(
+            degree=2,
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            feed_wire_index=0,
+            feed_arclength=eps_feed,
+            wavelength=wavelength,
+            wire_radius=0.0005,
+            nsegs=n,
+            junctions=junctions,
+            use_singular_enrichment=True,
+        ).compute_impedance()
+        Rs.append(z.real)
+        Xs.append(z.imag)
+
+    # Pin n=81 to the recorded productized value (5e-3 Ω tolerance leaves
+    # headroom for compiler/platform jitter but catches any constant-offset
+    # drift much smaller than the prototype's value-spread to non-enriched).
+    assert abs(Rs[2] - 43.0858) < 5e-3, f"R(n=81)={Rs[2]}, expected ≈43.0858"
+    assert abs(Xs[2] - 38.9038) < 5e-3, f"X(n=81)={Xs[2]}, expected ≈38.9038"
+
+    # Fit Z = Z_inf + C/N^p on the R component over n in {21, 41, 81}.
+    # Use the three-point Richardson-style estimator:
+    #   p ≈ log( (R(N1) - R(N2)) / (R(N2) - R(N3)) ) / log(N2/N1)
+    # with N1 < N2 < N3. The same constant C cancels.
+    dR_12 = Rs[0] - Rs[1]
+    dR_23 = Rs[1] - Rs[2]
+    assert dR_12 * dR_23 > 0, (
+        f"R differences sign-flipped — noise floor reached too early; Rs={Rs}"
+    )
+    p = np.log(abs(dR_12 / dR_23)) / np.log(ns[1] / ns[0])
+    assert p > 2.5, f"R convergence rate p={p:.2f} below the 2.5 floor (Rs={Rs})"
+
+
 @pytest.mark.parametrize("nsegs", [21, 41, 101])
 def test_sinusoidal_dipole_matches_nec2(nsegs):
     """SinusoidalPySim implements NEC2's three-term basis (Eqs 43-64 of the

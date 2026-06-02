@@ -99,6 +99,9 @@ class BSplinePySim:
         halfdriver_factor=0.962,
         wire_radius=0.0005,
         nsegs=101,
+        use_singular_enrichment=False,
+        n_qp_sing=32,
+        enrichment_min_k=3,
     ):
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
@@ -154,6 +157,20 @@ class BSplinePySim:
         self.feed_wire_index = feed_wire_index
         self.feed_arclength = feed_arclength
         self.n_qp_pair = int(n_qp_pair)
+
+        # Singular basis enrichment at K≥`enrichment_min_k` junctions.
+        # When enabled, adds ONE extra basis per (wire, end_pos) tuple at each
+        # qualifying junction, with shape Φ_sing(u) = (u/h)·log(u/h) on the
+        # adjacent segment (u measured from the junction node, so Φ_sing(0)=0
+        # matching the finite-current condition while dΦ_sing/du has a log
+        # singularity that captures the classical K≥3 junction charge-density
+        # singularity). On hentenna-class geometries this flips the R-rate
+        # from O(1/N) to ~O(1/N^(d+1)) (basis-limited). Quadrature is GL with
+        # `n_qp_sing` nodes per axis (default 32) routed through the C++
+        # `assemble_Z_enrich` accelerator.
+        self.use_singular_enrichment = bool(use_singular_enrichment)
+        self.n_qp_sing = int(n_qp_sing)
+        self.enrichment_min_k = int(enrichment_min_k)
 
         self.junctions = []
         if junctions is not None:
@@ -595,6 +612,96 @@ class BSplinePySim:
     # Driver impedance
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Singular basis enrichment at K≥3 junctions
+    # ------------------------------------------------------------------
+
+    def _enrichment_specs(self, geom):
+        """For each (wire, end_pos) at a K≥enrichment_min_k junction, return
+        the global segment index of the adjacent segment and the "orientation"
+        flag: u_local from junction = u_seg_left if end_pos == "start",
+        h - u_seg_left if end_pos == "end".
+        """
+        specs = []  # list of (junction_idx, wire_w, end_pos, seg_idx, u_origin)
+        for j_idx, jw in enumerate(self.junctions):
+            if len(jw) < self.enrichment_min_k:
+                continue
+            for wire_w, end_pos in jw:
+                if end_pos == "start":
+                    seg_idx = geom["seg_offsets"][wire_w]
+                    u_origin = "left"  # u from junction = u_seg_left
+                else:
+                    seg_idx = geom["seg_offsets"][wire_w + 1] - 1
+                    u_origin = "right"  # u from junction = h - u_seg_left
+                specs.append((j_idx, wire_w, end_pos, seg_idx, u_origin))
+        return specs
+
+    def _enrichment_Z_assemble(self, geom, supp_seg_poly, polys_poly):
+        """Assemble the (Z_pe, Z_ep, Z_ee) enrichment blocks via the C++
+        accelerator (`pysim._accelerators.assemble_Z_enrich`).
+
+        Z = [[Z_pp, Z_pe],
+             [Z_ep, Z_ee]]
+        with n_poly + n_enrich basis functions. Z_pp is built by the
+        existing polynomial assembly; the three new blocks come from
+        Gauss-Legendre quadrature over the (u·log(u/h))-shaped singular
+        basis adjacent to each K≥`enrichment_min_k` junction. Z_pe and
+        Z_ep are computed independently — the Galerkin .T shortcut is
+        mathematically exact for symmetric kernels but the productized
+        path computes both halves so a future quadrature change can't
+        silently break symmetry.
+        """
+        specs = self._enrichment_specs(geom)
+        n_enrich = len(specs)
+        if n_enrich == 0:
+            return None  # no qualifying junctions → no-op
+
+        spec_seg = np.fromiter((s[3] for s in specs), dtype=np.int64, count=n_enrich)
+        spec_origin = np.fromiter(
+            (0 if s[4] == "left" else 1 for s in specs),
+            dtype=np.int64,
+            count=n_enrich,
+        )
+
+        tangents = geom["tangents"]
+        td_all = np.ascontiguousarray(tangents @ tangents.T, dtype=np.float64)
+
+        gl_xi, gl_w = np.polynomial.legendre.leggauss(self.n_qp_sing)
+        t01 = 0.5 * (gl_xi + 1.0)
+        w01 = 0.5 * gl_w
+
+        from pysim._accelerators import assemble_Z_enrich
+
+        Z_pe, Z_ep, Z_ee = assemble_Z_enrich(
+            spec_seg,
+            spec_origin,
+            np.ascontiguousarray(geom["seg_l"], dtype=np.float64),
+            np.ascontiguousarray(geom["seg_r"], dtype=np.float64),
+            np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64),
+            td_all,
+            np.ascontiguousarray(supp_seg_poly, dtype=np.int64),
+            np.ascontiguousarray(polys_poly, dtype=np.float64),
+            float(self.wire_radius) ** 2,
+            float(self.k),
+            float(self.omega),
+            float(self.eps),
+            float(self.mu),
+            np.ascontiguousarray(t01, dtype=np.float64),
+            np.ascontiguousarray(w01, dtype=np.float64),
+        )
+
+        return {
+            "specs": specs,
+            "n_enrich": n_enrich,
+            "Z_pe": Z_pe,
+            "Z_ep": Z_ep,
+            "Z_ee": Z_ee,
+        }
+
+    # ------------------------------------------------------------------
+    # Driver impedance
+    # ------------------------------------------------------------------
+
     def compute_impedance(self):
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
@@ -607,6 +714,28 @@ class BSplinePySim:
         v = self._build_source_vector(
             geom, wire_knots, wire_basis_global, n_basis_total
         )
+
+        if self.use_singular_enrichment:
+            enrich = self._enrichment_Z_assemble(geom, supp_seg, polys)
+            if enrich is not None:
+                n_p = n_basis_total
+                n_e = enrich["n_enrich"]
+                n_total = n_p + n_e
+                Z_aug = np.zeros((n_total, n_total), dtype=np.complex128)
+                Z_aug[:n_p, :n_p] = Z
+                Z_aug[:n_p, n_p:] = enrich["Z_pe"]
+                Z_aug[n_p:, :n_p] = enrich["Z_ep"]
+                Z_aug[n_p:, n_p:] = enrich["Z_ee"]
+                v_aug = np.zeros(n_total, dtype=np.complex128)
+                v_aug[:n_p] = v
+                # Enrichment KCL: singular bases vanish at junction → 0 outflow
+                kcl_aug = np.zeros((kcl_A.shape[0], n_total), dtype=np.float64)
+                kcl_aug[:, :n_p] = kcl_A
+                coeffs = self._solve_with_kcl(Z_aug, v_aug, kcl_aug)
+                I_at_feed = v_aug @ coeffs
+                driver_impedance = 1.0 / I_at_feed
+                self.z = Z_aug
+                return driver_impedance, coeffs
 
         coeffs = self._solve_with_kcl(Z, v, kcl_A)
         I_at_feed = v @ coeffs
