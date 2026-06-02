@@ -1201,6 +1201,326 @@ seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d) 
 }
 
 
+// Assemble the (Z_pe, Z_ep, Z_ee) blocks for the singular basis enrichment at
+// K≥3 junctions (PR #47 productized path).
+//
+// Each enrichment basis e lives on a single segment adjacent to a junction.
+// The shape on that segment is Φ_sing(u) = (u/h)·log(u/h) where u is measured
+// from the junction node (u_origin=0 → u = t·h_e, u_origin=1 → u = (1-t)·h_e).
+// dΦ_sing/du = (log(u/h) + 1) / h  — log-singular at u=0, matching the K≥3
+// junction charge-density singularity.
+//
+// Integrals (all complex, single k):
+//   Z_ee[e, f] = j*ω*μ * td * I_A  +  I_Phi / (j*ω*ε)
+//     I_A   = ∫∫ Φ_e(u) Φ_f(u') G du du'
+//     I_Phi = ∫∫ Φ_e'(u) Φ_f'(u') G du du'
+//   Z_pe[m, e] = same, with polynomial basis m on one side and Φ_e on the other.
+//   Z_ep[e, m] = same, but computed independently (no .T shortcut) — the two
+//     match to floating-point precision when the same GL rule is used on both
+//     axes, but computing them separately verifies that and keeps the path
+//     robust if a future quadrature change breaks the symmetry.
+//
+// Parallelism: outer loop over m (polynomial basis index) for the (Z_pe, Z_ep)
+// work, which dominates cost (n_poly ≫ n_enrich). Z_ee is small (n_enrich²);
+// computed serially after.
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+assemble_Z_enrich(
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> spec_seg,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> spec_origin,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_per_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_seg_poly,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys_poly,
+    double a_squared,
+    double k,
+    double omega,
+    double eps_,
+    double mu_,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t01,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w01
+) {
+    auto specs_v   = spec_seg.unchecked<1>();
+    auto origin_v  = spec_origin.unchecked<1>();
+    auto sl_v      = seg_l.unchecked<2>();
+    auto sr_v      = seg_r.unchecked<2>();
+    auto h_v       = h_per_seg.unchecked<1>();
+    auto td_v      = td_all.unchecked<2>();
+    auto ss_v      = supp_seg_poly.unchecked<2>();
+    auto polys_v   = polys_poly.unchecked<3>();
+    auto t01_v     = gl_t01.unchecked<1>();
+    auto w01_v     = gl_w01.unchecked<1>();
+
+    size_t n_enrich = (size_t)spec_seg.shape(0);
+    size_t n_poly   = (size_t)supp_seg_poly.shape(0);
+    size_t n_wings  = (size_t)supp_seg_poly.shape(1);
+    size_t n_qp     = (size_t)gl_t01.shape(0);
+
+    if ((size_t)spec_origin.shape(0) != n_enrich) {
+        throw std::runtime_error("spec_origin must match spec_seg length");
+    }
+    if ((size_t)polys_poly.shape(0) != n_poly ||
+        (size_t)polys_poly.shape(1) != n_wings) {
+        throw std::runtime_error("polys_poly first two dims must match supp_seg_poly");
+    }
+    size_t d_plus_1 = (size_t)polys_poly.shape(2);
+    if ((size_t)gl_w01.shape(0) != n_qp) {
+        throw std::runtime_error("gl_t01 and gl_w01 must have matching length");
+    }
+    if (sl_v.shape(1) != 3 || sr_v.shape(1) != 3) {
+        throw std::runtime_error("seg_l/seg_r must have shape (N_seg, 3)");
+    }
+
+    py::array_t<std::complex<double>> Z_pe({n_poly, n_enrich});
+    py::array_t<std::complex<double>> Z_ep({n_enrich, n_poly});
+    py::array_t<std::complex<double>> Z_ee({n_enrich, n_enrich});
+    auto zpe_v = Z_pe.mutable_unchecked<2>();
+    auto zep_v = Z_ep.mutable_unchecked<2>();
+    auto zee_v = Z_ee.mutable_unchecked<2>();
+
+    if (n_enrich == 0) {
+        // Nothing to compute. Return empty arrays.
+        return std::make_tuple(Z_pe, Z_ep, Z_ee);
+    }
+
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+    const double omega_mu = omega * mu_;
+    const double inv_omega_eps = 1.0 / (omega * eps_);
+
+    // -----------------------------------------------------------------
+    // Per-enrichment precompute: 3D quad-point positions, Φ_sing values,
+    // dΦ_sing/du in arc length, and quadrature weights pre-scaled by h_e.
+    // -----------------------------------------------------------------
+    std::vector<double> pos_e_all(n_enrich * n_qp * 3);
+    std::vector<double> sing_val_all(n_enrich * n_qp);
+    std::vector<double> sing_dval_all(n_enrich * n_qp);
+    std::vector<double> w_e_all(n_enrich * n_qp);
+    std::vector<double> h_e_arr(n_enrich);
+    std::vector<int64_t> seg_e_arr(n_enrich);
+
+    const double eps_tiny = 1e-300;
+    for (size_t e = 0; e < n_enrich; e++) {
+        int64_t se = specs_v(e);
+        int orig = (int)origin_v(e);
+        double he = h_v(se);
+        h_e_arr[e] = he;
+        seg_e_arr[e] = se;
+        for (size_t q = 0; q < n_qp; q++) {
+            double t = t01_v(q);
+            double w = w01_v(q);
+            double u_norm = (orig == 0) ? t : (1.0 - t);
+            double u_safe = u_norm > eps_tiny ? u_norm : eps_tiny;
+            double log_u = std::log(u_safe);
+            sing_val_all[e * n_qp + q] = u_norm * log_u;
+            sing_dval_all[e * n_qp + q] = (log_u + 1.0) / he;
+            w_e_all[e * n_qp + q] = w * he;
+            double *pe = &pos_e_all[(e * n_qp + q) * 3];
+            pe[0] = (1.0 - t) * sl_v(se, 0) + t * sr_v(se, 0);
+            pe[1] = (1.0 - t) * sl_v(se, 1) + t * sr_v(se, 1);
+            pe[2] = (1.0 - t) * sl_v(se, 2) + t * sr_v(se, 2);
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // Z_ee assembly: pairs (e, f). Symmetric; fill upper triangle then mirror.
+    // -----------------------------------------------------------------
+    for (size_t e = 0; e < n_enrich; e++) {
+        for (size_t f = e; f < n_enrich; f++) {
+            double td = td_v(seg_e_arr[e], seg_e_arr[f]);
+            double IA_re = 0.0, IA_im = 0.0;
+            double IPhi_re = 0.0, IPhi_im = 0.0;
+            for (size_t q = 0; q < n_qp; q++) {
+                double wq    = w_e_all[e * n_qp + q];
+                double phiq  = sing_val_all[e * n_qp + q];
+                double dphiq = sing_dval_all[e * n_qp + q];
+                const double *pq = &pos_e_all[(e * n_qp + q) * 3];
+                double wq_phi  = wq * phiq;
+                double wq_dphi = wq * dphiq;
+                for (size_t r = 0; r < n_qp; r++) {
+                    double wr    = w_e_all[f * n_qp + r];
+                    double phir  = sing_val_all[f * n_qp + r];
+                    double dphir = sing_dval_all[f * n_qp + r];
+                    const double *pr = &pos_e_all[(f * n_qp + r) * 3];
+                    double dx = pq[0] - pr[0];
+                    double dy = pq[1] - pr[1];
+                    double dz = pq[2] - pr[2];
+                    double R = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+                    double phase = -k * R;
+                    double iR_4pi = inv_4pi / R;
+                    double Gre = std::cos(phase) * iR_4pi;
+                    double Gim = std::sin(phase) * iR_4pi;
+                    double wprod_A   = wq_phi  * (wr * phir);
+                    double wprod_Phi = wq_dphi * (wr * dphir);
+                    IA_re   += wprod_A * Gre;
+                    IA_im   += wprod_A * Gim;
+                    IPhi_re += wprod_Phi * Gre;
+                    IPhi_im += wprod_Phi * Gim;
+                }
+            }
+            // Z = j*ωμ*td*I_A + I_Phi/(jωε)
+            // j*ωμ * (re + j im) = -ωμ im + j ωμ re
+            // (re + j im) / (j ωε) = im/(ωε) - j re/(ωε)
+            double Zre = -omega_mu * td * IA_im + IPhi_im * inv_omega_eps;
+            double Zim =  omega_mu * td * IA_re - IPhi_re * inv_omega_eps;
+            std::complex<double> Z_val(Zre, Zim);
+            zee_v(e, f) = Z_val;
+            if (e != f) zee_v(f, e) = Z_val;
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // (Z_pe, Z_ep) assembly. For each polynomial basis m, for each wing of m,
+    // for each enrichment e: integrate (poly_m vs Φ_e) and (Φ_e vs poly_m).
+    //
+    // Z_pe[m, e] integrates with quad-i = polynomial axis, quad-j = singular.
+    // Z_ep[e, m] integrates with quad-i = singular axis, quad-j = polynomial.
+    // The kernel G is symmetric so the two yield identical sums in exact
+    // arithmetic; floating-point rounding is bit-for-bit identical given
+    // matching summation order, which we deliberately mirror below.
+    //
+    // OpenMP parallelizes over m. Z_pe is row-disjoint by m; Z_ep is column-
+    // disjoint by m. No reductions needed.
+    // -----------------------------------------------------------------
+    #pragma omp parallel
+    {
+        // Per-thread scratch for the polynomial-basis quad-point values.
+        std::vector<double> pos_m(n_qp * 3);
+        std::vector<double> poly_val(n_qp);
+        std::vector<double> poly_dval(n_qp);
+        std::vector<double> w_m(n_qp);
+
+        #pragma omp for schedule(static)
+        for (size_t m = 0; m < n_poly; m++) {
+            for (size_t e = 0; e < n_enrich; e++) {
+                zpe_v(m, e) = std::complex<double>(0.0, 0.0);
+                zep_v(e, m) = std::complex<double>(0.0, 0.0);
+            }
+            for (size_t w = 0; w < n_wings; w++) {
+                // Skip inactive wings (all-zero polynomial coefficients).
+                bool any_nz = false;
+                for (size_t p = 0; p < d_plus_1; p++) {
+                    if (polys_v(m, w, p) != 0.0) { any_nz = true; break; }
+                }
+                if (!any_nz) continue;
+
+                int64_t seg_m = ss_v(m, w);
+                double hm = h_v(seg_m);
+
+                for (size_t q = 0; q < n_qp; q++) {
+                    double t = t01_v(q);
+                    double u_arc = t * hm;
+                    // Horner over polys_v(m, w, :) — evaluate poly value and derivative.
+                    double pv = 0.0, dv = 0.0;
+                    // value: P(u) = Σ c_p u^p ; deriv: Σ p·c_p u^(p-1)
+                    // Evaluate as: pv = c_D ; for p = D-1..0: pv = pv*u + c_p
+                    // and dv with Horner on (p+1)*c_{p+1}: dv = D·c_D ; ...
+                    pv = polys_v(m, w, d_plus_1 - 1);
+                    dv = (double)(d_plus_1 - 1) * polys_v(m, w, d_plus_1 - 1);
+                    for (size_t pp = d_plus_1 - 1; pp-- > 0; ) {
+                        pv = pv * u_arc + polys_v(m, w, pp);
+                        if (pp >= 1) {
+                            dv = dv * u_arc + (double)pp * polys_v(m, w, pp);
+                        }
+                    }
+                    poly_val[q] = pv;
+                    poly_dval[q] = dv;
+                    w_m[q] = w01_v(q) * hm;
+                    pos_m[q*3 + 0] = (1.0 - t) * sl_v(seg_m, 0) + t * sr_v(seg_m, 0);
+                    pos_m[q*3 + 1] = (1.0 - t) * sl_v(seg_m, 1) + t * sr_v(seg_m, 1);
+                    pos_m[q*3 + 2] = (1.0 - t) * sl_v(seg_m, 2) + t * sr_v(seg_m, 2);
+                }
+
+                for (size_t e = 0; e < n_enrich; e++) {
+                    int64_t seg_e = seg_e_arr[e];
+                    double td_me = td_v(seg_m, seg_e);
+                    double td_em = td_v(seg_e, seg_m);
+
+                    // Z_pe[m, e]: i = m-axis, j = e-axis.
+                    double pe_IA_re = 0.0, pe_IA_im = 0.0;
+                    double pe_IP_re = 0.0, pe_IP_im = 0.0;
+                    // Z_ep[e, m]: i = e-axis, j = m-axis.
+                    double ep_IA_re = 0.0, ep_IA_im = 0.0;
+                    double ep_IP_re = 0.0, ep_IP_im = 0.0;
+
+                    for (size_t q = 0; q < n_qp; q++) {
+                        double wmq      = w_m[q];
+                        double pvq      = poly_val[q];
+                        double dvq      = poly_dval[q];
+                        const double *pmq = &pos_m[q*3];
+
+                        double weq_eax  = w_e_all[e * n_qp + q];
+                        double phiq_eax = sing_val_all[e * n_qp + q];
+                        double dphiq_eax= sing_dval_all[e * n_qp + q];
+                        const double *peq_eax = &pos_e_all[(e * n_qp + q) * 3];
+
+                        double wmq_pv  = wmq * pvq;
+                        double wmq_dv  = wmq * dvq;
+                        double weq_phi = weq_eax * phiq_eax;
+                        double weq_dphi= weq_eax * dphiq_eax;
+
+                        for (size_t r = 0; r < n_qp; r++) {
+                            // -- Z_pe leg: i on m, j on e --
+                            {
+                                double wer      = w_e_all[e * n_qp + r];
+                                double phir     = sing_val_all[e * n_qp + r];
+                                double dphir    = sing_dval_all[e * n_qp + r];
+                                const double *per = &pos_e_all[(e * n_qp + r) * 3];
+                                double dx = pmq[0] - per[0];
+                                double dy = pmq[1] - per[1];
+                                double dz = pmq[2] - per[2];
+                                double R = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+                                double phase = -k * R;
+                                double iR_4pi = inv_4pi / R;
+                                double Gre = std::cos(phase) * iR_4pi;
+                                double Gim = std::sin(phase) * iR_4pi;
+                                double wprod_A   = wmq_pv * (wer * phir);
+                                double wprod_Phi = wmq_dv * (wer * dphir);
+                                pe_IA_re += wprod_A   * Gre;
+                                pe_IA_im += wprod_A   * Gim;
+                                pe_IP_re += wprod_Phi * Gre;
+                                pe_IP_im += wprod_Phi * Gim;
+                            }
+                            // -- Z_ep leg: i on e, j on m --
+                            {
+                                double wmr      = w_m[r];
+                                double pvr      = poly_val[r];
+                                double dvr      = poly_dval[r];
+                                const double *pmr = &pos_m[r*3];
+                                double dx = peq_eax[0] - pmr[0];
+                                double dy = peq_eax[1] - pmr[1];
+                                double dz = peq_eax[2] - pmr[2];
+                                double R = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+                                double phase = -k * R;
+                                double iR_4pi = inv_4pi / R;
+                                double Gre = std::cos(phase) * iR_4pi;
+                                double Gim = std::sin(phase) * iR_4pi;
+                                double wprod_A   = weq_phi  * (wmr * pvr);
+                                double wprod_Phi = weq_dphi * (wmr * dvr);
+                                ep_IA_re += wprod_A   * Gre;
+                                ep_IA_im += wprod_A   * Gim;
+                                ep_IP_re += wprod_Phi * Gre;
+                                ep_IP_im += wprod_Phi * Gim;
+                            }
+                        }
+                    }
+                    double Zpe_re = -omega_mu * td_me * pe_IA_im + pe_IP_im * inv_omega_eps;
+                    double Zpe_im =  omega_mu * td_me * pe_IA_re - pe_IP_re * inv_omega_eps;
+                    double Zep_re = -omega_mu * td_em * ep_IA_im + ep_IP_im * inv_omega_eps;
+                    double Zep_im =  omega_mu * td_em * ep_IA_re - ep_IP_re * inv_omega_eps;
+                    zpe_v(m, e) += std::complex<double>(Zpe_re, Zpe_im);
+                    zep_v(e, m) += std::complex<double>(Zep_re, Zep_im);
+                }
+            }
+        }
+    }  // end omp parallel
+
+    return std::make_tuple(Z_pe, Z_ep, Z_ee);
+}
+
+
 PYBIND11_MODULE(_accelerators, m) {
     m.def("dist_outer_product", &dist_outer_product, "Compute point to point euclidean distance");
     m.def("seg_seg_quad_batch_3d", &seg_seg_quad_batch_3d,
@@ -1266,4 +1586,17 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("polys"), py::arg("td_all"),
           py::arg("omega"), py::arg("eps"), py::arg("mu"),
           py::arg("max_d"));
+    m.def("assemble_Z_enrich", &assemble_Z_enrich,
+          "Assemble (Z_pe, Z_ep, Z_ee) for the singular basis enrichment at "
+          "K≥3 junctions. Each enrichment basis is Φ_sing(u) = (u/h)·log(u/h) "
+          "on the segment adjacent to a junction, with u measured from the "
+          "junction node (origin=0 → u=t·h, origin=1 → u=(1-t)·h). Z_ep is "
+          "computed independently from Z_pe (no .T shortcut). Single-k.",
+          py::arg("spec_seg"), py::arg("spec_origin"),
+          py::arg("seg_l"), py::arg("seg_r"),
+          py::arg("h_per_seg"), py::arg("td_all"),
+          py::arg("supp_seg_poly"), py::arg("polys_poly"),
+          py::arg("a_squared"), py::arg("k"),
+          py::arg("omega"), py::arg("eps"), py::arg("mu"),
+          py::arg("gl_t01"), py::arg("gl_w01"));
 }
