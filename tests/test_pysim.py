@@ -326,6 +326,84 @@ def test_triangular_k2_junction_swept_matches_per_freq():
         assert abs(zs - z_f) < 1e-9, f"f={f}: swept={zs}, single={z_f}"
 
 
+def test_triangular_hentenna_smoke():
+    """Single-band hentenna at 28.47 MHz with the antenna_designer params_50
+    factors. Geometry is a tall narrow rectangular loop with a horizontal
+    cross-bar near the bottom; the feed sits in a small gap (T,S) at the
+    middle of the cross-bar. K=3 junctions at B (right of cross-bar) and D
+    (left of cross-bar) where the cross-bar half meets the upper and lower
+    loop perimeters; K=2 junctions at S and T where the cross-bar halves
+    meet the feed wire.
+
+        C----------------------------A
+        |                            |
+        |                            |
+        D------------T--S------------B
+        |                            |
+        |                            |
+        E----------------------------F
+    """
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.47
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    # antenna_designer hentenna params_50 (tuned for ~50 Ω feed).
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    eps = 0.05
+
+    half_w = wavelength * width_factor / 2
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+
+    A = (0.0, half_w, 0.0)
+    B = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps, z_mid)
+    C = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E = (0.0, -half_w, z_bot)
+    T = (0.0, -eps, z_mid)
+
+    N = 21
+    Nfeed = 3
+    wires = [
+        np.array([T, S], dtype=float),  # 0: feed gap
+        np.array([S, B], dtype=float),  # 1: right half of cross-bar
+        np.array(
+            [B, A, C, D], dtype=float
+        ),  # 2: upper rectangle (right-up-top-down to D)
+        np.array([T, D], dtype=float),  # 3: left half of cross-bar
+        np.array([D, E, F, B], dtype=float),  # 4: lower rectangle (down-bottom-up to B)
+    ]
+    n_per_edge_per_wire = [[Nfeed], [N], [N, N, N], [N], [N, N, N]]
+    junctions = [
+        [(0, "end"), (1, "start")],  # at S
+        [(0, "start"), (3, "start")],  # at T
+        [(1, "end"), (2, "start"), (4, "end")],  # at B (K=3)
+        [(2, "end"), (3, "end"), (4, "start")],  # at D (K=3)
+    ]
+
+    sim = TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=n_per_edge_per_wire,
+        feed_wire_index=0,
+        feed_arclength=eps,
+        wavelength=wavelength,
+        nsegs=N,
+        wire_radius=0.0005,
+        junctions=junctions,
+    )
+    z, c = sim.compute_impedance()
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert np.isfinite(c).all()
+    # Hentenna params_50 is tuned for ~50 Ω at 28.47 MHz in NEC2; the
+    # triangular Galerkin basis lands within a similar window. Use the same
+    # generous bands as the moxon/hexbeam smoke tests.
+    assert 25.0 < z.real < 110.0, f"R={z.real} out of plausible 50Ω-tuned range"
+    assert -40.0 < z.imag < 60.0, f"X={z.imag} out of plausible 50Ω-tuned range"
+
+
 def test_triangular_fandipole_two_band_smoke():
     """Two-band fan dipole (cone arrangement from antenna_designer) modelled
     with pysim junctions at S and T. Verifies the K=3 path runs, converges,

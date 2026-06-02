@@ -48,6 +48,41 @@ html, body, #root {
   margin-bottom: 4px;
 }
 
+.geometry-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 8px;
+}
+
+.geometry-select-label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.geometry-select {
+  flex: 1;
+  background: #0f1218;
+  color: var(--fg);
+  border: 1px solid #2a313d;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.geometry-select:hover {
+  border-color: #3a4150;
+}
+
+.geometry-select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 .geometry-tabs button {
   flex: 1;
   background: #0f1218;
