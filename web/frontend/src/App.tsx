@@ -7,7 +7,16 @@ type Wire = {
   knot_currents_im: number[];
 };
 
-type Geometry = "inverted_v" | "yagi" | "moxon" | "hexbeam" | "fan_dipole";
+type Geometry = "inverted_v" | "yagi" | "moxon" | "hexbeam" | "fan_dipole" | "hentenna";
+
+const GEOMETRY_OPTIONS: { id: Geometry; label: string }[] = [
+  { id: "inverted_v", label: "Inverted V" },
+  { id: "yagi", label: "Yagi" },
+  { id: "moxon", label: "Moxon" },
+  { id: "hexbeam", label: "Hexbeam" },
+  { id: "fan_dipole", label: "Fan dipole" },
+  { id: "hentenna", label: "Hentenna" },
+];
 
 type SolveResponse = {
   geometry: Geometry;
@@ -46,6 +55,10 @@ type SolveResponse = {
   band_freqs_mhz?: number[];
   slope?: number;
   cone_radius_m?: number;
+  // Hentenna-specific
+  half_width_m?: number;
+  top_height_m?: number;
+  mid_offset_m?: number;
 };
 
 type SolveRequest = {
@@ -79,6 +92,10 @@ type SolveRequest = {
   band_halfdriver_factors?: number[];
   slope?: number;
   cone_radius_m?: number;
+  // Hentenna
+  width_factor?: number;
+  top_height_factor?: number;
+  mid_height_factor?: number;
 };
 
 // Amateur HF bands the user can design for. Slider min/max snap to the
@@ -158,8 +175,14 @@ const PROJECTIONS: { id: Projection; label: string; horizAxis: 0|1|2; vertAxis: 
 function defaultProjection(geometry: Geometry): Projection {
   // V-and-fan-dipole arms run along y and droop in z, so a side (yz) view is
   // the natural one. Yagi / moxon / hexbeam are top-down (xy) because the
-  // beam axis lives in the xy plane.
-  if (geometry === "inverted_v" || geometry === "fan_dipole") return "yz";
+  // beam axis lives in the xy plane. Hentenna lives entirely in the yz
+  // plane (vertical rectangular loop), so yz is the only useful view.
+  if (
+    geometry === "inverted_v" ||
+    geometry === "fan_dipole" ||
+    geometry === "hentenna"
+  )
+    return "yz";
   return "xy";
 }
 
@@ -239,6 +262,13 @@ export function App() {
   const [hexbeamHalfdriverFactor, setHexbeamHalfdriverFactor] = useState(1.071);
   const [hexbeamTipspacerFactor, setHexbeamTipspacerFactor] = useState(0.1312);
   const [hexbeamT0Factor, setHexbeamT0Factor] = useState(0.1243);
+  // Hentenna controls (antenna_designer params_50, tuned for ~50 Ω at 28.47 MHz).
+  // width_factor: cross-bar half-length / lambda.
+  // top_height_factor: vertical rectangle height (top to bottom edge) / lambda.
+  // mid_height_factor: vertical position of cross-bar above bottom / lambda.
+  const [hentennaWidthFactor, setHentennaWidthFactor] = useState(0.1378);
+  const [hentennaTopHeightFactor, setHentennaTopHeightFactor] = useState(0.5081);
+  const [hentennaMidHeightFactor, setHentennaMidHeightFactor] = useState(0.1094);
   // Fan dipole. Per-band state is sized at 5 so changing nBands preserves
   // inactive sliders' values when the user dials it back up.
   const [fanNBands, setFanNBands] = useState(2);
@@ -445,6 +475,10 @@ export function App() {
       base.band_halfdriver_factors = fanHalfdriverFactors.slice(0, fanNBands);
       base.slope = fanSlope;
       base.cone_radius_m = fanConeRadius;
+    } else if (geometry === "hentenna") {
+      base.width_factor = hentennaWidthFactor;
+      base.top_height_factor = hentennaTopHeightFactor;
+      base.mid_height_factor = hentennaMidHeightFactor;
     } else {
       base.halfdriver_factor = hexbeamHalfdriverFactor;
       base.tipspacer_factor = hexbeamTipspacerFactor;
@@ -495,6 +529,7 @@ export function App() {
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
+    hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     nPerWire, designFreq, measFreq, wireRadius,
     groundEnabled, groundFast, heightM,
@@ -532,6 +567,7 @@ export function App() {
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
+    hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     nPerWire, designFreq, wireRadius,
     groundEnabled, groundFast, heightM,
@@ -559,6 +595,7 @@ export function App() {
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
+    hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     nPerWire, designFreq, measFreq, wireRadius,
     groundEnabled, groundFast, heightM,
@@ -726,50 +763,23 @@ export function App() {
       <aside className="sidebar">
         <h1>pysim — interactive</h1>
 
-        <div className="geometry-tabs" role="tablist">
-          <button
-            role="tab"
-            aria-selected={geometry === "inverted_v"}
-            className={geometry === "inverted_v" ? "active" : ""}
-            onClick={() => setGeometry("inverted_v")}
+        <div className="geometry-select-row">
+          <label className="geometry-select-label" htmlFor="geometry-select">
+            antenna
+          </label>
+          <select
+            id="geometry-select"
+            className="geometry-select"
+            value={geometry}
+            onChange={(e) => setGeometry(e.target.value as Geometry)}
           >
-            inverted V
-          </button>
-          <button
-            role="tab"
-            aria-selected={geometry === "yagi"}
-            className={geometry === "yagi" ? "active" : ""}
-            onClick={() => setGeometry("yagi")}
-          >
-            Yagi
-          </button>
-          <button
-            role="tab"
-            aria-selected={geometry === "moxon"}
-            className={geometry === "moxon" ? "active" : ""}
-            onClick={() => setGeometry("moxon")}
-          >
-            Moxon
-          </button>
-          <button
-            role="tab"
-            aria-selected={geometry === "hexbeam"}
-            className={geometry === "hexbeam" ? "active" : ""}
-            onClick={() => setGeometry("hexbeam")}
-          >
-            Hexbeam
-          </button>
-          <button
-            role="tab"
-            aria-selected={geometry === "fan_dipole"}
-            className={geometry === "fan_dipole" ? "active" : ""}
-            onClick={() => setGeometry("fan_dipole")}
-          >
-            Fan dipole
-          </button>
+            {GEOMETRY_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </div>
-
-        <div className="group-label">antenna</div>
 
         {geometry === "inverted_v" && (
           <>
@@ -1000,6 +1010,53 @@ export function App() {
                 step={0.001}
                 value={hexbeamT0Factor}
                 onInput={(e) => setHexbeamT0Factor(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+          </>
+        )}
+
+        {geometry === "hentenna" && (
+          <>
+            <div className="field">
+              <label>
+                <span>width factor</span>
+                <span>{hentennaWidthFactor.toFixed(4)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.05}
+                max={0.30}
+                step={0.0005}
+                value={hentennaWidthFactor}
+                onInput={(e) => setHentennaWidthFactor(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>top height factor</span>
+                <span>{hentennaTopHeightFactor.toFixed(4)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.30}
+                max={0.70}
+                step={0.0005}
+                value={hentennaTopHeightFactor}
+                onInput={(e) => setHentennaTopHeightFactor(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>mid height factor</span>
+                <span>{hentennaMidHeightFactor.toFixed(4)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.03}
+                max={0.30}
+                step={0.0005}
+                value={hentennaMidHeightFactor}
+                onInput={(e) => setHentennaMidHeightFactor(Number((e.target as HTMLInputElement).value))}
               />
             </div>
           </>
@@ -1392,6 +1449,22 @@ export function App() {
               <div className="row">
                 <span>tip spacer</span>
                 <span className="val">{result.tipspacer_m?.toFixed(3)} m</span>
+              </div>
+            </>
+          )}
+          {result?.geometry === "hentenna" && (
+            <>
+              <div className="row">
+                <span>half width</span>
+                <span className="val">{result.half_width_m?.toFixed(3)} m</span>
+              </div>
+              <div className="row">
+                <span>top height</span>
+                <span className="val">{result.top_height_m?.toFixed(3)} m</span>
+              </div>
+              <div className="row">
+                <span>mid offset</span>
+                <span className="val">{result.mid_offset_m?.toFixed(3)} m</span>
               </div>
             </>
           )}
