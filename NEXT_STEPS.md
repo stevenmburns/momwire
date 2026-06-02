@@ -125,9 +125,67 @@ Ordered by what I'd actually do next, not by what's most ambitious.
 
    pysim and pymininec — two independently-implemented MoM solvers in different basis families (triangular Galerkin vs pulse) — **agree on R to ~2 Ω across N**. PyNEC's R drifts downward with N (51.6 → 46.8, a further 4.8 Ω drift from N=21→81). The gap to pysim/pymininec is ~7 Ω at N=21 and ~12 Ω at N=81. The X gap is now small in all three solvers. pymininec's X diverges with N as documented (pulse-basis convergence-failure mode), so only its R is useful — R agreement with pysim across N is the load-bearing evidence.
 
-   **Decision**: accept the remaining R disagreement as a known NEC2-vs-others formulation gap and move on. Pysim is not the outlier — NEC2 is. The literature attributes this to NEC2's source-at-K-wire-junction handling and the thin-wire-kernel choice (these caveats apply independent of wire diameter, which is uniform in our model — that ruled out the dissimilar-diameter literature concerns). NEC4 (option a) would be a fourth datapoint if the question resurfaces but is not urgent.
+   **Decision**: accept the remaining R disagreement as a known NEC2-vs-others formulation gap and move on. Pysim is not the outlier — NEC2 is. The literature attributes this to NEC2's source-at-K-wire-junction handling and the thin-wire-kernel choice (these caveats apply independent of wire diameter, which is uniform in our model — that ruled out the dissimilar-diameter literature concerns). NEC4 is *not* a useful arbiter here: it shares NEC2's pulse-ish basis, delta-gap source, and thin-wire kernel for normal-radius wires, and the literature finds NEC4 vs NEC2 differences of <5 Ω for free-space wire antennas with uniform diameter. A genuinely independent arbiter would need a different formulation: higher-order B-spline in pysim (item 9 — cheapest in-codebase path), FDTD, or a surface-MoM with RWG basis.
 
    **Implication for the web UI**: the "solver agreement diagnostic" idea in item 10 should now treat fan-dipole pysim/PyNEC R disagreement as expected (and *growing* with K and N), not a bug indicator. The X agreement is the new baseline.
+
+13. **Hentenna cross-solver convergence — pysim converges, PyNEC diverges super-logarithmically.** Per-solver convergence sweep on the single-band hentenna at params_50 (28.47 MHz, free-space, r=0.5 mm, uniform N segments per non-feed edge). Feed-wire segment count chosen per backend so the source sits at the geometric centre of the T→S gap: EVEN for pysim (tent-basis interior knot at z=0) and ODD for PyNEC (delta-gap segment centred on z=0). The parity choice biases R by ~1 Ω in PyNEC and X by ~0.04 Ω in pysim if mismatched — both small but worth being right.
+
+    ```
+      n   | pys nf |  pysim (R + jX)    | pyn nf |  PyNEC (R + jX)
+      15  |    2   |  43.20 + j37.14    |    3   |  45.61  −j5.77
+      21  |    4   |  43.17 + j38.07    |    3   |  45.60  −j4.60     ← UI default
+      41  |    6   |  43.14 + j38.71    |    5   |  45.44  −j1.84
+      81  |   12   |  43.13 + j38.87    |   11   |  45.24  +j1.65
+     161  |   24   |  43.13 + j38.90    |   23   |  45.01  +j6.54
+     201  |   28   |  43.13 + j38.91    |   29   |  44.91  +j8.67
+     281  |   40   |  43.14 + j38.91    |   41   |  44.73 +j12.72
+     441  |   64   |  43.14 + j38.91    |   63   |  44.42 +j20.22
+     601  |   86   |  43.15 + j38.91    |   85   |  44.16 +j26.75
+     661  |   94   |  43.15 + j38.91    |   95   |  44.07 +j29.01     ← last n before thin-wire wall
+     701+ |        |                    |        |  error: first-segment midpoint intersects neighbor (seg ≈ 1.7× r on cross-bar)
+    ```
+
+    Pysim is stable to 3 sig figs from n=80 onward, locked at ~43.13 + j38.91 (a hint of upward R drift at very large n — 43.13 at n=80, 43.15 at n=661 — likely segment-radius interaction on the pysim side). PyNEC does *not* asymptote: `dX/d(log n)` increases monotonically across the sweep (3.5 at n=15→21, 12.1 at n=201→281, 23.8 at n=601→661 — never constant or decreasing), so the growth is super-logarithmic. The earlier framing "PyNEC is heading toward pysim's converged value" was sloppy — the trend would *cross* +j38.91 only if it kept going indefinitely past it, and it appears to. At the last feasible n (661, just before the cross-bar at 0.676 m / r=0.5 mm hits NEC's segment ≥ 2·radius rule), PyNEC X = +j29.01, still ~10 Ω below pysim and accelerating.
+
+    **Third-solver corroboration on the canonical M-Hentenna (W=λ/6, H=λ/2, feed at λ/10).** Babli/Yannopoulou/Zimourtopoulos ([viXra:1811.0473](https://vixra.org/abs/1811.0473)) report R ≈ 65 Ω, X ≈ 0 Ω at the M-Hentenna's design freq, using Richmond's RICHWIRE (piecewise-sinusoidal MoM at OSU, [Richmond 1974](https://apps.dtic.mil/sti/citations/ADA015377)) — a completely independent code lineage from NEC. Re-running our pysim at the paper's r/λ ≈ 0.0037 scaling: pysim gives 66.75 + j6.0 (R within 2 Ω of RICHWIRE; X near zero), stable across n=12..161. PyNEC can't directly run the paper's geometry — at r/λ ≈ 0.0037 with W=λ/6, the cross-bar fails NEC's segment ≥ 2·radius rule for any n ≥ ~9. So **pysim's basis is corroborated by RICHWIRE on M-Hentenna**, but this only carries over to params_50 by argument — they share the topology, not the dimensions. The paper measured *patterns* in an anechoic chamber, not impedance — no physical Z ground-truth was found in any of the open hentenna literature surveyed (OE9HRV field report, DK7ZB page, portable-antennas.com, the 1982 QST article reference, the 1996 Kinoshita reference; none publish a measured R+jX).
+
+    Likely interpretation: this is the same "imag part diverges with N" pathology already documented for the legacy pulse-basis pysim in [docs/convergence_analysis.md](docs/convergence_analysis.md), surfacing in PyNEC on the hentenna's particular geometry. **Which solver is physically correct remains unsettled** — pysim being converged and PyNEC being non-convergent doesn't automatically make pysim right; pysim's converged value could still reflect a systematic error in the tent basis that doesn't show up as non-convergence (it would just converge to the wrong place). NEC4 is *not* a useful arbiter (same MoM family, same pulse-ish basis, same delta-gap, same thin-wire kernel — literature has NEC2/NEC4 differing by <5 Ω on free-space wire antennas, much smaller than the 10 Ω residual here). What would arbitrate is a method in a fundamentally different formulation: see "What's open" below.
+
+    **Feed-model probe (the same Tsai magnetic-frill from item 5, re-applied on the hentenna).** A subclass of `TriangularPySim` reproducing the dbbc300 frill source vector was run across n=15..161 with b/a=2.3 (NEC2's ~50 Ω default), and a separate b/a sensitivity sweep at fixed n=81:
+
+    ```
+        n  |   delta-gap         |   frill (b/a=2.3)
+        15 |  43.208 + j37.161   |  43.212 + j37.168
+        21 |  43.167 + j38.058   |  43.171 + j38.066
+        81 |  43.123 + j38.828   |  43.127 + j38.835
+       161 |  43.119 + j38.859   |  43.124 + j38.867
+
+        b/a  |   frill Z at n=81
+        1.5  |  43.125 + j38.832
+        2.3  |  43.127 + j38.835
+        5.0  |  43.140 + j38.849
+       10.0  |  43.180 + j38.887
+       30.0  |  43.487 + j39.172
+    ```
+
+    Frill − delta-gap = (+0.005, +0.008j) Ω at any sensible b/a. Even pushing b/a to 30 only shifts Z by ~0.5 Ω. **The feed-singularity hypothesis is rejected for the hentenna**, same null result as item 5 (V dipoles) and item 12 (fandipole K=3). Pysim's converged Z does *not* depend on whether the feed is modelled as δ-gap or a finite-extent coaxial frill, so calling pysim "the converged answer for a basis-bandlimited feed" was overstated — the source-vector projection isn't the lever. The non-convergence in PyNEC is therefore not a feed-singularity artifact either; the mechanism remains open and lies somewhere in the basis × kernel × junction interaction that the three probes (5, 12, 13) have so far ruled out as feed-related.
+
+    pymininec at n=21 also read −j5.04 (matching PyNEC). Given the convergence picture, this is the same under-convergence at the same coarse n on two pulse-basis solvers — not an independent confirmation of "−j5 is correct." A per-n pymininec sweep would confirm it shows the same super-log climb.
+
+    **Relation to item 8 (fandipole).** Inverted-looking but structurally consistent: there pysim/pymininec agreed on R against PyNEC's drift; here PyNEC drifts on X with no asymptote in sight. Both cases point to the same conclusion: **on multi-wire/junction geometries with a delta-gap feed, NEC's pulse-ish basis can fail to converge, while pysim's tent basis gives a finite (basis-defined) value**. The `tests/test_pysim.py` comment attributing the fan-dipole pysim/PyNEC gap to "basis-shape at K=3 junctions" should be re-checked against an explicit per-solver convergence sweep — it may be the same non-convergence story.
+
+    **What's open**:
+    - Add hentenna to the cross-solver comparison scripts (extend `scripts/compare_fandipole_solvers.py` or a new `compare_hentenna_solvers.py`) and have it plot `X vs log(n)` so the super-log signature is visible at a glance.
+    - Per-n pymininec sweep on the hentenna to confirm it shows the same super-log climb (vs converging or hitting a different wall).
+    - Re-run the fandipole at multiple n with all three solvers and re-do the `dX/d(log n)` analysis to test whether the K=3 "basis-shape" story is actually a non-convergence story too.
+    - Decide what to do about the UI default for hentenna. n=21 is fine for pysim and badly wrong for PyNEC, and unlike a normal under-convergence there's no "high enough N" that fixes PyNEC — it just keeps drifting. Options: keep n=21 + UI warning that PyNEC on hentenna is non-convergent, raise the default and accept the cost, or refuse PyNEC for hentenna at the request layer (least surprising).
+    - The mechanism behind PyNEC's super-log divergence remains open. Probes that have ruled out causes: feed model (item 5, item 13 frill probe — frill barely changes pysim's Z), K=3 junction kernel regularization (item 12), junction multiplicity (item 12, K=1/2/3 all show ~constant ΔX). Remaining candidates worth a probe: NEC2's source-on-segment-containing-junction handling; thin-wire kernel behaviour on segments adjacent to the source on a short feed wire; whether pysim's tent basis has its own basis-induced regularization at the junction that PyNEC lacks.
+    - **What would arbitrate pysim vs PyNEC** (which is the bigger open question — pysim could still be converged-to-the-wrong-place). NEC4 won't do it (same MoM family). Independent arbiters, ranked by cost:
+      1. **Higher-order B-spline in pysim** (item 9, already on the roadmap). Same MoM machinery, degree-2 or degree-3 basis. If degree-2 converges to the same +38.87, the tent basis isn't introducing systematic error. If it lands elsewhere, the tent basis has a problem.
+      2. **FDTD** (openEMS, Meep, or similar). Completely different formulation — no MoM basis, no delta-gap singularity. Genuinely independent. Modest setup effort but no in-codebase pieces yet.
+      3. **Surface-MoM with RWG basis** treating the wire as a thin cylinder. Different basis, different kernel singularity, same Maxwell.
+      4. **Published measurement.** Hentennas are a 1970s amateur-radio antenna with measured VSWR/Z data possibly in the JA literature; a search and translation pass might find a ground-truth point for params_50.
 
 ### Interactive UI follow-ups
 
