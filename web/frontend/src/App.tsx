@@ -61,9 +61,131 @@ type SolveResponse = {
   mid_offset_m?: number;
 };
 
+// Backend selector — three PySim model variants + PyNEC. Per-backend
+// `model_options` are forwarded to server.py's _make_pysim_sim.
+type Backend = "triangular" | "sinusoidal" | "bspline" | "pynec";
+
+const BACKEND_LABEL: Record<Backend, string> = {
+  triangular: "Triangular",
+  sinusoidal: "Sinusoidal",
+  bspline: "B-spline",
+  pynec: "PyNEC",
+};
+
+const BACKEND_ORDER: Backend[] = ["triangular", "sinusoidal", "bspline", "pynec"];
+
+// Only Triangular has the PEC image-method ground; PyNEC has its own
+// Sommerfeld / reflection-coefficient ground. Sinusoidal and B-spline are
+// free-space-only right now (no ground_z constructor kwarg).
+function backendSupportsGround(b: Backend): boolean {
+  return b === "triangular" || b === "pynec";
+}
+
+type CommonOpts = { nPerWire: number; wireRadius: number };
+
+type TriangularOpts = CommonOpts & { nQpReg: number; nQpOff: number };
+type SinusoidalOpts = CommonOpts & { nQpConst: number };
+type BSplineOpts = CommonOpts & {
+  degree: 1 | 2;
+  nQpPair: number;
+  feedSmoothingFactor: number | null; // null = sharp delta-gap
+  useSingularEnrichment: boolean;
+  nQpSing: number;
+  enrichmentMinK: number;
+  nQpSource: number;
+};
+type PyNECOpts = CommonOpts;
+
+type BackendOptsMap = {
+  triangular: TriangularOpts;
+  sinusoidal: SinusoidalOpts;
+  bspline: BSplineOpts;
+  pynec: PyNECOpts;
+};
+
+const DEFAULT_BACKEND_OPTS: BackendOptsMap = {
+  triangular: { nPerWire: 30, wireRadius: 0.0005, nQpReg: 4, nQpOff: 4 },
+  sinusoidal: { nPerWire: 30, wireRadius: 0.0005, nQpConst: 8 },
+  bspline: {
+    nPerWire: 30,
+    wireRadius: 0.0005,
+    degree: 2,
+    nQpPair: 4,
+    feedSmoothingFactor: null,
+    useSingularEnrichment: false,
+    nQpSing: 32,
+    enrichmentMinK: 3,
+    nQpSource: 16,
+  },
+  pynec: { nPerWire: 30, wireRadius: 0.0005 },
+};
+
+// Three abstract solver slots. Each holds one backend choice and its
+// options; the user picks A/B/C with the row of buttons, configures the
+// inhabitants from the per-slot gear menu. Lets the same UI compare
+// e.g. "Triangular @ N=40" against "B-spline @ N=21 with enrichment"
+// without losing either setup.
+type Slot = "A" | "B" | "C";
+const SLOT_ORDER: Slot[] = ["A", "B", "C"];
+
+type SlotConfig = {
+  backend: Backend;
+  opts: BackendOptsMap[Backend];
+};
+
+const DEFAULT_SLOTS: Record<Slot, SlotConfig> = {
+  A: {
+    backend: "triangular",
+    opts: { ...DEFAULT_BACKEND_OPTS.triangular, nPerWire: 40 },
+  },
+  B: {
+    backend: "bspline",
+    opts: {
+      ...DEFAULT_BACKEND_OPTS.bspline,
+      nPerWire: 21,
+      useSingularEnrichment: true,
+    },
+  },
+  C: {
+    backend: "pynec",
+    opts: { ...DEFAULT_BACKEND_OPTS.pynec, nPerWire: 41 },
+  },
+};
+
+// Translates the camelCase frontend options into the snake_case kwargs the
+// server forwards to each PySim model class constructor.
+function modelOptionsForRequest(
+  backend: Backend,
+  opts: BackendOptsMap[Backend],
+): Record<string, unknown> {
+  if (backend === "triangular") {
+    const o = opts as TriangularOpts;
+    return { n_qp_reg: o.nQpReg, n_qp_off: o.nQpOff };
+  }
+  if (backend === "sinusoidal") {
+    const o = opts as SinusoidalOpts;
+    return { n_qp_const: o.nQpConst };
+  }
+  if (backend === "bspline") {
+    const o = opts as BSplineOpts;
+    return {
+      degree: o.degree,
+      n_qp_pair: o.nQpPair,
+      n_qp_source: o.nQpSource,
+      feed_smoothing_factor: o.feedSmoothingFactor,
+      use_singular_enrichment: o.useSingularEnrichment,
+      n_qp_sing: o.nQpSing,
+      enrichment_min_k: o.enrichmentMinK,
+    };
+  }
+  return {};
+}
+
 type SolveRequest = {
   geometry: Geometry;
   solver: "pysim" | "pynec";
+  pysim_model?: "triangular" | "sinusoidal" | "bspline";
+  model_options?: Record<string, unknown>;
   n_per_wire: number;
   design_freq_mhz: number;
   measurement_freq_mhz: number;
@@ -292,14 +414,55 @@ export function App() {
       ),
     [fanBandFreqs, fanHalfdriverFactors]
   );
-  // Shared
-  const [solver, setSolver] = useState<"pysim" | "pynec">("pysim");
-  const [nPerWire, setNPerWire] = useState(30);
+  // Solver slots A / B / C — each one holds its own backend + options so
+  // the user can switch between configured solvers with a single click
+  // and tune each one independently from its gear menu.
+  const [activeSlot, setActiveSlot] = useState<Slot>("A");
+  const [slots, setSlots] = useState<Record<Slot, SlotConfig>>(DEFAULT_SLOTS);
+  const [gearOpen, setGearOpen] = useState<Slot | null>(null);
+  const activeConfig = slots[activeSlot];
+  const backend = activeConfig.backend;
+  const currentOpts = activeConfig.opts;
+  const nPerWire = currentOpts.nPerWire;
+  const wireRadius = currentOpts.wireRadius;
+  // Stable hash of the active slot's config so useEffect can depend on it.
+  const backendOptsKey = JSON.stringify(activeConfig);
+  function updateSlotOpts(slot: Slot, patch: Partial<BackendOptsMap[Backend]>) {
+    setSlots((prev) => ({
+      ...prev,
+      [slot]: {
+        ...prev[slot],
+        opts: { ...prev[slot].opts, ...patch } as BackendOptsMap[Backend],
+      },
+    }));
+  }
+  function setSlotBackend(slot: Slot, newBackend: Backend) {
+    // Preserve segments-per-wire and wire-radius across the swap so the
+    // user keeps their geometry-sizing choices when comparing models;
+    // model-specific kwargs revert to that backend's defaults.
+    setSlots((prev) => {
+      const prevOpts = prev[slot].opts;
+      const defaults = DEFAULT_BACKEND_OPTS[newBackend];
+      return {
+        ...prev,
+        [slot]: {
+          backend: newBackend,
+          opts: {
+            ...defaults,
+            nPerWire: prevOpts.nPerWire,
+            wireRadius: prevOpts.wireRadius,
+          } as BackendOptsMap[Backend],
+        },
+      };
+    });
+  }
+  function resetSlot(slot: Slot) {
+    setSlots((prev) => ({ ...prev, [slot]: DEFAULT_SLOTS[slot] }));
+  }
   const [band, setBand] = useState<Band>("20m");
   const [designFreq, setDesignFreq] = useState(BAND_BY_ID["20m"].default);
   const [measFreq, setMeasFreq] = useState(BAND_BY_ID["20m"].default);
   const [linkMeas, setLinkMeas] = useState(true);
-  const [wireRadius, setWireRadius] = useState(0.0005);
   // Ground plane (PyNEC only). Geometry is lifted by heightM when enabled.
   const [groundEnabled, setGroundEnabled] = useState(false);
   const [groundFast, setGroundFast] = useState(false);
@@ -438,13 +601,14 @@ export function App() {
   const sendStartRef = useRef(0);
 
   function buildRequest(): SolveRequest {
-    // Both solvers support ground now: PyNEC uses Sommerfeld-Norton (or the
-    // fast reflection-coefficient approximation) with εr=10, σ=0.002; pysim
-    // uses the PEC image method.
-    const groundActive = groundEnabled;
+    // Both solver families support ground: PyNEC uses Sommerfeld-Norton (or
+    // the fast reflection-coefficient approximation) with εr=10, σ=0.002;
+    // pysim's Triangular model uses the PEC image method. Sinusoidal /
+    // B-spline don't model ground — the gear UI grays the toggle for them.
+    const groundActive = groundEnabled && backendSupportsGround(backend);
     const base: SolveRequest = {
       geometry,
-      solver,
+      solver: backend === "pynec" ? "pynec" : "pysim",
       n_per_wire: nPerWire,
       design_freq_mhz: designFreq,
       measurement_freq_mhz: measFreq,
@@ -453,6 +617,10 @@ export function App() {
       ground_fast: groundActive && groundFast,
       height_m: heightM,
     };
+    if (backend !== "pynec") {
+      base.pysim_model = backend;
+      base.model_options = modelOptionsForRequest(backend, currentOpts);
+    }
     if (geometry === "inverted_v") {
       base.angle_deg = angle;
       base.halfdriver_factor = halfdriverFactor;
@@ -523,7 +691,7 @@ export function App() {
     requestSolve();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    geometry, solver,
+    geometry, backend, backendOptsKey,
     angle, halfdriverFactor,
     driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
@@ -531,7 +699,7 @@ export function App() {
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
     hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
-    nPerWire, designFreq, measFreq, wireRadius,
+    designFreq, measFreq,
     groundEnabled, groundFast, heightM,
   ]);
 
@@ -561,7 +729,7 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    geometry, solver,
+    geometry, backend, backendOptsKey,
     angle, halfdriverFactor,
     driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
@@ -569,7 +737,7 @@ export function App() {
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
     hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
-    nPerWire, designFreq, wireRadius,
+    designFreq,
     groundEnabled, groundFast, heightM,
     geometry === "fan_dipole" ? measFreq : null,
   ]);
@@ -579,7 +747,7 @@ export function App() {
   useEffect(() => {
     if (patternTimerRef.current) window.clearTimeout(patternTimerRef.current);
     setPattern(null);
-    if (solver !== "pynec") return;
+    if (backend !== "pynec") return;
     patternTimerRef.current = window.setTimeout(() => {
       runPattern();
       patternTimerRef.current = null;
@@ -589,7 +757,7 @@ export function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    geometry, solver,
+    geometry, backend, backendOptsKey,
     angle, halfdriverFactor,
     driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
     nDirectors, directorSpacingWavelengths, directorSizeFactor,
@@ -597,7 +765,7 @@ export function App() {
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
     hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
-    nPerWire, designFreq, measFreq, wireRadius,
+    designFreq, measFreq,
     groundEnabled, groundFast, heightM,
   ]);
 
@@ -619,7 +787,7 @@ export function App() {
     // user is tuning) — wider would cross into neighbouring band tuning
     // and clutter the Smith trajectory. Single-band antennas keep the
     // broader 0.8x..1.25x for the resonance / out-of-band picture.
-    const slowGround = solver === "pynec" && groundEnabled && !groundFast;
+    const slowGround = backend === "pynec" && groundEnabled && !groundFast;
     const N = slowGround ? 21 : 41;
     const sweepAnchor = geometry === "fan_dipole" ? measFreq : designFreq;
     const multiband = geometry === "fan_dipole";
@@ -1192,50 +1360,55 @@ export function App() {
           </div>
         )}
 
-        <div className="field">
-          <label>
-            <span>wire radius (m)</span>
-          </label>
-          <input
-            type="number"
-            step={0.0001}
-            value={wireRadius}
-            onChange={(e) => setWireRadius(Number(e.target.value) || 0)}
-          />
-        </div>
-
         <div className="group-label">simulation</div>
 
         <div className="field">
           <label>
-            <span>solver</span>
-            <span>{solver}</span>
+            <span>solver slot</span>
+            <span>{BACKEND_LABEL[backend]} · N={nPerWire}</span>
           </label>
-          <div className="geometry-tabs" role="tablist">
-            <button
-              role="tab"
-              aria-selected={solver === "pysim"}
-              className={solver === "pysim" ? "active" : ""}
-              onClick={() => setSolver("pysim")}
-            >
-              pysim
-            </button>
-            <button
-              role="tab"
-              aria-selected={solver === "pynec"}
-              className={solver === "pynec" ? "active" : ""}
-              onClick={() => setSolver("pynec")}
-            >
-              PyNEC
-            </button>
+          <div className="backend-tabs" role="tablist">
+            {SLOT_ORDER.map((s) => {
+              const cfg = slots[s];
+              return (
+                <div key={s} className="backend-tab-cell">
+                  <button
+                    role="tab"
+                    aria-selected={activeSlot === s}
+                    className={`backend-tab-btn ${activeSlot === s ? "active" : ""}`}
+                    title={`${BACKEND_LABEL[cfg.backend]}, N=${cfg.opts.nPerWire}`}
+                    onClick={() => setActiveSlot(s)}
+                  >
+                    <span className="slot-letter">{s}</span>
+                    <span className="slot-sub">{BACKEND_LABEL[cfg.backend]}</span>
+                  </button>
+                  <button
+                    className="backend-gear-btn"
+                    title={`Slot ${s} options`}
+                    aria-label={`Slot ${s} options`}
+                    onClick={() => setGearOpen(s)}
+                  >
+                    ⚙
+                  </button>
+                </div>
+              );
+            })}
           </div>
         </div>
+
+        {!backendSupportsGround(backend) && groundEnabled && (
+          <div className="field" title="Sinusoidal and B-spline don't model ground; ignored until you switch to Triangular or PyNEC.">
+            <em style={{ color: "var(--muted)", fontSize: 12 }}>
+              ground plane ignored for {BACKEND_LABEL[backend]}
+            </em>
+          </div>
+        )}
 
         <div className="field">
           <label
             className="link-toggle"
             title={
-              solver === "pynec"
+              backend === "pynec"
                 ? "Sommerfeld-Norton ground (εr=10, σ=0.002 S/m)"
                 : "PEC image-method ground (perfect electric conductor)"
             }
@@ -1243,14 +1416,15 @@ export function App() {
             <input
               type="checkbox"
               checked={groundEnabled}
+              disabled={!backendSupportsGround(backend)}
               onChange={(e) => setGroundEnabled(e.target.checked)}
             />
             ground plane{" "}
-            {solver === "pynec"
+            {backend === "pynec"
               ? "(εr=10, σ=0.002 S/m)"
               : "(PEC, perfect conductor)"}
           </label>
-          {solver === "pynec" && groundEnabled && (
+          {backend === "pynec" && groundEnabled && (
             <label
               className="link-toggle"
               title="Reflection-coefficient approximation (NEC ITYPE=0). ~10x faster per solve than Sommerfeld-Norton; degrades for very-low antennas near the horizon."
@@ -1281,21 +1455,6 @@ export function App() {
             />
           </div>
         )}
-
-        <div className="field">
-          <label>
-            <span>segments / wire (N)</span>
-            <span>{nPerWire}</span>
-          </label>
-          <input
-            type="range"
-            min={10}
-            max={80}
-            step={1}
-            value={nPerWire}
-            onInput={(e) => setNPerWire(Number((e.target as HTMLInputElement).value))}
-          />
-        </div>
 
         <div className="field">
           <label>
@@ -1509,6 +1668,18 @@ export function App() {
             <span className="val">{rttMs != null ? `${rttMs.toFixed(1)} ms` : "—"}</span>
           </div>
         </div>
+
+        {gearOpen && (
+          <BackendConfigModal
+            slot={gearOpen}
+            backend={slots[gearOpen].backend}
+            opts={slots[gearOpen].opts}
+            onChangeBackend={(b) => setSlotBackend(gearOpen, b)}
+            onPatch={(patch) => updateSlotOpts(gearOpen, patch)}
+            onReset={() => resetSlot(gearOpen)}
+            onClose={() => setGearOpen(null)}
+          />
+        )}
       </aside>
 
       <main className="stage">
@@ -1601,6 +1772,277 @@ export function App() {
         </div>
         <div className="status">ws: {status}</div>
       </main>
+    </div>
+  );
+}
+
+type BackendConfigProps = {
+  slot: Slot;
+  backend: Backend;
+  opts: BackendOptsMap[Backend];
+  onChangeBackend: (b: Backend) => void;
+  onPatch: (patch: Partial<BackendOptsMap[Backend]>) => void;
+  onReset: () => void;
+  onClose: () => void;
+};
+
+function BackendConfigModal({
+  slot,
+  backend,
+  opts,
+  onChangeBackend,
+  onPatch,
+  onReset,
+  onClose,
+}: BackendConfigProps) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="backend-config-overlay" onClick={onClose}>
+      <div
+        className="backend-config-modal"
+        role="dialog"
+        aria-label={`Slot ${slot} options`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="backend-config-header">
+          <strong>Slot {slot} — {BACKEND_LABEL[backend]}</strong>
+          <button className="backend-config-close" onClick={onClose} aria-label="Close">×</button>
+        </div>
+
+        <div className="backend-config-body">
+          <div className="field">
+            <label>
+              <span>solver</span>
+              <span>{BACKEND_LABEL[backend]}</span>
+            </label>
+            <div className="geometry-tabs" role="tablist">
+              {BACKEND_ORDER.map((b) => (
+                <button
+                  key={b}
+                  role="tab"
+                  aria-selected={backend === b}
+                  className={backend === b ? "active" : ""}
+                  onClick={() => onChangeBackend(b)}
+                >
+                  {BACKEND_LABEL[b]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <NumberField
+            label="segments / wire (N)"
+            value={opts.nPerWire}
+            min={4}
+            max={120}
+            step={1}
+            onChange={(v) => onPatch({ nPerWire: v })}
+          />
+          <NumberField
+            label="wire radius (m)"
+            value={opts.wireRadius}
+            step={0.0001}
+            onChange={(v) => onPatch({ wireRadius: v })}
+          />
+
+          {backend === "triangular" && (
+            <>
+              <NumberField
+                label="n_qp_reg (same-edge GL pts)"
+                value={(opts as TriangularOpts).nQpReg}
+                min={2}
+                max={16}
+                step={1}
+                onChange={(v) => onPatch({ nQpReg: v } as never)}
+              />
+              <NumberField
+                label="n_qp_off (cross-edge GL pts)"
+                value={(opts as TriangularOpts).nQpOff}
+                min={2}
+                max={16}
+                step={1}
+                onChange={(v) => onPatch({ nQpOff: v } as never)}
+              />
+            </>
+          )}
+
+          {backend === "sinusoidal" && (
+            <NumberField
+              label="n_qp_const (GL pts)"
+              value={(opts as SinusoidalOpts).nQpConst}
+              min={2}
+              max={32}
+              step={1}
+              onChange={(v) => onPatch({ nQpConst: v } as never)}
+            />
+          )}
+
+          {backend === "bspline" && (
+            <BSplineFields
+              opts={opts as BSplineOpts}
+              onPatch={(p) => onPatch(p as never)}
+            />
+          )}
+
+          {backend === "pynec" && (
+            <em style={{ color: "var(--muted)", fontSize: 12 }}>
+              PyNEC has no extra solver knobs here — ground type / fast ground
+              live in the main panel.
+            </em>
+          )}
+        </div>
+
+        <div className="backend-config-footer">
+          <button className="backend-config-reset" onClick={onReset}>
+            reset to defaults
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BSplineFields({
+  opts,
+  onPatch,
+}: {
+  opts: BSplineOpts;
+  onPatch: (p: Partial<BSplineOpts>) => void;
+}) {
+  return (
+    <>
+      <div className="field">
+        <label>
+          <span>degree</span>
+          <span>{opts.degree}</span>
+        </label>
+        <div className="geometry-tabs" role="tablist">
+          {[1, 2].map((d) => (
+            <button
+              key={d}
+              role="tab"
+              aria-selected={opts.degree === d}
+              className={opts.degree === d ? "active" : ""}
+              onClick={() => onPatch({ degree: d as 1 | 2 })}
+            >
+              d={d}
+            </button>
+          ))}
+        </div>
+      </div>
+      <NumberField
+        label="n_qp_pair (GL pts/axis)"
+        value={opts.nQpPair}
+        min={2}
+        max={16}
+        step={1}
+        onChange={(v) => onPatch({ nQpPair: v })}
+      />
+      <div className="field">
+        <label className="link-toggle" title="Replace delta-gap source with cos² bump of width α·h_feed; basis-limited convergence on dipoles.">
+          <input
+            type="checkbox"
+            checked={opts.feedSmoothingFactor != null}
+            onChange={(e) =>
+              onPatch({ feedSmoothingFactor: e.target.checked ? 3 : null })
+            }
+          />
+          feed source smoothing
+        </label>
+        {opts.feedSmoothingFactor != null && (
+          <NumberField
+            label="α (bump width / h_feed)"
+            value={opts.feedSmoothingFactor}
+            min={0.5}
+            max={10}
+            step={0.5}
+            onChange={(v) => onPatch({ feedSmoothingFactor: v })}
+          />
+        )}
+        {opts.feedSmoothingFactor != null && (
+          <NumberField
+            label="n_qp_source"
+            value={opts.nQpSource}
+            min={4}
+            max={64}
+            step={1}
+            onChange={(v) => onPatch({ nQpSource: v })}
+          />
+        )}
+      </div>
+      <div className="field">
+        <label className="link-toggle" title="Add (u/h)·log(u/h) singular basis at K ≥ enrichment_min_k junctions; flips hentenna O(1/N) → ~O(1/N^(d+1)).">
+          <input
+            type="checkbox"
+            checked={opts.useSingularEnrichment}
+            onChange={(e) => onPatch({ useSingularEnrichment: e.target.checked })}
+          />
+          K≥3 junction singular enrichment
+        </label>
+        {opts.useSingularEnrichment && (
+          <>
+            <NumberField
+              label="n_qp_sing (GL pts/axis)"
+              value={opts.nQpSing}
+              min={8}
+              max={64}
+              step={1}
+              onChange={(v) => onPatch({ nQpSing: v })}
+            />
+            <NumberField
+              label="enrichment_min_k"
+              value={opts.enrichmentMinK}
+              min={2}
+              max={6}
+              step={1}
+              onChange={(v) => onPatch({ enrichmentMinK: v })}
+            />
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="field">
+      <label>
+        <span>{label}</span>
+        <span>{value}</span>
+      </label>
+      <input
+        type="number"
+        value={value}
+        min={min}
+        max={max}
+        step={step}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (!Number.isNaN(v)) onChange(v);
+        }}
+      />
     </div>
   );
 }

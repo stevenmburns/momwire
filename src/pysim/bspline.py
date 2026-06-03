@@ -817,6 +817,26 @@ class BSplinePySim:
         self.z = Z
         return driver_impedance, coeffs
 
+    def compute_impedance_swept(self, k_array):
+        """Loop over wavenumbers (no batched assembly here yet). Rebinds
+        self.k / self.omega / self.wavelength per call and restores them.
+        """
+        k_array = np.asarray(k_array, dtype=float)
+        z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
+        k_save = self.k
+        wl_save = self.wavelength
+        omega_save = self.omega
+        for i, kk in enumerate(k_array):
+            self.k = float(kk)
+            self.omega = self.k * self.c
+            self.wavelength = self.c / (self.omega / (2 * np.pi))
+            z, _ = self.compute_impedance()
+            z_out[i] = z
+        self.k = k_save
+        self.wavelength = wl_save
+        self.omega = omega_save
+        return z_out
+
     def currents_at_knots(self, coeffs):
         """Per-wire complex current at every mesh knot.
 
