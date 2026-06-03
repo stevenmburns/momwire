@@ -641,17 +641,25 @@ def test_bspline_d2_hentenna_arbitrates_against_triangular():
     # Triangular at n=21: 43.158 + j38.027
     # B-spline d=2 at n=21: 43.066 + j38.849
     # The two converge to different small-N transients but agree at the
-    # asymptote (~43.05 R, ~38.85 X at n=81) — they're independent
+    # asymptote (~43.05 R, ~38.85 X at n=161) — they're independent
     # basis families that BOTH reject the NEC super-log drift.
     assert abs(z_tri.real - 43.16) < 0.1, f"tri R={z_tri.real}"
     assert abs(z_tri.imag - 38.03) < 0.1, f"tri X={z_tri.imag}"
     assert abs(z_b2.real - 43.07) < 0.1, f"bsp d=2 R={z_b2.real}"
     assert abs(z_b2.imag - 38.85) < 0.1, f"bsp d=2 X={z_b2.imag}"
-    # Most importantly: the two bases agree to ~1 Ω on both R and X.
-    assert abs(z_tri.real - z_b2.real) < 1.0, (
+    # Cross-basis disagreement bound. Post-PR-#51 the n=15..161 sweep
+    # (scripts/compare_hentenna_solvers.py) pins the asymptote at 43.05 +
+    # j38.84 for BOTH bases. At n=21 specifically tri and b2 differ by
+    # ~0.09 Ω on R (b2 is essentially converged; tri still tightening
+    # from its degree-1 O(1/N²) slope) and by ~0.82 Ω on X (where tri
+    # has a larger small-N transient). Tighten R to 0.15 Ω; keep X at
+    # 0.9 Ω — both leave ~15-30% headroom over the actual gap and would
+    # fail loudly if either basis silently drifts off the arbitration
+    # asymptote.
+    assert abs(z_tri.real - z_b2.real) < 0.15, (
         f"basis disagreement on R: tri={z_tri.real}, bsp={z_b2.real}"
     )
-    assert abs(z_tri.imag - z_b2.imag) < 1.0, (
+    assert abs(z_tri.imag - z_b2.imag) < 0.9, (
         f"basis disagreement on X: tri={z_tri.imag}, bsp={z_b2.imag}"
     )
 
