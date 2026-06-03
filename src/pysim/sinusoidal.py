@@ -623,6 +623,27 @@ class SinusoidalPySim:
         self.Z_matrix = G
         return Z_drive, alpha
 
+    def compute_impedance_swept(self, k_array):
+        """Loop over wavenumbers; this class doesn't have a batched assembly
+        like TriangularPySim, so this is just compute_impedance() repeated
+        with the wavenumber/wavelength rebound per call.
+        """
+        k_array = np.asarray(k_array, dtype=float)
+        z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
+        k_save = self.k
+        wl_save = self.wavelength
+        omega_save = self.omega
+        for i, kk in enumerate(k_array):
+            self.k = float(kk)
+            self.omega = self.k * self.c
+            self.wavelength = self.c / (self.omega / (2 * np.pi))
+            z, _ = self.compute_impedance()
+            z_out[i] = z
+        self.k = k_save
+        self.wavelength = wl_save
+        self.omega = omega_save
+        return z_out
+
     def currents_at_knots(self, alpha):
         """Per-wire complex current sampled at every mesh knot.
 
