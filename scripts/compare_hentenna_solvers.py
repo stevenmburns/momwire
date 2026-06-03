@@ -8,17 +8,26 @@ Geometry: antenna_designer hentenna params_50, 28.47 MHz free space,
 width_factor=0.1378, top_height_factor=0.5081, mid_height_factor=0.1094,
 wire_radius=0.5 mm, eps_feed=0.05 m.
 
-Four columns at each n:
-  - tri  : TriangularPySim (tent basis, item-13 baseline)
+Five columns at each n:
+  - tri  : TriangularPySim (tent basis, degree-1 polynomial)
   - b2   : BSplinePySim(degree=2)                        — d=2 polynomial
   - b2e  : BSplinePySim(degree=2, use_singular_enrichment=True)
+  - sin  : SinusoidalPySim — NEC2's const+sin+cos three-term basis,
+           from-scratch in pysim (PR #44). Expected to track PyNEC's
+           super-log X drift since it's the same basis family.
   - pynec: NEC2 via PyNEC (item-13's reference column)
 
+Three independent polynomial-family bases (tri/b2/b2e) vs two
+independent three-term-basis implementations (sin/pynec). The
+arbitration argument from PR #45 / item 14 is that the polynomial
+trio agrees on Z, while the three-term pair tracks each other's drift.
+
 Feed-segment parity:
-  - pysim (tri / b2 / b2e): nfeed=2 (EVEN — interior knot at z=0).
-  - pynec:                  nfeed picked by the existing backend rule
-                            (odd, biased so the source segment centre lies
-                            on z=0 inside the gap).
+  - pysim polynomial (tri / b2 / b2e): nfeed=2 (EVEN — interior knot at z=0).
+  - pysim sinusoidal (sin):            nfeed=3 (ODD — delta-gap segment
+                                       centred at z=0; same parity as PyNEC).
+  - pynec:                             nfeed picked by the existing backend
+                                       rule (odd, source segment centre at z=0).
 
 After the table, the script reports for each solver:
   - n=161 anchor R + jX
@@ -44,26 +53,36 @@ Run from the project root (PyNEC column needs `web/` on the path):
     PYTHONPATH=. .venv/bin/python scripts/compare_hentenna_solvers.py \\
         --skip-pynec
 
-Post-PR-#51 result (2026-06-03, nfeed=2 for all pysim solvers; pynec
-keeps its odd-feed convention):
+Post-PR-#51 result (2026-06-03; nfeed=2 for tri/b2/b2e, nfeed=3 for
+sin and pynec — the basis-specific source-segment-centering rules):
 
-       n  |     tri         |    b2 (no enrich)    |    b2e (enrich)     |   pynec
-      15  | 43.20 + j37.13  | 43.07 + j38.85       | 42.86 + j40.07      | 45.61 - j 5.77
-      21  | 43.16 + j38.03  | 43.07 + j38.85       | 43.03 + j39.09      | 45.60 - j 4.60
-      41  | 43.13 + j38.65  | 43.06 + j38.84       | 43.06 + j38.86      | 45.44 - j 1.84
-      81  | 43.11 + j38.79  | 43.05 + j38.84       | 43.05 + j38.84      | 45.24 + j 1.65
-     161  | 43.11 + j38.82  | 43.05 + j38.84       | 43.05 + j38.84      | 45.01 + j 6.54
+       n  |    tri         |    b2 (no enr)  |    b2e (enr)    |    sin          |    pynec
+      15  | 43.20 + j37.13 | 43.07 + j38.85  | 42.86 + j40.07  | 45.61 − j 5.72  | 45.61 − j 5.77
+      21  | 43.16 + j38.03 | 43.07 + j38.85  | 43.03 + j39.09  | 45.60 − j 4.55  | 45.60 − j 4.60
+      41  | 43.13 + j38.65 | 43.06 + j38.84  | 43.06 + j38.86  | 45.46 − j 1.78  | 45.44 − j 1.84
+      81  | 43.11 + j38.79 | 43.05 + j38.84  | 43.05 + j38.84  | 45.25 + j 1.71  | 45.24 + j 1.65
+     161  | 43.11 + j38.82 | 43.05 + j38.84  | 43.05 + j38.84  | 44.98 + j 6.51  | 45.01 + j 6.54
 
-All three pysim solvers converge to the same Z asymptote ≈ 43.05 + j38.84
-(arbitration value unchanged from PR #45). PyNEC drifts super-log on X
-with no asymptote (fitted p < 0 on every consecutive triple).
+The polynomial trio (tri, b2, b2e) **converges** to 43.05 + j38.84.
+The three-term pair (sin, pynec) **drifts super-log on X** — sin
+tracks pynec to ~0.05 Ω on R and ~0.07 Ω on X at every n, exactly as
+predicted by item 14 (the two implementations of the same basis family
+diverge together).
 
-Per-solver convergence rates on X over the (41, 81, 161) triple:
-  tri  → p ≈ 2.19  (basis-limited at degree-1's O(1/N²) theoretical rate)
-  b2   → p ≈ 2.53  (already at convergence by n=15; rate is tail-noise)
-  b2e  → p ≈ 3.23  (visibly faster tail, but the small-N transient is
-                    worse than b2's — b2e starts +1.2 Ω off at n=15 where
-                    b2 is already converged)
+Per-solver X-convergence rates over the (41, 81, 161) triple:
+  tri   → p ≈ 2.19   (basis-limited at degree-1's O(1/N²) theoretical rate)
+  b2    → p ≈ 2.53   (already at convergence by n=15; rate is tail-noise)
+  b2e   → p ≈ 3.23   (visibly faster tail, but the small-N transient is
+                      worse than b2's — b2e starts +1.2 Ω off at n=15 where
+                      b2 is already converged)
+  sin   → p ≈ −0.46  (anti-convergent — fitted p < 0 every triple)
+  pynec → p ≈ −0.50  (anti-convergent — same as sin)
+
+The arbitration result is now visible in a single table: two
+independent basis FAMILIES (polynomial vs three-term), each with two
+or three independent code paths, with the polynomial side reaching
+an asymptote that the three-term side cannot. The three-term basis
+is the outlier on this geometry.
 
 Decision for slot-B default: **flip enrichment OFF**. At the UI default
 n=21, b2 alone gives 43.07 + j38.85 (within 0.02 Ω of asymptote) while
@@ -81,6 +100,7 @@ import numpy as np
 
 from pysim.triangular import TriangularPySim
 from pysim.bspline import BSplinePySim
+from pysim.sinusoidal import SinusoidalPySim
 
 
 C_LIGHT = 299_792_458.0
@@ -177,6 +197,28 @@ def solve_bspline(n: int, *, use_enrichment: bool) -> tuple[complex, float]:
     return complex(z), (time.perf_counter() - t0) * 1e3
 
 
+def solve_sinusoidal(n: int) -> tuple[complex, float]:
+    """NEC2's three-term basis (const + sin + cos per segment), from-scratch
+    re-implementation in pysim (PR #44). Uses ODD nfeed parity — the basis
+    centres a delta-gap segment at z=0, matching PyNEC's convention. Expected
+    to track PyNEC's super-log X drift since it's the same basis family."""
+    wires, junctions, wavelength = _hentenna_wires_and_junctions()
+    nfeed = 3
+    sim = SinusoidalPySim(
+        wires=wires,
+        n_per_edge_per_wire=_pysim_npe(n, nfeed),
+        feed_wire_index=0,
+        feed_arclength=EPS_FEED,
+        wavelength=wavelength,
+        wire_radius=WIRE_RADIUS,
+        nsegs=n,
+        junctions=junctions,
+    )
+    t0 = time.perf_counter()
+    z, _ = sim.compute_impedance()
+    return complex(z), (time.perf_counter() - t0) * 1e3
+
+
 def solve_pynec(n: int) -> tuple[complex, float]:
     """Run PyNEC via the existing web backend's hentenna builder. Imported
     lazily so the rest of the script runs even without the PyNEC build."""
@@ -251,7 +293,7 @@ def main():
         f"  wire_radius = {WIRE_RADIUS * 1e3:.2f} mm  feed_gap = {2 * EPS_FEED:.3f} m\n"
     )
 
-    cols = ["tri", "b2", "b2e"]
+    cols = ["tri", "b2", "b2e", "sin"]
     if not args.skip_pynec:
         cols.append("pynec")
 
@@ -272,6 +314,8 @@ def main():
                 z, ms = solve_bspline(n, use_enrichment=False)
             elif c == "b2e":
                 z, ms = solve_bspline(n, use_enrichment=True)
+            elif c == "sin":
+                z, ms = solve_sinusoidal(n)
             elif c == "pynec":
                 z, ms = solve_pynec(n)
             else:
