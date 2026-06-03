@@ -1308,6 +1308,16 @@ assemble_Z_enrich(
         double he = h_v(se);
         h_e_arr[e] = he;
         seg_e_arr[e] = se;
+        // d(u_norm)/d(u_arc_along_wire): for orig=0 the junction is at the
+        // segment's left endpoint, so u_norm = t = u_arc/h and the derivative
+        // is +1/h. For orig=1 the junction is at the right endpoint, so
+        // u_norm = 1 − t = 1 − u_arc/h and the derivative is −1/h. The
+        // singular basis's slope dΦ/du_arc inherits that sign — without
+        // it, every "end"-orientation enrichment basis enters the Φ-piece
+        // of Z_pe/Z_ep (and the mixed-orig off-diagonals of Z_ee) with the
+        // wrong sign, breaking L-R symmetry on geometries like hentenna
+        // where mirror junctions have opposite orig.
+        double dphi_sign = (orig == 0) ? 1.0 : -1.0;
         for (size_t q = 0; q < n_qp; q++) {
             double t = t01_v(q);
             double w = w01_v(q);
@@ -1315,7 +1325,7 @@ assemble_Z_enrich(
             double u_safe = u_norm > eps_tiny ? u_norm : eps_tiny;
             double log_u = std::log(u_safe);
             sing_val_all[e * n_qp + q] = u_norm * log_u;
-            sing_dval_all[e * n_qp + q] = (log_u + 1.0) / he;
+            sing_dval_all[e * n_qp + q] = dphi_sign * (log_u + 1.0) / he;
             w_e_all[e * n_qp + q] = w * he;
             double *pe = &pos_e_all[(e * n_qp + q) * 3];
             pe[0] = (1.0 - t) * sl_v(se, 0) + t * sr_v(se, 0);

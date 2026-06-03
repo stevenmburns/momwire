@@ -725,20 +725,110 @@ def test_bspline_d2_hentenna_singular_enrichment():
     # Pin n=81 to the recorded productized value (5e-3 Ω tolerance leaves
     # headroom for compiler/platform jitter but catches any constant-offset
     # drift much smaller than the prototype's value-spread to non-enriched).
-    assert abs(Rs[2] - 43.0858) < 5e-3, f"R(n=81)={Rs[2]}, expected ≈43.0858"
-    assert abs(Xs[2] - 38.9038) < 5e-3, f"X(n=81)={Xs[2]}, expected ≈38.9038"
+    assert abs(Rs[2] - 43.0866) < 5e-3, f"R(n=81)={Rs[2]}, expected ≈43.0866"
+    assert abs(Xs[2] - 38.8740) < 5e-3, f"X(n=81)={Xs[2]}, expected ≈38.8740"
 
-    # Fit Z = Z_inf + C/N^p on the R component over n in {21, 41, 81}.
-    # Use the three-point Richardson-style estimator:
-    #   p ≈ log( (R(N1) - R(N2)) / (R(N2) - R(N3)) ) / log(N2/N1)
-    # with N1 < N2 < N3. The same constant C cancels.
-    dR_12 = Rs[0] - Rs[1]
-    dR_23 = Rs[1] - Rs[2]
-    assert dR_12 * dR_23 > 0, (
-        f"R differences sign-flipped — noise floor reached too early; Rs={Rs}"
+    # Fit Z = Z_inf + C/N^p on the X component over n in {21, 41, 81}.
+    # (X used to be R, but with the enrichment-orig sign fix the R
+    # convergence is fast enough that R hits the few-mΩ noise floor
+    # between N=41 and N=81, making the sign-based rate estimator
+    # unreliable. X still has a few tens of mΩ of headroom at these N
+    # and converges monotonically.) Three-point Richardson-style:
+    #   p ≈ log( (X(N1) - X(N2)) / (X(N2) - X(N3)) ) / log(N2/N1)
+    # with N1 < N2 < N3. The same leading constant cancels.
+    dX_12 = Xs[0] - Xs[1]
+    dX_23 = Xs[1] - Xs[2]
+    assert dX_12 * dX_23 > 0, (
+        f"X differences sign-flipped — noise floor reached too early; Xs={Xs}"
     )
-    p = np.log(abs(dR_12 / dR_23)) / np.log(ns[1] / ns[0])
-    assert p > 2.5, f"R convergence rate p={p:.2f} below the 2.5 floor (Rs={Rs})"
+    p = np.log(abs(dX_12 / dX_23)) / np.log(ns[1] / ns[0])
+    assert p > 2.5, f"X convergence rate p={p:.2f} below the 2.5 floor (Xs={Xs})"
+
+
+def test_bspline_hentenna_enrichment_left_right_symmetry():
+    """Hentenna is mirror-symmetric about y=0, so the BSpline+enrichment solve
+    must produce mirror-symmetric per-knot currents on the upper and lower
+    polylines. A sign bug in the enrichment-basis derivative — where
+    `dΦ_sing/du_arc` was computed without the chain-rule sign flip for
+    "end"-orientation bases (junction at the segment's right endpoint) —
+    used to break this exact symmetry: junction-D current magnitudes were
+    several percent off from their junction-B mirrors, with the residual
+    only converging to zero as N→∞. Caught here at modest N so any
+    re-introduction of the bug fails loudly.
+    """
+    design_freq_mhz = 28.47
+    C_LIGHT = 299_792_458.0
+    wavelength = C_LIGHT / (design_freq_mhz * 1e6)
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    half_w = wavelength * width_factor / 2.0
+    eps_feed = 0.05
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+    A = (0.0, half_w, 0.0)
+    B_ = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps_feed, z_mid)
+    C_ = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E_ = (0.0, -half_w, z_bot)
+    T = (0.0, -eps_feed, z_mid)
+    wires = [
+        np.array([T, S], dtype=float),
+        np.array([S, B_], dtype=float),
+        np.array([B_, A, C_, D], dtype=float),
+        np.array([T, D], dtype=float),
+        np.array([D, E_, F, B_], dtype=float),
+    ]
+    junctions = [
+        [(0, "end"), (1, "start")],
+        [(0, "start"), (3, "start")],
+        [(1, "end"), (2, "start"), (4, "end")],
+        [(2, "end"), (3, "end"), (4, "start")],
+    ]
+
+    n = 21
+    npe = [[4], [n], [n, n, n], [n], [n, n, n]]
+    sim = BSplinePySim(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feed_wire_index=0,
+        feed_arclength=eps_feed,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=n,
+        degree=2,
+        junctions=junctions,
+        use_singular_enrichment=True,
+    )
+    _, coeffs = sim.compute_impedance()
+    currents = sim.currents_at_knots(coeffs)
+
+    # The K=3 junction directional polynomial bases sit on the polyline
+    # endpoint knots of `upper` and `lower`. By antenna L-R mirror, the
+    # current magnitudes at D (left) must equal those at B (right) to
+    # machine precision: ratio == 1 within ~1e-6.
+    upper = currents[2]
+    lower = currents[4]
+    assert abs(abs(upper[0]) - abs(upper[-1])) / abs(upper[0]) < 1e-6, (
+        f"upper |I| at B={abs(upper[0]):.6f} vs D={abs(upper[-1]):.6f} "
+        "(L/R mirror should be exact)"
+    )
+    assert abs(abs(lower[0]) - abs(lower[-1])) / abs(lower[0]) < 1e-6, (
+        f"lower |I| at D={abs(lower[0]):.6f} vs B={abs(lower[-1]):.6f} "
+        "(L/R mirror should be exact)"
+    )
+
+    # Interior polynomial bases on `upper` near the two K=3 junctions
+    # should also mirror. The pre-fix bug surfaced as ~5% asymmetry on the
+    # interior basis adjacent to the directional one; cap at 0.01% here
+    # so any re-introduction of the orig=1 sign flip fails immediately.
+    for k in range(1, 6):
+        ratio = abs(upper[k]) / abs(upper[-1 - k])
+        assert abs(ratio - 1.0) < 1e-4, (
+            f"upper knot pair (k={k}, n-1-{k}) ratio={ratio:.6f} — L/R asymmetry"
+        )
 
 
 @pytest.mark.parametrize("nsegs", [21, 41, 101])
