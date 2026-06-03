@@ -388,6 +388,33 @@ Ordered by what I'd actually do next, not by what's most ambitious.
 
     **Postscript (`fandipole-even-ring` branch, item 8 update)**: after fixing the lopsided pentagon `_FANDIPOLE_RING_5` to evenly distribute K bands at 360°/K, the ~15 Ω X-part of what was being called "the fan-dipole disagreement" turned out to be a *geometry* artifact (lopsided ring) that had been incorrectly attributed to junction/formulation effects. The original PR #36 cone-angle sweep (~7 Ω tracking inter-arm angle) was also partly contaminated by the same ring asymmetry — when n_bands varied while still using the pentagon prefix, the inter-arm angle changes mixed with ring-position bias. The remaining real-part disagreement (~5–17 Ω growing with K and N) is what's left after that contamination is removed; it sits in the same family as item 8's "NEC2 outlier" conclusion. No new actions — item stays closed.
 
+18. **Stable / XFEM-style enrichment basis to make `use_singular_enrichment=True` safe at small N on dominant-pair K=3 junctions.** Background: PR #52 + the slot-B-default-flip PR established that on hentenna-class geometries (where the K=3 current split has a dominant in/out pair with the third wire as a small tap — `scripts/probe_k3_junction_imbalance.py`), enrichment-on at small N introduces a ~0.26 Ω X offset that decays away by n=41. The offset is from the 6 enrichment DOFs (2 K=3 junctions × 3 wings) absorbing small-N polynomial-basis discretization error rather than representing real cusp physics — they're not constrained well enough by the data at N=21 to settle at their physically-correct near-zero values.
+
+    The XFEM/GFEM literature solves this with a **stable enrichment basis**: L²-orthogonalize the singular shape against the local polynomial basis on each segment *before* assembly, so the orthogonalized basis represents *only* what the polynomial space can't. Concretely, replace Φ_sing(u) = (u/h)·log(u/h) with
+
+    ```
+    Φ_sing_stable(u) = Φ_sing(u) − P_poly(Φ_sing)(u)
+    ```
+
+    where P_poly is the L²-orthogonal projection onto the local polynomial basis `{1, u/h, (u/h)²}` on the segment. Then α_enrich = 0 *exactly* when the truth lives in the polynomial subspace — no tuning parameter, principled.
+
+    Work involved (estimated ~1-2 days):
+    - Re-derive the static-moment integrals J_pq against the new shape Φ_sing_stable in `scripts/derive_bspline_static_moments.py` (sympy already has everything we need; the new integrals are linear combinations of the existing ones).
+    - Dump to `_bspline_static_moments.py` alongside the existing tables.
+    - Update `_assemble_Z_enrich` (and the C++ accelerator) to use the new shape.
+    - Re-run the convergence sweeps in `scripts/compare_hentenna_solvers.py`, `probe_y_fixture_enrichment.py`, `probe_fandipole_enrichment.py`. Expected outcomes:
+      - **Hentenna**: b2e converges to the same place as b2 at every N (the small-N offset vanishes — that's the whole point).
+      - **Y-fixture**: b2e still wins (~0.08 Ω R correction) — the cusp is real and Φ_sing_stable still represents it.
+      - **Fan dipole**: b2 ↔ b2e gap shrinks from 0.012 Ω X to noise floor.
+    - If the expected outcomes land, flip slot-B's `useSingularEnrichment` default back to `true` (the stable variant is universally safe).
+
+    Alternatives briefly considered and rejected (notes for future-us):
+    - **Tikhonov regularization** (add λ·I to the enrichment-block diagonal of the Galerkin matrix): simpler — one line in the solve step — but introduces a tuning parameter λ that needs to be picked per-geometry or via L-curve/GCV. Cheaper to ship but not principled.
+    - **Posteriori threshold** (solve, check |α_enrich,k|, zero small ones, re-solve): also tunable, also adds an iteration in the solver.
+    - **Stable XFEM** is the principled fix used in the actual XFEM literature for exactly this problem, and has the orthogonality guarantee that the simpler options lack.
+
+    **When to do this**: not urgent. The slot-B-default-flip PR already ships a working fix for the immediate user-visible issue. This is the right follow-up if (a) a new UI antenna preset gets added that has genuinely balanced K=3 junctions, OR (b) we want the BSpline backend to be "safe by default" with enrichment on for users running their own custom geometries.
+
 ## Key locations
 
 - `src/pysim/triangular.py` — the active solver. `_build_geometry` builds the per-basis support arrays (segments, level-at-left, level-at-right); `_add_junction_bases` (PR #36) appends K directional bases per junction and the KCL constraint matrix `kcl_A`; `_assemble_Z_single` is the fast path used for non-junction geometries (calls the C++ `assemble_Z` accelerator), `_assemble_Z_general_single` is the general path used when junctions exist. The Lagrange-augmented solve lives in `_solve_with_kcl` (single) and `_solve_with_kcl_batch` (swept).
