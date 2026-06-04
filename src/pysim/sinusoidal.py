@@ -222,38 +222,50 @@ class SinusoidalPySim:
         seg_h = np.concatenate(seg_h_chunks)
         n_segs = seg_l.shape[0]
 
-        # Per-segment N^- / N^+ neighbour lists.
-        # nm[i] = list of (j, sigma) where j is a segment whose "end-2" in
-        # NEC's arc convention coincides with i's end-1 (i's seg_l end).
-        # np[i] = list of (j, sigma) where j's NEC "end-1" coincides with
-        # i's end-2 (i's seg_r end).
-        nm = [[] for _ in range(n_segs)]
-        np_ = [[] for _ in range(n_segs)]
+        # Per-segment N^- / N^+ neighbours — built directly as flat arrays
+        # (nm_basis, nm_seg, nm_sigma and the np_ trio), where each entry
+        # k is a single (basis i, neighbour seg j, σ) triple. No
+        # list-of-lists intermediate, no per-seg Python append loop.
+        #
+        # nm_basis[k] = i  → basis i has a N⁻ neighbour at seg j
+        #   nm_seg[k] = j     ("j's NEC end-2 coincides with i's end-1")
+        # nm_sigma[k] = σ.   In-wire connections use σ = +1; junction
+        # connections use ±1 per the L/R side rule below.
+        nm_basis_chunks: list[np.ndarray] = []
+        nm_seg_chunks: list[np.ndarray] = []
+        nm_sigma_chunks: list[np.ndarray] = []
+        np_basis_chunks: list[np.ndarray] = []
+        np_seg_chunks: list[np.ndarray] = []
+        np_sigma_chunks: list[np.ndarray] = []
 
-        # In-wire neighbours: adjacent segments in the same wire, both at
-        # kinks and along straight edges, are connected through their
-        # naturally adjacent seg_l/seg_r endpoints.
+        # In-wire neighbours: per wire, segs [first+1..last] each get nm
+        # = (i-1, +1) and segs [first..last-1] each get np = (i+1, +1).
+        # Two np.arange pairs per wire instead of an n_segs Python loop.
         for w_idx in range(len(self.wires_polylines)):
             first = wire_first_seg[w_idx]
             last = wire_last_seg[w_idx]
-            for i in range(first, last + 1):
-                if i > first:
-                    # segment i-1 connects to i at i's end-1 (seg_l).
-                    # (i-1)'s natural seg_r is at the junction → matches
-                    # NEC's "end-2 of j" convention for N^- → σ = +1.
-                    nm[i].append((i - 1, +1))
-                if i < last:
-                    # segment i+1 connects to i at i's end-2 (seg_r).
-                    # (i+1)'s natural seg_l is at the junction → matches
-                    # NEC's "end-1 of j" convention for N^+ → σ = +1.
-                    np_[i].append((i + 1, +1))
+            if last > first:
+                m = last - first
+                nm_basis_chunks.append(np.arange(first + 1, last + 1, dtype=np.int64))
+                nm_seg_chunks.append(np.arange(first, last, dtype=np.int64))
+                nm_sigma_chunks.append(np.ones(m, dtype=np.int8))
+                np_basis_chunks.append(np.arange(first, last, dtype=np.int64))
+                np_seg_chunks.append(np.arange(first + 1, last + 1, dtype=np.int64))
+                np_sigma_chunks.append(np.ones(m, dtype=np.int8))
 
-        # Junction neighbours. For each junction node, every (wire, end)
-        # listed contributes its end-segment. The end-segments at this
-        # node are all mutually connected.
+        # Junction neighbours: small Python loop (junctions count is O(1)
+        # in geometry size — 2-4 junctions on typical antennas, with K=2-6
+        # members each producing K(K-1) edges). Append to per-junction
+        # Python lists, then convert to numpy once.
+        junc_nm_basis: list[int] = []
+        junc_nm_seg: list[int] = []
+        junc_nm_sigma: list[int] = []
+        junc_np_basis: list[int] = []
+        junc_np_seg: list[int] = []
+        junc_np_sigma: list[int] = []
         for jn in self.junctions:
-            # Collect (segment_idx, which_end_of_segment_is_at_node) for
-            # every wire-end at this junction.
+            # (segment_idx, which_end_of_segment_is_at_node) for every
+            # wire-end at this junction.
             members = []
             for w, end in jn:
                 if end == "start":
@@ -263,30 +275,36 @@ class SinusoidalPySim:
                     seg_idx = wire_last_seg[w]
                     end_side = "R"  # seg_r of this segment is at node
                 members.append((seg_idx, end_side))
-
-            # Wire each pair of (i, j) members: j is a neighbour of i at
-            # the node-side of i; figure out which list (nm/np_) of i it
-            # goes into and what σ j contributes.
-            for a in range(len(members)):
-                i_seg, i_side = members[a]
-                for b in range(len(members)):
-                    if b == a:
+            # Every (i, j) pair with i != j contributes one edge from i's
+            # perspective — N^- or N^+ depending on i's side at the node.
+            for a_idx in range(len(members)):
+                i_seg, i_side = members[a_idx]
+                for b_idx in range(len(members)):
+                    if b_idx == a_idx:
                         continue
-                    j_seg, j_side = members[b]
-                    # i's side at the node — does the node live at i's
-                    # end-1 (L) or end-2 (R)?
+                    j_seg, j_side = members[b_idx]
                     if i_side == "L":
-                        # j is in N^-(i). NEC wants j's "end-2" at the
-                        # node. j's natural seg_r is at the node iff
-                        # j_side == "R" → σ = +1; else σ = -1.
+                        # j is in N^-(i). σ = +1 if j's natural seg_r is at
+                        # the node (j_side == "R"), else −1.
                         sigma = +1 if j_side == "R" else -1
-                        nm[i_seg].append((j_seg, sigma))
+                        junc_nm_basis.append(i_seg)
+                        junc_nm_seg.append(j_seg)
+                        junc_nm_sigma.append(sigma)
                     else:
-                        # j is in N^+(i). NEC wants j's "end-1" at the
-                        # node. j's natural seg_l is at the node iff
-                        # j_side == "L" → σ = +1; else σ = -1.
+                        # j is in N^+(i). σ = +1 if j's natural seg_l is at
+                        # the node (j_side == "L"), else −1.
                         sigma = +1 if j_side == "L" else -1
-                        np_[i_seg].append((j_seg, sigma))
+                        junc_np_basis.append(i_seg)
+                        junc_np_seg.append(j_seg)
+                        junc_np_sigma.append(sigma)
+        if junc_nm_basis:
+            nm_basis_chunks.append(np.asarray(junc_nm_basis, dtype=np.int64))
+            nm_seg_chunks.append(np.asarray(junc_nm_seg, dtype=np.int64))
+            nm_sigma_chunks.append(np.asarray(junc_nm_sigma, dtype=np.int8))
+        if junc_np_basis:
+            np_basis_chunks.append(np.asarray(junc_np_basis, dtype=np.int64))
+            np_seg_chunks.append(np.asarray(junc_np_seg, dtype=np.int64))
+            np_sigma_chunks.append(np.asarray(junc_np_sigma, dtype=np.int8))
 
         # Feed segment index: the segment on the feed wire whose center is
         # closest to feed_arclength (default: midpoint of the wire).
@@ -301,38 +319,21 @@ class SinusoidalPySim:
         )
         feed_seg = first + int(np.argmin(np.abs(feed_arc_centers - feed_arc)))
 
-        # Flat per-edge versions of the nm/np_ list-of-lists, for
-        # _basis_coefs's vectorized P-sum scatter and entry build.
-        # nm_basis[k] = which basis (i) the k-th N⁻ edge belongs to;
-        # nm_seg[k] = the neighbour seg j; nm_sigma[k] = σ.
-        nm_basis_list: list[int] = []
-        nm_seg_list: list[int] = []
-        nm_sigma_list: list[int] = []
-        for i_b in range(n_segs):
-            for j_seg, sig in nm[i_b]:
-                nm_basis_list.append(i_b)
-                nm_seg_list.append(j_seg)
-                nm_sigma_list.append(sig)
-        np_basis_list: list[int] = []
-        np_seg_list: list[int] = []
-        np_sigma_list: list[int] = []
-        for i_b in range(n_segs):
-            for j_seg, sig in np_[i_b]:
-                np_basis_list.append(i_b)
-                np_seg_list.append(j_seg)
-                np_sigma_list.append(sig)
-        nm_basis = np.asarray(nm_basis_list, dtype=np.int64)
-        nm_seg = np.asarray(nm_seg_list, dtype=np.int64)
-        nm_sigma = np.asarray(nm_sigma_list, dtype=np.int8)
-        np_basis = np.asarray(np_basis_list, dtype=np.int64)
-        np_seg = np.asarray(np_seg_list, dtype=np.int64)
-        np_sigma = np.asarray(np_sigma_list, dtype=np.int8)
-        # Per-seg neighbour counts (== counts[s] - 1 with the self entry).
-        nm_count = np.zeros(n_segs, dtype=np.int64)
-        np_count = np.zeros(n_segs, dtype=np.int64)
-        for i_b in range(n_segs):
-            nm_count[i_b] = len(nm[i_b])
-            np_count[i_b] = len(np_[i_b])
+        # Concatenate the in-wire + junction chunks into the final flat
+        # neighbour arrays. Empty geometries (e.g. a single-segment wire
+        # with no junctions) get length-zero arrays of the right dtype.
+        def _cat(chunks: list[np.ndarray], dtype: np.dtype) -> np.ndarray:
+            return np.concatenate(chunks) if chunks else np.empty(0, dtype=dtype)
+
+        nm_basis = _cat(nm_basis_chunks, np.int64)
+        nm_seg = _cat(nm_seg_chunks, np.int64)
+        nm_sigma = _cat(nm_sigma_chunks, np.int8)
+        np_basis = _cat(np_basis_chunks, np.int64)
+        np_seg = _cat(np_seg_chunks, np.int64)
+        np_sigma = _cat(np_sigma_chunks, np.int8)
+        # Per-seg neighbour counts via bincount — no Python loop.
+        nm_count = np.bincount(nm_basis, minlength=n_segs).astype(np.int64)
+        np_count = np.bincount(np_basis, minlength=n_segs).astype(np.int64)
 
         self._cached_geometry = {
             "seg_l": seg_l,
@@ -341,8 +342,6 @@ class SinusoidalPySim:
             "seg_tangents": seg_t,
             "seg_h": seg_h,
             "n_segs": n_segs,
-            "nm": nm,
-            "np": np_,
             "nm_basis": nm_basis,
             "nm_seg": nm_seg,
             "nm_sigma": nm_sigma,
