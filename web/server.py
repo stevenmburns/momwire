@@ -1649,6 +1649,89 @@ async def sweep_endpoint(req: dict, request: Request):
     return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
+def _solve_z_only(req: dict) -> complex:
+    """Run the geometry-specific solver and return only the input impedance.
+
+    Skips the directivity-norm integral that `solve()` would otherwise tack
+    on — for the /converge sweep we only need Z(N), and at N ≳ 60 the
+    directivity step adds non-negligible cost.
+    """
+    geometry = req.get("geometry", "inverted_v")
+    use_pynec = req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC
+    if use_pynec:
+        res = pynec_backend.solve(req)
+    elif geometry == "yagi":
+        res = _solve_yagi(req)
+    elif geometry == "moxon":
+        res = _solve_moxon(req)
+    elif geometry == "hexbeam":
+        res = _solve_hexbeam(req)
+    elif geometry == "fan_dipole":
+        res = _solve_fandipole(req)
+    elif geometry == "hentenna":
+        res = _solve_hentenna(req)
+    else:
+        res = _solve_inverted_v(req)
+    return complex(res["z_in_re"], res["z_in_im"])
+
+
+@app.post("/converge")
+async def converge_endpoint(req: dict, request: Request):
+    """Stream impedance vs segments/wire as NDJSON, one (n, Z) per line.
+
+    The frontend passes `n_values: list[int]`; we re-solve the geometry at
+    each N (overriding `n_per_wire`) and yield the result before starting
+    the next solve. Streaming so the user sees the trajectory build up
+    incrementally — the largest-N solves take noticeably longer (~N³ for
+    the dense LU) and the user shouldn't have to wait for the whole sweep
+    to see early points.
+
+    Cancels on client disconnect (slider drag interrupts a stale sweep)
+    using the same pattern as /sweep.
+    """
+    n_values = [int(n) for n in req.get("n_values", [])]
+    use_pynec = req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC
+    solver_name = "pynec" if use_pynec else "pysim"
+
+    async def gen():
+        for n in n_values:
+            if await request.is_disconnected():
+                return
+            req_n = dict(req)
+            req_n["n_per_wire"] = n
+            try:
+                z = await run_in_threadpool(_solve_z_only, req_n)
+            except Exception as e:
+                # One-off solver failures (e.g. degenerate geometry at very
+                # small N) shouldn't abort the whole sweep — note the error
+                # for this N and keep going.
+                yield (
+                    json.dumps(
+                        {
+                            "n_per_wire": n,
+                            "error": str(e),
+                            "solver": solver_name,
+                        }
+                    )
+                    + "\n"
+                )
+                continue
+            yield (
+                json.dumps(
+                    {
+                        "n_per_wire": n,
+                        "z_re": float(z.real),
+                        "z_im": float(z.imag),
+                        "solver": solver_name,
+                    }
+                )
+                + "\n"
+            )
+        yield json.dumps({"done": True, "solver": solver_name}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
 @app.post("/pattern")
 async def pattern_endpoint(req: dict):
     """NEC's rp_card-computed gain pattern. PyNEC-only."""
