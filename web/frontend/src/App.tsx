@@ -274,6 +274,68 @@ type SweepData = {
   z_im: number[];
 };
 
+type ConvergeData = {
+  n_values: number[];
+  z_re: number[];
+  z_im: number[];
+  // Richardson extrapolation Z(1/N) → Z(0). Filled once ≥3 points are in.
+  z_re_extrap: number | null;
+  z_im_extrap: number | null;
+};
+
+// Log-spaced segments-per-wire ladder for the convergence sweep. Hentenna's
+// 8N+2 total segments at N=68 puts the dense LU at a ~550-cell matrix —
+// still snappy at this N range on all backends, but enough span to see
+// O(1/N) trajectories clearly. Same ladder across backends so the curves
+// are directly comparable when the user switches slots.
+const CONVERGE_N_VALUES: number[] = [8, 12, 17, 24, 34, 48, 68];
+
+// Richardson-style extrapolation Z(1/N) → Z(N→∞). Fits Z = a₀ + a₁·h + a₂·h²
+// (h = 1/N) on the last `nLast` points via least squares and returns a₀.
+// Quadratic gives a sane answer for O(1/N) limit (BSpline/Triangular without
+// enrichment) AND O(1/N^p) for p slightly above 1 — basis-cap, enrichment,
+// etc. With ≤2 points we can't fit; return null.
+function richardsonExtrap(
+  invN: number[],
+  vals: number[],
+  nLast = 5,
+): number | null {
+  const m = Math.min(nLast, invN.length);
+  if (m < 3) return null;
+  const start = invN.length - m;
+  // Solve Ax = b for x = [a₀, a₁, a₂] using normal equations on the last m
+  // points. m × 3 → 3 × 3 — small, no need for an LAPACK call.
+  let s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+  let t0 = 0, t1 = 0, t2 = 0;
+  for (let i = start; i < invN.length; i++) {
+    const h = invN[i];
+    const y = vals[i];
+    s0 += 1;
+    s1 += h;
+    s2 += h * h;
+    s3 += h * h * h;
+    s4 += h * h * h * h;
+    t0 += y;
+    t1 += y * h;
+    t2 += y * h * h;
+  }
+  // 3x3 linear system: [[s0,s1,s2],[s1,s2,s3],[s2,s3,s4]] · [a0,a1,a2] = [t0,t1,t2]
+  const m00 = s0, m01 = s1, m02 = s2;
+  const m10 = s1, m11 = s2, m12 = s3;
+  const m20 = s2, m21 = s3, m22 = s4;
+  const det =
+    m00 * (m11 * m22 - m12 * m21) -
+    m01 * (m10 * m22 - m12 * m20) +
+    m02 * (m10 * m21 - m11 * m20);
+  if (Math.abs(det) < 1e-30) return null;
+  const a0 =
+    (t0 * (m11 * m22 - m12 * m21) -
+      m01 * (t1 * m22 - m12 * t2) +
+      m02 * (t1 * m21 - m11 * t2)) /
+    det;
+  return a0;
+}
+
 type PatternData = {
   theta_deg: number[];
   phi_deg: number[];
@@ -548,6 +610,14 @@ export function App() {
   const [rttMs, setRttMs] = useState<number | null>(null);
   const [sweep, setSweep] = useState<SweepData | null>(null);
   const [sweepRunning, setSweepRunning] = useState(false);
+  // Smith-chart overlay toggles. Both are debounced sweeps that re-fire
+  // whenever any antenna/backend parameter changes; gating them with these
+  // checkboxes lets the user pause an expensive sweep (e.g. BSpline d=2
+  // converge on hentenna) without leaving the Smith view.
+  const [sweepEnabled, setSweepEnabled] = useState(true);
+  const [convergeEnabled, setConvergeEnabled] = useState(false);
+  const [converge, setConverge] = useState<ConvergeData | null>(null);
+  const [convergeRunning, setConvergeRunning] = useState(false);
   // NEC's rp_card pattern, fetched on a debounce so we don't fire one per
   // slider tick. Overlaid on the cuts as a comparison line.
   const [pattern, setPattern] = useState<PatternData | null>(null);
@@ -600,6 +670,8 @@ export function App() {
   const sweepAbortRef = useRef<AbortController | null>(null);
   const patternTimerRef = useRef<number | null>(null);
   const patternAbortRef = useRef<AbortController | null>(null);
+  const convergeTimerRef = useRef<number | null>(null);
+  const convergeAbortRef = useRef<AbortController | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const inFlightRef = useRef(false);
@@ -735,6 +807,9 @@ export function App() {
     }
     setSweep(null);
     setSweepRunning(false);
+    if (!sweepEnabled) {
+      return;
+    }
     sweepTimerRef.current = window.setTimeout(() => {
       runSweep();
       sweepTimerRef.current = null;
@@ -754,7 +829,45 @@ export function App() {
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq,
     groundEnabled, groundFast, heightM,
+    sweepEnabled,
     geometry === "fan_dipole" ? measFreq : null,
+  ]);
+
+  // Debounced convergence sweep over segments-per-wire. Independent of the
+  // freq sweep above: re-runs on any antenna/backend change, gated by its
+  // own overlay checkbox. The active slot's `nPerWire` is *overridden* by
+  // the ladder values for the duration of the sweep — the per-slot opts
+  // stay untouched, so the live /ws solve keeps using the user's setting.
+  useEffect(() => {
+    convergeAbortRef.current?.abort();
+    if (convergeTimerRef.current) {
+      window.clearTimeout(convergeTimerRef.current);
+    }
+    setConverge(null);
+    setConvergeRunning(false);
+    if (!convergeEnabled) {
+      return;
+    }
+    convergeTimerRef.current = window.setTimeout(() => {
+      runConverge();
+      convergeTimerRef.current = null;
+    }, 500);
+    return () => {
+      if (convergeTimerRef.current) window.clearTimeout(convergeTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    geometry, backend, backendOptsKey,
+    angle, halfdriverFactor,
+    driverLengthFactor, reflectorLengthFactor, spacingWavelengths,
+    nDirectors, directorSpacingWavelengths, directorSizeFactor,
+    moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
+    hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
+    hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
+    fanNBands, fanBandLengths, fanSlope, fanConeRadius,
+    designFreq, measFreq,
+    groundEnabled, groundFast, heightM,
+    convergeEnabled,
   ]);
 
   // Debounced NEC pattern fetch. PyNEC only — for pysim there's no rp_card
@@ -859,6 +972,77 @@ export function App() {
       if (sweepAbortRef.current === controller) {
         sweepAbortRef.current = null;
         setSweepRunning(false);
+      }
+    }
+  }
+
+  async function runConverge() {
+    convergeAbortRef.current?.abort();
+    const controller = new AbortController();
+    convergeAbortRef.current = controller;
+
+    // The active slot's nPerWire is irrelevant during a converge sweep —
+    // n_values overrides it on the server. We strip `n_per_wire` from the
+    // request anyway to make that explicit.
+    const body = { ...buildRequest(), n_values: CONVERGE_N_VALUES };
+    setConvergeRunning(true);
+    const acc: ConvergeData = {
+      n_values: [],
+      z_re: [],
+      z_im: [],
+      z_re_extrap: null,
+      z_im_extrap: null,
+    };
+    try {
+      const resp = await fetch("/converge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!resp.ok || !resp.body) throw new Error(`converge failed: ${resp.status}`);
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          const pt = JSON.parse(line);
+          if (pt.done) continue;
+          // A solver failure for one N (rare — degenerate small-N geometry)
+          // is reported by the backend as {n_per_wire, error}; skip rather
+          // than poisoning the trajectory.
+          if (pt.error) continue;
+          acc.n_values.push(pt.n_per_wire);
+          acc.z_re.push(pt.z_re);
+          acc.z_im.push(pt.z_im);
+          const invN = acc.n_values.map((n) => 1 / n);
+          acc.z_re_extrap = richardsonExtrap(invN, acc.z_re);
+          acc.z_im_extrap = richardsonExtrap(invN, acc.z_im);
+          if (!controller.signal.aborted) {
+            setConverge({
+              n_values: acc.n_values.slice(),
+              z_re: acc.z_re.slice(),
+              z_im: acc.z_im.slice(),
+              z_re_extrap: acc.z_re_extrap,
+              z_im_extrap: acc.z_im_extrap,
+            });
+          }
+        }
+      }
+    } catch (e: unknown) {
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      console.error("converge error", e);
+    } finally {
+      if (convergeAbortRef.current === controller) {
+        convergeAbortRef.current = null;
+        setConvergeRunning(false);
       }
     }
   }
@@ -1716,9 +1900,11 @@ export function App() {
                   fill={false}
                   result={result}
                   sweep={sweep}
+                  converge={converge}
                   pattern={pattern}
                   measFreqMhz={measFreq}
                   sweepRunning={sweepRunning}
+                  convergeRunning={convergeRunning}
                   azElevDeg={azElevDeg}
                   elevAzDeg={elevAzDeg}
                   cameraProjection={cameraProjection}
@@ -1769,15 +1955,43 @@ export function App() {
               </label>
             </div>
           )}
+          {view === "smith" && (
+            <div className="smith-overlay">
+              <label
+                className="overlay-checkbox"
+                title="Sweep Z across measurement freq and plot the locus on the Smith chart"
+              >
+                <input
+                  type="checkbox"
+                  checked={sweepEnabled}
+                  onChange={(e) => setSweepEnabled(e.target.checked)}
+                />
+                freq sweep
+              </label>
+              <label
+                className="overlay-checkbox"
+                title={`Re-solve at N = ${CONVERGE_N_VALUES.join(", ")} segments/wire and Richardson-extrapolate Z to N→∞`}
+              >
+                <input
+                  type="checkbox"
+                  checked={convergeEnabled}
+                  onChange={(e) => setConvergeEnabled(e.target.checked)}
+                />
+                converge sweep
+              </label>
+            </div>
+          )}
           <ViewPanel
             view={view}
             size={chartSize}
             fill={view === "antenna"}
             result={result}
             sweep={sweep}
+            converge={converge}
             pattern={pattern}
             measFreqMhz={measFreq}
             sweepRunning={sweepRunning}
+            convergeRunning={convergeRunning}
             azElevDeg={azElevDeg}
             elevAzDeg={elevAzDeg}
             cameraProjection={cameraProjection}
@@ -2092,9 +2306,11 @@ function ViewPanel({
   fill,
   result,
   sweep,
+  converge,
   pattern,
   measFreqMhz,
   sweepRunning,
+  convergeRunning,
   azElevDeg,
   elevAzDeg,
   cameraProjection,
@@ -2106,9 +2322,11 @@ function ViewPanel({
   fill: boolean;
   result: SolveResponse | null;
   sweep: SweepData | null;
+  converge: ConvergeData | null;
   pattern: PatternData | null;
   measFreqMhz: number;
   sweepRunning: boolean;
+  convergeRunning: boolean;
   azElevDeg: number;
   elevAzDeg: number;
   cameraProjection: Projection;
@@ -2159,8 +2377,10 @@ function ViewPanel({
       z0={50}
       size={size}
       sweep={sweep}
+      converge={converge}
       measFreqMhz={measFreqMhz}
       running={sweepRunning}
+      convergeRunning={convergeRunning}
     />
   );
 }
@@ -2588,16 +2808,20 @@ function SmithChart({
   z0,
   size,
   sweep,
+  converge,
   measFreqMhz,
   running,
+  convergeRunning,
 }: {
   r: number;
   x: number;
   z0: number;
   size: number;
   sweep: SweepData | null;
+  converge: ConvergeData | null;
   measFreqMhz: number;
   running: boolean;
+  convergeRunning: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -2744,6 +2968,107 @@ function SmithChart({
       ctx.fillText("sweeping…", 6, size - 6);
     }
 
+    // Convergence locus: Z(N) trajectory as N increases, drawn as a
+    // connected purple polyline so the sequence direction reads as motion
+    // (vs. the freq sweep's unconnected scatter — those samples are dense
+    // enough that a line would imply interpolation). Smallest-N point gets
+    // a hollow ring; largest-N gets a filled disc; Richardson-extrapolated
+    // Z* gets a diamond, in a brighter shade.
+    if (converge && converge.n_values.length >= 1) {
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, R, 0, 2 * Math.PI);
+      ctx.clip();
+      ctx.strokeStyle = "rgba(195, 140, 255, 0.85)";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      for (let i = 0; i < converge.n_values.length; i++) {
+        const g = reflectionCoefficient(converge.z_re[i], converge.z_im[i], z0);
+        const px = cx + g.gRe * R;
+        const py = cy - g.gIm * R;
+        if (i === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+
+      // Per-N dots along the trajectory.
+      ctx.fillStyle = "rgba(195, 140, 255, 0.9)";
+      for (let i = 0; i < converge.n_values.length; i++) {
+        const g = reflectionCoefficient(converge.z_re[i], converge.z_im[i], z0);
+        const px = cx + g.gRe * R;
+        const py = cy - g.gIm * R;
+        ctx.beginPath();
+        ctx.arc(px, py, 1.8, 0, 2 * Math.PI);
+        ctx.fill();
+      }
+      ctx.restore();
+
+      // Endpoint markers: smallest-N hollow, largest-N filled.
+      const drawNEndpoint = (idx: number, filled: boolean) => {
+        const g = reflectionCoefficient(converge.z_re[idx], converge.z_im[idx], z0);
+        const px = cx + g.gRe * R;
+        const py = cy - g.gIm * R;
+        ctx.lineWidth = 1.2;
+        ctx.strokeStyle = "rgba(195, 140, 255, 0.95)";
+        ctx.fillStyle = filled ? "rgba(195, 140, 255, 0.95)" : "rgba(13, 16, 21, 0.95)";
+        ctx.beginPath();
+        ctx.arc(px, py, 3, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.stroke();
+      };
+      drawNEndpoint(0, false);
+      drawNEndpoint(converge.n_values.length - 1, true);
+
+      // Richardson Z* marker — diamond in a brighter pink, to distinguish
+      // it from the actual sampled points and from the live-Z dot.
+      if (converge.z_re_extrap != null && converge.z_im_extrap != null) {
+        const ge = reflectionCoefficient(
+          converge.z_re_extrap,
+          converge.z_im_extrap,
+          z0,
+        );
+        // Clip extrapolated Z* to the unit Smith disc — Richardson on a
+        // not-yet-converging series can fly outside |Γ|=1 in early frames.
+        const gMag = Math.hypot(ge.gRe, ge.gIm);
+        const k = gMag > 0.98 ? 0.98 / gMag : 1;
+        const px = cx + ge.gRe * R * k;
+        const py = cy - ge.gIm * R * k;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(Math.PI / 4);
+        ctx.fillStyle = "rgba(255, 140, 220, 0.95)";
+        ctx.strokeStyle = "rgba(255, 140, 220, 1)";
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.rect(-4, -4, 8, 8);
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Bottom-left summary: N-range and extrapolated Z*.
+      ctx.fillStyle = "rgba(220, 195, 255, 0.95)";
+      ctx.font = "10px ui-monospace, monospace";
+      const nLo = converge.n_values[0];
+      const nHi = converge.n_values[converge.n_values.length - 1];
+      const nText = `N: ${nLo} → ${nHi}`;
+      ctx.fillText(nText, 6, 28);
+      if (converge.z_re_extrap != null && converge.z_im_extrap != null) {
+        const reTxt = converge.z_re_extrap.toFixed(2);
+        const imTxt = converge.z_im_extrap.toFixed(2);
+        const sign = converge.z_im_extrap >= 0 ? "+" : "−";
+        const zText = `Z* ≈ ${reTxt} ${sign} j${Math.abs(parseFloat(imTxt)).toFixed(2)} Ω`;
+        ctx.fillText(zText, 6, 40);
+      }
+    }
+    if (convergeRunning) {
+      ctx.fillStyle = "#7b8493";
+      ctx.font = "10px ui-monospace, monospace";
+      // Stack under the freq-sweep status if both are running.
+      const yOff = running ? 18 : 6;
+      ctx.fillText("converging…", 6, size - yOff);
+    }
+
     // Current impedance marker.
     if (r > 0 || x !== 0) {
       const { gRe, gIm } = reflectionCoefficient(r, x, z0);
@@ -2784,7 +3109,7 @@ function SmithChart({
     ctx.moveTo(cx, cy - 4);
     ctx.lineTo(cx, cy + 4);
     ctx.stroke();
-  }, [r, x, z0, size, sweep, measFreqMhz, running]);
+  }, [r, x, z0, size, sweep, converge, measFreqMhz, running, convergeRunning]);
 
   return <canvas ref={canvasRef} className="smith" />;
 }

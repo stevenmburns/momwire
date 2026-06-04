@@ -446,7 +446,8 @@ html, body, #root {
   position: relative;
 }
 
-.antenna-overlay {
+.antenna-overlay,
+.smith-overlay {
   position: absolute;
   top: 12px;
   right: 12px;
