@@ -16,6 +16,13 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
+# Core runtime deps: the solver and its helpers import these unconditionally
+# (numpy/scipy throughout src/pysim). The C++ _accelerators extension is an
+# optional speedup, not required for import.
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+]
 
 [project.optional-dependencies]
 web = [
@@ -34,6 +41,11 @@ Homepage = "https://github.com/stevenmburns/pysim"
 Issues = "https://github.com/stevenmburns/pysim/issues"
 
 [tool.pytest.ini_options]
+# Only collect the project's own tests. A bare `pytest` would otherwise
+# recurse into the vendored python-necpp submodule, whose Python-2-era
+# test harnesses fail to even parse on modern Python.
+testpaths = ["tests"]
+norecursedirs = ["python-necpp"]
 markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
     "plot: tests that produce plots for visual inspection (deselect with -m 'not plot')",
