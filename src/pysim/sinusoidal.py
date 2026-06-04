@@ -174,20 +174,22 @@ class SinusoidalPySim:
         """
         if self._cached_geometry is not None:
             return self._cached_geometry
-        seg_l_list = []
-        seg_r_list = []
-        seg_centers_list = []
-        seg_tangent_list = []
-        seg_length_list = []
-        # per-wire data: first/last segment index, first/last tangent at the
-        # wire's endpoints; used for resolving junction neighbours
-        wire_first_seg = []
-        wire_last_seg = []
+        # Build per-edge chunks (n_e segments per edge) in vectorized form,
+        # then concatenate. Inner k_seg Python loop (171 iters × 5 list
+        # appends + 4 numpy temporaries) was ~12% of py-spy samples at N=21.
+        seg_l_chunks: list[np.ndarray] = []
+        seg_r_chunks: list[np.ndarray] = []
+        seg_c_chunks: list[np.ndarray] = []
+        seg_t_chunks: list[np.ndarray] = []
+        seg_h_chunks: list[np.ndarray] = []
+        wire_first_seg: list[int] = []
+        wire_last_seg: list[int] = []
+        running_count = 0
 
         for w_idx, (pl, npe_list) in enumerate(
             zip(self.wires_polylines, self.n_per_edge_per_wire)
         ):
-            wire_first = len(seg_l_list)
+            wire_first = running_count
             for e_idx in range(pl.shape[0] - 1):
                 p0 = pl[e_idx]
                 p1 = pl[e_idx + 1]
@@ -198,23 +200,26 @@ class SinusoidalPySim:
                 tan = vec / edge_len
                 n_e = npe_list[e_idx]
                 h_e = edge_len / n_e
-                for k_seg in range(n_e):
-                    pl_l = p0 + (k_seg / n_e) * vec
-                    pl_r = p0 + ((k_seg + 1) / n_e) * vec
-                    seg_l_list.append(pl_l)
-                    seg_r_list.append(pl_r)
-                    seg_centers_list.append(0.5 * (pl_l + pl_r))
-                    seg_tangent_list.append(tan)
-                    seg_length_list.append(h_e)
-            wire_last = len(seg_l_list) - 1
+                # frac in [0, 1] sampled at n_e+1 points; consecutive points
+                # bound each segment.
+                frac = np.linspace(0.0, 1.0, n_e + 1)
+                pts = p0 + frac[:, None] * vec  # (n_e+1, 3)
+                pl_l_arr = pts[:-1]  # (n_e, 3)
+                pl_r_arr = pts[1:]  # (n_e, 3)
+                seg_l_chunks.append(pl_l_arr)
+                seg_r_chunks.append(pl_r_arr)
+                seg_c_chunks.append(0.5 * (pl_l_arr + pl_r_arr))
+                seg_t_chunks.append(np.broadcast_to(tan, (n_e, 3)).copy())
+                seg_h_chunks.append(np.full(n_e, h_e, dtype=np.float64))
+                running_count += n_e
+            wire_last_seg.append(running_count - 1)
             wire_first_seg.append(wire_first)
-            wire_last_seg.append(wire_last)
 
-        seg_l = np.asarray(seg_l_list, dtype=float)
-        seg_r = np.asarray(seg_r_list, dtype=float)
-        seg_c = np.asarray(seg_centers_list, dtype=float)
-        seg_t = np.asarray(seg_tangent_list, dtype=float)
-        seg_h = np.asarray(seg_length_list, dtype=float)
+        seg_l = np.concatenate(seg_l_chunks, axis=0)
+        seg_r = np.concatenate(seg_r_chunks, axis=0)
+        seg_c = np.concatenate(seg_c_chunks, axis=0)
+        seg_t = np.concatenate(seg_t_chunks, axis=0)
+        seg_h = np.concatenate(seg_h_chunks)
         n_segs = seg_l.shape[0]
 
         # Per-segment N^- / N^+ neighbour lists.
