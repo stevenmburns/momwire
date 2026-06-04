@@ -208,6 +208,16 @@ class BSplinePySim:
                     normalized.append((int(w), end))
                 self.junctions.append(normalized)
 
+        # `compute_impedance(...)` and `currents_at_knots(coeffs)` both call
+        # `_build_geometry()` + `_build_basis_polynomials(geom)` from scratch
+        # — on the N=21 hentenna width-sweep harness that's ~90 ms/step of
+        # repeated Python work (see scripts/vtune_hentenna_width_sweep.py).
+        # Cache both on the instance. Neither depends on `k` (only on the
+        # immutable geometry inputs + degree + junctions), so
+        # `compute_impedance_swept`'s per-k loop also benefits.
+        self._cached_geometry: dict | None = None
+        self._cached_basis_polynomials: tuple | None = None
+
     # ------------------------------------------------------------------
     # Geometry build
     # ------------------------------------------------------------------
@@ -228,6 +238,8 @@ class BSplinePySim:
           tangents: (N_total, 3) per-segment tangent unit vector
           seg_l, seg_r: (N_total, 3) per-segment 3D endpoint
         """
+        if self._cached_geometry is not None:
+            return self._cached_geometry
         per_wire = []
         seg_offsets = [0]
         h_list = []
@@ -295,7 +307,7 @@ class BSplinePySim:
         seg_l_global = np.vstack(seg_l_list_all)
         seg_r_global = np.vstack(seg_r_list_all)
 
-        return {
+        self._cached_geometry = {
             "per_wire": per_wire,
             "seg_offsets": seg_offsets,
             "n_segs_total": seg_offsets[-1],
@@ -304,6 +316,7 @@ class BSplinePySim:
             "seg_l": seg_l_global,
             "seg_r": seg_r_global,
         }
+        return self._cached_geometry
 
     # ------------------------------------------------------------------
     # Endpoint status (free vs junction)
@@ -354,6 +367,13 @@ class BSplinePySim:
         wire_basis_global : list of per-wire (kept_idx, global_basis_idx)
             tuples for the source-vector mapping.
         """
+        # Cache key is geometry identity: the result depends only on `geom`
+        # (per-wire arc knots), `self.degree`, and `self.junctions` (via
+        # _wire_endpoint_status); none change after __init__, so a cached
+        # result computed against the same geom dict is still valid.
+        cached_geom = self._cached_geometry
+        if cached_geom is geom and self._cached_basis_polynomials is not None:
+            return self._cached_basis_polynomials
         d = self.degree
         n_wings = d + 1
         n_poly = d + 1
@@ -473,7 +493,10 @@ class BSplinePySim:
             for m_g, sign in dirs:
                 kcl_A[j_idx, m_g] = sign
 
-        return supp_seg, polys, kcl_A, wire_knots, wire_basis_global
+        result = (supp_seg, polys, kcl_A, wire_knots, wire_basis_global)
+        if cached_geom is geom:
+            self._cached_basis_polynomials = result
+        return result
 
     # ------------------------------------------------------------------
     # J moment integrals
