@@ -86,6 +86,46 @@ def _step_sin(n: int, width_factor: float):
     return z_in, currents
 
 
+def _step_tri(n: int, width_factor: float):
+    from pysim.triangular import TriangularPySim
+
+    wires, junctions, wavelength = _hentenna_wires_with_width(width_factor)
+    sim = TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=_pysim_npe(n, nfeed=2),
+        feed_wire_index=0,
+        feed_arclength=EPS_FEED,
+        wavelength=wavelength,
+        wire_radius=WIRE_RADIUS,
+        nsegs=n,
+        junctions=junctions,
+    )
+    z_in, coeffs = sim.compute_impedance()
+    currents = sim.currents_at_knots(coeffs)
+    return z_in, currents
+
+
+def _step_bspline(n: int, width_factor: float):
+    from pysim.bspline import BSplinePySim
+
+    wires, junctions, wavelength = _hentenna_wires_with_width(width_factor)
+    sim = BSplinePySim(
+        degree=2,
+        wires=wires,
+        n_per_edge_per_wire=_pysim_npe(n, nfeed=2),
+        feed_wire_index=0,
+        feed_arclength=EPS_FEED,
+        wavelength=wavelength,
+        wire_radius=WIRE_RADIUS,
+        nsegs=n,
+        junctions=junctions,
+        use_singular_enrichment=False,
+    )
+    z_in, coeffs = sim.compute_impedance()
+    currents = sim.currents_at_knots(coeffs)
+    return z_in, currents
+
+
 def _step_pynec(n: int, width_factor: float):
     from web import pynec_backend
 
@@ -106,7 +146,9 @@ def _step_pynec(n: int, width_factor: float):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--solver", choices=["sin", "pynec"], required=True)
+    ap.add_argument(
+        "--solver", choices=["sin", "pynec", "tri", "bspline"], required=True
+    )
     ap.add_argument("--n", type=int, default=21)
     ap.add_argument("--steps-up", type=int, default=10)
     ap.add_argument("--steps-down", type=int, default=10)
@@ -122,10 +164,12 @@ def main():
     )
     args = ap.parse_args()
 
-    if args.solver == "sin":
-        step = _step_sin
-    else:
-        step = _step_pynec
+    step = {
+        "sin": _step_sin,
+        "pynec": _step_pynec,
+        "tri": _step_tri,
+        "bspline": _step_bspline,
+    }[args.solver]
 
     if args.warmup:
         step(args.n, args.w0)
