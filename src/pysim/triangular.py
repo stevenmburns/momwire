@@ -165,6 +165,13 @@ class TriangularPySim:
                     normalized.append((int(w), end))
                 self.junctions.append(normalized)
 
+        # `compute_impedance(...)` and `currents_at_knots(coeffs)` both call
+        # `_build_geometry()`; on the N=21 hentenna width sweep that's ~1.8
+        # ms/step of duplicated Python work. Cache on the instance. Geometry
+        # is purely a function of the immutable constructor inputs, so this
+        # is also safe inside `compute_impedance_swept`'s per-k loop.
+        self._cached_geometry: dict | None = None
+
     def _build_geometry(self):
         """Discretize every wire and concatenate into global arrays.
 
@@ -172,6 +179,8 @@ class TriangularPySim:
         the same-wire J build can stay edge-local and use the analytic
         static-kernel formula on each edge.
         """
+        if self._cached_geometry is not None:
+            return self._cached_geometry
         per_wire = []
         seg_offsets = [0]
         basis_offsets = [0]
@@ -258,6 +267,7 @@ class TriangularPySim:
         }
         if self.junctions:
             self._add_junction_bases(geom)
+        self._cached_geometry = geom
         return geom
 
     def _add_junction_bases(self, geom):
