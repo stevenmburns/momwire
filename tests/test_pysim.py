@@ -1172,6 +1172,131 @@ def test_bspline_enrichment_auto_two_pass_selects_correctly():
     assert z_y_auto == z_y_raw
 
 
+def test_bspline_assemble_z_enrich_cpp_matches_numpy():
+    """The C++ `assemble_Z_enrich` accelerator must agree with the
+    pure-numpy reference across all four enrichment variants. The
+    reference path is what runs on platforms where the Pybind11 extension
+    isn't built (Windows — setup.py skips it because the GCC-only
+    `-fopenmp` / `-mavx2` / `-lmvec` flags don't link under MSVC).
+
+    Sweep:
+      * Two geometries — hentenna (small-tap K=3, 2 enrichable junctions)
+        and Y-fixture (balanced 3-way K=3, 1 enrichable junction). Together
+        they exercise the multi-junction Z_ee block, the L-R symmetric
+        enrichment pair (hentenna), and the auto-variant's per-junction
+        filter (Y-fixture's K=2 junction must be excluded).
+      * All four variants — raw / stable / tikhonov / auto. raw and stable
+        differ in the kernel's `proj_coeffs` argument; tikhonov uses the
+        raw kernel call but adds λ·I in Python; auto routes through raw
+        with a junction filter and may take the pass-1-only path (which
+        skips the kernel entirely — that path agrees trivially but is
+        still worth exercising as a "no kernel call" case).
+
+    1e-12 relative is well below GL quadrature precision and lets the
+    two implementations differ only in floating-point reduction order
+    (numpy's pairwise vs C++'s sequential).
+    """
+    import pysim.bspline as bmod
+
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.47
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    eps_feed = 0.05
+
+    # Hentenna
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    half_w = wavelength * width_factor / 2
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+    A = (0.0, half_w, 0.0)
+    B_ = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps_feed, z_mid)
+    C_ = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E_ = (0.0, -half_w, z_bot)
+    T = (0.0, -eps_feed, z_mid)
+    h_kw = dict(
+        degree=2,
+        wires=[
+            np.array([T, S], dtype=float),
+            np.array([S, B_], dtype=float),
+            np.array([B_, A, C_, D], dtype=float),
+            np.array([T, D], dtype=float),
+            np.array([D, E_, F, B_], dtype=float),
+        ],
+        n_per_edge_per_wire=[[3], [21], [21, 21, 21], [21], [21, 21, 21]],
+        feed_wire_index=0,
+        feed_arclength=eps_feed,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=21,
+        junctions=[
+            [(0, "end"), (1, "start")],
+            [(0, "start"), (3, "start")],
+            [(1, "end"), (2, "start"), (4, "end")],
+            [(2, "end"), (3, "end"), (4, "start")],
+        ],
+    )
+
+    # Y-fixture
+    L = wavelength / 4.0
+    T_ = (-eps_feed, 0.0, 0.0)
+    S_ = (+eps_feed, 0.0, 0.0)
+    a1 = (T_[0] - L, 0.0, 0.0)
+    c60 = float(np.cos(np.pi / 3.0))
+    s60 = float(np.sin(np.pi / 3.0))
+    a2 = (S_[0] + L * c60, +L * s60, 0.0)
+    a3 = (S_[0] + L * c60, -L * s60, 0.0)
+    y_kw = dict(
+        degree=2,
+        wires=[
+            np.array([T_, S_], dtype=float),
+            np.array([T_, a1], dtype=float),
+            np.array([S_, a2], dtype=float),
+            np.array([S_, a3], dtype=float),
+        ],
+        n_per_edge_per_wire=[[2], [41], [41], [41]],
+        feed_wire_index=0,
+        feed_arclength=eps_feed,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=41,
+        junctions=[
+            [(0, "start"), (1, "start")],
+            [(0, "end"), (2, "start"), (3, "start")],
+        ],
+        enrichment_min_k=3,
+    )
+
+    def run(kw, variant):
+        z, _ = BSplinePySim(
+            **kw,
+            use_singular_enrichment=True,
+            enrichment_variant=variant,
+            tikhonov_lambda=0.1,
+        ).compute_impedance()
+        return z
+
+    for label, kw in [("hentenna", h_kw), ("y-fixture", y_kw)]:
+        for variant in ("raw", "stable", "tikhonov", "auto"):
+            saved = bmod._HAVE_ENRICH_ACCEL
+            try:
+                bmod._HAVE_ENRICH_ACCEL = True
+                z_cpp = run(kw, variant)
+                bmod._HAVE_ENRICH_ACCEL = False
+                z_np = run(kw, variant)
+            finally:
+                bmod._HAVE_ENRICH_ACCEL = saved
+            rel = abs(z_cpp - z_np) / abs(z_cpp)
+            assert rel < 1e-12, (
+                f"{label} variant={variant}: C++ vs numpy enrich kernel "
+                f"disagreement rel={rel:.2e} (cpp={z_cpp}, np={z_np})"
+            )
+
+
 def test_bspline_hentenna_enrichment_left_right_symmetry():
     """Hentenna is mirror-symmetric about y=0, so the BSpline+enrichment solve
     must produce mirror-symmetric per-knot currents on the upper and lower

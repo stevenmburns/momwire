@@ -51,8 +51,10 @@ try:
     from . import _accelerators as _acc
 
     _HAVE_BSPLINE_ASSEMBLE_ACCEL = hasattr(_acc, "assemble_Z_bspline")
+    _HAVE_ENRICH_ACCEL = hasattr(_acc, "assemble_Z_enrich")
 except ImportError:
     _HAVE_BSPLINE_ASSEMBLE_ACCEL = False
+    _HAVE_ENRICH_ACCEL = False
 
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
@@ -921,6 +923,193 @@ class BSplinePySim:
             ratios.append(0.0 if m_max == 0.0 else min(mags) / m_max)
         return ratios
 
+    @staticmethod
+    def _assemble_Z_enrich_numpy(
+        spec_seg,
+        spec_origin,
+        seg_l,
+        seg_r,
+        h_per_seg,
+        td_all,
+        supp_seg_poly,
+        polys_poly,
+        a_squared,
+        k,
+        omega,
+        eps_,
+        mu_,
+        gl_t01,
+        gl_w01,
+        proj_coeffs,
+    ):
+        """Pure-numpy reference for the C++ `assemble_Z_enrich` kernel.
+
+        Mirrors the C++ structure (precompute Φ_sing values/derivatives
+        and 3D positions at the enrichment-side quadrature nodes, then
+        nested-loop Galerkin sums for Z_ee / Z_pe / Z_ep) so the parity
+        test in tests/test_pysim.py catches any drift between the two.
+
+        Also lets BSplinePySim(use_singular_enrichment=True) work without
+        the C++ accelerator at all — Windows users hit this path because
+        setup.py skips the Pybind11Extension under MSVC (the GCC-only
+        `-fopenmp` / `-mavx2` / `-lmvec` flags don't link there).
+
+        Same argument names and semantics as the C++ binding. `proj_coeffs`
+        of length d+1 selects raw (all zeros → Φ_sing = t·log(t)) vs
+        stable XFEM (subtract Σ_p proj_coeffs[p] t^p from both Φ and its
+        derivative).
+        """
+        n_enrich = spec_seg.shape[0]
+        n_poly, n_wings = supp_seg_poly.shape
+        d_plus_1 = polys_poly.shape[2]
+        n_qp = gl_t01.shape[0]
+
+        Z_pe = np.zeros((n_poly, n_enrich), dtype=np.complex128)
+        Z_ep = np.zeros((n_enrich, n_poly), dtype=np.complex128)
+        Z_ee = np.zeros((n_enrich, n_enrich), dtype=np.complex128)
+        if n_enrich == 0:
+            return Z_pe, Z_ep, Z_ee
+
+        inv_4pi = 1.0 / (4.0 * np.pi)
+        omega_mu = omega * mu_
+        inv_omega_eps = 1.0 / (omega * eps_)
+        eps_tiny = 1e-300
+
+        # Derivative coefficients in monomial basis for the proj polynomial:
+        # P(t) = Σ_p c_p t^p ⇒ P'(t) = Σ_{p≥1} p·c_p t^(p-1).
+        proj_deriv_coeffs = proj_coeffs[1:] * np.arange(1, d_plus_1)
+
+        # Per-enrichment precompute.
+        pos_e_all = np.zeros((n_enrich, n_qp, 3))
+        sing_val_all = np.zeros((n_enrich, n_qp))
+        sing_dval_all = np.zeros((n_enrich, n_qp))
+        w_e_all = np.zeros((n_enrich, n_qp))
+        polyval = np.polynomial.polynomial.polyval
+        for e in range(n_enrich):
+            se = int(spec_seg[e])
+            orig = int(spec_origin[e])
+            he = h_per_seg[se]
+            dphi_sign = 1.0 if orig == 0 else -1.0
+            t = gl_t01
+            u_norm = t if orig == 0 else (1.0 - t)
+            u_safe = np.where(u_norm > eps_tiny, u_norm, eps_tiny)
+            log_u = np.log(u_safe)
+            poly_val = polyval(u_norm, proj_coeffs)
+            if proj_deriv_coeffs.size > 0:
+                poly_dval = polyval(u_norm, proj_deriv_coeffs)
+            else:
+                poly_dval = np.zeros_like(u_norm)
+            sing_val_all[e] = u_norm * log_u - poly_val
+            sing_dval_all[e] = dphi_sign * (log_u + 1.0 - poly_dval) / he
+            w_e_all[e] = gl_w01 * he
+            pos_e_all[e, :, 0] = (1.0 - t) * seg_l[se, 0] + t * seg_r[se, 0]
+            pos_e_all[e, :, 1] = (1.0 - t) * seg_l[se, 1] + t * seg_r[se, 1]
+            pos_e_all[e, :, 2] = (1.0 - t) * seg_l[se, 2] + t * seg_r[se, 2]
+
+        seg_e_arr = spec_seg.astype(np.int64, copy=False)
+
+        # Z_ee: symmetric. Fill upper triangle, mirror.
+        for e in range(n_enrich):
+            for f in range(e, n_enrich):
+                td = td_all[seg_e_arr[e], seg_e_arr[f]]
+                diff = pos_e_all[e, :, None, :] - pos_e_all[f, None, :, :]
+                R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
+                iR_4pi = inv_4pi / R
+                phase = -k * R
+                Gre = np.cos(phase) * iR_4pi
+                Gim = np.sin(phase) * iR_4pi
+                wprod_A = (w_e_all[e] * sing_val_all[e])[:, None] * (
+                    w_e_all[f] * sing_val_all[f]
+                )[None, :]
+                wprod_P = (w_e_all[e] * sing_dval_all[e])[:, None] * (
+                    w_e_all[f] * sing_dval_all[f]
+                )[None, :]
+                IA_re = np.sum(wprod_A * Gre)
+                IA_im = np.sum(wprod_A * Gim)
+                IP_re = np.sum(wprod_P * Gre)
+                IP_im = np.sum(wprod_P * Gim)
+                # Z = jωμ·td·I_A + I_Φ / (jωε)
+                Zre = -omega_mu * td * IA_im + IP_im * inv_omega_eps
+                Zim = omega_mu * td * IA_re - IP_re * inv_omega_eps
+                Z_ee[e, f] = complex(Zre, Zim)
+                if e != f:
+                    Z_ee[f, e] = Z_ee[e, f]
+
+        # Z_pe / Z_ep. Loop over polynomial bases and their wings;
+        # for each wing, precompute poly value/derivative + 3D quad-point
+        # positions on the wing's segment, then loop over enrichments.
+        # Z_pe and Z_ep are computed independently (no .T shortcut) to
+        # mirror the C++ kernel — the kernel is symmetric, so the totals
+        # agree to floating-point rounding either way.
+        for m in range(n_poly):
+            for w_idx in range(n_wings):
+                cw = polys_poly[m, w_idx]
+                if not np.any(cw != 0.0):
+                    continue
+                seg_m = int(supp_seg_poly[m, w_idx])
+                hm = h_per_seg[seg_m]
+                t = gl_t01
+                u_arc = t * hm
+                pv = polyval(u_arc, cw)
+                cw_deriv = cw[1:] * np.arange(1, d_plus_1)
+                if cw_deriv.size > 0:
+                    dv = polyval(u_arc, cw_deriv)
+                else:
+                    dv = np.zeros_like(u_arc)
+                w_m = gl_w01 * hm
+                pos_m = np.empty((n_qp, 3))
+                pos_m[:, 0] = (1.0 - t) * seg_l[seg_m, 0] + t * seg_r[seg_m, 0]
+                pos_m[:, 1] = (1.0 - t) * seg_l[seg_m, 1] + t * seg_r[seg_m, 1]
+                pos_m[:, 2] = (1.0 - t) * seg_l[seg_m, 2] + t * seg_r[seg_m, 2]
+                for e in range(n_enrich):
+                    seg_e = int(seg_e_arr[e])
+                    td_me = td_all[seg_m, seg_e]
+                    td_em = td_all[seg_e, seg_m]
+                    # Z_pe leg: i = m-axis, j = e-axis
+                    diff = pos_m[:, None, :] - pos_e_all[e, None, :, :]
+                    R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
+                    iR_4pi = inv_4pi / R
+                    phase = -k * R
+                    Gre = np.cos(phase) * iR_4pi
+                    Gim = np.sin(phase) * iR_4pi
+                    wprod_A = (w_m * pv)[:, None] * (w_e_all[e] * sing_val_all[e])[
+                        None, :
+                    ]
+                    wprod_P = (w_m * dv)[:, None] * (w_e_all[e] * sing_dval_all[e])[
+                        None, :
+                    ]
+                    pe_IA_re = np.sum(wprod_A * Gre)
+                    pe_IA_im = np.sum(wprod_A * Gim)
+                    pe_IP_re = np.sum(wprod_P * Gre)
+                    pe_IP_im = np.sum(wprod_P * Gim)
+                    # Z_ep leg: i = e-axis, j = m-axis
+                    diff = pos_e_all[e, :, None, :] - pos_m[None, :, :]
+                    R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
+                    iR_4pi = inv_4pi / R
+                    phase = -k * R
+                    Gre = np.cos(phase) * iR_4pi
+                    Gim = np.sin(phase) * iR_4pi
+                    wprod_A = (w_e_all[e] * sing_val_all[e])[:, None] * (w_m * pv)[
+                        None, :
+                    ]
+                    wprod_P = (w_e_all[e] * sing_dval_all[e])[:, None] * (w_m * dv)[
+                        None, :
+                    ]
+                    ep_IA_re = np.sum(wprod_A * Gre)
+                    ep_IA_im = np.sum(wprod_A * Gim)
+                    ep_IP_re = np.sum(wprod_P * Gre)
+                    ep_IP_im = np.sum(wprod_P * Gim)
+                    Z_pe[m, e] += complex(
+                        -omega_mu * td_me * pe_IA_im + pe_IP_im * inv_omega_eps,
+                        omega_mu * td_me * pe_IA_re - pe_IP_re * inv_omega_eps,
+                    )
+                    Z_ep[e, m] += complex(
+                        -omega_mu * td_em * ep_IA_im + ep_IP_im * inv_omega_eps,
+                        omega_mu * td_em * ep_IA_re - ep_IP_re * inv_omega_eps,
+                    )
+
+        return Z_pe, Z_ep, Z_ee
+
     def _enrichment_Z_assemble(
         self, geom, supp_seg_poly, polys_poly, active_junction_indices=None
     ):
@@ -968,9 +1157,7 @@ class BSplinePySim:
         else:
             proj_coeffs = np.zeros(self.degree + 1)
 
-        from pysim._accelerators import assemble_Z_enrich
-
-        Z_pe, Z_ep, Z_ee = assemble_Z_enrich(
+        kernel_args = (
             spec_seg,
             spec_origin,
             np.ascontiguousarray(geom["seg_l"], dtype=np.float64),
@@ -988,6 +1175,10 @@ class BSplinePySim:
             np.ascontiguousarray(w01, dtype=np.float64),
             np.ascontiguousarray(proj_coeffs, dtype=np.float64),
         )
+        if _HAVE_ENRICH_ACCEL:
+            Z_pe, Z_ep, Z_ee = _acc.assemble_Z_enrich(*kernel_args)
+        else:
+            Z_pe, Z_ep, Z_ee = self._assemble_Z_enrich_numpy(*kernel_args)
 
         return {
             "specs": specs,
