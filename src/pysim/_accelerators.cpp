@@ -4,6 +4,7 @@
 #include <complex.h>
 #include "math.h"
 
+#include <cmath>
 #include <iostream>
 #include <tuple>
 #include <vector>
@@ -1620,15 +1621,32 @@ sinusoidal_field_tensor(
     const double pref_rho_const_im = -eta / four_pi_k;
     const double a_sq = a * a;
 
-    #pragma omp parallel for collapse(2) schedule(static)
+    // The oscillatory sincos is batched across all N source segments (per
+    // observer m) into one flat buffer so it vectorizes — the per-pair scalar
+    // calls were unvectorizable. Three stages per m: (A) geometry + phases,
+    // (B) one omp-simd sincos sweep over the buffer, (C) assembly.
+    //
+    // Phases per source segment: 2 boundary (r0_2, r0_1) + n_qp quadrature nodes.
+    const size_t S = n_qp + 2;
+    const size_t P = N * S;
+
+    #pragma omp parallel for schedule(static)
     for (size_t m = 0; m < M; m++) {
+        // Per-iteration scratch (per-thread under the parallel-for). Sizes are
+        // tiny (P ~ N*(n_qp+2)); allocation cost is negligible next to the
+        // sincos + assembly work it feeds.
+        std::vector<double> ph(P), cphb(P), sphb(P);
+        std::vector<double> rho_eval_a(N), dz1_a(N), dz2_a(N),
+                            r0_1_a(N), r0_2_a(N), td_a(N), rpf_a(N);
+        std::vector<double> r0q_inv_a(N * n_qp);
+
+        double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
+        double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
+
+        // ---- Stage A: geometry + phase generation -------------------------
         for (size_t n = 0; n < N; n++) {
-            double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
             double cnx = sc(n, 0), cny = sc(n, 1), cnz = sc(n, 2);
             double tnx = st(n, 0), tny = st(n, 1), tnz = st(n, 2);
-            double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
-
-            // rvec = c_m - c_n; z_eval = rvec · t_src; rho_vec = rvec - z*t_src.
             double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
             double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
             double rho_vx = rvx - z_eval * tnx;
@@ -1638,7 +1656,6 @@ sinusoidal_field_tensor(
             double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
             double td = tmx*tnx + tmy*tny + tmz*tnz;
             double rho_dot_tobs = rho_vx*tmx + rho_vy*tmy + rho_vz*tmz;
-            double rho_proj_factor = rho_dot_tobs / rho_eval;
 
             double H = H_n[n];
             double dz2 = z_eval - H;
@@ -1646,11 +1663,42 @@ sinusoidal_field_tensor(
             double r0_2 = std::sqrt(rho_eval*rho_eval + dz2*dz2);
             double r0_1 = std::sqrt(rho_eval*rho_eval + dz1*dz1);
 
-            // G0_2, G0_1 = exp(-jk r0)/r0 (complex)
-            double phase_2 = -k * r0_2;
-            double phase_1 = -k * r0_1;
-            double cph_2 = std::cos(phase_2), sph_2 = std::sin(phase_2);
-            double cph_1 = std::cos(phase_1), sph_1 = std::sin(phase_1);
+            rho_eval_a[n] = rho_eval;
+            dz1_a[n] = dz1; dz2_a[n] = dz2;
+            r0_1_a[n] = r0_1; r0_2_a[n] = r0_2;
+            td_a[n] = td; rpf_a[n] = rho_dot_tobs / rho_eval;
+
+            size_t base = n * S;
+            ph[base + 0] = -k * r0_2;
+            ph[base + 1] = -k * r0_1;
+            for (size_t q = 0; q < n_qp; q++) {
+                double z_q = H * glt_v[q];
+                double dz_q = z_eval - z_q;
+                double r0_q = std::sqrt(rho_eval*rho_eval + dz_q*dz_q);
+                ph[base + 2 + q] = -k * r0_q;
+                r0q_inv_a[n * n_qp + q] = 1.0 / r0_q;
+            }
+        }
+
+        // ---- Stage B: vectorized sincos over every phase ------------------
+        // Split cos and sin into separate omp-simd loops (libmvec has no vector
+        // sincos) so each body stays vectorizable to _ZGVdN4v_{cos,sin}
+        // (AVX2, 4 doubles per call).
+        #pragma omp simd
+        for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
+        #pragma omp simd
+        for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
+
+        // ---- Stage C: assembly --------------------------------------------
+        for (size_t n = 0; n < N; n++) {
+            size_t base = n * S;
+            double cph_2 = cphb[base + 0], sph_2 = sphb[base + 0];
+            double cph_1 = cphb[base + 1], sph_1 = sphb[base + 1];
+            double rho_eval = rho_eval_a[n];
+            double dz1 = dz1_a[n], dz2 = dz2_a[n];
+            double r0_1 = r0_1_a[n], r0_2 = r0_2_a[n];
+            double td = td_a[n], rho_proj_factor = rpf_a[n];
+            double H = H_n[n];
             double inv_r0_2 = 1.0 / r0_2;
             double inv_r0_1 = 1.0 / r0_1;
             double G0_2_re = cph_2 * inv_r0_2, G0_2_im = sph_2 * inv_r0_2;
@@ -1689,10 +1737,10 @@ sinusoidal_field_tensor(
             double Erho_const_re = -pref_rho_const_im * rho_diff_im;
             double Erho_const_im =  pref_rho_const_im * rho_diff_re;
 
-            // u2, u1, int_inv_r0
+            // u2, u1, int_inv_r0.  H - z_eval = -dz2;  -H - z_eval = -dz1.
             double inv_rho_eval = 1.0 / rho_eval;
-            double u2 = (H - z_eval) * inv_rho_eval;
-            double u1 = (-H - z_eval) * inv_rho_eval;
+            double u2 = -dz2 * inv_rho_eval;
+            double u1 = -dz1 * inv_rho_eval;
             double int_inv_r0 = std::asinh(u2) - std::asinh(u1);
 
             // Quadrature for the smooth remainder of int_G0:
@@ -1700,13 +1748,9 @@ sinusoidal_field_tensor(
             //   int_reg = H * Σ_q reg(q) * gw[q]
             double int_reg_re = 0.0, int_reg_im = 0.0;
             for (size_t q = 0; q < n_qp; q++) {
-                double z_q = H * glt_v[q];
-                double dz_q = z_eval - z_q;
-                double r0_q = std::sqrt(rho_eval*rho_eval + dz_q*dz_q);
-                double phase_q = -k * r0_q;
-                double cph_q = std::cos(phase_q);
-                double sph_q = std::sin(phase_q);
-                double inv_r0_q = 1.0 / r0_q;
+                double cph_q = cphb[base + 2 + q];
+                double sph_q = sphb[base + 2 + q];
+                double inv_r0_q = r0q_inv_a[n * n_qp + q];
                 // (exp(jphase) - 1) / r0
                 double reg_re = (cph_q - 1.0) * inv_r0_q;
                 double reg_im = sph_q * inv_r0_q;
