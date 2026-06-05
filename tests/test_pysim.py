@@ -490,6 +490,162 @@ def test_bspline_cpp_kernel_matches_numpy():
     assert rel_S < 1e-7, f"Static kernel rel diff {rel_S}"
 
 
+def test_bspline_cpp_degree1_matches_numpy():
+    """Exercise the C++ degree=1 (max_d=1) template instantiations of the
+    B-spline accelerators -- the moment kernel<1>, the static moments at
+    max_d=1, and assemble_Z_bspline_kernel<1> -- which the degree=2 tests
+    never reach. Each must agree with the pure-numpy reference path.
+    """
+    import pysim.bspline as bmod
+    from pysim.bspline import BSplinePySim
+    import pysim._bspline_kernels as kmod
+    from pysim._bspline_kernels import (
+        _seg_seg_full_moments_offedge,
+        _seg_seg_static_moments,
+    )
+
+    if not (
+        kmod._HAVE_BSPLINE_ACCEL
+        and kmod._HAVE_BSPLINE_STATIC_ACCEL
+        and bmod._HAVE_BSPLINE_ASSEMBLE_ACCEL
+    ):
+        pytest.skip("B-spline C++ accelerators not built")
+
+    # --- moment kernel<1> + static moments at max_d=1 (off-edge + same-edge) --
+    N = 12
+    seg = np.linspace(0.0, 6.0, N + 1)
+    seg_l = np.column_stack([np.zeros(N), seg[:-1], np.zeros(N)])
+    seg_r = np.column_stack([np.zeros(N), seg[1:], np.zeros(N)])
+
+    J_cpp = _seg_seg_full_moments_offedge(seg_l, seg_r, seg_l, seg_r, 0.0005, 0.3, 1, 4)
+    S_cpp = _seg_seg_static_moments(seg, 0.0005, max_d=1)
+    # max_d=1 -> (d+1, d+1) = (2, 2) leading dims
+    assert J_cpp.shape[:2] == (2, 2)
+    assert S_cpp.shape[:2] == (2, 2)
+
+    saved_full = kmod._HAVE_BSPLINE_ACCEL
+    saved_static = kmod._HAVE_BSPLINE_STATIC_ACCEL
+    try:
+        kmod._HAVE_BSPLINE_ACCEL = False
+        kmod._HAVE_BSPLINE_STATIC_ACCEL = False
+        J_np = _seg_seg_full_moments_offedge(
+            seg_l, seg_r, seg_l, seg_r, 0.0005, 0.3, 1, 4
+        )
+        S_np = _seg_seg_static_moments(seg, 0.0005, max_d=1)
+    finally:
+        kmod._HAVE_BSPLINE_ACCEL = saved_full
+        kmod._HAVE_BSPLINE_STATIC_ACCEL = saved_static
+
+    rel_J = np.max(np.abs(J_cpp - J_np) / (np.abs(J_np) + 1e-30))
+    rel_S = np.max(np.abs(S_cpp - S_np) / (np.abs(S_np) + 1e-30))
+    assert rel_J < 1e-8, f"degree=1 J kernel rel diff {rel_J}"
+    assert rel_S < 1e-7, f"degree=1 static kernel rel diff {rel_S}"
+
+    # --- assemble_Z_bspline_kernel<1> via a full degree=1 dipole solve --------
+    L = 2 * 0.962 * 22 / 4
+    wires = [np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])]
+    z_cpp, _ = BSplinePySim(
+        wires=wires, n_per_edge_per_wire=[[21]], nsegs=21, degree=1
+    ).compute_impedance()
+
+    saved_asm = bmod._HAVE_BSPLINE_ASSEMBLE_ACCEL
+    try:
+        bmod._HAVE_BSPLINE_ASSEMBLE_ACCEL = False
+        z_np, _ = BSplinePySim(
+            wires=wires, n_per_edge_per_wire=[[21]], nsegs=21, degree=1
+        ).compute_impedance()
+    finally:
+        bmod._HAVE_BSPLINE_ASSEMBLE_ACCEL = saved_asm
+
+    rel_z = abs(z_cpp - z_np) / abs(z_np)
+    assert rel_z < 1e-12, f"degree=1 Z assembly C++ vs numpy rel diff {rel_z}"
+
+
+def test_triangular_reg_and_offedge_numpy_matches_cpp():
+    """The C++ same-edge-regularized (seg_seg_reg_quad_batch_1d) and cross-edge
+    (seg_seg_quad_batch_3d) accelerators must agree with the pure-numpy
+    reference paths in _triangular_kernels to ~1e-9 relative. Toggling the
+    _HAVE_*_ACCEL flags also exercises the numpy fallbacks themselves (taken
+    on platforms where the extension isn't built).
+    """
+    import pysim._triangular_kernels as tk
+    from pysim._triangular_kernels import (
+        _seg_seg_reg_all_batch,
+        _seg_seg_offedge_quad_batch,
+    )
+
+    if not (tk._HAVE_REG_ACCEL and tk._HAVE_OFF_ACCEL):
+        pytest.skip("triangular C++ accelerators not built")
+
+    a = 0.0005
+    k_array = np.array([0.3, 0.7])
+    n_qp = 4
+    N = 8
+
+    # same-edge regularized: arc-length endpoints along one straight edge
+    seg = np.linspace(0.0, 4.0, N + 1)
+
+    # cross-edge: two parallel edges offset 0.5 m in x, same y-extent
+    yl = np.linspace(0.0, 4.0, N + 1)
+    edge_i_l = np.column_stack([np.zeros(N), yl[:-1], np.zeros(N)])
+    edge_i_r = np.column_stack([np.zeros(N), yl[1:], np.zeros(N)])
+    edge_j_l = np.column_stack([np.full(N, 0.5), yl[:-1], np.zeros(N)])
+    edge_j_r = np.column_stack([np.full(N, 0.5), yl[1:], np.zeros(N)])
+
+    reg_cpp = _seg_seg_reg_all_batch(seg, a, k_array, n_qp)
+    off_cpp = _seg_seg_offedge_quad_batch(
+        edge_i_l, edge_i_r, edge_j_l, edge_j_r, a, k_array, n_qp
+    )
+
+    saved_reg, saved_off = tk._HAVE_REG_ACCEL, tk._HAVE_OFF_ACCEL
+    try:
+        tk._HAVE_REG_ACCEL = False
+        tk._HAVE_OFF_ACCEL = False
+        reg_np = _seg_seg_reg_all_batch(seg, a, k_array, n_qp)
+        off_np = _seg_seg_offedge_quad_batch(
+            edge_i_l, edge_i_r, edge_j_l, edge_j_r, a, k_array, n_qp
+        )
+    finally:
+        tk._HAVE_REG_ACCEL = saved_reg
+        tk._HAVE_OFF_ACCEL = saved_off
+
+    # --- kink-corner pair: two edges sharing an endpoint at a 90deg angle.   --
+    # Edge i lies on -y, edge j on +x; the right end of i[-1] coincides with
+    # the left end of j[0] at the origin. This exercises the a^2 regularization
+    # in seg_seg_quad_batch_3d on the touching pair where unregularized R
+    # would vanish at the shared corner, in isolation from the assembly-level
+    # tests that normally cover this case.
+    Nk = 4
+    yk = np.linspace(-2.0, 0.0, Nk + 1)
+    xk = np.linspace(0.0, 2.0, Nk + 1)
+    kink_i_l = np.column_stack([np.zeros(Nk), yk[:-1], np.zeros(Nk)])
+    kink_i_r = np.column_stack([np.zeros(Nk), yk[1:], np.zeros(Nk)])
+    kink_j_l = np.column_stack([xk[:-1], np.zeros(Nk), np.zeros(Nk)])
+    kink_j_r = np.column_stack([xk[1:], np.zeros(Nk), np.zeros(Nk)])
+    kink_cpp = _seg_seg_offedge_quad_batch(
+        kink_i_l, kink_i_r, kink_j_l, kink_j_r, a, k_array, n_qp
+    )
+    try:
+        tk._HAVE_OFF_ACCEL = False
+        kink_np = _seg_seg_offedge_quad_batch(
+            kink_i_l, kink_i_r, kink_j_l, kink_j_r, a, k_array, n_qp
+        )
+    finally:
+        tk._HAVE_OFF_ACCEL = saved_off
+
+    for label, cpp, npref in [
+        ("reg", reg_cpp, reg_np),
+        ("offedge-parallel", off_cpp, off_np),
+        ("offedge-kink-corner", kink_cpp, kink_np),
+    ]:
+        for idx, (jc, jn) in enumerate(zip(cpp, npref)):
+            # Corner pair must be finite (the a^2 regularization keeps it so).
+            assert np.isfinite(jc).all(), f"{label} J[{idx}] C++ not finite"
+            assert np.isfinite(jn).all(), f"{label} J[{idx}] numpy not finite"
+            rel = np.max(np.abs(jc - jn) / (np.abs(jn) + 1e-30))
+            assert rel < 1e-9, f"{label} J[{idx}] C++ vs numpy rel diff {rel}"
+
+
 @pytest.mark.parametrize("degree,nsegs", [(2, 21), (2, 81)])
 def test_bspline_dipole_converges_to_nec(degree, nsegs):
     """BSplinePySim degree-2 (quadratic) on the default half-wave dipole.
