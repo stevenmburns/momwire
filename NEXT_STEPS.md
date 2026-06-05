@@ -431,9 +431,23 @@ Ordered by what I'd actually do next, not by what's most ambitious.
     **Disposition.** "raw" stays default in `BSplinePySim`, `web/server.py`'s allowlist, and the slot-B UI default (`useSingularEnrichment=false`). The "stable" variant is exposed as an opt-in via the slot's gear menu for users who want faster large-N convergence and don't care about the n≤21 transient. Tests: `test_bspline_d2_hentenna_enrichment_stable_variant` pins the stable n=81 hentenna value and the d=1-equivalence-to-raw property.
 
     Alternatives still on the table (notes for future-us):
-    - **Tikhonov regularization** (add λ·I to the enrichment-block diagonal): one-line solve-step change but tuning parameter λ.
+    - **Tikhonov regularization** (add λ·I to the enrichment-block diagonal): **also implemented on this branch as `enrichment_variant="tikhonov"` with `tikhonov_lambda` knob.** Scaling is dimensionless: `Z_ee += λ·s·I` where `s = mean(|diag(Z_ee)|)`. Limits verified by `test_bspline_d2_hentenna_enrichment_tikhonov_variant`: λ=0 bit-exact to raw; λ→∞ bit-exact (~1e-7 rel) to no-enr. Sweep across (λ, geometry, n):
+
+      ```
+                       hentenna n=21 (target j38.873 ≡ no-enr)   Y-fix n=81 R (target 50.40 ≡ cusp captured)
+         raw         : 43.062 + j39.119  (+0.25 X transient)     50.404                            (cusp ✓)
+         stable      : 43.019 + j39.658  (+0.79 X — worse)       50.341                            (cusp ✗)
+         tik λ=0.001 : 43.06  + j39.12   (≈ raw)                 50.40                             (≈ raw)
+         tik λ=0.03  : 43.11  + j39.12   (X unchanged, R nudged) 50.40                             (≈ raw)
+         tik λ=0.1   : 43.19  + j39.06   (X half-fixed)          50.40                             (cusp ✓)
+         tik λ=0.3   : 43.19  + j38.94   (X ¾-fixed)             50.37                             (cusp slipping)
+         tik λ=1.0   : 43.13  + j38.89   (X fully fixed)         50.34                             (cusp ✗)
+         tik λ=3.0   : 43.11  + j38.88   (≈ no-enr)              50.33                             (cusp ✗)
+      ```
+
+      No universal λ exists — the same Z_ee diagonal that absorbs hentenna's spurious polynomial-discretization error also carries Y-fixture's legitimate cusp coefficient, and Tikhonov shrinks both proportionally. **Sweet-spot λ ≈ 0.1** as a compromise default (Y cusp preserved within 0.005 Ω; modest hentenna improvement) — but doesn't fully suppress the hentenna transient. `λ=1.0` matches no-enr on hentenna but kills the Y cusp. Frontend default is 0.1; users can dial it per slot.
     - **Posteriori threshold** (solve → zero small |α_enrich,k| → resolve): also tunable.
-    - **Two-pass tap_ratio auto-toggle**: solve raw once, measure tap_ratio at each K≥3 junction, re-solve enabling enrichment only where the split is genuinely 3-way (~0.50). Threshold-based; no basis change.
+    - **Two-pass tap_ratio auto-toggle**: solve raw once, measure tap_ratio at each K≥3 junction, re-solve enabling enrichment only where the split is genuinely 3-way (~0.50). Threshold-based; no basis change. Per-junction selectivity is what stable/tikhonov can't deliver — the spurious-vs-legitimate distinction is geometric, not algebraic.
     - **Blending / partition-of-unity XFEM**: multiply Φ_sing by a partition-of-unity that decays smoothly from the junction; literature suggests this captures the right physics with better conditioning. More implementation effort.
 
     None of these are urgent — "raw" with the slot-B `useSingularEnrichment=false` default already ships a working answer for all current UI presets.

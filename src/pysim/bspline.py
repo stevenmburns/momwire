@@ -160,6 +160,7 @@ class BSplinePySim:
         n_qp_sing=32,
         enrichment_min_k=3,
         enrichment_variant="raw",
+        tikhonov_lambda=1e-3,
     ):
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
@@ -264,12 +265,19 @@ class BSplinePySim:
         #             its 0.08 Ω R cusp benefit. Not "universally safe."
         #             For d=1 the bubble subspace is empty so "stable"
         #             reduces to "raw" identically.
-        if enrichment_variant not in ("raw", "stable"):
+        # "tikhonov" → raw Φ_sing basis, but add λ·s·I to the enrichment
+        # block Z_ee at solve time, where s is the average diagonal
+        # magnitude of Z_ee (so λ is a dimensionless relative-strength
+        # knob). Penalizes ||α_enr||² in the augmented objective; shrinks
+        # spurious-large α at small N without re-deriving the basis.
+        # λ → 0 ⇒ raw; λ → ∞ ⇒ enrichment effectively off.
+        if enrichment_variant not in ("raw", "stable", "tikhonov"):
             raise ValueError(
-                f"enrichment_variant must be 'raw' or 'stable', got "
-                f"{enrichment_variant!r}"
+                f"enrichment_variant must be 'raw', 'stable', or 'tikhonov', "
+                f"got {enrichment_variant!r}"
             )
         self.enrichment_variant = enrichment_variant
+        self.tikhonov_lambda = float(tikhonov_lambda)
 
         self.junctions = []
         if junctions is not None:
@@ -888,9 +896,9 @@ class BSplinePySim:
         w01 = 0.5 * gl_w
 
         # "stable" variant subtracts the L²-projection of Φ_sing onto
-        # the BC-preserving polynomial bubble subspace; "raw" sends zero
-        # coefficients so the C++ kernel evaluates the unmodified
-        # Φ_sing(t) = t·log(t).
+        # the BC-preserving polynomial bubble subspace; "raw" and
+        # "tikhonov" both send zero coefficients (the tikhonov knob is
+        # applied at solve time to Z_ee, not at the basis level).
         if self.enrichment_variant == "stable":
             proj_coeffs = _xfem_projection_coeffs(self.degree)
         else:
@@ -964,6 +972,13 @@ class BSplinePySim:
                 Z_aug[:n_p, n_p:] = enrich["Z_pe"]
                 Z_aug[n_p:, :n_p] = enrich["Z_ep"]
                 Z_aug[n_p:, n_p:] = enrich["Z_ee"]
+                if self.enrichment_variant == "tikhonov":
+                    # λ·s·I on the enrichment-block diagonal. s is the
+                    # mean diagonal magnitude of Z_ee so λ is a
+                    # dimensionless knob independent of problem scale.
+                    # If Z_ee is empty (n_e=0) this block is skipped above.
+                    s = float(np.mean(np.abs(np.diag(enrich["Z_ee"]))))
+                    Z_aug[n_p:, n_p:] += self.tikhonov_lambda * s * np.eye(n_e)
                 v_aug = np.zeros(n_total, dtype=np.complex128)
                 v_aug[:n_p] = v
                 # Enrichment KCL: singular bases vanish at junction → 0 outflow

@@ -993,6 +993,82 @@ def test_bspline_d2_hentenna_enrichment_stable_variant():
     assert z1_raw == z1_stb
 
 
+def test_bspline_d2_hentenna_enrichment_tikhonov_variant():
+    """Pin the two limit cases of the tikhonov variant:
+      (a) λ=0 reduces to raw bit-exact (the penalty disappears);
+      (b) λ→∞ reduces to use_singular_enrichment=False (penalty
+          dominates and α_enr → 0).
+
+    These limits are what makes tikhonov a knob rather than a separate
+    variant; if either limit drifts, the dimensionless scaling (λ·s with
+    s = mean |diag(Z_ee)|) is wrong and the knob loses its meaning.
+    """
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.47
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    eps_feed = 0.05
+    half_w = wavelength * width_factor / 2
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+    A = (0.0, half_w, 0.0)
+    B_ = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps_feed, z_mid)
+    C_ = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E_ = (0.0, -half_w, z_bot)
+    T = (0.0, -eps_feed, z_mid)
+    wires = [
+        np.array([T, S], dtype=float),
+        np.array([S, B_], dtype=float),
+        np.array([B_, A, C_, D], dtype=float),
+        np.array([T, D], dtype=float),
+        np.array([D, E_, F, B_], dtype=float),
+    ]
+    junctions = [
+        [(0, "end"), (1, "start")],
+        [(0, "start"), (3, "start")],
+        [(1, "end"), (2, "start"), (4, "end")],
+        [(2, "end"), (3, "end"), (4, "start")],
+    ]
+    n = 21  # small enough to see the tikhonov effect; UI default
+    npe = [[3], [n], [n, n, n], [n], [n, n, n]]
+    common = dict(
+        degree=2,
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feed_wire_index=0,
+        feed_arclength=eps_feed,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=n,
+        junctions=junctions,
+    )
+    z_raw, _ = BSplinePySim(
+        **common, use_singular_enrichment=True, enrichment_variant="raw"
+    ).compute_impedance()
+    z_tik_zero, _ = BSplinePySim(
+        **common,
+        use_singular_enrichment=True,
+        enrichment_variant="tikhonov",
+        tikhonov_lambda=0.0,
+    ).compute_impedance()
+    z_off, _ = BSplinePySim(**common, use_singular_enrichment=False).compute_impedance()
+    z_tik_big, _ = BSplinePySim(
+        **common,
+        use_singular_enrichment=True,
+        enrichment_variant="tikhonov",
+        tikhonov_lambda=1e6,
+    ).compute_impedance()
+    # (a) λ=0 → raw bit-exact
+    assert z_raw == z_tik_zero
+    # (b) λ→∞ → no-enrichment to ~1e-6 relative
+    assert abs(z_tik_big - z_off) / abs(z_off) < 1e-6
+
+
 def test_bspline_hentenna_enrichment_left_right_symmetry():
     """Hentenna is mirror-symmetric about y=0, so the BSpline+enrichment solve
     must produce mirror-symmetric per-knot currents on the upper and lower
