@@ -126,6 +126,7 @@ _PYSIM_MODEL_KEYS = {
         "n_qp_sing",
         "enrichment_min_k",
         "enrichment_variant",
+        "tikhonov_lambda",
     ),
 }
 _PYSIM_MODELS = {

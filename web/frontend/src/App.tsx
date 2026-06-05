@@ -97,11 +97,16 @@ type BSplineOpts = CommonOpts & {
   nQpPair: number;
   feedSmoothingFactor: number | null; // null = sharp delta-gap
   useSingularEnrichment: boolean;
-  // "raw"    → Φ_sing(t) = t·log(t), PR #45/#47 original shape.
-  // "stable" → Φ_sing − bubble-subspace L²-projection: faster large-N
-  //            convergence on hentenna; larger small-N transient; loses
-  //            Y-fixture cusp benefit. d=1 collapses to raw bit-exact.
-  enrichmentVariant: "raw" | "stable";
+  // "raw"      → Φ_sing(t) = t·log(t), PR #45/#47 original shape.
+  // "stable"   → Φ_sing − bubble-subspace L²-projection: faster large-N
+  //              convergence on hentenna; larger small-N transient; loses
+  //              Y-fixture cusp benefit. d=1 collapses to raw bit-exact.
+  // "tikhonov" → raw basis + λ·s·I penalty on Z_ee at solve time.
+  //              λ→0 is raw; λ→∞ kills enrichment. λ=0.1 preserves
+  //              Y-fixture cusp; λ=1.0 fully suppresses hentenna small-N
+  //              transient but loses Y cusp.
+  enrichmentVariant: "raw" | "stable" | "tikhonov";
+  tikhonovLambda: number;
   nQpSing: number;
   enrichmentMinK: number;
   nQpSource: number;
@@ -126,6 +131,7 @@ const DEFAULT_BACKEND_OPTS: BackendOptsMap = {
     feedSmoothingFactor: null,
     useSingularEnrichment: false,
     enrichmentVariant: "raw",
+    tikhonovLambda: 0.1,
     nQpSing: 32,
     enrichmentMinK: 3,
     nQpSource: 16,
@@ -187,6 +193,7 @@ function modelOptionsForRequest(
       feed_smoothing_factor: o.feedSmoothingFactor,
       use_singular_enrichment: o.useSingularEnrichment,
       enrichment_variant: o.enrichmentVariant,
+      tikhonov_lambda: o.tikhonovLambda,
       n_qp_sing: o.nQpSing,
       enrichment_min_k: o.enrichmentMinK,
     };
@@ -2242,21 +2249,35 @@ function BSplineFields({
             />
             <label
               className="link-toggle"
-              title="raw = original Φ_sing = (u/h)·log(u/h); stable = Φ_sing minus L²-projection on the polynomial bubble subspace (faster large-N hentenna convergence, larger small-N transient, loses Y-fixture cusp benefit)."
+              title="raw = original Φ_sing = (u/h)·log(u/h); stable = Φ_sing minus bubble-subspace L²-projection (faster large-N hentenna convergence, larger small-N transient, loses Y cusp); tikhonov = raw + λ·s·I penalty on Z_ee (λ=0.1 keeps Y cusp; λ=1 suppresses hentenna transient but loses Y cusp)."
             >
               variant:
               <select
                 value={opts.enrichmentVariant}
                 onChange={(e) =>
                   onPatch({
-                    enrichmentVariant: e.target.value as "raw" | "stable",
+                    enrichmentVariant: e.target.value as
+                      | "raw"
+                      | "stable"
+                      | "tikhonov",
                   })
                 }
               >
                 <option value="raw">raw</option>
                 <option value="stable">stable</option>
+                <option value="tikhonov">tikhonov</option>
               </select>
             </label>
+            {opts.enrichmentVariant === "tikhonov" && (
+              <NumberField
+                label="tikhonov_lambda (λ)"
+                value={opts.tikhonovLambda}
+                min={0}
+                max={10}
+                step={0.05}
+                onChange={(v) => onPatch({ tikhonovLambda: v })}
+              />
+            )}
           </>
         )}
       </div>
