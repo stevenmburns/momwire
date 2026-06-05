@@ -130,6 +130,18 @@ Ordered by what I'd actually do next, not by what's most ambitious.
 
      **Cumulative ceiling on AVX2: ~35-40% e2e** for the full-stack float32 mode. Existing tests would fail at every tier: `test_assemble_Z_general_cpp_matches_python` rtol=1e-12 (tier ≥1), `test_triangular_k2_junction_*` atol=1e-9 (tier ≥3), `test_triangular_fandipole_swept_matches_per_freq` atol=1e-6 (tier ≥3). Design implication: add `precision="float"` (or similar) opt-in flag, gate the C++ kernels on it, keep double as default. Existing tests stay; add float32 regression tests with relaxed tolerances (atol ~1e-3 on Z). Suited for the interactive web UI where the user can already see a ~0.1 Ω disagreement between pysim and PyNEC without complaint.
 
+   - **6l. BSpline `seg_seg_full_moments_bspline_kernel` has an un-vectorized scalar sincos.** *AVX2-applicable, not hardware-blocked.* A cross-engine `perf` profile (single-thread, hentenna N=21 width sweep via `scripts/vtune_hentenna_width_sweep.py --solver {sin,tri,bspline}`) measured the sin/cos share of total self-time per engine:
+
+     | engine | hot kernel | libmvec SIMD sincos | scalar sincos | total sincos |
+     |---|---|---|---|---|
+     | sinusoidal | `sinusoidal_field_tensor` | 10.2% | 0.3% | 10.5% |
+     | triangular | `seg_seg_quad_batch_3d` | 7.7% | — | 7.7% |
+     | bspline | `seg_seg_full_moments_bspline_kernel` | 3.0% | **1.4% (`__sincos_fma`)** | 4.4% |
+
+     The bspline kernel is the only one of the three that still spends a meaningful chunk (~⅓ of its sincos, 1.4% of total runtime) in *scalar* libm `__sincos_fma` rather than the vectorized libmvec `_ZGVdN4v_{sin,cos}` path — some phase/sincos site in the d-templated kernel isn't inside an `omp simd` loop over a contiguous phase buffer. The lever is the same flat-buffer batching the sinusoidal kernel already uses (Stage A/B/C in `sinusoidal_field_tensor`): collect all phases into one array, run a single split cos/sin `omp simd` sweep, then assemble. Ceiling is small (~1.4% e2e on bspline) — file it as cleanup-grade, not a priority.
+
+     **Note on the f32-8-way idea (was item 6k tier 1, now declined for sincos):** the f32 mode was prototyped on `sinusoidal_field_tensor` (`PYSIM_SINCOS_MODE=1/2`) and **measured as no help even in sinusoidal — the engine with the *most* sincos (10.5%)** — because the float↔double conversions and Cody-Waite reduction eat the theoretical ~½× SIMD-width win. Since triangular (7.7%) and bspline (4.4%) have strictly less sincos, their f32 ceilings are even lower (~3.8% / ~1.5%), so f32-8-way sincos is not worth carrying on any engine. The prototype was stripped; the f64 4-way flat-buffer restructuring it rode in on was kept (it *is* the sinusoidal sincos win).
+
    **Blocked on this hardware:**
 
    - **6b. Vectorized `cexp(-jkR)` via SLEEF / Intel SVML for AVX-512 sincos.** *Blocked: i7-8550U has no AVX-512.* The C++ quadrature kernels already use libmvec's AVX2 `cos_avx2`/`sin_avx2` (4 doubles per inst), which is the widest sincos this CPU supports. AVX-512 (8 doubles per inst) would notionally give ~1.5-2× on the sincos portion (~22% of J build, ~10% of /sweep), but only on Skylake-X / Ice Lake / Tiger Lake / newer server parts. If pysim deploys to such hardware, this becomes the top lever; on Kaby Lake there is nothing to gain. Smaller AVX2 micro-opts (fused sincos via SLEEF — libmvec lacks vector sincos so cos and sin are two passes; software pipelining the kernel loop) are plausible but add a build dependency for an estimated <10% kernel speedup.
