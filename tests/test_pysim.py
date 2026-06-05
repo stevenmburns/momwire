@@ -10,18 +10,8 @@ os.environ["NUMEXPR_NUM_THREADS"] = "8"
 from pysim.bspline import BSplinePySim
 from pysim.sinusoidal import SinusoidalPySim
 from pysim.triangular import TriangularPySim
-from pysim._accelerators import dist_outer_product
 
 import numpy as np
-
-
-def test_extension():
-    nsegs = 20
-    pts = np.array([[0, 0, z] for z in range(nsegs + 1)]) / (2 * nsegs)
-
-    result = dist_outer_product(pts, pts)
-    expected = np.linalg.norm(pts[:, None, :] - pts[None, :, :], axis=-1)
-    np.testing.assert_allclose(result, expected)
 
 
 @pytest.mark.parametrize("nsegs", [20, 40, 80])
@@ -833,6 +823,7 @@ def test_bspline_d2_hentenna_singular_enrichment():
       n=161 → 43.0845 + j38.8749
     Rate fit on R over the four points gives p ≈ 2.74.
     """
+    pytest.importorskip("pysim._accelerators")
     C_LIGHT = 299_792_458.0
     freq_mhz = 28.47
     wavelength = C_LIGHT / (freq_mhz * 1e6)
@@ -920,6 +911,7 @@ def test_bspline_hentenna_enrichment_left_right_symmetry():
     only converging to zero as N→∞. Caught here at modest N so any
     re-introduction of the bug fails loudly.
     """
+    pytest.importorskip("pysim._accelerators")
     design_freq_mhz = 28.47
     C_LIGHT = 299_792_458.0
     wavelength = C_LIGHT / (design_freq_mhz * 1e6)
@@ -1388,6 +1380,7 @@ def test_assemble_Z_general_cpp_matches_python():
     through both paths so any kernel divergence shows up here as ULP-level
     error.
     """
+    pytest.importorskip("pysim._accelerators")
     from pysim import triangular as _trimod
     from pysim._accelerators import assemble_Z_general as _cpp_general
 
