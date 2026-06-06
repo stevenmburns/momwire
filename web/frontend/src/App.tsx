@@ -322,6 +322,12 @@ type SweepData = {
   freqs_mhz: number[];
   z_re: number[];
   z_im: number[];
+  /** Multi-feed geometries (bowtie 1×2 array) populate these; each row is a
+   *  per-feed Z array of length n_feeds. Index alignment with freqs_mhz.
+   *  Single-feed geometries omit them and the Smith chart falls back to
+   *  the legacy single-trajectory render driven by z_re/z_im. */
+  feeds_z_re?: number[][];
+  feeds_z_im?: number[][];
 };
 
 type ConvergeData = {
@@ -997,7 +1003,13 @@ export function App() {
 
     const body = { ...buildRequest(), freqs_mhz: freqs };
     setSweepRunning(true);
-    const acc: SweepData = { freqs_mhz: [], z_re: [], z_im: [] };
+    const acc: SweepData = {
+      freqs_mhz: [],
+      z_re: [],
+      z_im: [],
+      feeds_z_re: undefined,
+      feeds_z_im: undefined,
+    };
     try {
       const resp = await fetch("/sweep", {
         method: "POST",
@@ -1023,12 +1035,27 @@ export function App() {
           acc.freqs_mhz.push(pt.freq_mhz);
           acc.z_re.push(pt.z_re);
           acc.z_im.push(pt.z_im);
+          // Multi-feed sweep records (bowtie) ship per-feed Z alongside
+          // the primary. Allocate the per-feed buffers lazily on first
+          // sight so single-feed sweeps stay on the original code path.
+          if (Array.isArray(pt.feeds_z_re) && Array.isArray(pt.feeds_z_im)) {
+            if (!acc.feeds_z_re) acc.feeds_z_re = [];
+            if (!acc.feeds_z_im) acc.feeds_z_im = [];
+            acc.feeds_z_re.push(pt.feeds_z_re);
+            acc.feeds_z_im.push(pt.feeds_z_im);
+          }
           if (!controller.signal.aborted) {
             // New object so React re-renders the Smith chart per point.
             setSweep({
               freqs_mhz: acc.freqs_mhz.slice(),
               z_re: acc.z_re.slice(),
               z_im: acc.z_im.slice(),
+              feeds_z_re: acc.feeds_z_re
+                ? acc.feeds_z_re.map((row) => row.slice())
+                : undefined,
+              feeds_z_im: acc.feeds_z_im
+                ? acc.feeds_z_im.map((row) => row.slice())
+                : undefined,
             });
           }
         }
@@ -2593,6 +2620,7 @@ function ViewPanel({
       measFreqMhz={measFreqMhz}
       running={sweepRunning}
       convergeRunning={convergeRunning}
+      feeds={result?.feeds}
     />
   );
 }
@@ -3014,6 +3042,22 @@ function FarFieldChart({
   return <canvas ref={canvasRef} className="farfield" />;
 }
 
+// Per-feed colors for multi-line Smith chart overlays. Feed 0 keeps the
+// existing single-feed blue so single-feed geometries are visually
+// unchanged; subsequent feeds use distinct hues that read well on the
+// dark background. Indices beyond this list wrap, but that's only
+// reachable on >4-feed geometries (none exist yet).
+const FEED_COLORS = [
+  "rgba(118, 208, 255, 0.85)",  // blue (primary)
+  "rgba(255, 196, 102, 0.85)",  // amber
+  "rgba(140, 230, 140, 0.85)",  // green
+  "rgba(255, 130, 200, 0.85)",  // pink
+];
+
+function feedColor(i: number): string {
+  return FEED_COLORS[i % FEED_COLORS.length];
+}
+
 function SmithChart({
   r,
   x,
@@ -3024,6 +3068,7 @@ function SmithChart({
   measFreqMhz,
   running,
   convergeRunning,
+  feeds,
 }: {
   r: number;
   x: number;
@@ -3034,6 +3079,9 @@ function SmithChart({
   measFreqMhz: number;
   running: boolean;
   convergeRunning: boolean;
+  /** Multi-feed geometries pass the per-feed Z list from the latest
+   *  solve so the chart can also render N centre dots, one per port. */
+  feeds?: FeedEntry[];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -3121,46 +3169,64 @@ function SmithChart({
     ctx.fillText("+jX", cx + R - 24, cy - R + 14);
     ctx.fillText("−jX", cx + R - 24, cy + R - 4);
 
-    // Sweep locus: blue points at each Γ-plane sample (no connecting line —
-    // sparse samples make a piecewise polyline read as artificial kinks).
+    // Sweep locus: one colored trajectory per feed (or just the primary
+    // for single-feed geometries). Multi-feed geometries (bowtie) ship
+    // per-feed Z arrays via sweep.feeds_z_re / feeds_z_im; when present
+    // we render one color-distinct trajectory per port instead of the
+    // single legacy blue locus. No connecting line — sparse samples
+    // make a piecewise polyline read as artificial kinks.
     if (sweep && sweep.freqs_mhz.length > 1) {
+      const hasMulti =
+        !!sweep.feeds_z_re &&
+        !!sweep.feeds_z_im &&
+        sweep.feeds_z_re.length === sweep.freqs_mhz.length &&
+        sweep.feeds_z_re[0].length > 1;
+      const nFeeds = hasMulti ? sweep.feeds_z_re![0].length : 1;
+
+      // Z accessor per (feed index, sample index). Single-feed falls
+      // back to the top-level z_re/z_im (same as before this change).
+      const zAt = (fi: number, i: number) =>
+        hasMulti
+          ? { re: sweep.feeds_z_re![i][fi], im: sweep.feeds_z_im![i][fi] }
+          : { re: sweep.z_re[i], im: sweep.z_im[i] };
+
       ctx.save();
       ctx.beginPath();
       ctx.arc(cx, cy, R, 0, 2 * Math.PI);
       ctx.clip();
-      ctx.fillStyle = "rgba(118, 208, 255, 0.85)";
-      let nearestIdx = 0;
-      let nearestDelta = Infinity;
-      for (let i = 0; i < sweep.freqs_mhz.length; i++) {
-        const g = reflectionCoefficient(sweep.z_re[i], sweep.z_im[i], z0);
-        const px = cx + g.gRe * R;
-        const py = cy - g.gIm * R;
-        ctx.beginPath();
-        ctx.arc(px, py, 1.5, 0, 2 * Math.PI);
-        ctx.fill();
-        const d = Math.abs(sweep.freqs_mhz[i] - measFreqMhz);
-        if (d < nearestDelta) {
-          nearestDelta = d;
-          nearestIdx = i;
+      for (let fi = 0; fi < nFeeds; fi++) {
+        ctx.fillStyle = feedColor(fi);
+        for (let i = 0; i < sweep.freqs_mhz.length; i++) {
+          const z = zAt(fi, i);
+          const g = reflectionCoefficient(z.re, z.im, z0);
+          const px = cx + g.gRe * R;
+          const py = cy - g.gIm * R;
+          ctx.beginPath();
+          ctx.arc(px, py, 1.5, 0, 2 * Math.PI);
+          ctx.fill();
         }
       }
       ctx.restore();
 
-      // Endpoint markers (low-freq filled, high-freq hollow).
-      const drawEndpoint = (idx: number, filled: boolean) => {
-        const g = reflectionCoefficient(sweep.z_re[idx], sweep.z_im[idx], z0);
+      // Endpoint markers per feed (low-freq filled, high-freq hollow).
+      const drawEndpoint = (fi: number, idx: number, filled: boolean) => {
+        const z = zAt(fi, idx);
+        const g = reflectionCoefficient(z.re, z.im, z0);
         const px = cx + g.gRe * R;
         const py = cy - g.gIm * R;
+        const col = feedColor(fi);
         ctx.lineWidth = 1.2;
-        ctx.strokeStyle = "rgba(118, 208, 255, 0.95)";
-        ctx.fillStyle = filled ? "rgba(118, 208, 255, 0.95)" : "rgba(13, 16, 21, 0.95)";
+        ctx.strokeStyle = col;
+        ctx.fillStyle = filled ? col : "rgba(13, 16, 21, 0.95)";
         ctx.beginPath();
         ctx.arc(px, py, 3, 0, 2 * Math.PI);
         ctx.fill();
         ctx.stroke();
       };
-      drawEndpoint(0, true);
-      drawEndpoint(sweep.freqs_mhz.length - 1, false);
+      for (let fi = 0; fi < nFeeds; fi++) {
+        drawEndpoint(fi, 0, true);
+        drawEndpoint(fi, sweep.freqs_mhz.length - 1, false);
+      }
 
       // Freq range label across the bottom of the panel.
       ctx.fillStyle = "#9aa3b2";
@@ -3170,8 +3236,19 @@ function SmithChart({
       const txt = `${fLoTxt} → ${fHiTxt} MHz`;
       ctx.fillText(txt, size - 6 - ctx.measureText(txt).width, size - 6);
 
-      // Tick which sweep sample matches the current meas freq (if any).
-      void nearestIdx;
+      // Per-feed legend swatches (only when multi-feed).
+      if (hasMulti) {
+        ctx.font = "10px ui-monospace, monospace";
+        for (let fi = 0; fi < nFeeds; fi++) {
+          const ly = 12 + fi * 14;
+          ctx.fillStyle = feedColor(fi);
+          ctx.beginPath();
+          ctx.arc(12, ly, 3, 0, 2 * Math.PI);
+          ctx.fill();
+          ctx.fillStyle = "#cdd5e0";
+          ctx.fillText(`feed ${fi}`, 20, ly + 3);
+        }
+      }
     }
 
     if (running) {
@@ -3281,8 +3358,26 @@ function SmithChart({
       ctx.fillText("converging…", 6, size - yOff);
     }
 
-    // Current impedance marker.
-    if (r > 0 || x !== 0) {
+    // Current impedance marker(s). Multi-feed: one dot per feed, in the
+    // matching sweep-trajectory color. Single-feed keeps the existing
+    // golden marker (with line-from-centre + glow) on the primary Z.
+    if (feeds && feeds.length > 1) {
+      for (let fi = 0; fi < feeds.length; fi++) {
+        const f = feeds[fi];
+        if (f.z_re <= 0 && f.z_im === 0) continue;
+        const { gRe, gIm } = reflectionCoefficient(f.z_re, f.z_im, z0);
+        const px = cx + gRe * R;
+        const py = cy - gIm * R;
+        ctx.fillStyle = feedColor(fi);
+        ctx.beginPath();
+        ctx.arc(px, py, 4, 0, 2 * Math.PI);
+        ctx.fill();
+        // Thin outline for visibility on top of any sweep dots.
+        ctx.strokeStyle = "rgba(13, 16, 21, 0.85)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    } else if (r > 0 || x !== 0) {
       const { gRe, gIm } = reflectionCoefficient(r, x, z0);
       // gIm > 0 means inductive (top half); canvas y flips.
       const px = cx + gRe * R;
@@ -3321,7 +3416,7 @@ function SmithChart({
     ctx.moveTo(cx, cy - 4);
     ctx.lineTo(cx, cy + 4);
     ctx.stroke();
-  }, [r, x, z0, size, sweep, converge, measFreqMhz, running, convergeRunning]);
+  }, [r, x, z0, size, sweep, converge, measFreqMhz, running, convergeRunning, feeds]);
 
   return <canvas ref={canvasRef} className="smith" />;
 }
