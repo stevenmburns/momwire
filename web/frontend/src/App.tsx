@@ -337,6 +337,12 @@ type ConvergeData = {
   // Richardson extrapolation Z(1/N) → Z(0). Filled once ≥3 points are in.
   z_re_extrap: number | null;
   z_im_extrap: number | null;
+  /** Multi-feed convergence — per-N per-feed Z. Outer index aligns with
+   *  n_values; inner index aligns with feed order. Single-feed
+   *  geometries omit these and the chart falls back to the legacy
+   *  single-trail render driven by z_re/z_im. */
+  feeds_z_re?: number[][];
+  feeds_z_im?: number[][];
 };
 
 // Log-spaced segments-per-wire ladder for the convergence sweep. Hentenna's
@@ -1087,6 +1093,8 @@ export function App() {
       z_im: [],
       z_re_extrap: null,
       z_im_extrap: null,
+      feeds_z_re: undefined,
+      feeds_z_im: undefined,
     };
     try {
       const resp = await fetch("/converge", {
@@ -1117,6 +1125,14 @@ export function App() {
           acc.n_values.push(pt.n_per_wire);
           acc.z_re.push(pt.z_re);
           acc.z_im.push(pt.z_im);
+          // Multi-feed convergence records ship per-feed Z alongside the
+          // primary; allocate the buffers lazily on first sight.
+          if (Array.isArray(pt.feeds_z_re) && Array.isArray(pt.feeds_z_im)) {
+            if (!acc.feeds_z_re) acc.feeds_z_re = [];
+            if (!acc.feeds_z_im) acc.feeds_z_im = [];
+            acc.feeds_z_re.push(pt.feeds_z_re);
+            acc.feeds_z_im.push(pt.feeds_z_im);
+          }
           const invN = acc.n_values.map((n) => 1 / n);
           acc.z_re_extrap = richardsonExtrap(invN, acc.z_re);
           acc.z_im_extrap = richardsonExtrap(invN, acc.z_im);
@@ -1127,6 +1143,12 @@ export function App() {
               z_im: acc.z_im.slice(),
               z_re_extrap: acc.z_re_extrap,
               z_im_extrap: acc.z_im_extrap,
+              feeds_z_re: acc.feeds_z_re
+                ? acc.feeds_z_re.map((row) => row.slice())
+                : undefined,
+              feeds_z_im: acc.feeds_z_im
+                ? acc.feeds_z_im.map((row) => row.slice())
+                : undefined,
             });
           }
         }
@@ -3209,7 +3231,9 @@ function SmithChart({
       for (let fi = 0; fi < nFeeds; fi++) {
         // Darkened color so the sweep cloud reads as a trail underneath
         // the bright current-Z primary marker (drawn later, full color).
-        ctx.fillStyle = hasMulti ? feedSweepColor(fi) : feedColor(fi);
+        // Same convention for single- and multi-feed so the chart's
+        // visual grammar is uniform.
+        ctx.fillStyle = feedSweepColor(fi);
         for (let i = 0; i < sweep.freqs_mhz.length; i++) {
           const z = zAt(fi, i);
           const g = reflectionCoefficient(z.re, z.im, z0);
@@ -3230,7 +3254,7 @@ function SmithChart({
         const g = reflectionCoefficient(z.re, z.im, z0);
         const px = cx + g.gRe * R;
         const py = cy - g.gIm * R;
-        const col = hasMulti ? feedSweepColor(fi) : feedColor(fi);
+        const col = feedSweepColor(fi);
         ctx.lineWidth = 1.2;
         ctx.strokeStyle = col;
         ctx.fillStyle = filled ? col : "rgba(13, 16, 21, 0.95)";
@@ -3281,58 +3305,81 @@ function SmithChart({
     }
 
     // Convergence locus: Z(N) trajectory as N increases, drawn as a
-    // connected purple polyline so the sequence direction reads as motion
-    // (vs. the freq sweep's unconnected scatter — those samples are dense
-    // enough that a line would imply interpolation). Smallest-N point gets
-    // a hollow ring; largest-N gets a filled disc; Richardson-extrapolated
-    // Z* gets a diamond, in a brighter shade.
+    // connected polyline per feed so the sequence direction reads as
+    // motion (vs. the freq sweep's unconnected scatter). Each feed gets
+    // its own bright color from the feed palette — the line shape
+    // distinguishes the convergence trail from the scattered freq-sweep
+    // dots, and the bright-vs-dim brightness distinguishes the bright
+    // current-Z marker from the trail's interior dots. Smallest-N point
+    // gets a hollow ring; largest-N gets a filled disc; Richardson-
+    // extrapolated Z* gets a diamond (primary feed only).
     if (converge && converge.n_values.length >= 1) {
+      const cHasMulti =
+        !!converge.feeds_z_re &&
+        !!converge.feeds_z_im &&
+        converge.feeds_z_re.length === converge.n_values.length &&
+        converge.feeds_z_re[0].length > 1;
+      const cNFeeds = cHasMulti ? converge.feeds_z_re![0].length : 1;
+      const czAt = (fi: number, i: number) =>
+        cHasMulti
+          ? { re: converge.feeds_z_re![i][fi], im: converge.feeds_z_im![i][fi] }
+          : { re: converge.z_re[i], im: converge.z_im[i] };
+
       ctx.save();
       ctx.beginPath();
       ctx.arc(cx, cy, R, 0, 2 * Math.PI);
       ctx.clip();
-      ctx.strokeStyle = "rgba(195, 140, 255, 0.85)";
-      ctx.lineWidth = 1.2;
-      ctx.beginPath();
-      for (let i = 0; i < converge.n_values.length; i++) {
-        const g = reflectionCoefficient(converge.z_re[i], converge.z_im[i], z0);
-        const px = cx + g.gRe * R;
-        const py = cy - g.gIm * R;
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
-
-      // Per-N dots along the trajectory.
-      ctx.fillStyle = "rgba(195, 140, 255, 0.9)";
-      for (let i = 0; i < converge.n_values.length; i++) {
-        const g = reflectionCoefficient(converge.z_re[i], converge.z_im[i], z0);
-        const px = cx + g.gRe * R;
-        const py = cy - g.gIm * R;
+      for (let fi = 0; fi < cNFeeds; fi++) {
+        ctx.strokeStyle = feedColor(fi);
+        ctx.lineWidth = 1.2;
         ctx.beginPath();
-        ctx.arc(px, py, 1.8, 0, 2 * Math.PI);
-        ctx.fill();
+        for (let i = 0; i < converge.n_values.length; i++) {
+          const z = czAt(fi, i);
+          const g = reflectionCoefficient(z.re, z.im, z0);
+          const px = cx + g.gRe * R;
+          const py = cy - g.gIm * R;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        // Per-N dots along the trajectory.
+        ctx.fillStyle = feedColor(fi);
+        for (let i = 0; i < converge.n_values.length; i++) {
+          const z = czAt(fi, i);
+          const g = reflectionCoefficient(z.re, z.im, z0);
+          const px = cx + g.gRe * R;
+          const py = cy - g.gIm * R;
+          ctx.beginPath();
+          ctx.arc(px, py, 1.8, 0, 2 * Math.PI);
+          ctx.fill();
+        }
       }
       ctx.restore();
 
-      // Endpoint markers: smallest-N hollow, largest-N filled.
-      const drawNEndpoint = (idx: number, filled: boolean) => {
-        const g = reflectionCoefficient(converge.z_re[idx], converge.z_im[idx], z0);
+      // Endpoint markers per feed: smallest-N hollow, largest-N filled.
+      const drawNEndpoint = (fi: number, idx: number, filled: boolean) => {
+        const z = czAt(fi, idx);
+        const g = reflectionCoefficient(z.re, z.im, z0);
         const px = cx + g.gRe * R;
         const py = cy - g.gIm * R;
+        const col = feedColor(fi);
         ctx.lineWidth = 1.2;
-        ctx.strokeStyle = "rgba(195, 140, 255, 0.95)";
-        ctx.fillStyle = filled ? "rgba(195, 140, 255, 0.95)" : "rgba(13, 16, 21, 0.95)";
+        ctx.strokeStyle = col;
+        ctx.fillStyle = filled ? col : "rgba(13, 16, 21, 0.95)";
         ctx.beginPath();
         ctx.arc(px, py, 3, 0, 2 * Math.PI);
         ctx.fill();
         ctx.stroke();
       };
-      drawNEndpoint(0, false);
-      drawNEndpoint(converge.n_values.length - 1, true);
+      for (let fi = 0; fi < cNFeeds; fi++) {
+        drawNEndpoint(fi, 0, false);
+        drawNEndpoint(fi, converge.n_values.length - 1, true);
+      }
 
-      // Richardson Z* marker — diamond in a brighter pink, to distinguish
-      // it from the actual sampled points and from the live-Z dot.
+      // Richardson Z* marker — diamond in a brighter pink. Primary feed
+      // only; the extrapolation math is per-feed-independent but we
+      // don't currently run it on the per-feed series.
       if (converge.z_re_extrap != null && converge.z_im_extrap != null) {
         const ge = reflectionCoefficient(
           converge.z_re_extrap,
@@ -3358,7 +3405,7 @@ function SmithChart({
         ctx.restore();
       }
 
-      // Bottom-left summary: N-range and extrapolated Z*.
+      // Bottom-left summary: N-range and extrapolated Z* (primary feed).
       ctx.fillStyle = "rgba(220, 195, 255, 0.95)";
       ctx.font = "10px ui-monospace, monospace";
       const nLo = converge.n_values[0];
@@ -3381,53 +3428,31 @@ function SmithChart({
       ctx.fillText("converging…", 6, size - yOff);
     }
 
-    // Current impedance marker(s). Multi-feed: one dot per feed, in the
-    // matching sweep-trajectory color. Single-feed keeps the existing
-    // golden marker (with line-from-centre + glow) on the primary Z.
-    if (feeds && feeds.length > 1) {
-      for (let fi = 0; fi < feeds.length; fi++) {
-        const f = feeds[fi];
-        if (f.z_re <= 0 && f.z_im === 0) continue;
-        const { gRe, gIm } = reflectionCoefficient(f.z_re, f.z_im, z0);
-        const px = cx + gRe * R;
-        const py = cy - gIm * R;
-        ctx.fillStyle = feedColor(fi);
-        ctx.beginPath();
-        ctx.arc(px, py, 4, 0, 2 * Math.PI);
-        ctx.fill();
-        // Thin outline for visibility on top of any sweep dots.
-        ctx.strokeStyle = "rgba(13, 16, 21, 0.85)";
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-    } else if (r > 0 || x !== 0) {
-      const { gRe, gIm } = reflectionCoefficient(r, x, z0);
-      // gIm > 0 means inductive (top half); canvas y flips.
+    // Current impedance marker(s). One bright dot per feed in the
+    // matching feed color, with a thin dark outline for visibility on
+    // top of the sweep cloud. Single- and multi-feed share this code
+    // path so the chart's visual grammar is uniform: dim color = trail
+    // (freq sweep), bright = "you are here." The previous golden +
+    // glow + line-from-centre treatment for single-feed is gone —
+    // single-feed and feed-0-of-multi-feed now look identical.
+    const markerPoints: Array<{ re: number; im: number; fi: number }> =
+      feeds && feeds.length > 0
+        ? feeds.map((f, fi) => ({ re: f.z_re, im: f.z_im, fi }))
+        : r > 0 || x !== 0
+          ? [{ re: r, im: x, fi: 0 }]
+          : [];
+    for (const m of markerPoints) {
+      if (m.re <= 0 && m.im === 0) continue;
+      const { gRe, gIm } = reflectionCoefficient(m.re, m.im, z0);
       const px = cx + gRe * R;
       const py = cy - gIm * R;
-
-      // Line from center
-      ctx.strokeStyle = "rgba(255, 209, 102, 0.45)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(cx, cy);
-      ctx.lineTo(px, py);
-      ctx.stroke();
-
-      // Glow
-      const grad = ctx.createRadialGradient(px, py, 0, px, py, 14);
-      grad.addColorStop(0, "rgba(255, 209, 102, 0.55)");
-      grad.addColorStop(1, "rgba(255, 209, 102, 0)");
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(px, py, 14, 0, 2 * Math.PI);
-      ctx.fill();
-
-      // Dot
-      ctx.fillStyle = "#ffd166";
+      ctx.fillStyle = feedColor(m.fi);
       ctx.beginPath();
       ctx.arc(px, py, 4, 0, 2 * Math.PI);
       ctx.fill();
+      ctx.strokeStyle = "rgba(13, 16, 21, 0.85)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
     }
 
     // Center match marker
