@@ -3306,26 +3306,6 @@ function SmithChart({
       const txt = `${fLoTxt} → ${fHiTxt} MHz`;
       ctx.fillText(txt, size - 6 - ctx.measureText(txt).width, size - 6);
 
-      // Per-feed legend swatches (only when multi-feed). Two dots per
-      // entry — bright = current-Z marker, dark = sweep trail — so the
-      // user can map the chart's two shades back to the same feed at a
-      // glance.
-      if (hasMulti) {
-        ctx.font = "10px ui-monospace, monospace";
-        for (let fi = 0; fi < nFeeds; fi++) {
-          const ly = 12 + fi * 14;
-          ctx.fillStyle = feedSweepColor(fi);
-          ctx.beginPath();
-          ctx.arc(12, ly, 3, 0, 2 * Math.PI);
-          ctx.fill();
-          ctx.fillStyle = feedColor(fi);
-          ctx.beginPath();
-          ctx.arc(20, ly, 3, 0, 2 * Math.PI);
-          ctx.fill();
-          ctx.fillStyle = "#cdd5e0";
-          ctx.fillText(`feed ${fi}`, 28, ly + 3);
-        }
-      }
     }
 
     if (running) {
@@ -3449,20 +3429,6 @@ function SmithChart({
         drawExtrap(0, converge.z_re_extrap, converge.z_im_extrap);
       }
 
-      // Bottom-left summary: N-range and extrapolated Z* (primary feed).
-      ctx.fillStyle = "rgba(220, 195, 255, 0.95)";
-      ctx.font = "10px ui-monospace, monospace";
-      const nLo = converge.n_values[0];
-      const nHi = converge.n_values[converge.n_values.length - 1];
-      const nText = `N: ${nLo} → ${nHi}`;
-      ctx.fillText(nText, 6, 28);
-      if (converge.z_re_extrap != null && converge.z_im_extrap != null) {
-        const reTxt = converge.z_re_extrap.toFixed(2);
-        const imTxt = converge.z_im_extrap.toFixed(2);
-        const sign = converge.z_im_extrap >= 0 ? "+" : "−";
-        const zText = `Z* ≈ ${reTxt} ${sign} j${Math.abs(parseFloat(imTxt)).toFixed(2)} Ω`;
-        ctx.fillText(zText, 6, 40);
-      }
     }
     if (convergeRunning) {
       ctx.fillStyle = "#7b8493";
@@ -3497,6 +3463,80 @@ function SmithChart({
       ctx.strokeStyle = "rgba(13, 16, 21, 0.85)";
       ctx.lineWidth = 1;
       ctx.stroke();
+    }
+
+    // Top-left summary: one row per feed (when multi-feed) or one row
+    // total (single-feed). Each row gets:
+    //   [dim swatch][bright swatch]  feed N  Z* ≈ R + jX Ω
+    // Both swatches encode the per-feed color (dim = freq-sweep trail,
+    // bright = current-Z marker / convergence trail). Z* tacks on
+    // inline in the matching bright color when ≥3 converge samples
+    // have come in, so each trail has its own visibly-colored Z*
+    // readout next to its swatch — replacing the old single purple
+    // Z* line that only tracked feeds[0].
+    const summaryFeeds: Array<{
+      fi: number;
+      extrapRe: number | null;
+      extrapIm: number | null;
+    }> = [];
+    if (feeds && feeds.length > 1) {
+      for (let fi = 0; fi < feeds.length; fi++) {
+        const re = converge?.feeds_z_re_extrap?.[fi] ?? null;
+        const im = converge?.feeds_z_im_extrap?.[fi] ?? null;
+        summaryFeeds.push({ fi, extrapRe: re, extrapIm: im });
+      }
+    } else if (converge && converge.n_values.length >= 1) {
+      summaryFeeds.push({
+        fi: 0,
+        extrapRe: converge.z_re_extrap,
+        extrapIm: converge.z_im_extrap,
+      });
+    } else if (feeds && feeds.length === 1) {
+      // Sweep-only single-feed run: show the swatch row so the colors
+      // on the chart are explained even without a converge.
+      summaryFeeds.push({ fi: 0, extrapRe: null, extrapIm: null });
+    }
+    if (summaryFeeds.length > 0) {
+      ctx.font = "10px ui-monospace, monospace";
+      for (let row = 0; row < summaryFeeds.length; row++) {
+        const { fi, extrapRe, extrapIm } = summaryFeeds[row];
+        const ly = 12 + row * 14;
+        // Dim swatch (sweep trail color).
+        ctx.fillStyle = feedSweepColor(fi);
+        ctx.beginPath();
+        ctx.arc(12, ly, 3, 0, 2 * Math.PI);
+        ctx.fill();
+        // Bright swatch (current-Z / convergence-trail color).
+        ctx.fillStyle = feedColor(fi);
+        ctx.beginPath();
+        ctx.arc(20, ly, 3, 0, 2 * Math.PI);
+        ctx.fill();
+        // Feed label + inline Z* (when extrap available). Text color
+        // matches the bright feed color so the row's color identity
+        // ties back to the chart trails for that feed.
+        ctx.fillStyle = feedColor(fi);
+        let txt =
+          summaryFeeds.length > 1 ? `feed ${fi}` : "";
+        if (extrapRe != null && extrapIm != null) {
+          const sign = extrapIm >= 0 ? "+" : "−";
+          const zText = `Z* ≈ ${extrapRe.toFixed(2)} ${sign} j${Math.abs(extrapIm).toFixed(2)} Ω`;
+          txt = txt ? `${txt}  ${zText}` : zText;
+        }
+        if (txt) ctx.fillText(txt, 28, ly + 3);
+      }
+    }
+
+    // Bottom-left: N-range stays neutral since it's per-converge not
+    // per-feed. Sits above the converging / sweeping status indicators.
+    if (converge && converge.n_values.length >= 1) {
+      const nLo = converge.n_values[0];
+      const nHi = converge.n_values[converge.n_values.length - 1];
+      ctx.fillStyle = "#9aa3b2";
+      ctx.font = "10px ui-monospace, monospace";
+      const baseY = running && convergeRunning ? size - 30
+        : running || convergeRunning ? size - 18
+        : size - 6;
+      ctx.fillText(`N: ${nLo} → ${nHi}`, 6, baseY);
     }
 
     // Center match marker
