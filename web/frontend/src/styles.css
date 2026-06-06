@@ -379,6 +379,20 @@ html, body, #root {
   font-weight: 600;
 }
 
+.feeds-table {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed #2a313d;
+}
+
+.feeds-table-header {
+  color: #7b8493;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+
 .smith,
 .farfield {
   display: block;
