@@ -12,7 +12,7 @@ type Wire = {
   sample_currents_im?: number[];
 };
 
-type Geometry = "inverted_v" | "yagi" | "moxon" | "hexbeam" | "fan_dipole" | "hentenna";
+type Geometry = "inverted_v" | "yagi" | "moxon" | "hexbeam" | "fan_dipole" | "hentenna" | "bowtie";
 
 const GEOMETRY_OPTIONS: { id: Geometry; label: string }[] = [
   { id: "inverted_v", label: "Inverted V" },
@@ -21,7 +21,17 @@ const GEOMETRY_OPTIONS: { id: Geometry; label: string }[] = [
   { id: "hexbeam", label: "Hexbeam" },
   { id: "fan_dipole", label: "Fan dipole" },
   { id: "hentenna", label: "Hentenna" },
+  { id: "bowtie", label: "Bowtie" },
 ];
+
+type FeedEntry = {
+  wire_index: number;
+  knot_index: number;
+  z_re: number;
+  z_im: number;
+  v_re: number;
+  v_im: number;
+};
 
 type SolveResponse = {
   geometry: Geometry;
@@ -30,6 +40,9 @@ type SolveResponse = {
   feed_knot_index: number;
   z_in_re: number;
   z_in_im: number;
+  /** Multi-feed geometries (bowtie 1×2 array) populate this; single-feed
+   *  geometries omit it. Primary feed is feeds[0] when present. */
+  feeds?: FeedEntry[];
   design_freq_mhz: number;
   measurement_freq_mhz: number;
   lambda_design_m: number;
@@ -64,6 +77,12 @@ type SolveResponse = {
   half_width_m?: number;
   top_height_m?: number;
   mid_offset_m?: number;
+  // Bowtie-1×2-array-specific
+  y_m?: number;
+  z_m?: number;
+  length_m?: number;
+  del_y_m?: number;
+  phase_lr_deg?: number;
 };
 
 // Backend selector — three PySim model variants + PyNEC. Per-backend
@@ -247,6 +266,10 @@ type SolveRequest = {
   width_factor?: number;
   top_height_factor?: number;
   mid_height_factor?: number;
+  // Bowtie 1×2 array (slope shared with fan_dipole tip-droop convention)
+  length_factor?: number;
+  del_y_m?: number;
+  phase_lr_deg?: number;
 };
 
 // Amateur HF bands the user can design for. Slider min/max snap to the
@@ -393,7 +416,8 @@ function defaultProjection(geometry: Geometry): Projection {
   if (
     geometry === "inverted_v" ||
     geometry === "fan_dipole" ||
-    geometry === "hentenna"
+    geometry === "hentenna" ||
+    geometry === "bowtie"
   )
     return "yz";
   return "xy";
@@ -482,6 +506,14 @@ export function App() {
   const [hentennaWidthFactor, setHentennaWidthFactor] = useState(0.1378);
   const [hentennaTopHeightFactor, setHentennaTopHeightFactor] = useState(0.5081);
   const [hentennaMidHeightFactor, setHentennaMidHeightFactor] = useState(0.1094);
+  // Bowtie 1×2 array controls (matching antenna_designer's bowtiearray1x2
+  // 28.47 MHz design). The geometry always builds a phased 1×2 array; set
+  // del_y_m to control the element spacing and phase_lr_deg to control the
+  // relative phase of the +y element. phase_lr_deg = 0 is in-phase.
+  const [bowtieSlope, setBowtieSlope] = useState(0.5376);
+  const [bowtieLengthFactor, setBowtieLengthFactor] = useState(0.515);
+  const [bowtieDelY, setBowtieDelY] = useState(4.0);
+  const [bowtiePhaseLrDeg, setBowtiePhaseLrDeg] = useState(0.0);
   // Fan dipole. Per-band state is sized at 5 so changing nBands preserves
   // inactive sliders' values when the user dials it back up.
   const [fanNBands, setFanNBands] = useState(2);
@@ -757,6 +789,11 @@ export function App() {
       base.width_factor = hentennaWidthFactor;
       base.top_height_factor = hentennaTopHeightFactor;
       base.mid_height_factor = hentennaMidHeightFactor;
+    } else if (geometry === "bowtie") {
+      base.slope = bowtieSlope;
+      base.length_factor = bowtieLengthFactor;
+      base.del_y_m = bowtieDelY;
+      base.phase_lr_deg = bowtiePhaseLrDeg;
     } else {
       base.halfdriver_factor = hexbeamHalfdriverFactor;
       base.tipspacer_factor = hexbeamTipspacerFactor;
@@ -808,6 +845,7 @@ export function App() {
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
     hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
+    bowtieSlope, bowtieLengthFactor, bowtieDelY, bowtiePhaseLrDeg,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq, measFreq,
     groundEnabled, groundFast, heightM,
@@ -849,6 +887,7 @@ export function App() {
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
     hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
+    bowtieSlope, bowtieLengthFactor, bowtieDelY, bowtiePhaseLrDeg,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq,
     groundEnabled, groundFast, heightM,
@@ -887,6 +926,7 @@ export function App() {
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
     hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
+    bowtieSlope, bowtieLengthFactor, bowtieDelY, bowtiePhaseLrDeg,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq, measFreq,
     groundEnabled, groundFast, heightM,
@@ -915,6 +955,7 @@ export function App() {
     moxonHalfdriverFactor, moxonAspectRatio, moxonTipspacerFactor, moxonT0Factor,
     hexbeamHalfdriverFactor, hexbeamTipspacerFactor, hexbeamT0Factor,
     hentennaWidthFactor, hentennaTopHeightFactor, hentennaMidHeightFactor,
+    bowtieSlope, bowtieLengthFactor, bowtieDelY, bowtiePhaseLrDeg,
     fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq, measFreq,
     groundEnabled, groundFast, heightM,
@@ -1452,6 +1493,67 @@ export function App() {
           </>
         )}
 
+        {geometry === "bowtie" && (
+          <>
+            <div className="field">
+              <label>
+                <span>length factor (L/λ)</span>
+                <span>{bowtieLengthFactor.toFixed(4)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.30}
+                max={0.80}
+                step={0.0005}
+                value={bowtieLengthFactor}
+                onInput={(e) => setBowtieLengthFactor(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>slope (tip droop)</span>
+                <span>{bowtieSlope.toFixed(4)}</span>
+              </label>
+              <input
+                type="range"
+                min={0.0}
+                max={1.5}
+                step={0.001}
+                value={bowtieSlope}
+                onInput={(e) => setBowtieSlope(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>element spacing del_y (m)</span>
+                <span>{bowtieDelY.toFixed(3)}</span>
+              </label>
+              <input
+                type="range"
+                min={1.0}
+                max={10.0}
+                step={0.05}
+                value={bowtieDelY}
+                onInput={(e) => setBowtieDelY(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+            <div className="field">
+              <label>
+                <span>phase_lr (deg)</span>
+                <span>{bowtiePhaseLrDeg.toFixed(1)}</span>
+              </label>
+              <input
+                type="range"
+                min={-180}
+                max={180}
+                step={1}
+                value={bowtiePhaseLrDeg}
+                onInput={(e) => setBowtiePhaseLrDeg(Number((e.target as HTMLInputElement).value))}
+              />
+            </div>
+          </>
+        )}
+
         {geometry === "fan_dipole" && (
           <>
             <div className="field">
@@ -1848,6 +1950,42 @@ export function App() {
                 <span className="val">{result.mid_offset_m?.toFixed(3)} m</span>
               </div>
             </>
+          )}
+          {result?.geometry === "bowtie" && (
+            <>
+              <div className="row">
+                <span>arm half-length</span>
+                <span className="val">{result.y_m?.toFixed(3)} m</span>
+              </div>
+              <div className="row">
+                <span>tip droop z</span>
+                <span className="val">{result.z_m?.toFixed(3)} m</span>
+              </div>
+              <div className="row">
+                <span>spacing del_y</span>
+                <span className="val">{result.del_y_m?.toFixed(3)} m</span>
+              </div>
+              <div className="row">
+                <span>phase_lr</span>
+                <span className="val">{result.phase_lr_deg?.toFixed(1)}°</span>
+              </div>
+            </>
+          )}
+          {result?.feeds && result.feeds.length > 1 && (
+            <div className="feeds-table">
+              <div className="feeds-table-header">per-feed Z (V/I)</div>
+              {result.feeds.map((f, i) => (
+                <div className="row" key={`feed-z-${i}`}>
+                  <span>
+                    feed {i} ∠{Math.round(Math.atan2(f.v_im, f.v_re) * 180 / Math.PI)}°
+                  </span>
+                  <span className="val">
+                    {f.z_re.toFixed(1)} {f.z_im >= 0 ? "+" : "−"} j
+                    {Math.abs(f.z_im).toFixed(1)} Ω
+                  </span>
+                </div>
+              ))}
+            </div>
           )}
           {result?.geometry === "fan_dipole" && (
             <>
@@ -3383,16 +3521,32 @@ function CurrentCanvas({
         }
       }
 
-      // Feed marker on the feed wire.
-      const feedWire = result.wires[feedWireIdx];
-      if (feedWire) {
-        const feed = project(feedWire.knot_positions[result.feed_knot_index]);
+      // Feed marker(s). Multi-feed geometries (bowtie 1×2 array) expose
+      // a `feeds[]` array — render one yellow dot per feed and label with
+      // the prescribed voltage phase. Single-feed geometries fall through
+      // to the legacy feed_wire_index / feed_knot_index path.
+      const feedList = result.feeds && result.feeds.length > 0
+        ? result.feeds
+        : [{
+            wire_index: feedWireIdx,
+            knot_index: result.feed_knot_index,
+            v_re: 1, v_im: 0,
+            z_re: result.z_in_re, z_im: result.z_in_im,
+          }];
+      for (let fi = 0; fi < feedList.length; fi++) {
+        const f = feedList[fi];
+        const w_ = result.wires[f.wire_index];
+        if (!w_) continue;
+        const feed = project(w_.knot_positions[f.knot_index]);
         ctx!.fillStyle = "#ffd166";
         ctx!.beginPath();
         ctx!.arc(feed.x, feed.y, 5 * s, 0, Math.PI * 2);
         ctx!.fill();
         ctx!.font = `${feedFontPx}px ui-monospace, monospace`;
-        ctx!.fillText("feed", feed.x + 8 * s, feed.y - 8 * s);
+        const label = feedList.length > 1
+          ? `feed ${fi} ∠${Math.round(Math.atan2(f.v_im, f.v_re) * 180 / Math.PI)}°`
+          : "feed";
+        ctx!.fillText(label, feed.x + 8 * s, feed.y - 8 * s);
       }
 
       // λ/4 scale bar, centered horizontally under the antenna.
