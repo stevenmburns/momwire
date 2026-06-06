@@ -149,6 +149,7 @@ class BSplinePySim:
         degree=2,
         feed_wire_index=0,
         feed_arclength=None,
+        feeds=None,
         feed_smoothing_factor=None,
         junctions=None,
         n_qp_pair=4,
@@ -229,10 +230,30 @@ class BSplinePySim:
                 )
             self.n_per_edge_per_wire.append(npe)
 
-        if not (0 <= feed_wire_index < n_w):
-            raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
-        self.feed_wire_index = feed_wire_index
-        self.feed_arclength = feed_arclength
+        if feeds is None:
+            if not (0 <= feed_wire_index < n_w):
+                raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
+            self.feeds = [(int(feed_wire_index), feed_arclength, 1.0 + 0.0j)]
+        else:
+            if len(feeds) == 0:
+                raise ValueError("feeds must contain at least one entry")
+            norm = []
+            for i, f in enumerate(feeds):
+                if len(f) != 3:
+                    raise ValueError(
+                        f"feeds[{i}]: expected (wire_index, arclength, voltage), got {f!r}"
+                    )
+                w_i, arc_i, v_i = f
+                if not (0 <= w_i < n_w):
+                    raise ValueError(
+                        f"feeds[{i}]: wire_index {w_i} out of range [0, {n_w})"
+                    )
+                arc_i = None if arc_i is None else float(arc_i)
+                norm.append((int(w_i), arc_i, complex(v_i)))
+            self.feeds = norm
+
+        self.feed_wire_index = self.feeds[0][0]
+        self.feed_arclength = self.feeds[0][1]
         self.n_qp_pair = int(n_qp_pair)
 
         # Singular basis enrichment at K≥`enrichment_min_k` junctions.
@@ -742,7 +763,15 @@ class BSplinePySim:
     # Source vector
     # ------------------------------------------------------------------
 
-    def _build_source_vector(self, geom, wire_knots, wire_basis_global, n_basis_total):
+    def _build_source_vector(
+        self,
+        geom,
+        wire_knots,
+        wire_basis_global,
+        n_basis_total,
+        wi=None,
+        s_f=None,
+    ):
         """Galerkin RHS for either a delta-gap or smoothed source.
 
         Delta-gap (feed_smoothing_factor=None): v_m = Φ_m(s_f).
@@ -761,12 +790,19 @@ class BSplinePySim:
         represent; the integrated impedance picks up an O(1/N) error term
         regardless of basis degree. The smoothed source has no singularity,
         so the convergence is basis-limited (O(1/N³) for d=2).
+
+        For unit excitation V=1 at a single (wi, s_f); the multi-feed
+        caller scales each per-feed vector by V_i and sums them. wi/s_f
+        default to self.feeds[0] for back-compat with single-feed callers.
         """
         d = self.degree
-        wi = self.feed_wire_index
+        if wi is None:
+            wi = self.feeds[0][0]
         arc = geom["per_wire"][wi]["arc_at_knot"]
         wire_arc = arc[-1]
-        s_f = self.feed_arclength if self.feed_arclength is not None else wire_arc / 2.0
+        if s_f is None:
+            arc_req = self.feeds[0][1]
+            s_f = arc_req if arc_req is not None else wire_arc / 2.0
         knots = wire_knots[wi]
         kept, local_to_global = wire_basis_global[wi]
 
@@ -1212,9 +1248,43 @@ class BSplinePySim:
             td_img = self._image_tangent_dot(geom["tangents"])
             Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
 
-        v = self._build_source_vector(
-            geom, wire_knots, wire_basis_global, n_basis_total
-        )
+        # Per-feed unit Galerkin source vectors. For multi-feed, the
+        # combined RHS is Σ_i V_i · v_i, and each per-feed driving-point
+        # current is I_i = v_i^T coeffs by reciprocity of the Galerkin
+        # inner product (V=1 source at port i gives v_i; the current
+        # sampled at port j by another source is then v_j^T · solve).
+        n_feeds = len(self.feeds)
+        v_per_feed = []
+        for w_i, arc_i, _v in self.feeds:
+            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
+            s_f_i = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
+            v_per_feed.append(
+                self._build_source_vector(
+                    geom,
+                    wire_knots,
+                    wire_basis_global,
+                    n_basis_total,
+                    wi=w_i,
+                    s_f=s_f_i,
+                )
+            )
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
+        v = np.zeros(n_basis_total, dtype=np.complex128)
+        for V_i, v_i in zip(voltages, v_per_feed):
+            v += V_i * v_i
+
+        def _per_feed_z(coeffs_full):
+            """Drive-point impedance per feed. coeffs_full may include the
+            enrichment block; v_per_feed entries are zero on that block by
+            convention (the feed is not on the enriched segment), so the
+            inner product naturally restricts to the polynomial block.
+            """
+            currents = np.array(
+                [v_i @ coeffs_full[: v_i.shape[0]] for v_i in v_per_feed],
+                dtype=np.complex128,
+            )
+            z_per = voltages / currents
+            return z_per[0] if n_feeds == 1 else z_per
 
         # Clear any leftover per-junction selection from a prior solve
         # (variant="auto" repopulates this below; everything else leaves
@@ -1239,9 +1309,8 @@ class BSplinePySim:
             self._auto_active_junctions = active_junctions
             if not active_junctions:
                 # No junction qualifies → pass-1 result is the final answer.
-                I_at_feed = v @ coeffs_p1
                 self.z = Z
-                return 1.0 / I_at_feed, coeffs_p1
+                return _per_feed_z(coeffs_p1), coeffs_p1
 
         if self.use_singular_enrichment:
             enrich = self._enrichment_Z_assemble(
@@ -1269,23 +1338,23 @@ class BSplinePySim:
                 kcl_aug = np.zeros((kcl_A.shape[0], n_total), dtype=np.float64)
                 kcl_aug[:, :n_p] = kcl_A
                 coeffs = self._solve_with_kcl(Z_aug, v_aug, kcl_aug)
-                I_at_feed = v_aug @ coeffs
-                driver_impedance = 1.0 / I_at_feed
                 self.z = Z_aug
-                return driver_impedance, coeffs
+                return _per_feed_z(coeffs), coeffs
 
         coeffs = self._solve_with_kcl(Z, v, kcl_A)
-        I_at_feed = v @ coeffs
-        driver_impedance = 1.0 / I_at_feed
         self.z = Z
-        return driver_impedance, coeffs
+        return _per_feed_z(coeffs), coeffs
 
     def compute_impedance_swept(self, k_array):
         """Loop over wavenumbers (no batched assembly here yet). Rebinds
         self.k / self.omega / self.wavelength per call and restores them.
         """
         k_array = np.asarray(k_array, dtype=float)
-        z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
+        n_feeds = len(self.feeds)
+        if n_feeds == 1:
+            z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
+        else:
+            z_out = np.zeros((k_array.shape[0], n_feeds), dtype=np.complex128)
         k_save = self.k
         wl_save = self.wavelength
         omega_save = self.omega

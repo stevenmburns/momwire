@@ -2233,6 +2233,122 @@ def test_triangular_multifeed_swept_matches_single_k():
 # Same multi-feed checks against BSplinePySim and SinusoidalPySim.
 # ---------------------------------------------------------------------------
 
+
+def _mk_sim(cls, *, wires, n_per_edge_per_wire, nsegs, feeds=None, **extra):
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=n_per_edge_per_wire,
+        nsegs=nsegs,
+    )
+    if feeds is not None:
+        kw["feeds"] = feeds
+    if cls is BSplinePySim:
+        kw["degree"] = 2
+    kw.update(extra)
+    return cls(**kw)
+
+
+@pytest.mark.parametrize("cls", [BSplinePySim, SinusoidalPySim])
+def test_multifeed_single_feed_via_feeds_kwarg_matches_legacy(cls):
+    L = 2 * 0.962 * 22 / 4
+    nsegs = 40
+    wires = [np.array([[0.0, 0.0, 0.0], [0.0, L, 0.0]])]
+    z_legacy, _ = _mk_sim(
+        cls, wires=wires, n_per_edge_per_wire=[[nsegs]], nsegs=nsegs
+    ).compute_impedance()
+    z_new, _ = _mk_sim(
+        cls,
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j)],
+    ).compute_impedance()
+    assert abs(z_new - z_legacy) < 1e-9
+
+
+@pytest.mark.parametrize("cls", [BSplinePySim, SinusoidalPySim])
+def test_multifeed_two_dipoles_in_phase(cls):
+    hd = 0.962 * 22 / 4
+    nsegs = 40
+    wires = _two_dipoles(hd, spacing=2.0)
+    sim = _mk_sim(
+        cls,
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j), (1, None, 1.0 + 0.0j)],
+    )
+    z_per_feed, c = sim.compute_impedance()
+    assert z_per_feed.shape == (2,)
+    assert np.isfinite(c).all()
+    assert abs(z_per_feed[0] - z_per_feed[1]) / abs(z_per_feed[0]) < 1e-4
+    assert 30.0 < z_per_feed[0].real < 200.0
+
+
+@pytest.mark.parametrize("cls", [BSplinePySim, SinusoidalPySim])
+def test_multifeed_phase_shift_changes_driving_point(cls):
+    hd = 0.962 * 22 / 4
+    nsegs = 40
+    wires = _two_dipoles(hd, spacing=2.0)
+    z_inphase, _ = _mk_sim(
+        cls,
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j), (1, None, 1.0 + 0.0j)],
+    ).compute_impedance()
+    z_anti, _ = _mk_sim(
+        cls,
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j), (1, None, -1.0 + 0.0j)],
+    ).compute_impedance()
+    assert abs(z_inphase[0] - z_anti[0]) > 5.0
+
+
+@pytest.mark.parametrize("cls", [BSplinePySim, SinusoidalPySim])
+def test_multifeed_homogeneity_in_voltage(cls):
+    # Driving-point impedance V/I is a ratio; scaling all voltages by a
+    # common (complex) factor must leave Z_i unchanged. This is a
+    # solver-agnostic linearity check that exercises the multi-feed RHS
+    # plumbing without requiring an external port-Z reference.
+    hd = 0.962 * 22 / 4
+    nsegs = 40
+    wires = _two_dipoles(hd, spacing=2.0)
+    common = dict(wires=wires, n_per_edge_per_wire=[[nsegs], [nsegs]], nsegs=nsegs)
+    V = np.array([1.0 + 0j, np.exp(1j * np.pi / 3)])
+    z1, _ = _mk_sim(
+        cls, **common, feeds=[(0, None, V[0]), (1, None, V[1])]
+    ).compute_impedance()
+    z2, _ = _mk_sim(
+        cls,
+        **common,
+        feeds=[(0, None, 2.5 * V[0]), (1, None, 2.5 * V[1])],
+    ).compute_impedance()
+    assert np.allclose(z1, z2, rtol=1e-8, atol=1e-12)
+    assert np.isfinite(z1).all()
+
+
+@pytest.mark.parametrize("cls", [BSplinePySim, SinusoidalPySim])
+def test_multifeed_swept_matches_single_k(cls):
+    hd = 0.962 * 22 / 4
+    nsegs = 30
+    wires = _two_dipoles(hd, spacing=2.5)
+    feeds = [(0, None, 1.0 + 0.0j), (1, None, np.exp(1j * np.pi / 4))]
+    sim = _mk_sim(
+        cls,
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        feeds=feeds,
+    )
+    z_single, _ = sim.compute_impedance()
+    z_swept = sim.compute_impedance_swept(np.array([sim.k]))
+    assert z_swept.shape == (1, 2)
+    assert np.allclose(z_swept[0], z_single, rtol=1e-8, atol=1e-12)
+
+
 def test_triangular_bowtiearray_1x2_phased():
     # Simplified "bowtie-array 1x2" stand-in: two V-shaped (kinked-dipole)
     # elements side-by-side, each driven with its own complex voltage.

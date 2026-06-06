@@ -54,6 +54,7 @@ class SinusoidalPySim:
         n_per_edge_per_wire=None,
         feed_wire_index=0,
         feed_arclength=None,
+        feeds=None,
         wavelength=22,
         halfdriver_factor=0.962,
         wire_radius=0.0005,
@@ -122,10 +123,30 @@ class SinusoidalPySim:
                 )
             self.n_per_edge_per_wire.append(npe)
 
-        if not (0 <= feed_wire_index < n_w):
-            raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
-        self.feed_wire_index = feed_wire_index
-        self.feed_arclength = feed_arclength
+        if feeds is None:
+            if not (0 <= feed_wire_index < n_w):
+                raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
+            self.feeds = [(int(feed_wire_index), feed_arclength, 1.0 + 0.0j)]
+        else:
+            if len(feeds) == 0:
+                raise ValueError("feeds must contain at least one entry")
+            norm = []
+            for i, f in enumerate(feeds):
+                if len(f) != 3:
+                    raise ValueError(
+                        f"feeds[{i}]: expected (wire_index, arclength, voltage), got {f!r}"
+                    )
+                w_i, arc_i, v_i = f
+                if not (0 <= w_i < n_w):
+                    raise ValueError(
+                        f"feeds[{i}]: wire_index {w_i} out of range [0, {n_w})"
+                    )
+                arc_i = None if arc_i is None else float(arc_i)
+                norm.append((int(w_i), arc_i, complex(v_i)))
+            self.feeds = norm
+
+        self.feed_wire_index = self.feeds[0][0]
+        self.feed_arclength = self.feeds[0][1]
         self.n_qp_const = n_qp_const
 
         self.junctions = []
@@ -306,18 +327,22 @@ class SinusoidalPySim:
             np_seg_chunks.append(np.asarray(junc_np_seg, dtype=np.int64))
             np_sigma_chunks.append(np.asarray(junc_np_sigma, dtype=np.int8))
 
-        # Feed segment index: the segment on the feed wire whose center is
-        # closest to feed_arclength (default: midpoint of the wire).
-        w_f = self.feed_wire_index
-        first = wire_first_seg[w_f]
-        last = wire_last_seg[w_f]
-        feed_h = seg_h[first : last + 1]
-        feed_arc_centers = np.cumsum(feed_h) - 0.5 * feed_h
-        total_arc = float(np.sum(feed_h))
-        feed_arc = (
-            self.feed_arclength if self.feed_arclength is not None else 0.5 * total_arc
-        )
-        feed_seg = first + int(np.argmin(np.abs(feed_arc_centers - feed_arc)))
+        # Per-feed segment index: for each feed, the segment on its wire
+        # whose center is closest to the requested arclength (default:
+        # midpoint of the wire). Primary feed kept as `feed_seg` for
+        # back-compat with single-feed callers / fields.
+        feed_segs = []
+        for w_f, arc_req, _v in self.feeds:
+            first = wire_first_seg[w_f]
+            last = wire_last_seg[w_f]
+            feed_h_w = seg_h[first : last + 1]
+            feed_arc_centers = np.cumsum(feed_h_w) - 0.5 * feed_h_w
+            total_arc = float(np.sum(feed_h_w))
+            feed_arc = arc_req if arc_req is not None else 0.5 * total_arc
+            feed_segs.append(
+                first + int(np.argmin(np.abs(feed_arc_centers - feed_arc)))
+            )
+        feed_seg = feed_segs[0]
 
         # Concatenate the in-wire + junction chunks into the final flat
         # neighbour arrays. Empty geometries (e.g. a single-segment wire
@@ -353,6 +378,7 @@ class SinusoidalPySim:
             "wire_first": wire_first_seg,
             "wire_last": wire_last_seg,
             "feed_seg": feed_seg,
+            "feed_segs": feed_segs,
         }
         return self._cached_geometry
 
@@ -881,38 +907,44 @@ class SinusoidalPySim:
             G = (Phi_c @ M_A) + (Phi_s @ M_B) + (Phi_co @ M_C)
         return G, seg_view
 
-    def compute_impedance(self):
-        """Return (Z_drive, alpha) where alpha[j] is the amplitude of
-        basis j and Z_drive = V_applied / I(feed-center) using V = 1 V.
+    def _feed_segment_current(self, alpha, seg_view, feed_seg):
+        """Current at centre of a feed segment. I(s_local=0) = Σ_j α_j · σ_j ·
+        (A_jn + C_jn) over bases j whose support includes `feed_seg`
+        (sin(k·0)=0 so B drops out).
         """
-        geom = self._build_geometry()
-        G, seg_view = self._assemble_Z(geom, self.k)
-        feed = geom["feed_seg"]
-        h_feed = geom["seg_h"][feed]
-        # Eq 187 applied-E source: E_feed = V/Δ_feed, zero elsewhere.
-        # EFIE boundary condition: ŝ · E^scat = -ŝ · E^applied, with G
-        # filled as +ŝ · E^scat-due-to-unit-basis-amplitude → solve
-        # G·α = -E_applied.  For V = 1 the RHS magnitude is -1/Δ_feed.
-        v = np.zeros(geom["n_segs"], dtype=np.complex128)
-        v[feed] = -1.0 / h_feed
-        alpha = scipy.linalg.solve(G, v)
-
-        # Current at centre of feed segment: I(s_local=0) = Σ_j α_j · σ_j ·
-        # (A_jn + C_jn) summed over bases j whose support includes `feed`
-        # (sin(k·0)=0 so B drops out). Pre-indexed in seg_view: every basis
-        # entry whose `n_seg == feed` lives in the slice
-        # seg_view[feed : feed+1]. Single numpy reduction replaces the
-        # original double-Python-loop that filtered the full basis list.
-        s = seg_view["starts"][feed]
-        e = seg_view["starts"][feed + 1]
-        I_feed = complex(
+        s = seg_view["starts"][feed_seg]
+        e = seg_view["starts"][feed_seg + 1]
+        return complex(
             (
                 alpha[seg_view["jbasis"][s:e]]
                 * seg_view["sigma"][s:e]
                 * (seg_view["A"][s:e] + seg_view["C"][s:e])
             ).sum()
         )
-        Z_drive = 1.0 / I_feed
+
+    def compute_impedance(self):
+        """Return (Z_drive, alpha). With a single feed, Z_drive is a scalar
+        V/I (back-compat). With N feeds, Z_drive is a length-N complex
+        array of per-feed driving-point impedances V_i / I_i — the RHS is
+        built as Σ_i V_i · (-1/h_i) · e_{feed_i} (linear superposition of
+        Eq 187 delta-gap sources).
+        """
+        geom = self._build_geometry()
+        G, seg_view = self._assemble_Z(geom, self.k)
+        feed_segs = geom["feed_segs"]
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
+
+        v = np.zeros(geom["n_segs"], dtype=np.complex128)
+        for fi, V_i in zip(feed_segs, voltages):
+            v[fi] += -V_i / geom["seg_h"][fi]
+        alpha = scipy.linalg.solve(G, v)
+
+        feed_currents = np.array(
+            [self._feed_segment_current(alpha, seg_view, fi) for fi in feed_segs],
+            dtype=np.complex128,
+        )
+        z_per_feed = voltages / feed_currents
+        Z_drive = z_per_feed[0] if len(self.feeds) == 1 else z_per_feed
         self.Z_matrix = G
         return Z_drive, alpha
 
@@ -925,32 +957,36 @@ class SinusoidalPySim:
         accelerator, this brings the n=21 sweep from ~70 ms to ~30 ms.
         """
         k_array = np.asarray(k_array, dtype=float)
-        z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
+        n_feeds = len(self.feeds)
+        if n_feeds == 1:
+            z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
+        else:
+            z_out = np.zeros((k_array.shape[0], n_feeds), dtype=np.complex128)
         k_save = self.k
         wl_save = self.wavelength
         omega_save = self.omega
         geom = self._build_geometry()
-        feed = geom["feed_seg"]
-        h_feed = geom["seg_h"][feed]
+        feed_segs = geom["feed_segs"]
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
         n_segs = geom["n_segs"]
         v = np.zeros(n_segs, dtype=np.complex128)
-        v[feed] = -1.0 / h_feed
+        for fi, V_i in zip(feed_segs, voltages):
+            v[fi] += -V_i / geom["seg_h"][fi]
         for i, kk in enumerate(k_array):
             self.k = float(kk)
             self.omega = self.k * self.c
             self.wavelength = self.c / (self.omega / (2 * np.pi))
             G, seg_view = self._assemble_Z(geom, self.k)
             alpha = scipy.linalg.solve(G, v)
-            s = seg_view["starts"][feed]
-            e = seg_view["starts"][feed + 1]
-            I_feed = complex(
-                (
-                    alpha[seg_view["jbasis"][s:e]]
-                    * seg_view["sigma"][s:e]
-                    * (seg_view["A"][s:e] + seg_view["C"][s:e])
-                ).sum()
+            feed_currents = np.array(
+                [self._feed_segment_current(alpha, seg_view, fi) for fi in feed_segs],
+                dtype=np.complex128,
             )
-            z_out[i] = 1.0 / I_feed
+            z_per_feed = voltages / feed_currents
+            if n_feeds == 1:
+                z_out[i] = z_per_feed[0]
+            else:
+                z_out[i] = z_per_feed
         self.k = k_save
         self.wavelength = wl_save
         self.omega = omega_save
