@@ -1113,6 +1113,343 @@ def _solve_hentenna(req: dict) -> dict:
     }
 
 
+_BOWTIE_EPS = 0.05  # half-gap (m) at the feed and at the top-of-bowtie pinch
+
+
+def _bowtie_element_wires(
+    slope: float,
+    length: float,
+    n_per_long_edge: int,
+    y_offset: float = 0.0,
+    z_offset: float = 0.0,
+) -> dict:
+    """Build a single bowtie's 4 polylines + per-edge segment counts.
+
+    Replicates antenna_designer/designs/bowtie.py. The antenna lies in the
+    y-z plane (x = 0), centred on (y, z) = (0, 0). With
+
+        y = (length/2) / (slope + sqrt(1 + slope^2))
+        z = slope * y
+
+    the two triangles' tips are at (±y, 0); their open sides flare to
+    (±y, ±z); each side closes to within an `eps` half-gap on the central
+    axis at (±eps, ±eps). The feed sits across the bottom gap
+    (-eps, -eps) → (eps, -eps).
+
+    Decomposed into 4 pysim polylines (each kink is a continuous bend
+    within a polyline so no junction is needed there) connected at 4
+    K=2 junctions where the loops meet:
+
+      W0  top arc:        (-y, 0)  -> (-y, z)  -> (-eps,  eps) ->
+                          ( eps, eps) -> ( y, z) -> ( y, 0)
+      W1  bot-left arc:   (-y, 0)  -> (-y,-z)  -> (-eps, -eps)
+      W2  bot-right arc:  ( eps,-eps) -> ( y,-z) -> ( y, 0)
+      W3  feed wire:      (-eps,-eps) -> ( eps,-eps)
+
+      J0 at (-y, 0):      W0.start + W1.start
+      J1 at ( y, 0):      W0.end   + W2.end
+      J2 at (-eps,-eps):  W1.end   + W3.start
+      J3 at ( eps,-eps):  W3.end   + W2.start
+    """
+    eps_b = _BOWTIE_EPS
+    y = 0.5 * length / (slope + np.sqrt(1.0 + slope * slope))
+    z = slope * y
+    yo = y_offset
+    zo = z_offset
+
+    def P(yy, zz):
+        return (0.0, yy + yo, zz + zo)
+
+    w0 = np.array(
+        [P(-y, 0), P(-y, z), P(-eps_b, eps_b), P(eps_b, eps_b), P(y, z), P(y, 0)],
+        dtype=float,
+    )
+    w1 = np.array([P(-y, 0), P(-y, -z), P(-eps_b, -eps_b)], dtype=float)
+    w2 = np.array([P(eps_b, -eps_b), P(y, -z), P(y, 0)], dtype=float)
+    w3 = np.array([P(-eps_b, -eps_b), P(eps_b, -eps_b)], dtype=float)
+
+    # Per-edge segment counts: long flare edges get the full count; the
+    # short eps-scale edges (top pinch + feed gap) get a few segments so the
+    # feed-midpoint basis lands on its own knot. Match antenna_designer's
+    # (n_seg0=21, n_seg1=3) ratio when n_per_long_edge=21.
+    n_long = max(2, int(n_per_long_edge))
+    n_short = max(2, n_long // 7)
+    if n_short % 2 == 1:
+        n_short += 1  # even count puts the feed's interior knot at gap centre
+
+    long_edge_ref = float(np.linalg.norm(w0[1] - w0[0]))  # (-y,0)→(-y,z) length
+
+    def npe(anchors: np.ndarray) -> list[int]:
+        out = []
+        for i in range(anchors.shape[0] - 1):
+            edge_len = float(np.linalg.norm(anchors[i + 1] - anchors[i]))
+            if edge_len < 2 * eps_b * 1.01:
+                out.append(n_short)
+            else:
+                # Scale long edges to the reference flare length so the
+                # diagonal hypotenuse gets proportionally more segments
+                # than the short vertical leg.
+                out.append(max(2, int(round(n_long * edge_len / long_edge_ref))))
+        return out
+
+    wires = [w0, w1, w2, w3]
+    n_per_edge_per_wire = [npe(w) for w in wires]
+    # Junction wire-indices here are LOCAL to this element (0..3); the array
+    # wrapper renumbers them to global wire indices.
+    junctions = [
+        [(0, "start"), (1, "start")],  # J0 at (-y, 0)
+        [(0, "end"), (2, "end")],  # J1 at ( y, 0)
+        [(1, "end"), (3, "start")],  # J2 at (-eps,-eps)
+        [(3, "end"), (2, "start")],  # J3 at ( eps,-eps)
+    ]
+
+    return {
+        "wires": wires,
+        "n_per_edge_per_wire": n_per_edge_per_wire,
+        "junctions": junctions,
+        "feed_wire_local": 3,
+        "feed_arclength": eps_b,  # midpoint of the 2·eps feed gap
+        "y_m": y,
+        "z_m": z,
+        "eps_m": eps_b,
+    }
+
+
+def _bowtie_array_1x2_geometry(
+    slope: float,
+    length: float,
+    n_per_long_edge: int,
+    del_y: float,
+    phase_lr_deg: float,
+    z_offset: float = 0.0,
+) -> dict:
+    """Build the 1×2 phased-bowtie array geometry.
+
+    Two bowtie elements at y_offset = -del_y and +del_y, sharing the same
+    slope/length. Element 0 (left, y < 0) is fed with V = 1+0j; element 1
+    (right, y > 0) is fed with V = exp(j·π·phase_lr_deg/180). Mirrors
+    `antenna_designer.builder.Array1x2Builder.build_wires`.
+
+    All wires and junctions from the two elements are concatenated; the
+    element-1 junction wire-indices are shifted by `n_wires_per_element`
+    (=4 for the bowtie). The returned `feeds` list is what
+    TriangularPySim(feeds=...) consumes.
+    """
+    elem_l = _bowtie_element_wires(
+        slope, length, n_per_long_edge, y_offset=-del_y, z_offset=z_offset
+    )
+    elem_r = _bowtie_element_wires(
+        slope, length, n_per_long_edge, y_offset=+del_y, z_offset=z_offset
+    )
+    n_wpe = len(elem_l["wires"])  # 4
+
+    wires = elem_l["wires"] + elem_r["wires"]
+    n_per_edge_per_wire = elem_l["n_per_edge_per_wire"] + elem_r["n_per_edge_per_wire"]
+    junctions = list(elem_l["junctions"]) + [
+        [(w + n_wpe, end) for (w, end) in jw] for jw in elem_r["junctions"]
+    ]
+
+    phase_lr_rad = np.pi * phase_lr_deg / 180.0
+    feeds = [
+        (elem_l["feed_wire_local"], elem_l["feed_arclength"], 1.0 + 0.0j),
+        (
+            elem_r["feed_wire_local"] + n_wpe,
+            elem_r["feed_arclength"],
+            complex(np.cos(phase_lr_rad), np.sin(phase_lr_rad)),
+        ),
+    ]
+
+    return {
+        "wires": wires,
+        "n_per_edge_per_wire": n_per_edge_per_wire,
+        "junctions": junctions,
+        "feeds": feeds,
+        "y_m": elem_l["y_m"],
+        "z_m": elem_l["z_m"],
+        "eps_m": elem_l["eps_m"],
+        "del_y_m": del_y,
+    }
+
+
+def _bowtie_request_args(req: dict) -> dict:
+    """Pull the bowtie-1×2-array params off the request with defaults that
+    match antenna_designer's canonical 28.47 MHz `bowtiearray1x2` design.
+    """
+    return {
+        "n_per_wire": int(req.get("n_per_wire", 21)),
+        "slope": float(req.get("slope", 0.5376)),
+        # length_factor = (antenna_designer "length") / λ_design.
+        # 0.515 ≈ 5.42 m at 28.47 MHz.
+        "length_factor": float(req.get("length_factor", 0.515)),
+        # del_y_m: half the centre-to-centre spacing between the two
+        # bowtie elements, matching Array1x2Builder's `del_y`.
+        "del_y_m": float(req.get("del_y_m", 4.0)),
+        # Phase shift on element 1 (the +y bowtie) in degrees; 0 = in-phase,
+        # 180 = anti-phase, matching antenna_designer's `phase_lr`.
+        "phase_lr_deg": float(req.get("phase_lr_deg", 0.0)),
+        "wire_radius": float(req.get("wire_radius", 0.0005)),
+    }
+
+
+def _bowtie_feed_knot_index(
+    feed_wire_global: int, feed_arclength: float, knots_per_wire: list[np.ndarray]
+) -> int:
+    """Find the interior knot of `feed_wire_global` whose arc-length from the
+    wire's start is closest to `feed_arclength`. Mirrors the
+    TriangularPySim._feed_basis_index convention so the frontend marker
+    lines up with the actual delta-gap source location.
+    """
+    feed_knots = knots_per_wire[feed_wire_global]
+    arc_at_knot = np.concatenate(
+        [[0.0], np.cumsum(np.linalg.norm(np.diff(feed_knots, axis=0), axis=1))]
+    )
+    interior_arc = arc_at_knot[1:-1]
+    if len(interior_arc) == 0:
+        return 0
+    return int(np.argmin(np.abs(interior_arc - feed_arclength))) + 1
+
+
+def _solve_bowtie(req: dict) -> dict:
+    """1×2 phased bowtie array. Two bowtie elements at y = ±del_y, fed with
+    V = (1, exp(j·π·phase_lr_deg/180)). Mirrors antenna_designer's
+    bowtiearray1x2 design.
+
+    Response carries per-feed driving-point impedances in `feeds[]`; the
+    primary feed (element 0) is also exposed on the legacy
+    `feed_wire_index` / `feed_knot_index` / `z_in_re` / `z_in_im` keys so
+    single-feed-aware frontends keep working without change.
+    """
+    args = _bowtie_request_args(req)
+    design_freq_mhz = float(req.get("design_freq_mhz", 28.47))
+    meas_freq_mhz = float(req.get("measurement_freq_mhz", design_freq_mhz))
+    ground_on, _, z_offset = _read_ground(req)
+
+    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
+    wavelength_meas = C_LIGHT / (meas_freq_mhz * 1e6)
+    length_m = args["length_factor"] * wavelength_design
+
+    geom = _bowtie_array_1x2_geometry(
+        args["slope"],
+        length_m,
+        args["n_per_wire"],
+        args["del_y_m"],
+        args["phase_lr_deg"],
+        z_offset=z_offset,
+    )
+
+    sim = _make_pysim_sim(
+        req,
+        wires=geom["wires"],
+        n_per_edge_per_wire=geom["n_per_edge_per_wire"],
+        feeds=geom["feeds"],
+        wavelength=wavelength_meas,
+        nsegs=args["n_per_wire"],
+        ground_z=0.0 if ground_on else None,
+        junctions=geom["junctions"],
+    )
+    sim.wire_radius = args["wire_radius"]
+
+    t0 = time.perf_counter()
+    z_per_feed, coeffs = sim.compute_impedance()
+    solve_ms = (time.perf_counter() - t0) * 1e3
+
+    knots_per_wire = [
+        _polyline_knots(w, npe)
+        for w, npe in zip(geom["wires"], geom["n_per_edge_per_wire"])
+    ]
+    wire_labels = [
+        f"{half}_{part}"
+        for half in ("L", "R")
+        for part in ("top_arc", "bot_left_arc", "bot_right_arc", "feed")
+    ]
+    wire_records = _pack_pysim_wires(sim, coeffs, knots_per_wire, wire_labels)
+
+    z_arr = np.atleast_1d(z_per_feed)
+    feed_entries = []
+    for i, (w_global, arc, v_complex) in enumerate(geom["feeds"]):
+        kidx = _bowtie_feed_knot_index(w_global, arc, knots_per_wire)
+        zi = complex(z_arr[i])
+        feed_entries.append(
+            {
+                "wire_index": int(w_global),
+                "knot_index": int(kidx),
+                "z_re": float(zi.real),
+                "z_im": float(zi.imag),
+                "v_re": float(v_complex.real),
+                "v_im": float(v_complex.imag),
+            }
+        )
+
+    primary = feed_entries[0]
+    return {
+        "geometry": "bowtie",
+        "wires": wire_records,
+        "feeds": feed_entries,
+        "feed_wire_index": primary["wire_index"],
+        "feed_knot_index": primary["knot_index"],
+        "z_in_re": primary["z_re"],
+        "z_in_im": primary["z_im"],
+        "design_freq_mhz": design_freq_mhz,
+        "measurement_freq_mhz": meas_freq_mhz,
+        "lambda_design_m": wavelength_design,
+        "y_m": geom["y_m"],
+        "z_m": geom["z_m"],
+        "length_m": length_m,
+        "slope": args["slope"],
+        "del_y_m": args["del_y_m"],
+        "phase_lr_deg": args["phase_lr_deg"],
+        "solve_ms": solve_ms,
+        "ground": ground_on,
+        "height_m": z_offset,
+        "ground_eps_r": _PEC_GROUND_EPS_R,
+        "ground_sigma": _PEC_GROUND_SIGMA,
+    }
+
+
+def _sweep_bowtie(
+    req: dict, freqs_mhz: list[float]
+) -> tuple[list[float], list[float], list[list[float]], list[list[float]]]:
+    """Sweep the 1×2 array. Returns (primary_re, primary_im, feeds_re,
+    feeds_im) where `feeds_*` is (n_freqs × n_feeds) per-feed Z and the
+    `primary_*` arrays carry feeds[0] for back-compat with the existing
+    single-feed sweep stream shape.
+    """
+    args = _bowtie_request_args(req)
+    design_freq_mhz = float(req.get("design_freq_mhz", 28.47))
+    ground_on, _, z_offset = _read_ground(req)
+
+    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
+    length_m = args["length_factor"] * wavelength_design
+
+    geom = _bowtie_array_1x2_geometry(
+        args["slope"],
+        length_m,
+        args["n_per_wire"],
+        args["del_y_m"],
+        args["phase_lr_deg"],
+        z_offset=z_offset,
+    )
+    sim = _make_pysim_sim(
+        req,
+        wires=geom["wires"],
+        n_per_edge_per_wire=geom["n_per_edge_per_wire"],
+        feeds=geom["feeds"],
+        wavelength=wavelength_design,
+        nsegs=args["n_per_wire"],
+        ground_z=0.0 if ground_on else None,
+        junctions=geom["junctions"],
+    )
+    sim.wire_radius = args["wire_radius"]
+
+    k_array = np.array([2 * np.pi * f * 1e6 / C_LIGHT for f in freqs_mhz])
+    z_array = np.atleast_2d(sim.compute_impedance_swept(k_array))  # (n_k, n_f)
+    feeds_re = z_array.real.tolist()
+    feeds_im = z_array.imag.tolist()
+    primary_re = [row[0] for row in feeds_re]
+    primary_im = [row[0] for row in feeds_im]
+    return primary_re, primary_im, feeds_re, feeds_im
+
+
 _FANDIPOLE_FEED_GAP = 0.01  # half-gap, matches pynec_backend's eps_feed
 
 
@@ -1350,6 +1687,8 @@ def solve(req: dict) -> dict:
         out = _solve_fandipole(req)
     elif geometry == "hentenna":
         out = _solve_hentenna(req)
+    elif geometry == "bowtie":
+        out = _solve_bowtie(req)
     else:
         out = _solve_inverted_v(req)
     out["solver"] = "pysim"
@@ -1617,6 +1956,7 @@ async def sweep_endpoint(req: dict, request: Request):
                 "hexbeam": _sweep_hexbeam,
                 "fan_dipole": _sweep_fandipole,
                 "hentenna": _sweep_hentenna,
+                "bowtie": _sweep_bowtie,
             }.get(geometry, _sweep_inverted_v)
             chunk_size = max(1, len(freqs) // 8)
             start = 0
@@ -1625,20 +1965,29 @@ async def sweep_endpoint(req: dict, request: Request):
                     return
                 chunk = freqs[start : start + chunk_size]
                 t0 = time.perf_counter()
-                z_re, z_im = await run_in_threadpool(sweep_fn, req, chunk)
+                sweep_result = await run_in_threadpool(sweep_fn, req, chunk)
+                # Multi-feed sweeps (bowtie array) return a 4-tuple with
+                # per-feed Z appended. Everything else stays on the
+                # original 2-tuple shape; the legacy z_re / z_im fields
+                # always carry the primary feed for back-compat.
+                feeds_re_chunk: list[list[float]] | None = None
+                feeds_im_chunk: list[list[float]] | None = None
+                if len(sweep_result) == 4:
+                    z_re, z_im, feeds_re_chunk, feeds_im_chunk = sweep_result
+                else:
+                    z_re, z_im = sweep_result
                 chunk_ms = (time.perf_counter() - t0) * 1000
                 for i, f in enumerate(chunk):
-                    yield (
-                        json.dumps(
-                            {
-                                "freq_mhz": f,
-                                "z_re": z_re[i],
-                                "z_im": z_im[i],
-                                "solver": solver_name,
-                            }
-                        )
-                        + "\n"
-                    )
+                    record: dict = {
+                        "freq_mhz": f,
+                        "z_re": z_re[i],
+                        "z_im": z_im[i],
+                        "solver": solver_name,
+                    }
+                    if feeds_re_chunk is not None:
+                        record["feeds_z_re"] = feeds_re_chunk[i]
+                        record["feeds_z_im"] = feeds_im_chunk[i]
+                    yield json.dumps(record) + "\n"
                 start += len(chunk)
                 # Adapt for the next chunk: target _CHUNK_TARGET_MS per
                 # batch. Per-freq cost is a weak function of chunk size
@@ -1673,6 +2022,8 @@ def _solve_z_only(req: dict) -> complex:
         res = _solve_fandipole(req)
     elif geometry == "hentenna":
         res = _solve_hentenna(req)
+    elif geometry == "bowtie":
+        res = _solve_bowtie(req)
     else:
         res = _solve_inverted_v(req)
     return complex(res["z_in_re"], res["z_in_im"])
