@@ -343,6 +343,10 @@ type ConvergeData = {
    *  single-trail render driven by z_re/z_im. */
   feeds_z_re?: number[][];
   feeds_z_im?: number[][];
+  /** Per-feed Richardson Z*. Indexed by feed order, same length as a row
+   *  of feeds_z_re. Entries are null until ≥3 sample points are in. */
+  feeds_z_re_extrap?: (number | null)[];
+  feeds_z_im_extrap?: (number | null)[];
 };
 
 // Log-spaced segments-per-wire ladder for the convergence sweep. Hentenna's
@@ -1095,6 +1099,8 @@ export function App() {
       z_im_extrap: null,
       feeds_z_re: undefined,
       feeds_z_im: undefined,
+      feeds_z_re_extrap: undefined,
+      feeds_z_im_extrap: undefined,
     };
     try {
       const resp = await fetch("/converge", {
@@ -1136,6 +1142,24 @@ export function App() {
           const invN = acc.n_values.map((n) => 1 / n);
           acc.z_re_extrap = richardsonExtrap(invN, acc.z_re);
           acc.z_im_extrap = richardsonExtrap(invN, acc.z_im);
+          // Per-feed Richardson Z*. Each feed's series is the column of
+          // feeds_z_re / feeds_z_im at that feed index across all sampled
+          // N values; richardsonExtrap returns null until ≥3 points are
+          // in, so the diamonds light up the same time the primary one
+          // does.
+          if (acc.feeds_z_re && acc.feeds_z_im) {
+            const nFeeds = acc.feeds_z_re[0].length;
+            const feedsRe: (number | null)[] = [];
+            const feedsIm: (number | null)[] = [];
+            for (let fi = 0; fi < nFeeds; fi++) {
+              const re = acc.feeds_z_re.map((row) => row[fi]);
+              const im = acc.feeds_z_im.map((row) => row[fi]);
+              feedsRe.push(richardsonExtrap(invN, re));
+              feedsIm.push(richardsonExtrap(invN, im));
+            }
+            acc.feeds_z_re_extrap = feedsRe;
+            acc.feeds_z_im_extrap = feedsIm;
+          }
           if (!controller.signal.aborted) {
             setConverge({
               n_values: acc.n_values.slice(),
@@ -1148,6 +1172,12 @@ export function App() {
                 : undefined,
               feeds_z_im: acc.feeds_z_im
                 ? acc.feeds_z_im.map((row) => row.slice())
+                : undefined,
+              feeds_z_re_extrap: acc.feeds_z_re_extrap
+                ? acc.feeds_z_re_extrap.slice()
+                : undefined,
+              feeds_z_im_extrap: acc.feeds_z_im_extrap
+                ? acc.feeds_z_im_extrap.slice()
                 : undefined,
             });
           }
@@ -3377,17 +3407,20 @@ function SmithChart({
         drawNEndpoint(fi, converge.n_values.length - 1, true);
       }
 
-      // Richardson Z* marker — diamond in a brighter pink. Primary feed
-      // only; the extrapolation math is per-feed-independent but we
-      // don't currently run it on the per-feed series.
-      if (converge.z_re_extrap != null && converge.z_im_extrap != null) {
-        const ge = reflectionCoefficient(
-          converge.z_re_extrap,
-          converge.z_im_extrap,
-          z0,
-        );
-        // Clip extrapolated Z* to the unit Smith disc — Richardson on a
-        // not-yet-converging series can fly outside |Γ|=1 in early frames.
+      // Richardson Z* markers — one diamond per feed, each in the
+      // matching bright feed color so the user can tell which trail
+      // extrapolates to which Z*. The diamond shape distinguishes the
+      // extrapolated value from the actual sampled per-N dots (small
+      // circles) and from the current-Z marker (larger outlined dot).
+      const drawExtrap = (
+        fi: number,
+        zRe: number | null,
+        zIm: number | null,
+      ) => {
+        if (zRe == null || zIm == null) return;
+        const ge = reflectionCoefficient(zRe, zIm, z0);
+        // Clip to the unit Smith disc — Richardson on a not-yet-converging
+        // series can fly outside |Γ|=1 in early frames.
         const gMag = Math.hypot(ge.gRe, ge.gIm);
         const k = gMag > 0.98 ? 0.98 / gMag : 1;
         const px = cx + ge.gRe * R * k;
@@ -3395,14 +3428,25 @@ function SmithChart({
         ctx.save();
         ctx.translate(px, py);
         ctx.rotate(Math.PI / 4);
-        ctx.fillStyle = "rgba(255, 140, 220, 0.95)";
-        ctx.strokeStyle = "rgba(255, 140, 220, 1)";
+        ctx.fillStyle = feedColor(fi);
+        ctx.strokeStyle = feedColor(fi, 1.0);
         ctx.lineWidth = 1.2;
         ctx.beginPath();
         ctx.rect(-4, -4, 8, 8);
         ctx.fill();
         ctx.stroke();
         ctx.restore();
+      };
+      if (cHasMulti && converge.feeds_z_re_extrap && converge.feeds_z_im_extrap) {
+        for (let fi = 0; fi < cNFeeds; fi++) {
+          drawExtrap(
+            fi,
+            converge.feeds_z_re_extrap[fi],
+            converge.feeds_z_im_extrap[fi],
+          );
+        }
+      } else {
+        drawExtrap(0, converge.z_re_extrap, converge.z_im_extrap);
       }
 
       // Bottom-left summary: N-range and extrapolated Z* (primary feed).
