@@ -10,7 +10,14 @@ import pytest
 PyNEC = pytest.importorskip("PyNEC")  # noqa: F841
 
 from web import pynec_backend  # noqa: E402
-from web.server import _solve_inverted_v, _solve_yagi, _sweep_inverted_v, _sweep_yagi  # noqa: E402
+from web.server import (  # noqa: E402
+    _solve_bowtie,
+    _solve_inverted_v,
+    _solve_yagi,
+    _sweep_bowtie,
+    _sweep_inverted_v,
+    _sweep_yagi,
+)
 
 
 # The two backends use different basis functions (NEC2 pulse basis vs
@@ -177,3 +184,128 @@ def test_response_shape_matches():
         assert len(wp["knot_positions"]) == len(wn["knot_positions"])
         assert len(wp["knot_currents_re"]) == len(wn["knot_currents_re"])
         assert len(wp["knot_currents_im"]) == len(wn["knot_currents_im"])
+
+
+# ---------------------------------------------------------------------------
+# Bowtie 1×2 phased array — multi-feed parity between the two backends.
+# ---------------------------------------------------------------------------
+
+
+def _bowtie_parity_req(**over) -> dict:
+    req = {
+        "geometry": "bowtie",
+        "n_per_wire": 21,
+        "design_freq_mhz": 28.47,
+        "measurement_freq_mhz": 28.47,
+        "wire_radius": 0.0005,
+        "slope": 0.5376,
+        "length_factor": 0.515,
+        "del_y_m": 4.0,
+        "phase_lr_deg": 0.0,
+    }
+    req.update(over)
+    return req
+
+
+def _feeds_z(res):
+    return [complex(f["z_re"], f["z_im"]) for f in res["feeds"]]
+
+
+# The bowtie array discretization differs more than the dipole / Yagi
+# cases — pysim's tent basis lives on a 4-polyline mesh with K=2
+# junctions while NEC uses 10 wire cards per element with implicit
+# coordinate-match continuity. At antenna_designer's resonant-ish
+# defaults the per-feed delta is ~3 Ω on a ~180 Ω port, so a 5%
+# relative tolerance + 2 Ω floor catches geometry / EX-card bugs
+# without flagging genuine basis-vs-basis disagreement.
+def _close_bowtie(z_a: complex, z_b: complex) -> bool:
+    return abs(z_a - z_b) < 0.05 * abs(z_a) + 2.0
+
+
+def test_bowtie_in_phase_per_feed_agrees():
+    req = _bowtie_parity_req(phase_lr_deg=0.0)
+    p = _solve_bowtie(req)
+    n = pynec_backend.solve_bowtie(req)
+    z_p = _feeds_z(p)
+    z_n = _feeds_z(n)
+    assert len(z_p) == len(z_n) == 2
+    for i, (zp, zn) in enumerate(zip(z_p, z_n)):
+        assert _close_bowtie(zp, zn), (
+            f"feed {i} in-phase: pysim={zp}, pynec={zn}, |delta|={abs(zp - zn):.3f}"
+        )
+
+
+def test_bowtie_90deg_phase_per_feed_agrees():
+    """The interesting case: V₁ ≠ V₂ in phase, so mutual coupling makes
+    Z_0 ≠ Z_1. Both backends must reproduce the same asymmetric drive
+    impedances — catches EX-card ordering / voltage-sign bugs that a
+    symmetric in-phase test would hide."""
+    req = _bowtie_parity_req(phase_lr_deg=90.0)
+    p = _solve_bowtie(req)
+    n = pynec_backend.solve_bowtie(req)
+    z_p = _feeds_z(p)
+    z_n = _feeds_z(n)
+    for i, (zp, zn) in enumerate(zip(z_p, z_n)):
+        assert _close_bowtie(zp, zn), (
+            f"feed {i} 90°: pysim={zp}, pynec={zn}, |delta|={abs(zp - zn):.3f}"
+        )
+    # Also assert asymmetry actually showed up — otherwise both sides
+    # could be failing silently in lockstep.
+    assert abs(z_p[0] - z_p[1]) > 5.0
+    assert abs(z_n[0] - z_n[1]) > 5.0
+
+
+def test_bowtie_response_shape_matches():
+    """Cross-backend response-shape contract: every key the frontend
+    indexes on the bowtie response must be present on both backends, and
+    the geometry-level structure (wire count, feed count, z0_ohms) must
+    agree exactly."""
+    req = _bowtie_parity_req()
+    p = _solve_bowtie(req)
+    n = pynec_backend.solve_bowtie(req)
+    for k in (
+        "wires",
+        "feeds",
+        "feed_wire_index",
+        "feed_knot_index",
+        "z_in_re",
+        "z_in_im",
+        "z0_ohms",
+        "phase_lr_deg",
+        "del_y_m",
+    ):
+        assert k in p, f"pysim response missing {k}"
+        assert k in n, f"pynec response missing {k}"
+    assert p["z0_ohms"] == n["z0_ohms"] == 100.0
+    assert len(p["wires"]) == len(n["wires"]) == 8
+    assert len(p["feeds"]) == len(n["feeds"]) == 2
+    # Same feed wire indices on both — guarantees the frontend's marker
+    # rendering finds the same wire on either backend.
+    for fp, fn in zip(p["feeds"], n["feeds"]):
+        assert fp["wire_index"] == fn["wire_index"]
+
+
+def test_bowtie_sweep_per_feed_agrees():
+    """Sweep parity across the band: at every frequency the per-feed Z
+    must agree between backends. Catches sweep-loop bugs (wrong NEC
+    context reuse, missing FR card reset) that single-frequency tests
+    miss."""
+    req = _bowtie_parity_req()
+    freqs = [28.0, 28.47, 29.0]
+    _, _, feeds_re_p, feeds_im_p = _sweep_bowtie(req, freqs)
+    # PyNEC has no batched sweep API; loop the multifeed point helper.
+    feeds_re_n, feeds_im_n = [], []
+    for f in freqs:
+        _, fz = pynec_backend._sweep_at_multifeed(req, f)
+        feeds_re_n.append([z.real for z in fz])
+        feeds_im_n.append([z.imag for z in fz])
+    for fi, (rp, ip, rn, ni) in enumerate(
+        zip(feeds_re_p, feeds_im_p, feeds_re_n, feeds_im_n)
+    ):
+        for j in range(2):
+            zp = complex(rp[j], ip[j])
+            zn = complex(rn[j], ni[j])
+            assert _close_bowtie(zp, zn), (
+                f"freq {freqs[fi]} feed {j}: pysim={zp}, pynec={zn}, "
+                f"|delta|={abs(zp - zn):.3f}"
+            )
