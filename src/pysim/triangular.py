@@ -50,9 +50,20 @@ class TriangularPySim:
         edges; an int means use that count for each edge; a sequence gives a
         per-edge count. If `n_per_edge_per_wire` itself is None, every wire
         uses `nsegs` on every edge.
-    feed_wire_index: index of the wire that carries the delta-gap source.
+    feed_wire_index: index of the wire that carries the delta-gap source
+        (single-feed back-compat path; ignored when `feeds` is supplied).
     feed_arclength: arc length along the feed wire (from its starting
         anchor) at which to place the source. None picks the midpoint.
+        Ignored when `feeds` is supplied.
+    feeds: optional list of (wire_index, arclength_or_None, voltage)
+        tuples describing multiple delta-gap sources with prescribed
+        complex driving voltages. Each entry is treated the same way
+        as the single-feed kwargs — `arclength_or_None=None` picks the
+        wire's midpoint; `voltage` is a complex scalar so phase shifts
+        across feeds are expressed by `V_i = |V| * exp(1j * phi_i)`.
+        With N feeds, `compute_impedance()` solves once with the
+        weighted RHS Σ_i V_i e_{m_i} and returns the per-feed driving
+        point impedance vector Z_i = V_i / coeffs[m_i].
     n_qp_reg: GL points for same-edge regular-kernel integrals.
     n_qp_off: GL points for off-edge / cross-wire integrals.
     wavelength, halfdriver_factor: set the measurement wavenumber k and the
@@ -80,6 +91,7 @@ class TriangularPySim:
         n_per_edge_per_wire=None,
         feed_wire_index=0,
         feed_arclength=None,
+        feeds=None,
         n_qp_reg=4,
         n_qp_off=4,
         wavelength=22,
@@ -133,10 +145,30 @@ class TriangularPySim:
                 )
             self.n_per_edge_per_wire.append(npe)
 
-        if not (0 <= feed_wire_index < n_w):
-            raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
-        self.feed_wire_index = feed_wire_index
-        self.feed_arclength = feed_arclength
+        if feeds is None:
+            if not (0 <= feed_wire_index < n_w):
+                raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
+            self.feeds = [(int(feed_wire_index), feed_arclength, 1.0 + 0.0j)]
+        else:
+            if len(feeds) == 0:
+                raise ValueError("feeds must contain at least one entry")
+            norm = []
+            for i, f in enumerate(feeds):
+                if len(f) != 3:
+                    raise ValueError(
+                        f"feeds[{i}]: expected (wire_index, arclength, voltage), got {f!r}"
+                    )
+                w_i, arc_i, v_i = f
+                if not (0 <= w_i < n_w):
+                    raise ValueError(
+                        f"feeds[{i}]: wire_index {w_i} out of range [0, {n_w})"
+                    )
+                arc_i = None if arc_i is None else float(arc_i)
+                norm.append((int(w_i), arc_i, complex(v_i)))
+            self.feeds = norm
+
+        self.feed_wire_index = self.feeds[0][0]
+        self.feed_arclength = self.feeds[0][1]
         self.n_qp_reg = n_qp_reg
         self.n_qp_off = n_qp_off
 
@@ -350,18 +382,26 @@ class TriangularPySim:
         geom["n_basis_total"] = n_total
 
     def _feed_basis_index(self, geom):
-        """Global basis index of the source: closest interior knot on
-        feed_wire_index to feed_arclength (default: wire midpoint).
+        """Global basis index of the (primary) source; back-compat helper
+        for callers that still assume a single feed.
         """
-        w = self.feed_wire_index
-        arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
-        total_arc = arc_at_knot[-1]
-        feed_arc = (
-            self.feed_arclength if self.feed_arclength is not None else total_arc / 2.0
-        )
-        interior_arc = arc_at_knot[1:-1]
-        m_local = int(np.argmin(np.abs(interior_arc - feed_arc)))
-        return geom["basis_offsets"][w] + m_local
+        return self._feed_basis_indices(geom)[0]
+
+    def _feed_basis_indices(self, geom):
+        """Global basis indices for every entry in `self.feeds`.
+
+        Each feed maps to the interior knot of its wire whose arc-length
+        from the wire start is closest to the requested `arclength`
+        (None → wire midpoint).
+        """
+        idx = []
+        for w, arc, _v in self.feeds:
+            arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
+            feed_arc = arc if arc is not None else arc_at_knot[-1] / 2.0
+            interior_arc = arc_at_knot[1:-1]
+            m_local = int(np.argmin(np.abs(interior_arc - feed_arc)))
+            idx.append(int(geom["basis_offsets"][w] + m_local))
+        return idx
 
     def _build_J_blocks(self, geom, k):
         """Per-segment-pair J integrals for a single wavenumber.
@@ -626,14 +666,20 @@ class TriangularPySim:
 
         self.z = Z
 
-        m_center = self._feed_basis_index(geom)
+        m_indices = self._feed_basis_indices(geom)
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
         v = np.zeros(geom["n_basis_total"], dtype=np.complex128)
-        v[m_center] = 1.0
+        for m_i, v_i in zip(m_indices, voltages):
+            v[m_i] += v_i
         if has_junctions:
             coeffs = self._solve_with_kcl(Z, v, geom)
         else:
             coeffs = scipy.linalg.solve(Z, v)
-        driver_impedance = 1.0 / coeffs[m_center]
+        feed_currents = np.array(
+            [coeffs[m_i] for m_i in m_indices], dtype=np.complex128
+        )
+        z_per_feed = voltages / feed_currents
+        driver_impedance = z_per_feed[0] if len(self.feeds) == 1 else z_per_feed
         return driver_impedance, coeffs
 
     def currents_at_knots(self, coeffs, s_array=None):
@@ -870,11 +916,15 @@ class TriangularPySim:
             td_img = self._image_tangent_dot(tangents)
             Z = Z - assemble_batch(*J_img, td_img, geom, omega_array)
 
-        m_center = self._feed_basis_index(geom)
+        m_indices = self._feed_basis_indices(geom)
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
         v = np.zeros(geom["n_basis_total"], dtype=np.complex128)
-        v[m_center] = 1.0
+        for m_i, v_i in zip(m_indices, voltages):
+            v[m_i] += v_i
         if has_junctions:
             coeffs = self._solve_with_kcl_batch(Z, v, geom)
         else:
             coeffs = np.linalg.solve(Z, v)
-        return 1.0 / coeffs[:, m_center]
+        feed_currents = coeffs[:, m_indices]  # (n_k, n_feeds)
+        z_per_feed = voltages[None, :] / feed_currents
+        return z_per_feed[:, 0] if len(self.feeds) == 1 else z_per_feed

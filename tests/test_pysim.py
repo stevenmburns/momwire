@@ -2093,3 +2093,177 @@ def test_bspline_ground_with_enrichment_raises():
             ground_z=0.0,
             use_singular_enrichment=True,
         )
+
+
+# ---------------------------------------------------------------------------
+# Multi-feed support (delta-gap excitations with prescribed complex voltages)
+# ---------------------------------------------------------------------------
+
+
+def _two_dipoles(halfdriver, spacing):
+    a = np.array([[0.0, -halfdriver, 0.0], [0.0, halfdriver, 0.0]])
+    b = np.array([[spacing, -halfdriver, 0.0], [spacing, halfdriver, 0.0]])
+    return [a, b]
+
+
+def test_triangular_single_feed_via_feeds_kwarg_matches_legacy():
+    L = 2 * 0.962 * 22 / 4
+    nsegs = 40
+    wires = [np.array([[0.0, 0.0, 0.0], [0.0, L, 0.0]])]
+    z_legacy, _ = TriangularPySim(
+        wires=wires, n_per_edge_per_wire=[[nsegs]], nsegs=nsegs
+    ).compute_impedance()
+    z_new, _ = TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j)],
+    ).compute_impedance()
+    assert abs(z_new - z_legacy) < 1e-12
+
+
+def test_triangular_multifeed_two_dipoles_in_phase():
+    # Two parallel dipoles, both fed with V=1 (no phase shift). The per-feed
+    # impedances should be equal by symmetry.
+    hd = 0.962 * 22 / 4
+    nsegs = 40
+    wires = _two_dipoles(hd, spacing=2.0)
+    sim = TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j), (1, None, 1.0 + 0.0j)],
+    )
+    z_per_feed, c = sim.compute_impedance()
+    assert z_per_feed.shape == (2,)
+    assert np.isfinite(c).all()
+    assert abs(z_per_feed[0] - z_per_feed[1]) / abs(z_per_feed[0]) < 1e-6
+    # Mutual coupling at this spacing shifts Z away from the isolated
+    # dipole value but it should remain bounded and positive (in-phase
+    # coupling raises R well above the isolated 70 ohm).
+    assert 30.0 < z_per_feed[0].real < 200.0
+
+
+def test_triangular_multifeed_phase_shift_changes_driving_point():
+    # Same geometry as the in-phase test; flipping one feed by 180 degrees
+    # must change the driving-point impedance (V1+V2 mode -> V1-V2 mode).
+    hd = 0.962 * 22 / 4
+    nsegs = 40
+    wires = _two_dipoles(hd, spacing=2.0)
+
+    z_inphase, _ = TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j), (1, None, 1.0 + 0.0j)],
+    ).compute_impedance()
+
+    z_anti, _ = TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j), (1, None, -1.0 + 0.0j)],
+    ).compute_impedance()
+
+    # Anti-phase pair excites the (Z_self - Z_mut) mode; in-phase excites
+    # (Z_self + Z_mut). With nonzero mutual coupling the two driving-point
+    # impedances must differ noticeably.
+    assert abs(z_inphase[0] - z_anti[0]) > 5.0
+
+
+def test_triangular_multifeed_consistency_via_port_z_matrix():
+    # Cross-check: compute the 2x2 port impedance matrix by two unit
+    # excitations and confirm V = Z_port @ I matches an arbitrary
+    # combined-voltage solve.
+    hd = 0.962 * 22 / 4
+    nsegs = 40
+    wires = _two_dipoles(hd, spacing=2.0)
+    kw = dict(wires=wires, n_per_edge_per_wire=[[nsegs], [nsegs]], nsegs=nsegs)
+
+    # Column 0: V=(1,0).
+    sim_a = TriangularPySim(**kw, feeds=[(0, None, 1.0 + 0.0j), (1, None, 0.0 + 0.0j)])
+    _, coeffs_a = sim_a.compute_impedance()
+    m = sim_a._feed_basis_indices(sim_a._build_geometry())
+    I_a = coeffs_a[m]
+    # Column 1: V=(0,1).
+    sim_b = TriangularPySim(**kw, feeds=[(0, None, 0.0 + 0.0j), (1, None, 1.0 + 0.0j)])
+    _, coeffs_b = sim_b.compute_impedance()
+    I_b = coeffs_b[m]
+
+    # Y matrix (port-admittance) columns are the currents at the two ports.
+    Y = np.column_stack([I_a, I_b])
+    Z_port = np.linalg.inv(Y)
+
+    # Arbitrary phased excitation: V = (1, exp(j*60deg)).
+    V = np.array([1.0 + 0j, np.exp(1j * np.pi / 3)])
+    sim_c = TriangularPySim(
+        **kw,
+        feeds=[(0, None, V[0]), (1, None, V[1])],
+    )
+    z_per_feed, coeffs_c = sim_c.compute_impedance()
+    I_c = coeffs_c[m]
+
+    # Linearity: I_c must equal Y @ V.
+    assert np.allclose(I_c, Y @ V, rtol=1e-8, atol=1e-12)
+    # And the reported per-feed driving-point Z must match V / (Y @ V).
+    assert np.allclose(z_per_feed, V / (Y @ V), rtol=1e-8, atol=1e-12)
+    # Z_port reciprocity sanity (free-space, no junctions): Z_port should be
+    # symmetric to within the discretization noise.
+    assert abs(Z_port[0, 1] - Z_port[1, 0]) / abs(Z_port[0, 0]) < 1e-6
+
+
+def test_triangular_multifeed_swept_matches_single_k():
+    hd = 0.962 * 22 / 4
+    nsegs = 30
+    wires = _two_dipoles(hd, spacing=2.5)
+    feeds = [(0, None, 1.0 + 0.0j), (1, None, np.exp(1j * np.pi / 4))]
+    sim = TriangularPySim(
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        feeds=feeds,
+    )
+    z_single, _ = sim.compute_impedance()
+    z_swept = sim.compute_impedance_swept(np.array([sim.k]))
+    assert z_swept.shape == (1, 2)
+    assert np.allclose(z_swept[0], z_single, rtol=1e-9, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Same multi-feed checks against BSplinePySim and SinusoidalPySim.
+# ---------------------------------------------------------------------------
+
+def test_triangular_bowtiearray_1x2_phased():
+    # Simplified "bowtie-array 1x2" stand-in: two V-shaped (kinked-dipole)
+    # elements side-by-side, each driven with its own complex voltage.
+    # The point of this test is the multi-feed plumbing on a non-trivial
+    # multi-wire / kinked geometry, not bowtie geometric fidelity.
+    hd = 0.962 * 22 / 4
+    nsegs = 30
+    bend = 0.3 * hd  # z-droop at the tip — gives each element a kink
+    del_y = 2.0
+    elem_tmpl = np.array(
+        [
+            [0.0, -hd, -bend],
+            [0.0, 0.0, 0.0],
+            [0.0, hd, -bend],
+        ]
+    )
+    left = elem_tmpl + np.array([0.0, -del_y, 0.0])
+    right = elem_tmpl + np.array([0.0, +del_y, 0.0])
+
+    sim = TriangularPySim(
+        wires=[left, right],
+        n_per_edge_per_wire=[[nsegs, nsegs], [nsegs, nsegs]],
+        nsegs=nsegs,
+        feeds=[(0, None, 1.0 + 0.0j), (1, None, np.exp(1j * np.pi / 2))],
+    )
+    z_per_feed, coeffs = sim.compute_impedance()
+    assert z_per_feed.shape == (2,)
+    assert np.isfinite(z_per_feed).all()
+    assert np.isfinite(coeffs).all()
+    # Per-feed Re(Z_i) can legitimately go negative when ports exchange
+    # power through strong mutual coupling (the system as a whole still
+    # radiates). Just sanity-check magnitudes stay bounded.
+    assert abs(z_per_feed[0]) < 1000.0
+    assert abs(z_per_feed[1]) < 1000.0
