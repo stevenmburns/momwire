@@ -22,6 +22,8 @@ except ImportError:
     HAVE_PYNEC = False
     nec = None
 
+from .examples import REGISTRY as EXAMPLES
+
 
 C_LIGHT = 299_792_458.0
 
@@ -87,123 +89,6 @@ def _run_solve(
     cur_arr = np.asarray(sc.get_current(), dtype=np.complex128)
     tag_arr = np.asarray(sc.get_current_segment_tag())
     return cur_arr, tag_arr
-
-
-def _build_inverted_v(req: dict):
-    """Build the PyNEC context + geometry for the inverted V. Returns the
-    context, feed segment, and derived geometry that callers need for
-    response formatting."""
-    angle_deg = float(req.get("angle_deg", 30.0))
-    n_per_wire = int(req.get("n_per_wire", 30))
-    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
-    halfdriver_factor = float(req.get("halfdriver_factor", 0.962))
-    wire_radius = float(req.get("wire_radius", 0.0005))
-    ground = bool(req.get("ground", False))
-    ground_fast = bool(req.get("ground_fast", False))
-    height_m = float(req.get("height_m", 0.0))
-
-    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
-    arm_len = halfdriver_factor * wavelength_design / 4.0
-    alpha = np.deg2rad(angle_deg)
-    cos_a, sin_a = float(np.cos(alpha)), float(np.sin(alpha))
-    # When ground is on, lift the entire geometry by height_m so the arms
-    # stay above z=0 (NEC rejects segments at/below the ground plane).
-    z_offset = height_m if ground else 0.0
-    # Arms along ±y in the yz plane so the broadside lobe peaks at +x,
-    # matching the Yagi/moxon/hexbeam convention.
-    left = (0.0, -arm_len * cos_a, z_offset - arm_len * sin_a)
-    apex = (0.0, 0.0, z_offset)
-    right = (0.0, arm_len * cos_a, z_offset - arm_len * sin_a)
-
-    c = nec.nec_context()
-    geo = c.get_geometry()
-    geo.wire(1, n_per_wire, *left, *apex, wire_radius, 1.0, 1.0)
-    geo.wire(2, n_per_wire, *apex, *right, wire_radius, 1.0, 1.0)
-    c.geometry_complete(0)
-
-    return {
-        "context": c,
-        "feed_seg": n_per_wire,  # last segment of wire 1 (touches the apex)
-        "n_per_wire": n_per_wire,
-        "left": left,
-        "apex": apex,
-        "right": right,
-        "arm_len_m": arm_len,
-        "wavelength_design": wavelength_design,
-        "design_freq_mhz": design_freq_mhz,
-        "ground": ground,
-        "ground_fast": ground_fast,
-        "z_offset": z_offset,
-    }
-
-
-def solve_inverted_v(req: dict) -> dict:
-    """Inverted V via two PyNEC wires meeting at the apex."""
-    meas_freq_mhz = float(
-        req.get("measurement_freq_mhz", req.get("design_freq_mhz", 14.3))
-    )
-    b = _build_inverted_v(req)
-    c = b["context"]
-    n_per_wire = b["n_per_wire"]
-    feed_seg = b["feed_seg"]
-
-    t0 = time.perf_counter()
-    cur_arr, tag_arr = _run_solve(
-        c,
-        2 * n_per_wire,
-        feed_seg,
-        meas_freq_mhz,
-        ground=b["ground"],
-        ground_fast=b["ground_fast"],
-    )
-    solve_ms = (time.perf_counter() - t0) * 1e3
-
-    # z_in = 1 / current at the fed segment center.
-    wire1_idx = np.where(tag_arr == 1)[0]
-    fed_global_idx = wire1_idx[feed_seg - 1]
-    z_in = complex(1.0 / cur_arr[fed_global_idx])
-
-    # Build knot positions and currents, matching pysim's response shape:
-    # one continuous wire (left arm reversed + right arm), feed at apex.
-    arm1_knots = np.linspace(b["left"], b["apex"], n_per_wire + 1)
-    arm2_knots = np.linspace(b["apex"], b["right"], n_per_wire + 1)
-    knots = np.vstack([arm1_knots[:-1], arm2_knots])  # (2N+1, 3)
-
-    # Per-wire segment currents.
-    wire2_idx = np.where(tag_arr == 2)[0]
-    cur_wire1 = cur_arr[wire1_idx]
-    cur_wire2 = cur_arr[wire2_idx]
-    # Concatenate currents in the same direction as knots.
-    cur_all = np.concatenate([cur_wire1, cur_wire2])
-    knot_currents = _segment_centers_to_knot_currents(cur_all, knots.shape[0])
-    feed_knot_index = n_per_wire  # apex
-
-    return {
-        "geometry": "inverted_v",
-        "wires": [
-            {
-                "label": "wire",
-                "knot_positions": knots.tolist(),
-                "knot_currents_re": knot_currents.real.tolist(),
-                "knot_currents_im": knot_currents.imag.tolist(),
-            }
-        ],
-        "feed_wire_index": 0,
-        "feed_knot_index": feed_knot_index,
-        "z_in_re": float(z_in.real),
-        "z_in_im": float(z_in.imag),
-        "design_freq_mhz": b["design_freq_mhz"],
-        "measurement_freq_mhz": meas_freq_mhz,
-        "lambda_design_m": b["wavelength_design"],
-        "arm_len_m": b["arm_len_m"],
-        "solve_ms": solve_ms,
-        "solver": "pynec",
-        "ground": b["ground"],
-        "ground_fast": b["ground_fast"],
-        "height_m": b["z_offset"],
-        "ground_eps_r": GROUND_DIELECTRIC,
-        "ground_sigma": GROUND_CONDUCTIVITY,
-    }
 
 
 def _build_yagi(req: dict):
@@ -1502,7 +1387,10 @@ def solve(req: dict) -> dict:
         return solve_hentenna(req)
     if geometry == "bowtie":
         return solve_bowtie(req)
-    return solve_inverted_v(req)
+    ex = EXAMPLES.get(geometry) or EXAMPLES["inverted_v"]
+    if ex.pynec_solve is None:
+        raise ValueError(f"PyNEC solve not implemented for geometry {ex.name!r}")
+    return ex.pynec_solve(req)
 
 
 def pattern(req: dict) -> dict:
@@ -1527,7 +1415,12 @@ def pattern(req: dict) -> dict:
     elif geometry == "bowtie":
         b = _build_bowtie(req)
     else:
-        b = _build_inverted_v(req)
+        ex = EXAMPLES.get(geometry) or EXAMPLES["inverted_v"]
+        if ex.pynec_build is None:
+            raise ValueError(
+                f"PyNEC pattern not implemented for geometry {ex.name!r}"
+            )
+        b = ex.pynec_build(req)
     c = b["context"]
     meas_freq_mhz = float(
         req.get("measurement_freq_mhz", req.get("design_freq_mhz", 14.3))
