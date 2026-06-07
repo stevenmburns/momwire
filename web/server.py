@@ -108,6 +108,7 @@ from pysim.sinusoidal import SinusoidalPySim
 from pysim.triangular import TriangularPySim
 
 from . import pynec_backend
+from .examples import REGISTRY as EXAMPLES
 
 
 # Per-model option allowlist. Frontend sends `pysim_model` + `model_options`
@@ -402,24 +403,6 @@ def _yagi_polylines(
     return polylines
 
 
-def _inverted_v_polyline(
-    arm_len: float, angle_deg: float, z_offset: float = 0.0
-) -> np.ndarray:
-    """Inverted-V with apex at z = z_offset and arms drooping in the yz plane.
-
-    Arms run along ±y so the broadside null axis is ±x — matching the
-    Yagi/moxon/hexbeam convention where the main lobe peaks at azimuth 0°
-    (along +x). angle_deg is each arm's droop from horizontal: 0 = flat
-    dipole, larger = more closed V.
-    """
-    alpha = np.deg2rad(angle_deg)
-    cos_a, sin_a = float(np.cos(alpha)), float(np.sin(alpha))
-    left = np.array([0.0, -arm_len * cos_a, z_offset - arm_len * sin_a])
-    apex = np.array([0.0, 0.0, z_offset])
-    right = np.array([0.0, arm_len * cos_a, z_offset - arm_len * sin_a])
-    return np.vstack([left, apex, right])
-
-
 # Pysim PEC ground: pass these to the response so the frontend's Fresnel
 # far-field code treats the surface as a perfect electric conductor
 # (ρ_h → −1, ρ_v → +1 in the eps_r → ∞ limit).
@@ -437,58 +420,6 @@ def _read_ground(req: dict) -> tuple[bool, float, float]:
     height_m = float(req.get("height_m", 0.0))
     z_offset = height_m if ground_on else 0.0
     return ground_on, height_m, z_offset
-
-
-def _solve_inverted_v(req: dict) -> dict:
-    angle_deg = float(req.get("angle_deg", 30.0))
-    n_per_wire = int(req.get("n_per_wire", 30))
-    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
-    meas_freq_mhz = float(req.get("measurement_freq_mhz", design_freq_mhz))
-    halfdriver_factor = float(req.get("halfdriver_factor", 0.962))
-    wire_radius = float(req.get("wire_radius", 0.0005))
-    ground_on, height_m, z_offset = _read_ground(req)
-
-    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
-    wavelength_meas = C_LIGHT / (meas_freq_mhz * 1e6)
-    arm_len = halfdriver_factor * wavelength_design / 4.0
-
-    polyline = _inverted_v_polyline(arm_len, angle_deg, z_offset=z_offset)
-    sim = _make_pysim_sim(
-        req,
-        wires=[polyline],
-        n_per_edge_per_wire=[[n_per_wire, n_per_wire]],
-        feed_wire_index=0,
-        wavelength=wavelength_meas,
-        halfdriver_factor=halfdriver_factor,
-        nsegs=n_per_wire,
-        ground_z=0.0 if ground_on else None,
-    )
-    sim.wire_radius = wire_radius
-
-    t0 = time.perf_counter()
-    z_in, coeffs = sim.compute_impedance()
-    solve_ms = (time.perf_counter() - t0) * 1e3
-
-    knots = _polyline_knots(polyline, [n_per_wire, n_per_wire])
-    feed_knot_index = n_per_wire  # apex (midpoint of polyline)
-
-    return {
-        "geometry": "inverted_v",
-        "wires": _pack_pysim_wires(sim, coeffs, [knots], ["wire"]),
-        "feed_wire_index": 0,
-        "feed_knot_index": feed_knot_index,
-        "z_in_re": float(z_in.real),
-        "z_in_im": float(z_in.imag),
-        "design_freq_mhz": design_freq_mhz,
-        "measurement_freq_mhz": meas_freq_mhz,
-        "lambda_design_m": wavelength_design,
-        "arm_len_m": arm_len,
-        "solve_ms": solve_ms,
-        "ground": ground_on,
-        "height_m": z_offset,
-        "ground_eps_r": _PEC_GROUND_EPS_R,
-        "ground_sigma": _PEC_GROUND_SIGMA,
-    }
 
 
 def _solve_yagi(req: dict) -> dict:
@@ -1350,42 +1281,13 @@ def solve(req: dict) -> dict:
         out = _solve_fandipole(req)
     elif geometry == "hentenna":
         out = _solve_hentenna(req)
+    elif geometry in EXAMPLES:
+        out = EXAMPLES[geometry].pysim_solve(req)
     else:
-        out = _solve_inverted_v(req)
+        out = EXAMPLES["inverted_v"].pysim_solve(req)
     out["solver"] = "pysim"
     _compute_directivity_norm(out)
     return out
-
-
-def _sweep_inverted_v(
-    req: dict, freqs_mhz: list[float]
-) -> tuple[list[float], list[float]]:
-    """Batched sweep using TriangularPySim.compute_impedance_swept."""
-    angle_deg = float(req.get("angle_deg", 30.0))
-    n_per_wire = int(req.get("n_per_wire", 30))
-    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
-    halfdriver_factor = float(req.get("halfdriver_factor", 0.962))
-    wire_radius = float(req.get("wire_radius", 0.0005))
-    ground_on, _, z_offset = _read_ground(req)
-
-    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
-    arm_len = halfdriver_factor * wavelength_design / 4.0
-
-    sim = _make_pysim_sim(
-        req,
-        wires=[_inverted_v_polyline(arm_len, angle_deg, z_offset=z_offset)],
-        n_per_edge_per_wire=[[n_per_wire, n_per_wire]],
-        feed_wire_index=0,
-        wavelength=wavelength_design,
-        halfdriver_factor=halfdriver_factor,
-        nsegs=n_per_wire,
-        ground_z=0.0 if ground_on else None,
-    )
-    sim.wire_radius = wire_radius
-
-    k_array = np.array([2 * np.pi * f * 1e6 / C_LIGHT for f in freqs_mhz])
-    z_array = sim.compute_impedance_swept(k_array)
-    return z_array.real.tolist(), z_array.imag.tolist()
 
 
 def _sweep_yagi(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
@@ -1617,7 +1519,10 @@ async def sweep_endpoint(req: dict, request: Request):
                 "hexbeam": _sweep_hexbeam,
                 "fan_dipole": _sweep_fandipole,
                 "hentenna": _sweep_hentenna,
-            }.get(geometry, _sweep_inverted_v)
+            }.get(geometry)
+            if sweep_fn is None:
+                ex = EXAMPLES.get(geometry) or EXAMPLES["inverted_v"]
+                sweep_fn = ex.pysim_sweep
             chunk_size = max(1, len(freqs) // 8)
             start = 0
             while start < len(freqs):
@@ -1673,8 +1578,10 @@ def _solve_z_only(req: dict) -> complex:
         res = _solve_fandipole(req)
     elif geometry == "hentenna":
         res = _solve_hentenna(req)
+    elif geometry in EXAMPLES:
+        res = EXAMPLES[geometry].pysim_solve(req)
     else:
-        res = _solve_inverted_v(req)
+        res = EXAMPLES["inverted_v"].pysim_solve(req)
     return complex(res["z_in_re"], res["z_in_im"])
 
 
