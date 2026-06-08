@@ -213,16 +213,11 @@ class AntennaExample:
     # 2-tuple. Sweep endpoint uses this to dispatch the two response
     # streaming shapes.
     multi_feed: bool = False
-    # When True, the frontend falls through to hardcoded JSX controls
-    # instead of generic ParamForm rendering. Used by fan_dipole, whose
-    # per-band UI (list of bands, each with its own selectors and sliders)
-    # doesn't fit a flat ParamSpec list. Schema-driven examples set it
-    # to False and supply a full param_schema.
-    legacy_controls: bool = False
-    # Same idea for the result-panel readouts. Fan_dipole has a per-band
-    # repeat group in its result block, so it stays on hand-rolled JSX.
-    # Kept independent of `legacy_controls` because in general the input
-    # and output panels are unrelated concerns.
+    # When True, the result panel falls through to hardcoded JSX
+    # instead of generic ResultPanel rendering. Used by fan_dipole,
+    # whose per-band repeat group on band_lengths_m / band_freqs_mhz
+    # isn't yet expressible in ResultFieldSpec. Schema-driven examples
+    # set it to False and supply a full result_schema.
     legacy_results: bool = False
     # Mixed sequence of ParamSpec (scalar) and ParamGroupSpec (repeat).
     # The Any erases the union; runtime discrimination is by presence of
