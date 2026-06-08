@@ -74,6 +74,14 @@ type ResultFieldSpec = {
   unit: string | null;
 };
 
+type BandSpec = {
+  key: string;
+  label: string;
+  freq_mhz: number;
+  min_mhz: number;
+  max_mhz: number;
+};
+
 type ExampleDescriptor = {
   name: string;
   label: string;
@@ -82,6 +90,8 @@ type ExampleDescriptor = {
   legacy_results: boolean;
   param_schema: SchemaItem[];
   result_schema: ResultFieldSpec[];
+  bands: BandSpec[];
+  meas_freq_range_mhz: [number, number] | null;
 };
 
 function applyVisibility(spec: SchemaParamSpec, values: ParamValueBag): boolean {
@@ -595,22 +605,6 @@ type SolveRequest = {
   phase_lr_deg?: number;
 };
 
-// Amateur HF bands the user can design for. Slider min/max snap to the
-// selected band's edges; the default is the band centre. Geometry choice
-// is independent of band — shape factors are dimensionless and scale to
-// whatever wavelength the design freq picks.
-type Band = "20m" | "17m" | "15m" | "12m" | "10m";
-const BANDS: { id: Band; min: number; max: number; default: number }[] = [
-  { id: "20m", min: 14.000, max: 14.350, default: 14.300 },
-  { id: "17m", min: 18.068, max: 18.168, default: 18.1575 },
-  { id: "15m", min: 21.000, max: 21.450, default: 21.383 },
-  { id: "12m", min: 24.890, max: 24.990, default: 24.970 },
-  { id: "10m", min: 28.000, max: 29.700, default: 28.470 },
-];
-const BAND_BY_ID: Record<Band, (typeof BANDS)[number]> = Object.fromEntries(
-  BANDS.map((b) => [b.id, b]),
-) as Record<Band, (typeof BANDS)[number]>;
-
 type SweepData = {
   freqs_mhz: number[];
   z_re: number[];
@@ -948,9 +942,12 @@ export function App() {
   function resetSlot(slot: Slot) {
     setSlots((prev) => ({ ...prev, [slot]: DEFAULT_SLOTS[slot] }));
   }
-  const [band, setBand] = useState<Band>("20m");
-  const [designFreq, setDesignFreq] = useState(BAND_BY_ID["20m"].default);
-  const [measFreq, setMeasFreq] = useState(BAND_BY_ID["20m"].default);
+  // band/designFreq/measFreq seed to placeholders; the auto-select
+  // effect below picks the first band of the active example and
+  // overwrites them once /examples resolves.
+  const [band, setBand] = useState<string>("");
+  const [designFreq, setDesignFreq] = useState(14.3);
+  const [measFreq, setMeasFreq] = useState(14.3);
   const [linkMeas, setLinkMeas] = useState(true);
   // Ground plane (PyNEC only). Geometry is lifted by heightM when enabled.
   const [groundEnabled, setGroundEnabled] = useState(false);
@@ -1105,29 +1102,52 @@ export function App() {
     return base;
   }
 
-  function selectBand(next: Band) {
-    setBand(next);
-    const d = BAND_BY_ID[next].default;
-    setDesignFreq(d);
-    if (linkMeas) setMeasFreq(d);
-    else if (measFreq < BAND_BY_ID[next].min || measFreq > BAND_BY_ID[next].max) {
-      setMeasFreq(d);
+  const currentBands: BandSpec[] = currentExample?.bands ?? [];
+
+  // When the active example changes (or first loads), snap band /
+  // designFreq / measFreq to the first band of that example. Skipped
+  // entirely for examples that suppress the row (bands === []) — those
+  // own their design freq via their own schema controls.
+  useEffect(() => {
+    if (!currentExample) return;
+    if (currentBands.length === 0) {
+      if (band !== "") setBand("");
+      return;
+    }
+    if (currentBands.some((b) => b.key === band)) return;
+    const first = currentBands[0];
+    setBand(first.key);
+    setDesignFreq(first.freq_mhz);
+    if (linkMeas) setMeasFreq(first.freq_mhz);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentExample]);
+
+  function selectBand(nextKey: string) {
+    const nb = currentBands.find((b) => b.key === nextKey);
+    if (!nb) return;
+    setBand(nextKey);
+    setDesignFreq(nb.freq_mhz);
+    if (linkMeas) setMeasFreq(nb.freq_mhz);
+    else if (measFreq < nb.min_mhz || measFreq > nb.max_mhz) {
+      setMeasFreq(nb.freq_mhz);
     }
   }
 
   // Measurement-band quick selector: jumps measFreq to the band centre and
   // auto-unlinks from design so the antenna geometry isn't retuned.
-  function selectMeasBand(next: Band) {
+  function selectMeasBand(nextKey: string) {
+    const nb = currentBands.find((b) => b.key === nextKey);
+    if (!nb) return;
     if (linkMeas) setLinkMeas(false);
-    setMeasFreq(BAND_BY_ID[next].default);
+    setMeasFreq(nb.freq_mhz);
   }
 
   // Which band (if any) currently contains the measurement freq — drives
   // the active-tab highlight on the meas-band selector. Falls outside any
   // band → no tab highlighted.
-  function bandContaining(f: number): Band | null {
-    for (const b of BANDS) {
-      if (f >= b.min && f <= b.max) return b.id;
+  function bandContaining(f: number): string | null {
+    for (const b of currentBands) {
+      if (f >= b.min_mhz && f <= b.max_mhz) return b.key;
     }
     return null;
   }
@@ -1563,35 +1583,38 @@ export function App() {
           />
         )}
 
-        {geometry !== "fan_dipole" && (
-          <div className="field">
-            <label>
-              <span>design freq</span>
-              <span>{designFreq.toFixed(3)} MHz</span>
-            </label>
-            <div className="geometry-tabs band-tabs" role="tablist">
-              {BANDS.map((b) => (
-                <button
-                  key={b.id}
-                  role="tab"
-                  aria-selected={band === b.id}
-                  className={band === b.id ? "active" : ""}
-                  onClick={() => selectBand(b.id)}
-                >
-                  {b.id}
-                </button>
-              ))}
+        {currentBands.length > 0 && (() => {
+          const active = currentBands.find((b) => b.key === band) ?? currentBands[0];
+          return (
+            <div className="field">
+              <label>
+                <span>design freq</span>
+                <span>{designFreq.toFixed(3)} MHz</span>
+              </label>
+              <div className="geometry-tabs band-tabs" role="tablist">
+                {currentBands.map((b) => (
+                  <button
+                    key={b.key}
+                    role="tab"
+                    aria-selected={band === b.key}
+                    className={band === b.key ? "active" : ""}
+                    onClick={() => selectBand(b.key)}
+                  >
+                    {b.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                type="range"
+                min={active.min_mhz}
+                max={active.max_mhz}
+                step={0.005}
+                value={designFreq}
+                onInput={(e) => updateDesignFreq(Number((e.target as HTMLInputElement).value))}
+              />
             </div>
-            <input
-              type="range"
-              min={BAND_BY_ID[band].min}
-              max={BAND_BY_ID[band].max}
-              step={0.005}
-              value={designFreq}
-              onInput={(e) => updateDesignFreq(Number((e.target as HTMLInputElement).value))}
-            />
-          </div>
-        )}
+          );
+        })()}
 
         <div className="group-label">simulation</div>
 
@@ -1694,34 +1717,36 @@ export function App() {
             <span>measurement freq</span>
             <span>{measFreq.toFixed(3)} MHz</span>
           </label>
-          {/* Fan dipole is multi-band, so the slider has to span all five
-              bands rather than ±25% of a single design freq. */}
-          <div className="geometry-tabs band-tabs" role="tablist">
-            {BANDS.map((b) => {
-              const active = bandContaining(measFreq) === b.id;
-              return (
-                <button
-                  key={b.id}
-                  role="tab"
-                  aria-selected={active}
-                  className={active ? "active" : ""}
-                  onClick={() => selectMeasBand(b.id)}
-                >
-                  {b.id}
-                </button>
-              );
-            })}
-          </div>
+          {/* Multi-band examples override meas_freq_range_mhz so the
+              slider spans every band rather than ±25% of one design freq. */}
+          {currentBands.length > 0 && (
+            <div className="geometry-tabs band-tabs" role="tablist">
+              {currentBands.map((b) => {
+                const active = bandContaining(measFreq) === b.key;
+                return (
+                  <button
+                    key={b.key}
+                    role="tab"
+                    aria-selected={active}
+                    className={active ? "active" : ""}
+                    onClick={() => selectMeasBand(b.key)}
+                  >
+                    {b.label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <input
             type="range"
             min={
-              geometry === "fan_dipole"
-                ? BANDS[0].min - 0.5
+              currentExample?.meas_freq_range_mhz
+                ? currentExample.meas_freq_range_mhz[0]
                 : Math.max(0.5, designFreq * 0.8)
             }
             max={
-              geometry === "fan_dipole"
-                ? BANDS[BANDS.length - 1].max + 0.5
+              currentExample?.meas_freq_range_mhz
+                ? currentExample.meas_freq_range_mhz[1]
                 : Math.min(60, designFreq * 1.25)
             }
             step={0.005}

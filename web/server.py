@@ -701,6 +701,21 @@ def examples_endpoint():
                     }
                     for r in ex.result_schema
                 ],
+                "bands": [
+                    {
+                        "key": b.key,
+                        "label": b.label,
+                        "freq_mhz": b.freq_mhz,
+                        "min_mhz": b.min_mhz,
+                        "max_mhz": b.max_mhz,
+                    }
+                    for b in ex.bands
+                ],
+                "meas_freq_range_mhz": (
+                    list(ex.meas_freq_range_mhz)
+                    if ex.meas_freq_range_mhz is not None
+                    else None
+                ),
             }
         )
     out.sort(key=lambda e: e["label"])

@@ -154,6 +154,33 @@ class ParamGroupSpec:
 
 
 @dataclass(frozen=True)
+class BandSpec:
+    """A frequency-preset tab the UI offers as a design-frequency selector.
+
+    The solver only sees the resulting `design_freq_mhz` float; bands are
+    purely a UI affordance. Examples that target HF amateur bands reuse
+    `DEFAULT_HF_BANDS`; others can supply their own list, or set bands=()
+    to suppress the row entirely (fan_dipole does this — its per-band
+    schema-driven controls own the design frequency).
+    """
+
+    key: str        # stable identifier; also used as the visible tab label today
+    label: str
+    freq_mhz: float  # tab default — slider snaps here when the band is selected
+    min_mhz: float   # slider lower bound while this band is active
+    max_mhz: float
+
+
+DEFAULT_HF_BANDS: tuple[BandSpec, ...] = (
+    BandSpec("20m", "20m", 14.300, 14.000, 14.350),
+    BandSpec("17m", "17m", 18.1575, 18.068, 18.168),
+    BandSpec("15m", "15m", 21.383, 21.000, 21.450),
+    BandSpec("12m", "12m", 24.970, 24.890, 24.990),
+    BandSpec("10m", "10m", 28.470, 28.000, 29.700),
+)
+
+
+@dataclass(frozen=True)
 class ResultFieldSpec:
     """One field from the solve response to surface in the result panel.
 
@@ -202,3 +229,12 @@ class AntennaExample:
     # `params` (groups have it, scalars don't).
     param_schema: tuple[Any, ...] = field(default_factory=tuple)
     result_schema: tuple[ResultFieldSpec, ...] = field(default_factory=tuple)
+    # Design-frequency band tabs offered by the UI. Defaults to the HF
+    # amateur set; multi-band examples (fan_dipole) set this to () to
+    # suppress the row.
+    bands: tuple[BandSpec, ...] = DEFAULT_HF_BANDS
+    # Optional override for the measurement-freq slider span. When None,
+    # the UI uses a generic ±20%/+25% window around the design freq.
+    # Multi-band examples that span the whole HF range set this to e.g.
+    # (13.5, 30.2) so the slider can reach every band.
+    meas_freq_range_mhz: Optional[tuple[float, float]] = None
