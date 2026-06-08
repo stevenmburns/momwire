@@ -66,7 +66,7 @@ function isGroup(item: SchemaItem): item is SchemaParamGroupSpec {
 // numbers (float/int) or strings (enum), and groups are arrays of
 // child bags (one per instance, pre-allocated to max_repeats).
 type ParamValueBag = {
-  [key: string]: number | string | ParamValueBag[];
+  [key: string]: number | string | boolean | ParamValueBag[];
 };
 
 type ResultFieldSpec = {
@@ -137,9 +137,11 @@ function seedDefaults(
     } else {
       const ov = overrides?.[item.name];
       if (ov !== undefined) {
-        out[item.name] = ov as number | string;
+        out[item.name] = ov as number | string | boolean;
       } else if (item.kind === "enum") {
         out[item.name] = String(item.default);
+      } else if (item.kind === "bool") {
+        out[item.name] = Boolean(item.default);
       } else {
         out[item.name] = Number(item.default);
       }
@@ -181,7 +183,7 @@ function ParamForm({
 }: {
   schema: SchemaItem[];
   values: ParamValueBag;
-  onChange: (path: (string | number)[], value: number | string) => void;
+  onChange: (path: (string | number)[], value: number | string | boolean) => void;
   pathPrefix?: (string | number)[];
 }) {
   return (
@@ -239,6 +241,27 @@ function ParamForm({
               if (typeof hi === "number") effMax = hi;
             }
           }
+        }
+
+        if (item.kind === "bool") {
+          const checked = Boolean(currentRaw ?? item.default);
+          return (
+            <div key={item.name} className="field field-bool">
+              <label className="field-bool-label">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={(e) =>
+                    onChange(
+                      [...pathPrefix, item.name],
+                      (e.target as HTMLInputElement).checked,
+                    )
+                  }
+                />
+                <span>{item.label}</span>
+              </label>
+            </div>
+          );
         }
 
         if (item.kind === "enum") {
@@ -837,7 +860,7 @@ export function App() {
   // reference at every level it watches.
   function setParamAtPath(
     path: (string | number)[],
-    value: number | string,
+    value: number | string | boolean,
   ) {
     const setIn = (node: unknown, ps: (string | number)[]): unknown => {
       if (ps.length === 0) return value;
@@ -1765,7 +1788,7 @@ export function App() {
               result={result as Record<string, unknown> | null}
             />
           )}
-          {currentExample?.multi_feed && result?.feeds && result.feeds.length > 0 && (
+          {currentExample?.multi_feed && result?.feeds && result.feeds.length > 1 && (
             <div className="feeds-table">
               <div className="feeds-table-header">per-feed Z (V/I)</div>
               {result.feeds.map((f, i) => (
@@ -3200,7 +3223,7 @@ function SmithChart({
       extrapRe: number | null;
       extrapIm: number | null;
     }> = [];
-    if (multiFeed && feeds && feeds.length > 0) {
+    if (multiFeed && feeds && feeds.length > 1) {
       for (let fi = 0; fi < feeds.length; fi++) {
         const re = converge?.feeds_z_re_extrap?.[fi] ?? null;
         const im = converge?.feeds_z_im_extrap?.[fi] ?? null;
@@ -3269,7 +3292,13 @@ function SmithChart({
     ctx.moveTo(cx, cy - 4);
     ctx.lineTo(cx, cy + 4);
     ctx.stroke();
-  }, [r, x, z0, size, sweep, converge, measFreqMhz, running, convergeRunning, feeds]);
+    // multiFeed is captured in the closure; without it in the deps the
+    // chart wouldn't redraw when the descriptor flag flips from the
+    // EXAMPLES_FALLBACK default (false) to the real /examples value
+    // (true for bowtie / hexbeam_5band) — the user saw only one Z*
+    // annotation in the legend because the closure stayed wedged on
+    // the single-feed branch.
+  }, [r, x, z0, size, sweep, converge, measFreqMhz, running, convergeRunning, feeds, multiFeed]);
 
   return <canvas ref={canvasRef} className="smith" />;
 }
