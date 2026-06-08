@@ -29,25 +29,34 @@ type SchemaParamSpec = {
   visible_when: { name: string; op: string; value: number } | null;
 };
 
+type ResultFieldSpec = {
+  field: string;
+  label: string;
+  precision: number;
+  unit: string | null;
+};
+
 type ExampleDescriptor = {
   name: string;
   label: string;
   multi_feed: boolean;
   legacy_controls: boolean;
+  legacy_results: boolean;
   param_schema: SchemaParamSpec[];
+  result_schema: ResultFieldSpec[];
 };
 
 // Fallback list used until /examples resolves on mount. Matches the
 // backend's registered names so the initial render doesn't show an empty
 // dropdown when the page first paints.
 const EXAMPLES_FALLBACK: ExampleDescriptor[] = [
-  { name: "inverted_v", label: "Inverted V", multi_feed: false, legacy_controls: false, param_schema: [] },
-  { name: "yagi", label: "Yagi", multi_feed: false, legacy_controls: false, param_schema: [] },
-  { name: "moxon", label: "Moxon", multi_feed: false, legacy_controls: false, param_schema: [] },
-  { name: "hexbeam", label: "Hexbeam", multi_feed: false, legacy_controls: false, param_schema: [] },
-  { name: "fan_dipole", label: "Fan Dipole", multi_feed: false, legacy_controls: true, param_schema: [] },
-  { name: "hentenna", label: "Hentenna", multi_feed: false, legacy_controls: false, param_schema: [] },
-  { name: "bowtie", label: "Bowtie 1×2 array", multi_feed: true, legacy_controls: false, param_schema: [] },
+  { name: "inverted_v", label: "Inverted V", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
+  { name: "yagi", label: "Yagi", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
+  { name: "moxon", label: "Moxon", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
+  { name: "hexbeam", label: "Hexbeam", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
+  { name: "fan_dipole", label: "Fan Dipole", multi_feed: false, legacy_controls: true, legacy_results: true, param_schema: [], result_schema: [] },
+  { name: "hentenna", label: "Hentenna", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
+  { name: "bowtie", label: "Bowtie 1×2 array", multi_feed: true, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
 ];
 
 function applyVisibility(
@@ -97,6 +106,35 @@ function ParamForm({
               value={current}
               onInput={(e) => onChange(s.name, Number((e.target as HTMLInputElement).value))}
             />
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+function ResultPanel({
+  schema,
+  result,
+}: {
+  schema: ResultFieldSpec[];
+  result: Record<string, unknown> | null;
+}) {
+  // Render one row per schema entry, reading the field off the response by
+  // name. Missing or non-numeric values get an em-dash so the row layout
+  // doesn't collapse mid-update.
+  return (
+    <>
+      {schema.map((s) => {
+        const raw = result?.[s.field];
+        const display =
+          typeof raw === "number"
+            ? `${raw.toFixed(s.precision)}${s.unit ?? ""}`
+            : "—";
+        return (
+          <div className="row" key={`result-${s.field}`}>
+            <span>{s.label}</span>
+            <span className="val">{display}</span>
           </div>
         );
       })}
@@ -1678,103 +1716,11 @@ export function App() {
               {result ? `${result.z_in_im.toFixed(2)} Ω` : "—"}
             </span>
           </div>
-          {result?.geometry === "inverted_v" && result.arm_len_m != null && (
-            <div className="row">
-              <span>arm length</span>
-              <span className="val">{result.arm_len_m.toFixed(3)} m</span>
-            </div>
-          )}
-          {result?.geometry === "yagi" && (
-            <>
-              <div className="row">
-                <span>driver L</span>
-                <span className="val">{result.driver_length_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>reflector L</span>
-                <span className="val">{result.reflector_length_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>spacing</span>
-                <span className="val">{result.spacing_m?.toFixed(3)} m</span>
-              </div>
-            </>
-          )}
-          {result?.geometry === "moxon" && (
-            <>
-              <div className="row">
-                <span>long (vertical)</span>
-                <span className="val">{result.long_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>short (gap)</span>
-                <span className="val">{result.short_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>tip spacer</span>
-                <span className="val">{result.tipspacer_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>tip length t0</span>
-                <span className="val">{result.t0_m?.toFixed(3)} m</span>
-              </div>
-            </>
-          )}
-          {result?.geometry === "hexbeam" && (
-            <>
-              <div className="row">
-                <span>radius</span>
-                <span className="val">{result.radius_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>tip length t0</span>
-                <span className="val">{result.t0_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>driver tip t1</span>
-                <span className="val">{result.t1_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>tip spacer</span>
-                <span className="val">{result.tipspacer_m?.toFixed(3)} m</span>
-              </div>
-            </>
-          )}
-          {result?.geometry === "hentenna" && (
-            <>
-              <div className="row">
-                <span>half width</span>
-                <span className="val">{result.half_width_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>top height</span>
-                <span className="val">{result.top_height_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>mid offset</span>
-                <span className="val">{result.mid_offset_m?.toFixed(3)} m</span>
-              </div>
-            </>
-          )}
-          {result?.geometry === "bowtie" && (
-            <>
-              <div className="row">
-                <span>arm half-length</span>
-                <span className="val">{result.y_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>tip droop z</span>
-                <span className="val">{result.z_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>spacing del_y</span>
-                <span className="val">{result.del_y_m?.toFixed(3)} m</span>
-              </div>
-              <div className="row">
-                <span>phase_lr</span>
-                <span className="val">{result.phase_lr_deg?.toFixed(1)}°</span>
-              </div>
-            </>
+          {currentExample && !currentExample.legacy_results && (
+            <ResultPanel
+              schema={currentExample.result_schema}
+              result={result as Record<string, unknown> | null}
+            />
           )}
           {result?.feeds && result.feeds.length > 1 && (
             <div className="feeds-table">

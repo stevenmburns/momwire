@@ -454,7 +454,10 @@ EXAMPLE = register(
         pynec_solve=pynec_solve,
         # Per-band UI (a list of bands, each with its own selectors and
         # sliders) doesn't fit the flat ParamSpec list. Tell the frontend
-        # to fall through to its hardcoded fan_dipole JSX block.
+        # to fall through to its hardcoded fan_dipole JSX block — for
+        # both the input controls AND the result-panel readouts (the
+        # result block also has a per-band repeat group).
         legacy_controls=True,
+        legacy_results=True,
     )
 )

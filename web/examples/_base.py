@@ -72,6 +72,22 @@ class ParamSpec:
 
 
 @dataclass(frozen=True)
+class ResultFieldSpec:
+    """One field from the solve response to surface in the result panel.
+
+    The frontend's ResultPanel reads the field by name off the response,
+    formats it with `precision`, appends `unit`, and renders one row
+    labelled `label`. Scalar number fields only — multi-feed tables
+    stay hardcoded for now.
+    """
+
+    field: str  # response key, e.g. "arm_len_m"
+    label: str
+    precision: int = 3
+    unit: Optional[str] = None  # rendered after the value: " m", "°", " Ω", ...
+
+
+@dataclass(frozen=True)
 class AntennaExample:
     name: str
     label: str
@@ -94,4 +110,10 @@ class AntennaExample:
     # doesn't fit a flat ParamSpec list. Schema-driven examples set it
     # to False and supply a full param_schema.
     legacy_controls: bool = False
+    # Same idea for the result-panel readouts. Fan_dipole has a per-band
+    # repeat group in its result block, so it stays on hand-rolled JSX.
+    # Kept independent of `legacy_controls` because in general the input
+    # and output panels are unrelated concerns.
+    legacy_results: bool = False
     param_schema: tuple[ParamSpec, ...] = field(default_factory=tuple)
+    result_schema: tuple[ResultFieldSpec, ...] = field(default_factory=tuple)

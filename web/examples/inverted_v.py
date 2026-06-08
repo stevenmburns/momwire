@@ -18,7 +18,7 @@ import time
 import numpy as np
 
 from . import register
-from ._base import AntennaExample, ParamSpec
+from ._base import AntennaExample, ParamSpec, ResultFieldSpec
 
 
 def _polyline(arm_len: float, angle_deg: float, z_offset: float = 0.0) -> np.ndarray:
@@ -277,6 +277,11 @@ EXAMPLE = register(
                 max=1.2,
                 step=0.001,
                 precision=3,
+            ),
+        ),
+        result_schema=(
+            ResultFieldSpec(
+                field="arm_len_m", label="arm length", precision=3, unit=" m"
             ),
         ),
     )

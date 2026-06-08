@@ -24,7 +24,7 @@ import time
 import numpy as np
 
 from . import register
-from ._base import AntennaExample, ParamSpec
+from ._base import AntennaExample, ParamSpec, ResultFieldSpec
 
 # Half-gap (m) at the feed and at the top-of-bowtie pinch.
 _BOWTIE_EPS = 0.05
@@ -678,6 +678,18 @@ EXAMPLE = register(
                 step=1.0,
                 precision=0,
                 unit="°",
+            ),
+        ),
+        result_schema=(
+            ResultFieldSpec(
+                field="y_m", label="arm half-length", precision=3, unit=" m"
+            ),
+            ResultFieldSpec(field="z_m", label="tip droop z", precision=3, unit=" m"),
+            ResultFieldSpec(
+                field="del_y_m", label="spacing del_y", precision=3, unit=" m"
+            ),
+            ResultFieldSpec(
+                field="phase_lr_deg", label="phase_lr", precision=1, unit="°"
             ),
         ),
     )
