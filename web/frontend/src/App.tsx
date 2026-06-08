@@ -508,16 +508,17 @@ type BSplineOpts = CommonOpts & {
   useSingularEnrichment: boolean;
   // "raw"      → Φ_sing(t) = t·log(t), PR #45/#47 original shape.
   // "stable"   → Φ_sing − bubble-subspace L²-projection: faster large-N
-  //              convergence on hentenna; larger small-N transient; loses
-  //              Y-fixture cusp benefit. d=1 collapses to raw bit-exact.
+  //              convergence on dominant-pair K=3 junctions; larger
+  //              small-N transient; loses Y-fixture cusp benefit. d=1
+  //              collapses to raw bit-exact.
   // "tikhonov" → raw basis + λ·s·I penalty on Z_ee at solve time.
   //              λ→0 is raw; λ→∞ kills enrichment. λ=0.1 preserves
-  //              Y-fixture cusp; λ=1.0 fully suppresses hentenna small-N
-  //              transient but loses Y cusp.
+  //              Y-fixture cusp; λ=1.0 fully suppresses the small-N
+  //              transient on dominant-pair K=3 junctions but loses Y cusp.
   // "auto"     → two-pass: solve once without enrichment, measure
   //              tap_ratio at each K≥3 junction, apply raw enrichment
   //              only where tap_ratio > autoTapRatioThreshold. Cleanly
-  //              separates dominant-pair K=3 (hentenna ≈ 0.16) from
+  //              separates dominant-pair K=3 (tap_ratio ≈ 0.16) from
   //              balanced 3-way (Y ≈ 0.50). The selectivity that
   //              raw/stable/tikhonov can't deliver algebraically.
   enrichmentVariant: "raw" | "stable" | "tikhonov" | "auto";
@@ -817,13 +818,6 @@ function useThumbColumnSize(
   return size;
 }
 
-// Default fan dipole presets: 5 amateur bands ordered high-band → low-band,
-// so n_bands=2 gives a maximally-distinct visual (20m + 10m) without the
-// user touching any per-band sliders. Lengths from antenna_designer's
-// canonical 5-band cone design.
-// Per-band defaults for fan_dipole used to live here; they now travel
-// on the backend's ParamGroupSpec.default_overrides for that example.
-
 export function App() {
   const [geometry, setGeometry] = useState<string>("");
 
@@ -1031,7 +1025,7 @@ export function App() {
   // Smith-chart overlay toggles. Both are debounced sweeps that re-fire
   // whenever any antenna/backend parameter changes; gating them with these
   // checkboxes lets the user pause an expensive sweep (e.g. BSpline d=2
-  // converge on hentenna) without leaving the Smith view.
+  // convergence on slow geometries) without leaving the Smith view.
   const [sweepEnabled, setSweepEnabled] = useState(true);
   const [convergeEnabled, setConvergeEnabled] = useState(false);
   const [converge, setConverge] = useState<ConvergeData | null>(null);
@@ -1050,10 +1044,8 @@ export function App() {
   }, [currentExample?.name]);
 
   // Schema-driven design-freq link: when the active example has any
-  // leaf marked `linked_to_design_freq` (currently only fan_dipole's
-  // first band's freq), sync the global designFreq state to its value.
-  // Replaces the old fan_dipole-specific useEffect that watched
-  // fanBandFreqs[0] directly.
+  // leaf marked `linked_to_design_freq`, sync the global designFreq
+  // state to its value.
   const linkedDesignFreq = useMemo(
     () =>
       currentExample
@@ -2195,7 +2187,7 @@ function BSplineFields({
         onChange={(v) => onPatch({ nQpPair: v })}
       />
       <div className="field">
-        <label className="link-toggle" title="Replace delta-gap source with cos² bump of width α·h_feed; basis-limited convergence on dipoles.">
+        <label className="link-toggle" title="Replace delta-gap source with cos² bump of width α·h_feed; helps where basis-limited convergence shows on straight-wire feeds.">
           <input
             type="checkbox"
             checked={opts.feedSmoothingFactor != null}
@@ -2227,7 +2219,7 @@ function BSplineFields({
         )}
       </div>
       <div className="field">
-        <label className="link-toggle" title="Add (u/h)·log(u/h) singular basis at K ≥ enrichment_min_k junctions; flips hentenna O(1/N) → ~O(1/N^(d+1)).">
+        <label className="link-toggle" title="Add (u/h)·log(u/h) singular basis at K ≥ enrichment_min_k junctions; flips O(1/N) → ~O(1/N^(d+1)) on dominant-pair K=3 junctions (most current flowing through two of three wires).">
           <input
             type="checkbox"
             checked={opts.useSingularEnrichment}
