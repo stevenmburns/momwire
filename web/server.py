@@ -186,6 +186,26 @@ app.add_middleware(
 
 
 C_LIGHT = 299_792_458.0  # m/s, matches TriangularPySim's eps*mu derivation to ~1e-9
+_EPS0 = 8.854187817e-12  # F/m
+
+
+def _attach_derived_em_fields(out: dict) -> None:
+    """Augment the solve response with frequency-derived EM scalars the
+    frontend would otherwise compute from raw physics constants.
+
+    Sets:
+      - `k_meas_m_inv`: wavenumber 2π f / c at measurement freq (rad/m)
+      - `ground_eps_im`: imaginary part of the complex relative permittivity
+        of the ground, -σ / (ω ε₀); 0 when ground is off or σ=0.
+
+    The frontend reads these directly so it doesn't need to carry C_LIGHT
+    or ε₀ literals. `lambda_design_m` is already shipped by each example.
+    """
+    f_hz = float(out["measurement_freq_mhz"]) * 1e6
+    omega = 2.0 * np.pi * f_hz
+    out["k_meas_m_inv"] = omega / C_LIGHT
+    sigma = float(out.get("ground_sigma", 0.0) or 0.0)
+    out["ground_eps_im"] = -sigma / (omega * _EPS0) if omega > 0 else 0.0
 
 
 def _compute_directivity_norm(out: dict, n_theta: int = 45, n_phi: int = 90) -> None:
@@ -198,7 +218,7 @@ def _compute_directivity_norm(out: dict, n_theta: int = 45, n_phi: int = 90) -> 
     Fresnel-reflected contribution from the geometric image so the
     normalization matches what the JS far-field code displays.
     """
-    k = 2 * np.pi * out["measurement_freq_mhz"] * 1e6 / C_LIGHT
+    k = float(out["k_meas_m_inv"])
     ground_on = bool(out.get("ground", False))
 
     mids, drs, i_mids = [], [], []
@@ -272,9 +292,7 @@ def _compute_directivity_norm(out: dict, n_theta: int = 45, n_phi: int = 90) -> 
         M_img_h = np.sum(M_img_perp * h_hat, axis=-1)  # complex (nθ, nφ)
         M_img_v = np.sum(M_img_perp * v_hat, axis=-1)
 
-        eps0 = 8.854187817e-12
-        omega = 2 * np.pi * out["measurement_freq_mhz"] * 1e6
-        eps_c = out["ground_eps_r"] - 1j * out["ground_sigma"] / (omega * eps0)
+        eps_c = out["ground_eps_r"] + 1j * out["ground_eps_im"]
         cos_ti = rz
         sin2_ti = s * s
         Q = np.sqrt(eps_c - sin2_ti)
@@ -415,11 +433,13 @@ def solve(req: dict) -> dict:
     use_pynec = req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC
     if use_pynec:
         out = pynec_backend.solve(req)
+        _attach_derived_em_fields(out)
         _compute_directivity_norm(out)
         return out
     ex = EXAMPLES.get(geometry) or EXAMPLES["inverted_v"]
     out = ex.pysim_solve(req)
     out["solver"] = "pysim"
+    _attach_derived_em_fields(out)
     _compute_directivity_norm(out)
     return out
 

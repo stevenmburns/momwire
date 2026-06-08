@@ -381,6 +381,8 @@ type SolveResponse = {
   height_m?: number;
   ground_eps_r?: number;
   ground_sigma?: number;
+  ground_eps_im?: number;
+  k_meas_m_inv?: number;
   // V-specific
   arm_len_m?: number;
   // Yagi-specific
@@ -2572,13 +2574,12 @@ function FarFieldChart({
     // Fresnel coefficients per ray to get the reflected wave. Above-horizon
     // only; rays into the ground contribute nothing.
     const N_DIR = 180;
-    const c = 299_792_458;
-    const k = (2 * Math.PI * result.measurement_freq_mhz * 1e6) / c;
-    // ε̃ = εr − j·σ/(ωε₀). Use stored constants when ground is on.
-    const omega = 2 * Math.PI * result.measurement_freq_mhz * 1e6;
-    const EPS0 = 8.854187817e-12;
+    // Wavenumber and complex ground permittivity are precomputed by the
+    // server (`k_meas_m_inv`, `ground_eps_im`) so this renderer stays
+    // free of physics constants. Fallbacks keep older responses working.
+    const k = result.k_meas_m_inv ?? 0;
     const epsRe = result.ground_eps_r ?? 1;
-    const epsIm = -(result.ground_sigma ?? 0) / (omega * EPS0);
+    const epsIm = result.ground_eps_im ?? 0;
 
     // Flatten per-segment quantities across every wire. Prefer the finer-
     // grained sample arrays (knots interleaved with segment midpoints) when
@@ -3381,8 +3382,7 @@ function CurrentCanvas({
       // legible; cap prevents very-large canvases from over-inflating.
       const refSize = 600;
       const s = Math.max(0.3, Math.min(1.4, Math.min(w, h) / refSize));
-      const C_LIGHT = 299_792_458.0;
-      const lambdaDesign = C_LIGHT / (result.design_freq_mhz * 1e6);
+      const lambdaDesign = result.lambda_design_m;
       const pad = 50 * s;
       const barReserveBottom = 40 * s;
       const FILL = 0.85;
