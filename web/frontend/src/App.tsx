@@ -86,7 +86,6 @@ type ExampleDescriptor = {
   name: string;
   label: string;
   multi_feed: boolean;
-  legacy_controls: boolean;
   legacy_results: boolean;
   param_schema: SchemaItem[];
   result_schema: ResultFieldSpec[];
@@ -1562,7 +1561,7 @@ export function App() {
           </div>
         )}
 
-        {currentExample && !currentExample.legacy_controls && (
+        {currentExample && (
           <ParamForm
             schema={currentExample.param_schema}
             values={currentValues}
