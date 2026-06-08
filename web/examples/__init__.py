@@ -30,6 +30,7 @@ def register(example: AntennaExample) -> AntennaExample:
 # antenna = create the module + add one import line; removing one = delete
 # the module file + the import line.
 from . import inverted_v  # noqa: F401,E402
+from . import moxon  # noqa: F401,E402
 from . import yagi  # noqa: F401,E402
 
 __all__ = ["AntennaExample", "ParamSpec", "REGISTRY", "register"]

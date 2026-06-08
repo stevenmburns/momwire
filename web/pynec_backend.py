@@ -92,105 +92,6 @@ def _run_solve(
 
 
 
-_MOXON_FEED_GAP = 0.05  # meters, half-gap between feed knots T and S
-
-
-def _build_moxon(req: dict):
-    """Build the PyNEC context + geometry for the moxon.
-
-    Driver path (5 NEC wires, tags 1..5): G->H, H->T, T->S (feed),
-    S->A, A->B. Reflector (3 NEC wires, tags 6..8): C->D, D->E, E->F.
-    The T->S edge carries a 1-segment feed; its segment center is the
-    delta-gap source.
-    """
-    n_per_wire = int(req.get("n_per_wire", 21))
-    design_freq_mhz = float(req.get("design_freq_mhz", 28.57))
-    halfdriver_factor = float(req.get("halfdriver_factor", 0.962))
-    aspect_ratio = float(req.get("aspect_ratio", 0.3646))
-    tipspacer_factor = float(req.get("tipspacer_factor", 0.0773))
-    t0_factor = float(req.get("t0_factor", 0.4078))
-    wire_radius = float(req.get("wire_radius", 0.0005))
-    ground = bool(req.get("ground", False))
-    ground_fast = bool(req.get("ground_fast", False))
-    height_m = float(req.get("height_m", 0.0))
-
-    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
-    halfdriver = halfdriver_factor * wavelength_design / 4.0
-    long_ = 2 * halfdriver / (1 + 2 * aspect_ratio * t0_factor)
-    short_ = aspect_ratio * long_
-    tipspacer = short_ * tipspacer_factor
-    t0 = short_ * t0_factor
-    eps_feed = _MOXON_FEED_GAP
-    z_offset = height_m if ground else 0.0
-
-    def rx(p):
-        return (-p[0], p[1], p[2])
-
-    def ry(p):
-        return (p[0], -p[1], p[2])
-
-    S = (short_ / 2, eps_feed, z_offset)
-    A = (S[0], long_ / 2, z_offset)
-    B = (A[0] - t0, A[1], z_offset)
-    Cc = (B[0] - tipspacer, B[1], z_offset)
-    D = rx(A)
-    E = ry(D)
-    F = ry(Cc)
-    G = ry(B)
-    H = ry(A)
-    T = ry(S)
-
-    long_edge_ref = long_ / 2 - eps_feed
-
-    def npe_edge(p, q) -> int:
-        edge_len = float(np.linalg.norm(np.subtract(q, p)))
-        if edge_len < 2 * eps_feed * 1.01:
-            return 1
-        return max(2, int(round(n_per_wire * edge_len / long_edge_ref)))
-
-    npe_d = [
-        npe_edge(G, H),
-        npe_edge(H, T),
-        1,
-        npe_edge(S, A),
-        npe_edge(A, B),
-    ]
-    npe_r = [npe_edge(Cc, D), npe_edge(D, E), npe_edge(E, F)]
-
-    driver_path = [G, H, T, S, A, B]
-    reflector_path = [Cc, D, E, F]
-
-    c = nec.nec_context()
-    geo = c.get_geometry()
-    for i in range(5):
-        p0, p1 = driver_path[i], driver_path[i + 1]
-        geo.wire(i + 1, npe_d[i], *p0, *p1, wire_radius, 1.0, 1.0)
-    for i in range(3):
-        p0, p1 = reflector_path[i], reflector_path[i + 1]
-        geo.wire(6 + i, npe_r[i], *p0, *p1, wire_radius, 1.0, 1.0)
-    c.geometry_complete(0)
-
-    return {
-        "context": c,
-        "feed_tag": 3,  # T->S edge
-        "feed_seg": 1,  # its only segment
-        "n_per_wire": n_per_wire,
-        "npe_d": npe_d,
-        "npe_r": npe_r,
-        "driver_path": driver_path,
-        "reflector_path": reflector_path,
-        "wavelength_design": wavelength_design,
-        "design_freq_mhz": design_freq_mhz,
-        "halfdriver_m": halfdriver,
-        "long_m": long_,
-        "short_m": short_,
-        "tipspacer_m": tipspacer,
-        "t0_m": t0,
-        "ground": ground,
-        "ground_fast": ground_fast,
-        "z_offset": z_offset,
-    }
-
 
 def _polyline_knots(path, npe_list) -> np.ndarray:
     """Concatenated per-edge knot positions, deduping shared corners."""
@@ -200,89 +101,6 @@ def _polyline_knots(path, npe_list) -> np.ndarray:
         parts.append(seg if i == 0 else seg[1:])
     return np.vstack(parts)
 
-
-def solve_moxon(req: dict) -> dict:
-    """Moxon via PyNEC: 5 driver wires + 3 reflector wires, fed on T->S."""
-    meas_freq_mhz = float(
-        req.get("measurement_freq_mhz", req.get("design_freq_mhz", 28.57))
-    )
-    b = _build_moxon(req)
-    c = b["context"]
-
-    t0_clock = time.perf_counter()
-    cur_arr, tag_arr = _run_solve(
-        c,
-        sum(b["npe_d"]) + sum(b["npe_r"]),
-        b["feed_seg"],
-        meas_freq_mhz,
-        ground=b["ground"],
-        feed_tag=b["feed_tag"],
-        ground_fast=b["ground_fast"],
-    )
-    solve_ms = (time.perf_counter() - t0_clock) * 1e3
-
-    # z_in from the current at the fed segment's center.
-    feed_idx_in_tag3 = np.where(tag_arr == b["feed_tag"])[0]
-    fed_global = feed_idx_in_tag3[b["feed_seg"] - 1]
-    z_in = complex(1.0 / cur_arr[fed_global])
-
-    # Combine driver (tags 1..5) and reflector (tags 6..8) into one polyline
-    # of currents each, then map onto knot positions with open-wire BC at
-    # the actual physical wire ends (G/B for driver, C/F for reflector).
-    cur_driver = np.concatenate(
-        [cur_arr[np.where(tag_arr == t)[0]] for t in range(1, 6)]
-    )
-    cur_refl = np.concatenate([cur_arr[np.where(tag_arr == t)[0]] for t in range(6, 9)])
-
-    driver_knots = _polyline_knots(b["driver_path"], b["npe_d"])
-    refl_knots = _polyline_knots(b["reflector_path"], b["npe_r"])
-    driver_knot_cur = _segment_centers_to_knot_currents(
-        cur_driver, driver_knots.shape[0]
-    )
-    refl_knot_cur = _segment_centers_to_knot_currents(cur_refl, refl_knots.shape[0])
-
-    # Feed knot on the driver: the knot between the T->S edge's start and
-    # end. driver_path[2] = T, driver_path[3] = S. After deduping, T is at
-    # index sum(npe_d[:2]); S is at sum(npe_d[:3]) (= same + 1 since
-    # the T->S edge has 1 segment).
-    feed_knot_index = sum(b["npe_d"][:2])
-
-    return {
-        "geometry": "moxon",
-        "wires": [
-            {
-                "label": "driver",
-                "knot_positions": driver_knots.tolist(),
-                "knot_currents_re": driver_knot_cur.real.tolist(),
-                "knot_currents_im": driver_knot_cur.imag.tolist(),
-            },
-            {
-                "label": "reflector",
-                "knot_positions": refl_knots.tolist(),
-                "knot_currents_re": refl_knot_cur.real.tolist(),
-                "knot_currents_im": refl_knot_cur.imag.tolist(),
-            },
-        ],
-        "feed_wire_index": 0,
-        "feed_knot_index": feed_knot_index,
-        "z_in_re": float(z_in.real),
-        "z_in_im": float(z_in.imag),
-        "design_freq_mhz": b["design_freq_mhz"],
-        "measurement_freq_mhz": meas_freq_mhz,
-        "lambda_design_m": b["wavelength_design"],
-        "halfdriver_m": b["halfdriver_m"],
-        "long_m": b["long_m"],
-        "short_m": b["short_m"],
-        "tipspacer_m": b["tipspacer_m"],
-        "t0_m": b["t0_m"],
-        "solve_ms": solve_ms,
-        "solver": "pynec",
-        "ground": b["ground"],
-        "ground_fast": b["ground_fast"],
-        "height_m": b["z_offset"],
-        "ground_eps_r": GROUND_DIELECTRIC,
-        "ground_sigma": GROUND_CONDUCTIVITY,
-    }
 
 
 _HEXBEAM_FEED_GAP = 0.05
@@ -901,8 +719,6 @@ def solve_fandipole(req: dict) -> dict:
 
 def solve(req: dict) -> dict:
     geometry = req.get("geometry", "inverted_v")
-    if geometry == "moxon":
-        return solve_moxon(req)
     if geometry == "hexbeam":
         return solve_hexbeam(req)
     if geometry == "fan_dipole":
@@ -924,9 +740,7 @@ def pattern(req: dict) -> dict:
     UI mirrors as needed.
     """
     geometry = req.get("geometry", "inverted_v")
-    if geometry == "moxon":
-        b = _build_moxon(req)
-    elif geometry == "hexbeam":
+    if geometry == "hexbeam":
         b = _build_hexbeam(req)
     elif geometry == "fan_dipole":
         b = _build_fandipole(req)
