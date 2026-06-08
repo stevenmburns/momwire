@@ -654,6 +654,7 @@ def examples_endpoint():
                 "label": ex.label,
                 "multi_feed": ex.multi_feed,
                 "legacy_controls": ex.legacy_controls,
+                "legacy_results": ex.legacy_results,
                 "param_schema": [
                     {
                         "name": p.name,
@@ -668,6 +669,15 @@ def examples_endpoint():
                         "visible_when": p.visible_when,
                     }
                     for p in ex.param_schema
+                ],
+                "result_schema": [
+                    {
+                        "field": r.field,
+                        "label": r.label,
+                        "precision": r.precision,
+                        "unit": r.unit,
+                    }
+                    for r in ex.result_schema
                 ],
             }
         )

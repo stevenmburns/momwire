@@ -12,7 +12,7 @@ import time
 import numpy as np
 
 from . import register
-from ._base import AntennaExample, ParamSpec
+from ._base import AntennaExample, ParamSpec, ResultFieldSpec
 
 
 def _polylines(
@@ -459,6 +459,15 @@ EXAMPLE = register(
                 precision=3,
                 visible_when={"name": "n_directors", "op": "gt", "value": 0},
             ),
+        ),
+        result_schema=(
+            ResultFieldSpec(
+                field="driver_length_m", label="driver L", precision=3, unit=" m"
+            ),
+            ResultFieldSpec(
+                field="reflector_length_m", label="reflector L", precision=3, unit=" m"
+            ),
+            ResultFieldSpec(field="spacing_m", label="spacing", precision=3, unit=" m"),
         ),
     )
 )

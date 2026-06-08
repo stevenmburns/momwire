@@ -13,7 +13,7 @@ import time
 import numpy as np
 
 from . import register
-from ._base import AntennaExample, ParamSpec
+from ._base import AntennaExample, ParamSpec, ResultFieldSpec
 
 _FEED_GAP = 0.05  # meters; half-gap between feed knots T and S
 
@@ -430,6 +430,18 @@ EXAMPLE = register(
                 max=0.30,
                 step=0.001,
                 precision=4,
+            ),
+        ),
+        result_schema=(
+            ResultFieldSpec(field="radius_m", label="radius", precision=3, unit=" m"),
+            ResultFieldSpec(
+                field="t0_m", label="tip length t0", precision=3, unit=" m"
+            ),
+            ResultFieldSpec(
+                field="t1_m", label="driver tip t1", precision=3, unit=" m"
+            ),
+            ResultFieldSpec(
+                field="tipspacer_m", label="tip spacer", precision=3, unit=" m"
             ),
         ),
     )
