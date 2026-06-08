@@ -381,28 +381,6 @@ def _pack_pysim_wires(sim, coeffs, knot_arrays, labels) -> list[dict]:
     ]
 
 
-def _yagi_polylines(
-    h_driver: float,
-    h_refl: float,
-    spacing_m: float,
-    n_directors: int,
-    dir_spacing_m: float,
-    h_dir: float,
-    z_offset: float = 0.0,
-) -> list[np.ndarray]:
-    """Driver + reflector + n_directors directors, all y-directed straight
-    wires expressed as 2-anchor polylines for TriangularPySim.
-    """
-    polylines = [
-        np.array([(0.0, -h_driver, z_offset), (0.0, h_driver, z_offset)]),
-        np.array([(-spacing_m, -h_refl, z_offset), (-spacing_m, h_refl, z_offset)]),
-    ]
-    for i in range(n_directors):
-        x = (i + 1) * dir_spacing_m
-        polylines.append(np.array([(x, -h_dir, z_offset), (x, h_dir, z_offset)]))
-    return polylines
-
-
 # Pysim PEC ground: pass these to the response so the frontend's Fresnel
 # far-field code treats the surface as a perfect electric conductor
 # (ρ_h → −1, ρ_v → +1 in the eps_r → ∞ limit).
@@ -421,113 +399,6 @@ def _read_ground(req: dict) -> tuple[bool, float, float]:
     z_offset = height_m if ground_on else 0.0
     return ground_on, height_m, z_offset
 
-
-def _solve_yagi(req: dict) -> dict:
-    """Yagi (driver + reflector + optional directors), all parallel straight
-    wires built as one-edge polylines and fed to TriangularPySim.
-
-    Canonical layout for the UI:
-        boom / spacing axis: +x (driver at x=0, reflector at x=-spacing,
-                                  directors at x = +i·dir_spacing)
-        element direction:   +y (each element runs from -half_len to +half_len
-                                  along y)
-        beam direction:      +x (away from reflector)
-        z = 0 everywhere
-    Aligns the Yagi convention with moxon and hexbeam (also +x beam).
-    """
-    n_per_wire = int(req.get("n_per_wire", 30))
-    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
-    meas_freq_mhz = float(req.get("measurement_freq_mhz", design_freq_mhz))
-    driver_factor = float(req.get("driver_length_factor", 0.962))
-    refl_factor_abs = float(req.get("reflector_length_factor", 1.01))
-    # Spacing in wavelengths of the design freq.
-    spacing_wavelengths = float(req.get("spacing_wavelengths", 0.15))
-    wire_radius = float(req.get("wire_radius", 0.0005))
-    n_directors = int(req.get("n_directors", 0))
-    dir_spacing_wl = float(req.get("director_spacing_wavelengths", 0.2))
-    dir_size_factor = float(req.get("director_size_factor", 0.95))
-    ground_on, height_m, z_offset = _read_ground(req)
-
-    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
-    wavelength_meas = C_LIGHT / (meas_freq_mhz * 1e6)
-    h_driver = driver_factor * wavelength_design / 4.0
-    h_refl = refl_factor_abs * wavelength_design / 4.0
-    spacing_m = spacing_wavelengths * wavelength_design
-    dir_spacing_m = dir_spacing_wl * wavelength_design
-    h_dir = dir_size_factor * h_driver
-
-    wires_polylines = _yagi_polylines(
-        h_driver,
-        h_refl,
-        spacing_m,
-        n_directors,
-        dir_spacing_m,
-        h_dir,
-        z_offset=z_offset,
-    )
-
-    sim = _make_pysim_sim(
-        req,
-        wires=wires_polylines,
-        n_per_edge_per_wire=[[n_per_wire]] * len(wires_polylines),
-        feed_wire_index=0,
-        wavelength=wavelength_meas,
-        halfdriver_factor=driver_factor,
-        nsegs=n_per_wire,
-        ground_z=0.0 if ground_on else None,
-    )
-    sim.wire_radius = wire_radius
-
-    t0 = time.perf_counter()
-    z_in, coeffs = sim.compute_impedance()
-    solve_ms = (time.perf_counter() - t0) * 1e3
-
-    N = n_per_wire
-
-    def _knots_at(x_pos: float, half_len: float) -> np.ndarray:
-        return np.column_stack(
-            [
-                np.full(N + 1, x_pos),
-                np.linspace(-half_len, half_len, N + 1),
-                np.full(N + 1, z_offset),
-            ]
-        )
-
-    knot_arrays = [_knots_at(0.0, h_driver), _knots_at(-spacing_m, h_refl)]
-    labels = ["driver", "reflector"]
-    for i in range(n_directors):
-        knot_arrays.append(_knots_at((i + 1) * dir_spacing_m, h_dir))
-        labels.append(f"director {i + 1}" if n_directors > 1 else "director")
-    wires = _pack_pysim_wires(sim, coeffs, knot_arrays, labels)
-
-    # Feed: TriangularPySim picks the interior knot of the driver closest to
-    # the wire midpoint (= h_driver in arc length). For N segments / N+1 knots
-    # along [-h_driver, +h_driver], that's the middle interior knot at full-
-    # list index N//2.
-    feed_knot_index = N // 2
-
-    return {
-        "geometry": "yagi",
-        "wires": wires,
-        "feed_wire_index": 0,
-        "feed_knot_index": feed_knot_index,
-        "z_in_re": float(z_in.real),
-        "z_in_im": float(z_in.imag),
-        "design_freq_mhz": design_freq_mhz,
-        "measurement_freq_mhz": meas_freq_mhz,
-        "lambda_design_m": wavelength_design,
-        "driver_length_m": 2 * h_driver,
-        "reflector_length_m": 2 * h_refl,
-        "spacing_m": spacing_m,
-        "n_directors": n_directors,
-        "director_length_m": 2 * h_dir if n_directors > 0 else None,
-        "director_spacing_m": dir_spacing_m if n_directors > 0 else None,
-        "solve_ms": solve_ms,
-        "ground": ground_on,
-        "height_m": z_offset,
-        "ground_eps_r": _PEC_GROUND_EPS_R,
-        "ground_sigma": _PEC_GROUND_SIGMA,
-    }
 
 
 _MOXON_FEED_GAP = 0.05  # meters; half-gap (eps) between feed knots T and S
@@ -1271,9 +1142,7 @@ def solve(req: dict) -> dict:
         out = pynec_backend.solve(req)
         _compute_directivity_norm(out)
         return out
-    if geometry == "yagi":
-        out = _solve_yagi(req)
-    elif geometry == "moxon":
+    if geometry == "moxon":
         out = _solve_moxon(req)
     elif geometry == "hexbeam":
         out = _solve_hexbeam(req)
@@ -1289,51 +1158,6 @@ def solve(req: dict) -> dict:
     _compute_directivity_norm(out)
     return out
 
-
-def _sweep_yagi(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
-    """Batched sweep using TriangularPySim.compute_impedance_swept."""
-    n_per_wire = int(req.get("n_per_wire", 30))
-    design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
-    driver_factor = float(req.get("driver_length_factor", 0.962))
-    refl_factor_abs = float(req.get("reflector_length_factor", 1.01))
-    spacing_wavelengths = float(req.get("spacing_wavelengths", 0.15))
-    wire_radius = float(req.get("wire_radius", 0.0005))
-    n_directors = int(req.get("n_directors", 0))
-    dir_spacing_wl = float(req.get("director_spacing_wavelengths", 0.2))
-    dir_size_factor = float(req.get("director_size_factor", 0.95))
-    ground_on, _, z_offset = _read_ground(req)
-
-    wavelength_design = C_LIGHT / (design_freq_mhz * 1e6)
-    h_driver = driver_factor * wavelength_design / 4.0
-    h_refl = refl_factor_abs * wavelength_design / 4.0
-    spacing_m = spacing_wavelengths * wavelength_design
-    dir_spacing_m = dir_spacing_wl * wavelength_design
-    h_dir = dir_size_factor * h_driver
-
-    wires_polylines = _yagi_polylines(
-        h_driver,
-        h_refl,
-        spacing_m,
-        n_directors,
-        dir_spacing_m,
-        h_dir,
-        z_offset=z_offset,
-    )
-    sim = _make_pysim_sim(
-        req,
-        wires=wires_polylines,
-        n_per_edge_per_wire=[[n_per_wire]] * len(wires_polylines),
-        feed_wire_index=0,
-        wavelength=wavelength_design,
-        halfdriver_factor=driver_factor,
-        nsegs=n_per_wire,
-        ground_z=0.0 if ground_on else None,
-    )
-    sim.wire_radius = wire_radius
-
-    k_array = np.array([2 * np.pi * f * 1e6 / C_LIGHT for f in freqs_mhz])
-    z_array = sim.compute_impedance_swept(k_array)
-    return z_array.real.tolist(), z_array.imag.tolist()
 
 
 def _sweep_moxon(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
@@ -1514,7 +1338,6 @@ async def sweep_endpoint(req: dict, request: Request):
             # 8-chunk heuristic, then after each chunk recompute the next
             # size from observed per-freq cost. Converges in ~1 iteration.
             sweep_fn = {
-                "yagi": _sweep_yagi,
                 "moxon": _sweep_moxon,
                 "hexbeam": _sweep_hexbeam,
                 "fan_dipole": _sweep_fandipole,
@@ -1568,8 +1391,6 @@ def _solve_z_only(req: dict) -> complex:
     use_pynec = req.get("solver") == "pynec" and pynec_backend.HAVE_PYNEC
     if use_pynec:
         res = pynec_backend.solve(req)
-    elif geometry == "yagi":
-        res = _solve_yagi(req)
     elif geometry == "moxon":
         res = _solve_moxon(req)
     elif geometry == "hexbeam":
