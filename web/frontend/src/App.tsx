@@ -1722,7 +1722,7 @@ export function App() {
               result={result as Record<string, unknown> | null}
             />
           )}
-          {result?.feeds && result.feeds.length > 1 && (
+          {currentExample?.multi_feed && result?.feeds && result.feeds.length > 0 && (
             <div className="feeds-table">
               <div className="feeds-table-header">per-feed Z (V/I)</div>
               {result.feeds.map((f, i) => (
@@ -1826,6 +1826,7 @@ export function App() {
                   cameraProjection={cameraProjection}
                   showHeatmap={showHeatmap}
                   showEnvelope={showEnvelope}
+                  multiFeed={currentExample?.multi_feed ?? false}
                 />
               </div>
               <div className="thumb-label">{v.label}</div>
@@ -1913,6 +1914,7 @@ export function App() {
             cameraProjection={cameraProjection}
             showHeatmap={showHeatmap}
             showEnvelope={showEnvelope}
+            multiFeed={currentExample?.multi_feed ?? false}
           />
         </div>
         <div className="status">ws: {status}</div>
@@ -2275,6 +2277,7 @@ function ViewPanel({
   cameraProjection,
   showHeatmap,
   showEnvelope,
+  multiFeed,
 }: {
   view: View;
   size: number;
@@ -2291,6 +2294,7 @@ function ViewPanel({
   cameraProjection: Projection;
   showHeatmap: boolean;
   showEnvelope: boolean;
+  multiFeed: boolean;
 }) {
   if (view === "antenna") {
     return (
@@ -2341,6 +2345,7 @@ function ViewPanel({
       running={sweepRunning}
       convergeRunning={convergeRunning}
       feeds={result?.feeds}
+      multiFeed={multiFeed}
     />
   );
 }
@@ -2801,6 +2806,7 @@ function SmithChart({
   running,
   convergeRunning,
   feeds,
+  multiFeed,
 }: {
   r: number;
   x: number;
@@ -2814,6 +2820,10 @@ function SmithChart({
   /** Multi-feed geometries pass the per-feed Z list from the latest
    *  solve so the chart can also render N centre dots, one per port. */
   feeds?: FeedEntry[];
+  /** From the example descriptor's `multi_feed` flag — drives the
+   *  per-feed summary rows. Decoupled from feeds[].length so the chart
+   *  reflects antenna type rather than guessing from response shape. */
+  multiFeed: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -3147,7 +3157,7 @@ function SmithChart({
       extrapRe: number | null;
       extrapIm: number | null;
     }> = [];
-    if (feeds && feeds.length > 1) {
+    if (multiFeed && feeds && feeds.length > 0) {
       for (let fi = 0; fi < feeds.length; fi++) {
         const re = converge?.feeds_z_re_extrap?.[fi] ?? null;
         const im = converge?.feeds_z_im_extrap?.[fi] ?? null;
