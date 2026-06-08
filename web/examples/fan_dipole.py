@@ -534,6 +534,12 @@ EXAMPLE = register(
         # which isn't yet schema-modelled, so the legacy result block
         # in App.tsx stays for now.
         legacy_results=True,
+        # Multi-band antenna: its design frequency comes from the
+        # per-band schema, not from the global band-tabs row, so suppress
+        # the row entirely. The measurement-freq slider spans every
+        # amateur HF band so users can probe any of them.
+        bands=(),
+        meas_freq_range_mhz=(13.5, 30.2),
         param_schema=(
             ParamSpec(
                 name="n_bands",
