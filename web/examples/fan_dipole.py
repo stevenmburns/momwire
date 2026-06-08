@@ -14,7 +14,7 @@ import time
 import numpy as np
 
 from . import register
-from ._base import AntennaExample
+from ._base import AntennaExample, ParamGroupSpec, ParamSpec, ResultFieldSpec  # noqa: F401
 
 _FEED_GAP = 0.01  # meters; half-gap, matches antenna_designer eps
 
@@ -36,6 +36,44 @@ def _band_label(i: int, freqs_mhz: list[float], length_m: float) -> str:
     return f"band {i} ({length_m:.2f} m)"
 
 
+def _bands_from_request(req: dict) -> tuple[list[float], list[float]]:
+    """Extract per-band (freq_mhz, length_m) from the request.
+
+    Schema-driven shape (preferred): `bands: [{freq, length_factor,
+    ...ignored}, ...]`. n_bands is derived from len(bands), capped at
+    the explicit n_bands field if present, then at 5.
+
+    Legacy shape (test fixtures, antenna_designer parity tests): three
+    parallel arrays `band_freqs_mhz` / `band_lengths_m` /
+    `band_halfdriver_factors` with `n_bands` an explicit length. Used
+    when `bands` is absent.
+    """
+    from web.server import C_LIGHT
+
+    bands = req.get("bands")
+    if bands:
+        n_bands = int(req.get("n_bands", len(bands)))
+        n_bands = min(n_bands, len(bands), 5)
+        freqs = [float(b["freq"]) for b in bands[:n_bands]]
+        factors = [float(b.get("length_factor", 0.962)) for b in bands[:n_bands]]
+        # band_length_m = halfdriver_factor × λ / 2 (mirrors the JS
+        # bandLengthFromFreqFactor at App.tsx:434).
+        lengths = [
+            f * (C_LIGHT / (freq * 1e6)) / 2.0 for freq, f in zip(freqs, factors)
+        ]
+        return freqs, lengths
+
+    n_bands = int(req.get("n_bands", 2))
+    band_lengths_m = list(req.get("band_lengths_m", [10.2551, 5.2691]))
+    if len(band_lengths_m) < n_bands:
+        raise ValueError(
+            f"band_lengths_m has {len(band_lengths_m)} entries, need {n_bands}"
+        )
+    lengths = band_lengths_m[:n_bands]
+    freqs = list(req.get("band_freqs_mhz", []))[:n_bands]
+    return freqs, lengths
+
+
 def _geometry(req: dict, z_offset: float):
     """Compute the cone-projected anchor points for all bands.
 
@@ -45,16 +83,10 @@ def _geometry(req: dict, z_offset: float):
     paths share this so the two backends stay geometrically locked.
     """
     n_per_wire = int(req.get("n_per_wire", 21))
-    n_bands = int(req.get("n_bands", 2))
+    band_freqs_mhz, band_lengths_m = _bands_from_request(req)
+    n_bands = len(band_lengths_m)
     if not 1 <= n_bands <= 5:
         raise ValueError(f"n_bands must be in [1, 5], got {n_bands}")
-    band_lengths_m = list(req.get("band_lengths_m", [10.2551, 5.2691]))
-    if len(band_lengths_m) < n_bands:
-        raise ValueError(
-            f"band_lengths_m has {len(band_lengths_m)} entries, need {n_bands}"
-        )
-    band_lengths_m = band_lengths_m[:n_bands]
-    band_freqs_mhz = list(req.get("band_freqs_mhz", []))[:n_bands]
     slope = float(req.get("slope", 0.5))
     cone_radius_m = float(req.get("cone_radius_m", 0.12))
     t0_factor = float(req.get("t0_factor", math.sqrt(2.0)))
@@ -444,6 +476,49 @@ def pynec_solve(req: dict) -> dict:
     }
 
 
+# Amateur HF bands the per-band picker exposes. The keys are reused by
+# the frontend's range_from_enum_option / on_change_set mechanisms — a
+# sibling freq slider reads `freq_min`/`freq_max` from the active band
+# entry, and snaps to `freq_default` when the band pulldown changes.
+_BANDS_ENUM = (
+    {
+        "value": "20m",
+        "label": "20m",
+        "freq_min": 14.000,
+        "freq_max": 14.350,
+        "freq_default": 14.300,
+    },
+    {
+        "value": "17m",
+        "label": "17m",
+        "freq_min": 18.068,
+        "freq_max": 18.168,
+        "freq_default": 18.1575,
+    },
+    {
+        "value": "15m",
+        "label": "15m",
+        "freq_min": 21.000,
+        "freq_max": 21.450,
+        "freq_default": 21.383,
+    },
+    {
+        "value": "12m",
+        "label": "12m",
+        "freq_min": 24.890,
+        "freq_max": 24.990,
+        "freq_default": 24.970,
+    },
+    {
+        "value": "10m",
+        "label": "10m",
+        "freq_min": 28.000,
+        "freq_max": 29.700,
+        "freq_default": 28.470,
+    },
+)
+
+
 EXAMPLE = register(
     AntennaExample(
         name="fan_dipole",
@@ -452,12 +527,99 @@ EXAMPLE = register(
         pysim_sweep=pysim_sweep,
         pynec_build=pynec_build,
         pynec_solve=pynec_solve,
-        # Per-band UI (a list of bands, each with its own selectors and
-        # sliders) doesn't fit the flat ParamSpec list. Tell the frontend
-        # to fall through to its hardcoded fan_dipole JSX block — for
-        # both the input controls AND the result-panel readouts (the
-        # result block also has a per-band repeat group).
-        legacy_controls=True,
+        # The input controls now fit the schema (the first user of
+        # ParamGroupSpec — per-band repeat group with enum + dynamic
+        # range + on_change side effect). Result panel still uses a
+        # per-band repeat group on band_lengths_m[] / band_freqs_mhz[]
+        # which isn't yet schema-modelled, so the legacy result block
+        # in App.tsx stays for now.
         legacy_results=True,
+        param_schema=(
+            ParamSpec(
+                name="n_bands",
+                label="# bands",
+                default=2,
+                kind="int",
+                min=1,
+                max=5,
+                step=1,
+                precision=0,
+            ),
+            ParamGroupSpec(
+                name="bands",
+                label_template="band {i}",
+                repeat_count="n_bands",
+                max_repeats=5,
+                # Per-instance defaults seed the 5 slots with the
+                # historical FAN_BAND_IDS_DEFAULT order from App.tsx so
+                # existing sessions look identical after the cutover.
+                # Each band_id default carries the matching freq via
+                # the enum's freq_default key (the on_change_set
+                # mechanism wouldn't fire on initial seeding; instead
+                # the frontend pre-resolves freq when seeding from a
+                # default_override that names an enum value).
+                default_overrides=(
+                    {"band_id": "20m", "freq": 14.300},
+                    {"band_id": "10m", "freq": 28.470},
+                    {"band_id": "17m", "freq": 18.1575},
+                    {"band_id": "12m", "freq": 24.970},
+                    {"band_id": "15m", "freq": 21.383},
+                ),
+                params=(
+                    ParamSpec(
+                        name="band_id",
+                        label="band",
+                        default="20m",
+                        kind="enum",
+                        enum_options=_BANDS_ENUM,
+                        on_change_set={"set": "freq", "from_enum_key": "freq_default"},
+                    ),
+                    ParamSpec(
+                        name="freq",
+                        label="freq",
+                        default=14.300,
+                        step=0.001,
+                        precision=3,
+                        unit=" MHz",
+                        range_from_enum_option={
+                            "param": "band_id",
+                            "min_key": "freq_min",
+                            "max_key": "freq_max",
+                        },
+                        # The first band's freq drives the global design
+                        # frequency, replacing the standalone slider.
+                        linked_to_design_freq=True,
+                    ),
+                    ParamSpec(
+                        name="length_factor",
+                        label="length factor",
+                        default=0.962,
+                        min=0.85,
+                        max=1.05,
+                        step=0.001,
+                        precision=3,
+                    ),
+                ),
+            ),
+            ParamSpec(
+                name="slope",
+                label="cone slope",
+                default=0.5,
+                min=0.0,
+                max=1.5,
+                step=0.01,
+                precision=3,
+            ),
+            ParamSpec(
+                name="cone_radius_m",
+                label="cone radius",
+                default=0.12,
+                min=0.05,
+                max=0.5,
+                step=0.005,
+                precision=3,
+                unit=" m",
+            ),
+        ),
     )
 )

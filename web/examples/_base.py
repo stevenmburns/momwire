@@ -53,22 +53,92 @@ class ParamSpec:
     n_directors > 0. The dict is shaped {name, op, value}; ops include
     "eq", "ne", "gt", "ge", "lt", "le".
 
-    `kind` switches the input type. "int" renders an integer step slider,
-    "float" a continuous slider, "bool" a checkbox. Bowtie's phase_lr_deg
-    uses a signed range — that's still kind="float" with min/max < 0.
+    `kind` switches the input type:
+      - "float": continuous slider (use min/max/step)
+      - "int": integer slider (use min/max/step=1)
+      - "bool": checkbox
+      - "enum": <select> dropdown; supply `enum_options`
+    Bowtie's phase_lr_deg uses a signed range — kind="float" with min<0.
+
+    For "enum" params, `enum_options` is a tuple of free-form dicts. Each
+    dict must have at least {"value", "label"}; antennas can attach
+    arbitrary extra keys to drive related controls. Fan_dipole's per-band
+    `band_id` carries {"value": "20m", "label": "20m", "freq_min": 14.0,
+    "freq_max": 14.35, "freq_default": 14.175} so a sibling freq slider
+    can read its bounds + default off the active band.
+
+    `range_from_enum_option` lets a slider's min/max/step come from the
+    currently-selected enum value of a sibling param. Shape:
+    {"param": <enum_param_name>, "min_key": <key>, "max_key": <key>}.
+
+    `on_change_set` is a side-effect rule: when this enum changes value,
+    write a sibling param using a key from the new enum option. Shape:
+    {"set": <sibling_name>, "from_enum_key": <key>}. Fan_dipole's
+    band_id uses {"set": "freq", "from_enum_key": "freq_default"} so
+    flipping the band pulldown snaps the freq slider to that band's
+    centre.
+
+    `linked_to_design_freq` means this param's value also drives the
+    global designFreq state on the frontend. Fan_dipole uses it on
+    `bands[0].freq` so the first band's frequency stays the antenna's
+    design frequency without a separate global slider.
     """
 
     name: str
     label: str
     default: Any
-    kind: str = "float"  # float | int | bool
+    kind: str = "float"  # float | int | bool | enum
     min: Optional[float] = None
     max: Optional[float] = None
     step: Optional[float] = None
     precision: int = 3  # decimal places shown in the value readout
     unit: Optional[str] = None  # rendered next to the value: "°", "m", "λ", etc.
     visible_when: Optional[dict] = None  # {"name": ..., "op": ..., "value": ...}
+    enum_options: Optional[tuple[dict, ...]] = None
+    range_from_enum_option: Optional[dict] = None
+    on_change_set: Optional[dict] = None
+    linked_to_design_freq: bool = False
     sweepable: bool = False
+
+
+@dataclass(frozen=True)
+class ParamGroupSpec:
+    """A repeating section of params, count-controlled by another param.
+
+    Used for multi-band / multi-element antennas where each band (or
+    element) carries its own set of knobs. Fan_dipole is the first user
+    (one group per band: band_id + freq + length_factor). The pattern
+    generalises: a trapped multi-bander would have a group with
+    {band_id, trap_freq, trap_q}; a multi-band Yagi would have a group
+    with {driver_factor, reflector_factor, n_directors, ...} possibly
+    containing its own nested director sub-group.
+
+    The schema currently allows nested groups (params is a union type)
+    but the frontend only renders one level of nesting in the first
+    cut. Adding deeper nesting is a frontend-only change.
+
+    `label_template` is the heading shown above each instance with
+    {i} substituted to the 0-indexed instance number, e.g. "band {i}".
+
+    `repeat_count` names a scalar param (kind="int") elsewhere in the
+    same schema whose value determines how many instances render.
+    `max_repeats` is the absolute cap used for state pre-allocation —
+    matching the count param's `max`.
+    """
+
+    name: str  # key under which the frontend stores per-instance values
+    label_template: str  # e.g. "band {i}" — {i} is the 0-indexed instance
+    repeat_count: str  # name of the scalar param that controls how many
+    max_repeats: int
+    params: tuple[Any, ...]  # tuple[Union[ParamSpec, ParamGroupSpec], ...]
+    # Optional per-instance default overrides. Index i applies to
+    # instance i; each dict maps {param_name: default_value} and beats
+    # the ParamSpec.default for that one instance. Used by fan_dipole
+    # so the 5 max bands seed to (20m, 10m, 17m, 12m, 15m) instead of
+    # all defaulting to the same band. Tuple length doesn't need to
+    # match max_repeats; missing indices fall back to the ParamSpec
+    # default.
+    default_overrides: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -115,5 +185,8 @@ class AntennaExample:
     # Kept independent of `legacy_controls` because in general the input
     # and output panels are unrelated concerns.
     legacy_results: bool = False
-    param_schema: tuple[ParamSpec, ...] = field(default_factory=tuple)
+    # Mixed sequence of ParamSpec (scalar) and ParamGroupSpec (repeat).
+    # The Any erases the union; runtime discrimination is by presence of
+    # `params` (groups have it, scalars don't).
+    param_schema: tuple[Any, ...] = field(default_factory=tuple)
     result_schema: tuple[ResultFieldSpec, ...] = field(default_factory=tuple)

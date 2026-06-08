@@ -646,6 +646,41 @@ def examples_endpoint():
     feeds) and a `legacy_controls` flag (when True, the frontend uses
     hardcoded JSX for that geometry — currently only fan_dipole).
     """
+
+    def _serialize_schema_item(item) -> dict:
+        # Discriminate by attribute: ParamGroupSpec has `params`, ParamSpec
+        # doesn't. Recurses so groups-in-groups serialize cleanly (the
+        # frontend only renders one level today but the wire format is
+        # already general).
+        if hasattr(item, "params"):
+            return {
+                "kind": "group",
+                "name": item.name,
+                "label_template": item.label_template,
+                "repeat_count": item.repeat_count,
+                "max_repeats": item.max_repeats,
+                "params": [_serialize_schema_item(p) for p in item.params],
+                "default_overrides": list(item.default_overrides),
+            }
+        return {
+            "name": item.name,
+            "label": item.label,
+            "default": item.default,
+            "kind": item.kind,
+            "min": item.min,
+            "max": item.max,
+            "step": item.step,
+            "precision": item.precision,
+            "unit": item.unit,
+            "visible_when": item.visible_when,
+            "enum_options": (
+                list(item.enum_options) if item.enum_options is not None else None
+            ),
+            "range_from_enum_option": item.range_from_enum_option,
+            "on_change_set": item.on_change_set,
+            "linked_to_design_freq": item.linked_to_design_freq,
+        }
+
     out = []
     for name, ex in EXAMPLES.items():
         out.append(
@@ -655,21 +690,7 @@ def examples_endpoint():
                 "multi_feed": ex.multi_feed,
                 "legacy_controls": ex.legacy_controls,
                 "legacy_results": ex.legacy_results,
-                "param_schema": [
-                    {
-                        "name": p.name,
-                        "label": p.label,
-                        "default": p.default,
-                        "kind": p.kind,
-                        "min": p.min,
-                        "max": p.max,
-                        "step": p.step,
-                        "precision": p.precision,
-                        "unit": p.unit,
-                        "visible_when": p.visible_when,
-                    }
-                    for p in ex.param_schema
-                ],
+                "param_schema": [_serialize_schema_item(p) for p in ex.param_schema],
                 "result_schema": [
                     {
                         "field": r.field,
