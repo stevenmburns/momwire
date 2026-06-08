@@ -83,6 +83,16 @@ html, body, #root {
   border-color: var(--accent);
 }
 
+.examples-error {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border: 1px solid #6b2a2a;
+  border-radius: 4px;
+  background: #2a1414;
+  color: #f0a8a8;
+  font-size: 0.9em;
+}
+
 .geometry-tabs button {
   flex: 1;
   background: #0f1218;

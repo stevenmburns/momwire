@@ -12,8 +12,6 @@ type Wire = {
   sample_currents_im?: number[];
 };
 
-type Geometry = "inverted_v" | "yagi" | "moxon" | "hexbeam" | "fan_dipole" | "hentenna" | "bowtie";
-
 // Schema served by `GET /examples`. The backend's web/examples/_base.py
 // owns the source of truth; this type just mirrors the JSON shape.
 type SchemaEnumOption = {
@@ -85,19 +83,6 @@ type ExampleDescriptor = {
   param_schema: SchemaItem[];
   result_schema: ResultFieldSpec[];
 };
-
-// Fallback list used until /examples resolves on mount. Matches the
-// backend's registered names so the initial render doesn't show an empty
-// dropdown when the page first paints.
-const EXAMPLES_FALLBACK: ExampleDescriptor[] = [
-  { name: "inverted_v", label: "Inverted V", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
-  { name: "yagi", label: "Yagi", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
-  { name: "moxon", label: "Moxon", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
-  { name: "hexbeam", label: "Hexbeam", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
-  { name: "fan_dipole", label: "Fan Dipole", multi_feed: false, legacy_controls: false, legacy_results: true, param_schema: [], result_schema: [] },
-  { name: "hentenna", label: "Hentenna", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
-  { name: "bowtie", label: "Bowtie 1×2 array", multi_feed: true, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
-];
 
 function applyVisibility(spec: SchemaParamSpec, values: ParamValueBag): boolean {
   const v = spec.visible_when;
@@ -368,7 +353,7 @@ type FeedEntry = {
 };
 
 type SolveResponse = {
-  geometry: Geometry;
+  geometry: string;
   wires: Wire[];
   feed_wire_index: number;
   feed_knot_index: number;
@@ -568,7 +553,7 @@ function modelOptionsForRequest(
 }
 
 type SolveRequest = {
-  geometry: Geometry;
+  geometry: string;
   solver: "pysim" | "pynec";
   pysim_model?: "triangular" | "sinusoidal" | "bspline";
   model_options?: Record<string, unknown>;
@@ -736,7 +721,7 @@ const PROJECTIONS: { id: Projection; label: string; horizAxis: 0|1|2; vertAxis: 
   { id: "yz", label: "Side (yz)",  horizAxis: 1, vertAxis: 2 },
 ];
 
-function defaultProjection(geometry: Geometry): Projection {
+function defaultProjection(geometry: string): Projection {
   // V-and-fan-dipole arms run along y and droop in z, so a side (yz) view is
   // the natural one. Yagi / moxon / hexbeam are top-down (xy) because the
   // beam axis lives in the xy plane. Hentenna lives entirely in the yz
@@ -804,18 +789,18 @@ function useThumbColumnSize(
 // on the backend's ParamGroupSpec.default_overrides for that example.
 
 export function App() {
-  const [geometry, setGeometry] = useState<Geometry>("inverted_v");
+  const [geometry, setGeometry] = useState<string>("");
 
-  // Schema-driven parameter controls for the 6 simple antennas (inverted_v,
-  // yagi, moxon, hexbeam, hentenna, bowtie). Each example bundles its own
-  // parameter schema in web/examples/<name>.py; the backend serves them on
-  // GET /examples and we render generic sliders from the result.
+  // Schema-driven parameter controls. Each registered example bundles
+  // its parameter schema in web/examples/<name>.py; the backend serves
+  // them on GET /examples and we render generic sliders from the result.
   //
-  // Multi-band antennas (fan_dipole as of this PR) get a nested shape
-  // for groups — `paramValues[name].bands` is an array of per-instance
-  // bags, pre-allocated to ParamGroupSpec.max_repeats so dialing the
+  // Multi-band antennas (fan_dipole) get a nested shape for groups —
+  // `paramValues[name].bands` is an array of per-instance bags,
+  // pre-allocated to ParamGroupSpec.max_repeats so dialing the
   // repeat-count down and back up preserves the values.
-  const [examples, setExamples] = useState<ExampleDescriptor[]>(EXAMPLES_FALLBACK);
+  const [examples, setExamples] = useState<ExampleDescriptor[]>([]);
+  const [examplesError, setExamplesError] = useState<string | null>(null);
   const [paramValues, setParamValues] = useState<Record<string, ParamValueBag>>({});
 
   useEffect(() => {
@@ -826,6 +811,7 @@ export function App() {
         if (cancelled) return;
         const list: ExampleDescriptor[] = j.examples ?? [];
         setExamples(list);
+        setExamplesError(null);
         // Walk each example's schema and pre-seed defaults — including
         // pre-allocated group instance arrays — so the sliders have
         // something to render against on first show.
@@ -838,12 +824,21 @@ export function App() {
           return next;
         });
       })
-      .catch(() => {
-        // Network failure: stay on EXAMPLES_FALLBACK; the schema-driven
-        // sliders will be empty.
+      .catch((e) => {
+        if (cancelled) return;
+        setExamplesError(String(e?.message ?? e));
       });
     return () => { cancelled = true; };
   }, []);
+
+  // Auto-select the first example once /examples resolves, and recover if
+  // the current selection disappears (e.g. backend dropped an example).
+  useEffect(() => {
+    if (examples.length === 0) return;
+    if (!examples.some((e) => e.name === geometry)) {
+      setGeometry(examples[0].name);
+    }
+  }, [examples, geometry]);
 
   const currentExample = examples.find((e) => e.name === geometry);
   const currentValues = paramValues[geometry] ?? {};
@@ -1545,7 +1540,7 @@ export function App() {
             id="geometry-select"
             className="geometry-select"
             value={geometry}
-            onChange={(e) => setGeometry(e.target.value as Geometry)}
+            onChange={(e) => setGeometry(e.target.value)}
           >
             {examples.map((ex) => (
               <option key={ex.name} value={ex.name}>
@@ -1554,6 +1549,11 @@ export function App() {
             ))}
           </select>
         </div>
+        {examplesError && (
+          <div className="examples-error">
+            Failed to load /examples: {examplesError}
+          </div>
+        )}
 
         {currentExample && !currentExample.legacy_controls && (
           <ParamForm
@@ -3293,11 +3293,10 @@ function SmithChart({
     ctx.lineTo(cx, cy + 4);
     ctx.stroke();
     // multiFeed is captured in the closure; without it in the deps the
-    // chart wouldn't redraw when the descriptor flag flips from the
-    // EXAMPLES_FALLBACK default (false) to the real /examples value
-    // (true for bowtie / hexbeam_5band) — the user saw only one Z*
-    // annotation in the legend because the closure stayed wedged on
-    // the single-feed branch.
+    // chart wouldn't redraw when the descriptor flag flips from its
+    // initial false to the real /examples value (true for bowtie /
+    // hexbeam_5band) — the user saw only one Z* annotation in the
+    // legend because the closure stayed wedged on the single-feed branch.
   }, [r, x, z0, size, sweep, converge, measFreqMhz, running, convergeRunning, feeds, multiFeed]);
 
   return <canvas ref={canvasRef} className="smith" />;
