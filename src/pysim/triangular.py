@@ -682,6 +682,58 @@ class TriangularPySim:
         driver_impedance = z_per_feed[0] if len(self.feeds) == 1 else z_per_feed
         return driver_impedance, coeffs
 
+    def compute_y_matrix(self) -> np.ndarray:
+        """Short-circuit admittance matrix [Y_sc] at the configured feeds.
+
+        Y_sc[i, j] is the current that flows out of port i when port j
+        is driven with V_j = 1 and every other port is held at V_k = 0.
+        N back-substitutions on the same factored system give all N
+        columns in one batched solve — the LU factor cost (which is
+        what dominates for our sizes) is paid once.
+
+        The caller can invert Y_sc to recover the open-circuit Z
+        matrix used in network analysis (V = Z·I with all other ports
+        open / I_k = 0).
+
+        Same Z assembly + ground handling as `compute_impedance`. Only
+        the RHS / readout differs. Junctions are not yet supported —
+        the Schur-complement KCL solve in `_solve_with_kcl` would need
+        a matrix-RHS generalisation; deferred until a multi-feed
+        antenna with junctions needs this.
+        """
+        if self.junctions:
+            raise NotImplementedError(
+                "compute_y_matrix with junctions isn't implemented yet"
+            )
+
+        geom = self._build_geometry()
+        tangents = geom["tangents"]
+
+        J_free = self._build_J_blocks(geom, self.k)
+        td_free = tangents @ tangents.T
+        Z = self._assemble_Z_single(*J_free, td_free, geom)
+
+        if self.ground_z is not None:
+            J_img = self._build_J_image_blocks(geom, self.k)
+            td_img = self._image_tangent_dot(tangents)
+            Z = Z - self._assemble_Z_single(*J_img, td_img, geom)
+
+        self.z = Z
+
+        m_indices = self._feed_basis_indices(geom)
+        n_ports = len(m_indices)
+        n_basis = geom["n_basis_total"]
+
+        # B is n_basis × n_ports; column j has a unit excitation at
+        # port j's basis index. scipy's LAPACK handles the batched
+        # RHS in a single LU + N back-subs.
+        B = np.zeros((n_basis, n_ports), dtype=np.complex128)
+        for j, m_i in enumerate(m_indices):
+            B[m_i, j] = 1.0
+
+        X = scipy.linalg.solve(Z, B)
+        return X[m_indices, :]
+
     def currents_at_knots(self, coeffs, s_array=None):
         """Per-wire complex current at every mesh knot, length = M_w knots per wire.
 
@@ -928,3 +980,49 @@ class TriangularPySim:
         feed_currents = coeffs[:, m_indices]  # (n_k, n_feeds)
         z_per_feed = voltages[None, :] / feed_currents
         return z_per_feed[:, 0] if len(self.feeds) == 1 else z_per_feed
+
+    def compute_y_matrix_swept(self, k_array) -> np.ndarray:
+        """Short-circuit Y matrices over a batch of wavenumbers.
+
+        Returns an (n_k, n_ports, n_ports) array. Each Y[k] is the
+        admittance matrix at wavenumber k_array[k]; see
+        `compute_y_matrix()` for the math. Same single-RHS pattern as
+        `compute_impedance_swept`, but with a batched per-port RHS so
+        we get all N columns per frequency in one solve.
+
+        Junctions are not yet supported (same reason as
+        `compute_y_matrix`).
+        """
+        if self.junctions:
+            raise NotImplementedError(
+                "compute_y_matrix_swept with junctions isn't implemented"
+            )
+
+        k_array = np.asarray(k_array, dtype=float)
+        omega_array = k_array * self.c
+        geom = self._build_geometry()
+        tangents = geom["tangents"]
+
+        J_free = self._build_J_blocks_batch(geom, k_array)
+        td_free = tangents @ tangents.T
+        Z = self._assemble_Z_batch(*J_free, td_free, geom, omega_array)
+
+        if self.ground_z is not None:
+            J_img = self._build_J_image_blocks_batch(geom, k_array)
+            td_img = self._image_tangent_dot(tangents)
+            Z = Z - self._assemble_Z_batch(*J_img, td_img, geom, omega_array)
+
+        m_indices = self._feed_basis_indices(geom)
+        n_ports = len(m_indices)
+        n_basis = geom["n_basis_total"]
+
+        # Same per-k RHS — broadcast it to (n_k, n_basis, n_ports).
+        B = np.zeros((n_basis, n_ports), dtype=np.complex128)
+        for j, m_i in enumerate(m_indices):
+            B[m_i, j] = 1.0
+        B_batch = np.broadcast_to(B, (k_array.shape[0], n_basis, n_ports))
+
+        coeffs = np.linalg.solve(Z, B_batch)  # (n_k, n_basis, n_ports)
+        # Y[k, i, j] = current at port i when port j was driven with
+        # V = 1, all others V = 0 — i.e. coeffs[k, m_indices[i], j].
+        return coeffs[:, m_indices, :]

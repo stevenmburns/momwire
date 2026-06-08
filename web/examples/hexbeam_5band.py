@@ -184,10 +184,16 @@ def _build_per_band_geometry(req: dict, z_offset_global: float) -> dict:
     z_spacing_m = float(req.get("z_spacing_m", 1.0))
 
     per_band = []
+    n_bands = len(bands)
     for i, band in enumerate(bands):
         wavelength = C_LIGHT / (band["freq_mhz"] * 1e6)
         halfdriver = band["halfdriver_factor"] * wavelength / 4.0
-        z = z_offset_global + i * z_spacing_m
+        # Stack so band 0 (the longest by the schema's default_overrides
+        # ordering) sits at the highest z and band N-1 at z=0. The
+        # daisy-chain feedline enters at band 0 from the top of the
+        # mast, jumpers descend along z to each successive band. Matches
+        # the physical convention where bigger elements ride on top.
+        z = z_offset_global + (n_bands - 1 - i) * z_spacing_m
         geom = _band_polylines(
             halfdriver,
             band["tipspacer_factor"],
@@ -259,8 +265,38 @@ def pysim_solve(req: dict) -> dict:
     )
     sim.wire_radius = wire_radius
 
+    daisy_chain = bool(req.get("daisy_chain", False))
+
     t0_clock = time.perf_counter()
-    z_per_feed, coeffs = sim.compute_impedance()
+    if daisy_chain:
+        # Compute the antenna's short-circuit Y matrix once (1 LU + N
+        # back-subs on the same factored system), invert to get Z_oc,
+        # apply the chain feedline. Use the design-freq factored system
+        # (we want one Z_in at the meas freq, so set the model's k to
+        # meas freq via wavelength=wavelength_meas above — already done).
+        from ._feedline import daisy_chain_z_in
+
+        y_sc = sim.compute_y_matrix()
+        z_oc = np.linalg.inv(y_sc)
+        z_in_complex = daisy_chain_z_in(
+            z_oc,
+            jumper_lengths_m=[g["z_spacing_m"]] * (n_bands - 1),
+            freq_mhz=meas_freq_mhz,
+            z0_ohms=50.0,
+        )
+        # Also resolve a basis-coefficient vector for the wire-record
+        # rendering: drive band 0 with V=1, others V=0 (the conditions
+        # the chain analysis already used to factor Y_sc). Gives a
+        # current distribution to colour the wires by.
+        sim.feeds = [
+            (2 * i, b["feed_arclength"], 1.0 + 0.0j if i == 0 else 0.0 + 0.0j)
+            for i, b in enumerate(per_band)
+        ]
+        _, coeffs = sim.compute_impedance()
+        z_per_feed = np.zeros(n_bands, dtype=complex)
+        z_per_feed[0] = z_in_complex  # primary; others undefined in chain mode
+    else:
+        z_per_feed, coeffs = sim.compute_impedance()
     solve_ms = (time.perf_counter() - t0_clock) * 1e3
 
     knots_per_wire = []
@@ -293,11 +329,17 @@ def pysim_solve(req: dict) -> dict:
                 "knot_index": feed_basis_local + 1,
                 "z_re": float(zi.real),
                 "z_im": float(zi.imag),
-                "v_re": 1.0,
+                "v_re": 1.0 if (not daisy_chain or i == 0) else 0.0,
                 "v_im": 0.0,
             }
         )
 
+    # In daisy-chain mode the per-feed entries beyond band 0 are
+    # artefacts of the network-decomposition convention, not
+    # operationally meaningful. Surface only band 0's entry as the
+    # single port the rig actually sees.
+    if daisy_chain:
+        feed_entries = feed_entries[:1]
     primary = feed_entries[0]
     return {
         "geometry": "hexbeam_5band",
@@ -362,6 +404,31 @@ def pysim_sweep(
     sim.wire_radius = wire_radius
 
     k_array = np.array([2 * np.pi * f * 1e6 / C_LIGHT for f in freqs_mhz])
+
+    if bool(req.get("daisy_chain", False)):
+        # Batched Y_sc over all freqs (one call), then per-freq inversion
+        # + network solve. Network math is N×N (≤5×5) so the per-freq
+        # cost is dominated by the MoM batched solve.
+        from ._feedline import daisy_chain_z_in
+
+        y_swept = sim.compute_y_matrix_swept(k_array)  # (n_k, N, N)
+        n_bands_local = g["n_bands"]
+        jumpers = [g["z_spacing_m"]] * (n_bands_local - 1)
+        primary_re_list: list[float] = []
+        primary_im_list: list[float] = []
+        for ki, f in enumerate(freqs_mhz):
+            z_oc = np.linalg.inv(y_swept[ki])
+            z_in = daisy_chain_z_in(z_oc, jumpers, f, 50.0)
+            primary_re_list.append(float(z_in.real))
+            primary_im_list.append(float(z_in.imag))
+        # No per-feed array in chain mode — feeds_re/feeds_im stay empty
+        # so the multi-trail Smith branch lies dormant. The 4-tuple
+        # shape is kept to match the existing sweep endpoint contract;
+        # empty inner lists are well-formed.
+        feeds_re_empty: list[list[float]] = [[] for _ in freqs_mhz]
+        feeds_im_empty: list[list[float]] = [[] for _ in freqs_mhz]
+        return primary_re_list, primary_im_list, feeds_re_empty, feeds_im_empty
+
     z_array = np.atleast_2d(sim.compute_impedance_swept(k_array))  # (n_k, n_f)
     feeds_re = z_array.real.tolist()
     feeds_im = z_array.imag.tolist()
@@ -384,6 +451,21 @@ def pynec_build(req: dict) -> dict:
     A→B); reflector edges are `10*i + 6..10` (C→D, D→E, E→F, F→G,
     G→H). The feed sits on tag `10*i + 3` (the T→S edge).
     """
+    if bool(req.get("daisy_chain", False)):
+        # NEC's TL card path gave results inconsistent with pysim's
+        # network analysis in early testing — both pysim engines
+        # (triangular + sinusoidal) agree with each other and pass
+        # analytic checks (λ/4 transformer, parallel combinations),
+        # while NEC's Z_in was nearly insensitive to jumper length
+        # for short L. Could be argument-order, timing, or a NEC2
+        # limitation when TL endpoints are also EM-coupled by being
+        # physically close. Tracking separately. Until that's
+        # resolved the PyNEC daisy-chain path raises; the user can
+        # switch to pysim to use this mode.
+        raise NotImplementedError(
+            "PyNEC daisy-chain mode is under investigation — "
+            "use the pysim backend (Triangular/B-spline/Sinusoidal) for now."
+        )
     from web.pynec_backend import C_LIGHT, nec
 
     n_per_wire = int(req.get("n_per_wire", 21))
@@ -396,6 +478,8 @@ def pynec_build(req: dict) -> dict:
     design_freq_mhz = float(req.get("design_freq_mhz", 14.300))
 
     bands = _request_bands(req)
+    n_bands = len(bands)
+    daisy_chain = bool(req.get("daisy_chain", False))
     c = nec.nec_context()
     geo = c.get_geometry()
 
@@ -404,7 +488,9 @@ def pynec_build(req: dict) -> dict:
     for band_idx, band in enumerate(bands):
         wavelength = C_LIGHT / (band["freq_mhz"] * 1e6)
         halfdriver = band["halfdriver_factor"] * wavelength / 4.0
-        z = z_offset_global + band_idx * z_spacing_m
+        # Stack with band 0 at the top; see _build_per_band_geometry
+        # for the rationale.
+        z = z_offset_global + (n_bands - 1 - band_idx) * z_spacing_m
         bg = _band_polylines(
             halfdriver,
             band["tipspacer_factor"],
@@ -456,6 +542,32 @@ def pynec_build(req: dict) -> dict:
         )
     c.geometry_complete(0)
 
+    # Daisy-chain TL cards. Each connects band i's feed segment to
+    # band i+1's feed segment via a 50Ω lossless line of length
+    # z_spacing_m (same value used for the physical z-stagger between
+    # bands — they're the same wire). End shunt admittances are zero
+    # (no lumped load at either end of the jumper). The longest-
+    # wavelength band is at band_idx=0 (top of stack); successive
+    # bands descend. The open end at band N-1 is implicit (no further
+    # TL beyond it). Only band 0 gets an ex_card in this mode (issued
+    # in _run_solve from elements[0].v_complex).
+    if daisy_chain:
+        for i in range(n_bands - 1):
+            a = elements[i]
+            b_ = elements[i + 1]
+            c.tl_card(
+                a["feed_tag"],
+                a["feed_seg"],
+                b_["feed_tag"],
+                b_["feed_seg"],
+                50.0,
+                z_spacing_m,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+            )
+
     n_seg_total = sum(n for elem in elements for n in (*elem["npe_d"], *elem["npe_r"]))
 
     return {
@@ -469,11 +581,15 @@ def pynec_build(req: dict) -> dict:
         "ground": ground,
         "ground_fast": ground_fast,
         "z_offset": z_offset_global,
+        "daisy_chain": daisy_chain,
     }
 
 
 def _run_solve(b: dict, freq_mhz: float):
-    """Multi-feed NEC solve. One EX card per band's T→S edge."""
+    """NEC solve. Multi-feed mode (default): one EX card per band's
+    T→S edge. Daisy-chain mode: one EX card on band 0's feed only
+    (the TL cards added in pynec_build handle the inter-band coupling
+    through NEC's internal transmission-line math)."""
     from web.pynec_backend import GROUND_CONDUCTIVITY, GROUND_DIELECTRIC
 
     c = b["context"]
@@ -482,9 +598,17 @@ def _run_solve(b: dict, freq_mhz: float):
         c.gn_card(itype, 0, GROUND_DIELECTRIC, GROUND_CONDUCTIVITY, 0, 0, 0, 0)
     else:
         c.gn_card(-1, 0, 0, 0, 0, 0, 0, 0)
-    for elem in b["elements"]:
+    if b.get("daisy_chain"):
+        # Drive only band 0; TL cards already wired in pynec_build.
+        elem = b["elements"][0]
         v = elem["v_complex"]
         c.ex_card(0, elem["feed_tag"], elem["feed_seg"], 0, v.real, v.imag, 0, 0, 0, 0)
+    else:
+        for elem in b["elements"]:
+            v = elem["v_complex"]
+            c.ex_card(
+                0, elem["feed_tag"], elem["feed_seg"], 0, v.real, v.imag, 0, 0, 0, 0
+            )
     c.fr_card(0, 1, freq_mhz, 0)
     c.xq_card(0)
     sc = c.get_structure_currents(0)
@@ -584,6 +708,13 @@ def pynec_solve(req: dict) -> dict:
             }
         )
 
+    # In daisy-chain mode, only band 0's feed corresponds to a real
+    # external port (the rig connection). The induced currents on the
+    # other bands' "feed" segments are TL-coupled responses to band 0's
+    # drive — meaningful as wire currents in the visualisation but not
+    # rig-visible impedances. Surface only band 0.
+    if b.get("daisy_chain"):
+        feeds = feeds[:1]
     primary = feeds[0]
     return {
         "geometry": "hexbeam_5band",
@@ -643,6 +774,19 @@ EXAMPLE = register(
                 step=0.05,
                 precision=2,
                 unit=" m",
+            ),
+            ParamSpec(
+                # Off: each band independently driven with V = 1+j0 (the
+                # bench-equivalent of N separate matched sources). On:
+                # one main 50Ω coax connects at band 0's feed (top of
+                # stack, longest wavelength) and daisy-chains down to
+                # each successive band via 50Ω jumpers of length =
+                # z_spacing_m. Open termination after band N-1.
+                # The operationally realistic mode.
+                name="daisy_chain",
+                label="daisy-chain feedline",
+                default=False,
+                kind="bool",
             ),
             ParamGroupSpec(
                 name="bands",
