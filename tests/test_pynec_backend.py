@@ -11,18 +11,17 @@ PyNEC = pytest.importorskip("PyNEC")  # noqa: F841
 
 from web import pynec_backend  # noqa: E402
 from web.examples import REGISTRY as _EXAMPLES  # noqa: E402
-from web.server import (  # noqa: E402
-    _solve_bowtie,
-    _sweep_bowtie,
-)
 
 _solve_inverted_v = _EXAMPLES["inverted_v"].pysim_solve
 _sweep_inverted_v = _EXAMPLES["inverted_v"].pysim_sweep
 _solve_yagi = _EXAMPLES["yagi"].pysim_solve
 _sweep_yagi = _EXAMPLES["yagi"].pysim_sweep
+_solve_bowtie = _EXAMPLES["bowtie"].pysim_solve
+_sweep_bowtie = _EXAMPLES["bowtie"].pysim_sweep
 pynec_backend.solve_inverted_v = _EXAMPLES["inverted_v"].pynec_solve
 pynec_backend.solve_yagi = _EXAMPLES["yagi"].pynec_solve
 pynec_backend.solve_fandipole = _EXAMPLES["fan_dipole"].pynec_solve
+pynec_backend.solve_bowtie = _EXAMPLES["bowtie"].pynec_solve
 
 
 # The two backends use different basis functions (NEC2 pulse basis vs
