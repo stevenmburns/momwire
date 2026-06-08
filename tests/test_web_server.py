@@ -17,7 +17,11 @@ import pytest
 # fastapi and exercise this file.
 pytest.importorskip("fastapi")
 
-from web.server import _solve_bowtie, _sweep_bowtie, solve  # noqa: E402
+from web.examples import REGISTRY as _EXAMPLES  # noqa: E402
+from web.server import solve  # noqa: E402
+
+_solve_bowtie = _EXAMPLES["bowtie"].pysim_solve
+_sweep_bowtie = _EXAMPLES["bowtie"].pysim_sweep
 
 
 def _bowtie_req(**over) -> dict:
