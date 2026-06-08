@@ -16,17 +16,52 @@ type Geometry = "inverted_v" | "yagi" | "moxon" | "hexbeam" | "fan_dipole" | "he
 
 // Schema served by `GET /examples`. The backend's web/examples/_base.py
 // owns the source of truth; this type just mirrors the JSON shape.
+type SchemaEnumOption = {
+  value: string;
+  label: string;
+  // Free-form metadata. Fan_dipole's band entries carry freq_min /
+  // freq_max / freq_default for range_from_enum_option + on_change_set.
+  [key: string]: unknown;
+};
+
 type SchemaParamSpec = {
   name: string;
   label: string;
-  default: number | boolean;
-  kind: "float" | "int" | "bool";
+  default: number | string | boolean;
+  kind: "float" | "int" | "bool" | "enum";
   min: number | null;
   max: number | null;
   step: number | null;
   precision: number;
   unit: string | null;
   visible_when: { name: string; op: string; value: number } | null;
+  enum_options?: SchemaEnumOption[] | null;
+  range_from_enum_option?: { param: string; min_key: string; max_key: string } | null;
+  on_change_set?: { set: string; from_enum_key: string } | null;
+  linked_to_design_freq?: boolean;
+};
+
+type SchemaParamGroupSpec = {
+  kind: "group";
+  name: string;
+  label_template: string;
+  repeat_count: string;
+  max_repeats: number;
+  params: SchemaItem[];
+  default_overrides: { [param: string]: unknown }[];
+};
+
+type SchemaItem = SchemaParamSpec | SchemaParamGroupSpec;
+
+function isGroup(item: SchemaItem): item is SchemaParamGroupSpec {
+  return (item as SchemaParamGroupSpec).kind === "group";
+}
+
+// State for a schema-driven antenna: nested map where scalars are
+// numbers (float/int) or strings (enum), and groups are arrays of
+// child bags (one per instance, pre-allocated to max_repeats).
+type ParamValueBag = {
+  [key: string]: number | string | ParamValueBag[];
 };
 
 type ResultFieldSpec = {
@@ -42,7 +77,7 @@ type ExampleDescriptor = {
   multi_feed: boolean;
   legacy_controls: boolean;
   legacy_results: boolean;
-  param_schema: SchemaParamSpec[];
+  param_schema: SchemaItem[];
   result_schema: ResultFieldSpec[];
 };
 
@@ -54,19 +89,20 @@ const EXAMPLES_FALLBACK: ExampleDescriptor[] = [
   { name: "yagi", label: "Yagi", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
   { name: "moxon", label: "Moxon", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
   { name: "hexbeam", label: "Hexbeam", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
-  { name: "fan_dipole", label: "Fan Dipole", multi_feed: false, legacy_controls: true, legacy_results: true, param_schema: [], result_schema: [] },
+  { name: "fan_dipole", label: "Fan Dipole", multi_feed: false, legacy_controls: false, legacy_results: true, param_schema: [], result_schema: [] },
   { name: "hentenna", label: "Hentenna", multi_feed: false, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
   { name: "bowtie", label: "Bowtie 1×2 array", multi_feed: true, legacy_controls: false, legacy_results: false, param_schema: [], result_schema: [] },
 ];
 
-function applyVisibility(
-  spec: SchemaParamSpec,
-  values: Record<string, number>,
-): boolean {
+function applyVisibility(spec: SchemaParamSpec, values: ParamValueBag): boolean {
   const v = spec.visible_when;
   if (!v) return true;
   const cur = values[v.name];
   if (cur == null) return true;
+  // Visibility comparisons only make sense for numeric controls today
+  // (e.g. yagi's `n_directors > 0`). Enum-valued conditions would need
+  // a different comparator — flag in v1 but punt on implementation.
+  if (typeof cur !== "number") return true;
   switch (v.op) {
     case "eq": return cur === v.value;
     case "ne": return cur !== v.value;
@@ -78,33 +114,185 @@ function applyVisibility(
   }
 }
 
+// Seed defaults for one ParamValueBag from a flat list of schema items.
+// `overrides` (optional) overlays per-instance defaults from a group's
+// default_overrides[i] entry — used when seeding a group instance.
+function seedDefaults(
+  schema: SchemaItem[],
+  overrides?: { [k: string]: unknown },
+): ParamValueBag {
+  const out: ParamValueBag = {};
+  for (const item of schema) {
+    if (isGroup(item)) {
+      const arr: ParamValueBag[] = [];
+      for (let i = 0; i < item.max_repeats; i++) {
+        arr.push(seedDefaults(item.params, item.default_overrides[i]));
+      }
+      out[item.name] = arr;
+    } else {
+      const ov = overrides?.[item.name];
+      if (ov !== undefined) {
+        out[item.name] = ov as number | string;
+      } else if (item.kind === "enum") {
+        out[item.name] = String(item.default);
+      } else {
+        out[item.name] = Number(item.default);
+      }
+    }
+  }
+  return out;
+}
+
+// Walk the schema collecting (param, value) pairs for every leaf marked
+// `linked_to_design_freq`. Fan_dipole's first band's freq is the
+// canonical example: when it changes, the global design frequency
+// should follow.
+function findLinkedDesignFreq(
+  schema: SchemaItem[],
+  values: ParamValueBag,
+): number | null {
+  for (const item of schema) {
+    if (isGroup(item)) {
+      const instances = values[item.name];
+      if (!Array.isArray(instances) || instances.length === 0) continue;
+      // Only the first instance's linked param drives design freq.
+      // Extending to "any instance" needs a tie-break policy; not
+      // worth designing until a second antenna asks for it.
+      const found = findLinkedDesignFreq(item.params, instances[0]);
+      if (found != null) return found;
+    } else if (item.linked_to_design_freq) {
+      const v = values[item.name];
+      if (typeof v === "number") return v;
+    }
+  }
+  return null;
+}
+
 function ParamForm({
   schema,
   values,
   onChange,
+  pathPrefix = [],
 }: {
-  schema: SchemaParamSpec[];
-  values: Record<string, number>;
-  onChange: (name: string, value: number) => void;
+  schema: SchemaItem[];
+  values: ParamValueBag;
+  onChange: (path: (string | number)[], value: number | string) => void;
+  pathPrefix?: (string | number)[];
 }) {
   return (
     <>
-      {schema.filter((s) => applyVisibility(s, values)).map((s) => {
-        const current = values[s.name] ?? Number(s.default);
-        const shown = s.kind === "int" ? String(Math.round(current)) : current.toFixed(s.precision);
+      {schema.map((item) => {
+        if (isGroup(item)) {
+          const countRaw = values[item.repeat_count];
+          const count = typeof countRaw === "number" ? Math.round(countRaw) : 0;
+          const instances = values[item.name];
+          if (!Array.isArray(instances)) return null;
+          return (
+            <div key={item.name} className="param-group">
+              {Array.from({ length: Math.min(count, instances.length) }, (_, i) => (
+                <div key={`${item.name}-${i}`} className="param-group-instance">
+                  <div className="param-group-header">
+                    {item.label_template.replace("{i}", String(i))}
+                  </div>
+                  <ParamForm
+                    schema={item.params}
+                    values={instances[i]}
+                    onChange={onChange}
+                    pathPrefix={[...pathPrefix, item.name, i]}
+                  />
+                </div>
+              ))}
+            </div>
+          );
+        }
+        // Scalar leaf.
+        if (!applyVisibility(item, values)) return null;
+        const currentRaw = values[item.name];
+        const currentNum =
+          typeof currentRaw === "number" ? currentRaw : Number(item.default);
+        const currentStr =
+          typeof currentRaw === "string" ? currentRaw : String(item.default);
+
+        // Resolve dynamic min/max from a sibling enum's currently-
+        // selected option, when configured. Falls back to the static
+        // min/max if the lookup misses.
+        let effMin = item.min ?? 0;
+        let effMax = item.max ?? 1;
+        const rfe = item.range_from_enum_option;
+        if (rfe) {
+          const siblingVal = values[rfe.param];
+          const siblingSchema = schema.find(
+            (s) => !isGroup(s) && s.name === rfe.param,
+          ) as SchemaParamSpec | undefined;
+          const opts = siblingSchema?.enum_options;
+          if (opts && typeof siblingVal === "string") {
+            const opt = opts.find((o) => o.value === siblingVal);
+            if (opt) {
+              const lo = opt[rfe.min_key];
+              const hi = opt[rfe.max_key];
+              if (typeof lo === "number") effMin = lo;
+              if (typeof hi === "number") effMax = hi;
+            }
+          }
+        }
+
+        if (item.kind === "enum") {
+          const opts = item.enum_options ?? [];
+          return (
+            <div key={item.name} className="field">
+              <label>
+                <span>{item.label}</span>
+              </label>
+              <select
+                value={currentStr}
+                onChange={(e) => {
+                  const next = (e.target as HTMLSelectElement).value;
+                  onChange([...pathPrefix, item.name], next);
+                  // On-change side effect: set a sibling's value to a
+                  // key from the new enum option. Fan_dipole uses this
+                  // to snap freq to the band's default.
+                  const oc = item.on_change_set;
+                  if (oc) {
+                    const opt = opts.find((o) => o.value === next);
+                    if (opt) {
+                      const k = opt[oc.from_enum_key];
+                      if (typeof k === "number" || typeof k === "string") {
+                        onChange([...pathPrefix, oc.set], k);
+                      }
+                    }
+                  }
+                }}
+              >
+                {opts.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+          );
+        }
+
+        const shown =
+          item.kind === "int"
+            ? String(Math.round(currentNum))
+            : currentNum.toFixed(item.precision);
         return (
-          <div key={s.name} className="field">
+          <div key={item.name} className="field">
             <label>
-              <span>{s.label}</span>
-              <span>{shown}{s.unit ?? ""}</span>
+              <span>{item.label}</span>
+              <span>{shown}{item.unit ?? ""}</span>
             </label>
             <input
               type="range"
-              min={s.min ?? 0}
-              max={s.max ?? 1}
-              step={s.step ?? 0.001}
-              value={current}
-              onInput={(e) => onChange(s.name, Number((e.target as HTMLInputElement).value))}
+              min={effMin}
+              max={effMax}
+              step={item.step ?? 0.001}
+              value={currentNum}
+              onInput={(e) =>
+                onChange(
+                  [...pathPrefix, item.name],
+                  Number((e.target as HTMLInputElement).value),
+                )
+              }
             />
           </div>
         );
@@ -410,32 +598,6 @@ const BAND_BY_ID: Record<Band, (typeof BANDS)[number]> = Object.fromEntries(
   BANDS.map((b) => [b.id, b]),
 ) as Record<Band, (typeof BANDS)[number]>;
 
-// For a given freq, snap to the ham band whose default is closest. If the
-// freq is well outside every band (e.g. user dragged a slider into a gap),
-// returns the band whose center is nearest.
-function nearestBandForFreq(freq: number): Band {
-  let best: Band = BANDS[0].id;
-  let bestDist = Infinity;
-  for (const b of BANDS) {
-    const d = Math.abs(freq - b.default);
-    if (d < bestDist) {
-      bestDist = d;
-      best = b.id;
-    }
-  }
-  return best;
-}
-
-const C_LIGHT = 299_792_458.0;
-// Half-wave dipole tip-to-tip length in metres for a target freq (MHz) and
-// half-arm length factor (typically ~0.95-0.97). Matches the
-// `halfdriver_factor` convention used elsewhere in the codebase:
-// halfdriver = factor * lambda/4, so band_length_m = 2*halfdriver.
-function bandLengthFromFreqFactor(freqMhz: number, halfdriverFactor: number): number {
-  const lambda = C_LIGHT / (freqMhz * 1e6);
-  return (halfdriverFactor * lambda) / 2;
-}
-
 type SweepData = {
   freqs_mhz: number[];
   z_re: number[];
@@ -610,9 +772,8 @@ function useThumbColumnSize(
 // so n_bands=2 gives a maximally-distinct visual (20m + 10m) without the
 // user touching any per-band sliders. Lengths from antenna_designer's
 // canonical 5-band cone design.
-const FAN_BAND_IDS_DEFAULT: Band[] = ["20m", "10m", "17m", "12m", "15m"];
-const FAN_BAND_FREQS_DEFAULT = FAN_BAND_IDS_DEFAULT.map((id) => BAND_BY_ID[id].default);
-const FAN_HALFDRIVER_FACTOR_DEFAULT = 0.962;
+// Per-band defaults for fan_dipole used to live here; they now travel
+// on the backend's ParamGroupSpec.default_overrides for that example.
 
 export function App() {
   const [geometry, setGeometry] = useState<Geometry>("inverted_v");
@@ -622,13 +783,12 @@ export function App() {
   // parameter schema in web/examples/<name>.py; the backend serves them on
   // GET /examples and we render generic sliders from the result.
   //
-  // Fan_dipole still has hand-written per-band JSX (its per-band selectors
-  // don't fit a flat ParamSpec list); the dropdown for it falls through to
-  // the legacy block via `legacy_controls=true` on the descriptor.
+  // Multi-band antennas (fan_dipole as of this PR) get a nested shape
+  // for groups — `paramValues[name].bands` is an array of per-instance
+  // bags, pre-allocated to ParamGroupSpec.max_repeats so dialing the
+  // repeat-count down and back up preserves the values.
   const [examples, setExamples] = useState<ExampleDescriptor[]>(EXAMPLES_FALLBACK);
-  // values[antennaName][paramName] = current slider value. Initialized from
-  // the schema's defaults when /examples arrives, then mutated by ParamForm.
-  const [paramValues, setParamValues] = useState<Record<string, Record<string, number>>>({});
+  const [paramValues, setParamValues] = useState<Record<string, ParamValueBag>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -638,23 +798,21 @@ export function App() {
         if (cancelled) return;
         const list: ExampleDescriptor[] = j.examples ?? [];
         setExamples(list);
-        // Seed paramValues with each schema's defaults so the sliders have
-        // something to render against on first show, even before the user
-        // touches a knob.
+        // Walk each example's schema and pre-seed defaults — including
+        // pre-allocated group instance arrays — so the sliders have
+        // something to render against on first show.
         setParamValues((prev) => {
           const next = { ...prev };
           for (const ex of list) {
             if (next[ex.name]) continue;
-            const seed: Record<string, number> = {};
-            for (const p of ex.param_schema) seed[p.name] = Number(p.default);
-            next[ex.name] = seed;
+            next[ex.name] = seedDefaults(ex.param_schema);
           }
           return next;
         });
       })
       .catch(() => {
         // Network failure: stay on EXAMPLES_FALLBACK; the schema-driven
-        // sliders will be empty but legacy controls (fan_dipole) still work.
+        // sliders will be empty.
       });
     return () => { cancelled = true; };
   }, []);
@@ -668,35 +826,37 @@ export function App() {
     () => JSON.stringify(currentValues),
     [currentValues],
   );
-  function setParam(name: string, value: number) {
+  // Deep-immutable path setter. ParamForm calls with paths like
+  // ["bands", 2, "freq"] for nested groups, or ["angle_deg"] for
+  // scalars. Recursive clone along the path so React sees a new
+  // reference at every level it watches.
+  function setParamAtPath(
+    path: (string | number)[],
+    value: number | string,
+  ) {
+    const setIn = (node: unknown, ps: (string | number)[]): unknown => {
+      if (ps.length === 0) return value;
+      const [head, ...rest] = ps;
+      if (typeof head === "number") {
+        const arr = ((node as unknown[]) ?? []).slice();
+        arr[head] = setIn(arr[head], rest);
+        return arr;
+      }
+      const obj = { ...((node as Record<string, unknown>) ?? {}) };
+      obj[head] = setIn(obj[head], rest);
+      return obj;
+    };
     setParamValues((prev) => ({
       ...prev,
-      [geometry]: { ...(prev[geometry] ?? {}), [name]: value },
+      [geometry]: setIn(prev[geometry] ?? {}, path) as ParamValueBag,
     }));
   }
-  // Fan dipole. Per-band state is sized at 5 so changing nBands preserves
-  // inactive sliders' values when the user dials it back up.
-  const [fanNBands, setFanNBands] = useState(2);
-  const [fanBandIds, setFanBandIds] = useState<Band[]>([...FAN_BAND_IDS_DEFAULT]);
-  const [fanBandFreqs, setFanBandFreqs] = useState<number[]>([...FAN_BAND_FREQS_DEFAULT]);
-  const [fanHalfdriverFactors, setFanHalfdriverFactors] = useState<number[]>(
-    Array(5).fill(FAN_HALFDRIVER_FACTOR_DEFAULT)
-  );
-  const [fanSlope, setFanSlope] = useState(0.5);
-  const [fanConeRadius, setFanConeRadius] = useState(0.12);
-
-  // Derived: band lengths from per-band freq * halfdriver_factor convention.
-  // halfdriver = factor * lambda/4 → band_length_m = factor * lambda/2.
-  // Memoized so the array reference is stable while inputs are — otherwise
-  // the three useEffects below that depend on fanBandLengths would re-fire
-  // on every render, flooding the WS with solve/sweep requests.
-  const fanBandLengths = useMemo(
-    () =>
-      fanBandFreqs.map((f, i) =>
-        bandLengthFromFreqFactor(f, fanHalfdriverFactors[i])
-      ),
-    [fanBandFreqs, fanHalfdriverFactors]
-  );
+  // Fan_dipole was hand-rolled here pre-PR — fanNBands / fanBandIds /
+  // fanBandFreqs / fanHalfdriverFactors / fanSlope / fanConeRadius
+  // useState hooks plus a fanBandLengths memo. All of that now lives in
+  // paramValues["fan_dipole"], seeded from the schema's defaults +
+  // default_overrides. The deletion removed ~25 lines of state plus the
+  // setFanBandSlot / setFanBandFreq / setFanHalfdriverFactor helpers.
   // Solver slots A / B / C — each one holds its own backend + options so
   // the user can switch between configured solvers with a single click
   // and tune each one independently from its gear menu.
@@ -769,56 +929,14 @@ export function App() {
     if (next) setMeasFreq(designFreq);
   }
 
-  // Pick a ham band for fan-dipole slot `i`: snaps that slot's design freq
-  // to the band's default. Length-factor is preserved; user can still drag
-  // the freq slider for fine tuning. When linkMeas is on, the measurement
-  // freq follows the band being adjusted so the user sees the simulation
-  // at the band they're currently tuning.
-  function setFanBandSlot(i: number, bandId: Band) {
-    setFanBandIds((prev) => {
-      const next = prev.slice();
-      next[i] = bandId;
-      return next;
-    });
-    const newFreq = BAND_BY_ID[bandId].default;
-    setFanBandFreqs((prev) => {
-      const next = prev.slice();
-      next[i] = newFreq;
-      return next;
-    });
-    if (linkMeas) setMeasFreq(newFreq);
-  }
-
-  // Freq slider for slot `i`. Also re-snaps the pulldown to whichever band
-  // is closest, so the dropdown's selected option tracks the slider value
-  // even when the user drags freely between bands.
-  function setFanBandFreq(i: number, v: number) {
-    setFanBandFreqs((prev) => {
-      const next = prev.slice();
-      next[i] = v;
-      return next;
-    });
-    setFanBandIds((prev) => {
-      const nearest = nearestBandForFreq(v);
-      if (prev[i] === nearest) return prev;
-      const next = prev.slice();
-      next[i] = nearest;
-      return next;
-    });
-    if (linkMeas) setMeasFreq(v);
-  }
-
-  function setFanHalfdriverFactor(i: number, v: number) {
-    setFanHalfdriverFactors((prev) => {
-      const next = prev.slice();
-      next[i] = v;
-      return next;
-    });
-    // Tuning a band's length factor → user is focused on that band; jump
-    // measurement freq to that band's current design freq so the live
-    // simulation tracks the band being tuned.
-    if (linkMeas) setMeasFreq(fanBandFreqs[i]);
-  }
+  // The pre-PR setFanBandSlot / setFanBandFreq / setFanHalfdriverFactor
+  // helpers (which also juggled measFreq to follow band tuning) are gone
+  // — schema-driven ParamForm fires onChange for each input directly.
+  // The "tuning a band → snap measFreq to that band's freq" affordance
+  // was a fan-dipole-only side effect; recreating it generically would
+  // require the schema to express "set this global state when a sibling
+  // group leaf changes," which doesn't pay for itself for one antenna.
+  // measFreq still follows designFreq via the linkMeas useEffect below.
 
   const [result, setResult] = useState<SolveResponse | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "closed">("connecting");
@@ -847,18 +965,28 @@ export function App() {
     setCameraProjection(defaultProjection(geometry));
   }, [geometry]);
 
-  // For fan_dipole the antenna doesn't have a single "design frequency" —
-  // each band has its own. The global designFreq state is still used by the
-  // canvas (λ/4 reference bar) and by the request builder, so we drive it
-  // from band 0's freq while fan_dipole is selected so the ref bar tracks
-  // the longest/lowest band as the user adjusts it.
+  // Schema-driven design-freq link: when the active example has any
+  // leaf marked `linked_to_design_freq` (currently only fan_dipole's
+  // first band's freq), sync the global designFreq state to its value.
+  // Replaces the old fan_dipole-specific useEffect that watched
+  // fanBandFreqs[0] directly.
+  const linkedDesignFreq = useMemo(
+    () =>
+      currentExample
+        ? findLinkedDesignFreq(currentExample.param_schema, currentValues)
+        : null,
+    // currentValues is a fresh reference whenever setParamValues fires;
+    // currentValuesKey is the stable primitive signature.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentExample, currentValuesKey],
+  );
   useEffect(() => {
-    if (geometry === "fan_dipole") {
-      const f0 = fanBandFreqs[0];
-      setDesignFreq(f0);
-      if (linkMeas) setMeasFreq(f0);
+    if (linkedDesignFreq != null) {
+      setDesignFreq(linkedDesignFreq);
+      if (linkMeas) setMeasFreq(linkedDesignFreq);
     }
-  }, [geometry, fanBandFreqs[0], linkMeas]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [linkedDesignFreq, linkMeas]);
   // Antenna-canvas current visualization is split into two independent
   // toggles: the per-segment current-magnitude heatmap (wire color/width)
   // and the |I| envelope curve overlay. Either or both can be turned off;
@@ -923,20 +1051,11 @@ export function App() {
       }
       base.model_options = opts;
     }
-    if (geometry === "fan_dipole") {
-      // Fan_dipole's per-band list doesn't fit the flat ParamSpec shape, so
-      // it stays on hand-rolled state for now (legacy_controls=true on the
-      // descriptor). All other antennas merge their schema-driven values in
-      // directly from paramValues[geometry].
-      base.n_bands = fanNBands;
-      base.band_lengths_m = fanBandLengths.slice(0, fanNBands);
-      base.band_freqs_mhz = fanBandFreqs.slice(0, fanNBands);
-      base.band_halfdriver_factors = fanHalfdriverFactors.slice(0, fanNBands);
-      base.slope = fanSlope;
-      base.cone_radius_m = fanConeRadius;
-    } else {
-      Object.assign(base, currentValues);
-    }
+    // Schema-driven antennas (all of them now): merge the active
+    // paramValues straight in. For fan_dipole this includes a nested
+    // `bands: [{band_id, freq, length_factor}, ...]` array; the backend
+    // unpacks it in _bands_from_request().
+    Object.assign(base, currentValues);
     return base;
   }
 
@@ -978,7 +1097,6 @@ export function App() {
   }, [
     geometry, backend, backendOptsKey,
     currentValuesKey,
-    fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq, measFreq,
     groundEnabled, groundFast, heightM,
   ]);
@@ -1014,7 +1132,6 @@ export function App() {
   }, [
     geometry, backend, backendOptsKey,
     currentValuesKey,
-    fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq,
     groundEnabled, groundFast, heightM,
     sweepEnabled,
@@ -1047,7 +1164,6 @@ export function App() {
   }, [
     geometry, backend, backendOptsKey,
     currentValuesKey,
-    fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq, measFreq,
     groundEnabled, groundFast, heightM,
     convergeEnabled,
@@ -1070,7 +1186,6 @@ export function App() {
   }, [
     geometry, backend, backendOptsKey,
     currentValuesKey,
-    fanNBands, fanBandLengths, fanSlope, fanConeRadius,
     designFreq, measFreq,
     groundEnabled, groundFast, heightM,
   ]);
@@ -1393,108 +1508,8 @@ export function App() {
           <ParamForm
             schema={currentExample.param_schema}
             values={currentValues}
-            onChange={setParam}
+            onChange={setParamAtPath}
           />
-        )}
-
-        {geometry === "fan_dipole" && (
-          <>
-            <div className="field">
-              <label>
-                <span># bands</span>
-                <span>{fanNBands}</span>
-              </label>
-              <input
-                type="range"
-                min={1}
-                max={5}
-                step={1}
-                value={fanNBands}
-                onInput={(e) => setFanNBands(Number((e.target as HTMLInputElement).value))}
-              />
-            </div>
-            {Array.from({ length: fanNBands }, (_, i) => {
-              const bandId = fanBandIds[i];
-              const bandSpec = BAND_BY_ID[bandId];
-              return (
-                <div className="fan-band-group" key={`fan-band-${i}`}>
-                  <div className="fan-band-header">
-                    <span className="fan-band-label">band {i}</span>
-                    <select
-                      className="fan-band-select"
-                      value={bandId}
-                      onChange={(e) => setFanBandSlot(i, e.target.value as Band)}
-                    >
-                      {BANDS.map((b) => (
-                        <option key={b.id} value={b.id}>{b.id}</option>
-                      ))}
-                    </select>
-                    <span className="fan-band-readout">{fanBandFreqs[i].toFixed(3)} MHz</span>
-                  </div>
-                  <input
-                    type="range"
-                    min={bandSpec.min}
-                    max={bandSpec.max}
-                    step={0.001}
-                    value={fanBandFreqs[i]}
-                    onInput={(e) =>
-                      setFanBandFreq(i, Number((e.target as HTMLInputElement).value))
-                    }
-                  />
-                  <label className="fan-band-sublabel">
-                    <span>length factor</span>
-                    <span>
-                      {fanHalfdriverFactors[i].toFixed(3)}{" "}
-                      <span className="fan-band-len">
-                        ({fanBandLengths[i].toFixed(2)} m tip-to-tip)
-                      </span>
-                    </span>
-                  </label>
-                  <input
-                    type="range"
-                    min={0.85}
-                    max={1.05}
-                    step={0.001}
-                    value={fanHalfdriverFactors[i]}
-                    onInput={(e) =>
-                      setFanHalfdriverFactor(
-                        i,
-                        Number((e.target as HTMLInputElement).value)
-                      )
-                    }
-                  />
-                </div>
-              );
-            })}
-            <div className="field">
-              <label>
-                <span>cone slope</span>
-                <span>{fanSlope.toFixed(3)}</span>
-              </label>
-              <input
-                type="range"
-                min={0.0}
-                max={1.5}
-                step={0.01}
-                value={fanSlope}
-                onInput={(e) => setFanSlope(Number((e.target as HTMLInputElement).value))}
-              />
-            </div>
-            <div className="field">
-              <label>
-                <span>cone radius</span>
-                <span>{fanConeRadius.toFixed(3)} m</span>
-              </label>
-              <input
-                type="range"
-                min={0.05}
-                max={0.5}
-                step={0.005}
-                value={fanConeRadius}
-                onInput={(e) => setFanConeRadius(Number((e.target as HTMLInputElement).value))}
-              />
-            </div>
-          </>
         )}
 
         {geometry !== "fan_dipole" && (
