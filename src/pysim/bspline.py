@@ -1345,6 +1345,119 @@ class BSplinePySim:
         self.z = Z
         return _per_feed_z(coeffs), coeffs
 
+    def compute_y_matrix(self) -> np.ndarray:
+        """Short-circuit admittance matrix [Y_sc] at the configured feeds.
+
+        See `TriangularPySim.compute_y_matrix` for the math + intent.
+        BSpline's per-feed driving-point current uses the Galerkin
+        reciprocity I_i = v_i^T · coeffs (inner product of feed i's
+        source vector with the solution). Stacking the N source
+        vectors as RHS columns and back-substituting once gives
+        Y[i, j] = v_i^T · solve(Z, v_j) in one shot.
+
+        Junctions and singular enrichment aren't supported here yet —
+        the daisy-chain use case (hexbeam_5band) has neither (5
+        independent hexbeam element pairs), so this is fine for now.
+        Add the kcl-augmented variant when a multi-feed multi-junction
+        antenna asks for it.
+        """
+        if self.junctions:
+            raise NotImplementedError(
+                "BSplinePySim.compute_y_matrix doesn't yet support junctions"
+            )
+        if self.use_singular_enrichment:
+            raise NotImplementedError(
+                "BSplinePySim.compute_y_matrix doesn't yet support enrichment"
+            )
+
+        geom = self._build_geometry()
+        supp_seg, polys, _kcl_A, wire_knots, wire_basis_global = (
+            self._build_basis_polynomials(geom)
+        )
+        n_basis_total = supp_seg.shape[0]
+
+        J = self._build_J_blocks(geom, self.k)
+        Z = self._assemble_Z(J, supp_seg, polys, geom)
+        if self.ground_z is not None:
+            J_img = self._build_J_image_blocks(geom, self.k)
+            td_img = self._image_tangent_dot(geom["tangents"])
+            Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+
+        # One source vector per feed, columns of B.
+        n_ports = len(self.feeds)
+        B = np.zeros((n_basis_total, n_ports), dtype=np.complex128)
+        for j, (w_i, arc_i, _v) in enumerate(self.feeds):
+            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
+            s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
+            B[:, j] = self._build_source_vector(
+                geom,
+                wire_knots,
+                wire_basis_global,
+                n_basis_total,
+                wi=w_i,
+                s_f=s_f_j,
+            )
+
+        X = scipy.linalg.solve(Z, B)  # (n_basis, n_ports)
+        return B.T @ X  # Y[i, j] = v_i^T · solve(Z, v_j)
+
+    def compute_y_matrix_swept(self, k_array) -> np.ndarray:
+        """Per-frequency Y matrices. Loops over k like
+        `compute_impedance_swept`; returns (n_k, n_ports, n_ports)."""
+        if self.junctions:
+            raise NotImplementedError(
+                "BSplinePySim.compute_y_matrix_swept doesn't yet support junctions"
+            )
+        if self.use_singular_enrichment:
+            raise NotImplementedError(
+                "BSplinePySim.compute_y_matrix_swept doesn't yet support enrichment"
+            )
+
+        k_array = np.asarray(k_array, dtype=float)
+        k_save = self.k
+        wl_save = self.wavelength
+        omega_save = self.omega
+
+        geom = self._build_geometry()
+        supp_seg, polys, _kcl_A, wire_knots, wire_basis_global = (
+            self._build_basis_polynomials(geom)
+        )
+        n_basis_total = supp_seg.shape[0]
+        n_ports = len(self.feeds)
+
+        # k-independent source vectors.
+        B = np.zeros((n_basis_total, n_ports), dtype=np.complex128)
+        for j, (w_i, arc_i, _v) in enumerate(self.feeds):
+            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
+            s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
+            B[:, j] = self._build_source_vector(
+                geom,
+                wire_knots,
+                wire_basis_global,
+                n_basis_total,
+                wi=w_i,
+                s_f=s_f_j,
+            )
+
+        out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
+        for ki, kk in enumerate(k_array):
+            self.k = float(kk)
+            self.omega = self.k * self.c
+            self.wavelength = self.c / (self.omega / (2 * np.pi))
+            J = self._build_J_blocks(geom, self.k)
+            Z = self._assemble_Z(J, supp_seg, polys, geom)
+            if self.ground_z is not None:
+                J_img = self._build_J_image_blocks(geom, self.k)
+                td_img = self._image_tangent_dot(geom["tangents"])
+                Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+            X = scipy.linalg.solve(Z, B)
+            out[ki] = B.T @ X
+
+        self.k = k_save
+        self.wavelength = wl_save
+        self.omega = omega_save
+        return out
+
     def compute_impedance_swept(self, k_array):
         """Loop over wavenumbers (no batched assembly here yet). Rebinds
         self.k / self.omega / self.wavelength per call and restores them.

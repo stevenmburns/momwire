@@ -948,6 +948,71 @@ class SinusoidalPySim:
         self.Z_matrix = G
         return Z_drive, alpha
 
+    def compute_y_matrix(self) -> np.ndarray:
+        """Short-circuit admittance matrix [Y_sc] at the configured feeds.
+
+        See `TriangularPySim.compute_y_matrix` for the math + intent.
+        Implementation mirrors `compute_impedance`: build G once, but
+        solve with an N-column RHS where column j has unit excitation
+        at port j's feed segment and zeros elsewhere. SinusoidalPySim
+        uses Eq 187's delta-gap source which scales by `-1/h_i`; the
+        Y matrix readout via `_feed_segment_current` already accounts
+        for the basis arithmetic.
+        """
+        geom = self._build_geometry()
+        G, seg_view = self._assemble_Z(geom, self.k)
+        feed_segs = geom["feed_segs"]
+        n_ports = len(feed_segs)
+        n_segs = geom["n_segs"]
+
+        # Column j: drive port j with V = 1 (RHS = -1/h_j at port j's
+        # segment, 0 elsewhere). Stack all N columns and let LAPACK
+        # do one LU + N back-subs.
+        B = np.zeros((n_segs, n_ports), dtype=np.complex128)
+        for j, fi in enumerate(feed_segs):
+            B[fi, j] = -1.0 / geom["seg_h"][fi]
+        alphas = scipy.linalg.solve(G, B)  # (n_segs, n_ports)
+
+        Y = np.zeros((n_ports, n_ports), dtype=np.complex128)
+        for j in range(n_ports):
+            for i, fi in enumerate(feed_segs):
+                Y[i, j] = self._feed_segment_current(alphas[:, j], seg_view, fi)
+        return Y
+
+    def compute_y_matrix_swept(self, k_array) -> np.ndarray:
+        """Per-frequency Y matrices. Loops over k like
+        `compute_impedance_swept` (no batched assembly here yet); returns
+        an (n_k, n_ports, n_ports) array."""
+        k_array = np.asarray(k_array, dtype=float)
+        k_save = self.k
+        wl_save = self.wavelength
+        omega_save = self.omega
+        geom = self._build_geometry()
+        feed_segs = geom["feed_segs"]
+        n_ports = len(feed_segs)
+        n_segs = geom["n_segs"]
+        # RHS columns are k-independent (depend only on segment lengths).
+        B = np.zeros((n_segs, n_ports), dtype=np.complex128)
+        for j, fi in enumerate(feed_segs):
+            B[fi, j] = -1.0 / geom["seg_h"][fi]
+
+        out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
+        for ki, kk in enumerate(k_array):
+            self.k = float(kk)
+            self.omega = self.k * self.c
+            self.wavelength = self.c / (self.omega / (2 * np.pi))
+            G, seg_view = self._assemble_Z(geom, self.k)
+            alphas = scipy.linalg.solve(G, B)
+            for j in range(n_ports):
+                for i, fi in enumerate(feed_segs):
+                    out[ki, i, j] = self._feed_segment_current(
+                        alphas[:, j], seg_view, fi
+                    )
+        self.k = k_save
+        self.wavelength = wl_save
+        self.omega = omega_save
+        return out
+
     def compute_impedance_swept(self, k_array):
         """Loop over wavenumbers. Per-call work that doesn't depend on k
         (geometry build, source-vector index, the set of bases that touch
