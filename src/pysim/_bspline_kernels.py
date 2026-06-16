@@ -70,7 +70,7 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d):
     n_d = max_d + 1
     inv4pi = 1.0 / (4 * np.pi)
 
-    uniform = N > 1 and np.allclose(h_seg, h_seg[0], rtol=1e-12, atol=1e-15)
+    uniform = N >= 1 and np.allclose(h_seg, h_seg[0], rtol=1e-12, atol=1e-15)
     if not uniform:
         alpha = sl[:, None]
         beta = sr[:, None]
