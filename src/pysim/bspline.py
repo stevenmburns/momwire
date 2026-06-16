@@ -59,6 +59,30 @@ except ImportError:
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
 
+# Module-level caches for `_build_geometry` and `_build_basis_polynomials`.
+# Both functions are pure functions of immutable geometry inputs (wires +
+# n_per_edge_per_wire, plus degree + junctions for the basis case) — they
+# don't depend on `k` / wavelength / feed location. The instance-level
+# caches in `_cached_geometry` / `_cached_basis_polynomials` only help the
+# swept path (where one solver instance handles many k's). The engine
+# wrapper instantiates a fresh BSplinePySim per impedance() call, so the
+# instance cache is dead for the interactive UI sweep. These module-level
+# caches survive across instances and turn a band-sweep of N freqs into
+# 1 cold call + (N−1) hot calls for the geometry/basis stages.
+#
+# FIFO with a small bound — typical interactive use has 1–3 active
+# (geometry, degree) combinations at a time.
+_GEOMETRY_CACHE: dict = {}
+_BASIS_POLY_CACHE: dict = {}
+_GEOMETRY_CACHE_MAX = 32
+_BASIS_POLY_CACHE_MAX = 32
+
+
+def _evict_fifo(cache: dict, limit: int) -> None:
+    while len(cache) >= limit:
+        cache.pop(next(iter(cache)))
+
+
 def _xfem_projection_coeffs(d):
     """Coefficients c such that P_bubble Φ_sing (t) = Σ_p c_p t^p, where
     P_bubble is the L²-orthogonal projection of Φ_sing(t) = t·log(t) onto
@@ -367,6 +391,15 @@ class BSplinePySim:
         """
         if self._cached_geometry is not None:
             return self._cached_geometry
+        # Module cache hit → reuse the geom dict identity-stably across
+        # solver instances. The basis-polynomial instance cache keys on
+        # `cached_geom is geom`, so returning the same object also lets
+        # the basis-poly cache resolve through the module path below.
+        geom_key = self._geometry_cache_key()
+        cached = _GEOMETRY_CACHE.get(geom_key)
+        if cached is not None:
+            self._cached_geometry = cached
+            return cached
         per_wire = []
         seg_offsets = [0]
         h_list = []
@@ -443,7 +476,18 @@ class BSplinePySim:
             "seg_l": seg_l_global,
             "seg_r": seg_r_global,
         }
+        _evict_fifo(_GEOMETRY_CACHE, _GEOMETRY_CACHE_MAX)
+        _GEOMETRY_CACHE[geom_key] = self._cached_geometry
         return self._cached_geometry
+
+    def _geometry_cache_key(self):
+        # Bytes view of each wire's float64 polyline + per-wire segmentation.
+        # Both are immutable post-__init__, and the geom dict depends on
+        # exactly these (see _build_geometry body).
+        return (
+            tuple(w.tobytes() for w in self.wires_polylines),
+            tuple(tuple(npe) for npe in self.n_per_edge_per_wire),
+        )
 
     # ------------------------------------------------------------------
     # Endpoint status (free vs junction)
@@ -501,6 +545,20 @@ class BSplinePySim:
         cached_geom = self._cached_geometry
         if cached_geom is geom and self._cached_basis_polynomials is not None:
             return self._cached_basis_polynomials
+        # Module cache promotes the per-instance memoization across solver
+        # instances (the engine wrapper recreates the solver per impedance()
+        # call). Key is geometry signature + degree + junctions; the result
+        # is k-independent.
+        basis_key = (
+            self._geometry_cache_key(),
+            self.degree,
+            tuple(tuple((w, e) for (w, e) in j) for j in self.junctions),
+        )
+        cached_basis = _BASIS_POLY_CACHE.get(basis_key)
+        if cached_basis is not None:
+            if cached_geom is geom:
+                self._cached_basis_polynomials = cached_basis
+            return cached_basis
         d = self.degree
         n_wings = d + 1
         n_poly = d + 1
@@ -623,6 +681,8 @@ class BSplinePySim:
         result = (supp_seg, polys, kcl_A, wire_knots, wire_basis_global)
         if cached_geom is geom:
             self._cached_basis_polynomials = result
+        _evict_fifo(_BASIS_POLY_CACHE, _BASIS_POLY_CACHE_MAX)
+        _BASIS_POLY_CACHE[basis_key] = result
         return result
 
     # ------------------------------------------------------------------
