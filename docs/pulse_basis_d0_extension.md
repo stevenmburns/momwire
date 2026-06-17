@@ -1,7 +1,12 @@
 # Pulse-Basis (d=0) Extension Plan for `BSplinePySim`
 
 Author: smburns47 (planning session 2026-06-16)
-Status: **Plan only — to be executed in a later session.**
+Status: **Superseded / shelved (2026-06-17).** This plan's step 7 ("at d=0 the
+entire Z_Φ block is zero") is physically wrong — dropping the scalar potential
+gives a degenerate solver. d=0 was investigated and shelved; see
+`pulse_basis_d0_nodal_charge.md` for the diagnosis, the correct (staggered
+dual-mesh) charge formulation, and why it isn't worth building. d=0 remains
+unsupported on main.
 
 ## Motivation
 
