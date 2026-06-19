@@ -157,6 +157,44 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
     return np.einsum("piq,iqjr,Pjr->pPij", wu_pow, G_block, wu_pow)
 
 
+def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 << 20):
+    """Batched `_seg_seg_reg_moments_from_geometry` over a vector of k.
+
+    Returns (n_k, max_d+1, max_d+1, N, N). The only k-dependent factor is the
+    phase `exp(-jkR)`, so R and the weighted powers are reused across the
+    whole sweep and the (q, r) quadrature reduction is done once per edge as a
+    single batched einsum instead of n_k small ones.
+
+    The (chunk, N·n_qp, N·n_qp) phase intermediate is the memory hot-spot, so
+    k is processed in chunks sized to keep it under `max_chunk_bytes`. The
+    returned moment block is n_qp² smaller than that intermediate, so storing
+    it for the whole sweep is cheap relative to the per-k full-J the caller
+    already materializes.
+    """
+    R = geo["R"]
+    wu_pow = geo["wu_pow"]
+    N = geo["N"]
+    n_qp = geo["n_qp"]
+    n_d = wu_pow.shape[0]
+    k_array = np.asarray(k_array, dtype=float)
+    n_k = k_array.shape[0]
+
+    out = np.empty((n_k, n_d, n_d, N, N), dtype=np.complex128)
+    bytes_per_k = R.size * 16  # complex128 phase table for one k
+    chunk = max(1, int(max_chunk_bytes // max(bytes_per_k, 1)))
+    inv4pi_R = 1.0 / (4 * np.pi * R)
+    for c0 in range(0, n_k, chunk):
+        kk = k_array[c0 : c0 + chunk]
+        G = (np.exp(-1j * kk[:, None, None] * R[None, :, :]) - 1.0) * inv4pi_R[
+            None, :, :
+        ]
+        G_block = G.reshape(kk.shape[0], N, n_qp, N, n_qp)
+        out[c0 : c0 + chunk] = np.einsum(
+            "piq,kiqjr,Pjr->kpPij", wu_pow, G_block, wu_pow, optimize=True
+        )
+    return out
+
+
 def _seg_seg_reg_moments(seg_endpoints, a, k, max_d, n_qp):
     """Smooth-kernel piece (exp(-jkR) - 1)/(4π R) over polynomial moments
     on every same-edge segment pair, via Gauss-Legendre quadrature.

@@ -46,6 +46,7 @@ from ._bspline_kernels import (
     _seg_seg_reg_geometry,
     _seg_seg_reg_moments,
     _seg_seg_reg_moments_from_geometry,
+    _seg_seg_reg_moments_from_geometry_swept,
     _seg_seg_static_moments,
 )
 from ._quadrature import leggauss
@@ -803,8 +804,15 @@ class BSplinePySim:
                     )
                     J[:, :, sl, sl] = A_st + A_reg
         else:
-            for sl, A_st, reg_geo in same_edge_prep:
-                A_reg = _seg_seg_reg_moments_from_geometry(reg_geo, k)
+            for sl, A_st, reg in same_edge_prep:
+                # `reg` is either a reg-geometry dict (compute this k's block
+                # now) or a precomputed (max_d+1, max_d+1, N, N) moment block
+                # for this k (swept caller batched it across frequencies).
+                A_reg = (
+                    _seg_seg_reg_moments_from_geometry(reg, k)
+                    if isinstance(reg, dict)
+                    else reg
+                )
                 J[:, :, sl, sl] = A_st + A_reg
 
         return J
@@ -1570,15 +1578,24 @@ class BSplinePySim:
                 s_f=s_f_j,
             )
 
-        # k-independent static + reg-geometry, shared across the sweep.
-        same_edge_prep = self._same_edge_prep(geom)
+        # k-independent static + reg-geometry, shared across the sweep; the
+        # reg-kernel moment blocks are batched over all k up front (one einsum
+        # per edge instead of one per (edge, k)).
+        prep = self._same_edge_prep(geom)
+        reg_all = [
+            _seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)
+            for _sl, _A_st, reg_geo in prep
+        ]
 
         out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
         for ki, kk in enumerate(k_array):
             self.k = float(kk)
             self.omega = self.k * self.c
             self.wavelength = self.c / (self.omega / (2 * np.pi))
-            J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_prep)
+            same_edge_k = [
+                (sl, A_st, reg_all[e][ki]) for e, (sl, A_st, _g) in enumerate(prep)
+            ]
+            J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_k)
             Z = self._assemble_Z(J, supp_seg, polys, geom)
             if self.ground_z is not None:
                 J_img = self._build_J_image_blocks(geom, self.k)
@@ -1605,13 +1622,22 @@ class BSplinePySim:
         k_save = self.k
         wl_save = self.wavelength
         omega_save = self.omega
-        # k-independent static + reg-geometry, shared across the sweep.
-        same_edge_prep = self._same_edge_prep(self._build_geometry())
+        # k-independent static + reg-geometry, shared across the sweep; the
+        # reg-kernel moment blocks are batched over all k up front (one einsum
+        # per edge instead of one per (edge, k)).
+        prep = self._same_edge_prep(self._build_geometry())
+        reg_all = [
+            _seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)
+            for _sl, _A_st, reg_geo in prep
+        ]
         for i, kk in enumerate(k_array):
             self.k = float(kk)
             self.omega = self.k * self.c
             self.wavelength = self.c / (self.omega / (2 * np.pi))
-            z, _ = self.compute_impedance(same_edge_prep=same_edge_prep)
+            same_edge_k = [
+                (sl, A_st, reg_all[e][i]) for e, (sl, A_st, _g) in enumerate(prep)
+            ]
+            z, _ = self.compute_impedance(same_edge_prep=same_edge_k)
             z_out[i] = z
         self.k = k_save
         self.wavelength = wl_save
