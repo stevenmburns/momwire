@@ -1985,9 +1985,12 @@ def test_triangular_fandipole_two_band_smoke():
         assert -50.0 < z.imag < 60.0, f"f={fmhz}: X={z.imag} out of plausible range"
 
 
-def _fandipole_two_band_sim(N, wavelength):
+def _fandipole_two_band_sim(N, wavelength, solver_cls=TriangularPySim, **solver_kwargs):
     """Helper: build the same K=3 two-band fan dipole used in the smoke test.
     Returned simulator has junctions=[S, T] each connecting 3 wire ends.
+
+    `solver_cls`/`solver_kwargs` let callers build the same geometry with a
+    different basis (e.g. BSplinePySim(degree=...)).
     """
     import math
 
@@ -2033,7 +2036,7 @@ def _fandipole_two_band_sim(N, wavelength):
         [(0, "end"), (1, "start"), (2, "start")],
         [(0, "start"), (3, "start"), (4, "start")],
     ]
-    return TriangularPySim(
+    return solver_cls(
         wires=wires,
         n_per_edge_per_wire=n_per_edge,
         feed_wire_index=0,
@@ -2042,6 +2045,7 @@ def _fandipole_two_band_sim(N, wavelength):
         nsegs=N,
         wire_radius=0.0005,
         junctions=junctions,
+        **solver_kwargs,
     )
 
 
@@ -2111,6 +2115,32 @@ def test_triangular_fandipole_swept_matches_per_freq():
         sim_f = _fandipole_two_band_sim(N=11, wavelength=C_LIGHT / (f * 1e6))
         z_f, _ = sim_f.compute_impedance()
         assert abs(zs - z_f) < 1e-6, f"f={f} MHz: swept={zs}, single={z_f}"
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_bspline_fandipole_swept_matches_per_freq(degree):
+    """BSpline batched swept-k path (hoisted static + reg-geometry, reg
+    moments batched over k) must agree with per-frequency solves to
+    roundoff on a K=3-junction fan dipole. Guards the same-edge swept
+    optimization against the untouched single-k path.
+    """
+    C_LIGHT = 299_792_458.0
+    freqs_mhz = np.array([12.0, 14.3, 21.0, 28.47])
+    k_array = 2 * np.pi * freqs_mhz * 1e6 / C_LIGHT
+    sim_sweep = _fandipole_two_band_sim(
+        N=11, wavelength=22.0, solver_cls=BSplinePySim, degree=degree
+    )
+    z_swept = sim_sweep.compute_impedance_swept(k_array)
+    for f, zs in zip(freqs_mhz, z_swept):
+        sim_f = _fandipole_two_band_sim(
+            N=11, wavelength=C_LIGHT / (f * 1e6), solver_cls=BSplinePySim, degree=degree
+        )
+        z_f, _ = sim_f.compute_impedance()
+        # Batched-over-k reg einsum changes the floating-point reduction order,
+        # so this is roundoff-equal (~1e-12 relative), not bit-identical.
+        assert abs(zs - z_f) <= 1e-9 * abs(z_f), (
+            f"d={degree}, f={f} MHz: swept={zs}, single={z_f}"
+        )
 
 
 # ---- PEC ground (image method) ----
