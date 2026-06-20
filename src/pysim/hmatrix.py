@@ -67,31 +67,47 @@ except ImportError:  # pragma: no cover
 _OFFEDGE_BLOCK_ACCEL_MAX_D = 2
 
 
-class _AugmentedFactoredSolve:
-    """Factored augmented near-field preconditioner `[Zn A^T; A 0]` plus the
-    per-RHS preconditioned GMRES on the operator `H`.
+class _SparseAugPrecond:
+    """Generic single sparse-LU factorisation of the augmented near-field
+    preconditioner `[Zn A^T; A 0]`. Used by the H-matrix path, where the near
+    band has no exploitable block structure. `.solve(R)` applies `M^{-1}` to an
+    augmented block R (N, nrhs) via one SuperLU back-substitution."""
 
+    def __init__(self, Zn, kcl_A):
+        nc = kcl_A.shape[0] if kcl_A is not None else 0
+        if nc > 0:
+            A_sp = sp.csr_matrix(kcl_A.astype(np.complex128))
+            Saug = sp.bmat([[Zn, A_sp.T], [A_sp, None]], format="csc")
+        else:
+            Saug = Zn.tocsc() if sp.issparse(Zn) else Zn
+        self.lu = splu(Saug)
+
+    def solve(self, R):
+        return self.lu.solve(R)
+
+
+class _AugmentedFactoredSolve:
+    """A factored augmented near-field preconditioner plus the preconditioned
+    block GMRES on the operator `H`.
+
+    The preconditioner is a pluggable object with a `.solve(R)` method (sparse
+    LU for the H-matrix, per-element block-Jacobi for the array-block solver).
     Holds no reference to the solver instance, so it can be cached on the
-    operator and reused across solves that share the same operator: the `splu`
-    factorisation is RHS-independent, so an animation phase/excitation sweep
-    re-solves with cached back-substitutions (`X0 = M^{-1} B`) plus a handful
-    of block-Krylov steps, never refactoring.
+    operator and reused across solves that share it: the factorisation is
+    RHS-independent, so an animation phase/excitation sweep re-solves with
+    cached back-substitutions (`X0 = M^{-1} B`) plus a handful of block-Krylov
+    steps, never refactoring.
     """
 
-    def __init__(self, H, kcl_A, Zn):
+    def __init__(self, H, kcl_A, precond):
         self.H = H
         self.kcl_A = kcl_A
+        self.precond = precond
         n = H.n
         self.n = n
         nc = kcl_A.shape[0] if kcl_A is not None else 0
         self.nc = nc
         self.N = n + nc
-        if nc > 0:
-            A_sp = sp.csr_matrix(kcl_A.astype(np.complex128))
-            Saug = sp.bmat([[Zn, A_sp.T], [A_sp, None]], format="csc")
-        else:
-            Saug = Zn
-        self.lu = splu(Saug)
 
     def _aug_matmat(self, Z):
         """Apply the augmented operator [Z A^T; A 0] to a block Z (N, nrhs)."""
@@ -126,7 +142,7 @@ class _AugmentedFactoredSolve:
         preconditioned-residual norm relative to ‖M^{-1} b_j‖ — matching SciPy
         gmres's left-preconditioned stopping test, so accuracy is unchanged.
         """
-        prec = self.lu.solve
+        prec = self.precond.solve
         Bt = prec(Baug)  # M^{-1} B
         bnorms = np.linalg.norm(Bt, axis=0)
         bnorms = np.where(bnorms == 0.0, 1.0, bnorms)
@@ -706,17 +722,24 @@ class HMatrixPySim(BSplinePySim):
             shape=(n, n),
         ).tocsc()
 
+    def _make_preconditioner(self, H, kcl_A):
+        """Build the augmented near-field preconditioner for operator `H`. The
+        generic H-matrix path uses a single sparse LU; subclasses with block
+        structure (e.g. `ArrayBlockPySim`) override this with a cheaper
+        block-wise factorisation."""
+        return _SparseAugPrecond(self._near_sparse(H, H.n), kcl_A)
+
     def _factored_solve(self, H, kcl_A):
         """The augmented preconditioner factorisation for operator `H`, built
         once and cached on `H` itself. Because the factorisation depends only
         on `H` (its near blocks) and the KCL rows — not on the RHS or the
         excitation — caching it on `H` lets a *reused* operator (e.g. an
         animation phase sweep, where geometry and Z are fixed and only the RHS
-        changes) skip the expensive `splu` entirely. A freshly-built `H` (the
+        changes) skip the factorisation entirely. A freshly-built `H` (the
         generic H-matrix path) just factors once per solve as before."""
         fac = getattr(H, "_factored", None)
         if fac is None:
-            fac = _AugmentedFactoredSolve(H, kcl_A, self._near_sparse(H, H.n))
+            fac = _AugmentedFactoredSolve(H, kcl_A, self._make_preconditioner(H, kcl_A))
             H._factored = fac
         return fac
 

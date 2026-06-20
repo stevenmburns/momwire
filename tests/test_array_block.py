@@ -277,6 +277,32 @@ def test_compute_y_matrix_matches_dense_with_junctions(degree):
     assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4
 
 
+@pytest.mark.parametrize("with_junctions", [False, True])
+def test_block_jacobi_precond_matches_sparse(with_junctions):
+    """The per-element block-Jacobi preconditioner inverts the *same* augmented
+    matrix as the generic sparse-LU preconditioner — it just exploits the
+    element block-diagonal structure — so applying either to the same vector
+    must agree (and hence GMRES convergence is identical)."""
+    from pysim.array_block import _BlockJacobiAugPrecond
+    from pysim.hmatrix import _SparseAugPrecond
+
+    half = 0.962 * 22 / 4
+    if with_junctions:
+        sim = ArrayBlockPySim(**_bent_array(3, half, nsegs=14))
+    else:
+        sim = _array_sim([(-9.0, 0.0), (-3.0, 0.0), (3.0, 0.0)], [half] * 3, nsegs=14)
+    H = sim.build_array_blocks()
+    kcl = sim._context()["kcl_A"]
+    nc = kcl.shape[0]
+    N = H.n + nc
+    rng = np.random.default_rng(0)
+    R = rng.standard_normal((N, 3)) + 1j * rng.standard_normal((N, 3))
+    sparse = _SparseAugPrecond(sim._near_sparse(H, H.n), kcl)
+    bjac = _BlockJacobiAugPrecond(H, kcl)
+    ref = sparse.solve(R)
+    assert np.linalg.norm(bjac.solve(R) - ref) / np.linalg.norm(ref) < 1e-10
+
+
 def test_solve_converges_in_few_iterations():
     """Weak inter-element coupling ⇒ the block-Jacobi preconditioner gives a
     small, RHS-flat GMRES iteration count."""
