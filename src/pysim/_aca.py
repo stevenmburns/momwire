@@ -130,6 +130,135 @@ def build_block_tree(s, t, eta, leaf_size_stop=None):
     return far, near
 
 
+def aca_partial(get_row, get_col, m, n, tol=1e-3, max_rank=None):
+    """Adaptive Cross Approximation with partial pivoting.
+
+    Builds a low-rank factorisation A ~ U @ V (U: (m, r), V: (r, n)) of an
+    (m, n) block sampling only ~r full rows and r full columns of A via the
+    callables `get_row(i) -> (n,)` and `get_col(j) -> (m,)`. Stops when the
+    newest rank-1 update's Frobenius norm drops below `tol` times the running
+    Frobenius norm of the accumulated approximation.
+
+    Returns (U, V). Pure linear algebra — knows nothing about the kernel.
+    """
+    if max_rank is None:
+        max_rank = min(m, n)
+    max_rank = min(max_rank, m, n)
+
+    U = []  # list of (m,) columns
+    V = []  # list of (n,) rows
+    used_rows = np.zeros(m, dtype=bool)
+    used_cols = np.zeros(n, dtype=bool)
+    approx_norm2 = 0.0
+    i_star = 0
+    rank = 0
+
+    for _ in range(max_rank):
+        row = np.asarray(get_row(i_star), dtype=np.complex128).copy()
+        for k in range(rank):
+            row -= U[k][i_star] * V[k]
+        used_rows[i_star] = True
+
+        absrow = np.abs(row)
+        absrow[used_cols] = -1.0
+        j_star = int(np.argmax(absrow))
+        delta = row[j_star]
+        if np.abs(delta) < 1e-300 or absrow[j_star] <= 0.0:
+            # Residual row vanished: hop to an unused row and retry, else done.
+            rem = np.flatnonzero(~used_rows)
+            if rem.size == 0:
+                break
+            i_star = int(rem[0])
+            continue
+
+        v = row / delta
+        col = np.asarray(get_col(j_star), dtype=np.complex128).copy()
+        for k in range(rank):
+            col -= V[k][j_star] * U[k]
+        used_cols[j_star] = True
+        u = col
+
+        un = float(np.linalg.norm(u))
+        vn = float(np.linalg.norm(v))
+        cross = 0.0
+        for k in range(rank):
+            cross += np.real(np.vdot(U[k], u) * np.vdot(V[k], v))
+        approx_norm2 += 2.0 * cross + (un * vn) ** 2
+
+        U.append(u)
+        V.append(v)
+        rank += 1
+
+        if approx_norm2 <= 0.0 or un * vn <= tol * np.sqrt(approx_norm2):
+            break
+
+        abscol = np.abs(col)
+        abscol[used_rows] = -1.0
+        if not (~used_rows).any():
+            break
+        i_star = int(np.argmax(abscol))
+
+    if rank == 0:
+        return (
+            np.zeros((m, 0), dtype=np.complex128),
+            np.zeros((0, n), dtype=np.complex128),
+        )
+    return np.array(U).T.copy(), np.array(V).copy()
+
+
+class HMatrix:
+    """Hierarchical matrix: a set of dense (near) and low-rank (far) blocks
+    tiling an n x n matrix, with a fast matvec.
+
+    near : list of (row_idx, col_idx, D)            D: (|row|, |col|)
+    far  : list of (row_idx, col_idx, U, V)         U@V approximates the block
+    """
+
+    def __init__(self, n, near, far):
+        self.n = n
+        self.near = near
+        self.far = far
+
+    def matvec(self, x):
+        x = np.asarray(x)
+        y = np.zeros(self.n, dtype=np.complex128)
+        for I, J, D in self.near:
+            y[I] += D @ x[J]
+        for I, J, U, V in self.far:
+            y[I] += U @ (V @ x[J])
+        return y
+
+    def storage(self):
+        """Number of complex scalars stored (vs n^2 for dense)."""
+        s = sum(D.size for _, _, D in self.near)
+        s += sum(U.size + V.size for _, _, U, V in self.far)
+        return s
+
+    def stats(self):
+        near_area = sum(D.size for _, _, D in self.near)
+        ranks = [U.shape[1] for _, _, U, _ in self.far]
+        return {
+            "n": self.n,
+            "n_near": len(self.near),
+            "n_far": len(self.far),
+            "storage": self.storage(),
+            "dense_storage": self.n * self.n,
+            "compression": self.storage() / (self.n * self.n),
+            "near_area": near_area,
+            "max_rank": max(ranks) if ranks else 0,
+            "mean_rank": float(np.mean(ranks)) if ranks else 0.0,
+        }
+
+    def to_dense(self):
+        """Reconstruct the full dense matrix (validation / small n only)."""
+        Z = np.zeros((self.n, self.n), dtype=np.complex128)
+        for I, J, D in self.near:
+            Z[np.ix_(I, J)] = D
+        for I, J, U, V in self.far:
+            Z[np.ix_(I, J)] = U @ V
+        return Z
+
+
 def partition_stats(n, far, near):
     """Summary of a block partition: counts and the fraction of the n x n
     matrix area that falls in far (compressible) vs near (dense) blocks.

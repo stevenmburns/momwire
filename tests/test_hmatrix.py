@@ -129,6 +129,49 @@ def test_far_blocks_have_no_same_edge_pairs():
         assert np.intersect1d(s.indices, t.indices).size == 0
 
 
+@pytest.mark.parametrize("tol", [1e-3, 1e-5])
+def test_hmatvec_matches_dense(tol):
+    """H-matrix matvec must reproduce the dense Z @ x; ACA's block-local
+    tolerance bounds the error well below 1."""
+    sim = _long_wire(1, 250)
+    Z = _dense_Z(sim)
+    n = Z.shape[0]
+    rng = np.random.default_rng(1)
+    x = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    H = sim.build_hmatrix(tol=tol)
+    rel = np.linalg.norm(H.matvec(x) - Z @ x) / np.linalg.norm(Z @ x)
+    assert rel < 50 * tol
+
+
+def test_hmatrix_to_dense_reconstruction():
+    sim = _long_wire(1, 200)
+    Z = _dense_Z(sim)
+    H = sim.build_hmatrix(tol=1e-6)
+    rel = np.abs(H.to_dense() - Z).max() / np.abs(Z).max()
+    assert rel < 1e-3
+
+
+def test_hmatrix_compresses_storage():
+    """A multi-wavelength wire must store strictly fewer scalars than dense,
+    and the far-field ranks must stay small."""
+    sim = _long_wire(1, 400)
+    H = sim.build_hmatrix(tol=1e-4)
+    st = H.stats()
+    assert st["compression"] < 0.7
+    assert st["max_rank"] <= 32
+
+
+def test_hmatrix_handles_junction_geometry():
+    sim = _bent_wire_with_junction(1, 60)
+    Z = _dense_Z(sim)
+    n = Z.shape[0]
+    rng = np.random.default_rng(2)
+    x = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    H = sim.build_hmatrix(tol=1e-5)
+    rel = np.linalg.norm(H.matvec(x) - Z @ x) / np.linalg.norm(Z @ x)
+    assert rel < 1e-3
+
+
 def test_zblock_off_edge_skips_same_edge_path():
     """A block between two well-separated single basis functions must contain
     no same-edge pairs, so it is computed purely off-edge — and still matches
