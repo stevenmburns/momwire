@@ -162,6 +162,21 @@ def test_array_block_matvec_matches_dense(degree):
     assert rel < 1e-4
 
 
+def test_array_block_matmat_equals_columnwise_matvec():
+    """The batched matmat must equal applying matvec to each column — the
+    correctness contract the block-GMRES solve relies on."""
+    half = 0.962 * 22 / 4
+    offsets = [(-9.0, 0.0), (-3.0, 0.0), (3.0, 0.0), (9.0, 0.0)]
+    sim = _array_sim(offsets, [half] * 4, nsegs=14)
+    AB = sim.build_array_blocks(tol=1e-7)
+    rng = np.random.default_rng(1)
+    X = rng.standard_normal((AB.n, 5)) + 1j * rng.standard_normal((AB.n, 5))
+    Y = AB.matmat(X)
+    Ycol = np.column_stack([AB.matvec(X[:, j]) for j in range(X.shape[1])])
+    # GEMM (matmat) vs GEMV (matvec) round differently at ~1e-15 relative.
+    assert np.linalg.norm(Y - Ycol) / np.linalg.norm(Ycol) < 1e-12
+
+
 def test_array_block_to_dense_reconstruction():
     half = 0.962 * 22 / 4
     offsets = [(-9.0, 0.0), (-3.0, 0.0), (3.0, 0.0), (9.0, 0.0)]
@@ -355,8 +370,12 @@ def test_phase_sweep_cached_result_matches_dense():
     offsets = [(-6.0, 0.0), (6.0, 0.0)]
     for ph_deg in (0.0, 60.0, 120.0):
         v = [1.0 + 0j, np.exp(1j * np.deg2rad(ph_deg))]
-        za = _array_solver(offsets, [half, half], v, ArrayBlockPySim).compute_impedance()[0]
-        zd = _array_solver(offsets, [half, half], v, BSplinePySim).compute_impedance()[0]
+        za = _array_solver(
+            offsets, [half, half], v, ArrayBlockPySim
+        ).compute_impedance()[0]
+        zd = _array_solver(offsets, [half, half], v, BSplinePySim).compute_impedance()[
+            0
+        ]
         za, zd = np.atleast_1d(za), np.atleast_1d(zd)
         assert np.max(np.abs(za - zd) / np.abs(zd)) < 1e-3
 
@@ -383,7 +402,9 @@ def test_spacing_sweep_reuses_self_blocks():
 def test_reset_array_caches_clears_state():
     reset_array_caches()
     half = 0.962 * 22 / 4
-    _array_solver([(-6.0, 0.0), (6.0, 0.0)], [half, half], [1, 1], ArrayBlockPySim).compute_y_matrix()
+    _array_solver(
+        [(-6.0, 0.0), (6.0, 0.0)], [half, half], [1, 1], ArrayBlockPySim
+    ).compute_y_matrix()
     assert sum(cache_stats().values()) > 0
     reset_array_caches()
     assert all(v == 0 for v in cache_stats().values())
