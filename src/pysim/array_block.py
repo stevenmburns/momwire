@@ -368,6 +368,21 @@ class ArrayBlock:
             y[self.groups[a]] += U @ (V @ x[self.groups[b]])
         return y
 
+    def matmat(self, X):
+        """Apply the operator to all columns of X (n, nrhs) at once.
+
+        Same block decomposition as `matvec`, but every block product becomes a
+        BLAS-3 matrix-matrix multiply (`(N_s, N_s) @ (N_s, nrhs)`), which is far
+        more cache- and overhead-efficient than nrhs separate matvecs — the
+        point of the batched multi-RHS solve."""
+        X = np.asarray(X)
+        Y = np.zeros((self.n, X.shape[1]), dtype=np.complex128)
+        for e, g in enumerate(self.groups):
+            Y[g] += self.shape_blocks[int(self.shape_of_elem[e])] @ X[g]
+        for a, b, U, V in self.coupling:
+            Y[self.groups[a]] += U @ (V @ X[self.groups[b]])
+        return Y
+
     def storage(self):
         """Complex scalars stored (distinct self-blocks + coupling factors)."""
         s = sum(D.size for D in self.shape_blocks.values())

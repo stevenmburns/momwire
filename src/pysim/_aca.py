@@ -233,6 +233,17 @@ class HMatrix:
             y[I] += U @ (V @ x[J])
         return y
 
+    def matmat(self, X):
+        """Apply to all columns of X (n, nrhs) at once via BLAS-3 block
+        products — the batched analogue of `matvec` for multi-RHS solves."""
+        X = np.asarray(X)
+        Y = np.zeros((self.n, X.shape[1]), dtype=np.complex128)
+        for I, J, D in self.near:
+            Y[I] += D @ X[J]
+        for I, J, U, V in self.far:
+            Y[I] += U @ (V @ X[J])
+        return Y
+
     def storage(self):
         """Number of complex scalars stored (vs n^2 for dense)."""
         s = sum(D.size for _, _, D in self.near)

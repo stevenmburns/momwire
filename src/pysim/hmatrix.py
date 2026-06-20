@@ -25,8 +25,10 @@ The plan (phased — see project notes):
   * Phase 2: partial-pivoted ACA low-rank approximation of admissible
     blocks; dense near blocks; fast H-matvec.
 
-  * Phase 3: GMRES (LinearOperator) + near-field preconditioner, KCL
-    junction constraints in the augmented system.
+  * Phase 3: preconditioned block GMRES on the batched operator
+    (`matmat`) + near-field preconditioner, KCL junction constraints in the
+    augmented system. All RHS share one block Krylov space, so the operator
+    and preconditioner applies are batched (BLAS-3) across the columns.
 
 Why distance matters here: the moment integral kernel
 G = exp(-jkR)/(4πR) is smooth and asymptotically smooth once the two
@@ -37,7 +39,7 @@ instead of the full m·n.
 
 import numpy as np
 import scipy.sparse as sp
-from scipy.sparse.linalg import LinearOperator, gmres, splu
+from scipy.sparse.linalg import splu
 
 from .bspline import BSplinePySim
 from ._bspline_kernels import (
@@ -71,9 +73,9 @@ class _AugmentedFactoredSolve:
 
     Holds no reference to the solver instance, so it can be cached on the
     operator and reused across solves that share the same operator: the `splu`
-    factorisation and the GMRES `LinearOperator`s are RHS-independent, so an
-    animation phase/excitation sweep re-solves with cached back-substitutions
-    (`x0 = lu.solve(rhs)`) plus a handful of Krylov steps, never refactoring.
+    factorisation is RHS-independent, so an animation phase/excitation sweep
+    re-solves with cached back-substitutions (`X0 = M^{-1} B`) plus a handful
+    of block-Krylov steps, never refactoring.
     """
 
     def __init__(self, H, kcl_A, Zn):
@@ -91,47 +93,87 @@ class _AugmentedFactoredSolve:
             Saug = Zn
         self.lu = splu(Saug)
 
-    def _aug_matvec(self, z):
+    def _aug_matmat(self, Z):
+        """Apply the augmented operator [Z A^T; A 0] to a block Z (N, nrhs)."""
         n, nc = self.n, self.nc
-        out = np.empty(self.N, dtype=np.complex128)
-        out[:n] = self.H.matvec(z[:n])
+        out = np.empty((self.N, Z.shape[1]), dtype=np.complex128)
+        out[:n] = self.H.matmat(Z[:n])
         if nc > 0:
-            out[:n] += self.kcl_A.T @ z[n:]
-            out[n:] = self.kcl_A @ z[:n]
+            out[:n] += self.kcl_A.T @ Z[n:]
+            out[n:] = self.kcl_A @ Z[:n]
         return out
 
     def solve(self, B, rtol):
-        """Solve for every RHS column of B (n, nrhs). Returns (X, iters)."""
+        """Solve the augmented system for every RHS column of B (n, nrhs) at
+        once with left-preconditioned block GMRES. Returns (X (n, nrhs),
+        iters). All RHS share one block Krylov space and every operator/
+        preconditioner apply is batched across the columns (BLAS-3), so the
+        cost is ~one batched matmat + one batched back-substitution per Krylov
+        step instead of nrhs separate matvec/solve pairs per step."""
         n, N = self.n, self.N
-        Aug = LinearOperator((N, N), matvec=self._aug_matvec, dtype=np.complex128)
-        Minv = LinearOperator((N, N), matvec=self.lu.solve, dtype=np.complex128)
-        nrhs = B.shape[1]
-        X = np.zeros((n, nrhs), dtype=np.complex128)
-        iters_all = []
-        for j in range(nrhs):
-            rhs = np.zeros(N, dtype=np.complex128)
-            rhs[:n] = B[:, j]
-            x0 = self.lu.solve(rhs)  # preconditioner solve = excellent guess
-            iters = [0]
+        Baug = np.zeros((N, B.shape[1]), dtype=np.complex128)
+        Baug[:n] = B
+        X, iters = self._block_gmres(Baug, rtol)
+        return X[:n], iters
 
-            def _count(_xk, iters=iters):
-                iters[0] += 1
+    def _block_gmres(self, Baug, rtol, restart=50, maxiter=2000):
+        """Left-preconditioned restarted block GMRES on the augmented system.
 
-            sol, _info = gmres(
-                Aug,
-                rhs,
-                M=Minv,
-                x0=x0,
-                rtol=rtol,
-                atol=0.0,
-                restart=min(N, 200),
-                maxiter=2000,
-                callback=_count,
-                callback_type="pr_norm",
-            )
-            X[:, j] = sol[:n]
-            iters_all.append(iters[0])
-        return X, iters_all
+        Solves M^{-1} A X = M^{-1} B for all columns simultaneously (M = the
+        factored near-field preconditioner, A = the augmented operator). The
+        preconditioned initial guess `X0 = M^{-1} B` is the same excellent
+        starting point the per-RHS path used. Convergence is the per-column
+        preconditioned-residual norm relative to ‖M^{-1} b_j‖ — matching SciPy
+        gmres's left-preconditioned stopping test, so accuracy is unchanged.
+        """
+        prec = self.lu.solve
+        Bt = prec(Baug)  # M^{-1} B
+        bnorms = np.linalg.norm(Bt, axis=0)
+        bnorms = np.where(bnorms == 0.0, 1.0, bnorms)
+        X = Bt.copy()  # X0 = M^{-1} B
+        s = Baug.shape[1]
+        m = min(restart, self.N)
+        total_iters = 0
+        for _ in range(maxiter // m + 1):
+            R = Bt - prec(self._aug_matmat(X))  # preconditioned residual
+            if np.all(np.linalg.norm(R, axis=0) <= rtol * bnorms):
+                break
+            Q, beta = np.linalg.qr(R)  # R = Q @ beta; Q (N,s), beta (s,s)
+            Vs = [Q]
+            Hblocks = []  # Hblocks[k] = [H_{0,k}, …, H_{k+1,k}], each (s,s)
+            Y = None
+            converged = False
+            for k in range(m):
+                total_iters += 1
+                W = prec(self._aug_matmat(Vs[k]))
+                Hk = []
+                for i in range(k + 1):  # block modified Gram-Schmidt
+                    Hik = Vs[i].conj().T @ W
+                    W = W - Vs[i] @ Hik
+                    Hk.append(Hik)
+                Qk, Hkk = np.linalg.qr(W)
+                Hk.append(Hkk)
+                Hblocks.append(Hk)
+                Vs.append(Qk)
+                kb = k + 1
+                Hbar = np.zeros(((kb + 1) * s, kb * s), dtype=np.complex128)
+                for col in range(kb):
+                    for i in range(col + 2):
+                        Hbar[i * s : (i + 1) * s, col * s : (col + 1) * s] = Hblocks[
+                            col
+                        ][i]
+                E1b = np.zeros(((kb + 1) * s, s), dtype=np.complex128)
+                E1b[:s, :] = beta
+                Y, _res, _rank, _sv = np.linalg.lstsq(Hbar, E1b, rcond=None)
+                rk = np.linalg.norm(E1b - Hbar @ Y, axis=0)
+                if np.all(rk <= rtol * bnorms):
+                    converged = True
+                    break
+            kb = len(Hblocks)
+            X = X + np.concatenate(Vs[:kb], axis=1) @ Y
+            if converged:
+                break
+        return X, [total_iters] * s
 
 
 class HMatrixPySim(BSplinePySim):

@@ -151,6 +151,19 @@ def test_hmatvec_matches_dense(tol):
     assert rel < 50 * tol
 
 
+def test_hmatmat_equals_columnwise_matvec():
+    """The batched H-matrix matmat must equal per-column matvec (the contract
+    the block-GMRES multi-RHS solve depends on)."""
+    sim = _long_wire(1, 250)
+    H = sim.build_hmatrix(tol=1e-5)
+    rng = np.random.default_rng(7)
+    X = rng.standard_normal((H.n, 4)) + 1j * rng.standard_normal((H.n, 4))
+    Y = H.matmat(X)
+    Ycol = np.column_stack([H.matvec(X[:, j]) for j in range(X.shape[1])])
+    # GEMM (matmat) vs GEMV (matvec) round differently at ~1e-15 relative.
+    assert np.linalg.norm(Y - Ycol) / np.linalg.norm(Ycol) < 1e-12
+
+
 def test_hmatrix_to_dense_reconstruction():
     sim = _long_wire(1, 200)
     Z = _dense_Z(sim)
