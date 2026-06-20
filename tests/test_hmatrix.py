@@ -9,6 +9,7 @@ same-edge analytic-overwrite (near) path.
 import numpy as np
 import pytest
 
+from pysim.bspline import BSplinePySim
 from pysim.hmatrix import HMatrixPySim
 
 
@@ -170,6 +171,62 @@ def test_hmatrix_handles_junction_geometry():
     H = sim.build_hmatrix(tol=1e-5)
     rel = np.linalg.norm(H.matvec(x) - Z @ x) / np.linalg.norm(Z @ x)
     assert rel < 1e-3
+
+
+def _matched_pair(wires, *, degree, n_per_edge_per_wire, **kw):
+    """A BSplinePySim and an HMatrixPySim built identically (same mesh), so
+    the only difference is the dense vs hierarchical solve path."""
+    common = dict(
+        wires=wires,
+        degree=degree,
+        n_per_edge_per_wire=n_per_edge_per_wire,
+        wavelength=22.0,
+        **kw,
+    )
+    return BSplinePySim(**common), HMatrixPySim(aca_tol=1e-7, **common)
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_compute_impedance_matches_dense_dipole(degree):
+    half = 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, -half], [0.0, 0.0, half]])]
+    dense, hmat = _matched_pair(wires, degree=degree, n_per_edge_per_wire=[[80]])
+    zd, _ = dense.compute_impedance()
+    zh, _ = hmat.compute_impedance()
+    assert abs(zh - zd) / abs(zd) < 1e-4
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_compute_y_matrix_matches_dense_junction(degree):
+    h = 0.962 * 22 / 4
+    wires = [
+        np.array([[0.0, 0.0, 0.0], [0.0, 0.0, h]]),
+        np.array([[0.0, 0.0, h], [0.0, h, h]]),
+    ]
+    junctions = [[(0, "end"), (1, "start")]]
+    npe = [[40], [40]]
+    dense, hmat = _matched_pair(
+        wires,
+        degree=degree,
+        n_per_edge_per_wire=npe,
+        junctions=junctions,
+        feed_wire_index=0,
+    )
+    yd = dense.compute_y_matrix()
+    yh = hmat.compute_y_matrix()
+    assert np.abs(yh - yd).max() / np.abs(yd).max() < 1e-4
+
+
+def test_solve_converges_in_few_iterations():
+    """The near-field preconditioner should give single/low-double-digit
+    GMRES iteration counts — the point of the hierarchical solve."""
+    half = 2 * 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, -half], [0.0, 0.0, half]])]
+    hmat = HMatrixPySim(
+        wires=wires, degree=1, n_per_edge_per_wire=[[300]], wavelength=22.0
+    )
+    hmat.compute_impedance()
+    assert max(hmat._last_solve_iters) < 50
 
 
 def test_zblock_off_edge_skips_same_edge_path():
