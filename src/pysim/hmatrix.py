@@ -44,6 +44,8 @@ from ._bspline_kernels import (
     _seg_seg_static_moments,
 )
 from ._aca import (
+    HMatrix,
+    aca_partial,
     build_block_tree,
     build_cluster_tree,
     partition_stats,
@@ -344,10 +346,65 @@ class HMatrixPySim(BSplinePySim):
         self._hm_partition = part
         return part
 
-    def __init__(self, *args, aca_eta=1.0, aca_leaf_size=32, **kwargs):
+    # ------------------------------------------------------------------
+    # H-matrix assembly (Phase 2): dense near blocks + ACA far blocks
+    # ------------------------------------------------------------------
+
+    def build_hmatrix(self, eta=None, leaf_size=None, tol=None, k=None):
+        """Assemble the impedance matrix as an `HMatrix`: near blocks dense
+        (via `zblock`, including the same-edge analytic path), far blocks
+        compressed by partial-pivoted ACA on the off-edge kernel.
+
+        A far block whose ACA factors would cost as much as the dense block
+        falls back to dense storage, so the H-matvec is never worse than the
+        dense block-by-block product.
+        """
+        if tol is None:
+            tol = self.aca_tol
+        if k is None:
+            k = self.k
+        part = self.build_partition(eta=eta, leaf_size=leaf_size)
+        ctx = self._context()
+        n = ctx["n_basis"]
+
+        near_blocks = []
+        for s, t in part["near"]:
+            I, J = s.indices, t.indices
+            near_blocks.append((I, J, self.zblock(I, J, k=k)))
+
+        far_blocks = []
+        for s, t in part["far"]:
+            I, J = s.indices, t.indices
+            mI, nJ = I.size, J.size
+
+            def get_row(i, I=I, J=J):
+                return self.zblock(I[i : i + 1], J, k=k).ravel()
+
+            def get_col(j, I=I, J=J):
+                return self.zblock(I, J[j : j + 1], k=k).ravel()
+
+            U, V = aca_partial(get_row, get_col, mI, nJ, tol=tol)
+            r = U.shape[1]
+            if r * (mI + nJ) >= mI * nJ:
+                # No compression — store dense instead.
+                near_blocks.append((I, J, self.zblock(I, J, k=k)))
+            else:
+                far_blocks.append((I, J, U, V))
+
+        return HMatrix(n, near_blocks, far_blocks)
+
+    def __init__(
+        self,
+        *args,
+        aca_eta=1.0,
+        aca_leaf_size=32,
+        aca_tol=1e-4,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         self.aca_eta = float(aca_eta)
         self.aca_leaf_size = int(aca_leaf_size)
+        self.aca_tol = float(aca_tol)
         self._hm_context = None
         self._hm_se_cache = {}
         self._hm_se_cache_k = None
