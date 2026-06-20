@@ -36,6 +36,8 @@ instead of the full m·n.
 """
 
 import numpy as np
+import scipy.sparse as sp
+from scipy.sparse.linalg import LinearOperator, gmres, splu
 
 from .bspline import BSplinePySim
 from ._bspline_kernels import (
@@ -393,18 +395,169 @@ class HMatrixPySim(BSplinePySim):
 
         return HMatrix(n, near_blocks, far_blocks)
 
+    # ------------------------------------------------------------------
+    # Iterative solve (Phase 3): GMRES on the H-matvec + near-field
+    # preconditioner, KCL constraints via the augmented saddle system
+    # ------------------------------------------------------------------
+
+    def _near_sparse(self, H, n):
+        """Assemble the dense near blocks of an HMatrix into one sparse
+        (n, n) matrix — the near-field approximation used to precondition
+        GMRES (and the dominant part of Z, so a strong preconditioner)."""
+        rows, cols, data = [], [], []
+        for I, J, D in H.near:
+            rr = np.repeat(I, J.size)
+            cc = np.tile(J, I.size)
+            rows.append(rr)
+            cols.append(cc)
+            data.append(D.ravel())
+        if not rows:
+            return sp.csc_matrix((n, n), dtype=np.complex128)
+        return sp.coo_matrix(
+            (np.concatenate(data), (np.concatenate(rows), np.concatenate(cols))),
+            shape=(n, n),
+        ).tocsc()
+
+    def _solve_hmatrix(self, H, kcl_A, B):
+        """Solve the constrained system  [Z A^T; A 0][x; λ] = [b; 0]  for each
+        RHS column of B (n, nrhs), with Z applied via the H-matvec and a
+        sparse-LU near-field preconditioner. Returns X (n, nrhs).
+
+        With no junctions (kcl_A empty) this is a plain GMRES on Z.
+        """
+        n = H.n
+        nc = kcl_A.shape[0] if kcl_A is not None else 0
+        N = n + nc
+        rtol = self.solve_tol
+
+        # Near-field preconditioner, augmented with the KCL rows, factorised
+        # once and reused across all RHS columns.
+        Zn = self._near_sparse(H, n)
+        if nc > 0:
+            A_sp = sp.csr_matrix(kcl_A.astype(np.complex128))
+            Saug = sp.bmat([[Zn, A_sp.T], [A_sp, None]], format="csc")
+        else:
+            Saug = Zn
+        lu = splu(Saug)
+
+        def aug_matvec(z):
+            x = z[:n]
+            out = np.empty(N, dtype=np.complex128)
+            out[:n] = H.matvec(x)
+            if nc > 0:
+                lam = z[n:]
+                out[:n] += kcl_A.T @ lam
+                out[n:] = kcl_A @ x
+            return out
+
+        Aug = LinearOperator((N, N), matvec=aug_matvec, dtype=np.complex128)
+        Minv = LinearOperator((N, N), matvec=lambda z: lu.solve(z), dtype=np.complex128)
+
+        nrhs = B.shape[1]
+        X = np.zeros((n, nrhs), dtype=np.complex128)
+        self._last_solve_iters = []
+        for j in range(nrhs):
+            rhs = np.zeros(N, dtype=np.complex128)
+            rhs[:n] = B[:, j]
+            x0 = lu.solve(rhs)  # near-field solve is an excellent initial guess
+            iters = [0]
+
+            def _count(_xk):
+                iters[0] += 1
+
+            sol, info = gmres(
+                Aug,
+                rhs,
+                M=Minv,
+                x0=x0,
+                rtol=rtol,
+                atol=0.0,
+                restart=min(N, 200),
+                maxiter=2000,
+                callback=_count,
+                callback_type="pr_norm",
+            )
+            X[:, j] = sol[:n]
+            self._last_solve_iters.append(iters[0])
+        return X
+
+    def _hmatrix_unsupported(self):
+        """The H-matrix path is free-space, no-enrichment only for now."""
+        return self.ground_z is not None or self.use_singular_enrichment
+
+    def compute_y_matrix(self):
+        if self._hmatrix_unsupported():
+            return super().compute_y_matrix()
+        ctx = self._context()
+        geom = ctx["geom"]
+        n = ctx["n_basis"]
+        H = self.build_hmatrix()
+        n_ports = len(self.feeds)
+        B = np.zeros((n, n_ports), dtype=np.complex128)
+        for j, (w_i, arc_i, _v) in enumerate(self.feeds):
+            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
+            s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
+            B[:, j] = self._build_source_vector(
+                geom,
+                ctx["wire_knots"],
+                ctx["wire_basis_global"],
+                n,
+                wi=w_i,
+                s_f=s_f_j,
+            )
+        X = self._solve_hmatrix(H, ctx["kcl_A"], B)
+        self._hmatrix = H
+        return B.T @ X
+
+    def compute_impedance(self):
+        if self._hmatrix_unsupported():
+            return super().compute_impedance()
+        ctx = self._context()
+        geom = ctx["geom"]
+        n = ctx["n_basis"]
+        H = self.build_hmatrix()
+
+        v_per_feed = []
+        for w_i, arc_i, _v in self.feeds:
+            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
+            s_f_i = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
+            v_per_feed.append(
+                self._build_source_vector(
+                    geom,
+                    ctx["wire_knots"],
+                    ctx["wire_basis_global"],
+                    n,
+                    wi=w_i,
+                    s_f=s_f_i,
+                )
+            )
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
+        v = np.zeros(n, dtype=np.complex128)
+        for V_i, v_i in zip(voltages, v_per_feed):
+            v += V_i * v_i
+
+        coeffs = self._solve_hmatrix(H, ctx["kcl_A"], v[:, None])[:, 0]
+        self._hmatrix = H
+
+        currents = np.array([v_i @ coeffs for v_i in v_per_feed], dtype=np.complex128)
+        z_per = voltages / currents
+        z = z_per[0] if len(self.feeds) == 1 else z_per
+        return z, coeffs
+
     def __init__(
         self,
         *args,
         aca_eta=1.0,
         aca_leaf_size=32,
         aca_tol=1e-4,
+        solve_tol=1e-6,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
         self.aca_eta = float(aca_eta)
         self.aca_leaf_size = int(aca_leaf_size)
         self.aca_tol = float(aca_tol)
+        self.solve_tol = float(solve_tol)
         self._hm_context = None
         self._hm_se_cache = {}
         self._hm_se_cache_k = None
