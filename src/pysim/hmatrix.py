@@ -157,22 +157,31 @@ class HMatrixPySim(BSplinePySim):
     # Same-edge analytic blocks (cached per k)
     # ------------------------------------------------------------------
 
-    def _same_edge_block(self, ctx, edge_id, k):
-        """Analytic static + regularised same-edge moment block for one edge,
-        shape (d+1, d+1, N_e, N_e), indexed by within-edge local segment
-        index. Cached per (edge_id, k); identical formula to
-        `BSplinePySim._build_J_blocks`'s same-edge overwrite path.
+    def _same_edge_band(self, ctx, edge_id, k, lo, hi):
+        """Analytic static + regularised same-edge moments over the contiguous
+        within-edge segment sub-range [lo, hi] (inclusive) of one edge. Shape
+        (d+1, d+1, W, W) with W = hi - lo + 1, indexed by (local_idx - lo).
+
+        Same formula as `BSplinePySim._build_J_blocks`'s same-edge overwrite,
+        but restricted to the sub-range a block actually touches — O(W²)
+        instead of the full O(N_edge²). A near block spans ~2·leaf_size
+        segments, so W stays small and the same-edge fill is O(N·leaf) total
+        rather than O(N²). The static moments are translation-invariant along a
+        straight edge and the reg geometry depends only on arc differences, so
+        the sub-range gives exactly the corresponding entries of the full
+        edge block. Cached per (edge_id, lo, hi); the per-k cache is reset in
+        `zblock` when k changes.
         """
         cache = self._hm_se_cache
-        key = (edge_id, k)
+        key = (edge_id, lo, hi)
         blk = cache.get(key)
         if blk is not None:
             return blk
         a = self.wire_radius
         d = self.degree
-        ed_arc = ctx["edge_arc"][edge_id]
-        A_st = _seg_seg_static_moments(ed_arc, a, max_d=d)
-        A_reg = _seg_seg_reg_moments(ed_arc, a, k, max_d=d, n_qp=self.n_qp_pair)
+        sub_arc = ctx["edge_arc"][edge_id][lo : hi + 2]
+        A_st = _seg_seg_static_moments(sub_arc, a, max_d=d)
+        A_reg = _seg_seg_reg_moments(sub_arc, a, k, max_d=d, n_qp=self.n_qp_pair)
         blk = A_st + A_reg
         cache[key] = blk
         return blk
@@ -222,8 +231,12 @@ class HMatrixPySim(BSplinePySim):
         for e in shared:
             rows = np.nonzero(eid_I == e)[0]
             cols = np.nonzero(eid_J == e)[0]
-            blk = self._same_edge_block(ctx, int(e), k)
-            sub = blk[:, :, loc[seg_I[rows]][:, None], loc[seg_J[cols]][None, :]]
+            li = loc[seg_I[rows]]
+            lj = loc[seg_J[cols]]
+            lo = int(min(li.min(), lj.min()))
+            hi = int(max(li.max(), lj.max()))
+            blk = self._same_edge_band(ctx, int(e), k, lo, hi)
+            sub = blk[:, :, (li - lo)[:, None], (lj - lo)[None, :]]
             Jsub[:, :, rows[:, None], cols[None, :]] = sub
         return Jsub
 

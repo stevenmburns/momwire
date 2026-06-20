@@ -76,14 +76,14 @@ Fixed-length wire, mesh refined, `aca_tol=1e-5`, `aca_eta=2.0`, degree 1:
 
 ```
    N   far%  rank  store%    relZ    Dfill(C)  Hbuild(py)  Dsolve  Hsolve  iters
-  250   66%  ~5    49.4%   6.6e-08    0.10s     0.27s      0.003s  0.13s     4
-  500   82%  ~5    30.9%   1.4e-07    0.40s     0.74s      0.064s  0.36s     5
- 1000   91%  ~5    18.9%   7.5e-07    1.57s     2.42s      0.097s  1.10s     6
- 2000   95%  ~5    11.1%   1.6e-06    6.12s     8.11s      0.347s  2.06s    12
- 4000   98%  ~5     6.4%   3.9e-07   25.05s    29.82s      1.81s   4.94s    21
+  250   66%  ~5    49.4%   6.6e-08    0.10s     0.27s      0.003s  0.15s     4
+  500   82%  ~5    30.9%   1.4e-07    0.40s     0.54s      0.064s  0.38s     5
+ 1000   91%  ~5    18.9%   7.5e-07    1.60s     1.17s      0.095s  0.99s     6
+ 2000   95%  ~5    11.1%   1.6e-06    6.23s     2.62s      0.323s  2.26s    12
+ 4000   98%  ~5     6.4%   3.9e-07   25.07s     5.70s      1.88s   5.18s    21
 ```
 
-What this shows, and what it doesn't:
+What this shows:
 
 - **Storage is the headline win.** It halves on every mesh doubling
   (49% → 6.4% of dense) at **constant far-block rank ~5** — the O(N log N)
@@ -91,14 +91,19 @@ What this shows, and what it doesn't:
   admissible blocks are sub-wavelength so there is no oscillatory rank
   growth in this size range.
 - **Accuracy is flat at ~1e-6** across all N — compression hides no error.
-- **Wall-clock is the honest caveat.** The dense *fill* uses the existing
-  C++ accelerators; the H build is pure Python, so it only *reaches parity*
-  with dense fill near N≈4000 despite touching far fewer entries. The Python
-  H-matvec also makes the iterative solve slower than the dense LU at these
-  sizes. Both are constant-factor effects the C++ phase (Phase 5) removes;
-  the dense fill is ~O(N²) and the dense LU ~O(N³), so the asymptotic
-  crossover is already visible in the *fill-work* (entries evaluated) and
-  *storage* columns, not yet in pure-Python seconds.
+- **The pure-Python H-build now beats the C-accelerated dense fill** for
+  N ≥ ~1000 (5.7 s vs 25 s at N=4000, a 4.4× win that widens with N): `Hbuild`
+  scales ~O(N log N), `Dfill` ~O(N²). This followed an algorithmic fix —
+  same-edge near-field moments are computed only over each near block's
+  contiguous sub-range (~2·leaf wide) instead of the full O(N_edge²) edge
+  block, which had been ~68% of build time.
+- **The iterative solve is now the relative weak point.** `Hsolve` (GMRES on
+  the H-matvec) is comparable to or slower than the dense LU at these sizes,
+  and the iteration count creeps up (4 → 21 over N=250 → 4000) as the
+  near-field preconditioner neglects more of the far field. Dense LU is
+  O(N³) so it loses eventually, but a stronger preconditioner (H-LU / coarse
+  correction) is the clear next lever. The C++ phase additionally targets the
+  remaining per-block Python orchestration in the fill.
 
 ### Known limitations / next work
 
