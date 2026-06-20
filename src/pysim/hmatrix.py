@@ -181,16 +181,19 @@ class HMatrixPySim(BSplinePySim):
     # On-demand moment sub-tensor
     # ------------------------------------------------------------------
 
-    def _moment_subtensor(self, ctx, seg_I, seg_J, k):
+    def _moment_subtensor(self, ctx, seg_I, seg_J, k, same_edge=True):
         """Moment tensor J_pq between the global segment lists seg_I, seg_J,
         shape (d+1, d+1, |seg_I|, |seg_J|), matching the corresponding slice
         of `BSplinePySim._build_J_blocks`.
 
-        Off-edge pairs use the full-kernel GL quadrature; pairs that share an
-        edge are overwritten with the analytic static + reg block. For an
-        admissible (well-separated) block there are no shared-edge pairs, so
-        the overwrite loop is skipped entirely and no same-edge block is built
-        — that is where the acceleration comes from.
+        Off-edge pairs use the full-kernel GL quadrature. When `same_edge` is
+        True, pairs that share an edge are overwritten with the analytic
+        static + reg block (essential for the near-singular diagonal). When
+        False, the overwrite is skipped entirely — valid for an *admissible*
+        (well-separated) block, where every pair, even two segments on the
+        same long wire, is far enough apart that the a²-regularised GL kernel
+        is accurate (~1e-5). Skipping it is what makes far blocks cheap:
+        no O(N_edge²) same-edge block is ever built for a single-wire mesh.
         """
         d = self.degree
         a = self.wire_radius
@@ -207,6 +210,9 @@ class HMatrixPySim(BSplinePySim):
             d,
             self.n_qp_pair,
         )
+
+        if not same_edge:
+            return Jsub
 
         eid = ctx["seg_edge_id"]
         loc = ctx["seg_edge_loc"]
@@ -267,12 +273,17 @@ class HMatrixPySim(BSplinePySim):
     # Public block evaluator
     # ------------------------------------------------------------------
 
-    def zblock(self, I, J, k=None):
+    def zblock(self, I, J, k=None, same_edge=True):
         """Return the dense sub-block Z[I][:, J] (shape (|I|, |J|), complex).
 
         `I`, `J` are 1-D integer arrays of *basis* indices. Computed on demand
         from only the segments in the supports of I and J — no full Z or full
-        moment tensor is formed. Equivalent to slicing the dense bspline Z.
+        moment tensor is formed.
+
+        With `same_edge=True` (default) this equals the dense bspline Z slice
+        exactly. With `same_edge=False` the same-edge analytic overwrite is
+        skipped — correct (~1e-5) only for *admissible* far blocks, where it
+        avoids ever materialising a same-edge block; used by the ACA fill.
         """
         if k is None:
             k = self.k
@@ -295,7 +306,7 @@ class HMatrixPySim(BSplinePySim):
         loc_of_I = {int(s): i for i, s in enumerate(seg_I)}
         loc_of_J = {int(s): i for i, s in enumerate(seg_J)}
 
-        Jsub = self._moment_subtensor(ctx, seg_I, seg_J, k)
+        Jsub = self._moment_subtensor(ctx, seg_I, seg_J, k, same_edge=same_edge)
 
         supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
         supp_J_local = np.vectorize(loc_of_J.__getitem__)(supp_seg[J])
@@ -380,16 +391,17 @@ class HMatrixPySim(BSplinePySim):
             mI, nJ = I.size, J.size
 
             def get_row(i, I=I, J=J):
-                return self.zblock(I[i : i + 1], J, k=k).ravel()
+                return self.zblock(I[i : i + 1], J, k=k, same_edge=False).ravel()
 
             def get_col(j, I=I, J=J):
-                return self.zblock(I, J[j : j + 1], k=k).ravel()
+                return self.zblock(I, J[j : j + 1], k=k, same_edge=False).ravel()
 
             U, V = aca_partial(get_row, get_col, mI, nJ, tol=tol)
             r = U.shape[1]
             if r * (mI + nJ) >= mI * nJ:
-                # No compression — store dense instead.
-                near_blocks.append((I, J, self.zblock(I, J, k=k)))
+                # No compression — store dense (off-edge kernel; the block is
+                # admissible so the same-edge analytic path is unnecessary).
+                near_blocks.append((I, J, self.zblock(I, J, k=k, same_edge=False)))
             else:
                 far_blocks.append((I, J, U, V))
 
