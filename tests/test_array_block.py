@@ -434,3 +434,130 @@ def test_reset_array_caches_clears_state():
     assert sum(cache_stats().values()) > 0
     reset_array_caches()
     assert all(v == 0 for v in cache_stats().values())
+
+
+# ---- PEC ground: per-block image term --------------------------------------
+
+
+def _ground_array(offsets, halves, solver, ground_z=0.0, nsegs=14, degree=2):
+    """`solver` for a dipole array above a PEC plane at `ground_z`. `offsets`
+    are (y, z) element centres; raising z above the plane gives a near-field
+    self-image. Mirrors `_array_solver` but with `ground_z` set."""
+    wires = [_dipole_wire(h, y=y, z=z) for (y, z), h in zip(offsets, halves)]
+    return solver(
+        wires=wires,
+        degree=degree,
+        n_per_edge_per_wire=[[nsegs]] * len(wires),
+        wavelength=22.0,
+        feeds=[(i, None, 1.0 + 0.0j) for i in range(len(wires))],
+        ground_z=ground_z,
+    )
+
+
+def _dense_Z_ground(sim):
+    """The exact dense bspline Z under PEC ground (free-space minus the image
+    assembly) the array-block decomposition must reproduce."""
+    geom = sim._build_geometry()
+    supp_seg, polys, _a, _wk, _wbg = sim._build_basis_polynomials(geom)
+    Z = sim._assemble_Z(sim._build_J_blocks(geom, sim.k), supp_seg, polys, geom)
+    J_img = sim._build_J_image_blocks(geom, sim.k)
+    td_img = sim._image_tangent_dot(geom["tangents"])
+    return Z - sim._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+
+
+def test_ground_array_block_matvec_matches_dense():
+    """The grounded array-block operator (self-image folded into the self-blocks,
+    real+image folded into each coupling block) reproduces the dense PEC Z @ x."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    sim = _ground_array(offsets, [half] * 4, ArrayBlockPySim, nsegs=16)
+    Z = _dense_Z_ground(sim)
+    AB = sim.build_array_blocks(tol=1e-7)
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(Z.shape[0]) + 1j * rng.standard_normal(Z.shape[0])
+    assert np.linalg.norm(AB.matvec(x) - Z @ x) / np.linalg.norm(Z @ x) < 1e-4
+    assert np.abs(AB.to_dense() - Z).max() / np.abs(Z).max() < 1e-4
+
+
+def test_ground_compute_y_matrix_matches_dense():
+    """ArrayBlock + PEC ground matches the dense bspline + PEC ground Y."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    ya = _ground_array(offsets, [half] * 4, ArrayBlockPySim, nsegs=16).compute_y_matrix()
+    yd = _ground_array(offsets, [half] * 4, BSplinePySim, nsegs=16).compute_y_matrix()
+    assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4
+
+
+def test_ground_compute_impedance_matches_dense():
+    """ArrayBlock + PEC ground matches the dense bspline + PEC ground impedance."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-6.0, 3.0), (6.0, 3.0)]
+    za = np.atleast_1d(
+        _ground_array(offsets, [half] * 2, ArrayBlockPySim).compute_impedance()[0]
+    )
+    zd = np.atleast_1d(
+        _ground_array(offsets, [half] * 2, BSplinePySim).compute_impedance()[0]
+    )
+    assert np.max(np.abs(za - zd) / np.abs(zd)) < 1e-3
+
+
+def test_ground_iteration_count_near_free_space():
+    """The per-block image term doesn't degrade the block-Jacobi conditioning:
+    GMRES under PEC ground converges in about the same number of iterations as
+    free space (the self-image stays inside the per-shape self-block, so the
+    preconditioner remains near-exact)."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    free = _array_sim([(y, 0.0) for y, _z in offsets], [half] * 4, nsegs=16)
+    free.compute_y_matrix()
+    grnd = _ground_array(offsets, [half] * 4, ArrayBlockPySim, nsegs=16)
+    grnd.compute_y_matrix()
+    assert abs(max(grnd._last_solve_iters) - max(free._last_solve_iters)) <= 2
+
+
+def test_ground_single_height_grid_reuses_one_block_per_shape():
+    """A single-height grid of identical elements keeps the grid reuse intact
+    under ground: one self-block for the shape and the displacement-keyed
+    coupling reuse still collapses the pairs (the height insight)."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    sim = _ground_array(offsets, [half] * 4, ArrayBlockPySim, nsegs=16)
+    AB = sim.build_array_blocks()
+    assert len(AB.shape_blocks) == 1  # one shape, one height
+    assert sim._last_n_coupling_aca == 3  # displacements {1,2,3}·spacing
+
+
+def test_ground_mixed_height_refines_blocks_and_stays_correct():
+    """Elements of one geometric shape at two heights need two distinct
+    self-blocks under ground (the self-image depends on height), and the result
+    still matches the dense PEC solve."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-6.0, 3.0), (6.0, 3.0), (-6.0, 9.0), (6.0, 9.0)]
+    sim = _ground_array(offsets, [half] * 4, ArrayBlockPySim, nsegs=14)
+    AB = sim.build_array_blocks()
+    # one geometric shape, but two heights ⇒ two block-shape classes
+    assert len(AB.shape_blocks) == 2
+    ya = _ground_array(offsets, [half] * 4, ArrayBlockPySim, nsegs=14).compute_y_matrix()
+    yd = _ground_array(offsets, [half] * 4, BSplinePySim, nsegs=14).compute_y_matrix()
+    assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4
+
+
+def test_ground_and_free_self_blocks_do_not_alias():
+    """The self-block cache key folds in ground height, so a free-space build and
+    a grounded build of the same geometry never reuse each other's self-block."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-6.0, 3.0), (6.0, 3.0)]
+    free = _array_sim([(y, z) for y, z in offsets], [half] * 2, nsegs=14)
+    free.build_array_blocks()
+    grnd = _ground_array(offsets, [half] * 2, ArrayBlockPySim, nsegs=14)
+    grnd.build_array_blocks()
+    # the grounded build must assemble its own self-block, not reuse the
+    # free-space one cached under the same translation-invariant signature
+    assert cache_stats()["self_block_build"] == 2
