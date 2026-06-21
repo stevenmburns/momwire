@@ -615,47 +615,11 @@ class ArrayBlockPySim(HMatrixPySim):
         """ACA low-rank factors (U, V) of the off-diagonal element block
         Z[I][:, J]. The two elements share no segments, so the block is purely
         off-edge (no same-edge analytic overwrite) and well separated ⇒ low
-        rank. Reuses the H-matrix off-edge evaluators / numpy fallback.
-
-        Under PEC ground the target is the *grounded* block ``Z_free − Z_image``
-        (element I against element J, plus I against J's mirror image). The image
-        term is folded into the same ACA row/column evaluators — one factor pair
-        per pair, so the matvec and block-Jacobi machinery are unchanged. Rank
-        may rise slightly (real + image content); the iteration-count test
-        guards against regressions."""
-        mI, nJ = I.size, J.size
-        if use_accel:
-            row_f, col_f, _dense = self._offedge_block_evaluators(ctx, I, J, k)
-        else:
-
-            def row_f(i, I=I, J=J):
-                return self.zblock(I[i : i + 1], J, k=k, same_edge=False).ravel()
-
-            def col_f(j, I=I, J=J):
-                return self.zblock(I, J[j : j + 1], k=k, same_edge=False).ravel()
-
-        if self.ground_z is None:
-            get_row, get_col = row_f, col_f
-        else:
-            if use_accel:
-                row_i, col_i, _di = self._offedge_block_evaluators(
-                    ctx, I, J, k, mirror_J=True
-                )
-            else:
-
-                def row_i(i, I=I, J=J):
-                    return self._zblock_image(I[i : i + 1], J, k=k).ravel()
-
-                def col_i(j, I=I, J=J):
-                    return self._zblock_image(I, J[j : j + 1], k=k).ravel()
-
-            def get_row(i):
-                return row_f(i) - row_i(i)
-
-            def get_col(j):
-                return col_f(j) - col_i(j)
-
-        U, V = aca_partial(get_row, get_col, mI, nJ, tol=tol)
+        rank. Reuses the shared off-edge ACA evaluators, which fold in the PEC
+        image term (``Z_free − Z_image``) when ground is on — one factor pair
+        per pair, so the matvec and block-Jacobi machinery are unchanged."""
+        get_row, get_col, _dense = self._offedge_aca_evaluators(ctx, I, J, k, use_accel)
+        U, V = aca_partial(get_row, get_col, I.size, J.size, tol=tol)
         return U, V
 
     def build_array_blocks(self, tol=None, k=None):

@@ -300,3 +300,155 @@ def test_zblock_off_edge_skips_same_edge_path():
     blk = sim.zblock(I, J)
     ref = Z[np.ix_(I, J)]
     assert np.abs(blk - ref).max() / (np.abs(ref).max() + 1e-30) < 1e-12
+
+
+# ---- PEC ground: per-block image term folded into near + far blocks --------
+
+
+def _dense_Z_ground(sim):
+    """The exact dense bspline Z under PEC ground (free-space minus the image
+    assembly) the hierarchical operator must reproduce."""
+    geom = sim._build_geometry()
+    supp_seg, polys, _a, _wk, _wbg = sim._build_basis_polynomials(geom)
+    Z = sim._assemble_Z(sim._build_J_blocks(geom, sim.k), supp_seg, polys, geom)
+    J_img = sim._build_J_image_blocks(geom, sim.k)
+    td_img = sim._image_tangent_dot(geom["tangents"])
+    return Z - sim._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+
+
+def test_ground_hmatrix_to_dense_matches_dense_pec():
+    """The grounded H-matrix (image folded into near + far blocks) reconstructs
+    the dense PEC Z."""
+    half = 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 2.0 + 2 * half]])]
+    sim = HMatrixPySim(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[200]],
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+        ground_z=0.0,
+        aca_tol=1e-7,
+    )
+    Z = _dense_Z_ground(sim)
+    H = sim.build_hmatrix()
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(Z.shape[0]) + 1j * rng.standard_normal(Z.shape[0])
+    assert np.linalg.norm(H.matvec(x) - Z @ x) / np.linalg.norm(Z @ x) < 1e-4
+    assert np.abs(H.to_dense() - Z).max() / np.abs(Z).max() < 1e-4
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_ground_compute_impedance_matches_dense_pec(degree):
+    """HMatrixPySim + PEC ground matches dense BSplinePySim + PEC ground."""
+    half = 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, 1.5], [0.0, 0.0, 1.5 + 2 * half]])]
+    dense, hmat = _matched_pair(
+        wires, degree=degree, n_per_edge_per_wire=[[100]], ground_z=0.0
+    )
+    zd, _ = dense.compute_impedance()
+    zh, _ = hmat.compute_impedance()
+    assert abs(zh - zd) / abs(zd) < 1e-4
+
+
+def test_ground_compute_y_matrix_matches_dense_pec_junction():
+    """Grounded H-matrix with a junction geometry — exercises the KCL saddle
+    rows and the near-field preconditioner under the image term."""
+    h = 0.962 * 22 / 4
+    wires = [
+        np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0 + h]]),
+        np.array([[0.0, 0.0, 1.0 + h], [0.0, h, 1.0 + h]]),
+    ]
+    junctions = [[(0, "end"), (1, "start")]]
+    dense, hmat = _matched_pair(
+        wires,
+        degree=2,
+        n_per_edge_per_wire=[[40], [40]],
+        junctions=junctions,
+        feed_wire_index=0,
+        ground_z=0.0,
+    )
+    yd = dense.compute_y_matrix()
+    yh = hmat.compute_y_matrix()
+    assert np.abs(yh - yd).max() / np.abs(yd).max() < 1e-4
+
+
+def test_ground_iteration_count_near_free_space():
+    """The per-block image term doesn't degrade the near-field preconditioner:
+    GMRES under PEC ground converges in about as many iterations as free
+    space."""
+    half = 2 * 0.962 * 22 / 4
+    free = HMatrixPySim(
+        wires=[np.array([[0.0, 0.0, -half], [0.0, 0.0, half]])],
+        degree=1,
+        n_per_edge_per_wire=[[300]],
+        wavelength=22.0,
+    )
+    grnd = HMatrixPySim(
+        wires=[np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 2.0 + 2 * half]])],
+        degree=1,
+        n_per_edge_per_wire=[[300]],
+        wavelength=22.0,
+        ground_z=0.0,
+    )
+    free.compute_impedance()
+    grnd.compute_impedance()
+    assert abs(max(grnd._last_solve_iters) - max(free._last_solve_iters)) <= 2
+
+
+def test_ground_hmatrix_still_compresses():
+    """For a normal-height antenna the grounded H-matrix still compresses vs
+    dense (the image stays low-rank — reflection only increases cluster
+    separation), and a *low* antenna stays correct even if it compresses less
+    (the dense-fallback guard makes the degradation graceful, not wrong)."""
+    half = 2 * 0.962 * 22 / 4
+    # normal height: image is far, compression close to free space
+    tall = HMatrixPySim(
+        wires=[np.array([[0.0, 0.0, 3.0], [0.0, 0.0, 3.0 + 2 * half]])],
+        degree=1,
+        n_per_edge_per_wire=[[400]],
+        wavelength=22.0,
+        ground_z=0.0,
+        aca_tol=1e-6,
+    )
+    tall.compute_impedance()
+    assert tall._hmatrix.stats()["compression"] < 0.9  # genuinely compressed
+
+    # low horizontal wire: image is near, but the answer is still correct
+    low = HMatrixPySim(
+        wires=[np.array([[0.0, -half, 0.1], [0.0, half, 0.1]])],
+        degree=1,
+        n_per_edge_per_wire=[[400]],
+        wavelength=22.0,
+        ground_z=0.0,
+        aca_tol=1e-6,
+    )
+    dense_low = BSplinePySim(
+        wires=[np.array([[0.0, -half, 0.1], [0.0, half, 0.1]])],
+        degree=1,
+        n_per_edge_per_wire=[[400]],
+        wavelength=22.0,
+        ground_z=0.0,
+    )
+    zl, _ = low.compute_impedance()
+    zd, _ = dense_low.compute_impedance()
+    assert abs(zl - zd) / abs(zd) < 1e-3
+
+
+def test_ground_does_not_break_free_space_path():
+    """Building a grounded then a free-space H-matrix of the same geometry must
+    give the free-space dense answer for the free-space one (the image term is
+    gated strictly on ground_z, no leakage)."""
+    half = 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 2.0 + 2 * half]])]
+    HMatrixPySim(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[80]],
+        wavelength=22.0,
+        ground_z=0.0,
+    ).compute_impedance()
+    dense, hmat = _matched_pair(wires, degree=2, n_per_edge_per_wire=[[80]])
+    zd, _ = dense.compute_impedance()
+    zh, _ = hmat.compute_impedance()
+    assert abs(zh - zd) / abs(zd) < 1e-4
