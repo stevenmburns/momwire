@@ -521,6 +521,15 @@ class ArrayBlockPySim(HMatrixPySim):
     they resolve to the dense `BSplinePySim` path via the base class.
     """
 
+    def _hmatrix_unsupported(self):
+        """ArrayBlock supports PEC ground via the per-block image term (the
+        free-space block reuse survives the image method for a grid array — see
+        `build_array_blocks`), so it only falls back to the dense path for
+        singular enrichment, which still belongs there. This narrows the base
+        `HMatrixPySim` gate, which keeps excluding ground for the generic
+        hierarchical solver."""
+        return self.use_singular_enrichment
+
     def array_partition(self, tol=1e-6):
         """Element/shape partition of the bases (cached)."""
         cached = getattr(self, "_array_partition", None)
@@ -534,7 +543,14 @@ class ArrayBlockPySim(HMatrixPySim):
         element's segment endpoints recentred on its own centroid (so it is
         translation-invariant — identical elements at different array positions
         share a key), rounded and canonically ordered, plus the parameters the
-        self-impedance depends on (k, wire radius, degree, quadrature)."""
+        self-impedance depends on (k, wire radius, degree, quadrature).
+
+        Under PEC ground the self-block also carries the self-image term, which
+        depends on the element's *height above the ground plane* (the image sits
+        at ``2·ground_z − z``), so the centroid height ``cen_z − ground_z`` joins
+        the key — same-height translates still share a block (the grid case),
+        while a free-space block (``ground_z is None``) never aliases a grounded
+        one and elements at different heights get distinct blocks."""
         seg_l, seg_r = ctx["seg_l"][segs], ctx["seg_r"][segs]
         cen = 0.5 * (seg_l + seg_r).mean(axis=0)
         rel = np.hstack([seg_l - cen, seg_r - cen])
@@ -542,7 +558,19 @@ class ArrayBlockPySim(HMatrixPySim):
         mid = 0.5 * (keyarr[:, :3] + keyarr[:, 3:])
         order = np.lexsort((mid[:, 2], mid[:, 1], mid[:, 0]))
         sig = keyarr[order].tobytes()
-        return (sig, float(k), float(self.wire_radius), self.degree, self.n_qp_pair)
+        gkey = (
+            None
+            if self.ground_z is None
+            else int(np.round((cen[2] - self.ground_z) / 1e-6))
+        )
+        return (
+            sig,
+            float(k),
+            float(self.wire_radius),
+            self.degree,
+            self.n_qp_pair,
+            gkey,
+        )
 
     def _build_operator(self):
         """Build the array-block operator (cached) for the constrained solve.
@@ -563,6 +591,7 @@ class ArrayBlockPySim(HMatrixPySim):
             self.degree,
             self.n_qp_pair,
             float(self.aca_tol),
+            None if self.ground_z is None else float(self.ground_z),
         )
         op = _ARRAY_OP_CACHE.get(key)
         if op is None:
@@ -586,17 +615,45 @@ class ArrayBlockPySim(HMatrixPySim):
         """ACA low-rank factors (U, V) of the off-diagonal element block
         Z[I][:, J]. The two elements share no segments, so the block is purely
         off-edge (no same-edge analytic overwrite) and well separated ⇒ low
-        rank. Reuses the H-matrix off-edge evaluators / numpy fallback."""
+        rank. Reuses the H-matrix off-edge evaluators / numpy fallback.
+
+        Under PEC ground the target is the *grounded* block ``Z_free − Z_image``
+        (element I against element J, plus I against J's mirror image). The image
+        term is folded into the same ACA row/column evaluators — one factor pair
+        per pair, so the matvec and block-Jacobi machinery are unchanged. Rank
+        may rise slightly (real + image content); the iteration-count test
+        guards against regressions."""
         mI, nJ = I.size, J.size
         if use_accel:
-            get_row, get_col, _dense = self._offedge_block_evaluators(ctx, I, J, k)
+            row_f, col_f, _dense = self._offedge_block_evaluators(ctx, I, J, k)
         else:
 
-            def get_row(i, I=I, J=J):
+            def row_f(i, I=I, J=J):
                 return self.zblock(I[i : i + 1], J, k=k, same_edge=False).ravel()
 
-            def get_col(j, I=I, J=J):
+            def col_f(j, I=I, J=J):
                 return self.zblock(I, J[j : j + 1], k=k, same_edge=False).ravel()
+
+        if self.ground_z is None:
+            get_row, get_col = row_f, col_f
+        else:
+            if use_accel:
+                row_i, col_i, _di = self._offedge_block_evaluators(
+                    ctx, I, J, k, mirror_J=True
+                )
+            else:
+
+                def row_i(i, I=I, J=J):
+                    return self._zblock_image(I[i : i + 1], J, k=k).ravel()
+
+                def col_i(j, I=I, J=J):
+                    return self._zblock_image(I, J[j : j + 1], k=k).ravel()
+
+            def get_row(i):
+                return row_f(i) - row_i(i)
+
+            def get_col(j):
+                return col_f(j) - col_i(j)
 
         U, V = aca_partial(get_row, get_col, mI, nJ, tol=tol)
         return U, V
@@ -626,16 +683,57 @@ class ArrayBlockPySim(HMatrixPySim):
         ctx = self._context()
         n = ctx["n_basis"]
 
-        # Dense self-block per distinct shape, from a representative element.
-        # Cached by the element's translation-invariant geometry signature so a
-        # spacing sweep (identical elements, new positions) reuses the assembly.
+        # Element centroids, from each element's own segment midpoints (translated
+        # elements differ by exactly the displacement, so rounding to the grouping
+        # tol is safe). Computed from seg_groups, not ctx["basis_centroid"] — the
+        # latter is polluted by boundary-basis support padding, which would
+        # perturb the displacement/height keys.
+        seg_mid = 0.5 * (ctx["seg_l"] + ctx["seg_r"])
+        cen = np.array([seg_mid[sg].mean(axis=0) for sg in part.seg_groups])
+        disp_tol = 1e-6
+
+        # Block-shape classes. In free space a block depends only on an element's
+        # (translation-invariant) geometric shape. Under PEC ground both the
+        # self-image and the coupling-image terms also depend on the element's
+        # height above the plane (the image sits at 2·ground_z − z), so refine the
+        # shape classes by height: same-shape elements at the same height share a
+        # block — the single-height grid case (e.g. bowtiearray2x4), full reuse —
+        # while different heights get distinct blocks (correct; reuse degrades
+        # gracefully, the solve stays fast). `shp[e]` is element e's dense
+        # block-class id; free space leaves it equal to the geometric shape id.
+        if self.ground_z is None:
+            shp = np.asarray(part.shape_of_elem)
+            reps = part.shape_representatives()
+        else:
+            label_of = {}
+            reps = []
+            shp = np.empty(part.n_elem, dtype=np.int64)
+            for e in range(part.n_elem):
+                hk = int(np.round((cen[e][2] - self.ground_z) / disp_tol))
+                key = (int(part.shape_of_elem[e]), hk)
+                lab = label_of.get(key)
+                if lab is None:
+                    lab = len(label_of)
+                    label_of[key] = lab
+                    reps.append(e)
+                shp[e] = lab
+
+        # Dense self-block per distinct block-shape, from a representative element.
+        # Cached by the element's translation-invariant geometry signature (plus
+        # height under ground) so a spacing sweep reuses the assembly.
         shape_blocks = {}
-        for s, e in enumerate(part.shape_representatives()):
+        for s, e in enumerate(reps):
             g = part.groups[e]
             sb_key = self._self_block_key(ctx, part.seg_groups[e], k)
             blk = _SELF_BLOCK_CACHE.get(sb_key)
             if blk is None:
                 blk = self.zblock(g, g, k=k)
+                if self.ground_z is not None:
+                    # Self-image reaction: the element against its own mirror. One
+                    # block per (shape, height) class, so the block-Jacobi
+                    # preconditioner stays (near-)exact and the
+                    # one-factorisation-per-class cost is unchanged.
+                    blk = blk - self._zblock_image(g, g, k=k)
                 _cache_put(_SELF_BLOCK_CACHE, sb_key, blk, _SELF_BLOCK_CACHE_MAX)
                 _CACHE_STATS["self_block_build"] += 1
             else:
@@ -648,18 +746,18 @@ class ArrayBlockPySim(HMatrixPySim):
             and self.hmatrix_use_accel
         )
 
-        # Element centroids for the displacement key, from each element's own
-        # segment midpoints (translated elements differ by exactly the
-        # displacement, so rounding to the grouping tol is safe). Computed from
-        # seg_groups, not ctx["basis_centroid"] — the latter is polluted by
-        # boundary-basis support padding, which would perturb the key.
-        seg_mid = 0.5 * (ctx["seg_l"] + ctx["seg_r"])
-        cen = np.array([seg_mid[sg].mean(axis=0) for sg in part.seg_groups])
-        shp = part.shape_of_elem
-        disp_tol = 1e-6
-
+        # Coupling reuse: a block depends only on the two elements' block-shapes
+        # and their relative displacement (the free-space kernel is
+        # translation-invariant; under ground the block-shape already encodes the
+        # height the image term needs, so the same key keys both the free and the
+        # image contribution). All pairs sharing `(block_shape_a, block_shape_b,
+        # displacement)` are the same block — ACA runs once per unique key. On a
+        # single-height grid this collapses the P(P-1) pairs to a handful of
+        # displacements. Complex symmetry Z_ab = Z_ba^T survives the image method
+        # (both free and image blocks are symmetric), so a key whose reverse is
+        # cached reuses the transposed factors instead of a fresh ACA.
         coupling = []
-        cache = {}  # (shape_a, shape_b, disp_key) -> (U, V)
+        cache = {}  # (block_shape_a, block_shape_b, disp_key) -> (U, V)
         n_aca = 0
         P = part.n_elem
         for a in range(P):
@@ -685,4 +783,4 @@ class ArrayBlockPySim(HMatrixPySim):
                 coupling.append((a, b, hit[0], hit[1]))
 
         self._last_n_coupling_aca = n_aca
-        return ArrayBlock(n, part.groups, part.shape_of_elem, shape_blocks, coupling)
+        return ArrayBlock(n, part.groups, shp, shape_blocks, coupling)

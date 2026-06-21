@@ -467,6 +467,63 @@ class HMatrixPySim(BSplinePySim):
             Jsub, supp_I_local, polys[I], supp_J_local, polys[J], td_sub
         )
 
+    def _zblock_image(self, I, J, k=None):
+        """Return the PEC-image sub-block for the basis pair (I, J): the real
+        test bases I reacting against the trial bases J mirrored across
+        ``z = ground_z`` (positions reflected, tangents z-flipped to (tx, ty,
+        -tz)). The full impedance block under PEC ground is
+
+            zblock(I, J) - _zblock_image(I, J)
+
+        a single combined minus sign capturing both the image current's
+        anti-parallel horizontal direction and the image charge sign flip (see
+        `BSplinePySim.compute_impedance`). The mirror always separates the image
+        from the real geometry, so every pair is off-edge — full GL quadrature
+        throughout, no same-edge analytic overwrite (mirrors
+        `BSplinePySim._build_J_image_blocks`)."""
+        if k is None:
+            k = self.k
+        ctx = self._context()
+        supp_seg = ctx["supp_seg"]
+        polys = ctx["polys"]
+        tangents = ctx["tangents"]
+        seg_l = ctx["seg_l"]
+        seg_r = ctx["seg_r"]
+        a = self.wire_radius
+        d = self.degree
+
+        I = np.asarray(I, dtype=np.int64)
+        J = np.asarray(J, dtype=np.int64)
+        seg_I = np.unique(supp_seg[I].ravel())
+        seg_J = np.unique(supp_seg[J].ravel())
+        loc_of_I = {int(s): i for i, s in enumerate(seg_I)}
+        loc_of_J = {int(s): i for i, s in enumerate(seg_J)}
+
+        Jsub = _seg_seg_full_moments_offedge(
+            seg_l[seg_I],
+            seg_r[seg_I],
+            self._image_positions(seg_l[seg_J]),
+            self._image_positions(seg_r[seg_J]),
+            a,
+            k,
+            d,
+            self.n_qp_pair,
+        )
+        supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
+        supp_J_local = np.vectorize(loc_of_J.__getitem__)(supp_seg[J])
+        td_sub = tangents[seg_I] @ self._image_tangent_dot_cols(tangents[seg_J])
+        return self._assemble_Z_block(
+            Jsub, supp_I_local, polys[I], supp_J_local, polys[J], td_sub
+        )
+
+    @staticmethod
+    def _image_tangent_dot_cols(tangents_J):
+        """The (tx, ty, -tz)-flipped trial tangents as columns, so
+        ``t_I @ _image_tangent_dot_cols(t_J)`` is the image tangent-dot table
+        (rows = real test, cols = image trial) — the block form of
+        `BSplinePySim._image_tangent_dot`."""
+        return (tangents_J * np.array([1.0, 1.0, -1.0])).T
+
     # ------------------------------------------------------------------
     # Cluster / block tree (Phase 1)
     # ------------------------------------------------------------------
@@ -598,7 +655,7 @@ class HMatrixPySim(BSplinePySim):
             self._hm_gl01 = cached
         return cached
 
-    def _offedge_block_evaluators(self, ctx, I, J, k):
+    def _offedge_block_evaluators(self, ctx, I, J, k, mirror_J=False):
         """Build (get_row, get_col, dense) closures for an admissible far block
         backed by the fused C++ off-edge assembler `bspline_assemble_offedge_block`.
 
@@ -606,6 +663,14 @@ class HMatrixPySim(BSplinePySim):
         once here; each row/column call passes only the single basis it needs
         on its own axis (so the C++ side never precomputes positions for unused
         segments) against the precomputed full opposite axis.
+
+        With `mirror_J=True` the trial (J) segment endpoints are reflected across
+        ``z = ground_z`` and their tangents z-flipped, so the kernel's internal R
+        distances and tangent dot products reproduce the PEC-image reaction — the
+        C++ counterpart of `_zblock_image` (the result is *subtracted* from the
+        free-space block). The C++ assembler uses the trial tangents only through
+        the dot product, so flipping their z is exactly the image-current sign
+        flip.
         """
         supp_seg = ctx["supp_seg"]
         polys = ctx["polys"]
@@ -616,6 +681,13 @@ class HMatrixPySim(BSplinePySim):
         a2 = self.wire_radius * self.wire_radius
         glt, glw = self._gl01()
         omega, eps, mu = self.omega, self.eps, self.mu
+        flip = np.array([1.0, 1.0, -1.0])
+
+        def mirror_pos(p):
+            return self._image_positions(p) if mirror_J else p
+
+        def mirror_tan(t):
+            return t * flip if mirror_J else t
 
         segI = np.unique(supp_seg[I].ravel())
         segJ = np.unique(supp_seg[J].ravel())
@@ -624,7 +696,9 @@ class HMatrixPySim(BSplinePySim):
         pI = np.ascontiguousarray(polys[I])
         pJ = np.ascontiguousarray(polys[J])
         slI, srI, tI = seg_l[segI], seg_r[segI], tangents[segI]
-        slJ, srJ, tJ = seg_l[segJ], seg_r[segJ], tangents[segJ]
+        slJ, srJ, tJ = mirror_pos(seg_l[segJ]), mirror_pos(seg_r[segJ]), mirror_tan(
+            tangents[segJ]
+        )
         one_supp = np.arange(d + 1, dtype=np.int64)[None, :]
 
         def get_row(i):
@@ -660,9 +734,9 @@ class HMatrixPySim(BSplinePySim):
                 tI,
                 one_supp,
                 polys[J[j]][None],
-                seg_l[seg_j],
-                seg_r[seg_j],
-                tangents[seg_j],
+                mirror_pos(seg_l[seg_j]),
+                mirror_pos(seg_r[seg_j]),
+                mirror_tan(tangents[seg_j]),
                 a2,
                 k,
                 omega,
