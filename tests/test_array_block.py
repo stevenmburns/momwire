@@ -485,7 +485,9 @@ def test_ground_compute_y_matrix_matches_dense():
     reset_array_caches()
     half = 0.962 * 22 / 4
     offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
-    ya = _ground_array(offsets, [half] * 4, ArrayBlockPySim, nsegs=16).compute_y_matrix()
+    ya = _ground_array(
+        offsets, [half] * 4, ArrayBlockPySim, nsegs=16
+    ).compute_y_matrix()
     yd = _ground_array(offsets, [half] * 4, BSplinePySim, nsegs=16).compute_y_matrix()
     assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4
 
@@ -543,7 +545,9 @@ def test_ground_mixed_height_refines_blocks_and_stays_correct():
     AB = sim.build_array_blocks()
     # one geometric shape, but two heights ⇒ two block-shape classes
     assert len(AB.shape_blocks) == 2
-    ya = _ground_array(offsets, [half] * 4, ArrayBlockPySim, nsegs=14).compute_y_matrix()
+    ya = _ground_array(
+        offsets, [half] * 4, ArrayBlockPySim, nsegs=14
+    ).compute_y_matrix()
     yd = _ground_array(offsets, [half] * 4, BSplinePySim, nsegs=14).compute_y_matrix()
     assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4
 

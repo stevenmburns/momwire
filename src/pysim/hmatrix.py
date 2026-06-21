@@ -579,6 +579,14 @@ class HMatrixPySim(BSplinePySim):
         A far block whose ACA factors would cost as much as the dense block
         falls back to dense storage, so the H-matvec is never worse than the
         dense block-by-block product.
+
+        Under PEC ground every block carries the per-block image term
+        (`Z_free − Z_image`): near blocks subtract the dense `_zblock_image`,
+        far blocks fold the image into the ACA target via
+        `_offedge_aca_evaluators`. The `HMatrix` container, matvec, and
+        preconditioner are ground-agnostic — they bake whatever block values
+        they are handed — and the cluster partition is built on the real
+        geometry, so it is reused unchanged.
         """
         if tol is None:
             tol = self.aca_tol
@@ -587,11 +595,15 @@ class HMatrixPySim(BSplinePySim):
         part = self.build_partition(eta=eta, leaf_size=leaf_size)
         ctx = self._context()
         n = ctx["n_basis"]
+        grounded = self.ground_z is not None
 
         near_blocks = []
         for s, t in part["near"]:
             I, J = s.indices, t.indices
-            near_blocks.append((I, J, self.zblock(I, J, k=k)))
+            D = self.zblock(I, J, k=k)
+            if grounded:
+                D = D - self._zblock_image(I, J, k=k)
+            near_blocks.append((I, J, D))
 
         use_accel = (
             _HAVE_OFFEDGE_BLOCK_ACCEL
@@ -606,18 +618,9 @@ class HMatrixPySim(BSplinePySim):
             I, J = s.indices, t.indices
             mI, nJ = I.size, J.size
 
-            if use_accel:
-                get_row, get_col, dense = self._offedge_block_evaluators(ctx, I, J, k)
-            else:
-
-                def get_row(i, I=I, J=J):
-                    return self.zblock(I[i : i + 1], J, k=k, same_edge=False).ravel()
-
-                def get_col(j, I=I, J=J):
-                    return self.zblock(I, J[j : j + 1], k=k, same_edge=False).ravel()
-
-                def dense(I=I, J=J):
-                    return self.zblock(I, J, k=k, same_edge=False)
+            get_row, get_col, dense = self._offedge_aca_evaluators(
+                ctx, I, J, k, use_accel
+            )
 
             U, V = aca_partial(get_row, get_col, mI, nJ, tol=tol)
             r = U.shape[1]
@@ -696,8 +699,10 @@ class HMatrixPySim(BSplinePySim):
         pI = np.ascontiguousarray(polys[I])
         pJ = np.ascontiguousarray(polys[J])
         slI, srI, tI = seg_l[segI], seg_r[segI], tangents[segI]
-        slJ, srJ, tJ = mirror_pos(seg_l[segJ]), mirror_pos(seg_r[segJ]), mirror_tan(
-            tangents[segJ]
+        slJ, srJ, tJ = (
+            mirror_pos(seg_l[segJ]),
+            mirror_pos(seg_r[segJ]),
+            mirror_tan(tangents[segJ]),
         )
         one_supp = np.arange(d + 1, dtype=np.int64)[None, :]
 
@@ -771,6 +776,64 @@ class HMatrixPySim(BSplinePySim):
 
         return get_row, get_col, dense
 
+    def _offedge_aca_evaluators(self, ctx, I, J, k, use_accel):
+        """`(get_row, get_col, dense)` for the off-edge block Z[I][:, J] — the
+        ACA-fill interface for an admissible far block (or a distinct array-
+        element pair). "Off-edge" means no same-edge analytic overwrite, valid
+        because the clusters are well separated; the C++ assembler is used when
+        available, else the numpy `zblock(..., same_edge=False)` fallback.
+
+        Under PEC ground the block is the *grounded* off-edge block,
+        `Z_free − Z_image` (real cluster I against J, plus I against J's mirror
+        image), with the image folded into every evaluator so a single ACA
+        compresses the combined block — one factor pair, leaving the matvec and
+        preconditioner unchanged. Rank rises modestly (real + image content); a
+        block whose combined rank no longer compresses falls back to dense in
+        the caller, which is correct (the image stays as low-rank as the real
+        block for an antenna above the plane — reflection only increases the
+        cluster separation)."""
+        if use_accel:
+            row_f, col_f, dense_f = self._offedge_block_evaluators(ctx, I, J, k)
+        else:
+
+            def row_f(i):
+                return self.zblock(I[i : i + 1], J, k=k, same_edge=False).ravel()
+
+            def col_f(j):
+                return self.zblock(I, J[j : j + 1], k=k, same_edge=False).ravel()
+
+            def dense_f():
+                return self.zblock(I, J, k=k, same_edge=False)
+
+        if self.ground_z is None:
+            return row_f, col_f, dense_f
+
+        if use_accel:
+            row_i, col_i, dense_i = self._offedge_block_evaluators(
+                ctx, I, J, k, mirror_J=True
+            )
+        else:
+
+            def row_i(i):
+                return self._zblock_image(I[i : i + 1], J, k=k).ravel()
+
+            def col_i(j):
+                return self._zblock_image(I, J[j : j + 1], k=k).ravel()
+
+            def dense_i():
+                return self._zblock_image(I, J, k=k)
+
+        def get_row(i):
+            return row_f(i) - row_i(i)
+
+        def get_col(j):
+            return col_f(j) - col_i(j)
+
+        def dense():
+            return dense_f() - dense_i()
+
+        return get_row, get_col, dense
+
     # ------------------------------------------------------------------
     # Iterative solve (Phase 3): GMRES on the H-matvec + near-field
     # preconditioner, KCL constraints via the augmented saddle system
@@ -829,8 +892,12 @@ class HMatrixPySim(BSplinePySim):
         return X
 
     def _hmatrix_unsupported(self):
-        """The H-matrix path is free-space, no-enrichment only for now."""
-        return self.ground_z is not None or self.use_singular_enrichment
+        """The H-matrix path supports free space and PEC ground (the latter via
+        the per-block image term folded into the near/far block fill — see
+        `build_hmatrix` and `_offedge_aca_evaluators`). Only singular enrichment
+        still falls back to the dense path (its image reaction isn't
+        implemented; the constructor already forbids enrichment + ground)."""
+        return self.use_singular_enrichment
 
     def _build_operator(self):
         """Build the fast operator the constrained solve runs GMRES on. The
