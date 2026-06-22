@@ -174,8 +174,8 @@ finite limit even with pulse basis.
   fits progressively narrowing trailing windows to test whether the power
   law stabilizes (it doesn't).
 
-All three require PyNEC. Build it once into the project venv via
-`scripts/build_pynec.sh` (see README), then run:
+All three require PyNEC. Install the wheel into the project venv (see the
+README's "Optional: PyNEC backend" section), then run:
 
 ```
 .venv/bin/python scripts/<script>.py

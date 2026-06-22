@@ -1,6 +1,7 @@
 """Compare TriangularPySim against NEC2 for a matched 2-element Yagi in free space.
 
-Run from the project venv (needs PyNEC — see `scripts/build_pynec.sh`):
+Run from the project venv (needs PyNEC — install the wheel per the README's
+"Optional: PyNEC backend" section):
 
     .venv/bin/python scripts/compare_yagi_nec.py
 """

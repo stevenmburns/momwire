@@ -9,7 +9,8 @@ NEC models this as two GW cards joined at the origin (segment 1's end =
 segment 2's start). The feed is at the boundary segment of arm 1
 (NEC fed via EX card at the last segment of arm 1, which abuts arm 2).
 
-Run from the project venv (needs PyNEC — see `scripts/build_pynec.sh`):
+Run from the project venv (needs PyNEC — install the wheel per the README's
+"Optional: PyNEC backend" section):
 
     .venv/bin/python scripts/compare_vdipole_nec.py
 """

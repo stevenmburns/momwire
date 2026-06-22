@@ -30,8 +30,8 @@ web = [
     "uvicorn[standard]>=0.27",
 ]
 # Optional third-party MoM solvers used by the comparator scripts in
-# scripts/. PyNEC is built from the vendored submodule via
-# scripts/build_pynec.sh — not pip-installable here.
+# scripts/. (PyNEC is installed separately from the python-necpp fork's
+# release wheel — see README — not from PyPI.)
 validation = [
     "pymininec>=1.2",
 ]
@@ -41,11 +41,8 @@ Homepage = "https://github.com/stevenmburns/pysim"
 Issues = "https://github.com/stevenmburns/pysim/issues"
 
 [tool.pytest.ini_options]
-# Only collect the project's own tests. A bare `pytest` would otherwise
-# recurse into the vendored python-necpp submodule, whose Python-2-era
-# test harnesses fail to even parse on modern Python.
+# Only collect the project's own tests.
 testpaths = ["tests"]
-norecursedirs = ["python-necpp"]
 markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
     "plot: tests that produce plots for visual inspection (deselect with -m 'not plot')",
@@ -79,10 +76,6 @@ test-command = 'python -c "import pysim._accelerators; from pysim import triangu
 # (It is also cibuildwheel 3.x+'s default, but pin it explicitly so a future
 # default change can't silently drop libmvec.)
 manylinux-x86_64-image = "manylinux_2_28"
-
-[tool.ruff]
-# Vendored upstream source (PyNEC + necpp) — never lint.
-extend-exclude = ["python-necpp"]
 
 [tool.ruff.lint]
 ignore = ["E741"]
