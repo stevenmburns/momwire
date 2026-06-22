@@ -62,11 +62,16 @@ build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
 # libmvec, and the -lmvec link in setup.py would fail), 32-bit, and PyPy.
 skip = "*-musllinux_* *_i686 *-win32 pp*"
 test-requires = "pytest"
-# Only the three core solver test modules exercise the C++ accelerator and run
+# First assert the compiled C++ accelerator actually loads in the wheel: a
+# failed import would otherwise be swallowed by triangular.py's pure-Python
+# fallback, so the tests below would pass on a silently-degraded wheel. The
+# direct import + _HAVE_* flags make that a hard failure instead.
+#
+# Then run only the three core solver modules — they exercise the accelerator
 # without the web/PyNEC integration deps (fastapi + a separately-built PyNEC).
 # -m skips slow/plot. cibuildwheel runs this from a temp dir against the
 # installed wheel, so `import pysim` resolves to the wheel, not src/.
-test-command = 'pytest {project}/tests/test_pysim.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not plot"'
+test-command = 'python -c "import pysim._accelerators; from pysim import triangular as t; assert t._HAVE_ASSEMBLE_Z and t._HAVE_ASSEMBLE_Z_GENERAL" && pytest {project}/tests/test_pysim.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not plot"'
 
 [tool.cibuildwheel.linux]
 # glibc >= 2.28 ships libmvec; manylinux2014 (glibc 2.17) does NOT, so the
