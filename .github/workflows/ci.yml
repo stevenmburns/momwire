@@ -31,95 +31,30 @@ jobs:
       - run: pytest tests/ -m "not slow and not plot"
 
   test-pynec:
-    # Builds PyNEC from the python-necpp submodule and runs the cross-backend
-    # validation tests in tests/test_pynec_backend.py. ~2 min slower than the
-    # plain `test` job, justified by exercising the build script and the
-    # web.pynec_backend response shape against pysim.
+    # Validate that the PyNEC web backend agrees with pysim
+    # (tests/test_pynec_backend.py). PyNEC is no longer compiled here — it's
+    # installed as a prebuilt wheel from the python-necpp fork's GitHub Release
+    # (OpenBLAS via scipy-openblas32, OpenMP matrix-fill). That dropped the
+    # autoconf/SWIG/OpenBLAS apt installs and the ~2 min C++ build. PyNEC's
+    # build coverage — across the atlas/lapacke/mkl/openblas backends and on
+    # Windows — now lives in python-necpp's own CI, which is its proper home;
+    # this job only needs *a* working PyNEC to compare against.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
       - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install build-time system deps for necpp
-        # PYNEC_BACKEND=lapacke (the default) links against OpenBLAS pthread
-        # + reference LAPACKE. liblapacke-dev cannot coexist with
-        # libatlas-base-dev on Ubuntu — they Provide the same
-        # libblas.so/liblapack.so alternatives — so we install only the
-        # lapacke deps and let scripts/build_pynec.sh patch config.h
-        # directly (no ATLAS configure check required).
+      - run: pip install --upgrade pip
+      - run: pip install pybind11 numpy scipy matplotlib scikit-rf pytest fastapi
+      - run: pip install -e .
+      - name: Install PyNEC from the python-necpp release wheel
+        # --no-index so the ONLY candidate is the fork's wheel — never upstream
+        # PyNEC on PyPI, which shares version 1.7.4 but lacks our BLAS/OpenMP
+        # work and doesn't load on the target machines. numpy is already
+        # installed above, so no package index is needed to satisfy deps.
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y autoconf automake libtool m4 \
-            libopenblas-pthread-dev liblapacke-dev
-      - name: Create venv and install python deps
-        run: |
-          python -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install pybind11 numpy scipy matplotlib scikit-rf pytest fastapi swig setuptools wheel
-          .venv/bin/pip install -e .
-      - name: Build and install PyNEC
-        run: scripts/build_pynec.sh
-      - name: Run cross-backend tests
-        run: .venv/bin/pytest tests/test_pynec_backend.py -v
-
-  test-pynec-mkl:
-    # Same as test-pynec but with PYNEC_BACKEND=mkl. Verifies that the
-    # MKL link path in PyNEC/setup.py still builds and that necpp's
-    # LAPACKE_zgetrf/zgetrs calls correctly resolve against MKL's
-    # mkl_lapacke.h declarations.
-    #
-    # Gated to push-to-main only: MKL is opt-in (not pre-installed on
-    # GitHub runners), the ~1 GB intel-oneapi-mkl-classic-devel apt
-    # install adds ~3 minutes per run, and the MKL path is a deployment
-    # option, not the default. Running it on every PR would burn CI
-    # minutes for marginal coverage. The post-merge run on main catches
-    # regressions without slowing PR feedback.
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - uses: actions/setup-python@v4
-        with:
-          python-version: '3.12'
-          cache: pip
-      - name: Install Intel oneAPI MKL classic
-        # We pull from Intel's apt repo rather than the GitHub-Actions
-        # Intel oneAPI action so the install line is self-contained and
-        # easy to mirror locally if you want to reproduce a CI failure.
-        run: |
-          wget -qO- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB \
-            | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" \
-            | sudo tee /etc/apt/sources.list.d/oneAPI.list
-          sudo apt-get update -qq
-          sudo apt-get install -y autoconf automake libtool m4 \
-            intel-oneapi-mkl-classic-devel
-      - name: Create venv and install python deps
-        run: |
-          python -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install pybind11 numpy scipy matplotlib scikit-rf pytest fastapi swig setuptools wheel
-          .venv/bin/pip install -e .
-      - name: Build and install PyNEC with MKL
-        env:
-          PYNEC_BACKEND: mkl
-          MKLROOT: /opt/intel/oneapi/mkl/latest
-        run: scripts/build_pynec.sh
-      - name: Verify MKL is linked
-        run: |
-          so=$(.venv/bin/python -c "import _PyNEC; print(_PyNEC.__file__)")
-          ldd "$so" | grep -q libmkl_core || { echo "ERROR: PyNEC not linked against MKL"; ldd "$so"; exit 1; }
-          echo "OK — PyNEC is linked against MKL:"
-          ldd "$so" | grep -i mkl
-      - name: Run cross-backend tests
-        # OPENBLAS_NUM_THREADS=1 keeps numpy/scipy's idle BLAS pool from
-        # contending with MKL for cores during the solve.
-        env:
-          OPENBLAS_NUM_THREADS: "1"
-        run: .venv/bin/pytest tests/test_pynec_backend.py -v
+          pip install PyNEC --no-index \
+            --find-links https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.4-accel.1
+      - run: pytest tests/test_pynec_backend.py -v
