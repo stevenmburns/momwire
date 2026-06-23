@@ -13,7 +13,8 @@ name: wheels
 #     on both platforms. The fast Linux-compile smoke already runs per-PR in
 #     ci.yml's `test` job (`pip install -e .` builds the extension), so the only
 #     gap this leaves is Windows/MSVC-specific breakage, caught here on merge.
-#   - push tags v*: build + attach the wheels (+ sdist) to the GitHub Release.
+#   - push tags v*: build + attach the wheels (+ sdist) to the GitHub Release,
+#     and publish them to TestPyPI via Trusted Publishing.
 #   - workflow_dispatch: run the full matrix manually on a branch before merging
 #     a build-affecting change, when you want cross-platform coverage pre-merge.
 
@@ -90,3 +91,28 @@ jobs:
           files: |
             dist/*.whl
             dist/*.tar.gz
+
+  publish-testpypi:
+    # Publish the wheels + sdist to TestPyPI via Trusted Publishing (OIDC) — no
+    # stored token. Requires a matching trusted/pending publisher configured on
+    # TestPyPI for project `momwire`: owner stevenmburns, repo momwire, workflow
+    # wheels.yml, no environment. Without it the OIDC exchange hard-fails (it
+    # does NOT skip). skip-existing makes re-runs of an already-published version
+    # a no-op instead of an error. Tag-gated, same as the GitHub Release job.
+    name: publish to TestPyPI
+    needs: [build_wheels, make_sdist]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          packages-dir: dist
+          skip-existing: true
