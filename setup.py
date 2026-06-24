@@ -25,15 +25,16 @@ if sys.platform == "win32":
     # AVX2 baseline.
     extra_compile_args = ["/O2", "/arch:AVX2", "/openmp:llvm", "/fp:fast"]
     extra_link_args = []
+    extra_objects = []
 elif sys.platform == "darwin":
-    # Apple clang ships no OpenMP runtime and macOS has no libmvec, so this
-    # branch is deliberately the "simple pragmas" port: Homebrew's libomp gives
-    # us the OpenMP parallel-for + omp-simd directives (passed through Apple
-    # clang via -Xpreprocessor -fopenmp), and clang autovectorizes the inner
-    # sincos for NEON on its own. No -mavx2/-mfma (arm64 has no AVX2) and no
-    # -lmvec (no vectorized libm on macOS); the libmvec `declare simd` block in
-    # _accelerators.cpp is #ifdef'd off under __APPLE__. delocate vendors the
-    # libomp dylib into the wheel (the -rpath below points the extension at it).
+    # Apple clang ships no OpenMP runtime, so Homebrew's libomp gives us the
+    # OpenMP parallel-for + omp-simd directives (passed through Apple clang via
+    # -Xpreprocessor -fopenmp). macOS has no libmvec, but Apple Silicon's inner
+    # sincos is vectorized for NEON via SLEEF (see the SLEEF block below); absent
+    # SLEEF it falls back to Apple clang's scalar/NEON-autovectorized sincos. No
+    # -mavx2/-mfma (arm64 has no AVX2). delocate vendors the libomp dylib into
+    # the wheel (the -rpath below points the extension at it); SLEEF is
+    # static-linked, so it adds nothing for delocate to vendor.
     _libomp = os.environ.get("LIBOMP_PREFIX", "/opt/homebrew/opt/libomp")
     extra_compile_args = [
         "-O3",
@@ -49,6 +50,23 @@ elif sys.platform == "darwin":
         "-lomp",
         f"-Wl,-rpath,{os.path.join(_libomp, 'lib')}",
     ]
+    # Vectorize the inner sincos via SLEEF's NEON 2-wide-double routines
+    # (_ZGVnN2v_{sin,cos}) when a static SLEEF is available. -fveclib=SLEEF makes
+    # clang substitute them into the existing `omp simd` loops (no declare-simd
+    # block needed — that's the libmvec-specific trick, gated off under __APPLE__
+    # in _accelerators.cpp). The gnuabi static archive is linked by full path so
+    # the link is static (no dylib for delocate to vendor). Without SLEEF_PREFIX
+    # set to a prefix that actually contains the archive (e.g. a plain local
+    # `pip install -e .`), this stays scalar — same as before.
+    _sleef = os.environ.get("SLEEF_PREFIX")
+    _sleef_a = (
+        os.path.join(_sleef, "lib", "libsleefgnuabi.a") if _sleef else None
+    )
+    if _sleef_a and os.path.exists(_sleef_a):
+        extra_compile_args.append("-fveclib=SLEEF")
+        extra_objects = [_sleef_a]
+    else:
+        extra_objects = []
 else:
     extra_compile_args = [
         # Force -O3 -- Debian's Python CFLAGS inject -O2 before our flags
@@ -73,6 +91,7 @@ else:
         "-std=gnu++11",
     ]
     extra_link_args = ["-fopenmp", "-lpthread", "-lmvec"]
+    extra_objects = []
 
 ext_modules = [
     Pybind11Extension(
@@ -80,6 +99,7 @@ ext_modules = [
         ["src/momwire/_accelerators.cpp"],
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
+        extra_objects=extra_objects,
     ),
 ]
 

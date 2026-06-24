@@ -81,9 +81,28 @@ manylinux-x86_64-image = "manylinux_2_28"
 # Native Apple Silicon only for this first cut (the macos-14 runner is arm64).
 # Intel macOS (x86_64) is intentionally out of scope.
 archs = ["arm64"]
+# Build SLEEF as a static, PIC, gnuabi library pinned to the wheel's arch +
+# deployment target, so setup.py can static-link its NEON 2-wide-double sincos
+# (_ZGVnN2v_{sin,cos}) via -fveclib=SLEEF. Static => nothing for delocate to
+# vendor (unlike libomp). SLEEF_BUILD_GNUABI_LIBS provides the _ZGV* veclib-ABI
+# names that -fveclib=SLEEF emits. macos-14 runners ship cmake. The SLEEF tag is
+# pinned for reproducibility; bump deliberately.
+before-all = """
+git clone --depth 1 --branch 3.6.1 https://github.com/shibatch/sleef /tmp/sleef-src
+cmake -S /tmp/sleef-src -B /tmp/sleef-build \
+  -DCMAKE_INSTALL_PREFIX=/tmp/sleef \
+  -DSLEEF_BUILD_SHARED_LIBS=OFF \
+  -DSLEEF_BUILD_GNUABI_LIBS=ON \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DCMAKE_OSX_ARCHITECTURES=arm64 \
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+  -DSLEEF_BUILD_TESTS=OFF
+cmake --build /tmp/sleef-build --target install
+"""
 # libomp is provided by `brew install libomp` in the workflow; point setup.py's
-# darwin branch at it and pin the deployment target to the runner's floor.
-environment = { LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TARGET = "14.0" }
+# darwin branch at it (LIBOMP_PREFIX) and at the SLEEF built above (SLEEF_PREFIX),
+# and pin the deployment target to the runner's floor.
+environment = { LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", SLEEF_PREFIX = "/tmp/sleef", MACOSX_DEPLOYMENT_TARGET = "14.0" }
 # delocate (cibuildwheel's default macOS repair tool) vendors the libomp dylib
 # into the wheel. DYLD_LIBRARY_PATH lets it resolve libomp.dylib by its rpath.
 repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
