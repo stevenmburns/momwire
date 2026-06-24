@@ -1,8 +1,67 @@
 import os
 import sys
+import warnings
 
 from setuptools import setup
+from setuptools.command.build_ext import build_ext
 from pybind11.setup_helpers import Pybind11Extension
+
+# Build-time error classes. setuptools.errors is the modern home (distutils is
+# removed in Python 3.12+); fall back to distutils for very old setuptools.
+try:
+    from setuptools.errors import CCompilerError, ExecError, PlatformError, FileError
+except ImportError:  # pragma: no cover - ancient setuptools
+    from distutils.errors import (  # type: ignore[no-redef]
+        CCompilerError,
+        DistutilsExecError as ExecError,
+        DistutilsPlatformError as PlatformError,
+        DistutilsFileError as FileError,
+    )
+
+# momwire._accelerators is an *optional* C++ speedup: every module that imports
+# it (triangular, _triangular_kernels, _bspline_kernels, bspline, hmatrix,
+# sinusoidal) guards the import with `try/except ImportError` and falls back to
+# a pure-Python/numpy path. So a platform with no working compiler / libmvec /
+# libomp (musllinux, glibc < 2.28, an arch outside the wheel matrix, or no
+# toolchain at all) should still get a usable install rather than a hard
+# `pip install` failure. This cmdclass makes a failed extension build a warning
+# instead of an error, leaving the package importable in pure-Python mode.
+#
+# This does NOT let a silently-degraded *wheel* ship: the cibuildwheel
+# test-command asserts `import momwire._accelerators` succeeds, so any CI wheel
+# that fails to compile the extension fails its tests. The graceful path is only
+# for source (sdist) installs on unsupported platforms.
+_OPTIONAL_BUILD_ERRORS = (
+    CCompilerError,
+    ExecError,
+    PlatformError,
+    FileError,  # inplace copy of an extension that never got built
+    FileNotFoundError,  # compiler binary absent
+)
+
+
+class OptionalBuildExt(build_ext):
+    def run(self):
+        try:
+            super().run()
+        except _OPTIONAL_BUILD_ERRORS as exc:
+            self._warn(exc)
+
+    def build_extension(self, ext):
+        try:
+            super().build_extension(ext)
+        except _OPTIONAL_BUILD_ERRORS as exc:
+            self._warn(exc)
+
+    @staticmethod
+    def _warn(exc):
+        warnings.warn(
+            f"momwire._accelerators C++ extension failed to build ({exc!r}); "
+            "installing in pure-Python mode. The solver will work but run "
+            "slower. Install a C++ toolchain (and on Linux, glibc>=2.28 with "
+            "libmvec) for the accelerated path.",
+            stacklevel=2,
+        )
 
 # The accelerator is built on all three platforms; the vectorization strategy
 # differs per platform. Linux/GCC binds the inner sincos to glibc's libmvec
@@ -85,6 +144,7 @@ ext_modules = [
 
 setup(
     ext_modules=ext_modules,
+    cmdclass={"build_ext": OptionalBuildExt},
     packages=["momwire"],
     package_dir={"": "src/"},
 )
