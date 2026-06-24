@@ -1,0 +1,132 @@
+name: macos-sincos-iter
+
+# Lightweight macOS-arm64 iteration loop for the SLEEF vector-sincos work.
+#
+# The full wheels.yml matrix (3 OSes x 5 Pythons + wheel repair + full test
+# suite) is the wrong feedback loop for tuning the macOS SLEEF build: too slow,
+# and it only runs post-merge / on tags. This job is the fast inner loop —
+# macos-14 only, one Python, SLEEF cached — and it does the one thing we can't
+# do off Apple Silicon:
+#   1. builds the extension WITHOUT SLEEF (scalar baseline) and WITH SLEEF,
+#   2. asserts the SLEEF NEON vector symbols (_ZGVnN2v_{sin,cos}) actually got
+#      linked into the .so — a deterministic gate that also catches the silent
+#      failure mode where -fveclib=SLEEF compiles but never substitutes,
+#   3. runs the accuracy parity test on the SLEEF build, and
+#   4. diffs the sincos microbenchmark between the two builds to show the real
+#      on-hardware speedup (informational — runner timing is too noisy to gate).
+#
+# Path-filtered so it only fires when the build wiring or kernels change. It is
+# intentionally NOT part of wheels.yml. Decide before merge whether to keep it
+# as a permanent fast macOS smoke or delete it once the feature lands.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "setup.py"
+      - "pyproject.toml"
+      - "src/momwire/_accelerators.cpp"
+      - "scripts/bench_sincos.py"
+      - ".github/workflows/macos-sincos-iter.yml"
+
+# Cancel superseded runs on the same ref so rapid pushes don't queue up.
+concurrency:
+  group: macos-sincos-iter-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SLEEF_TAG: "3.6.1"
+  MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+jobs:
+  macos-sincos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libomp (macOS OpenMP runtime)
+        run: brew install libomp
+
+      - name: Cache SLEEF static build
+        id: sleef-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/sleef
+          key: sleef-${{ env.SLEEF_TAG }}-macos14-arm64-dt${{ env.MACOSX_DEPLOYMENT_TARGET }}-v1
+
+      - name: Build SLEEF (static, PIC, gnuabi)
+        if: steps.sleef-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$SLEEF_TAG" https://github.com/shibatch/sleef /tmp/sleef-src
+          cmake -S /tmp/sleef-src -B /tmp/sleef-build \
+            -DCMAKE_INSTALL_PREFIX=/tmp/sleef \
+            -DSLEEF_BUILD_SHARED_LIBS=OFF \
+            -DSLEEF_BUILD_GNUABI_LIBS=ON \
+            -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET" \
+            -DSLEEF_BUILD_TESTS=OFF
+          cmake --build /tmp/sleef-build --target install
+          echo "--- libsleefgnuabi.a contents (expect _ZGVnN2v_*): ---"
+          ls -la /tmp/sleef/lib
+          nm /tmp/sleef/lib/libsleefgnuabi.a 2>/dev/null | grep -i ZGVnN2v | head || true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build + test deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install setuptools wheel pybind11 numpy scipy pytest
+
+      - name: Build scalar baseline (no SLEEF) + benchmark
+        env:
+          LIBOMP_PREFIX: /opt/homebrew/opt/libomp
+        run: |
+          # Editable install so `import momwire` resolves to src/; this first
+          # build has SLEEF_PREFIX unset, so setup.py stays on the scalar path.
+          pip install -e . --no-build-isolation
+          python scripts/bench_sincos.py --json | tee scalar.json
+          echo "scalar build symbols (expect NO _ZGVnN2v):"
+          nm src/momwire/_accelerators*.so | grep -i ZGVnN2v && echo "UNEXPECTED" || echo "(none, as expected)"
+
+      - name: Rebuild with SLEEF + benchmark
+        env:
+          LIBOMP_PREFIX: /opt/homebrew/opt/libomp
+          SLEEF_PREFIX: /tmp/sleef
+        run: |
+          # Rebuild the .so in place against SLEEF; the editable install above
+          # keeps pointing at src/, so it picks the new binary up.
+          python setup.py build_ext --inplace --force
+          python scripts/bench_sincos.py --json | tee sleef.json
+
+      - name: Assert SLEEF vector symbols are linked
+        run: |
+          echo "--- _accelerators.so : SLEEF NEON sincos symbols ---"
+          if nm src/momwire/_accelerators*.so | grep -i ZGVnN2v; then
+            echo "OK: SLEEF vector sincos (_ZGVnN2v_*) linked into the extension."
+          else
+            echo "FAIL: -fveclib=SLEEF did not substitute vector sincos —"
+            echo "      no _ZGVnN2v_* symbols in the .so. Vectorization is NOT happening."
+            exit 1
+          fi
+
+      - name: Accuracy parity test (SLEEF build)
+        run: |
+          pytest tests/test_momwire.py::test_triangular_reg_and_offedge_numpy_matches_cpp -q
+
+      - name: Report speedup (informational)
+        run: |
+          python - <<'PY'
+          import json
+          s = json.load(open("scalar.json"))
+          v = json.load(open("sleef.json"))
+          sp = s["ns_per_pair"] / v["ns_per_pair"]
+          print(f"scalar : {s['ns_per_pair']:.3f} ns/pair")
+          print(f"SLEEF  : {v['ns_per_pair']:.3f} ns/pair")
+          print(f"speedup: {sp:.2f}x  (proxy predicted ~1.5x)")
+          if sp < 1.1:
+              print("::warning::SLEEF speedup under 1.1x — investigate "
+                    "(vectorization may not be effective on this workload).")
+          PY
