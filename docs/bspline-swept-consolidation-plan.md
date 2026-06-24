@@ -70,12 +70,22 @@ pass, OpenMP to physical cores.
 still 1.3–1.5× slower on a **single large wire** and single-threaded.
 
 ### Why the residual gap (single large wire)
-At `d=1` the moment *count* equals triangular's (4 components) — it's not the
-basis. The gap is the **same-edge handling**: bspline does closed-form static
-moments **+** reg quadrature (two pieces) per same-edge block, while triangular
-does a single reg quadrature. On one big 100×100 same-edge block (a single
-wire) that extra static-moment work dominates. On multi-wire the same-edge
-blocks are small and most work is cross-wire off-edge (shared kernel) → parity.
+At `d=1` the moment *count* equals triangular's (4 components), so it isn't the
+basis (clamped B-spline degree 1 *is* the tent function). The gap is in the
+**same-edge moment scheme**, which the two solvers implement differently —
+bspline via the general-degree polynomial-moment path (`_seg_seg_static_moments`
++ the reg streaming kernel), triangular via tent-specific closed forms
+(`_triangular_kernels`: `_H1`/`_H2`/`_Sigma`/`_J_static_all` + its reg
+quadrature). On one big 100×100 same-edge block (a single wire) bspline's more
+general path dominates; on multi-wire the same-edge blocks are small and most
+work is cross-wire off-edge (shared kernel) → parity.
+
+> ⚠️ **These are genuinely different quadratures, not equivalent ones** — see
+> the dedicated section below. The `_bspline_kernels.py` module docstring claims
+> d=1 is "bit-for-bit equivalent" to triangular's same-edge kernels; that does
+> **not** hold end-to-end (the impedances differ by up to ~5% at coarse N). So
+> the performance gap and a real **accuracy/result-shift** question share the
+> same root: the two solvers are different numerical schemes.
 
 ### Why batching helps multi-wire but not single big wires
 The win tracks the **per-k Python/overhead fraction**, not compute. Small
@@ -103,6 +113,54 @@ would recover **~1.5×** at 128-bit width (arm64 has no 4-wide doubles). The
 kernels are **sincos-bound, not memory-bound**. macOS currently runs scalar
 sincos (the `__APPLE__` guard disables the libmvec block), so a SLEEF/Accelerate
 vForce NEON port is a real (if modest) lever — separate from this effort.
+
+---
+
+## ⚠️ Triangular and bspline d=1 are genuinely different quadratures
+
+**This must be understood before retiring triangular — it's a correctness
+question, not just performance.**
+
+Despite being the same linear basis (and a `_bspline_kernels.py` docstring
+claiming d=1 is "bit-for-bit equivalent" to triangular's same-edge kernels),
+the two solvers **do not produce the same impedance**. Driver-point Z, same
+geometry, same quadrature order (`n_qp=4` both):
+
+| case | triangular | bspline d=1 | rel diff |
+|---|---|---|--:|
+| dipole N=21 | 11.61 − 963.8j | 12.84 − 1013.2j | **5.1%** |
+| dipole N=81 | 11.57 − 958.9j | 11.97 − 975.4j | **1.7%** |
+| yagi2 N=21 | 34.86 − 11.65j | 34.93 − 11.55j | 0.34% |
+| yagi2 N=81 | 35.55 − 9.85j | 35.57 − 9.82j | 0.11% |
+
+The difference is largest at coarse N and **shrinks with refinement**
+(dipole 5.1% → 1.7% as N: 21 → 81) — the signature of two **genuinely different
+finite-N quadrature schemes** that converge to the same continuum limit but
+disagree at the segment counts users actually run (the UI default is ~21
+segs/wire, i.e. the 5%-disagreement regime, worst on a single long wire).
+
+**Implications (both matter):**
+
+1. **Correctness / result-shift.** Retiring triangular would shift every
+   user's computed Z — by up to ~5% on a coarse single-wire reactance. Before
+   doing that we must understand *which scheme is more accurate* (compare both
+   against NEC / the convergence study in NEXT_STEPS item 13, and against a
+   refined-N reference) and decide whether the shift is acceptable. The
+   "bit-for-bit equivalent" docstring is **wrong end-to-end** and should be
+   corrected once we know why (candidates: the same-edge static-moment split,
+   the delta-gap source projection, or the off-edge full-kernel evaluation —
+   not yet pinned down).
+
+2. **Performance.** This is *why bspline can't match triangular even in the
+   limited cases*: it isn't running the same (cheaper, tent-specific) numerical
+   scheme — it runs a more general polynomial-moment scheme that is both costlier
+   and numerically distinct. So "make bspline match triangular's speed" and
+   "make bspline match triangular's answer" are the same underlying question.
+
+**Action before retirement:** pin down the mechanism of the disagreement
+(diff the same-edge, off-edge, and source contributions between the two at a
+fixed geometry), establish which is more accurate, and document the expected
+result-shift. Only then is the speed comparison even the right comparison.
 
 ---
 
@@ -152,6 +210,12 @@ pass-1-needs-no-kernel optimization mitigates the worst case. Defer.
 ## Decision criteria before actually retiring triangular
 
 Retire only when **all** hold:
+0. **(gate) The quadrature disagreement is understood.** Per the section above,
+   bspline d=1 and triangular give different Z (up to ~5% at coarse N). Pin down
+   the mechanism, establish which is more accurate vs an external reference, and
+   accept/document the result-shift retirement would impose on users. *This is
+   the first gate — the speed comparison is only meaningful once we know the two
+   are computing acceptably-equivalent answers.*
 1. Items 1 & 2 above are batched in bspline (junction + multi-port sweeps no
    longer regress vs triangular).
 2. `MomwireEngine` default switched from `TriangularSolver` to a bspline degree
