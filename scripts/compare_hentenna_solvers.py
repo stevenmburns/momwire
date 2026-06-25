@@ -222,7 +222,7 @@ def solve_sinusoidal(n: int) -> tuple[complex, float]:
 def solve_pynec(n: int) -> tuple[complex, float]:
     """Run PyNEC via the existing web backend's hentenna builder. Imported
     lazily so the rest of the script runs even without the PyNEC build."""
-    from web import pynec_backend
+    from validation import pynec_backend
 
     req = {
         "n_per_wire": n,

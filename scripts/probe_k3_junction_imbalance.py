@@ -54,7 +54,7 @@ from __future__ import annotations
 import numpy as np
 
 from pysim.bspline import BSplinePySim
-from web import server as web_server
+from validation import momwire_backend as web_server
 
 
 C_LIGHT = 299_792_458.0

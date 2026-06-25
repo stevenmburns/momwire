@@ -26,12 +26,12 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install --upgrade pip
-      - run: pip install pybind11 numpy scipy matplotlib scikit-rf pytest
-      - run: pip install -e .
+      # Build (isolated, pybind11 from build-system.requires) + core + test deps.
+      - run: pip install -e .[test]
       - run: pytest tests/ -m "not slow and not plot"
 
   test-pynec:
-    # Validate that the PyNEC web backend agrees with momwire
+    # Validate that the PyNEC backend agrees with momwire
     # (tests/test_pynec_backend.py). PyNEC is no longer compiled here — it's
     # installed as a prebuilt wheel from the python-necpp fork's GitHub Release
     # (OpenBLAS via scipy-openblas32, OpenMP matrix-fill). That dropped the
@@ -47,8 +47,9 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install --upgrade pip
-      - run: pip install pybind11 numpy scipy matplotlib scikit-rf pytest fastapi
-      - run: pip install -e .
+      # Same build + test deps as the plain lane (no fastapi — the web server
+      # was retired); PyNEC is added from the fork's wheel in the next step.
+      - run: pip install -e .[test]
       - name: Install PyNEC from the python-necpp release wheel
         # --no-index so the ONLY candidate is the fork's wheel — never upstream
         # PyNEC on PyPI, which shares version 1.7.4 but lacks our BLAS/OpenMP

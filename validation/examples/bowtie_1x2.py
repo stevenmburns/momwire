@@ -209,7 +209,7 @@ def _feed_knot_index(
 
 
 def momwire_solve(req: dict) -> dict:
-    from web.server import (
+    from validation.momwire_backend import (
         C_LIGHT,
         _PEC_GROUND_EPS_R,
         _PEC_GROUND_SIGMA,
@@ -314,7 +314,7 @@ def momwire_sweep(
 ) -> tuple[list[float], list[float], list[list[float]], list[list[float]]]:
     """Multi-feed sweep returning the 4-tuple (primary_re, primary_im,
     feeds_re, feeds_im) where feeds_* is (n_freqs × n_feeds)."""
-    from web.server import C_LIGHT, _make_momwire_sim, _read_ground
+    from validation.momwire_backend import C_LIGHT, _make_momwire_sim, _read_ground
 
     args = _request_args(req)
     design_freq_mhz = float(req.get("design_freq_mhz", 28.47))
@@ -388,7 +388,7 @@ def pynec_build(req: dict) -> dict:
     element 0's feed and V_1 = exp(j·π·phase_lr_deg/180) on element 1's
     feed — see `pynec_excite()` below.
     """
-    from web.pynec_backend import C_LIGHT, nec
+    from validation.pynec_backend import C_LIGHT, nec
 
     n_per_wire = int(req.get("n_per_wire", 21))
     design_freq_mhz = float(req.get("design_freq_mhz", 28.47))
@@ -494,7 +494,7 @@ def _run_solve(b: dict, freq_mhz: float):
     tag's centre segment with its prescribed complex voltage; NEC
     superposes the excitations and the returned current vector reflects
     the combined drive."""
-    from web.pynec_backend import (
+    from validation.pynec_backend import (
         GROUND_CONDUCTIVITY,
         GROUND_DIELECTRIC,
     )
@@ -537,7 +537,7 @@ def _per_element_wires(
     """Pack one element's polylines into wire records the frontend renders.
     Every bowtie polyline endpoint is at a K=2 junction so the carry-over
     `junction_at_start/end` apply throughout."""
-    from web.pynec_backend import _segment_centers_to_knot_currents
+    from validation.pynec_backend import _segment_centers_to_knot_currents
 
     out = []
     for label, path, npe, tag_group in elem["polylines"]:
@@ -563,7 +563,7 @@ def _per_element_wires(
 
 
 def pynec_solve(req: dict) -> dict:
-    from web.pynec_backend import GROUND_CONDUCTIVITY, GROUND_DIELECTRIC
+    from validation.pynec_backend import GROUND_CONDUCTIVITY, GROUND_DIELECTRIC
 
     meas_freq_mhz = float(
         req.get("measurement_freq_mhz", req.get("design_freq_mhz", 28.47))

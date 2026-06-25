@@ -16,13 +16,18 @@ pip install -e .
 ## Test
 
 ```bash
-pip install pytest numpy scipy matplotlib icecream scikit-rf
+pip install -e ".[test]"   # core + test deps (pytest, matplotlib, scikit-rf)
 pytest tests/
 ```
 
-## Optional: PyNEC backend
+The cross-validation against NEC2 (`tests/test_pynec_backend.py`) additionally
+needs PyNEC — a test-only dependency installed separately from a wheel (see
+below). Those tests skip cleanly when it isn't present; everything else runs
+without it.
 
-momwire can be cross-validated against NEC2 via [PyNEC](https://github.com/tmolteno/python-necpp) (the `tests/test_pynec_backend.py` suite); NEC2 also delivers ~5–10× faster single-frequency solves.
+## Optional: PyNEC backend (test-only)
+
+momwire can be cross-validated against NEC2 via [PyNEC](https://github.com/tmolteno/python-necpp) (the `tests/test_pynec_backend.py` suite); NEC2 also delivers ~5–10× faster single-frequency solves. PyNEC is a **test-flow-only** dependency — momwire's own solver never imports it.
 
 ### Install the PyNEC wheel
 

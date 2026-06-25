@@ -177,7 +177,7 @@ def _build_per_band_geometry(req: dict, z_offset_global: float) -> dict:
     """Common driver: pull bands + global knobs, build per-band polylines,
     and return the bundle both momwire and pynec paths consume.
     """
-    from web.server import C_LIGHT
+    from validation.momwire_backend import C_LIGHT
 
     bands = _request_bands(req)
     n_per_wire = int(req.get("n_per_wire", 21))
@@ -221,7 +221,7 @@ def _build_per_band_geometry(req: dict, z_offset_global: float) -> dict:
 
 
 def momwire_solve(req: dict) -> dict:
-    from web.server import (
+    from validation.momwire_backend import (
         C_LIGHT,
         _PEC_GROUND_EPS_R,
         _PEC_GROUND_SIGMA,
@@ -374,7 +374,7 @@ def momwire_sweep(
     — moving a freq slider in the band group rebuilds geometry; this
     sweep just runs the existing geometry across many meas freqs.
     """
-    from web.server import C_LIGHT, _make_momwire_sim, _read_ground
+    from validation.momwire_backend import C_LIGHT, _make_momwire_sim, _read_ground
 
     design_freq_mhz = float(req.get("design_freq_mhz", 14.300))
     wire_radius = float(req.get("wire_radius", 0.0005))
@@ -466,7 +466,7 @@ def pynec_build(req: dict) -> dict:
             "PyNEC daisy-chain mode is under investigation — "
             "use the momwire backend (Triangular/B-spline/Sinusoidal) for now."
         )
-    from web.pynec_backend import C_LIGHT, nec
+    from validation.pynec_backend import C_LIGHT, nec
 
     n_per_wire = int(req.get("n_per_wire", 21))
     z_spacing_m = float(req.get("z_spacing_m", 1.0))
@@ -590,7 +590,7 @@ def _run_solve(b: dict, freq_mhz: float):
     T→S edge. Daisy-chain mode: one EX card on band 0's feed only
     (the TL cards added in pynec_build handle the inter-band coupling
     through NEC's internal transmission-line math)."""
-    from web.pynec_backend import GROUND_CONDUCTIVITY, GROUND_DIELECTRIC
+    from validation.pynec_backend import GROUND_CONDUCTIVITY, GROUND_DIELECTRIC
 
     c = b["context"]
     if b["ground"]:
@@ -633,7 +633,7 @@ def _path_knots(path, npe_list) -> np.ndarray:
 
 
 def pynec_solve(req: dict) -> dict:
-    from web.pynec_backend import (
+    from validation.pynec_backend import (
         GROUND_CONDUCTIVITY,
         GROUND_DIELECTRIC,
         _segment_centers_to_knot_currents,

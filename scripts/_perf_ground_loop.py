@@ -26,7 +26,7 @@ from __future__ import annotations
 import sys
 import time
 
-from web.pynec_backend import solve_yagi
+from validation.pynec_backend import solve_yagi
 
 REQ = {
     "solver": "pynec",

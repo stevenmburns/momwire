@@ -28,7 +28,7 @@ import io
 import pstats
 import time
 
-from web.pynec_backend import solve_yagi
+from validation.pynec_backend import solve_yagi
 
 
 def base_req(

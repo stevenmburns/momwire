@@ -1,9 +1,9 @@
 """Base types for the antenna-example registry.
 
-An `AntennaExample` bundles everything the web layer needs to serve one
-geometry: parameter schema, momwire solve/sweep, and pynec build/solve. Any
-callable left as None signals the backend doesn't support that operation
-for this geometry.
+An `AntennaExample` bundles everything the validation harness needs to run one
+geometry through both engines: parameter schema, momwire solve/sweep, and pynec
+build/solve. Any callable left as None signals the backend doesn't support that
+operation for this geometry.
 
 Keeping these as plain callables (rather than a class hierarchy) means
 each example module is a flat file of functions plus one EXAMPLE = ...
@@ -35,7 +35,7 @@ SweepResult = Union[
 SweepFn = Callable[[dict, list[float]], SweepResult]
 
 # pynec pattern excitation: drive the NEC context using the build dict's
-# feed metadata. Single-feed default lives in web.pynec_backend.pattern();
+# feed metadata. Single-feed default lives in validation.pynec_backend.pattern();
 # multi-feed examples (bowtie) supply their own (e.g. two ex_card calls).
 PynecPatternExciteFn = Callable[[dict, float], None]  # (build, freq_mhz)
 

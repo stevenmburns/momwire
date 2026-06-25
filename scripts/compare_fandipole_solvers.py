@@ -44,8 +44,8 @@ import numpy as np
 
 import mininec.mininec as mn
 
-from web import server as web_server
-from web import pynec_backend
+from validation import momwire_backend as web_server
+from validation import pynec_backend
 
 
 def _make_req(

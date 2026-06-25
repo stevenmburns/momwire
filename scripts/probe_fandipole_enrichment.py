@@ -40,7 +40,7 @@ import numpy as np
 
 from pysim.triangular import TriangularPySim
 from pysim.bspline import BSplinePySim
-from web import server as web_server
+from validation import momwire_backend as web_server
 
 
 def _make_req(n_per_wire: int, n_bands: int, design_freq_mhz: float = 14.3) -> dict:
