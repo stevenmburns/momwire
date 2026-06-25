@@ -100,7 +100,7 @@ def _geometry(
 
 
 def _derive(req: dict, z_offset: float):
-    from web.server import C_LIGHT
+    from validation.momwire_backend import C_LIGHT
 
     n_per_wire = int(req.get("n_per_wire", 21))
     design_freq_mhz = float(req.get("design_freq_mhz", 28.47))
@@ -128,7 +128,7 @@ def _derive(req: dict, z_offset: float):
 
 
 def momwire_solve(req: dict) -> dict:
-    from web.server import (
+    from validation.momwire_backend import (
         C_LIGHT,
         _PEC_GROUND_EPS_R,
         _PEC_GROUND_SIGMA,
@@ -204,7 +204,7 @@ def momwire_solve(req: dict) -> dict:
 
 
 def momwire_sweep(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
-    from web.server import C_LIGHT, _make_momwire_sim, _read_ground
+    from validation.momwire_backend import C_LIGHT, _make_momwire_sim, _read_ground
 
     ground_on, _, z_offset = _read_ground(req)
     d = _derive(req, z_offset)
@@ -243,7 +243,7 @@ def pynec_build(req: dict) -> dict:
     feed-segment count so the source lands at the gap's geometric centre;
     even n_feed offsets the source by half a segment and biases R by ~1 Ω.
     """
-    from web.pynec_backend import C_LIGHT, nec
+    from validation.pynec_backend import C_LIGHT, nec
 
     n_per_wire = int(req.get("n_per_wire", 21))
     design_freq_mhz = float(req.get("design_freq_mhz", 28.47))
@@ -332,7 +332,7 @@ def _path_knots(path, npe_list) -> np.ndarray:
 
 
 def pynec_solve(req: dict) -> dict:
-    from web.pynec_backend import (
+    from validation.pynec_backend import (
         GROUND_CONDUCTIVITY,
         GROUND_DIELECTRIC,
         _run_solve,

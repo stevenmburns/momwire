@@ -55,7 +55,7 @@ def _bands_from_request(req: dict) -> tuple[list[float], list[float]]:
     `band_halfdriver_factors` with `n_bands` an explicit length. Used
     when `bands` is absent.
     """
-    from web.server import C_LIGHT
+    from validation.momwire_backend import C_LIGHT
 
     bands = req.get("bands")
     if bands:
@@ -205,7 +205,7 @@ def _momwire_build_sim_args(req: dict, z_offset: float, ground_on: bool):
 
 
 def momwire_solve(req: dict) -> dict:
-    from web.server import (
+    from validation.momwire_backend import (
         C_LIGHT,
         _PEC_GROUND_EPS_R,
         _PEC_GROUND_SIGMA,
@@ -244,7 +244,9 @@ def momwire_solve(req: dict) -> dict:
 
     return {
         "geometry": "fan_dipole",
-        "wires": _momwire_pack_wires(g, sim, coeffs, _polyline_knots, _pack_momwire_wires),
+        "wires": _momwire_pack_wires(
+            g, sim, coeffs, _polyline_knots, _pack_momwire_wires
+        ),
         "feed_wire_index": 0,
         "feed_knot_index": 1,  # midpoint of the 3-knot feed wire record
         "z_in_re": float(z_in.real),
@@ -267,7 +269,7 @@ def momwire_solve(req: dict) -> dict:
 
 
 def momwire_sweep(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
-    from web.server import C_LIGHT, _make_momwire_sim, _read_ground
+    from validation.momwire_backend import C_LIGHT, _make_momwire_sim, _read_ground
 
     design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
     wire_radius = float(req.get("wire_radius", 0.0005))
@@ -297,7 +299,7 @@ def pynec_build(req: dict) -> dict:
     """Cone-arrangement fan dipole. Up to 5 bands, each a two-edge arm on
     each side (S->A_i->B_i mirrored to T->A_neg_i->B_neg_i). All bands
     share the T->S feed gap."""
-    from web.pynec_backend import C_LIGHT, nec
+    from validation.pynec_backend import C_LIGHT, nec
 
     design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
     wire_radius = float(req.get("wire_radius", 0.0005))
@@ -366,7 +368,7 @@ def _path_knots(path, npe_list) -> np.ndarray:
 
 
 def pynec_solve(req: dict) -> dict:
-    from web.pynec_backend import (
+    from validation.pynec_backend import (
         GROUND_CONDUCTIVITY,
         GROUND_DIELECTRIC,
         _run_solve,

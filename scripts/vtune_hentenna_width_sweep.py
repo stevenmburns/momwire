@@ -127,7 +127,7 @@ def _step_bspline(n: int, width_factor: float):
 
 
 def _step_pynec(n: int, width_factor: float):
-    from web import pynec_backend
+    from validation import pynec_backend
 
     req = {
         "n_per_wire": n,

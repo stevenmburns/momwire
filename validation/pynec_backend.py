@@ -1,10 +1,12 @@
-"""PyNEC drop-in backend for the web UI.
+"""PyNEC drop-in backend for the validation harness.
 
-Mirrors the response shape of `web.server`'s momwire solver paths so the
-frontend can swap between solvers via a `solver` field on every request.
+Mirrors the response shape of `validation.momwire_backend`'s momwire solver
+paths so the cross-check tests can run the same geometry through both engines
+and compare, selected via a `solver` field on the request.
 
-PyNEC is optional: `HAVE_PYNEC` is False if the import fails, and the
-server falls back to momwire with a one-time warning.
+PyNEC is optional: `HAVE_PYNEC` is False if the import fails, and `solve()`
+falls back to momwire with a one-time warning. The PyNEC tests skip entirely
+when it isn't installed (see tests/test_pynec_backend.py).
 """
 
 from __future__ import annotations

@@ -7,8 +7,8 @@ solve_inverted_v) as the pilot for the registry-based example layout.
 Helpers (_make_momwire_sim, _read_ground, _pack_momwire_wires, _polyline_knots,
 _run_solve, _segment_centers_to_knot_currents, etc.) are imported lazily
 inside each function to break the import cycle: the dispatchers in
-web.server import this package, so this module can't pull from web.server
-at import time.
+validation.momwire_backend / validation.pynec_backend import this package, so
+this module can't pull from them at import time.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def _polyline(arm_len: float, angle_deg: float, z_offset: float = 0.0) -> np.nda
 
 
 def momwire_solve(req: dict) -> dict:
-    from web.server import (
+    from validation.momwire_backend import (
         C_LIGHT,
         _PEC_GROUND_EPS_R,
         _PEC_GROUND_SIGMA,
@@ -100,7 +100,7 @@ def momwire_solve(req: dict) -> dict:
 
 def momwire_sweep(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
     """Batched sweep using the momwire model's compute_impedance_swept."""
-    from web.server import C_LIGHT, _make_momwire_sim, _read_ground
+    from validation.momwire_backend import C_LIGHT, _make_momwire_sim, _read_ground
 
     angle_deg = float(req.get("angle_deg", 30.0))
     n_per_wire = int(req.get("n_per_wire", 30))
@@ -133,7 +133,7 @@ def pynec_build(req: dict) -> dict:
     """Build the PyNEC context + geometry for the inverted V. Returns the
     context, feed segment, and derived geometry that callers need for
     response formatting."""
-    from web.pynec_backend import C_LIGHT, nec
+    from validation.pynec_backend import C_LIGHT, nec
 
     angle_deg = float(req.get("angle_deg", 30.0))
     n_per_wire = int(req.get("n_per_wire", 30))
@@ -179,7 +179,7 @@ def pynec_build(req: dict) -> dict:
 
 def pynec_solve(req: dict) -> dict:
     """Inverted V via two PyNEC wires meeting at the apex."""
-    from web.pynec_backend import (
+    from validation.pynec_backend import (
         GROUND_CONDUCTIVITY,
         GROUND_DIELECTRIC,
         _run_solve,

@@ -1,24 +1,18 @@
-"""Integration tests for the web/server.py momwire solver paths.
+"""Response-schema tests for validation.momwire_backend's solver paths.
 
 The solver-level momwire API has its own unit coverage in tests/test_momwire.py;
-this file pins the *response schema* and array-assembly logic the frontend
-depends on. Catches regressions in the bowtie 1×2 geometry build, the
+this file pins the *response schema* and array-assembly logic the cross-check
+harness depends on. Catches regressions in the bowtie 1×2 geometry build, the
 multi-feed response shape, the multi-feed sweep tuple shape, and the
-100 Ω Z₀ surfacing — all easy to break with a careless refactor of
-web/server.py and hard to notice without driving the UI by hand.
+100 Ω Z₀ surfacing — all easy to break with a careless refactor of the backend
+and hard to notice otherwise. Needs only momwire (no fastapi/PyNEC), so it runs
+in the plain test lane.
 """
 
 import numpy as np
-import pytest
 
-# web.server is the FastAPI app — skip the whole module when fastapi
-# isn't installed. The plain `test` CI job ships a minimal scientific
-# stack without the web dependencies; the `test-pynec` jobs install
-# fastapi and exercise this file.
-pytest.importorskip("fastapi")
-
-from web.examples import REGISTRY as _EXAMPLES  # noqa: E402
-from web.server import solve  # noqa: E402
+from validation.examples import REGISTRY as _EXAMPLES
+from validation.momwire_backend import solve
 
 _solve_bowtie = _EXAMPLES["bowtie"].momwire_solve
 _sweep_bowtie = _EXAMPLES["bowtie"].momwire_sweep

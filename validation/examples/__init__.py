@@ -1,15 +1,15 @@
 """Antenna example registry.
 
-Each antenna geometry exposed by the web UI is defined in its own module
+Each antenna geometry in the validation harness is defined in its own module
 under this package and registered via `register(EXAMPLE)`. The dispatchers
-in `web.server` and `web.pynec_backend` look up the example by its `name`
-field, so removing an antenna is a two-line change: delete the module file
-and the matching `from . import <name>` line below.
+in `validation.momwire_backend` and `validation.pynec_backend` look up the
+example by its `name` field, so removing an antenna is a two-line change:
+delete the module file and the matching `from . import <name>` line below.
 
-The registry is intentionally web-layer (not solver-core) — each example
-parses the request dict, calls shared helpers in `web.server` /
-`web.pynec_backend`, and produces the JSON-shaped response the frontend
-consumes. The solver package `momwire/` stays free of UI concerns.
+The registry is intentionally harness-level (not solver-core) — each example
+parses the request dict, calls shared helpers in `validation.momwire_backend` /
+`validation.pynec_backend`, and produces the JSON-shaped response the tests
+assert against. The solver package `momwire/` stays free of these concerns.
 """
 
 from __future__ import annotations

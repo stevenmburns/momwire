@@ -38,7 +38,7 @@ def _polylines(
 def _derive(req: dict, ground_z_offset: float):
     """Pull the request knobs and compute the derived geometry quantities
     that both momwire_solve and momwire_sweep need."""
-    from web.server import C_LIGHT
+    from validation.momwire_backend import C_LIGHT
 
     n_per_wire = int(req.get("n_per_wire", 30))
     design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
@@ -82,7 +82,7 @@ def _derive(req: dict, ground_z_offset: float):
 
 
 def momwire_solve(req: dict) -> dict:
-    from web.server import (
+    from validation.momwire_backend import (
         C_LIGHT,
         _PEC_GROUND_EPS_R,
         _PEC_GROUND_SIGMA,
@@ -170,7 +170,7 @@ def momwire_solve(req: dict) -> dict:
 
 def momwire_sweep(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[float]]:
     """Batched sweep using the momwire model's compute_impedance_swept."""
-    from web.server import C_LIGHT, _make_momwire_sim, _read_ground
+    from validation.momwire_backend import C_LIGHT, _make_momwire_sim, _read_ground
 
     ground_on, _, z_offset = _read_ground(req)
     d = _derive(req, z_offset)
@@ -196,7 +196,7 @@ def momwire_sweep(req: dict, freqs_mhz: list[float]) -> tuple[list[float], list[
 def pynec_build(req: dict) -> dict:
     """Build the PyNEC context + geometry for the Yagi (driver + reflector
     + n_directors uniformly-spaced directors)."""
-    from web.pynec_backend import C_LIGHT, nec
+    from validation.pynec_backend import C_LIGHT, nec
 
     n_per_wire = int(req.get("n_per_wire", 30))
     design_freq_mhz = float(req.get("design_freq_mhz", 14.3))
@@ -289,7 +289,7 @@ def pynec_build(req: dict) -> dict:
 
 def pynec_solve(req: dict) -> dict:
     """Yagi via PyNEC — elements along y, boom along x."""
-    from web.pynec_backend import (
+    from validation.pynec_backend import (
         GROUND_CONDUCTIVITY,
         GROUND_DIELECTRIC,
         _run_solve,

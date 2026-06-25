@@ -1,16 +1,16 @@
-"""Test that the PyNEC web backend agrees with the momwire backend.
+"""Test that the PyNEC backend agrees with the momwire backend.
 
-Skipped when PyNEC isn't installed. Exercises the dispatch path through
-`web.server.solve` and `web.server.sweep_endpoint`'s helpers as a side
-benefit, since both paths call into the per-backend modules.
+Skipped when PyNEC isn't installed (pip install pynec-accel — see README).
+Exercises the dispatch path through `validation.momwire_backend.solve` and the
+per-backend sweep helpers, since both call into the per-geometry modules.
 """
 
 import pytest
 
 PyNEC = pytest.importorskip("PyNEC")  # noqa: F841
 
-from web import pynec_backend  # noqa: E402
-from web.examples import REGISTRY as _EXAMPLES  # noqa: E402
+from validation import pynec_backend  # noqa: E402
+from validation.examples import REGISTRY as _EXAMPLES  # noqa: E402
 
 _solve_inverted_v = _EXAMPLES["inverted_v"].momwire_solve
 _sweep_inverted_v = _EXAMPLES["inverted_v"].momwire_sweep

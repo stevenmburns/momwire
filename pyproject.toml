@@ -30,9 +30,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-web = [
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.27",
+# Test/dev flow: `pip install -e .[test]` reproduces the suite. numpy/scipy are
+# core deps; these are the extra imports the tests use (matplotlib for the
+# plot-marked tests, scikit-rf for the network tests) plus the runner. The
+# PyNEC cross-check (tests/test_pynec_backend.py) additionally needs PyNEC,
+# installed separately from the python-necpp fork's wheel — see README — and
+# those tests skip cleanly without it, so it stays out of this list (it's a
+# platform-specific --find-links wheel, not a PyPI package a name could pin).
+test = [
+    "pytest",
+    "matplotlib",
+    "scikit-rf",
 ]
 # Optional third-party MoM solvers used by the comparator scripts in
 # scripts/. (PyNEC is installed separately from the python-necpp fork's
@@ -52,8 +60,8 @@ markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
     "plot: tests that produce plots for visual inspection (deselect with -m 'not plot')",
 ]
-# Put the project root on sys.path so `web` (which lives next to `tests/`,
-# not under src/) is importable from the pynec-backend tests.
+# Put the project root on sys.path so the `validation` harness package (which
+# lives next to `tests/`, not under src/) is importable from the backend tests.
 pythonpath = ["."]
 
 [tool.cibuildwheel]
@@ -70,7 +78,7 @@ test-requires = "pytest"
 # direct import + _HAVE_* flags make that a hard failure instead.
 #
 # Then run only the three core solver modules — they exercise the accelerator
-# without the web/PyNEC integration deps (fastapi + a separately-built PyNEC).
+# without the PyNEC cross-check backend (a separately-built wheel, test-only).
 # -m skips slow/plot. cibuildwheel runs this from a temp dir against the
 # installed wheel, so `import momwire` resolves to the wheel, not src/.
 test-command = 'python -c "import momwire._accelerators; from momwire import triangular as t; assert t._HAVE_ASSEMBLE_Z and t._HAVE_ASSEMBLE_Z_GENERAL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not plot"'
