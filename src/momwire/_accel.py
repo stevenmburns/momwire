@@ -11,7 +11,10 @@ in one place. The distinction that matters:
   a static-TLS clash when another OpenMP extension is ``dlopen``'d first (e.g. a
   pynec-accel build that vendors its own ``libgomp``); the import then fails with
   "cannot allocate memory in static TLS block" and every solver quietly drops to
-  the slow path. That used to be invisible — this module makes it audible.
+  the slow path. On macOS the usual cause is a missing ``libomp``: the wheel
+  links Homebrew's OpenMP runtime but doesn't bundle it (so it can share one
+  ``libomp`` with pynec-accel), so ``brew install libomp`` is required. Either
+  way the fallback used to be invisible — this module makes it audible.
 
 Public attributes:
     ``acc``     — the loaded ``_accelerators`` module, or ``None``.
@@ -22,6 +25,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import pathlib
+import sys
 import warnings
 
 
@@ -49,15 +53,25 @@ def _load():
         from . import _accelerators as mod
     except ImportError as exc:
         if _extension_built():
+            if sys.platform == "darwin":
+                hint = (
+                    "On macOS the accelerator links Homebrew's OpenMP runtime, "
+                    "which the wheel does not bundle (so it can share one libomp "
+                    "with pynec-accel); install it with `brew install libomp`."
+                )
+            else:
+                hint = (
+                    "On Linux this is usually a static-TLS clash with another "
+                    "OpenMP extension loaded first — e.g. a pynec-accel build "
+                    "that vendors its own libgomp (upgrade to pynec-accel "
+                    ">= 1.7.4.post1). Stopgap: "
+                    "GLIBC_TUNABLES=glibc.rtld.optional_static_tls=2097152 (set "
+                    "before the interpreter starts)."
+                )
             warnings.warn(
                 "momwire: the compiled accelerator '_accelerators' is installed "
                 f"but failed to import ({exc!r}); falling back to the slower "
-                "pure-Python path. On Linux this is usually a static-TLS clash "
-                "with another OpenMP extension loaded first — e.g. a pynec-accel "
-                "build that vendors its own libgomp (upgrade to pynec-accel "
-                ">= 1.7.4.post1). Stopgap: "
-                "GLIBC_TUNABLES=glibc.rtld.optional_static_tls=2097152 (set "
-                "before the interpreter starts).",
+                f"pure-Python path. {hint}",
                 RuntimeWarning,
                 stacklevel=3,
             )

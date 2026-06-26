@@ -20,6 +20,14 @@ name: wheels
 
 on:
   workflow_dispatch:
+    inputs:
+      pynec_find_links:
+        description: >-
+          --find-links URL for the pynec-accel macOS wheel to validate against.
+          Use a build that ALSO excludes libomp (shares Homebrew's), otherwise
+          the cross-engine job is expected to abort/deadlock.
+        required: false
+        default: "https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.4-accel.5"
   push:
     branches: ["main"]
     tags: ["v*"]
@@ -41,16 +49,65 @@ jobs:
         # are excluded from the wheel test-command.)
       - name: Install libomp (macOS OpenMP runtime)
         # Apple clang has no bundled OpenMP runtime; setup.py's darwin branch
-        # links Homebrew's libomp (LIBOMP_PREFIX) and delocate vendors the dylib
-        # into the wheel. No-op on the other runners.
+        # links Homebrew's libomp (LIBOMP_PREFIX). The wheel does NOT vendor it
+        # (delocate --exclude libomp) so it can share one libomp with pynec-accel
+        # — so libomp is needed here at build AND by users at runtime. No-op on
+        # the other runners.
         if: runner.os == 'macOS'
         run: brew install libomp
       - name: Build wheels
         uses: pypa/cibuildwheel@v4.1.0
+      - name: Assert libomp is NOT vendored into the macOS wheel
+        # Regression guard for the `delocate --exclude libomp` above: if a future
+        # change drops the exclude, the wheel would bundle a private libomp again
+        # and reintroduce the duplicate-OpenMP-runtime abort/deadlock when loaded
+        # alongside pynec-accel. cibuildwheel's own test-command already proves
+        # the wheel still LOADS against Homebrew's libomp on this runner.
+        if: runner.os == 'macOS'
+        run: |
+          for whl in wheelhouse/*.whl; do
+            if unzip -l "$whl" | grep -qi 'libomp.*\.dylib'; then
+              echo "ERROR: $whl bundles libomp — the --exclude regressed."; exit 1
+            fi
+          done
+          echo "OK: no libomp vendored in the macOS wheels."
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
+
+  macos_cross_engine:
+    # Validate the shared-libomp fix on real macOS hardware: run the PyNEC
+    # cross-validation suite with momwire + PyNEC in one process and NO workaround
+    # env vars (no KMP_DUPLICATE_LIB_OK, no OMP_NUM_THREADS). It passes only when
+    # both extensions load a SINGLE libomp — i.e. once pynec-accel also ships the
+    # `delocate --exclude libomp`. Until then it's expected to abort (OMP Error
+    # #15) or deadlock, which is itself the proof the coordinated fix is needed —
+    # so this is manual-only (workflow_dispatch), never on push, and time-boxed
+    # so a deadlock fails fast instead of hanging. momwire is built from source
+    # here, which links Homebrew's libomp directly (no vendoring), exactly like
+    # the --exclude wheel does.
+    name: macOS cross-engine (PyNEC + momwire, shared libomp)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: brew install libomp
+      - run: pip install --upgrade pip
+      - run: pip install -e ".[test]"
+      - name: Install PyNEC (the build under test)
+        run: pip install PyNEC --no-index --find-links "${{ inputs.pynec_find_links }}"
+      - name: Assert neither extension oversubscribes a private libomp
+        # No KMP_DUPLICATE_LIB_OK / OMP_NUM_THREADS here on purpose. A green run =
+        # one shared libomp; an abort/timeout = two copies (fix not yet on the
+        # pynec-accel side).
+        run: |
+          python -c "import momwire; assert momwire.accelerated, 'momwire accelerator did not load (libomp?)'"
+          pytest tests/test_pynec_backend.py -v
 
   make_sdist:
     name: sdist

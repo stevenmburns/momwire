@@ -1,8 +1,10 @@
 """The accelerator loader (`momwire._accel`) must warn — not silently degrade —
 when a *built* C++ extension fails to import, while staying quiet when it was
-never built. Regression guard for the static-TLS fallback that used to be
-invisible (an old pynec-accel vendoring its own libgomp would knock momwire onto
-the slow pure-Python path with no signal at all)."""
+never built. Regression guard for the fallback that used to be invisible: on
+Linux a static-TLS clash (an old pynec-accel vendoring its own libgomp), on
+macOS a missing Homebrew libomp — either way momwire would drop to the slow
+pure-Python path with no signal at all. The warning is platform-aware, so this
+also pins that the right remediation hint is shown for each OS."""
 
 import sys
 import warnings
@@ -35,18 +37,36 @@ def test_clean_load_reports_accelerated():
     assert _accel.acc is not None
 
 
-def test_built_but_unloadable_warns(monkeypatch):
+def _warn_message(monkeypatch) -> str:
+    """Force the built-but-unloadable path and return the single RuntimeWarning."""
     _force_import_failure(monkeypatch)
     monkeypatch.setattr(_accel, "_extension_built", lambda: True)
-
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         mod, loaded = _accel._load()
-
     assert (mod, loaded) == (None, False)
     msgs = [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)]
     assert len(msgs) == 1
-    assert "pure-Python" in msgs[0] and "static-TLS" in msgs[0]
+    return msgs[0]
+
+
+def test_built_but_unloadable_warns(monkeypatch):
+    # Host-platform run: always names the fallback and the OS-appropriate hint.
+    msg = _warn_message(monkeypatch)
+    assert "pure-Python" in msg
+    expected = "brew install libomp" if sys.platform == "darwin" else "static-TLS"
+    assert expected in msg
+
+
+def test_warning_hint_is_platform_specific(monkeypatch):
+    # macOS -> brew/libomp hint, no Linux static-TLS noise; Linux -> the reverse.
+    monkeypatch.setattr(sys, "platform", "darwin")
+    mac = _warn_message(monkeypatch)
+    assert "brew install libomp" in mac and "static-TLS" not in mac
+
+    monkeypatch.setattr(sys, "platform", "linux")
+    lin = _warn_message(monkeypatch)
+    assert "static-TLS" in lin and "brew install libomp" not in lin
 
 
 def test_not_built_is_silent(monkeypatch):

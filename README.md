@@ -13,6 +13,15 @@ pip install --upgrade pip
 pip install -e .
 ```
 
+**macOS:** the C++ accelerator uses Homebrew's OpenMP runtime, so `brew install
+libomp` is required — both to compile from source and to run the prebuilt
+Apple-Silicon wheel. The wheel deliberately does **not** bundle `libomp` (it links
+Homebrew's by absolute path) so that it shares a single OpenMP runtime with
+pynec-accel; two private copies in one process abort with `OMP: Error #15` (or
+deadlock). Without `libomp` installed, the accelerator can't load and momwire
+warns and falls back to the slower pure-Python path. On Linux the system
+`libgomp` covers this, so no extra step is needed.
+
 ## Test
 
 ```bash
