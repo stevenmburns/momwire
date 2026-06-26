@@ -94,12 +94,23 @@ manylinux-x86_64-image = "manylinux_2_28"
 # Native Apple Silicon only for this first cut (the macos-14 runner is arm64).
 # Intel macOS (x86_64) is intentionally out of scope.
 archs = ["arm64"]
-# libomp is provided by `brew install libomp` in the workflow; point setup.py's
-# darwin branch at it and pin the deployment target to the runner's floor.
+# libomp is provided by `brew install libomp` — at build AND at runtime (the
+# wheel no longer bundles it, see --exclude below). Point setup.py's darwin
+# branch at it and pin the deployment target to the runner's floor.
 environment = { LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TARGET = "14.0" }
-# delocate (cibuildwheel's default macOS repair tool) vendors the libomp dylib
-# into the wheel. DYLD_LIBRARY_PATH lets it resolve libomp.dylib by its rpath.
-repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib delocate-wheel --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+# Do NOT vendor libomp (`--exclude libomp`): leave the extension referencing
+# Homebrew's libomp by its absolute install-name
+# (/opt/homebrew/opt/libomp/lib/libomp.dylib). pynec-accel's macOS wheel excludes
+# it too, so when both load in one process they share ONE libomp image instead of
+# each loading a private copy. Two private copies is what triggered the OMP
+# "Error #15" duplicate-runtime abort + the join-barrier deadlock, forcing the
+# KMP_DUPLICATE_LIB_OK / OMP_NUM_THREADS=1 stopgap; one shared runtime keeps both
+# backends fully multithreaded with no env vars. This mirrors the Linux wheels,
+# where neither side vendors libgomp (glibc's is shared) — macOS has no system
+# libomp, so the shared copy is Homebrew's, hence `brew install libomp` is a
+# runtime requirement of the macOS wheel. DYLD_LIBRARY_PATH lets delocate resolve
+# the (now-external) libomp during repair.
+repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib delocate-wheel --exclude libomp --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
 [tool.ruff.lint]
 ignore = ["E741"]
