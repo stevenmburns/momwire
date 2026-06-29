@@ -14,7 +14,7 @@ name: wheels
 #     ci.yml's `test` job (`pip install -e .` builds the extension), so the only
 #     gap this leaves is Windows/MSVC-specific breakage, caught here on merge.
 #   - push tags v*: build + attach the wheels (+ sdist) to the GitHub Release,
-#     and publish them to TestPyPI via Trusted Publishing.
+#     and publish them to PyPI via Trusted Publishing.
 #   - workflow_dispatch: run the full matrix manually on a branch before merging
 #     a build-affecting change, when you want cross-platform coverage pre-merge.
 
