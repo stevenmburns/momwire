@@ -598,6 +598,7 @@ class HMatrixSolver(BSplineSolver):
 
         near_blocks = []
         for s, t in part["near"]:
+            self._checkpoint()  # per near-block dense fill
             I, J = s.indices, t.indices
             D = self.zblock(I, J, k=k)
             if grounded:
@@ -614,6 +615,7 @@ class HMatrixSolver(BSplineSolver):
         precond_extra = []  # first-ring far blocks, dense, for the preconditioner
         p_eta = self.precond_eta
         for s, t in part["far"]:
+            self._checkpoint()  # per far-block ACA build
             I, J = s.indices, t.indices
             mI, nJ = I.size, J.size
 
@@ -643,7 +645,9 @@ class HMatrixSolver(BSplineSolver):
                 ):
                     precond_extra.append((I, J, U @ V))
 
-        return HMatrix(n, near_blocks, far_blocks, precond_extra=precond_extra)
+        return HMatrix(
+            n, near_blocks, far_blocks, precond_extra=precond_extra, cancel=self._cancel
+        )
 
     def _gl01(self):
         """Gauss-Legendre nodes/weights mapped to [0, 1] (cached)."""
