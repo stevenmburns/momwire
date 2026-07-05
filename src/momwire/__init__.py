@@ -1,4 +1,5 @@
 from ._accel import LOADED as accelerated
+from ._cancel import CancelToken, SolveAborted
 from .bspline import BSplineSolver
 from .hmatrix import HMatrixSolver
 from .array_block import ArrayBlockSolver
@@ -13,5 +14,7 @@ __all__ = [
     "BSplineSolver",
     "HMatrixSolver",
     "ArrayBlockSolver",
+    "CancelToken",
+    "SolveAborted",
     "accelerated",
 ]

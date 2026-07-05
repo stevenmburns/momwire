@@ -21,6 +21,7 @@ import scipy.linalg
 import scipy.sparse
 
 from ._accel import acc as _acc
+from ._cancel import _Cancelable
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
 
@@ -33,7 +34,7 @@ _EULER_GAMMA = 0.5772156649015329
 _DENSE_ASSEMBLY_THRESHOLD = 60
 
 
-class SinusoidalSolver:
+class SinusoidalSolver(_Cancelable):
     """NEC2's three-term (const + sin + cos) basis on each segment, with
     end-condition coefficients closed-form per Eqs 25-64.
 
@@ -59,7 +60,9 @@ class SinusoidalSolver:
         ground_z=None,
         junctions=None,
         n_qp_const=8,
+        cancel=None,
     ):
+        self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
         self.wire_radius = wire_radius
@@ -927,6 +930,7 @@ class SinusoidalSolver:
         Eq 187 delta-gap sources).
         """
         geom = self._build_geometry()
+        self._checkpoint()  # after geometry, before the field-tensor fill
         G, seg_view = self._assemble_Z(geom, self.k)
         feed_segs = geom["feed_segs"]
         voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
@@ -934,6 +938,7 @@ class SinusoidalSolver:
         v = np.zeros(geom["n_segs"], dtype=np.complex128)
         for fi, V_i in zip(feed_segs, voltages):
             v[fi] += -V_i / geom["seg_h"][fi]
+        self._checkpoint()  # after assembly, before the dense LU solve
         alpha = scipy.linalg.solve(G, v)
 
         feed_currents = np.array(
@@ -1035,6 +1040,7 @@ class SinusoidalSolver:
         for fi, V_i in zip(feed_segs, voltages):
             v[fi] += -V_i / geom["seg_h"][fi]
         for i, kk in enumerate(k_array):
+            self._checkpoint()  # top of each frequency iteration
             self.k = float(kk)
             self.omega = self.k * self.c
             self.wavelength = self.c / (self.omega / (2 * np.pi))

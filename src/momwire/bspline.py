@@ -52,6 +52,7 @@ from ._bspline_kernels import (
 from ._quadrature import leggauss
 
 from ._accel import acc as _acc
+from ._cancel import _Cancelable
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_ENRICH_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_enrich")
@@ -149,7 +150,7 @@ def _xfem_projection_coeffs(d):
     return coeffs
 
 
-class BSplineSolver:
+class BSplineSolver(_Cancelable):
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
     Parameters
@@ -201,7 +202,9 @@ class BSplineSolver:
         enrichment_variant="raw",
         tikhonov_lambda=1e-3,
         auto_tap_ratio_threshold=0.3,
+        cancel=None,
     ):
+        self._cancel = cancel
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
         if degree > 2:
@@ -1372,10 +1375,12 @@ class BSplineSolver:
         )
         n_basis_total = supp_seg.shape[0]
 
+        self._checkpoint()  # after geometry/basis, before the J-block fill
         J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_prep)
         Z = self._assemble_Z(J, supp_seg, polys, geom)
 
         if self.ground_z is not None:
+            self._checkpoint()  # between fills: before the image J-block fill
             # PEC image method: subtract the same-shape assembly built from
             # J integrals over image segments + (tx, ty, -tz)-modified
             # tangent dot products. The minus sign captures both the
@@ -1436,6 +1441,7 @@ class BSplineSolver:
             # pair geometry, enrichment would absorb spurious polynomial-
             # discretization error — skip. Above ⇒ genuinely balanced
             # K-way split, enrichment captures real cusp physics — keep.
+            self._checkpoint()  # before the enrichment pass-1 probe solve
             coeffs_p1 = self._solve_with_kcl(Z, v, kcl_A)
             ratios = self._junction_tap_ratios(coeffs_p1)
             active_junctions = [
@@ -1449,6 +1455,7 @@ class BSplineSolver:
                 self.z = Z
                 return _per_feed_z(coeffs_p1), coeffs_p1
 
+        self._checkpoint()  # between passes: before pass-2 enrichment / final solve
         if self.use_singular_enrichment:
             enrich = self._enrichment_Z_assemble(
                 geom, supp_seg, polys, active_junction_indices=active_junctions
@@ -1622,11 +1629,13 @@ class BSplineSolver:
         # reg-kernel moment blocks are batched over all k up front (one einsum
         # per edge instead of one per (edge, k)).
         prep = self._same_edge_prep(self._build_geometry())
+        self._checkpoint()  # before the batched reg-moment build over all k
         reg_all = [
             _seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)
             for _sl, _A_st, reg_geo in prep
         ]
         for i, kk in enumerate(k_array):
+            self._checkpoint()  # top of each frequency iteration
             self.k = float(kk)
             self.omega = self.k * self.c
             self.wavelength = self.c / (self.omega / (2 * np.pi))

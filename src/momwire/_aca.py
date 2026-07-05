@@ -15,6 +15,8 @@ they touch/overlap). Smaller eta => stricter => fewer/larger near blocks.
 
 import numpy as np
 
+from ._cancel import _Cancelable
+
 
 class Cluster:
     """A node of the binary space-partition cluster tree.
@@ -206,7 +208,7 @@ def aca_partial(get_row, get_col, m, n, tol=1e-3, max_rank=None):
     return np.array(U).T.copy(), np.array(V).copy()
 
 
-class HMatrix:
+class HMatrix(_Cancelable):
     """Hierarchical matrix: a set of dense (near) and low-rank (far) blocks
     tiling an n x n matrix, with a fast matvec.
 
@@ -218,13 +220,18 @@ class HMatrix:
         GMRES preconditioner's near-field.
     """
 
-    def __init__(self, n, near, far, precond_extra=None):
+    def __init__(self, n, near, far, precond_extra=None, cancel=None):
         self.n = n
         self.near = near
         self.far = far
         self.precond_extra = precond_extra or []
+        self._cancel = cancel
 
     def matvec(self, x):
+        # GMRES calls this every iteration; one check per matvec aborts the
+        # solve within a single iteration (a matvec is fast; per-block would be
+        # overkill). No-op when no token was threaded in.
+        self._checkpoint()
         x = np.asarray(x)
         y = np.zeros(self.n, dtype=np.complex128)
         for I, J, D in self.near:
@@ -236,6 +243,7 @@ class HMatrix:
     def matmat(self, X):
         """Apply to all columns of X (n, nrhs) at once via BLAS-3 block
         products — the batched analogue of `matvec` for multi-RHS solves."""
+        self._checkpoint()
         X = np.asarray(X)
         Y = np.zeros((self.n, X.shape[1]), dtype=np.complex128)
         for I, J, D in self.near:

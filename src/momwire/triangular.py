@@ -32,12 +32,13 @@ from ._triangular_kernels import (
 )
 
 from ._accel import acc as _acc
+from ._cancel import _Cancelable
 
 _HAVE_ASSEMBLE_Z = _acc is not None and hasattr(_acc, "assemble_Z")
 _HAVE_ASSEMBLE_Z_GENERAL = _acc is not None and hasattr(_acc, "assemble_Z_general")
 
 
-class TriangularSolver:
+class TriangularSolver(_Cancelable):
     """N-wire triangular Galerkin MoM, each wire a polyline with bends.
 
     wires: list of (M_w, 3) polyline arrays. M_w >= 2 anchor points per wire.
@@ -96,7 +97,9 @@ class TriangularSolver:
         nsegs=101,
         ground_z=None,
         junctions=None,
+        cancel=None,
     ):
+        self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
         self.wire_radius = wire_radius
@@ -667,11 +670,13 @@ class TriangularSolver:
             else self._assemble_Z_single
         )
 
+        self._checkpoint()  # after geometry, before the J-block fill
         J_free = self._build_J_blocks(geom, self.k)
         td_free = tangents @ tangents.T
         Z = assemble(*J_free, td_free, geom)
 
         if self.ground_z is not None:
+            self._checkpoint()  # between fills: before the image J-block fill
             # PEC image: subtract sub-assembly built with image J tensors and
             # mirrored tangent dot products. The net image current is
             # anti-parallel for horizontal components / parallel for vertical;
@@ -688,6 +693,7 @@ class TriangularSolver:
         v = np.zeros(geom["n_basis_total"], dtype=np.complex128)
         for m_i, v_i in zip(m_indices, voltages):
             v[m_i] += v_i
+        self._checkpoint()  # after assembly, before the dense LU solve
         if has_junctions:
             coeffs = self._solve_with_kcl(Z, v, geom)
         else:
@@ -1001,6 +1007,7 @@ class TriangularSolver:
             self._assemble_Z_general_batch if has_junctions else self._assemble_Z_batch
         )
 
+        self._checkpoint()  # after geometry, before the batched J-block fill
         J_free = self._build_J_blocks_batch(geom, k_array)
         td_free = tangents @ tangents.T
         Z = assemble_batch(*J_free, td_free, geom, omega_array)
@@ -1015,6 +1022,7 @@ class TriangularSolver:
         v = np.zeros(geom["n_basis_total"], dtype=np.complex128)
         for m_i, v_i in zip(m_indices, voltages):
             v[m_i] += v_i
+        self._checkpoint()  # after assembly, before the batched solve
         if has_junctions:
             coeffs = self._solve_with_kcl_batch(Z, v, geom)
         else:

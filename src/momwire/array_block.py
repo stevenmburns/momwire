@@ -71,6 +71,7 @@ import numpy as np
 from scipy.linalg import lu_factor, lu_solve
 
 from ._aca import aca_partial
+from ._cancel import _Cancelable
 from .hmatrix import (
     _HAVE_OFFEDGE_BLOCK_ACCEL,
     _OFFEDGE_BLOCK_ACCEL_MAX_D,
@@ -332,7 +333,7 @@ def element_groups(sim, tol=1e-6):
 # ----------------------------------------------------------------------
 
 
-class ArrayBlock:
+class ArrayBlock(_Cancelable):
     """Element-block decomposition of the impedance matrix with a fast matvec.
 
     The `P x P` grid of element blocks exactly tiles `Z` (the element groups
@@ -353,12 +354,13 @@ class ArrayBlock:
         transposed factors of `(a, b)`).
     """
 
-    def __init__(self, n, groups, shape_of_elem, shape_blocks, coupling):
+    def __init__(self, n, groups, shape_of_elem, shape_blocks, coupling, cancel=None):
         self.n = n
         self.groups = groups
         self.shape_of_elem = shape_of_elem
         self.shape_blocks = shape_blocks
         self.coupling = coupling
+        self._cancel = cancel
         # Dense self-blocks as (I, J, D) triples, so the block decomposition is
         # a drop-in for `HMatrixSolver._solve_hmatrix`: its near-field
         # preconditioner becomes the block-diagonal of Z (block-Jacobi), which
@@ -371,6 +373,7 @@ class ArrayBlock:
         self.precond_extra = []
 
     def matvec(self, x):
+        self._checkpoint()  # one check per GMRES matvec (no-op without a token)
         x = np.asarray(x)
         y = np.zeros(self.n, dtype=np.complex128)
         for e, g in enumerate(self.groups):
@@ -386,6 +389,7 @@ class ArrayBlock:
         BLAS-3 matrix-matrix multiply (`(N_s, N_s) @ (N_s, nrhs)`), which is far
         more cache- and overhead-efficient than nrhs separate matvecs — the
         point of the batched multi-RHS solve."""
+        self._checkpoint()
         X = np.asarray(X)
         Y = np.zeros((self.n, X.shape[1]), dtype=np.complex128)
         for e, g in enumerate(self.groups):
@@ -687,6 +691,7 @@ class ArrayBlockSolver(HMatrixSolver):
         # height under ground) so a spacing sweep reuses the assembly.
         shape_blocks = {}
         for s, e in enumerate(reps):
+            self._checkpoint()  # per distinct self-block dense fill
             g = part.groups[e]
             sb_key = self._self_block_key(ctx, part.seg_groups[e], k)
             blk = _SELF_BLOCK_CACHE.get(sb_key)
@@ -725,6 +730,7 @@ class ArrayBlockSolver(HMatrixSolver):
         n_aca = 0
         P = part.n_elem
         for a in range(P):
+            self._checkpoint()  # per element-row of the coupling ACA grid
             for b in range(P):
                 if a == b:
                     continue
@@ -747,4 +753,6 @@ class ArrayBlockSolver(HMatrixSolver):
                 coupling.append((a, b, hit[0], hit[1]))
 
         self._last_n_coupling_aca = n_aca
-        return ArrayBlock(n, part.groups, shp, shape_blocks, coupling)
+        return ArrayBlock(
+            n, part.groups, shp, shape_blocks, coupling, cancel=self._cancel
+        )
