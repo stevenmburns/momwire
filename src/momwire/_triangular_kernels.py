@@ -127,7 +127,7 @@ def _seg_seg_static_all(seg_endpoints, a):
     return J00 * inv, J10 * inv, J01 * inv, J11 * inv
 
 
-def _seg_seg_reg_all(seg_endpoints, a, k, n_qp):
+def _seg_seg_reg_all(seg_endpoints, a, k, n_qp, cancel_flag=0):
     """Same-edge regular kernel G_reg = (exp(-jkR) - 1)/(4 pi R) at a single k.
 
     Returns (J00, J10, J01, J11), each (N, N) complex.
@@ -137,11 +137,12 @@ def _seg_seg_reg_all(seg_endpoints, a, k, n_qp):
         a,
         np.array([k]),
         n_qp,
+        cancel_flag=cancel_flag,
     )
     return J00[0], J10[0], J01[0], J11[0]
 
 
-def _seg_seg_reg_all_batch(seg_endpoints, a, k_array, n_qp):
+def _seg_seg_reg_all_batch(seg_endpoints, a, k_array, n_qp, cancel_flag=0):
     """Batched same-edge regular-kernel integrals over a 1D vector of k values.
 
     Point-pair distances R are k-independent and computed once; only
@@ -160,6 +161,7 @@ def _seg_seg_reg_all_batch(seg_endpoints, a, k_array, n_qp):
             np.ascontiguousarray(k_array, dtype=np.float64),
             np.ascontiguousarray(gl_t_01, dtype=np.float64),
             np.ascontiguousarray(gl_w_01, dtype=np.float64),
+            cancel_flag,
         )
 
     N = len(seg_endpoints) - 1
@@ -197,7 +199,7 @@ def _seg_seg_reg_all_batch(seg_endpoints, a, k_array, n_qp):
     return J00, J10, J01, J11
 
 
-def _seg_seg_offedge_quad(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k, n_qp):
+def _seg_seg_offedge_quad(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k, n_qp, cancel_flag=0):
     """Cross-edge / cross-wire integrals at a single k.
 
     Uses 3D Gauss-Legendre quadrature on the regularized kernel
@@ -216,11 +218,14 @@ def _seg_seg_offedge_quad(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k, n_qp):
         a,
         np.array([k]),
         n_qp,
+        cancel_flag=cancel_flag,
     )
     return J00[0], J10[0], J01[0], J11[0]
 
 
-def _seg_seg_offedge_quad_batch(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, n_qp):
+def _seg_seg_offedge_quad_batch(
+    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, n_qp, cancel_flag=0
+):
     """Batched cross-edge / cross-wire integrals over a 1D vector of k values.
 
     Returns (J00, J10, J01, J11), each of shape (n_k, N_i, N_j).
@@ -238,6 +243,7 @@ def _seg_seg_offedge_quad_batch(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, 
             np.ascontiguousarray(k_array, dtype=np.float64),
             t_qp,
             w_qp,
+            cancel_flag,
         )
 
     len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)

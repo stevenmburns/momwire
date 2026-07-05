@@ -1,14 +1,16 @@
-"""Phase 1 cooperative-cancellation tests.
+"""Cooperative-cancellation tests (Phases 1 and 2).
 
-A CancelToken threads into a solver via the ``cancel=`` constructor kwarg; the
-Python-level checkpoints (``self._checkpoint()``) poll it at phase boundaries,
-sweep iterations, and H-matrix/array build + matvec loops, raising
-``SolveAborted`` promptly. The default no-token path must be byte-identical to
-before.
+A CancelToken threads into a solver via the ``cancel=`` constructor kwarg.
+Phase 1: the Python-level checkpoints (``self._checkpoint()``) poll it at phase
+boundaries, sweep iterations, and H-matrix/array build + matvec loops. Phase 2:
+the token's raw flag address is also threaded into the long C++ kernels, which
+poll it per outer loop iteration and raise mid-fill. Either way the caller sees
+``SolveAborted``; the default no-token path must be byte-identical to before.
 
 Mid-solve cancellation is driven deterministically by shadowing the instance's
 ``_checkpoint`` with a counter that trips the token on the Nth poll — no timer
-threads, so the tests are not timing-flaky.
+threads, so the tests are not timing-flaky. The Phase 2 tests neutralize the
+Python checkpoints entirely, so an abort can only come from the C++ kernels.
 """
 
 import time
@@ -16,6 +18,7 @@ import time
 import numpy as np
 import pytest
 
+import momwire
 from momwire import (
     ArrayBlockSolver,
     BSplineSolver,
@@ -188,3 +191,54 @@ def test_abort_leaves_no_instance_cache_residue():
     z2, a2 = s.compute_impedance()
     assert np.allclose(z2, z_ref)
     assert np.allclose(a2, a_ref)
+
+
+# --------------------------------------------------------------------------
+# Phase 2: the C++ kernels poll the cancel_flag mid-fill and raise.
+# --------------------------------------------------------------------------
+requires_accel = pytest.mark.skipif(
+    not momwire.accelerated, reason="C++ accelerator not built"
+)
+
+
+@requires_accel
+@pytest.mark.parametrize("cls", BASE_SOLVERS, ids=lambda c: c.__name__)
+def test_cpp_polling_aborts_without_python_checkpoints(cls):
+    # Neutralize every Python-level checkpoint, so the ONLY thing that can
+    # observe the tripped token is the C++ kernel polling its cancel_flag. If
+    # the solve still aborts, the flag really is threaded into the kernels and
+    # polled mid-fill (Phase 2), independent of the Phase 1 seams.
+    token = CancelToken()
+    token.cancel()
+    s = _dipole(cls, cancel=token, nsegs=80)
+    s._checkpoint = lambda: None
+    with pytest.raises(SolveAborted):
+        s.compute_impedance()
+
+
+@requires_accel
+def test_accelerator_aborted_maps_to_solve_aborted():
+    # The raw C++ exception must reach callers as the shared SolveAborted, not
+    # the extension-private AcceleratorAborted.
+    from momwire._accel import acc
+
+    flag = np.ones(1, dtype=np.int32)
+    sl = np.zeros((16, 3))
+    gx, gw = np.polynomial.legendre.leggauss(6)
+    with pytest.raises(SolveAborted):
+        acc.seg_seg_quad_batch_3d(
+            sl, sl + 0.01, sl, sl + 0.01, 1e-6,
+            np.array([1.0, 2.0]), (gx + 1) / 2, gw / 2, flag.ctypes.data,
+        )
+
+
+@requires_accel
+def test_untripped_flag_leaves_result_unchanged():
+    # Passing a live-but-untripped token must produce the identical result as
+    # no token (the drain adds no arithmetic on the happy path).
+    z_ref, a_ref = _dipole(TriangularSolver, nsegs=60).compute_impedance()
+    z_tok, a_tok = _dipole(
+        TriangularSolver, cancel=CancelToken(), nsegs=60
+    ).compute_impedance()
+    assert np.allclose(z_ref, z_tok)
+    assert np.allclose(a_ref, a_tok)

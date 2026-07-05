@@ -83,3 +83,50 @@ def _load():
 
 
 acc, LOADED = _load()
+
+
+# Kernels that take a trailing ``cancel_flag`` and raise the C++ ``AcceleratorAborted``
+# when it is tripped mid-fill (Phase 2). We remap that to the shared
+# ``momwire.SolveAborted`` here — the one place the extension is loaded — so callers
+# only ever catch a single abort type, whether it came from a Python-level
+# checkpoint or from inside a native fill.
+_CANCELLABLE_KERNELS = (
+    "seg_seg_quad_batch_3d",
+    "seg_seg_reg_quad_batch_1d",
+    "assemble_Z",
+    "assemble_Z_general",
+    "assemble_Z_bspline",
+    "bspline_assemble_offedge_block",
+    "sinusoidal_field_tensor",
+)
+
+
+def _install_cancel_translation(mod) -> None:
+    """Wrap each cancellable kernel on ``mod`` so ``AcceleratorAborted`` surfaces
+    as ``momwire.SolveAborted``. No-op if the extension predates Phase 2."""
+    import functools
+
+    from ._cancel import SolveAborted
+
+    aborted = getattr(mod, "AcceleratorAborted", None)
+    if aborted is None:
+        return
+
+    def _wrap(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except aborted:
+                raise SolveAborted() from None
+
+        return wrapper
+
+    for name in _CANCELLABLE_KERNELS:
+        raw = getattr(mod, name, None)
+        if raw is not None:
+            setattr(mod, name, _wrap(raw))
+
+
+if acc is not None:
+    _install_cancel_translation(acc)

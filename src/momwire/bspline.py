@@ -851,6 +851,7 @@ class BSplineSolver(_Cancelable):
                 float(self.eps),
                 float(self.mu),
                 int(d),
+                self._cancel_flag,
             )
 
         Z_A = np.zeros((n_basis, n_basis), dtype=np.complex128)

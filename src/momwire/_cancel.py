@@ -67,3 +67,13 @@ class _Cancelable:
         cancel = self._cancel
         if cancel is not None:
             cancel.raise_if_cancelled()
+
+    @property
+    def _cancel_flag(self):
+        """Raw flag address for the C++ kernels' ``cancel_flag`` argument.
+
+        0 when no token is present, which the kernels treat as "no cancellation"
+        — so passing this unconditionally is free on the default path.
+        """
+        cancel = self._cancel
+        return cancel.ptr if cancel is not None else 0

@@ -9,7 +9,9 @@
 #include <pybind11/stl.h>
 #include <complex>
 
+#include <atomic>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <tuple>
 #include <vector>
@@ -69,6 +71,42 @@ extern "C" double sin(double);
 #  define PYSIM_OMP_SIMD(clauses) PYSIM_PRAGMA_(omp simd clauses)
 #endif
 
+// --------------------------------------------------------------------------
+// Cooperative cancellation (Phase 2).
+//
+// Long kernels take a trailing `uintptr_t cancel_flag` (0 = no cancellation).
+// It is the raw address of a CancelToken's int32 flag on the Python side. A
+// monotonic 0 -> 1 write from any thread means "abort"; we read it with a
+// `volatile` load per outer loop iteration (naturally-aligned int32, single
+// writer -> safe in practice, and avoids the C++20 std::atomic_ref / Apple
+// Clang libc++ support gap that would jeopardise the macOS wheel).
+//
+// An exception must never escape an OpenMP parallel region (UB), so we use the
+// standard drain pattern: on cancel, set a shared atomic<bool> and `continue`
+// so every remaining iteration becomes a no-op; the loop finishes normally and
+// we throw AFTER it. AbortedError is registered as the Python exception
+// `AcceleratorAborted`, which the `_accel.py` wrappers remap to SolveAborted.
+struct AbortedError : std::exception {
+    const char *what() const noexcept override { return "accelerator solve aborted"; }
+};
+
+#define PYSIM_CANCEL_SETUP(flag_addr)                                          \
+    const volatile int32_t *pysim_cancel =                                     \
+        reinterpret_cast<const volatile int32_t *>(flag_addr);                 \
+    std::atomic<bool> pysim_aborted { false }
+
+// Drain-poll. Place at the very top of a parallel loop body; `continue` targets
+// the enclosing for-loop by design, so use only inside a braced loop body.
+#define PYSIM_CANCEL_POLL()                                                    \
+    if (pysim_aborted.load(std::memory_order_relaxed)) continue;              \
+    if (pysim_cancel && *pysim_cancel) {                                       \
+        pysim_aborted.store(true, std::memory_order_relaxed);                  \
+        continue;                                                              \
+    }
+
+#define PYSIM_THROW_IF_ABORTED()                                               \
+    if (pysim_aborted.load(std::memory_order_relaxed)) throw AbortedError {}
+
 // Batched cross-segment Gauss-Legendre quadrature in 3D.
 //
 // For each k in k_array, and each (i, j) segment pair, compute:
@@ -97,7 +135,8 @@ seg_seg_quad_batch_3d(
     double a_squared,
     py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    uintptr_t cancel_flag = 0
 ) {
     auto sli = seg_l_i.unchecked<2>();
     auto sri = seg_r_i.unchecked<2>();
@@ -168,9 +207,11 @@ seg_seg_quad_batch_3d(
         }
     }
 
+    PYSIM_CANCEL_SETUP(cancel_flag);
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
+            PYSIM_CANCEL_POLL();
             // n_qp <= 8 in practice, so n_qp^2 <= 64. Stack-allocated, aligned
             // for 32-byte AVX2 loads. The hot loop is the sincos at line ~Y
             // below; the explicit per-(qr) array layout lets `#pragma omp simd`
@@ -274,6 +315,7 @@ seg_seg_quad_batch_3d(
         }
     }
 
+    PYSIM_THROW_IF_ABORTED();
     return std::make_tuple(J00, J10, J01, J11);
 }
 
@@ -303,7 +345,8 @@ seg_seg_reg_quad_batch_1d(
     double a,
     py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    uintptr_t cancel_flag = 0
 ) {
     auto se  = seg_endpoints.unchecked<1>();
     auto ka  = k_array.unchecked<1>();
@@ -352,9 +395,11 @@ seg_seg_reg_quad_batch_1d(
         }
     }
 
+    PYSIM_CANCEL_SETUP(cancel_flag);
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N; i++) {
         for (size_t j = 0; j < N; j++) {
+            PYSIM_CANCEL_POLL();
             // Same split-loop layout as seg_seg_quad_batch_3d: the per-(qr)
             // arrays let `#pragma omp simd` substitute libmvec's
             // _ZGVdN4v_cos / _ZGVdN4v_sin for the inner sincos calls.
@@ -441,6 +486,7 @@ seg_seg_reg_quad_batch_1d(
         }
     }
 
+    PYSIM_THROW_IF_ABORTED();
     return std::make_tuple(J00, J10, J01, J11);
 }
 
@@ -608,7 +654,8 @@ assemble_Z(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> right_seg,
     py::array_t<double, py::array::c_style | py::array::forcecast> omega_array,
     double eps,
-    double mu
+    double mu,
+    uintptr_t cancel_flag = 0
 ) {
     auto j00_info = J00.request();
     auto j10_info = J10.request();
@@ -656,9 +703,11 @@ assemble_Z(
 
     const std::complex<double> j_unit(0.0, 1.0);
 
+    PYSIM_CANCEL_SETUP(cancel_flag);
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t kk = 0; kk < n_k; kk++) {
         for (size_t m = 0; m < n_basis; m++) {
+            PYSIM_CANCEL_POLL();
             int64_t m_l = ls(m);
             int64_t m_r = rs(m);
             double hl_m = h(m_l);
@@ -733,6 +782,7 @@ assemble_Z(
         }
     }
 
+    PYSIM_THROW_IF_ABORTED();
     return Z;
 }
 
@@ -764,7 +814,8 @@ assemble_Z_general(
     py::array_t<double, py::array::c_style | py::array::forcecast> support_R,
     py::array_t<double, py::array::c_style | py::array::forcecast> omega_array,
     double eps,
-    double mu
+    double mu,
+    uintptr_t cancel_flag = 0
 ) {
     auto j00_info = J00.request();
     auto j10_info = J10.request();
@@ -830,9 +881,11 @@ assemble_Z_general(
 
     const std::complex<double> j_unit(0.0, 1.0);
 
+    PYSIM_CANCEL_SETUP(cancel_flag);
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t kk = 0; kk < n_k; kk++) {
         for (size_t m = 0; m < n_basis; m++) {
+            PYSIM_CANCEL_POLL();
             double omega_k = om(kk);
             std::complex<double> jw_mu      = j_unit * (omega_k * mu);
             std::complex<double> inv_jw_eps = 1.0 / (j_unit * (omega_k * eps));
@@ -908,6 +961,7 @@ assemble_Z_general(
         }
     }
 
+    PYSIM_THROW_IF_ABORTED();
     return Z;
 }
 
@@ -1137,7 +1191,8 @@ assemble_Z_bspline_kernel(
     py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
     double omega,
     double eps_,
-    double mu_
+    double mu_,
+    uintptr_t cancel_flag = 0
 ) {
     static constexpr int NM = D + 1;
 
@@ -1170,9 +1225,11 @@ assemble_Z_bspline_kernel(
     const double omega_mu = omega * mu_;
     const double inv_omega_eps = 1.0 / (omega * eps_);
 
+    PYSIM_CANCEL_SETUP(cancel_flag);
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t m = 0; m < n_basis; m++) {
         for (size_t n = 0; n < n_basis; n++) {
+            PYSIM_CANCEL_POLL();
             double zA_re = 0.0, zA_im = 0.0;
             double zPhi_re = 0.0, zPhi_im = 0.0;
 
@@ -1216,6 +1273,7 @@ assemble_Z_bspline_kernel(
         }
     }
 
+    PYSIM_THROW_IF_ABORTED();
     return Z;
 }
 
@@ -1228,13 +1286,14 @@ assemble_Z_bspline(
     double omega,
     double eps_,
     double mu_,
-    int max_d
+    int max_d,
+    uintptr_t cancel_flag = 0
 ) {
     switch (max_d) {
         case 1:
-            return assemble_Z_bspline_kernel<1>(J, support_seg, polys, td_all, omega, eps_, mu_);
+            return assemble_Z_bspline_kernel<1>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
         case 2:
-            return assemble_Z_bspline_kernel<2>(J, support_seg, polys, td_all, omega, eps_, mu_);
+            return assemble_Z_bspline_kernel<2>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
         default:
             throw std::runtime_error(
                 "assemble_Z_bspline: max_d must be 1 or 2");
@@ -1276,7 +1335,8 @@ bspline_assemble_offedge_block_kernel(
     double eps_,
     double mu_,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    uintptr_t cancel_flag = 0
 ) {
     static constexpr int NM = D + 1;
 
@@ -1339,9 +1399,11 @@ bspline_assemble_offedge_block_kernel(
     const double omega_mu = omega * mu_;
     const double inv_omega_eps = 1.0 / (omega * eps_);
 
+    PYSIM_CANCEL_SETUP(cancel_flag);
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t m = 0; m < nI; m++) {
         for (size_t n = 0; n < nJ; n++) {
+            PYSIM_CANCEL_POLL();
             double zA_re = 0.0, zA_im = 0.0, zPhi_re = 0.0, zPhi_im = 0.0;
 
             for (int a = 0; a < NM; a++) {
@@ -1433,6 +1495,7 @@ bspline_assemble_offedge_block_kernel(
         }
     }
 
+    PYSIM_THROW_IF_ABORTED();
     return Z;
 }
 
@@ -1450,17 +1513,20 @@ bspline_assemble_offedge_block(
     py::array_t<double, py::array::c_style | py::array::forcecast> tan_J,
     double a_squared, double k, double omega, double eps_, double mu_, int max_d,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    uintptr_t cancel_flag = 0
 ) {
     switch (max_d) {
         case 1:
             return bspline_assemble_offedge_block_kernel<1>(
                 supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
-                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w);
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                cancel_flag);
         case 2:
             return bspline_assemble_offedge_block_kernel<2>(
                 supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
-                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w);
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                cancel_flag);
         default:
             throw std::runtime_error(
                 "bspline_assemble_offedge_block: max_d must be 1 or 2");
@@ -1968,7 +2034,8 @@ sinusoidal_field_tensor(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,
     double a, double k, double eta,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    uintptr_t cancel_flag = 0
 ) {
     auto oc = obs_centers.unchecked<2>();
     auto ot = obs_tangents.unchecked<2>();
@@ -2038,8 +2105,10 @@ sinusoidal_field_tensor(
     const size_t S = n_qp + 2;
     const size_t P = N * S;
 
+    PYSIM_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(static)
     for (size_t m = 0; m < M; m++) {
+        PYSIM_CANCEL_POLL();
         // Per-iteration scratch (per-thread under the parallel-for). Sizes are
         // tiny (P ~ N*(n_qp+2)); allocation cost is negligible next to the
         // sincos + assembly work it feeds.
@@ -2272,25 +2341,32 @@ sinusoidal_field_tensor(
         }
     }
 
+    PYSIM_THROW_IF_ABORTED();
     return std::make_tuple(Phi_const, Phi_sin, Phi_cos);
 }
 
 
 PYBIND11_MODULE(_accelerators, m) {
+    // Phase 2: raised by the long kernels when their cancel_flag is tripped;
+    // the _accel.py wrappers remap it to momwire.SolveAborted.
+    py::register_exception<AbortedError>(m, "AcceleratorAborted");
+
     m.def("seg_seg_quad_batch_3d", &seg_seg_quad_batch_3d,
           "Batched 3D cross-segment Gauss-Legendre quadrature over a k vector. "
           "Returns (J00, J10, J01, J11) each (n_k, N_i, N_j) complex.",
           py::arg("seg_l_i"), py::arg("seg_r_i"),
           py::arg("seg_l_j"), py::arg("seg_r_j"),
           py::arg("a_squared"), py::arg("k_array"),
-          py::arg("gl_t"), py::arg("gl_w"));
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("cancel_flag") = 0);
     m.def("seg_seg_reg_quad_batch_1d", &seg_seg_reg_quad_batch_1d,
           "Batched same-wire Gauss-Legendre quadrature on the regularized "
           "kernel (exp(-jkR)-1)/(4 pi R) over a k vector. "
           "Returns (J00, J10, J01, J11) each (n_k, N, N) complex.",
           py::arg("seg_endpoints"), py::arg("a"),
           py::arg("k_array"),
-          py::arg("gl_t"), py::arg("gl_w"));
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("cancel_flag") = 0);
     m.def("seg_seg_reg_moments_bspline_swept",
           &seg_seg_reg_moments_bspline_swept,
           "Streaming swept reg-moment kernel for the B-spline Galerkin MoM. "
@@ -2310,7 +2386,8 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("h_per_seg"), py::arg("td_all"),
           py::arg("left_seg"), py::arg("right_seg"),
           py::arg("omega_array"),
-          py::arg("eps"), py::arg("mu"));
+          py::arg("eps"), py::arg("mu"),
+          py::arg("cancel_flag") = 0);
     m.def("assemble_Z_general", &assemble_Z_general,
           "Assemble Z from per-basis (support_seg, support_L, support_R) "
           "(n_basis, 2) arrays. Handles arbitrary 2-wing basis layouts "
@@ -2322,7 +2399,8 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("support_seg"),
           py::arg("support_L"), py::arg("support_R"),
           py::arg("omega_array"),
-          py::arg("eps"), py::arg("mu"));
+          py::arg("eps"), py::arg("mu"),
+          py::arg("cancel_flag") = 0);
     m.def("seg_seg_full_moments_bspline", &seg_seg_full_moments_bspline,
           "Single-k full-kernel polynomial moment integrals for the B-spline "
           "Galerkin MoM. Returns J of shape (max_d+1, max_d+1, N_i, N_j) "
@@ -2349,7 +2427,8 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("J"), py::arg("support_seg"),
           py::arg("polys"), py::arg("td_all"),
           py::arg("omega"), py::arg("eps"), py::arg("mu"),
-          py::arg("max_d"));
+          py::arg("max_d"),
+          py::arg("cancel_flag") = 0);
     m.def("bspline_assemble_offedge_block", &bspline_assemble_offedge_block,
           "Fused off-edge Z[I, J] block assembly for the H-matrix / ACA "
           "solver: quadratures the a²-regularised full-kernel moments and "
@@ -2363,7 +2442,8 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("segr_J"), py::arg("tan_J"),
           py::arg("a_squared"), py::arg("k"), py::arg("omega"),
           py::arg("eps"), py::arg("mu"), py::arg("max_d"),
-          py::arg("gl_t"), py::arg("gl_w"));
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("cancel_flag") = 0);
     m.def("assemble_Z_enrich", &assemble_Z_enrich,
           "Assemble (Z_pe, Z_ep, Z_ee) for the stable XFEM singular basis "
           "enrichment at K≥3 junctions. Each enrichment basis is "
@@ -2390,5 +2470,6 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("src_centers"), py::arg("src_tangents"),
           py::arg("seg_h"),
           py::arg("a"), py::arg("k"), py::arg("eta"),
-          py::arg("gl_t"), py::arg("gl_w"));
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("cancel_flag") = 0);
 }

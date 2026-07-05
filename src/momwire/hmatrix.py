@@ -730,6 +730,7 @@ class HMatrixSolver(BSplineSolver):
                 d,
                 glt,
                 glw,
+                self._cancel_flag,
             ).ravel()
 
         def get_col(j):
@@ -753,6 +754,7 @@ class HMatrixSolver(BSplineSolver):
                 d,
                 glt,
                 glw,
+                self._cancel_flag,
             ).ravel()
 
         def dense():
@@ -775,6 +777,7 @@ class HMatrixSolver(BSplineSolver):
                 d,
                 glt,
                 glw,
+                self._cancel_flag,
             )
 
         return get_row, get_col, dense
