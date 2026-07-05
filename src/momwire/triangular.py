@@ -428,6 +428,7 @@ class TriangularSolver(_Cancelable):
             a,
             k,
             self.n_qp_off,
+            cancel_flag=self._cancel_flag,
         )
 
         for w in range(n_w):
@@ -439,7 +440,9 @@ class TriangularSolver(_Cancelable):
             for i_e in range(n_edges_w):
                 sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
                 A00, A10, A01, A11 = _seg_seg_static_all(ed_arc[i_e], a)
-                R00, R10, R01, R11 = _seg_seg_reg_all(ed_arc[i_e], a, k, self.n_qp_reg)
+                R00, R10, R01, R11 = _seg_seg_reg_all(
+                    ed_arc[i_e], a, k, self.n_qp_reg, cancel_flag=self._cancel_flag
+                )
                 J00[sl, sl] = A00 + R00
                 J10[sl, sl] = A10 + R10
                 J01[sl, sl] = A01 + R01
@@ -467,6 +470,7 @@ class TriangularSolver(_Cancelable):
             a,
             k_array,
             self.n_qp_off,
+            cancel_flag=self._cancel_flag,
         )
 
         for w in range(n_w):
@@ -479,7 +483,8 @@ class TriangularSolver(_Cancelable):
                 sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
                 A00, A10, A01, A11 = _seg_seg_static_all(ed_arc[i_e], a)
                 R00, R10, R01, R11 = _seg_seg_reg_all_batch(
-                    ed_arc[i_e], a, k_array, self.n_qp_reg
+                    ed_arc[i_e], a, k_array, self.n_qp_reg,
+                    cancel_flag=self._cancel_flag,
                 )
                 J00[:, sl, sl] = A00[None, :, :] + R00
                 J10[:, sl, sl] = A10[None, :, :] + R10
@@ -514,7 +519,8 @@ class TriangularSolver(_Cancelable):
         seg_l_img = self._image_positions(seg_l_all)
         seg_r_img = self._image_positions(seg_r_all)
         return _seg_seg_offedge_quad(
-            seg_l_all, seg_r_all, seg_l_img, seg_r_img, a, k, self.n_qp_off
+            seg_l_all, seg_r_all, seg_l_img, seg_r_img, a, k, self.n_qp_off,
+            cancel_flag=self._cancel_flag,
         )
 
     def _build_J_image_blocks_batch(self, geom, k_array):
@@ -525,7 +531,8 @@ class TriangularSolver(_Cancelable):
         seg_l_img = self._image_positions(seg_l_all)
         seg_r_img = self._image_positions(seg_r_all)
         return _seg_seg_offedge_quad_batch(
-            seg_l_all, seg_r_all, seg_l_img, seg_r_img, a, k_array, self.n_qp_off
+            seg_l_all, seg_r_all, seg_l_img, seg_r_img, a, k_array, self.n_qp_off,
+            cancel_flag=self._cancel_flag,
         )
 
     def _assemble_Z_single(self, J00, J10, J01, J11, td_all, geom):
@@ -831,6 +838,7 @@ class TriangularSolver(_Cancelable):
                 np.ascontiguousarray(omega_array, dtype=np.float64),
                 float(self.eps),
                 float(self.mu),
+                self._cancel_flag,
             )
 
         hl_m = h_per_seg[left_seg][:, None]
@@ -892,6 +900,7 @@ class TriangularSolver(_Cancelable):
                 np.ascontiguousarray(omega_array, dtype=np.float64),
                 float(self.eps),
                 float(self.mu),
+                self._cancel_flag,
             )
 
         return self._assemble_Z_general_batch_python(

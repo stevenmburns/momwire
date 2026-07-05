@@ -687,6 +687,7 @@ class SinusoidalSolver(_Cancelable):
                 float(self.eta),
                 np.ascontiguousarray(gx, dtype=np.float64),
                 np.ascontiguousarray(gw, dtype=np.float64),
+                self._cancel_flag,
             )
 
         # Pairwise vectors c_m - c_n: shape (M=obs, N=src, 3).
