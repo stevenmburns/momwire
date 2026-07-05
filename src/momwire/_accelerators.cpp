@@ -132,6 +132,9 @@ seg_seg_quad_batch_3d(
     auto j01 = J01.mutable_unchecked<3>();
     auto j11 = J11.mutable_unchecked<3>();
 
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
+
     const double inv_4pi = 1.0 / (4.0 * M_PI);
 
     // Per-segment quadrature-point positions and lengths -- k-independent so
@@ -333,6 +336,9 @@ seg_seg_reg_quad_batch_1d(
     auto j01 = J01.mutable_unchecked<3>();
     auto j11 = J11.mutable_unchecked<3>();
 
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
+
     // Per-segment quadrature positions and lengths.
     std::vector<double> pos(N * n_qp);
     std::vector<double> Lvec(N);
@@ -494,6 +500,9 @@ seg_seg_reg_moments_bspline_swept(
     py::array_t<std::complex<double>> out({n_k, n_d, n_d, N, N});
     auto o = out.mutable_unchecked<5>();
 
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
+
     // (i, j) parallel; the per-(i, j) R block is hoisted out of the k loop and
     // the inner sincos runs as `omp simd` so GCC substitutes the libmvec
     // vectorized cos/sin (same pattern as seg_seg_reg_quad_batch_1d). The
@@ -641,6 +650,9 @@ assemble_Z(
     const std::complex<double>* j01_ptr = static_cast<const std::complex<double>*>(j01_info.ptr);
     const std::complex<double>* j11_ptr = static_cast<const std::complex<double>*>(j11_info.ptr);
     std::complex<double>* z_ptr = static_cast<std::complex<double>*>(z_info.ptr);
+
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
 
     const std::complex<double> j_unit(0.0, 1.0);
 
@@ -813,6 +825,9 @@ assemble_Z_general(
     const std::complex<double>* j11_ptr = static_cast<const std::complex<double>*>(j11_info.ptr);
     std::complex<double>* z_ptr = static_cast<std::complex<double>*>(z_info.ptr);
 
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
+
     const std::complex<double> j_unit(0.0, 1.0);
 
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
@@ -961,6 +976,9 @@ seg_seg_full_moments_bspline_kernel(
 
     py::array_t<std::complex<double>> J({(size_t)NM, (size_t)NM, N_i, N_j});
     auto j_view = J.mutable_unchecked<4>();
+
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
 
     const double inv_4pi = 1.0 / (4.0 * M_PI);
 
@@ -1143,6 +1161,9 @@ assemble_Z_bspline_kernel(
     py::array_t<std::complex<double>> Z({n_basis, n_basis});
     auto z_view = Z.mutable_unchecked<2>();
 
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
+
     // Z = j*omega*mu * Z_A_accum + (1/(j*omega*eps)) * Z_Phi_accum
     // For Z_A_accum = re + j*im:    j*omega*mu * (re + j*im) = -omega*mu*im + j*omega*mu*re
     // For Z_Phi_accum = re + j*im:  (re + j*im)/(j*omega*eps) = im/(omega*eps) - j*re/(omega*eps)
@@ -1310,6 +1331,9 @@ bspline_assemble_offedge_block_kernel(
 
     py::array_t<std::complex<double>> Z({nI, nJ});
     auto z_view = Z.mutable_unchecked<2>();
+
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
 
     const double inv_4pi = 1.0 / (4.0 * M_PI);
     const double omega_mu = omega * mu_;
@@ -1518,6 +1542,9 @@ seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d) 
     py::array_t<double> out({NM, NM, N, N});
     auto v = out.mutable_unchecked<4>();
 
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
+
     // 2N-1 unique Toeplitz values per moment, indexed by Δ = j - i ∈ [-(N-1), N-1].
     // delta_idx = Δ + (N - 1) ∈ [0, 2N-2].
     size_t n_delta = 2 * N - 1;
@@ -1644,6 +1671,9 @@ assemble_Z_enrich(
         // Nothing to compute. Return empty arrays.
         return std::make_tuple(Z_pe, Z_ep, Z_ee);
     }
+
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
 
     const double inv_4pi = 1.0 / (4.0 * M_PI);
     const double omega_mu = omega * mu_;
@@ -1972,6 +2002,9 @@ sinusoidal_field_tensor(
     auto pc = Phi_const.mutable_unchecked<2>();
     auto ps = Phi_sin.mutable_unchecked<2>();
     auto pco = Phi_cos.mutable_unchecked<2>();
+
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
 
     // Per-source-segment precompute: H_n = h_n/2, sin(kH_n), cos(kH_n).
     std::vector<double> H_n(N), sin_kH(N), cos_kH(N);
