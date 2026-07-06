@@ -53,7 +53,7 @@ Ground-truth oracle: `PyNECEngine(builder, ground=("finite-fast", εr, σ))`
 from antennaknobs — exact NEC gn 0, cross-checked against nec2c in
 antennaknobs `tests/test_nec_export.py`.
 
-## Architecture fit (read 2026-07-05)
+## Architecture fit (read 2026-07-05; line refs against v0.3.0 / main)
 
 ### BSplineSolver — primary target, good fit
 
@@ -61,11 +61,11 @@ Mixed-potential assembly: `Z = Z_A + Z_Φ` built from polarization-blind
 scalar quadrature tensors (J blocks) plus a per-segment-pair tangent-dot
 table that carries **all** orientation dependence of `Z_A`; `Z_Φ` (charge
 term) consumes the J blocks with no tangent factor. PEC image today:
-`_image_positions` (`bspline.py:718`), `_image_tangent_dot`
-(`bspline.py:724`), `_build_J_image_blocks` (`bspline.py:728`), subtracted
+`_image_positions` (`bspline.py:710`), `_image_tangent_dot`
+(`bspline.py:716`), `_build_J_image_blocks` (`bspline.py:720`), subtracted
 as one sub-assembly with a single global minus sign. (TriangularSolver has
-the same structure at `triangular.py:492–530` and assembly at
-`triangular.py:533` — see "Consolidation interaction" for why we do NOT
+the same structure at `triangular.py:496–534` and assembly at
+`triangular.py:538` — see "Consolidation interaction" for why we do NOT
 implement there.)
 
 The refl-coef ground slots in per term:
@@ -95,7 +95,7 @@ The refl-coef ground slots in per term:
   tables; the specular geometry is frequency-independent and computed once.
 - **Junction/KCL** general-assembly variant consumes the same tables — same
   treatment, small.
-- **Enrichment + ground** stays rejected (`bspline.py:225–228`), unchanged.
+- **Enrichment + ground** stays rejected (`bspline.py:217–221`), unchanged.
 
 ### HMatrix / ArrayBlock — free
 
@@ -106,13 +106,13 @@ inherit the bspline work with zero changes.
 
 Field-based: the C++ hot kernel `sinusoidal_field_tensor` (the stated 70%
 bottleneck at N≳80) returns fields already projected onto the observer
-tangent and integrated (`sinusoidal.py:650–690`), so there is no place to
+tangent and integrated (`sinusoidal.py:645–685`), so there is no place to
 insert the polarization decomposition after the fact. Ironically it is the
 formulation closest to NEC's own; it just discards the vector field too
 early. Needs a kernel variant that decomposes the image field into v/h
 components at the observer *before* projection (C++ change), or a slow
 numpy image path. Note: the module docstring (`sinusoidal.py:11`) still says
-"free-space only" while a PEC image build exists (`sinusoidal.py:830–850`) —
+"free-space only" while a PEC image build exists (`sinusoidal.py:831–851`) —
 reconcile that docstring in Phase 0 regardless.
 
 ### Consolidation interaction — do NOT build on TriangularSolver
@@ -178,6 +178,12 @@ Web adapter already ships real εr/σ for finite grounds since PR #251.
 ### Phase 3 — antennaknobs wiring
 - [ ] `MomwireEngine` ground-spec mapping (`finite-fast` → refl-coef solve;
       decide whether `finite` also upgrades — recommend yes).
+- [ ] antennaknobs consumes momwire via a **git submodule**
+      (`antennaknobs/momwire`, editable-installed into its .venv) pinned to a
+      release tag, plus a `momwire>=` version floor in its dependencies. New
+      solver API ⇒ release a momwire version, bump the submodule pin AND the
+      version floor **in the same antennaknobs PR** (lesson from the
+      v0.13.0/momwire-0.3.0 breakage).
 - [ ] Mirror antennaknobs `tests/test_pynec_ground.py` with a
       momwire-vs-PyNEC-gn0 cross-check.
 - [ ] Web: no adapter changes expected (eps fields already spec-driven);
