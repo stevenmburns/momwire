@@ -282,10 +282,10 @@ written, so their `_hmatrix_unsupported` gates were widened to send
       follow-up, not a Phase 3 side effect.
 
 ### Phase 4 — optional / deferred
-- [ ] SinusoidalSolver vector-field tensor variant (C++), or explicitly
+- [x] SinusoidalSolver vector-field tensor variant (C++), or explicitly
       document sinusoidal ground as PEC-image-only.
-      → Superseded by the concrete Phase 6 plan below (numpy image path,
-      no C++ change needed).
+      → Superseded by Phase 6 (done): numpy image path, no C++ change
+      needed.
 - [ ] TriangularSolver: intentionally skipped (retirement).
 
 ### Phase 5 — ground_eps in the fast solvers (added 2026-07-06)
@@ -341,7 +341,18 @@ Two structural simplifiers:
       faster than dense at N=720 with 2e-6 relative agreement, matching
       the PEC fast path's scaling profile.
 
-### Phase 6 — refl-coef ground in SinusoidalSolver (planned 2026-07-06)
+### Phase 6 — refl-coef ground in SinusoidalSolver (done 2026-07-06)
+
+**Outcome:** the "plausibly sub-Ω" prediction below landed hard: the
+finite-ground solve matches NEC gn 0 to **0.11 Ω max (dipole) / 0.07 Ω
+(inverted-L) across the entire 30-case matrix including 0.05λ** — exactly
+equal to the sinusoidal-vs-PyNEC PEC cross-solver floor (measured 0.11 /
+0.07 Ω; bspline's floor is 1.4 / 1.7 Ω). I.e. the field-based weighting
+reproduces gn 0 at the shared-basis discretization limit, with nothing
+left for the model to explain. Strictly-better-than-PEC holds on every
+window case, including the inverted-L heights where bspline could only
+tie. Free-space and PEC paths are untouched (C++ kernel retained); only
+the ground_eps image block runs at numpy speed.
 
 SinusoidalSolver is the reference engine — performance parity with the
 BSpline d=1/d=2 paths is explicitly NOT a goal. It is acceptable to slow
@@ -387,44 +398,63 @@ the same reasons as in `_ground_refl`: p̂ falls back to x̂ where ρ_v=−ρ_h
 makes the dyad isotropic, and rho_vec→0 kills the ρ̂·p̂ term.
 
 Steps:
-- [ ] `_ground_refl`: expose the specular-ray p̂ components (extend
+- [x] `_ground_refl`: expose the specular-ray p̂ components (extend
       `specular_pair_tables` with an opt-in return or add a small
       `specular_ray_tables(centers, ground_z, src_centers)` returning
       (cos_th, px, py)). Bspline callers unchanged.
-- [ ] Refactor the numpy `_field_tensor` into
+      → `specular_ray_tables` added; `specular_pair_tables` now calls it
+      (signature/returns unchanged, bspline suite green).
+- [x] Refactor the numpy `_field_tensor` into
       `_field_components(geom, k, src_c, src_t)` returning the per-shape
       (E_z, E_ρ) tables plus the projection geometry (td,
       rho_proj_factor, rho_vec, rho_eval); the numpy branch of
       `_field_tensor` becomes a thin projection wrapper. Guarded by the
       existing `test_sinusoidal_field_tensor_cpp_matches_numpy`.
-- [ ] `_field_tensor_image_refl(geom, k)`: mirrored sources →
+      → Done as specced (returns a dict); C++ branch untouched.
+- [x] `_field_tensor_image_refl(geom, k)`: mirrored sources →
       `_field_components` → ρ_v/ρ_h from ε̃(self.omega) via
       `eps_tilde`/`fresnel_rho` → dyad → tangential projection.
       Cache the k-independent specular tables per geometry (identity
       check, same pattern as `_cached_basis` / bspline's
       `_image_refl_prep`).
-- [ ] API + gate: `SinusoidalSolver(..., ground_eps=None)` (complex ε̃ or
+      → Done; `_image_refl_prep` caches (cos θ, px, py, tm_p, tn_p),
+      ρ tables recomputed per frequency.
+- [x] API + gate: `SinusoidalSolver(..., ground_eps=None)` (complex ε̃ or
       (eps_r, sigma) tuple; requires `ground_z`, same validation as
       bspline; deliberately NO `ground_phi_mode` — document why in the
       docstring). `_assemble_Z` subtracts the weighted image tensor
       instead of the PEC one when set. Sweeps work for free: both swept
       loops update `self.omega` per k before calling `_assemble_Z`, so
       ε̃/ρ tables are per-frequency automatically.
-- [ ] Update the module docstring scope list (currently "no
+      → Done; per-k ε̃ verified by the 3-k middle-entry sweep tests.
+- [x] Update the module docstring scope list (currently "no
       finite/Sommerfeld ground").
-- [ ] Tests (`tests/test_sinusoidal_refl_coef_ground.py`), reusing
+- [x] Tests (`tests/test_sinusoidal_refl_coef_ground.py`), reusing
       `fixtures_refl_coef_geoms.py` + `golden_refl_coef_ground.py`
       (constructor kwargs are interface-compatible):
       free-space and PEC-ground bit-exactness with `ground_eps=None`;
       PEC-limit collapse at ε̃=1e16; tuple-vs-complex ε̃ equivalence;
       swept-vs-single-k consistency; golden-window guards vs gn 0 +
       strictly-better-than-PEC over 0.1–0.5λ; 0.05λ reported, not gated.
-- [ ] **Acceptance:** first measure the sinusoidal-PEC vs PyNEC-PEC
+      → 36 tests, 1.1 s. Extras beyond the sketch: accel-toggle
+      consistency through a full grounded solve (guards the
+      `_field_components` refactor; junction case measures 1.9e-10 rel),
+      PEC-limit at 1.1e-8/4.8e-9 rel, strictly-better-than-PEC asserted
+      on inverted-L too (held everywhere — no floor tie).
+- [x] **Acceptance:** first measure the sinusoidal-PEC vs PyNEC-PEC
       cross-solver floor on the golden matrix (expect tighter than
       bspline's ≈1.4 Ω — same basis as NEC), then gate at floor + ~1 Ω
       across the 0.1–0.5λ dipole window. Extend
       `scripts/compare_refl_coef_ground.py` (or a sibling) to print the
       sinusoidal residual table for this doc.
+      → Floor measured (script now prints it for both solvers): dipole
+      window max/mean 0.12/0.11 Ω, inverted-L 0.07/0.07 Ω (bspline:
+      1.99/1.38 and 2.46/1.66). Finite-ground residuals vs gn 0: dipole
+      window max/mean **0.11/0.11 Ω**, inverted-L **0.07/0.07 Ω**,
+      0.05λ report 0.11 Ω — the residual IS the floor at every height
+      and ground constant, so the gate landed at 0.35/0.2 Ω (~3× floor)
+      rather than floor + 1 Ω. PEC solve for comparison: dipole window
+      max 41.6 Ω, mean 18.8 Ω.
 - [ ] antennaknobs follow-up (separate PR + momwire release): add
       `SinusoidalSolver` to `_GROUND_EPS_SOLVERS` in `MomwireEngine`;
       bump the submodule pin AND the `momwire>=` floor in the same
