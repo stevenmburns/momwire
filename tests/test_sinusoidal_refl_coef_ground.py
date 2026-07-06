@@ -57,9 +57,7 @@ def test_pec_ground_path_deterministic_and_inert_kwarg():
     bit-identical Z."""
     kw = dict(GEOMS[("dipole", 0.2)])
     z_a, _ = SinusoidalSolver(**kw, ground_z=0.0).compute_impedance()
-    z_b, _ = SinusoidalSolver(
-        **kw, ground_z=0.0, ground_eps=None
-    ).compute_impedance()
+    z_b, _ = SinusoidalSolver(**kw, ground_z=0.0, ground_eps=None).compute_impedance()
     assert z_a == z_b
 
 
