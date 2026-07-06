@@ -97,10 +97,15 @@ The refl-coef ground slots in per term:
   treatment, small.
 - **Enrichment + ground** stays rejected (`bspline.py:217–221`), unchanged.
 
-### HMatrix / ArrayBlock — free
+### HMatrix / ArrayBlock — dense fallback (gate added in Phase 3)
 
-Both already fall back to the dense bspline path when ground is on; they
-inherit the bspline work with zero changes.
+The claim above ("both fall back to dense when ground is on") was stale:
+both fast paths grew per-block PEC image support after this plan was
+written, and their `_hmatrix_unsupported` gates no longer excluded ground.
+With `ground_eps` set they would have run PEC physics silently. Phase 3
+widened both gates: `ground_eps is not None` ⇒ dense BSplineSolver path
+(correct, at dense cost). Fresnel-weighting the per-block image terms is
+future work if grounded arrays ever need the fast path.
 
 ### SinusoidalSolver — deferred (Phase 4, optional)
 
