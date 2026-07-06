@@ -900,10 +900,13 @@ class HMatrixSolver(BSplineSolver):
     def _hmatrix_unsupported(self):
         """The H-matrix path supports free space and PEC ground (the latter via
         the per-block image term folded into the near/far block fill — see
-        `build_hmatrix` and `_offedge_aca_evaluators`). Only singular enrichment
-        still falls back to the dense path (its image reaction isn't
-        implemented; the constructor already forbids enrichment + ground)."""
-        return self.use_singular_enrichment
+        `build_hmatrix` and `_offedge_aca_evaluators`). Falls back to the dense
+        path for singular enrichment (its image reaction isn't implemented;
+        the constructor already forbids enrichment + ground) and for the
+        reflection-coefficient finite ground (`ground_eps`): the block fills
+        bake the unweighted PEC image, so running them with `ground_eps` set
+        would silently solve the wrong physics."""
+        return self.use_singular_enrichment or self.ground_eps is not None
 
     def _build_operator(self):
         """Build the fast operator the constrained solve runs GMRES on. The

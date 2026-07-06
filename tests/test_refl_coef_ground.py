@@ -148,6 +148,22 @@ def test_accel_weighted_assembly_matches_numpy_reference(monkeypatch):
     np.testing.assert_allclose(z_accel, z_numpy, rtol=1e-9)
 
 
+def test_fast_solvers_fall_back_to_dense_with_ground_eps():
+    """HMatrixSolver / ArrayBlockSolver block fills bake the PEC image, so
+    with ground_eps they must route through the dense BSplineSolver path —
+    same Z as the dense solve, not silently-PEC fast blocks."""
+    from momwire import ArrayBlockSolver, HMatrixSolver
+
+    kw = dict(GEOMS[("dipole", 0.2)])
+    ground = dict(ground_z=0.0, ground_eps=(10.0, 0.002))
+    z_dense, _ = BSplineSolver(**kw, **ground).compute_impedance()
+    for solver_cls in (HMatrixSolver, ArrayBlockSolver):
+        sim = solver_cls(**kw, **ground)
+        assert sim._hmatrix_unsupported()
+        z_fast, _ = sim.compute_impedance()
+        np.testing.assert_allclose(z_fast, z_dense, rtol=1e-12)
+
+
 def test_y_matrix_swept_matches_single_k():
     """Swept Y with ground_eps must equal per-k single solves: ε̃(ω) has to
     track the rebound omega while the specular prep is reused across k."""

@@ -528,11 +528,13 @@ class ArrayBlockSolver(HMatrixSolver):
     def _hmatrix_unsupported(self):
         """ArrayBlock supports PEC ground via the per-block image term (the
         free-space block reuse survives the image method for a grid array — see
-        `build_array_blocks`), so it only falls back to the dense path for
-        singular enrichment, which still belongs there. This narrows the base
-        `HMatrixSolver` gate, which keeps excluding ground for the generic
-        hierarchical solver."""
-        return self.use_singular_enrichment
+        `build_array_blocks`), so it falls back to the dense path only for
+        singular enrichment, which still belongs there, and for the
+        reflection-coefficient finite ground (`ground_eps`) whose per-pair
+        Fresnel weights the per-block image term doesn't carry. This narrows
+        the base `HMatrixSolver` gate, which keeps excluding ground for the
+        generic hierarchical solver."""
+        return self.use_singular_enrichment or self.ground_eps is not None
 
     def array_partition(self, tol=1e-6):
         """Element/shape partition of the bases (cached)."""
