@@ -249,19 +249,37 @@ swept/assembly paths were edited directly, no rebase coordination.)
       swept/single-k consistency, accel-vs-numpy reference.
 
 ### Phase 3 — antennaknobs wiring
-- [ ] `MomwireEngine` ground-spec mapping (`finite-fast` → refl-coef solve;
+(done 2026-07-06: momwire v0.4.0 released — PR #115, rebase-merged, tag on
+`92b13f9`; antennaknobs PR #252. Includes the fast-solver gate fix: HMatrix/
+ArrayBlock had grown per-block PEC image support since this plan was
+written, so their `_hmatrix_unsupported` gates were widened to send
+`ground_eps` down the dense path — see "Architecture fit" update above.)
+- [x] `MomwireEngine` ground-spec mapping (`finite-fast` → refl-coef solve;
       decide whether `finite` also upgrades — recommend yes).
-- [ ] antennaknobs consumes momwire via a **git submodule**
+      → Both upgraded, for solver classes in `_GROUND_EPS_SOLVERS`
+      (BSpline/HMatrix/ArrayBlock); Triangular/Sinusoidal keep the PEC fold.
+- [x] antennaknobs consumes momwire via a **git submodule**
       (`antennaknobs/momwire`, editable-installed into its .venv) pinned to a
       release tag, plus a `momwire>=` version floor in its dependencies. New
       solver API ⇒ release a momwire version, bump the submodule pin AND the
       version floor **in the same antennaknobs PR** (lesson from the
       v0.13.0/momwire-0.3.0 breakage).
-- [ ] Mirror antennaknobs `tests/test_pynec_ground.py` with a
+      → Pin v0.4.0 + floor `momwire>=0.4.0` in PR #252. (Note antennaknobs
+      CI does `git submodule update --remote`, i.e. tests momwire main tip,
+      so the pin only governs local dev checkouts.)
+- [x] Mirror antennaknobs `tests/test_pynec_ground.py` with a
       momwire-vs-PyNEC-gn0 cross-check.
-- [ ] Web: no adapter changes expected (eps fields already spec-driven);
+      → `tests/test_momwire_finite_ground.py`: mapping unit tests + numeric
+      gn 0 cross-check at 0.2λ (≤ 2.5 Ω, strictly better than PEC).
+- [x] Web: no adapter changes expected (eps fields already spec-driven);
       consider whether momwire backends get their own ground-model wording
       in the UI tab summary.
+      → Deliberately unchanged. The web momwire path (`_ground_for_engine`)
+      still maps the ground toggle to `"pec"`: switching it to the finite
+      spec would change served results AND interacts with the frontend's
+      own Fresnel far-field treatment (`_PEC_GROUND_EPS_R` plumbing) —
+      upgrading the web ground model is a separate decision, tracked as
+      follow-up, not a Phase 3 side effect.
 
 ### Phase 4 — optional / deferred
 - [ ] SinusoidalSolver vector-field tensor variant (C++), or explicitly
