@@ -8,8 +8,9 @@ intrinsic to the basis itself versus its kernel / source / junction
 treatment.
 
 Scope (deliberately narrow):
-  * Free space or PEC-image ground (`ground_z`) — no finite/Sommerfeld
-    ground.
+  * Free space, PEC-image ground (`ground_z`), or NEC-style reflection-
+    coefficient finite ground (`ground_z` + `ground_eps`, matching NEC's
+    IPERF=0 approximation) — no Sommerfeld ground.
   * Thin-wire kernel (Eqs 73-79), no extended thin-wire / current-element.
   * Delta-gap "applied-E" source (Eq 187) on a single basis function.
   * Uniform wire radius across all wires.
@@ -21,6 +22,7 @@ import numpy as np
 import scipy.linalg
 import scipy.sparse
 
+from . import _ground_refl
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 
@@ -59,6 +61,7 @@ class SinusoidalSolver(_Cancelable):
         wire_radius=0.0005,
         nsegs=101,
         ground_z=None,
+        ground_eps=None,
         junctions=None,
         n_qp_const=8,
         cancel=None,
@@ -69,6 +72,19 @@ class SinusoidalSolver(_Cancelable):
         self.wire_radius = wire_radius
         self.nsegs = nsegs
         self.ground_z = ground_z
+        # Finite ground via NEC-style reflection-coefficient weighting of
+        # the image field (docs/refl-coef-ground-plan.md Phase 6). None →
+        # PEC image (today's behavior). A complex ε̃ or (eps_r, sigma)
+        # tuple → Fresnel-weighted image; needs ground_z. Unlike
+        # BSplineSolver there is deliberately NO `ground_phi_mode` knob:
+        # the sinusoidal solver is field-based — Eqs 76-79 give the TOTAL
+        # E-field of each source shape, vector- and scalar-potential
+        # contributions already merged — so NEC's field dyad applies
+        # exactly and no image-charge (Φ-term) weighting split exists to
+        # approximate.
+        if ground_eps is not None and ground_z is None:
+            raise ValueError("ground_eps requires ground_z to be set")
+        self.ground_eps = ground_eps
 
         self.c = 1 / np.sqrt(self.eps * self.mu)
         self.freq = self.c / self.wavelength
@@ -92,6 +108,12 @@ class SinusoidalSolver(_Cancelable):
         # in a loop) still rebuilds basis-coefs per k, but reuses geom.
         self._cached_geometry: dict | None = None
         self._cached_basis: tuple[dict, float, float, list] | None = None
+        # k-independent specular-ray tables for the `ground_eps` weighted
+        # image (cos θ, p̂ components, tangent·p̂ projections), cached per
+        # geometry object — same identity-check pattern as _cached_basis /
+        # bspline's `_image_refl_prep`. ρ_v/ρ_h are NOT cached: they depend
+        # on ε̃(ω) and are recomputed per frequency.
+        self._cached_image_refl_prep: tuple | None = None
 
         if not wires:
             raise ValueError("wires must be non-empty")
@@ -662,15 +684,16 @@ class SinusoidalSolver(_Cancelable):
 
         Hot path uses the C++ accelerator `sinusoidal_field_tensor` (the
         70% bottleneck of single-k solves at N≳80); the pure-numpy
-        formulation below is kept as a reference / fallback when the
-        accelerator isn't available.
+        formulation (`_field_components` + the tangential projection
+        below) is kept as a reference / fallback when the accelerator
+        isn't available. The finite-ground image block bypasses this
+        method entirely — see `_field_tensor_image_refl`, which needs the
+        unprojected field vectors the C++ kernel discards.
         """
         a = self.wire_radius
         seg_c = geom["seg_centers"]  # (N, 3) — observer centers
         seg_t = geom["seg_tangents"]  # (N, 3) — observer tangents
         seg_h = geom["seg_h"]  # (N,) full lengths
-        N = geom["n_segs"]
-        h_n = 0.5 * seg_h  # (N,) half-lengths
 
         src_c = src_centers if src_centers is not None else seg_c
         src_t = src_tangents if src_tangents is not None else seg_t
@@ -691,6 +714,48 @@ class SinusoidalSolver(_Cancelable):
                 self._cancel_flag,
             )
 
+        # numpy fallback: unprojected per-shape (E_z, E_ρ) components,
+        # then project tangentially onto the observer:
+        #   E_t = td · E_z + rho_proj · E_ρ  (NEC's ρ-projection rule).
+        cm = self._field_components(geom, k, src_centers=src_c, src_tangents=src_t)
+        td = cm["td"]
+        rho_proj_factor = cm["rho_proj_factor"]
+        Phi_const = td * cm["Ez_const"] + rho_proj_factor * cm["Erho_const"]
+        Phi_sin = td * cm["Ez_sin"] + rho_proj_factor * cm["Erho_sin"]
+        Phi_cos = td * cm["Ez_cos"] + rho_proj_factor * cm["Erho_cos"]
+        return Phi_const, Phi_sin, Phi_cos
+
+    def _field_components(self, geom, k, src_centers=None, src_tangents=None):
+        """Pure-numpy unprojected field tables behind `_field_tensor`'s
+        fallback path (Eqs 76-79 of the NEC2 Theory Manual).
+
+        For each (observer m, source n) pair and each of the three source
+        current shapes (const / sin / cos), computes the field scalars in
+        the SOURCE's local cylindrical frame: E = E_z·t_src + E_ρ·ρ̂ with
+        ρ̂ = rho_vec/rho_eval. Returns a dict of (M, N) tables:
+
+            Erho_const, Ez_const, Erho_sin, Ez_sin, Erho_cos, Ez_cos —
+                per-shape field scalars;
+            td              : t_obs · t_src (E_z projection factor);
+            rho_proj_factor : (rho_vec · t_obs)/rho_eval (E_ρ projection);
+            rho_vec         : (M, N, 3) perpendicular from source axis to
+                              the observer point;
+            rho_eval        : radius-regularized |rho_vec|, ≥ a.
+
+        `_field_tensor` consumes td/rho_proj_factor for the plain
+        tangential projection; `_field_tensor_image_refl` also needs
+        rho_vec/rho_eval to resolve E·p̂ for the Fresnel field dyad.
+        """
+        a = self.wire_radius
+        seg_c = geom["seg_centers"]  # (N, 3) — observer centers
+        seg_t = geom["seg_tangents"]  # (N, 3) — observer tangents
+        seg_h = geom["seg_h"]  # (N,) full lengths
+        N = geom["n_segs"]
+        h_n = 0.5 * seg_h  # (N,) half-lengths
+
+        src_c = src_centers if src_centers is not None else seg_c
+        src_t = src_tangents if src_tangents is not None else seg_t
+
         # Pairwise vectors c_m - c_n: shape (M=obs, N=src, 3).
         # rvec_mn = seg_c[m] - src_c[n]
         rvec = seg_c[:, None, :] - src_c[None, :, :]  # (M, N, 3)
@@ -703,10 +768,8 @@ class SinusoidalSolver(_Cancelable):
         rho_axis = np.linalg.norm(rho_vec, axis=-1)  # (M, N)
         rho_eval = np.sqrt(rho_axis * rho_axis + a * a)  # (M, N), >= a
 
-        # Tangent dot products
-        td = np.einsum("mnd,mnd->mn", t_obs * np.ones_like(t_src), t_src)
-        # t_obs is shape (M, 1, 3); broadcasting handles the singletons.
-        # Re-do cleanly:
+        # Tangent dot products; t_obs is shape (M, 1, 3), broadcasting
+        # handles the singletons.
         td = (t_obs * t_src).sum(axis=-1)  # (M, N)
         # rho_vec · t_obs at the observer (rho_vec is the perpendicular
         # vector from source axis to obs-axis center)
@@ -819,11 +882,18 @@ class SinusoidalSolver(_Cancelable):
         )
         Ez_cos = pref_z * (bracket_cos_z_2 - bracket_cos_z_1)
 
-        # Project tangentially to obs segment: E_t = td · E_z + rho_proj · E_ρ
-        Phi_const = td * Ez_const + rho_proj_factor * Erho_const
-        Phi_sin = td * Ez_sin + rho_proj_factor * Erho_sin
-        Phi_cos = td * Ez_cos + rho_proj_factor * Erho_cos
-        return Phi_const, Phi_sin, Phi_cos
+        return {
+            "Erho_const": Erho_const,
+            "Ez_const": Ez_const,
+            "Erho_sin": Erho_sin,
+            "Ez_sin": Ez_sin,
+            "Erho_cos": Erho_cos,
+            "Ez_cos": Ez_cos,
+            "td": td,
+            "rho_proj_factor": rho_proj_factor,
+            "rho_vec": rho_vec,
+            "rho_eval": rho_eval,
+        }
 
     # ------------------------------------------------------------------
     # Matrix assembly and solve
@@ -852,16 +922,110 @@ class SinusoidalSolver(_Cancelable):
             geom, k, src_centers=src_c_img, src_tangents=src_t_img
         )
 
+    def _image_refl_prep(self, geom):
+        """k-independent per-pair specular tables for the `ground_eps`
+        weighted image: incidence cosine cos θ, p̂ components (px, py),
+        and the tangent projections tm_p = t_m·p̂, tn_p = t_n·p̂. Cached
+        per geometry object (identity check, same pattern as
+        `_cached_basis`) so swept callers pay the O(N²) build once, not
+        per frequency; ρ_v/ρ_h depend on ε̃(ω) and are NOT cached.
+        """
+        cached = self._cached_image_refl_prep
+        if cached is not None and cached[0] is geom:
+            return cached[1]
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        # Square case: sources = observers; specular geometry from the
+        # REAL (unmirrored) source centers — specular_ray_tables does the
+        # mirroring internally (dz = z_m + z_n − 2·ground_z).
+        cos_th, px, py = _ground_refl.specular_ray_tables(seg_c, self.ground_z)
+        # t·p̂ tables. p̂ has zero z-component and the image tangent only
+        # flips z, so t_img·p̂ = t_src·p̂ — the REAL source tangents serve
+        # for the image-source projection too.
+        tm_p = seg_t[:, 0][:, None] * px + seg_t[:, 1][:, None] * py
+        tn_p = seg_t[:, 0][None, :] * px + seg_t[:, 1][None, :] * py
+        prep = (cos_th, px, py, tm_p, tn_p)
+        self._cached_image_refl_prep = (geom, prep)
+        return prep
+
+    def _field_tensor_image_refl(self, geom, k):
+        """Fresnel-weighted image field tensor for the `ground_eps` finite
+        ground (NEC IPERF=0 reflection-coefficient approximation).
+
+        Applies NEC's field dyad D = ρ_v·(I − p̂p̂) − ρ_h·p̂p̂ to the IMAGE
+        source's field vector at each observer before the tangential
+        projection, with p̂ the horizontal unit normal to the plane of
+        incidence of the specular ray (image midpoint → observer midpoint)
+        and ρ_v/ρ_h the Fresnel coefficients at that ray's incidence angle
+        — per-pair constants, NEC's approximation. Expanding the
+        projection (t_m has unit norm, p̂·p̂ = 1):
+
+            t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)·(E·p̂)
+
+        with both scalars available from the unprojected component tables:
+            t_m·E = td·E_z + rho_proj·E_ρ    (the plain projection)
+            E·p̂  = (t_n·p̂)·E_z + (ρ̂·p̂)·E_ρ  (t_img·p̂ = t_n·p̂; ρ̂ = rho_vec
+                                              /rho_eval as in the E_ρ rule)
+
+        PEC limit ε̃ → ∞: ρ_v → +1, ρ_h → −1, so the p̂ correction vanishes
+        and this reduces exactly to `_field_tensor_image` — the ε̃=1e16
+        collapse test rides on that. The returned tensors are SUBTRACTED
+        in `_assemble_Z` with the same single global minus sign as the PEC
+        image. Always pure numpy: the C++ `sinusoidal_field_tensor` kernel
+        projects before we can weight, so it cannot serve this path (the
+        free-space and PEC blocks keep using it).
+        """
+        src_c_img, src_t_img = self._image_source_centers_tangents(geom)
+        cm = self._field_components(
+            geom, k, src_centers=src_c_img, src_tangents=src_t_img
+        )
+
+        cos_th, px, py, tm_p, tn_p = self._image_refl_prep(geom)
+        # ε̃(ω) and the per-pair Fresnel coefficients — per-frequency (the
+        # swept loops update self.omega alongside k before assembling).
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
+
+        # ρ̂·p̂ from the image-build rho_vec (p̂ is horizontal, so only the
+        # x/y components contribute). Same radius-regularized rho_eval
+        # denominator as the E_ρ projection rule, so the two E_ρ pickups
+        # stay mutually consistent; near-vertical rays have rho_vec → 0,
+        # which kills this term along with the p̂ ambiguity.
+        rho_p = (
+            cm["rho_vec"][..., 0] * px + cm["rho_vec"][..., 1] * py
+        ) / cm["rho_eval"]
+
+        td = cm["td"]
+        rho_proj_factor = cm["rho_proj_factor"]
+        rvh = rho_v + rho_h  # → 0 in the PEC limit
+
+        def _project_weighted(Ez, Erho):
+            tm_E = td * Ez + rho_proj_factor * Erho  # t_m · E
+            E_p = tn_p * Ez + rho_p * Erho  # E · p̂
+            return rho_v * tm_E - rvh * tm_p * E_p
+
+        Phi_const = _project_weighted(cm["Ez_const"], cm["Erho_const"])
+        Phi_sin = _project_weighted(cm["Ez_sin"], cm["Erho_sin"])
+        Phi_cos = _project_weighted(cm["Ez_cos"], cm["Erho_cos"])
+        return Phi_const, Phi_sin, Phi_cos
+
     def _assemble_Z(self, geom, k):
         Phi_c, Phi_s, Phi_co = self._field_tensor(geom, k)
         if self.ground_z is not None:
-            # PEC image: subtract the sub-assembly built from the image
+            # Image ground: subtract the sub-assembly built from the image
             # field tensor. The image source's mirrored geometry + flipped
             # z-tangent already encode both the anti-parallel horizontal
             # image current and the parallel vertical image current; the
             # combined image-current + image-charge sign flip reduces to
             # a single minus sign on the image-Z block (same as Triangular).
-            Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image(geom, k)
+            # With `ground_eps` set, the image field is additionally
+            # Fresnel-dyad weighted (NEC IPERF=0); the subtraction sign is
+            # unchanged because the weighted tensor reduces to the PEC one
+            # in the ε̃ → ∞ limit.
+            if self.ground_eps is not None:
+                Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image_refl(geom, k)
+            else:
+                Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image(geom, k)
             Phi_c = Phi_c - Phi_c_i
             Phi_s = Phi_s - Phi_s_i
             Phi_co = Phi_co - Phi_co_i
