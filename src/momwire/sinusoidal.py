@@ -991,9 +991,9 @@ class SinusoidalSolver(_Cancelable):
         # denominator as the E_ρ projection rule, so the two E_ρ pickups
         # stay mutually consistent; near-vertical rays have rho_vec → 0,
         # which kills this term along with the p̂ ambiguity.
-        rho_p = (
-            cm["rho_vec"][..., 0] * px + cm["rho_vec"][..., 1] * py
-        ) / cm["rho_eval"]
+        rho_p = (cm["rho_vec"][..., 0] * px + cm["rho_vec"][..., 1] * py) / cm[
+            "rho_eval"
+        ]
 
         td = cm["td"]
         rho_proj_factor = cm["rho_proj_factor"]
