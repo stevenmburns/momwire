@@ -455,10 +455,17 @@ Steps:
       and ground constant, so the gate landed at 0.35/0.2 Ω (~3× floor)
       rather than floor + 1 Ω. PEC solve for comparison: dipole window
       max 41.6 Ω, mean 18.8 Ω.
-- [ ] antennaknobs follow-up (separate PR + momwire release): add
+- [x] antennaknobs follow-up (separate PR + momwire release): add
       `SinusoidalSolver` to `_GROUND_EPS_SOLVERS` in `MomwireEngine`;
       bump the submodule pin AND the `momwire>=` floor in the same
       antennaknobs PR (release discipline as in Phase 3).
+      → momwire v0.5.0 released (PR #119, tag on b78ca86, wheels on
+      PyPI); antennaknobs PR #257 rebase-merged with the gate, the
+      v0.5.0 pin + floor, engine-mapping/web tests, and site-doc
+      updates (solver.md/web.md no longer claim sinusoidal folds to
+      PEC). Web `ground_model_applied` now reports refl-coef for the
+      sinusoidal backend. The refl-coef ground program is complete
+      end to end on every solver except retirement-bound Triangular.
 
 Explicitly deferred: a C++ `sinusoidal_field_tensor_refl` kernel variant
 (dyad in-kernel, mirroring `bspline_assemble_offedge_block_refl`). Only
