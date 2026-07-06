@@ -56,6 +56,9 @@ from ._accel import acc as _acc
 from ._cancel import _Cancelable
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
+_HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
+    _acc, "assemble_Z_bspline_weighted"
+)
 _HAVE_ENRICH_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_enrich")
 
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
@@ -400,6 +403,10 @@ class BSplineSolver(_Cancelable):
         # `compute_impedance_swept`'s per-k loop also benefits.
         self._cached_geometry: dict | None = None
         self._cached_basis_polynomials: tuple | None = None
+        # (geom, specular tables) for the ground_eps weighted image — same
+        # lifetime as the geometry cache; k-independent, so swept solves
+        # reuse it across the whole frequency loop.
+        self._cached_image_refl_prep: tuple | None = None
 
     # ------------------------------------------------------------------
     # Geometry build
@@ -750,6 +757,36 @@ class BSplineSolver(_Cancelable):
             seg_l, seg_r, seg_l_img, seg_r_img, a, k, d, self.n_qp_pair
         )
 
+    def _image_refl_prep(self, geom):
+        """k-independent per-pair specular tables (cos θ, PEC mirror dot,
+        out-of-plane dyad component) for the `ground_eps` weighted image.
+        Cached per geometry object so swept callers pay for the O(N²)
+        build once, not per frequency.
+        """
+        cached = self._cached_image_refl_prep
+        if cached is not None and cached[0] is geom:
+            return cached[1]
+        seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
+        tables = _ground_refl.specular_pair_tables(
+            seg_c, geom["tangents"], self.ground_z
+        )
+        self._cached_image_refl_prep = (geom, tables)
+        return tables
+
+    def _image_refl_weights(self, prep, omega):
+        """Per-frequency weight tables from the k-independent specular prep:
+        ε̃(ω) → ρ_v/ρ_h at each pair's specular angle → A-term dyad table
+        w_A and Φ-term image-charge table w_Φ (mode: `ground_phi_mode`).
+        """
+        cos_th, td_img, P = prep
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
+        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
+        w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
+        w_Phi = _ground_refl.phi_term_weights(self.ground_phi_mode, eps_t, rho_v)
+        if np.ndim(w_Phi) == 0:
+            w_Phi = np.full(w_A.shape, complex(w_Phi))
+        return w_A, w_Phi
+
     def _image_Z_refl(self, J_img, supp_seg, polys, geom):
         """Fresnel-weighted image sub-assembly for `ground_eps` (NEC-style
         reflection-coefficient finite ground). Returns the matrix to SUBTRACT
@@ -761,21 +798,32 @@ class BSplineSolver(_Cancelable):
         Fresnel dyad tangent table w_A (in place of the PEC mirror tangent
         dot), and the Φ term — which the PEC path leaves unweighted — takes
         the per-pair image-charge weight w_Φ picked by `ground_phi_mode`.
-        Python-side assembly only (no C++ accelerator): the O(N²·d²) einsum
-        here is the same cost class as the image J fill it consumes; revisit
-        in Phase 2 if profiles disagree.
+
+        Hot path is the C++ `assemble_Z_bspline_weighted` — the PEC assembly
+        kernel with complex per-pair weight tables on both terms, added in
+        Phase 2 after profiling showed Python-side weighted assembly at
+        ~3× the PEC image assembly cost on a 41-freq grounded sweep
+        (scripts/perf_refl_coef_sweep.py). The einsum loop below stays as
+        the no-accelerator fallback and bit-exact reference.
         """
         d = self.degree
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-        seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
-        cos_th, td_img, P = _ground_refl.specular_pair_tables(
-            seg_c, geom["tangents"], self.ground_z
+        w_A, w_Phi = self._image_refl_weights(
+            self._image_refl_prep(geom), self.omega
         )
-        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
-        w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
-        w_Phi = _ground_refl.phi_term_weights(self.ground_phi_mode, eps_t, rho_v)
-        if np.ndim(w_Phi) == 0:
-            w_Phi = np.full(w_A.shape, complex(w_Phi))
+
+        if _HAVE_BSPLINE_ASSEMBLE_W_ACCEL and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D:
+            return _acc.assemble_Z_bspline_weighted(
+                np.ascontiguousarray(J_img, dtype=np.complex128),
+                np.ascontiguousarray(supp_seg, dtype=np.int64),
+                np.ascontiguousarray(polys, dtype=np.float64),
+                np.ascontiguousarray(w_A, dtype=np.complex128),
+                np.ascontiguousarray(w_Phi, dtype=np.complex128),
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                int(d),
+                self._cancel_flag,
+            )
 
         n_basis, n_wings, n_poly = polys.shape
         assert n_wings == d + 1 and n_poly == d + 1
@@ -1637,11 +1685,6 @@ class BSplineSolver(_Cancelable):
             raise NotImplementedError(
                 "BSplineSolver.compute_y_matrix_swept doesn't yet support enrichment"
             )
-        if self.ground_eps is not None:
-            raise NotImplementedError(
-                "ground_eps on swept paths lands in Phase 2 of "
-                "docs/refl-coef-ground-plan.md (per-k weight tables)"
-            )
 
         k_array = np.asarray(k_array, dtype=float)
         k_save = self.k
@@ -1690,8 +1733,16 @@ class BSplineSolver(_Cancelable):
             Z = self._assemble_Z(J, supp_seg, polys, geom)
             if self.ground_z is not None:
                 J_img = self._build_J_image_blocks(geom, self.k)
-                td_img = self._image_tangent_dot(geom["tangents"])
-                Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+                if self.ground_eps is not None:
+                    # self.omega is rebound per k above, so the ε̃(ω)-driven
+                    # weight tables track the sweep; the specular geometry
+                    # behind them is cached k-independently.
+                    Z = Z - self._image_Z_refl(J_img, supp_seg, polys, geom)
+                else:
+                    td_img = self._image_tangent_dot(geom["tangents"])
+                    Z = Z - self._assemble_Z(
+                        J_img, supp_seg, polys, geom, td_all=td_img
+                    )
             X = self._solve_with_kcl_ports(Z, B, kcl_A)
             out[ki] = B.T @ X
 
