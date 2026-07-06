@@ -51,6 +51,7 @@ from ._bspline_kernels import (
 )
 from ._quadrature import leggauss
 
+from . import _ground_refl
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 
@@ -196,6 +197,8 @@ class BSplineSolver(_Cancelable):
         wire_radius=0.0005,
         nsegs=101,
         ground_z=None,
+        ground_eps=None,
+        ground_phi_mode="normal",
         use_singular_enrichment=False,
         n_qp_sing=32,
         enrichment_min_k=3,
@@ -226,6 +229,20 @@ class BSplineSolver(_Cancelable):
         self.wire_radius = wire_radius
         self.nsegs = nsegs
         self.ground_z = ground_z
+        # Finite ground via NEC-style reflection-coefficient weighting of the
+        # image block (docs/refl-coef-ground-plan.md). None → PEC image
+        # (today's behavior). A complex ε̃ or (eps_r, sigma) tuple → Fresnel-
+        # weighted image; needs ground_z. `ground_phi_mode` picks the image-
+        # charge (Φ-term) weighting candidate — see _ground_refl.PHI_MODES.
+        if ground_eps is not None and ground_z is None:
+            raise ValueError("ground_eps requires ground_z to be set")
+        if ground_phi_mode not in _ground_refl.PHI_MODES:
+            raise ValueError(
+                f"ground_phi_mode must be one of {_ground_refl.PHI_MODES}, "
+                f"got {ground_phi_mode!r}"
+            )
+        self.ground_eps = ground_eps
+        self.ground_phi_mode = ground_phi_mode
         # Source smoothing: when None (default) → delta-gap at exact midpoint
         # of feed wire. When set to a float α, the delta-gap is replaced by a
         # cos² bump of width w = α · h_feed_segment_at_source centered on s_f,
@@ -732,6 +749,63 @@ class BSplineSolver(_Cancelable):
         return _seg_seg_full_moments_offedge(
             seg_l, seg_r, seg_l_img, seg_r_img, a, k, d, self.n_qp_pair
         )
+
+    def _image_Z_refl(self, J_img, supp_seg, polys, geom):
+        """Fresnel-weighted image sub-assembly for `ground_eps` (NEC-style
+        reflection-coefficient finite ground). Returns the matrix to SUBTRACT
+        from the free-space Z — same global-minus convention as the PEC
+        image, which this reproduces exactly in the ε̃ → ∞ limit.
+
+        Structure mirrors `_assemble_Z`'s numpy fallback, with two per-
+        segment-pair weight tables instead of one: the A term takes the
+        Fresnel dyad tangent table w_A (in place of the PEC mirror tangent
+        dot), and the Φ term — which the PEC path leaves unweighted — takes
+        the per-pair image-charge weight w_Φ picked by `ground_phi_mode`.
+        Python-side assembly only (no C++ accelerator): the O(N²·d²) einsum
+        here is the same cost class as the image J fill it consumes; revisit
+        in Phase 2 if profiles disagree.
+        """
+        d = self.degree
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
+        cos_th, td_img, P = _ground_refl.specular_pair_tables(
+            seg_c, geom["tangents"], self.ground_z
+        )
+        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
+        w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
+        w_Phi = _ground_refl.phi_term_weights(self.ground_phi_mode, eps_t, rho_v)
+        if np.ndim(w_Phi) == 0:
+            w_Phi = np.full(w_A.shape, complex(w_Phi))
+
+        n_basis, n_wings, n_poly = polys.shape
+        assert n_wings == d + 1 and n_poly == d + 1
+        Z_A = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        Z_Phi = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        p_vec = np.arange(1, d + 1, dtype=np.float64) if d >= 1 else None
+
+        for a in range(n_wings):
+            sm = supp_seg[:, a]
+            for b in range(n_wings):
+                sn = supp_seg[:, b]
+                J_blk = J_img[:, :, sm[:, None], sn[None, :]]
+                wA_blk = w_A[sm[:, None], sn[None, :]]
+
+                inner_A = np.einsum(
+                    "mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :]
+                )
+                Z_A += wA_blk * inner_A
+
+                if d >= 1:
+                    wPhi_blk = w_Phi[sm[:, None], sn[None, :]]
+                    deriv_m = polys[:, a, 1:] * p_vec[None, :]
+                    deriv_n = polys[:, b, 1:] * p_vec[None, :]
+                    J_blk_lo = J_blk[:d, :d]
+                    inner_Phi = np.einsum("mp,pPmn,nP->mn", deriv_m, J_blk_lo, deriv_n)
+                    Z_Phi += wPhi_blk * inner_Phi
+
+        Z_A = 1j * self.omega * self.mu * Z_A
+        Z_Phi = Z_Phi / (1j * self.omega * self.eps)
+        return Z_A + Z_Phi
 
     def _same_edge_prep(self, geom):
         """k-independent per-same-edge precompute hoisted out of the swept-k
@@ -1388,8 +1462,13 @@ class BSplineSolver(_Cancelable):
             # image current's horizontal anti-parallel direction and the
             # image charge's sign flip (one minus combined).
             J_img = self._build_J_image_blocks(geom, self.k)
-            td_img = self._image_tangent_dot(geom["tangents"])
-            Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+            if self.ground_eps is not None:
+                # Finite ground: Fresnel-weighted image (same J fill, per-
+                # pair weight tables on both terms) instead of the PEC dot.
+                Z = Z - self._image_Z_refl(J_img, supp_seg, polys, geom)
+            else:
+                td_img = self._image_tangent_dot(geom["tangents"])
+                Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
 
         # Per-feed unit Galerkin source vectors. For multi-feed, the
         # combined RHS is Σ_i V_i · v_i, and each per-feed driving-point
@@ -1523,8 +1602,11 @@ class BSplineSolver(_Cancelable):
         Z = self._assemble_Z(J, supp_seg, polys, geom)
         if self.ground_z is not None:
             J_img = self._build_J_image_blocks(geom, self.k)
-            td_img = self._image_tangent_dot(geom["tangents"])
-            Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+            if self.ground_eps is not None:
+                Z = Z - self._image_Z_refl(J_img, supp_seg, polys, geom)
+            else:
+                td_img = self._image_tangent_dot(geom["tangents"])
+                Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
 
         # One source vector per feed, columns of B.
         n_ports = len(self.feeds)
@@ -1554,6 +1636,11 @@ class BSplineSolver(_Cancelable):
         if self.use_singular_enrichment:
             raise NotImplementedError(
                 "BSplineSolver.compute_y_matrix_swept doesn't yet support enrichment"
+            )
+        if self.ground_eps is not None:
+            raise NotImplementedError(
+                "ground_eps on swept paths lands in Phase 2 of "
+                "docs/refl-coef-ground-plan.md (per-k weight tables)"
             )
 
         k_array = np.asarray(k_array, dtype=float)

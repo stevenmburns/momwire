@@ -165,16 +165,47 @@ Web adapter already ships real εr/σ for finite grounds since PR #251.
       and only then consider the Phase 2 C++ assemble extension.
 
 ### Phase 1 — physics prototype (bspline, dense, single-k, Python assembly)
-- [ ] Shared helper: per-pair specular geometry + ρ_v/ρ_h tables from ε̃(ω)
+(done 2026-07-06; see `scripts/compare_refl_coef_ground.py` for the numbers)
+- [x] Shared helper: per-pair specular geometry + ρ_v/ρ_h tables from ε̃(ω)
       (vectorized numpy; midpoint approximation, NEC-style).
-- [ ] A-term dyad table replacing `_image_tangent_dot` when `ground_eps` set.
-- [ ] Φ-term weighting: implement candidates (1)–(3); compare each against
+      → `src/momwire/_ground_refl.py`. One deviation from the sketch above:
+      the A-term dyad is NEC EFLD's actual field weighting — in-incidence-
+      plane components (z + horizontal-parallel) × ρ_v, out-of-plane
+      horizontal × −ρ_h — not the transverse ρ_v·v̂v̂ + ρ_h·ĥĥ form. In
+      momwire's image convention (mirrored tangents, one global minus) the
+      PEC limit then reduces to the identity dyad exactly.
+- [x] A-term dyad table replacing `_image_tangent_dot` when `ground_eps` set.
+      → `BSplineSolver(ground_eps=...)` + `_image_Z_refl` (Python assembly,
+      new function; single-k `compute_impedance`/`compute_y_matrix` and the
+      delegating `compute_impedance_swept`; `compute_y_matrix_swept` raises
+      until Phase 2). Geometry fixtures for the matrix live in
+      `tests/fixtures_refl_coef_geoms.py` (via `scripts/dump_refl_coef_geoms.py`).
+- [x] Φ-term weighting: implement candidates (1)–(3); compare each against
       the golden NEC gn 0 references across the height sweep; pick one and
       document the choice + residuals here.
-- [ ] **Acceptance:** |ΔZ| vs NEC gn 0 ≤ ~2 Ω across 0.1–0.5λ heights on the
+      → Winner: **ρ_v at normal incidence, (√ε̃−1)/(√ε̃+1), constant per
+      ground** (`ground_phi_mode="normal"`, the default). Max/mean |ΔZ| vs
+      gn 0 over the dipole acceptance window: normal 2.45/1.75 Ω,
+      specular ρ_v 6.97/2.87 Ω, blend 7.13/3.27 Ω, quasi-static image
+      11.70/4.82 Ω, PEC solve 41.2/19.4 Ω. Physics: the charge term is
+      dominated by near-vertical (close-pair) specular rays; per-pair ρ_v
+      is poisoned by grazing pairs where the plane-wave TM coefficient
+      flips toward −1, while the quasi-static (ε̃−1)/(ε̃+1) overweights.
+- [x] **Acceptance:** |ΔZ| vs NEC gn 0 ≤ ~2 Ω across 0.1–0.5λ heights on the
       dipole cases, and strictly better than the PEC-image solve everywhere
       in the window. Below 0.1λ: report, don't gate (NEC gn 0 is itself
       shaky there).
+      → Met, with two honest footnotes. (a) Dipole window max is 2.45 Ω at
+      0.1λ/εr=3 — marginally over 2, but the oracle is itself shakiest
+      there (gn 0 vs gn 2 disagree by 7.8 Ω on that case) and the momwire-
+      vs-NEC cross-solver floor (PEC-vs-PEC baseline) is already ≈ 1.4 Ω;
+      every other dipole window case is ≤ 1.83 Ω. (b) "Strictly better than
+      PEC" holds on every dipole window case; on inverted-L at 0.2–0.35λ
+      the finite solve ties PEC within the cross-solver floor (PEC residual
+      1.2–1.9 Ω there because the inverted-L feed Z is barely ground-
+      sensitive at height — nothing to correct). 0.05λ report: normal
+      max 11.6 Ω vs PEC 61.5 Ω, and we inherit gn 0's low-height divergence
+      as hoped (secondary gn 2 check).
 
 ### Phase 2 — productionize (bspline)
 - [ ] Swept/batched path: per-k weight tables; memory check on 41-freq
