@@ -65,14 +65,18 @@ def fresnel_rho(eps_t, cos_th):
     return rho_v, rho_h
 
 
-def specular_pair_tables(centers, tangents, ground_z):
+def specular_pair_tables(centers, tangents, ground_z, src_centers=None, src_tangents=None):
     """Frequency-independent per-pair specular geometry.
 
     For observer segment m (midpoint r_m, unit tangent t_m) and source
     segment n imaged across z = ground_z: the specular ray runs from the
     image midpoint r'_n = (x_n, y_n, 2·ground_z − z_n) to r_m.
 
-    Returns (cos_th, td_img, P), each (N, N):
+    Square by default (sources = observers). Pass `src_centers` /
+    `src_tangents` (REAL, unmirrored source geometry) for a rectangular
+    observer×source block — the fast solvers' per-block fills use this.
+
+    Returns (cos_th, td_img, P), each (N_obs, N_src):
       cos_th : cosine of the incidence angle (ray direction · ẑ);
       td_img : t_m · M·t_n, M = diag(1, 1, −1) — today's PEC mirror table;
       P      : (t_m · p̂_mn)(t_n · p̂_mn), the out-of-plane horizontal dyad
@@ -83,10 +87,12 @@ def specular_pair_tables(centers, tangents, ground_z):
     """
     c = np.asarray(centers, dtype=float)
     t = np.asarray(tangents, dtype=float)
+    cs = c if src_centers is None else np.asarray(src_centers, dtype=float)
+    ts = t if src_tangents is None else np.asarray(src_tangents, dtype=float)
 
-    dx = c[:, 0][:, None] - c[:, 0][None, :]
-    dy = c[:, 1][:, None] - c[:, 1][None, :]
-    dz = c[:, 2][:, None] + c[:, 2][None, :] - 2.0 * ground_z
+    dx = c[:, 0][:, None] - cs[:, 0][None, :]
+    dy = c[:, 1][:, None] - cs[:, 1][None, :]
+    dz = c[:, 2][:, None] + cs[:, 2][None, :] - 2.0 * ground_z
 
     hyp = np.hypot(dx, dy)
     rmag = np.sqrt(dx * dx + dy * dy + dz * dz)
@@ -101,10 +107,10 @@ def specular_pair_tables(centers, tangents, ground_z):
     # (t_m · p̂_mn) and (t_n · p̂_mn); p̂ has no z-component so M·t_n · p̂ =
     # t_n · p̂.
     tm_p = t[:, 0][:, None] * px + t[:, 1][:, None] * py
-    tn_p = t[:, 0][None, :] * px + t[:, 1][None, :] * py
+    tn_p = ts[:, 0][None, :] * px + ts[:, 1][None, :] * py
     P = tm_p * tn_p
 
-    td_img = t @ (t * np.array([1.0, 1.0, -1.0])).T
+    td_img = t @ (ts * np.array([1.0, 1.0, -1.0])).T
 
     return cos_th, td_img, P
 
@@ -153,4 +159,24 @@ def phi_term_weights(mode, eps_t, rho_v):
         return (r - 1.0) / (r + 1.0)
     if mode == "blend":
         return 0.5 * (rho_v + (eps_t - 1.0) / (eps_t + 1.0))
+    raise ValueError(f"unknown ground_phi_mode {mode!r}; expected one of {PHI_MODES}")
+
+
+def phi_mode_coeffs(mode, eps_t):
+    """Every Φ mode as w_Φ = c0 + c1·ρ_v(θ) with complex constants (c0, c1).
+
+    This is the form the C++ fused off-edge assembler consumes (it computes
+    ρ_v per segment pair in-kernel anyway for the A-term dyad, so per-pair Φ
+    modes cost nothing extra there). Must stay consistent with
+    `phi_term_weights` — guarded by a test.
+    """
+    if mode == "rho_v":
+        return complex(0.0), complex(1.0)
+    if mode == "image":
+        return (eps_t - 1.0) / (eps_t + 1.0), complex(0.0)
+    if mode == "normal":
+        r = np.sqrt(eps_t)
+        return (r - 1.0) / (r + 1.0), complex(0.0)
+    if mode == "blend":
+        return 0.5 * (eps_t - 1.0) / (eps_t + 1.0), complex(0.5)
     raise ValueError(f"unknown ground_phi_mode {mode!r}; expected one of {PHI_MODES}")

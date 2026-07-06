@@ -1446,7 +1446,20 @@ assemble_Z_bspline_weighted(
 // into those union arrays. Same EFIE Galerkin formula as
 // assemble_Z_bspline_kernel, but the per-pair moments are quadratured inline
 // from the segment endpoints (a²-regularised full kernel, the off-edge path).
-template<int D>
+//
+// WEIGHTED=true is the reflection-coefficient finite-ground image variant
+// (BSplineSolver ground_eps): the caller passes the J side PRE-MIRRORED
+// (positions reflected across the ground plane, tangents z-flipped), exactly
+// as for the PEC image evaluators, plus ε̃ and the Φ-weight coefficients
+// (w_Φ = phi_c0 + phi_c1·ρ_v — every ground_phi_mode reduces to this form,
+// see _ground_refl.phi_mode_coeffs). Everything the Fresnel dyad needs is
+// then already in the inputs: the obs→image midpoint delta gives cos θ and
+// the incidence plane, and the mirrored tangent dot IS the PEC mirror table
+// td_img — the kernel never needs ground_z itself. Weights are evaluated
+// from segment midpoints (the NEC-style per-pair-constant approximation,
+// same as the dense path). WEIGHTED=false compiles to the original kernel;
+// the weight parameters are ignored.
+template<int D, bool WEIGHTED>
 static py::array_t<std::complex<double>>
 bspline_assemble_offedge_block_kernel(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_I,   // (nI, NM)
@@ -1466,7 +1479,10 @@ bspline_assemble_offedge_block_kernel(
     double mu_,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    std::complex<double> eps_t = std::complex<double>(0.0, 0.0),
+    std::complex<double> phi_c0 = std::complex<double>(0.0, 0.0),
+    std::complex<double> phi_c1 = std::complex<double>(0.0, 0.0)
 ) {
     static constexpr int NM = D + 1;
 
@@ -1498,6 +1514,19 @@ bspline_assemble_offedge_block_kernel(
     // Per-segment quadrature positions + lengths, precomputed once.
     std::vector<double> posI(nSegI * n_qp * 3), lenI(nSegI);
     std::vector<double> posJ(nSegJ * n_qp * 3), lenJ(nSegJ);
+    // Segment midpoints for the WEIGHTED specular geometry (J side is
+    // already mirrored, so midI − midJ is the obs→image ray).
+    std::vector<double> midI, midJ;
+    if (WEIGHTED) {
+        midI.resize(nSegI * 3);
+        midJ.resize(nSegJ * 3);
+        for (size_t s = 0; s < nSegI; s++)
+            for (int c = 0; c < 3; c++)
+                midI[s*3+c] = 0.5 * (slI(s,c) + srI(s,c));
+        for (size_t s = 0; s < nSegJ; s++)
+            for (int c = 0; c < 3; c++)
+                midJ[s*3+c] = 0.5 * (slJ(s,c) + srJ(s,c));
+    }
     for (size_t s = 0; s < nSegI; s++) {
         double dx = srI(s,0)-slI(s,0), dy = srI(s,1)-slI(s,1), dz = srI(s,2)-slI(s,2);
         lenI[s] = std::sqrt(dx*dx + dy*dy + dz*dz);
@@ -1597,25 +1626,57 @@ bspline_assemble_offedge_block_kernel(
                     }
 
                     // Galerkin combine for this wing pair.
-                    double wA_re = 0.0, wA_im = 0.0, wPhi_re = 0.0, wPhi_im = 0.0;
+                    double iA_re = 0.0, iA_im = 0.0, iPhi_re = 0.0, iPhi_im = 0.0;
                     for (int p = 0; p < NM; p++) {
                         double mp = pI(m, a, p);
                         for (int q = 0; q < NM; q++) {
                             double nq = pJ(n, b, q);
                             double prod = mp * nq;
-                            wA_re += prod * Jc[p][q].real();
-                            wA_im += prod * Jc[p][q].imag();
+                            iA_re += prod * Jc[p][q].real();
+                            iA_im += prod * Jc[p][q].imag();
                             if (p >= 1 && q >= 1) {
                                 double pq = (double)(p*q) * prod;
-                                wPhi_re += pq * Jc[p-1][q-1].real();
-                                wPhi_im += pq * Jc[p-1][q-1].imag();
+                                iPhi_re += pq * Jc[p-1][q-1].real();
+                                iPhi_im += pq * Jc[p-1][q-1].imag();
                             }
                         }
                     }
-                    zA_re += td * wA_re;
-                    zA_im += td * wA_im;
-                    zPhi_re += wPhi_re;
-                    zPhi_im += wPhi_im;
+                    if (WEIGHTED) {
+                        // Fresnel dyad at the pair's specular angle. J side
+                        // is mirrored, so Δ = obs mid − image mid; td is
+                        // already the PEC mirror tangent dot td_img.
+                        double ddx = midI[smi*3+0] - midJ[snj*3+0];
+                        double ddy = midI[smi*3+1] - midJ[snj*3+1];
+                        double ddz = midI[smi*3+2] - midJ[snj*3+2];
+                        double rmag = std::sqrt(ddx*ddx + ddy*ddy + ddz*ddz);
+                        double cth = ddz / (rmag > 1e-30 ? rmag : 1e-30);
+                        double hyp = std::sqrt(ddx*ddx + ddy*ddy);
+                        double px, py;
+                        if (hyp > 1e-30) { px = -ddy/hyp; py = ddx/hyp; }
+                        else             { px = 1.0;      py = 0.0;     }
+                        // (t·p̂) uses xy components only, so the mirrored
+                        // trial tangent gives the same value as the real one.
+                        double tip = tix*px + tiy*py;
+                        double tjp = tJ(snj,0)*px + tJ(snj,1)*py;
+                        double P_ = tip * tjp;
+                        std::complex<double> root =
+                            std::sqrt(eps_t - (1.0 - cth*cth));
+                        std::complex<double> rv =
+                            (eps_t*cth - root) / (eps_t*cth + root);
+                        std::complex<double> rh =
+                            (cth - root) / (cth + root);
+                        std::complex<double> wa = rv*(td - P_) - rh*P_;
+                        std::complex<double> wp = phi_c0 + phi_c1*rv;
+                        zA_re += wa.real()*iA_re - wa.imag()*iA_im;
+                        zA_im += wa.real()*iA_im + wa.imag()*iA_re;
+                        zPhi_re += wp.real()*iPhi_re - wp.imag()*iPhi_im;
+                        zPhi_im += wp.real()*iPhi_im + wp.imag()*iPhi_re;
+                    } else {
+                        zA_re += td * iA_re;
+                        zA_im += td * iA_im;
+                        zPhi_re += iPhi_re;
+                        zPhi_im += iPhi_im;
+                    }
                 }
             }
 
@@ -1648,18 +1709,58 @@ bspline_assemble_offedge_block(
 ) {
     switch (max_d) {
         case 1:
-            return bspline_assemble_offedge_block_kernel<1>(
+            return bspline_assemble_offedge_block_kernel<1, false>(
                 supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
                 segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
                 cancel_flag);
         case 2:
-            return bspline_assemble_offedge_block_kernel<2>(
+            return bspline_assemble_offedge_block_kernel<2, false>(
                 supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
                 segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
                 cancel_flag);
         default:
             throw std::runtime_error(
                 "bspline_assemble_offedge_block: max_d must be 1 or 2");
+    }
+}
+
+// Reflection-coefficient finite-ground image variant of the fused off-edge
+// block assembler (see the WEIGHTED=true notes on the kernel). The J side
+// must be passed pre-mirrored, exactly as for the PEC image evaluators.
+static py::array_t<std::complex<double>>
+bspline_assemble_offedge_block_refl(
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> segl_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> segr_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tan_I,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> segl_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> segr_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tan_J,
+    double a_squared, double k, double omega, double eps_, double mu_, int max_d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    std::complex<double> eps_t,
+    std::complex<double> phi_c0,
+    std::complex<double> phi_c1,
+    uintptr_t cancel_flag = 0
+) {
+    switch (max_d) {
+        case 1:
+            return bspline_assemble_offedge_block_kernel<1, true>(
+                supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                cancel_flag, eps_t, phi_c0, phi_c1);
+        case 2:
+            return bspline_assemble_offedge_block_kernel<2, true>(
+                supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                cancel_flag, eps_t, phi_c0, phi_c1);
+        default:
+            throw std::runtime_error(
+                "bspline_assemble_offedge_block_refl: max_d must be 1 or 2");
     }
 }
 
@@ -2584,6 +2685,21 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("a_squared"), py::arg("k"), py::arg("omega"),
           py::arg("eps"), py::arg("mu"), py::arg("max_d"),
           py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("cancel_flag") = 0);
+    m.def("bspline_assemble_offedge_block_refl", &bspline_assemble_offedge_block_refl,
+          "Reflection-coefficient finite-ground image variant of "
+          "bspline_assemble_offedge_block: J side passed pre-mirrored, the "
+          "Fresnel dyad (from eps_t) weights the A term per segment pair and "
+          "w_Phi = phi_c0 + phi_c1*rho_v weights the charge term. Templated "
+          "on max_d in {1, 2}; single-k.",
+          py::arg("supp_I"), py::arg("polys_I"), py::arg("segl_I"),
+          py::arg("segr_I"), py::arg("tan_I"),
+          py::arg("supp_J"), py::arg("polys_J"), py::arg("segl_J"),
+          py::arg("segr_J"), py::arg("tan_J"),
+          py::arg("a_squared"), py::arg("k"), py::arg("omega"),
+          py::arg("eps"), py::arg("mu"), py::arg("max_d"),
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("eps_t"), py::arg("phi_c0"), py::arg("phi_c1"),
           py::arg("cancel_flag") = 0);
     m.def("assemble_Z_enrich", &assemble_Z_enrich,
           "Assemble (Z_pe, Z_ep, Z_ee) for the stable XFEM singular basis "

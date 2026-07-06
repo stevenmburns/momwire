@@ -468,3 +468,112 @@ def test_ground_does_not_break_free_space_path():
     zd, _ = dense.compute_impedance()
     zh, _ = hmat.compute_impedance()
     assert abs(zh - zd) / abs(zd) < 1e-4
+
+
+# ---- ground_eps: Fresnel-weighted image in near + far blocks (Phase 5) -----
+
+
+_GEPS = (10.0, 0.002)
+
+
+def _dense_Z_ground_eps(sim):
+    """The exact dense bspline Z under the refl-coef finite ground (free-space
+    minus the Fresnel-weighted image assembly) the H-matrix must reproduce."""
+    geom = sim._build_geometry()
+    supp_seg, polys, _a, _wk, _wbg = sim._build_basis_polynomials(geom)
+    Z = sim._assemble_Z(sim._build_J_blocks(geom, sim.k), supp_seg, polys, geom)
+    J_img = sim._build_J_image_blocks(geom, sim.k)
+    return Z - sim._image_Z_refl(J_img, supp_seg, polys, geom)
+
+
+def test_ground_eps_hmatrix_to_dense_matches_dense_refl():
+    """The ground_eps H-matrix (weighted image in near blocks via
+    _zblock_image_refl, in far blocks via the in-kernel Fresnel weighting)
+    reconstructs the dense refl-coef Z."""
+    half = 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 2.0 + 2 * half]])]
+    sim = HMatrixSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[200]],
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+        ground_z=0.0,
+        ground_eps=_GEPS,
+        aca_tol=1e-7,
+    )
+    Z = _dense_Z_ground_eps(sim)
+    H = sim.build_hmatrix()
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(Z.shape[0]) + 1j * rng.standard_normal(Z.shape[0])
+    assert np.linalg.norm(H.matvec(x) - Z @ x) / np.linalg.norm(Z @ x) < 1e-4
+    assert np.abs(H.to_dense() - Z).max() / np.abs(Z).max() < 1e-4
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_ground_eps_compute_impedance_matches_dense(degree):
+    """HMatrixSolver + ground_eps matches dense BSplineSolver + ground_eps."""
+    half = 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, 1.5], [0.0, 0.0, 1.5 + 2 * half]])]
+    dense, hmat = _matched_pair(
+        wires,
+        degree=degree,
+        n_per_edge_per_wire=[[100]],
+        ground_z=0.0,
+        ground_eps=_GEPS,
+    )
+    zd, _ = dense.compute_impedance()
+    zh, _ = hmat.compute_impedance()
+    assert abs(zh - zd) / abs(zd) < 1e-4
+
+
+def test_ground_eps_numpy_image_evaluators_match_accel():
+    """The numpy _zblock_image_refl fallback and the C++ in-kernel weighting
+    agree on a far block (guards the two Fresnel implementations against
+    drifting apart)."""
+    import momwire.hmatrix as hm
+
+    half = 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 2.0 + 2 * half]])]
+    sim = HMatrixSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[60]],
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+        ground_z=0.0,
+        ground_eps=_GEPS,
+    )
+    if not hm._HAVE_OFFEDGE_BLOCK_REFL_ACCEL:
+        pytest.skip("refl off-edge accelerator not built")
+    ctx = sim._context()
+    n = ctx["n_basis"]
+    I = np.arange(0, n // 3, dtype=np.int64)
+    J = np.arange(2 * n // 3, n, dtype=np.int64)
+    _row, _col, dense_accel = sim._offedge_block_evaluators(
+        ctx, I, J, sim.k, refl=True
+    )
+    D_accel = dense_accel()
+    D_numpy = sim._zblock_image_refl(I, J, k=sim.k)
+    assert np.abs(D_accel - D_numpy).max() / np.abs(D_numpy).max() < 1e-12
+
+
+def test_ground_eps_far_block_rank_growth_vs_pec():
+    """The smooth Fresnel weights must not blow up far-block ACA ranks: total
+    far rank under ground_eps stays within 1.5x of the PEC-image ranks."""
+    half = 0.962 * 22 / 4
+    wires = [np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 2.0 + 2 * half]])]
+    common = dict(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[200]],
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+        ground_z=0.0,
+    )
+    H_pec = HMatrixSolver(**common).build_hmatrix()
+    H_eps = HMatrixSolver(**common, ground_eps=_GEPS).build_hmatrix()
+    rank_pec = sum(U.shape[1] for _I, _J, U, _V in H_pec.far)
+    rank_eps = sum(U.shape[1] for _I, _J, U, _V in H_eps.far)
+    assert rank_pec > 0
+    assert rank_eps <= 1.5 * rank_pec

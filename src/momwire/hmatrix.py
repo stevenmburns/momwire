@@ -42,6 +42,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from .bspline import BSplineSolver
+from . import _ground_refl
 from ._bspline_kernels import (
     _seg_seg_full_moments_offedge,
     _seg_seg_reg_moments,
@@ -61,6 +62,9 @@ from ._accel import acc as _acc
 
 _HAVE_OFFEDGE_BLOCK_ACCEL = _acc is not None and hasattr(
     _acc, "bspline_assemble_offedge_block"
+)
+_HAVE_OFFEDGE_BLOCK_REFL_ACCEL = _acc is not None and hasattr(
+    _acc, "bspline_assemble_offedge_block_refl"
 )
 
 _OFFEDGE_BLOCK_ACCEL_MAX_D = 2
@@ -523,6 +527,105 @@ class HMatrixSolver(BSplineSolver):
         `BSplineSolver._image_tangent_dot`."""
         return (tangents_J * np.array([1.0, 1.0, -1.0])).T
 
+    def _assemble_Z_block_weighted(
+        self, Jsub, supp_I_local, polys_I, supp_J_local, polys_J, wA_sub, wPhi_sub
+    ):
+        """`_assemble_Z_block` with per-segment-pair weight tables on BOTH
+        terms — the block form of `BSplineSolver._image_Z_refl`'s numpy
+        fallback (wA on the A term in place of the tangent dot, wPhi on the
+        charge term the PEC path leaves unweighted)."""
+        d = self.degree
+        nI = supp_I_local.shape[0]
+        nJ = supp_J_local.shape[0]
+        Z_A = np.zeros((nI, nJ), dtype=np.complex128)
+        Z_Phi = np.zeros((nI, nJ), dtype=np.complex128)
+        p_vec = np.arange(1, d + 1, dtype=np.float64) if d >= 1 else None
+
+        for a in range(d + 1):
+            sm = supp_I_local[:, a]
+            for b in range(d + 1):
+                sn = supp_J_local[:, b]
+                J_blk = Jsub[:, :, sm[:, None], sn[None, :]]
+                wA_blk = wA_sub[sm[:, None], sn[None, :]]
+                inner_A = np.einsum(
+                    "mp,pPmn,nP->mn", polys_I[:, a, :], J_blk, polys_J[:, b, :]
+                )
+                Z_A += wA_blk * inner_A
+                if d >= 1:
+                    wPhi_blk = wPhi_sub[sm[:, None], sn[None, :]]
+                    deriv_m = polys_I[:, a, 1:] * p_vec[None, :]
+                    deriv_n = polys_J[:, b, 1:] * p_vec[None, :]
+                    J_blk_lo = J_blk[:d, :d]
+                    Z_Phi += wPhi_blk * np.einsum(
+                        "mp,pPmn,nP->mn", deriv_m, J_blk_lo, deriv_n
+                    )
+
+        Z_A = 1j * self.omega * self.mu * Z_A
+        Z_Phi = Z_Phi / (1j * self.omega * self.eps)
+        return Z_A + Z_Phi
+
+    def _refl_weight_tables(self, ctx, seg_I, seg_J):
+        """(wA, wPhi) tables over a (seg_I, seg_J) segment-index rectangle,
+        from the REAL (unmirrored) geometry — the rectangular counterpart of
+        `BSplineSolver._image_refl_weights`. O(|I|·|J|) closed-form; no
+        global (N, N) table is ever built, so large-N fast-solver problems
+        stay out of quadratic weight memory."""
+        seg_mid = 0.5 * (ctx["seg_l"] + ctx["seg_r"])
+        tangents = ctx["tangents"]
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        cos_th, td_img, P = _ground_refl.specular_pair_tables(
+            seg_mid[seg_I],
+            tangents[seg_I],
+            self.ground_z,
+            src_centers=seg_mid[seg_J],
+            src_tangents=tangents[seg_J],
+        )
+        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
+        wA = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
+        wPhi = _ground_refl.phi_term_weights(self.ground_phi_mode, eps_t, rho_v)
+        if np.ndim(wPhi) == 0:
+            wPhi = np.full(wA.shape, complex(wPhi))
+        return wA, wPhi
+
+    def _zblock_image_refl(self, I, J, k=None):
+        """Fresnel-weighted image sub-block for `ground_eps` — the
+        reflection-coefficient counterpart of `_zblock_image`, subtracted
+        from `zblock(I, J)` with the same single global minus sign. Same
+        image moment fill; only the assembly weights differ."""
+        if k is None:
+            k = self.k
+        ctx = self._context()
+        supp_seg = ctx["supp_seg"]
+        polys = ctx["polys"]
+        seg_l = ctx["seg_l"]
+        seg_r = ctx["seg_r"]
+        a = self.wire_radius
+        d = self.degree
+
+        I = np.asarray(I, dtype=np.int64)
+        J = np.asarray(J, dtype=np.int64)
+        seg_I = np.unique(supp_seg[I].ravel())
+        seg_J = np.unique(supp_seg[J].ravel())
+        loc_of_I = {int(s): i for i, s in enumerate(seg_I)}
+        loc_of_J = {int(s): i for i, s in enumerate(seg_J)}
+
+        Jsub = _seg_seg_full_moments_offedge(
+            seg_l[seg_I],
+            seg_r[seg_I],
+            self._image_positions(seg_l[seg_J]),
+            self._image_positions(seg_r[seg_J]),
+            a,
+            k,
+            d,
+            self.n_qp_pair,
+        )
+        supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
+        supp_J_local = np.vectorize(loc_of_J.__getitem__)(supp_seg[J])
+        wA_sub, wPhi_sub = self._refl_weight_tables(ctx, seg_I, seg_J)
+        return self._assemble_Z_block_weighted(
+            Jsub, supp_I_local, polys[I], supp_J_local, polys[J], wA_sub, wPhi_sub
+        )
+
     # ------------------------------------------------------------------
     # Cluster / block tree (Phase 1)
     # ------------------------------------------------------------------
@@ -602,7 +705,10 @@ class HMatrixSolver(BSplineSolver):
             I, J = s.indices, t.indices
             D = self.zblock(I, J, k=k)
             if grounded:
-                D = D - self._zblock_image(I, J, k=k)
+                if self.ground_eps is not None:
+                    D = D - self._zblock_image_refl(I, J, k=k)
+                else:
+                    D = D - self._zblock_image(I, J, k=k)
             near_blocks.append((I, J, D))
 
         use_accel = (
@@ -661,7 +767,7 @@ class HMatrixSolver(BSplineSolver):
             self._hm_gl01 = cached
         return cached
 
-    def _offedge_block_evaluators(self, ctx, I, J, k, mirror_J=False):
+    def _offedge_block_evaluators(self, ctx, I, J, k, mirror_J=False, refl=False):
         """Build (get_row, get_col, dense) closures for an admissible far block
         backed by the fused C++ off-edge assembler `bspline_assemble_offedge_block`.
 
@@ -677,7 +783,31 @@ class HMatrixSolver(BSplineSolver):
         free-space block). The C++ assembler uses the trial tangents only through
         the dot product, so flipping their z is exactly the image-current sign
         flip.
+
+        With `refl=True` (implies the mirrored-J image; `ground_eps` set) the
+        closures call `bspline_assemble_offedge_block_refl` instead: the same
+        pre-mirrored inputs, with the Fresnel dyad computed in-kernel from
+        ε̃ and the Φ weight as w_Φ = c0 + c1·ρ_v — the C++ counterpart of
+        `_zblock_image_refl`.
         """
+        if refl:
+            mirror_J = True
+            eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+            phi_c0, phi_c1 = _ground_refl.phi_mode_coeffs(
+                self.ground_phi_mode, eps_t
+            )
+
+            def _call(*args):
+                return _acc.bspline_assemble_offedge_block_refl(
+                    *args, eps_t, phi_c0, phi_c1, self._cancel_flag
+                )
+        else:
+
+            def _call(*args):
+                return _acc.bspline_assemble_offedge_block(
+                    *args, self._cancel_flag
+                )
+
         supp_seg = ctx["supp_seg"]
         polys = ctx["polys"]
         seg_l = ctx["seg_l"]
@@ -711,7 +841,7 @@ class HMatrixSolver(BSplineSolver):
 
         def get_row(i):
             seg_i = supp_seg[I[i]]
-            return _acc.bspline_assemble_offedge_block(
+            return _call(
                 one_supp,
                 polys[I[i]][None],
                 seg_l[seg_i],
@@ -730,12 +860,11 @@ class HMatrixSolver(BSplineSolver):
                 d,
                 glt,
                 glw,
-                self._cancel_flag,
             ).ravel()
 
         def get_col(j):
             seg_j = supp_seg[J[j]]
-            return _acc.bspline_assemble_offedge_block(
+            return _call(
                 sIl,
                 pI,
                 slI,
@@ -754,11 +883,10 @@ class HMatrixSolver(BSplineSolver):
                 d,
                 glt,
                 glw,
-                self._cancel_flag,
             ).ravel()
 
         def dense():
-            return _acc.bspline_assemble_offedge_block(
+            return _call(
                 sIl,
                 pI,
                 slI,
@@ -777,7 +905,6 @@ class HMatrixSolver(BSplineSolver):
                 d,
                 glt,
                 glw,
-                self._cancel_flag,
             )
 
         return get_row, get_col, dense
@@ -814,10 +941,22 @@ class HMatrixSolver(BSplineSolver):
         if self.ground_z is None:
             return row_f, col_f, dense_f
 
-        if use_accel:
+        refl = self.ground_eps is not None
+        if use_accel and (_HAVE_OFFEDGE_BLOCK_REFL_ACCEL or not refl):
             row_i, col_i, dense_i = self._offedge_block_evaluators(
-                ctx, I, J, k, mirror_J=True
+                ctx, I, J, k, mirror_J=True, refl=refl
             )
+        elif refl:
+
+            def row_i(i):
+                return self._zblock_image_refl(I[i : i + 1], J, k=k).ravel()
+
+            def col_i(j):
+                return self._zblock_image_refl(I, J[j : j + 1], k=k).ravel()
+
+            def dense_i():
+                return self._zblock_image_refl(I, J, k=k)
+
         else:
 
             def row_i(i):
@@ -900,13 +1039,13 @@ class HMatrixSolver(BSplineSolver):
     def _hmatrix_unsupported(self):
         """The H-matrix path supports free space and PEC ground (the latter via
         the per-block image term folded into the near/far block fill — see
-        `build_hmatrix` and `_offedge_aca_evaluators`). Falls back to the dense
-        path for singular enrichment (its image reaction isn't implemented;
-        the constructor already forbids enrichment + ground) and for the
-        reflection-coefficient finite ground (`ground_eps`): the block fills
-        bake the unweighted PEC image, so running them with `ground_eps` set
-        would silently solve the wrong physics."""
-        return self.use_singular_enrichment or self.ground_eps is not None
+        `build_hmatrix` and `_offedge_aca_evaluators`) as well as the
+        reflection-coefficient finite ground (`ground_eps`, Phase 5: near
+        blocks via `_zblock_image_refl`, far blocks via the in-kernel Fresnel
+        weighting in `bspline_assemble_offedge_block_refl`). Only singular
+        enrichment falls back to the dense path (its image reaction isn't
+        implemented; the constructor already forbids enrichment + ground)."""
+        return self.use_singular_enrichment
 
     def _build_operator(self):
         """Build the fast operator the constrained solve runs GMRES on. The
