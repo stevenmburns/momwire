@@ -148,10 +148,13 @@ def test_accel_weighted_assembly_matches_numpy_reference(monkeypatch):
     np.testing.assert_allclose(z_accel, z_numpy, rtol=1e-9)
 
 
-def test_fast_solvers_fall_back_to_dense_with_ground_eps():
-    """HMatrixSolver / ArrayBlockSolver block fills bake the PEC image, so
-    with ground_eps they must route through the dense BSplineSolver path —
-    same Z as the dense solve, not silently-PEC fast blocks."""
+def test_fast_solvers_match_dense_with_ground_eps():
+    """HMatrixSolver / ArrayBlockSolver support ground_eps natively since
+    Phase 5 (weighted image in the block fills) — the fast solve must agree
+    with the dense BSplineSolver to ACA tolerance, not bit-exactly (the
+    Phase 3 dense fallback was replaced by real fast-path support; the
+    per-solver equality/rank/reuse tests live in test_hmatrix.py /
+    test_array_block.py)."""
     from momwire import ArrayBlockSolver, HMatrixSolver
 
     kw = dict(GEOMS[("dipole", 0.2)])
@@ -159,9 +162,31 @@ def test_fast_solvers_fall_back_to_dense_with_ground_eps():
     z_dense, _ = BSplineSolver(**kw, **ground).compute_impedance()
     for solver_cls in (HMatrixSolver, ArrayBlockSolver):
         sim = solver_cls(**kw, **ground)
-        assert sim._hmatrix_unsupported()
+        assert not sim._hmatrix_unsupported()
         z_fast, _ = sim.compute_impedance()
-        np.testing.assert_allclose(z_fast, z_dense, rtol=1e-12)
+        np.testing.assert_allclose(z_fast, z_dense, rtol=1e-4)
+
+
+def test_phi_mode_coeffs_consistent_with_phi_term_weights():
+    """phi_mode_coeffs (the w_Φ = c0 + c1·ρ_v form the C++ off-edge kernel
+    consumes) must agree with phi_term_weights (the numpy table form) for
+    every mode — the two implementations must never drift apart."""
+    from momwire._ground_refl import (
+        PHI_MODES,
+        fresnel_rho,
+        phi_mode_coeffs,
+        phi_term_weights,
+    )
+
+    eps_t = complex(10.0, -12.6)
+    cos_th = np.linspace(0.01, 1.0, 7)
+    rho_v, _ = fresnel_rho(eps_t, cos_th)
+    for mode in PHI_MODES:
+        c0, c1 = phi_mode_coeffs(mode, eps_t)
+        expected = np.broadcast_to(
+            phi_term_weights(mode, eps_t, rho_v), rho_v.shape
+        )
+        np.testing.assert_allclose(c0 + c1 * rho_v, expected, rtol=1e-14)
 
 
 def test_y_matrix_swept_matches_single_k():

@@ -587,3 +587,91 @@ def test_ground_and_free_self_blocks_do_not_alias():
     # the grounded build must assemble its own self-block, not reuse the
     # free-space one cached under the same translation-invariant signature
     assert cache_stats()["self_block_build"] == 2
+
+
+# ---- ground_eps: Fresnel-weighted image blocks (Phase 5) --------------------
+
+
+_GEPS = (10.0, 0.002)
+
+
+def _ground_eps_array(offsets, halves, solver, nsegs=14, degree=2):
+    """`_ground_array` with the reflection-coefficient finite ground."""
+    wires = [_dipole_wire(h, y=y, z=z) for (y, z), h in zip(offsets, halves)]
+    return solver(
+        wires=wires,
+        degree=degree,
+        n_per_edge_per_wire=[[nsegs]] * len(wires),
+        wavelength=22.0,
+        feeds=[(i, None, 1.0 + 0.0j) for i in range(len(wires))],
+        ground_z=0.0,
+        ground_eps=_GEPS,
+    )
+
+
+def _dense_Z_ground_eps(sim):
+    geom = sim._build_geometry()
+    supp_seg, polys, _a, _wk, _wbg = sim._build_basis_polynomials(geom)
+    Z = sim._assemble_Z(sim._build_J_blocks(geom, sim.k), supp_seg, polys, geom)
+    J_img = sim._build_J_image_blocks(geom, sim.k)
+    return Z - sim._image_Z_refl(J_img, supp_seg, polys, geom)
+
+
+def test_ground_eps_array_block_matvec_matches_dense():
+    """The ground_eps array-block operator (weighted self-image in the
+    self-blocks, weighted real+image in each coupling block) reproduces the
+    dense refl-coef Z @ x."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    sim = _ground_eps_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16)
+    Z = _dense_Z_ground_eps(sim)
+    AB = sim.build_array_blocks(tol=1e-7)
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(Z.shape[0]) + 1j * rng.standard_normal(Z.shape[0])
+    assert np.linalg.norm(AB.matvec(x) - Z @ x) / np.linalg.norm(Z @ x) < 1e-4
+    assert np.abs(AB.to_dense() - Z).max() / np.abs(Z).max() < 1e-4
+
+
+def test_ground_eps_compute_impedance_matches_dense():
+    """ArrayBlock + ground_eps matches the dense bspline + ground_eps Z."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-6.0, 3.0), (6.0, 3.0)]
+    za = np.atleast_1d(
+        _ground_eps_array(offsets, [half] * 2, ArrayBlockSolver).compute_impedance()[0]
+    )
+    zd = np.atleast_1d(
+        _ground_eps_array(offsets, [half] * 2, BSplineSolver).compute_impedance()[0]
+    )
+    assert np.max(np.abs(za - zd) / np.abs(zd)) < 1e-3
+
+
+def test_ground_eps_single_height_grid_keeps_block_reuse():
+    """The Fresnel weights depend only on displacement + heights, so the
+    single-height grid reuse must be exactly as under PEC: one self-block,
+    coupling ACA once per unique displacement."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    sim = _ground_eps_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16)
+    AB = sim.build_array_blocks()
+    assert len(AB.shape_blocks) == 1  # one shape, one height
+    assert sim._last_n_coupling_aca == 3  # displacements {1,2,3}·spacing
+
+
+def test_ground_eps_and_pec_blocks_never_alias_in_module_caches():
+    """A PEC solve and a ground_eps solve of the identical geometry must not
+    share cached self-blocks / operators (the cache keys carry the ground
+    constants + phi mode)."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-6.0, 3.0), (6.0, 3.0)]
+    z_pec = np.atleast_1d(
+        _ground_array(offsets, [half] * 2, ArrayBlockSolver).compute_impedance()[0]
+    )
+    z_eps = np.atleast_1d(
+        _ground_eps_array(offsets, [half] * 2, ArrayBlockSolver).compute_impedance()[0]
+    )
+    # Physically different grounds: if the caches aliased, these would match.
+    assert np.max(np.abs(z_eps - z_pec)) > 0.5

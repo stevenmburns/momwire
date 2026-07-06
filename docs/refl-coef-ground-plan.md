@@ -302,21 +302,42 @@ Two structural simplifiers:
   plane), so no new singular/near cases arise; w_A is a smooth closed-form
   function of pair geometry.
 
-- [ ] **ArrayBlockSolver first** (easier, biggest payoff). Block reuse
+(done 2026-07-06)
+- [x] **ArrayBlockSolver first** (easier, biggest payoff). Block reuse
       survives: w_A depends only on horizontal displacement and the two
       heights via the specular ray — exactly what the grounded block key
       (relative displacement + centroid heights) already captures. Only the
       per-block image fill changes from PEC mirror-dot to the Fresnel dyad
       weighting; the reuse/dedup machinery is untouched.
-- [ ] **HMatrixSolver**: extend the C++ off-edge block assembler (ACA entry
+      → Self blocks via `_zblock_image_refl` (numpy weighted block
+      assembly); coupling blocks via the shared refl ACA evaluators. Reuse
+      verified: single-height 4-element grid still builds one self-block +
+      3 coupling ACAs under ground_eps. Module-scope cache keys
+      (`_self_block_key`, `_build_operator`) grew a (ground_eps, phi_mode)
+      component so PEC and finite blocks never alias.
+- [x] **HMatrixSolver**: extend the C++ off-edge block assembler (ACA entry
       evaluators + dense near blocks) to compute the Fresnel dyad in-kernel
       from pair geometry + ε̃. The weight is smooth, so ACA compressibility
       should be essentially unaffected — but verify far-block rank growth
       empirically before trusting it (add a rank-vs-PEC assertion to the
       hmatrix tests).
-- [ ] Re-narrow the `_hmatrix_unsupported` gates as each solver lands, with
+      → `bspline_assemble_offedge_block_refl`: the fused kernel templated
+      on WEIGHTED, computing the dyad from the pre-mirrored inputs alone
+      (obs→image Δ gives cos θ + incidence plane; the mirrored tangent dot
+      IS td_img — the kernel never needs ground_z). Φ weight passed as
+      w_Φ = c0 + c1·ρ_v, covering every phi mode (`phi_mode_coeffs`,
+      consistency-tested against the numpy tables). Rank growth measured:
+      **1.0× vs PEC** (72 = 72 total far rank on the 200-seg vertical
+      dipole) — the smooth weights add nothing, as hoped. numpy fallback
+      evaluators (`_zblock_image_refl`) agree with the C++ kernel to 1e-12.
+- [x] Re-narrow the `_hmatrix_unsupported` gates as each solver lands, with
       fast-vs-dense equality tests under `ground_eps` (mirror
       `test_fast_solvers_fall_back_to_dense_with_ground_eps`, flipped).
+      → Both gates back to enrichment-only. Equality: H-matrix/ArrayBlock
+      reconstruct the dense refl-coef Z to <1e-4 (matvec, to_dense,
+      impedance, y-matrix paths); 48-element grounded array solves 1.2×
+      faster than dense at N=720 with 2e-6 relative agreement, matching
+      the PEC fast path's scaling profile.
 
 ## Validation matrix
 

@@ -528,13 +528,12 @@ class ArrayBlockSolver(HMatrixSolver):
     def _hmatrix_unsupported(self):
         """ArrayBlock supports PEC ground via the per-block image term (the
         free-space block reuse survives the image method for a grid array — see
-        `build_array_blocks`), so it falls back to the dense path only for
-        singular enrichment, which still belongs there, and for the
-        reflection-coefficient finite ground (`ground_eps`) whose per-pair
-        Fresnel weights the per-block image term doesn't carry. This narrows
-        the base `HMatrixSolver` gate, which keeps excluding ground for the
-        generic hierarchical solver."""
-        return self.use_singular_enrichment or self.ground_eps is not None
+        `build_array_blocks`) and, since Phase 5, the reflection-coefficient
+        finite ground too: the Fresnel weights depend only on relative
+        displacement + heights, exactly what the grounded block keys already
+        carry, so block reuse is untouched and only the image fills change.
+        Only singular enrichment falls back to the dense path."""
+        return self.use_singular_enrichment
 
     def array_partition(self, tol=1e-6):
         """Element/shape partition of the bases (cached)."""
@@ -569,6 +568,15 @@ class ArrayBlockSolver(HMatrixSolver):
             if self.ground_z is None
             else int(np.round((cen[2] - self.ground_z) / 1e-6))
         )
+        # The Fresnel-weighted image block depends on the ground constants
+        # and the Φ mode too — a PEC-image block must never alias a
+        # ground_eps one (or one for different ground constants) in the
+        # module-scope cache.
+        ekey = (
+            None
+            if self.ground_eps is None
+            else (repr(self.ground_eps), self.ground_phi_mode)
+        )
         return (
             sig,
             float(k),
@@ -576,6 +584,7 @@ class ArrayBlockSolver(HMatrixSolver):
             self.degree,
             self.n_qp_pair,
             gkey,
+            ekey,
         )
 
     def _build_operator(self):
@@ -598,6 +607,9 @@ class ArrayBlockSolver(HMatrixSolver):
             self.n_qp_pair,
             float(self.aca_tol),
             None if self.ground_z is None else float(self.ground_z),
+            None
+            if self.ground_eps is None
+            else (repr(self.ground_eps), self.ground_phi_mode),
         )
         op = _ARRAY_OP_CACHE.get(key)
         if op is None:
@@ -703,8 +715,14 @@ class ArrayBlockSolver(HMatrixSolver):
                     # Self-image reaction: the element against its own mirror. One
                     # block per (shape, height) class, so the block-Jacobi
                     # preconditioner stays (near-)exact and the
-                    # one-factorisation-per-class cost is unchanged.
-                    blk = blk - self._zblock_image(g, g, k=k)
+                    # one-factorisation-per-class cost is unchanged. Under
+                    # ground_eps the weighted image replaces the PEC one; its
+                    # weights depend only on displacement + heights, which the
+                    # block key already carries.
+                    if self.ground_eps is not None:
+                        blk = blk - self._zblock_image_refl(g, g, k=k)
+                    else:
+                        blk = blk - self._zblock_image(g, g, k=k)
                 _cache_put(_SELF_BLOCK_CACHE, sb_key, blk, _SELF_BLOCK_CACHE_MAX)
                 _CACHE_STATS["self_block_build"] += 1
             else:
