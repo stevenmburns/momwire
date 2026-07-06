@@ -8,7 +8,8 @@ intrinsic to the basis itself versus its kernel / source / junction
 treatment.
 
 Scope (deliberately narrow):
-  * Free-space only — no Sommerfeld ground, no PEC image.
+  * Free space or PEC-image ground (`ground_z`) — no finite/Sommerfeld
+    ground.
   * Thin-wire kernel (Eqs 73-79), no extended thin-wire / current-element.
   * Delta-gap "applied-E" source (Eq 187) on a single basis function.
   * Uniform wire radius across all wires.

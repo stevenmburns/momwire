@@ -147,12 +147,22 @@ Web adapter already ships real εr/σ for finite grounds since PR #251.
 
 ## Phases
 
-### Phase 0 — scaffolding & golden references
-- [ ] Capture golden Z values from `PyNECEngine(ground=("finite-fast", ...))`
+### Phase 0 — scaffolding & golden references (done 2026-07-06)
+- [x] Capture golden Z values from `PyNECEngine(ground=("finite-fast", ...))`
       for the validation matrix below; store as literals in a momwire test
       module so momwire's suite needs no PyNEC dependency.
-- [ ] Fix the stale `sinusoidal.py:11` "free-space only" docstring.
-- [ ] Check PR #101 status; agree base/rebase strategy with that effort.
+      → `scripts/capture_refl_coef_ground_golden.py` (runs under the
+      antennaknobs venv) regenerates `tests/golden_refl_coef_ground.py`:
+      30 cases (2 geometries × 5 heights × 3 grounds), each with gn 0
+      (oracle), gn 2 (sanity), and PyNEC PEC (reference). Captured values
+      reproduce the plan's motivating numbers (dipole 0.2λ/(10, 0.002):
+      gn0 68.8+13.2j vs PEC 66.2+31.5j; 0.05λ gn0/gn2 divergence).
+- [x] Fix the stale `sinusoidal.py:11` "free-space only" docstring.
+- [x] Check PR #101 status; agree base/rebase strategy with that effort.
+      Checked 2026-07-06: PR #101 open, WIP. Strategy: this branch stays
+      based on `main`; Phase 1 goes in new functions (no edits to the
+      swept/assembly code #101 touches); rebase onto main after #101 lands
+      and only then consider the Phase 2 C++ assemble extension.
 
 ### Phase 1 — physics prototype (bspline, dense, single-k, Python assembly)
 - [ ] Shared helper: per-pair specular geometry + ρ_v/ρ_h tables from ε̃(ω)
