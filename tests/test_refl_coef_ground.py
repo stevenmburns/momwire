@@ -134,8 +134,32 @@ def test_impedance_swept_matches_single_k():
         np.testing.assert_allclose(z_k, z_single, rtol=1e-9)
 
 
-def test_y_matrix_swept_guarded():
+def test_accel_weighted_assembly_matches_numpy_reference(monkeypatch):
+    """The C++ assemble_Z_bspline_weighted kernel must agree with the numpy
+    einsum fallback (the bit-exact reference). Only the weighted-image flag
+    is patched, so the free-space assembly is identical in both solves."""
+    from momwire import bspline as bspline_mod
+
+    if not bspline_mod._HAVE_BSPLINE_ASSEMBLE_W_ACCEL:
+        pytest.skip("weighted C++ assembler not built")
+    z_accel = _solve("inverted_l", 0.2, ground_eps=(10.0, 0.002))
+    monkeypatch.setattr(bspline_mod, "_HAVE_BSPLINE_ASSEMBLE_W_ACCEL", False)
+    z_numpy = _solve("inverted_l", 0.2, ground_eps=(10.0, 0.002))
+    np.testing.assert_allclose(z_accel, z_numpy, rtol=1e-9)
+
+
+def test_y_matrix_swept_matches_single_k():
+    """Swept Y with ground_eps must equal per-k single solves: ε̃(ω) has to
+    track the rebound omega while the specular prep is reused across k."""
     kw = dict(GEOMS[("dipole", 0.2)])
     sim = BSplineSolver(**kw, ground_z=0.0, ground_eps=(10.0, 0.002))
-    with pytest.raises(NotImplementedError, match="Phase 2"):
-        sim.compute_y_matrix_swept(np.array([sim.k]))
+    k0 = sim.k
+    k_arr = np.array([k0 * 0.97, k0, k0 * 1.03])
+    Y_swept = sim.compute_y_matrix_swept(k_arr)
+    for kk, Y_k in zip(k_arr, Y_swept):
+        kw_k = dict(kw)
+        kw_k["wavelength"] = 2 * np.pi / kk
+        Y_single = BSplineSolver(
+            **kw_k, ground_z=0.0, ground_eps=(10.0, 0.002)
+        ).compute_y_matrix()
+        np.testing.assert_allclose(Y_k, Y_single, rtol=1e-9)

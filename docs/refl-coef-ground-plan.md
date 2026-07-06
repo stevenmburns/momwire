@@ -163,6 +163,9 @@ Web adapter already ships real εr/σ for finite grounds since PR #251.
       based on `main`; Phase 1 goes in new functions (no edits to the
       swept/assembly code #101 touches); rebase onto main after #101 lands
       and only then consider the Phase 2 C++ assemble extension.
+      **Update (later 2026-07-06): PR #101 judged unlikely to ever merge —
+      Phase 2 proceeded against main directly, editing the swept paths as
+      needed. If #101 is ever revived it must rebase over this.**
 
 ### Phase 1 — physics prototype (bspline, dense, single-k, Python assembly)
 (done 2026-07-06; see `scripts/compare_refl_coef_ground.py` for the numbers)
@@ -208,13 +211,37 @@ Web adapter already ships real εr/σ for finite grounds since PR #251.
       as hoped (secondary gn 2 check).
 
 ### Phase 2 — productionize (bspline)
-- [ ] Swept/batched path: per-k weight tables; memory check on 41-freq
+(done 2026-07-06. PR #101 was declared abandoned before this phase — the
+swept/assembly paths were edited directly, no rebase coordination.)
+- [x] Swept/batched path: per-k weight tables; memory check on 41-freq
       sweeps.
-- [ ] Junction/KCL assembly variant.
-- [ ] C++ assemble extension (second weight table) only if the Python image
+      → `compute_y_matrix_swept` assembles the weighted image inline per k;
+      `compute_impedance_swept` inherits via its per-k delegation. The
+      k-independent specular tables are cached per geometry
+      (`_image_refl_prep`); only ε̃(ω) → ρ tables (≈3 ms/k at N=180) are
+      per-frequency. Memory: weight tables are two (N, N) complex arrays
+      rebuilt per k, nothing accumulates across the sweep — 41-freq N=180
+      peak RSS ≈ 180 MB, indistinguishable from the PEC sweep
+      (`scripts/perf_refl_coef_sweep.py`).
+- [x] Junction/KCL assembly variant.
+      → Free: the weighted image is assembled at the basis level before the
+      KCL Schur solve, so junction geometries flow through unchanged
+      (inverted-L runs in the Phase 1 matrix and tests).
+- [x] C++ assemble extension (second weight table) only if the Python image
       assembly shows up in profiles.
-- [ ] Tests: golden-value guards, PEC-limit check (ε̃→∞ reproduces the PEC
+      → It did: numpy einsum assembly measured ~33 ms/k at N=180 (~3× the
+      image J fill; +40% on a grounded 41-freq sweep). Added
+      `assemble_Z_bspline_weighted` (complex w_A on the A term, complex w_Φ
+      on the Φ term, same loop structure as the PEC kernel) → ~3 ms/k
+      including the per-k ρ tables; grounded-sweep cost is now at parity
+      with the PEC image path. The numpy loop remains as the
+      no-accelerator fallback, guarded by a bit-exactness test.
+- [x] Tests: golden-value guards, PEC-limit check (ε̃→∞ reproduces the PEC
       image path to ~1e-6), free-space regression (ground_eps=None bit-exact).
+      → `tests/test_refl_coef_ground.py` (19 tests): golden-window guards +
+      better-than-PEC, PEC-limit collapse at ε̃=1e16 to <1e-5, free-space
+      bit-exactness, tuple-vs-complex ε̃ equivalence, y-matrix/impedance and
+      swept/single-k consistency, accel-vs-numpy reference.
 
 ### Phase 3 — antennaknobs wiring
 - [ ] `MomwireEngine` ground-spec mapping (`finite-fast` → refl-coef solve;

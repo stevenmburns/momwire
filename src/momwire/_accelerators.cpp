@@ -1301,6 +1301,136 @@ assemble_Z_bspline(
 }
 
 
+// Weighted variant of assemble_Z_bspline_kernel for the reflection-
+// coefficient finite ground (BSplineSolver ground_eps): the A term takes a
+// COMPLEX per-segment-pair weight table wA_all (the Fresnel dyad tangent
+// table, replacing the real tangent-dot), and the Φ term — unweighted in
+// the PEC kernel — takes its own complex per-pair image-charge table
+// wPhi_all. Same loop structure, same J tensor, one pass; the PEC kernel is
+// the wA = t·Mt (real), wPhi = 1 special case.
+template<int D>
+static py::array_t<std::complex<double>>
+assemble_Z_bspline_weighted_kernel(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_all,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_all,
+    double omega,
+    double eps_,
+    double mu_,
+    uintptr_t cancel_flag = 0
+) {
+    static constexpr int NM = D + 1;
+
+    auto j_view = J.unchecked<4>();
+    auto ss_view = support_seg.unchecked<2>();
+    auto p_view = polys.unchecked<3>();
+    auto wa_view = wA_all.unchecked<2>();
+    auto wp_view = wPhi_all.unchecked<2>();
+
+    size_t n_basis = (size_t)support_seg.shape(0);
+    if (support_seg.shape(1) != NM) {
+        throw std::runtime_error("support_seg.shape(1) must equal D+1");
+    }
+    if (polys.shape(0) != (long)n_basis || polys.shape(1) != NM ||
+        polys.shape(2) != NM) {
+        throw std::runtime_error("polys.shape must be (n_basis, D+1, D+1)");
+    }
+    if (J.shape(0) != NM || J.shape(1) != NM) {
+        throw std::runtime_error("J.shape(0:2) must be (D+1, D+1)");
+    }
+    if (wA_all.shape(0) != wPhi_all.shape(0) ||
+        wA_all.shape(1) != wPhi_all.shape(1)) {
+        throw std::runtime_error("wA_all / wPhi_all shape mismatch");
+    }
+
+    py::array_t<std::complex<double>> Z({n_basis, n_basis});
+    auto z_view = Z.mutable_unchecked<2>();
+
+    py::gil_scoped_release release;
+
+    const double omega_mu = omega * mu_;
+    const double inv_omega_eps = 1.0 / (omega * eps_);
+
+    PYSIM_CANCEL_SETUP(cancel_flag);
+    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t m = 0; m < n_basis; m++) {
+        for (size_t n = 0; n < n_basis; n++) {
+            PYSIM_CANCEL_POLL();
+            double zA_re = 0.0, zA_im = 0.0;
+            double zPhi_re = 0.0, zPhi_im = 0.0;
+
+            for (int a = 0; a < NM; a++) {
+                int64_t sm = ss_view(m, a);
+                for (int b = 0; b < NM; b++) {
+                    int64_t sn = ss_view(n, b);
+                    std::complex<double> wa = wa_view(sm, sn);
+                    std::complex<double> wp = wp_view(sm, sn);
+
+                    double iA_re = 0.0, iA_im = 0.0;
+                    double iPhi_re = 0.0, iPhi_im = 0.0;
+
+                    for (int p = 0; p < NM; p++) {
+                        double mp_ap = p_view(m, a, p);
+                        for (int q = 0; q < NM; q++) {
+                            double nq_bq = p_view(n, b, q);
+                            std::complex<double> Jpq = j_view(p, q, sm, sn);
+                            double prod = mp_ap * nq_bq;
+                            iA_re += prod * Jpq.real();
+                            iA_im += prod * Jpq.imag();
+                            if (p >= 1 && q >= 1) {
+                                std::complex<double> Jpm1qm1 = j_view(p - 1, q - 1, sm, sn);
+                                double pq = (double)(p * q) * prod;
+                                iPhi_re += pq * Jpm1qm1.real();
+                                iPhi_im += pq * Jpm1qm1.imag();
+                            }
+                        }
+                    }
+
+                    // complex weight × complex inner sum, by parts
+                    zA_re += wa.real() * iA_re - wa.imag() * iA_im;
+                    zA_im += wa.real() * iA_im + wa.imag() * iA_re;
+                    zPhi_re += wp.real() * iPhi_re - wp.imag() * iPhi_im;
+                    zPhi_im += wp.real() * iPhi_im + wp.imag() * iPhi_re;
+                }
+            }
+
+            double Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
+            double Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            z_view(m, n) = std::complex<double>(Zre, Zim);
+        }
+    }
+
+    PYSIM_THROW_IF_ABORTED();
+    return Z;
+}
+
+static py::array_t<std::complex<double>>
+assemble_Z_bspline_weighted(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_all,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_all,
+    double omega,
+    double eps_,
+    double mu_,
+    int max_d,
+    uintptr_t cancel_flag = 0
+) {
+    switch (max_d) {
+        case 1:
+            return assemble_Z_bspline_weighted_kernel<1>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
+        case 2:
+            return assemble_Z_bspline_weighted_kernel<2>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
+        default:
+            throw std::runtime_error(
+                "assemble_Z_bspline_weighted: max_d must be 1 or 2");
+    }
+}
+
+
 // Fused off-edge block assembler for the hierarchical (H-matrix / ACA) solver.
 //
 // Computes a dense Z[I, J] block where every basis pair is OFF-EDGE (the
@@ -2426,6 +2556,17 @@ PYBIND11_MODULE(_accelerators, m) {
           "currently instantiated for max_d in {1, 2}. Single-k.",
           py::arg("J"), py::arg("support_seg"),
           py::arg("polys"), py::arg("td_all"),
+          py::arg("omega"), py::arg("eps"), py::arg("mu"),
+          py::arg("max_d"),
+          py::arg("cancel_flag") = 0);
+    m.def("assemble_Z_bspline_weighted", &assemble_Z_bspline_weighted,
+          "Weighted assemble_Z_bspline for the reflection-coefficient "
+          "finite ground: complex per-segment-pair weight tables on both "
+          "terms — wA_all (Fresnel dyad tangent table) on the A term, "
+          "wPhi_all (image-charge weight) on the Φ term. Templated on "
+          "max_d in {1, 2}; single-k.",
+          py::arg("J"), py::arg("support_seg"),
+          py::arg("polys"), py::arg("wA_all"), py::arg("wPhi_all"),
           py::arg("omega"), py::arg("eps"), py::arg("mu"),
           py::arg("max_d"),
           py::arg("cancel_flag") = 0);
