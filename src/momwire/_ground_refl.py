@@ -65,6 +65,43 @@ def fresnel_rho(eps_t, cos_th):
     return rho_v, rho_h
 
 
+def specular_ray_tables(centers, ground_z, src_centers=None):
+    """Per-pair specular-ray geometry: incidence-angle cosine and the
+    horizontal unit vector p̂ normal to the plane of incidence.
+
+    For observer segment m (midpoint r_m) and source segment n imaged
+    across z = ground_z: the specular ray runs from the image midpoint
+    r'_n = (x_n, y_n, 2·ground_z − z_n) to r_m. Square by default
+    (sources = observers); pass `src_centers` (REAL, unmirrored source
+    midpoints) for a rectangular observer×source block.
+
+    Returns (cos_th, px, py), each (N_obs, N_src):
+      cos_th : cosine of the incidence angle (ray direction · ẑ);
+      px, py : components of p̂_mn = ẑ × d̂_horizontal (p̂_z ≡ 0). For a
+               near-vertical ray the incidence plane is undefined; p̂
+               falls back to x̂, which is harmless because ρ_v = −ρ_h at
+               θ = 0 makes the field dyad isotropic there.
+    """
+    c = np.asarray(centers, dtype=float)
+    cs = c if src_centers is None else np.asarray(src_centers, dtype=float)
+
+    dx = c[:, 0][:, None] - cs[:, 0][None, :]
+    dy = c[:, 1][:, None] - cs[:, 1][None, :]
+    dz = c[:, 2][:, None] + cs[:, 2][None, :] - 2.0 * ground_z
+
+    hyp = np.hypot(dx, dy)
+    rmag = np.sqrt(dx * dx + dy * dy + dz * dz)
+    cos_th = dz / np.maximum(rmag, _TINY)
+
+    # p̂ = (−dy, dx, 0)/hyp; degenerate (vertical ray) → x̂.
+    safe = hyp > _TINY
+    inv_hyp = np.where(safe, 1.0 / np.where(safe, hyp, 1.0), 1.0)
+    px = np.where(safe, -dy * inv_hyp, 1.0)
+    py = np.where(safe, dx * inv_hyp, 0.0)
+
+    return cos_th, px, py
+
+
 def specular_pair_tables(centers, tangents, ground_z, src_centers=None, src_tangents=None):
     """Frequency-independent per-pair specular geometry.
 
@@ -85,24 +122,10 @@ def specular_pair_tables(centers, tangents, ground_z, src_centers=None, src_tang
                which is harmless because ρ_v = −ρ_h at θ = 0 makes the dyad
                isotropic there.
     """
-    c = np.asarray(centers, dtype=float)
     t = np.asarray(tangents, dtype=float)
-    cs = c if src_centers is None else np.asarray(src_centers, dtype=float)
     ts = t if src_tangents is None else np.asarray(src_tangents, dtype=float)
 
-    dx = c[:, 0][:, None] - cs[:, 0][None, :]
-    dy = c[:, 1][:, None] - cs[:, 1][None, :]
-    dz = c[:, 2][:, None] + cs[:, 2][None, :] - 2.0 * ground_z
-
-    hyp = np.hypot(dx, dy)
-    rmag = np.sqrt(dx * dx + dy * dy + dz * dz)
-    cos_th = dz / np.maximum(rmag, _TINY)
-
-    # p̂ = (−dy, dx, 0)/hyp; degenerate (vertical ray) → x̂.
-    safe = hyp > _TINY
-    inv_hyp = np.where(safe, 1.0 / np.where(safe, hyp, 1.0), 1.0)
-    px = np.where(safe, -dy * inv_hyp, 1.0)
-    py = np.where(safe, dx * inv_hyp, 0.0)
+    cos_th, px, py = specular_ray_tables(centers, ground_z, src_centers)
 
     # (t_m · p̂_mn) and (t_n · p̂_mn); p̂ has no z-component so M·t_n · p̂ =
     # t_n · p̂.
