@@ -284,6 +284,8 @@ written, so their `_hmatrix_unsupported` gates were widened to send
 ### Phase 4 — optional / deferred
 - [ ] SinusoidalSolver vector-field tensor variant (C++), or explicitly
       document sinusoidal ground as PEC-image-only.
+      → Superseded by the concrete Phase 6 plan below (numpy image path,
+      no C++ change needed).
 - [ ] TriangularSolver: intentionally skipped (retirement).
 
 ### Phase 5 — ground_eps in the fast solvers (added 2026-07-06)
@@ -338,6 +340,102 @@ Two structural simplifiers:
       impedance, y-matrix paths); 48-element grounded array solves 1.2×
       faster than dense at N=720 with 2e-6 relative agreement, matching
       the PEC fast path's scaling profile.
+
+### Phase 6 — refl-coef ground in SinusoidalSolver (planned 2026-07-06)
+
+SinusoidalSolver is the reference engine — performance parity with the
+BSpline d=1/d=2 paths is explicitly NOT a goal. It is acceptable to slow
+the grounded-finite solve down to numpy-fill speed; the design below in
+fact leaves the free-space and PEC paths completely untouched (they keep
+the C++ `sinusoidal_field_tensor` kernel) and only the *image block under
+`ground_eps`* runs through the pure-numpy path.
+
+**Key insight — the Φ-mode problem does not exist here.** The sinusoidal
+solver is field-based: Eqs 76–79 give the *total* E-field of each source
+shape (vector- and scalar-potential contributions already merged), which
+is exactly the quantity NEC's EFLD weights. So unlike the mixed-potential
+bspline path there is no image-charge weighting to approximate and no
+`ground_phi_mode` knob: apply the NEC field dyad
+`D_mn = ρ_v·(I − p̂p̂) − ρ_h·p̂p̂` (per-pair, at the specular angle of the
+image-midpoint → observer-midpoint ray — the same per-pair-constant
+approximation NEC makes) to the image field *vector* at the observer,
+then project onto the observer tangent. Since the basis is also NEC's
+own, parity with gn 0 should be at least as good as bspline's 2.45 Ω
+window max, plausibly sub-Ω.
+
+**Where it slots in.** `_field_tensor` (numpy fallback path,
+`sinusoidal.py:694–826`) already has everything unprojected: per-shape
+(E_z, E_ρ) scalars plus the source tangent and ρ̂ = rho_vec/rho_eval
+directions; the tangential projection is its last three lines. The C++
+kernel is the only place the vector field is discarded pre-projection —
+so the finite-ground image block simply doesn't use it.
+
+**Algebra.** With E the image-source field vector at observer m
+(image source n: mirrored center, z-flipped tangent — existing
+`_image_source_centers_tangents`):
+
+    t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)(E·p̂)
+
+where both scalars come from tables the numpy path already has:
+  - t_m·E  = td·E_z + rho_proj_factor·E_ρ   (the existing projection)
+  - E·p̂    = (t_n·p̂)·E_z + (ρ̂·p̂)·E_ρ      (t_img·p̂ = t_n·p̂; p̂ is
+                                              horizontal)
+PEC limit ρ_v→1, ρ_h→−1 collapses this to t_m·E — bit-identical in form
+to the existing PEC image tensor, so the ε̃→∞ test carries over. The
+vertical-ray degenerate case (observer above its own image) is benign for
+the same reasons as in `_ground_refl`: p̂ falls back to x̂ where ρ_v=−ρ_h
+makes the dyad isotropic, and rho_vec→0 kills the ρ̂·p̂ term.
+
+Steps:
+- [ ] `_ground_refl`: expose the specular-ray p̂ components (extend
+      `specular_pair_tables` with an opt-in return or add a small
+      `specular_ray_tables(centers, ground_z, src_centers)` returning
+      (cos_th, px, py)). Bspline callers unchanged.
+- [ ] Refactor the numpy `_field_tensor` into
+      `_field_components(geom, k, src_c, src_t)` returning the per-shape
+      (E_z, E_ρ) tables plus the projection geometry (td,
+      rho_proj_factor, rho_vec, rho_eval); the numpy branch of
+      `_field_tensor` becomes a thin projection wrapper. Guarded by the
+      existing `test_sinusoidal_field_tensor_cpp_matches_numpy`.
+- [ ] `_field_tensor_image_refl(geom, k)`: mirrored sources →
+      `_field_components` → ρ_v/ρ_h from ε̃(self.omega) via
+      `eps_tilde`/`fresnel_rho` → dyad → tangential projection.
+      Cache the k-independent specular tables per geometry (identity
+      check, same pattern as `_cached_basis` / bspline's
+      `_image_refl_prep`).
+- [ ] API + gate: `SinusoidalSolver(..., ground_eps=None)` (complex ε̃ or
+      (eps_r, sigma) tuple; requires `ground_z`, same validation as
+      bspline; deliberately NO `ground_phi_mode` — document why in the
+      docstring). `_assemble_Z` subtracts the weighted image tensor
+      instead of the PEC one when set. Sweeps work for free: both swept
+      loops update `self.omega` per k before calling `_assemble_Z`, so
+      ε̃/ρ tables are per-frequency automatically.
+- [ ] Update the module docstring scope list (currently "no
+      finite/Sommerfeld ground").
+- [ ] Tests (`tests/test_sinusoidal_refl_coef_ground.py`), reusing
+      `fixtures_refl_coef_geoms.py` + `golden_refl_coef_ground.py`
+      (constructor kwargs are interface-compatible):
+      free-space and PEC-ground bit-exactness with `ground_eps=None`;
+      PEC-limit collapse at ε̃=1e16; tuple-vs-complex ε̃ equivalence;
+      swept-vs-single-k consistency; golden-window guards vs gn 0 +
+      strictly-better-than-PEC over 0.1–0.5λ; 0.05λ reported, not gated.
+- [ ] **Acceptance:** first measure the sinusoidal-PEC vs PyNEC-PEC
+      cross-solver floor on the golden matrix (expect tighter than
+      bspline's ≈1.4 Ω — same basis as NEC), then gate at floor + ~1 Ω
+      across the 0.1–0.5λ dipole window. Extend
+      `scripts/compare_refl_coef_ground.py` (or a sibling) to print the
+      sinusoidal residual table for this doc.
+- [ ] antennaknobs follow-up (separate PR + momwire release): add
+      `SinusoidalSolver` to `_GROUND_EPS_SOLVERS` in `MomwireEngine`;
+      bump the submodule pin AND the `momwire>=` floor in the same
+      antennaknobs PR (release discipline as in Phase 3).
+
+Explicitly deferred: a C++ `sinusoidal_field_tensor_refl` kernel variant
+(dyad in-kernel, mirroring `bspline_assemble_offedge_block_refl`). Only
+worth it if grounded-finite sinusoidal solves ever show up in a profile —
+they shouldn't, per the reference-engine framing above.
+
+Estimate: 1–2 focused days (S1 physics ~1 day, tests/validation ~½–1 day).
 
 ## Validation matrix
 
