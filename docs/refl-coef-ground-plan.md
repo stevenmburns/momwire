@@ -286,6 +286,38 @@ written, so their `_hmatrix_unsupported` gates were widened to send
       document sinusoidal ground as PEC-image-only.
 - [ ] TriangularSolver: intentionally skipped (retirement).
 
+### Phase 5 — ground_eps in the fast solvers (added 2026-07-06)
+
+Phase 3 gated HMatrix/ArrayBlock to the dense path under `ground_eps`
+(their per-block image terms bake unweighted PEC physics). That's correct
+but forfeits the fast solvers exactly where finite ground matters most in
+practice: large HF arrays over lossy earth (four-square, phased verticals).
+Next step: teach both fast paths the weighted image.
+
+Two structural simplifiers:
+- The chosen Φ weight (`ground_phi_mode="normal"`) is a **constant complex
+  scalar** per (ground, frequency) — the image Φ term is a scalar multiple
+  of the PEC-style image Φ term, no per-pair table needed.
+- The image is always well-separated from the sources (mirror across the
+  plane), so no new singular/near cases arise; w_A is a smooth closed-form
+  function of pair geometry.
+
+- [ ] **ArrayBlockSolver first** (easier, biggest payoff). Block reuse
+      survives: w_A depends only on horizontal displacement and the two
+      heights via the specular ray — exactly what the grounded block key
+      (relative displacement + centroid heights) already captures. Only the
+      per-block image fill changes from PEC mirror-dot to the Fresnel dyad
+      weighting; the reuse/dedup machinery is untouched.
+- [ ] **HMatrixSolver**: extend the C++ off-edge block assembler (ACA entry
+      evaluators + dense near blocks) to compute the Fresnel dyad in-kernel
+      from pair geometry + ε̃. The weight is smooth, so ACA compressibility
+      should be essentially unaffected — but verify far-block rank growth
+      empirically before trusting it (add a rank-vs-PEC assertion to the
+      hmatrix tests).
+- [ ] Re-narrow the `_hmatrix_unsupported` gates as each solver lands, with
+      fast-vs-dense equality tests under `ground_eps` (mirror
+      `test_fast_solvers_fall_back_to_dense_with_ground_eps`, flipped).
+
 ## Validation matrix
 
 Flat half-wave dipole (28.47 MHz, antennaknobs `dipoles.invvee:dipole`
