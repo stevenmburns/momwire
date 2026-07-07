@@ -22,7 +22,8 @@ import sys
 
 C_LIGHT = 299.792458  # MHz * m
 
-HEIGHT_FRACS = (0.05, 0.1, 0.2, 0.35, 0.5)
+HEIGHT_FRACS = (0.02, 0.05, 0.1, 0.2, 0.35, 0.5)
+YAGI_HEIGHT_FRACS = (0.2,)
 
 OUT_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -33,6 +34,7 @@ OUT_PATH = os.path.join(
 
 def _cases():
     from antennaknobs import resolve_variant_params
+    from antennaknobs.designs.beams.yagi import Builder as Yagi
     from antennaknobs.designs.dipoles.invvee import Builder as InvVee
     from antennaknobs.designs.verticals.inverted_l import Builder as InvertedL
 
@@ -47,6 +49,13 @@ def _cases():
         lam = C_LIGHT / params["design_freq"]
         params["base"] = frac * lam
         yield ("inverted_l", frac, params["freq"], InvertedL(params))
+
+    for frac in YAGI_HEIGHT_FRACS:
+        params = dict(Yagi.default_params)
+        params["n_directors"] = 4
+        lam = C_LIGHT / params["design_freq"]
+        params["base"] = frac * lam
+        yield ("yagi", frac, params["freq"], Yagi(params))
 
 
 def main():
