@@ -271,25 +271,36 @@ BSplineSolver(..., ground_z=0.0,
       residual 6–15% gates cover mesh-sampling of the small-θ ridge
       only. The engine reproduces NEC's published Sommerfeld surfaces.
 
-### Phase 2 — grid + bivariate interpolation
-- [ ] NEC's three-region layout as the baseline, two modernizations:
-      (a) grid R₁ extent sized to the geometry's actual max R₁ (computed
-      from cached geometry) instead of hard 1λ + Norton — memory is not
-      1979's constraint; (b) ΔR₁ in the R₁ > 0.2λ regions keyed to
-      2π/|k₁| (the manual's own caveat for low-loss high-εr).
-- [ ] Bivariate cubic interpolation, vectorized over query batches
-      (Re/Im via two real splines per surface, or a hand-rolled 4×4
-      NEC-style stencil — pick whichever benchmarks better at ~1e6
-      queries).
-- [ ] Accuracy harness: interp vs `eval_I_direct` at random (R₁, θ) per
-      grid region; target ≤ 1e−3 rel (NEC's own bar).
-- [ ] Grid-fill cost target: ≤ ~0.5 s per (ε̃, k) at default extent
-      (~300 nodes × 6 integrals, vectorizable across nodes sharing a
-      contour family). This is the per-k sweep cost — measure on the
-      41-freq sweep before accepting.
-- [ ] Norton/GWAVE asymptotic region: **deferred** unless the
-      geometry-sized grid proves inadequate (huge arrays). Record measured
-      interp error at the largest golden-case R₁ to justify.
+### Phase 2 — grid + bivariate interpolation (done 2026-07-06)
+`SommerfeldGrid` in `_sommerfeld.py`.
+- [x] NEC's three-region layout with three spacing changes, each earned
+      by the accuracy harness: (a) extent sized to the geometry's max R₁
+      instead of hard 1λ + Norton; (b) outer ΔR₁ capped at one sixth of
+      the lateral-wave beat 2π/|k₁−k₂| (the manual's high-εr caveat);
+      (c) **region 2's Δθ keyed to the extent** (≤ 0.07λ/r1_max) — near
+      grazing the surfaces vary on the height scale h = R₁·sinθ, so
+      NEC's fixed Δθ=5° goes coarse in h exactly where the geometry-
+      sized grid extends past NEC's 1λ (measured 1e−2-of-scale errors
+      at θ<3°, R₁>1λ before the fix); plus region-1 ΔR₁ halved to
+      0.01λ (the R₁<0.012λ bend toward the analytic limits).
+- [x] Hand-rolled 4×4 Lagrange bivariate cubic on the uniform regions,
+      complex values directly, fully vectorized gather+einsum
+      (~0.7 ms per 180-query batch).
+- [x] Accuracy harness (now the grid unit tests): random points per
+      region vs `iv_surfaces_direct` — ≤ 2e−3 of global surface scale
+      for lossy grounds (typ. ≤ 1.1e−3), ≤ 4e−3 on the zero-loss εr=16
+      stress case (gated at those; NEC's bar was 1e−3–1e−4 on its own
+      grid). Large-R₁ (to 1.6λ) covered by the random sample — the
+      geometry-sized-grid substitute for Norton validated there.
+- [x] Grid-fill cost **measured 2.4–3.6 s** per (ε̃, k) at r1_max=1.6λ
+      (590–690 nodes × ~4–6 ms) — misses the aspirational ≤0.5 s.
+      Accepted for now: single-k solves don't care; a 41-k sweep pays
+      ~2 min. If sweeps matter, the fill loop is embarrassingly
+      parallel / vectorizable across nodes — Phase 5 material, noted
+      in Risks.
+- [x] Norton/GWAVE asymptotic region: deferred as planned — the
+      geometry-sized grid covers every golden case (max R₁ ≈ 1.5λ on
+      the yagi) with the region-2 Δθ keying holding accuracy there.
 
 ### Phase 3 — BSplineSolver wiring
 - [ ] `ground_model` kwarg + validation (API sketch above).

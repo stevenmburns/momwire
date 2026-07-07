@@ -188,3 +188,58 @@ def test_manual_figure_extrema(fig_meshes, comp, er, sig):
         scale = max(abs(lo), abs(hi))
         assert abs(arr.min() - lo) < tol * scale, (part, "min", arr.min(), lo)
         assert abs(arr.max() - hi) < tol * scale, (part, "max", arr.max(), hi)
+
+
+# ---------------------------------------------------------------------------
+# 6. Interpolation grid (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def lossy_grid():
+    return som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=1.2)
+
+
+def test_grid_matches_direct(lossy_grid):
+    """Interpolation vs direct evaluation on random points across all
+    three regions: within 2e-3 of the global surface scale (NEC's own
+    measured range is 1e-3..1e-4 on its coarser 1975-vintage grid)."""
+    rng = np.random.default_rng(11)
+    r1 = np.concatenate([rng.uniform(0.004, 0.19, 40), rng.uniform(0.21, 1.19, 60)])
+    th = rng.uniform(0.0, np.pi / 2, r1.size)
+    gi = lossy_grid.eval(r1, th)
+    di = som.iv_surfaces_direct(10.0 - 1.26j, K2, r1, th, rtol=1e-8)
+    for kk in som._SURF_KEYS:
+        scale = np.max(np.abs(di[kk]))
+        assert np.max(np.abs(gi[kk] - di[kk])) < 2e-3 * scale, kk
+
+
+def test_grid_stress_lossless():
+    """Zero-loss eps_r=16 (manual fig 11): the evanescent interface wave
+    is the worst case for the grid; gate at 4e-3 of scale."""
+    eps_t = 16.0 + 0.0j
+    g = som.SommerfeldGrid(eps_t, K2, r1_max=1.2)
+    rng = np.random.default_rng(3)
+    r1 = rng.uniform(0.01, 1.19, 60)
+    th = rng.uniform(0.0, np.pi / 2, r1.size)
+    gi = g.eval(r1, th)
+    di = som.iv_surfaces_direct(eps_t, K2, r1, th, rtol=1e-8)
+    for kk in som._SURF_KEYS:
+        scale = np.max(np.abs(di[kk]))
+        assert np.max(np.abs(gi[kk] - di[kk])) < 4e-3 * scale, kk
+
+
+def test_grid_r1_zero_and_bounds(lossy_grid):
+    """R1 = 0 queries interpolate onto the analytic-limit row; queries
+    beyond r1_max raise; theta is clipped to [0, pi/2]."""
+    th = np.array([0.2, 1.0])
+    lim = som._limits_r1_zero(10.0 - 1.26j, K2, th, K2 * som._C_LIGHT, som._MU0)
+    out = lossy_grid.eval(np.zeros_like(th), th)
+    for kk in som._SURF_KEYS:
+        np.testing.assert_allclose(out[kk], lim[kk], rtol=2e-3, atol=0)
+    with pytest.raises(ValueError):
+        lossy_grid.eval([1.5], [0.3])
+    a = lossy_grid.eval([0.5], [np.pi / 2])
+    b = lossy_grid.eval([0.5], [np.pi / 2 + 1e-12])
+    for kk in som._SURF_KEYS:
+        np.testing.assert_allclose(a[kk], b[kk], rtol=1e-9)

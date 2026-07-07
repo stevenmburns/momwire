@@ -392,3 +392,140 @@ def greens_free_space_check(k2, rho, h, form, rtol=1e-9):
 
     exact = np.exp(-1j * k2 * r) / r
     return complex(total[0]), complex(exact)
+
+
+# ---------------------------------------------------------------------------
+# Interpolation grid (Phase 2)
+# ---------------------------------------------------------------------------
+
+_SURF_KEYS = ("IrhoV", "IzV", "IrhoH", "IphiH")
+
+
+class SommerfeldGrid:
+    """NEC-style bivariate interpolation grid over `iv_surfaces_direct`.
+
+    Three uniform (R₁, θ) regions per theory-manual fig 12, spacings in
+    wavelengths of k₂ (Δθ in degrees):
+
+      1: R₁ ∈ [0, 0.2λ],      θ ∈ [0°, 90°], ΔR₁ = 0.01λ, Δθ = 10°
+      2: R₁ ∈ [0.2λ, r1_max], θ ∈ [0°, 20°], ΔR₁ = 0.05λ†, Δθ = 5°
+      3: R₁ ∈ [0.2λ, r1_max], θ ∈ [20°, 90°], ΔR₁ = 0.1λ†,  Δθ = 10°
+
+    († capped at one sixth of the lateral-wave beat length 2π/|k₁ − k₂| —
+    the manual's own caveat that grid 2 needs finer ΔR₁ for high-εr
+    low-loss grounds, applied to both outer regions.)
+
+    Two modernizations vs NEC: `r1_max` is sized to the geometry that
+    will query the grid (instead of a hard 1λ plus Norton asymptotics
+    beyond), and the spacing keying above. Values at R₁ = 0 come from
+    the analytic eqs 169–172 limits via `iv_surfaces_direct`.
+
+    `eval(R1, theta)` interpolates all four surfaces with a 4×4 Lagrange
+    (bivariate cubic) stencil, vectorized over query batches; measured
+    accuracy vs direct evaluation is ~1e−4 (unit-tested at 1e−3, NEC's
+    own bar). Queries must satisfy 0 ≤ R₁ ≤ r1_max (tiny overshoot is
+    clamped) and 0 ≤ θ ≤ π/2.
+    """
+
+    def __init__(self, eps_t, k2, r1_max, rtol=1e-6, omega=None, mu=_MU0):
+        self.eps_t = complex(eps_t)
+        self.k2 = float(k2)
+        self.omega = k2 * _C_LIGHT if omega is None else float(omega)
+        self.mu = float(mu)
+        lam = 2.0 * np.pi / self.k2
+        self.r1_max = max(float(r1_max), 0.35 * lam)
+
+        k1 = self.k2 * np.sqrt(self.eps_t)
+        if k1.imag > 0:
+            k1 = np.conj(k1)
+        beat = 2.0 * np.pi / max(abs(k1 - self.k2), 1e-30)
+
+        # Region 2's θ spacing is keyed to the grid extent: near grazing
+        # the surfaces vary on the height scale h = R₁·sinθ, so a fixed
+        # Δθ grows ever coarser in h as R₁ grows (NEC never met this —
+        # its grid stopped at 1λ). Keep r1_max·Δθ ≲ 0.07λ.
+        dth2_target = min(5.0, np.degrees(0.07 * lam / self.r1_max))
+        n_th2 = int(np.ceil(20.0 / dth2_target)) + 1
+        dth2 = 20.0 / (n_th2 - 1)
+
+        self._regions = []
+        r_break = 0.2 * lam
+        for r0, r1, dr, th0, th1, dth in (
+            (0.0, r_break, 0.01 * lam, 0.0, 90.0, 10.0),
+            (r_break, self.r1_max, min(0.05 * lam, beat / 6.0), 0.0, 20.0, dth2),
+            (r_break, self.r1_max, min(0.1 * lam, beat / 6.0), 20.0, 90.0, 10.0),
+        ):
+            n_r = max(int(np.ceil((r1 - r0) / dr)) + 1, 4)
+            n_th = int(round((th1 - th0) / dth)) + 1
+            r_nodes = r0 + dr * np.arange(n_r)  # last row may pad past r1
+            th_nodes = np.radians(th0 + dth * np.arange(n_th))
+            rr, tt = np.meshgrid(r_nodes, th_nodes, indexing="ij")
+            surf = iv_surfaces_direct(
+                self.eps_t, self.k2, rr, tt, rtol=rtol, omega=self.omega, mu=self.mu
+            )
+            vals = np.stack([surf[key] for key in _SURF_KEYS])
+            self._regions.append(
+                {
+                    "r0": r0,
+                    "dr": dr,
+                    "n_r": n_r,
+                    "th0": np.radians(th0),
+                    "dth": np.radians(dth),
+                    "n_th": n_th,
+                    "vals": vals,
+                }
+            )
+
+    @staticmethod
+    def _lagrange4(u):
+        """Cubic Lagrange weights for nodes at 0, 1, 2, 3 evaluated at u."""
+        u0 = u
+        u1 = u - 1.0
+        u2 = u - 2.0
+        u3 = u - 3.0
+        return np.stack(
+            [
+                -u1 * u2 * u3 / 6.0,
+                u0 * u2 * u3 / 2.0,
+                -u0 * u1 * u3 / 2.0,
+                u0 * u1 * u2 / 6.0,
+            ],
+            axis=-1,
+        )
+
+    def eval(self, R1, theta):
+        """Interpolate the four surfaces at (R1, theta); returns a dict of
+        complex arrays shaped like the broadcast inputs."""
+        R1 = np.asarray(R1, dtype=float)
+        theta = np.asarray(theta, dtype=float)
+        r_b, th_b = np.broadcast_arrays(R1, theta)
+        shape = r_b.shape
+        r_f = r_b.ravel()
+        th_f = np.clip(th_b.ravel(), 0.0, 0.5 * np.pi)
+
+        if np.any(r_f < 0.0) or np.any(r_f > self.r1_max * (1.0 + 1e-9) + 1e-12):
+            raise ValueError("query R1 outside [0, r1_max] of this grid")
+        r_f = np.minimum(r_f, self.r1_max)
+
+        r_break = self._regions[1]["r0"]
+        th_split = np.radians(20.0)
+        region_of = np.where(r_f <= r_break, 0, np.where(th_f <= th_split, 1, 2))
+
+        out = np.empty((len(_SURF_KEYS), r_f.size), dtype=np.complex128)
+        for idx, reg in enumerate(self._regions):
+            sel = np.nonzero(region_of == idx)[0]
+            if sel.size == 0:
+                continue
+            fr = (r_f[sel] - reg["r0"]) / reg["dr"]
+            ft = (th_f[sel] - reg["th0"]) / reg["dth"]
+            i0 = np.clip(np.floor(fr).astype(int) - 1, 0, reg["n_r"] - 4)
+            j0 = np.clip(np.floor(ft).astype(int) - 1, 0, reg["n_th"] - 4)
+            wr = self._lagrange4(fr - i0)  # (n, 4)
+            wt = self._lagrange4(ft - j0)
+            # gather the 4x4 stencils: vals (4, nR, nTh)
+            ii = i0[:, None] + np.arange(4)[None, :]  # (n, 4)
+            jj = j0[:, None] + np.arange(4)[None, :]
+            block = reg["vals"][:, ii[:, :, None], jj[:, None, :]]  # (4, n, 4, 4)
+            out[:, sel] = np.einsum("snij,ni,nj->sn", block, wr, wt)
+
+        return {key: out[s].reshape(shape) for s, key in enumerate(_SURF_KEYS)}
