@@ -1,0 +1,394 @@
+"""Sommerfeld-integral engine for the NEC-style Sommerfeld/Norton ground.
+
+Implements the ground-remainder Sommerfeld integrals of the NEC-2 theory
+manual (docs/nec2_theory_manual.pdf §IV.1–IV.2): the six λ-integrals of
+eqs 148–153 with the D₁/D₂ kernels of eqs 154–155, evaluated on the
+deformed contours of figs 13–14, and assembled into the four
+interpolation surfaces I_ρ^V, I_z^V, I_ρ^H, I_φ^H of eqs 156–159 (with
+the analytic R₁ → 0 limits of eqs 169–172). See
+docs/sommerfeld-ground-plan.md Phase 1.
+
+Clean-room note: implemented from the public-domain theory-manual
+equations only; no GPL Sommerfeld code (nec2c, nec2++/PyNEC) was
+consulted. Validation is data-level: the manual's figure extrema
+(tests/oracle_sommerfeld_figs.py), closed-form identities, and
+nec2c-captured golden impedances.
+
+Conventions (matching momwire and `_ground_refl`):
+
+  e^{+jωt} time dependence; ε̃ = εr − jσ/(ωε₀) with Im(ε̃) ≤ 0 for a
+  passive ground; k₂ = free-space wavenumber (real); k₁ = k₂√ε̃ with
+  Im(k₁) ≤ 0.
+
+  γᵢ(λ) = (λ² − kᵢ²)^{1/2} with NEC's vertical branch cuts (fig 13:
+  downward from +kᵢ, upward from −kᵢ), realized as
+  γ = √(−j(λ−k))·√(j(λ+k)) with principal square roots. On the real
+  axis this gives the radiation branch γ = +j√(k²−λ²) for |λ| < k, so
+  e^{−γ(z+z′)} is the outgoing wave — pinned by the Sommerfeld-identity
+  test (the same contours must reproduce e^{−jk₂R}/R exactly).
+
+Geometry per pair: ρ = horizontal distance, h = z + z′ (both source and
+observer above the interface, h ≥ 0), R₁ = √(ρ² + h²) = distance from
+the image point, θ = atan2(h, ρ). The Bessel (J₀) form of the integrals
+is used for ρ < 2h, the Hankel (H₀⁽²⁾) form otherwise (a widened version
+of NEC's ρ < h/2 rule — see `_six_integrals`).
+
+All distances are in the length unit implied by k₂ (SI meters when k₂
+is rad/m). The C₁ = −jωμ₀/(4πk₂²) unit-dipole normalization of eq 123
+is applied with ω = k₂c by default.
+"""
+
+import numpy as np
+from scipy.special import hankel2, jv
+
+_C_LIGHT = 299792458.0
+_MU0 = 4e-7 * np.pi
+
+# Gauss–Legendre rule shared by all contour sections.
+_GAUSS_N = 24
+_GX, _GW = np.polynomial.legendre.leggauss(_GAUSS_N)
+
+# Recursion cap for the adaptive sections (branch-point neighborhoods).
+_ADAPT_DEPTH = 14
+
+
+def _gamma(lam, k):
+    """(λ² − k²)^{1/2} with vertical cuts down from +k / up from −k."""
+    return np.sqrt(-1j * (lam - k)) * np.sqrt(1j * (lam + k))
+
+
+def _d12(lam, k1, k2):
+    """NEC eqs 154–155 kernels (the 2s of eqs 141–142 are inside)."""
+    g1 = _gamma(lam, k1)
+    g2 = _gamma(lam, k2)
+    k1s = k1 * k1
+    k2s = k2 * k2
+    d1 = 2.0 / (g1 + g2) - 2.0 * k2s / (g2 * (k1s + k2s))
+    d2 = 2.0 / (k1s * g2 + k2s * g1) - 2.0 / (g2 * (k1s + k2s))
+    return d1, d2, g2
+
+
+def _bessel_j0_j1x(x):
+    """(J₀(x), J₁(x)/x) with a series switch at small |x| (ρ → 0 safe)."""
+    x = np.asarray(x, dtype=np.complex128)
+    small = np.abs(x) < 1e-6
+    xs = np.where(small, 1.0, x)
+    j0 = np.where(small, 1.0 - 0.25 * x * x, jv(0, xs))
+    j1x = np.where(small, 0.5 - x * x / 16.0, jv(1, xs) / xs)
+    return j0, j1x
+
+
+def _integrand_six(lam, rho, h, k1, k2, form):
+    """The six λ-integrands of NEC eqs 148–153, stacked (6, n):
+
+      0: ∂²V′₂₂/∂ρ²      [D₂ e^{−γ₂h} J₀″(λρ) λ³,  J₀″ = J₁/x − J₀]
+      1: ∂²V′₂₂/∂z²      [D₂ γ₂² e^{−γ₂h} J₀ λ]
+      2: ∂²V′₂₂/∂ρ∂z     [+D₂ γ₂ e^{−γ₂h} J₁ λ²,   J₀′ = −J₁]
+      3: (1/ρ)∂V′₂₂/∂ρ   [−D₂ e^{−γ₂h} (J₁/x) λ³]
+      4: V′₂₂            [D₂ e^{−γ₂h} J₀ λ]
+      5: U′₂₂            [D₁ e^{−γ₂h} J₀ λ]
+
+    `form` = "J" (Bessel, integrate 0→∞) or "H" (Hankel, ½H₀⁽²⁾ for J₀
+    over the full fig-14 contour). Identity 0 + 3 + λ²·4 = 0 (Laplacian
+    of J₀) holds pointwise and is unit-tested.
+    """
+    lam = np.asarray(lam, dtype=np.complex128)
+    d1, d2, g2 = _d12(lam, k1, k2)
+    e = np.exp(-g2 * h)
+    x = lam * rho
+    if form == "J":
+        b0, b1x = _bessel_j0_j1x(x)
+    else:
+        b0 = 0.5 * hankel2(0, x)
+        b1x = 0.5 * hankel2(1, x) / x
+    l2 = lam * lam
+    l3 = l2 * lam
+    common = d2 * e
+    return np.stack(
+        [
+            common * (b1x - b0) * l3,
+            common * g2 * g2 * b0 * lam,
+            common * g2 * (b1x * x) * l2,
+            -common * b1x * l3,
+            common * b0 * lam,
+            d1 * e * b0 * lam,
+        ]
+    )
+
+
+def _gauss_segment(f, z0, z1):
+    """∫ f over the straight segment z0→z1, f returning (6, n)."""
+    mid = 0.5 * (z0 + z1)
+    half = 0.5 * (z1 - z0)
+    nodes = mid + half * _GX
+    return f(nodes) @ (_GW * half)
+
+
+def _adaptive_segment(f, z0, z1, rtol, depth=_ADAPT_DEPTH, whole=None):
+    """Recursive bisection Gauss quadrature on z0→z1 (vector-valued).
+
+    The tolerance is RELATIVE to the local segment magnitude: near the
+    small-|λρ| part of the Hankel contour the integrand reaches ~1/(k₂ρ)²
+    (canceled by neighboring sections down to the ~C₃/R₁ answer), so an
+    absolute target is unreachable there while a relative one keeps the
+    post-cancellation error at ~rtol·(peak/answer) — set rtol accordingly
+    small (1e−11 leaves ~1e−7 after a 1e4 cancellation).
+    """
+    if whole is None:
+        whole = _gauss_segment(f, z0, z1)
+    mid = 0.5 * (z0 + z1)
+    left = _gauss_segment(f, z0, mid)
+    right = _gauss_segment(f, mid, z1)
+    better = left + right
+    err = np.max(np.abs(better - whole))
+    scale = np.max(np.abs(better))
+    if depth <= 0 or err <= rtol * max(scale, 1e-300):
+        return better
+    return _adaptive_segment(f, z0, mid, rtol, depth - 1, left) + _adaptive_segment(
+        f, mid, z1, rtol, depth - 1, right
+    )
+
+
+def _tail(f, z0, direction, panel, rtol, ref_scale, panel0=None, max_panels=800):
+    """Panel-by-panel tail ∫ from z0 toward `direction`·∞; stops when two
+    consecutive panels are below rtol·scale.
+
+    `panel` is the asymptotic panel length (0.2π/max(ρ,h) resolves the
+    Bessel/exponential oscillation out there). At small R₁ that length is
+    enormous compared to the k-scale structure near the tail's start, so
+    the first panels ramp geometrically from `panel0` (≈ the k-scale) up
+    to `panel` — a single Gauss rule leaping from |λ| ~ k to ~1/R₁ was
+    the dominant Hankel-form error at R₁ ≲ 1e−3 wavelengths. Decay along
+    NEC's tail directions is exponential (rate ≥ ~R₁ per unit |λ|
+    relative to `panel`), so plain summation converges without Shanks
+    acceleration."""
+    total = 0.0
+    quiet = 0
+    z = z0
+    step = panel if panel0 is None else min(panel0, panel)
+    for _ in range(max_panels):
+        z_next = z + step * direction
+        contrib = _gauss_segment(f, z, z_next)
+        total = total + contrib
+        z = z_next
+        step = min(2.0 * step, panel)
+        scale = max(np.max(np.abs(total)), ref_scale)
+        if np.max(np.abs(contrib)) < rtol * scale:
+            quiet += 1
+            if quiet >= 2:
+                break
+        else:
+            quiet = 0
+    return total
+
+
+def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
+    """Evaluate the six integrals at one (ρ, h) pair; returns (6,) complex.
+
+    Contour selection: Bessel form (fig 13) for ρ < 2h — a widened
+    version of the manual's ρ < h/2 rule, see the inline comment — and
+    the Hankel form (fig 14) otherwise. `form` ("J"/"H") overrides the
+    rule where both converge — the cross-form agreement test uses it.
+    """
+    eps_t = complex(eps_t)
+    k2 = float(k2)
+    k1 = k2 * np.sqrt(eps_t)
+    if k1.imag > 0:
+        k1 = np.conj(k1)
+    rho = float(rho)
+    h = float(h)
+    if rho < 0 or h < 0 or (rho == 0.0 and h == 0.0):
+        raise ValueError(f"need rho, h >= 0 and R1 > 0, got {(rho, h)!r}")
+
+    scale = max(rho, h)
+    panel = 0.2 * np.pi / scale
+    kmax = max(abs(k1), k2)
+    qtol = min(rtol, 1e-11)  # per-segment relative tolerance
+
+    # The Bessel form has no λρ → 0 pole; its horizontal tail decays like
+    # e^{−λh} with |J₀| bounded by e^{Im λ·ρ} ≤ e^{ρ/h}, so it converges
+    # for any ρ ≲ h at ~48·ρ/h panels. Widen NEC's ρ < h/2 rule to
+    # ρ < 2h to shrink the Hankel region (whose small-|λρ| cancellation
+    # costs accuracy at very small R₁); both forms are unit-tested to
+    # agree in the overlap band.
+    use_bessel = rho < 2.0 * h if form is None else form == "J"
+    if use_bessel:
+
+        def f(lam):
+            return _integrand_six(lam, rho, h, k1, k2, "J")
+
+        # Fig 13: 0 → p(1+j) diagonal, then horizontal at Im λ = p. The
+        # horizontal passes above the k₂/k₁ cuts (they run downward);
+        # adaptive quadrature to past the branch points, then panel tail.
+        p = min(1.0 / rho if rho > 0 else np.inf, 1.0 / h)
+        brk = p * (1.0 + 1.0j)
+        end_adapt = 1.3 * kmax + 3.0 * p + 1.0j * p
+        total = _adaptive_segment(f, 0.0 + 0.0j, brk, qtol)
+        if end_adapt.real > brk.real:
+            total = total + _adaptive_segment(f, brk, end_adapt, qtol)
+            tail_start = end_adapt
+        else:
+            tail_start = brk
+        total = total + _tail(
+            f, tail_start, 1.0 + 0.0j, panel, rtol, np.max(np.abs(total))
+        )
+        return total
+
+    def f(lam):
+        return _integrand_six(lam, rho, h, k1, k2, "H")
+
+    # Fig 14 contour. Tail slope matches the steepest-descent direction
+    # λᵢ/λᵣ = ∓ρ/h; waypoints from the manual (p. 52–53).
+    r1 = np.hypot(rho, h)
+    dir_right = (h - 1.0j * rho) / r1
+    dir_left = (-h - 1.0j * rho) / r1
+    a = -0.4j * k2
+    b = (0.6 + 0.2j) * k2
+    c = (1.02 + 0.2j) * k2
+    d = 1.01 * k1.real + 0.99j * k1.imag
+    if d.real < 1.1 * k2:
+        d = 1.1 * k2 + 1.0j * d.imag
+
+    total = _adaptive_segment(f, a, b, qtol)
+    total = total + _adaptive_segment(f, b, c, qtol)
+    total = total + _adaptive_segment(f, c, d, qtol)
+    ref = np.max(np.abs(total))
+    p0 = 0.5 * kmax
+    total = total + _tail(f, d, dir_right, panel, rtol, ref, panel0=p0)
+    # The left tail runs −∞ → a on the contour; _tail integrates outward
+    # from a, so its contribution enters with a minus sign.
+    total = total - _tail(f, a, dir_left, panel, rtol, ref, panel0=p0)
+    return total
+
+
+def _c1(k2, omega, mu):
+    """NEC eq 123 normalization for a unit current moment Iℓ = 1."""
+    return -1j * omega * mu / (4.0 * np.pi * k2 * k2)
+
+
+def _limits_r1_zero(eps_t, k2, theta, omega, mu):
+    """Analytic R₁ → 0 surface limits, NEC eqs 169–172."""
+    eps_t = complex(eps_t)
+    theta = np.asarray(theta, dtype=float)
+    k1s = k2 * k2 * eps_t
+    k2s = k2 * k2
+    c1 = _c1(k2, omega, mu)
+    c2 = (k1s - k2s) / (k1s + k2s)
+    c3 = k2s * (k1s - k2s) / (k1s + k2s) ** 2
+    s = np.sin(theta)
+    co = np.cos(theta)
+    # (1 − sinθ)/cosθ and (1 − sinθ)/cos²θ, θ → π/2 limits 0 and 1/2.
+    near = np.abs(co) < 1e-8
+    co_safe = np.where(near, 1.0, co)
+    q1 = np.where(near, 0.0, (1.0 - s) / co_safe)
+    q2 = np.where(near, 0.5, (1.0 - s) / (co_safe * co_safe))
+    return {
+        "IrhoV": c1 * c3 * k1s * q1,
+        "IzV": np.full_like(q1, c1 * c3 * k1s, dtype=np.complex128),
+        "IrhoH": c1 * k2s * (c2 - c3 + c3 * q2),
+        "IphiH": -c1 * k2s * (c2 - c3 * q2),
+    }
+
+
+def iv_surfaces_direct(eps_t, k2, R1, theta, rtol=1e-9, omega=None, mu=_MU0):
+    """Direct (no-grid) evaluation of the four NEC interpolation surfaces
+    I_ρ^V, I_z^V, I_ρ^H, I_φ^H (eqs 156–159) at points (R₁, θ).
+
+    R₁ in the length unit of 1/k₂; θ = atan2(z+z′, ρ) in radians,
+    0 ≤ θ ≤ π/2. Returns a dict of complex arrays shaped like R₁.
+    Unit dipole moment; ω defaults to k₂·c (SI).
+
+    This is the Phase 2 grid's fill function and the tests' oracle
+    hook — O(ms) per point, not for per-pair use in assembly.
+    """
+    if omega is None:
+        omega = k2 * _C_LIGHT
+    R1 = np.asarray(R1, dtype=float)
+    theta = np.asarray(theta, dtype=float)
+    R1b, thb = np.broadcast_arrays(R1, theta)
+    out_shape = R1b.shape
+    R1f = R1b.ravel()
+    thf = thb.ravel()
+
+    eps_t = complex(eps_t)
+    k1s = k2 * k2 * eps_t
+    k2s = k2 * k2
+    c1 = _c1(k2, omega, mu)
+
+    keys = ("IrhoV", "IzV", "IrhoH", "IphiH")
+    out = {kk: np.zeros(R1f.shape, dtype=np.complex128) for kk in keys}
+
+    zero = R1f == 0.0
+    if np.any(zero):
+        lim = _limits_r1_zero(eps_t, k2, thf[zero], omega, mu)
+        for kk in keys:
+            out[kk][zero] = lim[kk]
+
+    for i in np.nonzero(~zero)[0]:
+        r1 = R1f[i]
+        rho = r1 * np.cos(thf[i])
+        h = r1 * np.sin(thf[i])
+        rho = max(rho, 0.0)
+        h = max(h, 0.0)
+        v_rr, v_zz, v_rz, v_r1, v, u = _six_integrals(eps_t, k2, rho, h, rtol)
+        phase = r1 * np.exp(1j * k2 * r1)
+        out["IrhoV"][i] = c1 * phase * k1s * v_rz
+        out["IzV"][i] = c1 * phase * k1s * (v_zz + k2s * v)
+        out["IrhoH"][i] = c1 * phase * k2s * (v_rr + u)
+        out["IphiH"][i] = -c1 * phase * k2s * (v_r1 + u)
+
+    return {kk: out[kk].reshape(out_shape) for kk in keys}
+
+
+def greens_free_space_check(k2, rho, h, form, rtol=1e-9):
+    """Contour/branch self-test: ∫₀^∞ (λ/γ₂) e^{−γ₂h} J₀(λρ) dλ over the
+    module's own contours must equal the Sommerfeld identity value
+    e^{−jk₂R}/R. `form` picks the fig-13 ("J") or fig-14 ("H") path
+    regardless of the ρ < h/2 production rule, so both machines are
+    testable on overlapping points. Returns (numeric, exact).
+    """
+    k2 = float(k2)
+    rho = float(rho)
+    h = float(h)
+    r = np.hypot(rho, h)
+
+    def f6(lam):
+        lam = np.asarray(lam, dtype=np.complex128)
+        g2 = _gamma(lam, k2)
+        x = lam * rho
+        if form == "J":
+            b0, _ = _bessel_j0_j1x(x)
+        else:
+            b0 = 0.5 * hankel2(0, x)
+        val = (lam / g2) * np.exp(-g2 * h) * b0
+        return np.stack([val] * 6)
+
+    scale = max(rho, h)
+    panel = 0.2 * np.pi / scale
+    if form == "J":
+        p = min(1.0 / rho if rho > 0 else np.inf, 1.0 / h, 10.0 * k2)
+        brk = p * (1.0 + 1.0j)
+        end_adapt = 1.3 * k2 + 3.0 * p + 1.0j * p
+        total = _adaptive_segment(f6, 0.0 + 0.0j, brk, rtol)
+        if end_adapt.real > brk.real:
+            total = total + _adaptive_segment(f6, brk, end_adapt, rtol)
+            start = end_adapt
+        else:
+            start = brk
+        total = total + _tail(f6, start, 1.0 + 0.0j, panel, rtol, np.max(np.abs(total)))
+    else:
+        dir_right = (h - 1.0j * rho) / r
+        dir_left = (-h - 1.0j * rho) / r
+        a = -0.4j * k2
+        b = (0.6 + 0.2j) * k2
+        c = (1.02 + 0.2j) * k2
+        d = 1.3 * k2 + 0.0j
+        total = _adaptive_segment(f6, a, b, rtol)
+        total = total + _adaptive_segment(f6, b, c, rtol)
+        total = total + _adaptive_segment(f6, c, d, rtol)
+        ref = np.max(np.abs(total))
+        total = total + _tail(f6, d, dir_right, panel, rtol, ref, panel0=0.5 * k2)
+        total = total - _tail(f6, a, dir_left, panel, rtol, ref, panel0=0.5 * k2)
+
+    exact = np.exp(-1j * k2 * r) / r
+    return complex(total[0]), complex(exact)
