@@ -198,6 +198,10 @@ jobs:
       - name: Attach wheels + sdist to the GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          # Auto-generate the release body from the PR titles between tags
+          # (same notes antennaknobs releases get). Only fills the body when
+          # the release is first created — re-runs never clobber edits.
+          generate_release_notes: true
           files: |
             dist/*.whl
             dist/*.tar.gz
