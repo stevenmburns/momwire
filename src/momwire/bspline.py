@@ -40,8 +40,6 @@ multiplier row, mirroring TriangularSolver's treatment.
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
-import math
-
 import numpy as np
 import scipy.linalg
 from scipy.interpolate import BSpline
@@ -100,33 +98,15 @@ _BASIS_POLY_CACHE: dict = {}
 _GEOMETRY_CACHE_MAX = 32
 _BASIS_POLY_CACHE_MAX = 32
 
-# SommerfeldGrid fills cost seconds while the grids themselves are a few
-# tens of kB, and (as above) the engine wrapper builds a fresh solver per
-# impedance() call — an instance cache never survives an interactive
-# knob-turn. `r1_max` is bucketed UP in ~25% geometric steps before
-# keying: a grid tabulated to a larger radius is valid (and marginally
-# finer in theta) for any smaller one, so nearby geometries share one
-# fill instead of each paying seconds. The bound covers a full web sweep
-# (one entry per k; ~21-41 points) plus a couple of ground choices, so a
-# knob-turn that re-runs the same sweep hits every entry.
-_SOMM_GRID_CACHE: dict = {}
-_SOMM_GRID_CACHE_MAX = 128
+# The SommerfeldGrid cache lives in `_sommerfeld.get_grid` (module-level,
+# keyed `(eps_t, k, r1_bucket, omega, mu)`, r1_max bucketed UP in ~25%
+# geometric steps) so SinusoidalSolver and the fast solvers share fills
+# with this module — docs/sommerfeld-everywhere-plan.md Phase 1.
 
 
 def _evict_fifo(cache: dict, limit: int) -> None:
     while len(cache) >= limit:
         cache.pop(next(iter(cache)))
-
-
-def _somm_r1_bucket(r1_max: float, k: float) -> float:
-    """Round `r1_max` up to the next 1.25^n wavelengths (floor 0.1 wl)."""
-    lam = 2.0 * np.pi / k
-    x = max(r1_max / lam, 0.1)
-    n = math.ceil(math.log(x, 1.25) - 1e-12)
-    bucket = lam * 1.25**n
-    if bucket < r1_max:  # float fuzz at an exact bucket edge
-        bucket *= 1.25
-    return float(bucket)
 
 
 def _xfem_projection_coeffs(d):
@@ -457,8 +437,8 @@ class BSplineSolver(_Cancelable):
         # lifetime as the geometry cache; k-independent, so swept solves
         # reuse it across the whole frequency loop.
         self._cached_image_refl_prep: tuple | None = None
-        # SommerfeldGrid lives in the module-level _SOMM_GRID_CACHE (see
-        # its comment) so it survives across solver instances.
+        # SommerfeldGrid lives in the module-level cache in
+        # `_sommerfeld.get_grid` so it survives across solver instances.
 
     # ------------------------------------------------------------------
     # Geometry build
@@ -938,23 +918,14 @@ class BSplineSolver(_Cancelable):
         return M + self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
 
     def _somm_grid(self, eps_t, r1_max):
-        r1b = _somm_r1_bucket(r1_max, self.k)
-        key = (complex(eps_t), float(self.k), r1b, float(self.omega), float(self.mu))
-        grid = _SOMM_GRID_CACHE.get(key)
-        if grid is None:
-            _evict_fifo(_SOMM_GRID_CACHE, _SOMM_GRID_CACHE_MAX)
-            # A cancelled fill raises SolveAborted out of the constructor
-            # before the cache insert, so no partial grid is ever cached.
-            grid = _sommerfeld.SommerfeldGrid(
-                eps_t,
-                self.k,
-                r1b,
-                omega=self.omega,
-                mu=self.mu,
-                cancel_flag=self._cancel_flag,
-            )
-            _SOMM_GRID_CACHE[key] = grid
-        return grid
+        return _sommerfeld.get_grid(
+            eps_t,
+            self.k,
+            r1_max,
+            omega=self.omega,
+            mu=self.mu,
+            cancel_flag=self._cancel_flag,
+        )
 
     def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t):
         """Galerkin block Q[m,n] = ∫∫ f_m f_n · t_m·F(r, r')·t_n of the

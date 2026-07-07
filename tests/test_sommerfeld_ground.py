@@ -211,45 +211,45 @@ def test_beats_refl_coef_below_010():
 def test_somm_grid_shared_across_solver_instances():
     """The engine wrapper builds a fresh solver per impedance() call; the
     grid must survive that (identical key -> identical object)."""
-    from momwire import bspline as bs
+    from momwire import _sommerfeld as sm
 
-    bs._SOMM_GRID_CACHE.clear()
+    sm._GRID_CACHE.clear()
     s1 = _solver("dipole", 0.05, **SOMM)
     s2 = _solver("dipole", 0.05, **SOMM)
     z1, _ = s1.compute_impedance()
-    assert len(bs._SOMM_GRID_CACHE) == 1
-    grid = next(iter(bs._SOMM_GRID_CACHE.values()))
+    assert len(sm._GRID_CACHE) == 1
+    grid = next(iter(sm._GRID_CACHE.values()))
     z2, _ = s2.compute_impedance()
-    assert len(bs._SOMM_GRID_CACHE) == 1
-    assert next(iter(bs._SOMM_GRID_CACHE.values())) is grid
+    assert len(sm._GRID_CACHE) == 1
+    assert next(iter(sm._GRID_CACHE.values())) is grid
     assert z1 == z2
 
 
 def test_somm_r1_bucket_rounds_up_and_reuses():
-    from momwire import bspline as bs
+    from momwire import _sommerfeld as sm
 
     k = 2.0 * np.pi / 20.0  # 20 m wavelength
     lam = 20.0
     for r1 in (0.3 * lam, 1.7 * lam, 6.0 * lam):
-        b = bs._somm_r1_bucket(r1, k)
+        b = sm._somm_r1_bucket(r1, k)
         assert b >= r1  # never tabulate short of the geometry
         assert b <= 1.25 * r1 * (1 + 1e-9)  # bounded overshoot
         # nearby radii (a knob-turn) land in the same bucket
-        assert bs._somm_r1_bucket(0.99 * b, k) == b
+        assert sm._somm_r1_bucket(0.99 * b, k) == b
     # tiny radii share one floor bucket (the first 1.25^n step >= 0.1 wl)
-    b_tiny = bs._somm_r1_bucket(1e-6, k)
+    b_tiny = sm._somm_r1_bucket(1e-6, k)
     assert 0.1 * lam <= b_tiny <= 0.13 * lam
-    assert bs._somm_r1_bucket(0.05 * lam, k) == b_tiny
+    assert sm._somm_r1_bucket(0.05 * lam, k) == b_tiny
 
 
 def test_somm_grid_cache_bounded():
-    from momwire import bspline as bs
+    from momwire import _sommerfeld as sm
 
-    bs._SOMM_GRID_CACHE.clear()
+    sm._GRID_CACHE.clear()
     try:
-        for i in range(bs._SOMM_GRID_CACHE_MAX + 5):
-            bs._SOMM_GRID_CACHE[("sentinel", i)] = None
-            bs._evict_fifo(bs._SOMM_GRID_CACHE, bs._SOMM_GRID_CACHE_MAX)
-        assert len(bs._SOMM_GRID_CACHE) <= bs._SOMM_GRID_CACHE_MAX
+        for i in range(sm._GRID_CACHE_MAX + 5):
+            sm._GRID_CACHE[("sentinel", i)] = None
+            sm._evict_fifo(sm._GRID_CACHE, sm._GRID_CACHE_MAX)
+        assert len(sm._GRID_CACHE) <= sm._GRID_CACHE_MAX
     finally:
-        bs._SOMM_GRID_CACHE.clear()
+        sm._GRID_CACHE.clear()

@@ -143,9 +143,9 @@ def test_sommerfeld_solve_cancels_via_cpp_poll_only():
     test_cancel.py::test_cpp_polling_aborts_without_python_checkpoints)."""
     from fixtures_refl_coef_geoms import GEOMS
     from momwire import BSplineSolver, CancelToken, SolveAborted
-    from momwire import bspline as bs
+    from momwire import _sommerfeld as sm_mod
 
-    bs._SOMM_GRID_CACHE.clear()  # a cached grid would skip the fill
+    sm_mod._GRID_CACHE.clear()  # a cached grid would skip the fill
     token = CancelToken()
     token.cancel()
     kw = dict(GEOMS[("dipole", 0.05)])
@@ -159,7 +159,7 @@ def test_sommerfeld_solve_cancels_via_cpp_poll_only():
     s._checkpoint = lambda: None
     with pytest.raises(SolveAborted):
         s.compute_impedance()
-    assert not bs._SOMM_GRID_CACHE  # no partial grid was cached
+    assert not sm_mod._GRID_CACHE  # no partial grid was cached
 
 
 def test_untripped_token_result_unchanged():
