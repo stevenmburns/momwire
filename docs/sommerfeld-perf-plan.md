@@ -131,6 +131,16 @@ pure-Python fallback + wheel import smoke test) already exists.
       where NEC holds ~4 digits — and accuracy is a non-goal to trade
       (see below).
 
+- [x] Cooperative cancellation: `somm_six_integrals_batch` takes the
+      standard trailing `cancel_flag`, polls per node with the drain
+      pattern, and is registered in `_CANCELLABLE_KERNELS`; the Python
+      fallback loop polls the same flag address, and the new Python-side
+      seams checkpoint too (`_Z_sommerfeld_remainder` per observer
+      chunk). A cancelled fill raises before the module cache insert, so
+      no partial grid is ever cached. Tests: kernel-level tripped-flag,
+      fallback tripped-flag, solve-level abort with Python checkpoints
+      neutralized, untripped-token bit-identity.
+
 Outcome: a 21-point sweep's fill overhead drops from ~25–75 s to
 ~1.5–3 s, and it composes with the Phase 1 cache (repeat sweeps at
 unchanged ground/frequency pay nothing).

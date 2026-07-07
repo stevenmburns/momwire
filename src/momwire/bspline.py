@@ -943,8 +943,15 @@ class BSplineSolver(_Cancelable):
         grid = _SOMM_GRID_CACHE.get(key)
         if grid is None:
             _evict_fifo(_SOMM_GRID_CACHE, _SOMM_GRID_CACHE_MAX)
+            # A cancelled fill raises SolveAborted out of the constructor
+            # before the cache insert, so no partial grid is ever cached.
             grid = _sommerfeld.SommerfeldGrid(
-                eps_t, self.k, r1b, omega=self.omega, mu=self.mu
+                eps_t,
+                self.k,
+                r1b,
+                omega=self.omega,
+                mu=self.mu,
+                cancel_flag=self._cancel_flag,
             )
             _SOMM_GRID_CACHE[key] = grid
         return grid
@@ -1013,6 +1020,7 @@ class BSplineSolver(_Cancelable):
         chunk = max(1, (1 << 19) // max(n_nodes * q, 1))
         tiny = 1e-12 * r1_max
         for i0 in range(0, n_seg, chunk):
+            self._checkpoint()  # per observer chunk of the eval+einsum block
             i1 = min(i0 + chunk, n_seg)
             obs = nodes[i0:i1].reshape(-1, 3)
             t_obs = np.repeat(tang[i0:i1], q, axis=0)

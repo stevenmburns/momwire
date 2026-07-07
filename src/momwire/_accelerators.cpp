@@ -2916,7 +2916,7 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
     std::complex<double> eps_t, double k2,
     py::array_t<double, py::array::c_style | py::array::forcecast> rho,
     py::array_t<double, py::array::c_style | py::array::forcecast> h,
-    double rtol, int form) {
+    double rtol, int form, uintptr_t cancel_flag = 0) {
     auto rb = rho.unchecked<1>();
     auto hb = h.unchecked<1>();
     const py::ssize_t n = rb.shape(0);
@@ -2932,13 +2932,16 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
     py::array_t<std::complex<double>> out({n, py::ssize_t(6)});
     auto ob = out.mutable_unchecked<2>();
     const somm::cd et(eps_t);
+    PYSIM_CANCEL_SETUP(cancel_flag);
 
     #pragma omp parallel for schedule(dynamic)
     for (py::ssize_t i = 0; i < n; ++i) {
+        PYSIM_CANCEL_POLL();
         somm::cd res[6];
         somm::six_integrals(et, k2, rb(i), hb(i), rtol, form, res);
         for (int j = 0; j < 6; ++j) ob(i, j) = res[j];
     }
+    PYSIM_THROW_IF_ABORTED();
     return out;
 }
 
@@ -3089,7 +3092,8 @@ PYBIND11_MODULE(_accelerators, m) {
           "nodes; OpenMP across nodes. form: 0 auto, 1 Bessel, 2 Hankel. "
           "Returns (n, 6) complex in _six_integrals order.",
           py::arg("eps_t"), py::arg("k2"), py::arg("rho"), py::arg("h"),
-          py::arg("rtol") = 1e-9, py::arg("form") = 0);
+          py::arg("rtol") = 1e-9, py::arg("form") = 0,
+          py::arg("cancel_flag") = 0);
     m.def("sinusoidal_field_tensor", &sinusoidal_field_tensor,
           "Tangential field tensor for the NEC2 three-term basis. Returns "
           "(Phi_const, Phi_sin, Phi_cos), each (M, N) complex. obs_*/src_* "
