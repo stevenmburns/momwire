@@ -227,25 +227,49 @@ BSplineSolver(..., ground_z=0.0,
       scripts, as established (invoking the nec2c CLI at capture time
       links nothing).
 
-### Phase 1 — Sommerfeld integral engine (`src/momwire/_sommerfeld.py`)
-The one genuinely new component. Pure numpy/scipy, no C++.
-- [ ] Integrand kit: γ₁, γ₂ (principal branch, Im ≤ 0 decaying), D₁, D₂
-      (eqs 154–155), the six λ-integrals (eqs 148–153) producing
-      {∂²V′/∂ρ², ∂²V′/∂z², ∂²V′/∂ρ∂z, (1/ρ)∂V′/∂ρ, V′₂₂, U′₂₂}.
-- [ ] Contour evaluation per the manual: Bessel form for ρ < (z+z′)/2,
-      Hankel form otherwise (contours of figs 13–15, including the
-      fig-15 variant for large-Re k₁). Fixed Gauss panels along each
-      contour section + Shanks (or simply enough panels — modern compute
-      affords brute force; measure before being clever). scipy.special
-      supplies J₀/H₀⁽²⁾ and derivatives.
-- [ ] Assemble F components (eqs 143–147) → I surfaces (eqs 156–159);
-      analytic R₁→0 limits (eqs 169–172).
-- [ ] `eval_I_direct(eps_t, k, R1, theta)` — vectorized point evaluator
-      (the no-grid oracle for Phase 2 and for tests).
-- [ ] Tests: figure Max/Min oracles; ε̃→∞ and ε̃→1 → I ≡ 0 (tolerance);
-      Bessel-vs-Hankel agreement in the overlap wedge; contour-choice
-      invariance on a sample; R₁→0 limit continuity; near-free-space
-      ε̃ = 1+δ stability (the k₂ near-singularity case).
+### Phase 1 — Sommerfeld integral engine (done 2026-07-06)
+`src/momwire/_sommerfeld.py`, pure numpy/scipy, no C++.
+- [x] Integrand kit: γ via √(−j(λ−k))·√(j(λ+k)) (principal sqrts —
+      NEC's vertical cuts down from +k / up from −k in one closed form;
+      radiation branch on the real axis pinned by the identity test
+      below), D₁/D₂ (eqs 154–155), the six λ-integrals (eqs 148–153) in
+      a J₁/x formulation that is ρ→0-safe and satisfies the Laplacian
+      identity f₀ + f₃ + λ²f₄ = 0 pointwise (unit-tested).
+- [x] Contour evaluation: fig 13 Bessel + fig 14 Hankel with adaptive
+      bisection Gauss (24-pt) on the waypoint sections and geometric-ramp
+      panel tails. Three deviations from the manual's recipe, each
+      earned empirically: (a) the Bessel domain is widened to ρ < 2h
+      (its tail converges there at ~2× cost and has no λρ→0 pole),
+      shrinking the delicate Hankel region; (b) tail panels ramp
+      geometrically from the k-scale up to the 0.2π/max(ρ,h) asymptotic
+      length — a single Gauss panel leaping |λ| ~ k → 1/R₁ was a 270×
+      error at R₁ = 1e−4λ; (c) adaptive tolerance is RELATIVE (the
+      small-|λρ| Hankel sections legitimately reach ~1/(k₂ρ)² before
+      cancellation). No Shanks needed (exponential tail decay ≥ e^0.63
+      per panel by construction); fig-15 contour variant not needed so
+      far (the lossless εr=16 stress case validates on fig 14 — revisit
+      only if a Phase-2 grid case fails).
+- [x] F components → I surfaces (eqs 156–159) + analytic R₁→0 limits
+      (eqs 169–172), continuous against direct evaluation to ≤ 1.4e−3
+      at R₁ = 1e−4λ.
+- [x] `iv_surfaces_direct(eps_t, k2, R1, theta)` point evaluator
+      (~4 ms/point at rtol 1e−7 — a ~300-node Phase-2 grid fills in
+      ~1.2 s single-threaded before any vectorization).
+- [x] Tests → `tests/test_sommerfeld_engine.py` (27 tests, ~40 s):
+      Sommerfeld identity on BOTH contour machines vs e^{−jkR}/R
+      (≤1e−8, incl. h=0 and R₁=1e−4λ); Laplacian integrand identity;
+      same-point J-vs-H cross-form agreement (strongest contour check —
+      the paths share nothing); ε̃=1 → I ≡ 0 (identically, D₁=D₂=0);
+      PEC ~1/√ε̃ scaling; R₁→0 continuity; ε̃=1+δ near-singularity
+      stability; manual figs 7–11 extrema.
+      **Figure-oracle outcome:** with the single pinned normalization
+      (manual plots Iℓ = 1 A·wavelength → ×λ(10 MHz) = ×29.979), the
+      extrema of all five published surfaces reproduce to ~4 significant
+      digits where the mesh samples cleanly — e.g. I_z^V computed
+      −16.31 / 219.9 / −98.16 vs manual −16.31 / 219.9 / −98.16;
+      I_ρ^V −80.68/−137.88 vs −80.65/−137.9; fig 11's −166.2 exact —
+      residual 6–15% gates cover mesh-sampling of the small-θ ridge
+      only. The engine reproduces NEC's published Sommerfeld surfaces.
 
 ### Phase 2 — grid + bivariate interpolation
 - [ ] NEC's three-region layout as the baseline, two modernizations:

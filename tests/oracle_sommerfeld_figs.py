@@ -9,16 +9,20 @@ theta in [0, 90] degrees, theta = atan((z + z') / rho), and prints the
 Max/Min of the real and imaginary parts over the plotted mesh. Those
 extrema are the literals below.
 
-Normalization caveats for the Phase 1 test that consumes these:
-  - The manual does not print the plot mesh density; extrema of a smooth
-    surface sampled on a ~20x10 mesh can differ a few percent from the
-    true extrema. Compare on a similar mesh and gate loosely (~5-10%).
-  - Values are scanned-figure annotations for a unit current element at
-    10 MHz with C1 = -j*omega*I*dl*mu0 / (4*pi*k2**2) (eq 123). If the
-    computed surfaces disagree by a single global constant (unit-moment /
-    length-unit convention), pin the constant against eq 123 once and
-    document it in _sommerfeld.py -- but the constant must then be the
-    SAME for all five figures, which is itself a strong check.
+Normalization — PINNED (measured 2026-07-06): the manual plots a unit
+current moment in WAVELENGTH units, i.e. Idl = 1 A*wavelength. momwire's
+`iv_surfaces_direct` uses Idl = 1 A*(length unit of 1/k2), so
+manual_value = computed_value * wavelength_in_meters(10 MHz) = x29.9792.
+With that single constant, all five figures' extrema reproduce to ~4
+significant digits (e.g. I_z^V: computed -16.31/219.9/-98.16 against the
+manual's -16.31/219.9/-98.16), confirming eq 123's
+C1 = -j*omega*Idl*mu0/(4*pi*k2**2) with omega = 2*pi*10 MHz.
+
+Remaining caveats for the test that consumes these:
+  - The manual does not print its plot mesh; extrema of the sampled
+    surface depend on the mesh near the small-theta evanescent ridge
+    (worst on fig 11, the low-loss eps_r=16 case). Compare on a
+    comparable mesh and gate at ~10-15% there, tighter elsewhere.
   - Real/imag split assumes NEC's e^{+j omega t} convention (momwire's
     own; see _ground_refl.py docstring).
 
