@@ -173,7 +173,11 @@ def _tail(f, z0, direction, panel, rtol, ref_scale, panel0=None, max_panels=800)
         z = z_next
         step = min(2.0 * step, panel)
         scale = max(np.max(np.abs(total)), ref_scale)
-        if np.max(np.abs(contrib)) < rtol * scale:
+        contrib_max = np.max(np.abs(contrib))
+        # `== 0.0` matters: at eps_t = 1 the integrands are identically
+        # zero and `0 < rtol * 0` would never trip the quiet counter,
+        # burning all max_panels on an exactly-zero tail.
+        if contrib_max == 0.0 or contrib_max < rtol * scale:
             quiet += 1
             if quiet >= 2:
                 break
@@ -191,6 +195,11 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
     rule where both converge — the cross-form agreement test uses it.
     """
     eps_t = complex(eps_t)
+    if eps_t == 1.0:
+        # Free space: D1 = D2 = 0 identically. Short-circuit rather than
+        # integrate ulp noise (whose relative convergence test never
+        # trips — the tails would burn max_panels on ~1e-16 values).
+        return np.zeros(6, dtype=np.complex128)
     k2 = float(k2)
     k1 = k2 * np.sqrt(eps_t)
     if k1.imag > 0:
@@ -203,6 +212,13 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
     scale = max(rho, h)
     panel = 0.2 * np.pi / scale
     kmax = max(abs(k1), k2)
+    # Contour landmarks never need to chase branch points the integrand
+    # can't reach: e^{-gamma_2 h} / the Hankel tail kill everything beyond
+    # ~50/scale, so for enormous |k1| (PEC-limit eps ~ 1e16) the k1-shaped
+    # waypoints cap there. Any cut crossing past the cap sits between two
+    # numerical zeros. No-op for physical grounds (|k1| <~ 10 k2).
+    kcap = 1.2 * k2 + 50.0 / scale
+    kmax_eff = min(kmax, kcap)
     qtol = min(rtol, 1e-11)  # per-segment relative tolerance
 
     # The Bessel form has no λρ → 0 pole; its horizontal tail decays like
@@ -222,7 +238,7 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
         # adaptive quadrature to past the branch points, then panel tail.
         p = min(1.0 / rho if rho > 0 else np.inf, 1.0 / h)
         brk = p * (1.0 + 1.0j)
-        end_adapt = 1.3 * kmax + 3.0 * p + 1.0j * p
+        end_adapt = 1.3 * kmax_eff + 3.0 * p + 1.0j * p
         total = _adaptive_segment(f, 0.0 + 0.0j, brk, qtol)
         if end_adapt.real > brk.real:
             total = total + _adaptive_segment(f, brk, end_adapt, qtol)
@@ -245,7 +261,10 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
     a = -0.4j * k2
     b = (0.6 + 0.2j) * k2
     c = (1.02 + 0.2j) * k2
-    d = 1.01 * k1.real + 0.99j * k1.imag
+    if 1.01 * k1.real <= kcap:
+        d = 1.01 * k1.real + 0.99j * max(k1.imag, -kcap)
+    else:
+        d = kcap + 0.0j
     if d.real < 1.1 * k2:
         d = 1.1 * k2 + 1.0j * d.imag
 
@@ -438,7 +457,14 @@ class SommerfeldGrid:
         k1 = self.k2 * np.sqrt(self.eps_t)
         if k1.imag > 0:
             k1 = np.conj(k1)
-        beat = 2.0 * np.pi / max(abs(k1 - self.k2), 1e-30)
+        # Lateral-wave beat keying only matters while the interface wave
+        # is a visible feature: for |k1|/k2 beyond any physical ground
+        # (PEC-limit tests, |eps| ~ 1e16) the surfaces are ~1/sqrt(eps)
+        # small and the keying would explode the node count — skip it.
+        if abs(k1) <= 12.0 * self.k2:
+            beat = 2.0 * np.pi / max(abs(k1 - self.k2), 1e-30)
+        else:
+            beat = np.inf
 
         # Region 2's θ spacing is keyed to the grid extent: near grazing
         # the surfaces vary on the height scale h = R₁·sinθ, so a fixed

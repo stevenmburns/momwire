@@ -532,8 +532,10 @@ class ArrayBlockSolver(HMatrixSolver):
         finite ground too: the Fresnel weights depend only on relative
         displacement + heights, exactly what the grounded block keys already
         carry, so block reuse is untouched and only the image fills change.
-        Only singular enrichment falls back to the dense path."""
-        return self.use_singular_enrichment
+        Falls back to the dense path for singular enrichment and for the
+        Sommerfeld finite ground (no fast per-block Sommerfeld fill yet —
+        docs/sommerfeld-ground-plan.md Phase 5)."""
+        return self.use_singular_enrichment or self.ground_model == "sommerfeld"
 
     def array_partition(self, tol=1e-6):
         """Element/shape partition of the bases (cached)."""

@@ -1042,10 +1042,14 @@ class HMatrixSolver(BSplineSolver):
         `build_hmatrix` and `_offedge_aca_evaluators`) as well as the
         reflection-coefficient finite ground (`ground_eps`, Phase 5: near
         blocks via `_zblock_image_refl`, far blocks via the in-kernel Fresnel
-        weighting in `bspline_assemble_offedge_block_refl`). Only singular
-        enrichment falls back to the dense path (its image reaction isn't
-        implemented; the constructor already forbids enrichment + ground)."""
-        return self.use_singular_enrichment
+        weighting in `bspline_assemble_offedge_block_refl`). Falls back to
+        the dense path for singular enrichment (its image reaction isn't
+        implemented; the constructor already forbids enrichment + ground)
+        and for the Sommerfeld finite ground (the per-block image fills
+        bake refl-coef physics — correct-at-dense-cost until a fast
+        Sommerfeld block fill exists, docs/sommerfeld-ground-plan.md
+        Phase 5)."""
+        return self.use_singular_enrichment or self.ground_model == "sommerfeld"
 
     def _build_operator(self):
         """Build the fast operator the constrained solve runs GMRES on. The

@@ -302,37 +302,65 @@ BSplineSolver(..., ground_z=0.0,
       geometry-sized grid covers every golden case (max R₁ ≈ 1.5λ on
       the yagi) with the region-2 Δθ keying holding accuracy there.
 
-### Phase 3 — BSplineSolver wiring
-- [ ] `ground_model` kwarg + validation (API sketch above).
-- [ ] Image part: constant-table variant of `_image_Z_refl` (w_A = C₂·td,
-      w_Φ = C₂) — reuses `assemble_Z_bspline_weighted` and the numpy
-      fallback unchanged.
-- [ ] Remainder block `_image_Z_sommerfeld`: k-independent quadrature
-      geometry cached per geometry; per-k grid fill + interpolated
-      field-form Galerkin assembly (numpy). Chunk over observer segments;
-      exploit Z_S symmetry (reciprocity) for a 2× if it matters.
-- [ ] Wire the four seams; swept paths inherit per-k ε̃ for free.
-- [ ] Tests (`tests/test_sommerfeld_ground.py`), reusing
-      `fixtures_refl_coef_geoms.py` + goldens: free-space/PEC/refl-coef
-      bit-exactness when not selected; PEC-limit collapse at ε̃=1e16;
-      free-space-limit collapse at ε̃=1+1e−12 (Z → Z_free + 0·image);
-      tuple-vs-complex ε̃; swept-vs-single-k (3-k middle entry);
-      quadrature-order convergence (q vs q+2 stability); Z symmetry.
+### Phase 3 — BSplineSolver wiring (done 2026-07-06)
+- [x] `ground_model` kwarg (+ `n_qp_sommerfeld=3`) with validation;
+      default `"refl-coef"` keeps v0.5.0 behavior bit-identical
+      (guarded by test). Sommerfeld additionally validates every wire
+      strictly above `ground_z`.
+- [x] Image part: `_image_Z_weighted` factored out of `_image_Z_refl`
+      (same C++ kernel + numpy fallback, refl-coef suite still green);
+      the sommerfeld path calls it with constant tables w_A = C₂·td_img,
+      w_Φ = C₂.
+- [x] Remainder block `_Z_sommerfeld_remainder`: field-form Galerkin
+      quadrature over the interpolated surfaces (source tangent
+      vertical/horizontal decomposition + azimuth factors of eqs
+      143–147, ρ→0-degenerate azimuth handled via the I_ρ^H(90°) =
+      −I_φ^H(90°) identity), chunked over observer segments (512k
+      node-pairs per chunk). Grid extent from the exact max
+      obs-to-image distance (convex ⇒ attained at endpoint pairs);
+      grid cached per (ε̃, k, r1_max) on the solver. Symmetry exploited
+      not for speed but as a reciprocity test. One robustness addition
+      found here: the grid's beat-length ΔR₁ keying is skipped for
+      |k₁| > 12k₂ (PEC-limit ε̃ would explode the node count while the
+      surfaces vanish).
+- [x] Seams: one dispatch method `_ground_finite_Z` (matrix to subtract:
+      C₂-image + Q, where the EFIE remainder contribution is −Q) at all
+      three sites; swept paths inherit per-k ε̃ and per-k grids for free.
+      HMatrix/ArrayBlock `_hmatrix_unsupported` widened: sommerfeld ⇒
+      dense path (their per-block image fills bake refl-coef physics),
+      with a bit-exact fall-back test.
+- [x] Tests (`tests/test_sommerfeld_ground.py`, 20 tests): constructor
+      validation incl. wires-below-ground; default-model bit-exactness;
+      free-space limit (ε̃=1, rel <1e−9); PEC-limit collapse at ε̃=1e16
+      (<1e−5); tuple-vs-complex ε̃; swept-vs-single-k with a
+      frozen-omega guard; y-matrix/impedance consistency; q=3 vs q=5
+      quadrature convergence; remainder-block reciprocity symmetry;
+      fast-solver dense fall-back; golden gn 2 gates (below).
 
-### Phase 4 — validation vs gn 2
-- [ ] Extend `scripts/compare_refl_coef_ground.py` with a sommerfeld
-      section: residual tables vs the gn 2 goldens, alongside the
-      refl-coef-vs-gn 0 and PEC-floor sections.
-- [ ] **Acceptance:** |ΔZ| vs NEC gn 2 within the bspline cross-solver
-      floor + ~1 Ω across **all** heights *including 0.05λ and the new
-      0.02λ rows* — the low-height cases are the entire point (gn 0 is
-      ~22 Ω wrong at 0.05λ and >130 Ω at 0.02λ; we must land on gn 2's
-      side of that gap, which
-      also cleanly proves we implemented Sommerfeld and not refl-coef
-      again). Sanity: agree with the refl-coef solve within ~2.5 Ω over
-      0.2–0.5λ (where gn 0 ≈ gn 2). Record residuals here.
-- [ ] Fill-cost measurement vs free space (NEC parity is ~4×; flag if
-      grossly worse) and 41-freq sweep wall time.
+### Phase 4 — validation vs gn 2 (measured 2026-07-06 with Phase 3)
+- [x] `scripts/compare_refl_coef_ground.py` grew a sommerfeld section:
+      |ΔZ| vs gn 2 for the sommerfeld, refl-coef, and PEC solves across
+      all 39 cases.
+- [x] **Acceptance MET on the full 39-case matrix** (|Z_somm − Z_gn2|,
+      nec2c oracle):
+      | geometry   | max     | where the max sits                    |
+      |------------|---------|---------------------------------------|
+      | dipole     | 2.36 Ω  | 0.5λ; 0.02λ rows are 2.08–2.17 Ω      |
+      | inverted_l | 2.74 Ω  | 0.02λ (junction + vertical currents)  |
+      | yagi       | 0.98 Ω  | 0.2λ, R₁ to ~1.5λ (past NEC's grid)   |
+      Residual ≈ the bspline-vs-NEC cross-solver floor (~1.4–2.5 Ω) at
+      every height — at 0.05λ the refl-coef solve is ~22 Ω from gn 2
+      and sommerfeld lands at 1.43 Ω; at 0.02λ refl-coef is >20 Ω off
+      (gn 0 itself >130 Ω) and sommerfeld lands at ~2.1 Ω. Sanity:
+      sommerfeld and refl-coef agree within ~2.5 Ω over 0.2–0.5λ as
+      expected. Gates in `tests/test_sommerfeld_ground.py`: dipole 3.0,
+      inverted_l 3.5, yagi 1.5 Ω.
+- [ ] Fill-cost measurement vs free space and 41-freq sweep wall time.
+      Preliminary: grounded-sommerfeld single-k solve ≈ 1.1–1.9 s at
+      N=45 (grid fill dominates), 3.0–3.4 s at N=255 (yagi) — vs ~0.1 s
+      free-space. Way above NEC's 4× because the grid refills per
+      solve; formal sweep timing + the (per-k-parallel or vectorized)
+      fill optimization live in Phase 5.
 
 ### Phase 5 — fast solvers, docs, release
 - [ ] Widen `_hmatrix_unsupported` in hmatrix.py/array_block.py:
