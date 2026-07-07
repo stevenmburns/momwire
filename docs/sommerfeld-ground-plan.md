@@ -363,14 +363,21 @@ BSplineSolver(..., ground_z=0.0,
       fill optimization live in Phase 5.
 
 ### Phase 5 — fast solvers, docs, release
-- [ ] Widen `_hmatrix_unsupported` in hmatrix.py/array_block.py:
+- [x] Widen `_hmatrix_unsupported` in hmatrix.py/array_block.py:
       `ground_model == "sommerfeld"` ⇒ dense path, with a
-      falls-back-to-dense test (the refl-coef Phase 3 pattern). Per-block
-      fast support is explicitly out of scope.
-- [ ] Module docstrings, this doc's checkboxes, README solver table if
-      touched.
-- [ ] momwire minor release (new public constructor parameter — same
-      call as v0.5.0).
+      falls-back-to-dense test. → Landed with Phase 3 (the gates had to
+      move in the same commit as the kwarg to avoid silently-wrong
+      per-block physics). Per-block fast support stays out of scope.
+- [x] Module docstrings (bspline scope list de-staled, _sommerfeld /
+      grid docstrings carry the conventions), this doc's checkboxes.
+      README has no solver-level ground table to touch.
+- [x] momwire minor release: v0.6.0 (new public constructor parameters
+      `ground_model` / `n_qp_sommerfeld`; refl-coef default guarded
+      bit-identical).
+- [ ] Deferred perf item (tracked, not release-blocking): per-k grid
+      fill is 2.4–3.6 s, so 41-freq grounded-sommerfeld sweeps pay
+      ~2 min — vectorize/parallelize the fill loop if sweeps become a
+      real workflow.
 
 ### Phase 6 — antennaknobs wiring (separate PR, after the release)
 
