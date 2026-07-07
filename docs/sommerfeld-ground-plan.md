@@ -422,6 +422,22 @@ auto-generated release notes; antennaknobs PR #260.)
       PyNEC `("finite", ...)` path needs a sub-0.1λ warning in the
       hosted simulator — its gn 2 solve is the order-dependent one.
 
+## Postmortem — the default-cost miss (2026-07-07)
+
+The one thing this program got wrong, so the next one doesn't: the
+antennaknobs wiring PR (#260) shipped correct physics but silently made
+the DEFAULT web grounded solve the multi-second Sommerfeld path — the
+frontend had hardcoded `ground_model: "sommerfeld"` for momwire backends
+back when the engine folded both finite specs to refl-coef, and honoring
+the distinction armed that hardcode. Caught on a phone test before any
+release; fixed in PR #261 (fast default everywhere, Sommerfeld opt-in,
+method selector shown on bspline). Rule going forward: expensive models
+are always opt-in, and an engine-capability wiring PR must trace the
+unqualified request path end to end (frontend state → adapter fallback →
+engine mapping) and latency-smoke the default solve — correctness review
+alone does not catch a consumer whose "best model" hardcode just got more
+expensive.
+
 ## Validation matrix
 
 The refl-coef matrix extended to 2 geometries × 6 heights (0.02–0.5λ)
