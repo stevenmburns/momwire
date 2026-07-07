@@ -41,6 +41,8 @@ is applied with ω = k₂c by default.
 import numpy as np
 from scipy.special import hankel2, jv
 
+from ._accel import acc as _acc
+
 _C_LIGHT = 299792458.0
 _MU0 = 4e-7 * np.pi
 
@@ -280,6 +282,32 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
     return total
 
 
+_FORM_CODE = {None: 0, "J": 1, "H": 2}
+
+
+def _six_integrals_batch(eps_t, k2, rho, h, rtol=1e-9, form=None):
+    """`_six_integrals` over parallel (ρ, h) arrays; returns (n, 6) complex.
+
+    Routes through the C++ accelerator (`somm_six_integrals_batch`,
+    OpenMP across nodes) when it is loaded and falls back to the Python
+    per-node loop otherwise — same contours, same 24-point Gauss rule,
+    cross-checked in tests/test_sommerfeld_accel.py.
+    """
+    rho = np.ascontiguousarray(rho, dtype=float).ravel()
+    h = np.ascontiguousarray(h, dtype=float).ravel()
+    eps_t = complex(eps_t)
+    if eps_t == 1.0:
+        return np.zeros((rho.size, 6), dtype=np.complex128)
+    if _acc is not None and hasattr(_acc, "somm_six_integrals_batch"):
+        return _acc.somm_six_integrals_batch(
+            eps_t, float(k2), rho, h, float(rtol), _FORM_CODE[form]
+        )
+    out = np.empty((rho.size, 6), dtype=np.complex128)
+    for i in range(rho.size):
+        out[i] = _six_integrals(eps_t, k2, rho[i], h[i], rtol, form)
+    return out
+
+
 def _c1(k2, omega, mu):
     """NEC eq 123 normalization for a unit current moment Iℓ = 1."""
     return -1j * omega * mu / (4.0 * np.pi * k2 * k2)
@@ -343,18 +371,18 @@ def iv_surfaces_direct(eps_t, k2, R1, theta, rtol=1e-9, omega=None, mu=_MU0):
         for kk in keys:
             out[kk][zero] = lim[kk]
 
-    for i in np.nonzero(~zero)[0]:
-        r1 = R1f[i]
-        rho = r1 * np.cos(thf[i])
-        h = r1 * np.sin(thf[i])
-        rho = max(rho, 0.0)
-        h = max(h, 0.0)
-        v_rr, v_zz, v_rz, v_r1, v, u = _six_integrals(eps_t, k2, rho, h, rtol)
+    nz = np.nonzero(~zero)[0]
+    if nz.size:
+        r1 = R1f[nz]
+        rho = np.maximum(r1 * np.cos(thf[nz]), 0.0)
+        h = np.maximum(r1 * np.sin(thf[nz]), 0.0)
+        six = _six_integrals_batch(eps_t, k2, rho, h, rtol)
+        v_rr, v_zz, v_rz, v_r1, v, u = six.T
         phase = r1 * np.exp(1j * k2 * r1)
-        out["IrhoV"][i] = c1 * phase * k1s * v_rz
-        out["IzV"][i] = c1 * phase * k1s * (v_zz + k2s * v)
-        out["IrhoH"][i] = c1 * phase * k2s * (v_rr + u)
-        out["IphiH"][i] = -c1 * phase * k2s * (v_r1 + u)
+        out["IrhoV"][nz] = c1 * phase * k1s * v_rz
+        out["IzV"][nz] = c1 * phase * k1s * (v_zz + k2s * v)
+        out["IrhoH"][nz] = c1 * phase * k2s * (v_rr + u)
+        out["IphiH"][nz] = -c1 * phase * k2s * (v_r1 + u)
 
     return {kk: out[kk].reshape(out_shape) for kk in keys}
 

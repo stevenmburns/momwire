@@ -101,26 +101,39 @@ large pays far more in the dense O(N²) solve anyway.
 The extension infrastructure (pybind11, OpenMP, cibuildwheel,
 pure-Python fallback + wheel import smoke test) already exists.
 
-- [ ] Clean-room complex-argument J₀/J₁/H₀⁽²⁾/H₁⁽²⁾ from Abramowitz &
-      Stegun (power series small |x|, asymptotic expansions large |x|;
-      **no nec2c/nec2++/somnec source consulted**). Validate pointwise
-      against scipy over the actual contour-point domain (sampled from
-      real fills) to ~1e−12.
-- [ ] Port `_integrand_six` / `_gauss_segment` / `_adaptive_segment` /
-      `_tail` / `_six_integrals`; expose a batch entry point
-      `somm_six_integrals_batch(eps_t, k2, rho[], h[], rtol, form[])`
-      with OpenMP across nodes (nodes are independent).
-- [ ] Python `SommerfeldGrid` uses the accelerator when importable,
-      falls back to the existing pure-Python path otherwise (same
-      pattern as the other kernels). Cross-check test: C++ vs Python
-      six-integrals over sampled nodes to quadrature tolerance.
-- [ ] Target: ≤ 100 ms per (ε̃, k) fill single-threaded, tens of ms with
-      OpenMP (nec2c does the whole gn 2 increment in 24–48 ms
-      single-threaded at looser tolerance). Re-run the profile table
-      and record results here.
+- [x] Clean-room complex-argument J₀/J₁/H₀⁽²⁾/H₁⁽²⁾ from Abramowitz &
+      Stegun (ascending series |x| ≤ 12, asymptotic expansions with
+      optimal truncation beyond; **no nec2c/nec2++/somnec source
+      consulted**). Measured domain from real fills: |x| ≤ ~110, arg(x)
+      ∈ [−100°, +45°] — never near the negative-real-axis cut.
+- [x] Ported `_integrand_six` / `_gauss_segment` / `_adaptive_segment` /
+      `_tail` / `_six_integrals` verbatim (same 24-pt rule, same
+      contours); batch entry `somm_six_integrals_batch(eps_t, k2,
+      rho[], h[], rtol, form)` with `omp parallel for schedule(dynamic)`
+      across nodes.
+- [x] `_six_integrals_batch` in `_sommerfeld.py` routes through the
+      accelerator when loaded, per-node Python loop otherwise;
+      `iv_surfaces_direct` (and therefore every grid fill) uses it.
+      Cross-checks in tests/test_sommerfeld_accel.py: C++ vs Python
+      agree to 3e−12 per node for physical grounds (3e−9 at the
+      ε̃ = 1e16 PEC-limit stress case) — which doubles as validation of
+      the A&S Bessel port against scipy's AMOS, since the Python path
+      evaluates the same λ points through jv/hankel2. Fallback and grid
+      equivalence tests included; golden gn 2 gates run the accelerated
+      path automatically.
+- [x] Measured: isolated 2 λ grid fill 4.11 s → **0.34 s** (12×; 1.05 s
+      single-thread, so ~30× scalar + ~4.6× from 8-core OpenMP on
+      uneven node costs). Dipole @ 0.05 λ cold solve 1.29 s → 0.12 s;
+      yagi @ 0.2 λ cold 3.51 s → 1.45 s (the rest is eval+einsum
+      assembly).
+      Sommerfeld test suites 36 s → 7 s. The remaining gap to nec2c's
+      24–48 ms is tolerance policy — we hold 1e−11 per contour segment
+      where NEC holds ~4 digits — and accuracy is a non-goal to trade
+      (see below).
 
-Outcome: sweeps stop being dominated by grid fills (21-point sweep
-sommerfeld overhead ~60 s → ~2 s or less).
+Outcome: a 21-point sweep's fill overhead drops from ~25–75 s to
+~1.5–3 s, and it composes with the Phase 1 cache (repeat sweeps at
+unchanged ground/frequency pay nothing).
 
 ## Non-goals / notes
 
