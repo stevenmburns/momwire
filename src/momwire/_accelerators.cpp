@@ -2577,6 +2577,372 @@ sinusoidal_field_tensor(
 }
 
 
+// ==========================================================================
+// Sommerfeld ground: batched six-integral evaluation (sommerfeld-perf-plan
+// Phase 3). A faithful port of _sommerfeld.py's `_six_integrals` machinery
+// (same 24-point Gauss rule, same adaptive bisection, same fig 13/14
+// contours and tail handling), evaluated per (rho, h) node with OpenMP
+// across nodes — the nodes are independent, and the pure-Python fill spends
+// ~75% of its time on interpreter/ufunc dispatch this port removes.
+//
+// Clean-room note: ported from momwire's own _sommerfeld.py (itself
+// implemented from the public-domain NEC-2 theory manual equations); the
+// complex-argument Bessel/Hankel functions below are implemented from the
+// Abramowitz & Stegun 9.1/9.2 ascending series and asymptotic expansions.
+// No GPL Sommerfeld source (nec2c, nec2++/PyNEC, somnec) was consulted.
+// ==========================================================================
+
+namespace somm {
+
+using cd = std::complex<double>;
+static const cd CI(0.0, 1.0);
+static const double SPI = 3.14159265358979323846;
+static const double EULER_GAMMA = 0.57721566490153286061;
+static const int ADAPT_DEPTH = 14;  // = _sommerfeld._ADAPT_DEPTH
+
+// 24-point Gauss-Legendre rule — identical to _sommerfeld._GX/_GW.
+static const double GX[24] = {
+    -9.95187219997021311e-01, -9.74728555971309474e-01, -9.38274552002732798e-01,
+    -8.86415527004401071e-01, -8.20001985973902947e-01, -7.40124191578554358e-01,
+    -6.48093651936975546e-01, -5.45421471388839563e-01, -4.33793507626045127e-01,
+    -3.15042679696163397e-01, -1.91118867473616311e-01, -6.40568928626056300e-02,
+    6.40568928626056300e-02, 1.91118867473616311e-01, 3.15042679696163397e-01,
+    4.33793507626045127e-01, 5.45421471388839563e-01, 6.48093651936975546e-01,
+    7.40124191578554358e-01, 8.20001985973902947e-01, 8.86415527004401071e-01,
+    9.38274552002732798e-01, 9.74728555971309474e-01, 9.95187219997021311e-01,
+};
+static const double GW[24] = {
+    1.23412297999886903e-02, 2.85313886289335593e-02, 4.42774388174194122e-02,
+    5.92985849154363601e-02, 7.33464814110801611e-02, 8.61901615319532050e-02,
+    9.76186521041139260e-02, 1.07444270115965565e-01, 1.15505668053725516e-01,
+    1.21670472927803294e-01, 1.25837456346828247e-01, 1.27938195346752021e-01,
+    1.27938195346752021e-01, 1.25837456346828247e-01, 1.21670472927803294e-01,
+    1.15505668053725516e-01, 1.07444270115965565e-01, 9.76186521041139260e-02,
+    8.61901615319532050e-02, 7.33464814110801611e-02, 5.92985849154363601e-02,
+    4.42774388174194122e-02, 2.85313886289335593e-02, 1.23412297999886903e-02,
+};
+
+// ---- complex-argument Bessel/Hankel, orders 0 and 1 ----------------------
+//
+// Domain (measured from real contour fills): |x| up to ~110, arg(x) in
+// [-100 deg, +45 deg] — never near the negative-real-axis branch cut, so
+// principal-branch log/sqrt are safe throughout. Ascending series for
+// |x| <= 12 (~3 digits of cancellation, ~1e-12 abs), A&S 9.2 asymptotic
+// expansions with optimal truncation beyond (~1e-11 at the switch, far
+// better further out). Both are validated pointwise against scipy over the
+// sampled domain in tests/test_sommerfeld_accel.py.
+
+// J0 and J1/z ascending series (A&S 9.1.10/9.1.12): safe as z -> 0.
+static void j01_series(cd z, cd &j0, cd &j1x) {
+    const cd q = -0.25 * z * z;
+    cd t0(1.0, 0.0), t1(0.5, 0.0);
+    j0 = t0;
+    j1x = t1;
+    for (int k = 1; k <= 60; ++k) {
+        t0 *= q / double(k * k);
+        t1 *= q / double(k * (k + 1));
+        j0 += t0;
+        j1x += t1;
+        if (std::abs(t0) <= 1e-17 * std::abs(j0) &&
+            std::abs(t1) <= 1e-17 * std::abs(j1x))
+            break;
+    }
+}
+
+// Y0 and Y1 ascending series (A&S 9.1.13/9.1.11), principal log.
+static void y01_series(cd z, cd j0, cd j1, cd &y0, cd &y1) {
+    const cd lg = std::log(0.5 * z) + EULER_GAMMA;
+    const cd zq = 0.25 * z * z;  // (z/2)^2
+    // Y0 = (2/pi)[lg*J0 + sum_{k>=1} (-1)^{k+1} H_k (z/2)^{2k}/(k!)^2]
+    cd u(1.0, 0.0), s0(0.0, 0.0);
+    double hk = 0.0;
+    for (int k = 1; k <= 60; ++k) {
+        u *= zq / double(k * k);
+        hk += 1.0 / double(k);
+        const cd term = ((k & 1) ? 1.0 : -1.0) * hk * u;
+        s0 += term;
+        if (std::abs(term) <= 1e-17 * (std::abs(s0) + 1.0)) break;
+    }
+    y0 = (2.0 / SPI) * (lg * j0 + s0);
+    // Y1 = (2/pi)[lg*J1 - 1/z]
+    //      - (z/(2 pi)) sum_{k>=0} (-1)^k (H_k + H_{k+1}) (z/2)^{2k}/(k!(k+1)!)
+    cd s1(0.0, 0.0);
+    u = cd(1.0, 0.0);
+    double hkk = 0.0, hk1 = 1.0;
+    for (int k = 0; k <= 60; ++k) {
+        if (k > 0) {
+            u *= zq / double(k * (k + 1));
+            hkk += 1.0 / double(k);
+            hk1 += 1.0 / double(k + 1);
+        }
+        const cd term = ((k & 1) ? -1.0 : 1.0) * (hkk + hk1) * u;
+        s1 += term;
+        if (std::abs(term) <= 1e-17 * (std::abs(s1) + 1.0)) break;
+    }
+    y1 = (2.0 / SPI) * (lg * j1 - 1.0 / z) - (z / (2.0 * SPI)) * s1;
+}
+
+// H^(kind)_nu(z) by the A&S 9.2 asymptotic expansion with optimal
+// truncation: H ~ sqrt(2/(pi z)) e^{s i (z - nu pi/2 - pi/4)} sum_k t_k,
+// t_0 = 1, t_{k+1} = t_k (4 nu^2 - (2k+1)^2) / (8(k+1)) * (s i / z),
+// s = +1 for kind 1, -1 for kind 2. Valid away from the negative real
+// axis, which the contours never approach.
+static cd hankel_asym(cd z, int nu, int kind) {
+    const double s = (kind == 1) ? 1.0 : -1.0;
+    const cd iz = s * CI / z;
+    const double fournu2 = 4.0 * double(nu) * double(nu);
+    cd t(1.0, 0.0), sum(1.0, 0.0);
+    double prev = 1e300;
+    for (int k = 0; k < 40; ++k) {
+        const double odd = double(2 * k + 1);
+        t *= (fournu2 - odd * odd) / (8.0 * double(k + 1)) * iz;
+        const double a = std::abs(t);
+        if (a >= prev) break;  // divergence onset: stop at the optimum
+        sum += t;
+        prev = a;
+        if (a <= 1e-17 * std::abs(sum)) break;
+    }
+    const cd omega = z - (0.5 * double(nu) + 0.25) * SPI;
+    return std::sqrt(2.0 / (SPI * z)) * std::exp(s * CI * omega) * sum;
+}
+
+static const double BESSEL_SWITCH = 12.0;
+
+// (J0(x), J1(x)/x) — the Bessel-form pair of _bessel_j0_j1x.
+static void bessel_j0_j1x(cd x, cd &b0, cd &b1x) {
+    if (std::abs(x) <= BESSEL_SWITCH) {
+        j01_series(x, b0, b1x);
+        return;
+    }
+    b0 = 0.5 * (hankel_asym(x, 0, 1) + hankel_asym(x, 0, 2));
+    b1x = 0.5 * (hankel_asym(x, 1, 1) + hankel_asym(x, 1, 2)) / x;
+}
+
+// (H2_0(x)/2, H2_1(x)/(2x)) — the Hankel-form pair of _integrand_six.
+static void hankel2_half(cd x, cd &b0, cd &b1x) {
+    if (std::abs(x) <= BESSEL_SWITCH) {
+        cd j0, j1x;
+        j01_series(x, j0, j1x);
+        const cd j1 = j1x * x;
+        cd y0, y1;
+        y01_series(x, j0, j1, y0, y1);
+        b0 = 0.5 * (j0 - CI * y0);
+        b1x = 0.5 * (j1 - CI * y1) / x;
+        return;
+    }
+    b0 = 0.5 * hankel_asym(x, 0, 2);
+    b1x = 0.5 * hankel_asym(x, 1, 2) / x;
+}
+
+// ---- the six integrands and quadrature (ports of the Python names) -------
+
+// gamma(lam, k) = sqrt(-j(lam-k)) sqrt(j(lam+k)): NEC's vertical cuts.
+static inline cd gam(cd lam, cd k) {
+    return std::sqrt(-CI * (lam - k)) * std::sqrt(CI * (lam + k));
+}
+
+struct Six {
+    cd v[6];
+    Six() : v{} {}
+    Six &operator+=(const Six &o) {
+        for (int i = 0; i < 6; ++i) v[i] += o.v[i];
+        return *this;
+    }
+    Six &operator-=(const Six &o) {
+        for (int i = 0; i < 6; ++i) v[i] -= o.v[i];
+        return *this;
+    }
+};
+static inline Six operator+(Six a, const Six &b) { return a += b; }
+
+static inline double absmax(const Six &s) {
+    double m = 0.0;
+    for (int i = 0; i < 6; ++i) m = std::max(m, std::abs(s.v[i]));
+    return m;
+}
+static inline double absmax_diff(const Six &a, const Six &b) {
+    double m = 0.0;
+    for (int i = 0; i < 6; ++i) m = std::max(m, std::abs(a.v[i] - b.v[i]));
+    return m;
+}
+
+struct SommCtx {
+    double rho, h;
+    cd k1, k2;
+    bool bessel;
+};
+
+// The six lambda-integrands of NEC eqs 148-153 (= _integrand_six).
+static inline void integrand_six(const SommCtx &c, cd lam, cd out[6]) {
+    const cd g1 = gam(lam, c.k1);
+    const cd g2 = gam(lam, c.k2);
+    const cd k1s = c.k1 * c.k1;
+    const cd k2s = c.k2 * c.k2;
+    const cd d1 = 2.0 / (g1 + g2) - 2.0 * k2s / (g2 * (k1s + k2s));
+    const cd d2 = 2.0 / (k1s * g2 + k2s * g1) - 2.0 / (g2 * (k1s + k2s));
+    const cd e = std::exp(-g2 * c.h);
+    const cd x = lam * c.rho;
+    cd b0, b1x;
+    if (c.bessel)
+        bessel_j0_j1x(x, b0, b1x);
+    else
+        hankel2_half(x, b0, b1x);
+    const cd l2 = lam * lam;
+    const cd l3 = l2 * lam;
+    const cd common = d2 * e;
+    out[0] = common * (b1x - b0) * l3;
+    out[1] = common * g2 * g2 * b0 * lam;
+    out[2] = common * g2 * (b1x * x) * l2;
+    out[3] = -common * b1x * l3;
+    out[4] = common * b0 * lam;
+    out[5] = d1 * e * b0 * lam;
+}
+
+static Six gauss_segment(const SommCtx &c, cd z0, cd z1) {
+    const cd mid = 0.5 * (z0 + z1);
+    const cd half = 0.5 * (z1 - z0);
+    Six acc;
+    cd f[6];
+    for (int q = 0; q < 24; ++q) {
+        integrand_six(c, mid + half * GX[q], f);
+        const cd w = GW[q] * half;
+        for (int i = 0; i < 6; ++i) acc.v[i] += f[i] * w;
+    }
+    return acc;
+}
+
+// Recursive bisection Gauss quadrature, relative tolerance
+// (= _adaptive_segment; see its docstring for why relative).
+static Six adaptive_segment(const SommCtx &c, cd z0, cd z1, double rtol,
+                            int depth, const Six *whole_in) {
+    Six whole = whole_in ? *whole_in : gauss_segment(c, z0, z1);
+    const cd mid = 0.5 * (z0 + z1);
+    Six left = gauss_segment(c, z0, mid);
+    Six right = gauss_segment(c, mid, z1);
+    Six better = left + right;
+    const double err = absmax_diff(better, whole);
+    const double scale = absmax(better);
+    if (depth <= 0 || err <= rtol * std::max(scale, 1e-300)) return better;
+    return adaptive_segment(c, z0, mid, rtol, depth - 1, &left) +
+           adaptive_segment(c, mid, z1, rtol, depth - 1, &right);
+}
+
+// Panel tail with geometric ramp from panel0 (<= 0 means "none") — see
+// _tail's docstring for the ramp rationale and the `== 0.0` quiet trigger.
+static Six tail(const SommCtx &c, cd z0, cd direction, double panel,
+                double rtol, double ref_scale, double panel0) {
+    const int max_panels = 800;
+    Six total;
+    int quiet = 0;
+    cd z = z0;
+    double step = (panel0 > 0.0) ? std::min(panel0, panel) : panel;
+    for (int i = 0; i < max_panels; ++i) {
+        const cd z_next = z + step * direction;
+        Six contrib = gauss_segment(c, z, z_next);
+        total += contrib;
+        z = z_next;
+        step = std::min(2.0 * step, panel);
+        const double scale = std::max(absmax(total), ref_scale);
+        const double cmax = absmax(contrib);
+        if (cmax == 0.0 || cmax < rtol * scale) {
+            if (++quiet >= 2) break;
+        } else {
+            quiet = 0;
+        }
+    }
+    return total;
+}
+
+// = _six_integrals for one (rho, h); form: 0 auto (rho < 2h -> Bessel),
+// 1 force Bessel, 2 force Hankel. eps_t == 1 is short-circuited by the
+// caller (and again here for safety).
+static void six_integrals(cd eps_t, double k2d, double rho, double h,
+                          double rtol, int form, cd out[6]) {
+    for (int i = 0; i < 6; ++i) out[i] = cd(0.0, 0.0);
+    if (eps_t == cd(1.0, 0.0)) return;
+    const cd k2(k2d, 0.0);
+    cd k1 = k2d * std::sqrt(eps_t);
+    if (k1.imag() > 0) k1 = std::conj(k1);
+    const double scale = std::max(rho, h);
+    const double panel = 0.2 * SPI / scale;
+    const double kmax = std::max(std::abs(k1), k2d);
+    const double kcap = 1.2 * k2d + 50.0 / scale;
+    const double kmax_eff = std::min(kmax, kcap);
+    const double qtol = std::min(rtol, 1e-11);
+    const bool use_bessel = (form == 0) ? (rho < 2.0 * h) : (form == 1);
+    SommCtx c{rho, h, k1, k2, use_bessel};
+    Six total;
+    if (use_bessel) {
+        const double p = std::min(rho > 0.0 ? 1.0 / rho : 1e300, 1.0 / h);
+        const cd brk(p, p);
+        const cd end_adapt(1.3 * kmax_eff + 3.0 * p, p);
+        total = adaptive_segment(c, cd(0.0, 0.0), brk, qtol, ADAPT_DEPTH, nullptr);
+        cd tail_start = brk;
+        if (end_adapt.real() > brk.real()) {
+            total += adaptive_segment(c, brk, end_adapt, qtol, ADAPT_DEPTH, nullptr);
+            tail_start = end_adapt;
+        }
+        total += tail(c, tail_start, cd(1.0, 0.0), panel, rtol, absmax(total), -1.0);
+    } else {
+        const double r1 = std::hypot(rho, h);
+        const cd dir_right = cd(c.h, -c.rho) / r1;
+        const cd dir_left = cd(-c.h, -c.rho) / r1;
+        const cd a(0.0, -0.4 * k2d);
+        const cd b = cd(0.6, 0.2) * k2d;
+        const cd cc = cd(1.02, 0.2) * k2d;
+        cd d;
+        if (1.01 * k1.real() <= kcap)
+            d = cd(1.01 * k1.real(), 0.99 * std::max(k1.imag(), -kcap));
+        else
+            d = cd(kcap, 0.0);
+        if (d.real() < 1.1 * k2d) d = cd(1.1 * k2d, d.imag());
+        total = adaptive_segment(c, a, b, qtol, ADAPT_DEPTH, nullptr);
+        total += adaptive_segment(c, b, cc, qtol, ADAPT_DEPTH, nullptr);
+        total += adaptive_segment(c, cc, d, qtol, ADAPT_DEPTH, nullptr);
+        const double ref = absmax(total);
+        const double p0 = 0.5 * kmax;
+        total += tail(c, d, dir_right, panel, rtol, ref, p0);
+        total -= tail(c, a, dir_left, panel, rtol, ref, p0);
+    }
+    for (int i = 0; i < 6; ++i) out[i] = total.v[i];
+}
+
+}  // namespace somm
+
+// Batched entry point: the six NEC lambda-integrals at each (rho[i], h[i]),
+// OpenMP across nodes (each node's adaptive quadrature is independent).
+// Returns (n, 6) complex in _six_integrals order (Vrr, Vzz, Vrz, Vr1, V, U).
+static py::array_t<std::complex<double>> somm_six_integrals_batch(
+    std::complex<double> eps_t, double k2,
+    py::array_t<double, py::array::c_style | py::array::forcecast> rho,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h,
+    double rtol, int form) {
+    auto rb = rho.unchecked<1>();
+    auto hb = h.unchecked<1>();
+    const py::ssize_t n = rb.shape(0);
+    if (hb.shape(0) != n)
+        throw std::invalid_argument("rho and h must have the same length");
+    if (form < 0 || form > 2)
+        throw std::invalid_argument("form must be 0 (auto), 1 (J) or 2 (H)");
+    for (py::ssize_t i = 0; i < n; ++i) {
+        if (rb(i) < 0.0 || hb(i) < 0.0 || (rb(i) == 0.0 && hb(i) == 0.0))
+            throw std::invalid_argument(
+                "need rho, h >= 0 and R1 > 0 at every node");
+    }
+    py::array_t<std::complex<double>> out({n, py::ssize_t(6)});
+    auto ob = out.mutable_unchecked<2>();
+    const somm::cd et(eps_t);
+
+    #pragma omp parallel for schedule(dynamic)
+    for (py::ssize_t i = 0; i < n; ++i) {
+        somm::cd res[6];
+        somm::six_integrals(et, k2, rb(i), hb(i), rtol, form, res);
+        for (int j = 0; j < 6; ++j) ob(i, j) = res[j];
+    }
+    return out;
+}
+
+
 PYBIND11_MODULE(_accelerators, m) {
     // Phase 2: raised by the long kernels when their cancel_flag is tripped;
     // the _accel.py wrappers remap it to momwire.SolveAborted.
@@ -2718,6 +3084,12 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("omega"), py::arg("eps"), py::arg("mu"),
           py::arg("gl_t01"), py::arg("gl_w01"),
           py::arg("proj_coeffs"));
+    m.def("somm_six_integrals_batch", &somm_six_integrals_batch,
+          "Batched Sommerfeld six-integral evaluation at (rho[i], h[i]) "
+          "nodes; OpenMP across nodes. form: 0 auto, 1 Bessel, 2 Hankel. "
+          "Returns (n, 6) complex in _six_integrals order.",
+          py::arg("eps_t"), py::arg("k2"), py::arg("rho"), py::arg("h"),
+          py::arg("rtol") = 1e-9, py::arg("form") = 0);
     m.def("sinusoidal_field_tensor", &sinusoidal_field_tensor,
           "Tangential field tensor for the NEC2 three-term basis. Returns "
           "(Phi_const, Phi_sin, Phi_cos), each (M, N) complex. obs_*/src_* "
