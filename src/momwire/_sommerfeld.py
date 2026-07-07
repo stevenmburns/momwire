@@ -38,6 +38,8 @@ is rad/m). The C₁ = −jωμ₀/(4πk₂²) unit-dipole normalization of eq 12
 is applied with ω = k₂c by default.
 """
 
+import math
+
 import numpy as np
 from scipy.special import hankel2, jv
 
@@ -607,3 +609,57 @@ class SommerfeldGrid:
             out[:, sel] = np.einsum("snij,ni,nj->sn", block, wr, wt)
 
         return {key: out[s].reshape(shape) for s, key in enumerate(_SURF_KEYS)}
+
+
+# ---------------------------------------------------------------------------
+# Module-level grid cache (shared by every solver that consumes the grid)
+# ---------------------------------------------------------------------------
+#
+# Grid fills cost seconds while the grids themselves are a few tens of
+# kB, and the engine wrappers build a fresh solver per impedance() call —
+# an instance cache never survives an interactive knob-turn. `r1_max` is
+# bucketed UP in ~25% geometric steps before keying: a grid tabulated to
+# a larger radius is valid (and marginally finer in theta) for any
+# smaller one, so nearby geometries share one fill instead of each
+# paying seconds. The bound covers a full web sweep (one entry per k;
+# ~21-41 points) plus a couple of ground choices, so a knob-turn that
+# re-runs the same sweep hits every entry. Hoisted here from bspline.py
+# so SinusoidalSolver and the fast solvers hit the same cache
+# (docs/sommerfeld-everywhere-plan.md Phase 1).
+_GRID_CACHE: dict = {}
+_GRID_CACHE_MAX = 128
+
+
+def _evict_fifo(cache: dict, limit: int) -> None:
+    while len(cache) >= limit:
+        cache.pop(next(iter(cache)))
+
+
+def _somm_r1_bucket(r1_max: float, k: float) -> float:
+    """Round `r1_max` up to the next 1.25^n wavelengths (floor 0.1 wl)."""
+    lam = 2.0 * np.pi / k
+    x = max(r1_max / lam, 0.1)
+    n = math.ceil(math.log(x, 1.25) - 1e-12)
+    bucket = lam * 1.25**n
+    if bucket < r1_max:  # float fuzz at an exact bucket edge
+        bucket *= 1.25
+    return float(bucket)
+
+
+def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
+    """Cached `SommerfeldGrid` keyed `(eps_t, k2, r1_bucket, omega, mu)`.
+
+    FIFO-bounded module cache. A cancelled fill raises SolveAborted out
+    of the constructor before the cache insert, so no partial grid is
+    ever cached.
+    """
+    r1b = _somm_r1_bucket(float(r1_max), float(k2))
+    key = (complex(eps_t), float(k2), r1b, float(omega), float(mu))
+    grid = _GRID_CACHE.get(key)
+    if grid is None:
+        _evict_fifo(_GRID_CACHE, _GRID_CACHE_MAX)
+        grid = SommerfeldGrid(
+            eps_t, k2, r1b, omega=omega, mu=mu, cancel_flag=cancel_flag
+        )
+        _GRID_CACHE[key] = grid
+    return grid
