@@ -373,6 +373,19 @@ BSplineSolver(..., ground_z=0.0,
       call as v0.5.0).
 
 ### Phase 6 — antennaknobs wiring (separate PR, after the release)
+
+**E2E pre-check (done 2026-07-06, before any merge):** with the
+antennaknobs momwire submodule pointed at `feat/sommerfeld-ground`
+(local fetch, nothing pushed), `MomwireEngine(builder,
+solver=BSplineSolver, ground=("finite", εr, σ),
+solver_kwargs={"ground_model": "sommerfeld"})` drives the sommerfeld
+solve end to end with the C++ accelerator loaded and reproduces the
+momwire-side gn 2 residuals exactly (dipole 0.05λ → 1.43 Ω, 0.02λ →
+2.17 Ω, inverted-L 0.02λ → 2.71 Ω); refl-coef and PEC paths unchanged;
+antennaknobs momwire suites green against the branch. The
+`solver_kwargs` channel means the engine needs NO code change for
+power users — the Phase 6 work below is about making `("finite", ...)`
+map to it by default.
 - [ ] `MomwireEngine`: map `("finite", εr, σ)` → `ground_model="sommerfeld"`
       for solvers that support it (BSpline initially; HMatrix/ArrayBlock
       inherit via the dense gate — decide whether silent dense fallback or
