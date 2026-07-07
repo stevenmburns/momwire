@@ -48,21 +48,26 @@ per k regardless (ε̃ depends on k through σ/ωε₀).
 
 ## Phase 1 — module-level bucketed grid cache (pure Python)
 
-- [ ] Replace the per-instance cache with a module-level FIFO cache
+- [x] Replace the per-instance cache with a module-level FIFO cache
       (same pattern as `_cached_geometry` / `_evict_fifo`) keyed
-      `(eps_t, k, r1_max_bucket)`.
-- [ ] Bucket `r1_max` upward in geometric steps (~25 %, floor ~0.1 λ) so
+      `(eps_t, k, r1_max_bucket, omega, mu)`; bound 128 (one entry per
+      sweep k × a few grounds; a grid is a few tens of kB).
+- [x] Bucket `r1_max` upward in geometric steps (~25 %, floor ~0.1 λ) so
       small geometry changes (knob turns) land in the same bucket. A
       grid built for a larger `r1_max` is valid (and marginally finer in
       θ) for any smaller radius — oversizing only costs fill time once.
-- [ ] Tests: two solver instances share one grid object; nearby r1_max
+      (`_somm_r1_bucket`)
+- [x] Tests: two solver instances share one grid object; nearby r1_max
       values hit one bucket; FIFO eviction bounded; full sommerfeld
       suite green (golden gn 2 gates have 1.3× headroom over the
       measured cross-solver floor — bucketing shifts values only within
-      interpolation error).
+      interpolation error). 53/53 pass with bucketed grids.
 
 Outcome: repeat solves at fixed (ε̃, k) — the interactive web case —
-skip the fill entirely.
+skip the fill entirely. Measured (fresh solver instances): dipole
+@ 0.05 λ 1.17 s cold → **33 ms warm**; yagi @ 0.2 λ 3.43 s cold →
+1.34 s warm (the residue is the uncached eval+einsum assembly — see
+non-goals).
 
 ## Phase 2 — cap tabulation at ~1 λ, extrapolate beyond (pure Python)
 
