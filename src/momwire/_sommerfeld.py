@@ -42,6 +42,7 @@ import numpy as np
 from scipy.special import hankel2, jv
 
 from ._accel import acc as _acc
+from ._cancel import SolveAborted
 
 _C_LIGHT = 299792458.0
 _MU0 = 4e-7 * np.pi
@@ -285,13 +286,18 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
 _FORM_CODE = {None: 0, "J": 1, "H": 2}
 
 
-def _six_integrals_batch(eps_t, k2, rho, h, rtol=1e-9, form=None):
+def _six_integrals_batch(eps_t, k2, rho, h, rtol=1e-9, form=None, cancel_flag=0):
     """`_six_integrals` over parallel (ρ, h) arrays; returns (n, 6) complex.
 
     Routes through the C++ accelerator (`somm_six_integrals_batch`,
     OpenMP across nodes) when it is loaded and falls back to the Python
     per-node loop otherwise — same contours, same 24-point Gauss rule,
     cross-checked in tests/test_sommerfeld_accel.py.
+
+    `cancel_flag` is a raw int32 address in the C++ kernels' convention
+    (0 = no cancellation; see `CancelToken.ptr`): the kernel polls it per
+    node and raises `SolveAborted`, and the Python fallback loop polls
+    the same address so cancellation behaves identically on both paths.
     """
     rho = np.ascontiguousarray(rho, dtype=float).ravel()
     h = np.ascontiguousarray(h, dtype=float).ravel()
@@ -300,10 +306,17 @@ def _six_integrals_batch(eps_t, k2, rho, h, rtol=1e-9, form=None):
         return np.zeros((rho.size, 6), dtype=np.complex128)
     if _acc is not None and hasattr(_acc, "somm_six_integrals_batch"):
         return _acc.somm_six_integrals_batch(
-            eps_t, float(k2), rho, h, float(rtol), _FORM_CODE[form]
+            eps_t, float(k2), rho, h, float(rtol), _FORM_CODE[form], int(cancel_flag)
         )
+    flag = None
+    if cancel_flag:
+        import ctypes
+
+        flag = ctypes.cast(int(cancel_flag), ctypes.POINTER(ctypes.c_int32))
     out = np.empty((rho.size, 6), dtype=np.complex128)
     for i in range(rho.size):
+        if flag is not None and flag.contents.value:
+            raise SolveAborted()
         out[i] = _six_integrals(eps_t, k2, rho[i], h[i], rtol, form)
     return out
 
@@ -337,7 +350,9 @@ def _limits_r1_zero(eps_t, k2, theta, omega, mu):
     }
 
 
-def iv_surfaces_direct(eps_t, k2, R1, theta, rtol=1e-9, omega=None, mu=_MU0):
+def iv_surfaces_direct(
+    eps_t, k2, R1, theta, rtol=1e-9, omega=None, mu=_MU0, cancel_flag=0
+):
     """Direct (no-grid) evaluation of the four NEC interpolation surfaces
     I_ρ^V, I_z^V, I_ρ^H, I_φ^H (eqs 156–159) at points (R₁, θ).
 
@@ -376,7 +391,7 @@ def iv_surfaces_direct(eps_t, k2, R1, theta, rtol=1e-9, omega=None, mu=_MU0):
         r1 = R1f[nz]
         rho = np.maximum(r1 * np.cos(thf[nz]), 0.0)
         h = np.maximum(r1 * np.sin(thf[nz]), 0.0)
-        six = _six_integrals_batch(eps_t, k2, rho, h, rtol)
+        six = _six_integrals_batch(eps_t, k2, rho, h, rtol, cancel_flag=cancel_flag)
         v_rr, v_zz, v_rz, v_r1, v, u = six.T
         phase = r1 * np.exp(1j * k2 * r1)
         out["IrhoV"][nz] = c1 * phase * k1s * v_rz
@@ -474,7 +489,9 @@ class SommerfeldGrid:
     clamped) and 0 ≤ θ ≤ π/2.
     """
 
-    def __init__(self, eps_t, k2, r1_max, rtol=1e-6, omega=None, mu=_MU0):
+    def __init__(
+        self, eps_t, k2, r1_max, rtol=1e-6, omega=None, mu=_MU0, cancel_flag=0
+    ):
         self.eps_t = complex(eps_t)
         self.k2 = float(k2)
         self.omega = k2 * _C_LIGHT if omega is None else float(omega)
@@ -515,7 +532,14 @@ class SommerfeldGrid:
             th_nodes = np.radians(th0 + dth * np.arange(n_th))
             rr, tt = np.meshgrid(r_nodes, th_nodes, indexing="ij")
             surf = iv_surfaces_direct(
-                self.eps_t, self.k2, rr, tt, rtol=rtol, omega=self.omega, mu=self.mu
+                self.eps_t,
+                self.k2,
+                rr,
+                tt,
+                rtol=rtol,
+                omega=self.omega,
+                mu=self.mu,
+                cancel_flag=cancel_flag,
             )
             vals = np.stack([surf[key] for key in _SURF_KEYS])
             self._regions.append(

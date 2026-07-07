@@ -105,3 +105,68 @@ def test_grid_fill_fallback_equivalence(monkeypatch):
     for kk in ("IrhoV", "IzV", "IrhoH", "IphiH"):
         scale = np.abs(vs[kk]).max() + 1e-300
         assert np.abs(vf[kk] - vs[kk]).max() / scale < 1e-6
+
+
+# ---------------------------------------------------------------------------
+# Cooperative cancellation (same drain pattern as the other kernels)
+# ---------------------------------------------------------------------------
+
+
+@needs_acc
+def test_batch_tripped_flag_raises_solve_aborted():
+    from momwire import CancelToken, SolveAborted
+
+    token = CancelToken()
+    token.cancel()
+    with pytest.raises(SolveAborted):
+        _acc.somm_six_integrals_batch(
+            EPS_AVG, K2, np.r_[1.0], np.r_[1.0], 1e-9, 0, token.ptr
+        )
+
+
+def test_python_fallback_tripped_flag_raises(monkeypatch):
+    from momwire import CancelToken, SolveAborted
+
+    monkeypatch.setattr(sm, "_acc", None)
+    token = CancelToken()
+    token.cancel()
+    with pytest.raises(SolveAborted):
+        sm._six_integrals_batch(
+            EPS_AVG, K2, np.r_[1.0], np.r_[1.0], cancel_flag=token.ptr
+        )
+
+
+@needs_acc
+def test_sommerfeld_solve_cancels_via_cpp_poll_only():
+    """Neutralize the Python checkpoints so only the C++ grid-fill poll
+    can observe the tripped token (the sommerfeld twin of
+    test_cancel.py::test_cpp_polling_aborts_without_python_checkpoints)."""
+    from fixtures_refl_coef_geoms import GEOMS
+    from momwire import BSplineSolver, CancelToken, SolveAborted
+    from momwire import bspline as bs
+
+    bs._SOMM_GRID_CACHE.clear()  # a cached grid would skip the fill
+    token = CancelToken()
+    token.cancel()
+    kw = dict(GEOMS[("dipole", 0.05)])
+    s = BSplineSolver(
+        **kw,
+        ground_z=0.0,
+        ground_eps=(10.0, 0.002),
+        ground_model="sommerfeld",
+        cancel=token,
+    )
+    s._checkpoint = lambda: None
+    with pytest.raises(SolveAborted):
+        s.compute_impedance()
+    assert not bs._SOMM_GRID_CACHE  # no partial grid was cached
+
+
+def test_untripped_token_result_unchanged():
+    from momwire import CancelToken
+
+    rho = np.r_[0.5, 3.0]
+    h = np.r_[1.0, 0.2]
+    ref = sm._six_integrals_batch(EPS_AVG, K2, rho, h)
+    tok = sm._six_integrals_batch(EPS_AVG, K2, rho, h, cancel_flag=CancelToken().ptr)
+    assert np.array_equal(ref, tok)
