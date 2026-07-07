@@ -40,6 +40,8 @@ multiplier row, mirroring TriangularSolver's treatment.
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
+import math
+
 import numpy as np
 import scipy.linalg
 from scipy.interpolate import BSpline
@@ -98,10 +100,33 @@ _BASIS_POLY_CACHE: dict = {}
 _GEOMETRY_CACHE_MAX = 32
 _BASIS_POLY_CACHE_MAX = 32
 
+# SommerfeldGrid fills cost seconds while the grids themselves are a few
+# tens of kB, and (as above) the engine wrapper builds a fresh solver per
+# impedance() call — an instance cache never survives an interactive
+# knob-turn. `r1_max` is bucketed UP in ~25% geometric steps before
+# keying: a grid tabulated to a larger radius is valid (and marginally
+# finer in theta) for any smaller one, so nearby geometries share one
+# fill instead of each paying seconds. The bound covers a full web sweep
+# (one entry per k; ~21-41 points) plus a couple of ground choices, so a
+# knob-turn that re-runs the same sweep hits every entry.
+_SOMM_GRID_CACHE: dict = {}
+_SOMM_GRID_CACHE_MAX = 128
+
 
 def _evict_fifo(cache: dict, limit: int) -> None:
     while len(cache) >= limit:
         cache.pop(next(iter(cache)))
+
+
+def _somm_r1_bucket(r1_max: float, k: float) -> float:
+    """Round `r1_max` up to the next 1.25^n wavelengths (floor 0.1 wl)."""
+    lam = 2.0 * np.pi / k
+    x = max(r1_max / lam, 0.1)
+    n = math.ceil(math.log(x, 1.25) - 1e-12)
+    bucket = lam * 1.25**n
+    if bucket < r1_max:  # float fuzz at an exact bucket edge
+        bucket *= 1.25
+    return float(bucket)
 
 
 def _xfem_projection_coeffs(d):
@@ -432,9 +457,8 @@ class BSplineSolver(_Cancelable):
         # lifetime as the geometry cache; k-independent, so swept solves
         # reuse it across the whole frequency loop.
         self._cached_image_refl_prep: tuple | None = None
-        # ((eps_t, k, r1_max), SommerfeldGrid) for ground_model="sommerfeld";
-        # rebuilt whenever any key part changes (per-k in sweeps).
-        self._cached_somm_grid: tuple | None = None
+        # SommerfeldGrid lives in the module-level _SOMM_GRID_CACHE (see
+        # its comment) so it survives across solver instances.
 
     # ------------------------------------------------------------------
     # Geometry build
@@ -834,9 +858,7 @@ class BSplineSolver(_Cancelable):
         (scripts/perf_refl_coef_sweep.py). The einsum loop below stays as
         the no-accelerator fallback and bit-exact reference.
         """
-        w_A, w_Phi = self._image_refl_weights(
-            self._image_refl_prep(geom), self.omega
-        )
+        w_A, w_Phi = self._image_refl_weights(self._image_refl_prep(geom), self.omega)
         return self._image_Z_weighted(J_img, supp_seg, polys, w_A, w_Phi)
 
     def _image_Z_weighted(self, J_img, supp_seg, polys, w_A, w_Phi):
@@ -916,14 +938,15 @@ class BSplineSolver(_Cancelable):
         return M + self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
 
     def _somm_grid(self, eps_t, r1_max):
-        key = (complex(eps_t), float(self.k), float(r1_max))
-        cached = self._cached_somm_grid
-        if cached is not None and cached[0] == key:
-            return cached[1]
-        grid = _sommerfeld.SommerfeldGrid(
-            eps_t, self.k, r1_max, omega=self.omega, mu=self.mu
-        )
-        self._cached_somm_grid = (key, grid)
+        r1b = _somm_r1_bucket(r1_max, self.k)
+        key = (complex(eps_t), float(self.k), r1b, float(self.omega), float(self.mu))
+        grid = _SOMM_GRID_CACHE.get(key)
+        if grid is None:
+            _evict_fifo(_SOMM_GRID_CACHE, _SOMM_GRID_CACHE_MAX)
+            grid = _sommerfeld.SommerfeldGrid(
+                eps_t, self.k, r1b, omega=self.omega, mu=self.mu
+            )
+            _SOMM_GRID_CACHE[key] = grid
         return grid
 
     def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t):
@@ -1012,13 +1035,11 @@ class BSplineSolver(_Cancelable):
             sphi = ux[None, :] * dhy - uy[None, :] * dhx
 
             e_rho = g * (
-                tz_src[None, :] * surf["IrhoV"]
-                + th_src[None, :] * cphi * surf["IrhoH"]
+                tz_src[None, :] * surf["IrhoV"] + th_src[None, :] * cphi * surf["IrhoH"]
             )
             e_phi = g * th_src[None, :] * sphi * surf["IphiH"]
             e_z = g * (
-                tz_src[None, :] * surf["IzV"]
-                - th_src[None, :] * cphi * surf["IrhoV"]
+                tz_src[None, :] * surf["IzV"] - th_src[None, :] * cphi * surf["IrhoV"]
             )
             proj = (
                 t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
@@ -1026,9 +1047,7 @@ class BSplineSolver(_Cancelable):
                 + t_obs[:, 2][:, None] * e_z
             )
             fq = proj.reshape(i1 - i0, q, n_seg, q)
-            Jf[:, :, i0:i1, :] = np.einsum(
-                "piq,iqjr,Pjr->pPij", W[:, i0:i1], fq, W
-            )
+            Jf[:, :, i0:i1, :] = np.einsum("piq,iqjr,Pjr->pPij", W[:, i0:i1], fq, W)
 
         n_basis = polys.shape[0]
         Q = np.zeros((n_basis, n_basis), dtype=np.complex128)
@@ -1037,9 +1056,7 @@ class BSplineSolver(_Cancelable):
             for b in range(d + 1):
                 sn = supp_seg[:, b]
                 J_blk = Jf[:, :, sm[:, None], sn[None, :]]
-                Q += np.einsum(
-                    "mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :]
-                )
+                Q += np.einsum("mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :])
         return Q
 
     def _same_edge_prep(self, geom):
