@@ -5,8 +5,9 @@ antennaknobs `("finite", εr, σ)`) in momwire's `BSplineSolver` impedance
 solve. Today's `ground_eps` refl-coef model (docs/refl-coef-ground-plan.md,
 complete) matches NEC gn 0 to the cross-solver floor — but gn 0 is itself an
 approximation that fails close to ground: at 0.05λ the dipole goldens show
-gn 0 and gn 2 disagreeing by **12–16 Ω** (e.g. εr=10: 46.9+9.3j vs
-62.8−2.2j). Sommerfeld is the exact half-space solution; landing it removes
+gn 0 and gn 2 disagreeing by **~22 Ω** (εr=10: 46.9+9.3j vs 68.0+1.6j), and
+at 0.02λ by **>130 Ω** (70+163j vs 95+32j — gn 0 isn't even in the right
+regime). Sommerfeld is the exact half-space solution; landing it removes
 the "unreliable below 0.1λ" caveat and covers the antennas where ground
 matters most: low wires, verticals, radial-less end-fed types.
 
@@ -184,23 +185,47 @@ BSplineSolver(..., ground_z=0.0,
 
 ## Phases
 
-### Phase 0 — scaffolding & goldens (mostly exists)
-- [ ] Goldens: the 30-case matrix already carries gn 2 (`"finite"` key) —
-      no capture run needed for it. Extend
-      `scripts/capture_refl_coef_ground_golden.py` (or a sibling
-      `capture_sommerfeld_golden.py`) with: 0.02λ heights (both
-      geometries), and one horizontally-large case (multi-element parasitic
-      array or long doublet, span > 1λ) to exercise R₁ > 1λ. Regenerate
-      fixtures via `scripts/dump_refl_coef_geoms.py` for the new cases.
-- [ ] Pointwise oracles for the integral engine, independent of any MoM
-      solve: the manual's figs 7–11 print Max/Min of Re/Im of each I
-      surface for (εr=4, σ=0.001, 10 MHz) and (εr=16, σ=0) — capture as
-      literals. Add the two identities D₁ = D₂ = 0 at ε̃→∞ and ε̃→1.
-- [ ] License note: implement from the theory-manual equations + the
+### Phase 0 — scaffolding & goldens (done 2026-07-06)
+- [x] Goldens: extended `scripts/capture_refl_coef_ground_golden.py` +
+      `scripts/dump_refl_coef_geoms.py` with 0.02λ heights (both
+      geometries) and a 6-element flat yagi (beams.yagi, n_directors=4,
+      >1.2λ boom) at 0.2λ — 39 cases / 13 geometries regenerated; all
+      pre-existing gn 0 and PEC values reproduced byte-identically; both
+      refl-coef test suites still green (57 passed).
+- [x] **Finding — the gn 2 oracle is nec2c, NOT PyNEC.** Regenerating
+      goldens exposed two independent PyNEC (nec2++) Sommerfeld defects,
+      confirmed by controlled experiments (details in the capture-script
+      docstring):
+      1. *Cross-solve state*: the same gn 2 case solved twice in one
+         process returns different impedances (62.791−2.173j then
+         62.308−2.532j); a preceding 0.02λ solve shifts the next answer
+         by 17 Ω. The two pre-existing golden gn 2 values that were each
+         geometry's first-in-process solve changed when run order
+         changed — that's what unmasked this.
+      2. *Low-height breakage*: even first-in-process, PyNEC gn 2 at
+         0.02λ is erratic across the three similar matrix grounds
+         (572−227j / 216−783j / 78+43j) where nec2c varies smoothly
+         (95+32j / 91+30j / 93+31j) and is segment-refinement stable
+         (0.8 Ω under 2× segments).
+      Controls: identical exported decks agree nec2c-vs-PyNEC to 0.02 Ω
+      on gn 0/PEC at all heights (deck translation faithful) and on gn 2
+      at 0.1–0.5λ (both Sommerfelds healthy there); the split is only
+      below 0.1λ — precisely the regime this plan targets. Capture now
+      routes every gn 2 value through `antennaknobs.nec_export` + the
+      `nec2c` CLI (fresh process per case as a bonus). Payoff visible in
+      the new goldens: dipole 0.02λ/(10, 0.002) gn 0 = 70+163j vs
+      gn 2 = 95+32j.
+- [x] Pointwise oracles for the integral engine, independent of any MoM
+      solve: manual figs 7–11 Max/Min literals →
+      `tests/oracle_sommerfeld_figs.py` (with normalization caveats in
+      its docstring). D₁ = D₂ = 0 identities at ε̃→∞ / ε̃→1 verified
+      analytically (γ-limits) — encode as engine tests in Phase 1.
+- [x] License note: implement from the theory-manual equations + the
       public-domain NEC-2 Fortran listing (SOMNEC/GWAVE, Part II) if
       needed for tie-breaking. Do NOT read GPL derivatives (nec2c, PyNEC
-      sources); PyNEC stays a dev-time oracle behind capture scripts, as
-      established.
+      sources); nec2c/PyNEC stay dev-time oracles behind capture
+      scripts, as established (invoking the nec2c CLI at capture time
+      links nothing).
 
 ### Phase 1 — Sommerfeld integral engine (`src/momwire/_sommerfeld.py`)
 The one genuinely new component. Pure numpy/scipy, no C++.
@@ -266,7 +291,8 @@ The one genuinely new component. Pure numpy/scipy, no C++.
 - [ ] **Acceptance:** |ΔZ| vs NEC gn 2 within the bspline cross-solver
       floor + ~1 Ω across **all** heights *including 0.05λ and the new
       0.02λ rows* — the low-height cases are the entire point (gn 0 is
-      12–16 Ω wrong there; we must land on gn 2's side of that gap, which
+      ~22 Ω wrong at 0.05λ and >130 Ω at 0.02λ; we must land on gn 2's
+      side of that gap, which
       also cleanly proves we implemented Sommerfeld and not refl-coef
       again). Sanity: agree with the refl-coef solve within ~2.5 Ω over
       0.2–0.5λ (where gn 0 ≈ gn 2). Record residuals here.
@@ -295,16 +321,21 @@ The one genuinely new component. Pure numpy/scipy, no C++.
       the ground-model story ("finite is now true Sommerfeld on the
       B-spline solver, matching NEC gn 2"); home-page what's-new box as
       part of the release ritual.
-- [ ] Mirror test: momwire-vs-PyNEC-gn2 cross-check at 0.05λ (the height
-      where the mapping visibly changes results).
+- [ ] Mirror test: momwire-vs-gn 2 cross-check at 0.05λ (the height
+      where the mapping visibly changes results). Careful: PyNEC gn 2 is
+      untrustworthy below 0.1λ and order-dependent in-process (Phase 0
+      finding) — gate against captured nec2c literals, not live PyNEC.
+      Also consider whether antennaknobs' own PyNEC `("finite", ...)`
+      path needs a warning for sub-0.1λ geometries — the hosted
+      simulator serves those solves from PyNEC today.
 
 ## Validation matrix
 
-The refl-coef matrix (2 geometries × 5 heights × 3 grounds, gn 2 values
-already golden) plus: 0.02λ height rows, and one span-> 1λ geometry for
-the large-R₁ grid region. Oracle: PyNEC `("finite", εr, σ)` = gn 2.
-Secondary sanity: gn 0 agreement above 0.2λ, divergence below 0.1λ
-matching the known pattern.
+The refl-coef matrix extended to 2 geometries × 6 heights (0.02–0.5λ)
+× 3 grounds plus the 6-element yagi at 0.2λ (span > 1λ for the large-R₁
+grid region) — 39 cases, captured. Oracle: **nec2c** gn 2 via deck
+export (NOT PyNEC — see Phase 0 finding). Secondary sanity: gn 0
+agreement above 0.2λ, divergence below 0.1λ matching the known pattern.
 
 ## Risks
 
