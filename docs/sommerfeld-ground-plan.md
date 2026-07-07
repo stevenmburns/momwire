@@ -393,24 +393,34 @@ antennaknobs momwire suites green against the branch. The
 `solver_kwargs` channel means the engine needs NO code change for
 power users — the Phase 6 work below is about making `("finite", ...)`
 map to it by default.
-- [ ] `MomwireEngine`: map `("finite", εr, σ)` → `ground_model="sommerfeld"`
-      for solvers that support it (BSpline initially; HMatrix/ArrayBlock
-      inherit via the dense gate — decide whether silent dense fallback or
-      refl-coef is the better default for them and document the choice).
-      `("finite-fast", εr, σ)` stays refl-coef everywhere. Pin + floor in
-      the same PR; wheel-smoke race discipline per memory.
-- [ ] Web adapter: `ground_model_applied` gains a "sommerfeld" value for
-      the bspline backend; site docs (reference/solver.md, web.md) update
-      the ground-model story ("finite is now true Sommerfeld on the
-      B-spline solver, matching NEC gn 2"); home-page what's-new box as
-      part of the release ritual.
-- [ ] Mirror test: momwire-vs-gn 2 cross-check at 0.05λ (the height
-      where the mapping visibly changes results). Careful: PyNEC gn 2 is
-      untrustworthy below 0.1λ and order-dependent in-process (Phase 0
-      finding) — gate against captured nec2c literals, not live PyNEC.
-      Also consider whether antennaknobs' own PyNEC `("finite", ...)`
-      path needs a warning for sub-0.1λ geometries — the hosted
-      simulator serves those solves from PyNEC today.
+(done 2026-07-07: momwire v0.6.0 on PyPI — PR #121, tag on 06dee7f,
+auto-generated release notes; antennaknobs PR #260.)
+- [x] `MomwireEngine`: `_normalise_ground` now preserves the finite
+      variant; `("finite", εr, σ)` → `ground_model="sommerfeld"` on plain
+      BSplineSolver only. Decision on the fast solvers: HMatrix/ArrayBlock
+      keep refl-coef for BOTH specs — momwire gates their sommerfeld to a
+      dense solve, a silent perf cliff on exactly the large grounded
+      arrays those solvers exist for; documented in the engine docstring.
+      `("finite-fast", εr, σ)` is refl-coef everywhere it exists. Pin
+      v0.6.0 + floor `momwire>=0.6.0` (pyproject + Dockerfile) in the
+      same PR; momwire was on PyPI before the PR went up (no wheel-smoke
+      race this time).
+- [x] Web adapter: `ground_model_applied` reports "sommerfeld" /
+      "refl-coef" from the engine's own mapping (the frontend's existing
+      three-way ground selector needed no change — its "sommerfeld"
+      choice simply became true on the bspline backend); site docs
+      updated (reference/solver.md honest-limitations, web.md ground
+      story). Home-page what's-new box deferred to the next antennaknobs
+      release (the box is versioned; this PR doesn't bump).
+- [x] Mirror test: `test_momwire_bspline_sommerfeld_tracks_gn2_at_low_
+      heights` gates at 0.05λ (≤2.5 Ω) and 0.02λ (≤3.0 Ω) against
+      embedded nec2c literals (measured 1.43/2.17 through the engine),
+      plus the per-solver/per-spec mapping matrix and the web
+      sommerfeld-vs-fast distinction. One stale test updated:
+      `test_pynec_ground` asserted the old fold-to-one-model
+      normalisation. Still open (tracked, not this PR): whether the
+      PyNEC `("finite", ...)` path needs a sub-0.1λ warning in the
+      hosted simulator — its gn 2 solve is the order-dependent one.
 
 ## Validation matrix
 
