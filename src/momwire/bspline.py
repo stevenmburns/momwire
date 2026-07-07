@@ -13,7 +13,10 @@ Scope:
   * delta-gap "applied-E" source on one feed wire
   * degree d ∈ {1, 2}  (d=1 reproduces the tent basis up to feed convention)
   * K-wire junctions with KCL constraint (Σ outflow currents = 0)
-  * NO ground plane (yet)
+  * ground: PEC image (`ground_z`), NEC-gn 0-style reflection-coefficient
+    finite ground (`ground_eps`, docs/refl-coef-ground-plan.md), and
+    NEC-gn 2-style Sommerfeld finite ground (`ground_model="sommerfeld"`,
+    docs/sommerfeld-ground-plan.md)
 
 Same as TriangularSolver, but with a polynomial-of-degree-d on each segment
 instead of just a linear ramp. Each interior basis Φ_m spans up to d+1
@@ -52,6 +55,7 @@ from ._bspline_kernels import (
 from ._quadrature import leggauss
 
 from . import _ground_refl
+from . import _sommerfeld
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 
@@ -202,6 +206,8 @@ class BSplineSolver(_Cancelable):
         ground_z=None,
         ground_eps=None,
         ground_phi_mode="normal",
+        ground_model="refl-coef",
+        n_qp_sommerfeld=3,
         use_singular_enrichment=False,
         n_qp_sing=32,
         enrichment_min_k=3,
@@ -246,6 +252,25 @@ class BSplineSolver(_Cancelable):
             )
         self.ground_eps = ground_eps
         self.ground_phi_mode = ground_phi_mode
+        # `ground_model` picks the finite-ground physics when `ground_eps`
+        # is set: "refl-coef" (NEC gn 0 style, the default) or "sommerfeld"
+        # (NEC gn 2 style: exact image scaled by C2 = (eps-1)/(eps+1) plus
+        # the interpolated Sommerfeld remainder — see
+        # docs/sommerfeld-ground-plan.md). `ground_phi_mode` applies to
+        # "refl-coef" only; the sommerfeld image coefficient is exact and
+        # has no knob. `n_qp_sommerfeld` is the per-segment Gauss order of
+        # the remainder block's field-form Galerkin quadrature (the kernel
+        # is smooth — the image point is below the plane — so 3 converges;
+        # guarded by a q-vs-q+2 test).
+        if ground_model not in ("refl-coef", "sommerfeld"):
+            raise ValueError(
+                "ground_model must be 'refl-coef' or 'sommerfeld', "
+                f"got {ground_model!r}"
+            )
+        if ground_model == "sommerfeld" and ground_eps is None:
+            raise ValueError("ground_model='sommerfeld' requires ground_eps")
+        self.ground_model = ground_model
+        self.n_qp_sommerfeld = int(n_qp_sommerfeld)
         # Source smoothing: when None (default) → delta-gap at exact midpoint
         # of feed wire. When set to a float α, the delta-gap is replaced by a
         # cos² bump of width w = α · h_feed_segment_at_source centered on s_f,
@@ -407,6 +432,9 @@ class BSplineSolver(_Cancelable):
         # lifetime as the geometry cache; k-independent, so swept solves
         # reuse it across the whole frequency loop.
         self._cached_image_refl_prep: tuple | None = None
+        # ((eps_t, k, r1_max), SommerfeldGrid) for ground_model="sommerfeld";
+        # rebuilt whenever any key part changes (per-k in sweeps).
+        self._cached_somm_grid: tuple | None = None
 
     # ------------------------------------------------------------------
     # Geometry build
@@ -806,11 +834,19 @@ class BSplineSolver(_Cancelable):
         (scripts/perf_refl_coef_sweep.py). The einsum loop below stays as
         the no-accelerator fallback and bit-exact reference.
         """
-        d = self.degree
         w_A, w_Phi = self._image_refl_weights(
             self._image_refl_prep(geom), self.omega
         )
+        return self._image_Z_weighted(J_img, supp_seg, polys, w_A, w_Phi)
 
+    def _image_Z_weighted(self, J_img, supp_seg, polys, w_A, w_Phi):
+        """Weighted image assembly core: complex per-pair tables w_A on the
+        A term and w_Phi on the charge term, through the C++
+        `assemble_Z_bspline_weighted` kernel when available with the numpy
+        einsum loop as the bit-exact fallback. Shared by the refl-coef
+        ground (Fresnel tables) and the Sommerfeld ground's exact-image
+        part (constant C2 tables)."""
+        d = self.degree
         if _HAVE_BSPLINE_ASSEMBLE_W_ACCEL and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D:
             return _acc.assemble_Z_bspline_weighted(
                 np.ascontiguousarray(J_img, dtype=np.complex128),
@@ -854,6 +890,157 @@ class BSplineSolver(_Cancelable):
         Z_A = 1j * self.omega * self.mu * Z_A
         Z_Phi = Z_Phi / (1j * self.omega * self.eps)
         return Z_A + Z_Phi
+
+    def _ground_finite_Z(self, J_img, supp_seg, polys, geom):
+        """Finite-ground matrix to SUBTRACT from the free-space Z (the
+        seams' `Z - ...` convention, shared with the PEC image).
+
+        refl-coef: the Fresnel-weighted image (`_image_Z_refl`).
+
+        sommerfeld: NEC's decomposition (theory manual eqs 136-147) — the
+        exact image scaled by the constant C2 = (eps-1)/(eps+1), which
+        absorbs all the singular behavior and reuses the weighted-image
+        kernel with constant tables, plus the smooth Sommerfeld remainder
+        block. In the eps->inf limit C2 -> 1 and the remainder vanishes,
+        reproducing the PEC image exactly; at eps -> 1 both terms vanish,
+        reproducing free space. Both limits are unit-tested.
+        """
+        if self.ground_model != "sommerfeld":
+            return self._image_Z_refl(J_img, supp_seg, polys, geom)
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        c2 = (eps_t - 1.0) / (eps_t + 1.0)
+        td_img = self._image_tangent_dot(geom["tangents"])
+        w_A = c2 * td_img.astype(np.complex128)
+        w_Phi = np.full_like(w_A, c2)
+        M = self._image_Z_weighted(J_img, supp_seg, polys, w_A, w_Phi)
+        return M + self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+
+    def _somm_grid(self, eps_t, r1_max):
+        key = (complex(eps_t), float(self.k), float(r1_max))
+        cached = self._cached_somm_grid
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        grid = _sommerfeld.SommerfeldGrid(
+            eps_t, self.k, r1_max, omega=self.omega, mu=self.mu
+        )
+        self._cached_somm_grid = (key, grid)
+        return grid
+
+    def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t):
+        """Galerkin block Q[m,n] = ∫∫ f_m f_n · t_m·F(r, r')·t_n of the
+        smooth Sommerfeld remainder field F (theory manual eqs 143-147:
+        the ground field minus its C2-scaled exact-image part). The EFIE
+        contribution is -Q; `_ground_finite_Z` returns C2-image + Q so the
+        seams' single subtraction lands both terms.
+
+        Field-form, not mixed-potential: F is the total E-field of a unit
+        current element over ground (endpoint charges inherent in the
+        element superposition), interpolated from the four SommerfeldGrid
+        surfaces, combined per source-tangent vertical/horizontal
+        decomposition (eqs 143-147 azimuth factors), projected on the
+        observer tangent, and integrated with the basis polynomials by
+        per-segment Gauss quadrature. Chunked over observer segments to
+        bound the (nodes x nodes) working set.
+        """
+        gz = self.ground_z
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        tang = geom["tangents"]
+        h = geom["h_per_seg"]
+        n_seg = seg_l.shape[0]
+        zmin = min(seg_l[:, 2].min(), seg_r[:, 2].min()) - gz
+        if zmin <= 0.0:
+            raise ValueError(
+                "ground_model='sommerfeld' requires every wire strictly "
+                f"above ground_z (min height above plane: {zmin:.3g})"
+            )
+
+        d = self.degree
+        q = self.n_qp_sommerfeld
+        xg, wg = leggauss(q)
+        tq = 0.5 * (xg + 1.0)
+        nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
+        u_phys = h[:, None] * tq[None, :]  # (N, q) physical arc offsets
+        w_node = 0.5 * h[:, None] * wg[None, :]
+        # Moment weights W[p, i, qi] = w_qi * u_qi^p — the quadrature dual
+        # of the J-block u^p moments, so `polys` applies unchanged.
+        W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
+
+        # Grid extent: obs-to-image-point distance is convex in the two
+        # segment parameters, so its max over all pairs is attained at
+        # endpoint pairs.
+        ex = np.concatenate([seg_l, seg_r])
+        dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
+        dye = ex[:, 1][:, None] - ex[:, 1][None, :]
+        hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
+        r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+        grid = self._somm_grid(eps_t, r1_max)
+
+        n_nodes = n_seg * q
+        src = nodes.reshape(n_nodes, 3)
+        t_src = np.repeat(tang, q, axis=0)
+        th_src = np.hypot(t_src[:, 0], t_src[:, 1])
+        safe_t = th_src > 1e-12
+        ux = np.where(safe_t, t_src[:, 0] / np.where(safe_t, th_src, 1.0), 1.0)
+        uy = np.where(safe_t, t_src[:, 1] / np.where(safe_t, th_src, 1.0), 0.0)
+        tz_src = t_src[:, 2]
+        src_hz = src[:, 2] - gz
+
+        Jf = np.empty((d + 1, d + 1, n_seg, n_seg), dtype=np.complex128)
+        chunk = max(1, (1 << 19) // max(n_nodes * q, 1))
+        tiny = 1e-12 * r1_max
+        for i0 in range(0, n_seg, chunk):
+            i1 = min(i0 + chunk, n_seg)
+            obs = nodes[i0:i1].reshape(-1, 3)
+            t_obs = np.repeat(tang[i0:i1], q, axis=0)
+            dx = obs[:, 0][:, None] - src[:, 0][None, :]
+            dy = obs[:, 1][:, None] - src[:, 1][None, :]
+            rho = np.hypot(dx, dy)
+            hh = (obs[:, 2] - gz)[:, None] + src_hz[None, :]
+            r1 = np.sqrt(rho * rho + hh * hh)
+            surf = grid.eval(r1, np.arctan2(hh, rho))
+            g = np.exp(-1j * self.k * r1) / r1
+
+            safe_r = rho > tiny
+            inv_rho = np.where(safe_r, 1.0 / np.where(safe_r, rho, 1.0), 0.0)
+            # rho -> 0: the incidence azimuth degenerates; I_rho^H(90 deg)
+            # = -I_phi^H there (unit-tested in the engine suite), so any
+            # d-hat works — use the source horizontal direction.
+            dhx = np.where(safe_r, dx * inv_rho, ux[None, :])
+            dhy = np.where(safe_r, dy * inv_rho, uy[None, :])
+            cphi = ux[None, :] * dhx + uy[None, :] * dhy
+            sphi = ux[None, :] * dhy - uy[None, :] * dhx
+
+            e_rho = g * (
+                tz_src[None, :] * surf["IrhoV"]
+                + th_src[None, :] * cphi * surf["IrhoH"]
+            )
+            e_phi = g * th_src[None, :] * sphi * surf["IphiH"]
+            e_z = g * (
+                tz_src[None, :] * surf["IzV"]
+                - th_src[None, :] * cphi * surf["IrhoV"]
+            )
+            proj = (
+                t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
+                + t_obs[:, 1][:, None] * (dhy * e_rho + dhx * e_phi)
+                + t_obs[:, 2][:, None] * e_z
+            )
+            fq = proj.reshape(i1 - i0, q, n_seg, q)
+            Jf[:, :, i0:i1, :] = np.einsum(
+                "piq,iqjr,Pjr->pPij", W[:, i0:i1], fq, W
+            )
+
+        n_basis = polys.shape[0]
+        Q = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        for a in range(d + 1):
+            sm = supp_seg[:, a]
+            for b in range(d + 1):
+                sn = supp_seg[:, b]
+                J_blk = Jf[:, :, sm[:, None], sn[None, :]]
+                Q += np.einsum(
+                    "mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :]
+                )
+        return Q
 
     def _same_edge_prep(self, geom):
         """k-independent per-same-edge precompute hoisted out of the swept-k
@@ -1513,7 +1700,7 @@ class BSplineSolver(_Cancelable):
             if self.ground_eps is not None:
                 # Finite ground: Fresnel-weighted image (same J fill, per-
                 # pair weight tables on both terms) instead of the PEC dot.
-                Z = Z - self._image_Z_refl(J_img, supp_seg, polys, geom)
+                Z = Z - self._ground_finite_Z(J_img, supp_seg, polys, geom)
             else:
                 td_img = self._image_tangent_dot(geom["tangents"])
                 Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
@@ -1651,7 +1838,7 @@ class BSplineSolver(_Cancelable):
         if self.ground_z is not None:
             J_img = self._build_J_image_blocks(geom, self.k)
             if self.ground_eps is not None:
-                Z = Z - self._image_Z_refl(J_img, supp_seg, polys, geom)
+                Z = Z - self._ground_finite_Z(J_img, supp_seg, polys, geom)
             else:
                 td_img = self._image_tangent_dot(geom["tangents"])
                 Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
@@ -1735,9 +1922,10 @@ class BSplineSolver(_Cancelable):
                 J_img = self._build_J_image_blocks(geom, self.k)
                 if self.ground_eps is not None:
                     # self.omega is rebound per k above, so the ε̃(ω)-driven
-                    # weight tables track the sweep; the specular geometry
-                    # behind them is cached k-independently.
-                    Z = Z - self._image_Z_refl(J_img, supp_seg, polys, geom)
+                    # weight tables (and the sommerfeld grid, keyed on
+                    # (ε̃, k)) track the sweep; the specular geometry behind
+                    # them is cached k-independently.
+                    Z = Z - self._ground_finite_Z(J_img, supp_seg, polys, geom)
                 else:
                     td_img = self._image_tangent_dot(geom["tangents"])
                     Z = Z - self._assemble_Z(

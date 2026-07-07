@@ -12,6 +12,10 @@ tests/golden_refl_coef_ground.py):
 - Cross-solver PEC floor (Phase 6 acceptance input): |Z_solver_PEC − PyNEC
   PEC| per case for both solvers — the solver-vs-NEC discretization floor the
   finite-ground gates are set relative to.
+- BSplineSolver `ground_model="sommerfeld"` (sommerfeld plan Phase 4):
+  |ΔZ| vs the nec2c gn 2 oracle across ALL heights (0.02–0.5λ) and the
+  yagi, with the refl-coef and PEC solves' gn 2 residuals alongside for
+  scale — this is the table the sommerfeld acceptance gates are set from.
 
 Acceptance (docs/refl-coef-ground-plan.md Phase 1): |ΔZ| ≤ ~2 Ω across the
 dipole 0.1–0.5λ heights, and strictly better than the PEC-image solve
@@ -24,7 +28,9 @@ Run from the momwire repo:  .venv/bin/python scripts/compare_refl_coef_ground.py
 import os
 import sys
 
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(__file__)) or ".", "tests"))
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.dirname(__file__)) or ".", "tests")
+)
 
 from fixtures_refl_coef_geoms import GEOMS  # noqa: E402
 from golden_refl_coef_ground import GOLDEN  # noqa: E402
@@ -67,7 +73,7 @@ def print_residual_table(label, z_solver, cols):
         print(scope)
         for c in cols:
             vals = [d for w, n, d in stats[c] if pred(w, n)]
-            print(f"  {c:7s} max={max(vals):6.2f}  mean={sum(vals)/len(vals):6.2f}")
+            print(f"  {c:7s} max={max(vals):6.2f}  mean={sum(vals) / len(vals):6.2f}")
 
     # strictly-better-than-PEC check in the window
     print(f"\n--- {label}: cases in window where candidate is NOT better than PEC ---")
@@ -83,8 +89,10 @@ def print_residual_table(label, z_solver, cols):
                 continue
             d = abs(z_solver[(name, frac, eps_r, sigma, c)] - gn0)
             if d >= d_pec:
-                print(f"  {c}: {name} h={frac} eps={eps_r} s={sigma}: "
-                      f"{d:.2f} >= pec {d_pec:.2f}")
+                print(
+                    f"  {c}: {name} h={frac} eps={eps_r} s={sigma}: "
+                    f"{d:.2f} >= pec {d_pec:.2f}"
+                )
                 any_bad = True
     if not any_bad:
         print("  (none — every candidate beats PEC on every window case)")
@@ -135,7 +143,9 @@ def main():
 
     solvers = ("bspline", "sinusoidal")
     print("\n=== cross-solver PEC floor: |Z_solver_PEC - PyNEC PEC| (ohms) ===")
-    print(f"{'case':22s}" + "".join(f"{s:>12s}" for s in solvers) + f"{'PyNEC pec':>22s}")
+    print(
+        f"{'case':22s}" + "".join(f"{s:>12s}" for s in solvers) + f"{'PyNEC pec':>22s}"
+    )
     floor = {s: [] for s in solvers}  # (in_window, name, |dZ|)
     for name, frac in sorted(golden_pec):
         z_nec = golden_pec[(name, frac)]
@@ -156,7 +166,43 @@ def main():
         print(scope)
         for s in solvers:
             vals = [d for w, n, d in floor[s] if pred(w, n)]
-            print(f"  {s:10s} max={max(vals):6.2f}  mean={sum(vals)/len(vals):6.2f}")
+            print(f"  {s:10s} max={max(vals):6.2f}  mean={sum(vals) / len(vals):6.2f}")
+
+    # ------- BSplineSolver ground_model="sommerfeld" vs gn 2 (nec2c) -------
+    # gn 2 residuals for the refl-coef and PEC solves are context: below
+    # 0.1wl they are the error the sommerfeld model exists to remove.
+    print("\n=== bspline sommerfeld: |dZ| vs gn2 per case (ohms) ===")
+    print(f"{'case':38s}{'somm':>10s}{'refl':>10s}{'pec':>10s}{'gn2':>20s}")
+    somm_stats = {"somm": [], "refl": [], "pec": []}
+    for key in sorted(GOLDEN):
+        name, frac, eps_r, sigma = key
+        gn2 = GOLDEN[key]["finite"]
+        kw = GEOMS[(name, frac)]
+        z_s, _ = BSplineSolver(
+            **kw,
+            ground_z=0.0,
+            ground_eps=(eps_r, sigma),
+            ground_model="sommerfeld",
+        ).compute_impedance()
+        d = {
+            "somm": abs(z_s - gn2),
+            "refl": abs(z_bsp[(name, frac, eps_r, sigma, "normal")] - gn2),
+            "pec": abs(z_bsp[(name, frac, eps_r, sigma, "pec")] - gn2),
+        }
+        for c, v in d.items():
+            somm_stats[c].append((name, v))
+        print(
+            f"{name:11s} h={frac:4.2f} eps={eps_r:4.1f} s={sigma:5.3f} "
+            f"{d['somm']:10.2f}{d['refl']:10.2f}{d['pec']:10.2f}"
+            f"    {gn2.real:7.2f}{gn2.imag:+7.2f}j"
+        )
+    print("\n--- sommerfeld summary: |dZ| vs gn2 (ohms), ALL heights ---")
+    for name in ("dipole", "inverted_l", "yagi"):
+        row = f"  {name:11s}"
+        for c in ("somm", "refl", "pec"):
+            vals = [v for n, v in somm_stats[c] if n == name]
+            row += f"  {c} max={max(vals):6.2f} mean={sum(vals) / len(vals):6.2f}"
+        print(row)
 
 
 if __name__ == "__main__":
