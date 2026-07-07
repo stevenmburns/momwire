@@ -69,26 +69,32 @@ skip the fill entirely. Measured (fresh solver instances): dipole
 1.34 s warm (the residue is the uncached eval+einsum assembly — see
 non-goals).
 
-## Phase 2 — cap tabulation at ~1 λ, extrapolate beyond (pure Python)
+## Phase 2 — cap tabulation at ~1 λ, extrapolate beyond — **REJECTED**
 
 Geometrical-optics argument: the four normalized surfaces (free-space
 factor e^{−jkR₁}/R₁ divided out) should tend to θ-only functions
 (Fresnel-minus-C₂ shapes) as R₁ → ∞, with O(1/R₁) correction.
 
-- [ ] Numerically characterize the large-R₁ behavior of all four
-      surfaces vs `iv_surfaces_direct` (convergence rate, θ-dependence)
-      before committing to a form.
-- [ ] Cap tabulation at `R1_CAP` (~1 λ, exact value from the
-      characterization); beyond, evaluate `A(θ) + B(θ)/R₁` with A, B
-      fit from the two outermost tabulated R₁ rings — data-driven, no
-      hand-derived Fresnel algebra to get wrong.
-- [ ] Validation gates: extrapolated vs direct at R₁ = 3/5/10 λ within
-      tolerance TBD from characterization; golden gn 2 gates green;
-      measure the yagi fill improvement (its grid currently spans the
-      whole boom+image extent).
+- [x] Numerically characterized (2026-07-07): fit `A(θ) + B(θ)/R₁` from
+      rings at 0.8/1.0 λ, predict at 1.5–10 λ, compare against
+      `iv_surfaces_direct`, three grounds, θ = 0.5°–89.5°.
+- [x] **Result: the hypothesis fails.** Relative errors *grow* with R₁
+      instead of shrinking — IrhoH at grazing reaches 3–15× the local
+      value by 5–10 λ (poor ground worst), IzV near vertical degrades to
+      ~2× by 10 λ, and even mid-θ errors sit at 5–25 %. The normalized
+      surfaces do not settle to θ-only limits: the lateral-wave content
+      oscillates at the k₁−k₂ beat (the same beat the grid's ΔR₁ keying
+      resolves), which no smooth function of 1/R₁ can represent. NEC's
+      1 λ cap evidently rests on an explicit asymptotic decomposition
+      (GO + lateral-wave terms), and deriving one cleanly is a research
+      project, not a perf patch.
 
-Outcome: fill cost becomes geometry-independent; big arrays stop paying
-for grid area they barely use.
+Decision: keep the geometry-sized grid — it is precisely what buys the
+0.98 Ω yagi agreement beyond NEC's 1 λ grid edge
+(`test_yagi_tracks_gn2_large_r1`) — and let Phase 3 make its fill cheap.
+Node count grows ~linearly with r1_max (beat-keyed ΔR₁), so even a 20 λ
+grid is a few-thousand-node fill: trivial in C++, and any geometry that
+large pays far more in the dense O(N²) solve anyway.
 
 ## Phase 3 — C++ fill kernel in `_accelerators.cpp`
 
