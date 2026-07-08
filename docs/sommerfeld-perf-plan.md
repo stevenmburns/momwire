@@ -145,10 +145,129 @@ Outcome: a 21-point sweep's fill overhead drops from ~25–75 s to
 ~1.5–3 s, and it composes with the Phase 1 cache (repeat sweeps at
 unchanged ground/frequency pay nothing).
 
+## Phase 4 — compiled remainder assembly (the eval + einsum non-goal, now the bottleneck)
+
+Phases 1–3 drove the *grid fill* to near-zero (cached + C++). The
+benchmark that motivates this phase lives in the antennaknobs repo
+(`docs/status/2026-07-08-ground-model-benchmark.md`): across 10 designs,
+momwire's Sommerfeld path trails PyNEC's native NEC gn 2 by **10–100×**,
+and the cost scales cleanly as O(N²) per band on the dense solvers
+(moxon somm 388→1412→5261 ms for N=21→41→81 — ×4 per doubling). That is
+not the fill (cached); it is the per-pair **remainder assembly** the
+non-goal below deferred.
+
+### Where the time goes now (profiled 2026-07-08, 4-core linux)
+
+`BSplineSolver(degree=2, ground_model="sommerfeld")`, yagi @ N=81,
+**warm** (grid already cached, so this isolates assembly only) —
+7.54 s/solve, by `tottime`:
+
+cProfile's flat view lumps all `c_einsum` calls together; attributing
+each einsum to its caller (measured by wrapping `np.einsum`) gives the
+real picture — the hotspot is the grid **interpolation**, not the
+Galerkin projection:
+
+| stage                                                | time   | share |
+|------------------------------------------------------|--------|-------|
+| `SommerfeldGrid.eval` — bicubic interp of 4 surfaces (gather `(4,n,4,4)` + `snij,ni,nj->sn` einsum) | 5.4 s | 73 % |
+| `remainder_field_proj` — azimuth combine + tangent projection (own) | 0.89 s | 12 % |
+| Galerkin projection einsums (`piq,iqjr,Pjr` + `mp,pPmn,nP`) | 0.29 s | 4 %  |
+| `_lagrange4` + `np.stack` etc.                       | 0.35 s | 5 %   |
+| EFIE fill + dense solve (everything else)            | <0.1 s | <1 %  |
+
+So ~90 % of a warm Sommerfeld solve is the per-pair remainder assembly,
+dominated by the O(N²q²) bicubic interpolation of the four grid surfaces
+(the `eval` gather materializes a `(4, n, 4, 4)` complex block —
+hundreds of MB — and the contraction is memory-bandwidth-bound). PyNEC
+does the analogous per-pair work in compiled scalar loops with no
+intermediates. This is the same interpreter/bandwidth-tax gap Phase 3
+closed for the fill (~30× scalar), now on the assembly.
+
+All three dense/fast Sommerfeld paths funnel through the same two
+Python routines, so one compiled kernel helps every solver:
+- `bspline._Z_sommerfeld_remainder` — dense O(N²) Galerkin block.
+- `sinusoidal._field_tensor_sommerfeld_remainder` — field-tensor form.
+- `hmatrix/array_block._zblock_sommerfeld_remainder` — rectangular
+  sampler the fast solvers call O(N·rank) times through ACA (why Arr/ACA
+  also trail PyNEC on the benchmark, not just the dense bases).
+
+### 4a — pure-Python einsum/interpolation tuning — **REJECTED (measured 2026-07-08)**
+
+Initial reading of cProfile's flat `c_einsum` line suggested the Galerkin
+contraction was the target. Wrapping `np.einsum` to attribute per-caller
+showed that was wrong: the Galerkin einsums are only ~4 % of the solve;
+the cost is the bicubic **interpolation** inside `SommerfeldGrid.eval`.
+Both were then tuned on representative shapes (n≈4×10⁵ points):
+
+- The interpolation contraction `snij,ni,nj->sn` is *already* the fastest
+  form. `optimize=True` (297 ms), a two-step einsum (344 ms), a
+  broadcast-sum (611 ms), and a `matmul`-style split (339 ms) are all
+  **slower** than the current 3-operand call (163 ms). numpy's `c_einsum`
+  handles this small bilinear contraction near-optimally.
+- Avoiding the big `(4,n,4,4)` gather by accumulating over the 16 stencil
+  offsets, or a separable two-pass gather, is also slower (720 / 714 ms
+  vs 559 ms) — 16 advanced-index gathers cost more than one large one.
+
+Conclusion: the assembly is memory-bandwidth-bound numpy with no
+reassociation left to exploit. There is no meaningful pure-Python win;
+the only lever is compiled code with no materialized intermediates
+(register-level per-point contraction). Skip straight to 4b.
+
+### 4b — fused C++ remainder-Galerkin kernel (the real win)
+
+Mirror Phase 3 exactly (pybind11 + OpenMP + pure-Python fallback +
+`cancel_flag` + wheel smoke test all already exist in
+`_accelerators.cpp`). Add one kernel that, per (observer node, source
+node) pair, does the whole assembly inline and accumulates straight into
+the moment-weighted block — fusing eval + `remainder_field_proj` + the
+inner einsum (≈88 % of the time) into a single `omp parallel for` over
+observer segments:
+
+- [ ] Expose the tabulated `SommerfeldGrid` to C++: pass the four surface
+      arrays + axis params (`r1`/`θ` node grids, `r1_max`, region splits)
+      into the kernel. The grid is *built* in C++ already
+      (`somm_six_integrals_batch`); this hands the finished table back
+      down for interpolation. This grid-marshalling is the only genuinely
+      new plumbing vs Phase 3.
+- [ ] Port the 4×4 Lagrange interpolation (`_lagrange4` + the region
+      dispatch in `SommerfeldGrid.eval`) and the eqs 143–147 azimuth /
+      tangent projection (`remainder_field_proj`) to C++ scalar code.
+- [ ] Fold the basis-weighted quadrature (`W`, `polys`) into the same
+      loop so the kernel returns the projected J-block (or Q directly),
+      removing the Python `einsum` entirely for the dense path.
+- [ ] Cross-check vs the Python fallback to ~1e-11/node (same bar as the
+      Phase 3 six-integrals cross-check) and against the golden gn 2
+      gates. Register in `_CANCELLABLE_KERNELS`; poll `cancel_flag` per
+      observer chunk.
+
+Target: the Phase 3 scalar factor (~30×) applied to a 7.5 s warm solve →
+~0.25 s, i.e. parity with PyNEC's 0.18 s on the yagi somm N=81 cell, and
+proportional wins across the matrix. OpenMP across cores on top of that.
+
+### 4c — route the fast solvers through the kernel
+
+- [ ] Point `_zblock_sommerfeld_remainder` (the rectangular ACA sampler
+      shared by HMatrix/ArrayBlock) at the same C++ kernel so the
+      low-rank paths inherit the speedup — they already win structurally
+      on large single wires / arrays (rhombic, bowtiearray2x4); a
+      compiled per-pair kernel is what closes their residual gap to
+      PyNEC too.
+
+### Validation
+
+- [ ] Re-run `scripts/profile_ground_models.py` (antennaknobs) somm
+      column before/after and update the status doc with the new ratios;
+      the win is real only if the O(N²) constant drops, not the scaling.
+- [ ] Full sommerfeld suite green; golden gn 2 gates unchanged within
+      their 1.3× headroom.
+
 ## Non-goals / notes
 
-- `SommerfeldGrid.eval` + einsum assembly (~1.3 s on the yagi) stays
-  numpy for now; revisit only if it dominates after Phases 1–3.
+- Accuracy is still not traded away: grid rtol stays 1e-6 and the 4-point
+  Lagrange interpolation order is preserved through the C++ port (4b is a
+  language port of the *same* arithmetic, not a coarser scheme). The
+  residual few-Ω agreement floor vs nec2c may partly be *their* looser
+  tolerance, and is out of scope here.
 - Accuracy is not traded away: grid rtol stays 1e−6 (the measured
   2.4 Ω agreement floor vs nec2c may partly be *their* looser
   tolerance).
