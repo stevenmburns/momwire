@@ -603,8 +603,9 @@ def test_sommerfeld_self_block_never_aliases_refl():
     half = 0.962 * 22 / 4
     offsets = [(-6.0, 6.0), (6.0, 6.0)]
     z_somm = np.atleast_1d(
-        _ground_array(offsets, [half] * 2, ArrayBlockSolver, **_SOMM)
-        .compute_impedance()[0]
+        _ground_array(
+            offsets, [half] * 2, ArrayBlockSolver, **_SOMM
+        ).compute_impedance()[0]
     )
     z_refl = np.atleast_1d(
         _ground_array(

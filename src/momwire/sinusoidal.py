@@ -1142,9 +1142,7 @@ class SinusoidalSolver(_Cancelable):
                     Phi_s_i = c2 * Phi_s_i - S_s
                     Phi_co_i = c2 * Phi_co_i - S_co
                 else:
-                    Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image_refl(
-                        geom, k
-                    )
+                    Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image_refl(geom, k)
             else:
                 Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image(geom, k)
             Phi_c = Phi_c - Phi_c_i

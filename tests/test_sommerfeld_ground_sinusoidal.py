@@ -191,9 +191,7 @@ def test_inverted_l_tracks_gn2(frac):
     """Junction + vertical-current geometry (exercises the I_z^V/I_rho^V
     surfaces); measured max 0.14 ohm — gate at 0.3."""
     gn2 = GOLDEN[("inverted_l", frac, 10.0, 0.002)]["finite"]
-    z = _solve(
-        "inverted_l", frac, ground_eps=(10.0, 0.002), ground_model="sommerfeld"
-    )
+    z = _solve("inverted_l", frac, ground_eps=(10.0, 0.002), ground_model="sommerfeld")
     assert abs(z - gn2) < 0.3
 
 

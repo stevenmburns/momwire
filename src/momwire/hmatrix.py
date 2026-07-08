@@ -822,8 +822,10 @@ class HMatrixSolver(BSplineSolver):
         ctx = self._context()
         n = ctx["n_basis"]
         grounded = self.ground_z is not None
-        somm = grounded and self.ground_eps is not None and (
-            self.ground_model == "sommerfeld"
+        somm = (
+            grounded
+            and self.ground_eps is not None
+            and (self.ground_model == "sommerfeld")
         )
         if somm:
             eps_t, c2 = self._somm_eps_c2()
@@ -936,9 +938,7 @@ class HMatrixSolver(BSplineSolver):
         if refl:
             mirror_J = True
             eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-            phi_c0, phi_c1 = _ground_refl.phi_mode_coeffs(
-                self.ground_phi_mode, eps_t
-            )
+            phi_c0, phi_c1 = _ground_refl.phi_mode_coeffs(self.ground_phi_mode, eps_t)
 
             def _call(*args):
                 return _acc.bspline_assemble_offedge_block_refl(
@@ -947,9 +947,7 @@ class HMatrixSolver(BSplineSolver):
         else:
 
             def _call(*args):
-                return _acc.bspline_assemble_offedge_block(
-                    *args, self._cancel_flag
-                )
+                return _acc.bspline_assemble_offedge_block(*args, self._cancel_flag)
 
         supp_seg = ctx["supp_seg"]
         polys = ctx["polys"]
