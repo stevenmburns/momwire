@@ -142,14 +142,33 @@ def test_remainder_block_symmetric():
     assert asym < 5e-3
 
 
-def test_fast_solvers_fall_back_to_dense():
-    """HMatrix/ArrayBlock gate sommerfeld to the dense path (their
-    per-block image fills bake refl-coef physics) — results must equal
-    the dense BSplineSolver bit-for-bit."""
+def test_fast_solvers_match_dense():
+    """HMatrix/ArrayBlock run sommerfeld on the FAST path since the
+    sommerfeld-everywhere work (C2-scaled PEC-image blocks + one global
+    low-rank remainder term) — results must match the dense BSplineSolver
+    at ACA/GMRES tolerance, and the global remainder must actually be
+    low rank (measured 8-17 on this dipole; ~50 is the plan's
+    reconsider-the-architecture trigger)."""
     z_dense = _solve("dipole", 0.1, **SOMM)
     for cls in (HMatrixSolver, ArrayBlockSolver):
-        z_fast = _solve("dipole", 0.1, cls=cls, **SOMM)
-        assert abs(z_fast - z_dense) / abs(z_dense) < 1e-12, cls.__name__
+        s = _solver("dipole", 0.1, cls=cls, **SOMM)
+        z_fast, _ = s.compute_impedance()
+        assert abs(z_fast - z_dense) / abs(z_dense) < 1e-3, cls.__name__
+        assert s._last_somm_rank < 50, cls.__name__
+
+
+def test_rect_remainder_matches_dense_block():
+    """The fast solvers' rectangular remainder sampler on the full index
+    range reproduces the dense Galerkin remainder block — same dyad
+    algebra, same shared grid, different plumbing."""
+    s = _solver("dipole", 0.05, cls=HMatrixSolver, **SOMM)
+    geom = s._build_geometry()
+    supp_seg, polys, *_ = s._build_basis_polynomials(geom)
+    eps_t = _ground_refl.eps_tilde(s.ground_eps, s.omega, s.eps)
+    q_dense = s._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+    idx = np.arange(supp_seg.shape[0])
+    q_rect = s._zblock_sommerfeld_remainder(idx, idx, eps_t=eps_t)
+    assert np.max(np.abs(q_rect - q_dense)) / np.max(np.abs(q_dense)) < 1e-10
 
 
 # ---------------------------------------------------------------------------

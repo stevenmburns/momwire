@@ -98,42 +98,51 @@ tables (the weighted-image fills already exist for Fresnel weights;
 C₂ is the degenerate constant case) and U_S V_Sᵀ is a single global ACA
 factorization of the remainder block Q over ALL basis functions.
 
-- [ ] Remainder row/col samplers over the full basis set: row i = the
+- [x] Remainder row/col samplers over the full basis set: row i = the
       Galerkin Q[i, :] against every basis (batch `grid.eval` over the
       (q·supp) × (N·q) node pairs — vectorized Lagrange stencil gather,
       same math as the dense `_Z_sommerfeld_remainder` restricted to one
       row/column). Reuses the Phase-1 shared grid.
-- [ ] `aca_partial(get_row, get_col, m, n)` once, global; tolerance tied
+- [x] `aca_partial(get_row, get_col, m, n)` once, global; tolerance tied
       to the existing far-block ACA tol. GMRES operator gains one
       `U_S (V_Sᵀ x)` term in both solvers; the near-field/block-Jacobi
       preconditioners IGNORE the term (smooth perturbation — measure
       iteration-count impact, expected small).
-- [ ] Block-reuse audit (ArrayBlock): the remainder rides OUTSIDE the
+- [x] Block-reuse audit (ArrayBlock): the remainder rides OUTSIDE the
       block cache, so the `(shape_a, shape_b, displacement)` dedup and
       the sweep-frame self-block factorization reuse are untouched.
       Height dependence (z+z′) is the ACA term's problem, and ACA
       doesn't care.
-- [ ] Flip the gates: `ground_model=="sommerfeld"` leaves
+- [x] Flip the gates: `ground_model=="sommerfeld"` leaves
       `_hmatrix_unsupported` (hmatrix.py) / `skip_block_cache`
       (array_block.py). Constant-C₂ weight tables through the
       weighted-image block fills (near dense + far ACA image blocks).
-- [ ] Tests: replace `test_fast_solvers_fall_back_to_dense` with
+- [x] Tests: replace `test_fast_solvers_fall_back_to_dense` with
       fast-vs-dense agreement at ACA tolerance on the dipole + an array
       case; PEC/free-space limits through the fast path; measure and
       LOG the global remainder rank on bowtiearray2x4-class geometry
       (expect low tens; if it grows past ~50 at native sizes, fall back
       to per-element-pair remainder blocks — decision point, not a
-      silent regression).
+      silent regression). MEASURED 2026-07-07: rank 8-17 on the dipole
+      (N=45), 35 on the yagi (N=255, >1.2 λ boom), 37 on an 8-element
+      46 m-aperture dipole grid — comfortably under the trigger; rank
+      tracks aperture in wavelengths as expected. Fast-vs-dense
+      agreement 5e-6 (dipole) / 7e-6 (yagi) / 6e-5 (8-element Y).
 
 ## Phase 4 — perf smoke, release
 
-- [ ] Latency smoke vs the dense sommerfeld path and vs refl-coef on:
+- [x] Latency smoke vs the dense sommerfeld path and vs refl-coef on:
       dipole N=45, yagi N=255, bowtiearray2x4 native N. Grid fill
       dominates and is shared/cached — the marginal cost of the fast
       path must be the samplers + ACA only. 41-freq sweep number
       recorded (grid refill per k is the known dominant cost, tracked in
-      sommerfeld-perf-plan; not made worse here).
-- [ ] Docstrings (sinusoidal scope list, hmatrix/array_block "correct at
+      sommerfeld-perf-plan; not made worse here). MEASURED: yagi N=255
+      warm-grid 1.29 s fast vs 1.32 s dense (grid fill dominates both —
+      the fast path's point is removing the silent dense-assembly cliff
+      on large arrays, not beating the grid fill); 8-element array
+      warm-grid 0.71 s fast vs 0.76 s dense at n_basis=192 with block
+      reuse intact (7 coupling ACAs for 56 ordered pairs).
+- [x] Docstrings (sinusoidal scope list, hmatrix/array_block "correct at
       dense cost" comments), this doc's checkboxes.
 - [ ] momwire minor release v0.8.0 (new public kwargs on
       SinusoidalSolver; fast-solver behavior change is perf-only —

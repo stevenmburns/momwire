@@ -354,12 +354,28 @@ class ArrayBlock(_Cancelable):
         transposed factors of `(a, b)`).
     """
 
-    def __init__(self, n, groups, shape_of_elem, shape_blocks, coupling, cancel=None):
+    def __init__(
+        self,
+        n,
+        groups,
+        shape_of_elem,
+        shape_blocks,
+        coupling,
+        extra_lowrank=None,
+        cancel=None,
+    ):
         self.n = n
         self.groups = groups
         self.shape_of_elem = shape_of_elem
         self.shape_blocks = shape_blocks
         self.coupling = coupling
+        # Optional global low-rank terms [(I, J, U, V)] on top of the
+        # element decomposition — the Sommerfeld smooth remainder rides
+        # here (docs/sommerfeld-everywhere-plan.md Phase 3), OUTSIDE the
+        # block cache, so shape/displacement dedup and the per-shape
+        # factorisation reuse are untouched. Not part of `near`, so the
+        # block-Jacobi preconditioner ignores it (smooth perturbation).
+        self.extra_lowrank = extra_lowrank or []
         self._cancel = cancel
         # Dense self-blocks as (I, J, D) triples, so the block decomposition is
         # a drop-in for `HMatrixSolver._solve_hmatrix`: its near-field
@@ -380,6 +396,8 @@ class ArrayBlock(_Cancelable):
             y[g] += self.shape_blocks[int(self.shape_of_elem[e])] @ x[g]
         for a, b, U, V in self.coupling:
             y[self.groups[a]] += U @ (V @ x[self.groups[b]])
+        for I, J, U, V in self.extra_lowrank:
+            y[I] += U @ (V @ x[J])
         return y
 
     def matmat(self, X):
@@ -396,12 +414,15 @@ class ArrayBlock(_Cancelable):
             Y[g] += self.shape_blocks[int(self.shape_of_elem[e])] @ X[g]
         for a, b, U, V in self.coupling:
             Y[self.groups[a]] += U @ (V @ X[self.groups[b]])
+        for I, J, U, V in self.extra_lowrank:
+            Y[I] += U @ (V @ X[J])
         return Y
 
     def storage(self):
         """Complex scalars stored (distinct self-blocks + coupling factors)."""
         s = sum(D.size for D in self.shape_blocks.values())
         s += sum(U.size + V.size for _, _, U, V in self.coupling)
+        s += sum(U.size + V.size for _, _, U, V in self.extra_lowrank)
         return s
 
     def stats(self):
@@ -425,6 +446,8 @@ class ArrayBlock(_Cancelable):
             Z[np.ix_(g, g)] = self.shape_blocks[int(self.shape_of_elem[e])]
         for a, b, U, V in self.coupling:
             Z[np.ix_(self.groups[a], self.groups[b])] = U @ V
+        for I, J, U, V in self.extra_lowrank:
+            Z[np.ix_(I, J)] += U @ V
         return Z
 
 
@@ -528,14 +551,17 @@ class ArrayBlockSolver(HMatrixSolver):
     def _hmatrix_unsupported(self):
         """ArrayBlock supports PEC ground via the per-block image term (the
         free-space block reuse survives the image method for a grid array — see
-        `build_array_blocks`) and, since Phase 5, the reflection-coefficient
-        finite ground too: the Fresnel weights depend only on relative
-        displacement + heights, exactly what the grounded block keys already
-        carry, so block reuse is untouched and only the image fills change.
-        Falls back to the dense path for singular enrichment and for the
-        Sommerfeld finite ground (no fast per-block Sommerfeld fill yet —
-        docs/sommerfeld-ground-plan.md Phase 5)."""
-        return self.use_singular_enrichment or self.ground_model == "sommerfeld"
+        `build_array_blocks`), the reflection-coefficient finite ground (the
+        Fresnel weights depend only on relative displacement + heights,
+        exactly what the grounded block keys already carry), and the
+        Sommerfeld finite ground: the singular part is the C2-scaled PEC
+        image (same keys again — C2 is a per-frequency constant), and the
+        smooth remainder rides `ArrayBlock.extra_lowrank` as ONE global
+        low-rank term outside the block cache, so shape/displacement dedup
+        and per-shape factorisation reuse are untouched
+        (docs/sommerfeld-everywhere-plan.md Phase 3). Falls back to the
+        dense path only for singular enrichment."""
+        return self.use_singular_enrichment
 
     def array_partition(self, tol=1e-6):
         """Element/shape partition of the bases (cached)."""
@@ -573,11 +599,13 @@ class ArrayBlockSolver(HMatrixSolver):
         # The Fresnel-weighted image block depends on the ground constants
         # and the Φ mode too — a PEC-image block must never alias a
         # ground_eps one (or one for different ground constants) in the
-        # module-scope cache.
+        # module-scope cache. ground_model joins the key: a sommerfeld
+        # self-block (C2-scaled image) must never alias a refl-coef one
+        # for the same constants.
         ekey = (
             None
             if self.ground_eps is None
-            else (repr(self.ground_eps), self.ground_phi_mode)
+            else (repr(self.ground_eps), self.ground_phi_mode, self.ground_model)
         )
         return (
             sig,
@@ -611,7 +639,7 @@ class ArrayBlockSolver(HMatrixSolver):
             None if self.ground_z is None else float(self.ground_z),
             None
             if self.ground_eps is None
-            else (repr(self.ground_eps), self.ground_phi_mode),
+            else (repr(self.ground_eps), self.ground_phi_mode, self.ground_model),
         )
         op = _ARRAY_OP_CACHE.get(key)
         if op is None:
@@ -666,6 +694,13 @@ class ArrayBlockSolver(HMatrixSolver):
         part = self.array_partition()
         ctx = self._context()
         n = ctx["n_basis"]
+        somm = (
+            self.ground_z is not None
+            and self.ground_eps is not None
+            and self.ground_model == "sommerfeld"
+        )
+        if somm:
+            eps_t, c2 = self._somm_eps_c2()
 
         # Element centroids, from each element's own segment midpoints (translated
         # elements differ by exactly the displacement, so rounding to the grouping
@@ -720,8 +755,12 @@ class ArrayBlockSolver(HMatrixSolver):
                     # one-factorisation-per-class cost is unchanged. Under
                     # ground_eps the weighted image replaces the PEC one; its
                     # weights depend only on displacement + heights, which the
-                    # block key already carries.
-                    if self.ground_eps is not None:
+                    # block key already carries. Sommerfeld's singular part is
+                    # C2 x the PEC image (the smooth remainder rides the
+                    # global extra_lowrank term, outside the block cache).
+                    if somm:
+                        blk = blk - c2 * self._zblock_image(g, g, k=k)
+                    elif self.ground_eps is not None:
                         blk = blk - self._zblock_image_refl(g, g, k=k)
                     else:
                         blk = blk - self._zblock_image(g, g, k=k)
@@ -775,6 +814,19 @@ class ArrayBlockSolver(HMatrixSolver):
                 coupling.append((a, b, hit[0], hit[1]))
 
         self._last_n_coupling_aca = n_aca
+
+        extra_lowrank = None
+        if somm:
+            U, V = self._sommerfeld_global_lowrank(k, eps_t)
+            idx = np.arange(n, dtype=np.int64)
+            extra_lowrank = [(idx, idx, U, -V)]  # Z subtracts the remainder
+
         return ArrayBlock(
-            n, part.groups, shp, shape_blocks, coupling, cancel=self._cancel
+            n,
+            part.groups,
+            shp,
+            shape_blocks,
+            coupling,
+            extra_lowrank=extra_lowrank,
+            cancel=self._cancel,
         )

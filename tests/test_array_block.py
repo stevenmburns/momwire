@@ -461,10 +461,11 @@ def test_reset_array_caches_clears_state():
 # ---- PEC ground: per-block image term --------------------------------------
 
 
-def _ground_array(offsets, halves, solver, ground_z=0.0, nsegs=14, degree=2):
-    """`solver` for a dipole array above a PEC plane at `ground_z`. `offsets`
-    are (y, z) element centres; raising z above the plane gives a near-field
-    self-image. Mirrors `_array_solver` but with `ground_z` set."""
+def _ground_array(offsets, halves, solver, ground_z=0.0, nsegs=14, degree=2, **extra):
+    """`solver` for a dipole array above a ground plane at `ground_z`.
+    `offsets` are (y, z) element centres; raising z above the plane gives a
+    near-field self-image. Mirrors `_array_solver` but with `ground_z` set;
+    `extra` forwards finite-ground kwargs (ground_eps, ground_model)."""
     wires = [_dipole_wire(h, y=y, z=z) for (y, z), h in zip(offsets, halves)]
     return solver(
         wires=wires,
@@ -473,6 +474,7 @@ def _ground_array(offsets, halves, solver, ground_z=0.0, nsegs=14, degree=2):
         wavelength=22.0,
         feeds=[(i, None, 1.0 + 0.0j) for i in range(len(wires))],
         ground_z=ground_z,
+        **extra,
     )
 
 
@@ -554,6 +556,62 @@ def test_ground_single_height_grid_reuses_one_block_per_shape():
     AB = sim.build_array_blocks()
     assert len(AB.shape_blocks) == 1  # one shape, one height
     assert sim._last_n_coupling_aca == 3  # displacements {1,2,3}·spacing
+
+
+_SOMM = {"ground_eps": (10.0, 0.002), "ground_model": "sommerfeld"}
+
+
+def test_sommerfeld_array_matches_dense():
+    """ArrayBlock + Sommerfeld ground runs on the FAST path (C2-scaled
+    image blocks + one global low-rank remainder in `extra_lowrank`) and
+    matches the dense bspline sommerfeld Y at ACA/GMRES tolerance."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    # z-centre 6.0: the vertical dipoles (half ~5.29) must sit strictly
+    # above the plane for sommerfeld (min z ~0.71).
+    offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
+    sim = _ground_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16, **_SOMM)
+    ya = sim.compute_y_matrix()
+    yd = _ground_array(
+        offsets, [half] * 4, BSplineSolver, nsegs=16, **_SOMM
+    ).compute_y_matrix()
+    assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-3
+    assert sim._last_somm_rank < 50
+
+
+def test_sommerfeld_block_reuse_intact():
+    """The global remainder term lives OUTSIDE the block cache: on a
+    single-height grid the sommerfeld solve keeps one self-block per
+    shape and the displacement-keyed coupling dedup, exactly like PEC."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    # z-centre 6.0: the vertical dipoles (half ~5.29) must sit strictly
+    # above the plane for sommerfeld (min z ~0.71).
+    offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
+    sim = _ground_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16, **_SOMM)
+    AB = sim.build_array_blocks()
+    assert len(AB.shape_blocks) == 1  # one shape, one height
+    assert sim._last_n_coupling_aca == 3  # displacements {1,2,3}·spacing
+    assert len(AB.extra_lowrank) == 1  # the one global remainder term
+
+
+def test_sommerfeld_self_block_never_aliases_refl():
+    """A sommerfeld self-block (C2-scaled image) and a refl-coef one for
+    the same ground constants must key differently in the module cache —
+    the impedances differ by the remainder + weighting physics."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(-6.0, 6.0), (6.0, 6.0)]
+    z_somm = np.atleast_1d(
+        _ground_array(offsets, [half] * 2, ArrayBlockSolver, **_SOMM)
+        .compute_impedance()[0]
+    )
+    z_refl = np.atleast_1d(
+        _ground_array(
+            offsets, [half] * 2, ArrayBlockSolver, ground_eps=(10.0, 0.002)
+        ).compute_impedance()[0]
+    )
+    assert np.max(np.abs(z_somm - z_refl)) > 0.1  # distinct physics came out
 
 
 def test_ground_mixed_height_refines_blocks_and_stays_correct():

@@ -42,7 +42,7 @@ import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 
 from .bspline import BSplineSolver
-from . import _ground_refl
+from . import _ground_refl, _sommerfeld
 from ._bspline_kernels import (
     _seg_seg_full_moments_offedge,
     _seg_seg_reg_moments,
@@ -587,6 +587,130 @@ class HMatrixSolver(BSplineSolver):
             wPhi = np.full(wA.shape, complex(wPhi))
         return wA, wPhi
 
+    def _somm_eps_c2(self):
+        """(eps_t, C2) for the sommerfeld decomposition at the current
+        omega. C2 = (eps-1)/(eps+1) is the exact-image coefficient: the
+        C2-weighted image block is just C2 x the PEC-image block, so the
+        fully-accelerated PEC image paths serve it with one scalar."""
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        return eps_t, (eps_t - 1.0) / (eps_t + 1.0)
+
+    def _somm_nodes(self, ctx):
+        """k-independent per-geometry quadrature tables for the rectangular
+        Sommerfeld-remainder sampler: GL nodes along every segment, the
+        u^p moment weights W (the quadrature dual of the J-block moments,
+        so `polys` applies unchanged), and the GLOBAL grid extent — every
+        rectangular block must query ONE shared grid, so the extent comes
+        from all endpoint pairs, not the block's own. Memoised on the
+        hm-context dict (same lifetime as the geometry)."""
+        cached = ctx.get("somm_nodes")
+        if cached is not None:
+            return cached
+        seg_l = ctx["seg_l"]
+        seg_r = ctx["seg_r"]
+        h = ctx["geom"]["h_per_seg"]
+        d = self.degree
+        q = self.n_qp_sommerfeld
+        xg, wg = leggauss(q)
+        tq = 0.5 * (xg + 1.0)
+        nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
+        u_phys = h[:, None] * tq[None, :]
+        w_node = 0.5 * h[:, None] * wg[None, :]
+        W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
+        gz = self.ground_z
+        ex = np.concatenate([seg_l, seg_r])
+        dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
+        dye = ex[:, 1][:, None] - ex[:, 1][None, :]
+        hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
+        r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+        zmin = min(seg_l[:, 2].min(), seg_r[:, 2].min()) - gz
+        if zmin <= 0.0:
+            raise ValueError(
+                "ground_model='sommerfeld' requires every wire strictly "
+                f"above ground_z (min height above plane: {zmin:.3g})"
+            )
+        cached = {"nodes": nodes, "W": W, "q": q, "r1_max": r1_max}
+        ctx["somm_nodes"] = cached
+        return cached
+
+    def _zblock_sommerfeld_remainder(self, I, J, k=None, eps_t=None):
+        """Rectangular Galerkin block Q[I][:, J] of the smooth Sommerfeld
+        remainder — `BSplineSolver._Z_sommerfeld_remainder` restricted to
+        a basis rectangle, built on the shared `remainder_field_proj`
+        dyad algebra and the module grid cache. This is the ACA sampler
+        for the global low-rank remainder term: rows keep I small, and
+        the kernel is smooth everywhere (the image term absorbed the
+        singularity), so no same-edge special-casing exists."""
+        if k is None:
+            k = self.k
+        ctx = self._context()
+        supp_seg = ctx["supp_seg"]
+        polys = ctx["polys"]
+        tang = ctx["tangents"]
+        if eps_t is None:
+            eps_t, _c2 = self._somm_eps_c2()
+        sn = self._somm_nodes(ctx)
+        nodes, W, q = sn["nodes"], sn["W"], sn["q"]
+        grid = self._somm_grid(eps_t, sn["r1_max"])
+
+        I = np.asarray(I, dtype=np.int64)
+        J = np.asarray(J, dtype=np.int64)
+        seg_I = np.unique(supp_seg[I].ravel())
+        seg_J = np.unique(supp_seg[J].ravel())
+        self._checkpoint()  # per sampled rectangle (ACA row/col granularity)
+        proj = _sommerfeld.remainder_field_proj(
+            nodes[seg_I].reshape(-1, 3),
+            np.repeat(tang[seg_I], q, axis=0),
+            nodes[seg_J].reshape(-1, 3),
+            np.repeat(tang[seg_J], q, axis=0),
+            self.ground_z,
+            k,
+            grid,
+        )
+        fq = proj.reshape(seg_I.size, q, seg_J.size, q)
+        Jf = np.einsum("piq,iqjr,Pjr->pPij", W[:, seg_I], fq, W[:, seg_J])
+
+        d = self.degree
+        loc_I = np.searchsorted(seg_I, supp_seg[I])
+        loc_J = np.searchsorted(seg_J, supp_seg[J])
+        pI = polys[I]
+        pJ = polys[J]
+        Q = np.zeros((I.size, J.size), dtype=np.complex128)
+        for a in range(d + 1):
+            sm = loc_I[:, a]
+            for b in range(d + 1):
+                sc = loc_J[:, b]
+                J_blk = Jf[:, :, sm[:, None], sc[None, :]]
+                Q += np.einsum("mp,pPmn,nP->mn", pI[:, a, :], J_blk, pJ[:, b, :])
+        return Q
+
+    def _sommerfeld_global_lowrank(self, k, eps_t):
+        """One global ACA factorization (U, V) of the remainder block Q
+        over ALL bases. Q is smooth everywhere, hence globally low rank;
+        carrying it as a single extra low-rank term leaves the block
+        partition, matvec, and preconditioners untouched (the operator
+        subtracts it: Z = free - C2*image - Q). Rank is recorded on
+        `self._last_somm_rank` — if it ever grows past ~50 at native
+        sizes, per-pair remainder fills become the better trade
+        (docs/sommerfeld-everywhere-plan.md Phase 3 decision point)."""
+        ctx = self._context()
+        n = ctx["n_basis"]
+        idx = np.arange(n, dtype=np.int64)
+
+        def get_row(i):
+            return self._zblock_sommerfeld_remainder(
+                idx[i : i + 1], idx, k=k, eps_t=eps_t
+            ).ravel()
+
+        def get_col(j):
+            return self._zblock_sommerfeld_remainder(
+                idx, idx[j : j + 1], k=k, eps_t=eps_t
+            ).ravel()
+
+        U, V = aca_partial(get_row, get_col, n, n, tol=self.aca_tol)
+        self._last_somm_rank = U.shape[1]
+        return U, V
+
     def _zblock_image_refl(self, I, J, k=None):
         """Fresnel-weighted image sub-block for `ground_eps` — the
         reflection-coefficient counterpart of `_zblock_image`, subtracted
@@ -698,6 +822,11 @@ class HMatrixSolver(BSplineSolver):
         ctx = self._context()
         n = ctx["n_basis"]
         grounded = self.ground_z is not None
+        somm = grounded and self.ground_eps is not None and (
+            self.ground_model == "sommerfeld"
+        )
+        if somm:
+            eps_t, c2 = self._somm_eps_c2()
 
         near_blocks = []
         for s, t in part["near"]:
@@ -705,7 +834,12 @@ class HMatrixSolver(BSplineSolver):
             I, J = s.indices, t.indices
             D = self.zblock(I, J, k=k)
             if grounded:
-                if self.ground_eps is not None:
+                if somm:
+                    # C2-weighted exact image = C2 x the PEC-image block;
+                    # the smooth remainder rides the single global
+                    # low-rank term appended below.
+                    D = D - c2 * self._zblock_image(I, J, k=k)
+                elif self.ground_eps is not None:
                     D = D - self._zblock_image_refl(I, J, k=k)
                 else:
                     D = D - self._zblock_image(I, J, k=k)
@@ -750,6 +884,15 @@ class HMatrixSolver(BSplineSolver):
                     and not admissible(s, t, p_eta)
                 ):
                     precond_extra.append((I, J, U @ V))
+
+        if somm:
+            # The smooth remainder as ONE extra global low-rank far block
+            # (Z subtracts Q, so the factors carry the minus). Not in the
+            # near list, so the GMRES preconditioner ignores it — a smooth
+            # perturbation it converges through.
+            U, V = self._sommerfeld_global_lowrank(k, eps_t)
+            idx = np.arange(n, dtype=np.int64)
+            far_blocks.append((idx, idx, U, -V))
 
         return HMatrix(
             n, near_blocks, far_blocks, precond_extra=precond_extra, cancel=self._cancel
@@ -941,7 +1084,13 @@ class HMatrixSolver(BSplineSolver):
         if self.ground_z is None:
             return row_f, col_f, dense_f
 
-        refl = self.ground_eps is not None
+        # Sommerfeld: the singular ground part is C2 x the PEC image (the
+        # smooth remainder lives in the operator's single global low-rank
+        # term, NOT in per-block fills), so the PEC-image evaluators serve
+        # it with one scalar. Refl-coef keeps its Fresnel-weighted fills.
+        somm = self.ground_eps is not None and self.ground_model == "sommerfeld"
+        refl = self.ground_eps is not None and not somm
+        scale = self._somm_eps_c2()[1] if somm else 1.0
         if use_accel and (_HAVE_OFFEDGE_BLOCK_REFL_ACCEL or not refl):
             row_i, col_i, dense_i = self._offedge_block_evaluators(
                 ctx, I, J, k, mirror_J=True, refl=refl
@@ -969,13 +1118,13 @@ class HMatrixSolver(BSplineSolver):
                 return self._zblock_image(I, J, k=k)
 
         def get_row(i):
-            return row_f(i) - row_i(i)
+            return row_f(i) - scale * row_i(i)
 
         def get_col(j):
-            return col_f(j) - col_i(j)
+            return col_f(j) - scale * col_i(j)
 
         def dense():
-            return dense_f() - dense_i()
+            return dense_f() - scale * dense_i()
 
         return get_row, get_col, dense
 
@@ -1037,19 +1186,18 @@ class HMatrixSolver(BSplineSolver):
         return X
 
     def _hmatrix_unsupported(self):
-        """The H-matrix path supports free space and PEC ground (the latter via
-        the per-block image term folded into the near/far block fill — see
-        `build_hmatrix` and `_offedge_aca_evaluators`) as well as the
-        reflection-coefficient finite ground (`ground_eps`, Phase 5: near
-        blocks via `_zblock_image_refl`, far blocks via the in-kernel Fresnel
-        weighting in `bspline_assemble_offedge_block_refl`). Falls back to
-        the dense path for singular enrichment (its image reaction isn't
-        implemented; the constructor already forbids enrichment + ground)
-        and for the Sommerfeld finite ground (the per-block image fills
-        bake refl-coef physics — correct-at-dense-cost until a fast
-        Sommerfeld block fill exists, docs/sommerfeld-ground-plan.md
-        Phase 5)."""
-        return self.use_singular_enrichment or self.ground_model == "sommerfeld"
+        """The H-matrix path supports free space, PEC ground (per-block
+        image term folded into the near/far block fill — see
+        `build_hmatrix` and `_offedge_aca_evaluators`), the reflection-
+        coefficient finite ground (`ground_eps`, Phase 5: near blocks via
+        `_zblock_image_refl`, far blocks via the in-kernel Fresnel
+        weighting in `bspline_assemble_offedge_block_refl`), and the
+        Sommerfeld finite ground (C2-scaled PEC-image blocks + one global
+        low-rank remainder term — docs/sommerfeld-everywhere-plan.md
+        Phase 3). Falls back to the dense path only for singular
+        enrichment (its image reaction isn't implemented; the constructor
+        already forbids enrichment + ground)."""
+        return self.use_singular_enrichment
 
     def _build_operator(self):
         """Build the fast operator the constrained solve runs GMRES on. The
