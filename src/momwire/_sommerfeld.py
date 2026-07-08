@@ -658,9 +658,7 @@ def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid):
         tz_src[None, :] * surf["IrhoV"] + th_src[None, :] * cphi * surf["IrhoH"]
     )
     e_phi = g * th_src[None, :] * sphi * surf["IphiH"]
-    e_z = g * (
-        tz_src[None, :] * surf["IzV"] - th_src[None, :] * cphi * surf["IrhoV"]
-    )
+    e_z = g * (tz_src[None, :] * surf["IzV"] - th_src[None, :] * cphi * surf["IrhoV"])
     return (
         t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
         + t_obs[:, 1][:, None] * (dhy * e_rho + dhx * e_phi)
