@@ -980,50 +980,16 @@ class BSplineSolver(_Cancelable):
         n_nodes = n_seg * q
         src = nodes.reshape(n_nodes, 3)
         t_src = np.repeat(tang, q, axis=0)
-        th_src = np.hypot(t_src[:, 0], t_src[:, 1])
-        safe_t = th_src > 1e-12
-        ux = np.where(safe_t, t_src[:, 0] / np.where(safe_t, th_src, 1.0), 1.0)
-        uy = np.where(safe_t, t_src[:, 1] / np.where(safe_t, th_src, 1.0), 0.0)
-        tz_src = t_src[:, 2]
-        src_hz = src[:, 2] - gz
 
         Jf = np.empty((d + 1, d + 1, n_seg, n_seg), dtype=np.complex128)
         chunk = max(1, (1 << 19) // max(n_nodes * q, 1))
-        tiny = 1e-12 * r1_max
         for i0 in range(0, n_seg, chunk):
             self._checkpoint()  # per observer chunk of the eval+einsum block
             i1 = min(i0 + chunk, n_seg)
             obs = nodes[i0:i1].reshape(-1, 3)
             t_obs = np.repeat(tang[i0:i1], q, axis=0)
-            dx = obs[:, 0][:, None] - src[:, 0][None, :]
-            dy = obs[:, 1][:, None] - src[:, 1][None, :]
-            rho = np.hypot(dx, dy)
-            hh = (obs[:, 2] - gz)[:, None] + src_hz[None, :]
-            r1 = np.sqrt(rho * rho + hh * hh)
-            surf = grid.eval(r1, np.arctan2(hh, rho))
-            g = np.exp(-1j * self.k * r1) / r1
-
-            safe_r = rho > tiny
-            inv_rho = np.where(safe_r, 1.0 / np.where(safe_r, rho, 1.0), 0.0)
-            # rho -> 0: the incidence azimuth degenerates; I_rho^H(90 deg)
-            # = -I_phi^H there (unit-tested in the engine suite), so any
-            # d-hat works — use the source horizontal direction.
-            dhx = np.where(safe_r, dx * inv_rho, ux[None, :])
-            dhy = np.where(safe_r, dy * inv_rho, uy[None, :])
-            cphi = ux[None, :] * dhx + uy[None, :] * dhy
-            sphi = ux[None, :] * dhy - uy[None, :] * dhx
-
-            e_rho = g * (
-                tz_src[None, :] * surf["IrhoV"] + th_src[None, :] * cphi * surf["IrhoH"]
-            )
-            e_phi = g * th_src[None, :] * sphi * surf["IphiH"]
-            e_z = g * (
-                tz_src[None, :] * surf["IzV"] - th_src[None, :] * cphi * surf["IrhoV"]
-            )
-            proj = (
-                t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
-                + t_obs[:, 1][:, None] * (dhy * e_rho + dhx * e_phi)
-                + t_obs[:, 2][:, None] * e_z
+            proj = _sommerfeld.remainder_field_proj(
+                obs, t_obs, src, t_src, gz, self.k, grid
             )
             fq = proj.reshape(i1 - i0, q, n_seg, q)
             Jf[:, :, i0:i1, :] = np.einsum("piq,iqjr,Pjr->pPij", W[:, i0:i1], fq, W)

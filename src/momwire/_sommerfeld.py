@@ -611,6 +611,63 @@ class SommerfeldGrid:
         return {key: out[s].reshape(shape) for s, key in enumerate(_SURF_KEYS)}
 
 
+def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid):
+    """Projected smooth-remainder field table t_m · F(r_m, r_n) · t_n.
+
+    The theory-manual eqs 143-147 azimuth combination of the four grid
+    surfaces: per (observer point m, source point n), decompose the
+    source tangent into vertical + horizontal parts, combine the
+    interpolated surfaces with the incidence-azimuth factors, and
+    project the resulting E-field on the observer tangent. F is the
+    field of a unit current MOMENT (Il = 1, eq 123 normalization), so
+    quadrature callers weight rows/columns by their own basis shapes
+    and dz measures. Shared by the bspline Galerkin remainder block,
+    the sinusoidal remainder tensor, and the fast solvers' rectangular
+    remainder sampler — one home for the dyad algebra.
+
+    obs (M, 3) / t_obs (M, 3), src (S, 3) / t_src (S, 3); returns
+    (M, S) complex. Callers chunk the observer axis to bound the
+    working set (four surfaces x M x S complexes live at once).
+    """
+    th_src = np.hypot(t_src[:, 0], t_src[:, 1])
+    safe_t = th_src > 1e-12
+    ux = np.where(safe_t, t_src[:, 0] / np.where(safe_t, th_src, 1.0), 1.0)
+    uy = np.where(safe_t, t_src[:, 1] / np.where(safe_t, th_src, 1.0), 0.0)
+    tz_src = t_src[:, 2]
+
+    dx = obs[:, 0][:, None] - src[:, 0][None, :]
+    dy = obs[:, 1][:, None] - src[:, 1][None, :]
+    rho = np.hypot(dx, dy)
+    hh = (obs[:, 2] - ground_z)[:, None] + (src[:, 2] - ground_z)[None, :]
+    r1 = np.sqrt(rho * rho + hh * hh)
+    surf = grid.eval(r1, np.arctan2(hh, rho))
+    g = np.exp(-1j * k * r1) / r1
+
+    tiny = 1e-12 * grid.r1_max
+    safe_r = rho > tiny
+    inv_rho = np.where(safe_r, 1.0 / np.where(safe_r, rho, 1.0), 0.0)
+    # rho -> 0: the incidence azimuth degenerates; I_rho^H(90 deg)
+    # = -I_phi^H there (unit-tested in the engine suite), so any
+    # d-hat works — use the source horizontal direction.
+    dhx = np.where(safe_r, dx * inv_rho, ux[None, :])
+    dhy = np.where(safe_r, dy * inv_rho, uy[None, :])
+    cphi = ux[None, :] * dhx + uy[None, :] * dhy
+    sphi = ux[None, :] * dhy - uy[None, :] * dhx
+
+    e_rho = g * (
+        tz_src[None, :] * surf["IrhoV"] + th_src[None, :] * cphi * surf["IrhoH"]
+    )
+    e_phi = g * th_src[None, :] * sphi * surf["IphiH"]
+    e_z = g * (
+        tz_src[None, :] * surf["IzV"] - th_src[None, :] * cphi * surf["IrhoV"]
+    )
+    return (
+        t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
+        + t_obs[:, 1][:, None] * (dhy * e_rho + dhx * e_phi)
+        + t_obs[:, 2][:, None] * e_z
+    )
+
+
 # ---------------------------------------------------------------------------
 # Module-level grid cache (shared by every solver that consumes the grid)
 # ---------------------------------------------------------------------------

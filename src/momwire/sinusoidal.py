@@ -1094,50 +1094,14 @@ class SinusoidalSolver(_Cancelable):
         n_src = N * q
         srcf = src.reshape(n_src, 3)
         t_src = np.repeat(seg_t, q, axis=0)
-        th_src = np.hypot(t_src[:, 0], t_src[:, 1])
-        safe_t = th_src > 1e-12
-        ux = np.where(safe_t, t_src[:, 0] / np.where(safe_t, th_src, 1.0), 1.0)
-        uy = np.where(safe_t, t_src[:, 1] / np.where(safe_t, th_src, 1.0), 0.0)
-        tz_src = t_src[:, 2]
-        src_hz = srcf[:, 2] - gz
 
         S = np.empty((3, N, N), dtype=np.complex128)
         chunk = max(1, (1 << 19) // max(n_src, 1))
-        tiny = 1e-12 * r1_max
         for i0 in range(0, N, chunk):
             self._checkpoint()  # per observer chunk of the eval block
             i1 = min(i0 + chunk, N)
-            obs = seg_c[i0:i1]
-            t_obs = seg_t[i0:i1]
-            dx = obs[:, 0][:, None] - srcf[:, 0][None, :]
-            dy = obs[:, 1][:, None] - srcf[:, 1][None, :]
-            rho = np.hypot(dx, dy)
-            hh = (obs[:, 2] - gz)[:, None] + src_hz[None, :]
-            r1 = np.sqrt(rho * rho + hh * hh)
-            surf = grid.eval(r1, np.arctan2(hh, rho))
-            g = np.exp(-1j * k * r1) / r1
-
-            safe_r = rho > tiny
-            inv_rho = np.where(safe_r, 1.0 / np.where(safe_r, rho, 1.0), 0.0)
-            # rho -> 0: the incidence azimuth degenerates; I_rho^H(90 deg)
-            # = -I_phi^H there, so any d-hat works — use the source
-            # horizontal direction (same fallback as bspline's block).
-            dhx = np.where(safe_r, dx * inv_rho, ux[None, :])
-            dhy = np.where(safe_r, dy * inv_rho, uy[None, :])
-            cphi = ux[None, :] * dhx + uy[None, :] * dhy
-            sphi = ux[None, :] * dhy - uy[None, :] * dhx
-
-            e_rho = g * (
-                tz_src[None, :] * surf["IrhoV"] + th_src[None, :] * cphi * surf["IrhoH"]
-            )
-            e_phi = g * th_src[None, :] * sphi * surf["IphiH"]
-            e_z = g * (
-                tz_src[None, :] * surf["IzV"] - th_src[None, :] * cphi * surf["IrhoV"]
-            )
-            proj = (
-                t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
-                + t_obs[:, 1][:, None] * (dhy * e_rho + dhx * e_phi)
-                + t_obs[:, 2][:, None] * e_z
+            proj = _sommerfeld.remainder_field_proj(
+                seg_c[i0:i1], seg_t[i0:i1], srcf, t_src, gz, k, grid
             )
             fq = proj.reshape(i1 - i0, N, q)
             S[:, i0:i1, :] = np.einsum("snq,mnq->smn", shp * w_node[None], fq)
