@@ -30,7 +30,7 @@ plumbing. Smoothness is what makes each phase cheap:
 
 ## Phase 1 — shared grid-cache home
 
-- [ ] Move `_SOMM_GRID_CACHE`, `_SOMM_GRID_CACHE_MAX`, `_somm_r1_bucket`
+- [x] Move `_SOMM_GRID_CACHE`, `_SOMM_GRID_CACHE_MAX`, `_somm_r1_bucket`
       and the lookup/build logic from `bspline.py` into `_sommerfeld.py`
       as `get_grid(eps_t, k2, r1_max, omega, mu, cancel_flag)` (module
       FIFO, same `(ε̃, k, r1_bucket, ω, μ)` key, same 128 bound).
@@ -46,12 +46,12 @@ weight by a per-pair dyad, project on the observer tangent"
 already-projected PEC-image tensor, so the C++ `sinusoidal_field_tensor`
 kernel keeps serving it — plus (b) a remainder tensor from the grid.
 
-- [ ] Constructor: `ground_model="refl-coef"` (default) / `"sommerfeld"`
+- [x] Constructor: `ground_model="refl-coef"` (default) / `"sommerfeld"`
       + `n_qp_sommerfeld=3`, validation mirroring bspline (model value
       set; sommerfeld requires `ground_eps`; wires strictly above
       `ground_z` checked at assembly). Default preserves every existing
       result bit-exactly. De-stale the module-docstring scope list.
-- [ ] Remainder tensor S[3, M, N]: for source segment n, GL nodes z'_q
+- [x] Remainder tensor S[3, M, N]: for source segment n, GL nodes z'_q
       along the segment (± half-length, `n_qp_sommerfeld` points);
       source shapes {1, sin(k z'), cos(k z')} at the nodes; F dyad per
       (obs-center m, node q) from `grid.eval(R₁, θ)` with the SAME
@@ -60,26 +60,30 @@ kernel keeps serving it — plus (b) a remainder tensor from the grid.
       projection). Point-matched at observer centers — single (source-
       side) quadrature, no Galerkin double integral. Chunked over
       observers like bspline to bound the working set.
-- [ ] Assembly seam (`_assemble_Z` ground branch):
+- [x] Assembly seam (`_assemble_Z` ground branch):
       `Phi = Phi_free − C₂·Phi_img + S` — sign analysis says the
       remainder ADDS in the field-form tensor convention (bspline's
       subtracted `+Q` is a −⟨f,E⟩ convention artifact); pinned
       empirically against bspline-sommerfeld on a low dipole (see
       tests) exactly the way the ground-plan pinned bspline's signs,
       NOT trusted from this paragraph.
-- [ ] Grid extent from segment endpoints (obs-to-image distance is
+- [x] Grid extent from segment endpoints (obs-to-image distance is
       convex ⇒ endpoint-pair max, same as bspline), `_sommerfeld.
       get_grid` shared cache; swept loops already update `self.omega`
       per k, so per-k ε̃/grids come free.
-- [ ] Tests (`tests/test_sommerfeld_ground.py` additions or sibling
-      file): constructor validation; default-model bit-exactness;
+- [x] Tests (`tests/test_sommerfeld_ground_sinusoidal.py`, 19 tests): constructor validation; default-model bit-exactness;
       free-space limit ε̃=1; PEC-limit collapse to the PEC image at
       ε̃=1e16; swept-vs-single-k; cross-solver pin — sinusoidal-somm vs
       bspline-somm on a dipole at 0.05 λ (remainder ~20 Ω there: a sign
       error is ~2× the effect, unmissable) within the cross-solver
       floor; gn 2 golden gates at the heights the ground-plan used.
-      Payoff: sinusoidal's ~0.1 Ω NEC floor shows Sommerfeld parity
-      much sharper than bspline's ~1.5 Ω floor.
+      Payoff CONFIRMED (measured 2026-07-07, full 39-case gn 2
+      matrix): dipole max 0.10 Ω over 0.02-0.35 λ (0.91 at 0.5 λ, where
+      the image ray runs past nec2c's own 1 λ grid edge), inverted_l
+      max 0.14, yagi max 0.21 — vs bspline's 2.36/2.74/0.98. The
+      sinusoidal suite is now the sharpest validation of the Sommerfeld
+      engine itself. Remainder sign pinned by the 0.05 λ cross-solver
+      test (sin-somm vs bspl-somm 1.45 Ω apart; refl-coef 22 Ω away).
 
 ## Phase 3 — HMatrix/ArrayBlock: one global low-rank remainder term
 

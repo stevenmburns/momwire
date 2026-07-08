@@ -8,9 +8,12 @@ intrinsic to the basis itself versus its kernel / source / junction
 treatment.
 
 Scope (deliberately narrow):
-  * Free space, PEC-image ground (`ground_z`), or NEC-style reflection-
+  * Free space, PEC-image ground (`ground_z`), NEC-style reflection-
     coefficient finite ground (`ground_z` + `ground_eps`, matching NEC's
-    IPERF=0 approximation) — no Sommerfeld ground.
+    IPERF=0 approximation), or Sommerfeld/Norton finite ground
+    (`ground_model="sommerfeld"`, the same C2-image + interpolated
+    smooth-remainder decomposition BSplineSolver uses — see
+    docs/sommerfeld-everywhere-plan.md Phase 2).
   * Thin-wire kernel (Eqs 73-79), no extended thin-wire / current-element.
   * Delta-gap "applied-E" source (Eq 187) on a single basis function.
   * Uniform wire radius across all wires.
@@ -22,7 +25,7 @@ import numpy as np
 import scipy.linalg
 import scipy.sparse
 
-from . import _ground_refl
+from . import _ground_refl, _sommerfeld
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 
@@ -62,6 +65,8 @@ class SinusoidalSolver(_Cancelable):
         nsegs=101,
         ground_z=None,
         ground_eps=None,
+        ground_model="refl-coef",
+        n_qp_sommerfeld=3,
         junctions=None,
         n_qp_const=8,
         cancel=None,
@@ -85,6 +90,22 @@ class SinusoidalSolver(_Cancelable):
         if ground_eps is not None and ground_z is None:
             raise ValueError("ground_eps requires ground_z to be set")
         self.ground_eps = ground_eps
+        # Finite-ground physics model, mirroring BSplineSolver: the
+        # default "refl-coef" keeps every existing result bit-exact;
+        # "sommerfeld" swaps the Fresnel field dyad for NEC's exact
+        # decomposition — constant C2 = (eps-1)/(eps+1) on the PEC image
+        # tensor (the C++ field-tensor kernel keeps serving it, a scalar
+        # commutes with the projection) plus the smooth interpolated
+        # remainder (`_field_tensor_sommerfeld_remainder`).
+        if ground_model not in ("refl-coef", "sommerfeld"):
+            raise ValueError(
+                "ground_model must be 'refl-coef' or 'sommerfeld', "
+                f"got {ground_model!r}"
+            )
+        if ground_model == "sommerfeld" and ground_eps is None:
+            raise ValueError("ground_model='sommerfeld' requires ground_eps")
+        self.ground_model = ground_model
+        self.n_qp_sommerfeld = n_qp_sommerfeld
 
         self.c = 1 / np.sqrt(self.eps * self.mu)
         self.freq = self.c / self.wavelength
@@ -1009,6 +1030,119 @@ class SinusoidalSolver(_Cancelable):
         Phi_cos = _project_weighted(cm["Ez_cos"], cm["Erho_cos"])
         return Phi_const, Phi_sin, Phi_cos
 
+    def _field_tensor_sommerfeld_remainder(self, geom, k, eps_t):
+        """Smooth Sommerfeld-remainder tensor S[3, M, N]: the tangential
+        remainder field of segment n's const/sin/cos source shapes at the
+        center of segment m, from the interpolated SommerfeldGrid F dyad
+        (theory manual eqs 143-147 azimuth combination — the same algebra
+        as `BSplineSolver._Z_sommerfeld_remainder`, minus the observer
+        quadrature: this solver point-matches at segment centers, so only
+        the SOURCE side integrates, GL with `n_qp_sommerfeld` nodes).
+
+        The grid's surfaces are the E-field of a unit current MOMENT
+        (Il = 1, eq 123 normalization), so integrating shape(z')·F dz'
+        along the segment gives the remainder field of the full source
+        distribution — endpoint-charge contributions are inherent in the
+        element superposition, matching the field-form Eqs 76-79 blocks.
+        ADDED in `_assemble_Z` (`Phi_free - C2·Phi_img + S`): the sign is
+        pinned by the cross-solver test against bspline-sommerfeld on a
+        0.05-wl dipole (where the remainder is ~20 ohm, so a sign error
+        is a ~2x miss), not derived here — same discipline as the
+        ground-plan's PEC-limit sign pinning.
+        """
+        gz = self.ground_z
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        h_half = 0.5 * geom["seg_h"]  # (N,)
+        N = geom["n_segs"]
+        zmin = min(seg_l[:, 2].min(), seg_r[:, 2].min()) - gz
+        if zmin <= 0.0:
+            raise ValueError(
+                "ground_model='sommerfeld' requires every wire strictly "
+                f"above ground_z (min height above plane: {zmin:.3g})"
+            )
+
+        q = self.n_qp_sommerfeld
+        gx, gw = self._leggauss_cached(q)
+        zloc = h_half[:, None] * gx[None, :]  # (N, q) local arc offsets
+        src = seg_c[:, None, :] + zloc[..., None] * seg_t[:, None, :]
+        w_node = h_half[:, None] * gw[None, :]  # (N, q) dz' weights
+        # Source shapes at the nodes, NATURAL-arc convention like the
+        # free-space tensor (sigma accounting stays the caller's job).
+        shp = np.stack(
+            [np.ones_like(zloc), np.sin(k * zloc), np.cos(k * zloc)]
+        )  # (3, N, q)
+
+        # Grid extent: obs-to-image-point distance is convex in the two
+        # segment parameters, so its max is attained at endpoint pairs.
+        ex = np.concatenate([seg_l, seg_r])
+        dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
+        dye = ex[:, 1][:, None] - ex[:, 1][None, :]
+        hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
+        r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+        grid = _sommerfeld.get_grid(
+            eps_t,
+            k,
+            r1_max,
+            omega=self.omega,
+            mu=self.mu,
+            cancel_flag=self._cancel_flag,
+        )
+
+        n_src = N * q
+        srcf = src.reshape(n_src, 3)
+        t_src = np.repeat(seg_t, q, axis=0)
+        th_src = np.hypot(t_src[:, 0], t_src[:, 1])
+        safe_t = th_src > 1e-12
+        ux = np.where(safe_t, t_src[:, 0] / np.where(safe_t, th_src, 1.0), 1.0)
+        uy = np.where(safe_t, t_src[:, 1] / np.where(safe_t, th_src, 1.0), 0.0)
+        tz_src = t_src[:, 2]
+        src_hz = srcf[:, 2] - gz
+
+        S = np.empty((3, N, N), dtype=np.complex128)
+        chunk = max(1, (1 << 19) // max(n_src, 1))
+        tiny = 1e-12 * r1_max
+        for i0 in range(0, N, chunk):
+            self._checkpoint()  # per observer chunk of the eval block
+            i1 = min(i0 + chunk, N)
+            obs = seg_c[i0:i1]
+            t_obs = seg_t[i0:i1]
+            dx = obs[:, 0][:, None] - srcf[:, 0][None, :]
+            dy = obs[:, 1][:, None] - srcf[:, 1][None, :]
+            rho = np.hypot(dx, dy)
+            hh = (obs[:, 2] - gz)[:, None] + src_hz[None, :]
+            r1 = np.sqrt(rho * rho + hh * hh)
+            surf = grid.eval(r1, np.arctan2(hh, rho))
+            g = np.exp(-1j * k * r1) / r1
+
+            safe_r = rho > tiny
+            inv_rho = np.where(safe_r, 1.0 / np.where(safe_r, rho, 1.0), 0.0)
+            # rho -> 0: the incidence azimuth degenerates; I_rho^H(90 deg)
+            # = -I_phi^H there, so any d-hat works — use the source
+            # horizontal direction (same fallback as bspline's block).
+            dhx = np.where(safe_r, dx * inv_rho, ux[None, :])
+            dhy = np.where(safe_r, dy * inv_rho, uy[None, :])
+            cphi = ux[None, :] * dhx + uy[None, :] * dhy
+            sphi = ux[None, :] * dhy - uy[None, :] * dhx
+
+            e_rho = g * (
+                tz_src[None, :] * surf["IrhoV"] + th_src[None, :] * cphi * surf["IrhoH"]
+            )
+            e_phi = g * th_src[None, :] * sphi * surf["IphiH"]
+            e_z = g * (
+                tz_src[None, :] * surf["IzV"] - th_src[None, :] * cphi * surf["IrhoV"]
+            )
+            proj = (
+                t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
+                + t_obs[:, 1][:, None] * (dhy * e_rho + dhx * e_phi)
+                + t_obs[:, 2][:, None] * e_z
+            )
+            fq = proj.reshape(i1 - i0, N, q)
+            S[:, i0:i1, :] = np.einsum("snq,mnq->smn", shp * w_node[None], fq)
+        return S
+
     def _assemble_Z(self, geom, k):
         Phi_c, Phi_s, Phi_co = self._field_tensor(geom, k)
         if self.ground_z is not None:
@@ -1023,7 +1157,30 @@ class SinusoidalSolver(_Cancelable):
             # unchanged because the weighted tensor reduces to the PEC one
             # in the ε̃ → ∞ limit.
             if self.ground_eps is not None:
-                Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image_refl(geom, k)
+                if self.ground_model == "sommerfeld":
+                    # NEC's decomposition (theory manual eqs 136-147):
+                    # exact image scaled by the constant C2, which absorbs
+                    # all the singular behavior — a plain scalar on the
+                    # projected PEC-image tensor, so the C++ kernel keeps
+                    # serving it — plus the smooth interpolated remainder,
+                    # which ADDS (see the remainder method's docstring for
+                    # the sign pinning). eps->inf: C2 -> 1, S -> 0, PEC
+                    # image exactly; eps -> 1: both vanish, free space.
+                    eps_t = _ground_refl.eps_tilde(
+                        self.ground_eps, self.omega, self.eps
+                    )
+                    c2 = (eps_t - 1.0) / (eps_t + 1.0)
+                    Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image(geom, k)
+                    S_c, S_s, S_co = self._field_tensor_sommerfeld_remainder(
+                        geom, k, eps_t
+                    )
+                    Phi_c_i = c2 * Phi_c_i - S_c
+                    Phi_s_i = c2 * Phi_s_i - S_s
+                    Phi_co_i = c2 * Phi_co_i - S_co
+                else:
+                    Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image_refl(
+                        geom, k
+                    )
             else:
                 Phi_c_i, Phi_s_i, Phi_co_i = self._field_tensor_image(geom, k)
             Phi_c = Phi_c - Phi_c_i
