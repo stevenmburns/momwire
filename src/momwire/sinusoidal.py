@@ -30,6 +30,9 @@ from ._accel import acc as _acc
 from ._cancel import _Cancelable
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
+_HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
+    _acc, "sinusoidal_field_tensor_refl"
+)
 
 _EULER_GAMMA = 0.5772156649015329
 
@@ -997,14 +1000,44 @@ class SinusoidalSolver(_Cancelable):
         free-space and PEC blocks keep using it).
         """
         src_c_img, src_t_img = self._image_source_centers_tangents(geom)
+        cos_th, px, py, tm_p, tn_p = self._image_refl_prep(geom)
+        # ε̃(ω) — per-frequency (the swept loops update self.omega
+        # alongside k before assembling).
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+
+        if _HAVE_FIELD_TENSOR_REFL:
+            # Fused C++ path: Eqs 76-79 field components + the Fresnel
+            # dyad projection in one pass, with rho_v/rho_h computed
+            # in-kernel per pair from eps_t and cos_th (same principal-
+            # branch sqrt as _ground_refl.fresnel_rho). The numpy path
+            # below is the bit-close reference / fallback.
+            seg_c = geom["seg_centers"]
+            seg_t = geom["seg_tangents"]
+            seg_h = geom["seg_h"]
+            gx, gw = self._leggauss_cached(self.n_qp_const)
+            return _acc.sinusoidal_field_tensor_refl(
+                np.ascontiguousarray(seg_c, dtype=np.float64),
+                np.ascontiguousarray(seg_t, dtype=np.float64),
+                np.ascontiguousarray(src_c_img, dtype=np.float64),
+                np.ascontiguousarray(src_t_img, dtype=np.float64),
+                np.ascontiguousarray(seg_h, dtype=np.float64),
+                float(self.wire_radius),
+                float(k),
+                float(self.eta),
+                np.ascontiguousarray(gx, dtype=np.float64),
+                np.ascontiguousarray(gw, dtype=np.float64),
+                np.ascontiguousarray(cos_th, dtype=np.float64),
+                np.ascontiguousarray(px, dtype=np.float64),
+                np.ascontiguousarray(py, dtype=np.float64),
+                np.ascontiguousarray(tm_p, dtype=np.float64),
+                np.ascontiguousarray(tn_p, dtype=np.float64),
+                complex(eps_t),
+                self._cancel_flag,
+            )
+
         cm = self._field_components(
             geom, k, src_centers=src_c_img, src_tangents=src_t_img
         )
-
-        cos_th, px, py, tm_p, tn_p = self._image_refl_prep(geom)
-        # ε̃(ω) and the per-pair Fresnel coefficients — per-frequency (the
-        # swept loops update self.omega alongside k before assembling).
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
         rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
 
         # ρ̂·p̂ from the image-build rho_vec (p̂ is horizontal, so only the

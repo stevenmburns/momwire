@@ -94,6 +94,7 @@ _CANCELLABLE_KERNELS = (
     "assemble_Z_bspline",
     "bspline_assemble_offedge_block",
     "sinusoidal_field_tensor",
+    "sinusoidal_field_tensor_refl",
     "somm_six_integrals_batch",
 )
 
