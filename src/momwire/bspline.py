@@ -42,6 +42,8 @@ multiplier row (the same treatment the retired TriangularSolver used).
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
+import os
+
 import numpy as np
 import scipy.linalg
 from scipy.interpolate import BSpline
@@ -73,6 +75,16 @@ _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
 )
 
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
+
+# Memory budget (MB) for the batched swept path's per-chunk transients
+# (the all-pairs J moment tensor + same-edge reg moment blocks — see
+# `_swept_batched_z_chunks`). Seeded from the environment at import so a
+# memory-constrained deployment can cap peak sweep memory without a code
+# change (e.g. MOMWIRE_SWEPT_MEM_MB=64 on a small shared host). Tests
+# monkeypatch the module global directly. Speed saturates by ~256 (chunk
+# ≈ 8-16 on production shapes); below ~64 the batching win starts eroding
+# (chunk=1 costs ~+75%).
+_SWEPT_MEM_MB = int(os.environ.get("MOMWIRE_SWEPT_MEM_MB", "256"))
 
 
 # Constant Vandermonde inverses for uniform sample points [0, 1/d, ..., 1].
@@ -2025,10 +2037,21 @@ class BSplineSolver(_Cancelable):
         """Yield (c0, ks, Z) stacks of the batched swept assembly, where
         Z is (len(ks), n_basis, n_basis) for k_array[c0 : c0 + len(ks)].
 
-        Chunked so the batched moment tensor J (chunk, nm, nm, N, N)
-        stays cache-resident — past a few MB the per-frequency memory
-        traffic on the big tensor outweighs the batching win (worst on
-        large single-edge wires). Target ~32 MB of J per chunk.
+        The k axis is chunked so the transient moment tensors stay under
+        the `_SWEPT_MEM_MB` budget (module global, seeded from the
+        MOMWIRE_SWEPT_MEM_MB env var; default 256). The budget counts the
+        per-k transients that actually scale with the sweep — the
+        all-pairs J tensor (chunk, nm, nm, N, N) AND the same-edge reg
+        moment slices (chunk, nm, nm, N_e, N_e per edge), both computed
+        per chunk — so peak transient memory ≈ the budget, and a
+        memory-constrained deployment can cap it (e.g. 64–96 on a 2 GB
+        host with concurrent users).
+
+        The tradeoff (measured, single 400-seg dipole, d=2, 41-pt sweep):
+        the batched kernels amortize their per-pair R-table hoists across
+        the chunk's k axis, so tiny chunks re-derive geometry per k —
+        chunk=1 costs ~+75% wall-clock; the win saturates by chunk ≈ 8-16.
+        Budgets below ~64 MB buy little memory and cost real time.
         """
         d = self.degree
         n_k = k_array.shape[0]
@@ -2046,26 +2069,13 @@ class BSplineSolver(_Cancelable):
             seg_l_img = self._image_positions(seg_l)
             seg_r_img = self._image_positions(seg_r)
 
-        # Same-edge reg moments for the FULL sweep up front (sliced per
-        # chunk below). The streaming C++ kernel amortizes its per-pair
-        # R-block hoist across the whole k axis — calling it per chunk
-        # with a handful of k's was measured at >50% of the fandipole
-        # sweep. Memory is per-edge (n_k, nm, nm, N_e, N_e), far smaller
-        # than the all-pairs J tensor.
-        self._checkpoint()  # before the batched reg-moment build over all k
-        reg_all = [
-            _seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)
-            for _sl, _A_st, reg_geo in prep
-        ]
-
-        # Chunk the all-pairs J tensor (chunk, nm, nm, N, N) to bound
-        # memory. The budget trades footprint against per-call
-        # amortization of the off-edge kernel's R-table reuse across k —
-        # at production sizes (N≈400, d=2 ⇒ ~24 MB/k) a small budget
-        # degenerates to chunk=1 and re-derives R every k, so aim high
-        # (256 MB, matching the numpy reg chunker's precedent).
-        bytes_per_k = nm * nm * N * N * 16
-        chunk = max(1, min(n_k, (256 << 20) // max(bytes_per_k, 1)))
+        # Chunk size from the memory budget. Per k, the transients are
+        # the all-pairs J tensor (nm² N² complex) plus the per-edge
+        # same-edge reg moment blocks (nm² ΣN_e² complex); the PEC image
+        # J reuses J's footprint (J is dropped before the image build).
+        sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _A_st, _g in prep)
+        bytes_per_k = nm * nm * (N * N + sum_ne2) * 16
+        chunk = max(1, min(n_k, (_SWEPT_MEM_MB << 20) // max(bytes_per_k, 1)))
 
         def _assemble_swept(J_tensor, td, omega_chunk):
             return _acc.assemble_Z_bspline_swept(
@@ -2086,10 +2096,19 @@ class BSplineSolver(_Cancelable):
             J = _seg_seg_full_moments_offedge_swept(
                 seg_l, seg_r, seg_l, seg_r, self.wire_radius, ks, d, self.n_qp_pair
             )
-            for e, (sl, A_st, _g) in enumerate(prep):
-                J[:, :, :, sl, sl] = A_st[None] + reg_all[e][c0 : c0 + ks.shape[0]]
+            # Same-edge reg moments for this chunk. Computed per chunk —
+            # the streaming kernel amortizes its R hoist over the chunk's
+            # k axis, which captures nearly all of the full-sweep hoist's
+            # win once chunk ≳ 8 while keeping the allocation inside the
+            # memory budget (a full-sweep hoist is O(n_k·nm²·ΣN_e²) —
+            # ~1 GB on a 41-pt sweep of a single 400-seg wire).
+            for sl, A_st, reg_geo in prep:
+                J[:, :, :, sl, sl] = A_st[
+                    None
+                ] + _seg_seg_reg_moments_from_geometry_swept(reg_geo, ks)
             Z = _assemble_swept(J, td_free, omega_chunk)
             if self.ground_z is not None:
+                del J  # let the image tensor reuse J's footprint
                 J_img = _seg_seg_full_moments_offedge_swept(
                     seg_l,
                     seg_r,
