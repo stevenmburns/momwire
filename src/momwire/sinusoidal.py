@@ -711,8 +711,9 @@ class SinusoidalSolver(_Cancelable):
         formulation (`_field_components` + the tangential projection
         below) is kept as a reference / fallback when the accelerator
         isn't available. The finite-ground image block bypasses this
-        method entirely — see `_field_tensor_image_refl`, which needs the
-        unprojected field vectors the C++ kernel discards.
+        method — see `_field_tensor_image_refl`, which applies the
+        Fresnel field dyad pre-projection through its own kernel
+        (`sinusoidal_field_tensor_refl`).
         """
         a = self.wire_radius
         seg_c = geom["seg_centers"]  # (N, 3) — observer centers
@@ -995,9 +996,10 @@ class SinusoidalSolver(_Cancelable):
         and this reduces exactly to `_field_tensor_image` — the ε̃=1e16
         collapse test rides on that. The returned tensors are SUBTRACTED
         in `_assemble_Z` with the same single global minus sign as the PEC
-        image. Always pure numpy: the C++ `sinusoidal_field_tensor` kernel
-        projects before we can weight, so it cannot serve this path (the
-        free-space and PEC blocks keep using it).
+        image. Hot path is the fused C++ `sinusoidal_field_tensor_refl`
+        kernel (Eqs 76-79 + the dyad projection in one pass; ρ_v/ρ_h
+        computed in-kernel per pair); the numpy formulation below is the
+        bit-close reference / fallback.
         """
         src_c_img, src_t_img = self._image_source_centers_tangents(geom)
         cos_th, px, py, tm_p, tn_p = self._image_refl_prep(geom)
