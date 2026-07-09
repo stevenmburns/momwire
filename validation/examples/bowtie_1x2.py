@@ -135,7 +135,7 @@ def _array_geometry(
 
     Element 1's junction wire-indices are shifted by n_wires_per_element
     (=4 for the bowtie). The returned `feeds` list is what
-    TriangularSolver(feeds=...) consumes.
+    BSplineSolver(feeds=...) consumes.
     """
     elem_l = _element_wires(
         slope, length, n_per_long_edge, y_offset=-del_y, z_offset=z_offset
@@ -195,7 +195,7 @@ def _feed_knot_index(
     feed_wire_global: int, feed_arclength: float, knots_per_wire: list[np.ndarray]
 ) -> int:
     """Interior knot of `feed_wire_global` whose arc-length from the wire's
-    start is closest to `feed_arclength`. Mirrors TriangularSolver's
+    start is closest to `feed_arclength`. Mirrors the momwire solvers'
     feed-basis-index convention so the frontend marker matches the actual
     delta-gap source location."""
     feed_knots = knots_per_wire[feed_wire_global]

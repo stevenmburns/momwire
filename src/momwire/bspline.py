@@ -1,6 +1,8 @@
 """Higher-order B-spline Galerkin MoM solver.
 
-`TriangularSolver` is the degree-1 B-spline (tent) special case; this
+The retired TriangularSolver was the degree-1 (tent) special case of this
+solver — d=1 reproduces it to roundoff on knot-fed meshes (see
+tests/test_tent_parity.py); this
 module extends to arbitrary degree d on multi-wire polylines with K-wire
 junctions, primarily as an in-codebase arbiter for the hentenna question
 (NEXT_STEPS.md items 9, 13, 14): does the tent basis converge to the
@@ -18,7 +20,7 @@ Scope:
     NEC-gn 2-style Sommerfeld finite ground (`ground_model="sommerfeld"`,
     docs/sommerfeld-ground-plan.md)
 
-Same as TriangularSolver, but with a polynomial-of-degree-d on each segment
+Tent-basis generalisation: a polynomial-of-degree-d on each segment
 instead of just a linear ramp. Each interior basis Φ_m spans up to d+1
 contiguous segments within a single wire; on each segment in its support
 ("wing") the basis equals Σ_p C[m, w, p] · u^p with u local arc length.
@@ -35,7 +37,7 @@ Galerkin assembly:
 Junction directional bases: at every junction node with K connected wire-
 ends we add K boundary bases (B_0 or B_{N+d-1} of each connected wire,
 the ones with value 1 at the junction) and enforce KCL via a Lagrange-
-multiplier row, mirroring TriangularSolver's treatment.
+multiplier row (the same treatment the retired TriangularSolver used).
 
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
@@ -178,19 +180,20 @@ class BSplineSolver(_Cancelable):
         counts per edge. None for a wire ⇒ use `nsegs` on every edge; int ⇒
         same count for every edge; sequence ⇒ explicit per-edge count.
     degree : B-spline degree (1 ≤ degree ≤ 2 currently; static-moment file
-        only covers max_d=2). d=1 reproduces the tent basis up to the
-        feed-convention difference.
+        only covers max_d=2). d=1 IS the tent basis (it reproduced the
+        retired TriangularSolver to roundoff whenever the feed lands on a
+        knot; for a between-knots feed arclength triangular snapped to the
+        nearest knot while this solver excites the exact arclength).
     feed_wire_index : index of the wire carrying the delta-gap source.
     feed_arclength : arc length along the feed wire at which to evaluate
         Φ_m(s_f). Default: feed wire midpoint.
     junctions : list of [(wire_idx, "start"|"end"), ...] tuples, each entry
-        one junction node where K wire endpoints meet. Same convention as
-        TriangularSolver.
+        one junction node where K wire endpoints meet.
     n_qp_pair : Gauss-Legendre nodes per segment per axis for the smooth-
         kernel piece of same-edge pairs and for all cross-edge / cross-wire
         pairs (full kernel with a² regularization).
-    wavelength, halfdriver_factor, wire_radius, nsegs : as in
-        TriangularSolver.
+    wavelength, halfdriver_factor, wire_radius, nsegs : shared solver
+        conventions (see SinusoidalSolver for the same surface).
     """
 
     eps = 8.8541878188e-12
@@ -1068,7 +1071,7 @@ class BSplineSolver(_Cancelable):
         """All polynomial moment integrals J_pq[i, j] for p, q ∈ {0..d} and
         every (i, j) global segment pair. Returns shape (d+1, d+1, N, N).
 
-        Fused build mirroring TriangularSolver._build_J_blocks: first compute
+        Fused build: first compute
         every pair by full GL quadrature on the regularized full kernel
         G = exp(-jkR)/(4πR), R² = |Δr|² + a²; then overwrite same-edge
         blocks with the analytic static + GL-regularized split (essential
@@ -1299,8 +1302,7 @@ class BSplineSolver(_Cancelable):
     def _solve_with_kcl(self, Z, v, kcl_A):
         """Constrained solve [Z A^T; A 0] [I; λ] = [v; 0] via Schur.
 
-        Identical structure to TriangularSolver._solve_with_kcl. If kcl_A
-        is empty (no junctions), do a plain solve.
+        If kcl_A is empty (no junctions), do a plain solve.
         """
         if kcl_A.shape[0] == 0:
             return scipy.linalg.solve(Z, v)
@@ -1338,8 +1340,9 @@ class BSplineSolver(_Cancelable):
         """k-batched KCL-constrained Schur solve. Z: (n_k, n_b, n_b),
         v: (n_b,) shared across k. Returns (n_k, n_b).
 
-        Port of TriangularSolver._solve_with_kcl_batch — the Schur
-        algebra is basis-agnostic (it only sees Z and kcl_A). Packs the
+        The Schur algebra is basis-agnostic (it only sees Z and kcl_A):
+        solves the saddle-point system [Z Aᵀ; A 0][I; λ] = [v; 0] without
+        materializing the augmented matrix per k. Packs the
         (1 + n_c) right-hand sides into one stacked np.linalg.solve so
         the per-k LU factorisation is paid once.
         """
@@ -1362,8 +1365,8 @@ class BSplineSolver(_Cancelable):
     def _solve_with_kcl_swept_ports(self, Z, V, kcl_A):
         """k- and port-batched KCL-constrained Schur solve.
         Z: (n_k, n_b, n_b), V: (n_b, n_p) shared across k. Returns
-        (n_k, n_b, n_p). Port of
-        TriangularSolver._solve_with_kcl_swept_ports.
+        (n_k, n_b, n_p) — the matrix-RHS generalisation of
+        `_solve_with_kcl_batch`.
         """
         n_k = Z.shape[0]
         n_b, n_p = V.shape
@@ -1853,8 +1856,10 @@ class BSplineSolver(_Cancelable):
     def compute_y_matrix(self) -> np.ndarray:
         """Short-circuit admittance matrix [Y_sc] at the configured feeds.
 
-        See `TriangularSolver.compute_y_matrix` for the math + intent.
-        BSpline's per-feed driving-point current uses the Galerkin
+        Y_sc[i, j] is the current flowing out of port i when port j is
+        driven with V_j = 1 and every other port is held at V_k = 0; the
+        caller can invert it to recover the open-circuit Z matrix used in
+        network analysis. BSpline's per-feed driving-point current uses the Galerkin
         reciprocity I_i = v_i^T · coeffs (inner product of feed i's
         source vector with the solution). Stacking the N source
         vectors as RHS columns and back-substituting once gives
@@ -2099,7 +2104,7 @@ class BSplineSolver(_Cancelable):
             yield c0, ks, Z
 
     def _compute_impedance_swept_batched(self, k_array):
-        """Triangular-style fully batched swept solve: the whole sweep's
+        """Fully batched swept solve: the whole sweep's
         J and Z built in batched C++ calls, one stacked LAPACK solve per
         k-chunk instead of looping compute_impedance per frequency.
         Junctions ride the batched KCL Schur solve.
@@ -2165,7 +2170,7 @@ class BSplineSolver(_Cancelable):
         wl_save = self.wavelength
         omega_save = self.omega
 
-        # Fully batched fast path (triangular-style): build the whole sweep's
+        # Fully batched fast path: build the whole sweep's
         # J / Z / solve in batched calls instead of looping compute_impedance
         # per frequency. Junctions included; see _swept_batched_available
         # for the (enrichment / finite-ground / accel) eligibility rules.

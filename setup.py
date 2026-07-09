@@ -19,7 +19,7 @@ except ImportError:  # pragma: no cover - ancient setuptools
     )
 
 # momwire._accelerators is an *optional* C++ speedup: every module that imports
-# it (triangular, _triangular_kernels, _bspline_kernels, bspline, hmatrix,
+# it (_bspline_kernels, bspline, hmatrix,
 # sinusoidal) guards the import with `try/except ImportError` and falls back to
 # a pure-Python/numpy path. So a platform with no working compiler / libmvec /
 # libomp (musllinux, glibc < 2.28, an arch outside the wheel matrix, or no
@@ -71,7 +71,7 @@ class OptionalBuildExt(build_ext):
 # relies on Homebrew libomp for OpenMP parallelism and lets clang autovectorize
 # the inner loops for NEON. The .cpp guards the libmvec-specific declarations to
 # non-MSVC, non-Apple compilers. If the extension fails to build/import,
-# triangular.py falls back to pure Python.
+# the solvers fall back to pure Python.
 if sys.platform == "win32":
     # OpenMP on MSVC is a minefield for this code: /openmp:experimental rejects
     # unsigned loop indices (the kernels use size_t) and silently drops the

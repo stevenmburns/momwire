@@ -91,10 +91,6 @@ acc, LOADED = _load()
 # only ever catch a single abort type, whether it came from a Python-level
 # checkpoint or from inside a native fill.
 _CANCELLABLE_KERNELS = (
-    "seg_seg_quad_batch_3d",
-    "seg_seg_reg_quad_batch_1d",
-    "assemble_Z",
-    "assemble_Z_general",
     "assemble_Z_bspline",
     "bspline_assemble_offedge_block",
     "sinusoidal_field_tensor",

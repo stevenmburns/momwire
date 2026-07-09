@@ -454,7 +454,7 @@ def pynec_build(req: dict) -> dict:
     if bool(req.get("daisy_chain", False)):
         # NEC's TL card path gave results inconsistent with momwire's
         # network analysis in early testing — both momwire engines
-        # (triangular + sinusoidal) agree with each other and pass
+        # (bspline + sinusoidal) agree with each other and pass
         # analytic checks (λ/4 transformer, parallel combinations),
         # while NEC's Z_in was nearly insensitive to jumper length
         # for short L. Could be argument-order, timing, or a NEC2
@@ -464,7 +464,7 @@ def pynec_build(req: dict) -> dict:
         # switch to momwire to use this mode.
         raise NotImplementedError(
             "PyNEC daisy-chain mode is under investigation — "
-            "use the momwire backend (Triangular/B-spline/Sinusoidal) for now."
+            "use the momwire backend (B-spline/Sinusoidal) for now."
         )
     from validation.pynec_backend import C_LIGHT, nec
 

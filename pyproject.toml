@@ -73,7 +73,7 @@ build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
 skip = "*-musllinux_* *_i686 *-win32 pp*"
 test-requires = "pytest"
 # First assert the compiled C++ accelerator actually loads in the wheel: a
-# failed import would otherwise be swallowed by triangular.py's pure-Python
+# failed import would otherwise be swallowed by the solvers' pure-Python
 # fallback, so the tests below would pass on a silently-degraded wheel. The
 # direct import + _HAVE_* flags make that a hard failure instead.
 #
@@ -81,7 +81,7 @@ test-requires = "pytest"
 # without the PyNEC cross-check backend (a separately-built wheel, test-only).
 # -m skips slow/plot. cibuildwheel runs this from a temp dir against the
 # installed wheel, so `import momwire` resolves to the wheel, not src/.
-test-command = 'python -c "import momwire._accelerators; from momwire import triangular as t; assert t._HAVE_ASSEMBLE_Z and t._HAVE_ASSEMBLE_Z_GENERAL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not plot"'
+test-command = 'python -c "import momwire._accelerators; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not plot"'
 
 [tool.cibuildwheel.linux]
 # glibc >= 2.28 ships libmvec; manylinux2014 (glibc 2.17) does NOT, so the

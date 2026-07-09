@@ -23,7 +23,7 @@ def _bowtie_req(**over) -> dict:
     req = {
         "geometry": "bowtie",
         "solver": "momwire",
-        "momwire_model": "triangular",
+        "momwire_model": "bspline",
         "n_per_wire": 15,
         "design_freq_mhz": 28.47,
         "measurement_freq_mhz": 28.47,
@@ -150,6 +150,7 @@ def test_bowtie_single_feed_geometries_still_have_no_feeds_key():
     req = {
         "geometry": "inverted_v",
         "solver": "momwire",
+        # Retired model name — must fall back to bspline (stale client).
         "momwire_model": "triangular",
         "n_per_wire": 20,
         "design_freq_mhz": 14.3,

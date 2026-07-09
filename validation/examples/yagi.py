@@ -139,7 +139,7 @@ def momwire_solve(req: dict) -> dict:
         labels.append(f"director {i + 1}" if n_directors > 1 else "director")
     wires = _pack_momwire_wires(sim, coeffs, knot_arrays, labels)
 
-    # Feed: TriangularSolver picks the interior knot of the driver closest to
+    # Feed: the solver places the delta-gap at the driver arclength closest to
     # the wire midpoint (= h_driver in arc length); for N segments along
     # [-h_driver, +h_driver] that's the middle interior knot at index N//2.
     feed_knot_index = N // 2
@@ -360,7 +360,7 @@ def pynec_solve(req: dict) -> dict:
             )
         )
 
-    # Feed marker: middle interior knot of driver (matches TriangularSolver).
+    # Feed marker: middle interior knot of the driver.
     interior_arc = np.linspace(0.0, 2 * h_driver, N + 1)[1:-1]
     m_center_interior = int(np.argmin(np.abs(interior_arc - h_driver)))
     feed_knot_index = m_center_interior + 1

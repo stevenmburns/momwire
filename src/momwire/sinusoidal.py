@@ -1,7 +1,7 @@
 """NEC2-style sinusoidal-basis MoM for wires (Section III of the NEC2
 Theory Manual, Burke & Poggio 1981 — see `docs/sinusoidal_basis_design.md`).
 
-This is an OPTIONAL solver alongside `TriangularSolver` (the default). The
+This is an OPTIONAL solver alongside `BSplineSolver` (the default). The
 sinusoidal basis is what NEC2 / PyNEC / nec2c use; reproducing it in momwire
 lets us isolate which parts of NEC's pulse-basis convergence behaviour are
 intrinsic to the basis itself versus its kernel / source / junction
@@ -45,7 +45,7 @@ class SinusoidalSolver(_Cancelable):
     end-condition coefficients closed-form per Eqs 25-64.
 
     Constructor takes the same `wires` / `n_per_edge_per_wire` / `junctions`
-    interface as `TriangularSolver` for drop-in comparison.
+    interface as `BSplineSolver` for drop-in comparison.
     """
 
     eps = 8.8541878188e-12
@@ -922,7 +922,7 @@ class SinusoidalSolver(_Cancelable):
 
     def _image_source_centers_tangents(self, geom):
         """Mirror source segments across z = ground_z and flip their tangent
-        z-components, mirroring the convention TriangularSolver uses for the
+        z-components, mirroring the convention the Galerkin solvers use for the
         PEC image build. Same shape ((N, 3), (N, 3)) as the originals.
         """
         seg_c = geom["seg_centers"]
@@ -1115,7 +1115,7 @@ class SinusoidalSolver(_Cancelable):
             # z-tangent already encode both the anti-parallel horizontal
             # image current and the parallel vertical image current; the
             # combined image-current + image-charge sign flip reduces to
-            # a single minus sign on the image-Z block (same as Triangular).
+            # a single minus sign on the image-Z block (same as BSpline).
             # With `ground_eps` set, the image field is additionally
             # Fresnel-dyad weighted (NEC IPERF=0); the subtraction sign is
             # unchanged because the weighted tensor reduces to the PEC one
@@ -1238,7 +1238,9 @@ class SinusoidalSolver(_Cancelable):
     def compute_y_matrix(self) -> np.ndarray:
         """Short-circuit admittance matrix [Y_sc] at the configured feeds.
 
-        See `TriangularSolver.compute_y_matrix` for the math + intent.
+        Y_sc[i, j] is the current flowing out of port i when port j is
+        driven with V_j = 1 and every other port held at V_k = 0; invert
+        to recover the open-circuit Z matrix for network analysis.
         Implementation mirrors `compute_impedance`: build G once, but
         solve with an N-column RHS where column j has unit excitation
         at port j's feed segment and zeros elsewhere. SinusoidalSolver

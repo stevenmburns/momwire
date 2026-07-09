@@ -25,7 +25,7 @@ pynec_backend.solve_bowtie = _EXAMPLES["bowtie"].pynec_solve
 
 
 # The two backends use different basis functions (NEC2 pulse basis vs
-# momwire's triangular Galerkin) and slightly different feed models, so
+# momwire's polynomial Galerkin) and slightly different feed models, so
 # they don't agree bit-for-bit. Near resonance, |Z| is small (~60 Ω) and
 # the delta is ~1 Ω; off-resonance, |Z| can reach ~200 Ω and the delta
 # scales roughly with it. Use a 3% relative tolerance with a 0.5 Ω floor,

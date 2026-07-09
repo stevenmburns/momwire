@@ -32,7 +32,7 @@ def _geometry(
     z_offset: float = 0.0,
 ) -> dict:
     """Build the 5 momwire wires, per-edge segment counts, and the K=2/K=3
-    junction descriptors that TriangularSolver needs."""
+    junction descriptors that the momwire solvers need."""
     half_w = wavelength_design * width_factor / 2.0
     z_mid = wavelength_design * (mid_height_factor - top_height_factor) + z_offset
     z_top = z_offset
