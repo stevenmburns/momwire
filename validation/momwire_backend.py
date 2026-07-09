@@ -125,6 +125,7 @@ _PYSIM_MODEL_KEYS = {
         "enrichment_variant",
         "tikhonov_lambda",
         "auto_tap_ratio_threshold",
+        "swept_mem_mb",
     ),
     # Hierarchical (H-matrix / ACA) accelerator: same B-spline basis as
     # bspline, plus the clustering / compression / iterative-solve knobs.
@@ -137,6 +138,7 @@ _PYSIM_MODEL_KEYS = {
         "aca_leaf_size",
         "aca_tol",
         "solve_tol",
+        "swept_mem_mb",
     ),
 }
 _PYSIM_MODELS = {

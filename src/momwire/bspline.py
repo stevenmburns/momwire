@@ -42,8 +42,6 @@ multiplier row (the same treatment the retired TriangularSolver used).
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
-import os
-
 import numpy as np
 import scipy.linalg
 from scipy.interpolate import BSpline
@@ -75,16 +73,6 @@ _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
 )
 
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
-
-# Memory budget (MB) for the batched swept path's per-chunk transients
-# (the all-pairs J moment tensor + same-edge reg moment blocks — see
-# `_swept_batched_z_chunks`). Seeded from the environment at import so a
-# memory-constrained deployment can cap peak sweep memory without a code
-# change (e.g. MOMWIRE_SWEPT_MEM_MB=64 on a small shared host). Tests
-# monkeypatch the module global directly. Speed saturates by ~256 (chunk
-# ≈ 8-16 on production shapes); below ~64 the batching win starts eroding
-# (chunk=1 costs ~+75%).
-_SWEPT_MEM_MB = int(os.environ.get("MOMWIRE_SWEPT_MEM_MB", "256"))
 
 
 # Constant Vandermonde inverses for uniform sample points [0, 1/d, ..., 1].
@@ -206,6 +194,14 @@ class BSplineSolver(_Cancelable):
         pairs (full kernel with a² regularization).
     wavelength, halfdriver_factor, wire_radius, nsegs : shared solver
         conventions (see SinusoidalSolver for the same surface).
+    swept_mem_mb : memory budget (MB, default 256) for the batched swept
+        path's per-chunk transients — the all-pairs J moment tensor plus
+        the same-edge reg moment blocks (see `_swept_batched_z_chunks`).
+        Peak transient memory of a sweep ≈ this budget, so a
+        memory-constrained deployment caps it per solve (e.g. 64 on a
+        small shared host). Speed saturates by ~256 (chunk ≈ 8-16 on
+        production shapes); below ~64 the batching win starts eroding
+        (chunk=1 costs ~+75% on the worst shapes).
     """
 
     eps = 8.8541878188e-12
@@ -239,6 +235,7 @@ class BSplineSolver(_Cancelable):
         enrichment_variant="raw",
         tikhonov_lambda=1e-3,
         auto_tap_ratio_threshold=0.3,
+        swept_mem_mb=256,
         cancel=None,
     ):
         self._cancel = cancel
@@ -296,6 +293,9 @@ class BSplineSolver(_Cancelable):
             raise ValueError("ground_model='sommerfeld' requires ground_eps")
         self.ground_model = ground_model
         self.n_qp_sommerfeld = int(n_qp_sommerfeld)
+        self.swept_mem_mb = int(swept_mem_mb)
+        if self.swept_mem_mb < 1:
+            raise ValueError(f"swept_mem_mb must be >= 1, got {swept_mem_mb}")
         # Source smoothing: when None (default) → delta-gap at exact midpoint
         # of feed wire. When set to a float α, the delta-gap is replaced by a
         # cos² bump of width w = α · h_feed_segment_at_source centered on s_f,
@@ -2038,14 +2038,13 @@ class BSplineSolver(_Cancelable):
         Z is (len(ks), n_basis, n_basis) for k_array[c0 : c0 + len(ks)].
 
         The k axis is chunked so the transient moment tensors stay under
-        the `_SWEPT_MEM_MB` budget (module global, seeded from the
-        MOMWIRE_SWEPT_MEM_MB env var; default 256). The budget counts the
-        per-k transients that actually scale with the sweep — the
-        all-pairs J tensor (chunk, nm, nm, N, N) AND the same-edge reg
-        moment slices (chunk, nm, nm, N_e, N_e per edge), both computed
-        per chunk — so peak transient memory ≈ the budget, and a
-        memory-constrained deployment can cap it (e.g. 64–96 on a 2 GB
-        host with concurrent users).
+        the `swept_mem_mb` constructor budget (default 256 MB). The
+        budget counts the per-k transients that actually scale with the
+        sweep — the all-pairs J tensor (chunk, nm, nm, N, N) AND the
+        same-edge reg moment slices (chunk, nm, nm, N_e, N_e per edge),
+        both computed per chunk — so peak transient memory ≈ the budget,
+        and a memory-constrained deployment can cap it per solve (e.g.
+        64–96 on a 2 GB host with concurrent users).
 
         The tradeoff (measured, single 400-seg dipole, d=2, 41-pt sweep):
         the batched kernels amortize their per-pair R-table hoists across
@@ -2075,7 +2074,7 @@ class BSplineSolver(_Cancelable):
         # J reuses J's footprint (J is dropped before the image build).
         sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _A_st, _g in prep)
         bytes_per_k = nm * nm * (N * N + sum_ne2) * 16
-        chunk = max(1, min(n_k, (_SWEPT_MEM_MB << 20) // max(bytes_per_k, 1)))
+        chunk = max(1, min(n_k, (self.swept_mem_mb << 20) // max(bytes_per_k, 1)))
 
         def _assemble_swept(J_tensor, td, omega_chunk):
             return _acc.assemble_Z_bspline_swept(
