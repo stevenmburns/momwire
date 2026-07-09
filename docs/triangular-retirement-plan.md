@@ -58,9 +58,14 @@ case):
 
 Notes that fall out of this:
 
-- The recorded parity convention already runs both solvers at even
-  nsegs, where they are identical — which is why this never bit in
-  practice.
+- The parity is ENFORCED by the caller, not just conventional:
+  antennaknobs `_parity_for_solver` (engines/momwire.py) coerces
+  nsegs — bumping by one when needed — to even for d=1 (and its
+  HMatrix/ArrayBlock subclasses) and odd for d=2/sinusoidal, before
+  the mesh is built. So through antennaknobs the odd-N feed-split
+  case is unreachable and d=1 ≡ triangular to roundoff. The exposure
+  is limited to direct momwire API users choosing odd nsegs with a
+  midpoint feed.
 - Of the two odd-N conventions, triangular's snap gives the better
   finite-N answer (a between-knots delta-gap is poorly represented by
   the d=1 basis: N=21 short dipole, snap = 11.99−944.75j vs mid-split
