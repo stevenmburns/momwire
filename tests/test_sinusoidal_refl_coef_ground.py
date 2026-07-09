@@ -165,11 +165,10 @@ def test_y_matrix_swept_matches_single_k():
 
 
 def test_accel_toggle_consistent_under_ground_eps():
-    """The grounded-finite image block is pure numpy either way (the C++
-    sinusoidal_field_tensor kernel projects pre-dyad, so ground_eps never
-    uses it) — only the free-space block differs between accel on/off. This
-    guards the _field_components refactor: the numpy fallback must still
-    agree with the C++ free-space tensor through the full grounded solve.
+    """Free-space-kernel toggle under a finite ground: the numpy
+    `_field_components` fallback for the FREE-SPACE block must agree with
+    the C++ tensor through the full grounded solve (the refl image block
+    keeps its own kernel in both runs — see the companion test below).
     Measured: 1.9e-10 relative on this junction case (1.2e-11 on the
     plain dipole — the KCL-constrained system is a touch worse
     conditioned); guard at ~5x = 1e-9."""
@@ -185,3 +184,25 @@ def test_accel_toggle_consistent_under_ground_eps():
     finally:
         sin_mod._HAVE_FIELD_TENSOR = True
     np.testing.assert_allclose(z_numpy, z_accel, rtol=1e-9)
+
+
+def test_refl_kernel_matches_numpy_reference():
+    """The C++ `sinusoidal_field_tensor_refl` kernel (fused Eqs 76-79 +
+    Fresnel field dyad, in-kernel rho_v/rho_h) must agree with the pure-
+    numpy `_field_components` + `_project_weighted` reference through the
+    full grounded solve. Guards the weighted-projection port, the
+    in-kernel Fresnel branch choice, and the specular-table plumbing —
+    on both a plain geometry and the junctioned inverted_l."""
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_REFL:
+        pytest.skip("C++ refl kernel not built")
+
+    for name, frac in (("dipole", 0.1), ("inverted_l", 0.2)):
+        z_kernel = _solve(name, frac, ground_eps=(10.0, 0.002))
+        sin_mod._HAVE_FIELD_TENSOR_REFL = False
+        try:
+            z_numpy = _solve(name, frac, ground_eps=(10.0, 0.002))
+        finally:
+            sin_mod._HAVE_FIELD_TENSOR_REFL = True
+        np.testing.assert_allclose(z_numpy, z_kernel, rtol=1e-9)
