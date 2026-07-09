@@ -244,19 +244,43 @@ attribution of this change; 4-core, yagi @ N=81):
   `mp,pPmn,nP`) that the kernel does not yet absorb — 0.35 s numpy +
   0.28 s einsum. The C++ projection itself is 0.14 s (was 5.4 s).
 
-Follow-ups (next increments on this branch):
+Stage-2 fusion — **LANDED (2026-07-09)**: `sommerfeld_remainder_bspline_Q`
+now folds the moment quadrature *and* the basis assembly into the kernel,
+returning the `(n_basis, n_basis)` block Q directly — no `Jf` tensor, no
+`piq,iqjr,Pjr` / `mp,pPmn,nP` einsums, no large `J_blk` fancy-index gather.
+The dense `_Z_sommerfeld_remainder` calls it (numpy path kept as fallback).
 
-- [ ] Fold the basis-weighted Galerkin quadrature (`W`, `polys`) into the
-      kernel so it returns the projected J-block / Q directly, removing
-      the `Jf` intermediate and both Galerkin einsums (the residual
-      ~0.6 s on the dense path).
-- [ ] Hoist the grid marshalling out of `remainder_field_proj`: the ACA
-      sampler calls it O(rank) times on small rectangles, re-building the
-      `reg_vals` arrays each call — pass a pre-marshalled grid handle so
-      HMatrix/ArrayBlock don't re-pay it per sample.
+Measured warm (yagi N=81, 4-core), cumulative down the increments:
+
+| path | warm somm | note |
+|------|-----------|------|
+| numpy assembly (pre-4b) | 7443 ms | the deferred non-goal |
+| + proj kernel (stage 1) | 965 ms | 7.7× |
+| + fused Q kernel (stage 2) | **415 ms** | 18× total; **2.3× off PyNEC (~179 ms)** |
+
+- Fused Q vs the proj-kernel + numpy-Galerkin path: **0.0** (bit-identical
+  final Z), parametrized over degree 1 & 2; golden gn 2 gates unchanged;
+  full suite green (218 + new parity tests).
+- At 415 ms the Sommerfeld remainder is one 0.192 s kernel; the other
+  ~0.18 s is the base EFIE fill + dense solve + image assembly, shared
+  with every ground model (not Sommerfeld-specific). The remainder is now
+  compute-bound (per-pair interpolation + projection arithmetic × OMP),
+  near the algorithmic floor at this accuracy.
+- Grid marshalling hoisted into `_sommerfeld.grid_cpp_args`, shared by
+  `remainder_field_proj` and the fused kernel.
+
+Remaining follow-ups:
+
+- [ ] Route the fast solvers' ACA rectangular sampler
+      (`_zblock_sommerfeld_remainder`) at a Jf-returning variant and pass a
+      pre-marshalled grid handle so HMatrix/ArrayBlock stop re-building
+      `reg_vals` per sample. (Dense + Sinusoidal already covered.)
 - [ ] Re-run `scripts/profile_ground_models.py` somm column and refresh
       the antennaknobs status-doc ratios (cold-grid numbers, the
       user-visible figure).
+- [ ] Optional: SIMD / lower quadrature-node count on the per-pair proj to
+      chase the last ~2× to PyNEC, only if the remainder still dominates
+      after the base-solve cost is accounted for.
 
 ### 4b (original scope) — fused C++ remainder-Galerkin kernel
 

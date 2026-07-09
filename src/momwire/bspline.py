@@ -977,6 +977,22 @@ class BSplineSolver(_Cancelable):
         r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
         grid = self._somm_grid(eps_t, r1_max)
 
+        # Fully-fused C++ path: interpolate + project + moment-quadrature +
+        # basis-assemble straight into Q, skipping the Jf tensor and the two
+        # Galerkin einsums (sommerfeld-perf-plan Phase 4b stage 2).
+        if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
+            return _acc.sommerfeld_remainder_bspline_Q(
+                np.ascontiguousarray(nodes, dtype=np.float64),
+                np.ascontiguousarray(tang, dtype=np.float64),
+                np.ascontiguousarray(W, dtype=np.float64),
+                np.ascontiguousarray(supp_seg, dtype=np.int64),
+                np.ascontiguousarray(polys, dtype=np.float64),
+                float(gz),
+                float(self.k),
+                *_sommerfeld.grid_cpp_args(grid),
+                int(self._cancel_flag),
+            )
+
         n_nodes = n_seg * q
         src = nodes.reshape(n_nodes, 3)
         t_src = np.repeat(tang, q, axis=0)

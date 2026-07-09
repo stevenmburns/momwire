@@ -272,3 +272,34 @@ def test_somm_grid_cache_bounded():
         assert len(sm._GRID_CACHE) <= sm._GRID_CACHE_MAX
     finally:
         sm._GRID_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b: the fused C++ Galerkin remainder kernel must match the numpy
+# assembly path (which itself is gated against nec2c gn 2 above).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_fused_Q_kernel_matches_numpy_galerkin(degree, monkeypatch):
+    import momwire.bspline as bs
+
+    if bs._acc is None or not hasattr(bs._acc, "sommerfeld_remainder_bspline_Q"):
+        pytest.skip("fused sommerfeld kernel unavailable")
+
+    z_fused = _solve("yagi", 0.2, degree=degree, **SOMM)
+
+    # Hide only the fused kernel, keeping the per-pair proj kernel and the
+    # assemblers, so the fallback path is proj-kernel + numpy Galerkin einsum.
+    real = bs._acc
+
+    class _NoFused:
+        def __getattr__(self, name):
+            if name == "sommerfeld_remainder_bspline_Q":
+                raise AttributeError(name)
+            return getattr(real, name)
+
+    monkeypatch.setattr(bs, "_acc", _NoFused())
+    z_np = _solve("yagi", 0.2, degree=degree, **SOMM)
+
+    assert np.abs(z_fused - z_np).max() / np.abs(z_np).max() < 1e-11
