@@ -45,6 +45,7 @@ import scipy.linalg
 from scipy.interpolate import BSpline
 
 from ._bspline_kernels import (
+    _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
     _seg_seg_full_moments_offedge,
     _seg_seg_full_moments_offedge_swept,
     _seg_seg_reg_geometry,
@@ -993,9 +994,16 @@ class BSplineSolver(_Cancelable):
             supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
             polys_c = np.ascontiguousarray(polys, dtype=np.float64)
             return _acc.sommerfeld_remainder_bspline_Q(
-                nodes_c, tang_c, W_c,
-                nodes_c, tang_c, W_c,
-                supp_c, polys_c, supp_c, polys_c,
+                nodes_c,
+                tang_c,
+                W_c,
+                nodes_c,
+                tang_c,
+                W_c,
+                supp_c,
+                polys_c,
+                supp_c,
+                polys_c,
                 float(gz),
                 float(self.k),
                 *_sommerfeld.grid_cpp_args(grid),
