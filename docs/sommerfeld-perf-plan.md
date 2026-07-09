@@ -213,7 +213,52 @@ reassociation left to exploit. There is no meaningful pure-Python win;
 the only lever is compiled code with no materialized intermediates
 (register-level per-point contraction). Skip straight to 4b.
 
-### 4b — fused C++ remainder-Galerkin kernel (the real win)
+### 4b — fused C++ remainder-field-projection kernel — **LANDED (2026-07-08)**
+
+First increment shipped: `remainder_field_proj_batch` in `_accelerators.cpp`
+ports the whole of `_sommerfeld.remainder_field_proj` (which internally
+calls `SommerfeldGrid.eval`) to C++ — per (observer, source) pair it does
+the 4×4 Lagrange interpolation of the four surfaces and the eqs 143–147
+azimuth/tangent projection inline, with **no materialized `(4,n,4,4)`
+intermediate** and one `omp parallel for` over observer rows. The Python
+`remainder_field_proj` routes to it when the accelerator is loaded and
+keeps the vectorized numpy body as fallback (mirrors the Phase-3
+`_six_integrals_batch` dispatch).
+
+Because all three solver families call `remainder_field_proj`, this one
+kernel covers 4c for free.
+
+Measured (warm — grid cached — so this isolates the assembly, the honest
+attribution of this change; 4-core, yagi @ N=81):
+
+| solver | warm somm before | after | speedup |
+|--------|------------------|-------|---------|
+| BSpline deg 2 | 7443 ms | 965 ms | 7.7× |
+| Sinusoidal    | (assembly-bound) | 236 ms | ~9× |
+| ArrayBlock / HMatrix | — | inherit via shared fn | — |
+
+- Kernel vs numpy fallback agree to 4e-16 (round-off); the full
+  sommerfeld suite is green (184 passed).
+- Remaining warm cost on the dense path (~960 ms) is now the **Galerkin
+  projection**: the `Jf` handling + the two einsums (`piq,iqjr,Pjr` and
+  `mp,pPmn,nP`) that the kernel does not yet absorb — 0.35 s numpy +
+  0.28 s einsum. The C++ projection itself is 0.14 s (was 5.4 s).
+
+Follow-ups (next increments on this branch):
+
+- [ ] Fold the basis-weighted Galerkin quadrature (`W`, `polys`) into the
+      kernel so it returns the projected J-block / Q directly, removing
+      the `Jf` intermediate and both Galerkin einsums (the residual
+      ~0.6 s on the dense path).
+- [ ] Hoist the grid marshalling out of `remainder_field_proj`: the ACA
+      sampler calls it O(rank) times on small rectangles, re-building the
+      `reg_vals` arrays each call — pass a pre-marshalled grid handle so
+      HMatrix/ArrayBlock don't re-pay it per sample.
+- [ ] Re-run `scripts/profile_ground_models.py` somm column and refresh
+      the antennaknobs status-doc ratios (cold-grid numbers, the
+      user-visible figure).
+
+### 4b (original scope) — fused C++ remainder-Galerkin kernel
 
 Mirror Phase 3 exactly (pybind11 + OpenMP + pure-Python fallback +
 `cancel_flag` + wheel smoke test all already exist in
