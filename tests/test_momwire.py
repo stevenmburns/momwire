@@ -1829,27 +1829,24 @@ def test_bspline_swept_fully_batched_multifeed_matches_per_freq():
         assert np.allclose(zs, z_f, rtol=1e-9, atol=0), f"k={kk}: {zs} vs {z_f}"
 
 
-def test_bspline_swept_batched_tiny_memory_budget_matches(monkeypatch):
-    """MOMWIRE_SWEPT_MEM_MB caps the batched sweep's transient memory by
+def test_bspline_swept_batched_tiny_memory_budget_matches():
+    """`swept_mem_mb` caps the batched sweep's transient memory by
     shrinking the k-chunk. Correctness must be budget-independent — even
     the degenerate chunk=1 case (budget below one k's tensors) must match
     the default. Guards the chunking arithmetic and the per-chunk
     same-edge reg-moment slices.
     """
-    import momwire.bspline as bmod
-
     hd = 0.962 * 22 / 4
     wires = [np.array([[0.0, 0.0, -hd], [0.0, 0.0, hd]])]
     k0 = 2 * np.pi / 22
     k_array = np.linspace(0.9 * k0, 1.1 * k0, 5)
 
-    z_default = BSplineSolver(
-        wires=wires, nsegs=24, degree=2, ground_z=None
-    ).compute_impedance_swept(k_array)
-    monkeypatch.setattr(bmod, "_SWEPT_MEM_MB", 1)
-    z_tiny = BSplineSolver(wires=wires, nsegs=24, degree=2).compute_impedance_swept(
+    z_default = BSplineSolver(wires=wires, nsegs=24, degree=2).compute_impedance_swept(
         k_array
     )
+    z_tiny = BSplineSolver(
+        wires=wires, nsegs=24, degree=2, swept_mem_mb=1
+    ).compute_impedance_swept(k_array)
     assert np.allclose(z_default, z_tiny, rtol=1e-11, atol=0)
 
 
