@@ -658,8 +658,14 @@ def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid, cancel_flag=
     """
     if _acc is not None and hasattr(_acc, "remainder_field_proj_batch"):
         return _acc.remainder_field_proj_batch(
-            obs, t_obs, src, t_src, float(ground_z), float(k),
-            *grid_cpp_args(grid), int(cancel_flag),
+            obs,
+            t_obs,
+            src,
+            t_src,
+            float(ground_z),
+            float(k),
+            *grid_cpp_args(grid),
+            int(cancel_flag),
         )
 
     th_src = np.hypot(t_src[:, 0], t_src[:, 1])

@@ -110,9 +110,7 @@ def test_y_matrix_path_consistent_with_impedance():
     kw = dict(GEOMS[("dipole", 0.2)])
     sim = BSplineSolver(**kw, ground_z=0.0, ground_eps=(10.0, 0.002))
     z_direct, _ = sim.compute_impedance()
-    Y = BSplineSolver(
-        **kw, ground_z=0.0, ground_eps=(10.0, 0.002)
-    ).compute_y_matrix()
+    Y = BSplineSolver(**kw, ground_z=0.0, ground_eps=(10.0, 0.002)).compute_y_matrix()
     np.testing.assert_allclose(1.0 / Y[0, 0], z_direct, rtol=1e-9)
 
 
@@ -183,9 +181,7 @@ def test_phi_mode_coeffs_consistent_with_phi_term_weights():
     rho_v, _ = fresnel_rho(eps_t, cos_th)
     for mode in PHI_MODES:
         c0, c1 = phi_mode_coeffs(mode, eps_t)
-        expected = np.broadcast_to(
-            phi_term_weights(mode, eps_t, rho_v), rho_v.shape
-        )
+        expected = np.broadcast_to(phi_term_weights(mode, eps_t, rho_v), rho_v.shape)
         np.testing.assert_allclose(c0 + c1 * rho_v, expected, rtol=1e-14)
 
 
