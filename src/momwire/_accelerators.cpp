@@ -2970,6 +2970,121 @@ static inline void lagrange4(double u, double *w) {
     w[2] = -u0 * u1 * u3 / 2.0;
     w[3] = u0 * u1 * u2 / 6.0;
 }
+
+// The tabulated SommerfeldGrid, flattened for the inner loop: raw pointers to
+// the three regions' (4, n_r, n_th) C-contiguous value tables plus their axis
+// origins/spacings, and the region-select breakpoints. Populated from the
+// pybind arrays by both callers (build_grid_view).
+struct GridView {
+    const cd *vptr[3];
+    py::ssize_t nR[3], nTh[3];
+    double rr0[3], rdr[3], rth0[3], rdth[3];
+    double r1_max, r_break, th_split, tiny, half_pi;
+};
+
+static GridView build_grid_view(
+    double r1_max, double r_break, double th_split,
+    const py::detail::unchecked_reference<double, 1> &r0b,
+    const py::detail::unchecked_reference<double, 1> &drb,
+    const py::detail::unchecked_reference<double, 1> &th0b,
+    const py::detail::unchecked_reference<double, 1> &dthb,
+    const std::vector<py::array_t<cd, py::array::c_style | py::array::forcecast>>
+        &reg_vals) {
+    if (reg_vals.size() != 3)
+        throw std::runtime_error("expected 3 region value tables");
+    GridView G;
+    for (int g = 0; g < 3; ++g) {
+        auto v = reg_vals[g].template unchecked<3>();
+        if (v.shape(0) != 4)
+            throw std::runtime_error("region values must have shape (4, n_r, n_th)");
+        G.vptr[g] = reg_vals[g].data();
+        G.nR[g] = v.shape(1);
+        G.nTh[g] = v.shape(2);
+        G.rr0[g] = r0b(g);
+        G.rdr[g] = drb(g);
+        G.rth0[g] = th0b(g);
+        G.rdth[g] = dthb(g);
+    }
+    G.r1_max = r1_max;
+    G.r_break = r_break;
+    G.th_split = th_split;
+    G.tiny = 1e-12 * r1_max;
+    G.half_pi = 0.5 * M_PI;
+    return G;
+}
+
+// Interpolated + projected smooth-remainder field for ONE (observer, source)
+// pair: t_obs . F(r_obs, r_src) . t_src. `sux/suy/sthsrc/stzsrc` are the
+// source tangent's horizontal-unit / horizontal-magnitude / vertical parts
+// (precomputed once per source point by the caller). Inlines
+// SommerfeldGrid.eval + remainder_field_proj's eqs 143-147 with no
+// intermediates. Bit-for-bit the numpy body.
+static inline cd proj_one(
+    const GridView &G, double ground_z, double k,
+    double ox, double oy, double oz, double tox, double toy, double toz,
+    double sx, double sy, double sz, double sux, double suy, double sthsrc,
+    double stzsrc) {
+    const double dx = ox - sx;
+    const double dy = oy - sy;
+    const double rho = std::hypot(dx, dy);
+    const double hh = (oz - ground_z) + (sz - ground_z);
+    const double r1 = std::sqrt(rho * rho + hh * hh);
+
+    // --- inline SommerfeldGrid.eval(r1, theta) ---
+    double theta = std::atan2(hh, rho);
+    if (theta < 0.0) theta = 0.0; else if (theta > G.half_pi) theta = G.half_pi;
+    const double r1c = r1 > G.r1_max ? G.r1_max : r1;  // interp clamps; g uses r1
+    const int reg = (r1c <= G.r_break) ? 0 : (theta <= G.th_split ? 1 : 2);
+    const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
+    const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
+    int i0 = (int)std::floor(fr) - 1;
+    int j0 = (int)std::floor(ft) - 1;
+    if (i0 < 0) i0 = 0; else if (i0 > G.nR[reg] - 4) i0 = (int)G.nR[reg] - 4;
+    if (j0 < 0) j0 = 0; else if (j0 > G.nTh[reg] - 4) j0 = (int)G.nTh[reg] - 4;
+    double wr[4], wt[4];
+    lagrange4(fr - i0, wr);
+    lagrange4(ft - j0, wt);
+    const cd *V = G.vptr[reg];
+    const py::ssize_t nth = G.nTh[reg], nr = G.nR[reg];
+    cd surf[4];
+    for (int s = 0; s < 4; ++s) {
+        const cd *plane = V + (py::ssize_t)s * nr * nth;
+        cd acc(0.0, 0.0);
+        for (int i = 0; i < 4; ++i) {
+            const cd *row = plane + (py::ssize_t)(i0 + i) * nth + j0;
+            cd rs = row[0] * wt[0] + row[1] * wt[1] + row[2] * wt[2] +
+                    row[3] * wt[3];
+            acc += rs * wr[i];
+        }
+        surf[s] = acc;
+    }
+    const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2], IphiH = surf[3];
+
+    // --- projection (eqs 143-147) ---
+    const cd g = std::polar(1.0 / r1, -k * r1);
+    const bool safe_r = rho > G.tiny;
+    const double inv_rho = safe_r ? 1.0 / rho : 0.0;
+    const double dhx = safe_r ? dx * inv_rho : sux;
+    const double dhy = safe_r ? dy * inv_rho : suy;
+    const double cphi = sux * dhx + suy * dhy;
+    const double sphi = sux * dhy - suy * dhx;
+    const cd e_rho = g * (stzsrc * IrhoV + sthsrc * cphi * IrhoH);
+    const cd e_phi = g * (sthsrc * sphi * IphiH);
+    const cd e_z = g * (stzsrc * IzV - sthsrc * cphi * IrhoV);
+    return tox * (dhx * e_rho - dhy * e_phi) +
+           toy * (dhy * e_rho + dhx * e_phi) + toz * e_z;
+}
+
+// Decompose a tangent (tx,ty,tz) into (horizontal unit x,y; horizontal
+// magnitude; vertical), matching remainder_field_proj's th_src/ux/uy/tz_src.
+static inline void tangent_decomp(double tx, double ty, double tz, double &ux,
+                                  double &uy, double &th, double &tzc) {
+    th = std::hypot(tx, ty);
+    const bool safe = th > 1e-12;
+    ux = safe ? tx / th : 1.0;
+    uy = safe ? ty / th : 0.0;
+    tzc = tz;
+}
 }  // namespace somm_proj
 
 // obs/t_obs (M,3), src/t_src (S,3); returns (M,S) complex. The grid is passed
@@ -2999,33 +3114,12 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
         throw std::runtime_error("obs/src/tangent arrays must have shape (*, 3)");
     if (ob.shape(0) != tob.shape(0) || sb.shape(0) != tsb.shape(0))
         throw std::runtime_error("points and tangents must have matching length");
-    if (reg_vals.size() != 3)
-        throw std::runtime_error("expected 3 region value tables");
 
     const py::ssize_t M = ob.shape(0);
     const py::ssize_t S = sb.shape(0);
-
-    auto r0b = reg_r0.unchecked<1>();
-    auto drb = reg_dr.unchecked<1>();
-    auto th0b = reg_th0.unchecked<1>();
-    auto dthb = reg_dth.unchecked<1>();
-
-    // Region pointers/extents. Values are C-contiguous (4, n_r, n_th).
-    const cd *vptr[3];
-    py::ssize_t nR[3], nTh[3];
-    double rr0[3], rdr[3], rth0[3], rdth[3];
-    for (int g = 0; g < 3; ++g) {
-        auto v = reg_vals[g].unchecked<3>();
-        if (v.shape(0) != 4)
-            throw std::runtime_error("region values must have shape (4, n_r, n_th)");
-        vptr[g] = reg_vals[g].data();
-        nR[g] = v.shape(1);
-        nTh[g] = v.shape(2);
-        rr0[g] = r0b(g);
-        rdr[g] = drb(g);
-        rth0[g] = th0b(g);
-        rdth[g] = dthb(g);
-    }
+    somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
+        reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
 
     py::array_t<std::complex<double>> out({M, S});
     auto out_m = out.mutable_unchecked<2>();
@@ -3038,17 +3132,9 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
         sx[n] = sb(n, 0);
         sy[n] = sb(n, 1);
         sz[n] = sb(n, 2);
-        const double txn = tsb(n, 0), tyn = tsb(n, 1);
-        const double th = std::hypot(txn, tyn);
-        const bool safe_t = th > 1e-12;
-        ux[n] = safe_t ? txn / th : 1.0;
-        uy[n] = safe_t ? tyn / th : 0.0;
-        thsrc[n] = th;
-        tzsrc[n] = tsb(n, 2);
+        somm_proj::tangent_decomp(tsb(n, 0), tsb(n, 1), tsb(n, 2), ux[n], uy[n],
+                                  thsrc[n], tzsrc[n]);
     }
-
-    const double tiny = 1e-12 * r1_max;
-    const double half_pi = 0.5 * M_PI;
 
     PYSIM_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(static)
@@ -3056,63 +3142,143 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
         PYSIM_CANCEL_POLL();
         const double ox = ob(m, 0), oy = ob(m, 1), oz = ob(m, 2);
         const double tox = tob(m, 0), toy = tob(m, 1), toz = tob(m, 2);
-        const double oh = oz - ground_z;
         for (py::ssize_t n = 0; n < S; ++n) {
-            const double dx = ox - sx[n];
-            const double dy = oy - sy[n];
-            const double rho = std::hypot(dx, dy);
-            const double hh = oh + (sz[n] - ground_z);
-            const double r1 = std::sqrt(rho * rho + hh * hh);
-
-            // --- inline SommerfeldGrid.eval(r1, theta) ---
-            double theta = std::atan2(hh, rho);
-            if (theta < 0.0) theta = 0.0; else if (theta > half_pi) theta = half_pi;
-            double r1c = r1 > r1_max ? r1_max : r1;  // interp clamps; g uses r1
-            const int reg = (r1c <= r_break) ? 0 : (theta <= th_split ? 1 : 2);
-            const double fr = (r1c - rr0[reg]) / rdr[reg];
-            const double ft = (theta - rth0[reg]) / rdth[reg];
-            int i0 = (int)std::floor(fr) - 1;
-            int j0 = (int)std::floor(ft) - 1;
-            if (i0 < 0) i0 = 0; else if (i0 > nR[reg] - 4) i0 = (int)nR[reg] - 4;
-            if (j0 < 0) j0 = 0; else if (j0 > nTh[reg] - 4) j0 = (int)nTh[reg] - 4;
-            double wr[4], wt[4];
-            somm_proj::lagrange4(fr - i0, wr);
-            somm_proj::lagrange4(ft - j0, wt);
-            const cd *V = vptr[reg];
-            const py::ssize_t nth = nTh[reg], nr = nR[reg];
-            cd surf[4];
-            for (int s = 0; s < 4; ++s) {
-                const cd *plane = V + (py::ssize_t)s * nr * nth;
-                cd acc(0.0, 0.0);
-                for (int i = 0; i < 4; ++i) {
-                    const cd *row = plane + (py::ssize_t)(i0 + i) * nth + j0;
-                    cd rs = row[0] * wt[0] + row[1] * wt[1] + row[2] * wt[2] +
-                            row[3] * wt[3];
-                    acc += rs * wr[i];
-                }
-                surf[s] = acc;
-            }
-            const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2],
-                     IphiH = surf[3];
-
-            // --- projection (eqs 143-147) ---
-            const cd g = std::polar(1.0 / r1, -k * r1);
-            const bool safe_r = rho > tiny;
-            const double inv_rho = safe_r ? 1.0 / rho : 0.0;
-            const double dhx = safe_r ? dx * inv_rho : ux[n];
-            const double dhy = safe_r ? dy * inv_rho : uy[n];
-            const double cphi = ux[n] * dhx + uy[n] * dhy;
-            const double sphi = ux[n] * dhy - uy[n] * dhx;
-            const double thn = thsrc[n], tzn = tzsrc[n];
-            const cd e_rho = g * (tzn * IrhoV + thn * cphi * IrhoH);
-            const cd e_phi = g * (thn * sphi * IphiH);
-            const cd e_z = g * (tzn * IzV - thn * cphi * IrhoV);
-            out_m(m, n) = tox * (dhx * e_rho - dhy * e_phi) +
-                          toy * (dhy * e_rho + dhx * e_phi) + toz * e_z;
+            out_m(m, n) = somm_proj::proj_one(
+                G, ground_z, k, ox, oy, oz, tox, toy, toz, sx[n], sy[n], sz[n],
+                ux[n], uy[n], thsrc[n], tzsrc[n]);
         }
     }
     PYSIM_THROW_IF_ABORTED();
     return out;
+}
+
+// Fully-fused b-spline Galerkin Sommerfeld remainder (Phase 4b, stage 2):
+// returns the (n_basis, n_basis) block Q directly, absorbing the moment
+// quadrature and the basis assembly that the Python code did with two einsums
+// and a large fancy-index gather. Segments are the shared obs=src set.
+//
+//   Jf[p,P,i,j] = sum_{qi,rj} W[p,i,qi] * proj(node[i,qi], node[j,rj]) * W[P,j,rj]
+//   Q[m,n]      = sum_{a,b,p,P} polys[m,a,p] * Jf[p,P, supp[m,a], supp[n,b]]
+//                                            * polys[n,b,P]
+//
+// nodes (n_seg, q, 3), tang (n_seg, 3), W (d+1, n_seg, q), supp_seg
+// (n_basis, d+1) int64, polys (n_basis, d+1, d+1). Grid passed as in
+// remainder_field_proj_batch.
+static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
+    py::array_t<double, py::array::c_style | py::array::forcecast> nodes,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tang,
+    py::array_t<double, py::array::c_style | py::array::forcecast> W,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    double ground_z, double k, double r1_max, double r_break, double th_split,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals,
+    uintptr_t cancel_flag = 0) {
+    using somm_proj::cd;
+    auto nd = nodes.unchecked<3>();
+    auto tg = tang.unchecked<2>();
+    auto Wv = W.unchecked<3>();
+    auto ss = supp_seg.unchecked<2>();
+    auto pl = polys.unchecked<3>();
+
+    const py::ssize_t n_seg = nd.shape(0);
+    const py::ssize_t q = nd.shape(1);
+    const int d1 = (int)Wv.shape(0);  // degree + 1
+    const py::ssize_t n_basis = ss.shape(0);
+    if (nd.shape(2) != 3 || tg.shape(1) != 3)
+        throw std::runtime_error("nodes/tang must be (n_seg, q, 3)/(n_seg, 3)");
+    if (Wv.shape(1) != n_seg || Wv.shape(2) != q)
+        throw std::runtime_error("W must be (d+1, n_seg, q)");
+    if (ss.shape(1) != d1 || pl.shape(1) != d1 || pl.shape(2) != d1)
+        throw std::runtime_error("supp_seg/polys inconsistent with degree");
+
+    somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
+        reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
+
+    py::array_t<std::complex<double>> Q({n_basis, n_basis});
+    auto Qm = Q.mutable_unchecked<2>();
+
+    py::gil_scoped_release release;
+
+    // Per-segment source constants (position copies + tangent decomposition).
+    std::vector<double> sux(n_seg), suy(n_seg), sth(n_seg), stz(n_seg);
+    for (py::ssize_t j = 0; j < n_seg; ++j)
+        somm_proj::tangent_decomp(tg(j, 0), tg(j, 1), tg(j, 2), sux[j], suy[j],
+                                  sth[j], stz[j]);
+
+    // Stage 1: Jf[p,P,i,j], flat index (((p*d1+P)*n_seg)+i)*n_seg+j.
+    std::vector<cd> Jf((size_t)d1 * d1 * n_seg * n_seg);
+    const size_t seg2 = (size_t)n_seg * n_seg;
+
+    PYSIM_CANCEL_SETUP(cancel_flag);
+    #pragma omp parallel for schedule(dynamic)
+    for (py::ssize_t i = 0; i < n_seg; ++i) {
+        PYSIM_CANCEL_POLL();
+        const double tox = tg(i, 0), toy = tg(i, 1), toz = tg(i, 2);
+        std::vector<cd> fblk((size_t)q * q);
+        for (py::ssize_t j = 0; j < n_seg; ++j) {
+            // q x q field-projection block for this segment pair.
+            for (py::ssize_t qi = 0; qi < q; ++qi) {
+                const double ox = nd(i, qi, 0), oy = nd(i, qi, 1),
+                             oz = nd(i, qi, 2);
+                for (py::ssize_t rj = 0; rj < q; ++rj) {
+                    fblk[qi * q + rj] = somm_proj::proj_one(
+                        G, ground_z, k, ox, oy, oz, tox, toy, toz,
+                        nd(j, rj, 0), nd(j, rj, 1), nd(j, rj, 2),
+                        sux[j], suy[j], sth[j], stz[j]);
+                }
+            }
+            // Reduce with the moment weights into (d+1)^2 entries.
+            for (int p = 0; p < d1; ++p) {
+                for (int P = 0; P < d1; ++P) {
+                    cd acc(0.0, 0.0);
+                    for (py::ssize_t qi = 0; qi < q; ++qi) {
+                        const double wp = Wv(p, i, qi);
+                        cd row(0.0, 0.0);
+                        for (py::ssize_t rj = 0; rj < q; ++rj)
+                            row += fblk[qi * q + rj] * Wv(P, j, rj);
+                        acc += wp * row;
+                    }
+                    Jf[((size_t)(p * d1 + P) * n_seg + i) * n_seg + j] = acc;
+                }
+            }
+        }
+    }
+    PYSIM_THROW_IF_ABORTED();
+
+    // Stage 2: basis assembly Q[m,n] from the segment moment tensor.
+    #pragma omp parallel for schedule(static)
+    for (py::ssize_t m = 0; m < n_basis; ++m) {
+        PYSIM_CANCEL_POLL();
+        for (py::ssize_t n = 0; n < n_basis; ++n) {
+            cd qmn(0.0, 0.0);
+            for (int a = 0; a < d1; ++a) {
+                const py::ssize_t si = ss(m, a);
+                for (int b = 0; b < d1; ++b) {
+                    const py::ssize_t sj = ss(n, b);
+                    cd inner(0.0, 0.0);
+                    for (int p = 0; p < d1; ++p) {
+                        const double pma = pl(m, a, p);
+                        const cd *jfp =
+                            &Jf[((size_t)(p * d1) * n_seg + si) * n_seg + sj];
+                        cd s(0.0, 0.0);
+                        for (int P = 0; P < d1; ++P)
+                            s += jfp[(size_t)P * seg2] * pl(n, b, P);
+                        inner += pma * s;
+                    }
+                    qmn += inner;
+                }
+            }
+            Qm(m, n) = qmn;
+        }
+    }
+    PYSIM_THROW_IF_ABORTED();
+    return Q;
 }
 
 
@@ -3284,6 +3450,18 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("obs"), py::arg("t_obs"), py::arg("src"), py::arg("t_src"),
           py::arg("ground_z"), py::arg("k"), py::arg("r1_max"),
           py::arg("r_break"), py::arg("th_split"),
+          py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
+          py::arg("reg_dth"), py::arg("reg_vals"),
+          py::arg("cancel_flag") = 0);
+    m.def("sommerfeld_remainder_bspline_Q", &sommerfeld_remainder_bspline_Q,
+          "Fully-fused b-spline Galerkin Sommerfeld remainder: interpolate + "
+          "project + moment-quadrature + basis-assemble into the (n_basis, "
+          "n_basis) Q block directly (no Jf / einsum intermediates). nodes "
+          "(n_seg,q,3), tang (n_seg,3), W (d+1,n_seg,q), supp_seg (n_basis,"
+          "d+1), polys (n_basis,d+1,d+1); grid as in remainder_field_proj_batch.",
+          py::arg("nodes"), py::arg("tang"), py::arg("W"), py::arg("supp_seg"),
+          py::arg("polys"), py::arg("ground_z"), py::arg("k"),
+          py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"),
           py::arg("cancel_flag") = 0);
