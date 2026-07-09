@@ -2945,6 +2945,176 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Sommerfeld remainder assembly (sommerfeld-perf-plan Phase 4b).
+//
+// Fused C++ port of _sommerfeld.remainder_field_proj (which internally calls
+// SommerfeldGrid.eval). Per (observer m, source n) pair: interpolate the four
+// smooth-remainder surfaces from the tabulated grid with the same 4x4 Lagrange
+// (bivariate cubic) stencil, combine per the theory-manual eqs 143-147 azimuth
+// factors, and project onto the observer tangent -- with NO materialized
+// (4,n,4,4) intermediate (the numpy bottleneck). One OpenMP loop over observer
+// rows. Bit-for-bit the same arithmetic as the Python fallback; cross-checked
+// in tests/test_sommerfeld_accel.py.
+//
+// Clean-room: ported from momwire's own _sommerfeld.py. No GPL Sommerfeld
+// source (nec2c, nec2++/PyNEC, somnec) was consulted.
+namespace somm_proj {
+using cd = std::complex<double>;
+
+// Cubic Lagrange weights for nodes at 0,1,2,3 evaluated at u (== _lagrange4).
+static inline void lagrange4(double u, double *w) {
+    const double u0 = u, u1 = u - 1.0, u2 = u - 2.0, u3 = u - 3.0;
+    w[0] = -u1 * u2 * u3 / 6.0;
+    w[1] = u0 * u2 * u3 / 2.0;
+    w[2] = -u0 * u1 * u3 / 2.0;
+    w[3] = u0 * u1 * u2 / 6.0;
+}
+}  // namespace somm_proj
+
+// obs/t_obs (M,3), src/t_src (S,3); returns (M,S) complex. The grid is passed
+// flattened: the three regions' (r0, dr, th0, dth) as length-3 arrays, plus a
+// list of three (4, n_r, n_th) complex value tables. r_break / th_split select
+// the region exactly as SommerfeldGrid.eval.
+static py::array_t<std::complex<double>> remainder_field_proj_batch(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_src,
+    double ground_z, double k, double r1_max, double r_break, double th_split,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals,
+    uintptr_t cancel_flag = 0) {
+    using somm_proj::cd;
+    auto ob = obs.unchecked<2>();
+    auto tob = t_obs.unchecked<2>();
+    auto sb = src.unchecked<2>();
+    auto tsb = t_src.unchecked<2>();
+    if (ob.shape(1) != 3 || tob.shape(1) != 3 || sb.shape(1) != 3 ||
+        tsb.shape(1) != 3)
+        throw std::runtime_error("obs/src/tangent arrays must have shape (*, 3)");
+    if (ob.shape(0) != tob.shape(0) || sb.shape(0) != tsb.shape(0))
+        throw std::runtime_error("points and tangents must have matching length");
+    if (reg_vals.size() != 3)
+        throw std::runtime_error("expected 3 region value tables");
+
+    const py::ssize_t M = ob.shape(0);
+    const py::ssize_t S = sb.shape(0);
+
+    auto r0b = reg_r0.unchecked<1>();
+    auto drb = reg_dr.unchecked<1>();
+    auto th0b = reg_th0.unchecked<1>();
+    auto dthb = reg_dth.unchecked<1>();
+
+    // Region pointers/extents. Values are C-contiguous (4, n_r, n_th).
+    const cd *vptr[3];
+    py::ssize_t nR[3], nTh[3];
+    double rr0[3], rdr[3], rth0[3], rdth[3];
+    for (int g = 0; g < 3; ++g) {
+        auto v = reg_vals[g].unchecked<3>();
+        if (v.shape(0) != 4)
+            throw std::runtime_error("region values must have shape (4, n_r, n_th)");
+        vptr[g] = reg_vals[g].data();
+        nR[g] = v.shape(1);
+        nTh[g] = v.shape(2);
+        rr0[g] = r0b(g);
+        rdr[g] = drb(g);
+        rth0[g] = th0b(g);
+        rdth[g] = dthb(g);
+    }
+
+    py::array_t<std::complex<double>> out({M, S});
+    auto out_m = out.mutable_unchecked<2>();
+
+    py::gil_scoped_release release;
+
+    // Per-source constants (n-only): position + tangent decomposition.
+    std::vector<double> sx(S), sy(S), sz(S), ux(S), uy(S), thsrc(S), tzsrc(S);
+    for (py::ssize_t n = 0; n < S; ++n) {
+        sx[n] = sb(n, 0);
+        sy[n] = sb(n, 1);
+        sz[n] = sb(n, 2);
+        const double txn = tsb(n, 0), tyn = tsb(n, 1);
+        const double th = std::hypot(txn, tyn);
+        const bool safe_t = th > 1e-12;
+        ux[n] = safe_t ? txn / th : 1.0;
+        uy[n] = safe_t ? tyn / th : 0.0;
+        thsrc[n] = th;
+        tzsrc[n] = tsb(n, 2);
+    }
+
+    const double tiny = 1e-12 * r1_max;
+    const double half_pi = 0.5 * M_PI;
+
+    PYSIM_CANCEL_SETUP(cancel_flag);
+    #pragma omp parallel for schedule(static)
+    for (py::ssize_t m = 0; m < M; ++m) {
+        PYSIM_CANCEL_POLL();
+        const double ox = ob(m, 0), oy = ob(m, 1), oz = ob(m, 2);
+        const double tox = tob(m, 0), toy = tob(m, 1), toz = tob(m, 2);
+        const double oh = oz - ground_z;
+        for (py::ssize_t n = 0; n < S; ++n) {
+            const double dx = ox - sx[n];
+            const double dy = oy - sy[n];
+            const double rho = std::hypot(dx, dy);
+            const double hh = oh + (sz[n] - ground_z);
+            const double r1 = std::sqrt(rho * rho + hh * hh);
+
+            // --- inline SommerfeldGrid.eval(r1, theta) ---
+            double theta = std::atan2(hh, rho);
+            if (theta < 0.0) theta = 0.0; else if (theta > half_pi) theta = half_pi;
+            double r1c = r1 > r1_max ? r1_max : r1;  // interp clamps; g uses r1
+            const int reg = (r1c <= r_break) ? 0 : (theta <= th_split ? 1 : 2);
+            const double fr = (r1c - rr0[reg]) / rdr[reg];
+            const double ft = (theta - rth0[reg]) / rdth[reg];
+            int i0 = (int)std::floor(fr) - 1;
+            int j0 = (int)std::floor(ft) - 1;
+            if (i0 < 0) i0 = 0; else if (i0 > nR[reg] - 4) i0 = (int)nR[reg] - 4;
+            if (j0 < 0) j0 = 0; else if (j0 > nTh[reg] - 4) j0 = (int)nTh[reg] - 4;
+            double wr[4], wt[4];
+            somm_proj::lagrange4(fr - i0, wr);
+            somm_proj::lagrange4(ft - j0, wt);
+            const cd *V = vptr[reg];
+            const py::ssize_t nth = nTh[reg], nr = nR[reg];
+            cd surf[4];
+            for (int s = 0; s < 4; ++s) {
+                const cd *plane = V + (py::ssize_t)s * nr * nth;
+                cd acc(0.0, 0.0);
+                for (int i = 0; i < 4; ++i) {
+                    const cd *row = plane + (py::ssize_t)(i0 + i) * nth + j0;
+                    cd rs = row[0] * wt[0] + row[1] * wt[1] + row[2] * wt[2] +
+                            row[3] * wt[3];
+                    acc += rs * wr[i];
+                }
+                surf[s] = acc;
+            }
+            const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2],
+                     IphiH = surf[3];
+
+            // --- projection (eqs 143-147) ---
+            const cd g = std::polar(1.0 / r1, -k * r1);
+            const bool safe_r = rho > tiny;
+            const double inv_rho = safe_r ? 1.0 / rho : 0.0;
+            const double dhx = safe_r ? dx * inv_rho : ux[n];
+            const double dhy = safe_r ? dy * inv_rho : uy[n];
+            const double cphi = ux[n] * dhx + uy[n] * dhy;
+            const double sphi = ux[n] * dhy - uy[n] * dhx;
+            const double thn = thsrc[n], tzn = tzsrc[n];
+            const cd e_rho = g * (tzn * IrhoV + thn * cphi * IrhoH);
+            const cd e_phi = g * (thn * sphi * IphiH);
+            const cd e_z = g * (tzn * IzV - thn * cphi * IrhoV);
+            out_m(m, n) = tox * (dhx * e_rho - dhy * e_phi) +
+                          toy * (dhy * e_rho + dhx * e_phi) + toz * e_z;
+        }
+    }
+    PYSIM_THROW_IF_ABORTED();
+    return out;
+}
+
 
 PYBIND11_MODULE(_accelerators, m) {
     // Phase 2: raised by the long kernels when their cancel_flag is tripped;
@@ -3104,5 +3274,17 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("seg_h"),
           py::arg("a"), py::arg("k"), py::arg("eta"),
           py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("cancel_flag") = 0);
+    m.def("remainder_field_proj_batch", &remainder_field_proj_batch,
+          "Fused Sommerfeld smooth-remainder assembly: interpolate the four "
+          "grid surfaces (4x4 Lagrange) and project t_m.F(r_m,r_n).t_n per "
+          "(observer, source) pair; OpenMP over observer rows. Returns (M, S) "
+          "complex. The grid is passed flattened (per-region r0/dr/th0/dth "
+          "length-3 arrays + a list of three (4,n_r,n_th) value tables).",
+          py::arg("obs"), py::arg("t_obs"), py::arg("src"), py::arg("t_src"),
+          py::arg("ground_z"), py::arg("k"), py::arg("r1_max"),
+          py::arg("r_break"), py::arg("th_split"),
+          py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
+          py::arg("reg_dth"), py::arg("reg_vals"),
           py::arg("cancel_flag") = 0);
 }

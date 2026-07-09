@@ -611,7 +611,7 @@ class SommerfeldGrid:
         return {key: out[s].reshape(shape) for s, key in enumerate(_SURF_KEYS)}
 
 
-def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid):
+def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid, cancel_flag=0):
     """Projected smooth-remainder field table t_m · F(r_m, r_n) · t_n.
 
     The theory-manual eqs 143-147 azimuth combination of the four grid
@@ -628,7 +628,34 @@ def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid):
     obs (M, 3) / t_obs (M, 3), src (S, 3) / t_src (S, 3); returns
     (M, S) complex. Callers chunk the observer axis to bound the
     working set (four surfaces x M x S complexes live at once).
+
+    Routes through the C++ accelerator (`remainder_field_proj_batch`,
+    the Phase-4b fused interpolate+project kernel, OpenMP over observer
+    rows) when it is loaded — this assembly is ~90% of a Sommerfeld
+    solve — and falls back to the vectorized numpy body otherwise. Both
+    paths poll `cancel_flag` (raw int32 address; 0 = no cancellation).
     """
+    if _acc is not None and hasattr(_acc, "remainder_field_proj_batch"):
+        regs = grid._regions
+        reg_vals = [np.ascontiguousarray(r["vals"], dtype=np.complex128) for r in regs]
+        return _acc.remainder_field_proj_batch(
+            obs,
+            t_obs,
+            src,
+            t_src,
+            float(ground_z),
+            float(k),
+            float(grid.r1_max),
+            float(regs[1]["r0"]),  # r_break (= SommerfeldGrid.eval)
+            float(math.radians(20.0)),  # th_split
+            np.array([r["r0"] for r in regs], dtype=float),
+            np.array([r["dr"] for r in regs], dtype=float),
+            np.array([r["th0"] for r in regs], dtype=float),
+            np.array([r["dth"] for r in regs], dtype=float),
+            reg_vals,
+            int(cancel_flag),
+        )
+
     th_src = np.hypot(t_src[:, 0], t_src[:, 1])
     safe_t = th_src > 1e-12
     ux = np.where(safe_t, t_src[:, 0] / np.where(safe_t, th_src, 1.0), 1.0)

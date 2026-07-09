@@ -107,6 +107,40 @@ def test_grid_fill_fallback_equivalence(monkeypatch):
         assert np.abs(vf[kk] - vs[kk]).max() / scale < 1e-6
 
 
+def _proj_sample(seed=0):
+    """Random observer/source points (strictly above ground) with unit
+    tangents — the input shape `remainder_field_proj` sees from the solvers."""
+    rng = np.random.default_rng(seed)
+
+    def pts(n):
+        p = rng.uniform(-0.4 * LAM, 0.4 * LAM, (n, 3))
+        p[:, 2] = rng.uniform(0.01 * LAM, 0.3 * LAM, n)  # strictly above z=0
+        return p
+
+    def tang(n):
+        t = rng.standard_normal((n, 3))
+        return t / np.linalg.norm(t, axis=1, keepdims=True)
+
+    m, s = 61, 73
+    return pts(m), tang(m), pts(s), tang(s)
+
+
+@needs_acc
+@pytest.mark.parametrize("eps_t", EPS_LIST)
+def test_remainder_field_proj_accel_matches_python(eps_t, monkeypatch):
+    """The fused C++ `remainder_field_proj_batch` must reproduce the
+    vectorized numpy body to round-off (Phase 4b honest-fallback)."""
+    obs, t_obs, src, t_src = _proj_sample()
+    # Size the grid to the sample so no query exceeds r1_max (the solvers
+    # always do this; the numpy body raises on overshoot, the kernel clamps).
+    grid = sm.SommerfeldGrid(eps_t, K2, 1.6 * LAM)
+    fast = sm.remainder_field_proj(obs, t_obs, src, t_src, 0.0, K2, grid)
+    monkeypatch.setattr(sm, "_acc", None)
+    slow = sm.remainder_field_proj(obs, t_obs, src, t_src, 0.0, K2, grid)
+    scale = np.abs(slow).max() + 1e-300
+    assert np.abs(fast - slow).max() / scale < 1e-11
+
+
 # ---------------------------------------------------------------------------
 # Cooperative cancellation (same drain pattern as the other kernels)
 # ---------------------------------------------------------------------------
