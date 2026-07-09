@@ -33,44 +33,51 @@ batching — see the gate below). The branch predates v0.6.0+; expect a
 substantial rebase (refl-coef/sommerfeld ground landed in the swept
 loop since).
 
-## ⚠️ Gate 0 — Triangular and BSpline d=1 are NOT the same solver
+## Gate 0 — the "different solvers" scare: RESOLVED (2026-07-08)
 
-The consolidation plan documents this (it's why the last attempt
-stalled): despite being the same tent basis, the two are **genuinely
-different finite-N quadrature schemes**. Same geometry, same n_qp=4:
+The consolidation plan on the PR #101 branch reported up to **5.1%**
+impedance disagreement between triangular and bspline d=1 at coarse N
+and concluded they are "genuinely different quadrature schemes" needing
+an accuracy arbitration before retirement. **That conclusion is wrong —
+the entire difference is the FEED CONVENTION, measured on odd nsegs.**
 
-| case | triangular | bspline d=1 | rel diff |
-|---|---|---|--:|
-| dipole N=21 | 11.61 − 963.8j | 12.84 − 1013.2j | **5.1%** |
-| dipole N=81 | 11.57 − 958.9j | 11.97 − 975.4j | 1.7% |
-| yagi2 N=21 | 34.86 − 11.65j | 34.93 − 11.55j | 0.34% |
+Reproduction on current main (short 0.24 λ dipole, the doc's worst
+case):
 
-They converge to the same limit (agreement ~0.1 Ω by N=101 on the
-resonant dipole) but disagree up to ~5% at coarse N on off-resonance
-reactance. Suspected mechanisms (not yet pinned): same-edge
-static-moment split vs tent-specific closed forms, delta-gap source
-projection, off-edge full-kernel evaluation. The `_bspline_kernels.py`
-"bit-for-bit equivalent" docstring is **wrong end-to-end** — fix it as
-part of this work.
+- **Even nsegs** (feed knot exactly at midpoint): |ΔZ| ≤ 8e-11 Ω at
+  N = 10/20/40/80, resonant AND short — **numerically identical**.
+- **Odd nsegs**, both fed "at the midpoint": 5.1% at N=21 — but
+  triangular SNAPS the delta-gap to the nearest interior knot (half a
+  segment off-center) while bspline evaluates the source at the exact
+  arclength, splitting the delta-gap between two tents.
+- **Odd nsegs with bspline's `feed_arclength` set to the knot
+  triangular snapped to: |ΔZ| ≤ 4e-11 Ω.** Assembly, same-edge
+  moments, off-edge kernel — all bit-equivalent to roundoff; the
+  `_bspline_kernels.py` "bit-for-bit" docstring is RIGHT about the
+  kernels. Only the source placement differs.
 
-**What changed since that gate was written:** antennaknobs v0.19.0
-already switched every user to bspline d=2 — the user-facing result
-shift the old gate guarded against **has already happened and been
-recalibrated** (zepp/skyloop/PyNEC-sanity test updates). Triangular is
-now reachable only via direct momwire API use. So the gate softens
-from "arbitrate before any user sees a shift" to:
+Notes that fall out of this:
 
-- [ ] Diff the same-edge, off-edge, and source-vector contributions
-      between the two solvers at fixed geometry; name the mechanism(s).
-- [ ] Establish which scheme is more accurate at coarse N against a
-      refined-N reference + nec2c (extends the NEXT_STEPS item 13
-      convergence study).
-- [ ] Port triangular's unique tests to d=1 pinning **bspline's own
-      converged values** (not triangular's finite-N values — they WILL
-      differ at coarse N; a naive "port the numbers" migration fails,
-      which is the trap the last attempt hit).
-- [ ] Correct the false docstring; document the scheme difference in
-      the module docstrings so it isn't rediscovered a third time.
+- The recorded parity convention already runs both solvers at even
+  nsegs, where they are identical — which is why this never bit in
+  practice.
+- Of the two odd-N conventions, triangular's snap gives the better
+  finite-N answer (a between-knots delta-gap is poorly represented by
+  the d=1 basis: N=21 short dipole, snap = 11.99−944.75j vs mid-split
+  13.24−992.76j vs converged ≈ 11.95−939.8j). d=2 doesn't care (its
+  basis can put current extrema between knots).
+
+Remaining Gate 0 work (small now):
+
+- [ ] Test migration rule: port triangular's unique tests at EVEN
+      nsegs (values carry over exactly), or set `feed_arclength` to a
+      knot. Never port an odd-N midpoint-fed triangular value verbatim.
+- [ ] Decide the documented d=1 odd-N feed guidance (use even N /
+      explicit knot feed; optionally add a snap-to-knot opt-in to
+      BSplineSolver if any migrated caller needs it — likely none do).
+- [ ] Correct `docs/bspline-swept-consolidation-plan.md`'s "different
+      quadratures" section (and any docstring that echoes it) so the
+      scare isn't rediscovered a third time.
 
 ## Phase 0 — baselines and honest sizing (safe during the hold)
 
