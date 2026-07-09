@@ -1314,7 +1314,9 @@ def test_bspline_d2_hentenna_enrichment_tikhonov_variant():
         enrichment_variant="tikhonov",
         tikhonov_lambda=0.0,
     ).compute_impedance()
-    z_off, _ = BSplineSolver(**common, use_singular_enrichment=False).compute_impedance()
+    z_off, _ = BSplineSolver(
+        **common, use_singular_enrichment=False
+    ).compute_impedance()
     z_tik_big, _ = BSplineSolver(
         **common,
         use_singular_enrichment=True,
@@ -1388,7 +1390,9 @@ def test_bspline_enrichment_auto_two_pass_selects_correctly():
         nsegs=n,
         junctions=h_juncs,
     )
-    z_h_off, _ = BSplineSolver(**h_kw, use_singular_enrichment=False).compute_impedance()
+    z_h_off, _ = BSplineSolver(
+        **h_kw, use_singular_enrichment=False
+    ).compute_impedance()
     sim_h_auto = BSplineSolver(
         **h_kw, use_singular_enrichment=True, enrichment_variant="auto"
     )
@@ -1985,7 +1989,9 @@ def test_triangular_fandipole_two_band_smoke():
         assert -50.0 < z.imag < 60.0, f"f={fmhz}: X={z.imag} out of plausible range"
 
 
-def _fandipole_two_band_sim(N, wavelength, solver_cls=TriangularSolver, **solver_kwargs):
+def _fandipole_two_band_sim(
+    N, wavelength, solver_cls=TriangularSolver, **solver_kwargs
+):
     """Helper: build the same K=3 two-band fan dipole used in the smoke test.
     Returned simulator has junctions=[S, T] each connecting 3 wire ends.
 
@@ -2133,7 +2139,10 @@ def test_bspline_fandipole_swept_matches_per_freq(degree):
     z_swept = sim_sweep.compute_impedance_swept(k_array)
     for f, zs in zip(freqs_mhz, z_swept):
         sim_f = _fandipole_two_band_sim(
-            N=11, wavelength=C_LIGHT / (f * 1e6), solver_cls=BSplineSolver, degree=degree
+            N=11,
+            wavelength=C_LIGHT / (f * 1e6),
+            solver_cls=BSplineSolver,
+            degree=degree,
         )
         z_f, _ = sim_f.compute_impedance()
         # Batched-over-k reg einsum changes the floating-point reduction order,
@@ -2141,6 +2150,62 @@ def test_bspline_fandipole_swept_matches_per_freq(degree):
         assert abs(zs - z_f) <= 1e-9 * abs(z_f), (
             f"d={degree}, f={f} MHz: swept={zs}, single={z_f}"
         )
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize("ground_z", [None, 0.0])
+def test_bspline_swept_fully_batched_matches_per_freq(degree, ground_z):
+    """The fully batched swept fast path (batched off-edge moments + batched
+    C++ assemble + stacked LAPACK solve) must agree with per-frequency
+    solves to roundoff. Covers free space and the PEC image ground — the
+    two cases the fast path claims; junction/enrichment/finite-ground
+    cases fall back and are covered elsewhere.
+    """
+    hd = 0.962 * 22 / 4
+    z_off = 7.0 if ground_z is not None else 0.0
+    wires = (
+        [np.array([[-hd, 0.0, z_off], [hd, 0.0, z_off]])]
+        if ground_z is not None
+        else [np.array([[0.0, 0.0, -hd], [0.0, 0.0, hd]])]
+    )
+    kwargs = dict(wires=wires, nsegs=24, degree=degree)
+    if ground_z is not None:
+        kwargs["ground_z"] = ground_z
+
+    C_LIGHT = 299_792_458.0
+    k0 = 2 * np.pi / 22
+    k_array = np.linspace(0.9 * k0, 1.1 * k0, 5)
+
+    sim = BSplineSolver(**kwargs)
+    z_swept = sim.compute_impedance_swept(k_array)
+    for kk, zs in zip(k_array, z_swept):
+        sim_f = BSplineSolver(wavelength=2 * np.pi / kk, **kwargs)
+        z_f, _ = sim_f.compute_impedance()
+        assert abs(zs - z_f) <= 1e-9 * abs(z_f), (
+            f"d={degree}, ground={ground_z}, k={kk}: swept={zs}, single={z_f}"
+        )
+    _ = C_LIGHT  # (kept for symmetry with sibling tests)
+
+
+def test_bspline_swept_fully_batched_multifeed_matches_per_freq():
+    """Multi-feed variant of the batched fast path: per-feed driving-point
+    vector must match per-frequency solves."""
+    hd = 0.962 * 22 / 4
+    wires = [
+        np.array([[0.0, 0.0, -hd], [0.0, 0.0, hd]]),
+        np.array([[3.0, 0.0, -hd], [3.0, 0.0, hd]]),
+    ]
+    feeds = [(0, None, 1.0), (1, None, 1.0 + 0.5j)]
+    k0 = 2 * np.pi / 22
+    k_array = np.linspace(0.95 * k0, 1.05 * k0, 3)
+    sim = BSplineSolver(wires=wires, nsegs=20, degree=2, feeds=feeds)
+    z_swept = sim.compute_impedance_swept(k_array)  # (n_k, n_feeds)
+    for kk, zs in zip(k_array, z_swept):
+        sim_f = BSplineSolver(
+            wires=wires, nsegs=20, degree=2, feeds=feeds, wavelength=2 * np.pi / kk
+        )
+        z_f, _ = sim_f.compute_impedance()
+        assert np.allclose(zs, z_f, rtol=1e-9, atol=0), f"k={kk}: {zs} vs {z_f}"
 
 
 # ---- PEC ground (image method) ----
