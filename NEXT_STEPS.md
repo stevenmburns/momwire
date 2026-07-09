@@ -2,6 +2,15 @@
 
 Living roadmap of what's done and what's left. Updated as work lands.
 
+> **Historical note (2026-07-08):** this log predates the pysim → momwire
+> rename; class/module names below are the old ones. `TriangularPySim` /
+> `TriangularSolver` — the original tent-basis solver most of this log
+> chronicles — has been **retired**: `BSplineSolver(degree=1)` is the same
+> numerical scheme to roundoff on knot-fed meshes (pinned in
+> `tests/test_tent_parity.py`), and its batched swept path now covers what
+> triangular did (junctions and multi-port Y included). See
+> `docs/triangular-retirement-plan.md`.
+
 ## Where we are
 
 The codebase has one active solver, two optional comparators (a NEC-faithful and a higher-order-basis arbiter), and one legacy comparator:

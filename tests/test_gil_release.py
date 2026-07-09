@@ -38,10 +38,11 @@ import pytest
 accel = pytest.importorskip("momwire._accelerators")
 
 
-def test_seg_seg_quad_batch_3d_releases_gil():
+def test_seg_seg_full_moments_bspline_swept_releases_gil():
     # N large enough that one native call runs for tens of ms — long enough for
     # a frozen watcher (GIL held) to be plainly distinguishable from a
-    # cooperatively-yielding one (GIL released).
+    # cooperatively-yielding one (GIL released). Probes the batched swept
+    # off-edge moments kernel (the long fill of the batched sweep path).
     N = 500
     rng = np.random.default_rng(0)
     seg_l = rng.standard_normal((N, 3))
@@ -64,8 +65,8 @@ def test_seg_seg_quad_batch_3d_releases_gil():
         time.sleep(0.02)  # let the watcher ramp up on its own core
         i0 = len(samples)
         t0 = time.perf_counter()
-        accel.seg_seg_quad_batch_3d(
-            seg_l, seg_r, seg_l, seg_r, 1e-6, k_array, gl_t, gl_w
+        accel.seg_seg_full_moments_bspline_swept(
+            seg_l, seg_r, seg_l, seg_r, 1e-6, k_array, 2, gl_t, gl_w
         )
         fill = time.perf_counter() - t0
     finally:

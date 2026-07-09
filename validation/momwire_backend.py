@@ -103,7 +103,6 @@ import numpy as np
 from momwire.bspline import BSplineSolver
 from momwire.hmatrix import HMatrixSolver
 from momwire.sinusoidal import SinusoidalSolver
-from momwire.triangular import TriangularSolver
 
 from . import pynec_backend
 from .examples import REGISTRY as EXAMPLES
@@ -114,7 +113,6 @@ from .examples import REGISTRY as EXAMPLES
 # unrecognised option from a stale client never raises. Defaults match the
 # class signatures so unset options behave identically to the old code.
 _PYSIM_MODEL_KEYS = {
-    "triangular": ("n_qp_reg", "n_qp_off"),
     "sinusoidal": ("n_qp_const",),
     "bspline": (
         "degree",
@@ -142,7 +140,6 @@ _PYSIM_MODEL_KEYS = {
     ),
 }
 _PYSIM_MODELS = {
-    "triangular": TriangularSolver,
     "sinusoidal": SinusoidalSolver,
     "bspline": BSplineSolver,
     "hmatrix": HMatrixSolver,
@@ -150,7 +147,7 @@ _PYSIM_MODELS = {
 
 
 # hmatrix supports ground through its dense fallback path.
-_PYSIM_MODELS_WITH_GROUND = {"triangular", "bspline", "sinusoidal", "hmatrix"}
+_PYSIM_MODELS_WITH_GROUND = {"bspline", "sinusoidal", "hmatrix"}
 
 
 def _make_momwire_sim(req: dict, **base_kwargs):
@@ -163,9 +160,10 @@ def _make_momwire_sim(req: dict, **base_kwargs):
     excluded by name. model_options entries are filtered through the
     per-model allowlist.
     """
-    model = req.get("momwire_model", "triangular")
+    model = req.get("momwire_model", "bspline")
     if model not in _PYSIM_MODELS:
-        model = "triangular"
+        # Retired model names (e.g. "triangular") fall back to bspline.
+        model = "bspline"
     cls = _PYSIM_MODELS[model]
     allowed = _PYSIM_MODEL_KEYS[model]
 
@@ -178,7 +176,7 @@ def _make_momwire_sim(req: dict, **base_kwargs):
     return cls(**base_kwargs, **extra)
 
 
-C_LIGHT = 299_792_458.0  # m/s, matches TriangularSolver's eps*mu derivation to ~1e-9
+C_LIGHT = 299_792_458.0  # m/s, matches the momwire solvers' eps*mu derivation to ~1e-9
 _EPS0 = 8.854187817e-12  # F/m
 
 

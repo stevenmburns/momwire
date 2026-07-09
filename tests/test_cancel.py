@@ -26,12 +26,11 @@ from momwire import (
     HMatrixSolver,
     SinusoidalSolver,
     SolveAborted,
-    TriangularSolver,
 )
 
 HALF = 0.962 * 22 / 4
 DIPOLE = [np.array([[0.0, 0.0, -HALF], [0.0, 0.0, HALF]])]
-BASE_SOLVERS = [SinusoidalSolver, TriangularSolver, BSplineSolver]
+BASE_SOLVERS = [SinusoidalSolver, BSplineSolver]
 
 
 def _dipole(cls, *, cancel=None, nsegs=60):
@@ -113,7 +112,9 @@ def test_precancel_is_fast_relative_to_full_solve():
         _dipole(SinusoidalSolver, cancel=token, nsegs=120).compute_impedance()
     aborted = time.perf_counter() - t0
 
-    assert aborted < 0.5 * full, f"abort {aborted*1e3:.1f}ms vs full {full*1e3:.1f}ms"
+    assert aborted < 0.5 * full, (
+        f"abort {aborted * 1e3:.1f}ms vs full {full * 1e3:.1f}ms"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -223,12 +224,14 @@ def test_accelerator_aborted_maps_to_solve_aborted():
     from momwire._accel import acc
 
     flag = np.ones(1, dtype=np.int32)
-    sl = np.zeros((16, 3))
-    gx, gw = np.polynomial.legendre.leggauss(6)
+    n_seg, n_basis, d = 5, 4, 1
+    J = np.zeros((d + 1, d + 1, n_seg, n_seg), dtype=np.complex128)
+    supp = np.zeros((n_basis, d + 1), dtype=np.int64)
+    polys = np.zeros((n_basis, d + 1, d + 1), dtype=np.float64)
+    td = np.zeros((n_seg, n_seg), dtype=np.float64)
     with pytest.raises(SolveAborted):
-        acc.seg_seg_quad_batch_3d(
-            sl, sl + 0.01, sl, sl + 0.01, 1e-6,
-            np.array([1.0, 2.0]), (gx + 1) / 2, gw / 2, flag.ctypes.data,
+        acc.assemble_Z_bspline(
+            J, supp, polys, td, 1.0e6, 8.85e-12, 1.26e-6, d, flag.ctypes.data
         )
 
 
@@ -236,9 +239,9 @@ def test_accelerator_aborted_maps_to_solve_aborted():
 def test_untripped_flag_leaves_result_unchanged():
     # Passing a live-but-untripped token must produce the identical result as
     # no token (the drain adds no arithmetic on the happy path).
-    z_ref, a_ref = _dipole(TriangularSolver, nsegs=60).compute_impedance()
+    z_ref, a_ref = _dipole(BSplineSolver, nsegs=60).compute_impedance()
     z_tok, a_tok = _dipole(
-        TriangularSolver, cancel=CancelToken(), nsegs=60
+        BSplineSolver, cancel=CancelToken(), nsegs=60
     ).compute_impedance()
     assert np.allclose(z_ref, z_tok)
     assert np.allclose(a_ref, a_tok)

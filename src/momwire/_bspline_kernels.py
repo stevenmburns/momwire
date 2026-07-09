@@ -19,7 +19,10 @@ The full moment is S_pq + R_pq on same-edge pairs; for cross-edge / cross-
 wire pairs (not in this first-cut single-wire scope) the unregularized
 GL quadrature on G = exp(-jkR)/(4π R) is fine because R ≥ a there.
 
-For the triangular basis (degree 1) this is bit-for-bit equivalent to the
+For the tent basis (degree 1) this is bit-for-bit equivalent to the retired
+TriangularSolver's same-edge kernels (verified end-to-end: the two solvers
+agreed to solve-order roundoff on knot-fed meshes — tests/test_tent_parity.py
+pins the values), i.e. equivalent to the
 existing `_seg_seg_static_all` + `_seg_seg_reg_all` kernels; the new
 module is just the generalization to higher polynomial moments.
 """

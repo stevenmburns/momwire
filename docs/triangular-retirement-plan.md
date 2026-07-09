@@ -1,10 +1,8 @@
 # Triangular retirement — transfer the batched sweep to BSpline, then delete
 
-**STATUS: ON HOLD (2026-07-08)** — sequenced behind PR #125 (Sommerfeld
-perf Phase 4), which rewrites the remainder-assembly code the swept
-drivers call and adds kernels to the same `_accelerators.cpp` this plan
-touches. Land #125 first, then rebase this work. Phase 0 below is
-disjoint from #125 and safe to run any time.
+**STATUS: EXECUTED (2026-07-08, branch `feat/retire-triangular`)** — all
+phases below are done except the release (Phase 4). PR #125 landed first
+as planned. Measured results are inlined per phase.
 
 Goal: remove `TriangularSolver` from momwire. antennaknobs already
 retired it end to end (v0.19.0: frontend, adapter, CLI, engine default →
@@ -74,15 +72,19 @@ Notes that fall out of this:
 
 Remaining Gate 0 work (small now):
 
-- [ ] Test migration rule: port triangular's unique tests at EVEN
-      nsegs (values carry over exactly), or set `feed_arclength` to a
-      knot. Never port an odd-N midpoint-fed triangular value verbatim.
-- [ ] Decide the documented d=1 odd-N feed guidance (use even N /
-      explicit knot feed; optionally add a snap-to-knot opt-in to
-      BSplineSolver if any migrated caller needs it — likely none do).
-- [ ] Correct `docs/bspline-swept-consolidation-plan.md`'s "different
-      quadratures" section (and any docstring that echoes it) so the
-      scare isn't rediscovered a third time.
+- [x] Test migration rule: ported triangular's unique tests at EVEN
+      nsegs / knot-fed arclengths; `tests/test_tent_parity.py` carries
+      the pinned d=1 values (recorded at roundoff agreement with
+      triangular before deletion) plus the odd-N feed-convention pin.
+- [x] d=1 odd-N feed guidance documented in the BSplineSolver `degree`
+      docstring and the tent-parity module docstring; no snap-to-knot
+      option needed (no migrated caller wanted one; antennaknobs
+      coerces d=1 to even N anyway).
+- [x] The "different quadratures" scare is corrected here and in the
+      `_bspline_kernels.py` docstring (whose bit-for-bit claim was in
+      fact RIGHT); `docs/bspline-swept-consolidation-plan.md` only ever
+      existed on the PR #101 branch, which this branch supersedes —
+      close #101 unmerged when this lands.
 
 ## Phase 0 — baselines and honest sizing
 
@@ -105,57 +107,81 @@ Remaining Gate 0 work (small now):
       skyloop) confirm the batched-KCL half matters, not just the
       dense case.
 
-## Phase 1 — rebase + revive PR #101 (after #125 lands)
+## Phase 1 — rebase + revive PR #101 (after #125 lands) — DONE
 
-- [ ] Rebase `feat/bspline-swept-batched-assemble` onto main; resolve
-      `_accelerators.cpp` against #125's kernels; re-verify bit-exact
-      + the 1e-10 swept-vs-per-freq gate.
-- [ ] Extend the batched path's ground coverage to refl-coef (batched
-      weighted assemble + per-k w_A/w_Phi weights); sommerfeld remainder
-      stays per-k inside the chunk loop (grid keyed on (ε̃, k); it's the
-      opt-in expensive path and #125 is making it fast).
+- [x] Cherry-picked #101's feature commit onto post-#125 main; resolved
+      `_accelerators.cpp` / `bspline.py` / `_bspline_kernels.py`;
+      batched == per-k to ≤3e-11 (regression tests added — #101 carried
+      none). Dropped the unused `offedge_full`/`image_full` pass-through
+      and the fallback's unchunked whole-sweep off-edge prebuild
+      (~1 GB at production scale).
+- [x] Ground: batched path serves free space + PEC; finite grounds
+      (refl-coef, sommerfeld) fall back to the per-k loop — they carry
+      per-k ε̃(ω) weight tables / (ε̃, k)-keyed grids, were never fast
+      under triangular (which had no finite ground at all), and #125
+      just compiled the sommerfeld remainder. Batched refl-coef is an
+      optional later enhancement, NOT a retirement blocker.
 
-## Phase 2 — the hard half: junctions + multi-port (the real blockers)
+## Phase 2 — the hard half: junctions + multi-port — DONE (no new C++!)
 
-Per the consolidation plan's priority order:
+The consolidation plan assumed a `assemble_Z_bspline_general_swept`
+kernel was needed. It isn't: bspline's assembly is already general —
+junction directional bases live inside `supp_seg`/`polys`, which
+`assemble_Z_bspline_swept` consumes as-is. Only the KCL constraint
+needed batching, in pure Python:
 
-- [ ] `assemble_Z_bspline_general_swept` (C++): batched general
-      per-basis `(support_seg, support_L, support_R)` assemble —
-      mirror of triangular's batched `assemble_Z_general`.
-- [ ] Batched KCL Schur solve over the `(n_k, n_b, n_b)` stack: port
-      `_solve_with_kcl_batch` / `_solve_with_kcl_swept_ports` from
-      triangular.py — pure Schur algebra on (Z, kcl_A), basis-agnostic,
-      moves verbatim.
-- [ ] `compute_y_matrix_swept` batched fast path (matrix RHS through
-      the same solve).
-- [ ] Enrichment stays gated per-k (bspline-only feature, no
-      retirement blocker; existing NotImplementedError stands).
-- [ ] Regression: swept == per-k to ~1e-10 on dipole/V/yagi/K=3
-      fan-dipole × {free, PEC, refl-coef} × {single-feed, multi-port}.
-- [ ] Acceptance: bspline d=2 swept within ~2× of old triangular on
-      the Phase 0 production shapes; accept the documented residual
-      (single large-wire single-thread ~1.3–1.5×, same-edge scheme).
+- [x] `_solve_with_kcl_batch` / `_solve_with_kcl_swept_ports` ported
+      verbatim from triangular.py (basis-agnostic Schur algebra).
+- [x] Shared `_swept_batched_z_chunks` generator; junction-capable
+      `compute_impedance_swept` + batched `compute_y_matrix_swept`.
+- [x] Chunking fix (the real perf unlock): hoist same-edge reg moments
+      for the FULL sweep (the streaming kernel amortizes its R hoist
+      across the whole k axis; per-chunk calls were 52% of the
+      fandipole sweep) and raise the J budget 32→256 MB (24 MB/k at
+      N=400 d=2 degenerated to chunk=1, killing the off-edge kernel's
+      R reuse).
+- [x] Enrichment stays gated per-k (existing NotImplementedError).
+- [x] Regression: batched == per-k to ≤1e-11 across the junction ×
+      ground × multi-port matrix (existing + new tests).
+- [x] Acceptance measured (41-pt sweep vs triangular; was 7–11×):
+      fandipole d1 1.4× / d2 2.6×; dipole400 d1 1.1× / d2 2.2×;
+      skyloop d1 1.3× / d2 2.4×. d2's arithmetic floor is 2.25×
+      (9 vs 4 moment channels), so d2 is at its floor and d1 is at
+      parity — accepted.
 
-## Phase 3 — delete Triangular
+## Phase 3 — delete Triangular — DONE
 
-- [ ] Delete `triangular.py`, `_triangular_kernels.py`, the
-      `TriangularSolver` export in `__init__.py`.
-- [ ] Delete the now-dead C++ kernels: `seg_seg_quad_batch_3d`,
-      `seg_seg_reg_quad_batch_1d`, `assemble_Z`, `assemble_Z_general`
-      (grep first — bspline/hmatrix `assemble_Z*` hits are the
-      `assemble_Z_bspline*` names; hmatrix/array_block are
-      BSplineSolver subclasses, expected clean — verify).
-- [ ] Tests: migrate per Gate 0's pinning rule; update
-      `test_cancel.py` / `test_gil_release.py` entries.
-- [ ] Migrate `validation/momwire_backend.py` + examples (hentenna,
-      hexbeam, bowtie, yagi, feedline) and `scripts/compare_*` /
-      `probe_*` to bspline; delete `profile_triangular.py` and
-      triangular-specific probes.
-- [ ] De-stale docstrings naming TriangularSolver as "the default"
-      (sinusoidal.py, bspline.py); retirement note in NEXT_STEPS.md
-      (it's a log — keep history intact). Fold the still-relevant
-      parts of `docs/bspline-swept-consolidation-plan.md` into this
-      doc and retire that one.
+- [x] Deleted `triangular.py`, `_triangular_kernels.py`, the
+      `TriangularSolver` export, and the four dead C++ kernels
+      (`seg_seg_quad_batch_3d`, `seg_seg_reg_quad_batch_1d`,
+      `assemble_Z`, `assemble_Z_general`) + their m.defs and the
+      `_accel.py` cancellable-kernel registry entries. Verified
+      hmatrix/array_block clean (their `assemble_Z*` hits are the
+      bspline names).
+- [x] Tests migrated: 19 redundant triangular tests deleted (bspline
+      equivalents existed); geometry smokes (yagi/V/collinear/moxon/
+      hexbeam/hentenna/bowtie/K=2-junction) converted to d=1; the
+      hentenna arbitration + ground cross-checks now reference d=1
+      with the same pinned constants; `test_tent_parity.py` rewritten
+      as pinned-value regressions; test_cancel's abort-mapping test
+      re-targeted at `assemble_Z_bspline`. Note learned in migration:
+      K=2-junction ≡ single-polyline is EXACT only for d=1 (d=2's
+      split changes the basis space slightly, ~4e-6 Ω — documented in
+      the test).
+- [x] `validation/momwire_backend.py` default → bspline with
+      retired-name fallback; example comments de-staled; deleted the
+      triangular-purposed scripts (`profile_triangular`,
+      `compare_vdipole_nec`, `compare_yagi_nec`,
+      `compare_fandipole_solvers`, `vtune_hentenna_width_sweep` — all
+      already dead: they still imported the pre-rename `pysim`
+      package).
+- [x] Docstrings de-staled (sinusoidal.py "the default", bspline.py
+      TriangularSolver cross-references, `_bspline_kernels.py`
+      bit-for-bit claim now stated correctly); NEXT_STEPS.md carries a
+      retirement banner; the consolidation-plan doc stays on the
+      superseded PR #101 branch (close #101 unmerged).
+- [x] Net: −2900 lines (triangular.py 1091, kernels 272, ~630 C++,
+      scripts + tests), one Galerkin solver family.
 
 ## Phase 4 — release
 
