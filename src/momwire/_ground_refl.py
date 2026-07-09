@@ -102,7 +102,9 @@ def specular_ray_tables(centers, ground_z, src_centers=None):
     return cos_th, px, py
 
 
-def specular_pair_tables(centers, tangents, ground_z, src_centers=None, src_tangents=None):
+def specular_pair_tables(
+    centers, tangents, ground_z, src_centers=None, src_tangents=None
+):
     """Frequency-independent per-pair specular geometry.
 
     For observer segment m (midpoint r_m, unit tangent t_m) and source

@@ -550,9 +550,7 @@ def test_ground_eps_numpy_image_evaluators_match_accel():
     n = ctx["n_basis"]
     I = np.arange(0, n // 3, dtype=np.int64)
     J = np.arange(2 * n // 3, n, dtype=np.int64)
-    _row, _col, dense_accel = sim._offedge_block_evaluators(
-        ctx, I, J, sim.k, refl=True
-    )
+    _row, _col, dense_accel = sim._offedge_block_evaluators(ctx, I, J, sim.k, refl=True)
     D_accel = dense_accel()
     D_numpy = sim._zblock_image_refl(I, J, k=sim.k)
     assert np.abs(D_accel - D_numpy).max() / np.abs(D_numpy).max() < 1e-12
