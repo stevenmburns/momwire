@@ -303,3 +303,29 @@ def test_fused_Q_kernel_matches_numpy_galerkin(degree, monkeypatch):
     z_np = _solve("yagi", 0.2, degree=degree, **SOMM)
 
     assert np.abs(z_fused - z_np).max() / np.abs(z_np).max() < 1e-11
+
+
+@pytest.mark.parametrize("cls", [HMatrixSolver, ArrayBlockSolver])
+def test_fused_Q_rect_kernel_matches_numpy_fast_solvers(cls, monkeypatch):
+    """The ACA sampler's rectangular fused kernel (obs != src) must match
+    the numpy Galerkin path for both fast solvers — same rectangular kernel
+    the dense block uses, exercised through the low-rank remainder term."""
+    import momwire.hmatrix as hm
+
+    if hm._acc is None or not hasattr(hm._acc, "sommerfeld_remainder_bspline_Q"):
+        pytest.skip("fused sommerfeld kernel unavailable")
+
+    z_fused = _solve("yagi", 0.2, cls=cls, **SOMM)
+
+    real = hm._acc
+
+    class _NoFused:
+        def __getattr__(self, name):
+            if name == "sommerfeld_remainder_bspline_Q":
+                raise AttributeError(name)
+            return getattr(real, name)
+
+    monkeypatch.setattr(hm, "_acc", _NoFused())
+    z_np = _solve("yagi", 0.2, cls=cls, **SOMM)
+
+    assert np.abs(z_fused - z_np).max() / np.abs(z_np).max() < 1e-10

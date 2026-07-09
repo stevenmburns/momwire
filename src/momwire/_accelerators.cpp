@@ -3161,15 +3161,23 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
 //   Q[m,n]      = sum_{a,b,p,P} polys[m,a,p] * Jf[p,P, supp[m,a], supp[n,b]]
 //                                            * polys[n,b,P]
 //
-// nodes (n_seg, q, 3), tang (n_seg, 3), W (d+1, n_seg, q), supp_seg
-// (n_basis, d+1) int64, polys (n_basis, d+1, d+1). Grid passed as in
-// remainder_field_proj_batch.
+// Rectangular obs/src form: the dense b-spline block is the symmetric case
+// (obs == src, loc == supp_seg), the ACA sampler passes thin obs/src segment
+// subsets with local support maps. obs_nodes (nsI, q, 3), obs_tang (nsI, 3),
+// W_obs (d+1, nsI, q); likewise src_*; loc_I (nI, d+1) int64 indexes obs
+// segments, pI (nI, d+1, d+1); loc_J/pJ index src. Grid passed as in
+// remainder_field_proj_batch. Returns Q (nI, nJ).
 static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
-    py::array_t<double, py::array::c_style | py::array::forcecast> nodes,
-    py::array_t<double, py::array::c_style | py::array::forcecast> tang,
-    py::array_t<double, py::array::c_style | py::array::forcecast> W,
-    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_seg,
-    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_nodes,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tang,
+    py::array_t<double, py::array::c_style | py::array::forcecast> W_obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_nodes,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tang,
+    py::array_t<double, py::array::c_style | py::array::forcecast> W_src,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> loc_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> pI,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> loc_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> pJ,
     double ground_z, double k, double r1_max, double r_break, double th_split,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
@@ -3179,72 +3187,80 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
                             py::array::c_style | py::array::forcecast>> reg_vals,
     uintptr_t cancel_flag = 0) {
     using somm_proj::cd;
-    auto nd = nodes.unchecked<3>();
-    auto tg = tang.unchecked<2>();
-    auto Wv = W.unchecked<3>();
-    auto ss = supp_seg.unchecked<2>();
-    auto pl = polys.unchecked<3>();
+    auto ndI = obs_nodes.unchecked<3>();
+    auto tgI = obs_tang.unchecked<2>();
+    auto WvI = W_obs.unchecked<3>();
+    auto ndJ = src_nodes.unchecked<3>();
+    auto tgJ = src_tang.unchecked<2>();
+    auto WvJ = W_src.unchecked<3>();
+    auto lI = loc_I.unchecked<2>();
+    auto lJ = loc_J.unchecked<2>();
+    auto plI = pI.unchecked<3>();
+    auto plJ = pJ.unchecked<3>();
 
-    const py::ssize_t n_seg = nd.shape(0);
-    const py::ssize_t q = nd.shape(1);
-    const int d1 = (int)Wv.shape(0);  // degree + 1
-    const py::ssize_t n_basis = ss.shape(0);
-    if (nd.shape(2) != 3 || tg.shape(1) != 3)
-        throw std::runtime_error("nodes/tang must be (n_seg, q, 3)/(n_seg, 3)");
-    if (Wv.shape(1) != n_seg || Wv.shape(2) != q)
-        throw std::runtime_error("W must be (d+1, n_seg, q)");
-    if (ss.shape(1) != d1 || pl.shape(1) != d1 || pl.shape(2) != d1)
-        throw std::runtime_error("supp_seg/polys inconsistent with degree");
+    const py::ssize_t nsI = ndI.shape(0);
+    const py::ssize_t nsJ = ndJ.shape(0);
+    const py::ssize_t q = ndI.shape(1);
+    const int d1 = (int)WvI.shape(0);  // degree + 1
+    const py::ssize_t nI = lI.shape(0);
+    const py::ssize_t nJ = lJ.shape(0);
+    if (ndI.shape(2) != 3 || ndJ.shape(2) != 3 || ndJ.shape(1) != q)
+        throw std::runtime_error("obs/src nodes must be (n_seg, q, 3), same q");
+    if (WvI.shape(1) != nsI || WvI.shape(2) != q || WvJ.shape(1) != nsJ ||
+        WvJ.shape(2) != q || (int)WvJ.shape(0) != d1)
+        throw std::runtime_error("W_obs/W_src inconsistent with nodes/degree");
+    if (lI.shape(1) != d1 || lJ.shape(1) != d1 || plI.shape(1) != d1 ||
+        plI.shape(2) != d1 || plJ.shape(1) != d1 || plJ.shape(2) != d1)
+        throw std::runtime_error("loc/polys inconsistent with degree");
 
     somm_proj::GridView G = somm_proj::build_grid_view(
         r1_max, r_break, th_split, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
         reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
 
-    py::array_t<std::complex<double>> Q({n_basis, n_basis});
+    py::array_t<std::complex<double>> Q({nI, nJ});
     auto Qm = Q.mutable_unchecked<2>();
 
     py::gil_scoped_release release;
 
-    // Per-segment source constants (position copies + tangent decomposition).
-    std::vector<double> sux(n_seg), suy(n_seg), sth(n_seg), stz(n_seg);
-    for (py::ssize_t j = 0; j < n_seg; ++j)
-        somm_proj::tangent_decomp(tg(j, 0), tg(j, 1), tg(j, 2), sux[j], suy[j],
-                                  sth[j], stz[j]);
+    // Per-src-segment tangent decomposition.
+    std::vector<double> sux(nsJ), suy(nsJ), sth(nsJ), stz(nsJ);
+    for (py::ssize_t j = 0; j < nsJ; ++j)
+        somm_proj::tangent_decomp(tgJ(j, 0), tgJ(j, 1), tgJ(j, 2), sux[j],
+                                  suy[j], sth[j], stz[j]);
 
-    // Stage 1: Jf[p,P,i,j], flat index (((p*d1+P)*n_seg)+i)*n_seg+j.
-    std::vector<cd> Jf((size_t)d1 * d1 * n_seg * n_seg);
-    const size_t seg2 = (size_t)n_seg * n_seg;
+    // Stage 1: Jf[p,P,i,j] over the (nsI, nsJ) segment rectangle. Flat index
+    // (((p*d1+P)*nsI)+i)*nsJ+j.
+    std::vector<cd> Jf((size_t)d1 * d1 * nsI * nsJ);
+    const size_t seg2 = (size_t)nsI * nsJ;
 
     PYSIM_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(dynamic)
-    for (py::ssize_t i = 0; i < n_seg; ++i) {
+    for (py::ssize_t i = 0; i < nsI; ++i) {
         PYSIM_CANCEL_POLL();
-        const double tox = tg(i, 0), toy = tg(i, 1), toz = tg(i, 2);
+        const double tox = tgI(i, 0), toy = tgI(i, 1), toz = tgI(i, 2);
         std::vector<cd> fblk((size_t)q * q);
-        for (py::ssize_t j = 0; j < n_seg; ++j) {
-            // q x q field-projection block for this segment pair.
+        for (py::ssize_t j = 0; j < nsJ; ++j) {
             for (py::ssize_t qi = 0; qi < q; ++qi) {
-                const double ox = nd(i, qi, 0), oy = nd(i, qi, 1),
-                             oz = nd(i, qi, 2);
+                const double ox = ndI(i, qi, 0), oy = ndI(i, qi, 1),
+                             oz = ndI(i, qi, 2);
                 for (py::ssize_t rj = 0; rj < q; ++rj) {
                     fblk[qi * q + rj] = somm_proj::proj_one(
                         G, ground_z, k, ox, oy, oz, tox, toy, toz,
-                        nd(j, rj, 0), nd(j, rj, 1), nd(j, rj, 2),
+                        ndJ(j, rj, 0), ndJ(j, rj, 1), ndJ(j, rj, 2),
                         sux[j], suy[j], sth[j], stz[j]);
                 }
             }
-            // Reduce with the moment weights into (d+1)^2 entries.
             for (int p = 0; p < d1; ++p) {
                 for (int P = 0; P < d1; ++P) {
                     cd acc(0.0, 0.0);
                     for (py::ssize_t qi = 0; qi < q; ++qi) {
-                        const double wp = Wv(p, i, qi);
+                        const double wp = WvI(p, i, qi);
                         cd row(0.0, 0.0);
                         for (py::ssize_t rj = 0; rj < q; ++rj)
-                            row += fblk[qi * q + rj] * Wv(P, j, rj);
+                            row += fblk[qi * q + rj] * WvJ(P, j, rj);
                         acc += wp * row;
                     }
-                    Jf[((size_t)(p * d1 + P) * n_seg + i) * n_seg + j] = acc;
+                    Jf[((size_t)(p * d1 + P) * nsI + i) * nsJ + j] = acc;
                 }
             }
         }
@@ -3253,22 +3269,22 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
 
     // Stage 2: basis assembly Q[m,n] from the segment moment tensor.
     #pragma omp parallel for schedule(static)
-    for (py::ssize_t m = 0; m < n_basis; ++m) {
+    for (py::ssize_t m = 0; m < nI; ++m) {
         PYSIM_CANCEL_POLL();
-        for (py::ssize_t n = 0; n < n_basis; ++n) {
+        for (py::ssize_t n = 0; n < nJ; ++n) {
             cd qmn(0.0, 0.0);
             for (int a = 0; a < d1; ++a) {
-                const py::ssize_t si = ss(m, a);
+                const py::ssize_t si = lI(m, a);
                 for (int b = 0; b < d1; ++b) {
-                    const py::ssize_t sj = ss(n, b);
+                    const py::ssize_t sj = lJ(n, b);
                     cd inner(0.0, 0.0);
                     for (int p = 0; p < d1; ++p) {
-                        const double pma = pl(m, a, p);
+                        const double pma = plI(m, a, p);
                         const cd *jfp =
-                            &Jf[((size_t)(p * d1) * n_seg + si) * n_seg + sj];
+                            &Jf[((size_t)(p * d1) * nsI + si) * nsJ + sj];
                         cd s(0.0, 0.0);
                         for (int P = 0; P < d1; ++P)
-                            s += jfp[(size_t)P * seg2] * pl(n, b, P);
+                            s += jfp[(size_t)P * seg2] * plJ(n, b, P);
                         inner += pma * s;
                     }
                     qmn += inner;
@@ -3454,13 +3470,16 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("reg_dth"), py::arg("reg_vals"),
           py::arg("cancel_flag") = 0);
     m.def("sommerfeld_remainder_bspline_Q", &sommerfeld_remainder_bspline_Q,
-          "Fully-fused b-spline Galerkin Sommerfeld remainder: interpolate + "
-          "project + moment-quadrature + basis-assemble into the (n_basis, "
-          "n_basis) Q block directly (no Jf / einsum intermediates). nodes "
-          "(n_seg,q,3), tang (n_seg,3), W (d+1,n_seg,q), supp_seg (n_basis,"
-          "d+1), polys (n_basis,d+1,d+1); grid as in remainder_field_proj_batch.",
-          py::arg("nodes"), py::arg("tang"), py::arg("W"), py::arg("supp_seg"),
-          py::arg("polys"), py::arg("ground_z"), py::arg("k"),
+          "Fully-fused b-spline Galerkin Sommerfeld remainder over an obs/src "
+          "rectangle: interpolate + project + moment-quadrature + basis-assemble "
+          "into the (nI, nJ) Q block directly (no Jf / einsum intermediates). "
+          "Dense block = symmetric case (obs==src, loc==supp_seg); the ACA "
+          "sampler passes thin segment subsets with local support maps. Grid as "
+          "in remainder_field_proj_batch.",
+          py::arg("obs_nodes"), py::arg("obs_tang"), py::arg("W_obs"),
+          py::arg("src_nodes"), py::arg("src_tang"), py::arg("W_src"),
+          py::arg("loc_I"), py::arg("pI"), py::arg("loc_J"), py::arg("pJ"),
+          py::arg("ground_z"), py::arg("k"),
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"),

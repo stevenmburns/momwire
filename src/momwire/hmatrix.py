@@ -633,14 +633,20 @@ class HMatrixSolver(BSplineSolver):
         ctx["somm_nodes"] = cached
         return cached
 
-    def _zblock_sommerfeld_remainder(self, I, J, k=None, eps_t=None):
+    def _zblock_sommerfeld_remainder(self, I, J, k=None, eps_t=None, grid_args=None):
         """Rectangular Galerkin block Q[I][:, J] of the smooth Sommerfeld
         remainder — `BSplineSolver._Z_sommerfeld_remainder` restricted to
-        a basis rectangle, built on the shared `remainder_field_proj`
-        dyad algebra and the module grid cache. This is the ACA sampler
-        for the global low-rank remainder term: rows keep I small, and
-        the kernel is smooth everywhere (the image term absorbed the
-        singularity), so no same-edge special-casing exists."""
+        a basis rectangle. This is the ACA sampler for the global low-rank
+        remainder term: rows keep I small, and the kernel is smooth
+        everywhere (the image term absorbed the singularity), so no
+        same-edge special-casing exists.
+
+        Uses the fused C++ `sommerfeld_remainder_bspline_Q` (rectangular
+        obs/src form) when available — one call does interpolate + project
+        + moment-quadrature + basis-assembly, the same kernel the dense
+        block uses. `grid_args` lets the ACA driver pre-marshal the grid
+        once and reuse it across the O(rank) samples; falls back to the
+        vectorized numpy `remainder_field_proj` path otherwise."""
         if k is None:
             k = self.k
         ctx = self._context()
@@ -658,6 +664,29 @@ class HMatrixSolver(BSplineSolver):
         seg_I = np.unique(supp_seg[I].ravel())
         seg_J = np.unique(supp_seg[J].ravel())
         self._checkpoint()  # per sampled rectangle (ACA row/col granularity)
+        loc_I = np.searchsorted(seg_I, supp_seg[I])
+        loc_J = np.searchsorted(seg_J, supp_seg[J])
+
+        if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
+            if grid_args is None:
+                grid_args = _sommerfeld.grid_cpp_args(grid)
+            return _acc.sommerfeld_remainder_bspline_Q(
+                np.ascontiguousarray(nodes[seg_I], dtype=np.float64),
+                np.ascontiguousarray(tang[seg_I], dtype=np.float64),
+                np.ascontiguousarray(W[:, seg_I], dtype=np.float64),
+                np.ascontiguousarray(nodes[seg_J], dtype=np.float64),
+                np.ascontiguousarray(tang[seg_J], dtype=np.float64),
+                np.ascontiguousarray(W[:, seg_J], dtype=np.float64),
+                np.ascontiguousarray(loc_I, dtype=np.int64),
+                np.ascontiguousarray(polys[I], dtype=np.float64),
+                np.ascontiguousarray(loc_J, dtype=np.int64),
+                np.ascontiguousarray(polys[J], dtype=np.float64),
+                self.ground_z,
+                k,
+                *grid_args,
+                int(self._cancel_flag),
+            )
+
         proj = _sommerfeld.remainder_field_proj(
             nodes[seg_I].reshape(-1, 3),
             np.repeat(tang[seg_I], q, axis=0),
@@ -671,8 +700,6 @@ class HMatrixSolver(BSplineSolver):
         Jf = np.einsum("piq,iqjr,Pjr->pPij", W[:, seg_I], fq, W[:, seg_J])
 
         d = self.degree
-        loc_I = np.searchsorted(seg_I, supp_seg[I])
-        loc_J = np.searchsorted(seg_J, supp_seg[J])
         pI = polys[I]
         pJ = polys[J]
         Q = np.zeros((I.size, J.size), dtype=np.complex128)
@@ -697,14 +724,21 @@ class HMatrixSolver(BSplineSolver):
         n = ctx["n_basis"]
         idx = np.arange(n, dtype=np.int64)
 
+        # Marshal the grid once and reuse it across every ACA sample.
+        grid_args = None
+        if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
+            sn = self._somm_nodes(ctx)
+            grid = self._somm_grid(eps_t, sn["r1_max"])
+            grid_args = _sommerfeld.grid_cpp_args(grid)
+
         def get_row(i):
             return self._zblock_sommerfeld_remainder(
-                idx[i : i + 1], idx, k=k, eps_t=eps_t
+                idx[i : i + 1], idx, k=k, eps_t=eps_t, grid_args=grid_args
             ).ravel()
 
         def get_col(j):
             return self._zblock_sommerfeld_remainder(
-                idx, idx[j : j + 1], k=k, eps_t=eps_t
+                idx, idx[j : j + 1], k=k, eps_t=eps_t, grid_args=grid_args
             ).ravel()
 
         U, V = aca_partial(get_row, get_col, n, n, tol=self.aca_tol)
