@@ -84,16 +84,26 @@ Remaining Gate 0 work (small now):
       quadratures" section (and any docstring that echoes it) so the
       scare isn't rediscovered a third time.
 
-## Phase 0 — baselines and honest sizing (safe during the hold)
+## Phase 0 — baselines and honest sizing
 
-- [ ] Gate 0 items above.
-- [ ] Measure swept latency at the actual worst production shapes
-      (skyloop n_per_wire=100 ⇒ ~400 segs, hexbeam, 5-band fan dipole
-      with junctions) for triangular vs bspline d=1/d=2, sweep sizes
-      the frontend actually sends. Current main (per-k loop): dipole
-      41-pt sweep at N=21/41/101 = 19/33/1721 ms for d=2 vs
-      3/14/149 ms triangular — invisible at interactive sizes, opens
-      ~13× at N=101 and grows N² per k-point.
+- [x] Gate 0 parity pins: `tests/test_tent_parity.py` (11 tests) —
+      dipole/yagi/V/PEC-ground/K=3-junction/multi-feed-Y/swept all
+      match to ≤1e-8 relative on knot-fed meshes; odd-N feed-snap
+      convention pinned explicitly.
+- [x] Production-shape swept baselines (41-point sweep, this machine,
+      post-#125 main — the Phase 2 acceptance reference):
+
+      | shape | tri | d=1 | d=2 |
+      |---|--:|--:|--:|
+      | dipole N=400 | 1.04 s | 7.88 s | 8.58 s |
+      | yagi 6×40 | 0.24 s | 1.92 s | 1.69 s |
+      | fan dipole K=3, 4×(50+50) | 0.69 s | 7.41 s | 8.04 s |
+      | skyloop 4×100, K=2 closure | 0.82 s | 7.57 s | 8.14 s |
+
+      7–11× everywhere at production scale (interactive small cases
+      N=21/41 stay fine at 19/33 ms). Junction shapes (fan dipole,
+      skyloop) confirm the batched-KCL half matters, not just the
+      dense case.
 
 ## Phase 1 — rebase + revive PR #101 (after #125 lands)
 
