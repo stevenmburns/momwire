@@ -17,7 +17,8 @@ import time
 import numpy as np
 
 sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests")
+    0,
+    os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests"),
 )
 
 from fixtures_refl_coef_geoms import GEOMS  # noqa: E402
@@ -79,11 +80,15 @@ def main():
         print(f"N_seg={n_seg}  ({N_FREQ}-freq sweep)")
         print(f"  free space : {t_free:7.2f} s")
         print(f"  PEC image  : {t_pec:7.2f} s")
-        print(f"  ground_eps : {t_eps:7.2f} s   (+{100*(t_eps/t_pec-1):.1f}% vs PEC)")
-        print(f"  per-k image J fill        : {1e3*t_fill:8.1f} ms")
-        print(f"  per-k weighted image asm  : {1e3*t_asm:8.1f} ms "
-              f"({100*t_asm/t_fill:.0f}% of fill)")
-        print(f"  per-k PEC asm (C++)       : {1e3*t_asm_pec:8.1f} ms")
+        print(
+            f"  ground_eps : {t_eps:7.2f} s   (+{100 * (t_eps / t_pec - 1):.1f}% vs PEC)"
+        )
+        print(f"  per-k image J fill        : {1e3 * t_fill:8.1f} ms")
+        print(
+            f"  per-k weighted image asm  : {1e3 * t_asm:8.1f} ms "
+            f"({100 * t_asm / t_fill:.0f}% of fill)"
+        )
+        print(f"  per-k PEC asm (C++)       : {1e3 * t_asm_pec:8.1f} ms")
 
     rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
     print(f"peak RSS: {rss_mb:.0f} MB")
