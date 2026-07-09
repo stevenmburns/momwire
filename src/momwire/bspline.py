@@ -979,14 +979,19 @@ class BSplineSolver(_Cancelable):
 
         # Fully-fused C++ path: interpolate + project + moment-quadrature +
         # basis-assemble straight into Q, skipping the Jf tensor and the two
-        # Galerkin einsums (sommerfeld-perf-plan Phase 4b stage 2).
+        # Galerkin einsums (sommerfeld-perf-plan Phase 4b stage 2). The dense
+        # block is the symmetric obs==src case of the rectangular kernel, with
+        # the support map == supp_seg (segment set is all segments).
         if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
+            nodes_c = np.ascontiguousarray(nodes, dtype=np.float64)
+            tang_c = np.ascontiguousarray(tang, dtype=np.float64)
+            W_c = np.ascontiguousarray(W, dtype=np.float64)
+            supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
+            polys_c = np.ascontiguousarray(polys, dtype=np.float64)
             return _acc.sommerfeld_remainder_bspline_Q(
-                np.ascontiguousarray(nodes, dtype=np.float64),
-                np.ascontiguousarray(tang, dtype=np.float64),
-                np.ascontiguousarray(W, dtype=np.float64),
-                np.ascontiguousarray(supp_seg, dtype=np.int64),
-                np.ascontiguousarray(polys, dtype=np.float64),
+                nodes_c, tang_c, W_c,
+                nodes_c, tang_c, W_c,
+                supp_c, polys_c, supp_c, polys_c,
                 float(gz),
                 float(self.k),
                 *_sommerfeld.grid_cpp_args(grid),

@@ -269,15 +269,37 @@ Measured warm (yagi N=81, 4-core), cumulative down the increments:
 - Grid marshalling hoisted into `_sommerfeld.grid_cpp_args`, shared by
   `remainder_field_proj` and the fused kernel.
 
+Fast-solver ACA path — **LANDED (2026-07-09)**: the fused kernel was
+generalized to a rectangular obs/src form (the dense block is its
+symmetric `obs==src`, `loc==supp_seg` case), and the ACA sampler
+`_zblock_sommerfeld_remainder` (shared by HMatrix + ArrayBlock) now calls
+it — one C++ call per sampled rectangle instead of proj-kernel + numpy
+einsum + `J_blk` gather. `_sommerfeld_global_lowrank` marshals the grid
+once and reuses it across all O(rank) samples.
+
+Measured (fused ON vs OFF, isolating this change; warm grid, cold matrix;
+4-core, N=81), numerics identical to <4e-12:
+
+| design | fused | numpy | speedup |
+|--------|-------|-------|---------|
+| rhombic (HMatrix)          | 8939 ms | 10431 ms | 1.2× |
+| bowtiearray2x4 (ArrayBlock)| 7794 ms | 10367 ms | 1.3× |
+| delta_looparray_1x4 (Arr)  | 683 ms  | 1096 ms  | 1.6× |
+
+Modest by design: in the fast solvers the Sommerfeld ACA sampling is only
+a fraction of the total (the free-space H-matrix / array-block assembly +
+iterative solve dominate), unlike the dense path where the remainder was
+~90 %. Golden gn 2 gates for both fast solvers run the fused path and are
+green; a fused-vs-numpy parity test covers each.
+
 Remaining follow-ups:
 
-- [ ] Route the fast solvers' ACA rectangular sampler
-      (`_zblock_sommerfeld_remainder`) at a Jf-returning variant and pass a
-      pre-marshalled grid handle so HMatrix/ArrayBlock stop re-building
-      `reg_vals` per sample. (Dense + Sinusoidal already covered.)
 - [ ] Re-run `scripts/profile_ground_models.py` somm column and refresh
       the antennaknobs status-doc ratios (cold-grid numbers, the
       user-visible figure).
+- [ ] Optional: SIMD / lower quadrature-node count on the per-pair proj to
+      chase the last ~2× to PyNEC on the dense path, only if the remainder
+      still dominates after the base-solve cost is accounted for.
 - [ ] Optional: SIMD / lower quadrature-node count on the per-pair proj to
       chase the last ~2× to PyNEC, only if the remainder still dominates
       after the base-solve cost is accounted for.
