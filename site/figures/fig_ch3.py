@@ -7,7 +7,6 @@ Run from the repo root:  .venv/bin/python site/figures/fig_ch3.py
 import numpy as np
 import matplotlib.pyplot as plt
 
-import style
 from style import AMBER, CYAN, GREEN, GRID, MUTED, RED, save
 from toy_solver import toy_dipole
 
@@ -16,46 +15,66 @@ from momwire import BSplineSolver, SinusoidalSolver
 WAVELENGTH = 22.0
 L = 2 * 0.962 * WAVELENGTH / 4
 A_THIN = 0.0005
-A_FAT = 0.05
 
 
 def fig_convergence():
-    """The toy has no convergence — only a window. Fat dipole (a = 5 cm):
-    toy impedance vs N against momwire's settled answer. The plausible
-    window is dz between ~a and ~2a; on either side the toy collapses."""
-    Ns = np.array([21, 31, 41, 61, 81, 107, 131, 161, 201, 301, 401, 601, 801])
-    z_toy = np.array([toy_dipole(L, A_FAT, WAVELENGTH, int(n))[0] for n in Ns])
+    """The toy converges — but slowly, and unevenly. Thin specimen (a = 0.5 mm):
+    R settles by a few hundred segments and Richardson-extrapolates dead-on; X
+    crawls on a log-corrected trend X∞ + (b + c·lnN)/N. Fitting that trend to a
+    fistful of coarse solves recovers the converged reactance — the payoff, and
+    the price: many solves plus a curve fit, all to still land ~1 Ω short of a
+    good basis because the delta-gap feed is crude."""
+    Ns = np.array([11, 21, 41, 81, 121, 161, 241, 321, 481])
+    z_toy = np.array([toy_dipole(L, A_THIN, WAVELENGTH, int(n))[0] for n in Ns])
+    R, X = z_toy.real, z_toy.imag
 
     wire = np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])
     z_ref, _ = BSplineSolver(
-        wires=[wire], nsegs=81, wavelength=WAVELENGTH, wire_radius=A_FAT
+        wires=[wire], nsegs=21, wavelength=WAVELENGTH, wire_radius=A_THIN
     ).compute_impedance()
-    z_sin, _ = SinusoidalSolver(
-        wires=[wire], nsegs=81, wavelength=WAVELENGTH, wire_radius=A_FAT
-    ).compute_impedance()
+    n_wall = L / (8 * A_THIN)  # dz = 8a: the thin-wire kernel's own 1% limit
 
-    n_lo = L / (2 * A_FAT)  # dz = 2a
-    n_hi = L / A_FAT  # dz = a
+    # Fit the trends (from these very runs): R ~ Rinf + b/N ; X ~ Xinf + (b + c lnN)/N
+    fit = np.arange(len(Ns))[Ns >= 21]  # drop the coarsest point from the fit
+    one = np.ones(fit.size)
+    R_inf = np.linalg.lstsq(np.column_stack([one, 1 / Ns[fit]]), R[fit], rcond=None)[0][0]
+    cX = np.linalg.lstsq(
+        np.column_stack([one, 1 / Ns[fit], np.log(Ns[fit]) / Ns[fit]]), X[fit], rcond=None
+    )[0]
+    nn = np.geomspace(21, n_wall * 1.6, 200)
+    X_curve = cX[0] + cX[1] / nn + cX[2] * np.log(nn) / nn
 
     fig, axes = plt.subplots(2, 1, figsize=(7.2, 5.6), sharex=True)
-    for ax, part, label in [(axes[0], np.real, "R  (Ω)"), (axes[1], np.imag, "X  (Ω)")]:
-        ax.axvspan(n_lo, n_hi, color=GREEN, alpha=0.10, lw=0)
-        ax.plot(Ns, part(z_toy), "o-", color=CYAN, lw=1.6, ms=4, label="toy pulses")
-        ax.axhline(part(z_ref), color=AMBER, lw=1.6, ls="--",
-                   label=f"momwire B-spline N=81  ({part(z_ref):.1f})")
-        ax.axhline(part(z_sin), color=RED, lw=1.2, ls=":",
-                   label=f"momwire sinusoidal N=81  ({part(z_sin):.1f})")
+    axes[0].plot(Ns, R, "o", color=CYAN, ms=5, label="toy pulses")
+    axes[0].axhline(R_inf, color=GREEN, lw=1.3, ls="-", alpha=0.8,
+                    label=f"extrapolated R → {R_inf:.1f}")
+    axes[0].axhline(z_ref.real, color=AMBER, lw=1.6, ls="--",
+                    label=f"momwire (N=21):  {z_ref.real:.1f}")
+
+    axes[1].plot(Ns, X, "o", color=CYAN, ms=5, label="toy pulses")
+    axes[1].plot(nn, X_curve, color=CYAN, lw=1.3, ls=":", alpha=0.9,
+                 label=r"fitted trend  $X_\infty + (b + c\,\ln N)/N$")
+    axes[1].axhline(cX[0], color=GREEN, lw=1.3, ls="-", alpha=0.8,
+                    label=f"extrapolated X → {cX[0]:.1f}")
+    axes[1].axhline(z_ref.imag, color=AMBER, lw=1.6, ls="--",
+                    label=f"momwire (N=21):  {z_ref.imag:.1f}")
+
+    for ax in axes:
+        ax.axvline(n_wall, color=RED, lw=1.0, ls=":")
         ax.set_xscale("log")
-        ax.set_xticks([20, 50, 100, 200, 400, 800])
+        ax.set_xticks([10, 20, 50, 100, 200, 500, 1000, 2000])
         ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{v:g}"))
         ax.xaxis.set_minor_formatter(plt.NullFormatter())
-        ax.set_ylabel(label)
-    axes[0].set_ylim(-10, 160)
-    axes[1].set_ylim(-60, 120)
-    axes[0].set_title(f"Fat dipole (a = {A_FAT*100:.0f} cm): the toy's window of plausibility")
-    axes[0].text(np.sqrt(n_lo * n_hi), 145, "dz ≈ a…2a", color=GREEN, ha="center", fontsize=10)
+        ax.set_xlim(9, n_wall * 1.6)
+        ax.legend(fontsize=8.5, loc="upper right")
+    axes[0].set_ylabel("R  (Ω)")
+    axes[1].set_ylabel("X  (Ω)")
+    axes[0].set_ylim(64, 94)
+    axes[1].set_ylim(-30, 60)
+    axes[0].set_title(f"Thin specimen (a = {A_THIN * 1e3:.1f} mm): converges, but only by extrapolation")
+    axes[1].text(n_wall, 44, "  dz = 8a\n  (kernel's own\n  1% limit)",
+                 color=RED, ha="left", va="top", fontsize=8.5)
     axes[1].set_xlabel("number of segments N")
-    axes[0].legend(fontsize=9, loc="upper left")
     save(fig, "ch3-convergence")
 
 
@@ -81,18 +100,28 @@ def fig_sweep():
     y0, y1 = z.imag[i], z.imag[i + 1]
     xr = x0 - y0 * (x1 - x0) / (y1 - y0)
     ax.axvline(xr, color=GREEN, lw=1, ls=":")
-    ax.annotate(f"resonance\nL ≈ {xr:.3f} λ", xy=(xr, 0), xytext=(xr - 0.055, 150),
-                color=GREEN, fontsize=10, ha="center",
-                arrowprops=dict(arrowstyle="->", color=GREEN, lw=1))
+    ax.annotate(
+        f"resonance\nL ≈ {xr:.3f} λ",
+        xy=(xr, 0),
+        xytext=(xr - 0.055, 150),
+        color=GREEN,
+        fontsize=10,
+        ha="center",
+        arrowprops=dict(arrowstyle="->", color=GREEN, lw=1),
+    )
 
     # Mark the design point (lambda = 22 m).
     j = np.argmin(np.abs(lams - WAVELENGTH))
     ax.plot([l_over_lam[j]], [z.real[j]], "o", color=AMBER, ms=6)
     ax.plot([l_over_lam[j]], [z.imag[j]], "o", color=CYAN, ms=6)
-    ax.annotate(f"the specimen at λ = 22 m:\nZ = {z.real[j]:.1f} {z.imag[j]:+.1f}j Ω",
-                xy=(l_over_lam[j], z.imag[j]), xytext=(0.487, -230),
-                color=MUTED, fontsize=10,
-                arrowprops=dict(arrowstyle="->", color=GRID))
+    ax.annotate(
+        f"the specimen at λ = 22 m:\nZ = {z.real[j]:.1f} {z.imag[j]:+.1f}j Ω",
+        xy=(l_over_lam[j], z.imag[j]),
+        xytext=(0.487, -230),
+        color=MUTED,
+        fontsize=10,
+        arrowprops=dict(arrowstyle="->", color=GRID),
+    )
 
     ax.set_xlabel("dipole length in wavelengths  L/λ")
     ax.set_ylabel("impedance  (Ω)")

@@ -46,22 +46,31 @@ as the benchmark docs.
    the thin-wire kernel R(s, s′) sketch showing the a² floor.
 
 2. **You can't solve for a function, so solve for coefficients.** Basis
-   functions, testing, Galerkin → `Z I = V`. The 20-line toy: pulse basis +
-   point matching on a straight dipole (classic Harrington example). Then
-   the reveal that `docs/pulse_basis_d0_extension.md` documents why momwire
-   *rejected* that exact basis — a shipped negative result as a teaching
-   moment.
-   *Figures*: staircase current (pulse) vs smooth current (spline) on the
-   same dipole; the Z matrix as a heatmap (log |Z_mn|, showing the diagonal
-   dominance and smooth off-diagonal decay that Act IV will exploit).
+   functions, testing → `Z I = V`. The ~40-line toy: pulse basis on the
+   **2n+1-point grid** (n+1 endpoints carry charge, n midpoints carry
+   current), mixed-potential form with the analytic log self-term — Harrington's
+   classic straight-wire example. The pulse basis *works* on the real thin
+   specimen (staircase current sits on momwire's smooth one); the crack — slow
+   convergence, and *why* — is chapter 3's cliffhanger, not a strawman. (The
+   naive point-matched-Pocklington variant that famously *doesn't* converge is
+   named and left to the literature.)
+   *Figures*: pulse basis on the 2n+1 grid (midpoints=current, endpoints=charge)
+   + staircase vs smooth; toy current on momwire's on the thin specimen; the Z
+   matrix heatmap (log |Z_mn|, diagonal dominance → Act IV).
 
 3. **The feed and the answer.** Delta-gap source, what V actually is, drive-
    point impedance Z_in = V/I(feed), and why that number is what hams care
-   about (SWR, resonance). Keyed to `compute_impedance` and the feed handling
-   (`feed_arclength`, Φ_m(s_f)).
-   *Figures*: toy solver vs `SinusoidalSolver` vs `BSplineSolver` impedance
-   vs N (the toy converging slowly, momwire converged); R+jX across a
-   frequency sweep through resonance for the specimen dipole.
+   about (SWR, resonance). Keyed to `compute_impedance` and the delta-gap RHS.
+   Then the honest convergence story: the pulse *converges* but slowly and
+   unevenly — R first-order (Richardson-extrapolates dead on), X on a
+   log-corrected trend `X∞ + (b + c·lnN)/N` that extrapolates to ~−17 and lands
+   ~1 Ω short (the crude delta-gap feed, an X-only offset); brute force runs
+   into the kernel's own `dz > 8a` limit. The deep "why" (discontinuous current
+   → concentrated endpoint charge → the scalar potential that carries the
+   reactance) is *teased* here and *paid off* in Act II — continuity is the fix.
+   *Figures*: toy R and X vs N with the fitted X-trend + extrapolated asymptotes
+   vs momwire and the `dz=8a` wall; R+jX across a frequency sweep through
+   resonance for the specimen dipole.
 
 ### Act II — Bases and accuracy (where the craft lives)
 
@@ -179,17 +188,20 @@ actual differentiator.
 
 ### Bootstrap checklist
 
-- [ ] `site/` scaffold (Astro + Starlight, dark theme to match), landing
+- [x] `site/` scaffold (Astro + Starlight, dark theme to match), landing
       page with the four-act table of contents.
-- [ ] Sidebar nav: Acts as groups, chapters as pages; unwritten chapters
+- [x] Sidebar nav: Acts as groups, chapters as pages; unwritten chapters
       omitted until they land (no stub pages).
-- [ ] `site/figures/` runner convention + matplotlib style (one shared
+- [x] `site/figures/` runner convention + matplotlib style (one shared
       `style.py`).
-- [ ] Permalink-check script (`scripts/check_site_permalinks.py`) wired into
-      the site build.
-- [ ] Fly app `momwire-docs` + `site/fly.toml` + `deploy-docs.yml`
-      (token-gated skip like antennaknobs, so CI is green before the secret
-      exists).
+- [x] Permalink-check script (`scripts/check_site_permalinks.py`) with a
+      `site/permalinks.json` manifest (expected substring per line-anchored
+      link); runs in the deploy workflow (not `npm run build` — the Docker
+      build stage has no Python or git history).
+- [x] Fly app config: `site/fly.toml` + `deploy-docs.yml` (token-gated
+      skip like antennaknobs, so CI is green before the secret exists).
+      Still manual: `fly apps create momwire-docs` + first `fly deploy` +
+      the FLY_API_TOKEN_DOCS repo secret.
 - [ ] `fly certs add momwire.antennaknobs.dev` + registrar CNAME (manual,
       after first deploy).
 - [ ] LinkCard from the antennaknobs docs (separate antennaknobs PR, after

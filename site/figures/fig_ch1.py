@@ -88,7 +88,9 @@ def fig_kernel_floor():
     ax.axvline(A, color=MUTED, lw=1, ls=":")
     ax.text(A * 1.25, 2.2e-1, "d = a", color=MUTED, fontsize=10)
     ax.axhline(1 / (4 * np.pi * A), color=MUTED, lw=1, ls=":")
-    ax.text(2e-5, 1 / (4 * np.pi * A) * 0.55, r"cap: $1/4\pi a$", color=MUTED, fontsize=10)
+    ax.text(
+        2e-5, 1 / (4 * np.pi * A) * 0.55, r"cap: $1/4\pi a$", color=MUTED, fontsize=10
+    )
     ax.set_xlabel("distance along the wire  |z − z′|   (m)")
     ax.set_ylabel("static part of the kernel   (1/m)")
     ax.set_title("Why the integral survives: the a² floor")
