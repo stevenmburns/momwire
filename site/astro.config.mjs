@@ -77,6 +77,7 @@ export default defineConfig({
           label: "Act III — The ground",
           items: [
             { label: "Mirror worlds", slug: "act-3/mirror-worlds" },
+            { label: "Real dirt, cheap", slug: "act-3/real-dirt" },
           ],
         },
         // Act IV is added here as its chapters land — no stub pages.
