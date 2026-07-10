@@ -69,6 +69,7 @@ export default defineConfig({
           items: [
             { label: "Sinusoids, NEC's bet", slug: "act-2/sinusoids" },
             { label: "Splines and junctions", slug: "act-2/splines" },
+            { label: "Integrals done honestly", slug: "act-2/quadrature" },
           ],
         },
         // Acts III–IV are added here as their chapters land — no stub pages.
