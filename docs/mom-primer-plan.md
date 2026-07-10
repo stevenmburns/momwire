@@ -210,6 +210,13 @@ actual differentiator.
 ### Build order
 
 1. Plan (this doc) + site scaffold + Act I (chapters 1–3) — proves the
-   format end to end, including figure scripts and the permalink check.
-2. First deploy + domain + antennaknobs cross-link.
-3. Act II (4–7), then Act III (8–10), then Act IV (11–14) — one PR per act.
+   format end to end, including figure scripts and the permalink check. **DONE.**
+2. First deploy + domain + antennaknobs cross-link. *Still pending (manual:
+   `fly apps create momwire-docs`, cert, registrar CNAME, FLY_API_TOKEN_DOCS).*
+3. Act II (4–7), Act III (8–10), Act IV (11–14). **DONE** — all 14 chapters
+   written with verified figures from real momwire runs; every source link
+   pinned + permalink-checked. Note: Act I ch2–3 were rewritten mid-stream when
+   the original "pulse basis fails" framing turned out to be wrong (the toy was
+   a broken bare-Pocklington point-match); the corrected pulse toy is the
+   Harrington 2n+1 mixed-potential scheme, which converges. The triangular-
+   retirement story (planned for ch5) was dropped as momwire-internal.
