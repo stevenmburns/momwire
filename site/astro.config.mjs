@@ -68,6 +68,7 @@ export default defineConfig({
           label: "Act II — Bases and accuracy",
           items: [
             { label: "Sinusoids, NEC's bet", slug: "act-2/sinusoids" },
+            { label: "Splines and junctions", slug: "act-2/splines" },
           ],
         },
         // Acts III–IV are added here as their chapters land — no stub pages.
