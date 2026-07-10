@@ -1,0 +1,168 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="471.586875pt" height="321.84pt" viewBox="0 0 471.586875 321.84" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-07-10T08:53:32.261298</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.11.0, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 321.84 
+L 471.586875 321.84 
+L 471.586875 0 
+L 0 0 
+z
+" style="fill: #181b22"/>
+  </g>
+  <g id="axes_1">
+   <g id="FillBetweenPolyCollection_1">
+    <path d="M 26.992098 168.479062 
+L 26.992098 187.619185 
+L 444.594777 187.619185 
+L 444.594777 168.479062 
+L 444.594777 168.479062 
+L 26.992098 168.479062 
+z
+" clip-path="url(#p4a622f1979)" style="fill: url(#he3b24d67b8); fill-opacity: 0.15"/>
+   </g>
+   <g id="line2d_1">
+    <path d="M 26.992098 168.479062 
+L 444.594777 168.479062 
+" clip-path="url(#p4a622f1979)" style="fill: none; stroke: #c4ccd8; stroke-width: 2; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_2">
+    <path d="M 96.592545 84.958527 
+L 374.99433 84.958527 
+" clip-path="url(#p4a622f1979)" style="fill: none; stroke: #76d0ff; stroke-width: 3; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_3">
+    <path d="M 235.793438 168.479062 
+L 235.793438 84.958527 
+" clip-path="url(#p4a622f1979)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #9aa3b2; stroke-width: 0.8"/>
+   </g>
+   <g id="line2d_4">
+    <path d="M 96.592545 251.999598 
+L 374.99433 251.999598 
+" clip-path="url(#p4a622f1979)" style="fill: none; stroke: #ffb86b; stroke-opacity: 0.8; stroke-width: 3; stroke-linecap: square"/>
+   </g>
+   <g id="line2d_5">
+    <path d="M 235.793438 251.999598 
+L 235.793438 168.479062 
+" clip-path="url(#p4a622f1979)" style="fill: none; stroke-dasharray: 0.8,1.32; stroke-dashoffset: 0; stroke: #9aa3b2; stroke-width: 0.8"/>
+   </g>
+   <g id="text_1">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: end; fill: #9aa3b2" x="430.674688" y="180.659141" transform="rotate(-0 430.674688 180.659141)">PEC ground</text>
+   </g>
+   <g id="patch_2">
+    <path d="M 147.314762 84.958527 
+Q 235.793588 84.958527 322.036346 84.958527 
+" style="fill: none; stroke: #76d0ff; stroke-width: 2; stroke-linecap: round"/>
+    <path d="M 317.636346 82.758527 
+L 322.036346 84.958527 
+L 317.636346 87.158527 
+z
+" style="fill: #76d0ff; stroke: #76d0ff; stroke-width: 2; stroke-linecap: round"/>
+   </g>
+   <g id="text_2">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: middle; fill: #76d0ff" x="235.793438" y="72.778449" transform="rotate(-0 235.793438 72.778449)">real dipole  (current →)</text>
+   </g>
+   <g id="text_3">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #9aa3b2" x="242.753482" y="126.718795" transform="rotate(-0 242.753482 126.718795)">h</text>
+   </g>
+   <g id="patch_3">
+    <path d="M 324.272113 251.999598 
+Q 235.793287 251.999598 149.550529 251.999598 
+" style="fill: none; stroke: #ffb86b; stroke-width: 2; stroke-linecap: round"/>
+    <path d="M 153.950529 254.199598 
+L 149.550529 251.999598 
+L 153.950529 249.799598 
+z
+" style="fill: #ffb86b; stroke: #ffb86b; stroke-width: 2; stroke-linecap: round"/>
+   </g>
+   <g id="text_4">
+    <text style="font-size: 10px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: middle; fill: #ffb86b" x="235.793438" y="269.39971" transform="rotate(-0 235.793438 269.39971)">image  (current ←, reversed)</text>
+   </g>
+   <g id="text_5">
+    <text style="font-size: 11px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: start; fill: #9aa3b2" x="242.753482" y="210.23933" transform="rotate(-0 242.753482 210.23933)">h</text>
+   </g>
+   <g id="text_6">
+    <text style="font-size: 12px; font-family: 'DejaVu Sans', 'Bitstream Vera Sans', 'Computer Modern Sans Serif', 'Lucida Grande', 'Verdana', 'Geneva', 'Lucid', 'Arial', 'Helvetica', 'Avant Garde', sans-serif; text-anchor: middle; fill: #c4ccd8" x="235.793438" y="16.318125" transform="rotate(-0 235.793438 16.318125)">One extra kernel term: the PEC image, a mirror dipole with reversed current</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="p4a622f1979">
+   <rect x="26.992098" y="22.318125" width="417.602679" height="292.321875"/>
+  </clipPath>
+ </defs>
+ <defs>
+  <pattern id="he3b24d67b8" patternUnits="userSpaceOnUse" x="0" y="0" width="72" height="72">
+   <rect x="0" y="0" width="73" height="73" fill="#9aa3b2"/>
+   <path d="M -36 36 
+L 36 -36 
+M -33 39 
+L 39 -33 
+M -30 42 
+L 42 -30 
+M -27 45 
+L 45 -27 
+M -24 48 
+L 48 -24 
+M -21 51 
+L 51 -21 
+M -18 54 
+L 54 -18 
+M -15 57 
+L 57 -15 
+M -12 60 
+L 60 -12 
+M -9 63 
+L 63 -9 
+M -6 66 
+L 66 -6 
+M -3 69 
+L 69 -3 
+M 0 72 
+L 72 0 
+M 3 75 
+L 75 3 
+M 6 78 
+L 78 6 
+M 9 81 
+L 81 9 
+M 12 84 
+L 84 12 
+M 15 87 
+L 87 15 
+M 18 90 
+L 90 18 
+M 21 93 
+L 93 21 
+M 24 96 
+L 96 24 
+M 27 99 
+L 99 27 
+M 30 102 
+L 102 30 
+M 33 105 
+L 105 33 
+M 36 108 
+L 108 36 
+" style="fill: #9aa3b2; stroke: #9aa3b2; stroke-width: 1.0; stroke-linecap: butt; stroke-linejoin: miter; stroke-opacity: 0.15"/>
+  </pattern>
+ </defs>
+</svg>

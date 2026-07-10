@@ -1,0 +1,10 @@
+{
+  "_comment": "Expected content for every line-anchored source permalink in the primer. scripts/check_site_permalinks.py verifies each URL's line range at its pinned tag contains the substring, so a refactor can't silently strand the prose. Add an entry whenever a chapter links to a specific line.",
+  "https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/sinusoidal.py#L794": "rho_eval = np.sqrt(rho_axis * rho_axis + a * a)",
+  "https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/bspline.py#L14": "thin-wire kernel with a² wire-radius regularization",
+  "https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/sinusoidal.py#L46": "class SinusoidalSolver",
+  "https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/bspline.py#L173": "class BSplineSolver",
+  "https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/sinusoidal.py#L1245": "def compute_impedance(self):",
+  "https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/sinusoidal.py#L1260": "v[fi] += -V_i / geom[\"seg_h\"][fi]",
+  "https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/sinusoidal.py#L1340": "def compute_impedance_swept(self, k_array):"
+}

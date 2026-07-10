@@ -1,0 +1,48 @@
+name: Deploy primer site to Fly.io
+
+# Tag-to-deploy for the static primer site (the momwire-docs Fly app,
+# momwire.antennaknobs.dev). Releases are cut by pushing a v* tag (see
+# wheels.yml): the primer is rebuilt + released from the tagged commit, so
+# its pinned source permalinks always describe the code that is actually
+# published. Merging to main does NOT deploy. Gated on its own app-scoped
+# secret (FLY_API_TOKEN_DOCS); workflow_dispatch is the manual escape hatch.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+concurrency:
+  group: fly-deploy-docs
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Stay green (not red) if the secret is missing: skip with a notice.
+      - name: Check for Fly token
+        id: token
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_DOCS }}
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::notice::FLY_API_TOKEN_DOCS not set — skipping docs deploy."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check pinned source permalinks
+        if: steps.token.outputs.skip != 'true'
+        run: python scripts/check_site_permalinks.py
+
+      - name: Set up flyctl
+        if: steps.token.outputs.skip != 'true'
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy primer site
+        if: steps.token.outputs.skip != 'true'
+        working-directory: site
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_DOCS }}

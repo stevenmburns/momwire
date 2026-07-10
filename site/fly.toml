@@ -1,0 +1,33 @@
+# Fly.io config for the momwire primer site (static Astro/Starlight build,
+# served by nginx) — momwire.antennaknobs.dev. Same shape as the
+# antennaknobs-docs app: static files, scale-to-zero, near-free.
+#
+# Deploy from THIS directory so the build context is site/:
+#   cd site
+#   fly apps create momwire-docs   # first time only
+#   fly deploy
+
+app = 'momwire-docs'
+primary_region = 'sjc'
+
+[build]
+  dockerfile = 'Dockerfile'
+
+[http_service]
+  internal_port = 80
+  force_https = true
+  # Static files cold-start near-instantly, so scale to zero when idle.
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    method = 'GET'
+    path = '/'
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '5s'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '256mb'
