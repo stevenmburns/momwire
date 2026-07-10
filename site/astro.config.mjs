@@ -85,6 +85,7 @@ export default defineConfig({
           label: "Act IV — Scale",
           items: [
             { label: "N² is the enemy", slug: "act-4/scaling" },
+            { label: "Matrices that are secretly small", slug: "act-4/compression" },
           ],
         },
         {
