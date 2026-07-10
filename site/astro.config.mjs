@@ -73,7 +73,13 @@ export default defineConfig({
             { label: "How do you know it's right?", slug: "act-2/validation" },
           ],
         },
-        // Acts III–IV are added here as their chapters land — no stub pages.
+        {
+          label: "Act III — The ground",
+          items: [
+            { label: "Mirror worlds", slug: "act-3/mirror-worlds" },
+          ],
+        },
+        // Act IV is added here as its chapters land — no stub pages.
         {
           label: "Elsewhere",
           items: [
