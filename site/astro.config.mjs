@@ -64,7 +64,13 @@ export default defineConfig({
             { label: "The feed and the answer", slug: "act-1/the-feed" },
           ],
         },
-        // Acts II–IV are added here as their chapters land — no stub pages.
+        {
+          label: "Act II — Bases and accuracy",
+          items: [
+            { label: "Sinusoids, NEC's bet", slug: "act-2/sinusoids" },
+          ],
+        },
+        // Acts III–IV are added here as their chapters land — no stub pages.
         {
           label: "Elsewhere",
           items: [
