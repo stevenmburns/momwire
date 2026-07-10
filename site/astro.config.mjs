@@ -81,7 +81,12 @@ export default defineConfig({
             { label: "Sommerfeld, or paying full price", slug: "act-3/sommerfeld" },
           ],
         },
-        // Act IV is added here as its chapters land — no stub pages.
+        {
+          label: "Act IV — Scale",
+          items: [
+            { label: "N² is the enemy", slug: "act-4/scaling" },
+          ],
+        },
         {
           label: "Elsewhere",
           items: [
