@@ -78,6 +78,7 @@ export default defineConfig({
           items: [
             { label: "Mirror worlds", slug: "act-3/mirror-worlds" },
             { label: "Real dirt, cheap", slug: "act-3/real-dirt" },
+            { label: "Sommerfeld, or paying full price", slug: "act-3/sommerfeld" },
           ],
         },
         // Act IV is added here as its chapters land — no stub pages.
