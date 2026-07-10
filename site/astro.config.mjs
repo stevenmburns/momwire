@@ -86,6 +86,7 @@ export default defineConfig({
           items: [
             { label: "N² is the enemy", slug: "act-4/scaling" },
             { label: "Matrices that are secretly small", slug: "act-4/compression" },
+            { label: "Arrays know their own symmetry", slug: "act-4/arrays" },
           ],
         },
         {
