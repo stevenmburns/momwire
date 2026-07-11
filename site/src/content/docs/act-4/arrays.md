@@ -39,7 +39,7 @@ direction filled for free by symmetry (`Z_ba = Z_ab^T`):
 ![Horizontal bar chart for three arrays. Uniform linear array: 12 coupling pairs collapse to 3 unique blocks. Inverted-V array: 12 to 5. Bowtie 2×4 array: 56 to 13. The "unique" bars are a small fraction of the "all pairs" bars.](../../../assets/figures/ch13-dedup.svg)
 
 Fifty-six coupling pairs on a bowtie 2×4 become **thirteen** blocks to actually
-compute; a uniform line collapses `twelve to three`. The array's own regularity
+compute; a uniform line collapses twelve to three. The array's own regularity
 did what the H-matrix's clustering couldn't see. And the solve is cheap for a
 third reason: the coupling between elements is weak — about `1e-4` of the
 self-blocks — so an iterative solve preconditioned by the block-diagonal

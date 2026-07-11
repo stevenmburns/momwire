@@ -21,7 +21,7 @@ The diagonal block is **full rank** — its singular values barely budge. That's
 the singular near-field from chapter 6; every segment sees its neighbours
 differently, and nothing about it compresses. But the far block **collapses**:
 past the second singular value it's already below any tolerance you'd care
-about. A 3,600-number block is, to five digits, carried by **two** numbers.
+about. A 3,600-number block is, to five digits, a **rank-two** factor.
 
 The reason is the same smoothness that made far quadrature easy in chapter 6.
 The field of a distant chunk of wire varies gently across another distant chunk —
