@@ -71,5 +71,5 @@ print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")   # ~93 +5j — up from 70 in 
 One argument, one extra kernel term, and the dipole knows there's a floor. But
 the earth is not a perfect conductor — it's dirt, imperfectly reflecting and
 quietly absorbing. The mirror is real but *dim*, and its dimness is complex and
-angle-dependent. Chapter 9 replaces the perfect image with the next honest
+angle-dependent. [Chapter 9](/act-3/real-dirt/) replaces the perfect image with the next honest
 approximation: the Fresnel reflection coefficient.

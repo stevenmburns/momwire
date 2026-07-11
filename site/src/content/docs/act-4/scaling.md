@@ -29,10 +29,10 @@ the part that eventually wins, and it wins ugly.
 ## Sweeps: the same wall, M times
 
 It gets worse, because you rarely want *one* frequency. A ham wants the
-impedance across a band — the chapter 3 sweep. Done naively, an `M`-point sweep
+impedance across a band — the [chapter 3](/act-1/the-feed/) sweep. Done naively, an `M`-point sweep
 is `M` full solves: fill and factor, from scratch, `M` times.
 
-Except most of that work doesn't depend on frequency. Remember chapter 6's
+Except most of that work doesn't depend on frequency. Remember [chapter 6](/act-2/quadrature/)'s
 **static moments** — the singular integrals were called *static* precisely
 because they don't move with `k`. The geometry doesn't change across a sweep
 either. So momwire's swept solver
@@ -55,10 +55,10 @@ A *single* solve of a genuinely large structure is still `O(N³)`, and no amount
 of sweep-sharing rescues it. To actually break the wall you have to attack the
 `N²` itself — to stop treating the matrix as `N²` independent numbers.
 
-And here's the opening, and it's been visible since chapter 2. Go back and look
+And here's the opening, and it's been visible since [chapter 2](/act-1/coefficients/). Go back and look
 at that moment-matrix heatmap: a screaming diagonal, and then vast, smooth,
 *boring* regions off it, where the field of one distant chunk of wire barely
 varies across another. All those far-apart interactions carry almost no
 independent information. The matrix is dense, but it is not *full of content* —
-it is, in a precise sense, **secretly small**. Chapter 12 makes that precise and
+it is, in a precise sense, **secretly small**. [Chapter 12](/act-4/compression/) makes that precise and
 cashes it in.

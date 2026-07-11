@@ -3,7 +3,7 @@ title: "5 · Splines and junctions"
 description: B-splines trade a little of the sinusoid's magic for a basis that stays simple on any shape — bent wires, branches, and K-wire junctions — while climbing the same smoothness ladder that fixed the charge in Act I.
 ---
 
-Chapter 4's sinusoidal basis is close to perfect on a straight wire — and that
+[Chapter 4](/act-2/sinusoids/)'s sinusoidal basis is close to perfect on a straight wire — and that
 `straight` is the catch. NEC's gorgeous closed-form coefficients are derived
 for a segment whose neighbours continue in a line; the moment the wire bends,
 branches, or meets three others at a junction, that derivation turns into
@@ -15,7 +15,7 @@ per-segment cleverness to buy one thing: **it stays simple on any shape.**
 The idea is the plainest one in numerical analysis: on each segment, let the
 current be a **polynomial of degree `d`**, and stitch the pieces together with
 `d`-fold continuity. These are B-splines. Two rungs matter here, and it's worth
-seeing them against Act I's pulse:
+seeing them against [Act I](/act-1/the-question/)'s pulse:
 
 ![Three basis functions on the same knot grid: a d=0 pulse drawn as a box with vertical cliffs, a d=1 tent as a triangle with a kinked peak, and a d=2 quadratic B-spline as a smooth bell — each successive one more continuous and wider.](../../../assets/figures/ch5-basis.svg)
 
@@ -97,7 +97,7 @@ print(f"d=2, N=3:  Z_in = {Z.real:.1f} {Z.imag:+.1f}j ohms")   # 69.9 -18.1j —
 Three quadratic segments, converged. But that innocent `compute_impedance` hides
 a debt the sinusoid didn't owe: a polynomial current does **not** do its own
 quadrature. Every matrix entry is now a genuine integral of the kernel against a
-spline — and some of those integrals are nearly singular. Chapter 6 is about
+spline — and some of those integrals are nearly singular. [Chapter 6](/act-2/quadrature/) is about
 paying that debt honestly, because "MoM is 90% quadrature engineering."
 
 :::tip[Turn the knob yourself]

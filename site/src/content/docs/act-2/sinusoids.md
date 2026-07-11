@@ -3,7 +3,7 @@ title: "4 · Sinusoids, NEC's bet"
 description: A continuous current fixes the charge that made Act I crawl. NEC's three-term basis — constant + sin + cos per segment — nails the dipole in five segments, and the wave equation does most of the integral for free.
 ---
 
-Act I closed on a promise: the pulse toy crawled because a *discontinuous*
+[Act I](/act-1/the-question/) closed on a promise: the pulse toy crawled because a *discontinuous*
 current dumps its charge into concentrated knots at the segment joints, and the
 scalar potential of those knots — where the reactance lives — converges only
 first-order. Make the current **continuous** and the knots spread into honest
@@ -12,7 +12,7 @@ used since 1981.
 
 ## The bet
 
-Look again at what the current on a wire actually *does*. Chapter 1 turned the
+Look again at what the current on a wire actually *does*. [Chapter 1](/act-1/the-question/) turned the
 antenna into an integral equation; strip it to its skeleton and the current
 obeys, near enough, `(d²/ds² + k²) I ≈ source` — the **wave equation** along
 the wire. And the solutions of `(d²/ds² + k²)·f = 0` are exactly `sin ks` and
@@ -38,7 +38,7 @@ basis functions, pulled straight out of
 
 ![Three sinusoidal basis functions on a segmented dipole: smooth bell-like shapes, each peaking on its home segment and tapering continuously to zero across its two neighbours, overlapping their neighbours.](../../../assets/figures/ch4-basis.svg)
 
-Set that beside chapter 2's staircase of boxes. Those were discontinuous — a
+Set that beside [chapter 2](/act-1/coefficients/)'s staircase of boxes. Those were discontinuous — a
 cliff at every joint, a charge knot behind each cliff. These are smooth, they
 overlap, and they meet their neighbours with matching value and slope. That
 single change — continuity — is the entire difference between crawling and
@@ -73,7 +73,7 @@ converges as fast as everything else.
 There's a second gift, and it's the one that makes this basis *cheap*, not just
 accurate. Filling the matrix means computing the field each basis shape radiates
 onto every segment — an integral of the current against chapter 1's kernel. For
-a general current that integral is real work (chapter 6 is entirely about it).
+a general current that integral is real work ([chapter 6](/act-2/quadrature/) is entirely about it).
 But watch what the wave operator does to a sine:
 
 ```text
@@ -93,7 +93,7 @@ of your quadrature.
 ## The sharpest ruler
 
 There's a reason momwire carries this basis at all, given it also ships smoother,
-more general ones (chapter 5). Because it is NEC-2's *exact* basis — same three
+more general ones ([chapter 5](/act-2/splines/)). Because it is NEC-2's *exact* basis — same three
 terms, same testing, same thin-wire kernel — it is momwire's sharpest
 cross-validator. On the specimen dipole, momwire's sinusoidal solver returns
 `69.63 − 18.30j`; NEC-2 (via PyNEC), on the identical geometry, returns
@@ -101,7 +101,7 @@ cross-validator. On the specimen dipole, momwire's sinusoidal solver returns
 **A tenth of an ohm apart** — two independently written codes, agreeing to the
 fourth significant figure. When two solvers share a basis and disagree, the
 disagreement has to live in the kernel, the feed, or the junctions; matching
-NEC here is what lets momwire isolate and trust every *other* piece. Chapter 7
+NEC here is what lets momwire isolate and trust every *other* piece. [Chapter 7](/act-2/validation/)
 makes that cross-validation the credibility anchor of the whole engine.
 
 ## Run it yourself

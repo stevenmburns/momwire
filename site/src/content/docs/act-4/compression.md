@@ -3,7 +3,7 @@ title: "12 · Matrices that are secretly small"
 description: The far-apart interactions that fill most of the dense matrix carry almost no information — their blocks are low rank. Adaptive Cross Approximation peels them off without ever forming them, and the whole matrix collapses from O(N²) to O(N log N).
 ---
 
-Chapter 11 ended on a hunch from chapter 2's heatmap: the matrix is dense, but
+[Chapter 11](/act-4/scaling/) ended on a hunch from [chapter 2](/act-1/coefficients/)'s heatmap: the matrix is dense, but
 its far-from-the-diagonal regions are smooth and boring, as if they hold little
 real information. That hunch has a precise, cashable form. A block of the matrix
 coupling two *well-separated* chunks of wire is **low rank** — and low rank is
@@ -18,7 +18,7 @@ and watch its singular values:
 ![Semilog plot of normalized singular values. The diagonal (near) block's singular values stay flat near 1 across all 60 indices — full rank. The far block's singular values plunge below 1e-5 by the third and reach machine precision by the seventh — effectively rank 2.](../../../assets/figures/ch12-svd.svg)
 
 The diagonal block is **full rank** — its singular values barely budge. That's
-the singular near-field from chapter 6; every segment sees its neighbours
+the singular near-field from [chapter 6](/act-2/quadrature/); every segment sees its neighbours
 differently, and nothing about it compresses. But the far block **collapses**:
 past the second singular value it's already below any tolerance you'd care
 about. A 3,600-number block is, to five digits, a **rank-two** factor.
@@ -64,5 +64,5 @@ redundancy, not signal.
 That's geometry paying off — blocks are cheap when the wire chunks are far
 apart. But some antennas have a regularity stronger than mere distance: they're
 built of *identical elements*, repeated. When the geometry itself repeats, the
-matrix repeats — and chapter 13 exploits a symmetry even H-matrices leave on the
+matrix repeats — and [chapter 13](/act-4/arrays/) exploits a symmetry even H-matrices leave on the
 table.

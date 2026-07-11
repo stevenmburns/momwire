@@ -3,7 +3,7 @@ title: "3 · The feed and the answer"
 description: What the delta-gap source really is, why the pulse toy converges only slowly, how far extrapolation can rescue it — and the payoff plot through resonance.
 ---
 
-Chapter 2 ended owing two explanations: the feed line we typed without
+[Chapter 2](/act-1/coefficients/) ended owing two explanations: the feed line we typed without
 comment, and the question of how many segments the toy's "working" answer
 actually cost. Start with the feed, because it *is* the antenna's connection
 to the outside world.
@@ -95,7 +95,7 @@ That single observation is the hinge of the whole primer. Make the current
 **continuous** and its charge stops piling into knots and spreads into honest,
 distributed charge — the scalar potential converges, the reactance snaps into
 place, and you need a *handful* of segments instead of hundreds. Every basis
-momwire ships is continuous, and Act II is the story of what that buys:
+momwire ships is continuous, and [Act II](/act-2/sinusoids/) is the story of what that buys:
 `SinusoidalSolver` and `BSplineSolver` nail this same dipole — resistance *and*
 reactance — at twenty-one unknowns, no extrapolation, in milliseconds. **You
 cannot cheaply out-refine a staircase; you can only stop drawing one.**
