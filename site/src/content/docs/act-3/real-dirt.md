@@ -3,7 +3,7 @@ title: "9 · Real dirt, cheap"
 description: The earth isn't a perfect mirror — it's a lossy dielectric that reflects partially and absorbs the rest. The Fresnel reflection coefficient captures that for almost the same price as the PEC image, and tracks the exact answer down to about a tenth of a wavelength — where it quietly falls apart.
 ---
 
-Chapter 8's mirror was perfect: `|Γ| = 1`, every watt bounced straight back.
+[Chapter 8](/act-3/mirror-worlds/)'s mirror was perfect: `|Γ| = 1`, every watt bounced straight back.
 Actual ground is nothing like that. It's a lossy dielectric — average soil has
 a relative permittivity around 13 and a conductivity around 0.005 S/m — and when
 a wave hits it, some reflects, some refracts down and is *absorbed*, and the
@@ -36,7 +36,7 @@ NEC calls this ground mode "GN 0"). In momwire it's one more argument,
 ## Good until it isn't
 
 So how good is a weighted mirror? Put it up against the exact answer — the full
-Sommerfeld solve of chapter 10 — across height:
+Sommerfeld solve of [chapter 10](/act-3/sommerfeld/) — across height:
 
 ![R versus height for three ground models. The exact Sommerfeld curve and the cheap Fresnel reflection-coefficient curve lie almost exactly on top of each other from 0.15 λ upward. Below about 0.1 λ (shaded) they split apart by tens of ohms; the Fresnel value sags toward the PEC curve, which itself collapses toward zero. Real ground keeps R up near 60–75 Ω where PEC shorts it out.](../../../assets/figures/ch9-height.svg)
 

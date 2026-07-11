@@ -17,13 +17,13 @@ found the antenna's number, you've found *a* number for *this* mesh.
 ![Two panels, R and X versus segment count N on a log axis. The sinusoidal and B-spline curves sit flat on the NEC-2 reference line from about five segments on — a sharp knee. The Act I pulse curve crawls slowly toward the line across hundreds of segments and never quite arrives, especially in reactance.](../../../assets/figures/ch7-knee.svg)
 
 momwire's good bases hit **the knee** by five to seven segments and then sit
-still — that flat line is what convergence looks like. The Act I pulse toy, on
+still — that flat line is what convergence looks like. The [Act I](/act-1/the-question/) pulse toy, on
 the same axes, is still crawling at three hundred. That contrast is the whole of
 Acts I–II in one picture: continuity buys you a knee.
 
 But convergence is necessary, not sufficient. A solver can march confidently to
 a stable, wrong answer — a consistent bug, a subtly mis-derived kernel, a feed
-model that's off by a fixed offset (we watched exactly that in chapter 3, where
+model that's off by a fixed offset (we watched exactly that in [chapter 3](/act-1/the-feed/), where
 the pulse's reactance converged an ohm shy because the delta-gap feed was
 crude). A method agreeing *with itself* proves only that it's self-consistent.
 For the truth you need a witness who shares none of your code.
@@ -74,7 +74,7 @@ You now have the craft, and a reason to trust it:
 - and **convergence plus cross-validation** (ch. 7) turn the output into
   evidence.
 
-That is a trustworthy free-space wire solver. Act III raises the stakes to where
+That is a trustworthy free-space wire solver. [Act III](/act-3/mirror-worlds/) raises the stakes to where
 real antennas live: above the ground — first as a perfect mirror, then as real,
 lossy dirt, and finally paying Sommerfeld's full price for getting it exactly
 right.

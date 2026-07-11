@@ -3,7 +3,7 @@ title: "10 · Sommerfeld, or paying full price"
 description: When the cheap mirror fails, there's no shortcut — you solve the actual boundary-value problem at the air-ground interface. Sommerfeld's integrals are the exact answer and a brutal cost, and the story of this chapter is how momwire makes exact affordable.
 ---
 
-Chapter 9 left a hole: below about a tenth of a wavelength, the
+[Chapter 9](/act-3/real-dirt/) left a hole: below about a tenth of a wavelength, the
 reflection-coefficient mirror is tens of ohms wrong, because the antenna's near
 field arriving at the ground is nothing like a plane wave, and a single
 `Γ(angle)` can't describe it. There is no clever weight that fixes this. To get
@@ -87,7 +87,7 @@ You climbed the ground ladder rung by rung:
   made affordable by subtracting the image and interpolating the smooth
   remainder.
 
-Everything so far has been about getting the physics *right*. Act IV is about
+Everything so far has been about getting the physics *right*. [Act IV](/act-4/scaling/) is about
 getting it *fast enough to matter* — because a dense `N×N` matrix is a wall, and
 the whole business of momwire, from H-matrices to array symmetry to the compiled
 kernels, is the story of walking through it.

@@ -3,10 +3,10 @@ title: "6 · Integrals done honestly"
 description: A polynomial basis doesn't do its own quadrature. Most matrix entries are a smooth integral a handful of points nail; a few are near-singular and can't be brute-forced. The split between them is where MoM accuracy actually lives.
 ---
 
-The sinusoid of chapter 4 filled two-thirds of its matrix for free, because the
-wave operator annihilated its sine and cosine pieces. The B-spline of chapter 5
+The sinusoid of [chapter 4](/act-2/sinusoids/) filled two-thirds of its matrix for free, because the
+wave operator annihilated its sine and cosine pieces. The B-spline of [chapter 5](/act-2/splines/)
 has no such luck: a polynomial current is *not* a solution of the wave equation,
-so every matrix entry is a genuine integral of chapter 1's kernel against two
+so every matrix entry is a genuine integral of [chapter 1](/act-1/the-question/)'s kernel against two
 basis functions. Most are easy. A few will ruin your day. Telling them apart —
 and treating each honestly — is the unglamorous craft that decides whether the
 whole solver is accurate. As the saying in this field goes: **MoM is 90%
@@ -42,7 +42,7 @@ wrong. The spike is half a millimetre wide sitting in a segment a quarter of a
 metre long; the Gauss nodes step right over it, never seeing the thing that
 carries most of the integral. Adding points barely helps — you would need nodes
 spaced finer than `a` across the whole segment, thousands of them, and even then
-you'd converge slowly. This is the same wall Act I's pulse toy hit, and the same
+you'd converge slowly. This is the same wall [Act I](/act-1/the-question/)'s pulse toy hit, and the same
 lesson: **you cannot out-integrate a singularity; you have to handle it.**
 
 ## The split
@@ -68,7 +68,7 @@ constructor knobs `n_qp_pair` and the static-moment path):
 They're called *static* moments for a reason worth its own sentence: the
 singular geometry — how a `1/R` behaves against two overlapping splines — does
 **not depend on frequency**. So it's computed once and reused at every
-wavenumber. When chapter 3's swept solver evaluated 46 frequencies in 65 ms,
+wavenumber. When [chapter 3](/act-1/the-feed/)'s swept solver evaluated 46 frequencies in 65 ms,
 this is why: the hard part of every matrix was already done, frequency-free.
 
 ## Run it yourself
@@ -94,5 +94,5 @@ for nq in (2, 4, 8):
 
 The matrix is now filled honestly — smooth where it can be, exact where it must
 be. Which raises the question this whole act has been circling: filled honestly
-or not, how would you *know* the final answer is right? Chapter 7 is the
+or not, how would you *know* the final answer is right? [Chapter 7](/act-2/validation/) is the
 cross-examination — convergence, the knee, and an independent engine.

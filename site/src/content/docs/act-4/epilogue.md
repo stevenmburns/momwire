@@ -5,8 +5,8 @@ description: Everything in this primer is readable Python — a spec you could r
 
 You've now followed one question — *what current flows when you put a volt across
 a gap, and what does it radiate?* — from Maxwell to an array solver. Every step
-was **Python**: the toy in chapter 2, the sinusoidal coefficients of chapter 4,
-the Sommerfeld contours of chapter 10, the ACA crosses of chapter 12. That was a
+was **Python**: the toy in [chapter 2](/act-1/coefficients/), the sinusoidal coefficients of [chapter 4](/act-2/sinusoids/),
+the Sommerfeld contours of [chapter 10](/act-3/sommerfeld/), the ACA crosses of [chapter 12](/act-4/compression/). That was a
 choice, and it's the reason every chapter could link you straight into the
 source. The spec *is* the implementation; you can read the whole thing.
 
@@ -55,7 +55,7 @@ dipole's length and watch its reactance cross zero in real time, that is a
 reflecting an image, and being cancelled and restarted faster than you can
 perceive.
 
-Go back to chapter 1 and run that first snippet again — `69.6 − 18.3j Ω, in
+Go back to [chapter 1](/act-1/the-question/) and run that first snippet again — `69.6 − 18.3j Ω, in
 about 2 ms`. You know, now, everything those two milliseconds contain: the
 retreat from a function to coefficients, the basis chosen so the wave equation
 does half the integral, the singular self-term looked up instead of integrated,

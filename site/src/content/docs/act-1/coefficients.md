@@ -3,7 +3,7 @@ title: "2 · Solve for coefficients"
 description: Basis functions turn an integral equation into Z·I = V. We build the naive version — pulses on a 2n+1-point grid — in forty lines, and it works on the real antenna.
 ---
 
-Chapter 1 left us with an impossible ask: find the *function* `I(z)`
+[Chapter 1](/act-1/the-question/) left us with an impossible ask: find the *function* `I(z)`
 satisfying an integral equation at *every* point on the wire. Computers do
 neither of those things. The method of moments is the standard two-step
 retreat to something a computer can do:
@@ -127,7 +127,7 @@ Z_in, I, z_mid = toy_dipole(10.582, 0.0005, 22.0, 161)
 # Z_in ≈ 70.9 - 8.7j ohms
 ```
 
-momwire's B-spline solver says `69.6 − 18.3j` (and, spoiler for chapter 7, an
+momwire's B-spline solver says `69.6 − 18.3j` (and, spoiler for [chapter 7](/act-2/validation/), an
 independent NEC-2 engine agrees). The toy's resistance is already right to
 about a percent; its reactance is in the right neighbourhood and closing.
 This is a *working solver*, on the actual antenna — no fattened wire, no magic
@@ -140,7 +140,7 @@ Both bases agree on the whole shape, right up to the current maximum at the
 **feed** (marked) — the 1 V delta gap where the generator sits. This is a
 near-half-wave dipole, so the current crests at the feed and tapers to zero at
 the tips: the same physical current, resolved two completely different ways.
-When the method works, it *works*. (It also, we'll see in chapter 3, works
+When the method works, it *works*. (It also, we'll see in [chapter 3](/act-1/the-feed/), works
 *slowly* — but let's enjoy the win first.)
 
 ## What the matrix knows
@@ -159,7 +159,7 @@ Two things to file away:
 - **Away from the diagonal, the matrix is smooth and boring.** The field of
   segment 10 at segment 60 barely differs from its field at segment 61.
   Distant interactions carry almost no independent information — the matrix
-  is, in a precise sense we'll meet in Act IV, *secretly low-rank*. That
+  is, in a precise sense we'll meet in [Act IV](/act-4/scaling/), *secretly low-rank*. That
   boredom is worth a 12× speedup on real arrays; it is the entire business
   model of `hmatrix` and `arrayblock`.
 
@@ -171,11 +171,11 @@ better ones:
 - [`SinusoidalSolver`](https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/sinusoidal.py#L46)
   expands in NEC-2's three-term basis — `constant + sin(kz) + cos(kz)` per
   segment — shapes that already look like solutions of the wave equation, so a
-  handful of them fit a physical current superbly (chapter 4).
+  handful of them fit a physical current superbly ([chapter 4](/act-2/sinusoids/)).
 - [`BSplineSolver`](https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/bspline.py#L173)
   expands in degree-1/2 B-splines — smooth piecewise polynomials with
   guaranteed continuity, extending cleanly to bent wires and multi-wire
-  junctions (chapter 5) — and replaces our blunt per-segment testing with
+  junctions ([chapter 5](/act-2/splines/)) — and replaces our blunt per-segment testing with
   **Galerkin testing**: demand the residual be orthogonal to every basis
   function, not merely balanced segment by segment.
 

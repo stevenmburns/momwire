@@ -3,7 +3,7 @@ title: "13 · Arrays know their own symmetry"
 description: An H-matrix exploits distance. An array offers something stronger — identical elements, repeated on a grid — so the impedance matrix repeats too. Compute a handful of unique blocks instead of all P², and a big array collapses to the cost of a small one.
 ---
 
-The H-matrix of chapter 12 is *geometry-blind*: it discovers low rank by
+The H-matrix of [chapter 12](/act-4/compression/) is *geometry-blind*: it discovers low rank by
 measuring how far apart two chunks of wire happen to be. But some antennas hand
 you a much stronger regularity for free. An **array** is the same element,
 copied and translated — a row of dipoles, a stack of bowties, a log-periodic's
@@ -59,6 +59,6 @@ equation, tamed by a continuous basis; a ground, from a perfect mirror to
 Sommerfeld's exact remainder; and a dense matrix, walked through by low rank and
 symmetry. All of it is *Python* — readable, the spec you could re-derive. But
 under the hot loops there is a second copy of the same math, compiled, and a
-discipline for stopping a solve the instant a knob moves. Chapter 14 lifts that
+discipline for stopping a solve the instant a knob moves. [Chapter 14](/act-4/epilogue/) lifts that
 floorboard, and then points you back at the simulator where every bit of this
 runs live.
