@@ -22,10 +22,10 @@ the same axes, is still crawling at three hundred. That contrast is the whole of
 Acts I–II in one picture: continuity buys you a knee.
 
 But convergence is necessary, not sufficient. A solver can march confidently to
-a stable, wrong answer — a consistent bug, a subtly mis-derived kernel, a feed
-model that's off by a fixed offset (we watched exactly that in [chapter 3](/act-1/the-feed/), where
-the pulse's reactance converged an ohm shy because the delta-gap feed was
-crude). A method agreeing *with itself* proves only that it's self-consistent.
+a stable, wrong answer — a consistent bug, a subtly mis-derived kernel, a basis
+too crude to resolve the near field (we watched exactly that in [chapter 3](/act-1/the-feed/), where
+the pulse's reactance converged about an ohm shy of a continuous basis). A
+method agreeing *with itself* proves only that it's self-consistent.
 For the truth you need a witness who shares none of your code.
 
 ## External: does an unrelated engine agree?

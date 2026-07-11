@@ -27,8 +27,8 @@ momwire's delta-gap is the same move. Inside
 the right-hand side is built as
 [`v[fi] += -V_i / geom["seg_h"][fi]`](https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/sinusoidal.py#L1260)
 — voltage over feed-segment length, with the sign and constants absorbed into
-the solver's conventions. Same idea, a better-*tested* version of it — and, we
-are about to see, the *feed* is where the toy's last ohm hides.
+the solver's conventions. Same idea, a better-*tested* version of it — though,
+as we're about to see, the feed is *not* where the toy's last ohm hides.
 
 Solve the system, read off the current where the generator sits, and the
 number every ham actually wants falls out:
@@ -60,8 +60,10 @@ answer. But look how *unevenly*:
   still only `−14.4`, several ohms shy. And it doesn't ride a clean `1/N`: the
   self-term `log(dz/a)` from chapter 2 injects a *logarithm*, so the reactance
   follows `X ≈ X∞ + (b + c·log N)/N`. Fit *that* curve (the dotted line) and
-  you can extrapolate to `X∞ ≈ −17.1` from coarse data — a real rescue, pulling
-  a converged number out of solves that individually look nowhere near it.
+  you can extrapolate to `X∞ ≈ −17` from coarse data — a real rescue, pulling a
+  usable estimate out of solves that individually look nowhere near it. (Don't
+  read too much precision into it: the fit pins `X∞` to a couple tenths, not a
+  hundredth.)
 
 So: yes, you can get final values out of the pulse method. But count the cost.
 The resistance needs a handful of solves and a one-line extrapolation. The
@@ -69,9 +71,12 @@ reactance needs *many* solves, a fitted model of its trend, and even then lands
 about **an ohm short** of a good basis — because the last ohm isn't a
 convergence error at all. Notice `R` extrapolates *exactly* onto momwire while
 `X` stops an ohm away: an offset in the reactance alone, untouched by refining,
-is the fingerprint of the **feed model**. Our bare delta-gap and momwire's
-tested one simply disagree about the near-field a little, and that disagreement
-lives entirely in `X`.
+is the fingerprint of the **basis** — not a convergence error, and (perhaps
+surprisingly) not the feed. The pulse's staircase resolves the near-field
+reactive energy that `X` is made of a little differently than a continuous
+basis does, and settles about an ohm off; smoothing the delta-gap into a
+finite-width source — or a coaxial "frill" — barely moves it. Only a better
+basis closes that gap, which is what Act II is.
 
 And brute force is no escape hatch. To reach the converged reactance *without*
 extrapolating, you'd shrink the segments until `dz` approached the wire radius
