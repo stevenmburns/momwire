@@ -58,7 +58,7 @@ current at the tips, which depends on the current at the feed. You cannot
 march along the wire computing it locally; the whole distribution must be
 found *at once*.
 
-Hold onto that word "coupled" — it's why, three chapters from now, we'll be
+Hold onto that word "coupled" — it's why, in the next chapter, we'll be
 staring at a dense matrix, and why in Act IV the cost of that matrix becomes
 the villain of the story.
 
@@ -109,7 +109,7 @@ Nothing is free: the peak is still *violently* sharp. For our specimen the
 kernel varies on a length scale of half a millimetre near the diagonal, on
 a wire ten metres long. Integrating across that peak accurately is where an
 enormous amount of solver craft goes — Act II devotes a whole chapter to
-it, and the toy solver we build in the next chapter will be wrecked by it
+it, and the toy solver we build in the next chapter will strain against it
 in an instructive way.
 
 ## What "solving" means now
