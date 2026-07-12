@@ -72,9 +72,26 @@ class SinusoidalSolver(_Cancelable):
         n_qp_sommerfeld=3,
         junctions=None,
         n_qp_const=8,
+        wire_conductivity=None,
+        insulation_radius=None,
+        insulation_eps_r=None,
         cancel=None,
     ):
         self._cancel = cancel
+        # Distributed series wire loading (stevenmburns/momwire#131) is a
+        # BSplineSolver-family feature for now. The sinusoidal solver is
+        # field-based (Eqs 76-79 merge the potentials into a total-field
+        # dyad), so the loading needs Galerkin overlap integrals of the
+        # three-term sinusoidal shapes — accepted here only to fail loudly
+        # instead of silently solving PEC.
+        if wire_conductivity is not None or insulation_radius is not None:
+            raise NotImplementedError(
+                "distributed wire loading (wire_conductivity / insulation_*) "
+                "isn't implemented for SinusoidalSolver yet — use the "
+                "BSplineSolver family"
+            )
+        if insulation_eps_r is not None:
+            raise ValueError("insulation_eps_r requires insulation_radius to be set")
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
         self.wire_radius = wire_radius

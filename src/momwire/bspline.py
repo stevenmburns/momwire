@@ -44,6 +44,7 @@ Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 
 import numpy as np
 import scipy.linalg
+import scipy.sparse
 from scipy.interpolate import BSpline
 
 from ._bspline_kernels import (
@@ -60,6 +61,7 @@ from ._quadrature import leggauss
 
 from . import _ground_refl
 from . import _sommerfeld
+from . import _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 
@@ -194,6 +196,17 @@ class BSplineSolver(_Cancelable):
         pairs (full kernel with a² regularization).
     wavelength, halfdriver_factor, wire_radius, nsegs : shared solver
         conventions (see SinusoidalSolver for the same surface).
+    wire_conductivity : distributed conductor loss (#131). None (default)
+        = PEC; a scalar σ [S/m] applies to every wire; a per-wire sequence
+        with NaN entries switches individual wires off. Adds the exact
+        round-conductor internal impedance Z'_int(ω) (valid DC → strong
+        skin effect) as a series loading over same-wire basis overlaps.
+        `wire_loss_power(coeffs)` reads back the dissipated watts.
+    insulation_radius, insulation_eps_r : dielectric jacket (#131), given
+        together (scalar / per-wire like wire_conductivity). Adds King's
+        quasi-static series inductance μ₀/2π·(1−1/εr)·ln(b/a) per meter —
+        the insulated-wire velocity-factor effect (the wire tunes a few
+        percent long). Purely reactive; no dissipation modeled.
     swept_mem_mb : memory budget (MB, default 256) for the batched swept
         path's per-chunk transients — the all-pairs J moment tensor plus
         the same-edge reg moment blocks (see `_swept_batched_z_chunks`).
@@ -223,6 +236,9 @@ class BSplineSolver(_Cancelable):
         wavelength=22,
         halfdriver_factor=0.962,
         wire_radius=0.0005,
+        wire_conductivity=None,
+        insulation_radius=None,
+        insulation_eps_r=None,
         nsegs=101,
         ground_z=None,
         ground_eps=None,
@@ -252,6 +268,14 @@ class BSplineSolver(_Cancelable):
             raise NotImplementedError(
                 "use_singular_enrichment + ground_z together not supported "
                 "yet — image reaction for enrichment bases isn't implemented"
+            )
+        if use_singular_enrichment and (
+            wire_conductivity is not None or insulation_radius is not None
+        ):
+            raise NotImplementedError(
+                "use_singular_enrichment + distributed wire loading together "
+                "not supported yet — the enrichment bases don't carry the "
+                "loading overlap term"
             )
 
         self.degree = int(degree)
@@ -318,6 +342,56 @@ class BSplineSolver(_Cancelable):
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
 
         n_w = len(self.wires_polylines)
+
+        # Distributed series wire impedance (stevenmburns/momwire#131):
+        # finite conductivity (skin-effect internal impedance) and/or a
+        # dielectric jacket (series inductance → velocity factor). Each is
+        # None (off, today's PEC behavior), a scalar (every wire), or a
+        # per-wire sequence (NaN entries switch a wire off). The loading
+        # enters Z as Σ_w Z'_w(ω)·S_w over same-wire basis overlaps — see
+        # `_loading_gram` / `_apply_loading`.
+        self.wire_conductivity = _wire_loading.normalize_per_wire(
+            wire_conductivity, n_w, "wire_conductivity"
+        )
+        self.insulation_radius = _wire_loading.normalize_per_wire(
+            insulation_radius, n_w, "insulation_radius"
+        )
+        self.insulation_eps_r = _wire_loading.normalize_per_wire(
+            insulation_eps_r, n_w, "insulation_eps_r"
+        )
+        if (self.insulation_radius is None) != (self.insulation_eps_r is None):
+            raise ValueError(
+                "insulation_radius and insulation_eps_r must be given together"
+            )
+        if self.insulation_radius is not None:
+            finite_b = np.isfinite(self.insulation_radius)
+            if not np.array_equal(finite_b, np.isfinite(self.insulation_eps_r)):
+                raise ValueError(
+                    "insulation_radius and insulation_eps_r must be finite "
+                    "on the same wires (NaN switches a wire off in both)"
+                )
+            # Fail fast on bad geometry/material values (the same checks
+            # run inside insulation_inductance, but per-solve is too late).
+            for w in np.nonzero(finite_b)[0]:
+                _wire_loading.insulation_inductance(
+                    self.wire_radius,
+                    self.insulation_radius[w],
+                    self.insulation_eps_r[w],
+                )
+        if self.wire_conductivity is not None:
+            for w in np.nonzero(np.isfinite(self.wire_conductivity))[0]:
+                if self.wire_conductivity[w] <= 0.0:
+                    raise ValueError(
+                        f"wire_conductivity[{w}] must be > 0 S/m, "
+                        f"got {self.wire_conductivity[w]}"
+                    )
+        self._loading_active = self.wire_conductivity is not None or (
+            self.insulation_radius is not None
+        )
+        # Per-instance cache for the k-independent loading Gram structure
+        # (rows, cols, vals, wire_of_nnz) — see `_loading_gram`.
+        self._cached_loading_gram = None
+
         if n_per_edge_per_wire is None:
             n_per_edge_per_wire = [None] * n_w
         if len(n_per_edge_per_wire) != n_w:
@@ -1204,6 +1278,149 @@ class BSplineSolver(_Cancelable):
         return Z_A + Z_Phi
 
     # ------------------------------------------------------------------
+    # Distributed series wire loading (stevenmburns/momwire#131)
+    # ------------------------------------------------------------------
+
+    def _loading_gram(self):
+        """COO triplets of the loading Gram matrix, tagged per wire.
+
+        S[m, n] = ∫ Φ_m(l)·Φ_n(l) dl over the segments the two bases share
+        — nonzero only for overlapping bases on the same wire, so the
+        structure is banded and block-diagonal by wire. The full loading
+        term is Σ_w Z'_w(ω)·S_w; the triplets carry `wire_of_nnz` so one
+        structure serves every ω (only the per-wire scale changes).
+
+        Involves no kernel (no exp(-jkR)) — on each shared segment the
+        integral is the closed-form polynomial moment
+        Σ_pq C[m,a,p]·C[n,b,q]·h^(p+q+1)/(p+q+1). k-independent; cached
+        per instance (geometry is immutable after __init__).
+
+        Returns (rows, cols, vals, wire_of_nnz) int64/float64 arrays.
+        Duplicate (row, col) entries are intentional (one per shared
+        segment) — consumers accumulate (np.add.at / COO semantics).
+        """
+        cached = self._cached_loading_gram
+        if cached is not None:
+            return cached
+        geom = self._build_geometry()
+        supp_seg, polys, _kcl_A, _wk, _wbg = self._build_basis_polynomials(geom)
+        n_basis, n_wings, n_poly = polys.shape
+        h_per_seg = geom["h_per_seg"]
+        seg_offsets = np.asarray(geom["seg_offsets"], dtype=np.int64)
+
+        # segment → [(basis, wing), ...]. Padded wings (beyond a boundary
+        # basis's actual support) have all-zero poly rows; skip them so a
+        # padding segment index of 0 can't alias real segment 0.
+        seg_map: dict[int, list[tuple[int, int]]] = {}
+        nonzero_wing = np.any(polys != 0.0, axis=2)
+        for m in range(n_basis):
+            for a in range(n_wings):
+                if nonzero_wing[m, a]:
+                    seg_map.setdefault(int(supp_seg[m, a]), []).append((m, a))
+
+        pq = np.arange(n_poly)
+        pq_sum = pq[:, None] + pq[None, :] + 1
+        rows, cols, vals, wire_ids = [], [], [], []
+        for s, entries in seg_map.items():
+            hs = h_per_seg[s]
+            # H[p, q] = ∫₀^h u^p·u^q du = h^(p+q+1)/(p+q+1)
+            H = hs**pq_sum / pq_sum
+            C = polys[[m for m, _ in entries], [a for _, a in entries], :]
+            M = C @ H @ C.T
+            w = int(np.searchsorted(seg_offsets, s, side="right") - 1)
+            n_e = len(entries)
+            for i in range(n_e):
+                mi = entries[i][0]
+                for j in range(n_e):
+                    rows.append(mi)
+                    cols.append(entries[j][0])
+                    vals.append(M[i, j])
+                    wire_ids.append(w)
+
+        result = (
+            np.asarray(rows, dtype=np.int64),
+            np.asarray(cols, dtype=np.int64),
+            np.asarray(vals, dtype=np.float64),
+            np.asarray(wire_ids, dtype=np.int64),
+        )
+        self._cached_loading_gram = result
+        return result
+
+    def _loading_zw(self, omega):
+        """Per-wire series impedance Z'_w(ω) [Ω/m]; (n_w,) or (n_w, n_k)."""
+        return _wire_loading.series_impedance_per_wire(
+            omega,
+            self.wire_radius,
+            self.wire_conductivity,
+            self.insulation_radius,
+            self.insulation_eps_r,
+        )
+
+    def _apply_loading(self, Z, omega=None):
+        """Add the loading term into Z in place; no-op when loading is off.
+
+        Z is (n_basis, n_basis) with scalar `omega` (default self.omega),
+        or a swept chunk (n_k, n_basis, n_basis) with `omega` (n_k,).
+        Returns Z for call-site convenience.
+        """
+        if not self._loading_active:
+            return Z
+        rows, cols, vals, wire_ids = self._loading_gram()
+        if omega is None:
+            omega = self.omega
+        zw = self._loading_zw(omega)  # (n_w,) or (n_w, n_k)
+        if Z.ndim == 2:
+            np.add.at(Z, (rows, cols), zw[wire_ids] * vals)
+        else:
+            data = zw[wire_ids, :].T * vals[None, :]  # (n_k, nnz)
+            for ki in range(Z.shape[0]):
+                np.add.at(Z[ki], (rows, cols), data[ki])
+        return Z
+
+    def _loading_block(self, I, J, omega=None):
+        """Dense loading sub-block L[I][:, J] for restricted evaluators
+        (HMatrixSolver.zblock). The scaled CSR is cached per ω — the
+        H-matrix fill calls zblock many times per k."""
+        rows, cols, vals, wire_ids = self._loading_gram()
+        if omega is None:
+            omega = self.omega
+        cache = getattr(self, "_loading_csr_cache", None)
+        if cache is None or cache[0] != omega:
+            geom = self._build_geometry()
+            supp_seg, _p, _k, _wk, _wbg = self._build_basis_polynomials(geom)
+            n = supp_seg.shape[0]
+            zw = self._loading_zw(omega)
+            L = scipy.sparse.coo_matrix(
+                (zw[wire_ids] * vals, (rows, cols)), shape=(n, n)
+            ).tocsr()
+            self._loading_csr_cache = (omega, L)
+        L = self._loading_csr_cache[1]
+        return L[I][:, J].toarray()
+
+    def wire_loss_power(self, coeffs, omega=None):
+        """Ohmic power dissipated in the wire metal, from a solve's coeffs.
+
+        P_wire = ½ Σ_w Re[Z'_w(ω)] · (c^H S_w c) — the ∫ R'(l)·|I(l)|² dl
+        readout the downstream power budget reports. Insulation loading is
+        purely reactive and contributes nothing here. Trailing KCL
+        Lagrange-multiplier entries in `coeffs` are ignored.
+
+        Returns (total_watts, per_wire_watts ndarray (n_wires,)).
+        """
+        n_w = len(self.wires_polylines)
+        per_wire = np.zeros(n_w, dtype=np.float64)
+        if not self._loading_active:
+            return 0.0, per_wire
+        rows, cols, vals, wire_ids = self._loading_gram()
+        geom = self._build_geometry()
+        supp_seg, _p, _k, _wk, _wbg = self._build_basis_polynomials(geom)
+        c = np.asarray(coeffs)[: supp_seg.shape[0]]
+        r_w = np.real(self._loading_zw(self.omega if omega is None else omega))
+        contrib = 0.5 * r_w[wire_ids] * np.real(np.conj(c[rows]) * c[cols]) * vals
+        np.add.at(per_wire, wire_ids, contrib)
+        return float(per_wire.sum()), per_wire
+
+    # ------------------------------------------------------------------
     # Source vector
     # ------------------------------------------------------------------
 
@@ -1766,6 +1983,10 @@ class BSplineSolver(_Cancelable):
                 td_img = self._image_tangent_dot(geom["tangents"])
                 Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
 
+        # Distributed series wire loading (independent of ground: it's a
+        # wire property, added once to the final Z).
+        Z = self._apply_loading(Z)
+
         # Per-feed unit Galerkin source vectors. For multi-feed, the
         # combined RHS is Σ_i V_i · v_i, and each per-feed driving-point
         # current is I_i = v_i^T coeffs by reciprocity of the Galerkin
@@ -1905,6 +2126,7 @@ class BSplineSolver(_Cancelable):
             else:
                 td_img = self._image_tangent_dot(geom["tangents"])
                 Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+        Z = self._apply_loading(Z)
 
         # One source vector per feed, columns of B.
         n_ports = len(self.feeds)
@@ -2007,6 +2229,7 @@ class BSplineSolver(_Cancelable):
                     Z = Z - self._assemble_Z(
                         J_img, supp_seg, polys, geom, td_all=td_img
                     )
+            Z = self._apply_loading(Z)
             X = self._solve_with_kcl_ports(Z, B, kcl_A)
             out[ki] = B.T @ X
 
@@ -2119,6 +2342,9 @@ class BSplineSolver(_Cancelable):
                     self.n_qp_pair,
                 )
                 Z = Z - _assemble_swept(J_img, td_img, omega_chunk)
+            # Loading is Z'(ω)-scaled per k within the chunk (skin R ∝ √ω,
+            # insulation X ∝ ω), added after the batched kernel assembly.
+            Z = self._apply_loading(Z, omega=omega_chunk)
             yield c0, ks, Z
 
     def _compute_impedance_swept_batched(self, k_array):
