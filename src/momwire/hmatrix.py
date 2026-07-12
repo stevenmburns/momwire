@@ -466,9 +466,16 @@ class HMatrixSolver(BSplineSolver):
         supp_J_local = np.vectorize(loc_of_J.__getitem__)(supp_seg[J])
         td_sub = tangents[seg_I] @ tangents[seg_J].T
 
-        return self._assemble_Z_block(
+        Zb = self._assemble_Z_block(
             Jsub, supp_I_local, polys[I], supp_J_local, polys[J], td_sub
         )
+        # Distributed wire loading rides the free-space block (the image
+        # block is subtracted separately and carries none). Exact for any
+        # block partition: entry (i, j) appears in exactly one block, and
+        # far/admissible blocks hold no same-wire basis overlaps anyway.
+        if self._loading_active:
+            Zb += self._loading_block(I, J)
+        return Zb
 
     def _zblock_image(self, I, J, k=None):
         """Return the PEC-image sub-block for the basis pair (I, J): the real
