@@ -182,17 +182,6 @@ def test_enrichment_gated():
         _solver(wire_conductivity=SIGMA_CU, use_singular_enrichment=True)
 
 
-def test_sinusoidal_rejects_loading():
-    with pytest.raises(NotImplementedError, match="SinusoidalSolver"):
-        SinusoidalSolver(
-            wires=DIPOLE,
-            nsegs=81,
-            wavelength=WL,
-            wire_radius=A_28,
-            wire_conductivity=SIGMA_CU,
-        )
-
-
 # ----------------------------------------------------------------------
 # Every-Z-consumer parity
 # ----------------------------------------------------------------------
@@ -261,3 +250,126 @@ def test_hmatrix_iterative_solve_carries_loading():
     )
     z_h, _ = h.compute_impedance()
     assert z_h == pytest.approx(z_dense, rel=1e-5)  # GMRES rtol, not roundoff
+
+
+# ----------------------------------------------------------------------
+# SinusoidalSolver (momwire#134): point-matched loading — NEC's impedance
+# boundary condition at the match points, not the Galerkin overlap.
+# ----------------------------------------------------------------------
+
+
+def _ssolver(**kw):
+    base = dict(wires=DIPOLE, nsegs=81, wavelength=WL, wire_radius=A_28)
+    base.update(kw)
+    return SinusoidalSolver(**base)
+
+
+def test_sinusoidal_lossless_default_bit_identical():
+    z_default, c_default = _ssolver().compute_impedance()
+    z_nan, c_nan = _ssolver(wire_conductivity=np.nan).compute_impedance()
+    assert z_nan == z_default
+    np.testing.assert_array_equal(c_nan, c_default)
+
+
+def test_sinusoidal_loading_matches_adjoint_perturbation():
+    """The collocation G is NOT complex-symmetric, so the Galerkin
+    perturbation oracle (c₀ᵀLc₀/I₀²) doesn't apply. The adjoint form does:
+    with α₀ = G⁻¹v, I₀ = rᵀα₀ (r the feed-centre readout vector), and
+    w = G⁻ᵀr, a perturbation G → G − L gives ΔZ = −V·(wᵀLα₀)/I₀² to
+    first order. Independent route to the same number — pins the loading
+    matrix structure, its sign, and the Z'(ω) scaling through the solve."""
+    import scipy.linalg
+
+    sigma_big = 5.8e10  # tiny loss → first-order error negligible
+    s0 = _ssolver()
+    z0, a0 = s0.compute_impedance()
+    G0 = s0.Z_matrix
+
+    s1 = _ssolver(wire_conductivity=sigma_big)
+    z1, _ = s1.compute_impedance()
+
+    geom = s0._build_geometry()
+    seg_view = s0._basis_coefs(geom, s0.k)
+    n = geom["n_segs"]
+    Lneg = np.zeros((n, n), dtype=np.complex128)
+    s1._apply_loading(Lneg, geom, seg_view, s0.k)  # writes −L into zeros
+    fi = geom["feed_segs"][0]
+    st, en = seg_view["starts"][fi], seg_view["starts"][fi + 1]
+    r = np.zeros(n, dtype=np.complex128)
+    r[seg_view["jbasis"][st:en]] = seg_view["sigma"][st:en] * (
+        seg_view["A"][st:en] + seg_view["C"][st:en]
+    )
+    w = scipy.linalg.solve(G0.T, r)
+    i0 = 1.0 / z0
+    dz_pred = (w @ Lneg @ a0) / i0**2  # ΔZ = −V·wᵀLα₀/I₀², V=1, Lneg=−L
+    assert z1 - z0 == pytest.approx(dz_pred, rel=1e-3)
+
+
+def test_sinusoidal_copper_dipole_physics_window():
+    """Same physics windows as the BSpline test: ΔR within 15% of R'·L/2,
+    ΔX ≈ ΔR (strong skin), efficiency in the 0.91–0.95 window from the
+    closed-form ∫|I|² wire_loss_power readout."""
+    z0, _ = _ssolver().compute_impedance()
+    s = _ssolver(wire_conductivity=SIGMA_CU)
+    z1, c1 = s.compute_impedance()
+
+    rp = np.real(_wire_loading.wire_internal_impedance(s.omega, A_28, SIGMA_CU))
+    assert z1.real - z0.real == pytest.approx(rp * L_DIP / 2, rel=0.15)
+    assert z1.imag - z0.imag == pytest.approx(z1.real - z0.real, rel=0.20)
+
+    p_wire, per_wire = s.wire_loss_power(c1)
+    p_in = 0.5 * np.real(1.0 / np.conj(z1))
+    assert 0.91 < 1.0 - p_wire / p_in < 0.95
+    assert per_wire.shape == (1,)
+    assert per_wire[0] == pytest.approx(p_wire)
+
+
+def test_sinusoidal_matches_bspline_delta_z():
+    """Cross-basis: the copper ΔZ from the point-matched sinusoidal system
+    and the Galerkin BSpline system agree to ~1% at N=81 (measured 0.04%
+    on ΔR / 0.1% on ΔX) — two testing schemes, one physical loading."""
+    z0s, _ = _ssolver().compute_impedance()
+    z1s, _ = _ssolver(wire_conductivity=SIGMA_CU).compute_impedance()
+    z0b, _ = _solver().compute_impedance()
+    z1b, _ = _solver(wire_conductivity=SIGMA_CU).compute_impedance()
+    assert (z1s - z0s) == pytest.approx(z1b - z0b, rel=0.01)
+
+
+def test_sinusoidal_insulation_shift_and_direction():
+    z0, _ = _ssolver().compute_impedance()
+    b, eps_r = 0.4e-3, 3.0
+    s = _ssolver(insulation_radius=b, insulation_eps_r=eps_r)
+    z1, c1 = s.compute_impedance()
+
+    lp = _wire_loading.insulation_inductance(A_28, b, eps_r)
+    assert z1.imag - z0.imag == pytest.approx(s.omega * lp * L_DIP / 2, rel=0.15)
+    assert z1.imag > z0.imag
+    p_wire, _ = s.wire_loss_power(c1)
+    assert p_wire == 0.0  # purely reactive
+    assert z1.real == pytest.approx(z0.real, rel=0.1)
+
+
+def test_sinusoidal_validation_errors():
+    with pytest.raises(ValueError, match="must exceed"):
+        _ssolver(insulation_radius=A_28 / 2, insulation_eps_r=2.0)
+    with pytest.raises(ValueError, match="given together"):
+        _ssolver(insulation_radius=1e-3)
+    with pytest.raises(ValueError, match="> 0 S/m"):
+        _ssolver(wire_conductivity=-1.0)
+
+
+def test_sinusoidal_swept_and_y_matrix_parity():
+    """Both swept loops and the Y-matrix path funnel through _assemble_Z,
+    so the loading must ride every consumer identically."""
+    ks = 2 * np.pi / np.array([WL * 0.98, WL, WL * 1.02])
+    zs = _ssolver(**LOSSY_KW).compute_impedance_swept(ks)
+    for i, kk in enumerate(ks):
+        z_i, _ = _ssolver(wavelength=2 * np.pi / kk, **LOSSY_KW).compute_impedance()
+        # rel 1e-8, not 1e-9: the per-k constructor re-derives k from
+        # wavelength=2π/k (one ulp of k), and the basis trig near the feed
+        # resonance amplifies that to ~1e-9 relative on Z.
+        assert zs[i] == pytest.approx(z_i, rel=1e-8)
+
+    Y = _ssolver(**LOSSY_KW).compute_y_matrix()
+    z, _ = _ssolver(**LOSSY_KW).compute_impedance()
+    assert 1.0 / Y[0, 0] == pytest.approx(z, rel=1e-9)

@@ -25,7 +25,7 @@ import numpy as np
 import scipy.linalg
 import scipy.sparse
 
-from . import _ground_refl, _sommerfeld
+from . import _ground_refl, _sommerfeld, _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 
@@ -78,20 +78,6 @@ class SinusoidalSolver(_Cancelable):
         cancel=None,
     ):
         self._cancel = cancel
-        # Distributed series wire loading (stevenmburns/momwire#131) is a
-        # BSplineSolver-family feature for now. The sinusoidal solver is
-        # field-based (Eqs 76-79 merge the potentials into a total-field
-        # dyad), so the loading needs Galerkin overlap integrals of the
-        # three-term sinusoidal shapes — accepted here only to fail loudly
-        # instead of silently solving PEC.
-        if wire_conductivity is not None or insulation_radius is not None:
-            raise NotImplementedError(
-                "distributed wire loading (wire_conductivity / insulation_*) "
-                "isn't implemented for SinusoidalSolver yet — use the "
-                "BSplineSolver family"
-            )
-        if insulation_eps_r is not None:
-            raise ValueError("insulation_eps_r requires insulation_radius to be set")
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
         self.wire_radius = wire_radius
@@ -164,6 +150,54 @@ class SinusoidalSolver(_Cancelable):
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
 
         n_w = len(self.wires_polylines)
+
+        # Distributed series wire impedance (stevenmburns/momwire#131,
+        # sinusoidal support #134): finite conductivity and/or a dielectric
+        # jacket, same normalize/validate contract as BSplineSolver. This
+        # solver is point-matched (NEC collocation), so the loading enters
+        # as NEC's impedance boundary condition at the match points —
+        # E_scat(n) − Z'_w·I(n) = −E_app(n) — a sparse subtraction of
+        # Z'·(basis current at segment centre) in `_assemble_Z`, NOT the
+        # Galerkin overlap the BSpline family uses. `wire_loss_power` DOES
+        # use the closed-form ∫|I|² overlaps (a physical integral is basis-
+        # scheme-independent).
+        self.wire_conductivity = _wire_loading.normalize_per_wire(
+            wire_conductivity, n_w, "wire_conductivity"
+        )
+        self.insulation_radius = _wire_loading.normalize_per_wire(
+            insulation_radius, n_w, "insulation_radius"
+        )
+        self.insulation_eps_r = _wire_loading.normalize_per_wire(
+            insulation_eps_r, n_w, "insulation_eps_r"
+        )
+        if (self.insulation_radius is None) != (self.insulation_eps_r is None):
+            raise ValueError(
+                "insulation_radius and insulation_eps_r must be given together"
+            )
+        if self.insulation_radius is not None:
+            finite_b = np.isfinite(self.insulation_radius)
+            if not np.array_equal(finite_b, np.isfinite(self.insulation_eps_r)):
+                raise ValueError(
+                    "insulation_radius and insulation_eps_r must be finite "
+                    "on the same wires (NaN switches a wire off in both)"
+                )
+            for w in np.nonzero(finite_b)[0]:
+                _wire_loading.insulation_inductance(
+                    self.wire_radius,
+                    self.insulation_radius[w],
+                    self.insulation_eps_r[w],
+                )
+        if self.wire_conductivity is not None:
+            for w in np.nonzero(np.isfinite(self.wire_conductivity))[0]:
+                if self.wire_conductivity[w] <= 0.0:
+                    raise ValueError(
+                        f"wire_conductivity[{w}] must be > 0 S/m, "
+                        f"got {self.wire_conductivity[w]}"
+                    )
+        self._loading_active = self.wire_conductivity is not None or (
+            self.insulation_radius is not None
+        )
+
         if n_per_edge_per_wire is None:
             n_per_edge_per_wire = [None] * n_w
         if len(n_per_edge_per_wire) != n_w:
@@ -1242,7 +1276,102 @@ class SinusoidalSolver(_Cancelable):
             M_B = scipy.sparse.csc_matrix((B_eff, (n_idx_arr, j_idx_arr)), shape=(N, N))
             M_C = scipy.sparse.csc_matrix((C_eff, (n_idx_arr, j_idx_arr)), shape=(N, N))
             G = (Phi_c @ M_A) + (Phi_s @ M_B) + (Phi_co @ M_C)
+        self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
+
+    def _loading_zw(self, omega):
+        """Per-wire series impedance Z'_w(ω) [Ω/m]; zeros when a wire's
+        loading is switched off (NaN entries)."""
+        return _wire_loading.series_impedance_per_wire(
+            omega,
+            self.wire_radius,
+            self.wire_conductivity,
+            self.insulation_radius,
+            self.insulation_eps_r,
+        )
+
+    @staticmethod
+    def _wire_of_seg(geom):
+        """(n_segs,) int array mapping segment index → wire index."""
+        firsts = np.asarray(geom["wire_first"], dtype=np.int64)
+        lasts = np.asarray(geom["wire_last"], dtype=np.int64)
+        return np.repeat(np.arange(firsts.shape[0]), lasts - firsts + 1)
+
+    def _apply_loading(self, G, geom, seg_view, k):
+        """NEC's impedance boundary condition, in place; no-op when loading
+        is off. The system point-matches E_scat(n) = −E_app(n) at segment
+        centres; a distributed series impedance changes the wire surface
+        condition to E_scat(n) − Z'_w(n)·I(n) = −E_app(n), so subtract
+        Z'·(current of basis j at segment n's centre) = Z'·σ(A+C) from
+        G[n, j] over the basis-support entries. (Contrast the Galerkin
+        overlap loading in `BSplineSolver._apply_loading` — same physics,
+        each entering through its own testing scheme.)"""
+        if not self._loading_active:
+            return G
+        omega = k * self.c
+        zw = self._loading_zw(omega)  # (n_w,)
+        starts = seg_view["starts"]
+        n_segs = geom["n_segs"]
+        rows = np.repeat(np.arange(n_segs, dtype=np.int64), starts[1:] - starts[:-1])
+        cols = seg_view["jbasis"]
+        i_center = seg_view["sigma"] * (seg_view["A"] + seg_view["C"])
+        # Each (seg, basis) pair is unique in seg_view (see _basis_coefs),
+        # so plain fancy-index subtraction is exact.
+        G[rows, cols] -= zw[self._wire_of_seg(geom)[rows]] * i_center
+        return G
+
+    def wire_loss_power(self, coeffs, omega=None):
+        """Ohmic power dissipated in the wire metal, from a solve's coeffs.
+
+        P_wire = ½ Σ_w Re[Z'_w(ω)] · Σ_{s∈w} ∫|I_s(ξ)|² dξ — the physical
+        ∫R'(l)·|I(l)|² dl readout, same contract as the BSpline family's.
+        On each segment the current is the single aggregated three-term
+        shape I_s(ξ) = P + Q·sin(kξ) + R·cos(kξ) (α-weighted sums of the
+        per-basis σA/B/σC entries), so the integral over ξ ∈ [−h/2, h/2]
+        is closed-form:
+
+            ∫|I|² = |P|²h + 2Re(P·R̄)·(2/k)sin(kh/2)
+                    + |Q|²(h/2 − sin(kh)/2k) + |R|²(h/2 + sin(kh)/2k)
+
+        (P–Q and Q–R cross terms vanish by parity). Insulation loading is
+        purely reactive and contributes nothing.
+
+        Returns (total_watts, per_wire_watts ndarray (n_wires,)).
+        """
+        n_w = len(self.wires_polylines)
+        per_wire = np.zeros(n_w, dtype=np.float64)
+        if not self._loading_active:
+            return 0.0, per_wire
+        if omega is None:
+            omega = self.omega
+        k = omega / self.c
+        geom = self._build_geometry()
+        seg_view = self._basis_coefs(geom, k)
+        n_segs = geom["n_segs"]
+        h = np.asarray(geom["seg_h"], dtype=np.float64)
+
+        starts = seg_view["starts"]
+        rows = np.repeat(np.arange(n_segs, dtype=np.int64), starts[1:] - starts[:-1])
+        alpha_e = np.asarray(coeffs)[seg_view["jbasis"]]
+        P = np.zeros(n_segs, dtype=np.complex128)
+        Q = np.zeros(n_segs, dtype=np.complex128)
+        R = np.zeros(n_segs, dtype=np.complex128)
+        np.add.at(P, rows, alpha_e * seg_view["sigma"] * seg_view["A"])
+        np.add.at(Q, rows, alpha_e * seg_view["B"])
+        np.add.at(R, rows, alpha_e * seg_view["sigma"] * seg_view["C"])
+
+        sin_kh = np.sin(k * h)
+        sin_kh_2 = np.sin(0.5 * k * h)
+        int_abs_i2 = (
+            np.abs(P) ** 2 * h
+            + 2.0 * np.real(P * np.conj(R)) * (2.0 / k) * sin_kh_2
+            + np.abs(Q) ** 2 * (0.5 * h - sin_kh / (2.0 * k))
+            + np.abs(R) ** 2 * (0.5 * h + sin_kh / (2.0 * k))
+        )
+        r_w = np.real(self._loading_zw(omega))  # zeros where switched off
+        wire_of = self._wire_of_seg(geom)
+        np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
+        return float(per_wire.sum()), per_wire
 
     def _feed_segment_current(self, alpha, seg_view, feed_seg):
         """Current at centre of a feed segment. I(s_local=0) = Σ_j α_j · σ_j ·

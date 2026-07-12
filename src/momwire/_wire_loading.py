@@ -27,9 +27,15 @@ HF (stevenmburns/momwire#131):
   "insulated wire tunes long" velocity-factor effect. Dielectric loss
   (tan δ) is deliberately out of scope for now.
 
-Both enter the MoM identically: a per-wire series impedance
-Z'(ω) = Z'_int + jωL'_ins loading the impedance matrix over same-wire
-basis overlaps (see `BSplineSolver._loading_gram`).
+Both enter the MoM as one per-wire series impedance Z'(ω) = Z'_int +
+jωL'_ins, applied through each solver family's own testing scheme: the
+Galerkin BSpline family loads Z over same-wire basis overlaps (see
+`BSplineSolver._loading_gram`), while the point-matched SinusoidalSolver
+applies NEC's impedance boundary condition at the segment-centre match
+points (see `SinusoidalSolver._apply_loading`, momwire#134).
+
+`wire_internal_impedance` and `insulation_inductance` are public momwire
+exports (#133).
 """
 
 import numpy as np
