@@ -2326,4 +2326,9 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
         ) = saved
 
     rel = abs(z_chunked - z_tensor) / abs(z_tensor)
-    assert rel < 1e-12, f"chunked vs tensor grounded Z disagreement: rel {rel}"
+    # 1e-10, not 1e-12: the weighted windowed kernel accumulates the image
+    # contribution in complex sums whose rounding is compiler-dependent —
+    # MSVC and AppleClang land at 2e-12..8e-12 vs gcc's <1e-12 (wheels run
+    # 29345985527). Still 5+ orders below physical tolerance; this pins
+    # the algebra, not the reduction order.
+    assert rel < 1e-10, f"chunked vs tensor grounded Z disagreement: rel {rel}"
