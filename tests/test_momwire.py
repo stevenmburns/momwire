@@ -2274,3 +2274,56 @@ def test_bspline_chunked_dense_impedance_matches_tensor_path():
 
     rel = abs(z_chunked - z_tensor) / abs(z_tensor)
     assert rel < 1e-12, f"chunked vs tensor impedance disagreement: rel {rel}"
+
+
+@pytest.mark.parametrize(
+    "ground_kw",
+    [
+        {},
+        {"ground_eps": (10.0, 0.002)},
+        {"ground_eps": (10.0, 0.002), "ground_model": "sommerfeld"},
+    ],
+    ids=["pec", "refl-coef", "sommerfeld"],
+)
+def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
+    """Grounded compute_impedance through the chunked image path (default
+    dispatch) vs the legacy image-tensor path (windowed flags flipped off)
+    — PEC mirror-dot, Fresnel refl-coef tables, and the Sommerfeld
+    constant-C2 exact image all route through the weighted windowed
+    accumulator with scale = -1."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("weighted windowed Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    h = 2.2  # strictly above ground, sommerfeld-legal
+    wires = [np.array([[0.0, -L / 2, h], [0.0, L / 2, h]])]
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=[[17]],
+        nsegs=17,
+        degree=2,
+        wavelength=22.0,
+        ground_z=0.0,
+        **ground_kw,
+    )
+    z_chunked, _ = BSplineSolver(**kw).compute_impedance()
+
+    saved = (
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL,
+        bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL,
+    )
+    try:
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = False
+        bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL = False
+        z_tensor, _ = BSplineSolver(**kw).compute_impedance()
+    finally:
+        (
+            bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL,
+            bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL,
+        ) = saved
+
+    rel = abs(z_chunked - z_tensor) / abs(z_tensor)
+    assert rel < 1e-12, f"chunked vs tensor grounded Z disagreement: rel {rel}"

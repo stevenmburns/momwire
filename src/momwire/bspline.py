@@ -76,6 +76,9 @@ _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_windowed"
 )
+_HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL = _acc is not None and hasattr(
+    _acc, "assemble_Z_bspline_weighted_windowed"
+)
 
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
@@ -1306,7 +1309,10 @@ class BSplineSolver(_Cancelable):
         tangents = geom["tangents"]
         td_all = tangents @ tangents.T
 
-        Z = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        # Fortran order: scipy.linalg.solve(overwrite_a=True) can only
+        # factor in place on a column-major matrix — C order would silently
+        # cost a full n_basis-squared copy at solve time (issue #136).
+        Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
         supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
         td_c = np.ascontiguousarray(td_all, dtype=np.float64)
@@ -1382,6 +1388,68 @@ class BSplineSolver(_Cancelable):
             _accumulate(corr, sl.start, sl.stop, sl.start, sl.stop, e_idx, e_idx)
 
         return Z
+
+    def _accumulate_Z_image_chunked(self, Z, geom, k, supp_seg, polys, w_A, w_Phi):
+        """Chunked ground-image accumulation: subtract the weighted image
+        sub-assembly from Z without materialising the (d+1, d+1, N, N)
+        image tensor OR an intermediate n_basis² matrix (issue #136,
+        ground scope). Observer-row chunks of the mirrored-source
+        full-kernel moments feed the weighted windowed assembler with
+        scale = -1 (the seams' `Z - image` convention). Image pairs are
+        never singular (`_build_J_image_blocks` docstring), so there is
+        no same-edge correction pass. The complex tables serve all three
+        grounds: PEC (mirror tangent dot / ones), refl-coef (Fresnel
+        dyad / image charge), Sommerfeld exact image (constant C2)."""
+        d = self.degree
+        a = self.wire_radius
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        seg_l_img = self._image_positions(seg_l)
+        seg_r_img = self._image_positions(seg_r)
+        n_segs = geom["n_segs_total"]
+        n_basis = supp_seg.shape[0]
+
+        supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
+        polys_c = np.ascontiguousarray(polys, dtype=np.float64)
+        wa_c = np.ascontiguousarray(w_A, dtype=np.complex128)
+        wp_c = np.ascontiguousarray(w_Phi, dtype=np.complex128)
+        all_n = np.arange(n_basis, dtype=np.int64)
+
+        row_bytes = (d + 1) ** 2 * n_segs * 16
+        chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
+        for i0 in range(0, n_segs, chunk):
+            self._checkpoint()  # per observer chunk of the image fill
+            i1 = min(i0 + chunk, n_segs)
+            J_chunk = _seg_seg_full_moments_offedge(
+                seg_l[i0:i1],
+                seg_r[i0:i1],
+                seg_l_img,
+                seg_r_img,
+                a,
+                k,
+                d,
+                self.n_qp_pair,
+            )
+            m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
+            _acc.assemble_Z_bspline_weighted_windowed(
+                np.ascontiguousarray(J_chunk, dtype=np.complex128),
+                supp_c,
+                polys_c,
+                wa_c,
+                wp_c,
+                np.nonzero(m_mask)[0].astype(np.int64),
+                all_n,
+                int(i0),
+                int(i1),
+                0,
+                int(n_segs),
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                complex(-1.0),
+                Z,
+                self._cancel_flag,
+            )
 
     # ------------------------------------------------------------------
     # Distributed series wire loading (stevenmburns/momwire#131)
@@ -1634,38 +1702,44 @@ class BSplineSolver(_Cancelable):
     # KCL solve (Schur complement)
     # ------------------------------------------------------------------
 
-    def _solve_with_kcl(self, Z, v, kcl_A):
+    def _solve_with_kcl(self, Z, v, kcl_A, overwrite=False):
         """Constrained solve [Z A^T; A 0] [I; λ] = [v; 0] via Schur.
 
         If kcl_A is empty (no junctions), do a plain solve.
+
+        `overwrite=True` lets LAPACK factor Z in place instead of copying
+        it — a full n_basis²-complex saving (2.5 GB at whip-benchmark
+        scale). Callers pass it only where Z is dead after the solve. The
+        locally-built rhs is always overwritten; the caller's `v` never is.
         """
         if kcl_A.shape[0] == 0:
-            return scipy.linalg.solve(Z, v)
+            return scipy.linalg.solve(Z, v, overwrite_a=overwrite)
         n_b = Z.shape[0]
         n_c = kcl_A.shape[0]
-        rhs = np.empty((n_b, 1 + n_c), dtype=np.complex128)
+        rhs = np.empty((n_b, 1 + n_c), dtype=np.complex128, order="F")
         rhs[:, 0] = v
         rhs[:, 1:] = kcl_A.T
-        sol = scipy.linalg.solve(Z, rhs)
+        sol = scipy.linalg.solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
         w = sol[:, 0]
         X = sol[:, 1:]
         lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ w)
         return w - X @ lam
 
-    def _solve_with_kcl_ports(self, Z, V, kcl_A):
+    def _solve_with_kcl_ports(self, Z, V, kcl_A, overwrite=False):
         """Multi-port KCL-constrained Schur solve. V: (n_b, n_p), returns
         (n_b, n_p). Matrix-RHS generalisation of `_solve_with_kcl` — all
         n_p source columns share one LU factorisation with the n_c
-        constraint columns.
+        constraint columns. `overwrite` as in `_solve_with_kcl`; the
+        caller's V is never overwritten.
         """
         if kcl_A.shape[0] == 0:
-            return scipy.linalg.solve(Z, V)
+            return scipy.linalg.solve(Z, V, overwrite_a=overwrite)
         n_b, n_p = V.shape
         n_c = kcl_A.shape[0]
-        rhs = np.empty((n_b, n_p + n_c), dtype=np.complex128)
+        rhs = np.empty((n_b, n_p + n_c), dtype=np.complex128, order="F")
         rhs[:, :n_p] = V
         rhs[:, n_p:] = kcl_A.T
-        sol = scipy.linalg.solve(Z, rhs)
+        sol = scipy.linalg.solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
         W = sol[:, :n_p]
         X = sol[:, n_p:]
         Lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ W)
@@ -2091,14 +2165,53 @@ class BSplineSolver(_Cancelable):
             # tangent dot products. The minus sign captures both the
             # image current's horizontal anti-parallel direction and the
             # image charge's sign flip (one minus combined).
-            J_img = self._build_J_image_blocks(geom, self.k)
-            if self.ground_eps is not None:
-                # Finite ground: Fresnel-weighted image (same J fill, per-
-                # pair weight tables on both terms) instead of the PEC dot.
-                Z = Z - self._ground_finite_Z(J_img, supp_seg, polys, geom)
+            if (
+                _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL
+                and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            ):
+                # Chunked image subtraction — no (d+1, d+1, N, N) image
+                # tensor, no intermediate n_basis² matrix (issue #136).
+                # Same weight tables as the tensor path below; the
+                # Sommerfeld remainder Q is already observer-chunked.
+                if self.ground_eps is not None:
+                    if self.ground_model == "sommerfeld":
+                        eps_t = _ground_refl.eps_tilde(
+                            self.ground_eps, self.omega, self.eps
+                        )
+                        c2 = (eps_t - 1.0) / (eps_t + 1.0)
+                        td_img = self._image_tangent_dot(geom["tangents"])
+                        w_A = c2 * td_img.astype(np.complex128)
+                        w_Phi = np.full_like(w_A, c2)
+                        self._accumulate_Z_image_chunked(
+                            Z, geom, self.k, supp_seg, polys, w_A, w_Phi
+                        )
+                        Z -= self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+                    else:
+                        w_A, w_Phi = self._image_refl_weights(
+                            self._image_refl_prep(geom), self.omega
+                        )
+                        self._accumulate_Z_image_chunked(
+                            Z, geom, self.k, supp_seg, polys, w_A, w_Phi
+                        )
+                else:
+                    td_img = self._image_tangent_dot(geom["tangents"])
+                    w_A = td_img.astype(np.complex128)
+                    w_Phi = np.ones_like(w_A)
+                    self._accumulate_Z_image_chunked(
+                        Z, geom, self.k, supp_seg, polys, w_A, w_Phi
+                    )
             else:
-                td_img = self._image_tangent_dot(geom["tangents"])
-                Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+                J_img = self._build_J_image_blocks(geom, self.k)
+                if self.ground_eps is not None:
+                    # Finite ground: Fresnel-weighted image (same J fill,
+                    # per-pair weight tables on both terms) instead of the
+                    # PEC dot.
+                    Z = Z - self._ground_finite_Z(J_img, supp_seg, polys, geom)
+                else:
+                    td_img = self._image_tangent_dot(geom["tangents"])
+                    Z = Z - self._assemble_Z(
+                        J_img, supp_seg, polys, geom, td_all=td_img
+                    )
 
         # Distributed series wire loading (independent of ground: it's a
         # wire property, added once to the final Z).
@@ -2166,7 +2279,6 @@ class BSplineSolver(_Cancelable):
             self._auto_active_junctions = active_junctions
             if not active_junctions:
                 # No junction qualifies → pass-1 result is the final answer.
-                self.z = Z
                 return _per_feed_z(coeffs_p1), coeffs_p1
 
         self._checkpoint()  # between passes: before pass-2 enrichment / final solve
@@ -2195,12 +2307,13 @@ class BSplineSolver(_Cancelable):
                 # Enrichment KCL: singular bases vanish at junction → 0 outflow
                 kcl_aug = np.zeros((kcl_A.shape[0], n_total), dtype=np.float64)
                 kcl_aug[:, :n_p] = kcl_A
-                coeffs = self._solve_with_kcl(Z_aug, v_aug, kcl_aug)
-                self.z = Z_aug
+                # Z_aug is dead after the solve (and the unused `self.z`
+                # stash was dropped — it retained the full n_basis² matrix
+                # for nothing), so let LAPACK factor in place.
+                coeffs = self._solve_with_kcl(Z_aug, v_aug, kcl_aug, overwrite=True)
                 return _per_feed_z(coeffs), coeffs
 
-        coeffs = self._solve_with_kcl(Z, v, kcl_A)
-        self.z = Z
+        coeffs = self._solve_with_kcl(Z, v, kcl_A, overwrite=True)
         return _per_feed_z(coeffs), coeffs
 
     def compute_y_matrix(self) -> np.ndarray:
@@ -2260,7 +2373,7 @@ class BSplineSolver(_Cancelable):
                 s_f=s_f_j,
             )
 
-        X = self._solve_with_kcl_ports(Z, B, kcl_A)  # (n_basis, n_ports)
+        X = self._solve_with_kcl_ports(Z, B, kcl_A, overwrite=True)
         return B.T @ X  # Y[i, j] = v_i^T · solve(Z, v_j)
 
     def compute_y_matrix_swept(self, k_array) -> np.ndarray:
@@ -2347,7 +2460,7 @@ class BSplineSolver(_Cancelable):
                         J_img, supp_seg, polys, geom, td_all=td_img
                     )
             Z = self._apply_loading(Z)
-            X = self._solve_with_kcl_ports(Z, B, kcl_A)
+            X = self._solve_with_kcl_ports(Z, B, kcl_A, overwrite=True)
             out[ki] = B.T @ X
 
         self.k = k_save
