@@ -1405,7 +1405,15 @@ class SinusoidalSolver(_Cancelable):
         for fi, V_i in zip(feed_segs, voltages):
             v[fi] += -V_i / geom["seg_h"][fi]
         self._checkpoint()  # after assembly, before the dense LU solve
-        alpha = scipy.linalg.solve(G, v)
+        # Factor Gᵀ in place: G.T is an F-ordered view of the C-ordered G,
+        # so LAPACK's getrf overwrites it with zero copies (factoring G
+        # directly would silently F-copy the whole matrix). trans=1 on the
+        # factors then solves G·α = v. The factors — not the raw matrix —
+        # are what gets stashed: the collocation G is not symmetric, so the
+        # wire-loading adjoint oracle needs Gᵀw = r, which is the same
+        # factorization at trans=0. One getrf serves both.
+        lu_piv = scipy.linalg.lu_factor(G.T, overwrite_a=True)
+        alpha = scipy.linalg.lu_solve(lu_piv, v, trans=1)
 
         feed_currents = np.array(
             [self._feed_segment_current(alpha, seg_view, fi) for fi in feed_segs],
@@ -1413,7 +1421,7 @@ class SinusoidalSolver(_Cancelable):
         )
         z_per_feed = voltages / feed_currents
         Z_drive = z_per_feed[0] if len(self.feeds) == 1 else z_per_feed
-        self.Z_matrix = G
+        self.Z_factors = lu_piv  # LU of Gᵀ; adjoint solve = lu_solve(·, trans=0)
         return Z_drive, alpha
 
     def compute_y_matrix(self) -> np.ndarray:
