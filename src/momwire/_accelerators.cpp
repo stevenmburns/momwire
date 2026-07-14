@@ -737,6 +737,157 @@ assemble_Z_bspline_kernel(
 }
 
 
+// Windowed, accumulating variant of assemble_Z_bspline_kernel for the
+// chunked dense build (issue #136): J_chunk holds the moment tensor for a
+// rectangular segment window [i0, i1) x [j0, j1) only, and this kernel adds
+// the window's contribution into a caller-provided Z. The (zA, zPhi) -> Z
+// mixing is linear, so summing per-window contributions across calls
+// reproduces the all-at-once assembly exactly; the caller never has to
+// materialise the full (NM, NM, N, N) tensor. m_idx / n_idx list the basis
+// rows/cols with at least one support wing inside the window (wings outside
+// are skipped here), so per-chunk work stays proportional to the window.
+// Each (m, n) pair is visited once per call, so the parallel += on
+// z_view(m, n) is contention-free.
+template<int D>
+static void
+assemble_Z_bspline_windowed_kernel(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
+    int64_t i0, int64_t i1, int64_t j0, int64_t j1,
+    double omega,
+    double eps_,
+    double mu_,
+    py::array_t<std::complex<double>, py::array::c_style> Z,
+    uintptr_t cancel_flag = 0
+) {
+    static constexpr int NM = D + 1;
+
+    auto j_view = J_chunk.unchecked<4>();
+    auto ss_view = support_seg.unchecked<2>();
+    auto p_view = polys.unchecked<3>();
+    auto td_view = td_all.unchecked<2>();
+    auto mi_view = m_idx.unchecked<1>();
+    auto ni_view = n_idx.unchecked<1>();
+
+    size_t n_basis = (size_t)support_seg.shape(0);
+    if (support_seg.shape(1) != NM) {
+        throw std::runtime_error("support_seg.shape(1) must equal D+1");
+    }
+    if (polys.shape(0) != (long)n_basis || polys.shape(1) != NM ||
+        polys.shape(2) != NM) {
+        throw std::runtime_error("polys.shape must be (n_basis, D+1, D+1)");
+    }
+    if (J_chunk.shape(0) != NM || J_chunk.shape(1) != NM ||
+        J_chunk.shape(2) != i1 - i0 || J_chunk.shape(3) != j1 - j0) {
+        throw std::runtime_error(
+            "J_chunk.shape must be (D+1, D+1, i1-i0, j1-j0)");
+    }
+    if (Z.shape(0) != (long)n_basis || Z.shape(1) != (long)n_basis) {
+        throw std::runtime_error("Z.shape must be (n_basis, n_basis)");
+    }
+    auto z_view = Z.mutable_unchecked<2>();
+
+    py::gil_scoped_release release;
+
+    const double omega_mu = omega * mu_;
+    const double inv_omega_eps = 1.0 / (omega * eps_);
+    size_t n_m = (size_t)m_idx.shape(0);
+    size_t n_n = (size_t)n_idx.shape(0);
+
+    PYSIM_CANCEL_SETUP(cancel_flag);
+    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t mi = 0; mi < n_m; mi++) {
+        for (size_t ni = 0; ni < n_n; ni++) {
+            PYSIM_CANCEL_POLL();
+            int64_t m = mi_view(mi);
+            int64_t n = ni_view(ni);
+            double zA_re = 0.0, zA_im = 0.0;
+            double zPhi_re = 0.0, zPhi_im = 0.0;
+
+            for (int a = 0; a < NM; a++) {
+                int64_t sm = ss_view(m, a);
+                if (sm < i0 || sm >= i1) continue;
+                for (int b = 0; b < NM; b++) {
+                    int64_t sn = ss_view(n, b);
+                    if (sn < j0 || sn >= j1) continue;
+                    double td = td_view(sm, sn);
+
+                    double wA_re = 0.0, wA_im = 0.0;
+                    double wPhi_re = 0.0, wPhi_im = 0.0;
+
+                    for (int p = 0; p < NM; p++) {
+                        double mp_ap = p_view(m, a, p);
+                        for (int q = 0; q < NM; q++) {
+                            double nq_bq = p_view(n, b, q);
+                            std::complex<double> Jpq =
+                                j_view(p, q, sm - i0, sn - j0);
+                            double prod = mp_ap * nq_bq;
+                            wA_re += prod * Jpq.real();
+                            wA_im += prod * Jpq.imag();
+                            if (p >= 1 && q >= 1) {
+                                std::complex<double> Jpm1qm1 =
+                                    j_view(p - 1, q - 1, sm - i0, sn - j0);
+                                double pq = (double)(p * q) * prod;
+                                wPhi_re += pq * Jpm1qm1.real();
+                                wPhi_im += pq * Jpm1qm1.imag();
+                            }
+                        }
+                    }
+
+                    zA_re += td * wA_re;
+                    zA_im += td * wA_im;
+                    zPhi_re += wPhi_re;
+                    zPhi_im += wPhi_im;
+                }
+            }
+
+            double Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
+            double Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            z_view(m, n) += std::complex<double>(Zre, Zim);
+        }
+    }
+
+    PYSIM_THROW_IF_ABORTED();
+}
+
+
+static void
+assemble_Z_bspline_windowed(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
+    int64_t i0, int64_t i1, int64_t j0, int64_t j1,
+    double omega,
+    double eps_,
+    double mu_,
+    py::array_t<std::complex<double>, py::array::c_style> Z,
+    uintptr_t cancel_flag = 0
+) {
+    switch ((int)support_seg.shape(1) - 1) {
+        case 1:
+            assemble_Z_bspline_windowed_kernel<1>(
+                J_chunk, support_seg, polys, td_all, m_idx, n_idx,
+                i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag);
+            return;
+        case 2:
+            assemble_Z_bspline_windowed_kernel<2>(
+                J_chunk, support_seg, polys, td_all, m_idx, n_idx,
+                i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag);
+            return;
+        default:
+            throw std::runtime_error(
+                "assemble_Z_bspline_windowed: max_d must be 1 or 2");
+    }
+}
+
+
 // Batched (swept-k) variant of assemble_Z_bspline_kernel. J carries a leading
 // k axis (n_k, NM, NM, N, N) and omega is an array; the basis tables
 // (support_seg, polys, td_all) are k-independent and reused across the sweep.
@@ -3078,6 +3229,20 @@ PYBIND11_MODULE(_accelerators, m) {
           "Returns J_static of shape (max_d+1, max_d+1, N, N), with the "
           "1/(4π) prefactor folded in.",
           py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"));
+    m.def("assemble_Z_bspline_windowed", &assemble_Z_bspline_windowed,
+          "Accumulate one rectangular segment window's contribution into a "
+          "caller-provided Z from a chunked moment tensor J_chunk of shape "
+          "(D+1, D+1, i1-i0, j1-j0). m_idx / n_idx select the basis rows / "
+          "cols with support in the window; the (zA, zPhi) -> Z mixing is "
+          "linear so per-window accumulation equals the all-at-once "
+          "assembly. Lets the dense build skip the full (D+1, D+1, N, N) "
+          "tensor (issue #136). max_d is inferred from support_seg.",
+          py::arg("J_chunk"), py::arg("support_seg"),
+          py::arg("polys"), py::arg("td_all"),
+          py::arg("m_idx"), py::arg("n_idx"),
+          py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
+          py::arg("omega"), py::arg("eps_"), py::arg("mu_"),
+          py::arg("Z"), py::arg("cancel_flag") = 0);
     m.def("assemble_Z_bspline", &assemble_Z_bspline,
           "Assemble the (n_basis, n_basis) Z matrix from the polynomial-"
           "moment tensor J, per-basis polynomial coefficients, support-segment "

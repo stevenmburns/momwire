@@ -73,6 +73,9 @@ _HAVE_ENRICH_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_enrich")
 _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_swept"
 )
+_HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = _acc is not None and hasattr(
+    _acc, "assemble_Z_bspline_windowed"
+)
 
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
@@ -1277,6 +1280,109 @@ class BSplineSolver(_Cancelable):
         Z_Phi = Z_Phi / (1j * self.omega * self.eps)
         return Z_A + Z_Phi
 
+    def _compute_Z_dense_chunked(self, geom, k, supp_seg, polys, same_edge_prep=None):
+        """Free-space dense Z without materialising the (d+1, d+1, N, N)
+        moment tensor (issue #136).
+
+        Observer-row chunks of the all-pairs full-kernel moments accumulate
+        straight into Z through the windowed C++ assembler — the
+        (zA, zPhi) → Z mixing is linear, so per-window accumulation equals
+        the all-at-once assembly. Same-edge blocks are then fixed up
+        per edge with a correction window (analytic static + regularised
+        split MINUS the full-kernel block the sweep already added), the
+        chunked equivalent of `_build_J_blocks`'s overwrite. Identical
+        quadrature and algebra to `_build_J_blocks` + `_assemble_Z`; the
+        peak transient is one row chunk (bounded by `swept_mem_mb`, the
+        same fill-transient budget the batched sweep uses) instead of the
+        full tensor — the difference between ~3 GB and ~0.25 GB on a
+        4,700-segment mesh.
+        """
+        d = self.degree
+        a = self.wire_radius
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        n_segs = geom["n_segs_total"]
+        n_basis = supp_seg.shape[0]
+        tangents = geom["tangents"]
+        td_all = tangents @ tangents.T
+
+        Z = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
+        polys_c = np.ascontiguousarray(polys, dtype=np.float64)
+        td_c = np.ascontiguousarray(td_all, dtype=np.float64)
+        all_n = np.arange(n_basis, dtype=np.int64)
+
+        def _accumulate(J_win, i0, i1, j0, j1, m_idx, n_idx):
+            _acc.assemble_Z_bspline_windowed(
+                np.ascontiguousarray(J_win, dtype=np.complex128),
+                supp_c,
+                polys_c,
+                td_c,
+                m_idx,
+                n_idx,
+                int(i0),
+                int(i1),
+                int(j0),
+                int(j1),
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                Z,
+                self._cancel_flag,
+            )
+
+        def _bases_touching(lo, hi):
+            mask = ((supp_c >= lo) & (supp_c < hi)).any(axis=1)
+            return np.nonzero(mask)[0].astype(np.int64)
+
+        # Row-chunk budget: bytes per observer row of the (d+1, d+1, ·, N)
+        # chunk, against the same transient budget the swept path uses.
+        row_bytes = (d + 1) ** 2 * n_segs * 16
+        chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
+        for i0 in range(0, n_segs, chunk):
+            self._checkpoint()  # per observer chunk of the fill+assemble
+            i1 = min(i0 + chunk, n_segs)
+            J_chunk = _seg_seg_full_moments_offedge(
+                seg_l[i0:i1], seg_r[i0:i1], seg_l, seg_r, a, k, d, self.n_qp_pair
+            )
+            _accumulate(J_chunk, i0, i1, 0, n_segs, _bases_touching(i0, i1), all_n)
+        del J_chunk
+
+        # Same-edge fixup: the sweep above added the full-kernel block for
+        # every pair; each same-edge block must instead be the analytic
+        # static + regularised split, so accumulate the difference.
+        if same_edge_prep is None:
+            per_wire = geom["per_wire"]
+            seg_off = geom["seg_offsets"]
+            same_edge_prep = []
+            for w in range(len(per_wire)):
+                pw = per_wire[w]
+                ed_off = pw["edge_offsets"]
+                ed_arc = pw["edge_arc_edges"]
+                base = seg_off[w]
+                for i_e in range(len(ed_off) - 1):
+                    sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
+                    A_st = _seg_seg_static_moments(ed_arc[i_e], a, max_d=d)
+                    reg_geo = _seg_seg_reg_geometry(
+                        ed_arc[i_e], a, max_d=d, n_qp=self.n_qp_pair
+                    )
+                    same_edge_prep.append((sl, A_st, reg_geo))
+        for sl, A_st, reg in same_edge_prep:
+            self._checkpoint()  # per same-edge correction block
+            A_reg = (
+                _seg_seg_reg_moments_from_geometry(reg, k)
+                if isinstance(reg, dict)
+                else reg
+            )
+            J_edge = _seg_seg_full_moments_offedge(
+                seg_l[sl], seg_r[sl], seg_l[sl], seg_r[sl], a, k, d, self.n_qp_pair
+            )
+            corr = (A_st + A_reg) - J_edge
+            e_idx = _bases_touching(sl.start, sl.stop)
+            _accumulate(corr, sl.start, sl.stop, sl.start, sl.stop, e_idx, e_idx)
+
+        return Z
+
     # ------------------------------------------------------------------
     # Distributed series wire loading (stevenmburns/momwire#131)
     # ------------------------------------------------------------------
@@ -1964,8 +2070,19 @@ class BSplineSolver(_Cancelable):
         n_basis_total = supp_seg.shape[0]
 
         self._checkpoint()  # after geometry/basis, before the J-block fill
-        J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_prep)
-        Z = self._assemble_Z(J, supp_seg, polys, geom)
+        if (
+            _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
+            and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+        ):
+            # Chunked fill+assemble: never materialises the full
+            # (d+1, d+1, N, N) tensor (issue #136). Identical algebra to
+            # the tensor path below, bounded transients.
+            Z = self._compute_Z_dense_chunked(
+                geom, self.k, supp_seg, polys, same_edge_prep=same_edge_prep
+            )
+        else:
+            J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_prep)
+            Z = self._assemble_Z(J, supp_seg, polys, geom)
 
         if self.ground_z is not None:
             self._checkpoint()  # between fills: before the image J-block fill

@@ -2207,3 +2207,70 @@ def test_d1_bowtiearray_1x2_phased():
     # radiates). Just sanity-check magnitudes stay bounded.
     assert abs(z_per_feed[0]) < 1000.0
     assert abs(z_per_feed[1]) < 1000.0
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_bspline_chunked_dense_z_matches_tensor_path(degree):
+    """The chunked fill+assemble (`_compute_Z_dense_chunked`, issue #136)
+    must reproduce the legacy build-the-tensor-then-assemble Z to
+    reduction-order precision. Geometry mixes a junction, multiple edges,
+    and a 2-segment wire (zero-weight padding wings), and swept_mem_mb=0
+    forces 1-row chunks so every window boundary case is exercised —
+    including the per-edge same-edge correction windows."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    h = 0.962 * 22 / 4
+    w0 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, h]])
+    w1 = np.array([[0.0, 0.0, h], [0.0, h, h]])
+    w2 = np.array([[0.0, 0.0, 0.0], [0.35, 0.0, 0.0]])
+    junctions = [[(0, "end"), (1, "start")], [(0, "start"), (2, "start")]]
+    sim = BSplineSolver(
+        wires=[w0, w1, w2],
+        degree=degree,
+        n_per_edge_per_wire=[[13], [9], [2]],
+        nsegs=13,
+        wavelength=22.0,
+        junctions=junctions,
+        feed_wire_index=0,
+    )
+    geom = sim._build_geometry()
+    supp, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+
+    sim.swept_mem_mb = 0  # chunk = max(1, 0) -> single-row windows
+    Z_chunked = sim._compute_Z_dense_chunked(geom, sim.k, supp, polys)
+
+    J = sim._build_J_blocks(geom, sim.k)
+    Z_tensor = sim._assemble_Z(J, supp, polys, geom)
+
+    rel = np.abs(Z_chunked - Z_tensor).max() / np.abs(Z_tensor).max()
+    assert rel < 1e-12, f"chunked vs tensor Z disagreement: rel {rel:.2e}"
+
+
+def test_bspline_chunked_dense_impedance_matches_tensor_path():
+    """End-to-end compute_impedance through the chunked path (default
+    dispatch) vs the legacy tensor path (flag flipped off) — covers the
+    same-edge prep sharing and everything downstream of Z."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    wires = [np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])]
+    kw = dict(wires=wires, n_per_edge_per_wire=[[21]], nsegs=21, degree=2)
+    z_chunked, _ = BSplineSolver(**kw).compute_impedance()
+
+    saved = bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
+    try:
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = False
+        z_tensor, _ = BSplineSolver(**kw).compute_impedance()
+    finally:
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = saved
+
+    rel = abs(z_chunked - z_tensor) / abs(z_tensor)
+    assert rel < 1e-12, f"chunked vs tensor impedance disagreement: rel {rel}"
