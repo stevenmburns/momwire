@@ -92,6 +92,7 @@ acc, LOADED = _load()
 # checkpoint or from inside a native fill.
 _CANCELLABLE_KERNELS = (
     "assemble_Z_bspline",
+    "assemble_Z_bspline_windowed",
     "bspline_assemble_offedge_block",
     "sinusoidal_field_tensor",
     "sinusoidal_field_tensor_refl",
