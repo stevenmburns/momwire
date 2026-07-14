@@ -734,3 +734,105 @@ def test_ground_eps_and_pec_blocks_never_alias_in_module_caches():
     )
     # Physically different grounds: if the caches aliased, these would match.
     assert np.max(np.abs(z_eps - z_pec)) > 0.5
+
+
+# ---- Degenerate-partition fallback (issue #143) ------------------------------
+
+
+def test_single_structure_falls_back_to_hmatrix():
+    """One connected structure = one element holding every basis: nothing to
+    exploit, so the operator must be the parent's H-matrix, not a whole-matrix
+    dense self-block (issue #143's 21.6 GiB gather at whip scale)."""
+    from momwire._aca import HMatrix
+    from momwire.array_block import ArrayBlock
+
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = ArrayBlockSolver(
+        wires=[_dipole_wire(half)],
+        degree=2,
+        n_per_edge_per_wire=[[16]],
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+    )
+    assert sim._degenerate_partition()
+    op = sim._build_operator()
+    assert isinstance(op, HMatrix) and not isinstance(op, ArrayBlock)
+    assert cache_stats()["hmatrix_fallback"] == 1
+    assert cache_stats()["operator_build"] == 0  # array path never entered
+
+
+def test_fallback_impedance_matches_dense():
+    """The degraded solve is still a correct solve."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    common = dict(
+        wires=[_dipole_wire(half)],
+        degree=2,
+        n_per_edge_per_wire=[[16]],
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+    )
+    za = np.atleast_1d(ArrayBlockSolver(**common).compute_impedance()[0])
+    zd = np.atleast_1d(BSplineSolver(**common).compute_impedance()[0])
+    assert np.max(np.abs(za - zd) / np.abs(zd)) < 1e-3
+    assert cache_stats()["hmatrix_fallback"] >= 1
+
+
+def test_fallback_with_junctions_uses_sparse_precond():
+    """A single bent element (internal KCL junction) exercises the
+    preconditioner delegation: the fallback H-matrix has no element blocks,
+    so `_make_preconditioner` must hand off to the generic sparse-LU path
+    instead of `_BlockJacobiAugPrecond`."""
+    reset_array_caches()
+    h = 0.962 * 22 / 4
+    common = _bent_array(1, h, nsegs=14)
+    ya = ArrayBlockSolver(**common).compute_y_matrix()
+    yd = BSplineSolver(**common).compute_y_matrix()
+    assert cache_stats()["hmatrix_fallback"] >= 1
+    assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4
+
+
+def test_all_distinct_shapes_fall_back():
+    """Multiple elements but every shape unique: neither the self-block reuse
+    nor the coupling-displacement dedup can ever fire, so the partition is
+    degenerate too."""
+    reset_array_caches()
+    long_h = 0.962 * 22 / 4
+    offsets = [(-9.0, 0.0), (0.0, 0.0), (9.0, 0.0)]
+    sim = _array_sim(offsets, [long_h, 0.8 * long_h, 0.6 * long_h])
+    assert sim._degenerate_partition()
+    za = np.diag(sim.compute_y_matrix())
+    yd = BSplineSolver(
+        wires=list(sim.wires_polylines),
+        degree=2,
+        n_per_edge_per_wire=[[12]] * 3,
+        wavelength=22.0,
+        feeds=[(i, None, 1.0 + 0.0j) for i in range(3)],
+    ).compute_y_matrix()
+    assert cache_stats()["hmatrix_fallback"] >= 1
+    assert np.abs(za - np.diag(yd)).max() / np.abs(np.diag(yd)).max() < 1e-4
+
+
+def test_oversize_element_falls_back_repetition_stays():
+    """The size cap: a uniform grid keeps the block path under the default
+    cap, but the same mesh with a tiny `array_max_elem_bases` degrades to the
+    H-matrix even though repetition exists (two copies of a huge element
+    would still gather a multi-GiB intermediate per representative)."""
+    from momwire.array_block import ArrayBlock
+
+    half = 0.962 * 22 / 4
+    offsets = [(-6.0, 0.0), (0.0, 0.0), (6.0, 0.0)]
+
+    reset_array_caches()
+    sim = _array_sim(offsets, [half] * 3)
+    assert not sim._degenerate_partition()
+    assert isinstance(sim._build_operator(), ArrayBlock)
+    assert cache_stats()["hmatrix_fallback"] == 0
+
+    reset_array_caches()
+    capped = _array_sim(offsets, [half] * 3)
+    capped.array_max_elem_bases = 4
+    assert capped._degenerate_partition()
+    capped._build_operator()
+    assert cache_stats()["hmatrix_fallback"] == 1

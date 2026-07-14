@@ -101,6 +101,7 @@ _CACHE_STATS = {
     "operator_hit": 0,
     "self_block_build": 0,
     "self_block_hit": 0,
+    "hmatrix_fallback": 0,
 }
 
 
@@ -540,13 +541,30 @@ class _BlockJacobiAugPrecond:
 
 class ArrayBlockSolver(HMatrixSolver):
     """Element-aware block-low-rank accelerator for arrays of identical (or
-    few-shape) elements. Drop-in for `HMatrixSolver` (same constructor).
+    few-shape) elements. Drop-in for `HMatrixSolver` (same constructor, plus
+    `array_max_elem_bases`).
 
     P1 adds `array_partition()` (cached element grouping) and
     `build_array_blocks()` (the `ArrayBlock` assembly + matvec). The solve and
     `compute_impedance` / `compute_y_matrix` overrides arrive in P2; until then
     they resolve to the dense `BSplineSolver` path via the base class.
+
+    On a mesh with no repeated-block structure to exploit (a single connected
+    structure, or all-distinct element shapes) — or when one element is too
+    large to densify — the solve degrades to the parent H-matrix instead of
+    forcing the block decomposition (issue #143); see `_degenerate_partition`.
     """
+
+    def __init__(self, *args, array_max_elem_bases=2048, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Largest element (in bases) the block decomposition will densify.
+        # A dense self-block build materialises an (m, m, degree+1, degree+1)
+        # complex gather — 576 MiB at m=2048, degree 2, but 21.6 GiB at the
+        # whip deck's m=12,682 (issue #143) — and the resulting (m, m) block
+        # must then be LU-factored for the block-Jacobi preconditioner.
+        # Beyond this the parent H-matrix (ACA partition + bounded near
+        # blocks) is the better tool, so `_build_operator` falls back to it.
+        self.array_max_elem_bases = int(array_max_elem_bases)
 
     def _hmatrix_unsupported(self):
         """ArrayBlock supports PEC ground via the per-block image term (the
@@ -617,6 +635,21 @@ class ArrayBlockSolver(HMatrixSolver):
             ekey,
         )
 
+    def _degenerate_partition(self):
+        """True when the element partition offers nothing the block solver
+        can exploit: no shape class has two members (so neither the self-block
+        reuse nor the coupling-displacement dedup ever fires), or some element
+        exceeds `array_max_elem_bases` (its dense self-block would materialise
+        a multi-GiB gather — issue #143). The whip-style mesh is the extreme
+        case: one connected structure ⇒ one element holding every basis."""
+        part = self.array_partition()
+        if part.n_elem == 0:
+            return True
+        counts = np.bincount(part.shape_of_elem, minlength=part.n_shapes)
+        no_reuse = not bool((counts >= 2).any())
+        oversize = int(part.sizes.max()) > self.array_max_elem_bases
+        return no_reuse or oversize
+
     def _build_operator(self):
         """Build the array-block operator (cached) for the constrained solve.
 
@@ -629,6 +662,16 @@ class ArrayBlockSolver(HMatrixSolver):
         fixed, only the RHS changes — reuses both the operator and the
         factorisation cached on it (`HMatrixSolver._factored_solve`), making each
         frame a cheap multi-RHS back-substitution."""
+        if self._degenerate_partition():
+            # Nothing to exploit (or an element too big to densify): degrade
+            # to the parent H-matrix — ACA partition + bounded near blocks —
+            # instead of feeding whole-matrix index sets to zblock. On the
+            # whip benchmark (12,682 bases, one connected element) the block
+            # path gathered a 21.6 GiB intermediate where the H-matrix
+            # solves the same deck in ~2.1 GB (issue #143).
+            _CACHE_STATS["hmatrix_fallback"] += 1
+            self._last_n_coupling_aca = 0
+            return super()._build_operator()
         key = (
             self._geometry_cache_key(),
             float(self.k),
@@ -656,7 +699,13 @@ class ArrayBlockSolver(HMatrixSolver):
         """Per-element block-Jacobi factorisation of the augmented near-field
         preconditioner — the same matrix the generic sparse-LU path factors,
         but block-diagonal by element so it factors once per shape and applies
-        as batched dense solves (see `_BlockJacobiAugPrecond`)."""
+        as batched dense solves (see `_BlockJacobiAugPrecond`).
+
+        When `_build_operator` fell back to the parent H-matrix (degenerate
+        partition, issue #143) the operator has no element blocks — delegate
+        to the generic sparse-LU preconditioner."""
+        if not isinstance(H, ArrayBlock):
+            return super()._make_preconditioner(H, kcl_A)
         return _BlockJacobiAugPrecond(H, kcl_A)
 
     def _coupling_aca(self, ctx, I, J, k, tol, use_accel):
