@@ -128,6 +128,39 @@ def test_block_partition_compresses_far_field():
     assert part["stats"]["far_frac"] > 0.6
 
 
+def test_basis_boxes_ignore_zero_weight_padding_wings():
+    """Wires shorter than degree+1 segments zero-pad their unused supp_seg
+    wing slots with global segment 0 (zero poly weight, numerically inert).
+    The basis bounding boxes must mask those wings: trusting supp_seg raw
+    drags every short wire's boxes back to segment 0's location, the overlap
+    kills admissibility, and the H-matrix degenerates to dense (issue #137).
+
+    A 5x5 field of 2-segment wires (every basis pads at degree 2) spread far
+    apart: each basis box must stay on its own wire, and the partition must
+    put most of the matrix area into far blocks."""
+    L = 0.3
+    wires = [
+        np.array([[6.0 * i, 6.0 * j, 0.0], [6.0 * i + L, 6.0 * j, 0.0]])
+        for i in range(5)
+        for j in range(5)
+    ]
+    sim = HMatrixSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[2]] * len(wires),
+        nsegs=2,
+        wavelength=22.0,
+        feed_wire_index=0,
+    )
+    ctx = sim._context()
+    diam = np.linalg.norm(ctx["basis_hi"] - ctx["basis_lo"], axis=1)
+    assert diam.max() <= L + 1e-9
+    # One wire per leaf: every distinct wire pair is admissible, so all but
+    # the diagonal compresses (with the bug, far_frac collapses to ~0).
+    part = sim.build_partition(eta=1.0, leaf_size=2)
+    assert part["stats"]["far_frac"] > 0.9
+
+
 def test_far_blocks_have_no_same_edge_pairs():
     """Admissibility must spatially separate clusters, so no far block may
     contain a self-pair (a basis paired with itself)."""

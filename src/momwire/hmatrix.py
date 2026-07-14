@@ -262,11 +262,20 @@ class HMatrixSolver(BSplineSolver):
         # of the union of the segment endpoints in the basis support. The
         # cluster tree partitions on the boxes so admissibility reflects the
         # true spatial extent of each basis function's current support.
+        #
+        # Wings must be masked to the basis's REAL support: on wires shorter
+        # than d+1 segments, `_build_basis_polynomials` zero-pads the unused
+        # supp_seg slots with global segment 0 (zero poly weight, so every
+        # numeric consumer is unaffected). Trusting supp_seg raw here drags
+        # every padded basis's box out to segment 0's location; on a
+        # junction-split multi-wire mesh that makes all boxes overlap, kills
+        # admissibility, and degenerates the H-matrix to dense (issue #137).
         basis_lo = np.empty((n_basis, 3), dtype=float)
         basis_hi = np.empty((n_basis, 3), dtype=float)
         basis_centroid = np.empty((n_basis, 3), dtype=float)
+        live_wing = np.abs(polys).sum(axis=2) > 0.0  # (n_basis, n_wings)
         for m in range(n_basis):
-            segs = np.unique(supp_seg[m])
+            segs = np.unique(supp_seg[m][live_wing[m]])
             pts = np.vstack([seg_l[segs], seg_r[segs]])
             basis_lo[m] = pts.min(axis=0)
             basis_hi[m] = pts.max(axis=0)
