@@ -283,7 +283,6 @@ def test_sinusoidal_loading_matches_adjoint_perturbation():
     sigma_big = 5.8e10  # tiny loss → first-order error negligible
     s0 = _ssolver()
     z0, a0 = s0.compute_impedance()
-    G0 = s0.Z_matrix
 
     s1 = _ssolver(wire_conductivity=sigma_big)
     z1, _ = s1.compute_impedance()
@@ -299,7 +298,9 @@ def test_sinusoidal_loading_matches_adjoint_perturbation():
     r[seg_view["jbasis"][st:en]] = seg_view["sigma"][st:en] * (
         seg_view["A"][st:en] + seg_view["C"][st:en]
     )
-    w = scipy.linalg.solve(G0.T, r)
+    # Gᵀw = r straight from the stashed forward-solve factors (LU of Gᵀ,
+    # trans=0) — no second factorization, no retained raw matrix.
+    w = scipy.linalg.lu_solve(s0.Z_factors, r)
     i0 = 1.0 / z0
     dz_pred = (w @ Lneg @ a0) / i0**2  # ΔZ = −V·wᵀLα₀/I₀², V=1, Lneg=−L
     assert z1 - z0 == pytest.approx(dz_pred, rel=1e-3)
