@@ -93,6 +93,7 @@ acc, LOADED = _load()
 _CANCELLABLE_KERNELS = (
     "assemble_Z_bspline",
     "assemble_Z_bspline_windowed",
+    "assemble_Z_bspline_weighted_windowed",
     "bspline_assemble_offedge_block",
     "sinusoidal_field_tensor",
     "sinusoidal_field_tensor_refl",
