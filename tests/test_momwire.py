@@ -2247,7 +2247,10 @@ def test_bspline_chunked_dense_z_matches_tensor_path(degree):
     Z_tensor = sim._assemble_Z(J, supp, polys, geom)
 
     rel = np.abs(Z_chunked - Z_tensor).max() / np.abs(Z_tensor).max()
-    assert rel < 1e-12, f"chunked vs tensor Z disagreement: rel {rel:.2e}"
+    # 1e-10 margin, same policy as the grounded tests below: MSVC/AppleClang
+    # reduction order lands these equalities at 1e-12..8e-12 (main wheels
+    # runs 29345985527, 29350220998) — pin the algebra, not the compiler.
+    assert rel < 1e-10, f"chunked vs tensor Z disagreement: rel {rel:.2e}"
 
 
 def test_bspline_chunked_dense_impedance_matches_tensor_path():
@@ -2273,7 +2276,9 @@ def test_bspline_chunked_dense_impedance_matches_tensor_path():
         bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = saved
 
     rel = abs(z_chunked - z_tensor) / abs(z_tensor)
-    assert rel < 1e-12, f"chunked vs tensor impedance disagreement: rel {rel}"
+    # 1e-10 margin — MSVC landed this at 1.02e-12 on the main wheels run
+    # 29350220998; same cross-compiler policy as the grounded tests.
+    assert rel < 1e-10, f"chunked vs tensor impedance disagreement: rel {rel}"
 
 
 @pytest.mark.parametrize(
