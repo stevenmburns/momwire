@@ -262,7 +262,9 @@ class SinusoidalSolver(_Cancelable):
                         )
                     if end not in ("start", "end"):
                         raise ValueError(
-                            f"junction {j}: end must be 'start' or 'end', got {end!r}"
+                            f"junction {j}: end must be 'start' or 'end', got "
+                            f"{end!r} (interior-anchor attachments are "
+                            "BSpline-family only — see issue #138)"
                         )
                     normalized.append((int(w), end))
                 self.junctions.append(normalized)

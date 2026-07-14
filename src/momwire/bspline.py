@@ -195,8 +195,20 @@ class BSplineSolver(_Cancelable):
     feed_wire_index : index of the wire carrying the delta-gap source.
     feed_arclength : arc length along the feed wire at which to evaluate
         Φ_m(s_f). Default: feed wire midpoint.
-    junctions : list of [(wire_idx, "start"|"end"), ...] tuples, each entry
-        one junction node where K wire endpoints meet.
+    junctions : list of [(wire_idx, attach), ...] tuples, each entry one
+        junction node where K wire attachment points meet. `attach` is
+        "start" / "end" for a wire endpoint, or an *interior anchor index*
+        of the polyline (1 ≤ a ≤ M-2; 0 and M-1 are coerced to "start" /
+        "end") for a mid-polyline attachment (#138). An interior attachment
+        keeps the polyline's spline continuous for the through-current and
+        adds `degree` localized *node bases* at the anchor (value +
+        derivative jumps) so KCL can route current into the other attached
+        wires — a mesh whose wires cross mid-polyline no longer needs
+        shattering into per-junction pieces, and the result matches the
+        shattered mesh to roundoff (the spaces are identical; see
+        `_build_basis_polynomials`). Anchor (edge-boundary) positions are
+        segment boundaries for every segmentation, so interior attachments
+        survive resegmentation.
     n_qp_pair : Gauss-Legendre nodes per segment per axis for the smooth-
         kernel piece of same-edge pairs and for all cross-edge / cross-wire
         pairs (full kernel with a² regularization).
@@ -517,12 +529,38 @@ class BSplineSolver(_Cancelable):
                         raise ValueError(
                             f"junction {j}: wire_idx {w} out of range [0, {n_w})"
                         )
-                    if end not in ("start", "end"):
+                    if isinstance(end, (int, np.integer)):
+                        # Interior anchor attachment (#138). Anchors 0 and
+                        # M-1 are the endpoints — coerce so downstream code
+                        # sees exactly one spelling per attachment kind.
+                        n_anchor = self.wires_polylines[w].shape[0]
+                        a = int(end)
+                        if not (0 <= a < n_anchor):
+                            raise ValueError(
+                                f"junction {j}: anchor {a} out of range "
+                                f"[0, {n_anchor}) for wire {w}"
+                            )
+                        if a == 0:
+                            end = "start"
+                        elif a == n_anchor - 1:
+                            end = "end"
+                        else:
+                            end = a
+                    elif end not in ("start", "end"):
                         raise ValueError(
-                            f"junction {j}: end must be 'start' or 'end', got {end!r}"
+                            f"junction {j}: attach must be 'start', 'end' or "
+                            f"an interior anchor index, got {end!r}"
                         )
                     normalized.append((int(w), end))
                 self.junctions.append(normalized)
+        if use_singular_enrichment and any(
+            isinstance(end, int) for jw in self.junctions for _w, end in jw
+        ):
+            raise NotImplementedError(
+                "use_singular_enrichment + interior-anchor junctions together "
+                "not supported yet — the enrichment machinery keys on wire "
+                "endpoints"
+            )
 
         # `compute_impedance(...)` and `currents_at_knots(coeffs)` both call
         # `_build_geometry()` + `_build_basis_polynomials(geom)` from scratch
@@ -667,7 +705,8 @@ class BSplineSolver(_Cancelable):
     def _wire_endpoint_status(self):
         """For each wire, return ("free" | junction_idx, "free" | junction_idx)
         for its (start, end) — the index of the junction connecting it, or
-        "free" if the endpoint isn't junctioned.
+        "free" if the endpoint isn't junctioned. Interior-anchor attachments
+        don't touch endpoint status (see `_wire_interior_attachments`).
         """
         n_w = len(self.wires_polylines)
         start_status = ["free"] * n_w
@@ -676,9 +715,21 @@ class BSplineSolver(_Cancelable):
             for w, end in jw:
                 if end == "start":
                     start_status[w] = j_idx
-                else:
+                elif end == "end":
                     end_status[w] = j_idx
         return start_status, end_status
+
+    def _wire_interior_attachments(self):
+        """Per-wire list of (junction_idx, anchor_idx) interior attachments
+        (#138), in junction order. Endpoint attachments are handled by
+        `_wire_endpoint_status`."""
+        n_w = len(self.wires_polylines)
+        interior = [[] for _ in range(n_w)]
+        for j_idx, jw in enumerate(self.junctions):
+            for w, end in jw:
+                if isinstance(end, int):
+                    interior[w].append((j_idx, end))
+        return interior
 
     # ------------------------------------------------------------------
     # Basis polynomial extraction
@@ -697,6 +748,27 @@ class BSplineSolver(_Cancelable):
                   their value at the end is 0).
               - Junction end: keep the value-1 boundary basis B_0 as a
                   directional basis; keep B_1..B_{d-1} as interior bases.
+          * Per interior-anchor attachment (#138), append d *node bases*:
+            the boundary bases B_0..B_{d−1} of a virtual clamped sub-spline
+            starting at the anchor knot (support: the first 1..d segments to
+            its right). The wire's own spline stays continuous
+            (through-current); the node bases add the value jump and the
+            d−1 derivative jumps at the anchor that junction physics needs
+            — a continuous spline alone would force zero branch current,
+            and a lone value-jump basis is *inconsistent*: its O(1/h) slope
+            makes the jump's energy diverge under refinement, suppressing
+            the branch current entirely (measured: a T-junction plateaus
+            ~33% off at d=2). With all d jumps,
+            {C^{d−1} through-spline} ⊕ {node bases} spans EXACTLY the space
+            of the mesh shattered into per-junction wires — same dimension,
+            same Galerkin solution to roundoff — while keeping the wire one
+            polyline. Only B_0 (value 1 at the node) enters the KCL row,
+            with sign +1: its coefficient is the net current the wire
+            carries *away* from the node, I(s*+) − I(s*−), the outflow
+            convention of a "start" basis. Its charge delta at the anchor
+            cancels against the other attached bases' deltas exactly when
+            the KCL row holds — the same bookkeeping endpoint directional
+            bases rely on.
           * Extract per-segment polynomial coefficients via BSpline +
             Vandermonde (uniform within each segment's local-u range).
 
@@ -735,6 +807,7 @@ class BSplineSolver(_Cancelable):
         n_poly = d + 1
 
         start_status, end_status = self._wire_endpoint_status()
+        interior_attach = self._wire_interior_attachments()
 
         all_supp_seg = []
         all_polys = []
@@ -831,6 +904,41 @@ class BSplineSolver(_Cancelable):
                     junction_dirs[junc_idx].append((m_global, sign))
 
                 m_global += 1
+
+            # Interior-anchor node bases (#138) — see the docstring. Emitted
+            # after the wire's spline bases so each wire still owns a
+            # contiguous global-index range (_basis_to_wire relies on it).
+            for junc_idx, a_idx in interior_attach[w_idx]:
+                seg_local = pw["edge_offsets"][a_idx]
+                knots_r = self._node_basis_knots(pw, a_idx)
+                for j_node in range(d):
+                    # B_{j_node} of the virtual right sub-spline spans its
+                    # local segments 0..j_node (clamped start), truncated if
+                    # the wire ends first.
+                    n_actual = min(j_node + 1, n_total_w - seg_local)
+                    segs = seg_local + np.arange(n_actual)
+                    u_seg = (
+                        arc_at_knot_w[segs][:, None]
+                        + h_per_seg_w[segs][:, None] * unit[None, :]
+                    )
+                    DMr = BSpline.design_matrix(
+                        u_seg.reshape(-1), knots_r, d
+                    ).toarray()[:, j_node]
+                    vals = DMr.reshape(n_actual, d + 1)
+                    supp_seg_m = np.zeros(n_wings, dtype=np.int64)
+                    polys_m = np.zeros((n_wings, n_poly), dtype=np.float64)
+                    supp_seg_m[:n_actual] = seg_off + segs
+                    polys_m[:n_actual, :] = (
+                        np.einsum("ij,sj->si", V_unit_inv, vals) * inv_h_powers[segs]
+                    )
+                    all_supp_seg.append(supp_seg_m)
+                    all_polys.append(polys_m)
+                    kept_idx = len(kept)
+                    kept.append((j_node, "jump", junc_idx, a_idx))
+                    per_basis_local_to_global[kept_idx] = m_global
+                    if j_node == 0:
+                        junction_dirs[junc_idx].append((m_global, +1.0))
+                    m_global += 1
 
             wire_basis_global.append((kept, per_basis_local_to_global))
 
@@ -1598,6 +1706,32 @@ class BSplineSolver(_Cancelable):
     # Source vector
     # ------------------------------------------------------------------
 
+    def _node_basis_knots(self, pw, a_idx):
+        """Clamped knot vector of the virtual right sub-spline an interior
+        attachment's node bases live on (#138): the wire's knots from the
+        anchor onward, clamped at both the anchor and the wire end."""
+        seg_local = pw["edge_offsets"][a_idx]
+        arc_r = pw["arc_at_knot"][seg_local:]
+        d = self.degree
+        return np.concatenate([np.full(d, arc_r[0]), arc_r, np.full(d, arc_r[-1])])
+
+    def _jump_basis_values(self, geom, w_idx, a_idx, j_node, s_eval):
+        """Interior-attachment node basis (#138) evaluated at arc positions
+        on wire `w_idx`: B_{j_node} of the virtual clamped sub-spline starting
+        at anchor `a_idx`, zero left of the anchor. One-sided at the anchor
+        knot: the left limit is 0, the value AT the anchor is the right limit
+        (1 for j_node=0) — evaluations exactly on the anchor report the
+        current just past the junction."""
+        pw = geom["per_wire"][w_idx]
+        knots_r = self._node_basis_knots(pw, a_idx)
+        s = np.asarray(s_eval, dtype=np.float64)
+        out = np.zeros(s.shape, dtype=np.float64)
+        inside = (s >= knots_r[0]) & (s <= knots_r[-1])
+        if np.any(inside):
+            DM = BSpline.design_matrix(s[inside], knots_r, self.degree).toarray()
+            out[inside] = DM[:, j_node]
+        return out
+
     def _build_source_vector(
         self,
         geom,
@@ -1645,9 +1779,14 @@ class BSplineSolver(_Cancelable):
             # Delta-gap (original)
             DM = BSpline.design_matrix(np.array([s_f]), knots, d).toarray()[0]
             v = np.zeros(n_basis_total, dtype=np.complex128)
-            for kept_idx, (j, _kind, _junc_idx, _end_pos) in enumerate(kept):
+            for kept_idx, (j, kind, _junc_idx, end_pos) in enumerate(kept):
                 m_global = local_to_global[kept_idx]
-                v[m_global] = DM[j]
+                if kind == "jump":
+                    v[m_global] = self._jump_basis_values(
+                        geom, wi, end_pos, j, np.array([s_f])
+                    )[0]
+                else:
+                    v[m_global] = DM[j]
             return v
 
         # Smoothed source: find the feed segment to set the smoothing width
@@ -1693,9 +1832,13 @@ class BSplineSolver(_Cancelable):
         v_full = np.einsum("qj,q,q->j", DM, g_vals, weights)  # (n_basis_w_full,)
 
         v = np.zeros(n_basis_total, dtype=np.complex128)
-        for kept_idx, (j, _kind, _junc_idx, _end_pos) in enumerate(kept):
+        for kept_idx, (j, kind, _junc_idx, end_pos) in enumerate(kept):
             m_global = local_to_global[kept_idx]
-            v[m_global] = v_full[j]
+            if kind == "jump":
+                psi = self._jump_basis_values(geom, wi, end_pos, j, t)
+                v[m_global] = float(np.einsum("q,q,q->", psi, g_vals, weights))
+            else:
+                v[m_global] = v_full[j]
         return v
 
     # ------------------------------------------------------------------
@@ -2729,8 +2872,18 @@ class BSplineSolver(_Cancelable):
                 # design_matrix at [0, wire_arc] — clip tiny FP overshoots that
                 # would push the endpoint epsilon outside the clamped knot range.
                 DM = BSpline.design_matrix(s_eval, knots_vec, d).toarray()
-                for kept_idx, (j_local, _, _, _) in enumerate(kept):
-                    I_out += coeffs[local_to_global[kept_idx]] * DM[:, j_local]
+                for kept_idx, (j_local, kind, _, end_pos) in enumerate(kept):
+                    if kind == "jump":
+                        # Interior-attachment jump basis (#138); one-sided at
+                        # the anchor — a sample exactly on the anchor knot
+                        # reports the current just past the junction.
+                        I_out += coeffs[
+                            local_to_global[kept_idx]
+                        ] * self._jump_basis_values(
+                            geom, w_idx, end_pos, j_local, s_eval
+                        )
+                    else:
+                        I_out += coeffs[local_to_global[kept_idx]] * DM[:, j_local]
 
             if enrich_specs is not None:
                 seg_off_w = geom["seg_offsets"][w_idx]
