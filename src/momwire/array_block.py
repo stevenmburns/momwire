@@ -273,7 +273,7 @@ class ArrayPartition:
         )
 
 
-def _shape_classes(geom, seg_groups, tol=1e-6):
+def _shape_classes(geom, seg_groups, seg_a, tol=1e-6):
     """Cluster elements into geometric shape classes (translation-invariant).
 
     Each element's signature is its segment midpoints recentred on the element
@@ -283,6 +283,11 @@ def _shape_classes(geom, seg_groups, tol=1e-6):
     distinct inner/outer/top/bot params, fewer when params coincide. (These
     arrays differ only by translation, not rotation/reflection; a rotated
     element would land in its own class, which is the safe behaviour.)
+
+    `seg_a` (the per-segment conductor radius) joins the signature in the
+    same canonical order: two geometric translates whose wires carry
+    different radii have different impedance blocks, so they must not share
+    a shape class (stevenmburns/momwire#147).
     """
     seg_l, seg_r = geom["seg_l"], geom["seg_r"]
     sigs = []
@@ -291,7 +296,11 @@ def _shape_classes(geom, seg_groups, tol=1e-6):
         mids = mids - mids.mean(axis=0)
         key = np.round(mids / tol).astype(np.int64)
         order = np.lexsort((key[:, 2], key[:, 1], key[:, 0]))
-        sigs.append(key[order].tobytes() + bytes(str(key.shape), "ascii"))
+        sigs.append(
+            key[order].tobytes()
+            + bytes(str(key.shape), "ascii")
+            + np.asarray(seg_a[segs], dtype=np.float64)[order].tobytes()
+        )
     label_of_sig = {}
     shape_of_elem = np.empty(len(seg_groups), dtype=np.int64)
     for e, s in enumerate(sigs):
@@ -323,7 +332,7 @@ def element_groups(sim, tol=1e-6):
         for e in range(n_elem)
     ]
     seg_groups = _element_segment_groups(geom, wire_elem, n_elem)
-    shape_of_elem = _shape_classes(geom, seg_groups, tol=tol)
+    shape_of_elem = _shape_classes(geom, seg_groups, sim._seg_radius(geom), tol=tol)
     return ArrayPartition(
         n_basis, elem_of_basis, groups, wire_elem, seg_groups, shape_of_elem
     )
@@ -608,7 +617,11 @@ class ArrayBlockSolver(HMatrixSolver):
         keyarr = np.round(rel / 1e-6).astype(np.int64)
         mid = 0.5 * (keyarr[:, :3] + keyarr[:, 3:])
         order = np.lexsort((mid[:, 2], mid[:, 1], mid[:, 0]))
-        sig = keyarr[order].tobytes()
+        # Per-segment conductor radii in the same canonical order — the
+        # module-scope cache must never alias two translation-identical
+        # elements with different (or differently-arranged) radii
+        # (stevenmburns/momwire#147).
+        sig = keyarr[order].tobytes() + ctx["seg_a"][segs][order].tobytes()
         gkey = (
             None
             if self.ground_z is None
@@ -628,7 +641,6 @@ class ArrayBlockSolver(HMatrixSolver):
         return (
             sig,
             float(k),
-            float(self._uniform_radius),
             self.degree,
             self.n_qp_pair,
             gkey,
@@ -675,7 +687,7 @@ class ArrayBlockSolver(HMatrixSolver):
         key = (
             self._geometry_cache_key(),
             float(self.k),
-            float(self._uniform_radius),
+            self._radius_per_wire.tobytes(),
             self.degree,
             self.n_qp_pair,
             float(self.aca_tol),
@@ -839,6 +851,17 @@ class ArrayBlockSolver(HMatrixSolver):
         cache = {}  # (block_shape_a, block_shape_b, disp_key) -> (U, V)
         n_aca = 0
         P = part.n_elem
+        # Complex symmetry Z_ab = Z_ba^T needs the a²-regularisation to be
+        # symmetric across the pair: mixed per-wire radii regularise each
+        # OBSERVER row with its own wire's radius (stevenmburns/momwire#147),
+        # so the transposed factors are only reusable when every wire in
+        # BOTH elements carries one and the same radius. Per-element uniform
+        # radius (or None when internally mixed), for that gate:
+        seg_a = ctx["seg_a"]
+        elem_a = []
+        for sg in part.seg_groups:
+            av = seg_a[sg]
+            elem_a.append(float(av[0]) if np.all(av == av[0]) else None)
         for a in range(P):
             self._checkpoint()  # per element-row of the coupling ACA grid
             for b in range(P):
@@ -851,7 +874,8 @@ class ArrayBlockSolver(HMatrixSolver):
                 if hit is None:
                     rkey = (sb, sa, tuple(-d for d in dkey))
                     rhit = cache.get(rkey)
-                    if rhit is not None:
+                    symmetric_pair = elem_a[a] is not None and elem_a[a] == elem_a[b]
+                    if rhit is not None and symmetric_pair:
                         # Z_ab = Z_ba^T = (U_r V_r)^T = V_r^T U_r^T.
                         hit = (rhit[1].T.copy(), rhit[0].T.copy())
                     else:
