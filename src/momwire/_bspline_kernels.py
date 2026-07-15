@@ -53,6 +53,27 @@ _BSPLINE_ACCEL_MAX_D = 2
 MAX_D_SUPPORTED = 2
 
 
+def _normalize_row_radius(a, n_rows):
+    """Normalize the off-edge kernel's `a` argument: scalar, or a per-
+    OBSERVER-row (N_i,) array (per-wire radius, stevenmburns/momwire#147).
+
+    Returns a float when the radius is uniform (including a uniform array —
+    keeps the scalar code paths bit-identical and C++-servable), else the
+    validated (N_i,) float64 array.
+    """
+    a_arr = np.asarray(a, dtype=np.float64)
+    if a_arr.ndim == 0:
+        return float(a_arr)
+    if a_arr.shape != (n_rows,):
+        raise ValueError(
+            f"a: expected a scalar or a per-observer-row length-{n_rows} "
+            f"array, got shape {a_arr.shape}"
+        )
+    if np.all(a_arr == a_arr[0]):
+        return float(a_arr[0])
+    return a_arr
+
+
 def _seg_seg_static_moments(seg_endpoints, a, max_d):
     """Closed-form same-edge static-kernel moment integrals.
 
@@ -253,10 +274,46 @@ def _seg_seg_full_moments_offedge(
     bspline solver overwrites the same-edge blocks with analytic_static +
     GL_reg afterwards, so the accuracy of this call only needs to be good
     on far / nearly-far pairs.
+
+    `a` is a scalar, or a per-OBSERVER-row (N_i,) array for mixed per-wire
+    radii (momwire#147): the regularization represents the boundary
+    condition on the observing wire's surface, so each observer row uses
+    its own wire's radius — the same observer-side convention the
+    sinusoidal solver oracle-validated against NEC's EFLD. A mixed-radius
+    array is served by the C++ kernel one constant-radius row-run at a
+    time (segments are laid out wire-contiguously, so runs are few).
     """
+    a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
     gl_xi, gl_w = leggauss(n_qp)
     t01 = 0.5 * (gl_xi + 1.0)
     w01 = 0.5 * gl_w
+
+    if (
+        _HAVE_BSPLINE_ACCEL
+        and max_d <= _BSPLINE_ACCEL_MAX_D
+        and not np.ndim(a) == 0
+    ):
+        # Mixed per-row radii on the C++ path: dispatch one call per
+        # contiguous run of equal radius and stitch along the row axis.
+        bounds = np.flatnonzero(np.diff(a)) + 1
+        starts = np.concatenate(([0], bounds))
+        stops = np.concatenate((bounds, [a.shape[0]]))
+        return np.concatenate(
+            [
+                _seg_seg_full_moments_offedge(
+                    seg_l_i[s:e],
+                    seg_r_i[s:e],
+                    seg_l_j,
+                    seg_r_j,
+                    float(a[s]),
+                    k,
+                    max_d,
+                    n_qp,
+                )
+                for s, e in zip(starts, stops)
+            ],
+            axis=2,
+        )
 
     if _HAVE_BSPLINE_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D:
         return _acc.seg_seg_full_moments_bspline(
@@ -287,7 +344,8 @@ def _seg_seg_full_moments_offedge(
     w_j = w01[None, :] * len_j[:, None]
 
     diff = pos_i[:, :, None, None, :] - pos_j[None, None, :, :, :]
-    R = np.sqrt((diff * diff).sum(-1) + a * a)
+    a2 = a * a if np.ndim(a) == 0 else (a * a)[:, None, None, None]
+    R = np.sqrt((diff * diff).sum(-1) + a2)
     G = np.exp(-1j * k * R) / (4 * np.pi * R)
 
     u_pow_i = np.stack([u_i**p for p in range(max_d + 1)], axis=0)
@@ -309,8 +367,36 @@ def _seg_seg_full_moments_offedge_swept(
     `compute_impedance_swept` build the all-pairs off-edge moments in one call
     instead of one single-k call per frequency. Falls back to stacking the
     single-k path when the accelerator is unavailable.
+
+    `a` is a scalar or a per-observer-row (N_i,) array — same contract and
+    per-run C++ dispatch as `_seg_seg_full_moments_offedge` (axis 3 here).
     """
     k_array = np.asarray(k_array, dtype=np.float64)
+    a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
+    if (
+        _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL
+        and max_d <= _BSPLINE_ACCEL_MAX_D
+        and not np.ndim(a) == 0
+    ):
+        bounds = np.flatnonzero(np.diff(a)) + 1
+        starts = np.concatenate(([0], bounds))
+        stops = np.concatenate((bounds, [a.shape[0]]))
+        return np.concatenate(
+            [
+                _seg_seg_full_moments_offedge_swept(
+                    seg_l_i[s:e],
+                    seg_r_i[s:e],
+                    seg_l_j,
+                    seg_r_j,
+                    float(a[s]),
+                    k_array,
+                    max_d,
+                    n_qp,
+                )
+                for s, e in zip(starts, stops)
+            ],
+            axis=3,
+        )
     if _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D:
         gl_xi, gl_w = leggauss(n_qp)
         t01 = 0.5 * (gl_xi + 1.0)

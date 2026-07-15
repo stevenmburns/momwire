@@ -327,7 +327,7 @@ class HMatrixSolver(BSplineSolver):
         blk = cache.get(key)
         if blk is not None:
             return blk
-        a = self.wire_radius
+        a = self._uniform_radius
         d = self.degree
         sub_arc = ctx["edge_arc"][edge_id][lo : hi + 2]
         A_st = _seg_seg_static_moments(sub_arc, a, max_d=d)
@@ -355,7 +355,7 @@ class HMatrixSolver(BSplineSolver):
         no O(N_edge²) same-edge block is ever built for a single-wire mesh.
         """
         d = self.degree
-        a = self.wire_radius
+        a = self._uniform_radius
         seg_l = ctx["seg_l"]
         seg_r = ctx["seg_r"]
 
@@ -508,7 +508,7 @@ class HMatrixSolver(BSplineSolver):
         tangents = ctx["tangents"]
         seg_l = ctx["seg_l"]
         seg_r = ctx["seg_r"]
-        a = self.wire_radius
+        a = self._uniform_radius
         d = self.degree
 
         I = np.asarray(I, dtype=np.int64)
@@ -773,7 +773,7 @@ class HMatrixSolver(BSplineSolver):
         polys = ctx["polys"]
         seg_l = ctx["seg_l"]
         seg_r = ctx["seg_r"]
-        a = self.wire_radius
+        a = self._uniform_radius
         d = self.degree
 
         I = np.asarray(I, dtype=np.int64)
@@ -1005,7 +1005,7 @@ class HMatrixSolver(BSplineSolver):
         seg_r = ctx["seg_r"]
         tangents = ctx["tangents"]
         d = self.degree
-        a2 = self.wire_radius * self.wire_radius
+        a2 = self._uniform_radius * self._uniform_radius
         glt, glw = self._gl01()
         omega, eps, mu = self.omega, self.eps, self.mu
         flip = np.array([1.0, 1.0, -1.0])
@@ -1356,6 +1356,12 @@ class HMatrixSolver(BSplineSolver):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        if self._uniform_radius is None:
+            raise NotImplementedError(
+                "HMatrixSolver does not support mixed per-wire radii yet — "
+                "its block fills take a single radius. Use BSplineSolver "
+                "for mixed-radius geometries (stevenmburns/momwire#147)."
+            )
         self.aca_eta = float(aca_eta)
         self.aca_leaf_size = int(aca_leaf_size)
         self.aca_tol = float(aca_tol)

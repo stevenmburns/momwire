@@ -628,7 +628,7 @@ class ArrayBlockSolver(HMatrixSolver):
         return (
             sig,
             float(k),
-            float(self.wire_radius),
+            float(self._uniform_radius),
             self.degree,
             self.n_qp_pair,
             gkey,
@@ -675,7 +675,7 @@ class ArrayBlockSolver(HMatrixSolver):
         key = (
             self._geometry_cache_key(),
             float(self.k),
-            float(self.wire_radius),
+            float(self._uniform_radius),
             self.degree,
             self.n_qp_pair,
             float(self.aca_tol),

@@ -11,7 +11,11 @@ correct value, or is it converged-to-the-wrong-place?
 Scope:
   * arbitrary number of wires; each wire is a polyline (M ≥ 2 anchors)
   * uniform segments per edge, possibly non-uniform across edges
-  * free space, thin-wire kernel with a² wire-radius regularization
+  * free space, thin-wire kernel with a² wire-radius regularization;
+    `wire_radius` is a scalar or a per-wire sequence (momwire#147) — mixed
+    radii regularize each observer row with ITS wire's radius (the
+    observer-surface convention oracle-validated in
+    docs/sinusoidal_basis_design.md "Per-wire radius")
   * delta-gap "applied-E" source on one feed wire
   * degree d ∈ {1, 2}  (d=1 reproduces the tent basis up to feed convention)
   * K-wire junctions with KCL constraint (Σ outflow currents = 0)
@@ -349,6 +353,38 @@ class BSplineSolver(_Cancelable):
 
         n_w = len(self.wires_polylines)
 
+        # Per-wire conductor radius (stevenmburns/momwire#147): a scalar
+        # applies to every wire; a length-n_wires sequence gives each wire
+        # (polyline) its own. `_uniform_radius` is the scalar fast path —
+        # it keeps the historical scalar code paths (and the single-`a`
+        # C++ kernel arguments) bit-identical whenever all wires share one
+        # radius, including when that radius arrived as a uniform array.
+        # Mixed radii use the OBSERVER wire's radius in the a²-regularised
+        # kernel — see docs/sinusoidal_basis_design.md "Per-wire radius"
+        # for the convention and its PyNEC oracle validation.
+        radius = np.asarray(wire_radius, dtype=float)
+        if radius.ndim == 0:
+            radius = np.full(n_w, float(radius))
+        elif radius.shape != (n_w,):
+            raise ValueError(
+                f"wire_radius: expected a scalar or a length-{n_w} sequence "
+                f"(one entry per wire), got shape {radius.shape}"
+            )
+        if not np.all(np.isfinite(radius)) or np.any(radius <= 0.0):
+            raise ValueError(
+                f"wire_radius entries must be positive and finite, got {radius}"
+            )
+        self._radius_per_wire = radius
+        self._uniform_radius = (
+            float(radius[0]) if np.all(radius == radius[0]) else None
+        )
+        if use_singular_enrichment and self._uniform_radius is None:
+            raise NotImplementedError(
+                "use_singular_enrichment + mixed per-wire radii together "
+                "not supported yet — the enrichment kernels take a single "
+                "radius (stevenmburns/momwire#147)"
+            )
+
         # Distributed series wire impedance (stevenmburns/momwire#131):
         # finite conductivity (skin-effect internal impedance) and/or a
         # dielectric jacket (series inductance → velocity factor). Each is
@@ -380,7 +416,7 @@ class BSplineSolver(_Cancelable):
             # run inside insulation_inductance, but per-solve is too late).
             for w in np.nonzero(finite_b)[0]:
                 _wire_loading.insulation_inductance(
-                    self.wire_radius,
+                    self._radius_per_wire[w],
                     self.insulation_radius[w],
                     self.insulation_eps_r[w],
                 )
@@ -879,14 +915,22 @@ class BSplineSolver(_Cancelable):
         that the analytic same-edge static + reg split doesn't apply — full
         off-edge quadrature handles every (i, j) pair uniformly.
         """
-        a = self.wire_radius
         d = self.degree
         seg_l = geom["seg_l"]
         seg_r = geom["seg_r"]
         seg_l_img = self._image_positions(seg_l)
         seg_r_img = self._image_positions(seg_r)
+        # Observers (rows) are the real segments — the per-observer radius
+        # convention applies to the image block unchanged.
         return _seg_seg_full_moments_offedge(
-            seg_l, seg_r, seg_l_img, seg_r_img, a, k, d, self.n_qp_pair
+            seg_l,
+            seg_r,
+            seg_l_img,
+            seg_r_img,
+            self._seg_radius(geom),
+            k,
+            d,
+            self.n_qp_pair,
         )
 
     def _image_refl_prep(self, geom):
@@ -1132,6 +1176,14 @@ class BSplineSolver(_Cancelable):
                 Q += np.einsum("mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :])
         return Q
 
+    def _seg_radius(self, geom):
+        """(n_segs_total,) per-segment radius — each segment inherits its
+        wire's (stevenmburns/momwire#147). The kernel helpers collapse a
+        uniform array back to the scalar fast path, so passing this
+        everywhere keeps scalar-radius solves bit-identical."""
+        seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
+        return np.repeat(self._radius_per_wire, np.diff(seg_off))
+
     def _same_edge_prep(self, geom):
         """k-independent per-same-edge precompute hoisted out of the swept-k
         loop: each edge's analytic static-moment block plus the reg-kernel
@@ -1139,9 +1191,11 @@ class BSplineSolver(_Cancelable):
         `(global_slice, A_static, reg_geometry)`. Bounded memory — one edge's
         tables at a time, identical footprint to the per-k path; only the
         cheap `exp(-jkR)` + einsum is left per k.
+
+        Same-edge pairs live on a single wire, so each edge's block uses
+        that wire's own radius.
         """
         d = self.degree
-        a = self.wire_radius
         per_wire = geom["per_wire"]
         seg_off = geom["seg_offsets"]
         prep = []
@@ -1150,11 +1204,12 @@ class BSplineSolver(_Cancelable):
             ed_off = pw["edge_offsets"]
             ed_arc = pw["edge_arc_edges"]
             base = seg_off[w]
+            a_w = float(self._radius_per_wire[w])
             for i_e in range(len(ed_off) - 1):
                 sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                A_st = _seg_seg_static_moments(ed_arc[i_e], a, max_d=d)
+                A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
                 reg_geo = _seg_seg_reg_geometry(
-                    ed_arc[i_e], a, max_d=d, n_qp=self.n_qp_pair
+                    ed_arc[i_e], a_w, max_d=d, n_qp=self.n_qp_pair
                 )
                 prep.append((sl, A_st, reg_geo))
         return prep
@@ -1177,15 +1232,16 @@ class BSplineSolver(_Cancelable):
         (n_k, d+1, d+1, N, N) tensors.)
         """
         d = self.degree
-        a = self.wire_radius
+        a_row = self._seg_radius(geom)
         seg_l = geom["seg_l"]
         seg_r = geom["seg_r"]
 
         # All-pairs full kernel (same a² regularization handles touching
         # segments at kink corners and at junctions to within ~1e-5 at
         # antenna scales; off-segment-pair accuracy is what GL is good at).
+        # Per-observer-row radius under mixed per-wire radii.
         J = _seg_seg_full_moments_offedge(
-            seg_l, seg_r, seg_l, seg_r, a, k, d, self.n_qp_pair
+            seg_l, seg_r, seg_l, seg_r, a_row, k, d, self.n_qp_pair
         )  # (d+1, d+1, N, N) complex
 
         # Overwrite each same-edge block with analytic static + reg
@@ -1197,11 +1253,12 @@ class BSplineSolver(_Cancelable):
                 ed_off = pw["edge_offsets"]
                 ed_arc = pw["edge_arc_edges"]
                 base = seg_off[w]
+                a_w = float(self._radius_per_wire[w])
                 for i_e in range(len(ed_off) - 1):
                     sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                    A_st = _seg_seg_static_moments(ed_arc[i_e], a, max_d=d)
+                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
                     A_reg = _seg_seg_reg_moments(
-                        ed_arc[i_e], a, k, max_d=d, n_qp=self.n_qp_pair
+                        ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair
                     )
                     J[:, :, sl, sl] = A_st + A_reg
         else:
@@ -1301,7 +1358,7 @@ class BSplineSolver(_Cancelable):
         4,700-segment mesh.
         """
         d = self.degree
-        a = self.wire_radius
+        a_row = self._seg_radius(geom)
         seg_l = geom["seg_l"]
         seg_r = geom["seg_r"]
         n_segs = geom["n_segs_total"]
@@ -1349,7 +1406,14 @@ class BSplineSolver(_Cancelable):
             self._checkpoint()  # per observer chunk of the fill+assemble
             i1 = min(i0 + chunk, n_segs)
             J_chunk = _seg_seg_full_moments_offedge(
-                seg_l[i0:i1], seg_r[i0:i1], seg_l, seg_r, a, k, d, self.n_qp_pair
+                seg_l[i0:i1],
+                seg_r[i0:i1],
+                seg_l,
+                seg_r,
+                a_row[i0:i1],
+                k,
+                d,
+                self.n_qp_pair,
             )
             _accumulate(J_chunk, i0, i1, 0, n_segs, _bases_touching(i0, i1), all_n)
         del J_chunk
@@ -1366,11 +1430,12 @@ class BSplineSolver(_Cancelable):
                 ed_off = pw["edge_offsets"]
                 ed_arc = pw["edge_arc_edges"]
                 base = seg_off[w]
+                a_w = float(self._radius_per_wire[w])
                 for i_e in range(len(ed_off) - 1):
                     sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                    A_st = _seg_seg_static_moments(ed_arc[i_e], a, max_d=d)
+                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
                     reg_geo = _seg_seg_reg_geometry(
-                        ed_arc[i_e], a, max_d=d, n_qp=self.n_qp_pair
+                        ed_arc[i_e], a_w, max_d=d, n_qp=self.n_qp_pair
                     )
                     same_edge_prep.append((sl, A_st, reg_geo))
         for sl, A_st, reg in same_edge_prep:
@@ -1381,7 +1446,14 @@ class BSplineSolver(_Cancelable):
                 else reg
             )
             J_edge = _seg_seg_full_moments_offedge(
-                seg_l[sl], seg_r[sl], seg_l[sl], seg_r[sl], a, k, d, self.n_qp_pair
+                seg_l[sl],
+                seg_r[sl],
+                seg_l[sl],
+                seg_r[sl],
+                a_row[sl],
+                k,
+                d,
+                self.n_qp_pair,
             )
             corr = (A_st + A_reg) - J_edge
             e_idx = _bases_touching(sl.start, sl.stop)
@@ -1401,7 +1473,7 @@ class BSplineSolver(_Cancelable):
         grounds: PEC (mirror tangent dot / ones), refl-coef (Fresnel
         dyad / image charge), Sommerfeld exact image (constant C2)."""
         d = self.degree
-        a = self.wire_radius
+        a_row = self._seg_radius(geom)
         seg_l = geom["seg_l"]
         seg_r = geom["seg_r"]
         seg_l_img = self._image_positions(seg_l)
@@ -1425,7 +1497,7 @@ class BSplineSolver(_Cancelable):
                 seg_r[i0:i1],
                 seg_l_img,
                 seg_r_img,
-                a,
+                a_row[i0:i1],
                 k,
                 d,
                 self.n_qp_pair,
@@ -1524,7 +1596,7 @@ class BSplineSolver(_Cancelable):
         """Per-wire series impedance Z'_w(ω) [Ω/m]; (n_w,) or (n_w, n_k)."""
         return _wire_loading.series_impedance_per_wire(
             omega,
-            self.wire_radius,
+            self._radius_per_wire,
             self.wire_conductivity,
             self.insulation_radius,
             self.insulation_eps_r,
@@ -2110,7 +2182,7 @@ class BSplineSolver(_Cancelable):
             td_all,
             np.ascontiguousarray(supp_seg_poly, dtype=np.int64),
             np.ascontiguousarray(polys_poly, dtype=np.float64),
-            float(self.wire_radius) ** 2,
+            float(self._uniform_radius) ** 2,
             float(self.k),
             float(self.omega),
             float(self.eps),
@@ -2546,7 +2618,14 @@ class BSplineSolver(_Cancelable):
             ks = k_array[c0 : c0 + chunk]
             omega_chunk = ks * self.c
             J = _seg_seg_full_moments_offedge_swept(
-                seg_l, seg_r, seg_l, seg_r, self.wire_radius, ks, d, self.n_qp_pair
+                seg_l,
+                seg_r,
+                seg_l,
+                seg_r,
+                self._seg_radius(geom),
+                ks,
+                d,
+                self.n_qp_pair,
             )
             # Same-edge reg moments for this chunk. Computed per chunk —
             # the streaming kernel amortizes its R hoist over the chunk's
@@ -2566,7 +2645,7 @@ class BSplineSolver(_Cancelable):
                     seg_r,
                     seg_l_img,
                     seg_r_img,
-                    self.wire_radius,
+                    self._seg_radius(geom),
                     ks,
                     d,
                     self.n_qp_pair,
