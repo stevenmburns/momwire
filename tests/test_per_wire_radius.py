@@ -1,0 +1,240 @@
+"""Per-wire radius on SinusoidalSolver (stevenmburns/momwire#147).
+
+Covers the two mixed-radius conventions (see the "Per-wire radius" section
+of docs/sinusoidal_basis_design.md):
+
+* basis end-condition constants use each segment's own radius (nec2c TBF);
+* the field kernel offsets onto the OBSERVER segment's surface
+  (necpp EFLD: rh = sqrt(rho² + a_obs²)).
+
+Scalar-regression contract: a uniform per-wire array is bit-identical to
+the scalar it equals. Oracle contract: mixed-radius geometries agree with
+PyNEC within the tolerances established for single-radius geometries
+(uniform 0.5 mm dipole ~0.05 Ω, uniform 5 mm ~0.44 Ω at this length).
+"""
+
+import numpy as np
+import pytest
+
+from momwire import _wire_loading
+from momwire.sinusoidal import SinusoidalSolver
+
+C_LIGHT = 299_792_458.0
+WL = 22.0
+FREQ_MHZ = C_LIGHT / WL / 1e6
+
+
+# ----------------------------------------------------------------------
+# Geometry builders
+# ----------------------------------------------------------------------
+
+
+def _two_arm_dipole(radii, n):
+    """Center-junction dipole, one wire per arm, fed on the top arm's
+    first segment (mirrors the PyNEC deck's EX on tag 2 segment 1)."""
+    L = 5.291
+    return SinusoidalSolver(
+        wires=[
+            np.array([[0.0, 0.0, -L], [0.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, L]]),
+        ],
+        n_per_edge_per_wire=[[n], [n]],
+        junctions=[[(0, "end"), (1, "start")]],
+        feed_wire_index=1,
+        feed_arclength=0.0,
+        wavelength=WL,
+        wire_radius=radii,
+        nsegs=n,
+    )
+
+
+def _groundplane(radii, n):
+    """Vertical + 4 radials meeting at the origin (free space): a K=5
+    junction where every member can carry its own radius."""
+    Lv = 5.5
+    O = (0.0, 0.0, 0.0)
+    tips = [(Lv, 0.0, 0.0), (-Lv, 0.0, 0.0), (0.0, Lv, 0.0), (0.0, -Lv, 0.0)]
+    wires = [np.array([O, (0.0, 0.0, Lv)])] + [np.array([O, t]) for t in tips]
+    return SinusoidalSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[n]] * 5,
+        junctions=[[(w, "start") for w in range(5)]],
+        feed_wire_index=0,
+        feed_arclength=0.0,
+        wavelength=WL,
+        wire_radius=radii,
+        nsegs=n,
+    )
+
+
+def _pynec_z(wires_nec, feed_tag):
+    """Free-space single-frequency drive; wires_nec = (tag, n, p0, p1, rad)."""
+    nec = pytest.importorskip("PyNEC")
+    c = nec.nec_context()
+    geo = c.get_geometry()
+    for tag, n, p0, p1, rad in wires_nec:
+        geo.wire(tag, n, *p0, *p1, rad, 1.0, 1.0)
+    c.geometry_complete(0)
+    c.gn_card(-1, 0, 0, 0, 0, 0, 0, 0)
+    c.ex_card(0, feed_tag, 1, 0, 1.0, 0.0, 0, 0, 0, 0)
+    c.fr_card(0, 1, FREQ_MHZ, 0)
+    c.xq_card(0)
+    return complex(c.get_input_parameters(0).get_impedance()[0])
+
+
+# ----------------------------------------------------------------------
+# Scalar regression: uniform array == scalar, bit for bit
+# ----------------------------------------------------------------------
+
+
+def test_uniform_array_bit_identical_to_scalar_dipole():
+    z_s, alpha_s = _two_arm_dipole(0.0005, 21).compute_impedance()
+    z_a, alpha_a = _two_arm_dipole([0.0005, 0.0005], 21).compute_impedance()
+    assert z_s == z_a
+    np.testing.assert_array_equal(alpha_s, alpha_a)
+
+
+def test_uniform_array_bit_identical_to_scalar_junctions():
+    z_s, alpha_s = _groundplane(0.0005, 9).compute_impedance()
+    z_a, alpha_a = _groundplane([0.0005] * 5, 9).compute_impedance()
+    assert z_s == z_a
+    np.testing.assert_array_equal(alpha_s, alpha_a)
+
+
+def test_uniform_array_takes_scalar_fast_path():
+    sim = _two_arm_dipole([0.0005, 0.0005], 9)
+    assert sim._uniform_radius == 0.0005
+    assert _two_arm_dipole([0.0005, 0.0004], 9)._uniform_radius is None
+
+
+def test_wire_radius_validation():
+    with pytest.raises(ValueError, match="length-2"):
+        _two_arm_dipole([0.0005] * 3, 9)
+    with pytest.raises(ValueError, match="positive and finite"):
+        _two_arm_dipole([0.0005, 0.0], 9)
+    with pytest.raises(ValueError, match="positive and finite"):
+        _two_arm_dipole([0.0005, -0.001], 9)
+    with pytest.raises(ValueError, match="positive and finite"):
+        _two_arm_dipole([0.0005, np.nan], 9)
+
+
+# ----------------------------------------------------------------------
+# Mixed-radius mechanics (no oracle needed)
+# ----------------------------------------------------------------------
+
+
+def test_mixed_radius_cpp_gate_falls_back_to_numpy(monkeypatch):
+    """With the C++ field tensor nominally available, a mixed-radius solve
+    must produce the identical result with it disabled — the uniform-only
+    gate routes mixed radii to the numpy path either way."""
+    import momwire.sinusoidal as sin_mod
+
+    sim_on = _two_arm_dipole([0.005, 0.0005], 15)
+    z_on, _ = sim_on.compute_impedance()
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR", False)
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_REFL", False)
+    z_off, _ = _two_arm_dipole([0.005, 0.0005], 15).compute_impedance()
+    assert z_on == z_off
+
+
+def test_mixed_radius_swept_matches_per_k():
+    """The basis-coefs cache keys on (geom, k, radius-bytes): a swept solve
+    over two wavenumbers must match two independent single-k solves."""
+    sim = _two_arm_dipole([0.005, 0.0005], 15)
+    k0 = sim.k
+    ks = np.array([0.95 * k0, 1.05 * k0])
+    z_swept = sim.compute_impedance_swept(ks)
+    for kk, z_ref in zip(ks, z_swept):
+        wl = 2.0 * np.pi / kk
+        sim_k = _two_arm_dipole([0.005, 0.0005], 15)
+        sim_k.k = float(kk)
+        sim_k.omega = sim_k.k * sim_k.c
+        sim_k.wavelength = wl
+        z_k, _ = sim_k.compute_impedance()
+        assert z_k == pytest.approx(z_ref, rel=1e-12)
+
+
+def test_mixed_radius_loading_uses_each_wires_radius():
+    """Skin-effect loading evaluates at each wire's own radius: the fatter
+    wire must show the smaller per-unit-length loss resistance, matching
+    wire_internal_impedance at that wire's radius exactly."""
+    sim = SinusoidalSolver(
+        wires=[
+            np.array([[0.0, 0.0, -5.291], [0.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.291]]),
+        ],
+        n_per_edge_per_wire=[[15], [15]],
+        junctions=[[(0, "end"), (1, "start")]],
+        feed_wire_index=1,
+        feed_arclength=0.0,
+        wavelength=WL,
+        wire_radius=[0.005, 0.0005],
+        nsegs=15,
+        wire_conductivity=5.8e7,
+    )
+    zw = sim._loading_zw(sim.omega)
+    assert zw[0].real < zw[1].real
+    for w, rad in enumerate([0.005, 0.0005]):
+        expected = _wire_loading.wire_internal_impedance(sim.omega, rad, 5.8e7)
+        assert zw[w] == complex(expected)
+    z, alpha = sim.compute_impedance()
+    p_tot, p_wire = sim.wire_loss_power(alpha)
+    assert p_tot > 0.0 and np.all(p_wire > 0.0)
+
+
+def test_series_impedance_per_wire_radius_array():
+    omega = 2.0 * np.pi * 14.0e6
+    sigma = np.array([5.8e7, 5.8e7])
+    z_arr = _wire_loading.series_impedance_per_wire(
+        omega, np.array([0.005, 0.0005]), sigma, None, None
+    )
+    for w, rad in enumerate([0.005, 0.0005]):
+        z_one = _wire_loading.series_impedance_per_wire(
+            omega, rad, sigma[w : w + 1], None, None
+        )
+        assert z_arr[w] == z_one[0]
+    with pytest.raises(ValueError, match="length-2"):
+        _wire_loading.series_impedance_per_wire(
+            omega, np.array([0.005, 0.0005, 0.001]), sigma, None, None
+        )
+
+
+# ----------------------------------------------------------------------
+# Oracle: PyNEC parity on mixed-radius geometries
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("radii", [(0.005, 0.0005), (0.0005, 0.005)])
+def test_mixed_radius_dipole_matches_pynec(radii):
+    """Two-radius dipole (each arm its own radius), both orderings.
+    Measured deltas ~0.2-0.3 Ω at N=21 and N=41 (stable under refinement);
+    the uniform 5 mm baseline is ~0.44 Ω, so 0.5 Ω catches a convention
+    regression (the refuted source-radius kernel gave 8-12 Ω at N=41)."""
+    n = 41
+    L = 5.291
+    z_mw, _ = _two_arm_dipole(list(radii), n).compute_impedance()
+    z_nec = _pynec_z(
+        [
+            (1, n, (0.0, 0.0, -L), (0.0, 0.0, 0.0), radii[0]),
+            (2, n, (0.0, 0.0, 0.0), (0.0, 0.0, L), radii[1]),
+        ],
+        feed_tag=2,
+    )
+    assert abs(z_mw - z_nec) < 0.5, f"momwire={z_mw}, pynec={z_nec}"
+
+
+def test_mixed_radius_groundplane_junction_matches_pynec():
+    """Fat vertical + four thin radials meeting at a K=5 junction: the
+    strongest test of the per-segment TBF constants at a mixed-radius
+    junction. Measured delta ~0.21 Ω at N=31 (uniform baseline ~0.03 Ω)."""
+    n = 31
+    Lv = 5.5
+    O = (0.0, 0.0, 0.0)
+    tips = [(Lv, 0.0, 0.0), (-Lv, 0.0, 0.0), (0.0, Lv, 0.0), (0.0, -Lv, 0.0)]
+    z_mw, _ = _groundplane([0.005] + [0.0005] * 4, n).compute_impedance()
+    z_nec = _pynec_z(
+        [(1, n, O, (0.0, 0.0, Lv), 0.005)]
+        + [(2 + i, n, O, t, 0.0005) for i, t in enumerate(tips)],
+        feed_tag=1,
+    )
+    assert abs(z_mw - z_nec) < 0.5, f"momwire={z_mw}, pynec={z_nec}"
