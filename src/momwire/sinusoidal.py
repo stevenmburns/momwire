@@ -22,9 +22,8 @@ Scope (deliberately narrow):
     radius (nec2c TBF), and the thin-wire kernel keeps the source current
     a filament on the source axis while enforcing the boundary condition
     on the OBSERVER segment's surface (EFLD's rh = sqrt(rho² + a_obs²)).
-    The C++ field-tensor kernels take a single scalar radius, so
-    mixed-radius solves use the pure-numpy field path until they are
-    ported.
+    The scalar-radius C++ field-tensor kernels serve mixed radii one
+    constant-radius observer-row run at a time (`_radius_runs`).
   * Free wire ends use the X_i = 0 zero-current condition (the more
     physical J_1/J_0 end-cap condition is negligible for thin wires).
 """
@@ -809,9 +808,10 @@ class SinusoidalSolver(_Cancelable):
         70% bottleneck of single-k solves at N≳80); the pure-numpy
         formulation (`_field_components` + the tangential projection
         below) is kept as a reference / fallback when the accelerator
-        isn't available. The C++ kernel takes a single scalar radius, so
-        mixed per-wire radii also take the numpy path (stevenmburns/
-        momwire#147) until the kernel signature is ported. The
+        isn't available. The C++ kernel takes a single scalar radius —
+        the OBSERVER segment's (necpp EFLD) — so mixed per-wire radii
+        dispatch one call per constant-radius observer-row run
+        (stevenmburns/momwire#147). The
         finite-ground image block bypasses this method — see
         `_field_tensor_image_refl`, which applies the Fresnel field dyad
         pre-projection through its own kernel
@@ -824,20 +824,34 @@ class SinusoidalSolver(_Cancelable):
         src_c = src_centers if src_centers is not None else seg_c
         src_t = src_tangents if src_tangents is not None else seg_t
 
-        if _HAVE_FIELD_TENSOR and self._uniform_radius is not None:
+        if _HAVE_FIELD_TENSOR:
             gx, gw = self._leggauss_cached(self.n_qp_const)
-            return _acc.sinusoidal_field_tensor(
-                np.ascontiguousarray(seg_c, dtype=np.float64),
-                np.ascontiguousarray(seg_t, dtype=np.float64),
-                np.ascontiguousarray(src_c, dtype=np.float64),
-                np.ascontiguousarray(src_t, dtype=np.float64),
-                np.ascontiguousarray(seg_h, dtype=np.float64),
-                float(self._uniform_radius),
-                float(k),
-                float(self.eta),
-                np.ascontiguousarray(gx, dtype=np.float64),
-                np.ascontiguousarray(gw, dtype=np.float64),
-                self._cancel_flag,
+
+            def _call(rows, a):
+                return _acc.sinusoidal_field_tensor(
+                    np.ascontiguousarray(seg_c[rows], dtype=np.float64),
+                    np.ascontiguousarray(seg_t[rows], dtype=np.float64),
+                    np.ascontiguousarray(src_c, dtype=np.float64),
+                    np.ascontiguousarray(src_t, dtype=np.float64),
+                    np.ascontiguousarray(seg_h, dtype=np.float64),
+                    float(a),
+                    float(k),
+                    float(self.eta),
+                    np.ascontiguousarray(gx, dtype=np.float64),
+                    np.ascontiguousarray(gw, dtype=np.float64),
+                    self._cancel_flag,
+                )
+
+            if self._uniform_radius is not None:
+                return _call(slice(None), self._uniform_radius)
+            # Mixed per-wire radii: the radius is the OBSERVER segment's
+            # (necpp EFLD convention) and the C++ kernel takes one scalar,
+            # so dispatch one call per contiguous constant-radius run of
+            # observer rows and stitch — segments are wire-contiguous, so
+            # runs are few (same pattern as the bspline kernels, #147).
+            parts = [_call(slice(s, e), a) for s, e, a in self._radius_runs(geom)]
+            return tuple(
+                np.concatenate([p[i] for p in parts], axis=0) for i in range(3)
             )
 
         # numpy fallback: unprojected per-shape (E_z, E_ρ) components,
@@ -1124,7 +1138,7 @@ class SinusoidalSolver(_Cancelable):
         # alongside k before assembling).
         eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
 
-        if _HAVE_FIELD_TENSOR_REFL and self._uniform_radius is not None:
+        if _HAVE_FIELD_TENSOR_REFL:
             # Fused C++ path: Eqs 76-79 field components + the Fresnel
             # dyad projection in one pass, with rho_v/rho_h computed
             # in-kernel per pair from eps_t and cos_th (same principal-
@@ -1134,24 +1148,37 @@ class SinusoidalSolver(_Cancelable):
             seg_t = geom["seg_tangents"]
             seg_h = geom["seg_h"]
             gx, gw = self._leggauss_cached(self.n_qp_const)
-            return _acc.sinusoidal_field_tensor_refl(
-                np.ascontiguousarray(seg_c, dtype=np.float64),
-                np.ascontiguousarray(seg_t, dtype=np.float64),
-                np.ascontiguousarray(src_c_img, dtype=np.float64),
-                np.ascontiguousarray(src_t_img, dtype=np.float64),
-                np.ascontiguousarray(seg_h, dtype=np.float64),
-                float(self._uniform_radius),
-                float(k),
-                float(self.eta),
-                np.ascontiguousarray(gx, dtype=np.float64),
-                np.ascontiguousarray(gw, dtype=np.float64),
-                np.ascontiguousarray(cos_th, dtype=np.float64),
-                np.ascontiguousarray(px, dtype=np.float64),
-                np.ascontiguousarray(py, dtype=np.float64),
-                np.ascontiguousarray(tm_p, dtype=np.float64),
-                np.ascontiguousarray(tn_p, dtype=np.float64),
-                complex(eps_t),
-                self._cancel_flag,
+
+            def _call(rows, a):
+                # Observer-side slicing: the (M, N) specular tables slice
+                # on their observer axis alongside the obs arrays.
+                return _acc.sinusoidal_field_tensor_refl(
+                    np.ascontiguousarray(seg_c[rows], dtype=np.float64),
+                    np.ascontiguousarray(seg_t[rows], dtype=np.float64),
+                    np.ascontiguousarray(src_c_img, dtype=np.float64),
+                    np.ascontiguousarray(src_t_img, dtype=np.float64),
+                    np.ascontiguousarray(seg_h, dtype=np.float64),
+                    float(a),
+                    float(k),
+                    float(self.eta),
+                    np.ascontiguousarray(gx, dtype=np.float64),
+                    np.ascontiguousarray(gw, dtype=np.float64),
+                    np.ascontiguousarray(cos_th[rows], dtype=np.float64),
+                    np.ascontiguousarray(px[rows], dtype=np.float64),
+                    np.ascontiguousarray(py[rows], dtype=np.float64),
+                    np.ascontiguousarray(tm_p[rows], dtype=np.float64),
+                    np.ascontiguousarray(tn_p[rows], dtype=np.float64),
+                    complex(eps_t),
+                    self._cancel_flag,
+                )
+
+            if self._uniform_radius is not None:
+                return _call(slice(None), self._uniform_radius)
+            # Mixed per-wire radii: one call per constant-radius run of
+            # observer rows (see `_field_tensor` / `_radius_runs`).
+            parts = [_call(slice(s, e), a) for s, e, a in self._radius_runs(geom)]
+            return tuple(
+                np.concatenate([p[i] for p in parts], axis=0) for i in range(3)
             )
 
         cm = self._field_components(
@@ -1366,6 +1393,18 @@ class SinusoidalSolver(_Cancelable):
     def _seg_radius(self, geom):
         """(n_segs,) per-segment radius — each segment inherits its wire's."""
         return self._radius_per_wire[self._wire_of_seg(geom)]
+
+    def _radius_runs(self, geom):
+        """Contiguous constant-radius observer-row runs, as (start, stop,
+        radius) triples — the per-run dispatch unit that serves mixed
+        per-wire radii through the scalar-radius C++ field kernels
+        (stevenmburns/momwire#147). Segments are wire-contiguous, so the
+        number of runs is at most the number of wires."""
+        a_seg = self._seg_radius(geom)
+        bounds = np.flatnonzero(np.diff(a_seg)) + 1
+        starts = np.concatenate(([0], bounds))
+        stops = np.concatenate((bounds, [a_seg.shape[0]]))
+        return [(int(s), int(e), float(a_seg[s])) for s, e in zip(starts, stops)]
 
     def _apply_loading(self, G, geom, seg_view, k):
         """NEC's impedance boundary condition, in place; no-op when loading

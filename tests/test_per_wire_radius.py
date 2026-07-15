@@ -123,18 +123,50 @@ def test_wire_radius_validation():
 # ----------------------------------------------------------------------
 
 
-def test_mixed_radius_cpp_gate_falls_back_to_numpy(monkeypatch):
-    """With the C++ field tensor nominally available, a mixed-radius solve
-    must produce the identical result with it disabled — the uniform-only
-    gate routes mixed radii to the numpy path either way."""
+def test_mixed_radius_cpp_run_dispatch_matches_numpy(monkeypatch):
+    """Mixed radii are served by the scalar-radius C++ field kernel one
+    constant-radius observer-row run at a time (`_radius_runs`); the
+    stitched result must be bit-close to the pure-numpy reference path
+    (measured ~1e-12 rel; trivially identical when the accelerator is
+    absent — both paths are then numpy)."""
     import momwire.sinusoidal as sin_mod
 
-    sim_on = _two_arm_dipole([0.005, 0.0005], 15)
-    z_on, _ = sim_on.compute_impedance()
+    z_on, _ = _two_arm_dipole([0.005, 0.0005], 15).compute_impedance()
     monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR", False)
     monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_REFL", False)
     z_off, _ = _two_arm_dipole([0.005, 0.0005], 15).compute_impedance()
-    assert z_on == z_off
+    assert z_on == pytest.approx(z_off, rel=1e-9)
+
+
+def test_mixed_radius_refl_ground_cpp_matches_numpy(monkeypatch):
+    """Same cross-path agreement through the fused Fresnel image kernel
+    (`sinusoidal_field_tensor_refl`): its (M, N) specular tables slice on
+    the observer axis alongside the radius runs."""
+    import momwire.sinusoidal as sin_mod
+
+    def _monopole(radii):
+        Lv = 5.5
+        return SinusoidalSolver(
+            wires=[
+                np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0 + Lv]]),
+                np.array([[0.0, 0.0, 1.0 + Lv], [0.0, 3.0, 1.0 + Lv]]),
+            ],
+            n_per_edge_per_wire=[[11], [11]],
+            junctions=[[(0, "end"), (1, "start")]],
+            feed_wire_index=0,
+            feed_arclength=0.0,
+            wavelength=WL,
+            wire_radius=radii,
+            nsegs=11,
+            ground_z=0.0,
+            ground_eps=13.0 - 0.09j,
+        )
+
+    z_on, _ = _monopole([0.005, 0.0005]).compute_impedance()
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR", False)
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_REFL", False)
+    z_off, _ = _monopole([0.005, 0.0005]).compute_impedance()
+    assert z_on == pytest.approx(z_off, rel=1e-9)
 
 
 def test_mixed_radius_swept_matches_per_k():
