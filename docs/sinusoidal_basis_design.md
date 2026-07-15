@@ -231,6 +231,29 @@ are bit-identical to pre-#147 results. The C++ field-tensor kernels
 scalar radius, so mixed-radius solves fall back to the pure-numpy field
 path until the kernels are ported.
 
+**The BSpline (Galerkin) family** applies the same observer-surface
+convention through the a²-regularized moment kernel: each observer ROW of
+`_seg_seg_full_moments_offedge` uses its wire's own radius (per-row `a`
+argument; C++ served one constant-radius row-run at a time), and same-edge
+blocks — always single-wire — use that wire's radius.
+
+**NEC-2 is not a converged reference at an in-line radius step.** On a
+two-radius dipole (arms joined end-to-end, fed away from the step), PyNEC
+does not converge under refinement: R drifts ~+2.4 Ω per mesh doubling at
+a 10:1 step (146.4 → 153.8 Ω over N=21→161) and ~+0.4 Ω per doubling even
+at a mild 2:1 step, with no sign of settling — the classic NEC-2
+stepped-radius deficiency (the three-term basis's junction condition
+mishandles the charge-distribution jump; the reason stepped-diameter
+correction schemes exist in Yagi modeling). momwire's SinusoidalSolver,
+which implements NEC's basis, TRACKS PyNEC point-for-point through this
+drift (|Δ| = 0.5 → 0.3 Ω, shrinking with N) — that is the parity
+criterion for it. The Galerkin BSpline family instead converges cleanly
+at the step (134.30 → 134.52 Ω over the same range) and its answer is
+basis-degree-independent (d=1 vs d=2 within ~0.1 Ω at N=81), so its
+mixed-radius validation rests on (a) cross-degree consistency at the
+step, and (b) direct PyNEC parity on mixed-radius JUNCTIONS (fat vertical
++ thin radials: ~0.5 Ω, stable under refinement), where NEC converges.
+
 ## Output
 
 After solving `G α = E`, the basis-function amplitudes `α_j` are known.

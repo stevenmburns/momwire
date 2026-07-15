@@ -238,3 +238,136 @@ def test_mixed_radius_groundplane_junction_matches_pynec():
         feed_tag=1,
     )
     assert abs(z_mw - z_nec) < 0.5, f"momwire={z_mw}, pynec={z_nec}"
+
+
+# ----------------------------------------------------------------------
+# BSplineSolver (Galerkin family)
+# ----------------------------------------------------------------------
+
+from momwire import BSplineSolver  # noqa: E402
+from momwire.hmatrix import HMatrixSolver  # noqa: E402
+
+
+def _two_arm_dipole_bsp(radii, n, **kw):
+    """Same two-arm center-junction dipole; feed at the TOP ARM's midpoint
+    (the bspline delta-gap lives at a knot — feeding at the junction knot
+    is mirror-symmetric between the arms and can't tell the orderings
+    apart, so mixed-radius tests keep the feed away from the step)."""
+    L = 5.291
+    return BSplineSolver(
+        wires=[
+            np.array([[0.0, 0.0, -L], [0.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, L]]),
+        ],
+        n_per_edge_per_wire=[[n], [n]],
+        junctions=[[(0, "end"), (1, "start")]],
+        feed_wire_index=1,
+        feed_arclength=None,
+        wavelength=WL,
+        wire_radius=radii,
+        nsegs=n,
+        **kw,
+    )
+
+
+def test_bspline_uniform_array_bit_identical_to_scalar():
+    z_s, alpha_s = _two_arm_dipole_bsp(0.0005, 15).compute_impedance()
+    z_a, alpha_a = _two_arm_dipole_bsp([0.0005, 0.0005], 15).compute_impedance()
+    assert z_s == z_a
+    np.testing.assert_array_equal(alpha_s, alpha_a)
+
+
+def test_bspline_wire_radius_validation():
+    with pytest.raises(ValueError, match="length-2"):
+        _two_arm_dipole_bsp([0.0005] * 3, 9)
+    with pytest.raises(ValueError, match="positive and finite"):
+        _two_arm_dipole_bsp([0.0005, 0.0], 9)
+
+
+def test_bspline_mixed_radius_orderings_differ():
+    """With the feed on the top arm, swapping which arm is fat must change
+    Z (this is what the per-observer-row radius buys; a radius-blind build
+    returns identical values for both orderings)."""
+    z_ab, _ = _two_arm_dipole_bsp([0.005, 0.0005], 21).compute_impedance()
+    z_ba, _ = _two_arm_dipole_bsp([0.0005, 0.005], 21).compute_impedance()
+    assert abs(z_ab - z_ba) > 1.0
+
+
+def test_bspline_mixed_radius_degree_consistent():
+    """The mixed-radius answer is a property of the formulation, not the
+    basis degree: d=1 and d=2 agree to well under an ohm at N=41 (measured
+    ~0.45 Ω, both converging to the same value; NEC-2 itself is
+    NON-convergent at an in-line radius step — see the design-note
+    section — so cross-degree consistency is the right oracle here)."""
+    z1, _ = _two_arm_dipole_bsp([0.005, 0.0005], 41, degree=1).compute_impedance()
+    z2, _ = _two_arm_dipole_bsp([0.005, 0.0005], 41, degree=2).compute_impedance()
+    assert abs(z1 - z2) < 1.0, f"d1={z1}, d2={z2}"
+
+
+def test_bspline_mixed_radius_swept_matches_single_k():
+    sim = _two_arm_dipole_bsp([0.005, 0.0005], 15)
+    k0 = sim.k
+    z_single, _ = sim.compute_impedance()
+    z_swept = _two_arm_dipole_bsp([0.005, 0.0005], 15).compute_impedance_swept(
+        np.array([k0])
+    )
+    assert z_single == pytest.approx(z_swept[0], rel=1e-9)
+
+
+def test_bspline_mixed_radius_groundplane_matches_pynec():
+    """Fat vertical + thin radials (K=5 junction, no in-line radius step):
+    NEC converges here, so direct parity applies. Measured ~0.51-0.56 Ω
+    across N=15/31 (uniform fat-wire baseline ~0.73 Ω)."""
+    pytest.importorskip("PyNEC")
+    import PyNEC as nec
+
+    n = 31
+    Lv = 5.5
+    O = (0.0, 0.0, 0.0)
+    tips = [(Lv, 0.0, 0.0), (-Lv, 0.0, 0.0), (0.0, Lv, 0.0), (0.0, -Lv, 0.0)]
+    wires = [np.array([O, (0.0, 0.0, Lv)])] + [
+        np.array([O, t], dtype=float) for t in tips
+    ]
+    z_mw, _ = BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[n]] * 5,
+        junctions=[[(w, "start") for w in range(5)]],
+        feed_wire_index=0,
+        feed_arclength=None,
+        wavelength=WL,
+        wire_radius=[0.005] + [0.0005] * 4,
+        nsegs=n,
+    ).compute_impedance()
+    c = nec.nec_context()
+    geo = c.get_geometry()
+    geo.wire(1, n, *O, 0.0, 0.0, Lv, 0.005, 1.0, 1.0)
+    for i, t in enumerate(tips):
+        geo.wire(2 + i, n, *O, *t, 0.0005, 1.0, 1.0)
+    c.geometry_complete(0)
+    c.gn_card(-1, 0, 0, 0, 0, 0, 0, 0)
+    c.ex_card(0, 1, (n + 1) // 2, 0, 1.0, 0.0, 0, 0, 0, 0)
+    c.fr_card(0, 1, FREQ_MHZ, 0)
+    c.xq_card(0)
+    z_nec = complex(c.get_input_parameters(0).get_impedance()[0])
+    assert abs(z_mw - z_nec) < 1.0, f"momwire={z_mw}, pynec={z_nec}"
+
+
+def test_hmatrix_mixed_radius_raises_uniform_array_works():
+    L = 5.291
+    kw = dict(
+        wires=[
+            np.array([[0.0, 0.0, -L], [0.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, L]]),
+        ],
+        n_per_edge_per_wire=[[15], [15]],
+        junctions=[[(0, "end"), (1, "start")]],
+        feed_wire_index=1,
+        feed_arclength=None,
+        wavelength=WL,
+        nsegs=15,
+    )
+    with pytest.raises(NotImplementedError, match="mixed per-wire radii"):
+        HMatrixSolver(wire_radius=[0.005, 0.0005], **kw)
+    z_h, _ = HMatrixSolver(wire_radius=[0.0005, 0.0005], **kw).compute_impedance()
+    z_d, _ = BSplineSolver(wire_radius=0.0005, **kw).compute_impedance()
+    assert abs(z_h - z_d) < 1e-6
