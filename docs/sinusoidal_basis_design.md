@@ -237,6 +237,19 @@ convention through the a²-regularized moment kernel: each observer ROW of
 argument; C++ served one constant-radius row-run at a time), and same-edge
 blocks — always single-wire — use that wire's radius.
 
+**The fast solvers (HMatrixSolver, ArrayBlockSolver)** inherit the same
+convention through their block fills: numpy block evaluators pass the
+per-observer-row radius slice, same-edge bands use their edge's wire
+radius, and the fused C++ off-edge assembler (which regularizes with one
+scalar a²) is dispatched one constant-radius observer-basis group per
+admissible block. Two consequences are specific to the array solver:
+per-segment radii join the element shape signatures and the module-scope
+self-block cache keys (translation-identical elements with different
+radii must not share a block), and the complex-symmetry coupling shortcut
+`Z_ba = Z_ab^T` only fires when both elements of the pair carry one and
+the same radius — the observer-row regularization makes the mutual block
+(slightly) asymmetric otherwise.
+
 **NEC-2 is not a converged reference at an in-line radius step.** On a
 two-radius dipole (arms joined end-to-end, fed away from the step), PyNEC
 does not converge under refinement: R drifts ~+2.4 Ω per mesh doubling at

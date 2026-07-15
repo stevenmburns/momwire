@@ -180,9 +180,7 @@ class SinusoidalSolver(_Cancelable):
                 f"wire_radius entries must be positive and finite, got {radius}"
             )
         self._radius_per_wire = radius
-        self._uniform_radius = (
-            float(radius[0]) if np.all(radius == radius[0]) else None
-        )
+        self._uniform_radius = float(radius[0]) if np.all(radius == radius[0]) else None
 
         # Distributed series wire impedance (stevenmburns/momwire#131,
         # sinusoidal support #134): finite conductivity and/or a dielectric

@@ -218,7 +218,12 @@ class HMatrixSolver(BSplineSolver):
           seg_edge_id   (N_segs,)   global edge index of each segment
           seg_edge_loc  (N_segs,)   within-edge local index of each segment
           edge_arc      list[ (edge_arc_edges array) ] indexed by edge id
-          basis_centroid (n_basis, 3), basis_radius (n_basis,)
+          basis_centroid (n_basis, 3), basis_lo/basis_hi (n_basis, 3)
+          seg_a   (N_segs,)  conductor radius of each segment's wire
+          edge_a  (n_edges,) conductor radius of each edge's wire
+          basis_a (n_basis,) conductor radius of each basis's wire
+        (the *_a tables are the per-wire radius broadcasts the block fills
+        regularise observer rows with — stevenmburns/momwire#147)
         """
         cached = getattr(self, "_hm_context", None)
         if cached is not None:
@@ -242,6 +247,7 @@ class HMatrixSolver(BSplineSolver):
         seg_edge_id = np.full(n_segs, -1, dtype=np.int64)
         seg_edge_loc = np.full(n_segs, -1, dtype=np.int64)
         edge_arc = []
+        edge_a = []
         per_wire = geom["per_wire"]
         seg_off = geom["seg_offsets"]
         eid = 0
@@ -250,12 +256,14 @@ class HMatrixSolver(BSplineSolver):
             ed_off = pw["edge_offsets"]
             ed_arc = pw["edge_arc_edges"]
             base = seg_off[w]
+            a_w = float(self._radius_per_wire[w])
             for i_e in range(len(ed_off) - 1):
                 lo = base + ed_off[i_e]
                 hi = base + ed_off[i_e + 1]
                 seg_edge_id[lo:hi] = eid
                 seg_edge_loc[lo:hi] = np.arange(hi - lo, dtype=np.int64)
                 edge_arc.append(np.asarray(ed_arc[i_e], dtype=float))
+                edge_a.append(a_w)
                 eid += 1
 
         # Basis geometric extent: axis-aligned bounding box (and centroid)
@@ -273,6 +281,8 @@ class HMatrixSolver(BSplineSolver):
         basis_lo = np.empty((n_basis, 3), dtype=float)
         basis_hi = np.empty((n_basis, 3), dtype=float)
         basis_centroid = np.empty((n_basis, 3), dtype=float)
+        basis_a = np.empty(n_basis, dtype=float)
+        seg_a = self._seg_radius(geom)
         live_wing = np.abs(polys).sum(axis=2) > 0.0  # (n_basis, n_wings)
         for m in range(n_basis):
             segs = np.unique(supp_seg[m][live_wing[m]])
@@ -280,6 +290,10 @@ class HMatrixSolver(BSplineSolver):
             basis_lo[m] = pts.min(axis=0)
             basis_hi[m] = pts.max(axis=0)
             basis_centroid[m] = pts.mean(axis=0)
+            # Every live segment of a basis lives on one wire (bases are
+            # wire-local; junctions couple through KCL, not shared bases),
+            # so the first live segment pins the basis's conductor radius.
+            basis_a[m] = seg_a[segs[0]]
 
         ctx = {
             "geom": geom,
@@ -299,6 +313,9 @@ class HMatrixSolver(BSplineSolver):
             "basis_centroid": basis_centroid,
             "basis_lo": basis_lo,
             "basis_hi": basis_hi,
+            "seg_a": seg_a,
+            "edge_a": np.asarray(edge_a, dtype=float),
+            "basis_a": basis_a,
         }
         self._hm_context = ctx
         return ctx
@@ -327,7 +344,9 @@ class HMatrixSolver(BSplineSolver):
         blk = cache.get(key)
         if blk is not None:
             return blk
-        a = self._uniform_radius
+        # An edge lives on one wire, so the whole band uses that wire's
+        # radius (stevenmburns/momwire#147).
+        a = float(ctx["edge_a"][edge_id])
         d = self.degree
         sub_arc = ctx["edge_arc"][edge_id][lo : hi + 2]
         A_st = _seg_seg_static_moments(sub_arc, a, max_d=d)
@@ -355,16 +374,17 @@ class HMatrixSolver(BSplineSolver):
         no O(N_edge²) same-edge block is ever built for a single-wire mesh.
         """
         d = self.degree
-        a = self._uniform_radius
         seg_l = ctx["seg_l"]
         seg_r = ctx["seg_r"]
 
+        # Per-OBSERVER-row radius (stevenmburns/momwire#147); the kernel
+        # helper collapses a uniform slice back to the scalar fast path.
         Jsub = _seg_seg_full_moments_offedge(
             seg_l[seg_I],
             seg_r[seg_I],
             seg_l[seg_J],
             seg_r[seg_J],
-            a,
+            ctx["seg_a"][seg_I],
             k,
             d,
             self.n_qp_pair,
@@ -508,7 +528,6 @@ class HMatrixSolver(BSplineSolver):
         tangents = ctx["tangents"]
         seg_l = ctx["seg_l"]
         seg_r = ctx["seg_r"]
-        a = self._uniform_radius
         d = self.degree
 
         I = np.asarray(I, dtype=np.int64)
@@ -518,12 +537,14 @@ class HMatrixSolver(BSplineSolver):
         loc_of_I = {int(s): i for i, s in enumerate(seg_I)}
         loc_of_J = {int(s): i for i, s in enumerate(seg_J)}
 
+        # Observer rows are the REAL test segments — the per-observer
+        # radius convention applies to the image block unchanged.
         Jsub = _seg_seg_full_moments_offedge(
             seg_l[seg_I],
             seg_r[seg_I],
             self._image_positions(seg_l[seg_J]),
             self._image_positions(seg_r[seg_J]),
-            a,
+            ctx["seg_a"][seg_I],
             k,
             d,
             self.n_qp_pair,
@@ -773,7 +794,6 @@ class HMatrixSolver(BSplineSolver):
         polys = ctx["polys"]
         seg_l = ctx["seg_l"]
         seg_r = ctx["seg_r"]
-        a = self._uniform_radius
         d = self.degree
 
         I = np.asarray(I, dtype=np.int64)
@@ -788,7 +808,7 @@ class HMatrixSolver(BSplineSolver):
             seg_r[seg_I],
             self._image_positions(seg_l[seg_J]),
             self._image_positions(seg_r[seg_J]),
-            a,
+            ctx["seg_a"][seg_I],
             k,
             d,
             self.n_qp_pair,
@@ -964,7 +984,56 @@ class HMatrixSolver(BSplineSolver):
 
     def _offedge_block_evaluators(self, ctx, I, J, k, mirror_J=False, refl=False):
         """Build (get_row, get_col, dense) closures for an admissible far block
-        backed by the fused C++ off-edge assembler `bspline_assemble_offedge_block`.
+        backed by the fused C++ off-edge assembler.
+
+        The C++ assembler regularises with ONE scalar a²; under mixed
+        per-wire radii (stevenmburns/momwire#147) each observer basis row
+        uses its own wire's radius, so the block dispatches one uniform
+        sub-evaluator per constant-radius row group and scatters the rows
+        back into block order. Bases are wire-contiguous, so a cluster
+        spans few radii; a uniform block (every scalar-radius solve) takes
+        the single-call fast path unchanged.
+        """
+        aI = ctx["basis_a"][np.asarray(I, dtype=np.int64)]
+        if np.all(aI == aI[0]):
+            return self._offedge_block_evaluators_uniform(
+                ctx, I, J, k, float(aI[0]) ** 2, mirror_J=mirror_J, refl=refl
+            )
+
+        nI, nJ = I.size, J.size
+        groups = []
+        grp_of = np.empty(nI, dtype=np.int64)
+        loc_of = np.empty(nI, dtype=np.int64)
+        for a_val in np.unique(aI):
+            rows = np.flatnonzero(aI == a_val)
+            row_g, col_g, dense_g = self._offedge_block_evaluators_uniform(
+                ctx, I[rows], J, k, float(a_val) ** 2, mirror_J=mirror_J, refl=refl
+            )
+            grp_of[rows] = len(groups)
+            loc_of[rows] = np.arange(rows.size)
+            groups.append((rows, row_g, col_g, dense_g))
+
+        def get_row(i):
+            return groups[grp_of[i]][1](loc_of[i])
+
+        def get_col(j):
+            out = np.empty(nI, dtype=np.complex128)
+            for rows, _row_g, col_g, _dense_g in groups:
+                out[rows] = col_g(j)
+            return out
+
+        def dense():
+            out = np.empty((nI, nJ), dtype=np.complex128)
+            for rows, _row_g, _col_g, dense_g in groups:
+                out[rows] = dense_g()
+            return out
+
+        return get_row, get_col, dense
+
+    def _offedge_block_evaluators_uniform(self, ctx, I, J, k, a2, mirror_J, refl):
+        """`_offedge_block_evaluators` for a block whose observer bases all
+        share the conductor radius √a2 — the fused C++ assembler
+        `bspline_assemble_offedge_block` takes that single scalar.
 
         The block-wide I/J segment unions and local support maps are resolved
         once here; each row/column call passes only the single basis it needs
@@ -1005,7 +1074,6 @@ class HMatrixSolver(BSplineSolver):
         seg_r = ctx["seg_r"]
         tangents = ctx["tangents"]
         d = self.degree
-        a2 = self._uniform_radius * self._uniform_radius
         glt, glw = self._gl01()
         omega, eps, mu = self.omega, self.eps, self.mu
         flip = np.array([1.0, 1.0, -1.0])
@@ -1356,12 +1424,6 @@ class HMatrixSolver(BSplineSolver):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        if self._uniform_radius is None:
-            raise NotImplementedError(
-                "HMatrixSolver does not support mixed per-wire radii yet — "
-                "its block fills take a single radius. Use BSplineSolver "
-                "for mixed-radius geometries (stevenmburns/momwire#147)."
-            )
         self.aca_eta = float(aca_eta)
         self.aca_leaf_size = int(aca_leaf_size)
         self.aca_tol = float(aca_tol)

@@ -352,7 +352,7 @@ def test_bspline_mixed_radius_groundplane_matches_pynec():
     assert abs(z_mw - z_nec) < 1.0, f"momwire={z_mw}, pynec={z_nec}"
 
 
-def test_hmatrix_mixed_radius_raises_uniform_array_works():
+def test_hmatrix_uniform_array_matches_scalar_dense():
     L = 5.291
     kw = dict(
         wires=[
@@ -366,8 +366,182 @@ def test_hmatrix_mixed_radius_raises_uniform_array_works():
         wavelength=WL,
         nsegs=15,
     )
-    with pytest.raises(NotImplementedError, match="mixed per-wire radii"):
-        HMatrixSolver(wire_radius=[0.005, 0.0005], **kw)
     z_h, _ = HMatrixSolver(wire_radius=[0.0005, 0.0005], **kw).compute_impedance()
     z_d, _ = BSplineSolver(wire_radius=0.0005, **kw).compute_impedance()
     assert abs(z_h - z_d) < 1e-6
+
+
+# ----------------------------------------------------------------------
+# HMatrixSolver: block fills under mixed per-wire radii
+# ----------------------------------------------------------------------
+
+
+def _dipole_kw(n, **extra):
+    L = 5.291
+    kw = dict(
+        wires=[
+            np.array([[0.0, 0.0, -L], [0.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, L]]),
+        ],
+        n_per_edge_per_wire=[[n], [n]],
+        junctions=[[(0, "end"), (1, "start")]],
+        feed_wire_index=1,
+        feed_arclength=None,
+        wavelength=WL,
+        nsegs=n,
+    )
+    kw.update(extra)
+    return kw
+
+
+def test_hmatrix_mixed_radius_matches_dense():
+    """Mixed-radius H-matrix parity against the dense Galerkin build, on a
+    mesh fine enough (leaf 8, N=41 per arm) that the partition really has
+    admissible far blocks — otherwise the test never leaves zblock."""
+    kw = _dipole_kw(41)
+    sim = HMatrixSolver(wire_radius=[0.005, 0.0005], aca_leaf_size=8, **kw)
+    H = sim.build_hmatrix()
+    assert len(H.far) > 0, "partition degenerated to dense — test is vacuous"
+    z_h, _ = sim.compute_impedance()
+    z_d, _ = BSplineSolver(wire_radius=[0.005, 0.0005], **kw).compute_impedance()
+    assert abs(z_h - z_d) / abs(z_d) < 1e-3, f"hmatrix={z_h}, dense={z_d}"
+
+
+def test_hmatrix_mixed_radius_accel_gate(monkeypatch):
+    """The grouped-row C++ block evaluators and the numpy zblock fallback
+    must agree on a mixed-radius solve (identical when the accelerator is
+    absent — both take the numpy path)."""
+    kw = _dipole_kw(41)
+    radii = [0.005, 0.0005]
+    z_on, _ = HMatrixSolver(
+        wire_radius=radii, aca_leaf_size=8, hmatrix_use_accel=True, **kw
+    ).compute_impedance()
+    z_off, _ = HMatrixSolver(
+        wire_radius=radii, aca_leaf_size=8, hmatrix_use_accel=False, **kw
+    ).compute_impedance()
+    assert abs(z_on - z_off) / abs(z_off) < 1e-3, f"accel={z_on}, numpy={z_off}"
+
+
+def test_hmatrix_mixed_radius_pec_ground_matches_dense():
+    """PEC ground exercises the per-observer-row radius on the image block
+    fills (`_zblock_image` and the mirrored C++ evaluators)."""
+    kw = _dipole_kw(41, ground_z=-8.0)
+    radii = [0.005, 0.0005]
+    z_h, _ = HMatrixSolver(wire_radius=radii, aca_leaf_size=8, **kw).compute_impedance()
+    z_d, _ = BSplineSolver(wire_radius=radii, **kw).compute_impedance()
+    assert abs(z_h - z_d) / abs(z_d) < 1e-3, f"hmatrix={z_h}, dense={z_d}"
+
+
+# ----------------------------------------------------------------------
+# ArrayBlockSolver: shape classes, caches, and symmetry under mixed radii
+# ----------------------------------------------------------------------
+
+from momwire.array_block import (  # noqa: E402
+    ArrayBlockSolver,
+    element_groups,
+    reset_array_caches,
+)
+
+
+def _dipole_line_kw(radii_per_elem, nsegs=16):
+    """Four well-separated parallel dipoles, one wire each — element e gets
+    `radii_per_elem[e]`."""
+    half = 0.962 * WL / 4
+    ys = [-9.0, -3.0, 3.0, 9.0][: len(radii_per_elem)]
+    wires = [np.array([[0.0, y, -half], [0.0, y, half]]) for y in ys]
+    return dict(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[nsegs]] * len(wires),
+        wavelength=WL,
+        feeds=[(i, None, 1.0 + 0.0j) for i in range(len(wires))],
+        wire_radius=list(radii_per_elem),
+    )
+
+
+def test_array_block_radius_refines_shape_classes():
+    """Geometric translates with different radii must not share a shape
+    class (their self-blocks differ), while same-radius translates still
+    dedup — [fat, thin, fat, thin] is exactly two classes."""
+    uni = ArrayBlockSolver(**_dipole_line_kw([0.0005] * 4))
+    assert len(set(element_groups(uni).shape_of_elem.tolist())) == 1
+    mixed = ArrayBlockSolver(**_dipole_line_kw([0.005, 0.0005, 0.005, 0.0005]))
+    part = element_groups(mixed)
+    assert len(set(part.shape_of_elem.tolist())) == 2
+    assert part.shape_of_elem[0] == part.shape_of_elem[2]
+    assert part.shape_of_elem[1] == part.shape_of_elem[3]
+
+
+def test_array_block_mixed_radius_elements_match_dense():
+    """[fat, thin, fat, thin] line: two shape classes with two members each,
+    so the block path (not the degenerate H-matrix fallback) runs, with
+    self-block and coupling reuse live. Y-matrix parity vs dense."""
+    reset_array_caches()
+    kw = _dipole_line_kw([0.005, 0.0005, 0.005, 0.0005])
+    arr = ArrayBlockSolver(**kw)
+    assert not arr._degenerate_partition()
+    ya = arr.compute_y_matrix()
+    # same-radius pairs still dedup: fewer ACA runs than the 12 ordered pairs
+    assert arr._last_n_coupling_aca < 12
+    yd = BSplineSolver(**kw).compute_y_matrix()
+    assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4
+
+
+def test_array_block_self_block_cache_never_aliases_radii():
+    """Two decks with identical geometry but different radii solved
+    back-to-back share the module-scope self-block cache — the radius
+    pattern is part of the content address, so the second solve must not
+    inherit the first's blocks."""
+    reset_array_caches()
+    y_uni = ArrayBlockSolver(**_dipole_line_kw([0.0005] * 4)).compute_y_matrix()
+    kw = _dipole_line_kw([0.005, 0.0005, 0.005, 0.0005])
+    y_mix = ArrayBlockSolver(**kw).compute_y_matrix()
+    assert np.abs(y_mix - y_uni).max() / np.abs(y_uni).max() > 1e-3
+    yd = BSplineSolver(**kw).compute_y_matrix()
+    assert np.abs(y_mix - yd).max() / np.abs(yd).max() < 1e-4
+
+
+def _bent_pair_kw(radii_per_wire, nsegs=12, dy=20.0):
+    """Two translated copies of an L element (vertical + horizontal wire,
+    internal junction). `radii_per_wire` is per WIRE: 4 entries, wires
+    (0, 1) = element 0, wires (2, 3) = element 1."""
+    h = 0.962 * WL / 4
+    wires, junctions, feeds = [], [], []
+    for e in range(2):
+        y = e * dy
+        base = len(wires)
+        wires += [
+            np.array([[0.0, y, 0.0], [0.0, y, h]]),
+            np.array([[0.0, y, h], [0.0, y + h, h]]),
+        ]
+        junctions.append([(base, "end"), (base + 1, "start")])
+        feeds.append((base, None, 1.0 + 0.0j))
+    return dict(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[nsegs]] * 4,
+        wavelength=WL,
+        junctions=junctions,
+        feeds=feeds,
+        wire_radius=list(radii_per_wire),
+    )
+
+
+def test_array_block_internally_mixed_elements_gate_transpose_reuse():
+    """Two identical elements whose wires mix radii INSIDE the element: the
+    observer-row regularisation makes Z_ba != Z_ab^T, so the transposed-
+    factor shortcut must not fire (2 ACA runs, not 1) and the answer must
+    still match dense. The uniform control keeps the shortcut (1 run)."""
+    reset_array_caches()
+    uni = ArrayBlockSolver(**_bent_pair_kw([0.0005] * 4))
+    uni.compute_y_matrix()
+    assert uni._last_n_coupling_aca == 1  # transpose reuse intact
+
+    reset_array_caches()
+    kw = _bent_pair_kw([0.005, 0.0005, 0.005, 0.0005])
+    arr = ArrayBlockSolver(**kw)
+    assert not arr._degenerate_partition()
+    ya = arr.compute_y_matrix()
+    assert arr._last_n_coupling_aca == 2  # gate blocked the transposed reuse
+    yd = BSplineSolver(**kw).compute_y_matrix()
+    assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4

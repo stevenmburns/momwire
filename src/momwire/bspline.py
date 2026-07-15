@@ -375,9 +375,7 @@ class BSplineSolver(_Cancelable):
                 f"wire_radius entries must be positive and finite, got {radius}"
             )
         self._radius_per_wire = radius
-        self._uniform_radius = (
-            float(radius[0]) if np.all(radius == radius[0]) else None
-        )
+        self._uniform_radius = float(radius[0]) if np.all(radius == radius[0]) else None
         if use_singular_enrichment and self._uniform_radius is None:
             raise NotImplementedError(
                 "use_singular_enrichment + mixed per-wire radii together "

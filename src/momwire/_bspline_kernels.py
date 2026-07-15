@@ -288,11 +288,7 @@ def _seg_seg_full_moments_offedge(
     t01 = 0.5 * (gl_xi + 1.0)
     w01 = 0.5 * gl_w
 
-    if (
-        _HAVE_BSPLINE_ACCEL
-        and max_d <= _BSPLINE_ACCEL_MAX_D
-        and not np.ndim(a) == 0
-    ):
+    if _HAVE_BSPLINE_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D and not np.ndim(a) == 0:
         # Mixed per-row radii on the C++ path: dispatch one call per
         # contiguous run of equal radius and stitch along the row axis.
         bounds = np.flatnonzero(np.diff(a)) + 1
