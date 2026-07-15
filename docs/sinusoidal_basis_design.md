@@ -227,9 +227,11 @@ nec2c/necpp and validated against PyNEC on mixed-radius geometries:
 
 Scalar (and uniform-array) radii keep the historical scalar code paths and
 are bit-identical to pre-#147 results. The C++ field-tensor kernels
-(`sinusoidal_field_tensor`, `sinusoidal_field_tensor_refl`) still take one
-scalar radius, so mixed-radius solves fall back to the pure-numpy field
-path until the kernels are ported.
+(`sinusoidal_field_tensor`, `sinusoidal_field_tensor_refl`) take one
+scalar radius — the OBSERVER row's — so mixed-radius solves dispatch one
+kernel call per contiguous constant-radius run of observer rows and
+stitch the results (segments are wire-contiguous, so runs are at most
+the wire count; no numpy fallback penalty).
 
 **The BSpline (Galerkin) family** applies the same observer-surface
 convention through the a²-regularized moment kernel: each observer ROW of
