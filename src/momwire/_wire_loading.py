@@ -99,10 +99,14 @@ def series_impedance_per_wire(
 ):
     """Per-wire distributed series impedance Z'(ω) [Ω/m].
 
-    `conductivity` / `insulation_radius` / `insulation_eps_r` are the
-    normalized (n_wires,) arrays (or None) from `normalize_per_wire`; NaN
-    entries switch the effect off for that wire. `omega` may be scalar or
-    (n_k,); the result is (n_wires,) or (n_wires, n_k) complex.
+    `wire_radius` is a scalar (every wire) or a length-n_wires sequence
+    (each wire's own conductor radius — stevenmburns/momwire#147): the
+    skin-loss internal impedance and the insulation-jacket inductance are
+    both evaluated at wire w's own radius. `conductivity` /
+    `insulation_radius` / `insulation_eps_r` are the normalized (n_wires,)
+    arrays (or None) from `normalize_per_wire`; NaN entries switch the
+    effect off for that wire. `omega` may be scalar or (n_k,); the result
+    is (n_wires,) or (n_wires, n_k) complex.
     """
     omega = np.asarray(omega, dtype=float)
     n_w = (
@@ -110,13 +114,21 @@ def series_impedance_per_wire(
         if conductivity is not None
         else insulation_radius.shape[0]
     )
+    radius = np.asarray(wire_radius, dtype=float)
+    if radius.ndim == 0:
+        radius = np.broadcast_to(radius, (n_w,))
+    elif radius.shape != (n_w,):
+        raise ValueError(
+            f"wire_radius: expected a scalar or a length-{n_w} sequence "
+            f"(one entry per wire), got shape {radius.shape}"
+        )
     out = np.zeros((n_w,) + omega.shape, dtype=np.complex128)
     for w in range(n_w):
         if conductivity is not None and np.isfinite(conductivity[w]):
-            out[w] += wire_internal_impedance(omega, wire_radius, conductivity[w])
+            out[w] += wire_internal_impedance(omega, radius[w], conductivity[w])
         if insulation_radius is not None and np.isfinite(insulation_radius[w]):
             L = insulation_inductance(
-                wire_radius, insulation_radius[w], insulation_eps_r[w]
+                radius[w], insulation_radius[w], insulation_eps_r[w]
             )
             out[w] += 1j * omega * L
     return out

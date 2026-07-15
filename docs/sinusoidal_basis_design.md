@@ -196,6 +196,41 @@ For a voltage source `V` on segment `m`:
 This is the applied-E "constant-field" delta-gap. Sign: positive end of the
 source points along `+ŝ_m`.
 
+## Per-wire radius (momwire#147)
+
+`wire_radius` accepts a scalar (every wire) or a length-n_wires sequence
+(each wire's own conductor radius). Two conventions, both transcribed from
+nec2c/necpp and validated against PyNEC on mixed-radius geometries:
+
+1. **Basis end-condition constants (TBF).** The per-segment constant
+   `a_seg = 1/(ln(2/(k·a_seg)) − γ)` uses each segment's OWN radius.
+   nec2c's `tbf()` computes `aj` from `bi[jcox]` for every connected
+   segment — so the P sums and the N± neighbour coefficient entries take
+   the constant at the *neighbour's* segment — and resets `aj = ap =` the
+   self constant before the Q/D/B₀/C₀ formulas, so the self-segment
+   formulas use only the basis's own radius. At a junction of wires with
+   different radii each member contributes its own constant to the P sums.
+
+2. **Field kernel offset (EFLD).** The source current stays a filament on
+   the source axis; the boundary condition is enforced on the OBSERVER
+   segment's surface: `ρ' = √(ρ² + a_obs²)` with `a_obs` the radius of the
+   segment the field is evaluated on (necpp passes
+   `ai = segment_radius[i]`, the observer, into `efld`). Self terms use
+   the wire's own radius; mutual terms between wires of different radii
+   use the observer wire's. The opposite convention (source radius,
+   observation on the axis) was tried first and refuted by the oracle:
+   on a two-radius dipole the PyNEC delta grew from ~0.8 Ω at N=21 to
+   ~11.6 Ω at N=41 — the in-line near-junction pairs are exactly where
+   the two conventions diverge. With the observer convention the delta
+   is ~0.3 Ω and stable under refinement, inside the single-radius
+   fat-wire baseline (~0.44 Ω).
+
+Scalar (and uniform-array) radii keep the historical scalar code paths and
+are bit-identical to pre-#147 results. The C++ field-tensor kernels
+(`sinusoidal_field_tensor`, `sinusoidal_field_tensor_refl`) still take one
+scalar radius, so mixed-radius solves fall back to the pure-numpy field
+path until the kernels are ported.
+
 ## Output
 
 After solving `G α = E`, the basis-function amplitudes `α_j` are known.

@@ -16,7 +16,15 @@ Scope (deliberately narrow):
     docs/sommerfeld-everywhere-plan.md Phase 2).
   * Thin-wire kernel (Eqs 73-79), no extended thin-wire / current-element.
   * Delta-gap "applied-E" source (Eq 187) on a single basis function.
-  * Uniform wire radius across all wires.
+  * Per-wire radius (stevenmburns/momwire#147): `wire_radius` is a scalar
+    or a length-n_wires sequence. Mixed radii follow NEC2's per-segment
+    convention — the basis end-condition constants use each segment's own
+    radius (nec2c TBF), and the thin-wire kernel keeps the source current
+    a filament on the source axis while enforcing the boundary condition
+    on the OBSERVER segment's surface (EFLD's rh = sqrt(rho² + a_obs²)).
+    The C++ field-tensor kernels take a single scalar radius, so
+    mixed-radius solves use the pure-numpy field path until they are
+    ported.
   * Free wire ends use the X_i = 0 zero-current condition (the more
     physical J_1/J_0 end-cap condition is negligible for thin wires).
 """
@@ -131,10 +139,11 @@ class SinusoidalSolver(_Cancelable):
         # of (geom, k, wire_radius). Cache both so the second call reuses
         # the work the first call already did. _basis_coefs validates the
         # cache by identity-checking the geom dict + value-comparing k and
-        # wire_radius — so `compute_impedance_swept` (which mutates self.k
-        # in a loop) still rebuilds basis-coefs per k, but reuses geom.
+        # a radius key (the scalar radius, or the per-wire array's bytes)
+        # — so `compute_impedance_swept` (which mutates self.k in a loop)
+        # still rebuilds basis-coefs per k, but reuses geom.
         self._cached_geometry: dict | None = None
-        self._cached_basis: tuple[dict, float, float, list] | None = None
+        self._cached_basis: tuple[dict, float, float | bytes, list] | None = None
         # k-independent specular-ray tables for the `ground_eps` weighted
         # image (cos θ, p̂ components, tangent·p̂ projections), cached per
         # geometry object — same identity-check pattern as _cached_basis /
@@ -150,6 +159,30 @@ class SinusoidalSolver(_Cancelable):
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
 
         n_w = len(self.wires_polylines)
+
+        # Per-wire conductor radius (stevenmburns/momwire#147): a scalar
+        # applies to every wire; a length-n_wires sequence gives each wire
+        # (polyline) its own radius, mapped to segments via _wire_of_seg.
+        # `_uniform_radius` is the scalar fast path — it keeps the
+        # historical scalar code paths (and the single-`a` C++ kernels)
+        # bit-identical whenever all wires share one radius, including
+        # when that radius arrived as a uniform array.
+        radius = np.asarray(wire_radius, dtype=float)
+        if radius.ndim == 0:
+            radius = np.full(n_w, float(radius))
+        elif radius.shape != (n_w,):
+            raise ValueError(
+                f"wire_radius: expected a scalar or a length-{n_w} sequence "
+                f"(one entry per wire), got shape {radius.shape}"
+            )
+        if not np.all(np.isfinite(radius)) or np.any(radius <= 0.0):
+            raise ValueError(
+                f"wire_radius entries must be positive and finite, got {radius}"
+            )
+        self._radius_per_wire = radius
+        self._uniform_radius = (
+            float(radius[0]) if np.all(radius == radius[0]) else None
+        )
 
         # Distributed series wire impedance (stevenmburns/momwire#131,
         # sinusoidal support #134): finite conductivity and/or a dielectric
@@ -183,7 +216,7 @@ class SinusoidalSolver(_Cancelable):
                 )
             for w in np.nonzero(finite_b)[0]:
                 _wire_loading.insulation_inductance(
-                    self.wire_radius,
+                    self._radius_per_wire[w],
                     self.insulation_radius[w],
                     self.insulation_eps_r[w],
                 )
@@ -514,13 +547,21 @@ class SinusoidalSolver(_Cancelable):
         differently. We only need the seg-major layout for downstream
         consumers, so that's all we materialise.
         """
-        a = self.wire_radius
+        # Uniform radius keeps the historical scalar path (bit-exact);
+        # mixed radii promote `a` to a per-segment array — each segment
+        # inherits its wire's radius. The cache key is the scalar for the
+        # uniform case, the radius array's bytes otherwise.
+        if self._uniform_radius is not None:
+            a = a_key = self._uniform_radius
+        else:
+            a = self._seg_radius(geom)
+            a_key = self._radius_per_wire.tobytes()
         cached = self._cached_basis
         if (
             cached is not None
             and cached[0] is geom
             and cached[1] == k
-            and cached[2] == a
+            and cached[2] == a_key
         ):
             return cached[3]
         seg_h = geom["seg_h"]
@@ -535,8 +576,14 @@ class SinusoidalSolver(_Cancelable):
         np_count = geom["np_count"]
 
         ka = k * a
-        # a_i± from Eq 25 (same value for both ends since wire radius is
-        # uniform; we name it a_const).
+        # a_i± from Eq 25: 1/(ln(2/(k·a)) − γ) per segment (scalar when the
+        # radius is uniform). Mixed radii follow NEC2's TBF convention —
+        # each segment's log-constant uses that segment's OWN radius: the
+        # self formulas below (D, Q±, B_i0, C_i0 and the end branches) take
+        # a_const at the basis's segment, while the P sums and the N±
+        # neighbour coefficient entries take it at the NEIGHBOUR's segment
+        # (nec2c computes aj from bi[jcox] for every connected segment and
+        # resets aj = ap = the self constant before the Q/D formulas).
         a_const = 1.0 / (np.log(2.0 / ka) - _EULER_GAMMA)
 
         # Pre-compute every per-segment trig in one vectorized pass.
@@ -631,17 +678,20 @@ class SinusoidalSolver(_Cancelable):
         self_seg = np.arange(n_segs, dtype=np.int64)
 
         # N⁻ neighbour entries (Eqs 43-45). Basis i contributes at seg j
-        # (the j-side neighbour) using Q_minus[i] for the magnitude.
+        # (the j-side neighbour) using Q_minus[i] for the magnitude and the
+        # NEIGHBOUR segment's a-constant (a_const[nm_seg], per TBF).
+        a_nm = a_const if np.ndim(a_const) == 0 else a_const[nm_seg]
+        a_np = a_const if np.ndim(a_const) == 0 else a_const[np_seg]
         nm_Q = Q_minus_arr[nm_basis]
-        nm_A = a_const * nm_Q / sin_kd[nm_seg]
-        nm_B = a_const * nm_Q / (2.0 * cos_kd_2[nm_seg])
-        nm_C = -a_const * nm_Q / (2.0 * sin_kd_2[nm_seg])
+        nm_A = a_nm * nm_Q / sin_kd[nm_seg]
+        nm_B = a_nm * nm_Q / (2.0 * cos_kd_2[nm_seg])
+        nm_C = -a_nm * nm_Q / (2.0 * sin_kd_2[nm_seg])
 
         # N⁺ neighbour entries (Eqs 46-48).
         np_Q = Q_plus_arr[np_basis]
-        np_A = -a_const * np_Q / sin_kd[np_seg]
-        np_B = a_const * np_Q / (2.0 * cos_kd_2[np_seg])
-        np_C = a_const * np_Q / (2.0 * sin_kd_2[np_seg])
+        np_A = -a_np * np_Q / sin_kd[np_seg]
+        np_B = a_np * np_Q / (2.0 * cos_kd_2[np_seg])
+        np_C = a_np * np_Q / (2.0 * sin_kd_2[np_seg])
 
         # Concatenate the three blocks and sort by seg-target to get CSR.
         # Within-seg ordering is unconstrained — every downstream consumer
@@ -673,7 +723,7 @@ class SinusoidalSolver(_Cancelable):
             "C": all_C[order],
             "sigma": all_sigma[order],
         }
-        self._cached_basis = (geom, k, a, seg_view)
+        self._cached_basis = (geom, k, a_key, seg_view)
         return seg_view
 
     def _evaluate_basis_at_points(self, seg_view, eval_seg, eval_s, alpha):
@@ -761,12 +811,14 @@ class SinusoidalSolver(_Cancelable):
         70% bottleneck of single-k solves at N≳80); the pure-numpy
         formulation (`_field_components` + the tangential projection
         below) is kept as a reference / fallback when the accelerator
-        isn't available. The finite-ground image block bypasses this
-        method — see `_field_tensor_image_refl`, which applies the
-        Fresnel field dyad pre-projection through its own kernel
+        isn't available. The C++ kernel takes a single scalar radius, so
+        mixed per-wire radii also take the numpy path (stevenmburns/
+        momwire#147) until the kernel signature is ported. The
+        finite-ground image block bypasses this method — see
+        `_field_tensor_image_refl`, which applies the Fresnel field dyad
+        pre-projection through its own kernel
         (`sinusoidal_field_tensor_refl`).
         """
-        a = self.wire_radius
         seg_c = geom["seg_centers"]  # (N, 3) — observer centers
         seg_t = geom["seg_tangents"]  # (N, 3) — observer tangents
         seg_h = geom["seg_h"]  # (N,) full lengths
@@ -774,7 +826,7 @@ class SinusoidalSolver(_Cancelable):
         src_c = src_centers if src_centers is not None else seg_c
         src_t = src_tangents if src_tangents is not None else seg_t
 
-        if _HAVE_FIELD_TENSOR:
+        if _HAVE_FIELD_TENSOR and self._uniform_radius is not None:
             gx, gw = self._leggauss_cached(self.n_qp_const)
             return _acc.sinusoidal_field_tensor(
                 np.ascontiguousarray(seg_c, dtype=np.float64),
@@ -782,7 +834,7 @@ class SinusoidalSolver(_Cancelable):
                 np.ascontiguousarray(src_c, dtype=np.float64),
                 np.ascontiguousarray(src_t, dtype=np.float64),
                 np.ascontiguousarray(seg_h, dtype=np.float64),
-                float(a),
+                float(self._uniform_radius),
                 float(k),
                 float(self.eta),
                 np.ascontiguousarray(gx, dtype=np.float64),
@@ -822,7 +874,23 @@ class SinusoidalSolver(_Cancelable):
         tangential projection; `_field_tensor_image_refl` also needs
         rho_vec/rho_eval to resolve E·p̂ for the Fresnel field dyad.
         """
-        a = self.wire_radius
+        # Thin-wire surface offset: the OBSERVER segment's radius. NEC
+        # keeps the source current a filament on the source axis and
+        # enforces the boundary condition on the observing segment's
+        # surface — nec2c/necpp pass ai = segment_radius[i] (the segment
+        # the field is evaluated on) into EFLD, where it regularizes
+        # rh = sqrt(rho² + ai²). Self terms therefore use the wire's own
+        # radius, and mutual terms between wires of different radii use
+        # the OBSERVER wire's radius. (The opposite source-radius
+        # convention was tried first and refuted by the PyNEC oracle: the
+        # mixed-radius delta grew with mesh refinement near junctions.)
+        # Scalar on the uniform path; an (M, 1) per-observer column when
+        # mixed. Observers are always the real segments — image builds
+        # only mirror the SOURCE side — so this indexes geom directly.
+        if self._uniform_radius is not None:
+            a = self._uniform_radius
+        else:
+            a = self._seg_radius(geom)[:, None]
         seg_c = geom["seg_centers"]  # (N, 3) — observer centers
         seg_t = geom["seg_tangents"]  # (N, 3) — observer tangents
         seg_h = geom["seg_h"]  # (N,) full lengths
@@ -1058,7 +1126,7 @@ class SinusoidalSolver(_Cancelable):
         # alongside k before assembling).
         eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
 
-        if _HAVE_FIELD_TENSOR_REFL:
+        if _HAVE_FIELD_TENSOR_REFL and self._uniform_radius is not None:
             # Fused C++ path: Eqs 76-79 field components + the Fresnel
             # dyad projection in one pass, with rho_v/rho_h computed
             # in-kernel per pair from eps_t and cos_th (same principal-
@@ -1074,7 +1142,7 @@ class SinusoidalSolver(_Cancelable):
                 np.ascontiguousarray(src_c_img, dtype=np.float64),
                 np.ascontiguousarray(src_t_img, dtype=np.float64),
                 np.ascontiguousarray(seg_h, dtype=np.float64),
-                float(self.wire_radius),
+                float(self._uniform_radius),
                 float(k),
                 float(self.eta),
                 np.ascontiguousarray(gx, dtype=np.float64),
@@ -1284,7 +1352,7 @@ class SinusoidalSolver(_Cancelable):
         loading is switched off (NaN entries)."""
         return _wire_loading.series_impedance_per_wire(
             omega,
-            self.wire_radius,
+            self._radius_per_wire,
             self.wire_conductivity,
             self.insulation_radius,
             self.insulation_eps_r,
@@ -1296,6 +1364,10 @@ class SinusoidalSolver(_Cancelable):
         firsts = np.asarray(geom["wire_first"], dtype=np.int64)
         lasts = np.asarray(geom["wire_last"], dtype=np.int64)
         return np.repeat(np.arange(firsts.shape[0]), lasts - firsts + 1)
+
+    def _seg_radius(self, geom):
+        """(n_segs,) per-segment radius — each segment inherits its wire's."""
+        return self._radius_per_wire[self._wire_of_seg(geom)]
 
     def _apply_loading(self, G, geom, seg_view, k):
         """NEC's impedance boundary condition, in place; no-op when loading
