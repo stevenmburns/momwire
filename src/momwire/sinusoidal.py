@@ -488,6 +488,63 @@ class SinusoidalSolver(_Cancelable):
         nm_count = np.bincount(nm_basis, minlength=n_segs).astype(np.int64)
         np_count = np.bincount(np_basis, minlength=n_segs).astype(np.int64)
 
+        # Ground-junction flags (#151): a wire endpoint lying in an active
+        # ground plane is electrically connected to its own image — NEC2's
+        # "connected to ground" condition. Mark the end segment's plane
+        # side so _basis_coefs swaps the free-end X=0 branch for the
+        # interior branch with a self-image P-sum atom. end-1 (seg_l at
+        # the plane) is the N⁻ side, end-2 (seg_r) the N⁺ side.
+        ground_minus = np.zeros(n_segs, dtype=bool)
+        ground_plus = np.zeros(n_segs, dtype=bool)
+        gz = self.ground_z
+        if gz is not None:
+            junctioned = set()
+            for jn in self.junctions:
+                for w, end in jn:
+                    junctioned.add((w, end))
+            for w_idx, pl in enumerate(self.wires_polylines):
+                pl_arr = np.asarray(pl, dtype=np.float64)
+                length = float(
+                    np.sum(np.linalg.norm(np.diff(pl_arr, axis=0), axis=1))
+                )
+                tol = 1e-6 * max(length, 1e-30)
+                if float(pl_arr[:, 2].min()) < gz - tol:
+                    raise ValueError(
+                        f"wire {w_idx} dips below the ground plane "
+                        f"(min z = {pl_arr[:, 2].min():.6g} < ground_z = {gz:g})"
+                    )
+                start_touch = abs(pl_arr[0, 2] - gz) <= tol
+                end_touch = abs(pl_arr[-1, 2] - gz) <= tol
+                if start_touch and (w_idx, "start") not in junctioned:
+                    ground_minus[wire_first_seg[w_idx]] = True
+                if end_touch and (w_idx, "end") not in junctioned:
+                    ground_plus[wire_last_seg[w_idx]] = True
+            # A segment lying IN the plane (both ends at gz) is degenerate
+            # over a conducting ground — its image cancels it.
+            in_plane = (np.abs(seg_l[:, 2] - gz) + np.abs(seg_r[:, 2] - gz)) <= (
+                2e-6 * np.maximum(seg_h, 1e-30)
+            )
+            if in_plane.any():
+                raise ValueError(
+                    "segment(s) lying in the ground plane (both endpoints at "
+                    "ground_z) — degenerate over a conducting ground"
+                )
+            # Grounded junction: every member wire-end at the plane also
+            # connects to its own image, in addition to its real partners.
+            for jn in self.junctions:
+                w0, end0 = jn[0]
+                pl0 = np.asarray(self.wires_polylines[w0], dtype=np.float64)
+                pt = pl0[0] if end0 == "start" else pl0[-1]
+                length0 = float(
+                    np.sum(np.linalg.norm(np.diff(pl0, axis=0), axis=1))
+                )
+                if abs(pt[2] - gz) <= 1e-6 * max(length0, 1e-30):
+                    for w, end in jn:
+                        if end == "start":
+                            ground_minus[wire_first_seg[w]] = True
+                        else:
+                            ground_plus[wire_last_seg[w]] = True
+
         self._cached_geometry = {
             "seg_l": seg_l,
             "seg_r": seg_r,
@@ -507,6 +564,8 @@ class SinusoidalSolver(_Cancelable):
             "wire_last": wire_last_seg,
             "feed_seg": feed_seg,
             "feed_segs": feed_segs,
+            "ground_minus": ground_minus,
+            "ground_plus": ground_plus,
         }
         return self._cached_geometry
 
@@ -600,14 +659,28 @@ class SinusoidalSolver(_Cancelable):
         P_plus_arr = np.zeros(n_segs, dtype=np.float64)
         np.add.at(P_plus_arr, np_basis, -P_minus_atom[np_seg])
 
+        # Ground junction (#151): an end at the ground plane is connected
+        # to its own image — same length, same radius — so the plane side's
+        # P-sum gains the segment's own atom and the segment takes the
+        # interior (connected) branch instead of the free-end X=0 one. No
+        # entry lands in the nm/np extension tables: the image side's
+        # current is supplied by the ground image blocks, which mirror the
+        # whole real expansion.
+        ground_minus = geom["ground_minus"]
+        ground_plus = geom["ground_plus"]
+        if ground_minus.any():
+            P_minus_arr = P_minus_arr + np.where(ground_minus, P_minus_atom, 0.0)
+        if ground_plus.any():
+            P_plus_arr = P_plus_arr - np.where(ground_plus, P_minus_atom, 0.0)
+
         # Per-basis (A_i0, B_i0, C_i0, Q_minus, Q_plus) as N-vectors,
         # following Eqs 43-64. The 4-way branch on (has_minus, has_plus)
         # is masked: compute the interior formula everywhere, then patch
         # the rare end / isolated branches via boolean masks. For a
         # hentenna (closed loop) every segment is interior; for a dipole
         # the wire-tip segments hit only_minus / only_plus.
-        has_minus = nm_count > 0
-        has_plus = np_count > 0
+        has_minus = (nm_count > 0) | ground_minus
+        has_plus = (np_count > 0) | ground_plus
         both = has_minus & has_plus
 
         # Interior branch (Eqs 49-53). Compute everywhere using a_minus =
@@ -667,6 +740,29 @@ class SinusoidalSolver(_Cancelable):
             # A_i0 = -1 in every branch — no patch needed.
         # `both` mask is unused: the interior formula already lives there.
         del both
+
+        # Ground junction (#151), part 2: the connected-side EXTENSION.
+        # For a real neighbour the Q-scaled Eqs 43-48 shape lands on the
+        # neighbour segment; for a ground connection the "neighbour" is the
+        # segment's own image, and nec2c's tbf folds that extension back
+        # onto the segment itself with the sin term mirrored (s → −s, so
+        # B → −B; `segj.bx[jsnox] = -segj.bx[jsnox]` in tbf). The folded
+        # entry targets the same (basis, seg) pair as the self entry — and
+        # downstream scatter is assignment, not add — so merge it into the
+        # self coefficients. Basis + its image then forms the intended
+        # continuous through-plane current.
+        # (the ground "neighbour" is the segment itself, so the neighbour
+        # a-constant is its own — works for scalar and per-segment alike)
+        if ground_minus.any():
+            Qg = np.where(ground_minus, Q_minus_arr, 0.0)
+            A_i0_arr = A_i0_arr + a_const * Qg / sin_kd_safe
+            B_i0_arr = B_i0_arr - a_const * Qg / (2.0 * cos_kd_2)
+            C_i0_arr = C_i0_arr - a_const * Qg / (2.0 * sin_kd_2)
+        if ground_plus.any():
+            Qg = np.where(ground_plus, Q_plus_arr, 0.0)
+            A_i0_arr = A_i0_arr - a_const * Qg / sin_kd_safe
+            B_i0_arr = B_i0_arr - a_const * Qg / (2.0 * cos_kd_2)
+            C_i0_arr = C_i0_arr + a_const * Qg / (2.0 * sin_kd_2)
 
         # Build the flat entry arrays. Three blocks (self, N⁻, N⁺), each
         # produced with one set of vectorized array ops:
