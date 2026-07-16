@@ -32,6 +32,15 @@ and risks. Pick it up from here in a fresh session.
   Sommerfeld integrals + interpolation grids) is required.
 - **Target accuracy window: 0.1–0.5λ heights**, where refl-coef corrects most
   of the PEC-image error at essentially PEC-image cost.
+- **#153 study (2026-07-16) quantified the window's edges for the bspline
+  (mixed-potential) path**: vs PyNEC gn 0, |ΔΓ| ≈ 0.004 (mesh floor) for
+  h ≥ 0.15λ, 0.019 at 0.1λ, 0.127 at 0.05λ, diverging at contact — while
+  the field-based sinusoidal solver matches NEC's dyad exactly at every
+  height (|ΔΓ| ≈ 0.0005). Below the window, use
+  `ground_model="sommerfeld"` (both bases track NEC there, and it handles
+  ground contact since #151) or the sinusoidal basis. No Φ-mode constant
+  can fix the near field — the quasi-static image-charge interaction has
+  no plane-wave weight.
 
 ## What NEC IPERF=0 actually does
 
