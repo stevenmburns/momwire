@@ -303,6 +303,15 @@ class BSplineSolver(_Cancelable):
         # (today's behavior). A complex ε̃ or (eps_r, sigma) tuple → Fresnel-
         # weighted image; needs ground_z. `ground_phi_mode` picks the image-
         # charge (Φ-term) weighting candidate — see _ground_refl.PHI_MODES.
+        #
+        # Validity window (#153): this mixed-potential refl-coef path is
+        # accurate for wires 0.1–0.5λ above the plane — the Φ-term has no
+        # exact Fresnel weight, and its θ=0 approximation degrades in the
+        # quasi-static near field (|ΔΓ| ~0.02 at 0.1λ, ~0.13 at 0.05λ,
+        # worse at contact). Below ~0.1λ or for ground-touching wires,
+        # prefer `ground_model="sommerfeld"` (exact everywhere, contact-
+        # capable since #151) or the field-based SinusoidalSolver, which
+        # applies NEC's dyad exactly at any height.
         if ground_eps is not None and ground_z is None:
             raise ValueError("ground_eps requires ground_z to be set")
         if ground_phi_mode not in _ground_refl.PHI_MODES:
