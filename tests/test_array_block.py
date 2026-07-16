@@ -494,7 +494,7 @@ def test_ground_array_block_matvec_matches_dense():
     real+image folded into each coupling block) reproduces the dense PEC Z @ x."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
     sim = _ground_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16)
     Z = _dense_Z_ground(sim)
     AB = sim.build_array_blocks(tol=1e-7)
@@ -508,7 +508,7 @@ def test_ground_compute_y_matrix_matches_dense():
     """ArrayBlock + PEC ground matches the dense bspline + PEC ground Y."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
     ya = _ground_array(
         offsets, [half] * 4, ArrayBlockSolver, nsegs=16
     ).compute_y_matrix()
@@ -520,7 +520,7 @@ def test_ground_compute_impedance_matches_dense():
     """ArrayBlock + PEC ground matches the dense bspline + PEC ground impedance."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-6.0, 3.0), (6.0, 3.0)]
+    offsets = [(-6.0, 6.0), (6.0, 6.0)]
     za = np.atleast_1d(
         _ground_array(offsets, [half] * 2, ArrayBlockSolver).compute_impedance()[0]
     )
@@ -537,7 +537,7 @@ def test_ground_iteration_count_near_free_space():
     preconditioner remains near-exact)."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
     free = _array_sim([(y, 0.0) for y, _z in offsets], [half] * 4, nsegs=16)
     free.compute_y_matrix()
     grnd = _ground_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16)
@@ -551,7 +551,7 @@ def test_ground_single_height_grid_reuses_one_block_per_shape():
     coupling reuse still collapses the pairs (the height insight)."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
     sim = _ground_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16)
     AB = sim.build_array_blocks()
     assert len(AB.shape_blocks) == 1  # one shape, one height
@@ -621,7 +621,7 @@ def test_ground_mixed_height_refines_blocks_and_stays_correct():
     still matches the dense PEC solve."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-6.0, 3.0), (6.0, 3.0), (-6.0, 9.0), (6.0, 9.0)]
+    offsets = [(-6.0, 6.0), (6.0, 6.0), (-6.0, 9.0), (6.0, 9.0)]
     sim = _ground_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=14)
     AB = sim.build_array_blocks()
     # one geometric shape, but two heights ⇒ two block-shape classes
@@ -638,7 +638,7 @@ def test_ground_and_free_self_blocks_do_not_alias():
     a grounded build of the same geometry never reuse each other's self-block."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-6.0, 3.0), (6.0, 3.0)]
+    offsets = [(-6.0, 6.0), (6.0, 6.0)]
     free = _array_sim([(y, z) for y, z in offsets], [half] * 2, nsegs=14)
     free.build_array_blocks()
     grnd = _ground_array(offsets, [half] * 2, ArrayBlockSolver, nsegs=14)
@@ -682,7 +682,7 @@ def test_ground_eps_array_block_matvec_matches_dense():
     dense refl-coef Z @ x."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
     sim = _ground_eps_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16)
     Z = _dense_Z_ground_eps(sim)
     AB = sim.build_array_blocks(tol=1e-7)
@@ -696,7 +696,7 @@ def test_ground_eps_compute_impedance_matches_dense():
     """ArrayBlock + ground_eps matches the dense bspline + ground_eps Z."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-6.0, 3.0), (6.0, 3.0)]
+    offsets = [(-6.0, 6.0), (6.0, 6.0)]
     za = np.atleast_1d(
         _ground_eps_array(offsets, [half] * 2, ArrayBlockSolver).compute_impedance()[0]
     )
@@ -712,7 +712,7 @@ def test_ground_eps_single_height_grid_keeps_block_reuse():
     coupling ACA once per unique displacement."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-9.0, 3.0), (-3.0, 3.0), (3.0, 3.0), (9.0, 3.0)]
+    offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
     sim = _ground_eps_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16)
     AB = sim.build_array_blocks()
     assert len(AB.shape_blocks) == 1  # one shape, one height
@@ -725,7 +725,7 @@ def test_ground_eps_and_pec_blocks_never_alias_in_module_caches():
     constants + phi mode)."""
     reset_array_caches()
     half = 0.962 * 22 / 4
-    offsets = [(-6.0, 3.0), (6.0, 3.0)]
+    offsets = [(-6.0, 6.0), (6.0, 6.0)]
     z_pec = np.atleast_1d(
         _ground_array(offsets, [half] * 2, ArrayBlockSolver).compute_impedance()[0]
     )

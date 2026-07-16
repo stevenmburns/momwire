@@ -49,8 +49,9 @@ kernel keeps serving it — plus (b) a remainder tensor from the grid.
 - [x] Constructor: `ground_model="refl-coef"` (default) / `"sommerfeld"`
       + `n_qp_sommerfeld=3`, validation mirroring bspline (model value
       set; sommerfeld requires `ground_eps`; wires strictly above
-      `ground_z` checked at assembly). Default preserves every existing
-      result bit-exactly. De-stale the module-docstring scope list.
+      `ground_z` checked at assembly — relaxed to at-or-above by #151).
+      Default preserves every existing result bit-exactly. De-stale the
+      module-docstring scope list.
 - [x] Remainder tensor S[3, M, N]: for source segment n, GL nodes z'_q
       along the segment (± half-length, `n_qp_sommerfeld` points);
       source shapes {1, sin(k z'), cos(k z')} at the nodes; F dyad per

@@ -661,9 +661,14 @@ class HMatrixSolver(BSplineSolver):
         hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
         r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
         zmin = min(seg_l[:, 2].min(), seg_r[:, 2].min()) - gz
-        if zmin <= 0.0:
+        # Touching (zmin == 0) is allowed since #151: the ground-junction
+        # basis handles contact, and the remainder quadrature samples
+        # Gauss nodes strictly interior to segments, so z+z' > 0 holds
+        # even for a wire ending in the plane. Only genuinely submerged
+        # geometry is rejected (already caught at geometry build too).
+        if zmin < -1e-12:
             raise ValueError(
-                "ground_model='sommerfeld' requires every wire strictly "
+                "ground_model='sommerfeld' requires every wire at or "
                 f"above ground_z (min height above plane: {zmin:.3g})"
             )
         cached = {"nodes": nodes, "W": W, "q": q, "r1_max": r1_max}

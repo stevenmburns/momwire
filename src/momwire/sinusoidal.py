@@ -26,6 +26,13 @@ Scope (deliberately narrow):
     constant-radius observer-row run at a time (`_radius_runs`).
   * Free wire ends use the X_i = 0 zero-current condition (the more
     physical J_1/J_0 end-cap condition is negligible for thin wires).
+    A wire end lying IN an active ground plane is instead ground-
+    connected (#151): NEC's tbf ground path — the plane side's P-sum
+    gains the segment's own atom and the image-side extension folds
+    back onto the segment with the sin term mirrored, so basis + image
+    carry current continuously through the plane. Junctions AT the
+    plane follow NEC's conect(): each member is ground-connected
+    independently, with no inter-wire junction entries.
 """
 
 import numpy as np
@@ -415,9 +422,7 @@ class SinusoidalSolver(_Cancelable):
                 w0, end0 = jn[0]
                 pl0 = np.asarray(self.wires_polylines[w0], dtype=np.float64)
                 pt = pl0[0] if end0 == "start" else pl0[-1]
-                length0 = float(
-                    np.sum(np.linalg.norm(np.diff(pl0, axis=0), axis=1))
-                )
+                length0 = float(np.sum(np.linalg.norm(np.diff(pl0, axis=0), axis=1)))
                 if abs(pt[2] - gz) <= 1e-6 * max(length0, 1e-30):
                     grounded_junctions.add(j_i)
 
@@ -525,9 +530,7 @@ class SinusoidalSolver(_Cancelable):
                     junctioned.add((w, end))
             for w_idx, pl in enumerate(self.wires_polylines):
                 pl_arr = np.asarray(pl, dtype=np.float64)
-                length = float(
-                    np.sum(np.linalg.norm(np.diff(pl_arr, axis=0), axis=1))
-                )
+                length = float(np.sum(np.linalg.norm(np.diff(pl_arr, axis=0), axis=1)))
                 tol = 1e-6 * max(length, 1e-30)
                 if float(pl_arr[:, 2].min()) < gz - tol:
                     raise ValueError(
@@ -1349,9 +1352,14 @@ class SinusoidalSolver(_Cancelable):
         h_half = 0.5 * geom["seg_h"]  # (N,)
         N = geom["n_segs"]
         zmin = min(seg_l[:, 2].min(), seg_r[:, 2].min()) - gz
-        if zmin <= 0.0:
+        # Touching (zmin == 0) is allowed since #151: the ground-junction
+        # basis handles contact, and the remainder quadrature samples
+        # Gauss nodes strictly interior to segments, so z+z' > 0 holds
+        # even for a wire ending in the plane. Only genuinely submerged
+        # geometry is rejected (already caught at geometry build too).
+        if zmin < -1e-12:
             raise ValueError(
-                "ground_model='sommerfeld' requires every wire strictly "
+                "ground_model='sommerfeld' requires every wire at or "
                 f"above ground_z (min height above plane: {zmin:.3g})"
             )
 

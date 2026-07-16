@@ -19,6 +19,10 @@ Scope:
   * delta-gap "applied-E" source on one feed wire
   * degree d ∈ {1, 2}  (d=1 reproduces the tent basis up to feed convention)
   * K-wire junctions with KCL constraint (Σ outflow currents = 0)
+  * ground junctions (#151): a wire end at `ground_z` keeps its value-1
+    boundary basis (end current is a dof; the image is the return path);
+    a junction at the plane keeps its directional bases but drops the
+    KCL row (current may flow into ground)
   * ground: PEC image (`ground_z`), NEC-gn 0-style reflection-coefficient
     finite ground (`ground_eps`, docs/refl-coef-ground-plan.md), and
     NEC-gn 2-style Sommerfeld finite ground (`ground_model="sommerfeld"`,
@@ -723,9 +727,22 @@ class BSplineSolver(_Cancelable):
         if gz is not None:
             for w_idx, pl in enumerate(self.wires_polylines):
                 tol = self._ground_touch_tol(pl)
-                if start_status[w_idx] == "free" and abs(pl[0][2] - gz) <= tol:
+                pl_arr = np.asarray(pl, dtype=np.float64)
+                if float(pl_arr[:, 2].min()) < gz - tol:
+                    raise ValueError(
+                        f"wire {w_idx} dips below the ground plane "
+                        f"(min z = {pl_arr[:, 2].min():.6g} < ground_z = {gz:g})"
+                    )
+                z_at = np.abs(pl_arr[:, 2] - gz) <= tol
+                if np.any(z_at[:-1] & z_at[1:]):
+                    raise ValueError(
+                        f"wire {w_idx} has an edge lying in the ground plane "
+                        "(both endpoints at ground_z) — degenerate over a "
+                        "conducting ground"
+                    )
+                if start_status[w_idx] == "free" and z_at[0]:
                     start_status[w_idx] = "ground"
-                if end_status[w_idx] == "free" and abs(pl[-1][2] - gz) <= tol:
+                if end_status[w_idx] == "free" and z_at[-1]:
                     end_status[w_idx] = "ground"
         return start_status, end_status
 
@@ -1150,9 +1167,14 @@ class BSplineSolver(_Cancelable):
         h = geom["h_per_seg"]
         n_seg = seg_l.shape[0]
         zmin = min(seg_l[:, 2].min(), seg_r[:, 2].min()) - gz
-        if zmin <= 0.0:
+        # Touching (zmin == 0) is allowed since #151: the ground-junction
+        # basis handles contact, and the remainder quadrature samples
+        # Gauss nodes strictly interior to segments, so z+z' > 0 holds
+        # even for a wire ending in the plane. Only genuinely submerged
+        # geometry is rejected (already caught at geometry build too).
+        if zmin < -1e-12:
             raise ValueError(
-                "ground_model='sommerfeld' requires every wire strictly "
+                "ground_model='sommerfeld' requires every wire at or "
                 f"above ground_z (min height above plane: {zmin:.3g})"
             )
 

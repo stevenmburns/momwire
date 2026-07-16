@@ -179,9 +179,12 @@ BSplineSolver(..., ground_z=0.0,
   no Φ knob — the image coefficient is exact).
 - Same `ground_eps` value forms (complex ε̃ or `(eps_r, sigma)`), via the
   existing `eps_tilde`.
-- Restriction, same as NEC: all wire z strictly above `ground_z`
+- ~~Restriction, same as NEC: all wire z strictly above `ground_z`
   (z + z′ > 0; a wire touching ground needs a ground-stake model neither
-  code has).
+  code has).~~ **Lifted by #151**: wire ends may touch `ground_z` (the
+  ground-junction basis handles contact; the remainder quadrature's
+  Gauss nodes are strictly interior to segments, so z + z′ > 0 still
+  holds pointwise). Only geometry *below* the plane is rejected.
 
 ## Phases
 
@@ -306,7 +309,7 @@ BSplineSolver(..., ground_z=0.0,
 - [x] `ground_model` kwarg (+ `n_qp_sommerfeld=3`) with validation;
       default `"refl-coef"` keeps v0.5.0 behavior bit-identical
       (guarded by test). Sommerfeld additionally validates every wire
-      strictly above `ground_z`.
+      strictly above `ground_z` (relaxed to at-or-above by #151).
 - [x] Image part: `_image_Z_weighted` factored out of `_image_Z_refl`
       (same C++ kernel + numpy fallback, refl-coef suite still green);
       the sommerfeld path calls it with constant tables w_A = C₂·td_img,
