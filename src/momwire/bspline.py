@@ -699,9 +699,16 @@ class BSplineSolver(_Cancelable):
     # ------------------------------------------------------------------
 
     def _wire_endpoint_status(self):
-        """For each wire, return ("free" | junction_idx, "free" | junction_idx)
-        for its (start, end) — the index of the junction connecting it, or
-        "free" if the endpoint isn't junctioned.
+        """For each wire, return the (start, end) endpoint condition:
+        "free", "ground", or the index of the junction connecting it.
+
+        "ground" marks an un-junctioned endpoint lying in an active ground
+        plane (|z − ground_z| ≤ 1e-6 of the wire's length): the wire is
+        electrically connected to ground, so its end current must NOT be
+        pinned to zero — the image supplies the return path/continuation
+        (issue #151). A *junctioned* endpoint at ground keeps its junction
+        index; the grounded-junction handling (KCL row dropped — current may
+        flow into ground) lives in `_grounded_junctions`.
         """
         n_w = len(self.wires_polylines)
         start_status = ["free"] * n_w
@@ -712,7 +719,43 @@ class BSplineSolver(_Cancelable):
                     start_status[w] = j_idx
                 else:
                     end_status[w] = j_idx
+        gz = self.ground_z
+        if gz is not None:
+            for w_idx, pl in enumerate(self.wires_polylines):
+                tol = self._ground_touch_tol(pl)
+                if start_status[w_idx] == "free" and abs(pl[0][2] - gz) <= tol:
+                    start_status[w_idx] = "ground"
+                if end_status[w_idx] == "free" and abs(pl[-1][2] - gz) <= tol:
+                    end_status[w_idx] = "ground"
         return start_status, end_status
+
+    def _ground_touch_tol(self, polyline):
+        """Snap distance for "this endpoint touches the ground plane":
+        1e-6 of the wire's polyline length — loose enough for deck-import
+        float noise at z=0, far tighter than any deliberate clearance (a
+        1 mm stand-off on a 10 m vertical is 100× the tolerance)."""
+        pl = np.asarray(polyline, dtype=np.float64)
+        length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
+        return 1e-6 * max(length, 1e-30)
+
+    def _grounded_junctions(self):
+        """Indices of junctions whose shared point lies in the ground plane.
+
+        Their KCL row (Σ signed outflows = 0) is dropped: at a grounded
+        node current may flow into the ground stake (completed by the
+        image), so enforcing closure among the real wires alone would be
+        wrong physics."""
+        gz = self.ground_z
+        if gz is None or not self.junctions:
+            return frozenset()
+        grounded = set()
+        for j_idx, jw in enumerate(self.junctions):
+            w, end = jw[0]
+            pl = self.wires_polylines[w]
+            pt = pl[0] if end == "start" else pl[-1]
+            if abs(pt[2] - gz) <= self._ground_touch_tol(pl):
+                grounded.add(j_idx)
+        return frozenset(grounded)
 
     # ------------------------------------------------------------------
     # Basis polynomial extraction
@@ -758,6 +801,9 @@ class BSplineSolver(_Cancelable):
             self._geometry_cache_key(),
             self.degree,
             tuple(tuple((w, e) for (w, e) in j) for j in self.junctions),
+            # Endpoint conditions depend on the ground plane (ground ends /
+            # grounded junctions, #151); geometry alone no longer keys them.
+            self.ground_z,
         )
         cached_basis = _BASIS_POLY_CACHE.get(basis_key)
         if cached_basis is not None:
@@ -797,6 +843,13 @@ class BSplineSolver(_Cancelable):
             # Start boundary basis (B_0)
             if start_status[w_idx] == "free":
                 pass  # drop
+            elif start_status[w_idx] == "ground":
+                # Ground junction: keep the value-1 end basis so the end
+                # current is a real dof — its image (integrated by the
+                # ground blocks like every basis's) is the continuation
+                # through the plane. No KCL partner: the image IS the
+                # return path.
+                kept.append((0, "gnd", None, "start"))
             else:
                 kept.append((0, "dir", start_status[w_idx], "start"))
             # Truly interior bases
@@ -805,6 +858,8 @@ class BSplineSolver(_Cancelable):
             # End boundary basis (B_{n_basis_w - 1})
             if end_status[w_idx] == "free":
                 pass  # drop
+            elif end_status[w_idx] == "ground":
+                kept.append((n_basis_w - 1, "gnd", None, "end"))
             else:
                 kept.append((n_basis_w - 1, "dir", end_status[w_idx], "end"))
 
@@ -880,11 +935,14 @@ class BSplineSolver(_Cancelable):
         )
         n_basis_total = supp_seg.shape[0]
 
-        n_junctions = len(self.junctions)
-        kcl_A = np.zeros((n_junctions, n_basis_total), dtype=np.float64)
-        for j_idx, dirs in junction_dirs.items():
-            for m_g, sign in dirs:
-                kcl_A[j_idx, m_g] = sign
+        # Grounded junctions keep their directional bases but lose the KCL
+        # closure row — current may leave through the ground image (#151).
+        grounded = self._grounded_junctions()
+        kcl_rows = [j for j in range(len(self.junctions)) if j not in grounded]
+        kcl_A = np.zeros((len(kcl_rows), n_basis_total), dtype=np.float64)
+        for row, j_idx in enumerate(kcl_rows):
+            for m_g, sign in junction_dirs[j_idx]:
+                kcl_A[row, m_g] = sign
 
         result = (supp_seg, polys, kcl_A, wire_knots, wire_basis_global)
         if cached_geom is geom:
