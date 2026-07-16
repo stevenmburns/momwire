@@ -68,8 +68,49 @@ Z, _ = solver.compute_impedance()
 print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")   # ~93 +5j — up from 70 in free space
 ```
 
-One argument, one extra kernel term, and the dipole knows there's a floor. But
-the earth is not a perfect conductor — it's dirt, imperfectly reflecting and
+One argument, one extra kernel term, and the dipole knows there's a floor.
+
+## The grounded end
+
+Everything above kept the antenna *clear* of the plane. But the oldest antenna
+over ground doesn't hover — it **touches**: a quarter-wave vertical driven
+against the earth itself. And here the mirror pays out its famous dividend,
+because a *vertical* current images **unreversed** (flip the geometry across
+the plane and the arrow still points the same way). The image doesn't fight the
+wire; it *finishes* it. Monopole + mirror twin = a half-wave dipole, of which
+you only had to build half.
+
+That poses a boundary-condition question the free-space chapters never faced.
+A free wire end pins its current to zero — charge has nowhere to go. But a
+wire end *in* the plane is not an end at all: the current flows through into
+the image. So the solver must treat a ground-touching end as a **junction with
+its own reflection** — the end current stays a real unknown, and the image
+supplies the return path. (momwire does exactly this whenever a wire end lies
+in the `ground_z` plane; pinning it to zero instead would strangle the feed
+and report a monopole as a few-picofarad capacitor.)
+
+```python
+import numpy as np
+from momwire import BSplineSolver
+
+# quarter-wave vertical, base ON the perfect ground at z = 0
+wire = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.236]])
+solver = BSplineSolver(wires=[wire], nsegs=21, wavelength=22.0, wire_radius=0.0005,
+                       degree=2, ground_z=0.0,
+                       feed_wire_index=0, feed_arclength=0.1)  # drive the base
+Z, _ = solver.compute_impedance()
+print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")   # ~34 -17j
+```
+
+Solve the equivalent free-space dipole (double the wire, feed the middle) and
+you get twice that — `67 -35j` — to the last digit that matters. The plane did
+half the work: **half the antenna, half the impedance**, which is why the
+textbook monopole reads 36 Ω where the textbook dipole reads 73. The current
+profile tells the same story — maximum at the base where the free-end rule
+would have forced a zero, tapering to nothing at the tip, exactly the top half
+of a dipole's hump.
+
+But the earth is not a perfect conductor — it's dirt, imperfectly reflecting and
 quietly absorbing. The mirror is real but *dim*, and its dimness is complex and
 angle-dependent. [Chapter 9](/act-3/real-dirt/) replaces the perfect image with the next honest
 approximation: the Fresnel reflection coefficient.
