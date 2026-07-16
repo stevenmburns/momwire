@@ -402,6 +402,25 @@ class SinusoidalSolver(_Cancelable):
                 np_seg_chunks.append(np.arange(first + 1, last + 1, dtype=np.int64))
                 np_sigma_chunks.append(np.ones(m, dtype=np.int8))
 
+        # Junctions AT the ground plane (#151): NEC's conect() connects a
+        # ground-touching end to ground ONLY — it never searches for real
+        # partners there (`icon1[i] = i; jump = TRUE` in nec2c). So a
+        # grounded junction emits NO inter-wire neighbour entries: each
+        # member is independently ground-connected (self-image basis), and
+        # the members couple through the plane via their images.
+        grounded_junctions = set()
+        gz = self.ground_z
+        if gz is not None:
+            for j_i, jn in enumerate(self.junctions):
+                w0, end0 = jn[0]
+                pl0 = np.asarray(self.wires_polylines[w0], dtype=np.float64)
+                pt = pl0[0] if end0 == "start" else pl0[-1]
+                length0 = float(
+                    np.sum(np.linalg.norm(np.diff(pl0, axis=0), axis=1))
+                )
+                if abs(pt[2] - gz) <= 1e-6 * max(length0, 1e-30):
+                    grounded_junctions.add(j_i)
+
         # Junction neighbours: small Python loop (junctions count is O(1)
         # in geometry size — 2-4 junctions on typical antennas, with K=2-6
         # members each producing K(K-1) edges). Append to per-junction
@@ -412,7 +431,9 @@ class SinusoidalSolver(_Cancelable):
         junc_np_basis: list[int] = []
         junc_np_seg: list[int] = []
         junc_np_sigma: list[int] = []
-        for jn in self.junctions:
+        for j_i, jn in enumerate(self.junctions):
+            if j_i in grounded_junctions:
+                continue
             # (segment_idx, which_end_of_segment_is_at_node) for every
             # wire-end at this junction.
             members = []
@@ -529,21 +550,16 @@ class SinusoidalSolver(_Cancelable):
                     "segment(s) lying in the ground plane (both endpoints at "
                     "ground_z) — degenerate over a conducting ground"
                 )
-            # Grounded junction: every member wire-end at the plane also
-            # connects to its own image, in addition to its real partners.
-            for jn in self.junctions:
-                w0, end0 = jn[0]
-                pl0 = np.asarray(self.wires_polylines[w0], dtype=np.float64)
-                pt = pl0[0] if end0 == "start" else pl0[-1]
-                length0 = float(
-                    np.sum(np.linalg.norm(np.diff(pl0, axis=0), axis=1))
-                )
-                if abs(pt[2] - gz) <= 1e-6 * max(length0, 1e-30):
-                    for w, end in jn:
-                        if end == "start":
-                            ground_minus[wire_first_seg[w]] = True
-                        else:
-                            ground_plus[wire_last_seg[w]] = True
+            # Grounded junction: per NEC's conect(), each member wire-end
+            # is ground-connected INSTEAD of inter-connected (its junction
+            # entries were skipped above) — the members couple through
+            # their images.
+            for j_i in grounded_junctions:
+                for w, end in self.junctions[j_i]:
+                    if end == "start":
+                        ground_minus[wire_first_seg[w]] = True
+                    else:
+                        ground_plus[wire_last_seg[w]] = True
 
         self._cached_geometry = {
             "seg_l": seg_l,

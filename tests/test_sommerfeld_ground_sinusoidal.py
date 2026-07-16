@@ -67,7 +67,9 @@ def test_wires_below_ground_rejected():
     kw = dict(GEOMS[("dipole", 0.2)])
     z_top = max(p[2] for wire in kw["wires"] for p in wire)
     s = SinusoidalSolver(**kw, ground_z=z_top + 1.0, **SOMM)
-    with pytest.raises(ValueError, match="strictly above"):
+    # Rejected at geometry build since #151 (for every ground model, not
+    # just Sommerfeld — a wire below the plane is never valid).
+    with pytest.raises(ValueError, match="below the ground plane"):
         s.compute_impedance()
 
 
