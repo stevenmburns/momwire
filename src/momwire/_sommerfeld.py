@@ -39,12 +39,35 @@ is applied with ω = k₂c by default.
 """
 
 import math
+import os
 
 import numpy as np
 from scipy.special import hankel2, jv
 
 from ._accel import acc as _acc
 from ._cancel import SolveAborted
+
+# Far-pair grid-extent cap, in wavelengths (issue #157). The interpolation
+# grid's radius `r1_max` is sized to the geometry's largest image-point
+# distance, and grid-fill cost grows ~quadratically in that radius (both the
+# radial and, near grazing, the theta node counts scale with it). A wire
+# parked hundreds of wavelengths away — the NEC TL-anchor idiom, or any
+# genuinely large structure over real ground (rhombics, long-wire arrays) —
+# would make construction do millions of oscillatory Sommerfeld integrals and
+# effectively hang. Capping the radius bounds that cost: beyond the cap the
+# smooth remainder g·surf is a negligible ~1/R1 tail (the space wave, carried
+# by the separate reflection-coefficient/image term, dominates and decays no
+# faster), so `proj_one`'s existing r1 -> r1_max clamp — g keeps the true
+# distance, only the slowly-varying surface amplitude freezes at the cap — is
+# an accurate, bounded stand-in for the true far interaction. The 15-lambda
+# default is calibrated: the remainder is empirically negligible beyond
+# ~3-4 lambda (a 6-lambda long wire, two dipoles 8 lambda apart, and a
+# 171-lambda TL anchor over finite ground all give bit-identical impedance
+# for every cap >= ~8 lambda vs a 25-lambda grid), so 15 lambda leaves ~4x
+# margin and grids any real HF-over-ground structure exactly while bounding
+# the pathological remote-wire fill to a few seconds. Overridable via the
+# environment for validation/benchmarking.
+_SOMM_R1_CAP_LAMBDA = float(os.environ.get("MOMWIRE_SOMM_R1_CAP_LAMBDA") or "15.0")
 
 _C_LIGHT = 299792458.0
 _MU0 = 4e-7 * np.pi
@@ -499,7 +522,9 @@ class SommerfeldGrid:
         self.omega = k2 * _C_LIGHT if omega is None else float(omega)
         self.mu = float(mu)
         lam = 2.0 * np.pi / self.k2
-        self.r1_max = max(float(r1_max), 0.35 * lam)
+        # Clamp to [0.35 lambda, cap]: never smaller than the near grid, never
+        # larger than the far-pair cap (issue #157) that bounds fill cost.
+        self.r1_max = min(max(float(r1_max), 0.35 * lam), _SOMM_R1_CAP_LAMBDA * lam)
 
         k1 = self.k2 * np.sqrt(self.eps_t)
         if k1.imag > 0:
@@ -583,8 +608,11 @@ class SommerfeldGrid:
         r_f = r_b.ravel()
         th_f = np.clip(th_b.ravel(), 0.0, 0.5 * np.pi)
 
-        if np.any(r_f < 0.0) or np.any(r_f > self.r1_max * (1.0 + 1e-9) + 1e-12):
-            raise ValueError("query R1 outside [0, r1_max] of this grid")
+        # A negative R1 is a genuine bug; an R1 past r1_max is now expected —
+        # a far pair beyond the grid cap (issue #157). Clamp it, matching the
+        # C++ proj_one path (g keeps the true distance, surf freezes at r1_max).
+        if np.any(r_f < 0.0):
+            raise ValueError("query R1 must be non-negative")
         r_f = np.minimum(r_f, self.r1_max)
 
         r_break = self._regions[1]["r0"]
@@ -747,7 +775,11 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
     of the constructor before the cache insert, so no partial grid is
     ever cached.
     """
-    r1b = _somm_r1_bucket(float(r1_max), float(k2))
+    # Cap before bucketing so every geometry beyond the cap keys to the same
+    # (capped) grid instead of minting a distinct oversized cache entry (#157).
+    lam = 2.0 * np.pi / float(k2)
+    r1_capped = min(float(r1_max), _SOMM_R1_CAP_LAMBDA * lam)
+    r1b = _somm_r1_bucket(r1_capped, float(k2))
     key = (complex(eps_t), float(k2), r1b, float(omega), float(mu))
     grid = _GRID_CACHE.get(key)
     if grid is None:
