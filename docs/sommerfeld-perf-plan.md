@@ -352,6 +352,46 @@ proportional wins across the matrix. OpenMP across cores on top of that.
 - [ ] Full sommerfeld suite green; golden gn 2 gates unchanged within
       their 1.3× headroom.
 
+## Phase 5 — far-pair grid-extent cap (issue #157) — **LANDED**
+
+Phase 2/3's cost model assumed the geometry-sized grid is always cheap
+("even a 20 λ grid is a few-thousand-node fill: trivial"). That holds to a
+couple tens of λ, but the region-2 θ spacing is keyed to the grid extent
+(`_sommerfeld.py`, `dth2_target = deg(0.07 λ / r1_max)`), so the node count
+grows ~**quadratically**, not linearly, once r1_max is large: a wire parked
+hundreds of λ away — the NEC TL-anchor idiom, or a rhombic/long-wire array
+over real ground — drives r1_max to 100–500 λ and the fill to millions of
+oscillatory Sommerfeld integrals, i.e. an effective hang (a 52-seg problem
+that otherwise solves in 1.3 s runs > 300 s).
+
+Fix: cap `r1_max` at `_SOMM_R1_CAP_LAMBDA` (15 λ) in `SommerfeldGrid` and
+`get_grid`. Beyond the cap, `proj_one`'s existing r1 → r1_max clamp stands
+in (the free-space factor g = e^{−jkR₁}/R₁ keeps the *true* distance, only
+the slowly-varying surface amplitude freezes at the cap); the Python
+`grid.eval` guard now clamps to match instead of raising. No C++ change.
+
+Why this is **not** the rejected Phase 2 (cap at ~1 λ + extrapolate):
+
+- Phase 2 tried to *extrapolate* the surfaces past the grid with a smooth
+  A(θ)+B(θ)/R₁ model and failed — the lateral-wave content oscillates at
+  the k₁−k₂ beat, so relative surface error *grows* with R₁. Phase 5 does
+  not model the far surfaces at all; it asserts their *contribution* is
+  negligible and freezes it.
+- The cap is 15 λ, not 1 λ, so every real structure keeps its full
+  geometry-sized grid — the yagi's >1.2 λ boom (`test_yagi_tracks_gn2_
+  large_r1`, 0.98 Ω) is untouched, and Phase 2's reason for keeping the
+  geometry-sized grid is preserved intact.
+
+Calibration (finite ground, sinusoidal vs nec2c): a 6 λ long wire, two
+dipoles 8 λ apart, and a 171 λ TL anchor all give **bit-identical**
+impedance for every cap ≥ ~8 λ vs a 25 λ grid; the remainder is
+empirically negligible beyond ~3–4 λ. 15 λ leaves ~4× margin and bounds
+the pathological fill to a few seconds (cached). The residual vs nec2c is
+the pre-existing ground-model floor (cap-independent, matches the issue's
+own control values). Overridable via `MOMWIRE_SOMM_R1_CAP_LAMBDA` for
+benchmarking. Regression: `test_grid_r1_max_is_capped`,
+`test_remote_wire_stays_bounded_and_irrelevant`.
+
 ## Non-goals / notes
 
 - Accuracy is still not traded away: grid rtol stays 1e-6 and the 4-point

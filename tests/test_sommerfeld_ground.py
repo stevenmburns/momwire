@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from momwire import ArrayBlockSolver, BSplineSolver, HMatrixSolver
-from momwire import _ground_refl
+from momwire import _ground_refl, _sommerfeld
 
 from fixtures_refl_coef_geoms import GEOMS
 from golden_refl_coef_ground import GOLDEN
@@ -67,6 +67,39 @@ def test_default_model_is_refl_coef():
         "dipole", 0.2, ground_eps=(10.0, 0.002), ground_model="refl-coef"
     )
     assert z_default == z_explicit
+
+
+# ---------------------------------------------------------------------------
+# Far-pair grid cap (issue #157)
+# ---------------------------------------------------------------------------
+
+
+def test_remote_wire_stays_bounded_and_irrelevant(monkeypatch):
+    """A 1-segment wire parked ~150 wavelengths from a dipole — the NEC
+    TL-anchor idiom, and any large structure over real ground (issue #157) —
+    used to size the Sommerfeld grid to hundreds of wavelengths and hang the
+    fill. With the r1_max cap the solve completes, and the electrically
+    irrelevant far wire leaves the driven impedance essentially unchanged.
+    (Completion itself is the no-hang guard: pre-cap this did not return.)
+
+    The cap is knocked down to a few wavelengths here so the test builds a
+    small grid quickly; the mechanism (far geometry -> capped grid -> bounded
+    fill) is identical at the production default, which the grid unit test
+    pins."""
+    monkeypatch.setattr(_sommerfeld, "_SOMM_R1_CAP_LAMBDA", 4.0)
+    _sommerfeld._GRID_CACHE.clear()  # don't reuse a grid built at another cap
+    base = dict(GEOMS[("dipole", 0.2)])
+    lam = base["wavelength"]
+    z_ctrl, _ = BSplineSolver(**base, ground_z=0.0, **SOMM).compute_impedance()
+
+    h = base["wires"][0][0][2]  # dipole height above the plane
+    d = 150.0 * lam
+    anchored = dict(base)
+    anchored["wires"] = base["wires"] + [[[d, d, h], [d, d + 0.01, h]]]
+    anchored["n_per_edge_per_wire"] = base["n_per_edge_per_wire"] + [[1]]
+    z_anc, _ = BSplineSolver(**anchored, ground_z=0.0, **SOMM).compute_impedance()
+
+    assert abs(z_anc - z_ctrl) < 0.1  # 150-lambda wire couples negligibly
 
 
 # ---------------------------------------------------------------------------

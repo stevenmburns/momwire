@@ -229,16 +229,48 @@ def test_grid_stress_lossless():
         assert np.max(np.abs(gi[kk] - di[kk])) < 4e-3 * scale, kk
 
 
+def test_grid_r1_max_is_capped(monkeypatch):
+    """A geometry that would size the grid to hundreds of wavelengths — the
+    NEC TL-anchor idiom, or any large structure over real ground (issue
+    #157) — is capped at _SOMM_R1_CAP_LAMBDA wavelengths so the fill stays
+    bounded instead of doing millions of oscillatory integrals. lambda =
+    2 pi / K2 = 1 in these units."""
+    # The shipped default is the calibrated 15 lambda.
+    assert som._SOMM_R1_CAP_LAMBDA == pytest.approx(15.0)
+    # Exercise the mechanism at a small cap so the grids build cheaply.
+    monkeypatch.setattr(som, "_SOMM_R1_CAP_LAMBDA", 3.0)
+    som._GRID_CACHE.clear()
+    lam = 2.0 * np.pi / K2
+    cap = 3.0 * lam
+    g = som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=1000.0 * lam)
+    assert g.r1_max == pytest.approx(cap)
+    # get_grid caps before its 1.25**n bucketing too, so an oversized request
+    # keys to the capped grid rather than minting a distinct huge entry.
+    gg = som.get_grid(10.0 - 1.26j, K2, 1000.0 * lam, omega=K2 * som._C_LIGHT)
+    assert gg.r1_max == pytest.approx(cap)
+    # A modest geometry well under the cap is untouched.
+    small = som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=2.0 * lam)
+    assert small.r1_max == pytest.approx(2.0 * lam)
+
+
 def test_grid_r1_zero_and_bounds(lossy_grid):
-    """R1 = 0 queries interpolate onto the analytic-limit row; queries
-    beyond r1_max raise; theta is clipped to [0, pi/2]."""
+    """R1 = 0 queries interpolate onto the analytic-limit row; a query
+    beyond r1_max clamps to r1_max (the far-pair cap, issue #157) rather
+    than raising; a negative R1 still raises; theta is clipped to [0, pi/2]."""
     th = np.array([0.2, 1.0])
     lim = som._limits_r1_zero(10.0 - 1.26j, K2, th, K2 * som._C_LIGHT, som._MU0)
     out = lossy_grid.eval(np.zeros_like(th), th)
     for kk in som._SURF_KEYS:
         np.testing.assert_allclose(out[kk], lim[kk], rtol=2e-3, atol=0)
+    # Beyond r1_max: clamped, so a far query equals the r1_max edge (the C++
+    # proj_one path clamps identically). Was a ValueError before #157.
+    beyond = lossy_grid.eval([1.5], [0.3])
+    at_cap = lossy_grid.eval([lossy_grid.r1_max], [0.3])
+    for kk in som._SURF_KEYS:
+        np.testing.assert_allclose(beyond[kk], at_cap[kk], rtol=1e-12)
+    # A negative R1 is a genuine bug and still raises.
     with pytest.raises(ValueError):
-        lossy_grid.eval([1.5], [0.3])
+        lossy_grid.eval([-0.1], [0.3])
     a = lossy_grid.eval([0.5], [np.pi / 2])
     b = lossy_grid.eval([0.5], [np.pi / 2 + 1e-12])
     for kk in som._SURF_KEYS:
