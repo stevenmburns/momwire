@@ -141,6 +141,30 @@ def test_remainder_field_proj_accel_matches_python(eps_t, monkeypatch):
     assert np.abs(fast - slow).max() / scale < 1e-11
 
 
+@needs_acc
+def test_remainder_field_proj_accel_matches_python_far_zone(monkeypatch):
+    """Same honest-fallback guarantee on a grid WITH the #159 far regions:
+    the C++ near/far routing must match SommerfeldGrid.eval bit-for-bit.
+    The split is lowered so a cheap grid exercises both zones."""
+    monkeypatch.setattr(sm, "_SOMM_R1_NEAR_LAMBDA", 0.5)
+    grid = sm.SommerfeldGrid(EPS_AVG, K2, 1.6 * LAM)
+    assert len(grid._regions) == 5
+    obs, t_obs, src, t_src = _proj_sample(seed=5)
+    fast = sm.remainder_field_proj(obs, t_obs, src, t_src, 0.0, K2, grid)
+    monkeypatch.setattr(sm, "_acc", None)
+    slow = sm.remainder_field_proj(obs, t_obs, src, t_src, 0.0, K2, grid)
+    scale = np.abs(slow).max() + 1e-300
+    assert np.abs(fast - slow).max() / scale < 1e-11
+    # The sample must actually straddle the split, or this test is a no-op.
+    hh = obs[:, 2][:, None] + src[:, 2][None, :]
+    rho = np.hypot(
+        obs[:, 0][:, None] - src[:, 0][None, :],
+        obs[:, 1][:, None] - src[:, 1][None, :],
+    )
+    r1 = np.hypot(rho, hh)
+    assert (r1 < grid.r_near).any() and (r1 > grid.r_near).any()
+
+
 # ---------------------------------------------------------------------------
 # Cooperative cancellation (same drain pattern as the other kernels)
 # ---------------------------------------------------------------------------
