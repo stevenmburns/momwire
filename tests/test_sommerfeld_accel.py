@@ -204,6 +204,7 @@ def test_sommerfeld_solve_cancels_via_cpp_poll_only():
     from momwire import _sommerfeld as sm_mod
 
     sm_mod._GRID_CACHE.clear()  # a cached grid would skip the fill
+    sm_mod._NORM_CACHE.clear()
     token = CancelToken()
     token.cancel()
     kw = dict(GEOMS[("dipole", 0.05)])
@@ -218,6 +219,7 @@ def test_sommerfeld_solve_cancels_via_cpp_poll_only():
     with pytest.raises(SolveAborted):
         s.compute_impedance()
     assert not sm_mod._GRID_CACHE  # no partial grid was cached
+    assert not sm_mod._NORM_CACHE  # ... on either cache level
 
 
 def test_untripped_token_result_unchanged():

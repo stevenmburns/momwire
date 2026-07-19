@@ -89,6 +89,32 @@ _SOMM_R1_NEAR_LAMBDA = float(os.environ.get("MOMWIRE_SOMM_R1_NEAR_LAMBDA") or "4
 _SOMM_DR_FAR_LAMBDA = 0.2
 _SOMM_DTH_FAR_DEG = 2.5
 
+# Frequency-axis grid reuse (issue #159, phase 2). In wavelength coordinates
+# the four surfaces obey S = omega * mu * G(eps_t; R1/lambda, theta): omega
+# and mu enter iv_surfaces_direct only through the linear eq-123
+# normalization C1, and the measured k2-scaling at omega = k2*c is exactly
+# linear. Every lattice parameter (cap, beat keying, dth2, far spacings) is
+# lambda-proportional too, so one normalized master fill serves any
+# frequency via a coordinate scale plus one scalar multiply. The only true
+# frequency dependence left is eps_t = eps_r - j*sigma/(omega*eps0), whose
+# imaginary part drifts ~1/omega across a sweep — so Im(eps_t) is quantized
+# onto a geometric ladder (round to NEAREST rung, so the worst offset is
+# half a step) before keying the master cache. Measured sensitivity (dense
+# random points, three grounds): a relative Im perturbation delta moves the
+# surfaces by only ~(0.08-0.14)*delta of scale, so the 1% default step
+# (worst offset 0.5%) costs <= ~7e-4 — well under the grid's own ~2e-3
+# interpolation bar — while collapsing a band sweep from one fill per
+# frequency to one fill per ladder rung (a 3%-span sweep: 21 fills -> ~4;
+# a single-band 1% sweep: 1-2). Re(eps_t) does not move with frequency and
+# is ~8x more sensitive, so it is keyed exactly. Set the env override to 0
+# to disable the quantization (normalized reuse then still applies at
+# exactly-equal eps_t). Wide multi-octave sweeps still fill per rung — Im
+# genuinely changes several-fold there; that is physics, not caching.
+_SOMM_EPS_IM_BUCKET = float(os.environ.get("MOMWIRE_SOMM_EPS_IM_BUCKET") or "0.01")
+
+# Reference scales the normalized masters are filled at (lambda_ref = 1).
+_K2_REF = 2.0 * np.pi
+
 _C_LIGHT = 299792458.0
 _MU0 = 4e-7 * np.pi
 
@@ -686,6 +712,42 @@ class SommerfeldGrid:
 
         return {key: out[s].reshape(shape) for s, key in enumerate(_SURF_KEYS)}
 
+    def scaled_to(self, k2, omega, mu):
+        """A physical-units copy of this grid rescaled to another
+        (k2, omega, mu) — the frequency-reuse view (issue #159 phase 2).
+
+        Valid because S = ω·μ·G(ε̃; R₁/λ, θ) (ω and μ enter only through
+        the linear eq-123 normalization C₁; the k₂-scaling at ω = k₂c is
+        exactly linear, verified numerically) and the lattice is
+        λ-proportional: lengths scale by λ_new/λ_old, values by
+        (ω·μ)/(ω_old·μ_old), angles and node counts are untouched. The
+        value tables are fresh scaled copies, so the source grid (a cached
+        normalized master) is never mutated.
+        """
+        k2 = float(k2)
+        scale = self.k2 / k2  # = lambda_new / lambda_old
+        factor = (float(omega) * float(mu)) / (self.omega * self.mu)
+        g = object.__new__(SommerfeldGrid)
+        g.eps_t = self.eps_t
+        g.k2 = k2
+        g.omega = float(omega)
+        g.mu = float(mu)
+        g.r1_max = self.r1_max * scale
+        g.r_near = self.r_near * scale
+        g._regions = [
+            {
+                "r0": reg["r0"] * scale,
+                "dr": reg["dr"] * scale,
+                "n_r": reg["n_r"],
+                "th0": reg["th0"],
+                "dth": reg["dth"],
+                "n_th": reg["n_th"],
+                "vals": reg["vals"] * factor,
+            }
+            for reg in self._regions
+        ]
+        return g
+
 
 def grid_cpp_args(grid):
     """Flatten a `SommerfeldGrid` into the positional args the C++ remainder
@@ -784,22 +846,33 @@ def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid, cancel_flag=
 
 
 # ---------------------------------------------------------------------------
-# Module-level grid cache (shared by every solver that consumes the grid)
+# Module-level grid caches (shared by every solver that consumes the grid)
 # ---------------------------------------------------------------------------
 #
-# Grid fills cost seconds while the grids themselves are a few tens of
-# kB, and the engine wrappers build a fresh solver per impedance() call —
-# an instance cache never survives an interactive knob-turn. `r1_max` is
-# bucketed UP in ~25% geometric steps before keying: a grid tabulated to
-# a larger radius is valid (and marginally finer in theta) for any
-# smaller one, so nearby geometries share one fill instead of each
-# paying seconds. The bound covers a full web sweep (one entry per k;
-# ~21-41 points) plus a couple of ground choices, so a knob-turn that
-# re-runs the same sweep hits every entry. Hoisted here from bspline.py
-# so SinusoidalSolver and the fast solvers hit the same cache
-# (docs/sommerfeld-everywhere-plan.md Phase 1).
+# Grid fills cost seconds while the grids themselves are a few hundred kB,
+# and the engine wrappers build a fresh solver per impedance() call — an
+# instance cache never survives an interactive knob-turn. Two levels
+# (issue #159 phase 2):
+#
+#   _NORM_CACHE — the expensive artifacts: normalized masters filled at
+#     k2 = _K2_REF (lambda_ref = 1), keyed (eps_bucket, r1_wl_bucket).
+#     Frequency-independent: one fill serves a whole sweep.
+#   _GRID_CACHE — cheap physical-units views (`SommerfeldGrid.scaled_to`,
+#     a coordinate scale + one scalar multiply, ~sub-ms), keyed
+#     (eps_bucket, k2, r1_wl_bucket, omega, mu) so repeat solves at one
+#     frequency return the identical object, as before.
+#
+# `r1_max` is bucketed UP in ~25% geometric steps (in wavelengths) before
+# keying: a grid tabulated to a larger radius is valid (and marginally
+# finer in theta) for any smaller one, so nearby geometries (knob turns)
+# share one fill. Im(eps_t) is quantized onto the _SOMM_EPS_IM_BUCKET
+# geometric ladder — see the calibration note at the constant. Hoisted
+# here from bspline.py so SinusoidalSolver and the fast solvers hit the
+# same caches (docs/sommerfeld-everywhere-plan.md Phase 1).
 _GRID_CACHE: dict = {}
 _GRID_CACHE_MAX = 128
+_NORM_CACHE: dict = {}
+_NORM_CACHE_MAX = 32
 
 
 def _evict_fifo(cache: dict, limit: int) -> None:
@@ -807,35 +880,72 @@ def _evict_fifo(cache: dict, limit: int) -> None:
         cache.pop(next(iter(cache)))
 
 
-def _somm_r1_bucket(r1_max: float, k: float) -> float:
-    """Round `r1_max` up to the next 1.25^n wavelengths (floor 0.1 wl)."""
-    lam = 2.0 * np.pi / k
-    x = max(r1_max / lam, 0.1)
+def _somm_r1_bucket_wl(r1_wl: float) -> float:
+    """Round a radius in wavelengths up to the next 1.25^n (floor 0.1)."""
+    x = max(float(r1_wl), 0.1)
     n = math.ceil(math.log(x, 1.25) - 1e-12)
-    bucket = lam * 1.25**n
-    if bucket < r1_max:  # float fuzz at an exact bucket edge
+    bucket = 1.25**n
+    if bucket < r1_wl:  # float fuzz at an exact bucket edge
         bucket *= 1.25
     return float(bucket)
 
 
-def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
-    """Cached `SommerfeldGrid` keyed `(eps_t, k2, r1_bucket, omega, mu)`.
+def _somm_r1_bucket(r1_max: float, k: float) -> float:
+    """Round `r1_max` up to the next 1.25^n wavelengths (floor 0.1 wl)."""
+    lam = 2.0 * np.pi / k
+    return lam * _somm_r1_bucket_wl(r1_max / lam)
 
-    FIFO-bounded module cache. A cancelled fill raises SolveAborted out
-    of the constructor before the cache insert, so no partial grid is
-    ever cached.
+
+def _somm_eps_bucket(eps_t: complex) -> complex:
+    """Quantize Im(eps_t) onto the _SOMM_EPS_IM_BUCKET geometric ladder.
+
+    Re is keyed exactly (it does not move with frequency and is ~8x more
+    sensitive). Nonstandard values — free space, nonpassive Im > 0,
+    Re <= 0, or a disabled ladder — pass through exactly.
     """
-    # Cap before bucketing so every geometry beyond the cap keys to the same
-    # (capped) grid instead of minting a distinct oversized cache entry (#157).
-    lam = 2.0 * np.pi / float(k2)
-    r1_capped = min(float(r1_max), _SOMM_R1_CAP_LAMBDA * lam)
-    r1b = _somm_r1_bucket(r1_capped, float(k2))
-    key = (complex(eps_t), float(k2), r1b, float(omega), float(mu))
+    step = 1.0 + _SOMM_EPS_IM_BUCKET
+    if step <= 1.0:
+        return eps_t
+    re, im = eps_t.real, eps_t.imag
+    if not (re > 0.0) or im >= 0.0:  # lossless (im == 0) included: exact
+        return eps_t
+    n = round(math.log(-im, step))
+    return complex(re, -(step**n))
+
+
+def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
+    """Cached `SommerfeldGrid` for (eps_t, k2, r1_max, omega, mu).
+
+    Two-level FIFO-bounded module cache: a frequency-independent
+    normalized master (filled once per (eps-bucket, r1-bucket)) plus a
+    cheap per-(k2, omega, mu) rescaled view — see the cache note above.
+    A cancelled fill raises SolveAborted out of the constructor before
+    either cache insert, so no partial grid is ever cached.
+    """
+    # Cap (in wavelengths, #157) before bucketing so every geometry beyond
+    # the cap keys to the same capped grid instead of minting a distinct
+    # oversized cache entry.
+    k2 = float(k2)
+    lam = 2.0 * np.pi / k2
+    r1b_wl = _somm_r1_bucket_wl(min(float(r1_max) / lam, _SOMM_R1_CAP_LAMBDA))
+    eps_b = _somm_eps_bucket(complex(eps_t))
+    key = (eps_b, k2, r1b_wl, float(omega), float(mu))
     grid = _GRID_CACHE.get(key)
     if grid is None:
+        nkey = (eps_b, r1b_wl)
+        master = _NORM_CACHE.get(nkey)
+        if master is None:
+            _evict_fifo(_NORM_CACHE, _NORM_CACHE_MAX)
+            master = SommerfeldGrid(
+                eps_b,
+                _K2_REF,
+                r1b_wl,  # lambda_ref = 1: wavelengths ARE physical units
+                omega=_K2_REF * _C_LIGHT,
+                mu=_MU0,
+                cancel_flag=cancel_flag,
+            )
+            _NORM_CACHE[nkey] = master
         _evict_fifo(_GRID_CACHE, _GRID_CACHE_MAX)
-        grid = SommerfeldGrid(
-            eps_t, k2, r1b, omega=omega, mu=mu, cancel_flag=cancel_flag
-        )
+        grid = master.scaled_to(k2, omega, mu)
         _GRID_CACHE[key] = grid
     return grid

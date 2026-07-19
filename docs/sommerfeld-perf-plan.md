@@ -435,6 +435,45 @@ near-zone fill itself; the next lever there is frequency-axis grid reuse
 Regression: `test_grid_far_zone_*`, `test_grid_small_extent_keeps_pre_
 split_layout`, `test_remainder_field_proj_accel_matches_python_far_zone`.
 
+## Phase 7 — frequency-axis grid reuse (issue #159 phase 2) — **LANDED**
+
+Phase 6 fixed the extent axis; the frequency axis remained: the grid
+cache keyed on k₂, so every sweep point and frequency-knob tick paid a
+cold fill — and sub-4 λ geometries (most of the catalog) get no help
+from the near/far split because their cost *is* the near-zone fill.
+
+Physics that makes reuse exact: in wavelength coordinates the surfaces
+obey **S = ω·μ·G(ε̃; R₁/λ, θ)** — ω and μ enter `iv_surfaces_direct`
+only through the linear eq-123 normalization C₁, the k₂-scaling at
+ω = k₂c is measured *exactly* linear, and every lattice parameter (cap,
+beat keying, dth2, far spacings) is λ-proportional. So one normalized
+master (filled at k₂ = 2π, λ_ref = 1) serves any frequency via a
+coordinate scale plus one scalar multiply (`SommerfeldGrid.scaled_to`,
+sub-ms). The only true frequency dependence is ε̃ = εr − jσ/ωε₀, whose
+**imaginary part** drifts ~1/ω: it is quantized onto a 1 % geometric
+ladder (round-to-nearest, worst offset 0.5 %) before keying. Measured
+sensitivity is ~(0.08–0.14)·δ of surface scale per relative Im
+perturbation δ — three grounds, dense random points — so the ladder
+costs ≤ ~7e−4, under the grid's own ~2e−3 interpolation bar; Re does
+not move with frequency and is 8× more sensitive, so it stays exact.
+
+Cache becomes two-level: `_NORM_CACHE` (masters, the expensive
+artifacts, keyed (eps-bucket, r1-wl-bucket)) + `_GRID_CACHE` (rescaled
+views keyed with k₂/ω/μ, preserving same-frequency object identity).
+A cancelled fill still caches nothing on either level.
+
+Measured end-to-end (21-point band sweeps, bs2 + Sommerfeld, one
+process): invvee 5.7 → 1.05 s (21 → 4 fills), quad 10.3 → 3.2 s,
+longwire 7.0 → 4.0 s (3 fills; the residual is the 293-seg assembly).
+View accuracy vs a direct fill at the true ε̃ is indistinguishable
+(1.96e−3 vs 2.00e−3 worst surface). Wide multi-octave sweeps still fill
+per rung — Im genuinely changes several-fold; that is physics, not
+caching. `MOMWIRE_SOMM_EPS_IM_BUCKET` overrides the ladder (0 disables;
+normalized k-reuse then still applies at exactly-equal ε̃). Golden gn 2
+gates pass on the ladder default. Regression: `test_somm_eps_bucket_
+ladder`, `test_somm_scaled_view_matches_direct_fill`,
+`test_somm_grid_frequency_reuse_one_fill_per_rung`.
+
 ## Non-goals / notes
 
 - Accuracy is still not traded away: grid rtol stays 1e-6 and the 4-point
