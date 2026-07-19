@@ -392,6 +392,49 @@ own control values). Overridable via `MOMWIRE_SOMM_R1_CAP_LAMBDA` for
 benchmarking. Regression: `test_grid_r1_max_is_capped`,
 `test_remote_wire_stays_bounded_and_irrelevant`.
 
+## Phase 6 — near/far tabulation split (issue #159) — **LANDED**
+
+Phase 5 bounded the pathological (100–500 λ) case but left every large
+*real* structure under the cap paying the quadratic keying: an 11.6 λ
+terminated long-wire built a 15,218-node grid (region 2 alone 230×60) and
+antennaknobs' full-catalog benchmark measured the grid fill as 85–96 % of
+every cold Sommerfeld solve — momwire ~13× slower than PyNEC's gn 2 with
+the remainder assembly (Phase 4b) already near-free.
+
+The keying was calibrated at the wrong scale. Dense (R₁, θ) scans of the
+four surfaces (three grounds incl. the lossless εr=16 stress case) show the
+fine structure — the lateral-wave interference near grazing — lives at
+**moderate R₁ (~0.5–3 λ) and decays beyond**: at R₁ = 5–10 λ a
+2.5° θ / 0.2 λ R₁ lattice interpolates to ≤ 7e−4 of surface scale, vs the
+≤ 2e−3 near-zone bar. Keying Δθ to the full extent refines exactly where
+the surfaces are smoothest.
+
+Fix: stop the fine tabulation at `r_near = min(r1_max,
+_SOMM_R1_NEAR_LAMBDA · λ)` (default 4 λ — where Phase 5's calibration
+found the remainder itself going negligible), key region 2's Δθ to
+`r_near`, and cover [r_near, r1_max] with two coarse far regions
+(ΔR₁ = 0.2 λ; Δθ = 2.5° / 10°). Grids with r1_max ≤ 4 λ build
+bit-identically to the pre-split layout. `GridView`/`proj_one` in the C++
+kernels take 3 or 5 region tables with a two-level region select; the
+numpy `eval` mirrors it (cross-checked to 1e−15 by the accel parity
+tests).
+
+Not the rejected Phase 2, again: nothing is extrapolated or modeled — the
+far zone is still *tabulated* from `iv_surfaces_direct`, just on the
+lattice the measured smoothness supports.
+
+Measured (default ground): 11.64 λ grid 15,218 → 2,915 nodes, fill
+3.8 s → 1.3 s; at the 15 λ cap 24,342 → 3,187 (7.6×); node count now
+grows linearly with extent (~85 nodes/λ). Catalog: terminated_longwire
+cold solve 5.2 s → 2.8 s, rhombic 2.5 s → 2.3 s, impedance shifts ≤ 1e−6
+relative; random-point interpolation error vs direct evaluation unchanged
+to the printed digit on every surface and ground tested. Sub-4 λ
+geometries (most of the catalog) are untouched — their cold cost is the
+near-zone fill itself; the next lever there is frequency-axis grid reuse
+(#159 proposal 2). Overridable via `MOMWIRE_SOMM_R1_NEAR_LAMBDA`.
+Regression: `test_grid_far_zone_*`, `test_grid_small_extent_keeps_pre_
+split_layout`, `test_remainder_field_proj_accel_matches_python_far_zone`.
+
 ## Non-goals / notes
 
 - Accuracy is still not traded away: grid rtol stays 1e-6 and the 4-point

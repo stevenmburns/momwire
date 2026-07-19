@@ -69,6 +69,26 @@ from ._cancel import SolveAborted
 # environment for validation/benchmarking.
 _SOMM_R1_CAP_LAMBDA = float(os.environ.get("MOMWIRE_SOMM_R1_CAP_LAMBDA") or "15.0")
 
+# Radius where the grid switches from the near tabulation (NEC fig-12 spacings,
+# extent-keyed theta) to a coarse far zone (issue #159). Empirically the fine
+# structure of the four surfaces — the lateral-wave interference near grazing —
+# lives at moderate R1 (~0.5-3 lambda) and decays beyond: dense scans at
+# R1 = 5-10 lambda show a 2.5 deg theta / 0.2 lambda R1 lattice interpolates to
+# <= 7e-4 of surface scale for every tested ground (incl. the lossless eps=16
+# stress case), vs the <= 2e-3 near-zone bar. Keying the fine spacings to the
+# full extent (the pre-#159 layout) made node count grow ~quadratically with
+# geometry size for nothing: at the 15-lambda #157 cap the split cuts the fill
+# ~7.6x with measured interpolation error identical to the near-keyed grid.
+# 4 lambda matches where #157 measured the remainder itself becoming
+# negligible, and grids with r1_max <= the split build bit-identically to the
+# pre-#159 layout. Overridable for validation (raise it to force the old
+# layout on any extent).
+_SOMM_R1_NEAR_LAMBDA = float(os.environ.get("MOMWIRE_SOMM_R1_NEAR_LAMBDA") or "4.0")
+
+# Far-zone lattice (wavelengths / degrees) — see the calibration note above.
+_SOMM_DR_FAR_LAMBDA = 0.2
+_SOMM_DTH_FAR_DEG = 2.5
+
 _C_LIGHT = 299792458.0
 _MU0 = 4e-7 * np.pi
 
@@ -491,16 +511,24 @@ _SURF_KEYS = ("IrhoV", "IzV", "IrhoH", "IphiH")
 class SommerfeldGrid:
     """NEC-style bivariate interpolation grid over `iv_surfaces_direct`.
 
-    Three uniform (R₁, θ) regions per theory-manual fig 12, spacings in
-    wavelengths of k₂ (Δθ in degrees):
+    Three uniform (R₁, θ) near regions per theory-manual fig 12, spacings
+    in wavelengths of k₂ (Δθ in degrees), with `r_near` = min(r1_max,
+    `_SOMM_R1_NEAR_LAMBDA`·λ):
 
       1: R₁ ∈ [0, 0.2λ],      θ ∈ [0°, 90°], ΔR₁ = 0.01λ, Δθ = 10°
-      2: R₁ ∈ [0.2λ, r1_max], θ ∈ [0°, 20°], ΔR₁ = 0.05λ†, Δθ = 5°
-      3: R₁ ∈ [0.2λ, r1_max], θ ∈ [20°, 90°], ΔR₁ = 0.1λ†,  Δθ = 10°
+      2: R₁ ∈ [0.2λ, r_near], θ ∈ [0°, 20°], ΔR₁ = 0.05λ†, Δθ = 5°
+      3: R₁ ∈ [0.2λ, r_near], θ ∈ [20°, 90°], ΔR₁ = 0.1λ†,  Δθ = 10°
 
     († capped at one sixth of the lateral-wave beat length 2π/|k₁ − k₂| —
     the manual's own caveat that grid 2 needs finer ΔR₁ for high-εr
     low-loss grounds, applied to both outer regions.)
+
+    When the geometry extends past `r_near`, two coarse far regions cover
+    the rest (issue #159 — the surfaces' fine lateral-wave structure has
+    decayed out there, see the `_SOMM_R1_NEAR_LAMBDA` note):
+
+      4: R₁ ∈ [r_near, r1_max], θ ∈ [0°, 20°],  ΔR₁ = 0.2λ, Δθ = 2.5°
+      5: R₁ ∈ [r_near, r1_max], θ ∈ [20°, 90°], ΔR₁ = 0.2λ, Δθ = 10°
 
     Two modernizations vs NEC: `r1_max` is sized to the geometry that
     will query the grid (instead of a hard 1λ plus Norton asymptotics
@@ -538,21 +566,37 @@ class SommerfeldGrid:
         else:
             beat = np.inf
 
-        # Region 2's θ spacing is keyed to the grid extent: near grazing
+        # The near/far split (issue #159): the fine tabulation stops at
+        # r_near; for grids that small it equals r1_max and the layout is
+        # bit-identical to the pre-split one.
+        self.r_near = min(self.r1_max, _SOMM_R1_NEAR_LAMBDA * lam)
+
+        # Region 2's θ spacing is keyed to the NEAR extent: near grazing
         # the surfaces vary on the height scale h = R₁·sinθ, so a fixed
         # Δθ grows ever coarser in h as R₁ grows (NEC never met this —
-        # its grid stopped at 1λ). Keep r1_max·Δθ ≲ 0.07λ.
-        dth2_target = min(5.0, np.degrees(0.07 * lam / self.r1_max))
+        # its grid stopped at 1λ). Keep r_near·Δθ ≲ 0.07λ. Beyond r_near
+        # the lateral-wave structure has decayed and the far regions'
+        # fixed 2.5° suffices — keying to the full extent (pre-#159) grew
+        # the node count ~quadratically with geometry size.
+        dth2_target = min(5.0, np.degrees(0.07 * lam / self.r_near))
         n_th2 = int(np.ceil(20.0 / dth2_target)) + 1
         dth2 = 20.0 / (n_th2 - 1)
 
-        self._regions = []
         r_break = 0.2 * lam
-        for r0, r1, dr, th0, th1, dth in (
+        layout = [
             (0.0, r_break, 0.01 * lam, 0.0, 90.0, 10.0),
-            (r_break, self.r1_max, min(0.05 * lam, beat / 6.0), 0.0, 20.0, dth2),
-            (r_break, self.r1_max, min(0.1 * lam, beat / 6.0), 20.0, 90.0, 10.0),
-        ):
+            (r_break, self.r_near, min(0.05 * lam, beat / 6.0), 0.0, 20.0, dth2),
+            (r_break, self.r_near, min(0.1 * lam, beat / 6.0), 20.0, 90.0, 10.0),
+        ]
+        if self.r1_max > self.r_near * (1.0 + 1e-9):
+            dr_far = _SOMM_DR_FAR_LAMBDA * lam
+            layout += [
+                (self.r_near, self.r1_max, dr_far, 0.0, 20.0, _SOMM_DTH_FAR_DEG),
+                (self.r_near, self.r1_max, dr_far, 20.0, 90.0, 10.0),
+            ]
+
+        self._regions = []
+        for r0, r1, dr, th0, th1, dth in layout:
             n_r = max(int(np.ceil((r1 - r0) / dr)) + 1, 4)
             n_th = int(round((th1 - th0) / dth)) + 1
             r_nodes = r0 + dr * np.arange(n_r)  # last row may pad past r1
@@ -617,7 +661,11 @@ class SommerfeldGrid:
 
         r_break = self._regions[1]["r0"]
         th_split = np.radians(20.0)
-        region_of = np.where(r_f <= r_break, 0, np.where(th_f <= th_split, 1, 2))
+        # Near/far select: for 3-region grids r_near == r1_max, so the
+        # clamped queries all land near and this reduces to the old routing.
+        near = np.where(th_f <= th_split, 1, 2)
+        far = np.where(th_f <= th_split, 3, 4)
+        region_of = np.where(r_f <= r_break, 0, np.where(r_f <= self.r_near, near, far))
 
         out = np.empty((len(_SURF_KEYS), r_f.size), dtype=np.complex128)
         for idx, reg in enumerate(self._regions):
@@ -641,9 +689,10 @@ class SommerfeldGrid:
 
 def grid_cpp_args(grid):
     """Flatten a `SommerfeldGrid` into the positional args the C++ remainder
-    kernels take after (ground_z, k): (r1_max, r_break, th_split, reg_r0,
-    reg_dr, reg_th0, reg_dth, reg_vals). The three region value tables are
-    made C-contiguous complex128 once; callers that sample the same grid many
+    kernels take after (ground_z, k): (r1_max, r_break, th_split, r_near,
+    reg_r0, reg_dr, reg_th0, reg_dth, reg_vals). The three (near-only grids)
+    or five (with the #159 far zone) region value tables are made
+    C-contiguous complex128 once; callers that sample the same grid many
     times (the ACA path) should hoist this out of their loop.
     """
     regs = grid._regions
@@ -652,6 +701,7 @@ def grid_cpp_args(grid):
         float(grid.r1_max),
         float(regs[1]["r0"]),  # r_break (= SommerfeldGrid.eval)
         float(math.radians(20.0)),  # th_split
+        float(grid.r_near),
         np.array([r["r0"] for r in regs], dtype=float),
         np.array([r["dr"] for r in regs], dtype=float),
         np.array([r["th0"] for r in regs], dtype=float),

@@ -229,6 +229,82 @@ def test_grid_stress_lossless():
         assert np.max(np.abs(gi[kk] - di[kk])) < 4e-3 * scale, kk
 
 
+@pytest.fixture(scope="module")
+def far_grid():
+    """A grid past the near/far split (issue #159): lossy ground, 7 lambda."""
+    return som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=7.0)
+
+
+def test_grid_far_zone_layout(far_grid):
+    """Past _SOMM_R1_NEAR_LAMBDA the grid adds two coarse far regions
+    instead of keying the fine near spacings to the full extent (which grew
+    the node count ~quadratically with geometry size — issue #159). The
+    near tabulation stops at r_near and region 2's theta keying follows it."""
+    assert som._SOMM_R1_NEAR_LAMBDA == pytest.approx(4.0)
+    g = far_grid
+    assert g.r_near == pytest.approx(4.0)  # lambda = 1 in these units
+    assert len(g._regions) == 5
+    near2, near3, far2, far3 = g._regions[1:]
+    # Near regions tabulate to r_near (last row may pad one dr past it).
+    for reg in (near2, near3):
+        r_last = reg["r0"] + reg["dr"] * (reg["n_r"] - 1)
+        assert g.r_near <= r_last < g.r_near + reg["dr"] + 1e-12
+    # dth2 keys to r_near, not r1_max: 0.07/4 rad = 1.002 deg -> 21 columns.
+    assert near2["n_th"] == 21
+    # Far regions: [r_near, r1_max] on the coarse lattice.
+    for reg, dth_deg in ((far2, som._SOMM_DTH_FAR_DEG), (far3, 10.0)):
+        assert reg["r0"] == pytest.approx(g.r_near)
+        assert reg["dr"] == pytest.approx(som._SOMM_DR_FAR_LAMBDA)
+        assert reg["dth"] == pytest.approx(np.radians(dth_deg))
+        r_last = reg["r0"] + reg["dr"] * (reg["n_r"] - 1)
+        assert g.r1_max <= r_last < g.r1_max + reg["dr"] + 1e-12
+    # The point of the split: far fewer nodes than the near-keyed layout
+    # (~6.6k at 7 lambda) and the count now grows linearly with extent.
+    assert sum(r["n_r"] * r["n_th"] for r in g._regions) < 3100
+
+
+def test_grid_far_zone_accuracy(far_grid):
+    """Random points across all five regions vs direct evaluation: the far
+    zone holds the same 2e-3 global-scale bar as the near zone (the
+    surfaces' lateral-wave fine structure has decayed out there — the
+    calibration behind _SOMM_R1_NEAR_LAMBDA)."""
+    rng = np.random.default_rng(17)
+    r1 = np.concatenate([rng.uniform(0.004, 3.9, 40), rng.uniform(4.1, 6.99, 60)])
+    th = rng.uniform(0.0, np.pi / 2, r1.size)
+    gi = far_grid.eval(r1, th)
+    di = som.iv_surfaces_direct(10.0 - 1.26j, K2, r1, th, rtol=1e-8)
+    for kk in som._SURF_KEYS:
+        scale = np.max(np.abs(di[kk]))
+        assert np.max(np.abs(gi[kk] - di[kk])) < 2e-3 * scale, kk
+
+
+def test_grid_far_zone_matches_near_keyed_layout(far_grid, monkeypatch):
+    """The split changes the tabulation, not the answers: far-zone queries
+    agree with the pre-#159 near-keyed layout (forced by raising the split
+    past r1_max) to within the two interpolants' own error budgets."""
+    monkeypatch.setattr(som, "_SOMM_R1_NEAR_LAMBDA", 100.0)
+    ref = som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=7.0)
+    assert len(ref._regions) == 3  # the old layout
+    rng = np.random.default_rng(23)
+    r1 = rng.uniform(4.05, 6.95, 80)
+    th = rng.uniform(0.0, np.pi / 2, r1.size)
+    a = far_grid.eval(r1, th)
+    b = ref.eval(r1, th)
+    for kk in som._SURF_KEYS:
+        scale = np.max(np.abs(b[kk]))
+        assert np.max(np.abs(a[kk] - b[kk])) < 2e-3 * scale, kk
+
+
+def test_grid_small_extent_keeps_pre_split_layout():
+    """r1_max at/below the split builds exactly the pre-#159 grid: three
+    regions, theta keying to r1_max, no far tables."""
+    g = som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=3.0)
+    assert len(g._regions) == 3
+    assert g.r_near == pytest.approx(g.r1_max)
+    # dth2 keyed to r1_max: 0.07/3 rad = 1.337 deg -> ceil(20/1.337)+1 = 16.
+    assert g._regions[1]["n_th"] == 16
+
+
 def test_grid_r1_max_is_capped(monkeypatch):
     """A geometry that would size the grid to hundreds of wavelengths — the
     NEC TL-anchor idiom, or any large structure over real ground (issue

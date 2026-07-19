@@ -3015,28 +3015,30 @@ static inline void lagrange4(double u, double *w) {
 }
 
 // The tabulated SommerfeldGrid, flattened for the inner loop: raw pointers to
-// the three regions' (4, n_r, n_th) C-contiguous value tables plus their axis
-// origins/spacings, and the region-select breakpoints. Populated from the
-// pybind arrays by both callers (build_grid_view).
+// the three near (plus optionally two far, issue #159) regions'
+// (4, n_r, n_th) C-contiguous value tables plus their axis origins/spacings,
+// and the region-select breakpoints. Populated from the pybind arrays by both
+// callers (build_grid_view).
 struct GridView {
-    const cd *vptr[3];
-    py::ssize_t nR[3], nTh[3];
-    double rr0[3], rdr[3], rth0[3], rdth[3];
-    double r1_max, r_break, th_split, tiny, half_pi;
+    const cd *vptr[5];
+    py::ssize_t nR[5], nTh[5];
+    double rr0[5], rdr[5], rth0[5], rdth[5];
+    double r1_max, r_break, th_split, r_near, tiny, half_pi;
 };
 
 static GridView build_grid_view(
-    double r1_max, double r_break, double th_split,
+    double r1_max, double r_break, double th_split, double r_near,
     const py::detail::unchecked_reference<double, 1> &r0b,
     const py::detail::unchecked_reference<double, 1> &drb,
     const py::detail::unchecked_reference<double, 1> &th0b,
     const py::detail::unchecked_reference<double, 1> &dthb,
     const std::vector<py::array_t<cd, py::array::c_style | py::array::forcecast>>
         &reg_vals) {
-    if (reg_vals.size() != 3)
-        throw std::runtime_error("expected 3 region value tables");
+    const size_t n_reg = reg_vals.size();
+    if (n_reg != 3 && n_reg != 5)
+        throw std::runtime_error("expected 3 or 5 region value tables");
     GridView G;
-    for (int g = 0; g < 3; ++g) {
+    for (size_t g = 0; g < n_reg; ++g) {
         auto v = reg_vals[g].template unchecked<3>();
         if (v.shape(0) != 4)
             throw std::runtime_error("region values must have shape (4, n_r, n_th)");
@@ -3051,6 +3053,9 @@ static GridView build_grid_view(
     G.r1_max = r1_max;
     G.r_break = r_break;
     G.th_split = th_split;
+    // 3-region grids have r_near == r1_max, so clamped queries never route
+    // far; guard anyway so a stale r_near can't index missing tables.
+    G.r_near = n_reg == 5 ? r_near : r1_max;
     G.tiny = 1e-12 * r1_max;
     G.half_pi = 0.5 * M_PI;
     return G;
@@ -3077,7 +3082,10 @@ static inline cd proj_one(
     double theta = std::atan2(hh, rho);
     if (theta < 0.0) theta = 0.0; else if (theta > G.half_pi) theta = G.half_pi;
     const double r1c = r1 > G.r1_max ? G.r1_max : r1;  // interp clamps; g uses r1
-    const int reg = (r1c <= G.r_break) ? 0 : (theta <= G.th_split ? 1 : 2);
+    const int reg = (r1c <= G.r_break)
+                        ? 0
+                        : (r1c <= G.r_near ? (theta <= G.th_split ? 1 : 2)
+                                           : (theta <= G.th_split ? 3 : 4));
     const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
     const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
     int i0 = (int)std::floor(fr) - 1;
@@ -3140,6 +3148,7 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
     py::array_t<double, py::array::c_style | py::array::forcecast> src,
     py::array_t<double, py::array::c_style | py::array::forcecast> t_src,
     double ground_z, double k, double r1_max, double r_break, double th_split,
+    double r_near,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
@@ -3161,8 +3170,9 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
     const py::ssize_t M = ob.shape(0);
     const py::ssize_t S = sb.shape(0);
     somm_proj::GridView G = somm_proj::build_grid_view(
-        r1_max, r_break, th_split, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
-        reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
+        reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
+        reg_vals);
 
     py::array_t<std::complex<double>> out({M, S});
     auto out_m = out.mutable_unchecked<2>();
@@ -3222,6 +3232,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> loc_J,
     py::array_t<double, py::array::c_style | py::array::forcecast> pJ,
     double ground_z, double k, double r1_max, double r_break, double th_split,
+    double r_near,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
@@ -3257,8 +3268,9 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         throw std::runtime_error("loc/polys inconsistent with degree");
 
     somm_proj::GridView G = somm_proj::build_grid_view(
-        r1_max, r_break, th_split, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
-        reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
+        reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
+        reg_vals);
 
     py::array_t<std::complex<double>> Q({nI, nJ});
     auto Qm = Q.mutable_unchecked<2>();
@@ -3532,10 +3544,11 @@ PYBIND11_MODULE(_accelerators, m) {
           "grid surfaces (4x4 Lagrange) and project t_m.F(r_m,r_n).t_n per "
           "(observer, source) pair; OpenMP over observer rows. Returns (M, S) "
           "complex. The grid is passed flattened (per-region r0/dr/th0/dth "
-          "length-3 arrays + a list of three (4,n_r,n_th) value tables).",
+          "arrays + a list of 3 near — or 5 with the #159 far zone — "
+          "(4,n_r,n_th) value tables).",
           py::arg("obs"), py::arg("t_obs"), py::arg("src"), py::arg("t_src"),
           py::arg("ground_z"), py::arg("k"), py::arg("r1_max"),
-          py::arg("r_break"), py::arg("th_split"),
+          py::arg("r_break"), py::arg("th_split"), py::arg("r_near"),
           py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"),
           py::arg("cancel_flag") = 0);
@@ -3551,7 +3564,7 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("loc_I"), py::arg("pI"), py::arg("loc_J"), py::arg("pJ"),
           py::arg("ground_z"), py::arg("k"),
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
-          py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
+          py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"),
           py::arg("cancel_flag") = 0);
 }
