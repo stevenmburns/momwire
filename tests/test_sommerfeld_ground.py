@@ -88,6 +88,7 @@ def test_remote_wire_stays_bounded_and_irrelevant(monkeypatch):
     pins."""
     monkeypatch.setattr(_sommerfeld, "_SOMM_R1_CAP_LAMBDA", 4.0)
     _sommerfeld._GRID_CACHE.clear()  # don't reuse a grid built at another cap
+    _sommerfeld._NORM_CACHE.clear()
     base = dict(GEOMS[("dipole", 0.2)])
     lam = base["wavelength"]
     z_ctrl, _ = BSplineSolver(**base, ground_z=0.0, **SOMM).compute_impedance()
@@ -293,6 +294,98 @@ def test_somm_r1_bucket_rounds_up_and_reuses():
     b_tiny = sm._somm_r1_bucket(1e-6, k)
     assert 0.1 * lam <= b_tiny <= 0.13 * lam
     assert sm._somm_r1_bucket(0.05 * lam, k) == b_tiny
+
+
+def test_somm_eps_bucket_ladder():
+    """Im(eps_t) rounds to the nearest rung of the geometric ladder (worst
+    offset half a step); Re is exact; nonstandard values pass through."""
+    from momwire import _sommerfeld as sm
+
+    step = 1.0 + sm._SOMM_EPS_IM_BUCKET
+    assert sm._SOMM_EPS_IM_BUCKET == pytest.approx(0.01)  # the shipped default
+    e = 10.0 - 1.26j
+    b = sm._somm_eps_bucket(e)
+    assert b.real == e.real
+    assert abs(b.imag / e.imag - 1.0) <= (step - 1.0) / 2 * (1 + 1e-9)
+    # nearby frequencies (a band sweep tick) land on the same rung
+    assert sm._somm_eps_bucket(complex(e.real, e.imag * 1.002)) == b
+    # pass-throughs: lossless, free space, nonpassive, nonphysical Re
+    for weird in (16.0 + 0.0j, 1.0 + 0.0j, 10.0 + 2.0j, -3.0 - 1.0j):
+        assert sm._somm_eps_bucket(weird) == weird
+
+
+def test_somm_scaled_view_matches_direct_fill():
+    """The frequency-reuse scaling law: a master rescaled by `scaled_to`
+    must reproduce a from-scratch fill at the target (k2, omega) — the
+    lattice is lambda-proportional and S = omega*mu*G(eps; R1/lam, theta),
+    so agreement is at quadrature/rounding level, not interpolation level."""
+    from momwire import _sommerfeld as sm
+
+    eps = 10.0 - 1.26j
+    k_a, k_b = 2.0 * np.pi / 20.0, 2.0 * np.pi / 11.0  # 20 m -> 11 m
+    master = sm.SommerfeldGrid(eps, k_a, r1_max=1.2 * 20.0, omega=k_a * sm._C_LIGHT)
+    view = master.scaled_to(k_b, k_b * sm._C_LIGHT, sm._MU0)
+    direct = sm.SommerfeldGrid(eps, k_b, r1_max=1.2 * 11.0, omega=k_b * sm._C_LIGHT)
+    assert view.r1_max == pytest.approx(direct.r1_max)
+    assert len(view._regions) == len(direct._regions)
+    rng = np.random.default_rng(31)
+    r1 = rng.uniform(0.0, 1.19 * 11.0, 150)
+    th = rng.uniform(0.0, np.pi / 2, 150)
+    a = view.eval(r1, th)
+    b = direct.eval(r1, th)
+    for kk in sm._SURF_KEYS:
+        scale = np.abs(b[kk]).max()
+        assert np.abs(a[kk] - b[kk]).max() < 1e-6 * scale, kk
+
+
+def test_somm_grid_frequency_reuse_one_fill_per_rung():
+    """A band sweep pays one fill per eps-ladder rung, not one per
+    frequency — and the bucketed views still track the true-eps surfaces
+    within the grid accuracy bar (issue #159 phase 2)."""
+    from momwire import _sommerfeld as sm
+
+    eps0_im = 0.002 / (2.0 * np.pi * 28.4e6 * 8.8541878128e-12)  # sigma/(w*eps0)
+    fills = []
+    orig = sm.SommerfeldGrid.__init__
+
+    def counting(self, *a, **kw):
+        fills.append(a)
+        orig(self, *a, **kw)
+
+    sm._GRID_CACHE.clear()
+    sm._NORM_CACHE.clear()
+    try:
+        sm.SommerfeldGrid.__init__ = counting
+        views = []
+        for fmhz in np.linspace(28.35, 28.45, 7):  # ~0.35% span: one rung
+            w = 2.0 * np.pi * fmhz * 1e6
+            k2 = w / sm._C_LIGHT
+            eps = 10.0 - 1j * 0.002 / (w * 8.8541878128e-12)
+            views.append(sm.get_grid(eps, k2, 15.0, omega=w))
+    finally:
+        sm.SommerfeldGrid.__init__ = orig
+        sm._GRID_CACHE.clear()
+        sm._NORM_CACHE.clear()
+    assert len(fills) == 1  # every sweep point shared one master fill
+    assert len({id(v) for v in views}) == len(views)  # but distinct views
+    # normalized master: filled at the reference wavenumber, bucketed eps
+    eps_m, k_m = fills[0][0], fills[0][1]
+    assert k_m == pytest.approx(sm._K2_REF)
+    assert abs(eps_m.imag / -eps0_im - 1.0) < sm._SOMM_EPS_IM_BUCKET
+    # end-to-end accuracy at the sweep edge (largest bucket offset): view
+    # vs direct evaluation at the TRUE eps holds the grid bar
+    w = 2.0 * np.pi * 28.45e6
+    k2 = w / sm._C_LIGHT
+    eps_true = 10.0 - 1j * 0.002 / (w * 8.8541878128e-12)
+    v = views[-1]
+    rng = np.random.default_rng(41)
+    r1 = rng.uniform(0.0, 14.0, 200)
+    th = rng.uniform(0.0, np.pi / 2, 200)
+    got = v.eval(r1, th)
+    want = sm.iv_surfaces_direct(eps_true, k2, r1, th, rtol=1e-8, omega=w)
+    for kk in sm._SURF_KEYS:
+        scale = np.abs(want[kk]).max()
+        assert np.abs(got[kk] - want[kk]).max() < 2.5e-3 * scale, kk
 
 
 def test_somm_grid_cache_bounded():

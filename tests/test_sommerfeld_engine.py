@@ -316,6 +316,7 @@ def test_grid_r1_max_is_capped(monkeypatch):
     # Exercise the mechanism at a small cap so the grids build cheaply.
     monkeypatch.setattr(som, "_SOMM_R1_CAP_LAMBDA", 3.0)
     som._GRID_CACHE.clear()
+    som._NORM_CACHE.clear()
     lam = 2.0 * np.pi / K2
     cap = 3.0 * lam
     g = som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=1000.0 * lam)
