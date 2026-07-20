@@ -8,6 +8,14 @@ dipole max 2.36 ohm (across 0.02-0.5 wl, all three grounds), inverted_l
 max 2.74, yagi max 0.98 — i.e. the bspline-vs-NEC cross-solver floor at
 every height, where the refl-coef model is ~22 ohm off at 0.05 wl and
 >130 ohm off at 0.02 wl. Gates are set ~1.3x above those measurements.
+
+The golden gates run at BOTH bspline degrees (parametrized). Degree 2 is
+the constructor default and was the only degree pinned here originally;
+degree 1 is the batched-swept basis the antennaknobs web sweep serves and
+was otherwise unpinned against the physical oracle on Sommerfeld ground.
+Its measured residuals sit in the same band (dipole 2.41, inverted_l 2.27,
+yagi 1.54 — the last a touch above degree 2's 0.98 on that off-resonance
+geometry, so yagi carries a per-degree gate).
 """
 
 import numpy as np
@@ -211,6 +219,7 @@ def test_rect_remainder_matches_dense_block():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("degree", [1, 2])
 @pytest.mark.parametrize(
     "frac,ground",
     [
@@ -221,30 +230,46 @@ def test_rect_remainder_matches_dense_block():
         (0.5, (10.0, 0.002)),
     ],
 )
-def test_dipole_tracks_gn2(frac, ground):
-    """Measured max residual 2.36 ohm across the full 18-case dipole
-    matrix — gate at 3.0."""
+def test_dipole_tracks_gn2(frac, ground, degree):
+    """Both bspline degrees track the nec2c gn 2 oracle. Measured max
+    residual across the full dipole matrix: 2.36 ohm (degree 2), 2.41
+    (degree 1) — gate at 3.0 for both. The degree-1 gate matters because
+    it is the batched-swept default nowhere else pinned against the
+    physical oracle on Sommerfeld ground."""
     gn2 = GOLDEN[("dipole", frac, *ground)]["finite"]
-    z = _solve("dipole", frac, ground_eps=ground, ground_model="sommerfeld")
+    z = _solve(
+        "dipole", frac, degree=degree, ground_eps=ground, ground_model="sommerfeld"
+    )
     assert abs(z - gn2) < 3.0
 
 
+@pytest.mark.parametrize("degree", [1, 2])
 @pytest.mark.parametrize("frac", [0.02, 0.2])
-def test_inverted_l_tracks_gn2(frac):
-    """Junction + vertical-current geometry; measured max 2.74 ohm —
-    gate at 3.5."""
+def test_inverted_l_tracks_gn2(frac, degree):
+    """Junction + vertical-current geometry, both degrees; measured max
+    2.74 ohm (degree 2), 2.27 (degree 1) — gate at 3.5."""
     gn2 = GOLDEN[("inverted_l", frac, 10.0, 0.002)]["finite"]
-    z = _solve("inverted_l", frac, ground_eps=(10.0, 0.002), ground_model="sommerfeld")
+    z = _solve(
+        "inverted_l",
+        frac,
+        degree=degree,
+        ground_eps=(10.0, 0.002),
+        ground_model="sommerfeld",
+    )
     assert abs(z - gn2) < 3.5
 
 
-def test_yagi_tracks_gn2_large_r1():
+@pytest.mark.parametrize("degree,tol", [(1, 2.0), (2, 1.5)])
+def test_yagi_tracks_gn2_large_r1(degree, tol):
     """>1.2-wavelength boom: image-ray distances past NEC's 1-wavelength
-    grid edge exercise the geometry-sized grid; measured max 0.98 ohm —
-    gate at 1.5."""
+    grid edge exercise the geometry-sized grid. Measured max 0.98 ohm
+    (degree 2, gate 1.5); the lower-order degree-1 basis sits at 1.54 on
+    this off-resonance |Z|~52 geometry, gated at 2.0."""
     gn2 = GOLDEN[("yagi", 0.2, 10.0, 0.002)]["finite"]
-    z = _solve("yagi", 0.2, ground_eps=(10.0, 0.002), ground_model="sommerfeld")
-    assert abs(z - gn2) < 1.5
+    z = _solve(
+        "yagi", 0.2, degree=degree, ground_eps=(10.0, 0.002), ground_model="sommerfeld"
+    )
+    assert abs(z - gn2) < tol
 
 
 def test_beats_refl_coef_below_010():
