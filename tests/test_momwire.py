@@ -2337,3 +2337,115 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
     # 29345985527). Still 5+ orders below physical tolerance; this pins
     # the algebra, not the reduction order.
     assert rel < 1e-10, f"chunked vs tensor grounded Z disagreement: rel {rel}"
+
+
+# --------------------------------------------------------------------------
+# Enrichment through the Y-matrix path (issue #165)
+# --------------------------------------------------------------------------
+
+
+def _hentenna_enrich_kwargs(n=21, feeds=None, variant="raw"):
+    """The K=3-junction hentenna fixture (same geometry as the enrichment
+    convergence tests above), packaged for the Y-matrix tests. `feeds`
+    overrides the single default feed with explicit (wire, arc, V) tuples."""
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.47
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    eps_feed = 0.05
+    half_w = wavelength * width_factor / 2
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+    A = (0.0, half_w, 0.0)
+    B_ = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps_feed, z_mid)
+    C_ = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E_ = (0.0, -half_w, z_bot)
+    T = (0.0, -eps_feed, z_mid)
+    wires = [
+        np.array([T, S], dtype=float),
+        np.array([S, B_], dtype=float),
+        np.array([B_, A, C_, D], dtype=float),
+        np.array([T, D], dtype=float),
+        np.array([D, E_, F, B_], dtype=float),
+    ]
+    junctions = [
+        [(0, "end"), (1, "start")],
+        [(0, "start"), (3, "start")],
+        [(1, "end"), (2, "start"), (4, "end")],
+        [(2, "end"), (3, "end"), (4, "start")],
+    ]
+    npe = [[3], [n], [n, n, n], [n], [n, n, n]]
+    kw = dict(
+        degree=2,
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=n,
+        junctions=junctions,
+        use_singular_enrichment=True,
+        enrichment_variant=variant,
+    )
+    if feeds is None:
+        kw.update(feed_wire_index=0, feed_arclength=eps_feed)
+    else:
+        kw["feeds"] = feeds
+    return kw
+
+
+@pytest.mark.parametrize("variant", ["raw", "stable", "tikhonov", "auto"])
+def test_bspline_enrichment_y_matrix_matches_impedance(variant):
+    """Single feed: 1/Y[0,0] must equal compute_impedance's Z essentially
+    exactly — both paths solve the SAME augmented system with the same
+    poly-block-restricted readout, so any gap is an implementation drift,
+    not physics. For "auto", the pass-1 union over one port column is the
+    same set compute_impedance selects, pinned via _auto_active_junctions."""
+    z_imp, _ = BSplineSolver(
+        **_hentenna_enrich_kwargs(variant=variant)
+    ).compute_impedance()
+    s = BSplineSolver(**_hentenna_enrich_kwargs(variant=variant))
+    Y = s.compute_y_matrix()
+    assert Y.shape == (1, 1)
+    assert abs(1.0 / Y[0, 0] - z_imp) / abs(z_imp) < 1e-9, (1.0 / Y[0, 0], z_imp)
+    if variant == "auto":
+        s2 = BSplineSolver(**_hentenna_enrich_kwargs(variant=variant))
+        s2.compute_impedance()
+        assert s._auto_active_junctions == s2._auto_active_junctions
+
+
+def test_bspline_enrichment_y_matrix_two_port():
+    """Two ports (feed wire + a port on the far rail): Y is symmetric
+    (Galerkin reciprocity survives the augmented system) and the [0,0]
+    entry equals the driven-port current of a (1 V, 0 V) impedance solve."""
+    kw1 = _hentenna_enrich_kwargs()
+    # port 2 halfway along wire 2's three-edge polyline
+    w2 = np.array(kw1["wires"][2])
+    arc2 = float(np.linalg.norm(np.diff(w2, axis=0), axis=1).sum()) / 2.0
+    feeds = [(0, kw1["feed_arclength"], 1.0 + 0.0j), (2, arc2, 0.0 + 0.0j)]
+    kw = _hentenna_enrich_kwargs(feeds=feeds)
+    Y = BSplineSolver(**kw).compute_y_matrix()
+    assert Y.shape == (2, 2)
+    assert abs(Y[0, 1] - Y[1, 0]) / abs(Y[0, 0]) < 1e-6
+    z_per, _ = BSplineSolver(**kw).compute_impedance()
+    # feeds = (1 V, 0 V): driving-point current at port 0 is exactly the
+    # first Y column's diagonal entry.
+    assert abs(1.0 / z_per[0] - Y[0, 0]) / abs(Y[0, 0]) < 1e-9
+
+
+def test_bspline_enrichment_y_matrix_swept_matches_single_k():
+    """The swept enrichment path is a per-k compute_y_matrix loop; its
+    first entry at k_array[0] == self.k must reproduce the single-k Y, and
+    self.k/omega/wavelength must be restored afterwards."""
+    s = BSplineSolver(**_hentenna_enrich_kwargs())
+    Y0 = s.compute_y_matrix()
+    k0, om0, wl0 = s.k, s.omega, s.wavelength
+    Ys = s.compute_y_matrix_swept(np.array([s.k, 1.02 * s.k]))
+    assert Ys.shape == (2, 1, 1)
+    assert abs(Ys[0, 0, 0] - Y0[0, 0]) / abs(Y0[0, 0]) < 1e-10
+    assert (s.k, s.omega, s.wavelength) == (k0, om0, wl0)
+    assert abs(Ys[1, 0, 0] - Y0[0, 0]) / abs(Y0[0, 0]) > 1e-4  # k moved, Y moved

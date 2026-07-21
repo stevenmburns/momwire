@@ -2492,14 +2492,18 @@ class BSplineSolver(_Cancelable):
         source columns, so the augmentation cost stays O(n_c²) per Y
         rather than scaling with the port count.
 
-        Singular enrichment is still gated; it composes an iterative two-
-        pass solve (variant="auto") that needs separate treatment.
+        Singular enrichment (issue #165) composes exactly as in
+        `compute_impedance`: the augmented system [[Z, Z_pe], [Z_ep, Z_ee]]
+        with zero RHS and zero KCL rows on the enrichment block, and the
+        readout restricted to the polynomial block (the source vectors are
+        zero on the enrichment dofs), so for a single feed 1/Y[0,0] equals
+        `compute_impedance`'s Z identically. The "auto" variant needs ONE
+        consistent operator across all port columns for Y to be symmetric
+        and self-consistent, so its pass-1 activates the UNION of junctions
+        whose tap_ratio exceeds the threshold under ANY port drive (a
+        single-feed solver therefore selects the same set as
+        `compute_impedance`).
         """
-        if self.use_singular_enrichment:
-            raise NotImplementedError(
-                "BSplineSolver.compute_y_matrix doesn't yet support enrichment"
-            )
-
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
             self._build_basis_polynomials(geom)
@@ -2532,6 +2536,57 @@ class BSplineSolver(_Cancelable):
                 s_f=s_f_j,
             )
 
+        # Clear any leftover per-junction selection from a prior solve
+        # (mirrors compute_impedance; "auto" repopulates it below).
+        self._auto_active_junctions = None
+
+        active_junctions = None
+        if self.use_singular_enrichment and self.enrichment_variant == "auto":
+            # Pass 1: all port columns against the un-enriched operator.
+            # A junction activates when its tap_ratio exceeds the threshold
+            # under ANY port drive — the union keeps one operator for every
+            # column, so Y stays symmetric and internally consistent.
+            X1 = self._solve_with_kcl_ports(Z, B, kcl_A)
+            active = set()
+            for j in range(n_ports):
+                ratios = self._junction_tap_ratios(X1[:, j])
+                active |= {
+                    i
+                    for i, r in enumerate(ratios)
+                    if r is not None and r > self.auto_tap_ratio_threshold
+                }
+            active_junctions = sorted(active)
+            self._auto_active_junctions = active_junctions
+            if not active_junctions:
+                return B.T @ X1  # pass-1 result is final
+
+        if self.use_singular_enrichment:
+            enrich = self._enrichment_Z_assemble(
+                geom, supp_seg, polys, active_junction_indices=active_junctions
+            )
+            if enrich is not None:
+                n_p = n_basis_total
+                n_e = enrich["n_enrich"]
+                n_total = n_p + n_e
+                Z_aug = np.zeros((n_total, n_total), dtype=np.complex128)
+                Z_aug[:n_p, :n_p] = Z
+                Z_aug[:n_p, n_p:] = enrich["Z_pe"]
+                Z_aug[n_p:, :n_p] = enrich["Z_ep"]
+                Z_aug[n_p:, n_p:] = enrich["Z_ee"]
+                if self.enrichment_variant == "tikhonov":
+                    s = float(np.mean(np.abs(np.diag(enrich["Z_ee"]))))
+                    Z_aug[n_p:, n_p:] += self.tikhonov_lambda * s * np.eye(n_e)
+                B_aug = np.zeros((n_total, n_ports), dtype=np.complex128)
+                B_aug[:n_p, :] = B
+                # Enrichment KCL: singular bases vanish at the junction →
+                # zero outflow columns, same padding as compute_impedance.
+                kcl_aug = np.zeros((kcl_A.shape[0], n_total), dtype=np.float64)
+                kcl_aug[:, :n_p] = kcl_A
+                X = self._solve_with_kcl_ports(Z_aug, B_aug, kcl_aug, overwrite=True)
+                # Readout restricted to the polynomial block (source
+                # vectors are zero on the enrichment dofs).
+                return B.T @ X[:n_p, :]
+
         X = self._solve_with_kcl_ports(Z, B, kcl_A, overwrite=True)
         return B.T @ X  # Y[i, j] = v_i^T · solve(Z, v_j)
 
@@ -2542,13 +2597,25 @@ class BSplineSolver(_Cancelable):
         port-batched KCL Schur solve) when `_swept_batched_available`;
         otherwise loops over k like `compute_impedance_swept`'s fallback,
         with junctions through the per-k `_solve_with_kcl_ports`.
-        Singular enrichment is still gated."""
-        if self.use_singular_enrichment:
-            raise NotImplementedError(
-                "BSplineSolver.compute_y_matrix_swept doesn't yet support enrichment"
-            )
-
+        Singular enrichment (issue #165) takes a per-k `compute_y_matrix`
+        loop — the same convention as `compute_impedance_swept`, whose
+        enrichment sweeps also live on the per-k path (the batched C++
+        assembly has no augmented-system variant)."""
         k_array = np.asarray(k_array, dtype=float)
+        if self.use_singular_enrichment:
+            k_save, wl_save, omega_save = self.k, self.wavelength, self.omega
+            n_ports = len(self.feeds)
+            out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
+            try:
+                for i, kk in enumerate(k_array):
+                    self._checkpoint()  # top of each frequency iteration
+                    self.k = float(kk)
+                    self.omega = self.k * self.c
+                    self.wavelength = self.c / (self.omega / (2 * np.pi))
+                    out[i] = self.compute_y_matrix()
+            finally:
+                self.k, self.wavelength, self.omega = k_save, wl_save, omega_save
+            return out
         k_save = self.k
         wl_save = self.wavelength
         omega_save = self.omega
