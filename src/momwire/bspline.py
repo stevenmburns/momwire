@@ -278,19 +278,6 @@ class BSplineSolver(_Cancelable):
             )
         if not wires:
             raise ValueError("wires must be non-empty")
-        if (
-            use_singular_enrichment
-            and ground_z is not None
-            and ground_eps is not None
-            and ground_model == "sommerfeld"
-        ):
-            raise NotImplementedError(
-                "use_singular_enrichment + Sommerfeld ground together not "
-                "supported yet — the enrichment bases carry no Sommerfeld "
-                "remainder-field reaction (#167 stage 3). Use "
-                "ground_model='refl-coef' for the fast finite ground (or "
-                "ground_eps=None for the PEC image), or drop enrichment."
-            )
         if use_singular_enrichment and (
             wire_conductivity is not None or insulation_radius is not None
         ):
@@ -1270,6 +1257,125 @@ class BSplineSolver(_Cancelable):
                 J_blk = Jf[:, :, sm[:, None], sn[None, :]]
                 Q += np.einsum("mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :])
         return Q
+
+    def _Q_sommerfeld_remainder_enrich(
+        self, geom, supp_seg_poly, polys_poly, spec_seg, spec_origin, eps_t
+    ):
+        """Sommerfeld remainder-field reaction for the enrichment DOFs (#167
+        stage 3): the (Q_pe, Q_ep, Q_ee) counterpart of
+        `_Z_sommerfeld_remainder`.
+
+        Same smooth remainder field F (theory eqs 143-147, interpolated from
+        the SommerfeldGrid via `_sommerfeld.remainder_field_proj`), projected
+        between basis quad nodes and integrated with the basis shapes. F is the
+        field of a unit current MOMENT — basis-agnostic — so the enrichment
+        side simply weights its nodes by ``w·Φ_sing`` where the polynomial side
+        uses the ``u^p`` moment weights. Field-form, so the singular basis's
+        endpoint charges are inherent (no separate Φ term).
+
+        The returned blocks are SUBTRACTED alongside the C2 exact-image blocks
+        (the sommerfeld branch of `_enrichment_Z_assemble`), matching the
+        polynomial `_ground_finite_Z` convention (C2-image + Q, one minus).
+        numpy-only and negligible: the enrichment node count is a handful.
+        """
+        gz = self.ground_z
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        tang = geom["tangents"]
+        h = geom["h_per_seg"]
+        d = self.degree
+        n_enrich = spec_seg.shape[0]
+        n_poly, n_wings = supp_seg_poly.shape
+        n_seg = seg_l.shape[0]
+
+        # Same grid extent as _Z_sommerfeld_remainder: endpoint pairs bound the
+        # obs-to-image distance, and every interior quad node sits inside it.
+        ex = np.concatenate([seg_l, seg_r])
+        dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
+        dye = ex[:, 1][:, None] - ex[:, 1][None, :]
+        hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
+        r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+        grid = self._somm_grid(eps_t, r1_max)
+
+        # Enrichment-side nodes: the singular basis value Φ_sing(u) sampled at
+        # the enrichment quadrature (n_qp_sing), times the node weight. Same
+        # Φ_sing shape as the free-space / image enrichment assembly.
+        gl_xi, gl_w = leggauss(self.n_qp_sing)
+        te = 0.5 * (gl_xi + 1.0)
+        we = 0.5 * gl_w
+        q_e = te.shape[0]
+        if self.enrichment_variant == "stable":
+            proj_coeffs = _xfem_projection_coeffs(d)
+        else:
+            proj_coeffs = np.zeros(d + 1)
+        polyval = np.polynomial.polynomial.polyval
+        eps_tiny = 1e-300
+
+        pos_e = np.zeros((n_enrich, q_e, 3))
+        wphi_e = np.zeros((n_enrich, q_e))  # node weight · Φ_sing
+        t_e = np.zeros((n_enrich, 3))
+        for e in range(n_enrich):
+            se = int(spec_seg[e])
+            orig = int(spec_origin[e])
+            u_norm = te if orig == 0 else (1.0 - te)
+            u_safe = np.where(u_norm > eps_tiny, u_norm, eps_tiny)
+            sing = u_norm * np.log(u_safe) - polyval(u_norm, proj_coeffs)
+            wphi_e[e] = (we * h[se]) * sing
+            pos_e[e] = seg_l[se] + te[:, None] * (seg_r[se] - seg_l[se])
+            t_e[e] = tang[se]
+
+        obs_e = pos_e.reshape(n_enrich * q_e, 3)
+        tobs_e = np.repeat(t_e, q_e, axis=0)
+
+        # Q_ee: enrichment observer vs enrichment source. F is smooth, so the
+        # Φ_sing-weighted double sum is a plain contraction (no chunking — the
+        # (n_enrich·q_e)² block is tiny).
+        proj_ee = _sommerfeld.remainder_field_proj(
+            obs_e, tobs_e, obs_e, tobs_e, gz, self.k, grid, self._cancel_flag
+        ).reshape(n_enrich, q_e, n_enrich, q_e)
+        Q_ee = np.einsum("eq,eqfr,fr->ef", wphi_e, proj_ee, wphi_e)
+
+        Q_pe = np.zeros((n_poly, n_enrich), dtype=np.complex128)
+        Q_ep = np.zeros((n_enrich, n_poly), dtype=np.complex128)
+        if n_poly == 0:
+            return Q_pe, Q_ep, Q_ee
+
+        # Polynomial-side nodes + u^p moment weights, exactly as
+        # _Z_sommerfeld_remainder (n_qp_sommerfeld order).
+        q = self.n_qp_sommerfeld
+        xg, wg = leggauss(q)
+        tq = 0.5 * (xg + 1.0)
+        nodes_p = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
+        u_phys = h[:, None] * tq[None, :]
+        w_node = 0.5 * h[:, None] * wg[None, :]
+        Wm = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
+        obs_p = nodes_p.reshape(n_seg * q, 3)
+        tobs_p = np.repeat(tang, q, axis=0)
+
+        # Q_pe: poly observer m, enrichment source e. Poly side assembled with
+        # the u^p moments + basis polynomials; enrichment side with w·Φ_sing.
+        proj_pe = _sommerfeld.remainder_field_proj(
+            obs_p, tobs_p, obs_e, tobs_e, gz, self.k, grid, self._cancel_flag
+        ).reshape(n_seg, q, n_enrich, q_e)
+        field_pe = np.einsum("iqer,er->iqe", proj_pe, wphi_e)  # (n_seg, q, n_enrich)
+        Jf_pe = np.einsum("piq,iqe->pie", Wm, field_pe)  # (d+1, n_seg, n_enrich)
+        for a in range(n_wings):
+            sm = supp_seg_poly[:, a]
+            Q_pe += np.einsum("mp,pme->me", polys_poly[:, a, :], Jf_pe[:, sm, :])
+
+        # Q_ep: enrichment observer e, poly source m.
+        proj_ep = _sommerfeld.remainder_field_proj(
+            obs_e, tobs_e, obs_p, tobs_p, gz, self.k, grid, self._cancel_flag
+        ).reshape(n_enrich, q_e, n_seg, q)
+        field_ep = np.einsum("eq,eqir->eir", wphi_e, proj_ep)  # (n_enrich, n_seg, q)
+        # Jf_ep[e, i, P] = Σ_r field_ep[e,i,r] · Wm[P,i,r]
+        Jf_ep = np.einsum("eir,Pir->eiP", field_ep, Wm)  # (n_enrich, n_seg, d+1)
+        for b in range(n_wings):
+            sn = supp_seg_poly[:, b]
+            # Jf_ep[:, sn, :] -> (n_enrich, n_poly, d+1); polys_poly[:, b, :] -> (n_poly, d+1)
+            Q_ep += np.einsum("enP,nP->en", Jf_ep[:, sn, :], polys_poly[:, b, :])
+
+        return Q_pe, Q_ep, Q_ee
 
     def _seg_radius(self, geom):
         """(n_segs_total,) per-segment radius — each segment inherits its
@@ -2510,14 +2616,24 @@ class BSplineSolver(_Cancelable):
         if self.ground_z is not None:
             # Ground image reaction for the enrichment DOFs (#167). Same
             # global-minus + per-segment-pair weight convention as the
-            # polynomial image block: PEC (ground_eps is None) uses the mirror
-            # tangent dot on the A term and unit weight on the charge term;
-            # the fast finite ground (refl-coef) swaps in the Fresnel weight
-            # tables `_image_refl_weights`. Sommerfeld stays guarded in
-            # __init__ (its remainder-field reaction is stage 3). numpy-only —
-            # the handful of enrichment DOFs make its cost negligible beside
-            # the poly image fill.
-            if self.ground_eps is not None:
+            # polynomial image block. Three grounds, one image kernel with the
+            # matching weight tables:
+            #   PEC        — mirror tangent dot on A, unit charge weight;
+            #   refl-coef  — Fresnel weight tables (`_image_refl_weights`);
+            #   sommerfeld — the C2 exact-image weights, PLUS the smooth
+            #                remainder-field reaction added below.
+            # numpy-only — the handful of enrichment DOFs make the cost
+            # negligible beside the poly image fill.
+            sommerfeld = (
+                self.ground_eps is not None and self.ground_model == "sommerfeld"
+            )
+            if sommerfeld:
+                eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+                c2 = (eps_t - 1.0) / (eps_t + 1.0)
+                td_img = self._image_tangent_dot(tangents)
+                w_A_all = np.ascontiguousarray(c2 * td_img, dtype=np.complex128)
+                w_Phi_all = np.full_like(w_A_all, c2)
+            elif self.ground_eps is not None:
                 w_A_all, w_Phi_all = self._image_refl_weights(
                     self._image_refl_prep(geom), self.omega
                 )
@@ -2551,6 +2667,19 @@ class BSplineSolver(_Cancelable):
             Z_pe = Z_pe - Z_pe_img
             Z_ep = Z_ep - Z_ep_img
             Z_ee = Z_ee - Z_ee_img
+
+            if sommerfeld:
+                # The exact-image part above is only the C2-scaled image; the
+                # Sommerfeld ground adds the smooth remainder field. Subtract
+                # its enrichment reaction (one minus, matching the poly
+                # `_ground_finite_Z` = C2-image + Q convention). In the
+                # ε̃ → ∞ limit C2 → 1 and Q → 0, so this collapses to PEC.
+                Q_pe, Q_ep, Q_ee = self._Q_sommerfeld_remainder_enrich(
+                    geom, supp_arr, polys_arr, spec_seg, spec_origin, eps_t
+                )
+                Z_pe = Z_pe - Q_pe
+                Z_ep = Z_ep - Q_ep
+                Z_ee = Z_ee - Q_ee
 
         return {
             "specs": specs,
