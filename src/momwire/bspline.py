@@ -278,12 +278,18 @@ class BSplineSolver(_Cancelable):
             )
         if not wires:
             raise ValueError("wires must be non-empty")
-        if use_singular_enrichment and ground_z is not None and ground_eps is not None:
+        if (
+            use_singular_enrichment
+            and ground_z is not None
+            and ground_eps is not None
+            and ground_model == "sommerfeld"
+        ):
             raise NotImplementedError(
-                "use_singular_enrichment + finite ground (ground_eps set) "
-                "together not supported yet — only the PEC image reaction is "
-                "implemented (#167). Use ground_eps=None for the PEC image, or "
-                "drop enrichment."
+                "use_singular_enrichment + Sommerfeld ground together not "
+                "supported yet — the enrichment bases carry no Sommerfeld "
+                "remainder-field reaction (#167 stage 3). Use "
+                "ground_model='refl-coef' for the fast finite ground (or "
+                "ground_eps=None for the PEC image), or drop enrichment."
             )
         if use_singular_enrichment and (
             wire_conductivity is not None or insulation_radius is not None
@@ -2222,7 +2228,8 @@ class BSplineSolver(_Cancelable):
         seg_l,
         seg_r,
         h_per_seg,
-        td_img_all,
+        w_A_all,
+        w_Phi_all,
         supp_seg_poly,
         polys_poly,
         a_squared,
@@ -2235,24 +2242,29 @@ class BSplineSolver(_Cancelable):
         proj_coeffs,
         ground_z,
     ):
-        """PEC ground-image reaction blocks for the enrichment DOFs (#167).
+        """Ground-image reaction blocks for the enrichment DOFs (#167).
 
         The image counterpart of `_assemble_Z_enrich_numpy`: the reaction of
         each real observer basis against the ground-plane image of every
         source basis. Same Galerkin kernel and mixing algebra
-        (`Z = jωμ·td·I_A + I_Φ/(jωε)`), with the two changes that define the
-        polynomial PEC image path (`_assemble_Z` with `td_all=td_img`):
+        (`Z = jωμ·w_A·I_A + w_Φ·I_Φ/(jωε)`), with the two changes that define
+        the polynomial image path (`_image_Z_weighted`):
 
           * the source-side quadrature positions are mirrored across
             `z = ground_z` (the `_image_positions` reflection), and
-          * the A-term tangent dot is the image dot
-            `t_m · (t_n,x, t_n,y, -t_n,z)`, passed in as `td_img_all`.
+          * the free-space tangent dot on the A term becomes the per-segment-
+            pair weight table `w_A_all[seg_m, seg_n]`, and the charge term
+            picks up `w_Phi_all[seg_m, seg_n]`.
 
-        The Φ (charge) term stays unweighted, exactly as the PEC polynomial
-        image leaves it. The caller SUBTRACTS the returned blocks from the
-        free-space (Z_pe, Z_ep, Z_ee): the single global minus captures both
-        the image current's anti-parallel horizontal direction and the image
-        charge's sign flip, matching the poly block's convention.
+        The same weight tables the polynomial block uses, so both grounds are
+        one code path: **PEC image** passes `w_A = t_m·(t_n,x, t_n,y, -t_n,z)`
+        (the mirror tangent dot) and `w_Φ = 1`; the **fast finite ground**
+        (refl-coef) passes the Fresnel dyad table `_ground_refl.a_term_weights`
+        and the image-charge table `_ground_refl.phi_term_weights`. The caller
+        SUBTRACTS the returned blocks from the free-space (Z_pe, Z_ep, Z_ee):
+        the single global minus captures both the image current's anti-parallel
+        horizontal direction and the image charge's sign flip (PEC), or is
+        absorbed into the complex Fresnel weights (finite).
 
         numpy-only: there are only a few enrichment DOFs (one per
         K≥enrichment_min_k junction), so this O(n_enrich·(n_enrich + n_poly))
@@ -2317,10 +2329,13 @@ class BSplineSolver(_Cancelable):
         # Z_ee image: real observer e against image source f. The image
         # reaction is symmetric (a mirror is an isometry, so reciprocity
         # holds), but both halves are computed independently to mirror the
-        # free-space "no .T shortcut" convention.
+        # free-space "no .T shortcut" convention. Complex per-pair weights
+        # w_A / w_Φ (PEC: real td / 1; finite: Fresnel) fold in via
+        # Z = jωμ·w_A·I_A + w_Φ·I_Φ/(jωε).
         for e in range(n_enrich):
             for f in range(n_enrich):
-                td = td_img_all[seg_e_arr[e], seg_e_arr[f]]
+                w_A = w_A_all[seg_e_arr[e], seg_e_arr[f]]
+                w_Phi = w_Phi_all[seg_e_arr[e], seg_e_arr[f]]
                 diff = pos_e_all[e, :, None, :] - pos_e_img[f, None, :, :]
                 R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
                 iR_4pi = inv_4pi / R
@@ -2333,13 +2348,10 @@ class BSplineSolver(_Cancelable):
                 wprod_P = (w_e_all[e] * sing_dval_all[e])[:, None] * (
                     w_e_all[f] * sing_dval_all[f]
                 )[None, :]
-                IA_re = np.sum(wprod_A * Gre)
-                IA_im = np.sum(wprod_A * Gim)
-                IP_re = np.sum(wprod_P * Gre)
-                IP_im = np.sum(wprod_P * Gim)
-                Z_ee[e, f] = complex(
-                    -omega_mu * td * IA_im + IP_im * inv_omega_eps,
-                    omega_mu * td * IA_re - IP_re * inv_omega_eps,
+                I_A = complex(np.sum(wprod_A * Gre), np.sum(wprod_A * Gim))
+                I_P = complex(np.sum(wprod_P * Gre), np.sum(wprod_P * Gim))
+                Z_ee[e, f] = (
+                    1j * omega_mu * w_A * I_A - 1j * w_Phi * I_P * inv_omega_eps
                 )
 
         # Z_pe / Z_ep image: real polynomial observer against image
@@ -2370,8 +2382,10 @@ class BSplineSolver(_Cancelable):
                 pos_m_img[:, 2] = 2.0 * ground_z - pos_m_img[:, 2]
                 for e in range(n_enrich):
                     seg_e = int(seg_e_arr[e])
-                    td_me = td_img_all[seg_m, seg_e]
-                    td_em = td_img_all[seg_e, seg_m]
+                    wA_me = w_A_all[seg_m, seg_e]
+                    wPhi_me = w_Phi_all[seg_m, seg_e]
+                    wA_em = w_A_all[seg_e, seg_m]
+                    wPhi_em = w_Phi_all[seg_e, seg_m]
                     # Z_pe leg: real poly m vs image enrichment e.
                     diff = pos_m[:, None, :] - pos_e_img[e, None, :, :]
                     R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
@@ -2385,10 +2399,8 @@ class BSplineSolver(_Cancelable):
                     wprod_P = (w_m * dv)[:, None] * (w_e_all[e] * sing_dval_all[e])[
                         None, :
                     ]
-                    pe_IA_re = np.sum(wprod_A * Gre)
-                    pe_IA_im = np.sum(wprod_A * Gim)
-                    pe_IP_re = np.sum(wprod_P * Gre)
-                    pe_IP_im = np.sum(wprod_P * Gim)
+                    pe_I_A = complex(np.sum(wprod_A * Gre), np.sum(wprod_A * Gim))
+                    pe_I_P = complex(np.sum(wprod_P * Gre), np.sum(wprod_P * Gim))
                     # Z_ep leg: real enrichment e vs image poly m.
                     diff = pos_e_all[e, :, None, :] - pos_m_img[None, :, :]
                     R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
@@ -2402,17 +2414,15 @@ class BSplineSolver(_Cancelable):
                     wprod_P = (w_e_all[e] * sing_dval_all[e])[:, None] * (w_m * dv)[
                         None, :
                     ]
-                    ep_IA_re = np.sum(wprod_A * Gre)
-                    ep_IA_im = np.sum(wprod_A * Gim)
-                    ep_IP_re = np.sum(wprod_P * Gre)
-                    ep_IP_im = np.sum(wprod_P * Gim)
-                    Z_pe[m, e] += complex(
-                        -omega_mu * td_me * pe_IA_im + pe_IP_im * inv_omega_eps,
-                        omega_mu * td_me * pe_IA_re - pe_IP_re * inv_omega_eps,
+                    ep_I_A = complex(np.sum(wprod_A * Gre), np.sum(wprod_A * Gim))
+                    ep_I_P = complex(np.sum(wprod_P * Gre), np.sum(wprod_P * Gim))
+                    Z_pe[m, e] += (
+                        1j * omega_mu * wA_me * pe_I_A
+                        - 1j * wPhi_me * pe_I_P * inv_omega_eps
                     )
-                    Z_ep[e, m] += complex(
-                        -omega_mu * td_em * ep_IA_im + ep_IP_im * inv_omega_eps,
-                        omega_mu * td_em * ep_IA_re - ep_IP_re * inv_omega_eps,
+                    Z_ep[e, m] += (
+                        1j * omega_mu * wA_em * ep_I_A
+                        - 1j * wPhi_em * ep_I_P * inv_omega_eps
                     )
 
         return Z_pe, Z_ep, Z_ee
@@ -2498,23 +2508,34 @@ class BSplineSolver(_Cancelable):
             Z_pe, Z_ep, Z_ee = self._assemble_Z_enrich_numpy(*kernel_args)
 
         if self.ground_z is not None:
-            # PEC ground image reaction for the enrichment DOFs (#167). Same
-            # global-minus + image-tangent-dot convention as the polynomial
-            # image block (compute_impedance does
-            # `Z -= _assemble_Z(J_img, td_all=td_img)`). Finite grounds stay
-            # guarded in __init__, so ground_z here is always the PEC image
-            # (ground_eps is None). numpy-only — the handful of enrichment
-            # DOFs make its cost negligible beside the poly image fill.
-            td_img_all = np.ascontiguousarray(
-                self._image_tangent_dot(tangents), dtype=np.float64
-            )
+            # Ground image reaction for the enrichment DOFs (#167). Same
+            # global-minus + per-segment-pair weight convention as the
+            # polynomial image block: PEC (ground_eps is None) uses the mirror
+            # tangent dot on the A term and unit weight on the charge term;
+            # the fast finite ground (refl-coef) swaps in the Fresnel weight
+            # tables `_image_refl_weights`. Sommerfeld stays guarded in
+            # __init__ (its remainder-field reaction is stage 3). numpy-only —
+            # the handful of enrichment DOFs make its cost negligible beside
+            # the poly image fill.
+            if self.ground_eps is not None:
+                w_A_all, w_Phi_all = self._image_refl_weights(
+                    self._image_refl_prep(geom), self.omega
+                )
+                w_A_all = np.ascontiguousarray(w_A_all, dtype=np.complex128)
+                w_Phi_all = np.ascontiguousarray(w_Phi_all, dtype=np.complex128)
+            else:
+                w_A_all = np.ascontiguousarray(
+                    self._image_tangent_dot(tangents), dtype=np.complex128
+                )
+                w_Phi_all = np.ones_like(w_A_all)
             Z_pe_img, Z_ep_img, Z_ee_img = self._assemble_Z_enrich_image_numpy(
                 spec_seg,
                 spec_origin,
                 seg_l_arr,
                 seg_r_arr,
                 h_arr,
-                td_img_all,
+                w_A_all,
+                w_Phi_all,
                 supp_arr,
                 polys_arr,
                 a_squared,

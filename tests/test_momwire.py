@@ -2026,10 +2026,11 @@ def test_sinusoidal_ground_swept_matches_single_freq():
     assert abs(z_single - z_swept) < 1e-9
 
 
-def test_bspline_finite_ground_with_enrichment_raises():
-    """Enrichment over a *finite* ground (ground_eps set) is still guarded —
-    only the PEC image reaction is implemented (#167). The PEC image
-    (ground_eps=None) is allowed; see the grounded-enrichment tests below."""
+def test_bspline_sommerfeld_ground_with_enrichment_raises():
+    """Enrichment over a *Sommerfeld* ground is still guarded — the
+    enrichment bases carry no Sommerfeld remainder-field reaction (#167
+    stage 3). The PEC image and the fast finite (refl-coef) ground are both
+    supported; see the grounded-enrichment tests below."""
     L = 2 * 0.962 * 22 / 4
     import pytest
 
@@ -2041,18 +2042,22 @@ def test_bspline_finite_ground_with_enrichment_raises():
             degree=2,
             ground_z=0.0,
             ground_eps=(13.0, 0.005),
+            ground_model="sommerfeld",
             use_singular_enrichment=True,
         )
 
-    # PEC image (no ground_eps) must construct — the whole point of #167.
-    BSplineSolver(
-        wires=[_h_dipole(L, 5.0)],
-        n_per_edge_per_wire=[[20]],
-        nsegs=20,
-        degree=2,
-        ground_z=0.0,
-        use_singular_enrichment=True,
-    )
+    # PEC image (no ground_eps) and the fast finite ground (refl-coef with
+    # ground_eps) must both construct — #167 stages 1 and 2.
+    for extra in ({}, {"ground_eps": (13.0, 0.005)}):
+        BSplineSolver(
+            wires=[_h_dipole(L, 5.0)],
+            n_per_edge_per_wire=[[20]],
+            nsegs=20,
+            degree=2,
+            ground_z=0.0,
+            use_singular_enrichment=True,
+            **extra,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2358,15 +2363,19 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
 # --------------------------------------------------------------------------
 
 
-def _hentenna_enrich_kwargs(n=21, feeds=None, variant="raw", ground_clearance=None):
+def _hentenna_enrich_kwargs(
+    n=21, feeds=None, variant="raw", ground_clearance=None, ground_eps=None
+):
     """The K=3-junction hentenna fixture (same geometry as the enrichment
     convergence tests above), packaged for the Y-matrix tests. `feeds`
     overrides the single default feed with explicit (wire, arc, V) tuples.
 
-    `ground_clearance` (in wavelengths), when set, adds a PEC ground plane
-    that many below the antenna's lowest wire — i.e. `ground_z = z_bot -
+    `ground_clearance` (in wavelengths), when set, adds a ground plane that
+    many below the antenna's lowest wire — i.e. `ground_z = z_bot -
     ground_clearance·λ` — exercising the enrichment image reaction (#167)
-    while keeping every wire strictly above the plane."""
+    while keeping every wire strictly above the plane. `ground_eps` (a
+    complex ε̃ or (eps_r, sigma) tuple) selects the fast finite ground;
+    None leaves the plane PEC."""
     C_LIGHT = 299_792_458.0
     freq_mhz = 28.47
     wavelength = C_LIGHT / (freq_mhz * 1e6)
@@ -2416,6 +2425,8 @@ def _hentenna_enrich_kwargs(n=21, feeds=None, variant="raw", ground_clearance=No
         kw["feeds"] = feeds
     if ground_clearance is not None:
         kw["ground_z"] = z_bot - ground_clearance * wavelength
+    if ground_eps is not None:
+        kw["ground_eps"] = ground_eps
     return kw
 
 
@@ -2503,6 +2514,52 @@ def test_bspline_d2_hentenna_enrichment_convergence_over_pec():
     assert dX_12 * dX_23 > 0, f"X differences sign-flipped (noise floor); Xs={Xs}"
     p = np.log(abs(dX_12 / dX_23)) / np.log(ns[1] / ns[0])
     assert p > 2.5, f"X convergence rate over PEC p={p:.2f} below 2.5 (Xs={Xs})"
+
+
+@pytest.mark.parametrize("variant", ["raw", "stable", "tikhonov", "auto"])
+def test_bspline_enrichment_refl_coef_ground_y_matrix_identity(variant):
+    """The #165 oracle over the fast finite (refl-coef) ground (#167 stage 2):
+    1/Y[0,0] == compute_impedance with the enrichment blocks bordered by their
+    Fresnel-weighted ground-image reaction. Same tightest self-consistency
+    check as the PEC case, now with complex per-segment-pair weights."""
+    kw = _hentenna_enrich_kwargs(
+        variant=variant, ground_clearance=0.25, ground_eps=(13.0, 0.005)
+    )
+    z_imp, _ = BSplineSolver(**kw).compute_impedance()
+    Y = BSplineSolver(**kw).compute_y_matrix()
+    assert Y.shape == (1, 1)
+    assert abs(1.0 / Y[0, 0] - z_imp) / abs(z_imp) < 1e-9, (1.0 / Y[0, 0], z_imp)
+
+
+def test_bspline_enrichment_refl_coef_pec_limit():
+    """ε̃ → ∞ collapses the fast finite ground to the PEC image (the Fresnel
+    weights → the mirror tangent dot / unit charge weight). The enriched
+    refl-coef impedance at ground_eps=1e16 must reproduce the PEC-image
+    enriched impedance — the canonical ground-limit consistency check, now
+    reachable for enrichment because stage 2 admits ground_eps."""
+    z_pec, _ = BSplineSolver(
+        **_hentenna_enrich_kwargs(ground_clearance=0.25)
+    ).compute_impedance()
+    z_lim, _ = BSplineSolver(
+        **_hentenna_enrich_kwargs(ground_clearance=0.25, ground_eps=1e16)
+    ).compute_impedance()
+    assert abs(z_lim - z_pec) / abs(z_pec) < 1e-6
+
+
+def test_bspline_enrichment_refl_coef_ground_reciprocity():
+    """Two ports over the fast finite ground: Y stays symmetric
+    (Y[0,1] == Y[1,0]). Galerkin reciprocity survives the complex Fresnel-
+    weighted image blocks only if Z_pe and Z_ep remain mutual transposes."""
+    kw1 = _hentenna_enrich_kwargs(ground_clearance=0.25, ground_eps=(13.0, 0.005))
+    w2 = np.array(kw1["wires"][2])
+    arc2 = float(np.linalg.norm(np.diff(w2, axis=0), axis=1).sum()) / 2.0
+    feeds = [(0, kw1["feed_arclength"], 1.0 + 0.0j), (2, arc2, 0.0 + 0.0j)]
+    kw = _hentenna_enrich_kwargs(
+        feeds=feeds, ground_clearance=0.25, ground_eps=(13.0, 0.005)
+    )
+    Y = BSplineSolver(**kw).compute_y_matrix()
+    assert Y.shape == (2, 2)
+    assert abs(Y[0, 1] - Y[1, 0]) / abs(Y[0, 0]) < 1e-6
 
 
 def test_bspline_enrichment_y_matrix_two_port():
