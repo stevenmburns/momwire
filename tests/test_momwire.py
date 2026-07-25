@@ -2026,29 +2026,17 @@ def test_sinusoidal_ground_swept_matches_single_freq():
     assert abs(z_single - z_swept) < 1e-9
 
 
-def test_bspline_sommerfeld_ground_with_enrichment_raises():
-    """Enrichment over a *Sommerfeld* ground is still guarded — the
-    enrichment bases carry no Sommerfeld remainder-field reaction (#167
-    stage 3). The PEC image and the fast finite (refl-coef) ground are both
-    supported; see the grounded-enrichment tests below."""
+def test_bspline_all_grounds_with_enrichment_construct():
+    """Enrichment is supported over every ground model (#167 complete): PEC
+    image (no ground_eps), fast finite (refl-coef with ground_eps), and
+    Sommerfeld (ground_model='sommerfeld'). None raise; the functional
+    grounded-enrichment tests below check each one's physics."""
     L = 2 * 0.962 * 22 / 4
-    import pytest
-
-    with pytest.raises(NotImplementedError):
-        BSplineSolver(
-            wires=[_h_dipole(L, 5.0)],
-            n_per_edge_per_wire=[[20]],
-            nsegs=20,
-            degree=2,
-            ground_z=0.0,
-            ground_eps=(13.0, 0.005),
-            ground_model="sommerfeld",
-            use_singular_enrichment=True,
-        )
-
-    # PEC image (no ground_eps) and the fast finite ground (refl-coef with
-    # ground_eps) must both construct — #167 stages 1 and 2.
-    for extra in ({}, {"ground_eps": (13.0, 0.005)}):
+    for extra in (
+        {},
+        {"ground_eps": (13.0, 0.005)},
+        {"ground_eps": (13.0, 0.005), "ground_model": "sommerfeld"},
+    ):
         BSplineSolver(
             wires=[_h_dipole(L, 5.0)],
             n_per_edge_per_wire=[[20]],
@@ -2364,7 +2352,12 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
 
 
 def _hentenna_enrich_kwargs(
-    n=21, feeds=None, variant="raw", ground_clearance=None, ground_eps=None
+    n=21,
+    feeds=None,
+    variant="raw",
+    ground_clearance=None,
+    ground_eps=None,
+    ground_model=None,
 ):
     """The K=3-junction hentenna fixture (same geometry as the enrichment
     convergence tests above), packaged for the Y-matrix tests. `feeds`
@@ -2427,6 +2420,8 @@ def _hentenna_enrich_kwargs(
         kw["ground_z"] = z_bot - ground_clearance * wavelength
     if ground_eps is not None:
         kw["ground_eps"] = ground_eps
+    if ground_model is not None:
+        kw["ground_model"] = ground_model
     return kw
 
 
@@ -2556,6 +2551,76 @@ def test_bspline_enrichment_refl_coef_ground_reciprocity():
     feeds = [(0, kw1["feed_arclength"], 1.0 + 0.0j), (2, arc2, 0.0 + 0.0j)]
     kw = _hentenna_enrich_kwargs(
         feeds=feeds, ground_clearance=0.25, ground_eps=(13.0, 0.005)
+    )
+    Y = BSplineSolver(**kw).compute_y_matrix()
+    assert Y.shape == (2, 2)
+    assert abs(Y[0, 1] - Y[1, 0]) / abs(Y[0, 0]) < 1e-6
+
+
+@pytest.mark.parametrize("variant", ["raw", "stable", "tikhonov", "auto"])
+def test_bspline_enrichment_sommerfeld_ground_y_matrix_identity(variant):
+    """The #165 oracle over the Sommerfeld ground (#167 stage 3): 1/Y[0,0] ==
+    compute_impedance with the enrichment blocks bordered by their C2 exact-
+    image reaction plus the smooth remainder reaction. Both solve paths must
+    agree on the augmented Sommerfeld system."""
+    kw = _hentenna_enrich_kwargs(
+        variant=variant,
+        ground_clearance=0.25,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+    )
+    z_imp, _ = BSplineSolver(**kw).compute_impedance()
+    Y = BSplineSolver(**kw).compute_y_matrix()
+    assert Y.shape == (1, 1)
+    assert abs(1.0 / Y[0, 0] - z_imp) / abs(z_imp) < 1e-9, (1.0 / Y[0, 0], z_imp)
+
+
+def test_bspline_enrichment_sommerfeld_pec_limit():
+    """ε̃ → ∞ collapses Sommerfeld to the PEC image: the exact-image weight
+    C2 = (ε̃−1)/(ε̃+1) → 1 and the smooth remainder field → 0. The enriched
+    Sommerfeld impedance at ground_eps=1e13 must reproduce the PEC-image
+    enriched impedance — a direct check that BOTH new Sommerfeld pieces (the
+    C2 image and the remainder reaction) vanish correctly in the limit."""
+    z_pec, _ = BSplineSolver(
+        **_hentenna_enrich_kwargs(ground_clearance=0.25)
+    ).compute_impedance()
+    z_lim, _ = BSplineSolver(
+        **_hentenna_enrich_kwargs(
+            ground_clearance=0.25, ground_eps=1e13, ground_model="sommerfeld"
+        )
+    ).compute_impedance()
+    assert abs(z_lim - z_pec) / abs(z_pec) < 1e-6
+
+
+def test_bspline_enrichment_sommerfeld_tracks_refl_coef():
+    """Sanity bound on the remainder magnitude: over the same finite ground,
+    the exact Sommerfeld and the fast refl-coef approximation must land close
+    (both model the same physics, differing only by the remainder correction
+    the refl-coef path drops). A few percent apart, not diverging — catches a
+    remainder block that is mis-scaled or has the wrong sign."""
+    kw = dict(ground_clearance=0.25, ground_eps=(13.0, 0.005))
+    z_somm, _ = BSplineSolver(
+        **_hentenna_enrich_kwargs(ground_model="sommerfeld", **kw)
+    ).compute_impedance()
+    z_refl, _ = BSplineSolver(**_hentenna_enrich_kwargs(**kw)).compute_impedance()
+    assert abs(z_somm - z_refl) / abs(z_refl) < 0.05
+
+
+def test_bspline_enrichment_sommerfeld_ground_reciprocity():
+    """Two ports over the Sommerfeld ground: Y stays symmetric
+    (Y[0,1] == Y[1,0]). Reciprocity survives only if the C2-image and
+    remainder blocks each keep Z_pe and Z_ep mutual transposes."""
+    kw1 = _hentenna_enrich_kwargs(
+        ground_clearance=0.25, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
+    )
+    w2 = np.array(kw1["wires"][2])
+    arc2 = float(np.linalg.norm(np.diff(w2, axis=0), axis=1).sum()) / 2.0
+    feeds = [(0, kw1["feed_arclength"], 1.0 + 0.0j), (2, arc2, 0.0 + 0.0j)]
+    kw = _hentenna_enrich_kwargs(
+        feeds=feeds,
+        ground_clearance=0.25,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
     )
     Y = BSplineSolver(**kw).compute_y_matrix()
     assert Y.shape == (2, 2)
