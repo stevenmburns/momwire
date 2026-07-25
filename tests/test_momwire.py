@@ -2026,7 +2026,10 @@ def test_sinusoidal_ground_swept_matches_single_freq():
     assert abs(z_single - z_swept) < 1e-9
 
 
-def test_bspline_ground_with_enrichment_raises():
+def test_bspline_finite_ground_with_enrichment_raises():
+    """Enrichment over a *finite* ground (ground_eps set) is still guarded —
+    only the PEC image reaction is implemented (#167). The PEC image
+    (ground_eps=None) is allowed; see the grounded-enrichment tests below."""
     L = 2 * 0.962 * 22 / 4
     import pytest
 
@@ -2037,8 +2040,19 @@ def test_bspline_ground_with_enrichment_raises():
             nsegs=20,
             degree=2,
             ground_z=0.0,
+            ground_eps=(13.0, 0.005),
             use_singular_enrichment=True,
         )
+
+    # PEC image (no ground_eps) must construct — the whole point of #167.
+    BSplineSolver(
+        wires=[_h_dipole(L, 5.0)],
+        n_per_edge_per_wire=[[20]],
+        nsegs=20,
+        degree=2,
+        ground_z=0.0,
+        use_singular_enrichment=True,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2344,10 +2358,15 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
 # --------------------------------------------------------------------------
 
 
-def _hentenna_enrich_kwargs(n=21, feeds=None, variant="raw"):
+def _hentenna_enrich_kwargs(n=21, feeds=None, variant="raw", ground_clearance=None):
     """The K=3-junction hentenna fixture (same geometry as the enrichment
     convergence tests above), packaged for the Y-matrix tests. `feeds`
-    overrides the single default feed with explicit (wire, arc, V) tuples."""
+    overrides the single default feed with explicit (wire, arc, V) tuples.
+
+    `ground_clearance` (in wavelengths), when set, adds a PEC ground plane
+    that many below the antenna's lowest wire — i.e. `ground_z = z_bot -
+    ground_clearance·λ` — exercising the enrichment image reaction (#167)
+    while keeping every wire strictly above the plane."""
     C_LIGHT = 299_792_458.0
     freq_mhz = 28.47
     wavelength = C_LIGHT / (freq_mhz * 1e6)
@@ -2395,6 +2414,8 @@ def _hentenna_enrich_kwargs(n=21, feeds=None, variant="raw"):
         kw.update(feed_wire_index=0, feed_arclength=eps_feed)
     else:
         kw["feeds"] = feeds
+    if ground_clearance is not None:
+        kw["ground_z"] = z_bot - ground_clearance * wavelength
     return kw
 
 
@@ -2416,6 +2437,72 @@ def test_bspline_enrichment_y_matrix_matches_impedance(variant):
         s2 = BSplineSolver(**_hentenna_enrich_kwargs(variant=variant))
         s2.compute_impedance()
         assert s._auto_active_junctions == s2._auto_active_junctions
+
+
+@pytest.mark.parametrize("variant", ["raw", "stable", "tikhonov", "auto"])
+def test_bspline_enrichment_pec_ground_y_matrix_identity(variant):
+    """The #165 oracle with a PEC ground plane (#167): 1/Y[0,0] must still
+    equal compute_impedance's Z, now that both border the enrichment blocks
+    with their ground-image reaction subtracted. If the image reflection were
+    inconsistent between the impedance Schur solve and the Y-matrix port
+    solve the identity would break — it is the tightest self-consistency
+    check on the new blocks."""
+    kw = _hentenna_enrich_kwargs(variant=variant, ground_clearance=0.25)
+    z_imp, _ = BSplineSolver(**kw).compute_impedance()
+    Y = BSplineSolver(**kw).compute_y_matrix()
+    assert Y.shape == (1, 1)
+    assert abs(1.0 / Y[0, 0] - z_imp) / abs(z_imp) < 1e-9, (1.0 / Y[0, 0], z_imp)
+
+
+def test_bspline_enrichment_pec_ground_reciprocity():
+    """Two ports over a PEC ground: Y stays symmetric (Y[0,1] == Y[1,0]).
+    Galerkin reciprocity of the augmented system survives only if the image
+    reaction blocks Z_pe and Z_ep are mutual transposes — a direct check that
+    the enrichment↔image and image↔enrichment legs agree."""
+    kw1 = _hentenna_enrich_kwargs(ground_clearance=0.25)
+    w2 = np.array(kw1["wires"][2])
+    arc2 = float(np.linalg.norm(np.diff(w2, axis=0), axis=1).sum()) / 2.0
+    feeds = [(0, kw1["feed_arclength"], 1.0 + 0.0j), (2, arc2, 0.0 + 0.0j)]
+    kw = _hentenna_enrich_kwargs(feeds=feeds, ground_clearance=0.25)
+    Y = BSplineSolver(**kw).compute_y_matrix()
+    assert Y.shape == (2, 2)
+    assert abs(Y[0, 1] - Y[1, 0]) / abs(Y[0, 0]) < 1e-6
+
+
+def test_bspline_enrichment_pec_far_plane_approaches_free_space():
+    """Image-limit consistency (the eps→∞ analog for the PEC path): pushing
+    the ground plane far below the antenna must drive the enriched grounded
+    impedance back to the free-space enriched value as the image reaction
+    (∝ 1/R) vanishes. Monotone in clearance, and within 1e-3 at 50 λ."""
+    z_free, _ = BSplineSolver(**_hentenna_enrich_kwargs()).compute_impedance()
+    z_near, _ = BSplineSolver(
+        **_hentenna_enrich_kwargs(ground_clearance=5.0)
+    ).compute_impedance()
+    z_far, _ = BSplineSolver(
+        **_hentenna_enrich_kwargs(ground_clearance=50.0)
+    ).compute_impedance()
+    assert abs(z_far - z_free) < abs(z_near - z_free)  # monotone toward free
+    assert abs(z_far - z_free) / abs(z_free) < 1e-3
+
+
+def test_bspline_d2_hentenna_enrichment_convergence_over_pec():
+    """Acceptance gate (#167): the enrichment convergence-rate result holds
+    over a PEC ground plane. Sweeping the mesh with a fixed ground 0.25 λ
+    below the antenna, the fitted X-rate p in Z(N) = Z_inf + C/N^p must stay
+    above 2.5 — the enrichment still restores high-order convergence at the
+    K≥3 junctions; the smooth image reaction reintroduces no cusp."""
+    ns = [21, 41, 81]
+    Xs = []
+    for n in ns:
+        z, _ = BSplineSolver(
+            **_hentenna_enrich_kwargs(n=n, ground_clearance=0.25)
+        ).compute_impedance()
+        Xs.append(z.imag)
+    dX_12 = Xs[0] - Xs[1]
+    dX_23 = Xs[1] - Xs[2]
+    assert dX_12 * dX_23 > 0, f"X differences sign-flipped (noise floor); Xs={Xs}"
+    p = np.log(abs(dX_12 / dX_23)) / np.log(ns[1] / ns[0])
+    assert p > 2.5, f"X convergence rate over PEC p={p:.2f} below 2.5 (Xs={Xs})"
 
 
 def test_bspline_enrichment_y_matrix_two_port():
