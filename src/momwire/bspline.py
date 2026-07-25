@@ -278,10 +278,12 @@ class BSplineSolver(_Cancelable):
             )
         if not wires:
             raise ValueError("wires must be non-empty")
-        if use_singular_enrichment and ground_z is not None:
+        if use_singular_enrichment and ground_z is not None and ground_eps is not None:
             raise NotImplementedError(
-                "use_singular_enrichment + ground_z together not supported "
-                "yet — image reaction for enrichment bases isn't implemented"
+                "use_singular_enrichment + finite ground (ground_eps set) "
+                "together not supported yet — only the PEC image reaction is "
+                "implemented (#167). Use ground_eps=None for the PEC image, or "
+                "drop enrichment."
             )
         if use_singular_enrichment and (
             wire_conductivity is not None or insulation_radius is not None
@@ -2213,6 +2215,208 @@ class BSplineSolver(_Cancelable):
 
         return Z_pe, Z_ep, Z_ee
 
+    @staticmethod
+    def _assemble_Z_enrich_image_numpy(
+        spec_seg,
+        spec_origin,
+        seg_l,
+        seg_r,
+        h_per_seg,
+        td_img_all,
+        supp_seg_poly,
+        polys_poly,
+        a_squared,
+        k,
+        omega,
+        eps_,
+        mu_,
+        gl_t01,
+        gl_w01,
+        proj_coeffs,
+        ground_z,
+    ):
+        """PEC ground-image reaction blocks for the enrichment DOFs (#167).
+
+        The image counterpart of `_assemble_Z_enrich_numpy`: the reaction of
+        each real observer basis against the ground-plane image of every
+        source basis. Same Galerkin kernel and mixing algebra
+        (`Z = jωμ·td·I_A + I_Φ/(jωε)`), with the two changes that define the
+        polynomial PEC image path (`_assemble_Z` with `td_all=td_img`):
+
+          * the source-side quadrature positions are mirrored across
+            `z = ground_z` (the `_image_positions` reflection), and
+          * the A-term tangent dot is the image dot
+            `t_m · (t_n,x, t_n,y, -t_n,z)`, passed in as `td_img_all`.
+
+        The Φ (charge) term stays unweighted, exactly as the PEC polynomial
+        image leaves it. The caller SUBTRACTS the returned blocks from the
+        free-space (Z_pe, Z_ep, Z_ee): the single global minus captures both
+        the image current's anti-parallel horizontal direction and the image
+        charge's sign flip, matching the poly block's convention.
+
+        numpy-only: there are only a few enrichment DOFs (one per
+        K≥enrichment_min_k junction), so this O(n_enrich·(n_enrich + n_poly))
+        assembly is negligible beside the O(N²) polynomial image fill and
+        needs no C++ twin. `a_squared` regularises the reduced kernel exactly
+        as in the free-space path, so a ground-touching wire (image coincident
+        with the wire) stays finite.
+        """
+        n_enrich = spec_seg.shape[0]
+        n_poly, n_wings = supp_seg_poly.shape
+        d_plus_1 = polys_poly.shape[2]
+        n_qp = gl_t01.shape[0]
+
+        Z_pe = np.zeros((n_poly, n_enrich), dtype=np.complex128)
+        Z_ep = np.zeros((n_enrich, n_poly), dtype=np.complex128)
+        Z_ee = np.zeros((n_enrich, n_enrich), dtype=np.complex128)
+        if n_enrich == 0:
+            return Z_pe, Z_ep, Z_ee
+
+        inv_4pi = 1.0 / (4.0 * np.pi)
+        omega_mu = omega * mu_
+        inv_omega_eps = 1.0 / (omega * eps_)
+        eps_tiny = 1e-300
+
+        proj_deriv_coeffs = proj_coeffs[1:] * np.arange(1, d_plus_1)
+
+        # Per-enrichment precompute — identical to the free-space reference
+        # (kept in lockstep by inspection); then mirror the positions to serve
+        # as the ground-plane image sources.
+        pos_e_all = np.zeros((n_enrich, n_qp, 3))
+        sing_val_all = np.zeros((n_enrich, n_qp))
+        sing_dval_all = np.zeros((n_enrich, n_qp))
+        w_e_all = np.zeros((n_enrich, n_qp))
+        polyval = np.polynomial.polynomial.polyval
+        for e in range(n_enrich):
+            se = int(spec_seg[e])
+            orig = int(spec_origin[e])
+            he = h_per_seg[se]
+            dphi_sign = 1.0 if orig == 0 else -1.0
+            t = gl_t01
+            u_norm = t if orig == 0 else (1.0 - t)
+            u_safe = np.where(u_norm > eps_tiny, u_norm, eps_tiny)
+            log_u = np.log(u_safe)
+            poly_val = polyval(u_norm, proj_coeffs)
+            if proj_deriv_coeffs.size > 0:
+                poly_dval = polyval(u_norm, proj_deriv_coeffs)
+            else:
+                poly_dval = np.zeros_like(u_norm)
+            sing_val_all[e] = u_norm * log_u - poly_val
+            sing_dval_all[e] = dphi_sign * (log_u + 1.0 - poly_dval) / he
+            w_e_all[e] = gl_w01 * he
+            pos_e_all[e, :, 0] = (1.0 - t) * seg_l[se, 0] + t * seg_r[se, 0]
+            pos_e_all[e, :, 1] = (1.0 - t) * seg_l[se, 1] + t * seg_r[se, 1]
+            pos_e_all[e, :, 2] = (1.0 - t) * seg_l[se, 2] + t * seg_r[se, 2]
+
+        # Image sources: mirror z across the ground plane.
+        pos_e_img = pos_e_all.copy()
+        pos_e_img[..., 2] = 2.0 * ground_z - pos_e_img[..., 2]
+
+        seg_e_arr = spec_seg.astype(np.int64, copy=False)
+
+        # Z_ee image: real observer e against image source f. The image
+        # reaction is symmetric (a mirror is an isometry, so reciprocity
+        # holds), but both halves are computed independently to mirror the
+        # free-space "no .T shortcut" convention.
+        for e in range(n_enrich):
+            for f in range(n_enrich):
+                td = td_img_all[seg_e_arr[e], seg_e_arr[f]]
+                diff = pos_e_all[e, :, None, :] - pos_e_img[f, None, :, :]
+                R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
+                iR_4pi = inv_4pi / R
+                phase = -k * R
+                Gre = np.cos(phase) * iR_4pi
+                Gim = np.sin(phase) * iR_4pi
+                wprod_A = (w_e_all[e] * sing_val_all[e])[:, None] * (
+                    w_e_all[f] * sing_val_all[f]
+                )[None, :]
+                wprod_P = (w_e_all[e] * sing_dval_all[e])[:, None] * (
+                    w_e_all[f] * sing_dval_all[f]
+                )[None, :]
+                IA_re = np.sum(wprod_A * Gre)
+                IA_im = np.sum(wprod_A * Gim)
+                IP_re = np.sum(wprod_P * Gre)
+                IP_im = np.sum(wprod_P * Gim)
+                Z_ee[e, f] = complex(
+                    -omega_mu * td * IA_im + IP_im * inv_omega_eps,
+                    omega_mu * td * IA_re - IP_re * inv_omega_eps,
+                )
+
+        # Z_pe / Z_ep image: real polynomial observer against image
+        # enrichment source (Z_pe) and real enrichment observer against image
+        # polynomial source (Z_ep). Both mirror one side and use the image
+        # tangent dot; the two agree by reciprocity but are computed apart.
+        for m in range(n_poly):
+            for w_idx in range(n_wings):
+                cw = polys_poly[m, w_idx]
+                if not np.any(cw != 0.0):
+                    continue
+                seg_m = int(supp_seg_poly[m, w_idx])
+                hm = h_per_seg[seg_m]
+                t = gl_t01
+                u_arc = t * hm
+                pv = polyval(u_arc, cw)
+                cw_deriv = cw[1:] * np.arange(1, d_plus_1)
+                if cw_deriv.size > 0:
+                    dv = polyval(u_arc, cw_deriv)
+                else:
+                    dv = np.zeros_like(u_arc)
+                w_m = gl_w01 * hm
+                pos_m = np.empty((n_qp, 3))
+                pos_m[:, 0] = (1.0 - t) * seg_l[seg_m, 0] + t * seg_r[seg_m, 0]
+                pos_m[:, 1] = (1.0 - t) * seg_l[seg_m, 1] + t * seg_r[seg_m, 1]
+                pos_m[:, 2] = (1.0 - t) * seg_l[seg_m, 2] + t * seg_r[seg_m, 2]
+                pos_m_img = pos_m.copy()
+                pos_m_img[:, 2] = 2.0 * ground_z - pos_m_img[:, 2]
+                for e in range(n_enrich):
+                    seg_e = int(seg_e_arr[e])
+                    td_me = td_img_all[seg_m, seg_e]
+                    td_em = td_img_all[seg_e, seg_m]
+                    # Z_pe leg: real poly m vs image enrichment e.
+                    diff = pos_m[:, None, :] - pos_e_img[e, None, :, :]
+                    R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
+                    iR_4pi = inv_4pi / R
+                    phase = -k * R
+                    Gre = np.cos(phase) * iR_4pi
+                    Gim = np.sin(phase) * iR_4pi
+                    wprod_A = (w_m * pv)[:, None] * (w_e_all[e] * sing_val_all[e])[
+                        None, :
+                    ]
+                    wprod_P = (w_m * dv)[:, None] * (w_e_all[e] * sing_dval_all[e])[
+                        None, :
+                    ]
+                    pe_IA_re = np.sum(wprod_A * Gre)
+                    pe_IA_im = np.sum(wprod_A * Gim)
+                    pe_IP_re = np.sum(wprod_P * Gre)
+                    pe_IP_im = np.sum(wprod_P * Gim)
+                    # Z_ep leg: real enrichment e vs image poly m.
+                    diff = pos_e_all[e, :, None, :] - pos_m_img[None, :, :]
+                    R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
+                    iR_4pi = inv_4pi / R
+                    phase = -k * R
+                    Gre = np.cos(phase) * iR_4pi
+                    Gim = np.sin(phase) * iR_4pi
+                    wprod_A = (w_e_all[e] * sing_val_all[e])[:, None] * (w_m * pv)[
+                        None, :
+                    ]
+                    wprod_P = (w_e_all[e] * sing_dval_all[e])[:, None] * (w_m * dv)[
+                        None, :
+                    ]
+                    ep_IA_re = np.sum(wprod_A * Gre)
+                    ep_IA_im = np.sum(wprod_A * Gim)
+                    ep_IP_re = np.sum(wprod_P * Gre)
+                    ep_IP_im = np.sum(wprod_P * Gim)
+                    Z_pe[m, e] += complex(
+                        -omega_mu * td_me * pe_IA_im + pe_IP_im * inv_omega_eps,
+                        omega_mu * td_me * pe_IA_re - pe_IP_re * inv_omega_eps,
+                    )
+                    Z_ep[e, m] += complex(
+                        -omega_mu * td_em * ep_IA_im + ep_IP_im * inv_omega_eps,
+                        omega_mu * td_em * ep_IA_re - ep_IP_re * inv_omega_eps,
+                    )
+
+        return Z_pe, Z_ep, Z_ee
+
     def _enrichment_Z_assemble(
         self, geom, supp_seg_poly, polys_poly, active_junction_indices=None
     ):
@@ -2260,28 +2464,72 @@ class BSplineSolver(_Cancelable):
         else:
             proj_coeffs = np.zeros(self.degree + 1)
 
+        seg_l_arr = np.ascontiguousarray(geom["seg_l"], dtype=np.float64)
+        seg_r_arr = np.ascontiguousarray(geom["seg_r"], dtype=np.float64)
+        h_arr = np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64)
+        supp_arr = np.ascontiguousarray(supp_seg_poly, dtype=np.int64)
+        polys_arr = np.ascontiguousarray(polys_poly, dtype=np.float64)
+        a_squared = float(self._uniform_radius) ** 2
+        t01_arr = np.ascontiguousarray(t01, dtype=np.float64)
+        w01_arr = np.ascontiguousarray(w01, dtype=np.float64)
+        proj_arr = np.ascontiguousarray(proj_coeffs, dtype=np.float64)
+
         kernel_args = (
             spec_seg,
             spec_origin,
-            np.ascontiguousarray(geom["seg_l"], dtype=np.float64),
-            np.ascontiguousarray(geom["seg_r"], dtype=np.float64),
-            np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64),
+            seg_l_arr,
+            seg_r_arr,
+            h_arr,
             td_all,
-            np.ascontiguousarray(supp_seg_poly, dtype=np.int64),
-            np.ascontiguousarray(polys_poly, dtype=np.float64),
-            float(self._uniform_radius) ** 2,
+            supp_arr,
+            polys_arr,
+            a_squared,
             float(self.k),
             float(self.omega),
             float(self.eps),
             float(self.mu),
-            np.ascontiguousarray(t01, dtype=np.float64),
-            np.ascontiguousarray(w01, dtype=np.float64),
-            np.ascontiguousarray(proj_coeffs, dtype=np.float64),
+            t01_arr,
+            w01_arr,
+            proj_arr,
         )
         if _HAVE_ENRICH_ACCEL:
             Z_pe, Z_ep, Z_ee = _acc.assemble_Z_enrich(*kernel_args)
         else:
             Z_pe, Z_ep, Z_ee = self._assemble_Z_enrich_numpy(*kernel_args)
+
+        if self.ground_z is not None:
+            # PEC ground image reaction for the enrichment DOFs (#167). Same
+            # global-minus + image-tangent-dot convention as the polynomial
+            # image block (compute_impedance does
+            # `Z -= _assemble_Z(J_img, td_all=td_img)`). Finite grounds stay
+            # guarded in __init__, so ground_z here is always the PEC image
+            # (ground_eps is None). numpy-only — the handful of enrichment
+            # DOFs make its cost negligible beside the poly image fill.
+            td_img_all = np.ascontiguousarray(
+                self._image_tangent_dot(tangents), dtype=np.float64
+            )
+            Z_pe_img, Z_ep_img, Z_ee_img = self._assemble_Z_enrich_image_numpy(
+                spec_seg,
+                spec_origin,
+                seg_l_arr,
+                seg_r_arr,
+                h_arr,
+                td_img_all,
+                supp_arr,
+                polys_arr,
+                a_squared,
+                float(self.k),
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                t01_arr,
+                w01_arr,
+                proj_arr,
+                float(self.ground_z),
+            )
+            Z_pe = Z_pe - Z_pe_img
+            Z_ep = Z_ep - Z_ep_img
+            Z_ee = Z_ee - Z_ee_img
 
         return {
             "specs": specs,
