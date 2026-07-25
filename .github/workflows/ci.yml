@@ -14,7 +14,11 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
-      - run: pip install ruff
+      # Pinned (matches antennaknobs' ruff.yml): the unpinned `pip install
+      # ruff` pulls the latest release, so a new ruff version silently turns
+      # CI red on pre-existing code with no repo change. Bump this pin
+      # deliberately, alongside the repo-wide `ruff check` cleanup it implies.
+      - run: pip install ruff==0.15.21
       - run: ruff check
 
   test:
