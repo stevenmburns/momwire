@@ -165,6 +165,29 @@ def test_swept_matches_per_k():
         np.testing.assert_allclose(Y_swept[i], s2.compute_y_matrix(), rtol=1e-6)
 
 
+def test_zero_gap_feeds_allowed_with_junction_ports():
+    """A solve driven entirely through junction ports needs no gap feed:
+    feeds=[] is legal when junction_ports exist, and the Y matrix covers
+    exactly the junction ports."""
+    wires, npe, junctions = _split_wires(0.04, 0.01, 20)
+    s = BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feeds=[],
+        junctions=junctions,
+        junction_ports=[0, 1],
+        wavelength=WAVELENGTH,
+    )
+    Y = s.compute_y_matrix()
+    assert Y.shape == (2, 2)
+    Zp = np.linalg.inv(Y)
+    z_diff = complex(Zp[0, 0] - Zp[0, 1] - Zp[1, 0] + Zp[1, 1])
+    # same structure as _port_pair_zdiff (whose dummy feed is a shorted
+    # gap = plain wire): the two must agree to solver precision
+    z_ref = _port_pair_zdiff(0.04, 0.01, 20)
+    assert abs(z_diff - z_ref) / abs(z_ref) < 1e-6
+
+
 def test_grounded_junction_port_rejected():
     """A junction whose node touches the ground plane already has its KCL
     row dropped (current exits via the image, #151) — declaring it a port
