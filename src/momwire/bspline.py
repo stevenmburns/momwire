@@ -245,6 +245,7 @@ class BSplineSolver(_Cancelable):
         feeds=None,
         feed_smoothing_factor=None,
         junctions=None,
+        junction_ports=None,
         n_qp_pair=4,
         n_qp_source=16,
         wavelength=22,
@@ -551,8 +552,12 @@ class BSplineSolver(_Cancelable):
         self.junctions = []
         if junctions is not None:
             for j, jw in enumerate(junctions):
-                if len(jw) < 2:
-                    raise ValueError(f"junction {j}: need >= 2 wire-ends")
+                # A 1-entry group is legal (issue #172): as a plain junction
+                # it enforces I_end = 0 through the KCL row — numerically a
+                # free end — and as a junction PORT it is the natural form
+                # of a lone-conductor-end attachment.
+                if len(jw) < 1:
+                    raise ValueError(f"junction {j}: need >= 1 wire-end")
                 normalized = []
                 for w, end in jw:
                     if not (0 <= w < n_w):
@@ -565,6 +570,33 @@ class BSplineSolver(_Cancelable):
                         )
                     normalized.append((int(w), end))
                 self.junctions.append(normalized)
+
+        # Junction ports (issue #172): junction groups promoted to network
+        # ports. Each entry is (junction_index, voltage) — a plain int means
+        # voltage 0. A port junction's KCL closure row leaves the constraint
+        # set (the grounded-junction #151 move) and becomes the port's
+        # source/readout vector instead: voltage V drives the excitation
+        # v += V·A_p, and the port current reads I_p = A_p·coeffs — the same
+        # Galerkin-reciprocity pairing as delta-gap feeds, so mixed-port Y
+        # matrices stay symmetric by construction. Ports are ordered after
+        # the gap feeds everywhere: [feeds..., junction_ports...].
+        self.junction_ports = []
+        if junction_ports is not None:
+            seen = set()
+            for p in junction_ports:
+                if isinstance(p, (int, np.integer)):
+                    j_idx, volt = int(p), 0j
+                else:
+                    j_idx, volt = int(p[0]), complex(p[1])
+                if not (0 <= j_idx < len(self.junctions)):
+                    raise ValueError(
+                        f"junction_ports: junction index {j_idx} out of range "
+                        f"[0, {len(self.junctions)})"
+                    )
+                if j_idx in seen:
+                    raise ValueError(f"junction_ports: junction {j_idx} listed twice")
+                seen.add(j_idx)
+                self.junction_ports.append((j_idx, volt))
 
         # `compute_impedance(...)` and `currents_at_knots(coeffs)` both call
         # `_build_geometry()` + `_build_basis_polynomials(geom)` from scratch
@@ -777,6 +809,47 @@ class BSplineSolver(_Cancelable):
             if abs(pt[2] - gz) <= self._ground_touch_tol(pl):
                 grounded.add(j_idx)
         return frozenset(grounded)
+
+    def _split_kcl_ports(self, kcl_A):
+        """Split the assembled KCL matrix into (constraint rows, port rows,
+        port voltages) per `self.junction_ports` (issue #172).
+
+        `_build_basis_polynomials` emits one KCL row per non-grounded
+        junction, in junction-index order; a junction port's row moves from
+        the constraint set to the port set. Returns
+        ``(kcl_con, port_A, port_V)`` where ``port_A`` rows follow
+        `self.junction_ports` order and ``port_V`` is the matching complex
+        voltage vector. With no junction ports this is
+        ``(kcl_A, (0, n) empty, (0,) empty)`` — the exact passthrough.
+        """
+        if not self.junction_ports:
+            return (
+                kcl_A,
+                np.zeros((0, kcl_A.shape[1]), dtype=np.float64),
+                np.zeros(0, dtype=np.complex128),
+            )
+        grounded = self._grounded_junctions()
+        row_of = {}
+        row = 0
+        for j in range(len(self.junctions)):
+            if j not in grounded:
+                row_of[j] = row
+                row += 1
+        assert row == kcl_A.shape[0], (row, kcl_A.shape)
+        port_rows = []
+        for j_idx, _v in self.junction_ports:
+            if j_idx in grounded:
+                raise ValueError(
+                    f"junction {j_idx} is both grounded and a junction port — "
+                    "a grounded node's voltage is pinned by the ground image, "
+                    "so it cannot also be a driven port"
+                )
+            port_rows.append(row_of[j_idx])
+        keep = [r for r in range(kcl_A.shape[0]) if r not in set(port_rows)]
+        kcl_con = kcl_A[keep, :]
+        port_A = kcl_A[port_rows, :]
+        port_V = np.array([v for _j, v in self.junction_ports], dtype=np.complex128)
+        return kcl_con, port_A, port_V
 
     # ------------------------------------------------------------------
     # Basis polynomial extraction
@@ -2799,18 +2872,28 @@ class BSplineSolver(_Cancelable):
         for V_i, v_i in zip(voltages, v_per_feed):
             v += V_i * v_i
 
+        # Junction ports (issue #172): drive v += V_p·A_p per port and
+        # append the A_p rows to the readout set; the port-junction KCL
+        # rows leave the constraint matrix.
+        kcl_con, port_A, port_V = self._split_kcl_ports(kcl_A)
+        v += port_V @ port_A
+        port_vectors = v_per_feed + [port_A[i] for i in range(port_A.shape[0])]
+        all_voltages = np.concatenate([voltages, port_V])
+        n_ports_total = n_feeds + port_A.shape[0]
+
         def _per_feed_z(coeffs_full):
-            """Drive-point impedance per feed. coeffs_full may include the
-            enrichment block; v_per_feed entries are zero on that block by
-            convention (the feed is not on the enriched segment), so the
-            inner product naturally restricts to the polynomial block.
+            """Drive-point impedance per port (gap feeds, then junction
+            ports). coeffs_full may include the enrichment block; every port
+            vector is zero on that block by convention (gap feeds are not on
+            enriched segments; singular enrichment bases vanish AT junctions),
+            so the inner product naturally restricts to the polynomial block.
             """
             currents = np.array(
-                [v_i @ coeffs_full[: v_i.shape[0]] for v_i in v_per_feed],
+                [u_i @ coeffs_full[: u_i.shape[0]] for u_i in port_vectors],
                 dtype=np.complex128,
             )
-            z_per = voltages / currents
-            return z_per[0] if n_feeds == 1 else z_per
+            z_per = all_voltages / currents
+            return z_per[0] if n_ports_total == 1 else z_per
 
         # Clear any leftover per-junction selection from a prior solve
         # (variant="auto" repopulates this below; everything else leaves
@@ -2826,7 +2909,7 @@ class BSplineSolver(_Cancelable):
             # discretization error — skip. Above ⇒ genuinely balanced
             # K-way split, enrichment captures real cusp physics — keep.
             self._checkpoint()  # before the enrichment pass-1 probe solve
-            coeffs_p1 = self._solve_with_kcl(Z, v, kcl_A)
+            coeffs_p1 = self._solve_with_kcl(Z, v, kcl_con)
             ratios = self._junction_tap_ratios(coeffs_p1)
             active_junctions = [
                 j
@@ -2862,15 +2945,15 @@ class BSplineSolver(_Cancelable):
                 v_aug = np.zeros(n_total, dtype=np.complex128)
                 v_aug[:n_p] = v
                 # Enrichment KCL: singular bases vanish at junction → 0 outflow
-                kcl_aug = np.zeros((kcl_A.shape[0], n_total), dtype=np.float64)
-                kcl_aug[:, :n_p] = kcl_A
+                kcl_aug = np.zeros((kcl_con.shape[0], n_total), dtype=np.float64)
+                kcl_aug[:, :n_p] = kcl_con
                 # Z_aug is dead after the solve (and the unused `self.z`
                 # stash was dropped — it retained the full n_basis² matrix
                 # for nothing), so let LAPACK factor in place.
                 coeffs = self._solve_with_kcl(Z_aug, v_aug, kcl_aug, overwrite=True)
                 return _per_feed_z(coeffs), coeffs
 
-        coeffs = self._solve_with_kcl(Z, v, kcl_A, overwrite=True)
+        coeffs = self._solve_with_kcl(Z, v, kcl_con, overwrite=True)
         return _per_feed_z(coeffs), coeffs
 
     def compute_y_matrix(self) -> np.ndarray:
@@ -2920,8 +3003,8 @@ class BSplineSolver(_Cancelable):
         Z = self._apply_loading(Z)
 
         # One source vector per feed, columns of B.
-        n_ports = len(self.feeds)
-        B = np.zeros((n_basis_total, n_ports), dtype=np.complex128)
+        n_feeds = len(self.feeds)
+        B = np.zeros((n_basis_total, n_feeds), dtype=np.complex128)
         for j, (w_i, arc_i, _v) in enumerate(self.feeds):
             arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
             s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
@@ -2934,6 +3017,14 @@ class BSplineSolver(_Cancelable):
                 s_f=s_f_j,
             )
 
+        # Junction ports (issue #172): their KCL rows become port-vector
+        # columns after the gap feeds; the constraint set shrinks to match.
+        # Reciprocity holds for them exactly as for gap feeds (drive vector
+        # == readout vector), so the mixed Y stays symmetric.
+        kcl_con, port_A, _port_V = self._split_kcl_ports(kcl_A)
+        B = np.hstack([B, port_A.T.astype(np.complex128)])
+        n_ports = B.shape[1]
+
         # Clear any leftover per-junction selection from a prior solve
         # (mirrors compute_impedance; "auto" repopulates it below).
         self._auto_active_junctions = None
@@ -2944,7 +3035,7 @@ class BSplineSolver(_Cancelable):
             # A junction activates when its tap_ratio exceeds the threshold
             # under ANY port drive — the union keeps one operator for every
             # column, so Y stays symmetric and internally consistent.
-            X1 = self._solve_with_kcl_ports(Z, B, kcl_A)
+            X1 = self._solve_with_kcl_ports(Z, B, kcl_con)
             active = set()
             for j in range(n_ports):
                 ratios = self._junction_tap_ratios(X1[:, j])
@@ -2978,14 +3069,14 @@ class BSplineSolver(_Cancelable):
                 B_aug[:n_p, :] = B
                 # Enrichment KCL: singular bases vanish at the junction →
                 # zero outflow columns, same padding as compute_impedance.
-                kcl_aug = np.zeros((kcl_A.shape[0], n_total), dtype=np.float64)
-                kcl_aug[:, :n_p] = kcl_A
+                kcl_aug = np.zeros((kcl_con.shape[0], n_total), dtype=np.float64)
+                kcl_aug[:, :n_p] = kcl_con
                 X = self._solve_with_kcl_ports(Z_aug, B_aug, kcl_aug, overwrite=True)
                 # Readout restricted to the polynomial block (source
                 # vectors are zero on the enrichment dofs).
                 return B.T @ X[:n_p, :]
 
-        X = self._solve_with_kcl_ports(Z, B, kcl_A, overwrite=True)
+        X = self._solve_with_kcl_ports(Z, B, kcl_con, overwrite=True)
         return B.T @ X  # Y[i, j] = v_i^T · solve(Z, v_j)
 
     def compute_y_matrix_swept(self, k_array) -> np.ndarray:
@@ -3002,7 +3093,7 @@ class BSplineSolver(_Cancelable):
         k_array = np.asarray(k_array, dtype=float)
         if self.use_singular_enrichment:
             k_save, wl_save, omega_save = self.k, self.wavelength, self.omega
-            n_ports = len(self.feeds)
+            n_ports = len(self.feeds) + len(self.junction_ports)
             out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
             try:
                 for i, kk in enumerate(k_array):
@@ -3023,10 +3114,10 @@ class BSplineSolver(_Cancelable):
             self._build_basis_polynomials(geom)
         )
         n_basis_total = supp_seg.shape[0]
-        n_ports = len(self.feeds)
+        n_feeds = len(self.feeds)
 
         # k-independent source vectors.
-        B = np.zeros((n_basis_total, n_ports), dtype=np.complex128)
+        B = np.zeros((n_basis_total, n_feeds), dtype=np.complex128)
         for j, (w_i, arc_i, _v) in enumerate(self.feeds):
             arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
             s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
@@ -3039,6 +3130,12 @@ class BSplineSolver(_Cancelable):
                 s_f=s_f_j,
             )
 
+        # Junction-port columns (issue #172) — k-independent like the gap
+        # source vectors, so both the batched and per-k paths carry them.
+        kcl_con, port_A, _port_V = self._split_kcl_ports(kcl_A)
+        B = np.hstack([B, port_A.T.astype(np.complex128)])
+        n_ports = B.shape[1]
+
         # Fully batched fast path: batched assembly + one k- and
         # port-batched KCL Schur solve per chunk. out[k] = B^T X, same
         # readout as the per-k loop below.
@@ -3047,7 +3144,7 @@ class BSplineSolver(_Cancelable):
             for c0, ks, Z in self._swept_batched_z_chunks(
                 k_array, geom, supp_seg, polys
             ):
-                X = self._solve_with_kcl_swept_ports(Z, B, kcl_A)
+                X = self._solve_with_kcl_swept_ports(Z, B, kcl_con)
                 out[c0 : c0 + ks.shape[0]] = np.einsum("bp,kbq->kpq", B, X)
             return out
 
@@ -3084,7 +3181,7 @@ class BSplineSolver(_Cancelable):
                         J_img, supp_seg, polys, geom, td_all=td_img
                     )
             Z = self._apply_loading(Z)
-            X = self._solve_with_kcl_ports(Z, B, kcl_A, overwrite=True)
+            X = self._solve_with_kcl_ports(Z, B, kcl_con, overwrite=True)
             out[ki] = B.T @ X
 
         self.k = k_save
@@ -3241,18 +3338,27 @@ class BSplineSolver(_Cancelable):
         v = np.zeros(n_basis_total, dtype=np.complex128)
         for V_i, v_i in zip(voltages, v_per_feed):
             v += V_i * v_i
-        vpf_T = np.array(v_per_feed).T  # (n_basis, n_feeds)
+
+        # Junction ports (issue #172): k-independent drive and readout rows,
+        # exactly like the gap source vectors, so they batch for free.
+        kcl_con, port_A, port_V = self._split_kcl_ports(kcl_A)
+        v += port_V @ port_A
+        all_voltages = np.concatenate([voltages, port_V])
+        n_total = n_feeds + port_A.shape[0]
+        vpf_T = np.hstack(
+            [np.array(v_per_feed).T, port_A.T.astype(np.complex128)]
+        )  # (n_basis, n_total)
 
         z_out = (
             np.zeros(n_k, dtype=np.complex128)
-            if n_feeds == 1
-            else np.zeros((n_k, n_feeds), dtype=np.complex128)
+            if n_total == 1
+            else np.zeros((n_k, n_total), dtype=np.complex128)
         )
         for c0, ks, Z in self._swept_batched_z_chunks(k_array, geom, supp_seg, polys):
-            coeffs = self._solve_with_kcl_batch(Z, v, kcl_A)
-            currents = coeffs @ vpf_T  # (chunk, n_feeds)
-            z_per = voltages[None, :] / currents
-            z_out[c0 : c0 + ks.shape[0]] = z_per[:, 0] if n_feeds == 1 else z_per
+            coeffs = self._solve_with_kcl_batch(Z, v, kcl_con)
+            currents = coeffs @ vpf_T  # (chunk, n_total)
+            z_per = all_voltages[None, :] / currents
+            z_out[c0 : c0 + ks.shape[0]] = z_per[:, 0] if n_total == 1 else z_per
 
         return z_out
 
@@ -3266,11 +3372,11 @@ class BSplineSolver(_Cancelable):
         (enrichment and finite grounds live here).
         """
         k_array = np.asarray(k_array, dtype=float)
-        n_feeds = len(self.feeds)
-        if n_feeds == 1:
+        n_total = len(self.feeds) + len(self.junction_ports)
+        if n_total == 1:
             z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
         else:
-            z_out = np.zeros((k_array.shape[0], n_feeds), dtype=np.complex128)
+            z_out = np.zeros((k_array.shape[0], n_total), dtype=np.complex128)
         k_save = self.k
         wl_save = self.wavelength
         omega_save = self.omega

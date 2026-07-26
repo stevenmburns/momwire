@@ -1429,6 +1429,17 @@ class HMatrixSolver(BSplineSolver):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        if self.junction_ports:
+            # The iterative paths thread kcl_A into the augmented sparse
+            # system / GMRES constraints directly and know nothing of the
+            # constraint/port split (issue #172). Dense BSplineSolver
+            # supports junction ports; extend here when a use case needs
+            # array-scale end attachments.
+            raise NotImplementedError(
+                "junction_ports are not supported on the iterative "
+                "HMatrix/ArrayBlock solvers yet (momwire#172); use "
+                "BSplineSolver"
+            )
         self.aca_eta = float(aca_eta)
         self.aca_leaf_size = int(aca_leaf_size)
         self.aca_tol = float(aca_tol)
