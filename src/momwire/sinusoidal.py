@@ -85,12 +85,18 @@ class SinusoidalSolver(_Cancelable):
         ground_model="refl-coef",
         n_qp_sommerfeld=3,
         junctions=None,
+        junction_ports=None,
         n_qp_const=8,
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
         cancel=None,
     ):
+        if junction_ports:
+            raise NotImplementedError(
+                "junction_ports are not supported on SinusoidalSolver "
+                "(momwire#172); use BSplineSolver"
+            )
         self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
