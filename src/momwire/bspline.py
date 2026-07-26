@@ -467,7 +467,10 @@ class BSplineSolver(_Cancelable):
                 raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
             self.feeds = [(int(feed_wire_index), feed_arclength, 1.0 + 0.0j)]
         else:
-            if len(feeds) == 0:
+            if len(feeds) == 0 and not junction_ports:
+                # Junction ports (issue #172) are drive/readout ports in
+                # their own right, so a solve driven entirely through them
+                # needs no gap feed at all.
                 raise ValueError("feeds must contain at least one entry")
             norm = []
             for i, f in enumerate(feeds):
@@ -484,8 +487,10 @@ class BSplineSolver(_Cancelable):
                 norm.append((int(w_i), arc_i, complex(v_i)))
             self.feeds = norm
 
-        self.feed_wire_index = self.feeds[0][0]
-        self.feed_arclength = self.feeds[0][1]
+        # Back-compat scalars — None when driven entirely through junction
+        # ports (feeds=[] with junction_ports, issue #172).
+        self.feed_wire_index = self.feeds[0][0] if self.feeds else None
+        self.feed_arclength = self.feeds[0][1] if self.feeds else None
         self.n_qp_pair = int(n_qp_pair)
 
         # Singular basis enrichment at K≥`enrichment_min_k` junctions.
