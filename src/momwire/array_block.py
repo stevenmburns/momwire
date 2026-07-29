@@ -952,7 +952,14 @@ class ArrayBlockSolver(HMatrixSolver):
             # solves the same deck in ~2.1 GB (issue #143).
             _CACHE_STATS["hmatrix_fallback"] += 1
             self._last_n_coupling_aca = 0
-            return super()._build_operator()
+            H = super()._build_operator()
+            # solver_diag() (antennaknobs#613) reads this straight off the
+            # operator — a plain `HMatrix` instance identifies the fallback
+            # by type, but only this branch knows *why* it fell back.
+            H._fft_reason = (
+                "fell back to the H-matrix (no exploitable element partition)"
+            )
+            return H
         key = (
             self._geometry_cache_key(),
             float(self.k),
@@ -1212,14 +1219,25 @@ class ArrayBlockSolver(HMatrixSolver):
         # form and skip the O(P²) pair loop entirely. "auto" requires enough
         # elements for the FFT bookkeeping to matter; `lattice_fft=True`
         # forces it (tests / benchmarks), False disables.
-        if (
-            self.lattice_fft
-            and len(shape_blocks) == 1
-            and (self.lattice_fft is True or P >= 16)
-        ):
+        #
+        # fft_reason (antennaknobs#613) walks the same gate in the same
+        # order and records, in the gate's own vocabulary, which condition
+        # kept the path from engaging — solver_diag() surfaces it verbatim
+        # so a user can act on it (constant height, 16+ elements, a regular
+        # grid) instead of just seeing `lattice_fft: false`.
+        if not self.lattice_fft:
+            fft_reason = "lattice FFT explicitly disabled"
+        elif len(shape_blocks) > 1:
+            fft_reason = (
+                f"shape classes split by height above ground "
+                f"({len(shape_blocks)} classes); the FFT path needs 1"
+            )
+        elif self.lattice_fft is not True and P < 16:
+            fft_reason = f"only {P} elements; the FFT path engages at 16+"
+        else:
             lattice = _detect_lattice(cen, disp_tol)
             if lattice is not None:
-                return self._build_lattice_operator(
+                op = self._build_lattice_operator(
                     ctx,
                     part,
                     shp,
@@ -1230,6 +1248,9 @@ class ArrayBlockSolver(HMatrixSolver):
                     elem_a,
                     extra_lowrank,
                 )
+                op._fft_reason = None
+                return op
+            fft_reason = "element centroids don't fit a regular lattice"
 
         # Coupling reuse: a block depends only on the two elements' block-shapes
         # and their relative displacement (the free-space kernel is
@@ -1270,7 +1291,7 @@ class ArrayBlockSolver(HMatrixSolver):
 
         self._last_n_coupling_aca = n_aca
 
-        return ArrayBlock(
+        op = ArrayBlock(
             n,
             part.groups,
             shp,
@@ -1279,3 +1300,27 @@ class ArrayBlockSolver(HMatrixSolver):
             extra_lowrank=extra_lowrank,
             cancel=self._cancel,
         )
+        op._fft_reason = fft_reason
+        return op
+
+    def solver_diag(self):
+        """Advisory diagnostics for which coupling path the last solve used
+        (antennaknobs#613): the fast lattice-FFT path, the per-pair
+        `ArrayBlock` path, or a degenerate fallback to the parent H-matrix
+        (issue #143) — plus, when the FFT path did not engage, why not.
+
+        Pulled from the operator `compute_impedance()` / `compute_y_matrix()`
+        already built and cached on `self._hmatrix` — reading it needs no
+        re-solve. Returns None before any solve has run.
+        """
+        op = getattr(self, "_hmatrix", None)
+        if op is None:
+            return None
+        stats = op.stats()
+        return {
+            "operator": type(op).__name__,
+            "lattice_fft": bool(stats.get("lattice_fft", False)),
+            "n_elem": stats.get("n_elem"),
+            "n_shapes": stats.get("n_shapes"),
+            "reason": getattr(op, "_fft_reason", None),
+        }
