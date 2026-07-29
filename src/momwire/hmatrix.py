@@ -135,7 +135,7 @@ class _AugmentedFactoredSolve:
         X, iters = self._block_gmres(Baug, rtol)
         return X[:n], iters
 
-    def _block_gmres(self, Baug, rtol, restart=50, maxiter=2000):
+    def _block_gmres(self, Baug, rtol, restart=None, maxiter=2000):
         """Left-preconditioned restarted block GMRES on the augmented system.
 
         Solves M^{-1} A X = M^{-1} B for all columns simultaneously (M = the
@@ -144,7 +144,20 @@ class _AugmentedFactoredSolve:
         starting point the per-RHS path used. Convergence is the per-column
         preconditioned-residual norm relative to ‖M^{-1} b_j‖ — matching SciPy
         gmres's left-preconditioned stopping test, so accuracy is unchanged.
+
+        The restart depth defaults to the operator's `gmres_restart` hint (50
+        when absent). Resonant lattices need deep Krylov spaces: a 32×32
+        half-wave-dipole grid converges in 226 unrestarted iterations but
+        *stalls indefinitely* at restart 50 — truncation discards exactly the
+        slowly-converging edge-resonance directions (`LatticeArrayBlock` hints
+        300). The depth is capped so the stored Krylov block (m·N·nrhs
+        complex) stays within ~2 GB — a tighter clamp can land back inside
+        stall territory and defeat the hint (a 100×100 lattice, N=1.4e5,
+        stalled when an earlier 500 MB cap cut the depth to 223).
         """
+        if restart is None:
+            restart = getattr(self.H, "gmres_restart", 50)
+            restart = max(50, min(restart, int(2e9 / (16 * self.N * Baug.shape[1]))))
         prec = self.precond.solve
         Bt = prec(Baug)  # M^{-1} B
         bnorms = np.linalg.norm(Bt, axis=0)

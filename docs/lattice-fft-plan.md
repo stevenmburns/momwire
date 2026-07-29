@@ -91,13 +91,25 @@ Exactness: `to_dense` matches dense Z to ~1e-17 (the FFT kernel stores
 displacement blocks exactly — *better* than the ACA'd pair path); impedance
 matches the dense solver to ~1e-10 on small grids.
 
-The 16×16 end-to-end: 80 s → 1.9 s (~40×). Iterations still grow (39 → 82):
-the Floquet preconditioner is exact for the *infinite* lattice, so what
-remains is genuinely the edge effect, and restart-50 truncation compounds it
-(restart 200 gives 64). Scaling of the iteration count to 100×100 is the
-open risk being measured; per-bin conditioning of the Floquet blocks is
-elevated but bounded (worst ~3×10⁴ near the lattice's surface-wave
-resonances).
+The 16×16 end-to-end: 80 s → 1.9 s (~40×), and 24×24: 584 s → 21 s at
+identical impedance. Iterations still grow (39 → 82 → 270): the Floquet
+preconditioner is exact for the *infinite* lattice, so what remains is
+genuinely the edge effect (finite-size surface-wave resonances the periodic
+operator cannot see), and restart-50 truncation compounds it (restart 200
+gives 64 at 16×16). Per-bin conditioning of the Floquet blocks is elevated
+but bounded (worst ~3×10⁴ near the lattice's surface-wave resonances).
+
+**Excitation matters — the worst case is not the driving case.** A single
+centre feed among 10⁴ resonant parasitics pumps energy into *every* edge
+mode; a uniformly driven (phased) array — the realistic usage for the
+driving example — has a smooth RHS concentrated in well-preconditioned
+Floquet modes and converges ~3× faster (16×16: 30 vs 82; 24×24: 97 vs 270).
+The single-feed stress case stalls at 32×32 under restart 50 / maxiter 2000;
+resolution options, in order of preference: larger/adaptive restart for
+lattice operators (note `_block_gmres` re-solves the Hessenberg least-squares
+from scratch each iteration — O(k³) per step — so large restarts also want a
+Givens-recurrence update), damped pseudo-inverse of the resonant Floquet
+bins, and deflation of the near-resonant edge modes.
 
 ## Design
 
@@ -156,6 +168,31 @@ Solve = block-Jacobi GMRES; iteration count at 0.7λ spacing measured 12 at
 4×4 (ladder will show the P-trend; coupling decays as 1/R so growth should
 be mild). A nearest-neighbour-ring strengthened preconditioner is the known
 lever if iterations grow — the blocks are already in `K`.
+
+## Measured: the driving example (P3 ladder)
+
+Clean sequential runs (`scripts/lattice_scaling.py`, 15-seg degree-1
+half-wave dipoles, 0.7λ, single centre feed — the worst-case excitation),
+`gmres_restart` honoured at full depth:
+
+| grid | P | n | kernel fills | build | matvec | solve | iters | RSS |
+|---|---|---|---|---|---|---|---|---|
+| 32×32 | 1,024 | 14,336 | 1,984 | 1.1 s | 3.9 ms | 11.2 s | 226 | 0.24 GB |
+| 48×48 | 2,304 | 32,256 | 4,512 | 2.8 s | 6.3 ms | 20.1 s | 228 | 0.43 GB |
+| 64×64 | 4,096 | 57,344 | 8,064 | 4.4 s | 10.8 ms | 34.4 s | 245 | 0.77 GB |
+| **100×100** | **10,000** | **140,000** | 19,800 | **12.0 s** | **34.6 ms** | **201 s** | **410** | 2.3 GB |
+
+- Impedance is stable across sizes (50.8−23.3j from 48×48 up) and matches
+  the per-pair/dense references where those are computable.
+- Unrestarted iteration counts are near-flat in array size (226 → 228 → 245
+  through 64×64) — the edge-resonance subspace saturates; but they exceed
+  300 by 100×100, so a 300-deep restart converges with a ~3× cycle penalty
+  (1,014 iterations, 353 s) and the shipped hint is 600.
+- Storage at 100×100 is **0.04 % of dense** (the spectrum, 1.2 GB-equivalent
+  dense would be 314 GB); the per-pair path would need ~10⁸ coupling tuples
+  and ~2-minute matvecs at this size.
+- For comparison, the per-pair baseline took 584 s *at 24×24* (n=8,064);
+  the FFT path solves a 17× larger problem in less time.
 
 ## Phases
 

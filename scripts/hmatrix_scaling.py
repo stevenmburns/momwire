@@ -56,9 +56,7 @@ def _screen_geometry(nsegs):
     m = max(2, int(round(np.sqrt(nsegs))))
     n_w = max(1, int(round(nsegs / m)))
     xs = np.linspace(-side / 2, side / 2, m)
-    wires = [
-        np.array([[x, 0.0, -side / 2], [x, 0.0, side / 2]]) for x in xs
-    ]
+    wires = [np.array([[x, 0.0, -side / 2], [x, 0.0, side / 2]]) for x in xs]
     return wires, [[n_w]] * m
 
 
@@ -96,9 +94,7 @@ def main():
         default="250,500,1000,2000,4000",
         help="comma-separated total segment counts",
     )
-    ap.add_argument(
-        "--geometry", choices=sorted(GEOMETRIES), default="wire"
-    )
+    ap.add_argument("--geometry", choices=sorted(GEOMETRIES), default="wire")
     ap.add_argument(
         "--dense-max",
         type=int,
