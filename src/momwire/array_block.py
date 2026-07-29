@@ -553,6 +553,14 @@ class LatticeArrayBlock(ArrayBlock):
         self.n_kernel_blocks = n_kernel_blocks
         self._axes = tuple(range(coords.shape[1]))
         self._site_idx = tuple(coords.T)
+        # Deep-restart hint for the block GMRES: edge-resonance modes on a
+        # resonant lattice converge slowly, and restart truncation at the
+        # generic depth (50) can stall the solve outright — see
+        # `_AugmentedFactoredSolve._block_gmres` and docs/lattice-fft-plan.md.
+        # 600 covers the measured need through a 100×100 half-wave lattice
+        # (245 iters at 64×64; >300 at 100×100, where a 300-deep restart
+        # still converged but paid ~3× in cycles).
+        self.gmres_restart = 600
         # (P, n_e) gather map — same-shape elements all have n_e bases and
         # the groups partition the basis range, so this is a permutation.
         self.G = np.stack(groups)
@@ -820,9 +828,7 @@ class ArrayBlockSolver(HMatrixSolver):
     forcing the block decomposition (issue #143); see `_degenerate_partition`.
     """
 
-    def __init__(
-        self, *args, array_max_elem_bases=2048, lattice_fft="auto", **kwargs
-    ):
+    def __init__(self, *args, array_max_elem_bases=2048, lattice_fft="auto", **kwargs):
         super().__init__(*args, **kwargs)
         # Block-Toeplitz FFT coupling for regular same-shape lattices
         # (docs/lattice-fft-plan.md). "auto" (default) switches to the FFT
@@ -1206,8 +1212,10 @@ class ArrayBlockSolver(HMatrixSolver):
         # form and skip the O(P²) pair loop entirely. "auto" requires enough
         # elements for the FFT bookkeeping to matter; `lattice_fft=True`
         # forces it (tests / benchmarks), False disables.
-        if self.lattice_fft and len(shape_blocks) == 1 and (
-            self.lattice_fft is True or P >= 16
+        if (
+            self.lattice_fft
+            and len(shape_blocks) == 1
+            and (self.lattice_fft is True or P >= 16)
         ):
             lattice = _detect_lattice(cen, disp_tol)
             if lattice is not None:
