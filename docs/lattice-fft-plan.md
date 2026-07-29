@@ -180,7 +180,7 @@ half-wave dipoles, 0.7λ, single centre feed — the worst-case excitation),
 | 32×32 | 1,024 | 14,336 | 1,984 | 1.1 s | 3.9 ms | 11.2 s | 226 | 0.24 GB |
 | 48×48 | 2,304 | 32,256 | 4,512 | 2.8 s | 6.3 ms | 20.1 s | 228 | 0.43 GB |
 | 64×64 | 4,096 | 57,344 | 8,064 | 4.4 s | 10.8 ms | 34.4 s | 245 | 0.77 GB |
-| **100×100** | **10,000** | **140,000** | 19,800 | **12.0 s** | **34.6 ms** | **201 s** | **410** | 2.3 GB |
+| **100×100** | **10,000** | **140,000** | 19,800 | **12.0 s** | **34.6 ms** | **94 s** | **410** | 1.9 GB |
 
 - Impedance is stable across sizes (50.8−23.3j from 48×48 up) and matches
   the per-pair/dense references where those are computable.
@@ -192,7 +192,18 @@ half-wave dipoles, 0.7λ, single centre feed — the worst-case excitation),
   dense would be 314 GB); the per-pair path would need ~10⁸ coupling tuples
   and ~2-minute matvecs at this size.
 - For comparison, the per-pair baseline took 584 s *at 24×24* (n=8,064);
-  the FFT path solves a 17× larger problem in less time.
+  the FFT path solves a 17× larger problem in a sixth of the time.
+- The deep restarts initially made Krylov bookkeeping ~90 % of the
+  per-iteration cost (a Python-loop modified Gram-Schmidt plus a fresh
+  O(k³) least-squares each step). `_block_gmres` now uses CGS2 over a
+  contiguous basis (two BLAS-3 products per iteration) and an incremental
+  QR of the block Hessenberg (O(k·s³) per step): 32×32 solve 11.2 s → 4.8 s,
+  100×100 201 s → 94 s at identical iteration counts and answers, and the
+  full momwire test suite dropped from ~22 min to ~4 min. The remaining
+  per-iteration cost is ~⅓ operator/preconditioner and ~⅔ the O(k·N)
+  orthogonalisation gemms — irreducible at this Krylov depth, so the next
+  lever is fewer iterations (edge-corrected preconditioner or subspace
+  recycling across sweeps), not cheaper iterations.
 
 ## Phases
 

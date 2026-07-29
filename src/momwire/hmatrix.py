@@ -39,6 +39,7 @@ instead of the full m·n.
 
 import numpy as np
 import scipy.sparse as sp
+from scipy.linalg import solve_triangular
 from scipy.sparse.linalg import splu
 
 from .bspline import BSplineSolver
@@ -171,38 +172,63 @@ class _AugmentedFactoredSolve:
             if np.all(np.linalg.norm(R, axis=0) <= rtol * bnorms):
                 break
             Q, beta = np.linalg.qr(R)  # R = Q @ beta; Q (N,s), beta (s,s)
-            Vs = [Q]
-            Hblocks = []  # Hblocks[k] = [H_{0,k}, …, H_{k+1,k}], each (s,s)
-            Y = None
+            # Krylov basis as ONE contiguous block: orthogonalisation is then
+            # two BLAS-3 products per iteration (classical Gram-Schmidt done
+            # twice — CGS2, as stable as modified GS in practice) instead of
+            # a Python loop of k rank-s updates. At deep restarts (lattice
+            # operators hint 600) the loop version dominated the whole solve.
+            V = np.empty((self.N, (m + 1) * s), dtype=np.complex128)
+            V[:, :s] = Q
+            # Incremental QR of the block Hessenberg: Rbar accumulates the
+            # triangular factor, g the transformed RHS (whose trailing block
+            # IS the least-squares residual, giving the same stopping test
+            # the old per-iteration lstsq computed), and rots[j] the small
+            # (2s, 2s) unitary that eliminated column block j's subdiagonal.
+            # O(k·s³) small work per iteration instead of a fresh O(k³)
+            # lstsq + O(k²) Python rebuild of the Hessenberg.
+            Rbar = np.zeros(((m + 1) * s, m * s), dtype=np.complex128)
+            g = np.zeros(((m + 1) * s, s), dtype=np.complex128)
+            g[:s] = beta
+            rots = []
+            kb = 0
             converged = False
             for k in range(m):
                 total_iters += 1
-                W = prec(self._aug_matmat(Vs[k]))
-                Hk = []
-                for i in range(k + 1):  # block modified Gram-Schmidt
-                    Hik = Vs[i].conj().T @ W
-                    W = W - Vs[i] @ Hik
-                    Hk.append(Hik)
+                p = (k + 1) * s
+                W = prec(self._aug_matmat(V[:, p - s : p]))
+                Vp = V[:, :p]
+                # Vp^H W = (W^H Vp)^H — conjugate the (N, s) block, never
+                # the (N, p) basis.
+                H1 = (W.conj().T @ Vp).conj().T
+                W -= Vp @ H1
+                H2 = (W.conj().T @ Vp).conj().T
+                W -= Vp @ H2
                 Qk, Hkk = np.linalg.qr(W)
-                Hk.append(Hkk)
-                Hblocks.append(Hk)
-                Vs.append(Qk)
+                V[:, p : p + s] = Qk
+                c = np.empty((p + s, s), dtype=np.complex128)
+                c[:p] = H1 + H2
+                c[p:] = Hkk
+                for j, Qh in enumerate(rots):  # accumulated eliminations
+                    r0 = j * s
+                    c[r0 : r0 + 2 * s] = Qh.conj().T @ c[r0 : r0 + 2 * s]
+                Qh, Rh = np.linalg.qr(c[p - s : p + s], mode="complete")
+                rots.append(Qh)
+                c[p - s : p] = Rh[:s]
+                Rbar[:p, p - s : p] = c[:p]
+                g[p - s : p + s] = Qh.conj().T @ g[p - s : p + s]
                 kb = k + 1
-                Hbar = np.zeros(((kb + 1) * s, kb * s), dtype=np.complex128)
-                for col in range(kb):
-                    for i in range(col + 2):
-                        Hbar[i * s : (i + 1) * s, col * s : (col + 1) * s] = Hblocks[
-                            col
-                        ][i]
-                E1b = np.zeros(((kb + 1) * s, s), dtype=np.complex128)
-                E1b[:s, :] = beta
-                Y, _res, _rank, _sv = np.linalg.lstsq(Hbar, E1b, rcond=None)
-                rk = np.linalg.norm(E1b - Hbar @ Y, axis=0)
+                rk = np.linalg.norm(g[p : p + s], axis=0)
                 if np.all(rk <= rtol * bnorms):
                     converged = True
                     break
-            kb = len(Hblocks)
-            X = X + np.concatenate(Vs[:kb], axis=1) @ Y
+            psz = kb * s
+            Rtop = Rbar[:psz, :psz]
+            diag = np.abs(np.diagonal(Rtop))
+            if np.all(diag > 1e-14 * max(float(diag.max(initial=0.0)), 1.0)):
+                Y = solve_triangular(Rtop, g[:psz], check_finite=False)
+            else:  # (near-)breakdown: rank-deficient small system
+                Y = np.linalg.lstsq(Rtop, g[:psz], rcond=None)[0]
+            X = X + V[:, :psz] @ Y
             if converged:
                 break
         return X, [total_iters] * s
