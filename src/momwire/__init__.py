@@ -2,7 +2,7 @@ from ._accel import LOADED as accelerated
 from ._cancel import CancelToken, SolveAborted
 from .bspline import BSplineSolver
 from .hmatrix import HMatrixSolver
-from .array_block import ArrayBlockSolver
+from .array_block import ArrayBlockSolver, LatticeFFTUnavailable
 from .sinusoidal import SinusoidalSolver
 
 # Wire-material physics helpers (#133): the per-metre quantities behind the
@@ -17,6 +17,7 @@ __all__ = [
     "BSplineSolver",
     "HMatrixSolver",
     "ArrayBlockSolver",
+    "LatticeFFTUnavailable",
     "CancelToken",
     "SolveAborted",
     "accelerated",

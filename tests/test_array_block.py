@@ -1088,8 +1088,7 @@ def test_solver_diag_height_split_under_ground():
     assert diag["lattice_fft"] is False
     assert diag["n_shapes"] == 2
     assert diag["reason"] == (
-        "shape classes split by height above ground (2 classes); "
-        "the FFT path needs 1"
+        "shape classes split by height above ground (2 classes); the FFT path needs 1"
     )
 
 
@@ -1129,3 +1128,141 @@ def test_solver_diag_absent_for_other_solvers():
         feeds=[(0, None, 1.0 + 0.0j)],
     )
     assert not hasattr(sim, "solver_diag")
+
+
+# ---- require_lattice_fft enforcement (antennaknobs#616) ----------------------
+
+
+def test_require_lattice_fft_engaged_passes():
+    """When the FFT path engages, enforcement is invisible: same solve, same
+    operator, no exception."""
+    from momwire.array_block import LatticeArrayBlock
+
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 4, half, require_lattice_fft=True)  # auto, P=16
+    sim.compute_impedance()
+    assert isinstance(sim._hmatrix, LatticeArrayBlock)
+
+
+def test_require_lattice_fft_too_few_elements():
+    """auto + P<16: the exception names the count gate and the concrete fix
+    (lattice_fft=True engages the path below 16 elements)."""
+    from momwire import LatticeFFTUnavailable
+
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 3, half, require_lattice_fft=True)  # auto, P=12
+    with pytest.raises(
+        LatticeFFTUnavailable, match=r"only 12 elements.*lattice_fft=True"
+    ):
+        sim.compute_impedance()
+
+
+def test_require_lattice_fft_non_lattice():
+    from momwire import LatticeFFTUnavailable
+
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(
+        4,
+        4,
+        half,
+        lattice_fft=True,
+        require_lattice_fft=True,
+        jitter=(5, [0.9, 0.4, 0.0]),
+    )
+    with pytest.raises(LatticeFFTUnavailable, match=r"don't fit a regular lattice"):
+        sim.compute_impedance()
+
+
+def test_require_lattice_fft_height_split_under_ground():
+    """The issue's headline trap: lattice_fft=True + ground quietly degraded;
+    with enforcement it raises and names the height split."""
+    from momwire import LatticeFFTUnavailable
+
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(y, z) for z in (6.0, 12.0) for y in (-22.0, -14.0, -6.0, 2.0, 10.0)]
+    sim = _ground_array(
+        offsets,
+        [half] * len(offsets),
+        ArrayBlockSolver,
+        nsegs=8,
+        lattice_fft=True,
+        require_lattice_fft=True,
+    )
+    with pytest.raises(
+        LatticeFFTUnavailable,
+        match=r"split by height above ground \(2 classes\).*constant height",
+    ):
+        sim.compute_impedance()
+
+
+def test_require_lattice_fft_distinct_shapes_free_space():
+    """Two shape classes with no ground: the reason must name distinct
+    element shapes, not the height split (which can't happen in free space)."""
+    from momwire import LatticeFFTUnavailable
+
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    wires = [
+        _dipole_wire(h, y=y)
+        for y, h in [(-18.0, half), (-6.0, half), (6.0, 0.8 * half), (18.0, 0.8 * half)]
+    ]
+    sim = ArrayBlockSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[10]] * len(wires),
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+        lattice_fft=True,
+        require_lattice_fft=True,
+    )
+    with pytest.raises(LatticeFFTUnavailable, match=r"2 distinct element shapes"):
+        sim.compute_impedance()
+
+
+def test_require_lattice_fft_degenerate_partition():
+    """Degenerate partitions never reach the gate walk (H-matrix fallback,
+    issue #143) — enforcement must still fire, naming the specific cause."""
+    from momwire import LatticeFFTUnavailable
+
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    oversize = _lattice_sim(
+        4, 4, half, require_lattice_fft=True, array_max_elem_bases=4
+    )
+    with pytest.raises(LatticeFFTUnavailable, match=r"array_max_elem_bases=4"):
+        oversize.compute_impedance()
+
+    no_reuse = _lattice_sim(1, 1, half, lattice_fft=True, require_lattice_fft=True)
+    with pytest.raises(LatticeFFTUnavailable, match=r"no shape class has two members"):
+        no_reuse.compute_impedance()
+
+
+def test_require_lattice_fft_cached_operator():
+    """A cached per-pair operator (built by a permissive solver for the same
+    geometry) must not slip past enforcement on the cache-hit path."""
+    from momwire import LatticeFFTUnavailable
+
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    _lattice_sim(4, 3, half).compute_impedance()  # caches the per-pair op
+    strict = _lattice_sim(4, 3, half, require_lattice_fft=True)
+    with pytest.raises(LatticeFFTUnavailable, match=r"only 12 elements"):
+        strict.compute_impedance()
+    assert cache_stats()["operator_hit"] >= 1
+
+
+def test_require_lattice_fft_construction_errors():
+    """Contradictory or hopeless configurations fail at construction, not at
+    solve time: lattice_fft=False contradicts the requirement outright, and
+    singular enrichment forces the dense fallback for every solve."""
+    from momwire import LatticeFFTUnavailable
+
+    half = 0.962 * 22 / 4
+    with pytest.raises(ValueError, match=r"contradicts lattice_fft=False"):
+        _lattice_sim(4, 4, half, lattice_fft=False, require_lattice_fft=True)
+    with pytest.raises(LatticeFFTUnavailable, match=r"singular enrichment"):
+        _lattice_sim(4, 4, half, use_singular_enrichment=True, require_lattice_fft=True)
