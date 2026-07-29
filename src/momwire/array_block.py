@@ -812,6 +812,13 @@ class _BlockJacobiAugPrecond:
         return out
 
 
+class LatticeFFTUnavailable(RuntimeError):
+    """Raised by `ArrayBlockSolver(require_lattice_fft=True)` when the
+    lattice-FFT coupling path cannot engage. The message names the unmet
+    gate condition (the same vocabulary `solver_diag()["reason"]` reports,
+    antennaknobs#613) and how to meet it (antennaknobs#616)."""
+
+
 class ArrayBlockSolver(HMatrixSolver):
     """Element-aware block-low-rank accelerator for arrays of identical (or
     few-shape) elements. Drop-in for `HMatrixSolver` (same constructor, plus
@@ -828,13 +835,40 @@ class ArrayBlockSolver(HMatrixSolver):
     forcing the block decomposition (issue #143); see `_degenerate_partition`.
     """
 
-    def __init__(self, *args, array_max_elem_bases=2048, lattice_fft="auto", **kwargs):
+    def __init__(
+        self,
+        *args,
+        array_max_elem_bases=2048,
+        lattice_fft="auto",
+        require_lattice_fft=False,
+        **kwargs,
+    ):
         super().__init__(*args, **kwargs)
         # Block-Toeplitz FFT coupling for regular same-shape lattices
-        # (docs/lattice-fft-plan.md). "auto" (default) switches to the FFT
-        # representation when a lattice is detected and P ≥ 16; True forces
-        # it whenever a lattice is detected; False keeps the per-pair path.
+        # (docs/lattice-fft-plan.md). `lattice_fft` is a representation
+        # *preference*, never a guarantee: "auto" (default) switches to the
+        # FFT representation when a lattice is detected and P ≥ 16; True
+        # prefers it at any element count but still yields to the other
+        # gates (one block-shape class, a regular lattice fit); False keeps
+        # the per-pair path. To *assert* the FFT path engaged, pass
+        # `require_lattice_fft=True` — then any solve whose operator is not
+        # the lattice-FFT one raises `LatticeFFTUnavailable` naming the
+        # unmet gate condition (antennaknobs#616).
         self.lattice_fft = lattice_fft
+        self.require_lattice_fft = bool(require_lattice_fft)
+        if self.require_lattice_fft:
+            if not self.lattice_fft:
+                raise ValueError(
+                    "require_lattice_fft=True contradicts lattice_fft=False"
+                )
+            if self.use_singular_enrichment:
+                # Known at construction: enrichment forces the dense-path
+                # fallback (`_hmatrix_unsupported`), so no solve could ever
+                # engage the FFT path. Fail fast rather than at solve time.
+                raise self._lattice_fft_unavailable(
+                    "use_singular_enrichment forces the dense-path fallback",
+                    "Disable singular enrichment",
+                )
         # Largest element (in bases) the block decomposition will densify.
         # A dense self-block build materialises an (m, m, degree+1, degree+1)
         # complex gather — 576 MiB at m=2048, degree 2, but 21.6 GiB at the
@@ -916,6 +950,16 @@ class ArrayBlockSolver(HMatrixSolver):
             ekey,
         )
 
+    def _lattice_fft_unavailable(self, reason, hint):
+        """Build (not raise) the `require_lattice_fft` failure, so callers
+        read as `raise self._lattice_fft_unavailable(...)`. `reason` is the
+        gate condition in `solver_diag()` vocabulary; `hint` is the concrete
+        way to meet it."""
+        return LatticeFFTUnavailable(
+            f"lattice-FFT path unavailable: {reason}. "
+            f"{hint} — or drop require_lattice_fft."
+        )
+
     def _degenerate_partition(self):
         """True when the element partition offers nothing the block solver
         can exploit: no shape class has two members (so neither the self-block
@@ -944,6 +988,25 @@ class ArrayBlockSolver(HMatrixSolver):
         factorisation cached on it (`HMatrixSolver._factored_solve`), making each
         frame a cheap multi-RHS back-substitution."""
         if self._degenerate_partition():
+            if self.require_lattice_fft:
+                part = self.array_partition()
+                if part.n_elem == 0:
+                    reason, hint = "empty element partition", "Add elements"
+                elif int(part.sizes.max()) > self.array_max_elem_bases:
+                    reason = (
+                        f"largest element holds {int(part.sizes.max())} bases "
+                        f"> array_max_elem_bases={self.array_max_elem_bases} "
+                        f"(H-matrix fallback, issue #143)"
+                    )
+                    hint = "Raise array_max_elem_bases or mesh the element finer"
+                else:
+                    reason = (
+                        "no shape class has two members, so there is no "
+                        "block structure to exploit (H-matrix fallback, "
+                        "issue #143)"
+                    )
+                    hint = "Use repeated identical elements"
+                raise self._lattice_fft_unavailable(reason, hint)
             # Nothing to exploit (or an element too big to densify): degrade
             # to the parent H-matrix — ACA partition + bounded near blocks —
             # instead of feeding whole-matrix index sets to zblock. On the
@@ -981,6 +1044,12 @@ class ArrayBlockSolver(HMatrixSolver):
             _CACHE_STATS["operator_build"] += 1
         else:
             _CACHE_STATS["operator_hit"] += 1
+        if self.require_lattice_fft and not isinstance(op, LatticeArrayBlock):
+            # Cache hits skip build_array_blocks' gate walk, so re-assert
+            # here from the reason/hint the build stored on the operator.
+            raise self._lattice_fft_unavailable(
+                op._fft_reason, getattr(op, "_fft_hint", "Meet the gate above")
+            )
         self._last_n_coupling_aca = op._n_coupling_aca
         return op
 
@@ -1227,13 +1296,24 @@ class ArrayBlockSolver(HMatrixSolver):
         # grid) instead of just seeing `lattice_fft: false`.
         if not self.lattice_fft:
             fft_reason = "lattice FFT explicitly disabled"
+            fft_hint = "Pass lattice_fft='auto' or True"
         elif len(shape_blocks) > 1:
-            fft_reason = (
-                f"shape classes split by height above ground "
-                f"({len(shape_blocks)} classes); the FFT path needs 1"
-            )
+            if len(shape_blocks) > part.n_shapes:
+                # Only ground refinement splits block-shape classes beyond
+                # the geometric shape count (`shp` construction above).
+                fft_reason = (
+                    f"shape classes split by height above ground "
+                    f"({len(shape_blocks)} classes); the FFT path needs 1"
+                )
+                fft_hint = "Lay the array out at constant height above the ground plane"
+            else:
+                fft_reason = (
+                    f"{len(shape_blocks)} distinct element shapes; the FFT path needs 1"
+                )
+                fft_hint = "Make every element geometrically identical"
         elif self.lattice_fft is not True and P < 16:
             fft_reason = f"only {P} elements; the FFT path engages at 16+"
+            fft_hint = "Pass lattice_fft=True to engage below 16 elements"
         else:
             lattice = _detect_lattice(cen, disp_tol)
             if lattice is not None:
@@ -1251,6 +1331,11 @@ class ArrayBlockSolver(HMatrixSolver):
                 op._fft_reason = None
                 return op
             fft_reason = "element centroids don't fit a regular lattice"
+            fft_hint = "Lay the elements out on a regular (possibly sparse) grid"
+        if self.require_lattice_fft:
+            # Raise here, before the O(P²) per-pair coupling build below —
+            # the caller asked for an assertion, not a slow fallback.
+            raise self._lattice_fft_unavailable(fft_reason, fft_hint)
 
         # Coupling reuse: a block depends only on the two elements' block-shapes
         # and their relative displacement (the free-space kernel is
@@ -1301,6 +1386,7 @@ class ArrayBlockSolver(HMatrixSolver):
             cancel=self._cancel,
         )
         op._fft_reason = fft_reason
+        op._fft_hint = fft_hint
         return op
 
     def solver_diag(self):
