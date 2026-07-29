@@ -67,7 +67,10 @@ the C++ off-edge block assembler, and `aca_partial` verbatim; the grouping
 reuses BSplineSolver's geometry/basis build. Nothing here touches the kernel.
 """
 
+import itertools
+
 import numpy as np
+from scipy.fft import fftn, ifftn, next_fast_len
 from scipy.linalg import lu_factor, lu_solve
 
 from ._aca import aca_partial
@@ -461,6 +464,259 @@ class ArrayBlock(_Cancelable):
         return Z
 
 
+def _detect_lattice(cen, tol=1e-6):
+    """Fit element centroids to a regular 1-D or 2-D integer lattice.
+
+    Basis vectors are the shortest and shortest-non-parallel centroid
+    differences from element 0; every centroid must then land on an integer
+    combination of them within `tol` (metres — the same absolute grid the
+    displacement keys round to). Any misfit returns None and the caller keeps
+    the per-pair path. The lattice may sit in any plane at any orientation and
+    need not be fully occupied (an array with holes still fits; absent sites
+    simply stay zero in the convolution).
+
+    Returns (coords, basis): `coords` (P, dim) 0-based integer lattice
+    coordinates, `basis` (dim, 3) lattice vectors — or None.
+    """
+    cen = np.asarray(cen, dtype=float)
+    P = cen.shape[0]
+    if P < 4:
+        return None
+    d = cen - cen[0]
+    norms = np.linalg.norm(d, axis=1)
+    nz = np.argsort(norms)
+    nz = nz[norms[nz] > tol]
+    if nz.size == 0:
+        return None
+    v1 = d[nz[0]]
+    v2 = None
+    n1 = np.linalg.norm(v1)
+    for idx in nz[1:]:
+        if np.linalg.norm(np.cross(v1, d[idx])) > 1e-9 * n1 * norms[idx]:
+            v2 = d[idx]
+            break
+    A = np.array([v1]) if v2 is None else np.array([v1, v2])
+    m = np.linalg.solve(A @ A.T, A @ d.T).T  # (P, dim) real coordinates
+    mi = np.round(m)
+    if np.abs(d - mi @ A).max() > tol:
+        return None
+    coords = mi.astype(np.int64)
+    coords -= coords.min(axis=0)
+    if len({tuple(c) for c in coords}) != P:
+        return None
+    return coords, A
+
+
+class LatticeArrayBlock(ArrayBlock):
+    """`ArrayBlock` specialised for a regular lattice of same-shape elements:
+    the coupling is block-Toeplitz in every lattice dimension, held as one
+    dense `(n_e, n_e)` block per displacement in FFT (spectral) form, and the
+    coupling matvec is an FFT convolution over the element grid —
+    O(N log P) per apply with no per-pair loop and no ACA truncation
+    (displacement blocks are stored exactly). Self-blocks, block-Jacobi
+    preconditioning, KCL saddle rows, and the Sommerfeld `extra_lowrank`
+    remainder are inherited unchanged.
+
+    Parameters beyond `ArrayBlock`: `coords` (P, dim) integer lattice
+    coordinates; `fft_shape` the padded per-dimension FFT sizes (each
+    ≥ 2·span−1, so the circular convolution never wraps onto an occupied
+    site); `k_hat` the kernel spectrum `(*fft_shape, n_e, n_e)` with the
+    zero-displacement slot empty (self-blocks stay separate);
+    `n_kernel_blocks` the count of stored displacement blocks (for stats).
+    """
+
+    def __init__(
+        self,
+        n,
+        groups,
+        shape_of_elem,
+        shape_blocks,
+        coords,
+        fft_shape,
+        k_hat,
+        n_kernel_blocks,
+        extra_lowrank=None,
+        cancel=None,
+    ):
+        super().__init__(
+            n,
+            groups,
+            shape_of_elem,
+            shape_blocks,
+            coupling=[],
+            extra_lowrank=extra_lowrank,
+            cancel=cancel,
+        )
+        self.coords = coords
+        self.fft_shape = tuple(fft_shape)
+        self.k_hat = k_hat
+        self.n_kernel_blocks = n_kernel_blocks
+        self._axes = tuple(range(coords.shape[1]))
+        self._site_idx = tuple(coords.T)
+        # (P, n_e) gather map — same-shape elements all have n_e bases and
+        # the groups partition the basis range, so this is a permutation.
+        self.G = np.stack(groups)
+
+    def _apply(self, X):
+        self._checkpoint()
+        n_e = self.G.shape[1]
+        nrhs = X.shape[1]
+        Y = np.zeros((self.n, nrhs), dtype=np.complex128)
+        Xg = X[self.G]  # (P, n_e, nrhs)
+        for sid, S in self.shape_blocks.items():
+            mask = self.shape_of_elem == sid
+            Y[self.G[mask]] += np.matmul(S, Xg[mask])
+        Xgrid = np.zeros(self.fft_shape + (n_e, nrhs), dtype=np.complex128)
+        Xgrid[self._site_idx] = Xg
+        Yhat = np.matmul(self.k_hat, fftn(Xgrid, axes=self._axes, workers=-1))
+        Ygrid = ifftn(Yhat, axes=self._axes, workers=-1)
+        Y[self.G] += Ygrid[self._site_idx]
+        for I, J, U, V in self.extra_lowrank:
+            Y[I] += U @ (V @ X[J])
+        return Y
+
+    def matvec(self, x):
+        return self._apply(np.asarray(x)[:, None])[:, 0]
+
+    def matmat(self, X):
+        return self._apply(np.asarray(X))
+
+    def storage(self):
+        s = sum(D.size for D in self.shape_blocks.values())
+        s += self.k_hat.size
+        s += sum(U.size + V.size for _, _, U, V in self.extra_lowrank)
+        return s
+
+    def stats(self):
+        st = super().stats()
+        st["n_coupling"] = self.n_kernel_blocks
+        st["lattice_fft"] = True
+        st["fft_shape"] = self.fft_shape
+        return st
+
+    def to_dense(self):
+        """Validation only (small grids): reconstruct dense Z from the
+        spatial kernel recovered by inverse FFT of the stored spectrum."""
+        Kgrid = ifftn(self.k_hat, axes=self._axes, workers=-1)
+        F = np.array(self.fft_shape)
+        Z = np.zeros((self.n, self.n), dtype=np.complex128)
+        for e, g in enumerate(self.groups):
+            Z[np.ix_(g, g)] = self.shape_blocks[int(self.shape_of_elem[e])]
+        P = len(self.groups)
+        for a in range(P):
+            for b in range(P):
+                if a == b:
+                    continue
+                idx = tuple((self.coords[a] - self.coords[b]) % F)
+                Z[np.ix_(self.groups[a], self.groups[b])] = Kgrid[idx]
+        for I, J, U, V in self.extra_lowrank:
+            Z[np.ix_(I, J)] += U @ V
+        return Z
+
+
+class _LatticeFloquetAugPrecond:
+    """Block-circulant (Floquet) preconditioner for a `LatticeArrayBlock`.
+
+    Block-Jacobi ignores *all* coupling, and on a resonant lattice the GMRES
+    iteration count grows fast with array size (measured 12 → 46 → 178 on
+    4×4 → 8×8 → 16×16 half-wave dipoles at 0.7λ). The lattice structure
+    offers the principled fix: fold the displacement kernel onto a
+    span-sized circulant grid (Chan-style, `c[m] = Σ_{Δ≡m (mod span)} T(Δ)`),
+    so the preconditioner is the impedance operator of the *periodic* array —
+    exact for the infinite lattice, leaving GMRES only the edge effects. It
+    diagonalises over Floquet bins: one dense `(n_e+nce, n_e+nce)` augmented
+    saddle per bin (the per-element KCL rows `A_e` are identical across a
+    single shape class), inverted batched once; each apply is two lattice
+    FFTs plus one batched per-bin matmul.
+
+    Raises ValueError when per-element constraint blocks differ (caller falls
+    back to block-Jacobi).
+    """
+
+    def __init__(self, H, kcl_A):
+        n = H.n
+        nc = kcl_A.shape[0] if kcl_A is not None else 0
+        self.n, self.nc = n, nc
+        coords = H.coords
+        P, n_e = H.G.shape
+        self.G = H.G
+        self.n_e = n_e
+        span = tuple(int(s) for s in coords.max(axis=0) + 1)
+        self.span = span
+        axes = tuple(range(coords.shape[1]))
+        self.axes = axes
+        self.site_idx = H._site_idx
+
+        # Per-element constraint rows; must be identical across elements
+        # (same shape class ⇒ same local KCL structure, but verify).
+        if nc > 0:
+            row_map = []
+            A_ref = None
+            for e in range(P):
+                g = H.groups[e]
+                rows = np.nonzero(np.abs(kcl_A[:, g]).sum(axis=1) > 0)[0]
+                A_e = kcl_A[np.ix_(rows, g)].astype(np.complex128)
+                if A_ref is None:
+                    A_ref = A_e
+                elif A_e.shape != A_ref.shape or not np.array_equal(A_e, A_ref):
+                    raise ValueError("per-element KCL blocks differ")
+                row_map.append(rows)
+            row_map = np.stack(row_map)  # (P, nce)
+            if len(np.unique(row_map)) != nc:
+                raise ValueError("constraint rows not partitioned by element")
+            self.row_map = row_map
+            nce = A_ref.shape[0]
+        else:
+            self.row_map = None
+            A_ref = None
+            nce = 0
+        d = n_e + nce
+        self.d = d
+
+        # Chan fold of the displacement kernel onto the span-sized circulant.
+        Kgrid = ifftn(H.k_hat, axes=axes, workers=-1)
+        F = np.asarray(H.fft_shape)
+        Sarr = np.asarray(span)
+        c = np.zeros(span + (n_e, n_e), dtype=np.complex128)
+        for delta in itertools.product(*(range(-(s - 1), s) for s in span)):
+            if all(v == 0 for v in delta):
+                continue
+            c[tuple(np.mod(delta, Sarr))] += Kgrid[tuple(np.mod(delta, F))]
+        del Kgrid
+        M = fftn(c, axes=axes, workers=-1)  # (*span, n_e, n_e)
+        del c
+        S_blk = H.shape_blocks[next(iter(H.shape_blocks))]
+        if nce == 0:
+            M = M + S_blk
+        else:
+            Maug = np.zeros(span + (d, d), dtype=np.complex128)
+            Maug[..., :n_e, :n_e] = M + S_blk
+            Maug[..., :n_e, n_e:] = A_ref.T
+            Maug[..., n_e:, :n_e] = A_ref
+            M = Maug
+        self.Minv = np.linalg.inv(M.reshape((-1, d, d))).reshape(M.shape)
+
+    def solve(self, R):
+        R = np.asarray(R)
+        s = R.shape[1]
+        n, n_e, d = self.n, self.n_e, self.d
+        Rg = np.zeros(self.span + (d, s), dtype=np.complex128)
+        Rg[self.site_idx + (slice(None, n_e),)] = R[:n][self.G]
+        if self.nc:
+            Rg[self.site_idx + (slice(n_e, None),)] = R[n + self.row_map]
+        Xg = ifftn(
+            np.matmul(self.Minv, fftn(Rg, axes=self.axes, workers=-1)),
+            axes=self.axes,
+            workers=-1,
+        )
+        out = np.empty_like(R)
+        body = Xg[self.site_idx]  # (P, d, s)
+        out[:n][self.G] = body[:, :n_e]
+        if self.nc:
+            out[n + self.row_map] = body[:, n_e:]
+        return out
+
+
 class _BlockJacobiAugPrecond:
     """Block-Jacobi factorisation of the augmented near-field preconditioner
     `[Zn A^T; A 0]` for an `ArrayBlock`.
@@ -564,8 +820,15 @@ class ArrayBlockSolver(HMatrixSolver):
     forcing the block decomposition (issue #143); see `_degenerate_partition`.
     """
 
-    def __init__(self, *args, array_max_elem_bases=2048, **kwargs):
+    def __init__(
+        self, *args, array_max_elem_bases=2048, lattice_fft="auto", **kwargs
+    ):
         super().__init__(*args, **kwargs)
+        # Block-Toeplitz FFT coupling for regular same-shape lattices
+        # (docs/lattice-fft-plan.md). "auto" (default) switches to the FFT
+        # representation when a lattice is detected and P ≥ 16; True forces
+        # it whenever a lattice is detected; False keeps the per-pair path.
+        self.lattice_fft = lattice_fft
         # Largest element (in bases) the block decomposition will densify.
         # A dense self-block build materialises an (m, m, degree+1, degree+1)
         # complex gather — 576 MiB at m=2048, degree 2, but 21.6 GiB at the
@@ -691,6 +954,7 @@ class ArrayBlockSolver(HMatrixSolver):
             self.degree,
             self.n_qp_pair,
             float(self.aca_tol),
+            repr(self.lattice_fft),
             None if self.ground_z is None else float(self.ground_z),
             None
             if self.ground_eps is None
@@ -718,6 +982,14 @@ class ArrayBlockSolver(HMatrixSolver):
         to the generic sparse-LU preconditioner."""
         if not isinstance(H, ArrayBlock):
             return super()._make_preconditioner(H, kcl_A)
+        if isinstance(H, LatticeArrayBlock):
+            # Periodic-array (Floquet) preconditioner: exact for the infinite
+            # lattice, so GMRES only iterates on edge effects — block-Jacobi's
+            # iteration count grows fast with array size on resonant lattices.
+            try:
+                return _LatticeFloquetAugPrecond(H, kcl_A)
+            except ValueError:
+                pass  # irregular constraint structure: block-Jacobi still valid
         return _BlockJacobiAugPrecond(H, kcl_A)
 
     def _coupling_aca(self, ctx, I, J, k, tol, use_accel):
@@ -730,6 +1002,78 @@ class ArrayBlockSolver(HMatrixSolver):
         get_row, get_col, _dense = self._offedge_aca_evaluators(ctx, I, J, k, use_accel)
         U, V = aca_partial(get_row, get_col, I.size, J.size, tol=tol)
         return U, V
+
+    def _build_lattice_operator(
+        self, ctx, part, shp, shape_blocks, coords, k, use_accel, elem_a, extra_lowrank
+    ):
+        """Assemble the block-Toeplitz coupling kernel for a regular lattice
+        of same-shape elements and return a `LatticeArrayBlock`.
+
+        One dense `(n_e, n_e)` off-edge block per lattice displacement —
+        filled with the same ground-aware evaluators the ACA path samples,
+        but kept exact (no truncation) since the FFT convolution needs the
+        full block anyway. `T(−Δ) = T(Δ)ᵀ` halves the fills under the same
+        uniform-radius gate the per-pair dedup uses. Displacements that never
+        occur between occupied sites (sparse lattices) stay zero: the
+        convolution only ever reads them into cropped-away rows.
+        """
+        n = ctx["n_basis"]
+        sizes = np.asarray(part.sizes)
+        assert sizes.min() == sizes.max(), "single shape class ⇒ equal sizes"
+        n_e = int(sizes[0])
+        span = coords.max(axis=0) + 1
+        fft_shape = tuple(int(next_fast_len(2 * int(s) - 1)) for s in span)
+        F = np.asarray(fft_shape)
+        site = {tuple(c): e for e, c in enumerate(coords)}
+        coords_list = list(site)
+        sym = elem_a[0] is not None and all(a == elem_a[0] for a in elem_a)
+        Kgrid = np.zeros(fft_shape + (n_e, n_e), dtype=np.complex128)
+        filled = set()
+        n_fill = 0
+        ranges = (range(-(int(s) - 1), int(s)) for s in span)
+        for delta in itertools.product(*ranges):
+            # delta = observer coord − source coord; slot (a−b) holds Z_ab.
+            if all(v == 0 for v in delta) or delta in filled:
+                continue
+            self._checkpoint()  # per displacement fill (cancellable build)
+            cb = tuple(max(0, -v) for v in delta)  # full-grid anchor: source
+            ca = tuple(c + v for c, v in zip(cb, delta))  # observer
+            if cb not in site or ca not in site:
+                ca = cb = None
+                for cb2 in coords_list:  # sparse lattice: scan for any pair
+                    ca2 = tuple(c + v for c, v in zip(cb2, delta))
+                    if ca2 in site:
+                        ca, cb = ca2, cb2
+                        break
+                if ca is None:
+                    continue  # displacement absent from the occupied set
+            a, b = site[ca], site[cb]
+            T = self._offedge_aca_evaluators(
+                ctx, part.groups[a], part.groups[b], k, use_accel
+            )[2]()
+            n_fill += 1
+            Kgrid[tuple(np.mod(delta, F))] = T
+            filled.add(delta)
+            if sym:
+                mdelta = tuple(-v for v in delta)
+                Kgrid[tuple(np.mod(mdelta, F))] = T.T
+                filled.add(mdelta)
+        axes = tuple(range(coords.shape[1]))
+        k_hat = fftn(Kgrid, axes=axes, workers=-1)
+        del Kgrid
+        self._last_n_coupling_aca = n_fill
+        return LatticeArrayBlock(
+            n,
+            part.groups,
+            shp,
+            shape_blocks,
+            coords,
+            fft_shape,
+            k_hat,
+            len(filled),
+            extra_lowrank=extra_lowrank,
+            cancel=self._cancel,
+        )
 
     def build_array_blocks(self, tol=None, k=None):
         """Assemble the impedance matrix as an `ArrayBlock`.
@@ -837,6 +1181,48 @@ class ArrayBlockSolver(HMatrixSolver):
             and self.hmatrix_use_accel
         )
 
+        extra_lowrank = None
+        if somm:
+            U, V = self._sommerfeld_global_lowrank(k, eps_t)
+            idx = np.arange(n, dtype=np.int64)
+            extra_lowrank = [(idx, idx, U, -V)]  # Z subtracts the remainder
+
+        # Per-element uniform radius (or None when internally mixed). Complex
+        # symmetry Z_ab = Z_ba^T needs the a²-regularisation to be symmetric
+        # across the pair: mixed per-wire radii regularise each OBSERVER row
+        # with its own wire's radius (stevenmburns/momwire#147), so transposed
+        # factors/blocks are only reusable when every wire in BOTH elements
+        # carries one and the same radius.
+        seg_a = ctx["seg_a"]
+        elem_a = []
+        for sg in part.seg_groups:
+            av = seg_a[sg]
+            elem_a.append(float(av[0]) if np.all(av == av[0]) else None)
+
+        P = part.n_elem
+        # Lattice-FFT path (docs/lattice-fft-plan.md): one block-shape class on
+        # a regular lattice ⇒ the coupling is block-Toeplitz per lattice
+        # dimension. Represent it as a dense displacement-block kernel in FFT
+        # form and skip the O(P²) pair loop entirely. "auto" requires enough
+        # elements for the FFT bookkeeping to matter; `lattice_fft=True`
+        # forces it (tests / benchmarks), False disables.
+        if self.lattice_fft and len(shape_blocks) == 1 and (
+            self.lattice_fft is True or P >= 16
+        ):
+            lattice = _detect_lattice(cen, disp_tol)
+            if lattice is not None:
+                return self._build_lattice_operator(
+                    ctx,
+                    part,
+                    shp,
+                    shape_blocks,
+                    lattice[0],
+                    k,
+                    use_accel,
+                    elem_a,
+                    extra_lowrank,
+                )
+
         # Coupling reuse: a block depends only on the two elements' block-shapes
         # and their relative displacement (the free-space kernel is
         # translation-invariant; under ground the block-shape already encodes the
@@ -850,18 +1236,6 @@ class ArrayBlockSolver(HMatrixSolver):
         coupling = []
         cache = {}  # (block_shape_a, block_shape_b, disp_key) -> (U, V)
         n_aca = 0
-        P = part.n_elem
-        # Complex symmetry Z_ab = Z_ba^T needs the a²-regularisation to be
-        # symmetric across the pair: mixed per-wire radii regularise each
-        # OBSERVER row with its own wire's radius (stevenmburns/momwire#147),
-        # so the transposed factors are only reusable when every wire in
-        # BOTH elements carries one and the same radius. Per-element uniform
-        # radius (or None when internally mixed), for that gate:
-        seg_a = ctx["seg_a"]
-        elem_a = []
-        for sg in part.seg_groups:
-            av = seg_a[sg]
-            elem_a.append(float(av[0]) if np.all(av == av[0]) else None)
         for a in range(P):
             self._checkpoint()  # per element-row of the coupling ACA grid
             for b in range(P):
@@ -887,12 +1261,6 @@ class ArrayBlockSolver(HMatrixSolver):
                 coupling.append((a, b, hit[0], hit[1]))
 
         self._last_n_coupling_aca = n_aca
-
-        extra_lowrank = None
-        if somm:
-            U, V = self._sommerfeld_global_lowrank(k, eps_t)
-            idx = np.arange(n, dtype=np.int64)
-            extra_lowrank = [(idx, idx, U, -V)]  # Z subtracts the remainder
 
         return ArrayBlock(
             n,

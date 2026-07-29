@@ -836,3 +836,175 @@ def test_oversize_element_falls_back_repetition_stays():
     assert capped._degenerate_partition()
     capped._build_operator()
     assert cache_stats()["hmatrix_fallback"] == 1
+
+
+# ---- Lattice-FFT coupling (docs/lattice-fft-plan.md) -------------------------
+
+
+def _lattice_sim(
+    px,
+    py,
+    half,
+    sx=15.4,
+    sy=15.4,
+    nsegs=10,
+    degree=2,
+    solver=ArrayBlockSolver,
+    jitter=None,
+    drop=(),
+    **extra,
+):
+    """px × py grid of identical vertical dipoles in the x-y plane. `jitter`
+    displaces one element off-lattice; `drop` removes grid sites (holes)."""
+    wires = [
+        np.array([[i * sx, j * sy, -half], [i * sx, j * sy, half]])
+        for i in range(px)
+        for j in range(py)
+        if (i, j) not in drop
+    ]
+    if jitter is not None:
+        wires[jitter[0]] = wires[jitter[0]] + np.asarray(jitter[1])
+    return solver(
+        wires=wires,
+        degree=degree,
+        n_per_edge_per_wire=[[nsegs]] * len(wires),
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+        **extra,
+    )
+
+
+def test_lattice_fft_operator_selection():
+    """auto: per-pair below 16 elements, FFT at/above; True forces, False
+    disables; jittered (non-lattice) geometry always falls back."""
+    from momwire.array_block import ArrayBlock, LatticeArrayBlock
+
+    half = 0.962 * 22 / 4
+    op = _lattice_sim(4, 3, half).build_array_blocks()  # auto, P=12
+    assert type(op) is ArrayBlock
+    op = _lattice_sim(4, 4, half).build_array_blocks()  # auto, P=16
+    assert isinstance(op, LatticeArrayBlock)
+    op = _lattice_sim(4, 3, half, lattice_fft=True).build_array_blocks()
+    assert isinstance(op, LatticeArrayBlock)
+    op = _lattice_sim(4, 4, half, lattice_fft=False).build_array_blocks()
+    assert type(op) is ArrayBlock
+    jit = _lattice_sim(4, 4, half, lattice_fft=True, jitter=(5, [0.9, 0.4, 0.0]))
+    assert type(jit.build_array_blocks()) is ArrayBlock
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_lattice_fft_to_dense_matches_dense(degree):
+    """The FFT kernel stores displacement blocks exactly (no ACA truncation),
+    so the reconstruction matches the dense Z to roundoff."""
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 3, half, degree=degree, lattice_fft=True)
+    Z = _dense_Z(sim)
+    rel = np.abs(sim.build_array_blocks().to_dense() - Z).max() / np.abs(Z).max()
+    assert rel < 1e-10
+
+
+def test_lattice_fft_matvec_matches_dense():
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 3, half, lattice_fft=True)
+    Z = _dense_Z(sim)
+    H = sim.build_array_blocks()
+    rng = np.random.default_rng(0)
+    x = rng.standard_normal(H.n) + 1j * rng.standard_normal(H.n)
+    assert np.linalg.norm(H.matvec(x) - Z @ x) / np.linalg.norm(Z @ x) < 1e-10
+    X = np.column_stack([x, 2 * x - 1])
+    Ycol = np.column_stack([H.matvec(X[:, j]) for j in range(2)])
+    assert np.linalg.norm(H.matmat(X) - Ycol) / np.linalg.norm(Ycol) < 1e-12
+
+
+def test_lattice_fft_impedance_matches_dense():
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 4, half, lattice_fft=True)
+    zd = _lattice_sim(4, 4, half, solver=BSplineSolver).compute_impedance()[0]
+    za = sim.compute_impedance()[0]
+    assert abs(za - zd) / abs(zd) < 1e-4
+    from momwire.array_block import LatticeArrayBlock
+
+    assert isinstance(sim._hmatrix, LatticeArrayBlock)
+
+
+def test_lattice_fft_line_array():
+    """A 1-D lattice (line array) exercises the dim-1 FFT path."""
+    from momwire.array_block import LatticeArrayBlock
+
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(6, 1, half, lattice_fft=True)
+    H = sim.build_array_blocks()
+    assert isinstance(H, LatticeArrayBlock)
+    Z = _dense_Z(sim)
+    rng = np.random.default_rng(2)
+    x = rng.standard_normal(H.n) + 1j * rng.standard_normal(H.n)
+    assert np.linalg.norm(H.matvec(x) - Z @ x) / np.linalg.norm(Z @ x) < 1e-10
+
+
+def test_lattice_fft_sparse_grid_hole():
+    """A lattice with an unoccupied site still runs the FFT path: absent
+    displacements stay zero and only cropped rows ever read them."""
+    from momwire.array_block import LatticeArrayBlock
+
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 4, half, lattice_fft=True, drop={(1, 2)})
+    H = sim.build_array_blocks()
+    assert isinstance(H, LatticeArrayBlock)
+    Z = _dense_Z(sim)
+    rel = np.abs(H.to_dense() - Z).max() / np.abs(Z).max()
+    assert rel < 1e-10
+
+
+def test_lattice_fft_with_junctions_matches_dense():
+    """L-shaped elements on a lattice: the Floquet preconditioner augments
+    each Floquet bin with the (identical) per-element KCL saddle."""
+    h = 0.962 * 22 / 4
+    wires, junctions, feeds = [], [], []
+    for i in range(3):
+        for j in range(2):
+            dx, dy = i * 15.4, j * 15.4
+            base = len(wires)
+            wires.append(np.array([[dx, dy, 0.0], [dx, dy, h]]))
+            wires.append(np.array([[dx, dy, h], [dx, dy + h, h]]))
+            junctions.append([(base, "end"), (base + 1, "start")])
+            feeds.append((base, None, 1.0 + 0.0j))
+    common = dict(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[10]] * len(wires),
+        wavelength=22.0,
+        junctions=junctions,
+        feeds=feeds,
+    )
+    yd = BSplineSolver(**common).compute_y_matrix()
+    sim = ArrayBlockSolver(lattice_fft=True, **common)
+    ya = sim.compute_y_matrix()
+    assert np.abs(ya - yd).max() / np.abs(yd).max() < 1e-4
+    from momwire.array_block import LatticeArrayBlock, _LatticeFloquetAugPrecond
+
+    assert isinstance(sim._hmatrix, LatticeArrayBlock)
+    assert isinstance(sim._hmatrix._factored.precond, _LatticeFloquetAugPrecond)
+
+
+def test_lattice_fft_ground_matches_dense():
+    """Single-height grid above PEC ground: the image term rides the same
+    displacement kernel (folded into the dense evaluators)."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    kw = dict(lattice_fft=True, ground_z=-8.0)
+    za = _lattice_sim(3, 5, half, **kw).compute_impedance()[0]
+    zd = _lattice_sim(
+        3, 5, half, solver=BSplineSolver, ground_z=-8.0
+    ).compute_impedance()[0]
+    assert abs(za - zd) / abs(zd) < 1e-3
+
+
+def test_lattice_fft_solve_iterations_bounded():
+    """The Floquet preconditioner keeps iteration growth to edge effects —
+    far below the block-Jacobi count on the same grid."""
+    half = 0.962 * 22 / 4
+    fft = _lattice_sim(8, 8, half, nsegs=8, degree=1, lattice_fft=True)
+    fft.compute_impedance()
+    pair = _lattice_sim(8, 8, half, nsegs=8, degree=1, lattice_fft=False)
+    pair.compute_impedance()
+    assert max(fft._last_solve_iters) < max(pair._last_solve_iters)
