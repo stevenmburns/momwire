@@ -1008,3 +1008,124 @@ def test_lattice_fft_solve_iterations_bounded():
     pair = _lattice_sim(8, 8, half, nsegs=8, degree=1, lattice_fft=False)
     pair.compute_impedance()
     assert max(fft._last_solve_iters) < max(pair._last_solve_iters)
+
+
+# ---- solver_diag() (antennaknobs#613) ---------------------------------------
+
+
+def test_solver_diag_none_before_solve():
+    """No `_hmatrix` yet ⇒ nothing to report, not a stale/wrong guess."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 4, half)
+    assert sim.solver_diag() is None
+
+
+def test_solver_diag_fft_engaged():
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 4, half)  # auto, P=16 ⇒ FFT lattice
+    sim.compute_impedance()
+    assert sim.solver_diag() == {
+        "operator": "LatticeArrayBlock",
+        "lattice_fft": True,
+        "n_elem": 16,
+        "n_shapes": 1,
+        "reason": None,
+    }
+
+
+def test_solver_diag_too_few_elements():
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 3, half)  # auto, P=12 < 16
+    sim.compute_impedance()
+    diag = sim.solver_diag()
+    assert diag["operator"] == "ArrayBlock"
+    assert diag["lattice_fft"] is False
+    assert diag["n_elem"] == 12
+    assert diag["n_shapes"] == 1
+    assert diag["reason"] == "only 12 elements; the FFT path engages at 16+"
+
+
+def test_solver_diag_non_lattice():
+    """A jittered element still parses as one shape class with 16+ elements,
+    so the reason must name the failed lattice fit specifically, not just
+    restate `lattice_fft: false`."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 4, half, jitter=(5, [0.9, 0.4, 0.0]))
+    sim.compute_impedance()
+    diag = sim.solver_diag()
+    assert diag["operator"] == "ArrayBlock"
+    assert diag["lattice_fft"] is False
+    assert diag["n_shapes"] == 1
+    assert diag["reason"] == "element centroids don't fit a regular lattice"
+
+
+def test_solver_diag_explicitly_disabled():
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = _lattice_sim(4, 4, half, lattice_fft=False)
+    sim.compute_impedance()
+    diag = sim.solver_diag()
+    assert diag["lattice_fft"] is False
+    assert diag["reason"] == "lattice FFT explicitly disabled"
+
+
+def test_solver_diag_height_split_under_ground():
+    """A vertically-stacked (2-height) grounded array reports the FFT gap
+    with the height-split reason, even though it has plenty of elements and
+    every element shares one geometric shape — ground-refined block-shape
+    classes are what the gate actually checks (issue #613's headline case)."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    offsets = [(y, z) for z in (6.0, 12.0) for y in (-22.0, -14.0, -6.0, 2.0, 10.0)]
+    sim = _ground_array(offsets, [half] * len(offsets), ArrayBlockSolver, nsegs=8)
+    sim.compute_impedance()
+    diag = sim.solver_diag()
+    assert diag["operator"] == "ArrayBlock"
+    assert diag["lattice_fft"] is False
+    assert diag["n_shapes"] == 2
+    assert diag["reason"] == (
+        "shape classes split by height above ground (2 classes); "
+        "the FFT path needs 1"
+    )
+
+
+def test_solver_diag_hmatrix_fallback():
+    """The degenerate (no exploitable partition) path reports a distinct
+    operator type and reason from the ArrayBlock per-pair path — the two
+    must not be conflated even though both report `lattice_fft: false`."""
+    reset_array_caches()
+    half = 0.962 * 22 / 4
+    sim = ArrayBlockSolver(
+        wires=[_dipole_wire(half)],
+        degree=2,
+        n_per_edge_per_wire=[[16]],
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+    )
+    sim.compute_impedance()
+    assert sim.solver_diag() == {
+        "operator": "HMatrix",
+        "lattice_fft": False,
+        "n_elem": None,
+        "n_shapes": None,
+        "reason": "fell back to the H-matrix (no exploitable element partition)",
+    }
+
+
+def test_solver_diag_absent_for_other_solvers():
+    """Only the Array Block engine reports this — plain BSplineSolver has no
+    `solver_diag` at all, and the adapter relies on that absence to omit the
+    field for every other engine."""
+    half = 0.962 * 22 / 4
+    sim = BSplineSolver(
+        wires=[_dipole_wire(half)],
+        degree=2,
+        n_per_edge_per_wire=[[16]],
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0.0j)],
+    )
+    assert not hasattr(sim, "solver_diag")
