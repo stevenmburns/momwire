@@ -1,45 +1,68 @@
-"""Scaling study: HMatrixPySim (hierarchical / ACA) vs dense BSplinePySim.
+"""Scaling study: HMatrixSolver (hierarchical / ACA) vs dense BSplineSolver.
 
-Sweeps a fixed-length straight wire at increasing segment count N and reports,
-for each N:
+Sweeps a geometry at increasing segment count N and reports, for each N:
 
-  * storage      — H-matrix complex scalars stored vs dense N^2
+  * storage      — H-matrix complex scalars stored vs dense N^2, and MB
   * rank         — mean / max far-block ACA rank
   * far%         — fraction of the matrix area in admissible (far) blocks
-  * fill-work    — matrix *entries evaluated* by each method (the algorithmic
-                   fill cost, independent of Python constant factors):
-                   dense = N^2; H = near_area + sum_far rank*(rows+cols)
-  * accuracy     — |Z_hmat - Z_dense| / |Z_dense|
-  * wall-clock   — dense assemble+solve vs H build+solve (honest; the pure-
-                   Python prototype carries large constant factors the C++
-                   phase removes — read the *slopes*, not the absolutes)
+  * accuracy     — |Z_hmat - Z_dense| / |Z_dense| (only while the dense
+                   reference is still affordable, see --dense-max)
+  * wall-clock   — dense assemble+solve vs H build+solve
+  * rss          — peak process RSS (cumulative across the ladder when several
+                   N run in one invocation; run one N per process for a clean
+                   per-N figure)
 
-Run:  python scripts/hmatrix_scaling.py
+Geometries (--geometry):
+
+  wire    — fixed-length straight wire (4 wavelengths), mesh refined. The
+            cluster tree is effectively 1-D: the most favourable case for
+            ACA (tiny constant ranks).
+  screen  — square panel of ~sqrt(N) parallel disconnected wires, segment
+            length ~ wire spacing (an NEC-style wire-grid ground screen).
+            2-D cluster structure: the honest stand-in for the large-N
+            wire-grid workload motivating the FMM scoping (issue #168).
+
+Run:
+  python scripts/hmatrix_scaling.py                       # classic ladder to 4000
+  python scripts/hmatrix_scaling.py --ns 16000 --geometry screen
+  python scripts/hmatrix_scaling.py --ns 8000,16000,32000 --dense-max 8000
 """
 
+import argparse
+import resource
 import time
 
 import numpy as np
 
-from pysim.bspline import BSplinePySim
-from pysim.hmatrix import HMatrixPySim
+from momwire.bspline import BSplineSolver
+from momwire.hmatrix import HMatrixSolver
 
 WAVELENGTH = 22.0
-LEN_WL = 4.0  # wire length in wavelengths (fixed as N grows)
-ACA_TOL = 1e-5
-ACA_ETA = 2.0
-DEGREE = 1
+LEN_WL = 4.0  # straight-wire length in wavelengths (fixed as N grows)
+SCREEN_WL = 2.0  # screen panel side in wavelengths
 
 
-def _wire():
+def _wire_geometry(nsegs):
     half = 0.5 * LEN_WL * WAVELENGTH
-    return [np.array([[0.0, 0.0, -half], [0.0, 0.0, half]])]
+    wires = [np.array([[0.0, 0.0, -half], [0.0, 0.0, half]])]
+    return wires, [[nsegs]]
 
 
-def _fill_work(H):
-    near = sum(D.size for _, _, D in H.near)
-    far = sum(U.shape[1] * (U.shape[0] + V.shape[1]) for _, _, U, V in H.far)
-    return near + far
+def _screen_geometry(nsegs):
+    """~sqrt(N) parallel wires spanning a square panel, segment length ~
+    spacing — a wire-grid screen without junctions (wires couple through
+    the field, which is all the far-field compression sees)."""
+    side = SCREEN_WL * WAVELENGTH
+    m = max(2, int(round(np.sqrt(nsegs))))
+    n_w = max(1, int(round(nsegs / m)))
+    xs = np.linspace(-side / 2, side / 2, m)
+    wires = [
+        np.array([[x, 0.0, -side / 2], [x, 0.0, side / 2]]) for x in xs
+    ]
+    return wires, [[n_w]] * m
+
+
+GEOMETRIES = {"wire": _wire_geometry, "screen": _screen_geometry}
 
 
 def _dense_solve(sim):
@@ -62,30 +85,63 @@ def _dense_solve(sim):
     return z, t_fill, t_solve, n
 
 
+def _rss_mb():
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+
+
 def main():
-    ns = [250, 500, 1000, 2000, 4000]
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument(
+        "--ns",
+        default="250,500,1000,2000,4000",
+        help="comma-separated total segment counts",
+    )
+    ap.add_argument(
+        "--geometry", choices=sorted(GEOMETRIES), default="wire"
+    )
+    ap.add_argument(
+        "--dense-max",
+        type=int,
+        default=4000,
+        help="skip the dense reference above this N (time/memory wall)",
+    )
+    ap.add_argument("--aca-tol", type=float, default=1e-5)
+    ap.add_argument("--aca-eta", type=float, default=2.0)
+    ap.add_argument("--degree", type=int, default=1)
+    args = ap.parse_args()
+
+    ns = [int(s) for s in args.ns.split(",")]
     print(
-        f"{'N':>6} {'n':>6} {'far%':>6} {'rank':>9} "
-        f"{'store%':>7} {'fill%':>7} {'relZ':>9} "
-        f"{'Dfill':>7} {'Dslv':>7} {'Hbld':>7} {'Hslv':>7} {'it':>4}"
+        f"geometry={args.geometry} degree={args.degree} "
+        f"aca_tol={args.aca_tol} aca_eta={args.aca_eta}"
+    )
+    print(
+        f"{'N':>7} {'n':>7} {'far%':>6} {'rank':>9} "
+        f"{'store%':>7} {'H_MB':>8} {'relZ':>9} "
+        f"{'Dfill':>8} {'Dslv':>8} {'Hbld':>8} {'Hslv':>8} {'it':>4} {'rssMB':>8}"
     )
     for nsegs in ns:
-        wire = _wire()
-        dense = BSplinePySim(
-            wires=wire,
-            degree=DEGREE,
-            n_per_edge_per_wire=[[nsegs]],
-            wavelength=WAVELENGTH,
-        )
-        zd, t_dfill, t_dsolve, n = _dense_solve(dense)
+        wires, n_per_edge = GEOMETRIES[args.geometry](nsegs)
 
-        hmat = HMatrixPySim(
-            wires=wire,
-            degree=DEGREE,
-            n_per_edge_per_wire=[[nsegs]],
+        if nsegs <= args.dense_max:
+            dense = BSplineSolver(
+                wires=wires,
+                degree=args.degree,
+                n_per_edge_per_wire=n_per_edge,
+                wavelength=WAVELENGTH,
+            )
+            zd, t_dfill, t_dsolve, _ = _dense_solve(dense)
+            del dense
+        else:
+            zd = t_dfill = t_dsolve = None
+
+        hmat = HMatrixSolver(
+            wires=wires,
+            degree=args.degree,
+            n_per_edge_per_wire=n_per_edge,
             wavelength=WAVELENGTH,
-            aca_tol=ACA_TOL,
-            aca_eta=ACA_ETA,
+            aca_tol=args.aca_tol,
+            aca_eta=args.aca_eta,
         )
         t0 = time.perf_counter()
         H = hmat.build_hmatrix()
@@ -97,17 +153,20 @@ def main():
         zh, _ = hmat.compute_impedance()
         t_hsolve = time.perf_counter() - t0
 
-        relz = abs(zh - zd) / abs(zd)
-        fill_pct = _fill_work(H) / (n * n)
+        relz = "" if zd is None else f"{abs(zh - zd) / abs(zd):>9.1e}"
+        dfill = "" if t_dfill is None else f"{t_dfill:>7.2f}s"
+        dslv = "" if t_dsolve is None else f"{t_dsolve:>7.2f}s"
+        h_mb = st["storage"] * 16 / 1e6
         print(
-            f"{nsegs:>6} {n:>6} {part['stats']['far_frac'] * 100:>5.0f}% "
-            f"{st['mean_rank']:>4.1f}/{st['max_rank']:>3d} "
-            f"{st['compression'] * 100:>6.1f}% {fill_pct * 100:>6.1f}% "
-            f"{relz:>9.1e} "
-            f"{t_dfill:>6.3f}s {t_dsolve:>6.3f}s "
-            f"{t_hbuild:>6.3f}s {t_hsolve:>6.3f}s "
-            f"{max(hmat._last_solve_iters):>4d}"
+            f"{nsegs:>7} {st['n']:>7} {part['stats']['far_frac'] * 100:>5.0f}% "
+            f"{st['mean_rank']:>4.1f}/{st['max_rank']:>4d} "
+            f"{st['compression'] * 100:>6.1f}% {h_mb:>7.1f} "
+            f"{relz:>9} {dfill:>8} {dslv:>8} "
+            f"{t_hbuild:>7.2f}s {t_hsolve:>7.2f}s "
+            f"{max(hmat._last_solve_iters):>4d} {_rss_mb():>7.0f}",
+            flush=True,
         )
+        del hmat, H
 
 
 if __name__ == "__main__":
