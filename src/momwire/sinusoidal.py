@@ -1398,7 +1398,9 @@ class SinusoidalSolver(_Cancelable):
         Phi_cos = _project_weighted(cm["Ez_cos"], cm["Erho_cos"])
         return Phi_const, Phi_sin, Phi_cos
 
-    def _field_tensor_sommerfeld_remainder(self, geom, k, eps_t):
+    def _field_tensor_sommerfeld_remainder(
+        self, geom, k, eps_t, obs_centers=None, obs_tangents=None
+    ):
         """Smooth Sommerfeld-remainder tensor S[3, M, N]: the tangential
         remainder field of segment n's const/sin/cos source shapes at the
         center of segment m, from the interpolated SommerfeldGrid F dyad
@@ -1406,6 +1408,14 @@ class SinusoidalSolver(_Cancelable):
         as `BSplineSolver._Z_sommerfeld_remainder`, minus the observer
         quadrature: this solver point-matches at segment centers, so only
         the SOURCE side integrates, GL with `n_qp_sommerfeld` nodes).
+
+        Observers default to the geometry's segment centres/tangents
+        (collocation). `SinusoidalGalerkinSolver` overrides them with the
+        Gauss points along each test segment — the same reuse-the-evaluator
+        pattern as `_field_components`'s `obs_*` overrides — so M is then
+        the number of quadrature points rather than the number of segments.
+        The grid extent below is derived from segment ENDPOINTS, which
+        bounds any interior quadrature point, so it serves both callers.
 
         The grid's surfaces are the E-field of a unit current MOMENT
         (Il = 1, eq 123 normalization), so integrating shape(z')·F dz'
@@ -1468,13 +1478,17 @@ class SinusoidalSolver(_Cancelable):
         srcf = src.reshape(n_src, 3)
         t_src = np.repeat(seg_t, q, axis=0)
 
-        S = np.empty((3, N, N), dtype=np.complex128)
+        obs_c = seg_c if obs_centers is None else np.asarray(obs_centers, dtype=float)
+        obs_t = seg_t if obs_tangents is None else np.asarray(obs_tangents, dtype=float)
+        M = obs_c.shape[0]
+
+        S = np.empty((3, M, N), dtype=np.complex128)
         chunk = max(1, (1 << 19) // max(n_src, 1))
-        for i0 in range(0, N, chunk):
+        for i0 in range(0, M, chunk):
             self._checkpoint()  # per observer chunk of the eval block
-            i1 = min(i0 + chunk, N)
+            i1 = min(i0 + chunk, M)
             proj = _sommerfeld.remainder_field_proj(
-                seg_c[i0:i1], seg_t[i0:i1], srcf, t_src, gz, k, grid
+                obs_c[i0:i1], obs_t[i0:i1], srcf, t_src, gz, k, grid
             )
             fq = proj.reshape(i1 - i0, N, q)
             S[:, i0:i1, :] = np.einsum("snq,mnq->smn", shp * w_node[None], fq)

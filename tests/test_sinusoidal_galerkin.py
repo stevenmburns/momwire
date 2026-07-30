@@ -40,6 +40,15 @@ gate, the two experimental-design constraints it turned up (the feed must not
 move between mesh levels; the delta-gap reactance has no mesh limit, so the
 "converged reference" is a *choice* whose influence has to be bounded), and the
 first basis-vs-testing instrument readings.
+
+**G4** — ground models, one at a time (PEC image → reflection-coefficient →
+Sommerfeld), each by reusing that ground's existing field evaluator under the
+same test quadrature. Symmetry must survive the ground terms, and the
+impedance must hold up against the per-ground references the tree already has.
+See the ``M4`` section at the bottom for the measured tables, the two places
+the gate had to be stated more carefully than the milestone's one-liner (the
+Sommerfeld source-side quadrature near the plane; the per-ground restatement of
+G2's PyNEC amendment), and the one inherited defect it turned up.
 """
 
 import functools
@@ -935,15 +944,737 @@ def test_m3_reference_constants_are_reproducible():
             )
 
 
-def test_ground_and_loading_are_not_yet_supported():
-    """Free-space, lossless: the deferred features fail loudly rather than
-    silently producing wrong numbers (ground → M4, loading → later)."""
-    # Elevated dipole so the free-space geometry build succeeds and the
-    # NotImplementedError comes from the Galerkin assembly, not the in-plane
-    # ground degeneracy check.
+def test_loading_is_not_yet_supported():
+    """Still deferred, and it fails loudly rather than silently producing wrong
+    numbers (wire loading → after M5). Grounds arrived in M4 — see below."""
     dip_hi = np.array([[0.0, -HD, 2.0], [0.0, HD, 2.0]])
     common = dict(wires=[dip_hi], n_per_edge_per_wire=[[41]], nsegs=41)
     with pytest.raises(NotImplementedError):
-        SinusoidalGalerkinSolver(**common, ground_z=0.0).compute_impedance()
-    with pytest.raises(NotImplementedError):
         SinusoidalGalerkinSolver(**common, wire_conductivity=5.8e7).compute_impedance()
+
+
+# ---------------------------------------------------------------------------
+# M4 — ground models: PEC image → reflection-coefficient → Sommerfeld
+#
+# Each ground is wired by reusing that ground's EXISTING source-field evaluator
+# under the M2 test quadrature — no new field kernels. The two G4 clauses:
+#
+# **Symmetry.** ‖G−Gᵀ‖/‖G‖ ≤ 1e-10 with the ground terms in, on uniform-radius
+# geometries (M2 established that mixed radii break reciprocity in the KERNEL,
+# so symmetry is not a valid oracle there). Measured at the default quadrature,
+# n = 21, against the free-space value on the same wires:
+#
+#     geometry      free      pec       refl      sommerfeld
+#     m4_dipole     2.9e-12   3.4e-12   3.1e-12   4.3e-12
+#     m4_vertical   6.8e-12   6.6e-12   6.5e-12   6.9e-12
+#     m4_lshape     3.9e-11   3.9e-11   4.0e-11   4.0e-11
+#     m4_monopole   9.2e-12   1.3e-11   2.4e-12   6.7e-10  ← see below
+#
+# i.e. every ground block lands the matrix back on the free-space floor. The
+# one entry above the gate is Sommerfeld on the ground-CONTACT monopole, and it
+# is the source-side remainder quadrature rather than anything M4 added: it
+# falls 6.7e-10 → 7.0e-12 → 6.3e-12 as `n_qp_sommerfeld` goes 3 → 5 → 7 and
+# then stops, exactly the way M2's free-space floor turned out to be the
+# source-side `n_qp_const`. Pinned by
+# `test_g4_sommerfeld_symmetry_near_the_plane_is_source_quadrature_limited`.
+#
+# **Impedance.** The per-ground references that already exist in this tree are
+# the PyNEC/nec2c goldens in `golden_refl_coef_ground.py` (gn −1 / gn 0 / gn 2)
+# and the dense B-spline solve on the same geometry. Against them:
+#
+#   * the **ground increment** Z(ground) − Z(free space) agrees with dense
+#     B-spline's to 0.04-0.08% for the PEC and Sommerfeld grounds, across the
+#     whole 0.1-0.5 λ height window on both fixture geometries;
+#   * |Z_gal − gn| sits at 0.96-1.30× |Z_bs2 − gn| — the same NEC-tracking floor
+#     the tree's OTHER Galerkin scheme occupies;
+#   * |Z_gal − Z_bs2| is smaller than |Z_coll − Z_bs2| on every case, and is
+#     unchanged from its free-space value (dipole 0.257 Ω free → 0.253/0.257
+#     under PEC/Sommerfeld; inverted_l 0.038 → 0.035/0.036).
+#
+# What is NOT claimed, per ground, is the point-matched solver's ~0.1 Ω
+# tracking of NEC. That is the same amendment G2 made in M2 and for the same
+# reason — collocation's tightness to NEC is its shared-heritage artifact, and
+# issue #182 lists not reproducing it as an explicit non-goal. The evidence
+# that it is heritage rather than a ground-block defect is the last bullet:
+# the ground adds nothing to the sin↔bs2 gap, it just carries the free-space
+# gap through.
+#
+# **Convergence.** Following the M3 constraints — feed fixed at a segment
+# centre for every N in the sweep, and a NAMED reference family rather than
+# "the converged value" — the variational payoff survives every ground:
+#
+#     geometry      pec    refl   somm    reading
+#     m4_dipole     1.88   2.04   2.19    testing-limited
+#     m4_vertical   1.74   1.90   1.86    testing-limited
+#     m4_lshape     1.01   1.01   1.01    BASIS-limited (M3's k3_star again)
+#     m4_monopole   1.64    —      —      testing-limited
+#
+# (worst-case errColl/errGal over the reference family at N = 11/15/21). The
+# ratio barely moves between grounds on a given geometry, which says the
+# testing payoff is a property of the free-space fill that the ground blocks
+# inherit rather than something the ground changes.
+# ---------------------------------------------------------------------------
+
+from fixtures_refl_coef_geoms import GEOMS  # noqa: E402
+from golden_refl_coef_ground import GOLDEN  # noqa: E402
+
+# The three grounds, keyed by the GOLDEN column that references each one.
+M4_GROUNDS = {
+    "pec": ("pec", {}),
+    "refl": ("finite-fast", {"ground_eps": (10.0, 0.002)}),
+    "somm": ("finite", {"ground_eps": (10.0, 0.002), "ground_model": "sommerfeld"}),
+}
+
+# Heights (in wavelengths) of the fixture acceptance window. 0.05 and 0.02 are
+# deliberately excluded: they sit outside the documented refl-coef acceptance
+# window, where the dense-B-spline finite ground is itself 11.5 Ω from NEC gn 0
+# and so cannot serve as a reference for anybody.
+M4_WINDOW = (0.1, 0.2, 0.35, 0.5)
+M4_FIXTURES = [("dipole", f) for f in M4_WINDOW] + [
+    ("inverted_l", f) for f in M4_WINDOW
+]
+
+MONO_L = 0.25 * WL  # quarter-wave grounded vertical
+GND_H = 0.1 * WL  # elevation of the "over ground" geometries
+
+
+def _m4_dipole(n, **over):
+    """Horizontal dipole 0.1 λ over the plane. Feed defaults to the wire
+    midpoint = the centre segment for odd n (M3 constraint 1)."""
+    w = np.array([[0.0, -HD, GND_H], [0.0, HD, GND_H]])
+    return dict(wires=[w], n_per_edge_per_wire=[[n]], nsegs=n, **over)
+
+
+def _m4_vertical(n, **over):
+    """Centre-fed VERTICAL dipole with its base 0.1 λ up. Vertical current over
+    ground is the case where the image is parallel rather than anti-parallel,
+    and where the Fresnel dyad's p̂ correction switches off (ρ_v = −ρ_h at
+    normal incidence) — a different corner of the ground blocks than the
+    horizontal dipole exercises."""
+    w = np.array([[0.0, 0.0, GND_H], [0.0, 0.0, GND_H + 2 * HD]])
+    return dict(wires=[w], n_per_edge_per_wire=[[n]], nsegs=n, **over)
+
+
+def _m4_lshape(n, **over):
+    """Vertical + horizontal arm meeting 0.1 λ above the plane: a junction (so
+    the N⁻/N⁺ basis coupling is live) with both current orientations present.
+    Feed defaults to the midpoint of wire 0 — a segment centre for odd n."""
+    w0 = np.array([[0.0, 0.0, GND_H], [0.0, 0.0, GND_H + 3.0]])
+    w1 = np.array([[0.0, 0.0, GND_H], [3.0, 0.0, GND_H]])
+    return dict(
+        wires=[w0, w1],
+        n_per_edge_per_wire=[[n], [n]],
+        nsegs=n,
+        feed_wire_index=0,
+        junctions=[[(0, "start"), (1, "start")]],
+        **over,
+    )
+
+
+def _m4_monopole(n, **over):
+    """Quarter-wave vertical whose base LIES IN the plane — the #151
+    ground-connected basis, and the only geometry here where a segment and its
+    own image share a node. Centre-fed rather than base-fed so the feed is a
+    segment centre at every odd n (a base feed would sit at h/2 and creep as
+    the mesh refines — M3 constraint 1)."""
+    w = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, MONO_L]])
+    return dict(wires=[w], n_per_edge_per_wire=[[n]], nsegs=n, **over)
+
+
+M4_GEOMETRIES = {
+    "m4_dipole": _m4_dipole,
+    "m4_vertical": _m4_vertical,
+    "m4_lshape": _m4_lshape,
+    "m4_monopole": _m4_monopole,
+}
+
+# (geometry, ground) pairs the gates run over. The ground-contact monopole is
+# PEC-only: see `test_finite_ground_at_a_ground_contact_is_an_inherited_defect`
+# for why the finite grounds have no meaning there on EITHER sinusoidal solver.
+M4_CASES = [
+    (g, gnd)
+    for g in M4_GEOMETRIES
+    for gnd in M4_GROUNDS
+    if not (g == "m4_monopole" and gnd != "pec")
+]
+
+M4_N = 21  # mesh the symmetry / quadrature gates are measured at
+
+
+def _m4_solver(cls, geom_name, ground, n=M4_N, **over):
+    kw = M4_GEOMETRIES[geom_name](n, **over)
+    return cls(**kw, ground_z=0.0, **M4_GROUNDS[ground][1])
+
+
+# --- G4, clause 1: symmetry survives every ground --------------------------
+
+
+@pytest.mark.parametrize("geom_name,ground", M4_CASES)
+def test_g4_symmetry_holds_with_the_ground_terms_in(geom_name, ground):
+    """G4's symmetry clause: adding a ground must not cost reciprocity.
+
+    The image block is one more source block through the same test quadrature,
+    so it should land the matrix back on the free-space floor — and it does, to
+    within ~15% of the free-space value on every case (table in the section
+    header). Sommerfeld on the ground-contact monopole is the single exception
+    and is `n_qp_sommerfeld`-limited, not M4-limited; it is refined to the gate
+    here and characterized by the next test.
+
+    Uniform radius throughout: M2 showed the Eqs 76-79 kernel is itself
+    asymmetric under mixed per-wire radii, so symmetry is not an oracle there.
+    """
+    over = {}
+    if geom_name == "m4_monopole" and ground == "somm":
+        over["n_qp_sommerfeld"] = 5
+    r = _sym_ratio(
+        _matrix(_m4_solver(SinusoidalGalerkinSolver, geom_name, ground, **over))
+    )
+    r_free = _sym_ratio(
+        _matrix(SinusoidalGalerkinSolver(**M4_GEOMETRIES[geom_name](M4_N)))
+    )
+    assert r < G1_GATE, f"{geom_name}/{ground}: ‖G-Gᵀ‖/‖G‖ = {r:.3e}"
+    assert r < max(10.0 * r_free, 1e-11), (
+        f"{geom_name}/{ground}: {r:.3e} is well above the free-space floor "
+        f"{r_free:.3e} on the same wires — the ground block, not the fill"
+    )
+
+
+def test_g4_sommerfeld_symmetry_near_the_plane_is_source_quadrature_limited():
+    """The one symmetry number above the gate at default settings, given a
+    cause rather than a carve-out.
+
+    On the ground-contact monopole the Sommerfeld remainder's SOURCE-side
+    Gauss rule (`n_qp_sommerfeld`, default 3 — the point-matched solver's
+    default, untouched here) is what limits reciprocity: the remainder kernel
+    varies fastest when the image point is closest, i.e. exactly at a wire
+    touching the plane. Measured 6.65e-10 (q=3) → 7.01e-12 (q=5) → 6.26e-12
+    (q=7) → 6.27e-12 (q=9): a clean quadrature convergence onto the same
+    ~6e-12 floor the PEC ground reaches, not a structural asymmetry.
+
+    Refining the TEST rule instead does nothing (6.65e-10 → 6.60e-10 at
+    n_qp_test=16), which is what identifies the source side as the limiter —
+    the same diagnosis M2 made for the free-space floor.
+    """
+    ratios = [
+        _sym_ratio(
+            _matrix(
+                _m4_solver(
+                    SinusoidalGalerkinSolver, "m4_monopole", "somm", n_qp_sommerfeld=q
+                )
+            )
+        )
+        for q in (3, 5, 7)
+    ]
+    assert ratios[0] > G1_GATE, f"the documented q=3 residual is gone: {ratios[0]:.2e}"
+    assert ratios[1] < G1_GATE and ratios[2] < G1_GATE, (
+        f"refining the source rule no longer reaches the gate: {ratios}"
+    )
+    # ...and it is not the test rule.
+    r_test = _sym_ratio(
+        _matrix(
+            _m4_solver(
+                SinusoidalGalerkinSolver,
+                "m4_monopole",
+                "somm",
+                n_qp_test=16,
+                n_qp_near=16,
+            )
+        )
+    )
+    assert r_test > G1_GATE, (
+        f"doubling the TEST rule reached the gate ({r_test:.2e}) — the limiter "
+        "is not the source-side remainder quadrature after all"
+    )
+
+
+def test_image_block_gets_its_own_near_pair_set():
+    """The structural reason ground contact keeps its symmetry: near pairs are
+    selected against the MIRRORED source geometry for an image block.
+
+    On a wire whose base lies in the plane, base segment 0 and its own image
+    share the in-plane node, so the image block carries the same width-`a`
+    endpoint spike M2 built the graded rule for — and the selection finds
+    exactly that one pair. A wire well clear of the plane has no near image
+    pairs at all, so the correction costs nothing there.
+    """
+    sim = SinusoidalGalerkinSolver(**_m4_monopole(M4_N), ground_z=0.0)
+    geom = sim._build_geometry()
+    img_c, img_t = sim._image_source_centers_tangents(geom)
+    mm, nn = sim._near_pairs(geom, src_c=img_c, src_t=img_t)
+    assert set(zip(mm.tolist(), nn.tolist())) == {(0, 0)}
+
+    high = SinusoidalGalerkinSolver(**_m4_dipole(M4_N), ground_z=0.0)
+    g2 = high._build_geometry()
+    ic, it = high._image_source_centers_tangents(g2)
+    assert high._near_pairs(g2, src_c=ic, src_t=it)[0].size == 0
+
+
+@pytest.mark.parametrize("ground", list(M4_GROUNDS))
+def test_ground_symmetry_needs_the_near_correction(ground):
+    """Same M1-vs-M2 contrast as free space, now with a ground in: disabling
+    the graded near-pair rule at the same node count leaves the grounded matrix
+    visibly asymmetric (2.1e-6 dipole, 1.6e-4 L-shape, 1.6e-6 to 6.1e-5 on the
+    ground-contact monopole, where the image block contributes its own share)."""
+    for geom_name in ("m4_dipole", "m4_lshape"):
+        r_off = _sym_ratio(
+            _matrix(
+                _m4_solver(
+                    SinusoidalGalerkinSolver, geom_name, ground, near_correction=False
+                )
+            )
+        )
+        r_on = _sym_ratio(
+            _matrix(_m4_solver(SinusoidalGalerkinSolver, geom_name, ground))
+        )
+        assert r_on < G1_GATE < UNIFORM_FLOOR < r_off, (
+            f"{geom_name}/{ground}: off={r_off:.2e} on={r_on:.2e}"
+        )
+
+
+# --- G4, clause 1b: the exact limits each ground must reproduce -------------
+
+
+@pytest.mark.parametrize("geom_name", ["m4_dipole", "m4_vertical", "m4_lshape"])
+def test_g4_finite_grounds_collapse_to_the_pec_image(geom_name):
+    """ε̃ → ∞ must collapse BOTH finite grounds onto the PEC image block: the
+    Fresnel dyad degenerates (ρ_v → 1, ρ_h → −1, so the p̂ correction vanishes)
+    and NEC's Sommerfeld decomposition has C2 → 1 with the remainder scaling
+    away like 1/√ε̃. This is the sign/normalization pin for both blocks —
+    a flipped sign anywhere would be a ~2× miss, not a 1e-8 one.
+
+    Measured at ground_eps = 1e16: refl 5.9e-8 / 2.6e-9 / 7.7e-11 and
+    sommerfeld 7.7e-8 / 2.0e-9 / 9.4e-11 over the three geometries; the
+    point-matched solver's own collapse on its fixtures is 1.1e-8 / 4.8e-9.
+    """
+    kw = M4_GEOMETRIES[geom_name](M4_N)
+    z_pec, _ = SinusoidalGalerkinSolver(**kw, ground_z=0.0).compute_impedance()
+    z_refl, _ = SinusoidalGalerkinSolver(
+        **kw, ground_z=0.0, ground_eps=1e16 + 0j
+    ).compute_impedance()
+    z_somm, _ = SinusoidalGalerkinSolver(
+        **kw, ground_z=0.0, ground_eps=1e16 + 0j, ground_model="sommerfeld"
+    ).compute_impedance()
+    assert abs(z_refl - z_pec) < 1e-5 * abs(z_pec)
+    assert abs(z_somm - z_pec) < 1e-5 * abs(z_pec)
+
+
+@pytest.mark.parametrize("geom_name", ["m4_dipole", "m4_vertical", "m4_lshape"])
+def test_g4_sommerfeld_free_space_limit_is_exact(geom_name):
+    """ε̃ → 1: C2 = 0 and the remainder integrands vanish identically, so the
+    grounded solve must reproduce the no-ground solve. Measured EXACTLY equal
+    (0.0 relative) on all three geometries — the two blocks cancel term by
+    term, they do not merely nearly cancel.
+
+    Excluded: the ground-contact monopole, where setting `ground_z` also
+    changes the BASIS (#151 makes the in-plane end a ground connection instead
+    of a free end), so ε̃ = 1 is not the same problem as no ground at all.
+    """
+    kw = M4_GEOMETRIES[geom_name](M4_N)
+    z_free, _ = SinusoidalGalerkinSolver(**kw).compute_impedance()
+    z_g, _ = SinusoidalGalerkinSolver(
+        **kw, ground_z=0.0, ground_eps=1.0 + 0j, ground_model="sommerfeld"
+    ).compute_impedance()
+    assert abs(z_g - z_free) < 1e-12 * abs(z_free)
+
+
+@pytest.mark.parametrize("geom_name,ground", M4_CASES)
+def test_g4_ground_impedance_is_quadrature_converged(geom_name, ground):
+    """G2's "converged, not tuned" clause, restated with the ground terms in:
+    doubling BOTH test-quadrature knobs moves Z by well under 0.5%. Measured
+    shifts are 1e-9 to 1.7e-7 across the whole (geometry × ground) matrix, so
+    none of the ground numbers below are quadrature artifacts."""
+    z1, _ = _m4_solver(SinusoidalGalerkinSolver, geom_name, ground).compute_impedance()
+    z2, _ = _m4_solver(
+        SinusoidalGalerkinSolver, geom_name, ground, n_qp_test=16, n_qp_near=16
+    ).compute_impedance()
+    shift = abs(z2 - z1) / abs(z1)
+    assert shift < 5e-3, f"{geom_name}/{ground}: {shift:.3%} on doubling n_qp"
+
+
+# --- G4, clause 2: impedance against the existing per-ground references -----
+
+
+def _fixture_z(cls, name, frac, ground, **over):
+    kw = dict(GEOMS[(name, frac)])
+    if cls is BSplineSolver:
+        over.setdefault("degree", 2)
+    return cls(**kw, ground_z=0.0, **M4_GROUNDS[ground][1], **over).compute_impedance()[
+        0
+    ]
+
+
+def _fixture_free_z(cls, name, frac):
+    kw = dict(GEOMS[(name, frac)])
+    extra = {"degree": 2} if cls is BSplineSolver else {}
+    return cls(**kw, **extra).compute_impedance()[0]
+
+
+@pytest.mark.parametrize("name,frac", M4_FIXTURES)
+@pytest.mark.parametrize("ground", ["pec", "somm"])
+def test_g4_ground_increment_matches_dense_bspline(name, frac, ground):
+    """The sharpest available statement about the ground blocks themselves.
+
+    Comparing total impedances mixes the ground block with the free-space fill,
+    whose sin↔bs2 gap is a basis/testing effect M3 already classified. Comparing
+    the ground INCREMENT Z(ground) − Z(free space) isolates the ground block —
+    and against the tree's independently-validated B-spline Galerkin ground
+    blocks it agrees to **0.04-0.08%** of the increment on every case here,
+    over both fixture geometries and the whole 0.1-0.5 λ height window (the
+    increment itself is 1.1-54 Ω, so this is not a small-signal artifact).
+
+    `refl` is excluded from this comparison on purpose, and not because it
+    fails: the two solvers implement DIFFERENT finite-ground models there. The
+    sinusoidal solvers are field-based and apply NEC's Fresnel field dyad
+    exactly; the mixed-potential B-spline has to approximate the image-charge
+    weighting through `ground_phi_mode` (`_ground_refl.PHI_MODES` documents
+    that as the one place the mixed-potential form cannot copy NEC). Their
+    increments differ by 0.17-16%, which measures that modelling difference,
+    not this fill. The refl ground is gated against the gn 0 golden below.
+    """
+    d_gal = _fixture_z(SinusoidalGalerkinSolver, name, frac, ground) - _fixture_free_z(
+        SinusoidalGalerkinSolver, name, frac
+    )
+    d_bs = _fixture_z(BSplineSolver, name, frac, ground) - _fixture_free_z(
+        BSplineSolver, name, frac
+    )
+    rel = abs(d_gal - d_bs) / abs(d_bs)
+    assert rel < 1.5e-3, (
+        f"{name} h={frac} {ground}: ground increment differs from dense bspline "
+        f"by {rel:.3%} (Δ_gal={d_gal:.4f}, Δ_bs2={d_bs:.4f})"
+    )
+
+
+@pytest.mark.parametrize("name,frac", M4_FIXTURES)
+@pytest.mark.parametrize("ground", list(M4_GROUNDS))
+def test_g4_tracks_the_gn_golden_at_the_other_galerkin_scheme_floor(name, frac, ground):
+    """G4's golden clause, stated the way G2's PyNEC clause had to be.
+
+    |Z_gal − gn| is 0.96-1.30× |Z_bs2 − gn| across the matrix: sinusoidal
+    Galerkin lands on the NEC-family goldens at the same cross-solver floor the
+    tree's OTHER Galerkin scheme occupies (~1.4 Ω on these fixtures, which is
+    the floor `docs/refl-coef-ground-plan.md` measured independently).
+
+    It deliberately does NOT reproduce the point-matched solver's 0.05-0.14 Ω
+    tracking of the same goldens. That tightness is collocation's NEC heritage
+    — same basis, same point matching — and #182 lists not reproducing it as an
+    explicit non-goal. The evidence that this is heritage and not a ground-block
+    defect is `test_the_ground_adds_nothing_to_the_sin_bspline_gap` below: the
+    gap is already there in free space, at the same size, on the same wires.
+    """
+    gn = GOLDEN[(name, frac, 10.0, 0.002)][M4_GROUNDS[ground][0]]
+    d_gal = abs(_fixture_z(SinusoidalGalerkinSolver, name, frac, ground) - gn)
+    d_bs = abs(_fixture_z(BSplineSolver, name, frac, ground) - gn)
+    assert d_gal < 1.4 * d_bs, (
+        f"{name} h={frac} {ground}: |gal-gn| = {d_gal:.4f} against dense "
+        f"bspline's {d_bs:.4f} — no longer at the other Galerkin scheme's floor"
+    )
+
+
+@pytest.mark.parametrize("name,frac", M4_FIXTURES)
+@pytest.mark.parametrize("ground", list(M4_GROUNDS))
+def test_g4_closer_to_dense_bspline_than_collocation_is(name, frac, ground):
+    """G2's dense-B-spline clause, per ground: against the other Galerkin scheme
+    in the tree, sinusoidal Galerkin is closer than the point-matched solver on
+    every grounded case. Measured |gal−bs2| 0.035-1.62 Ω against |coll−bs2|
+    1.45-2.52 Ω over the matrix."""
+    z_bs = _fixture_z(BSplineSolver, name, frac, ground)
+    d_gal = abs(_fixture_z(SinusoidalGalerkinSolver, name, frac, ground) - z_bs)
+    d_coll = abs(_fixture_z(SinusoidalSolver, name, frac, ground) - z_bs)
+    assert d_gal < d_coll, (
+        f"{name} h={frac} {ground}: galerkin {d_gal:.4f} from dense bspline, "
+        f"worse than collocation's {d_coll:.4f}"
+    )
+
+
+@pytest.mark.parametrize("name", ["dipole", "inverted_l"])
+@pytest.mark.parametrize("ground", ["pec", "somm"])
+def test_the_ground_adds_nothing_to_the_sin_bspline_gap(name, ground):
+    """Why the golden clause above is a heritage statement and not a defect.
+
+    The sin-Galerkin ↔ dense-B-spline gap under ground is the SAME gap the two
+    schemes already have in free space on the same wires — 0.257 Ω free vs
+    0.253 (PEC) / 0.257 (Sommerfeld) on the dipole, 0.038 free vs 0.035 / 0.036
+    on the inverted-L. The ground block adds essentially nothing to it; it just
+    carries the free-space difference through. So the residual against NEC is
+    the free-space fill's, and no amount of ground work would move it.
+
+    `refl` excluded for the modelling reason given two tests up.
+    """
+    frac = 0.2
+    gap_free = abs(
+        _fixture_free_z(SinusoidalGalerkinSolver, name, frac)
+        - _fixture_free_z(BSplineSolver, name, frac)
+    )
+    gap_gnd = abs(
+        _fixture_z(SinusoidalGalerkinSolver, name, frac, ground)
+        - _fixture_z(BSplineSolver, name, frac, ground)
+    )
+    assert 0.8 < gap_gnd / gap_free < 1.25, (
+        f"{name}/{ground}: sin↔bs2 gap {gap_gnd:.4f} under ground vs "
+        f"{gap_free:.4f} in free space — the ground block is contributing"
+    )
+
+
+# --- G4, clause 3: the M3 payoff, per ground -------------------------------
+#
+# Both M3 constraints are honoured: every `_m4_*` factory puts the feed at a
+# point that is a segment centre for every odd n (so the delta gap does not
+# translate as the mesh refines), and the reference is a NAMED FAMILY rather
+# than "the converged value" — which, per M3, does not exist for a delta-gap
+# reactance. Family = the N=161 solve and the Richardson extrapolation of
+# N = 81/121/161, for each scheme that implements the SAME ground model.
+#
+# B-spline is in the family for `pec` and `somm` (identical physics: the PEC
+# image, and NEC's C2-image-plus-remainder decomposition) but NOT for `refl`,
+# where it approximates the image-charge weighting through `ground_phi_mode`
+# and lands 1 Ω / 2% away from both sinusoidal schemes — a different model, not
+# a different discretization, so it cannot serve as a reference for this one.
+
+M4_REFS = {
+    ("m4_dipole", "pec"): dict(
+        gal_161=20.995250 + 2.666325j,
+        rich_gal=20.999742 + 2.766010j,
+        coll_161=20.991305 + 2.574722j,
+        rich_coll=20.998852 + 2.739493j,
+        bspl_161=20.995314 + 2.664842j,
+        rich_bspl=21.000269 + 2.765637j,
+    ),
+    ("m4_dipole", "refl"): dict(
+        gal_161=48.106418 - 4.643412j,
+        rich_gal=48.110072 - 4.560912j,
+        coll_161=48.097236 - 4.733933j,
+        rich_coll=48.108123 - 4.587350j,
+    ),
+    ("m4_dipole", "somm"): dict(
+        gal_161=56.409201 - 8.712697j,
+        rich_gal=56.408636 - 8.639097j,
+        coll_161=56.399501 - 8.801966j,
+        rich_coll=56.406698 - 8.665026j,
+        bspl_161=56.405042 - 8.723017j,
+        rich_bspl=56.408964 - 8.641944j,
+    ),
+    ("m4_vertical", "pec"): dict(
+        gal_161=75.632971 - 26.411502j,
+        rich_gal=75.609852 - 26.356312j,
+        coll_161=75.618689 - 26.498808j,
+        rich_coll=75.606594 - 26.382214j,
+        bspl_161=75.618372 - 26.428028j,
+        rich_bspl=75.608020 - 26.361113j,
+    ),
+    ("m4_vertical", "refl"): dict(
+        gal_161=72.422670 - 22.749400j,
+        rich_gal=72.405074 - 22.691248j,
+        coll_161=72.409158 - 22.837169j,
+        rich_coll=72.402045 - 22.717164j,
+    ),
+    ("m4_vertical", "somm"): dict(
+        gal_161=72.107419 - 24.213443j,
+        rich_gal=72.088192 - 24.154544j,
+        coll_161=72.093827 - 24.300908j,
+        rich_coll=72.085090 - 24.180389j,
+        bspl_161=72.094569 - 24.228621j,
+        rich_bspl=72.086715 - 24.158961j,
+    ),
+    ("m4_lshape", "pec"): dict(
+        gal_161=11.968607 - 1085.995621j,
+        rich_gal=11.875187 - 1081.538405j,
+        coll_161=11.965616 - 1086.082421j,
+        rich_coll=11.875475 - 1081.571768j,
+        bspl_161=11.933778 - 1084.412462j,
+        rich_bspl=11.863879 - 1081.026114j,
+    ),
+    ("m4_lshape", "refl"): dict(
+        gal_161=10.932084 - 1087.785369j,
+        rich_gal=10.846718 - 1083.313835j,
+        coll_161=10.929226 - 1087.871391j,
+        rich_coll=10.846979 - 1083.347318j,
+    ),
+    ("m4_lshape", "somm"): dict(
+        gal_161=12.579734 - 1088.065235j,
+        rich_gal=12.481400 - 1083.591743j,
+        coll_161=12.576230 - 1088.151274j,
+        rich_coll=12.481679 - 1083.625009j,
+        bspl_161=12.543057 - 1086.476087j,
+        rich_bspl=12.469523 - 1083.077592j,
+    ),
+    ("m4_monopole", "pec"): dict(
+        gal_161=74.917206 + 44.165358j,
+        rich_gal=74.957605 + 44.213649j,
+        coll_161=74.913681 + 44.115541j,
+        rich_coll=74.956952 + 44.202932j,
+        bspl_161=74.929388 + 44.141531j,
+        rich_bspl=74.962429 + 44.218677j,
+    ),
+}
+
+M4_FINE = (81, 121, 161)
+
+# Worst-case errColl/errGal over the whole reference family at N = 11/15/21,
+# floored a little below the measured value.
+M4_GATE_RATIO = {
+    ("m4_dipole", "pec"): 1.85,
+    ("m4_dipole", "refl"): 2.0,
+    ("m4_dipole", "somm"): 2.15,
+    ("m4_vertical", "pec"): 1.70,
+    ("m4_vertical", "refl"): 1.87,
+    ("m4_vertical", "somm"): 1.83,
+    ("m4_lshape", "pec"): 1.005,
+    ("m4_lshape", "refl"): 1.005,
+    ("m4_lshape", "somm"): 1.005,
+    ("m4_monopole", "pec"): 1.60,
+}
+
+
+@functools.lru_cache(maxsize=None)
+def _m4_z(scheme, geom_name, ground, n):
+    kw = M4_GEOMETRIES[geom_name](n)
+    kw = dict(kw, ground_z=0.0, **M4_GROUNDS[ground][1])
+    return _SCHEMES[scheme](kw).compute_impedance()[0]
+
+
+@pytest.mark.parametrize("geom_name,ground", M4_CASES)
+def test_g4_variational_payoff_survives_each_ground(geom_name, ground):
+    """G3's payoff, re-measured with each ground in: at 11-21 segments the
+    Galerkin impedance is still closer to the fine-mesh answer than the
+    point-matched solver's, and the verdict survives every reference in the
+    family (M3 constraint 2 — there is no single converged value to measure
+    against, so the gate is the worst ratio over all defensible choices).
+
+    Measured worst-case errColl/errGal: dipole 1.88/2.04/2.19,
+    vertical 1.74/1.90/1.86, L-shape 1.01/1.01/1.01, contact monopole 1.64
+    (pec/refl/somm). Two things worth reading off that:
+
+    * the ratio barely moves between grounds on a given geometry, so the
+      testing payoff is a property of the free-space fill that the ground
+      blocks inherit rather than something the ground changes;
+    * the L-shape is BASIS-limited at 1.01, which is M3's k3_star reading
+      again — near-open, |X| ≈ 1085, and no amount of testing work moves it.
+    """
+    refs = M4_REFS[(geom_name, ground)]
+    worst = min(
+        _rel_err(_m4_z("coll", geom_name, ground, n), ref)
+        / _rel_err(_m4_z("gal", geom_name, ground, n), ref)
+        for ref in refs.values()
+        for n in M3_COARSE
+    )
+    assert worst > 1.0, (
+        f"{geom_name}/{ground}: the payoff flips under some reference choice "
+        f"(worst errColl/errGal = {worst:.3f})"
+    )
+    assert worst >= M4_GATE_RATIO[(geom_name, ground)], (
+        f"{geom_name}/{ground}: worst-case errColl/errGal fell to {worst:.3f}, "
+        f"below the pinned {M4_GATE_RATIO[(geom_name, ground)]}"
+    )
+
+
+@pytest.mark.parametrize("geom_name,ground", M4_CASES)
+def test_g4_ground_convergence_is_monotone(geom_name, ground):
+    """The convergence curve with a ground in must still decay monotonically —
+    over the whole M3 ladder (11 → 41) on every geometry × ground here, unlike
+    free space where the junction geometry has a pre-asymptotic maximum."""
+    ref = M4_REFS[(geom_name, ground)]["rich_gal"]
+    errs = [_rel_err(_m4_z("gal", geom_name, ground, n), ref) for n in M3_LADDER]
+    assert all(b < a for a, b in zip(errs, errs[1:])), (
+        f"{geom_name}/{ground}: not monotone over N={M3_LADDER}: "
+        f"{[f'{e:.4%}' for e in errs]}"
+    )
+
+
+def test_the_m4_reference_family_is_tight_enough_to_decide():
+    """The reference families span 1.3e-3 to 9.1e-3 of |Z| — wide enough that
+    the M3 warning applies (no single converged number exists) and narrow
+    enough that the payoff verdicts above survive all of them. Asserted so a
+    future reference refresh cannot silently widen the family until the gate
+    stops meaning anything."""
+    for key, refs in M4_REFS.items():
+        vals = list(refs.values())
+        spread = max(abs(a - b) for a in vals for b in vals) / abs(vals[0])
+        assert spread < 1.5e-2, f"{key}: reference family spans {spread:.2e} of |Z|"
+
+
+# --- A finding, pinned rather than fixed -----------------------------------
+
+
+def test_finite_ground_at_a_ground_contact_is_an_inherited_defect():
+    """A wire END LYING IN the plane plus a FINITE ground is broken on BOTH
+    sinusoidal solvers, and M4 did not introduce it.
+
+    #151's ground-connected basis folds a segment's image-side extension back
+    onto the segment — the end current is completed by its own image. That is
+    exact for a PEC plane (where the image IS the mirrored current) and it is
+    the reason the PEC contact monopole agrees with every other basis to <0.1%.
+    With a Fresnel-weighted or Sommerfeld image the image is no longer a
+    physical continuation of the wire, so the basis's built-in continuation is
+    inconsistent with the field model, and refining the mesh does not help:
+
+        n     galerkin           collocation        dense bspline
+        11    21.15  -965.56j    64.55  -484.08j    41.66 +22.12j
+        21    21.12  -920.65j    53.54  -632.64j    41.71 +22.35j
+        41    21.12  -896.35j    41.53  -741.49j    41.74 +22.50j
+        81    21.12  -883.02j    32.39  -806.50j    41.76 +22.60j
+
+    B-spline (value-1 end basis, no self-image folding) converges cleanly;
+    neither sinusoidal scheme goes anywhere near it. So this is a basis defect
+    shared with the point-matched solver, which per the standing rules is
+    recorded rather than "fixed" from the Galerkin side. It is also why the
+    finite grounds are gated on ELEVATED geometries throughout M4.
+
+    (The PEC contact case, by contrast, is gated normally above — it is the
+    only ground for which the #151 basis is exact.)
+    """
+    e = {"ground_eps": (10.0, 0.002)}
+    ns = (21, 81)
+    zb = [
+        BSplineSolver(
+            **_m4_monopole(n), ground_z=0.0, **e, degree=2
+        ).compute_impedance()[0]
+        for n in ns
+    ]
+    # B-spline is converged: it barely moves over a 4x refinement.
+    assert abs(zb[1] - zb[0]) / abs(zb[0]) < 0.02, f"bspline reference moved: {zb}"
+    for cls in (SinusoidalSolver, SinusoidalGalerkinSolver):
+        zs = [
+            cls(**_m4_monopole(n), ground_z=0.0, **e).compute_impedance()[0] for n in ns
+        ]
+        # ...and both sinusoidal schemes are nowhere near it, at either mesh.
+        assert all(abs(z - zb[i]) > 5.0 * abs(zb[i]) for i, z in enumerate(zs)), (
+            f"{cls.__name__} is no longer far from the bspline reference "
+            f"({zs} vs {zb}) — the documented defect may have been fixed; "
+            "re-derive this test rather than deleting it"
+        )
+    # The PEC contact case IS sound on the same wires — the contrast that
+    # localizes the defect to the non-PEC image, not to ground contact itself.
+    z_pec = [
+        cls(**_m4_monopole(21), ground_z=0.0).compute_impedance()[0]
+        for cls in (SinusoidalSolver, SinusoidalGalerkinSolver, BSplineSolver)
+    ]
+    assert max(abs(z - z_pec[0]) for z in z_pec) < 0.01 * abs(z_pec[0])
+
+
+@pytest.mark.slow
+def test_m4_reference_constants_are_reproducible():
+    """The pinned `M4_REFS` are the only measured inputs the M4 convergence
+    gates trust, so they are re-derived here from the N = 81/121/161 solves
+    they came from — three schemes × three grounds × four geometries. Slow
+    (~30 s); keeps the constants from rotting silently under a fill change."""
+
+    def richardson(zs):
+        c = (zs[-2] - zs[-1]) / (1.0 / M4_FINE[-2] - 1.0 / M4_FINE[-1])
+        return zs[-1] - c / M4_FINE[-1]
+
+    for (geom_name, ground), refs in M4_REFS.items():
+        series = {
+            s: [_m4_z(s, geom_name, ground, n) for n in M4_FINE]
+            for s in ("gal", "coll", "bspl")
+            if f"{s}_161" in refs
+        }
+        got = {}
+        for s, zs in series.items():
+            got[f"{s}_161"] = zs[-1]
+            got[f"rich_{s}"] = richardson(zs)
+        assert set(got) == set(refs), (geom_name, ground, sorted(got), sorted(refs))
+        for key, pinned in refs.items():
+            assert abs(got[key] - pinned) / abs(pinned) < 1e-5, (
+                f"{geom_name}/{ground}.{key}: pinned {pinned:.6f}, "
+                f"recomputed {got[key]:.6f}"
+            )
