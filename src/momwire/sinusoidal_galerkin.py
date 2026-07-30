@@ -135,8 +135,52 @@ now with a number attached.
 So `junction_ports=` is accepted and validated here — the construction is
 kept because the measurement that kills it is the only thing that stops it
 being re-proposed, and it is pinned by tests — but every solve entry point
-refuses. Use the workaround NEC-2 itself requires: mesh a short bridge wire
-across the gap and gap-feed it.
+refuses.
+
+**M5b — `node_ports=`, the port M5's mechanism does NOT forbid.** M5's
+obstruction is constructive: it forbids exactly one thing, a basis that
+TERMINATES current at a node. Formulation (a) terminates nothing. Join the
+port's two terminals into one junction, so current flows THROUGH the node
+under the ordinary KCL-identical span, and drive it with a ZERO-width
+delta-gap EMF sitting exactly at the node, across a declared bipartition of
+the junction's members:
+
+    b_i = -V·f_i(node),     I_port = -b·α / V
+
+`f_i(node)` is the cut vector — basis i's current crossing the gap, summed
+over the + side's members. Two facts carry the whole formulation. Summed over
+ALL the members it is the identically-zero KCL residual (#177's identity,
+4e-13 here), so nothing accumulates at the node and M5's
+Z_pp ≈ 1/(jω·4πε·a) has nothing to attach to. Summed over half of them it is
+O(1), so the source has a well-defined excitation — even though the same
+source point-samples to an identically ZERO RHS in the point-matched solver,
+because a node is never a segment centre. That was #177's argument for why
+NEC has no node port; read forwards it is a statement about the TESTING, and
+this is the one capability the fourth basis × testing cell adds that
+collocation cannot have.
+
+No basis column is added, drive and readout are the same vector (so the node
+ports' block of Y is symmetric to 1.3e-13 under either `feed_readout`, with
+none of the gap feed's centre-vs-dual tradeoff), and a 0 V node port leaves
+the solve bit-identical. Against the `_bridged_z` oracle — the same structure
+re-joined by a real bridge wire of length delta carrying a real delta-gap
+feed, extrapolated to delta → 0 — the node port lands 0.13-0.56 % away over
+n_half 10-40 at K=2 and K=4, against G5b's 1.5 %, decaying with mesh; the
+reference family's own spread is 0.013-0.041 %, so the delta → 0 idealization
+is absorbed by the extrapolation rather than assumed away.
+
+**What `node_ports` is not.** It is a two-terminal object. A ONE-terminal
+net-inflow port at a lone conductor end — antennaknobs' `PortAtEnd`, which
+resolves every one of `wire.sterba_bl`'s 16 ports to a ONE-member junction
+whose return path is at a different node — has nothing to bipartition and
+genuinely must accept net current at the node. That is `junction_ports`'
+topology, and `junction_ports` is still refused here. `node_ports` refuses
+a one-member junction at construction rather than silently modelling an open.
+
+For the one-terminal case, use `BSplineSolver`; for a gap that happens to sit
+at a node, `node_ports` now beats the workaround NEC-2 requires (mesh a short
+bridge wire across the gap and gap-feed it), which is still available and is
+what the oracle above uses as its reference.
 
 One thing M5 did land: `compute_y_matrix` / `compute_y_matrix_swept` /
 `compute_impedance_swept` are now honestly Galerkin. They were inherited
@@ -264,6 +308,26 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     #151's ground-connected basis completes the end current with an exact
     mirror image that a finite ground does not provide.
 
+    `node_ports`
+        Two-terminal ports located AT a junction node (M5b formulation (a)):
+        a zero-width delta-gap EMF across a declared bipartition of the
+        junction's members, so current flows THROUGH the node and nothing
+        terminates there. Entries are `(junction_index, side_a)` (voltage 0)
+        or `(junction_index, side_a, voltage)`, where `side_a` indexes into
+        `junctions[junction_index]` and must be a nonempty PROPER subset —
+        both sides of the gap need a conductor.
+
+        Ports are ordered [gap feeds…, junction ports…, node ports…]. Drive
+        and readout are the same vector, so a node port's Y block is
+        machine-symmetric under either `feed_readout` and costs none of the
+        M3 payoff. Which side is called "+" is a convention the impedance
+        does not see (2.5e-16). Grounded junctions are rejected (#151: the
+        node's current closes through its image, not on its partners), as is
+        a ONE-member junction — that is a one-terminal net-inflow port, i.e.
+        `junction_ports`, which this solver refuses. The point-matched
+        sibling has no equivalent and takes no such keyword: a node source
+        samples to an identically zero collocation RHS.
+
     `junction_ports=` is ACCEPTED and validated here (with `BSplineSolver`'s
     rules: a junction index or an (index, voltage) pair, in range, no
     repeats, no grounded junction, and `feeds=[]` legal when there is at
@@ -286,6 +350,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         near_factor=0.5,
         near_correction=True,
         feed_readout="centre",
+        node_ports=None,
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -298,10 +363,76 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 f"feed_readout must be 'centre' or 'variational', got {feed_readout!r}"
             )
         self.feed_readout = feed_readout
+        self.node_ports = self._validate_node_ports(node_ports)
         # (base seg_view, k) → port-augmented seg_view. Keyed by identity on
         # the inherited view, which `_basis_coefs` already caches per (geom,
         # k, radius), so this rides that cache's validation.
         self._port_basis_cache = None
+
+    # ------------------------------------------------------------------
+    # Node ports (M5b formulation (a)) — a delta-gap EMF AT a junction node
+    # ------------------------------------------------------------------
+
+    def _validate_node_ports(self, node_ports):
+        """Normalize `node_ports=` to [(j_idx, (member indices…), voltage), …].
+
+        Accepted entry forms are `(j_idx, side_a)` (voltage 0) and
+        `(j_idx, side_a, voltage)`, with `side_a` a sequence of indices into
+        `self.junctions[j_idx]` naming the members on the port's + terminal.
+        """
+        if not node_ports:
+            return []
+        out = []
+        seen = set()
+        junction_port_idx = {j for j, _v in self.junction_ports}
+        for entry in node_ports:
+            if not isinstance(entry, (tuple, list)) or len(entry) not in (2, 3):
+                raise ValueError(
+                    "node_ports entries must be (junction_index, side_a) or "
+                    f"(junction_index, side_a, voltage), got {entry!r}"
+                )
+            j_idx = int(entry[0])
+            side_a = tuple(int(m) for m in entry[1])
+            volts = complex(entry[2]) if len(entry) == 3 else 0j
+            if not 0 <= j_idx < len(self.junctions):
+                raise ValueError(
+                    f"node_ports: junction index {j_idx} out of range "
+                    f"(have {len(self.junctions)} junctions)"
+                )
+            if j_idx in seen:
+                raise ValueError(f"node_ports: junction {j_idx} listed twice")
+            if j_idx in junction_port_idx:
+                raise ValueError(
+                    f"junction {j_idx} is declared as both a junction_port and "
+                    "a node_port — they are different port objects (net inflow "
+                    "at the node vs an EMF across the node) and cannot share a "
+                    "junction"
+                )
+            seen.add(j_idx)
+            members = self.junctions[j_idx]
+            if len(members) < 2:
+                raise ValueError(
+                    f"node_ports: junction {j_idx} has {len(members)} member(s); "
+                    "a node port is an EMF ACROSS the node, so it needs at "
+                    "least two wire-ends to put on opposite sides of the gap. "
+                    "A one-terminal net-inflow port at a lone conductor end is "
+                    "a junction_port, which this solver refuses (momwire#182 M5)"
+                )
+            if len(set(side_a)) != len(side_a):
+                raise ValueError(f"node_ports: repeated member index in {side_a!r}")
+            if any(not 0 <= m < len(members) for m in side_a):
+                raise ValueError(
+                    f"node_ports: member index out of range in {side_a!r} "
+                    f"(junction {j_idx} has {len(members)} members)"
+                )
+            if not 0 < len(side_a) < len(members):
+                raise ValueError(
+                    f"node_ports: side_a {side_a!r} must be a nonempty PROPER "
+                    f"subset of junction {j_idx}'s {len(members)} members — "
+                    "both sides of the gap need at least one conductor"
+                )
+            out.append((j_idx, side_a, volts))
+        return out
 
     def _reject_junction_ports(self):
         """No-op at CONSTRUCTION: #177's stated blocker was the missing
@@ -329,15 +460,69 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "that charge at the wire radius (Z_pp ~ 1/(jw*4*pi*eps*a)), which "
             "no mesh refinement removes and the KCL-clean span cannot cancel "
             "— the paired-tip oracle misses its bridged-gap reference by "
-            "~2400x (momwire#182 M5, extending #177). Use BSplineSolver, or "
-            "do what NEC requires: mesh a short bridge wire across the gap "
-            "and gap-feed it"
+            "~2400x (momwire#182 M5, extending #177). Use BSplineSolver; if "
+            "the port's two terminals meet at ONE node, use node_ports= "
+            "instead (momwire#182 M5b), or do what NEC requires: mesh a short "
+            "bridge wire across the gap and gap-feed it"
         )
+
+    def _node_cut_vectors(self, geom, seg_view, k):
+        """(n_basis, P_node) — per node port, each basis's current THROUGH the
+        node from the port's + side to its − side.
+
+        Member m of the junction contributes σ_m·I_{i,m}(node) where σ_m is
+        `_junction_members`' sign (+1 when the node is the member segment's
+        natural end-2, −1 when it is end-1) and I_{i,m} is basis i's current
+        shape σA + B·sin(kξ) + σC·cos(kξ) evaluated at ξ = σ_m·h_m/2. That
+        product is basis i's current flowing INTO the node along member m, so
+        summing it over the + side gives the current crossing the gap.
+
+        Two facts make this the whole of formulation (a):
+
+        * The sum over ALL members is identically zero — #177's KCL identity,
+          the same property that makes a net-inflow junction port impossible
+          here. So the cut vector is antisymmetric under swapping the sides
+          and the port carries no net charge into the node: nothing terminates
+          there, and M5's Z_pp ≈ 1/(jω·4πε·a) node self-energy never appears.
+        * It is not identically zero, because current flows THROUGH the node.
+          A point EMF sitting exactly at the node therefore has a well-defined
+          Galerkin excitation, U_i = f_i(node)·V, even though it point-samples
+          to nothing at any collocation point — which is #177's observation
+          that a node source has an identically zero RHS in the point-matched
+          solver, read as a statement about the TESTING rather than the basis.
+        """
+        N = geom["n_segs"]
+        n_basis = N + len(self.junction_ports)
+        grounded = geom["grounded_junctions"]
+        out = np.zeros((n_basis, len(self.node_ports)), dtype=np.complex128)
+        starts = seg_view["starts"]
+        seg_h = np.asarray(geom["seg_h"], dtype=float)
+        for p, (j_idx, side_a, _v) in enumerate(self.node_ports):
+            if j_idx in grounded:
+                raise ValueError(
+                    f"junction {j_idx} is both grounded and a node port — a "
+                    "node in the ground plane carries current into its own "
+                    "image (#151), so the members' currents do not close on "
+                    "each other and there is no through-current to drive"
+                )
+            members = self._junction_members(geom, j_idx)
+            for mi in side_a:
+                m, sgn = members[mi]
+                half = 0.5 * float(seg_h[m])
+                s, e = starts[m], starts[m + 1]
+                sig = seg_view["sigma"][s:e]
+                val = (
+                    sig * seg_view["A"][s:e]
+                    + seg_view["B"][s:e] * np.sin(k * half * sgn)
+                    + sig * seg_view["C"][s:e] * np.cos(k * half)
+                )
+                np.add.at(out[:, p], seg_view["jbasis"][s:e], sgn * val)
+        return out
 
     @property
     def n_ports(self):
-        """Total network ports: gap feeds first, then junction ports."""
-        return len(self.feeds) + len(self.junction_ports)
+        """Network ports, in order: gap feeds, junction ports, node ports."""
+        return len(self.feeds) + len(self.junction_ports) + len(self.node_ports)
 
     # ------------------------------------------------------------------
     # Near-pair selection
@@ -905,7 +1090,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
     def _drive_columns(self, geom, seg_view, k):
         """Unit-voltage Galerkin excitation column per port, (N+P, n_ports),
-        ordered [gap feeds…, junction ports…].
+        ordered [gap feeds…, junction ports…, node ports…].
 
         Gap feed j: b_i = -∫ f_i(s)·ŝ·E^app(s) ds with the delta-gap applied
         field E^app = 1/Δ_m along +ŝ_m on feed segment m and zero elsewhere,
@@ -925,6 +1110,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         impossible in the point-matched solver — and `g_q` has δ_pq by
         construction. So the whole column is a single -1 at row N+p: the
         port's excitation touches exactly the port's own row, exactly.
+
+        Node port p (M5b formulation (a)): the source is a ZERO-width delta
+        gap sitting exactly at the junction node, E^app = V·δ(s − s_node)
+        along the arc that runs from the port's + side to its − side. The
+        Galerkin test integral collapses on the delta, so
+
+            b_i = -∫ f_i(s)·ŝ·E^app(s) ds = -V·f_i(node)
+
+        with f_i(node) the through-current `_node_cut_vectors` builds. No
+        basis column, no node charge — the whole port is one RHS column plus
+        its exact dual readout.
         """
         N = geom["n_segs"]
         h = np.asarray(geom["seg_h"], dtype=float)
@@ -941,6 +1137,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             np.add.at(U[:, j], seg_view["jbasis"][s:e], -int_f / hm)
         for p in range(len(self.junction_ports)):
             U[N + p, len(self.feeds) + p] = -1.0
+        if self.node_ports:
+            n0 = len(self.feeds) + len(self.junction_ports)
+            U[:, n0:] = -self._node_cut_vectors(geom, seg_view, k)
         return U
 
     def _tested_source_vector(self, geom, seg_view, k):
@@ -951,17 +1150,26 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
     def _port_voltages(self):
         return np.array(
-            [v for _, _, v in self.feeds] + [v for _j, v in self.junction_ports],
+            [v for _, _, v in self.feeds]
+            + [v for _j, v in self.junction_ports]
+            + [v for _j, _s, v in self.node_ports],
             dtype=np.complex128,
         )
 
     def _port_currents(self, alpha, geom, seg_view, U):
-        """Per-port current readout, ordered [gap feeds…, junction ports…].
+        """Per-port current readout, ordered [gap feeds…, junction ports…,
+        node ports…].
 
         A junction port's readout is `α_{N+p}` — its own basis amplitude,
         which by construction IS the current injected at the node — and that
         equals -U[:, port]·α exactly, so the port block of Y is symmetric to
         machine precision whichever branch below runs.
+
+        A NODE port's readout is the current through the node, -U[:, port]·α,
+        which is likewise the exact dual of its drive: the drive column IS the
+        through-current functional, so there is no centre-vs-average choice to
+        make here and no payoff to trade (contrast the gap feed below). Its
+        block of Y is symmetric to machine precision in both branches.
 
         A gap feed's readout depends on `feed_readout`: the segment-CENTRE
         current (default, the point-matched solver's and NEC's) or the
@@ -972,12 +1180,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         N = geom["n_segs"]
         if self.feed_readout == "variational":
             return -(U.T @ alpha)
+        n0 = len(self.feeds) + len(self.junction_ports)
         return np.array(
             [
                 self._feed_segment_current(alpha, seg_view, fi)
                 for fi in geom["feed_segs"]
             ]
-            + [alpha[N + p] for p in range(len(self.junction_ports))],
+            + [alpha[N + p] for p in range(len(self.junction_ports))]
+            + [-(U[:, n0 + p] @ alpha) for p in range(len(self.node_ports))],
             dtype=np.complex128,
         )
 
