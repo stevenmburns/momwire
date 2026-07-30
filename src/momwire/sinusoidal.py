@@ -1003,9 +1003,26 @@ class SinusoidalSolver(_Cancelable):
         Phi_cos = td * cm["Ez_cos"] + rho_proj_factor * cm["Erho_cos"]
         return Phi_const, Phi_sin, Phi_cos
 
-    def _field_components(self, geom, k, src_centers=None, src_tangents=None):
+    def _field_components(
+        self,
+        geom,
+        k,
+        src_centers=None,
+        src_tangents=None,
+        obs_centers=None,
+        obs_tangents=None,
+        obs_radius=None,
+    ):
         """Pure-numpy unprojected field tables behind `_field_tensor`'s
         fallback path (Eqs 76-79 of the NEC2 Theory Manual).
+
+        Observers default to the geometry's segment centres (collocation).
+        A Galerkin test caller (`SinusoidalGalerkinSolver`) overrides
+        `obs_centers` / `obs_tangents` / `obs_radius` to evaluate the same
+        closed-form source fields at Gauss quadrature points ALONG each test
+        segment; the source side is unaffected (still the geometry's segments
+        unless `src_*` is overridden by an image build). With M observers and
+        N sources every returned table is (M, N).
 
         For each (observer m, source n) pair and each of the three source
         current shapes (const / sin / cos), computes the field scalars in
@@ -1037,18 +1054,22 @@ class SinusoidalSolver(_Cancelable):
         # Scalar on the uniform path; an (M, 1) per-observer column when
         # mixed. Observers are always the real segments — image builds
         # only mirror the SOURCE side — so this indexes geom directly.
-        if self._uniform_radius is not None:
+        if obs_radius is not None:
+            a = obs_radius
+        elif self._uniform_radius is not None:
             a = self._uniform_radius
         else:
             a = self._seg_radius(geom)[:, None]
-        seg_c = geom["seg_centers"]  # (N, 3) — observer centers
-        seg_t = geom["seg_tangents"]  # (N, 3) — observer tangents
-        seg_h = geom["seg_h"]  # (N,) full lengths
+        seg_c = geom["seg_centers"] if obs_centers is None else obs_centers  # (M,3)
+        seg_t = geom["seg_tangents"] if obs_tangents is None else obs_tangents  # (M,3)
+        seg_h = geom["seg_h"]  # (N,) SOURCE full lengths
         N = geom["n_segs"]
-        h_n = 0.5 * seg_h  # (N,) half-lengths
+        h_n = 0.5 * seg_h  # (N,) source half-lengths
 
-        src_c = src_centers if src_centers is not None else seg_c
-        src_t = src_tangents if src_tangents is not None else seg_t
+        # Sources default to the geometry's segments — NOT the observer set,
+        # which may be quadrature points; image builds override src_* directly.
+        src_c = src_centers if src_centers is not None else geom["seg_centers"]
+        src_t = src_tangents if src_tangents is not None else geom["seg_tangents"]
 
         # Pairwise vectors c_m - c_n: shape (M=obs, N=src, 3).
         # rvec_mn = seg_c[m] - src_c[n]
@@ -1071,8 +1092,11 @@ class SinusoidalSolver(_Cancelable):
         # NEC's prescription: tangential E_ρ component is (ρ·ŝ)/ρ' · E_ρ.
         rho_proj_factor = rho_dot_tobs / rho_eval  # (M, N)
 
-        # Half-length per source segment broadcast to (M, N)
-        H = np.broadcast_to(h_n[None, :], (N, N))
+        # Half-length per source segment broadcast to (M, N). M is the
+        # observer count: N segment centres (collocation) or N·n_qp Gauss
+        # points (Galerkin test integration).
+        M = seg_c.shape[0]
+        H = np.broadcast_to(h_n[None, :], (M, N))
 
         # z values at source ends: z' = +H (z2) and z' = -H (z1).
         # Δz = z_eval - z' at the two endpoints.
