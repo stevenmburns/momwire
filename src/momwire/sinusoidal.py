@@ -93,9 +93,26 @@ class SinusoidalSolver(_Cancelable):
         cancel=None,
     ):
         if junction_ports:
+            # Not a plumbing gap — the basis excludes the port (issue #177,
+            # where the full derivation lives so it isn't redone). Junction
+            # continuity here is enforced INSIDE the sinusoidal basis via the
+            # N-/N+ neighbour tables, so every basis function satisfies KCL at
+            # every junction as an algebraic identity (measured residuals
+            # ~1e-13 on a 3-way star) — the span simply contains no current
+            # with nonzero net inflow at a node, at any mesh density.
+            # Relaxing a junction's neighbour entries yields I = 0 free ends,
+            # and a KCL row added on top would enforce 0 = 0. A real port
+            # needs Galerkin (segment-integrated) test rows the entire
+            # point-collocation field stack doesn't provide — NEC-2 has the
+            # same limitation for the same reason (its EX/NT/TL port is a
+            # segment-centre delta gap; a node-localized EMF samples to a
+            # zero RHS).
             raise NotImplementedError(
-                "junction_ports are not supported on SinusoidalSolver "
-                "(momwire#172); use BSplineSolver"
+                "junction_ports are not supported on SinusoidalSolver: the "
+                "sinusoidal basis enforces KCL identically, so a node-current "
+                "port is outside its span (momwire#177; same limitation as "
+                "NEC-2). Use BSplineSolver, or do what NEC requires: mesh a "
+                "short bridge wire across the gap and gap-feed it"
             )
         self._cancel = cancel
         self.wavelength = wavelength

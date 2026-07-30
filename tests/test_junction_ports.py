@@ -269,7 +269,7 @@ def test_validation_and_unsupported_solvers():
             feeds=[(0, 1.0, 1.0 + 0j)], junctions=junctions,
             junction_ports=[0], wavelength=WAVELENGTH,
         )  # fmt: skip
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError, match="outside its span.*bridge"):
         SinusoidalSolver(
             wires=wires, n_per_edge_per_wire=npe,
             feeds=[(0, 1.0, 1.0 + 0j)], junctions=junctions,
