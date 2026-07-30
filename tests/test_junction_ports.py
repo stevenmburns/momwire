@@ -165,6 +165,45 @@ def test_swept_matches_per_k():
         np.testing.assert_allclose(Y_swept[i], s2.compute_y_matrix(), rtol=1e-6)
 
 
+def test_impedance_swept_matches_per_k_with_junction_ports():
+    """The batched impedance sweep agrees with per-k compute_impedance when
+    junction ports are present — with a gap feed and (issue #175) entirely
+    feed-less, where the batched path used to crash on a 1-D hstack operand."""
+
+    def per_k(make, ks):
+        out = []
+        for kk in ks:
+            s = make()
+            s.k = float(kk)
+            s.omega = s.k * s.c
+            s.wavelength = s.c / (s.omega / (2 * np.pi))
+            z, _ = s.compute_impedance()
+            out.append(np.atleast_1d(z))
+        return np.array(out)
+
+    def make_mixed():
+        return _port_pair_solver(0.04, 0.01, 12, volts=(0.5 + 0j, -0.5 + 0j))
+
+    def make_feedless():
+        wires, npe, junctions = _split_wires(0.04, 0.01, 12)
+        return BSplineSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            feeds=[],
+            junctions=junctions,
+            junction_ports=[(0, 0.5 + 0j), (1, -0.5 + 0j)],
+            wavelength=WAVELENGTH,
+        )
+
+    k0 = make_mixed().k
+    ks = np.array([0.9 * k0, k0, 1.1 * k0])
+    for make in (make_mixed, make_feedless):
+        assert make()._swept_batched_available()  # the path under test
+        np.testing.assert_allclose(
+            make().compute_impedance_swept(ks), per_k(make, ks), rtol=1e-6
+        )
+
+
 def test_zero_gap_feeds_allowed_with_junction_ports():
     """A solve driven entirely through junction ports needs no gap feed:
     feeds=[] is legal when junction_ports exist, and the Y matrix covers
