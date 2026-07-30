@@ -19,7 +19,7 @@ the M5/M5b **feed- and port-model** column added.
 Everything here comes out of one harness:
 
 ```
-# the residue-cluster / near-open sweep (§3-§5)   ~20 min, 11 designs
+# the residue-cluster / near-open sweep (§3-§5)   ~17 min, 11 designs
 python scripts/m6_residue_cluster.py
 
 # the feed-model axis on the canonical dipole (§6)   ~9 s
@@ -461,7 +461,9 @@ or substituted, and every attribution above is made at a rung where the
 Galerkin columns' own convergence is demonstrated (§2 constraint 1) — which is
 what makes the coarser rung sufficient.
 
-Full sweep, 11 designs, 4 columns per rung: **~20 min** wall clock.
+Full sweep, 11 designs, 4 columns per rung: **16m54s** wall clock (measured
+2026-07-30 on a 32 GiB / 8-core box; every table above is that run's
+verbatim output).
 
 ---
 
