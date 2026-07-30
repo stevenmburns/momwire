@@ -4,6 +4,7 @@ from .bspline import BSplineSolver
 from .hmatrix import HMatrixSolver
 from .array_block import ArrayBlockSolver, LatticeFFTUnavailable
 from .sinusoidal import SinusoidalSolver
+from .sinusoidal_galerkin import SinusoidalGalerkinSolver
 
 # Wire-material physics helpers (#133): the per-metre quantities behind the
 # distributed wire loading, exported for consumers that mirror the loading
@@ -14,6 +15,7 @@ from ._wire_loading import insulation_inductance, wire_internal_impedance
 # assert it to guard against a silent fall-back to the slow pure-Python path.
 __all__ = [
     "SinusoidalSolver",
+    "SinusoidalGalerkinSolver",
     "BSplineSolver",
     "HMatrixSolver",
     "ArrayBlockSolver",
