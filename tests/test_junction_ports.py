@@ -275,3 +275,32 @@ def test_validation_and_unsupported_solvers():
             feeds=[(0, 1.0, 1.0 + 0j)], junctions=junctions,
             junction_ports=[0], wavelength=WAVELENGTH,
         )  # fmt: skip
+
+
+def test_enrichment_dense_fallback_allows_junction_ports():
+    """Issue #176: use_singular_enrichment sends every solve down the dense
+    BSplineSolver path, which fully supports junction ports — so the
+    iterative solvers must accept the combination instead of rejecting it
+    at construction. The results are the dense solver's own, verbatim."""
+    from momwire import ArrayBlockSolver
+
+    wires, npe, junctions = _split_wires(0.04, 0.01, 8)
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feeds=[(0, L_DIP / 4, 0.0 + 0j)],
+        junctions=junctions,
+        junction_ports=[(0, 0.5 + 0j), (1, -0.5 + 0j)],
+        wavelength=WAVELENGTH,
+        use_singular_enrichment=True,
+    )
+    y_ref = BSplineSolver(**kw).compute_y_matrix()
+    z_ref, _ = BSplineSolver(**kw).compute_impedance()
+    for solver in (HMatrixSolver, ArrayBlockSolver):
+        s = solver(**kw)
+        np.testing.assert_allclose(s.compute_y_matrix(), y_ref, rtol=1e-12)
+        z, _ = solver(**kw).compute_impedance()
+        np.testing.assert_allclose(z, z_ref, rtol=1e-12)
+    # Without enrichment the iterative path is real and still guards.
+    with pytest.raises(NotImplementedError):
+        HMatrixSolver(**{**kw, "use_singular_enrichment": False})
