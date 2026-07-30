@@ -55,6 +55,7 @@ import functools
 
 import numpy as np
 import pytest
+import scipy.linalg
 
 from momwire import (
     BSplineSolver,
@@ -1678,3 +1679,205 @@ def test_m4_reference_constants_are_reproducible():
                 f"{geom_name}/{ground}.{key}: pinned {pinned:.6f}, "
                 f"recomputed {got[key]:.6f}"
             )
+
+
+# ---------------------------------------------------------------------------
+# M5 — the network-parameter paths, made honestly Galerkin
+#
+# M4's finding 2: `compute_y_matrix` / `compute_y_matrix_swept` /
+# `compute_impedance_swept` were inherited verbatim from the point-matched
+# solver, which pairs THIS solver's Galerkin matrix with collocation's point
+# RHS (a bare −1/h at the feed segment's row). That is #177's hybrid trap, and
+# it was not subtle: the inherited Y read Z = 0.0489 − 0.0129j on the N=41
+# dipole where `compute_impedance` reads 69.687 − 18.217j — wrong by 1400×,
+# because the Galerkin RHS lives in BASIS index space (the delta gap spread
+# over every basis touching the feed segment) and the collocation one in
+# SEGMENT index space. Ports are a Y-matrix feature, so this had to be fixed
+# before anything could be built on it.
+#
+# All four entry points now share `_drive_columns` and `_port_currents`, so
+# they agree with `compute_impedance` to roundoff (5.6e-16 measured).
+#
+# The remaining wrinkle is the delta-gap feed's READOUT, and it is a real
+# finding rather than a leftover. The Galerkin drive for NEC's delta gap
+# spreads E_app = V/Δ over the whole feed segment, so its exact dual readout
+# is the gap-AVERAGED current; the readout this solver actually uses is the
+# point-matched solver's, the current at the segment CENTRE. They differ at
+# O(h), which is why a two-gap-feed Y is symmetric only to ~1e-5:
+#
+#     N     centre (default)   variational   collocation (inherited)
+#     21    6.7e-05            1.8e-12       9.1e-05
+#     41    2.4e-05            1.6e-12       2.7e-05
+#     81    6.5e-06            4.2e-12       7.3e-06
+#
+# `feed_readout="variational"` makes the pairing dual and the Y exactly
+# reciprocal. It is NOT the default, and the reason is measured: it costs the
+# M3 payoff gate on k3_star (worst-case errColl/errGal 1.014 → 0.797, i.e. the
+# variational readout is where collocation starts winning). Keeping the
+# centre readout also keeps the two sinusoidal cells differing in exactly one
+# thing — the testing — which is the whole point of the instrument.
+# ---------------------------------------------------------------------------
+
+
+def _two_feed_dipole(n=41, **over):
+    dip = np.array([DIP_A, DIP_B])
+    return dict(
+        wires=[dip],
+        n_per_edge_per_wire=[[n]],
+        nsegs=n,
+        feeds=[(0, HD * 0.3, 1.0 + 0j), (0, HD * 1.1, 0.25 - 0.5j)],
+        **over,
+    )
+
+
+@pytest.mark.parametrize("readout", ["centre", "variational"])
+@pytest.mark.parametrize("geom_name", list(GEOMETRIES))
+def test_y_matrix_agrees_with_compute_impedance(geom_name, readout):
+    """M4 finding 2, fixed: the Y matrix is now the same Galerkin drive and
+    the same readout `compute_impedance` uses, so I = Y·V reproduces the
+    impedance readout to roundoff (worst 5.6e-16 measured). Holds under both
+    readout conventions — each is internally consistent."""
+    kw = GEOMETRIES[geom_name](wavelength=WL, feed_readout=readout)
+    s = SinusoidalGalerkinSolver(**kw)
+    z = np.atleast_1d(s.compute_impedance()[0])
+    volts = np.array([v for _, _, v in s.feeds], dtype=np.complex128)
+    i_y = SinusoidalGalerkinSolver(**kw).compute_y_matrix() @ volts
+    np.testing.assert_allclose(volts / z, i_y, rtol=1e-11)
+
+
+def test_multi_feed_y_matrix_agrees_with_compute_impedance():
+    """Same, with two gap feeds at different voltages — the case where a
+    single-column RHS cannot hide a drive/readout mismatch."""
+    s = SinusoidalGalerkinSolver(**_two_feed_dipole(wavelength=WL))
+    z = np.atleast_1d(s.compute_impedance()[0])
+    volts = np.array([v for _, _, v in s.feeds], dtype=np.complex128)
+    Y = SinusoidalGalerkinSolver(**_two_feed_dipole(wavelength=WL)).compute_y_matrix()
+    np.testing.assert_allclose(volts / z, Y @ volts, rtol=1e-11)
+
+
+def test_the_inherited_y_matrix_was_a_collocation_rhs_on_a_galerkin_matrix():
+    """Pins WHAT M4's finding 2 actually was, so the fix cannot be undone by
+    a well-meaning "simplify by reusing the base class" refactor.
+
+    The inherited implementation put −1/h_feed on the feed SEGMENT's row of a
+    matrix whose rows are indexed by BASIS, then read the centre current. On
+    the N=41 dipole that gives 0.0489 − 0.0129j against the true 69.687 −
+    18.217j: not a subtle inconsistency, a different problem.
+    """
+    s = SinusoidalGalerkinSolver(**_dipole(wavelength=WL))
+    geom = s._build_geometry()
+    G, seg_view = s._assemble_Z(geom, s.k)
+    fi = geom["feed_segs"][0]
+    b_coll = np.zeros(geom["n_segs"], dtype=np.complex128)
+    b_coll[fi] = -1.0 / geom["seg_h"][fi]
+    z_hybrid = 1.0 / s._feed_segment_current(
+        scipy.linalg.solve(G, b_coll), seg_view, fi
+    )
+    z_true = complex(np.atleast_1d(s.compute_impedance()[0])[0])
+    assert abs(z_hybrid - z_true) / abs(z_true) > 0.9
+    assert abs(z_true / z_hybrid) > 100.0
+
+
+@pytest.mark.parametrize("readout", ["centre", "variational"])
+def test_impedance_swept_matches_per_k(readout):
+    """The swept path is the per-k path, including the ports ordering and the
+    readout convention."""
+    ks = np.array([0.9, 1.0, 1.1]) * SinusoidalGalerkinSolver(**_dipole()).k
+    swept = SinusoidalGalerkinSolver(
+        **_two_feed_dipole(n=21, wavelength=WL, feed_readout=readout)
+    ).compute_impedance_swept(ks)
+    y_swept = SinusoidalGalerkinSolver(
+        **_two_feed_dipole(n=21, wavelength=WL, feed_readout=readout)
+    ).compute_y_matrix_swept(ks)
+    for i, kk in enumerate(ks):
+        s = SinusoidalGalerkinSolver(
+            **_two_feed_dipole(n=21, wavelength=WL, feed_readout=readout)
+        )
+        s._set_k(float(kk))
+        np.testing.assert_allclose(
+            swept[i], np.atleast_1d(s.compute_impedance()[0]), rtol=1e-10
+        )
+        np.testing.assert_allclose(y_swept[i], s.compute_y_matrix(), rtol=1e-10)
+
+
+@pytest.mark.parametrize("n", [21, 41, 81])
+def test_gap_feed_readout_is_not_its_drives_dual(n):
+    """The measured cost of keeping NEC's centre-current readout.
+
+    Y symmetry is exact iff the readout functional IS the drive functional.
+    The Galerkin delta-gap drive integrates E_app = V/Δ over the feed
+    segment, so its dual is the gap-AVERAGED current; the default readout is
+    the centre current. Measured asymmetry (see the section header): 6.7e-05
+    / 2.4e-05 / 6.5e-06 at N = 21/41/81 — an O(h) effect that decays, and one
+    the point-matched solver has slightly MORE of on the same wires.
+
+    `feed_readout="variational"` closes it to ~1e-12, which is the proof that
+    the residue is the readout convention and nothing in the fill.
+    """
+
+    def asym(cls, **kw):
+        Y = cls(
+            **_two_feed_dipole(n=n, wavelength=WL, **kw),
+        ).compute_y_matrix()
+        Y = np.asarray(Y)
+        return np.linalg.norm(Y - Y.T) / np.linalg.norm(Y)
+
+    a_centre = asym(SinusoidalGalerkinSolver)
+    a_var = asym(SinusoidalGalerkinSolver, feed_readout="variational")
+    a_coll = asym(SinusoidalSolver)
+    assert a_var < 1e-10, f"the dual pairing is not reciprocal: {a_var:.3e}"
+    assert 1e-6 < a_centre < 2e-4, a_centre
+    assert a_centre < a_coll, (
+        f"the Galerkin centre-readout Y ({a_centre:.3e}) is no longer less "
+        f"asymmetric than the point-matched one ({a_coll:.3e})"
+    )
+
+
+def test_feed_readout_is_validated():
+    with pytest.raises(ValueError, match="feed_readout"):
+        SinusoidalGalerkinSolver(**_dipole(feed_readout="galerkin"))
+
+
+@pytest.mark.slow
+def test_the_variational_readout_costs_the_m3_payoff_on_k3_star():
+    """Why `feed_readout="variational"` is not the default, as a number.
+
+    Re-runs M3's payoff comparison on k3_star — the geometry M3 identified as
+    BASIS-limited, where the testing payoff is already only 1.01× — under both
+    readouts, against that readout's OWN fine-mesh reference family (N=321
+    solve + a Richardson extrapolation off N=241/321, following M3's rule that
+    a verdict must survive every defensible reference).
+
+    Measured worst-case errColl/errGal: 1.014 with the centre readout (the
+    value `M3_GATE_RATIO` pins) and 0.797 with the variational one — i.e. the
+    exactly-reciprocal readout is where the point-matched solver starts
+    winning, and G3 would go red. Slow (~90 s): four fine k3_star solves.
+    """
+    fine = (241, 321)
+
+    def both_readouts(n):
+        s = SinusoidalGalerkinSolver(**_m3_k3(n))
+        geom = s._build_geometry()
+        G, seg_view = s._assemble_Z(geom, s.k)
+        U = s._drive_columns(geom, seg_view, s.k)
+        alpha = scipy.linalg.solve(G, U[:, 0])
+        centre = 1.0 / s._feed_segment_current(alpha, seg_view, geom["feed_segs"][0])
+        return complex(centre), complex(1.0 / -(U[:, 0] @ alpha))
+
+    fine_z = {n: both_readouts(n) for n in fine}
+    coarse_z = {n: both_readouts(n) for n in M3_COARSE}
+    worst = {}
+    for idx, label in ((0, "centre"), (1, "variational")):
+        z241, z321 = fine_z[241][idx], fine_z[321][idx]
+        refs = (z321, z321 + (z321 - z241) * (241.0 / (321.0 - 241.0)))
+        worst[label] = min(
+            _rel_err(_m3_z("coll", "k3_star", n), ref) / _rel_err(coarse_z[n][idx], ref)
+            for ref in refs
+            for n in M3_COARSE
+        )
+    assert worst["centre"] > 1.0, worst
+    assert worst["centre"] >= M3_GATE_RATIO["k3_star"], worst
+    assert worst["variational"] < 1.0, (
+        "the variational readout no longer costs the k3_star payoff "
+        f"({worst}) — reconsider making it the default"
+    )
