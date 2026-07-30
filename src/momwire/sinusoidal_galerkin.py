@@ -88,8 +88,66 @@ block, selected against the mirrored source geometry — which matters exactly
 when a wire touches or nearly touches the plane, because then a segment and
 its own image share the endpoint that carries M2's width-`a` spike.
 
-Still deferred: wire loading and junction ports (M5), and the C++ accelerator
-— all raise rather than return plausible wrong numbers.
+**M5 — junction ports: built, measured, and REFUSED.** #177 derived why the
+point-matched solver cannot have them (every sinusoidal basis function
+satisfies KCL at every junction as an algebraic identity, so a current with
+nonzero net inflow at a node is outside the span at any mesh density) and
+named what a real implementation would need: the port basis COLUMN is cheap,
+the port ROW needs the segment-integrated field testing that point
+collocation cannot provide. This solver HAS those rows, so the construction
+was built here and taken all the way to the oracle:
+
+* `_junction_port_view` appends #177's `g_p = (1/P_J)·Σ_m ext_m` to the CSR
+  basis table — unit net inflow at the node, vanishing at every member's far
+  end, verified to 1e-15 against the ordinary bases' identically-zero inflow;
+* the port row is that column tested against the field, which costs no new
+  kernel: G grows from (N, N) to (N+P, N+P) through the same quadrature and
+  the same M2 near-pair correction, and stays symmetric to ~1e-11;
+* drive and readout are exactly dual (`b_p = -V_p`, readout `α_p`), so the
+  port block of Y is symmetric to 1.7e-14.
+
+Structurally everything #177 asked for is there. **The physics is not**, and
+the reason is one #177 did not anticipate. A current with unit net inflow at
+node A terminates there, so it deposits a point charge q = I/(jω) AT the
+node — and the Eqs 78-79 endpoint terms (the same width-`a` feature M2's
+graded rule exists to resolve) charge that point charge its own self-energy,
+regularized at the thin-wire radius rather than at the mesh scale:
+
+    Z_pp ≈ 1/(jω · 4πε · a)   — measured to 2-8 % over a decade of `a`
+
+That term is set by `a`, not by `h`, so it does not converge away; and it
+cannot be cancelled, because every ordinary basis has zero net charge at a
+junction by the very KCL identity #177 identified, so no combination of them
+carries a matching charge. The whole span removes 2 % of it. The result is a
+port that reads as the self-capacitance of the node instead of the antenna:
+on `tests/test_junction_ports.py`'s paired-tip oracle the Zdiff misses the
+bridged-gap reference by ~2400×, unchanged under mesh refinement.
+
+`BSplineSolver` is not subject to this because its ports are a
+MIXED-POTENTIAL construct: the node potential is an explicit Lagrange
+multiplier on a KCL constraint row, i.e. the integration-by-parts BOUNDARY
+term, held apart from the reaction integral. This solver is deliberately
+field-based (Eqs 76-79 give the total E of each source shape, vector and
+scalar potential already merged), so the boundary term is inside the kernel
+and cannot be separated from it. That is #177's "node-voltage row" bullet,
+now with a number attached.
+
+So `junction_ports=` is accepted and validated here — the construction is
+kept because the measurement that kills it is the only thing that stops it
+being re-proposed, and it is pinned by tests — but every solve entry point
+refuses. Use the workaround NEC-2 itself requires: mesh a short bridge wire
+across the gap and gap-feed it.
+
+One thing M5 did land: `compute_y_matrix` / `compute_y_matrix_swept` /
+`compute_impedance_swept` are now honestly Galerkin. They were inherited
+verbatim from the point-matched solver, which paired THIS solver's Galerkin
+matrix with collocation's point RHS — #182 M4's finding 2 — so they did not
+even agree with `compute_impedance`. They now share its drive and readout.
+The delta-gap feed's readout is still not its drive's dual (`feed_readout`,
+below), which is why a two-gap-feed Y is symmetric only to O(h).
+
+Still deferred: wire loading and the C++ accelerator — both raise rather than
+return plausible wrong numbers.
 """
 
 import numpy as np
@@ -97,7 +155,7 @@ import scipy.linalg
 import scipy.spatial.distance
 
 from . import _ground_refl
-from .sinusoidal import SinusoidalSolver
+from .sinusoidal import _EULER_GAMMA, SinusoidalSolver
 
 # Pairs are corrected in blocks so the (P, G, n_qp_const) source-quadrature
 # scratch inside the field kernel stays bounded regardless of model size.
@@ -173,6 +231,28 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         Set False to fall back to M1 behaviour (one uniform rule everywhere)
         — the contrast the M2 tests use to show the correction is what buys
         the symmetry gate.
+    `feed_readout`
+        Which functional reads the current at a DELTA-GAP feed (junction
+        ports are unaffected — theirs is dual either way).
+
+        ``"centre"`` (default) is the point-matched solver's and NEC's: the
+        current AT the feed segment's centre. ``"variational"`` is the exact
+        dual of the Galerkin drive: the gap-averaged current
+        (1/h)∫_gap J ds, i.e. Y = −Uᵀ G⁻¹ U on the drive columns U.
+
+        They differ because the delta-gap source this solver inherits is
+        NEC's — E_app = V/Δ spread over the whole feed segment — whose dual
+        readout is the gap AVERAGE, not the gap centre. The default keeps
+        the point-matched sibling's readout so that the two sinusoidal cells
+        differ in exactly one thing (the testing), which is what the whole
+        basis × testing instrument is for; the price is that a multiport Y
+        with a gap feed in it is symmetric only to the O(h) difference
+        between the two functionals (6.7e-5 at N=21, 6.5e-6 at N=81 on the
+        two-feed dipole — better than the point-matched solver's own 9.1e-5
+        / 7.3e-6 there, and decaying). ``"variational"`` makes that Y
+        symmetric to ~1e-12 instead, and costs the M3 payoff gate: on
+        k3_star the worst-case errColl/errGal falls from 1.014 to 0.797, so
+        it is offered, measured and documented rather than made the default.
 
     All three ground models are wired (M4): `ground_z` alone gives the PEC
     image, `+ ground_eps` NEC's reflection-coefficient ground, and
@@ -184,8 +264,18 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     #151's ground-connected basis completes the end current with an exact
     mirror image that a finite ground does not provide.
 
-    Wire loading, junction ports (M5), and the C++ accelerator are deliberately
-    not wired yet and raise where reached.
+    `junction_ports=` is ACCEPTED and validated here (with `BSplineSolver`'s
+    rules: a junction index or an (index, voltage) pair, in range, no
+    repeats, no grounded junction, and `feeds=[]` legal when there is at
+    least one port) so that #177's port basis can be built and measured —
+    but every solve entry point refuses, because the measurement says the
+    construction is wrong by ~2400× for a reason no amount of mesh fixes.
+    See the module docstring for the mechanism and
+    `tests/test_junction_ports.py` for the pinned numbers. Use a meshed
+    bridge wire with a gap feed instead, which is what NEC-2 requires too.
+
+    Wire loading and the C++ accelerator are deliberately not wired yet and
+    raise where reached.
     """
 
     def __init__(
@@ -195,6 +285,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         n_qp_near=8,
         near_factor=0.5,
         near_correction=True,
+        feed_readout="centre",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -202,6 +293,51 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         self.n_qp_near = int(n_qp_near)
         self.near_factor = float(near_factor)
         self.near_correction = bool(near_correction)
+        if feed_readout not in ("centre", "variational"):
+            raise ValueError(
+                f"feed_readout must be 'centre' or 'variational', got {feed_readout!r}"
+            )
+        self.feed_readout = feed_readout
+        # (base seg_view, k) → port-augmented seg_view. Keyed by identity on
+        # the inherited view, which `_basis_coefs` already caches per (geom,
+        # k, radius), so this rides that cache's validation.
+        self._port_basis_cache = None
+
+    def _reject_junction_ports(self):
+        """No-op at CONSTRUCTION: #177's stated blocker was the missing
+        segment-integrated test row and this solver's rows are segment
+        integrals, so the port basis is buildable here and gets built. The
+        refusal moved to `_refuse_junction_port_solve`, which is where the
+        measurement that actually kills it belongs."""
+
+    def _refuse_junction_port_solve(self):
+        """Refuse any solve that would return a junction-port number.
+
+        The construction is sound and the matrix is symmetric; what fails is
+        the physics, quantified in the module docstring and pinned by
+        `tests/test_junction_ports.py`: the port basis's node charge is
+        priced at the thin-wire radius (Z_pp ≈ 1/(jω·4πε·a)), the KCL-clean
+        span removes 2 % of that, and the paired-tip oracle lands ~2400×
+        from its bridged-gap reference at every mesh.
+        """
+        if not self.junction_ports:
+            return
+        raise NotImplementedError(
+            "junction_ports are built but not solvable on "
+            "SinusoidalGalerkinSolver: the port basis necessarily deposits a "
+            "point charge at the node, and this family's field kernel prices "
+            "that charge at the wire radius (Z_pp ~ 1/(jw*4*pi*eps*a)), which "
+            "no mesh refinement removes and the KCL-clean span cannot cancel "
+            "— the paired-tip oracle misses its bridged-gap reference by "
+            "~2400x (momwire#182 M5, extending #177). Use BSplineSolver, or "
+            "do what NEC requires: mesh a short bridge wire across the gap "
+            "and gap-feed it"
+        )
+
+    @property
+    def n_ports(self):
+        """Total network ports: gap feeds first, then junction ports."""
+        return len(self.feeds) + len(self.junction_ports)
 
     # ------------------------------------------------------------------
     # Near-pair selection
@@ -263,6 +399,129 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         )
         keep = gap <= self.near_factor * reach[m, n]
         return m[keep], n[keep]
+
+    # ------------------------------------------------------------------
+    # Junction ports (M5) — the port basis column
+    # ------------------------------------------------------------------
+
+    def _junction_members(self, geom, j_idx):
+        """(segment index, σ) for every wire-end at junction `j_idx`.
+
+        σ is the sign the extension shape below is stamped with: +1 when the
+        junction node is at the member segment's natural end-2 (`seg_r`), −1
+        when it is at end-1 (`seg_l`) — the same L/R rule `_build_geometry`
+        applies to a real N⁻ neighbour. Under the current-shape convention
+        I(s) = σA + B·sin(ks) + σC·cos(ks) that sign is exactly what makes
+        the shape's current flow INTO the node in both orientations.
+        """
+        members = []
+        for w, end in self.junctions[j_idx]:
+            if end == "start":
+                members.append((geom["wire_first"][w], -1))
+            else:
+                members.append((geom["wire_last"][w], +1))
+        return members
+
+    def _junction_port_view(self, geom, k, base_view):
+        """Append one basis column per junction port to the CSR seg-view.
+
+        Port p's basis is #177's `g_p = (1/P_J)·Σ_m ext_m`, where `ext_m` is
+        the three-term extension a real N⁻ neighbour would carry on member
+        segment m at unit Q,
+
+            A_m = a_m/sin(kΔ_m),  B_m = a_m/(2cos(kΔ_m/2)),
+            C_m = −a_m/(2sin(kΔ_m/2)),
+
+        with `a_m` the member's own Eq-25 log constant. That shape is zero at
+        the member's FAR end and carries current `a_m(1−cos kΔ_m)/sin kΔ_m`
+        — the same `P_minus_atom` the basis coefficients are built from —
+        into the node. Summing over the members and dividing by
+        `P_J = Σ_m P_minus_atom[m]` therefore gives a current distribution
+        with **unit net inflow at the node**, KCL-clean everywhere else, and
+        vanishing outside the K member segments: precisely the vector #177
+        proved the ordinary span cannot contain.
+
+        The entries are merged into the same segment-major CSR the inherited
+        `_basis_coefs` returns, with basis indices N…N+P−1. Everything
+        downstream — the test quadrature, the M2 near-pair correction, the
+        source-side coefficient matrices, `_feed_segment_current`,
+        `currents_at_knots` — then treats them as ordinary bases, which is
+        why the port row is a Galerkin row and not a bolted-on constraint.
+        """
+        N = geom["n_segs"]
+        grounded = geom["grounded_junctions"]
+        for j_idx, _v in self.junction_ports:
+            if j_idx in grounded:
+                raise ValueError(
+                    f"junction {j_idx} is both grounded and a junction port — "
+                    "a node in the ground plane is connected to its own image "
+                    "instead of to its partners (#151), so its voltage is "
+                    "pinned and it cannot also be a driven port"
+                )
+
+        seg_h = np.asarray(geom["seg_h"], dtype=float)
+        a = (
+            self._uniform_radius
+            if self._uniform_radius is not None
+            else self._seg_radius(geom)
+        )
+        a_const = 1.0 / (np.log(2.0 / (k * a)) - _EULER_GAMMA)
+        a_const = np.broadcast_to(np.asarray(a_const, dtype=float), (N,))
+        kd = k * seg_h
+        atom = (1.0 - np.cos(kd)) / np.sin(kd) * a_const
+
+        segs, bases, A, B, C, sig = [], [], [], [], [], []
+        for p, (j_idx, _v) in enumerate(self.junction_ports):
+            members = self._junction_members(geom, j_idx)
+            m_seg = np.array([m for m, _s in members], dtype=np.int64)
+            m_sig = np.array([s for _m, s in members], dtype=np.int8)
+            P_J = float(atom[m_seg].sum())
+            if P_J == 0.0:
+                raise ValueError(
+                    f"junction_ports: junction {j_idx} has a degenerate port "
+                    "normalization (Σ P⁻ atoms = 0) at this mesh"
+                )
+            q = a_const[m_seg] / P_J
+            segs.append(m_seg)
+            bases.append(np.full(m_seg.shape, N + p, dtype=np.int64))
+            A.append(q / np.sin(kd[m_seg]))
+            B.append(q / (2.0 * np.cos(0.5 * kd[m_seg])))
+            C.append(-q / (2.0 * np.sin(0.5 * kd[m_seg])))
+            sig.append(m_sig)
+
+        starts = base_view["starts"]
+        base_seg = np.repeat(np.arange(N, dtype=np.int64), np.diff(starts))
+        all_seg = np.concatenate([base_seg] + segs)
+        all_basis = np.concatenate([base_view["jbasis"]] + bases)
+        all_A = np.concatenate([base_view["A"]] + A).astype(np.complex128)
+        all_B = np.concatenate([base_view["B"]] + B).astype(np.complex128)
+        all_C = np.concatenate([base_view["C"]] + C).astype(np.complex128)
+        all_sigma = np.concatenate([base_view["sigma"]] + sig)
+
+        order = np.argsort(all_seg, kind="stable")
+        new_starts = np.zeros(N + 1, dtype=np.int64)
+        np.cumsum(np.bincount(all_seg, minlength=N), out=new_starts[1:])
+        return {
+            "starts": new_starts,
+            "jbasis": all_basis[order],
+            "A": all_A[order],
+            "B": all_B[order],
+            "C": all_C[order],
+            "sigma": all_sigma[order],
+        }
+
+    def _basis_coefs(self, geom, k):
+        """The inherited CSR basis view, extended with the junction-port
+        basis columns. Verbatim passthrough when there are no ports."""
+        base_view = super()._basis_coefs(geom, k)
+        if not self.junction_ports:
+            return base_view
+        cached = self._port_basis_cache
+        if cached is not None and cached[0] is base_view and cached[1] == k:
+            return cached[2]
+        view = self._junction_port_view(geom, k, base_view)
+        self._port_basis_cache = (base_view, k, view)
+        return view
 
     # ------------------------------------------------------------------
     # Galerkin matrix assembly
@@ -520,6 +779,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         With `ground_z` set, the ground's tested sub-assembly is subtracted
         from the free-space one before the scatter — one more source block
         through the same test quadrature, not a second scheme.
+
+        With junction ports the index `i`/`j` runs over N+P bases rather than
+        N (the port columns appended by `_junction_port_view`), so G grows to
+        (N+P, N+P). The source index `n` still runs over the N segments —
+        a port basis is a current distribution on real segments like any
+        other, so it needs no new field kernel and gets none.
         """
         if self._loading_active:
             raise NotImplementedError(
@@ -537,9 +802,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             contribs = tuple(c - g for c, g in zip(contribs, gnd))
 
         i_of_entry = ctx["i_of_entry"]
+        n_basis = N + len(self.junction_ports)
 
         def _scatter(contrib):
-            T = np.zeros((N, N), dtype=np.complex128)
+            T = np.zeros((n_basis, N), dtype=np.complex128)
             np.add.at(T, i_of_entry, contrib)
             return T
 
@@ -547,9 +813,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         # --- Source-side coefficient matrices (identical to collocation) --
         m_of_entry = ctx["m_of_entry"]
-        M_A = np.zeros((N, N), dtype=np.complex128)
-        M_B = np.zeros((N, N), dtype=np.complex128)
-        M_C = np.zeros((N, N), dtype=np.complex128)
+        M_A = np.zeros((N, n_basis), dtype=np.complex128)
+        M_B = np.zeros((N, n_basis), dtype=np.complex128)
+        M_C = np.zeros((N, n_basis), dtype=np.complex128)
         M_A[m_of_entry, i_of_entry] = ctx["sigA"]
         M_B[m_of_entry, i_of_entry] = ctx["B"]
         M_C[m_of_entry, i_of_entry] = ctx["sigC"]
@@ -637,52 +903,190 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # Galerkin-tested source vector + solve
     # ------------------------------------------------------------------
 
-    def _tested_source_vector(self, geom, seg_view, k):
-        """Galerkin RHS b_i = -∫ f_i(s) · ŝ·E^app(s) ds. The delta-gap
-        applied field is E^app = V/Δ_m along +ŝ_m on each feed segment m and
-        zero elsewhere, so only feed-segment support entries contribute:
+    def _drive_columns(self, geom, seg_view, k):
+        """Unit-voltage Galerkin excitation column per port, (N+P, n_ports),
+        ordered [gap feeds…, junction ports…].
+
+        Gap feed j: b_i = -∫ f_i(s)·ŝ·E^app(s) ds with the delta-gap applied
+        field E^app = 1/Δ_m along +ŝ_m on feed segment m and zero elsewhere,
+        so only that segment's support entries contribute:
 
             ∫_{seg m} f_{i,m}(ξ) dξ = σA·Δ_m + σC·(2/k)·sin(kΔ_m/2)
 
         (the sin term integrates to zero by parity). Contrast the collocation
-        RHS, which point-samples -V/Δ_m at the feed segment centre. This
+        RHS, which point-samples -1/Δ_m at the feed segment centre. This
         integral is exact, so M2's quadrature work does not touch it.
+
+        Junction port p: the source is an EMF in the infinitesimal lead
+        between the port terminal and the node, so testing it against basis
+        w gives -1 × (w's net current THROUGH that lead) = -1 × (w's net
+        inflow at the node). Every ordinary basis has zero net inflow there
+        — that is #177's KCL identity, the very property that makes the port
+        impossible in the point-matched solver — and `g_q` has δ_pq by
+        construction. So the whole column is a single -1 at row N+p: the
+        port's excitation touches exactly the port's own row, exactly.
         """
         N = geom["n_segs"]
         h = np.asarray(geom["seg_h"], dtype=float)
         starts = seg_view["starts"]
-        b = np.zeros(N, dtype=np.complex128)
-        for fseg, (_, _, V) in zip(geom["feed_segs"], self.feeds):
+        n_basis = N + len(self.junction_ports)
+        U = np.zeros((n_basis, self.n_ports), dtype=np.complex128)
+        for j, fseg in enumerate(geom["feed_segs"]):
             s, e = starts[fseg], starts[fseg + 1]
-            i = seg_view["jbasis"][s:e]
-            A = seg_view["A"][s:e]
-            C = seg_view["C"][s:e]
-            sig = seg_view["sigma"][s:e]
             hm = float(h[fseg])
-            int_f = sig * A * hm + sig * C * (2.0 / k) * np.sin(0.5 * k * hm)
-            np.add.at(b, i, -(V / hm) * int_f)
-        return b
+            sig = seg_view["sigma"][s:e]
+            int_f = sig * seg_view["A"][s:e] * hm + sig * seg_view["C"][s:e] * (
+                2.0 / k
+            ) * np.sin(0.5 * k * hm)
+            np.add.at(U[:, j], seg_view["jbasis"][s:e], -int_f / hm)
+        for p in range(len(self.junction_ports)):
+            U[N + p, len(self.feeds) + p] = -1.0
+        return U
+
+    def _tested_source_vector(self, geom, seg_view, k):
+        """Galerkin RHS for the configured port voltages: Σ_ports V·U[:, port].
+        See `_drive_columns` for what each column is."""
+        U = self._drive_columns(geom, seg_view, k)
+        return U @ self._port_voltages()
+
+    def _port_voltages(self):
+        return np.array(
+            [v for _, _, v in self.feeds] + [v for _j, v in self.junction_ports],
+            dtype=np.complex128,
+        )
+
+    def _port_currents(self, alpha, geom, seg_view, U):
+        """Per-port current readout, ordered [gap feeds…, junction ports…].
+
+        A junction port's readout is `α_{N+p}` — its own basis amplitude,
+        which by construction IS the current injected at the node — and that
+        equals -U[:, port]·α exactly, so the port block of Y is symmetric to
+        machine precision whichever branch below runs.
+
+        A gap feed's readout depends on `feed_readout`: the segment-CENTRE
+        current (default, the point-matched solver's and NEC's) or the
+        gap-averaged current -U[:, j]·α, which is the exact dual of the
+        Galerkin drive. See the class docstring for why the non-dual one is
+        the default and what it costs.
+        """
+        N = geom["n_segs"]
+        if self.feed_readout == "variational":
+            return -(U.T @ alpha)
+        return np.array(
+            [
+                self._feed_segment_current(alpha, seg_view, fi)
+                for fi in geom["feed_segs"]
+            ]
+            + [alpha[N + p] for p in range(len(self.junction_ports))],
+            dtype=np.complex128,
+        )
 
     def compute_impedance(self):
         """Return (Z_drive, alpha). Mirrors `SinusoidalSolver.compute_impedance`
-        but assembles the Galerkin matrix and the Galerkin-tested RHS. The
-        current readout (I at the feed-segment centre) is a property of the
-        solution current, so `_feed_segment_current` is reused unchanged.
+        but assembles the Galerkin matrix and the Galerkin-tested RHS.
+
+        With junction ports, `alpha` is length N+P and `Z_drive` covers
+        [gap feeds…, junction ports…]; it stays a bare scalar only when the
+        model has exactly one port of any kind.
         """
+        self._refuse_junction_port_solve()
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field fill
         G, seg_view = self._assemble_Z(geom, self.k)
-        b = self._tested_source_vector(geom, seg_view, self.k)
+        U = self._drive_columns(geom, seg_view, self.k)
+        voltages = self._port_voltages()
         self._checkpoint()  # after assembly, before the dense solve
 
-        alpha = scipy.linalg.solve(G, b)
+        alpha = scipy.linalg.solve(G, U @ voltages)
 
-        feed_segs = geom["feed_segs"]
-        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
-        feed_currents = np.array(
-            [self._feed_segment_current(alpha, seg_view, fi) for fi in feed_segs],
+        currents = self._port_currents(alpha, geom, seg_view, U)
+        z_per_port = voltages / currents
+        Z_drive = z_per_port[0] if self.n_ports == 1 else z_per_port
+        return Z_drive, alpha
+
+    def compute_y_matrix(self) -> np.ndarray:
+        """Short-circuit admittance matrix over [gap feeds…, junction ports…].
+
+        Honestly Galerkin throughout, which the inherited implementation was
+        not: it paired this solver's Galerkin matrix with the point-matched
+        solver's RHS (a bare -1/h at the feed segment's row), so its Y did
+        not even agree with `compute_impedance`. Here the columns are the
+        same `_drive_columns` the impedance solve uses and the readout is the
+        same `_port_currents`, so 1/Y⁻¹ reproduces `compute_impedance` to
+        solver precision by construction.
+        """
+        self._refuse_junction_port_solve()
+        geom = self._build_geometry()
+        G, seg_view = self._assemble_Z(geom, self.k)
+        U = self._drive_columns(geom, seg_view, self.k)
+        alphas = scipy.linalg.solve(G, U)
+        return np.stack(
+            [
+                self._port_currents(alphas[:, j], geom, seg_view, U)
+                for j in range(self.n_ports)
+            ],
+            axis=1,
+        )
+
+    def compute_y_matrix_swept(self, k_array) -> np.ndarray:
+        """Per-frequency Y matrices; loops over k like the inherited version
+        but with the Galerkin drive/readout of `compute_y_matrix`. The drive
+        columns are k-DEPENDENT here (the gap column integrates the basis
+        shapes, which move with k), so they are rebuilt per step."""
+        self._refuse_junction_port_solve()
+        k_array = np.asarray(k_array, dtype=float)
+        geom = self._build_geometry()
+        out = np.zeros(
+            (k_array.shape[0], self.n_ports, self.n_ports), dtype=np.complex128
+        )
+        saved = (self.k, self.wavelength, self.omega)
+        try:
+            for ki, kk in enumerate(k_array):
+                self._checkpoint()
+                self._set_k(float(kk))
+                G, seg_view = self._assemble_Z(geom, self.k)
+                U = self._drive_columns(geom, seg_view, self.k)
+                alphas = scipy.linalg.solve(G, U)
+                out[ki] = np.stack(
+                    [
+                        self._port_currents(alphas[:, j], geom, seg_view, U)
+                        for j in range(self.n_ports)
+                    ],
+                    axis=1,
+                )
+        finally:
+            self.k, self.wavelength, self.omega = saved
+        return out
+
+    def compute_impedance_swept(self, k_array):
+        """Driving-point impedance over a batch of wavenumbers — a per-k loop
+        of exactly `compute_impedance`'s algebra (the inherited version used
+        the collocation RHS, so it disagreed with `compute_impedance`)."""
+        self._refuse_junction_port_solve()
+        k_array = np.asarray(k_array, dtype=float)
+        geom = self._build_geometry()
+        voltages = self._port_voltages()
+        n_p = self.n_ports
+        z_out = np.zeros(
+            k_array.shape[0] if n_p == 1 else (k_array.shape[0], n_p),
             dtype=np.complex128,
         )
-        z_per_feed = voltages / feed_currents
-        Z_drive = z_per_feed[0] if len(self.feeds) == 1 else z_per_feed
-        return Z_drive, alpha
+        saved = (self.k, self.wavelength, self.omega)
+        try:
+            for i, kk in enumerate(k_array):
+                self._checkpoint()
+                self._set_k(float(kk))
+                G, seg_view = self._assemble_Z(geom, self.k)
+                U = self._drive_columns(geom, seg_view, self.k)
+                alpha = scipy.linalg.solve(G, U @ voltages)
+                z_per = voltages / self._port_currents(alpha, geom, seg_view, U)
+                z_out[i] = z_per[0] if n_p == 1 else z_per
+        finally:
+            self.k, self.wavelength, self.omega = saved
+        return z_out
+
+    def _set_k(self, kk):
+        """Rebind the frequency triple the sweeps mutate in lockstep."""
+        self.k = float(kk)
+        self.omega = self.k * self.c
+        self.wavelength = self.c / (self.omega / (2 * np.pi))

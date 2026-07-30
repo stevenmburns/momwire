@@ -93,27 +93,7 @@ class SinusoidalSolver(_Cancelable):
         cancel=None,
     ):
         if junction_ports:
-            # Not a plumbing gap — the basis excludes the port (issue #177,
-            # where the full derivation lives so it isn't redone). Junction
-            # continuity here is enforced INSIDE the sinusoidal basis via the
-            # N-/N+ neighbour tables, so every basis function satisfies KCL at
-            # every junction as an algebraic identity (measured residuals
-            # ~1e-13 on a 3-way star) — the span simply contains no current
-            # with nonzero net inflow at a node, at any mesh density.
-            # Relaxing a junction's neighbour entries yields I = 0 free ends,
-            # and a KCL row added on top would enforce 0 = 0. A real port
-            # needs Galerkin (segment-integrated) test rows the entire
-            # point-collocation field stack doesn't provide — NEC-2 has the
-            # same limitation for the same reason (its EX/NT/TL port is a
-            # segment-centre delta gap; a node-localized EMF samples to a
-            # zero RHS).
-            raise NotImplementedError(
-                "junction_ports are not supported on SinusoidalSolver: the "
-                "sinusoidal basis enforces KCL identically, so a node-current "
-                "port is outside its span (momwire#177; same limitation as "
-                "NEC-2). Use BSplineSolver, or do what NEC requires: mesh a "
-                "short bridge wire across the gap and gap-feed it"
-            )
+            self._reject_junction_ports()
         self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
@@ -286,7 +266,9 @@ class SinusoidalSolver(_Cancelable):
                 raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
             self.feeds = [(int(feed_wire_index), feed_arclength, 1.0 + 0.0j)]
         else:
-            if len(feeds) == 0:
+            # feeds=[] is legal only when the model is driven entirely through
+            # junction ports (issue #172's rule, mirrored from BSplineSolver).
+            if len(feeds) == 0 and not junction_ports:
                 raise ValueError("feeds must contain at least one entry")
             norm = []
             for i, f in enumerate(feeds):
@@ -303,17 +285,19 @@ class SinusoidalSolver(_Cancelable):
                 norm.append((int(w_i), arc_i, complex(v_i)))
             self.feeds = norm
 
-        self.feed_wire_index = self.feeds[0][0]
-        self.feed_arclength = self.feeds[0][1]
+        self.feed_wire_index = self.feeds[0][0] if self.feeds else None
+        self.feed_arclength = self.feeds[0][1] if self.feeds else None
         self.n_qp_const = n_qp_const
 
         self.junctions = []
         if junctions is not None:
             for j, jw in enumerate(junctions):
-                if len(jw) < 2:
-                    raise ValueError(
-                        f"junction {j}: need >= 2 wire-ends, got {len(jw)}"
-                    )
+                # 1-entry groups are legal (issue #172's scope item 2): as a
+                # non-port they emit no neighbour entries, so the member end
+                # keeps the free-end branch and the solve is unchanged; as a
+                # port they are the natural lone-conductor-end terminal.
+                if len(jw) < 1:
+                    raise ValueError(f"junction {j}: need >= 1 wire-end, got 0")
                 normalized = []
                 for w, end in jw:
                     if not (0 <= w < n_w):
@@ -326,6 +310,65 @@ class SinusoidalSolver(_Cancelable):
                         )
                     normalized.append((int(w), end))
                 self.junctions.append(normalized)
+
+        self.junction_ports = self._normalize_junction_ports(junction_ports)
+
+    def _reject_junction_ports(self):
+        """Refuse `junction_ports=` on the point-matched solver.
+
+        Not a plumbing gap — the basis excludes the port (issue #177, where
+        the full derivation lives so it isn't redone). Junction continuity
+        here is enforced INSIDE the sinusoidal basis via the N⁻/N⁺ neighbour
+        tables, so every basis function satisfies KCL at every junction as an
+        algebraic identity (measured residuals ~1e-13 on a 3-way star) — the
+        span simply contains no current with nonzero net inflow at a node, at
+        any mesh density. Relaxing a junction's neighbour entries yields I = 0
+        free ends, and a KCL row added on top would enforce 0 = 0. A real port
+        needs Galerkin (segment-integrated) test rows the entire
+        point-collocation field stack doesn't provide — NEC-2 has the same
+        limitation for the same reason (its EX/NT/TL port is a segment-centre
+        delta gap; a node-localized EMF samples to a zero RHS).
+
+        `SinusoidalGalerkinSolver` overrides this to a no-op so the port
+        basis column CAN be built and measured there — but its solves refuse
+        too, for a second and stronger reason #177 did not anticipate
+        (momwire#182 M5: the port basis's node charge is priced at the
+        wire radius by this family's field kernel). See that class.
+        """
+        raise NotImplementedError(
+            "junction_ports are not supported on SinusoidalSolver: the "
+            "sinusoidal basis enforces KCL identically, so a node-current "
+            "port is outside its span (momwire#177; same limitation as "
+            "NEC-2). Use BSplineSolver, or do what NEC requires: mesh a "
+            "short bridge wire across the gap and gap-feed it"
+        )
+
+    def _normalize_junction_ports(self, junction_ports):
+        """Validate `junction_ports=` into a list of (junction_index, voltage).
+
+        Same rules as `BSplineSolver` (issue #172): entries may be a plain
+        int (voltage 0) or a (index, voltage) pair; indices must be in range
+        and may not repeat. Returns [] when there are none, which is the only
+        outcome the point-matched solver ever reaches — it raises in
+        `_reject_junction_ports` first.
+        """
+        if not junction_ports:
+            return []
+        out = []
+        seen = set()
+        for p in junction_ports:
+            j_idx, volt = (p, 0.0 + 0.0j) if np.isscalar(p) else p
+            j_idx = int(j_idx)
+            if not (0 <= j_idx < len(self.junctions)):
+                raise ValueError(
+                    f"junction_ports: junction index {j_idx} out of range "
+                    f"[0, {len(self.junctions)})"
+                )
+            if j_idx in seen:
+                raise ValueError(f"junction_ports: junction {j_idx} listed twice")
+            seen.add(j_idx)
+            out.append((j_idx, complex(volt)))
+        return out
 
     def _leggauss_cached(self, n: int) -> tuple[np.ndarray, np.ndarray]:
         cached = self._leggauss_cache.get(n)
@@ -519,7 +562,8 @@ class SinusoidalSolver(_Cancelable):
             feed_segs.append(
                 first + int(np.argmin(np.abs(feed_arc_centers - feed_arc)))
             )
-        feed_seg = feed_segs[0]
+        # None with feeds=[] — legal only under junction-port drive (#172).
+        feed_seg = feed_segs[0] if feed_segs else None
 
         # Concatenate the in-wire + junction chunks into the final flat
         # neighbour arrays. Empty geometries (e.g. a single-segment wire
@@ -608,6 +652,12 @@ class SinusoidalSolver(_Cancelable):
             "feed_segs": feed_segs,
             "ground_minus": ground_minus,
             "ground_plus": ground_plus,
+            # Junctions whose node lies in the ground plane: their members are
+            # ground-connected INSTEAD of inter-connected, so they emit no
+            # neighbour entries. Published because a junction port cannot live
+            # on one (its node voltage is pinned by the image) — see
+            # `SinusoidalGalerkinSolver._junction_port_view`.
+            "grounded_junctions": frozenset(grounded_junctions),
         }
         return self._cached_geometry
 
