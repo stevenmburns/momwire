@@ -91,6 +91,12 @@ export default defineConfig({
           ],
         },
         {
+          label: "Act V — The instrument",
+          items: [
+            { label: "The fourth cell", slug: "act-5/the-fourth-cell" },
+          ],
+        },
+        {
           label: "Elsewhere",
           items: [
             { label: "Turn the knobs live", link: SIMULATOR_URL, attrs: { target: "_blank" } },
