@@ -48,6 +48,23 @@ points against (P, 1) sources directly instead of forming the N² table those
 pairs live in. Net effect: the G1 symmetry gate is met at the DEFAULT
 quadrature, at ~1/16 the fill cost of M1's converged setting.
 
+**M3 — the variational payoff, measured.** At 11-21 segments this solver's
+driving-point impedance is closer to the fine-mesh answer than the
+point-matched solver's, by 1.01× (k3_star) to 2.97× (k2_junction) worst-case
+over a family of six references. Two things worth knowing when reading those
+numbers, both pinned by tests in `tests/test_sinusoidal_galerkin.py`:
+
+* The win is a **reactance** win. In R the point-matched solver actually
+  converges faster on three of the four validation geometries; the net |Z|
+  verdict is a reactance gain partly given back on resistance. That is the
+  useful direction — the sin↔bs2 questions this solver exists to arbitrate are
+  reactance-dominated.
+* There is no "converged impedance" to measure against in an absolute sense:
+  the delta-gap width IS the segment length, so refining the mesh shrinks the
+  source, and X drifts logarithmically without limit while R settles. Every
+  error figure above is relative to a *chosen* fine-mesh reference, and the
+  gate is the verdict that survives the whole spread of defensible choices.
+
 Still deferred: ground models (M4), wire loading, junction ports (M5), and
 the C++ accelerator — all raise rather than return plausible wrong numbers.
 """
