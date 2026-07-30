@@ -3350,9 +3350,12 @@ class BSplineSolver(_Cancelable):
         v += port_V @ port_A
         all_voltages = np.concatenate([voltages, port_V])
         n_total = n_feeds + port_A.shape[0]
-        vpf_T = np.hstack(
-            [np.array(v_per_feed).T, port_A.T.astype(np.complex128)]
-        )  # (n_basis, n_total)
+        # Reshape keeps this 2-D at n_feeds == 0: np.array([]) is (0,) and
+        # would break the hstack against port_A's rows (issue #175).
+        vpf = np.asarray(v_per_feed, dtype=np.complex128).reshape(
+            n_feeds, n_basis_total
+        )
+        vpf_T = np.hstack([vpf.T, port_A.T.astype(np.complex128)])  # (n_basis, n_total)
 
         z_out = (
             np.zeros(n_k, dtype=np.complex128)
