@@ -20,6 +20,10 @@ jobs:
       # deliberately, alongside the repo-wide `ruff check` cleanup it implies.
       - run: pip install ruff==0.15.21
       - run: ruff check
+      # Formatter drift is invisible without this — `ruff format` was
+      # previously unenforced, so unformatted commits accumulated
+      # silently (site/figures are excluded by [tool.ruff.format]).
+      - run: ruff format --check
 
   test:
     runs-on: ubuntu-latest

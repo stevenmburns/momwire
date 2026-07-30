@@ -63,6 +63,7 @@ class OptionalBuildExt(build_ext):
             stacklevel=2,
         )
 
+
 # The accelerator is built on all three platforms; the vectorization strategy
 # differs per platform. Linux/GCC binds the inner sincos to glibc's libmvec
 # (-lmvec) via the `omp declare simd` block in _accelerators.cpp; Windows/MSVC
