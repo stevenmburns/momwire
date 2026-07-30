@@ -355,6 +355,15 @@ def test_enrichment_dense_fallback_allows_junction_ports():
 #
 # These tests pin the measurement, because the measurement is the only thing
 # that stops the construction being re-proposed.
+#
+# SUPERSEDED, NOT DELETED (M5b formulation (b), last section of this file):
+# M5's blanket solve refusal is gone — holding the node's lumped charge
+# OUTSIDE the reaction integral turns this same port basis into one that
+# reproduces `BSplineSolver` to 3e-5. Everything below still measures
+# `_assemble_Z`, i.e. M5's reaction form verbatim, and every number in it
+# still reproduces. What changed is only which matrix the SOLVES use
+# (`_assemble_Z_ported`). Read this section as the record of why the naive
+# construction is wrong, which is exactly what makes the correction legible.
 
 EPS0 = 8.8541878188e-12
 
@@ -528,20 +537,34 @@ def test_sg_paired_ports_miss_the_bridged_reference_at_every_mesh(n_half):
     assert abs(z_port.imag) > 1e4, z_port
 
 
-def test_sg_junction_port_solves_refuse():
-    """The construction is kept and measured; the numbers are not shipped.
-    Every solve entry point refuses so no caller can pick up a port
-    impedance that is off by three orders of magnitude."""
-    s = _port_pair_solver(0.04, 0.01, 8, cls=SinusoidalGalerkinSolver)
-    ks = np.array([s.k])
-    for call in (
-        s.compute_impedance,
-        s.compute_y_matrix,
-        lambda: s.compute_impedance_swept(ks),
-        lambda: s.compute_y_matrix_swept(ks),
-    ):
-        with pytest.raises(NotImplementedError, match="point charge.*bridge"):
-            call()
+def test_sg_junction_port_reaction_form_is_still_what_the_solves_reject():
+    """M5's blanket solve refusal was SUPERSEDED by M5b formulation (b), and
+    this test is what keeps the supersession honest.
+
+    Everything above still measures `_assemble_Z` — M5's reaction-form
+    construction, verbatim, still 2400× from its oracle. What changed is that
+    the solves no longer use that matrix: they go through
+    `_assemble_Z_ported`, which holds the node's lumped charge outside the
+    reaction integral. So the two must differ, and differ by exactly the
+    blocker: the port self-term drops from ~8.9e4 j to ~5.0e3 j (94 %), and
+    that is the whole of the difference between a refused solve and a green
+    one.
+    """
+    s = _port_pair_solver(0.04, 0.01, 20, cls=SinusoidalGalerkinSolver)
+    geom = s._build_geometry()
+    G_raw, _sv = s._assemble_Z(geom, s.k)
+    G_solve, _sv2 = s._assemble_Z_ported(geom, s.k)
+    n = geom["n_segs"]
+    assert G_raw[n, n].imag > 5e4, G_raw[n, n]
+    assert G_solve[n, n].imag < 1e4, G_solve[n, n]
+    assert G_solve[n, n].imag / G_raw[n, n].imag < 0.1
+    # the ordinary block is untouched: only the port rows/columns move
+    np.testing.assert_array_equal(G_raw[:n, :n], G_solve[:n, :n])
+    # and the correction is symmetric by construction, so the fill's own
+    # reciprocity residual is exactly as good as it was
+    raw = np.linalg.norm(G_raw - G_raw.T)
+    cor = np.linalg.norm(G_solve - G_solve.T)
+    assert abs(cor - raw) / raw < 1e-6, (raw, cor)
 
 
 @pytest.mark.parametrize("cls", [SinusoidalSolver, SinusoidalGalerkinSolver])
@@ -1067,3 +1090,363 @@ def test_sg_grounded_node_port_rejected():
     )
     with pytest.raises(ValueError, match="grounded and a node port"):
         s.compute_impedance()
+
+
+# ===========================================================================
+# momwire#182 M5b — formulation (b): the mixed-potential port row
+# ===========================================================================
+#
+# Formulation (a) above is a two-terminal object and cannot serve the payoff:
+# antennaknobs' `PortAtEnd` needs a ONE-terminal net-inflow port at a
+# one-member junction. That is exactly the construction M5 refuted — so M5's
+# mechanism had to be dissolved, not avoided.
+#
+# It dissolves on one observation, measured rather than argued:
+# `BSplineSolver`'s own one-terminal port impedance is −1.87 − 35.05j where
+# the node self-capacitance 1/(w.4pi.eps.a) would be 9.5e4. It carries NONE of
+# it. That is the physical content of its Lagrange-multiplier port: the
+# current reaching the node leaves through an ideal UNMODELLED lead, so
+# nothing accumulates there and there is no node charge to price. M5's port
+# basis, by contrast, terminates its current in vacuum.
+#
+# So formulation (b) redefines the port basis's CHARGE to be its line charge
+# only and removes the lumped node charge from the source, symmetrically:
+#
+#     G'[i,p] = G'[p,i] = G[i,p] - D[i,p]
+#     G'[p,q]           = G[p,q] - D[p,q] - D[q,p] + S[p,q]
+#
+# D is every basis tested against the node charge's field (the same test
+# quadrature, graded); S is the lumped-lumped term put back after the double
+# subtraction. Both constants come from the solver's own kernel — the
+# point-charge field IS the Eqs 78-79 endpoint term — so nothing is fitted.
+#
+# `_assemble_Z` still returns M5's reaction-form matrix and the M5 section
+# above still measures it. Only `_assemble_Z_ported`, which the solves use,
+# is new.
+
+
+def _sg_zdiff_b(delta, whisker, n_half, **kw):
+    """Differential impedance across the two tip ports, through the PUBLIC
+    API — this is the formulation-(b) analogue of `_port_pair_zdiff`."""
+    Y = _port_pair_solver(
+        delta, whisker, n_half, cls=SinusoidalGalerkinSolver, **kw
+    ).compute_y_matrix()
+    Zp = np.linalg.inv(Y[1:, 1:])
+    return complex(Zp[0, 0] - Zp[0, 1] - Zp[1, 0] + Zp[1, 1])
+
+
+def _sg_oracle_extrap(n_half, deltas=(0.04, 0.02), whisker=0.01):
+    """The B-spline oracle's own procedure, verbatim: the port-minus-bridge
+    difference is the physical bridge metal, linear in the split gap, so
+    Richardson-extrapolate it to delta -> 0 and normalize by |Z_ref|."""
+    diffs = {}
+    for delta in deltas:
+        z_ref = _bridged_z(delta, whisker, n_half, cls=SinusoidalGalerkinSolver)
+        diffs[delta] = (_sg_zdiff_b(delta, whisker, n_half) - z_ref, z_ref)
+    ext = 2 * diffs[deltas[1]][0] - diffs[deltas[0]][0]
+    return abs(ext) / abs(diffs[deltas[1]][1])
+
+
+@pytest.mark.parametrize("n_half", [10, 20, 40])
+def test_sg_junction_port_meets_the_bridged_oracle(n_half):
+    """G5b clause 1 for formulation (b) — GREEN, at 1.429 % against 1.5 %.
+
+    Same oracle, same procedure, same delta pair (0.04, 0.02) the B-spline
+    ports were accepted on. Measured 1.4290 / 1.4289 / 1.4280 % at n_half
+    10 / 20 / 40 — mesh-INDEPENDENT, which is the tell that what is left is
+    the oracle's own extrapolation residue rather than anything about the
+    port (see the next test).
+
+    The margin is thin and honestly so: B-spline's own number on this oracle
+    is 0.73 / 1.08 / 1.28 / 1.39 % at n_half 10 / 20 / 40 / 80 — it CLIMBS
+    with mesh toward the same place. Both formulations are converging on the
+    same ~1.4 %, so 1.5 % is a statement about the oracle's delta ladder, not
+    a discriminator between them.
+    """
+    rel = _sg_oracle_extrap(n_half)
+    assert rel < 0.015, f"G5b clause 1 RED for formulation (b): {rel:.4%}"
+    assert 0.012 < rel < 0.0146, f"drifted from the M5b-measured 1.429 %: {rel:.4%}"
+
+
+def test_sg_junction_port_oracle_residue_is_the_extrapolation_not_the_port():
+    """Why 1.43 % is not the port's error.
+
+    The oracle extrapolates the port-minus-bridge difference LINEARLY in the
+    split gap. Halve the ladder and the residue halves — 2.876 % from
+    (0.08, 0.04), 1.429 % from (0.04, 0.02), 0.700 % from (0.02, 0.01) — so
+    the difference is not linear in delta and the two-point Richardson leaves
+    an O(delta) tail. `BSplineSolver` does exactly the same thing on the same
+    geometry (2.542 / 1.075 / 0.370 %), which is what identifies the tail as
+    the oracle's rather than either formulation's.
+    """
+    rels = [
+        _sg_oracle_extrap(20, deltas=d)
+        for d in ((0.08, 0.04), (0.04, 0.02), (0.02, 0.01))
+    ]
+    assert rels[1] < 0.55 * rels[0], rels
+    assert rels[2] < 0.55 * rels[1], rels
+
+
+@pytest.mark.parametrize("delta", [0.04, 0.02])
+def test_sg_junction_port_reproduces_the_bspline_port(delta):
+    """The strongest evidence formulation (b) is right, and it is not the
+    oracle.
+
+    `BSplineSolver`'s junction port is a Lagrange multiplier on a KCL
+    constraint row in a spline basis; this one is a node-charge term held
+    outside a reaction integral in a sinusoidal basis. Nothing is shared —
+    not the basis, not the testing, not the port algebra. Their full 2×2 port
+    Y matrices agree ENTRYWISE to 3.4e-5 / 4.2e-5, and the individual
+    one-terminal Z11 to 4e-5 (−1.8697 − 35.0471j vs −1.8704 − 35.0469j) —
+    including the gauge-dependent self terms, not merely the differential
+    combination.
+    """
+    Yb = _port_pair_solver(delta, 0.01, 20).compute_y_matrix()[1:, 1:]
+    Yg = _port_pair_solver(
+        delta, 0.01, 20, cls=SinusoidalGalerkinSolver
+    ).compute_y_matrix()[1:, 1:]
+    rel = np.abs(Yg - Yb) / np.abs(Yb)
+    assert rel.max() < 2e-4, rel
+    assert abs(np.linalg.inv(Yg)[0, 0] - np.linalg.inv(Yb)[0, 0]) < 5e-3
+
+
+def test_sg_junction_port_serves_the_one_member_portatend_topology():
+    """The payoff clause: the topology `PortAtEnd` actually uses.
+
+    Every one of `wire.sterba_bl`'s 16 ports resolves to a ONE-member
+    junction at a lone conductor end — genuine net inflow, no through-current
+    and nothing to bipartition, so formulation (a) refuses it by design. This
+    is what formulation (b) buys: on a split dipole driven through two such
+    one-member ports, the sinusoidal-Galerkin Y matches `BSplineSolver`'s
+    entrywise to 3.9e-6.
+    """
+    wires = [
+        np.array([(0.0, -L_DIP / 2, 0.0), (0.0, -0.02, 0.0)]),
+        np.array([(0.0, 0.02, 0.0), (0.0, L_DIP / 2, 0.0)]),
+    ]
+    common = dict(
+        wires=wires, n_per_edge_per_wire=[[20], [20]],
+        junctions=[[(0, "end")], [(1, "start")]],
+        junction_ports=[0, 1], wavelength=WAVELENGTH,
+    )  # fmt: skip
+    Yb = BSplineSolver(feeds=[], **common).compute_y_matrix()
+    Yg = SinusoidalGalerkinSolver(
+        feeds=[(0, L_DIP / 4, 0j)], **common
+    ).compute_y_matrix()[1:, 1:]
+    rel = np.abs(Yg - Yb) / np.abs(Yb)
+    assert rel.max() < 5e-5, rel
+
+
+@pytest.mark.parametrize("radius", [0.0002, 0.0005, 0.002])
+def test_sg_junction_port_correction_removes_the_1_over_a_blocker(radius):
+    """The M5 blocker law, and its removal, on the same matrix entry.
+
+    `_assemble_Z` still puts the node's self-capacitance in the port diagonal
+    at 0.965 / 0.930 / 0.824 × 1/(w.4pi.eps.a) — M5's measurement, unchanged
+    and still pinned above. `_assemble_Z_ported` takes it out: the same entry
+    reads 5897 / 4991 / 3617 j across a decade of radius, a 1.63× swing where
+    the raw one swings 11.7×. The law is gone, not merely reduced.
+    """
+    s = _port_pair_solver(
+        0.04, 0.01, 20, cls=SinusoidalGalerkinSolver, wire_radius=radius
+    )
+    geom = s._build_geometry()
+    n = geom["n_segs"]
+    raw = s._assemble_Z(geom, s.k)[0][n, n].imag
+    cor = s._assemble_Z_ported(geom, s.k)[0][n, n].imag
+    predicted = 1.0 / (s.omega * 4.0 * np.pi * EPS0 * radius)
+    assert 0.75 < raw / predicted < 1.05, raw / predicted
+    assert cor / raw < 0.2, (raw, cor)
+    assert 2e3 < cor < 8e3, cor
+
+
+def test_sg_junction_port_pair_block_regularization_is_load_bearing():
+    """`_node_charge_pair_block` regularizes the node separation as
+    sqrt(d² + a²), not d, and that is not cosmetic.
+
+    The columns are subtracted twice, so the lumped-lumped term must go back
+    in at exactly the separation the columns' own integration by parts
+    produced — which is the regularized one, because the point-charge field
+    is -grad of a potential in the regularized R. Use the bare d instead and
+    a residue against `BSplineSolver` appears that runs as a²/d³: it grows
+    8× when the gap halves and 100× over a decade of radius. Reproduced here
+    by patching the block, so the choice cannot be silently undone.
+    """
+    kw = dict(cls=SinusoidalGalerkinSolver, wire_radius=0.002)
+    good = _sg_zdiff_b(0.04, 0.01, 20, wire_radius=0.002)
+    s_bad = _port_pair_solver(0.04, 0.01, 20, **kw)
+    orig = s_bad._node_charge_pair_block
+
+    def unregularized(geom, k):
+        nodes = np.array(
+            [s_bad._junction_node_position(geom, j) for j, _v in s_bad.junction_ports]
+        )
+        d = np.linalg.norm(nodes[:, None, :] - nodes[None, :, :], axis=-1)
+        np.fill_diagonal(d, float(s_bad._uniform_radius))
+        return 1j * s_bad.eta * np.exp(-1j * k * d) / (4.0 * np.pi * k * d)
+
+    s_bad._node_charge_pair_block = unregularized
+    Y = s_bad.compute_y_matrix()
+    Zp = np.linalg.inv(Y[1:, 1:])
+    bad = complex(Zp[0, 0] - Zp[0, 1] - Zp[1, 0] + Zp[1, 1])
+    assert orig is not None
+    # B-spline reference at the SAME fat radius, where the a²/d³ residue bites
+    Yb = _port_pair_solver(0.04, 0.01, 20, wire_radius=0.002).compute_y_matrix()
+    Zb = np.linalg.inv(Yb[1:, 1:])
+    ref = complex(Zb[0, 0] - Zb[0, 1] - Zb[1, 0] + Zb[1, 1])
+    assert abs(good - ref) / abs(ref) < 1e-3, (good, ref)
+    assert abs(bad - ref) / abs(ref) > 0.02, (bad, ref)
+
+
+def test_sg_junction_port_node_charge_quadrature_is_converged():
+    """`n_qp_node` is a converged setting, not a tuned one: the port
+    impedance moves 2.8e-5 from 8 panels-per-end to 12, 4.0e-9 from 12 to 16,
+    and 1e-10 beyond — so the default 16 sits two decades inside the floor,
+    and the answer is a property of the formulation rather than of the rule.
+    """
+    zs = {q: _sg_zdiff_b(0.04, 0.01, 20, n_qp_node=q) for q in (12, 16, 24)}
+    assert abs(zs[16] - zs[12]) / abs(zs[16]) < 1e-7
+    assert abs(zs[24] - zs[16]) / abs(zs[16]) < 1e-9
+
+
+@pytest.mark.parametrize("feed_readout", ["centre", "variational"])
+def test_sg_junction_port_y_block_symmetric(feed_readout):
+    """G5b clause 2 for formulation (b), the half that is green.
+
+    Drive and readout are still the same vector and the correction is
+    symmetric by construction, so the junction-port block of Y is symmetric
+    to 4.2e-12 under either readout — inside the 1e-10 clause.
+    """
+    Y = _port_pair_solver(
+        0.04, 0.01, 20, cls=SinusoidalGalerkinSolver, feed_readout=feed_readout
+    ).compute_y_matrix()
+    block = Y[1:, 1:]
+    asym = np.linalg.norm(block - block.T) / np.linalg.norm(block)
+    assert asym < 1e-10, f"port block asymmetry {asym:.3e}"
+
+
+def test_sg_junction_port_full_y_symmetry_is_the_fills_own_floor():
+    """G5b clause 2 for formulation (b), the half that carries an AMENDMENT
+    M5 did not need — stated with its attribution measured.
+
+    The full mixed Y is symmetric to 3.7e-8 under `feed_readout="variational"`
+    (1.4e-4 under the default `"centre"`, which is M5's gap-feed amendment
+    unchanged). 3.7e-8 misses the clause's 1e-10, and the reason is not the
+    port: symmetrising the assembled matrix by hand drops the Y asymmetry to
+    1.4e-16, so ALL of it is the fill's own reciprocity residual
+    (‖G−Gᵀ‖/‖G‖ = 8.3e-12, M1/M2's floor) amplified through the port solve.
+
+    M5 did not see this because its port diagonal was the 8.9e4 j node
+    self-capacitance, which made the port solve trivially well conditioned
+    while being physically wrong. Removing it removes that masking:
+    cond(G) falls 9.7e9 -> 5.9e8 and the fill's honest error becomes visible.
+    Refining the SOURCE quadrature helps only slowly (3.7e-8 -> 2.5e-8 at 4×
+    `n_qp_const`), which is what says it is a fill-accuracy statement rather
+    than a port defect. Recorded, not papered over by symmetrising the fill.
+    """
+    s = _port_pair_solver(
+        0.04, 0.01, 20, cls=SinusoidalGalerkinSolver, feed_readout="variational"
+    )
+    geom = s._build_geometry()
+    G, seg_view = s._assemble_Z_ported(geom, s.k)
+    U = s._drive_columns(geom, seg_view, s.k)
+
+    def y_from(M):
+        alphas = scipy.linalg.solve(M, U)
+        return np.stack(
+            [
+                s._port_currents(alphas[:, j], geom, seg_view, U)
+                for j in range(s.n_ports)
+            ],
+            axis=1,
+        )
+
+    def asym(Y):
+        return np.linalg.norm(Y - Y.T) / np.linalg.norm(Y)
+
+    a_built = asym(y_from(G))
+    a_sym = asym(y_from(0.5 * (G + G.T)))
+    assert 1e-9 < a_built < 1e-6, a_built
+    assert a_sym < 1e-13, a_sym
+    assert a_sym < 1e-6 * a_built, (a_built, a_sym)
+
+
+def test_sg_junction_port_impedance_and_sweeps_agree():
+    """One drive/readout pair across all four entry points, with the ported
+    assembly in the loop."""
+
+    def make():
+        return _port_pair_solver(
+            0.04, 0.01, 12, cls=SinusoidalGalerkinSolver, volts=(0.5 + 0j, -0.5 + 0j)
+        )
+
+    s = make()
+    V = s._port_voltages()
+    z_per = np.atleast_1d(s.compute_impedance()[0])
+    Y = make().compute_y_matrix()
+    # port 0 is the shorted dummy gap feed, whose z entry is 0/I
+    np.testing.assert_allclose(V[1:] / z_per[1:], (Y @ V)[1:], rtol=1e-9)
+
+    ks = np.array([0.9 * s.k, s.k, 1.1 * s.k])
+    Y_swept = make().compute_y_matrix_swept(ks)
+    z_swept = make().compute_impedance_swept(ks)
+    for i, kk in enumerate(ks):
+        s2 = make()
+        s2._set_k(float(kk))
+        np.testing.assert_allclose(Y_swept[i], s2.compute_y_matrix(), rtol=1e-8)
+        s3 = make()
+        s3._set_k(float(kk))
+        np.testing.assert_allclose(
+            z_swept[i], np.atleast_1d(s3.compute_impedance()[0]), rtol=1e-8
+        )
+
+
+def test_sg_junction_port_ground_and_mixed_radius_still_refuse():
+    """What formulation (b) does NOT cover, refused rather than approximated.
+
+    The node-charge correction is a free-space scalar potential written for
+    one radius. Over a ground the node's lumped charge also has an IMAGE that
+    the correction does not remove, so part of the M5 blocker would survive;
+    under mixed radii the kernel is not reciprocal at all (M2) and the
+    regularization radius at a node whose members disagree about `a` is
+    ambiguous. Both raise instead of returning a plausible number.
+    """
+    wires, npe, junctions = _split_wires(0.04, 0.01, 8)
+    common = dict(
+        wires=[w + np.array([0.0, 0.0, 3.0]) for w in wires],
+        n_per_edge_per_wire=npe, feeds=[(0, L_DIP / 4, 0j)],
+        junctions=junctions, junction_ports=[0, 1], wavelength=WAVELENGTH,
+    )  # fmt: skip
+    with pytest.raises(NotImplementedError, match="over a ground"):
+        SinusoidalGalerkinSolver(**common, ground_z=0.0).compute_impedance()
+    with pytest.raises(NotImplementedError, match="mixed per-wire radii"):
+        SinusoidalGalerkinSolver(
+            **common, wire_radius=[1e-3, 2e-3, 1e-3, 2e-3]
+        ).compute_impedance()
+
+
+def test_sg_junction_port_and_bspline_converge_on_the_same_oracle_residue():
+    """The claim the 1.5 % margin rests on, as a measurement.
+
+    Formulation (b)'s oracle miss is flat in the mesh (1.4290 / 1.4289 /
+    1.4280 / 1.4268 % at n_half 10 / 20 / 40 / 80) while `BSplineSolver`'s
+    CLIMBS toward it (0.73 / 1.08 / 1.28 / 1.39 %). Neither is converging to
+    zero — they are converging to each other, which is what identifies the
+    residue as the oracle's linear-in-delta extrapolation rather than either
+    port formulation's error. So the honest reading of "under 1.5 %" here is
+    "indistinguishable from the reference implementation", not "1.5 %
+    accurate".
+    """
+    ours, theirs = {}, {}
+    for n_half in (40, 80):
+        ours[n_half] = _sg_oracle_extrap(n_half)
+        diffs = {}
+        for delta in (0.04, 0.02):
+            z_ref = _bridged_z(delta, 0.01, n_half)
+            diffs[delta] = (_port_pair_zdiff(delta, 0.01, n_half) - z_ref, z_ref)
+        ext = 2 * diffs[0.02][0] - diffs[0.04][0]
+        theirs[n_half] = abs(ext) / abs(diffs[0.02][1])
+    assert ours[80] < ours[40], ours  # flat-to-falling
+    assert theirs[80] > theirs[40], theirs  # climbing
+    assert abs(ours[80] - theirs[80]) < abs(ours[40] - theirs[40]), (ours, theirs)
+    assert abs(ours[80] - theirs[80]) < 0.005, (ours, theirs)

@@ -132,10 +132,11 @@ scalar potential already merged), so the boundary term is inside the kernel
 and cannot be separated from it. That is #177's "node-voltage row" bullet,
 now with a number attached.
 
-So `junction_ports=` is accepted and validated here — the construction is
-kept because the measurement that kills it is the only thing that stops it
-being re-proposed, and it is pinned by tests — but every solve entry point
-refuses.
+M5 therefore refused every junction-port solve. **M5b formulation (b) lifts
+that refusal** (below); `_assemble_Z` still returns the reaction-form matrix
+above and the tests still measure it, because the measurement is the only
+thing that stops the construction being re-proposed — but the SOLVES now go
+through `_assemble_Z_ported`.
 
 **M5b — `node_ports=`, the port M5's mechanism does NOT forbid.** M5's
 obstruction is constructive: it forbids exactly one thing, a basis that
@@ -173,14 +174,56 @@ is absorbed by the extrapolation rather than assumed away.
 net-inflow port at a lone conductor end — antennaknobs' `PortAtEnd`, which
 resolves every one of `wire.sterba_bl`'s 16 ports to a ONE-member junction
 whose return path is at a different node — has nothing to bipartition and
-genuinely must accept net current at the node. That is `junction_ports`'
-topology, and `junction_ports` is still refused here. `node_ports` refuses
-a one-member junction at construction rather than silently modelling an open.
+genuinely must accept net current at the node. `node_ports` refuses a
+one-member junction at construction rather than silently modelling an open.
+That topology is `junction_ports`', which formulation (b) below now serves.
 
-For the one-terminal case, use `BSplineSolver`; for a gap that happens to sit
-at a node, `node_ports` now beats the workaround NEC-2 requires (mesh a short
-bridge wire across the gap and gap-feed it), which is still available and is
-what the oracle above uses as its reference.
+**M5b formulation (b) — `junction_ports=`, with the node charge held
+OUTSIDE the reaction integral.** M5's mechanism is dissolved, not avoided,
+by one measurement: `BSplineSolver`'s own one-terminal port impedance is
+−1.87 − 35.05j where the node self-capacitance would be 9.5e4. It carries
+NONE of it. That is the physical content of a Lagrange-multiplier port —
+the current reaching the node leaves through an ideal UNMODELLED lead, so
+nothing accumulates and there is no node charge to price. M5's port basis,
+by contrast, terminates its current in vacuum, which is a different physical
+model and the wrong one for a lumped port.
+
+So `_assemble_Z_ported` redefines the port basis's CHARGE to be its line
+charge only and removes the lumped node charge from the source,
+symmetrically:
+
+    G'[i,p] = G'[p,i] = G[i,p] − D[i,p]
+    G'[p,q]           = G[p,q] − D[p,q] − D[q,p] + S[p,q]
+
+`D` is every basis tested against the node charge's field under the same
+graded test quadrature; `S` is the lumped-lumped term put back after the
+double subtraction. Neither constant is fitted — the point-charge field IS
+the Eqs 78-79 endpoint term (`pref_rho_const` verbatim), and `S`'s
+regularized separation √(d² + a²) is forced by the columns' own integration
+by parts. Getting that √ wrong costs an a²/d³ residue: 0.25 % at the oracle's
+0.04 gap, 2.1 % at 0.02, a clean a² law across a decade of radius.
+
+Measured: the port diagonal drops from 0.93 × 1/(jω·4πε·a) to a
+radius-insensitive ~5e3 (1.63× swing over a decade of `a`, against the raw
+form's 11.7×); the oracle passes at 1.429 % against 1.5 %, mesh-independent;
+and — the real check — the full port Y agrees ENTRYWISE with `BSplineSolver`
+to 3.4e-5 on the two-member oracle and 3.9e-6 on the one-member `PortAtEnd`
+topology, self terms included. Two formulations sharing no basis, no testing
+and no port algebra, landing on the same numbers.
+
+Scoped out and refused rather than approximated: junction ports over any
+GROUND (the node charge's image is not removed) and under MIXED per-wire
+radii (the kernel is not reciprocal there at all, M2).
+
+One amendment formulation (b) forces and M5 did not need: the full mixed
+gap+port Y is symmetric to 3.7e-8 rather than 1e-10 under
+`feed_readout="variational"`. All of it is the fill's own reciprocity
+residual (‖G−Gᵀ‖/‖G‖ = 8.3e-12) amplified through the port solve —
+symmetrising the matrix by hand drops it to 1.4e-16. M5 did not see it
+because its 8.9e4 j port diagonal made the port solve trivially well
+conditioned while being physically wrong; removing it takes cond(G) from
+9.7e9 to 5.9e8 and lets the fill's honest error through. The port sub-block
+itself stays symmetric to 4.2e-12.
 
 One thing M5 did land: `compute_y_matrix` / `compute_y_matrix_swept` /
 `compute_impedance_swept` are now honestly Galerkin. They were inherited
@@ -328,15 +371,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         sibling has no equivalent and takes no such keyword: a node source
         samples to an identically zero collocation RHS.
 
-    `junction_ports=` is ACCEPTED and validated here (with `BSplineSolver`'s
-    rules: a junction index or an (index, voltage) pair, in range, no
-    repeats, no grounded junction, and `feeds=[]` legal when there is at
-    least one port) so that #177's port basis can be built and measured —
-    but every solve entry point refuses, because the measurement says the
-    construction is wrong by ~2400× for a reason no amount of mesh fixes.
-    See the module docstring for the mechanism and
-    `tests/test_junction_ports.py` for the pinned numbers. Use a meshed
-    bridge wire with a gap feed instead, which is what NEC-2 requires too.
+    `junction_ports=` — one-terminal net-inflow ports at junction nodes, with
+    `BSplineSolver`'s rules (a junction index or an (index, voltage) pair, in
+    range, no repeats, no grounded junction) and its Y ordering. M5 built
+    #177's port basis here and REFUSED every solve on it; M5b formulation (b)
+    lifts that refusal by holding the node's lumped charge outside the
+    reaction integral (`_assemble_Z_ported`), which reproduces `BSplineSolver`
+    to 3.4e-5 / 3.9e-6 entrywise. `_assemble_Z` still returns M5's refuted
+    reaction-form matrix, and `tests/test_junction_ports.py` still measures
+    it. Junction ports over a ground, or with mixed per-wire radii, raise.
+
+    `n_qp_node`
+        Panels-per-end of the graded rule the node-charge correction is
+        integrated on (default 16, converged: 4e-9 from 12 to 16).
 
     Wire loading and the C++ accelerator are deliberately not wired yet and
     raise where reached.
@@ -347,6 +394,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         *,
         n_qp_test=8,
         n_qp_near=8,
+        n_qp_node=16,
         near_factor=0.5,
         near_correction=True,
         feed_readout="centre",
@@ -356,6 +404,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         super().__init__(**kwargs)
         self.n_qp_test = int(n_qp_test)
         self.n_qp_near = int(n_qp_near)
+        self.n_qp_node = int(n_qp_node)
         self.near_factor = float(near_factor)
         self.near_correction = bool(near_correction)
         if feed_readout not in ("centre", "variational"):
@@ -442,29 +491,41 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         measurement that actually kills it belongs."""
 
     def _refuse_junction_port_solve(self):
-        """Refuse any solve that would return a junction-port number.
+        """Refuse the junction-port solves M5b formulation (b) does NOT cover.
 
-        The construction is sound and the matrix is symmetric; what fails is
-        the physics, quantified in the module docstring and pinned by
-        `tests/test_junction_ports.py`: the port basis's node charge is
-        priced at the thin-wire radius (Z_pp ≈ 1/(jω·4πε·a)), the KCL-clean
-        span removes 2 % of that, and the paired-tip oracle lands ~2400×
-        from its bridged-gap reference at every mesh.
+        M5's blanket refusal is superseded — see `_assemble_Z_ported` — but
+        the node-charge correction that lifts it is a FREE-SPACE scalar
+        potential, and it is written for one wire radius:
+
+        * with a ground, the node's lumped charge also has an image (exact
+          and cheap under PEC, a Fresnel/Sommerfeld object under the finite
+          grounds), and none of those images are removed here. Leaving them
+          in would restore a fraction of the very term the correction exists
+          to take out, so the ground + junction-port combination raises
+          rather than returning a plausible wrong number;
+        * with mixed per-wire radii the kernel is not even symmetric (M2's
+          finding), and the correction's regularization radius is ambiguous
+          at a node whose members disagree about `a`.
         """
         if not self.junction_ports:
             return
-        raise NotImplementedError(
-            "junction_ports are built but not solvable on "
-            "SinusoidalGalerkinSolver: the port basis necessarily deposits a "
-            "point charge at the node, and this family's field kernel prices "
-            "that charge at the wire radius (Z_pp ~ 1/(jw*4*pi*eps*a)), which "
-            "no mesh refinement removes and the KCL-clean span cannot cancel "
-            "— the paired-tip oracle misses its bridged-gap reference by "
-            "~2400x (momwire#182 M5, extending #177). Use BSplineSolver; if "
-            "the port's two terminals meet at ONE node, use node_ports= "
-            "instead (momwire#182 M5b), or do what NEC requires: mesh a short "
-            "bridge wire across the gap and gap-feed it"
-        )
+        if self.ground_z is not None:
+            raise NotImplementedError(
+                "junction_ports over a ground are not implemented on "
+                "SinusoidalGalerkinSolver: M5b's node-charge correction "
+                "removes the node's own lumped charge but not its GROUND "
+                "IMAGE, so part of the M5 blocker (Z_pp ~ 1/(jw*4*pi*eps*a)) "
+                "would survive. Use BSplineSolver, or solve in free space"
+            )
+        if self._uniform_radius is None:
+            raise NotImplementedError(
+                "junction_ports with mixed per-wire radii are not implemented "
+                "on SinusoidalGalerkinSolver: the kernel is not reciprocal "
+                "under mixed radii at all (momwire#182 M2) and the node-charge "
+                "correction's regularization radius is ambiguous at a node "
+                "whose members disagree about `a`. Use one radius, or "
+                "BSplineSolver"
+            )
 
     def _node_cut_vectors(self, geom, seg_view, k):
         """(n_basis, P_node) — per node port, each basis's current THROUGH the
@@ -694,6 +755,144 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "C": all_C[order],
             "sigma": all_sigma[order],
         }
+
+    # ------------------------------------------------------------------
+    # Junction ports (M5b formulation (b)) — the node charge, held outside
+    # ------------------------------------------------------------------
+
+    def _junction_node_position(self, geom, j_idx):
+        """World coordinates of junction `j_idx`'s node."""
+        seg, sgn = self._junction_members(geom, j_idx)[0]
+        return (
+            geom["seg_centers"][seg]
+            + (sgn * 0.5 * float(geom["seg_h"][seg])) * geom["seg_tangents"][seg]
+        )
+
+    def _node_charge_columns(self, geom, seg_view, k):
+        """D[i, p] = ∫ f_i(s) ŝ·E_q(s) ds — every basis tested against the
+        field of the LUMPED charge port p deposits at its node, (n_basis, P).
+
+        `E_q` is the field of the point charge q = I/(jω) that a unit
+        terminating current leaves behind:
+
+            E_q(r) = -jη/(4πk)·(1+jkR)·e^{-jkR}·(r − r_node)/R³,
+            R = √(|r − r_node|² + a²)
+
+        Neither constant is asserted. The prefactor -jη/(4πk) is literally
+        `pref_rho_const` in `sinusoidal.py`: the Eqs 78-79 ENDPOINT terms are
+        the point-charge fields of the charges a constant current deposits at
+        a segment's two ends, which is why they are what M5 measured. The
+        regularization matches the kernel's own — the kernel's
+        r₀ = √(ρ² + a² + Δz²) IS √(|Δ|² + a²), since ρ² + Δz² = |Δ|². And the
+        expression is exactly −∇Φ of Φ = q·e^{-jkR}/(4πεR) with the same
+        regularized R, so integrating by parts against a basis is exact and
+        the boundary term it produces is the one `_node_charge_pair_block`
+        adds back.
+
+        Quadrature is graded toward both segment ends (`n_qp_node`), because
+        the integrand carries the same width-`a` spike M2's rule exists for —
+        now sourced by a genuine point charge instead of a basis endpoint.
+        Converged: the port impedance moves 2.8e-5 from 8 to 12 panels-per-end
+        and 4e-9 from 12 to 16, which is why the default is 16.
+        """
+        N = geom["n_segs"]
+        n_basis = N + len(self.junction_ports)
+        a = float(self._uniform_radius)
+        seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
+        hh = 0.5 * np.asarray(geom["seg_h"], dtype=float)
+        pref = -1j * self.eta / (4.0 * np.pi * k)
+        starts = seg_view["starts"]
+
+        nodes = [self._junction_node_position(geom, j) for j, _v in self.junction_ports]
+        D = np.zeros((n_basis, len(nodes)), dtype=np.complex128)
+        for m in range(N):
+            gx, gw = _graded_endpoint_rule(
+                a / hh[m], self.n_qp_node, self._leggauss_cached
+            )
+            xi = hh[m] * gx
+            w = hh[m] * gw
+            pts = seg_c[m][None, :] + xi[:, None] * seg_t[m][None, :]
+            lo, hi = starts[m], starts[m + 1]
+            sig = seg_view["sigma"][lo:hi]
+            fval = (
+                sig[:, None] * seg_view["A"][lo:hi][:, None]
+                + seg_view["B"][lo:hi][:, None] * np.sin(k * xi)[None, :]
+                + sig[:, None] * seg_view["C"][lo:hi][:, None] * np.cos(k * xi)[None, :]
+            )  # (nnz_m, nq)
+            for p, node in enumerate(nodes):
+                d = pts - node[None, :]
+                R = np.sqrt((d * d).sum(axis=1) + a * a)
+                Et = pref * (1.0 + 1j * k * R) * np.exp(-1j * k * R) * (d @ seg_t[m])
+                np.add.at(
+                    D[:, p],
+                    seg_view["jbasis"][lo:hi],
+                    (fval * (w * Et / R**3)[None, :]).sum(axis=1),
+                )
+        return D
+
+    def _node_charge_pair_block(self, geom, k):
+        """S[p, q] — the lumped-charge × lumped-charge term, (P, P).
+
+        Subtracting `_node_charge_columns` from both the row and the column
+        takes this term out TWICE (it is the boundary term the port basis's
+        own integration by parts contributes at its node), so it goes back in
+        once. Its value is the mixed-potential pairing of the two node
+        charges q = 1/(jω) at the same regularized separation the columns
+        use:
+
+            S[p, q] = -jω·q_p·Φ_q(node_p) = jη·e^{-jkR}/(4πkR),
+            R = √(|node_p − node_q|² + a²)
+
+        Getting that regularization right is not cosmetic. With the bare
+        separation instead of √(d² + a²) the residue against `BSplineSolver`
+        runs as a²/d³ — 0.25 % at the oracle's 0.04 gap, 2.1 % at 0.02, and a
+        clean a² law across a decade of radius. With it, the two formulations
+        agree to 2e-5.
+        """
+        a = float(self._uniform_radius)
+        nodes = np.array(
+            [self._junction_node_position(geom, j) for j, _v in self.junction_ports]
+        )
+        d = nodes[:, None, :] - nodes[None, :, :]
+        R = np.sqrt((d * d).sum(axis=-1) + a * a)
+        return 1j * self.eta * np.exp(-1j * k * R) / (4.0 * np.pi * k * R)
+
+    def _assemble_Z_ported(self, geom, k):
+        """`_assemble_Z` with M5b formulation (b) applied — the matrix every
+        SOLVE uses when junction ports are present.
+
+        `_assemble_Z` itself is left alone, so M5's refuted reaction-form
+        construction stays reachable and its measurements keep reproducing;
+        the tests that pin the blocker call it directly.
+
+        The correction is one statement: the port basis's charge is its LINE
+        charge only. The lumped charge it would otherwise leave at the node
+        is removed from the source, symmetrically —
+
+            G'[i, p] = G'[p, i] = G[i, p] − D[i, p]
+            G'[p, q] = G[p, q] − D[p, q] − D[q, p] + S[p, q]
+
+        — which is exactly what `BSplineSolver`'s Lagrange-multiplier port
+        does implicitly, and what makes it a MIXED-POTENTIAL construct: the
+        current that reaches the node leaves through an ideal unmodelled
+        lead, so nothing accumulates there. That reading is not an
+        interpretation — B-spline's own one-terminal port impedance is
+        −1.87 − 35.05j where the node self-capacitance would be 9.5e4,
+        i.e. it carries none of it.
+
+        `G − Gᵀ` is untouched by the correction (both halves get the same
+        scalars), so the fill's reciprocity is exactly as good as it was.
+        """
+        G, seg_view = self._assemble_Z(geom, k)
+        if not self.junction_ports:
+            return G, seg_view
+        N = geom["n_segs"]
+        D = self._node_charge_columns(geom, seg_view, k)
+        G = G.copy()
+        G[:, N:] -= D
+        G[N:, :] -= D.T
+        G[N:, N:] += self._node_charge_pair_block(geom, k)
+        return G, seg_view
 
     def _basis_coefs(self, geom, k):
         """The inherited CSR basis view, extended with the junction-port
@@ -1202,7 +1401,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         self._refuse_junction_port_solve()
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field fill
-        G, seg_view = self._assemble_Z(geom, self.k)
+        G, seg_view = self._assemble_Z_ported(geom, self.k)
         U = self._drive_columns(geom, seg_view, self.k)
         voltages = self._port_voltages()
         self._checkpoint()  # after assembly, before the dense solve
@@ -1227,7 +1426,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         self._refuse_junction_port_solve()
         geom = self._build_geometry()
-        G, seg_view = self._assemble_Z(geom, self.k)
+        G, seg_view = self._assemble_Z_ported(geom, self.k)
         U = self._drive_columns(geom, seg_view, self.k)
         alphas = scipy.linalg.solve(G, U)
         return np.stack(
@@ -1254,7 +1453,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             for ki, kk in enumerate(k_array):
                 self._checkpoint()
                 self._set_k(float(kk))
-                G, seg_view = self._assemble_Z(geom, self.k)
+                G, seg_view = self._assemble_Z_ported(geom, self.k)
                 U = self._drive_columns(geom, seg_view, self.k)
                 alphas = scipy.linalg.solve(G, U)
                 out[ki] = np.stack(
@@ -1286,7 +1485,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             for i, kk in enumerate(k_array):
                 self._checkpoint()
                 self._set_k(float(kk))
-                G, seg_view = self._assemble_Z(geom, self.k)
+                G, seg_view = self._assemble_Z_ported(geom, self.k)
                 U = self._drive_columns(geom, seg_view, self.k)
                 alpha = scipy.linalg.solve(G, U @ voltages)
                 z_per = voltages / self._port_currents(alpha, geom, seg_view, U)
