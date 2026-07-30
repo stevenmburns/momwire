@@ -1063,7 +1063,6 @@ class SinusoidalSolver(_Cancelable):
         seg_c = geom["seg_centers"] if obs_centers is None else obs_centers  # (M,3)
         seg_t = geom["seg_tangents"] if obs_tangents is None else obs_tangents  # (M,3)
         seg_h = geom["seg_h"]  # (N,) SOURCE full lengths
-        N = geom["n_segs"]
         h_n = 0.5 * seg_h  # (N,) source half-lengths
 
         # Sources default to the geometry's segments — NOT the observer set,
@@ -1071,13 +1070,40 @@ class SinusoidalSolver(_Cancelable):
         src_c = src_centers if src_centers is not None else geom["seg_centers"]
         src_t = src_tangents if src_tangents is not None else geom["seg_tangents"]
 
-        # Pairwise vectors c_m - c_n: shape (M=obs, N=src, 3).
-        # rvec_mn = seg_c[m] - src_c[n]
-        rvec = seg_c[:, None, :] - src_c[None, :, :]  # (M, N, 3)
-        t_src = src_t[None, :, :]  # (1, N, 3)
-        t_obs = seg_t[:, None, :]  # (M, 1, 3)
+        # Every-observer × every-source: insert the singleton axes that make
+        # the shared core broadcast to the (M, N) outer product.
+        return self._field_components_bcast(
+            k,
+            obs_c=seg_c[:, None, :],  # (M, 1, 3)
+            obs_t=seg_t[:, None, :],  # (M, 1, 3)
+            a=a,  # scalar or (M, 1)
+            src_c=src_c[None, :, :],  # (1, N, 3)
+            src_t=src_t[None, :, :],  # (1, N, 3)
+            src_hh=h_n[None, :],  # (1, N)
+        )
 
-        z_eval = np.einsum("mnd,nd->mn", rvec, src_t)  # (M, N)
+    def _field_components_bcast(self, k, obs_c, obs_t, a, src_c, src_t, src_hh):
+        """Shape-agnostic core of `_field_components` (Eqs 76-79).
+
+        Every argument is broadcast against the others, so the caller — not
+        this method — decides the pairing. `_field_components` passes
+        (M,1,·) observers against (1,N,·) sources for the full outer product;
+        `SinusoidalGalerkinSolver`'s near-singular correction passes (P,G,·)
+        quadrature points against (P,1,·) sources to get just the P near
+        pairs evaluated, without ever forming the N² table those pairs live
+        in. Returns the same dict of field tables, each of the common
+        broadcast shape S (`rho_vec` is S + (3,)).
+
+        `obs_c`/`obs_t`/`src_c`/`src_t` are position/tangent arrays whose last
+        axis is the 3 spatial components; `src_hh` is the source segment's
+        HALF length; `a` is the observer-side thin-wire radius.
+        """
+        # Pairwise separation obs - src; shape is whatever the two broadcast to.
+        rvec = obs_c - src_c
+        t_src = src_t
+        t_obs = obs_t
+
+        z_eval = np.einsum("...d,...d->...", rvec, t_src)
         # Perpendicular component:
         rho_vec = rvec - z_eval[..., None] * t_src  # (M, N, 3)
         rho_axis = np.linalg.norm(rho_vec, axis=-1)  # (M, N)
@@ -1092,11 +1118,12 @@ class SinusoidalSolver(_Cancelable):
         # NEC's prescription: tangential E_ρ component is (ρ·ŝ)/ρ' · E_ρ.
         rho_proj_factor = rho_dot_tobs / rho_eval  # (M, N)
 
-        # Half-length per source segment broadcast to (M, N). M is the
-        # observer count: N segment centres (collocation) or N·n_qp Gauss
-        # points (Galerkin test integration).
-        M = seg_c.shape[0]
-        H = np.broadcast_to(h_n[None, :], (M, N))
+        # Source half-length, materialized at the full broadcast shape so the
+        # `H[..., None]` source-quadrature axis below has somewhere to land.
+        # Under the outer product that shape is (M, N), M being the observer
+        # count: N segment centres (collocation) or N·n_qp Gauss points
+        # (Galerkin test integration).
+        H = np.broadcast_to(src_hh, z_eval.shape)
 
         # z values at source ends: z' = +H (z2) and z' = -H (z1).
         # Δz = z_eval - z' at the two endpoints.
@@ -1141,12 +1168,12 @@ class SinusoidalSolver(_Cancelable):
         u1 = (-H - z_eval) / rho_eval
         int_inv_r0 = np.arcsinh(u2) - np.arcsinh(u1)
         gx, gw = self._leggauss_cached(self.n_qp_const)
-        z_qp = H[..., None] * gx[None, None, :]  # (M, N, n_qp)
+        z_qp = H[..., None] * gx  # S + (n_qp,)
         dz_qp = z_eval[..., None] - z_qp
         r0_qp = np.sqrt(rho_eval[..., None] ** 2 + dz_qp**2)
         G0_qp = np.exp(-1j * k * r0_qp) / r0_qp
         reg_qp = G0_qp - 1.0 / r0_qp
-        int_reg = np.einsum("mnq,q->mn", reg_qp, gw) * H
+        int_reg = np.einsum("...q,q->...", reg_qp, gw) * H
         int_G0 = int_inv_r0 + int_reg  # (M, N)
         Ez_const_boundary = (1.0 + 1j * k * r0_2) * dz2 * G0_2 / (r0_2 * r0_2) - (
             1.0 + 1j * k * r0_1
