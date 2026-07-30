@@ -610,3 +610,460 @@ def test_sg_grounded_junction_port_rejected():
     )
     with pytest.raises(ValueError, match="grounded"):
         s._assemble_Z(s._build_geometry(), s.k)
+
+
+# ===========================================================================
+# momwire#182 M5b — node ports: the SAME oracle, formulation (a)
+# ===========================================================================
+#
+# M5's refutation is constructive: it forbids exactly ONE thing, a port basis
+# that TERMINATES current at a node (depositing q = I/jω that the field kernel
+# prices at the wire radius). Formulation (a) avoids it by never terminating
+# anything — the port's two terminals are JOINED into one junction, so current
+# flows THROUGH the node under the ordinary KCL-identical span, and the drive
+# is a zero-width delta-gap EMF sitting exactly at the node:
+#
+#     b_i = -V·f_i(node),      I_port = -b·α / V
+#
+# The point-matched solver cannot do this and the reason is #177's own: a node
+# source samples to an identically zero RHS at segment centres. Galerkin test
+# functions have nonzero node values, so the same source has a well-defined
+# excitation here. That makes the node port a capability of the TESTING, which
+# is what the fourth basis × testing cell exists to expose.
+#
+# What it is NOT: a one-terminal net-inflow port. `PortAtEnd` in antennaknobs
+# resolves every one of `wire.sterba_bl`'s 16 ports to a ONE-member junction
+# at a dangling conductor end, with the return path at a different node
+# (0.04 m away differentially, λ/2 away in common mode) — there is nothing to
+# bipartition and the node genuinely must accept net current. Formulation (a)
+# rejects that topology at construction rather than answering it wrongly. See
+# the M5b PR body for the scoping and `test_sg_node_port_rejects_the_one_
+# terminal_topology` below for the guard.
+
+M5B_WHISKER = 0.01
+
+
+def _m5b_bridged_z(delta, whisker, n_half, cls=SinusoidalGalerkinSolver, **kw):
+    """Reference: a dipole split at its centre and RE-JOINED by a physical
+    1-segment bridge wire of length `delta` carrying a classic delta-gap feed
+    — the workaround NEC-2 itself requires, and the delta → 0 limit of the
+    node port below.
+
+    Optional cross whiskers hold two extra wire-ends at each tip so the node
+    port's junction is K=4 rather than K=2. They point in OPPOSITE directions
+    (∓x) because the delta → 0 limit has to stay a legal geometry: the
+    original `_split_wires` whiskers both point +x, so joining the tips would
+    place two identical overlapping wires on top of each other.
+    """
+    wires = [
+        np.array([(0.0, -L_DIP / 2, 0.0), (0.0, -delta / 2, 0.0)]),
+        np.array([(0.0, -delta / 2, 0.0), (0.0, delta / 2, 0.0)]),
+        np.array([(0.0, delta / 2, 0.0), (0.0, L_DIP / 2, 0.0)]),
+    ]
+    npe = [[n_half], [1], [n_half]]
+    junctions = [[(0, "end"), (1, "start")], [(1, "end"), (2, "start")]]
+    if whisker:
+        wires += [
+            np.array([(0.0, -delta / 2, 0.0), (-whisker, -delta / 2, 0.0)]),
+            np.array([(0.0, delta / 2, 0.0), (whisker, delta / 2, 0.0)]),
+        ]
+        npe += [[1], [1]]
+        junctions[0].append((3, "start"))
+        junctions[1].append((4, "start"))
+    s = cls(
+        wires=wires, n_per_edge_per_wire=npe,
+        feeds=[(1, delta / 2, 1.0 + 0j)], junctions=junctions,
+        wavelength=WAVELENGTH, **kw,
+    )  # fmt: skip
+    return complex(np.atleast_1d(s.compute_impedance()[0])[0])
+
+
+def _m5b_node_port_solver(whisker, n_half, volts=1.0 + 0j, feed_v=0.0 + 0j, **kw):
+    """The SAME structure at delta = 0: the two dipole halves meet at one
+    junction and the port is an EMF across it.
+
+    Carries a dummy gap feed because `SinusoidalSolver` requires at least one
+    (`feeds=[]` is B-spline-only). At 0 V a delta gap is a plain wire — it
+    touches the RHS and nothing else — which
+    `test_sg_node_port_zero_volts_reproduces_the_plain_solve` pins.
+    """
+    wires = [
+        np.array([(0.0, -L_DIP / 2, 0.0), (0.0, 0.0, 0.0)]),
+        np.array([(0.0, 0.0, 0.0), (0.0, L_DIP / 2, 0.0)]),
+    ]
+    npe = [[n_half], [n_half]]
+    junctions = [[(0, "end"), (1, "start")]]
+    side_a = (0,)
+    if whisker:
+        wires += [
+            np.array([(0.0, 0.0, 0.0), (-whisker, 0.0, 0.0)]),
+            np.array([(0.0, 0.0, 0.0), (whisker, 0.0, 0.0)]),
+        ]
+        npe += [[1], [1]]
+        junctions[0] += [(2, "start"), (3, "start")]
+        side_a = (0, 2)
+    return SinusoidalGalerkinSolver(
+        wires=wires, n_per_edge_per_wire=npe,
+        feeds=[(0, L_DIP / 4, feed_v)], junctions=junctions,
+        node_ports=[(0, side_a, volts)], wavelength=WAVELENGTH, **kw,
+    )  # fmt: skip
+
+
+def _m5b_node_port_z(whisker, n_half, **kw):
+    z, _a = _m5b_node_port_solver(whisker, n_half, **kw).compute_impedance()
+    return complex(np.atleast_1d(z)[1])  # [dummy gap feed, node port]
+
+
+def _m5b_reference_family(whisker, n_half, deltas=(0.08, 0.04, 0.02)):
+    """The bridged reference extrapolated to delta → 0, as a FAMILY.
+
+    M3's constraint applies: there is no single "converged reference" here
+    either, so the verdict is the one that survives every defensible choice —
+    linear-in-delta Richardson from each consecutive pair of a 4×-spanning
+    delta ladder.
+    """
+    vals = [_m5b_bridged_z(d, whisker, n_half) for d in deltas]
+    return [2 * vals[i + 1] - vals[i] for i in range(len(deltas) - 1)]
+
+
+# --- G5b clause 1: the `_bridged_z` oracle -------------------------------
+
+# Worst-case |Z_node − Z_ref| / |Z_ref| over the reference family, measured
+# 2026-07-30. Pinned slightly ABOVE each measurement (these are error bounds,
+# so the floor goes on the other side from a payoff ratio).
+M5B_ORACLE_MEASURED = {
+    (0.0, 10): 0.005572, (0.0, 20): 0.003179, (0.0, 40): 0.001807,
+    (0.01, 10): 0.005217, (0.01, 20): 0.002766, (0.01, 40): 0.001341,
+}  # fmt: skip
+M5B_ORACLE_PINNED = {key: 1.15 * v for key, v in M5B_ORACLE_MEASURED.items()}
+
+
+@pytest.mark.parametrize("whisker", [0.0, M5B_WHISKER])
+@pytest.mark.parametrize("n_half", [10, 20, 40])
+def test_sg_node_port_matches_the_bridged_reference(whisker, n_half):
+    """G5b clause 1 — GREEN, at 3.6× to 11× inside the gate.
+
+    The port drive is a zero-width gap at the joined node; the reference is
+    the same structure with a real bridge wire of length delta carrying a
+    real delta-gap feed, extrapolated to delta → 0. Worst case over the
+    reference family:
+
+        K=2 (no whiskers): 0.557 % / 0.318 % / 0.181 % at n_half 10/20/40
+        K=4 (whiskers):    0.522 % / 0.277 % / 0.134 %
+
+    against the 1.5 % the B-spline junction ports passed at. Both sides are
+    built by the SAME solver, so this is not a basis comparison; and the
+    difference DECAYS with mesh, which is what says the residue is
+    discretization rather than a modelling gap.
+    """
+    z = _m5b_node_port_z(whisker, n_half)
+    refs = _m5b_reference_family(whisker, n_half)
+    worst = max(abs(z - r) / abs(r) for r in refs)
+    assert worst < 0.015, f"G5b clause 1 RED: {worst:.4%} from the reference"
+    assert worst < M5B_ORACLE_PINNED[(whisker, n_half)], (
+        f"node-port oracle drifted: {worst:.4%} vs "
+        f"{M5B_ORACLE_MEASURED[(whisker, n_half)]:.4%} measured at M5b"
+    )
+
+
+@pytest.mark.parametrize("whisker", [0.0, M5B_WHISKER])
+def test_sg_node_port_oracle_improves_with_mesh(whisker):
+    """The residue in the clause above is discretization, not a modelling
+    gap: it falls monotonically (~0.57× per mesh doubling, i.e. a little
+    slower than O(h)) rather than settling on a floor. A modelling gap — the
+    shape M5's node charge had — would be mesh-independent."""
+    errs = []
+    for n_half in (10, 20, 40):
+        z = _m5b_node_port_z(whisker, n_half)
+        refs = _m5b_reference_family(whisker, n_half)
+        errs.append(max(abs(z - r) / abs(r) for r in refs))
+    assert errs[1] < errs[0] and errs[2] < errs[1], errs
+    assert errs[2] / errs[0] < 0.45, errs
+
+
+@pytest.mark.parametrize("whisker", [0.0, M5B_WHISKER])
+def test_sg_node_port_reference_family_is_well_posed(whisker):
+    """The verdict must not depend on which extrapolation you pick.
+
+    Richardson from (0.08, 0.04) and from (0.04, 0.02) agree to 0.013–0.016 %
+    (K=2) / 0.039–0.041 % (K=4) — 10× to 100× below the measured difference
+    they are the reference for, and ~40× to 100× below the 1.5 % gate. So the
+    delta → 0 idealization the node port makes is absorbed by the
+    extrapolation, exactly as M3's constraint requires it to be checked
+    rather than assumed.
+    """
+    for n_half in (10, 20, 40):
+        refs = _m5b_reference_family(whisker, n_half)
+        spread = abs(refs[1] - refs[0]) / abs(refs[1])
+        assert spread < 0.001, f"n_half={n_half}: reference spread {spread:.4%}"
+
+
+# --- the structural claims formulation (a) rests on ----------------------
+
+
+def test_sg_node_port_cuts_a_kcl_identical_span_and_deposits_no_charge():
+    """The mechanism, as two numbers.
+
+    M5 forbids a basis that terminates current at a node. A node port
+    terminates nothing: the drive vector is a CUT of the ordinary span, whose
+    net inflow summed over ALL the junction's members is the identically-zero
+    KCL residual (#177's identity, 4.0e-13 relative here) — while the cut
+    itself over half the members is O(1). So there is no node charge to price
+    at the wire radius, and M5's Z_pp ≈ 1/(jω·4πε·a) has nothing to attach to.
+
+    Also asserted: no basis column is added at all (α stays length N), which
+    is the concrete difference from the M5 construction.
+    """
+    s = _m5b_node_port_solver(M5B_WHISKER, 20)
+    geom = s._build_geometry()
+    seg_view = s._basis_coefs(geom, s.k)
+    cut = s._node_cut_vectors(geom, seg_view, s.k)[:, 0]
+    s_all = _m5b_node_port_solver(M5B_WHISKER, 20)
+    s_all.node_ports = [(0, (0, 1, 2), 1.0 + 0j)]  # 3 of 4 members
+    partial = s_all._node_cut_vectors(geom, seg_view, s.k)[:, 0]
+    # cut(all four members) = cut(0,2) + cut(1,3); build it as cut + complement
+    s_c = _m5b_node_port_solver(M5B_WHISKER, 20)
+    s_c.node_ports = [(0, (1, 3), 1.0 + 0j)]
+    kcl = cut + s_c._node_cut_vectors(geom, seg_view, s.k)[:, 0]
+    scale = np.abs(cut).max()
+    assert scale > 1e-3, scale
+    assert np.abs(kcl).max() / scale < 1e-10, (
+        f"KCL residual {np.abs(kcl).max() / scale:.2e} — the node port would "
+        "be depositing charge, which is exactly what M5 refuted"
+    )
+    # An UNEVEN split is a port too, and its cut is the exact negative of the
+    # complement's — the KCL identity again, now without the 2-2 symmetry that
+    # could hide a sign bug. (Its magnitude is 1.1e-4, three decades below the
+    # 2-2 cut, because the complement here is a lone 0.01-long free-ended
+    # whisker: a nearly-open port, which is the right answer for one.)
+    s_w = _m5b_node_port_solver(M5B_WHISKER, 20)
+    s_w.node_ports = [(0, (3,), 1.0 + 0j)]
+    lone = s_w._node_cut_vectors(geom, seg_view, s.k)[:, 0]
+    assert np.abs(lone).max() > 1e-6
+    assert np.abs(partial + lone).max() / np.abs(lone).max() < 1e-10
+    _z, alpha = s.compute_impedance()
+    assert alpha.shape == (geom["n_segs"],)
+
+
+@pytest.mark.parametrize("whisker", [0.0, M5B_WHISKER])
+def test_sg_node_port_is_invariant_under_swapping_the_gap_sides(whisker):
+    """Which side of the gap is called "+" is a convention, and the port
+    impedance may not know about it: swapping `side_a` for its complement
+    negates the cut vector, and Z is quadratic in it. Agreement to 2.5e-16 —
+    a structural check that the drive and readout use the SAME vector."""
+    s = _m5b_node_port_solver(whisker, 20)
+    j_idx, side_a, volts = s.node_ports[0]
+    rest = tuple(m for m in range(len(s.junctions[j_idx])) if m not in side_a)
+    z_a = complex(np.atleast_1d(s.compute_impedance()[0])[1])
+    s2 = _m5b_node_port_solver(whisker, 20)
+    s2.node_ports = [(j_idx, rest, volts)]
+    z_b = complex(np.atleast_1d(s2.compute_impedance()[0])[1])
+    assert abs(z_a - z_b) / abs(z_a) < 1e-13
+
+
+# --- G5b clause 2: mixed gap + port Y symmetry ---------------------------
+
+
+def _m5b_mixed_y_solver(feed_readout):
+    """A dipole cut into three, gap-fed on the first third and node-ported at
+    BOTH interior nodes — a genuine 3-port with a gap feed in it."""
+    ys = [-L_DIP / 2, -L_DIP / 6, L_DIP / 6, L_DIP / 2]
+    wires = [np.array([(0.0, ys[i], 0.0), (0.0, ys[i + 1], 0.0)]) for i in range(3)]
+    return SinusoidalGalerkinSolver(
+        wires=wires, n_per_edge_per_wire=[[15], [15], [15]],
+        feeds=[(0, L_DIP / 8, 1.0 + 0j)],
+        junctions=[[(0, "end"), (1, "start")], [(1, "end"), (2, "start")]],
+        node_ports=[(0, (0,), 0.5 + 0j), (1, (0,), -0.5 + 0j)],
+        wavelength=WAVELENGTH, feed_readout=feed_readout,
+    )  # fmt: skip
+
+
+@pytest.mark.parametrize("feed_readout", ["centre", "variational"])
+def test_sg_node_port_y_block_is_symmetric_in_both_readouts(feed_readout):
+    """G5b clause 2, the half that is unconditionally green.
+
+    A node port's readout is its drive vector, always — the through-current
+    functional has no centre-vs-average ambiguity for the delta-gap feed to
+    contaminate, so it costs none of the M3 payoff. The node-port block of Y
+    is symmetric to 1.3e-13 under BOTH `feed_readout` settings.
+    """
+    Y = _m5b_mixed_y_solver(feed_readout).compute_y_matrix()
+    assert Y.shape == (3, 3)
+    block = Y[1:, 1:]
+    asym = np.linalg.norm(block - block.T) / np.linalg.norm(block)
+    assert asym < 1e-11, f"node-port Y block asymmetry {asym:.3e}"
+
+
+def test_sg_node_port_full_mixed_y_symmetry_inherits_the_m5_amendment():
+    """G5b clause 2, the half that carries M5's amendment unchanged.
+
+    The FULL Y also has the gap feed's rows in it, and the default
+    `feed_readout="centre"` is not the Galerkin drive's dual — so the mixed Y
+    is symmetric only to the O(h) gap between the two feed functionals
+    (1.06e-4 here), exactly as M5 recorded for the delta-gap-only Y.
+    `feed_readout="variational"` restores it to 7.3e-13, i.e. inside the 1e-10
+    clause, at the M5-measured cost to the M3 payoff.
+
+    The amendment is the feed's, not the node port's: the block above is
+    machine-symmetric either way.
+    """
+    asym = {}
+    for ro in ("centre", "variational"):
+        Y = _m5b_mixed_y_solver(ro).compute_y_matrix()
+        asym[ro] = np.linalg.norm(Y - Y.T) / np.linalg.norm(Y)
+    assert asym["variational"] < 1e-10, asym
+    assert 1e-5 < asym["centre"] < 1e-3, asym
+    assert asym["variational"] < 1e-6 * asym["centre"], asym
+
+
+# --- G5b clause 3: the degenerate case reproduces the plain solve --------
+
+
+def test_sg_node_port_zero_volts_reproduces_the_plain_solve():
+    """G5b clause 3 for the new construction — BIT-exact, not merely close.
+
+    A node port at 0 V is a short across the node, i.e. an ordinary junction.
+    It adds no basis column and its drive column is scaled by V, so the whole
+    system is untouched: a gap-fed solve with a 0 V node port declared must
+    return the identical float to one without it. That is also what makes the
+    dummy 0 V gap feed in `_m5b_node_port_solver` free.
+    """
+    s = _m5b_node_port_solver(0.0, 20, volts=0j, feed_v=1.0 + 0j)
+    z_with = complex(np.atleast_1d(s.compute_impedance()[0])[0])
+    plain = SinusoidalGalerkinSolver(
+        wires=[
+            np.array([(0.0, -L_DIP / 2, 0.0), (0.0, 0.0, 0.0)]),
+            np.array([(0.0, 0.0, 0.0), (0.0, L_DIP / 2, 0.0)]),
+        ],
+        n_per_edge_per_wire=[[20], [20]],
+        feeds=[(0, L_DIP / 4, 1.0 + 0j)],
+        junctions=[[(0, "end"), (1, "start")]],
+        wavelength=WAVELENGTH,
+    )
+    z_plain = complex(np.atleast_1d(plain.compute_impedance()[0])[0])
+    assert z_with == z_plain
+
+
+# --- the rest of #172's contract, on node ports --------------------------
+
+
+def test_sg_node_port_readout_consistent_with_y_and_swept():
+    """`compute_impedance`, `compute_y_matrix` and both swept paths share one
+    drive/readout pair (M5's prerequisite fix), so I = Y·V must reproduce the
+    impedance readout and the batched sweep must reproduce the per-k solves.
+    The node port's drive column is k-DEPENDENT (the cut vector evaluates the
+    basis shapes, which move with k), so the sweeps rebuild it per step."""
+    s = _m5b_mixed_y_solver("centre")
+    V = s._port_voltages()
+    z_per = np.atleast_1d(s.compute_impedance()[0])
+    Y = _m5b_mixed_y_solver("centre").compute_y_matrix()
+    np.testing.assert_allclose((V / z_per)[1:], (Y @ V)[1:], rtol=1e-9)
+
+    ks = np.array([0.9 * s.k, s.k, 1.1 * s.k])
+    Y_swept = _m5b_mixed_y_solver("centre").compute_y_matrix_swept(ks)
+    z_swept = _m5b_mixed_y_solver("centre").compute_impedance_swept(ks)
+    for i, kk in enumerate(ks):
+        s2 = _m5b_mixed_y_solver("centre")
+        s2._set_k(float(kk))
+        np.testing.assert_allclose(Y_swept[i], s2.compute_y_matrix(), rtol=1e-8)
+        s3 = _m5b_mixed_y_solver("centre")
+        s3._set_k(float(kk))
+        np.testing.assert_allclose(
+            z_swept[i], np.atleast_1d(s3.compute_impedance()[0]), rtol=1e-8
+        )
+
+
+def test_sg_node_port_rejects_the_one_terminal_topology():
+    """The scoping result, as a guard.
+
+    antennaknobs' `PortAtEnd` resolves to a ONE-member junction at a lone
+    conductor end and needs genuine net inflow there — the current leaves via
+    an unmodelled lead whose return is at a different node. A node port is an
+    EMF ACROSS a node and has nothing to bipartition with one member, so it
+    must refuse rather than silently model an open circuit (which is exactly
+    the measured failure mode of every gap-family substitute in
+    antennaknobs#608). That topology is still `junction_ports`' job, and
+    `junction_ports` is still refused here.
+    """
+    wires = [np.array([(0.0, -L_DIP / 2, 0.0), (0.0, 0.0, 0.0)])]
+    with pytest.raises(ValueError, match="at least two wire-ends"):
+        SinusoidalGalerkinSolver(
+            wires=wires, n_per_edge_per_wire=[[8]],
+            feeds=[(0, L_DIP / 4, 1.0 + 0j)], junctions=[[(0, "end")]],
+            node_ports=[(0, (0,), 1.0 + 0j)], wavelength=WAVELENGTH,
+        )  # fmt: skip
+
+
+def test_sg_node_port_needs_galerkin_testing():
+    """#177's observation, read forwards: a source at a NODE point-samples to
+    an identically zero RHS, because a node is never a segment centre. So the
+    point-matched solver has no node ports and does not accept the keyword —
+    while the Galerkin drive column for the same source is O(1) (asserted in
+    `test_sg_node_port_cuts_a_kcl_identical_span_and_deposits_no_charge`).
+    This is the one capability difference between the two sinusoidal cells
+    that is a TESTING property rather than a basis property."""
+    wires = [
+        np.array([(0.0, -L_DIP / 2, 0.0), (0.0, 0.0, 0.0)]),
+        np.array([(0.0, 0.0, 0.0), (0.0, L_DIP / 2, 0.0)]),
+    ]
+    with pytest.raises(TypeError):
+        SinusoidalSolver(
+            wires=wires, n_per_edge_per_wire=[[8], [8]],
+            feeds=[(0, L_DIP / 4, 1.0 + 0j)],
+            junctions=[[(0, "end"), (1, "start")]],
+            node_ports=[(0, (0,), 1.0 + 0j)], wavelength=WAVELENGTH,
+        )  # fmt: skip
+
+
+def test_sg_node_port_validation_rules():
+    """Malformed node ports are refused at construction, before any solve."""
+    wires = [
+        np.array([(0.0, -L_DIP / 2, 0.0), (0.0, 0.0, 0.0)]),
+        np.array([(0.0, 0.0, 0.0), (0.0, L_DIP / 2, 0.0)]),
+    ]
+    common = dict(
+        wires=wires, n_per_edge_per_wire=[[8], [8]],
+        feeds=[(0, L_DIP / 4, 1.0 + 0j)],
+        junctions=[[(0, "end"), (1, "start")]], wavelength=WAVELENGTH,
+    )  # fmt: skip
+    for ports, msg in (
+        ([(3, (0,))], "out of range"),
+        ([(0, (0,)), (0, (1,))], "listed twice"),
+        ([(0, ())], "PROPER subset"),
+        ([(0, (0, 1))], "PROPER subset"),
+        ([(0, (0, 0))], "repeated member"),
+        ([(0, (5,))], "member index out of range"),
+        ([0], "must be"),
+    ):
+        with pytest.raises(ValueError, match=msg):
+            SinusoidalGalerkinSolver(**common, node_ports=ports)
+    with pytest.raises(ValueError, match="both a junction_port and a node_port"):
+        SinusoidalGalerkinSolver(
+            **common, junction_ports=[0], node_ports=[(0, (0,))]
+        )  # fmt: skip
+    # the 2-tuple form means voltage 0
+    s = SinusoidalGalerkinSolver(**common, node_ports=[(0, (0,))])
+    assert s.node_ports == [(0, (0,), 0j)]
+    assert s.n_ports == 2
+
+
+def test_sg_grounded_node_port_rejected():
+    """A junction node lying in the ground plane carries current into its own
+    image (#151) rather than closing on its partners, so there is no
+    through-current for an EMF to drive — refused from the assembly, for the
+    same reason a grounded junction port is."""
+    h = 0.24 * WAVELENGTH
+    s = SinusoidalGalerkinSolver(
+        wires=[
+            np.array([(0.0, 0.0, 0.0), (0.0, 0.0, h)]),
+            np.array([(0.0, 0.0, 0.0), (0.01, 0.0, 0.01)]),
+        ],
+        n_per_edge_per_wire=[[21], [1]],
+        feeds=[(0, h / 2, 1.0 + 0j)],
+        junctions=[[(0, "start"), (1, "start")]],
+        node_ports=[(0, (0,), 1.0 + 0j)],
+        wavelength=WAVELENGTH,
+        ground_z=0.0,
+    )
+    with pytest.raises(ValueError, match="grounded and a node port"):
+        s.compute_impedance()
