@@ -465,6 +465,15 @@ Full sweep, 11 designs, 4 columns per rung: **16m54s** wall clock (measured
 2026-07-30 on a 32 GiB / 8-core box; every table above is that run's
 verbatim output).
 
+> **Postscript (2026-07-31, #194):** this section describes the run as made.
+> Both halves of the "blocked or accelerated" sentence have since landed —
+> the numpy fill is blocked over test segments (the O(N²·n_qp) workspace and
+> its 2000-segment ceiling are gone; `wire.lazy_h` at N=321 / 2570 segments
+> runs in 3.9 GiB) and a fused C++ far fill serves the plain-projected
+> blocks (`gal` on that rung: ~70 s numpy → ~7.5 s). The skipped finest
+> rungs above are re-runnable; the numbers in this report remain the
+> 2026-07-30 run's verbatim output.
+
 ---
 
 ## 12. Follow-ups this report generates
