@@ -9,6 +9,7 @@
 #include <pybind11/stl.h>
 #include <complex>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdint>
@@ -2620,6 +2621,361 @@ sinusoidal_field_tensor_refl(
 }
 
 
+// Fused far fill for the sinusoidal GALERKIN solver (momwire#194).
+//
+// The Galerkin row for test segment m is a quadrature over m, so its field
+// evaluation is the tensor above with the observers at m's nq Gauss points
+// instead of its centre — and then reduced against the test weights:
+//
+//   contrib[e, n] = Σ_q w_entry[e, q] · Phi[m(e), q, n]
+//
+// where `e` runs over the support entries (segment, basis) of the CSR basis
+// view and Phi is the plainly-projected tensor of the three source shapes.
+// Evaluating Phi and reducing it in ONE kernel is the whole point: the numpy
+// path has to materialize the (rows·nq, N) tables (and the (rows·nq, N,
+// n_qp_const) source-quadrature scratch under them) before it can contract
+// the q axis away, which is what forces the Python fill to block over test
+// segments at all. Here nothing but the (nnz, N) result is ever stored.
+//
+// Serves the PLAIN projection only — the free-space block and the PEC-image
+// block (`src_*` mirrored), which is where the fill time is. The
+// reflection-coefficient projector's per-pair Fresnel tables and the
+// Sommerfeld remainder stay on the numpy path.
+//
+// Parallelism: over test segments m. Each m owns rows starts[m]:starts[m+1]
+// of the output exclusively, so the accumulation needs no reduction and no
+// atomics; the rows are contiguous, so they stay cache-resident across the
+// nq observers that write them. Per observer the kernel repeats
+// `sinusoidal_field_tensor_impl`'s three stages (geometry+phases, one
+// omp-simd sincos sweep, assembly), so the arithmetic per matrix entry is
+// the point-matched kernel's verbatim.
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+sinusoidal_galerkin_far_fill(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_hh,
+    double k, double eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<std::complex<double>,
+                py::array::c_style | py::array::forcecast> w_entry,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
+    uintptr_t cancel_flag = 0
+) {
+    auto oc = obs_centers.unchecked<2>();
+    auto ot = obs_tangents.unchecked<2>();
+    auto ar = obs_radius.unchecked<1>();
+    auto sc = src_centers.unchecked<2>();
+    auto st = src_tangents.unchecked<2>();
+    auto sh = src_hh.unchecked<1>();
+    auto glt = gl_t.unchecked<1>();
+    auto glw = gl_w.unchecked<1>();
+    auto we = w_entry.unchecked<2>();
+    auto st_ = starts.unchecked<1>();
+
+    if (oc.shape(1) != 3 || ot.shape(1) != 3 ||
+        sc.shape(1) != 3 || st.shape(1) != 3) {
+        throw std::runtime_error("center/tangent arrays must have shape (N, 3)");
+    }
+    if (sc.shape(0) != st.shape(0) || sc.shape(0) != sh.shape(0)) {
+        throw std::runtime_error("src arrays must all have matching N");
+    }
+    if (glt.shape(0) != glw.shape(0)) {
+        throw std::runtime_error("gl_t and gl_w must have matching length");
+    }
+    if (st_.shape(0) < 1) {
+        throw std::runtime_error("starts must have length n_test_segments + 1");
+    }
+
+    size_t M = (size_t)st_.shape(0) - 1;          // test segments
+    size_t nq = (size_t)we.shape(1);              // test quadrature nodes
+    size_t nnz = (size_t)we.shape(0);             // CSR support entries
+    size_t N = (size_t)sc.shape(0);               // source segments
+    size_t n_qp = (size_t)glt.shape(0);           // source quadrature nodes
+
+    if ((size_t)oc.shape(0) != M * nq || (size_t)ot.shape(0) != M * nq ||
+        (size_t)ar.shape(0) != M * nq) {
+        throw std::runtime_error(
+            "obs_centers/obs_tangents/obs_radius must have M*nq rows");
+    }
+    if ((size_t)st_(st_.shape(0) - 1) != nnz) {
+        throw std::runtime_error("starts[-1] must equal w_entry's row count");
+    }
+
+    py::array_t<std::complex<double>> out_const({nnz, N});
+    py::array_t<std::complex<double>> out_sin({nnz, N});
+    py::array_t<std::complex<double>> out_cos({nnz, N});
+    std::complex<double> *oc_p = out_const.mutable_data();
+    std::complex<double> *os_p = out_sin.mutable_data();
+    std::complex<double> *oco_p = out_cos.mutable_data();
+    const std::complex<double> *w_p = w_entry.data();
+
+    py::gil_scoped_release release;
+
+    std::vector<double> H_n(N), sin_kH(N), cos_kH(N);
+    for (size_t n = 0; n < N; n++) {
+        H_n[n] = sh(n);
+        sin_kH[n] = std::sin(k * H_n[n]);
+        cos_kH[n] = std::cos(k * H_n[n]);
+    }
+    std::vector<double> glt_v(n_qp), glw_v(n_qp);
+    for (size_t q = 0; q < n_qp; q++) {
+        glt_v[q] = glt(q);
+        glw_v[q] = glw(q);
+    }
+
+    const double four_pi_k = 4.0 * M_PI * k;
+    const double pref_z_im = eta / four_pi_k;
+    const double pref_rho_const_im = -eta / four_pi_k;
+
+    const size_t S = n_qp + 2;   // 2 boundary phases + the quadrature nodes
+    const size_t P = N * S;
+
+    PYSIM_CANCEL_SETUP(cancel_flag);
+    #pragma omp parallel for schedule(static)
+    for (size_t m = 0; m < M; m++) {
+        PYSIM_CANCEL_POLL();
+        size_t e0 = (size_t)st_(m), e1 = (size_t)st_(m + 1);
+        if (e1 == e0) continue;  // segment carries no basis support
+
+        // Rows e0:e1 belong to this test segment alone; zero them here rather
+        // than allocating a zeroed output, so the accumulation below can add
+        // straight into the result.
+        std::fill(oc_p + e0 * N, oc_p + e1 * N, std::complex<double>(0.0, 0.0));
+        std::fill(os_p + e0 * N, os_p + e1 * N, std::complex<double>(0.0, 0.0));
+        std::fill(oco_p + e0 * N, oco_p + e1 * N, std::complex<double>(0.0, 0.0));
+
+        std::vector<double> ph(P), cphb(P), sphb(P);
+        std::vector<double> rho_eval_a(N), dz1_a(N), dz2_a(N),
+                            r0_1_a(N), r0_2_a(N), td_a(N), rpf_a(N);
+        std::vector<double> r0q_inv_a(N * n_qp);
+        // Projected field of the three source shapes at ONE observer, split
+        // re/im so the reduction below stays vectorizable.
+        std::vector<double> phi_c_re(N), phi_c_im(N), phi_s_re(N), phi_s_im(N),
+                            phi_co_re(N), phi_co_im(N);
+
+        for (size_t qt = 0; qt < nq; qt++) {
+            size_t o = m * nq + qt;
+            double cmx = oc(o, 0), cmy = oc(o, 1), cmz = oc(o, 2);
+            double tmx = ot(o, 0), tmy = ot(o, 1), tmz = ot(o, 2);
+            double a_sq = ar(o) * ar(o);
+
+            // ---- Stage A: geometry + phase generation ---------------------
+            for (size_t n = 0; n < N; n++) {
+                double cnx = sc(n, 0), cny = sc(n, 1), cnz = sc(n, 2);
+                double tnx = st(n, 0), tny = st(n, 1), tnz = st(n, 2);
+                double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
+                double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
+                double rho_vx = rvx - z_eval * tnx;
+                double rho_vy = rvy - z_eval * tny;
+                double rho_vz = rvz - z_eval * tnz;
+                double rho_axis =
+                    std::sqrt(rho_vx*rho_vx + rho_vy*rho_vy + rho_vz*rho_vz);
+                double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
+                double td = tmx*tnx + tmy*tny + tmz*tnz;
+                double rho_dot_tobs = rho_vx*tmx + rho_vy*tmy + rho_vz*tmz;
+
+                double H = H_n[n];
+                double dz2 = z_eval - H;
+                double dz1 = z_eval + H;
+                double r0_2 = std::sqrt(rho_eval*rho_eval + dz2*dz2);
+                double r0_1 = std::sqrt(rho_eval*rho_eval + dz1*dz1);
+
+                rho_eval_a[n] = rho_eval;
+                dz1_a[n] = dz1; dz2_a[n] = dz2;
+                r0_1_a[n] = r0_1; r0_2_a[n] = r0_2;
+                td_a[n] = td; rpf_a[n] = rho_dot_tobs / rho_eval;
+
+                size_t base = n * S;
+                ph[base + 0] = -k * r0_2;
+                ph[base + 1] = -k * r0_1;
+                for (size_t q = 0; q < n_qp; q++) {
+                    double z_q = H * glt_v[q];
+                    double dz_q = z_eval - z_q;
+                    double r0_q = std::sqrt(rho_eval*rho_eval + dz_q*dz_q);
+                    ph[base + 2 + q] = -k * r0_q;
+                    r0q_inv_a[n * n_qp + q] = 1.0 / r0_q;
+                }
+            }
+
+            // ---- Stage B: vectorized sincos over every phase --------------
+            PYSIM_OMP_SIMD()
+            for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
+            PYSIM_OMP_SIMD()
+            for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
+
+            // ---- Stage C: assembly + plain tangential projection ----------
+            for (size_t n = 0; n < N; n++) {
+                size_t base = n * S;
+                double cph_2 = cphb[base + 0], sph_2 = sphb[base + 0];
+                double cph_1 = cphb[base + 1], sph_1 = sphb[base + 1];
+                double rho_eval = rho_eval_a[n];
+                double dz1 = dz1_a[n], dz2 = dz2_a[n];
+                double r0_1 = r0_1_a[n], r0_2 = r0_2_a[n];
+                double td = td_a[n], rho_proj_factor = rpf_a[n];
+                double H = H_n[n];
+                double inv_r0_2 = 1.0 / r0_2;
+                double inv_r0_1 = 1.0 / r0_1;
+                double G0_2_re = cph_2 * inv_r0_2, G0_2_im = sph_2 * inv_r0_2;
+                double G0_1_re = cph_1 * inv_r0_1, G0_1_im = sph_1 * inv_r0_1;
+
+                double inv_r0_2_sq = inv_r0_2 * inv_r0_2;
+                double inv_r0_1_sq = inv_r0_1 * inv_r0_1;
+                double one_jkr_2_re = inv_r0_2_sq;
+                double one_jkr_2_im = k * r0_2 * inv_r0_2_sq;
+                double one_jkr_1_re = inv_r0_1_sq;
+                double one_jkr_1_im = k * r0_1 * inv_r0_1_sq;
+
+                auto cmul = [](double ar_, double ai, double br, double bi,
+                               double &cr, double &ci) {
+                    cr = ar_*br - ai*bi;
+                    ci = ar_*bi + ai*br;
+                };
+
+                // ---- Const source (Eqs 78, 79) ---------------------------
+                double term_const2_re, term_const2_im;
+                cmul(one_jkr_2_re, one_jkr_2_im, G0_2_re, G0_2_im,
+                     term_const2_re, term_const2_im);
+                double term_const1_re, term_const1_im;
+                cmul(one_jkr_1_re, one_jkr_1_im, G0_1_re, G0_1_im,
+                     term_const1_re, term_const1_im);
+                double rho_diff_re = rho_eval * (term_const2_re - term_const1_re);
+                double rho_diff_im = rho_eval * (term_const2_im - term_const1_im);
+                double Erho_const_re = -pref_rho_const_im * rho_diff_im;
+                double Erho_const_im =  pref_rho_const_im * rho_diff_re;
+
+                double inv_rho_eval = 1.0 / rho_eval;
+                double u2 = -dz2 * inv_rho_eval;
+                double u1 = -dz1 * inv_rho_eval;
+                double int_inv_r0 = std::asinh(u2) - std::asinh(u1);
+
+                double int_reg_re = 0.0, int_reg_im = 0.0;
+                for (size_t q = 0; q < n_qp; q++) {
+                    double cph_q = cphb[base + 2 + q];
+                    double sph_q = sphb[base + 2 + q];
+                    double inv_r0_q = r0q_inv_a[n * n_qp + q];
+                    int_reg_re += (cph_q - 1.0) * inv_r0_q * glw_v[q];
+                    int_reg_im += sph_q * inv_r0_q * glw_v[q];
+                }
+                int_reg_re *= H;
+                int_reg_im *= H;
+                double int_G0_re = int_inv_r0 + int_reg_re;
+                double int_G0_im = int_reg_im;
+
+                double Ez_boundary_re = dz2 * term_const2_re - dz1 * term_const1_re;
+                double Ez_boundary_im = dz2 * term_const2_im - dz1 * term_const1_im;
+                double k_sq = k * k;
+                double inside_re = Ez_boundary_re + k_sq * int_G0_re;
+                double inside_im = Ez_boundary_im + k_sq * int_G0_im;
+                double Ez_const_re =  pref_z_im * inside_im;
+                double Ez_const_im = -pref_z_im * inside_re;
+
+                // ---- Sine source (Eqs 76, 77) ----------------------------
+                double sin2 = sin_kH[n];
+                double cos2 = cos_kH[n];
+                double sin1 = -sin2;
+                double cos1 =  cos2;
+
+                double inner_2_re = 1.0 - dz2*dz2 * one_jkr_2_re;
+                double inner_2_im =     - dz2*dz2 * one_jkr_2_im;
+                double bracket_sin_2_re = k*dz2*cos2 + inner_2_re*sin2;
+                double bracket_sin_2_im =              inner_2_im*sin2;
+                double bsin2_re, bsin2_im;
+                cmul(G0_2_re, G0_2_im, bracket_sin_2_re, bracket_sin_2_im,
+                     bsin2_re, bsin2_im);
+
+                double inner_1_re = 1.0 - dz1*dz1 * one_jkr_1_re;
+                double inner_1_im =     - dz1*dz1 * one_jkr_1_im;
+                double bracket_sin_1_re = k*dz1*cos1 + inner_1_re*sin1;
+                double bracket_sin_1_im =              inner_1_im*sin1;
+                double bsin1_re, bsin1_im;
+                cmul(G0_1_re, G0_1_im, bracket_sin_1_re, bracket_sin_1_im,
+                     bsin1_re, bsin1_im);
+                double pref_rho_im = pref_rho_const_im * inv_rho_eval;
+                double Erho_sin_re = -pref_rho_im * (bsin2_im - bsin1_im);
+                double Erho_sin_im =  pref_rho_im * (bsin2_re - bsin1_re);
+
+                double bracket_sin_z_2_re = k*cos2 - dz2*one_jkr_2_re*sin2;
+                double bracket_sin_z_2_im =        - dz2*one_jkr_2_im*sin2;
+                double bszin2_re, bszin2_im;
+                cmul(G0_2_re, G0_2_im, bracket_sin_z_2_re, bracket_sin_z_2_im,
+                     bszin2_re, bszin2_im);
+                double bracket_sin_z_1_re = k*cos1 - dz1*one_jkr_1_re*sin1;
+                double bracket_sin_z_1_im =        - dz1*one_jkr_1_im*sin1;
+                double bszin1_re, bszin1_im;
+                cmul(G0_1_re, G0_1_im, bracket_sin_z_1_re, bracket_sin_z_1_im,
+                     bszin1_re, bszin1_im);
+                double Ez_sin_re = -pref_z_im * (bszin2_im - bszin1_im);
+                double Ez_sin_im =  pref_z_im * (bszin2_re - bszin1_re);
+
+                // ---- Cosine source ---------------------------------------
+                double bracket_cos_2_re = -k*dz2*sin2 + inner_2_re*cos2;
+                double bracket_cos_2_im =               inner_2_im*cos2;
+                double bcos2_re, bcos2_im;
+                cmul(G0_2_re, G0_2_im, bracket_cos_2_re, bracket_cos_2_im,
+                     bcos2_re, bcos2_im);
+                double bracket_cos_1_re = -k*dz1*sin1 + inner_1_re*cos1;
+                double bracket_cos_1_im =               inner_1_im*cos1;
+                double bcos1_re, bcos1_im;
+                cmul(G0_1_re, G0_1_im, bracket_cos_1_re, bracket_cos_1_im,
+                     bcos1_re, bcos1_im);
+                double Erho_cos_re = -pref_rho_im * (bcos2_im - bcos1_im);
+                double Erho_cos_im =  pref_rho_im * (bcos2_re - bcos1_re);
+
+                double bracket_cos_z_2_re = -k*sin2 - dz2*one_jkr_2_re*cos2;
+                double bracket_cos_z_2_im =         - dz2*one_jkr_2_im*cos2;
+                double bczin2_re, bczin2_im;
+                cmul(G0_2_re, G0_2_im, bracket_cos_z_2_re, bracket_cos_z_2_im,
+                     bczin2_re, bczin2_im);
+                double bracket_cos_z_1_re = -k*sin1 - dz1*one_jkr_1_re*cos1;
+                double bracket_cos_z_1_im =         - dz1*one_jkr_1_im*cos1;
+                double bczin1_re, bczin1_im;
+                cmul(G0_1_re, G0_1_im, bracket_cos_z_1_re, bracket_cos_z_1_im,
+                     bczin1_re, bczin1_im);
+                double Ez_cos_re = -pref_z_im * (bczin2_im - bczin1_im);
+                double Ez_cos_im =  pref_z_im * (bczin2_re - bczin1_re);
+
+                phi_c_re[n]  = td * Ez_const_re + rho_proj_factor * Erho_const_re;
+                phi_c_im[n]  = td * Ez_const_im + rho_proj_factor * Erho_const_im;
+                phi_s_re[n]  = td * Ez_sin_re   + rho_proj_factor * Erho_sin_re;
+                phi_s_im[n]  = td * Ez_sin_im   + rho_proj_factor * Erho_sin_im;
+                phi_co_re[n] = td * Ez_cos_re   + rho_proj_factor * Erho_cos_re;
+                phi_co_im[n] = td * Ez_cos_im   + rho_proj_factor * Erho_cos_im;
+            }
+
+            // ---- Test reduction: contrib[e, :] += w_entry[e, qt] * Phi ----
+            // One axpy per support entry of this test segment, over the whole
+            // source row. Accumulating quadrature node by quadrature node
+            // matches `_tested_contrib_rows`' summation order.
+            for (size_t e = e0; e < e1; e++) {
+                double wr = w_p[e * nq + qt].real();
+                double wi = w_p[e * nq + qt].imag();
+                double *rc  = reinterpret_cast<double *>(oc_p + e * N);
+                double *rs  = reinterpret_cast<double *>(os_p + e * N);
+                double *rco = reinterpret_cast<double *>(oco_p + e * N);
+                PYSIM_OMP_SIMD()
+                for (size_t n = 0; n < N; n++) {
+                    rc[2*n]     += wr * phi_c_re[n]  - wi * phi_c_im[n];
+                    rc[2*n + 1] += wr * phi_c_im[n]  + wi * phi_c_re[n];
+                    rs[2*n]     += wr * phi_s_re[n]  - wi * phi_s_im[n];
+                    rs[2*n + 1] += wr * phi_s_im[n]  + wi * phi_s_re[n];
+                    rco[2*n]    += wr * phi_co_re[n] - wi * phi_co_im[n];
+                    rco[2*n + 1]+= wr * phi_co_im[n] + wi * phi_co_re[n];
+                }
+            }
+        }
+    }
+
+    PYSIM_THROW_IF_ABORTED();
+    return std::make_tuple(out_const, out_sin, out_cos);
+}
+
+
 // ==========================================================================
 // Sommerfeld ground: batched six-integral evaluation (sommerfeld-perf-plan
 // Phase 3). A faithful port of _sommerfeld.py's `_six_integrals` machinery
@@ -3538,6 +3894,22 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("cos_th"), py::arg("px"), py::arg("py"),
           py::arg("tm_p"), py::arg("tn_p"),
           py::arg("eps_t"),
+          py::arg("cancel_flag") = 0);
+    m.def("sinusoidal_galerkin_far_fill", &sinusoidal_galerkin_far_fill,
+          "Fused far fill for SinusoidalGalerkinSolver: the plainly-projected "
+          "Eqs 76-79 tensor at each test segment's nq Gauss points, reduced "
+          "on the fly against the test weights. Returns (contrib_const, "
+          "contrib_sin, contrib_cos), each (nnz, N) complex, where nnz is the "
+          "CSR support-entry count (`starts` is that CSR's per-test-segment "
+          "row index). src_* are the geometry's segments (free-space block) "
+          "or the MIRRORED ones (PEC image block); the reflection-coefficient "
+          "and Sommerfeld blocks stay on the numpy path.",
+          py::arg("obs_centers"), py::arg("obs_tangents"),
+          py::arg("obs_radius"),
+          py::arg("src_centers"), py::arg("src_tangents"), py::arg("src_hh"),
+          py::arg("k"), py::arg("eta"),
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("w_entry"), py::arg("starts"),
           py::arg("cancel_flag") = 0);
     m.def("remainder_field_proj_batch", &remainder_field_proj_batch,
           "Fused Sommerfeld smooth-remainder assembly: interpolate the four "
