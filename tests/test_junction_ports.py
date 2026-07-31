@@ -1401,15 +1401,19 @@ def test_sg_junction_port_impedance_and_sweeps_agree():
         )
 
 
-def test_sg_junction_port_ground_and_mixed_radius_still_refuse():
+def test_sg_junction_port_finite_ground_and_mixed_radius_still_refuse():
     """What formulation (b) does NOT cover, refused rather than approximated.
 
-    The node-charge correction is a free-space scalar potential written for
-    one radius. Over a ground the node's lumped charge also has an IMAGE that
-    the correction does not remove, so part of the M5 blocker would survive;
-    under mixed radii the kernel is not reciprocal at all (M2) and the
-    regularization radius at a node whose members disagree about `a` is
-    ambiguous. Both raise instead of returning a plausible number.
+    #191 narrowed this to the FINITE grounds. The PEC image of the removed
+    lumped charge is a point charge at the mirrored node, so the same
+    correction takes it out (section below) and `ground_z` alone now solves.
+    The reflection-coefficient and Sommerfeld images are not point charges —
+    the reflection is angle-dependent, and Sommerfeld's is not an image at
+    all — so the removed term has no closed mirror there and part of the M5
+    blocker would survive. Under mixed radii the kernel is not reciprocal at
+    all (M2) and the regularization radius at a node whose members disagree
+    about `a` is ambiguous. Both raise instead of returning a plausible
+    number.
     """
     wires, npe, junctions = _split_wires(0.04, 0.01, 8)
     common = dict(
@@ -1417,8 +1421,18 @@ def test_sg_junction_port_ground_and_mixed_radius_still_refuse():
         n_per_edge_per_wire=npe, feeds=[(0, L_DIP / 4, 0j)],
         junctions=junctions, junction_ports=[0, 1], wavelength=WAVELENGTH,
     )  # fmt: skip
-    with pytest.raises(NotImplementedError, match="over a ground"):
-        SinusoidalGalerkinSolver(**common, ground_z=0.0).compute_impedance()
+    # PEC solves, and the ports read as ports rather than as the node's own
+    # self-capacitance (Y through the same public entry point that refused).
+    Y = SinusoidalGalerkinSolver(**common, ground_z=0.0).compute_y_matrix()
+    assert np.all(np.isfinite(Y[1:, 1:]))
+    with pytest.raises(NotImplementedError, match="over a FINITE ground"):
+        SinusoidalGalerkinSolver(
+            **common, ground_z=0.0, ground_eps=(13.0, 0.005)
+        ).compute_impedance()
+    with pytest.raises(NotImplementedError, match="over a FINITE ground"):
+        SinusoidalGalerkinSolver(
+            **common, ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
+        ).compute_impedance()
     with pytest.raises(NotImplementedError, match="mixed per-wire radii"):
         SinusoidalGalerkinSolver(
             **common, wire_radius=[1e-3, 2e-3, 1e-3, 2e-3]
@@ -1450,3 +1464,164 @@ def test_sg_junction_port_and_bspline_converge_on_the_same_oracle_residue():
     assert theirs[80] > theirs[40], theirs  # climbing
     assert abs(ours[80] - theirs[80]) < abs(ours[40] - theirs[40]), (ours, theirs)
     assert abs(ours[80] - theirs[80]) < 0.005, (ours, theirs)
+
+
+# ======================================================================
+# #191 — formulation (b) over a PEC ground
+# ======================================================================
+# M5b removed the port basis's lumped NODE charge from the free-space
+# source only, so any `ground_z` refused: the image of that charge was left
+# in, restoring a fraction of the very term the correction exists to take
+# out.
+#
+# Under PEC the fix needs no new object. `_assemble_Z` builds the ground as
+# the free-space field of MIRRORED sources and subtracts it once, G = A - B,
+# and the image of a point charge is a point charge at the mirrored node. So
+# the same D/S correction runs on B at the mirrored separation and enters G
+# with the OPPOSITE sign:
+#
+#     A' = A - D     - D^T     + S        (free space, as before)
+#     B' = B - D_img - D_img^T + S_img    (mirrored nodes)
+#     G' = A' - B'
+#
+# The sign is derived, not fitted, and the tests below pin it: dropping the
+# image half costs 15 % against `BSplineSolver` and flipping it costs 38 %,
+# where the derived sign lands at the free-space agreement floor.
+#
+# Fresnel/Sommerfeld stay refused — their "image" of a point charge is not a
+# point charge (test above). #151's grounded-junction rejection is untouched:
+# a node IN the plane is pinned by its own image and cannot be a port.
+
+PEC_H = 3.0  # node height over the plane — well clear of #151's grounded case
+
+
+def _elevated(wires, h=PEC_H):
+    return [w + np.array([0.0, 0.0, h]) for w in wires]
+
+
+def _pec_two_member_solver(
+    cls, delta=0.04, whisker=0.01, n_half=20, ground_z=0.0, **kw
+):
+    """M5b's two-member oracle topology, lifted over a PEC plane at z = 0."""
+    wires, npe, junctions = _split_wires(delta, whisker, n_half)
+    return cls(
+        wires=_elevated(wires), n_per_edge_per_wire=npe,
+        feeds=[(0, L_DIP / 4, 0j)], junctions=junctions,
+        junction_ports=[0, 1], wavelength=WAVELENGTH, ground_z=ground_z, **kw,
+    )  # fmt: skip
+
+
+def _pec_one_member_solver(cls, n=20, ground_z=0.0, **kw):
+    """The `PortAtEnd` topology — two ONE-member junctions — over PEC."""
+    wires = [
+        np.array([(0.0, -L_DIP / 2, 0.0), (0.0, -0.02, 0.0)]),
+        np.array([(0.0, 0.02, 0.0), (0.0, L_DIP / 2, 0.0)]),
+    ]
+    return cls(
+        wires=_elevated(wires), n_per_edge_per_wire=[[n], [n]],
+        feeds=[(0, L_DIP / 4, 0j)], junctions=[[(0, "end")], [(1, "start")]],
+        junction_ports=[0, 1], wavelength=WAVELENGTH, ground_z=ground_z, **kw,
+    )  # fmt: skip
+
+
+def _port_y(solver):
+    """The junction-port sub-block of Y, with the dummy gap feed dropped."""
+    return solver.compute_y_matrix()[1:, 1:]
+
+
+@pytest.mark.parametrize(
+    "make", [_pec_two_member_solver, _pec_one_member_solver], ids=["two", "one"]
+)
+def test_sg_junction_port_over_pec_reproduces_the_bspline_port(make):
+    """The #191 gate: M5b's entrywise-vs-`BSplineSolver` check, over PEC.
+
+    Nothing is shared between the two port formulations (Lagrange multiplier
+    in a spline basis vs a node charge held outside a sinusoidal reaction
+    integral) and now nothing is shared about the ground either — B-spline
+    images its charge and current expansions, this one images the whole
+    field. The full 2x2 port Y still agrees entrywise to 8.5e-5 (two-member)
+    and 4.7e-6 (one-member `PortAtEnd`), against 5.6e-5 / 3.9e-6 for the same
+    geometries in free space: the PEC block costs a factor under 1.6, i.e.
+    the ground rides at the free-space agreement floor.
+
+    What is left is discretization, not formulation: the two-member gap
+    halves with the mesh (1.9e-4 / 8.5e-5 / 4.6e-5 at n_half 10 / 20 / 40)
+    and is quadrature-converged (unmoved past `n_qp_node` 12, 1e-9).
+
+    The ground is load-bearing in the comparison, not decorative — it moves
+    the port Y by 33 % from the free-space answer.
+    """
+    Yb = _port_y(make(BSplineSolver))
+    Yg = _port_y(make(SinusoidalGalerkinSolver))
+    rel = np.abs(Yg - Yb) / np.abs(Yb)
+    assert rel.max() < 2e-4, rel
+
+    free = _port_y(make(BSplineSolver, ground_z=None))
+    moved = np.abs(free - Yb).max() / np.abs(Yb).max()
+    assert moved > 0.05, moved
+
+
+class _ImageCorrectionScaled(SinusoidalGalerkinSolver):
+    """`_assemble_Z_ported` with #191's image half rescaled — 0 undoes it
+    (M5b's free-space-only correction over a ground), -1 flips its sign."""
+
+    def __init__(self, *, image_factor=0.0, **kw):
+        super().__init__(**kw)
+        self.image_factor = float(image_factor)
+
+    def _assemble_Z_ported(self, geom, k):
+        G, seg_view = super()._assemble_Z_ported(geom, k)
+        N = geom["n_segs"]
+        w = 1.0 - self.image_factor
+        D = self._node_charge_columns(
+            geom, seg_view, k, nodes=self._port_node_positions(geom, mirror=True)
+        )
+        G = G.copy()
+        G[:, N:] -= w * D
+        G[N:, :] -= w * D.T
+        G[N:, N:] += w * self._node_charge_image_pair_block(geom, k)
+        return G, seg_view
+
+
+@pytest.mark.parametrize(
+    "make", [_pec_two_member_solver, _pec_one_member_solver], ids=["two", "one"]
+)
+def test_sg_junction_port_pec_image_term_and_its_sign_are_load_bearing(make):
+    """The derivation, as a measurement: the image block is SUBTRACTED, so
+    removing its node charge ADDS D_img back.
+
+    Against `BSplineSolver` over the same PEC plane, the derived sign lands
+    at 1e-5 (two-member 8.5e-5); leaving the image charge in — what M5b's
+    refusal existed to prevent — misses by 15 %, and the opposite sign,
+    double-counting instead of removing, by 38 %. Three decades between the
+    derived answer and either neighbouring choice, so the sign is pinned by
+    the oracle and not by inspection of the code.
+    """
+    Yb = _port_y(make(BSplineSolver))
+
+    def miss(cls, **kw):
+        return (np.abs(_port_y(make(cls, **kw)) - Yb) / np.abs(Yb)).max()
+
+    good = miss(SinusoidalGalerkinSolver)
+    none = miss(_ImageCorrectionScaled)
+    flipped = miss(_ImageCorrectionScaled, image_factor=-1.0)
+    assert good < 2e-4, good
+    assert none > 100 * good, (none, good)
+    assert flipped > 100 * good, (flipped, good)
+
+
+@pytest.mark.parametrize("feed_readout", ["centre", "variational"])
+def test_sg_junction_port_over_pec_y_block_symmetric(feed_readout):
+    """The port block stays symmetric at the free-space floor over PEC.
+
+    Both halves of the correction are applied to row and column alike and
+    the mirrored separation is itself symmetric (reflection is an isometry:
+    |node_p - M.node_q| = |M.node_p - node_q|), so the image half adds no
+    asymmetry of its own — measured 6.3e-13 over PEC against 2.5e-12 in free
+    space, both inside G5b's 1e-10 clause.
+    """
+    Y = _port_y(
+        _pec_two_member_solver(SinusoidalGalerkinSolver, feed_readout=feed_readout)
+    )
+    asym = np.linalg.norm(Y - Y.T) / np.linalg.norm(Y)
+    assert asym < 1e-10, f"port block asymmetry over PEC {asym:.3e}"
