@@ -62,7 +62,11 @@ from momwire import (
     SinusoidalGalerkinSolver,
     SinusoidalSolver,
 )
-from momwire.sinusoidal_galerkin import _graded_endpoint_rule, _plain_projection
+from momwire.sinusoidal_galerkin import (
+    _basis_value,
+    _graded_endpoint_rule,
+    _plain_projection,
+)
 
 WL = 22.0
 FREQ_MHZ = 299792458.0 / WL / 1e6
@@ -2062,21 +2066,26 @@ def test_far_fill_dispatch_is_projector_selective(monkeypatch):
 # `_DENSE_ASSEMBLY_THRESHOLD` — measured here on the Galerkin tail at N ≈ 57
 # (N=40: 0.31 ms dense / 0.48 ms sparse; N=80: 1.54 / 0.95; N=400: 49.5 / 8.1).
 #
-# The tolerance is NOT the 1e-13 house figure the accelerator agreements use,
-# and the reason is conditioning rather than sloppiness. The const-shape and
-# cos-shape products very nearly cancel — the three-term basis has A ≈ −C ~
-# 1/(kΔ) — so at N=41 the terms have Frobenius norm 291 against G's 0.24, a
-# 1.2e3 amplification that grows like N². Any reassociation of that sum lands
-# ~1e-13 away at these meshes, and `test_sparse_assembly_is_no_less_accurate`
-# pins that neither spelling is the accurate one: against an 80-bit reference
-# built from the same tested contributions, dense sits 1.16e-11 and sparse
-# 1.26e-11 away at N=401 (4.45e-11 / 4.13e-11 at N=801 — sparse the closer of
-# the two there). The G1 symmetry ratios agree to three digits between paths.
+# The tolerance used to be 1e-12 rather than the 1e-13 house figure the
+# accelerator agreements use, and the reason was conditioning rather than
+# sloppiness: the const- and cos-shape products very nearly cancelled, so any
+# reassociation of that sum landed ~1e-13 away and neither spelling was the
+# accurate one (against an 80-bit reference built from the same tested
+# contributions, dense sat 1.16e-11 and sparse 1.26e-11 away at N=401).
+#
+# 2026-07-31 (momwire#203): the sum is folded before the product now, so there
+# is nothing left for the reassociation to amplify — the two spellings land
+# 1.1e-16 to 1.5e-16 apart on the set below, and the ported pair, which the
+# M5b corrections used to amplify by ~40×, comes in at 2e-17. One gate covers
+# both; see the #203 section at the bottom for the before/after table.
 
-SPARSE_ASSEMBLY_AGREEMENT = 1e-12  # measured 1.0e-13 - 2.9e-13 on this set
-# `_assemble_Z_ported`'s M5b corrections re-difference the port row against the
-# node-charge columns, amplifying whatever G carries by ~40x (measured 6e-12).
-PORTED_SPARSE_AGREEMENT = 1e-10
+SPARSE_ASSEMBLY_AGREEMENT = 1e-15  # measured 1.1e-16 - 1.5e-16 on this set
+# How far either spelling sits from the EXACT product of the same float64
+# contributions — a different quantity from the gate above (which is how far
+# they sit from each other) and a looser one, because it grows with mesh:
+# 1.2e-15 at N=41, 2.8e-15 at N=401, 1.4e-14 at N=801, 8.3e-14 at N=2401 (#203;
+# the literal pairing was at 7.3e-13 / 1.2e-11 / 7.6e-11 / 4.5e-10).
+EXACT_PRODUCT_DISTANCE = 1e-14
 
 
 def _G_by_assembly_path(monkeypatch, *, sparse, ported=False, **kw):
@@ -2133,8 +2142,7 @@ def test_sparse_assembly_matches_dense_with_junction_ports(
     kw = GEOMETRIES[geom_name](junction_ports=[0])
     G_dense, G_sparse = _both_assembly_paths(monkeypatch, ported=ported, **kw)
     assert G_dense.shape == (kw["nsegs"] * len(kw["wires"]) + 1,) * 2
-    gate = PORTED_SPARSE_AGREEMENT if ported else SPARSE_ASSEMBLY_AGREEMENT
-    assert _rel_matrix_delta(G_sparse, G_dense) < gate
+    assert _rel_matrix_delta(G_sparse, G_dense) < SPARSE_ASSEMBLY_AGREEMENT
 
 
 @pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
@@ -2169,39 +2177,64 @@ def test_support_entries_name_distinct_segment_basis_pairs(geom_name, ports):
     assert np.unique(pairs, axis=0).shape[0] == pairs.shape[0]
 
 
-def _longdouble_coefficient_product(sim):
-    """G's coefficient product in 80-bit arithmetic, from the SAME float64
-    tested contributions both assembly paths start from — so the only
-    difference from either is the precision of the sum they reassociate."""
+def _tested_pieces(sim):
+    """The float64 (context, tested contributions) every spelling of the
+    coefficient product starts from — one fill, shared by the 80-bit reference
+    and by the float64 products measured against it."""
     geom = sim._build_geometry()
     k = sim.k
     ctx = sim._test_context(geom, sim._basis_coefs(geom, k), k)
-    contribs = sim._tested_contribs(geom, k, ctx, _plain_projection)
+    return ctx, sim._tested_contribs(geom, k, ctx, _plain_projection)
+
+
+def _coefficient_product(ctx, contribs, n_ports, dtype, *, folded):
+    """G = Σ_shape (scatter contrib[shape]) @ M[shape], at a chosen precision
+    and on a chosen shape set.
+
+    `folded=False` is the literal pre-#203 pairing (const↔σA, cos↔σC);
+    `folded=True` is the shipped one, which subtracts the const contributions
+    from the cos ones BEFORE the scatter and pairs the const shape with σ(A+C).
+    At 80-bit both are the exact product, which is how the reference is built.
+    """
     n_segs = ctx["N"]
-    n_basis = n_segs + len(sim.junction_ports)
+    n_basis = n_segs + n_ports
     i_of_entry, m_of_entry = ctx["i_of_entry"], ctx["m_of_entry"]
+    c_const, c_sin, c_cos = (np.asarray(c, dtype=dtype) for c in contribs)
+    if folded:
+        c_cos = c_cos - c_const
+        coefs = (ctx["sigAC"], ctx["B"], ctx["sigC"])
+    else:
+        coefs = (ctx["sigA"], ctx["B"], ctx["sigC"])
 
-    T = []
-    for contrib in contribs:
-        t = np.zeros((n_basis, n_segs), dtype=np.complex128)
-        np.add.at(t, i_of_entry, contrib)
-        T.append(t.astype(np.clongdouble))
-    coefs = [
-        np.asarray(c, dtype=np.clongdouble)
-        for c in (ctx["sigA"], ctx["B"], ctx["sigC"])
-    ]
-
-    G = np.zeros((n_basis, n_basis), dtype=np.clongdouble)
-    for e in range(i_of_entry.shape[0]):
-        for t, coef in zip(T, coefs):
-            G[:, i_of_entry[e]] += coef[e] * t[:, m_of_entry[e]]
+    G = np.zeros((n_basis, n_basis), dtype=dtype)
+    for contrib, coef in zip((c_const, c_sin, c_cos), coefs):
+        T = np.zeros((n_basis, n_segs), dtype=dtype)
+        np.add.at(T, i_of_entry, contrib)
+        M = np.zeros((n_segs, n_basis), dtype=dtype)
+        M[m_of_entry, i_of_entry] = np.asarray(coef, dtype=dtype)
+        G = G + T @ M
     return G
+
+
+def _longdouble_coefficient_product(sim):
+    """G's coefficient product in 80-bit arithmetic, from the SAME float64
+    tested contributions every assembly path starts from — so the only
+    difference from any of them is the precision of the sum they reassociate.
+
+    The scatter runs at 80-bit too (#203): the shipped fold happens BEFORE the
+    scatter, so a reference that scattered in float64 would have one spelling's
+    rounding already baked into it and would flatter that spelling.
+    """
+    ctx, contribs = _tested_pieces(sim)
+    return _coefficient_product(
+        ctx, contribs, len(sim.junction_ports), np.clongdouble, folded=False
+    )
 
 
 def test_sparse_assembly_is_no_less_accurate_than_dense(monkeypatch):
     """Both spellings sit the same distance from the exact product, which is
-    what makes `SPARSE_ASSEMBLY_AGREEMENT` a conditioning number rather than a
-    slackened gate."""
+    what keeps `SPARSE_ASSEMBLY_AGREEMENT` a statement about reassociation
+    rather than a slackened gate."""
     kw = _dipole()
     G_dense, G_sparse = _both_assembly_paths(monkeypatch, **kw)
     G_ref = _longdouble_coefficient_product(SinusoidalGalerkinSolver(**kw))
@@ -2209,4 +2242,164 @@ def test_sparse_assembly_is_no_less_accurate_than_dense(monkeypatch):
     err_dense = _rel_matrix_delta(G_dense, ref)
     err_sparse = _rel_matrix_delta(G_sparse, ref)
     assert err_sparse < 3 * err_dense, (err_sparse, err_dense)
-    assert err_sparse < SPARSE_ASSEMBLY_AGREEMENT
+    assert err_sparse < EXACT_PRODUCT_DISTANCE
+
+
+# ---------------------------------------------------------------------------
+# momwire#203 — the const/cos cancellation, folded at both of its sites
+# ---------------------------------------------------------------------------
+# The three-term basis is normalized to its own segment-centre current A+C,
+# and that is O((kΔ)²) while A and C are each O(1). So every literal spelling
+# of the basis — `σA + B·sin kξ + σC·cos kξ` for a value, `T_c @ M_A +
+# T_co @ M_C` for the Galerkin product — computes a small number by cancelling
+# two large ones, and throws away ε·8/(kΔ)² relative. On the half-wave dipole
+# that is 5.5e-14 at N=41 but 1.75e-10 at N=2401, growing like N².
+#
+# Two sites, one fold, measured on the dipole ladder:
+#
+#   N     fval vs 80-bit eval      product vs 80-bit product   ‖G−Gᵀ‖/‖G‖
+#         literal    folded        literal    folded           lit / fold / exact
+#   41    5.5e-14 →  9.1e-17       7.3e-13 →  1.2e-15          1.03 / 1.06 / 1.05 e-11
+#   401   2.9e-12 →  3.0e-15       1.2e-11 →  2.8e-15          1.48 / 1.45 / 1.45 e-10
+#   801   2.3e-11 →  8.0e-15       7.6e-11 →  1.4e-14          1.98 / 2.04 / 2.04 e-10
+#   2401  1.8e-10 →  7.2e-14       4.5e-10 →  8.3e-14          1.57 / 1.45 / 1.45 e-9
+#
+# The last column is the finding that contradicts #203's own second gate. The
+# issue expected G1 to fall back toward "the fill's reciprocity floor" once the
+# product was fixed. It does not move, because it was ALREADY at that floor:
+# the exact 80-bit product of the same float64 contributions has the same G1 to
+# three digits (`test_reciprocity_floor_is_set_by_the_fill_not_the_product`).
+# G−Gᵀ is inherited from the contributions, and the same cancellation sets it
+# one level up — the const- and cos-shape SOURCE fields nearly coincide, so the
+# ε·‖T_const‖ rounding the kernel leaves in them is amplified by ‖T‖/‖G‖. That
+# fingerprint is exact: G1 = 1.4 × ε‖T_const‖/‖G‖ at N=801 AND at N=2401.
+# Fixing it means giving the field kernel the (cos kξ − 1) source shape itself,
+# which is a change to the C++ far fill's output contract — filed separately,
+# out of scope here.
+#
+# What the fold DOES buy beyond the product: the solve. cond(G) is 2.9e5 at the
+# vee's N=321 and ~4e6 at the dipole's N=2401, so the evaluation error above is
+# what set the impedance's last digits — Z moved 5.2e-6 relative at the vee's
+# N=321 and 5.6e-4 at the dipole's N=2401 when the fold landed, and M3's `*_gal`
+# constants were re-pinned for it.
+
+_203_N = 401  # fine enough for the cancellation to bite, cheap enough to gate
+
+
+def _basis_eval_errors(sim):
+    """(literal, folded) relative error of the basis evaluation over every
+    support entry × test node, against an 80-bit evaluation of the same float64
+    coefficients — so this measures the SPELLING, not the coefficients."""
+    geom = sim._build_geometry()
+    k = sim.k
+    view = sim._basis_coefs(geom, k)
+    hh = 0.5 * np.asarray(geom["seg_h"], dtype=float)
+    gx, _gw = sim._leggauss_cached(sim.n_qp_test)
+    m_of_entry = np.repeat(np.arange(geom["n_segs"]), np.diff(view["starts"]))
+    xi = (hh[:, None] * gx[None, :])[m_of_entry]
+    sig = view["sigma"].astype(np.complex128)
+    sigA, B, sigC = sig * view["A"], view["B"], sig * view["C"]
+
+    literal = (
+        sigA[:, None] + B[:, None] * np.sin(k * xi) + sigC[:, None] * np.cos(k * xi)
+    )
+    folded = _basis_value((sig * view["AC"])[:, None], B[:, None], sigC[:, None], k, xi)
+    kl, xl = np.longdouble(k), xi.astype(np.longdouble)
+    exact = (
+        sigA.astype(np.clongdouble)[:, None]
+        + B.astype(np.clongdouble)[:, None] * np.sin(kl * xl)
+        + sigC.astype(np.clongdouble)[:, None] * np.cos(kl * xl)
+    )
+    return (
+        _rel_matrix_delta(literal, np.asarray(exact, dtype=np.complex128)),
+        _rel_matrix_delta(folded, np.asarray(exact, dtype=np.complex128)),
+    )
+
+
+def test_folded_basis_evaluation_is_orders_more_accurate():
+    """Site 1: the value. `_basis_value` must be the accurate spelling, not
+    merely a different one — the coefficients are held fixed and only the
+    arithmetic that combines them changes."""
+    sim = SinusoidalGalerkinSolver(**_m3_dipole(_203_N))
+    literal, folded = _basis_eval_errors(sim)
+    assert folded < 1e-14, folded
+    assert literal > 100 * folded, (literal, folded)
+
+
+def test_folded_basis_evaluation_is_the_one_the_fill_uses():
+    """…and the fill actually uses it: `_test_context`'s weights are the folded
+    value times the arc weight, exactly."""
+    sim = SinusoidalGalerkinSolver(**_dipole())
+    geom = sim._build_geometry()
+    view = sim._basis_coefs(geom, sim.k)
+    ctx = sim._test_context(geom, view, sim.k)
+    hh = ctx["hh"]
+    gx, gw = sim._leggauss_cached(sim.n_qp_test)
+    xi = (hh[:, None] * gx[None, :])[ctx["m_of_entry"]]
+    fval = _basis_value(
+        ctx["sigAC"][:, None], ctx["B"][:, None], ctx["sigC"][:, None], sim.k, xi
+    )
+    expect = (gw[None, :] * hh[ctx["m_of_entry"]][:, None]) * fval
+    assert np.array_equal(ctx["w_entry"], expect)
+
+
+def test_folded_coefficient_product_is_orders_closer_to_the_exact_product():
+    """Site 2: the product. Both spellings are formed from the SAME float64
+    contributions, so the 80-bit product of those contributions is the exact
+    answer to the question each is answering."""
+    sim = SinusoidalGalerkinSolver(**_m3_dipole(_203_N))
+    ctx, contribs = _tested_pieces(sim)
+    ref = np.asarray(
+        _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=False),
+        dtype=np.complex128,
+    )
+    literal = _coefficient_product(ctx, contribs, 0, np.complex128, folded=False)
+    folded = _coefficient_product(ctx, contribs, 0, np.complex128, folded=True)
+    err_lit = _rel_matrix_delta(literal, ref)
+    err_fold = _rel_matrix_delta(folded, ref)
+    assert err_fold < EXACT_PRODUCT_DISTANCE, err_fold
+    assert err_lit > 1000 * err_fold, (err_lit, err_fold)
+
+
+@pytest.mark.parametrize("sparse", [False, True], ids=["dense", "sparse"])
+def test_shipped_assembly_is_the_folded_product(monkeypatch, sparse):
+    """Neither assembly tail gets to keep the literal pairing: both land on the
+    exact product at a distance the literal spelling cannot reach."""
+    kw = _m3_dipole(_203_N)
+    sim = SinusoidalGalerkinSolver(**kw)
+    ctx, contribs = _tested_pieces(sim)
+    ref = np.asarray(
+        _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=False),
+        dtype=np.complex128,
+    )
+    err_lit = _rel_matrix_delta(
+        _coefficient_product(ctx, contribs, 0, np.complex128, folded=False), ref
+    )
+    G = _G_by_assembly_path(monkeypatch, sparse=sparse, **kw)
+    err = _rel_matrix_delta(G, ref)
+    assert err < EXACT_PRODUCT_DISTANCE, err
+    assert err < err_lit / 1000, (err, err_lit)
+
+
+def test_reciprocity_floor_is_set_by_the_fill_not_the_product():
+    """#203's second gate, refuted by measurement.
+
+    The issue read G1's mesh degradation (3.4e-10 at N=801, 1.3e-9 at N=2401)
+    as the coefficient product's conditioning noise, and expected the fold to
+    remove it. It does not: the EXACT 80-bit product of the same float64
+    contributions is just as asymmetric, so G−Gᵀ is inherited from the
+    contributions rather than created by the product. Pinned here so that a
+    future kernel-level fold — the (cos kξ − 1) source shape, which is where
+    this floor actually lives — announces itself by breaking this test rather
+    than by quietly improving a number nobody is watching.
+    """
+    sim = SinusoidalGalerkinSolver(**_m3_dipole(_203_N))
+    ctx, contribs = _tested_pieces(sim)
+    exact = _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=False)
+    folded = _coefficient_product(ctx, contribs, 0, np.complex128, folded=True)
+    r_exact, r_folded = _sym_ratio(exact), _sym_ratio(folded)
+    assert r_folded > G1_GATE, (
+        f"the floor this test describes is gone ({r_folded:.2e}) — if the fill "
+        "learned the (cos−1) shape, retire this test and tighten G1_GATE"
+    )
+    assert abs(r_folded - float(r_exact)) < 0.05 * r_folded, (r_folded, r_exact)
