@@ -67,10 +67,13 @@ from momwire import BSplineSolver, SinusoidalSolver, SinusoidalGalerkinSolver
 SNAPSHOT = Path(__file__).resolve().parent / "m6_residue_cluster_geoms.json"
 
 # antennaknobs#521's no-mutual residue cluster + its helix control, then
-# antennaknobs#478's near-open high-Q class. Values are the mesh ladder; the
-# helix's mesh knob is `pts_per_turn`, not `nominal_nsegs`, because its
-# builder hard-codes one segment per chord (which is exactly why the census
-# ladder read it "byte-identical at every N").
+# antennaknobs#478's near-open high-Q class. Values are the mesh ladder.
+# The helix control is `faceted_helix` on the standard nominal_nsegs ladder:
+# antennaknobs#630 found the original helix builder hard-coded one segment
+# per winding chord (why the census read it "byte-identical at every N" and
+# why this harness once had to sweep `pts_per_turn` instead), and
+# antennaknobs#636 split it into faceted/continuous variants that mesh at
+# the design density like every other catalog design.
 DESIGNS = {
     # --- antennaknobs#521, the T/X-junction residue cluster -----------------
     "specialty.hentenna": ("nominal_nsegs", (21, 41, 81, 161, 321)),
@@ -82,7 +85,7 @@ DESIGNS = {
     "broadband.discone": ("nominal_nsegs", (21, 41, 81, 161)),
     "specialty.bowtie": ("nominal_nsegs", (21, 41, 81, 161, 321)),
     # --- antennaknobs#521's control: no junctions at all, curvature only ----
-    "specialty.helix": ("pts_per_turn", (8, 12, 16, 24, 32)),
+    "specialty.faceted_helix": ("nominal_nsegs", (21, 41, 81, 161, 321)),
     # --- antennaknobs#478, near-open high-Q ---------------------------------
     "wire.lazy_h": ("nominal_nsegs", (21, 41, 81, 161, 321)),
     "wire.vbeam": ("nominal_nsegs", (21, 41, 81, 161, 321)),
@@ -99,15 +102,13 @@ DESIGNS = {
 
 # Rungs whose mesh exceeds this are recorded as skipped rather than run.
 #
-# 2000 is a MEMORY ceiling, not a patience one. The Galerkin fill's near-pair
-# quadrature workspace is O(N^2 * n_qp) complex, so a rung that solves in
-# ~60 s at 1900 segments is OOM-killed at 2379 on a 32 GiB box. Raising it is
-# not a matter of waiting longer; it needs the fill blocked or accelerated
-# (deliberately out of scope while momwire#182's Python-first rule stands).
-# Consequence, stated in the report: a few of the rungs antennaknobs#521 and
-# #478 quoted (discone at N=161, lazy_h/vbeam at N=321) are out of reach here,
-# and are reported as skipped rather than substituted for.
-DEFAULT_SEG_CAP = 2000
+# Once a MEMORY ceiling (2000: the unblocked Galerkin fill's O(N^2 * n_qp)
+# workspace OOM-killed a 2379-segment rung on a 32 GiB box — the 2026-07-30
+# report's §11), now a patience guard: #194 blocked the numpy fill and added
+# the fused C++ far fill, so every rung antennaknobs#521 and #478 quoted
+# (discone at N=161, hourglass* at N=321/161, lazy_h/vbeam at N=321, up to
+# 2767 segments) runs in a few GiB and a few seconds per column.
+DEFAULT_SEG_CAP = 4000
 
 
 # ---------------------------------------------------------------------------
