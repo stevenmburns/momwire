@@ -26,7 +26,9 @@ What is pinned here:
 Everything here is FREE SPACE. momwire#182 M4 pinned that a finite-ground
 model over a ground-CONTACT wire is broken on both sinusoidal solvers (an
 inherited #151 defect), and M5b scoped junction ports over any ground out, so
-the report takes no ground reads at all and neither does this file.
+the report takes no ground reads at all and neither does this file. (#191 has
+since lifted the port half of that for a PEC ground — report §14 — but the
+contact defect and the finite grounds are untouched, so the scope stands.)
 """
 
 import json
