@@ -418,7 +418,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         Gauss nodes per panel of the graded near-pair rule (M2). The default 8
         is where the G1 residual stops being near-pair quadrature error and
         hits the source-side `n_qp_const` floor (~2e-11) on every validation
-        geometry; 4 leaves the bent/junction cases short of the gate.
+        geometry; 4 leaves the bent/junction cases short of the gate. That
+        floor is the QUADRATURE one, and it is only the binding one at
+        test-scale meshes: past N ≈ 400 the G1 residual is set instead by the
+        const/cos cancellation inside the fill (2e-10 at N=801, 1.4e-9 at
+        N=2401, i.e. ~ε‖T_const‖/‖G‖), which no test rule can reach —
+        stevenmburns/momwire#203 and §15 of the instrument report.
     `near_factor`
         A pair is "near" when its segments approach within
         `near_factor · (h_m + h_n)/2`. The default 0.5 selects the self and

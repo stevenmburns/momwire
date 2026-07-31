@@ -600,3 +600,52 @@ not an image at all, so neither has the closed mirror this argument turns
 on, and both still refuse. §7's `sterba_bl` comparison could now be re-run
 over a PEC ground; the average-ground catalog check it names still cannot,
 which is the remaining half of follow-up 4.
+
+---
+
+## 15. Addendum (2026-07-31): §6's last digits moved — momwire#203
+
+momwire#203 found that every literal spelling of the three-term basis was
+throwing away most of the precision it had already computed, and folding it
+moved the Galerkin numbers in §6 at the 1e-7 to 1e-5 level. The run records
+above stand as measured; this is what they read now.
+
+The basis is normalized to its own segment-centre current, A + C — and that
+is O((kΔ)²) while A and C are each O(1). So `σA + B·sin kξ + σC·cos kξ`
+computes a small number by cancelling two large ones, at a cost of ε·8/(kΔ)²
+relative: 5.5e-14 at N=41, 1.8e-10 at N=2401, growing like N². The same
+cancellation runs again in the Galerkin coefficient product, where the
+const- and cos-shape source fields nearly coincide. Both are now evaluated on
+the well-scaled shape set {1, sin kξ, cos kξ − 1}, which is the same functions
+rearranged so that no term is larger than the answer.
+
+Nothing about the physics changed, and the point-matched solver and the
+B-spline family are untouched — but cond(G) is ~3e5 at N=321 and ~4e6 at
+N=2401, so those lost digits were setting the last digits of Z:
+
+| reading | as filed | folded |
+|---|---|---|
+| §6 `gal` at N=321 | 69.639094 − 18.056294j | 69.639093 − 18.056307j |
+| §6 `ptgap` at N=321 | 69.633780 − 18.065312j | 69.633779 − 18.065325j |
+| §6 `ptgap`↔`bs2` at N=321 | 4.17e-8 | 1.30e-7 |
+| §6 `ptgap`↔`bs2` at N=161 | 2.81e-7 | 2.81e-7 |
+| dipole `gal` at N=2401 | 69.64 − 17.93j | 69.64 − 17.97j |
+
+§6's conclusion is unchanged in kind and slightly smaller in degree: matching
+the feed removes ~1100× of the sinusoidal↔B-spline difference rather than
+~3500×, the matched pair still tightens with refinement while the mismatched
+pair does not, and what is left at N=321 is still three orders below anything
+M2/M3 filed as a basis effect. The N=161 rung does not move at all, which is
+the expected N² scaling of the defect.
+
+What #203 did **not** fix, contrary to its own second gate: the G1 symmetry
+ratio's growth with mesh (3.4e-10 at N=801, 1.3e-9 at N=2401). That is not
+the coefficient product's conditioning — the exact 80-bit product of the same
+float64 contributions is just as asymmetric — but the same cancellation one
+level up, inside the fill: the const- and cos-shape SOURCE fields nearly
+coincide, so the ε‖T_const‖ the kernel leaves in them is amplified by
+‖T‖/‖G‖, and G1 sits at 1.4 × ε‖T_const‖/‖G‖ at both meshes. Removing it
+means giving the field kernel the (cos kξ − 1) source shape itself, which is a
+change to the C++ far fill's output contract. Filed as a follow-up;
+`test_reciprocity_floor_is_set_by_the_fill_not_the_product` pins the reading
+so the follow-up announces itself.
