@@ -381,7 +381,9 @@ table.
 
 **Scope, stated openly:** free space only. M5b scoped junction ports over any
 ground out (the node charge's *image* is not removed yet, so part of the M5
-blocker would survive), and the solver refuses rather than approximating. So
+blocker would survive), and the solver refuses rather than approximating.
+(momwire#191 has since lifted that for a **PEC** ground — §14; the finite
+grounds this section's catalog check needs still refuse.) So
 `test_catalog_curtain_gain_over_average_ground` — the one `sterba_bl` catalog
 check that runs over a ground — has **no** sinusoidal-Galerkin column. The
 refusal itself is pinned by a test so the omission cannot be read as an
@@ -496,6 +498,7 @@ verbatim output).
 4. **momwire** — junction ports over a PEC ground would be exact and cheap
    (the node charge's image is a mirror of a term already removed); that would
    let §7's comparison run over the ground where `sterba_bl` is actually used.
+   *(Landed as momwire#191 — §14. The finite grounds still refuse.)*
 5. **momwire** — the point-gap feed model is measurably closer to `bspline`
    and self-dual at no cost to the M3 payoff. Whether it should become an
    option on `SinusoidalGalerkinSolver` is a real question, deliberately not
@@ -562,3 +565,38 @@ What the deeper rungs say, attribution by attribution:
 The feed-placement guard reads 0.0000 m on every ladder, as before. Raw
 sweep output: reproduce with `python scripts/m6_residue_cluster.py` (the
 defaults now reach every rung above).
+
+---
+
+## 14. Addendum (2026-07-31): §12 follow-up 4 landed — junction ports over PEC
+
+momwire#191 closes follow-up 4 for the PEC ground, and it cost what the
+follow-up predicted. `_assemble_Z` builds a PEC ground as the free-space
+field of *mirrored* sources and subtracts it once, so the image of the
+lumped node charge M5b removes is a point charge at the mirrored node — a
+mirror of a term already removed. The same `D`/`S` correction therefore runs
+on the image block at the mirrored separation and enters with the opposite
+sign:
+
+    G' = (A − D − Dᵀ + S) − (B − D_img − D_imgᵀ + S_img)
+
+Measured on M5b's own gate — the entrywise comparison against
+`BSplineSolver`'s Lagrange-multiplier port, over a PEC plane:
+
+| topology | free space (§7) | over PEC |
+|---|---|---|
+| two-member oracle | 3.4e-5 | 8.5e-5 |
+| one-member `PortAtEnd` | 3.9e-6 | 4.7e-6 |
+
+The ground rides at the free-space agreement floor while moving the port Y
+itself by 33 %, and the port block stays symmetric to 6.3e-13. The sign is
+pinned by measurement rather than by reading the code: dropping the image
+half misses `BSplineSolver` by 15 %, flipping it by 38 %.
+
+What §7's scope paragraph and §10's "every ground read" row say about
+junction ports therefore now applies only to the **finite** grounds — a
+Fresnel reflection of a point charge is angle-dependent and Sommerfeld's is
+not an image at all, so neither has the closed mirror this argument turns
+on, and both still refuse. §7's `sterba_bl` comparison could now be re-run
+over a PEC ground; the average-ground catalog check it names still cannot,
+which is the remaining half of follow-up 4.
