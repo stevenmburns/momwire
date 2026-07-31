@@ -139,6 +139,15 @@ and 0.001 dB in gain.
   of NEC is collocation heritage — shared basis, shared point matching — and
   it keeps the NEC-parity-probe role. The new cell will *never* track NEC
   that tightly, by design.
+- The milestone's Python-first rule has since paid out and retired
+  ([momwire#194](https://github.com/stevenmburns/momwire/issues/194)): a
+  profile indicted the far fill for ~85 % of wall-clock *and* the O(N²·n_qp)
+  scratch that OOM-killed census rungs past ~2000 segments, so the fill is
+  now blocked on the numpy path and served by a fused C++ kernel — field
+  evaluation and test reduction in one pass, [the same math
+  twice](/act-4/epilogue/) — for 7–12× end-to-end. A 4000-segment Galerkin
+  solve runs in under 4 GiB; the numpy fill remains the reference and the
+  oracle the kernel is gated against.
 - Every claim above is pinned by a test or a checked-in reproduction script;
   the follow-ups the work generated are
   [momwire#191](https://github.com/stevenmburns/momwire/issues/191) (ports
