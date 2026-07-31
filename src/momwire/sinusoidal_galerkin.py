@@ -280,11 +280,12 @@ wrong numbers.
 
 import numpy as np
 import scipy.linalg
+import scipy.sparse
 import scipy.spatial.distance
 
 from . import _ground_refl
 from ._accel import acc as _acc
-from .sinusoidal import _EULER_GAMMA, SinusoidalSolver
+from .sinusoidal import _DENSE_ASSEMBLY_THRESHOLD, _EULER_GAMMA, SinusoidalSolver
 
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
@@ -1413,25 +1414,53 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             contribs = tuple(c - g for c, g in zip(contribs, gnd))
 
         i_of_entry = ctx["i_of_entry"]
-        n_basis = N + len(self.junction_ports)
-
-        def _scatter(contrib):
-            T = np.zeros((n_basis, N), dtype=np.complex128)
-            np.add.at(T, i_of_entry, contrib)
-            return T
-
-        T_c, T_s, T_co = (_scatter(c) for c in contribs)
-
-        # --- Source-side coefficient matrices (identical to collocation) --
         m_of_entry = ctx["m_of_entry"]
-        M_A = np.zeros((N, n_basis), dtype=np.complex128)
-        M_B = np.zeros((N, n_basis), dtype=np.complex128)
-        M_C = np.zeros((N, n_basis), dtype=np.complex128)
-        M_A[m_of_entry, i_of_entry] = ctx["sigA"]
-        M_B[m_of_entry, i_of_entry] = ctx["B"]
-        M_C[m_of_entry, i_of_entry] = ctx["sigC"]
+        n_basis = N + len(self.junction_ports)
+        # Source-side coefficient values, identical to collocation's.
+        coefs = (ctx["sigA"], ctx["B"], ctx["sigC"])
 
-        G = T_c @ M_A + T_s @ M_B + T_co @ M_C
+        # Both factors of the product carry exactly one nonzero per support
+        # entry e: the scatter T[shape] = R @ contrib[shape] with R[i(e),e]=1,
+        # and M[shape][m(e), i(e)] = the entry's own coefficient. The CSR is
+        # segment-major with one entry per (segment, basis) pair, so a basis's
+        # entries name DISTINCT segments — a junction-port column too, whose
+        # entries are its K distinct member segments — and no (m, i) cell is
+        # written twice. Dense pays 3·n_basis·N² in the matmuls alone, plus an
+        # nnz-way `np.add.at`; sparse pays 3·nnz·(N + n_basis) with nnz ≈ 3N.
+        # Measured at N=2401 (M1-M3 dipole): 2.75 s → 0.79 s, and the tail of
+        # `_assemble_Z` 3.10 s → 0.87 s. Threshold is the point-matched
+        # `_assemble_Z`'s (`sinusoidal.py`), re-measured for this product —
+        # below N≈57 the scipy constructors cost more than the BLAS call they
+        # replace. The two paths sum the same terms in a different order, and
+        # that sum is ill-conditioned (the const- and cos-shape products very
+        # nearly cancel), so they agree to ~1e-13 relative, not bit-exactly —
+        # equidistant from the exact product, not one degrading the other.
+        if N < _DENSE_ASSEMBLY_THRESHOLD:
+
+            def _scatter(contrib):
+                T = np.zeros((n_basis, N), dtype=np.complex128)
+                np.add.at(T, i_of_entry, contrib)
+                return T
+
+            def _coef_matrix(coef):
+                M = np.zeros((N, n_basis), dtype=np.complex128)
+                M[m_of_entry, i_of_entry] = coef
+                return M
+
+            G = sum(
+                _scatter(contrib) @ _coef_matrix(coef)
+                for contrib, coef in zip(contribs, coefs)
+            )
+        else:
+            nnz = i_of_entry.shape[0]
+            R = scipy.sparse.csr_matrix(
+                (np.ones(nnz), (i_of_entry, np.arange(nnz))), shape=(n_basis, nnz)
+            )
+            mi = (m_of_entry, i_of_entry)
+            G = sum(
+                (R @ contrib) @ scipy.sparse.csc_matrix((coef, mi), shape=(N, n_basis))
+                for contrib, coef in zip(contribs, coefs)
+            )
         return G, seg_view
 
     def _apply_near_correction(self, geom, k, ctx, contribs, projector, src_c, src_t):
