@@ -2381,6 +2381,35 @@ def test_shipped_assembly_is_the_folded_product(monkeypatch, sparse):
     assert err < err_lit / 1000, (err, err_lit)
 
 
+def test_sin_minus_arg_is_accurate_on_both_branches():
+    """`_drive_columns`' `sin u − u`, against a 50-digit series. Both branches
+    are live at meshes this solver runs: u = kΔ/2 is 0.137 on M3's 11-segment
+    coarse dipole (subtraction) and 0.037 at N=41 (series)."""
+    from decimal import Decimal, getcontext
+
+    from momwire.sinusoidal_galerkin import _sin_minus_arg
+
+    getcontext().prec = 50
+
+    def exact(x):
+        term = total = Decimal(x)
+        for n in range(1, 40):
+            term = -term * Decimal(x) * Decimal(x) / Decimal((2 * n) * (2 * n + 1))
+            total += term
+        return total - Decimal(x)
+
+    for u in (1e-4, 1e-3, 1e-2, 0.037, 0.0999, 0.1, 0.137, 0.5, 1.0):
+        ref = exact(u)
+        got = Decimal(float(_sin_minus_arg(u)))
+        assert abs((got - ref) / ref) < Decimal("1e-13"), (u, got, ref)
+    # vectorized, and the two branches meet without a step
+    assert np.allclose(
+        _sin_minus_arg(np.array([0.09999, 0.10001])),
+        [-1.66525e-04, -1.66625e-04],
+        rtol=1e-6,
+    )
+
+
 def test_reciprocity_floor_is_set_by_the_fill_not_the_product():
     """#203's second gate, refuted by measurement.
 
