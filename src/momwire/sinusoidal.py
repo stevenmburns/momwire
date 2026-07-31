@@ -675,7 +675,20 @@ class SinusoidalSolver(_Cancelable):
                 the flat per-segment arrays below.
             seg_view["jbasis"][k]     → which basis contributes entry k.
             seg_view["A"/"B"/"C"][k]  → that basis's coefficient on seg.
+            seg_view["AC"][k]         → A + C, pre-summed (see below).
             seg_view["sigma"][k]      → σ sign relative to NEC arc.
+
+        `AC` is A + C — the entry's current at the segment CENTRE, and the
+        coefficient the well-scaled shape set {1, sin kξ, cos kξ − 1} puts on
+        the constant shape. It is published rather than left to each consumer
+        because A ≈ −C to O((kΔ)²) on every entry type (self: A = −1 against
+        C → 1; N± neighbour: C/A = −cos(kΔ/2)), so `σA + B·sin kξ + σC·cos kξ`
+        evaluates a quantity of size ~(kΔ)²/8 from terms of size 1 — a
+        relative error of ~ε·8/(kΔ)², which is 1.2e-10 at N=801 on the
+        half-wave dipole and grows like N² (stevenmburns/momwire#203). Adding
+        the two float64 coefficients here is correctly rounded *to the sum*,
+        so every consumer that evaluates the basis gets the cancellation done
+        once, in the one place where it is exact.
 
         Writing the entries directly into seg-major position during the
         main per-basis loop (instead of building a list-of-lists `basis`
@@ -900,12 +913,14 @@ class SinusoidalSolver(_Cancelable):
         starts[0] = 0
         np.cumsum(counts, out=starts[1:])
 
+        A_ord, C_ord = all_A[order], all_C[order]
         seg_view = {
             "starts": starts,
             "jbasis": all_basis[order],
-            "A": all_A[order],
+            "A": A_ord,
             "B": all_B[order],
-            "C": all_C[order],
+            "C": C_ord,
+            "AC": A_ord + C_ord,
             "sigma": all_sigma[order],
         }
         self._cached_basis = (geom, k, a_key, seg_view)

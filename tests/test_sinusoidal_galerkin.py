@@ -589,36 +589,49 @@ M3_GEOMETRIES = {
 # the reference ambiguity constraint 2 describes, and the gate below requires
 # its verdict to hold at every corner of it. Re-derived by the `slow`
 # reproduction test at the bottom, so these cannot rot silently.
+#
+# 2026-07-31 (momwire#203): the six `*_gal` entries were re-measured after the
+# basis evaluation was folded onto the well-scaled shape set. They moved by
+# 1.7e-7 to 1.9e-5 of |Z|; the `*_coll` and `*_bspline2` entries reproduced to
+# 1e-9, which is what confines the move to the Galerkin path. The old values
+# were the ones carrying error, not these: at the vee's N=321 the literal
+# `σA + B·sin + σC·cos` evaluates a 8.2e-6-sized number from O(1) terms and so
+# is 1.1e-11 relative off an 80-bit evaluation of the same coefficients, and
+# cond(G) = 2.9e5 there — 3e-6 of |Z|, reproduced to within a factor of ~1 by
+# perturbing the folded evaluation by exactly that much (the Richardson keys
+# then amplify it ~4×, which is why `vee.rich_sin_gal` is the one that moved
+# past 1e-5). Nothing about the physics changed; the solver stopped throwing
+# away five digits it had already computed.
 M3_REFS = {
     "dipole": dict(
-        sin_gal_321=69.639094 - 18.056294j,
+        sin_gal_321=69.639093 - 18.056307j,
         sin_coll_321=69.631876 - 18.107822j,
         bspline2_321=69.633780 - 18.065315j,
-        rich_sin_gal=69.634798 - 18.007989j,
+        rich_sin_gal=69.634796 - 18.008036j,
         rich_sin_coll=69.633551 - 18.018862j,
         rich_bspline2=69.633701 - 18.010747j,
     ),
     "vee": dict(
-        sin_gal_321=97.960367 - 61.297119j,
+        sin_gal_321=97.960292 - 61.297668j,
         sin_coll_321=97.947410 - 61.346335j,
         bspline2_321=97.945040 - 61.306749j,
-        rich_sin_gal=97.934880 - 61.214816j,
+        rich_sin_gal=97.934589 - 61.216983j,
         rich_sin_coll=97.934600 - 61.216284j,
         rich_bspline2=97.930347 - 61.214625j,
     ),
     "k2_junction": dict(
-        sin_gal_321=124.493290 + 0.392380j,
+        sin_gal_321=124.493250 + 0.392167j,
         sin_coll_321=124.479522 + 0.340718j,
         bspline2_321=124.492289 + 0.367751j,
-        rich_sin_gal=124.513127 + 0.444632j,
+        rich_sin_gal=124.513021 + 0.444108j,
         rich_sin_coll=124.513126 + 0.445724j,
         rich_bspline2=124.514726 + 0.445185j,
     ),
     "k3_star": dict(
-        sin_gal_321=13.438931 - 951.615461j,
+        sin_gal_321=13.438927 - 951.615918j,
         sin_coll_321=13.438415 - 951.658449j,
         bspline2_321=13.416848 - 950.833391j,
-        rich_sin_gal=13.379066 - 949.328997j,
+        rich_sin_gal=13.379051 - 949.330644j,
         rich_sin_coll=13.380080 - 949.324632j,
         rich_bspline2=13.369902 - 949.004252j,
     ),
