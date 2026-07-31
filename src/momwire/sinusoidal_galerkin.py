@@ -211,9 +211,35 @@ to 3.4e-5 on the two-member oracle and 3.9e-6 on the one-member `PortAtEnd`
 topology, self terms included. Two formulations sharing no basis, no testing
 and no port algebra, landing on the same numbers.
 
-Scoped out and refused rather than approximated: junction ports over any
-GROUND (the node charge's image is not removed) and under MIXED per-wire
-radii (the kernel is not reciprocal there at all, M2).
+Scoped out and refused rather than approximated: junction ports under MIXED
+per-wire radii (the kernel is not reciprocal there at all, M2) and over a
+FINITE ground — see #191 below for what a PEC ground costs instead.
+
+**#191 — the same port over a PEC ground.** M5b removed the lumped node
+charge from the free-space source only, so any `ground_z` refused. Under PEC
+that refusal costs one repeat of the correction and no new object: the
+ground block IS the free-space field of mirrored sources, subtracted once
+(`_tested_ground_block`, one global minus sign), and the image of a point
+charge is a point charge at the mirrored node. So the removed term's image
+is a mirror of a term already removed, and
+
+    G' = (A − D − Dᵀ + S) − (B − D_img − D_imgᵀ + S_img)
+
+with `D_img`/`S_img` the same kernels at the mirrored separation — entering
+G with the OPPOSITE sign because the image block is subtracted. The gate is
+M5b's own: the full port Y still agrees ENTRYWISE with `BSplineSolver` over
+the same PEC plane, 8.5e-5 on the two-member oracle and 4.7e-6 on the
+one-member `PortAtEnd` topology, against 5.6e-5 / 3.9e-6 for the same
+geometries in free space — the ground rides at the free-space floor, though
+it moves the port Y itself by 33 %. The port block stays symmetric at
+6.3e-13. Dropping the image half misses by 15 % and flipping its sign by
+38 %, which is what pins the derivation rather than the code reading.
+
+The finite grounds stay refused: a Fresnel reflection of a point charge is
+angle-dependent and Sommerfeld's is not an image at all, so neither has the
+closed mirror this argument turns on. #151's grounded-junction rejection is
+untouched — a node IN the plane is pinned by its own image and cannot be a
+port at all.
 
 One amendment formulation (b) forces and M5 did not need: the full mixed
 gap+port Y is symmetric to 3.7e-8 rather than 1e-10 under
@@ -420,7 +446,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     reaction integral (`_assemble_Z_ported`), which reproduces `BSplineSolver`
     to 3.4e-5 / 3.9e-6 entrywise. `_assemble_Z` still returns M5's refuted
     reaction-form matrix, and `tests/test_junction_ports.py` still measures
-    it. Junction ports over a ground, or with mixed per-wire radii, raise.
+    it. Over a PEC ground (`ground_z` alone) the same correction runs on the
+    image block at the mirrored separation (#191), holding 8.5e-5 / 4.7e-6
+    against `BSplineSolver`. A FINITE ground (`ground_eps`, or
+    `ground_model="sommerfeld"`) or mixed per-wire radii still raise.
 
     `n_qp_node`
         Panels-per-end of the graded rule the node-charge correction is
@@ -538,29 +567,35 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     def _refuse_junction_port_solve(self):
         """Refuse the junction-port solves M5b formulation (b) does NOT cover.
 
-        M5's blanket refusal is superseded — see `_assemble_Z_ported` — but
-        the node-charge correction that lifts it is a FREE-SPACE scalar
-        potential, and it is written for one wire radius:
+        M5's blanket refusal is superseded — see `_assemble_Z_ported` — and
+        #191 narrowed what is left of it to the FINITE grounds:
 
-        * with a ground, the node's lumped charge also has an image (exact
-          and cheap under PEC, a Fresnel/Sommerfeld object under the finite
-          grounds), and none of those images are removed here. Leaving them
-          in would restore a fraction of the very term the correction exists
-          to take out, so the ground + junction-port combination raises
-          rather than returning a plausible wrong number;
+        * under PEC (`ground_z` with no `ground_eps`) the node charge's image
+          is a point charge at the mirrored node, i.e. a mirror of the term
+          already removed, so the same correction removes it at the mirrored
+          separation and the solve runs;
+        * under `ground_eps` (Fresnel) or `ground_model="sommerfeld"` the
+          image of a point charge is not a point charge — the reflection is
+          angle-dependent and, for Sommerfeld, not an image at all — so the
+          removed term has no closed mirror here. Leaving it in would restore
+          a fraction of the very term the correction exists to take out, so
+          the finite-ground + junction-port combination still raises rather
+          than returning a plausible wrong number;
         * with mixed per-wire radii the kernel is not even symmetric (M2's
           finding), and the correction's regularization radius is ambiguous
           at a node whose members disagree about `a`.
         """
         if not self.junction_ports:
             return
-        if self.ground_z is not None:
+        if self.ground_z is not None and self.ground_eps is not None:
             raise NotImplementedError(
-                "junction_ports over a ground are not implemented on "
+                "junction_ports over a FINITE ground are not implemented on "
                 "SinusoidalGalerkinSolver: M5b's node-charge correction "
-                "removes the node's own lumped charge but not its GROUND "
-                "IMAGE, so part of the M5 blocker (Z_pp ~ 1/(jw*4*pi*eps*a)) "
-                "would survive. Use BSplineSolver, or solve in free space"
+                "removes the node's own lumped charge, and #191 removes its "
+                "PEC image too, but the reflection-coefficient and Sommerfeld "
+                "images of a point charge are not point charges, so part of "
+                "the M5 blocker (Z_pp ~ 1/(jw*4*pi*eps*a)) would survive. Use "
+                "BSplineSolver, a PEC ground (ground_z alone), or free space"
             )
         if self._uniform_radius is None:
             raise NotImplementedError(
@@ -813,7 +848,21 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             + (sgn * 0.5 * float(geom["seg_h"][seg])) * geom["seg_tangents"][seg]
         )
 
-    def _node_charge_columns(self, geom, seg_view, k):
+    def _port_node_positions(self, geom, mirror=False):
+        """(P, 3) node positions of the junction ports, optionally mirrored
+        across z = ground_z — the PEC image's node, where the image of the
+        removed lumped charge sits (#191). The mirror is
+        `_image_source_centers_tangents`' verbatim, applied to a point."""
+        nodes = np.array(
+            [self._junction_node_position(geom, j) for j, _v in self.junction_ports]
+        )
+        if not mirror:
+            return nodes
+        return nodes * np.array([1.0, 1.0, -1.0]) + np.array(
+            [0.0, 0.0, 2.0 * self.ground_z]
+        )
+
+    def _node_charge_columns(self, geom, seg_view, k, nodes=None):
         """D[i, p] = ∫ f_i(s) ŝ·E_q(s) ds — every basis tested against the
         field of the LUMPED charge port p deposits at its node, (n_basis, P).
 
@@ -839,6 +888,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         now sourced by a genuine point charge instead of a basis endpoint.
         Converged: the port impedance moves 2.8e-5 from 8 to 12 panels-per-end
         and 4e-9 from 12 to 16, which is why the default is 16.
+
+        `nodes` overrides where the charges sit; the PEC-image correction
+        (#191) passes the MIRRORED nodes, which is the whole of its cost —
+        the image of a point charge is a point charge, so the same kernel at
+        the mirrored separation is exact rather than an approximation.
         """
         N = geom["n_segs"]
         n_basis = N + len(self.junction_ports)
@@ -848,7 +902,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         pref = -1j * self.eta / (4.0 * np.pi * k)
         starts = seg_view["starts"]
 
-        nodes = [self._junction_node_position(geom, j) for j, _v in self.junction_ports]
+        if nodes is None:
+            nodes = self._port_node_positions(geom)
         D = np.zeros((n_basis, len(nodes)), dtype=np.complex128)
         for m in range(N):
             gx, gw = _graded_endpoint_rule(
@@ -894,11 +949,24 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         clean a² law across a decade of radius. With it, the two formulations
         agree to 2e-5.
         """
+        nodes = self._port_node_positions(geom)
+        return self._lumped_pair_block(nodes, nodes, k)
+
+    def _node_charge_image_pair_block(self, geom, k):
+        """S_img[p, q] — the same lumped-lumped term between node p and the
+        PEC IMAGE of node q, at the mirrored separation (#191).
+
+        Symmetric because reflection is an isometry:
+        |node_p − M·node_q| = |M·node_p − node_q|.
+        """
+        nodes = self._port_node_positions(geom)
+        return self._lumped_pair_block(nodes, self._port_node_positions(geom, True), k)
+
+    def _lumped_pair_block(self, nodes_row, nodes_col, k):
+        """Mixed-potential pairing of unit node charges at two point sets,
+        regularized at the wire radius exactly as `_node_charge_columns` is."""
         a = float(self._uniform_radius)
-        nodes = np.array(
-            [self._junction_node_position(geom, j) for j, _v in self.junction_ports]
-        )
-        d = nodes[:, None, :] - nodes[None, :, :]
+        d = nodes_row[:, None, :] - nodes_col[None, :, :]
         R = np.sqrt((d * d).sum(axis=-1) + a * a)
         return 1j * self.eta * np.exp(-1j * k * R) / (4.0 * np.pi * k * R)
 
@@ -927,6 +995,22 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         `G − Gᵀ` is untouched by the correction (both halves get the same
         scalars), so the fill's reciprocity is exactly as good as it was.
+
+        Over a PEC ground the same correction runs a second time on the image
+        block (#191). `_assemble_Z` builds that block as the free-space field
+        of MIRRORED sources and the caller subtracts it once,
+        G = A − B, so the removed term's image is a mirror of a term already
+        removed and the arithmetic is fixed rather than chosen:
+
+            A' = A − D − Dᵀ + S            (free space, above)
+            B' = B − D_img − D_imgᵀ + S_img (mirrored nodes)
+            G' = A' − B'
+
+        i.e. the image half enters with the OPPOSITE sign, at the mirrored
+        separation. Nothing else changes: the image of a point charge under
+        PEC is a point charge, so the correction needs no new kernel and no
+        new constant. Fresnel/Sommerfeld images are not point charges and are
+        refused upstream (`_refuse_junction_port_solve`).
         """
         G, seg_view = self._assemble_Z(geom, k)
         if not self.junction_ports:
@@ -937,6 +1021,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         G[:, N:] -= D
         G[N:, :] -= D.T
         G[N:, N:] += self._node_charge_pair_block(geom, k)
+        if self.ground_z is not None:
+            D_img = self._node_charge_columns(
+                geom, seg_view, k, nodes=self._port_node_positions(geom, mirror=True)
+            )
+            G[:, N:] += D_img
+            G[N:, :] += D_img.T
+            G[N:, N:] -= self._node_charge_image_pair_block(geom, k)
         return G, seg_view
 
     def _basis_coefs(self, geom, k):
