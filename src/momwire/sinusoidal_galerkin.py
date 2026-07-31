@@ -233,8 +233,23 @@ even agree with `compute_impedance`. They now share its drive and readout.
 The delta-gap feed's readout is still not its drive's dual (`feed_readout`,
 below), which is why a two-gap-feed Y is symmetric only to O(h).
 
-Still deferred: wire loading and the C++ accelerator — both raise rather than
-return plausible wrong numbers.
+**The C++ far fill (#194).** The Galerkin fill is the point-matched fill's
+kernel evaluated at n_qp_test observers per row instead of one, so it is
+~n_qp_test× the work by construction, and ~85 % of a solve's wall clock is
+that one kernel. `sinusoidal_galerkin_far_fill` fuses the kernel with the
+test reduction: per test segment it evaluates the Eqs 76-79 tables at that
+segment's quadrature points and contracts each observer's row into the
+`(nnz, N)` contributions as it computes it, so the numpy path's
+`(rows·nq, N, n_qp_const)` scratch — the thing the blocked fill above exists
+to bound — is never formed at all. It serves the PLAIN projection, i.e. the
+free-space block and the PEC image block; the reflection-coefficient
+projector's per-pair Fresnel tables and the Sommerfeld remainder stay on
+numpy, as does the O(N) near-pair correction. The numpy path remains the
+reference implementation and the oracle, and is what runs when the extension
+is absent.
+
+Still deferred: wire loading — it raises rather than returning plausible
+wrong numbers.
 """
 
 import numpy as np
@@ -242,7 +257,12 @@ import scipy.linalg
 import scipy.spatial.distance
 
 from . import _ground_refl
+from ._accel import acc as _acc
 from .sinusoidal import _EULER_GAMMA, SinusoidalSolver
+
+_HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
+    _acc, "sinusoidal_galerkin_far_fill"
+)
 
 # Pairs are corrected in blocks so the (P, G, n_qp_const) source-quadrature
 # scratch inside the field kernel stays bounded regardless of model size.
@@ -254,7 +274,8 @@ _PAIR_BLOCK = 512
 # complex — 18.6 GiB at N=1601, OOM at N≈2000 on a 24 GiB budget (the M6
 # census ceiling). The block size adapts to N so the live fill workspace
 # stays near this budget; the arithmetic per matrix entry is identical, so
-# the assembled G is bit-for-bit the unblocked one.
+# the assembled G is bit-for-bit the unblocked one. Governs the NUMPY fill
+# only — the fused C++ far fill never forms that scratch.
 _FILL_WORKSPACE_BYTES = 1 << 30
 
 
@@ -405,8 +426,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         Panels-per-end of the graded rule the node-charge correction is
         integrated on (default 16, converged: 4e-9 from 12 to 16).
 
-    Wire loading and the C++ accelerator are deliberately not wired yet and
-    raise where reached.
+    The C++ accelerator serves the far fill of the PLAIN-projected blocks —
+    free space and the PEC image — through `_far_fill_accel`, which fuses the
+    field kernel with the test reduction (#194). Everything else is numpy: the
+    reflection-coefficient and Sommerfeld ground blocks, the near-pair
+    correction, and the whole fill when the extension is not loaded. Wire
+    loading is deliberately not wired and raises where reached.
     """
 
     def __init__(
@@ -1037,11 +1062,24 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         Two-tier quadrature (M2): a shared uniform rule for the far pairs,
         overwritten per near pair by the endpoint-graded rule.
+
+        The far half runs in C++ when the accelerator is present AND the
+        projector is the plain tangential one (`_far_fill_accel`) — that is
+        the free-space block and the PEC image block. The near correction is
+        O(N) pairs and stays here regardless.
         """
         N = ctx["N"]
         nq = ctx["nq"]
         src_c = geom["seg_centers"] if src_c is None else src_c
         src_t = geom["seg_tangents"] if src_t is None else src_t
+
+        if _HAVE_GALERKIN_FAR_FILL and projector is _plain_projection:
+            contribs = self._far_fill_accel(k, ctx, src_c, src_t)
+            if self.near_correction:
+                self._apply_near_correction(
+                    geom, k, ctx, contribs, projector, src_c, src_t
+                )
+            return contribs
 
         # Blocked over test segments (#194): identical arithmetic per matrix
         # entry, but the kernel's source-quadrature scratch is (rows·nq, N,
@@ -1077,6 +1115,57 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         if self.near_correction:
             self._apply_near_correction(geom, k, ctx, contribs, projector, src_c, src_t)
         return contribs
+
+    def _far_fill_accel(self, k, ctx, src_c, src_t):
+        """C++ far fill for the PLAIN projection: kernel and test reduction
+        fused, (contrib_const, sin, cos) each (nnz, N) — the same three arrays
+        the numpy loop above builds (#194).
+
+        The fusion is what buys the speed AND the memory: the numpy path has
+        to materialize the (rows·nq, N) field tables — with the
+        (rows·nq, N, n_qp_const) source-quadrature scratch under them, which is
+        why it blocks at all — before it can contract the test-quadrature axis
+        away, while the kernel contracts each observer's row into `contribs`
+        as it computes it. So there is no block loop here and
+        `_FILL_WORKSPACE_BYTES` does not apply.
+
+        The reduction is accumulated one test-quadrature node at a time, in
+        the same order as `_tested_contrib_rows`; the field arithmetic per
+        matrix entry is the point-matched solver's `sinusoidal_field_tensor`
+        verbatim. Agreement with the numpy reference is therefore
+        reassociation-level, not algorithmic (~1e-15 relative on G).
+
+        Only the plain projector's blocks come here — free space and the PEC
+        image. `_refl_projection`'s per-pair Fresnel tables and the Sommerfeld
+        remainder keep the numpy path, so their callers still see the blocked
+        loop above.
+        """
+        n_obs = ctx["obs_c"].shape[0]
+        a_obs = ctx["a_obs"]
+        # The kernel takes one radius per OBSERVER (which is per test segment,
+        # repeated over its quadrature nodes), so mixed per-wire radii need no
+        # run-splitting here — unlike the point-matched scalar-`a` kernel.
+        a_flat = (
+            np.ascontiguousarray(np.reshape(a_obs, n_obs), dtype=np.float64)
+            if isinstance(a_obs, np.ndarray)
+            else np.full(n_obs, float(a_obs))
+        )
+        gx, gw = self._leggauss_cached(self.n_qp_const)
+        return _acc.sinusoidal_galerkin_far_fill(
+            np.ascontiguousarray(ctx["obs_c"], dtype=np.float64),
+            np.ascontiguousarray(ctx["obs_t"], dtype=np.float64),
+            a_flat,
+            np.ascontiguousarray(src_c, dtype=np.float64),
+            np.ascontiguousarray(src_t, dtype=np.float64),
+            np.ascontiguousarray(ctx["hh"], dtype=np.float64),
+            float(k),
+            float(self.eta),
+            np.ascontiguousarray(gx, dtype=np.float64),
+            np.ascontiguousarray(gw, dtype=np.float64),
+            np.ascontiguousarray(ctx["w_entry"], dtype=np.complex128),
+            np.ascontiguousarray(ctx["starts"], dtype=np.int64),
+            self._cancel_flag,
+        )
 
     def _refl_projection(self, geom, eps_t):
         """Projector applying NEC's Fresnel field dyad to the image-source
