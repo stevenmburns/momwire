@@ -1881,3 +1881,47 @@ def test_the_variational_readout_costs_the_m3_payoff_on_k3_star():
         "the variational readout no longer costs the k3_star payoff "
         f"({worst}) — reconsider making it the default"
     )
+
+
+# ---------------------------------------------------------------------------
+# momwire#194 — the far fill is blocked over test segments
+# ---------------------------------------------------------------------------
+# The profile (scripts/profile_sinusoidal_galerkin.py) showed the unblocked
+# fill's (N·nq, N, n_qp_const) kernel scratch peaking at 18.6 GiB by N=1601
+# and OOMing at N≈2000 — the M6 census ceiling. Blocking bounds the scratch;
+# these tests pin that it changes NOTHING else: the arithmetic per matrix
+# entry is identical, so G must be bit-for-bit the single-block matrix.
+
+
+def _G_at_block_budget(monkeypatch, budget, cls=SinusoidalGalerkinSolver, **kw):
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_FILL_WORKSPACE_BYTES", budget)
+    return _matrix(cls(**kw))
+
+
+@pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
+def test_far_fill_blocking_is_bit_exact(monkeypatch, geom_name):
+    """Forced one-segment blocks reproduce the single-block G exactly."""
+    kw = GEOMETRIES[geom_name]()
+    G_one_block = _G_at_block_budget(monkeypatch, 1 << 62, **kw)
+    G_tiny_blocks = _G_at_block_budget(monkeypatch, 1, **kw)
+    assert np.array_equal(G_one_block, G_tiny_blocks)
+
+
+@pytest.mark.parametrize(
+    "ground_kw",
+    [
+        dict(ground_z=-6.0),
+        dict(ground_z=-6.0, ground_eps=(13.0, 0.005)),
+    ],
+    ids=["pec-image", "refl-coef"],
+)
+def test_far_fill_blocking_is_bit_exact_over_ground(monkeypatch, ground_kw):
+    """The ground blocks share `_tested_contribs`, so blocking must be
+    invisible there too — including the per-pair Fresnel projector, whose
+    tables are indexed by GLOBAL test-segment index from inside a block."""
+    kw = _dipole(**ground_kw)
+    G_one_block = _G_at_block_budget(monkeypatch, 1 << 62, **kw)
+    G_tiny_blocks = _G_at_block_budget(monkeypatch, 1, **kw)
+    assert np.array_equal(G_one_block, G_tiny_blocks)
