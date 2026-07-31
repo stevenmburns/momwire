@@ -1894,8 +1894,15 @@ def test_the_variational_readout_costs_the_m3_payoff_on_k3_star():
 
 
 def _G_at_block_budget(monkeypatch, budget, cls=SinusoidalGalerkinSolver, **kw):
+    """G at a forced fill-workspace budget, on the NUMPY path.
+
+    Blocking is a property of the numpy fill — the fused C++ far fill never
+    forms the scratch the budget bounds and ignores it — so the accelerator is
+    switched off here or the comparison would be two identical C++ fills.
+    """
     from momwire import sinusoidal_galerkin as _sg
 
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
     monkeypatch.setattr(_sg, "_FILL_WORKSPACE_BYTES", budget)
     return _matrix(cls(**kw))
 
@@ -1925,3 +1932,107 @@ def test_far_fill_blocking_is_bit_exact_over_ground(monkeypatch, ground_kw):
     G_one_block = _G_at_block_budget(monkeypatch, 1 << 62, **kw)
     G_tiny_blocks = _G_at_block_budget(monkeypatch, 1, **kw)
     assert np.array_equal(G_one_block, G_tiny_blocks)
+
+
+# ---------------------------------------------------------------------------
+# momwire#194 step 2 — the C++ far fill
+# ---------------------------------------------------------------------------
+# `sinusoidal_galerkin_far_fill` fuses the Eqs 76-79 kernel with the test
+# reduction for the PLAIN-projected blocks (free space, PEC image). The numpy
+# fill stays the reference implementation, so the gate is a matrix-level
+# agreement: the same G to reassociation. `1e-13` is the house tolerance for
+# the sinusoidal accelerator agreements (test_momwire's field-tensor test uses
+# it too); measured here it sits at 1.3e-14 - 5.4e-14, the two paths differing
+# only in summation order — the C++ scalar arithmetic against numpy's ufunc
+# chains. It is NOT thread-count sensitive: the kernel parallelizes over test
+# segments and each segment's rows are summed by one thread in the numpy
+# path's own quadrature-node order.
+
+ACCEL_AGREEMENT = 1e-13
+
+
+def _G_accel_and_numpy(monkeypatch, **kw):
+    """(G with the accelerator, G with it switched off) on one geometry."""
+    from momwire import sinusoidal_galerkin as _sg
+
+    G_acc = _matrix(SinusoidalGalerkinSolver(**kw))
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
+    G_py = _matrix(SinusoidalGalerkinSolver(**kw))
+    return G_acc, G_py
+
+
+def _rel_matrix_delta(G_acc, G_py):
+    return np.linalg.norm(G_acc - G_py) / np.linalg.norm(G_py)
+
+
+@pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
+def test_accelerated_far_fill_matches_numpy(monkeypatch, geom_name):
+    """Free space: the C++ fill reproduces the numpy matrix entrywise."""
+    G_acc, G_py = _G_accel_and_numpy(monkeypatch, **GEOMETRIES[geom_name]())
+    assert _rel_matrix_delta(G_acc, G_py) < ACCEL_AGREEMENT
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        dict(ground_z=-6.0),
+        dict(ground_z=-6.0, ground_eps=(13.0, 0.005)),
+        dict(ground_z=-6.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"),
+        dict(wire_radius=[0.0005, 0.004]),
+    ],
+    ids=["pec-image", "refl-coef", "sommerfeld", "mixed-radius"],
+)
+def test_accelerated_far_fill_matches_numpy_per_block(monkeypatch, over):
+    """Each dispatch branch, against its numpy reference.
+
+    The PEC image block goes through the kernel like free space (same plain
+    projector, mirrored sources). The refl-coef and Sommerfeld grounds keep
+    their numpy image blocks while their free-space block is accelerated —
+    the mixed case, which is where a wrong dispatch would show. Mixed per-wire
+    radii exercise the kernel's per-OBSERVER radius argument (the point-matched
+    kernel takes a scalar and splits into radius runs instead).
+    """
+    kw = _k2_junction(**over) if "wire_radius" in over else _dipole(**over)
+    G_acc, G_py = _G_accel_and_numpy(monkeypatch, **kw)
+    assert _rel_matrix_delta(G_acc, G_py) < ACCEL_AGREEMENT
+
+
+def test_accelerated_fill_meets_the_g1_symmetry_gate():
+    """The accelerated fill is held to G1 itself, not just to agreement with
+    numpy: a reduction that mis-pairs weights with rows would still agree with
+    a numpy path making the same mistake, but could not stay symmetric."""
+    from momwire import sinusoidal_galerkin as _sg
+
+    if not _sg._HAVE_GALERKIN_FAR_FILL:
+        pytest.skip("accelerator not built")
+    for name, factory in GEOMETRIES.items():
+        G = _matrix(SinusoidalGalerkinSolver(**factory()))
+        assert _sym_ratio(G) < G1_GATE, name
+
+
+def test_far_fill_dispatch_is_projector_selective(monkeypatch):
+    """The kernel serves the plain projector only. Free space takes it once;
+    a PEC image takes it twice (free-space + image block); the refl-coef
+    ground takes it once and leaves its Fresnel-weighted image block on numpy.
+    """
+    from momwire import sinusoidal_galerkin as _sg
+
+    if not _sg._HAVE_GALERKIN_FAR_FILL:
+        pytest.skip("accelerator not built")
+
+    calls = []
+    real = SinusoidalGalerkinSolver._far_fill_accel
+
+    def counted(self, *a, **kw):
+        calls.append(1)
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(SinusoidalGalerkinSolver, "_far_fill_accel", counted)
+    for over, expected in (
+        ({}, 1),
+        (dict(ground_z=-6.0), 2),
+        (dict(ground_z=-6.0, ground_eps=(13.0, 0.005)), 1),
+    ):
+        calls.clear()
+        _matrix(SinusoidalGalerkinSolver(**_dipole(**over)))
+        assert len(calls) == expected, over
