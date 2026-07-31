@@ -256,6 +256,11 @@ What can be said, and is worth saying, is narrower and more useful:
   *fails* to explain the residue. It is — but for a reason that disqualifies it
   as evidence either way.
 
+> **Resolved 2026-07-31:** the meshing issue was fixed in antennaknobs (#630,
+> #636 — the helix now meshes at the design density like every other design),
+> and the re-instrumented control is scored in the full-depth re-run (§13):
+> **no basis discrepancy** (`gal↔bs2` 0.01 %, matched-feed 0.005 % at N=321).
+
 ---
 
 ## 5. antennaknobs#478's near-open class: **the feed model**
@@ -496,3 +501,64 @@ verbatim output).
    option on `SinusoidalGalerkinSolver` is a real question, deliberately not
    answered here: it would re-baseline every M2–M4 number, so it needs its own
    issue and its own gate.
+
+---
+
+## 13. Addendum (2026-07-31): the full-depth re-run
+
+momwire#194 landed between the runs: the numpy far fill is now blocked over
+test segments and the plain-projected blocks run on a fused C++ kernel, so
+the §11 memory ceiling is gone. The harness's default cap moved 2000 → 4000
+segments, and the helix control was re-instrumented after the antennaknobs
+fixes §4 called for (#630 made the helix mesh at the design density; #636
+split it into `faceted_helix`/`continuous_helix`): the control is now
+`specialty.faceted_helix` on the standard `nominal_nsegs` ladder. The
+snapshot was re-dumped for that row alone — **every non-helix rung is
+byte-identical to the 2026-07-30 snapshot** (checked mechanically), so the
+tables below extend the same experiment rather than re-running a different
+one.
+
+Full sweep, 11 designs, 52 rungs — including every rung §11 recorded as
+skipped (discone N=161 / 2767 segs, hourglass and hourglass_slant N=321,
+hourglass_array N=161, lazy_h and vbeam N=321) — under a 24 GiB address-space
+cap, in ~3 minutes wall clock against the previous run's 16m54s at the
+smaller cap:
+
+```
+design                         finest  coll↔bs2   gal↔bs2  ptgap↔bs2  coll step  gal step  bs2 step
+---------------------------------------------------------------------------------------------------
+specialty.hentenna                321    12.89%     0.01%     0.008%      1.61%     0.02%     0.04%
+specialty.hentenna_slant          321     1.20%     0.03%     0.026%      0.54%     0.02%     0.09%
+arrays.hentenna_array             161    10.67%     0.04%     0.024%      1.09%     0.07%     0.04%
+specialty.hourglass               321     8.85%     0.01%     0.008%      1.11%     0.02%     0.03%
+specialty.hourglass_slant         321    14.88%     0.02%     0.019%      1.98%     0.02%     0.07%
+arrays.hourglass_array            161     9.35%     0.04%     0.018%      0.82%     0.07%     0.03%
+broadband.discone                 161    14.89%     0.13%     0.122%      9.65%     0.08%     0.13%
+specialty.bowtie                  321     0.05%     0.05%     0.017%      0.07%     0.07%     0.02%
+specialty.faceted_helix           321     0.59%     0.01%     0.005%      0.21%     0.21%     0.30%
+wire.lazy_h                       321     0.84%     0.81%     0.003%      1.85%     1.84%     1.43%
+wire.vbeam                        321     0.57%     0.59%     0.001%      0.75%     0.69%     0.54%
+```
+
+What the deeper rungs say, attribution by attribution:
+
+- **§3 (T/X-junction cluster → testing) holds and sharpens.** At the rungs
+  #521 actually quoted, `coll↔bs2` still reads 1.2–14.9 % while `gal↔bs2`
+  sits at 0.01–0.13 % — the point matching, not the basis, at every depth
+  the census asked about. `discone`'s 9.65 % collocation step at its finest
+  rung is the same story told by convergence rate: the collocation column is
+  still far from settled where both Galerkin columns already agree.
+- **§4 (helix) is resolved.** The re-instrumented control converges on a
+  genuinely refining ladder and scores clean: `gal↔bs2` 0.01 %, matched-feed
+  0.005 %. The 2026-07-22 census's 30.6 % helix row measured a frozen mesh;
+  there was never a curvature-driven basis effect. Follow-up 2 of §12 is
+  closed by antennaknobs#630/#636.
+- **§5 (near-open class → feed model) is confirmed at full depth.** At
+  N=321, `lazy_h` and `vbeam` still show a `gal↔bs2` gap (0.81 % / 0.59 %)
+  that the matched feed collapses to 0.003 % / 0.001 % — three decades. The
+  shared whole-structure slow convergence stands as filed (per-scheme steps
+  0.5–1.9 % at 2570 segments).
+
+The feed-placement guard reads 0.0000 m on every ladder, as before. Raw
+sweep output: reproduce with `python scripts/m6_residue_cluster.py` (the
+defaults now reach every rung above).
