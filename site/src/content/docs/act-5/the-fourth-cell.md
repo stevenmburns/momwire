@@ -134,7 +134,7 @@ and 0.001 dB in gain.
 - `SinusoidalGalerkinSolver` sits in the tree beside chapter 4's solver —
   same constructor, all three grounds of [Act III](/act-3/mirror-worlds/) by
   evaluator reuse, junction ports in free space — and is wired into the
-  [simulator](https://antennaknobs.dev/) as the `sinusoidal-galerkin` backend.
+  [simulator](https://app.antennaknobs.dev/) as the `sinusoidal-galerkin` backend.
 - The point-matched solver is deliberately untouched: its 0.1–0.3 Ω tracking
   of NEC is collocation heritage — shared basis, shared point matching — and
   it keeps the NEC-parity-probe role. The new cell will *never* track NEC
