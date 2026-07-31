@@ -12,13 +12,22 @@ ceiling is part of what this profile is for.
 Phases (nested; `total` contains `assemble`, which contains the rest):
 
   setup        `_basis_coefs` + `_test_context`
-  kernel_far   `_field_components_bcast` from the far fill — the Eqs 76-79
-               tables at (N·n_qp_test, N), with the n_qp_const source-
-               quadrature axis on top: the O(N²·nq) workspace
-  reduce       `_tested_contrib` — the per-quad-node test-integration sum
+  kernel_far   the far fill's field evaluation. On the numpy path that is
+               `_field_components_bcast` — the Eqs 76-79 tables at
+               (N·n_qp_test, N) with the n_qp_const source-quadrature axis on
+               top, i.e. the O(N²·nq) workspace. With the C++ accelerator it
+               is `_far_fill_accel`, which fuses the kernel WITH the reduction
+               (#194 step 2), so `reduce` goes to zero and this column is the
+               whole far fill.
+  reduce       the per-quad-node test-integration sum (`_tested_contrib_rows`
+               on the numpy far fill, `_tested_contrib` on the Sommerfeld
+               remainder)
   near         `_apply_near_correction` total (includes its kernel calls)
   assemble     `_assemble_Z` total
   total        `compute_impedance` total (assemble + factor/solve + readout)
+
+`--no-accel` forces the pure-Python far fill, which is what the before/after
+comparison for #194 step 2 is made of: same binary, same ladder, one flag.
 
 Geometry: the M1-M3 validation dipole (0.962λ/2, a = 0.5 mm), the same
 first-party geometry the M6 harness's feed-model column uses. The cost
@@ -31,6 +40,7 @@ Running
     python scripts/profile_sinusoidal_galerkin.py                 # default ladder
     python scripts/profile_sinusoidal_galerkin.py --nsegs 101 401
     python scripts/profile_sinusoidal_galerkin.py --cap-gib 24
+    python scripts/profile_sinusoidal_galerkin.py --no-accel      # numpy far fill
     python scripts/profile_sinusoidal_galerkin.py --out prof.json
 """
 
@@ -93,8 +103,21 @@ class _ProfiledGalerkin(SinusoidalGalerkinSolver):
         key = "kernel_near" if self._in_near else "kernel_far"
         return self._timed(key, super()._field_components_bcast, *a, **kw)
 
+    def _far_fill_accel(self, *a, **kw):
+        # The fused C++ far fill: kernel AND reduction, so it lands in
+        # kernel_far and `reduce` stays empty on this path.
+        return self._timed("kernel_far", super()._far_fill_accel, *a, **kw)
+
     def _tested_contrib(self, *a, **kw):
         return self._timed("reduce", super()._tested_contrib, *a, **kw)
+
+    def _tested_contrib_rows(self, *a, **kw):
+        # An instance method shadowing the base staticmethod — the blocked
+        # numpy fill calls this directly rather than through
+        # `_tested_contrib`, so without it the reduce column reads zero.
+        return self._timed(
+            "reduce", SinusoidalGalerkinSolver._tested_contrib_rows, *a, **kw
+        )
 
     def _near_pairs(self, *a, **kw):
         mm, nn = super()._near_pairs(*a, **kw)
@@ -115,8 +138,12 @@ class _ProfiledGalerkin(SinusoidalGalerkinSolver):
         return self._timed("total", super().compute_impedance)
 
 
-def run_one(n: int) -> dict:
+def run_one(n: int, no_accel: bool = False) -> dict:
     kw = dipole_kwargs(n)
+    if no_accel:
+        from momwire import sinusoidal_galerkin as _sg
+
+        _sg._HAVE_GALERKIN_FAR_FILL = False
 
     t0 = time.perf_counter()
     z_coll, _ = SinusoidalSolver(**kw).compute_impedance()
@@ -141,11 +168,11 @@ def run_one(n: int) -> dict:
 # ---------------------------------------------------------------------------
 # parent / child protocol: one child per rung, hard AS cap in the child
 # ---------------------------------------------------------------------------
-def child_main(n: int, cap_gib: float) -> None:
+def child_main(n: int, cap_gib: float, no_accel: bool = False) -> None:
     cap = int(cap_gib * 2**30)
     resource.setrlimit(resource.RLIMIT_AS, (cap, cap))
     try:
-        row = run_one(n)
+        row = run_one(n, no_accel=no_accel)
     except MemoryError:
         row = {
             "n": n,
@@ -160,18 +187,26 @@ def main(argv=None) -> None:
     ap.add_argument("--single", type=int, help=argparse.SUPPRESS)
     ap.add_argument("--nsegs", nargs="+", type=int, default=list(DEFAULT_LADDER))
     ap.add_argument("--cap-gib", type=float, default=24.0)
+    ap.add_argument(
+        "--no-accel",
+        action="store_true",
+        help="force the pure-Python far fill (the #194 before column)",
+    )
     ap.add_argument("--out", type=Path, default=None)
     args = ap.parse_args(argv)
 
     if args.single is not None:
-        child_main(args.single, args.cap_gib)
+        child_main(args.single, args.cap_gib, no_accel=args.no_accel)
         return
 
     cols = (
         "coll_total total assemble kernel_far reduce near kernel_near "
         "setup near_pairs peak_rss_gib"
     ).split()
-    print(f"cap: {args.cap_gib} GiB (RLIMIT_AS, per child)   ladder: {args.nsegs}")
+    print(
+        f"cap: {args.cap_gib} GiB (RLIMIT_AS, per child)   ladder: {args.nsegs}"
+        f"   far fill: {'numpy (forced)' if args.no_accel else 'accelerated'}"
+    )
     print(f"{'N':>6} " + " ".join(f"{c:>12}" for c in cols))
     rows = []
     for n in args.nsegs:
@@ -183,7 +218,8 @@ def main(argv=None) -> None:
                 str(n),
                 "--cap-gib",
                 str(args.cap_gib),
-            ],
+            ]
+            + (["--no-accel"] if args.no_accel else []),
             capture_output=True,
             text=True,
         )
