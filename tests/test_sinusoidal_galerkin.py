@@ -62,7 +62,7 @@ from momwire import (
     SinusoidalGalerkinSolver,
     SinusoidalSolver,
 )
-from momwire.sinusoidal_galerkin import _graded_endpoint_rule
+from momwire.sinusoidal_galerkin import _graded_endpoint_rule, _plain_projection
 
 WL = 22.0
 FREQ_MHZ = 299792458.0 / WL / 1e6
@@ -2036,3 +2036,164 @@ def test_far_fill_dispatch_is_projector_selective(monkeypatch):
         calls.clear()
         _matrix(SinusoidalGalerkinSolver(**_dipole(**over)))
         assert len(calls) == expected, over
+
+
+# ---------------------------------------------------------------------------
+# momwire#198 — sparse scatter/coefficient assembly
+# ---------------------------------------------------------------------------
+# `_assemble_Z`'s tail forms G = Σ_shape (R @ contrib[shape]) @ M[shape]. Both
+# factors carry one nonzero per support entry, so the dense spelling (an
+# nnz-way `np.add.at` plus three (n_basis,N)@(N,n_basis) matmuls) does O(N³)
+# BLAS work on matrices that are 3/N full. The sparse spelling is the same
+# product, and the crossover is the point-matched solver's own
+# `_DENSE_ASSEMBLY_THRESHOLD` — measured here on the Galerkin tail at N ≈ 57
+# (N=40: 0.31 ms dense / 0.48 ms sparse; N=80: 1.54 / 0.95; N=400: 49.5 / 8.1).
+#
+# The tolerance is NOT the 1e-13 house figure the accelerator agreements use,
+# and the reason is conditioning rather than sloppiness. The const-shape and
+# cos-shape products very nearly cancel — the three-term basis has A ≈ −C ~
+# 1/(kΔ) — so at N=41 the terms have Frobenius norm 291 against G's 0.24, a
+# 1.2e3 amplification that grows like N². Any reassociation of that sum lands
+# ~1e-13 away at these meshes, and `test_sparse_assembly_is_no_less_accurate`
+# pins that neither spelling is the accurate one: against an 80-bit reference
+# built from the same tested contributions, dense sits 1.16e-11 and sparse
+# 1.26e-11 away at N=401 (4.45e-11 / 4.13e-11 at N=801 — sparse the closer of
+# the two there). The G1 symmetry ratios agree to three digits between paths.
+
+SPARSE_ASSEMBLY_AGREEMENT = 1e-12  # measured 1.0e-13 - 2.9e-13 on this set
+# `_assemble_Z_ported`'s M5b corrections re-difference the port row against the
+# node-charge columns, amplifying whatever G carries by ~40x (measured 6e-12).
+PORTED_SPARSE_AGREEMENT = 1e-10
+
+
+def _G_by_assembly_path(monkeypatch, *, sparse, ported=False, **kw):
+    """G with the assembly-tail path forced, by moving the dense/sparse
+    threshold past (or below) this geometry's N."""
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_DENSE_ASSEMBLY_THRESHOLD", 0 if sparse else 1 << 30)
+    sim = SinusoidalGalerkinSolver(**kw)
+    geom = sim._build_geometry()
+    assemble = sim._assemble_Z_ported if ported else sim._assemble_Z
+    return assemble(geom, sim.k)[0]
+
+
+def _both_assembly_paths(monkeypatch, *, ported=False, **kw):
+    return (
+        _G_by_assembly_path(monkeypatch, sparse=False, ported=ported, **kw),
+        _G_by_assembly_path(monkeypatch, sparse=True, ported=ported, **kw),
+    )
+
+
+@pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
+def test_sparse_assembly_matches_dense(monkeypatch, geom_name):
+    G_dense, G_sparse = _both_assembly_paths(monkeypatch, **GEOMETRIES[geom_name]())
+    assert _rel_matrix_delta(G_sparse, G_dense) < SPARSE_ASSEMBLY_AGREEMENT
+
+
+@pytest.mark.parametrize(
+    "over",
+    [
+        dict(ground_z=-6.0),
+        dict(ground_z=-6.0, ground_eps=(13.0, 0.005)),
+        dict(ground_z=-6.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"),
+    ],
+    ids=["pec-image", "refl-coef", "sommerfeld"],
+)
+def test_sparse_assembly_matches_dense_over_ground(monkeypatch, over):
+    """The ground blocks are subtracted from the free-space contributions
+    BEFORE the scatter, so they reach the product through the same arrays —
+    but each ground adds its own cancellation to the sum being reassociated."""
+    G_dense, G_sparse = _both_assembly_paths(monkeypatch, **_dipole(**over))
+    assert _rel_matrix_delta(G_sparse, G_dense) < SPARSE_ASSEMBLY_AGREEMENT
+
+
+@pytest.mark.parametrize("geom_name", ["k2_junction", "k3_star"])
+@pytest.mark.parametrize("ported", [False, True], ids=["reaction-form", "ported"])
+def test_sparse_assembly_matches_dense_with_junction_ports(
+    monkeypatch, geom_name, ported
+):
+    """Junction ports are the case where "one nonzero per support entry" has
+    to be checked rather than assumed: a port column is supported on all K of
+    its members, so M[shape] gets K nonzeros in that column and G grows to
+    (N+P, N+P). `_assemble_Z_ported` goes through `_assemble_Z` too."""
+    kw = GEOMETRIES[geom_name](junction_ports=[0])
+    G_dense, G_sparse = _both_assembly_paths(monkeypatch, ported=ported, **kw)
+    assert G_dense.shape == (kw["nsegs"] * len(kw["wires"]) + 1,) * 2
+    gate = PORTED_SPARSE_AGREEMENT if ported else SPARSE_ASSEMBLY_AGREEMENT
+    assert _rel_matrix_delta(G_sparse, G_dense) < gate
+
+
+@pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
+def test_sparse_assembly_meets_the_g1_symmetry_gate(monkeypatch, geom_name):
+    """G1 held against the sparse path itself, not just against the dense
+    matrix: an index swapped between the scatter and the coefficient matrix
+    would still be close to dense in norm but could not stay symmetric."""
+    G = _G_by_assembly_path(monkeypatch, sparse=True, **GEOMETRIES[geom_name]())
+    assert _sym_ratio(G) < G1_GATE
+
+
+@pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
+@pytest.mark.parametrize("ports", [None, [0]], ids=["no-ports", "junction-port"])
+def test_support_entries_name_distinct_segment_basis_pairs(geom_name, ports):
+    """The invariant the sparse coefficient matrices rest on. `csc_matrix`
+    SUMS duplicate (row, col) triplets where the dense `M[m, i] = coef`
+    assignment keeps the last, so a CSR carrying a (segment, basis) pair twice
+    would make the two paths disagree by more than reassociation."""
+    if ports is not None and geom_name in ("dipole", "vee"):
+        pytest.skip("no junction to hang a port on")
+    kw = (
+        GEOMETRIES[geom_name]()
+        if ports is None
+        else GEOMETRIES[geom_name](junction_ports=ports)
+    )
+    sim = SinusoidalGalerkinSolver(**kw)
+    geom = sim._build_geometry()
+    view = sim._basis_coefs(geom, sim.k)
+    n_segs = geom["n_segs"]
+    m_of_entry = np.repeat(np.arange(n_segs), np.diff(view["starts"]))
+    pairs = np.stack([m_of_entry, view["jbasis"]], axis=1)
+    assert np.unique(pairs, axis=0).shape[0] == pairs.shape[0]
+
+
+def _longdouble_coefficient_product(sim):
+    """G's coefficient product in 80-bit arithmetic, from the SAME float64
+    tested contributions both assembly paths start from — so the only
+    difference from either is the precision of the sum they reassociate."""
+    geom = sim._build_geometry()
+    k = sim.k
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, k), k)
+    contribs = sim._tested_contribs(geom, k, ctx, _plain_projection)
+    n_segs = ctx["N"]
+    n_basis = n_segs + len(sim.junction_ports)
+    i_of_entry, m_of_entry = ctx["i_of_entry"], ctx["m_of_entry"]
+
+    T = []
+    for contrib in contribs:
+        t = np.zeros((n_basis, n_segs), dtype=np.complex128)
+        np.add.at(t, i_of_entry, contrib)
+        T.append(t.astype(np.clongdouble))
+    coefs = [
+        np.asarray(c, dtype=np.clongdouble)
+        for c in (ctx["sigA"], ctx["B"], ctx["sigC"])
+    ]
+
+    G = np.zeros((n_basis, n_basis), dtype=np.clongdouble)
+    for e in range(i_of_entry.shape[0]):
+        for t, coef in zip(T, coefs):
+            G[:, i_of_entry[e]] += coef[e] * t[:, m_of_entry[e]]
+    return G
+
+
+def test_sparse_assembly_is_no_less_accurate_than_dense(monkeypatch):
+    """Both spellings sit the same distance from the exact product, which is
+    what makes `SPARSE_ASSEMBLY_AGREEMENT` a conditioning number rather than a
+    slackened gate."""
+    kw = _dipole()
+    G_dense, G_sparse = _both_assembly_paths(monkeypatch, **kw)
+    G_ref = _longdouble_coefficient_product(SinusoidalGalerkinSolver(**kw))
+    ref = np.asarray(G_ref, dtype=np.complex128)
+    err_dense = _rel_matrix_delta(G_dense, ref)
+    err_sparse = _rel_matrix_delta(G_sparse, ref)
+    assert err_sparse < 3 * err_dense, (err_sparse, err_dense)
+    assert err_sparse < SPARSE_ASSEMBLY_AGREEMENT
