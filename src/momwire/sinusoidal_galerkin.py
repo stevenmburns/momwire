@@ -346,6 +346,49 @@ def _graded_endpoint_rule(eps, n_per_panel, leggauss):
     return x, w
 
 
+def _sin_minus_arg(u):
+    """sin(u) − u to full relative precision.
+
+    The literal difference loses everything below u²/6 relative, which is the
+    whole answer for the segment half-angles this solver works at (u = kΔ/2 ≈
+    1.9e-3 at N=801 on the half-wave dipole → ε·6/u² = 3.6e-10 relative). The
+    Taylor series has no cancellation at all — every term is smaller than the
+    last — so it is exact where the subtraction is worst; above u ≈ 0.1 the
+    subtraction costs at most 6ε/u² = 1.3e-13 and the series would need more
+    terms, so that is where the two swap.
+    """
+    u = np.asarray(u, dtype=float)
+    u2 = u * u
+    series = (
+        -(u * u2)
+        / 6.0
+        * (1.0 - u2 / 20.0 * (1.0 - u2 / 42.0 * (1.0 - u2 / 72.0 * (1.0 - u2 / 110.0))))
+    )
+    return np.where(np.abs(u) < 0.1, series, np.sin(u) - u)
+
+
+def _basis_value(sigAC, B, sigC, k, xi):
+    """The three-term basis current at local arc ξ, on the well-scaled shape
+    set {1, sin kξ, cos kξ − 1} (stevenmburns/momwire#203):
+
+        f(ξ) = σ(A+C) + B·sin(kξ) − 2σC·sin²(kξ/2)
+
+    — identically the NEC form σA + B·sin(kξ) + σC·cos(kξ), rearranged so that
+    no term is larger than the result. In the literal spelling σA and σC·cos
+    are O(1) and cancel to O((kΔ)²/8), which costs ε·8/(kΔ)² relative — 3e-13
+    at N=41 but 1.2e-10 at N=801 and rising like N², because the basis is
+    normalized to its own segment-centre current A+C. Here the σ(A+C) sum is
+    pre-computed in `_basis_coefs` (correctly rounded to the sum) and
+    cos kξ − 1 is spelled −2sin²(kξ/2), so both cancellations happen where
+    they are exact and f comes out to full relative precision.
+
+    Every argument broadcasts: callers supply coefficient columns and an arc
+    array in whatever pairing they already hold.
+    """
+    half = np.sin(0.5 * k * xi)
+    return sigAC + B * np.sin(k * xi) - 2.0 * sigC * (half * half)
+
+
 def _plain_projection(cm, m_idx, n_idx):
     """Tangential projection of the Eqs 76-79 component tables — NEC's rule
     E_t = (t_obs·t_src)·E_z + ((ρ⃗·t_obs)/ρ')·E_ρ, the same expression
@@ -653,10 +696,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 half = 0.5 * float(seg_h[m])
                 s, e = starts[m], starts[m + 1]
                 sig = seg_view["sigma"][s:e]
-                val = (
-                    sig * seg_view["A"][s:e]
-                    + seg_view["B"][s:e] * np.sin(k * half * sgn)
-                    + sig * seg_view["C"][s:e] * np.cos(k * half)
+                # ξ = σ_m·h_m/2; cos is even in ξ so the folded sin² term
+                # needs no sign, and B's sin(kξ) carries it (#203).
+                val = _basis_value(
+                    sig * seg_view["AC"][s:e],
+                    seg_view["B"][s:e],
+                    sig * seg_view["C"][s:e],
+                    k,
+                    half * sgn,
                 )
                 np.add.at(out[:, p], seg_view["jbasis"][s:e], sgn * val)
         return out
@@ -828,12 +875,18 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         order = np.argsort(all_seg, kind="stable")
         new_starts = np.zeros(N + 1, dtype=np.int64)
         np.cumsum(np.bincount(all_seg, minlength=N), out=new_starts[1:])
+        A_ord, C_ord = all_A[order], all_C[order]
+        # A + C on the port entries cancels exactly as it does on an ordinary
+        # N⁻ extension — C_m/A_m = −cos(kΔ_m/2) — so the port columns carry
+        # the #203 pre-sum too, and every consumer can read `AC` without
+        # asking whether the entry is a port's.
         return {
             "starts": new_starts,
             "jbasis": all_basis[order],
-            "A": all_A[order],
+            "A": A_ord,
             "B": all_B[order],
-            "C": all_C[order],
+            "C": C_ord,
+            "AC": A_ord + C_ord,
             "sigma": all_sigma[order],
         }
 
@@ -915,10 +968,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             pts = seg_c[m][None, :] + xi[:, None] * seg_t[m][None, :]
             lo, hi = starts[m], starts[m + 1]
             sig = seg_view["sigma"][lo:hi]
-            fval = (
-                sig[:, None] * seg_view["A"][lo:hi][:, None]
-                + seg_view["B"][lo:hi][:, None] * np.sin(k * xi)[None, :]
-                + sig[:, None] * seg_view["C"][lo:hi][:, None] * np.cos(k * xi)[None, :]
+            fval = _basis_value(
+                (sig * seg_view["AC"][lo:hi])[:, None],
+                seg_view["B"][lo:hi][:, None],
+                (sig * seg_view["C"][lo:hi])[:, None],
+                k,
+                xi[None, :],
             )  # (nnz_m, nq)
             for p, node in enumerate(nodes):
                 d = pts - node[None, :]
@@ -1060,6 +1115,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         f_{i,m}(ξ_q) = σA + B·sin(kξ_q) + σC·cos(kξ_q) (the current-shape
         convention pinned in `_evaluate_basis_at_points`) and the arc weight
         is gw_q·(h_m/2).
+
+        That value is evaluated on the FOLDED shape set (#203),
+
+            f = σ(A+C)·1 + B·sin(kξ) + σC·(cos kξ − 1)
+              = σ·AC + B·sin(kξ) − 2σC·sin²(kξ/2),
+
+        which is the same function rearranged so that neither term is larger
+        than the answer. The literal spelling subtracts two O(1) numbers to
+        get an O((kΔ)²/8) one — ε·8/(kΔ)² relative, 1.2e-10 at N=801 — and
+        `w_entry` multiplies the whole free-space fill, so that error lands
+        on G at full strength. `AC` is pre-summed in `_basis_coefs` and
+        `cos kξ − 1` is spelled as −2sin²(kξ/2), so both cancellations are
+        done where they are exact.
         """
         N = geom["n_segs"]
         seg_c = geom["seg_centers"]  # (N, 3)
@@ -1086,10 +1154,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         sigA = sig * seg_view["A"]
         B = seg_view["B"]
         sigC = sig * seg_view["C"]
-        fval = (
-            sigA[:, None]
-            + B[:, None] * np.sin(k * xi)[m_of_entry]
-            + sigC[:, None] * np.cos(k * xi)[m_of_entry]
+        sigAC = sig * seg_view["AC"]
+        fval = _basis_value(
+            sigAC[:, None], B[:, None], sigC[:, None], k, xi[m_of_entry]
         )  # (nnz, nq)
         w_entry = (gw[None, :] * hh[m_of_entry][:, None]) * fval  # (nnz, nq)
 
@@ -1111,6 +1178,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "sigA": sigA,
             "B": B,
             "sigC": sigC,
+            "sigAC": sigAC,
             "w_entry": w_entry,
         }
 
@@ -1388,6 +1456,30 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         effective coefficient source basis j puts on segment n — the SAME
         source-side coefficient matrices the collocation path builds.
 
+        The three shapes are the FOLDED set {1, sin kξ, cos kξ − 1} rather
+        than the literal {1, sin kξ, cos kξ} (stevenmburns/momwire#203). The
+        reassociation is exact,
+
+            T_c @ M_A + T_co @ M_C = T_c @ M_{A+C} + (T_co − T_c) @ M_C,
+
+        and it is what makes the product well-scaled: A ≈ −C makes M_{A+C}
+        small, and cos kξ ≈ 1 over a segment makes the cos-shape source
+        radiate almost the const-shape field, so T_co − T_c is small too.
+        Literally spelled, the two terms have Frobenius norm 8.8 against G's
+        2.7e-6 at N=2401 (3.3e6 amplification, growing like N²); folded they
+        are 2.8e-6 and 4.2e-7, i.e. the size of the answer. Measured against
+        an 80-bit reference product of the same float64 contributions, the
+        float64 result moves from 3.5e-10 to 9.5e-14 relative there — see
+        `tests/test_sinusoidal_galerkin.py`'s #203 section for the table and
+        for what this does NOT fix (the fill's own reciprocity floor, which
+        the same cancellation sets one level up).
+
+        Both `T_co − T_c` and `A + C` are formed by a single float64
+        subtraction of quantities the caller already has, so each is
+        correctly rounded *to its own result* — the fold moves the
+        cancellation to the two places where it costs nothing, exactly as
+        `_basis_value` does on the test side.
+
         With `ground_z` set, the ground's tested sub-assembly is subtracted
         from the free-space one before the scatter — one more source block
         through the same test quadrature, not a second scheme.
@@ -1413,11 +1505,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             gnd = self._tested_ground_block(geom, k, ctx)
             contribs = tuple(c - g for c, g in zip(contribs, gnd))
 
+        # Fold the const/cos pair before the product (#203). The contribution
+        # arrays are freshly built by the block above — nobody else holds a
+        # reference — so the cos block becomes (cos − const) in place rather
+        # than costing another (nnz, N) allocation (830 MB at N=2401).
+        c_const, c_sin, c_cos = contribs
+        c_cos -= c_const
+        contribs = (c_const, c_sin, c_cos)
+
         i_of_entry = ctx["i_of_entry"]
         m_of_entry = ctx["m_of_entry"]
         n_basis = N + len(self.junction_ports)
-        # Source-side coefficient values, identical to collocation's.
-        coefs = (ctx["sigA"], ctx["B"], ctx["sigC"])
+        # Source-side coefficient values: the SAME per-entry coefficients the
+        # collocation path builds, re-paired to the folded shapes.
+        coefs = (ctx["sigAC"], ctx["B"], ctx["sigC"])
 
         # Both factors of the product carry exactly one nonzero per support
         # entry e: the scatter T[shape] = R @ contrib[shape] with R[i(e),e]=1,
@@ -1431,10 +1532,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # `_assemble_Z` 3.10 s → 0.87 s. Threshold is the point-matched
         # `_assemble_Z`'s (`sinusoidal.py`), re-measured for this product —
         # below N≈57 the scipy constructors cost more than the BLAS call they
-        # replace. The two paths sum the same terms in a different order, and
-        # that sum is ill-conditioned (the const- and cos-shape products very
-        # nearly cancel), so they agree to ~1e-13 relative, not bit-exactly —
-        # equidistant from the exact product, not one degrading the other.
+        # replace. The two paths sum the same terms in a different order, so
+        # they agree to reassociation level rather than bit-exactly; on the
+        # folded shapes above that sum is well-scaled, so the two spellings
+        # now land ~1e-16 apart instead of the ~1e-13 the literal const/cos
+        # pair cost (#203).
         if N < _DENSE_ASSEMBLY_THRESHOLD:
 
             def _scatter(contrib):
@@ -1486,7 +1588,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         hh = ctx["hh"]
         a_seg = ctx["a_seg"]
         starts, counts = ctx["starts"], ctx["counts"]
-        sigA, B, sigC = ctx["sigA"], ctx["B"], ctx["sigC"]
+        sigAC, B, sigC = ctx["sigAC"], ctx["B"], ctx["sigC"]
 
         # Feature width relative to the half-length, taken at the tightest
         # segment in the model so one shared template resolves them all.
@@ -1528,10 +1630,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             ei = entry_of[e0:e1]  # into the flat seg_view arrays
             lp = pair_of[e0:e1] - p0  # into this block's pair axis
             xi_e = xi[lp]  # (E, G)
-            fval = (
-                sigA[ei][:, None]
-                + B[ei][:, None] * np.sin(k * xi_e)
-                + sigC[ei][:, None] * np.cos(k * xi_e)
+            # Same folded evaluation `_test_context` uses for the uniform
+            # rule — the near pairs' weights have to be the SAME function of
+            # ξ, or the overwrite would leave the row inconsistent (#203).
+            fval = _basis_value(
+                sigAC[ei][:, None], B[ei][:, None], sigC[ei][:, None], k, xi_e
             )
             w = (wg[None, :] * hh[mi][lp][:, None]) * fval  # (E, G)
 
@@ -1556,6 +1659,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         (the sin term integrates to zero by parity). Contrast the collocation
         RHS, which point-samples -1/Δ_m at the feed segment centre. This
         integral is exact, so M2's quadrature work does not touch it.
+
+        It carries the #203 cancellation too — both terms are O(Δ) and the
+        integral is O(Δ·(kΔ)²) — so it is evaluated on the folded shapes as
+        well:
+
+            ∫ f dξ = σ(A+C)·Δ_m + σC·(2/k)·(sin u − u),  u = kΔ_m/2,
+
+        with `sin u − u` taken from its series rather than from a float64
+        subtraction (`_sin_minus_arg`). That is the RHS, not G, so no gate
+        below moves on it; it is folded because leaving one consumer of the
+        pair unfolded is how the defect comes back.
 
         Junction port p: the source is an EMF in the infinitesimal lead
         between the port terminal and the node, so testing it against basis
@@ -1586,9 +1700,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             s, e = starts[fseg], starts[fseg + 1]
             hm = float(h[fseg])
             sig = seg_view["sigma"][s:e]
-            int_f = sig * seg_view["A"][s:e] * hm + sig * seg_view["C"][s:e] * (
+            int_f = sig * seg_view["AC"][s:e] * hm + sig * seg_view["C"][s:e] * (
                 2.0 / k
-            ) * np.sin(0.5 * k * hm)
+            ) * _sin_minus_arg(0.5 * k * hm)
             np.add.at(U[:, j], seg_view["jbasis"][s:e], -int_f / hm)
         for p in range(len(self.junction_ports)):
             U[N + p, len(self.feeds) + p] = -1.0
