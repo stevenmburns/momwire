@@ -248,6 +248,26 @@ from .sinusoidal import _EULER_GAMMA, SinusoidalSolver
 # scratch inside the field kernel stays bounded regardless of model size.
 _PAIR_BLOCK = 512
 
+# The far fill is likewise blocked over TEST segments so the field kernel's
+# (rows·nq, N, n_qp_const) source-quadrature scratch stays bounded (#194):
+# unblocked, the whole-matrix fill peaks at O(N²·n_qp_test·n_qp_const)
+# complex — 18.6 GiB at N=1601, OOM at N≈2000 on a 24 GiB budget (the M6
+# census ceiling). The block size adapts to N so the live fill workspace
+# stays near this budget; the arithmetic per matrix entry is identical, so
+# the assembled G is bit-for-bit the unblocked one.
+_FILL_WORKSPACE_BYTES = 1 << 30
+
+
+def _fill_block(n_segs, nq, n_qp_const):
+    """Test segments per far-fill block: live kernel scratch ≈ the budget.
+
+    Per test segment the kernel holds ~5 (nq, N, n_qp_const) complex
+    quadrature arrays plus ~16 (nq, N) tables at once (measured against
+    peak RSS in scripts/profile_sinusoidal_galerkin.py).
+    """
+    per_seg = nq * n_segs * 16 * (5 * n_qp_const + 16)
+    return max(1, _FILL_WORKSPACE_BYTES // per_seg)
+
 
 def _graded_endpoint_rule(eps, n_per_panel, leggauss):
     """Composite Gauss rule on [-1, 1] with panels graded toward BOTH ends.
@@ -978,17 +998,25 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         }
 
     def _tested_contrib(self, ctx, Phi):
-        """contrib[entry, n] = Σ_q w_entry[entry, q] · Phi[m(entry), q, n].
+        """contrib[entry, n] = Σ_q w_entry[entry, q] · Phi[m(entry), q, n]."""
+        return self._tested_contrib_rows(
+            ctx["w_entry"], ctx["m_of_entry"], ctx["nq"], Phi
+        )
+
+    @staticmethod
+    def _tested_contrib_rows(w_entry, m_local, nq, Phi):
+        """The reducer behind `_tested_contrib`, on caller-sliced rows:
+        `w_entry`/`m_local` cover one contiguous run of support entries and
+        `m_local` indexes Phi's first axis directly (the caller subtracts
+        its block offset).
 
         Accumulated one quadrature node at a time: the equivalent einsum over
-        `Phi[m_of_entry]` would first materialize an (nnz, nq, N) gather, nq×
+        `Phi[m_local]` would first materialize an (nnz, nq, N) gather, nq×
         the peak memory for the same arithmetic.
         """
-        w_entry = ctx["w_entry"]
-        m_of_entry = ctx["m_of_entry"]
-        out = np.zeros((w_entry.shape[0], ctx["N"]), dtype=np.complex128)
-        for q in range(ctx["nq"]):
-            out += w_entry[:, q, None] * Phi[m_of_entry, q, :]
+        out = np.zeros((w_entry.shape[0], Phi.shape[-1]), dtype=np.complex128)
+        for q in range(nq):
+            out += w_entry[:, q, None] * Phi[m_local, q, :]
         return out
 
     def _tested_contribs(self, geom, k, ctx, projector, src_c=None, src_t=None):
@@ -1015,17 +1043,36 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         src_c = geom["seg_centers"] if src_c is None else src_c
         src_t = geom["seg_tangents"] if src_t is None else src_t
 
-        cm = self._field_components_bcast(
-            k,
-            obs_c=ctx["obs_c"][:, None, :],  # (M, 1, 3)
-            obs_t=ctx["obs_t"][:, None, :],  # (M, 1, 3)
-            a=ctx["a_obs"],
-            src_c=src_c[None, :, :],
-            src_t=src_t[None, :, :],
-            src_hh=ctx["hh"][None, :],
-        )
-        Phi = projector(cm, ctx["m_of_obs"][:, None], np.arange(N)[None, :])
-        contribs = tuple(self._tested_contrib(ctx, P.reshape(N, nq, N)) for P in Phi)
+        # Blocked over test segments (#194): identical arithmetic per matrix
+        # entry, but the kernel's source-quadrature scratch is (rows·nq, N,
+        # n_qp_const) per block instead of (N·nq, N, n_qp_const) once.
+        starts = ctx["starts"]
+        nnz = ctx["w_entry"].shape[0]
+        a_obs = ctx["a_obs"]
+        n_idx = np.arange(N)[None, :]
+        contribs = tuple(np.zeros((nnz, N), dtype=np.complex128) for _ in range(3))
+        blk = _fill_block(N, nq, self.n_qp_const)
+        for m0 in range(0, N, blk):
+            m1 = min(m0 + blk, N)
+            o0, o1 = m0 * nq, m1 * nq
+            cm = self._field_components_bcast(
+                k,
+                obs_c=ctx["obs_c"][o0:o1, None, :],  # (rows·nq, 1, 3)
+                obs_t=ctx["obs_t"][o0:o1, None, :],
+                a=a_obs[o0:o1] if isinstance(a_obs, np.ndarray) else a_obs,
+                src_c=src_c[None, :, :],
+                src_t=src_t[None, :, :],
+                src_hh=ctx["hh"][None, :],
+            )
+            Phi = projector(cm, ctx["m_of_obs"][o0:o1, None], n_idx)
+            del cm  # drop the kernel tables before the reduction allocates
+            e0, e1 = starts[m0], nnz if m1 == N else starts[m1]
+            w = ctx["w_entry"][e0:e1]
+            m_loc = ctx["m_of_entry"][e0:e1] - m0
+            for c_out, P in zip(contribs, Phi):
+                c_out[e0:e1] = self._tested_contrib_rows(
+                    w, m_loc, nq, P.reshape(m1 - m0, nq, N)
+                )
 
         if self.near_correction:
             self._apply_near_correction(geom, k, ctx, contribs, projector, src_c, src_t)
