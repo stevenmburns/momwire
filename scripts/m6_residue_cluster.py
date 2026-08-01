@@ -95,8 +95,13 @@ DESIGNS = {
     # --- antennaknobs#521's control: no junctions at all, curvature only ----
     "specialty.faceted_helix": ("nominal_nsegs", (21, 41, 81, 161, 321)),
     # --- antennaknobs#478, near-open high-Q ---------------------------------
-    "wire.lazy_h": ("nominal_nsegs", (21, 41, 81, 161, 321)),
-    "wire.vbeam": ("nominal_nsegs", (21, 41, 81, 161, 321)),
+    # These two carry one rung more than the cluster: N=641 (~5140 segments) is
+    # ABOVE `DEFAULT_SEG_CAP`, so the standard sweep records it skipped and its
+    # cost does not grow — `--near-open` (momwire#213, report §18) is what runs
+    # it, on its own cap. The snapshot carries the row either way, which is what
+    # makes the two runs the same experiment at a different depth.
+    "wire.lazy_h": ("nominal_nsegs", (21, 41, 81, 161, 321, 641)),
+    "wire.vbeam": ("nominal_nsegs", (21, 41, 81, 161, 321, 641)),
     # EXCLUDED, not overlooked: #478's third member `wire.expanded_lazy_h` and
     # `arrays.delta_looparray_with_tls` are NETWORK designs — their feeds sit
     # at 0 V and the driving-point impedance is produced by antennaknobs'
