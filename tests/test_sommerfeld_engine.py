@@ -171,6 +171,60 @@ def test_grazing_scan_has_no_isolated_jump(eps_t, lo, hi):
         assert d2.max() < 10.0 * np.median(d2), (kk, d2.max(), np.median(d2))
 
 
+def _six_bessel_big_budget(eps_t, k2, rho, h, rtol=1e-11, max_panels=60000):
+    """The fig-13 contour with the panel budget lifted.
+
+    At rho >> h the Bessel tail needs ~50/h in lambda, i.e. thousands of
+    0.2*pi/rho panels — past `_tail`'s production 800 — which is why the
+    production rule hands grazing to fig 14 and why the cross-form check
+    above cannot go there. Lifting only the budget makes the fig-13
+    machine usable as a referee at grazing: its horizontal run sits ABOVE
+    both downward cuts and never goes near the k1 branch point, so it
+    shares no geometry with the waypoint under test.
+    """
+    k1 = k2 * np.sqrt(complex(eps_t))
+    if k1.imag > 0:
+        k1 = np.conj(k1)
+
+    def f(lam):
+        return som._integrand_six(lam, rho, h, k1, k2, "J")
+
+    p = min(1.0 / rho, 1.0 / h)
+    brk = p * (1.0 + 1.0j)
+    end_adapt = 1.3 * max(abs(k1), k2) + 3.0 * p + 1.0j * p
+    total = som._adaptive_segment(f, 0.0 + 0.0j, brk, rtol)
+    start = brk
+    if end_adapt.real > brk.real:
+        total = total + som._adaptive_segment(f, brk, end_adapt, rtol)
+        start = end_adapt
+    return total + som._tail(
+        f,
+        start,
+        1.0 + 0.0j,
+        0.2 * np.pi / max(rho, h),
+        rtol,
+        np.max(np.abs(total)),
+        max_panels=max_panels,
+    )
+
+
+@pytest.mark.parametrize(
+    "eps_t,r1,th_deg",
+    [(EPS_STRESS, 3.0, 0.5), (EPS_STRESS, 3.5, 0.5), (EPS_STRESS, 3.0, 2.0)],
+)
+def test_bessel_contour_agrees_at_grazing(eps_t, r1, th_deg):
+    """The referee for #161: past the old crossing radius on the lossless
+    stress ground, the shipped fig-14 result must match the fig-13 one.
+    Nothing is shared between the two paths, and fig 13 cannot have the
+    defect. Agreement is ~9e-10 of scale; the old capped waypoint sat
+    1.3e-1 away."""
+    th = np.radians(th_deg)
+    rho, h = r1 * np.cos(th), r1 * np.sin(th)
+    shipped = som._six_integrals(eps_t, K2, rho, h, 1e-9)
+    ref = _six_bessel_big_budget(eps_t, K2, rho, h)
+    assert np.max(np.abs(shipped - ref)) < 1e-8 * np.max(np.abs(ref))
+
+
 # ---------------------------------------------------------------------------
 # 4. Exact limits
 # ---------------------------------------------------------------------------

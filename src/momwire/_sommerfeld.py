@@ -83,6 +83,19 @@ _SOMM_R1_CAP_LAMBDA = float(os.environ.get("MOMWIRE_SOMM_R1_CAP_LAMBDA") or "15.
 # negligible, and grids with r1_max <= the split build bit-identically to the
 # pre-#159 layout. Overridable for validation (raise it to force the old
 # layout on any extent).
+#
+# Addendum (2026-08-01, issue #161): that "<= 7e-4 for every tested ground"
+# reading stands as measured, but for the LOSSLESS eps=16 stress case it was
+# measured against a direct evaluation that was itself wrong past R1 ~ 2.84
+# lambda at grazing — the fig-14 waypoint had dropped below k1's branch point
+# there, and the mis-branched contour returned a nearly flat surface, which a
+# coarse lattice of course interpolates well. Against the corrected surface
+# the same far lattice reads 2.2e-2 (R1 4-5), 5.7e-2 (5-7) and 9.3e-3 (7-10)
+# of scale, all of it at theta < 5 deg; the grid was always this far from the
+# truth there, only now it is visible. Lossy grounds are bit-identical before
+# and after (10-1.26j: 1.3e-3/1.4e-3/1.5e-3; 3-1.2j: 1.9e-3) and still meet
+# the 2e-3 bar, so no spacing is moved here — sizing the far lattice for a
+# near-lossless ground at grazing is #159's call, not #161's.
 _SOMM_R1_NEAR_LAMBDA = float(os.environ.get("MOMWIRE_SOMM_R1_NEAR_LAMBDA") or "4.0")
 
 # Far-zone lattice (wavelengths / degrees) — see the calibration note above.
