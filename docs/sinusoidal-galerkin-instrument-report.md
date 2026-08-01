@@ -777,3 +777,157 @@ than from a subclass in a script, and that anyone with a near-open, high-Q
 model (§5, antennaknobs#478) can opt into the feed model `BSplineSolver`
 already uses and get a reciprocal Y with it. What is deliberately not new is
 the default.
+
+---
+
+## 17. Addendum (2026-08-01): the feed-matched payoff — momwire#212
+
+§16 named the substantive blocker on ever flipping `feed_model`'s default: the
+M3/M4 payoff gates score `SinusoidalGalerkinSolver` against `SinusoidalSolver`,
+which hard-codes NEC's segment gap, so flipping only the Galerkin default would
+make `errColl/errGal` compare two feed models. The remedy §16 proposed was to
+give the point-matched solver a matching gap. momwire#212 went to do that and
+found it cannot be done — not for want of plumbing, but because the object does
+not exist. This addendum records the refutation and the payoff reading that
+survives it. **No pinned gate moved; §6, §15 and §16's run records stand as
+measured.**
+
+### The zero-width gap has no collocation RHS
+
+Collocation tests with δ(s − s_m), so row *m*'s drive is the pairing
+⟨δ_m, E_app⟩ = E_app(s_m) — defined only where E_app is a *function*. The
+zero-width gap's applied field is the distribution E_app = V·δ(s − s0), and
+δ·δ is not one: there is no number to put in the feed row, and zero in every
+other row is the unexcited problem. §16's Galerkin column exists only because
+its pairing ⟨f_i, E_app⟩ tests against a continuous f_i, on which the delta
+collapses to the drive column −V·f_i(s0). **The feed model is an axis of the
+testing scheme, not of the basis** — which is a sharper statement of the axis
+than §1 had, and it means the third axis is not orthogonal to the second after
+all: one cell of the 2 × 2 is empty.
+
+Any construction has to replace δ by a nascent delta g_w of unit integral and
+width *w* and then sample, v_m = −V·g_w(s_m − s0). There are exactly two
+regimes, and the dipole ladder was run on both
+(`scripts/m6_residue_cluster.py --feed-matched`, canonical 0.962 λ/2 dipole,
+a = 0.5 mm, free space):
+
+**w ≪ h.** The only width this model already owns is the wire radius: the
+b → a limit of the magnetic frill, i.e. a delta ring of magnetic current at
+ρ = a, whose on-axis field
+
+    E_z(d) = (V a²/2)(1 + jkR) e^{−jkR} / R³,   R = √(d² + a²)
+
+is smooth, finite everywhere, integrates to exactly V, and — the reason it is
+the right candidate — has **no free parameter left** once b → a. (The textbook
+frill's entire content is its b/a; that is precisely the modeling parameter a
+zero-width gap may not introduce.) It is evaluated in the solver's own kernel
+convention: ring on the surface, observation on the axis, which reproduces the
+source-filament / BC-on-surface separation √(d² + a²) the fill already uses.
+
+| N | h | a/h | `coll` (segment gap) | point-sampled | ‖v − c·v_seg‖/‖v‖ | (2a/h)·Z_seg / Z_pt − 1 |
+|--:|--:|--:|---|---|--:|--:|
+| 41 | 0.25810 | 1.94e-3 | 69.645276 − 18.457609j | 0.269841 − 0.071514j | 7.3e-9 | 2.8e-8 |
+| 81 | 0.13064 | 3.83e-3 | 69.633707 − 18.295229j | 0.533012 − 0.140041j | 5.6e-8 | 1.4e-7 |
+| 161 | 0.06573 | 7.61e-3 | 69.631109 − 18.185891j | 1.059402 − 0.276689j | 4.4e-7 | 1.1e-6 |
+| 321 | 0.03297 | 1.52e-2 | 69.631876 − 18.107822j | 2.112233 − 0.549288j | 3.5e-6 | 8.4e-6 |
+| 641 | 0.01651 | 3.03e-2 | 69.634021 − 18.048454j | 4.217769 − 1.093204j | 2.8e-5 | 6.7e-5 |
+
+The sampled drive carries no shape of its own — it is the segment-gap drive
+rescaled by h/2a, to parts in 1e5 — because every match point but the feed's
+sees ≈ 0 while the feed row sees the spike's *peak*, ≈ V/2a. Z is homogeneous
+of degree −1 in the RHS, so Z = (2a/h)·Z_segment and **doubles at every mesh
+doubling**. That is the failure in one sentence: *collocation reads the
+source's width off the feed row's amplitude and cannot tell a narrow gap from
+a small voltage*, so a sub-mesh width comes back as a fraction of a volt. It is
+not §16's log walk — it is a linear one, and no refinement fixes it, because a
+zero-width source is sub-mesh at every N.
+
+**w ≳ h.** The source is mesh-resolved and collocation is consistent again,
+but *w* is then a modeling parameter, and the smallest one the mesh resolves is
+w = h — which is NEC's segment gap exactly. Confirmed from the other side: the
+cell average of the *same* zero-width field above returns the segment gap's
+−V/h to 6.0e-8 / 1.1e-7 / 2.4e-7 / 5.7e-7 / 1.4e-6 of |Z| at N = 41…641, four
+decades inside the (a/h)² bound.
+
+So the two regularizations fail in complementary ways — one is mesh-dependent
+garbage, the other is the default under a new name — and between them they
+prove the reading:
+
+> **Under collocation the segment gap is not a rival source model to the point
+> gap. It IS the point gap, rendered at the only resolution collocation has.**
+
+A Hallén-style particular-solution forcing term is the one remaining escape and
+was rejected on scope: it needs the infinite-wire kernel's Fourier inversion to
+get J_p, J_p satisfies neither this basis's end conditions nor its junction
+tables, and moving the unknown changes what "the basis" means — which would
+break the one-axis-at-a-time discipline this instrument exists to keep.
+
+`SinusoidalSolver` therefore takes `feed_model=` with the sibling's validation
+and message, accepts `"segment"`, and **refuses `"point"`** with the derivation
+attached (`_reject_point_feed_model`). A silent fallback to the segment gap
+would manufacture exactly the two-feed-model comparison §16 exists to prevent.
+
+### What `errColl/errGal` reads with the feed model held fixed
+
+Given the above, the feed-matched pairing is `segment`/`segment` — which is
+what M3 already scores. The one place a feed model still varies inside that
+gate is the *reference* family: two of M3's six defensible references are
+`BSplineSolver` solves, and those drive a zero-width gap. Dropping them is the
+only feed-matching left to do:
+
+| geometry | reference | N=11 | N=15 | N=21 | reference feed |
+|---|---|--:|--:|--:|---|
+| dipole | `sin_gal_321` | 2.125 | 2.245 | 2.323 | segment |
+| | `sin_coll_321` | 2.163 | 2.339 | 2.504 | segment |
+| | `bspline2_321` | 2.123 | 2.249 | 2.338 | **point** |
+| | `rich_sin_gal` | 2.062 | 2.133 | 2.149 | segment |
+| | `rich_sin_coll` | 2.072 | 2.151 | 2.179 | segment |
+| | `rich_bspline2` | 2.063 | 2.136 | 2.155 | **point** |
+| k2_junction | `sin_gal_321` | 5.712 | 4.341 | 3.628 | segment |
+| | `sin_coll_321` | 8.031 | 5.702 | 4.712 | segment |
+| | `bspline2_321` | 6.461 | 4.790 | 3.984 | **point** |
+| | `rich_sin_gal` | 4.465 | 3.531 | 2.987 | segment |
+| | `rich_sin_coll` | 4.440 | 3.515 | 2.974 | segment |
+| | `rich_bspline2` | 4.436 | 3.511 | 2.971 | **point** |
+
+| geometry | worst over all six | worst over the four feed-matched | pinned floor | §16's flipped reading |
+|---|--:|--:|--:|--:|
+| dipole | 2.062 | 2.062 | 2.0 | 1.948 |
+| k2_junction | 2.971 | 2.974 | 2.9 | 1.774 |
+
+**The M3 payoff verdict does not rest on the reference's feed model** — matching
+it moves the worst case by less than 0.2 %, well inside the ~1e-3 spread the
+reference family already spans (§ "G3" in `tests/test_sinusoidal_galerkin.py`).
+So §16's confound lives entirely on the *comparand* side, and the last two
+columns are the whole story: the pinned 2.06 / 2.97 are a feed-matched
+measurement already, and §16's 1.948 / 1.774 are what the same gate reads once
+one comparand's feed model is changed and the other's cannot follow.
+
+### What this says about M3's headline claim
+
+M3's headline — *Galerkin testing buys 2.1× on the dipole and 3.0× at a
+junction, at coarse mesh* — is **unaffected**, and is now known to be
+feed-matched rather than merely assumed to be. What the refutation removes is
+the option §16 held open of restoring feed-matching after a default flip: there
+is no matching gap to give the point-matched solver, so a flip of
+`SinusoidalGalerkinSolver`'s default would confound `errColl/errGal`
+*permanently*, not until someone does the plumbing. That converts §16's
+"substantive argument against a flip" into a structural one, and it is the
+reason the recommendation stands unchanged: keep `"segment"` as both solvers'
+default and treat `"point"` as a per-model opt-in on the Galerkin cell, where
+the source is admissible.
+
+The constructive repair §16's other half suggested — *score the flipped solver
+against its own family* — is untouched by this and remains available; what is
+now excluded is the repair by symmetry. A third option this addendum opens:
+give `BSplineSolver` a `feed_model="segment"`, which is well defined there (it
+is Galerkin) and would let §6's three-way be feed-matched in the other
+direction, with the oracle joining the two sinusoidal solvers on NEC's gap
+instead of the reverse. That is a new follow-up, not a claim.
+
+Pinned by `test_zero_width_gap_has_no_collocation_rhs` and
+`test_feed_matched_payoff_is_the_pinned_m3_ratio`
+(`tests/test_m6_instrument_report.py`), plus
+`test_coll_point_feed_model_is_refused_not_defaulted`
+(`tests/test_sinusoidal_galerkin.py`). Reproduce with
+`python scripts/m6_residue_cluster.py --feed-matched`.
