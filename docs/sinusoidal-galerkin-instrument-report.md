@@ -1058,3 +1058,144 @@ above with a ≥100× structural floor, plus the §5 caveat guard that every
 scheme's own step still exceeds its cross-scheme gap. N=641 is not in CI —
 it is a ~2.5-minute rung, and it lives here and in the harness. Reproduce
 with `python scripts/m6_residue_cluster.py --near-open`.
+
+---
+
+## 19. Addendum (2026-08-01): §6 mirrored — the oracle on NEC's gap, momwire#216
+
+§17 closed one direction of feed-matching and opened the other: the point gap
+cannot exist on a collocation solver, so if §6's three-way is ever to be
+feed-matched from *both* sides, the move has to be the B-spline oracle joining
+the sinusoidal solvers on NEC's segment gap rather than the reverse. momwire#216
+does that, and this addendum records what the mirror reads. **No pinned gate
+moved and no run record is edited; §6, §15, §16 and §17 stand as measured.**
+
+    BSplineSolver(..., feed_model="point")     # default, as before
+    BSplineSolver(..., feed_model="segment")   # NEC's Eq 187 gap
+
+`"segment"` is the drive b_m = (1/Δ)∫_cell Φ_m ds over the mesh cell holding
+the feed arclength, against `"point"`'s b_m = Φ_m(s_f). Under Galerkin testing
+that is well-defined and cheap — every Φ_m is a polynomial of degree *d* on
+exactly one knot span, so the RHS assembly's existing 16-node Gauss rule
+(exact through degree 31) integrates it exactly and there is no accuracy knob
+to add. It is built in `_build_source_vector`, the one place all four solve
+paths and every feed of a multi-feed model construct their drive, so the option
+is honored everywhere by construction and `HMatrixSolver` inherits it.
+Combining it with `feed_smoothing_factor` raises: both replace the point drive
+with a spread one, and composing them means nothing.
+
+### The readout is the drive's dual — so the mirror has two pairings
+
+This is the whole subtlety of the mirror, and it is a property of the solver
+rather than of the experiment. `BSplineSolver` reads Z = 1/(vᵀc) with the SAME
+v it drove — the impedance is automatically its drive's dual. Under the point
+gap vᵀc is the current at s_f, which is why §6's `ptgap` pairing worked against
+`SinusoidalGalerkinSolver`'s default `feed_readout="centre"`. Under the segment
+gap vᵀc is the gap-AVERAGED current, which is `feed_readout="variational"`'s
+functional, not the centre one — and §16 measured that those two differ at O(h)
+under a segment gap (2.2e-3 / 1.4e-3 / 8.2e-4 at N=21/41/81). So there is no
+single "gal(segment)" to mirror against, and both are reported.
+
+Canonical 0.962 λ/2 dipole, free space, a = 0.5 mm — §6's geometry exactly:
+
+| N | `bs2(point)` | `bs2(segment)` | `gal(seg, centre)` | `gal(seg, variational)` |
+|--:|---|---|---|---|
+| 161 | 69.634329 − 18.112432j | 69.651936 − 18.085105j | 69.643869 − 18.097471j | 69.651933 − 18.085125j |
+| 321 | 69.633780 − 18.065315j | 69.643519 − 18.048873j | 69.639093 − 18.056307j | 69.643518 − 18.048882j |
+
+| N | `gal(seg,centre)`↔`bs2(seg)` | `gal(seg,variational)`↔`bs2(seg)` | `gal(point)`↔`bs2(point)` | `gal(seg,centre)`↔`bs2(point)` |
+|--:|--:|--:|--:|--:|
+| | source matched, readout not | **fully matched** | §6's pair, mirrored | §6's pair |
+| 161 | 2.052e-4 | **2.845e-7** | 2.806e-7 | 2.466e-4 |
+| 321 | 1.203e-4 | **1.308e-7** | 1.303e-7 | 1.454e-4 |
+
+### The verdict: it collapses, symmetrically, and to the same number
+
+**The fully matched pairing collapses — 867× at N=161 and 1112× at N=321
+against §6's own mismatched pairing — and it lands on the same residual §6's
+point-gap pairing lands on: 2.845e-7 against 2.806e-7, and 1.308e-7 against
+1.303e-7.** That is 1.4 % and 0.4 % agreement between two independent
+feed-matched readings of the same quantity, taken under two *different* feed
+models. It also tightens with refinement (2.8e-7 → 1.3e-7) exactly as §6's does,
+while both mismatched columns stay flat at ~1e-4.
+
+So §6's conclusion is now closed from both directions: **on a clean geometry
+the two bases are the same basis, and the ~1e-7 that is left is a basis
+difference that does not depend on which gap model the comparison is
+feed-matched at.** The mirror found no asymmetry — which is the outcome §6
+predicts and the first time it has been checked rather than assumed.
+
+One thing the mirror does add, and it sharpens §16 rather than contradicting
+it. Matching only the *source* buys almost nothing: `gal(seg,centre)`↔`bs2(seg)`
+is 2.05e-4 / 1.20e-4 against the mismatched 2.47e-4 / 1.45e-4, a factor of
+**1.2×**. The other three decades are the readout functional. §6's "matching
+the feed removes ~1100× of the difference" is therefore, read precisely, *matching
+the feed model and its dual readout together* — under the point gap those are the
+same act, because the point gap is self-dual under the centre readout (§16),
+and that coincidence is what made §6's single column sufficient. Under the
+segment gap they come apart, and the mirror is the measurement that separates
+them. The oracle's own sensitivity to the choice is the same size:
+`bs2(point)`↔`bs2(segment)` reads 4.52e-4 / 2.66e-4.
+
+### A degeneracy worth naming: the option is a no-op on the tent basis
+
+On `degree=1` with the feed at its cell's centre, `"segment"` and `"point"` are
+**bit-identical** drives. Each tent is linear on a knot span and the cell
+average of a linear function is its midpoint value, so (1/Δ)∫_cell Φ_m = Φ_m(s_f)
+identically. The two models separate at d ≥ 2, or at d = 1 with an off-centre
+feed. Nothing depends on this, but it means a d=1 reader must not treat
+`feed_model` as a control that is known to be active.
+
+### The M3 reference family, with nothing dropped
+
+§17 could only feed-match M3's reference family by *removing* its two
+`BSplineSolver` members, leaving four of six. A segment-gapped oracle lets them
+be kept instead, as a seventh reference `bs2_segment_321` =
+`BSplineSolver(degree=2, feed_model="segment")` at N=321 — 69.643519 − 18.048873j
+on the dipole, 124.492317 + 0.403057j on k2_junction:
+
+| geometry | `bs2_segment_321` at N=11 / 15 / 21 | worst over §17's matched four | worst over the fully matched five | pinned floor |
+|---|--:|--:|--:|--:|
+| dipole | 2.127 / 2.241 / 2.309 | 2.062 | **2.062** | 2.0 |
+| k2_junction | 5.450 / 4.181 / 3.501 | 2.974 | **2.974** | 2.9 |
+
+**The worst case does not move at all.** §17 extrapolated "<0.2 % movement";
+measured, it is 0.0 % — the new reference is never the worst member on either
+geometry (its coarsest ratio, 2.127 / 5.450, sits mid-family). M3's headline —
+*Galerkin testing buys 2.1× on the dipole and 3.0× at a junction, at coarse
+mesh* — is now feed-matched with **nothing dropped from the family**, which is
+strictly better than §17's position and reaches the same number.
+
+The pinned `M3_REFS` in `tests/test_sinusoidal_galerkin.py` is deliberately
+untouched: #216 adds a reading, not a gate, and §17's own test still passes
+verbatim. `M3_REFS_QUOTED` in the harness remains a byte-for-byte quote of it;
+the seventh reference is a separate object beside it.
+
+### What this does and does not change
+
+It does **not** reopen the default question. §17's structural argument against
+flipping `SinusoidalGalerkinSolver`'s default stands untouched — the point
+gap still has no collocation RHS, so a flip there would still confound
+`errColl/errGal` permanently. And `BSplineSolver`'s own default stays
+`"point"`, bit-identical, because every pinned B-spline constant in the tree
+is a point-gap reading and the option's purpose is comparison, not physics.
+
+What it does change is that the instrument can now hold the feed model fixed
+at **either** value across all three solvers rather than only at the point gap
+on two of them, and that §6's sharpest result has been re-derived under a
+source it was never measured under. The follow-up §17 opened is closed.
+
+### Cost
+
+`--dipole-feed-mirror`: **3.7 s** and 190 MiB — ten solves, five schemes at
+each of two fine meshes. `--feed-matched` is unchanged in cost; its seventh
+reference is a constant, not a solve.
+
+Pinned by `test_section_6_mirrors_with_the_oracle_on_the_segment_gap` and
+`test_m3_payoff_is_unmoved_by_a_fully_feed_matched_reference_family`
+(`tests/test_m6_instrument_report.py`), with the option's own surface —
+validation, the bit-identical default, the exactness of the cell integral
+against an independent quadrature, multi-feed and the Y path, and the d=1
+degeneracy — in `tests/test_momwire.py`. Reproduce with
+`python scripts/m6_residue_cluster.py --dipole-feed-mirror` and
+`--feed-matched`.
