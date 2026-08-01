@@ -41,7 +41,6 @@ from momwire import BSplineSolver, SinusoidalGalerkinSolver, SinusoidalSolver
 from scripts.m6_residue_cluster import (
     DESIGNS,
     SNAPSHOT,
-    PointGapGalerkin,
     _kwargs_from_row,
     solve,
 )
@@ -115,6 +114,55 @@ def test_matched_feed_model_closes_the_dipole_basis_gap():
     )
 
 
+@pytest.mark.slow
+def test_feed_model_option_reproduces_section_6():
+    """§12 follow-up 5, landed: the `ptgap` column is now a solver OPTION
+    (`feed_model="point"`, momwire#192), and it has to keep reading §6's table.
+
+    §6 was measured off a `PointGapGalerkin` research subclass and §15
+    re-read it after the #203 fold. Pinned here as VALUES, not just as a
+    structural ordering, because the whole point of promoting the column is
+    that a future default flip becomes a decision — and a decision needs a
+    before.
+
+    Measured (§15's post-fold numbers, reproduced through the option):
+
+        N=161  ptgap 69.634327 − 18.112452j   ptgap↔bs2 2.806e-7
+        N=321  ptgap 69.633779 − 18.065325j   ptgap↔bs2 1.303e-7
+
+    The segment-gap default at the same meshes is 2.47e-4 / 1.45e-4, so the
+    option buys 879× / 1116× — which is also the guard that it is not a no-op.
+
+    ~7 s: three solves at each of two fine meshes.
+    """
+    pinned = {161: 2.806e-7, 321: 1.303e-7}
+    seen = {}
+    for n in (161, 321):
+        kw = _dipole_kwargs(n)
+        z_pt = complex(
+            np.atleast_1d(
+                SinusoidalGalerkinSolver(**kw, feed_model="point").compute_impedance()[
+                    0
+                ]
+            )[0]
+        )
+        z_gal = complex(
+            np.atleast_1d(SinusoidalGalerkinSolver(**kw).compute_impedance()[0])[0]
+        )
+        z_bs2 = complex(
+            np.atleast_1d(BSplineSolver(**kw, degree=2).compute_impedance()[0])[0]
+        )
+        r_pt, r_gal = _rel(z_pt, z_bs2), _rel(z_gal, z_bs2)
+        seen[n] = r_pt
+        # 5 % on the pinned relative: enough to catch a changed feed model or
+        # a lost #203 fold (both move it by ≥2×), loose enough to survive a
+        # BLAS reassociation at the 1e-7 level these differences live at.
+        assert abs(r_pt - pinned[n]) < 0.05 * pinned[n], (n, r_pt, pinned[n])
+        assert r_pt < 0.01 * r_gal, (n, r_pt, r_gal)
+    # The matched pair converges together; the mismatched pair does not.
+    assert seen[321] < seen[161]
+
+
 def test_point_gap_drive_is_self_dual():
     """The matched-feed column's construction, checked rather than asserted.
 
@@ -124,6 +172,10 @@ def test_point_gap_drive_is_self_dual():
     machine-symmetric with no `feed_readout="variational"` opt-in and none of
     the M3 payoff traded. If that ever stops holding, the feed-model column of
     the report is measuring something other than a feed model.
+
+    (The construction itself is pinned by
+    `test_point_gap_feed_y_is_symmetric_in_both_readouts` in
+    `test_sinusoidal_galerkin.py`; this is the report's stake in it.)
     """
     kw = _dipole_kwargs(41)
     two_feeds = dict(
@@ -132,7 +184,7 @@ def test_point_gap_drive_is_self_dual():
     )
     two_feeds.pop("feed_wire_index")
     two_feeds.pop("feed_arclength")
-    Y = PointGapGalerkin(**two_feeds).compute_y_matrix()
+    Y = SinusoidalGalerkinSolver(**two_feeds, feed_model="point").compute_y_matrix()
     asym = abs(Y - Y.T).max() / abs(Y).max()
     # The floor is the FILL's reciprocity floor (8.3e-12, momwire#182 M2), not
     # the port algebra's; the default delta gap sits at ~1e-5 here.
@@ -185,8 +237,12 @@ def test_all_four_columns_share_one_mesh():
     )
     kw = _kwargs_from_row(row)
     n = {}
-    for cls in (SinusoidalSolver, SinusoidalGalerkinSolver, PointGapGalerkin):
-        n[cls.__name__] = cls(**kw)._build_geometry()["n_segs"]
+    for label, s in (
+        ("coll", SinusoidalSolver(**kw)),
+        ("gal", SinusoidalGalerkinSolver(**kw)),
+        ("ptgap", SinusoidalGalerkinSolver(**kw, feed_model="point")),
+    ):
+        n[label] = s._build_geometry()["n_segs"]
     assert len(set(n.values())) == 1, n
     assert set(n.values()) == {row["n_segs"]}
     # BSplineSolver counts BASES, not segments, so it gets the structural
