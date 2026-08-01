@@ -747,6 +747,175 @@ def test_bspline_d2_dipole_smoothed_source():
     )
 
 
+# ---------------------------------------------------------------------------
+# feed_model — NEC's segment-wide gap on the B-spline oracle (momwire#216)
+# ---------------------------------------------------------------------------
+
+
+def _segment_gap_kwargs(n, degree=2, **extra):
+    hd = 0.962 * 22 / 4
+    return dict(
+        wires=[np.array([[0.0, 0.0, -hd], [0.0, 0.0, hd]])],
+        n_per_edge_per_wire=[[n]],
+        feed_wire_index=0,
+        feed_arclength=hd,
+        wavelength=22,
+        wire_radius=0.0005,
+        degree=degree,
+        **extra,
+    )
+
+
+def test_bspline_feed_model_validation_and_guard():
+    """The option's surface: the siblings' validation idiom, plus the guard
+    that `"segment"` and `feed_smoothing_factor` may not be combined — both
+    replace the point drive with a spread one, so composing them would silently
+    integrate a cos² bump against a gap-average and mean nothing."""
+    with pytest.raises(ValueError, match="feed_model must be"):
+        BSplineSolver(**_segment_gap_kwargs(21, feed_model="bogus"))
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        BSplineSolver(
+            **_segment_gap_kwargs(21, feed_model="segment", feed_smoothing_factor=2.0)
+        )
+    # The default is the point gap, named.
+    assert BSplineSolver(**_segment_gap_kwargs(21)).feed_model == "point"
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_bspline_point_feed_model_is_bit_identical_to_the_default(degree):
+    """`feed_model="point"` must be the untouched pre-#216 drive — bit for
+    bit, not to a tolerance, because every pinned B-spline constant in the
+    tree is a point-gap reading."""
+    kw = _segment_gap_kwargs(41, degree=degree)
+    z_default, c_default = BSplineSolver(**kw).compute_impedance()
+    z_named, c_named = BSplineSolver(**kw, feed_model="point").compute_impedance()
+    assert complex(z_named) == complex(z_default)
+    assert np.array_equal(c_named, c_default)
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_bspline_segment_gap_drive_is_the_exact_cell_average(degree):
+    """The `"segment"` drive is v_m = (1/Δ)∫_cell Φ_m ds, and the existing
+    `n_qp_source` Gauss rule integrates it EXACTLY: each Φ_m is a polynomial
+    of degree d on one knot span, and a 16-node rule is exact through degree
+    31. Checked against an independent 4000-node composite Simpson evaluation
+    of the same integral (no shared quadrature), to ~1e-14.
+
+    Also checked: the drive sums to 1 over the full basis partition-of-unity
+    on an interior cell (∫(1/Δ)Σ_m Φ_m = 1), which is the statement that the
+    source carries exactly V volts across the gap — NEC's Eq 187 convention.
+    """
+    kw = _segment_gap_kwargs(21, degree=degree)
+    sim = BSplineSolver(**kw, feed_model="segment")
+    geom = sim._build_geometry()
+    supp_seg, _p, _kcl, wk, wbg = sim._build_basis_polynomials(geom)
+    n_bt = supp_seg.shape[0]
+    s_f = kw["feed_arclength"]
+    v = sim._build_source_vector(geom, wk, wbg, n_bt, wi=0, s_f=s_f)
+
+    from scipy.interpolate import BSpline as _BSpline
+
+    arc = geom["per_wire"][0]["arc_at_knot"]
+    seg = int(np.searchsorted(arc, s_f, side="right")) - 1
+    s_lo, s_hi = float(arc[seg]), float(arc[seg + 1])
+    # Independent quadrature: composite Simpson on 4001 samples of the cell.
+    m = 4000
+    xs = np.linspace(s_lo, s_hi, m + 1)
+    w = np.ones(m + 1)
+    w[1:-1:2] = 4.0
+    w[2:-1:2] = 2.0
+    w *= (s_hi - s_lo) / (3.0 * m)
+    DM = _BSpline.design_matrix(xs, wk[0], sim.degree).toarray()
+    ref_full = (DM * w[:, None]).sum(axis=0) / (s_hi - s_lo)
+
+    kept, local_to_global = wbg[0]
+    ref = np.zeros(n_bt, dtype=np.complex128)
+    for kept_idx, (j, _kind, _ji, _ep) in enumerate(kept):
+        ref[local_to_global[kept_idx]] = ref_full[j]
+    assert np.abs(v - ref).max() < 1e-14, np.abs(v - ref).max()
+    # Partition of unity over the cell: the gap carries exactly V.
+    assert abs(ref_full.sum() - 1.0) < 1e-14, ref_full.sum()
+    # ... and (at d=2) it is genuinely NOT the point drive. At d=1 it is —
+    # see `test_bspline_segment_gap_is_the_point_gap_on_the_tent_basis`.
+    v_pt = BSplineSolver(**kw)._build_source_vector(geom, wk, wbg, n_bt, wi=0, s_f=s_f)
+    if degree == 2:
+        assert np.abs(v - v_pt).max() > 1e-3, np.abs(v - v_pt).max()
+
+
+def test_bspline_segment_gap_is_the_point_gap_on_the_tent_basis():
+    """A degeneracy worth pinning rather than tripping over (momwire#216): on
+    d=1 with the feed at its cell's CENTRE, `feed_model` is an exact no-op.
+
+    Each tent is linear on a knot span, and the cell average of a linear
+    function is its value at the cell midpoint — so (1/Δ)∫_cell Φ_m = Φ_m(s_f)
+    identically, to roundoff. The two feed models are only distinguishable by
+    a basis with curvature inside the cell (d≥2) or by a feed that is not
+    centred in it, both checked below.
+    """
+    # Centred feed (odd segment count puts the wire midpoint at a cell centre).
+    kw = _segment_gap_kwargs(21, degree=1)
+    sim = BSplineSolver(**kw, feed_model="segment")
+    geom = sim._build_geometry()
+    supp_seg, _p, _kcl, wk, wbg = sim._build_basis_polynomials(geom)
+    n_bt = supp_seg.shape[0]
+    s_f = kw["feed_arclength"]
+    v_seg = sim._build_source_vector(geom, wk, wbg, n_bt, wi=0, s_f=s_f)
+    v_pt = BSplineSolver(**kw)._build_source_vector(geom, wk, wbg, n_bt, wi=0, s_f=s_f)
+    assert np.abs(v_seg - v_pt).max() < 1e-15, np.abs(v_seg - v_pt).max()
+
+    # Off-centre in its cell: the drives separate, so this is the centred-feed
+    # coincidence and not a dead option.
+    h = float(geom["per_wire"][0]["h_per_seg"][0])
+    off = s_f + 0.25 * h
+    v_seg_off = sim._build_source_vector(geom, wk, wbg, n_bt, wi=0, s_f=off)
+    v_pt_off = BSplineSolver(**kw)._build_source_vector(
+        geom, wk, wbg, n_bt, wi=0, s_f=off
+    )
+    assert np.abs(v_seg_off - v_pt_off).max() > 0.2, np.abs(v_seg_off - v_pt_off).max()
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_bspline_segment_gap_reaches_the_y_path_and_multi_feed(degree):
+    """All four solve paths share `_build_source_vector`, so the option is
+    honored everywhere by construction; the two that a caller actually reaches
+    (impedance and Y) are checked, on a two-feed model so multi-feed is covered
+    too. Y stays reciprocal — the drive vector is still the readout vector.
+
+    Port 1 sits off its cell's centre, so it separates the two feed models at
+    both degrees; port 0 is centred, which at d=1 makes it a no-op (pinned by
+    `test_bspline_segment_gap_is_the_point_gap_on_the_tent_basis`), so the
+    all-entries check is d=2 only.
+    """
+    hd = 0.962 * 22 / 4
+    kw = _segment_gap_kwargs(31, degree=degree)
+    kw.pop("feed_wire_index")
+    kw.pop("feed_arclength")
+    kw["feeds"] = [(0, hd, 1 + 0j), (0, hd * 0.5, 0 + 0j)]
+    Y_seg = BSplineSolver(**kw, feed_model="segment").compute_y_matrix()
+    Y_pt = BSplineSolver(**kw).compute_y_matrix()
+    assert Y_seg.shape == (2, 2)
+    assert abs(Y_seg[0, 1] - Y_seg[1, 0]) < 1e-10 * abs(Y_seg).max()
+    # The option reached the Y path — at the off-centre port under either
+    # degree, and at every entry once the basis has curvature in the cell.
+    moved = [
+        (i, j)
+        for i in range(2)
+        for j in range(2)
+        if abs(Y_seg[i, j] - Y_pt[i, j]) > 1e-6 * abs(Y_pt[i, j])
+    ]
+    assert (1, 1) in moved, (degree, Y_seg, Y_pt)
+    if degree == 2:
+        assert len(moved) == 4, (degree, moved)
+    # ... and the impedance path likewise, on the same two-feed model.
+    z_seg, _ = BSplineSolver(**kw, feed_model="segment").compute_impedance()
+    z_pt, _ = BSplineSolver(**kw).compute_impedance()
+    dz = abs(complex(np.atleast_1d(z_seg)[0]) - complex(np.atleast_1d(z_pt)[0]))
+    if degree == 2:
+        assert dz > 1e-6, dz
+    else:
+        assert dz < 1e-9, dz
+
+
 def test_bspline_d2_hentenna_arbitrates_against_d1():
     """Degree-2 B-spline on the hentenna converges to the SAME value as the
     tent basis (within ~0.1 Ω), independently arbitrating the
