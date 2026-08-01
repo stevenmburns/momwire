@@ -39,6 +39,7 @@ import pytest
 from momwire import BSplineSolver, SinusoidalGalerkinSolver, SinusoidalSolver
 
 from scripts.m6_residue_cluster import (
+    COLUMNS,
     DESIGNS,
     M3_COARSE,
     M3_FEED_MATCHED_GEOMS,
@@ -309,6 +310,65 @@ def test_feed_matched_payoff_is_the_pinned_m3_ratio():
         # Both readings clear the pinned M3 floor (2.0 / 2.9) they are the
         # feed-matched statement of.
         assert min(w_all, w_matched) > (2.0 if name == "dipole" else 2.9)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "design,gal_bs2,ptgap_bs2",
+    [("wire.lazy_h", 8.130e-3, 2.928e-5), ("wire.vbeam", 5.943e-3, 8.446e-6)],
+)
+def test_near_open_collapse_survives_at_the_fine_rung(design, gal_bs2, ptgap_bs2):
+    """§18 (momwire#213) — antennaknobs#478's class through the shipped option.
+
+    §5 measured the near-open feed-model collapse at N=161 (55× / 74×) off a
+    research subclass. It is a solver option now (#192), and the question #213
+    asks is whether the collapse is a coarse-mesh coincidence. Pinned here at
+    N=321 off the snapshot, where §13 read it:
+
+        wire.lazy_h   gal↔bs2 0.813 %   ptgap↔bs2 0.0029 %    278×
+        wire.vbeam    gal↔bs2 0.594 %   ptgap↔bs2 0.0008 %    704×
+
+    N=641 (5130 / 5119 segments, ~2.5 min and 7 GiB) is the addendum's finest
+    rung and lives in the harness (`--near-open`), not in CI; it reads 992× and
+    374×, so the ≥100× asserted here is a floor the deep rung clears too.
+
+    The last block is §5's caveat, kept honest: the collapse is a statement
+    about the DISAGREEMENT between schemes, not about the error. Every scheme's
+    own 161→321 step is still 0.5-1.8 %, larger than any cross-scheme gap at
+    that rung and ≥100× the matched residual — so "expect the last percent to
+    be physical, and budget fine mesh" is untouched by the feed model.
+
+    ~18 s per design (36 s for the pair): four solves at each of two fine
+    meshes, 2570 / 1290 segments.
+    """
+    rows = json.loads(SNAPSHOT.read_text())
+    z = {}
+    for rung in (161, 321):
+        row = next(r for r in rows if r["design"] == design and r["rung"] == rung)
+        z[rung] = {c: solve(c, _kwargs_from_row(row)) for c in COLUMNS}
+    fine, coarse = z[321], z[161]
+
+    r_gal = _rel(fine["gal"], fine["bs2"])
+    r_pt = _rel(fine["ptgap"], fine["bs2"])
+    # 5 % on the mismatched column; 10 % on the matched one, which is a
+    # difference of two ~4 kΩ impedances at the 1e-5 level and so carries
+    # correspondingly fewer digits. Both are far tighter than the 100× the
+    # verdict rests on.
+    assert abs(r_gal - gal_bs2) < 0.05 * gal_bs2, (design, r_gal)
+    assert abs(r_pt - ptgap_bs2) < 0.10 * ptgap_bs2, (design, r_pt)
+    # The verdict, structurally: matching the feed model buys two decades or
+    # better. (Also the no-op guard — a `feed_model` that stopped taking
+    # effect would land `ptgap` on `gal` and read 1×.)
+    assert r_gal > 100 * r_pt, (design, r_gal, r_pt)
+    # Swapping the TESTING buys nothing on this class — §5's other half, and
+    # what makes the feed model the whole story here.
+    assert abs(_rel(fine["coll"], fine["bs2"]) - r_gal) < 0.25 * r_gal, fine
+
+    # §5's caveat: the residual that is left is SHARED, and it dominates.
+    steps = {c: _rel(coarse[c], fine[c]) for c in COLUMNS}
+    assert min(steps.values()) > 100 * r_pt, (design, steps, r_pt)
+    for c in ("coll", "gal"):
+        assert steps[c] > _rel(fine[c], fine["bs2"]), (design, c, steps)
 
 
 def test_point_gap_drive_is_self_dual():
