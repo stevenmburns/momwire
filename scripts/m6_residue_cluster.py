@@ -48,6 +48,12 @@ Running
     python scripts/m6_residue_cluster.py --seg-cap 1000     # cheaper rungs
     python scripts/m6_residue_cluster.py --dipole-feed-model  # the M5 column
     python scripts/m6_residue_cluster.py --feed-matched       # §17 (momwire#212)
+    python scripts/m6_residue_cluster.py --near-open          # §18 (momwire#213)
+
+The near-open ladder runs deeper than the standard sweep — antennaknobs#478's
+two designs down to N=641 (~5140 segments), past `DEFAULT_SEG_CAP`, which the
+standard sweep therefore records as skipped so its cost stays where §13 quotes
+it. Give the deep run ~24 GiB of address space.
 
 Free space only, by construction: momwire#182 M4 pinned that a finite-ground
 model on a ground-CONTACT wire is broken on BOTH sinusoidal solvers (an
@@ -329,6 +335,79 @@ def report(results, columns=COLUMNS):
         print(f"  {design:28} max |Δ feed centre| over the ladder = {drift:.4f} m")
 
 
+# ---------------------------------------------------------------------------
+# the near-open ladder, all the way down (momwire#213, report §18)
+# ---------------------------------------------------------------------------
+# §5 read antennaknobs#478's class at N=161 and found the `gal↔bs2` residual
+# collapsing 55-74× under a matched feed; §13 re-read it at N=321 through the
+# same research subclass's successor. #213 asks the question those two leave
+# open: does the collapse SURVIVE at the finest mesh, or is it a coarse-mesh
+# coincidence that the shared whole-structure residual §5 filed reasserts
+# itself over? That needs a rung below the standard ladder, hence N=641.
+#
+# It is a separate entry point rather than a bigger default cap because the
+# 641 rungs are ~5140 segments and cost more than the other ten designs put
+# together; the standard sweep stays at ~3 minutes and records them skipped.
+NEAR_OPEN = ("wire.lazy_h", "wire.vbeam")
+
+# Enough for the 641 rungs (5140 / 5127 segments) and nothing beyond them.
+NEAR_OPEN_SEG_CAP = 6000
+
+
+def near_open_report(results, columns=COLUMNS):
+    """Per-RUNG table: §5/§13 print the finest rung only, but the question
+    here is a trend across the ladder, so every rung is shown with its own
+    collapse factor `gal↔bs2 / ptgap↔bs2` — how much of the sinusoidal ↔
+    B-spline disagreement the feed model accounts for at that depth."""
+    print("\n" + "=" * 100)
+    print("NEAR-OPEN LADDER (antennaknobs#478) — free space, driving-point Z at feed 0")
+    print("=" * 100)
+    print(
+        "\n'collapse' is gal↔bs2 / ptgap↔bs2 at the SAME rung: the factor by which\n"
+        "matching the feed model shrinks the residual. 'step' columns are each\n"
+        "scheme against the rung below it — §5's shared whole-structure term, which\n"
+        "no feed model explains and which is what the fine rungs are here to test."
+    )
+    for design, d in results.items():
+        rungs = d["rungs"]
+        print(f"\n  {design}")
+        hdr = (
+            f"  {'N':>5} {'segs':>6} {'coll↔bs2':>9} {'gal↔bs2':>9} "
+            f"{'ptgap↔bs2':>10} {'collapse':>9} {'coll step':>10} {'gal step':>9} "
+            f"{'ptgap step':>11} {'bs2 step':>9}"
+        )
+        print(hdr)
+        print("  " + "-" * (len(hdr) - 2))
+        for i, rec in enumerate(rungs):
+            z = rec["z"]
+            g, p = rel(z["gal"], z["bs2"]), rel(z["ptgap"], z["bs2"])
+            step = {c: rel(rungs[i - 1]["z"][c], z[c]) for c in columns} if i else None
+            steps = (
+                " ".join(f"{step[c] * 100:9.2f}%" for c in ("coll", "gal"))
+                + f" {step['ptgap'] * 100:10.2f}% {step['bs2'] * 100:8.2f}%"
+                if step
+                else f"{'—':>10} {'—':>9} {'—':>11} {'—':>9}"
+            )
+            print(
+                f"  {rec['rung']:>5} {rec['n_segs']:>6} "
+                f"{rel(z['coll'], z['bs2']) * 100:8.2f}% {g * 100:8.2f}% "
+                # four decimals, not §5/§13's three: the matched column reaches
+                # 1e-3 % here and the collapse factor is a ratio OF it.
+                f"{p * 100:9.4f}% {g / p:8.0f}× {steps}"
+            )
+        times = {c: sum(r["t"][c] for r in rungs) for c in columns}
+        print(
+            "    column wall clock over the ladder: "
+            + "  ".join(f"{c} {times[c]:.1f}s" for c in columns)
+        )
+
+
+def near_open(rows, seg_cap=NEAR_OPEN_SEG_CAP):
+    results = sweep(rows, only=set(NEAR_OPEN), seg_cap=seg_cap)
+    near_open_report(results)
+    return results
+
+
 def dipole_feed_model(n_list=(81, 161, 321)):
     """The feed-model axis on the canonical dipole — momwire#182 M5's finding,
     first-party. Same geometry as the M1-M3 validation dipole."""
@@ -583,13 +662,21 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dump", action="store_true", help="rebuild the geometry snapshot")
     ap.add_argument("--only", nargs="+", help="restrict to these dotted design names")
-    ap.add_argument("--seg-cap", type=int, default=DEFAULT_SEG_CAP)
+    # Unset means "this run's own cap": DEFAULT_SEG_CAP for the standard sweep,
+    # the higher NEAR_OPEN_SEG_CAP for --near-open, which exists to reach past it.
+    ap.add_argument("--seg-cap", type=int, default=None)
     ap.add_argument("--dipole-feed-model", action="store_true")
     ap.add_argument(
         "--feed-matched",
         action="store_true",
         help="report §17: the zero-width gap under collocation, and the "
         "feed-matched payoff",
+    )
+    ap.add_argument(
+        "--near-open",
+        action="store_true",
+        help="report §18: antennaknobs#478's two designs at every rung "
+        "including N=641, with the per-rung feed-model collapse factor",
     )
     ap.add_argument("--snapshot", type=Path, default=SNAPSHOT)
     args = ap.parse_args(argv)
@@ -606,8 +693,16 @@ def main(argv=None):
     if not args.snapshot.exists():
         raise SystemExit(f"{args.snapshot} missing — run with --dump first")
     rows = json.loads(args.snapshot.read_text())
+    if args.near_open:
+        near_open(
+            rows,
+            seg_cap=NEAR_OPEN_SEG_CAP if args.seg_cap is None else args.seg_cap,
+        )
+        return 0
     results = sweep(
-        rows, only=set(args.only) if args.only else None, seg_cap=args.seg_cap
+        rows,
+        only=set(args.only) if args.only else None,
+        seg_cap=DEFAULT_SEG_CAP if args.seg_cap is None else args.seg_cap,
     )
     report(results)
     return 0
