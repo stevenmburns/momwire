@@ -3031,6 +3031,26 @@ static const double GW[24] = {
 // better further out). Both are validated pointwise against scipy over the
 // sampled domain in tests/test_sommerfeld_accel.py.
 
+// These routines are the measured hot spot of the whole grid fill
+// (sommerfeld-perf-plan Phase 8): ~85% of the per-contour-point cost, and
+// the fill is ~95% of a cold Sommerfeld solve. Three shares are exploited
+// below, none of which changes the mathematics:
+//
+//   * every truncation test is "is this term small next to the running
+//     sum", a predicate identical under squaring — so |.| (a libm hypot,
+//     ~75 of them per small-|x| Hankel call) becomes three flops;
+//   * the Y series ride the same two ladders as the J series, so one pass
+//     yields all four sums instead of two passes rebuilding the ladders;
+//   * in the asymptotic regime the two orders share the (i/z) ladder and
+//     the sqrt/exp prefactor, and the kind-1 terms are the kind-2 terms
+//     with alternating signs.
+
+// |z|^2 — the convergence-test currency (see above).
+static inline double cnorm(cd z) {
+    return z.real() * z.real() + z.imag() * z.imag();
+}
+static const double SER_EPS2 = 1e-34;  // (1e-17)^2
+
 // J0 and J1/z ascending series (A&S 9.1.10/9.1.12): safe as z -> 0.
 static void j01_series(cd z, cd &j0, cd &j1x) {
     const cd q = -0.25 * z * z;
@@ -3042,95 +3062,139 @@ static void j01_series(cd z, cd &j0, cd &j1x) {
         t1 *= q / double(k * (k + 1));
         j0 += t0;
         j1x += t1;
-        if (std::abs(t0) <= 1e-17 * std::abs(j0) &&
-            std::abs(t1) <= 1e-17 * std::abs(j1x))
+        if (cnorm(t0) <= SER_EPS2 * cnorm(j0) &&
+            cnorm(t1) <= SER_EPS2 * cnorm(j1x))
             break;
     }
 }
 
-// Y0 and Y1 ascending series (A&S 9.1.13/9.1.11), principal log.
-static void y01_series(cd z, cd j0, cd j1, cd &y0, cd &y1) {
-    const cd lg = std::log(0.5 * z) + EULER_GAMMA;
-    const cd zq = 0.25 * z * z;  // (z/2)^2
-    // Y0 = (2/pi)[lg*J0 + sum_{k>=1} (-1)^{k+1} H_k (z/2)^{2k}/(k!)^2]
-    cd u(1.0, 0.0), s0(0.0, 0.0);
-    double hk = 0.0;
+// J0, J1/z, Y0 and Y1 from ONE ascending-series pass (A&S 9.1.10-9.1.13,
+// principal log).
+//
+// With q = -(z/2)^2 the J ladders are t0_k = q^k/(k!)^2 and t1_k =
+// (1/2) q^k/(k!(k+1)!), i.e. t0_k = (-1)^k (z/2)^{2k}/(k!)^2 and 2 t1_k =
+// (-1)^k (z/2)^{2k}/(k!(k+1)!). The manual's alternating Y sums are then
+// exactly those ladders reweighted by harmonic numbers:
+//   sum_{k>=1} (-1)^{k+1} H_k (z/2)^{2k}/(k!)^2        = -sum_k H_k t0_k
+//   sum_{k>=0} (-1)^k (H_k+H_{k+1}) (z/2)^{2k}/(k!(k+1)!)
+//                                            = 2 sum_k (H_k+H_{k+1}) t1_k
+// so the four sums cost two complex multiplies per term, not four.
+static void jy01_series(cd z, cd &j0, cd &j1x, cd &y0, cd &y1) {
+    const cd q = -0.25 * z * z;
+    cd t0(1.0, 0.0), t1(0.5, 0.0);
+    j0 = t0;
+    j1x = t1;
+    cd s0(0.0, 0.0), s1 = 2.0 * t1;  // k = 0: H_0 = 0, H_0 + H_1 = 1
+    double hk = 0.0, hk1 = 1.0;
     for (int k = 1; k <= 60; ++k) {
-        u *= zq / double(k * k);
+        t0 *= q / double(k * k);
+        t1 *= q / double(k * (k + 1));
         hk += 1.0 / double(k);
-        const cd term = ((k & 1) ? 1.0 : -1.0) * hk * u;
-        s0 += term;
-        if (std::abs(term) <= 1e-17 * (std::abs(s0) + 1.0)) break;
+        hk1 += 1.0 / double(k + 1);
+        j0 += t0;
+        j1x += t1;
+        const cd term0 = hk * t0;
+        const cd term1 = (2.0 * (hk + hk1)) * t1;
+        s0 -= term0;
+        s1 += term1;
+        if (cnorm(t0) <= SER_EPS2 * cnorm(j0) &&
+            cnorm(t1) <= SER_EPS2 * cnorm(j1x) &&
+            cnorm(term0) <= SER_EPS2 * (cnorm(s0) + 1.0) &&
+            cnorm(term1) <= SER_EPS2 * (cnorm(s1) + 1.0))
+            break;
     }
+    const cd lg = std::log(0.5 * z) + EULER_GAMMA;
     y0 = (2.0 / SPI) * (lg * j0 + s0);
-    // Y1 = (2/pi)[lg*J1 - 1/z]
-    //      - (z/(2 pi)) sum_{k>=0} (-1)^k (H_k + H_{k+1}) (z/2)^{2k}/(k!(k+1)!)
-    cd s1(0.0, 0.0);
-    u = cd(1.0, 0.0);
-    double hkk = 0.0, hk1 = 1.0;
-    for (int k = 0; k <= 60; ++k) {
-        if (k > 0) {
-            u *= zq / double(k * (k + 1));
-            hkk += 1.0 / double(k);
-            hk1 += 1.0 / double(k + 1);
-        }
-        const cd term = ((k & 1) ? -1.0 : 1.0) * (hkk + hk1) * u;
-        s1 += term;
-        if (std::abs(term) <= 1e-17 * (std::abs(s1) + 1.0)) break;
-    }
-    y1 = (2.0 / SPI) * (lg * j1 - 1.0 / z) - (z / (2.0 * SPI)) * s1;
+    y1 = (2.0 / SPI) * (lg * (j1x * z) - 1.0 / z) - (z / (2.0 * SPI)) * s1;
 }
 
-// H^(kind)_nu(z) by the A&S 9.2 asymptotic expansion with optimal
-// truncation: H ~ sqrt(2/(pi z)) e^{s i (z - nu pi/2 - pi/4)} sum_k t_k,
-// t_0 = 1, t_{k+1} = t_k (4 nu^2 - (2k+1)^2) / (8(k+1)) * (s i / z),
-// s = +1 for kind 1, -1 for kind 2. Valid away from the negative real
+// The A&S 9.2 asymptotic sums for orders 0 and 1 at once, each with its own
+// optimal truncation:
+//   H^(kind)_nu(z) ~ sqrt(2/(pi z)) e^{s i (z - nu pi/2 - pi/4)} sum_k t^nu_k
+//   t^nu_0 = 1,  t^nu_{k+1} = t^nu_k (4 nu^2 - (2k+1)^2)/(8(k+1)) (s i/z)
+// with s = +1 for kind 1, -1 for kind 2. Valid away from the negative real
 // axis, which the contours never approach.
-static cd hankel_asym(cd z, int nu, int kind) {
-    const double s = (kind == 1) ? 1.0 : -1.0;
-    const cd iz = s * CI / z;
-    const double fournu2 = 4.0 * double(nu) * double(nu);
-    cd t(1.0, 0.0), sum(1.0, 0.0);
-    double prev = 1e300;
-    for (int k = 0; k < 40; ++k) {
+//
+// The orders differ only in the numerator 4 nu^2 - (2k+1)^2, so one loop
+// over the shared (i/z) ladder yields both; and t^nu_k carries (s i/z)^k,
+// so the kind-1 terms are the kind-2 terms with alternating signs — no
+// second pass. `want_plus` skips the kind-1 accumulation for the Hankel
+// form, which never needs it. Each order keeps its own divergence-onset
+// break, so both truncate exactly where a per-order loop would.
+static void hankel_asym_sums(cd z, bool want_plus, cd &s0m, cd &s1m, cd &s0p,
+                             cd &s1p) {
+    const cd iz = -CI / z;  // s = -1
+    cd t0(1.0, 0.0), t1(1.0, 0.0);
+    s0m = s1m = s0p = s1p = cd(1.0, 0.0);
+    double prev0 = 1e300, prev1 = 1e300;
+    bool live0 = true, live1 = true;
+    for (int k = 0; k < 40 && (live0 || live1); ++k) {
         const double odd = double(2 * k + 1);
-        t *= (fournu2 - odd * odd) / (8.0 * double(k + 1)) * iz;
-        const double a = std::abs(t);
-        if (a >= prev) break;  // divergence onset: stop at the optimum
-        sum += t;
-        prev = a;
-        if (a <= 1e-17 * std::abs(sum)) break;
+        const double odd2 = odd * odd;
+        const double den = 8.0 * double(k + 1);
+        const double sgn = (k & 1) ? 1.0 : -1.0;  // (-1)^{k+1}: term k+1
+        if (live0) {
+            t0 *= (-odd2 / den) * iz;
+            const double a = cnorm(t0);
+            if (a >= prev0) {
+                live0 = false;  // divergence onset: stop at the optimum
+            } else {
+                s0m += t0;
+                if (want_plus) s0p += sgn * t0;
+                prev0 = a;
+                if (a <= SER_EPS2 * cnorm(s0m)) live0 = false;
+            }
+        }
+        if (live1) {
+            t1 *= ((4.0 - odd2) / den) * iz;
+            const double a = cnorm(t1);
+            if (a >= prev1) {
+                live1 = false;
+            } else {
+                s1m += t1;
+                if (want_plus) s1p += sgn * t1;
+                prev1 = a;
+                if (a <= SER_EPS2 * cnorm(s1m)) live1 = false;
+            }
+        }
     }
-    const cd omega = z - (0.5 * double(nu) + 0.25) * SPI;
-    return std::sqrt(2.0 / (SPI * z)) * std::exp(s * CI * omega) * sum;
 }
 
-static const double BESSEL_SWITCH = 12.0;
+static const double BESSEL_SWITCH2 = 144.0;  // (12.0)^2
 
 // (J0(x), J1(x)/x) — the Bessel-form pair of _bessel_j0_j1x.
 static void bessel_j0_j1x(cd x, cd &b0, cd &b1x) {
-    if (std::abs(x) <= BESSEL_SWITCH) {
+    if (cnorm(x) <= BESSEL_SWITCH2) {
         j01_series(x, b0, b1x);
         return;
     }
-    b0 = 0.5 * (hankel_asym(x, 0, 1) + hankel_asym(x, 0, 2));
-    b1x = 0.5 * (hankel_asym(x, 1, 1) + hankel_asym(x, 1, 2)) / x;
+    // J_nu = (H1_nu + H2_nu)/2. With W = sqrt(2/(pi x)) and E = e^{-i(x -
+    // pi/4)}: H2_0 = W E S0m, H2_1 = i W E S1m, H1_0 = (W/E) S0p and
+    // H1_1 = -i (W/E) S1p — one sqrt and one exp for all four, where the
+    // per-order calls did four of each.
+    cd s0m, s1m, s0p, s1p;
+    hankel_asym_sums(x, true, s0m, s1m, s0p, s1p);
+    const cd w = std::sqrt(2.0 / (SPI * x));
+    const cd e = std::exp(-CI * (x - 0.25 * SPI));
+    const cd p = w * e, pinv = w / e;
+    b0 = 0.5 * (pinv * s0p + p * s0m);
+    b1x = (0.5 * CI) * (p * s1m - pinv * s1p) / x;
 }
 
 // (H2_0(x)/2, H2_1(x)/(2x)) — the Hankel-form pair of _integrand_six.
 static void hankel2_half(cd x, cd &b0, cd &b1x) {
-    if (std::abs(x) <= BESSEL_SWITCH) {
-        cd j0, j1x;
-        j01_series(x, j0, j1x);
-        const cd j1 = j1x * x;
-        cd y0, y1;
-        y01_series(x, j0, j1, y0, y1);
+    if (cnorm(x) <= BESSEL_SWITCH2) {
+        cd j0, j1x, y0, y1;
+        jy01_series(x, j0, j1x, y0, y1);
         b0 = 0.5 * (j0 - CI * y0);
-        b1x = 0.5 * (j1 - CI * y1) / x;
+        b1x = 0.5 * (j1x * x - CI * y1) / x;
         return;
     }
-    b0 = 0.5 * hankel_asym(x, 0, 2);
-    b1x = 0.5 * hankel_asym(x, 1, 2) / x;
+    cd s0m, s1m, s0p, s1p;
+    hankel_asym_sums(x, false, s0m, s1m, s0p, s1p);
+    const cd p = std::sqrt(2.0 / (SPI * x)) * std::exp(-CI * (x - 0.25 * SPI));
+    b0 = 0.5 * p * s0m;
+    b1x = (0.5 * CI) * p * s1m / x;
 }
 
 // ---- the six integrands and quadrature (ports of the Python names) -------
