@@ -63,6 +63,17 @@ class SinusoidalSolver(_Cancelable):
 
     Constructor takes the same `wires` / `n_per_edge_per_wire` / `junctions`
     interface as `BSplineSolver` for drop-in comparison.
+
+    `feed_model`
+        Which SOURCE a delta-gap feed applies. Accepted for signature parity
+        with `SinusoidalGalerkinSolver` (momwire#192), but `"segment"` — NEC's
+        E_app = V/Δ_m over the whole feed segment, Eq 187 — is the only value
+        this solver can carry, and `"point"` is refused with the derivation in
+        `_reject_point_feed_model`. The short form: the feed-model axis is a
+        property of the TESTING, not of the basis, because a zero-width gap
+        has no collocation RHS at all, and under point matching the segment
+        gap already IS the zero-width gap at the mesh's own resolution
+        (momwire#212, report §17).
     """
 
     eps = 8.8541878188e-12
@@ -76,6 +87,7 @@ class SinusoidalSolver(_Cancelable):
         feed_wire_index=0,
         feed_arclength=None,
         feeds=None,
+        feed_model="segment",
         wavelength=22,
         halfdriver_factor=0.962,
         wire_radius=0.0005,
@@ -94,6 +106,13 @@ class SinusoidalSolver(_Cancelable):
     ):
         if junction_ports:
             self._reject_junction_ports()
+        if feed_model not in ("segment", "point"):
+            raise ValueError(
+                f"feed_model must be 'segment' or 'point', got {feed_model!r}"
+            )
+        if feed_model == "point":
+            self._reject_point_feed_model()
+        self.feed_model = feed_model
         self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
@@ -341,6 +360,76 @@ class SinusoidalSolver(_Cancelable):
             "port is outside its span (momwire#177; same limitation as "
             "NEC-2). Use BSplineSolver, or do what NEC requires: mesh a "
             "short bridge wire across the gap and gap-feed it"
+        )
+
+    def _reject_point_feed_model(self):
+        """Refuse `feed_model="point"` on the point-matched solver.
+
+        Not a plumbing gap and not an RHS formula nobody has written down yet
+        — the pairing that RHS *is* does not exist. Collocation tests with
+        δ(s − s_m), so row m's drive is ⟨δ_m, E_app⟩ = E_app(s_m), defined
+        only where E_app is a FUNCTION. The zero-width gap's applied field is
+        the distribution E_app = V·δ(s − s0), and δ·δ is not one: there is no
+        number to put in the feed row, and 0 in every other row is the
+        unexcited problem. `SinusoidalGalerkinSolver` carries the same source
+        only because its pairing ⟨f_i, E_app⟩ tests against a continuous f_i,
+        on which the delta collapses to the drive column −V·f_i(s0)
+        (momwire#192). The feed-model axis is a property of the TESTING.
+
+        Every regularization of the delta collapses into one of two dead ends.
+        Replace δ by a nascent delta g_w of unit integral and width w, and
+        sample: v_m = −V·g_w(s_m − s0). Measured on the canonical 0.962 λ/2
+        dipole over N = 41…641 (momwire#212, report §17):
+
+          **w ≪ h.** Every match point but the feed's sees ~0 while the feed
+          row sees −V·g_w(0) ≈ −V/w, so the RHS is the segment-gap RHS scaled
+          by h/w, and Z — homogeneous of degree −1 in the RHS — comes out
+          (w/h)·Z_segment. Collocation reads the source's WIDTH off the feed
+          row's amplitude and cannot tell a narrow gap from a small voltage,
+          so a sub-mesh width is returned as a fraction of a volt. The only
+          width this model already owns is the wire radius: the b → a limit of
+          the magnetic frill, i.e. a delta ring of magnetic current at ρ = a,
+          whose on-axis field E_z = (V a²/2)(1 + jkR)e^{−jkR}/R³ with
+          R = √(d² + a²) is smooth, finite everywhere, integrates to V, and
+          has no free parameter left (the textbook frill's entire content is
+          its b/a — exactly the modeling parameter a zero-width gap may not
+          introduce). Evaluated in this solver's own kernel convention — ring
+          on the surface, observation on the axis, which reproduces the
+          source-filament / BC-on-surface separation √(d² + a²) the fill
+          already uses — it has w = 2a, and a/h ≤ 3.0e-2 across the whole
+          ladder. Measured: the sampled RHS is the segment-gap RHS times
+          h/2a to ≤2.8e-5 relative, and Z DOUBLES at every mesh doubling
+          (0.270 → 0.533 → 1.059 → 2.112 → 4.218 Ω at N = 41…641) rather than
+          stabilizing. Not the segment gap's log walk — a linear one.
+
+          **w ≳ h.** The source is mesh-resolved and collocation is consistent
+          again, but w is then a modeling parameter, and the smallest one the
+          mesh resolves is w = h — which IS NEC's segment gap. Confirmed from
+          the other side: the exact cell average of the zero-width field above
+          reproduces the segment gap's −V/h to 6.0e-8…1.4e-6 of |Z| on the
+          same ladder, four decades inside the (a/h)² bound.
+
+        So under collocation the segment gap is not a rival source model to
+        the point gap — it is the point gap, rendered at the only resolution
+        collocation has. There is nothing left to opt into, which is why this
+        is a refusal rather than a second default.
+
+        A Hallén-style particular-solution forcing term is the one remaining
+        escape and is rejected on scope: it needs the infinite-wire kernel's
+        Fourier inversion to get J_p, J_p satisfies neither this basis's end
+        conditions nor its junction tables, and moving the unknown changes
+        what "the basis" means — which would break the one-axis-at-a-time
+        discipline the whole instrument exists to keep.
+        """
+        raise NotImplementedError(
+            "feed_model='point' is not supported on SinusoidalSolver: a "
+            "zero-width gap has no collocation RHS — the drive is E_app "
+            "sampled AT a match point and the source is a delta there, so "
+            "the pairing is undefined (momwire#212). Under point matching "
+            "NEC's segment gap already is the zero-width gap at the mesh's "
+            "own resolution. For the zero-width source use "
+            "SinusoidalGalerkinSolver(feed_model='point'), whose test "
+            "integral is what makes a delta source admissible"
         )
 
     def _normalize_junction_ports(self, junction_ports):

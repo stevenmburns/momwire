@@ -1860,6 +1860,32 @@ def test_feed_model_is_validated():
         SinusoidalGalerkinSolver(**_dipole(feed_model="delta"))
 
 
+def test_coll_feed_model_is_validated():
+    """The point-matched solver takes the same keyword with the same message,
+    so a caller matching the two solvers' feed models writes one spelling."""
+    with pytest.raises(ValueError, match="feed_model"):
+        SinusoidalSolver(**_dipole(feed_model="delta"))
+    assert SinusoidalSolver(**_dipole()).feed_model == "segment"
+    assert SinusoidalSolver(**_dipole(feed_model="segment")).feed_model == "segment"
+
+
+def test_coll_point_feed_model_is_refused_not_defaulted():
+    """momwire#212: the zero-width gap is outside the COLLOCATION stack, and
+    the refusal says so rather than silently serving the segment gap.
+
+    A caller who flips `SinusoidalGalerkinSolver`'s default to `"point"` and
+    tries to feed-match its point-matched sibling has to be told the pairing
+    does not exist — a silent fallback would produce exactly the two-feed-model
+    comparison report §16 exists to prevent. Derivation in
+    `SinusoidalSolver._reject_point_feed_model`; measured refutation in
+    `test_m6_instrument_report.py`.
+    """
+    with pytest.raises(NotImplementedError, match="zero-width gap"):
+        SinusoidalSolver(**_dipole(feed_model="point"))
+    # The sibling's option is unaffected — this is a testing-scheme limit.
+    assert SinusoidalGalerkinSolver(**_dipole(feed_model="point")).feed_model == "point"
+
+
 @pytest.mark.parametrize("n", [21, 41, 81])
 @pytest.mark.parametrize("readout", ["centre", "variational"])
 def test_point_gap_feed_y_is_symmetric_in_both_readouts(n, readout):
