@@ -504,6 +504,8 @@ verbatim output).
    option on `SinusoidalGalerkinSolver` is a real question, deliberately not
    answered here: it would re-baseline every M2–M4 number, so it needs its own
    issue and its own gate.
+   *(Landed as momwire#192 — §16. An option, `feed_model="point"`; the default
+   is still the segment-wide gap, and §16 inventories what a flip would move.)*
 
 ---
 
@@ -649,3 +651,129 @@ means giving the field kernel the (cos kξ − 1) source shape itself, which is 
 change to the C++ far fill's output contract. Filed as a follow-up;
 `test_reciprocity_floor_is_set_by_the_fill_not_the_product` pins the reading
 so the follow-up announces itself.
+
+---
+
+## 16. Addendum (2026-08-01): §12 follow-up 5 landed — `feed_model` is an option
+
+momwire#192 closes follow-up 5 the way the follow-up asked: as an **option,
+with the default unchanged**.
+
+    SinusoidalGalerkinSolver(..., feed_model="segment")   # default, as before
+    SinusoidalGalerkinSolver(..., feed_model="point")     # §6's `ptgap` column
+
+`"point"` is the zero-width gap `BSplineSolver` drives: E_app = V·δ(s − s0) at
+the feed segment's centre, so the Galerkin test integral collapses on the
+delta and the drive column is −V·f_i(s0) = −σ(A+C). That is one line of RHS
+assembly; nothing in the fill, the quadrature or the ports changes, and the
+`"segment"` branch is the same expression it always was, so no pinned constant
+in the tree moved (837 → 848 tests collected, all green).
+
+`ptgap` in `scripts/m6_residue_cluster.py` is now that option rather than the
+ten-line `PointGapGalerkin` research subclass, which is deleted. §1's
+description of it as "a ten-line research subclass in the harness, not a
+solver option" is superseded here; the run records themselves are untouched
+and the column still reads what §15 says it reads, verbatim:
+
+| N | `ptgap` | `ptgap`↔`bs2` | `gal`↔`bs2` |
+|--:|---|--:|--:|
+| 161 | 69.634327 − 18.112452j | 2.806e-7 | 2.466e-4 |
+| 321 | 69.633779 − 18.065325j | 1.303e-7 | 1.454e-4 |
+
+Pinned by `test_feed_model_option_reproduces_section_6`
+(`tests/test_m6_instrument_report.py`), which asserts the relative *values*,
+not only the ordering — a column that has graduated into the API needs a
+before that a future flip has to be measured against.
+
+### The duality, and its interaction with `feed_readout`
+
+M5's finding, now a property of the solver: the point-gap drive column IS the
+centre-evaluation functional the default `feed_readout="centre"` reads. So
+under `feed_model="point"` the two readouts are the same functional and the
+knob stops having consequences at gap feeds. Measured on the two-feed dipole:
+
+| | `segment` (default) | `point` |
+|---|--:|--:|
+| Y asymmetry, `feed_readout="centre"`, N=21/41/81 | 6.7e-5 / 2.4e-5 / 6.5e-6 | 3.1e-13 / 3.9e-12 / 5.6e-12 |
+| Y asymmetry, `feed_readout="variational"` | 4.4e-13 / 3.2e-12 / 5.9e-12 | 3.1e-13 / 3.9e-12 / 5.6e-12 |
+| driving-point spread between the two readouts | 2.2e-3 / 1.4e-3 / 8.2e-4 | 0.0 / 0.0 / 1.7e-16 |
+
+The point gap reaches the fill's own reciprocity floor under **either**
+readout, so it buys the reciprocal Y that `feed_readout="variational"` buys
+without the M3 payoff `variational` costs. What it does **not** do is leave
+the payoff alone in general — see the inventory.
+
+### What a default flip WOULD move
+
+Measured, not reasoned: the whole suite re-run with the default flipped to
+`"point"` fails 22 tests. That is the price list, and it is why the flip is
+its own decision rather than a consequence of this change.
+
+**Pinned impedance constants that move** (both are reference *families* other
+gates are scored against, so moving them re-baselines their dependents too):
+
+| file : test | reading | pinned | flipped |
+|---|---|---|---|
+| `test_sinusoidal_galerkin.py` : `test_m3_reference_constants_are_reproducible` | `dipole.sin_gal_321` | 69.639093 − 18.056307j | 69.633779 − 18.065325j |
+| `test_sinusoidal_galerkin.py` : `test_m4_reference_constants_are_reproducible` | `m4_dipole/pec.gal_161` | 20.995250 + 2.666325j | 20.995314 + 2.664821j |
+
+**Payoff gates that fall below their pinned floors** — the M3/M4 headline
+"Galerkin testing is worth this much":
+
+| file : test (param) | pinned floor | flipped |
+|---|--:|--:|
+| `test_sinusoidal_galerkin.py` : `test_g3_verdict_survives_every_candidate_reference` (`dipole`) | 2.0 | 1.948 |
+| — (`k2_junction`) | 2.9 | 1.774 |
+| `test_sinusoidal_galerkin.py` : `test_g4_variational_payoff_survives_each_ground` (`m4_dipole-pec`) | 1.85 | 1.841 |
+| — (`m4_dipole-refl`) | 2.0 | 1.884 |
+| — (`m4_dipole-somm`) | 2.15 | 1.960 |
+
+Read these with M3's fixed-feed constraint in mind: the reference family is
+built from *this* solver, so flipping the default changes the reference and
+the comparand together while the point-matched sibling it is scored against
+keeps NEC's segment gap. `errColl/errGal` then compares two feed models, which
+is exactly the confound §6 exists to isolate. So these are not simply numbers
+to re-record — the comparison itself would have to be re-derived (either give
+`SinusoidalSolver` a matching gap, or score the flipped solver against its own
+family). That is the substantive argument against a flip, and it is stronger
+than the re-baselining cost.
+
+**Qualitative M3 findings that invert** — statements, not constants, so a flip
+would need new prose rather than new digits:
+
+| file : test | flipped reading |
+|---|---|
+| `test_sinusoidal_galerkin.py` : `test_the_variational_payoff_is_in_the_reactance` | collocation converges faster in R on all four geometries (dipole 2.64, vee 1.14, k2_junction 1.74, k3_star 1.39) |
+| `test_sinusoidal_galerkin.py` : `test_k2_pre_asymptotic_error_maximum_is_not_quadrature` | the documented pre-asymptotic rise is gone (0.463 % → 0.392 % → 0.330 %) |
+| `test_sinusoidal_galerkin.py` : `test_k3_star_gap_is_basis_limited_not_testing_limited` | testing starts mattering (1.42) |
+| `test_sinusoidal_galerkin.py` : `test_k2_junction_gap_is_testing_limited` | testing stops mattering (1.84) |
+
+**Contrast tests that become tautologies** — they measure the difference
+between the two models, so a flip makes both sides the same thing:
+`test_sinusoidal_galerkin.py` : `test_gap_feed_readout_is_not_its_drives_dual`
+(3 params), `test_point_gap_readouts_coincide` (3 params),
+`test_the_variational_readout_costs_the_m3_payoff_on_k3_star`;
+`test_junction_ports.py` :
+`test_sg_node_port_full_mixed_y_symmetry_inherits_the_m5_amendment`;
+`test_m6_instrument_report.py` :
+`test_matched_feed_model_closes_the_dipole_basis_gap`,
+`test_feed_model_option_reproduces_section_6`,
+`test_point_gap_drive_is_self_dual`.
+
+Outside momwire, the one antennaknobs pin exposed is
+`tests/test_momwire_engine.py` :
+`test_momwire_sinusoidal_galerkin_reads_the_hentenna_residue`, which quotes a
+gap-fed `sin-Galerkin` impedance — §5's reading (`gal`↔`ptgap` ≤ 0.03 % on the
+residue cluster) says it would move well inside its tolerance. The
+`wire.sterba_bl` comparison in `tests/test_balanced_line_physics.py` is
+junction-ported and has no gap feed, so it is not exposed at all.
+
+### Where this leaves the axis
+
+Unchanged as a *reading*: on a clean geometry the two bases are, for practical
+purposes, the same basis, and §6 is still the sharpest result in the report.
+What is new is that the reading is reproducible from the shipped API rather
+than from a subclass in a script, and that anyone with a near-open, high-Q
+model (§5, antennaknobs#478) can opt into the feed model `BSplineSolver`
+already uses and get a reciprocal Y with it. What is deliberately not new is
+the default.
