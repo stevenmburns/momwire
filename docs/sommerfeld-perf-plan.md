@@ -474,6 +474,135 @@ gates pass on the ladder default. Regression: `test_somm_eps_bucket_
 ladder`, `test_somm_scaled_view_matches_direct_fill`,
 `test_somm_grid_frequency_reuse_one_fill_per_rung`.
 
+## Phase 8 — per-node quadrature constant factor (issue #159 proposal 3) — **LANDED (2026-08-01)**
+
+Phases 6 and 7 attacked the *node count* (extent keying) and the *number of
+fills* (frequency reuse). What was left of #159 is the cost of one node:
+the cold-single-solve floor moves only through the per-node quadrature (or
+through persisted masters, a product decision out of scope here).
+
+### Where the per-node time goes (profiled 2026-08-01, 4-core/8-thread linux)
+
+Measured with a standalone harness that compiles the `somm` namespace out of
+`_accelerators.cpp` and runs it single-threaded over the *real* grid node
+lists (so the mix of contours, forms and R₁ is the production one), with
+evaluation counters and an integrand-stub ablation:
+
+| grid                        | nodes | ms/node | integrand evals/node |
+|-----------------------------|-------|---------|----------------------|
+| lossless εr=16, 5 λ         | 2479  | 2.34    | 1343                 |
+| issue repro (εr=10, 122 m)  | 2905  | 1.97    | 1074                 |
+| default 10−1.26j, 2 λ       |  807  | 2.38    | 1192                 |
+
+Where those evaluations go (stress grid): fig-14 a→d adaptive run **53 %**,
+fig-14 descending tails **33 %**, fig-13 Bessel contour **14 %**. And where
+the time inside one evaluation goes, by ablation: **~85 % the clean-room A&S
+Bessel/Hankel routines** (1.49 µs of 1.75 µs), the balance being 2×`gam`
+(91 ns — four complex sqrts), one complex `exp` (21 ns), four complex
+divisions (~45 ns) and the 24-point accumulation.
+
+Two things the profile explicitly *cleared*:
+
+- **No six-way duplication.** `integrand_six` already evaluates D₁/D₂, γ₁,
+  γ₂, e^{−γ₂h} and the Bessel pair once per λ and shares them across all six
+  integrands — the thread's "sharing contour work across the six integrals"
+  was already true when the Phase 3 port landed.
+- **The adaptive bookkeeping is not the cost.** Per-node it is ~17 `absmax`
+  hypots per accepted panel, ~1 % of the node.
+
+### 8a — the Bessel/Hankel core — **LANDED**
+
+Three shares, none of which changes the mathematics or the quadrature:
+
+- Every truncation test is "is this term small next to the running sum" — a
+  predicate identical under squaring, so `std::abs(complex)` (a libm hypot at
+  ~20 cycles; **~75 of them per small-|x| Hankel call**) becomes three flops.
+- The Y₀/Y₁ ascending series ride the same two ladders as J₀/J₁: with
+  q = −(z/2)², the manual's alternating Y sums are those ladders reweighted
+  by harmonic numbers. One pass (`jy01_series`) yields all four sums where
+  two passes rebuilt the same ladders.
+- In the asymptotic regime the two orders differ only in the numerator
+  4ν²−(2k+1)², so one loop over the shared (i/z) ladder yields both; and
+  tᵏ carries (s i/z)ᵏ, so the kind-1 terms are the kind-2 terms with
+  alternating signs. One sqrt and one exp now serve all four Hankel values
+  the Bessel form needs (there were four of each). Each order keeps its own
+  divergence-onset break, so both truncate exactly where they did before.
+
+Contours, waypoints (including #161's branch-point-aware `d`), the 24-point
+rule, the adaptive bisection and the tail policy are untouched, so
+`_sommerfeld.py` remains the reference/oracle unchanged — no mirroring
+needed, and the mirror tests stay a real cross-check (Python evaluates the
+same λ points through scipy's AMOS).
+
+Measured (3 runs, same box, 8 threads):
+
+| case                                   | before  | after   | speedup |
+|----------------------------------------|---------|---------|---------|
+| grid fill, lossless εr=16, 5 λ (2479 n)| 1.305 s | 0.465 s | 2.81×   |
+| grid fill, issue repro (2905 n)        | 1.272 s | 0.440 s | 2.89×   |
+| grid fill, default 10−1.26j, 2 λ       | 0.427 s | 0.144 s | 2.96×   |
+| grid fill, poor 3−1.2j, 2 λ            | 0.388 s | 0.128 s | 3.03×   |
+| cold solve, dipole @ 0.05 λ            | 0.132 s | 0.048 s | 2.75×   |
+| cold solve, inverted_l @ 0.2 λ         | 0.235 s | 0.137 s | 1.72×   |
+| cold solve, yagi @ 0.2 λ               | 0.370 s | 0.192 s | 1.93×   |
+
+(The cold solves dilute the fill with the shared base assembly, hence the
+smaller factors; impedances are unchanged to every printed digit.)
+
+Accuracy — max relative delta vs the previous kernel on the full four-surface
+lattice out to 5 λ: **2.8e−13** default (10−1.26j), **2.4e−13** poor
+(3−1.2j), **2.2e−13** lossless εr=16; the mirror-test node set agrees to
+1.9e−14 / 4.2e−14 / 2.1e−17 / 1.2e−17 across its four grounds including the
+PEC limit. Pointwise vs scipy's AMOS over the sampled contour domain (|x| to
+130, arg ∈ [−100°, +45°]) the new routines are bit-identical to the old at
+the median and match its worst case exactly, including the pre-existing
+cancellation corner near arg(x) = −90°. Full suite green, no gate loosened.
+
+### 8b — what was measured and left alone
+
+- **Merging γ's two square roots** (γ = √(−j(λ−k))·√(j(λ+k)) → ±√ of the
+  product, with a sign fix): worth ~45 ns of a 640 ns evaluation (7 %), and
+  it would rewrite exactly the branch-cut bookkeeping issue #161 had to fix.
+  Not worth 7 %.
+- **`-fcx-limited-range`** (inlining libgcc's complex multiply/divide):
+  measured **+7 %** after the hypots were gone — a whole-translation-unit
+  numerics flag for 7 %, affecting every other kernel in the file. No.
+- **Hoisting k₁², k₂² and the shared D₁/D₂ reciprocal** out of the per-point
+  integrand: one complex division saved, measured 0.8 % — inside run-to-run
+  noise. Left alone rather than widen the diff.
+- **Squared-magnitude `absmax`/`absmax_diff`** in the adaptive/tail
+  convergence tests: ~1 % of a node, and it perturbs subdivision decisions.
+  Not worth it.
+
+### 8c — the evaluation count (not taken; sized for a follow-up)
+
+The remaining lever is the ~1100–1350 integrand evaluations per node, and it
+is a genuine 1.3–1.4×, not more. Counted on the stress grid: the adaptive
+bisection spends 2.0 M evaluations to place 1.16 M evaluations' worth of
+accepted panels — **58 % efficiency**, because each interval is priced with a
+24-point rule on the whole plus 24-point rules on both halves, and only the
+halves survive. A nested error-estimated pair (Gauss–Kronrod / Patterson)
+recovers at most the other 42 % of the adaptive share = **25 % of all
+evaluations**. Against that: a Kronrod extension of the 24-point rule is a new
+tabulated constant set, it must be mirrored identically in `_sommerfeld.py`
+(the oracle), and it re-prices every panel on exactly the grazing fig-14
+contours issue #161 had to repair. Deferred as a separate, test-first change.
+
+The descending tails (33 % of evaluations, ~20 panels/node) are over-resolved
+by construction — the asymptotic panel length is 0.2π/max(ρ,h), i.e. ~1/10 of
+an oscillation carrying a 24-point rule — but the panel length and rule order
+are pinned quadrature constants, so cutting there is an accuracy-policy change
+rather than a perf patch, and out of this phase's scope.
+
+### 8d — follow-up: persisted masters
+
+With the fill 2.8–3.0× cheaper, the cold floor a first interactive request
+pays is now ~0.13–0.47 s of grid fill (0.44 s on the issue-repro geometry,
+0.14 s on a typical sub-2 λ catalog shape). Phase 7's normalized masters are
+what a disk cache would persist; at 0.14–0.47 s each the case for spending a
+product decision on persisting them is *weaker* than it was at 1.3–3.8 s, but
+it is the only remaining lever on a truly cold process. Noted, not proposed.
+
 ## Non-goals / notes
 
 - Accuracy is still not traded away: grid rtol stays 1e-6 and the 4-point
