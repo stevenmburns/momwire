@@ -2430,8 +2430,8 @@ def test_bspline_chunked_dense_z_matches_tensor_path(degree):
 
 
 def test_bspline_chunked_dense_impedance_matches_tensor_path():
-    """End-to-end compute_impedance through the chunked path (default
-    dispatch) vs the legacy tensor path (flag flipped off) — covers the
+    """End-to-end compute_impedance through a forced chunked path vs the
+    tensor path (flag flipped off) — covers the
     same-edge prep sharing and everything downstream of Z."""
     import momwire.bspline as bmod
     from momwire.bspline import BSplineSolver
@@ -2441,8 +2441,10 @@ def test_bspline_chunked_dense_impedance_matches_tensor_path():
 
     L = 2 * 0.962 * 22 / 4
     wires = [np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])]
-    kw = dict(wires=wires, n_per_edge_per_wire=[[21]], nsegs=21, degree=2)
-    z_chunked, _ = BSplineSolver(**kw).compute_impedance()
+    kw = {"wires": wires, "n_per_edge_per_wire": [[21]], "nsegs": 21, "degree": 2}
+    chunked = BSplineSolver(**kw)
+    chunked.swept_mem_mb = 0
+    z_chunked, _ = chunked.compute_impedance()
 
     saved = bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
     try:
@@ -2457,6 +2459,31 @@ def test_bspline_chunked_dense_impedance_matches_tensor_path():
     assert rel < 1e-10, f"chunked vs tensor impedance disagreement: rel {rel}"
 
 
+def test_bspline_dense_dispatch_respects_memory_budget(monkeypatch):
+    """Small tensors use the faster tensor path; oversized ones stay chunked."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    wires = [np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])]
+    kw = {"wires": wires, "n_per_edge_per_wire": [[21]], "nsegs": 21, "degree": 2}
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("unexpected dense assembly path")
+
+    tensor = BSplineSolver(**kw)
+    monkeypatch.setattr(tensor, "_compute_Z_dense_chunked", unexpected)
+    tensor.compute_impedance()
+
+    chunked = BSplineSolver(**kw)
+    chunked.swept_mem_mb = 0
+    monkeypatch.setattr(chunked, "_build_J_blocks", unexpected)
+    chunked.compute_impedance()
+
+
 @pytest.mark.parametrize(
     "ground_kw",
     [
@@ -2467,8 +2494,8 @@ def test_bspline_chunked_dense_impedance_matches_tensor_path():
     ids=["pec", "refl-coef", "sommerfeld"],
 )
 def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
-    """Grounded compute_impedance through the chunked image path (default
-    dispatch) vs the legacy image-tensor path (windowed flags flipped off)
+    """Grounded compute_impedance through a forced chunked image path vs the
+    image-tensor path (windowed flags flipped off)
     — PEC mirror-dot, Fresnel refl-coef tables, and the Sommerfeld
     constant-C2 exact image all route through the weighted windowed
     accumulator with scale = -1."""
@@ -2490,7 +2517,9 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
         ground_z=0.0,
         **ground_kw,
     )
-    z_chunked, _ = BSplineSolver(**kw).compute_impedance()
+    chunked = BSplineSolver(**kw)
+    chunked.swept_mem_mb = 0
+    z_chunked, _ = chunked.compute_impedance()
 
     saved = (
         bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL,
