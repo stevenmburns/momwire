@@ -9,18 +9,19 @@ that document comes out of this script.
 Four columns per geometry, all on the SAME mesh at each rung (so a rung
 compares four *schemes*, never four problems):
 
-  ``coll``   ``SinusoidalSolver``            three-term basis, point-matched
-  ``gal``    ``SinusoidalGalerkinSolver``    three-term basis, Galerkin
-  ``ptgap``  ``PointGapGalerkin`` (below)    ditto, with B-spline's feed model
-  ``bs2``    ``BSplineSolver(degree=2)``     quadratic B-spline, Galerkin
+  ``coll``   ``SinusoidalSolver``               three-term basis, point-matched
+  ``gal``    ``SinusoidalGalerkinSolver``       three-term basis, Galerkin
+  ``ptgap``  ``…(feed_model="point")``          ditto, B-spline's feed model
+  ``bs2``    ``BSplineSolver(degree=2)``        quadratic B-spline, Galerkin
 
 ``coll`` vs ``gal`` isolates the TESTING scheme (basis and feed held fixed).
 ``gal`` vs ``bs2`` is what the census called the sin↔bs2 basis gap — except it
 also differs in the feed model, which is why ``ptgap`` exists: it is ``gal``
 with the delta gap swapped for the zero-width (point) gap ``BSplineSolver``
 uses, so ``ptgap`` vs ``bs2`` is the BASIS difference with everything else
-matched. See `PointGapGalerkin` for why that is a ten-line subclass and not a
-solver change.
+matched. That swap was a research subclass in this file until momwire#192
+made it the opt-in ``feed_model="point"`` (see the comment above `COLUMNS`);
+the solver's default is still the segment-wide gap ``gal`` reads.
 
 Geometry
 --------
@@ -114,42 +115,18 @@ DEFAULT_SEG_CAP = 4000
 # ---------------------------------------------------------------------------
 # the matched-feed column
 # ---------------------------------------------------------------------------
-class PointGapGalerkin(SinusoidalGalerkinSolver):
-    """`SinusoidalGalerkinSolver` with a ZERO-WIDTH (point) delta gap.
-
-    momwire#182 M5 found a third instrument axis while measuring the port
-    duality: the source model. `SinusoidalSolver` inherits NEC's delta gap —
-    E_app = V/Δ spread over the WHOLE feed segment — so refining the mesh
-    shrinks the source, which is why the dipole reactance walks logarithmically
-    with no limit (M3). `BSplineSolver` drives a point gap instead. Comparing
-    the two bases therefore compares two feed models as well, and part of what
-    M2/M3 filed as a sin↔bs2 basis gap is a feed-model gap.
-
-    The point gap is E_app = V·δ(s − s0), so the Galerkin test integral
-    collapses on the delta and the drive column is just −V·f_i(s0): the same
-    basis-evaluation vector the CENTRE readout already uses (`sigma·(A + C)`,
-    since sin(k·0) = 0 kills B). Putting s0 at the feed segment's centre makes
-    drive and readout exact duals of each other, so this column's Y is
-    machine-symmetric with the DEFAULT `feed_readout="centre"` — no knob, no
-    payoff traded.
-
-    Deliberately a research subclass in a script, not a solver option: adopting
-    it would re-litigate every M2-M4 number, and its job here is to MEASURE the
-    feed-model contribution, not to become a fifth cell.
-    """
-
-    def _drive_columns(self, geom, seg_view, k):
-        U = super()._drive_columns(geom, seg_view, k)
-        starts = seg_view["starts"]
-        for j, fseg in enumerate(geom["feed_segs"]):
-            s, e = starts[fseg], starts[fseg + 1]
-            U[:, j] = 0.0
-            np.add.at(
-                U[:, j],
-                seg_view["jbasis"][s:e],
-                -(seg_view["sigma"][s:e] * (seg_view["A"][s:e] + seg_view["C"][s:e])),
-            )
-        return U
+# The ZERO-WIDTH (point) delta gap this column reads used to be a research
+# subclass here. momwire#182 M5 found it while measuring the port duality:
+# `SinusoidalSolver` inherits NEC's delta gap — E_app = V/Δ spread over the
+# WHOLE feed segment — so refining the mesh shrinks the source, while
+# `BSplineSolver` drives a point gap. Comparing the two bases therefore
+# compares two feed models as well, and part of what M2/M3 filed as a sin↔bs2
+# basis gap is a feed-model gap; the point gap is also exactly self-dual under
+# the default `feed_readout="centre"`.
+#
+# momwire#192 graduated it to `SinusoidalGalerkinSolver(feed_model="point")` —
+# opt-in, with `"segment"` still the default, so the report's M2-M4 numbers do
+# not move and this column keeps reading §6/§15 unchanged.
 
 
 COLUMNS = ("coll", "gal", "ptgap", "bs2")
@@ -168,7 +145,7 @@ def solve(column: str, kw: dict) -> complex:
     elif column == "gal":
         z, _ = SinusoidalGalerkinSolver(**kw).compute_impedance()
     elif column == "ptgap":
-        z, _ = PointGapGalerkin(**kw).compute_impedance()
+        z, _ = SinusoidalGalerkinSolver(**kw, feed_model="point").compute_impedance()
     elif column == "bs2":
         z, _ = BSplineSolver(**kw, degree=2).compute_impedance()
     else:

@@ -456,6 +456,32 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         symmetric to ~1e-12 instead, and costs the M3 payoff gate: on
         k3_star the worst-case errColl/errGal falls from 1.014 to 0.797, so
         it is offered, measured and documented rather than made the default.
+    `feed_model`
+        Which SOURCE a delta-gap feed applies (junction and node ports are
+        unaffected — both are zero-width by construction).
+
+        ``"segment"`` (default) is NEC's and the point-matched sibling's:
+        E_app = V/Δ_m spread over the whole feed segment, so refining the
+        mesh shrinks the source. ``"point"`` is `BSplineSolver`'s zero-width
+        gap, E_app = V·δ(s − s0) at the feed segment's centre; the Galerkin
+        test integral collapses on the delta and the drive column is
+        −V·f_i(s0), i.e. the basis-evaluation vector σ(A+C).
+
+        The source model is a third instrument axis, not a refinement of the
+        first two (momwire#182 M5, report §6): on the canonical dipole the
+        point gap sits 2.8e-7 / 1.3e-7 from `BSplineSolver` at N=161/321
+        against the segment gap's 2.5e-4 / 1.5e-4, so most of what M2/M3
+        filed as a sin↔bs2 BASIS gap is a feed-model gap. It is also exactly
+        self-dual under the DEFAULT `feed_readout="centre"` — the drive
+        column IS the centre-evaluation functional — so a multiport Y with
+        gap feeds in it is symmetric to the fill's own reciprocity floor
+        under either readout, with none of the M3 payoff traded.
+
+        `"segment"` stays the default because flipping it re-baselines every
+        pinned M2–M4 number (report §16 inventories which), so adoption is a
+        decision to take deliberately per model rather than a silent change
+        of what this solver means. See §6 and §12 follow-up 5 of
+        `docs/sinusoidal-galerkin-instrument-report.md`.
 
     All three ground models are wired (M4): `ground_z` alone gives the PEC
     image, `+ ground_eps` NEC's reflection-coefficient ground, and
@@ -521,6 +547,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         near_factor=0.5,
         near_correction=True,
         feed_readout="centre",
+        feed_model="segment",
         node_ports=None,
         **kwargs,
     ):
@@ -535,6 +562,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 f"feed_readout must be 'centre' or 'variational', got {feed_readout!r}"
             )
         self.feed_readout = feed_readout
+        if feed_model not in ("segment", "point"):
+            raise ValueError(
+                f"feed_model must be 'segment' or 'point', got {feed_model!r}"
+            )
+        self.feed_model = feed_model
         self.node_ports = self._validate_node_ports(node_ports)
         # (base seg_view, k) → port-augmented seg_view. Keyed by identity on
         # the inherited view, which `_basis_coefs` already caches per (geom,
@@ -1655,9 +1687,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """Unit-voltage Galerkin excitation column per port, (N+P, n_ports),
         ordered [gap feeds…, junction ports…, node ports…].
 
-        Gap feed j: b_i = -∫ f_i(s)·ŝ·E^app(s) ds with the delta-gap applied
-        field E^app = 1/Δ_m along +ŝ_m on feed segment m and zero elsewhere,
-        so only that segment's support entries contribute:
+        Gap feed j, `feed_model="segment"` (default): b_i = -∫ f_i(s)·ŝ·E^app(s)
+        ds with the delta-gap applied field E^app = 1/Δ_m along +ŝ_m on feed
+        segment m and zero elsewhere, so only that segment's support entries
+        contribute:
 
             ∫_{seg m} f_{i,m}(ξ) dξ = σA·Δ_m + σC·(2/k)·sin(kΔ_m/2)
 
@@ -1675,6 +1708,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         subtraction (`_sin_minus_arg`). That is the RHS, not G, so no gate
         below moves on it; it is folded because leaving one consumer of the
         pair unfolded is how the defect comes back.
+
+        Gap feed j, `feed_model="point"`: E^app = δ(s − s0) at the feed
+        segment's CENTRE, so the test integral collapses on the delta and the
+        column is just -f_i(s0) = -σ(A+C) — sin(k·0) = 0 kills the B shape and
+        cos(k·0) − 1 kills the third, leaving the one folded coefficient
+        `AC` the centre readout already reads. Drive and readout are then the
+        same functional, which is the duality the class docstring states; the
+        1/Δ_m of the segment model is absent because the source no longer
+        spreads. `AC` rather than `A + C` for the #203 discipline: the two are
+        bit-identical (`AC` is stored as that sum), but one spelling of the
+        pair keeps every consumer folded by construction.
 
         Junction port p: the source is an EMF in the infinitesimal lead
         between the port terminal and the node, so testing it against basis
@@ -1703,12 +1747,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         U = np.zeros((n_basis, self.n_ports), dtype=np.complex128)
         for j, fseg in enumerate(geom["feed_segs"]):
             s, e = starts[fseg], starts[fseg + 1]
-            hm = float(h[fseg])
             sig = seg_view["sigma"][s:e]
-            int_f = sig * seg_view["AC"][s:e] * hm + sig * seg_view["C"][s:e] * (
-                2.0 / k
-            ) * _sin_minus_arg(0.5 * k * hm)
-            np.add.at(U[:, j], seg_view["jbasis"][s:e], -int_f / hm)
+            if self.feed_model == "point":
+                col = -(sig * seg_view["AC"][s:e])
+            else:
+                hm = float(h[fseg])
+                int_f = sig * seg_view["AC"][s:e] * hm + sig * seg_view["C"][s:e] * (
+                    2.0 / k
+                ) * _sin_minus_arg(0.5 * k * hm)
+                col = -int_f / hm
+            np.add.at(U[:, j], seg_view["jbasis"][s:e], col)
         for p in range(len(self.junction_ports)):
             U[N + p, len(self.feeds) + p] = -1.0
         if self.node_ports:
@@ -1750,6 +1798,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         gap-averaged current -U[:, j]·α, which is the exact dual of the
         Galerkin drive. See the class docstring for why the non-dual one is
         the default and what it costs.
+
+        Under `feed_model="point"` the two branches COINCIDE: that drive
+        column is the centre-evaluation functional itself, so -U[:, j]·α and
+        `_feed_segment_current` differ only in summation order (~1e-16
+        relative, `test_point_gap_readouts_coincide`) and `feed_readout` stops
+        being a choice with consequences at gap feeds.
         """
         N = geom["n_segs"]
         if self.feed_readout == "variational":

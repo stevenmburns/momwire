@@ -1855,6 +1855,89 @@ def test_feed_readout_is_validated():
         SinusoidalGalerkinSolver(**_dipole(feed_readout="galerkin"))
 
 
+def test_feed_model_is_validated():
+    with pytest.raises(ValueError, match="feed_model"):
+        SinusoidalGalerkinSolver(**_dipole(feed_model="delta"))
+
+
+@pytest.mark.parametrize("n", [21, 41, 81])
+@pytest.mark.parametrize("readout", ["centre", "variational"])
+def test_point_gap_feed_y_is_symmetric_in_both_readouts(n, readout):
+    """`feed_model="point"` makes the gap-feed Y block self-dual (momwire#192).
+
+    The zero-width gap's drive column IS the basis-evaluation vector at the
+    feed segment's centre, which is what the DEFAULT centre readout reads, so
+    drive and readout are the same functional and Y = −UᵀG⁻¹U up to the fill's
+    own reciprocity floor — no `feed_readout="variational"` opt-in and none of
+    the M3 payoff traded. Measured 3.1e-13 / 3.9e-12 / 5.6e-12 at N = 21/41/81,
+    identical under both readouts.
+
+    The segment-gap control is the adversarial half: it is the O(h) asymmetry
+    `test_gap_feed_readout_is_not_its_drives_dual` pins (6.7e-5 / 2.4e-5 /
+    6.5e-6), so this test cannot pass on a `feed_model` that silently did
+    nothing.
+    """
+
+    def asym(**kw):
+        Y = np.asarray(
+            SinusoidalGalerkinSolver(
+                **_two_feed_dipole(n=n, wavelength=WL, feed_readout=readout, **kw)
+            ).compute_y_matrix()
+        )
+        return np.linalg.norm(Y - Y.T) / np.linalg.norm(Y)
+
+    a_point = asym(feed_model="point")
+    a_segment = asym(feed_model="segment")
+    assert a_point < 1e-10, f"the point gap is not self-dual: {a_point:.3e}"
+    if readout == "centre":
+        # The control: without the option this IS the measurement, and it is
+        # five orders worse.
+        assert a_segment > 1e-6, a_segment
+        assert a_point < 1e-3 * a_segment, (a_point, a_segment)
+
+
+@pytest.mark.parametrize("n", [21, 41, 81])
+def test_point_gap_readouts_coincide(n):
+    """Under `feed_model="point"` the two `feed_readout` branches are the same
+    functional, so the knob stops having consequences at gap feeds.
+
+    `_port_currents`'s centre branch sums σ(A+C)·α over the feed segment's
+    support entries; its variational branch is −U[:, j]·α, and the point-gap
+    drive column is that same vector scattered onto basis rows. Measured
+    driving-point spread between the readouts: 0.0 / 0.0 / 1.7e-16 at
+    N = 21/41/81 — against the segment gap's 2.2e-3 / 1.4e-3 / 8.2e-4, which
+    is the O(h) gap-average-vs-centre difference the default trades.
+    """
+
+    def z(**kw):
+        s = SinusoidalGalerkinSolver(**_two_feed_dipole(n=n, wavelength=WL, **kw))
+        return np.atleast_1d(s.compute_impedance()[0])
+
+    point = [z(feed_model="point", feed_readout=r) for r in ("centre", "variational")]
+    np.testing.assert_allclose(point[0], point[1], rtol=1e-14)
+
+    segment = [z(feed_readout=r) for r in ("centre", "variational")]
+    spread = np.abs(segment[0] - segment[1]).max() / np.abs(segment[1]).max()
+    assert spread > 1e-5, spread
+
+    # The identity behind it, on an arbitrary current vector rather than on a
+    # solved one: the drive column IS the centre-evaluation functional.
+    s = SinusoidalGalerkinSolver(
+        **_two_feed_dipole(n=n, wavelength=WL, feed_model="point")
+    )
+    geom = s._build_geometry()
+    seg_view = s._basis_coefs(geom, s.k)
+    U = s._drive_columns(geom, seg_view, s.k)
+    rng = np.random.default_rng(0)
+    alpha = rng.standard_normal(geom["n_segs"]) + 1j * rng.standard_normal(
+        geom["n_segs"]
+    )
+    for j, fseg in enumerate(geom["feed_segs"]):
+        dual = -(U[:, j] @ alpha)
+        centre = s._feed_segment_current(alpha, seg_view, fseg)
+        assert abs(dual - centre) <= 1e-14 * abs(centre), (j, dual, centre)
+
+
 @pytest.mark.slow
 def test_the_variational_readout_costs_the_m3_payoff_on_k3_star():
     """Why `feed_readout="variational"` is not the default, as a number.
