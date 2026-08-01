@@ -203,6 +203,19 @@ class BSplineSolver(_Cancelable):
     feed_wire_index : index of the wire carrying the delta-gap source.
     feed_arclength : arc length along the feed wire at which to evaluate
         Φ_m(s_f). Default: feed wire midpoint.
+    feed_model : gap-source model, `"point"` (default) or `"segment"`
+        (stevenmburns/momwire#216). `"point"` is this solver's native
+        zero-width drive, E_app = V·δ(s − s_f), whose Galerkin drive column
+        collapses on the delta to v_m = Φ_m(s_f). `"segment"` is NEC's
+        segment-wide gap, E_app = V/Δ uniform over the mesh cell containing
+        s_f, giving v_m = (1/Δ)∫_cell Φ_m ds — the same source
+        `SinusoidalSolver` hard-codes and `SinusoidalGalerkinSolver` defaults
+        to, so it is what makes a feed-matched comparison against those
+        solvers possible from this side (report §19). Mutually exclusive with
+        `feed_smoothing_factor`. Note the readout follows: Z = 1/(vᵀc) is
+        always the drive's dual, so `"segment"` reads the gap-AVERAGED
+        current, matching `SinusoidalGalerkinSolver(feed_readout=
+        "variational")` rather than its default centre readout.
     junctions : list of [(wire_idx, "start"|"end"), ...] tuples, each entry
         one junction node where K wire endpoints meet.
     n_qp_pair : Gauss-Legendre nodes per segment per axis for the smooth-
@@ -243,6 +256,7 @@ class BSplineSolver(_Cancelable):
         feed_wire_index=0,
         feed_arclength=None,
         feeds=None,
+        feed_model="point",
         feed_smoothing_factor=None,
         junctions=None,
         junction_ports=None,
@@ -347,6 +361,23 @@ class BSplineSolver(_Cancelable):
         # larger α gives faster basis-limited convergence but the smoothing
         # error from the bump's finite width takes longer to vanish.
         self.feed_smoothing_factor = feed_smoothing_factor
+        # Gap-source model (stevenmburns/momwire#216), the mirror of #192's
+        # option on the sinusoidal siblings. "point" (default) is this
+        # solver's native zero-width drive E_app = V·δ(s − s_f); "segment" is
+        # NEC's segment-wide gap, E_app = V/Δ uniform over the mesh cell
+        # containing s_f (Eq 187's convention). Both are gap models, so
+        # combining "segment" with the cos²-bump `feed_smoothing_factor` is
+        # meaningless — each replaces the point drive outright.
+        if feed_model not in ("point", "segment"):
+            raise ValueError(
+                f"feed_model must be 'point' or 'segment', got {feed_model!r}"
+            )
+        if feed_model == "segment" and feed_smoothing_factor is not None:
+            raise ValueError(
+                "feed_model='segment' and feed_smoothing_factor are mutually "
+                "exclusive — both replace the point drive with a spread one"
+            )
+        self.feed_model = feed_model
         self.n_qp_source = int(n_qp_source)
 
         self.c = 1 / np.sqrt(self.eps * self.mu)
@@ -1958,9 +1989,23 @@ class BSplineSolver(_Cancelable):
         wi=None,
         s_f=None,
     ):
-        """Galerkin RHS for either a delta-gap or smoothed source.
+        """Galerkin RHS for a delta-gap, segment-gap or smoothed source.
 
-        Delta-gap (feed_smoothing_factor=None): v_m = Φ_m(s_f).
+        Delta-gap (`feed_model="point"`, no smoothing — the default):
+        v_m = Φ_m(s_f).
+
+        Segment gap (`feed_model="segment"`, stevenmburns/momwire#216): NEC's
+        Eq 187 convention, E_app = V/Δ uniform over the mesh cell [s_lo, s_hi]
+        containing s_f, so v_m = (1/Δ)∫_{s_lo}^{s_hi} Φ_m ds with Δ = s_hi −
+        s_lo. Every Φ_m is a polynomial of degree d on that cell (its
+        endpoints ARE knots), so the existing `n_qp_source`-node Gauss rule —
+        exact through degree 2·n_qp_source − 1, i.e. 31 at the default 16 —
+        integrates it exactly; there is no accuracy knob to add here. This is
+        the same source `SinusoidalSolver` hard-codes and
+        `SinusoidalGalerkinSolver` defaults to, so it is the feed-matched
+        setting for a comparison against either (report §19). It shares the
+        smoothed source's cure for the delta gap's O(1/N) term below: the
+        drive is a bounded function, not a distribution.
 
         Smoothed source: replace V·δ(s − s_f) with V·g_w(s − s_f) where g_w
         is a cos² bump of integral 1 and half-width w/2 = α·h_feed/2 (with
@@ -1992,13 +2037,37 @@ class BSplineSolver(_Cancelable):
         knots = wire_knots[wi]
         kept, local_to_global = wire_basis_global[wi]
 
-        if self.feed_smoothing_factor is None:
+        if self.feed_smoothing_factor is None and self.feed_model == "point":
             # Delta-gap (original)
             DM = BSpline.design_matrix(np.array([s_f]), knots, d).toarray()[0]
             v = np.zeros(n_basis_total, dtype=np.complex128)
             for kept_idx, (j, _kind, _junc_idx, _end_pos) in enumerate(kept):
                 m_global = local_to_global[kept_idx]
                 v[m_global] = DM[j]
+            return v
+
+        if self.feed_model == "segment":
+            # NEC's segment-wide gap: E_app = V/Δ uniform over the mesh cell
+            # holding s_f. Same cell location as the smoothing branch below
+            # (a feed exactly on a knot takes the cell to its right, and a
+            # feed at the wire end is clipped to the last cell).
+            arc_at_knot = arc
+            seg_idx = int(np.searchsorted(arc_at_knot, s_f, side="right")) - 1
+            seg_idx = max(0, min(seg_idx, len(arc_at_knot) - 2))
+            s_lo = float(arc_at_knot[seg_idx])
+            s_hi = float(arc_at_knot[seg_idx + 1])
+            h_cell = s_hi - s_lo
+            gl_xi, gl_w = leggauss(self.n_qp_source)
+            t = 0.5 * (s_hi + s_lo) + 0.5 * h_cell * gl_xi
+            # (1/h)·∫_cell Φ_m ds — exact, the integrand being degree d on
+            # exactly one knot span (see the docstring).
+            weights = (0.5 * h_cell * gl_w) / h_cell
+            DM = BSpline.design_matrix(t, knots, d).toarray()
+            v_full = DM.T @ weights
+            v = np.zeros(n_basis_total, dtype=np.complex128)
+            for kept_idx, (j, _kind, _junc_idx, _end_pos) in enumerate(kept):
+                m_global = local_to_global[kept_idx]
+                v[m_global] = v_full[j]
             return v
 
         # Smoothed source: find the feed segment to set the smoothing width
