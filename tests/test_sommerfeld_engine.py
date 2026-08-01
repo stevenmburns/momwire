@@ -81,6 +81,97 @@ def test_bessel_vs_hankel_same_point(r1):
 
 
 # ---------------------------------------------------------------------------
+# 3b. Fig-14 waypoint vs the k1 branch point (issue #161)
+# ---------------------------------------------------------------------------
+#
+# The cross-form check above cannot reach this: the Bessel form needs
+# rho ~< 2h, and the waypoint cap only bites once max(rho, h) > ~2.8
+# wavelengths, which at rho ~ 2h means h > 1.4 and puts the k1 branch
+# point back in the numerically-dead regime. The defect lived exactly in
+# the gap — grazing (rho >> h), where only the Hankel form converges — so
+# it is gated here against contours that differ only in their waypoint.
+
+EPS_STRESS = 16.0 + 0.0j  # lossless: k1's branch point sits ON the real axis
+EPS_DEFAULT = 10.0 - 1.26j
+TH_GRAZE = np.radians(0.5)
+
+
+def _six_hankel_with_waypoint(eps_t, k2, rho, h, d, rtol=1e-11):
+    """The fig-14 contour with the caller dictating the waypoint `d`.
+
+    Same role as `greens_free_space_check` one layer down: the value
+    cannot depend on where the real-axis run turns into the descending
+    tail, provided it turns down clear of the k1 branch point.
+    """
+    k1 = k2 * np.sqrt(complex(eps_t))
+    if k1.imag > 0:
+        k1 = np.conj(k1)
+
+    def f(lam):
+        return som._integrand_six(lam, rho, h, k1, k2, "H")
+
+    r1 = np.hypot(rho, h)
+    dir_right = (h - 1.0j * rho) / r1
+    dir_left = (-h - 1.0j * rho) / r1
+    a = -0.4j * k2
+    b = (0.6 + 0.2j) * k2
+    c = (1.02 + 0.2j) * k2
+    qtol = min(rtol, 1e-11)
+    total = som._adaptive_segment(f, a, b, qtol)
+    total = total + som._adaptive_segment(f, b, c, qtol)
+    total = total + som._adaptive_segment(f, c, d, qtol)
+    ref = np.max(np.abs(total))
+    p0 = 0.5 * max(abs(k1), k2)
+    total = total + som._tail(f, d, dir_right, 0.2 * np.pi / max(rho, h), rtol, ref, p0)
+    total = total - som._tail(f, a, dir_left, 0.2 * np.pi / max(rho, h), rtol, ref, p0)
+    return total
+
+
+@pytest.mark.parametrize(
+    "eps_t,r1",
+    [
+        (EPS_STRESS, 2.7),  # below the old cap/branch-point crossing
+        (EPS_STRESS, 2.9),  # just above it
+        (EPS_STRESS, 3.5),
+        (EPS_DEFAULT, 3.9),
+        (EPS_DEFAULT, 4.2),
+    ],
+)
+def test_waypoint_clearance_invariance(eps_t, r1):
+    """Straddling the radius where the old max(rho, h)-keyed cap dropped
+    the waypoint below k1.real (2.842 wavelengths on the stress ground at
+    theta = 0.5 deg, 4.045 on the default one), the shipped contour must
+    agree with ones that turn down further out. Contours that keep the
+    clearance agree to ~1e-11 of scale among themselves; the capped one
+    was off by up to 1.2e-1 (stress) / 1e-8 (default) before #161."""
+    rho, h = r1 * np.cos(TH_GRAZE), r1 * np.sin(TH_GRAZE)
+    k1r = (K2 * np.sqrt(complex(eps_t))).real
+    k1i = -abs((K2 * np.sqrt(complex(eps_t))).imag)
+    shipped = som._six_integrals(eps_t, K2, rho, h, 1e-9)
+    scale = np.max(np.abs(shipped))
+    for mult in (1.2, 1.5):
+        ref = _six_hankel_with_waypoint(eps_t, K2, rho, h, mult * k1r + 0.99j * k1i)
+        assert np.max(np.abs(shipped - ref)) < 1e-8 * scale, mult
+
+
+@pytest.mark.parametrize(
+    "eps_t,lo,hi",
+    [(EPS_STRESS, 2.55, 3.15), (EPS_DEFAULT, 3.75, 4.35)],
+)
+def test_grazing_scan_has_no_isolated_jump(eps_t, lo, hi):
+    """Issue #161's acceptance criterion: a zoomed second-difference scan
+    across the old switch radius shows no isolated spike. Curvature varies
+    smoothly over so narrow a window, so max/median is a jump detector;
+    before the fix it read 8.6e6 (stress) and 2.4e3 (default), after, ~2.
+    Runs through _six_integrals_batch, i.e. the C++ kernel when built."""
+    r1 = np.linspace(lo, hi, 301)
+    surf = som.iv_surfaces_direct(eps_t, K2, r1, np.full_like(r1, TH_GRAZE), rtol=1e-9)
+    for kk in som._SURF_KEYS:
+        d2 = np.abs(np.diff(surf[kk], 2))
+        assert d2.max() < 10.0 * np.median(d2), (kk, d2.max(), np.median(d2))
+
+
+# ---------------------------------------------------------------------------
 # 4. Exact limits
 # ---------------------------------------------------------------------------
 
@@ -221,6 +312,25 @@ def test_grid_stress_lossless():
     g = som.SommerfeldGrid(eps_t, K2, r1_max=1.2)
     rng = np.random.default_rng(3)
     r1 = rng.uniform(0.01, 1.19, 60)
+    th = rng.uniform(0.0, np.pi / 2, r1.size)
+    gi = g.eval(r1, th)
+    di = som.iv_surfaces_direct(eps_t, K2, r1, th, rtol=1e-8)
+    for kk in som._SURF_KEYS:
+        scale = np.max(np.abs(di[kk]))
+        assert np.max(np.abs(gi[kk] - di[kk])) < 4e-3 * scale, kk
+
+
+def test_grid_stress_lossless_past_the_waypoint_switch():
+    """The same stress ground sampled from 1.5 to 4.9 wavelengths.
+
+    The test above stops at 1.2, and every other stress sample sits below
+    it too — which left the whole region past R1 ~ 2.84, where the fig-14
+    waypoint cap used to cross k1's branch point (issue #161), untested.
+    Same 4e-3-of-scale bar; measured 1.4e-3 across the four surfaces."""
+    eps_t = 16.0 + 0.0j
+    g = som.SommerfeldGrid(eps_t, K2, r1_max=5.0)
+    rng = np.random.default_rng(5)
+    r1 = rng.uniform(1.5, 4.9, 40)
     th = rng.uniform(0.0, np.pi / 2, r1.size)
     gi = g.eval(r1, th)
     di = som.iv_surfaces_direct(eps_t, K2, r1, th, rtol=1e-8)

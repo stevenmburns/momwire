@@ -63,6 +63,25 @@ def test_batch_form_override_cross_form_agreement():
 
 
 @needs_acc
+def test_batch_matches_python_across_the_waypoint_switch():
+    """Lossless eps_r = 16 at grazing, straddling R1 = 2.84 wavelengths.
+
+    None of EPS_LIST is lossless, so none of them puts k1's branch point
+    ON the real axis — the case that made the fig-14 waypoint rule
+    branch-point-aware (issue #161). Both paths must implement the same
+    rule, including the chase/cap decision it turns on."""
+    r1 = np.linspace(2.6, 3.1, 9) * LAM
+    th = np.deg2rad(0.5)
+    rho, h = r1 * np.cos(th), r1 * np.sin(th)
+    cxx = _acc.somm_six_integrals_batch(16.0 + 0.0j, K2, rho, h, 1e-9, 0)
+    py = np.array(
+        [sm._six_integrals(16.0 + 0.0j, K2, r, hh, 1e-9) for r, hh in zip(rho, h)]
+    )
+    scale = np.abs(py).max(axis=1, keepdims=True) + 1e-300
+    assert (np.abs(cxx - py) / scale).max() < 1e-7
+
+
+@needs_acc
 def test_batch_free_space_is_exactly_zero():
     out = _acc.somm_six_integrals_batch(1.0 + 0.0j, K2, np.r_[1.0], np.r_[1.0], 1e-9, 0)
     assert np.all(out == 0.0)
