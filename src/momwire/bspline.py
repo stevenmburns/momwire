@@ -234,8 +234,9 @@ class BSplineSolver(_Cancelable):
         quasi-static series inductance μ₀/2π·(1−1/εr)·ln(b/a) per meter —
         the insulated-wire velocity-factor effect (the wire tunes a few
         percent long). Purely reactive; no dissipation modeled.
-    swept_mem_mb : memory budget (MB, default 256) for the batched swept
-        path's per-chunk transients — the all-pairs J moment tensor plus
+    swept_mem_mb : memory budget (MB, default 256) for dense moment tensors
+        and for the batched swept path's per-chunk transients — the
+        all-pairs J moment tensor plus
         the same-edge reg moment blocks (see `_swept_batched_z_chunks`).
         Peak transient memory of a sweep ≈ this budget, so a
         memory-constrained deployment caps it per solve (e.g. 64 on a
@@ -2840,17 +2841,26 @@ class BSplineSolver(_Cancelable):
     # Driver impedance
     # ------------------------------------------------------------------
 
+    def _dense_tensor_fits_budget(self, n_segs):
+        """Whether one dense polynomial-moment tensor fits the memory budget."""
+        tensor_bytes = (
+            (self.degree + 1) ** 2 * int(n_segs) ** 2 * np.dtype(np.complex128).itemsize
+        )
+        return tensor_bytes <= (self.swept_mem_mb << 20)
+
     def compute_impedance(self, same_edge_prep=None):
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
             self._build_basis_polynomials(geom)
         )
         n_basis_total = supp_seg.shape[0]
+        dense_tensor_fits = self._dense_tensor_fits_budget(geom["n_segs_total"])
 
         self._checkpoint()  # after geometry/basis, before the J-block fill
         if (
             _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
             and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and not dense_tensor_fits
         ):
             # Chunked fill+assemble: never materialises the full
             # (d+1, d+1, N, N) tensor (issue #136). Identical algebra to
@@ -2861,6 +2871,7 @@ class BSplineSolver(_Cancelable):
         else:
             J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_prep)
             Z = self._assemble_Z(J, supp_seg, polys, geom)
+            del J
 
         if self.ground_z is not None:
             self._checkpoint()  # between fills: before the image J-block fill
