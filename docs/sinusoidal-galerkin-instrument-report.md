@@ -931,3 +931,130 @@ Pinned by `test_zero_width_gap_has_no_collocation_rhs` and
 `test_coll_point_feed_model_is_refused_not_defaulted`
 (`tests/test_sinusoidal_galerkin.py`). Reproduce with
 `python scripts/m6_residue_cluster.py --feed-matched`.
+
+---
+
+## 18. Addendum (2026-08-01): the near-open collapse at N=641 — momwire#213
+
+§5 measured antennaknobs#478's near-open class at N=161 and found the
+sinusoidal ↔ B-spline residual collapsing **55× / 74×** once the feed model
+was matched; §13 re-read it at N=321 through the shipped
+`feed_model="point"` (momwire#192) and got 0.003 % / 0.001 %. Both readings
+stop short of the question #478's users would actually act on: §5 also filed
+a **shared whole-structure** residual that no feed model explains, and the
+finest mesh is exactly where a shared term would reassert itself over a
+feed-model term. This addendum takes the ladder one rung deeper — N=641,
+5130 and 5119 segments, a 24× refinement on the rung #478 quoted — and
+records what happens. **No run record is edited; §5 and §13 stand as
+measured, and the rungs they quote reproduce here verbatim.**
+
+Harness: `python scripts/m6_residue_cluster.py --near-open` (momwire#213).
+The two designs carry N=641 in the snapshot, which was re-dumped for those
+two rows alone — **all 52 pre-existing rows are byte-identical to the
+2026-07-31 snapshot and in the same order** (checked mechanically), so this
+is the same experiment at greater depth. N=641 is above the harness's
+`DEFAULT_SEG_CAP`, so the standard sweep records it *skipped* and does not
+grow: re-run here it takes **2m31s** against the ~3 minutes §13 quotes and
+reproduces §13's eleven-design table row for row. `--near-open` is what
+reaches the deep rungs.
+
+### The ladder
+
+Every gap is `|ΔZ| / |Z_bs2|` at the same rung; `collapse` is
+`gal↔bs2 / ptgap↔bs2`, i.e. how much of the disagreement the feed model
+accounts for at that depth. `step` is each scheme against the rung below it.
+
+`wire.lazy_h`:
+
+| N | segs | `coll`↔`bs2` | `gal`↔`bs2` | `ptgap`↔`bs2` | collapse | `coll` step | `gal` step | `ptgap` step | `bs2` step |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 21 | 170 | 5.41 % | 5.75 % | 0.5728 % | 10× | — | — | — | — |
+| 41 | 330 | 2.17 % | 2.31 % | 0.1369 % | 17× | 10.71 % | 11.04 % | 7.98 % | 7.53 % |
+| 81 | 646 | 2.32 % | 2.26 % | 0.0655 % | 34× | 0.50 % | 0.07 % | 0.08 % | 0.01 % |
+| 161 | 1290 | 1.25 % | 1.21 % | 0.0217 % | 56× | 4.03 % | 4.00 % | 2.99 % | 2.95 % |
+| 321 | 2570 | 0.84 % | 0.81 % | 0.0029 % | 278× | 1.85 % | 1.84 % | 1.45 % | 1.43 % |
+| **641** | **5130** | **0.60 %** | **0.59 %** | **0.0006 %** | **992×** | 1.44 % | 1.43 % | 1.20 % | 1.20 % |
+
+`wire.vbeam`:
+
+| N | segs | `coll`↔`bs2` | `gal`↔`bs2` | `ptgap`↔`bs2` | collapse | `coll` step | `gal` step | `ptgap` step | `bs2` step |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 21 | 169 | 1.50 % | 2.48 % | 0.3306 % | 8× | — | — | — | — |
+| 41 | 327 | 4.19 % | 2.60 % | 0.2203 % | 12× | 3.68 % | 0.17 % | 0.40 % | 0.29 % |
+| 81 | 647 | 1.31 % | 1.06 % | 0.0343 % | 31× | 6.34 % | 5.03 % | 3.65 % | 3.46 % |
+| 161 | 1287 | 0.78 % | 0.74 % | 0.0098 % | 76× | 1.55 % | 1.33 % | 1.04 % | 1.01 % |
+| 321 | 2563 | 0.57 % | 0.59 % | 0.0008 % | 704× | 0.75 % | 0.69 % | 0.55 % | 0.54 % |
+| **641** | **5119** | **0.37 %** | **0.41 %** | **0.0011 %** | **374×** | 1.19 % | 1.18 % | 0.99 % | 0.99 % |
+
+The N=161 rows are §5's table to the digit (1.25/1.21/0.022 and
+0.78/0.74/0.010) and the N=321 rows are §13's, so the deep rungs extend
+those runs rather than replacing them.
+
+### The verdict: it survives, and it is not a coarse-mesh artifact
+
+**The collapse holds at every depth measured and grows over most of the
+ladder.** On `lazy_h` it is monotone — 10 → 17 → 34 → 56 → 278 → **992×** —
+and the matched column falls monotonically from 0.57 % to 0.0006 % while the
+mismatched one is still at 0.59 %. On `vbeam` it peaks: 704× at N=321, then
+**374×** at N=641. The peak is not the collapse degrading in the sense §5
+warned about — the matched residual only moves 8.4e-6 → 1.1e-5 — it is the
+*mismatched* residual continuing to shrink (0.59 % → 0.41 %) while the
+matched one has flattened. Both readings are two-and-a-half decades or more,
+at 5100 segments, so the answer to #213's question is unambiguous: on this
+class essentially the whole sinusoidal ↔ B-spline disagreement is the delta
+gap, at every mesh anyone would run.
+
+One new observation the deep rung buys: **the matched pair stops converging
+together at ~1e-5 here**, where on §6's clean dipole it keeps tightening past
+1e-7. That floor is the first thing in this report that looks like a genuine
+basis difference on a near-open geometry rather than a feed-model one — and
+it is 2.5 decades below the shared term below, so it is a curiosity, not an
+error budget. (Follow-up, not a claim: whether the floor is the basis or the
+two Galerkin schemes' own errors ceasing to cancel is unmeasured.)
+
+### §5's caveat is intact — and, at this depth, stronger
+
+The collapse is a statement about the **disagreement between schemes**, never
+about the error. At N=641 every scheme's own last step is still **1.2–1.4 %**
+on `lazy_h` and **1.0–1.2 %** on `vbeam`, after a 24× refinement of the mesh
+#478 quoted; the shared term is two to three orders larger than the matched
+inter-scheme gap at the same rung and remains the dominant number on the
+page. It also does not fall cleanly: `vbeam`'s own step is *larger* at N=641
+(1.19 %) than at N=321 (0.75 %), and `lazy_h`'s N=81 step (0.07 %) sits
+between a 11.04 % and a 4.00 % one. So a single rung-to-rung step
+under-reports the distance to converged on this class, which is the honest
+form of #478's advice:
+
+> **"Expect the last percent to be physical, and budget fine mesh for
+> near-open structures" survives this addendum unchanged.** What
+> `feed_model="point"` removes is the part of the discrepancy that was an
+> artifact of comparing two source models. It buys no accuracy.
+
+### What antennaknobs#478 users should do
+
+For a near-open, high-Q model on `momwire:sinusoidal-galerkin`, set
+`feed_model="point"`: it removes ≥278× of the sinusoidal ↔ B-spline
+disagreement at every rung from N=321 down (992× / 374× at ~5100 segments,
+56× / 76× as coarse as N=161), and per §16 it also delivers a reciprocal Y
+under either `feed_readout` at no cost to the M3 payoff. It does **not**
+reduce the mesh a near-open model needs — the ~1 % that is left is shared by
+every scheme and is what the fine mesh is for. The default stays `"segment"`
+for the reasons §16 and §17 give; this is a per-model opt-in.
+
+Free space only, as everywhere in this report: momwire#151 / M4's
+ground-contact defect still excludes ground reads on the sinusoidal family.
+
+### Cost
+
+Both ladders, six rungs, four columns: **3m09s** wall clock and **7.0 GiB**
+peak RSS under the 24 GiB address-space cap (same box as §13). The N=641
+rungs are ~2.5 min of that — per design `coll` 7.3 s, `gal` 27 s, `ptgap`
+27 s, `bs2` 11–15 s — which is why they are gated behind `--near-open`
+instead of joining the standard sweep.
+
+Pinned by `test_near_open_collapse_survives_at_the_fine_rung`
+(`tests/test_m6_instrument_report.py`), at N=321 off the snapshot: the values
+above with a ≥100× structural floor, plus the §5 caveat guard that every
+scheme's own step still exceeds its cross-scheme gap. N=641 is not in CI —
+it is a ~2.5-minute rung, and it lives here and in the harness. Reproduce
+with `python scripts/m6_residue_cluster.py --near-open`.
