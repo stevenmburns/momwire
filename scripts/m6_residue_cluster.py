@@ -47,6 +47,7 @@ Running
     python scripts/m6_residue_cluster.py --only specialty.hentenna
     python scripts/m6_residue_cluster.py --seg-cap 1000     # cheaper rungs
     python scripts/m6_residue_cluster.py --dipole-feed-model  # the M5 column
+    python scripts/m6_residue_cluster.py --dipole-feed-mirror # §19 (momwire#216)
     python scripts/m6_residue_cluster.py --feed-matched       # §17 (momwire#212)
     python scripts/m6_residue_cluster.py --near-open          # §18 (momwire#213)
 
@@ -442,6 +443,57 @@ def dipole_feed_model(n_list=(81, 161, 321)):
         )
 
 
+def dipole_feed_mirror(n_list=(161, 321)):
+    """§19 (momwire#216): §6 mirrored — the same dipole with the ORACLE moved
+    onto NEC's segment gap instead of the sinusoidal solvers moved onto the
+    point gap.
+
+    Two pairings are printed for the segment gap because `BSplineSolver`'s
+    readout is its drive's dual (Z = 1/(vᵀc)), so `bs2(segment)` reads the
+    gap-AVERAGED current — the functional `feed_readout="variational"` reads,
+    not the default centre one. Only the variational row is matched in BOTH
+    the source and the readout functional; the centre row is the control that
+    shows how much of §6's residual is the readout rather than the source.
+    """
+    hd = 0.962 * 22 / 4
+    print("\n" + "=" * 100)
+    print("FEED-MODEL MIRROR — 0.962λ/2 dipole, free space, a=0.5 mm")
+    print("=" * 100)
+    for n in n_list:
+        kw = dict(
+            wires=[np.array([[0, 0, -hd], [0, 0, hd]], dtype=float)],
+            n_per_edge_per_wire=[[n]],
+            feed_wire_index=0,
+            feed_arclength=hd,
+            wavelength=22,
+            wire_radius=0.0005,
+        )
+
+        def _z(s):
+            return complex(np.atleast_1d(s.compute_impedance()[0])[0])
+
+        z = {
+            "bs2(point)": _z(BSplineSolver(**kw, degree=2)),
+            "bs2(segment)": _z(BSplineSolver(**kw, degree=2, feed_model="segment")),
+            "gal(seg,centre)": _z(SinusoidalGalerkinSolver(**kw)),
+            "gal(seg,variational)": _z(
+                SinusoidalGalerkinSolver(**kw, feed_readout="variational")
+            ),
+            "gal(point)": _z(SinusoidalGalerkinSolver(**kw, feed_model="point")),
+        }
+        print(f"\n  N={n}")
+        for name, zz in z.items():
+            print(f"    {name:>22} {zz.real:12.6f}{zz.imag:+12.6f}j")
+        pairs = (
+            ("gal(seg,centre)", "bs2(segment)", "source matched, readout NOT"),
+            ("gal(seg,variational)", "bs2(segment)", "FULLY matched"),
+            ("gal(point)", "bs2(point)", "§6's matched pair, mirrored"),
+            ("gal(seg,centre)", "bs2(point)", "§6's mismatched pair"),
+        )
+        for a, b, note in pairs:
+            print(f"    {a:>22} ↔ {b:<13} {rel(z[a], z[b]):.3e}   {note}")
+
+
 # ---------------------------------------------------------------------------
 # the feed-MATCHED payoff (momwire#212, report §17)
 # ---------------------------------------------------------------------------
@@ -566,6 +618,20 @@ M3_REFS_QUOTED = {
     ),
 }
 _MATCHED_REFS = ("sin_gal_321", "sin_coll_321", "rich_sin_gal", "rich_sin_coll")
+
+# momwire#216's seventh reference: the SAME B-spline solve as `bspline2_321`
+# with the oracle moved onto NEC's segment gap, which §17 named as the only
+# remaining route to a fully feed-matched M3 family. It is deliberately NOT in
+# `M3_REFS_QUOTED` — that dict is a verbatim quote of the pinned `M3_REFS` in
+# tests/test_sinusoidal_galerkin.py, and #216 does not change the pinned gate.
+# Measured with `BSplineSolver(degree=2, feed_model="segment")` at N=321 on the
+# same two geometries (report §19).
+M3_SEGMENT_BS2_REF = {
+    "dipole": 69.643519 - 18.048873j,
+    "k2_junction": 124.492317 + 0.403057j,
+}
+# The family with every feed model matched to the two comparands' segment gap.
+_FULLY_MATCHED_REFS = _MATCHED_REFS + ("bs2_segment_321",)
 M3_FEED_MATCHED_GEOMS = {"dipole": _m3_dipole_kwargs, "k2_junction": _m3_k2_kwargs}
 M3_COARSE = (11, 15, 21)
 
@@ -644,11 +710,20 @@ def feed_matched(ladder=(41, 81, 161, 321, 641)):
             + "   reference feed"
         )
         per_ref = {}
-        for ref_name, ref in M3_REFS_QUOTED[name].items():
+        refs = dict(M3_REFS_QUOTED[name])
+        # momwire#216's seventh row — the same oracle on the segment gap.
+        refs["bs2_segment_321"] = M3_SEGMENT_BS2_REF[name]
+        for ref_name, ref in refs.items():
             per_ref[ref_name] = [
                 rel(z[("coll", n)], ref) / rel(z[("gal", n)], ref) for n in M3_COARSE
             ]
-            tag = "segment" if ref_name in _MATCHED_REFS else "POINT (bspline)"
+            tag = (
+                "segment (bspline)"
+                if ref_name == "bs2_segment_321"
+                else "segment"
+                if ref_name in _MATCHED_REFS
+                else "POINT (bspline)"
+            )
             print(
                 "  "
                 + f"{ref_name:>16} "
@@ -657,9 +732,11 @@ def feed_matched(ladder=(41, 81, 161, 321, 641)):
             )
         w_all = min(min(v) for v in per_ref.values())
         w_m = min(min(per_ref[r]) for r in _MATCHED_REFS)
+        w_f = min(min(per_ref[r]) for r in _FULLY_MATCHED_REFS)
         print(
-            f"    worst over all six references      {w_all:.3f}\n"
-            f"    worst over feed-matched references {w_m:.3f}"
+            f"    worst over all seven references       {w_all:.3f}\n"
+            f"    worst over §17's feed-matched four    {w_m:.3f}\n"
+            f"    worst over the fully matched five     {w_f:.3f}"
         )
 
 
@@ -671,6 +748,12 @@ def main(argv=None):
     # the higher NEAR_OPEN_SEG_CAP for --near-open, which exists to reach past it.
     ap.add_argument("--seg-cap", type=int, default=None)
     ap.add_argument("--dipole-feed-model", action="store_true")
+    ap.add_argument(
+        "--dipole-feed-mirror",
+        action="store_true",
+        help="report §19: §6 mirrored — the B-spline oracle on NEC's segment "
+        "gap, under both sinusoidal-Galerkin readouts",
+    )
     ap.add_argument(
         "--feed-matched",
         action="store_true",
@@ -691,6 +774,9 @@ def main(argv=None):
         return 0
     if args.dipole_feed_model:
         dipole_feed_model()
+        return 0
+    if args.dipole_feed_mirror:
+        dipole_feed_mirror()
         return 0
     if args.feed_matched:
         feed_matched()

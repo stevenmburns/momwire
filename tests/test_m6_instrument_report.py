@@ -44,8 +44,10 @@ from scripts.m6_residue_cluster import (
     M3_COARSE,
     M3_FEED_MATCHED_GEOMS,
     M3_REFS_QUOTED,
+    M3_SEGMENT_BS2_REF,
     SNAPSHOT,
     PointGapCollocation,
+    _FULLY_MATCHED_REFS,
     _kwargs_from_row,
     _MATCHED_REFS,
     solve,
@@ -167,6 +169,73 @@ def test_feed_model_option_reproduces_section_6():
         assert r_pt < 0.01 * r_gal, (n, r_pt, r_gal)
     # The matched pair converges together; the mismatched pair does not.
     assert seen[321] < seen[161]
+
+
+@pytest.mark.slow
+def test_section_6_mirrors_with_the_oracle_on_the_segment_gap():
+    """§19 (momwire#216) — §6 run the other way round: instead of moving the
+    sinusoidal solvers onto `BSplineSolver`'s point gap, move the ORACLE onto
+    NEC's segment gap (`BSplineSolver(feed_model="segment")`).
+
+    The subtlety the mirror turns on is the READOUT. `BSplineSolver` reads
+    Z = 1/(vᵀc), always its drive's dual, so under the segment gap it reads the
+    gap-AVERAGED current — which is `SinusoidalGalerkinSolver`'s
+    `feed_readout="variational"` functional, NOT its default centre readout.
+    So the mirror has two pairings and only one of them is fully matched:
+
+        N     gal(seg,centre)↔bs2(seg)   gal(seg,variational)↔bs2(seg)
+        161            2.052e-4                    2.845e-7
+        321            1.203e-4                    1.308e-7
+
+    The fully matched pairing collapses to 2.845e-7 / 1.308e-7 — the same
+    numbers §6/§15's point-gap pairing reads (2.806e-7 / 1.303e-7), to 1.4 %
+    and 0.4 %. Matching the SOURCE alone (centre readout) buys only ~1.2×, so
+    §6's residual is a source difference AND a functional difference, and the
+    basis difference underneath is the same size under either feed model.
+
+    ~7 s: five solves at each of two fine meshes.
+    """
+    pinned_matched = {161: 2.845e-7, 321: 1.308e-7}
+    pinned_centre = {161: 2.052e-4, 321: 1.203e-4}
+    matched, mirrored_point = {}, {}
+    for n in (161, 321):
+        kw = _dipole_kwargs(n)
+
+        def _z(s):
+            return complex(np.atleast_1d(s.compute_impedance()[0])[0])
+
+        z_bs2_seg = _z(BSplineSolver(**kw, degree=2, feed_model="segment"))
+        z_bs2_pt = _z(BSplineSolver(**kw, degree=2))
+        z_gal_c = _z(SinusoidalGalerkinSolver(**kw))
+        z_gal_v = _z(SinusoidalGalerkinSolver(**kw, feed_readout="variational"))
+        z_gal_pt = _z(SinusoidalGalerkinSolver(**kw, feed_model="point"))
+
+        r_matched = _rel(z_gal_v, z_bs2_seg)
+        r_centre = _rel(z_gal_c, z_bs2_seg)
+        r_mismatched = _rel(z_gal_c, z_bs2_pt)  # §6's own pairing
+        matched[n] = r_matched
+        mirrored_point[n] = _rel(z_gal_pt, z_bs2_pt)
+        # Values, 5 % — the house tolerance on these relatives.
+        assert abs(r_matched - pinned_matched[n]) < 0.05 * pinned_matched[n], (
+            n,
+            r_matched,
+        )
+        assert abs(r_centre - pinned_centre[n]) < 0.05 * pinned_centre[n], (n, r_centre)
+        # The verdict, structurally: the FULLY matched pairing beats §6's
+        # mismatched one by ≥100×...
+        assert r_mismatched > 100 * r_matched, (n, r_mismatched, r_matched)
+        # ...while matching the source alone does not — the readout is half
+        # the story, which is what makes the two-pairing table necessary.
+        assert r_centre > 0.1 * r_mismatched, (n, r_centre, r_mismatched)
+        # The two feed models leave the SAME basis residual (§19's verdict:
+        # §6 is now closed from both directions).
+        assert abs(r_matched - mirrored_point[n]) < 0.05 * mirrored_point[n], (
+            n,
+            r_matched,
+            mirrored_point[n],
+        )
+    # And, as in §6, the matched pair tightens with refinement.
+    assert matched[321] < matched[161]
 
 
 @pytest.mark.slow
@@ -310,6 +379,63 @@ def test_feed_matched_payoff_is_the_pinned_m3_ratio():
         # Both readings clear the pinned M3 floor (2.0 / 2.9) they are the
         # feed-matched statement of.
         assert min(w_all, w_matched) > (2.0 if name == "dipole" else 2.9)
+
+
+@pytest.mark.slow
+def test_m3_payoff_is_unmoved_by_a_fully_feed_matched_reference_family():
+    """§19's second half (momwire#216) — §17 could only feed-match M3's
+    reference family by DROPPING its two `BSplineSolver` members. With
+    `feed_model="segment"` on the oracle they can be kept instead: a seventh
+    reference, `bs2_segment_321`, that is a B-spline solve on the comparands'
+    own segment gap.
+
+    Measured (`scripts/m6_residue_cluster.py --feed-matched`):
+
+        geometry      bs2_segment_321 at N=11/15/21   worst over the matched five
+        dipole              2.127 / 2.241 / 2.309              2.062
+        k2_junction         5.450 / 4.181 / 3.501              2.974
+
+    So the fully matched family reads exactly what §17's four-member matched
+    family read — the new reference is never the worst — and §17's <0.2 %
+    extrapolation lands at 0.0 %. The M3 payoff verdict is now feed-matched
+    with nothing dropped.
+
+    ~25 s: two schemes × two geometries × three coarse meshes.
+    """
+    pinned = {"dipole": 2.062, "k2_junction": 2.974}
+    for name, factory in M3_FEED_MATCHED_GEOMS.items():
+        z = {
+            (scheme, n): complex(
+                np.atleast_1d(
+                    (
+                        SinusoidalSolver
+                        if scheme == "coll"
+                        else SinusoidalGalerkinSolver
+                    )(**factory(n)).compute_impedance()[0]
+                )[0]
+            )
+            for scheme in ("coll", "gal")
+            for n in M3_COARSE
+        }
+        refs = dict(M3_REFS_QUOTED[name])
+        refs["bs2_segment_321"] = M3_SEGMENT_BS2_REF[name]
+        ratios = {
+            ref_name: [
+                _rel(z[("coll", n)], ref) / _rel(z[("gal", n)], ref) for n in M3_COARSE
+            ]
+            for ref_name, ref in refs.items()
+        }
+        w_fully = min(min(ratios[r]) for r in _FULLY_MATCHED_REFS)
+        w_matched = min(min(ratios[r]) for r in _MATCHED_REFS)
+        assert abs(w_fully - pinned[name]) < 0.05 * pinned[name], (name, w_fully)
+        # §17's extrapolated "<0.2 % movement", measured: it does not move.
+        assert abs(w_fully - w_matched) < 0.002 * w_matched, (name, w_fully, w_matched)
+        # And the new reference is a genuine seventh reading, not a duplicate
+        # of the point-gap one it is the segment-gap twin of.
+        assert (
+            _rel(M3_SEGMENT_BS2_REF[name], M3_REFS_QUOTED[name]["bspline2_321"]) > 1e-5
+        ), name
+        assert w_fully > (2.0 if name == "dipole" else 2.9)
 
 
 @pytest.mark.slow
