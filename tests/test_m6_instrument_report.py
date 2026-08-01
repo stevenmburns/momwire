@@ -40,8 +40,13 @@ from momwire import BSplineSolver, SinusoidalGalerkinSolver, SinusoidalSolver
 
 from scripts.m6_residue_cluster import (
     DESIGNS,
+    M3_COARSE,
+    M3_FEED_MATCHED_GEOMS,
+    M3_REFS_QUOTED,
     SNAPSHOT,
+    PointGapCollocation,
     _kwargs_from_row,
+    _MATCHED_REFS,
     solve,
 )
 
@@ -161,6 +166,149 @@ def test_feed_model_option_reproduces_section_6():
         assert r_pt < 0.01 * r_gal, (n, r_pt, r_gal)
     # The matched pair converges together; the mismatched pair does not.
     assert seen[321] < seen[161]
+
+
+@pytest.mark.slow
+def test_zero_width_gap_has_no_collocation_rhs():
+    """§17 (momwire#212) — the refutation `SinusoidalSolver.feed_model="point"`
+    is refused on, measured rather than argued.
+
+    §16 wanted a feed-MATCHED payoff, which needs a zero-width gap on the
+    point-matched solver. Collocation's drive is E_app sampled AT a match
+    point, so the source has to be a function there; the zero-width gap is a
+    delta. Regularize it to a nascent delta of width w and exactly two things
+    can happen, both checked here on the canonical dipole:
+
+      w ≪ h — take the only width the model owns, the wire radius (the b → a
+      frill, `zero_width_gap_Ez`). The feed row sees the spike's PEAK, ≈ V/2a,
+      and every other row sees ~0, so the drive is the segment-gap drive
+      scaled by h/2a and Z = (2a/h)·Z_segment: 0.270 → 0.533 → 1.059 → 2.112 →
+      4.218 Ω at N = 41…641, doubling every rung away from the answer instead
+      of settling. Collocation cannot tell a narrow gap from a small voltage.
+
+      w ≳ h — the smallest width the mesh resolves is one cell, and averaging
+      the SAME zero-width field over each cell returns the segment gap to
+      ~1e-7 of |Z|. A no-op, not an option.
+
+    So the segment gap is not a rival source model here — it is the zero-width
+    gap at the only resolution collocation has. Pinned as values because §17
+    is a claim about magnitudes; 5 % on the relatives, matching
+    `test_feed_model_option_reproduces_section_6`.
+
+    ~20 s: three solves at each of four meshes.
+    """
+    a = 0.0005
+    # Pinned: Z from point-sampling the zero-width field. Doubling per rung IS
+    # the finding, so the values are pinned, not just their ordering.
+    pinned_point = {161: 1.059402 - 0.276689j, 321: 2.112233 - 0.549288j}
+    z_pt, z_seg, z_bs2, cell_rel, prop_dev = {}, {}, {}, {}, {}
+    for n in (41, 81, 161, 321):
+        kw = _dipole_kwargs(n)
+        s = SinusoidalSolver(**kw)
+        z_seg[n] = complex(np.atleast_1d(s.compute_impedance()[0])[0])
+        geom = s._build_geometry()
+        fi = geom["feed_segs"][0]
+        h = float(geom["seg_h"][fi])
+        pt = PointGapCollocation(**kw, sampled="point")
+        z_pt[n] = complex(np.atleast_1d(pt.compute_impedance()[0])[0])
+        v = pt.drive_vector
+        v_seg = np.zeros_like(v)
+        v_seg[fi] = -1.0 / h
+        prop_dev[n] = float(
+            np.abs(v - (v[fi] / v_seg[fi]) * v_seg).max() / np.abs(v).max()
+        )
+        z_cell = complex(
+            np.atleast_1d(
+                PointGapCollocation(**kw, sampled="cell").compute_impedance()[0]
+            )[0]
+        )
+        cell_rel[n] = _rel(z_cell, z_seg[n])
+        z_bs2[n] = complex(
+            np.atleast_1d(BSplineSolver(**kw, degree=2).compute_impedance()[0])[0]
+        )
+        # The point-sampled drive carries no shape of its own: it is the
+        # segment-gap drive rescaled, to parts in 1e5.
+        assert prop_dev[n] < 1e-4, (n, prop_dev[n])
+        assert _rel((2 * a / h) * z_seg[n], z_pt[n]) < 1e-4, (n, z_pt[n])
+        # ...and the cell-averaged reading is the segment gap itself.
+        assert cell_rel[n] < 1e-5, (n, cell_rel[n])
+
+    for n, want in pinned_point.items():
+        assert _rel(z_pt[n], want) < 0.05, (n, z_pt[n], want)
+    # The two failure modes, structurally. The point-sampled solve converges to
+    # nothing: its rung-to-rung STEP doubles where the segment gap's shrinks,
+    # and it never comes within 10× of the oracle at any rung on the ladder.
+    steps_pt = [abs(z_pt[b] - z_pt[a_]) for a_, b in zip((41, 81, 161), (81, 161, 321))]
+    steps_seg = [
+        abs(z_seg[b] - z_seg[a_]) for a_, b in zip((41, 81, 161), (81, 161, 321))
+    ]
+    assert all(b > 1.9 * a_ for a_, b in zip(steps_pt, steps_pt[1:])), steps_pt
+    assert all(b < a_ for a_, b in zip(steps_seg, steps_seg[1:])), steps_seg
+    assert all(abs(z_bs2[n]) > 10 * abs(z_pt[n]) for n in z_pt), z_pt
+    # ... and the cell-averaged solve is the default by another name, so it is
+    # not an alternative feed model either.
+    assert cell_rel[321] < 0.01 * _rel(z_seg[321], z_bs2[321]), (
+        cell_rel[321],
+        _rel(z_seg[321], z_bs2[321]),
+    )
+    # The refusal the derivation buys.
+    with pytest.raises(NotImplementedError, match="zero-width gap"):
+        SinusoidalSolver(**_dipole_kwargs(41), feed_model="point")
+
+
+@pytest.mark.slow
+def test_feed_matched_payoff_is_the_pinned_m3_ratio():
+    """§17's second half: what `errColl/errGal` reads with the feed model held
+    fixed — which, given the refutation above, means the segment gap on both
+    comparands, i.e. exactly what M3 already scores.
+
+    The one place a feed model still varies inside that gate is the REFERENCE
+    family: two of M3's six defensible references are `BSplineSolver` solves,
+    which drive a zero-width gap. Dropping them is the only feed-matching left
+    to do, and it moves the worst-case ratio by <0.2 %:
+
+        geometry      worst over six   worst over the four matched
+        dipole             2.062              2.062
+        k2_junction        2.971              2.974
+
+    So the M3 payoff verdict does not rest on the reference's feed model, and
+    the confound §16 identified lives entirely on the comparand side — where
+    it is unremovable, because the point-matched sibling cannot carry a point
+    gap. Contrast the §16 flip reading (Galerkin on "point", collocation still
+    on "segment"): 1.948 on the dipole, 1.774 on k2_junction, both below their
+    pinned floors.
+
+    ~25 s: two schemes × two geometries × three coarse meshes.
+    """
+    pinned = {"dipole": 2.062, "k2_junction": 2.971}
+    for name, factory in M3_FEED_MATCHED_GEOMS.items():
+        z = {
+            (scheme, n): complex(
+                np.atleast_1d(
+                    (
+                        SinusoidalSolver
+                        if scheme == "coll"
+                        else SinusoidalGalerkinSolver
+                    )(**factory(n)).compute_impedance()[0]
+                )[0]
+            )
+            for scheme in ("coll", "gal")
+            for n in M3_COARSE
+        }
+        ratios = {
+            ref_name: [
+                _rel(z[("coll", n)], ref) / _rel(z[("gal", n)], ref) for n in M3_COARSE
+            ]
+            for ref_name, ref in M3_REFS_QUOTED[name].items()
+        }
+        w_all = min(min(v) for v in ratios.values())
+        w_matched = min(min(ratios[r]) for r in _MATCHED_REFS)
+        assert abs(w_all - pinned[name]) < 0.05 * pinned[name], (name, w_all)
+        # Feed-matching the reference family does not move the verdict.
+        assert abs(w_matched - w_all) < 0.01 * w_all, (name, w_all, w_matched)
+        # Both readings clear the pinned M3 floor (2.0 / 2.9) they are the
+        # feed-matched statement of.
+        assert min(w_all, w_matched) > (2.0 if name == "dipole" else 2.9)
 
 
 def test_point_gap_drive_is_self_dual():

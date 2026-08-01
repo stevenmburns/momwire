@@ -47,6 +47,7 @@ Running
     python scripts/m6_residue_cluster.py --only specialty.hentenna
     python scripts/m6_residue_cluster.py --seg-cap 1000     # cheaper rungs
     python scripts/m6_residue_cluster.py --dipole-feed-model  # the M5 column
+    python scripts/m6_residue_cluster.py --feed-matched       # §17 (momwire#212)
 
 Free space only, by construction: momwire#182 M4 pinned that a finite-ground
 model on a ground-CONTACT wire is broken on BOTH sinusoidal solvers (an
@@ -357,12 +358,239 @@ def dipole_feed_model(n_list=(81, 161, 321)):
         )
 
 
+# ---------------------------------------------------------------------------
+# the feed-MATCHED payoff (momwire#212, report §17)
+# ---------------------------------------------------------------------------
+# §16 asked what `errColl/errGal` reads with the feed model genuinely held
+# fixed. The answer needed a point gap on `SinusoidalSolver`, and there is
+# none: a zero-width gap has no collocation RHS (derivation in
+# `SinusoidalSolver._reject_point_feed_model`, which now refuses the option).
+# What runs below is that refutation, measured, plus the payoff read on the
+# only pairing that IS feed-matched — the segment gap on both sides, i.e. what
+# M3 already scores.
+
+
+def zero_width_gap_Ez(d, a, k):
+    """E_z of the zero-width gap: the b → a limit of the magnetic frill, i.e.
+    a delta ring of magnetic current at ρ = a, observed on the axis at
+    arc-distance `d`. Normalized to ∫E_z dz = 1 so it is the segment gap's
+    V/Δ with the width taken to zero, and parameter-free once a is fixed.
+
+    Ring on the surface / observation on the axis reproduces the solver's own
+    source-filament / BC-on-surface separation R = √(d² + a²), so this is
+    evaluated in the fill's convention rather than beside it.
+    """
+    R = np.sqrt(d**2 + a**2)
+    return (a**2 / 2) * (1 + 1j * k * R) * np.exp(-1j * k * R) / R**3
+
+
+def _zero_width_cell_average(d0, d1, a, k, nq=200):
+    """(1/(d1−d0))∫ E_z dz on z = a·sinh(u), which removes the width-a spike
+    the raw variable cannot resolve when h ≫ a."""
+    u0, u1 = np.arcsinh(d0 / a), np.arcsinh(d1 / a)
+    gx, gw = np.polynomial.legendre.leggauss(nq)
+    u = 0.5 * (u1 + u0) + 0.5 * (u1 - u0) * gx
+    R = a * np.cosh(u)
+    f = 0.5 * (1 + 1j * k * R) * np.exp(-1j * k * R) / np.cosh(u) ** 2
+    return (f * (0.5 * (u1 - u0) * gw)).sum() / (d1 - d0)
+
+
+class PointGapCollocation(SinusoidalSolver):
+    """The REFUTED construction, kept so the refusal stays measured.
+
+    `sampled="point"` is collocation done literally — the zero-width field
+    evaluated AT each match point. `sampled="cell"` averages it over each
+    match point's own cell, the smallest width the mesh resolves. Neither is
+    a shippable point gap and `_reject_point_feed_model` says why; this class
+    is how §17's table is produced.
+    """
+
+    def __init__(self, *, sampled="point", **kwargs):
+        super().__init__(**kwargs)
+        self.sampled = sampled
+
+    def compute_impedance(self):
+        import scipy.linalg
+
+        geom = self._build_geometry()
+        G, seg_view = self._assemble_Z(geom, self.k)
+        fi = geom["feed_segs"][0]
+        V = complex(self.feeds[0][2]) or 1.0 + 0j
+        a = float(np.atleast_1d(self.wire_radius)[0])
+        d = (geom["seg_centers"] - geom["seg_centers"][fi]) @ geom["seg_tangents"][fi]
+        h = geom["seg_h"]
+        if self.sampled == "point":
+            e = zero_width_gap_Ez(d, a, self.k)
+        else:
+            e = np.array(
+                [
+                    _zero_width_cell_average(
+                        d[m] - h[m] / 2, d[m] + h[m] / 2, a, self.k
+                    )
+                    for m in range(len(d))
+                ]
+            )
+        self.drive_vector = -V * e
+        alpha = scipy.linalg.solve(G, self.drive_vector)
+        return V / self._feed_segment_current(alpha, seg_view, fi), alpha
+
+
+def _m3_dipole_kwargs(n):
+    hd = 0.962 * 22 / 4
+    return dict(
+        wires=[np.array([[0.0, -hd, 0.0], [0.0, hd, 0.0]])],
+        n_per_edge_per_wire=[[n]],
+        feed_wire_index=0,
+        nsegs=n,
+        wavelength=22,
+    )
+
+
+def _m3_k2_kwargs(n):
+    a, b, c = (0.0, -5.0, 0.0), (0.0, 0.0, -2.0), (0.0, 5.0, 0.0)
+    return dict(
+        wires=[np.array([a, b]), np.array([b, c])],
+        n_per_edge_per_wire=[[n], [n]],
+        feed_wire_index=0,
+        nsegs=n,
+        junctions=[[(0, "end"), (1, "start")]],
+        wavelength=22,
+    )
+
+
+# Quoted verbatim from `M3_REFS` in tests/test_sinusoidal_galerkin.py — the
+# six defensible references M3's payoff gate takes its WORST ratio over. The
+# `bspline2_*` pair is the only feed-MISMATCHED member (BSplineSolver drives a
+# zero-width gap; both comparands drive NEC's segment gap), so splitting the
+# family on that line is what "feed-matched payoff" can mean here.
+M3_REFS_QUOTED = {
+    "dipole": dict(
+        sin_gal_321=69.639093 - 18.056307j,
+        sin_coll_321=69.631876 - 18.107822j,
+        bspline2_321=69.633780 - 18.065315j,
+        rich_sin_gal=69.634796 - 18.008036j,
+        rich_sin_coll=69.633551 - 18.018862j,
+        rich_bspline2=69.633701 - 18.010747j,
+    ),
+    "k2_junction": dict(
+        sin_gal_321=124.493250 + 0.392167j,
+        sin_coll_321=124.479522 + 0.340718j,
+        bspline2_321=124.492289 + 0.367751j,
+        rich_sin_gal=124.513021 + 0.444108j,
+        rich_sin_coll=124.513126 + 0.445724j,
+        rich_bspline2=124.514726 + 0.445185j,
+    ),
+}
+_MATCHED_REFS = ("sin_gal_321", "sin_coll_321", "rich_sin_gal", "rich_sin_coll")
+M3_FEED_MATCHED_GEOMS = {"dipole": _m3_dipole_kwargs, "k2_junction": _m3_k2_kwargs}
+M3_COARSE = (11, 15, 21)
+
+
+def feed_matched(ladder=(41, 81, 161, 321, 641)):
+    """§17: why coll-point does not exist, and what the payoff reads without it."""
+    hd = 0.962 * 22 / 4
+    print("\n" + "=" * 100)
+    print("A. THE ZERO-WIDTH GAP UNDER COLLOCATION — 0.962λ/2 dipole, a=0.5 mm")
+    print("=" * 100)
+    print(
+        f"\n{'N':>5} {'h':>9} {'a/h':>9} {'Z coll(segment)':>25} "
+        f"{'Z point-sampled':>25} {'(2a/h)Zseg/Zpt−1':>17} {'‖v−c·v_seg‖':>13} "
+        f"{'cell-avg ↔ segment':>19}"
+    )
+    for n in ladder:
+        kw = dict(
+            wires=[np.array([[0.0, 0.0, -hd], [0.0, 0.0, hd]])],
+            n_per_edge_per_wire=[[n]],
+            feed_wire_index=0,
+            feed_arclength=hd,
+            wavelength=22,
+            wire_radius=0.0005,
+        )
+        s = SinusoidalSolver(**kw)
+        z_seg = complex(np.atleast_1d(s.compute_impedance()[0])[0])
+        geom = s._build_geometry()
+        fi = geom["feed_segs"][0]
+        h, a = float(geom["seg_h"][fi]), 0.0005
+        pt = PointGapCollocation(**kw, sampled="point")
+        z_pt = complex(np.atleast_1d(pt.compute_impedance()[0])[0])
+        v = pt.drive_vector
+        v_seg = np.zeros_like(v)
+        v_seg[fi] = -1.0 / h
+        dev = np.abs(v - (v[fi] / v_seg[fi]) * v_seg).max() / np.abs(v).max()
+        z_cell = complex(
+            np.atleast_1d(
+                PointGapCollocation(**kw, sampled="cell").compute_impedance()[0]
+            )[0]
+        )
+        print(
+            f"{n:>5} {h:9.5f} {a / h:9.3e} {z_seg.real:11.6f}{z_seg.imag:+11.6f}j "
+            f"{z_pt.real:11.6f}{z_pt.imag:+11.6f}j "
+            f"{abs((2 * a / h) * z_seg / z_pt - 1):17.3e} {dev:13.3e} "
+            f"{rel(z_cell, z_seg):19.3e}"
+        )
+    print(
+        "\n  Point-sampled: the RHS is the segment-gap RHS times h/2a, so Z comes\n"
+        "  out (2a/h)·Z_segment and DOUBLES every rung — collocation reads the\n"
+        "  source's width off the feed row's amplitude. Cell-averaged: the\n"
+        "  segment gap, to ~1e-7. There is no third reading."
+    )
+
+    print("\n" + "=" * 100)
+    print("B. errColl/errGal WITH THE FEED MODEL HELD FIXED (segment on both)")
+    print("=" * 100)
+    for name, factory in M3_FEED_MATCHED_GEOMS.items():
+        z = {
+            (scheme, n): complex(
+                np.atleast_1d(
+                    (
+                        SinusoidalSolver
+                        if scheme == "coll"
+                        else SinusoidalGalerkinSolver
+                    )(**factory(n)).compute_impedance()[0]
+                )[0]
+            )
+            for scheme in ("coll", "gal")
+            for n in M3_COARSE
+        }
+        print(f"\n  {name}")
+        print(
+            "  "
+            + f"{'reference':>16} "
+            + " ".join(f"{'N=%d' % n:>9}" for n in M3_COARSE)
+            + "   reference feed"
+        )
+        per_ref = {}
+        for ref_name, ref in M3_REFS_QUOTED[name].items():
+            per_ref[ref_name] = [
+                rel(z[("coll", n)], ref) / rel(z[("gal", n)], ref) for n in M3_COARSE
+            ]
+            tag = "segment" if ref_name in _MATCHED_REFS else "POINT (bspline)"
+            print(
+                "  "
+                + f"{ref_name:>16} "
+                + " ".join(f"{v:9.3f}" for v in per_ref[ref_name])
+                + f"   {tag}"
+            )
+        w_all = min(min(v) for v in per_ref.values())
+        w_m = min(min(per_ref[r]) for r in _MATCHED_REFS)
+        print(
+            f"    worst over all six references      {w_all:.3f}\n"
+            f"    worst over feed-matched references {w_m:.3f}"
+        )
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dump", action="store_true", help="rebuild the geometry snapshot")
     ap.add_argument("--only", nargs="+", help="restrict to these dotted design names")
     ap.add_argument("--seg-cap", type=int, default=DEFAULT_SEG_CAP)
     ap.add_argument("--dipole-feed-model", action="store_true")
+    ap.add_argument(
+        "--feed-matched",
+        action="store_true",
+        help="report §17: the zero-width gap under collocation, and the "
+        "feed-matched payoff",
+    )
     ap.add_argument("--snapshot", type=Path, default=SNAPSHOT)
     args = ap.parse_args(argv)
 
@@ -371,6 +599,9 @@ def main(argv=None):
         return 0
     if args.dipole_feed_model:
         dipole_feed_model()
+        return 0
+    if args.feed_matched:
+        feed_matched()
         return 0
     if not args.snapshot.exists():
         raise SystemExit(f"{args.snapshot} missing — run with --dump first")
