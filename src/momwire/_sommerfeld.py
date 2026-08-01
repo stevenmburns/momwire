@@ -291,6 +291,10 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
     # ~50/scale, so for enormous |k1| (PEC-limit eps ~ 1e16) the k1-shaped
     # waypoints cap there. Any cut crossing past the cap sits between two
     # numerical zeros. No-op for physical grounds (|k1| <~ 10 k2).
+    # The fig-13 end-of-adaptive landmark below takes this as-is (its
+    # horizontal tail runs ABOVE both downward cuts and so cannot cross
+    # one); the fig-14 waypoint d needs a branch-point-aware version of
+    # the same cap — see the block before `d` is chosen (issue #161).
     kcap = 1.2 * k2 + 50.0 / scale
     kmax_eff = min(kmax, kcap)
     qtol = min(rtol, 1e-11)  # per-segment relative tolerance
@@ -335,10 +339,38 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
     a = -0.4j * k2
     b = (0.6 + 0.2j) * k2
     c = (1.02 + 0.2j) * k2
-    if 1.01 * k1.real <= kcap:
-        d = 1.01 * k1.real + 0.99j * max(k1.imag, -kcap)
+    # Waypoint d, where the run turns into the descending tail. It has to
+    # clear the k₁ branch point: γ₁'s cut runs straight DOWN from +k₁, so a
+    # d left of k₁.real starts the tail on the far side of that cut and
+    # γ₁ flips sign over the live part of the contour. The `kcap` cap above
+    # is keyed to max(ρ, h) and at grazing that falls below k₁ — issue #161,
+    # an isolated jump of ~1.2e−1 of scale (lossless εr=16, θ = 0.5°) at the
+    # R₁ where kcap crosses k₁.real, and the capped side is the wrong one
+    # (contours with d.real from 1.01·k₁ to 1.5·k₁ agree to ~1e−11).
+    #
+    # Capping short of k₁ is only safe once its neighborhood is numerically
+    # dead. What the a→d run carries there is e^{−γ₂h}·H₀⁽²⁾(λρ) ~
+    # e^{−(k₁ᵣh − k₁ᵢρ)}: along the real axis H₀⁽²⁾ merely oscillates, so
+    # the decay is keyed to h alone, plus (for a lossy ground) the depth of
+    # the branch point below the axis. Measured across εr = 16/100/1e4 and
+    # 10−1.26j/81−9000j, that exponent tracks the capped contour's error to
+    # within an O(1) prefactor: ≥ 50 puts it at the quadrature floor.
+    #
+    # The one case that stays capped while live is a PEC-limit ε (~1e16) at
+    # h → 0: chasing a branch point out to |k₁| costs ~|k₁|ρ/2π oscillations
+    # on c→d and the adaptive bisection bottoms out at 2^14 panels, so
+    # |k₁| > 200·k₂ (|ε̃| > 4e4 — past any physical ground, sea water
+    # included at |k₁| ≈ 95·k₂) keeps the old cap. There the whole ground
+    # remainder is ~1/√ε of the image term, so the residual is invisible.
+    k1_dead = k1.real * h - k1.imag * rho >= 50.0
+    if k1_dead or abs(k1) > 200.0 * k2:
+        cap_d = kcap
     else:
-        d = kcap + 0.0j
+        cap_d = max(kcap, 1.01 * k1.real)
+    if 1.01 * k1.real <= cap_d:
+        d = 1.01 * k1.real + 0.99j * max(k1.imag, -cap_d)
+    else:
+        d = cap_d + 0.0j
     if d.real < 1.1 * k2:
         d = 1.1 * k2 + 1.0j * d.imag
 

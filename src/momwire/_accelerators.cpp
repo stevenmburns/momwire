@@ -3289,11 +3289,24 @@ static void six_integrals(cd eps_t, double k2d, double rho, double h,
         const cd a(0.0, -0.4 * k2d);
         const cd b = cd(0.6, 0.2) * k2d;
         const cd cc = cd(1.02, 0.2) * k2d;
+        // Waypoint d must clear the k1 branch point: gamma_1's cut runs
+        // straight DOWN from +k1, so a d left of k1.real starts the
+        // descending tail on the far side of that cut and flips gamma_1's
+        // sign over the live part of the contour (issue #161). `kcap` is
+        // keyed to max(rho, h) and at grazing falls below k1, so cap only
+        // once the branch point is numerically dead -- the a->d run
+        // carries e^{-gamma_2 h} * H0(2)(lam*rho) ~ e^{-(k1r*h - k1i*rho)}
+        // there. See _sommerfeld._six_integrals for the full rationale and
+        // the |k1| > 200 k2 (PEC-limit) escape.
+        const bool k1_dead = k1.real() * h - k1.imag() * rho >= 50.0;
+        const double cap_d = (k1_dead || std::abs(k1) > 200.0 * k2d)
+                                 ? kcap
+                                 : std::max(kcap, 1.01 * k1.real());
         cd d;
-        if (1.01 * k1.real() <= kcap)
-            d = cd(1.01 * k1.real(), 0.99 * std::max(k1.imag(), -kcap));
+        if (1.01 * k1.real() <= cap_d)
+            d = cd(1.01 * k1.real(), 0.99 * std::max(k1.imag(), -cap_d));
         else
-            d = cd(kcap, 0.0);
+            d = cd(cap_d, 0.0);
         if (d.real() < 1.1 * k2d) d = cd(1.1 * k2d, d.imag());
         total = adaptive_segment(c, a, b, qtol, ADAPT_DEPTH, nullptr);
         total += adaptive_segment(c, b, cc, qtol, ADAPT_DEPTH, nullptr);
