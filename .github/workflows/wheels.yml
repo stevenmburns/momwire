@@ -50,7 +50,7 @@ jobs:
         # intentionally out of scope for this first cut.
         os: [ubuntu-latest, windows-latest, macos-14]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         # The extension builds from src/momwire only — no external sources. (The
         # PyNEC backend tests, which need a separately-installed PyNEC wheel,
         # are excluded from the wheel test-command.)
@@ -138,7 +138,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -174,7 +174,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -198,7 +198,7 @@ jobs:
     name: sdist
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build sdist
         run: pipx run build --sdist
       - name: Verify the sdist builds the extension from source
