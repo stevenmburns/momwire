@@ -32,6 +32,13 @@ on:
     branches: ["main"]
     tags: ["v*"]
 
+# Superseded MAIN-push matrices cancel; tag refs are unique groups, so a
+# release build can never be cancelled (#220). Back-to-back merges used to
+# stack full 12-minute Windows matrices.
+concurrency:
+  group: wheels-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build_wheels:
     name: wheels ${{ matrix.os }}
@@ -55,8 +62,33 @@ jobs:
         # the other runners.
         if: runner.os == 'macOS'
         run: brew install libomp
-      - name: Build wheels
+      - name: Assert the tag matches pyproject's version (tags only)
+        # The release runbook warns "tagging first mislabels every wheel";
+        # make it structural (#220): a v-tag whose commit still carries the
+        # previous version dies here, before 15 wheels are built from it.
+        # bash shell explicitly, so the ${TAG#v} strip works on Windows too.
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          grep -Fxq "version = \"${TAG#v}\"" pyproject.toml || {
+            echo "pyproject.toml version does not match tag ${TAG}"; exit 1; }
+      - name: Build wheels (full matrix — tags and manual runs)
+        # Tags build the full cp310–cp314 matrix from pyproject's
+        # [tool.cibuildwheel].build. Two steps rather than a conditional
+        # CIBW_BUILD env: an empty env value would OVERRIDE pyproject's
+        # build spec instead of falling back to it.
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: pypa/cibuildwheel@v4.1.0
+      - name: Build wheels (single-Python canary — main pushes)
+        # Post-merge compiler canary (all 3 red runs in 30 days were MSVC),
+        # not a release: one Python per OS is enough signal at ~1/5 the
+        # work (#220).
+        if: "!(startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')"
+        uses: pypa/cibuildwheel@v4.1.0
+        env:
+          CIBW_BUILD: "cp312-*"
       - name: Assert libomp is NOT vendored into the macOS wheel
         # Regression guard for the `delocate --exclude libomp` above: if a future
         # change drops the exclude, the wheel would bundle a private libomp again

@@ -36,7 +36,24 @@ jobs:
       - run: pip install --upgrade pip
       # Build (isolated, pybind11 from build-system.requires) + core + test deps.
       - run: pip install -e .[test]
-      - run: pytest tests/ -m "not slow and not plot"
+      - run: pytest tests/ -m "not slow"
+
+  test-slow:
+    # The 12 slow-marked tests are the solver-regression pins (M3/M4
+    # reference constants, near-open collapse, section-6 oracle) — until
+    # #219 NO lane ran them, so week-old pins had never executed in CI.
+    # Measured 81 s: fits the PR path as a parallel job at zero added
+    # wall time (the test job is ~2:56).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install --upgrade pip
+      - run: pip install -e .[test]
+      - run: pytest tests/ -m slow
 
   test-pynec:
     # Validate that the PyNEC backend agrees with momwire
