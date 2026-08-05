@@ -10,7 +10,8 @@ authors = [
 ]
 description = "A pure-Python method-of-moments antenna simulator with optional C++ accelerators"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"  # matches the wheel floor (cp310+); module-level
+# PEP 585 generics (bspline._V_UNIT_INV) break import below 3.9 anyway (#221)
 classifiers = [
     "Programming Language :: Python :: 3",
     "License :: OSI Approved :: MIT License",
@@ -32,7 +33,7 @@ dependencies = [
 [project.optional-dependencies]
 # Test/dev flow: `pip install -e .[test]` reproduces the suite. numpy/scipy are
 # core deps; these are the extra imports the tests use (matplotlib for the
-# plot-marked tests, scikit-rf for the network tests) plus the runner. The
+# figure scripts, scikit-rf for the network tests) plus the runner. The
 # PyNEC cross-check (tests/test_pynec_backend.py) additionally needs PyNEC,
 # installed separately from the python-necpp fork's wheel — see README — and
 # those tests skip cleanly without it, so it stays out of this list (it's a
@@ -58,7 +59,6 @@ Issues = "https://github.com/stevenmburns/momwire/issues"
 testpaths = ["tests"]
 markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
-    "plot: tests that produce plots for visual inspection (deselect with -m 'not plot')",
 ]
 # Put the project root on sys.path so the `validation` harness package (which
 # lives next to `tests/`, not under src/) is importable from the backend tests.
@@ -79,9 +79,9 @@ test-requires = "pytest"
 #
 # Then run only the three core solver modules — they exercise the accelerator
 # without the PyNEC cross-check backend (a separately-built wheel, test-only).
-# -m skips slow/plot. cibuildwheel runs this from a temp dir against the
+# -m skips slow. cibuildwheel runs this from a temp dir against the
 # installed wheel, so `import momwire` resolves to the wheel, not src/.
-test-command = 'python -c "import momwire._accelerators; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not plot"'
+test-command = 'python -c "import momwire._accelerators; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow"'
 
 [tool.cibuildwheel.linux]
 # glibc >= 2.28 ships libmvec; manylinux2014 (glibc 2.17) does NOT, so the

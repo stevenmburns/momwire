@@ -1,0 +1,9 @@
+# Monthly action-version currency (#222): the three workflows had already
+# drifted apart (setup-python v4 vs v5, checkout v4 vs v5). Actions only —
+# Python floors in pyproject are deliberate runtime metadata.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
