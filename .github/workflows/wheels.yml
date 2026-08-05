@@ -117,7 +117,7 @@ jobs:
             fi
           done
           echo "OK: no libgomp vendored in the Linux wheels."
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
@@ -210,7 +210,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install dist/*.tar.gz
           python -c "import momwire._accelerators; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: sdist
           path: ./dist/*.tar.gz
