@@ -228,7 +228,7 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Attach wheels + sdist to the GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Auto-generate the release body from the PR titles between tags
           # (same notes antennaknobs releases get). Only fills the body when
