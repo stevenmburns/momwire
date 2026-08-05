@@ -180,7 +180,7 @@ jobs:
           python-version: '3.12'
       # The de-vendored wheel links the system libgomp at runtime.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgomp1
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: wheels-ubuntu-latest
           path: wheelhouse
@@ -223,7 +223,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
@@ -256,7 +256,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
