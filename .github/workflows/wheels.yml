@@ -195,7 +195,8 @@ jobs:
         with:
           name: wheels-windows-latest
           path: wheelhouse
-      - run: pip install --upgrade pip
+      # python -m pip: on Windows pip.exe refuses to replace itself in-place.
+      - run: python -m pip install --upgrade pip
       # Install the BUILT momwire wheel (NOT source) + the test deps. bash shell
       # so the wheel glob expands (pwsh would pass it through literally).
       - shell: bash
