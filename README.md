@@ -40,14 +40,14 @@ momwire can be cross-validated against NEC2 via [PyNEC](https://github.com/tmolt
 
 ### Install the PyNEC wheel
 
-Install PyNEC from the [python-necpp fork](https://github.com/stevenmburns/python-necpp)'s release. The wheels are self-contained — OpenBLAS is vendored (via scipy-openblas32), so no system BLAS, SWIG, or build toolchain is needed — and cover Linux + Windows on CPython 3.10–3.14:
+Install PyNEC from the [python-necpp fork](https://github.com/stevenmburns/python-necpp)'s release. The distribution is named `pynec-accel` (the import name stays `PyNEC`); the wheels are self-contained — OpenBLAS is vendored (via scipy-openblas32), so no system BLAS, SWIG, or build toolchain is needed — and cover Linux, Windows, and macOS (arm64) on CPython 3.10–3.14:
 
 ```bash
-pip install PyNEC --no-index \
-    --find-links https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.4-accel.1
+pip install pynec-accel --no-index \
+    --find-links https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.6
 ```
 
-`--no-index` ensures pip takes the fork's wheel rather than upstream PyNEC on PyPI (same version, but its builds are broken on current Python and it lacks the OpenBLAS/OpenMP work). After install, `from PyNEC import nec_context` works and the cross-validation tests run; without it they're skipped (momwire itself needs no PyNEC).
+`--no-index` ensures pip takes the fork's wheel rather than upstream PyNEC on PyPI (which is broken on current Python and lacks the OpenBLAS/OpenMP work). On macOS the wheel shares Homebrew's libomp (`brew install libomp`) rather than vendoring its own, so it can coexist with momwire's accelerator in one process. After install, `from PyNEC import nec_context` works and the cross-validation tests run; without it they're skipped (momwire itself needs no PyNEC).
 
 ### Runtime thread pinning
 

@@ -25,9 +25,11 @@ on:
         description: >-
           --find-links URL for the pynec-accel macOS wheel to validate against.
           Use a build that ALSO excludes libomp (shares Homebrew's), otherwise
-          the cross-engine job is expected to abort/deadlock.
+          the cross-engine job is expected to abort/deadlock. The default is
+          the current shared-libomp release; v1.7.4-accel.5 and older vendor
+          libomp and abort (#229).
         required: false
-        default: "https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.4-accel.5"
+        default: "https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.6"
   push:
     branches: ["main"]
     tags: ["v*"]
@@ -126,13 +128,14 @@ jobs:
     # Validate the shared-libomp fix on real macOS hardware: run the PyNEC
     # cross-validation suite with momwire + PyNEC in one process and NO workaround
     # env vars (no KMP_DUPLICATE_LIB_OK, no OMP_NUM_THREADS). It passes only when
-    # both extensions load a SINGLE libomp — i.e. once pynec-accel also ships the
-    # `delocate --exclude libomp`. Until then it's expected to abort (OMP Error
-    # #15) or deadlock, which is itself the proof the coordinated fix is needed —
-    # so this is manual-only (workflow_dispatch), never on push, and time-boxed
-    # so a deadlock fails fast instead of hanging. momwire is built from source
-    # here, which links Homebrew's libomp directly (no vendoring), exactly like
-    # the --exclude wheel does.
+    # both extensions load a SINGLE libomp. pynec-accel ships its side of the
+    # coordinated fix since v1.7.6 (links Homebrew's libomp, nothing vendored),
+    # so with the default find-links green is the expectation; pointing the
+    # input at a pre-1.7.6 build (vendored libomp) reproduces the abort (OMP
+    # Error #15) or deadlock instead (#229). Manual-only (workflow_dispatch),
+    # never on push, and time-boxed so a deadlock fails fast instead of hanging.
+    # momwire is built from source here, which links Homebrew's libomp directly
+    # (no vendoring), exactly like the --exclude wheel does.
     name: macOS cross-engine (PyNEC + momwire, shared libomp)
     if: github.event_name == 'workflow_dispatch'
     runs-on: macos-14
