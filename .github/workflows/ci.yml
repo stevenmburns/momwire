@@ -75,12 +75,13 @@ jobs:
       # Same build + test deps as the plain lane (no fastapi — the web server
       # was retired); PyNEC is added from the fork's wheel in the next step.
       - run: pip install -e .[test]
-      - name: Install PyNEC from the python-necpp release wheel
+      - name: Install pynec-accel from the python-necpp release wheel
         # --no-index so the ONLY candidate is the fork's wheel — never upstream
-        # PyNEC on PyPI, which shares version 1.7.4 but lacks our BLAS/OpenMP
-        # work and doesn't load on the target machines. numpy is already
-        # installed above, so no package index is needed to satisfy deps.
+        # PyNEC on PyPI, which lacks our BLAS/OpenMP work and doesn't load on
+        # the target machines. (The fork's distribution is `pynec-accel`; the
+        # import name stays PyNEC.) numpy is already installed above, so no
+        # package index is needed to satisfy deps.
         run: |
-          pip install PyNEC --no-index \
-            --find-links https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.4-accel.1
+          pip install pynec-accel --no-index \
+            --find-links https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.6
       - run: pytest tests/test_pynec_backend.py -v
