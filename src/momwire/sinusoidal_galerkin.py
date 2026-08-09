@@ -274,6 +274,23 @@ numpy, as does the O(N) near-pair correction. The numpy path remains the
 reference implementation and the oracle, and is what runs when the extension
 is absent.
 
+**The folded source shape (#205).** The third shape the fill returns is
+cos kξ − 1, not cos kξ, on both paths (`cos_shape="cos-1"`). #203 had folded
+that pair everywhere it could be folded from outside the kernel — the basis
+value, the coefficient product, the drive — and G1 did not move, because the
+same A ≈ −C cancellation runs one level up: the const-shape and cos-shape
+SOURCE fields nearly coincide, so subtracting their closed forms leaves
+ε·|const-shape field| inside a quantity that is O((kΔ)²) of it, and no
+arrangement of the arithmetic downstream can take that back out.
+`SinusoidalSolver._folded_cos_fields` computes the folded shape's field
+directly instead, with every term at its own size. ‖G−Gᵀ‖/‖G‖ on the
+half-wave dipole goes 1.06e-11 → 2.15e-13 at N=41 and 1.45e-9 → 5.5e-14 at
+N=2401 — i.e. it now FALLS with mesh refinement, and equals what the same
+fill produces with its kernel run at 80 bits, so what is left is the fill's
+structural test-vs-source asymmetry rather than its rounding. The fill costs
+~1.5× what it did: the folded spelling needs half-angle phases, and the
+sweep that produces them is most of the kernel.
+
 Still deferred: wire loading — it raises rather than returning plausible
 wrong numbers.
 """
@@ -285,7 +302,12 @@ import scipy.spatial.distance
 
 from . import _ground_refl
 from ._accel import acc as _acc
-from .sinusoidal import _DENSE_ASSEMBLY_THRESHOLD, _EULER_GAMMA, SinusoidalSolver
+from .sinusoidal import (
+    _DENSE_ASSEMBLY_THRESHOLD,
+    _EULER_GAMMA,
+    SinusoidalSolver,
+    _sin_minus_arg,
+)
 
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
@@ -344,27 +366,6 @@ def _graded_endpoint_rule(eps, n_per_panel, leggauss):
     x = (mid[:, None] + half[:, None] * gx[None, :]).ravel()
     w = (half[:, None] * gw[None, :]).ravel()
     return x, w
-
-
-def _sin_minus_arg(u):
-    """sin(u) − u to full relative precision.
-
-    The literal difference loses everything below u²/6 relative, which is the
-    whole answer for the segment half-angles this solver works at (u = kΔ/2 ≈
-    1.9e-3 at N=801 on the half-wave dipole → ε·6/u² = 3.6e-10 relative). The
-    Taylor series has no cancellation at all — every term is smaller than the
-    last — so it is exact where the subtraction is worst; above u ≈ 0.1 the
-    subtraction costs at most 6ε/u² = 1.3e-13 and the series would need more
-    terms, so that is where the two swap.
-    """
-    u = np.asarray(u, dtype=float)
-    u2 = u * u
-    series = (
-        -(u * u2)
-        / 6.0
-        * (1.0 - u2 / 20.0 * (1.0 - u2 / 42.0 * (1.0 - u2 / 72.0 * (1.0 - u2 / 110.0))))
-    )
-    return np.where(np.abs(u) < 0.1, series, np.sin(u) - u)
 
 
 def _basis_value(sigAC, B, sigC, k, xi):
@@ -1242,8 +1243,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         return out
 
     def _tested_contribs(self, geom, k, ctx, projector, src_c=None, src_t=None):
-        """Test-integrate one source block: (contrib_const, sin, cos), each
-        (nnz, N).
+        """Test-integrate one source block: (contrib_const, sin, cos−1), each
+        (nnz, N) — the folded shape set (#203/#205), which is what the field
+        kernel is asked for (`cos_shape="cos-1"`).
 
         `src_c` / `src_t` are the source geometry the field evaluator sees —
         the geometry's own segments for the free-space block, the mirrored
@@ -1298,6 +1300,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 src_c=src_c[None, :, :],
                 src_t=src_t[None, :, :],
                 src_hh=ctx["hh"][None, :],
+                cos_shape="cos-1",
             )
             Phi = projector(cm, ctx["m_of_obs"][o0:o1, None], n_idx)
             del cm  # drop the kernel tables before the reduction allocates
@@ -1315,7 +1318,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
     def _far_fill_accel(self, k, ctx, src_c, src_t):
         """C++ far fill for the PLAIN projection: kernel and test reduction
-        fused, (contrib_const, sin, cos) each (nnz, N) — the same three arrays
+        fused, (contrib_const, sin, cos−1) each (nnz, N) — the same three arrays
         the numpy loop above builds (#194).
 
         The fusion is what buys the speed AND the memory: the numpy path has
@@ -1477,7 +1480,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         N = ctx["N"]
         nq = ctx["nq"]
         S = self._field_tensor_sommerfeld_remainder(
-            geom, k, eps_t, obs_centers=ctx["obs_c"], obs_tangents=ctx["obs_t"]
+            geom,
+            k,
+            eps_t,
+            obs_centers=ctx["obs_c"],
+            obs_tangents=ctx["obs_t"],
+            cos_shape="cos-1",
         )
         return tuple(self._tested_contrib(ctx, s.reshape(N, nq, N)) for s in S)
 
@@ -1488,10 +1496,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 = Σ_shape ( T[shape] @ M[shape] )[i, j]
 
         where T[shape, i, n] integrates the closed-form field of unit
-        `shape` (const/sin/cos) current on source segment n against test
-        basis i (quadrature along i's support), and M[shape][n, j] is the
-        effective coefficient source basis j puts on segment n — the SAME
-        source-side coefficient matrices the collocation path builds.
+        `shape` current on source segment n against test basis i (quadrature
+        along i's support), and M[shape][n, j] is the effective coefficient
+        source basis j puts on segment n — the SAME source-side coefficient
+        matrices the collocation path builds.
 
         The three shapes are the FOLDED set {1, sin kξ, cos kξ − 1} rather
         than the literal {1, sin kξ, cos kξ} (stevenmburns/momwire#203). The
@@ -1506,16 +1514,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         2.7e-6 at N=2401 (3.3e6 amplification, growing like N²); folded they
         are 2.8e-6 and 4.2e-7, i.e. the size of the answer. Measured against
         an 80-bit reference product of the same float64 contributions, the
-        float64 result moves from 3.5e-10 to 9.5e-14 relative there — see
-        `tests/test_sinusoidal_galerkin.py`'s #203 section for the table and
-        for what this does NOT fix (the fill's own reciprocity floor, which
-        the same cancellation sets one level up).
+        float64 result moves from 3.5e-10 to 9.5e-14 relative there.
 
-        Both `T_co − T_c` and `A + C` are formed by a single float64
-        subtraction of quantities the caller already has, so each is
-        correctly rounded *to its own result* — the fold moves the
-        cancellation to the two places where it costs nothing, exactly as
-        `_basis_value` does on the test side.
+        `A + C` is formed by a single float64 subtraction of quantities the
+        caller already has, so it is correctly rounded *to its own result*.
+        `T_co − T_c` is NOT formed here at all: since #205 the fill returns
+        the (cos kξ − 1)-shape field directly (`cos_shape="cos-1"`), because
+        subtracting the two contribution arrays — however exactly — cannot
+        recover the ε·‖T_const‖ the kernel had already left inside them. That
+        residual was the fill's reciprocity floor, and it is what
+        `SinusoidalSolver._folded_cos_fields` removes.
 
         With `ground_z` set, the ground's tested sub-assembly is subtracted
         from the free-space one before the scatter — one more source block
@@ -1541,14 +1549,6 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         if self.ground_z is not None:
             gnd = self._tested_ground_block(geom, k, ctx)
             contribs = tuple(c - g for c, g in zip(contribs, gnd))
-
-        # Fold the const/cos pair before the product (#203). The contribution
-        # arrays are freshly built by the block above — nobody else holds a
-        # reference — so the cos block becomes (cos − const) in place rather
-        # than costing another (nnz, N) allocation (830 MB at N=2401).
-        c_const, c_sin, c_cos = contribs
-        c_cos -= c_const
-        contribs = (c_const, c_sin, c_cos)
 
         i_of_entry = ctx["i_of_entry"]
         m_of_entry = ctx["m_of_entry"]
@@ -1659,6 +1659,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 src_c=src_c[ni][:, None, :],
                 src_t=src_t[ni][:, None, :],
                 src_hh=hh[ni][:, None],
+                cos_shape="cos-1",
             )
             # (P, 1) pair indices broadcast against the (P, G) field tables.
             Phi = projector(cm, mi[:, None], ni[:, None])  # each (P, G)

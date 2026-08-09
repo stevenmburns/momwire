@@ -57,6 +57,67 @@ _EULER_GAMMA = 0.5772156649015329
 _DENSE_ASSEMBLY_THRESHOLD = 60
 
 
+def _sin_minus_arg(u):
+    """sin(u) − u to full relative precision.
+
+    The literal difference loses everything below u²/6 relative, which is the
+    whole answer for the segment half-angles this solver works at (u = kΔ/2 ≈
+    1.9e-3 at N=801 on the half-wave dipole → ε·6/u² = 3.6e-10 relative). The
+    Taylor series has no cancellation at all — every term is smaller than the
+    last — so it is exact where the subtraction is worst; above u ≈ 0.1 the
+    subtraction costs at most 6ε/u² = 1.3e-13 and the series would need more
+    terms, so that is where the two swap.
+    """
+    u = np.asarray(u, dtype=float)
+    u2 = u * u
+    series = (
+        -(u * u2)
+        / 6.0
+        * (1.0 - u2 / 20.0 * (1.0 - u2 / 42.0 * (1.0 - u2 / 72.0 * (1.0 - u2 / 110.0))))
+    )
+    return np.where(np.abs(u) < 0.1, series, np.sin(u) - u)
+
+
+def _asinh_minus_arg(x):
+    """asinh(x) − x to full relative precision (momwire#205).
+
+    Substituting x = sinh t turns the answer into −(sinh t − t), whose series
+    converges factorially — nine terms cover |t| ≤ 1 to below ε, where the
+    asinh series itself would need ~28 — and t = asinh(x) is exactly what
+    libm gives to a relative ε. Perturbing t by ε·t moves sinh t − t ≈ t³/6 by
+    (t²/2)·εt = 3ε of itself, so routing through t costs nothing.
+
+    Above |t| = 1 the plain subtraction is already accurate (the answer is
+    within a factor 6 of sinh t there) and is used instead.
+    """
+    t = np.asarray(np.arcsinh(x), dtype=float)
+    t2 = t * t
+    series = (
+        (t * t2)
+        / 6.0
+        * (
+            1.0
+            + t2
+            / 20.0
+            * (
+                1.0
+                + t2
+                / 42.0
+                * (1.0 + t2 / 72.0 * (1.0 + t2 / 110.0 * (1.0 + t2 / 156.0)))
+            )
+        )
+    )
+    return np.where(np.abs(t) < 1.0, -series, -(np.sinh(t) - t))
+
+
+def _expm1_neg_j(w):
+    """e^{−jw} − 1, spelled so neither part cancels: the real part is
+    cos w − 1 = −2sin²(w/2), which the literal subtraction would compute to
+    an absolute ε rather than a relative one."""
+    half = np.sin(0.5 * w)
+    return (-2.0 * half * half) - 1j * np.sin(w)
+
+
 class SinusoidalSolver(_Cancelable):
     """NEC2's three-term (const + sin + cos) basis on each segment, with
     end-condition coefficients closed-form per Eqs 25-64.
@@ -1236,7 +1297,9 @@ class SinusoidalSolver(_Cancelable):
             src_hh=h_n[None, :],  # (1, N)
         )
 
-    def _field_components_bcast(self, k, obs_c, obs_t, a, src_c, src_t, src_hh):
+    def _field_components_bcast(
+        self, k, obs_c, obs_t, a, src_c, src_t, src_hh, cos_shape="cos"
+    ):
         """Shape-agnostic core of `_field_components` (Eqs 76-79).
 
         Every argument is broadcast against the others, so the caller — not
@@ -1251,7 +1314,24 @@ class SinusoidalSolver(_Cancelable):
         `obs_c`/`obs_t`/`src_c`/`src_t` are position/tangent arrays whose last
         axis is the 3 spatial components; `src_hh` is the source segment's
         HALF length; `a` is the observer-side thin-wire radius.
+
+        `cos_shape` selects which third SOURCE shape the `*_cos` tables carry
+        (momwire#205):
+
+        `"cos"`
+            I = cos kξ, the literal NEC shape. The point-matched solver's
+            contract, and the default.
+        `"cos-1"`
+            I = cos kξ − 1, the shape the Galerkin fill's coefficient product
+            actually pairs with σC once #203's fold is applied. Its field is
+            O((kΔ)²) of the const shape's, so taking the difference of the two
+            closed forms in float64 leaves ε·‖T_const‖ in it — which is the
+            reciprocity floor #205 exists to remove. The branch below gets the
+            same quantity out of a spelling in which no term is larger than
+            the answer.
         """
+        if cos_shape not in ("cos", "cos-1"):
+            raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
         # Pairwise separation obs - src; shape is whatever the two broadcast to.
         rvec = obs_c - src_c
         t_src = src_t
@@ -1361,25 +1441,46 @@ class SinusoidalSolver(_Cancelable):
         )
         Ez_sin = pref_z * (bracket_sin_z_2 - bracket_sin_z_1)
 
-        # ---- Cosine source (I = cos(k·z'_local)): same as Eqs 76, 77 with
-        #      the "(cos kz'/-sin kz')" toggle picking the lower row, i.e.
-        #      swap sin↔cos and negate the (sin-row → -sin) term.
-        bracket_cos_2 = G0_2 * (
-            -k * dz2 * sin2
-            + (1.0 - dz2 * dz2 * (1.0 + 1j * k * r0_2) / (r0_2 * r0_2)) * cos2
-        )
-        bracket_cos_1 = G0_1 * (
-            -k * dz1 * sin1
-            + (1.0 - dz1 * dz1 * (1.0 + 1j * k * r0_1) / (r0_1 * r0_1)) * cos1
-        )
-        Erho_cos = pref_rho * (bracket_cos_2 - bracket_cos_1)
-        bracket_cos_z_2 = G0_2 * (
-            -k * sin2 - (1.0 + 1j * k * r0_2) * dz2 / (r0_2 * r0_2) * cos2
-        )
-        bracket_cos_z_1 = G0_1 * (
-            -k * sin1 - (1.0 + 1j * k * r0_1) * dz1 / (r0_1 * r0_1) * cos1
-        )
-        Ez_cos = pref_z * (bracket_cos_z_2 - bracket_cos_z_1)
+        if cos_shape == "cos":
+            # ---- Cosine source (I = cos(k·z'_local)): same as Eqs 76, 77 with
+            #      the "(cos kz'/-sin kz')" toggle picking the lower row, i.e.
+            #      swap sin↔cos and negate the (sin-row → -sin) term.
+            bracket_cos_2 = G0_2 * (
+                -k * dz2 * sin2
+                + (1.0 - dz2 * dz2 * (1.0 + 1j * k * r0_2) / (r0_2 * r0_2)) * cos2
+            )
+            bracket_cos_1 = G0_1 * (
+                -k * dz1 * sin1
+                + (1.0 - dz1 * dz1 * (1.0 + 1j * k * r0_1) / (r0_1 * r0_1)) * cos1
+            )
+            Erho_cos = pref_rho * (bracket_cos_2 - bracket_cos_1)
+            bracket_cos_z_2 = G0_2 * (
+                -k * sin2 - (1.0 + 1j * k * r0_2) * dz2 / (r0_2 * r0_2) * cos2
+            )
+            bracket_cos_z_1 = G0_1 * (
+                -k * sin1 - (1.0 + 1j * k * r0_1) * dz1 / (r0_1 * r0_1) * cos1
+            )
+            Ez_cos = pref_z * (bracket_cos_z_2 - bracket_cos_z_1)
+        else:
+            Erho_cos, Ez_cos = self._folded_cos_fields(
+                k,
+                H,
+                z_eval,
+                rho_eval,
+                dz1,
+                dz2,
+                r0_1,
+                r0_2,
+                G0_1,
+                G0_2,
+                sin2,
+                dz_qp,
+                r0_qp,
+                gx,
+                gw,
+                pref_z,
+                pref_rho,
+            )
 
         return {
             "Erho_const": Erho_const,
@@ -1393,6 +1494,172 @@ class SinusoidalSolver(_Cancelable):
             "rho_vec": rho_vec,
             "rho_eval": rho_eval,
         }
+
+    @staticmethod
+    def _folded_cos_fields(
+        k,
+        H,
+        z,
+        rho,
+        dz1,
+        dz2,
+        r1,
+        r2,
+        G1,
+        G2,
+        sH,
+        dz_qp,
+        r_qp,
+        gx,
+        gw,
+        pref_z,
+        pref_rho,
+    ):
+        """(E_ρ, E_z) of the source shape I = cos kξ − 1 (momwire#205).
+
+        Same quantity as `Ez_cos − Ez_const` on the same source quadrature —
+        exactly, not approximately: nothing here changes the rule, only which
+        differences are taken before which sums. What changes is the error.
+        The literal subtraction leaves ε·|const-shape field| in an answer that
+        is O((kH)²) of it, so it is ε·6/(kH)² relative and it lands on G undiluted
+        — 3.9e-12 of the const scale at N=2401 on the half-wave dipole, which
+        is exactly the reciprocity floor #203 measured and could not reach.
+
+        Taking the two closed forms apart term by term (the endpoint pairs
+        cancel against each other, and the const shape's ∫G₀ against the cos
+        shape's endpoint terms) leaves three quantities, each ALREADY the size
+        of the answer:
+
+            E_z:  pref_z·[ k²·(∫G₀ − (sin kH/k)(G₁+G₂)) − (cos kH − 1)(F₂−F₁) ]
+            E_ρ:  pref_ρ·[ −k·W + ρ²(cos kH − 1)(T₂−T₁) ]
+
+        with F_e = Δz_e·T_e, T_e = (1+jkr_e)G_e/r_e², and W the closed form of
+        kρ²∫sin(kξ)T(ξ)dξ. The three cancellations that spelling still hides
+        are removed one at a time:
+
+        * **∫G₀ against its endpoint pair.** Split at the singularity
+          extraction the const shape already does. The 1/r half is the exact
+          trapezoid remainder ∫(1/r) − H(1/r₁+1/r₂), which rationalizes to
+          `asinh(X) − X` plus a manifestly positive term (`X` is the argument
+          of the arcsinh difference, itself rationalized so its numerator does
+          not cancel). The regular half is a quadrature sum whose nodes are
+          taken relative to the NEAREST endpoint, through r-differences that
+          are exact by construction (Δz_q − Δz_e = ±H(1 ∓ t_q): the observer
+          drops out) and an `expm1` of the resulting phase.
+        * **H − sin(kH)/k**, from `_sin_minus_arg`.
+        * **W**, whose two endpoint groups cancel to O((kH)³). Referring both
+          endpoints to the pair's MEAN radius turns them into one even and one
+          odd combination, and the even one telescopes to
+          A·(sin B − B) − B·(sin A − A) with A, B = kH ± k(r₁−r₂)/2 — two more
+          `_sin_minus_arg`s — plus a term in H(c₁+c₂) − (r₁−r₂), which has its
+          own cancellation-free closed form (`d_lin` below).
+
+        What is left is the regular quadrature sum, where the node terms are
+        O(kH) and their sum is O((kH)²): one power of kH, not two, so the
+        residual is ε·(kH)·|const| rather than ε·|const| — measured 1.6e-15 of
+        the const scale at N=2401 against a 50-digit reference, a factor 2400.
+        Removing the last power needs the SECOND difference of the regular
+        integrand (node pair against endpoint pair) in closed form; at the
+        meshes this solver runs, that residual is already below the fill's
+        structural asymmetry, so it is left to #205's follow-up.
+        """
+        kH = k * H
+        cm1 = -2.0 * np.sin(0.5 * kH) ** 2  # cos kH − 1, without the subtraction
+        T2 = (1.0 + 1j * k * r2) * G2 / (r2 * r2)
+        T1 = (1.0 + 1j * k * r1) * G1 / (r1 * r1)
+
+        # X = sinh of the arcsinh difference ∫(1/r) dξ, i.e. asinh(X) = that
+        # integral. Its numerator Δz₁r₂ − Δz₂r₁ cancels when the observer is
+        # off the segment's span and Δz₁r₂ + Δz₂r₁ cancels when it is inside,
+        # so each branch takes the sum that does not: rationalizing
+        # (Δz₁r₂)² − (Δz₂r₁)² = ρ²(Δz₁² − Δz₂²) swaps one for the other.
+        outside = dz1 * dz2 >= 0.0
+        s_den = np.where(outside, dz1 * r2 + dz2 * r1, 1.0)
+        X = np.where(
+            outside,
+            2.0 * H * (dz1 + dz2) / s_den,
+            (dz1 * r2 - dz2 * r1) / (rho * rho),
+        )
+        # ∫(1/r)dξ − H(1/r₁ + 1/r₂). The rationalized second term is
+        # X − H(r₁+r₂)/(r₁r₂) = Hρ²X²/((r₁+r₂)r₁r₂) — all positive, no
+        # cancellation — leaving asinh(X) − X for `_asinh_minus_arg`. Above
+        # |X| = 1 the pair no longer cancels at all (this is the self and
+        # near-neighbour band, where the answer IS the arcsinh), and the two
+        # rationalized terms would instead cancel against each other, so the
+        # literal difference is the accurate spelling there.
+        t_sing = np.where(
+            np.abs(X) < 1.0,
+            _asinh_minus_arg(X) + H * rho * rho * X * X / ((r1 + r2) * r1 * r2),
+            np.arcsinh(X) - H * (1.0 / r1 + 1.0 / r2),
+        )
+
+        # Σ_q gw_q·g(ξ_q) − (g₁ + g₂) for the regular part g = G₀ − 1/r, with
+        # every node referred to the endpoint on its own side of the segment.
+        g1 = _expm1_neg_j(k * r1) / r1
+        g2 = _expm1_neg_j(k * r2) / r2
+        near2 = gx >= 0.0
+        r_ref = np.where(near2, r2[..., None], r1[..., None])
+        dz_ref = np.where(near2, dz2[..., None], dz1[..., None])
+        g_ref = np.where(near2, g2[..., None], g1[..., None])
+        # e^{-jkr} at the reference endpoint, from the Green's value already in
+        # hand rather than from a second exp.
+        e_ref = np.where(near2, (G2 * r2)[..., None], (G1 * r1)[..., None])
+        # Δz_q − Δz_ref is ±H(1 ∓ t_q) exactly: z_eval cancels, so the node
+        # radius difference below is exact however far away the observer is.
+        d_step = np.where(near2, H[..., None] * (1.0 - gx), -H[..., None] * (1.0 + gx))
+        delta = d_step * (dz_qp + dz_ref) / (r_qp + r_ref)
+        # g(r_ref + δ) − g(r_ref), rearranged so both terms are O(kδ). Spelled
+        # in named steps, not as one expression: above numpy's 256 KB temporary
+        # threshold a complex product with a dead operand is evaluated in place
+        # by a different loop, which would make this (…, n_qp)-sized array's
+        # rounding depend on the fill's BLOCK size — the one thing
+        # `test_far_fill_blocking_is_bit_exact` may not tolerate.
+        dg_phase = _expm1_neg_j(k * delta)
+        dg_a = e_ref * dg_phase
+        dg_b = g_ref * delta
+        dg_num = dg_a - dg_b
+        dg = dg_num / r_qp
+        # The rule's weights sum to 2 and its two halves to 1 each only to
+        # within ε, and those ε's are part of the value the const shape
+        # already carries, so they are kept rather than idealized away.
+        m_reg = (
+            np.einsum("...q,q->...", dg, gw)
+            + (gw[near2].sum() - 1.0) * g2
+            + (gw[~near2].sum() - 1.0) * g1
+        )
+
+        d_int = t_sing + H * m_reg - (_sin_minus_arg(kH) / k) * (G1 + G2)
+        Ez = pref_z * (k * k * d_int - cm1 * (dz2 * T2 - dz1 * T1))
+
+        # E_ρ: W = kρ²∫sin(kξ)·(1+jkr)G₀/r² dξ in closed form, with both
+        # endpoint terms referred to the pair's mean radius (r₁+r₂)/2 — which
+        # costs no new exponential, since e^{-jk(r₁+r₂)/2} = e^{-jkr₂}·e^{-jkφ}
+        # and φ = k(r₁−r₂)/2 is needed anyway.
+        dr = 4.0 * H * z / (r1 + r2)  # r₁ − r₂, exactly
+        phi = 0.5 * k * dr
+        A = kH + phi
+        B = kH - phi
+        # H(c₁+c₂) − (r₁−r₂), with c_e = Δz_e/r_e: the same rationalization
+        # twice over, ending on
+        # ρ² + Δz₁Δz₂ − r₁r₂ = −4ρ²H²/(ρ² + Δz₁Δz₂ + r₁r₂).
+        d_lin = (
+            -8.0
+            * H**3
+            * z
+            * rho
+            * rho
+            / ((rho * rho + dz1 * dz2 + r1 * r2) * (r1 + r2) * r1 * r2)
+        )
+        cph = np.cos(phi)
+        sph = np.sin(phi)
+        w_even = (A * _sin_minus_arg(B) - B * _sin_minus_arg(A)) / kH + (
+            d_lin / H
+        ) * sH * cph
+        # c₂ − c₁ = −ρ²X/(r₁r₂), from the same rationalized numerator as X.
+        w_odd = 1j * sH * (-(rho * rho * X) / (r1 * r2)) * sph
+        W = (G2 * r2) * (cph - 1j * sph) * (w_even + w_odd)
+        Erho = pref_rho * (-k * W + rho * rho * cm1 * (T2 - T1))
+        return Erho, Ez
 
     # ------------------------------------------------------------------
     # Matrix assembly and solve
@@ -1553,10 +1820,10 @@ class SinusoidalSolver(_Cancelable):
         return Phi_const, Phi_sin, Phi_cos
 
     def _field_tensor_sommerfeld_remainder(
-        self, geom, k, eps_t, obs_centers=None, obs_tangents=None
+        self, geom, k, eps_t, obs_centers=None, obs_tangents=None, cos_shape="cos"
     ):
         """Smooth Sommerfeld-remainder tensor S[3, M, N]: the tangential
-        remainder field of segment n's const/sin/cos source shapes at the
+        remainder field of segment n's three source shapes (`cos_shape`) at the
         center of segment m, from the interpolated SommerfeldGrid F dyad
         (theory manual eqs 143-147 azimuth combination — the same algebra
         as `BSplineSolver._Z_sommerfeld_remainder`, minus the observer
@@ -1607,10 +1874,18 @@ class SinusoidalSolver(_Cancelable):
         src = seg_c[:, None, :] + zloc[..., None] * seg_t[:, None, :]
         w_node = h_half[:, None] * gw[None, :]  # (N, q) dz' weights
         # Source shapes at the nodes, NATURAL-arc convention like the
-        # free-space tensor (sigma accounting stays the caller's job).
-        shp = np.stack(
-            [np.ones_like(zloc), np.sin(k * zloc), np.cos(k * zloc)]
-        )  # (3, N, q)
+        # free-space tensor (sigma accounting stays the caller's job). The
+        # third shape follows the free-space tensor's `cos_shape` contract
+        # (momwire#205) — this block is SUBTRACTED from one built there, so
+        # both have to be on the same shape set. Here the fold is only a
+        # better-scaled weight inside a quadrature (no cancelling closed
+        # forms), and −2sin²(kξ/2) keeps it accurate at its own size.
+        shp_cos = (
+            np.cos(k * zloc)
+            if cos_shape == "cos"
+            else -2.0 * np.sin(0.5 * k * zloc) ** 2
+        )
+        shp = np.stack([np.ones_like(zloc), np.sin(k * zloc), shp_cos])  # (3, N, q)
 
         # Grid extent: obs-to-image-point distance is convex in the two
         # segment parameters, so its max is attained at endpoint pairs.

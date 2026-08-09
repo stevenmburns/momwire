@@ -2647,8 +2647,45 @@ sinusoidal_field_tensor_refl(
 // atomics; the rows are contiguous, so they stay cache-resident across the
 // nq observers that write them. Per observer the kernel repeats
 // `sinusoidal_field_tensor_impl`'s three stages (geometry+phases, one
-// omp-simd sincos sweep, assembly), so the arithmetic per matrix entry is
-// the point-matched kernel's verbatim.
+// omp-simd sincos sweep, assembly).
+//
+// THIRD SHAPE (momwire#205): the const and sin blocks are the point-matched
+// kernel's arithmetic verbatim; the third is the (cos kξ − 1) source shape,
+// not cos kξ — the folded contract the Galerkin product pairs with σC. It is
+// a transcription of `SinusoidalSolver._folded_cos_fields`, whose docstring
+// carries the derivation and the reason the literal difference cannot be
+// used. The two helpers below are that method's `_sin_minus_arg` /
+// `_asinh_minus_arg`, and the phase table grows to carry the half-angles the
+// spelling needs (see `S` at the top of the fill).
+
+// sin(u) − u, without the u²/6 cancellation of the literal difference.
+static inline double sin_minus_arg(double u) {
+    double u2 = u * u;
+    if (std::fabs(u) < 0.1) {
+        return -(u * u2) / 6.0 *
+               (1.0 - u2 / 20.0 *
+                          (1.0 - u2 / 42.0 *
+                                     (1.0 - u2 / 72.0 * (1.0 - u2 / 110.0))));
+    }
+    return std::sin(u) - u;
+}
+
+// asinh(x) − x, taking the caller's t = asinh(x) so the fill pays for one
+// asinh either way. The series is in t because sinh t − t converges
+// factorially where the asinh series does not.
+static inline double asinh_minus_arg_from_t(double t) {
+    double t2 = t * t;
+    if (std::fabs(t) < 1.0) {
+        return -(t * t2) / 6.0 *
+               (1.0 + t2 / 20.0 *
+                          (1.0 + t2 / 42.0 *
+                                     (1.0 + t2 / 72.0 *
+                                                (1.0 + t2 / 110.0 *
+                                                           (1.0 + t2 / 156.0)))));
+    }
+    return -(std::sinh(t) - t);
+}
+
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>>
@@ -2717,23 +2754,57 @@ sinusoidal_galerkin_far_fill(
 
     py::gil_scoped_release release;
 
-    std::vector<double> H_n(N), sin_kH(N), cos_kH(N);
+    std::vector<double> H_n(N), sin_kH(N), cos_kH(N), cos_kH_m1(N), smarg_kH(N);
     for (size_t n = 0; n < N; n++) {
         H_n[n] = sh(n);
         sin_kH[n] = std::sin(k * H_n[n]);
         cos_kH[n] = std::cos(k * H_n[n]);
+        // cos kH − 1 and sin kH − kH, both at their own size (#205).
+        double hs = std::sin(0.5 * k * H_n[n]);
+        cos_kH_m1[n] = -2.0 * hs * hs;
+        smarg_kH[n] = sin_minus_arg(k * H_n[n]);
     }
     std::vector<double> glt_v(n_qp), glw_v(n_qp);
+    // Which endpoint each source-quadrature node is referred to (#205), and
+    // the two halves' weight sums — the rule's own departure from 1 each,
+    // which is part of the value the const shape already carries.
+    std::vector<double> gl_step(n_qp);
+    std::vector<char> gl_near2(n_qp);
+    double w_hi = 0.0, w_lo = 0.0;
     for (size_t q = 0; q < n_qp; q++) {
         glt_v[q] = glt(q);
         glw_v[q] = glw(q);
+        gl_near2[q] = glt_v[q] >= 0.0;
+        gl_step[q] = gl_near2[q] ? (1.0 - glt_v[q]) : -(1.0 + glt_v[q]);
+        (gl_near2[q] ? w_hi : w_lo) += glw_v[q];
     }
+    w_hi -= 1.0;
+    w_lo -= 1.0;
 
     const double four_pi_k = 4.0 * M_PI * k;
     const double pref_z_im = eta / four_pi_k;
     const double pref_rho_const_im = -eta / four_pi_k;
 
-    const size_t S = n_qp + 2;   // 2 boundary phases + the quadrature nodes
+    // Phase table per source segment. The folded third shape (#205) needs
+    // HALF angles the const and sin shapes do not: cos kr − 1 has to be
+    // −2sin²(kr/2) rather than a subtraction, and each node's e^{−jkδ_q} − 1
+    // is taken at that node's offset δ_q from its own endpoint. So the table
+    // carries the halves and derives the full angles from them by the
+    // double-angle identities — e^{−jkr} = (e^{−jkr/2})², two multiplies —
+    // rather than evaluating both. That keeps the sweep at n_qp + 3 phases
+    // against the pre-#205 n_qp + 2: the whole cost of the folded shape is
+    // one extra sincos per (observer, source) pair, for the E_ρ reference
+    // angle φ = k(r₁−r₂)/2. Evaluating the full angles as well measured 2×
+    // slower on the N=2401 dipole, and the sweep is most of the kernel.
+    //
+    // The reconstruction costs the const and sin shapes ~1 ulp on their
+    // Green's values against the numpy path's own exp() — the two paths have
+    // agreed at reassociation level since #194 and still do.
+    const size_t IX_H2 = 0;         // half-phase of r₀_2
+    const size_t IX_H1 = 1;         // half-phase of r₀_1
+    const size_t IX_PHI = 2;        // φ
+    const size_t IX_DQ = 3;         // half-phases of the node offsets
+    const size_t S = n_qp + 3;
     const size_t P = N * S;
 
     PYSIM_CANCEL_SETUP(cancel_flag);
@@ -2752,8 +2823,8 @@ sinusoidal_galerkin_far_fill(
 
         std::vector<double> ph(P), cphb(P), sphb(P);
         std::vector<double> rho_eval_a(N), dz1_a(N), dz2_a(N),
-                            r0_1_a(N), r0_2_a(N), td_a(N), rpf_a(N);
-        std::vector<double> r0q_inv_a(N * n_qp);
+                            r0_1_a(N), r0_2_a(N), td_a(N), rpf_a(N), z_a(N);
+        std::vector<double> r0q_inv_a(N * n_qp), delta_a(N * n_qp);
         // Projected field of the three source shapes at ONE observer, split
         // re/im so the reduction below stays vectorizable.
         std::vector<double> phi_c_re(N), phi_c_im(N), phi_s_re(N), phi_s_im(N),
@@ -2787,19 +2858,32 @@ sinusoidal_galerkin_far_fill(
                 double r0_1 = std::sqrt(rho_eval*rho_eval + dz1*dz1);
 
                 rho_eval_a[n] = rho_eval;
+                z_a[n] = z_eval;
                 dz1_a[n] = dz1; dz2_a[n] = dz2;
                 r0_1_a[n] = r0_1; r0_2_a[n] = r0_2;
                 td_a[n] = td; rpf_a[n] = rho_dot_tobs / rho_eval;
 
                 size_t base = n * S;
-                ph[base + 0] = -k * r0_2;
-                ph[base + 1] = -k * r0_1;
+                ph[base + IX_H2] = -0.5 * k * r0_2;
+                ph[base + IX_H1] = -0.5 * k * r0_1;
+                // φ from r₁ − r₂ = 4Hz/(r₁+r₂), which is exact where the
+                // subtraction would not be (#205).
+                ph[base + IX_PHI] = 2.0 * k * H * z_eval / (r0_1 + r0_2);
                 for (size_t q = 0; q < n_qp; q++) {
                     double z_q = H * glt_v[q];
                     double dz_q = z_eval - z_q;
                     double r0_q = std::sqrt(rho_eval*rho_eval + dz_q*dz_q);
-                    ph[base + 2 + q] = -k * r0_q;
                     r0q_inv_a[n * n_qp + q] = 1.0 / r0_q;
+                    // δ_q = r_q − r_ref for the endpoint on the node's own
+                    // side. Δz_q − Δz_ref is ±H(1 ∓ t_q) exactly — the
+                    // observer cancels out of it — so δ_q is exact however
+                    // far away the observer sits.
+                    double dz_ref = gl_near2[q] ? dz2 : dz1;
+                    double r_ref = gl_near2[q] ? r0_2 : r0_1;
+                    double delta = H * gl_step[q] * (dz_q + dz_ref)
+                                   / (r0_q + r_ref);
+                    delta_a[n * n_qp + q] = delta;
+                    ph[base + IX_DQ + q] = -0.5 * k * delta;
                 }
             }
 
@@ -2812,8 +2896,13 @@ sinusoidal_galerkin_far_fill(
             // ---- Stage C: assembly + plain tangential projection ----------
             for (size_t n = 0; n < N; n++) {
                 size_t base = n * S;
-                double cph_2 = cphb[base + 0], sph_2 = sphb[base + 0];
-                double cph_1 = cphb[base + 1], sph_1 = sphb[base + 1];
+                // Full boundary phases from their halves: e^{−jkr} =
+                // (e^{−jkr/2})². The halves are what the folded shape needs
+                // (below), and squaring is cheaper than a second sincos.
+                double ch2 = cphb[base + IX_H2], sh2 = sphb[base + IX_H2];
+                double ch1 = cphb[base + IX_H1], sh1 = sphb[base + IX_H1];
+                double cph_2 = ch2 * ch2 - sh2 * sh2, sph_2 = 2.0 * ch2 * sh2;
+                double cph_1 = ch1 * ch1 - sh1 * sh1, sph_1 = 2.0 * ch1 * sh1;
                 double rho_eval = rho_eval_a[n];
                 double dz1 = dz1_a[n], dz2 = dz2_a[n];
                 double r0_1 = r0_1_a[n], r0_2 = r0_2_a[n];
@@ -2856,8 +2945,18 @@ sinusoidal_galerkin_far_fill(
 
                 double int_reg_re = 0.0, int_reg_im = 0.0;
                 for (size_t q = 0; q < n_qp; q++) {
-                    double cph_q = cphb[base + 2 + q];
-                    double sph_q = sphb[base + 2 + q];
+                    // e^{−jkr_q} = e^{−jkr_ref}·(e^{−jkδ_q/2})², the node's
+                    // own endpoint carrying the reference phase (#205). The
+                    // half-angle is the one the folded shape needs below.
+                    double cd = cphb[base + IX_DQ + q];
+                    double sd = sphb[base + IX_DQ + q];
+                    double ed_re = cd * cd - sd * sd;
+                    double ed_im = 2.0 * cd * sd;
+                    bool hi = gl_near2[q];
+                    double er = hi ? cph_2 : cph_1;
+                    double ei = hi ? sph_2 : sph_1;
+                    double cph_q = er * ed_re - ei * ed_im;
+                    double sph_q = er * ed_im + ei * ed_re;
                     double inv_r0_q = r0q_inv_a[n * n_qp + q];
                     int_reg_re += (cph_q - 1.0) * inv_r0_q * glw_v[q];
                     int_reg_im += sph_q * inv_r0_q * glw_v[q];
@@ -2913,32 +3012,97 @@ sinusoidal_galerkin_far_fill(
                 double Ez_sin_re = -pref_z_im * (bszin2_im - bszin1_im);
                 double Ez_sin_im =  pref_z_im * (bszin2_re - bszin1_re);
 
-                // ---- Cosine source ---------------------------------------
-                double bracket_cos_2_re = -k*dz2*sin2 + inner_2_re*cos2;
-                double bracket_cos_2_im =               inner_2_im*cos2;
-                double bcos2_re, bcos2_im;
-                cmul(G0_2_re, G0_2_im, bracket_cos_2_re, bracket_cos_2_im,
-                     bcos2_re, bcos2_im);
-                double bracket_cos_1_re = -k*dz1*sin1 + inner_1_re*cos1;
-                double bracket_cos_1_im =               inner_1_im*cos1;
-                double bcos1_re, bcos1_im;
-                cmul(G0_1_re, G0_1_im, bracket_cos_1_re, bracket_cos_1_im,
-                     bcos1_re, bcos1_im);
-                double Erho_cos_re = -pref_rho_im * (bcos2_im - bcos1_im);
-                double Erho_cos_im =  pref_rho_im * (bcos2_re - bcos1_re);
+                // ---- Folded source (I = cos kξ − 1), #205 ----------------
+                // Transcription of `SinusoidalSolver._folded_cos_fields`;
+                // the derivation, and why the two closed forms may not
+                // simply be subtracted, are in that method's docstring.
+                double rho2 = rho_eval * rho_eval;
+                double cm1 = cos_kH_m1[n];
 
-                double bracket_cos_z_2_re = -k*sin2 - dz2*one_jkr_2_re*cos2;
-                double bracket_cos_z_2_im =         - dz2*one_jkr_2_im*cos2;
-                double bczin2_re, bczin2_im;
-                cmul(G0_2_re, G0_2_im, bracket_cos_z_2_re, bracket_cos_z_2_im,
-                     bczin2_re, bczin2_im);
-                double bracket_cos_z_1_re = -k*sin1 - dz1*one_jkr_1_re*cos1;
-                double bracket_cos_z_1_im =         - dz1*one_jkr_1_im*cos1;
-                double bczin1_re, bczin1_im;
-                cmul(G0_1_re, G0_1_im, bracket_cos_z_1_re, bracket_cos_z_1_im,
-                     bczin1_re, bczin1_im);
-                double Ez_cos_re = -pref_z_im * (bczin2_im - bczin1_im);
-                double Ez_cos_im =  pref_z_im * (bczin2_re - bczin1_re);
+                // X: sinh of the arcsinh difference ∫(1/r)dξ, rationalized
+                // on whichever endpoint pair does not cancel.
+                double X = (dz1 * dz2 >= 0.0)
+                    ? 2.0 * H * (dz1 + dz2) / (dz1 * r0_2 + dz2 * r0_1)
+                    : (dz1 * r0_2 - dz2 * r0_1) / rho2;
+                double t_asx = std::asinh(X);
+                double t_sing =
+                    (std::fabs(X) < 1.0)
+                        ? asinh_minus_arg_from_t(t_asx)
+                              + H * rho2 * X * X / ((r0_1 + r0_2) * r0_1 * r0_2)
+                        : t_asx - H * (inv_r0_1 + inv_r0_2);
+
+                // g_e = (e^{−jkr_e} − 1)/r_e at the two endpoints, real part
+                // from the half-angle (cos kr − 1 = −2sin²(kr/2)) so it is
+                // relative rather than absolute.
+                double g2_re = -2.0 * sh2 * sh2 * inv_r0_2;
+                double g2_im = sph_2 * inv_r0_2;
+                double g1_re = -2.0 * sh1 * sh1 * inv_r0_1;
+                double g1_im = sph_1 * inv_r0_1;
+
+                // Σ_q gw_q·g(ξ_q) − (g₁+g₂), each node against the endpoint
+                // on its own side: g(r_ref+δ) − g(r_ref), both terms O(kδ).
+                double m_reg_re = w_hi * g2_re + w_lo * g1_re;
+                double m_reg_im = w_hi * g2_im + w_lo * g1_im;
+                for (size_t q = 0; q < n_qp; q++) {
+                    bool hi = gl_near2[q];
+                    double e_ref_re = hi ? cph_2 : cph_1;
+                    double e_ref_im = hi ? sph_2 : sph_1;
+                    double gr_re = hi ? g2_re : g1_re;
+                    double gr_im = hi ? g2_im : g1_im;
+                    double sd = sphb[base + IX_DQ + q];
+                    double cd = cphb[base + IX_DQ + q];
+                    // e^{−jkδ} − 1 from the half-angle: −2s² + 2jsc.
+                    double em1_re = -2.0 * sd * sd;
+                    double em1_im = 2.0 * sd * cd;
+                    double t_re, t_im;
+                    cmul(e_ref_re, e_ref_im, em1_re, em1_im, t_re, t_im);
+                    double dl = delta_a[n * n_qp + q];
+                    double inv_r0_q = r0q_inv_a[n * n_qp + q];
+                    double w = glw_v[q] * inv_r0_q;
+                    m_reg_re += w * (t_re - gr_re * dl);
+                    m_reg_im += w * (t_im - gr_im * dl);
+                }
+
+                double smarg = smarg_kH[n];
+                double d_int_re = t_sing + H * m_reg_re
+                                  - smarg / k * (G0_1_re + G0_2_re);
+                double d_int_im = H * m_reg_im - smarg / k * (G0_1_im + G0_2_im);
+                double inner_cos_re =
+                    k_sq * d_int_re - cm1 * Ez_boundary_re;
+                double inner_cos_im =
+                    k_sq * d_int_im - cm1 * Ez_boundary_im;
+                double Ez_cos_re = -pref_z_im * inner_cos_im;
+                double Ez_cos_im =  pref_z_im * inner_cos_re;
+
+                // E_ρ: both endpoint terms referred to the pair's mean
+                // radius, which splits them into an even part that
+                // telescopes onto sin_minus_arg and an odd part in c₂ − c₁.
+                double cph_p = cphb[base + IX_PHI], sph_p = sphb[base + IX_PHI];
+                double phi_ang = ph[base + IX_PHI];
+                double kH = k * H;
+                double A_ang = kH + phi_ang, B_ang = kH - phi_ang;
+                // H(c₁+c₂) − (r₁−r₂), cancellation-free.
+                double d_lin = -8.0 * H * H * H * z_a[n] * rho2
+                               / ((rho2 + dz1 * dz2 + r0_1 * r0_2)
+                                  * (r0_1 + r0_2) * r0_1 * r0_2);
+                double w_even =
+                    (A_ang * sin_minus_arg(B_ang) - B_ang * sin_minus_arg(A_ang))
+                        / kH
+                    + (d_lin / H) * sin2 * cph_p;
+                // c₂ − c₁ = −ρ²X/(r₁r₂), from the same numerator as X.
+                double w_odd = sin2 * (-(rho2 * X) / (r0_1 * r0_2)) * sph_p;
+                // W = e^{−jk(r₁+r₂)/2}·(w_even + j·w_odd), the reference
+                // phase built from e^{−jkr₂} and φ rather than a new exp.
+                double ref_re = cph_2 * cph_p + sph_2 * sph_p;
+                double ref_im = sph_2 * cph_p - cph_2 * sph_p;
+                double W_re, W_im;
+                cmul(ref_re, ref_im, w_even, w_odd, W_re, W_im);
+                double b_rho_re = -k * W_re + rho2 * cm1
+                                  * (term_const2_re - term_const1_re);
+                double b_rho_im = -k * W_im + rho2 * cm1
+                                  * (term_const2_im - term_const1_im);
+                double Erho_cos_re = -pref_rho_im * b_rho_im;
+                double Erho_cos_im =  pref_rho_im * b_rho_re;
 
                 phi_c_re[n]  = td * Ez_const_re + rho_proj_factor * Erho_const_re;
                 phi_c_im[n]  = td * Ez_const_im + rho_proj_factor * Erho_const_im;
