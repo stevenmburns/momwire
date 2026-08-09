@@ -2289,7 +2289,8 @@ def test_support_entries_name_distinct_segment_basis_pairs(geom_name, ports):
 def _tested_pieces(sim):
     """The float64 (context, tested contributions) every spelling of the
     coefficient product starts from — one fill, shared by the 80-bit reference
-    and by the float64 products measured against it."""
+    and by the float64 products measured against it. On the folded shape set
+    (const, sin, cos−1) since #205."""
     geom = sim._build_geometry()
     k = sim.k
     ctx = sim._test_context(geom, sim._basis_coefs(geom, k), k)
@@ -2300,19 +2301,22 @@ def _coefficient_product(ctx, contribs, n_ports, dtype, *, folded):
     """G = Σ_shape (scatter contrib[shape]) @ M[shape], at a chosen precision
     and on a chosen shape set.
 
-    `folded=False` is the literal pre-#203 pairing (const↔σA, cos↔σC);
-    `folded=True` is the shipped one, which subtracts the const contributions
-    from the cos ones BEFORE the scatter and pairs the const shape with σ(A+C).
-    At 80-bit both are the exact product, which is how the reference is built.
+    `contribs` arrives on the FOLDED shape set — since #205 that is the only
+    thing the fill produces — so it is the literal spelling that has to be
+    reconstructed here: `folded=False` adds the const contributions back into
+    the cos ones to recover the cos-shape table, then pairs const↔σA and
+    cos↔σC as the pre-#203 product did. `folded=True` is the shipped pairing,
+    const↔σ(A+C) and (cos−1)↔σC, straight off the fill. At 80-bit both are the
+    exact product, which is how the reference is built.
     """
     n_segs = ctx["N"]
     n_basis = n_segs + n_ports
     i_of_entry, m_of_entry = ctx["i_of_entry"], ctx["m_of_entry"]
     c_const, c_sin, c_cos = (np.asarray(c, dtype=dtype) for c in contribs)
     if folded:
-        c_cos = c_cos - c_const
         coefs = (ctx["sigAC"], ctx["B"], ctx["sigC"])
     else:
+        c_cos = c_cos + c_const
         coefs = (ctx["sigA"], ctx["B"], ctx["sigC"])
 
     G = np.zeros((n_basis, n_basis), dtype=dtype)
@@ -2332,11 +2336,14 @@ def _longdouble_coefficient_product(sim):
 
     The scatter runs at 80-bit too (#203): the shipped fold happens BEFORE the
     scatter, so a reference that scattered in float64 would have one spelling's
-    rounding already baked into it and would flatter that spelling.
+    rounding already baked into it and would flatter that spelling. And the
+    reference takes the FOLDED pairing (#205): reconstructing the cos-shape
+    table to run the literal one would walk the 80-bit product into the very
+    cancellation it is meant to arbitrate, which costs it four digits.
     """
     ctx, contribs = _tested_pieces(sim)
     return _coefficient_product(
-        ctx, contribs, len(sim.junction_ports), np.clongdouble, folded=False
+        ctx, contribs, len(sim.junction_ports), np.clongdouble, folded=True
     )
 
 
@@ -2459,7 +2466,7 @@ def test_folded_coefficient_product_is_orders_closer_to_the_exact_product():
     sim = SinusoidalGalerkinSolver(**_m3_dipole(_203_N))
     ctx, contribs = _tested_pieces(sim)
     ref = np.asarray(
-        _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=False),
+        _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=True),
         dtype=np.complex128,
     )
     literal = _coefficient_product(ctx, contribs, 0, np.complex128, folded=False)
@@ -2478,7 +2485,7 @@ def test_shipped_assembly_is_the_folded_product(monkeypatch, sparse):
     sim = SinusoidalGalerkinSolver(**kw)
     ctx, contribs = _tested_pieces(sim)
     ref = np.asarray(
-        _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=False),
+        _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=True),
         dtype=np.complex128,
     )
     err_lit = _rel_matrix_delta(
@@ -2520,24 +2527,77 @@ def test_sin_minus_arg_is_accurate_on_both_branches():
 
 
 def test_reciprocity_floor_is_set_by_the_fill_not_the_product():
-    """#203's second gate, refuted by measurement.
+    """#203's second gate, refuted by measurement — and #205's, met.
 
     The issue read G1's mesh degradation (3.4e-10 at N=801, 1.3e-9 at N=2401)
     as the coefficient product's conditioning noise, and expected the fold to
-    remove it. It does not: the EXACT 80-bit product of the same float64
-    contributions is just as asymmetric, so G−Gᵀ is inherited from the
-    contributions rather than created by the product. Pinned here so that a
-    future kernel-level fold — the (cos kξ − 1) source shape, which is where
-    this floor actually lives — announces itself by breaking this test rather
-    than by quietly improving a number nobody is watching.
+    remove it. It did not: the EXACT 80-bit product of the same float64
+    contributions was just as asymmetric, so G−Gᵀ is inherited from the
+    contributions rather than created by the product.
+
+    That is still the finding — and it is why the fix had to be a kernel one.
+    Both halves are asserted:
+
+    * the floor is the FILL's, so the 80-bit product of the same
+      contributions has the same G1 the float64 one does (it did before #205
+      at 1.45e-10, and it does after at 1.34e-13);
+    * and the fill's floor is now `FOLDED_FILL_G1`, not `G1_GATE` — the
+      contributions arrive on the (cos kξ − 1) shape, so nothing here is left
+      to amplify.
     """
     sim = SinusoidalGalerkinSolver(**_m3_dipole(_203_N))
     ctx, contribs = _tested_pieces(sim)
-    exact = _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=False)
+    exact = _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=True)
     folded = _coefficient_product(ctx, contribs, 0, np.complex128, folded=True)
     r_exact, r_folded = _sym_ratio(exact), _sym_ratio(folded)
-    assert r_folded > G1_GATE, (
-        f"the floor this test describes is gone ({r_folded:.2e}) — if the fill "
-        "learned the (cos−1) shape, retire this test and tighten G1_GATE"
-    )
+    assert r_folded < FOLDED_FILL_G1, r_folded
     assert abs(r_folded - float(r_exact)) < 0.05 * r_folded, (r_folded, r_exact)
+
+
+# ---------------------------------------------------------------------------
+# momwire#205 — the (cos kξ − 1) source shape, in the field kernel
+# ---------------------------------------------------------------------------
+# #203 folded the coefficient product and did not move G1, because the same
+# A ≈ −C cancellation runs one level up: the const-shape and cos-shape SOURCE
+# fields nearly coincide, so subtracting the two closed forms leaves
+# ε·|const-shape field| in a quantity that is O((kH)²) of it. That error is
+# what `_folded_cos_fields` removes, by taking the two closed forms apart and
+# spelling each surviving term at its own size (`cos_shape="cos-1"`).
+#
+# Measured on the half-wave dipole (the accelerated and numpy fills agree to
+# every digit shown; `assemble` is the free-space fill+product wall clock on
+# the dev box, 8 threads):
+#
+#   N      ‖G−Gᵀ‖/‖G‖               field error / |const|      assemble
+#          before      after        before     after           before  after
+#   41     1.06e-11 →  2.15e-13     6.9e-14 →  1.3e-16         0.03 s  0.05 s
+#   401    1.45e-10 →  1.34e-13     7.5e-13 →  4.7e-16         0.19 s  0.29 s
+#   801    2.04e-10 →  1.27e-13        —          —            0.52 s  0.77 s
+#   2401   1.45e-09 →  5.51e-14     3.9e-12 →  1.6e-15         3.40 s  6.82 s
+#
+# So the growth with mesh is not merely broken: G1 now FALLS as the mesh
+# refines, because what is left is no longer the (kΔ)⁻² amplification but the
+# fill's own structural asymmetry between an integrated test side and an
+# analytic source side. The cost is the phase table, which roughly doubled —
+# the folded spelling needs the half-angles of the node offsets (see the fill
+# kernel's `S`), and that sweep is most of the kernel's time.
+#
+# What is NOT fixed: one power of kH is left in the regular part of ∫G₀, whose
+# per-node terms are O(kH) and whose sum is O((kH)²) — removing it needs the
+# second difference (node pair against endpoint pair) in closed form. At the
+# meshes above it sits below the structural floor, which is why G1 stops
+# improving rather than continuing to fall.
+
+# The dipole ladder's floor: measured 5.5e-14 (N=2401) to 2.2e-13 (N=41).
+FOLDED_FILL_G1 = 1e-12
+# How far the folded fill may sit from the pre-#205 fill: the two are the same
+# quantity, so this is the size of the error being removed, not a tolerance on
+# the physics. Measured 1.2e-11 - 1.8e-11 relative on the four validation
+# geometries at their (coarse) gate meshes, where the amplification is
+# smallest; on the N=2401 dipole the same difference is ~1e-9.
+PRE_205_AGREEMENT = 1e-10
+# Same statement one level down, on the field tables rather than on G, and
+# scaled by the const-shape field the ε lives on. Measured 4.5e-11 — which IS
+# the literal difference's own error at that sample, since the folded field is
+# four orders closer to exact than the thing it is being compared with.
+PRE_205_FIELD_AGREEMENT = 1e-9
