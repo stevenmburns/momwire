@@ -302,10 +302,12 @@ import scipy.spatial.distance
 
 from . import _ground_refl
 from ._accel import acc as _acc
+from ._port_solution import PortSolution
 from .sinusoidal import (
     _DENSE_ASSEMBLY_THRESHOLD,
     _EULER_GAMMA,
     SinusoidalSolver,
+    _SegmentBasis,
     _sin_minus_arg,
 )
 
@@ -1870,18 +1872,51 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         same `_drive_columns` the impedance solve uses and the readout is the
         same `_port_currents`, so 1/Y⁻¹ reproduces `compute_impedance` to
         solver precision by construction.
+
+        This is the `y` field of `compute_port_solution()` and nothing else —
+        see there for the per-port solution columns this throws away (#232).
+        """
+        return self.compute_port_solution().y
+
+    def compute_port_solution(self) -> PortSolution:
+        """Solve every port from ONE fill and ONE factorisation.
+
+        Returns a `PortSolution` whose `y` is identical to
+        `compute_y_matrix()` and whose `coeffs` column j is the solution for a
+        1 V drive at port j with the others shorted. Ports run
+        [gap feeds…, junction ports…, node ports…] — `coeffs` therefore has
+        N + len(junction_ports) rows, one per segment basis plus one per
+        junction-port basis, and the port rows are part of the solution, not
+        Lagrange multipliers bolted on.
+
+        Everything basis-specific stays inside: the Galerkin-tested drive
+        columns (`feed_model`), the ported assembly with M5b's node-charge
+        correction, and the `feed_readout` choice of centre-vs-variational
+        current. Junction ports ride the same #191 rules as
+        `compute_y_matrix`, and refuse at the same moment with the same
+        `NotImplementedError` where the formulation does not cover them
+        (finite ground, mixed radii).
+
+        `basis` is stable across the ports of this one solution and NOT
+        across solves.
         """
         self._refuse_junction_port_solve()
         geom = self._build_geometry()
         G, seg_view = self._assemble_Z_ported(geom, self.k)
         U = self._drive_columns(geom, seg_view, self.k)
         alphas = scipy.linalg.solve(G, U)
-        return np.stack(
+        Y = np.stack(
             [
                 self._port_currents(alphas[:, j], geom, seg_view, U)
                 for j in range(self.n_ports)
             ],
             axis=1,
+        )
+        return PortSolution(
+            y=Y,
+            coeffs=alphas,
+            port_currents=Y,  # the same object: the readout IS the Y matrix
+            basis=_SegmentBasis(geom=geom, seg_view=seg_view, k=self.k),
         )
 
     def compute_y_matrix_swept(self, k_array) -> np.ndarray:

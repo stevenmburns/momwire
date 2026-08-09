@@ -42,7 +42,8 @@ import scipy.sparse as sp
 from scipy.linalg import solve_triangular
 from scipy.sparse.linalg import splu
 
-from .bspline import BSplineSolver
+from .bspline import BSplineSolver, _SplineBasis
+from ._port_solution import PortSolution
 from . import _ground_refl, _sommerfeld
 from ._bspline_kernels import (
     _seg_seg_full_moments_offedge,
@@ -1390,8 +1391,31 @@ class HMatrixSolver(BSplineSolver):
         return self.build_hmatrix()
 
     def compute_y_matrix(self):
+        """Short-circuit admittance matrix — the `y` field of
+        `compute_port_solution()` and nothing else (#232)."""
+        return self.compute_port_solution().y
+
+    def compute_port_solution(self):
+        """Solve every port from ONE operator fill and ONE block-GMRES group.
+
+        Same contract as `BSplineSolver.compute_port_solution` — ports are
+        [gap feeds…, junction ports…], `coeffs` column j is the amplitude
+        vector for a 1 V drive at port j, `y` is identical to
+        `compute_y_matrix()` — but the constrained solve is the iterative one:
+        the H-matrix (or, on `ArrayBlockSolver`, the lattice operator) is built
+        once and every port column is carried through one factored-solve group,
+        so the port count costs back-substitutions, not fills. Columns are
+        converged to `solve_tol`, not to machine precision.
+
+        Falls back to the dense B-spline path exactly where
+        `compute_y_matrix` does (singular enrichment), including its column
+        conventions.
+
+        `basis` is an opaque handle, stable across the ports of this one
+        solution and NOT across solves.
+        """
         if self._hmatrix_unsupported():
-            return super().compute_y_matrix()
+            return super().compute_port_solution()
         ctx = self._context()
         geom = ctx["geom"]
         n = ctx["n_basis"]
@@ -1416,7 +1440,20 @@ class HMatrixSolver(BSplineSolver):
         B = np.hstack([B, port_A.T.astype(np.complex128)])
         X = self._solve_hmatrix(H, kcl_con, B)
         self._hmatrix = H
-        return B.T @ X
+        Y = B.T @ X
+        return PortSolution(
+            y=Y,
+            coeffs=X,
+            port_currents=Y,  # the same object: the readout IS the Y matrix
+            basis=_SplineBasis(
+                geom=geom,
+                supp_seg=ctx["supp_seg"],
+                polys=ctx["polys"],
+                wire_knots=ctx["wire_knots"],
+                wire_basis_global=ctx["wire_basis_global"],
+                n_poly=n,
+            ),
+        )
 
     def compute_impedance(self):
         if self._hmatrix_unsupported():

@@ -50,6 +50,8 @@ multiplier row (the same treatment the retired TriangularSolver used).
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 import scipy.linalg
 import scipy.sparse
@@ -72,6 +74,7 @@ from . import _sommerfeld
 from . import _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
+from ._port_solution import PortSolution
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
@@ -184,6 +187,27 @@ def _xfem_projection_coeffs(d):
         coeffs[k + 1] += alpha[k]
         coeffs[k + 2] -= alpha[k]
     return coeffs
+
+
+@dataclass(frozen=True)
+class _SplineBasis:
+    """Opaque `PortSolution.basis` payload for the B-spline families.
+
+    The per-solve context needed to read a coefficient column: the geometry
+    tables, the basis support map and per-basis polynomials, the knot vectors
+    and the basis-index map, plus `n_poly` — the number of polynomial dofs,
+    i.e. where the singular-enrichment block starts in a column (== the column
+    length when enrichment is off). Private on purpose — #232 hands consumers
+    an OPAQUE handle, not an interface; nothing here promises it survives the
+    next solve.
+    """
+
+    geom: dict
+    supp_seg: object
+    polys: object
+    wire_knots: object
+    wire_basis_global: object
+    n_poly: int
 
 
 class BSplineSolver(_Cancelable):
@@ -3084,6 +3108,36 @@ class BSplineSolver(_Cancelable):
         whose tap_ratio exceeds the threshold under ANY port drive (a
         single-feed solver therefore selects the same set as
         `compute_impedance`).
+
+        This is the `y` field of `compute_port_solution()` and nothing else —
+        see there for the per-port solution columns this throws away (#232).
+        """
+        return self.compute_port_solution().y
+
+    def compute_port_solution(self) -> PortSolution:
+        """Solve every port from ONE fill and ONE factorisation.
+
+        Returns a `PortSolution` whose `y` is identical to
+        `compute_y_matrix()` and whose `coeffs` column j is the B-spline
+        amplitude vector for a 1 V drive at port j with every other port
+        shorted; any other excitation is `coeffs @ V` with no second fill.
+        Ports run [gap feeds…, junction ports…]. Lagrange multipliers are
+        already eliminated — the columns satisfy the junction KCL constraints,
+        they do not carry the multipliers.
+
+        The port algebra stays inside: the Galerkin source vector per gap
+        feed, the #172 split that turns a ported junction's KCL row into a
+        drive/readout column, and the Schur solve that enforces the remaining
+        constraints once across all port columns. Ground models, wire loading
+        and singular enrichment ride exactly as for `compute_y_matrix`.
+
+        With singular enrichment active, `coeffs` carries the enrichment
+        amplitudes after the polynomial block, so it is longer than the
+        polynomial basis; `basis` records where the split is. Readout is
+        unaffected — port vectors vanish on the enrichment dofs.
+
+        `basis` is an opaque handle, stable across the ports of this one
+        solution and NOT across solves.
         """
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
@@ -3116,6 +3170,24 @@ class BSplineSolver(_Cancelable):
         B = np.hstack([B, port_A.T.astype(np.complex128)])
         n_ports = B.shape[1]
 
+        def _solution(Y, X):
+            """Wrap a (Y, columns) pair without touching either — the Y
+            expressions below are the ones `compute_y_matrix` has always
+            evaluated, spelled identically so no reduction order moves."""
+            return PortSolution(
+                y=Y,
+                coeffs=X,
+                port_currents=Y,  # the same object: the readout IS the Y matrix
+                basis=_SplineBasis(
+                    geom=geom,
+                    supp_seg=supp_seg,
+                    polys=polys,
+                    wire_knots=wire_knots,
+                    wire_basis_global=wire_basis_global,
+                    n_poly=n_basis_total,
+                ),
+            )
+
         # Clear any leftover per-junction selection from a prior solve
         # (mirrors compute_impedance; "auto" repopulates it below).
         self._auto_active_junctions = None
@@ -3138,7 +3210,7 @@ class BSplineSolver(_Cancelable):
             active_junctions = sorted(active)
             self._auto_active_junctions = active_junctions
             if not active_junctions:
-                return B.T @ X1  # pass-1 result is final
+                return _solution(B.T @ X1, X1)  # pass-1 result is final
 
         if self.use_singular_enrichment:
             enrich = self._enrichment_Z_assemble(
@@ -3164,11 +3236,13 @@ class BSplineSolver(_Cancelable):
                 kcl_aug[:, :n_p] = kcl_con
                 X = self._solve_with_kcl_ports(Z_aug, B_aug, kcl_aug, overwrite=True)
                 # Readout restricted to the polynomial block (source
-                # vectors are zero on the enrichment dofs).
-                return B.T @ X[:n_p, :]
+                # vectors are zero on the enrichment dofs); the returned
+                # columns keep the enrichment block, which is part of the
+                # solved current — `basis.n_poly` marks the split.
+                return _solution(B.T @ X[:n_p, :], X)
 
         X = self._solve_with_kcl_ports(Z, B, kcl_con, overwrite=True)
-        return B.T @ X  # Y[i, j] = v_i^T · solve(Z, v_j)
+        return _solution(B.T @ X, X)  # Y[i, j] = v_i^T · solve(Z, v_j)
 
     def compute_y_matrix_swept(self, k_array) -> np.ndarray:
         """Per-frequency Y matrices; returns (n_k, n_ports, n_ports).

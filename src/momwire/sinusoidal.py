@@ -35,6 +35,8 @@ Scope (deliberately narrow):
     independently, with no inter-wire junction entries.
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 import scipy.linalg
 import scipy.sparse
@@ -42,6 +44,7 @@ import scipy.sparse
 from . import _ground_refl, _sommerfeld, _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
+from ._port_solution import PortSolution
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
 _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
@@ -116,6 +119,23 @@ def _expm1_neg_j(w):
     an absolute ε rather than a relative one."""
     half = np.sin(0.5 * w)
     return (-2.0 * half * half) - 1j * np.sin(w)
+
+
+@dataclass(frozen=True)
+class _SegmentBasis:
+    """Opaque `PortSolution.basis` payload for the segment-basis families.
+
+    The per-solve context needed to read a coefficient column: the geometry
+    tables, the segment view (`starts`/`jbasis`/`sigma`/`A`/`B`/`C`, the thing
+    `_feed_segment_current` and the Galerkin readouts index), and the
+    wavenumber they were built at. Private on purpose — #232 hands consumers
+    an OPAQUE handle, not an interface; nothing outside this family should
+    unpack it, and nothing here promises it survives the next solve.
+    """
+
+    geom: dict
+    seg_view: dict
+    k: float
 
 
 class SinusoidalSolver(_Cancelable):
@@ -2536,6 +2556,35 @@ class SinusoidalSolver(_Cancelable):
         uses Eq 187's delta-gap source which scales by `-1/h_i`; the
         Y matrix readout via `_feed_segment_current` already accounts
         for the basis arithmetic.
+
+        This is the `y` field of `compute_port_solution()` and nothing
+        else — see there for the per-port solution columns this throws
+        away (#232).
+        """
+        return self.compute_port_solution().y
+
+    def compute_port_solution(self) -> PortSolution:
+        """Solve every port from ONE fill and ONE factorisation.
+
+        Returns a `PortSolution` carrying `y` (identical to
+        `compute_y_matrix()`), `coeffs` — column j is the segment-amplitude
+        solution for a 1 V drive at port j with the others shorted — the
+        per-port current readout `port_currents`, and the opaque `basis`
+        handle. Ports are the configured gap feeds, in order; this solver
+        rejects `junction_ports` at construction (#177: its basis enforces
+        KCL identically, so a node-current port is outside its span), so
+        there is nothing after the feeds.
+
+        Drive convention is Eq 187's delta gap, which is why column j's
+        right-hand side is `-1/h_j` at port j's feed segment rather than a
+        bare 1: that scaling is INSIDE here, and a caller who wants the
+        coefficients for an arbitrary excitation just forms `coeffs @ V`
+        with V in volts. Ground models, wire loading and the extended
+        thin-wire kernel all ride exactly as they do for
+        `compute_y_matrix`; there are no extra preconditions.
+
+        `basis` is stable across the ports of this one solution and NOT
+        across solves — re-solve and the previous handle is stale.
         """
         geom = self._build_geometry()
         G, seg_view = self._assemble_Z(geom, self.k)
@@ -2555,7 +2604,12 @@ class SinusoidalSolver(_Cancelable):
         for j in range(n_ports):
             for i, fi in enumerate(feed_segs):
                 Y[i, j] = self._feed_segment_current(alphas[:, j], seg_view, fi)
-        return Y
+        return PortSolution(
+            y=Y,
+            coeffs=alphas,
+            port_currents=Y,  # the same object: the readout IS the Y matrix
+            basis=_SegmentBasis(geom=geom, seg_view=seg_view, k=self.k),
+        )
 
     def compute_y_matrix_swept(self, k_array) -> np.ndarray:
         """Per-frequency Y matrices. Loops over k like
