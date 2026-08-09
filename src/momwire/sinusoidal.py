@@ -160,6 +160,7 @@ class SinusoidalSolver(_Cancelable):
         junctions=None,
         junction_ports=None,
         n_qp_const=8,
+        extended_kernel=False,
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
@@ -174,6 +175,23 @@ class SinusoidalSolver(_Cancelable):
         if feed_model == "point":
             self._reject_point_feed_model()
         self.feed_model = feed_model
+        # NEC's EK card (momwire#233). False — the default, and what every
+        # momwire solver did before #233 — is NEC's reduced ("thin-wire")
+        # kernel: the source current is a filament on the wire axis and the
+        # only trace of the conductor's girth is the a² regularization of ρ
+        # (`rho_eval` below). True is NEC's EXTENDED thin-wire kernel, Eqs
+        # 84-98 of the theory manual: the current is a uniform tube of
+        # surface current at ρ' = a and the kernel is its circumferential
+        # average, expanded to O(a²). The two agree to O((a/R)²), which is
+        # invisible at ordinary Δ/a and worth tens of percent below Δ/a ≈ 1.
+        # NEC's `EK`/`EK 0` maps to True, `EK -1` to False.
+        #
+        # Cost: True routes the fill through the numpy reference kernel,
+        # because the C++ accelerators transcribe EKSC only. Measured ~8.5×
+        # the fill time at N=801 against the OpenMP path, and the numpy fill's
+        # (N, N, n_qp_const) temporaries make large meshes memory-bound.
+        self.extended_kernel = bool(extended_kernel)
+        self._cached_ek_gating: tuple | None = None
         self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
@@ -1177,7 +1195,11 @@ class SinusoidalSolver(_Cancelable):
         src_c = src_centers if src_centers is not None else seg_c
         src_t = src_tangents if src_tangents is not None else seg_t
 
-        if _HAVE_FIELD_TENSOR:
+        # The C++ kernels transcribe EKSC only, and they are handed neither
+        # the source radius nor any connectivity, so `extended_kernel=True`
+        # takes the numpy reference path (momwire#233). Nothing about the
+        # EK-OFF dispatch moves, which is what keeps the default bit-exact.
+        if _HAVE_FIELD_TENSOR and not self.extended_kernel:
             gx, gw = self._leggauss_cached(self.n_qp_const)
 
             def _call(rows, a):
@@ -1217,6 +1239,300 @@ class SinusoidalSolver(_Cancelable):
         Phi_sin = td * cm["Ez_sin"] + rho_proj_factor * cm["Erho_sin"]
         Phi_cos = td * cm["Ez_cos"] + rho_proj_factor * cm["Erho_cos"]
         return Phi_const, Phi_sin, Phi_cos
+
+    # ---- NEC's extended thin-wire kernel (EK card), momwire#233 -----------
+    #
+    # Theory manual Eqs 84-98 (Burke & Poggio Part I, pp. 30-34). The reduced
+    # kernel treats the segment current as a filament on the wire axis and
+    # keeps the observer on the wire surface, so the source-observer distance
+    # never falls below a; that is Eq 84's R = sqrt((z-z')² + a²), and it is
+    # what every momwire solver computes. The EXTENDED kernel instead keeps
+    # the current as a uniform tube of surface current at ρ' = a and averages
+    # the free-space Green's function over the circumference (Eq 85). Eqs
+    # 86-88 expand that average in a Taylor series about the axial filament
+    # and truncate at second order, which is exact to O(a²/R²) and — crucially
+    # — reintroduces the ρ' ≠ 0 terms the reduced kernel drops. Eq 89 is the
+    # resulting scalar kernel and Eqs 90-98 are its z- and ρ-derivatives, the
+    # six per-end quantities the field expressions consume.
+    #
+    # NEC's implementation of all of this is `GXX` (nec2-1.2.1.2.f:4857-4897),
+    # which stands in for the reduced-kernel `GX` (f.4842-4852) at ONE END of
+    # ONE SOURCE SEGMENT at a time, and `EKSCX` (f.3170-3234), which is
+    # `EKSC` (f.3124-3166) with GX swapped for GXX per end plus a correction
+    # to the constant-current term. momwire's `_field_components_bcast` is
+    # algebraically EKSC rearranged into per-endpoint brackets (verified term
+    # by term — see `test_extended_kernel_zero_radius_limit_is_the_reduced
+    # _kernel`), so the extended kernel drops into the same slots.
+
+    def _ek_gating(self, geom):
+        """Per-source-segment extended-kernel end gating — NEC's IND1/IND2.
+
+        NEC does NOT apply the extended kernel unconditionally. Once per
+        SOURCE segment it asks, separately for each end, whether the segment's
+        sinusoidal current really continues straight through that end into an
+        identical conductor; only then is the O(a²) surface-current expansion
+        legitimate there. The decision lives in the matrix fill, not in the
+        kernel: nec2-1.2.1.2.f lines 2019-2053 (repeated verbatim at
+        6197-6224 and 7217-7244 for the other two fill routines), guarded by
+        `IF( IEXK.EQ.0) GOTO 16` at f.2019. The three codes it produces are
+        consumed by EKSCX at f.3193 (`IF( INX1.EQ.2) GOTO 3`) and f.3199,
+        which route the end to the reduced GX for code 2 and to the extended
+        GXX for codes 0 and 1:
+
+          IND = 1  Free end — ICONn(J) == 0 (f.2032 / f.2049). Nothing is
+                   attached, so nothing can violate the expansion; NEC
+                   extends.
+          IND = 0  Either (a) a simple two-segment junction whose partner is
+                   collinear to |t·t'| >= 0.999999 (f.2040-2041) AND of equal
+                   radius to |a'/a - 1| <= 1e-6 (f.2042-2043), or (b) a
+                   ground-plane contact, ICONn(J) == J, by a segment
+                   perpendicular to the plane — NEC's CABJ²+SABJ² <= 1e-8
+                   test at f.2026-2027 / f.2043-2044 — where the image
+                   continues the wire straight through.
+          IND = 2  Everything else: a bend, a radius step, a non-perpendicular
+                   ground contact, or a multi-way junction. The last is
+                   implicit: NEC threads 3+ segments meeting at a node onto a
+                   circular ICON chain, so the reciprocal test at f.2025
+                   (`IF(-ICON1(IPR).NE.J)`) / f.2031 (`IF(ICON2(IPR).NE.J)`)
+                   fails for every member as soon as K >= 3.
+
+        momwire's N⁻/N⁺ neighbour tables carry exactly this information. End 1
+        is the N⁻ side and end 2 the N⁺ side (`nm_seg[k]` is documented as
+        "j's NEC end-2 coincides with i's end-1", so the arc orientation
+        matches NEC's ICON1/ICON2 convention). A neighbour count of exactly 1
+        is precisely NEC's reciprocal-ICON test: momwire emits K(K-1) edges at
+        a K-member junction, so K == 2 leaves count 1 on both members and
+        K >= 3 leaves count >= 2 — the case NEC's chain rejects.
+
+        Returns `(ind1, ind2)`, int8 arrays of shape (N,) holding NEC's codes.
+        """
+        geom_key = self._cached_ek_gating
+        if geom_key is not None and geom_key[0] is geom:
+            return geom_key[1], geom_key[2]
+
+        n = geom["n_segs"]
+        t = geom["seg_tangents"]  # (N, 3) unit tangents, NEC arc order
+        rad = self._seg_radius(geom)  # (N,)
+        # NEC's CABJ² + SABJ² is the squared HORIZONTAL projection of the
+        # segment tangent (f.2026): the ground plane is z = const, so a
+        # segment is perpendicular to it exactly when t_x² + t_y² vanishes.
+        horiz = t[:, 0] * t[:, 0] + t[:, 1] * t[:, 1]
+        perpendicular_to_plane = horiz <= 1e-8
+
+        inds = []
+        for count, basis, seg, ground in (
+            (geom["nm_count"], geom["nm_basis"], geom["nm_seg"], geom["ground_minus"]),
+            (geom["np_count"], geom["np_basis"], geom["np_seg"], geom["ground_plus"]),
+        ):
+            # Default IND = 2: reduced kernel at this end unless proven safe.
+            ind = np.full(n, 2, dtype=np.int8)
+            # Free end (f.2032): no neighbour entry AND no ground contact.
+            ind[(count == 0) & ~ground] = 1
+            # Ground contact (f.2026-2029): NEC's ICON == J self-connection.
+            # momwire records it as a `ground_minus`/`ground_plus` flag and
+            # emits no neighbour edge, so it never collides with the branch
+            # below.
+            ind[ground & perpendicular_to_plane] = 0
+            # Simple two-segment junction: collinear AND equal radius.
+            single = np.flatnonzero(count == 1)
+            if single.size:
+                # count == 1 means exactly one table entry names this basis,
+                # so a last-write-wins scatter resolves the neighbour.
+                nbr = np.empty(n, dtype=np.int64)
+                nbr[basis] = seg
+                j = nbr[single]
+                # ABS() at f.2040: σ = ±1 records whether the neighbour's
+                # natural tangent is arc-flipped, and NEC likewise compares
+                # magnitudes, so an antiparallel collinear pair still counts.
+                dot = np.abs(np.einsum("id,id->i", t[single], t[j]))
+                ok = (dot >= 0.999999) & (np.abs(rad[j] / rad[single] - 1.0) <= 1e-6)
+                ind[single[ok]] = 0
+            inds.append(ind)
+
+        self._cached_ek_gating = (geom, inds[0], inds[1])
+        return inds[0], inds[1]
+
+    @staticmethod
+    def _ek_end_gxx(k, zz, rh, b, want_swapped):
+        """NEC's GXX (f.4857-4897): extended-kernel segment-end contributions.
+
+        `zz` is NEC's ZZ — the axial distance from the observer to this END of
+        the source segment, signed as NEC signs it (Z2 = H - z, Z1 = -(H + z)).
+        `rh` is the radial distance and `b` the radius entering the O(a²)
+        terms; EKSCX has already ordered them so that `rh >= b` (see
+        `_extended_kernel_fields`). `want_swapped` selects EKSCX's IRA == 1
+        arm — the case where the observation point lies INSIDE the source
+        conductor's radius and the roles of "distance" and "radius" trade
+        places (f.4886-4896).
+
+        Returns the six quantities EKSCX consumes, in NEC's argument order:
+        `(G1, G1P, G2, G2P, G3, GZP)` — respectively the extended scalar
+        kernel (Eq 89), its z-derivative, the ρ-kernel and its ρ- and
+        z-derivatives (Eqs 90-96), and the reduced-kernel z-derivative that
+        only the constant-current correction term uses.
+        """
+        # Multi-step spelling throughout (momwire#205): a one-expression
+        # complex product with a dead operand changes rounding above numpy's
+        # temporary-elision threshold, making the fill depend on block size.
+        r2 = zz * zz + rh * rh
+        r = np.sqrt(r2)
+        kr = k * r
+        kr2 = kr * kr
+        # C1, C2, C3 of f.4869-4871 — the polynomial coefficients of the
+        # second-order Taylor terms of Eqs 86-88.
+        c1 = 1.0 + 1j * kr
+        c2 = 3.0 * c1 - kr2
+        c3 = (6.0 + 1j * kr) * kr2 - 15.0 * c1
+        a2 = b * b
+        # T1, T2 of f.4867-4868: the two O(a²) shape factors of Eq 89.
+        rh2 = rh * rh
+        r4 = r2 * r2
+        t1 = 0.25 * a2 * rh2 / r4
+        t2 = 0.5 * a2 / r2
+        gz = np.exp(-1j * kr) / r  # reduced kernel e^{-jkR}/R
+        # Eq 89: the circumferentially averaged kernel, ρ-flavoured (G2) and
+        # z-flavoured (G1, which carries the extra -T2·C1 term).
+        g2 = gz * (1.0 + t1 * c2)
+        g1 = g2 - t2 * c1 * gz
+        gzr = gz / r2
+        g2p = gzr * (t1 * c3 - c1)
+        gzp_t = t2 * c2 * gzr
+        g3 = g2p + gzp_t
+        g1p = g3 * zz
+        # GZP: the plain reduced-kernel z-derivative. It is a-independent and
+        # only enters EKSCX's constant-current term, scaled by (ka/2)².
+        gzp_out = -zz * c1 * gzr
+        if want_swapped:
+            # IRA == 1 (f.4886-4896): observation point inside the conductor.
+            t2b = 0.5 * b
+            g2_out = -t2b * c1 * gzr
+            g2p_s = t2b * gzr * c2 / r2
+            g3_out = rh2 * g2p_s - b * gzr * c1
+            g2p_out = g2p_s * zz
+        else:
+            # IRA == 0 (f.4879-4885), the ordinary case. `rh` is never zero in
+            # momwire — it is at least the observer radius — so NEC's
+            # RH < 1e-10 guard at f.4881 is unreachable here.
+            g3_out = (g3 + gzp_t) * rh
+            g2_out = g2 / rh
+            g2p_out = g2p * zz / rh
+        return g1, g1p, g2_out, g2p_out, g3_out, gzp_out
+
+    @staticmethod
+    def _ek_end_gx(k, zz, rhx):
+        """NEC's GX (f.4842-4852) repackaged into GXX's six-value contract.
+
+        EKSCX's `INX == 2` arm (f.3195-3201, f.3201-3207) calls the REDUCED
+        end routine and then rescales its two outputs into the same six slots
+        GXX fills. Note it passes RHX — the ORIGINAL radial distance — not the
+        possibly-swapped RH, and it zeroes GZP so the end contributes nothing
+        to the constant-current correction.
+        """
+        r2 = zz * zz + rhx * rhx
+        r = np.sqrt(r2)
+        kr = k * r
+        c1 = 1.0 + 1j * kr
+        gz = np.exp(-1j * kr) / r
+        gp = -c1 * gz / r2
+        g1p = gp * zz
+        return gz, g1p, gz / rhx, g1p / rhx, gp * rhx, np.zeros_like(gz)
+
+    def _extended_kernel_fields(self, k, H, z_eval, rho_eval, src_a, ind1, ind2):
+        """NEC's EKSCX (f.3170-3234) — the extended-kernel field tables.
+
+        Drop-in replacement for the reduced-kernel body of
+        `_field_components_bcast`, returning the same six per-shape tables.
+        `H` is the source HALF length, `z_eval` the observer's axial
+        coordinate in the source frame, `rho_eval` the a-regularized radial
+        distance (NEC's RHX out of EFLD), `src_a` the SOURCE segment's radius
+        (NEC's BX = BI(J) — not the observer radius the reduced path
+        regularizes with), and `ind1`/`ind2` the per-end gating codes from
+        `_ek_gating`, broadcastable against the source axis.
+        """
+        # f.3186-3192: order the two lengths so RH is the larger. When the
+        # observation point falls inside the source conductor the roles trade
+        # and IRA is set; every downstream use of RH — including the INTX
+        # integration radius and the (kB/2)² correction factor — sees the
+        # ordered pair, not the raw one.
+        rhx = rho_eval
+        swap = rhx < src_a
+        any_swap = bool(np.any(swap))
+        rh = (
+            np.where(swap, src_a, rhx) if any_swap else np.broadcast_to(rhx, swap.shape)
+        )
+        b = (
+            np.where(swap, rhx, src_a)
+            if any_swap
+            else np.broadcast_to(src_a, swap.shape)
+        )
+
+        # NEC's Z2 = SH - Z and Z1 = -(SH + Z); momwire's dz_i is -Z_i.
+        z2 = H - z_eval
+        z1 = -(H + z_eval)
+        ss = np.sin(k * H)
+        cs = np.cos(k * H)
+
+        ends = []
+        for zz, ind in ((z1, ind1), (z2, ind2)):
+            zz = np.broadcast_to(zz, swap.shape)
+            ext = np.broadcast_to(ind != 2, swap.shape)
+            q_ext = self._ek_end_gxx(k, zz, rh, b, any_swap)
+            if ext.all():
+                ends.append(q_ext)
+                continue
+            q_red = self._ek_end_gx(k, zz, rhx)
+            ends.append(tuple(np.where(ext, e, r) for e, r in zip(q_ext, q_red)))
+        (g1_1, g1p_1, g2_1, g2p_1, g3_1, gzz_1) = ends[0]
+        (g1_2, g1p_2, g2_2, g2p_2, g3_2, gzz_2) = ends[1]
+
+        # CON of f.3181 — NEC's DATA CONX/0., 4.771341189/ is jη/(4πk) with
+        # NEC's k = 2π. Identical to `_field_components_bcast`'s `pref_z`.
+        con = 1j * self.eta / (4.0 * np.pi * k)
+
+        # f.3213-3222, verbatim. These are algebraically the same brackets the
+        # reduced path spells per endpoint; only the G-quantities changed.
+        ez_sin = con * ((g1_2 - g1_1) * cs * k - (g1p_2 + g1p_1) * ss)
+        ez_cos = -con * ((g1_2 + g1_1) * ss * k + (g1p_2 - g1p_1) * cs)
+        erho_sin = -con * (
+            (z2 * g2p_2 + z1 * g2p_1 + g2_2 + g2_1) * ss
+            - (z2 * g2_2 - z1 * g2_1) * cs * k
+        )
+        erho_cos = -con * (
+            (z2 * g2p_2 - z1 * g2p_1 + g2_2 - g2_1) * cs
+            + (z2 * g2_2 + z1 * g2_1) * ss * k
+        )
+        erho_const = con * (g3_2 - g3_1)
+
+        # f.3223-3227: the constant-current term. INTX integrates e^{-jkR}/R
+        # along the segment at the ORDERED radius RH, and the extended kernel
+        # scales that integral by (1 - (kB/2)²) while adding back a (kB/2)²
+        # weighted reduced-kernel end difference — the O(a²) piece of Eq 98
+        # that the ρ-expansion of the axial term leaves behind. Unlike the
+        # per-end substitutions this factor is NOT gated: it applies whenever
+        # EK is on, even when both ends fell back to GX.
+        u2 = (H - z_eval) / rh
+        u1 = (-H - z_eval) / rh
+        int_inv_r0 = np.arcsinh(u2) - np.arcsinh(u1)
+        gx, gw = self._leggauss_cached(self.n_qp_const)
+        z_qp = H[..., None] * gx
+        dz_qp = z_eval[..., None] - z_qp
+        r0_qp = np.sqrt(rh[..., None] ** 2 + dz_qp**2)
+        G0_qp = np.exp(-1j * k * r0_qp) / r0_qp
+        reg_qp = G0_qp - 1.0 / r0_qp
+        int_G0 = int_inv_r0 + np.einsum("...q,q->...", reg_qp, gw) * H
+        bk = k * b
+        bk2 = 0.25 * bk * bk
+        ez_const = -con * (
+            g1p_2 - g1p_1 + k * k * (1.0 - bk2) * int_G0 - bk2 * (gzz_2 - gzz_1)
+        )
+        return {
+            "Erho_const": erho_const,
+            "Ez_const": ez_const,
+            "Erho_sin": erho_sin,
+            "Ez_sin": ez_sin,
+            "Erho_cos": erho_cos,
+            "Ez_cos": ez_cos,
+        }
 
     def _field_components(
         self,
@@ -1285,6 +1601,22 @@ class SinusoidalSolver(_Cancelable):
         src_c = src_centers if src_centers is not None else geom["seg_centers"]
         src_t = src_tangents if src_tangents is not None else geom["seg_tangents"]
 
+        # Extended thin-wire kernel (#233): the SOURCE segment's radius and
+        # the per-end gating codes, both indexed by source segment. Image
+        # builds mirror the source geometry without reordering it, so the same
+        # (N,) tables apply there — which is also what NEC does, EFLD passing
+        # one IND1/IND2 pair through both passes of its KSYMP image loop
+        # (nec2-1.2.1.2.f:2914-2971). (N,) broadcasts against (M, N).
+        ek = None
+        if self.extended_kernel:
+            ind1, ind2 = self._ek_gating(geom)
+            src_a = (
+                self._uniform_radius
+                if self._uniform_radius is not None
+                else self._seg_radius(geom)
+            )
+            ek = (src_a, ind1, ind2)
+
         # Every-observer × every-source: insert the singleton axes that make
         # the shared core broadcast to the (M, N) outer product.
         return self._field_components_bcast(
@@ -1295,10 +1627,11 @@ class SinusoidalSolver(_Cancelable):
             src_c=src_c[None, :, :],  # (1, N, 3)
             src_t=src_t[None, :, :],  # (1, N, 3)
             src_hh=h_n[None, :],  # (1, N)
+            ek=ek,
         )
 
     def _field_components_bcast(
-        self, k, obs_c, obs_t, a, src_c, src_t, src_hh, cos_shape="cos"
+        self, k, obs_c, obs_t, a, src_c, src_t, src_hh, cos_shape="cos", ek=None
     ):
         """Shape-agnostic core of `_field_components` (Eqs 76-79).
 
@@ -1358,6 +1691,25 @@ class SinusoidalSolver(_Cancelable):
         # count: N segment centres (collocation) or N·n_qp Gauss points
         # (Galerkin test integration).
         H = np.broadcast_to(src_hh, z_eval.shape)
+
+        # Extended thin-wire kernel (#233). The geometry above is shared —
+        # rho_eval, td and rho_proj_factor are EFLD's, computed before it
+        # chooses between EKSC and EKSCX (nec2-1.2.1.2.f:2919-2962), and the
+        # ρ̂ projection uses the UNSWAPPED radial distance either way. From
+        # here down the two kernels part company, so the extended branch is a
+        # clean early return: with `ek=None` (the default, and everything
+        # `extended_kernel=False` can reach) not one floating-point operation
+        # below changes, which is what makes the option a true no-op when off.
+        if ek is not None:
+            src_a, ind1, ind2 = ek
+            tables = self._extended_kernel_fields(
+                k, H, z_eval, rho_eval, src_a, ind1, ind2
+            )
+            tables["td"] = td
+            tables["rho_proj_factor"] = rho_proj_factor
+            tables["rho_vec"] = rho_vec
+            tables["rho_eval"] = rho_eval
+            return tables
 
         # z values at source ends: z' = +H (z2) and z' = -H (z1).
         # Δz = z_eval - z' at the two endpoints.
@@ -1748,7 +2100,9 @@ class SinusoidalSolver(_Cancelable):
         # alongside k before assembling).
         eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
 
-        if _HAVE_FIELD_TENSOR_REFL:
+        # As in `_field_tensor`: the fused C++ kernel is reduced-kernel-only,
+        # so EK-on falls to the numpy reference (momwire#233).
+        if _HAVE_FIELD_TENSOR_REFL and not self.extended_kernel:
             # Fused C++ path: Eqs 76-79 field components + the Fresnel
             # dyad projection in one pass, with rho_v/rho_h computed
             # in-kernel per pair from eps_t and cos_th (same principal-
