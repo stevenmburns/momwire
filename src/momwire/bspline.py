@@ -2848,12 +2848,17 @@ class BSplineSolver(_Cancelable):
         )
         return tensor_bytes <= (self.swept_mem_mb << 20)
 
-    def compute_impedance(self, same_edge_prep=None):
-        geom = self._build_geometry()
-        supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
-            self._build_basis_polynomials(geom)
-        )
-        n_basis_total = supp_seg.shape[0]
+    def _compute_Z_operator(self, geom, supp_seg, polys, same_edge_prep=None):
+        """Loaded (free-space or grounded) dense Z for one k — the operator
+        construction shared by `compute_impedance` and `compute_y_matrix`.
+
+        Dispatches to the chunked fill+assemble (issue #136) whenever the
+        (d+1, d+1, N, N) moment tensor would blow the `swept_mem_mb`
+        budget. `compute_y_matrix` used to bypass that dispatch and
+        materialise the full tensor unconditionally — a flat ~12x n²·16 B
+        peak on exactly the entry point the SimNEC portal and the array
+        benchmarks drive (issue #235).
+        """
         dense_tensor_fits = self._dense_tensor_fits_budget(geom["n_segs_total"])
 
         self._checkpoint()  # after geometry/basis, before the J-block fill
@@ -2930,7 +2935,17 @@ class BSplineSolver(_Cancelable):
 
         # Distributed series wire loading (independent of ground: it's a
         # wire property, added once to the final Z).
-        Z = self._apply_loading(Z)
+        return self._apply_loading(Z)
+
+    def compute_impedance(self, same_edge_prep=None):
+        geom = self._build_geometry()
+        supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
+            self._build_basis_polynomials(geom)
+        )
+        n_basis_total = supp_seg.shape[0]
+        Z = self._compute_Z_operator(
+            geom, supp_seg, polys, same_edge_prep=same_edge_prep
+        )
 
         # Per-feed unit Galerkin source vectors. For multi-feed, the
         # combined RHS is Σ_i V_i · v_i, and each per-feed driving-point
@@ -3076,16 +3091,7 @@ class BSplineSolver(_Cancelable):
         )
         n_basis_total = supp_seg.shape[0]
 
-        J = self._build_J_blocks(geom, self.k)
-        Z = self._assemble_Z(J, supp_seg, polys, geom)
-        if self.ground_z is not None:
-            J_img = self._build_J_image_blocks(geom, self.k)
-            if self.ground_eps is not None:
-                Z = Z - self._ground_finite_Z(J_img, supp_seg, polys, geom)
-            else:
-                td_img = self._image_tangent_dot(geom["tangents"])
-                Z = Z - self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
-        Z = self._apply_loading(Z)
+        Z = self._compute_Z_operator(geom, supp_seg, polys)
 
         # One source vector per feed, columns of B.
         n_feeds = len(self.feeds)
