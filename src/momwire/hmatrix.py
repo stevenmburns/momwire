@@ -90,6 +90,23 @@ class _SparseAugPrecond:
         return self.lu.solve(R)
 
 
+def _same_constraints(a, b):
+    """True when two constraint-row matrices define the same augmented system.
+
+    A cached `_AugmentedFactoredSolve` is only reusable for constraint rows it
+    was built on. `junction_ports` (#234) moves rows out of the constraint set
+    without touching the operator, so an operator-cache hit can hand back a
+    factorisation of a *different* saddle system; row count alone does not
+    separate the cases (two solvers can port different junctions)."""
+    if a is b:
+        return True
+    a_empty = a is None or a.shape[0] == 0
+    b_empty = b is None or b.shape[0] == 0
+    if a_empty or b_empty:
+        return a_empty and b_empty
+    return a.shape == b.shape and np.array_equal(a, b)
+
+
 class _AugmentedFactoredSolve:
     """A factored augmented near-field preconditioner plus the preconditioned
     block GMRES on the operator `H`.
@@ -1327,9 +1344,14 @@ class HMatrixSolver(BSplineSolver):
         excitation — caching it on `H` lets a *reused* operator (e.g. an
         animation phase sweep, where geometry and Z are fixed and only the RHS
         changes) skip the factorisation entirely. A freshly-built `H` (the
-        generic H-matrix path) just factors once per solve as before."""
+        generic H-matrix path) just factors once per solve as before.
+
+        The cached factorisation is keyed on the constraint rows themselves:
+        `ArrayBlockSolver`'s operator cache is junction-port-blind (ports do
+        not change the basis set or Z), so the same operator can be handed
+        different constraint sets across solvers."""
         fac = getattr(H, "_factored", None)
-        if fac is None:
+        if fac is None or not _same_constraints(fac.kcl_A, kcl_A):
             fac = _AugmentedFactoredSolve(H, kcl_A, self._make_preconditioner(H, kcl_A))
             H._factored = fac
         return fac
@@ -1374,8 +1396,7 @@ class HMatrixSolver(BSplineSolver):
         geom = ctx["geom"]
         n = ctx["n_basis"]
         H = self._build_operator()
-        n_ports = len(self.feeds)
-        B = np.zeros((n, n_ports), dtype=np.complex128)
+        B = np.zeros((n, len(self.feeds)), dtype=np.complex128)
         for j, (w_i, arc_i, _v) in enumerate(self.feeds):
             arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
             s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
@@ -1387,7 +1408,13 @@ class HMatrixSolver(BSplineSolver):
                 wi=w_i,
                 s_f=s_f_j,
             )
-        X = self._solve_hmatrix(H, ctx["kcl_A"], B)
+        # Junction-port columns (#172 dense contract, lifted onto the
+        # iterative paths by #234): the ported junction's KCL row leaves the
+        # constraint set and becomes a port column, drive vector == readout
+        # vector as for a gap feed, so the mixed Y stays symmetric.
+        kcl_con, port_A, _port_V = self._split_kcl_ports(ctx["kcl_A"])
+        B = np.hstack([B, port_A.T.astype(np.complex128)])
+        X = self._solve_hmatrix(H, kcl_con, B)
         self._hmatrix = H
         return B.T @ X
 
@@ -1418,12 +1445,24 @@ class HMatrixSolver(BSplineSolver):
         for V_i, v_i in zip(voltages, v_per_feed):
             v += V_i * v_i
 
-        coeffs = self._solve_hmatrix(H, ctx["kcl_A"], v[:, None])[:, 0]
+        # Junction ports (#234). A driven port row differs from a zero
+        # constraint row only in where it lands: the constraint set keeps the
+        # rows whose outflow is forced to zero, while a port row multiplies
+        # its voltage into the RHS (its Lagrange multiplier is *given*, not
+        # solved for) and reads its current back off the same row. The
+        # augmented GMRES therefore needs no port concept — it is handed the
+        # shrunken constraint matrix and an already-driven RHS.
+        kcl_con, port_A, port_V = self._split_kcl_ports(ctx["kcl_A"])
+        v += port_V @ port_A
+        port_vectors = v_per_feed + list(port_A)
+        all_voltages = np.concatenate([voltages, port_V])
+
+        coeffs = self._solve_hmatrix(H, kcl_con, v[:, None])[:, 0]
         self._hmatrix = H
 
-        currents = np.array([v_i @ coeffs for v_i in v_per_feed], dtype=np.complex128)
-        z_per = voltages / currents
-        z = z_per[0] if len(self.feeds) == 1 else z_per
+        currents = np.array([u @ coeffs for u in port_vectors], dtype=np.complex128)
+        z_per = all_voltages / currents
+        z = z_per[0] if z_per.shape[0] == 1 else z_per
         return z, coeffs
 
     def compute_impedance_swept(self, k_array):
@@ -1437,11 +1476,11 @@ class HMatrixSolver(BSplineSolver):
         if self._hmatrix_unsupported():
             return super().compute_impedance_swept(k_array)
         k_array = np.asarray(k_array, dtype=float)
-        n_feeds = len(self.feeds)
-        if n_feeds == 1:
+        n_ports = len(self.feeds) + len(self.junction_ports)
+        if n_ports == 1:
             z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
         else:
-            z_out = np.zeros((k_array.shape[0], n_feeds), dtype=np.complex128)
+            z_out = np.zeros((k_array.shape[0], n_ports), dtype=np.complex128)
         k_save, wl_save, omega_save = self.k, self.wavelength, self.omega
         try:
             for i, kk in enumerate(k_array):
@@ -1468,20 +1507,6 @@ class HMatrixSolver(BSplineSolver):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        if self.junction_ports and not self._hmatrix_unsupported():
-            # The iterative paths thread kcl_A into the augmented sparse
-            # system / GMRES constraints directly and know nothing of the
-            # constraint/port split (issue #172). Dense BSplineSolver
-            # supports junction ports; extend here when a use case needs
-            # array-scale end attachments. When `_hmatrix_unsupported()`
-            # (singular enrichment) every solve entry falls back to that
-            # dense path anyway, so the combination is legal (issue #176).
-            raise NotImplementedError(
-                "junction_ports are not supported on the iterative "
-                "HMatrix/ArrayBlock solvers yet (momwire#172); use "
-                "BSplineSolver (or use_singular_enrichment=True, whose "
-                "solves take the dense path)"
-            )
         self.aca_eta = float(aca_eta)
         self.aca_leaf_size = int(aca_leaf_size)
         self.aca_tol = float(aca_tol)

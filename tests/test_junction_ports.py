@@ -279,12 +279,13 @@ def test_validation_and_unsupported_solvers():
             feeds=[(0, 1.0, 1.0 + 0j)], junctions=junctions,
             junction_ports=[0, 0], wavelength=WAVELENGTH,
         )  # fmt: skip
-    with pytest.raises(NotImplementedError):
-        HMatrixSolver(
-            wires=wires, n_per_edge_per_wire=npe,
-            feeds=[(0, 1.0, 1.0 + 0j)], junctions=junctions,
-            junction_ports=[0], wavelength=WAVELENGTH,
-        )  # fmt: skip
+    # The iterative solvers took junction ports in #234; the refusal that
+    # used to live here is gone (tests/test_junction_ports_iterative.py).
+    HMatrixSolver(
+        wires=wires, n_per_edge_per_wire=npe,
+        feeds=[(0, 1.0, 1.0 + 0j)], junctions=junctions,
+        junction_ports=[0], wavelength=WAVELENGTH,
+    )  # fmt: skip
     with pytest.raises(NotImplementedError, match="outside its span.*bridge"):
         SinusoidalSolver(
             wires=wires, n_per_edge_per_wire=npe,
@@ -317,9 +318,6 @@ def test_enrichment_dense_fallback_allows_junction_ports():
         np.testing.assert_allclose(s.compute_y_matrix(), y_ref, rtol=1e-12)
         z, _ = solver(**kw).compute_impedance()
         np.testing.assert_allclose(z, z_ref, rtol=1e-12)
-    # Without enrichment the iterative path is real and still guards.
-    with pytest.raises(NotImplementedError):
-        HMatrixSolver(**{**kw, "use_singular_enrichment": False})
 
 
 # ===========================================================================
