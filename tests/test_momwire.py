@@ -2484,6 +2484,132 @@ def test_bspline_dense_dispatch_respects_memory_budget(monkeypatch):
     chunked.compute_impedance()
 
 
+def test_bspline_chunked_dense_y_matrix_matches_tensor_path():
+    """compute_y_matrix through a forced chunked fill vs the tensor path
+    (flag flipped off), on a genuinely 2x2 Y (a mutual term plus two self
+    terms). Until issue #235 the Y entry point bypassed the issue-#136
+    dispatch entirely and materialised the full moment tensor
+    unconditionally — this pins the routed path to the legacy algebra."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    wires = [
+        np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]]),
+        np.array([[3.0, -L / 2, 0.0], [3.0, L / 2, 0.0]]),
+    ]
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=[[21], [17]],
+        nsegs=21,
+        degree=2,
+        wavelength=22.0,
+        feeds=[(0, L / 2, 1.0), (1, L / 2, 0.0)],
+    )
+    chunked = BSplineSolver(**kw)
+    chunked.swept_mem_mb = 0  # chunk = max(1, 0) -> single-row windows
+    Y_chunked = chunked.compute_y_matrix()
+
+    saved = bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
+    try:
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = False
+        Y_tensor = BSplineSolver(**kw).compute_y_matrix()
+    finally:
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = saved
+
+    rel = np.abs(Y_chunked - Y_tensor).max() / np.abs(Y_tensor).max()
+    # 1e-10 margin, same cross-compiler policy as the impedance twin above.
+    assert rel < 1e-10, f"chunked vs tensor Y disagreement: rel {rel:.2e}"
+
+
+def test_bspline_y_matrix_dispatch_respects_memory_budget(monkeypatch):
+    """compute_y_matrix takes the tensor path when the moment tensor fits
+    the budget and the chunked path when it doesn't. The second half is
+    the disabled-path probe for the issue-#235 routing: before it,
+    compute_y_matrix never called the chunked build at any budget."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    wires = [np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])]
+    kw = {"wires": wires, "n_per_edge_per_wire": [[21]], "nsegs": 21, "degree": 2}
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("unexpected dense assembly path")
+
+    tensor = BSplineSolver(**kw)
+    monkeypatch.setattr(tensor, "_compute_Z_dense_chunked", unexpected)
+    tensor.compute_y_matrix()
+
+    chunked = BSplineSolver(**kw)
+    chunked.swept_mem_mb = 0
+    monkeypatch.setattr(chunked, "_build_J_blocks", unexpected)
+    chunked.compute_y_matrix()
+
+
+@pytest.mark.parametrize(
+    "ground_kw",
+    [
+        {},
+        {"ground_eps": (10.0, 0.002)},
+        {"ground_eps": (10.0, 0.002), "ground_model": "sommerfeld"},
+    ],
+    ids=["pec", "refl-coef", "sommerfeld"],
+)
+def test_bspline_chunked_ground_y_matrix_matches_tensor_path(ground_kw):
+    """Grounded compute_y_matrix, forced chunked vs windowed-flags-off —
+    the Y twin of the grounded impedance test below, pinning that the
+    issue-#235 shared-operator routing preserves every ground branch
+    (the flags-off side reproduces the pre-#235 Y code path exactly:
+    image tensor + `_ground_finite_Z`)."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("weighted windowed Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    h = 2.2  # strictly above ground, sommerfeld-legal
+    wires = [np.array([[0.0, -L / 2, h], [0.0, L / 2, h]])]
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=[[17]],
+        nsegs=17,
+        degree=2,
+        wavelength=22.0,
+        ground_z=0.0,
+        **ground_kw,
+    )
+    chunked = BSplineSolver(**kw)
+    chunked.swept_mem_mb = 0
+    Y_chunked = chunked.compute_y_matrix()
+
+    saved = (
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL,
+        bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL,
+    )
+    try:
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = False
+        bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL = False
+        Y_tensor = BSplineSolver(**kw).compute_y_matrix()
+    finally:
+        (
+            bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL,
+            bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL,
+        ) = saved
+
+    rel = np.abs(Y_chunked - Y_tensor).max() / np.abs(Y_tensor).max()
+    # 1e-10 — same cross-compiler reduction-order policy as the grounded
+    # impedance twin.
+    assert rel < 1e-10, f"chunked vs tensor grounded Y disagreement: rel {rel}"
+
+
 @pytest.mark.parametrize(
     "ground_kw",
     [
