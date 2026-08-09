@@ -2601,3 +2601,341 @@ PRE_205_AGREEMENT = 1e-10
 # the literal difference's own error at that sample, since the folded field is
 # four orders closer to exact than the thing it is being compared with.
 PRE_205_FIELD_AGREEMENT = 1e-9
+
+
+def _decimal_cos_minus_one_fields(k, rho, z, H, gx, gw, eta, prec=60):
+    """(E_z, E_ρ) of the cos kξ − 1 source shape at `prec` digits, as the
+    LITERAL difference of the two Eqs 76-79 closed forms over the same source
+    quadrature.
+
+    The reference has no spelling to defend: at 60 digits the cancellation it
+    walks into costs ~15 digits and leaves 45, so what it measures is the
+    float64 spelling and nothing else. (An 80-bit reference cannot serve here
+    — the same cancellation eats most of ITS margin too, which is exactly the
+    #203 finding.)
+    """
+    from decimal import Decimal as D
+    from decimal import localcontext
+
+    with localcontext() as ctx:
+        ctx.prec = prec
+        pi = D("3.14159265358979323846264338327950288419716939937510582097494459231")
+
+        def dsin(x):
+            term = total = x
+            for n in range(1, 80):
+                term = -term * x * x / D((2 * n) * (2 * n + 1))
+                total += term
+                if abs(term) < abs(total) * D(10) ** -prec:
+                    break
+            return total
+
+        def dcos(x):
+            term, total = D(1), D(1)
+            for n in range(1, 80):
+                term = -term * x * x / D((2 * n - 1) * (2 * n))
+                total += term
+                if abs(term) < D(10) ** -prec:
+                    break
+            return total
+
+        def emjkr(r):  # e^{−jkr}, as a Python complex of Decimals
+            return (dcos(k * r), -dsin(k * r))
+
+        def cmul(a, b):
+            return (a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0])
+
+        def cdiv(a, s):
+            return (a[0] / s, a[1] / s)
+
+        def cadd(a, b):
+            return (a[0] + b[0], a[1] + b[1])
+
+        def csub(a, b):
+            return (a[0] - b[0], a[1] - b[1])
+
+        def cscale(a, s):
+            return (a[0] * s, a[1] * s)
+
+        def jmul(a):  # multiply by j
+            return (-a[1], a[0])
+
+        k, rho, z, H = (D(repr(float(v))) for v in (k, rho, z, H))
+        d2, d1 = z - H, z + H
+        r2 = (rho * rho + d2 * d2).sqrt()
+        r1 = (rho * rho + d1 * d1).sqrt()
+        G2, G1 = cdiv(emjkr(r2), r2), cdiv(emjkr(r1), r1)
+        # T_e = (1 + jkr_e)·G_e/r_e²
+        T2 = cdiv(cmul((D(1), k * r2), G2), r2 * r2)
+        T1 = cdiv(cmul((D(1), k * r1), G1), r1 * r1)
+
+        def asinh(x):
+            return ((x * x + 1).sqrt() + x).ln()
+
+        int_G0 = (asinh((H - z) / rho) - asinh((-H - z) / rho), D(0))
+        for t, w in zip(gx, gw):
+            rq = (rho * rho + (z - H * D(repr(float(t)))) ** 2).sqrt()
+            int_G0 = cadd(
+                int_G0,
+                cscale(
+                    csub(cdiv(emjkr(rq), rq), (D(1) / rq, D(0))), D(repr(float(w))) * H
+                ),
+            )
+        sH, cH = dsin(k * H), dcos(k * H)
+        # E_z = pref_z·[…]; E_ρ = pref_ρ·[…], with pref_z = jη/(4πk) and
+        # pref_ρ = −jη/(4πkρ). η is the SOLVER's, to the bit: its own value
+        # differs from √(μ₀/ε₀) in the 10th digit, which at these field ratios
+        # is 1.7e-12 of the const-shape scale — thirty times the error under
+        # test.
+        eta = D(repr(float(eta)))
+        pz = eta / (D(4) * pi * k)  # ×j
+        pr = -eta / (D(4) * pi * k * rho)  # ×j
+
+        ez_const = cscale(
+            cadd(csub(cscale(T2, d2), cscale(T1, d1)), cscale(int_G0, k * k)), -pz
+        )
+        # bracket_e = −k·sin(kz'_e)·G_e − cos(kz'_e)·Δz_e·T_e, at z'_2 = +H
+        # and z'_1 = −H.
+        ez_cos = cscale(
+            csub(
+                csub(cscale(G2, -k * sH), cscale(T2, d2 * cH)),
+                csub(cscale(G1, k * sH), cscale(T1, d1 * cH)),
+            ),
+            pz,
+        )
+        erho_const = cscale(csub(T2, T1), pr * rho * rho)
+        b2 = csub(cscale(csub(G2, cscale(T2, d2 * d2)), cH), cscale(G2, k * d2 * sH))
+        b1 = cadd(cscale(csub(G1, cscale(T1, d1 * d1)), cH), cscale(G1, k * d1 * sH))
+        erho_cos = cscale(csub(b2, b1), pr)
+
+        def out(a):
+            return complex(float(a[0]), float(a[1]))
+
+        return (
+            out(jmul(csub(ez_cos, ez_const))),
+            out(jmul(csub(erho_cos, erho_const))),
+            out(jmul(ez_const)),
+            out(jmul(erho_const)),
+        )
+
+
+def _205_sample(n_seg):
+    """(ρ, z) pairs spanning the bands the fill actually visits at mesh
+    `n_seg` on the M3 dipole: the self pair, the touching neighbours, the
+    mid-range where kr ~ 1 and the far end of the wire."""
+    sim = SinusoidalGalerkinSolver(**_m3_dipole(n_seg))
+    geom = sim._build_geometry()
+    H = 0.5 * float(geom["seg_h"][0])
+    a = float(sim._uniform_radius)
+    rho0 = np.sqrt(a * a)
+    zs = np.concatenate(
+        [np.arange(0, 4) * 2.0 * H, np.geomspace(4.0 * H, 0.45 * WL, 12)]
+    )
+    rhos = np.array([rho0, 10 * rho0, 0.3, 2.0])
+    Z, R = (v.ravel() for v in np.meshgrid(zs, rhos))
+    return sim, H, np.sqrt(R * R + a * a), Z
+
+
+def _folded_field_errors(n_seg):
+    """(literal, folded) worst error of the (cos kξ − 1) field over the
+    sample, each divided by the CONST-shape field at the same pair — the
+    scale an ε·‖T_const‖ rounding sits at, and therefore the scale at which
+    the error reaches G."""
+    sim, H, rho, z = _205_sample(n_seg)
+    k = sim.k
+    gx, gw = sim._leggauss_cached(sim.n_qp_const)
+    Hs = np.full_like(z, H)
+    args = dict(
+        k=k,
+        H=Hs,
+        z=z,
+        rho=rho,
+        dz1=z + Hs,
+        dz2=z - Hs,
+        r1=np.sqrt(rho**2 + (z + Hs) ** 2),
+        r2=np.sqrt(rho**2 + (z - Hs) ** 2),
+        gx=gx,
+        gw=gw,
+        pref_z=1j * sim.eta / (4.0 * np.pi * k),
+        pref_rho=-1j * sim.eta / (4.0 * np.pi * k * rho),
+    )
+    args["G1"] = np.exp(-1j * k * args["r1"]) / args["r1"]
+    args["G2"] = np.exp(-1j * k * args["r2"]) / args["r2"]
+    args["sH"] = np.sin(k * Hs)
+    z_qp = Hs[:, None] * gx
+    args["dz_qp"] = z[:, None] - z_qp
+    args["r_qp"] = np.sqrt(rho[:, None] ** 2 + args["dz_qp"] ** 2)
+    erho_f, ez_f = SinusoidalSolver._folded_cos_fields(**args)
+
+    lit = np.empty((len(z), 2), dtype=complex)
+    fold = np.empty_like(lit)
+    scale = np.empty(len(z))
+    for i in range(len(z)):
+        ez_d, erho_d, ez_c, erho_c = _decimal_cos_minus_one_fields(
+            k, rho[i], z[i], H, gx, gw, sim.eta
+        )
+        cm = SinusoidalGalerkinSolver(**_m3_dipole(n_seg))._field_components_bcast(
+            k,
+            obs_c=np.array([[0.0, rho[i], z[i]]]),
+            obs_t=np.array([[0.0, 0.0, 1.0]]),
+            a=0.0,
+            src_c=np.array([[0.0, 0.0, 0.0]]),
+            src_t=np.array([[0.0, 0.0, 1.0]]),
+            src_hh=np.array([H]),
+        )
+        lit[i] = (
+            cm["Ez_cos"][0] - cm["Ez_const"][0],
+            cm["Erho_cos"][0] - cm["Erho_const"][0],
+        )
+        fold[i] = (ez_f[i], erho_f[i])
+        exact = np.array([ez_d, erho_d])
+        scale[i] = max(abs(ez_c), abs(erho_c))
+        lit[i] -= exact
+        fold[i] -= exact
+    return (
+        float((np.abs(lit).max(axis=1) / scale).max()),
+        float((np.abs(fold).max(axis=1) / scale).max()),
+    )
+
+
+@pytest.mark.parametrize("n_seg", [41, _203_N])
+def test_folded_cos_shape_is_orders_more_accurate_than_the_difference(n_seg):
+    """The spelling, against a 60-digit evaluation of the same scheme.
+
+    Both numbers are errors in the SAME quantity computed from the SAME
+    inputs on the SAME source quadrature, so what separates them is the
+    arithmetic and nothing else — and the gap widens with mesh, because the
+    literal difference's error is ε·|const| while the folded one's is at the
+    answer's own size.
+    """
+    literal, folded = _folded_field_errors(n_seg)
+    assert folded < 5e-14, folded  # measured 3.1e-15 at N=41, 1.4e-16 at N=401
+    assert literal > 100 * folded, (literal, folded)
+
+
+def test_folded_cos_shape_reproduces_the_literal_difference():
+    """…and it is the same quantity: the folded field agrees with the literal
+    difference to the literal difference's own accuracy, which is the only
+    agreement available (the two disagree BY the error being removed)."""
+    sim, H, rho, z = _205_sample(41)
+    k = sim.k
+    obs = np.stack([np.zeros_like(z), rho, z], axis=1)
+    t = np.tile(np.array([0.0, 0.0, 1.0]), (len(z), 1))
+    src_c = np.zeros((1, 3))
+    src_t = np.array([[0.0, 0.0, 1.0]])
+    hh = np.array([H])
+    kw = dict(obs_c=obs[:, None, :], obs_t=t[:, None, :], a=0.0)
+    lit = sim._field_components_bcast(
+        k, src_c=src_c[None], src_t=src_t[None], src_hh=hh[None], **kw
+    )
+    fold = sim._field_components_bcast(
+        k,
+        src_c=src_c[None],
+        src_t=src_t[None],
+        src_hh=hh[None],
+        cos_shape="cos-1",
+        **kw,
+    )
+    # Scaled by the pair's const-shape field — where an ε·‖T_const‖ rounding
+    # sits — and by the LARGER of the two components, since E_ρ vanishes
+    # identically on the broadside pairs of this sample and a per-component
+    # scale would divide by zero there.
+    scale = np.abs(lit["Ez_const"]) + np.abs(lit["Erho_const"])
+    for comp in ("Ez", "Erho"):
+        d = lit[f"{comp}_cos"] - lit[f"{comp}_const"]
+        rel = np.abs(fold[f"{comp}_cos"] - d) / scale
+        assert rel.max() < PRE_205_FIELD_AGREEMENT, (comp, rel.max())
+
+
+def _G_pre_205(monkeypatch, dtype=np.complex128, ld_kernel=False, **kw):
+    """G as the pre-#205 fill built it: the LITERAL cos shape out of the field
+    kernel, folded by subtracting the const contributions after the test
+    reduction (#203's `_assemble_Z` tail).
+
+    With `ld_kernel` the kernel runs at 80 bits and the fold happens there,
+    which is the exact-arithmetic fill both float64 spellings are measured
+    against — the fold has to be inside the kernel or the reference inherits
+    the very cancellation it exists to arbitrate.
+    """
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
+    sim = SinusoidalGalerkinSolver(**kw)
+    inner = sim._field_components_bcast
+
+    def literal(k, **kwargs):
+        kwargs["cos_shape"] = "cos"
+        if not ld_kernel:
+            return inner(k, **kwargs)
+        cast = {
+            key: (
+                np.asarray(v, dtype=np.longdouble) if isinstance(v, np.ndarray) else v
+            )
+            for key, v in kwargs.items()
+        }
+        cm = inner(np.longdouble(k), **cast)
+        out = {}
+        for key, v in cm.items():
+            if key in ("Ez_cos", "Erho_cos"):
+                v = v - cm[key.replace("cos", "const")]
+            out[key] = np.asarray(
+                v, dtype=np.complex128 if v.dtype.kind == "c" else float
+            )
+        return out
+
+    monkeypatch.setattr(sim, "_field_components_bcast", literal)
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    contribs = sim._tested_contribs(geom, sim.k, ctx, _plain_projection)
+    if not ld_kernel:  # #203's assembly-level fold, on the literal shapes
+        c_const, c_sin, c_cos = contribs
+        contribs = (c_const, c_sin, c_cos - c_const)
+    return _coefficient_product(
+        ctx, contribs, len(sim.junction_ports), dtype, folded=True
+    )
+
+
+@pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
+def test_folded_fill_agrees_with_the_pre_205_fill_and_is_closer_to_exact(
+    monkeypatch, geom_name
+):
+    """The matrix gate. Same fill, same quadrature, same product — so the two
+    spellings must agree, and they do, to the size of the error #205 removes.
+    Which of them is the accurate one is then settled against a fill whose
+    kernel ran at 80 bits: the folded one is orders closer, and the residue
+    is not a difference of scheme.
+    """
+    kw = GEOMETRIES[geom_name]()
+    G_new = _matrix(SinusoidalGalerkinSolver(**kw))
+    G_old = _G_pre_205(monkeypatch, **kw)
+    G_ref = _G_pre_205(monkeypatch, ld_kernel=True, **kw)
+    assert _rel_matrix_delta(G_new, G_old) < PRE_205_AGREEMENT
+    err_new = _rel_matrix_delta(G_new, G_ref)
+    err_old = _rel_matrix_delta(G_old, G_ref)
+    # 47× (k3_star, 12 segments per arm) to 1100× (the 41-segment dipole):
+    # the gain is the amplification removed, which is ~(kΔ)⁻², so the coarser
+    # the validation geometry the less there was to win.
+    assert err_new < err_old / 20, (err_new, err_old)
+
+
+@pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
+def test_folded_fill_asymmetry_is_now_structural_not_rounding(monkeypatch, geom_name):
+    """What is left of G−Gᵀ after the fold: nothing that arithmetic can fix.
+
+    The same fill with its kernel run at 80 bits — 2000× the precision — has
+    the SAME G1 to three digits on every validation geometry (2.15e-13 dipole,
+    8.35e-12 vee, 2.94e-12 k2_junction, 2.21e-11 k3_star). So the residual is
+    the fill's structural asymmetry between an integrated test side and an
+    analytic source side, not its rounding — which is the statement #203 could
+    not make, since there G1 fell by 50× when the kernel precision went up.
+
+    The dipole, where the rounding used to dominate, additionally has to reach
+    `FOLDED_FILL_G1`; the bent geometries carry a larger structural residual
+    at their much coarser gate meshes and are not held to it.
+    """
+    kw = GEOMETRIES[geom_name]()
+    r_new = _sym_ratio(_matrix(SinusoidalGalerkinSolver(**kw)))
+    r_ref = _sym_ratio(_G_pre_205(monkeypatch, ld_kernel=True, **kw))
+    assert abs(r_new - r_ref) < 0.05 * r_ref, (r_new, r_ref)
+    if geom_name == "dipole":
+        assert r_new < FOLDED_FILL_G1, r_new
