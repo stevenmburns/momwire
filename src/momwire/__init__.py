@@ -1,5 +1,10 @@
 from ._accel import LOADED as accelerated
 from ._cancel import CancelToken, SolveAborted
+
+# The multi-port solve result (#232): every solver family's
+# `compute_port_solution()` returns one of these — Y plus the per-port
+# solution columns that one fill + one factorisation already produced.
+from ._port_solution import PortSolution
 from .bspline import BSplineSolver
 from .hmatrix import HMatrixSolver
 from .array_block import ArrayBlockSolver, LatticeFFTUnavailable
@@ -20,6 +25,7 @@ __all__ = [
     "HMatrixSolver",
     "ArrayBlockSolver",
     "LatticeFFTUnavailable",
+    "PortSolution",
     "CancelToken",
     "SolveAborted",
     "accelerated",
