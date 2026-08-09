@@ -553,6 +553,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        if self.extended_kernel:
+            # momwire#233 ships the extended thin-wire kernel on the
+            # point-matched solver only. The Galerkin fill's third source
+            # shape is the FOLDED cos kξ − 1 (#205), whose cancellation-free
+            # spelling is built out of the reduced kernel's half-angle phase
+            # identities; NEC's EKSCX has no folded counterpart, so wiring EK
+            # through it means re-deriving that fold against Eqs 89-96 rather
+            # than substituting per-end quantities as the collocation path
+            # does. Refuse loudly rather than serve a silently reduced-kernel
+            # (or silently wrong) answer.
+            raise NotImplementedError(
+                "extended_kernel=True is not supported on "
+                "SinusoidalGalerkinSolver: NEC's extended thin-wire kernel is "
+                "implemented on the point-matched SinusoidalSolver only "
+                "(momwire#233). Use SinusoidalSolver(extended_kernel=True), "
+                "or drop extended_kernel for the reduced-kernel Galerkin fill."
+            )
         self.n_qp_test = int(n_qp_test)
         self.n_qp_near = int(n_qp_near)
         self.n_qp_node = int(n_qp_node)
