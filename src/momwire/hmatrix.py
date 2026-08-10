@@ -79,6 +79,15 @@ _HAVE_OFFEDGE_BLOCK_REFL_ACCEL = _acc is not None and hasattr(
 _HAVE_OFFEDGE_BLOCK_EK_ACCEL = _acc is not None and hasattr(
     _acc, "bspline_assemble_offedge_block_ek"
 )
+# The refl-coef image's own EK twin (momwire#269). A build without it takes
+# the numpy `_zblock_image_refl` closures for the far-block image under
+# `extended_kernel` + `ground_eps` — correct (that path routes through the
+# EK-aware `_seg_seg_full_moments_offedge`), just unfused. Falling back to
+# `bspline_assemble_offedge_block_refl` would be silently REDUCED, the same
+# trap `_HAVE_OFFEDGE_BLOCK_EK_ACCEL` guards on the free-space side.
+_HAVE_OFFEDGE_BLOCK_REFL_EK_ACCEL = _acc is not None and hasattr(
+    _acc, "bspline_assemble_offedge_block_refl_ek"
+)
 
 _OFFEDGE_BLOCK_ACCEL_MAX_D = 2
 
@@ -897,10 +906,12 @@ class HMatrixSolver(BSplineSolver):
         loc_of_I = {int(s): i for i, s in enumerate(seg_I)}
         loc_of_J = {int(s): i for i, s in enumerate(seg_J)}
 
-        # Threaded for symmetry with `_zblock_image`, though unreachable in
-        # phase 1: `extended_kernel` + `ground_eps` is refused in
-        # `BSplineSolver.__init__`, so `ek` here is always None until #249
-        # follow-up A lifts the refusal.
+        # Same mirrored-source eligibility as `_zblock_image`, and live since
+        # momwire#269 lifted the `extended_kernel` + `ground_eps` refusal:
+        # this is the near-block image fill of every grounded H-matrix solve
+        # (and the far-block one on a build without the fused refl EK twin).
+        # The Fresnel weights below are applied after the fill, so the moment
+        # kernel choice is independent of them.
         Jsub = _seg_seg_full_moments_offedge(
             seg_l[seg_I],
             seg_r[seg_I],
@@ -1179,42 +1190,67 @@ class HMatrixSolver(BSplineSolver):
         closures call `bspline_assemble_offedge_block_refl` instead: the same
         pre-mirrored inputs, with the Fresnel dyad computed in-kernel from
         ε̃ and the Φ weight as w_Φ = c0 + c1·ρ_v — the C++ counterpart of
-        `_zblock_image_refl`. There is no EK twin of the refl assembler (EK +
-        finite ground is refused upstream, momwire#269), which is also why
-        `refl` and `self.extended_kernel` are never both true here — `ek`
-        below is unconditionally `None` on this branch.
+        `_zblock_image_refl`. Under `extended_kernel` it calls that
+        assembler's own EK twin, `bspline_assemble_offedge_block_refl_ek`
+        (momwire#269), which takes the same group labels as the free-space
+        twin ALONGSIDE the Fresnel arguments — the dyad is a per-pair scalar
+        applied after the Galerkin contraction and the coaxial factor
+        multiplies G before it, so the two compose without interacting.
+        `_offedge_aca_evaluators` gates on the twin's presence before asking
+        for `refl=True` under EK, so a build without it never lands on the
+        reduced refl assembler here.
         """
+        # momwire#270 unit 3 / #269: the fused block assembler's EK twins.
+        # `ek` is the whole-mesh (group_i, group_j) label spec — sliced per
+        # call below, not once here, because get_row/get_col rebuild their
+        # single-basis side fresh each call (see the docstring).
+        ek = (
+            self._ek_spec(ctx["geom"], mirror=mirror_J or refl)
+            if self.extended_kernel
+            else None
+        )
+        have_twin = (
+            _HAVE_OFFEDGE_BLOCK_REFL_EK_ACCEL if refl else _HAVE_OFFEDGE_BLOCK_EK_ACCEL
+        )
+        use_ek_accel = ek is not None and have_twin
+        a_ek = float(_ek_radius(ek, math.sqrt(a2))) if use_ek_accel else 0.0
+
+        def _ek_groups(seg_ids_I, seg_ids_J):
+            return (
+                np.ascontiguousarray(ek.group_i[seg_ids_I], dtype=np.int64),
+                np.ascontiguousarray(ek.group_j[seg_ids_J], dtype=np.int64),
+            )
+
         if refl:
             mirror_J = True
             eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
             phi_c0, phi_c1 = _ground_refl.phi_mode_coeffs(self.ground_phi_mode, eps_t)
-
-            def _call(seg_ids_I, seg_ids_J, *args):
-                del seg_ids_I, seg_ids_J
-                return _acc.bspline_assemble_offedge_block_refl(
-                    *args, eps_t, phi_c0, phi_c1, self._cancel_flag
-                )
-        else:
-            # momwire#270 unit 3: the fused block assembler's EK twin. `ek`
-            # is the whole-mesh (group_i, group_j) label spec — sliced per
-            # call below, not once here, because get_row/get_col rebuild
-            # their single-basis side fresh each call (see the docstring).
-            ek = (
-                self._ek_spec(ctx["geom"], mirror=mirror_J)
-                if self.extended_kernel
-                else None
-            )
-            use_ek_accel = ek is not None and _HAVE_OFFEDGE_BLOCK_EK_ACCEL
             if use_ek_accel:
-                a_ek = float(_ek_radius(ek, math.sqrt(a2)))
 
                 def _call(seg_ids_I, seg_ids_J, *args):
-                    group_i = np.ascontiguousarray(
-                        ek.group_i[seg_ids_I], dtype=np.int64
+                    group_i, group_j = _ek_groups(seg_ids_I, seg_ids_J)
+                    return _acc.bspline_assemble_offedge_block_refl_ek(
+                        *args,
+                        group_i,
+                        group_j,
+                        a_ek,
+                        eps_t,
+                        phi_c0,
+                        phi_c1,
+                        self._cancel_flag,
                     )
-                    group_j = np.ascontiguousarray(
-                        ek.group_j[seg_ids_J], dtype=np.int64
+            else:
+
+                def _call(seg_ids_I, seg_ids_J, *args):
+                    del seg_ids_I, seg_ids_J
+                    return _acc.bspline_assemble_offedge_block_refl(
+                        *args, eps_t, phi_c0, phi_c1, self._cancel_flag
                     )
+        else:
+            if use_ek_accel:
+
+                def _call(seg_ids_I, seg_ids_J, *args):
+                    group_i, group_j = _ek_groups(seg_ids_I, seg_ids_J)
                     return _acc.bspline_assemble_offedge_block_ek(
                         *args, group_i, group_j, a_ek, self._cancel_flag
                     )
@@ -1386,7 +1422,13 @@ class HMatrixSolver(BSplineSolver):
         somm = self.ground_eps is not None and self.ground_model == "sommerfeld"
         refl = self.ground_eps is not None and not somm
         scale = self._somm_eps_c2()[1] if somm else 1.0
-        if use_accel and (_HAVE_OFFEDGE_BLOCK_REFL_ACCEL or not refl):
+        # The refl image needs its OWN twin under EK (momwire#269) — the
+        # reduced `_refl` assembler would be silently wrong, not merely
+        # slow, exactly as `use_accel`'s own EK gate above.
+        refl_accel = _HAVE_OFFEDGE_BLOCK_REFL_ACCEL and (
+            not self.extended_kernel or _HAVE_OFFEDGE_BLOCK_REFL_EK_ACCEL
+        )
+        if use_accel and (refl_accel or not refl):
             row_i, col_i, dense_i = self._offedge_block_evaluators(
                 ctx, I, J, k, mirror_J=True, refl=refl
             )
