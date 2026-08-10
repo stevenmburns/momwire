@@ -214,6 +214,23 @@ class _SplineBasis:
 class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
+    **Usable Δ/a floor (issue #248).** Like every reduced-kernel
+    (filament-source) solver, this one answers a question that stops being
+    well-posed when segments get shorter than the wire radius: below
+    Δ/a ≈ 1 the solved current develops a cell-alternating spurious mode at
+    the feed that dominates the driving-point reading, and mesh refinement
+    at fixed radius makes it diverge rather than settle (|I_feed| grows
+    without bound; Z → 0 — measured for every momwire basis, diagnosis on
+    the issue). The answer there is basis-dependent, not physical;
+    `SinusoidalSolver` reproduces nec2c's EK-OFF column on those rungs only
+    because it is NEC-2's own discretization. Against that oracle at NS=41
+    this solver holds ≤0.7% for Δ/a ≥ 24, ≤2.1% for Δ/a ≥ 6, ≤2.9% for
+    Δ/a ≥ 2.4, then 5.9% / 18.5% / 33.8% at Δ/a = 1.22 / 0.81 / 0.41.
+    Treat **Δ/a ≥ 2 as the usable floor** (≈3%), Δ/a ≥ 6 for ≈2%; the
+    residual also grows with absolute a/λ at fixed Δ/a. Fat conductors need
+    the extended kernel AND a mesh that keeps Δ/a above ~1 — they are not
+    rescued by refining the mesh.
+
     Parameters
     ----------
     wires : list of (M, 3) polyline arrays, M ≥ 2 anchors each.
