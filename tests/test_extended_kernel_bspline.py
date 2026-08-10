@@ -1024,9 +1024,30 @@ def ek_call_counts(monkeypatch):
     return counts
 
 
-def test_g7b_the_counters_fire_when_ek_is_on(ek_call_counts):
+# The two entry points reachable ONLY from the same-edge kernels: #270 unit 1
+# moved those to C++, so with the twins present they are legitimately never
+# entered. The other three are still reached from the off-edge fill (which is
+# unit 2's) and from the solver itself.
+_SAME_EDGE_ONLY_EK_ENTRY_POINTS = {"_ek_reg_extra", "D_ek_moment"}
+
+
+@pytest.mark.parametrize("same_edge", ["numpy", "default"])
+def test_g7b_the_counters_fire_when_ek_is_on(ek_call_counts, monkeypatch, same_edge):
     """The control for the three gates below: a monkeypatch that silently
-    failed to bind would make them pass vacuously."""
+    failed to bind would make them pass vacuously.
+
+    Parametrized over the same-edge backend rather than narrowed (#270 unit
+    1): with the C++ twins forced off every counter must fire, which is the
+    original claim; with them live the two same-edge-only counters must be
+    exactly zero, which is the dispatch claim. Either way each counter is
+    asserted, so a dead monkeypatch is still caught.
+    """
+    if same_edge == "numpy":
+        monkeypatch.setattr(_bk, "_HAVE_BSPLINE_STATIC_EK_ACCEL", False)
+        monkeypatch.setattr(_bk, "_HAVE_BSPLINE_REG_SWEPT_EK_ACCEL", False)
+    cpp_same_edge = (
+        _bk._HAVE_BSPLINE_STATIC_EK_ACCEL and _bk._HAVE_BSPLINE_REG_SWEPT_EK_ACCEL
+    )
     BSplineSolver(
         **_G7_BSPLINE["free space"],
         wavelength=LAM,
@@ -1034,7 +1055,10 @@ def test_g7b_the_counters_fire_when_ek_is_on(ek_call_counts):
         extended_kernel=True,
     ).compute_impedance()
     for attr, n in ek_call_counts.items():
-        assert n > 0, f"{attr} never called with EK on"
+        if cpp_same_edge and attr in _SAME_EDGE_ONLY_EK_ENTRY_POINTS:
+            assert n == 0, f"{attr}: numpy entered despite the C++ same-edge twin"
+        else:
+            assert n > 0, f"{attr} never called with EK on"
 
 
 @pytest.mark.parametrize("name", list(_G7_BSPLINE))
