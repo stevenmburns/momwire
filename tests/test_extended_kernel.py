@@ -1105,3 +1105,544 @@ def test_monopole_ek_shift_direction_matches_nec2c():
     assert mom_shift.imag * nec_shift.imag > 0, f"{mom_shift} vs {nec_shift}"
     ratio = abs(mom_shift) / abs(nec_shift)
     assert MONO_SHIFT_RATIO_LO < ratio < MONO_SHIFT_RATIO_HI, ratio
+
+
+# ----------------------------------------------------------------------
+# Gate 10 — the C++ extended-kernel Fresnel image tensor (momwire#259)
+# ----------------------------------------------------------------------
+#
+# #245 gave the point-matched fill an EKSCX entry point, but left one block
+# behind by design: `_field_tensor_image_refl`, the `ground_eps` (NEC IPERF=0)
+# image, stayed reduced-kernel-only, so `extended_kernel=True` over finite
+# ground took the pure-numpy `_field_components` path. #259 closes it with
+# `sinusoidal_field_tensor_ek_refl` — EKSCX's E_z/E_ρ tables under the SAME
+# Fresnel dyad tail the reduced refl kernel already applied.
+#
+# The claim under test is that the marriage is exactly that and nothing more:
+# the dyad's four geometric factors (td, rho_proj, t_n·p̂, ρ̂·p̂) are EFLD's,
+# computed before NEC picks between EKSC and EKSCX — in particular ρ̂ and
+# rho_proj ride the UNSWAPPED radial distance RHX, never EKSCX's ordered RH.
+# Get that wrong and the tensor is still plausible; the battery below is what
+# says so.
+#
+# Gate shape is Gate 8's, for the same reason: an image block is a mirrored
+# source on the far side of a plane, both kernels shed digits as kR grows, so
+# the honest control on an ill-conditioned geometry is the REDUCED refl
+# kernel's own C++-vs-numpy agreement on the same deck, not a looser constant.
+# 1e-13, OR within `_CONDITIONING_HEADROOM` of the reduced kernel. Measured on
+# this battery the extended kernel runs 0.19x - 3.2x of the reduced one and
+# 2.5x / 9.6x at the 6 m and 20 m mirror planes of the control below — where
+# the reduced kernel is itself at 2.7e-12 and 2.3e-11 and an absolute
+# tolerance would only be measuring the geometry.
+#
+# Two ground constants, because ε̃ sets the whole tail: average soil, where
+# ρ_v passes through the Brewster null and ρ_v + ρ_h is O(1) — the p̂
+# correction is fully live — and sea water, three orders of magnitude more
+# conductive, where the dyad is close to the PEC one it must degenerate into.
+
+# (eps_r, sigma) — average soil and sea water.
+REFL_EPS = {
+    "avg_soil": (13.0, 0.005),
+    "sea_water": (81.0, 5.0),
+}
+
+REFL_EK_BATTERY = {
+    # Vertical monopole STANDING IN the plane: NEC's ICON == J ground-contact
+    # IND = 0 arm, and the specular geometry's degenerate limit — the image is
+    # the collinear continuation, so rho_axis = 0 and ρ̂·p̂ is pure a-regularized
+    # noise the dyad must not amplify.
+    "monopole_contact": dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]])],
+        n_per_edge_per_wire=[[15]],
+        wire_radius=0.03,
+        nsegs=15,
+        feed_arclength=0.1,
+        ground_z=0.0,
+    ),
+    # The same monopole LIFTED clear of the plane: both ends IND = 1 now, and
+    # the image sits a real distance away.
+    "monopole_lifted": dict(
+        wires=[np.array([[0.0, 0.0, 0.4], [0.0, 0.0, 2.9]])],
+        n_per_edge_per_wire=[[15]],
+        wire_radius=0.03,
+        nsegs=15,
+        feed_arclength=1.25,
+        ground_z=0.0,
+    ),
+    # Horizontal wire at height — the case the vertical fixtures cannot reach:
+    # t_m·p̂ and t_n·p̂ are O(1), so the −(ρ_v+ρ_h)(t_m·p̂)(E·p̂) half of the dyad
+    # carries real weight instead of cancelling.
+    "horizontal_at_height": dict(
+        wires=[np.array([[-2.5, 0.0, 1.5], [2.5, 0.0, 1.5]])],
+        n_per_edge_per_wire=[[21]],
+        wire_radius=0.05,
+        nsegs=21,
+        feed_arclength=2.5,
+        ground_z=0.0,
+    ),
+    # Bent wire above the plane: IND = 2 (GX) on one end of each vertex
+    # segment, and a p̂ that rotates pair by pair.
+    "bent_above": dict(
+        wires=[np.array([[0.0, 0.0, 0.3], [2.0, 0.0, 1.5], [3.6, 1.1, 1.5]])],
+        n_per_edge_per_wire=[[6, 5]],
+        wire_radius=0.08,
+        nsegs=11,
+        feed_arclength=1.0,
+        ground_z=0.0,
+    ),
+    # Ground contact AND mixed radii: two observer-radius runs, so the (M, N)
+    # specular tables have to slice on their observer axis in step with the
+    # obs arrays and the EK tables have to NOT slice (they are source-indexed).
+    "grounded_ell_radii": dict(
+        wires=[
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
+            np.array([[0.0, 0.0, 2.0], [1.6, 0.0, 2.0]]),
+        ],
+        n_per_edge_per_wire=[[9], [7]],
+        wire_radius=[0.03, 0.008],
+        nsegs=16,
+        feed_arclength=0.15,
+        ground_z=0.0,
+        junctions=[[(0, "end"), (1, "start")]],
+    ),
+    # EKSCX's IRA arm on the IMAGE build. A grounded fat/thin collinear stack
+    # puts the thin wire's centres on the fat wire's axis, so the MIRRORED fat
+    # sources swap too (rho_eval = 0.005 < src_a = 0.02); the skew wire beside
+    # it is what stops the arm from cancelling out of Φ, exactly as in Gate 8's
+    # `radius_step_skew`. `test_cpp_ek_refl_ira_arm_is_load_bearing` pins that.
+    "grounded_radius_step_skew": dict(
+        wires=[
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
+            np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 4.0]]),
+            np.array([[1.1, 0.6, 0.3], [2.3, 1.9, 1.4]]),
+        ],
+        n_per_edge_per_wire=[[5], [5], [4]],
+        wire_radius=[0.02, 0.005, 0.005],
+        nsegs=14,
+        feed_arclength=1.0,
+        ground_z=0.0,
+        junctions=[[(0, "end"), (1, "start")]],
+    ),
+    # A FAR mirror plane — the conditioning regime, in the battery rather than
+    # only in the dedicated control below, so the routine per-fixture gate has
+    # to survive it too.
+    "dipole_far_plane": dict(
+        wires=_DIPOLE_W,
+        n_per_edge_per_wire=[[21]],
+        wire_radius=0.05,
+        nsegs=21,
+        feed_arclength=2.5,
+        ground_z=-6.0,
+    ),
+}
+
+
+def _refl_solver(name, eps_name="avg_soil", **extra):
+    return SinusoidalSolver(
+        wavelength=LAM,
+        ground_eps=REFL_EPS[eps_name],
+        **REFL_EK_BATTERY[name],
+        **extra,
+    )
+
+
+def _refl_accel_vs_numpy(sim):
+    """Worst max-elementwise relative delta between the fused C++ Fresnel image
+    tensor and its numpy reference, over the three returned tensors.
+    `sim.extended_kernel` picks which accelerator flag is switched off to get
+    the reference — the EK one leaves the EK-ON solve on the numpy
+    `_field_components` + `_project_weighted` path, the reduced one leaves an
+    EK-OFF solve there."""
+    import momwire.sinusoidal as sin_mod
+
+    geom = sim._build_geometry()
+    cpp = sim._field_tensor_image_refl(geom, sim.k)
+    flag = (
+        "_HAVE_FIELD_TENSOR_EK_REFL"
+        if sim.extended_kernel
+        else "_HAVE_FIELD_TENSOR_REFL"
+    )
+    saved = getattr(sin_mod, flag)
+    setattr(sin_mod, flag, False)
+    try:
+        ref = sim._field_tensor_image_refl(geom, sim.k)
+    finally:
+        setattr(sin_mod, flag, saved)
+    worst, worst_label = 0.0, ""
+    for label, a_cpp, a_ref in zip(("Phi_const", "Phi_sin", "Phi_cos"), cpp, ref):
+        rel = np.max(np.abs(a_cpp - a_ref)) / max(np.max(np.abs(a_ref)), 1e-30)
+        if rel > worst:
+            worst, worst_label = rel, label
+    return worst, worst_label
+
+
+@pytest.mark.parametrize("name", list(REFL_EK_BATTERY))
+@pytest.mark.parametrize("eps_name", list(REFL_EPS))
+def test_cpp_ek_refl_field_tensor_matches_numpy(name, eps_name):
+    """Every gating branch, both IRA arms, both radius dispatch shapes, both
+    ground constants — against the numpy EK + Fresnel-dyad reference.
+
+    See the section header for why the reduced refl kernel is the control on
+    the ill-conditioned image blocks rather than a looser constant.
+    """
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
+        pytest.skip("C++ accelerator not built")
+
+    ek, label = _refl_accel_vs_numpy(_refl_solver(name, eps_name, extended_kernel=True))
+    if ek < ACCEL_AGREEMENT:
+        return
+    reduced, _ = _refl_accel_vs_numpy(
+        _refl_solver(name, eps_name, extended_kernel=False)
+    )
+    assert ek < _CONDITIONING_HEADROOM * reduced, (
+        f"{name}/{eps_name} {label}: EK {ek:.3e} misses {ACCEL_AGREEMENT:g} and "
+        f"is {ek / max(reduced, 1e-300):.1f}x the reduced refl kernel's own "
+        f"{reduced:.3e} on the same geometry"
+    )
+
+
+@pytest.mark.parametrize("ground_z", [-6.0, -20.0])
+def test_cpp_ek_refl_far_image_conditioning_tracks_the_reduced_kernel(ground_z):
+    """Gate 8's conditioning control, on the Fresnel tail. At 6 m and 20 m the
+    reduced refl kernel is already well past 1e-13 and no absolute tolerance
+    means anything; what the extended one owes is to stay within
+    `_CONDITIONING_HEADROOM` of it on the same deck.
+    """
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
+        pytest.skip("C++ accelerator not built")
+
+    def _worst(extended):
+        sim = SinusoidalSolver(
+            wavelength=LAM,
+            wires=_DIPOLE_W,
+            n_per_edge_per_wire=[[21]],
+            wire_radius=0.05,
+            nsegs=21,
+            feed_arclength=2.5,
+            ground_z=ground_z,
+            ground_eps=REFL_EPS["avg_soil"],
+            extended_kernel=extended,
+        )
+        return _refl_accel_vs_numpy(sim)[0]
+
+    reduced = _worst(False)
+    extended = _worst(True)
+    assert extended < _CONDITIONING_HEADROOM * reduced, (
+        f"EK {extended:.3e} vs reduced {reduced:.3e}"
+    )
+
+
+def test_cpp_ek_refl_ira_arm_is_load_bearing():
+    """`want_swapped` on the IMAGE build must be worth passing. It rewrites
+    only the ρ-flavoured slots, so on a collinear deck the whole arm cancels
+    out of Φ — the defect Gate 8 caught, here with the Fresnel tail on top,
+    which pulls E_ρ in through a SECOND route (ρ̂·p̂) and could have masked it
+    differently.
+    """
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
+        pytest.skip("C++ accelerator not built")
+
+    class ForcedIra0(SinusoidalSolver):
+        def _ek_any_swap(self, geom, src_c, src_t):
+            return False
+
+    sim = _refl_solver("grounded_radius_step_skew", extended_kernel=True)
+    geom = sim._build_geometry()
+    src_c, src_t = sim._image_source_centers_tangents(geom)
+    assert sim._ek_any_swap(geom, src_c, src_t), "fixture must swap on the image"
+    on = sim._field_tensor_image_refl(geom, sim.k)
+    off = ForcedIra0(
+        wavelength=LAM,
+        ground_eps=REFL_EPS["avg_soil"],
+        extended_kernel=True,
+        **REFL_EK_BATTERY["grounded_radius_step_skew"],
+    )._field_tensor_image_refl(geom, sim.k)
+    moved = max(np.max(np.abs(a - b)) / np.max(np.abs(a)) for a, b in zip(on, off))
+    assert moved > 1e-3, f"IRA arm moves the Fresnel image tensor by {moved:.3e}"
+
+
+def test_cpp_ek_refl_battery_is_decisive():
+    """The battery must reach every arm the C++ can take on the image build,
+    asserted rather than trusted to the fixtures staying as written."""
+    codes, swaps, uniform = set(), set(), set()
+    multirun = False
+    ground_contact_extends = False
+    horizontal = False
+    for name in REFL_EK_BATTERY:
+        sim = _refl_solver(name, extended_kernel=True)
+        geom = sim._build_geometry()
+        ind1, ind2 = sim._ek_gating(geom)
+        codes |= set(ind1.tolist()) | set(ind2.tolist())
+        uniform.add(sim._uniform_radius is not None)
+        multirun = multirun or len(sim._radius_runs(geom)) > 1
+        # The Fresnel image block resolves its IRA on the MIRRORED sources.
+        src_c, src_t = sim._image_source_centers_tangents(geom)
+        swaps.add(sim._ek_any_swap(geom, src_c, src_t))
+        at_plane = np.flatnonzero(geom["ground_minus"])
+        if at_plane.size:
+            ground_contact_extends = ground_contact_extends or bool(
+                (ind1[at_plane] == 0).all()
+            )
+        # A wire with a real horizontal run: t·p̂ is what makes the second half
+        # of the dyad load-bearing, and every vertical fixture zeroes it.
+        horizontal = horizontal or bool(
+            np.max(np.abs(geom["seg_tangents"][:, :2])) > 0.5
+        )
+    assert codes == {0, 1, 2}, codes
+    assert swaps == {False, True}, "EKSCX's IRA arm is uncovered on the image build"
+    assert uniform == {False, True}, "both radius dispatch shapes are needed"
+    assert multirun, "no fixture produces more than one observer-radius run"
+    assert ground_contact_extends, "the perpendicular ground-contact IND=0 arm is unhit"
+    assert horizontal, "no fixture gives the p̂ half of the dyad any weight"
+
+
+# Impedance-level agreement over finite ground, per fixture. 1e-12 is the gate.
+# Measured across the battery: 3.6e-15 (bent_above), 5.4e-15
+# (monopole_lifted), 7.2e-15 (dipole_far_plane), 1.6e-14
+# (grounded_radius_step_skew), 3.8e-14 (grounded_ell_radii), 1.6e-13
+# (monopole_contact), 1.5e-12 (horizontal_at_height).
+#
+# `horizontal_at_height` alone needs 5e-12, and it is conditioning, not
+# dispatch: it is the battery's worst-conditioned image block by a wide margin
+# (the REDUCED refl kernel's own C++-vs-numpy delta on that deck is 3.5e-12 —
+# larger than the extended kernel's 3.3e-12), so the matrix solve is
+# multiplying a fill delta that has nothing to do with #259 by the deck's
+# condition number. A dispatch fault — image block on the wrong kernel,
+# unsliced specular table, gating dropped, IRA dropped — lands at 1e-2, not
+# here.
+_REFL_Z_AGREEMENT = {name: 1e-12 for name in REFL_EK_BATTERY}
+_REFL_Z_AGREEMENT["horizontal_at_height"] = 5e-12
+
+
+@pytest.mark.parametrize("name", list(REFL_EK_BATTERY))
+def test_cpp_ek_refl_impedance_matches_the_numpy_path(name, monkeypatch):
+    """Kernel agreement is not the whole dispatch: solving end to end both ways
+    pins the gating/radius plumbing, the per-run stitching of the sliced
+    specular tables, and the fact that the free-space block still rides #245's
+    kernel while only the image block changed."""
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
+        pytest.skip("C++ accelerator not built")
+
+    z_cpp, _ = _refl_solver(name, extended_kernel=True).compute_impedance()
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_EK_REFL", False)
+    z_ref, _ = _refl_solver(name, extended_kernel=True).compute_impedance()
+    rel = _rel(z_cpp, z_ref)
+    assert rel < _REFL_Z_AGREEMENT[name], f"{name}: {rel:.3e} — {z_cpp} vs {z_ref}"
+
+
+def test_cpp_ek_refl_path_does_not_re_enter_the_numpy_kernel(monkeypatch):
+    """The whole point of #259: an EK-ON finite-ground solve must never touch
+    `_extended_kernel_fields`. Before it, the free-space block went to C++ and
+    the Fresnel image block silently did not — the residue #245 left."""
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
+        pytest.skip("C++ accelerator not built")
+
+    calls = []
+    for attr in ("_ek_end_gxx", "_ek_end_gx", "_extended_kernel_fields"):
+        original = getattr(SinusoidalSolver, attr)
+
+        def trip(*a, _attr=attr, _o=original, **kw):
+            calls.append(_attr)
+            return _o(*a, **kw)
+
+        monkeypatch.setattr(SinusoidalSolver, attr, trip)
+
+    _refl_solver("grounded_ell_radii", extended_kernel=True).compute_impedance()
+    assert calls == [], f"EK-ON refl solve fell back to the numpy kernel: {calls}"
+
+
+def test_ek_refl_kernel_is_never_entered_when_ek_is_off(monkeypatch):
+    """The mirror claim, and the armor #259 owes the reduced path: with EK off
+    the Fresnel image block must still go through `sinusoidal_field_tensor_refl`
+    and never through the new entry point, whichever geometry it is."""
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
+        pytest.skip("C++ accelerator not built")
+
+    seen = []
+    original = sin_mod._acc.sinusoidal_field_tensor_ek_refl
+
+    def trip(*a, **kw):
+        seen.append(1)
+        return original(*a, **kw)
+
+    monkeypatch.setattr(sin_mod._acc, "sinusoidal_field_tensor_ek_refl", trip)
+    for name in REFL_EK_BATTERY:
+        _refl_solver(name, extended_kernel=False).compute_impedance()
+    assert seen == [], "an EK-OFF refl solve entered the extended-kernel kernel"
+
+
+# Four corners of each of the three EK-OFF Fresnel image tensors on the deck
+# below, captured on the pre-#259 build (`git stash` on the #259 diff) and
+# reproduced BIT-FOR-BIT by the branch. Hex floats so the comparison is exact.
+_EK_OFF_REFL_PIN = [
+    (
+        "0x1.57bc9f1612964p+8",
+        "0x1.4e0a45375b9a9p+11",
+        "0x1.23912cc2197fbp-2",
+        "0x1.590d30a10b1fep-1",
+    ),
+    (
+        "-0x1.6a8d36530c0b7p+3",
+        "-0x1.61eada0d8b0e5p+6",
+        "-0x1.d77647c1f7964p-14",
+        "-0x1.7201fb9f4aa72p-10",
+    ),
+    (
+        "0x1.575ac9d27970cp+8",
+        "0x1.4dab14dd8b3b0p+11",
+        "0x1.2354755624f41p-2",
+        "0x1.58c5447715a4ep-1",
+    ),
+]
+
+
+def test_ek_off_refl_tensor_is_unmoved_by_the_new_kernel():
+    """Byte-level armor for the reduced Fresnel tail. #259 edits the file the
+    reduced kernel lives in, so pin its output exactly rather than relatively:
+    EK-OFF, C++ refl kernel on, against the pre-#259 capture.
+
+    This is the gate that decided the shape of the C++ change. Factoring the
+    dyad tail into a helper the two kernels share — the obvious spelling —
+    moved this tensor by 3.6e-15 and a grounded Z by 7.1e-14, because the
+    factors then reach the multiply-adds through a struct and GCC contracts
+    them differently. Both numbers pass every relative tolerance in this file,
+    which is exactly why the pin is exact and why the reduced kernel keeps an
+    open-coded copy of the tail instead.
+    """
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_REFL:
+        pytest.skip("C++ refl kernel not built")
+
+    sim = SinusoidalSolver(
+        # 9.993 exactly, not LAM: this deck is the capture deck, reproduced
+        # verbatim so the pin below is literally the pre-#259 output.
+        wavelength=9.993,
+        wires=[
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
+            np.array([[0.0, 0.0, 2.0], [1.6, 0.0, 2.0]]),
+        ],
+        n_per_edge_per_wire=[[9], [7]],
+        wire_radius=[0.03, 0.008],
+        nsegs=16,
+        feed_arclength=0.15,
+        ground_z=0.0,
+        ground_eps=(4.0, 0.2),
+        junctions=[[(0, "end"), (1, "start")]],
+        extended_kernel=False,
+    )
+    geom = sim._build_geometry()
+    phi = sim._field_tensor_image_refl(geom, sim.k)
+    got = [
+        (
+            float(t[0, 0].real).hex(),
+            float(t[0, 0].imag).hex(),
+            float(t[-1, 3].real).hex(),
+            float(t[-1, 3].imag).hex(),
+        )
+        for t in phi
+    ]
+    assert got == [tuple(row) for row in _EK_OFF_REFL_PIN], (
+        f"reduced refl kernel moved: {got}"
+    )
+
+
+def test_sommerfeld_ground_under_ek_rides_the_pec_kernel(monkeypatch):
+    """The scope claim #259 rests on, asserted rather than reasoned about.
+
+    Sommerfeld ground needs no Fresnel kernel of its own: `_assemble_Z`
+    decomposes it (theory manual eqs 136-147) into the exact PEC image scaled
+    by the scalar C₂ plus a smooth interpolated remainder, so its image block
+    is `_field_tensor_image` — #245's kernel with mirrored sources — and the
+    remainder is a grid-dyad term with its own kernels that the thin-wire
+    kernel choice does not reach at all. So an EK-ON Sommerfeld solve must
+    call `sinusoidal_field_tensor_ek` twice (free space + image), never the
+    refl entry point, and never fall back to `_extended_kernel_fields`.
+    """
+    import momwire.sinusoidal as sin_mod
+
+    if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
+        pytest.skip("C++ accelerator not built")
+
+    seen = []
+    for kernel in ("sinusoidal_field_tensor_ek", "sinusoidal_field_tensor_ek_refl"):
+        original = getattr(sin_mod._acc, kernel)
+
+        def trip(*a, _name=kernel, _o=original, **kw):
+            seen.append(_name)
+            return _o(*a, **kw)
+
+        monkeypatch.setattr(sin_mod._acc, kernel, trip)
+
+    numpy_entries = []
+    original_fields = SinusoidalSolver._extended_kernel_fields
+
+    def trip_fields(*a, **kw):
+        numpy_entries.append(1)
+        return original_fields(*a, **kw)
+
+    monkeypatch.setattr(SinusoidalSolver, "_extended_kernel_fields", trip_fields)
+
+    SinusoidalSolver(
+        wavelength=LAM,
+        wires=[np.array([[0.0, 0.0, 0.5], [0.0, 0.0, 2.5]])],
+        n_per_edge_per_wire=[[9]],
+        wire_radius=0.02,
+        nsegs=9,
+        feed_arclength=1.0,
+        ground_z=0.0,
+        ground_eps=REFL_EPS["avg_soil"],
+        ground_model="sommerfeld",
+        extended_kernel=True,
+    ).compute_impedance()
+
+    assert seen == ["sinusoidal_field_tensor_ek"] * 2, seen
+    assert numpy_entries == [], "Sommerfeld + EK fell back to the numpy kernel"
+
+
+def test_ek_refl_kernel_aborts_as_solve_aborted():
+    """The new kernel polls `cancel_flag` like every other fused fill, so its
+    abort must reach callers as the shared `SolveAborted` — which means being
+    listed in `_accel._CANCELLABLE_KERNELS`. Python-level checkpoints are
+    neutralized so the ONLY thing that can observe the tripped token is the
+    C++ poll (the Phase-2 pattern of `test_cancel.py`).
+
+    #245 left `sinusoidal_field_tensor_ek` off that tuple, so this covers the
+    plain EK entry point too.
+    """
+    import momwire
+    from momwire import CancelToken, SolveAborted
+
+    if not momwire.accelerated:
+        pytest.skip("C++ accelerator not built")
+
+    for ground_eps in (None, REFL_EPS["avg_soil"]):
+        token = CancelToken()
+        token.cancel()
+        sim = SinusoidalSolver(
+            wavelength=LAM,
+            wires=[np.array([[0.0, 0.0, 0.4], [0.0, 0.0, 2.9]])],
+            n_per_edge_per_wire=[[41]],
+            wire_radius=0.02,
+            nsegs=41,
+            feed_arclength=1.25,
+            ground_z=0.0,
+            ground_eps=ground_eps,
+            extended_kernel=True,
+            cancel=token,
+        )
+        sim._checkpoint = lambda: None
+        with pytest.raises(SolveAborted):
+            sim.compute_impedance()
