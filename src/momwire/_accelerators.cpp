@@ -2222,6 +2222,310 @@ bspline_assemble_offedge_block_refl(
     }
 }
 
+// No EK twin here: EK + finite ground (the reflection-coefficient image) is
+// refused upstream at the solver level (momwire#269), so this variant never
+// needs to serve an extended-kernel fill and is left reduced-only.
+
+
+// THE FUSED OFF-EDGE BLOCK ASSEMBLER'S EXTENDED-KERNEL TWIN (momwire#270
+// unit 3)
+// -------------------------------------------------------------------
+// `bspline_assemble_offedge_block_kernel<D, false>` above fuses the
+// off-edge moment quadrature with the EFIE Galerkin combine so ACA
+// row/col/dense block sampling never materialises an intermediate
+// (d+1, d+1, N_i, N_j) moment tensor. This is that assembler's EK twin:
+// same fusion, with NEC Eq 89's coaxial factor applied to G on eligible
+// SEGMENT pairs before the Galerkin contraction — the fused-assembler
+// analog of unit 2's `seg_seg_full_moments_bspline_kernel_ek`, whose
+// eligibility rule and `fac` spelling (T1, T2, C1, C2, in that order) this
+// transcribes verbatim.
+//
+// `group_I` (nSegI,) / `group_J` (nSegJ,) are per-segment coaxial-and-
+// equal-radius labels over the SAME per-block segment unions `tan_I` /
+// `tan_J` are already keyed by (the caller's `segI`/`segJ` — hmatrix.py's
+// `_offedge_block_evaluators_uniform`) — NOT per-basis, because eligibility
+// is a property of the (segment, segment) pair sampled inside the basis-
+// pair wing loop below, exactly as it is in unit 2. A pair is eligible iff
+// `group_I[smi] == group_J[snj] >= 0`, evaluated once per (a, b) wing and
+// applied to every quadrature sub-pair inside it (the mask does not vary
+// with (q, r), same as unit 2). `a_ek` is the plain (unsquared) EK radius,
+// kept separate from `a_squared` for the same reason unit 1/2 keep it
+// separate: on every eligible pair the two agree by construction, but the
+// C++ side mirrors `_ek_radius(ek, a)` rather than assuming it.
+//
+// No WEIGHTED variant: the only image case this twin has to serve is the
+// mirror_J PEC-ground path (WEIGHTED=false, J-side positions/tangents
+// pre-mirrored by the caller exactly as for the reduced kernel) — the
+// reflection-coefficient WEIGHTED=true path is the one refused above.
+template<int D>
+static py::array_t<std::complex<double>>
+bspline_assemble_offedge_block_kernel_ek(
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_I,   // (nI, NM)
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys_I,   // (nI, NM, NM)
+    py::array_t<double, py::array::c_style | py::array::forcecast> segl_I,    // (nSegI, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> segr_I,    // (nSegI, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> tan_I,     // (nSegI, 3)
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_J,   // (nJ, NM)
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys_J,   // (nJ, NM, NM)
+    py::array_t<double, py::array::c_style | py::array::forcecast> segl_J,    // (nSegJ, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> segr_J,    // (nSegJ, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> tan_J,     // (nSegJ, 3)
+    double a_squared,
+    double k,
+    double omega,
+    double eps_,
+    double mu_,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_I,  // (nSegI,)
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_J,  // (nSegJ,)
+    double a_ek,
+    uintptr_t cancel_flag = 0
+) {
+    static constexpr int NM = D + 1;
+
+    auto sI = supp_I.unchecked<2>();
+    auto pI = polys_I.unchecked<3>();
+    auto slI = segl_I.unchecked<2>();
+    auto srI = segr_I.unchecked<2>();
+    auto tI = tan_I.unchecked<2>();
+    auto sJ = supp_J.unchecked<2>();
+    auto pJ = polys_J.unchecked<3>();
+    auto slJ = segl_J.unchecked<2>();
+    auto srJ = segr_J.unchecked<2>();
+    auto tJ = tan_J.unchecked<2>();
+    auto glt = gl_t.unchecked<1>();
+    auto glw = gl_w.unchecked<1>();
+    auto gI_v = group_I.unchecked<1>();
+    auto gJ_v = group_J.unchecked<1>();
+
+    size_t nI = (size_t)supp_I.shape(0);
+    size_t nJ = (size_t)supp_J.shape(0);
+    size_t nSegI = (size_t)segl_I.shape(0);
+    size_t nSegJ = (size_t)segl_J.shape(0);
+    size_t n_qp = (size_t)gl_t.shape(0);
+    if (supp_I.shape(1) != NM || supp_J.shape(1) != NM) {
+        throw std::runtime_error("support arrays must have shape (n, D+1)");
+    }
+    if (n_qp > 8) {
+        throw std::runtime_error("n_qp > 8 not supported (scratch buffer size)");
+    }
+    if ((size_t)group_I.shape(0) != nSegI || (size_t)group_J.shape(0) != nSegJ) {
+        throw std::runtime_error(
+            "bspline_assemble_offedge_block_kernel_ek: group_I/group_J must "
+            "match the segment unions");
+    }
+
+    // Per-segment quadrature positions + lengths, precomputed once — same
+    // precompute as the reduced kernel's WEIGHTED=false path (no mirror
+    // midpoint table: that is WEIGHTED-only and this twin is never WEIGHTED).
+    std::vector<double> posI(nSegI * n_qp * 3), lenI(nSegI);
+    std::vector<double> posJ(nSegJ * n_qp * 3), lenJ(nSegJ);
+    for (size_t s = 0; s < nSegI; s++) {
+        double dx = srI(s,0)-slI(s,0), dy = srI(s,1)-slI(s,1), dz = srI(s,2)-slI(s,2);
+        lenI[s] = std::sqrt(dx*dx + dy*dy + dz*dz);
+        for (size_t q = 0; q < n_qp; q++) {
+            double t = glt(q);
+            posI[(s*n_qp+q)*3+0] = (1.0-t)*slI(s,0) + t*srI(s,0);
+            posI[(s*n_qp+q)*3+1] = (1.0-t)*slI(s,1) + t*srI(s,1);
+            posI[(s*n_qp+q)*3+2] = (1.0-t)*slI(s,2) + t*srI(s,2);
+        }
+    }
+    for (size_t s = 0; s < nSegJ; s++) {
+        double dx = srJ(s,0)-slJ(s,0), dy = srJ(s,1)-slJ(s,1), dz = srJ(s,2)-slJ(s,2);
+        lenJ[s] = std::sqrt(dx*dx + dy*dy + dz*dz);
+        for (size_t q = 0; q < n_qp; q++) {
+            double t = glt(q);
+            posJ[(s*n_qp+q)*3+0] = (1.0-t)*slJ(s,0) + t*srJ(s,0);
+            posJ[(s*n_qp+q)*3+1] = (1.0-t)*slJ(s,1) + t*srJ(s,1);
+            posJ[(s*n_qp+q)*3+2] = (1.0-t)*slJ(s,2) + t*srJ(s,2);
+        }
+    }
+
+    py::array_t<std::complex<double>> Z({nI, nJ});
+    auto z_view = Z.mutable_unchecked<2>();
+
+    // Phase 0: release the GIL for the heavy compute region below.
+    py::gil_scoped_release release;
+
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+    const double omega_mu = omega * mu_;
+    const double inv_omega_eps = 1.0 / (omega * eps_);
+    const double a2_ek = a_ek * a_ek;
+    const double a4_ek = a2_ek * a2_ek;
+
+    PYSIM_CANCEL_SETUP(cancel_flag);
+    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t m = 0; m < nI; m++) {
+        for (size_t n = 0; n < nJ; n++) {
+            PYSIM_CANCEL_POLL();
+            double zA_re = 0.0, zA_im = 0.0, zPhi_re = 0.0, zPhi_im = 0.0;
+
+            for (int a = 0; a < NM; a++) {
+                int64_t smi = sI(m, a);
+                double tix = tI(smi,0), tiy = tI(smi,1), tiz = tI(smi,2);
+                const double *pi = &posI[smi * n_qp * 3];
+                double Li = lenI[smi];
+                for (int b = 0; b < NM; b++) {
+                    int64_t snj = sJ(n, b);
+                    const double *pj = &posJ[snj * n_qp * 3];
+                    double Lj = lenJ[snj];
+                    double td = tix*tJ(snj,0) + tiy*tJ(snj,1) + tiz*tJ(snj,2);
+                    // Eligibility is a property of THIS (smi, snj) SEGMENT
+                    // pair, not of the quadrature sub-pair — one branch
+                    // below serves every (q, r), exactly as unit 2's
+                    // off-edge twin.
+                    bool eligible = (gI_v(smi) == gJ_v(snj)) && (gI_v(smi) >= 0);
+
+                    // Moment tensor Jc[p][P] for this single segment pair.
+                    std::complex<double> Jc[NM][NM];
+                    {
+                        alignas(32) double R[64], G_re[64], G_im[64];
+                        alignas(32) double wuwu[(NM*NM) * 64];
+                        size_t n_pairs = n_qp * n_qp;
+                        for (size_t q = 0; q < n_qp; q++) {
+                            double pix = pi[q*3+0], piy = pi[q*3+1], piz = pi[q*3+2];
+                            for (size_t r = 0; r < n_qp; r++) {
+                                double dx = pix - pj[r*3+0];
+                                double dy = piy - pj[r*3+1];
+                                double dz = piz - pj[r*3+2];
+                                R[q*n_qp+r] = std::sqrt(dx*dx+dy*dy+dz*dz+a_squared);
+                            }
+                        }
+                        for (size_t q = 0; q < n_qp; q++) {
+                            double wi = glw(q) * Li, ui = glt(q) * Li;
+                            double uip[NM]; uip[0] = 1.0;
+                            for (int p = 1; p < NM; p++) uip[p] = uip[p-1]*ui;
+                            for (size_t r = 0; r < n_qp; r++) {
+                                double wj = glw(r) * Lj, uj = glt(r) * Lj;
+                                double ujp[NM]; ujp[0] = 1.0;
+                                for (int P = 1; P < NM; P++) ujp[P] = ujp[P-1]*uj;
+                                double wij = wi*wj;
+                                size_t qr = q*n_qp + r;
+                                for (int p = 0; p < NM; p++)
+                                    for (int P = 0; P < NM; P++)
+                                        wuwu[(p*NM+P)*n_pairs + qr] = wij*uip[p]*ujp[P];
+                            }
+                        }
+                        PYSIM_OMP_SIMD()
+                        for (size_t qr = 0; qr < n_pairs; qr++) {
+                            double inv = inv_4pi / R[qr];
+                            double ph = -k * R[qr];
+                            G_re[qr] = std::cos(ph) * inv;
+                            G_im[qr] = std::sin(ph) * inv;
+                        }
+                        if (eligible) {
+                            // `_ek_factor`'s spelling, term by term: T1, T2,
+                            // C1, C2, fac = T1*C2 - T2*C1 + 1, G *= fac —
+                            // unit 2's off-edge twin, transcribed again.
+                            PYSIM_OMP_SIMD()
+                            for (size_t qr = 0; qr < n_pairs; qr++) {
+                                double Rq = R[qr];
+                                double r2 = Rq * Rq;
+                                double r4 = r2 * r2;
+                                double kr = k * Rq;
+                                double kr2 = kr * kr;
+                                double t1 = 0.25 * a4_ek / r4;
+                                double t2 = 0.5 * a2_ek / r2;
+                                double c1r = 1.0;
+                                double c1i = kr;
+                                double c2r = 3.0 * c1r - kr2;
+                                double c2i = 3.0 * c1i;
+                                double facr = t1 * c2r;
+                                double faci = t1 * c2i;
+                                facr = facr - t2 * c1r;
+                                faci = faci - t2 * c1i;
+                                facr = facr + 1.0;
+                                double gre = G_re[qr];
+                                double gim = G_im[qr];
+                                G_re[qr] = gre * facr - gim * faci;
+                                G_im[qr] = gre * faci + gim * facr;
+                            }
+                        }
+                        for (int pP = 0; pP < NM*NM; pP++) {
+                            double sr_ = 0.0, si_ = 0.0;
+                            const double *w_row = &wuwu[pP * n_pairs];
+                            PYSIM_OMP_SIMD(reduction(+:sr_,si_))
+                            for (size_t qr = 0; qr < n_pairs; qr++) {
+                                sr_ += w_row[qr]*G_re[qr];
+                                si_ += w_row[qr]*G_im[qr];
+                            }
+                            Jc[pP/NM][pP%NM] = std::complex<double>(sr_, si_);
+                        }
+                    }
+
+                    // Galerkin combine for this wing pair (reduced,
+                    // WEIGHTED=false spelling — the tangent-dot A term and
+                    // the unweighted charge term).
+                    double iA_re = 0.0, iA_im = 0.0, iPhi_re = 0.0, iPhi_im = 0.0;
+                    for (int p = 0; p < NM; p++) {
+                        double mp = pI(m, a, p);
+                        for (int q = 0; q < NM; q++) {
+                            double nq = pJ(n, b, q);
+                            double prod = mp * nq;
+                            iA_re += prod * Jc[p][q].real();
+                            iA_im += prod * Jc[p][q].imag();
+                            if (p >= 1 && q >= 1) {
+                                double pq = (double)(p*q) * prod;
+                                iPhi_re += pq * Jc[p-1][q-1].real();
+                                iPhi_im += pq * Jc[p-1][q-1].imag();
+                            }
+                        }
+                    }
+                    zA_re += td * iA_re;
+                    zA_im += td * iA_im;
+                    zPhi_re += iPhi_re;
+                    zPhi_im += iPhi_im;
+                }
+            }
+
+            double Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
+            double Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            z_view(m, n) = std::complex<double>(Zre, Zim);
+        }
+    }
+
+    PYSIM_THROW_IF_ABORTED();
+    return Z;
+}
+
+static py::array_t<std::complex<double>>
+bspline_assemble_offedge_block_ek(
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> segl_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> segr_I,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tan_I,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> segl_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> segr_J,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tan_J,
+    double a_squared, double k, double omega, double eps_, double mu_, int max_d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_I,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_J,
+    double a_ek,
+    uintptr_t cancel_flag = 0
+) {
+    switch (max_d) {
+        case 1:
+            return bspline_assemble_offedge_block_kernel_ek<1>(
+                supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                group_I, group_J, a_ek, cancel_flag);
+        case 2:
+            return bspline_assemble_offedge_block_kernel_ek<2>(
+                supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                group_I, group_J, a_ek, cancel_flag);
+        default:
+            throw std::runtime_error(
+                "bspline_assemble_offedge_block_ek: max_d must be 1 or 2");
+    }
+}
+
 
 // Runtime dispatch wrapper. Picks the right template instantiation based on
 // max_d (the maximum polynomial moment degree, == B-spline degree D).
@@ -5260,6 +5564,30 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("eps"), py::arg("mu"), py::arg("max_d"),
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("eps_t"), py::arg("phi_c0"), py::arg("phi_c1"),
+          py::arg("cancel_flag") = 0);
+    m.def("bspline_assemble_offedge_block_ek", &bspline_assemble_offedge_block_ek,
+          "Extended-thin-wire-kernel twin of bspline_assemble_offedge_block "
+          "(momwire#270 unit 3). Same fused off-edge Z[I, J] block assembly "
+          "contract, plus per-segment coaxial-and-equal-radius group labels "
+          "group_I (nSegI,) / group_J (nSegJ,) int64 over the SAME segment "
+          "unions segl_I/segl_J index, and the plain (unsquared) EK radius "
+          "a_ek. A segment pair (smi, snj) is eligible iff "
+          "group_I[smi] == group_J[snj] >= 0, evaluated once per basis-pair "
+          "wing and applied to every quadrature sub-pair inside it before "
+          "the Galerkin combine — the fused-assembler analog of "
+          "seg_seg_full_moments_bspline_ek. No WEIGHTED variant: EK + "
+          "finite ground is refused upstream (momwire#269), so the only "
+          "image case this serves is the mirror_J PEC-ground path (J-side "
+          "positions/tangents pre-mirrored by the caller). Templated on "
+          "max_d in {1, 2}; single-k.",
+          py::arg("supp_I"), py::arg("polys_I"), py::arg("segl_I"),
+          py::arg("segr_I"), py::arg("tan_I"),
+          py::arg("supp_J"), py::arg("polys_J"), py::arg("segl_J"),
+          py::arg("segr_J"), py::arg("tan_J"),
+          py::arg("a_squared"), py::arg("k"), py::arg("omega"),
+          py::arg("eps"), py::arg("mu"), py::arg("max_d"),
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("group_I"), py::arg("group_J"), py::arg("a_ek"),
           py::arg("cancel_flag") = 0);
     m.def("assemble_Z_enrich", &assemble_Z_enrich,
           "Assemble (Z_pe, Z_ep, Z_ee) for the stable XFEM singular basis "
