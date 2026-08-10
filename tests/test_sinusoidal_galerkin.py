@@ -2016,7 +2016,30 @@ def test_the_variational_readout_costs_the_m3_payoff_on_k3_star():
 # fill's (N·nq, N, n_qp_const) kernel scratch peaking at 18.6 GiB by N=1601
 # and OOMing at N≈2000 — the M6 census ceiling. Blocking bounds the scratch;
 # these tests pin that it changes NOTHING else: the arithmetic per matrix
-# entry is identical, so G must be bit-for-bit the single-block matrix.
+# entry is identical. The gate is a few ULPs rather than array_equal
+# (issue #236): numpy may pick a different einsum/reduction kernel per
+# block shape, and reassociating a per-entry sum moves the last bits —
+# observed as a deterministic ULP-level k2_junction mismatch on one venv's
+# numpy while three CI platforms were bit-exact. Anything past a few ULPs
+# is still a real blocking bug (an indexing or projector error is orders
+# of magnitude larger), so the gate keeps its teeth.
+
+
+def _assert_ulp_close(A, B, max_ulp=8):
+    """ULP gate at the MATRIX'S complex scale, not per entry: reassociation
+    noise is absolute at the magnitude of the summands, and G's real part is
+    a cancellation residue ~5 orders below its imag part (measured: dipole
+    re 8e-7 vs im 3.4e-2), so a per-entry relative gate would demand the
+    impossible exactly where cancellation happens. Measured worst on the
+    affected venv: 2.2 ULPs at scale (k2_junction re); a real blocking bug
+    (indexing, projector) lands at the scale itself, ~16 orders above tol."""
+    scale = max(np.max(np.abs(A)), np.max(np.abs(B)))
+    tol = max_ulp * np.spacing(scale)
+    worst = np.max(np.abs(A - B))
+    assert worst <= tol, (
+        f"worst |A-B|={worst:.3e} = {worst / np.spacing(scale):.1f} ULPs "
+        f"at matrix scale {scale:.3e} (gate: {max_ulp})"
+    )
 
 
 def _G_at_block_budget(monkeypatch, budget, cls=SinusoidalGalerkinSolver, **kw):
@@ -2034,12 +2057,12 @@ def _G_at_block_budget(monkeypatch, budget, cls=SinusoidalGalerkinSolver, **kw):
 
 
 @pytest.mark.parametrize("geom_name", ["dipole", "vee", "k2_junction", "k3_star"])
-def test_far_fill_blocking_is_bit_exact(monkeypatch, geom_name):
-    """Forced one-segment blocks reproduce the single-block G exactly."""
+def test_far_fill_blocking_is_ulp_exact(monkeypatch, geom_name):
+    """Forced one-segment blocks reproduce the single-block G to a few ULPs."""
     kw = GEOMETRIES[geom_name]()
     G_one_block = _G_at_block_budget(monkeypatch, 1 << 62, **kw)
     G_tiny_blocks = _G_at_block_budget(monkeypatch, 1, **kw)
-    assert np.array_equal(G_one_block, G_tiny_blocks)
+    _assert_ulp_close(G_one_block, G_tiny_blocks)
 
 
 @pytest.mark.parametrize(
@@ -2050,14 +2073,14 @@ def test_far_fill_blocking_is_bit_exact(monkeypatch, geom_name):
     ],
     ids=["pec-image", "refl-coef"],
 )
-def test_far_fill_blocking_is_bit_exact_over_ground(monkeypatch, ground_kw):
+def test_far_fill_blocking_is_ulp_exact_over_ground(monkeypatch, ground_kw):
     """The ground blocks share `_tested_contribs`, so blocking must be
     invisible there too — including the per-pair Fresnel projector, whose
     tables are indexed by GLOBAL test-segment index from inside a block."""
     kw = _dipole(**ground_kw)
     G_one_block = _G_at_block_budget(monkeypatch, 1 << 62, **kw)
     G_tiny_blocks = _G_at_block_budget(monkeypatch, 1, **kw)
-    assert np.array_equal(G_one_block, G_tiny_blocks)
+    _assert_ulp_close(G_one_block, G_tiny_blocks)
 
 
 # ---------------------------------------------------------------------------
