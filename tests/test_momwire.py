@@ -2553,6 +2553,57 @@ def test_bspline_y_matrix_dispatch_respects_memory_budget(monkeypatch):
     chunked.compute_y_matrix()
 
 
+def test_bspline_y_swept_fallback_respects_memory_budget(monkeypatch):
+    """The swept twin of the dispatch probe above (issue #238).
+
+    `compute_y_matrix_swept`'s fallback — the route taken when the batched
+    swept accelerator is unavailable — used to call `_build_J_blocks` itself
+    and materialise the full (d+1, d+1, N, N) moment tensor at ANY budget,
+    the same hole #235 closed at single k. It now goes through
+    `compute_port_solution`, hence `_compute_Z_operator`, hence the
+    `swept_mem_mb` dispatch. Both halves are booby-trapped: the budgeted
+    solver must never touch the tensor build, the default-budget one must
+    never touch the chunked build, and the two must agree.
+    """
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    wires = [np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])]
+    kw = {
+        "wires": wires,
+        "n_per_edge_per_wire": [[21]],
+        "nsegs": 21,
+        "degree": 2,
+        "wavelength": 22.0,
+    }
+    # Force the fallback: with the batched swept assembly available the sweep
+    # never reaches the per-k route this test is about.
+    monkeypatch.setattr(bmod, "_HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL", False)
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("unexpected dense assembly path")
+
+    k0 = 2 * np.pi / 22.0
+    k_array = np.linspace(0.94 * k0, 1.06 * k0, 4)
+
+    budgeted = BSplineSolver(**kw)
+    budgeted.swept_mem_mb = 0  # chunk = max(1, 0) -> single-row windows
+    monkeypatch.setattr(budgeted, "_build_J_blocks", unexpected)
+    Y_chunked = budgeted.compute_y_matrix_swept(k_array)
+
+    tensor = BSplineSolver(**kw)
+    monkeypatch.setattr(tensor, "_compute_Z_dense_chunked", unexpected)
+    Y_tensor = tensor.compute_y_matrix_swept(k_array)
+
+    rel = np.abs(Y_chunked - Y_tensor).max() / np.abs(Y_tensor).max()
+    # 1e-10 margin, same cross-compiler policy as the single-k twins above.
+    assert rel < 1e-10, f"chunked vs tensor swept Y disagreement: rel {rel:.2e}"
+
+
 @pytest.mark.parametrize(
     "ground_kw",
     [
