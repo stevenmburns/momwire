@@ -1880,3 +1880,384 @@ def test_g14_pec_ground_shift_matches_sinusoidal():
         f"δ_bsp={delta_bsp} vs sinusoidal δ={delta_sin}, "
         f"mismatch {mismatch:.3f} > {_G14_TOL}"
     )
+
+
+# ======================================================================
+# momwire#270 UNIT 1 — the C++ same-edge extended-kernel twins
+# ======================================================================
+#
+# #249 shipped EK as numpy only: every C++ dispatch in `_bspline_kernels`
+# was guarded by `ek is None`, so an EK-on fill paid the numpy penalty.
+# #270 adds the accelerated twins. Unit 1 is the SAME-EDGE pair —
+# `seg_seg_static_moments_bspline_uniform_ek` and
+# `seg_seg_reg_moments_bspline_swept_ek`. Off-edge is unit 2, the fused
+# assemblers and the ACA re-enable are unit 3.
+#
+# WHAT IS AND IS NOT COMPARED. Everything here is a CROSS-BACKEND
+# comparison, so nothing here asks for bit equality — that is the finding
+# unit 1 of #249 recorded higher up in this file and it applies with
+# knobs on: the C++ (q, r) reduction is not the einsum's, and the closed
+# forms differ in the last bits between `np.arcsinh` and `std::asinh`.
+# Gates are relative-tolerance. Measured worsts on this box are in each
+# gate's comment; the tolerances sit ~20x above them.
+#
+# The one place bit equality IS still demanded is EK-OFF, and it is
+# demanded WITHIN one backend: `test_g7*` above pin that a defaulted
+# solver and `extended_kernel=False` produce the same bits and enter no EK
+# code. Those tests are unmodified by #270 and still pass. What #270 does
+# NOT claim is that the reduced C++ kernel's absolute output is unchanged
+# against a pre-#270 BUILD: it moves by 1-3 ulp, because D_ek_pq_*_2 gives
+# J_static_pq_*_0 a second call site and GCC then inlines those header
+# forms differently under `-mfma`. That is measured, bisected and
+# explained at the kernel in _accelerators.cpp, and it is deliberately not
+# pinned — cross-build bit equality is the same trap as the cross-machine
+# one antennaknobs#253 hotfixed.
+
+_U1_STATIC_EK_ACCEL = _bk._HAVE_BSPLINE_STATIC_EK_ACCEL
+_U1_REG_EK_ACCEL = _bk._HAVE_BSPLINE_REG_SWEPT_EK_ACCEL
+_U1_ACCEL = _U1_STATIC_EK_ACCEL and _U1_REG_EK_ACCEL
+
+# The 1e-13 class this file's own cross-backend note calls for. Measured
+# worsts: 4.5e-15 (static), 1.8e-14 (reg, single k), 3.2e-15 (reg, swept).
+ACCEL_AGREEMENT = 1e-13
+
+# Solve-level, where the moment differences are amplified by the Z
+# inverse. Measured worst 6.9e-13 over the five decks below.
+ACCEL_AGREEMENT_SOLVE = 5e-12
+
+pytestmark_u1 = pytest.mark.skipif(
+    not _U1_ACCEL, reason="extension built without the #270 same-edge EK twins"
+)
+
+# Δ/a ladder: the fat end of the usable window (#248's Δ/a >= 2 floor),
+# the middle, and an ordinary wire.
+_U1_H = H
+_U1_RADII = {"fat d/a=2": _U1_H / 2, "d/a=6": _U1_H / 6, "ordinary d/a=24": _U1_H / 24}
+_U1_KS = {"k/4": 0.25 * K, "k": K, "4k": 4.0 * K}
+_U1_N = 9
+_U1_NQP = 4
+
+# A deliberately uneven edge: the uniform-h Toeplitz fast path must not
+# claim it.
+_U1_NONUNIFORM = np.array([0.0, 0.1, 0.25, 0.31, 0.5, 0.72])
+
+
+@pytest.fixture
+def numpy_same_edge(monkeypatch):
+    """Force the same-edge EK kernels back onto their numpy paths."""
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_STATIC_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_REG_SWEPT_EK_ACCEL", False)
+
+
+_U1_ACCEL_ENTRY_POINTS = (
+    "seg_seg_static_moments_bspline_uniform",
+    "seg_seg_static_moments_bspline_uniform_ek",
+    "seg_seg_reg_moments_bspline_swept",
+    "seg_seg_reg_moments_bspline_swept_ek",
+)
+
+
+class _AccelSpy:
+    """Counting proxy over the accelerator module.
+
+    `_bspline_kernels` reaches the extension as `_acc.<name>`, so swapping
+    the module-level `_acc` for this counts calls without touching the
+    extension object (whose attributes are not all rebindable). Everything
+    not in the counted set passes straight through, so the rest of the
+    accelerated fill is unaffected.
+    """
+
+    def __init__(self, real):
+        self._real = real
+        self.counts = dict.fromkeys(_U1_ACCEL_ENTRY_POINTS, 0)
+
+    def __getattr__(self, name):
+        target = getattr(self._real, name)
+        if name not in self.counts:
+            return target
+
+        def counted(*args, **kwargs):
+            self.counts[name] += 1
+            return target(*args, **kwargs)
+
+        return counted
+
+
+@pytest.fixture
+def accel_spy(monkeypatch):
+    spy = _AccelSpy(_bk._acc)
+    monkeypatch.setattr(_bk, "_acc", spy)
+    return spy
+
+
+def _u1_rel(got, ref):
+    return float(np.abs(got - ref).max() / np.abs(ref).max())
+
+
+def _u1_ends(n=_U1_N, h=_U1_H):
+    return np.arange(n + 1) * h
+
+
+# ----------------------------------------------------------------------
+# U1a — the static twin agrees with numpy's D_ek_moment path
+# ----------------------------------------------------------------------
+#
+# Measured relative worsts (degree 2):
+#
+#   Δ/a      2         6         24
+#   static   3.7e-15   4.5e-15   1.9e-15
+
+
+@pytestmark_u1
+@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize("radius", list(_U1_RADII))
+def test_u1_static_ek_cpp_matches_numpy(numpy_same_edge, degree, radius):
+    a = _U1_RADII[radius]
+    ends = _u1_ends()
+    ref = _seg_seg_static_moments(ends, a, degree, ek=WHOLE_BLOCK)  # numpy (fixture)
+    _bk._HAVE_BSPLINE_STATIC_EK_ACCEL = _U1_STATIC_EK_ACCEL
+    got = _seg_seg_static_moments(ends, a, degree, ek=WHOLE_BLOCK)
+    rel = _u1_rel(got, ref)
+    assert rel <= ACCEL_AGREEMENT, f"degree {degree}, {radius}: {rel:.3e}"
+
+
+@pytestmark_u1
+def test_u1_static_ek_honours_an_explicit_radius_override(numpy_same_edge):
+    """`_EK.a` is not the kernel's own `a`, and the C++ takes it as its own
+    argument rather than assuming the two are equal."""
+    a = _U1_RADII["d/a=6"]
+    spec = _EK(a=0.7 * a, group_i=None, group_j=None)
+    ends = _u1_ends()
+    ref = _seg_seg_static_moments(ends, a, 2, ek=spec)
+    _bk._HAVE_BSPLINE_STATIC_EK_ACCEL = _U1_STATIC_EK_ACCEL
+    got = _seg_seg_static_moments(ends, a, 2, ek=spec)
+    assert _u1_rel(got, ref) <= ACCEL_AGREEMENT
+    # And the override is not being ignored: the two radii disagree.
+    plain = _seg_seg_static_moments(ends, a, 2, ek=WHOLE_BLOCK)
+    assert _u1_rel(got, plain) > 1e-6
+
+
+@pytestmark_u1
+@pytest.mark.parametrize("degree", [1, 2])
+def test_u1_static_ek_leaves_non_uniform_edges_to_numpy(accel_spy, monkeypatch, degree):
+    """The Toeplitz kernel exists only for a uniform-h edge — under EITHER
+    kernel flavour. A non-uniform edge returns on the dense numpy branch
+    above the fast paths, so the dispatch must not reach C++ at all and the
+    answer must be bit-identical to the flags-off one."""
+    got = _seg_seg_static_moments(
+        _U1_NONUNIFORM, _U1_RADII["d/a=6"], degree, ek=WHOLE_BLOCK
+    )
+    assert accel_spy.counts["seg_seg_static_moments_bspline_uniform_ek"] == 0
+    assert accel_spy.counts["seg_seg_static_moments_bspline_uniform"] == 0
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_STATIC_EK_ACCEL", False)
+    ref = _seg_seg_static_moments(
+        _U1_NONUNIFORM, _U1_RADII["d/a=6"], degree, ek=WHOLE_BLOCK
+    )
+    assert np.array_equal(got, ref)
+
+
+# ----------------------------------------------------------------------
+# U1b — the reg twin agrees with numpy's `_ek_reg_kernel` path
+# ----------------------------------------------------------------------
+#
+# Measured relative worsts: 1.8e-14 single k, 3.2e-15 swept, over the full
+# (degree, Δ/a, k) cross-product below.
+
+
+@pytestmark_u1
+@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize("radius", list(_U1_RADII))
+@pytest.mark.parametrize("kname", list(_U1_KS))
+def test_u1_reg_ek_cpp_matches_numpy_single_k(numpy_same_edge, degree, radius, kname):
+    a = _U1_RADII[radius]
+    k = _U1_KS[kname]
+    ends = _u1_ends()
+    ref = _seg_seg_reg_moments(ends, a, k, degree, _U1_NQP, ek=WHOLE_BLOCK)
+    _bk._HAVE_BSPLINE_REG_SWEPT_EK_ACCEL = _U1_REG_EK_ACCEL
+    got = _seg_seg_reg_moments(ends, a, k, degree, _U1_NQP, ek=WHOLE_BLOCK)
+    rel = _u1_rel(got, ref)
+    assert rel <= ACCEL_AGREEMENT, f"degree {degree}, {radius}, {kname}: {rel:.3e}"
+
+
+@pytestmark_u1
+@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize("radius", list(_U1_RADII))
+def test_u1_reg_ek_cpp_matches_numpy_swept(numpy_same_edge, degree, radius):
+    a = _U1_RADII[radius]
+    ks = np.array(list(_U1_KS.values()))
+    geo = _seg_seg_reg_geometry(_u1_ends(), a, degree, _U1_NQP, ek=WHOLE_BLOCK)
+    ref = _seg_seg_reg_moments_from_geometry_swept(geo, ks)
+    _bk._HAVE_BSPLINE_REG_SWEPT_EK_ACCEL = _U1_REG_EK_ACCEL
+    got = _seg_seg_reg_moments_from_geometry_swept(geo, ks)
+    rel = _u1_rel(got, ref)
+    assert rel <= ACCEL_AGREEMENT, f"degree {degree}, {radius}: {rel:.3e}"
+
+
+@pytestmark_u1
+def test_u1_reg_ek_cpp_does_serve_a_non_uniform_edge(numpy_same_edge, accel_spy):
+    """Unlike the static twin, the reg twin has no uniformity precondition:
+    it consumes the precomputed (N·n_qp, N·n_qp) R table, which already
+    carries whatever geometry the edge has. Pinned as a positive claim so
+    the asymmetry between the two same-edge kernels is not read as an
+    oversight in either."""
+    a = _U1_RADII["d/a=6"]
+    ref = _seg_seg_reg_moments(_U1_NONUNIFORM, a, K, 2, _U1_NQP, ek=WHOLE_BLOCK)
+    _bk._HAVE_BSPLINE_REG_SWEPT_EK_ACCEL = _U1_REG_EK_ACCEL
+    got = _seg_seg_reg_moments(_U1_NONUNIFORM, a, K, 2, _U1_NQP, ek=WHOLE_BLOCK)
+    assert accel_spy.counts["seg_seg_reg_moments_bspline_swept_ek"] == 1
+    assert _u1_rel(got, ref) <= ACCEL_AGREEMENT
+
+
+# ----------------------------------------------------------------------
+# U1c — end to end: the same EK-on solve, both same-edge backends
+# ----------------------------------------------------------------------
+#
+# Measured relative worsts on Z:
+#
+#   dipole fat 6.9e-13 | dipole thin 4.5e-13 | bend 9.4e-16
+#   mixed radii 2.2e-15 | PEC ground 1.5e-14 | swept 5.8e-13
+#
+# The two dipoles are the loose end because they are the two decks whose
+# whole matrix IS one same-edge block, so nothing else dilutes the moment
+# difference before the Z inverse amplifies it.
+
+_U1_DECKS = {name: dict(kw, extended_kernel=True) for name, kw in _G7_BSPLINE.items()}
+_U1_DECKS["dipole thin"] = dict(
+    wires=[_dipole_wire(2.5)],
+    n_per_edge_per_wire=[[21]],
+    wire_radius=0.005,
+    extended_kernel=True,
+)
+
+
+@pytestmark_u1
+@pytest.mark.parametrize("name", list(_U1_DECKS))
+def test_u1_end_to_end_solve_agrees_with_the_numpy_same_edge_path(monkeypatch, name):
+    kw = dict(_U1_DECKS[name], wavelength=LAM, degree=2)
+    z_cpp, c_cpp = BSplineSolver(**kw).compute_impedance()
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_STATIC_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_REG_SWEPT_EK_ACCEL", False)
+    z_npy, c_npy = BSplineSolver(**kw).compute_impedance()
+    rel = abs(z_cpp - z_npy) / abs(z_npy)
+    assert rel <= ACCEL_AGREEMENT_SOLVE, f"{name}: {z_cpp!r} vs {z_npy!r} ({rel:.3e})"
+    assert _u1_rel(c_cpp, c_npy) <= ACCEL_AGREEMENT_SOLVE
+
+
+@pytestmark_u1
+def test_u1_end_to_end_swept_solve_agrees_with_the_numpy_same_edge_path(monkeypatch):
+    kw = dict(_U1_DECKS["free space"], wavelength=LAM, degree=2)
+    ks = 2 * np.pi / LAM * np.array([0.9, 1.0, 1.1])
+    z_cpp = np.asarray(BSplineSolver(**kw).compute_impedance_swept(ks))
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_STATIC_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_REG_SWEPT_EK_ACCEL", False)
+    z_npy = np.asarray(BSplineSolver(**kw).compute_impedance_swept(ks))
+    assert _u1_rel(z_cpp, z_npy) <= ACCEL_AGREEMENT_SOLVE
+
+
+# ----------------------------------------------------------------------
+# U1d — EK-OFF armor: the twins are unreachable and inert with EK off
+# ----------------------------------------------------------------------
+#
+# `test_g7*` above already pin the numeric and no-EK-code-entered halves
+# within a backend, unmodified by #270. These two add what is specific to
+# having a second C++ entry point in the file at all.
+
+
+@pytestmark_u1
+@pytest.mark.parametrize("name", list(_G7_BSPLINE))
+def test_u1_ek_off_never_reaches_the_ek_entry_points(accel_spy, name):
+    """A defaulted (EK-off) solve must call the reduced C++ symbols and
+    neither EK one — the dispatch guard, checked at the C++ boundary rather
+    than at the numpy helpers `test_g7b` watches."""
+    BSplineSolver(**_G7_BSPLINE[name], wavelength=LAM, degree=2).compute_impedance()
+    assert accel_spy.counts["seg_seg_static_moments_bspline_uniform_ek"] == 0
+    assert accel_spy.counts["seg_seg_reg_moments_bspline_swept_ek"] == 0
+    assert accel_spy.counts["seg_seg_reg_moments_bspline_swept"] > 0
+    assert accel_spy.counts["seg_seg_static_moments_bspline_uniform"] > 0
+
+
+@pytestmark_u1
+@pytest.mark.parametrize("degree", [1, 2])
+def test_u1_static_ek_twin_adds_exactly_d_and_stays_toeplitz(degree):
+    """The twin's two structural claims, both checked inside one backend so
+    both can be exact where they should be.
+
+    1. It adds D and nothing else: the EK-minus-reduced difference is the
+       numpy `D_ek_moment` family on the same corners, over 1/(4π).
+    2. D rides the SAME 2N-1 Toeplitz table: every entry on a given
+       diagonal of the EK block is bit-identical, which would not survive a
+       twin that evaluated D per (i, j) with drifting arguments.
+
+    (There is no zero-radius bit-collapse gate here, unlike `test_g4_...`
+    above: on a uniform edge the Δ ∈ {-1, 0, 1} corners make one of D's
+    `1/√(a² + ζ²)` terms infinite at a = 0, so the explicit a² prefactor
+    gives 0·inf = nan rather than the exact zero it gives off-diagonal.)
+    """
+    h, a, n = _U1_H, _U1_RADII["d/a=6"], _U1_N
+    reduced = _bk._acc.seg_seg_static_moments_bspline_uniform(h, a, n, degree)
+    ek = _bk._acc.seg_seg_static_moments_bspline_uniform_ek(h, a, n, degree, a)
+
+    delta = np.arange(-(n - 1), n, dtype=float)
+    alpha = np.zeros_like(delta)
+    beta = np.full_like(delta, h)
+    A = delta * h
+    B = (delta + 1.0) * h
+    gather = (np.arange(n)[None, :] - np.arange(n)[:, None]) + (n - 1)
+    for p in range(degree + 1):
+        for q in range(degree + 1):
+            want = D_ek_moment(p, q, alpha, beta, A, B, a)[gather] / (4 * np.pi)
+            got = ek[p, q] - reduced[p, q]
+            assert _u1_rel(got, want) <= ACCEL_AGREEMENT, f"({p}, {q})"
+
+    for d in range(-(n - 1), n):
+        diag = np.diagonal(ek, offset=d, axis1=2, axis2=3)
+        assert np.all(diag == diag[..., :1]), f"EK block is not Toeplitz at Δ={d}"
+
+
+# ----------------------------------------------------------------------
+# U1e — dispatch probes: EK-on same-edge really is served by C++
+# ----------------------------------------------------------------------
+#
+# Numeric agreement alone would be satisfied by a dispatch that quietly
+# never left numpy, so each direction is pinned from both sides: the C++
+# entry point is entered, and the numpy closed form it replaces is not.
+# The probe is scoped to the SAME-EDGE helpers: `_ek_factor` is still
+# entered in this unit, from the off-edge fill that unit 2 will move.
+
+
+@pytestmark_u1
+def test_u1_ek_on_same_edge_is_served_by_cpp(accel_spy, ek_call_counts):
+    BSplineSolver(
+        **_G7_BSPLINE["free space"],
+        wavelength=LAM,
+        degree=2,
+        extended_kernel=True,
+    ).compute_impedance()
+    assert accel_spy.counts["seg_seg_static_moments_bspline_uniform_ek"] > 0
+    assert accel_spy.counts["seg_seg_reg_moments_bspline_swept_ek"] > 0
+    # ... and the numpy same-edge closed forms were not touched.
+    assert ek_call_counts["D_ek_moment"] == 0
+    assert ek_call_counts["_ek_reg_extra"] == 0
+    # The reduced C++ same-edge symbols are idle too: EK-on same-edge
+    # blocks go to the EK twins, not to the reduced kernel plus a fixup.
+    assert accel_spy.counts["seg_seg_static_moments_bspline_uniform"] == 0
+    assert accel_spy.counts["seg_seg_reg_moments_bspline_swept"] == 0
+    # Off-edge is still numpy in unit 1 — the control that this probe is
+    # scoped, not merely lucky.
+    assert ek_call_counts["_ek_factor"] > 0
+
+
+@pytestmark_u1
+def test_u1_missing_symbols_fall_back_to_numpy(numpy_same_edge, accel_spy):
+    """Graceful degradation: an extension built before #270 has neither
+    twin, the `_HAVE_*` flags are False, and the EK fill is the #249 numpy
+    path — same answer, no AttributeError."""
+    z, _ = BSplineSolver(
+        **_G7_BSPLINE["free space"],
+        wavelength=LAM,
+        degree=2,
+        extended_kernel=True,
+    ).compute_impedance()
+    assert np.isfinite(z)
+    assert accel_spy.counts["seg_seg_static_moments_bspline_uniform_ek"] == 0
+    assert accel_spy.counts["seg_seg_reg_moments_bspline_swept_ek"] == 0
