@@ -86,8 +86,13 @@ Landed so far (unit 1, the SAME-EDGE kernels):
     _seg_seg_reg_moments_from_geometry      seg_seg_reg_moments_bspline_swept_ek
     ...        _from_geometry_swept         seg_seg_reg_moments_bspline_swept_ek
 
-The OFF-EDGE kernels (`_seg_seg_full_moments_offedge` and its swept form) are
-still guarded by `ek is None` and still take the numpy path with EK on.
+Unit 2 adds the OFF-EDGE pair: `seg_seg_full_moments_bspline_ek` and
+`seg_seg_full_moments_bspline_swept_ek`. Off-edge eligibility is a property
+of the (i, j) SEGMENT PAIR rather than of the whole block, so these two
+twins additionally take the per-segment coaxial-and-equal-radius group
+labels (`group_i`, `group_j`, int64 arrays) that `_ek_pair_mask` consumes on
+the numpy side, and apply NEC Eq 89's coaxial factor pair by pair instead of
+block-wide.
 
 The EK-off path is untouched, byte for byte: the twins are separate symbols
 (and, in C++, separate template instantiations), so the reduced kernels'
@@ -127,6 +132,13 @@ _HAVE_BSPLINE_STATIC_EK_ACCEL = _acc is not None and hasattr(
 )
 _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_reg_moments_bspline_swept_ek"
+)
+# The extended-kernel twins of the two OFF-EDGE kernels (momwire#270 unit 2).
+_HAVE_BSPLINE_OFFEDGE_EK_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_full_moments_bspline_ek"
+)
+_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_full_moments_bspline_swept_ek"
 )
 
 # Currently the C++ accelerator has explicit instantiations for D in {1, 2}.
@@ -611,9 +623,12 @@ def _seg_seg_full_moments_offedge(
     coaxial-and-equal-radius, `group_i[i] == group_j[j]`, and leaves every
     other pair reduced. Eligible pairs have equal radii by definition, so
     the per-observer-row `a` already IS the EK radius and the mixed-radius
-    plumbing needs no change — but the C++ paths (including the
-    constant-radius run-splitting, which exists only to feed them) are
-    bypassed, since they transcribe the reduced kernel only.
+    plumbing needs no change. Since momwire#270 unit 2 the C++ paths
+    (including the constant-radius run-splitting) serve `ek` too, via the
+    `seg_seg_full_moments_bspline_ek` twin — a spec with `group_i`/`group_j`
+    unset (whole-block eligibility, the same-edge convention) still falls
+    back to numpy here, since the off-edge twin transcribes the PAIR mask
+    rather than the whole-block case.
     """
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
     gl_xi, gl_w = leggauss(n_qp)
@@ -621,9 +636,24 @@ def _seg_seg_full_moments_offedge(
     w01 = 0.5 * gl_w
 
     accel_ok = _HAVE_BSPLINE_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D and ek is None
-    if accel_ok and not np.ndim(a) == 0:
+    accel_ok_ek = (
+        ek is not None
+        and ek.group_i is not None
+        and ek.group_j is not None
+        and _HAVE_BSPLINE_OFFEDGE_EK_ACCEL
+        # max_d=0 has no C++ template instantiation (only D in {1, 2} are
+        # instantiated for either kernel flavour) — the reduced dispatch
+        # above shares this floor too, just never exercises it: `ek is not
+        # None` always forced numpy pre-#270-unit-2, so no caller ever hit
+        # max_d=0 on the accel-eligible branch until this one.
+        and 1 <= max_d <= _BSPLINE_ACCEL_MAX_D
+    )
+    if (accel_ok or accel_ok_ek) and not np.ndim(a) == 0:
         # Mixed per-row radii on the C++ path: dispatch one call per
         # contiguous run of equal radius and stitch along the row axis.
+        # Under EK, `group_i` is sliced the same way (momwire#270 unit 2):
+        # eligible pairs already share a radius by construction, so a run
+        # boundary — drawn purely from `a` — never splits a coaxial group.
         bounds = np.flatnonzero(np.diff(a)) + 1
         starts = np.concatenate(([0], bounds))
         stops = np.concatenate((bounds, [a.shape[0]]))
@@ -638,6 +668,11 @@ def _seg_seg_full_moments_offedge(
                     k,
                     max_d,
                     n_qp,
+                    ek=(
+                        _EK(a=ek.a, group_i=ek.group_i[s:e], group_j=ek.group_j)
+                        if ek is not None
+                        else None
+                    ),
                 )
                 for s, e in zip(starts, stops)
             ],
@@ -655,6 +690,27 @@ def _seg_seg_full_moments_offedge(
             int(max_d),
             np.ascontiguousarray(t01, dtype=np.float64),
             np.ascontiguousarray(w01, dtype=np.float64),
+        )
+
+    if accel_ok_ek:
+        # The C++ EK twin (momwire#270 unit 2): the reduced kernel's own
+        # geometry contract, plus the per-segment group labels and the
+        # plain (unsquared) EK radius — `a` here is already scalar (the
+        # mixed-radius branch above recurses one constant-radius run at a
+        # time before reaching this point).
+        return _acc.seg_seg_full_moments_bspline_ek(
+            np.ascontiguousarray(seg_l_i, dtype=np.float64),
+            np.ascontiguousarray(seg_r_i, dtype=np.float64),
+            np.ascontiguousarray(seg_l_j, dtype=np.float64),
+            np.ascontiguousarray(seg_r_j, dtype=np.float64),
+            float(a) * float(a),
+            float(k),
+            int(max_d),
+            np.ascontiguousarray(t01, dtype=np.float64),
+            np.ascontiguousarray(w01, dtype=np.float64),
+            np.ascontiguousarray(ek.group_i, dtype=np.int64),
+            np.ascontiguousarray(ek.group_j, dtype=np.int64),
+            float(_ek_radius(ek, a)),
         )
 
     len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
@@ -705,8 +761,11 @@ def _seg_seg_full_moments_offedge_swept(
 
     `a` is a scalar or a per-observer-row (N_i,) array — same contract and
     per-run C++ dispatch as `_seg_seg_full_moments_offedge` (axis 3 here).
-    `ek` likewise: same spec, and it bypasses the C++ paths, so the sweep
-    falls back to stacking single-k calls.
+    `ek` likewise: same spec and the same per-run dispatch; since
+    momwire#270 unit 2 a spec with concrete `group_i`/`group_j` reaches the
+    batched `seg_seg_full_moments_bspline_swept_ek` twin instead of falling
+    back to stacking single-k calls. A spec with unset group labels (or no
+    C++ EK twin available) still falls back to that stack.
     """
     k_array = np.asarray(k_array, dtype=np.float64)
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
@@ -715,7 +774,15 @@ def _seg_seg_full_moments_offedge_swept(
         and max_d <= _BSPLINE_ACCEL_MAX_D
         and ek is None
     )
-    if accel_ok and not np.ndim(a) == 0:
+    accel_ok_ek = (
+        ek is not None
+        and ek.group_i is not None
+        and ek.group_j is not None
+        and _HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL
+        # Same max_d=0 floor as the single-k twin above.
+        and 1 <= max_d <= _BSPLINE_ACCEL_MAX_D
+    )
+    if (accel_ok or accel_ok_ek) and not np.ndim(a) == 0:
         bounds = np.flatnonzero(np.diff(a)) + 1
         starts = np.concatenate(([0], bounds))
         stops = np.concatenate((bounds, [a.shape[0]]))
@@ -730,6 +797,11 @@ def _seg_seg_full_moments_offedge_swept(
                     k_array,
                     max_d,
                     n_qp,
+                    ek=(
+                        _EK(a=ek.a, group_i=ek.group_i[s:e], group_j=ek.group_j)
+                        if ek is not None
+                        else None
+                    ),
                 )
                 for s, e in zip(starts, stops)
             ],
@@ -749,6 +821,24 @@ def _seg_seg_full_moments_offedge_swept(
             int(max_d),
             np.ascontiguousarray(t01, dtype=np.float64),
             np.ascontiguousarray(w01, dtype=np.float64),
+        )
+    if accel_ok_ek:
+        gl_xi, gl_w = leggauss(n_qp)
+        t01 = 0.5 * (gl_xi + 1.0)
+        w01 = 0.5 * gl_w
+        return _acc.seg_seg_full_moments_bspline_swept_ek(
+            np.ascontiguousarray(seg_l_i, dtype=np.float64),
+            np.ascontiguousarray(seg_r_i, dtype=np.float64),
+            np.ascontiguousarray(seg_l_j, dtype=np.float64),
+            np.ascontiguousarray(seg_r_j, dtype=np.float64),
+            float(a) * float(a),
+            np.ascontiguousarray(k_array),
+            int(max_d),
+            np.ascontiguousarray(t01, dtype=np.float64),
+            np.ascontiguousarray(w01, dtype=np.float64),
+            np.ascontiguousarray(ek.group_i, dtype=np.int64),
+            np.ascontiguousarray(ek.group_j, dtype=np.int64),
+            float(_ek_radius(ek, a)),
         )
     return np.stack(
         [
