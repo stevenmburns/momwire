@@ -25,10 +25,67 @@ agreed to solve-order roundoff on knot-fed meshes — tests/test_tent_parity.py
 pins the values), i.e. equivalent to the
 existing `_seg_seg_static_all` + `_seg_seg_reg_all` kernels; the new
 module is just the generalization to higher polynomial moments.
+
+THE EXTENDED THIN-WIRE KERNEL (momwire#249)
+-------------------------------------------
+Everything above is NEC's *reduced* kernel: the source current is a filament
+on the wire axis and the conductor's girth survives only as the a²
+regularization of R. Passing `ek=` (an `_EK` spec) switches the eligible
+segment pairs to NEC's *extended* kernel, Eq 89 of the LLNL theory manual:
+
+    G_ek = (e^{-jkR}/4πR)·(1 + T1·C2 − T2·C1)
+    C1 = 1 + jkR    C2 = 3·C1 − (kR)²    T1 = b²ρ²/(4R⁴)    T2 = b²/(2R²)
+
+which is the O(b²) truncation of the azimuthal average of the free-space
+Green's function over a source tube of radius b, seen from an observer a
+distance ρ off the source axis.
+
+momwire extends only COAXIAL EQUAL-RADIUS pairs (`_ek_axis_groups`), and on
+those the whole thing collapses: the observer sits on its own wire's surface
+on the same axis, so ρ = a and b = a and R = √(ζ² + a²) is *the same R the
+reduced kernel already computes*. Eq 89 becomes a scalar multiplicative
+factor of R alone (`_ek_factor`), manifestly symmetric in i ↔ j and
+manifestly → 1 as a → 0. NEC's IRA swapped arm is unreachable in this
+specialisation (the test `ρ_eval < b` is strict and ρ_eval = b = a).
+
+The factor rides through the existing static/regular split unchanged:
+
+    G_ek,static = (1/4π)·[ 1/R − a²/(2R³) + 3a⁴/(4R⁵) ]      (k → 0)
+    G_ek,reg    = (1/4π)·[ (e^{-jkR} − 1)·fac + extra ] / R
+
+`extra = fac − fac_static` is spelled out term by term (`_ek_reg_extra`) so
+that no term is a difference of near-equal quantities, and so that a = 0
+reduces it to exactly the pre-existing expression rather than to something
+that merely rounds to it. The static half's new O(a²) piece is one generated
+closed-form family, `D_ek_moment` — one integrand, never 1/R³ and 1/R⁵
+separately (see scripts/derive_bspline_static_moments.py for the
+cancellation this avoids). The remainder is bounded by ≈ 3.5k on R ≥ a, the
+same class as the reduced `(e^{-jkR}−1)/R → −jk` limit, and is resolved by
+the existing Gauss–Legendre rule at unchanged `n_qp` (measured: the EK
+remainder's quadrature error is within 2–8× the reduced remainder's).
+
+Two honest limits, both measured (momwire#249 design §1.3, §3):
+
+  * EK does NOT fix the self term. The exact tube kernel diverges
+    logarithmically as ζ → 0 while EK saturates at 1.25/a, so the diagonal
+    MOMENT is only ~10× better than reduced, not the ~10³× the pointwise
+    O(a⁴) order suggests.
+  * Below Δ/a ≈ 1 EK stops improving the moments, and by Δ/a ≈ 0.5 it is
+    *worse* than the reduced kernel on the nearest-neighbour moment. This is
+    an engine-free confirmation of the Δ/a ≥ 2 floor #248 established from
+    the divergence side.
+
+Every C++ accelerator dispatch in this module is guarded by `ek is None`:
+the accelerated kernels transcribe the reduced kernel only, so an EK-on fill
+takes the numpy path (momwire#249 follow-up B adds the C++ twins). The
+EK-off path is therefore untouched, byte for byte.
 """
+
+from collections import namedtuple
 
 import numpy as np
 
+from ._bspline_ek_moments import D_ek_moment
 from ._bspline_static_moments import J_static_moment
 from ._quadrature import leggauss
 
@@ -74,7 +131,167 @@ def _normalize_row_radius(a, n_rows):
     return a_arr
 
 
-def _seg_seg_static_moments(seg_endpoints, a, max_d):
+# The extended-kernel spec threaded through every kernel entry point.
+#
+#   a        EK regularization radius, or None to use the kernel call's own
+#            `a` — which is the right answer on every eligible pair by
+#            construction (eligibility REQUIRES equal radii, and the
+#            off-edge kernel's per-observer-row `a` is already that radius).
+#            None is the normal spelling; an explicit value is an override
+#            for callers that regularize with something else.
+#   group_i  per-observer-segment axis-group labels, or None meaning "every
+#            row of this block is eligible" (the same-edge case: one edge is
+#            one straight run of one wire at one radius, so its segments are
+#            coaxial and equal-radius by construction).
+#   group_j  per-source-segment labels, same convention.
+#
+# A pair is extended iff `group_i[i] == group_j[j]`, which is symmetric in
+# (i, j) by construction — the Galerkin symmetry gate stays live as an error
+# detector rather than being burnt by the gating rule (momwire#249 §4.1).
+_EK = namedtuple("_EK", "a group_i group_j")
+
+
+def _ek_radius(ek, a):
+    """The radius entering the EK factor for a kernel call regularized by `a`."""
+    return a if ek.a is None else ek.a
+
+
+def _ek_factor(R, a, k):
+    """NEC Eq 89's `1 + T1·C2 − T2·C1` in the coaxial equal-radius case.
+
+    With the observer on its own wire's surface on the source axis, NEC's
+    ρ_eval and its source radius b are both `a`, so T1 = a⁴/(4R⁴) and
+    T2 = a²/(2R²) and the whole factor is a function of R alone. Exactly
+    1.0 at a = 0, in IEEE and not merely in the limit.
+    """
+    # Multi-step spelling throughout (momwire#205): a one-expression complex
+    # product with a dead operand changes rounding above numpy's
+    # temporary-elision threshold, making the fill depend on block size.
+    r2 = R * R
+    r4 = r2 * r2
+    kr = k * R
+    kr2 = kr * kr
+    a2 = a * a
+    a4 = a2 * a2
+    c1 = 1.0 + 1j * kr
+    c2 = 3.0 * c1 - kr2
+    t1 = 0.25 * a4 / r4
+    t2 = 0.5 * a2 / r2
+    fac = t1 * c2
+    fac = fac - t2 * c1
+    fac = fac + 1.0
+    return fac
+
+
+def _ek_reg_extra(R, a, k):
+    """`fac − fac_static` = T1·(C2 − 3) − T2·(C1 − 1), written out.
+
+    The k → 0 limit of `_ek_factor` is `fac_static = 1 − a²/(2R²) +
+    3a⁴/(4R⁴)`, whose moments the generated `D_ek_moment` family carries in
+    closed form. What is left for the Gauss–Legendre remainder is this
+    difference — spelled as the two surviving terms rather than as a
+    subtraction of near-equal factors, so it is exactly `0.0` at a = 0 and
+    the remainder collapses term by term onto the reduced kernel's.
+    """
+    r2 = R * R
+    r4 = r2 * r2
+    kr = k * R
+    kr2 = kr * kr
+    a2 = a * a
+    a4 = a2 * a2
+    t1 = 0.25 * a4 / r4
+    t2 = 0.5 * a2 / r2
+    # C2 - 3 = 3jkR - (kR)²  and  C1 - 1 = jkR.
+    extra = t1 * (3j * kr - kr2)
+    extra = extra - t2 * (1j * kr)
+    return extra
+
+
+def _ek_axis_groups(seg_l, seg_r, tangents, seg_a, tol=1e-6):
+    """Per-segment coaxial-and-equal-radius eligibility labels.
+
+    Two segments share a label iff they lie on the SAME LINE and have the
+    same radius, using NEC's own thresholds:
+
+      * `|t_i · t_j| ≥ 1 − tol` — nec2-1.2.1.2.f:2040-2041, including the
+        ABS() there, so an antiparallel collinear pair still counts;
+      * `|a_i/a_j − 1| ≤ tol` — f.2042-2043;
+      * perpendicular offset between the two axes `≤ tol·a` — momwire's own
+        addition. NEC never needs it because its collinearity test is
+        applied only to segments already known to share an endpoint; a
+        Galerkin fill asks the question of arbitrary pairs, where parallel
+        is not the same as coaxial.
+
+    NEC's per-END gating (`SinusoidalSolver._ek_gating`, IND1/IND2) is
+    deliberately NOT reused. It reads per-segment neighbour tables the
+    B-spline geometry never builds, per-end brackets do not exist in a
+    quadrature fill, and a per-source-segment decision would make
+    `G(i, j) ≠ G(j, i)` and burn the Galerkin symmetry gate. Against NEC's
+    codes this rule:
+
+      IND = 1 (free end)                agrees — coaxial observers extend
+      IND = 0 (collinear junction)      agrees — same line, same radius
+      IND = 0 (perpendicular ground)    agrees via the image: the mirrored
+                                        source of a vertical monopole is
+                                        coaxial with, and of equal radius
+                                        to, the real wire
+      IND = 2 (bend, radius step,       agrees where both ends are reduced;
+               K ≥ 3 junction)          strictly MORE conservative on the
+                                        cross-arm pairs NEC still extends
+                                        (~1 % of Z at Δ/a = 2, and O(h) in
+                                        the refinement limit — #249 §4.3)
+
+    seg_l, seg_r: (N, 3) segment endpoints. tangents: (N, 3) unit tangents.
+    seg_a: (N,) per-segment radii. Returns an (N,) int64 label array; every
+    label is ≥ 0 (a segment is always coaxial with itself), the ≥ 0
+    convention leaving room for a future "never extend" marker.
+
+    Cost is O(N·G) with G the number of distinct groups — one pass per
+    segment against the existing group representatives, not an O(N²) pair
+    scan. G is 1 on a straight wire and small on any real deck.
+    """
+    seg_l = np.asarray(seg_l, dtype=np.float64)
+    seg_r = np.asarray(seg_r, dtype=np.float64)
+    tangents = np.asarray(tangents, dtype=np.float64)
+    seg_a = np.asarray(seg_a, dtype=np.float64)
+    n = seg_l.shape[0]
+    centers = 0.5 * (seg_l + seg_r)
+
+    labels = np.full(n, -1, dtype=np.int64)
+    rep_c = np.empty((0, 3), dtype=np.float64)
+    rep_t = np.empty((0, 3), dtype=np.float64)
+    rep_a = np.empty(0, dtype=np.float64)
+    for i in range(n):
+        if rep_a.size:
+            collinear = np.abs(rep_t @ tangents[i]) >= 1.0 - tol
+            same_a = np.abs(seg_a[i] / rep_a - 1.0) <= tol
+            # Perpendicular component of the center-to-center offset,
+            # resolved in each representative's own axis frame.
+            dvec = centers[i][None, :] - rep_c
+            axial = dvec @ tangents[i]
+            perp = dvec - axial[:, None] * tangents[i][None, :]
+            coaxial = np.linalg.norm(perp, axis=1) <= tol * rep_a
+            hit = np.flatnonzero(collinear & same_a & coaxial)
+            if hit.size:
+                labels[i] = int(hit[0])
+                continue
+        labels[i] = rep_a.size
+        rep_c = np.vstack([rep_c, centers[i][None, :]])
+        rep_t = np.vstack([rep_t, tangents[i][None, :]])
+        rep_a = np.append(rep_a, seg_a[i])
+    return labels
+
+
+def _ek_pair_mask(ek, n_i, n_j):
+    """The (N_i, N_j) boolean "extend this pair" mask of an `_EK` spec."""
+    if ek.group_i is None or ek.group_j is None:
+        return np.ones((n_i, n_j), dtype=bool)
+    gi = np.asarray(ek.group_i)
+    gj = np.asarray(ek.group_j)
+    return (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
+
+
+def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
     """Closed-form same-edge static-kernel moment integrals.
 
     seg_endpoints: (N+1,) array of arc lengths along a single straight edge.
@@ -86,6 +303,14 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d):
     direction along the straight edge), so the (N, N) matrix is Toeplitz —
     2N-1 unique values per moment instead of N². At N=21 this is ~10× faster
     than the dense evaluation; at N=81 it's ~40×.
+
+    `ek`: an `_EK` spec turns on the extended kernel's static correction,
+    `D_ek_moment`, added moment by moment. A same-edge block is eligible in
+    its entirety (one edge is one straight run of one wire at one radius),
+    so the spec's group labels are not consulted here. `D` is
+    translation-invariant along the edge exactly as `J_static_moment` is, so
+    the Toeplitz gather serves it unchanged; the C++ static path does not
+    know about EK and is bypassed.
     """
     if max_d > MAX_D_SUPPORTED:
         raise NotImplementedError(
@@ -108,12 +333,17 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d):
         out = np.empty((n_d, n_d, N, N), dtype=np.float64)
         for p in range(n_d):
             for q in range(n_d):
-                out[p, q] = J_static_moment(p, q, alpha, beta, A, B, a) * inv4pi
+                vals = J_static_moment(p, q, alpha, beta, A, B, a)
+                if ek is not None:
+                    vals = vals + D_ek_moment(
+                        p, q, alpha, beta, A, B, _ek_radius(ek, a)
+                    )
+                out[p, q] = vals * inv4pi
         return out
 
     # Uniform-h fast paths
     h = float(h_seg[0])
-    if _HAVE_BSPLINE_STATIC_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D:
+    if _HAVE_BSPLINE_STATIC_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D and ek is None:
         # C++ inlined sympy-derived closed forms — ~50× faster than numpy
         # because each call escapes per-op dispatch overhead.
         return _acc.seg_seg_static_moments_bspline_uniform(
@@ -131,12 +361,15 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d):
     out = np.empty((n_d, n_d, N, N), dtype=np.float64)
     for p in range(n_d):
         for q in range(n_d):
-            vals = J_static_moment(p, q, alpha, beta, A, B, a) * inv4pi
+            vals = J_static_moment(p, q, alpha, beta, A, B, a)
+            if ek is not None:
+                vals = vals + D_ek_moment(p, q, alpha, beta, A, B, _ek_radius(ek, a))
+            vals = vals * inv4pi
             out[p, q] = vals[gather_idx]
     return out
 
 
-def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp):
+def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None):
     """k-independent precompute for `_seg_seg_reg_moments`.
 
     Everything in the smooth-kernel moment integral except the `exp(-jkR)`
@@ -146,7 +379,11 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp):
     `_seg_seg_reg_moments_from_geometry`). Bounded memory — one edge's
     (N·n_qp, N·n_qp) R table at a time, same as the per-k path.
 
-    Returns a dict consumed by `_seg_seg_reg_moments_from_geometry`.
+    Returns a dict consumed by `_seg_seg_reg_moments_from_geometry`. The
+    extended-kernel spec rides in that dict rather than in the per-k call
+    signature: `a` is k-independent geometry, so the EK-aware remainder needs
+    nothing per k that the reduced one does not (momwire#249 §5, the
+    swept-path row).
     """
     gl_xi, gl_w = leggauss(n_qp)
     t01 = 0.5 * (gl_xi + 1.0)
@@ -168,7 +405,23 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp):
     u_pow = np.stack([u_q**p for p in range(max_d + 1)], axis=0)  # (max_d+1, N, n_qp)
     wu_pow = w_q[None, :, :] * u_pow
 
-    return {"R": R, "wu_pow": wu_pow, "N": N, "n_qp": n_qp}
+    return {"R": R, "wu_pow": wu_pow, "N": N, "n_qp": n_qp, "a": a, "ek": ek}
+
+
+def _ek_reg_kernel(R, a, k):
+    """`[(e^{-jkR} − 1)·fac + extra] / (4πR)` — the EK smooth-kernel piece.
+
+    At a = 0 this is the reduced `(e^{-jkR} − 1)/(4πR)` term by term, not
+    merely to rounding: `fac` is exactly 1.0 and `extra` exactly 0.0.
+    """
+    # Multi-step (momwire#205), same discipline as `_ek_factor`.
+    fac = _ek_factor(R, a, k)
+    extra = _ek_reg_extra(R, a, k)
+    phase = np.exp(-1j * k * R)
+    phase = phase - 1.0
+    num = phase * fac
+    num = num + extra
+    return num / (4 * np.pi * R)
 
 
 def _seg_seg_reg_moments_from_geometry(geo, k):
@@ -177,16 +430,23 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
     wu_pow = geo["wu_pow"]
     N = geo["N"]
     n_qp = geo["n_qp"]
+    ek = geo.get("ek")
     # Single-k case (the non-swept compute_impedance): the same streaming C++
     # kernel serves it with a length-1 k axis, which we squeeze back off. This
     # is the ~65% of a single d=2 solve that the numpy einsum below otherwise
     # dominates. Bit-close (different reduction order); numpy stays the fallback.
-    if _HAVE_BSPLINE_REG_SWEPT_ACCEL:
+    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None:
         return _acc.seg_seg_reg_moments_bspline_swept(
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
             np.ascontiguousarray(np.asarray([k], dtype=np.float64)),
         )[0]
+    if ek is not None:
+        # Whole-block eligibility, as in `_seg_seg_static_moments`: a
+        # same-edge block is one straight run of one wire at one radius.
+        G_ek = _ek_reg_kernel(R, _ek_radius(ek, geo["a"]), k)
+        G_ek_block = G_ek.reshape(N, n_qp, N, n_qp)
+        return np.einsum("piq,iqjr,Pjr->pPij", wu_pow, G_ek_block, wu_pow)
     # (exp(-jkR) - 1) / (4π R). At R = a small, this is bounded → -jk/(4π) in
     # the a → 0, kR → 0 limit; no quadrature pathology.
     G_reg = (np.exp(-1j * k * R) - 1.0) / (4 * np.pi * R)
@@ -216,13 +476,14 @@ def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 <
     n_d = wu_pow.shape[0]
     k_array = np.asarray(k_array, dtype=float)
     n_k = k_array.shape[0]
+    ek = geo.get("ek")
 
     # Streaming C++ kernel: evaluates exp(-jkR) once per (iq, jr, k) and
     # accumulates straight into the (n_d, n_d) moment block, so it never
     # materializes the (chunk, N*n_qp, N*n_qp) phase intermediate this numpy
     # path has to chunk under max_chunk_bytes. Bit-close (different reduction
     # order) to the einsum below, which stays as the fallback.
-    if _HAVE_BSPLINE_REG_SWEPT_ACCEL:
+    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None:
         return _acc.seg_seg_reg_moments_bspline_swept(
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
@@ -233,11 +494,15 @@ def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 <
     bytes_per_k = R.size * 16  # complex128 phase table for one k
     chunk = max(1, int(max_chunk_bytes // max(bytes_per_k, 1)))
     inv4pi_R = 1.0 / (4 * np.pi * R)
+    a_ek = None if ek is None else _ek_radius(ek, geo["a"])
     for c0 in range(0, n_k, chunk):
         kk = k_array[c0 : c0 + chunk]
-        G = (np.exp(-1j * kk[:, None, None] * R[None, :, :]) - 1.0) * inv4pi_R[
-            None, :, :
-        ]
+        if ek is None:
+            G = (np.exp(-1j * kk[:, None, None] * R[None, :, :]) - 1.0) * inv4pi_R[
+                None, :, :
+            ]
+        else:
+            G = _ek_reg_kernel(R[None, :, :], a_ek, kk[:, None, None])
         G_block = G.reshape(kk.shape[0], N, n_qp, N, n_qp)
         out[c0 : c0 + chunk] = np.einsum(
             "piq,kiqjr,Pjr->kpPij", wu_pow, G_block, wu_pow, optimize=True
@@ -245,7 +510,7 @@ def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 <
     return out
 
 
-def _seg_seg_reg_moments(seg_endpoints, a, k, max_d, n_qp):
+def _seg_seg_reg_moments(seg_endpoints, a, k, max_d, n_qp, *, ek=None):
     """Smooth-kernel piece (exp(-jkR) - 1)/(4π R) over polynomial moments
     on every same-edge segment pair, via Gauss-Legendre quadrature.
 
@@ -256,12 +521,12 @@ def _seg_seg_reg_moments(seg_endpoints, a, k, max_d, n_qp):
 
     Returns J_reg of shape (max_d+1, max_d+1, N, N) complex.
     """
-    geo = _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp)
+    geo = _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, ek=ek)
     return _seg_seg_reg_moments_from_geometry(geo, k)
 
 
 def _seg_seg_full_moments_offedge(
-    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k, max_d, n_qp
+    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k, max_d, n_qp, *, ek=None
 ):
     """Full-kernel moment integrals on all segment pairs.
 
@@ -282,13 +547,22 @@ def _seg_seg_full_moments_offedge(
     sinusoidal solver oracle-validated against NEC's EFLD. A mixed-radius
     array is served by the C++ kernel one constant-radius row-run at a
     time (segments are laid out wire-contiguously, so runs are few).
+
+    `ek`: an `_EK` spec extends the kernel on the pairs its labels declare
+    coaxial-and-equal-radius, `group_i[i] == group_j[j]`, and leaves every
+    other pair reduced. Eligible pairs have equal radii by definition, so
+    the per-observer-row `a` already IS the EK radius and the mixed-radius
+    plumbing needs no change — but the C++ paths (including the
+    constant-radius run-splitting, which exists only to feed them) are
+    bypassed, since they transcribe the reduced kernel only.
     """
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
     gl_xi, gl_w = leggauss(n_qp)
     t01 = 0.5 * (gl_xi + 1.0)
     w01 = 0.5 * gl_w
 
-    if _HAVE_BSPLINE_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D and not np.ndim(a) == 0:
+    accel_ok = _HAVE_BSPLINE_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D and ek is None
+    if accel_ok and not np.ndim(a) == 0:
         # Mixed per-row radii on the C++ path: dispatch one call per
         # contiguous run of equal radius and stitch along the row axis.
         bounds = np.flatnonzero(np.diff(a)) + 1
@@ -311,7 +585,7 @@ def _seg_seg_full_moments_offedge(
             axis=2,
         )
 
-    if _HAVE_BSPLINE_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D:
+    if accel_ok:
         return _acc.seg_seg_full_moments_bspline(
             np.ascontiguousarray(seg_l_i, dtype=np.float64),
             np.ascontiguousarray(seg_r_i, dtype=np.float64),
@@ -343,6 +617,12 @@ def _seg_seg_full_moments_offedge(
     a2 = a * a if np.ndim(a) == 0 else (a * a)[:, None, None, None]
     R = np.sqrt((diff * diff).sum(-1) + a2)
     G = np.exp(-1j * k * R) / (4 * np.pi * R)
+    if ek is not None:
+        a_ek = _ek_radius(ek, a)
+        a_b = a_ek if np.ndim(a_ek) == 0 else a_ek[:, None, None, None]
+        mask = _ek_pair_mask(ek, R.shape[0], R.shape[2])
+        fac = np.where(mask[:, None, :, None], _ek_factor(R, a_b, k), 1.0)
+        G = G * fac
 
     u_pow_i = np.stack([u_i**p for p in range(max_d + 1)], axis=0)
     u_pow_j = np.stack([u_j**p for p in range(max_d + 1)], axis=0)
@@ -353,7 +633,7 @@ def _seg_seg_full_moments_offedge(
 
 
 def _seg_seg_full_moments_offedge_swept(
-    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, max_d, n_qp
+    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, max_d, n_qp, *, ek=None
 ):
     """Batched-over-k `_seg_seg_full_moments_offedge`.
 
@@ -366,14 +646,17 @@ def _seg_seg_full_moments_offedge_swept(
 
     `a` is a scalar or a per-observer-row (N_i,) array — same contract and
     per-run C++ dispatch as `_seg_seg_full_moments_offedge` (axis 3 here).
+    `ek` likewise: same spec, and it bypasses the C++ paths, so the sweep
+    falls back to stacking single-k calls.
     """
     k_array = np.asarray(k_array, dtype=np.float64)
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
-    if (
+    accel_ok = (
         _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL
         and max_d <= _BSPLINE_ACCEL_MAX_D
-        and not np.ndim(a) == 0
-    ):
+        and ek is None
+    )
+    if accel_ok and not np.ndim(a) == 0:
         bounds = np.flatnonzero(np.diff(a)) + 1
         starts = np.concatenate(([0], bounds))
         stops = np.concatenate((bounds, [a.shape[0]]))
@@ -393,7 +676,7 @@ def _seg_seg_full_moments_offedge_swept(
             ],
             axis=3,
         )
-    if _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D:
+    if accel_ok:
         gl_xi, gl_w = leggauss(n_qp)
         t01 = 0.5 * (gl_xi + 1.0)
         w01 = 0.5 * gl_w
@@ -411,7 +694,7 @@ def _seg_seg_full_moments_offedge_swept(
     return np.stack(
         [
             _seg_seg_full_moments_offedge(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, float(k), max_d, n_qp
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, float(k), max_d, n_qp, ek=ek
             )
             for k in k_array
         ],
