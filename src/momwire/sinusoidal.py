@@ -217,6 +217,7 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
         # `ground_model="sommerfeld"`) — see `_field_tensor_image_refl`.
         self.extended_kernel = bool(extended_kernel)
         self._cached_ek_gating: tuple | None = None
+        self._cached_ek_swap: tuple | None = None
         self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
@@ -1450,17 +1451,35 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
 
         `src_c` / `src_t` are the build's source centers/tangents: the
         geometry's own for free space, the mirrored pair for the PEC image.
+        The answer is k-independent, so a swept solve computes it once per
+        build rather than once per frequency (cached per geometry object,
+        identity check, same pattern as `_cached_ek_gating`).
         """
         obs_c = geom["seg_centers"]
         a_seg = self._seg_radius(geom)
         src_a = a_seg
         if float(src_a.max()) <= float(a_seg.min()):
             return False
+        # The image build hands in freshly mirrored arrays, so identity
+        # against the geometry's own is exactly the free-space/image key.
+        key = src_c is obs_c
+        cached = self._cached_ek_swap
+        if cached is None or cached[0] is not geom:
+            cached = (geom, {})
+            self._cached_ek_swap = cached
+        if key in cached[1]:
+            return cached[1][key]
+        cached[1][key] = self._ek_swap_scan(obs_c, src_c, src_t, a_seg, src_a)
+        return cached[1][key]
+
+    @staticmethod
+    def _ek_swap_scan(obs_c, src_c, src_t, a_seg, src_a):
+        """The (M, N) `np.any(rho_eval < src_a)` pass behind `_ek_any_swap`."""
         # Same arithmetic as `_field_components_bcast`, chunked over observer
         # rows so this stays O(N) in memory rather than reintroducing an
         # (M, N) temporary — the elementwise values are chunk-independent.
         a_col = a_seg[:, None]
-        rows = max(1, 2_000_000 // max(1, obs_c.shape[0]))
+        rows = max(1, 500_000 // max(1, obs_c.shape[0]))
         for i0 in range(0, obs_c.shape[0], rows):
             i1 = min(i0 + rows, obs_c.shape[0])
             rvec = obs_c[i0:i1, None, :] - src_c[None, :, :]
