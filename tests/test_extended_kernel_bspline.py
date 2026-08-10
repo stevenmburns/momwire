@@ -2703,3 +2703,429 @@ def test_u2_ek_on_offedge_falls_back_to_ek_factor_without_the_twin(
         extended_kernel=True,
     ).compute_impedance()
     assert ek_call_counts["_ek_factor"] > 0
+
+
+# ======================================================================
+# momwire#270 UNIT 3 — the fused H-matrix off-edge assembler + ACA re-enable
+# ======================================================================
+#
+# Units 1 and 2 gave the MOMENT kernels C++ EK twins. `_offedge_aca_
+# evaluators` never used them for the ACA fill: `bspline_assemble_
+# offedge_block` fuses the off-edge moment quadrature with the Galerkin
+# combine in one pass (no intermediate moment tensor), and unit 2's twins
+# are moment-TENSOR entry points that a fused assembler cannot call — so
+# `_offedge_aca_evaluators` forced `use_accel = False` under EK outright,
+# and every ACA fill (H-matrix far blocks, `ArrayBlockSolver._coupling_aca`,
+# `_build_lattice_operator`'s per-displacement dense fills) paid the numpy
+# `zblock(..., same_edge=False)` cost under EK. This unit adds
+# `bspline_assemble_offedge_block_ek` — the fused assembler's own EK twin,
+# transcribing unit 2's eligibility rule and `fac` spelling into the fused
+# loop — and replaces the blanket `not self.extended_kernel` gate with a
+# capability check: `use_accel` stays on under EK whenever the extension
+# has the twin, and only degrades to numpy when it does not (never to the
+# REDUCED fused assembler, which would silently be wrong under EK).
+#
+# Labels flow in per CALL, not per block: `_offedge_block_evaluators_
+# uniform`'s `get_row`/`get_col` rebuild their single-basis side's segment
+# geometry fresh each call (the existing "C++ never precomputes positions
+# for unused segments" design unit 3 inherited unmodified) — so `_call`
+# takes the GLOBAL segment ids each call's I-side/J-side arrays were built
+# from and slices the whole-mesh `_ek_spec` labels by those, not by the
+# block-wide `segI`/`segJ` unions `dense()` uses. Getting this wrong (using
+# the block-wide slice inside `get_row`/`get_col` too) is exactly the
+# mutation exercised below.
+#
+# WHAT IS AND IS NOT COMPARED — same discipline as units 1/2: cross-backend
+# (C++ vs numpy) is relative-tolerance; EK-off is untouched (G7/G7b already
+# pin that, and this unit adds no new EK-off code path — only a new EK
+# sibling of the fused assembler and a new dispatch decision governing
+# which of the two closures is called).
+
+_U3_HAVE_ACCEL = _hm._HAVE_OFFEDGE_BLOCK_EK_ACCEL
+pytestmark_u3 = pytest.mark.skipif(
+    not _U3_HAVE_ACCEL, reason="extension built without the #270 unit 3 fused EK twin"
+)
+
+# Measured on this box: mixed-eligibility fixture below, free-space dense
+# 2.2e-14 / row 3.3e-14 / col 8.1e-14; PEC-ground (mirror_J) dense 2.4e-13 /
+# row 2.8e-13 / col 3.6e-13 — the tighter end of unit 2's own 1e-13 class
+# (this twin shares unit 2's `fac` arithmetic almost verbatim, one fewer
+# reduction step than the moment-tensor-then-combine route).
+U3_AGREEMENT = 1e-12
+# End-to-end solves: unit 1's own solve-level bar (ACA truncation and the
+# fused-vs-tensor reassociation both stay well inside it — measured worsts
+# below each gate's comment).
+U3_AGREEMENT_SOLVE = 5e-12
+
+
+def _u3_mixed_deck_kw(radius=0.02, ground_z=None):
+    """An observer wire (A), a coaxial continuation (B — eligible against
+    A) and a parallel offset wire (C — not eligible): the fused-assembler's
+    own mixed-eligibility fixture. Unit 2's own `_u2_mixed_geo` builds this
+    shape at the raw segment level; this one goes through a real
+    `HMatrixSolver` mesh because unit 3's fusion operates at the BASIS
+    level (`supp_I`/`polys_I`), not the segment level unit 2's twins do.
+    `ground_z` (well below every wire — its value is not otherwise
+    meaningful here) is only for the `mirror_J` image-block gate, which
+    needs `_image_positions` to have a plane to mirror across."""
+    kw = dict(
+        wires=[
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]]),  # A: observer (I)
+            np.array([[0.0, 0.0, 10.0], [0.0, 0.0, 12.5]]),  # B: coaxial with A
+            np.array([[5.0, 0.0, 0.0], [5.0, 0.0, 2.5]]),  # C: parallel, offset
+        ],
+        n_per_edge_per_wire=[[10], [8], [8]],
+        wavelength=LAM,
+        wire_radius=radius,
+    )
+    if ground_z is not None:
+        kw["ground_z"] = ground_z
+    return kw
+
+
+def _u3_mixed_block(degree=2, radius=0.02, extended_kernel=True, ground_z=None):
+    sim = HMatrixSolver(
+        **_u3_mixed_deck_kw(radius, ground_z=ground_z),
+        degree=degree,
+        extended_kernel=extended_kernel,
+    )
+    ctx = sim._context()
+    cen = ctx["basis_centroid"]
+    idx_a = np.flatnonzero((np.abs(cen[:, 0]) < 1e-6) & (cen[:, 2] < 5.0))
+    idx_b = np.flatnonzero((np.abs(cen[:, 0]) < 1e-6) & (cen[:, 2] > 5.0))
+    idx_c = np.flatnonzero(np.abs(cen[:, 0] - 5.0) < 1e-6)
+    assert idx_a.size and idx_b.size and idx_c.size, "the mixed fixture degenerated"
+    I = idx_a.astype(np.int64)
+    J = np.concatenate([idx_b, idx_c]).astype(np.int64)
+    return sim, ctx, I, J
+
+
+# ----------------------------------------------------------------------
+# U3a — the fused assembler agrees with the numpy zblock path
+# ----------------------------------------------------------------------
+
+
+@pytestmark_u3
+@pytest.mark.parametrize("degree", [1, 2])
+def test_u3_fused_offedge_block_matches_zblock_free_space(degree):
+    sim, ctx, I, J = _u3_mixed_block(degree=degree)
+    row_f, col_f, dense_f = sim._offedge_block_evaluators(ctx, I, J, sim.k)
+    D = dense_f()
+    D_ref = sim.zblock(I, J, k=sim.k, same_edge=False)
+    rel = float(np.abs(D - D_ref).max() / np.abs(D_ref).max())
+    assert rel <= U3_AGREEMENT, f"degree {degree}: dense {rel:.3e}"
+
+    r0 = row_f(0)
+    r0_ref = sim.zblock(I[0:1], J, k=sim.k, same_edge=False).ravel()
+    rel_r = float(np.abs(r0 - r0_ref).max() / np.abs(r0_ref).max())
+    assert rel_r <= U3_AGREEMENT, f"degree {degree}: row {rel_r:.3e}"
+
+    c0 = col_f(0)
+    c0_ref = sim.zblock(I, J[0:1], k=sim.k, same_edge=False).ravel()
+    rel_c = float(np.abs(c0 - c0_ref).max() / np.abs(c0_ref).max())
+    assert rel_c <= U3_AGREEMENT, f"degree {degree}: col {rel_c:.3e}"
+
+
+@pytestmark_u3
+@pytest.mark.parametrize("degree", [1, 2])
+def test_u3_fused_offedge_block_matches_zblock_image(degree):
+    """The mirror_J path: `_offedge_block_evaluators(..., mirror_J=True)`
+    against `_zblock_image` — the fused assembler's own image-block gate.
+    Unit 2's off-edge twin never had to answer this: it operates one level
+    below the block fusion, where mirroring is the caller's job either way.
+    """
+    sim, ctx, I, J = _u3_mixed_block(degree=degree, ground_z=-5.0)
+    row_f, col_f, dense_f = sim._offedge_block_evaluators(
+        ctx, I, J, sim.k, mirror_J=True
+    )
+    D = dense_f()
+    D_ref = sim._zblock_image(I, J, k=sim.k)
+    rel = float(np.abs(D - D_ref).max() / np.abs(D_ref).max())
+    assert rel <= U3_AGREEMENT, f"degree {degree}: dense {rel:.3e}"
+
+    r0 = row_f(0)
+    r0_ref = sim._zblock_image(I[0:1], J, k=sim.k).ravel()
+    rel_r = float(np.abs(r0 - r0_ref).max() / np.abs(r0_ref).max())
+    assert rel_r <= U3_AGREEMENT, f"degree {degree}: row {rel_r:.3e}"
+
+    c0 = col_f(0)
+    c0_ref = sim._zblock_image(I, J[0:1], k=sim.k).ravel()
+    rel_c = float(np.abs(c0 - c0_ref).max() / np.abs(c0_ref).max())
+    assert rel_c <= U3_AGREEMENT, f"degree {degree}: col {rel_c:.3e}"
+
+
+# ----------------------------------------------------------------------
+# U3b — the ELIGIBILITY MASK is the risk: bracket checks from both ends
+# ----------------------------------------------------------------------
+#
+# Same discipline as unit 2's U2b: a mask that is always True passes an
+# all-eligible check vacuously and a mask that is always False passes an
+# all-ineligible one the same way — only both together pin the rule. Forced
+# via `_ek_spec`, so both `dense_ek()` (the fused C++ call) and its numpy
+# comparison target (which also calls `self._ek_spec` internally) see the
+# SAME forced labels.
+
+
+@pytestmark_u3
+@pytest.mark.parametrize("degree", [1, 2])
+def test_u3_all_ineligible_labels_reduce_to_the_reduced_assembler(monkeypatch, degree):
+    """Every pair declared ineligible must match the REDUCED fused
+    assembler exactly: with `eligible` false the EK kernel executes the
+    identical G_re/G_im/wuwu sequence the reduced one does (measured: 0.0
+    relative on this box, every degree — mirrors unit 2's own
+    `test_u2_all_ineligible_labels_reduce_to_the_reduced_kernel`, one level
+    up the fusion)."""
+    sim_on, ctx_on, I, J = _u3_mixed_block(degree=degree, extended_kernel=True)
+
+    def all_ineligible(self, geom, mirror=False):
+        labels = np.full(geom["seg_l"].shape[0], -1, dtype=np.int64)
+        return _EK(a=None, group_i=labels, group_j=labels)
+
+    monkeypatch.setattr(HMatrixSolver, "_ek_spec", all_ineligible)
+    _, _, dense_ek = sim_on._offedge_block_evaluators(ctx_on, I, J, sim_on.k)
+    ek_out = dense_ek()
+
+    sim_off, ctx_off, I2, J2 = _u3_mixed_block(degree=degree, extended_kernel=False)
+    assert np.array_equal(I, I2) and np.array_equal(J, J2)
+    _, _, dense_reduced = sim_off._offedge_block_evaluators(ctx_off, I2, J2, sim_off.k)
+    assert np.array_equal(ek_out, dense_reduced()), f"degree {degree}"
+
+
+@pytestmark_u3
+@pytest.mark.parametrize("degree", [1, 2])
+def test_u3_all_eligible_labels_apply_the_full_coaxial_factor(monkeypatch, degree):
+    """Every pair declared eligible must match the numpy zblock oracle
+    computed under the SAME forced labels — pinning that the eligible
+    branch really does apply Eq 89's factor, not merely that the
+    ineligible branch above skips it."""
+    sim, ctx, I, J = _u3_mixed_block(degree=degree, extended_kernel=True)
+
+    def all_eligible(self, geom, mirror=False):
+        labels = np.zeros(geom["seg_l"].shape[0], dtype=np.int64)
+        return _EK(a=None, group_i=labels, group_j=labels)
+
+    monkeypatch.setattr(HMatrixSolver, "_ek_spec", all_eligible)
+    _, _, dense_ek = sim._offedge_block_evaluators(ctx, I, J, sim.k)
+    ek_out = dense_ek()
+    ref = sim.zblock(I, J, k=sim.k, same_edge=False)
+    rel = float(np.abs(ek_out - ref).max() / np.abs(ref).max())
+    assert rel <= U3_AGREEMENT, f"degree {degree}: {rel:.3e}"
+
+
+# ----------------------------------------------------------------------
+# U3c — end to end: HMatrix + ArrayBlock EK-on solves, accel vs numpy
+# ----------------------------------------------------------------------
+
+
+@pytestmark_u3
+def test_u3_end_to_end_hmatrix_solve_agrees_accel_vs_numpy(monkeypatch):
+    kw = dict(
+        wires=[_dipole_wire(2.5, x=-4.0), _dipole_wire(2.5, x=4.0)],
+        n_per_edge_per_wire=[[24], [24]],
+        wavelength=LAM,
+        wire_radius=0.05,
+        degree=2,
+        feeds=[(0, None, 1.0 + 0j), (1, None, 1.0 + 0j)],
+        aca_tol=1e-7,
+        aca_eta=1.0,
+        extended_kernel=True,
+    )
+    sim = HMatrixSolver(**kw)
+    assert len(sim.build_hmatrix().far) > 0
+    z_accel, _ = sim.compute_impedance()
+    monkeypatch.setattr(_hm, "_HAVE_OFFEDGE_BLOCK_EK_ACCEL", False)
+    z_numpy, _ = HMatrixSolver(**kw).compute_impedance()
+    za, zn = np.atleast_1d(z_accel), np.atleast_1d(z_numpy)
+    rel = float(np.abs(za - zn).max() / np.abs(zn).max())
+    assert rel <= U3_AGREEMENT_SOLVE, f"{rel:.3e}"
+
+
+@pytestmark_u3
+def test_u3_end_to_end_hmatrix_pec_ground_solve_agrees_accel_vs_numpy(monkeypatch):
+    """PEC-ground deck with genuinely eligible image far blocks (two
+    monopoles, each coaxial with its own image via the joint real+image
+    labelling) — the case the free-space two-dipole deck above cannot
+    exercise (those dipoles are parallel but offset, never coaxial)."""
+    kw = dict(
+        wires=[
+            np.array([[0.0, 0.0, 0.02], [0.0, 0.0, 2.42]]),
+            np.array([[6.0, 0.0, 0.02], [6.0, 0.0, 2.42]]),
+        ],
+        n_per_edge_per_wire=[[24], [24]],
+        wavelength=LAM,
+        wire_radius=0.02,
+        degree=2,
+        feeds=[(0, None, 1.0 + 0j), (1, None, 1.0 + 0j)],
+        ground_z=0.0,
+        aca_tol=1e-7,
+        aca_eta=1.0,
+        extended_kernel=True,
+    )
+    sim = HMatrixSolver(**kw)
+    assert len(sim.build_hmatrix().far) > 0
+    z_accel, _ = sim.compute_impedance()
+    monkeypatch.setattr(_hm, "_HAVE_OFFEDGE_BLOCK_EK_ACCEL", False)
+    z_numpy, _ = HMatrixSolver(**kw).compute_impedance()
+    za, zn = np.atleast_1d(z_accel), np.atleast_1d(z_numpy)
+    rel = float(np.abs(za - zn).max() / np.abs(zn).max())
+    assert rel <= U3_AGREEMENT_SOLVE, f"{rel:.3e}"
+
+
+@pytestmark_u3
+@pytest.mark.parametrize("lattice_fft", [False, True])
+def test_u3_end_to_end_array_block_solve_agrees_accel_vs_numpy(
+    monkeypatch, lattice_fft
+):
+    """The 4x1 COLLINEAR deck (G8's own fixture): every element shares the
+    same axis, so cross-element pairs are genuinely EK-eligible on both the
+    per-pair ACA route (`_coupling_aca`, `lattice_fft=False`) and the
+    lattice route (`_build_lattice_operator`'s dense per-displacement
+    fills, `lattice_fft=True`)."""
+    kw = dict(
+        wires=[_dipole_wire(1.2, z=3.0 * i) for i in range(4)],
+        n_per_edge_per_wire=[[8]] * 4,
+        wavelength=LAM,
+        wire_radius=0.03,
+        degree=2,
+        feeds=[(i, None, 1.0 + 0j) for i in range(4)],
+        extended_kernel=True,
+        lattice_fft=lattice_fft,
+        require_lattice_fft=lattice_fft,
+    )
+    reset_array_caches()
+    op_accel = ArrayBlockSolver(**kw).build_array_blocks()
+    assert isinstance(op_accel, LatticeArrayBlock) == lattice_fft
+    monkeypatch.setattr(_hm, "_HAVE_OFFEDGE_BLOCK_EK_ACCEL", False)
+    reset_array_caches()
+    op_numpy = ArrayBlockSolver(**kw).build_array_blocks()
+    A, B = op_accel.to_dense(), op_numpy.to_dense()
+    rel = float(np.abs(A - B).max() / np.abs(B).max())
+    assert rel <= U3_AGREEMENT_SOLVE, f"lattice_fft={lattice_fft}: {rel:.3e}"
+
+
+# ----------------------------------------------------------------------
+# U3d — dispatch probes: EK-on ACA really is served by the fused twin
+# ----------------------------------------------------------------------
+
+_U3_ACCEL_ENTRY_POINTS = (
+    "bspline_assemble_offedge_block",
+    "bspline_assemble_offedge_block_refl",
+    "bspline_assemble_offedge_block_ek",
+)
+
+
+class _HMAccelSpy:
+    """`_AccelSpy`'s counterpart over `hmatrix`'s OWN `_acc` reference.
+
+    `_bspline_kernels` and `hmatrix` each bind `_acc = ._accel.acc` at
+    import time as separate module-level names, so the `accel_spy` fixture
+    above (which patches `_bk._acc`) does not see calls `hmatrix.py` makes
+    through its own `_acc` — the fused block assemblers are reached only
+    from here, never from `_bspline_kernels`.
+    """
+
+    def __init__(self, real):
+        self._real = real
+        self.counts = dict.fromkeys(_U3_ACCEL_ENTRY_POINTS, 0)
+
+    def __getattr__(self, name):
+        target = getattr(self._real, name)
+        if name not in self.counts:
+            return target
+
+        def counted(*args, **kwargs):
+            self.counts[name] += 1
+            return target(*args, **kwargs)
+
+        return counted
+
+
+@pytest.fixture
+def hm_accel_spy(monkeypatch):
+    spy = _HMAccelSpy(_hm._acc)
+    monkeypatch.setattr(_hm, "_acc", spy)
+    return spy
+
+
+@pytestmark_u3
+def test_u3_g15_now_exercises_the_fused_ek_twin(hm_accel_spy):
+    """momwire#249's `test_g15_solver_family_agrees_on_a_fat_deck` builds
+    `HMatrixSolver(**common, aca_tol=1e-7)` with `extended_kernel=True` —
+    before this unit that ACA fill was forced onto the numpy `zblock` path
+    (`_offedge_aca_evaluators`'s old blanket `not self.extended_kernel`
+    gate); confirm it now reaches the fused EK twin instead, and that the
+    REDUCED fused symbol stays idle (an EK-on fill must not go to the
+    kernel that would silently drop the EK correction)."""
+    common = _g15_common(True)
+    aca = HMatrixSolver(**common, aca_tol=1e-7)
+    assert len(aca.build_hmatrix().far) > 0  # the ACA fill really ran
+    aca.compute_impedance()
+    assert hm_accel_spy.counts["bspline_assemble_offedge_block_ek"] > 0
+    assert hm_accel_spy.counts["bspline_assemble_offedge_block"] == 0
+
+
+@pytestmark_u3
+def test_u3_ek_on_aca_fill_never_touches_zblock(monkeypatch, hm_accel_spy):
+    calls = []
+    orig_zblock = HMatrixSolver.zblock
+
+    def spy_zblock(self, *a, **kw):
+        calls.append(1)
+        return orig_zblock(self, *a, **kw)
+
+    monkeypatch.setattr(HMatrixSolver, "zblock", spy_zblock)
+    sim, ctx, I, J = _u3_mixed_block()
+    get_row, get_col, dense = sim._offedge_aca_evaluators(ctx, I, J, sim.k, True)
+    dense()
+    get_row(0)
+    get_col(0)
+    assert hm_accel_spy.counts["bspline_assemble_offedge_block_ek"] > 0
+    assert len(calls) == 0, "the ACA fill fell back to zblock despite the twin"
+
+
+@pytestmark_u3
+def test_u3_dispatch_control_without_the_twin_uses_zblock(monkeypatch, hm_accel_spy):
+    """The scoping control for the probe above: force the fused EK twin
+    off and confirm the SAME ACA fill now goes through `zblock` instead —
+    proving the `== 0` above is a dispatch claim, not a "this fill never
+    needed the fallback" coincidence."""
+    monkeypatch.setattr(_hm, "_HAVE_OFFEDGE_BLOCK_EK_ACCEL", False)
+    calls = []
+    orig_zblock = HMatrixSolver.zblock
+
+    def spy_zblock(self, *a, **kw):
+        calls.append(1)
+        return orig_zblock(self, *a, **kw)
+
+    monkeypatch.setattr(HMatrixSolver, "zblock", spy_zblock)
+    sim, ctx, I, J = _u3_mixed_block()
+    get_row, get_col, dense = sim._offedge_aca_evaluators(ctx, I, J, sim.k, True)
+    dense()
+    get_row(0)
+    get_col(0)
+    assert hm_accel_spy.counts["bspline_assemble_offedge_block_ek"] == 0
+    assert len(calls) > 0, "the control never hit zblock — the probe proves nothing"
+
+
+@pytestmark_u3
+def test_u3_ek_off_never_reaches_the_fused_ek_twin(hm_accel_spy):
+    """EK-OFF armor: a defaulted (EK-off) HMatrix ACA fill must reach the
+    REDUCED fused assembler and never the EK one — unmodified by this unit
+    (G7's own bit-identity gate already pins the numeric half; this is the
+    dispatch half, specific to the new symbol this unit adds)."""
+    a, _b = _hmatrix_pair(aca_eta=1.0)
+    assert len(a.build_hmatrix().far) > 0
+    a.compute_impedance()
+    assert hm_accel_spy.counts["bspline_assemble_offedge_block_ek"] == 0
+    assert hm_accel_spy.counts["bspline_assemble_offedge_block"] > 0
+
+
+@pytestmark_u3
+def test_u3_missing_symbol_falls_back_to_numpy(monkeypatch):
+    """Graceful degradation: an extension built before #270 unit 3 has no
+    fused EK twin, `_HAVE_OFFEDGE_BLOCK_EK_ACCEL` is False, and the ACA
+    fill is the numpy `zblock` path — same answer, no AttributeError."""
+    monkeypatch.setattr(_hm, "_HAVE_OFFEDGE_BLOCK_EK_ACCEL", False)
+    sim, _, _, _ = _u3_mixed_block()
+    z, _ = sim.compute_impedance()
+    assert np.isfinite(z)
