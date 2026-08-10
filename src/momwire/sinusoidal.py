@@ -45,7 +45,7 @@ from . import _ground_refl, _sommerfeld, _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._element_currents import _ElementCurrents
-from ._port_solution import PortSolution
+from ._port_solution import PortSolution, _SweptPortSolutions
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
 _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
@@ -140,7 +140,7 @@ class _SegmentBasis:
     k: float
 
 
-class SinusoidalSolver(_ElementCurrents, _Cancelable):
+class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """NEC2's three-term (const + sin + cos) basis on each segment, with
     end-condition coefficients closed-form per Eqs 25-64.
 
@@ -2633,6 +2633,39 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
             ).sum()
         )
 
+    def _port_count(self):
+        """Ports `compute_port_solution` returns — the configured gap feeds
+        and nothing else (this family refuses `junction_ports`, #177)."""
+        return len(self.feeds)
+
+    def _feed_drive_vector(self, geom):
+        """`(v, voltages)`: the RHS for the configured feed voltages, Eq 187's
+        Σ_i V_i · (-1/h_i) · e_{feed_i}, and the voltages themselves.
+
+        k-independent — it only needs segment lengths — which is why the
+        sweeps hoist it out of their loops. Shared by `compute_impedance` and
+        `compute_impedance_swept` so the drive convention has one home (#252).
+        """
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
+        v = np.zeros(geom["n_segs"], dtype=np.complex128)
+        for fi, V_i in zip(geom["feed_segs"], voltages):
+            v[fi] += -V_i / geom["seg_h"][fi]
+        return v, voltages
+
+    def _feed_impedances(self, alpha, geom, seg_view, voltages):
+        """Per-feed driving-point impedance V_i / I_i off a solved `alpha`,
+        scalar at a single feed (back-compat). The readout half of the port
+        algebra `compute_impedance` and its sweep share (#252)."""
+        feed_currents = np.array(
+            [
+                self._feed_segment_current(alpha, seg_view, fi)
+                for fi in geom["feed_segs"]
+            ],
+            dtype=np.complex128,
+        )
+        z_per_feed = voltages / feed_currents
+        return z_per_feed[0] if len(self.feeds) == 1 else z_per_feed
+
     def compute_impedance(self):
         """Return (Z_drive, alpha). With a single feed, Z_drive is a scalar
         V/I (back-compat). With N feeds, Z_drive is a length-N complex
@@ -2643,12 +2676,7 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field-tensor fill
         G, seg_view = self._assemble_Z(geom, self.k)
-        feed_segs = geom["feed_segs"]
-        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
-
-        v = np.zeros(geom["n_segs"], dtype=np.complex128)
-        for fi, V_i in zip(feed_segs, voltages):
-            v[fi] += -V_i / geom["seg_h"][fi]
+        v, voltages = self._feed_drive_vector(geom)
         self._checkpoint()  # after assembly, before the dense LU solve
         # Factor Gᵀ in place: G.T is an F-ordered view of the C-ordered G,
         # so LAPACK's getrf overwrites it with zero copies (factoring G
@@ -2660,12 +2688,7 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
         lu_piv = scipy.linalg.lu_factor(G.T, overwrite_a=True)
         alpha = scipy.linalg.lu_solve(lu_piv, v, trans=1)
 
-        feed_currents = np.array(
-            [self._feed_segment_current(alpha, seg_view, fi) for fi in feed_segs],
-            dtype=np.complex128,
-        )
-        z_per_feed = voltages / feed_currents
-        Z_drive = z_per_feed[0] if len(self.feeds) == 1 else z_per_feed
+        Z_drive = self._feed_impedances(alpha, geom, seg_view, voltages)
         self.Z_factors = lu_piv  # LU of Gᵀ; adjoint solve = lu_solve(·, trans=0)
         return Z_drive, alpha
 
@@ -2736,39 +2759,21 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
             basis=_SegmentBasis(geom=geom, seg_view=seg_view, k=self.k),
         )
 
-    def compute_y_matrix_swept(self, k_array) -> np.ndarray:
-        """Per-frequency Y matrices. Loops over k like
-        `compute_impedance_swept` (no batched assembly here yet); returns
-        an (n_k, n_ports, n_ports) array."""
-        k_array = np.asarray(k_array, dtype=float)
-        k_save = self.k
-        wl_save = self.wavelength
-        omega_save = self.omega
-        geom = self._build_geometry()
-        feed_segs = geom["feed_segs"]
-        n_ports = len(feed_segs)
-        n_segs = geom["n_segs"]
-        # RHS columns are k-independent (depend only on segment lengths).
-        B = np.zeros((n_segs, n_ports), dtype=np.complex128)
-        for j, fi in enumerate(feed_segs):
-            B[fi, j] = -1.0 / geom["seg_h"][fi]
+    def _port_solutions_swept(self, k_array):
+        """Per-k `PortSolution` generator behind `compute_y_matrix_swept` and
+        `compute_port_solution_swept` (#252).
 
-        out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
-        for ki, kk in enumerate(k_array):
-            self.k = float(kk)
-            self.omega = self.k * self.c
-            self.wavelength = self.c / (self.omega / (2 * np.pi))
-            G, seg_view = self._assemble_Z(geom, self.k)
-            alphas = scipy.linalg.solve(G, B)
-            for j in range(n_ports):
-                for i, fi in enumerate(feed_segs):
-                    out[ki, i, j] = self._feed_segment_current(
-                        alphas[:, j], seg_view, fi
-                    )
-        self.k = k_save
-        self.wavelength = wl_save
-        self.omega = omega_save
-        return out
+        A plain loop over `compute_port_solution` — there is no batched
+        assembly on this family, so the per-k core IS the single-k entry
+        point and the swept Y cannot drift from the stacked single-k Y by so
+        much as an ulp. The only work worth hoisting (the geometry build) is
+        already cached on the instance.
+        """
+        with self._k_restored():
+            for kk in np.asarray(k_array, dtype=float):
+                self._checkpoint()  # top of each frequency iteration
+                self._set_k(kk)
+                yield self.compute_port_solution()
 
     def compute_impedance_swept(self, k_array):
         """Loop over wavenumbers. Per-call work that doesn't depend on k
@@ -2777,6 +2782,14 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
         reduces to field-tensor + basis-coefs + assembly + solve. Together
         with the assemble_Z vectorization and the C++ field-tensor
         accelerator, this brings the n=21 sweep from ~70 ms to ~30 ms.
+
+        Drive and readout come from `compute_impedance`'s own
+        `_feed_drive_vector` / `_feed_impedances`, so the sweep carries no
+        second copy of the port algebra (#252). What it does NOT do is call
+        `compute_impedance` per k: that entry point factors Gᵀ in place and
+        stashes the factors for the wire-loading adjoint oracle, and a sweep
+        must not leave `Z_factors` pointing at a frequency the solver has
+        already stepped away from.
         """
         k_array = np.asarray(k_array, dtype=float)
         n_feeds = len(self.feeds)
@@ -2784,35 +2797,15 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
             z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
         else:
             z_out = np.zeros((k_array.shape[0], n_feeds), dtype=np.complex128)
-        k_save = self.k
-        wl_save = self.wavelength
-        omega_save = self.omega
         geom = self._build_geometry()
-        feed_segs = geom["feed_segs"]
-        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
-        n_segs = geom["n_segs"]
-        v = np.zeros(n_segs, dtype=np.complex128)
-        for fi, V_i in zip(feed_segs, voltages):
-            v[fi] += -V_i / geom["seg_h"][fi]
-        for i, kk in enumerate(k_array):
-            self._checkpoint()  # top of each frequency iteration
-            self.k = float(kk)
-            self.omega = self.k * self.c
-            self.wavelength = self.c / (self.omega / (2 * np.pi))
-            G, seg_view = self._assemble_Z(geom, self.k)
-            alpha = scipy.linalg.solve(G, v)
-            feed_currents = np.array(
-                [self._feed_segment_current(alpha, seg_view, fi) for fi in feed_segs],
-                dtype=np.complex128,
-            )
-            z_per_feed = voltages / feed_currents
-            if n_feeds == 1:
-                z_out[i] = z_per_feed[0]
-            else:
-                z_out[i] = z_per_feed
-        self.k = k_save
-        self.wavelength = wl_save
-        self.omega = omega_save
+        v, voltages = self._feed_drive_vector(geom)
+        with self._k_restored():
+            for i, kk in enumerate(k_array):
+                self._checkpoint()  # top of each frequency iteration
+                self._set_k(kk)
+                G, seg_view = self._assemble_Z(geom, self.k)
+                alpha = scipy.linalg.solve(G, v)
+                z_out[i] = self._feed_impedances(alpha, geom, seg_view, voltages)
         return z_out
 
     def currents_at_knots(self, alpha, s_array=None):

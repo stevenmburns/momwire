@@ -1919,65 +1919,49 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             basis=_SegmentBasis(geom=geom, seg_view=seg_view, k=self.k),
         )
 
-    def compute_y_matrix_swept(self, k_array) -> np.ndarray:
-        """Per-frequency Y matrices; loops over k like the inherited version
-        but with the Galerkin drive/readout of `compute_y_matrix`. The drive
+    def _port_count(self):
+        """Ports `compute_port_solution` returns: [gap feeds…, junction
+        ports…, node ports…], from the configuration alone."""
+        return self.n_ports
+
+    def _port_solutions_swept(self, k_array):
+        """Per-k `PortSolution` generator behind `compute_y_matrix_swept` and
+        `compute_port_solution_swept` (#252).
+
+        A per-k loop over `compute_port_solution` — no batched assembly on
+        this family, so the swept Y is the stacked single-k Y bit for bit.
+        Nothing is hoisted out of the loop because nothing can be: the drive
         columns are k-DEPENDENT here (the gap column integrates the basis
-        shapes, which move with k), so they are rebuilt per step."""
+        shapes, which move with k). The refusal is raised up front so an
+        unserved configuration is rejected before any solve, even at an empty
+        sweep.
+        """
         self._refuse_junction_port_solve()
-        k_array = np.asarray(k_array, dtype=float)
-        geom = self._build_geometry()
-        out = np.zeros(
-            (k_array.shape[0], self.n_ports, self.n_ports), dtype=np.complex128
-        )
-        saved = (self.k, self.wavelength, self.omega)
-        try:
-            for ki, kk in enumerate(k_array):
+        with self._k_restored():
+            for kk in np.asarray(k_array, dtype=float):
                 self._checkpoint()
-                self._set_k(float(kk))
-                G, seg_view = self._assemble_Z_ported(geom, self.k)
-                U = self._drive_columns(geom, seg_view, self.k)
-                alphas = scipy.linalg.solve(G, U)
-                out[ki] = np.stack(
-                    [
-                        self._port_currents(alphas[:, j], geom, seg_view, U)
-                        for j in range(self.n_ports)
-                    ],
-                    axis=1,
-                )
-        finally:
-            self.k, self.wavelength, self.omega = saved
-        return out
+                self._set_k(kk)
+                yield self.compute_port_solution()
 
     def compute_impedance_swept(self, k_array):
         """Driving-point impedance over a batch of wavenumbers — a per-k loop
-        of exactly `compute_impedance`'s algebra (the inherited version used
-        the collocation RHS, so it disagreed with `compute_impedance`)."""
+        over `compute_impedance` itself (the inherited version used the
+        collocation RHS, so it disagreed with `compute_impedance`; #252 then
+        replaced the local copy of its algebra with the call).
+
+        This family's `compute_impedance` stashes nothing and hoists nothing,
+        so driving it per k is the same arithmetic in the same order.
+        """
         self._refuse_junction_port_solve()
         k_array = np.asarray(k_array, dtype=float)
-        geom = self._build_geometry()
-        voltages = self._port_voltages()
         n_p = self.n_ports
         z_out = np.zeros(
             k_array.shape[0] if n_p == 1 else (k_array.shape[0], n_p),
             dtype=np.complex128,
         )
-        saved = (self.k, self.wavelength, self.omega)
-        try:
+        with self._k_restored():
             for i, kk in enumerate(k_array):
                 self._checkpoint()
-                self._set_k(float(kk))
-                G, seg_view = self._assemble_Z_ported(geom, self.k)
-                U = self._drive_columns(geom, seg_view, self.k)
-                alpha = scipy.linalg.solve(G, U @ voltages)
-                z_per = voltages / self._port_currents(alpha, geom, seg_view, U)
-                z_out[i] = z_per[0] if n_p == 1 else z_per
-        finally:
-            self.k, self.wavelength, self.omega = saved
+                self._set_k(kk)
+                z_out[i], _alpha = self.compute_impedance()
         return z_out
-
-    def _set_k(self, kk):
-        """Rebind the frequency triple the sweeps mutate in lockstep."""
-        self.k = float(kk)
-        self.omega = self.k * self.c
-        self.wavelength = self.c / (self.omega / (2 * np.pi))
