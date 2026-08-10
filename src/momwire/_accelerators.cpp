@@ -1887,11 +1887,28 @@ static double D_ek_dispatch(int p, int q,
     }
 }
 
-// Shared body of the reduced and extended Toeplitz static kernels. `ek_on` is
-// a compile-time template parameter so the EK-off instantiation is textually
-// (and therefore bit-for-bit) the pre-#270 loop — the byte-identity armor in
-// tests/test_extended_kernel_bspline.py pins that and nothing here may perturb
-// it.
+// Shared body of the reduced and extended Toeplitz static kernels. `EK` is a
+// compile-time template parameter, so the EK-off instantiation is the pre-#270
+// loop with the `if (EK)` block folded away — no runtime branch, no change to
+// the reduced arithmetic.
+//
+// A NOTE ON LAST BITS (momwire#270 unit 1, measured). The reduced kernel's
+// OUTPUT still moves by 1-3 ulp against a pre-#270 build (30 of 441 entries on
+// the gate deck, max 1.8e-15 relative), and not because of anything above:
+// D_ek_pq_0_2 / 1_2 / 2_2 call J_static_pq_0_0 / 1_0 / 2_0, which gives those
+// three header inlines a second call site, which changes how GCC inlines them
+// into THIS function, which at `-mfma -ffp-contract=fast` is a different set
+// of fused multiply-adds. Confirmed by bisection: including the D header
+// without using it is bit-identical; both a shared body and a fully duplicated
+// one shift the same 30 entries; giving the EK twin its own copy of
+// J_static_dispatch does not help either.
+//
+// So absolute cross-build bit stability is not a property this translation
+// unit has, and it is not one to pin (the same argument as antennaknobs#253:
+// never pin cross-machine bit equality — this is the cross-build case of it).
+// What IS armored, and stays armored, is the within-build claim the tests
+// actually make: EK-off is the same code path and the same bits as the
+// default, and no EK code is entered to produce it.
 template <bool EK>
 static py::array_t<double>
 seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
