@@ -18,6 +18,10 @@
 #include <vector>
 
 #include "_bspline_static_moments_inline.h"
+// The extended-thin-wire static correction D_pq^EK (momwire#249's codegen,
+// wired in by #270 unit 1). Pulls in the J header itself; the duplicate
+// include above is harmless (`#pragma once`) and kept for legibility.
+#include "_bspline_ek_moments_inline.h"
 
 namespace py = pybind11;
 
@@ -129,11 +133,42 @@ struct AbortedError : std::exception {
 // Loop order (kk, i) collapse-parallel, inner j: the o(kk, p, P, i, j) writes
 // run contiguously over the trailing (i, j) axes, and the (N*n_qp)^2 R table
 // stays L2-resident as it is re-read across the k axis.
+//
+// THE EXTENDED-KERNEL TWIN (momwire#270 unit 1)
+// ---------------------------------------------
+// `EK == true` swaps Greg for the extended kernel's smooth remainder,
+// `_bspline_kernels._ek_reg_kernel`:
+//
+//     Greg_ek = [ (e^{-jkR} − 1)·fac + extra ] / (4 π R)
+//     fac     = 1 + T1·C2 − T2·C1        (Eq 89's coaxial factor of R)
+//     extra   = T1·(C2 − 3) − T2·(C1 − 1) = fac − fac_static
+//     C1 = 1 + jkR,  C2 = 3·C1 − (kR)²,  T1 = a⁴/(4R⁴),  T2 = a²/(2R²)
+//
+// with `a_ek` the EK radius (`_ek_radius(ek, geo["a"])` on the Python side).
+// The static half of the same coaxial factor is carried in closed form by
+// D_ek_pq / seg_seg_static_moments_bspline_uniform_ek, so what is left here
+// really is a bounded remainder — the same class as the reduced kernel's
+// (e^{-jkR}−1)/R → −jk, resolved by the caller's existing n_qp rule.
+//
+// The arithmetic is a LITERAL transcription of the numpy spelling, in the
+// same multi-step order (momwire#205): every intermediate below has a named
+// counterpart in `_ek_factor` / `_ek_reg_extra` / `_ek_reg_kernel` and the
+// pointwise kernel comes out bit-identical to numpy's on this box, including
+// the final `num / (4 π R)` — numpy's complex-by-real divide is Smith's
+// algorithm with a zero divisor imaginary part, i.e. a multiply by
+// `1.0 / (4 π R)`, which is what `scl` below is. (The MOMENT still differs in
+// the last bits: the (q, r) reduction order is not the einsum's. Gates are
+// relative-tolerance, not bit equality.)
+//
+// T1, T2 and `scl` are functions of R and a_ek alone, so they hoist out of
+// the k loop next to `inv_R_4pi`; only C1/C2 and the phase are per-k.
+template <bool EK>
 static py::array_t<std::complex<double>>
-seg_seg_reg_moments_bspline_swept(
+seg_seg_reg_moments_bspline_swept_impl(
     py::array_t<double, py::array::c_style | py::array::forcecast> R,
     py::array_t<double, py::array::c_style | py::array::forcecast> wu_pow,
-    py::array_t<double, py::array::c_style | py::array::forcecast> k_array
+    py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
+    double a_ek
 ) {
     auto Rr = R.unchecked<2>();
     auto wu = wu_pow.unchecked<3>();
@@ -159,6 +194,10 @@ seg_seg_reg_moments_bspline_swept(
     }
 
     const double inv_4pi = 1.0 / (4.0 * M_PI);
+    // numpy divides by `4 * np.pi * R`, associated as `(4*np.pi) * R`.
+    const double four_pi = 4.0 * M_PI;
+    const double a2_ek = a_ek * a_ek;
+    const double a4_ek = a2_ek * a2_ek;
 
     py::array_t<std::complex<double>> out({n_k, n_d, n_d, N, N});
     auto o = out.mutable_unchecked<5>();
@@ -182,6 +221,9 @@ seg_seg_reg_moments_bspline_swept(
             alignas(32) double sin_phases[64];
             alignas(32) double Gre[64];
             alignas(32) double Gim[64];
+            alignas(32) double t1v[64];
+            alignas(32) double t2v[64];
+            alignas(32) double scl[64];
 
             for (size_t q = 0; q < n_qp; q++) {
                 size_t iq = i * n_qp + q;
@@ -192,6 +234,18 @@ seg_seg_reg_moments_bspline_swept(
             PYSIM_OMP_SIMD()
             for (size_t qr = 0; qr < n_pairs; qr++) {
                 inv_R_4pi[qr] = inv_4pi / R[qr];
+            }
+            if (EK) {
+                // `_ek_factor`'s r2/r4 and T1/T2, plus the reciprocal of the
+                // final 4πR divisor. All k-independent.
+                PYSIM_OMP_SIMD()
+                for (size_t qr = 0; qr < n_pairs; qr++) {
+                    double r2 = R[qr] * R[qr];
+                    double r4 = r2 * r2;
+                    t1v[qr] = 0.25 * a4_ek / r4;
+                    t2v[qr] = 0.5 * a2_ek / r2;
+                    scl[qr] = 1.0 / (four_pi * R[qr]);
+                }
             }
 
             for (size_t kk = 0; kk < n_k; kk++) {
@@ -208,11 +262,46 @@ seg_seg_reg_moments_bspline_swept(
                 for (size_t qr = 0; qr < n_pairs; qr++) {
                     sin_phases[qr] = std::sin(phases[qr]);
                 }
+                if (EK) {
+                    PYSIM_OMP_SIMD()
+                    for (size_t qr = 0; qr < n_pairs; qr++) {
+                        double kr = k * R[qr];
+                        double kr2 = kr * kr;
+                        double t1 = t1v[qr];
+                        double t2 = t2v[qr];
+                        // C1 = 1 + jkR;  C2 = 3·C1 − (kR)².
+                        double c1r = 1.0;
+                        double c1i = kr;
+                        double c2r = 3.0 * c1r - kr2;
+                        double c2i = 3.0 * c1i;
+                        // fac = T1·C2;  fac -= T2·C1;  fac += 1.
+                        double facr = t1 * c2r;
+                        double faci = t1 * c2i;
+                        facr = facr - t2 * c1r;
+                        faci = faci - t2 * c1i;
+                        facr = facr + 1.0;
+                        // extra = T1·(3jkR − (kR)²);  extra -= T2·(jkR).
+                        double exr = t1 * (0.0 - kr2);
+                        double exi = t1 * (3.0 * kr);
+                        exi = exi - t2 * kr;
+                        // phase = e^{-jkR} − 1 = (cos(-kR) − 1) + j sin(-kR).
+                        double pr = cos_phases[qr] - 1.0;
+                        double pim = sin_phases[qr];
+                        // num = phase·fac;  num += extra;  num /= 4πR.
+                        double numr = pr * facr - pim * faci;
+                        double numi = pr * faci + pim * facr;
+                        numr = numr + exr;
+                        numi = numi + exi;
+                        Gre[qr] = numr * scl[qr];
+                        Gim[qr] = numi * scl[qr];
+                    }
+                } else {
                 PYSIM_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
                     // exp(-j k R) - 1 = (cos(-kR) - 1) + j sin(-kR)
                     Gre[qr] = (cos_phases[qr] - 1.0) * inv_R_4pi[qr];
                     Gim[qr] = sin_phases[qr] * inv_R_4pi[qr];
+                }
                 }
 
                 // J[p,P,i,j] = sum_{q,r} wu[p,i,q] Greg[q,r] wu[P,j,r].
@@ -235,6 +324,25 @@ seg_seg_reg_moments_bspline_swept(
         }
     }
     return out;
+}
+
+static py::array_t<std::complex<double>>
+seg_seg_reg_moments_bspline_swept(
+    py::array_t<double, py::array::c_style | py::array::forcecast> R,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_pow,
+    py::array_t<double, py::array::c_style | py::array::forcecast> k_array
+) {
+    return seg_seg_reg_moments_bspline_swept_impl<false>(R, wu_pow, k_array, 0.0);
+}
+
+static py::array_t<std::complex<double>>
+seg_seg_reg_moments_bspline_swept_ek(
+    py::array_t<double, py::array::c_style | py::array::forcecast> R,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_pow,
+    py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
+    double a_ek
+) {
+    return seg_seg_reg_moments_bspline_swept_impl<true>(R, wu_pow, k_array, a_ek);
 }
 
 
@@ -1745,8 +1853,49 @@ static double J_static_dispatch(int p, int q,
     }
 }
 
+// The extended thin-wire kernel's static correction, same shape of dispatch
+// (momwire#270 unit 1).
+//
+//   D_pq^EK = ∫∫ (s-α)^p (s'-A)^q [ -a²/(2R³) + 3a⁴/(4R⁵) ] ds' ds
+//
+// i.e. the k → 0 limit of Eq 89's coaxial factor minus 1, integrated against
+// the same polynomial moments as J. It is a function of (α, β, A, B) through
+// the same four corner differences J is, so it is translation-invariant along
+// the edge exactly as J is and rides the Toeplitz gather below unchanged.
+//
+// `a_ek` is a SEPARATE argument from the regularization radius `a`: on every
+// eligible pair they are equal by construction (eligibility requires equal
+// radii), but `_EK.a` lets a caller override, and keeping them apart here
+// means the C++ mirrors `_ek_radius(ek, a)` on the Python side rather than
+// assuming it.
+static double D_ek_dispatch(int p, int q,
+                            double alpha, double beta,
+                            double A, double B, double a) {
+    int pq = p * 3 + q;
+    switch (pq) {
+        case 0: return D_ek_pq_0_0(alpha, beta, A, B, a);
+        case 1: return D_ek_pq_0_1(alpha, beta, A, B, a);
+        case 2: return D_ek_pq_0_2(alpha, beta, A, B, a);
+        case 3: return D_ek_pq_1_0(alpha, beta, A, B, a);
+        case 4: return D_ek_pq_1_1(alpha, beta, A, B, a);
+        case 5: return D_ek_pq_1_2(alpha, beta, A, B, a);
+        case 6: return D_ek_pq_2_0(alpha, beta, A, B, a);
+        case 7: return D_ek_pq_2_1(alpha, beta, A, B, a);
+        case 8: return D_ek_pq_2_2(alpha, beta, A, B, a);
+        default:
+            throw std::runtime_error("D_ek: (p, q) out of inline range");
+    }
+}
+
+// Shared body of the reduced and extended Toeplitz static kernels. `ek_on` is
+// a compile-time template parameter so the EK-off instantiation is textually
+// (and therefore bit-for-bit) the pre-#270 loop — the byte-identity armor in
+// tests/test_extended_kernel_bspline.py pins that and nothing here may perturb
+// it.
+template <bool EK>
 static py::array_t<double>
-seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d) {
+seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
+                                            int max_d, double a_ek) {
     if (max_d < 0 || max_d > 2) {
         throw std::runtime_error("max_d out of range [0, 2]");
     }
@@ -1773,6 +1922,12 @@ seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d) 
                 double A_ = (double)delta * h;
                 double B_ = ((double)delta + 1.0) * h;
                 double val = J_static_dispatch((int)p, (int)q, alpha, beta, A_, B_, a);
+                if (EK) {
+                    // numpy's `vals = vals + D_ek_moment(...)` then `* inv4pi`,
+                    // in that order (_bspline_kernels._seg_seg_static_moments).
+                    val = val + D_ek_dispatch((int)p, (int)q, alpha, beta, A_, B_,
+                                              a_ek);
+                }
                 table[(p * NM + q) * n_delta + di] = val * inv_4pi;
             }
         }
@@ -1791,6 +1946,17 @@ seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d) 
         }
     }
     return out;
+}
+
+static py::array_t<double>
+seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d) {
+    return seg_seg_static_moments_bspline_uniform_impl<false>(h, a, N, max_d, 0.0);
+}
+
+static py::array_t<double>
+seg_seg_static_moments_bspline_uniform_ek(double h, double a, size_t N, int max_d,
+                                          double a_ek) {
+    return seg_seg_static_moments_bspline_uniform_impl<true>(h, a, N, max_d, a_ek);
 }
 
 
@@ -4370,6 +4536,18 @@ PYBIND11_MODULE(_accelerators, m) {
           "complex — the streaming C++ replacement for the numpy einsum in "
           "_seg_seg_reg_moments_from_geometry_swept.",
           py::arg("R"), py::arg("wu_pow"), py::arg("k_array"));
+    m.def("seg_seg_reg_moments_bspline_swept_ek",
+          &seg_seg_reg_moments_bspline_swept_ek,
+          "Extended-thin-wire-kernel twin of seg_seg_reg_moments_bspline_swept "
+          "(momwire#270 unit 1). Same (R, wu_pow, k_array) contract and the "
+          "same (n_k, n_d, n_d, N, N) output, but the smooth remainder is "
+          "[(exp(-jkR) - 1)*fac + extra] / (4 pi R) with NEC Eq 89's coaxial "
+          "equal-radius factor fac = 1 + T1*C2 - T2*C1 about the EK radius "
+          "`a_ek` and extra = fac - fac_static — a literal transcription of "
+          "_bspline_kernels._ek_reg_kernel, whose static half rides in "
+          "seg_seg_static_moments_bspline_uniform_ek. Same-edge blocks are "
+          "eligible in their entirety, so there are no per-pair group labels.",
+          py::arg("R"), py::arg("wu_pow"), py::arg("k_array"), py::arg("a_ek"));
     m.def("seg_seg_full_moments_bspline", &seg_seg_full_moments_bspline,
           "Single-k full-kernel polynomial moment integrals for the B-spline "
           "Galerkin MoM. Returns J of shape (max_d+1, max_d+1, N_i, N_j) "
@@ -4400,6 +4578,19 @@ PYBIND11_MODULE(_accelerators, m) {
           "Returns J_static of shape (max_d+1, max_d+1, N, N), with the "
           "1/(4π) prefactor folded in.",
           py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"));
+    m.def("seg_seg_static_moments_bspline_uniform_ek",
+          &seg_seg_static_moments_bspline_uniform_ek,
+          "Extended-thin-wire-kernel twin of "
+          "seg_seg_static_moments_bspline_uniform (momwire#270 unit 1). Adds "
+          "the generated closed-form correction D_pq^EK — the moments of "
+          "-a_ek^2/(2R^3) + 3 a_ek^4/(4R^5), the k -> 0 limit of Eq 89's "
+          "coaxial factor minus 1 — to each J_pq before the 1/(4 pi) "
+          "prefactor. D is translation-invariant along the edge exactly as J "
+          "is, so it rides the same 2N-1 Toeplitz table. `a_ek` is separate "
+          "from the regularization radius `a` because _EK.a may override it; "
+          "on every eligible pair they are equal.",
+          py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"),
+          py::arg("a_ek"));
     m.def("assemble_Z_bspline_weighted_windowed", &assemble_Z_bspline_weighted_windowed,
           "Weighted + scaled windowed accumulator: like "
           "assemble_Z_bspline_windowed but with complex per-pair tables "
