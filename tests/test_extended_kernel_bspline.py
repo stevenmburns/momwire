@@ -46,6 +46,8 @@ from momwire._bspline_kernels import (
     _EK,
     _ek_axis_groups,
     _ek_factor,
+    _ek_reg_extra,
+    _ek_reg_kernel,
     _seg_seg_full_moments_offedge,
     _seg_seg_full_moments_offedge_swept,
     _seg_seg_reg_geometry,
@@ -621,3 +623,16 @@ def test_ek_off_default_matches_explicit_none_bit_for_bit():
         _seg_seg_full_moments_offedge(lo, hi, lo_j, hi_j, a, K, 2, 4),
         _seg_seg_full_moments_offedge(lo, hi, lo_j, hi_j, a, K, 2, 4, ek=None),
     )
+
+
+def test_ek_spelling_reduces_to_the_reduced_kernel_exactly_at_zero_radius():
+    # The #249 §2.1 claim about the G_ek,reg spelling: at a = 0 it is the
+    # pre-existing expression TERM BY TERM, not merely to rounding. `fac` is
+    # exactly 1.0 and `extra` exactly 0.0, and multiplying a complex by
+    # (1 + 0j) and adding (0 + 0j) is the identity in IEEE — so the whole
+    # remainder is bit-identical to what the EK-off branch computes.
+    R = np.geomspace(1e-3, 10.0, 41)
+    assert np.all(_ek_factor(R, 0.0, K) == 1.0)
+    assert np.all(_ek_reg_extra(R, 0.0, K) == 0.0)
+    reduced = (np.exp(-1j * K * R) - 1.0) / (4 * np.pi * R)
+    assert np.array_equal(_ek_reg_kernel(R, 0.0, K), reduced)
