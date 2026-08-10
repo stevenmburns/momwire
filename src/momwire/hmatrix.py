@@ -37,6 +37,8 @@ numerically low rank and ACA captures it from O(r·(m+n)) sampled entries
 instead of the full m·n.
 """
 
+import math
+
 import numpy as np
 import scipy.sparse as sp
 from scipy.linalg import solve_triangular
@@ -46,6 +48,7 @@ from .bspline import BSplineSolver, _SplineBasis, _EK_SAME_EDGE, _ek_slice
 from ._port_solution import PortSolution
 from . import _ground_refl, _sommerfeld
 from ._bspline_kernels import (
+    _ek_radius,
     _seg_seg_full_moments_offedge,
     _seg_seg_reg_moments,
     _seg_seg_static_moments,
@@ -67,6 +70,14 @@ _HAVE_OFFEDGE_BLOCK_ACCEL = _acc is not None and hasattr(
 )
 _HAVE_OFFEDGE_BLOCK_REFL_ACCEL = _acc is not None and hasattr(
     _acc, "bspline_assemble_offedge_block_refl"
+)
+# The fused off-edge assembler's extended-kernel twin (momwire#270 unit 3):
+# a build without it degrades to the numpy zblock(..., same_edge=False)
+# fallback under `extended_kernel` rather than silently using the reduced
+# fused assembler (which would be numerically wrong under EK) — see
+# `_offedge_aca_evaluators`'s `use_accel` gate.
+_HAVE_OFFEDGE_BLOCK_EK_ACCEL = _acc is not None and hasattr(
+    _acc, "bspline_assemble_offedge_block_ek"
 )
 
 _OFFEDGE_BLOCK_ACCEL_MAX_D = 2
@@ -1087,6 +1098,18 @@ class HMatrixSolver(BSplineSolver):
         back into block order. Bases are wire-contiguous, so a cluster
         spans few radii; a uniform block (every scalar-radius solve) takes
         the single-call fast path unchanged.
+
+        Under `extended_kernel` (momwire#270 unit 3) nothing here needs to
+        split the EK labels alongside `a`, unlike `_seg_seg_full_moments_
+        offedge`'s own per-row-run recursion (which slices `ek.group_i` by
+        hand because it is handed one whole-mesh array up front): each
+        `_offedge_block_evaluators_uniform` sub-call rebuilds its own
+        `segI`/`segJ` union from the `I[rows]`/`J` it is actually given and
+        re-derives `_ek_spec(...)` from that, so the labels a row group sees
+        are already restricted correctly. A row-group boundary is drawn
+        purely from `a`, and eligible pairs share a radius by construction,
+        so a boundary never splits a coaxial group — same invariant unit 2's
+        own recursion relies on.
         """
         aI = ctx["basis_a"][np.asarray(I, dtype=np.int64)]
         if np.all(aI == aI[0]):
@@ -1132,7 +1155,13 @@ class HMatrixSolver(BSplineSolver):
         The block-wide I/J segment unions and local support maps are resolved
         once here; each row/column call passes only the single basis it needs
         on its own axis (so the C++ side never precomputes positions for unused
-        segments) against the precomputed full opposite axis.
+        segments) against the precomputed full opposite axis. `_call`'s first
+        two arguments are always the GLOBAL segment ids that call's I-side and
+        J-side geometry arrays were built from (`segI`/`segJ` for the block-
+        wide axis, the single basis's own `seg_i`/`seg_j` for the other) — the
+        EK branch below needs them to slice the group labels the same way,
+        since a per-call fresh I/J-side rebuild (get_row's `seg_i`, get_col's
+        `seg_j`) is not indexed by `segI`/`segJ` at all.
 
         With `mirror_J=True` the trial (J) segment endpoints are reflected across
         ``z = ground_z`` and their tangents z-flipped, so the kernel's internal R
@@ -1140,27 +1169,60 @@ class HMatrixSolver(BSplineSolver):
         C++ counterpart of `_zblock_image` (the result is *subtracted* from the
         free-space block). The C++ assembler uses the trial tangents only through
         the dot product, so flipping their z is exactly the image-current sign
-        flip.
+        flip. Group labels do not need a parallel mirror step: `_ek_spec(...,
+        mirror=mirror_J)` already returns the JOINT real+image labelling (the
+        #249 `_ek_axis_labels` scan), keyed by the REAL global segment ids —
+        the same ids `seg_l`/`seg_r`/`tangents` are indexed by before the
+        `mirror_pos`/`mirror_tan` transform is applied for the kernel call.
 
         With `refl=True` (implies the mirrored-J image; `ground_eps` set) the
         closures call `bspline_assemble_offedge_block_refl` instead: the same
         pre-mirrored inputs, with the Fresnel dyad computed in-kernel from
         ε̃ and the Φ weight as w_Φ = c0 + c1·ρ_v — the C++ counterpart of
-        `_zblock_image_refl`.
+        `_zblock_image_refl`. There is no EK twin of the refl assembler (EK +
+        finite ground is refused upstream, momwire#269), which is also why
+        `refl` and `self.extended_kernel` are never both true here — `ek`
+        below is unconditionally `None` on this branch.
         """
         if refl:
             mirror_J = True
             eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
             phi_c0, phi_c1 = _ground_refl.phi_mode_coeffs(self.ground_phi_mode, eps_t)
 
-            def _call(*args):
+            def _call(seg_ids_I, seg_ids_J, *args):
+                del seg_ids_I, seg_ids_J
                 return _acc.bspline_assemble_offedge_block_refl(
                     *args, eps_t, phi_c0, phi_c1, self._cancel_flag
                 )
         else:
+            # momwire#270 unit 3: the fused block assembler's EK twin. `ek`
+            # is the whole-mesh (group_i, group_j) label spec — sliced per
+            # call below, not once here, because get_row/get_col rebuild
+            # their single-basis side fresh each call (see the docstring).
+            ek = (
+                self._ek_spec(ctx["geom"], mirror=mirror_J)
+                if self.extended_kernel
+                else None
+            )
+            use_ek_accel = ek is not None and _HAVE_OFFEDGE_BLOCK_EK_ACCEL
+            if use_ek_accel:
+                a_ek = float(_ek_radius(ek, math.sqrt(a2)))
 
-            def _call(*args):
-                return _acc.bspline_assemble_offedge_block(*args, self._cancel_flag)
+                def _call(seg_ids_I, seg_ids_J, *args):
+                    group_i = np.ascontiguousarray(
+                        ek.group_i[seg_ids_I], dtype=np.int64
+                    )
+                    group_j = np.ascontiguousarray(
+                        ek.group_j[seg_ids_J], dtype=np.int64
+                    )
+                    return _acc.bspline_assemble_offedge_block_ek(
+                        *args, group_i, group_j, a_ek, self._cancel_flag
+                    )
+            else:
+
+                def _call(seg_ids_I, seg_ids_J, *args):
+                    del seg_ids_I, seg_ids_J
+                    return _acc.bspline_assemble_offedge_block(*args, self._cancel_flag)
 
         supp_seg = ctx["supp_seg"]
         polys = ctx["polys"]
@@ -1195,6 +1257,8 @@ class HMatrixSolver(BSplineSolver):
         def get_row(i):
             seg_i = supp_seg[I[i]]
             return _call(
+                seg_i,
+                segJ,
                 one_supp,
                 polys[I[i]][None],
                 seg_l[seg_i],
@@ -1218,6 +1282,8 @@ class HMatrixSolver(BSplineSolver):
         def get_col(j):
             seg_j = supp_seg[J[j]]
             return _call(
+                segI,
+                seg_j,
                 sIl,
                 pI,
                 slI,
@@ -1240,6 +1306,8 @@ class HMatrixSolver(BSplineSolver):
 
         def dense():
             return _call(
+                segI,
+                segJ,
                 sIl,
                 pI,
                 slI,
@@ -1279,15 +1347,22 @@ class HMatrixSolver(BSplineSolver):
         block for an antenna above the plane — reflection only increases the
         cluster separation).
 
-        Under `extended_kernel` the C++ assemblers are bypassed outright:
-        they transcribe the reduced kernel, so the whole EK story for the
-        ACA fill is this one line forcing the numpy `zblock(...,
-        same_edge=False)` branch, which routes through `_moment_subtensor`
-        and is already EK-aware. That is the pre-#245-style cost; #249
-        follow-up B adds the C++ twins. Every ArrayBlock coupling fill
+        Under `extended_kernel` the dispatch is capability-gated rather than
+        forced off outright (momwire#270 unit 3): `_offedge_block_evaluators`
+        /`_offedge_block_evaluators_uniform` build the whole-mesh `_ek_spec`
+        and pass its per-segment labels through to the fused
+        `bspline_assemble_offedge_block_ek` twin whenever the extension has
+        it (`_HAVE_OFFEDGE_BLOCK_EK_ACCEL`); only a build that LACKS the twin
+        still falls back to the numpy `zblock(..., same_edge=False)` branch
+        below, which routes through `_moment_subtensor` and has been
+        EK-aware since #249 (falling back to the REDUCED fused assembler
+        would be silently wrong under EK, not merely slow, so the gate is
+        "twin present" rather than "EK off"). Every ArrayBlock coupling fill
         (`_coupling_aca`, `_build_lattice_operator`) comes through here, so
         they inherit the decision rather than repeating it."""
-        use_accel = use_accel and not self.extended_kernel
+        use_accel = use_accel and (
+            not self.extended_kernel or _HAVE_OFFEDGE_BLOCK_EK_ACCEL
+        )
         if use_accel:
             row_f, col_f, dense_f = self._offedge_block_evaluators(ctx, I, J, k)
         else:

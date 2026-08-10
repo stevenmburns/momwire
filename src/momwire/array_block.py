@@ -1114,8 +1114,11 @@ class ArrayBlockSolver(HMatrixSolver):
         image term (``Z_free − Z_image``) when ground is on — one factor pair
         per pair, so the matvec and block-Jacobi machinery are unchanged.
         Sharing those evaluators is also what makes `extended_kernel` work
-        here: they force `use_accel=False` under EK, so this fill inherits
-        the numpy block path without knowing the flag exists
+        here without this method knowing the flag exists: under EK
+        `_offedge_aca_evaluators` dispatches to the fused
+        `bspline_assemble_offedge_block_ek` twin when the extension has it
+        (momwire#270 unit 3), and only degrades to the numpy block path when
+        it does not — same capability gate either caller inherits
         (momwire#249)."""
         get_row, get_col, _dense = self._offedge_aca_evaluators(ctx, I, J, k, use_accel)
         U, V = aca_partial(get_row, get_col, I.size, J.size, tol=tol)
