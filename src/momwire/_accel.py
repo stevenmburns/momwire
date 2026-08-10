@@ -103,6 +103,14 @@ _CANCELLABLE_KERNELS = (
     # rather than land its own kernel with the same hole.
     "sinusoidal_field_tensor_ek",
     "sinusoidal_field_tensor_ek_refl",
+    # Same hole on the fused bspline block assembler's variants: only the
+    # plain one was listed, so a cancelled H-matrix fill over finite ground
+    # or under EK surfaced the raw ``AcceleratorAborted``. momwire#269 needs
+    # `_refl_ek` (the path it opens) and lists its two siblings with it
+    # rather than leave the tuple half-populated.
+    "bspline_assemble_offedge_block_refl",
+    "bspline_assemble_offedge_block_ek",
+    "bspline_assemble_offedge_block_refl_ek",
     "sinusoidal_galerkin_far_fill",
     "somm_six_integrals_batch",
 )
