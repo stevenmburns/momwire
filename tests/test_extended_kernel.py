@@ -892,3 +892,48 @@ def test_cpp_ek_path_does_not_re_enter_the_numpy_kernel(monkeypatch):
 
     _ek_solver("grounded_ell_radii").compute_impedance()
     assert calls == [], f"EK-ON solve fell back to the numpy kernel: {calls}"
+
+
+def test_ek_any_swap_matches_the_definition_on_both_builds():
+    """`_ek_any_swap` is `np.any(rho_eval < src_a)` over the whole (M, N) grid
+    — the same reduction `_extended_kernel_fields` performs internally. It
+    reaches that answer through an early-out, a chunked scan and a per-build
+    cache, so pin it against the literal definition on both builds, on a deck
+    where the two builds genuinely disagree: a horizontal radius step 3 m up,
+    so the thin wire's own centres sit on the fat stub's axis (swap) while the
+    mirror images sit 6 m below it (no swap).
+    """
+    sim = SinusoidalSolver(
+        wavelength=LAM,
+        wires=[
+            np.array([[0.0, 0.0, 3.0], [2.0, 0.0, 3.0]]),
+            np.array([[2.0, 0.0, 3.0], [4.0, 0.0, 3.0]]),
+        ],
+        n_per_edge_per_wire=[[5], [5]],
+        wire_radius=[0.02, 0.005],
+        nsegs=10,
+        feed_arclength=1.0,
+        junctions=[[(0, "end"), (1, "start")]],
+        ground_z=0.0,
+        extended_kernel=True,
+    )
+    geom = sim._build_geometry()
+    src_a = sim._seg_radius(geom)
+    obs_c = geom["seg_centers"]
+
+    def literal(src_c, src_t):
+        rvec = obs_c[:, None, :] - src_c[None, :, :]
+        z = np.einsum("...d,...d->...", rvec, src_t[None, :, :])
+        rho_vec = rvec - z[..., None] * src_t[None, :, :]
+        a = src_a[:, None]
+        rho_eval = np.sqrt(np.linalg.norm(rho_vec, axis=-1) ** 2 + a * a)
+        return bool(np.any(rho_eval < src_a))
+
+    free = (obs_c, geom["seg_tangents"])
+    image = sim._image_source_centers_tangents(geom)
+    assert literal(*free) is True and literal(*image) is False, (
+        "fixture must have the two builds disagree, or the cache key is untested"
+    )
+    for _ in range(2):  # twice: once cold, once off the cache
+        assert sim._ek_any_swap(geom, *free) == literal(*free)
+        assert sim._ek_any_swap(geom, *image) == literal(*image)
