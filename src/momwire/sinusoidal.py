@@ -51,6 +51,7 @@ _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor
 _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
     _acc, "sinusoidal_field_tensor_refl"
 )
+_HAVE_FIELD_TENSOR_EK = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor_ek")
 
 _EULER_GAMMA = 0.5772156649015329
 
@@ -207,10 +208,13 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
         # invisible at ordinary Δ/a and worth tens of percent below Δ/a ≈ 1.
         # NEC's `EK`/`EK 0` maps to True, `EK -1` to False.
         #
-        # Cost: True routes the fill through the numpy reference kernel,
-        # because the C++ accelerators transcribe EKSC only. Measured ~8.5×
-        # the fill time at N=801 against the OpenMP path, and the numpy fill's
-        # (N, N, n_qp_const) temporaries make large meshes memory-bound.
+        # Cost: since momwire#245 the point-matched fill has its own C++ entry
+        # point for EK (`sinusoidal_field_tensor_ek`, EKSCX), so True costs
+        # ~1.2× the EK-OFF fill rather than the ~8.5× the numpy reference did
+        # at N=801, and nothing (N, N, n_qp_const)-sized is materialized. The
+        # numpy kernel remains the reference and the fallback. Still numpy:
+        # the reflection-coefficient image block (`ground_eps` without
+        # `ground_model="sommerfeld"`) — see `_field_tensor_image_refl`.
         self.extended_kernel = bool(extended_kernel)
         self._cached_ek_gating: tuple | None = None
         self._cancel = cancel
@@ -1197,10 +1201,14 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
         the image-source field at the original observer points.
 
         Hot path uses the C++ accelerator `sinusoidal_field_tensor` (the
-        70% bottleneck of single-k solves at N≳80); the pure-numpy
-        formulation (`_field_components` + the tangential projection
-        below) is kept as a reference / fallback when the accelerator
-        isn't available. The C++ kernel takes a single scalar radius —
+        70% bottleneck of single-k solves at N≳80), or
+        `sinusoidal_field_tensor_ek` when `extended_kernel` is set — the
+        EKSCX transcription of momwire#245, which additionally takes the
+        source radius and the per-end gating codes as (N,) tables. The
+        pure-numpy formulation (`_field_components` + the tangential
+        projection below) is kept as the reference for both, and as the
+        fallback when the accelerator isn't available. Either C++ kernel
+        takes a single scalar radius —
         the OBSERVER segment's (necpp EFLD) — so mixed per-wire radii
         dispatch one call per constant-radius observer-row run
         (stevenmburns/momwire#147). The
@@ -1216,10 +1224,57 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
         src_c = src_centers if src_centers is not None else seg_c
         src_t = src_tangents if src_tangents is not None else seg_t
 
-        # The C++ kernels transcribe EKSC only, and they are handed neither
-        # the source radius nor any connectivity, so `extended_kernel=True`
-        # takes the numpy reference path (momwire#233). Nothing about the
-        # EK-OFF dispatch moves, which is what keeps the default bit-exact.
+        # `extended_kernel=True` has had its own C++ entry point since
+        # momwire#245 — EKSCX rather than EKSC, taking the SOURCE radius and
+        # the per-end gating codes as (N,) tables alongside the observer-side
+        # scalar radius. It is dispatched first, and separately, so the EK-OFF
+        # marshalling below is untouched by it (which is what keeps the
+        # default bit-exact; see the #233 off-path armor).
+        if _HAVE_FIELD_TENSOR_EK and self.extended_kernel:
+            gx, gw = self._leggauss_cached(self.n_qp_const)
+            # Both tables are indexed by SOURCE segment, and the image build
+            # mirrors the source geometry without reordering it, so the same
+            # (N,) arrays serve both passes — which is also what NEC does,
+            # EFLD passing one IND1/IND2 pair through both passes of its
+            # KSYMP image loop (nec2-1.2.1.2.f:2914-2971).
+            ind1, ind2 = self._ek_gating(geom)
+            src_a = np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64)
+            want_swapped = self._ek_any_swap(geom, src_c, src_t)
+
+            def _call_ek(rows, a):
+                return _acc.sinusoidal_field_tensor_ek(
+                    np.ascontiguousarray(seg_c[rows], dtype=np.float64),
+                    np.ascontiguousarray(seg_t[rows], dtype=np.float64),
+                    np.ascontiguousarray(src_c, dtype=np.float64),
+                    np.ascontiguousarray(src_t, dtype=np.float64),
+                    np.ascontiguousarray(seg_h, dtype=np.float64),
+                    float(a),
+                    float(k),
+                    float(self.eta),
+                    np.ascontiguousarray(gx, dtype=np.float64),
+                    np.ascontiguousarray(gw, dtype=np.float64),
+                    src_a,
+                    np.ascontiguousarray(ind1, dtype=np.int8),
+                    np.ascontiguousarray(ind2, dtype=np.int8),
+                    want_swapped,
+                    self._cancel_flag,
+                )
+
+            # The observer radius is still one scalar per call (EFLD's `ai`),
+            # so mixed radii still split into constant-radius observer-row
+            # runs. Spelled out rather than shared with the EK-OFF block
+            # below so that block's diff stays empty.
+            if self._uniform_radius is not None:
+                return _call_ek(slice(None), self._uniform_radius)
+            parts = [_call_ek(slice(s, e), a) for s, e, a in self._radius_runs(geom)]
+            return tuple(
+                np.concatenate([p[i] for p in parts], axis=0) for i in range(3)
+            )
+
+        # The reduced-kernel C++ kernels transcribe EKSC only, so an EK-ON
+        # solve reaches this branch only when the accelerator is unavailable —
+        # in which case it takes the numpy reference path below, same as an
+        # EK-OFF solve would.
         if _HAVE_FIELD_TENSOR and not self.extended_kernel:
             gx, gw = self._leggauss_cached(self.n_qp_const)
 
@@ -1372,6 +1427,51 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
 
         self._cached_ek_gating = (geom, inds[0], inds[1])
         return inds[0], inds[1]
+
+    def _ek_any_swap(self, geom, src_c, src_t):
+        """EKSCX's IRA for a whole build — the scalar the C++ EK kernel takes.
+
+        `_extended_kernel_fields` orders each pair's (rh, b) per pair but then
+        hands `_ek_end_gxx` ONE `want_swapped`: `np.any(rhx < src_a)` over the
+        entire (M, N) grid. The accelerated path has to reproduce that exactly
+        or it would not be a transcription, and it cannot compute it per
+        radius-run — a run-local `any` is not the global one. So it is computed
+        here, once per build, and passed down (momwire#245; the globality
+        itself is a numpy-side defect, tracked separately — it is masked
+        wherever the swapping pairs are collinear, since the slots it changes
+        are the ρ-flavoured ones and the ρ-projection vanishes there).
+
+        Uniform radius can never swap and skips the pass entirely: rho_eval =
+        sqrt(rho_axis² + a²) ≥ a = src_a in IEEE (sqrt of a correctly rounded
+        square is exact) and the test is strict. More generally the pass is
+        skipped whenever the fattest source is no fatter than the thinnest
+        observer, for the same reason — so only genuinely mixed-radius decks
+        pay for it.
+
+        `src_c` / `src_t` are the build's source centers/tangents: the
+        geometry's own for free space, the mirrored pair for the PEC image.
+        """
+        obs_c = geom["seg_centers"]
+        a_seg = self._seg_radius(geom)
+        src_a = a_seg
+        if float(src_a.max()) <= float(a_seg.min()):
+            return False
+        # Same arithmetic as `_field_components_bcast`, chunked over observer
+        # rows so this stays O(N) in memory rather than reintroducing an
+        # (M, N) temporary — the elementwise values are chunk-independent.
+        a_col = a_seg[:, None]
+        rows = max(1, 2_000_000 // max(1, obs_c.shape[0]))
+        for i0 in range(0, obs_c.shape[0], rows):
+            i1 = min(i0 + rows, obs_c.shape[0])
+            rvec = obs_c[i0:i1, None, :] - src_c[None, :, :]
+            z_eval = np.einsum("...d,...d->...", rvec, src_t[None, :, :])
+            rho_vec = rvec - z_eval[..., None] * src_t[None, :, :]
+            rho_axis = np.linalg.norm(rho_vec, axis=-1)
+            a = a_col[i0:i1]
+            rho_eval = np.sqrt(rho_axis * rho_axis + a * a)
+            if bool(np.any(rho_eval < src_a)):
+                return True
+        return False
 
     @staticmethod
     def _ek_end_gxx(k, zz, rh, b, want_swapped):
@@ -2122,8 +2222,12 @@ class SinusoidalSolver(_ElementCurrents, _Cancelable):
         # alongside k before assembling).
         eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
 
-        # As in `_field_tensor`: the fused C++ kernel is reduced-kernel-only,
-        # so EK-on falls to the numpy reference (momwire#233).
+        # The fused Fresnel kernel is reduced-kernel-only, so EK-on still falls
+        # to the numpy reference here (momwire#233). Unlike `_field_tensor`,
+        # which gained an EKSCX entry point in momwire#245, this one has not:
+        # the Fresnel dyad rides on top of the SAME unprojected E_z/E_ρ tables,
+        # so the extended variant is a mechanical follow-on rather than new
+        # physics — filed separately so #245 stayed one kernel.
         if _HAVE_FIELD_TENSOR_REFL and not self.extended_kernel:
             # Fused C++ path: Eqs 76-79 field components + the Fresnel
             # dyad projection in one pass, with rho_v/rho_h computed
