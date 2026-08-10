@@ -58,7 +58,9 @@ import scipy.sparse
 from scipy.interpolate import BSpline
 
 from ._bspline_kernels import (
+    _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
+    _ek_axis_groups,
     _seg_seg_full_moments_offedge,
     _seg_seg_full_moments_offedge_swept,
     _seg_seg_reg_geometry,
@@ -134,6 +136,31 @@ _BASIS_POLY_CACHE_MAX = 32
 def _evict_fifo(cache: dict, limit: int) -> None:
     while len(cache) >= limit:
         cache.pop(next(iter(cache)))
+
+
+# The extended-kernel spec for a SAME-EDGE moment block (momwire#249). One
+# edge is one straight run of one wire at one radius, so every pair in the
+# block is coaxial-and-equal-radius by construction and the labels carry no
+# information — the all-None spec is the kernel layer's spelling for "the
+# whole block is eligible".
+_EK_SAME_EDGE = _EK(a=None, group_i=None, group_j=None)
+
+
+def _ek_slice(ek, rows=None, cols=None):
+    """Restrict an `_EK` spec's per-segment labels to a block's rows/cols.
+
+    The solver builds ONE label array over the whole mesh (labels have to be
+    globally comparable — `group_i[i] == group_j[j]` is the eligibility
+    test), and every windowed/blocked fill site then hands the kernel the
+    labels of just the segments it is filling. `rows`/`cols` are anything
+    numpy indexes a 1-D array with: a slice, or a fancy-index array.
+    None (both here and for a spec's own labels) means "unrestricted".
+    """
+    if ek is None:
+        return None
+    gi = ek.group_i if rows is None or ek.group_i is None else ek.group_i[rows]
+    gj = ek.group_j if cols is None or ek.group_j is None else ek.group_j[cols]
+    return _EK(a=ek.a, group_i=gi, group_j=gj)
 
 
 def _xfem_projection_coeffs(d):
@@ -231,6 +258,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     the extended kernel AND a mesh that keeps Δ/a above ~1 — they are not
     rescued by refining the mesh.
 
+    `extended_kernel=True` (issue #249) is the first half of that: it buys
+    ~10× on the same-edge moments at Δ/a ≥ 2 (measured against the exact
+    tube kernel). It does NOT move the floor. EK stops improving the moments
+    below Δ/a ≈ 1, and by Δ/a ≈ 0.5 it is *worse* than the reduced kernel on
+    the nearest-neighbour moment — an engine-free confirmation of the same
+    floor #248 found from the divergence side. The reason is that EK's O(a²)
+    tube expansion is a truncation in b/R, and the self moment integrates
+    through the ζ ≲ a region where that truncation is still O(1) wrong.
+
     Parameters
     ----------
     wires : list of (M, 3) polyline arrays, M ≥ 2 anchors each.
@@ -263,6 +299,31 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     n_qp_pair : Gauss-Legendre nodes per segment per axis for the smooth-
         kernel piece of same-edge pairs and for all cross-edge / cross-wire
         pairs (full kernel with a² regularization).
+    extended_kernel : NEC's EK card for this basis family (#249). False —
+        the default, and what this solver did before #249 — is the reduced
+        ("thin-wire") kernel: the source current is a filament on the wire
+        axis and the conductor's girth survives only as the a²
+        regularization of R. True is NEC's EXTENDED thin-wire kernel, Eq 89
+        of the theory manual, the O(a²) azimuthal average of the Green's
+        function over a source tube of radius a. Unlike `SinusoidalSolver`,
+        which transcribes NEC's per-END IND1/IND2 gating, this Galerkin fill
+        applies EK to a segment PAIR iff the two segments are coaxial and of
+        equal radius (`_ek_axis_groups`) — a symmetric rule, so the Galerkin
+        symmetry of Z survives as an error detector. It agrees with NEC
+        exactly on straight wires and on perpendicular ground contacts (via
+        the mirrored source) and is strictly more conservative at bends,
+        radius steps and K ≥ 3 junctions, where NEC still extends the
+        cross-arm pairs and this rule does not (~1 % of Z at Δ/a = 2, O(h)
+        in the refinement limit — #249 §4.3).
+
+        Phase 1 is numpy-only: every C++ moment kernel transcribes the
+        reduced kernel, so an EK-on fill takes the numpy path (and
+        `HMatrixSolver`'s ACA fill drops to the numpy block evaluator).
+        Expect a real slowdown on large decks until #249 follow-up B adds
+        the C++ twins. Refused, rather than half-served, with
+        `use_singular_enrichment` and with finite ground (`ground_eps`, both
+        `ground_model`s) — see the `NotImplementedError`s in `__init__`.
+        PEC ground (`ground_z` alone) is served.
     wavelength, halfdriver_factor, wire_radius, nsegs : shared solver
         conventions (see SinusoidalSolver for the same surface).
     wire_conductivity : distributed conductor loss (#131). None (default)
@@ -305,6 +366,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junction_ports=None,
         n_qp_pair=4,
         n_qp_source=16,
+        extended_kernel=False,
         wavelength=22,
         halfdriver_factor=0.962,
         wire_radius=0.0005,
@@ -393,6 +455,44 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             raise ValueError("ground_model='sommerfeld' requires ground_eps")
         self.ground_model = ground_model
         self.n_qp_sommerfeld = int(n_qp_sommerfeld)
+        # NEC's extended thin-wire kernel (momwire#249). See the class
+        # docstring for what it is and what it costs; `_ek_spec` builds the
+        # per-fill eligibility spec and every fill site guards on this flag,
+        # so an EK-off solve never enters a line of EK code.
+        self.extended_kernel = bool(extended_kernel)
+        # (geom, {mirror: (group_i, group_j)}) — per-geometry-object cache of
+        # the axis-group labels, identity-checked, same pattern as
+        # `SinusoidalSolver._cached_ek_gating` / `_cached_ek_swap`.
+        self._cached_ek_groups = None
+        if self.extended_kernel:
+            # Two refusals rather than two half-served paths (#249 §5).
+            if use_singular_enrichment:
+                raise NotImplementedError(
+                    "extended_kernel=True + use_singular_enrichment=True not "
+                    "supported yet — the enrichment DOFs bypass the moment "
+                    "kernels entirely (they carry their own Φ_sing "
+                    "quadrature), they exist only at K >= 3 junctions where "
+                    "NEC's own gating turns EK off, and the O(a²) tube "
+                    "expansion was never derived for the s^(-1/2) shapes "
+                    "(stevenmburns/momwire#249 follow-up C)"
+                )
+            if ground_eps is not None:
+                # One boundary line for both finite-ground models: the
+                # refl-coef image would ride the EK-aware moment blocks for
+                # free, but the Sommerfeld remainder and global low-rank
+                # term have their own kernel machinery and would stay
+                # reduced. That mixture is probably harmless — the
+                # remainder's source is a reflection at >= 2x the height, so
+                # its correction is O((a/2h)²) — but it is a claim with no
+                # gate behind it, so phase 1 refuses instead of shipping it.
+                raise NotImplementedError(
+                    "extended_kernel=True + finite ground (ground_eps) not "
+                    "supported yet — the Sommerfeld remainder and global "
+                    "low-rank terms would stay reduced while the image "
+                    "blocks were extended, an ungated mixture "
+                    "(stevenmburns/momwire#249 follow-up A). PEC ground "
+                    "(ground_z alone) is served."
+                )
         self.swept_mem_mb = int(swept_mem_mb)
         if self.swept_mem_mb < 1:
             raise ValueError(f"swept_mem_mb must be >= 1, got {swept_mem_mb}")
@@ -1150,7 +1250,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_l_img = self._image_positions(seg_l)
         seg_r_img = self._image_positions(seg_r)
         # Observers (rows) are the real segments — the per-observer radius
-        # convention applies to the image block unchanged.
+        # convention applies to the image block unchanged. Under EK the
+        # source side is the MIRRORED geometry, so eligibility is scored
+        # against it (`mirror=True`): a vertical monopole is coaxial with
+        # its own image and extends, a horizontal wire is not and does not.
         return _seg_seg_full_moments_offedge(
             seg_l,
             seg_r,
@@ -1160,6 +1263,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             k,
             d,
             self.n_qp_pair,
+            ek=self._ek_spec(geom, mirror=True) if self.extended_kernel else None,
         )
 
     def _image_refl_prep(self, geom):
@@ -1537,6 +1641,77 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
         return np.repeat(self._radius_per_wire, np.diff(seg_off))
 
+    def _ek_axis_labels(self, geom, mirror):
+        """Cached coaxial-and-equal-radius labels for this geometry.
+
+        Returns `(group_i, group_j)`, both (n_segs,), for the observer and
+        source sides of a fill. `mirror=False` is the free-space case, where
+        both sides are the same real segments and therefore the same labels.
+
+        `mirror=True` is the PEC-image block, where the SOURCE segments are
+        the real ones reflected through z = ground_z. The two label arrays
+        must stay COMPARABLE — eligibility is `group_i[i] == group_j[j]` —
+        so the labels are built by one scan over the CONCATENATION of the
+        real and mirrored segments and then split, not by two independent
+        scans. Two independent scans would be actively wrong: a horizontal
+        wire and its image would both be labelled 0 and every real/image
+        pair would be declared coaxial, when in fact they are parallel and
+        offset by twice the height. With the joint scan, a vertical monopole
+        on the plane mirrors onto its own axis and IS one group (NEC's
+        IND = 0 ground-contact branch, #249 §4.3), while the horizontal wire
+        splits into two.
+
+        Cached per geometry OBJECT (identity check) and per mirror flag, so
+        a grounded swept solve pays for the O(N·G) scan once, not per k.
+        """
+        cached = self._cached_ek_groups
+        if cached is None or cached[0] is not geom:
+            cached = (geom, {})
+            self._cached_ek_groups = cached
+        hit = cached[1].get(mirror)
+        if hit is not None:
+            return hit
+
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        tangents = geom["tangents"]
+        seg_a = self._seg_radius(geom)
+        if mirror:
+            n = seg_l.shape[0]
+            flip = np.array([1.0, 1.0, -1.0])
+            joint = _ek_axis_groups(
+                np.vstack([seg_l, self._image_positions(seg_l)]),
+                np.vstack([seg_r, self._image_positions(seg_r)]),
+                np.vstack([tangents, tangents * flip]),
+                np.concatenate([seg_a, seg_a]),
+            )
+            hit = (joint[:n], joint[n:])
+        else:
+            labels = _ek_axis_groups(seg_l, seg_r, tangents, seg_a)
+            hit = (labels, labels)
+        cached[1][mirror] = hit
+        return hit
+
+    def _ek_spec(self, geom, mirror=False):
+        """The `_EK` spec for a whole-mesh fill, or None when EK is off.
+
+        Call sites guard on `self.extended_kernel` before calling, so an
+        EK-off solve enters no EK code at all (the monkeypatch-counter gate
+        in tests/test_extended_kernel_bspline.py pins that); the `not`
+        branch here is belt-and-braces for a direct caller.
+
+        Windowed and blocked fills restrict the returned spec's labels to
+        their own rows/columns with `_ek_slice`; same-edge blocks use
+        `_EK_SAME_EDGE` instead (whole-block eligibility).
+        """
+        if not self.extended_kernel:
+            return None
+        group_i, group_j = self._ek_axis_labels(geom, mirror)
+        # a=None: each kernel call's own regularisation radius IS the EK
+        # radius, because eligibility requires equal radii and the off-edge
+        # kernel already regularises each observer row with its own wire's.
+        return _EK(a=None, group_i=group_i, group_j=group_j)
+
     def _same_edge_prep(self, geom):
         """k-independent per-same-edge precompute hoisted out of the swept-k
         loop: each edge's analytic static-moment block plus the reg-kernel
@@ -1546,9 +1721,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cheap `exp(-jkR)` + einsum is left per k.
 
         Same-edge pairs live on a single wire, so each edge's block uses
-        that wire's own radius.
+        that wire's own radius — and, under `extended_kernel`, is eligible
+        in its entirety (`_EK_SAME_EDGE`). The spec rides into the reg
+        GEOMETRY dict rather than the per-k call, so the swept callers that
+        share this prep across frequencies carry EK for free.
         """
         d = self.degree
+        ek = _EK_SAME_EDGE if self.extended_kernel else None
         per_wire = geom["per_wire"]
         seg_off = geom["seg_offsets"]
         prep = []
@@ -1560,9 +1739,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             a_w = float(self._radius_per_wire[w])
             for i_e in range(len(ed_off) - 1):
                 sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
+                A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek)
                 reg_geo = _seg_seg_reg_geometry(
-                    ed_arc[i_e], a_w, max_d=d, n_qp=self.n_qp_pair
+                    ed_arc[i_e], a_w, max_d=d, n_qp=self.n_qp_pair, ek=ek
                 )
                 prep.append((sl, A_st, reg_geo))
         return prep
@@ -1588,13 +1767,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         a_row = self._seg_radius(geom)
         seg_l = geom["seg_l"]
         seg_r = geom["seg_r"]
+        ek = self._ek_spec(geom) if self.extended_kernel else None
+        ek_se = _EK_SAME_EDGE if self.extended_kernel else None
 
         # All-pairs full kernel (same a² regularization handles touching
         # segments at kink corners and at junctions to within ~1e-5 at
         # antenna scales; off-segment-pair accuracy is what GL is good at).
         # Per-observer-row radius under mixed per-wire radii.
         J = _seg_seg_full_moments_offedge(
-            seg_l, seg_r, seg_l, seg_r, a_row, k, d, self.n_qp_pair
+            seg_l, seg_r, seg_l, seg_r, a_row, k, d, self.n_qp_pair, ek=ek
         )  # (d+1, d+1, N, N) complex
 
         # Overwrite each same-edge block with analytic static + reg
@@ -1609,9 +1790,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 a_w = float(self._radius_per_wire[w])
                 for i_e in range(len(ed_off) - 1):
                     sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
+                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek_se)
                     A_reg = _seg_seg_reg_moments(
-                        ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair
+                        ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair, ek=ek_se
                     )
                     J[:, :, sl, sl] = A_st + A_reg
         else:
@@ -1718,6 +1899,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_basis = supp_seg.shape[0]
         tangents = geom["tangents"]
         td_all = tangents @ tangents.T
+        ek = self._ek_spec(geom) if self.extended_kernel else None
+        ek_se = _EK_SAME_EDGE if self.extended_kernel else None
 
         # Fortran order: scipy.linalg.solve(overwrite_a=True) can only
         # factor in place on a column-major matrix — C order would silently
@@ -1767,6 +1950,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 k,
                 d,
                 self.n_qp_pair,
+                ek=_ek_slice(ek, rows=slice(i0, i1)),
             )
             _accumulate(J_chunk, i0, i1, 0, n_segs, _bases_touching(i0, i1), all_n)
         del J_chunk
@@ -1786,9 +1970,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 a_w = float(self._radius_per_wire[w])
                 for i_e in range(len(ed_off) - 1):
                     sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
+                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek_se)
                     reg_geo = _seg_seg_reg_geometry(
-                        ed_arc[i_e], a_w, max_d=d, n_qp=self.n_qp_pair
+                        ed_arc[i_e], a_w, max_d=d, n_qp=self.n_qp_pair, ek=ek_se
                     )
                     same_edge_prep.append((sl, A_st, reg_geo))
         for sl, A_st, reg in same_edge_prep:
@@ -1798,6 +1982,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if isinstance(reg, dict)
                 else reg
             )
+            # The correction subtracts what the sweep above already added for
+            # these pairs, so it must be filled with exactly the sweep's own
+            # EK treatment — the sliced whole-mesh spec, not `ek_se`. (They
+            # agree pair by pair on a same-edge block; slicing keeps the two
+            # windows the same arithmetic rather than merely the same value.)
             J_edge = _seg_seg_full_moments_offedge(
                 seg_l[sl],
                 seg_r[sl],
@@ -1807,6 +1996,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 k,
                 d,
                 self.n_qp_pair,
+                ek=_ek_slice(ek, rows=sl, cols=sl),
             )
             corr = (A_st + A_reg) - J_edge
             e_idx = _bases_touching(sl.start, sl.stop)
@@ -1833,6 +2023,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_r_img = self._image_positions(seg_r)
         n_segs = geom["n_segs_total"]
         n_basis = supp_seg.shape[0]
+        ek = self._ek_spec(geom, mirror=True) if self.extended_kernel else None
 
         supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
@@ -1854,6 +2045,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 k,
                 d,
                 self.n_qp_pair,
+                ek=_ek_slice(ek, rows=slice(i0, i1)),
             )
             m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
             _acc.assemble_Z_bspline_weighted_windowed(
@@ -3449,10 +3641,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # image segments — all built once for the whole sweep.
         prep = self._same_edge_prep(geom)
         td_free = tangents @ tangents.T
+        # Same specs as the per-k fills; the same-edge half already rides
+        # `prep` (its static blocks and reg geometry carry `_EK_SAME_EDGE`).
+        # Under EK the batched offedge kernels fall back to stacking per-k
+        # numpy calls — correct, and slow until #249 follow-up B.
+        ek = self._ek_spec(geom) if self.extended_kernel else None
+        ek_img = None
         if self.ground_z is not None:
             td_img = self._image_tangent_dot(tangents)
             seg_l_img = self._image_positions(seg_l)
             seg_r_img = self._image_positions(seg_r)
+            if self.extended_kernel:
+                ek_img = self._ek_spec(geom, mirror=True)
 
         # Chunk size from the memory budget. Per k, the transients are
         # the all-pairs J tensor (nm² N² complex) plus the per-edge
@@ -3487,6 +3687,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ks,
                 d,
                 self.n_qp_pair,
+                ek=ek,
             )
             # Same-edge reg moments for this chunk. Computed per chunk —
             # the streaming kernel amortizes its R hoist over the chunk's
@@ -3510,6 +3711,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     ks,
                     d,
                     self.n_qp_pair,
+                    ek=ek_img,
                 )
                 Z = Z - _assemble_swept(J_img, td_img, omega_chunk)
             # Loading is Z'(ω)-scaled per k within the chunk (skin R ∝ √ω,
