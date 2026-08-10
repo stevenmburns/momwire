@@ -74,6 +74,7 @@ from . import _sommerfeld
 from . import _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
+from ._element_currents import _ElementCurrents
 from ._port_solution import PortSolution
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
@@ -210,7 +211,7 @@ class _SplineBasis:
     n_poly: int
 
 
-class BSplineSolver(_Cancelable):
+class BSplineSolver(_ElementCurrents, _Cancelable):
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
     Parameters
