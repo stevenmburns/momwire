@@ -955,6 +955,11 @@ class ArrayBlockSolver(HMatrixSolver):
             if self.ground_eps is None
             else (repr(self.ground_eps), self.ground_phi_mode, self.ground_model)
         )
+        # `extended_kernel` changes the operator (a different Green's
+        # function on the coaxial pairs), so it joins the key for the same
+        # reason `junctions` did in issue #240: two solver instances with
+        # identical geometry, radius, k and degree but different kernels
+        # must not alias in this module-scope cache.
         return (
             sig,
             float(k),
@@ -962,6 +967,7 @@ class ArrayBlockSolver(HMatrixSolver):
             self.n_qp_pair,
             gkey,
             ekey,
+            self.extended_kernel,
         )
 
     def _lattice_fft_unavailable(self, reason, hint):
@@ -1057,6 +1063,10 @@ class ArrayBlockSolver(HMatrixSolver):
             # moves a KCL row out of the constraint set without touching
             # the assembled operator, so it cannot stale this cache.
             tuple(tuple((w, e) for (w, e) in jw) for jw in self.junctions),
+            # Same staleness class as junctions (#240): the extended kernel
+            # is a different operator on the same geometry, so it must not
+            # alias a reduced-kernel operator here (momwire#249).
+            self.extended_kernel,
         )
         op = _ARRAY_OP_CACHE.get(key)
         if op is None:
@@ -1102,7 +1112,11 @@ class ArrayBlockSolver(HMatrixSolver):
         off-edge (no same-edge analytic overwrite) and well separated ⇒ low
         rank. Reuses the shared off-edge ACA evaluators, which fold in the PEC
         image term (``Z_free − Z_image``) when ground is on — one factor pair
-        per pair, so the matvec and block-Jacobi machinery are unchanged."""
+        per pair, so the matvec and block-Jacobi machinery are unchanged.
+        Sharing those evaluators is also what makes `extended_kernel` work
+        here: they force `use_accel=False` under EK, so this fill inherits
+        the numpy block path without knowing the flag exists
+        (momwire#249)."""
         get_row, get_col, _dense = self._offedge_aca_evaluators(ctx, I, J, k, use_accel)
         U, V = aca_partial(get_row, get_col, I.size, J.size, tol=tol)
         return U, V
@@ -1120,6 +1134,15 @@ class ArrayBlockSolver(HMatrixSolver):
         uniform-radius gate the per-pair dedup uses. Displacements that never
         occur between occupied sites (sparse lattices) stay zero: the
         convolution only ever reads them into cropped-away rows.
+
+        `extended_kernel` needs nothing here. Coaxial-and-equal-radius
+        eligibility is translation-invariant — a lattice translate of a
+        segment is coaxial with the original iff the lattice vector lies
+        along the axis, which is a property of the lattice, not of the site
+        — so every displacement block keeps the value it would have had and
+        the block-Toeplitz structure is preserved. Argued, and gated (G8 in
+        tests/test_extended_kernel_bspline.py: a COLLINEAR lattice, where
+        cross-element pairs really are eligible, against the per-pair path).
         """
         n = ctx["n_basis"]
         sizes = np.asarray(part.sizes)
