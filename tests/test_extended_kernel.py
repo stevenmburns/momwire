@@ -954,3 +954,154 @@ def test_ek_any_swap_matches_the_definition_on_both_builds():
     for _ in range(2):  # twice: once cold, once off the cache
         assert sim._ek_any_swap(geom, *free) == literal(*free)
         assert sim._ek_any_swap(geom, *image) == literal(*image)
+
+
+# ----------------------------------------------------------------------
+# Gate 9 — the ground-contact branch of the extended-kernel gating
+# (momwire#247, follow-up from #233/#244)
+# ----------------------------------------------------------------------
+#
+# `_ek_gating`'s ground branch (f.2026-2029: NEC's ICON==J self-connection,
+# CABJ²+SABJ² <= 1e-8) maps a PERPENDICULAR ground contact to IND=0 — the
+# image continues the wire straight through, so the O(a²) expansion is as
+# legitimate there as at an ordinary collinear junction. Gates 1-3 above
+# never exercise it: nothing in the ladder or the bend/junction fixtures
+# touches ground_z under extended_kernel=True. This section is the
+# oracle-anchored complement to Gate 8's own ground-contacting monopole
+# fixtures above (#245) — that side pins ind1[0]==0 against the C++ path;
+# this pins the SAME code against nec2c.
+#
+# GEOMETRY: a vertical quarter-wave-ish monopole, base at the origin, tip
+# at z=H=λ/4 (30 MHz, nec2c's CVEL — same convention as the ladder above),
+# fed at the base segment, PEC ground at z=0. Thick wire — radius 0.09
+# against a segment length of H/21 ≈ 0.119 m puts Δ/a ≈ 1.32, the same
+# "EK matters" band the ladder's Δ/a ≈ 1.22 rung walks.
+#
+#     CM monopole EK=<on|off> ground_z=0.0 (momwire#247)
+#     CE
+#     GW 1 21 0. 0. 0. 0. 0. 2.4982704833333336 0.09
+#     GE 1
+#     GN 1 0 0 0 0 0
+#     EK                      <- present only on the EK-ON run
+#     FR 0 1 0 0 30. 0.
+#     EX 0 1 1 0 1. 0.
+#     XQ
+#     EN
+#
+# GE vs GN (the issue's open question): they are independent cards, and
+# BOTH are required to model a wire touching a perfect ground. GN 1 alone
+# turns on the field image (KSYMP=2) for every segment, but does NOT mark a
+# touching end as topologically continuous with it — that bookkeeping is
+# GE's first field (NEC's GPFLAG, consumed by `conect(ignd)` in
+# geometry.c), and without it the base segment's ground-plane end is still
+# treated as an ordinary FREE end by the current expansion, sitting right
+# on the conducting surface. That combination (GE 0 + GN 1) is a real,
+# distinct nec2c deck, not a hypothetical failure mode — solving it on this
+# geometry gives 51.6+12.0j, 6% low on R and half the reactance of the
+# correct answer below. GE 1 alone (no GN card) leaves nec2c in free space
+# (KSYMP defaults to 1 absent a GN card — main.c's GN handler is what sets
+# KSYMP=2), so the ground flag's connectivity bookkeeping fires but nothing
+# is being connected TO: 6.0-395j, indistinguishable from GE 0 with no GN
+# at all (5.7-381j, both just free-space monopoles with an unphysical open
+# base at the feed). Only GE 1 + GN 1 together reproduce momwire's
+# `ground_z=0.0` PEC model (measured below); that is the deck this section
+# captures.
+#
+# CAPTURED (nec2c-ubuntu-x86, VERSION 5b4az.ae6ty.1.23, this box):
+#   EK-off  55.066 + 24.336j
+#   EK-on   52.035 + 22.223j
+#
+# MEASURED on this box against those two:
+#   momwire EK-off  54.900 + 24.162j   rel 0.40%
+#   momwire EK-on   52.075 + 22.292j   rel 0.14%
+# Gates below sit at ~2.5x those margins.
+#
+# DIRECTION / IMAGE-FILL: momwire's own EK-on shift (-2.825-1.870j) and
+# nec2c's (-3.031-2.113j) agree in sign on both the real and imaginary
+# parts, magnitude ratio 0.92 — comfortably inside a 2x band. This also
+# answers the issue's image-fill question: `_field_components` builds one
+# (src_a, ind1, ind2) EK table per SOURCE segment and reuses it unchanged
+# for the mirrored image source (sinusoidal.py:1624-1638), matching NEC's
+# EFLD, which passes one IND1/IND2 pair through both KSYMP passes. As a
+# counterfactual, forcing the image-side fill back to the reduced kernel
+# while leaving the real fill extended — giving the SAME continuous
+# ground-junction current two different kernels on its two halves — was
+# tried and breaks badly: 59.806-151.173j, sign-flipped reactance at 7x the
+# correct magnitude. The gated, both-sides-extended choice the production
+# code makes is the one that tracks nec2c; the split-kernel alternative is
+# not just less accurate, it is a different, wrong model.
+
+MONO_H = LAM / 4
+MONO_NS = 21
+MONO_A = 0.09
+MONO_FEED = (MONO_H / MONO_NS) / 2  # base-segment centre
+
+MONO_EK_OFF_TOL = 0.01
+MONO_EK_ON_TOL = 0.005
+MONO_SHIFT_RATIO_LO = 0.5
+MONO_SHIFT_RATIO_HI = 2.0
+
+# nec2c oracle, the GE 1 + GN 1 deck above.
+MONO_NEC2C_OFF = complex(55.066, 24.336)
+MONO_NEC2C_ON = complex(52.035, 22.223)
+
+
+def _grounded_monopole(radius=MONO_A, z0=0.0, **kw):
+    return SinusoidalSolver(
+        wires=[np.array([[0.0, 0.0, z0], [0.0, 0.0, z0 + MONO_H]])],
+        n_per_edge_per_wire=[[MONO_NS]],
+        wavelength=LAM,
+        wire_radius=radius,
+        nsegs=MONO_NS,
+        ground_z=0.0,
+        feed_arclength=MONO_FEED,
+        **kw,
+    )
+
+
+def test_gating_extends_the_ground_contact_end():
+    """The branch under test: a segment perpendicular to the plane, one end
+    genuinely touching it (`ground_minus`), gates IND=0 — extended, same as
+    an ordinary collinear junction — while the free tip stays IND=1."""
+    sim = _grounded_monopole(extended_kernel=True)
+    geom = sim._build_geometry()
+    assert geom["ground_minus"][0], "fixture must really touch the plane"
+    ind1, ind2 = sim._ek_gating(geom)
+    assert ind1[0] == 0, "ground contact end must extend, not fall back"
+    assert ind2[-1] == 1, "free tip is unaffected"
+
+
+def test_gating_ignores_a_grounded_wire_that_does_not_touch():
+    """Same wire, lifted clear of the plane. Ground PRESENCE alone must not
+    trip the branch — only genuine contact does, which is why f.2026-2029
+    keys on ICON==J (a self-connection at zero clearance) and not on
+    ground_z being set at all."""
+    sim = _grounded_monopole(z0=0.5, extended_kernel=True)
+    geom = sim._build_geometry()
+    assert not geom["ground_minus"].any(), "fixture must not touch the plane"
+    ind1, ind2 = sim._ek_gating(geom)
+    assert ind1[0] == 1 and ind2[-1] == 1, "both ends free, nothing to gate"
+
+
+def test_monopole_ek_off_matches_nec2c():
+    z, _ = _grounded_monopole().compute_impedance()
+    assert _rel(z, MONO_NEC2C_OFF) < MONO_EK_OFF_TOL, f"{z} vs {MONO_NEC2C_OFF}"
+
+
+def test_monopole_ek_on_matches_nec2c():
+    z, _ = _grounded_monopole(extended_kernel=True).compute_impedance()
+    assert _rel(z, MONO_NEC2C_ON) < MONO_EK_ON_TOL, f"{z} vs {MONO_NEC2C_ON}"
+
+
+def test_monopole_ek_shift_direction_matches_nec2c():
+    """The physics-direction pin: turning EK on must move momwire's answer
+    the same way it moves nec2c's, by a comparable amount — not merely land
+    both endpoints inside separate tolerance windows independently."""
+    z_off, _ = _grounded_monopole().compute_impedance()
+    z_on, _ = _grounded_monopole(extended_kernel=True).compute_impedance()
+    mom_shift = z_on - z_off
+    nec_shift = MONO_NEC2C_ON - MONO_NEC2C_OFF
+    assert mom_shift.real * nec_shift.real > 0, f"{mom_shift} vs {nec_shift}"
+    assert mom_shift.imag * nec_shift.imag > 0, f"{mom_shift} vs {nec_shift}"
+    ratio = abs(mom_shift) / abs(nec_shift)
+    assert MONO_SHIFT_RATIO_LO < ratio < MONO_SHIFT_RATIO_HI, ratio
