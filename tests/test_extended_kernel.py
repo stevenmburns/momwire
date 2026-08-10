@@ -830,12 +830,28 @@ def test_cpp_ek_battery_is_decisive():
     assert ground_contact_extends, "the perpendicular ground-contact IND=0 arm is unhit"
 
 
-@pytest.mark.parametrize("name", ["three_way", "radius_step", "grounded_ell_radii"])
+# Impedance-level agreement, per fixture. 1e-12 is the gate; the two named
+# below need 5e-12 and it is conditioning, not dispatch. Both are driven near
+# an antiresonance (skew_tee answers 449 + 331j, the monopole is a quarter-wave
+# stub over PEC), so the matrix solve multiplies the fill's 1e-15 reassociation
+# delta by a large condition number on the way to Z. Measured across the
+# battery: 2.1e-14 (radius_step), 2.1e-14 (radius_step_skew), 6.7e-14
+# (three_way), 2.3e-13 (grounded_ell_radii), 3.2e-13 (bent_wire), 9.3e-13
+# (free_wire), 2.0e-12 (grounded_monopole), 2.6e-12 (skew_tee). A dispatch
+# fault — wrong gating table, unstitched radius run, image block on the wrong
+# kernel — lands at 1e-2, not here.
+_Z_AGREEMENT = {name: 1e-12 for name in EK_BATTERY}
+_Z_AGREEMENT["skew_tee"] = 5e-12
+_Z_AGREEMENT["grounded_monopole"] = 5e-12
+
+
+@pytest.mark.parametrize("name", list(EK_BATTERY))
 def test_cpp_ek_impedance_matches_the_numpy_path(name, monkeypatch):
     """Kernel agreement is not the whole dispatch. Solving end to end both ways
-    on junction geometries pins the gating/radius plumbing, the per-run
-    stitching and the image-block routing too, not just the arithmetic inside
-    one call.
+    pins the gating/radius plumbing, the per-run stitching and the image-block
+    routing too, not just the arithmetic inside one call. The junction
+    geometries — `three_way`, `radius_step`, `grounded_ell_radii` — are the
+    ones that exercise all three at once, and they sit at 2e-14 - 2e-13.
     """
     import momwire.sinusoidal as sin_mod
 
@@ -845,7 +861,8 @@ def test_cpp_ek_impedance_matches_the_numpy_path(name, monkeypatch):
     z_cpp, _ = _ek_solver(name).compute_impedance()
     monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_EK", False)
     z_ref, _ = _ek_solver(name).compute_impedance()
-    assert _rel(z_cpp, z_ref) < 1e-12, f"{name}: {z_cpp} vs {z_ref}"
+    rel = _rel(z_cpp, z_ref)
+    assert rel < _Z_AGREEMENT[name], f"{name}: {rel:.3e} — {z_cpp} vs {z_ref}"
 
 
 def test_cpp_ek_y_matrix_matches_the_numpy_path(monkeypatch):
