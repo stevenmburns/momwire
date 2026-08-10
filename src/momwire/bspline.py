@@ -316,14 +316,47 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cross-arm pairs and this rule does not (~1 % of Z at Δ/a = 2, O(h)
         in the refinement limit — #249 §4.3).
 
-        Phase 1 is numpy-only: every C++ moment kernel transcribes the
-        reduced kernel, so an EK-on fill takes the numpy path (and
-        `HMatrixSolver`'s ACA fill drops to the numpy block evaluator).
-        Expect a real slowdown on large decks until #249 follow-up B adds
-        the C++ twins. Refused, rather than half-served, with
-        `use_singular_enrichment` and with finite ground (`ground_eps`, both
-        `ground_model`s) — see the `NotImplementedError`s in `__init__`.
-        PEC ground (`ground_z` alone) is served.
+        Every fill an EK-on solve takes is C++-served (momwire#270): the
+        same-edge static and reg moments, the off-edge moments single-k and
+        batched-over-k, and `HMatrixSolver`/`ArrayBlockSolver`'s fused ACA
+        block assembler all have extended-kernel twins. Measured cost of
+        turning EK on, 400-segment monopole, degree 2: ~1.1x on the dense
+        path and ~1.1x on the H-matrix, the same factor in free space, over
+        PEC ground and over both finite grounds. Refused, rather than
+        half-served, with `use_singular_enrichment` — see the
+        `NotImplementedError` in `__init__`.
+
+        **Ground under EK.** PEC ground (`ground_z` alone) and both finite-
+        ground models (`ground_eps`) are served (momwire#269). The image
+        blocks are extended: eligibility is scored against the MIRRORED
+        source geometry (`_ek_axis_labels(mirror=True)`, one joint scan), so
+        a vertical monopole extends against its own image — NEC's IND = 0
+        ground-contact branch — while a horizontal wire, whose image is
+        parallel but offset by twice the height, does not. `ground_eps`
+        costs nothing extra over PEC: its Fresnel dyad / image-charge tables
+        are per-segment-pair weights applied by the assembler AFTER the
+        moment fill, so the same EK moment twins serve them (dense route:
+        `_accumulate_Z_image_chunked`; H-matrix near blocks:
+        `_zblock_image_refl`; H-matrix far blocks: the fused
+        `bspline_assemble_offedge_block_refl_ek` twin).
+
+        What stays REDUCED under EK is the Sommerfeld remainder
+        (`_Z_sommerfeld_remainder`, `_sommerfeld_global_lowrank`) — the
+        smooth ground-wave correction NEC's eqs 143-147 add on top of the
+        C2-scaled exact image. That is deliberate, not an omission: EK is an
+        O((a/R)²) tube correction, and the remainder's source is the ground
+        reflection, so R ≥ 2h for a wire at height h and the un-applied
+        correction is O((a/2h)²). Measured, by building the extended
+        remainder outright (the same field azimuthally averaged over the
+        source tube) and re-solving: for a wire CLEAR of the plane it moves
+        |Z| by ≤ 1.1e-4 relative — three orders below the EK shift the image
+        blocks do carry, two below this basis's own accuracy at Δ/a ≥ 2. At
+        ground CONTACT, where the (a/2h)² estimate degenerates and only the
+        remainder's smoothness bounds it, the measured cost is 3-4e-3
+        relative: still an order below the basis error, but ~45% of that
+        deck's own EK shift, so it is the one place the mixture is visible.
+        The full table, the O(a²) confirmation and the tolerances are in
+        tests/test_extended_kernel_bspline.py Gate 18.
     wavelength, halfdriver_factor, wire_radius, nsegs : shared solver
         conventions (see SinusoidalSolver for the same surface).
     wire_conductivity : distributed conductor loss (#131). None (default)
@@ -465,7 +498,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # `SinusoidalSolver._cached_ek_gating` / `_cached_ek_swap`.
         self._cached_ek_groups = None
         if self.extended_kernel:
-            # Two refusals rather than two half-served paths (#249 §5).
+            # One refusal rather than a half-served path (#249 §5). The
+            # second (finite ground) was lifted by momwire#269 — see below.
             if use_singular_enrichment:
                 raise NotImplementedError(
                     "extended_kernel=True + use_singular_enrichment=True not "
@@ -476,23 +510,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     "expansion was never derived for the s^(-1/2) shapes "
                     "(stevenmburns/momwire#249 follow-up C)"
                 )
-            if ground_eps is not None:
-                # One boundary line for both finite-ground models: the
-                # refl-coef image would ride the EK-aware moment blocks for
-                # free, but the Sommerfeld remainder and global low-rank
-                # term have their own kernel machinery and would stay
-                # reduced. That mixture is probably harmless — the
-                # remainder's source is a reflection at >= 2x the height, so
-                # its correction is O((a/2h)²) — but it is a claim with no
-                # gate behind it, so phase 1 refuses instead of shipping it.
-                raise NotImplementedError(
-                    "extended_kernel=True + finite ground (ground_eps) not "
-                    "supported yet — the Sommerfeld remainder and global "
-                    "low-rank terms would stay reduced while the image "
-                    "blocks were extended, an ungated mixture "
-                    "(stevenmburns/momwire#249 follow-up A). PEC ground "
-                    "(ground_z alone) is served."
-                )
+            # Finite ground (`ground_eps`, both models) is served since
+            # momwire#269. What #249 refused as "an ungated mixture" now has
+            # its gates: the refl-coef image rides the same EK-aware moment
+            # blocks as the PEC image (the Fresnel tables are per-pair
+            # weights applied AFTER the fill, so the kernel choice is
+            # orthogonal to them), and the Sommerfeld remainder /global
+            # low-rank term deliberately stay REDUCED — see the class
+            # docstring's "Finite ground under EK" note for the (a/2h)²
+            # negligibility arithmetic and
+            # tests/test_extended_kernel_bspline.py's G16-G19 for the
+            # measurements behind it.
         self.swept_mem_mb = int(swept_mem_mb)
         if self.swept_mem_mb < 1:
             raise ValueError(f"swept_mem_mb must be >= 1, got {swept_mem_mb}")
@@ -3643,8 +3671,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         td_free = tangents @ tangents.T
         # Same specs as the per-k fills; the same-edge half already rides
         # `prep` (its static blocks and reg geometry carry `_EK_SAME_EDGE`).
-        # Under EK the batched offedge kernels fall back to stacking per-k
-        # numpy calls — correct, and slow until #249 follow-up B.
+        # Under EK the batched offedge kernels reach their own C++ twin
+        # (momwire#270 unit 2); only a build without it stacks per-k calls.
         ek = self._ek_spec(geom) if self.extended_kernel else None
         ek_img = None
         if self.ground_z is not None:
