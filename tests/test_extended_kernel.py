@@ -436,10 +436,22 @@ def test_extended_kernel_off_is_bit_identical_to_main(name, explicit):
     mixed-radius junction, both ground models and the Galerkin fill alike —
     and identical whether it is defaulted or passed explicitly.
     """
-    extra = {"extended_kernel": False} if explicit else {}
-    z, _ = _armor_solver(name, **extra).compute_impedance()
+    z, _ = _armor_solver(name).compute_impedance()
+    if explicit:
+        # Defaulted vs explicit MUST be bit-identical — same machine, same
+        # run, so exact equality is the honest gate here.
+        z_x, _ = _armor_solver(name, extended_kernel=False).compute_impedance()
+        assert z.real == z_x.real and z.imag == z_x.imag, name
+    # Against the pre-#233 captures the gate is the house cross-machine
+    # margin, NOT bit equality: the pinned values are one dev box's
+    # reduction order, and CI runners land 1 ulp away (the main run on
+    # 31352791540 failed exact comparison at the 16th digit — same policy
+    # call as the 1e-10 comments in test_momwire.py). The true bit-identity
+    # claim was established pre-merge against the actual pre-#233 code on
+    # one machine (PR #244's gate 4); THIS pin is drift armor.
     re, im = MAIN_SIDE[name]
-    assert z.real == re and z.imag == im, f"{name}: {z.real.hex()} {z.imag.hex()}"
+    ref = complex(re, im)
+    assert abs(z - ref) <= 1e-12 * abs(ref), f"{name}: {z!r} vs {ref!r}"
 
 
 @pytest.mark.parametrize("name", list(ARMOR_CASES))
