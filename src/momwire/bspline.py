@@ -75,7 +75,7 @@ from . import _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._element_currents import _ElementCurrents
-from ._port_solution import PortSolution
+from ._port_solution import PortSolution, _SweptPortSolutions
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
@@ -211,7 +211,7 @@ class _SplineBasis:
     n_poly: int
 
 
-class BSplineSolver(_ElementCurrents, _Cancelable):
+class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
     Parameters
@@ -2962,6 +2962,88 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
         # wire property, added once to the final Z).
         return self._apply_loading(Z)
 
+    def _port_count(self):
+        """Ports `compute_port_solution` returns: [gap feeds…, junction
+        ports…]. Answered from the configuration, without solving."""
+        return len(self.feeds) + len(self.junction_ports)
+
+    def _gap_source_vectors(self, geom, wire_knots, wire_basis_global, n_basis_total):
+        """One unit Galerkin source vector per configured gap feed, in feed
+        order. k-independent (it only integrates basis shapes against the
+        delta gap), which is why every swept path hoists it out of the loop.
+        """
+        v_per_feed = []
+        for w_i, arc_i, _v in self.feeds:
+            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
+            s_f_i = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
+            v_per_feed.append(
+                self._build_source_vector(
+                    geom,
+                    wire_knots,
+                    wire_basis_global,
+                    n_basis_total,
+                    wi=w_i,
+                    s_f=s_f_i,
+                )
+            )
+        return v_per_feed
+
+    def _port_columns(self, geom, wire_knots, wire_basis_global, n_basis_total, kcl_A):
+        """`(B, kcl_con)`: the unit-drive/readout column per port and the
+        constraint rows left over, shared by every entry point that solves
+        all ports at once (#252).
+
+        Column j of `B` is port j's Galerkin source vector AND its readout
+        vector — the reciprocity that makes `Y = Bᵀ X` symmetric. Ports run
+        [gap feeds…, junction ports…]: a ported junction's KCL row (#172)
+        leaves the constraint set and becomes a column here, which is why the
+        returned `kcl_con` is shorter than the `kcl_A` handed in. All of it is
+        k-independent, so the swept paths build it once for the sweep.
+        """
+        B = np.zeros((n_basis_total, len(self.feeds)), dtype=np.complex128)
+        for j, v_j in enumerate(
+            self._gap_source_vectors(geom, wire_knots, wire_basis_global, n_basis_total)
+        ):
+            B[:, j] = v_j
+        kcl_con, port_A, _port_V = self._split_kcl_ports(kcl_A)
+        return np.hstack([B, port_A.T.astype(np.complex128)]), kcl_con
+
+    def _feed_drive_and_readout(
+        self, geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
+    ):
+        """The single-excitation drive/readout algebra shared by
+        `compute_impedance` and its batched sweep (#252).
+
+        Returns `(v, port_vectors, vpf_T, all_voltages, kcl_con)`: the RHS for
+        the configured voltages, the per-port readout vectors as a list and as
+        the `(n_basis, n_ports)` matrix the batched sweep contracts against,
+        the port voltages in [gap feeds…, junction ports…] order, and the
+        constraint rows left after the ported junctions become drives.
+        """
+        n_feeds = len(self.feeds)
+        v_per_feed = self._gap_source_vectors(
+            geom, wire_knots, wire_basis_global, n_basis_total
+        )
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
+        v = np.zeros(n_basis_total, dtype=np.complex128)
+        for V_i, v_i in zip(voltages, v_per_feed):
+            v += V_i * v_i
+
+        # Junction ports (issue #172): drive v += V_p·A_p per port and
+        # append the A_p rows to the readout set; the port-junction KCL
+        # rows leave the constraint matrix.
+        kcl_con, port_A, port_V = self._split_kcl_ports(kcl_A)
+        v += port_V @ port_A
+        port_vectors = v_per_feed + [port_A[i] for i in range(port_A.shape[0])]
+        all_voltages = np.concatenate([voltages, port_V])
+        # Reshape keeps this 2-D at n_feeds == 0: np.array([]) is (0,) and
+        # would break the hstack against port_A's rows (issue #175).
+        vpf = np.asarray(v_per_feed, dtype=np.complex128).reshape(
+            n_feeds, n_basis_total
+        )
+        vpf_T = np.hstack([vpf.T, port_A.T.astype(np.complex128)])
+        return v, port_vectors, vpf_T, all_voltages, kcl_con
+
     def compute_impedance(self, same_edge_prep=None):
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
@@ -2977,34 +3059,10 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
         # current is I_i = v_i^T coeffs by reciprocity of the Galerkin
         # inner product (V=1 source at port i gives v_i; the current
         # sampled at port j by another source is then v_j^T · solve).
-        n_feeds = len(self.feeds)
-        v_per_feed = []
-        for w_i, arc_i, _v in self.feeds:
-            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
-            s_f_i = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
-            v_per_feed.append(
-                self._build_source_vector(
-                    geom,
-                    wire_knots,
-                    wire_basis_global,
-                    n_basis_total,
-                    wi=w_i,
-                    s_f=s_f_i,
-                )
-            )
-        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
-        v = np.zeros(n_basis_total, dtype=np.complex128)
-        for V_i, v_i in zip(voltages, v_per_feed):
-            v += V_i * v_i
-
-        # Junction ports (issue #172): drive v += V_p·A_p per port and
-        # append the A_p rows to the readout set; the port-junction KCL
-        # rows leave the constraint matrix.
-        kcl_con, port_A, port_V = self._split_kcl_ports(kcl_A)
-        v += port_V @ port_A
-        port_vectors = v_per_feed + [port_A[i] for i in range(port_A.shape[0])]
-        all_voltages = np.concatenate([voltages, port_V])
-        n_ports_total = n_feeds + port_A.shape[0]
+        v, port_vectors, _vpf_T, all_voltages, kcl_con = self._feed_drive_and_readout(
+            geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
+        )
+        n_ports_total = len(port_vectors)
 
         def _per_feed_z(coeffs_full):
             """Drive-point impedance per port (gap feeds, then junction
@@ -3115,7 +3173,7 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
         """
         return self.compute_port_solution().y
 
-    def compute_port_solution(self) -> PortSolution:
+    def compute_port_solution(self, same_edge_prep=None) -> PortSolution:
         """Solve every port from ONE fill and ONE factorisation.
 
         Returns a `PortSolution` whose `y` is identical to
@@ -3139,6 +3197,11 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
 
         `basis` is an opaque handle, stable across the ports of this one
         solution and NOT across solves.
+
+        `same_edge_prep` is the sweep's hoisted same-edge reg-moment block for
+        this k (see `_same_edge_prep`); it changes nothing about the answer,
+        it just spares the per-k rebuild when `_port_solutions_swept` drives
+        this method frequency by frequency.
         """
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
@@ -3146,29 +3209,17 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
         )
         n_basis_total = supp_seg.shape[0]
 
-        Z = self._compute_Z_operator(geom, supp_seg, polys)
-
-        # One source vector per feed, columns of B.
-        n_feeds = len(self.feeds)
-        B = np.zeros((n_basis_total, n_feeds), dtype=np.complex128)
-        for j, (w_i, arc_i, _v) in enumerate(self.feeds):
-            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
-            s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
-            B[:, j] = self._build_source_vector(
-                geom,
-                wire_knots,
-                wire_basis_global,
-                n_basis_total,
-                wi=w_i,
-                s_f=s_f_j,
-            )
+        Z = self._compute_Z_operator(
+            geom, supp_seg, polys, same_edge_prep=same_edge_prep
+        )
 
         # Junction ports (issue #172): their KCL rows become port-vector
         # columns after the gap feeds; the constraint set shrinks to match.
         # Reciprocity holds for them exactly as for gap feeds (drive vector
         # == readout vector), so the mixed Y stays symmetric.
-        kcl_con, port_A, _port_V = self._split_kcl_ports(kcl_A)
-        B = np.hstack([B, port_A.T.astype(np.complex128)])
+        B, kcl_con = self._port_columns(
+            geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
+        )
         n_ports = B.shape[1]
 
         def _solution(Y, X):
@@ -3245,74 +3296,76 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
         X = self._solve_with_kcl_ports(Z, B, kcl_con, overwrite=True)
         return _solution(B.T @ X, X)  # Y[i, j] = v_i^T · solve(Z, v_j)
 
-    def compute_y_matrix_swept(self, k_array) -> np.ndarray:
-        """Per-frequency Y matrices; returns (n_k, n_ports, n_ports).
+    def _port_solutions_swept(self, k_array):
+        """Per-k `PortSolution` generator behind `compute_y_matrix_swept` and
+        `compute_port_solution_swept` (#252).
 
-        Takes the fully batched fast path (batched C++ assembly + k- and
-        port-batched KCL Schur solve) when `_swept_batched_available`;
-        otherwise loops over k like `compute_impedance_swept`'s fallback,
-        with junctions through the per-k `_solve_with_kcl_ports`.
-        Singular enrichment (issue #165) takes a per-k `compute_y_matrix`
-        loop — the same convention as `compute_impedance_swept`, whose
-        enrichment sweeps also live on the per-k path (the batched C++
-        assembly has no augmented-system variant)."""
+        Three routes, all producing the same per-k answer:
+
+        * singular enrichment (issue #165) — a bare per-k
+          `compute_port_solution` loop; the batched C++ assembly has no
+          augmented-system variant, and the same-edge hoist is skipped so the
+          enrichment sweep stays byte-for-byte what it was;
+        * the fully batched fast path (batched assembly + one k- and
+          port-batched KCL Schur solve per chunk) when
+          `_swept_batched_available`. This is the one route whose per-k core
+          is NOT `compute_port_solution` — thinning it would dissolve the
+          chunking that bounds `swept_mem_mb` — so it re-spells only the
+          readout, `Y = Bᵀ X`, off the shared `_port_columns`;
+        * otherwise a per-k `compute_port_solution` with the sweep's hoisted
+          same-edge reg moments. Routing through `compute_port_solution` puts
+          the fallback on `_compute_Z_operator`, so it honours the
+          `swept_mem_mb` dispatch instead of always materialising the full
+          (d+1, d+1, N, N) moment tensor (issue #238).
+        """
         k_array = np.asarray(k_array, dtype=float)
         if self.use_singular_enrichment:
-            k_save, wl_save, omega_save = self.k, self.wavelength, self.omega
-            n_ports = len(self.feeds) + len(self.junction_ports)
-            out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
-            try:
-                for i, kk in enumerate(k_array):
+            with self._k_restored():
+                for kk in k_array:
                     self._checkpoint()  # top of each frequency iteration
-                    self.k = float(kk)
-                    self.omega = self.k * self.c
-                    self.wavelength = self.c / (self.omega / (2 * np.pi))
-                    out[i] = self.compute_y_matrix()
-            finally:
-                self.k, self.wavelength, self.omega = k_save, wl_save, omega_save
-            return out
-        k_save = self.k
-        wl_save = self.wavelength
-        omega_save = self.omega
+                    self._set_k(kk)
+                    yield self.compute_port_solution()
+            return
 
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
             self._build_basis_polynomials(geom)
         )
         n_basis_total = supp_seg.shape[0]
-        n_feeds = len(self.feeds)
 
-        # k-independent source vectors.
-        B = np.zeros((n_basis_total, n_feeds), dtype=np.complex128)
-        for j, (w_i, arc_i, _v) in enumerate(self.feeds):
-            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
-            s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
-            B[:, j] = self._build_source_vector(
-                geom,
-                wire_knots,
-                wire_basis_global,
-                n_basis_total,
-                wi=w_i,
-                s_f=s_f_j,
+        # Port columns (gap feeds then junction ports, issue #172) are
+        # k-independent, so the whole sweep shares one build.
+        B, kcl_con = self._port_columns(
+            geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
+        )
+
+        def _solution(Y, X):
+            return PortSolution(
+                y=Y,
+                coeffs=X,
+                port_currents=Y,  # the same object: the readout IS the Y matrix
+                basis=_SplineBasis(
+                    geom=geom,
+                    supp_seg=supp_seg,
+                    polys=polys,
+                    wire_knots=wire_knots,
+                    wire_basis_global=wire_basis_global,
+                    n_poly=n_basis_total,
+                ),
             )
 
-        # Junction-port columns (issue #172) — k-independent like the gap
-        # source vectors, so both the batched and per-k paths carry them.
-        kcl_con, port_A, _port_V = self._split_kcl_ports(kcl_A)
-        B = np.hstack([B, port_A.T.astype(np.complex128)])
-        n_ports = B.shape[1]
-
-        # Fully batched fast path: batched assembly + one k- and
-        # port-batched KCL Schur solve per chunk. out[k] = B^T X, same
-        # readout as the per-k loop below.
         if self._swept_batched_available():
-            out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
-            for c0, ks, Z in self._swept_batched_z_chunks(
+            for _c0, ks, Z in self._swept_batched_z_chunks(
                 k_array, geom, supp_seg, polys
             ):
                 X = self._solve_with_kcl_swept_ports(Z, B, kcl_con)
-                out[c0 : c0 + ks.shape[0]] = np.einsum("bp,kbq->kpq", B, X)
-            return out
+                del Z  # the chunk's Z stack is dead; let it go before the yields
+                for i in range(ks.shape[0]):
+                    # Spelled exactly as compute_port_solution's readout, so
+                    # the batched path differs from a per-k solve only by the
+                    # batched LAPACK/assembly reassociation, never by algebra.
+                    yield _solution(B.T @ X[i], X[i])
+            return
 
         # k-independent static + reg-geometry, shared across the sweep; the
         # reg-kernel moment blocks are batched over all k up front (one einsum
@@ -3322,38 +3375,14 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
             _seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)
             for _sl, _A_st, reg_geo in prep
         ]
-
-        out = np.zeros((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
-        for ki, kk in enumerate(k_array):
-            self.k = float(kk)
-            self.omega = self.k * self.c
-            self.wavelength = self.c / (self.omega / (2 * np.pi))
-            same_edge_k = [
-                (sl, A_st, reg_all[e][ki]) for e, (sl, A_st, _g) in enumerate(prep)
-            ]
-            J = self._build_J_blocks(geom, self.k, same_edge_prep=same_edge_k)
-            Z = self._assemble_Z(J, supp_seg, polys, geom)
-            if self.ground_z is not None:
-                J_img = self._build_J_image_blocks(geom, self.k)
-                if self.ground_eps is not None:
-                    # self.omega is rebound per k above, so the ε̃(ω)-driven
-                    # weight tables (and the sommerfeld grid, keyed on
-                    # (ε̃, k)) track the sweep; the specular geometry behind
-                    # them is cached k-independently.
-                    Z = Z - self._ground_finite_Z(J_img, supp_seg, polys, geom)
-                else:
-                    td_img = self._image_tangent_dot(geom["tangents"])
-                    Z = Z - self._assemble_Z(
-                        J_img, supp_seg, polys, geom, td_all=td_img
-                    )
-            Z = self._apply_loading(Z)
-            X = self._solve_with_kcl_ports(Z, B, kcl_con, overwrite=True)
-            out[ki] = B.T @ X
-
-        self.k = k_save
-        self.wavelength = wl_save
-        self.omega = omega_save
-        return out
+        with self._k_restored():
+            for ki, kk in enumerate(k_array):
+                self._checkpoint()  # top of each frequency iteration
+                self._set_k(kk)
+                same_edge_k = [
+                    (sl, A_st, reg_all[e][ki]) for e, (sl, A_st, _g) in enumerate(prep)
+                ]
+                yield self.compute_port_solution(same_edge_prep=same_edge_k)
 
     def _swept_batched_available(self):
         """True when the fully batched swept fast path can serve this
@@ -3476,8 +3505,11 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
         J and Z built in batched C++ calls, one stacked LAPACK solve per
         k-chunk instead of looping compute_impedance per frequency.
         Junctions ride the batched KCL Schur solve.
+
+        The drive and readout algebra is `compute_impedance`'s own
+        `_feed_drive_and_readout` — this method owns the batching, not a
+        second copy of the port bookkeeping (#252).
         """
-        n_feeds = len(self.feeds)
         n_k = k_array.shape[0]
 
         geom = self._build_geometry()
@@ -3486,37 +3518,12 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
         )
         n_basis_total = supp_seg.shape[0]
 
-        v_per_feed = []
-        for w_i, arc_i, _v in self.feeds:
-            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
-            s_f_i = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
-            v_per_feed.append(
-                self._build_source_vector(
-                    geom,
-                    wire_knots,
-                    wire_basis_global,
-                    n_basis_total,
-                    wi=w_i,
-                    s_f=s_f_i,
-                )
-            )
-        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
-        v = np.zeros(n_basis_total, dtype=np.complex128)
-        for V_i, v_i in zip(voltages, v_per_feed):
-            v += V_i * v_i
-
         # Junction ports (issue #172): k-independent drive and readout rows,
         # exactly like the gap source vectors, so they batch for free.
-        kcl_con, port_A, port_V = self._split_kcl_ports(kcl_A)
-        v += port_V @ port_A
-        all_voltages = np.concatenate([voltages, port_V])
-        n_total = n_feeds + port_A.shape[0]
-        # Reshape keeps this 2-D at n_feeds == 0: np.array([]) is (0,) and
-        # would break the hstack against port_A's rows (issue #175).
-        vpf = np.asarray(v_per_feed, dtype=np.complex128).reshape(
-            n_feeds, n_basis_total
+        v, port_vectors, vpf_T, all_voltages, kcl_con = self._feed_drive_and_readout(
+            geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
         )
-        vpf_T = np.hstack([vpf.T, port_A.T.astype(np.complex128)])  # (n_basis, n_total)
+        n_total = len(port_vectors)
 
         z_out = (
             np.zeros(n_k, dtype=np.complex128)
@@ -3539,6 +3546,14 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
         `_swept_batched_available`; otherwise a per-k loop that rebinds
         self.k / self.omega / self.wavelength per call and restores them
         (enrichment and finite grounds live here).
+
+        Both routes read their drive/readout algebra off
+        `_feed_drive_and_readout`, the same helper `compute_impedance` uses,
+        so there is no swept copy of it to drift (#252). This entry point
+        stays on `compute_impedance`'s single-excitation solve rather than on
+        the port columns: at one RHS instead of n_ports it is the cheaper
+        solve, and it keeps the swept answer bit-comparable with the per-k
+        `compute_impedance` it mirrors.
         """
         k_array = np.asarray(k_array, dtype=float)
         n_total = len(self.feeds) + len(self.junction_ports)
@@ -3546,9 +3561,6 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
             z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
         else:
             z_out = np.zeros((k_array.shape[0], n_total), dtype=np.complex128)
-        k_save = self.k
-        wl_save = self.wavelength
-        omega_save = self.omega
 
         # Fully batched fast path: build the whole sweep's
         # J / Z / solve in batched calls instead of looping compute_impedance
@@ -3566,19 +3578,15 @@ class BSplineSolver(_ElementCurrents, _Cancelable):
             _seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)
             for _sl, _A_st, reg_geo in prep
         ]
-        for i, kk in enumerate(k_array):
-            self._checkpoint()  # top of each frequency iteration
-            self.k = float(kk)
-            self.omega = self.k * self.c
-            self.wavelength = self.c / (self.omega / (2 * np.pi))
-            same_edge_k = [
-                (sl, A_st, reg_all[e][i]) for e, (sl, A_st, _g) in enumerate(prep)
-            ]
-            z, _ = self.compute_impedance(same_edge_prep=same_edge_k)
-            z_out[i] = z
-        self.k = k_save
-        self.wavelength = wl_save
-        self.omega = omega_save
+        with self._k_restored():
+            for i, kk in enumerate(k_array):
+                self._checkpoint()  # top of each frequency iteration
+                self._set_k(kk)
+                same_edge_k = [
+                    (sl, A_st, reg_all[e][i]) for e, (sl, A_st, _g) in enumerate(prep)
+                ]
+                z, _ = self.compute_impedance(same_edge_prep=same_edge_k)
+                z_out[i] = z
         return z_out
 
     def currents_at_knots(self, coeffs, s_array=None):
