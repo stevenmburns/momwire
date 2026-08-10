@@ -655,6 +655,7 @@ def test_ek_spelling_reduces_to_the_reduced_kernel_exactly_at_zero_radius():
 
 import momwire._bspline_kernels as _bk  # noqa: E402
 import momwire.bspline as _bs  # noqa: E402
+import momwire.hmatrix as _hm  # noqa: E402
 from momwire.array_block import (  # noqa: E402
     ArrayBlockSolver,
     LatticeArrayBlock,
@@ -1353,3 +1354,188 @@ def test_swept_port_solutions_with_ek_match_the_per_k_solves():
             per_k.append(sim.compute_port_solution().y[0, 0])
     rel = np.abs(np.asarray(swept) - np.asarray(per_k)) / np.abs(per_k)
     assert rel.max() <= 1e-11, f"swept ports vs per-k {rel.max():.3e}"
+
+
+# ----------------------------------------------------------------------
+# The IMAGE side is wired, and stays wired
+# ----------------------------------------------------------------------
+
+# Review finding on unit 2: setting `_build_J_image_blocks`' `ek=` argument
+# to None left all 84 gates green. Two reasons, and both are worth naming.
+#
+# 1. G6 gates the LABELS and G15's deck is free space, so nothing above
+#    connected a mirrored spec to an actual image fill.
+# 2. `_build_J_image_blocks` is not even on the default solve path.
+#    `_compute_Z_operator` picks `_accumulate_Z_image_chunked` whenever the
+#    weighted-windowed C++ assembler is present — which is independent of
+#    the dense-tensor budget — so the tensor-route image fill is the
+#    NO-ACCELERATOR fallback and a mutation there is invisible to any test
+#    that just calls `compute_impedance()` on this box.
+#
+# So there are four image wiring points, not one: the two BSplineSolver
+# routes, `HMatrixSolver._zblock_image`, and the batched swept builder's
+# `ek_img`. The last is already pinned (the swept-vs-per-k PEC-ground gate
+# above compares a batched fill against a chunked one, so a spec dropped on
+# either side shows up as a mismatch). The other three are pinned here,
+# structurally by a spy and numerically by the mutation itself.
+
+_IMAGE_DECK = dict(
+    # Two wires with OPPOSITE mirror eligibility, so a spec built without
+    # mirror=True is distinguishable from one built with it: the vertical
+    # monopole is coaxial with its own image, the horizontal wire is not.
+    wires=[
+        np.array([[0.0, 0.0, 0.05], [0.0, 0.0, 2.5]]),
+        np.array([[-2.0, 3.0, 1.4], [2.0, 3.0, 1.4]]),
+    ],
+    n_per_edge_per_wire=[[12], [12]],
+    wavelength=LAM,
+    wire_radius=0.05,
+    degree=2,
+    ground_z=0.0,
+)
+
+
+def _image_solver(cls, extended_kernel=True, **over):
+    return cls(**_IMAGE_DECK, extended_kernel=extended_kernel, **over)
+
+
+def _assert_mirrored_spec(ek, sim, rows=None, cols=None):
+    """The spec really is the JOINT real+image labelling of `_IMAGE_DECK`.
+
+    A free-space spec (`mirror=False`) would pass a naive "is not None"
+    check and even a "the monopole extends" check, because there group_i is
+    group_j — but it would ALSO mark the horizontal wire eligible against
+    its own image, which is wrong by twice the height. Both halves are
+    asserted, so only the mirrored spec survives.
+    """
+    assert ek is not None, "the image fill got no EK spec"
+    gi = np.asarray(ek.group_i)
+    gj = np.asarray(ek.group_j)
+    mask = (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
+    n_mono = _IMAGE_DECK["n_per_edge_per_wire"][0][0]
+    seg_rows = np.arange(sim._build_geometry()["n_segs_total"])
+    r = seg_rows if rows is None else np.asarray(rows)
+    c = seg_rows if cols is None else np.asarray(cols)
+    mono_r, mono_c = r < n_mono, c < n_mono
+    if mono_r.any() and mono_c.any():
+        assert mask[np.ix_(mono_r, mono_c)].all(), (
+            "the vertical monopole must extend against its own image "
+            "(NEC's IND = 0 ground-contact branch)"
+        )
+    if (~mono_r).any() and (~mono_c).any():
+        assert not mask[np.ix_(~mono_r, ~mono_c)].any(), (
+            "the horizontal wire is parallel to its image, not coaxial — a "
+            "free-space (mirror=False) spec would wrongly extend it"
+        )
+
+
+@pytest.fixture
+def offedge_ek_spy(monkeypatch):
+    """Record the `ek=` kwarg of every off-edge moment fill."""
+    seen = []
+    original = _bk._seg_seg_full_moments_offedge
+
+    def spy(*args, ek=None, **kwargs):
+        seen.append(ek)
+        return original(*args, ek=ek, **kwargs)
+
+    for mod in (_bs, _hm):
+        monkeypatch.setattr(mod, "_seg_seg_full_moments_offedge", spy)
+    return seen
+
+
+def test_image_tensor_route_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
+    """`_build_J_image_blocks` — the no-accelerator fallback route."""
+    sim = _image_solver(BSplineSolver)
+    geom = sim._build_geometry()
+    offedge_ek_spy.clear()
+    sim._build_J_image_blocks(geom, sim.k)
+    assert len(offedge_ek_spy) == 1
+    _assert_mirrored_spec(offedge_ek_spy[0], sim)
+
+
+def test_image_chunked_route_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
+    """`_accumulate_Z_image_chunked` — the route a default solve takes."""
+    sim = _image_solver(BSplineSolver)
+    geom = sim._build_geometry()
+    supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    w_A = sim._image_tangent_dot(geom["tangents"]).astype(np.complex128)
+    Z = np.zeros((supp_seg.shape[0],) * 2, dtype=np.complex128, order="F")
+    offedge_ek_spy.clear()
+    sim._accumulate_Z_image_chunked(
+        Z, geom, sim.k, supp_seg, polys, w_A, np.ones_like(w_A)
+    )
+    assert offedge_ek_spy, "no image fill happened"
+    n_segs = geom["n_segs_total"]
+    row0 = 0
+    for ek in offedge_ek_spy:
+        rows = np.arange(row0, row0 + len(ek.group_i))
+        _assert_mirrored_spec(ek, sim, rows=rows)
+        row0 += len(ek.group_i)
+    assert row0 == n_segs, "the observer chunks did not cover the mesh"
+
+
+def test_hmatrix_image_block_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
+    """`HMatrixSolver._zblock_image` — the block form of the same fill."""
+    sim = _image_solver(HMatrixSolver, aca_tol=1e-9)
+    ctx = sim._context()
+    idx = np.arange(ctx["n_basis"], dtype=np.int64)
+    offedge_ek_spy.clear()
+    sim._zblock_image(idx, idx)
+    assert len(offedge_ek_spy) == 1
+    seg = np.unique(ctx["supp_seg"][idx].ravel())
+    _assert_mirrored_spec(offedge_ek_spy[0], sim, rows=seg, cols=seg)
+
+
+# --- and the mutation itself, as a numeric gate ------------------------
+
+
+@pytest.fixture
+def image_ek_disabled(monkeypatch):
+    """THE mutation, as a fixture: the free-space blocks stay extended and
+    the image blocks quietly drop to the reduced kernel."""
+    original = BSplineSolver._ek_spec
+
+    def free_space_only(self, geom, mirror=False):
+        return None if mirror else original(self, geom, mirror)
+
+    monkeypatch.setattr(BSplineSolver, "_ek_spec", free_space_only)
+
+
+# Measured on this box: extending the image side moves the grounded EK-on
+# impedance by 3.3e-3 relative on the monopole deck — three orders above the
+# 3e-7 the accelerated and numpy fills of the SAME operator differ by, so
+# the bar below is a signal test, not a noise test.
+_IMAGE_EK_SIGNAL = 1e-4
+
+
+def _grounded_z(cls, **over):
+    return _image_solver(cls, **over).compute_impedance()[0]
+
+
+@pytest.mark.parametrize("weighted_accel", [True, False])
+def test_bspline_grounded_ek_uses_the_extended_image(
+    request, monkeypatch, weighted_accel
+):
+    """Both BSplineSolver image routes: `weighted_accel=True` is the chunked
+    route a default solve takes, False forces the tensor-route fallback
+    (`_build_J_image_blocks`), which is otherwise unreachable on a build
+    that has the C++ weighted-windowed assembler."""
+    monkeypatch.setattr(_bs, "_HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL", weighted_accel)
+    z_wired = _grounded_z(BSplineSolver)
+    request.getfixturevalue("image_ek_disabled")
+    z_reduced_image = _grounded_z(BSplineSolver)
+    rel = abs(z_wired - z_reduced_image) / abs(z_wired)
+    assert rel >= _IMAGE_EK_SIGNAL, (
+        f"weighted_accel={weighted_accel}: the image fill answers the same "
+        f"whether or not it is handed an EK spec (moved {rel:.3e}) — the "
+        f"mirrored wiring is dead"
+    )
+
+
+def test_hmatrix_grounded_ek_uses_the_extended_image(request):
+    z_wired = _grounded_z(HMatrixSolver, aca_tol=1e-9)
+    request.getfixturevalue("image_ek_disabled")
+    z_reduced_image = _grounded_z(HMatrixSolver, aca_tol=1e-9)
+    rel = abs(z_wired - z_reduced_image) / abs(z_wired)
+    assert rel >= _IMAGE_EK_SIGNAL, f"_zblock_image is not EK-wired ({rel:.3e})"
