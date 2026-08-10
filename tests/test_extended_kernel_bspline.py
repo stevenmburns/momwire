@@ -2826,32 +2826,130 @@ def test_u3_fused_offedge_block_matches_zblock_free_space(degree):
     assert rel_c <= U3_AGREEMENT, f"degree {degree}: col {rel_c:.3e}"
 
 
+def _u3_image_block(extended_kernel=True):
+    """momwire#249's own `_IMAGE_DECK` (a vertical monopole coaxial with its
+    own image, plus a horizontal wire that is NOT), returned as an
+    HMatrixSolver self-block spanning the whole mesh.
+
+    REVIEW FINDING (caught in review, before merge): `_u3_mixed_block`
+    above is all-VERTICAL geometry, so mirroring it across a horizontal
+    ground plane is a no-op on every eligibility label — a vertical wire's
+    image lies on the exact same infinite line as the wire itself, so the
+    (buggy) free-space-sliced labels and the (correct) joint mirror labels
+    produce the IDENTICAL mask. Mutating `_offedge_block_evaluators_
+    uniform`'s `self._ek_spec(ctx["geom"], mirror=mirror_J)` to
+    `mirror=False` left every unit 3 gate on `_u3_mixed_block` green —
+    exactly the "vertical monopole" coincidence momwire#249 unit 2's own
+    module docstring already warned about. A HORIZONTAL wire discriminates:
+    its image is a PARALLEL, offset line, never coaxial with the real wire,
+    so a mirror-wiring bug that quietly fell back to real-vs-real labels
+    would wrongly mark the horizontal wire's self-image reaction eligible
+    (trivially "coaxial with itself") where the correct joint labelling
+    declines it — moving the block measurably off `_zblock_image`'s answer.
+    Verified: with the `mirror=False` mutation restored, `test_u3_fused_
+    offedge_block_image_declines_a_noncoaxial_mirror` below fails (both the
+    dense and the horizontal-wire-owned row/col checks); on a clean tree it
+    passes. Kept as its own deck/helper rather than folded into
+    `_u3_mixed_block`: that helper's all-vertical shape is still the right
+    fixture for the FREE-SPACE mask tests (U3a's free-space gate, U3b's
+    brackets), where mirroring never enters."""
+    sim = HMatrixSolver(**_IMAGE_DECK, extended_kernel=extended_kernel)
+    ctx = sim._context()
+    idx = np.arange(ctx["n_basis"], dtype=np.int64)
+    return sim, ctx, idx
+
+
 @pytestmark_u3
-@pytest.mark.parametrize("degree", [1, 2])
-def test_u3_fused_offedge_block_matches_zblock_image(degree):
+def test_u3_fused_offedge_block_image_declines_a_noncoaxial_mirror():
     """The mirror_J path: `_offedge_block_evaluators(..., mirror_J=True)`
-    against `_zblock_image` — the fused assembler's own image-block gate.
-    Unit 2's off-edge twin never had to answer this: it operates one level
-    below the block fusion, where mirroring is the caller's job either way.
-    """
-    sim, ctx, I, J = _u3_mixed_block(degree=degree, ground_z=-5.0)
+    against `_zblock_image`, on the discriminating `_u3_image_block` deck
+    (see its docstring for why `_u3_mixed_block` could not catch a mirror-
+    wiring bug here). Row/col checks use the LAST basis, which by
+    construction (`_IMAGE_DECK`'s wire order) belongs to the horizontal
+    wire — the discriminating half of the deck — not the monopole."""
+    sim, ctx, idx = _u3_image_block()
     row_f, col_f, dense_f = sim._offedge_block_evaluators(
-        ctx, I, J, sim.k, mirror_J=True
+        ctx, idx, idx, sim.k, mirror_J=True
     )
     D = dense_f()
-    D_ref = sim._zblock_image(I, J, k=sim.k)
+    D_ref = sim._zblock_image(idx, idx, k=sim.k)
     rel = float(np.abs(D - D_ref).max() / np.abs(D_ref).max())
-    assert rel <= U3_AGREEMENT, f"degree {degree}: dense {rel:.3e}"
+    assert rel <= U3_AGREEMENT, f"dense: {rel:.3e}"
 
-    r0 = row_f(0)
-    r0_ref = sim._zblock_image(I[0:1], J, k=sim.k).ravel()
+    j_last = int(idx.size - 1)
+    r0 = row_f(j_last)
+    r0_ref = sim._zblock_image(idx[j_last : j_last + 1], idx, k=sim.k).ravel()
     rel_r = float(np.abs(r0 - r0_ref).max() / np.abs(r0_ref).max())
-    assert rel_r <= U3_AGREEMENT, f"degree {degree}: row {rel_r:.3e}"
+    assert rel_r <= U3_AGREEMENT, f"row: {rel_r:.3e}"
 
-    c0 = col_f(0)
-    c0_ref = sim._zblock_image(I, J[0:1], k=sim.k).ravel()
+    c0 = col_f(j_last)
+    c0_ref = sim._zblock_image(idx, idx[j_last : j_last + 1], k=sim.k).ravel()
     rel_c = float(np.abs(c0 - c0_ref).max() / np.abs(c0_ref).max())
-    assert rel_c <= U3_AGREEMENT, f"degree {degree}: col {rel_c:.3e}"
+    assert rel_c <= U3_AGREEMENT, f"col: {rel_c:.3e}"
+
+    # Sanity: the deck really does carry EK content on this block (a fused
+    # twin that silently never applied Eq 89's factor at all would pass the
+    # comparisons above too, for the wrong reason — it would just agree
+    # with an equally-EK-blind `_zblock_image`... except `_zblock_image` is
+    # NOT EK-blind, so this would already be caught above; this assertion
+    # instead pins that the EK-on answer differs from the EK-OFF one, i.e.
+    # that SOME pair in this block really is eligible).
+    sim_off, _ctx_off, idx_off = _u3_image_block(extended_kernel=False)
+    D_off = sim_off._zblock_image(idx_off, idx_off, k=sim_off.k)
+    rel_off = float(np.abs(D - D_off).max() / np.abs(D_off).max())
+    assert rel_off > 1e-6, (
+        f"EK-on image block == EK-off ({rel_off:.3e}) — no EK content"
+    )
+
+
+@pytestmark_u3
+def test_u3_fused_offedge_block_image_labels_match_the_joint_spec(monkeypatch):
+    """Structural companion to the numeric gate above — the #249 pattern of
+    pinning wiring "structurally by a spy and numerically by the mutation
+    itself" (see the IMAGE-side-is-wired section higher up this file).
+    Captures the `group_I`/`group_J` arrays the fused EK twin is actually
+    called with for `_u3_image_block`'s self-block and checks them against
+    the same joint-mirror mask `_assert_mirrored_spec` pins for the numpy
+    route: the monopole (bases 0..11) must extend to its own image, the
+    horizontal wire (bases 12..23) must not.
+    """
+    sim, ctx, idx = _u3_image_block()
+    calls = []
+    real = _hm._acc
+
+    class _Capture:
+        def __getattr__(self, name):
+            target = getattr(real, name)
+            if name != "bspline_assemble_offedge_block_ek":
+                return target
+
+            def wrapped(*args, **kwargs):
+                calls.append(args)
+                return target(*args, **kwargs)
+
+            return wrapped
+
+    monkeypatch.setattr(_hm, "_acc", _Capture())
+    _row_f, _col_f, dense_f = sim._offedge_block_evaluators(
+        ctx, idx, idx, sim.k, mirror_J=True
+    )
+    dense_f()
+    assert len(calls) == 1, f"expected exactly one fused-twin call, got {len(calls)}"
+    # _call appends (..., group_i, group_j, a_ek, cancel_flag) after the 18
+    # positional geometry args (hmatrix.py's `_offedge_block_evaluators_
+    # uniform`), so group_i/group_j are the 4th/3rd-from-last positionals.
+    group_i, group_j = calls[0][-4], calls[0][-3]
+    group_i = np.asarray(group_i)
+    group_j = np.asarray(group_j)
+    mask = (group_i[:, None] == group_j[None, :]) & (group_i[:, None] >= 0)
+    n_mono = _IMAGE_DECK["n_per_edge_per_wire"][0][0]
+    mono = np.arange(mask.shape[0]) < n_mono
+    assert mask[np.ix_(mono, mono)].all(), (
+        "the monopole must extend to its own image (NEC's IND=0 branch)"
+    )
+    assert not mask[np.ix_(~mono, ~mono)].any(), (
+        "the horizontal wire must NOT extend to its own image"
+    )
 
 
 # ----------------------------------------------------------------------
