@@ -447,6 +447,78 @@ def test_spacing_sweep_reuses_self_blocks():
     assert st["operator_build"] == 3  # new geometry each frame
 
 
+def test_array_op_cache_key_includes_junctions():
+    """#240: two ArrayBlockSolvers with identical wires/segmentation but
+    different `junctions` have different basis counts (a junction end keeps
+    a directional boundary basis a free end drops), so the operator cache
+    key must include junctions — before the fix the second solve reused the
+    first solver's wrong-shaped operator and died with
+    `ValueError: could not broadcast ...`."""
+    reset_array_caches()
+    h = 0.962 * 22 / 4
+    junctioned = ArrayBlockSolver(**_bent_array(2, h, nsegs=14, degree=2))
+    no_junction = _bent_array(2, h, nsegs=14, degree=2)
+    no_junction["junctions"] = []
+    freeended = ArrayBlockSolver(**no_junction)
+    assert junctioned._context()["n_basis"] != freeended._context()["n_basis"]
+
+    z1 = junctioned.compute_impedance()[0]
+    z2 = freeended.compute_impedance()[0]  # raised ValueError before the fix
+
+    zd1 = BSplineSolver(**_bent_array(2, h, nsegs=14, degree=2)).compute_impedance()[0]
+    dense_free = _bent_array(2, h, nsegs=14, degree=2)
+    dense_free["junctions"] = []
+    zd2 = BSplineSolver(**dense_free).compute_impedance()[0]
+    assert np.max(np.abs(z1 - zd1) / np.abs(zd1)) < 1e-3
+    assert np.max(np.abs(z2 - zd2) / np.abs(zd2)) < 1e-3
+    assert not np.allclose(z1, z2)  # junctions materially change the solve
+
+
+def test_array_op_cache_no_false_hit_across_junction_sets():
+    """Cache-behavior half of #240: differing junctions must each get a
+    fresh operator_build (no false hit), while a genuinely identical second
+    solver still gets an operator_hit (reuse must keep working)."""
+    reset_array_caches()
+    h = 0.962 * 22 / 4
+    common = _bent_array(2, h, nsegs=14, degree=2)
+    no_junction = dict(common)
+    no_junction["junctions"] = []
+
+    ArrayBlockSolver(**common).compute_impedance()
+    ArrayBlockSolver(**no_junction).compute_impedance()
+    st = cache_stats()
+    assert st["operator_build"] == 2
+    assert st["operator_hit"] == 0
+
+    ArrayBlockSolver(**common).compute_impedance()  # same geometry + junctions
+    st = cache_stats()
+    assert st["operator_build"] == 2  # no new build — reused
+    assert st["operator_hit"] == 1
+
+
+def test_self_block_key_distinguishes_junction_composition():
+    """#240 audit: `_SELF_BLOCK_CACHE` keys on segment geometry alone, which
+    has no trace of a junction/free swap in a wire's kept boundary basis —
+    same segments, different basis composition, same key before the fix.
+    These two single-element builds share identical segment geometry (only
+    `junctions` differs), so the key must still separate them."""
+    h = 0.962 * 22 / 4
+    junctioned = ArrayBlockSolver(**_bent_array(1, h, nsegs=14, degree=2))
+    no_junction = _bent_array(1, h, nsegs=14, degree=2)
+    no_junction["junctions"] = []
+    freeended = ArrayBlockSolver(**no_junction)
+
+    ctx_j, ctx_f = junctioned._context(), freeended._context()
+    part_j, part_f = junctioned.array_partition(), freeended.array_partition()
+    key_j = junctioned._self_block_key(
+        ctx_j, part_j.seg_groups[0], part_j.groups[0], junctioned.k
+    )
+    key_f = freeended._self_block_key(
+        ctx_f, part_f.seg_groups[0], part_f.groups[0], freeended.k
+    )
+    assert key_j != key_f
+
+
 def test_reset_array_caches_clears_state():
     reset_array_caches()
     half = 0.962 * 22 / 4
