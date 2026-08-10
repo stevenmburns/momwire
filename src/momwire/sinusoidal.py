@@ -52,6 +52,9 @@ _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
     _acc, "sinusoidal_field_tensor_refl"
 )
 _HAVE_FIELD_TENSOR_EK = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor_ek")
+_HAVE_FIELD_TENSOR_EK_REFL = _acc is not None and hasattr(
+    _acc, "sinusoidal_field_tensor_ek_refl"
+)
 
 _EULER_GAMMA = 0.5772156649015329
 
@@ -212,9 +215,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # point for EK (`sinusoidal_field_tensor_ek`, EKSCX), so True costs
         # ~1.2× the EK-OFF fill rather than the ~8.5× the numpy reference did
         # at N=801, and nothing (N, N, n_qp_const)-sized is materialized. The
-        # numpy kernel remains the reference and the fallback. Still numpy:
-        # the reflection-coefficient image block (`ground_eps` without
-        # `ground_model="sommerfeld"`) — see `_field_tensor_image_refl`.
+        # numpy kernel remains the reference and the fallback. momwire#259
+        # finished the sweep: the reflection-coefficient image block
+        # (`ground_eps` without `ground_model="sommerfeld"`) has its own
+        # EKSCX + Fresnel-dyad entry point too
+        # (`sinusoidal_field_tensor_ek_refl`), so NO block of a point-matched
+        # sinusoidal fill still falls to numpy under EK — free space, the PEC
+        # image, the Fresnel image and Sommerfeld's C₂-scaled image all ride a
+        # C++ EK kernel. (Sommerfeld's smooth interpolated REMAINDER is numpy
+        # + its own kernels either way; it is a grid-dyad term, not a
+        # thin-wire kernel, so EK does not apply to it at all.)
         self.extended_kernel = bool(extended_kernel)
         self._cached_ek_gating: tuple | None = None
         self._cached_ek_swap: tuple | None = None
@@ -1213,10 +1223,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the OBSERVER segment's (necpp EFLD) — so mixed per-wire radii
         dispatch one call per constant-radius observer-row run
         (stevenmburns/momwire#147). The
-        finite-ground image block bypasses this method — see
-        `_field_tensor_image_refl`, which applies the Fresnel field dyad
-        pre-projection through its own kernel
-        (`sinusoidal_field_tensor_refl`).
+        reflection-coefficient finite-ground image block bypasses this
+        method — see `_field_tensor_image_refl`, which applies the Fresnel
+        field dyad pre-projection through its own kernel pair
+        (`sinusoidal_field_tensor_refl` / `sinusoidal_field_tensor_ek_refl`).
+        The PEC and Sommerfeld image blocks do NOT bypass it: both go
+        through `_field_tensor_image`, so they ride whichever kernel this
+        method picks.
         """
         seg_c = geom["seg_centers"]  # (N, 3) — observer centers
         seg_t = geom["seg_tangents"]  # (N, 3) — observer tangents
@@ -2232,8 +2245,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         in `_assemble_Z` with the same single global minus sign as the PEC
         image. Hot path is the fused C++ `sinusoidal_field_tensor_refl`
         kernel (Eqs 76-79 + the dyad projection in one pass; ρ_v/ρ_h
-        computed in-kernel per pair); the numpy formulation below is the
-        bit-close reference / fallback.
+        computed in-kernel per pair), or `sinusoidal_field_tensor_ek_refl`
+        — the same dyad tail over EKSCX's tables — when
+        `extended_kernel` is set (momwire#259). The numpy formulation
+        below is the bit-close reference / fallback for both.
         """
         src_c_img, src_t_img = self._image_source_centers_tangents(geom)
         cos_th, px, py, tm_p, tn_p = self._image_refl_prep(geom)
@@ -2241,12 +2256,74 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # alongside k before assembling).
         eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
 
-        # The fused Fresnel kernel is reduced-kernel-only, so EK-on still falls
-        # to the numpy reference here (momwire#233). Unlike `_field_tensor`,
-        # which gained an EKSCX entry point in momwire#245, this one has not:
-        # the Fresnel dyad rides on top of the SAME unprojected E_z/E_ρ tables,
-        # so the extended variant is a mechanical follow-on rather than new
-        # physics — filed separately so #245 stayed one kernel.
+        # `extended_kernel=True` has its own fused Fresnel kernel since
+        # momwire#259 — EKSCX's E_z/E_ρ tables under the SAME dyad tail, which
+        # is all the extended variant ever was: the Fresnel weighting rides on
+        # top of the unprojected components and does not know which kernel
+        # produced them. It is dispatched first, and separately, so the EK-OFF
+        # marshalling below is untouched by it (the #233 off-path armor), and
+        # it closes the last numpy-speed EK path on this family — PEC and
+        # Sommerfeld image blocks already ride #245's kernel through
+        # `_field_tensor_image` (Sommerfeld's is that PEC tensor times the
+        # scalar C₂; see `_assemble_Z`).
+        if _HAVE_FIELD_TENSOR_EK_REFL and self.extended_kernel:
+            seg_c = geom["seg_centers"]
+            seg_t = geom["seg_tangents"]
+            seg_h = geom["seg_h"]
+            gx, gw = self._leggauss_cached(self.n_qp_const)
+            # Source-indexed EK tables, exactly as `_field_tensor` passes
+            # them: the mirror reorders nothing, so one IND1/IND2 pair serves
+            # both KSYMP passes (nec2-1.2.1.2.f:2914-2971). `want_swapped` is
+            # resolved on the MIRRORED sources — it is EKSCX's IRA for THIS
+            # build, and the image build's answer can differ from free space's.
+            ind1, ind2 = self._ek_gating(geom)
+            src_a = np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64)
+            want_swapped = self._ek_any_swap(geom, src_c_img, src_t_img)
+
+            def _call_ek_refl(rows, a):
+                # Observer-side slicing: the (M, N) specular tables slice
+                # on their observer axis alongside the obs arrays.
+                return _acc.sinusoidal_field_tensor_ek_refl(
+                    np.ascontiguousarray(seg_c[rows], dtype=np.float64),
+                    np.ascontiguousarray(seg_t[rows], dtype=np.float64),
+                    np.ascontiguousarray(src_c_img, dtype=np.float64),
+                    np.ascontiguousarray(src_t_img, dtype=np.float64),
+                    np.ascontiguousarray(seg_h, dtype=np.float64),
+                    float(a),
+                    float(k),
+                    float(self.eta),
+                    np.ascontiguousarray(gx, dtype=np.float64),
+                    np.ascontiguousarray(gw, dtype=np.float64),
+                    src_a,
+                    np.ascontiguousarray(ind1, dtype=np.int8),
+                    np.ascontiguousarray(ind2, dtype=np.int8),
+                    want_swapped,
+                    np.ascontiguousarray(cos_th[rows], dtype=np.float64),
+                    np.ascontiguousarray(px[rows], dtype=np.float64),
+                    np.ascontiguousarray(py[rows], dtype=np.float64),
+                    np.ascontiguousarray(tm_p[rows], dtype=np.float64),
+                    np.ascontiguousarray(tn_p[rows], dtype=np.float64),
+                    complex(eps_t),
+                    self._cancel_flag,
+                )
+
+            # Observer radius is still one scalar per call (EFLD's `ai`), so
+            # mixed radii still split into constant-radius observer-row runs.
+            # Spelled out rather than shared with the EK-OFF block below so
+            # that block's diff stays empty (same reason as `_field_tensor`).
+            if self._uniform_radius is not None:
+                return _call_ek_refl(slice(None), self._uniform_radius)
+            parts = [
+                _call_ek_refl(slice(s, e), a) for s, e, a in self._radius_runs(geom)
+            ]
+            return tuple(
+                np.concatenate([p[i] for p in parts], axis=0) for i in range(3)
+            )
+
+        # The reduced-kernel fused Fresnel kernel transcribes EKSC only, so an
+        # EK-ON solve reaches this branch only when that accelerator is
+        # unavailable — in which case it takes the numpy reference below, same
+        # as an EK-OFF solve would.
         if _HAVE_FIELD_TENSOR_REFL and not self.extended_kernel:
             # Fused C++ path: Eqs 76-79 field components + the Fresnel
             # dyad projection in one pass, with rho_v/rho_h computed

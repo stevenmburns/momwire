@@ -3167,6 +3167,71 @@ assemble_Z_enrich(
 }
 
 
+// ---------------------------------------------------------------------------
+// Fresnel field-dyad projection tail — the reflection-coefficient finite
+// ground (NEC IPERF=0). Called by the EXTENDED-kernel refl entry point
+// (`sinusoidal_field_tensor_ek_refl`, momwire#259); the reduced one
+// (`sinusoidal_field_tensor_refl`) carries a byte-frozen open-coded copy of
+// exactly this algebra — see the note at its REFL branch for why it is not
+// routed through here.
+//
+// At each (observer m, IMAGE source n) pair the specular ray's incidence
+// cosine cos θ fixes the Fresnel coefficients (principal-branch sqrt, matching
+// `_ground_refl.fresnel_rho`)
+//   ρ_v = (ε̃ cosθ − √(ε̃ − sin²θ)) / (ε̃ cosθ + √(ε̃ − sin²θ))
+//   ρ_h = (   cosθ − √(ε̃ − sin²θ)) / (   cosθ + √(ε̃ − sin²θ))
+// and the dyad D = ρ_v(I − p̂p̂) − ρ_h p̂p̂ collapses under the observer
+// projection to
+//   t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)·(E·p̂)
+// with both scalars read off the UNPROJECTED (E_z, E_ρ) tables:
+//   t_m·E = td·E_z + rho_proj·E_ρ      (the plain projection)
+//   E·p̂  = (t_n·p̂)·E_z + (ρ̂·p̂)·E_ρ    (t_img·p̂ = t_n·p̂; ρ̂ = rho_vec/rho_eval)
+//
+// That is exactly why one tail serves both kernels: the extended kernel
+// changes WHAT E_z/E_ρ are, not how they are weighted, and the four geometric
+// factors fed in (td, rho_proj, t_n·p̂, ρ̂·p̂) are EFLD's, computed before NEC
+// picks between EKSC and EKSCX and therefore identical in both — in
+// particular ρ̂ and rho_proj use the UNSWAPPED radial distance RHX, never
+// EKSCX's ordered RH. The numpy side says the same thing by construction:
+// `_field_tensor_image_refl`'s `_project_weighted` is ONE expression, applied
+// to whichever tables `_field_components_bcast` returned, and it is the oracle
+// for the term placement below.
+struct ReflPair {
+    std::complex<double> rho_v;
+    std::complex<double> rvh;  // ρ_v + ρ_h — → 0 in the PEC limit
+    double tm_p;               // t_m · p̂
+    double tn_p;               // t_n · p̂
+    double rho_p;              // ρ̂ · p̂
+    double td;                 // t_m · t_n
+    double rho_proj;           // (rho_vec · t_m) / rho_eval
+};
+
+static inline ReflPair refl_pair(std::complex<double> eps_t, double ct,
+                                 double tm_p, double tn_p, double rho_p,
+                                 double td, double rho_proj) {
+    std::complex<double> root = std::sqrt(eps_t - (1.0 - ct * ct));
+    std::complex<double> rho_v = (eps_t * ct - root) / (eps_t * ct + root);
+    std::complex<double> rho_h = (ct - root) / (ct + root);
+    ReflPair p;
+    p.rho_v = rho_v;
+    p.rvh = rho_v + rho_h;
+    p.tm_p = tm_p;
+    p.tn_p = tn_p;
+    p.rho_p = rho_p;
+    p.td = td;
+    p.rho_proj = rho_proj;
+    return p;
+}
+
+static inline std::complex<double> refl_project(const ReflPair &p,
+                                                std::complex<double> Ez,
+                                                std::complex<double> Erho) {
+    std::complex<double> tm_E = p.td * Ez + p.rho_proj * Erho;
+    std::complex<double> E_p = p.tn_p * Ez + p.rho_p * Erho;
+    return p.rho_v * tm_E - p.rvh * (p.tm_p * E_p);
+}
+
+
 // Sinusoidal-basis (NEC2 three-term) tangential-field tensor.
 //
 // For each (m=obs, n=src) pair of segments, compute the three scalar tensors
@@ -3544,6 +3609,19 @@ sinusoidal_field_tensor_impl(
                 //   t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)·(E·p̂)
                 //   t_m·E = td·E_z + rho_proj·E_ρ
                 //   E·p̂  = (t_n·p̂)·E_z + (ρ̂·p̂)·E_ρ
+                //
+                // `refl_pair` / `refl_project` above are this same algebra,
+                // and the extended kernel (momwire#259) calls them — but THIS
+                // copy stays open-coded on purpose. Routing the reduced path
+                // through the helpers is a byte-level change: the factors then
+                // reach the multiply-adds through a struct and GCC contracts
+                // them differently, which measured out at ≤3.6e-15 on the
+                // tensor and 7.1e-14 on a grounded Z. The reduced refl path is
+                // frozen armor (#233 gate 4 / #259 gate 3), so the duplication
+                // is the cheaper price. Both copies are independently anchored
+                // to the same numpy oracle, `_field_tensor_image_refl`'s
+                // `_project_weighted` — that, not code sharing, is what keeps
+                // them from drifting.
                 size_t mn = m * N + n;
                 double ct = cth_p[mn];
                 std::complex<double> root =
@@ -3682,6 +3760,17 @@ sinusoidal_field_tensor_refl(
 // assembly). Nothing (M, N, n_qp)-sized is ever materialized, which is the
 // other half of #245 — the numpy path's source-quadrature temporaries are what
 // make large EK meshes memory-bound.
+//
+// REFL=true (momwire#259) is the same marriage the reduced kernel's REFL arm
+// makes: EKSCX's E_z/E_ρ tables with the Fresnel field dyad applied instead of
+// the plain tangential projection, from the same k-independent specular tables
+// (cos_th, px, py, tm_p, tn_p) and the same complex ε̃. It closes the last
+// numpy-speed extended-kernel path on the sinusoidal family — before it,
+// `extended_kernel=True` with `ground_eps` (and no `ground_model=
+// "sommerfeld"`) took the pure-numpy image block. PEC and Sommerfeld grounds
+// need nothing here: the PEC image is `sinusoidal_field_tensor_ek` with
+// mirrored sources, and the Sommerfeld image block is that same PEC tensor
+// scaled by the scalar C₂, so both already ride REFL=false.
 
 // Minimal POD complex for the extended-kernel inner loop. libstdc++'s
 // std::complex<double> multiplication lowers to a libgcc `__muldc3` CALL (the
@@ -3795,10 +3884,11 @@ struct EkGeomRow {
     bool ext1, ext2;
 };
 
+template<bool REFL>
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>>
-sinusoidal_field_tensor_ek(
+sinusoidal_field_tensor_ek_impl(
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
     py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
@@ -3811,6 +3901,12 @@ sinusoidal_field_tensor_ek(
     py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind1,
     py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind2,
     bool want_swapped,
+    py::array_t<double, py::array::c_style | py::array::forcecast> cos_th,
+    py::array_t<double, py::array::c_style | py::array::forcecast> px_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> py_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tm_p,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tn_p,
+    std::complex<double> eps_t,
     uintptr_t cancel_flag = 0
 ) {
     auto oc = obs_centers.unchecked<2>();
@@ -3845,6 +3941,25 @@ sinusoidal_field_tensor_ek(
     size_t M = oc.shape(0);
     size_t N = sc.shape(0);
     size_t n_qp = glt.shape(0);
+
+    // REFL-only per-pair specular tables, flat (M, N) row-major — the same
+    // contract `sinusoidal_field_tensor_impl<true>` takes.
+    const double *cth_p = nullptr, *px_p = nullptr, *py_p = nullptr;
+    const double *tmp_p = nullptr, *tnp_p = nullptr;
+    if (REFL) {
+        for (const auto *t : {&cos_th, &px_t, &py_t, &tm_p, &tn_p}) {
+            if ((*t).ndim() != 2 || (size_t)(*t).shape(0) != M ||
+                (size_t)(*t).shape(1) != N) {
+                throw std::runtime_error(
+                    "refl tables must all have shape (M_obs, N_src)");
+            }
+        }
+        cth_p = cos_th.data();
+        px_p = px_t.data();
+        py_p = py_t.data();
+        tmp_p = tm_p.data();
+        tnp_p = tn_p.data();
+    }
 
     py::array_t<std::complex<double>> Phi_const({M, N});
     py::array_t<std::complex<double>> Phi_sin({M, N});
@@ -3893,6 +4008,9 @@ sinusoidal_field_tensor_ek(
         std::vector<double> ph(P), cphb(P), sphb(P);
         std::vector<EkGeomRow> gmr(N);
         std::vector<double> r0q_inv_a(N * n_qp);
+        // REFL: ρ̂·p̂ per source segment for this observer row, off the
+        // UNSWAPPED rho_eval (= RHX) — p̂ is horizontal so only x/y contribute.
+        std::vector<double> rho_p_a(REFL ? N : 0);
 
         double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
         double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
@@ -3914,6 +4032,10 @@ sinusoidal_field_tensor_ek(
             double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
             double td = tmx*tnx + tmy*tny + tmz*tnz;
             double rho_dot_tobs = rho_vx*tmx + rho_vy*tmy + rho_vz*tmz;
+            if (REFL) {
+                size_t mn = m * N + n;
+                rho_p_a[n] = (rho_vx * px_p[mn] + rho_vy * py_p[mn]) / rho_eval;
+            }
 
             double H = H_n[n];
             // f.3186-3192: order the two lengths so RH is the larger. The
@@ -4024,23 +4146,105 @@ sinusoidal_field_tensor_ek(
                 e2.g1p - e1.g1p + (k_sq * (1.0 - bk2)) * int_G0
                     - bk2 * (e2.gzp - e1.gzp));
 
-            // The consuming projection is the reduced kernel's:
-            //   Phi = td·E_z + rho_proj·E_ρ   (`_field_tensor`'s tail).
             double td = g.td, rpf = g.rpf;
-            pc(m, n) = std::complex<double>(
-                td * ez_const.re + rpf * erho_const.re,
-                td * ez_const.im + rpf * erho_const.im);
-            ps(m, n) = std::complex<double>(
-                td * ez_sin.re + rpf * erho_sin.re,
-                td * ez_sin.im + rpf * erho_sin.im);
-            pco(m, n) = std::complex<double>(
-                td * ez_cos.re + rpf * erho_cos.re,
-                td * ez_cos.im + rpf * erho_cos.im);
+            if (REFL) {
+                // The Fresnel tail, byte-for-byte the reduced kernel's (see
+                // `refl_pair` / `refl_project`). The EK tables replace E_z/E_ρ
+                // and nothing else: `td`, `rpf` and `rho_p_a` are EFLD's
+                // pre-kernel geometry, so the dyad sees the same four factors
+                // it sees with EK off — which is exactly how the numpy path
+                // spells it, `_field_tensor_image_refl`'s `_project_weighted`
+                // consuming whichever tables `_field_components_bcast`
+                // returned.
+                size_t mn = m * N + n;
+                ReflPair rp = refl_pair(eps_t, cth_p[mn], tmp_p[mn], tnp_p[mn],
+                                        rho_p_a[n], td, rpf);
+                auto weighted = [&](EkC ez, EkC erho) {
+                    return refl_project(rp,
+                                        std::complex<double>(ez.re, ez.im),
+                                        std::complex<double>(erho.re, erho.im));
+                };
+                pc(m, n) = weighted(ez_const, erho_const);
+                ps(m, n) = weighted(ez_sin, erho_sin);
+                pco(m, n) = weighted(ez_cos, erho_cos);
+            } else {
+                // The consuming projection is the reduced kernel's:
+                //   Phi = td·E_z + rho_proj·E_ρ   (`_field_tensor`'s tail).
+                pc(m, n) = std::complex<double>(
+                    td * ez_const.re + rpf * erho_const.re,
+                    td * ez_const.im + rpf * erho_const.im);
+                ps(m, n) = std::complex<double>(
+                    td * ez_sin.re + rpf * erho_sin.re,
+                    td * ez_sin.im + rpf * erho_sin.im);
+                pco(m, n) = std::complex<double>(
+                    td * ez_cos.re + rpf * erho_cos.re,
+                    td * ez_cos.im + rpf * erho_cos.im);
+            }
         }
     }
 
     PYSIM_THROW_IF_ABORTED();
     return std::make_tuple(Phi_const, Phi_sin, Phi_cos);
+}
+
+
+// Thin non-template wrappers for pybind registration, mirroring the reduced
+// kernel's pair: the plain EK entry point passes empty refl tables, the refl
+// one forwards them.
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+sinusoidal_field_tensor_ek(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,
+    double a, double k, double eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_a,
+    py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind1,
+    py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind2,
+    bool want_swapped,
+    uintptr_t cancel_flag = 0
+) {
+    py::array_t<double> empty(std::vector<py::ssize_t>{0, 0});
+    return sinusoidal_field_tensor_ek_impl<false>(
+        obs_centers, obs_tangents, src_centers, src_tangents, seg_h,
+        a, k, eta, gl_t, gl_w, src_a, ind1, ind2, want_swapped,
+        empty, empty, empty, empty, empty,
+        std::complex<double>(0.0, 0.0), cancel_flag);
+}
+
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+sinusoidal_field_tensor_ek_refl(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,
+    double a, double k, double eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_a,
+    py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind1,
+    py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind2,
+    bool want_swapped,
+    py::array_t<double, py::array::c_style | py::array::forcecast> cos_th,
+    py::array_t<double, py::array::c_style | py::array::forcecast> px,
+    py::array_t<double, py::array::c_style | py::array::forcecast> py_,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tm_p,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tn_p,
+    std::complex<double> eps_t,
+    uintptr_t cancel_flag = 0
+) {
+    return sinusoidal_field_tensor_ek_impl<true>(
+        obs_centers, obs_tangents, src_centers, src_tangents, seg_h,
+        a, k, eta, gl_t, gl_w, src_a, ind1, ind2, want_swapped,
+        cos_th, px, py_, tm_p, tn_p, eps_t, cancel_flag);
 }
 
 
@@ -5661,6 +5865,26 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("src_a"), py::arg("ind1"), py::arg("ind2"),
           py::arg("want_swapped"),
+          py::arg("cancel_flag") = 0);
+    m.def("sinusoidal_field_tensor_ek_refl", &sinusoidal_field_tensor_ek_refl,
+          "Extended-thin-wire-kernel (EKSCX) variant of "
+          "sinusoidal_field_tensor_refl: the EK tables of "
+          "sinusoidal_field_tensor_ek (src_a / ind1 / ind2 / want_swapped) "
+          "with the Fresnel field dyad projection tail of "
+          "sinusoidal_field_tensor_refl (cos_th, px, py, tm_p, tn_p, eps_t) "
+          "in place of the plain tangential one. src_* are the MIRRORED "
+          "image sources. Returns (Phi_const, Phi_sin, Phi_cos), each "
+          "(M, N) complex.",
+          py::arg("obs_centers"), py::arg("obs_tangents"),
+          py::arg("src_centers"), py::arg("src_tangents"),
+          py::arg("seg_h"),
+          py::arg("a"), py::arg("k"), py::arg("eta"),
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("src_a"), py::arg("ind1"), py::arg("ind2"),
+          py::arg("want_swapped"),
+          py::arg("cos_th"), py::arg("px"), py::arg("py"),
+          py::arg("tm_p"), py::arg("tn_p"),
+          py::arg("eps_t"),
           py::arg("cancel_flag") = 0);
     m.def("sinusoidal_galerkin_far_fill", &sinusoidal_galerkin_far_fill,
           "Fused far fill for SinusoidalGalerkinSolver: the plainly-projected "

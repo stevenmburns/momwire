@@ -97,6 +97,12 @@ _CANCELLABLE_KERNELS = (
     "bspline_assemble_offedge_block",
     "sinusoidal_field_tensor",
     "sinusoidal_field_tensor_refl",
+    # The extended-kernel twins take and poll the same flag. `_ek` was left off
+    # this tuple when momwire#245 added it, so a cancelled EK solve surfaced the
+    # raw ``AcceleratorAborted`` instead of ``SolveAborted``; #259 adds both
+    # rather than land its own kernel with the same hole.
+    "sinusoidal_field_tensor_ek",
+    "sinusoidal_field_tensor_ek_refl",
     "sinusoidal_galerkin_far_fill",
     "somm_six_integrals_batch",
 )

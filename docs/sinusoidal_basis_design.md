@@ -227,7 +227,9 @@ nec2c/necpp and validated against PyNEC on mixed-radius geometries:
 
 Scalar (and uniform-array) radii keep the historical scalar code paths and
 are bit-identical to pre-#147 results. The C++ field-tensor kernels
-(`sinusoidal_field_tensor`, `sinusoidal_field_tensor_refl`) take one
+(`sinusoidal_field_tensor`, `sinusoidal_field_tensor_refl`, and their
+extended-thin-wire twins `sinusoidal_field_tensor_ek` /
+`sinusoidal_field_tensor_ek_refl`) take one
 scalar radius — the OBSERVER row's — so mixed-radius solves dispatch one
 kernel call per contiguous constant-radius run of observer rows and
 stitch the results (segments are wire-contiguous, so runs are at most
