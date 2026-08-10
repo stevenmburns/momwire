@@ -23,6 +23,9 @@ Plus the refusals: where a family will not serve a configuration,
 does.
 """
 
+import gc
+import weakref
+
 import numpy as np
 import pytest
 
@@ -458,3 +461,222 @@ def test_port_solution_is_exported_and_frozen():
     sol = BSplineSolver(**single_feed()).compute_port_solution()
     with pytest.raises(Exception):
         sol.y = None
+
+
+# ---- Gate 5: the swept entry points are the per-k core, stacked (#252) -----
+#
+# `compute_y_matrix_swept` / `compute_port_solution_swept` are thin wrappers
+# over one per-k generator, `_port_solutions_swept`, whose core is the
+# family's own `compute_port_solution` everywhere except bspline's batched
+# accelerator (thinning that one would dissolve the chunking that bounds
+# `swept_mem_mb`). So the armor below is two-tier: bit-exact wherever the code
+# path really is shared, and a documented tolerance for the batched routes,
+# which differ only by LAPACK/assembly reassociation over the k axis.
+
+# Measured on this matrix at 1e-14-ish; the pin is two orders looser so a
+# cross-compiler BLAS can breathe, and tight enough that any real algebra
+# change (a moved port order, a dropped junction split, a rebuilt drive
+# vector) blows straight through it.
+SWEPT_REASSOC_RTOL = 1e-12
+
+
+def _sweep_ks(solver):
+    """Three off-design points, deliberately not including the design k."""
+    return solver.k * np.array([0.93, 1.04, 1.11])
+
+
+def _per_k(solver, ks, fn):
+    """`fn()` at each k, with the frequency triple saved and restored.
+
+    Spelled out rather than routed through the solver's own `_set_k` /
+    `_k_restored`: the reference side of a drift gate must not share code with
+    the thing it is checking.
+    """
+    saved = (solver.k, solver.wavelength, solver.omega)
+    out = []
+    try:
+        for kk in ks:
+            solver.k = float(kk)
+            solver.omega = solver.k * solver.c
+            solver.wavelength = solver.c / (solver.omega / (2 * np.pi))
+            out.append(fn())
+    finally:
+        solver.k, solver.wavelength, solver.omega = saved
+    return out
+
+
+def _y_reassociates(solver):
+    """True where the swept Y legitimately differs from the stacked single-k Y
+    in the last ulps: bspline's fully batched route, and only it."""
+    if not isinstance(solver, BSplineSolver) or isinstance(solver, HMatrixSolver):
+        return False
+    return solver._swept_batched_available()
+
+
+def _z_reassociates(solver):
+    """As `_y_reassociates`, plus `SinusoidalSolver`: its swept impedance
+    deliberately keeps `scipy.linalg.solve` where the single-k
+    `compute_impedance` factors Gᵀ in place to stash the adjoint oracle's
+    factors. Same algebra, different LAPACK route — a pre-#252 difference the
+    cleanup kept rather than move numbers on the default engine."""
+    if type(solver) is SinusoidalSolver:
+        return True
+    return _y_reassociates(solver)
+
+
+def _assert_stacked(got, want, reassociates, what):
+    assert got.shape == want.shape, f"{what}: shape {got.shape} vs {want.shape}"
+    if reassociates:
+        rel = np.abs(got - want).max() / np.abs(want).max()
+        assert rel < SWEPT_REASSOC_RTOL, f"{what}: swept vs stacked rel {rel:.3e}"
+    else:
+        assert got.tobytes() == want.tobytes(), f"{what}: not bit-identical"
+
+
+@pytest.mark.parametrize("case", CASES, ids=_case_id)
+def test_y_matrix_swept_is_the_stacked_single_k_y(case):
+    """`compute_y_matrix_swept(ks)[i]` IS `compute_y_matrix()` at `ks[i]`.
+
+    The #232 discipline one level up: the swept path used to carry its own
+    copy of every family's port algebra — drive columns, the #172 junction
+    split, the readout — which is exactly where a convention change lands on
+    one copy and not the other. Junction-port and grounded configurations are
+    in the matrix because port ORDER is half of what can drift.
+    """
+    cls, fixture = case
+    kw = _tight(cls, fixture())
+    solver = cls(**kw)
+    ks = _sweep_ks(solver)
+    k_before = solver.k
+    got = solver.compute_y_matrix_swept(ks)
+    assert solver.k == k_before  # the sweep puts the frequency triple back
+    want = np.stack(_per_k(solver, ks, solver.compute_y_matrix))
+    _assert_stacked(got, want, _y_reassociates(solver), f"{cls.__name__} swept Y")
+
+
+@pytest.mark.parametrize("case", CASES, ids=_case_id)
+def test_impedance_swept_is_the_stacked_single_k_impedance(case):
+    """The impedance twin. This entry point stays on each family's
+    single-excitation `compute_impedance` rather than on the port columns —
+    one RHS is the cheaper solve, and it keeps the swept answer comparable
+    with the per-k call it mirrors — so the gate is the same stacking
+    identity."""
+    cls, fixture = case
+    kw = _tight(cls, fixture())
+    solver = cls(**kw)
+    ks = _sweep_ks(solver)
+    k_before = solver.k
+    got = solver.compute_impedance_swept(ks)
+    assert solver.k == k_before
+    want = np.stack([z for z, _c in _per_k(solver, ks, solver.compute_impedance)])
+    _assert_stacked(got, want, _z_reassociates(solver), f"{cls.__name__} swept Z")
+
+
+@pytest.mark.parametrize("case", CASES, ids=_case_id)
+def test_port_solution_swept_is_the_stacked_single_k_solution(case):
+    """The columns too, not just Y — `compute_port_solution_swept` is the
+    swept twin of `compute_port_solution`, entry for entry."""
+    cls, fixture = case
+    kw = _tight(cls, fixture())
+    solver = cls(**kw)
+    ks = _sweep_ks(solver)
+    sols = solver.compute_port_solution_swept(ks)
+    refs = _per_k(solver, ks, solver.compute_port_solution)
+    assert len(sols) == len(refs) == len(ks)
+    reassoc = _y_reassociates(solver)
+    for i, (sol, ref) in enumerate(zip(sols, refs)):
+        assert isinstance(sol, PortSolution)
+        assert sol.port_currents is sol.y  # the readout IS the Y matrix
+        _assert_stacked(sol.y, ref.y, reassoc, f"{cls.__name__} sol[{i}].y")
+        _assert_stacked(sol.coeffs, ref.coeffs, reassoc, f"{cls.__name__} sol[{i}].c")
+        # Per-solve handle: each k gets its own, never a shared one.
+        assert sol.basis is not ref.basis
+
+
+@pytest.mark.parametrize("case", CASES, ids=_case_id)
+def test_swept_y_is_the_swept_port_solutions_y(case):
+    """Bit for bit, like gate 1 at single k. Both entry points read the same
+    generator, so this can only fail if one of them grew its own core."""
+    cls, fixture = case
+    kw = _tight(cls, fixture())
+    solver = cls(**kw)
+    ks = _sweep_ks(solver)
+    Y = solver.compute_y_matrix_swept(ks)
+    sols = solver.compute_port_solution_swept(ks)
+    assert Y.shape == (len(ks), len(_port_voltages(kw)), len(_port_voltages(kw)))
+    for i, sol in enumerate(sols):
+        assert Y[i].tobytes() == sol.y.tobytes()
+
+
+@pytest.mark.parametrize("cls", [HMatrixSolver, ArrayBlockSolver])
+def test_swept_y_on_an_accelerated_solver_never_fills_dense(cls, monkeypatch):
+    """#241: swept Y on an accelerated solver must use the accelerator.
+
+    Before the fix these classes had no swept-port override at all, so
+    `compute_y_matrix_swept` fell through to `BSplineSolver`'s and ran the
+    DENSE fill for every frequency — the batched dense assembly when that
+    accelerator was built, a dense `_compute_Z_operator` per k otherwise. It
+    was never *wrong* (the dense path is the reference, junction ports and
+    all), it just silently ignored the operator the caller asked for. Every
+    dense fill entry point is booby-trapped here; the sweep must build one
+    fast operator per frequency and nothing else.
+    """
+    kw = _tight(cls, plain_multifeed())
+    solver = cls(**kw)
+    ks = _sweep_ks(solver)
+    plain = cls(**kw)
+    reference = np.stack(_per_k(plain, ks, plain.compute_y_matrix))
+
+    for name in (
+        "_swept_batched_z_chunks",
+        "_compute_Z_operator",
+        "_compute_Z_dense_chunked",
+        "_build_J_blocks",
+    ):
+
+        def _trap(*_a, _name=name, **_kw):
+            pytest.fail(f"swept Y on {cls.__name__} ran the dense path: {_name}")
+
+        monkeypatch.setattr(solver, name, _trap)
+
+    built = []
+    real_build = solver._build_operator
+    monkeypatch.setattr(
+        solver, "_build_operator", lambda: (built.append(1), real_build())[1]
+    )
+
+    Y = solver.compute_y_matrix_swept(ks)
+    assert len(built) == len(ks), "one accelerated operator per frequency"
+    rel = np.abs(Y - reference).max() / np.abs(reference).max()
+    assert rel < 1e-8, f"accelerated swept Y vs dense reference: rel {rel:.3e}"
+
+
+def test_swept_y_streams_and_does_not_hoard_solution_columns():
+    """`compute_y_matrix_swept` reads the per-k generator and keeps only the Y
+    blocks, so a long sweep on a big model never accumulates the
+    `n_k · n_dof · n_ports` solution columns the caller did not ask for.
+    `compute_port_solution_swept` is the entry point that DOES materialise
+    them, and its docstring says so."""
+    refs, alive = [], []
+    real = BSplineSolver._port_solutions_swept
+
+    def spy(self, k_array):
+        for sol in real(self, k_array):
+            refs.append(weakref.ref(sol))
+            yield sol
+            # Resumed: the only solution that may still be reachable is the
+            # one this frame is holding.
+            gc.collect()
+            alive.append(sum(r() is not None for r in refs))
+
+    spied = type("Spied", (BSplineSolver,), {"_port_solutions_swept": spy})(
+        **plain_multifeed()
+    )
+    ks = _sweep_ks(spied)
+    spied.compute_y_matrix_swept(ks)
+    assert len(refs) == len(ks)
+    assert max(alive) <= 1, f"swept Y hoarded {max(alive)} solutions at once"
+
+    refs.clear()
+    sols = spied.compute_port_solution_swept(ks)
+    assert len(sols) == len(ks)  # this one keeps them all, by contract
