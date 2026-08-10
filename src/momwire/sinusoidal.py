@@ -44,6 +44,7 @@ import scipy.sparse
 from . import _ground_refl, _sommerfeld, _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
+from ._element_currents import _ElementCurrents
 from ._port_solution import PortSolution
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
@@ -138,7 +139,7 @@ class _SegmentBasis:
     k: float
 
 
-class SinusoidalSolver(_Cancelable):
+class SinusoidalSolver(_ElementCurrents, _Cancelable):
     """NEC2's three-term (const + sin + cos) basis on each segment, with
     end-condition coefficients closed-form per Eqs 25-64.
 
