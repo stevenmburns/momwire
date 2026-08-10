@@ -636,3 +636,720 @@ def test_ek_spelling_reduces_to_the_reduced_kernel_exactly_at_zero_radius():
     assert np.all(_ek_reg_extra(R, 0.0, K) == 0.0)
     reduced = (np.exp(-1j * K * R) - 1.0) / (4 * np.pi * R)
     assert np.array_equal(_ek_reg_kernel(R, 0.0, K), reduced)
+
+
+# ======================================================================
+# UNIT 2 — the solver wiring (#249 §6.3-6.5)
+# ======================================================================
+#
+# Everything above gates the kernel layer with no solver in sight. What
+# follows gates the THREE SOLVERS that thread `ek=` into it: that the
+# eligibility labels reproduce NEC's own gating decisions on real decks,
+# that Z stays Galerkin-symmetric, that ArrayBlock's block-Toeplitz
+# structure survives, that the solver family still agrees with itself —
+# and, at least as important, that `extended_kernel=False` is a true no-op
+# down to the bit.
+#
+# The engine-level shift gates against nec2c (δZ vs the LADDER columns)
+# are unit 3's and live with the sinusoidal EK file.
+
+import momwire._bspline_kernels as _bk  # noqa: E402
+import momwire.bspline as _bs  # noqa: E402
+from momwire.array_block import (  # noqa: E402
+    ArrayBlockSolver,
+    LatticeArrayBlock,
+    cache_stats,
+    reset_array_caches,
+)
+from momwire.bspline import BSplineSolver  # noqa: E402
+from momwire.hmatrix import HMatrixSolver  # noqa: E402
+from momwire.sinusoidal import SinusoidalSolver  # noqa: E402
+
+# The #233 ladder deck: a 5 m dipole at 30 MHz.
+LEN = 5.0
+
+
+def _dipole_wire(half, x=0.0, y=0.0, z=0.0):
+    return np.array([[x, y, z - half], [x, y, z + half]])
+
+
+# ----------------------------------------------------------------------
+# Gate 5 — Galerkin symmetry survives the extended kernel
+# ----------------------------------------------------------------------
+
+# The coaxial rule is symmetric in (i, j) BY CONSTRUCTION (#249 §4.1), and
+# that is the whole reason NEC's per-END gating was not transcribed: a
+# per-source-segment decision makes G(i, j) != G(j, i), which a collocation
+# solver does not notice and a Galerkin fill does. So |Z - Zᵀ| is the
+# high-gain detector for a mis-wired eligibility rule — a source-side rule
+# would show up here at percent level, not at 1e-12.
+#
+# Measured on this box (dipole + skew wire, EK off vs on):
+#
+#   degree   EK off     EK on
+#     1      5.7e-15    1.7e-14
+#     2      1.2e-12    1.5e-12
+#
+# Note the degree-2 floor is ~1e-12 with EK OFF too — it is the assembly's
+# own reassociation, not the kernel. The design quoted 1.3e-13 (#205's
+# sinusoidal floor); that is not this family's degree-2 floor, so the
+# tolerances below are pinned just above the measured EK-OFF values and the
+# ratio check carries the "EK did not make it worse" claim.
+
+_G5_ABS_TOL = {1: 1e-13, 2: 3e-12}
+
+
+def _skew_pair_Z(degree, extended_kernel):
+    sim = BSplineSolver(
+        wires=[
+            np.array([[0.0, 0.0, -2.5], [0.0, 0.0, 2.5]]),
+            np.array([[3.0, 0.2, -1.0], [3.6, 1.4, 1.2]]),
+        ],
+        n_per_edge_per_wire=[[12], [9]],
+        degree=degree,
+        wavelength=LAM,
+        wire_radius=0.05,
+        extended_kernel=extended_kernel,
+    )
+    geom = sim._build_geometry()
+    supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    return sim._compute_Z_operator(geom, supp_seg, polys)
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_g5_galerkin_symmetry_holds_with_ek_on(degree):
+    def resid(Z):
+        return float(np.abs(Z - Z.T).max() / np.abs(Z).max())
+
+    off = resid(_skew_pair_Z(degree, False))
+    on = resid(_skew_pair_Z(degree, True))
+    assert on <= _G5_ABS_TOL[degree], f"d={degree}: |Z-Zᵀ|/|Z| = {on:.3e} with EK on"
+    assert on <= 10.0 * max(off, 1e-15), (
+        f"d={degree}: EK on {on:.3e} vs EK off {off:.3e} — EK degraded symmetry"
+    )
+
+
+# ----------------------------------------------------------------------
+# Gate 6 — the coaxial labels against NEC's own IND codes
+# ----------------------------------------------------------------------
+
+# The honest form of "shared gating logic" (#249 §4.4): not shared code — a
+# pinned cross-check. `SinusoidalSolver._ek_gating` transcribes NEC's
+# per-end IND1/IND2 straight out of nec2-1.2.1.2.f:2019-2053; the B-spline
+# side computes a per-segment coaxial-and-equal-radius label and extends a
+# PAIR iff the labels match. On every deck below the two agree exactly:
+#
+#   deck                     NEC IND at the feature   coaxial labels
+#   straight dipole          1 (free ends), 0         one group
+#   vertical monopole/PEC    0 (perpendicular ground) one group WITH its image
+#   90° bend                 2                        two groups
+#   radius step              2                        two groups
+#   K = 3 junction           2                        three groups
+#   slanted ground contact   2                        image is a second group
+#
+# The linkage is asserted structurally rather than by hand-written index
+# lists: for every pair of segments that SHARE AN ENDPOINT, the coaxial
+# rule extends the pair iff neither of the two facing ends is IND = 2.
+
+
+def _facing_ends(geom, tol=1e-9):
+    """[(i, end_i, j, end_j)] for every pair of segments sharing an endpoint.
+
+    `end` is 0 for NEC's end 1 (the N⁻ / seg_l side, `ind1`) and 1 for its
+    end 2 (the N⁺ / seg_r side, `ind2`) — momwire's arc order is NEC's
+    ICON1/ICON2 order, which is what makes the comparison legitimate.
+    """
+    ends = np.stack([geom["seg_l"], geom["seg_r"]], axis=1)  # (N, 2, 3)
+    n = ends.shape[0]
+    out = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            for ei in (0, 1):
+                for ej in (0, 1):
+                    if np.linalg.norm(ends[i, ei] - ends[j, ej]) <= tol:
+                        out.append((i, ei, j, ej))
+    return out
+
+
+_G6_DECKS = {
+    "straight dipole": dict(
+        wires=[_dipole_wire(2.5)],
+        n_per_edge_per_wire=[[6]],
+    ),
+    "vertical monopole on PEC ground": dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]])],
+        n_per_edge_per_wire=[[6]],
+        ground_z=0.0,
+    ),
+    "90 degree bend": dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0], [2.0, 0.0, 2.0]])],
+        n_per_edge_per_wire=[[3, 3]],
+    ),
+    "radius step": dict(
+        wires=[
+            np.array([[0.0, 0.0, -2.5], [0.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]]),
+        ],
+        n_per_edge_per_wire=[[3], [3]],
+        wire_radius=[0.01, 0.02],
+        junctions=[[(0, "end"), (1, "start")]],
+    ),
+    "K=3 junction": dict(
+        wires=[
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
+            np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+            np.array([[0.0, 0.0, 0.0], [0.0, 2.0, 0.0]]),
+        ],
+        n_per_edge_per_wire=[[3], [3], [3]],
+        junctions=[[(0, "start"), (1, "start"), (2, "start")]],
+    ),
+}
+
+
+def _g6_pair(name):
+    kw = dict(_G6_DECKS[name])
+    kw.setdefault("wire_radius", 0.01)
+    sin = SinusoidalSolver(wavelength=LAM, nsegs=6, **kw)
+    bsp = BSplineSolver(wavelength=LAM, nsegs=6, degree=2, extended_kernel=True, **kw)
+    gs = sin._build_geometry()
+    gb = bsp._build_geometry()
+    # The comparison is per-SEGMENT, so the two meshes must be the same one.
+    assert np.allclose(
+        0.5 * (gs["seg_l"] + gs["seg_r"]), 0.5 * (gb["seg_l"] + gb["seg_r"])
+    ), f"{name}: the two solvers meshed this deck differently"
+    return sin, gs, bsp, gb
+
+
+@pytest.mark.parametrize("name", list(_G6_DECKS))
+def test_g6_coaxial_labels_agree_with_nec_ind_codes(name):
+    sin, gs, bsp, gb = _g6_pair(name)
+    ind = np.stack(sin._ek_gating(gs))  # (2, N): ind[end, seg]
+    labels, _ = bsp._ek_axis_labels(gb, False)
+    touching = _facing_ends(gs)
+    assert touching, f"{name}: no shared endpoints — the deck proves nothing"
+    for i, ei, j, ej in touching:
+        nec_extends = ind[ei, i] != 2 and ind[ej, j] != 2
+        assert (labels[i] == labels[j]) == nec_extends, (
+            f"{name}: segs {i}(end{ei + 1}, IND={ind[ei, i]}) / "
+            f"{j}(end{ej + 1}, IND={ind[ej, j]}) — NEC "
+            f"{'extends' if nec_extends else 'declines'}, labels "
+            f"{labels[i]} vs {labels[j]}"
+        )
+
+
+@pytest.mark.parametrize(
+    "name,every_end_extends",
+    [("straight dipole", True), ("vertical monopole on PEC ground", True)],
+)
+def test_g6_decks_nec_extends_everywhere_are_one_coaxial_group(name, every_end_extends):
+    sin, gs, bsp, gb = _g6_pair(name)
+    ind = np.stack(sin._ek_gating(gs))
+    assert (ind != 2).all() == every_end_extends
+    labels, _ = bsp._ek_axis_labels(gb, False)
+    assert len(np.unique(labels)) == 1, f"{name}: labels {labels}"
+
+
+def test_g6_ground_contact_branch_matches_through_the_image():
+    """NEC's IND = 0 ground case is justified by "the image continues the wire
+    straight through", so the B-spline rule has to reproduce it on the
+    MIRRORED source geometry rather than on the real one — a vertical
+    monopole is coaxial with its own image and extends; a slanted contact
+    (NEC: IND = 2) is not and does not."""
+    for wire, perpendicular in (
+        (np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]]), True),
+        (np.array([[0.0, 0.0, 0.0], [1.5, 0.0, 2.0]]), False),
+    ):
+        kw = dict(
+            wires=[wire],
+            n_per_edge_per_wire=[[6]],
+            wavelength=LAM,
+            nsegs=6,
+            wire_radius=0.01,
+            ground_z=0.0,
+        )
+        sin = SinusoidalSolver(**kw)
+        bsp = BSplineSolver(degree=2, extended_kernel=True, **kw)
+        ind1, _ind2 = sin._ek_gating(sin._build_geometry())
+        # The ground-contact end is segment 0's end 1 on both decks.
+        assert (ind1[0] == 0) == perpendicular, f"NEC IND1[0] = {ind1[0]}"
+        real, image = bsp._ek_axis_labels(bsp._build_geometry(), True)
+        extends = bool((real[:, None] == image[None, :]).any())
+        assert extends == perpendicular, (
+            f"perpendicular={perpendicular}: real {real} vs image {image}"
+        )
+
+
+def test_g6_a_horizontal_wire_is_never_coaxial_with_its_own_image():
+    """The negative control for the joint real+image label scan. Two
+    INDEPENDENT scans would label the real run 0 and the image run 0 and
+    declare every real/image pair coaxial — wrong by twice the height."""
+    bsp = BSplineSolver(
+        wires=[np.array([[-2.5, 0.0, 1.0], [2.5, 0.0, 1.0]])],
+        n_per_edge_per_wire=[[6]],
+        wavelength=LAM,
+        degree=2,
+        wire_radius=0.01,
+        ground_z=0.0,
+        extended_kernel=True,
+    )
+    real, image = bsp._ek_axis_labels(bsp._build_geometry(), True)
+    assert not (real[:, None] == image[None, :]).any(), f"{real} vs {image}"
+
+
+# ----------------------------------------------------------------------
+# Gate 7 — EK OFF is the pre-#249 code path, bit for bit
+# ----------------------------------------------------------------------
+
+# Two halves, because numerical identity is necessary and not sufficient
+# (#233's own argument): G7 pins that the defaulted solver and an explicit
+# `extended_kernel=False` produce the SAME BITS on every solver and every
+# path, and G7b pins that no line of EK code was entered to produce them.
+#
+# Comparisons are within ONE backend only. EK-off reaches the C++ kernels
+# and EK-on does not, so a cross-backend "bit identity" claim would be
+# meaningless — that is unit 1's note, and it is why nothing here compares
+# an EK-on fill against an EK-off one for equality.
+
+_G7_BSPLINE = {
+    "free space": dict(
+        wires=[_dipole_wire(2.5)], n_per_edge_per_wire=[[21]], wire_radius=0.05
+    ),
+    "bend": dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0], [1.5, 0.0, 2.0]])],
+        n_per_edge_per_wire=[[8, 6]],
+        wire_radius=0.02,
+    ),
+    "mixed radii": dict(
+        wires=[_dipole_wire(2.0, x=-1.5), _dipole_wire(2.0, x=1.5)],
+        n_per_edge_per_wire=[[10], [10]],
+        wire_radius=[0.01, 0.04],
+    ),
+    "PEC ground": dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.4]])],
+        n_per_edge_per_wire=[[14]],
+        wire_radius=0.02,
+        ground_z=0.0,
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_G7_BSPLINE))
+def test_g7_bspline_ek_off_is_bit_identical_to_the_default(name):
+    kw = dict(_G7_BSPLINE[name], wavelength=LAM, degree=2)
+    z_def, c_def = BSplineSolver(**kw).compute_impedance()
+    z_off, c_off = BSplineSolver(**kw, extended_kernel=False).compute_impedance()
+    assert z_def == z_off, f"{name}: {z_def!r} vs {z_off!r}"
+    assert np.array_equal(c_def, c_off)
+
+
+def test_g7_bspline_swept_ek_off_is_bit_identical_to_the_default():
+    kw = dict(_G7_BSPLINE["free space"], wavelength=LAM, degree=2)
+    ks = 2 * np.pi / LAM * np.array([0.9, 1.0, 1.1])
+    assert np.array_equal(
+        BSplineSolver(**kw).compute_impedance_swept(ks),
+        BSplineSolver(**kw, extended_kernel=False).compute_impedance_swept(ks),
+    )
+
+
+def _hmatrix_pair(**over):
+    kw = dict(
+        wires=[_dipole_wire(2.5, x=-4.0), _dipole_wire(2.5, x=4.0)],
+        n_per_edge_per_wire=[[24], [24]],
+        wavelength=LAM,
+        wire_radius=0.05,
+        degree=2,
+        feeds=[(0, None, 1.0 + 0j), (1, None, 1.0 + 0j)],
+        aca_tol=1e-7,
+        **over,
+    )
+    return HMatrixSolver(**kw), HMatrixSolver(extended_kernel=False, **kw)
+
+
+@pytest.mark.parametrize("eta,want_far", [(0.0, False), (1.0, True)])
+def test_g7_hmatrix_ek_off_is_bit_identical_to_the_default(eta, want_far):
+    a, b = _hmatrix_pair(aca_eta=eta)
+    # Assert the path under test is the one actually taken: eta = 0 admits
+    # nothing, so every leaf is a dense near block; eta = 1 gives far blocks
+    # and therefore the ACA fill.
+    assert (len(a.build_hmatrix().far) > 0) == want_far
+    za, _ = a.compute_impedance()
+    zb, _ = b.compute_impedance()
+    assert np.array_equal(np.atleast_1d(za), np.atleast_1d(zb))
+
+
+@pytest.mark.parametrize("lattice_fft", [True, False])
+def test_g7_array_block_ek_off_is_bit_identical_to_the_default(lattice_fft):
+    kw = dict(
+        wires=[_dipole_wire(1.2, z=3.0 * i) for i in range(4)],
+        n_per_edge_per_wire=[[8]] * 4,
+        wavelength=LAM,
+        wire_radius=0.03,
+        degree=2,
+        feeds=[(i, None, 1.0 + 0j) for i in range(4)],
+        lattice_fft=lattice_fft,
+    )
+    reset_array_caches()
+    op_def = ArrayBlockSolver(**kw).build_array_blocks()
+    assert isinstance(op_def, LatticeArrayBlock) == lattice_fft
+    reset_array_caches()
+    op_off = ArrayBlockSolver(extended_kernel=False, **kw).build_array_blocks()
+    assert np.array_equal(op_def.to_dense(), op_off.to_dense())
+
+
+# --- G7b: and no EK code was entered to produce any of it ---------------
+
+_EK_ENTRY_POINTS = [
+    (_bk, "_ek_factor"),
+    (_bk, "_ek_reg_extra"),
+    (_bk, "D_ek_moment"),
+    (_bs, "_ek_axis_groups"),
+    (BSplineSolver, "_ek_spec"),
+]
+
+
+@pytest.fixture
+def ek_call_counts(monkeypatch):
+    """Counters on every entry point into the extended kernel."""
+    counts = {}
+    for owner, attr in _EK_ENTRY_POINTS:
+        counts[attr] = 0
+        original = getattr(owner, attr)
+
+        def wrapper(*args, _a=attr, _f=original, **kwargs):
+            counts[_a] += 1
+            return _f(*args, **kwargs)
+
+        monkeypatch.setattr(owner, attr, wrapper)
+    return counts
+
+
+def test_g7b_the_counters_fire_when_ek_is_on(ek_call_counts):
+    """The control for the three gates below: a monkeypatch that silently
+    failed to bind would make them pass vacuously."""
+    BSplineSolver(
+        **_G7_BSPLINE["free space"],
+        wavelength=LAM,
+        degree=2,
+        extended_kernel=True,
+    ).compute_impedance()
+    for attr, n in ek_call_counts.items():
+        assert n > 0, f"{attr} never called with EK on"
+
+
+@pytest.mark.parametrize("name", list(_G7_BSPLINE))
+def test_g7b_bspline_ek_off_enters_no_ek_code(ek_call_counts, name):
+    BSplineSolver(**_G7_BSPLINE[name], wavelength=LAM, degree=2).compute_impedance()
+    assert ek_call_counts == dict.fromkeys(ek_call_counts, 0)
+
+
+@pytest.mark.parametrize("eta", [0.0, 1.0])
+def test_g7b_hmatrix_ek_off_enters_no_ek_code(ek_call_counts, eta):
+    _hmatrix_pair(aca_eta=eta)[0].compute_impedance()
+    assert ek_call_counts == dict.fromkeys(ek_call_counts, 0)
+
+
+def test_g7b_array_block_ek_off_enters_no_ek_code(ek_call_counts):
+    for lattice_fft in (True, False):
+        reset_array_caches()
+        ArrayBlockSolver(
+            wires=[_dipole_wire(1.2, z=3.0 * i) for i in range(4)],
+            n_per_edge_per_wire=[[8]] * 4,
+            wavelength=LAM,
+            wire_radius=0.03,
+            degree=2,
+            feeds=[(i, None, 1.0 + 0j) for i in range(4)],
+            lattice_fft=lattice_fft,
+        ).build_array_blocks()
+    assert ek_call_counts == dict.fromkeys(ek_call_counts, 0)
+
+
+# ----------------------------------------------------------------------
+# Gate 8 — ArrayBlock's block-Toeplitz structure survives EK
+# ----------------------------------------------------------------------
+
+# `_build_lattice_operator` fills ONE dense block per lattice displacement
+# and reuses it at every site, which is only legitimate if eligibility is
+# translation-invariant. It is (#249 §6.5) — but the COLLINEAR array is the
+# case where cross-element pairs are genuinely EK-eligible, so it is the one
+# that would expose a distance- or position-dependent rule. The broadside
+# 4x4 is the complementary case (no cross-element pair is eligible) and
+# exercises the 2-D lattice bookkeeping.
+#
+# The per-pair path compresses each coupling block with ACA while the
+# lattice path keeps its displacement blocks exact, so the two agree only to
+# the ACA truncation — at the default `aca_tol=1e-4` that is 3.6e-9, with EK
+# off and on ALIKE (measured: 3.74e-9 / 3.64e-9 on the 4x1). This gate is
+# about structure, not compression, so it runs at `aca_tol=1e-9`, where the
+# two paths agree to 9.2e-19 (4x1) and 2.1e-17 (4x4) with EK on.
+
+_G8_DECKS = {
+    "4x1 collinear": [_dipole_wire(1.2, z=3.0 * i) for i in range(4)],
+    "4x4 broadside": [
+        _dipole_wire(1.2, x=4.0 * i, y=4.0 * j) for i in range(4) for j in range(4)
+    ],
+}
+
+
+@pytest.mark.parametrize("name", list(_G8_DECKS))
+def test_g8_lattice_dense_matches_the_per_pair_path_with_ek_on(name):
+    wires = _G8_DECKS[name]
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=[[6]] * len(wires),
+        wavelength=LAM,
+        wire_radius=0.03,
+        degree=2,
+        feeds=[(0, None, 1.0 + 0j)],
+        extended_kernel=True,
+        aca_tol=1e-9,
+    )
+    reset_array_caches()
+    lat = ArrayBlockSolver(
+        **kw, lattice_fft=True, require_lattice_fft=True
+    ).build_array_blocks()
+    assert isinstance(lat, LatticeArrayBlock)
+    reset_array_caches()
+    pairwise = ArrayBlockSolver(**kw, lattice_fft=False).build_array_blocks()
+    assert not isinstance(pairwise, LatticeArrayBlock)
+    A, B = lat.to_dense(), pairwise.to_dense()
+    rel = float(np.abs(A - B).max() / np.abs(B).max())
+    assert rel <= 1e-12, f"{name}: lattice vs per-pair {rel:.3e}"
+
+
+# ----------------------------------------------------------------------
+# Gate 15 — the solver family still agrees with itself under EK
+# ----------------------------------------------------------------------
+
+# The "nine kernel sites" risk: EK wired into some fills and not others
+# would leave each solver internally consistent and the family split. The
+# tolerances are the ones these pairs already hold at with EK OFF, measured
+# on this deck (two fat dipoles, Δ/a = 2.44, NS = 41, degree 2):
+#
+#   pair                                 EK off     EK on
+#   HMatrix (ACA, aca_tol=1e-7) / dense  3.30e-7    3.15e-7
+#   HMatrix (dense blocks)     / dense   5.17e-12   2.81e-12
+#   ArrayBlock                 / dense   3.26e-7    3.11e-7
+#
+# Both columns are asserted against the same bars, so the test is also its
+# own control: a bar that only the EK-off column could clear would mean the
+# family had drifted, not that the bar was loose.
+
+_G15_TOL = {"hmatrix-aca": 1e-6, "hmatrix-dense": 1e-10, "array-block": 1e-6}
+
+
+def _g15_common(extended_kernel):
+    return dict(
+        wires=[_dipole_wire(2.5, x=-6.0), _dipole_wire(2.5, x=6.0)],
+        n_per_edge_per_wire=[[41], [41]],
+        wavelength=LAM,
+        wire_radius=0.05,
+        degree=2,
+        feeds=[(0, None, 1.0 + 0j), (1, None, 1.0 + 0j)],
+        extended_kernel=extended_kernel,
+    )
+
+
+@pytest.mark.parametrize("extended_kernel", [False, True])
+def test_g15_solver_family_agrees_on_a_fat_deck(extended_kernel):
+    common = _g15_common(extended_kernel)
+    z_dense = np.atleast_1d(BSplineSolver(**common).compute_impedance()[0])
+
+    def rel(z):
+        return float(np.abs(np.atleast_1d(z) - z_dense).max() / np.abs(z_dense).max())
+
+    aca = HMatrixSolver(**common, aca_tol=1e-7)
+    assert len(aca.build_hmatrix().far) > 0  # the ACA fill really ran
+    got = {
+        "hmatrix-aca": rel(aca.compute_impedance()[0]),
+        "hmatrix-dense": rel(
+            HMatrixSolver(**common, aca_tol=1e-7, aca_eta=0.0).compute_impedance()[0]
+        ),
+    }
+    reset_array_caches()
+    got["array-block"] = rel(ArrayBlockSolver(**common).compute_impedance()[0])
+    for name, r in got.items():
+        assert r <= _G15_TOL[name], f"EK={extended_kernel} {name}: {r:.3e}"
+
+
+# ----------------------------------------------------------------------
+# The refusals (#249 §5) — and what is NOT refused
+# ----------------------------------------------------------------------
+
+
+def _refusal_kw(**over):
+    return dict(
+        wires=[_dipole_wire(2.5)],
+        n_per_edge_per_wire=[[8]],
+        wavelength=LAM,
+        wire_radius=0.02,
+        degree=2,
+        extended_kernel=True,
+        **over,
+    )
+
+
+def test_extended_kernel_refuses_singular_enrichment():
+    with pytest.raises(NotImplementedError, match="use_singular_enrichment"):
+        BSplineSolver(**_refusal_kw(use_singular_enrichment=True))
+
+
+@pytest.mark.parametrize("ground_model", ["refl-coef", "sommerfeld"])
+def test_extended_kernel_refuses_finite_ground(ground_model):
+    with pytest.raises(NotImplementedError, match="ground_eps"):
+        BSplineSolver(
+            **_refusal_kw(
+                ground_z=0.0, ground_eps=(13.0, 0.005), ground_model=ground_model
+            )
+        )
+
+
+def test_extended_kernel_serves_plain_pec_ground():
+    z, _ = BSplineSolver(**_refusal_kw(ground_z=-3.0)).compute_impedance()
+    assert np.isfinite(z)
+
+
+@pytest.mark.parametrize("cls", [HMatrixSolver, ArrayBlockSolver])
+def test_extended_kernel_refusals_reach_the_subclasses(cls):
+    with pytest.raises(NotImplementedError, match="ground_eps"):
+        cls(**_refusal_kw(ground_z=0.0, ground_eps=(13.0, 0.005)))
+
+
+# ----------------------------------------------------------------------
+# `extended_kernel` is part of both ArrayBlock cache keys (the #240 class)
+# ----------------------------------------------------------------------
+
+# The extended kernel is a different operator on the same geometry, radius,
+# degree, quadrature and k — every field the module-scope caches already
+# key on. Without joining the keys, an EK-on solve in the same process
+# would silently hand back the reduced-kernel operator (or self-block) that
+# an earlier EK-off solve built. Same staleness class as issue #240's
+# junction composition, so the same treatment and the same test.
+
+
+def _cache_key_kw(extended_kernel):
+    return dict(
+        wires=[_dipole_wire(1.2, z=3.0 * i) for i in range(2)],
+        n_per_edge_per_wire=[[8]] * 2,
+        wavelength=LAM,
+        wire_radius=0.03,
+        degree=2,
+        feeds=[(i, None, 1.0 + 0j) for i in range(2)],
+        extended_kernel=extended_kernel,
+    )
+
+
+def test_extended_kernel_joins_the_array_operator_cache_key():
+    reset_array_caches()
+    n0 = cache_stats()["operator_build"]
+    ops = [
+        ArrayBlockSolver(**_cache_key_kw(ek))._build_operator() for ek in (False, True)
+    ]
+    assert cache_stats()["operator_build"] - n0 == 2, "the EK build hit a stale entry"
+    A, B = (op.to_dense() for op in ops)
+    assert np.abs(A - B).max() / np.abs(A).max() > 1e-4, "EK did not move the operator"
+
+
+def test_extended_kernel_joins_the_self_block_cache_key():
+    reset_array_caches()
+    n0 = cache_stats()["self_block_build"]
+    blocks = []
+    for ek in (False, True):
+        sim = ArrayBlockSolver(**_cache_key_kw(ek))
+        ctx = sim._context()
+        part = sim.array_partition()
+        sim.build_array_blocks()
+        key = sim._self_block_key(ctx, part.seg_groups[0], part.groups[0], sim.k)
+        blocks.append(key)
+    assert cache_stats()["self_block_build"] - n0 == 2
+    assert blocks[0] != blocks[1], "the EK self-block would alias the reduced one"
+
+
+# ----------------------------------------------------------------------
+# The end-to-end shift, measured but NOT gated here
+# ----------------------------------------------------------------------
+
+# The engine-level shift gates (δZ against nec2c's own δZ column, against
+# the sinusoidal basis at the same mesh, the PEC-ground parity) are unit 3's
+# and belong with the LADDER pins in tests/test_extended_kernel.py. What is
+# recorded here is the one measurement that says the wiring above produced
+# a shift of the right size and sign before anyone formalises it — the
+# #233 ladder deck at Δ/a = 2.44 (L = 5 m, NS = 41, a = 0.05, degree 2),
+# against nec2c's pinned EK-OFF 101.010 + 50.114j and EK-ON 98.660 + 48.113j:
+#
+#   feed_model   Z(EK off)             Z(EK on)              δZ(bspline)
+#   point        100.676 + 46.943j     98.128 + 45.123j      -2.548 - 1.820j
+#   segment       98.824 + 48.489j     96.727 + 46.339j      -2.097 - 2.150j
+#
+#   nec2c                                                     -2.350 - 2.001j
+#
+# Both components have nec2c's sign, |δ| is within 3 % of nec2c's, and the
+# vector mismatch |δ_bsp - δ_nec|/|δ_nec| is 8.7 % (point) / 9.5 % (segment)
+# — comfortably inside the 30 % cross-basis bar #249 §7.2 derived for the
+# shift gate. The absolute-Z residual is essentially unmoved (2.83 % → 2.77 %
+# against the matching nec2c column), which is the design's point: at this
+# mesh the EK shift and the bspline-vs-NEC basis difference are the same
+# size, so only the SHIFT is a measurement of the kernel.
+
+
+# ----------------------------------------------------------------------
+# The swept paths serve EK too (#249 §5, the swept-k row)
+# ----------------------------------------------------------------------
+
+# EK adds only k-independent geometry to the reg-geometry dict (the a-powers
+# of R) plus a k-dependent factor on the phase step, so nothing about the
+# swept hoists changes — but there are three separate swept routes to get
+# wrong: the fully batched chunk builder (`_swept_batched_z_chunks`, which
+# has its own offedge and image fills), the per-k `compute_impedance` loop,
+# and `_port_solutions_swept`. Each is checked against its own per-k solve
+# with EK on, so a spec dropped on any one of them shows up as a mismatch
+# rather than as a silently reduced sweep.
+
+_SWEPT_DECKS = {
+    "free space": dict(wires=[_dipole_wire(2.5)], n_per_edge_per_wire=[[16]]),
+    "PEC ground": dict(
+        wires=[np.array([[0.0, 0.0, 0.2], [0.0, 0.0, 2.6]])],
+        n_per_edge_per_wire=[[14]],
+        ground_z=0.0,
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(_SWEPT_DECKS))
+def test_swept_impedance_with_ek_matches_the_per_k_solves(name):
+    kw = dict(
+        _SWEPT_DECKS[name],
+        wavelength=LAM,
+        wire_radius=0.05,
+        degree=2,
+        extended_kernel=True,
+    )
+    ks = 2 * np.pi / LAM * np.array([0.85, 1.0, 1.15])
+    swept = BSplineSolver(**kw).compute_impedance_swept(ks)
+    sim = BSplineSolver(**kw)
+    with sim._k_restored():
+        per_k = []
+        for kk in ks:
+            sim._set_k(kk)
+            per_k.append(sim.compute_impedance()[0])
+    rel = np.abs(swept - np.asarray(per_k)) / np.abs(per_k)
+    assert rel.max() <= 1e-11, f"{name}: swept vs per-k {rel.max():.3e}"
+
+
+def test_swept_port_solutions_with_ek_match_the_per_k_solves():
+    kw = dict(
+        _SWEPT_DECKS["free space"],
+        wavelength=LAM,
+        wire_radius=0.05,
+        degree=2,
+        extended_kernel=True,
+    )
+    ks = 2 * np.pi / LAM * np.array([0.9, 1.1])
+    swept = [ps.y[0, 0] for ps in BSplineSolver(**kw)._port_solutions_swept(ks)]
+    sim = BSplineSolver(**kw)
+    with sim._k_restored():
+        per_k = []
+        for kk in ks:
+            sim._set_k(kk)
+            per_k.append(sim.compute_port_solution().y[0, 0])
+    rel = np.abs(np.asarray(swept) - np.asarray(per_k)) / np.abs(per_k)
+    assert rel.max() <= 1e-11, f"swept ports vs per-k {rel.max():.3e}"
