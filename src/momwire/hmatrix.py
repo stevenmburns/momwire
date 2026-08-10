@@ -42,7 +42,7 @@ import scipy.sparse as sp
 from scipy.linalg import solve_triangular
 from scipy.sparse.linalg import splu
 
-from .bspline import BSplineSolver, _SplineBasis
+from .bspline import BSplineSolver, _SplineBasis, _EK_SAME_EDGE, _ek_slice
 from ._port_solution import PortSolution
 from . import _ground_refl, _sommerfeld
 from ._bspline_kernels import (
@@ -394,7 +394,9 @@ class HMatrixSolver(BSplineSolver):
         straight edge and the reg geometry depends only on arc differences, so
         the sub-range gives exactly the corresponding entries of the full
         edge block. Cached per (edge_id, lo, hi); the per-k cache is reset in
-        `zblock` when k changes.
+        `zblock` when k changes. `extended_kernel` is a solver-level
+        constant and this cache lives on the solver, so it needs no place in
+        the key.
         """
         cache = self._hm_se_cache
         key = (edge_id, lo, hi)
@@ -402,12 +404,15 @@ class HMatrixSolver(BSplineSolver):
         if blk is not None:
             return blk
         # An edge lives on one wire, so the whole band uses that wire's
-        # radius (stevenmburns/momwire#147).
+        # radius (stevenmburns/momwire#147) — and, under EK, is eligible in
+        # its entirety, sub-range included (a sub-range of one straight run
+        # is still one straight run).
         a = float(ctx["edge_a"][edge_id])
         d = self.degree
+        ek = _EK_SAME_EDGE if self.extended_kernel else None
         sub_arc = ctx["edge_arc"][edge_id][lo : hi + 2]
-        A_st = _seg_seg_static_moments(sub_arc, a, max_d=d)
-        A_reg = _seg_seg_reg_moments(sub_arc, a, k, max_d=d, n_qp=self.n_qp_pair)
+        A_st = _seg_seg_static_moments(sub_arc, a, max_d=d, ek=ek)
+        A_reg = _seg_seg_reg_moments(sub_arc, a, k, max_d=d, n_qp=self.n_qp_pair, ek=ek)
         blk = A_st + A_reg
         cache[key] = blk
         return blk
@@ -436,6 +441,8 @@ class HMatrixSolver(BSplineSolver):
 
         # Per-OBSERVER-row radius (stevenmburns/momwire#147); the kernel
         # helper collapses a uniform slice back to the scalar fast path.
+        # The EK labels are a whole-mesh array (they have to be globally
+        # comparable), restricted here to the block's own segment lists.
         Jsub = _seg_seg_full_moments_offedge(
             seg_l[seg_I],
             seg_r[seg_I],
@@ -445,6 +452,11 @@ class HMatrixSolver(BSplineSolver):
             k,
             d,
             self.n_qp_pair,
+            ek=_ek_slice(
+                self._ek_spec(ctx["geom"]) if self.extended_kernel else None,
+                rows=seg_I,
+                cols=seg_J,
+            ),
         )
 
         if not same_edge:
@@ -595,7 +607,9 @@ class HMatrixSolver(BSplineSolver):
         loc_of_J = {int(s): i for i, s in enumerate(seg_J)}
 
         # Observer rows are the REAL test segments — the per-observer
-        # radius convention applies to the image block unchanged.
+        # radius convention applies to the image block unchanged. EK scores
+        # eligibility against the MIRRORED source geometry (`mirror=True`),
+        # the block form of `BSplineSolver._build_J_image_blocks`.
         Jsub = _seg_seg_full_moments_offedge(
             seg_l[seg_I],
             seg_r[seg_I],
@@ -605,6 +619,13 @@ class HMatrixSolver(BSplineSolver):
             k,
             d,
             self.n_qp_pair,
+            ek=_ek_slice(
+                self._ek_spec(ctx["geom"], mirror=True)
+                if self.extended_kernel
+                else None,
+                rows=seg_I,
+                cols=seg_J,
+            ),
         )
         supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
         supp_J_local = np.vectorize(loc_of_J.__getitem__)(supp_seg[J])
@@ -865,6 +886,10 @@ class HMatrixSolver(BSplineSolver):
         loc_of_I = {int(s): i for i, s in enumerate(seg_I)}
         loc_of_J = {int(s): i for i, s in enumerate(seg_J)}
 
+        # Threaded for symmetry with `_zblock_image`, though unreachable in
+        # phase 1: `extended_kernel` + `ground_eps` is refused in
+        # `BSplineSolver.__init__`, so `ek` here is always None until #249
+        # follow-up A lifts the refusal.
         Jsub = _seg_seg_full_moments_offedge(
             seg_l[seg_I],
             seg_r[seg_I],
@@ -874,6 +899,13 @@ class HMatrixSolver(BSplineSolver):
             k,
             d,
             self.n_qp_pair,
+            ek=_ek_slice(
+                self._ek_spec(ctx["geom"], mirror=True)
+                if self.extended_kernel
+                else None,
+                rows=seg_I,
+                cols=seg_J,
+            ),
         )
         supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
         supp_J_local = np.vectorize(loc_of_J.__getitem__)(supp_seg[J])
@@ -1245,7 +1277,17 @@ class HMatrixSolver(BSplineSolver):
         block whose combined rank no longer compresses falls back to dense in
         the caller, which is correct (the image stays as low-rank as the real
         block for an antenna above the plane — reflection only increases the
-        cluster separation)."""
+        cluster separation).
+
+        Under `extended_kernel` the C++ assemblers are bypassed outright:
+        they transcribe the reduced kernel, so the whole EK story for the
+        ACA fill is this one line forcing the numpy `zblock(...,
+        same_edge=False)` branch, which routes through `_moment_subtensor`
+        and is already EK-aware. That is the pre-#245-style cost; #249
+        follow-up B adds the C++ twins. Every ArrayBlock coupling fill
+        (`_coupling_aca`, `_build_lattice_operator`) comes through here, so
+        they inherit the decision rather than repeating it."""
+        use_accel = use_accel and not self.extended_kernel
         if use_accel:
             row_f, col_f, dense_f = self._offedge_block_evaluators(ctx, I, J, k)
         else:
