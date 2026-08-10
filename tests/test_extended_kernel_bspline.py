@@ -1026,27 +1026,41 @@ def ek_call_counts(monkeypatch):
 
 # The two entry points reachable ONLY from the same-edge kernels: #270 unit 1
 # moved those to C++, so with the twins present they are legitimately never
-# entered. The other three are still reached from the off-edge fill (which is
-# unit 2's) and from the solver itself.
+# entered. `_ek_factor` is reached from EITHER numpy fallback — the same-edge
+# reg kernel's `_ek_reg_kernel` calls it, and so does the off-edge fill's own
+# `ek is not None` branch — so #270 unit 2 giving the off-edge fill a C++
+# path too means zero calls now requires BOTH backends to be on C++, not just
+# one. `_ek_axis_groups` and `_ek_spec` are still always entered: unit 2
+# doesn't touch label computation, only what consumes the labels.
 _SAME_EDGE_ONLY_EK_ENTRY_POINTS = {"_ek_reg_extra", "D_ek_moment"}
+_DUAL_BACKEND_EK_ENTRY_POINTS = {"_ek_factor"}
 
 
+@pytest.mark.parametrize("offedge", ["numpy", "default"])
 @pytest.mark.parametrize("same_edge", ["numpy", "default"])
-def test_g7b_the_counters_fire_when_ek_is_on(ek_call_counts, monkeypatch, same_edge):
+def test_g7b_the_counters_fire_when_ek_is_on(
+    ek_call_counts, monkeypatch, same_edge, offedge
+):
     """The control for the three gates below: a monkeypatch that silently
     failed to bind would make them pass vacuously.
 
-    Parametrized over the same-edge backend rather than narrowed (#270 unit
-    1): with the C++ twins forced off every counter must fire, which is the
-    original claim; with them live the two same-edge-only counters must be
-    exactly zero, which is the dispatch claim. Either way each counter is
-    asserted, so a dead monkeypatch is still caught.
+    Parametrized over BOTH the same-edge and (#270 unit 2) off-edge
+    backends rather than narrowed: with a pair of C++ twins forced off,
+    every counter their scope covers must fire; with them live, the
+    counters exclusive to that scope must be exactly zero. Either way each
+    counter is asserted, so a dead monkeypatch is still caught.
     """
     if same_edge == "numpy":
         monkeypatch.setattr(_bk, "_HAVE_BSPLINE_STATIC_EK_ACCEL", False)
         monkeypatch.setattr(_bk, "_HAVE_BSPLINE_REG_SWEPT_EK_ACCEL", False)
+    if offedge == "numpy":
+        monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+        monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL", False)
     cpp_same_edge = (
         _bk._HAVE_BSPLINE_STATIC_EK_ACCEL and _bk._HAVE_BSPLINE_REG_SWEPT_EK_ACCEL
+    )
+    cpp_offedge = (
+        _bk._HAVE_BSPLINE_OFFEDGE_EK_ACCEL and _bk._HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL
     )
     BSplineSolver(
         **_G7_BSPLINE["free space"],
@@ -1057,6 +1071,11 @@ def test_g7b_the_counters_fire_when_ek_is_on(ek_call_counts, monkeypatch, same_e
     for attr, n in ek_call_counts.items():
         if cpp_same_edge and attr in _SAME_EDGE_ONLY_EK_ENTRY_POINTS:
             assert n == 0, f"{attr}: numpy entered despite the C++ same-edge twin"
+        elif attr in _DUAL_BACKEND_EK_ENTRY_POINTS:
+            if cpp_same_edge and cpp_offedge:
+                assert n == 0, f"{attr}: numpy entered despite both C++ twins"
+            else:
+                assert n > 0, f"{attr} never called with EK on"
         else:
             assert n > 0, f"{attr} never called with EK on"
 
@@ -1954,6 +1973,12 @@ _U1_ACCEL_ENTRY_POINTS = (
     "seg_seg_static_moments_bspline_uniform_ek",
     "seg_seg_reg_moments_bspline_swept",
     "seg_seg_reg_moments_bspline_swept_ek",
+    # The off-edge pair (#270 unit 2): both the reduced symbols (so a
+    # dispatch probe can pin they stay idle under EK) and the EK twins.
+    "seg_seg_full_moments_bspline",
+    "seg_seg_full_moments_bspline_swept",
+    "seg_seg_full_moments_bspline_ek",
+    "seg_seg_full_moments_bspline_swept_ek",
 )
 
 
@@ -2226,7 +2251,15 @@ def test_u1_static_ek_twin_adds_exactly_d_and_stays_toeplitz(degree):
 
 
 @pytestmark_u1
-def test_u1_ek_on_same_edge_is_served_by_cpp(accel_spy, ek_call_counts):
+def test_u1_ek_on_same_edge_is_served_by_cpp(accel_spy, ek_call_counts, monkeypatch):
+    # Off-edge gained its own C++ EK twins in #270 unit 2; force them off so
+    # this probe still tests what unit 1 built it to test — that the
+    # SAME-EDGE twins are what is entered, with the off-edge numpy
+    # `_ek_factor` call as the scoping control below. Unit 2's own probes
+    # (`test_u2_*`) cover the off-edge C++ path this monkeypatch disables
+    # here.
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL", False)
     BSplineSolver(
         **_G7_BSPLINE["free space"],
         wavelength=LAM,
@@ -2242,7 +2275,7 @@ def test_u1_ek_on_same_edge_is_served_by_cpp(accel_spy, ek_call_counts):
     # blocks go to the EK twins, not to the reduced kernel plus a fixup.
     assert accel_spy.counts["seg_seg_static_moments_bspline_uniform"] == 0
     assert accel_spy.counts["seg_seg_reg_moments_bspline_swept"] == 0
-    # Off-edge is still numpy in unit 1 — the control that this probe is
+    # Off-edge is forced to numpy above — the control that this probe is
     # scoped, not merely lucky.
     assert ek_call_counts["_ek_factor"] > 0
 
@@ -2261,3 +2294,412 @@ def test_u1_missing_symbols_fall_back_to_numpy(numpy_same_edge, accel_spy):
     assert np.isfinite(z)
     assert accel_spy.counts["seg_seg_static_moments_bspline_uniform_ek"] == 0
     assert accel_spy.counts["seg_seg_reg_moments_bspline_swept_ek"] == 0
+
+
+# ======================================================================
+# momwire#270 UNIT 2 — the C++ OFF-EDGE extended-kernel twins
+# ======================================================================
+#
+# Unit 1 landed the SAME-EDGE pair, where a block is eligible in its
+# entirety. Off-edge eligibility is a property of the (i, j) SEGMENT PAIR
+# (`group_i[i] == group_j[j]`, momwire#249 §4.1), evaluated once per pair
+# and applied to every quadrature sub-pair inside it. The twins here —
+# `seg_seg_full_moments_bspline_ek` / `_swept_ek` — take the per-segment
+# group labels as int64 arrays in addition to the reduced kernel's own
+# contract, and apply NEC Eq 89's coaxial factor pair by pair rather than
+# block-wide. The fused H-matrix assemblers and the ACA re-enable are
+# unit 3's.
+#
+# WHAT IS AND IS NOT COMPARED — same rule as unit 1: cross-backend (C++ vs
+# numpy) comparisons are relative-tolerance, never bit equality; EK-off
+# stays bit-exact within one backend, which `test_g7*` / `test_g7b*` above
+# already cover.
+#
+# ADAPTED TESTS (dispatch rerouted by this unit — both listed here so the
+# change is traceable from one place):
+#
+#   test_g7b_the_counters_fire_when_ek_is_on — was parametrized only over
+#     the same-edge backend; now parametrized over the off-edge backend
+#     too, because `_ek_factor` stopped being same-edge-exclusive (the
+#     off-edge fill's own `ek is not None` branch calls it too, and now has
+#     a C++ alternative).
+#
+#   test_u1_ek_on_same_edge_is_served_by_cpp — forces the new off-edge
+#     flags off so its "off-edge is still numpy" scoping control keeps
+#     meaning what unit 1 wrote it to mean.
+#
+# Nothing else needed adapting: every other unit-1/#249 test either does
+# not touch the off-edge fill, or already parametrizes over "numpy vs
+# whatever the box has" in a way this unit's new C++ path falls naturally
+# into (e.g. `test_swept_offedge_moments_with_ek_match_the_per_k_path`,
+# which stayed green at its ORIGINAL bit-exact tolerance once both the
+# single-k and swept calls started reaching the same C++ backend).
+
+_U2_OFFEDGE_EK_ACCEL = _bk._HAVE_BSPLINE_OFFEDGE_EK_ACCEL
+_U2_OFFEDGE_SWEPT_EK_ACCEL = _bk._HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL
+_U2_ACCEL = _U2_OFFEDGE_EK_ACCEL and _U2_OFFEDGE_SWEPT_EK_ACCEL
+
+# Measured worsts on this box (degree in {1, 2}, k in _U2_KS, scalar and
+# per-row radius, over the mixed-eligibility fixture below): 3.7e-16 single
+# k, 3.7e-16 swept, 1.8e-16 all-eligible — a full order tighter than unit
+# 1's same-edge twins (no static/reg split here, so fewer summed terms),
+# but the bar stays at the 1e-13 class this file's own cross-backend note
+# calls for rather than chasing this box's measurement.
+U2_AGREEMENT = 1e-13
+
+pytestmark_u2 = pytest.mark.skipif(
+    not _U2_ACCEL, reason="extension built without the #270 off-edge EK twins"
+)
+
+_U2_NQP = 4
+_U2_KS = {"k/2": 0.5 * K, "k": K, "2k": 2.0 * K}
+
+
+@pytest.fixture
+def numpy_offedge(monkeypatch):
+    """Force the off-edge EK kernels back onto their numpy paths."""
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL", False)
+
+
+def _u2_mixed_geo(n_i=4, n_co=3, n_perp=2, radius=0.05, gap=5.0):
+    """Observer run + a coaxial continuation + a perpendicular run — "a
+    collinear pair of edges plus a perpendicular edge", the mixed-
+    eligibility fixture shape the design calls for. One call exercises both
+    mask outcomes: `lo_j[:n_co]` is coaxial with the observer run and
+    extends; `lo_j[n_co:]` is offset and does not.
+    """
+    lo_i, hi_i, _, _ = _straight(n_i, radius)
+    lo_co, hi_co, _, _ = _straight(n_co, radius, origin=(0.0, 0.0, gap))
+    lo_off, hi_off, _, _ = _straight(n_perp, radius, origin=(1.0, 0.0, 0.0))
+    lo_j = np.vstack([lo_co, lo_off])
+    hi_j = np.vstack([hi_co, hi_off])
+    group_i = np.zeros(n_i, dtype=np.int64)
+    group_j = np.concatenate(
+        [np.zeros(n_co, dtype=np.int64), np.ones(n_perp, dtype=np.int64)]
+    )
+    return lo_i, hi_i, lo_j, hi_j, group_i, group_j
+
+
+def _u2_gl():
+    gl_xi, gl_w = np.polynomial.legendre.leggauss(_U2_NQP)
+    return 0.5 * (gl_xi + 1.0), 0.5 * gl_w
+
+
+# ----------------------------------------------------------------------
+# U2a — the off-edge twins agree with numpy's `ek is not None` branch
+# ----------------------------------------------------------------------
+
+
+@pytestmark_u2
+@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize("kname", list(_U2_KS))
+@pytest.mark.parametrize("radius_kind", ["scalar", "per-row"])
+def test_u2_offedge_ek_cpp_matches_numpy_single_k(
+    numpy_offedge, degree, kname, radius_kind
+):
+    lo_i, hi_i, lo_j, hi_j, gi, gj = _u2_mixed_geo()
+    a = (
+        0.05
+        if radius_kind == "scalar"
+        # Two runs on the observer side (momwire#147): the C++ path
+        # dispatches one call per constant-radius run and slices `group_i`
+        # the same way — this is what proves that slice is correct.
+        else np.array([0.05, 0.05, 0.02, 0.02])
+    )
+    spec = _EK(a=None, group_i=gi, group_j=gj)
+    k = _U2_KS[kname]
+    ref = _seg_seg_full_moments_offedge(
+        lo_i, hi_i, lo_j, hi_j, a, k, degree, _U2_NQP, ek=spec
+    )
+    _bk._HAVE_BSPLINE_OFFEDGE_EK_ACCEL = _U2_OFFEDGE_EK_ACCEL
+    _bk._HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL = _U2_OFFEDGE_SWEPT_EK_ACCEL
+    got = _seg_seg_full_moments_offedge(
+        lo_i, hi_i, lo_j, hi_j, a, k, degree, _U2_NQP, ek=spec
+    )
+    rel = _u1_rel(got, ref)
+    assert rel <= U2_AGREEMENT, f"degree {degree}, {kname}, {radius_kind}: {rel:.3e}"
+
+
+@pytestmark_u2
+@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize("radius_kind", ["scalar", "per-row"])
+def test_u2_offedge_ek_cpp_matches_numpy_swept(numpy_offedge, degree, radius_kind):
+    lo_i, hi_i, lo_j, hi_j, gi, gj = _u2_mixed_geo()
+    a = 0.05 if radius_kind == "scalar" else np.array([0.05, 0.05, 0.02, 0.02])
+    spec = _EK(a=None, group_i=gi, group_j=gj)
+    ks = np.array(list(_U2_KS.values()))
+    ref = _seg_seg_full_moments_offedge_swept(
+        lo_i, hi_i, lo_j, hi_j, a, ks, degree, _U2_NQP, ek=spec
+    )
+    _bk._HAVE_BSPLINE_OFFEDGE_EK_ACCEL = _U2_OFFEDGE_EK_ACCEL
+    _bk._HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL = _U2_OFFEDGE_SWEPT_EK_ACCEL
+    got = _seg_seg_full_moments_offedge_swept(
+        lo_i, hi_i, lo_j, hi_j, a, ks, degree, _U2_NQP, ek=spec
+    )
+    rel = _u1_rel(got, ref)
+    assert rel <= U2_AGREEMENT, f"degree {degree}, {radius_kind}: {rel:.3e}"
+
+
+# ----------------------------------------------------------------------
+# U2b — the MASK is the risk: mutation checks from both ends
+# ----------------------------------------------------------------------
+#
+# `test_offedge_ek_extends_only_the_coaxial_pairs` above pins the numpy
+# mask; these two pin the C++ one, calling the extension directly so the
+# claim is about the kernel itself rather than about Python dispatch (that
+# is U2e's job). Bracketing from both ends catches mutations a single
+# direction would miss: a mask that is always True passes an all-eligible
+# check vacuously; a mask that is always False passes an all-ineligible one
+# the same way. Only both together pin `(gi == gj) && (gi >= 0)` exactly.
+
+
+@pytestmark_u2
+@pytest.mark.parametrize("degree", [1, 2])
+def test_u2_all_ineligible_labels_reduce_to_the_reduced_kernel(degree):
+    """Every pair declared ineligible (`group_i`/`group_j` all -1, never
+    equal to each other by the `>= 0` guard) must match the C++ REDUCED
+    kernel bit for bit: with `eligible` false the twin executes the exact
+    same G_re/G_im/wuwu sequence the reduced kernel does (measured: 0.0
+    relative on this box, every degree)."""
+    lo_i, hi_i, lo_j, hi_j, _gi, _gj = _u2_mixed_geo()
+    a = 0.05
+    n_i, n_j = lo_i.shape[0], lo_j.shape[0]
+    t01, w01 = _u2_gl()
+    reduced = _bk._acc.seg_seg_full_moments_bspline(
+        lo_i, hi_i, lo_j, hi_j, a * a, K, degree, t01, w01
+    )
+    ineligible = _bk._acc.seg_seg_full_moments_bspline_ek(
+        lo_i,
+        hi_i,
+        lo_j,
+        hi_j,
+        a * a,
+        K,
+        degree,
+        t01,
+        w01,
+        np.full(n_i, -1, dtype=np.int64),
+        np.full(n_j, -1, dtype=np.int64),
+        a,
+    )
+    assert np.array_equal(ineligible, reduced), f"degree {degree}"
+
+
+@pytestmark_u2
+@pytest.mark.parametrize("degree", [1, 2])
+def test_u2_all_eligible_labels_apply_the_full_coaxial_factor(degree):
+    """Every pair declared eligible (`group_i`/`group_j` all 0) must match
+    the numpy oracle computed with the SAME-EDGE convention for "whole
+    block eligible" (`group_i=group_j=None`) — the off-edge fill's version
+    of a fully-extended block."""
+    lo_i, hi_i, lo_j, hi_j, _gi, _gj = _u2_mixed_geo()
+    a = 0.05
+    n_i, n_j = lo_i.shape[0], lo_j.shape[0]
+    whole = _EK(a=None, group_i=None, group_j=None)
+    oracle = _seg_seg_full_moments_offedge(
+        lo_i, hi_i, lo_j, hi_j, a, K, degree, _U2_NQP, ek=whole
+    )
+    t01, w01 = _u2_gl()
+    got = _bk._acc.seg_seg_full_moments_bspline_ek(
+        lo_i,
+        hi_i,
+        lo_j,
+        hi_j,
+        a * a,
+        K,
+        degree,
+        t01,
+        w01,
+        np.zeros(n_i, dtype=np.int64),
+        np.zeros(n_j, dtype=np.int64),
+        a,
+    )
+    rel = _u1_rel(got, oracle)
+    assert rel <= U2_AGREEMENT, f"degree {degree}: {rel:.3e}"
+
+
+# ----------------------------------------------------------------------
+# U2c — end to end: the same EK-on solve, both off-edge backends
+# ----------------------------------------------------------------------
+#
+# Measured relative worsts on Z (both well inside `ACCEL_AGREEMENT_SOLVE`,
+# unit 1's own solve-level bar): T-junction 1.5e-15, T-junction swept
+# 5.3e-16, PEC ground (image route) 3.6e-16.
+
+# A "T" junction: two collinear arms through the joint (coaxial, eligible)
+# plus a perpendicular third arm (not coaxial) — the bent-deck-with-
+# junction shape the design calls for, exercised through the solver's own
+# KCL/basis-polynomial machinery rather than through a hand-built mask.
+_U2_JUNCTION_DECK = dict(
+    wires=[
+        np.array([[0.0, 0.0, -2.0], [0.0, 0.0, 0.0]]),
+        np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
+        np.array([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+    ],
+    n_per_edge_per_wire=[[8], [8], [8]],
+    wire_radius=0.02,
+    junctions=[[(0, "end"), (1, "start"), (2, "start")]],
+)
+
+
+@pytestmark_u2
+def test_u2_end_to_end_solve_agrees_with_the_numpy_offedge_path(monkeypatch):
+    kw = dict(_U2_JUNCTION_DECK, wavelength=LAM, degree=2, extended_kernel=True)
+    z_cpp, c_cpp = BSplineSolver(**kw).compute_impedance()
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL", False)
+    z_npy, c_npy = BSplineSolver(**kw).compute_impedance()
+    rel = abs(z_cpp - z_npy) / abs(z_npy)
+    assert rel <= ACCEL_AGREEMENT_SOLVE, f"{z_cpp!r} vs {z_npy!r} ({rel:.3e})"
+    assert _u1_rel(c_cpp, c_npy) <= ACCEL_AGREEMENT_SOLVE
+
+
+@pytestmark_u2
+def test_u2_end_to_end_swept_solve_agrees_with_the_numpy_offedge_path(monkeypatch):
+    kw = dict(_U2_JUNCTION_DECK, wavelength=LAM, degree=2, extended_kernel=True)
+    ks = 2 * np.pi / LAM * np.array([0.9, 1.0, 1.1])
+    z_cpp = np.asarray(BSplineSolver(**kw).compute_impedance_swept(ks))
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL", False)
+    z_npy = np.asarray(BSplineSolver(**kw).compute_impedance_swept(ks))
+    assert _u1_rel(z_cpp, z_npy) <= ACCEL_AGREEMENT_SOLVE
+
+
+@pytestmark_u2
+def test_u2_end_to_end_pec_ground_solve_agrees_with_the_numpy_offedge_path(monkeypatch):
+    """The IMAGE route (`_IMAGE_DECK`, #249's own fixture): the mirrored
+    spec's labels flow through `_ek_slice` into the same off-edge fill, so
+    this is also the PEC-ground case the design calls out."""
+    kw = dict(_IMAGE_DECK, extended_kernel=True)
+    z_cpp, c_cpp = BSplineSolver(**kw).compute_impedance()
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL", False)
+    z_npy, c_npy = BSplineSolver(**kw).compute_impedance()
+    rel = abs(z_cpp - z_npy) / abs(z_npy)
+    assert rel <= ACCEL_AGREEMENT_SOLVE, f"{z_cpp!r} vs {z_npy!r} ({rel:.3e})"
+    assert _u1_rel(c_cpp, c_npy) <= ACCEL_AGREEMENT_SOLVE
+
+
+# --- and that the C++ kernel really does receive the JOINT image labels ---
+
+
+@pytestmark_u2
+def test_u2_image_tensor_route_serves_the_joint_labels_to_cpp(
+    offedge_ek_spy, accel_spy
+):
+    """`_build_J_image_blocks` — the no-accelerator-assembler fallback
+    route (#249's own fixture: `_IMAGE_DECK` has opposite mirror
+    eligibility on its two wires, so a free-space spec is distinguishable
+    from a mirrored one). `offedge_ek_spy` already pins that the JOINT
+    real+image labels reach `_seg_seg_full_moments_offedge`'s `ek=`
+    kwarg (#249); this pins that they then reach the C++ symbol rather
+    than silently staying on numpy."""
+    sim = _image_solver(BSplineSolver)
+    geom = sim._build_geometry()
+    offedge_ek_spy.clear()
+    sim._build_J_image_blocks(geom, sim.k)
+    assert len(offedge_ek_spy) == 1
+    _assert_mirrored_spec(offedge_ek_spy[0], sim)
+    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] > 0
+
+
+@pytestmark_u2
+def test_u2_image_chunked_route_serves_the_joint_labels_to_cpp(
+    offedge_ek_spy, accel_spy
+):
+    """`_accumulate_Z_image_chunked` — the route a DEFAULT grounded EK-on
+    solve actually takes."""
+    sim = _image_solver(BSplineSolver)
+    geom = sim._build_geometry()
+    supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    w_A = sim._image_tangent_dot(geom["tangents"]).astype(np.complex128)
+    Z = np.zeros((supp_seg.shape[0],) * 2, dtype=np.complex128, order="F")
+    offedge_ek_spy.clear()
+    sim._accumulate_Z_image_chunked(
+        Z, geom, sim.k, supp_seg, polys, w_A, np.ones_like(w_A)
+    )
+    assert offedge_ek_spy, "no image fill happened"
+    n_segs = geom["n_segs_total"]
+    row0 = 0
+    for ek in offedge_ek_spy:
+        rows = np.arange(row0, row0 + len(ek.group_i))
+        _assert_mirrored_spec(ek, sim, rows=rows)
+        row0 += len(ek.group_i)
+    assert row0 == n_segs, "the observer chunks did not cover the mesh"
+    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] > 0
+
+
+# ----------------------------------------------------------------------
+# U2d — EK-OFF armor: the off-edge twins are unreachable and inert
+# ----------------------------------------------------------------------
+
+
+@pytestmark_u2
+@pytest.mark.parametrize("name", list(_G7_BSPLINE))
+def test_u2_ek_off_never_reaches_the_offedge_ek_entry_points(accel_spy, name):
+    BSplineSolver(**_G7_BSPLINE[name], wavelength=LAM, degree=2).compute_impedance()
+    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] == 0
+    assert accel_spy.counts["seg_seg_full_moments_bspline_swept_ek"] == 0
+    assert accel_spy.counts["seg_seg_full_moments_bspline"] > 0
+
+
+@pytestmark_u2
+def test_u2_missing_symbols_fall_back_to_numpy(numpy_offedge, accel_spy):
+    """Graceful degradation: an extension built before #270 unit 2 has
+    neither off-edge twin, the `_HAVE_*` flags are False, and the EK fill
+    is the numpy path — same answer, no AttributeError."""
+    z, _ = BSplineSolver(
+        **_G7_BSPLINE["mixed radii"],
+        wavelength=LAM,
+        degree=2,
+        extended_kernel=True,
+    ).compute_impedance()
+    assert np.isfinite(z)
+    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] == 0
+    assert accel_spy.counts["seg_seg_full_moments_bspline_swept_ek"] == 0
+
+
+# ----------------------------------------------------------------------
+# U2e — dispatch probes: EK-on off-edge really is served by C++
+# ----------------------------------------------------------------------
+
+
+@pytestmark_u2
+def test_u2_ek_on_offedge_is_served_by_cpp(accel_spy, ek_call_counts):
+    """ "mixed radii" (#249's own G7 deck: two offset dipoles at different
+    wire_radius) exercises both the off-edge C++ path AND its mixed-radius
+    row-splitting in one solve — the two dipoles are parallel and offset,
+    so every cross-dipole pair is ineligible and every same-edge block is
+    (unit 1's territory), which is exactly why this deck is also this
+    unit's negative-scoping control below."""
+    BSplineSolver(
+        **_G7_BSPLINE["mixed radii"],
+        wavelength=LAM,
+        degree=2,
+        extended_kernel=True,
+    ).compute_impedance()
+    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] > 0
+    assert accel_spy.counts["seg_seg_full_moments_bspline"] == 0
+    # ... and the numpy off-edge closed form was not touched — with BOTH
+    # C++ pairs live, nothing anywhere reaches `_ek_factor` any more.
+    assert ek_call_counts["_ek_factor"] == 0
+
+
+@pytestmark_u2
+def test_u2_ek_on_offedge_falls_back_to_ek_factor_without_the_twin(
+    monkeypatch, ek_call_counts
+):
+    """The scoping control for the probe above: force JUST the off-edge
+    twins off (same-edge stays on C++) and confirm `_ek_factor` fires —
+    proving the `== 0` above is a dispatch claim, not a "this deck never
+    calls it" coincidence."""
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL", False)
+    BSplineSolver(
+        **_G7_BSPLINE["mixed radii"],
+        wavelength=LAM,
+        degree=2,
+        extended_kernel=True,
+    ).compute_impedance()
+    assert ek_call_counts["_ek_factor"] > 0
