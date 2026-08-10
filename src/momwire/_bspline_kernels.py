@@ -75,10 +75,27 @@ Two honest limits, both measured (momwire#249 design §1.3, §3):
     an engine-free confirmation of the Δ/a ≥ 2 floor #248 established from
     the divergence side.
 
-Every C++ accelerator dispatch in this module is guarded by `ek is None`:
-the accelerated kernels transcribe the reduced kernel only, so an EK-on fill
-takes the numpy path (momwire#249 follow-up B adds the C++ twins). The
-EK-off path is therefore untouched, byte for byte.
+C++ TWINS (momwire#270)
+-----------------------
+#249 landed EK as numpy only: every C++ dispatch was guarded by `ek is None`.
+#270 adds the accelerated twins, one entry point at a time, each behind its
+own `_HAVE_*` capability flag so an older extension still degrades to numpy.
+Landed so far (unit 1, the SAME-EDGE kernels):
+
+    _seg_seg_static_moments (uniform edge)  seg_seg_static_moments_bspline_uniform_ek
+    _seg_seg_reg_moments_from_geometry      seg_seg_reg_moments_bspline_swept_ek
+    ...        _from_geometry_swept         seg_seg_reg_moments_bspline_swept_ek
+
+The OFF-EDGE kernels (`_seg_seg_full_moments_offedge` and its swept form) are
+still guarded by `ek is None` and still take the numpy path with EK on.
+
+The EK-off path is untouched, byte for byte: the twins are separate symbols
+(and, in C++, separate template instantiations), so the reduced kernels'
+signatures and arithmetic are unchanged rather than merely believed to be.
+Cross-backend EK comparisons are meaningful only at tolerance — the C++
+reduction order is not the einsum's, and the closed forms differ in the last
+bits between `np.arcsinh` and `std::asinh` (measured ~1e-15 relative, the same
+class the reduced kernels have always had).
 """
 
 from collections import namedtuple
@@ -100,6 +117,16 @@ _HAVE_BSPLINE_REG_SWEPT_ACCEL = _acc is not None and hasattr(
 )
 _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_full_moments_bspline_swept"
+)
+# The extended-kernel twins of the two SAME-EDGE kernels (momwire#270 unit 1).
+# Separate capability flags, following the module's existing one-flag-per-
+# symbol pattern: an extension built before #270 lacks these symbols and the
+# EK path then falls back to numpy rather than failing to import.
+_HAVE_BSPLINE_STATIC_EK_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_static_moments_bspline_uniform_ek"
+)
+_HAVE_BSPLINE_REG_SWEPT_EK_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_reg_moments_bspline_swept_ek"
 )
 
 # Currently the C++ accelerator has explicit instantiations for D in {1, 2}.
@@ -309,8 +336,10 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
     its entirety (one edge is one straight run of one wire at one radius),
     so the spec's group labels are not consulted here. `D` is
     translation-invariant along the edge exactly as `J_static_moment` is, so
-    the Toeplitz gather serves it unchanged; the C++ static path does not
-    know about EK and is bypassed.
+    the Toeplitz gather serves it unchanged — in numpy and, since #270, in the
+    C++ twin `seg_seg_static_moments_bspline_uniform_ek`, which builds the same
+    2N-1 table with `J + D` in each entry. NON-uniform edges take the dense
+    numpy branch above under both kernels; there is no C++ path for them.
     """
     if max_d > MAX_D_SUPPORTED:
         raise NotImplementedError(
@@ -348,6 +377,18 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
         # because each call escapes per-op dispatch overhead.
         return _acc.seg_seg_static_moments_bspline_uniform(
             float(h), float(a), int(N), int(max_d)
+        )
+    if (
+        ek is not None
+        and _HAVE_BSPLINE_STATIC_EK_ACCEL
+        and max_d <= _BSPLINE_ACCEL_MAX_D
+    ):
+        # The EK twin (momwire#270): same Toeplitz table, each entry J + D.
+        # Only the UNIFORM edge reaches here — a non-uniform edge returned
+        # above on the numpy dense path, which the C++ kernel does not serve
+        # for either kernel flavour.
+        return _acc.seg_seg_static_moments_bspline_uniform_ek(
+            float(h), float(a), int(N), int(max_d), float(_ek_radius(ek, a))
         )
 
     # numpy Toeplitz fallback: J_pq[i, j] = vals_pq[j - i + (N - 1)]
@@ -441,6 +482,15 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
             np.ascontiguousarray(wu_pow, dtype=np.float64),
             np.ascontiguousarray(np.asarray([k], dtype=np.float64)),
         )[0]
+    if ek is not None and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL:
+        # The EK twin (momwire#270), same length-1 k axis. Whole-block
+        # eligibility, as below — the C++ kernel takes no group labels.
+        return _acc.seg_seg_reg_moments_bspline_swept_ek(
+            np.ascontiguousarray(R, dtype=np.float64),
+            np.ascontiguousarray(wu_pow, dtype=np.float64),
+            np.ascontiguousarray(np.asarray([k], dtype=np.float64)),
+            float(_ek_radius(ek, geo["a"])),
+        )[0]
     if ek is not None:
         # Whole-block eligibility, as in `_seg_seg_static_moments`: a
         # same-edge block is one straight run of one wire at one radius.
@@ -488,6 +538,15 @@ def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 <
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
             np.ascontiguousarray(k_array, dtype=np.float64),
+        )
+    if ek is not None and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL:
+        # The EK twin (momwire#270). It streams the same way, so the EK sweep
+        # no longer materializes the chunked phase intermediate either.
+        return _acc.seg_seg_reg_moments_bspline_swept_ek(
+            np.ascontiguousarray(R, dtype=np.float64),
+            np.ascontiguousarray(wu_pow, dtype=np.float64),
+            np.ascontiguousarray(k_array, dtype=np.float64),
+            float(_ek_radius(ek, geo["a"])),
         )
 
     out = np.empty((n_k, n_d, n_d, N, N), dtype=np.complex128)
