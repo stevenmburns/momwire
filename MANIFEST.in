@@ -1,4 +1,7 @@
 # setuptools auto-includes the C++ ext source (_accelerators.cpp) in the sdist,
-# but not the header it pulls in via #include "_bspline_static_moments_inline.h".
-# Without this, a source build from the sdist fails to compile the extension.
-include src/momwire/_bspline_static_moments_inline.h
+# but not the headers it pulls in via #include. Without these, a source build
+# from the sdist fails to compile the extension — caught by the wheels
+# workflow's sdist-verify job (which is exactly what happened to the first
+# v0.25.0 tag when _bspline_ek_moments_inline.h, #270, was missing here).
+# The glob keeps the NEXT generated header from repeating that.
+include src/momwire/*.h
