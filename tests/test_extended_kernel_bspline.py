@@ -931,6 +931,26 @@ _G7_BSPLINE = {
         wire_radius=0.02,
         ground_z=0.0,
     ),
+    # The two finite grounds momwire#269 opened. They enter the armor here
+    # rather than in their own gate so they inherit BOTH halves: the byte
+    # identity above and the "no EK code was entered" counter below. Each
+    # exercises a route the PEC deck does not — the Fresnel weight tables
+    # (`_image_refl_weights`) and the Sommerfeld remainder respectively.
+    "refl-coef ground": dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.4]])],
+        n_per_edge_per_wire=[[14]],
+        wire_radius=0.02,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+    ),
+    "sommerfeld ground": dict(
+        wires=[np.array([[0.0, 0.0, 0.3], [0.0, 0.0, 2.7]])],
+        n_per_edge_per_wire=[[14]],
+        wire_radius=0.02,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+    ),
 }
 
 
@@ -973,6 +993,27 @@ def test_g7_hmatrix_ek_off_is_bit_identical_to_the_default(eta, want_far):
     # nothing, so every leaf is a dense near block; eta = 1 gives far blocks
     # and therefore the ACA fill.
     assert (len(a.build_hmatrix().far) > 0) == want_far
+    za, _ = a.compute_impedance()
+    zb, _ = b.compute_impedance()
+    assert np.array_equal(np.atleast_1d(za), np.atleast_1d(zb))
+
+
+# The finite grounds momwire#269 opened, on the H-matrix path: eta = 1 so
+# the far-block ACA fill (and therefore the fused refl / PEC-image block
+# assemblers) is the route under test, which is where an EK-off regression
+# would land — `_offedge_aca_evaluators` grew a new EK branch there.
+_G7_HM_GROUNDS = {
+    "refl-coef": dict(ground_z=-3.0, ground_eps=(13.0, 0.005)),
+    "sommerfeld": dict(
+        ground_z=-3.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
+    ),
+}
+
+
+@pytest.mark.parametrize("ground", list(_G7_HM_GROUNDS))
+def test_g7_hmatrix_finite_ground_ek_off_is_bit_identical_to_the_default(ground):
+    a, b = _hmatrix_pair(aca_eta=1.0, **_G7_HM_GROUNDS[ground])
+    assert len(a.build_hmatrix().far) > 0
     za, _ = a.compute_impedance()
     zb, _ = b.compute_impedance()
     assert np.array_equal(np.atleast_1d(za), np.atleast_1d(zb))
@@ -1089,6 +1130,12 @@ def test_g7b_bspline_ek_off_enters_no_ek_code(ek_call_counts, name):
 @pytest.mark.parametrize("eta", [0.0, 1.0])
 def test_g7b_hmatrix_ek_off_enters_no_ek_code(ek_call_counts, eta):
     _hmatrix_pair(aca_eta=eta)[0].compute_impedance()
+    assert ek_call_counts == dict.fromkeys(ek_call_counts, 0)
+
+
+@pytest.mark.parametrize("ground", list(_G7_HM_GROUNDS))
+def test_g7b_hmatrix_finite_ground_ek_off_enters_no_ek_code(ek_call_counts, ground):
+    _hmatrix_pair(aca_eta=1.0, **_G7_HM_GROUNDS[ground])[0].compute_impedance()
     assert ek_call_counts == dict.fromkeys(ek_call_counts, 0)
 
 
@@ -1237,25 +1284,31 @@ def test_extended_kernel_refuses_singular_enrichment():
         BSplineSolver(**_refusal_kw(use_singular_enrichment=True))
 
 
-@pytest.mark.parametrize("ground_model", ["refl-coef", "sommerfeld"])
-def test_extended_kernel_refuses_finite_ground(ground_model):
-    with pytest.raises(NotImplementedError, match="ground_eps"):
-        BSplineSolver(
-            **_refusal_kw(
-                ground_z=0.0, ground_eps=(13.0, 0.005), ground_model=ground_model
-            )
-        )
-
-
 def test_extended_kernel_serves_plain_pec_ground():
     z, _ = BSplineSolver(**_refusal_kw(ground_z=-3.0)).compute_impedance()
     assert np.isfinite(z)
 
 
-@pytest.mark.parametrize("cls", [HMatrixSolver, ArrayBlockSolver])
-def test_extended_kernel_refusals_reach_the_subclasses(cls):
-    with pytest.raises(NotImplementedError, match="ground_eps"):
-        cls(**_refusal_kw(ground_z=0.0, ground_eps=(13.0, 0.005)))
+# momwire#269 lifted #249's second refusal. What replaces the "raises" test
+# is the weakest possible statement — that both models construct and answer
+# a finite number on every solver in the family. The gates that say the
+# answer is RIGHT are G16-G19 below.
+@pytest.mark.parametrize("cls", [BSplineSolver, HMatrixSolver, ArrayBlockSolver])
+@pytest.mark.parametrize("ground_model", ["refl-coef", "sommerfeld"])
+def test_extended_kernel_serves_finite_ground(cls, ground_model):
+    z, _ = cls(
+        **_refusal_kw(
+            ground_z=-3.0, ground_eps=(13.0, 0.005), ground_model=ground_model
+        )
+    ).compute_impedance()
+    assert np.isfinite(np.atleast_1d(z)).all()
+
+
+def test_extended_kernel_enrichment_refusal_reaches_the_subclasses():
+    """The refusal that STAYS (#249 follow-up C / momwire#271)."""
+    for cls in (BSplineSolver, HMatrixSolver, ArrayBlockSolver):
+        with pytest.raises(NotImplementedError, match="use_singular_enrichment"):
+            cls(**_refusal_kw(use_singular_enrichment=True))
 
 
 # ----------------------------------------------------------------------
@@ -1899,6 +1952,803 @@ def test_g14_pec_ground_shift_matches_sinusoidal():
         f"δ_bsp={delta_bsp} vs sinusoidal δ={delta_sin}, "
         f"mismatch {mismatch:.3f} > {_G14_TOL}"
     )
+
+
+# ======================================================================
+# momwire#269 — FINITE GROUND under the extended kernel
+# ======================================================================
+#
+# #249 refused `extended_kernel=True` + `ground_eps` on both models with one
+# boundary line, because the refl-coef image would have ridden the EK-aware
+# moment blocks while the Sommerfeld remainder stayed reduced — "probably
+# harmless, but a claim with no gate behind it". These are the gates.
+#
+# WHAT ACTUALLY CHANGED IN THE SOLVER, and therefore what is worth gating:
+#
+# * The refl-coef image needed NO new physics on the dense path. Its Fresnel
+#   dyad / image-charge tables are per-segment-pair WEIGHTS the assembler
+#   applies after the moment fill (`_accumulate_Z_image_chunked` hands them
+#   to `assemble_Z_bspline_weighted_windowed`), so the moment kernel choice
+#   is orthogonal to them and the #270 unit-2 EK twins already served it.
+#   The H-matrix's FUSED far-block assembler is the one place where the two
+#   are welded into a single C++ kernel, so that one needed a new twin —
+#   `bspline_assemble_offedge_block_refl_ek`, gated in U4 below.
+# * The Sommerfeld remainder (`_Z_sommerfeld_remainder`,
+#   `_sommerfeld_global_lowrank`) deliberately stays REDUCED. G18 measures
+#   what that costs instead of assuming it.
+#
+# THE ORACLE is `SinusoidalSolver(extended_kernel=True)` + `ground_eps`,
+# fully C++-served for both models since momwire#259 — G14's PEC-ground
+# parity gate with a ground constant added. Gate shape is G11/G14's: the
+# cross-basis comparison is of the SHIFT δZ = Z(EK on) − Z(EK off), because
+# at any one mesh the absolute bspline-vs-sinusoidal basis gap is the same
+# size as the EK shift itself, so only the shift measures the kernel.
+#
+# THE CONTROL is the same deck's PEC-ground mismatch, and it carries more
+# weight than the absolute bar. Every deck below has a cross-basis EK shift
+# mismatch that is a property of the DECK (14% on a straight wire, 44% at a
+# bend — #249 §4.3: this Galerkin fill declines to extend cross-arm pairs
+# where NEC still extends them). Adding a ground constant must not move
+# that number. Measured, it moves it by at most 0.0073 absolute.
+
+_G16_EPS = {"soil": (13.0, 0.005), "sea": (81.0, 5.0)}
+_G16_H = LAM / 4
+
+
+def _g16_decks():
+    """Four grounded decks, each at Δ/a ≥ 2.4 and fed at a segment CENTRE so
+    both bases excite the same cell (the sinusoidal side is segment-fed by
+    construction; the bspline side uses `feed_model="segment"` to match, as
+    G11/G14 do)."""
+    ns = 21
+    bend = np.array([[0.0, 0.0, 0.3], [2.0, 0.0, 1.5], [3.6, 1.1, 1.5]])
+    h_bend = float(np.linalg.norm(bend[1] - bend[0])) / 6
+    return {
+        # A quarter-wave monopole STANDING IN the plane — the ground-contact
+        # branch (NEC's IND = 0), and G14's own deck with ε̃ added.
+        "mono_contact": dict(
+            wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, _G16_H]])],
+            n_per_edge_per_wire=[[ns]],
+            nsegs=ns,
+            wire_radius=0.02,
+            feed_arclength=(_G16_H / ns) * 0.5,
+            ground_z=0.0,
+        ),
+        # The same wire LIFTED clear of the plane: the image is a real
+        # distance away and both ends are ordinary IND = 1.
+        "mono_lifted": dict(
+            wires=[np.array([[0.0, 0.0, 0.4], [0.0, 0.0, 2.9]])],
+            n_per_edge_per_wire=[[ns]],
+            nsegs=ns,
+            wire_radius=0.02,
+            feed_arclength=(2.5 / ns) * 10.5,
+            ground_z=0.0,
+        ),
+        # Horizontal at height: the wire whose image is PARALLEL, not
+        # coaxial, so the joint mirror labelling must decline it — and the
+        # deck where the Fresnel dyad's −(ρ_v+ρ_h)(t·p̂) half carries real
+        # weight rather than cancelling.
+        "horizontal": dict(
+            wires=[np.array([[-2.5, 0.0, 1.5], [2.5, 0.0, 1.5]])],
+            n_per_edge_per_wire=[[ns]],
+            nsegs=ns,
+            wire_radius=0.05,
+            feed_arclength=(5.0 / ns) * 10.5,
+            ground_z=0.0,
+        ),
+        # Bent above the plane: two arms, a p̂ that rotates pair by pair, and
+        # the fat radius (Δ/a = 4.9) that makes the EK shift large.
+        "bent": dict(
+            wires=[bend],
+            n_per_edge_per_wire=[[6, 5]],
+            nsegs=11,
+            wire_radius=0.08,
+            feed_arclength=h_bend * 3.5,
+            ground_z=0.0,
+        ),
+    }
+
+
+_G16_DECKS = _g16_decks()
+
+# Ground pairings, as (ground_model, eps_name) -> solver kwargs. "pec" is
+# the control: no ground constant at all.
+_G16_GROUNDS = {"pec": {}}
+for _m in ("refl-coef", "sommerfeld"):
+    for _e, _v in _G16_EPS.items():
+        _G16_GROUNDS[f"{_m} {_e}"] = dict(ground_eps=_v, ground_model=_m)
+
+
+@functools.lru_cache(maxsize=None)
+def _g16_z(deck, ground, cls, ek):
+    kw = dict(_G16_DECKS[deck], wavelength=LAM, extended_kernel=ek)
+    kw.update(_G16_GROUNDS[ground])
+    if cls is BSplineSolver:
+        kw.update(degree=2, feed_model="segment")
+    z, _ = cls(**kw).compute_impedance()
+    return complex(z)
+
+
+def _g16_mismatch(deck, ground):
+    """|δ_bsp − δ_sin| / |δ_sin| on one (deck, ground) pairing."""
+    d_bsp = _g16_z(deck, ground, BSplineSolver, True) - _g16_z(
+        deck, ground, BSplineSolver, False
+    )
+    d_sin = _g16_z(deck, ground, SinusoidalSolver, True) - _g16_z(
+        deck, ground, SinusoidalSolver, False
+    )
+    return abs(d_bsp - d_sin) / abs(d_sin), d_bsp, d_sin
+
+
+# ----------------------------------------------------------------------
+# Gate 16 — the parity table, and the pairings the oracle cannot serve
+# ----------------------------------------------------------------------
+#
+# Measured on this box (mismatch |δ_bsp − δ_sin|/|δ_sin|):
+#
+#   deck            PEC      refl soil  refl sea  somm soil  somm sea
+#   mono_contact    0.1527   1.0055*    1.0309*   1.0154*    0.2709
+#   mono_lifted     0.0737   0.0715     0.0735    0.0720     0.0737
+#   horizontal      0.2770   0.2829     0.2773    0.2793     0.2770
+#   bent            0.4385   0.4439     0.4387    0.4458     0.4389
+#
+# Read the columns, not the rows: every deck answers the SAME number under
+# every ground it can be measured under. The row-to-row spread is the
+# deck's own cross-basis EK gap (G11's ~14% class on a straight wire, more
+# at a bend where this fill is deliberately more conservative than NEC —
+# #249 §4.3); the column-to-column spread is what finite ground adds, and
+# it is ≤ 0.0073 absolute. G16b gates that directly and is the stronger
+# statement; the absolute bars here are #249 §7.2's 0.30 where the deck
+# meets it in PEC too, and the deck's own PEC value + margin where it does
+# not.
+#
+# (*) THE ORACLE IS UNUSABLE AT GROUND CONTACT OVER LOSSY GROUND, and it is
+# unusable EK-off, so this is not an EK finding. `SinusoidalSolver`'s own
+# EK-OFF answer for the contacting monopole over average soil DIVERGES
+# under mesh refinement while this solver's converges — measured, a = 0.02,
+# feed at the base segment:
+#
+#   NS    bspline refl soil    sinusoidal refl soil   sinusoidal somm soil
+#   11     28.23 +15.44j        66.84 −392.22j          80.66 −107.05j
+#   21     28.74 +15.82j        91.04 −702.06j         101.10 −207.36j
+#   41     29.22 +16.26j       112.75 −1019.03j        121.23 −314.69j
+#   61     29.48 +16.54j       109.14 −1054.33j        122.34 −335.55j
+#
+# Under PEC ground the two agree at every NS (43.97+24.62j vs 44.15+24.93j
+# at NS = 21), and over SEA water — three orders more conductive, so nearly
+# the PEC limit — the Sommerfeld pairing is sound and is gated. So δ_sin on
+# the three starred pairings measures the oracle's instability, not the
+# kernel, and they are excluded here. `test_g16c_*` pins the reason so the
+# exclusion cannot rot: if the oracle is ever fixed, that gate fails and
+# these pairings should be moved back into `_G16_TOL`.
+
+_G16_UNSOUND = {
+    ("mono_contact", "refl-coef soil"),
+    ("mono_contact", "refl-coef sea"),
+    ("mono_contact", "sommerfeld soil"),
+}
+
+# Absolute bar per deck: #249 §7.2's 0.30 where the deck's own PEC control
+# meets it, the PEC value + ~15% headroom where it does not.
+_G16_TOL = {
+    "mono_contact": 0.30,
+    "mono_lifted": 0.30,
+    "horizontal": 0.30,
+    "bent": 0.50,
+}
+
+_G16_FINITE = [g for g in _G16_GROUNDS if g != "pec"]
+
+
+@pytest.mark.parametrize("ground", _G16_FINITE)
+@pytest.mark.parametrize("deck", list(_G16_DECKS))
+def test_g16_finite_ground_shift_matches_sinusoidal(deck, ground):
+    if (deck, ground) in _G16_UNSOUND:
+        pytest.skip("oracle diverges at ground contact over lossy soil — see G16c")
+    mismatch, d_bsp, d_sin = _g16_mismatch(deck, ground)
+    tol = _G16_TOL[deck]
+    assert mismatch <= tol, (
+        f"{deck} / {ground}: δ_bsp={d_bsp} vs sinusoidal δ={d_sin}, "
+        f"mismatch {mismatch:.4f} > {tol}"
+    )
+
+
+# ----------------------------------------------------------------------
+# Gate 16b — and the ground constant did not move that mismatch
+# ----------------------------------------------------------------------
+#
+# The gate the headline claim actually rests on. A deck's cross-basis EK
+# mismatch is a property of its geometry and mesh; if the finite-ground
+# image were extended differently on the two sides (wrong eligibility, a
+# weight applied before the kernel instead of after, the reduced refl
+# assembler silently serving an EK block), this number would move. Measured
+# worst |mismatch_ground − mismatch_PEC| over the 13 sound pairings: 0.0073
+# (bent / sommerfeld soil). Gated at 0.03, ~4x the worst.
+#
+# mono_contact / sommerfeld sea is the one sound contact pairing and gets
+# its own looser bound: both δ real parts are small there (−0.16 bspline,
+# −0.30 sinusoidal) so the ratio is noisy even though the vectors agree —
+# measured 0.118 against its 0.153 PEC control.
+
+_G16B_TOL = 0.03
+_G16B_TOL_CONTACT = 0.15
+
+
+@pytest.mark.parametrize("ground", _G16_FINITE)
+@pytest.mark.parametrize("deck", list(_G16_DECKS))
+def test_g16b_finite_ground_does_not_move_the_pec_mismatch(deck, ground):
+    if (deck, ground) in _G16_UNSOUND:
+        pytest.skip("oracle diverges at ground contact over lossy soil — see G16c")
+    mm_g = _g16_mismatch(deck, ground)[0]
+    mm_pec = _g16_mismatch(deck, "pec")[0]
+    tol = _G16B_TOL_CONTACT if deck == "mono_contact" else _G16B_TOL
+    assert abs(mm_g - mm_pec) <= tol, (
+        f"{deck} / {ground}: mismatch {mm_g:.4f} vs PEC control {mm_pec:.4f} "
+        f"— the ground constant moved the cross-basis EK gap by "
+        f"{abs(mm_g - mm_pec):.4f} > {tol}"
+    )
+
+
+# ----------------------------------------------------------------------
+# Gate 16c — why three pairings are excluded, pinned rather than asserted
+# ----------------------------------------------------------------------
+
+_G16C_NS = (11, 21, 41)
+
+
+def _g16c_contact_z(cls, ns, ek=False, **ground):
+    kw = dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, _G16_H]])],
+        n_per_edge_per_wire=[[ns]],
+        nsegs=ns,
+        wire_radius=0.02,
+        feed_arclength=(_G16_H / ns) * 0.5,
+        ground_z=0.0,
+        wavelength=LAM,
+        extended_kernel=ek,
+        **ground,
+    )
+    if cls is BSplineSolver:
+        kw.update(degree=2, feed_model="segment")
+    return complex(cls(**kw).compute_impedance()[0])
+
+
+def _g16c_spread(cls, **ground):
+    z = [_g16c_contact_z(cls, ns, **ground) for ns in _G16C_NS]
+    return abs(z[-1] - z[0]) / abs(z[0])
+
+
+def test_g16c_the_excluded_pairings_are_an_unstable_oracle_not_a_kernel_gap():
+    """The exclusion in `_G16_UNSOUND`, as a measurement.
+
+    EK-OFF throughout — so nothing here is about the extended kernel. Over
+    average soil at ground CONTACT the sinusoidal oracle's impedance walks
+    away under mesh refinement (~100% over NS = 11 → 41) while this solver's
+    settles (~4%); over PEC ground both settle. If this ever fails because
+    the oracle stabilised, delete the corresponding entries from
+    `_G16_UNSOUND` and let G16/G16b measure them.
+    """
+    soil = dict(ground_eps=_G16_EPS["soil"])
+    assert _g16c_spread(BSplineSolver) < 0.05, "the bspline PEC control is unstable"
+    assert _g16c_spread(SinusoidalSolver) < 0.05, (
+        "the sinusoidal PEC control is unstable"
+    )
+    assert _g16c_spread(BSplineSolver, **soil) < 0.10, (
+        "the bspline contact answer over soil stopped converging"
+    )
+    spread_sin = _g16c_spread(SinusoidalSolver, **soil)
+    assert spread_sin > 0.50, (
+        f"the sinusoidal oracle now converges at ground contact over soil "
+        f"(spread {spread_sin:.3f}) — re-enable the _G16_UNSOUND pairings"
+    )
+
+
+# ----------------------------------------------------------------------
+# Gate 17 — the family agrees with itself over finite ground under EK
+# ----------------------------------------------------------------------
+#
+# G15's fat-deck cross-solver gate, with the two finite grounds. The dense
+# path, the H-matrix (near blocks via `_zblock_image_refl`, far blocks via
+# the fused refl twin) and the Sommerfeld global low-rank term are three
+# different assemblies of the same operator; under EK they must still land
+# on one answer. Measured worst on this box: 1.3e-7 (sommerfeld soil — the
+# global remainder's own ACA at tol 1e-9 is the floor), 1e-13 class on the
+# refl-coef pairings, which have no low-rank term.
+#
+# `leaf_size` is a PARAMETER, not a detail. This deck is 11 segments, so at
+# the default 32 the whole mesh is one leaf and the H-matrix is all near
+# blocks — the far-block dispatch (and therefore the fused refl EK twin)
+# never runs, and a mutation that sent it to the reduced refl assembler
+# would leave this gate green. leaf_size = 4 gives two admissible blocks
+# and closes that hole; the mutation run for #269 confirms it (the reduced-
+# assembler dispatch mutation fails this gate only in the leaf_size = 4
+# rungs).
+
+_G17_TOL = 1e-6
+
+
+@pytest.mark.parametrize("leaf_size,want_far", [(32, False), (4, True)])
+@pytest.mark.parametrize("ground", _G16_FINITE)
+def test_g17_hmatrix_agrees_with_the_dense_path_over_finite_ground(
+    ground, leaf_size, want_far
+):
+    kw = dict(
+        _G16_DECKS["bent"],
+        wavelength=LAM,
+        degree=2,
+        feed_model="segment",
+        extended_kernel=True,
+        **_G16_GROUNDS[ground],
+    )
+    z_dense, _ = BSplineSolver(**kw).compute_impedance()
+    sim = HMatrixSolver(**kw, aca_tol=1e-9, aca_leaf_size=leaf_size)
+    assert (len(sim.build_partition()["far"]) > 0) == want_far
+    z_hm, _ = sim.compute_impedance()
+    rel = abs(z_hm - z_dense) / abs(z_dense)
+    assert rel <= _G17_TOL, (
+        f"{ground} / leaf {leaf_size}: dense {z_dense} vs H-matrix {z_hm} ({rel:.2e})"
+    )
+
+
+# ----------------------------------------------------------------------
+# Gate 18 — the Sommerfeld remainder stays reduced, and that is measured
+# ----------------------------------------------------------------------
+#
+# THE CLAIM #249 refused to ship ungated. The remainder Q (theory manual
+# eqs 143-147) is the smooth ground-wave correction left after the C2-scaled
+# exact image; the image is extended under EK and Q is not.
+#
+# THE ARITHMETIC. EK is the azimuthal average of the source over a tube of
+# radius a, an O((a/R)²) correction where R is the source-observer distance
+# — precisely, |fac − 1| ≈ (a²/2R²)|1 + jkR| for a ≪ R. Every term in Q has
+# the ground reflection as its source, so its R is the IMAGE distance
+# r1 = √(ρ² + (z+z')²) ≥ 2h for a wire at height h: the un-applied
+# correction is O((a/2h)²). Measured min r1 over the remainder quadrature
+# confirms the ≥ 2h floor is tight (mono_lifted 0.827 vs 2h = 0.8;
+# horizontal 3.000 vs 3.000; bent 0.645 vs 0.600).
+#
+# THE MEASUREMENT, because the arithmetic alone is an estimate and the
+# estimate degenerates at ground contact (r1 → 0, where the (a/2h)² form
+# says nothing and only the SMOOTHNESS of Q — the whole point of NEC's
+# decomposition, the C2 image absorbs the singular part — bounds it). So
+# this gate builds the extended remainder outright: the same
+# `remainder_field_proj`, evaluated on a ring of `n_phi` source points at
+# radius a about each source axis point and averaged, which IS the tube
+# average EK applies. The cost of shipping the reduced one is then the
+# difference in the solved Z:
+#
+#   deck            a       min r1    2h      |ΔZ|/|Z| soil   sea
+#   mono_contact    0.020   0.0268    0.000   3.03e-03    3.83e-03
+#   mono_lifted     0.020   0.8268    0.800   9.60e-07    9.30e-08
+#   horizontal      0.050   3.0000    3.000   3.94e-05    4.15e-06
+#   bent            0.080   0.6451    0.600   1.09e-04    2.12e-05
+#
+# Converged in n_phi (4, 8 and 16 agree to the digits shown), and O(a²) as
+# the expansion says — on mono_contact/soil, a = 0.04/0.02/0.01/0.005 gives
+# 7.89e-3 / 3.03e-3 / 9.29e-4 / 2.51e-4, ratios 2.6 / 3.3 / 3.7 → 4.
+#
+# HOW TO READ IT. For any wire clear of the plane the un-modelled term is
+# ≤ 1.1e-4 relative — three orders below the EK shift the image blocks DO
+# carry on the same decks (3.6e-2 on bent) and two orders below this
+# basis's own accuracy at Δ/a ≥ 2 (~3%, class docstring). AT GROUND CONTACT
+# it is 3-4e-3, which is ~45% of that deck's own EK shift (7.1e-3) — the
+# one place the mixture is visible. It is still an order below the basis
+# error, and refl-coef is invalid at contact (#153) so Sommerfeld is the
+# only model there; refusing it would cost the consumer more than 0.3% on
+# |Z|. Recorded, gated, and named in the class docstring rather than
+# hidden.
+
+_G18_TOL = {
+    "mono_contact": 6e-3,
+    "mono_lifted": 5e-6,
+    "horizontal": 1e-4,
+    "bent": 3e-4,
+}
+_G18_NPHI = 8
+
+
+def _tube_averaged_proj(a, n_phi=_G18_NPHI):
+    """`_sommerfeld.remainder_field_proj` with the SOURCE points spread onto
+    a ring of radius `a` about the source axis and averaged — NEC Eq 89's
+    tube average, applied to the smooth remainder field the shipped code
+    leaves on the axis."""
+    from momwire import _sommerfeld as _sm
+
+    original = _sm.remainder_field_proj
+
+    def ring(obs, t_obs, src, t_src, gz, k, grid, cancel_flag=0):
+        ref = np.tile(np.array([0.0, 0.0, 1.0]), (t_src.shape[0], 1))
+        ref[np.abs(t_src[:, 2]) > 0.9] = np.array([1.0, 0.0, 0.0])
+        e1 = np.cross(t_src, ref)
+        e1 /= np.linalg.norm(e1, axis=1)[:, None]
+        e2 = np.cross(t_src, e1)
+        total = None
+        for i in range(n_phi):
+            phi = 2.0 * np.pi * i / n_phi
+            s = src + a * (np.cos(phi) * e1 + np.sin(phi) * e2)
+            v = original(obs, t_obs, s, t_src, gz, k, grid, cancel_flag)
+            total = v if total is None else total + v
+        return total / n_phi
+
+    return original, ring
+
+
+@pytest.mark.parametrize("eps_name", list(_G16_EPS))
+@pytest.mark.parametrize("deck", list(_G16_DECKS))
+def test_g18_reduced_sommerfeld_remainder_is_negligible(
+    monkeypatch, deck, eps_name, request
+):
+    from momwire import _sommerfeld as _sm
+
+    kw = dict(
+        _G16_DECKS[deck],
+        wavelength=LAM,
+        degree=2,
+        feed_model="segment",
+        extended_kernel=True,
+        ground_eps=_G16_EPS[eps_name],
+        ground_model="sommerfeld",
+    )
+    a = float(np.max(np.atleast_1d(kw["wire_radius"])))
+    # The fused C++ remainder never calls `remainder_field_proj`, so the
+    # tube average has to be installed on the numpy route — and BOTH sides
+    # of the comparison are measured there, so the route is not a variable.
+    monkeypatch.delattr(_bs._acc, "sommerfeld_remainder_bspline_Q", raising=False)
+    z_axis, _ = BSplineSolver(**kw).compute_impedance()
+    original, ring = _tube_averaged_proj(a)
+    monkeypatch.setattr(_sm, "remainder_field_proj", ring)
+    z_tube, _ = BSplineSolver(**kw).compute_impedance()
+    rel = abs(z_tube - z_axis) / abs(z_axis)
+    assert rel <= _G18_TOL[deck], (
+        f"{deck} / {eps_name}: extending the Sommerfeld remainder moves Z by "
+        f"{rel:.3e} > {_G18_TOL[deck]:.3e} — the reduced-remainder mixture is "
+        f"no longer negligible on this deck"
+    )
+    assert original is not ring
+
+
+def test_g18_the_tube_average_is_a_real_perturbation():
+    """The control for G18: with the ring installed at a radius the solve
+    can actually feel, the numbers above must MOVE. Otherwise G18 would pass
+    on a no-op monkeypatch (e.g. a route change that stopped calling
+    `remainder_field_proj` at all) and prove nothing."""
+    from momwire import _sommerfeld as _sm
+
+    kw = dict(
+        _G16_DECKS["bent"],
+        wavelength=LAM,
+        degree=2,
+        feed_model="segment",
+        extended_kernel=True,
+        ground_eps=_G16_EPS["soil"],
+        ground_model="sommerfeld",
+    )
+    saved = getattr(_bs._acc, "sommerfeld_remainder_bspline_Q", None)
+    if saved is not None:
+        delattr(_bs._acc, "sommerfeld_remainder_bspline_Q")
+    original, ring = _tube_averaged_proj(0.5)  # 6x the real radius
+    _sm.remainder_field_proj = ring
+    try:
+        z_fat, _ = BSplineSolver(**kw).compute_impedance()
+    finally:
+        _sm.remainder_field_proj = original
+        if saved is not None:
+            setattr(_bs._acc, "sommerfeld_remainder_bspline_Q", saved)
+    z_axis, _ = BSplineSolver(**kw).compute_impedance()
+    rel = abs(z_fat - z_axis) / abs(z_axis)
+    assert rel > 1e-3, f"the tube average is not reaching the solve ({rel:.3e})"
+
+
+# ----------------------------------------------------------------------
+# Gate 19 — the refl-coef image routes are EK-wired, and stay wired
+# ----------------------------------------------------------------------
+#
+# The #249/#270 image-wiring pattern (spy for the structure, mutation for
+# the numbers) applied to the routes `ground_eps` adds. There are FOUR, and
+# they are not the same four the PEC image has:
+#
+#   1. `_accumulate_Z_image_chunked` with Fresnel weights — the route a
+#      default dense grounded solve takes.
+#   2. `_ground_finite_Z` / `_build_J_image_blocks` — the no-accelerator
+#      tensor fallback (dead on this box unless forced; #273).
+#   3. `HMatrixSolver._zblock_image_refl` — every near block of a grounded
+#      H-matrix solve.
+#   4. The fused far-block `bspline_assemble_offedge_block_refl_ek` — the
+#      new C++ twin, gated numerically in U4 below.
+#
+# The deck is `_IMAGE_DECK`'s (a vertical monopole, coaxial with its own
+# image, PLUS a horizontal wire that is NOT) with a ground constant added,
+# for the reason its own comment gives: an all-vertical deck cannot tell a
+# joint mirror labelling from a free-space one.
+
+_IMAGE_DECK_REFL = dict(_IMAGE_DECK, ground_eps=(13.0, 0.005))
+
+
+def _refl_image_solver(cls, extended_kernel=True, **over):
+    return cls(**_IMAGE_DECK_REFL, extended_kernel=extended_kernel, **over)
+
+
+def test_g19_refl_chunked_route_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
+    """Route 1: the Fresnel-weighted chunked image fill, driven with the
+    solver's OWN weight tables (`_image_refl_weights`) rather than the PEC
+    ones the #270 gate above uses, so the route under test is the one a
+    `ground_eps` solve takes."""
+    sim = _refl_image_solver(BSplineSolver)
+    geom = sim._build_geometry()
+    supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    w_A, w_Phi = sim._image_refl_weights(sim._image_refl_prep(geom), sim.omega)
+    Z = np.zeros((supp_seg.shape[0],) * 2, dtype=np.complex128, order="F")
+    offedge_ek_spy.clear()
+    sim._accumulate_Z_image_chunked(Z, geom, sim.k, supp_seg, polys, w_A, w_Phi)
+    assert offedge_ek_spy, "no image fill happened"
+    row0 = 0
+    for ek in offedge_ek_spy:
+        rows = np.arange(row0, row0 + len(ek.group_i))
+        _assert_mirrored_spec(ek, sim, rows=rows)
+        row0 += len(ek.group_i)
+    assert row0 == geom["n_segs_total"], "the observer chunks did not cover the mesh"
+    assert np.abs(Z).max() > 0.0, "the weighted image fill produced nothing"
+
+
+def test_g19_refl_tensor_route_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
+    """Route 2 — the no-accelerator fallback, reached explicitly."""
+    sim = _refl_image_solver(BSplineSolver)
+    geom = sim._build_geometry()
+    offedge_ek_spy.clear()
+    sim._build_J_image_blocks(geom, sim.k)
+    assert len(offedge_ek_spy) == 1
+    _assert_mirrored_spec(offedge_ek_spy[0], sim)
+
+
+def test_g19_hmatrix_refl_near_block_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
+    """Route 3."""
+    sim = _refl_image_solver(HMatrixSolver, aca_tol=1e-9)
+    ctx = sim._context()
+    idx = np.arange(ctx["n_basis"], dtype=np.int64)
+    offedge_ek_spy.clear()
+    sim._zblock_image_refl(idx, idx)
+    assert len(offedge_ek_spy) == 1
+    seg = np.unique(ctx["supp_seg"][idx].ravel())
+    _assert_mirrored_spec(offedge_ek_spy[0], sim, rows=seg, cols=seg)
+
+
+# --- and the mutation itself, as a numeric gate ------------------------
+
+
+def _grounded_refl_z(cls, **over):
+    return complex(_refl_image_solver(cls, **over).compute_impedance()[0])
+
+
+@pytest.mark.parametrize("weighted_accel", [True, False])
+def test_g19_bspline_refl_ek_uses_the_extended_image(
+    request, monkeypatch, weighted_accel
+):
+    """Routes 1 and 2 numerically: `image_ek_disabled` leaves the free-space
+    blocks extended and quietly drops the IMAGE blocks to the reduced
+    kernel. Measured move on this deck: 3.1e-3 (chunked) / 3.1e-3 (tensor),
+    against the 1e-4 bar #249 set from the accelerated-vs-numpy noise floor
+    of the same operator."""
+    monkeypatch.setattr(_bs, "_HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL", weighted_accel)
+    z_wired = _grounded_refl_z(BSplineSolver)
+    request.getfixturevalue("image_ek_disabled")
+    z_reduced = _grounded_refl_z(BSplineSolver)
+    rel = abs(z_wired - z_reduced) / abs(z_wired)
+    assert rel >= _IMAGE_EK_SIGNAL, (
+        f"weighted_accel={weighted_accel}: the Fresnel image fill answers the "
+        f"same with and without an EK spec (moved {rel:.3e})"
+    )
+
+
+@pytest.mark.parametrize("eta,want_far", [(0.0, False), (1.0, True)])
+def test_g19_hmatrix_refl_ek_uses_the_extended_image(request, eta, want_far):
+    """Routes 3 and 4: eta = 0 admits nothing so every block is a dense near
+    block (`_zblock_image_refl`); eta = 1 gives far blocks and therefore the
+    fused refl EK twin."""
+    sim = _refl_image_solver(HMatrixSolver, aca_tol=1e-9, aca_eta=eta, aca_leaf_size=8)
+    # The partition, not `HMatrix.far`: this deck's clusters are small
+    # enough that an admissible block's ACA factors cost as much as the
+    # dense block, so `build_hmatrix` stores them densely — but the FILL
+    # still went through `_offedge_aca_evaluators`, which is the dispatch
+    # under test.
+    assert (len(sim.build_partition()["far"]) > 0) == want_far
+    hm = dict(aca_tol=1e-9, aca_eta=eta, aca_leaf_size=8)
+    z_wired = _grounded_refl_z(HMatrixSolver, **hm)
+    request.getfixturevalue("image_ek_disabled")
+    z_reduced = _grounded_refl_z(HMatrixSolver, **hm)
+    rel = abs(z_wired - z_reduced) / abs(z_wired)
+    assert rel >= _IMAGE_EK_SIGNAL, (
+        f"eta={eta}: the H-matrix Fresnel image is not EK-wired ({rel:.3e})"
+    )
+
+
+# ----------------------------------------------------------------------
+# U4 — the fused refl-coef block assembler's EK twin
+# ----------------------------------------------------------------------
+#
+# `bspline_assemble_offedge_block_refl_ek` is #270 unit 3's twin composed
+# with #259's Fresnel tail: the coaxial factor multiplies G pair by pair
+# BEFORE the Galerkin contraction, the dyad weights the contracted terms
+# AFTER it. Both halves are already gated in their own right, so what U4
+# has to say is that the composition is the composition — against the numpy
+# route (`_zblock_image_refl`, C++ moments + einsum combine) on the
+# discriminating image deck. Measured: dense 3.4e-13, row 3.5e-13, col
+# 4.2e-13 — unit 3's own 1e-12 class.
+#
+# The DISPATCH matters as much as the arithmetic: a build lacking the twin
+# must fall back to the numpy closures, never to the reduced
+# `bspline_assemble_offedge_block_refl` (which would be silently wrong, not
+# merely slow — the same trap `_HAVE_OFFEDGE_BLOCK_EK_ACCEL` already guards
+# on the free-space side).
+
+_U4_HAVE_ACCEL = _hm._HAVE_OFFEDGE_BLOCK_REFL_EK_ACCEL
+pytestmark_u4 = pytest.mark.skipif(
+    not _U4_HAVE_ACCEL, reason="extension built without the #269 fused refl EK twin"
+)
+
+
+def _u4_refl_block(extended_kernel=True):
+    sim = HMatrixSolver(**_IMAGE_DECK_REFL, extended_kernel=extended_kernel)
+    ctx = sim._context()
+    idx = np.arange(ctx["n_basis"], dtype=np.int64)
+    return sim, ctx, idx
+
+
+@pytestmark_u4
+def test_u4_fused_refl_ek_block_matches_the_numpy_route():
+    sim, ctx, idx = _u4_refl_block()
+    row_f, col_f, dense_f = sim._offedge_block_evaluators(
+        ctx, idx, idx, sim.k, mirror_J=True, refl=True
+    )
+    D_ref = sim._zblock_image_refl(idx, idx, k=sim.k)
+    scale = float(np.abs(D_ref).max())
+    for label, got, ref in (
+        ("dense", dense_f(), D_ref),
+        ("row", row_f(0), D_ref[0]),
+        ("col", col_f(0), D_ref[:, 0]),
+    ):
+        rel = float(np.abs(np.asarray(got).ravel() - ref.ravel()).max() / scale)
+        assert rel <= U3_AGREEMENT, f"{label}: {rel:.3e}"
+
+
+@pytestmark_u4
+def test_u4_fused_refl_ek_block_declines_a_noncoaxial_mirror():
+    """The discriminating half: the horizontal wire's image is parallel, not
+    coaxial, so the joint mirror labelling must decline it. A twin wired
+    with a free-space (`mirror=False`) spec would extend it and land off
+    `_zblock_image_refl`'s answer — the rows/cols the horizontal wire owns
+    are checked separately so a whole-block norm cannot dilute it."""
+    sim, ctx, idx = _u4_refl_block()
+    cen = ctx["basis_centroid"]
+    horiz = np.flatnonzero(np.abs(cen[:, 1] - 3.0) < 1e-6)
+    assert horiz.size, "the discriminating deck degenerated"
+    _row, _col, dense_f = sim._offedge_block_evaluators(
+        ctx, idx, idx, sim.k, mirror_J=True, refl=True
+    )
+    D = dense_f()
+    D_ref = sim._zblock_image_refl(idx, idx, k=sim.k)
+    sub, sub_ref = D[np.ix_(horiz, horiz)], D_ref[np.ix_(horiz, horiz)]
+    rel = float(np.abs(sub - sub_ref).max() / np.abs(sub_ref).max())
+    assert rel <= U3_AGREEMENT, f"horizontal self-image block: {rel:.3e}"
+
+
+@pytestmark_u4
+def test_u4_the_reduced_refl_assembler_would_have_been_visibly_wrong():
+    """The control that gives U4a its teeth: the block the dispatch must NOT
+    fall back to. `bspline_assemble_offedge_block_refl` on the same inputs
+    (i.e. what an EK solve would have silently got before #269 added the
+    twin) differs from the extended answer by ~2e-3 — four orders above the
+    1e-12 U4a asserts, so U4a is a signal test."""
+    sim, ctx, idx = _u4_refl_block()
+    _r, _c, dense_ek = sim._offedge_block_evaluators(
+        ctx, idx, idx, sim.k, mirror_J=True, refl=True
+    )
+    D_ek = dense_ek()
+    sim_off = HMatrixSolver(**_IMAGE_DECK_REFL, extended_kernel=False)
+    _r0, _c0, dense_red = sim_off._offedge_block_evaluators(
+        ctx, idx, idx, sim.k, mirror_J=True, refl=True
+    )
+    D_red = dense_red()
+    rel = float(np.abs(D_ek - D_red).max() / np.abs(D_red).max())
+    assert rel > 1e-6, f"the EK twin and the reduced refl assembler agree ({rel:.3e})"
+
+
+def _u4_count_block_calls(monkeypatch, names):
+    calls = dict.fromkeys(names, 0)
+    for name in names:
+        original = getattr(_hm._acc, name)
+
+        def trip(*a, _n=name, _o=original, **kw):
+            calls[_n] += 1
+            return _o(*a, **kw)
+
+        monkeypatch.setattr(_hm._acc, name, trip)
+    return calls
+
+
+_U4_BLOCK_KERNELS = (
+    "bspline_assemble_offedge_block",
+    "bspline_assemble_offedge_block_ek",
+    "bspline_assemble_offedge_block_refl",
+    "bspline_assemble_offedge_block_refl_ek",
+)
+
+
+@pytestmark_u4
+def test_u4_the_twin_is_what_serves_a_grounded_far_block(monkeypatch):
+    """The positive control for the dispatch gate below: with the capability
+    present, an EK far-block fill over `ground_eps` uses the two EK twins and
+    NEITHER reduced assembler. Without this, the "no calls" gate below could
+    pass on a build where the far blocks never reached C++ at all."""
+    calls = _u4_count_block_calls(monkeypatch, _U4_BLOCK_KERNELS)
+    _refl_image_solver(
+        HMatrixSolver, aca_tol=1e-9, aca_eta=1.0, aca_leaf_size=8
+    ).build_hmatrix()
+    assert calls["bspline_assemble_offedge_block_ek"] > 0, "no free-space EK fill"
+    assert calls["bspline_assemble_offedge_block_refl_ek"] > 0, "no refl EK fill"
+    assert calls["bspline_assemble_offedge_block"] == 0
+    assert calls["bspline_assemble_offedge_block_refl"] == 0
+
+
+@pytestmark_u4
+def test_u4_a_build_without_the_twin_uses_the_numpy_closures(monkeypatch):
+    """Never the reduced fused assembler. Pinned by counting calls to both
+    C++ entry points while the capability flag is off."""
+    calls = []
+    for name in (
+        "bspline_assemble_offedge_block_refl",
+        "bspline_assemble_offedge_block_refl_ek",
+    ):
+        original = getattr(_hm._acc, name)
+
+        def trip(*a, _n=name, _o=original, **kw):
+            calls.append(_n)
+            return _o(*a, **kw)
+
+        monkeypatch.setattr(_hm._acc, name, trip)
+
+    monkeypatch.setattr(_hm, "_HAVE_OFFEDGE_BLOCK_REFL_EK_ACCEL", False)
+    sim = _refl_image_solver(HMatrixSolver, aca_tol=1e-9, aca_eta=1.0, aca_leaf_size=8)
+    assert len(sim.build_partition()["far"]) > 0, "nothing was dispatched"
+    sim.build_hmatrix()
+    assert calls == [], f"a build without the twin called {set(calls)}"
+
+
+@pytestmark_u4
+def test_u4_ek_off_never_reaches_the_refl_ek_twin(monkeypatch):
+    calls = []
+    original = _hm._acc.bspline_assemble_offedge_block_refl_ek
+
+    def trip(*a, **kw):
+        calls.append(1)
+        return original(*a, **kw)
+
+    monkeypatch.setattr(_hm._acc, "bspline_assemble_offedge_block_refl_ek", trip)
+    _refl_image_solver(
+        HMatrixSolver,
+        extended_kernel=False,
+        aca_tol=1e-9,
+        aca_eta=1.0,
+        aca_leaf_size=8,
+    ).compute_impedance()
+    assert calls == []
+
+
+@pytestmark_u4
+def test_u4_refl_ek_twin_aborts_as_solve_aborted():
+    """The new kernel polls `cancel_flag`, so its abort must reach callers as
+    the shared `SolveAborted` — which means being listed in
+    `_accel._CANCELLABLE_KERNELS`. Python-level checkpoints are neutralized
+    so the only thing that can observe the tripped token is the C++ poll."""
+    from momwire import CancelToken, SolveAborted
+
+    token = CancelToken()
+    token.cancel()
+    sim = _refl_image_solver(
+        HMatrixSolver, cancel=token, aca_tol=1e-9, aca_eta=1.0, aca_leaf_size=8
+    )
+    sim._checkpoint = lambda: None
+    with pytest.raises(SolveAborted):
+        sim.compute_impedance()
 
 
 # ======================================================================
