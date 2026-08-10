@@ -901,7 +901,7 @@ class ArrayBlockSolver(HMatrixSolver):
             self._array_partition = cached
         return cached
 
-    def _self_block_key(self, ctx, segs, k):
+    def _self_block_key(self, ctx, segs, basis_idx, k):
         """Content-addressed key for an element's dense self-block: the
         element's segment endpoints recentred on its own centroid (so it is
         translation-invariant — identical elements at different array positions
@@ -925,6 +925,20 @@ class ArrayBlockSolver(HMatrixSolver):
         # elements with different (or differently-arranged) radii
         # (stevenmburns/momwire#147).
         sig = keyarr[order].tobytes() + ctx["seg_a"][segs][order].tobytes()
+        # Basis-composition signature (issue #240): segment geometry alone
+        # doesn't determine this element's basis set — a wire end kept as a
+        # junction/ground directional basis vs dropped as free changes the
+        # block's actual size and content (_build_basis_polynomials), with
+        # no visible trace in the segments above. Two solver instances with
+        # identical wires/segmentation but different self.junctions must not
+        # alias here. Same recentre-round-lexsort-tobytes treatment as the
+        # segment signature, over basis centroids, so it is translation-
+        # invariant and also separates a same-count composition swap (the
+        # extra tip basis moving from one wire end to another).
+        bcen = ctx["basis_centroid"][basis_idx] - cen
+        bkeyarr = np.round(bcen / 1e-6).astype(np.int64)
+        border = np.lexsort((bkeyarr[:, 2], bkeyarr[:, 1], bkeyarr[:, 0]))
+        sig += bkeyarr[border].tobytes()
         gkey = (
             None
             if self.ground_z is None
@@ -1035,6 +1049,14 @@ class ArrayBlockSolver(HMatrixSolver):
             None
             if self.ground_eps is None
             else (repr(self.ground_eps), self.ground_phi_mode, self.ground_model),
+            # junctions change which boundary bases are kept vs dropped
+            # (bspline.py's _build_basis_polynomials), so they change the
+            # basis count/composition — same geometry + k, different
+            # junctions must not alias (issue #240). junction_ports is
+            # deliberately excluded: per #234/_same_constraints, a port
+            # moves a KCL row out of the constraint set without touching
+            # the assembled operator, so it cannot stale this cache.
+            tuple(tuple((w, e) for (w, e) in jw) for jw in self.junctions),
         )
         op = _ARRAY_OP_CACHE.get(key)
         if op is None:
@@ -1231,7 +1253,7 @@ class ArrayBlockSolver(HMatrixSolver):
         for s, e in enumerate(reps):
             self._checkpoint()  # per distinct self-block dense fill
             g = part.groups[e]
-            sb_key = self._self_block_key(ctx, part.seg_groups[e], k)
+            sb_key = self._self_block_key(ctx, part.seg_groups[e], g, k)
             blk = _SELF_BLOCK_CACHE.get(sb_key)
             if blk is None:
                 blk = self.zblock(g, g, k=k)
