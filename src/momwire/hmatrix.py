@@ -1395,7 +1395,7 @@ class HMatrixSolver(BSplineSolver):
         `compute_port_solution()` and nothing else (#232)."""
         return self.compute_port_solution().y
 
-    def compute_port_solution(self):
+    def compute_port_solution(self, same_edge_prep=None):
         """Solve every port from ONE operator fill and ONE block-GMRES group.
 
         Same contract as `BSplineSolver.compute_port_solution` — ports are
@@ -1413,31 +1413,26 @@ class HMatrixSolver(BSplineSolver):
 
         `basis` is an opaque handle, stable across the ports of this one
         solution and NOT across solves.
+
+        `same_edge_prep` rides through to the dense fallback for the same
+        reason `compute_impedance` accepts it — the dense swept loop calls
+        back in with the sweep's hoisted same-edge block — and is ignored on
+        the accelerated path, which builds its own blocks.
         """
         if self._hmatrix_unsupported():
-            return super().compute_port_solution()
+            return super().compute_port_solution(same_edge_prep=same_edge_prep)
         ctx = self._context()
         geom = ctx["geom"]
         n = ctx["n_basis"]
         H = self._build_operator()
-        B = np.zeros((n, len(self.feeds)), dtype=np.complex128)
-        for j, (w_i, arc_i, _v) in enumerate(self.feeds):
-            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
-            s_f_j = arc_i if arc_i is not None else arc_at_knot[-1] / 2.0
-            B[:, j] = self._build_source_vector(
-                geom,
-                ctx["wire_knots"],
-                ctx["wire_basis_global"],
-                n,
-                wi=w_i,
-                s_f=s_f_j,
-            )
         # Junction-port columns (#172 dense contract, lifted onto the
         # iterative paths by #234): the ported junction's KCL row leaves the
         # constraint set and becomes a port column, drive vector == readout
-        # vector as for a gap feed, so the mixed Y stays symmetric.
-        kcl_con, port_A, _port_V = self._split_kcl_ports(ctx["kcl_A"])
-        B = np.hstack([B, port_A.T.astype(np.complex128)])
+        # vector as for a gap feed, so the mixed Y stays symmetric. Built by
+        # the dense family's helper so the two never diverge (#252).
+        B, kcl_con = self._port_columns(
+            geom, ctx["wire_knots"], ctx["wire_basis_global"], n, ctx["kcl_A"]
+        )
         X = self._solve_hmatrix(H, kcl_con, B)
         self._hmatrix = H
         Y = B.T @ X
@@ -1455,9 +1450,19 @@ class HMatrixSolver(BSplineSolver):
             ),
         )
 
-    def compute_impedance(self):
+    def compute_impedance(self, same_edge_prep=None):
+        """Driving-point impedance on the accelerated operator.
+
+        `same_edge_prep` is the dense sweep's hoisted same-edge reg-moment
+        block for this k. The accelerated fill builds its own blocks and has
+        no use for it, but the signature has to accept it: on a configuration
+        the accelerator does not serve, `compute_impedance_swept` hands the
+        whole sweep to the dense base, whose per-k loop calls back into THIS
+        method with the hoist. Before it did, an enriched sweep on an
+        H-matrix solver raised `TypeError` from inside the base sweep.
+        """
         if self._hmatrix_unsupported():
-            return super().compute_impedance()
+            return super().compute_impedance(same_edge_prep=same_edge_prep)
         ctx = self._context()
         geom = ctx["geom"]
         n = ctx["n_basis"]
@@ -1513,24 +1518,73 @@ class HMatrixSolver(BSplineSolver):
         if self._hmatrix_unsupported():
             return super().compute_impedance_swept(k_array)
         k_array = np.asarray(k_array, dtype=float)
-        n_ports = len(self.feeds) + len(self.junction_ports)
+        n_ports = self._port_count()
         if n_ports == 1:
             z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
         else:
             z_out = np.zeros((k_array.shape[0], n_ports), dtype=np.complex128)
-        k_save, wl_save, omega_save = self.k, self.wavelength, self.omega
-        try:
+        with self._k_restored():
             for i, kk in enumerate(k_array):
-                self.k = float(kk)
-                self.omega = self.k * self.c
-                self.wavelength = self.c / (self.omega / (2 * np.pi))
+                self._set_k(kk)
                 z, _ = self.compute_impedance()
                 z_out[i] = z
-        finally:
-            self.k = k_save
-            self.wavelength = wl_save
-            self.omega = omega_save
         return z_out
+
+    def _port_solutions_swept(self, k_array):
+        """Swept ports on the accelerated operator — the `compute_y_matrix_swept`
+        / `compute_port_solution_swept` twin of `compute_impedance_swept`
+        (issue #241).
+
+        Without this, a swept Y on an accelerated solver fell straight through
+        to `BSplineSolver`'s implementation and ran the DENSE fill per k: the
+        batched dense assembly (or, with that accelerator absent, a dense
+        `_compute_Z_operator`) for every frequency, silently bypassing the very
+        operator the caller asked for. It was never wrong — the dense path is
+        the reference, junction ports and all — just quietly not accelerated.
+        Now the sweep rebinds k per point and reuses the fast
+        `compute_port_solution`, exactly as the impedance sweep above reuses
+        the fast `compute_impedance`; `ArrayBlockSolver` inherits it and gets
+        its per-k operator-cache hits along the way.
+
+        The tradeoff is the same one `compute_impedance_swept` has always
+        made, and it is worth stating because it does NOT run one way.
+        Measured on this box, a 3-point sweep of a gap-fed linear array
+        (1 port, d=2), dense batched route vs this one:
+
+            480 bases    0.28 s / 207 MB   →   1.61 s / 120 MB
+            1600 bases   1.87 s / 897 MB   →  10.04 s / 304 MB
+            3360 bases   9.52 s / 3.6 GB   →  28.9 s  / 491 MB
+
+        The batched dense sweep amortizes one C++ assembly and one stacked
+        LAPACK factorisation across a whole k-chunk; this route rebuilds an
+        ACA operator and re-runs GMRES per frequency, so at small and middling
+        n it is several times SLOWER in wall clock. What it does not do is
+        grow as n²: the dense route is already at 3.6 GB by 3,360 bases and
+        does not survive the models `HMatrixSolver` exists for at all (issue
+        #143's whip: 12,682 bases, 21.6 GiB dense). Picking the accelerated
+        solver and getting a dense sweep was not a free win, it was an OOM
+        waiting for a big enough model — and it made one solver answer swept Y
+        and swept Z on two different engines. Callers who want the batched
+        dense sweep should ask for it by using `BSplineSolver`.
+
+        The per-k rebuild is not fundamental: the ACA block tree and
+        admissibility are k-independent and only the block CONTENTS move with
+        frequency, so a swept H-matrix fill could batch the k axis the way the
+        dense assembly already does. That is a separate piece of work.
+
+        Falls back to the dense base sweep wherever the accelerator is
+        unsupported for this configuration (singular enrichment), which is
+        also where the base sweep's batched same-edge precompute is worth
+        having.
+        """
+        if self._hmatrix_unsupported():
+            yield from super()._port_solutions_swept(k_array)
+            return
+        with self._k_restored():
+            for kk in np.asarray(k_array, dtype=float):
+                self._checkpoint()  # top of each frequency iteration
+                self._set_k(kk)
+                yield self.compute_port_solution()
 
     def __init__(
         self,
