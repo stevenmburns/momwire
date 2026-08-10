@@ -1985,7 +1985,8 @@ class SinusoidalSolver(_Cancelable):
         # threshold a complex product with a dead operand is evaluated in place
         # by a different loop, which would make this (…, n_qp)-sized array's
         # rounding depend on the fill's BLOCK size — the one thing
-        # `test_far_fill_blocking_is_bit_exact` may not tolerate.
+        # `test_far_fill_blocking_is_ulp_exact` bounds (a few ULPs, #236;
+        # the named-steps discipline is what keeps it that tight).
         dg_phase = _expm1_neg_j(k * delta)
         dg_a = e_ref * dg_phase
         dg_b = g_ref * delta
