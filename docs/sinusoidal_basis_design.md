@@ -11,15 +11,22 @@ piece of NEC's machinery.
 
 ## Scope
 
+(The v1 scope, kept as a record of what the from-the-spec build set out to
+prove. Several bullets have since been lifted by later arcs and are annotated
+where a section below carries the design.)
+
 * Free space only (no Sommerfeld ground, no PEC image, no patches/MFIE).
-* Thin-wire kernel only (Eq. 68-72 / 75-79); no extended thin-wire kernel.
+* Thin-wire kernel only (Eq. 68-72 / 75-79). *(Superseded: the extended
+  thin-wire kernel is served on both sinusoidal solvers — see "The extended
+  thin-wire kernel (Eqs 84–98)" below.)*
 * Applied-E "delta-gap" source only (Eq. 187); no slope-discontinuity source.
 * Wires with arbitrary 3D polylines, junctions at endpoints between wires.
 * Same wire radius `a` everywhere (uniform-radius simplification — the
-  hentenna is uniform radius).
+  hentenna is uniform radius). *(Superseded: per-wire radius, momwire#147,
+  below.)*
 
-Out of scope (deliberate): networks, loads, transmission lines, ground plane,
-extended thin-wire, magnetic-frill source, ratings of segment ≥ 2a etc.
+Out of scope in v1 (deliberate): networks, loads, transmission lines, ground
+plane, extended thin-wire, magnetic-frill source, ratings of segment ≥ 2a etc.
 
 ## The continuous problem (Section II.1)
 
@@ -270,6 +277,165 @@ basis-degree-independent (d=1 vs d=2 within ~0.1 Ω at N=81), so its
 mixed-radius validation rests on (a) cross-degree consistency at the
 step, and (b) direct PyNEC parity on mixed-radius JUNCTIONS (fat vertical
 + thin radials: ~0.5 Ω, stable under refinement), where NEC converges.
+
+## The extended thin-wire kernel (Eqs 84–98)
+
+Everything above is NEC's *reduced* ("thin-wire") kernel: the source current
+is a filament on the wire axis, the observer sits on the wire surface, and
+the conductor's girth survives only as Eq. 84's regularization
+`R = √((z-z')² + a²)`. The EXTENDED kernel (NEC's EK card; momwire#233 on
+the point-matched solver, momwire#246 on the Galerkin one) instead keeps the
+current as a uniform tube of surface current at `ρ' = a` and averages the
+free-space Green's function over the circumference (Eq. 85). Eqs. 86-88
+expand that average in a Taylor series about the axial filament and truncate
+at second order — exact to O(a²/R²), and, crucially, reintroducing the
+`ρ' ≠ 0` terms the reduced kernel drops. Eq. 89 is the resulting scalar
+kernel and Eqs. 90-98 are its z- and ρ-derivatives, the six per-end
+quantities the field expressions consume. This is what makes fat conductors
+— Δ/a below ~3 — answerable at all.
+
+### Eq. 89 as a factor of the reduced kernel (momwire#249)
+
+The re-derivation both solver families build on (module comment in
+`src/momwire/_bspline_kernels.py`): write Eq. 89 as
+
+    G_ek = G_red · fac(R; a, k)
+    fac  = 1 + T1·C2 − T2·C1
+    C1   = 1 + jkR          C2 = 3·C1 − (kR)²
+    T1   = a²ρ²/(4R⁴)       T2 = a²/(2R²)
+
+i.e. the O(a²) truncation of the azimuthal tube average, seen from an
+observer a distance ρ off the source axis. momwire extends only COAXIAL
+EQUAL-RADIUS pairs (`_ek_axis_groups`, NEC's own thresholds: same line to
+|t·t'| ≥ 1 − 1e-6, radii equal to 1e-6 relative), and on those the whole
+thing collapses: the observer sits on its own wire's surface on the same
+axis, so ρ = a, the tube radius is a, and R = √(ζ² + a²) is *the same
+regularized R the reduced kernel already computes*. Eq. 89 becomes a scalar
+multiplicative factor of R alone (`_ek_factor`), manifestly symmetric in
+i ↔ j and manifestly → 1 as a → 0. NEC's IRA swapped arm is unreachable in
+this specialisation (the test `ρ_eval < b` is strict and `ρ_eval = b = a`).
+
+### The point-matched route: per-end substitution (momwire#233/#245)
+
+NEC implements Eqs. 84-98 as `GXX`, which stands in for the reduced-kernel
+`GX` at ONE END of ONE SOURCE SEGMENT at a time, and `EKSCX`, which is
+`EKSC` with GX swapped for GXX per end plus a correction to the
+constant-current term. momwire's collocation solver transcribes EKSCX
+directly (`SinusoidalSolver._extended_kernel_fields`; C++ twins
+`sinusoidal_field_tensor_ek` / `sinusoidal_field_tensor_ek_refl`), dropping
+into the same per-endpoint bracket slots as the reduced Eqs. 76-79 build.
+
+Gating is NEC's, per source-segment END (`_ek_gating`, the IND1/IND2
+codes): a free end extends (IND 1); a two-segment junction whose partner is
+collinear and of equal radius extends (IND 0), as does a perpendicular
+ground contact, where the image continues the wire straight through;
+everything else — a bend, a radius step, a non-perpendicular contact, a
+K ≥ 3 junction — keeps the reduced kernel at that end (IND 2). The docstring
+at `_ek_gating` maps each code to the nec2-1.2.1.2.f lines it transcribes.
+
+### The Galerkin route: a smooth delta, added (momwire#246)
+
+The Galerkin fill's reduced path is #205's folded closed forms, whose
+cancellation discipline is load-bearing; substituting per-end closed forms
+into it was rejected outright. Instead the reduced fill is computed exactly
+as it always was and `SinusoidalSolver._folded_ek_delta_fields` ADDS a
+Gauss-Legendre quadrature of the extended-minus-reduced delta on the
+eligible pairs, with the folded source shape evaluated POINTWISE as
+−2·sin²(kξ/2). Nothing is subtracted anywhere, so the fold's discipline
+never comes up, and an ineligible pair comes back bit-for-bit the reduced
+fill's.
+
+**The delta kernel.** Write the reduced kernel as a function of u = R²,
+`g(u) = e^{−jkR}/R`, whose u-derivatives are the reverse Bessel polynomials:
+`g⁽ⁿ⁾(u) = (−½)ⁿ·e^{−jkR}·Aₙ(jkR)/R^{2n+1}`. Averaging over the source tube
+with `R(φ)² = u + a² − 2aρ·cos φ` — the same expansion as Eqs. 86-88, kept
+in terms of the moments ⟨R²−u⟩ = a², ⟨(R²−u)²⟩ = a⁴ + 2a²ρ² — gives the
+delta this integrates:
+
+    W(ρ, ζ) = a²·g′(u) + a²·ρ²·g″(u)
+
+At ρ = a — which is what eligibility MEANS — W is Eq. 89's `(fac − 1)·G_red`
+term for term. Keeping the ρ² rather than substituting a² for it changes
+nothing on the pairs served, but it is the difference between a right and a
+wrong E_ρ: E_ρ differentiates the kernel in ρ, and Eq. 89's factor form,
+being a function of R and a alone, has no honest ρ-derivative to give.
+Measured, substituting a² first lands E_ρ at HALF the exact circumferential
+average and half of NEC's own EKSCX; W reproduces both. E_z is untouched by
+the choice (∂/∂z reaches u only through ζ). The field operators are the
+reduced path's own — `E_z[s] = −pref_z·∫ s·(k² + ∂²_z)W dξ`,
+`E_ρ[s] = −pref_z·∫ s·∂²_{ρz}W dξ` — sympy-derived and proved against the
+shipped reduced closed forms in `scripts/derive_galerkin_ek_delta.py`, so no
+sign or prefactor is fitted.
+
+**The quadrature variable, and why it is not ξ.** W is bounded (at ζ = 0 it
+tends to ¼·G_red(a)) and analytic along the whole source segment, its
+nearest pole — the reduced kernel's own ζ = ±jρ — a full wire radius off the
+real axis. But "a wire radius off the axis" governs convergence only once
+the path is measured in radii: in ξ the delta is a spike of width ρ inside a
+segment of half-length H, so a fixed rule's accuracy is set by ρ/H and
+collapses on exactly the pairs a fill cares most about — the self pair and
+its neighbours, where the observer sits ON the source segment. Measured, a
+plain 16-node ξ rule at the self pair is wrong by 5× the answer at Δ/a = 6
+and by 1e6× at Δ/a = 122. The integration therefore runs in the sinh-mapped
+variable
+
+    ζ = ρ·sinh t,   R = ρ·cosh t,   t ∈ [asinh((z−H)/ρ), asinh((z+H)/ρ)]
+
+— R in closed form, never through a difference of squares — in which the
+spike is O(1) wide whatever ρ/H is, the kernel's poles sit at t = ±jπ/2
+independent of ρ, and the interval's half width grows only like ln(2H/ρ),
+covered by a composite rule of `n_panels` equal panels of 16 nodes
+(`_ek_delta_rule`). Refining means adding panels, not nodes, and one rule
+serves every wire thickness.
+
+**Pair rule, not per-end gating.** Eligibility on the Galerkin fill is per
+PAIR — coaxial and equal radius (`SinusoidalGalerkinSolver._ek_pairs`, label
+scan shared verbatim with `_bspline_kernels._ek_axis_groups`) — and NOT
+NEC's per-end IND codes. Transplanted into a Galerkin fill, a per-END
+decision depends on which segment is the SOURCE, so G(i, j) would be
+extended while G(j, i) was not, and ‖G−Gᵀ‖/‖G‖ — the reciprocity residual
+this solver family uses as its error detector — would stop measuring
+anything. The pair rule is symmetric by construction, reproduces NEC's
+decision on straight wires and on perpendicular ground contacts (via the
+mirrored source, scored in ONE joint scan over real ∧ mirrored segments so a
+horizontal wire and its offset image are never mislabelled coaxial), and is
+strictly MORE conservative at bends, radius steps and K ≥ 3 junctions, where
+NEC still extends the cross-arm pairs — worth ~1 % of Z at Δ/a = 2 and O(h)
+under refinement (momwire#249 §4.3).
+
+**Near/far tiers.** The panel count is the second tier of the near/far split
+the Galerkin test quadrature already runs on: coaxial pairs whose observer
+can sit inside the source segment's span are pairs whose segments overlap,
+i.e. separation zero, i.e. NEAR pairs — so the split by near-ness IS the
+split by whether the spike is inside the integration path. Near pairs take
+the dense rule (8 panels, measured converged over Δ/a from 1 to 500); far
+pairs are converged on one. This is also why
+`SinusoidalGalerkinSolver(extended_kernel=True)` requires
+`near_correction=True`: under EK the near path is not a refinement but where
+the on-segment pairs are computed at all.
+
+**The floor.** Reduced-plus-delta is a near-cancelling decomposition — the
+two kernels agree away from the wire, so the delta's whole-line integral
+very nearly vanishes and an on-segment pair carries ~(H/ρ)² of cancellation;
+float64 leaves ~ε·(H/ρ)² of the delta's peak behind. The EK shift is itself
+O((ρ/H)²), so the two scale against each other and the error that reaches Z
+stays ~1e-10 relative out to Δ/a ≈ 500; past Δ/a ≈ 1e4, where the kernel is
+a 1e-8 effect anyway, the decomposition is noise-limited. That is a property
+of reduced-plus-delta, not of the quadrature, and it bounds how thin a wire
+the decomposition can resolve an EK correction for.
+
+**What is served, what refuses.** Free space, the PEC image and the
+reflection-coefficient image, plus the graded near-pair correction on each
+(the Fresnel dyad is a per-pair weight applied AFTER the field tables, so
+the delta rides through it exactly as the reduced field does). The
+junction/node lumped-charge blocks stay reduced — their source is a point
+charge at a node, which has no tube to average over. The Sommerfeld
+remainder under EK refuses (its delta story is a separate validation arc —
+momwire#287); `BSplineSolver` serves every ground under EK with the
+remainder deliberately reduced on a measured O((a/2h)²) argument
+(momwire#269, `bspline.py` class docstring). Measured results — the nec2c
+ladder shift, the symmetry ratios, the thin-rung deviation — are §20 of
+`docs/sinusoidal-galerkin-instrument-report.md`.
 
 ## Output
 
