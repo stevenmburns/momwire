@@ -36,11 +36,18 @@ and risks. Pick it up from here in a fresh session.
   (mixed-potential) path**: vs PyNEC gn 0, |ΔΓ| ≈ 0.004 (mesh floor) for
   h ≥ 0.15λ, 0.019 at 0.1λ, 0.127 at 0.05λ, diverging at contact — while
   the field-based sinusoidal solver matches NEC's dyad exactly at every
-  height (|ΔΓ| ≈ 0.0005). Below the window, use
-  `ground_model="sommerfeld"` (both bases track NEC there, and it handles
-  ground contact since #151) or the sinusoidal basis. No Φ-mode constant
-  can fix the near field — the quasi-static image-charge interaction has
-  no plane-wave weight.
+  ELEVATED height (|ΔΓ| ≈ 0.0005). That reading was taken on lifted wires
+  only and says nothing about a wire END LYING IN the plane: there the
+  sinusoidal solvers used to diverge under mesh refinement (momwire#282),
+  because #151's ground-connected basis is exact for a PEC image and a
+  Fresnel image is not — the end charges no longer cancel and (1−ρ)·I/jω is
+  left on the plane. #282 removes that charge and the contact answer settles
+  (see `test_282_*` in tests/test_ground_junction.py); the EXTENDED-kernel
+  contact fill over a lossy ground is still unstable, because the correction
+  is written on the reduced kernel's end-charge bracket. Below the window,
+  use `ground_model="sommerfeld"` (both bases track NEC there) or the
+  sinusoidal basis. No Φ-mode constant can fix the near field — the
+  quasi-static image-charge interaction has no plane-wave weight.
 
 ## What NEC IPERF=0 actually does
 

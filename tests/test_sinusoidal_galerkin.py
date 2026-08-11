@@ -51,6 +51,7 @@ Sommerfeld source-side quadrature near the plane; the per-ground restatement of
 G2's PyNEC amendment), and the one inherited defect it turned up.
 """
 
+import contextlib
 import functools
 
 import numpy as np
@@ -1157,6 +1158,28 @@ def test_g4_symmetry_holds_with_the_ground_terms_in(geom_name, ground):
     )
 
 
+@contextlib.contextmanager
+def _without_the_282_contact_correction():
+    """Assemble with #282's ground-contact charge correction switched off.
+
+    The correction is a SOURCE-side term (see
+    `SinusoidalSolver._contact_charge_kernel`): it removes the charge a
+    basis leaves on the plane, and nothing removes it from the test
+    function's side, because a test function has no charge to remove. So on
+    a deck that touches a FINITE ground it makes the fill non-self-adjoint
+    by construction — measured below. Everything in this module that is
+    about the fill's own reciprocity therefore measures it with the
+    correction off, which is what those tests were always about.
+    """
+    cls = SinusoidalGalerkinSolver
+    orig = cls._contact_charge_correction_tested
+    cls._contact_charge_correction_tested = lambda self, G, geom, k, sv, ctx: G
+    try:
+        yield
+    finally:
+        cls._contact_charge_correction_tested = orig
+
+
 def test_g4_sommerfeld_symmetry_near_the_plane_is_source_quadrature_limited():
     """The one symmetry number above the gate at default settings, given a
     cause rather than a carve-out.
@@ -1165,14 +1188,25 @@ def test_g4_sommerfeld_symmetry_near_the_plane_is_source_quadrature_limited():
     Gauss rule (`n_qp_sommerfeld`, default 3 — the point-matched solver's
     default, untouched here) is what limits reciprocity: the remainder kernel
     varies fastest when the image point is closest, i.e. exactly at a wire
-    touching the plane. Measured 6.65e-10 (q=3) → 7.01e-12 (q=5) → 6.26e-12
-    (q=7) → 6.27e-12 (q=9): a clean quadrature convergence onto the same
-    ~6e-12 floor the PEC ground reaches, not a structural asymmetry.
+    touching the plane. Measured 6.70e-10 (q=3) → 7.24e-12 (q=5) → 5.80e-12
+    (q=7): a clean quadrature convergence onto the same ~6e-12 floor the PEC
+    ground reaches, not a structural asymmetry.
 
-    Refining the TEST rule instead does nothing (6.65e-10 → 6.60e-10 at
-    n_qp_test=16), which is what identifies the source side as the limiter —
-    the same diagnosis M2 made for the free-space floor.
+    Refining the TEST rule instead does nothing, which is what identifies the
+    source side as the limiter — the same diagnosis M2 made for the
+    free-space floor.
+
+    Measured with #282's contact-charge correction OFF: that correction is
+    deliberately one-sided and dominates this number when it is on (3.9e-3,
+    quadrature-independent — `test_the_282_contact_correction_is_not
+    _self_adjoint` pins it). The quadrature statement below is about the
+    Sommerfeld remainder's own fill and is unchanged by #282.
     """
+    with _without_the_282_contact_correction():
+        _g4_sommerfeld_symmetry_body()
+
+
+def _g4_sommerfeld_symmetry_body():
     ratios = [
         _sym_ratio(
             _matrix(
@@ -1203,6 +1237,62 @@ def test_g4_sommerfeld_symmetry_near_the_plane_is_source_quadrature_limited():
         f"doubling the TEST rule reached the gate ({r_test:.2e}) — the limiter "
         "is not the source-side remainder quadrature after all"
     )
+
+
+def test_the_282_contact_correction_is_not_self_adjoint():
+    """#282's price, measured rather than assumed.
+
+    The contact-charge correction removes the point charge a wire end lying
+    in a FINITE ground plane leaves behind — a source-model defect (see
+    `SinusoidalSolver._contact_charge_kernel`), so it lands on that basis's
+    COLUMN and on nothing else. The fill it produces is therefore not
+    symmetric on such a deck: measured 3.9e-3 here against the 5.8e-12 the
+    same deck reaches with the correction off, and it does NOT move with any
+    quadrature rule, which is what says "structural" rather than "under-
+    resolved". A PEC ground or a wire clear of the plane is untouched (the
+    correction is identically zero there) and keeps the 1e-13 floor.
+
+    The alternative was a fill that stays symmetric and diverges under mesh
+    refinement — the #282 defect itself, ~30x off the cross-basis reference
+    and getting worse with every refinement. This test exists so the trade
+    is a recorded decision and not a silent regression: if a symmetric
+    formulation of the same removal is ever found, this number should fall
+    back to the quadrature floor and this test should be deleted.
+    """
+    somm = _sym_ratio(
+        _matrix(_m4_solver(SinusoidalGalerkinSolver, "m4_monopole", "somm"))
+    )
+    assert somm > 1e-4, (
+        f"the contact correction no longer breaks self-adjointness ({somm:.2e}) "
+        "— if that is a real fix, delete this test and tighten G4's"
+    )
+    # Quadrature-independent: it is the correction, not an under-resolved rule.
+    fine = _sym_ratio(
+        _matrix(
+            _m4_solver(
+                SinusoidalGalerkinSolver,
+                "m4_monopole",
+                "somm",
+                n_qp_test=16,
+                n_qp_near=16,
+                n_qp_sommerfeld=7,
+            )
+        )
+    )
+    assert abs(fine - somm) / somm < 0.05, (
+        f"the asymmetry moved with the rules ({somm:.2e} -> {fine:.2e}) — then "
+        "it is quadrature, not the correction"
+    )
+    # PEC contact and the elevated wire keep the floor: the correction is a
+    # no-op without a finite ground, and without a contact.
+    pec = _sym_ratio(
+        _matrix(_m4_solver(SinusoidalGalerkinSolver, "m4_monopole", "pec"))
+    )
+    lifted = _sym_ratio(
+        _matrix(_m4_solver(SinusoidalGalerkinSolver, "m4_vertical", "somm"))
+    )
+    assert pec < G1_GATE, f"PEC contact lost its symmetry floor: {pec:.2e}"
+    assert lifted < G1_GATE, f"the elevated wire lost its symmetry floor: {lifted:.2e}"
 
 
 def test_image_block_gets_its_own_near_pair_set():
@@ -1613,55 +1703,83 @@ def test_the_m4_reference_family_is_tight_enough_to_decide():
 # --- A finding, pinned rather than fixed -----------------------------------
 
 
-def test_finite_ground_at_a_ground_contact_is_an_inherited_defect():
-    """A wire END LYING IN the plane plus a FINITE ground is broken on BOTH
-    sinusoidal solvers, and M4 did not introduce it.
+def test_finite_ground_at_a_ground_contact_converges_since_282():
+    """A wire END LYING IN the plane plus a FINITE ground, which used to be
+    broken on BOTH sinusoidal solvers and is now a convergence gate.
 
-    #151's ground-connected basis folds a segment's image-side extension back
-    onto the segment — the end current is completed by its own image. That is
-    exact for a PEC plane (where the image IS the mirrored current) and it is
-    the reason the PEC contact monopole agrees with every other basis to <0.1%.
-    With a Fresnel-weighted or Sommerfeld image the image is no longer a
-    physical continuation of the wire, so the basis's built-in continuation is
-    inconsistent with the field model, and refining the mesh does not help:
+    #151's ground-connected basis lets the end current be nonzero by treating
+    the plane as a junction with the segment's own image. Over a PEC plane
+    that is exact. Over a finite ground the image carries only ρ of the wire
+    current, so the wire's end charge no longer cancels against the image's
+    and a point charge is left sitting ON the plane — whose potential at the
+    nearest collocation point grows like 1/Δ. That was #282: refining the
+    mesh made the answer worse, on both sinusoidal solvers and in nec2c
+    itself (measured, GN 2, the deck below at NS = 11/21/41: 80.95-106.25j,
+    101.26-206.92j, 121.18-314.57j — our own Sommerfeld column to 0.1%).
 
         n     galerkin           collocation        dense bspline
-        11    21.15  -965.56j    64.55  -484.08j    41.66 +22.12j
-        21    21.12  -920.65j    53.54  -632.64j    41.71 +22.35j
-        41    21.12  -896.35j    41.53  -741.49j    41.74 +22.50j
-        81    21.12  -883.02j    32.39  -806.50j    41.76 +22.60j
+        11    21.29  -964.39j    63.63   +49.07j    41.66 +22.12j     BEFORE
+        21    21.37  -918.65j    63.81   +49.32j    41.71 +22.35j
+        81    25.68  -850.88j    64.00   +49.62j    41.76 +22.60j
 
-    B-spline (value-1 end basis, no self-image folding) converges cleanly;
-    neither sinusoidal scheme goes anywhere near it. So this is a basis defect
-    shared with the point-matched solver, which per the standing rules is
-    recorded rather than "fixed" from the Galerkin side. It is also why the
-    finite grounds are gated on ELEVATED geometries throughout M4.
+        11    63.75  +49.44j     63.63   +49.07j    41.66 +22.12j     AFTER
+        21    63.87  +49.54j     63.81   +49.32j    41.71 +22.35j
+        81    64.02  +49.70j     64.00   +49.62j    41.76 +22.60j
 
-    (The PEC contact case, by contrast, is gated normally above — it is the
-    only ground for which the #151 basis is exact.)
+    #282 removes that charge — it is double-counting, not physics: ρ < 1 is
+    already the model's statement that the earth takes the current the plane
+    does not reflect, and the mixed-potential solvers never had the charge at
+    all (`BSplineSolver` builds its charge term from the basis derivative, so
+    a ground-contact basis has no end charge — which is why it converges).
+    Both sinusoidal schemes now settle to 0.4% over a 7x refinement and agree
+    with EACH OTHER to 0.3%.
+
+    What they do NOT do is agree with the b-spline reference: 63.9 vs 41.7 in
+    R on this thin-wire deck (Δ/a = 238, where the contact term is at its most
+    violent). That gap is recorded, not gated — the two families now differ by
+    a cross-basis contact-model difference of fixed size rather than by a
+    divergence, and NEC-2 forbids this configuration outright (a wire may not
+    connect to a finite ground; only GN 1 or a ground screen).
     """
     e = {"ground_eps": (10.0, 0.002)}
-    ns = (21, 81)
+    ns = (11, 21, 81)
     zb = [
         BSplineSolver(
             **_m4_monopole(n), ground_z=0.0, **e, degree=2
         ).compute_impedance()[0]
         for n in ns
     ]
-    # B-spline is converged: it barely moves over a 4x refinement.
-    assert abs(zb[1] - zb[0]) / abs(zb[0]) < 0.02, f"bspline reference moved: {zb}"
+    # B-spline is converged: it barely moves over a 7x refinement.
+    assert abs(zb[-1] - zb[0]) / abs(zb[0]) < 0.02, f"bspline reference moved: {zb}"
+    zs = {}
     for cls in (SinusoidalSolver, SinusoidalGalerkinSolver):
-        zs = [
+        z = [
             cls(**_m4_monopole(n), ground_z=0.0, **e).compute_impedance()[0] for n in ns
         ]
-        # ...and both sinusoidal schemes are nowhere near it, at either mesh.
-        assert all(abs(z - zb[i]) > 5.0 * abs(zb[i]) for i, z in enumerate(zs)), (
-            f"{cls.__name__} is no longer far from the bspline reference "
-            f"({zs} vs {zb}) — the documented defect may have been fixed; "
-            "re-derive this test rather than deleting it"
+        zs[cls.__name__] = z
+        spread = abs(z[-1] - z[0]) / abs(z[0])
+        assert spread < 0.02, (
+            f"{cls.__name__} no longer converges at a finite-ground contact "
+            f"(spread {spread:.3f} over NS={ns}): {z}"
         )
-    # The PEC contact case IS sound on the same wires — the contrast that
-    # localizes the defect to the non-PEC image, not to ground contact itself.
+        # ...and monotonically, toward its own limit rather than away.
+        errs = [abs(v - z[-1]) for v in z]
+        assert errs[0] > errs[1], f"{cls.__name__} is not settling: {z}"
+    # The two sinusoidal schemes agree with each other — the same contact
+    # model through two different testing schemes.
+    a, b = zs["SinusoidalSolver"], zs["SinusoidalGalerkinSolver"]
+    assert max(abs(x - y) / abs(x) for x, y in zip(a, b)) < 0.01, (
+        f"the sinusoidal family disagrees with itself at contact: {a} vs {b}"
+    )
+    # The recorded cross-basis gap, pinned loosely so a real convergence onto
+    # the b-spline answer would show up as a failure to be celebrated.
+    gap = abs(a[-1] - zb[-1]) / abs(zb[-1])
+    assert 0.2 < gap < 1.0, (
+        f"the sinusoidal/bspline contact gap moved to {gap:.3f} — if it "
+        "closed, re-derive this test around the agreement"
+    )
+    # The PEC contact case is sound on the same wires — the contrast that
+    # localizes what is left to the non-PEC image, not to ground contact.
     z_pec = [
         cls(**_m4_monopole(21), ground_z=0.0).compute_impedance()[0]
         for cls in (SinusoidalSolver, SinusoidalGalerkinSolver, BSplineSolver)

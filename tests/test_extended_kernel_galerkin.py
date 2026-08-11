@@ -28,6 +28,8 @@ variable, without which no node count reaches those probes at all. See
 `Z_OVER_DELTA` and `ON_SEGMENT_FLOOR`.
 """
 
+import contextlib
+
 import numpy as np
 import pytest
 
@@ -791,6 +793,19 @@ def test_the_pair_mask_is_symmetric_by_construction():
 # ---------------------------------------------------------------------------
 # G-B2 — reciprocity
 # ---------------------------------------------------------------------------
+@contextlib.contextmanager
+def _without_the_282_contact_correction():
+    """Assemble with #282's ground-contact charge correction off — see the
+    same-named helper in test_sinusoidal_galerkin.py."""
+    cls = SinusoidalGalerkinSolver
+    orig = cls._contact_charge_correction_tested
+    cls._contact_charge_correction_tested = lambda self, G, geom, k, sv, ctx: G
+    try:
+        yield
+    finally:
+        cls._contact_charge_correction_tested = orig
+
+
 def _sym_ratio(sim):
     geom = sim._build_geometry()
     G, _ = sim._assemble_Z(geom, sim.k)
@@ -823,8 +838,18 @@ def test_gb2_fat_wire_asymmetry_is_test_quadrature_limited(ground):
     The next test does that floor deliberately.
     """
     kw = _GROUND_KW[ground]
-    coarse = _sym_ratio(_monopole(extended_kernel=True, **kw))
-    fine = _sym_ratio(_monopole(extended_kernel=True, n_qp_test=16, n_qp_near=16, **kw))
+    # This deck STANDS IN the plane, so over a finite ground #282's
+    # contact-charge correction applies — and that correction is one-sided
+    # by construction (it removes a source-model charge; a test function has
+    # none to remove), which makes the fill non-self-adjoint at 8.5e-2 here.
+    # The quadrature statement this test makes is about the EK fill and is
+    # measured with the correction off; `test_the_282_contact_correction_is
+    # _not_self_adjoint` in test_sinusoidal_galerkin.py owns the trade.
+    with _without_the_282_contact_correction():
+        coarse = _sym_ratio(_monopole(extended_kernel=True, **kw))
+        fine = _sym_ratio(
+            _monopole(extended_kernel=True, n_qp_test=16, n_qp_near=16, **kw)
+        )
     assert coarse < 1e-10, coarse
     assert fine < 0.1 * coarse, f"{fine:.2e} did not improve on {coarse:.2e}"
     assert fine <= 10.0 * _sym_ratio(_monopole(n_qp_test=16, n_qp_near=16, **kw))

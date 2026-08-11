@@ -2102,25 +2102,26 @@ def _g16_mismatch(deck, ground):
 # meets it in PEC too, and the deck's own PEC value + margin where it does
 # not.
 #
-# (*) THE ORACLE IS UNUSABLE AT GROUND CONTACT OVER LOSSY GROUND, and it is
-# unusable EK-off, so this is not an EK finding. `SinusoidalSolver`'s own
-# EK-OFF answer for the contacting monopole over average soil DIVERGES
-# under mesh refinement while this solver's converges — measured, a = 0.02,
-# feed at the base segment:
+# (*) THE ORACLE IS UNUSABLE AT GROUND CONTACT OVER LOSSY GROUND WITH THE
+# EXTENDED KERNEL ON. momwire#282 fixed the EK-OFF half of this: the wire
+# end lying in the plane used to leave an uncancelled point charge there
+# (the image carries only ρ of the wire current, so the two end charges no
+# longer cancel), and the sinusoidal answer walked away under refinement.
+# The correction removes that charge, and EK-OFF now settles — measured,
+# a = 0.02, feed at the base segment, NS = 11/21/41:
 #
-#   NS    bspline refl soil    sinusoidal refl soil   sinusoidal somm soil
-#   11     28.23 +15.44j        66.84 −392.22j          80.66 −107.05j
-#   21     28.74 +15.82j        91.04 −702.06j         101.10 −207.36j
-#   41     29.22 +16.26j       112.75 −1019.03j        121.23 −314.69j
-#   61     29.48 +16.54j       109.14 −1054.33j        122.34 −335.55j
+#   ground              bspline              sinusoidal EK-OFF   spread
+#   refl-coef soil      28.23→29.22 +16j     33.67→29.54 +21j    0.13
+#   sommerfeld soil     52.83→54.43 +24j     53.64→52.84 +26j    0.02
 #
-# Under PEC ground the two agree at every NS (43.97+24.62j vs 44.15+24.93j
-# at NS = 21), and over SEA water — three orders more conductive, so nearly
-# the PEC limit — the Sommerfeld pairing is sound and is gated. So δ_sin on
-# the three starred pairings measures the oracle's instability, not the
-# kernel, and they are excluded here. `test_g16c_*` pins the reason so the
-# exclusion cannot rot: if the oracle is ever fixed, that gate fails and
-# these pairings should be moved back into `_G16_TOL`.
+# EK-ON it still walks — 32.30+38.50j → 21.28+116.34j over the same ladder,
+# spread 1.56 — because the correction is written on the REDUCED kernel's
+# end-charge bracket while an EK-on fill carries EKSCX's, and the O(a²/R²)
+# difference between them is ~10% of the charge at these meshes. So δ_sin on
+# the three starred pairings still measures the oracle's instability rather
+# than the kernel, and they stay excluded. `test_g16c_*` pins BOTH halves so
+# the exclusion cannot rot: the EK-OFF convergence #282 won, and the EK-ON
+# instability that is what is left to fix.
 
 _G16_UNSOUND = {
     ("mono_contact", "refl-coef soil"),
@@ -2218,17 +2219,29 @@ def _g16c_spread(cls, **ground):
     return abs(z[-1] - z[0]) / abs(z[0])
 
 
+def _g16c_spread_ek(cls, **ground):
+    z = [_g16c_contact_z(cls, ns, ek=True, **ground) for ns in _G16C_NS]
+    return abs(z[-1] - z[0]) / abs(z[0])
+
+
 def test_g16c_the_excluded_pairings_are_an_unstable_oracle_not_a_kernel_gap():
     """The exclusion in `_G16_UNSOUND`, as a measurement.
 
-    EK-OFF throughout — so nothing here is about the extended kernel. Over
-    average soil at ground CONTACT the sinusoidal oracle's impedance walks
-    away under mesh refinement (~100% over NS = 11 → 41) while this solver's
-    settles (~4%); over PEC ground both settle. If this ever fails because
-    the oracle stabilised, delete the corresponding entries from
-    `_G16_UNSOUND` and let G16/G16b measure them.
+    Over average soil at ground CONTACT the sinusoidal oracle used to walk
+    away under mesh refinement at ~100% over NS = 11 → 41, EK on or off.
+    momwire#282 fixed the EK-OFF half — the uncancelled contact-node charge —
+    and EK-OFF now settles to 0.13 (refl-coef) / 0.02 (Sommerfeld), against
+    this solver's 0.04 and the PEC controls' 0.03-0.04. EK-ON is still
+    unstable at 1.56, because #282's correction cancels the REDUCED kernel's
+    end-charge bracket and an EK-on fill carries EKSCX's instead.
+
+    That EK-ON number is why the three pairings stay out of G16/G16b: their δ
+    is an EK-vs-no-EK difference, so it is exactly the unstable quantity. If
+    the correction is ever extended to the EK bracket, this test fails on its
+    last assertion and those pairings should be moved back into `_G16_TOL`.
     """
     soil = dict(ground_eps=_G16_EPS["soil"])
+    somm = dict(soil, ground_model="sommerfeld")
     assert _g16c_spread(BSplineSolver) < 0.05, "the bspline PEC control is unstable"
     assert _g16c_spread(SinusoidalSolver) < 0.05, (
         "the sinusoidal PEC control is unstable"
@@ -2236,10 +2249,18 @@ def test_g16c_the_excluded_pairings_are_an_unstable_oracle_not_a_kernel_gap():
     assert _g16c_spread(BSplineSolver, **soil) < 0.10, (
         "the bspline contact answer over soil stopped converging"
     )
-    spread_sin = _g16c_spread(SinusoidalSolver, **soil)
-    assert spread_sin > 0.50, (
-        f"the sinusoidal oracle now converges at ground contact over soil "
-        f"(spread {spread_sin:.3f}) — re-enable the _G16_UNSOUND pairings"
+    # #282: the EK-OFF oracle converges, within 4x of this solver's own spread.
+    for name, ground in (("refl-coef", soil), ("sommerfeld", somm)):
+        spread = _g16c_spread(SinusoidalSolver, **ground)
+        assert spread < 0.20, (
+            f"the EK-OFF sinusoidal contact answer over {name} soil regressed "
+            f"to spread {spread:.3f} — momwire#282 is undone"
+        )
+    # ...and EK-ON does not, which is what the exclusion now names.
+    ek_spread = _g16c_spread_ek(SinusoidalSolver, **soil)
+    assert ek_spread > 0.50, (
+        f"the EK-ON sinusoidal oracle now converges at ground contact over "
+        f"soil (spread {ek_spread:.3f}) — re-enable the _G16_UNSOUND pairings"
     )
 
 

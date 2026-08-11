@@ -59,6 +59,11 @@ _HAVE_FIELD_TENSOR_EK_REFL = _acc is not None and hasattr(
 
 _EULER_GAMMA = 0.5772156649015329
 
+# Degenerate-geometry guard for the #282 contact-charge kernel: a
+# collocation point sitting exactly ON the contact node (a zero-length
+# segment) would otherwise divide by zero building p̂.
+_CONTACT_TINY = 1e-30
+
 # Threshold for dense vs sparse assembly in `_assemble_Z`. Below this N
 # the BLAS overhead on a tiny matrix loses to dense matmul; above it the
 # O(N³) zgemm cost on a mostly-zero matrix loses to CSC sparse matmul.
@@ -287,7 +292,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # E-field of each source shape, vector- and scalar-potential
         # contributions already merged — so NEC's field dyad applies
         # exactly and no image-charge (Φ-term) weighting split exists to
-        # approximate.
+        # approximate. One place the merge is NOT free is a wire end lying
+        # IN the plane: the end charge each shape's field carries there is
+        # ρ-weighted on the image side and not on the wire's, and the
+        # residual is a point charge on the plane. It cannot be reweighted
+        # in place for want of that same split, so it is subtracted whole —
+        # see `_contact_charge_kernel` (momwire#282).
         if ground_eps is not None and ground_z is None:
             raise ValueError("ground_eps requires ground_z to be set")
         self.ground_eps = ground_eps
@@ -2839,6 +2849,147 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             S[:, i0:i1, :] = np.einsum("snq,mnq->smn", shp * w_node[None], fq)
         return S
 
+    # ------------------------------------------------------------------
+    # The ground-contact node charge over a FINITE ground (#282)
+    # ------------------------------------------------------------------
+
+    def _contact_nodes(self, geom):
+        """Every wire end that LIES IN the ground plane, as
+        `(segment, sign, node_point)` — sign = −1 when the plane is at the
+        segment's end-1 (N⁻ side) and +1 at its end-2, so the node sits at
+        local arc `sign·h/2`. Empty unless there is a ground.
+        """
+        if self.ground_z is None:
+            return []
+        gm, gp = geom["ground_minus"], geom["ground_plus"]
+        seg_c, seg_t, seg_h = (
+            geom["seg_centers"],
+            geom["seg_tangents"],
+            geom["seg_h"],
+        )
+        out = []
+        for mask, sgn in ((gm, -1.0), (gp, +1.0)):
+            for i in np.flatnonzero(mask):
+                out.append((int(i), sgn, seg_c[i] + sgn * 0.5 * seg_h[i] * seg_t[i]))
+        return out
+
+    def _contact_node_values(self, geom, k, seg_view, i, sgn):
+        """`(bases, values)`: what every basis with support on segment `i`
+        is worth AT the contact node — the current each one delivers into
+        the plane, and so the charge each one would leave there.
+
+        Away from a junction only the segment's own basis is nonzero here
+        (a neighbour's extension vanishes at the node it does not touch),
+        but the whole CSR block is evaluated so a multi-wire junction
+        standing on the plane is covered without a special case.
+        """
+        blk = slice(seg_view["starts"][i], seg_view["starts"][i + 1])
+        sig = seg_view["sigma"][blk]
+        s = sgn * 0.5 * geom["seg_h"][i]
+        val = (
+            sig * seg_view["A"][blk]
+            + seg_view["B"][blk] * np.sin(k * s)
+            + sig * seg_view["C"][blk] * np.cos(k * s)
+        )
+        return seg_view["jbasis"][blk], val
+
+    def _contact_charge_kernel(self, geom, k, node, obs_c, obs_t, a_obs):
+        """Per-observer field of the SPURIOUS charge a unit contact current
+        leaves at `node`, tangentially projected — the #282 correction's
+        whole content.
+
+        Over a PEC plane a wire end in the plane is charge-free: the end
+        charge the wire's own field carries (+I/jω, the boundary term every
+        one of Eqs 76-79 puts at a segment end) is cancelled exactly by the
+        image's end charge at the SAME point, because the image current
+        equals the wire current there. Over a finite ground the image is
+        scaled by ρ, so the cancellation leaves (1−ρ)·I/jω sitting ON the
+        plane — a point charge whose potential at the nearest collocation
+        point grows like 1/Δ. That is #282: |Z| walks away under mesh
+        refinement instead of settling, in proportion to |1−ρ|, on both
+        sinusoidal solvers and in nec2c itself.
+
+        The charge is not physics; it is double-counting. ρ < 1 is already
+        the model's statement that the earth takes the current the plane
+        does not reflect — piling that same current up as a point charge on
+        the wire end charges the earth twice. The mixed-potential solvers
+        never had it: `BSplineSolver` builds its charge term from the basis
+        DERIVATIVE over the support, so a ground-contact basis simply has
+        no end charge, which is why it converges here and is the reference
+        this correction restores agreement with.
+
+        So subtract the residual charge's field. For a unit terminating
+        current the deposited charge is I/(jω), and with the kernel's own
+        thin-wire regularization r₀ = √(|d|² + a²) its field is
+
+            E = −jη/(4πk) · (1 + jkr₀)·e^{−jkr₀}/r₀³ · d,   d = r_obs − node
+
+        which is exactly the (1+jkr₀)(z−z')G₀/r₀² boundary term the closed
+        forms carry, in the same normalization — the cancellation is
+        algebraic, not a fit. The image's copy of it sits at the SAME point
+        (the node is its own mirror image) and is weighted by the ground:
+        the scalar C₂ under Sommerfeld, the Fresnel dyad under the
+        reflection-coefficient ground. What is returned is the residual,
+        real minus image-weighted, which is identically zero in the PEC
+        limit (ρ_v → 1, ρ_v + ρ_h → 0) and so leaves elevated and PEC
+        geometries untouched.
+        """
+        d = obs_c - node
+        r2 = np.einsum("...d,...d->...", d, d)
+        a2 = np.asarray(a_obs, dtype=float)
+        a2 = a2.reshape(a2.shape[:1]) if a2.ndim == 2 else a2
+        r0 = np.sqrt(r2 + a2 * a2)
+        pref = (
+            -1j
+            * self.eta
+            / (4.0 * np.pi * k)
+            * (1.0 + 1j * k * r0)
+            * np.exp(-1j * k * r0)
+            / (r0 * r0 * r0)
+        )
+        t_d = np.einsum("...d,...d->...", obs_t, d)
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        if self.ground_model == "sommerfeld":
+            # The image term the C₂ scalar multiplies is the whole of the
+            # Sommerfeld model's point-charge behaviour at the contact; the
+            # interpolated remainder is a smooth correction on the REAL
+            # source's ground response, with no 1/R there and so no share
+            # of the charge being cancelled.
+            return pref * (1.0 - (eps_t - 1.0) / (eps_t + 1.0)) * t_d
+        # Reflection-coefficient ground: the same dyad the image tensor
+        # applies, evaluated on the specular ray from the node — which IS
+        # its own image, so the ray is (node → observer) and cos θ = the
+        # observer's height over the plane divided by that distance.
+        # t·D·E = ρ_v(t·E) − (ρ_v + ρ_h)(t·p̂)(E·p̂) with E ∝ d.
+        dz = obs_c[..., 2] - self.ground_z
+        rmag = np.sqrt(np.maximum(r2, _CONTACT_TINY))
+        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, dz / rmag)
+        hyp = np.hypot(d[..., 0], d[..., 1])
+        safe = hyp > _CONTACT_TINY
+        inv_hyp = np.where(safe, 1.0 / np.where(safe, hyp, 1.0), 1.0)
+        px = np.where(safe, -d[..., 1] * inv_hyp, 1.0)
+        py = np.where(safe, d[..., 0] * inv_hyp, 0.0)
+        t_p = obs_t[..., 0] * px + obs_t[..., 1] * py
+        p_d = px * d[..., 0] + py * d[..., 1]
+        return pref * ((1.0 - rho_v) * t_d + (rho_v + rho_h) * t_p * p_d)
+
+    def _contact_charge_correction(self, G, geom, k, seg_view):
+        """Subtract the #282 residual contact charge from a collocated fill,
+        in place. No-op without a finite ground or without a contact, so
+        PEC and elevated geometries keep their base arithmetic exactly."""
+        if self.ground_eps is None:
+            return G
+        nodes = self._contact_nodes(geom)
+        if not nodes:
+            return G
+        obs_c, obs_t = geom["seg_centers"], geom["seg_tangents"]
+        a_obs = self._seg_radius(geom)
+        for i, sgn, node in nodes:
+            R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs)
+            jb, val = self._contact_node_values(geom, k, seg_view, i, sgn)
+            G[:, jb] -= sgn * R[:, None] * val[None, :]
+        return G
+
     def _assemble_Z(self, geom, k):
         Phi_c, Phi_s, Phi_co = self._field_tensor(geom, k)
         if self.ground_z is not None:
@@ -2922,6 +3073,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             M_B = scipy.sparse.csc_matrix((B_eff, (n_idx_arr, j_idx_arr)), shape=(N, N))
             M_C = scipy.sparse.csc_matrix((C_eff, (n_idx_arr, j_idx_arr)), shape=(N, N))
             G = (Phi_c @ M_A) + (Phi_s @ M_B) + (Phi_co @ M_C)
+        self._contact_charge_correction(G, geom, k, seg_view)
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
 
