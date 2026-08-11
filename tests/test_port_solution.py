@@ -48,7 +48,16 @@ ALL_CLASSES = SPLINE + SEGMENT
 
 # The accelerated operator's own approximations sit above the port algebra, so
 # the iterative gates tighten both knobs and compare near the solve tolerance.
-TIGHT = dict(aca_tol=1e-10, solve_tol=1e-11)
+#
+# `swept_dense_max_bases=0` pins the swept entry points onto the accelerated
+# route (#262). These fixtures are all far below the dispatch ceiling, so by
+# default their sweeps would take the batched DENSE route — a different engine
+# from the single-k `compute_port_solution` these gates compare against, which
+# would turn every "swept IS the stacked single-k" identity below into a
+# comparison of two solvers at ACA/GMRES tolerance. The gates here are about
+# port ALGEBRA drift, so they hold the engine fixed and let the dispatch have
+# its own gates (test_momwire.py, `swept_dense_dispatch`).
+TIGHT = dict(aca_tol=1e-10, solve_tol=1e-11, swept_dense_max_bases=0)
 
 
 def _tight(cls, kw):

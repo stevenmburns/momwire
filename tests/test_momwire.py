@@ -2737,6 +2737,220 @@ def test_bspline_swept_batched_path_skips_fallback_hoist(monkeypatch):
     s2.compute_y_matrix_swept(k_array)
 
 
+# ---- Swept size dispatch on the accelerated solvers (issue #262) ------------
+#
+# Below `HMatrixSolver.SWEPT_DENSE_MAX_BASES` both swept entry points hand the
+# sweep to the batched dense route instead of rebuilding the ACA operator per
+# frequency. The gates: the two routes agree (it is a performance dispatch,
+# not a physics change), BOTH entry points read the SAME predicate (#241 was
+# exactly the defect of one solver answering swept Y and swept Z on two
+# engines), and the ceiling stays inside the memory the dense route needs.
+
+
+def _dispatch_kw(nsegs=21, **extra):
+    """Two gap-fed dipoles, `nsegs` bases each — far below the dispatch
+    ceiling either way, so the default construction dispatches and
+    `swept_dense_max_bases=0` does not. Two ports so the Y gate has an
+    off-diagonal to disagree about.
+
+    The routing gates take the 21 (42 bases) default: cheap, and routing does
+    not care about block structure. The equality gate takes 40 (80 bases),
+    which is the smallest size on this geometry whose partition has any
+    ADMISSIBLE blocks at all — below it every block is near/dense, the ACA
+    tolerance never enters, and the two routes agree to 1e-13 for a reason
+    that has nothing to do with the dispatch being right.
+    """
+    L = 2 * 0.962 * 22 / 4
+    wires = [
+        np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]]),
+        np.array([[3.0, -L / 2, 0.0], [3.0, L / 2, 0.0]]),
+    ]
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=[[nsegs], [nsegs]],
+        nsegs=nsegs,
+        degree=2,
+        wavelength=22.0,
+        feeds=[(0, None, 1.0 + 0j), (1, None, 0.5 - 0.25j)],
+        **extra,
+    )
+
+
+def _dispatch_ks():
+    k0 = 2 * np.pi / 22.0
+    return np.linspace(0.94 * k0, 1.06 * k0, 4)
+
+
+@pytest.mark.parametrize(
+    "ground_kw", [{}, {"ground_z": 0.0, "z_offset": 2.2}], ids=["free", "pec"]
+)
+def test_swept_dense_dispatch_agrees_with_the_accelerated_route(ground_kw):
+    """The dispatched (dense) sweep and the forced-accelerated sweep are the
+    same answer, Z and Y, in free space and over PEC ground.
+
+    This is the gate that makes #262 a *policy* change: the two engines
+    differ by the accelerator's own approximations (ACA `aca_tol`, GMRES
+    `solve_tol`) and by nothing else, so the bound here is the iterative
+    tolerance, not machine precision. Measured on this box at the default
+    knobs: 1.0e-9 (Z) / 2.8e-9 (Y) free space, 6.3e-10 / 1.7e-9 over PEC on
+    this 80-basis fixture, and 1.5e-7 on a 240- and an 800-basis array where
+    the far blocks carry more of the matrix. The pin is loose enough for a
+    cross-compiler BLAS and for a bigger model's share of ACA, and far
+    tighter than any real routing mistake — a sweep on different geometry or
+    a shuffled port order blows through 1e-4 by orders.
+    """
+    from momwire.hmatrix import HMatrixSolver
+
+    z_off = ground_kw.pop("z_offset", 0.0)
+    kw = _dispatch_kw(nsegs=40, **ground_kw)
+    if z_off:
+        kw["wires"] = [w + np.array([0.0, 0.0, z_off]) for w in kw["wires"]]
+    ks = _dispatch_ks()
+
+    dispatched = HMatrixSolver(**kw)
+    assert dispatched._swept_prefers_dense(), "fixture must be under the ceiling"
+    accelerated = HMatrixSolver(**kw, swept_dense_max_bases=0)
+    assert not accelerated._swept_prefers_dense(), "escape hatch must pin accel"
+    # The accelerated side must really be compressing something, or this gate
+    # compares a dense solve with a dense solve and passes for free.
+    assert accelerated.build_partition()["far"], "fixture has no admissible blocks"
+
+    z_d = dispatched.compute_impedance_swept(ks)
+    z_a = accelerated.compute_impedance_swept(ks)
+    rel_z = np.abs(z_d - z_a).max() / np.abs(z_a).max()
+    assert rel_z < 1e-4, f"dispatched vs accelerated swept Z: rel {rel_z:.3e}"
+
+    y_d = HMatrixSolver(**kw).compute_y_matrix_swept(ks)
+    y_a = HMatrixSolver(**kw, swept_dense_max_bases=0).compute_y_matrix_swept(ks)
+    rel_y = np.abs(y_d - y_a).max() / np.abs(y_a).max()
+    assert rel_y < 1e-4, f"dispatched vs accelerated swept Y: rel {rel_y:.3e}"
+
+
+def test_swept_dense_dispatch_is_one_predicate_for_both_entry_points(monkeypatch):
+    """Z and Y route off the SAME predicate — forced both ways.
+
+    `_swept_prefers_dense` is monkeypatched True and then False, and each
+    entry point is checked to land on the engine the predicate names. A
+    mutation that hard-codes either route (an `if n_basis <= …` re-spelled
+    inside `compute_impedance_swept`, a `_port_solutions_swept` that forgets
+    to ask) fails one half of this: the forced predicate would no longer move
+    that entry point, and its trap fires.
+    """
+    from momwire.hmatrix import HMatrixSolver
+
+    kw = _dispatch_kw()
+    ks = _dispatch_ks()
+
+    def _trap(name):
+        def go(*_a, **_kw):
+            pytest.fail(f"swept route took the wrong engine: {name}")
+
+        return go
+
+    def _spy(solver, name):
+        seen = []
+        real = getattr(solver, name)
+
+        def wrapper(*a, **kw_):
+            seen.append(1)
+            return real(*a, **kw_)
+
+        monkeypatch.setattr(solver, name, wrapper)
+        return seen
+
+    # --- predicate True: both entry points must reach the batched dense route
+    for entry, dense_marker, accel_entry in (
+        (
+            "compute_impedance_swept",
+            "_compute_impedance_swept_batched",
+            "compute_impedance",
+        ),
+        ("compute_y_matrix_swept", "_swept_batched_z_chunks", "compute_port_solution"),
+    ):
+        s = HMatrixSolver(**kw)
+        monkeypatch.setattr(s, "_swept_prefers_dense", lambda: True)
+        seen = _spy(s, dense_marker)
+        monkeypatch.setattr(s, accel_entry, _trap(f"{entry} stayed accelerated"))
+        getattr(s, entry)(ks)
+        assert seen, f"{entry}: predicate True but the dense route never ran"
+
+    # --- predicate False: both entry points must rebuild the operator per k
+    for entry, dense_marker in (
+        ("compute_impedance_swept", "_compute_impedance_swept_batched"),
+        ("compute_y_matrix_swept", "_swept_batched_z_chunks"),
+    ):
+        s = HMatrixSolver(**kw)
+        monkeypatch.setattr(s, "_swept_prefers_dense", lambda: False)
+        monkeypatch.setattr(s, dense_marker, _trap(f"{entry} went dense"))
+        built = _spy(s, "_build_operator")
+        getattr(s, entry)(ks)
+        assert len(built) == len(ks), f"{entry}: one accelerated operator per k"
+
+
+def test_swept_dense_dispatch_ceiling_respects_the_dense_memory_it_implies():
+    """Provenance gate for `SWEPT_DENSE_MAX_BASES` (#262).
+
+    The constant is a measurement (the table lives in `_swept_prefers_dense`),
+    but the CAP on it is arithmetic, and that part a test can hold:
+
+    * a single-k dense Z at the ceiling is n²·16 B — must stay well inside
+      what a laptop can spare;
+    * the batched sweep's real peak is the (chunk, (d+1)², N, N) moment
+      tensor, and `_swept_batched_z_chunks` floors `chunk` at 1, so ONE k's
+      tensor at the ceiling must still fit the default `swept_mem_mb` (256 MB)
+      at degree 2 — past that point the #263 budget stops being honoured and
+      the dense peaks leave the few-hundred-MB range (measured: 919 MB at
+      1,600 bases, 3.7 GB at 3,360);
+    * #143's 12,682-basis whip — the model this accelerator exists for —
+      must never dispatch, at any construction.
+    """
+    from momwire.hmatrix import HMatrixSolver
+
+    cap = HMatrixSolver.SWEPT_DENSE_MAX_BASES
+    assert cap == 1024, "the ceiling is a measured constant; re-measure to move it"
+
+    dense_z_mb = cap * cap * 16 / (1 << 20)
+    assert dense_z_mb < 32, f"single-k dense Z at the ceiling: {dense_z_mb:.1f} MB"
+
+    default_budget_mb = BSplineSolver(**_dispatch_kw()).swept_mem_mb
+    moment_mb = (2 + 1) ** 2 * cap * cap * 16 / (1 << 20)
+    assert moment_mb <= default_budget_mb, (
+        f"one k's d=2 moment tensor at the ceiling is {moment_mb:.0f} MB, over "
+        f"the {default_budget_mb} MB default budget the chunk floor cannot honour"
+    )
+
+    whip = HMatrixSolver(**_dispatch_kw())
+    whip._hm_context = {**whip._context(), "n_basis": 12682}
+    assert not whip._swept_prefers_dense(), "#143's whip must never dispatch dense"
+
+
+def test_swept_dense_dispatch_escape_hatch_and_array_block_opt_out():
+    """The knob and the subclass opt-out, both directions.
+
+    `swept_dense_max_bases=None` takes the class default, 0 pins the
+    accelerated route at every size, and `ArrayBlockSolver` never dispatches
+    at all — its wall clock against the dense sweep is set by array structure,
+    not basis count, so the H-matrix threshold does not speak for it.
+    """
+    from momwire.array_block import ArrayBlockSolver
+    from momwire.hmatrix import HMatrixSolver
+
+    kw = _dispatch_kw()
+    assert HMatrixSolver(**kw).swept_dense_max_bases == (
+        HMatrixSolver.SWEPT_DENSE_MAX_BASES
+    )
+    assert HMatrixSolver(**kw, swept_dense_max_bases=0).swept_dense_max_bases == 0
+    assert HMatrixSolver(**kw, swept_dense_max_bases=16).swept_dense_max_bases == 16
+    # 16 is under this fixture's 42 bases, so the ceiling really is consulted —
+    # the knob is a threshold, not just an on/off.
+    assert not HMatrixSolver(**kw, swept_dense_max_bases=16)._swept_prefers_dense()
+    assert HMatrixSolver(**kw, swept_dense_max_bases=42)._swept_prefers_dense()
+
+    arr = ArrayBlockSolver(**kw)
+    assert not arr._swept_dense_dispatch_ok()
+    assert not arr._swept_prefers_dense(), "array sweeps stay on the array operator"
+
+
 @pytest.mark.parametrize(
     "ground_kw",
     [

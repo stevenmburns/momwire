@@ -1666,15 +1666,120 @@ class HMatrixSolver(BSplineSolver):
         z = z_per[0] if z_per.shape[0] == 1 else z_per
         return z, coeffs
 
+    # ------------------------------------------------------------------
+    # Size-based swept dispatch (issue #262)
+    # ------------------------------------------------------------------
+
+    #: Basis-count ceiling at or below which BOTH swept entry points hand the
+    #: whole sweep to the dense batched route instead of rebuilding the
+    #: accelerated operator per frequency. `_swept_prefers_dense` carries the
+    #: measurement table and the memory arithmetic behind the number.
+    SWEPT_DENSE_MAX_BASES = 1024
+
+    def _swept_dense_dispatch_ok(self):
+        """Whether the size-based swept dispatch may speak for this class.
+
+        True on the generic H-matrix accelerator, where the crossover really
+        is a function of the basis count. `ArrayBlockSolver` overrides it to
+        False: its wall clock against the dense sweep is set by the ARRAY
+        structure (element count, shape classes, lattice-FFT eligibility),
+        not by n, and measurably so — same 3-point sweep, same box, dipole
+        line array vs the batched dense route:
+
+            240 bases   0.283 s vs 0.060 s dense   (dense 4.7x faster)
+            480 bases   0.205 s vs 0.249 s dense   (dense 1.2x SLOWER)
+           1000 bases   1.901 s vs 0.712 s dense   (dense 2.7x faster)
+
+        A basis-count threshold cannot predict that ordering — at 480 it
+        would dispatch to the slower engine and pay 2.3x the memory for the
+        privilege. Measuring a second threshold in the array-structure
+        coordinates is the work that would lift this hook; guessing one is
+        exactly what #262 asks us not to do.
+        """
+        return True
+
+    def _swept_prefers_dense(self):
+        """The ONE predicate both swept entry points consult (issue #262).
+
+        Below a measured basis count the batched dense sweep beats this
+        class's per-k operator rebuild outright, so `compute_impedance_swept`
+        and `_port_solutions_swept` both hand the sweep to
+        `BSplineSolver`'s batched route. Having exactly one predicate is the
+        point: #241 was a bug in which one solver answered swept Y and swept Z
+        on two different engines, and a size rule spelled twice would grow the
+        same defect back. Both entry points call this; nothing else decides.
+
+        Measured on this box (3-point sweep, gap-fed linear array of
+        half-wave dipoles, degree 2, free space, one driven port; wall is the
+        whole sweep, MB is peak RSS of the process):
+
+            n_basis   dense batched        accelerated per-k     dense win
+              120     0.054 s /   90 MB    0.072 s /  86 MB        1.3x
+              240     0.052 s /  113 MB    0.200 s /  89 MB        3.9x
+              480     0.291 s /  211 MB    0.572 s / 113 MB        2.0x
+              800     0.526 s /  397 MB    1.193 s / 126 MB        2.3x
+             1000     0.745 s /  428 MB    1.479 s / 137 MB        2.0x
+             1600     1.767 s /  919 MB    3.741 s / 173 MB        2.1x
+             2000     2.505 s / 1387 MB    4.040 s / 231 MB        1.6x
+             3360     7.697 s / 3700 MB    8.991 s / 297 MB        1.2x
+
+        The dense advantage is real but it decays — 2x through the middle,
+        1.6x by 2,000 bases, 1.2x by 3,360 — while its memory grows as n².
+        (#262's own table, measured before the extended-kernel C++ work and
+        before #263, had the dense side 3.0-5.8x ahead; the accelerated route
+        has closed most of that gap on its own.) So the ceiling belongs where
+        the win is still worth paying for, and the memory arithmetic says the
+        same thing:
+
+        * a single-k dense Z at the ceiling is 1024² · 16 B = 16.8 MB;
+        * the batched route's real peak is the all-pairs moment tensor,
+          (chunk, (d+1)², N, N) complex. Post-#263 that tensor is chunked
+          under `swept_mem_mb` (default 256 MB) — which is what makes this
+          dispatch safe at all — but `_swept_batched_z_chunks` floors the
+          chunk at 1, so ONE k's tensor is the point past which the budget
+          stops being honoured. At d = 2 that is 9 · 1024² · 16 = 151 MB
+          (inside the budget); at d = 3, 268 MB (at it). Above ~1,365 bases
+          at d = 2 the floor bites, and the measured peaks leave the
+          few-hundred-MB range accordingly: 919 MB at 1,600, 3.7 GB at 3,360;
+        * #143's whip — 12,682 bases, the model `HMatrixSolver` exists for —
+          is 12x the ceiling and can never dispatch. Its dense Z alone would
+          be 2.57 GB, its moment tensor 23 GB.
+
+        `swept_dense_max_bases` is the per-instance escape hatch: 0 pins the
+        accelerated route at every size (a memory-constrained caller, or a
+        test that wants to exercise the accelerator on a small model), None
+        takes `SWEPT_DENSE_MAX_BASES`.
+
+        Dispatch also requires `_swept_batched_available()`. Without it the
+        dense base sweep falls onto its per-k loop, which calls back into
+        THIS class's `compute_impedance` / `compute_port_solution` — i.e. it
+        would run the accelerated route anyway, just with a wasted same-edge
+        hoist in front of it. The dispatch is a choice of engine, so it only
+        fires where the other engine is actually reachable.
+        """
+        cap = self.swept_dense_max_bases
+        if cap <= 0 or not self._swept_dense_dispatch_ok():
+            return False
+        if not self._swept_batched_available():
+            return False
+        return self._context()["n_basis"] <= cap
+
     def compute_impedance_swept(self, k_array):
         """Frequency sweep on the accelerated operator: rebind k per point and
         reuse the fast `compute_impedance` (which assembles the H-matrix /
         array block for that k). Overrides the dense base sweep, whose
         `same_edge_prep` batching argument the accelerated `compute_impedance`
-        doesn't accept — calling it would `TypeError`. Falls back to the dense
-        base sweep (with its batched same-edge precompute) whenever the
-        accelerator is unsupported for this configuration."""
-        if self._hmatrix_unsupported():
+        doesn't accept — calling it would `TypeError`.
+
+        Hands the whole sweep to the dense base in two cases: where the
+        accelerator is unsupported for this configuration (then the base
+        sweep's batched same-edge precompute is worth having), and where
+        `_swept_prefers_dense` says the model is small enough that the
+        batched dense route simply wins (#262). `_port_solutions_swept`
+        consults the same predicate, so swept Z and swept Y are never on
+        different engines.
+        """
+        if self._hmatrix_unsupported() or self._swept_prefers_dense():
             return super().compute_impedance_swept(k_array)
         k_array = np.asarray(k_array, dtype=float)
         n_ports = self._port_count()
@@ -1705,38 +1810,52 @@ class HMatrixSolver(BSplineSolver):
         the fast `compute_impedance`; `ArrayBlockSolver` inherits it and gets
         its per-k operator-cache hits along the way.
 
-        The tradeoff is the same one `compute_impedance_swept` has always
-        made, and it is worth stating because it does NOT run one way.
-        Measured on this box, a 3-point sweep of a gap-fed linear array
-        (1 port, d=2), dense batched route vs this one:
+        The tradeoff is the same one `compute_impedance_swept` makes, and it
+        is worth stating because it does NOT run one way. Re-measured on this
+        box post-#263 (3-point sweep, gap-fed linear array, 1 port, d=2;
+        wall / peak RSS), dense batched route vs this one:
 
-            480 bases    0.28 s / 207 MB   →   1.61 s / 120 MB
-            1600 bases   1.87 s / 897 MB   →  10.04 s / 304 MB
-            3360 bases   9.52 s / 3.6 GB   →  28.9 s  / 491 MB
+             480 bases   0.29 s /  211 MB   →   0.57 s / 113 MB
+            1000 bases   0.75 s /  428 MB   →   1.48 s / 137 MB
+            1600 bases   1.77 s /  919 MB   →   3.74 s / 173 MB
+            2000 bases   2.51 s / 1387 MB   →   4.04 s / 231 MB
+            3360 bases   7.70 s / 3700 MB   →   8.99 s / 297 MB
 
         The batched dense sweep amortizes one C++ assembly and one stacked
         LAPACK factorisation across a whole k-chunk; this route rebuilds an
         ACA operator and re-runs GMRES per frequency, so at small and middling
-        n it is several times SLOWER in wall clock. What it does not do is
-        grow as n²: the dense route is already at 3.6 GB by 3,360 bases and
-        does not survive the models `HMatrixSolver` exists for at all (issue
-        #143's whip: 12,682 bases, 21.6 GiB dense). Picking the accelerated
-        solver and getting a dense sweep was not a free win, it was an OOM
-        waiting for a big enough model — and it made one solver answer swept Y
-        and swept Z on two different engines. Callers who want the batched
-        dense sweep should ask for it by using `BSplineSolver`.
+        n it loses on wall clock. What it does not do is grow
+        as n²: the dense route is already at 3.7 GB by 3,360 bases and does
+        not survive the models `HMatrixSolver` exists for at all (issue #143's
+        whip: 12,682 bases, 21.6 GiB dense).
 
-        The per-k rebuild is not fundamental: the ACA block tree and
-        admissibility are k-independent and only the block CONTENTS move with
-        frequency, so a swept H-matrix fill could batch the k axis the way the
-        dense assembly already does. That is a separate piece of work.
+        Which is why the size rule is now a dispatch rather than an argument.
+        Below `_swept_prefers_dense`'s measured ceiling this generator hands
+        the sweep to the dense base itself; above it, the accelerated route is
+        the only one that finishes, and picking the accelerated solver and
+        silently getting a dense sweep would be an OOM waiting for a big
+        enough model. The one thing that must not happen is the #241 defect —
+        one solver answering swept Y here and swept Z somewhere else — so the
+        rule lives in a single predicate that `compute_impedance_swept` calls
+        too, and the escape hatch (`swept_dense_max_bases=0`) pins BOTH back
+        onto the accelerator at once.
+
+        The per-k rebuild is still not fundamental, and dispatch does not fix
+        it — above the ceiling every frequency pays a full fill. The ACA block
+        tree and admissibility are k-independent (`build_partition` is already
+        memoised across the sweep; only the block CONTENTS move with
+        frequency), so a swept H-matrix fill could batch the k axis the way
+        the dense assembly does. Profiled at 1,600 bases the per-k wall splits
+        ~57% near-block dense fill, ~25% far-block ACA, ~18% GMRES, so
+        k-batching the near fill is the piece with something to win and the
+        ACA/GMRES 43% is genuinely per-frequency. #262 holds that idea.
 
         Falls back to the dense base sweep wherever the accelerator is
         unsupported for this configuration (singular enrichment), which is
         also where the base sweep's batched same-edge precompute is worth
         having.
         """
-        if self._hmatrix_unsupported():
+        if self._hmatrix_unsupported() or self._swept_prefers_dense():
             yield from super()._port_solutions_swept(k_array)
             return
         with self._k_restored():
@@ -1754,6 +1873,7 @@ class HMatrixSolver(BSplineSolver):
         solve_tol=1e-6,
         hmatrix_use_accel=True,
         precond_eta=None,
+        swept_dense_max_bases=None,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -1776,6 +1896,16 @@ class HMatrixSolver(BSplineSolver):
         # Use the fused C++ off-edge block assembler for ACA far blocks when
         # available; set False to force the pure-numpy zblock path (testing).
         self.hmatrix_use_accel = bool(hmatrix_use_accel)
+        # Swept size dispatch (#262): at or below this many bases both swept
+        # entry points take the batched dense route instead of rebuilding the
+        # accelerated operator per frequency. None ⇒ the class default; 0 (or
+        # anything ≤ 0) ⇒ never dispatch, i.e. always accelerated — the opt-out
+        # for a memory-constrained caller. See `_swept_prefers_dense`.
+        self.swept_dense_max_bases = (
+            int(self.SWEPT_DENSE_MAX_BASES)
+            if swept_dense_max_bases is None
+            else int(swept_dense_max_bases)
+        )
         self._hm_context = None
         self._hm_gl01 = None
         self._hm_se_cache = {}
