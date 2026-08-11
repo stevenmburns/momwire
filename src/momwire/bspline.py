@@ -373,7 +373,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     swept_mem_mb : memory budget (MB, default 256) for dense moment tensors
         and for the batched swept path's per-chunk transients — the
         all-pairs J moment tensor plus
-        the same-edge reg moment blocks (see `_swept_batched_z_chunks`).
+        the same-edge reg moment blocks (see `_swept_batched_z_chunks`;
+        the per-k fallback sweeps chunk their same-edge hoist under the
+        same budget, `_same_edge_prep_swept_chunks`).
         Peak transient memory of a sweep ≈ this budget, so a
         memory-constrained deployment caps it per solve (e.g. 64 on a
         small shared host). Speed saturates by ~256 (chunk ≈ 8-16 on
@@ -1773,6 +1775,41 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
                 prep.append((sl, A_st, reg_geo))
         return prep
+
+    def _same_edge_prep_swept_chunks(self, prep, k_array):
+        """Yield `(ki, k, same_edge_k)` per sweep point, where `same_edge_k`
+        is the per-k `same_edge_prep` list the fallback sweeps hand to
+        `compute_port_solution` / `compute_impedance`.
+
+        The swept same-edge reg-moment hoist is chunked over k so the
+        hoisted blocks stay under the `swept_mem_mb` budget (issue #263):
+        the whole-sweep hoist is an O(n_k · nm² · ΣN_e²) transient that the
+        budget never saw — the same corner as #238's per-k tensor, one
+        multiplicative n_k worse. The chunk arithmetic mirrors the
+        same-edge term of `_swept_batched_z_chunks` (nm² ΣN_e² complex per
+        k). Chunking is pure re-batching: each k's moment block is computed
+        independently of its chunk mates, so a sweep that fits in one chunk
+        is byte-for-byte the old whole-sweep call, and a multi-chunk sweep
+        matches it to the last ulp.
+        """
+        k_array = np.asarray(k_array, dtype=float)
+        n_k = k_array.shape[0]
+        nm = self.degree + 1
+        sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _A_st, _g in prep)
+        bytes_per_k = nm * nm * sum_ne2 * 16
+        chunk = max(1, min(n_k, (self.swept_mem_mb << 20) // max(bytes_per_k, 1)))
+        for c0 in range(0, n_k, chunk):
+            self._checkpoint()  # before each chunk's batched reg-moment build
+            ks = k_array[c0 : c0 + chunk]
+            reg_chunk = [
+                _seg_seg_reg_moments_from_geometry_swept(reg_geo, ks)
+                for _sl, _A_st, reg_geo in prep
+            ]
+            for i in range(ks.shape[0]):
+                same_edge_k = [
+                    (sl, A_st, reg_chunk[e][i]) for e, (sl, A_st, _g) in enumerate(prep)
+                ]
+                yield c0 + i, ks[i], same_edge_k
 
     def _build_J_blocks(self, geom, k, same_edge_prep=None):
         """All polynomial moment integrals J_pq[i, j] for p, q ∈ {0..d} and
@@ -3605,20 +3642,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return
 
         # k-independent static + reg-geometry, shared across the sweep; the
-        # reg-kernel moment blocks are batched over all k up front (one einsum
-        # per edge instead of one per (edge, k)).
+        # reg-kernel moment blocks are batched over chunks of k sized to the
+        # `swept_mem_mb` budget (one einsum per (edge, chunk) instead of one
+        # per (edge, k); whole-sweep hoisting was issue #263).
         prep = self._same_edge_prep(geom)
-        reg_all = [
-            _seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)
-            for _sl, _A_st, reg_geo in prep
-        ]
         with self._k_restored():
-            for ki, kk in enumerate(k_array):
+            for _ki, kk, same_edge_k in self._same_edge_prep_swept_chunks(
+                prep, k_array
+            ):
                 self._checkpoint()  # top of each frequency iteration
                 self._set_k(kk)
-                same_edge_k = [
-                    (sl, A_st, reg_all[e][ki]) for e, (sl, A_st, _g) in enumerate(prep)
-                ]
                 yield self.compute_port_solution(same_edge_prep=same_edge_k)
 
     def _swept_batched_available(self):
@@ -3817,21 +3850,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return self._compute_impedance_swept_batched(k_array)
 
         # k-independent static + reg-geometry, shared across the sweep; the
-        # reg-kernel moment blocks are batched over all k up front (one einsum
-        # per edge instead of one per (edge, k)).
+        # reg-kernel moment blocks are batched over chunks of k sized to the
+        # `swept_mem_mb` budget (one einsum per (edge, chunk) instead of one
+        # per (edge, k); whole-sweep hoisting was issue #263).
         prep = self._same_edge_prep(self._build_geometry())
-        self._checkpoint()  # before the batched reg-moment build over all k
-        reg_all = [
-            _seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)
-            for _sl, _A_st, reg_geo in prep
-        ]
         with self._k_restored():
-            for i, kk in enumerate(k_array):
+            for i, kk, same_edge_k in self._same_edge_prep_swept_chunks(prep, k_array):
                 self._checkpoint()  # top of each frequency iteration
                 self._set_k(kk)
-                same_edge_k = [
-                    (sl, A_st, reg_all[e][i]) for e, (sl, A_st, _g) in enumerate(prep)
-                ]
                 z, _ = self.compute_impedance(same_edge_prep=same_edge_k)
                 z_out[i] = z
         return z_out
