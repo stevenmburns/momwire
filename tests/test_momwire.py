@@ -2604,6 +2604,139 @@ def test_bspline_y_swept_fallback_respects_memory_budget(monkeypatch):
     assert rel < 1e-10, f"chunked vs tensor swept Y disagreement: rel {rel:.2e}"
 
 
+def _swept_fallback_kw():
+    """One 21-segment dipole edge, the shared shape of the #263 probes."""
+    L = 2 * 0.962 * 22 / 4
+    wires = [np.array([[0.0, -L / 2, 0.0], [0.0, L / 2, 0.0]])]
+    return {
+        "wires": wires,
+        "n_per_edge_per_wire": [[21]],
+        "nsegs": 21,
+        "degree": 2,
+        "wavelength": 22.0,
+    }
+
+
+def test_bspline_swept_fallback_hoist_chunked_under_budget(monkeypatch):
+    """The fallback sweeps' same-edge reg-moment hoist is chunked over k
+    under `swept_mem_mb` (issue #263). Pre-#263 both fallback sweeps called
+    `_seg_seg_reg_moments_from_geometry_swept(reg_geo, k_array)` over the
+    WHOLE sweep — an O(n_k · nm² · ΣN_e²) transient the budget never saw
+    (~2 GB at 600 segments × 40 k, measured). The spy trips on any hoist
+    call whose k-chunk exceeds what the budget allows, so the pre-fix
+    whole-sweep call fails here without needing a multi-GB allocation.
+    """
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    # Force the fallback: with the batched swept assembly available the sweep
+    # never reaches the per-k route this test is about.
+    monkeypatch.setattr(bmod, "_HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL", False)
+
+    kw = _swept_fallback_kw()
+    n_k = 32
+    k0 = 2 * np.pi / 22.0
+    k_array = np.linspace(0.94 * k0, 1.06 * k0, n_k)
+
+    budget_mb = 1
+    s = BSplineSolver(**kw)
+    s.swept_mem_mb = budget_mb
+    # The helper's own chunk arithmetic: nm² ΣN_e² complex128 per k.
+    prep = s._same_edge_prep(s._build_geometry())
+    nm = s.degree + 1
+    sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _a, _g in prep)
+    max_chunk = max(1, (budget_mb << 20) // (nm * nm * sum_ne2 * 16))
+    assert max_chunk < n_k, "probe must need more than one chunk"
+
+    real = bmod._seg_seg_reg_moments_from_geometry_swept
+    seen = []
+
+    def spy(reg_geo, ks, *args, **kwargs):
+        seen.append(len(ks))
+        assert len(ks) <= max_chunk, (
+            f"hoist over {len(ks)} k at once exceeds the {budget_mb} MB budget "
+            f"(max chunk {max_chunk})"
+        )
+        return real(reg_geo, ks, *args, **kwargs)
+
+    monkeypatch.setattr(bmod, "_seg_seg_reg_moments_from_geometry_swept", spy)
+    s.compute_impedance_swept(k_array)
+    assert len(seen) > 1 and sum(seen) == n_k
+
+    seen.clear()
+    s2 = BSplineSolver(**kw)
+    s2.swept_mem_mb = budget_mb
+    s2.compute_y_matrix_swept(k_array)
+    assert len(seen) > 1 and sum(seen) == n_k
+
+
+def test_bspline_swept_fallback_hoist_chunking_bit_identical(monkeypatch):
+    """Chunking the fallback hoist is pure re-batching (issue #263): a
+    multi-chunk sweep must match the single-chunk (pre-#263 whole-sweep)
+    call to the last ulp, because each k's moment block is computed
+    independently of its chunk mates. The 1 MB budget splits the 32-point
+    sweep into two hoist chunks while the per-k (d+1,d+1,N,N) tensor
+    (~63 KB here) still fits, so the #238 dispatch — a genuinely different
+    assembly — stays on the same side for both solvers.
+    """
+    import momwire._bspline_kernels as kmod
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    monkeypatch.setattr(bmod, "_HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL", False)
+
+    kw = _swept_fallback_kw()
+    k0 = 2 * np.pi / 22.0
+    k_array = np.linspace(0.94 * k0, 1.06 * k0, 32)
+
+    def pair(entry):
+        base = getattr(BSplineSolver(**kw), entry)(k_array)
+        multi = BSplineSolver(**kw)
+        multi.swept_mem_mb = 1
+        return base, getattr(multi, entry)(k_array)
+
+    z_base, z_multi = pair("compute_impedance_swept")
+    assert np.array_equal(z_base, z_multi)
+    y_base, y_multi = pair("compute_y_matrix_swept")
+    assert np.array_equal(y_base, y_multi)
+
+    # The numpy-einsum inner path (builds without the reg-swept C++ kernel)
+    # must be per-k independent too.
+    monkeypatch.setattr(kmod, "_HAVE_BSPLINE_REG_SWEPT_ACCEL", False)
+    z_np_base, z_np_multi = pair("compute_impedance_swept")
+    assert np.array_equal(z_np_base, z_np_multi)
+
+
+def test_bspline_swept_batched_path_skips_fallback_hoist(monkeypatch):
+    """Entry-count armor for the batched fast path (issue #263): when the
+    batched swept accelerator serves, the fallback's chunked hoist helper
+    must never run — `_swept_batched_z_chunks` owns its own per-chunk
+    same-edge moments and is untouched by the #263 re-batching."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not (
+        bmod._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL
+        and bmod._HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL
+    ):
+        pytest.skip("batched swept accelerators not built")
+
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("batched swept path entered the fallback hoist")
+
+    kw = _swept_fallback_kw()
+    k0 = 2 * np.pi / 22.0
+    k_array = np.linspace(0.94 * k0, 1.06 * k0, 4)
+
+    s = BSplineSolver(**kw)
+    assert s._swept_batched_available()
+    monkeypatch.setattr(s, "_same_edge_prep_swept_chunks", unexpected)
+    s.compute_impedance_swept(k_array)
+    s2 = BSplineSolver(**kw)
+    monkeypatch.setattr(s2, "_same_edge_prep_swept_chunks", unexpected)
+    s2.compute_y_matrix_swept(k_array)
+
+
 @pytest.mark.parametrize(
     "ground_kw",
     [
