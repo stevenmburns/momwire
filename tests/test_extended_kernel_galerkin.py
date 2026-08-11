@@ -1104,3 +1104,38 @@ def test_gb5_the_refl_coef_image_rides_the_same_delta():
         SinusoidalGalerkinSolver._ek_pairs = original
     assert seen and all(seen), seen
     assert _plain_projection is not None  # the refl block used its own projector
+
+
+def test_the_pair_mask_equals_an_independent_coaxiality_predicate():
+    """Armor against over-extension (reviewer's probe: flipping the mask's
+    `&` to `|` — every labeled pair eligible — passed every shift and
+    symmetry gate, because the spurious delta on well-separated non-coaxial
+    pairs is symmetric and small). The mask is therefore pinned directly:
+    on a bent deck it must equal a predicate computed here from raw segment
+    geometry — same line (parallel tangents AND no perpendicular offset
+    between centers) and equal radii — with both eligible and ineligible
+    pairs present in the deck."""
+    kw = dict(_G4_DECKS["vee"], wavelength=LAM_NEC, extended_kernel=True)
+    sim = SinusoidalGalerkinSolver(**kw)
+    geom = sim._build_geometry()
+    n = geom["n_segs"]
+    idx = np.arange(n)
+    mask = sim._ek_pairs(geom, idx[:, None], idx[None, :], mirror=False).eligible
+
+    seg_c = geom["seg_centers"]
+    seg_t = geom["seg_tangents"]
+    seg_a = sim._seg_radius(geom)
+    expect = np.zeros((n, n), dtype=bool)
+    for i in range(n):
+        for j in range(n):
+            parallel = abs(float(np.dot(seg_t[i], seg_t[j]))) >= 1.0 - 1e-6
+            d = seg_c[j] - seg_c[i]
+            perp = d - np.dot(d, seg_t[i]) * seg_t[i]
+            on_line = float(np.linalg.norm(perp)) <= 1e-6 * (
+                1.0 + float(np.linalg.norm(d))
+            )
+            radii = abs(float(seg_a[i]) - float(seg_a[j])) <= 1e-6 * float(seg_a[i])
+            expect[i, j] = parallel and on_line and radii
+    # The vee must exercise both answers or the pin is vacuous.
+    assert expect.any() and not expect.all()
+    assert np.array_equal(mask, expect)
