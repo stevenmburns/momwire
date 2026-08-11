@@ -494,6 +494,7 @@ def test_no_other_path_can_reach_the_delta(monkeypatch):
 # And the two decisions that are not tolerances: which ground models are
 # served, and which pairs an IMAGE block extends.
 
+from momwire import sinusoidal_galerkin as _sg  # noqa: E402
 from momwire.sinusoidal_galerkin import (  # noqa: E402
     SinusoidalGalerkinSolver,
     _plain_projection,
@@ -1018,12 +1019,14 @@ def test_gb4b_ek_off_enters_no_ek_code(ek_call_counts, name):
     assert ek_call_counts == dict.fromkeys(ek_call_counts, 0)
 
 
-def test_gb4_the_fused_far_fill_is_not_asked_to_serve_the_extended_kernel():
-    """The C++ far fill takes no eligibility mask, so routing an EK-on block
-    through it would drop the delta silently. The capability flag
-    `_HAVE_GALERKIN_FAR_FILL_EK` is what unit C flips; until then
-    `_tested_contribs` must take the numpy path, and `_far_fill_accel` must
-    refuse an EK payload rather than ignore it."""
+def test_gb4_the_fused_far_fill_refuses_an_ek_payload_it_cannot_serve(monkeypatch):
+    """The reduced C++ far fill takes no eligibility mask, so routing an EK-on
+    block through it would drop the delta silently. Unit C added the twin and
+    flipped `_HAVE_GALERKIN_FAR_FILL_EK`; on a build WITHOUT it — a
+    pure-Python install, or an extension predating #246 — `_tested_contribs`
+    must take the numpy path and `_far_fill_accel` must refuse an EK payload
+    rather than ignore it. That is what this simulates."""
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL_EK", False)
     sim = _monopole(extended_kernel=True)
     with pytest.raises(NotImplementedError, match="unit C"):
         sim._far_fill_accel(sim.k, None, None, None, ek=_EKPairs(np.zeros(1), None))
@@ -1139,3 +1142,208 @@ def test_the_pair_mask_equals_an_independent_coaxiality_predicate():
     # The vee must exercise both answers or the pin is vacuous.
     assert expect.any() and not expect.all()
     assert np.array_equal(mask, expect)
+
+
+# ===========================================================================
+# G-C — the C++ twin (momwire#246 unit C)
+# ===========================================================================
+# The fused far fill got an extended-kernel twin,
+# `_accelerators.sinusoidal_galerkin_far_fill_ek`, so an EK-on Galerkin fill
+# runs at the accelerated path's speed instead of falling back to the numpy
+# block loop. The gates below are the #249 parity rule applied to it:
+#
+#   G-C1  the two backends agree at TOLERANCE on the EK far fill — never bit,
+#         because the C++ path reassociates the same arithmetic.
+#   G-C2  the REDUCED far fill is untouched: an all-ineligible EK call is bit
+#         identical to the reduced entry point, and EK off never reaches the
+#         twin at all. (Byte-freeze against a pre-#246 BUILD is measured at
+#         review time — `np.array_equal` of the reduced fill's raw output
+#         across the two .so builds — and is not reproducible from inside the
+#         suite, which only ever has one build.)
+#   G-C3  end to end: the same Z either way, and the G-B1 shift gates above
+#         now run with the C++ path active.
+
+_HAVE_ACCEL = _sg._HAVE_GALERKIN_FAR_FILL and _sg._HAVE_GALERKIN_FAR_FILL_EK
+
+_GC_DECKS = {
+    "fat dipole": _G4_DECKS["straight dipole"],
+    "thin dipole": dict(
+        wires=_DIPOLE_W,
+        n_per_edge_per_wire=[[41]],
+        nsegs=41,
+        wire_radius=0.001,
+        feed_arclength=LEN / 2,
+    ),
+    "vee": _G4_DECKS["vee"],
+    "PEC ground": _G4_DECKS["PEC ground"],
+    "refl-coef ground": _G4_DECKS["refl-coef ground"],
+}
+
+# The two backends agree to reassociation, which on these decks measures
+# 7.2e-15 of the block's largest entry at worst (the fat ladder rungs) — the
+# same level the reduced far fill has agreed at since #194.
+_GC1_BAR = 1e-13
+
+
+def _gc_solver(name, **over):
+    return SinusoidalGalerkinSolver(
+        **dict(_GC_DECKS[name], wavelength=LAM_NEC), extended_kernel=True, **over
+    )
+
+
+def _far_blocks(name, accel, monkeypatch):
+    """Every plainly-projected source block's three contribution arrays, with
+    the near correction (numpy on both backends, and an OVERWRITE) switched
+    off so what is compared is the far fill alone."""
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", accel)
+    sim = _gc_solver(name)
+    sim.near_correction = False
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    out = list(sim._tested_contribs(geom, sim.k, ctx, _plain_projection))
+    if sim.ground_z is not None and sim.ground_eps is None:
+        src_c, src_t = sim._image_source_centers_tangents(geom)
+        out += list(
+            sim._tested_contribs(
+                geom, sim.k, ctx, _plain_projection, src_c, src_t, mirror=True
+            )
+        )
+    return out
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("name", list(_GC_DECKS))
+def test_gc1_the_cpp_ek_far_fill_matches_the_numpy_one(name, monkeypatch):
+    """Measured, worst entry of any block relative to that block's largest:
+
+        fat dipole        1.6e-15
+        thin dipole       3.9e-15
+        vee               1.9e-15
+        PEC ground        2.2e-15
+        refl-coef ground  2.2e-15
+
+    A tolerance and not a bit comparison, deliberately (#249's rule): the C++
+    fill contracts the test quadrature as it goes and the numpy one contracts
+    it afterwards, so the two cannot be bit-equal and pinning them there would
+    pin a compiler rather than a kernel.
+    """
+    cpp = _far_blocks(name, True, monkeypatch)
+    npy = _far_blocks(name, False, monkeypatch)
+    for i, (c, n) in enumerate(zip(cpp, npy)):
+        rel = np.max(np.abs(c - n)) / np.max(np.abs(n))
+        assert rel < _GC1_BAR, f"{name} block {i}: {rel:.2e}"
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("name", list(_GC_DECKS))
+def test_gc1_the_ek_twin_actually_moves_the_far_fill(name, monkeypatch):
+    """The control for the gate above: an EK twin that dropped the delta
+    would agree with the numpy EK fill only if the numpy fill had dropped it
+    too — but it would also equal the REDUCED fill, which this refuses."""
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", True)
+    ext = _far_blocks(name, True, monkeypatch)
+    sim = SinusoidalGalerkinSolver(**dict(_GC_DECKS[name], wavelength=LAM_NEC))
+    sim.near_correction = False
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    red = list(sim._tested_contribs(geom, sim.k, ctx, _plain_projection))
+    rel = np.max(np.abs(ext[0] - red[0])) / np.max(np.abs(red[0]))
+    assert rel > 1e-9, f"{name}: EK far fill is the reduced one ({rel:.2e})"
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+def test_gc2_an_all_ineligible_mask_gives_the_reduced_fill_to_the_bit():
+    """The delta's code path is entered per PAIR, so a mask with nothing in it
+    must leave the reduced arithmetic alone — not to a tolerance, to the bit.
+    This is the C++ half of `test_gb3_zero_radius_gives_the_reduced_fill_to_
+    the_bit`, and it is what says the twin's reduced half is the frozen one.
+    """
+    from momwire._accel import acc
+
+    sim = _gc_solver("fat dipole")
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    n_obs, n_src = ctx["obs_c"].shape[0], ctx["N"]
+    args = (
+        np.ascontiguousarray(ctx["obs_c"]),
+        np.ascontiguousarray(ctx["obs_t"]),
+        np.full(n_obs, float(sim._uniform_radius)),
+        np.ascontiguousarray(geom["seg_centers"]),
+        np.ascontiguousarray(geom["seg_tangents"]),
+        np.ascontiguousarray(ctx["hh"]),
+        float(sim.k),
+        float(sim.eta),
+        *[np.ascontiguousarray(v) for v in sim._leggauss_cached(sim.n_qp_const)],
+        np.ascontiguousarray(ctx["w_entry"], dtype=np.complex128),
+        np.ascontiguousarray(ctx["starts"], dtype=np.int64),
+    )
+    ek_gx, ek_gw = sim._ek_delta_rule(_N_QP_EK_DELTA, 1)
+    red = acc.sinusoidal_galerkin_far_fill(*args)
+    for radius, mask in (
+        (sim._seg_radius(geom), np.zeros((n_obs, n_src), dtype=bool)),
+        (np.zeros(n_src), np.ones((n_obs, n_src), dtype=bool)),
+    ):
+        got = acc.sinusoidal_galerkin_far_fill_ek(
+            *args,
+            np.ascontiguousarray(radius, dtype=np.float64),
+            mask,
+            np.ascontiguousarray(ek_gx),
+            np.ascontiguousarray(ek_gw),
+        )
+        for a, b in zip(got, red):
+            assert np.array_equal(a, b)
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("name", list(_G4_DECKS))
+def test_gc2_ek_off_never_reaches_the_twin(name, monkeypatch):
+    """Numerical identity is necessary and not sufficient (the G-B4
+    argument), so the counter is the other half here too: with the extended
+    kernel off, the EK symbol is not called even once."""
+    from momwire._accel import acc
+
+    calls = []
+    original = acc.sinusoidal_galerkin_far_fill_ek
+    monkeypatch.setattr(
+        acc,
+        "sinusoidal_galerkin_far_fill_ek",
+        lambda *a, **kw: (calls.append(1), original(*a, **kw))[1],
+        raising=False,
+    )
+    kw = dict(_G4_DECKS[name], wavelength=LAM_NEC)
+    SinusoidalGalerkinSolver(**kw).compute_impedance()
+    assert calls == []
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+def test_gc3_the_fused_path_is_what_an_ek_solve_takes(monkeypatch):
+    """The control for the two gates above: on a deck the accelerator serves,
+    an EK-on solve DOES reach the twin. A capability flag that never flipped,
+    or a `_tested_contribs` that kept falling back, would make them vacuous.
+    """
+    from momwire._accel import acc
+
+    calls = []
+    original = acc.sinusoidal_galerkin_far_fill_ek
+    monkeypatch.setattr(
+        acc,
+        "sinusoidal_galerkin_far_fill_ek",
+        lambda *a, **kw: (calls.append(1), original(*a, **kw))[1],
+        raising=False,
+    )
+    _monopole(extended_kernel=True, ground_z=0.0).compute_impedance()
+    assert len(calls) == 2, calls  # the free-space block and the PEC image
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("name", list(_GC_DECKS))
+def test_gc3_the_two_backends_solve_the_same_deck(name, monkeypatch):
+    """End to end, near correction and all: |ΔZ|/|Z| measured 3.5e-15 at
+    worst over these decks (2.7e-14 on the thinnest ladder rung, where the
+    delta's own near-cancellation floor is widest)."""
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", True)
+    z_cpp, c_cpp = _gc_solver(name).compute_impedance()
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
+    z_npy, c_npy = _gc_solver(name).compute_impedance()
+    assert abs(z_cpp - z_npy) < 1e-12 * abs(z_npy), (name, z_cpp, z_npy)
+    assert np.allclose(c_cpp, c_npy, rtol=1e-10, atol=1e-14)

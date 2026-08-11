@@ -309,6 +309,7 @@ from .sinusoidal import (
     _EKPairs,
     _EULER_GAMMA,
     _N_PANEL_EK_DELTA_NEAR,
+    _N_QP_EK_DELTA,
     SinusoidalSolver,
     _SegmentBasis,
     _sin_minus_arg,
@@ -317,11 +318,11 @@ from .sinusoidal import (
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
 )
-# The EXTENDED-kernel twin of that fused far fill (momwire#246 unit C). Until it
-# lands this is False on every build, and `_tested_contribs` therefore routes an
-# EK-on fill through the numpy block loop — the reduced far fill would silently
-# drop the delta, since the C++ entry point takes no eligibility mask. Unit C
-# flips this by adding the named symbol; nothing else here has to change.
+# The EXTENDED-kernel twin of that fused far fill (momwire#246 unit C). On a
+# build without it — a pure-Python install, or one whose extension predates
+# #246 — this is False and `_tested_contribs` routes an EK-on fill through the
+# numpy block loop instead, because the reduced far fill takes no eligibility
+# mask and would silently drop the delta.
 _HAVE_GALERKIN_FAR_FILL_EK = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill_ek"
 )
@@ -600,10 +601,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
     The C++ accelerator serves the far fill of the PLAIN-projected blocks —
     free space and the PEC image — through `_far_fill_accel`, which fuses the
-    field kernel with the test reduction (#194). Everything else is numpy: the
-    reflection-coefficient and Sommerfeld ground blocks, the near-pair
-    correction, and the whole fill when the extension is not loaded. Wire
-    loading is deliberately not wired and raises where reached.
+    field kernel with the test reduction (#194) and, with `extended_kernel`
+    on, carries #246's delta on the eligible pairs in the same pass.
+    Everything else is numpy: the reflection-coefficient and Sommerfeld ground
+    blocks, the near-pair correction, and the whole fill when the extension is
+    not loaded. Wire loading is deliberately not wired and raises where
+    reached.
     """
 
     def __init__(
@@ -1594,17 +1597,29 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         image. `_refl_projection`'s per-pair Fresnel tables and the Sommerfeld
         remainder keep the numpy path, so their callers still see the blocked
         loop above.
+
+        `ek` picks the entry point (momwire#246 unit C). With no payload the
+        call is the pre-#246 one, byte for byte — the reduced symbol is
+        compiled from the shared implementation with the delta's code absent,
+        so an EK-off fill cannot pay for the option or be perturbed by it.
+        With one, `sinusoidal_galerkin_far_fill_ek` adds the folded delta on
+        the eligible pairs inside the same fused sweep, which is what keeps
+        the extended kernel on the accelerated path at all: the numpy block
+        loop it replaces measured 25-30x slower on the N=101...401 dipole.
+        The toggle itself costs ~6x there, and that is the honest worst case
+        — every pair of a straight wire is coaxial, so every pair takes the
+        delta's 16-node quadrature.
         """
-        if ek is not None:
-            # Unreachable today, and deliberately not silent: the caller admits
-            # an EK payload here only when `_HAVE_GALERKIN_FAR_FILL_EK` says a
-            # C++ twin that can consume it exists (momwire#246 unit C). A
-            # half-landed twin therefore fails loudly instead of dropping the
-            # extended kernel's delta on the floor.
+        if ek is not None and not _HAVE_GALERKIN_FAR_FILL_EK:
+            # Deliberately not silent: the caller admits an EK payload here
+            # only when `_HAVE_GALERKIN_FAR_FILL_EK` says a C++ twin that can
+            # consume it exists (momwire#246 unit C). A half-landed twin
+            # therefore fails loudly instead of dropping the extended kernel's
+            # delta on the floor.
             raise NotImplementedError(
-                "the fused C++ far fill has no extended-kernel twin yet "
-                "(momwire#246 unit C); _tested_contribs is supposed to take "
-                "the numpy path while _HAVE_GALERKIN_FAR_FILL_EK is False"
+                "the fused C++ far fill has no extended-kernel twin in this "
+                "build (momwire#246 unit C); _tested_contribs is supposed to "
+                "take the numpy path while _HAVE_GALERKIN_FAR_FILL_EK is False"
             )
         n_obs = ctx["obs_c"].shape[0]
         a_obs = ctx["a_obs"]
@@ -1617,7 +1632,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             else np.full(n_obs, float(a_obs))
         )
         gx, gw = self._leggauss_cached(self.n_qp_const)
-        return _acc.sinusoidal_galerkin_far_fill(
+        args = (
             np.ascontiguousarray(ctx["obs_c"], dtype=np.float64),
             np.ascontiguousarray(ctx["obs_t"], dtype=np.float64),
             a_flat,
@@ -1630,6 +1645,26 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             np.ascontiguousarray(gw, dtype=np.float64),
             np.ascontiguousarray(ctx["w_entry"], dtype=np.complex128),
             np.ascontiguousarray(ctx["starts"], dtype=np.int64),
+        )
+        if ek is None:
+            return _acc.sinusoidal_galerkin_far_fill(*args, self._cancel_flag)
+        # The EK twin takes the payload flattened to the shapes the kernel
+        # indexes: one radius per SOURCE segment, the mask over (observer row,
+        # source segment) — the rows of `obs_c` — and the delta quadrature's
+        # composite rule, built HERE rather than in C++ so the two backends
+        # integrate against the same nodes by construction rather than by
+        # transcription. `n_panels` rides along from the payload, so the far
+        # tier's single panel is the payload's decision and not the kernel's.
+        n_src = args[3].shape[0]
+        ek_gx, ek_gw = self._ek_delta_rule(_N_QP_EK_DELTA, ek.n_panels)
+        return _acc.sinusoidal_galerkin_far_fill_ek(
+            *args,
+            np.ascontiguousarray(np.reshape(ek.src_a, n_src), dtype=np.float64),
+            np.ascontiguousarray(
+                np.broadcast_to(ek.eligible, (n_obs, n_src)), dtype=bool
+            ),
+            np.ascontiguousarray(ek_gx, dtype=np.float64),
+            np.ascontiguousarray(ek_gw, dtype=np.float64),
             self._cancel_flag,
         )
 
