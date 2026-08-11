@@ -181,10 +181,17 @@ BSplineSolver(..., ground_z=0.0,
   existing `eps_tilde`.
 - ~~Restriction, same as NEC: all wire z strictly above `ground_z`
   (z + z′ > 0; a wire touching ground needs a ground-stake model neither
-  code has).~~ **Lifted by #151**: wire ends may touch `ground_z` (the
-  ground-junction basis handles contact; the remainder quadrature's
-  Gauss nodes are strictly interior to segments, so z + z′ > 0 still
-  holds pointwise). Only geometry *below* the plane is rejected.
+  code has).~~ **Lifted by #151, and made true by #282**: wire ends may
+  touch `ground_z` (the ground-junction basis handles contact; the
+  remainder quadrature's Gauss nodes are strictly interior to segments, so
+  z + z′ > 0 still holds pointwise). Only geometry *below* the plane is
+  rejected. #151 alone lifted it for a PEC image only: with the C₂-scaled
+  image the wire's end charge no longer cancelled against the image's and
+  the answer diverged under refinement (momwire#282). #282 subtracts that
+  residual charge, and the Sommerfeld contact monopole now settles to ~2%
+  over NS = 11 → 81. It remains a ground-STAKE-free model: the current
+  entering the earth is carried by the ground constant, not by a modelled
+  electrode.
 
 ## Phases
 

@@ -189,3 +189,134 @@ def test_elevated_end_stays_free():
     assert z.imag < -5000.0
     mag = np.abs(np.asarray(s.currents_at_knots(alpha)[0]))
     assert mag[0] < 0.05 * mag.max()
+
+
+# ----------------------------------------------------------------------
+# The contact-node charge over a FINITE ground (momwire#282)
+# ----------------------------------------------------------------------
+#
+# #151's junction is exact only for a PEC plane, where the image current
+# equals the wire current at the node and the two end charges cancel. Over
+# a finite ground the image carries ρ of it, leaving (1−ρ)·I/jω sitting ON
+# the plane — a point charge whose potential at the nearest collocation
+# point grows like 1/Δ, so |Z| walked away under refinement instead of
+# settling. #282 subtracts that charge's field: it is double-counting, not
+# physics (ρ < 1 already says the earth takes the current the plane does
+# not reflect), and it is what the mixed-potential solvers never had.
+
+_282_LAM = 299.792458 / 30.0
+_282_H = _282_LAM / 4
+_282_NS = (11, 21, 41, 61, 81)
+_282_GROUNDS = {
+    "refl-coef soil": dict(ground_eps=(13.0, 0.005)),
+    "refl-coef lossless": dict(ground_eps=(13.0, 0.0)),
+    "sommerfeld soil": dict(ground_eps=(13.0, 0.005), ground_model="sommerfeld"),
+}
+
+
+def _282_z(cls, ns, **ground):
+    """The issue's own deck: a base-fed quarter-wave vertical whose base
+    LIES IN the plane, a = 0.02 (Δ/a from 11 down to 1.5 over the ladder)."""
+    kw = dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, _282_H]])],
+        n_per_edge_per_wire=[[ns]],
+        nsegs=ns,
+        wire_radius=0.02,
+        feed_arclength=(_282_H / ns) * 0.5,
+        ground_z=0.0,
+        wavelength=_282_LAM,
+    )
+    if cls is BSplineSolver:
+        kw.update(degree=2, feed_model="segment")
+    kw.update(ground)
+    return complex(cls(**kw).compute_impedance()[0])
+
+
+@pytest.mark.parametrize("ground", list(_282_GROUNDS))
+def test_282_contact_over_finite_ground_no_longer_diverges(ground):
+    """|Z| settles instead of walking. Before #282 this ladder ran
+    66.81−392.21j → 96.13−984.75j (refl-coef soil, spread 1.49) with the
+    reactance tracking 1/Δ; now the whole excursion is gone and what is
+    left is a monotone approach.
+    """
+    z = [_282_z(SinusoidalSolver, n, **_282_GROUNDS[ground]) for n in _282_NS]
+    spread = abs(z[-1] - z[0]) / abs(z[0])
+    assert spread < 0.30, f"{ground}: spread {spread:.3f} over NS={_282_NS}: {z}"
+    # Monotone approach to the fine-mesh end, not an excursion.
+    errs = [abs(v - z[-1]) for v in z[:-1]]
+    assert all(b < a for a, b in zip(errs, errs[1:])), f"{ground}: not monotone: {z}"
+    # The old failure mode was a huge negative reactance; the new answer sits
+    # in the same quadrant as the cross-basis reference at every mesh.
+    assert all(v.imag > 0 for v in z), f"{ground}: reactance went capacitive: {z}"
+
+
+def test_282_leaves_the_pec_contact_fill_bit_identical():
+    """ρ = 1 is the PEC path, and the correction is identically zero there:
+    the #151/#247 PEC contact decks must produce the SAME fill, bit for bit,
+    not merely the same answer."""
+    common = dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, _282_H]])],
+        n_per_edge_per_wire=[[21]],
+        nsegs=21,
+        wire_radius=0.02,
+        feed_arclength=(_282_H / 21) * 0.5,
+        ground_z=0.0,
+        wavelength=_282_LAM,
+    )
+    for ek in (False, True):
+        s = SinusoidalSolver(**common, extended_kernel=ek)
+        geom = s._build_geometry()
+        G, seg_view = s._assemble_Z(geom, s.k)
+        G2 = G.copy()
+        s._contact_charge_correction(G2, geom, s.k, seg_view)
+        assert np.array_equal(G, G2), f"PEC contact fill moved (extended_kernel={ek})"
+
+
+def test_282_leaves_an_elevated_wire_untouched():
+    """No contact, no correction: a wire clear of the plane over the same
+    finite ground keeps its exact fill (#153's elevated parity numbers ride
+    on this)."""
+    s = SinusoidalSolver(
+        wires=[np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0 + _282_H]])],
+        n_per_edge_per_wire=[[21]],
+        nsegs=21,
+        wire_radius=0.02,
+        feed_arclength=(_282_H / 21) * 0.5,
+        ground_z=0.0,
+        wavelength=_282_LAM,
+        ground_eps=(13.0, 0.005),
+    )
+    geom = s._build_geometry()
+    G, seg_view = s._assemble_Z(geom, s.k)
+    G2 = G.copy()
+    s._contact_charge_correction(G2, geom, s.k, seg_view)
+    assert np.array_equal(G, G2)
+
+
+def test_282_correction_vanishes_in_the_pec_limit():
+    """ε̃ → ∞ drives the correction to zero continuously, so the finite-ground
+    path meets the PEC path rather than jumping to it."""
+    z_pec = _282_z(SinusoidalSolver, 21)
+    z_big = _282_z(SinusoidalSolver, 21, ground_eps=(1e12, 0.0))
+    assert abs(z_big - z_pec) < 1e-3 * abs(z_pec), f"{z_big} vs PEC {z_pec}"
+
+
+def test_282_brings_the_ground_shift_onto_the_cross_basis_reference():
+    """The finite-ground SHIFT — Z(ground) − Z(PEC), the quantity feed-model
+    differences cancel out of — now tracks the b-spline family instead of
+    being 20x it. Measured at NS = 41: δ_bspline = −0.302−0.168j,
+    δ_sinusoidal = −0.298−0.091j (was 1.312−20.232j).
+    """
+    ns = 41
+    for ground in ("refl-coef soil", "sommerfeld soil"):
+        kw = _282_GROUNDS[ground]
+        d_s = (_282_z(SinusoidalSolver, ns, **kw) - _282_z(SinusoidalSolver, ns)) / abs(
+            _282_z(SinusoidalSolver, ns)
+        )
+        d_b = (_282_z(BSplineSolver, ns, **kw) - _282_z(BSplineSolver, ns)) / abs(
+            _282_z(BSplineSolver, ns)
+        )
+        mismatch = abs(d_s - d_b) / abs(d_b)
+        assert mismatch < 0.30, (
+            f"{ground}: shift mismatch {mismatch:.3f} (sin {d_s}, bsp {d_b})"
+        )

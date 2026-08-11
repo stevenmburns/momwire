@@ -556,11 +556,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     image, `+ ground_eps` NEC's reflection-coefficient ground, and
     `+ ground_model="sommerfeld"` the Sommerfeld/Norton ground — each by
     reusing that ground's existing source-field evaluator under this test
-    quadrature. One inherited caveat, shared with the point-matched solver and
-    pinned by `test_finite_ground_at_a_ground_contact_is_an_inherited_defect`:
-    a wire END LYING IN the plane is only sound under the PEC ground, because
-    #151's ground-connected basis completes the end current with an exact
-    mirror image that a finite ground does not provide.
+    quadrature. A wire END LYING IN the plane used to be sound only under the
+    PEC ground — #151's ground-connected basis completes the end current with
+    an exact mirror image, which a finite ground does not provide, so the
+    leftover contact charge made the answer diverge under refinement.
+    momwire#282 subtracts that charge (see
+    `SinusoidalSolver._contact_charge_kernel`) and the contact answer settles,
+    at one recorded price: the correction is source-side only, so the fill is
+    no longer self-adjoint on such a deck
+    (`test_the_282_contact_correction_is_not_self_adjoint`). With the EXTENDED
+    kernel on, the contact fill over a lossy ground is still unstable — the
+    correction cancels the reduced kernel's end-charge bracket, not EKSCX's.
 
     `node_ports`
         Two-terminal ports located AT a junction node (M5b formulation (a)):
@@ -1916,7 +1922,67 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 (R @ contrib) @ scipy.sparse.csc_matrix((coef, mi), shape=(N, n_basis))
                 for contrib, coef in zip(contribs, coefs)
             )
+        self._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
         return G, seg_view
+
+    def _contact_charge_correction_tested(self, G, geom, k, seg_view, ctx):
+        """#282's ground-contact charge correction, test-integrated.
+
+        Identical physics to the point-matched
+        `SinusoidalSolver._contact_charge_correction` — the residual charge
+        a wire end lying in a FINITE ground plane leaves behind, which is
+        double-counting and diverges under refinement — through this
+        solver's own testing scheme: the same per-observer kernel evaluated
+        at the test quadrature points and reduced against the test
+        functions, exactly like every other source block here.
+
+        The correction is a source-side term (it belongs to the basis whose
+        current reaches the plane), so it lands on that basis's COLUMN;
+        the test side is the ordinary Galerkin integral over the real wire.
+        No-op without a finite ground or without a contact.
+        """
+        if self.ground_eps is None:
+            return G
+        nodes = self._contact_nodes(geom)
+        if not nodes:
+            return G
+        # The charge kernel's whole variation lives within a wire radius of
+        # the node — the same width-`a` endpoint spike M2's near correction
+        # exists for — so the uniform test rule cannot see it and the
+        # ENDPOINT-GRADED rule is used instead, over every test segment
+        # (the correction is one rank-one update per contact, so paying the
+        # richer rule everywhere costs nothing measurable).
+        N = ctx["N"]
+        seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
+        hh = ctx["hh"]
+        a_all = self._seg_radius(geom)
+        m_of_entry, i_of_entry = ctx["m_of_entry"], ctx["i_of_entry"]
+        xg, wg = _graded_endpoint_rule(
+            float(np.min(a_all / hh)), self.n_qp_near, self._leggauss_cached
+        )
+        nq = xg.shape[0]
+        xi = hh[:, None] * xg[None, :]  # (N, nq)
+        obs_c = (seg_c[:, None, :] + xi[:, :, None] * seg_t[:, None, :]).reshape(-1, 3)
+        obs_t = np.broadcast_to(seg_t[:, None, :], (N, nq, 3)).reshape(-1, 3)
+        a_obs = np.repeat(a_all, nq)
+        fval = _basis_value(
+            ctx["sigAC"][:, None],
+            ctx["B"][:, None],
+            ctx["sigC"][:, None],
+            k,
+            xi[m_of_entry],
+        )
+        w_entry = (wg[None, :] * hh[m_of_entry][:, None]) * fval
+        for i, sgn, node in nodes:
+            R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs)
+            R_t = self._tested_contrib_rows(
+                w_entry, m_of_entry, nq, R.reshape(N, nq, 1)
+            )[:, 0]
+            T = np.zeros(G.shape[0], dtype=np.complex128)
+            np.add.at(T, i_of_entry, R_t)
+            jb, val = self._contact_node_values(geom, k, seg_view, i, sgn)
+            G[:, jb] -= sgn * T[:, None] * val[None, :]
+        return G
 
     def _apply_near_correction(
         self, geom, k, ctx, contribs, projector, src_c, src_t, mirror=False

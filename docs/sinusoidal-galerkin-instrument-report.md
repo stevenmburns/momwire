@@ -103,8 +103,13 @@ got wrong first:
 4. **No finite-ground reads on ground-CONTACT geometry, on either sinusoidal
    solver.** M4 pinned that as an inherited #151 defect (the ground-connected
    basis completes the end current with an exact mirror image, which a
-   Fresnel/Sommerfeld image is not) and it is not this issue's to fix. This
-   report is free space throughout, which sidesteps it entirely.
+   Fresnel/Sommerfeld image is not) and it was not this issue's to fix. It has
+   since been fixed by momwire#282, which removes the contact charge that
+   mismatch leaves on the plane: both sinusoidal solvers now converge there
+   (0.4% over a 7x refinement) and agree with each other to 0.3%, though they
+   sit a fixed cross-basis distance from the b-spline reference and the
+   EK-on contact fill over a lossy ground is still unstable. This report is
+   free space throughout, which sidesteps all of it regardless.
 5. **The `_bridged_z` oracle's ~1.4% linear-in-δ extrapolation residue is the
    oracle's**, characterized in M5b and off-limits for re-attribution to any
    solver. It is not used as a reference here.
