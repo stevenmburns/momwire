@@ -35,6 +35,7 @@ Scope (deliberately narrow):
     independently, with no inter-wire junction entries.
 """
 
+from collections import namedtuple
 from dataclasses import dataclass
 
 import numpy as np
@@ -63,6 +64,33 @@ _EULER_GAMMA = 0.5772156649015329
 # O(N³) zgemm cost on a mostly-zero matrix loses to CSC sparse matmul.
 # Measured crossover on Kaby Lake R / OpenBLAS-pthreads ≈ 60.
 _DENSE_ASSEMBLY_THRESHOLD = 60
+
+# The extended-kernel payload `_field_components_bcast` takes on its GALERKIN
+# path (momwire#246), as distinct from the point-matched path's plain
+# `(src_a, ind1, ind2)` triple:
+#
+#   src_a     the source segments' radius — the `a` of NEC Eq 89's factor,
+#             broadcastable against the field tables;
+#   eligible  a boolean mask, broadcastable the same way, that is True on the
+#             pairs the SYMMETRIC pair rule extends (coaxial + equal radius,
+#             momwire#249 §4), or None meaning "every pair in this block".
+#
+# The two payloads are different types on purpose: the point-matched triple
+# carries NEC's PER-END IND1/IND2 gating codes, which have no meaning under a
+# pair rule (per-end gating is not symmetric in i↔j, and ‖G−Gᵀ‖/‖G‖ is a
+# load-bearing invariant of the Galerkin fill). Handing either payload to the
+# other path raises rather than silently serving the wrong tables.
+_EKPairs = namedtuple("_EKPairs", "src_a eligible")
+
+# Gauss-Legendre nodes for the EK delta quadrature (momwire#246). The delta
+# kernel is analytic on the integration path — its nearest singularity is the
+# reduced kernel's own ζ = ±jρ, off the real axis by a full wire radius, and
+# at ζ = 0 itself it is merely ¼·G_red(a) — so the rule converges
+# spectrally: the design's E1 experiment reaches 1e-15 of the const-shape
+# scale with 8-12 nodes over Δ/a ∈ {2, 6, 20} × kH ∈ {7.5e-2 … 7.5e-4} ×
+# observers at 1/2/10 segment lengths. 16 is that with margin, and it is
+# cheap: the delta runs only on the sparse eligible set.
+_N_QP_EK_DELTA = 16
 
 
 def _sin_minus_arg(u):
@@ -1815,6 +1843,24 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             reciprocity floor #205 exists to remove. The branch below gets the
             same quantity out of a spelling in which no term is larger than
             the answer.
+
+        `ek` turns on NEC's EXTENDED thin-wire kernel, and its TYPE says which
+        of the two kernels' extended paths is meant (momwire#246 §4). The two
+        combinations that exist are:
+
+        `(src_a, ind1, ind2)` + `cos_shape="cos"`
+            the point-matched contract: NEC's EKSCX closed forms with per-end
+            IND gating, served by `_extended_kernel_fields`.
+        `_EKPairs(src_a, eligible)` + `cos_shape="cos-1"`
+            the Galerkin contract: the #205 folded REDUCED fields, untouched,
+            plus `_folded_ek_delta_fields`' quadrature of the smooth delta on
+            the pairs `eligible` selects.
+
+        The other two raise. That is the point of dispatching on the payload
+        rather than on `ek is not None`: before momwire#246 this method took
+        the EKSCX early return whatever `cos_shape` said, so a caller asking
+        for the folded shape with `ek=` set was silently handed literal-cos
+        EK tables — a wrong answer with no symptom.
         """
         if cos_shape not in ("cos", "cos-1"):
             raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
@@ -1853,16 +1899,40 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # clean early return: with `ek=None` (the default, and everything
         # `extended_kernel=False` can reach) not one floating-point operation
         # below changes, which is what makes the option a true no-op when off.
+        #
+        # The Galerkin payload (momwire#246) does NOT early-return: its EK
+        # field is the reduced field below plus a quadrature correction, so it
+        # falls through and the delta is added at the return statement. Every
+        # reduced closed form it rides on is the one #205 shipped, unchanged
+        # and unrounded — the correction is a separate sum at its own size.
+        ek_pairs = None
         if ek is not None:
-            src_a, ind1, ind2 = ek
-            tables = self._extended_kernel_fields(
-                k, H, z_eval, rho_eval, src_a, ind1, ind2
-            )
-            tables["td"] = td
-            tables["rho_proj_factor"] = rho_proj_factor
-            tables["rho_vec"] = rho_vec
-            tables["rho_eval"] = rho_eval
-            return tables
+            if isinstance(ek, _EKPairs):
+                if cos_shape != "cos-1":
+                    raise NotImplementedError(
+                        "the pair-rule extended kernel serves the folded "
+                        "cos_shape='cos-1' shape only; cos_shape="
+                        f"{cos_shape!r} with an _EKPairs payload is not "
+                        "wired (momwire#246)"
+                    )
+                ek_pairs = ek
+            else:
+                if cos_shape != "cos":
+                    raise NotImplementedError(
+                        "the point-matched extended kernel (per-end IND "
+                        "gating) serves cos_shape='cos' only; pass "
+                        "_EKPairs(src_a, eligible) for the folded Galerkin "
+                        "shape (momwire#246)"
+                    )
+                src_a, ind1, ind2 = ek
+                tables = self._extended_kernel_fields(
+                    k, H, z_eval, rho_eval, src_a, ind1, ind2
+                )
+                tables["td"] = td
+                tables["rho_proj_factor"] = rho_proj_factor
+                tables["rho_vec"] = rho_vec
+                tables["rho_eval"] = rho_eval
+                return tables
 
         # z values at source ends: z' = +H (z2) and z' = -H (z1).
         # Δz = z_eval - z' at the two endpoints.
@@ -1987,18 +2057,36 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 pref_rho,
             )
 
-        return {
+        tables = {
             "Erho_const": Erho_const,
             "Ez_const": Ez_const,
             "Erho_sin": Erho_sin,
             "Ez_sin": Ez_sin,
             "Erho_cos": Erho_cos,
             "Ez_cos": Ez_cos,
-            "td": td,
-            "rho_proj_factor": rho_proj_factor,
-            "rho_vec": rho_vec,
-            "rho_eval": rho_eval,
         }
+        if ek_pairs is not None:
+            # Extended kernel, Galerkin path (momwire#246): reduced + delta.
+            # The delta is computed for the whole block and selected off the
+            # eligible set rather than gathered — the block is already
+            # materialized, and a mask keeps the arithmetic on the pairs that
+            # DO get it identical however the caller slices them.
+            delta = self._folded_ek_delta_fields(
+                k, H, z_eval, rho_eval, ek_pairs.src_a, cos_shape="cos-1"
+            )
+            for key, base in tables.items():
+                summed = base + delta[key]
+                if ek_pairs.eligible is not None:
+                    # Selecting the SUM rather than zeroing the delta: adding
+                    # a zero is not the identity on a signed zero, and this
+                    # branch has to give the reduced table back to the bit.
+                    summed = np.where(ek_pairs.eligible, summed, base)
+                tables[key] = summed
+        tables["td"] = td
+        tables["rho_proj_factor"] = rho_proj_factor
+        tables["rho_vec"] = rho_vec
+        tables["rho_eval"] = rho_eval
+        return tables
 
     @staticmethod
     def _folded_cos_fields(
@@ -2166,6 +2254,172 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         W = (G2 * r2) * (cph - 1j * sph) * (w_even + w_odd)
         Erho = pref_rho * (-k * W + rho * rho * cm1 * (T2 - T1))
         return Erho, Ez
+
+    def _folded_ek_delta_fields(
+        self, k, H, z, rho, src_a, cos_shape="cos-1", n_gl=None
+    ):
+        """The EK-minus-reduced field correction, by direct quadrature
+        (momwire#246).
+
+        Returns the same six per-shape tables `_field_components_bcast`
+        returns — `Erho_const`, `Ez_const`, `Erho_sin`, `Ez_sin`,
+        `Erho_cos`, `Ez_cos` — but holding only the DIFFERENCE between the
+        extended and reduced kernels' fields, so the caller adds them to the
+        reduced tables it already has. Every argument broadcasts: `H` (source
+        HALF length), `z` (observer's axial coordinate in the source frame),
+        `rho` (the a-regularized radial distance `rho_eval`) and `src_a` (the
+        source segments' radius) share the field tables' shape S, and every
+        returned table has shape S.
+
+        The delta kernel
+        ----------------
+        Write the reduced kernel as a function of u = R² = ρ² + ζ²,
+
+            g(u) = e^{−jkR}/R,   g⁽ⁿ⁾(u) = (−½)ⁿ·e^{−jkR}·Aₙ(jkR)/R^{2n+1}
+
+        with Aₙ the reverse Bessel polynomials (A₁ = 1+x, A₂ = 3+3x+x²,
+        A₃ = 15+15x+6x²+x³, A₄ = 105+105x+45x²+10x³+x⁴). The extended kernel
+        is the source tube's circumferential average, R(φ)² = u + a² −
+        2aρ·cos φ; averaging the Taylor expansion in (R² − u) — ⟨R²−u⟩ = a²,
+        ⟨(R²−u)²⟩ = a⁴ + 2a²ρ² — gives the delta kernel this integrates:
+
+            W(ρ, ζ) = a²·g′(u) + a²ρ²·g″(u)                              (*)
+
+        At ρ = a — which is what eligibility MEANS, coaxial and equal radius,
+        so the observer sits on its own wire's surface on the source axis —
+        (*) is NEC Eq 89's factor minus one times the reduced kernel, term for
+        term: a²g′ = −(a²/2R²)·C1·G and a⁴g″ = (a⁴/4R⁴)·C2·G, i.e. exactly
+        `_bspline_kernels._ek_factor`'s `(fac − 1)·G_red` (momwire#249 §1.2).
+        Keeping the ρ² of (*) rather than substituting a² for it changes
+        NOTHING on the pairs this serves — but it is the difference between a
+        right and a wrong E_ρ, because E_ρ differentiates the kernel in ρ and
+        Eq 89's factor form, being a function of R and a alone, has no honest
+        ρ-derivative to give. (Measured: substituting a² first lands E_ρ at
+        HALF the value of the exact circumferential average and of NEC's own
+        EKSCX; (*) reproduces both. E_z is untouched by the choice, since
+        ∂/∂z reaches u only through ζ.)
+
+        Why a quadrature and not a closed form
+        --------------------------------------
+        `W` is bounded — no singularity survives at ζ = 0, where it tends to a
+        finite multiple of G_red(a) — and analytic along the whole source
+        segment, its nearest pole (the reduced kernel's own ζ = ±jρ) a full
+        wire radius off the real axis. That is what Gauss-Legendre is for:
+        `_N_QP_EK_DELTA` nodes reach 1e-15 of the const-shape scale across
+        the whole (Δ/a, kH, observer) box the fill visits, spectrally rather
+        than by refinement. And — the point — the folded source shape can be
+        evaluated POINTWISE as −2·sin²(kξ/2). There is no folded-versus-
+        literal spelling question to answer, because there is no subtraction:
+        the cancellation discipline `_folded_cos_fields` exists to enforce
+        never arises here. Differencing the EKSCX closed forms instead would
+        inherit their internal ~1e-13·‖T_const‖ noise, the very floor #205
+        removed.
+
+        The field operators are the reduced path's own, re-read off its closed
+        forms and proved against them in `scripts/derive_galerkin_ek_delta.py`
+        §1:
+
+            E_z[s] = −pref_z·∫ s(ξ)·(k² + ∂²/∂z²) W dξ
+            E_ρ[s] = −pref_z·∫ s(ξ)·(∂²/∂ρ∂z)   W dξ,  pref_z = jη/(4πk)
+
+        (`pref_rho = −pref_z/ρ` is a factoring of the reduced brackets, not a
+        second normalization.) Applied to (*) with ∂u/∂z = 2ζ, ∂u/∂ρ = 2ρ they
+        collapse onto the four derivatives above — §2 of the same script:
+
+            (k² + ∂²_z)W = a²·[ k²(g′ + ρ²g″) + 2(g″ + ρ²g‴)
+                                + 4ζ²(g‴ + ρ²g⁗) ]
+            ∂²_{ρz} W    = a²·ρζ·[ 8g‴ + 4ρ²g⁗ ]
+
+        Eligibility is NOT decided here — this computes the delta for whatever
+        pairs it is handed, and `_field_components_bcast` (with
+        `_EKPairs.eligible`) or a caller that pre-selects a sub-block decides
+        which pairs get it.
+
+        `cos_shape` picks the third source shape exactly as
+        `_field_components_bcast` does: `"cos-1"` (the default here) is the
+        Galerkin fill's folded shape −2·sin²(kξ/2); `"cos"` is the literal NEC
+        shape, which exists so the delta can be measured against the
+        point-matched `_extended_kernel_fields` on the same three shapes.
+        """
+        if cos_shape not in ("cos", "cos-1"):
+            raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
+        gx, gw = self._leggauss_cached(_N_QP_EK_DELTA if n_gl is None else n_gl)
+
+        # Source quadrature: ξ ∈ [−H, H], ζ = z − ξ, R the shared regularized
+        # distance the reduced path is already using at this pair — taking it
+        # from `rho` rather than rebuilding it from `src_a` is what makes
+        # reduced + delta the extended kernel's field and not something near
+        # it. On an eligible pair the two agree anyway (ρ IS the radius).
+        hh = np.asarray(H)[..., None]
+        xi = hh * gx
+        w = hh * gw
+        zeta = np.asarray(z)[..., None] - xi
+        rr = np.asarray(rho)[..., None]
+        r2 = rr * rr + zeta * zeta
+        R = np.sqrt(r2)
+
+        # g′ … g⁗ of the reduced kernel with respect to u = R², through the
+        # reverse Bessel polynomials. Named steps throughout, per the rule at
+        # `_folded_cos_fields`: above numpy's 256 KB temporary threshold a
+        # one-expression complex product with a dead operand is evaluated by a
+        # different loop, which would make these (…, n_gl)-sized arrays'
+        # rounding depend on the fill's BLOCK size.
+        x = 1j * (k * R)
+        x2 = x * x
+        x3 = x2 * x
+        x4 = x2 * x2
+        a1 = 1.0 + x
+        a2 = 3.0 + 3.0 * x + x2
+        a3 = 15.0 + 15.0 * x + 6.0 * x2 + x3
+        a4 = 105.0 + 105.0 * x + 45.0 * x2 + 10.0 * x3 + x4
+        inv2 = 1.0 / r2
+        phase = np.exp(-1j * (k * R))
+        base = phase / R
+        g1 = base * a1
+        g1 = g1 * inv2
+        g1 = -0.5 * g1
+        g2 = base * a2
+        g2 = g2 * (inv2 * inv2)
+        g2 = 0.25 * g2
+        g3 = base * a3
+        g3 = g3 * (inv2 * inv2 * inv2)
+        g3 = -0.125 * g3
+        g4 = base * a4
+        g4 = g4 * (inv2 * inv2 * inv2 * inv2)
+        g4 = 0.0625 * g4
+
+        # The two operators of (*), with the a² held back to the end.
+        rho2 = rr * rr
+        t_k = (k * k) * (g1 + rho2 * g2)
+        t_c = 2.0 * (g2 + rho2 * g3)
+        t_z = (4.0 * zeta * zeta) * (g3 + rho2 * g4)
+        l_z = t_k + t_c
+        l_z = l_z + t_z
+        l_r = 8.0 * g3 + 4.0 * rho2 * g4
+        l_r = l_r * rr
+        l_r = l_r * zeta
+
+        # −pref_z, times the a² that makes the whole correction exactly 0.0 at
+        # a = 0 in IEEE and not merely in the limit: (*) is linear in a², so
+        # one multiplication at the end carries the collapse. `src_a` is the
+        # SOURCE segment's radius, the `a` of NEC Eq 89 (and of
+        # `_extended_kernel_fields`' BX).
+        pref = -1j * self.eta / (4.0 * np.pi * k)
+        gain = pref * (src_a * src_a)
+
+        kxi = k * xi
+        if cos_shape == "cos":
+            s_cos = np.cos(kxi)
+        else:
+            # The folded shape POINTWISE — never cos − 1 by subtraction.
+            s_cos = -2.0 * np.sin(0.5 * kxi) ** 2
+        shapes = {"const": None, "sin": np.sin(kxi), "cos": s_cos}
+        out = {}
+        for name, s in shapes.items():
+            sw = w if s is None else s * w
+            out[f"Ez_{name}"] = gain * np.einsum("...q,...q->...", sw, l_z)
+            out[f"Erho_{name}"] = gain * np.einsum("...q,...q->...", sw, l_r)
+        return out
 
     # ------------------------------------------------------------------
     # Matrix assembly and solve
