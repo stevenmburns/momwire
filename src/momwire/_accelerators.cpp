@@ -3825,7 +3825,7 @@ sinusoidal_field_tensor_refl(
 // `_extended_kernel_fields`, which stay the reference implementation and the
 // oracle: tests/test_extended_kernel.py holds the two paths to 1e-13 on every
 // gating branch. Nothing here may be "improved" relative to the numpy spelling
-// without moving that oracle first — see the `want_swapped` note below.
+// without moving that oracle first — see the IRA note below.
 //
 // Two tables the reduced entry point does not take:
 //   * `src_a` (N,) — the SOURCE segment's radius, NEC's BX = BI(J). The
@@ -3840,12 +3840,18 @@ sinusoidal_field_tensor_refl(
 //     They are computed in Python because they are a connectivity walk, not
 //     arithmetic.
 //
-// `want_swapped` is EKSCX's IRA (f.3186-3192) and is deliberately a SCALAR for
-// the whole build: `_extended_kernel_fields` reduces the per-pair `rhx <
-// src_a` test to one `np.any` before calling `_ek_end_gxx`, so every pair sees
-// the same arm. The per-pair ORDERING of (rh, b) below IS per pair, in both
-// paths; only the branch selection is global. Reproducing that faithfully is
-// what makes this a transcription rather than a silent repair.
+// EKSCX's IRA (f.3186-3192) is decided PER PAIR, in stage A, from this pair's
+// own `rhx < src_a` — the same comparison that already orders (rh, b) right
+// beside it. #245 could not do that: `_extended_kernel_fields` reduced the
+// test to one `np.any` before calling `_ek_end_gxx`, so every pair took the
+// same arm, and this kernel took a build-wide `want_swapped` scalar to
+// reproduce that faithfully rather than silently repair it. momwire#258
+// repaired it on both sides, so the scalar is GONE from this signature — the
+// arm now rides the same local `sw` the ordering does, which is the only
+// spelling in which the two cannot disagree at a knife-edge pair. Python
+// detects the new arity through the `ek_ira_per_pair` module attribute below;
+// a stale extension exports the symbols with the old arity and is refused
+// there rather than called wrongly.
 //
 // Parallelism / staging follow `sinusoidal_field_tensor_impl` exactly: OpenMP
 // over observer rows, per-row scratch, and the same three stages (geometry +
@@ -3898,7 +3904,8 @@ struct EkEnd {
 
 // GXX (f.4857-4897) — `SinusoidalSolver._ek_end_gxx`. `r2`/`r` are the already
 // formed R² = zz² + rh² and R; `cph`/`sph` are cos(−kR)/sin(−kR) out of the
-// batched sincos sweep. `rh >= b` is the caller's ordering (f.3186-3192).
+// batched sincos sweep. `rh >= b` is the caller's ordering (f.3186-3192), and
+// `want_swapped` is THIS pair's IRA out of that same ordering (momwire#258).
 static inline EkEnd ek_end_gxx(double k, double zz, double rh, double b,
                                double r2, double r, double cph, double sph,
                                bool want_swapped) {
@@ -3975,6 +3982,9 @@ struct EkGeomRow {
     double r2_1, r_1, r2_2, r_2;
     double td, rpf;
     bool ext1, ext2;
+    // EKSCX's IRA for THIS pair (momwire#258): the `rhx < src_a` that ordered
+    // (rh, b) just above, carried through to the arm it selects.
+    bool swapped;
 };
 
 template<bool REFL>
@@ -3993,7 +4003,6 @@ sinusoidal_field_tensor_ek_impl(
     py::array_t<double, py::array::c_style | py::array::forcecast> src_a,
     py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind1,
     py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind2,
-    bool want_swapped,
     py::array_t<double, py::array::c_style | py::array::forcecast> cos_th,
     py::array_t<double, py::array::c_style | py::array::forcecast> px_t,
     py::array_t<double, py::array::c_style | py::array::forcecast> py_t,
@@ -4131,10 +4140,10 @@ sinusoidal_field_tensor_ek_impl(
             }
 
             double H = H_n[n];
-            // f.3186-3192: order the two lengths so RH is the larger. The
-            // ordering is per pair; only the IRA arm it selects is global.
             double rhx = rho_eval;
             double src_an = sa_v[n];
+            // f.3186-3192. One comparison decides both the ordering and the
+            // IRA arm, per pair — see the IRA note at the top of this block.
             bool sw = rhx < src_an;
             double rh = sw ? src_an : rhx;
             double b = sw ? rhx : src_an;
@@ -4157,6 +4166,7 @@ sinusoidal_field_tensor_ek_impl(
             g.r2_1 = r2_1; g.r_1 = r_1; g.r2_2 = r2_2; g.r_2 = r_2;
             g.td = td; g.rpf = rho_dot_tobs / rho_eval;
             g.ext1 = ext1; g.ext2 = ext2;
+            g.swapped = sw;
 
             size_t base = n * S;
             ph[base + 0] = -k * r_1;
@@ -4188,12 +4198,12 @@ sinusoidal_field_tensor_ek_impl(
 
             EkEnd e1 = g.ext1
                 ? ek_end_gxx(k, g.z1, g.rh, g.b, g.r2_1, g.r_1,
-                             cphb[base + 0], sphb[base + 0], want_swapped)
+                             cphb[base + 0], sphb[base + 0], g.swapped)
                 : ek_end_gx(g.z1, g.rhx, g.r2_1, g.r_1, k,
                             cphb[base + 0], sphb[base + 0]);
             EkEnd e2 = g.ext2
                 ? ek_end_gxx(k, g.z2, g.rh, g.b, g.r2_2, g.r_2,
-                             cphb[base + 1], sphb[base + 1], want_swapped)
+                             cphb[base + 1], sphb[base + 1], g.swapped)
                 : ek_end_gx(g.z2, g.rhx, g.r2_2, g.r_2, k,
                             cphb[base + 1], sphb[base + 1]);
 
@@ -4299,13 +4309,12 @@ sinusoidal_field_tensor_ek(
     py::array_t<double, py::array::c_style | py::array::forcecast> src_a,
     py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind1,
     py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind2,
-    bool want_swapped,
     uintptr_t cancel_flag = 0
 ) {
     py::array_t<double> empty(std::vector<py::ssize_t>{0, 0});
     return sinusoidal_field_tensor_ek_impl<false>(
         obs_centers, obs_tangents, src_centers, src_tangents, seg_h,
-        a, k, eta, gl_t, gl_w, src_a, ind1, ind2, want_swapped,
+        a, k, eta, gl_t, gl_w, src_a, ind1, ind2,
         empty, empty, empty, empty, empty,
         std::complex<double>(0.0, 0.0), cancel_flag);
 }
@@ -4325,7 +4334,6 @@ sinusoidal_field_tensor_ek_refl(
     py::array_t<double, py::array::c_style | py::array::forcecast> src_a,
     py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind1,
     py::array_t<int8_t, py::array::c_style | py::array::forcecast> ind2,
-    bool want_swapped,
     py::array_t<double, py::array::c_style | py::array::forcecast> cos_th,
     py::array_t<double, py::array::c_style | py::array::forcecast> px,
     py::array_t<double, py::array::c_style | py::array::forcecast> py_,
@@ -4336,7 +4344,7 @@ sinusoidal_field_tensor_ek_refl(
 ) {
     return sinusoidal_field_tensor_ek_impl<true>(
         obs_centers, obs_tangents, src_centers, src_tangents, seg_h,
-        a, k, eta, gl_t, gl_w, src_a, ind1, ind2, want_swapped,
+        a, k, eta, gl_t, gl_w, src_a, ind1, ind2,
         cos_th, px, py_, tm_p, tn_p, eps_t, cancel_flag);
 }
 
@@ -5909,6 +5917,16 @@ PYBIND11_MODULE(_accelerators, m) {
     // the _accel.py wrappers remap it to momwire.SolveAborted.
     py::register_exception<AbortedError>(m, "AcceleratorAborted");
 
+    // Capability flag, not a value (momwire#258). The two EKSCX entry points
+    // dropped their build-wide `want_swapped` argument when the IRA arm went
+    // per pair, and a STALE extension still exports both symbols under the
+    // old arity — so `hasattr` alone would hand the new caller a TypeError
+    // instead of the graceful numpy fallback the guards exist to give.
+    // `sinusoidal.py` requires this attribute before it claims either
+    // accelerator; an older build simply lacks it and takes the numpy
+    // reference, which carries the same per-pair fix.
+    m.attr("ek_ira_per_pair") = true;
+
     m.def("seg_seg_reg_moments_bspline_swept",
           &seg_seg_reg_moments_bspline_swept,
           "Streaming swept reg-moment kernel for the B-spline Galerkin MoM. "
@@ -6201,8 +6219,10 @@ PYBIND11_MODULE(_accelerators, m) {
           "conductor radius the O(a²) expansion is about) and the int8 "
           "per-end gating codes `ind1`/`ind2` from "
           "SinusoidalSolver._ek_gating (0/1 -> GXX, 2 -> GX). "
-          "`want_swapped` is EKSCX's IRA and is one scalar for the whole "
-          "build, matching _extended_kernel_fields' `np.any(rhx < src_a)`. "
+          "EKSCX's IRA is NOT an argument: it is resolved per pair inside "
+          "the kernel from that pair's own `rhx < src_a`, the same "
+          "comparison that orders (rh, b) — see momwire#258, which removed "
+          "the build-wide `want_swapped` scalar #245 took. "
           "src_* may be the MIRRORED image sources (the gating tables are "
           "unchanged there, as in NEC's KSYMP loop).",
           py::arg("obs_centers"), py::arg("obs_tangents"),
@@ -6211,12 +6231,12 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("a"), py::arg("k"), py::arg("eta"),
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("src_a"), py::arg("ind1"), py::arg("ind2"),
-          py::arg("want_swapped"),
           py::arg("cancel_flag") = 0);
     m.def("sinusoidal_field_tensor_ek_refl", &sinusoidal_field_tensor_ek_refl,
           "Extended-thin-wire-kernel (EKSCX) variant of "
           "sinusoidal_field_tensor_refl: the EK tables of "
-          "sinusoidal_field_tensor_ek (src_a / ind1 / ind2 / want_swapped) "
+          "sinusoidal_field_tensor_ek (src_a / ind1 / ind2, with EKSCX's IRA "
+          "resolved per pair in-kernel) "
           "with the Fresnel field dyad projection tail of "
           "sinusoidal_field_tensor_refl (cos_th, px, py, tm_p, tn_p, eps_t) "
           "in place of the plain tangential one. src_* are the MIRRORED "
@@ -6228,7 +6248,6 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("a"), py::arg("k"), py::arg("eta"),
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("src_a"), py::arg("ind1"), py::arg("ind2"),
-          py::arg("want_swapped"),
           py::arg("cos_th"), py::arg("px"), py::arg("py"),
           py::arg("tm_p"), py::arg("tn_p"),
           py::arg("eps_t"),
