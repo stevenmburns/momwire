@@ -497,3 +497,60 @@ def test_292_the_two_brackets_differ_by_the_expected_o_a2_amount():
     # It falls off with distance — the correction is local to the node —
     # but never becomes the rounding-level term a converged fill could carry.
     assert rel[-1] < rel[0], f"delta does not decay along the wire: {rel}"
+
+
+def _292_delta_at_tilted_observers(radius):
+    """‖`_contact_charge_ek_delta`‖ on synthetic OFF-AXIS observers whose
+    tangents tilt into the radial direction, and the radial share of it."""
+    lam, H = 10.0, 2.0
+    s = SinusoidalSolver(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, H]])],
+        n_per_edge_per_wire=[[21]],
+        nsegs=21,
+        wire_radius=radius,
+        feed_arclength=(H / 21) * 0.5,
+        ground_z=0.0,
+        wavelength=lam,
+        ground_eps=(13.0, 0.005),
+        extended_kernel=True,
+    )
+    geom = s._build_geometry()
+    ((i, sgn, node),) = s._contact_nodes(geom)
+    obs_c = np.array([[0.3, 0.0, 0.4], [0.0, 0.25, 0.9], [0.2, 0.2, 0.1]])
+    obs_t = np.array([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0], [1.0, 1.0, 0.2]])
+    obs_t = obs_t / np.linalg.norm(obs_t, axis=1, keepdims=True)
+    a_obs = np.full(3, radius)
+    d = s._contact_charge_ek_delta(
+        geom, s.k, i, sgn, node, obs_c, obs_t, a_obs, True, True
+    )
+    obs_t_ax = np.tile(np.array([0.0, 0.0, 1.0]), (3, 1))
+    d_ax = s._contact_charge_ek_delta(
+        geom, s.k, i, sgn, node, obs_c, obs_t_ax, a_obs, True, True
+    )
+    return np.abs(d).max(), np.abs(d - d_ax).max()
+
+
+def test_292_the_delta_collapses_with_the_tube_radially_included():
+    """δE = E_ext − E_red must vanish as O(a²) — WITH the radial half
+    exercised.
+
+    The ladder decks are vertical monopoles whose observers are coaxial with
+    the contact, so `E_ρ` projects onto nothing there: a sign error in the
+    radial component of `_contact_charge_end_gradient` sails through every
+    ladder and bit-identity gate (measured: flipping `con·G3`'s sign leaves
+    the whole g16/292 selection green). This gate uses off-axis observers
+    with tilted tangents, checks the radial share is material (~56% of the
+    delta at a = 0.02), and pins the a → 0 collapse the derivation demands:
+    shrinking both radii 10× shrinks ‖δ‖ ~100× (measured ratio 0.0101).
+    With the radial sign flipped the small-a delta converges to −2× the
+    reduced radial field instead of zero and the ratio sits at ~1.0 — two
+    orders off the pin.
+    """
+    big, big_radial = _292_delta_at_tilted_observers(0.02)
+    small, _ = _292_delta_at_tilted_observers(0.002)
+    assert big_radial > 0.3 * big, (
+        f"radial share {big_radial:.3e} of {big:.3e} — observers no longer "
+        "exercise the radial component; the collapse below proves nothing"
+    )
+    ratio = small / big
+    assert ratio < 0.03, f"a->0 collapse ratio {ratio:.4f}, expected ~(1/10)^2"
