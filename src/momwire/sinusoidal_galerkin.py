@@ -302,10 +302,13 @@ import scipy.spatial.distance
 
 from . import _ground_refl
 from ._accel import acc as _acc
+from ._bspline_kernels import _ek_axis_groups
 from ._port_solution import PortSolution
 from .sinusoidal import (
     _DENSE_ASSEMBLY_THRESHOLD,
+    _EKPairs,
     _EULER_GAMMA,
+    _N_PANEL_EK_DELTA_NEAR,
     SinusoidalSolver,
     _SegmentBasis,
     _sin_minus_arg,
@@ -313,6 +316,14 @@ from .sinusoidal import (
 
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
+)
+# The EXTENDED-kernel twin of that fused far fill (momwire#246 unit C). Until it
+# lands this is False on every build, and `_tested_contribs` therefore routes an
+# EK-on fill through the numpy block loop — the reduced far fill would silently
+# drop the delta, since the C++ entry point takes no eligibility mask. Unit C
+# flips this by adding the named symbol; nothing else here has to change.
+_HAVE_GALERKIN_FAR_FILL_EK = _acc is not None and hasattr(
+    _acc, "sinusoidal_galerkin_far_fill_ek"
 )
 
 # Pairs are corrected in blocks so the (P, G, n_qp_const) source-quadrature
@@ -486,6 +497,60 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         of what this solver means. See §6 and §12 follow-up 5 of
         `docs/sinusoidal-galerkin-instrument-report.md`.
 
+    `extended_kernel`
+        NEC's EK card for this basis (momwire#246). False — the default —
+        keeps the reduced ("thin-wire") kernel: the source current is a
+        filament on the wire axis and the conductor's girth survives only as
+        the a² regularization of ρ. True switches the fill to NEC's EXTENDED
+        thin-wire kernel, the O(a²) azimuthal average of the Green's function
+        over a source tube of radius a (Eqs 84-98 of the theory manual), which
+        is what makes fat conductors — Δ/a below ~3 — answerable at all.
+
+        **What is served.** The free-space block, the PEC image and the
+        reflection-coefficient image, plus the graded near-pair correction on
+        every one of them. Mechanically the reduced fill is untouched: #205's
+        folded closed forms are computed exactly as they always were and
+        `SinusoidalSolver._folded_ek_delta_fields` ADDS a Gauss-Legendre
+        quadrature of the smooth extended-minus-reduced delta on the eligible
+        pairs. Nothing is subtracted anywhere, so the fold's cancellation
+        discipline never comes up, and an ineligible pair comes back bit-for-
+        bit the reduced fill's.
+
+        **What refuses.** `ground_model="sommerfeld"` with a ground plane —
+        the smooth ground-wave remainder is a separate evaluator with a
+        separate derivation, and mixing an extended image with a reduced
+        remainder inside one ground model would be a silent half-answer. And
+        `near_correction=False`, because under EK the near path is not a
+        refinement but where the on-segment pairs are computed: the delta's
+        structure is a spike of width `a` around each source-segment END, and
+        it is the near path that passes the dense quadrature resolving it.
+        The junction/node-port lumped-charge blocks stay reduced, and that is
+        not a gap: their source is a point charge at a node, which has no
+        tube to average over.
+
+        **What it costs in accuracy at the thin end.** Reduced-plus-delta is
+        a near-cancelling decomposition — the two kernels agree away from the
+        wire — so an on-segment pair carries ~(H/a)² of cancellation and
+        float64 leaves ~ε·(H/a)² of the delta's peak behind. The EK shift is
+        itself O((a/H)²), so the two scale against each other and the error
+        that reaches Z stays ~1e-10 relative out to Δ/a ≈ 500; past Δ/a ≈ 1e4,
+        where the kernel is a 1e-8 effect anyway, the decomposition is
+        noise-limited. `_folded_ek_delta_fields` documents the mechanism.
+
+        **Why a PAIR rule, not NEC's per-end gating.** A pair is eligible iff
+        its two segments are coaxial and of equal radius (`_ek_pairs`, the
+        rule `BSplineSolver` uses — #249 §4). NEC decides per source-segment
+        END (IND1/IND2), which in a Galerkin fill would make G(i, j) extended
+        while G(j, i) was not and destroy ‖G−Gᵀ‖/‖G‖, the reciprocity residual
+        this solver has used as its error detector since M2. The pair rule is
+        symmetric by construction, agrees with NEC on straight wires and on
+        perpendicular ground contacts (via the mirrored source), and is
+        strictly more conservative at bends, radius steps and K ≥ 3 junctions.
+
+        The delta is numpy-only for now: with EK on, the fused C++ far fill is
+        skipped (it takes no eligibility mask) until momwire#246 unit C lands
+        its twin, so an EK-on fill costs what the pre-#194 fill did.
+
     All three ground models are wired (M4): `ground_z` alone gives the PEC
     image, `+ ground_eps` NEC's reflection-coefficient ground, and
     `+ ground_model="sommerfeld"` the Sommerfeld/Norton ground — each by
@@ -555,28 +620,51 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        if self.extended_kernel:
-            # momwire#233 ships the extended thin-wire kernel on the
-            # point-matched solver only. The Galerkin fill's third source
-            # shape is the FOLDED cos kξ − 1 (#205), whose cancellation-free
-            # spelling is built out of the reduced kernel's half-angle phase
-            # identities; NEC's EKSCX has no folded counterpart, so wiring EK
-            # through it means re-deriving that fold against Eqs 89-96 rather
-            # than substituting per-end quantities as the collocation path
-            # does. Refuse loudly rather than serve a silently reduced-kernel
-            # (or silently wrong) answer.
+        if (
+            self.extended_kernel
+            and self.ground_z is not None
+            and self.ground_model == "sommerfeld"
+        ):
+            # momwire#246 extends the free-space block, the PEC image and the
+            # reflection-coefficient image — every block whose field is the
+            # Eqs 76-79 build, where the delta rides the same regularized R the
+            # reduced closed forms already share. The Sommerfeld REMAINDER is a
+            # different evaluator (an interpolated ground-wave correction on top
+            # of the C2-scaled image, `_tested_sommerfeld_remainder`), so its
+            # extended twin is its own derivation and its own validation story.
+            # Serving it reduced while the image block is extended would be a
+            # silent mixture of two kernels inside one ground model, so refuse
+            # instead — loudly, and naming what to do about it.
             raise NotImplementedError(
-                "extended_kernel=True is not supported on "
-                "SinusoidalGalerkinSolver: NEC's extended thin-wire kernel is "
-                "implemented on the point-matched SinusoidalSolver only "
-                "(momwire#233). Use SinusoidalSolver(extended_kernel=True), "
-                "or drop extended_kernel for the reduced-kernel Galerkin fill."
+                "extended_kernel=True with ground_model='sommerfeld' is not "
+                "supported on SinusoidalGalerkinSolver: the extended kernel is "
+                "wired through the free-space, PEC-image and "
+                "reflection-coefficient blocks, but the Sommerfeld remainder "
+                "is still the reduced-kernel evaluator (momwire#246). Use "
+                "ground_model='refl-coef' with extended_kernel, or drop "
+                "extended_kernel for the reduced-kernel Sommerfeld fill."
             )
         self.n_qp_test = int(n_qp_test)
         self.n_qp_near = int(n_qp_near)
         self.n_qp_node = int(n_qp_node)
         self.near_factor = float(near_factor)
         self.near_correction = bool(near_correction)
+        if self.extended_kernel and not self.near_correction:
+            # The near path is not an accuracy refinement under EK, it is where
+            # the on-segment pairs are computed at all: the delta's spike is a
+            # wire radius wide, so the pairs whose observer sits inside the
+            # source segment take the dense quadrature the near path passes,
+            # and the far fill's cheap rule is only ever correct on those pairs
+            # because the near path overwrites them. M1 mode would ship the
+            # cheap rule's answer there, which is not an approximation but a
+            # wrong number (5× the answer at Δ/a = 6). Refuse the combination.
+            raise NotImplementedError(
+                "extended_kernel=True requires near_correction=True on "
+                "SinusoidalGalerkinSolver: the extended kernel's delta is "
+                "resolved on the near-pair path, and M1 mode would leave the "
+                "self and node-sharing pairs on the far tier's rule "
+                "(momwire#246)"
+            )
         if feed_readout not in ("centre", "variational"):
             raise ValueError(
                 f"feed_readout must be 'centre' or 'variational', got {feed_readout!r}"
@@ -592,6 +680,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # the inherited view, which `_basis_coefs` already caches per (geom,
         # k, radius), so this rides that cache's validation.
         self._port_basis_cache = None
+        # geom → {mirror: (group_obs, group_src)} for the EK pair rule.
+        self._cached_ek_groups = None
 
     # ------------------------------------------------------------------
     # Node ports (M5b formulation (a)) — a delta-gap EMF AT a junction node
@@ -1261,14 +1351,127 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             out += w_entry[:, q, None] * Phi[m_local, q, :]
         return out
 
-    def _tested_contribs(self, geom, k, ctx, projector, src_c=None, src_t=None):
+    # ------------------------------------------------------------------
+    # The extended kernel's pair rule (momwire#246 / #249 §4)
+    # ------------------------------------------------------------------
+
+    def _ek_axis_labels(self, geom, mirror):
+        """Coaxial-and-equal-radius group labels for this geometry, as
+        `(group_obs, group_src)` — both (n_segs,) int64 — with a pair eligible
+        for the extended kernel iff the two labels are equal.
+
+        The rule and the scan are `_bspline_kernels._ek_axis_groups`', shared
+        verbatim rather than re-derived: two segments group together iff their
+        axes are the same LINE (NEC's |t·t'| ≥ 1 − 1e-6, plus a perpendicular
+        offset test that NEC never needs because it only ever asks the question
+        of segments already sharing an endpoint) and their radii agree to
+        1e-6 relative (NEC's f.2042-2043).
+
+        `mirror=True` is an image block, whose SOURCE segments are the real
+        ones reflected through z = ground_z. Its two label arrays come from ONE
+        scan over the CONCATENATION of the real and mirrored segments, then
+        split — exactly `BSplineSolver._ek_axis_labels`' reason, and it is not
+        an optimization: two independent scans would label a horizontal wire
+        and its image both 0 and declare every real/image pair coaxial, when
+        they are parallel and offset by twice the height. Jointly scanned, a
+        vertical monopole standing on the plane maps onto its own axis and IS
+        one group (NEC's IND = 0 ground-contact branch), while the horizontal
+        wire splits in two and its image block stays reduced.
+
+        Cached per geometry OBJECT (identity) and per mirror flag, so a swept
+        solve pays the O(N·G) scan once rather than per k.
+        """
+        cached = self._cached_ek_groups
+        if cached is None or cached[0] is not geom:
+            cached = (geom, {})
+            self._cached_ek_groups = cached
+        hit = cached[1].get(mirror)
+        if hit is not None:
+            return hit
+
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        hh = 0.5 * np.asarray(geom["seg_h"], dtype=float)[:, None]
+        seg_l = seg_c - hh * seg_t
+        seg_r = seg_c + hh * seg_t
+        seg_a = self._seg_radius(geom)
+        if mirror:
+            n = seg_c.shape[0]
+            flip = np.array([1.0, 1.0, -1.0])
+            shift = np.array([0.0, 0.0, 2.0 * self.ground_z])
+            joint = _ek_axis_groups(
+                np.vstack([seg_l, seg_l * flip + shift]),
+                np.vstack([seg_r, seg_r * flip + shift]),
+                np.vstack([seg_t, seg_t * flip]),
+                np.concatenate([seg_a, seg_a]),
+            )
+            hit = (joint[:n], joint[n:])
+        else:
+            labels = _ek_axis_groups(seg_l, seg_r, seg_t, seg_a)
+            hit = (labels, labels)
+        cached[1][mirror] = hit
+        return hit
+
+    def _ek_pairs(self, geom, m_idx, n_idx, mirror, n_panels=1):
+        """The `_EKPairs` payload for one field-kernel call, or None when the
+        extended kernel is off.
+
+        `m_idx` / `n_idx` are the (test segment, source segment) index arrays
+        of whatever pairing the caller has built — (rows, 1) against (1, N) for
+        a far-fill block, (P, 1) against (P, 1) for the near-pair path — so the
+        returned mask and source radius broadcast against that call's field
+        tables exactly as the indices do.
+
+        Eligibility is `group_obs[m] == group_src[n]`, i.e. #249 §4's PAIR
+        rule, and NOT `SinusoidalSolver._ek_gating`'s per-END IND codes. That
+        is the load-bearing choice of this arc. NEC decides per source segment
+        end whether the current continues straight through into an identical
+        conductor; transplanted into a Galerkin fill that decision depends on
+        which segment is the SOURCE, so G(i, j) would be extended while
+        G(j, i) was not and ‖G−Gᵀ‖/‖G‖ — the fill's own error detector, and a
+        gate this solver has carried since M2 — would stop measuring anything.
+        The pair rule is symmetric by construction (label equality is), it
+        reproduces NEC's decision on straight wires (IND = 1 free ends and
+        IND = 0 collinear junctions are both same-line same-radius) and on
+        perpendicular ground contacts via the mirrored source, and it is
+        strictly MORE conservative than NEC at bends, radius steps and K ≥ 3
+        junctions, where NEC still extends the cross-arm pairs — worth ~1 % of
+        Z at Δ/a = 2 and O(h) under refinement (#249 §4.3).
+
+        `n_panels` is the delta quadrature's density, and it is the second
+        tier of the same near/far split the test quadrature already runs on.
+        An eligible pair whose observer can sit ON the source segment needs the
+        dense rule (`_N_PANEL_EK_DELTA_NEAR`); one whose observer is a segment
+        length away is converged on a single panel. Coaxial pairs are exactly
+        the ones for which "observer inside the source segment's span" means
+        "the two segments overlap", i.e. separation zero, i.e. a NEAR pair — so
+        the split by near-ness IS the split by whether the spike is inside the
+        integration path, and no pair is short-changed.
+        """
+        if not self.extended_kernel:
+            return None
+        group_obs, group_src = self._ek_axis_labels(geom, mirror)
+        gi = group_obs[m_idx]
+        gj = group_src[n_idx]
+        # `>= 0` mirrors `_bspline_kernels._ek_pair_mask`: the label convention
+        # reserves negatives for a future never-extend marker, and `_ek_axis_
+        # groups` emits none today.
+        eligible = (gi == gj) & (gi >= 0)
+        return _EKPairs(self._seg_radius(geom)[n_idx], eligible, n_panels)
+
+    def _tested_contribs(
+        self, geom, k, ctx, projector, src_c=None, src_t=None, mirror=False
+    ):
         """Test-integrate one source block: (contrib_const, sin, cos−1), each
         (nnz, N) — the folded shape set (#203/#205), which is what the field
         kernel is asked for (`cos_shape="cos-1"`).
 
         `src_c` / `src_t` are the source geometry the field evaluator sees —
         the geometry's own segments for the free-space block, the mirrored
-        ones for a ground image block.
+        ones for a ground image block. `mirror` says which of the two this is,
+        and is consulted only by the extended kernel's pair rule
+        (`_ek_pairs`), which has to score eligibility against the MIRRORED
+        source geometry on an image block.
 
         `projector(cm, m_idx, n_idx)` turns the unprojected Eqs 76-79
         component tables into the three tangential field tables. `m_idx` /
@@ -1285,17 +1488,38 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         projector is the plain tangential one (`_far_fill_accel`) — that is
         the free-space block and the PEC image block. The near correction is
         O(N) pairs and stays here regardless.
+
+        With the extended kernel on (momwire#246) the far half falls back to
+        the numpy loop unless the C++ EK twin is present: the reduced far fill
+        takes no eligibility mask, so routing an EK-on block through it would
+        drop the delta silently rather than fail.
         """
         N = ctx["N"]
         nq = ctx["nq"]
         src_c = geom["seg_centers"] if src_c is None else src_c
         src_t = geom["seg_tangents"] if src_t is None else src_t
 
-        if _HAVE_GALERKIN_FAR_FILL and projector is _plain_projection:
-            contribs = self._far_fill_accel(k, ctx, src_c, src_t)
+        if (
+            _HAVE_GALERKIN_FAR_FILL
+            and projector is _plain_projection
+            and (not self.extended_kernel or _HAVE_GALERKIN_FAR_FILL_EK)
+        ):
+            contribs = self._far_fill_accel(
+                k,
+                ctx,
+                src_c,
+                src_t,
+                ek=(
+                    self._ek_pairs(
+                        geom, ctx["m_of_obs"][:, None], np.arange(N)[None, :], mirror
+                    )
+                    if self.extended_kernel
+                    else None
+                ),
+            )
             if self.near_correction:
                 self._apply_near_correction(
-                    geom, k, ctx, contribs, projector, src_c, src_t
+                    geom, k, ctx, contribs, projector, src_c, src_t, mirror
                 )
             return contribs
 
@@ -1320,6 +1544,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 src_t=src_t[None, :, :],
                 src_hh=ctx["hh"][None, :],
                 cos_shape="cos-1",
+                # Per BLOCK, like everything else in this loop: the mask is
+                # (rows·nq, N) and would otherwise be the one array in the
+                # fill that scales with the whole matrix. Eligibility is a
+                # per-pair property, so the blocked masks are slices of the
+                # unblocked one and the arithmetic per entry is unchanged.
+                ek=(
+                    self._ek_pairs(geom, ctx["m_of_obs"][o0:o1, None], n_idx, mirror)
+                    if self.extended_kernel
+                    else None
+                ),
             )
             Phi = projector(cm, ctx["m_of_obs"][o0:o1, None], n_idx)
             del cm  # drop the kernel tables before the reduction allocates
@@ -1332,10 +1566,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 )
 
         if self.near_correction:
-            self._apply_near_correction(geom, k, ctx, contribs, projector, src_c, src_t)
+            self._apply_near_correction(
+                geom, k, ctx, contribs, projector, src_c, src_t, mirror
+            )
         return contribs
 
-    def _far_fill_accel(self, k, ctx, src_c, src_t):
+    def _far_fill_accel(self, k, ctx, src_c, src_t, ek=None):
         """C++ far fill for the PLAIN projection: kernel and test reduction
         fused, (contrib_const, sin, cos−1) each (nnz, N) — the same three arrays
         the numpy loop above builds (#194).
@@ -1359,6 +1595,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         remainder keep the numpy path, so their callers still see the blocked
         loop above.
         """
+        if ek is not None:
+            # Unreachable today, and deliberately not silent: the caller admits
+            # an EK payload here only when `_HAVE_GALERKIN_FAR_FILL_EK` says a
+            # C++ twin that can consume it exists (momwire#246 unit C). A
+            # half-landed twin therefore fails loudly instead of dropping the
+            # extended kernel's delta on the floor.
+            raise NotImplementedError(
+                "the fused C++ far fill has no extended-kernel twin yet "
+                "(momwire#246 unit C); _tested_contribs is supposed to take "
+                "the numpy path while _HAVE_GALERKIN_FAR_FILL_EK is False"
+            )
         n_obs = ctx["obs_c"].shape[0]
         a_obs = ctx["a_obs"]
         # The kernel takes one radius per OBSERVER (which is per test segment,
@@ -1461,24 +1708,39 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         * `ground_model="sommerfeld"` — NEC's decomposition, C2·(PEC image)
           minus the smooth interpolated remainder, so that the caller's
           subtraction reproduces `Phi_free − C2·Phi_img + S`.
+
+        Every image block passes `mirror=True`, which is the extended kernel's
+        only ground-specific decision: eligibility is scored between the real
+        test segments and the MIRRORED sources, so a wire standing on the plane
+        extends against its own image and a wire parallel to it does not. The
+        reflection-coefficient block needs nothing further — its Fresnel dyad
+        is a per-segment-pair weight applied to the field tables AFTER the
+        kernel, so the delta rides through it linearly, exactly as the reduced
+        field does. Sommerfeld never gets here under EK: `__init__` refuses.
         """
         src_c_img, src_t_img = self._image_source_centers_tangents(geom)
         if self.ground_eps is None:
             return self._tested_contribs(
-                geom, k, ctx, _plain_projection, src_c_img, src_t_img
+                geom, k, ctx, _plain_projection, src_c_img, src_t_img, mirror=True
             )
 
         eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
         if self.ground_model == "sommerfeld":
             c2 = (eps_t - 1.0) / (eps_t + 1.0)
             img = self._tested_contribs(
-                geom, k, ctx, _plain_projection, src_c_img, src_t_img
+                geom, k, ctx, _plain_projection, src_c_img, src_t_img, mirror=True
             )
             rem = self._tested_sommerfeld_remainder(geom, k, ctx, eps_t)
             return tuple(c2 * a - b for a, b in zip(img, rem))
 
         return self._tested_contribs(
-            geom, k, ctx, self._refl_projection(geom, eps_t), src_c_img, src_t_img
+            geom,
+            k,
+            ctx,
+            self._refl_projection(geom, eps_t),
+            src_c_img,
+            src_t_img,
+            mirror=True,
         )
 
     def _tested_sommerfeld_remainder(self, geom, k, ctx, eps_t):
@@ -1621,7 +1883,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
         return G, seg_view
 
-    def _apply_near_correction(self, geom, k, ctx, contribs, projector, src_c, src_t):
+    def _apply_near_correction(
+        self, geom, k, ctx, contribs, projector, src_c, src_t, mirror=False
+    ):
         """Recompute the near-pair test integrals on the endpoint-graded rule,
         overwriting the uniform-rule values in `contribs` (M2).
 
@@ -1634,6 +1898,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         ones, so a wire touching the plane gets its segment↔own-image spike
         corrected too. The blocks are separate arrays, so the assignments
         never collide.
+
+        The extended kernel reaches here too, and it matters more here than
+        anywhere: the near set is the self and node-sharing pairs, which are
+        both the coaxial ones the pair rule admits and the ones at the smallest
+        R, where the O(a²/R²) delta is largest. Because this path OVERWRITES
+        rather than accumulates, an EK-on far fill with a reduced near
+        correction would quietly throw the delta away again on exactly those
+        pairs.
         """
         mm, nn = self._near_pairs(geom, src_c=src_c, src_t=src_t)
         if mm.size == 0:
@@ -1679,6 +1951,21 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 src_t=src_t[ni][:, None, :],
                 src_hh=hh[ni][:, None],
                 cos_shape="cos-1",
+                # (P, 1) against the (P, G) field tables: one eligibility
+                # decision per PAIR, shared by that pair's graded observers.
+                # These are the pairs whose observers sit on the source
+                # segment, so they take the DENSE delta rule (see `_ek_pairs`).
+                ek=(
+                    self._ek_pairs(
+                        geom,
+                        mi[:, None],
+                        ni[:, None],
+                        mirror,
+                        n_panels=_N_PANEL_EK_DELTA_NEAR,
+                    )
+                    if self.extended_kernel
+                    else None
+                ),
             )
             # (P, 1) pair indices broadcast against the (P, G) field tables.
             Phi = projector(cm, mi[:, None], ni[:, None])  # each (P, G)
