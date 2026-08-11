@@ -475,34 +475,47 @@ def test_extended_kernel_code_is_never_entered_when_off(name, monkeypatch):
 
 
 # ----------------------------------------------------------------------
-# Gate 7 — Galerkin refuses rather than quietly serving the reduced kernel
+# Gate 7 — the Galerkin family's own contract
 # ----------------------------------------------------------------------
+#
+# momwire#233 shipped the extended kernel on the point-matched solver and had
+# `SinusoidalGalerkinSolver` refuse it outright; momwire#246 narrowed that
+# refusal to one combination. What is left here is the boundary — the two
+# statements that say which side of it a caller is on. The Galerkin fill's own
+# gate battery is `tests/test_extended_kernel_galerkin.py`.
 
 
-def test_galerkin_refuses_the_extended_kernel():
-    with pytest.raises(NotImplementedError, match="extended_kernel"):
-        SinusoidalGalerkinSolver(
-            wires=_DIPOLE_W,
-            n_per_edge_per_wire=[[21]],
-            wavelength=LAM,
-            wire_radius=0.05,
-            nsegs=21,
-            feed_arclength=2.5,
-            extended_kernel=True,
-        )
-
-
-def test_galerkin_still_accepts_the_reduced_kernel_explicitly():
-    sim = SinusoidalGalerkinSolver(
+def _galerkin(**kw):
+    return SinusoidalGalerkinSolver(
         wires=_DIPOLE_W,
         n_per_edge_per_wire=[[21]],
         wavelength=LAM,
         wire_radius=0.05,
         nsegs=21,
         feed_arclength=2.5,
-        extended_kernel=False,
+        **kw,
     )
-    assert sim.extended_kernel is False
+
+
+def test_galerkin_accepts_the_extended_kernel():
+    """It solves, and the kernel is not a no-op on this Δ/a ≈ 2.4 wire."""
+    z_red, _ = _galerkin().compute_impedance()
+    z_ext, _ = _galerkin(extended_kernel=True).compute_impedance()
+    assert abs(z_ext - z_red) > 1e-3 * abs(z_red)
+
+
+def test_galerkin_still_refuses_the_extended_kernel_under_sommerfeld_ground():
+    """The one combination momwire#246 did not open: the Sommerfeld
+    remainder is a separate evaluator and is still the reduced one, so
+    serving it under an extended image would mix two kernels inside one
+    ground model."""
+    with pytest.raises(NotImplementedError, match="sommerfeld"):
+        _galerkin(
+            extended_kernel=True,
+            ground_z=-3.0,
+            ground_eps=(13.0, 0.005),
+            ground_model="sommerfeld",
+        )
 
 
 # ----------------------------------------------------------------------

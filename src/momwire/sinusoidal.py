@@ -80,17 +80,33 @@ _DENSE_ASSEMBLY_THRESHOLD = 60
 # pair rule (per-end gating is not symmetric in i↔j, and ‖G−Gᵀ‖/‖G‖ is a
 # load-bearing invariant of the Galerkin fill). Handing either payload to the
 # other path raises rather than silently serving the wrong tables.
-_EKPairs = namedtuple("_EKPairs", "src_a eligible")
+#
+# `n_panels` picks the delta quadrature's density (see `_ek_delta_rule`): 1,
+# the default, is the FAR tier, and the Galerkin near-pair path raises it.
+_EKPairs = namedtuple("_EKPairs", "src_a eligible n_panels", defaults=(1,))
 
-# Gauss-Legendre nodes for the EK delta quadrature (momwire#246). The delta
-# kernel is analytic on the integration path — its nearest singularity is the
-# reduced kernel's own ζ = ±jρ, off the real axis by a full wire radius, and
-# at ζ = 0 itself it is merely ¼·G_red(a) — so the rule converges
-# spectrally: the design's E1 experiment reaches 1e-15 of the const-shape
-# scale with 8-12 nodes over Δ/a ∈ {2, 6, 20} × kH ∈ {7.5e-2 … 7.5e-4} ×
-# observers at 1/2/10 segment lengths. 16 is that with margin, and it is
-# cheap: the delta runs only on the sparse eligible set.
+# Gauss-Legendre nodes per panel for the EK delta quadrature (momwire#246).
+#
+# The delta kernel is analytic on the integration path — its nearest
+# singularity is the reduced kernel's own ζ = ±jρ, off the real axis by a full
+# wire radius, and at ζ = 0 itself it is merely ¼·G_red(a). But "off the real
+# axis by ρ" is the whole story only once the path is measured in units of ρ:
+# in ξ the feature is a spike of WIDTH ρ inside a segment of half-length H, so
+# a plain rule's accuracy is set by ρ/H and collapses on exactly the pairs a
+# fill cares most about — the self pair and its neighbours, where the observer
+# sits ON the source segment. `_folded_ek_delta_fields` therefore integrates in
+# the sinh-mapped variable ζ = ρ·sinh t, in which R = ρ·cosh t and the spike is
+# O(1) wide whatever ρ/H is; what is left is a bounded interval whose half
+# width grows only like ln(2H/ρ), covered by splitting it into `n_panels`
+# equal panels of this many nodes each.
 _N_QP_EK_DELTA = 16
+
+# Panels for the NEAR tier — the pairs whose observer can sit on or beside the
+# source segment. One panel per unit of mapped half-width is what the measured
+# box needs (Δ/a from 1 to 500 at ≤2e-10 of the reduced const field, 8 panels);
+# far pairs, whose mapped interval is short and holds no spike at all, are
+# converged on one panel and take the default.
+_N_PANEL_EK_DELTA_NEAR = 8
 
 
 def _sin_minus_arg(u):
@@ -2072,7 +2088,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # materialized, and a mask keeps the arithmetic on the pairs that
             # DO get it identical however the caller slices them.
             delta = self._folded_ek_delta_fields(
-                k, H, z_eval, rho_eval, ek_pairs.src_a, cos_shape="cos-1"
+                k,
+                H,
+                z_eval,
+                rho_eval,
+                ek_pairs.src_a,
+                cos_shape="cos-1",
+                n_panels=ek_pairs.n_panels,
             )
             for key, base in tables.items():
                 summed = base + delta[key]
@@ -2255,8 +2277,29 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Erho = pref_rho * (-k * W + rho * rho * cm1 * (T2 - T1))
         return Erho, Ez
 
+    def _ek_delta_rule(self, n_gl, n_panels):
+        """Composite Gauss-Legendre rule on [−1, 1]: `n_panels` equal panels of
+        `n_gl` nodes each, Σw = 2. Cached on the solver's own node cache.
+
+        The delta quadrature runs in the sinh-mapped variable, where the
+        integrand is analytic with its nearest pole a fixed distance π/2 off
+        the real axis. Convergence is therefore set by the mapped interval's
+        half width per panel, not by ρ/H — so one rule serves every wire
+        thickness, and refining means adding panels rather than nodes.
+        """
+        gx, gw = self._leggauss_cached(n_gl)
+        if n_panels == 1:
+            return gx, gw
+        edges = np.linspace(-1.0, 1.0, n_panels + 1)
+        mid = 0.5 * (edges[:-1] + edges[1:])
+        half = 0.5 * (edges[1:] - edges[:-1])
+        return (
+            (mid[:, None] + half[:, None] * gx[None, :]).ravel(),
+            (half[:, None] * gw[None, :]).ravel(),
+        )
+
     def _folded_ek_delta_fields(
-        self, k, H, z, rho, src_a, cos_shape="cos-1", n_gl=None
+        self, k, H, z, rho, src_a, cos_shape="cos-1", n_gl=None, n_panels=1
     ):
         """The EK-minus-reduced field correction, by direct quadrature
         (momwire#246).
@@ -2304,16 +2347,48 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `W` is bounded — no singularity survives at ζ = 0, where it tends to a
         finite multiple of G_red(a) — and analytic along the whole source
         segment, its nearest pole (the reduced kernel's own ζ = ±jρ) a full
-        wire radius off the real axis. That is what Gauss-Legendre is for:
-        `_N_QP_EK_DELTA` nodes reach 1e-15 of the const-shape scale across
-        the whole (Δ/a, kH, observer) box the fill visits, spectrally rather
-        than by refinement. And — the point — the folded source shape can be
-        evaluated POINTWISE as −2·sin²(kξ/2). There is no folded-versus-
-        literal spelling question to answer, because there is no subtraction:
-        the cancellation discipline `_folded_cos_fields` exists to enforce
-        never arises here. Differencing the EKSCX closed forms instead would
-        inherit their internal ~1e-13·‖T_const‖ noise, the very floor #205
-        removed.
+        wire radius off the real axis. That is what Gauss-Legendre is for. And
+        — the point — the folded source shape can be evaluated POINTWISE as
+        −2·sin²(kξ/2). There is no folded-versus-literal spelling question to
+        answer, because there is no subtraction: the cancellation discipline
+        `_folded_cos_fields` exists to enforce never arises here. Differencing
+        the EKSCX closed forms instead would inherit their internal
+        ~1e-13·‖T_const‖ noise, the very floor #205 removed.
+
+        The variable, and why it is not ξ
+        ---------------------------------
+        "A pole a wire radius off the axis" is a statement about convergence
+        only once the path is measured in radii. Integrated in ξ, the delta's
+        feature is a spike of width ρ inside a segment of half-length H, so a
+        fixed rule's accuracy is governed by ρ/H — fine for a fat wire, and
+        useless exactly where a fill spends its most important pairs: the self
+        pair and its neighbours, where the observer sits ON the source segment
+        (|z| ≤ H) and ρ/H is the reciprocal of Δ/a. Measured, a plain 16-node
+        ξ rule at the self pair is wrong by 5× the answer at Δ/a = 6 and by
+        1e6× at Δ/a = 122.
+
+        So the integration variable is the sinh-mapped one:
+
+            ζ = ρ·sinh t,  R = ρ·cosh t,  dζ = ρ·cosh t dt,
+            t ∈ [asinh((z−H)/ρ), asinh((z+H)/ρ)]
+
+        — the classical near-singular substitution, and here an unusually
+        clean one because R comes out in closed form rather than as a square
+        root. In t the spike is O(1) wide however thin the wire is, the
+        kernel's poles sit at t = ±jπ/2 independent of ρ, and the interval's
+        half width grows only like ln(2H/ρ). `n_panels` splits that interval
+        into equal panels, which is what makes one rule serve every thickness.
+
+        There IS a floor underneath all of this, and it is not the rule's: the
+        delta's whole-line integral very nearly vanishes (extended and reduced
+        kernels agree away from the wire), so the sum carries ~(H/ρ)² of
+        cancellation and float64 leaves ~ε·(H/ρ)² of the delta's own peak in
+        it. In the units that reach G that is ~ε·const, because the delta is
+        itself O((ρ/H)²) of the field — measured ≤2e-10 of the reduced const
+        field out to Δ/a = 500 on the near tier, and falling to 1e-13 for fat
+        wire. It does bound how thin a wire this decomposition can resolve an
+        EK correction for, which is a property of reduced-plus-delta and not
+        of the quadrature.
 
         The field operators are the reduced path's own, re-read off its closed
         forms and proved against them in `scripts/derive_galerkin_ek_delta.py`
@@ -2343,20 +2418,31 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if cos_shape not in ("cos", "cos-1"):
             raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
-        gx, gw = self._leggauss_cached(_N_QP_EK_DELTA if n_gl is None else n_gl)
+        gx, gw = self._ek_delta_rule(_N_QP_EK_DELTA if n_gl is None else n_gl, n_panels)
 
-        # Source quadrature: ξ ∈ [−H, H], ζ = z − ξ, R the shared regularized
-        # distance the reduced path is already using at this pair — taking it
-        # from `rho` rather than rebuilding it from `src_a` is what makes
-        # reduced + delta the extended kernel's field and not something near
-        # it. On an eligible pair the two agree anyway (ρ IS the radius).
+        # Source quadrature over ξ ∈ [−H, H], reparametrized by ζ = z − ξ =
+        # ρ·sinh t. `rho` is the shared regularized distance the reduced path
+        # is already using at this pair — taking it from there rather than
+        # rebuilding it from `src_a` is what makes reduced + delta the extended
+        # kernel's field and not something near it. On an eligible pair the two
+        # agree anyway (ρ IS the radius).
         hh = np.asarray(H)[..., None]
-        xi = hh * gx
-        w = hh * gw
-        zeta = np.asarray(z)[..., None] - xi
+        zz = np.asarray(z)[..., None]
         rr = np.asarray(rho)[..., None]
-        r2 = rr * rr + zeta * zeta
-        R = np.sqrt(r2)
+        t_lo = np.arcsinh((zz - hh) / rr)
+        t_hi = np.arcsinh((zz + hh) / rr)
+        t_mid = 0.5 * (t_hi + t_lo)
+        t_half = 0.5 * (t_hi - t_lo)
+        t = t_mid + t_half * gx
+        cosh_t = np.cosh(t)
+        # R = ρ·cosh t exactly, so the near-singular denominator never goes
+        # through a difference of squares. ξ = z − ζ recovers the source arc
+        # the shape functions are evaluated on.
+        R = rr * cosh_t
+        zeta = rr * np.sinh(t)
+        xi = zz - zeta
+        w = (t_half * gw) * (rr * cosh_t)  # dζ = ρ·cosh t dt
+        r2 = R * R
 
         # g′ … g⁗ of the reduced kernel with respect to u = R², through the
         # reverse Bessel polynomials. Named steps throughout, per the rule at
