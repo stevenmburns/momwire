@@ -189,7 +189,11 @@ BSplineSolver(..., ground_z=0.0,
   image the wire's end charge no longer cancelled against the image's and
   the answer diverged under refinement (momwire#282). #282 subtracts that
   residual charge, and the Sommerfeld contact monopole now settles to ~2%
-  over NS = 11 → 81. It remains a ground-STAKE-free model: the current
+  over NS = 11 → 81. Under the EXTENDED kernel the same charge has to be
+  subtracted on EKSCX's end-charge bracket instead — momwire#292; before it,
+  the EK-on Sommerfeld contact ladder still walked at 0.42 over
+  NS = 11 → 41 against EK-off's 0.02, and it now runs 0.027. It remains a
+  ground-STAKE-free model: the current
   entering the earth is carried by the ground constant, not by a modelled
   electrode.
 

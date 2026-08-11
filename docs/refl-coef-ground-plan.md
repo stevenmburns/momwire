@@ -42,9 +42,10 @@ and risks. Pick it up from here in a fresh session.
   because #151's ground-connected basis is exact for a PEC image and a
   Fresnel image is not — the end charges no longer cancel and (1−ρ)·I/jω is
   left on the plane. #282 removes that charge and the contact answer settles
-  (see `test_282_*` in tests/test_ground_junction.py); the EXTENDED-kernel
-  contact fill over a lossy ground is still unstable, because the correction
-  is written on the reduced kernel's end-charge bracket. Below the window,
+  (see `test_282_*` in tests/test_ground_junction.py). momwire#292 then did
+  the same for the EXTENDED kernel, whose fill carries EKSCX's end-charge
+  bracket rather than the reduced one's (`test_292_*`); the EK-on contact
+  ladder now tracks the EK-off one rung for rung. Below the window,
   use `ground_model="sommerfeld"` (both bases track NEC there) or the
   sinusoidal basis. No Φ-mode constant can fix the near field — the
   quasi-static image-charge interaction has no plane-wave weight.

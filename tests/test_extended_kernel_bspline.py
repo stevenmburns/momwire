@@ -2081,16 +2081,16 @@ def _g16_mismatch(deck, ground):
 
 
 # ----------------------------------------------------------------------
-# Gate 16 — the parity table, and the pairings the oracle cannot serve
+# Gate 16 — the parity table, over every ground the oracle can serve
 # ----------------------------------------------------------------------
 #
 # Measured on this box (mismatch |δ_bsp − δ_sin|/|δ_sin|):
 #
 #   deck            PEC      refl soil  refl sea  somm soil  somm sea
-#   mono_contact    0.1527   1.0055*    1.0309*   1.0154*    0.2709
-#   mono_lifted     0.0737   0.0715     0.0735    0.0720     0.0737
-#   horizontal      0.2770   0.2829     0.2773    0.2793     0.2770
-#   bent            0.4385   0.4439     0.4387    0.4458     0.4389
+#   mono_contact    0.1532   0.4561*    0.1196    0.0808     0.1529
+#   mono_lifted     0.0738   0.0715     0.0736    0.0721     0.0737
+#   horizontal      0.2769   0.2829     0.2773    0.2792     0.2770
+#   bent            0.4389   0.4444     0.4391    0.4463     0.4392
 #
 # Read the columns, not the rows: every deck answers the SAME number under
 # every ground it can be measured under. The row-to-row spread is the
@@ -2102,32 +2102,40 @@ def _g16_mismatch(deck, ground):
 # meets it in PEC too, and the deck's own PEC value + margin where it does
 # not.
 #
-# (*) THE ORACLE IS UNUSABLE AT GROUND CONTACT OVER LOSSY GROUND WITH THE
-# EXTENDED KERNEL ON. momwire#282 fixed the EK-OFF half of this: the wire
-# end lying in the plane used to leave an uncancelled point charge there
-# (the image carries only ρ of the wire current, so the two end charges no
-# longer cancel), and the sinusoidal answer walked away under refinement.
-# The correction removes that charge, and EK-OFF now settles — measured,
-# a = 0.02, feed at the base segment, NS = 11/21/41:
+# The contact row is the whole of momwire#282 and momwire#292, and it used
+# to have three cells excluded outright. A wire end lying in the plane left
+# an uncancelled point charge there (the image carries only ρ of the wire
+# current, so the two end charges no longer cancel) and the sinusoidal
+# answer walked away under refinement. #282 subtracted that charge on the
+# REDUCED kernel's end-charge bracket and EK-OFF settled; EK-ON kept
+# walking — 32.30+38.50j → 21.28+116.34j over NS = 11/21/41, spread 1.56 —
+# because an EK-on fill carries EKSCX's bracket instead, an O(a²/R²) ≈ 10%
+# different quantity at these meshes. #292 builds the subtraction from the
+# same per-end GXX quantities the fill uses, and the oracle converges with
+# EK on. Measured, a = 0.02, feed at the base segment, NS = 11/21/41:
 #
-#   ground              bspline              sinusoidal EK-OFF   spread
-#   refl-coef soil      28.23→29.22 +16j     33.67→29.54 +21j    0.13
-#   sommerfeld soil     52.83→54.43 +24j     53.64→52.84 +26j    0.02
+#   ground            sinusoidal EK-OFF          EK-ON             spreads
+#   refl-coef soil    33.67→29.54 +21j    33.64→29.76 +20j     0.129 / 0.127
+#   sommerfeld soil   53.64→52.84 +26j    53.59→52.70 +25j     0.020 / 0.027
 #
-# EK-ON it still walks — 32.30+38.50j → 21.28+116.34j over the same ladder,
-# spread 1.56 — because the correction is written on the REDUCED kernel's
-# end-charge bracket while an EK-on fill carries EKSCX's, and the O(a²/R²)
-# difference between them is ~10% of the charge at these meshes. So δ_sin on
-# the three starred pairings still measures the oracle's instability rather
-# than the kernel, and they stay excluded. `test_g16c_*` pins BOTH halves so
-# the exclusion cannot rot: the EK-OFF convergence #282 won, and the EK-ON
-# instability that is what is left to fix.
+# so all five contact cells are now measured. `test_g16c_*` pins those
+# ladders directly, on both kernels, so neither half can rot.
+#
+# (*) SCORED ON THE NUMERATOR, not the ratio — see `_G16_ABSOLUTE`.
 
-_G16_UNSOUND = {
-    ("mono_contact", "refl-coef soil"),
-    ("mono_contact", "refl-coef sea"),
-    ("mono_contact", "sommerfeld soil"),
-}
+# The one pairing whose RATIO is not a usable statistic. Over average soil
+# the reflection-coefficient ground very nearly cancels the sinusoidal
+# solver's EK shift in the real part (δ_sin = −0.026 − 0.309j at NS = 21,
+# against −0.185 − 0.487j under PEC), so |δ_sin| is a small denominator and
+# the ratio inflates to 0.456 while the two bases' shift VECTORS agree to
+# 0.141 — 1.8x the PEC control's 0.080, on the one ground where the two
+# bases already disagree by 11% on Z itself at a contact (28.74+15.82j vs
+# 32.12+22.80j: the reflection-coefficient ground is the Φ-approximation
+# #153 bounded to 0.1-0.5λ, and a contact is below that window). That is
+# the same denominator noise the G16b contact bar already exists for, and
+# it is measured here where it is honest: on |δ_bsp − δ_sin| itself.
+_G16_ABSOLUTE = {("mono_contact", "refl-coef soil")}
+_G16_ABS_TOL = 0.30
 
 # Absolute bar per deck: #249 §7.2's 0.30 where the deck's own PEC control
 # meets it, the PEC value + ~15% headroom where it does not.
@@ -2141,16 +2149,24 @@ _G16_TOL = {
 _G16_FINITE = [g for g in _G16_GROUNDS if g != "pec"]
 
 
+def _g16_score(deck, ground, absolute):
+    """The number G16/G16b gate on this pairing: the ratio normally, the
+    bare |δ_bsp − δ_sin| for the `_G16_ABSOLUTE` pairing. `absolute` is
+    passed rather than re-derived so G16b scores a pairing's PEC control on
+    the SAME metric as the pairing."""
+    ratio, d_bsp, d_sin = _g16_mismatch(deck, ground)
+    return (abs(d_bsp - d_sin) if absolute else ratio), d_bsp, d_sin
+
+
 @pytest.mark.parametrize("ground", _G16_FINITE)
 @pytest.mark.parametrize("deck", list(_G16_DECKS))
 def test_g16_finite_ground_shift_matches_sinusoidal(deck, ground):
-    if (deck, ground) in _G16_UNSOUND:
-        pytest.skip("oracle diverges at ground contact over lossy soil — see G16c")
-    mismatch, d_bsp, d_sin = _g16_mismatch(deck, ground)
-    tol = _G16_TOL[deck]
-    assert mismatch <= tol, (
+    absolute = (deck, ground) in _G16_ABSOLUTE
+    score, d_bsp, d_sin = _g16_score(deck, ground, absolute)
+    tol = _G16_ABS_TOL if absolute else _G16_TOL[deck]
+    assert score <= tol, (
         f"{deck} / {ground}: δ_bsp={d_bsp} vs sinusoidal δ={d_sin}, "
-        f"mismatch {mismatch:.4f} > {tol}"
+        f"{'|δ_bsp − δ_sin|' if absolute else 'mismatch'} {score:.4f} > {tol}"
     )
 
 
@@ -2163,13 +2179,15 @@ def test_g16_finite_ground_shift_matches_sinusoidal(deck, ground):
 # image were extended differently on the two sides (wrong eligibility, a
 # weight applied before the kernel instead of after, the reduced refl
 # assembler silently serving an EK block), this number would move. Measured
-# worst |mismatch_ground − mismatch_PEC| over the 13 sound pairings: 0.0073
-# (bent / sommerfeld soil). Gated at 0.03, ~4x the worst.
+# worst |mismatch_ground − mismatch_PEC| over the 12 non-contact pairings:
+# 0.0073 (bent / sommerfeld soil). Gated at 0.03, ~4x the worst.
 #
-# mono_contact / sommerfeld sea is the one sound contact pairing and gets
-# its own looser bound: both δ real parts are small there (−0.16 bspline,
-# −0.30 sinusoidal) so the ratio is noisy even though the vectors agree —
-# measured 0.118 against its 0.153 PEC control.
+# The four contact pairings get their own looser bound. Their δ real parts
+# are small (−0.16 bspline, −0.30 sinusoidal on sommerfeld sea), so the
+# ratio is noisy even where the vectors agree — measured 0.0336 (refl sea),
+# 0.0724 (somm soil), 0.0003 (somm sea) against a 0.153 PEC control, and
+# 0.0616 for refl soil, which is scored absolutely (`_G16_ABSOLUTE`:
+# |δ_bsp − δ_sin| = 0.141 against its PEC control's 0.080).
 
 _G16B_TOL = 0.03
 _G16B_TOL_CONTACT = 0.15
@@ -2178,10 +2196,9 @@ _G16B_TOL_CONTACT = 0.15
 @pytest.mark.parametrize("ground", _G16_FINITE)
 @pytest.mark.parametrize("deck", list(_G16_DECKS))
 def test_g16b_finite_ground_does_not_move_the_pec_mismatch(deck, ground):
-    if (deck, ground) in _G16_UNSOUND:
-        pytest.skip("oracle diverges at ground contact over lossy soil — see G16c")
-    mm_g = _g16_mismatch(deck, ground)[0]
-    mm_pec = _g16_mismatch(deck, "pec")[0]
+    absolute = (deck, ground) in _G16_ABSOLUTE
+    mm_g = _g16_score(deck, ground, absolute)[0]
+    mm_pec = _g16_score(deck, "pec", absolute)[0]
     tol = _G16B_TOL_CONTACT if deck == "mono_contact" else _G16B_TOL
     assert abs(mm_g - mm_pec) <= tol, (
         f"{deck} / {ground}: mismatch {mm_g:.4f} vs PEC control {mm_pec:.4f} "
@@ -2191,7 +2208,7 @@ def test_g16b_finite_ground_does_not_move_the_pec_mismatch(deck, ground):
 
 
 # ----------------------------------------------------------------------
-# Gate 16c — why three pairings are excluded, pinned rather than asserted
+# Gate 16c — the contact ladders both kernels now converge on
 # ----------------------------------------------------------------------
 
 _G16C_NS = (11, 21, 41)
@@ -2224,21 +2241,27 @@ def _g16c_spread_ek(cls, **ground):
     return abs(z[-1] - z[0]) / abs(z[0])
 
 
-def test_g16c_the_excluded_pairings_are_an_unstable_oracle_not_a_kernel_gap():
-    """The exclusion in `_G16_UNSOUND`, as a measurement.
+def test_g16c_the_contact_oracle_converges_on_both_kernels():
+    """The contact row of G16, as a measurement rather than a tolerance —
+    and the armor under momwire#282 and momwire#292 both.
 
     Over average soil at ground CONTACT the sinusoidal oracle used to walk
-    away under mesh refinement at ~100% over NS = 11 → 41, EK on or off.
-    momwire#282 fixed the EK-OFF half — the uncancelled contact-node charge —
-    and EK-OFF now settles to 0.13 (refl-coef) / 0.02 (Sommerfeld), against
-    this solver's 0.04 and the PEC controls' 0.03-0.04. EK-ON is still
-    unstable at 1.56, because #282's correction cancels the REDUCED kernel's
-    end-charge bracket and an EK-on fill carries EKSCX's instead.
+    away under mesh refinement at ~100% over NS = 11 → 41, EK on or off,
+    which is why three pairings were excluded from G16/G16b outright. #282
+    fixed the EK-OFF half — the uncancelled contact-node charge — taking it
+    to 0.13 (refl-coef) / 0.02 (Sommerfeld) against this solver's 0.04 and
+    the PEC controls' 0.03-0.04. #292 fixed the EK-ON half, which was still
+    at 1.56 (refl-coef) / 0.42 (Sommerfeld) because #282's subtraction
+    cancelled the REDUCED kernel's end-charge bracket while an EK-on fill
+    carries EKSCX's; built from the same per-end GXX quantities it lands at
+    0.127 / 0.027, i.e. ON the EK-off numbers rather than merely near them.
 
-    That EK-ON number is why the three pairings stay out of G16/G16b: their δ
-    is an EK-vs-no-EK difference, so it is exactly the unstable quantity. If
-    the correction is ever extended to the EK bracket, this test fails on its
-    last assertion and those pairings should be moved back into `_G16_TOL`.
+    Both halves are pinned here because both are load-bearing for G16: δ_sin
+    on the contact row is an EK-vs-no-EK DIFFERENCE, so an instability in
+    either kernel is an instability in the gated quantity. Reverting either
+    fix fails this test long before it fails a tolerance elsewhere — the
+    EK-on bars are set at 2x the measured EK-off spread, which the pre-#292
+    numbers miss by an order of magnitude.
     """
     soil = dict(ground_eps=_G16_EPS["soil"])
     somm = dict(soil, ground_model="sommerfeld")
@@ -2249,19 +2272,22 @@ def test_g16c_the_excluded_pairings_are_an_unstable_oracle_not_a_kernel_gap():
     assert _g16c_spread(BSplineSolver, **soil) < 0.10, (
         "the bspline contact answer over soil stopped converging"
     )
-    # #282: the EK-OFF oracle converges, within 4x of this solver's own spread.
     for name, ground in (("refl-coef", soil), ("sommerfeld", somm)):
-        spread = _g16c_spread(SinusoidalSolver, **ground)
-        assert spread < 0.20, (
+        # #282: the EK-OFF oracle converges, within 4x of this solver's own
+        # spread. Measured 0.129 / 0.020.
+        off = _g16c_spread(SinusoidalSolver, **ground)
+        assert off < 0.20, (
             f"the EK-OFF sinusoidal contact answer over {name} soil regressed "
-            f"to spread {spread:.3f} — momwire#282 is undone"
+            f"to spread {off:.3f} — momwire#282 is undone"
         )
-    # ...and EK-ON does not, which is what the exclusion now names.
-    ek_spread = _g16c_spread_ek(SinusoidalSolver, **soil)
-    assert ek_spread > 0.50, (
-        f"the EK-ON sinusoidal oracle now converges at ground contact over "
-        f"soil (spread {ek_spread:.3f}) — re-enable the _G16_UNSOUND pairings"
-    )
+        # #292: and so does the EK-ON one, to within 2x of it. Measured
+        # 0.127 / 0.027 against pre-#292's 1.565 / 0.423.
+        on = _g16c_spread_ek(SinusoidalSolver, **ground)
+        assert on < 2.0 * off, (
+            f"the EK-ON sinusoidal contact answer over {name} soil is at "
+            f"spread {on:.3f} against EK-OFF's {off:.3f} — momwire#292's "
+            f"EKSCX end-charge bracket is undone"
+        )
 
 
 # ----------------------------------------------------------------------

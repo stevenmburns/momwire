@@ -2882,10 +2882,38 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
         return seg_view["jbasis"][blk], val
 
+    def _contact_charge_fresnel(self, d, r2, obs_c, obs_t, eps_t):
+        """The reflection-coefficient ground's specular geometry at a contact
+        node, shared by the reduced and extended charge kernels.
+
+        The node IS its own mirror image, so the specular ray is simply
+        (node → observer): cos θ is the observer's height over the plane
+        divided by that distance, and p̂ — the horizontal unit vector the
+        Fresnel dyad resolves the horizontal polarization on — is
+        perpendicular to the ray's horizontal projection. Returns
+        `(ρ_v, ρ_h, t·p̂, p̂_x, p̂_y, p̂·d)`; the last is the reduced kernel's
+        own E·p̂ up to its prefactor (its E is parallel to `d`), while the
+        extended kernel resolves E·p̂ from p̂_x/p̂_y itself because its E is
+        not.
+        """
+        dz = obs_c[..., 2] - self.ground_z
+        rmag = np.sqrt(np.maximum(r2, _CONTACT_TINY))
+        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, dz / rmag)
+        hyp = np.hypot(d[..., 0], d[..., 1])
+        safe = hyp > _CONTACT_TINY
+        inv_hyp = np.where(safe, 1.0 / np.where(safe, hyp, 1.0), 1.0)
+        px = np.where(safe, -d[..., 1] * inv_hyp, 1.0)
+        py = np.where(safe, d[..., 0] * inv_hyp, 0.0)
+        t_p = obs_t[..., 0] * px + obs_t[..., 1] * py
+        p_d = px * d[..., 0] + py * d[..., 1]
+        return rho_v, rho_h, t_p, px, py, p_d
+
     def _contact_charge_kernel(self, geom, k, node, obs_c, obs_t, a_obs):
         """Per-observer field of the SPURIOUS charge a unit contact current
         leaves at `node`, tangentially projected — the #282 correction's
-        whole content.
+        whole content, on the REDUCED kernel's end-charge bracket. When the
+        fill extended that end, `_contact_charge_ek_delta` (#292) adds the
+        difference to EKSCX's bracket on top of what this returns.
 
         Over a PEC plane a wire end in the plane is charge-free: the end
         charge the wire's own field carries (+I/jω, the boundary term every
@@ -2950,22 +2978,199 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # its own image, so the ray is (node → observer) and cos θ = the
         # observer's height over the plane divided by that distance.
         # t·D·E = ρ_v(t·E) − (ρ_v + ρ_h)(t·p̂)(E·p̂) with E ∝ d.
-        dz = obs_c[..., 2] - self.ground_z
-        rmag = np.sqrt(np.maximum(r2, _CONTACT_TINY))
-        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, dz / rmag)
-        hyp = np.hypot(d[..., 0], d[..., 1])
-        safe = hyp > _CONTACT_TINY
-        inv_hyp = np.where(safe, 1.0 / np.where(safe, hyp, 1.0), 1.0)
-        px = np.where(safe, -d[..., 1] * inv_hyp, 1.0)
-        py = np.where(safe, d[..., 0] * inv_hyp, 0.0)
-        t_p = obs_t[..., 0] * px + obs_t[..., 1] * py
-        p_d = px * d[..., 0] + py * d[..., 1]
+        rho_v, rho_h, t_p, _px, _py, p_d = self._contact_charge_fresnel(
+            d, r2, obs_c, obs_t, eps_t
+        )
         return pref * ((1.0 - rho_v) * t_d + (rho_v + rho_h) * t_p * p_d)
+
+    def _contact_charge_end_gradient(self, geom, k, i, sgn, obs_c, obs_t, a_obs):
+        """∇G_ext at the contact end of segment `i`, in the two components
+        the fill resolves fields on: `(E_z, E_ρ/ρ_eval, t_src, rho_vec)`.
+
+        This is the extended kernel's answer to the same question
+        `_contact_charge_kernel`'s prefactor answers for the reduced one —
+        what field does the charge sitting at this end produce, per unit
+        terminating current — and it is read straight off `_ek_end_gxx`
+        rather than re-derived, because the point of #292 is that the
+        subtraction must be the SAME bracket the fill carries.
+
+        NEC's GXX returns exactly the gradient of Eq 89's circumferentially
+        averaged kernel: `G1P = ∂G_ext/∂z` and `G3 = ∂G_ext/∂ρ` — the
+        ρ-derivative needing both the explicit ρ² inside T1 and the chain
+        rule through R, which is precisely why GXX's IRA == 0 arm carries
+        `(G3 + GZP_T)·RH` and not `G3·RH`, and the identity being gated by
+        `test_292_gxx_returns_the_gradient_of_the_extended_kernel`. EKSCX spends
+        them exactly there: an end's share of `Ez_const` is −CON·G1P and of
+        `Erho_const` is +CON·G3, per unit current terminating at that end,
+        with the sin and cos shapes carrying the same pair scaled by their
+        own end value. So
+
+            E_end = CON·∇G_ext = −CON·G1P·t̂_src + CON·G3·ρ̂
+
+        with ρ̂ = rho_vec/ρ_eval — NEC's regularized ρ̂, the same one
+        `_field_components_bcast`'s `rho_proj_factor` divides by, so the
+        projection matches the fill's term for term. In the a → 0 limit
+        G1P → G1P_red and G3 → G3_red·ρ and the pair collapses onto
+        `_contact_charge_kernel`'s isotropic (1+jkr₀)e^{−jkr₀}d/r₀³.
+
+        The O(a²/R²) difference between the two is ~10 % of the charge at
+        the meshes #292 measured, and — being a difference of the SUBTRACTED
+        term rather than of the fill — it does not shrink under refinement:
+        it is the whole of the EK-on residue #282 left behind. On the G16c
+        deck the EK-on ladder ran spread 1.56 over NS = 11 → 41 against
+        EK-off's 0.13, and lands at 0.127 with this bracket in.
+
+        NOT gated here: the caller has already established that this end is
+        EK-eligible. `(rh, b)` ordering and the IRA arm are per pair exactly
+        as in `_extended_kernel_fields` (#258) — the observation point can
+        sit inside the source conductor here as anywhere else.
+        """
+        src_c = geom["seg_centers"][i]
+        src_t = geom["seg_tangents"][i]
+        src_hh = 0.5 * float(geom["seg_h"][i])
+        src_a = (
+            self._uniform_radius
+            if self._uniform_radius is not None
+            else float(self._seg_radius(geom)[i])
+        )
+        rvec = obs_c - src_c
+        z_eval = rvec @ src_t
+        rho_vec = rvec - z_eval[..., None] * src_t
+        rho_axis = np.linalg.norm(rho_vec, axis=-1)
+        a = np.asarray(a_obs, dtype=float)
+        a = a.reshape(a.shape[:1]) if a.ndim == 2 else a
+        rho_eval = np.sqrt(rho_axis * rho_axis + a * a)
+        # NEC's Z2 = SH − Z at end 2, Z1 = −(SH + Z) at end 1; `sgn` is +1
+        # for a `ground_plus` contact (end 2) and −1 for `ground_minus`.
+        zz = (src_hh - z_eval) if sgn > 0 else -(src_hh + z_eval)
+        swap = rho_eval < src_a
+        any_swap = bool(np.any(swap))
+        rh = np.where(swap, src_a, rho_eval) if any_swap else rho_eval
+        b = (
+            np.where(swap, rho_eval, src_a)
+            if any_swap
+            else np.full_like(rho_eval, src_a)
+        )
+        _g1, g1p, _g2, _g2p, g3, _gzp = self._ek_end_gxx(
+            k, zz, rh, b, swap if any_swap else False
+        )
+        con = 1j * self.eta / (4.0 * np.pi * k)
+        return -con * g1p, con * g3 / rho_eval, src_t, rho_vec
+
+    def _contact_charge_ek_delta(
+        self, geom, k, i, sgn, node, obs_c, obs_t, a_obs, use_real, use_image
+    ):
+        """How much `_contact_charge_kernel`'s residual changes when the
+        fill's end-charge bracket is EKSCX's rather than the reduced
+        kernel's — the whole of momwire#292, added on top of #282 rather
+        than replacing it so that an EK-off fill runs not one extra
+        floating-point operation.
+
+        Where the reduced kernel's terminating charge is a POINT on the
+        axis, radiating isotropically so that `t·E ∝ t·d` and `p̂·E ∝ p̂·d`,
+        the extended kernel's is the same charge smeared over the source
+        tube's circumference. Its field is anisotropic — axial and radial
+        parts carrying different O(a²) corrections
+        (`_contact_charge_end_gradient`) — so both projections have to be
+        resolved from the decomposition instead of from `d`:
+
+            t·E = E_z·(t_obs·t̂_src) + (E_ρ/ρ_eval)·(rho_vec·t_obs)
+            p̂·E = E_z·(p̂·t̂_src)    + (E_ρ/ρ_eval)·(rho_vec·p̂)
+
+        The residual #282 subtracts is `E_real − W[E_image]` with W the
+        ground's weighting (the scalar C₂ under Sommerfeld, the Fresnel
+        dyad under the reflection-coefficient ground), and both sides of it
+        are linear in the bracket. So the amendment is
+
+            Δ = use_real·(t·δE) − use_image·W[δE],   δE = E_ext − E_red
+
+        with `use_real` / `use_image` the per-observer masks saying where
+        the fill actually carried the extended bracket on that side. They
+        are separate because they CAN differ: `SinusoidalGalerkinSolver`
+        scores eligibility per pair against the mirrored sources
+        (`_ek_axis_labels(mirror=True)`), so a slanted wire standing on the
+        plane is coaxial with itself but not with its image. On the
+        point-matched solver they never differ — NEC threads one IND1/IND2
+        pair through both passes of its KSYMP image loop, and a contact is
+        EK-gated at all only when the segment is PERPENDICULAR to the
+        plane, whose mirror is its own axis with t̂ → −t̂; that flips the
+        sign of both `zz` and `t̂_src` and so leaves the end-charge VECTOR,
+        rho_vec included, exactly equal to the real one.
+
+        Identically zero in the PEC limit, like the term it amends: both
+        `use_*` branches then carry the same δE and W is the identity.
+        """
+        ez, erho_hat, src_t, rho_vec = self._contact_charge_end_gradient(
+            geom, k, i, sgn, obs_c, obs_t, a_obs
+        )
+        d = obs_c - node
+        r2 = np.einsum("...d,...d->...", d, d)
+        a2 = np.asarray(a_obs, dtype=float)
+        a2 = a2.reshape(a2.shape[:1]) if a2.ndim == 2 else a2
+        r0 = np.sqrt(r2 + a2 * a2)
+        pref = (
+            -1j
+            * self.eta
+            / (4.0 * np.pi * k)
+            * (1.0 + 1j * k * r0)
+            * np.exp(-1j * k * r0)
+            / (r0 * r0 * r0)
+        )
+        rho_t = np.einsum("...d,...d->...", rho_vec, obs_t)
+        t_d = np.einsum("...d,...d->...", obs_t, d)
+        dt = ez * (obs_t @ src_t) + erho_hat * rho_t - pref * t_d
+        zero = np.zeros((), dtype=np.complex128)
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        if self.ground_model == "sommerfeld":
+            # As in the reduced kernel: C₂ carries the whole of the
+            # Sommerfeld image's point-charge behaviour at the contact and
+            # the interpolated remainder takes no share of it.
+            c2 = (eps_t - 1.0) / (eps_t + 1.0)
+            return np.where(use_real, dt, zero) - c2 * np.where(use_image, dt, zero)
+        rho_v, rho_h, t_p, px, py, p_d = self._contact_charge_fresnel(
+            d, r2, obs_c, obs_t, eps_t
+        )
+        dp = (
+            ez * (src_t[0] * px + src_t[1] * py)
+            + erho_hat * (rho_vec[..., 0] * px + rho_vec[..., 1] * py)
+            - pref * p_d
+        )
+        img = rho_v * dt - (rho_v + rho_h) * t_p * dp
+        return np.where(use_real, dt, zero) - np.where(use_image, img, zero)
+
+    def _contact_ek_masks(self, geom, i, sgn, obs_seg):
+        """`(use_real, use_image)` for `_contact_charge_ek_delta` at the
+        contact end `(i, sgn)`, or None when this end kept the REDUCED
+        bracket and #282's correction already matches the fill.
+
+        The point-matched fill decides per source-segment END, with NEC's
+        IND codes (`_ek_gating`): code 2 routes the end to the reduced GX,
+        codes 0 and 1 to GXX. A ground contact earns code 0 only when the
+        segment is perpendicular to the plane, so a SLANTED contact keeps
+        the reduced bracket even with EK on. The decision does not depend
+        on the observer, and it is the same on the image pass, hence the
+        two scalar `True`s. `SinusoidalGalerkinSolver` overrides this: its
+        extended kernel is #246's per-PAIR rule, not NEC's per-end one, so
+        its masks are per observer and its two sides can disagree.
+        """
+        if not self.extended_kernel:
+            return None
+        ind1, ind2 = self._ek_gating(geom)
+        if int((ind2 if sgn > 0 else ind1)[i]) == 2:
+            return None
+        return True, True
 
     def _contact_charge_correction(self, G, geom, k, seg_view):
         """Subtract the #282 residual contact charge from a collocated fill,
         in place. No-op without a finite ground or without a contact, so
-        PEC and elevated geometries keep their base arithmetic exactly."""
+        PEC and elevated geometries keep their base arithmetic exactly.
+
+        Each contact end takes the bracket its own fill carried: the
+        reduced kernel's always, plus #292's `_contact_charge_ek_delta`
+        wherever the extended kernel reached that end. With EK off the
+        second term is never built and not one floating-point operation
+        here changes.
+        """
         if self.ground_eps is None:
             return G
         nodes = self._contact_nodes(geom)
@@ -2973,8 +3178,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return G
         obs_c, obs_t = geom["seg_centers"], geom["seg_tangents"]
         a_obs = self._seg_radius(geom)
+        obs_seg = np.arange(geom["n_segs"], dtype=np.int64)
         for i, sgn, node in nodes:
             R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs)
+            masks = self._contact_ek_masks(geom, i, sgn, obs_seg)
+            if masks is not None:
+                R = R + self._contact_charge_ek_delta(
+                    geom, k, i, sgn, node, obs_c, obs_t, a_obs, *masks
+                )
             jb, val = self._contact_node_values(geom, k, seg_view, i, sgn)
             G[:, jb] -= sgn * R[:, None] * val[None, :]
         return G
