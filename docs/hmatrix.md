@@ -176,4 +176,7 @@ Web UI / server: registered under the `hmatrix` model key.
 
 Knobs: `aca_eta` (admissibility looseness), `aca_leaf_size` (cluster leaf
 size), `aca_tol` (ACA relative tolerance), `solve_tol` (GMRES tolerance),
+`swept_dense_max_bases` (basis-count ceiling below which frequency sweeps
+take the batched dense route instead of rebuilding the operator per k —
+issue #262; 0 disables the dispatch, `None` takes the class default),
 plus all the inherited `BSplinePySim` parameters (`degree`, `n_qp_pair`, …).

@@ -995,6 +995,30 @@ class ArrayBlockSolver(HMatrixSolver):
         oversize = int(part.sizes.max()) > self.array_max_elem_bases
         return no_reuse or oversize
 
+    def _swept_dense_dispatch_ok(self):
+        """No size-based swept dispatch on this class (issue #262).
+
+        `HMatrixSolver`'s rule is that below a measured basis count the
+        batched dense sweep is simply the faster engine. That measurement
+        does not transfer here: this solver's wall clock is set by how much
+        ARRAY structure there is to exploit — element count, shape-class
+        multiplicity, lattice-FFT eligibility — and n orders those cases
+        badly. Same 3-point sweep, same box, dipole line array, this solver
+        vs the batched dense route:
+
+            240 bases   0.283 s vs 0.060 s dense   (dense 4.7x faster)
+            480 bases   0.205 s vs 0.249 s dense   (dense 1.2x SLOWER)
+           1000 bases   1.901 s vs 0.712 s dense   (dense 2.7x faster)
+
+        A basis-count threshold sends the 480-basis case to the slower engine
+        at 2.3x the memory. #262 asks for a measured threshold, not a guessed
+        one; the threshold this class would need is measured in array
+        coordinates, and nobody has measured it. Until then the array sweeps
+        stay on the array operator, which is also what the caller asked for by
+        instantiating this class.
+        """
+        return False
+
     def _build_operator(self):
         """Build the array-block operator (cached) for the constrained solve.
 
