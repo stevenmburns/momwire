@@ -1199,3 +1199,113 @@ against an independent quadrature, multi-feed and the Y path, and the d=1
 degeneracy — in `tests/test_momwire.py`. Reproduce with
 `python scripts/m6_residue_cluster.py --dipole-feed-mirror` and
 `--feed-matched`.
+
+---
+
+## 20. Addendum (2026-08-11): the extended kernel reaches the fourth cell — momwire#246
+
+Until this arc the EK card split the instrument: the point-matched sinusoidal
+solver served it (momwire#233) and the Galerkin one refused it, so a fat-wire
+disagreement between the two cells confounded the kernel with the testing —
+the exact confounding this instrument exists to remove.
+`SinusoidalGalerkinSolver(extended_kernel=True)` now solves: the reduced
+#205 folded fill untouched, a smooth extended-minus-reduced delta ADDED by
+sinh-mapped quadrature on the coaxial equal-radius pairs, eligibility per
+PAIR rather than NEC's per-end INDs. The design and the derivation are "The
+extended thin-wire kernel (Eqs 84–98)" in `docs/sinusoidal_basis_design.md`;
+this addendum records what the wired solver measures.
+
+### The ladder, read as a shift
+
+The oracle is the nec2c EK ladder read DIFFERENTIALLY: δZ = Z(EK on) −
+Z(EK off) on one and the same mesh, each solver against nec2c's own δZ
+column — so every reduced-kernel disagreement subtracts out and what is
+compared is only what the kernel adds. On the thin-rung end nec2c's printed
+digits cannot resolve its own shift (δZ = 0.000 ± half a printed digit at
+Δ/a ≥ 24), so those rungs are excluded from the sign and ratio gates rather
+than scored against noise.
+
+| Δ/a | δZ nec2c | δZ galerkin | δZ collocation |
+|--:|--:|--:|--:|
+| 2.439 | −2.350 − 2.001j | −2.289 − 2.015j | −3.155 − 3.354j |
+| 1.220 | −12.450 + 3.084j | −11.273 + 3.422j | −11.639 + 3.643j |
+| 0.813 | −8.220 + 48.470j | −7.607 + 47.350j | −7.265 + 47.684j |
+| 0.407 | +37.587 − 49.332j | +36.105 − 48.502j | +37.752 − 48.944j |
+
+Against nec2c: **2.0 %, 9.5 %, 2.6 %, 2.7 %** — where the collocation
+solver's own column reads 51 %, 7.7 %, 2.5 %, 0.7 %, so the Galerkin cell is
+*stronger* than #233's at the fat end. Cross-basis, on the three rungs where
+EK carries the answer: 3.5 %, 1.0 %, 2.8 %, all inside #249 §7's 25 % bar.
+The sign structure matches nec2c on every rung the oracle resolves. Over the
+PEC image the same differential reads −4.192 − 1.605j against the
+point-matched −4.210 − 1.191j (9.5 %) on a fat monopole standing on the
+plane — pinned as the image block's shift by forcing its EK payload off (the
+answer moves) with the free-space control two orders away.
+
+### The thin rungs: the test integral sees what collocation never samples
+
+Above Δ/a ≈ 6 the Galerkin shift RUNS LARGER than the point-matched one —
+0.146 Ω against 0.046 Ω at Δ/a = 24, 0.021 Ω against 0.0014 Ω at Δ/a = 122 —
+and that is the fill, not a defect. The extended-minus-reduced field is O(1)
+relative to the reduced one within a wire radius of a source-segment END
+(0.75 of it at Δ/a = 122, against 4e-4 at mid-segment); a collocation point
+sits at a segment CENTRE and never visits that region, while a Galerkin test
+integral sweeps straight through it. So the two cells honestly read
+different functionals of the same kernel, and the instrument's own axis —
+same basis, different testing — is what the deviation measures. Pinned two
+ways: refining the delta rule, the near rule and the test rule each moves it
+by <1e-7; and rebuilding the whole EK fill from NEC's own EKSCX closed forms
+— folded by subtraction, sharing no quadrature with the delta — reproduces
+δZ to **eight figures**.
+
+### Symmetry, the fill's own detector, with the kernel on
+
+‖G−Gᵀ‖/‖G‖ on the ladder mesh: 5.8e-13 EK-on against 3.5e-13 reduced at
+Δ/a = 2.4 (1.7×), 4.6e-13 against 2.1e-13 at Δ/a = 6.1 (2.2×). On the
+Δ/a ≈ 1 monopole decks EK-on sits at 1.9e-12 against the reduced fill's
+4.4e-14 — and that is the shared FAR test rule being short, not the pair
+rule: `n_qp_test=16` takes it to 5.1e-15, *under* the reduced fill's own.
+The falsifying contrast is in the battery: extend only j > i and the ratio
+jumps to 1e-2 and stops responding to refinement. ‖G_ek − G_red‖/‖G_red‖
+scales as the structural a²: 1.6e-1 (a = 0.05), 2.5e-3 (0.005), 3.7e-5
+(5e-4), 2.6e-6 (5e-5), and a zero source radius returns the reduced tables
+bit-for-bit.
+
+### The resolution floor
+
+Reduced-plus-delta is a near-cancelling decomposition — the two kernels
+agree away from the wire — so an on-segment pair carries ~(H/ρ)² of
+cancellation and float64 leaves ~ε·(H/ρ)² of the delta's peak behind. The EK
+shift is itself O((ρ/H)²), so the two scale against each other: what reaches
+Z stays **~1e-10 relative out to Δ/a ≈ 500**, and past **Δ/a ≈ 1e4** — where
+the kernel is a 1e-8 effect anyway — the decomposition is noise-limited.
+That floor belongs to reduced-plus-delta, not to any quadrature, and it
+bounds how thin a wire this cell can resolve an EK correction for; the far
+and on-segment tiers are gated separately so the sharp statement survives in
+the tests.
+
+### What still refuses
+
+`ground_model="sommerfeld"` with a plane: the ground-wave remainder is a
+separate evaluator, still reduced, and mixing an extended image with a
+reduced remainder inside one ground model would be a silent half-answer.
+Filed as momwire#287, with `BSplineSolver`'s #269 precedent (remainder left
+reduced on a measured O((a/2h)²) argument) as the shape of the fix and the
+re-measurement this cell's test integration forces as the open question.
+`near_correction=False` also refuses under EK — the near path is where the
+on-segment pairs are computed at all, not a refinement.
+
+### Cost, and where it is pinned
+
+With EK on the fused C++ far fill is skipped (it takes no eligibility mask)
+behind the `_HAVE_GALERKIN_FAR_FILL_EK` capability flag, so an EK-on fill
+costs what the pre-#194 numpy fill did until #246 unit C lands the twin;
+EK-off is bit-identical to the pre-arc solver (defaulted vs explicit
+`extended_kernel=False` on five decks, plus an entry counter proving the
+four EK code objects are never entered). Pinned in
+`tests/test_extended_kernel_galerkin.py` — the delta against the 80-bit
+reference and against EKSCX, the ladder shift, symmetry, a → 0, the
+off-path armor, the PEC image attribution and the pair-mask predicate —
+with the acceptance/refusal seam mirrored in
+`tests/test_extended_kernel.py`; the derivation replays in
+`scripts/derive_galerkin_ek_delta.py`.
