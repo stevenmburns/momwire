@@ -320,3 +320,180 @@ def test_282_brings_the_ground_shift_onto_the_cross_basis_reference():
         assert mismatch < 0.30, (
             f"{ground}: shift mismatch {mismatch:.3f} (sin {d_s}, bsp {d_b})"
         )
+
+
+# ----------------------------------------------------------------------
+# The same node charge, under the EXTENDED kernel (momwire#292)
+# ----------------------------------------------------------------------
+#
+# #282 wrote the subtraction on the REDUCED kernel's end-charge bracket —
+# the isotropic (1+jkr₀)e^{−jkr₀}d/r₀³ field of a point charge on the axis.
+# An EK-on fill carries EKSCX's bracket instead: the same charge smeared
+# over the source tube's circumference, whose field is Eq 89's gradient and
+# is O(a²/R²) ≈ 10% different at these meshes. Subtracting the wrong one of
+# the two leaves that difference in the fill as a term that does NOT shrink
+# under refinement, and the EK-on contact answer kept walking (spread 1.56
+# over NS = 11 → 41 where EK-off had come down to 0.13). #292 builds the
+# subtraction from the same per-end GXX quantities the fill uses.
+
+_292_EK_GROUNDS = {
+    "refl-coef soil": dict(ground_eps=(13.0, 0.005)),
+    "sommerfeld soil": dict(ground_eps=(13.0, 0.005), ground_model="sommerfeld"),
+}
+
+
+def _292_z(cls, ns, ek, **ground):
+    return _282_z(cls, ns, extended_kernel=ek, **ground)
+
+
+@pytest.mark.parametrize("ground", list(_292_EK_GROUNDS))
+def test_292_ek_contact_over_finite_ground_no_longer_diverges(ground):
+    """The EK-ON ladder settles, and settles no worse than the EK-OFF one.
+
+    Before #292 this ran 32.30+38.50j → 21.28+116.34j over NS = 11/21/41
+    (spread 1.56) under refl-coef soil and 0.42 under Sommerfeld; it now
+    tracks the EK-off ladder rung for rung.
+    """
+    kw = _292_EK_GROUNDS[ground]
+    on = [_292_z(SinusoidalSolver, n, True, **kw) for n in _282_NS]
+    off = [_292_z(SinusoidalSolver, n, False, **kw) for n in _282_NS]
+    spread_on = abs(on[-1] - on[0]) / abs(on[0])
+    spread_off = abs(off[-1] - off[0]) / abs(off[0])
+    assert spread_on < 0.30, f"{ground}: EK-on spread {spread_on:.3f}: {on}"
+    assert spread_on <= 1.5 * spread_off, (
+        f"{ground}: EK-on spread {spread_on:.3f} against EK-off's "
+        f"{spread_off:.3f} — the EKSCX end-charge bracket is not being used"
+    )
+    errs = [abs(v - on[-1]) for v in on[:-1]]
+    assert all(b < a for a, b in zip(errs, errs[1:])), f"{ground}: not monotone: {on}"
+    assert all(v.imag > 0 for v in on), f"{ground}: reactance went capacitive: {on}"
+    # The kernel switch is a small perturbation of the answer, not a new one.
+    for a, b in zip(on, off):
+        assert abs(a - b) < 0.10 * abs(b), f"{ground}: EK-on {a} vs EK-off {b}"
+
+
+def test_292_the_galerkin_contact_fill_gets_the_same_twin():
+    """The Galerkin solver carries the correction through its own test
+    integration and scores eligibility with #246's per-PAIR rule, so it
+    needs the twin too — and needed it more: its EK-on contact answer was
+    58.79−236.52j at NS = 11 against 33.13+23.50j EK-off, stably wrong
+    rather than walking. Sommerfeld under EK is refused by this solver, so
+    the reflection-coefficient ground is the whole of the test.
+    """
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
+
+    kw = _292_EK_GROUNDS["refl-coef soil"]
+    for ns in (11, 21, 41):
+        on = _292_z(SinusoidalGalerkinSolver, ns, True, **kw)
+        off = _292_z(SinusoidalGalerkinSolver, ns, False, **kw)
+        assert abs(on - off) < 0.10 * abs(off), f"NS={ns}: EK-on {on} vs {off}"
+
+
+def test_292_leaves_an_elevated_ek_wire_untouched():
+    """The twin is gated on a CONTACT exactly as #282's term is: a wire
+    clear of the plane under EK keeps its exact fill."""
+    s = SinusoidalSolver(
+        wires=[np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 1.0 + _282_H]])],
+        n_per_edge_per_wire=[[21]],
+        nsegs=21,
+        wire_radius=0.02,
+        feed_arclength=(_282_H / 21) * 0.5,
+        ground_z=0.0,
+        wavelength=_282_LAM,
+        ground_eps=(13.0, 0.005),
+        extended_kernel=True,
+    )
+    geom = s._build_geometry()
+    G, seg_view = s._assemble_Z(geom, s.k)
+    G2 = G.copy()
+    s._contact_charge_correction(G2, geom, s.k, seg_view)
+    assert np.array_equal(G, G2)
+
+
+def _292_contact_solver(top, ek=True):
+    """A contacting wire from the origin to `top`, over average soil."""
+    return SinusoidalSolver(
+        wires=[np.array([[0.0, 0.0, 0.0], top])],
+        n_per_edge_per_wire=[[21]],
+        nsegs=21,
+        wire_radius=0.02,
+        feed_arclength=(_282_H / 21) * 0.5,
+        ground_z=0.0,
+        wavelength=_282_LAM,
+        ground_eps=(13.0, 0.005),
+        extended_kernel=ek,
+    )
+
+
+def test_292_follows_the_fills_own_gating_at_the_contact_end():
+    """The bracket is chosen by the same IND code the fill routed the end
+    with, not by a global EK flag.
+
+    NEC extends a ground contact only when the segment is PERPENDICULAR to
+    the plane (CABJ² + SABJ² ≤ 1e-8); a slanted contact is IND = 2 and its
+    end goes to the reduced GX, where #282's subtraction is already the
+    right one. So the slanted deck must take no twin at all — and its EK-on
+    fill must be bit-identical to what it was before #292 existed, which is
+    what `_contact_ek_masks` returning None means.
+    """
+    vertical = _292_contact_solver(np.array([0.0, 0.0, _282_H]))
+    geom = vertical._build_geometry()
+    assert vertical._contact_ek_masks(geom, 0, -1.0, np.arange(21)) == (True, True)
+
+    slanted = _292_contact_solver(np.array([_282_H * 0.6, 0.0, _282_H * 0.8]))
+    geom = slanted._build_geometry()
+    assert slanted._contact_ek_masks(geom, 0, -1.0, np.arange(21)) is None
+
+    off = _292_contact_solver(np.array([0.0, 0.0, _282_H]), ek=False)
+    assert off._contact_ek_masks(off._build_geometry(), 0, -1.0, np.arange(21)) is None
+
+
+def test_292_gxx_returns_the_gradient_of_the_extended_kernel():
+    """The derivation the twin rests on, checked numerically.
+
+    `_contact_charge_end_gradient` spends NEC's GXX outputs as
+    ∇G_ext = (G1P, G3) — the z- and ρ-derivatives of Eq 89's
+    circumferentially averaged kernel, which is what makes them the field of
+    the charge sitting at that end. The ρ half is the one that can be got
+    wrong: T1 carries an explicit ρ² as well as the chain rule through R,
+    which is exactly why GXX's IRA == 0 arm returns (G3 + GZP_T)·RH rather
+    than G3·RH.
+    """
+    k = 2.0 * np.pi / _282_LAM
+    gxx = SinusoidalSolver._ek_end_gxx
+
+    def g1(z, rho, a):
+        return gxx(k, np.asarray(z), np.asarray(rho), np.asarray(a), False)[0]
+
+    for a, rho, z in ((0.02, 0.02, 0.15), (0.05, 0.31, 0.7), (0.08, 2.0, -1.3)):
+        h = 1e-6 * max(rho, abs(z), 1.0)
+        _g1, g1p, _g2, _g2p, g3, _gzp = gxx(
+            k, np.asarray(z), np.asarray(rho), np.asarray(a), False
+        )
+        dz = (g1(z + h, rho, a) - g1(z - h, rho, a)) / (2.0 * h)
+        dr = (g1(z, rho + h, a) - g1(z, rho - h, a)) / (2.0 * h)
+        assert abs(g1p - dz) < 1e-6 * abs(dz), f"G1P at ({a},{rho},{z})"
+        assert abs(g3 - dr) < 1e-6 * abs(dr), f"G3 at ({a},{rho},{z})"
+
+
+def test_292_the_two_brackets_differ_by_the_expected_o_a2_amount():
+    """The δ the fix removes, sized: on the #282 deck at NS = 21 the
+    extended and reduced end-charge brackets differ by ~10% of the charge
+    at the collocation points nearest the contact, and by more as the
+    observer approaches it. That is the O(a²/R²) of Eq 89 and nothing
+    else — it is NOT a small residual that refinement would wash out, which
+    is why leaving it in made the ladder walk."""
+    s = _292_contact_solver(np.array([0.0, 0.0, _282_H]))
+    geom = s._build_geometry()
+    obs_c, obs_t = geom["seg_centers"], geom["seg_tangents"]
+    a_obs = s._seg_radius(geom)
+    (i, sgn, node) = s._contact_nodes(geom)[0]
+    red = s._contact_charge_kernel(geom, s.k, node, obs_c, obs_t, a_obs)
+    delta = s._contact_charge_ek_delta(
+        geom, s.k, i, sgn, node, obs_c, obs_t, a_obs, True, True
+    )
+    rel = np.abs(delta) / np.abs(red)
+    assert 0.05 < rel[0] < 0.30, f"nearest-observer bracket delta {rel[0]:.4f}"
+    # It falls off with distance — the correction is local to the node —
+    # but never becomes the rounding-level term a converged fill could carry.
+    assert rel[-1] < rel[0], f"delta does not decay along the wire: {rel}"

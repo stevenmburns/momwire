@@ -1472,21 +1472,28 @@ def test_cpp_ek_refl_battery_is_decisive():
 
 
 # Impedance-level agreement over finite ground, per fixture. 1e-12 is the gate.
-# Measured across the battery: 3.6e-15 (bent_above), 5.4e-15
-# (monopole_lifted), 7.2e-15 (dipole_far_plane), 1.6e-14
-# (grounded_radius_step_skew), 3.8e-14 (grounded_ell_radii), 1.6e-13
-# (monopole_contact), 1.5e-12 (horizontal_at_height).
+# Measured across the battery: 3.8e-15 (bent_above), 5.4e-15
+# (monopole_lifted), 7.2e-15 (dipole_far_plane), 1.5e-14
+# (grounded_radius_step_skew), 6.6e-14 (grounded_ell_radii), 1.5e-12
+# (horizontal_at_height), 1.7e-12 (monopole_contact).
 #
-# `horizontal_at_height` alone needs 5e-12, and it is conditioning, not
-# dispatch: it is the battery's worst-conditioned image block by a wide margin
-# (the REDUCED refl kernel's own C++-vs-numpy delta on that deck is 3.5e-12 —
-# larger than the extended kernel's 3.3e-12), so the matrix solve is
-# multiplying a fill delta that has nothing to do with #259 by the deck's
-# condition number. A dispatch fault — image block on the wrong kernel,
-# unsliced specular table, gating dropped, IRA dropped — lands at 1e-2, not
-# here.
+# Two fixtures need 5e-12, and in both it is the metric, not dispatch.
+# `horizontal_at_height` is the battery's worst-conditioned image block by a
+# wide margin (the REDUCED refl kernel's own C++-vs-numpy delta on that deck
+# is 3.5e-12 — larger than the extended kernel's 3.3e-12), so the matrix
+# solve is multiplying a fill delta that has nothing to do with #259 by the
+# deck's condition number. `monopole_contact` moved from 8.6e-13 to 1.7e-12
+# under momwire#292 with the ABSOLUTE delta unchanged at 6.9e-11 Ω: the twin
+# takes that deck's EK-on |Z| from 79.7 to 40.5 (28.56+74.42j, still walking
+# with the reduced end-charge bracket, to 33.28+23.19j), so the same error
+# is divided by half the number. cond(G) is 424 against the EK-off path's
+# 400, and EK-OFF on this deck is bit-identical between the two paths.
+#
+# A dispatch fault — image block on the wrong kernel, unsliced specular
+# table, gating dropped, IRA dropped — lands at 1e-2, not here.
 _REFL_Z_AGREEMENT = {name: 1e-12 for name in REFL_EK_BATTERY}
 _REFL_Z_AGREEMENT["horizontal_at_height"] = 5e-12
+_REFL_Z_AGREEMENT["monopole_contact"] = 5e-12
 
 
 @pytest.mark.parametrize("name", list(REFL_EK_BATTERY))
@@ -1510,7 +1517,20 @@ def test_cpp_ek_refl_impedance_matches_the_numpy_path(name, monkeypatch):
 def test_cpp_ek_refl_path_does_not_re_enter_the_numpy_kernel(monkeypatch):
     """The whole point of #259: an EK-ON finite-ground solve must never touch
     `_extended_kernel_fields`. Before it, the free-space block went to C++ and
-    the Fresnel image block silently did not — the residue #245 left."""
+    the Fresnel image block silently did not — the residue #245 left.
+
+    One caller of the END routines is legitimate, and is COUNTED here rather
+    than forbidden, so that it cannot grow silently: momwire#292's
+    contact-charge twin calls `_ek_end_gxx` once per contact node per fill,
+    to build the same EKSCX end-charge bracket the C++ fill carries so that
+    #282's subtraction cancels it. That is a rank-one post-assembly term with
+    no C++ twin (`SinusoidalSolver._contact_charge_ek_delta`), not the field
+    kernel, and `grounded_ell_radii` has exactly one contact node. A fill
+    that fell back would show up as `_extended_kernel_fields` in the list, or
+    as many more than one `_ek_end_gxx`.
+    """
+    import inspect
+
     import momwire.sinusoidal as sin_mod
 
     if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
@@ -1524,10 +1544,17 @@ def test_cpp_ek_refl_path_does_not_re_enter_the_numpy_kernel(monkeypatch):
             calls.append(_attr)
             return _o(*a, **kw)
 
+        if isinstance(inspect.getattr_static(SinusoidalSolver, attr), staticmethod):
+            # The end routines are staticmethods; a bare function in their
+            # slot would be handed `self` and blow up before it counted.
+            trip = staticmethod(trip)
         monkeypatch.setattr(SinusoidalSolver, attr, trip)
 
     _refl_solver("grounded_ell_radii", extended_kernel=True).compute_impedance()
-    assert calls == [], f"EK-ON refl solve fell back to the numpy kernel: {calls}"
+    assert calls == ["_ek_end_gxx"], (
+        f"EK-ON refl solve fell back to the numpy kernel: {calls} "
+        "(one _ek_end_gxx is momwire#292's contact-charge bracket)"
+    )
 
 
 def test_ek_refl_kernel_is_never_entered_when_ek_is_off(monkeypatch):

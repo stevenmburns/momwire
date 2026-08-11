@@ -107,9 +107,10 @@ got wrong first:
    since been fixed by momwire#282, which removes the contact charge that
    mismatch leaves on the plane: both sinusoidal solvers now converge there
    (0.4% over a 7x refinement) and agree with each other to 0.3%, though they
-   sit a fixed cross-basis distance from the b-spline reference and the
-   EK-on contact fill over a lossy ground is still unstable. This report is
-   free space throughout, which sidesteps all of it regardless.
+   sit a fixed cross-basis distance from the b-spline reference; momwire#292
+   then carried the same correction onto the extended kernel's end-charge
+   bracket, so the EK-on contact fill converges too. This report is free
+   space throughout, which sidesteps all of it regardless.
 5. **The `_bridged_z` oracle's ~1.4% linear-in-δ extrapolation residue is the
    oracle's**, characterized in M5b and off-limits for re-attribution to any
    solver. It is not used as a reference here.

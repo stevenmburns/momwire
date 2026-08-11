@@ -565,8 +565,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     at one recorded price: the correction is source-side only, so the fill is
     no longer self-adjoint on such a deck
     (`test_the_282_contact_correction_is_not_self_adjoint`). With the EXTENDED
-    kernel on, the contact fill over a lossy ground is still unstable — the
-    correction cancels the reduced kernel's end-charge bracket, not EKSCX's.
+    kernel on the subtraction has to cancel EKSCX's end-charge bracket rather
+    than the reduced one's, which momwire#292 does — through
+    `_contact_ek_masks`, whose eligibility is this solver's per-PAIR rule
+    rather than NEC's per-end IND code.
 
     `node_ports`
         Two-terminal ports located AT a junction node (M5b formulation (a)):
@@ -1468,6 +1470,41 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         eligible = (gi == gj) & (gi >= 0)
         return _EKPairs(self._seg_radius(geom)[n_idx], eligible, n_panels)
 
+    def _contact_ek_masks(self, geom, i, sgn, obs_seg):
+        """momwire#292's masks under #246's PAIR rule.
+
+        `SinusoidalSolver._contact_ek_masks` reads NEC's per-END IND code,
+        which is the wrong question here for exactly the reason `_ek_pairs`
+        gives: this fill extends a pair when observer and source share an
+        axis, symmetrically, and never asks whether a current "continues
+        through" an end. So the contact node's bracket is extended for
+        precisely those observers whose test segment is coaxial-and-equal-
+        radius with the contacting segment `i` — the same predicate, scored
+        on the same labels, that decided the fill's own delta.
+
+        The two sides come apart here in a way they cannot on the
+        point-matched solver. The free-space block scores against the REAL
+        sources and the image block against the MIRRORED ones
+        (`_ek_axis_labels(mirror=True)`), so a vertical wire standing on the
+        plane is eligible on both — it maps onto its own axis — while a
+        SLANTED contact is coaxial with itself and not with its image, and
+        gets the extended bracket on the real half of the residual only.
+        `_contact_charge_ek_delta` takes the two masks separately for that
+        case; `sgn` plays no part, both ends of a segment carrying the same
+        axis label.
+
+        `None` when EK is off, which keeps #282's arithmetic untouched.
+        """
+        if not self.extended_kernel:
+            return None
+        group_obs, group_src = self._ek_axis_labels(geom, False)
+        real = (group_obs[obs_seg] == group_src[i]) & (group_obs[obs_seg] >= 0)
+        group_obs_m, group_src_m = self._ek_axis_labels(geom, True)
+        img = (group_obs_m[obs_seg] == group_src_m[i]) & (group_obs_m[obs_seg] >= 0)
+        if not (real.any() or img.any()):
+            return None
+        return real, img
+
     def _tested_contribs(
         self, geom, k, ctx, projector, src_c=None, src_t=None, mirror=False
     ):
@@ -1940,6 +1977,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         current reaches the plane), so it lands on that basis's COLUMN;
         the test side is the ordinary Galerkin integral over the real wire.
         No-op without a finite ground or without a contact.
+
+        momwire#292's extended-kernel amendment rides here too, and rides
+        through the test integration unchanged — it is one more per-observer
+        kernel value, reduced against the same test functions. What is
+        specific to this solver is WHERE it applies: `_contact_ek_masks`
+        scores #246's per-pair eligibility at every quadrature point rather
+        than reading NEC's per-end IND code.
         """
         if self.ground_eps is None:
             return G
@@ -1973,8 +2017,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             xi[m_of_entry],
         )
         w_entry = (wg[None, :] * hh[m_of_entry][:, None]) * fval
+        obs_seg = np.repeat(np.arange(N, dtype=np.int64), nq)
         for i, sgn, node in nodes:
             R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs)
+            masks = self._contact_ek_masks(geom, i, sgn, obs_seg)
+            if masks is not None:
+                R = R + self._contact_charge_ek_delta(
+                    geom, k, i, sgn, node, obs_c, obs_t, a_obs, *masks
+                )
             R_t = self._tested_contrib_rows(
                 w_entry, m_of_entry, nq, R.reshape(N, nq, 1)
             )[:, 0]
