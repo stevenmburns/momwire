@@ -4406,10 +4406,32 @@ static inline double asinh_minus_arg_from_t(double t) {
     return -(std::sinh(t) - t);
 }
 
+// The extended kernel's payload for the fused far fill (momwire#246 unit C):
+// `SinusoidalGalerkinSolver._ek_pairs`' `_EKPairs`, flattened. `src_a` is one
+// radius per SOURCE segment (N), `eligible` the pair rule's mask over
+// (observer row, source segment) — M*nq rows, exactly the rows `obs_centers`
+// has — and `gx`/`gw` the composite sinh-mapped rule
+// `SinusoidalSolver._ek_delta_rule` built, passed in rather than rebuilt here
+// so the two backends integrate against the same nodes by construction.
+struct GalerkinEkBlock {
+    const double *src_a;
+    const bool *eligible;
+    const double *gx;
+    const double *gw;
+    size_t n_gl;
+};
+
+// One implementation, two instantiations. `WITH_EK` is a compile-time
+// constant, so the reduced entry point below compiles with every line of the
+// delta gone — which is what keeps `sinusoidal_galerkin_far_fill` byte-frozen
+// against its pre-#246 build (gate G-C2) while the two paths stay one piece of
+// code. The alternative — a copied 450-line twin — freezes the reduced fill
+// just as well and rots twice as fast.
+template <bool WITH_EK>
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>>
-sinusoidal_galerkin_far_fill(
+galerkin_far_fill_impl(
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
@@ -4422,7 +4444,8 @@ sinusoidal_galerkin_far_fill(
     py::array_t<std::complex<double>,
                 py::array::c_style | py::array::forcecast> w_entry,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag,
+    const GalerkinEkBlock *ekb
 ) {
     auto oc = obs_centers.unchecked<2>();
     auto ot = obs_tangents.unchecked<2>();
@@ -4824,6 +4847,139 @@ sinusoidal_galerkin_far_fill(
                 double Erho_cos_re = -pref_rho_im * b_rho_im;
                 double Erho_cos_im =  pref_rho_im * b_rho_re;
 
+                // ---- Extended kernel: the folded delta (momwire#246) ------
+                // Transcription of `SinusoidalSolver._folded_ek_delta_fields`;
+                // the derivation of the delta kernel W = a²g′ + a²ρ²g″, the
+                // two field operators, and the floor underneath the whole
+                // decomposition are in that method's docstring. Nothing above
+                // this point moves: the reduced tables are #205's own, and the
+                // delta is a separate sum at its own size added to them before
+                // the projection — exactly where the numpy seam adds it.
+                if (WITH_EK && ekb->eligible[o * N + n]) {
+                    // ζ = ρ·sinh t, R = ρ·cosh t. The variable is NOT ξ: in ξ
+                    // the delta is a spike of width ρ inside a segment of half
+                    // length H, so a fixed rule's accuracy is governed by ρ/H
+                    // and a 16-node rule at the self pair is wrong by 1e6 at
+                    // Δ/a = 122. In t the spike is O(1) wide however thin the
+                    // wire, and the kernel's poles sit at t = ±jπ/2 whatever ρ
+                    // is. `gx`/`gw` are the caller's composite rule over that
+                    // mapped interval (`_ek_delta_rule`).
+                    double t_lo = std::asinh((z_a[n] - H) / rho_eval);
+                    double t_hi = std::asinh((z_a[n] + H) / rho_eval);
+                    double t_mid = 0.5 * (t_hi + t_lo);
+                    double t_half = 0.5 * (t_hi - t_lo);
+                    double src_a = ekb->src_a[n];
+                    double dz_c_re = 0.0, dz_c_im = 0.0;  // E_z,   const shape
+                    double dr_c_re = 0.0, dr_c_im = 0.0;  // E_ρ,   const shape
+                    double dz_s_re = 0.0, dz_s_im = 0.0;  // sin shape
+                    double dr_s_re = 0.0, dr_s_im = 0.0;
+                    double dz_o_re = 0.0, dz_o_im = 0.0;  // folded cos shape
+                    double dr_o_re = 0.0, dr_o_im = 0.0;
+                    for (size_t qd = 0; qd < ekb->n_gl; qd++) {
+                        double t = t_mid + t_half * ekb->gx[qd];
+                        double cosh_t = std::cosh(t);
+                        // R = ρ·cosh t exactly, so the near-singular
+                        // denominator never goes through a difference of
+                        // squares; ξ = z − ζ recovers the source arc.
+                        double R = rho_eval * cosh_t;
+                        double zeta = rho_eval * std::sinh(t);
+                        double xi = z_a[n] - zeta;
+                        double wq = (t_half * ekb->gw[qd]) * (rho_eval * cosh_t);
+                        double r2 = R * R;
+
+                        // g′…g⁗ of e^{−jkR}/R in u = R², through the reverse
+                        // Bessel polynomials Aₙ(x) at x = jkR. x is purely
+                        // imaginary, so x², x³, x⁴ are exactly real or exactly
+                        // imaginary and the four polynomials split by hand
+                        // into the same values numpy's complex products give.
+                        double kR = k * R;
+                        double kr2 = kR * kR;
+                        double kr3 = kr2 * kR;
+                        double kr4 = kr2 * kr2;
+                        double a1_re = 1.0,               a1_im = kR;
+                        double a2_re = 3.0 - kr2,         a2_im = 3.0 * kR;
+                        double a3_re = 15.0 - 6.0 * kr2,  a3_im = 15.0 * kR - kr3;
+                        double a4_re = 105.0 - 45.0 * kr2 + kr4;
+                        double a4_im = 105.0 * kR - 10.0 * kr3;
+
+                        double inv2 = 1.0 / r2;
+                        double inv4 = inv2 * inv2;
+                        double inv6 = inv4 * inv2;
+                        double inv8 = inv6 * inv2;
+                        double base_re =  std::cos(kR) / R;
+                        double base_im = -std::sin(kR) / R;
+                        double gd1_re, gd1_im, gd2_re, gd2_im;
+                        double gd3_re, gd3_im, gd4_re, gd4_im;
+                        // Named steps in the numpy path's own order — the
+                        // scale factor last — so the two backends' roundings
+                        // stay one reassociation apart and no further.
+                        cmul(base_re, base_im, a1_re, a1_im, gd1_re, gd1_im);
+                        gd1_re *= inv2;   gd1_im *= inv2;
+                        gd1_re *= -0.5;   gd1_im *= -0.5;
+                        cmul(base_re, base_im, a2_re, a2_im, gd2_re, gd2_im);
+                        gd2_re *= inv4;   gd2_im *= inv4;
+                        gd2_re *= 0.25;   gd2_im *= 0.25;
+                        cmul(base_re, base_im, a3_re, a3_im, gd3_re, gd3_im);
+                        gd3_re *= inv6;   gd3_im *= inv6;
+                        gd3_re *= -0.125; gd3_im *= -0.125;
+                        cmul(base_re, base_im, a4_re, a4_im, gd4_re, gd4_im);
+                        gd4_re *= inv8;   gd4_im *= inv8;
+                        gd4_re *= 0.0625; gd4_im *= 0.0625;
+
+                        // The two operators, with a² held back to the end:
+                        //   (k² + ∂²_z)W = a²[k²(g′+ρ²g″) + 2(g″+ρ²g‴)
+                        //                     + 4ζ²(g‴+ρ²g⁗)]
+                        //   ∂²_{ρz} W    = a²·ρζ·[8g‴ + 4ρ²g⁗]
+                        double z4 = 4.0 * zeta * zeta;
+                        double lz_re = k_sq * (gd1_re + rho2 * gd2_re)
+                                       + 2.0 * (gd2_re + rho2 * gd3_re)
+                                       + z4 * (gd3_re + rho2 * gd4_re);
+                        double lz_im = k_sq * (gd1_im + rho2 * gd2_im)
+                                       + 2.0 * (gd2_im + rho2 * gd3_im)
+                                       + z4 * (gd3_im + rho2 * gd4_im);
+                        double lr_re = ((8.0 * gd3_re + 4.0 * rho2 * gd4_re)
+                                        * rho_eval) * zeta;
+                        double lr_im = ((8.0 * gd3_im + 4.0 * rho2 * gd4_im)
+                                        * rho_eval) * zeta;
+
+                        // The folded shape POINTWISE as −2sin²(kξ/2) — never
+                        // cos − 1 by subtraction. There is no cancellation
+                        // discipline to keep here because there is no
+                        // difference of closed forms anywhere in the delta.
+                        // The sin shape is evaluated at the full angle rather
+                        // than reconstructed from the half one: measured, the
+                        // reconstruction saves nothing here (the loop is
+                        // bound by cosh/sinh, not by sincos) and costs a ulp.
+                        double kxi = k * xi;
+                        double hsx = std::sin(0.5 * kxi);
+                        double sw_s = std::sin(kxi) * wq;
+                        double sw_o = (-2.0 * hsx * hsx) * wq;
+                        dz_c_re += wq * lz_re;    dz_c_im += wq * lz_im;
+                        dr_c_re += wq * lr_re;    dr_c_im += wq * lr_im;
+                        dz_s_re += sw_s * lz_re;  dz_s_im += sw_s * lz_im;
+                        dr_s_re += sw_s * lr_re;  dr_s_im += sw_s * lr_im;
+                        dz_o_re += sw_o * lz_re;  dz_o_im += sw_o * lz_im;
+                        dr_o_re += sw_o * lr_re;  dr_o_im += sw_o * lr_im;
+                    }
+                    // −pref_z·a²: one multiplication at the end, which is what
+                    // makes the whole correction exactly 0.0 at a = 0 in IEEE
+                    // and not merely in the limit. `src_a` is the SOURCE
+                    // segment's radius, the a of NEC Eq 89.
+                    double gain = pref_z_im * (src_a * src_a);
+                    Ez_const_re  += gain * dz_c_im;
+                    Ez_const_im  -= gain * dz_c_re;
+                    Erho_const_re += gain * dr_c_im;
+                    Erho_const_im -= gain * dr_c_re;
+                    Ez_sin_re  += gain * dz_s_im;
+                    Ez_sin_im  -= gain * dz_s_re;
+                    Erho_sin_re += gain * dr_s_im;
+                    Erho_sin_im -= gain * dr_s_re;
+                    Ez_cos_re  += gain * dz_o_im;
+                    Ez_cos_im  -= gain * dz_o_re;
+                    Erho_cos_re += gain * dr_o_im;
+                    Erho_cos_im -= gain * dr_o_re;
+                }
+
                 phi_c_re[n]  = td * Ez_const_re + rho_proj_factor * Erho_const_re;
                 phi_c_im[n]  = td * Ez_const_im + rho_proj_factor * Erho_const_im;
                 phi_s_re[n]  = td * Ez_sin_re   + rho_proj_factor * Erho_sin_re;
@@ -4857,6 +5013,84 @@ sinusoidal_galerkin_far_fill(
 
     PYSIM_THROW_IF_ABORTED();
     return std::make_tuple(out_const, out_sin, out_cos);
+}
+
+// The reduced entry point. Byte-frozen against its pre-#246 build: the
+// instantiation below has WITH_EK false, so not one line of the delta is
+// compiled into it (gate G-C2).
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+sinusoidal_galerkin_far_fill(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_hh,
+    double k, double eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<std::complex<double>,
+                py::array::c_style | py::array::forcecast> w_entry,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
+    uintptr_t cancel_flag = 0
+) {
+    return galerkin_far_fill_impl<false>(
+        obs_centers, obs_tangents, obs_radius, src_centers, src_tangents,
+        src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag, nullptr);
+}
+
+// The extended-kernel twin (momwire#246 unit C). Same arguments plus the
+// `_EKPairs` payload — one source radius per segment, the pair rule's mask
+// over (observer row, source segment), and the delta quadrature's composite
+// rule — and the same three arrays out.
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+sinusoidal_galerkin_far_fill_ek(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_hh,
+    double k, double eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<std::complex<double>,
+                py::array::c_style | py::array::forcecast> w_entry,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_a,
+    py::array_t<bool, py::array::c_style | py::array::forcecast> eligible,
+    py::array_t<double, py::array::c_style | py::array::forcecast> ek_gx,
+    py::array_t<double, py::array::c_style | py::array::forcecast> ek_gw,
+    uintptr_t cancel_flag = 0
+) {
+    auto sa = src_a.unchecked<1>();
+    auto el = eligible.unchecked<2>();
+    auto ex = ek_gx.unchecked<1>();
+    auto ew = ek_gw.unchecked<1>();
+    if (sa.shape(0) != src_centers.shape(0)) {
+        throw std::runtime_error("src_a must have one radius per source segment");
+    }
+    if (el.shape(0) != obs_centers.shape(0) ||
+        el.shape(1) != src_centers.shape(0)) {
+        throw std::runtime_error(
+            "eligible must have shape (obs rows, source segments)");
+    }
+    if (ex.shape(0) != ew.shape(0) || ex.shape(0) < 1) {
+        throw std::runtime_error("ek_gx and ek_gw must have matching length");
+    }
+    GalerkinEkBlock ekb;
+    ekb.src_a = src_a.data();
+    ekb.eligible = eligible.data();
+    ekb.gx = ek_gx.data();
+    ekb.gw = ek_gw.data();
+    ekb.n_gl = (size_t)ex.shape(0);
+    return galerkin_far_fill_impl<true>(
+        obs_centers, obs_tangents, obs_radius, src_centers, src_tangents,
+        src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag, &ekb);
 }
 
 
@@ -6014,6 +6248,24 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("k"), py::arg("eta"),
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("w_entry"), py::arg("starts"),
+          py::arg("cancel_flag") = 0);
+    m.def("sinusoidal_galerkin_far_fill_ek", &sinusoidal_galerkin_far_fill_ek,
+          "Extended-kernel twin of sinusoidal_galerkin_far_fill "
+          "(momwire#246): the same fused far fill, plus the folded EK delta "
+          "on the pairs `eligible` selects. `src_a` is one radius per SOURCE "
+          "segment, `eligible` the pair rule's (obs rows, N) mask, and "
+          "`ek_gx`/`ek_gw` the composite sinh-mapped rule "
+          "`SinusoidalSolver._ek_delta_rule` built — passed in, not rebuilt "
+          "here, so both backends integrate the delta on the same nodes. "
+          "Returns the same three (nnz, N) arrays.",
+          py::arg("obs_centers"), py::arg("obs_tangents"),
+          py::arg("obs_radius"),
+          py::arg("src_centers"), py::arg("src_tangents"), py::arg("src_hh"),
+          py::arg("k"), py::arg("eta"),
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("w_entry"), py::arg("starts"),
+          py::arg("src_a"), py::arg("eligible"),
+          py::arg("ek_gx"), py::arg("ek_gw"),
           py::arg("cancel_flag") = 0);
     m.def("remainder_field_proj_batch", &remainder_field_proj_batch,
           "Fused Sommerfeld smooth-remainder assembly: interpolate the four "
