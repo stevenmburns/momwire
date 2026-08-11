@@ -325,6 +325,19 @@ directly (`SinusoidalSolver._extended_kernel_fields`; C++ twins
 `sinusoidal_field_tensor_ek` / `sinusoidal_field_tensor_ek_refl`), dropping
 into the same per-endpoint bracket slots as the reduced Eqs. 76-79 build.
 
+EKSCX's IRA arm — the `RHX < BX` swap of f.3186-3192, where the observation
+point falls inside the source conductor and "distance" and "radius" trade
+places — is chosen PER PAIR on both backends (momwire#258). Through #245 and
+#259 it was one flag for the whole fill (`np.any` over the (M, N) grid), so a
+single inside-conductor pair put every pair on the IRA == 1 formula. That is
+invisible on a collinear stepped-radius deck, where the arm rewrites only the
+ρ-flavoured slots and the ρ-projection factor is identically zero, and worth
+7% of Z against nec2c as soon as a skew member joins the deck. The C++ entry
+points therefore take no IRA argument at all: they resolve it from the same
+per-pair comparison that orders (rh, b), which is the only spelling in which
+the two cannot disagree at a knife-edge pair. The coaxial specialisation above
+is unaffected — it never reaches the arm.
+
 Gating is NEC's, per source-segment END (`_ek_gating`, the IND1/IND2
 codes): a free end extends (IND 1); a two-segment junction whose partner is
 collinear and of equal radius extends (IND 0), as does a perpendicular

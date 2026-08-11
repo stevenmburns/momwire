@@ -495,7 +495,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.extended_kernel = bool(extended_kernel)
         # (geom, {mirror: (group_i, group_j)}) — per-geometry-object cache of
         # the axis-group labels, identity-checked, same pattern as
-        # `SinusoidalSolver._cached_ek_gating` / `_cached_ek_swap`.
+        # `SinusoidalSolver._cached_ek_gating`.
         self._cached_ek_groups = None
         if self.extended_kernel:
             # One refusal rather than a half-served path (#249 §5). The

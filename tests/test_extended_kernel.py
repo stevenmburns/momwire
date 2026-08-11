@@ -554,7 +554,8 @@ def test_galerkin_still_refuses_the_extended_kernel_under_sommerfeld_ground():
 #   IND = 0   perpendicular ground contact      -> GXX  (NEC's f.2026-2029 arm,
 #                                                        unreached before #245)
 #   IND = 2   bend / radius step / 3-way node   -> GX
-#   want_swapped True / False                   -> EKSCX's two IRA arms
+#   IRA = 1 / 0 pairs in the SAME fill          -> EKSCX's two IRA arms, which
+#                                                  are chosen per pair (#258)
 #   uniform radius / per-observer-run dispatch  -> the two call shapes
 #   free-space sources / mirrored PEC image     -> both builds
 #
@@ -601,7 +602,7 @@ EK_BATTERY = {
         junctions=[[(0, "end"), (1, "start"), (2, "start")]],
     ),
     # (d) mixed radii, collinear: the thin wire's segment centres lie INSIDE
-    # the fat wire's radius, which is what sets EKSCX's IRA (want_swapped).
+    # the fat wire's radius, which is what sets EKSCX's IRA.
     "radius_step": dict(
         wires=[
             np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
@@ -617,8 +618,10 @@ EK_BATTERY = {
     # not decorative: EKSCX's IRA arm rewrites the ρ-flavoured slots (G2, G2P,
     # G3) and leaves the z-flavoured ones alone, so on a purely collinear deck
     # the ρ-projection factor is identically zero and the whole arm cancels out
-    # of Φ — a C++ build that ignored `want_swapped` passed the rest of this
-    # battery. Here the arm is worth 19% of the tensor.
+    # of Φ — a C++ build that ignored the arm passed the rest of this battery.
+    # Here the arm is worth 19% of the tensor. 25 of its 196 pairs swap and 171
+    # do not, which is also what makes it the fixture where a GLOBAL arm and a
+    # per-pair one part company (momwire#258, Gate 10 below).
     "radius_step_skew": dict(
         wires=[
             np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
@@ -628,6 +631,24 @@ EK_BATTERY = {
         n_per_edge_per_wire=[[5], [5], [4]],
         wire_radius=[0.02, 0.005, 0.005],
         nsegs=14,
+        feed_arclength=1.0,
+        junctions=[[(0, "end"), (1, "start")]],
+    ),
+    # (d) the deciding deck of momwire#258: the same shape as
+    # `radius_step_skew` with the step made FAT (Δ/a = 1.33, where EK is worth
+    # 13.5% to nec2c) and the skew member brought in close, so the 171 pairs
+    # that must NOT take the IRA==1 arm carry real weight. Gate 10 anchors it
+    # against nec2c; here it puts a mixed-IRA fill through the cross-backend
+    # gates, which `radius_step_skew` alone does only weakly.
+    "radius_step_skew_fat": dict(
+        wires=[
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
+            np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 4.0]]),
+            np.array([[0.6, 0.35, 0.2], [2.1, 1.9, 2.4]]),
+        ],
+        n_per_edge_per_wire=[[5], [5], [6]],
+        wire_radius=[0.30, 0.02, 0.02],
+        nsegs=16,
         feed_arclength=1.0,
         junctions=[[(0, "end"), (1, "start")]],
     ),
@@ -684,6 +705,39 @@ def _ek_solver(name, image=False):
     return SinusoidalSolver(
         wavelength=LAM, extended_kernel=True, **_ek_kwargs(name, image=image)
     )
+
+
+def _swap_mask(sim, geom, src_c, src_t):
+    """EKSCX's IRA per pair, from the literal definition (f.3186-3192): the
+    (M, N) `rho_eval < src_a`, with `rho_eval` the OBSERVER-radius-regularized
+    radial distance to the source axis and `src_a` the SOURCE conductor's
+    radius. Both backends resolve this inline, per pair, since momwire#258 —
+    the numpy path in `_extended_kernel_fields`, the C++ path in stage A of
+    `sinusoidal_field_tensor_ek` — so the tests keep their own copy rather
+    than asserting a spelling against itself.
+    """
+    obs_c = geom["seg_centers"]
+    a = sim._seg_radius(geom)
+    rvec = obs_c[:, None, :] - src_c[None, :, :]
+    z = np.einsum("...d,...d->...", rvec, src_t[None, :, :])
+    rho = np.linalg.norm(rvec - z[..., None] * src_t[None, :, :], axis=-1)
+    rho_eval = np.sqrt(rho * rho + a[:, None] ** 2)
+    return rho_eval < a
+
+
+class _GlobalIra(SinusoidalSolver):
+    """The pre-momwire#258 solver: EKSCX's IRA collapsed to ONE arm for the
+    whole fill, `np.any(rhx < src_a)` over the entire (M, N) grid, so a single
+    observation point inside a source conductor put every pair on the IRA==1
+    formula — evaluated with the unswapped (rh, b) of the pairs that did not
+    swap. Only the numpy kernel can be forced this way; the accelerated path
+    has no such switch left, which is the point. Tests using it turn the
+    accelerator off and compare numpy against numpy.
+    """
+
+    @staticmethod
+    def _ek_end_gxx(k, zz, rh, b, want_swapped):
+        return SinusoidalSolver._ek_end_gxx(k, zz, rh, b, bool(np.any(want_swapped)))
 
 
 def _accel_vs_numpy(sim, image):
@@ -779,29 +833,34 @@ def test_cpp_ek_far_image_conditioning_tracks_the_reduced_kernel(ground_z):
     )
 
 
-def test_cpp_ek_ira_arm_is_load_bearing():
-    """The IRA (`want_swapped`) arm must be worth catching. It rewrites only
-    the ρ-flavoured slots (G2, G2P, G3), so on a collinear deck the ρ-projection
-    factor is zero and the arm cancels out of Φ entirely — a C++ build that
-    ignored the flag passed every other assertion in this section. This pins a
-    fixture where it does not cancel, so `test_cpp_ek_field_tensor_matches_numpy`
-    is actually testing something on that branch.
+def test_cpp_ek_ira_arm_is_load_bearing(monkeypatch):
+    """The IRA arm must be worth catching. It rewrites only the ρ-flavoured
+    slots (G2, G2P, G3), so on a collinear deck the ρ-projection factor is zero
+    and the arm cancels out of Φ entirely — a C++ build that ignored it passed
+    every other assertion in this section. This pins a fixture where it does
+    not cancel, so `test_cpp_ek_field_tensor_matches_numpy` is actually testing
+    something on that branch.
+
+    The control is `_GlobalIra` — the pre-momwire#258 fill, which put every
+    pair on the arm `np.any` chose. Forcing the arm OFF everywhere would prove
+    nothing on this fixture: the pairs that DO swap here are the collinear
+    ones, so the 25 of them are exactly the ones the ρ-projection cannot carry.
+    It is the 171 pairs the global arm dragged onto IRA==1 that move Φ. Only
+    the numpy kernel can still be forced this way (the accelerated path
+    resolves IRA per pair in stage A and takes no argument for it), which is
+    enough: the C++ path is pinned to this numpy path at 1e-13 here.
     """
     import momwire.sinusoidal as sin_mod
 
-    if not sin_mod._HAVE_FIELD_TENSOR_EK:
-        pytest.skip("C++ accelerator not built")
-
-    class ForcedIra0(SinusoidalSolver):
-        def _ek_any_swap(self, geom, src_c, src_t):
-            return False
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_EK", False)
 
     kw = _ek_kwargs("radius_step_skew")
     sim = _ek_solver("radius_step_skew")
     geom = sim._build_geometry()
-    assert sim._ek_any_swap(geom, geom["seg_centers"], geom["seg_tangents"])
+    swap = _swap_mask(sim, geom, geom["seg_centers"], geom["seg_tangents"])
+    assert swap.any() and not swap.all(), "fixture must mix both IRA arms"
     on = sim._field_tensor(geom, sim.k)
-    off = ForcedIra0(wavelength=LAM, extended_kernel=True, **kw)._field_tensor(
+    off = _GlobalIra(wavelength=LAM, extended_kernel=True, **kw)._field_tensor(
         geom, sim.k
     )
     moved = max(np.max(np.abs(a - b)) / np.max(np.abs(a)) for a, b in zip(on, off))
@@ -816,6 +875,7 @@ def test_cpp_ek_battery_is_decisive():
     codes, swaps, uniform = set(), set(), set()
     multirun = False
     ground_contact_extends = False
+    mixed_ira = False
     for name in EK_BATTERY:
         sim = _ek_solver(name)
         geom = sim._build_geometry()
@@ -823,7 +883,12 @@ def test_cpp_ek_battery_is_decisive():
         codes |= set(ind1.tolist()) | set(ind2.tolist())
         uniform.add(sim._uniform_radius is not None)
         multirun = multirun or len(sim._radius_runs(geom)) > 1
-        swaps.add(sim._ek_any_swap(geom, geom["seg_centers"], geom["seg_tangents"]))
+        free = _swap_mask(sim, geom, geom["seg_centers"], geom["seg_tangents"])
+        swaps |= set(np.unique(free).tolist())
+        # A single fill carrying BOTH arms at once is the case momwire#258
+        # exists for; a battery of all-swap and no-swap decks would leave the
+        # per-pair selection itself untested.
+        mixed_ira = mixed_ira or bool(free.any() and not free.all())
         if sim.ground_z is None:
             continue
         at_plane = np.flatnonzero(geom["ground_minus"])
@@ -835,9 +900,10 @@ def test_cpp_ek_battery_is_decisive():
             )
         # The image build resolves its own IRA, on the MIRRORED sources.
         src_c, src_t = sim._image_source_centers_tangents(geom)
-        swaps.add(sim._ek_any_swap(geom, src_c, src_t))
+        swaps |= set(np.unique(_swap_mask(sim, geom, src_c, src_t)).tolist())
     assert codes == {0, 1, 2}, codes
     assert swaps == {False, True}, "EKSCX's IRA arm is not covered both ways"
+    assert mixed_ira, "no fixture puts both IRA arms in the SAME fill"
     assert uniform == {False, True}, "both radius dispatch shapes are needed"
     assert multirun, "no fixture produces more than one observer-radius run"
     assert ground_contact_extends, "the perpendicular ground-contact IND=0 arm is unhit"
@@ -848,9 +914,10 @@ def test_cpp_ek_battery_is_decisive():
 # an antiresonance (skew_tee answers 449 + 331j, the monopole is a quarter-wave
 # stub over PEC), so the matrix solve multiplies the fill's 1e-15 reassociation
 # delta by a large condition number on the way to Z. Measured across the
-# battery: 2.1e-14 (radius_step), 2.1e-14 (radius_step_skew), 6.7e-14
-# (three_way), 2.3e-13 (grounded_ell_radii), 3.2e-13 (bent_wire), 9.3e-13
-# (free_wire), 2.0e-12 (grounded_monopole), 2.6e-12 (skew_tee). A dispatch
+# battery: 2.1e-14 (radius_step), 2.1e-14 (radius_step_skew), 5.7e-14
+# (radius_step_skew_fat), 6.7e-14 (three_way), 2.3e-13 (grounded_ell_radii),
+# 3.2e-13 (bent_wire), 9.3e-13 (free_wire), 2.0e-12 (grounded_monopole),
+# 2.6e-12 (skew_tee). A dispatch
 # fault — wrong gating table, unstitched radius run, image block on the wrong
 # kernel — lands at 1e-2, not here.
 _Z_AGREEMENT = {name: 1e-12 for name in EK_BATTERY}
@@ -924,14 +991,19 @@ def test_cpp_ek_path_does_not_re_enter_the_numpy_kernel(monkeypatch):
     assert calls == [], f"EK-ON solve fell back to the numpy kernel: {calls}"
 
 
-def test_ek_any_swap_matches_the_definition_on_both_builds():
-    """`_ek_any_swap` is `np.any(rho_eval < src_a)` over the whole (M, N) grid
-    — the same reduction `_extended_kernel_fields` performs internally. It
-    reaches that answer through an early-out, a chunked scan and a per-build
-    cache, so pin it against the literal definition on both builds, on a deck
-    where the two builds genuinely disagree: a horizontal radius step 3 m up,
-    so the thin wire's own centres sit on the fat stub's axis (swap) while the
-    mirror images sit 6 m below it (no swap).
+def test_ira_is_resolved_per_build_from_the_sources_it_is_handed():
+    """The IRA mask belongs to the BUILD, not the geometry: it is a statement
+    about where the observers sit relative to the SOURCE conductors, and the
+    PEC image moves the sources. The deck below is a horizontal radius step 3 m
+    up, so the thin wire's own centres sit on the fat stub's axis (every
+    fat-source pair swaps) while the mirror images sit 6 m below it (none do).
+
+    Neither backend is told which: both recompute the mask from the source
+    centres/tangents they were handed — the numpy path in
+    `_extended_kernel_fields`, the C++ path in stage A — which is exactly what
+    lets `_field_tensor` serve both passes of NEC's KSYMP loop from one call
+    shape. `test_cpp_ek_field_tensor_matches_numpy[...][pec-image]` pins that
+    they agree; this pins that there is something to agree about.
     """
     sim = SinusoidalSolver(
         wavelength=LAM,
@@ -948,25 +1020,10 @@ def test_ek_any_swap_matches_the_definition_on_both_builds():
         extended_kernel=True,
     )
     geom = sim._build_geometry()
-    src_a = sim._seg_radius(geom)
-    obs_c = geom["seg_centers"]
-
-    def literal(src_c, src_t):
-        rvec = obs_c[:, None, :] - src_c[None, :, :]
-        z = np.einsum("...d,...d->...", rvec, src_t[None, :, :])
-        rho_vec = rvec - z[..., None] * src_t[None, :, :]
-        a = src_a[:, None]
-        rho_eval = np.sqrt(np.linalg.norm(rho_vec, axis=-1) ** 2 + a * a)
-        return bool(np.any(rho_eval < src_a))
-
-    free = (obs_c, geom["seg_tangents"])
-    image = sim._image_source_centers_tangents(geom)
-    assert literal(*free) is True and literal(*image) is False, (
-        "fixture must have the two builds disagree, or the cache key is untested"
-    )
-    for _ in range(2):  # twice: once cold, once off the cache
-        assert sim._ek_any_swap(geom, *free) == literal(*free)
-        assert sim._ek_any_swap(geom, *image) == literal(*image)
+    free = _swap_mask(sim, geom, geom["seg_centers"], geom["seg_tangents"])
+    image = _swap_mask(sim, geom, *sim._image_source_centers_tangents(geom))
+    assert free.any() and not free.all(), "free-space build must mix both arms"
+    assert not image.any(), "image build must reach its own (all-IRA=0) answer"
 
 
 # ----------------------------------------------------------------------
@@ -1349,28 +1406,27 @@ def test_cpp_ek_refl_far_image_conditioning_tracks_the_reduced_kernel(ground_z):
     )
 
 
-def test_cpp_ek_refl_ira_arm_is_load_bearing():
-    """`want_swapped` on the IMAGE build must be worth passing. It rewrites
+def test_cpp_ek_refl_ira_arm_is_load_bearing(monkeypatch):
+    """The IRA arm on the IMAGE build must be worth getting right. It rewrites
     only the ρ-flavoured slots, so on a collinear deck the whole arm cancels
     out of Φ — the defect Gate 8 caught, here with the Fresnel tail on top,
     which pulls E_ρ in through a SECOND route (ρ̂·p̂) and could have masked it
-    differently.
+    differently. The control is `_GlobalIra`, the pre-momwire#258 fill, for the
+    reason spelled out in Gate 8's twin; only the numpy kernel can still be
+    forced that way, and the fused Fresnel kernel is pinned to that numpy path
+    at 1e-13 above.
     """
     import momwire.sinusoidal as sin_mod
 
-    if not sin_mod._HAVE_FIELD_TENSOR_EK_REFL:
-        pytest.skip("C++ accelerator not built")
-
-    class ForcedIra0(SinusoidalSolver):
-        def _ek_any_swap(self, geom, src_c, src_t):
-            return False
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_EK_REFL", False)
 
     sim = _refl_solver("grounded_radius_step_skew", extended_kernel=True)
     geom = sim._build_geometry()
     src_c, src_t = sim._image_source_centers_tangents(geom)
-    assert sim._ek_any_swap(geom, src_c, src_t), "fixture must swap on the image"
+    swap = _swap_mask(sim, geom, src_c, src_t)
+    assert swap.any() and not swap.all(), "fixture must mix both arms on the image"
     on = sim._field_tensor_image_refl(geom, sim.k)
-    off = ForcedIra0(
+    off = _GlobalIra(
         wavelength=LAM,
         ground_eps=REFL_EPS["avg_soil"],
         extended_kernel=True,
@@ -1396,7 +1452,7 @@ def test_cpp_ek_refl_battery_is_decisive():
         multirun = multirun or len(sim._radius_runs(geom)) > 1
         # The Fresnel image block resolves its IRA on the MIRRORED sources.
         src_c, src_t = sim._image_source_centers_tangents(geom)
-        swaps.add(sim._ek_any_swap(geom, src_c, src_t))
+        swaps |= set(np.unique(_swap_mask(sim, geom, src_c, src_t)).tolist())
         at_plane = np.flatnonzero(geom["ground_minus"])
         if at_plane.size:
             ground_contact_extends = ground_contact_extends or bool(
@@ -1659,3 +1715,158 @@ def test_ek_refl_kernel_aborts_as_solve_aborted():
         sim._checkpoint = lambda: None
         with pytest.raises(SolveAborted):
             sim.compute_impedance()
+
+
+# ----------------------------------------------------------------------
+# Gate 10 — EKSCX's IRA arm is chosen PER PAIR (momwire#258)
+# ----------------------------------------------------------------------
+#
+# f.3186-3192 sets IRA inside EKSCX, once per SEGMENT PAIR, from that pair's
+# own `RHX < BX`. momwire#245 could not: `_extended_kernel_fields` reduced the
+# test to one `np.any` over the whole (M, N) grid before calling `_ek_end_gxx`,
+# so a single observation point inside a source conductor put EVERY pair on the
+# IRA==1 formula — evaluated with the unswapped (rh, b) of the pairs that did
+# not swap, which is not the physics for those pairs. The accelerated kernel
+# took a `want_swapped` scalar precisely to reproduce that faithfully rather
+# than repair it silently. #258 repaired it on both sides; the scalar is gone
+# from the C++ signature and the arm now rides the same per-pair comparison
+# that orders (rh, b), which is the only spelling in which the two cannot
+# disagree at a knife-edge pair.
+#
+# The defect was MASKED, which is why it survived #245's battery: the IRA arm
+# rewrites only the ρ-flavoured slots (G2, G2P, G3), and the swap needs an
+# observer inside a source conductor — which on the reachable decks means a
+# stepped-radius COLLINEAR run, where the ρ-projection factor is identically
+# zero and both arms give the same Φ. `test_collinear_radius_step_is_unmoved`
+# below pins that masking as the real physics it is. It stops masking the
+# moment a skew member joins the deck.
+#
+# ORACLE (nec2c 1.3.1, /usr/bin/nec2c, run once and pinned here so CI needs no
+# binary). A fat stepped-radius stack — Δ/a = 1.33 on the fat wire, where EK is
+# worth 13.5% to nec2c — with a skew member close enough that the 171 pairs
+# which must NOT take the IRA==1 arm carry real weight:
+#
+#     CM radius step + skew: momwire#258 deciding deck
+#     CE
+#     GW 1 5 0. 0. 0. 0. 0. 2.0 0.30
+#     GW 2 5 0. 0. 2.0 0. 0. 4.0 0.02
+#     GW 3 6 0.6 0.35 0.2 2.1 1.9 2.4 0.02
+#     GE 0
+#     EK                      <- present only on the EK-ON run
+#     FR 0 1 0 0 30. 0.
+#     EX 0 1 3 0 1. 0.
+#     XQ
+#     EN
+#
+# Measured on this box:
+#
+#   nec2c        EK-off  38.655 - 35.438j     EK-on  41.287 - 42.147j
+#   momwire      EK-off  38.079 - 35.892j     1.40% off the oracle
+#   momwire per-pair EK-on 40.979 - 42.286j   0.57% off the oracle
+#   momwire GLOBAL   EK-on 42.464 - 46.178j   7.12% off the oracle
+#
+# So the oracle does discriminate: the per-pair answer sits inside Gate 1's
+# 1.7% bar and the global one misses it by 4x. On `radius_step_skew` the same
+# repair moves the fill by 17.7% and Z by 0.26% — enough to matter, not enough
+# for nec2c to arbitrate through the discretization gap, which is why the fat
+# deck exists.
+NEC2C_FAT_STEP_EK_OFF = 38.655 - 35.438j
+NEC2C_FAT_STEP_EK_ON = 41.287 - 42.147j
+
+
+def _fat_step_solver(**extra):
+    return SinusoidalSolver(
+        wavelength=LAM, **EK_BATTERY["radius_step_skew_fat"], **extra
+    )
+
+
+def test_per_pair_ira_matches_nec2c_where_the_global_arm_does_not(monkeypatch):
+    """The deciding deck, both ways, against nec2c EK-on. This is the whole of
+    momwire#258 in one assertion: the per-pair arm has to land inside the same
+    bar Gate 1's ladder holds, AND the pre-#258 global arm has to miss it —
+    otherwise the repair is unfalsifiable here and the fixture is decorative.
+    """
+    z_off, _ = _fat_step_solver(extended_kernel=False).compute_impedance()
+    assert _rel(z_off, NEC2C_FAT_STEP_EK_OFF) < EK_ON_TOL, (
+        f"EK-off control drifted: {z_off} vs {NEC2C_FAT_STEP_EK_OFF}"
+    )
+    z_on, _ = _fat_step_solver(extended_kernel=True).compute_impedance()
+    per_pair = _rel(z_on, NEC2C_FAT_STEP_EK_ON)
+    assert per_pair < EK_ON_TOL, f"per-pair IRA: {per_pair:.3%} — {z_on}"
+    # The pre-#258 answer, reachable only through the numpy kernel now — the
+    # accelerator has no argument left to force.
+    import momwire.sinusoidal as sin_mod
+
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_EK", False)
+    z_global, _ = _GlobalIra(
+        wavelength=LAM, extended_kernel=True, **EK_BATTERY["radius_step_skew_fat"]
+    ).compute_impedance()
+    glob = _rel(z_global, NEC2C_FAT_STEP_EK_ON)
+    assert glob > EK_ON_TOL, (
+        f"the global IRA arm answers {z_global} ({glob:.3%} off nec2c) — the "
+        "deck no longer discriminates, so this gate proves nothing"
+    )
+    assert glob > 4.0 * per_pair, (
+        f"per-pair {per_pair:.3%} vs global {glob:.3%}: the margin collapsed"
+    )
+
+
+def test_collinear_radius_step_is_unmoved_by_the_per_pair_arm():
+    """The masking is real physics, so pin it. `radius_step` swaps on 25 of its
+    100 pairs and every member is collinear, so the ρ-projection factor is
+    identically zero and the ρ-flavoured slots the IRA arm rewrites cannot
+    reach Φ. Per-pair and global must therefore agree BIT FOR BIT there — the
+    reason the defect went unnoticed through #245, and the reason a fixture
+    like this one can never be the gate.
+    """
+    import momwire.sinusoidal as sin_mod
+
+    kw = EK_BATTERY["radius_step"]
+    sim = SinusoidalSolver(wavelength=LAM, extended_kernel=True, **kw)
+    geom = sim._build_geometry()
+    swap = _swap_mask(sim, geom, geom["seg_centers"], geom["seg_tangents"])
+    assert swap.any() and not swap.all(), "fixture must mix both arms"
+
+    saved = sin_mod._HAVE_FIELD_TENSOR_EK
+    sin_mod._HAVE_FIELD_TENSOR_EK = False
+    try:
+        per_pair = sim._assemble_Z(geom, sim.k)[0]
+        g = _GlobalIra(wavelength=LAM, extended_kernel=True, **kw)
+        gg = g._build_geometry()
+        glob = g._assemble_Z(gg, g.k)[0]
+    finally:
+        sin_mod._HAVE_FIELD_TENSOR_EK = saved
+    assert np.array_equal(np.asarray(per_pair), np.asarray(glob)), (
+        "the collinear stepped-radius fill is supposed to be blind to the arm"
+    )
+
+
+@pytest.mark.parametrize("radius", [0.001, 0.05, 0.3])
+def test_uniform_radius_never_reaches_the_ira_arm(radius):
+    """The #233 ladder is untouched by all of this, and not by luck: with one
+    radius everywhere, rho_eval = sqrt(rho_axis² + a²) >= a = src_a in IEEE
+    (the sqrt of a correctly rounded square is exact) and EKSCX's test is
+    strict. So the mask is empty, `_extended_kernel_fields` passes the scalar
+    `False`, and the fill is the pre-#258 spelling operation for operation.
+    """
+    sim = _dipole(radius, extended_kernel=True)
+    geom = sim._build_geometry()
+    swap = _swap_mask(sim, geom, geom["seg_centers"], geom["seg_tangents"])
+    assert not swap.any(), f"uniform radius {radius} swapped {swap.sum()} pairs"
+
+
+def test_accelerator_declares_the_per_pair_ira_capability():
+    """The EK entry points lost an argument in momwire#258, and a STALE
+    extension still exports both symbols under the old arity — so `hasattr`
+    alone would hand the new caller a TypeError instead of the numpy fallback
+    the guards exist to give. `sinusoidal.py` requires the `ek_ira_per_pair`
+    attribute before it claims either accelerator; if a rebuild drops the
+    attribute the EK paths must go quiet, not wrong.
+    """
+    import momwire.sinusoidal as sin_mod
+    from momwire._accel import acc
+
+    if acc is None:
+        pytest.skip("C++ accelerator not built")
+    assert getattr(acc, "ek_ira_per_pair", False) is True
+    assert sin_mod._HAVE_FIELD_TENSOR_EK and sin_mod._HAVE_FIELD_TENSOR_EK_REFL

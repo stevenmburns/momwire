@@ -52,9 +52,25 @@ _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor
 _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
     _acc, "sinusoidal_field_tensor_refl"
 )
-_HAVE_FIELD_TENSOR_EK = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor_ek")
-_HAVE_FIELD_TENSOR_EK_REFL = _acc is not None and hasattr(
-    _acc, "sinusoidal_field_tensor_ek_refl"
+# momwire#258 changed both extended-kernel entry points' signatures: EKSCX's
+# IRA is now decided per source-observer PAIR inside the kernel, so they no
+# longer take the build-wide `want_swapped` scalar #245 passed. A stale
+# extension still EXPORTS both symbols under the old arity, and calling one
+# with the new argument list is a TypeError rather than a graceful fallback —
+# so presence of the symbol is no longer enough to claim the capability. The
+# module-level flag below is what says "this build speaks the per-pair
+# signature"; without it the EK paths take the numpy reference, which carries
+# the same per-pair fix.
+_EK_IRA_PER_PAIR = _acc is not None and bool(getattr(_acc, "ek_ira_per_pair", False))
+_HAVE_FIELD_TENSOR_EK = (
+    _acc is not None
+    and hasattr(_acc, "sinusoidal_field_tensor_ek")
+    and _EK_IRA_PER_PAIR
+)
+_HAVE_FIELD_TENSOR_EK_REFL = (
+    _acc is not None
+    and hasattr(_acc, "sinusoidal_field_tensor_ek_refl")
+    and _EK_IRA_PER_PAIR
 )
 
 _EULER_GAMMA = 0.5772156649015329
@@ -276,7 +292,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # thin-wire kernel, so EK does not apply to it at all.)
         self.extended_kernel = bool(extended_kernel)
         self._cached_ek_gating: tuple | None = None
-        self._cached_ek_swap: tuple | None = None
         self._cancel = cancel
         self.wavelength = wavelength
         self.halfdriver_factor = halfdriver_factor
@@ -1307,7 +1322,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # KSYMP image loop (nec2-1.2.1.2.f:2914-2971).
             ind1, ind2 = self._ek_gating(geom)
             src_a = np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64)
-            want_swapped = self._ek_any_swap(geom, src_c, src_t)
 
             def _call_ek(rows, a):
                 return _acc.sinusoidal_field_tensor_ek(
@@ -1324,7 +1338,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     src_a,
                     np.ascontiguousarray(ind1, dtype=np.int8),
                     np.ascontiguousarray(ind2, dtype=np.int8),
-                    want_swapped,
                     self._cancel_flag,
                 )
 
@@ -1496,69 +1509,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cached_ek_gating = (geom, inds[0], inds[1])
         return inds[0], inds[1]
 
-    def _ek_any_swap(self, geom, src_c, src_t):
-        """EKSCX's IRA for a whole build — the scalar the C++ EK kernel takes.
-
-        `_extended_kernel_fields` orders each pair's (rh, b) per pair but then
-        hands `_ek_end_gxx` ONE `want_swapped`: `np.any(rhx < src_a)` over the
-        entire (M, N) grid. The accelerated path has to reproduce that exactly
-        or it would not be a transcription, and it cannot compute it per
-        radius-run — a run-local `any` is not the global one. So it is computed
-        here, once per build, and passed down (momwire#245; the globality
-        itself is a numpy-side defect, tracked separately — it is masked
-        wherever the swapping pairs are collinear, since the slots it changes
-        are the ρ-flavoured ones and the ρ-projection vanishes there).
-
-        Uniform radius can never swap and skips the pass entirely: rho_eval =
-        sqrt(rho_axis² + a²) ≥ a = src_a in IEEE (sqrt of a correctly rounded
-        square is exact) and the test is strict. More generally the pass is
-        skipped whenever the fattest source is no fatter than the thinnest
-        observer, for the same reason — so only genuinely mixed-radius decks
-        pay for it.
-
-        `src_c` / `src_t` are the build's source centers/tangents: the
-        geometry's own for free space, the mirrored pair for the PEC image.
-        The answer is k-independent, so a swept solve computes it once per
-        build rather than once per frequency (cached per geometry object,
-        identity check, same pattern as `_cached_ek_gating`).
-        """
-        obs_c = geom["seg_centers"]
-        a_seg = self._seg_radius(geom)
-        src_a = a_seg
-        if float(src_a.max()) <= float(a_seg.min()):
-            return False
-        # The image build hands in freshly mirrored arrays, so identity
-        # against the geometry's own is exactly the free-space/image key.
-        key = src_c is obs_c
-        cached = self._cached_ek_swap
-        if cached is None or cached[0] is not geom:
-            cached = (geom, {})
-            self._cached_ek_swap = cached
-        if key in cached[1]:
-            return cached[1][key]
-        cached[1][key] = self._ek_swap_scan(obs_c, src_c, src_t, a_seg, src_a)
-        return cached[1][key]
-
-    @staticmethod
-    def _ek_swap_scan(obs_c, src_c, src_t, a_seg, src_a):
-        """The (M, N) `np.any(rho_eval < src_a)` pass behind `_ek_any_swap`."""
-        # Same arithmetic as `_field_components_bcast`, chunked over observer
-        # rows so this stays O(N) in memory rather than reintroducing an
-        # (M, N) temporary — the elementwise values are chunk-independent.
-        a_col = a_seg[:, None]
-        rows = max(1, 500_000 // max(1, obs_c.shape[0]))
-        for i0 in range(0, obs_c.shape[0], rows):
-            i1 = min(i0 + rows, obs_c.shape[0])
-            rvec = obs_c[i0:i1, None, :] - src_c[None, :, :]
-            z_eval = np.einsum("...d,...d->...", rvec, src_t[None, :, :])
-            rho_vec = rvec - z_eval[..., None] * src_t[None, :, :]
-            rho_axis = np.linalg.norm(rho_vec, axis=-1)
-            a = a_col[i0:i1]
-            rho_eval = np.sqrt(rho_axis * rho_axis + a * a)
-            if bool(np.any(rho_eval < src_a)):
-                return True
-        return False
-
     @staticmethod
     def _ek_end_gxx(k, zz, rh, b, want_swapped):
         """NEC's GXX (f.4857-4897): extended-kernel segment-end contributions.
@@ -1570,7 +1520,18 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `_extended_kernel_fields`). `want_swapped` selects EKSCX's IRA == 1
         arm — the case where the observation point lies INSIDE the source
         conductor's radius and the roles of "distance" and "radius" trade
-        places (f.4886-4896).
+        places (f.4886-4896). It is PER PAIR: NEC sets IRA inside EKSCX, once
+        per segment pair (f.3186-3192), so a boolean array broadcastable
+        against `rh` selects the arm elementwise. Before momwire#258 this was
+        one scalar for the whole fill, and a single observation point inside a
+        source conductor put every other pair on the IRA==1 formula evaluated
+        with ITS unswapped (rh, b) — not the physics for those pairs, and
+        visible wherever the ρ-projection does not vanish.
+
+        A scalar `False` (or `True`) is still accepted and takes a single arm
+        with no `np.where`: `_extended_kernel_fields` passes `False` whenever
+        no pair swaps, which is every uniform-radius deck, and that is the
+        spelling whose rounding the #233 ladder is frozen against.
 
         Returns the six quantities EKSCX consumes, in NEC's argument order:
         `(G1, G1P, G2, G2P, G3, GZP)` — respectively the extended scalar
@@ -1609,20 +1570,35 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # GZP: the plain reduced-kernel z-derivative. It is a-independent and
         # only enters EKSCX's constant-current term, scaled by (ka/2)².
         gzp_out = -zz * c1 * gzr
-        if want_swapped:
+
+        def _ira1():
             # IRA == 1 (f.4886-4896): observation point inside the conductor.
             t2b = 0.5 * b
-            g2_out = -t2b * c1 * gzr
+            g2_s = -t2b * c1 * gzr
             g2p_s = t2b * gzr * c2 / r2
-            g3_out = rh2 * g2p_s - b * gzr * c1
-            g2p_out = g2p_s * zz
-        else:
+            g3_s = rh2 * g2p_s - b * gzr * c1
+            return g2_s, g2p_s * zz, g3_s
+
+        def _ira0():
             # IRA == 0 (f.4879-4885), the ordinary case. `rh` is never zero in
             # momwire — it is at least the observer radius — so NEC's
             # RH < 1e-10 guard at f.4881 is unreachable here.
-            g3_out = (g3 + gzp_t) * rh
-            g2_out = g2 / rh
-            g2p_out = g2p * zz / rh
+            return g2 / rh, g2p * zz / rh, (g3 + gzp_t) * rh
+
+        if np.ndim(want_swapped) == 0:
+            # One arm for the whole call. This is the pre-#258 spelling and it
+            # is kept for the (overwhelmingly common) uniform-radius case,
+            # where no pair can swap: it is the rounding the #233 ladder is
+            # frozen against, and it does not pay for a second arm.
+            g2_out, g2p_out, g3_out = _ira1() if want_swapped else _ira0()
+        else:
+            # Per pair (f.3186-3192). Both arms are finite everywhere on this
+            # grid — the IRA==0 divisions are by `rh`, the LARGER of the two
+            # lengths, which is never zero — so evaluating both and selecting
+            # elementwise is safe; no masked evaluation is needed.
+            g2_out, g2p_out, g3_out = tuple(
+                np.where(want_swapped, s, o) for s, o in zip(_ira1(), _ira0())
+            )
         return g1, g1p, g2_out, g2p_out, g3_out, gzp_out
 
     @staticmethod
@@ -1661,6 +1637,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # and IRA is set; every downstream use of RH — including the INTX
         # integration radius and the (kB/2)² correction factor — sees the
         # ordered pair, not the raw one.
+        #
+        # Both the ordering AND the IRA arm it selects are PER PAIR, which is
+        # where NEC sets them. Until momwire#258 only the ordering was: the
+        # arm was `np.any(swap)`, one branch for the whole fill, so a single
+        # observation point inside a source conductor put every pair on the
+        # IRA==1 formula — evaluated with the unswapped (rh, b) of the pairs
+        # that did not swap. That is masked on a collinear deck (the arm
+        # rewrites only the ρ-flavoured slots and the ρ-projection vanishes
+        # there) and worth ~20% of the tensor as soon as a skew member is
+        # present.
         rhx = rho_eval
         swap = rhx < src_a
         any_swap = bool(np.any(swap))
@@ -1683,7 +1669,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for zz, ind in ((z1, ind1), (z2, ind2)):
             zz = np.broadcast_to(zz, swap.shape)
             ext = np.broadcast_to(ind != 2, swap.shape)
-            q_ext = self._ek_end_gxx(k, zz, rh, b, any_swap)
+            # `False` rather than the all-False mask when nothing swaps: same
+            # answer, one arm instead of two, and bit-for-bit the pre-#258
+            # spelling on every deck that never reached the arm.
+            q_ext = self._ek_end_gxx(k, zz, rh, b, swap if any_swap else False)
             if ext.all():
                 ends.append(q_ext)
                 continue
@@ -2623,12 +2612,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             gx, gw = self._leggauss_cached(self.n_qp_const)
             # Source-indexed EK tables, exactly as `_field_tensor` passes
             # them: the mirror reorders nothing, so one IND1/IND2 pair serves
-            # both KSYMP passes (nec2-1.2.1.2.f:2914-2971). `want_swapped` is
-            # resolved on the MIRRORED sources — it is EKSCX's IRA for THIS
-            # build, and the image build's answer can differ from free space's.
+            # both KSYMP passes (nec2-1.2.1.2.f:2914-2971). EKSCX's IRA is not
+            # among them: since momwire#258 it is resolved per PAIR inside the
+            # kernel, off the MIRRORED sources' own rho_eval, so this build
+            # reaches its own answer pair by pair without being told — and the
+            # image build's answer can differ from free space's, pair for pair.
             ind1, ind2 = self._ek_gating(geom)
             src_a = np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64)
-            want_swapped = self._ek_any_swap(geom, src_c_img, src_t_img)
 
             def _call_ek_refl(rows, a):
                 # Observer-side slicing: the (M, N) specular tables slice
@@ -2647,7 +2637,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     src_a,
                     np.ascontiguousarray(ind1, dtype=np.int8),
                     np.ascontiguousarray(ind2, dtype=np.int8),
-                    want_swapped,
                     np.ascontiguousarray(cos_th[rows], dtype=np.float64),
                     np.ascontiguousarray(px[rows], dtype=np.float64),
                     np.ascontiguousarray(py[rows], dtype=np.float64),
