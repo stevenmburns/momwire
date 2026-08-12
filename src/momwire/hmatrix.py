@@ -1655,8 +1655,18 @@ class HMatrixSolver(BSplineSolver):
         # shrunken constraint matrix and an already-driven RHS.
         kcl_con, port_A, port_V = self._split_kcl_ports(ctx["kcl_A"])
         v += port_V @ port_A
-        port_vectors = v_per_feed + list(port_A)
-        all_voltages = np.concatenate([voltages, port_V])
+        # Node gaps (#305): same additive drive/readout as the dense
+        # family's `_feed_drive_and_readout` — without this the accelerated
+        # route solved a node-gap-driven deck with a ZERO drive (empty z,
+        # silent) while the dense fallback answered correctly.
+        gap_cols, gap_V = self._node_gap_columns(ctx["wire_basis_global"], n)
+        v += gap_cols @ gap_V
+        port_vectors = (
+            v_per_feed
+            + list(port_A)
+            + [gap_cols[:, p] for p in range(gap_cols.shape[1])]
+        )
+        all_voltages = np.concatenate([voltages, port_V, gap_V])
 
         coeffs = self._solve_hmatrix(H, kcl_con, v[:, None])[:, 0]
         self._hmatrix = H
