@@ -398,21 +398,38 @@ def test_292_ek_contact_over_finite_ground_no_longer_diverges(ground):
         assert abs(a - b) < 0.10 * abs(b), f"{ground}: EK-on {a} vs EK-off {b}"
 
 
-def test_292_the_galerkin_contact_fill_gets_the_same_twin():
+@pytest.mark.parametrize("ground", list(_292_EK_GROUNDS))
+def test_292_the_galerkin_contact_fill_gets_the_same_twin(ground):
     """The Galerkin solver carries the correction through its own test
     integration and scores eligibility with #246's per-PAIR rule, so it
     needs the twin too — and needed it more: its EK-on contact answer was
     58.79−236.52j at NS = 11 against 33.13+23.50j EK-off, stably wrong
-    rather than walking. Sommerfeld under EK is refused by this solver, so
-    the reflection-coefficient ground is the whole of the test.
+    rather than walking.
+
+    The reflection-coefficient ground used to be the whole of this test,
+    because `SinusoidalGalerkinSolver` refused EK under Sommerfeld outright.
+    momwire#287 lifted that refusal, so the C2-weighted Sommerfeld branch of
+    `_contact_charge_ek_delta` is now reachable from this fill for the first
+    time — and it lands in the same place: |on − off|/|off| is 0.004 / 0.005 /
+    0.005 over NS = 11 / 21 / 41 under soil against refl-coef's 0.005 / 0.005 /
+    0.008, and the ladder converges harder than the refl-coef one does
+    (spread 0.039 against 0.128), the finite ground being a smaller
+    perturbation of the PEC answer under a Sommerfeld evaluation than under
+    the Φ-approximation #153 bounded to 0.1-0.5λ.
     """
     from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
-    kw = _292_EK_GROUNDS["refl-coef soil"]
+    kw = _292_EK_GROUNDS[ground]
+    z_on = []
     for ns in (11, 21, 41):
         on = _292_z(SinusoidalGalerkinSolver, ns, True, **kw)
         off = _292_z(SinusoidalGalerkinSolver, ns, False, **kw)
-        assert abs(on - off) < 0.10 * abs(off), f"NS={ns}: EK-on {on} vs {off}"
+        assert abs(on - off) < 0.10 * abs(off), f"{ground} NS={ns}: {on} vs {off}"
+        z_on.append(on)
+    # The EK-on ladder settles rather than walking — the #292 failure mode was
+    # an O(a²/R²) term that refinement could not remove.
+    spread = abs(z_on[-1] - z_on[0]) / abs(z_on[0])
+    assert spread < 0.30, f"{ground}: EK-on spread {spread:.3f}: {z_on}"
 
 
 def test_292_leaves_an_elevated_ek_wire_untouched():

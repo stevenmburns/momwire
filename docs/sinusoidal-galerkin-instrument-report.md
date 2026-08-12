@@ -1290,15 +1290,28 @@ bounds how thin a wire this cell can resolve an EK correction for; the far
 and on-segment tiers are gated separately so the sharp statement survives in
 the tests.
 
-### What still refuses
+### The Sommerfeld ground, and what stays reduced inside it
 
-`ground_model="sommerfeld"` with a plane: the ground-wave remainder is a
-separate evaluator, still reduced, and mixing an extended image with a
-reduced remainder inside one ground model would be a silent half-answer.
-Filed as momwire#287, with `BSplineSolver`'s #269 precedent (remainder left
-reduced on a measured O((a/2h)²) argument) as the shape of the fix and the
-re-measurement this cell's test integration forces as the open question.
-`near_correction=False` also refuses under EK — the near path is where the
+`ground_model="sommerfeld"` with a plane refused through #246 and is served
+since **momwire#287**. The C2-scaled exact image half carries the delta like
+any other image block; the ground-wave REMAINDER (eqs 143-147) stays reduced,
+which is `BSplineSolver`'s #269 answer arrived at again under this cell's own
+test quadrature rather than inherited. The open question #246 named — that
+Galerkin test integrals sweep the segment-end region collocation never
+samples, and could enlarge the mixture's visible cost — was re-measured and
+does not reach it: the remainder's spatial scale is the IMAGE distance
+r₁ ≥ 2h, not a segment end. Building the extended remainder outright (the
+same field averaged over a ring of radius `a` about the source axis) and
+re-solving moves |Z| by **≤ 4.0e-5** for any wire clear of the plane — three
+orders below the EK shift the image blocks do carry on the same decks — and
+by **3.5e-3 / 4.5e-3** (soil / sea) at a ground CONTACT, where the (a/2h)²
+estimate degenerates and only the remainder's smoothness bounds it. That
+contact figure is 55-66 % of the deck's own EK shift and an order below the
+cross-basis Z gap there; every cell lands within a factor of 1.2 of the
+B-spline family's. Converged in the ring count and O(a²) in the wire radius.
+G-S1 of `tests/test_extended_kernel_galerkin.py` is the measurement.
+
+`near_correction=False` still refuses under EK — the near path is where the
 on-segment pairs are computed at all, not a refinement.
 
 ### Cost, and where it is pinned
@@ -1311,7 +1324,9 @@ EK-off is bit-identical to the pre-arc solver (defaulted vs explicit
 four EK code objects are never entered). Pinned in
 `tests/test_extended_kernel_galerkin.py` — the delta against the 80-bit
 reference and against EKSCX, the ladder shift, symmetry, a → 0, the
-off-path armor, the PEC image attribution and the pair-mask predicate —
-with the acceptance/refusal seam mirrored in
+off-path armor, the PEC image attribution, the pair-mask predicate and
+(momwire#287) the Sommerfeld G-S battery: the reduced-remainder cost, the
+cross-basis shift bar over that ground, its symmetry ratio and its own
+a → 0 collapse — with the acceptance seam mirrored in
 `tests/test_extended_kernel.py`; the derivation replays in
 `scripts/derive_galerkin_ek_delta.py`.

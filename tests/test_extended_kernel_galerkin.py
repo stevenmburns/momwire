@@ -29,6 +29,7 @@ variable, without which no node count reaches those probes at all. See
 """
 
 import contextlib
+import functools
 
 import numpy as np
 import pytest
@@ -683,6 +684,11 @@ _GROUND_KW = {
     "free space": {},
     "PEC": dict(ground_z=0.0),
     "refl-coef": dict(ground_z=0.0, ground_eps=(13.0, 0.005)),
+    # momwire#287. The remainder half of this model stays reduced, on the
+    # measurement G-S1 makes at the bottom of this file.
+    "sommerfeld": dict(
+        ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
+    ),
 }
 
 
@@ -702,30 +708,17 @@ def _monopole(**kw):
 
 @pytest.mark.parametrize("ground", list(_GROUND_KW))
 def test_galerkin_accepts_the_extended_kernel_on_every_served_ground(ground):
-    """The refusal momwire#233 left behind is narrowed to one combination,
-    not lifted: free space, the PEC image and the reflection-coefficient
-    image all solve, and the answer moves."""
+    """momwire#233's blanket refusal is now gone entirely: free space, the
+    PEC image, the reflection-coefficient image and the Sommerfeld ground
+    (momwire#287) all solve, and the answer moves on every one of them."""
     kw = _GROUND_KW[ground]
     z_red, _ = _monopole(**kw).compute_impedance()
     z_ext, _ = _monopole(extended_kernel=True, **kw).compute_impedance()
     assert abs(z_ext - z_red) > 1e-3 * abs(z_red)
 
 
-def test_galerkin_refuses_the_extended_kernel_under_sommerfeld_ground():
-    """The Sommerfeld remainder is a different evaluator with a different
-    derivation, and serving it reduced under an extended image would be a
-    silent mixture of two kernels inside one ground model."""
-    with pytest.raises(NotImplementedError, match="sommerfeld"):
-        _monopole(
-            extended_kernel=True,
-            ground_z=0.0,
-            ground_eps=(13.0, 0.005),
-            ground_model="sommerfeld",
-        )
-
-
 def test_galerkin_still_serves_sommerfeld_with_the_reduced_kernel():
-    """The refusal is about the combination, not about either half."""
+    """The kernel is a choice on this ground, not a requirement of it."""
     z, _ = _monopole(
         ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
     ).compute_impedance()
@@ -824,7 +817,16 @@ def test_gb2_symmetry_survives_the_extended_kernel(radius, bar):
     assert r_ext < bar * r_red, f"{r_ext:.2e} vs reduced {r_red:.2e}"
 
 
-@pytest.mark.parametrize("ground", list(_GROUND_KW))
+@pytest.mark.parametrize(
+    "ground",
+    # Sommerfeld is deliberately absent, and G-S3 says why in its own terms:
+    # that ground's asymmetry floor is not the TEST rule's but the
+    # remainder's SOURCE rule's (`n_qp_sommerfeld`), so refining n_qp_test
+    # does not move it — the claim this test makes is not the claim that
+    # ground supports. `test_g4_sommerfeld_symmetry_near_the_plane_is_source_
+    # quadrature_limited` in test_sommerfeld_ground_sinusoidal.py owns that.
+    [g for g in _GROUND_KW if g != "sommerfeld"],
+)
 def test_gb2_fat_wire_asymmetry_is_test_quadrature_limited(ground):
     """At Δ/a ≈ 1 the EK-on ratio sits ABOVE the reduced fill's — 1.9e-12
     against 4.4e-14 in free space — and this is what that means.
@@ -1372,3 +1374,618 @@ def test_gc3_the_two_backends_solve_the_same_deck(name, monkeypatch):
     z_npy, c_npy = _gc_solver(name).compute_impedance()
     assert abs(z_cpp - z_npy) < 1e-12 * abs(z_npy), (name, z_cpp, z_npy)
     assert np.allclose(c_cpp, c_npy, rtol=1e-10, atol=1e-14)
+
+
+# ===========================================================================
+# G-S — the extended kernel over the SOMMERFELD ground (momwire#287)
+# ===========================================================================
+#
+# #246 unit B narrowed #233's blanket refusal down to one combination —
+# `extended_kernel=True` with `ground_model="sommerfeld"` — and refused it
+# loudly, because that ground is served as TWO evaluators (NEC's eqs 143-147:
+# the C2-scaled exact image plus a smooth interpolated ground-wave remainder)
+# and only the first of them is an Eqs 76-79 build the delta rides through.
+# Extending the image while the remainder stayed reduced would have been a
+# silent mixture of two kernels inside one ground model.
+#
+# The refusal is now gone, and the mixture is not: the image half carries the
+# delta, the remainder stays REDUCED, and G-S1 measures what that costs
+# instead of asserting that it is small. That is the same answer
+# `BSplineSolver` reached in #269 (its Gate 18), reached again here under this
+# fill's own test quadrature rather than inherited — #246's G-B1 found the
+# Galerkin EK shift runs LARGER than the point-matched one at thin Δ/a because
+# test integrals sweep the segment-end region collocation never samples, and
+# the same mechanism could plausibly have enlarged the mixture's visible cost.
+# Measured, it does not: the numbers land within a factor of 1.2 of the
+# B-spline family's on every deck.
+#
+#   G-S1  the extended remainder built outright, and the cost of not
+#         shipping it — per deck, per ground, converged in the ring count,
+#         and O(a²) at the contact where the analytic estimate degenerates;
+#   G-S2  δZ = Z(EK on) − Z(EK off) over Sommerfeld inside #249 §7's 25 %
+#         cross-basis bar against `BSplineSolver` and against the
+#         point-matched solver, fat decks clear of and in contact with the
+#         plane, with the deck's own PEC mismatch as the control;
+#   G-S3  ‖G−Gᵀ‖/‖G‖ with EK on over Sommerfeld, with #246's asymmetric-mask
+#         falsifying contrast;
+#   G-S4  a → 0 collapse on a Sommerfeld deck, and the EK-ON half of G-B4's
+#         EK-off bit-identity statement;
+#   G-S5  the image half really is extended — mutating only the mirrored
+#         pair mask moves the Sommerfeld answer.
+
+from momwire import _sommerfeld as _sm  # noqa: E402
+from momwire.bspline import BSplineSolver  # noqa: E402
+
+_S_EPS = {"soil": (13.0, 0.005), "sea": (81.0, 5.0)}
+_S_H = LAM_NEC / 4
+_S_NS = 21
+
+
+def _s_decks():
+    """G-S1's decks. Three are `test_extended_kernel_bspline.py`'s Gate-18
+    decks verbatim, so the two families' numbers are comparable line by line;
+    the fourth is not, and the substitution is deliberate.
+
+    #269's fourth deck is a BENT fat wire above the plane. Under this solver
+    that deck does not measure the remainder, because the Galerkin EK fill is
+    itself wrong on it: on any multi-edge NON-COLLINEAR wire the EK delta
+    concentrates on the two bases straddling the bend and GROWS as the wire
+    thins, instead of collapsing. On an L (2 x 8 segments, arms 2 m, LAM_NEC)
+    in FREE SPACE, δZ = Z(EK on) − Z(EK off) runs −21.5 − 240.7j at a = 0.02
+    and −24.1 − 526.9j at a = 0.002, against `BSplineSolver`'s −0.04 − 0.92j
+    and −0.002 − 0.06j on the same deck. That is a momwire#246 defect, it
+    predates this arc (it reproduces on main at e535503, in free space, with
+    no ground anywhere), and it is out of scope here — but pinning a
+    Sommerfeld tolerance against a Z that wrong would pin a number a fix to it
+    will move. `slanted` is the bent deck's FIRST ARM alone: the same fat
+    radius, the same tilt (so p̂ rotates pair by pair and min r₁ still sits
+    just above 2h), no bend.
+    """
+    return {
+        # A quarter-wave monopole STANDING IN the plane — NEC's IND = 0
+        # ground-contact branch, and the deck where the (a/2h)² estimate
+        # degenerates because r₁ → 0.
+        "mono_contact": dict(
+            wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, _S_H]])],
+            n_per_edge_per_wire=[[_S_NS]],
+            nsegs=_S_NS,
+            wire_radius=0.02,
+            feed_arclength=(_S_H / _S_NS) * 0.5,
+            ground_z=0.0,
+        ),
+        # The same wire lifted clear of the plane: the image is a real
+        # distance away and both ends are ordinary IND = 1.
+        "mono_lifted": dict(
+            wires=[np.array([[0.0, 0.0, 0.4], [0.0, 0.0, 2.9]])],
+            n_per_edge_per_wire=[[_S_NS]],
+            nsegs=_S_NS,
+            wire_radius=0.02,
+            feed_arclength=(2.5 / _S_NS) * 10.5,
+            ground_z=0.0,
+        ),
+        # Horizontal at height: the image is PARALLEL, not coaxial, so the
+        # image block itself stays reduced and what G-S1 measures on this deck
+        # is the remainder alone.
+        "horizontal": dict(
+            wires=[np.array([[-2.5, 0.0, 1.5], [2.5, 0.0, 1.5]])],
+            n_per_edge_per_wire=[[_S_NS]],
+            nsegs=_S_NS,
+            wire_radius=0.05,
+            feed_arclength=(5.0 / _S_NS) * 10.5,
+            ground_z=0.0,
+        ),
+        # Fat (Δ/a = 4.9) and tilted: neither coaxial with its image nor
+        # parallel to the plane, and close enough to it that min r₁ = 0.627
+        # against 2h = 0.600.
+        "slanted": dict(
+            wires=[np.array([[0.0, 0.0, 0.3], [2.0, 0.0, 1.5]])],
+            n_per_edge_per_wire=[[6]],
+            nsegs=6,
+            wire_radius=0.08,
+            feed_arclength=(float(np.hypot(2.0, 1.2)) / 6.0) * 3.5,
+            ground_z=0.0,
+        ),
+    }
+
+
+_S_DECKS = _s_decks()
+
+
+def _s_solve(deck, eps, cls=SinusoidalGalerkinSolver, ek=True, **over):
+    kw = dict(
+        _S_DECKS[deck],
+        wavelength=LAM_NEC,
+        extended_kernel=ek,
+        ground_eps=_S_EPS[eps],
+        ground_model="sommerfeld",
+    )
+    kw.update(over)
+    if cls is BSplineSolver:
+        kw.update(degree=2, feed_model="segment")
+    z, _ = cls(**kw).compute_impedance()
+    return complex(z)
+
+
+# ---------------------------------------------------------------------------
+# G-S1 — the Sommerfeld remainder stays reduced, and that is MEASURED
+# ---------------------------------------------------------------------------
+#
+# THE ARITHMETIC. EK is the azimuthal average of the source over a tube of
+# radius a: an O((a/R)²) correction, precisely |fac − 1| ≈ (a²/2R²)|1 + jkR|
+# for a ≪ R. Every term in the remainder has the ground REFLECTION as its
+# source, so its R is the image distance r₁ = √(ρ² + (z+z')²) ≥ 2h for a wire
+# at height h, and the un-applied correction is O((a/2h)²). Measured min r₁
+# over this fill's remainder quadrature confirms the floor is tight
+# (mono_lifted 0.816 against 2h = 0.800; horizontal 3.000 against 3.000;
+# slanted 0.627 against 0.600) — and says nothing at all at a CONTACT, where
+# r₁ → 0 and only the SMOOTHNESS of the remainder bounds it. That is the
+# whole point of NEC's decomposition (the C2 image absorbs the singular part),
+# and it is why this gate measures rather than estimates.
+#
+# THE MEASUREMENT. Build the extended remainder outright — the same
+# `_sommerfeld.remainder_field_proj` the shipped code calls, evaluated on a
+# ring of `n_phi` source points at radius a about each source axis point and
+# averaged, which IS the tube average EK applies — and re-solve. The cost of
+# shipping the reduced one is the difference in the solved Z:
+#
+#   deck            a       min r1   2h      |ΔZ|/|Z| soil   sea        EK shift
+#   mono_contact    0.020   0.0158   0.000   3.498e-03   4.490e-03   5.3e-3
+#   mono_lifted     0.020   0.8158   0.800   9.503e-07   9.250e-08   5.2e-3
+#   horizontal      0.050   3.0000   3.000   3.957e-05   4.202e-06   2.1e-2
+#   slanted         0.080   0.6273   0.600   1.024e-05   1.331e-06   2.4e-2
+#
+# (the last column is that deck's own EK shift over soil, |Z_on − Z_off|/|Z|,
+# i.e. what the EXTENDED half of the same ground model is worth). Converged in
+# n_phi — 4, 8 and 16 agree to every digit shown — and O(a²) as the expansion
+# says: on mono_contact/soil, a = 0.04 / 0.02 / 0.01 / 0.005 gives
+# 8.506e-3 / 3.498e-3 / 1.170e-3 / 3.291e-4, ratios 2.4 / 3.0 / 3.6 → 4.
+#
+# HOW TO READ IT. Clear of the plane the un-modelled term is ≤ 4.0e-5
+# relative — three orders below the EK shift the image blocks DO carry on
+# those same decks, and two below this fill's own cross-basis Z gap. AT GROUND
+# CONTACT it is 3.5-4.5e-3, which is 66 % (soil) / 55 % (sea) of that deck's
+# own EK shift: the one place the mixture is visible. It is still an order
+# below the cross-basis Z gap there (3.6 % against `BSplineSolver`), and
+# refl-coef is invalid at a contact (#153) so Sommerfeld is the only model
+# available — refusing it would cost the consumer more than 0.4 % of |Z|.
+#
+# AGAINST THE B-SPLINE PRECEDENT (#269 Gate 18, which measured 3.03e-3 /
+# 3.83e-3 at contact, 9.60e-7 / 9.30e-8 lifted, 3.94e-5 / 4.15e-6
+# horizontal): every cell lands within a factor of 1.2. #246's G-B1 warning —
+# that Galerkin test integrals sweep the segment-end region and can enlarge an
+# EK-scale effect — does not reach this one, because the remainder's spatial
+# scale is r₁ ≥ 2h and not the segment end.
+
+_GS1_TOL = {
+    "mono_contact": 8e-3,
+    "mono_lifted": 3e-6,
+    "horizontal": 1e-4,
+    "slanted": 3e-5,
+}
+_GS1_NPHI = 8
+
+
+def _tube_averaged_proj(a, n_phi=_GS1_NPHI):
+    """`_sommerfeld.remainder_field_proj` with the SOURCE points spread onto
+    a ring of radius `a` about the source axis and averaged — NEC Eq 89's tube
+    average, applied to the smooth remainder field the shipped code leaves on
+    the axis. `test_extended_kernel_bspline.py`'s Gate-18 helper, transferred
+    verbatim: the Galerkin fill consumes the SAME evaluator through
+    `_tested_sommerfeld_remainder`, only with the test-quadrature points as
+    its observer set.
+    """
+    original = _sm.remainder_field_proj
+
+    def ring(obs, t_obs, src, t_src, gz, k, grid, cancel_flag=0):
+        ref = np.tile(np.array([0.0, 0.0, 1.0]), (t_src.shape[0], 1))
+        ref[np.abs(t_src[:, 2]) > 0.9] = np.array([1.0, 0.0, 0.0])
+        e1 = np.cross(t_src, ref)
+        e1 /= np.linalg.norm(e1, axis=1)[:, None]
+        e2 = np.cross(t_src, e1)
+        total = None
+        for i in range(n_phi):
+            phi = 2.0 * np.pi * i / n_phi
+            s = src + a * (np.cos(phi) * e1 + np.sin(phi) * e2)
+            v = original(obs, t_obs, s, t_src, gz, k, grid, cancel_flag)
+            total = v if total is None else total + v
+        return total / n_phi
+
+    return original, ring
+
+
+def _gs1_cost(monkeypatch, deck, eps, n_phi=_GS1_NPHI, radius=None):
+    """|ΔZ|/|Z| between shipping the reduced remainder and the extended one."""
+    over = {} if radius is None else dict(wire_radius=radius)
+    a = float(radius if radius is not None else _S_DECKS[deck]["wire_radius"])
+    z_axis = _s_solve(deck, eps, **over)
+    original, ring = _tube_averaged_proj(a, n_phi)
+    assert original is not ring
+    monkeypatch.setattr(_sm, "remainder_field_proj", ring)
+    z_tube = _s_solve(deck, eps, **over)
+    monkeypatch.setattr(_sm, "remainder_field_proj", original)
+    return abs(z_tube - z_axis) / abs(z_axis)
+
+
+@pytest.mark.parametrize("eps", list(_S_EPS))
+@pytest.mark.parametrize("deck", list(_S_DECKS))
+def test_gs1_reduced_sommerfeld_remainder_is_negligible(monkeypatch, deck, eps):
+    rel = _gs1_cost(monkeypatch, deck, eps)
+    assert rel <= _GS1_TOL[deck], (
+        f"{deck} / {eps}: extending the Sommerfeld remainder moves Z by "
+        f"{rel:.3e} > {_GS1_TOL[deck]:.3e} — the reduced-remainder mixture is "
+        f"no longer negligible on this deck"
+    )
+
+
+@pytest.mark.parametrize("deck", ["mono_contact", "slanted"])
+def test_gs1_the_ring_count_is_converged(monkeypatch, deck):
+    """The tube average is a quadrature too, and G-S1's numbers are only a
+    measurement if it has converged. 4 and 8 nodes agree to 4e-3 relative on
+    the contact deck (identically, in fact) and 3.5e-3 on the slanted one."""
+    coarse = _gs1_cost(monkeypatch, deck, "soil", n_phi=4)
+    fine = _gs1_cost(monkeypatch, deck, "soil", n_phi=8)
+    assert abs(fine - coarse) <= 0.01 * fine, (deck, coarse, fine)
+
+
+def test_gs1_the_contact_cost_is_o_a2(monkeypatch):
+    """The one deck where the analytic O((a/2h)²) estimate says nothing, made
+    to say it anyway: the measured cost still falls like a². Ratios 2.4 / 3.0 /
+    3.6 over a = 0.04 → 0.005, approaching 4 from below as the expansion's
+    higher orders drop out."""
+    prev = None
+    for a in (0.04, 0.02, 0.01, 0.005):
+        rel = _gs1_cost(monkeypatch, "mono_contact", "soil", radius=a)
+        if prev is not None:
+            assert 2.0 < prev / rel < 4.5, (a, prev, rel)
+        prev = rel
+
+
+def test_gs1_the_tube_average_is_a_real_perturbation(monkeypatch):
+    """The control. With the ring installed at a radius the solve can
+    actually feel, G-S1's numbers must MOVE — otherwise the gate would pass on
+    a no-op monkeypatch (a route change that stopped calling
+    `remainder_field_proj` at all, say) and prove nothing. Measured 1.2e-1 at
+    25x the real radius."""
+    rel = _gs1_cost(monkeypatch, "mono_contact", "soil")
+    assert rel < 1e-2, rel
+    z_axis = _s_solve("mono_contact", "soil")
+    original, ring = _tube_averaged_proj(0.5)  # 25x the deck's radius
+    monkeypatch.setattr(_sm, "remainder_field_proj", ring)
+    z_fat = _s_solve("mono_contact", "soil")
+    monkeypatch.setattr(_sm, "remainder_field_proj", original)
+    assert abs(z_fat - z_axis) / abs(z_axis) > 1e-2, "the ring is not reaching"
+
+
+# ---------------------------------------------------------------------------
+# G-S2 — the cross-basis shift bar, over the Sommerfeld ground
+# ---------------------------------------------------------------------------
+#
+# #249 §7's 25 % bar on δZ = Z(EK on) − Z(EK off), applied over Sommerfeld and
+# scored against the two solvers that already serve this combination:
+# `BSplineSolver` (since #269) and the point-matched `SinusoidalSolver` (since
+# #259). The SHIFT and not Z, because at any one mesh the absolute
+# basis-to-basis gap is the size of the EK shift itself, so only the shift
+# measures the kernel.
+#
+# The decks are FAT (Δ/a ≈ 1.07), because that is where the extended kernel is
+# a first-order term rather than a rounding difference — the G16 decks above
+# are at Δ/a ≥ 2.4, where δZ is 0.6 % of Z and every ratio taken on it is
+# denominator noise. One stands IN the plane, one is lifted clear of it.
+#
+# Measured (δ_gal against δ_bsp and δ_sin, |Δδ|/|δ|):
+#
+#   deck          ground       δ_gal              vs bsp   vs sin
+#   fat lifted    PEC          +4.62 − 156.16j    0.1473   0.0278
+#   fat lifted    somm soil    +4.56 − 157.07j    0.1477   0.0267
+#   fat lifted    somm sea     +4.67 − 156.21j    0.1474   0.0277
+#   fat contact   PEC          −4.19 −   1.60j    0.0016   0.0947
+#   fat contact   somm sea     −4.26 −   1.36j    0.0212   0.0986
+#   fat contact   somm soil    −1.68 −   0.11j    0.5635*  0.4122*
+#
+# Read the lifted rows as a COLUMN: the deck's cross-basis EK mismatch is a
+# property of the deck (14.7 % against bspline — G11's class — and 2.7 %
+# against the point-matched fill), and adding the Sommerfeld ground does not
+# move it, to 4e-4 absolute. That is the stronger statement and
+# `test_gs2_the_sommerfeld_ground_does_not_move_the_cross_basis_mismatch`
+# makes it directly.
+#
+# (*) THE CONTACT ROW OVER SOIL is the one pairing whose ratio is not a usable
+# statistic, for two separate reasons, and both are gated below rather than
+# waved at:
+#
+#   - against the point-matched solver it is denominator noise, exactly as
+#     `_G16_ABSOLUTE` is in the B-spline file. Over average soil this ground
+#     nearly cancels the shift's real part, so |δ| falls from 4.37 under PEC
+#     to 1.41 and the ratio inflates while the shift VECTORS stay 0.58 apart
+#     against the PEC control's own 0.41. Scored on the numerator it passes.
+#   - against `BSplineSolver` it is not noise, and it is not about EK at all:
+#     the two families disagree by 9.8 % on Z ITSELF, EK-OFF, at a fat contact
+#     over soil (54.49 + 10.74j against 59.75 + 9.35j), and by 22.5 % over the
+#     reflection-coefficient ground. That is the #151-vs-#282 contact story —
+#     a ground-connected basis against a subtracted contact charge — and it
+#     predates this arc on both finite grounds. A shift ratio taken across a
+#     10 % disagreement about the answer measures the disagreement.
+#     `test_gs2_the_bspline_bar_is_scored_where_the_bases_agree_on_z` pins
+#     both halves of that, so the exclusion cannot rot into a silent skip.
+
+_S2_DECKS = {
+    "fat contact": dict(
+        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.4]])],
+        n_per_edge_per_wire=[[15]],
+        nsegs=15,
+        wire_radius=0.15,
+        feed_arclength=0.08,
+        ground_z=0.0,
+    ),
+    "fat lifted": dict(
+        wires=[np.array([[0.0, 0.0, 0.6], [0.0, 0.0, 3.0]])],
+        n_per_edge_per_wire=[[15]],
+        nsegs=15,
+        wire_radius=0.15,
+        feed_arclength=0.08,
+        ground_z=0.0,
+    ),
+}
+
+_S2_GROUNDS = {
+    "PEC": {},
+    "somm soil": dict(ground_eps=(13.0, 0.005), ground_model="sommerfeld"),
+    "somm sea": dict(ground_eps=(81.0, 5.0), ground_model="sommerfeld"),
+}
+
+
+@functools.lru_cache(maxsize=None)
+def _s2_z(deck, ground, cls, ek):
+    kw = dict(_S2_DECKS[deck], wavelength=LAM_NEC, extended_kernel=ek)
+    kw.update(_S2_GROUNDS[ground])
+    if cls is BSplineSolver:
+        kw.update(degree=2, feed_model="segment")
+    z, _ = cls(**kw).compute_impedance()
+    return complex(z)
+
+
+def _s2_shift(deck, ground, cls):
+    return _s2_z(deck, ground, cls, True) - _s2_z(deck, ground, cls, False)
+
+
+def _s2_mismatch(deck, ground, other):
+    d_gal = _s2_shift(deck, ground, SinusoidalGalerkinSolver)
+    d_oth = _s2_shift(deck, ground, other)
+    return abs(d_gal - d_oth) / abs(d_oth), abs(d_gal - d_oth)
+
+
+_S2_SOMMERFELD = [g for g in _S2_GROUNDS if g != "PEC"]
+
+
+@pytest.mark.parametrize(
+    "other", [BSplineSolver, SinusoidalSolver], ids=["bspline", "point-matched"]
+)
+@pytest.mark.parametrize("ground", _S2_SOMMERFELD)
+def test_gs2_lifted_fat_wire_shift_is_within_the_cross_basis_bar(ground, other):
+    ratio, _ = _s2_mismatch("fat lifted", ground, other)
+    assert ratio < _SHIFT_BAR, f"fat lifted / {ground} / {other.__name__}: {ratio:.4f}"
+
+
+@pytest.mark.parametrize(
+    "other", [BSplineSolver, SinusoidalSolver], ids=["bspline", "point-matched"]
+)
+@pytest.mark.parametrize("deck", list(_S2_DECKS))
+def test_gs2_the_sommerfeld_ground_does_not_move_the_cross_basis_mismatch(deck, other):
+    """The control, and the stronger of the two statements: whatever the
+    deck's own cross-basis EK mismatch is, adding sea water under it must not
+    change it. Measured worst 0.0011 absolute on the lifted deck.
+
+    The contact deck is scored on the NUMERATOR — the shift vectors' distance
+    — for the reason the section comment gives: over a finite ground its |δ|
+    shrinks and the ratio stops being a statistic. Sea water, whose ε̃ puts
+    this ground near the PEC limit, is the pairing where both metrics agree.
+    """
+    if deck == "fat lifted":
+        base = _s2_mismatch(deck, "PEC", other)[0]
+        for ground in _S2_SOMMERFELD:
+            got = _s2_mismatch(deck, ground, other)[0]
+            assert abs(got - base) < 0.01, (deck, ground, base, got)
+        return
+    base = _s2_mismatch(deck, "PEC", other)[1]
+    got = _s2_mismatch(deck, "somm sea", other)[1]
+    assert abs(got - base) < 0.2, (deck, base, got)
+
+
+@pytest.mark.parametrize(
+    "other", [BSplineSolver, SinusoidalSolver], ids=["bspline", "point-matched"]
+)
+def test_gs2_contact_shift_over_sea_is_within_the_cross_basis_bar(other):
+    """Sea water is the finite ground on which every basis still agrees about
+    the contact deck's Z (0.4 % EK-off against bspline), so the ratio bar is a
+    statement about the kernel there. Measured 0.021 / 0.099."""
+    ratio, _ = _s2_mismatch("fat contact", "somm sea", other)
+    assert ratio < _SHIFT_BAR, f"fat contact / somm sea / {other.__name__}: {ratio:.4f}"
+
+
+def test_gs2_contact_shift_over_soil_is_scored_on_the_numerator():
+    """The `_G16_ABSOLUTE` idiom: where |δ| collapses the ratio is denominator
+    noise, so score the shift VECTORS' distance and compare it to the same
+    deck's PEC control on the same metric. Measured 0.583 against 0.414."""
+    _, num = _s2_mismatch("fat contact", "somm soil", SinusoidalSolver)
+    _, ctrl = _s2_mismatch("fat contact", "PEC", SinusoidalSolver)
+    assert num < 2.0 * ctrl, f"|Δδ| {num:.3f} against the PEC control's {ctrl:.3f}"
+    # And the denominator really did collapse — otherwise the ratio would have
+    # been usable and this test would be excusing nothing.
+    assert abs(_s2_shift("fat contact", "somm soil", SinusoidalSolver)) < 0.5 * abs(
+        _s2_shift("fat contact", "PEC", SinusoidalSolver)
+    )
+
+
+def test_gs2_the_bspline_bar_is_scored_where_the_bases_agree_on_z():
+    """Why `fat contact / somm soil` is not scored against `BSplineSolver` at
+    all, pinned as a measurement so that it stays an informed exclusion rather
+    than an unexplained gap.
+
+    A shift ratio between two bases is only about the kernel if the two agree
+    about the answer. On this deck EK-OFF they agree to 0.5 % under PEC and to
+    0.4 % under sea water — and to 9.8 % under average soil, where a
+    ground-connected B-spline basis (#151) and a subtracted contact charge
+    (#282) genuinely part company. That gap is EK-OFF, i.e. nothing this arc
+    touched, and it is what the 0.56 shift ratio inherits.
+    """
+
+    def gap(ground):
+        zg = _s2_z("fat contact", ground, SinusoidalGalerkinSolver, False)
+        zb = _s2_z("fat contact", ground, BSplineSolver, False)
+        return abs(zg - zb) / abs(zg)
+
+    pec = gap("PEC")
+    assert pec < 0.01, pec
+    assert gap("somm sea") < 2.0 * pec, gap("somm sea")
+    assert gap("somm soil") > 5.0 * pec, gap("somm soil")
+
+
+# ---------------------------------------------------------------------------
+# G-S3 — reciprocity over the Sommerfeld ground, with EK on
+# ---------------------------------------------------------------------------
+def test_gs3_symmetry_survives_the_extended_kernel_over_sommerfeld():
+    """G-B2's statement on the one ground it was not allowed to make it on.
+
+    On the fat contact monopole the EK-ON ratio sits BELOW the reduced fill's
+    over both soils — 6.6e-8 against 9.5e-8 (soil), 1.1e-7 against 1.6e-7
+    (sea) — because on this ground neither number is the EK fill's: the floor
+    is the remainder block's own SOURCE rule (`n_qp_sommerfeld`), which is why
+    G-B2's "refine `n_qp_test` and it falls" contrast is parametrized without
+    this ground and `test_g4_sommerfeld_symmetry_near_the_plane_is_source_
+    quadrature_limited` owns the identification.
+
+    Measured with #282's contact-charge correction off, for the reason G-B2
+    gives: that correction is source-side only and makes the fill
+    non-self-adjoint by construction on a deck that touches the plane.
+    """
+    for name in ("sommerfeld", "sommerfeld sea"):
+        kw = (
+            _GROUND_KW["sommerfeld"]
+            if name == "sommerfeld"
+            else dict(ground_z=0.0, ground_eps=(81.0, 5.0), ground_model="sommerfeld")
+        )
+        with _without_the_282_contact_correction():
+            red = _sym_ratio(_monopole(**kw))
+            ext = _sym_ratio(_monopole(extended_kernel=True, **kw))
+        assert ext < 2.0 * red, f"{name}: EK {ext:.2e} against reduced {red:.2e}"
+        assert ext < 1e-6, f"{name}: {ext:.2e}"
+
+
+def test_gs3_an_asymmetric_mask_breaks_reciprocity_over_sommerfeld_too():
+    """The falsifying contrast, on this ground: extend only the `j > i` pairs
+    — the caricature of NEC's per-source-END decision — and ‖G−Gᵀ‖/‖G‖ jumps
+    from 6.6e-8 to 6.6e-1, seven orders, AND stops responding to the test rule
+    (6.63e-1 at `n_qp_test` 8 and 16 alike), because the asymmetry is now in
+    what is integrated rather than in how well.
+    """
+    original = SinusoidalGalerkinSolver._ek_pairs
+
+    def upper_only(self, geom, m_idx, n_idx, mirror, n_panels=1):
+        pairs = original(self, geom, m_idx, n_idx, mirror, n_panels)
+        return pairs._replace(eligible=pairs.eligible & (n_idx > m_idx))
+
+    kw = _GROUND_KW["sommerfeld"]
+    with _without_the_282_contact_correction():
+        honest = _sym_ratio(_monopole(extended_kernel=True, **kw))
+        try:
+            SinusoidalGalerkinSolver._ek_pairs = upper_only
+            coarse = _sym_ratio(_monopole(extended_kernel=True, **kw))
+            fine = _sym_ratio(
+                _monopole(extended_kernel=True, n_qp_test=16, n_qp_near=16, **kw)
+            )
+        finally:
+            SinusoidalGalerkinSolver._ek_pairs = original
+    assert coarse > 1e-3, coarse
+    assert coarse > 1e4 * honest, (coarse, honest)
+    assert fine > 0.5 * coarse, f"{fine:.2e} vs {coarse:.2e}: not structural"
+
+
+# ---------------------------------------------------------------------------
+# G-S4 — the armor, extended to the Sommerfeld decks
+# ---------------------------------------------------------------------------
+def _s4_fill(radius, extended_kernel=False):
+    sim = SinusoidalGalerkinSolver(
+        wires=[np.array([[0.0, 0.0, 0.6], [0.0, 0.0, 3.0]])],
+        n_per_edge_per_wire=[[15]],
+        wavelength=LAM_NEC,
+        wire_radius=radius,
+        nsegs=15,
+        feed_arclength=0.08,
+        extended_kernel=extended_kernel,
+        **_GROUND_KW["sommerfeld"],
+    )
+    return sim._assemble_Z(sim._build_geometry(), sim.k)[0]
+
+
+def test_gs4_the_sommerfeld_fill_collapses_onto_the_reduced_one():
+    """G-B3 over the Sommerfeld ground. ‖G_ek − G_red‖/‖G_red‖ on a lifted
+    monopole over average soil:
+
+        a = 0.05    1.04e-1
+        a = 0.005   1.68e-3
+        a = 5e-4    4.98e-5
+        a = 5e-5    3.21e-6
+
+    Monotone, and four and a half decades of collapse for three decades of
+    radius. Not a clean a² law at the thin end, for the reason G-B3 gives:
+    reduced-plus-delta leaves ~ε·(H/ρ)² of the delta's peak behind, and the
+    remainder — which does not collapse at all, being the same in both fills —
+    is subtracted out of this difference exactly.
+    """
+    prev = None
+    for radius in (0.05, 0.005, 5e-4, 5e-5):
+        rel = np.linalg.norm(
+            _s4_fill(radius, True) - _s4_fill(radius)
+        ) / np.linalg.norm(_s4_fill(radius))
+        assert prev is None or rel < 0.1 * prev, (radius, rel, prev)
+        prev = rel
+    assert prev < 1e-5, prev
+
+
+def test_gs4_ek_on_over_sommerfeld_enters_the_ek_code(ek_call_counts):
+    """The other half of G-B4. That file's `sommerfeld ground` deck already
+    proves EK OFF is bit-identical to the default and enters no EK code at
+    all; before #287 there was no EK-ON statement to make on it, because the
+    constructor refused. Now there is, and it is the control that keeps the
+    EK-off counter gate from passing vacuously on this ground.
+    """
+    kw = dict(_G4_DECKS["sommerfeld ground"], wavelength=LAM_NEC)
+    z_off, _ = SinusoidalGalerkinSolver(**kw).compute_impedance()
+    z_on, _ = SinusoidalGalerkinSolver(**kw, extended_kernel=True).compute_impedance()
+    for attr, n in ek_call_counts.items():
+        assert n > 0, f"{attr} never called with EK on over the Sommerfeld ground"
+    assert z_on != z_off
+    assert abs(z_on - z_off) < 0.1 * abs(z_off), (z_on, z_off)
+
+
+# ---------------------------------------------------------------------------
+# G-S5 — the IMAGE half of this ground really is extended
+# ---------------------------------------------------------------------------
+def test_gs5_the_sommerfeld_image_block_carries_its_own_delta():
+    """A mutation gate. Everything above measures what the REDUCED half
+    costs; this one shows there is an extended half to compare it to.
+
+    Neuter the pair mask on the MIRRORED source only — the free-space block
+    keeps its delta, the image block loses it — and the Sommerfeld answer must
+    move. It is a fat monopole standing in the plane, so every real/image pair
+    is coaxial and equal-radius through the mirror (NEC's IND = 0 branch) and
+    the whole image block is eligible. Measured 1.9e-2 of |Z|, against the
+    3.5e-3 the reduced remainder is worth on a comparable deck: the mixture is
+    a correction to an effect that is really there, not the whole of it.
+    """
+    original = SinusoidalGalerkinSolver._ek_pairs
+
+    def no_image(self, geom, m_idx, n_idx, mirror, n_panels=1):
+        pairs = original(self, geom, m_idx, n_idx, mirror, n_panels)
+        if not mirror:
+            return pairs
+        return pairs._replace(eligible=np.zeros_like(pairs.eligible))
+
+    kw = _GROUND_KW["sommerfeld"]
+    z_full, _ = _monopole(extended_kernel=True, **kw).compute_impedance()
+    try:
+        SinusoidalGalerkinSolver._ek_pairs = no_image
+        z_flat, _ = _monopole(extended_kernel=True, **kw).compute_impedance()
+    finally:
+        SinusoidalGalerkinSolver._ek_pairs = original
+    assert abs(z_flat - z_full) > 1e-3 * abs(z_full), (z_full, z_flat)

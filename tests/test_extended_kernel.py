@@ -480,9 +480,10 @@ def test_extended_kernel_code_is_never_entered_when_off(name, monkeypatch):
 #
 # momwire#233 shipped the extended kernel on the point-matched solver and had
 # `SinusoidalGalerkinSolver` refuse it outright; momwire#246 narrowed that
-# refusal to one combination. What is left here is the boundary — the two
-# statements that say which side of it a caller is on. The Galerkin fill's own
-# gate battery is `tests/test_extended_kernel_galerkin.py`.
+# refusal to one combination (Sommerfeld) and momwire#287 removed the last of
+# it. What is left here is that the two solvers agree the kernel is served at
+# all — the Galerkin fill's own gate battery, including every ground, is
+# `tests/test_extended_kernel_galerkin.py`.
 
 
 def _galerkin(**kw):
@@ -504,18 +505,16 @@ def test_galerkin_accepts_the_extended_kernel():
     assert abs(z_ext - z_red) > 1e-3 * abs(z_red)
 
 
-def test_galerkin_still_refuses_the_extended_kernel_under_sommerfeld_ground():
-    """The one combination momwire#246 did not open: the Sommerfeld
-    remainder is a separate evaluator and is still the reduced one, so
-    serving it under an extended image would mix two kernels inside one
-    ground model."""
-    with pytest.raises(NotImplementedError, match="sommerfeld"):
-        _galerkin(
-            extended_kernel=True,
-            ground_z=-3.0,
-            ground_eps=(13.0, 0.005),
-            ground_model="sommerfeld",
-        )
+def test_galerkin_serves_the_extended_kernel_under_sommerfeld_ground():
+    """The combination momwire#246 refused and momwire#287 opened. The
+    Sommerfeld ground-wave remainder is still the reduced-kernel evaluator
+    under an extended image, which is a deliberate and measured mixture —
+    `test_extended_kernel_galerkin.py`'s G-S1 is the measurement, and the
+    class docstring carries the table."""
+    ground = dict(ground_z=-3.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld")
+    z_red, _ = _galerkin(**ground).compute_impedance()
+    z_ext, _ = _galerkin(extended_kernel=True, **ground).compute_impedance()
+    assert abs(z_ext - z_red) > 1e-3 * abs(z_red)
 
 
 # ----------------------------------------------------------------------
