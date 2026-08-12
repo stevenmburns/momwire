@@ -229,6 +229,28 @@ def test_iterative_families_reproduce_the_dense_port():
         assert np.abs(y - y_ref).max() / np.abs(y_ref).max() < 1e-9, cls.__name__
 
 
+def test_iterative_families_drive_the_node_gap():
+    """The accelerated `compute_impedance` route must DRIVE the gap, not
+    just read it: before the fix it assembled a zero RHS for a node-gap-
+    driven deck and returned an EMPTY z (feeds-shaped) while the dense
+    fallback answered — a silent wrong-shape, wrong-physics result. Free
+    space keeps the accelerated route (no dense fallback) engaged."""
+    kw = dict(
+        wires=_split_wires(),
+        feeds=[],
+        node_gaps=[(0, "end", 1.0 + 0j)],
+        degree=2,
+        **_SPLIT_KW,
+    )
+    z_ref, _ = BSplineSolver(**kw).compute_impedance()
+    z_ref = complex(np.atleast_1d(z_ref)[0])
+    for cls in (HMatrixSolver, ArrayBlockSolver):
+        z, coeffs = cls(aca_tol=1e-9, solve_tol=1e-10, **kw).compute_impedance()
+        z = complex(np.atleast_1d(z)[0])
+        assert abs(z - z_ref) < 1e-6 * abs(z_ref), (cls.__name__, z, z_ref)
+        assert np.abs(coeffs).max() > 0, cls.__name__
+
+
 def test_swept_ports_match_per_k():
     """The swept path hoists the k-independent port columns once; each
     per-k Y must equal the single-k solve's."""
