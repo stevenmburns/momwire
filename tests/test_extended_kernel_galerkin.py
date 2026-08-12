@@ -1011,8 +1011,11 @@ def test_gb4_ek_off_is_bit_identical_to_the_default(name):
 _EK_ENTRY_POINTS = [
     (SinusoidalSolver, "_folded_ek_delta_fields"),
     (SinusoidalSolver, "_ek_delta_rule"),
+    (SinusoidalSolver, "_ek_end_bracket_fields"),
     (SinusoidalGalerkinSolver, "_ek_axis_labels"),
     (SinusoidalGalerkinSolver, "_ek_pairs"),
+    (SinusoidalGalerkinSolver, "_ek_reduced_ends"),
+    (SinusoidalGalerkinSolver, "_ek_bracket_block"),
 ]
 
 
@@ -1033,8 +1036,13 @@ def ek_call_counts(monkeypatch):
 
 def test_gb4b_the_counters_fire_when_ek_is_on(ek_call_counts):
     """The control: a monkeypatch that failed to bind would make the gate
-    below pass vacuously."""
+    below pass vacuously. Two decks, because momwire#299's end-bracket
+    correction only evaluates a bracket on a geometry with a SPLIT node — the
+    monopole reaches `_ek_bracket_block` and returns from it."""
     _monopole(extended_kernel=True, ground_z=0.0).compute_impedance()
+    SinusoidalGalerkinSolver(
+        **dict(_G4_DECKS["vee"], wavelength=LAM_NEC), extended_kernel=True
+    ).compute_impedance()
     for attr, n in ek_call_counts.items():
         assert n > 0, f"{attr} never called with EK on"
 
@@ -1426,20 +1434,23 @@ def _s_decks():
     decks verbatim, so the two families' numbers are comparable line by line;
     the fourth is not, and the substitution is deliberate.
 
-    #269's fourth deck is a BENT fat wire above the plane. Under this solver
-    that deck does not measure the remainder, because the Galerkin EK fill is
-    itself wrong on it: on any multi-edge NON-COLLINEAR wire the EK delta
-    concentrates on the two bases straddling the bend and GROWS as the wire
-    thins, instead of collapsing. On an L (2 x 8 segments, arms 2 m, LAM_NEC)
-    in FREE SPACE, δZ = Z(EK on) − Z(EK off) runs −21.5 − 240.7j at a = 0.02
-    and −24.1 − 526.9j at a = 0.002, against `BSplineSolver`'s −0.04 − 0.92j
-    and −0.002 − 0.06j on the same deck. That is a momwire#246 defect, it
-    predates this arc (it reproduces on main at e535503, in free space, with
-    no ground anywhere), and it is out of scope here — but pinning a
-    Sommerfeld tolerance against a Z that wrong would pin a number a fix to it
-    will move. `slanted` is the bent deck's FIRST ARM alone: the same fat
-    radius, the same tilt (so p̂ rotates pair by pair and min r₁ still sits
-    just above 2h), no bend.
+    #269's fourth deck is a BENT fat wire above the plane, and when these
+    gates landed this solver could not use it: the Galerkin EK fill was wrong
+    on any multi-edge wire whose nodes split, growing as the wire thinned
+    instead of collapsing (momwire#299, diagnosed as the end-bracket residue
+    and fixed by the NODE predicate G-D gates). `slanted` is the bent deck's
+    FIRST ARM alone: the same fat radius, the same tilt (so p̂ rotates pair by
+    pair and min r₁ still sits just above 2h), no bend.
+
+    The substitution STAYS, and that is now a choice rather than a
+    constraint. With #299 in, the bent deck's EK shift agrees with
+    `BSplineSolver`'s to 11.7 % over PEC and 10.3 % over Sommerfeld soil
+    (+11.52 − 4.97j against +11.94 − 6.50j, and +13.04 − 2.41j against
+    +13.33 − 3.81j) — inside #249 §7's 25 % bar, so the deck is usable
+    again. Restoring it would re-baseline every measured number in G-S1's
+    table and G-S2's, which belong to momwire#287 and are not this arc's to
+    move; the bent deck is gated instead by
+    `test_gd7_the_bent_deck_of_287_is_usable_again` below, on both grounds.
     """
     return {
         # A quarter-wave monopole STANDING IN the plane — NEC's IND = 0
@@ -1953,6 +1964,12 @@ def test_gs4_ek_on_over_sommerfeld_enters_the_ek_code(ek_call_counts):
     z_off, _ = SinusoidalGalerkinSolver(**kw).compute_impedance()
     z_on, _ = SinusoidalGalerkinSolver(**kw, extended_kernel=True).compute_impedance()
     for attr, n in ek_call_counts.items():
+        # `_ek_end_bracket_fields` is the one entry point a deck can honestly
+        # leave alone: it evaluates only where a node SPLITS (momwire#299) and
+        # this deck is a straight wire. `_ek_bracket_block` is still entered —
+        # it is what asks the question — so the route is covered either way.
+        if attr == "_ek_end_bracket_fields":
+            continue
         assert n > 0, f"{attr} never called with EK on over the Sommerfeld ground"
     assert z_on != z_off
     assert abs(z_on - z_off) < 0.1 * abs(z_off), (z_on, z_off)
@@ -1989,3 +2006,443 @@ def test_gs5_the_sommerfeld_image_block_carries_its_own_delta():
     finally:
         SinusoidalGalerkinSolver._ek_pairs = original
     assert abs(z_flat - z_full) > 1e-3 * abs(z_full), (z_full, z_flat)
+
+
+# ===========================================================================
+# G-D — the end brackets are gated by a NODE predicate (momwire#299)
+# ===========================================================================
+#
+# #246 gated the whole EK delta by a PAIR rule (`_ek_pairs`: same axis line,
+# same radius, symmetric by construction). The delta's END BRACKET — the
+# boundary term of its integration by parts in ξ, `_ek_end_bracket_fields` —
+# is not a pair object: it is O(1/a) per source end, and the two brackets
+# meeting at an interior node cancel only if BOTH sides are extended. At a
+# bend, a radius step or a K ≥ 3 junction the pair rule's eligible set stops AT
+# the node, one bracket survives uncancelled, and the fill diverges as the wire
+# thins. Measured on main at 5a1e363, δZ = Z(EK on) − Z(EK off):
+#
+#   deck                         a = 0.02          a = 0.002
+#   L (2 x 8 segs, λ = 10)       −21.5 − 240.5j    −24.1 − 526.7j
+#   collinear radius step 1:2    − 5.3 − 257.0j    −54.4 − 554.2j
+#   T junction, K = 3            − 0.9 −   6.6j    − 1.6 −  16.1j
+#   `_G4_DECKS` vee (LAM_NEC)    −25.5 − 195.7j    −36.9 − 431.3j
+#
+# against `BSplineSolver`'s −0.035 − 0.657j → −0.002 − 0.041j on the L. The
+# straight dipole was always healthy, because no node on it splits.
+#
+# The fix gates the brackets per SOURCE END by a NODE predicate
+# (`_ek_reduced_ends`: extend at node P iff every segment meeting there shares
+# one axis line and one radius — NEC's IND = 0 scored on the node, not on the
+# pair), and lands it as a post-fill correction assembled through
+# `_ek_bracket_correction_tested`. The gates:
+#
+#   G-D1  a → 0 collapse on every node kind, tracking `BSplineSolver`;
+#   G-D2  the predicate itself, and the decks it must leave alone;
+#   G-D3  a deck with no split node is bit-identical without the correction;
+#   G-D4  the correction's DIVERGENT half is symmetric, which is what makes
+#         halving it with its transpose (G-D5's reason) free;
+#   G-D5  reciprocity is unmoved on the decks the correction fires on;
+#   G-D6  the falsifier: without the correction these decks still diverge.
+
+_GD_LAM = 10.0
+_GD_A = (0.02, 0.01, 0.005, 0.002)
+# 0.02 → 0.002 is 3.3 halvings, so a bar of 0.55 per halving is ~0.19 over the
+# ladder; measured worst is 0.452 (L, 0.01 → 0.005).
+_GD_RATIO_BAR = 0.55
+
+
+def _gd_decks(radius):
+    """One deck per NODE KIND the predicate has to decide, all λ = 10, all in
+    free space, all 16-20 segments — the design note's own decks, so the
+    numbers in these docstrings are its numbers.
+    """
+    arm = [np.array([[0.0, 0.0, 0.0], [0.0, 2.0, 0.0]])]
+    return {
+        # No split node anywhere: the control, and the deck whose numbers must
+        # not move at all.
+        "straight": dict(
+            wires=[np.array([[0.0, 0.0, 0.0], [0.0, 4.0, 0.0]])],
+            n_per_edge_per_wire=[[16]],
+            nsegs=16,
+            wire_radius=radius,
+        ),
+        # A right-angle bend: two arms, labels split at the corner.
+        "L": dict(
+            wires=[np.array([[0.0, 0.0, 0.0], [0.0, 2.0, 0.0], [2.0, 2.0, 0.0]])],
+            n_per_edge_per_wire=[[8, 8]],
+            nsegs=16,
+            wire_radius=radius,
+        ),
+        # A 60° bend — the same node kind at a shallower angle.
+        "vee": dict(
+            wires=[
+                np.array(
+                    [[0.0, 0.0, 0.0], [0.0, 2.0, 0.0], [1.0, 2.0 + np.sqrt(3.0), 0.0]]
+                )
+            ],
+            n_per_edge_per_wire=[[8, 8]],
+            nsegs=16,
+            wire_radius=radius,
+        ),
+        # PERFECTLY COLLINEAR, and it still splits: the radii differ 1:2, so
+        # the equal-radius half of the label rule separates the two arms. This
+        # is the deck an "extend everything" cheat passes the L on and fails.
+        "radius step": dict(
+            wires=arm + [np.array([[0.0, 2.0, 0.0], [0.0, 4.0, 0.0]])],
+            n_per_edge_per_wire=[[8], [8]],
+            nsegs=16,
+            wire_radius=[radius, 2.0 * radius],
+            junctions=[[(0, "end"), (1, "start")]],
+        ),
+        # K = 3, all radii equal: two of the three members ARE collinear, so
+        # the label test alone would pass the node and the topological K ≥ 3
+        # test is what fails it.
+        "T": dict(
+            wires=arm
+            + [
+                np.array([[0.0, 2.0, 0.0], [0.0, 4.0, 0.0]]),
+                np.array([[0.0, 2.0, 0.0], [1.0, 2.0, 0.0]]),
+            ],
+            n_per_edge_per_wire=[[8], [8], [4]],
+            nsegs=20,
+            wire_radius=radius,
+            junctions=[[(0, "end"), (1, "start"), (2, "start")]],
+        ),
+    }
+
+
+def _gd_shift(name, radius, cls=SinusoidalGalerkinSolver):
+    kw = dict(_gd_decks(radius)[name], feed_arclength=1.0, wavelength=_GD_LAM)
+    if cls is BSplineSolver:
+        kw.update(degree=2, feed_model="segment")
+    off, _ = cls(**kw).compute_impedance()
+    on, _ = cls(**kw, extended_kernel=True).compute_impedance()
+    return complex(on) - complex(off)
+
+
+# ---------------------------------------------------------------------------
+# G-D1 — a → 0 on every node kind
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("name", list(_gd_decks(0.02)))
+def test_gd1_the_fill_collapses_on_every_node_kind(name):
+    """G-B3's idiom off the straight dipole and onto the four decks whose
+    nodes split. δZ over a = 0.02 / 0.01 / 0.005 / 0.002:
+
+        straight      −0.143 − 1.097j … −0.007 − 0.079j   (unmoved)
+        L             −0.071 − 1.040j … −0.004 − 0.075j
+        vee           −0.154 − 1.069j … −0.008 − 0.078j
+        radius step   −1.072 − 3.535j … −0.036 − 0.213j
+        T             −0.140 − 1.039j … −0.007 − 0.075j
+
+    Monotone, worst ratio 0.452 per halving (0.425 on the radius step), and
+    every deck now lands within a factor of two of the straight dipole it
+    used to be three orders of magnitude away from.
+    """
+    prev = None
+    for radius in _GD_A:
+        d = abs(_gd_shift(name, radius))
+        if prev is not None:
+            step = 0.5 if radius != 0.002 else 0.4  # the last rung is 2.5x
+            assert d < prev, (name, radius, d, prev)
+            assert d / prev <= _GD_RATIO_BAR * (step / 0.5), (name, radius, d / prev)
+        prev = d
+
+
+@pytest.mark.parametrize("name", ["L", "vee", "radius step", "T"])
+def test_gd1_the_collapse_tracks_the_bspline_family(name):
+    """Order, not value: the collapse factor over the whole ladder against
+    `BSplineSolver`'s on the same deck — 13.8x against 16.0x on the L
+    (1.16), 13.7/15.8 vee, 16.6/17.4 radius step, 13.8/16.0 T. The two bases
+    disagree about the SIZE of the EK shift by #249 §7's cross-basis margin;
+    they must not disagree about its ORDER in a.
+    """
+    fat, thin = _GD_A[0], _GD_A[-1]
+    gal = abs(_gd_shift(name, fat)) / abs(_gd_shift(name, thin))
+    bsp = abs(_gd_shift(name, fat, BSplineSolver)) / abs(
+        _gd_shift(name, thin, BSplineSolver)
+    )
+    assert 0.5 < gal / bsp < 2.0, f"{name}: galerkin {gal:.1f}x vs bspline {bsp:.1f}x"
+
+
+def test_gd1_the_vee_deck_gains_its_ek_on_gate():
+    """momwire#299's acceptance sketch, on `_G4_DECKS`' own vee — until now
+    checked EK-OFF only, which is how #246 shipped the defect.
+
+        a        δZ galerkin        δZ bspline        |ratio|
+        0.020    +0.399 − 32.137j   +0.530 − 35.177j   0.914
+        0.010    +0.153 − 16.590j   +0.210 − 18.085j   0.917
+        0.005    +0.060 −  8.364j   +0.085 −  9.092j   0.920
+        0.002    +0.019 −  3.338j   +0.027 −  3.617j   0.923
+
+    On main the same column reads −25.5 − 195.7j … −36.9 − 431.3j: growing,
+    and 6x the size of the answer.
+    """
+    kw = dict(_G4_DECKS["vee"], wavelength=LAM_NEC)
+    prev = None
+    for radius in _GD_A:
+        deck = dict(kw, wire_radius=radius)
+        off, _ = SinusoidalGalerkinSolver(**deck).compute_impedance()
+        on, _ = SinusoidalGalerkinSolver(
+            **deck, extended_kernel=True
+        ).compute_impedance()
+        b_off, _ = BSplineSolver(
+            **deck, degree=2, feed_model="segment"
+        ).compute_impedance()
+        b_on, _ = BSplineSolver(
+            **deck, degree=2, feed_model="segment", extended_kernel=True
+        ).compute_impedance()
+        d, db = complex(on - off), complex(b_on - b_off)
+        assert abs(d - db) < _SHIFT_BAR * abs(db), (radius, d, db)
+        if prev is not None:
+            assert abs(d) < 0.55 * prev, (radius, abs(d), prev)
+        prev = abs(d)
+
+
+# ---------------------------------------------------------------------------
+# G-D2 — the predicate
+# ---------------------------------------------------------------------------
+def _bad_ends(sim, mirror=False):
+    geom = sim._build_geometry()
+    lo, hi = sim._ek_reduced_ends(geom, mirror)
+    return geom, lo, hi
+
+
+@pytest.mark.parametrize(
+    "name,n_bad", [("straight", 0), ("L", 2), ("vee", 2), ("radius step", 2), ("T", 3)]
+)
+def test_gd2_the_node_predicate_marks_exactly_the_split_nodes(name, n_bad):
+    """One marked end per segment meeting the split node, and nothing else: a
+    bend and a radius step have two members, the T has three, and the straight
+    wire — whose only nodes are its own free ends and its collinear
+    equal-radius interior — has none. Free ends are never marked, which is
+    what keeps every straight deck's numbers where they were.
+    """
+    sim = SinusoidalGalerkinSolver(
+        **dict(_gd_decks(0.02)[name], feed_arclength=1.0, wavelength=_GD_LAM),
+        extended_kernel=True,
+    )
+    geom, lo, hi = _bad_ends(sim)
+    assert int(lo.sum() + hi.sum()) == n_bad, (name, lo, hi)
+    # And the ends that ARE marked all sit at the same point in space.
+    hh = 0.5 * np.asarray(geom["seg_h"])[:, None]
+    ends = np.concatenate(
+        [
+            geom["seg_centers"][lo] - hh[lo] * geom["seg_tangents"][lo],
+            geom["seg_centers"][hi] + hh[hi] * geom["seg_tangents"][hi],
+        ]
+    )
+    if ends.shape[0]:
+        assert np.allclose(ends, ends[0], atol=1e-12), (name, ends)
+
+
+@pytest.mark.parametrize("name", list(_G4_DECKS))
+def test_gd2_the_served_grounds_have_no_split_node(name):
+    """Every deck G-B4 and G-C pin is a straight wire — over PEC, over
+    refl-coef, over Sommerfeld, and the vee. Only the vee has a split node, on
+    the REAL geometry and on the MIRRORED one alike (it has no ground), so the
+    ground decks' EK-on numbers cannot move under this correction and the vee's
+    must. A ground contact is a one-segment node and stays extended, which is
+    #292's and #287's arithmetic left alone."""
+    sim = SinusoidalGalerkinSolver(
+        **dict(_G4_DECKS[name], wavelength=LAM_NEC), extended_kernel=True
+    )
+    _, lo, hi = _bad_ends(sim)
+    want = name == "vee"
+    assert bool(lo.any() or hi.any()) is want, (name, lo, hi)
+    if sim.ground_z is not None:
+        _, lo_m, hi_m = _bad_ends(sim, mirror=True)
+        assert not (lo_m.any() or hi_m.any()), (name, lo_m, hi_m)
+
+
+# ---------------------------------------------------------------------------
+# G-D3 — no split node, no correction, to the bit
+# ---------------------------------------------------------------------------
+@contextlib.contextmanager
+def _without_the_299_bracket_correction():
+    cls = SinusoidalGalerkinSolver
+    orig = cls._ek_bracket_correction_tested
+    cls._ek_bracket_correction_tested = lambda self, G, geom, k, ctx: None
+    try:
+        yield
+    finally:
+        cls._ek_bracket_correction_tested = orig
+
+
+@pytest.mark.parametrize("name", [n for n in _G4_DECKS if n != "vee"])
+def test_gd3_a_deck_without_a_split_node_is_bit_identical(name):
+    """The other half of G-D2's structural claim, measured on Z rather than on
+    the predicate: with the extended kernel ON, removing the correction
+    entirely changes nothing on a deck whose nodes all pass — not to a
+    tolerance, to the bit. That is what says #246's straight-wire, ground and
+    Sommerfeld numbers are the ones this arc inherited."""
+    kw = dict(_G4_DECKS[name], wavelength=LAM_NEC)
+    z_on, c_on = SinusoidalGalerkinSolver(
+        **kw, extended_kernel=True
+    ).compute_impedance()
+    with _without_the_299_bracket_correction():
+        z_off, c_off = SinusoidalGalerkinSolver(
+            **kw, extended_kernel=True
+        ).compute_impedance()
+    assert z_on == z_off, f"{name}: {z_on!r} vs {z_off!r}"
+    assert np.array_equal(c_on, c_off)
+
+
+def test_gd3_the_straight_dipole_is_where_it_was():
+    """The pinned value, so a future change to the correction's pair set
+    cannot quietly reach a deck it has no business on: the 16-segment straight
+    wire of `_gd_decks` at a = 0.02 shifts by −0.1434 − 1.0967j, the number
+    main gives."""
+    d = _gd_shift("straight", 0.02)
+    assert abs(d - (-0.14337 - 1.09666j)) < 5e-5, d
+
+
+# ---------------------------------------------------------------------------
+# G-D4 — the correction's divergent half is symmetric
+# ---------------------------------------------------------------------------
+def _bracket_matrix(radius, name="L"):
+    """The free-space block's correction C, before symmetrization."""
+    sim = SinusoidalGalerkinSolver(
+        **dict(_gd_decks(radius)[name], feed_arclength=1.0, wavelength=_GD_LAM),
+        extended_kernel=True,
+    )
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    corr = tuple(
+        np.zeros((ctx["w_entry"].shape[0], ctx["N"]), dtype=np.complex128)
+        for _ in range(3)
+    )
+    sim._ek_bracket_block(
+        geom,
+        sim.k,
+        ctx,
+        corr,
+        _plain_projection,
+        geom["seg_centers"],
+        geom["seg_tangents"],
+        False,
+        1.0,
+    )
+    return np.asarray(sim._scatter_coef_product(ctx, corr))
+
+
+def test_gd4_the_bracket_correction_diverges_symmetrically():
+    """The licence for `G −= ½(C + Cᵀ)`. The cap is a SOURCE-sided boundary
+    term, so C itself is not symmetric — but its divergence is, because the
+    cap is κ_P·f_i(P)·f_j(P), a rank-one outer product in the two sides'
+    current at the node. Measured on the L:
+
+        a        ‖C‖        a·‖C‖       ‖C−Cᵀ‖/‖C‖
+        0.0200   9.320e−2   1.864e−3    8.374e−3
+        0.0100   1.856e−1   1.856e−3    2.166e−3
+        0.0050   3.708e−1   1.854e−3    5.522e−4
+        0.0020   9.268e−1   1.854e−3    8.961e−5
+        0.0010   1.853e+0   1.853e−3    2.253e−5
+
+    ‖C‖ is exactly 1/a (a·‖C‖ constant to 0.6 % over a decade and a half) and
+    the asymmetry falls like a² (0.26 per halving), so halving C with its
+    transpose removes the same O(1/a) term and averages only an O(a²)
+    remainder.
+    """
+    scaled, asym = [], []
+    for radius in (0.02, 0.01, 0.005, 0.002, 0.001):
+        C = _bracket_matrix(radius)
+        norm = np.linalg.norm(C)
+        scaled.append(radius * norm)
+        asym.append(np.linalg.norm(C - C.T) / norm)
+    assert max(scaled) / min(scaled) < 1.02, scaled
+    for prev, cur in zip(asym, asym[1:]):
+        assert cur < 0.35 * prev, asym
+    assert asym[-1] < 1e-4, asym
+
+
+# ---------------------------------------------------------------------------
+# G-D5 — reciprocity
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("name", list(_gd_decks(0.02)))
+@pytest.mark.parametrize("radius", [0.02, 0.002])
+def test_gd5_reciprocity_is_unmoved_by_the_bracket_correction(name, radius):
+    """G-B2's statement on the decks the correction actually fires on.
+    ‖G−Gᵀ‖/‖G‖ with EK on against the reduced fill's, at a = 0.02 / 0.002:
+
+        straight      1.34e−12 / 6.09e−13     2.32e−12 / 2.31e−12
+        L             1.04e−10 / 6.16e−11     4.85e−11 / 5.09e−11
+        vee           3.72e−11 / 6.50e−12     4.27e−11 / 4.03e−11
+        radius step   1.14e−01 / 1.15e−01     5.85e−02 / 5.85e−02
+        T             4.17e−10 / 1.64e−10     3.10e−10 / 2.09e−10
+
+    — the free-space floor everywhere except the radius-step deck, whose 1e−1
+    is its MIXED-RADIUS reduced fill's own and moves by 1 % under the extended
+    kernel. The correction as literally spelled — the source-sided bracket
+    subtracted where the node rule says, without the transpose average — gives
+    1.6e−3 on the L and 2.9e−3 on the T instead, seven orders worse than the
+    reduced fill and the reason `_ek_bracket_correction_tested` halves C with
+    its transpose.
+    """
+    kw = dict(_gd_decks(radius)[name], feed_arclength=1.0, wavelength=_GD_LAM)
+    red = _sym_ratio(SinusoidalGalerkinSolver(**kw))
+    ext = _sym_ratio(SinusoidalGalerkinSolver(**kw, extended_kernel=True))
+    assert ext < 8.0 * red, f"{name} a={radius}: {ext:.2e} vs reduced {red:.2e}"
+    # And in absolute terms: still at the fill's own floor, not merely close
+    # to a reduced number that happens to be large.
+    assert ext < 1e-8 or name == "radius step", f"{name} a={radius}: {ext:.2e}"
+
+
+# ---------------------------------------------------------------------------
+# G-D6 — the falsifier
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("name", ["L", "radius step", "T"])
+def test_gd6_without_the_correction_these_decks_still_diverge(name):
+    """The control for all of the above: every gate here would pass vacuously
+    on a correction that never fired, so this removes it and demands the
+    defect back. δZ must GROW from a = 0.02 to a = 0.002, by 2x on the L and
+    the T and 2.2x on the radius step — the numbers from main."""
+    with _without_the_299_bracket_correction():
+        fat = abs(_gd_shift(name, 0.02))
+        thin = abs(_gd_shift(name, 0.002))
+    assert thin > 1.5 * fat, f"{name}: {fat:.3f} → {thin:.3f}"
+
+
+# ---------------------------------------------------------------------------
+# G-D7 — #287's bent deck, usable again
+# ---------------------------------------------------------------------------
+def test_gd7_the_bent_deck_of_287_is_usable_again():
+    """`_s_decks()` substituted `slanted` for #269's Gate-18 BENT deck because
+    this fill was wrong on it. Measured with the node gate in, δZ = Z(EK on) −
+    Z(EK off) on that very deck:
+
+        ground        galerkin           bspline            point-matched
+        PEC           +11.52 −  4.97j    +11.94 −  6.50j    +12.81 −  5.71j
+        somm soil     +13.04 −  2.41j    +13.33 −  3.81j    +14.42 −  2.68j
+
+    — 11.7 % / 10.3 % from the B-spline family and 10.6 % / 9.6 % from the
+    point-matched one, inside #249 §7's 25 % cross-basis bar. On main the same
+    deck reads +50.86 + 215.97j and −12.70 + 225.97j: a shift 30x too big,
+    with the wrong sign on the reactance.
+    """
+    bend = np.array([[0.0, 0.0, 0.3], [2.0, 0.0, 1.5], [3.6, 1.1, 1.5]])
+    h_bend = float(np.linalg.norm(bend[1] - bend[0])) / 6
+    deck = dict(
+        wires=[bend],
+        n_per_edge_per_wire=[[6, 5]],
+        nsegs=11,
+        wire_radius=0.08,
+        feed_arclength=h_bend * 3.5,
+        ground_z=0.0,
+        wavelength=6.0,
+    )
+    grounds = ({}, dict(ground_eps=_S_EPS["soil"], ground_model="sommerfeld"))
+    for ground in grounds:
+        shifts = {}
+        for tag, cls, extra in (
+            ("gal", SinusoidalGalerkinSolver, {}),
+            ("bsp", BSplineSolver, dict(degree=2, feed_model="segment")),
+            ("pm", SinusoidalSolver, {}),
+        ):
+            off, _ = cls(**deck, **ground, **extra).compute_impedance()
+            on, _ = cls(
+                **deck, **ground, **extra, extended_kernel=True
+            ).compute_impedance()
+            shifts[tag] = complex(on) - complex(off)
+        for other in ("bsp", "pm"):
+            rel = abs(shifts["gal"] - shifts[other]) / abs(shifts[other])
+            assert rel < _SHIFT_BAR, (ground, other, rel, shifts)

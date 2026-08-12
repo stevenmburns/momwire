@@ -1826,6 +1826,40 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ek=ek,
         )
 
+    @staticmethod
+    def _pair_geometry(obs_c, obs_t, a, src_c, src_t):
+        """The (observer, source) frame every Eqs 76-79 evaluation starts from:
+        `(z_eval, rho_eval, rho_vec, td, rho_proj_factor)`, each broadcast to
+        whatever shape the position/tangent arguments broadcast to.
+
+        Lifted verbatim out of `_field_components_bcast` (its only caller until
+        momwire#299) so that the Galerkin fill's post-fill end-bracket
+        correction — which has to evaluate a piece of the SAME kernel at the
+        SAME pairs, and whose whole job is to cancel a term the fill already
+        added — reads the frame off one spelling instead of a transcription of
+        it. Nothing here depends on the source shape or on the kernel choice.
+        """
+        # Pairwise separation obs - src; shape is whatever the two broadcast to.
+        rvec = obs_c - src_c
+        t_src = src_t
+        t_obs = obs_t
+
+        z_eval = np.einsum("...d,...d->...", rvec, t_src)
+        # Perpendicular component:
+        rho_vec = rvec - z_eval[..., None] * t_src  # (M, N, 3)
+        rho_axis = np.linalg.norm(rho_vec, axis=-1)  # (M, N)
+        rho_eval = np.sqrt(rho_axis * rho_axis + a * a)  # (M, N), >= a
+
+        # Tangent dot products; t_obs is shape (M, 1, 3), broadcasting
+        # handles the singletons.
+        td = (t_obs * t_src).sum(axis=-1)  # (M, N)
+        # rho_vec · t_obs at the observer (rho_vec is the perpendicular
+        # vector from source axis to obs-axis center)
+        rho_dot_tobs = (rho_vec * t_obs).sum(axis=-1)  # (M, N)
+        # NEC's prescription: tangential E_ρ component is (ρ·ŝ)/ρ' · E_ρ.
+        rho_proj_factor = rho_dot_tobs / rho_eval  # (M, N)
+        return z_eval, rho_eval, rho_vec, td, rho_proj_factor
+
     def _field_components_bcast(
         self, k, obs_c, obs_t, a, src_c, src_t, src_hh, cos_shape="cos", ek=None
     ):
@@ -1879,25 +1913,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if cos_shape not in ("cos", "cos-1"):
             raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
-        # Pairwise separation obs - src; shape is whatever the two broadcast to.
-        rvec = obs_c - src_c
-        t_src = src_t
-        t_obs = obs_t
-
-        z_eval = np.einsum("...d,...d->...", rvec, t_src)
-        # Perpendicular component:
-        rho_vec = rvec - z_eval[..., None] * t_src  # (M, N, 3)
-        rho_axis = np.linalg.norm(rho_vec, axis=-1)  # (M, N)
-        rho_eval = np.sqrt(rho_axis * rho_axis + a * a)  # (M, N), >= a
-
-        # Tangent dot products; t_obs is shape (M, 1, 3), broadcasting
-        # handles the singletons.
-        td = (t_obs * t_src).sum(axis=-1)  # (M, N)
-        # rho_vec · t_obs at the observer (rho_vec is the perpendicular
-        # vector from source axis to obs-axis center)
-        rho_dot_tobs = (rho_vec * t_obs).sum(axis=-1)  # (M, N)
-        # NEC's prescription: tangential E_ρ component is (ρ·ŝ)/ρ' · E_ρ.
-        rho_proj_factor = rho_dot_tobs / rho_eval  # (M, N)
+        z_eval, rho_eval, rho_vec, td, rho_proj_factor = self._pair_geometry(
+            obs_c, obs_t, a, src_c, src_t
+        )
 
         # Source half-length, materialized at the full broadcast shape so the
         # `H[..., None]` source-quadrature axis below has somewhere to land.
@@ -2504,6 +2522,103 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             sw = w if s is None else s * w
             out[f"Ez_{name}"] = gain * np.einsum("...q,...q->...", sw, l_z)
             out[f"Erho_{name}"] = gain * np.einsum("...q,...q->...", sw, l_r)
+        return out
+
+    def _ek_end_bracket_fields(self, k, H, z, rho, src_a, sign, cos_shape="cos-1"):
+        """One END BRACKET of `_folded_ek_delta_fields`' operator, in closed
+        form — the boundary term of its integration by parts in ξ
+        (momwire#299).
+
+        Same six per-shape tables, same broadcasting contract and same
+        arguments as `_folded_ek_delta_fields`, except for `sign`: +1 selects
+        the source segment's ξ = +H end, −1 its ξ = −H end, and the returned
+        tables carry that end's share of the bracket ALONE (no quadrature, no
+        smooth remainder). Adding both ends' tables to the smooth integrals
+        below reproduces the full delta to 3e-13 relative on every table.
+
+        The decomposition
+        -----------------
+        ζ = z − ξ, so ∂/∂ξ = −∂/∂ζ = −∂/∂z on W, and integrating the delta's
+        two field operators by parts once in ξ gives
+
+            E_z[s] = −pref_z ( [ s·∂_ξW − s′·W ]_{−H}^{+H}
+                               + ∫ (k²s + s″) W dξ )
+            E_ρ[s] = −pref_z ( −[ s·∂_ρW ]_{−H}^{+H} + ∫ s′·∂_ρW dξ )
+
+        with W = a²(g′ + ρ²g″) the delta kernel (*) of
+        `_folded_ek_delta_fields` and
+
+            ∂_ξW = −2ζ·a²(g″ + ρ²g‴),    ∂_ρW = 2ρ·a²(2g″ + ρ²g‴).
+
+        Why the bracket is worth naming
+        -------------------------------
+        It is the whole divergence. At the observer radii a matrix fill uses
+        (ρ = a on an eligible pair) the s·∂_ξW cap integrates over an adjacent
+        test segment to a_src²/ρ³ = **O(1/a)**, while W itself integrates to
+        O(1) — measured 1.19e4 against 23.9 at a = 0.002, and 99.8 % of the
+        cap comes from within 10 a of the segment end. Two such caps meeting
+        at an interior node cancel identically (the source current and its
+        derivative are continuous there and the two ends carry opposite
+        `sign`), which is why a fill that extends BOTH sides of every node is
+        healthy and one that extends only one side is not — momwire#299's
+        defect, and `SinusoidalGalerkinSolver._ek_bracket_correction`'s reason
+        for calling this.
+
+        `cos_shape` picks the third source shape exactly as
+        `_folded_ek_delta_fields` does; the shape values are evaluated AT the
+        end, with the folded one spelled pointwise as −2·sin²(kξ/2).
+        """
+        if cos_shape not in ("cos", "cos-1"):
+            raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
+        xi_end = sign * np.asarray(H, dtype=float)
+        zeta = np.asarray(z) - xi_end
+        rr = np.asarray(rho)
+        R = np.sqrt(rr * rr + zeta * zeta)
+
+        # g′ … g‴ of the reduced kernel in u = R², named step by step exactly
+        # as in `_folded_ek_delta_fields` (same reverse Bessel polynomials,
+        # same association) so the two spellings of the same kernel cannot
+        # drift apart.
+        x = 1j * (k * R)
+        x2 = x * x
+        x3 = x2 * x
+        a1 = 1.0 + x
+        a2 = 3.0 + 3.0 * x + x2
+        a3 = 15.0 + 15.0 * x + 6.0 * x2 + x3
+        inv2 = 1.0 / (R * R)
+        base = np.exp(-1j * (k * R)) / R
+        g1 = -0.5 * (base * a1) * inv2
+        g2 = 0.25 * (base * a2) * (inv2 * inv2)
+        g3 = -0.125 * (base * a3) * (inv2 * inv2 * inv2)
+
+        rho2 = rr * rr
+        w_val = g1 + rho2 * g2  # W / a²
+        dw_dxi = (-2.0 * zeta) * (g2 + rho2 * g3)  # ∂_ξW / a²
+        dw_drho = (2.0 * rr) * (2.0 * g2 + rho2 * g3)  # ∂_ρW / a²
+
+        # −pref_z·a², the same one multiplication that carries
+        # `_folded_ek_delta_fields`' exact collapse at a = 0.
+        pref = -1j * self.eta / (4.0 * np.pi * k)
+        gain = pref * (src_a * src_a) * sign
+
+        kxi = k * xi_end
+        s_sin = np.sin(kxi)
+        c_cos = np.cos(kxi)
+        if cos_shape == "cos":
+            s_cos, sp_cos = c_cos, -k * s_sin
+        else:
+            # The folded shape POINTWISE — never cos − 1 by subtraction.
+            s_cos, sp_cos = -2.0 * np.sin(0.5 * kxi) ** 2, -k * s_sin
+        shapes = {
+            "const": (np.ones_like(kxi), None),
+            "sin": (s_sin, k * c_cos),
+            "cos": (s_cos, sp_cos),
+        }
+        out = {}
+        for name, (s, sp) in shapes.items():
+            ez = s * dw_dxi if sp is None else s * dw_dxi - sp * w_val
+            out[f"Ez_{name}"] = gain * ez
+            out[f"Erho_{name}"] = -gain * (s * dw_drho)
         return out
 
     # ------------------------------------------------------------------
