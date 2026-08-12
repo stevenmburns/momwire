@@ -311,6 +311,58 @@ def test_sg_apex_survives_the_extended_kernel():
 
 
 # ---------------------------------------------------------------------------
+# ground models
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "ground_kw",
+    [
+        {"ground_z": 0.0},
+        {"ground_z": 0.0, "ground_eps": (13, 0.005)},
+        {
+            "ground_z": 0.0,
+            "ground_eps": (13, 0.005),
+            "ground_model": "sommerfeld",
+        },
+    ],
+    ids=["pec", "refl-coef", "sommerfeld"],
+)
+def test_node_gap_runs_over_every_ground_model(ground_kw):
+    """A node gap rides the ordinary span — no node-charge machinery — so
+    it inherits each family's full ground roster, with NONE of the
+    junction-port ground caveats (SG junction ports refuse finite
+    grounds; SG node gaps don't have to). Pinned as: both families
+    solve, agree within the basis gap, and actually saw the ground
+    (measured 2026-08-12: PEC moves Z by ~7 Ω vs free space here)."""
+    import math
+
+    ang, arm, height = math.radians(30), 2.6, 8.0
+    apex = (0.0, 0.0, height)
+    e1 = (0.0, arm * math.cos(ang), height - arm * math.sin(ang))
+    e2 = (0.0, -arm * math.cos(ang), height - arm * math.sin(ang))
+    kw = dict(
+        wires=[[apex, e1], [apex, e2]],
+        n_per_edge_per_wire=[16, 16],
+        feeds=[],
+        junctions=[[(0, "start"), (1, "start")]],
+        node_gaps=[(0, "start", 1.0 + 0j)],
+        wavelength=11.1,
+        wire_radius=1e-3,
+    )
+
+    def _solve(cls, extra):
+        z, _ = cls(**kw, **extra).compute_impedance()
+        return complex(np.atleast_1d(z)[0])
+
+    z_free = _solve(BSplineSolver, {"degree": 2})
+    z_bs = _solve(BSplineSolver, {"degree": 2, **ground_kw})
+    z_sg = _solve(SinusoidalGalerkinSolver, ground_kw)
+    assert abs(z_bs - z_free) > 2.0  # the ground is actually in the answer
+    assert abs(z_bs - z_sg) < 1.0, f"bspline {z_bs:.2f} vs SG {z_sg:.2f}"
+
+
+# ---------------------------------------------------------------------------
 # the degree-3 star
 # ---------------------------------------------------------------------------
 
