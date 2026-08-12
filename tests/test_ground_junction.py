@@ -597,3 +597,67 @@ def test_292_the_delta_collapses_with_the_tube_radially_included():
     )
     ratio = small / big
     assert ratio < 0.03, f"a->0 collapse ratio {ratio:.4f}, expected ~(1/10)^2"
+
+
+# ----------------------------------------------------------------------
+# What is left after #282: the contact solve has no mesh limit (#291)
+# ----------------------------------------------------------------------
+
+
+def test_291_contact_over_finite_ground_still_diverges_slowly():
+    """#291 reframed with measurements: the post-#282 sinusoidal contact
+    solve over a finite ground has NO mesh limit — it walks as ~N^0.4
+    (increment magnitude grows ~1.3x per mesh doubling, measured out to
+    NS = 1281), on BOTH sinusoidal schemes, with or without the
+    Sommerfeld remainder, and under refl-coef too. The issue's
+    "half-strength ground shift" is this walk sampled at NS = 81.
+
+    Localization (2026-08-12, the #291 thread): an independent
+    fine-quadrature implementation of the no-end-charge C2-image model
+    reproduces the code's fill to machine precision at fine mesh — the
+    #282/#292 subtraction class is COMPLETE, and the walk is intrinsic
+    to collocating/Galerkin-testing the piecewise-sinusoid basis at the
+    contact node, where the interface current is not representable. A
+    real fix is a contact-region scheme change (e.g. a singular contact
+    atom), not another correction column — and it must make THIS test
+    fail loudly: the increments below stop growing and the total drift
+    collapses to the b-spline reference's.
+    """
+    lam = 299.792458 / 30.0
+    h = lam / 4
+
+    def z(cls, ns, **over):
+        kw = dict(
+            wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, h]])],
+            n_per_edge_per_wire=[[ns]],
+            nsegs=ns,
+            wire_radius=0.0005,
+            feed_arclength=(h / ns) * 0.5,
+            ground_z=0.0,
+            wavelength=lam,
+            ground_eps=(13.0, 0.005),
+            ground_model="sommerfeld",
+        )
+        kw.update(over)
+        return complex(cls(**kw).compute_impedance()[0])
+
+    # The mixed-potential reference barely moves over the same span.
+    drift_b = abs(
+        z(BSplineSolver, 321, degree=2, feed_model="segment")
+        - z(BSplineSolver, 81, degree=2, feed_model="segment")
+    )
+    assert drift_b < 0.5, f"bspline reference moved {drift_b:.3f}"
+
+    zs = [z(SinusoidalSolver, ns) for ns in (81, 161, 321, 641)]
+    incs = [abs(b - a) for a, b in zip(zs, zs[1:])]
+    # Measured 2026-08-12: 0.612, 0.832, 1.129 — growing ~1.36x per rung.
+    total = abs(zs[-1] - zs[0])
+    assert total > 1.5, (
+        f"contact walk vanished (total drift {total:.3f} over NS 81->641) — "
+        "if the sinusoidal contact now converges, celebrate: re-derive this "
+        "test and the 0.2<gap<1.0 gate around the agreement (#291)"
+    )
+    assert all(b > 1.1 * a for a, b in zip(incs, incs[1:])), (
+        f"the walk stopped accelerating ({incs}) — the divergence class "
+        "changed; re-measure #291"
+    )
