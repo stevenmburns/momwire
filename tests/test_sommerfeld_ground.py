@@ -243,6 +243,27 @@ def test_dipole_tracks_gn2(frac, ground, degree):
     assert abs(z - gn2) < 3.0
 
 
+def test_dipole_tracks_gn2_via_tensor_route_fallback(monkeypatch):
+    """#273: the same nec2c gn2 gate as `test_dipole_tracks_gn2` at
+    frac=0.2, ground (13.0, 0.005), degree 2 — forced onto the
+    no-accelerator tensor-route image fill (`_build_J_image_blocks` feeding
+    `_ground_finite_Z`'s sommerfeld branch: the constant-C2 weighted image
+    plus `_Z_sommerfeld_remainder`) instead of the chunked accumulator this
+    box's accelerated build always takes. Before this test, Sommerfeld's
+    fallback route had zero physics-oracle coverage — only the generic
+    route-equality pin in test_momwire.py touched it at all."""
+    import momwire.bspline as bmod
+
+    if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("weighted windowed Z assembly accelerator not built")
+    monkeypatch.setattr(bmod, "_HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL", False)
+    gn2 = GOLDEN[("dipole", 0.2, 13.0, 0.005)]["finite"]
+    z = _solve(
+        "dipole", 0.2, degree=2, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
+    )
+    assert abs(z - gn2) < 3.0
+
+
 @pytest.mark.parametrize("degree", [1, 2])
 @pytest.mark.parametrize("frac", [0.02, 0.2])
 def test_inverted_l_tracks_gn2(frac, degree):
