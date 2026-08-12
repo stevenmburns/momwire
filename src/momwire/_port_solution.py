@@ -23,8 +23,11 @@ class PortSolution:
     """Everything one multi-port solve produced, from one fill + factorisation.
 
     Ports are ordered exactly as the solver's own port list: the configured
-    gap feeds first, then `junction_ports`, then (where the family has them)
-    `node_ports`. That is the same order `compute_y_matrix` indexes.
+    gap feeds first, then `junction_ports`, then the series node ports —
+    `node_gaps` on the B-spline families (#305), `node_ports` then
+    `node_gaps` on the sinusoidal-Galerkin family, where wire-end-spelled
+    gaps normalize onto the node-port list after any explicit bipartition
+    entries. That is the same order `compute_y_matrix` indexes.
 
     Attributes
     ----------

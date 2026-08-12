@@ -90,3 +90,46 @@ def test_both_spellings_track_the_radius_together():
     dz_bridge = _z_bridge(5e-4, 2) - _z_bridge(1e-3, 2)
     assert -17.0 < dz_single.imag < -13.0
     assert abs(dz_bridge - dz_single) < 1.0
+
+
+def _z_apex(radius, degree):
+    """The THIRD spelling (#305): split at L/4 into two wires and feed
+    the junction itself with a series node gap — no bridge wire at all."""
+    a = L / 4
+    s = BSplineSolver(
+        wires=[
+            np.array([(0.0, 0.0, 0.0), (0.0, 0.0, a)]),
+            np.array([(0.0, 0.0, a), (0.0, 0.0, L)]),
+        ],
+        n_per_edge_per_wire=[[N // 4], [3 * N // 4]],
+        feeds=[],
+        junctions=[[(0, "end"), (1, "start")]],
+        node_gaps=[(0, "end", 1.0 + 0j)],
+        wavelength=WAVELENGTH,
+        wire_radius=radius,
+        degree=degree,
+    )
+    z, _ = s.compute_impedance()
+    return complex(np.atleast_1d(z)[0])
+
+
+@pytest.mark.parametrize("radius", [1e-3, 5e-4])
+@pytest.mark.parametrize("degree", [1, 2])
+def test_apex_fed_split_matches_single_wire(radius, degree):
+    """#305's first validation bullet: the apex-fed split must reproduce
+    the single-wire gap at both radii of the #300 confusion, any degree.
+    Measured 2026-08-12: ~0.03 Ω at d=1, ~0.7 Ω at d=2 (see the d=1 pin
+    below for why the tent case is nearly exact)."""
+    zs = _z_single(radius, degree)
+    za = _z_apex(radius, degree)
+    assert abs(za - zs) < 2.0, f"single {zs:.3f} vs apex {za:.3f}"
+
+
+def test_apex_identity_is_nearly_exact_at_degree_one():
+    """At d=1 the apex node gap IS the single wire's knot-fed tent basis:
+    the two directional half-tents under the KCL row reassemble the tent
+    the single wire feeds, so the identity is discretization-exact up to
+    constraint elimination (measured 0.027 Ω; the d=2 case carries a real
+    ~0.7 Ω march term from the split's C0 node). Pinned so the exactness
+    can't silently degrade into 'within the 2 Ω gate'."""
+    assert abs(_z_apex(1e-3, 1) - _z_single(1e-3, 1)) < 0.1
