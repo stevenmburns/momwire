@@ -437,16 +437,45 @@ a 1e-8 effect anyway, the decomposition is noise-limited. That is a property
 of reduced-plus-delta, not of the quadrature, and it bounds how thin a wire
 the decomposition can resolve an EK correction for.
 
-**What is served, what refuses.** Free space, the PEC image and the
-reflection-coefficient image, plus the graded near-pair correction on each
-(the Fresnel dyad is a per-pair weight applied AFTER the field tables, so
-the delta rides through it exactly as the reduced field does). The
-junction/node lumped-charge blocks stay reduced — their source is a point
-charge at a node, which has no tube to average over. The Sommerfeld
-remainder under EK refuses (its delta story is a separate validation arc —
-momwire#287); `BSplineSolver` serves every ground under EK with the
-remainder deliberately reduced on a measured O((a/2h)²) argument
-(momwire#269, `bspline.py` class docstring). Measured results — the nec2c
+**What is served, what stays reduced.** Every ground model the solver has
+(momwire#287): free space, the PEC image, the reflection-coefficient image
+and the Sommerfeld ground's C2-scaled exact image, plus the graded near-pair
+correction on each. Neither finite ground needs anything kernel-specific —
+the Fresnel dyad is a per-pair weight applied AFTER the field tables and the
+C2 factor is one complex scalar on the whole image contribution, so the delta
+rides through both exactly as the reduced field does. The junction/node
+lumped-charge blocks stay reduced: their source is a point charge at a node,
+which has no tube to average over.
+
+The Sommerfeld ground-wave REMAINDER (eqs 143-147,
+`_tested_sommerfeld_remainder`) also stays reduced, and that is the one place
+in the fill where two kernels meet inside one ground model. It is deliberate
+and measured, not an omission, and it reaches the same conclusion
+`BSplineSolver` reached in momwire#269 under a different test rule. EK is an
+O((a/R)²) tube correction; the remainder's source is the ground reflection,
+so its R is the IMAGE distance r₁ ≥ 2h for a wire at height h and the
+un-applied correction is O((a/2h)²). Measured by building the extended
+remainder outright — the same `remainder_field_proj` field averaged over a
+ring of radius `a` about the source axis — and re-solving, |ΔZ|/|Z| under
+average soil / sea water:
+
+| deck (LAM = 10 m, ground_z = 0) | a | min r₁ | 2h | soil | sea |
+|---|---|---|---|---|---|
+| quarter-wave monopole standing IN the plane | 0.020 | 0.0158 | 0.000 | 3.50e-3 | 4.49e-3 |
+| the same monopole lifted to h = 0.4 | 0.020 | 0.8158 | 0.800 | 9.50e-7 | 9.25e-8 |
+| horizontal wire at h = 1.5 | 0.050 | 3.0000 | 3.000 | 3.96e-5 | 4.20e-6 |
+| slanted fat wire, h = 0.3 to 1.5 | 0.080 | 0.6273 | 0.600 | 1.02e-5 | 1.33e-6 |
+
+converged in the ring count (4, 8 and 16 nodes agree to the digits shown) and
+O(a²) as the expansion says — on the contact deck over soil, a = 0.04 / 0.02 /
+0.01 / 0.005 gives 8.51e-3 / 3.50e-3 / 1.17e-3 / 3.29e-4, ratios 2.4 / 3.0 /
+3.6 → 4. Read it as: clear of the plane the mixture costs ≤ 4e-5, three orders
+below the EK shift the image blocks DO carry on those decks (2.2e-2 to
+2.4e-2); at a ground CONTACT it costs 3.5-4.5e-3, an order below the deck's
+cross-basis Z gap (3.6 %) but 55-66 % of its own EK shift, which is the one
+place the mixture is visible — and since refl-coef is invalid at a contact
+(#153), Sommerfeld is the only model available there. The gate is G-S1 of
+`tests/test_extended_kernel_galerkin.py`. Other measured results — the nec2c
 ladder shift, the symmetry ratios, the thin-rung deviation — are §20 of
 `docs/sinusoidal-galerkin-instrument-report.md`.
 

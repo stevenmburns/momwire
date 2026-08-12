@@ -507,27 +507,49 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         over a source tube of radius a (Eqs 84-98 of the theory manual), which
         is what makes fat conductors — Δ/a below ~3 — answerable at all.
 
-        **What is served.** The free-space block, the PEC image and the
-        reflection-coefficient image, plus the graded near-pair correction on
-        every one of them. Mechanically the reduced fill is untouched: #205's
-        folded closed forms are computed exactly as they always were and
-        `SinusoidalSolver._folded_ek_delta_fields` ADDS a Gauss-Legendre
-        quadrature of the smooth extended-minus-reduced delta on the eligible
-        pairs. Nothing is subtracted anywhere, so the fold's cancellation
-        discipline never comes up, and an ineligible pair comes back bit-for-
-        bit the reduced fill's.
+        **What is served.** Every ground model this solver has (momwire#287):
+        the free-space block, the PEC image, the reflection-coefficient image
+        and the Sommerfeld ground's C2-scaled exact image, plus the graded
+        near-pair correction on every one of them. Mechanically the reduced
+        fill is untouched: #205's folded closed forms are computed exactly as
+        they always were and `SinusoidalSolver._folded_ek_delta_fields` ADDS a
+        Gauss-Legendre quadrature of the smooth extended-minus-reduced delta
+        on the eligible pairs. Nothing is subtracted anywhere, so the fold's
+        cancellation discipline never comes up, and an ineligible pair comes
+        back bit-for-bit the reduced fill's.
 
-        **What refuses.** `ground_model="sommerfeld"` with a ground plane —
-        the smooth ground-wave remainder is a separate evaluator with a
-        separate derivation, and mixing an extended image with a reduced
-        remainder inside one ground model would be a silent half-answer. And
-        `near_correction=False`, because under EK the near path is not a
-        refinement but where the on-segment pairs are computed: the delta's
-        structure is a spike of width `a` around each source-segment END, and
-        it is the near path that passes the dense quadrature resolving it.
-        The junction/node-port lumped-charge blocks stay reduced, and that is
-        not a gap: their source is a point charge at a node, which has no
-        tube to average over.
+        **What stays REDUCED** is the Sommerfeld ground-wave remainder
+        (`_tested_sommerfeld_remainder` — NEC's eqs 143-147, the smooth
+        correction left after the C2-scaled exact image). That is deliberate
+        and measured, not an omission, and it is `BSplineSolver`'s answer
+        since #269 arrived at independently under this fill's own test
+        quadrature. EK is an O((a/R)²) tube correction and the remainder's
+        source is the ground reflection, so R is the IMAGE distance
+        r₁ ≥ 2h for a wire at height h and the un-applied correction is
+        O((a/2h)²). Measured by building the extended remainder outright —
+        the same `remainder_field_proj` field azimuthally averaged over a
+        ring of radius `a` about the source axis — and re-solving, |ΔZ|/|Z|
+        over soil / sea: 9.5e-7 / 9.3e-8 for a monopole clear of the plane,
+        4.0e-5 / 4.2e-6 horizontal, 1.0e-5 / 1.3e-6 slanted, i.e. ≤ 4e-5
+        anywhere the wire is clear of the plane — three orders below the EK
+        shift the image blocks DO carry on those decks (2.2e-2 to 2.4e-2)
+        and two below this basis's own cross-basis gap. AT GROUND CONTACT,
+        where the (a/2h)² estimate degenerates (r₁ → 0) and only the
+        remainder's smoothness bounds it, the cost is 3.5e-3 / 4.5e-3: still
+        an order below the cross-basis Z gap on that deck (3.6 %), but 55-66 %
+        of the deck's own EK shift, so it is the one place the mixture is
+        visible — and refl-coef is invalid at a contact (#153), so Sommerfeld
+        is the only model there. The measurement is `test_extended_kernel_
+        galerkin.py`'s G-S1, with the O(a²) ladder and the ring-count
+        convergence beside it.
+
+        **What refuses.** `near_correction=False`, because under EK the near
+        path is not a refinement but where the on-segment pairs are computed:
+        the delta's structure is a spike of width `a` around each
+        source-segment END, and it is the near path that passes the dense
+        quadrature resolving it. The junction/node-port lumped-charge blocks
+        stay reduced, and that is not a gap: their source is a point charge
+        at a node, which has no tube to average over.
 
         **What it costs in accuracy at the thin end.** Reduced-plus-delta is
         a near-cancelling decomposition — the two kernels agree away from the
@@ -631,30 +653,6 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         **kwargs,
     ):
         super().__init__(**kwargs)
-        if (
-            self.extended_kernel
-            and self.ground_z is not None
-            and self.ground_model == "sommerfeld"
-        ):
-            # momwire#246 extends the free-space block, the PEC image and the
-            # reflection-coefficient image — every block whose field is the
-            # Eqs 76-79 build, where the delta rides the same regularized R the
-            # reduced closed forms already share. The Sommerfeld REMAINDER is a
-            # different evaluator (an interpolated ground-wave correction on top
-            # of the C2-scaled image, `_tested_sommerfeld_remainder`), so its
-            # extended twin is its own derivation and its own validation story.
-            # Serving it reduced while the image block is extended would be a
-            # silent mixture of two kernels inside one ground model, so refuse
-            # instead — loudly, and naming what to do about it.
-            raise NotImplementedError(
-                "extended_kernel=True with ground_model='sommerfeld' is not "
-                "supported on SinusoidalGalerkinSolver: the extended kernel is "
-                "wired through the free-space, PEC-image and "
-                "reflection-coefficient blocks, but the Sommerfeld remainder "
-                "is still the reduced-kernel evaluator (momwire#246). Use "
-                "ground_model='refl-coef' with extended_kernel, or drop "
-                "extended_kernel for the reduced-kernel Sommerfeld fill."
-            )
         self.n_qp_test = int(n_qp_test)
         self.n_qp_near = int(n_qp_near)
         self.n_qp_node = int(n_qp_node)
@@ -1794,7 +1792,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         reflection-coefficient block needs nothing further — its Fresnel dyad
         is a per-segment-pair weight applied to the field tables AFTER the
         kernel, so the delta rides through it linearly, exactly as the reduced
-        field does. Sommerfeld never gets here under EK: `__init__` refuses.
+        field does. Neither does the Sommerfeld block's C2 scaling, which is
+        one complex number times the whole image contribution (momwire#287).
+        The Sommerfeld REMAINDER, the second half of that model, stays reduced
+        on the measured argument in the class docstring.
         """
         src_c_img, src_t_img = self._image_source_centers_tangents(geom)
         if self.ground_eps is None:
@@ -1835,6 +1836,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         `test_g4_sommerfeld_symmetry_near_the_plane_is_source_quadrature_limited`
         identifies by showing that refining the test rule does not move it
         while refining the source rule drives it to the free-space floor.
+
+        No extended kernel either, and that one is a DECISION rather than a
+        consequence (momwire#287). With `extended_kernel=True` the C2-scaled
+        image half of this ground carries the delta like any other image
+        block, while this remainder keeps the reduced-kernel field — the
+        source stays a filament on the axis instead of a tube of radius `a`.
+        EK is an O((a/R)²) correction and this evaluator's R is the IMAGE
+        distance r₁ ≥ 2h, so the term left out is O((a/2h)²) and measures
+        ≤ 4e-5 relative on |Z| for any wire clear of the plane, 3.5-4.5e-3 at
+        a ground contact where that estimate degenerates. The class docstring
+        carries the table and G-S1 in `tests/test_extended_kernel_galerkin.py`
+        gates it, by building the extended remainder outright (this same field
+        azimuthally averaged over the source tube) and re-solving.
         """
         N = ctx["N"]
         nq = ctx["nq"]
