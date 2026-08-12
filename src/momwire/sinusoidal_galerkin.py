@@ -570,6 +570,26 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         perpendicular ground contacts (via the mirrored source), and is
         strictly more conservative at bends, radius steps and K ≥ 3 junctions.
 
+        **Where the pair rule is not enough (momwire#299).** One piece of the
+        delta is not a pair object: its END BRACKET, the boundary term of the
+        integration by parts in ξ, whose contribution to a matrix entry is
+        O(1/a) per source end. The two brackets meeting at an interior node
+        cancel — current and charge are continuous through it and the two ends
+        carry opposite signs — but only if BOTH sides are extended, and the
+        pair rule's eligible set stops AT a split node. One uncancelled cap
+        made the fill DIVERGE as the wire thinned: δZ on an L ran
+        −21.5 − 240.5j at a = 0.02 and −24.1 − 526.7j at a = 0.002 where
+        `BSplineSolver` gave −0.035 − 0.657j and −0.002 − 0.041j. So the
+        brackets are gated separately, per SOURCE END, by a NODE predicate
+        (`_ek_reduced_ends`: extend at node P iff every segment meeting there
+        shares one axis line and one radius — NEC's IND = 0 read as a property
+        of the node, hence observer-independent) and taken back off by
+        `_ek_bracket_correction_tested`, which symmetrizes what it removes so
+        that reciprocity does not move. Straight decks, free ends and ground
+        contacts are untouched to the bit; the four repaired node kinds — bend,
+        shallow vee, collinear radius step, K = 3 junction — now collapse at
+        the straight dipole's own rate (worst 0.45 per halving of a).
+
         The delta is numpy-only for now: with EK on, the fused C++ far fill is
         skipped (it takes no eligibility mask) until momwire#246 unit C lands
         its twin, so an EK-on fill costs what the pre-#194 fill did.
@@ -691,6 +711,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         self._port_basis_cache = None
         # geom → {mirror: (group_obs, group_src)} for the EK pair rule.
         self._cached_ek_groups = None
+        # geom → {mirror: (bad_lo, bad_hi)} for the EK end-bracket node rule.
+        self._cached_ek_bad_ends = None
 
     # ------------------------------------------------------------------
     # Node ports (M5b formulation (a)) — a delta-gap EMF AT a junction node
@@ -1447,6 +1469,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         junctions, where NEC still extends the cross-arm pairs — worth ~1 % of
         Z at Δ/a = 2 and O(h) under refinement (#249 §4.3).
 
+        What this mask must NOT be asked to decide is the delta's END
+        BRACKET: that term is O(1/a) per source end and cancels only across a
+        whole node, so truncating the eligible set at a node leaves it
+        uncancelled and the fill divergent as the wire thins.
+        `_ek_reduced_ends` scores that one decision per NODE instead, and
+        `_ek_bracket_correction_tested` takes the difference back off
+        (momwire#299). Everything this mask still governs is the delta's
+        SMOOTH half, which is O(a²) and harmless however it is truncated.
+
         `n_panels` is the delta quadrature's density, and it is the second
         tier of the same near/far split the test quadrature already runs on.
         An eligible pair whose observer can sit ON the source segment needs the
@@ -1467,6 +1498,235 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # groups` emits none today.
         eligible = (gi == gj) & (gi >= 0)
         return _EKPairs(self._seg_radius(geom)[n_idx], eligible, n_panels)
+
+    def _ek_reduced_ends(self, geom, mirror):
+        """The NODE predicate of momwire#299, scored per SOURCE segment end:
+        `(bad_lo, bad_hi)`, boolean (N,), True where the end sits on a node
+        whose extended-kernel cap must be REDUCED away again.
+
+        The predicate itself is the positive one — extend the cap at node P iff
+        every segment meeting at P shares one axis line and one radius, which
+        is NEC's IND = 0 read as a property of the NODE rather than of the
+        (observer, source) pair — so these arrays are its complement:
+
+            bad = (K ≥ 3 at this node) OR (some segment at it carries a
+                   different `_ek_axis_labels` group)
+
+        A free end has one segment at its node and is therefore never bad, and
+        neither is a ground contact (`ground_minus`/`ground_plus`, no
+        neighbour edge): both keep exactly the caps #246 gave them, which is
+        what makes a straight deck and every ground deck bit-identical under
+        this correction. K ≥ 3 is `count ≥ 2` because momwire emits K(K−1)
+        neighbour edges at a K-member junction — the same reading of the same
+        tables `SinusoidalSolver._ek_gating` makes of NEC's reciprocal ICON
+        test — and it is redundant with the label test on any realizable
+        junction (three segments meeting at a point cannot pairwise share one
+        line without overlapping); it is spelled anyway because NEC's rule is
+        the topological one and this is the place that claims to reproduce it.
+
+        Why a node property and not a pair property. The end bracket
+        (`SinusoidalSolver._ek_end_bracket_fields`) is O(1/a) and the two caps
+        meeting at an interior node cancel each other; #246's per-PAIR
+        eligibility truncates the extended set AT a node, leaving one cap
+        uncancelled and the fill divergent as a → 0 (momwire#299). Scored per
+        node the decision is observer-independent, hence symmetric, hence
+        harmless to ‖G−Gᵀ‖ — which is the one property that made #246 refuse
+        to transplant NEC's per-SOURCE-end gating in the first place.
+
+        `mirror=True` scores the MIRRORED source geometry, whose labels are
+        `_ek_axis_labels(geom, True)`'s source half. Mirroring is an isometry
+        and commutes with the ξ = ±H end convention (the ξ = +H end of the
+        mirrored segment is the mirror of the real one's), so the geometry's
+        own neighbour tables carry over unchanged and only the labels differ.
+
+        Cached per geometry OBJECT and per mirror flag, like the labels.
+        """
+        cached = self._cached_ek_bad_ends
+        if cached is None or cached[0] is not geom:
+            cached = (geom, {})
+            self._cached_ek_bad_ends = cached
+        hit = cached[1].get(mirror)
+        if hit is not None:
+            return hit
+
+        _, group_src = self._ek_axis_labels(geom, mirror)
+        n = geom["n_segs"]
+        out = []
+        for count, basis, seg in (
+            (geom["nm_count"], geom["nm_basis"], geom["nm_seg"]),
+            (geom["np_count"], geom["np_basis"], geom["np_seg"]),
+        ):
+            bad = np.asarray(count) >= 2  # K ≥ 3 at this node
+            bad = bad | (group_src < 0)  # the never-extend marker
+            if np.asarray(basis).size:
+                split = group_src[basis] != group_src[seg]
+                bad = bad.copy()
+                bad[np.asarray(basis)[split]] = True
+            out.append(np.ascontiguousarray(bad, dtype=bool).reshape(n))
+        hit = (out[0], out[1])
+        cached[1][mirror] = hit
+        return hit
+
+    def _ek_bracket_block(
+        self, geom, k, ctx, corr, projector, src_c, src_t, mirror, scale
+    ):
+        """One source block's share of momwire#299's end-bracket correction,
+        ACCUMULATED into `corr` (the same three (nnz, N) arrays a fill block
+        produces) with weight `scale` — never applied to the fill's own
+        contributions, which `_ek_bracket_correction_tested` explains.
+
+        What is collected, and what is NOT
+        ----------------------------------
+        Writing e for a source end, the fill capped e with weight
+        `eligible(m, n)` (#246's pair rule) and the node rule wants weight
+        `pred(node(e))`, so the correction per (test m, source n, end e) is
+        (pred − eligible)·bracket. Only the negative half of that is computed
+        here, and the positive half is a documented identity rather than an
+        omission:
+
+        * pred FALSE, eligible — the divergent case, and the whole defect.
+          Taking the cap back off leaves that node with no cap from any
+          observer, which is what an EK-off fill has and what makes the caps
+          cancel by KCL again.
+        * pred TRUE, eligible — nothing to do, the fill already capped it.
+        * pred TRUE, NOT eligible — the literal rule would ADD caps here (a
+          cross-arm observer looking at the far arm's interior nodes). Every
+          segment at a pred-true node carries one label, so a given observer is
+          ineligible with ALL of them or none: the added caps come in a
+          complete set at the node, share one ρ and one ζ (the node's segments
+          share an axis and a radius, so the observer sees one geometry for all
+          of them), and are weighted by the source basis's current and charge
+          at the node — whose signed sums over the node's segments are zero by
+          KCL and by charge continuity. The set therefore sums to zero in G
+          before it is computed. At a free end the set has one member and no
+          partner, but there the basis current vanishes, which kills the
+          O(1/a) s·∂_ξW half outright and leaves the O(a²) s′·W half — the same
+          term the fill already omits there for cross-arm observers, and the
+          only place this differs from the literal rule at all.
+        * pred FALSE, not eligible — nothing was capped, nothing to remove.
+
+        Quadrature consistency is the one thing that has to be exact: the
+        bracket is collected on the SAME test rule the cell was filled with —
+        the uniform rule for a far cell, `_apply_near_correction`'s graded
+        endpoint rule for a near one — because a rule mismatch would leave a
+        quadrature-level difference of an O(1/a) quantity behind instead of
+        cancelling it.
+        """
+        if not self.extended_kernel:
+            return
+        bad_lo, bad_hi = self._ek_reduced_ends(geom, mirror)
+        if not (bad_lo.any() or bad_hi.any()):
+            return
+        group_obs, group_src = self._ek_axis_labels(geom, mirror)
+        N, nq = ctx["N"], ctx["nq"]
+        hh = ctx["hh"]
+        a_seg = ctx["a_seg"]
+        a_all = self._seg_radius(geom)
+        seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
+        starts, counts = ctx["starts"], ctx["counts"]
+        sigAC, B, sigC = ctx["sigAC"], ctx["B"], ctx["sigC"]
+        corr_c, corr_s, corr_co = corr
+
+        # The near set is the fill's own, selected against the same source
+        # geometry the caller filled with, so "which rule did this cell get"
+        # is answered by the same predicate that decided it.
+        if self.near_correction:
+            mm, nn = self._near_pairs(geom, src_c=src_c, src_t=src_t)
+            near_key = mm * N + nn
+        else:
+            near_key = np.empty(0, dtype=np.int64)
+        xg, wg = _graded_endpoint_rule(
+            float(np.min(a_all / hh)), self.n_qp_near, self._leggauss_cached
+        )
+        gq = np.arange(nq)
+
+        for sign, bad in ((-1.0, bad_lo), (+1.0, bad_hi)):
+            nb = np.flatnonzero(bad)
+            if nb.size == 0:
+                continue
+            # Every pair the fill capped at this end: eligibility is #246's,
+            # unchanged, because the cap being taken off is the one it added.
+            elig = (group_obs[:, None] == group_src[nb][None, :]) & (
+                group_obs[:, None] >= 0
+            )
+            m_sel, j_sel = np.nonzero(elig)
+            if m_sel.size == 0:
+                continue
+            n_sel = nb[j_sel]
+            is_near = np.isin(m_sel * N + n_sel, near_key)
+            for graded in (False, True):
+                keep = is_near if graded else ~is_near
+                mm_g, nn_g = m_sel[keep], n_sel[keep]
+                if mm_g.size == 0:
+                    continue
+                # Flatten (pair, support entry of its test segment) exactly as
+                # `_apply_near_correction` does.
+                cnt = counts[mm_g]
+                cum = np.concatenate(([0], np.cumsum(cnt)))
+                pair_of = np.repeat(np.arange(mm_g.size), cnt)
+                entry_of = (
+                    np.arange(cum[-1])
+                    - np.repeat(cum[:-1], cnt)
+                    + np.repeat(starts[mm_g], cnt)
+                )
+                for p0 in range(0, mm_g.size, _PAIR_BLOCK):
+                    p1 = min(p0 + _PAIR_BLOCK, mm_g.size)
+                    mi, ni = mm_g[p0:p1], nn_g[p0:p1]
+                    if graded:
+                        xi = hh[mi][:, None] * xg  # (P, G)
+                        obs = (
+                            seg_c[mi][:, None, :]
+                            + xi[:, :, None] * seg_t[mi][:, None, :]
+                        )
+                    else:
+                        # The uniform rule's observers, read back out of the
+                        # context the far fill used rather than rebuilt.
+                        xi = None
+                        obs = ctx["obs_c"][mi[:, None] * nq + gq]
+                    obs_t = seg_t[mi][:, None, :]
+                    a_obs = (
+                        self._uniform_radius if a_seg is None else a_seg[mi][:, None]
+                    )
+                    z, rho_eval, rho_vec, td, rho_proj = self._pair_geometry(
+                        obs, obs_t, a_obs, src_c[ni][:, None, :], src_t[ni][:, None, :]
+                    )
+                    cm = self._ek_end_bracket_fields(
+                        k,
+                        np.broadcast_to(hh[ni][:, None], z.shape),
+                        z,
+                        rho_eval,
+                        a_all[ni][:, None],
+                        sign,
+                        cos_shape="cos-1",
+                    )
+                    cm["td"] = td
+                    cm["rho_proj_factor"] = rho_proj
+                    cm["rho_vec"] = rho_vec
+                    cm["rho_eval"] = rho_eval
+                    Phi = projector(cm, mi[:, None], ni[:, None])  # each (P, G)
+
+                    e0, e1 = cum[p0], cum[p1]
+                    ei = entry_of[e0:e1]
+                    lp = pair_of[e0:e1] - p0
+                    if graded:
+                        fval = _basis_value(
+                            sigAC[ei][:, None],
+                            B[ei][:, None],
+                            sigC[ei][:, None],
+                            k,
+                            xi[lp],
+                        )
+                        w = (wg[None, :] * hh[mi][lp][:, None]) * fval
+                    else:
+                        w = ctx["w_entry"][ei]
+                    col = ni[lp]
+                    # One (entry, source) cell per (pair, entry) and the pairs
+                    # of a group are distinct, so the cells are distinct and
+                    # this is an assignment-shaped update, not an accumulation
+                    # — the two END groups are two separate statements, which
+                    # is how a segment bad at BOTH ends pays twice.
+                    for c_out, Ph in zip((corr_c, corr_s, corr_co), Phi):
+                        c_out[ei, col] += scale * np.einsum("eg,eg->e", w, Ph[lp])
 
     def _contact_ek_masks(self, geom, i, sgn, obs_seg):
         """momwire#292's masks under #246's PAIR rule.
@@ -1916,13 +2176,26 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         seg_view = self._basis_coefs(geom, k)
         ctx = self._test_context(geom, seg_view, k)
-        N = ctx["N"]
 
         contribs = self._tested_contribs(geom, k, ctx, _plain_projection)
         if self.ground_z is not None:
             gnd = self._tested_ground_block(geom, k, ctx)
             contribs = tuple(c - g for c, g in zip(contribs, gnd))
 
+        G = self._scatter_coef_product(ctx, contribs)
+        self._ek_bracket_correction_tested(G, geom, k, ctx)
+        self._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
+        return G, seg_view
+
+    def _scatter_coef_product(self, ctx, contribs):
+        """Σ_shape T[shape] @ M[shape] — the (n_basis, n_basis) matrix a triple
+        of (nnz, N) tested contributions assembles to.
+
+        Factored out of `_assemble_Z` so momwire#299's end-bracket correction,
+        which is a triple of exactly that shape, reaches G through the same
+        product rather than a second spelling of it.
+        """
+        N = ctx["N"]
         i_of_entry = ctx["i_of_entry"]
         m_of_entry = ctx["m_of_entry"]
         n_basis = N + len(self.junction_ports)
@@ -1973,8 +2246,82 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 (R @ contrib) @ scipy.sparse.csc_matrix((coef, mi), shape=(N, n_basis))
                 for contrib, coef in zip(contribs, coefs)
             )
-        self._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
-        return G, seg_view
+        return G
+
+    def _ek_bracket_correction_tested(self, G, geom, k, ctx):
+        """momwire#299's end-bracket correction, assembled and SYMMETRIZED
+        into G: `G −= ½(C + Cᵀ)`.
+
+        The blocks below mirror `_tested_ground_block`'s dispatch exactly —
+        free space, then the PEC image, the Fresnel-weighted image or the
+        C2-scaled Sommerfeld image, each with the sign the caller's
+        `contribs − gnd` gives it — because the bracket rides every one of them
+        for the same reason the delta does. The Sommerfeld REMAINDER carries no
+        delta (#287) and so has no bracket to take off.
+
+        Why it is applied here and not to the fill's contributions
+        ----------------------------------------------------------
+        The cap is a boundary term of an integration by parts in the SOURCE
+        variable, so it is a source-sided spelling of a two-sided object: for
+        the pair (m, n) it removes n's cap and for (n, m) it removes m's, and
+        those are different quantities. Left as spelled it puts an asymmetry
+        into G the size of the whole EK correction — measured
+        ‖G−Gᵀ‖/‖G‖ = 1.6e-3 on the L at a = 0.02 against the reduced fill's
+        6.2e-11 — and reciprocity is this solver's own error detector (G-B2),
+        the very property #246 refused NEC's per-source-end gating to protect.
+        Halving C with its transpose costs nothing that matters: the DIVERGENT
+        content of C is the node cap, which is κ_P·f_i(P)·f_j(P) — a rank-one
+        outer product in the two sides' current at the node, hence symmetric —
+        so ½(C + Cᵀ) removes exactly the same O(1/a) term and averages only
+        C's O(a²) asymmetric remainder. G-D4's
+        `test_gd4_the_bracket_correction_diverges_symmetrically` measures
+        ‖C−Cᵀ‖/‖C‖ collapsing like a² while ‖C‖ grows exactly like 1/a, which
+        is that claim.
+
+        No-op with the extended kernel off, and on any geometry whose nodes all
+        pass the predicate (every straight deck, and every deck in G-B4/G-C/G-S
+        — which is what keeps their numbers bit-identical).
+        """
+        if not self.extended_kernel:
+            return
+        blocks = [(_plain_projection, None, None, False, 1.0)]
+        if self.ground_z is not None:
+            src_c_img, src_t_img = self._image_source_centers_tangents(geom)
+            if self.ground_eps is None:
+                blocks.append((_plain_projection, src_c_img, src_t_img, True, -1.0))
+            else:
+                eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+                if self.ground_model == "sommerfeld":
+                    c2 = (eps_t - 1.0) / (eps_t + 1.0)
+                    blocks.append((_plain_projection, src_c_img, src_t_img, True, -c2))
+                else:
+                    blocks.append(
+                        (
+                            self._refl_projection(geom, eps_t),
+                            src_c_img,
+                            src_t_img,
+                            True,
+                            -1.0,
+                        )
+                    )
+        nnz, N = ctx["w_entry"].shape[0], ctx["N"]
+        corr = tuple(np.zeros((nnz, N), dtype=np.complex128) for _ in range(3))
+        for projector, src_c, src_t, mirror, scale in blocks:
+            self._ek_bracket_block(
+                geom,
+                k,
+                ctx,
+                corr,
+                projector,
+                geom["seg_centers"] if src_c is None else src_c,
+                geom["seg_tangents"] if src_t is None else src_t,
+                mirror,
+                scale,
+            )
+        if not any(np.any(c) for c in corr):
+            return
+        C = self._scatter_coef_product(ctx, corr)
+        G -= 0.5 * (C + C.T)
 
     def _contact_charge_correction_tested(self, G, geom, k, seg_view, ctx):
         """#282's ground-contact charge correction, test-integrated.
