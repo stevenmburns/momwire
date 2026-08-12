@@ -399,6 +399,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         feed_smoothing_factor=None,
         junctions=None,
         junction_ports=None,
+        node_gaps=None,
         n_qp_pair=4,
         n_qp_source=16,
         extended_kernel=False,
@@ -671,10 +672,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
             self.feeds = [(int(feed_wire_index), feed_arclength, 1.0 + 0.0j)]
         else:
-            if len(feeds) == 0 and not junction_ports:
-                # Junction ports (issue #172) are drive/readout ports in
-                # their own right, so a solve driven entirely through them
-                # needs no gap feed at all.
+            if len(feeds) == 0 and not junction_ports and not node_gaps:
+                # Junction ports (issue #172) and node gaps (issue #305) are
+                # drive/readout ports in their own right, so a solve driven
+                # entirely through them needs no gap feed at all.
                 raise ValueError("feeds must contain at least one entry")
             norm = []
             for i, f in enumerate(feeds):
@@ -806,6 +807,78 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     raise ValueError(f"junction_ports: junction {j_idx} listed twice")
                 seen.add(j_idx)
                 self.junction_ports.append((j_idx, volt))
+
+        # Node gaps (issue #305): a SERIES delta-gap EMF at a junction node,
+        # in series with a named wire-end — the apex feed. Each entry is
+        # (wire_index, "start"|"end", voltage). The named end must belong to
+        # a junction group; the junction's KCL row STAYS in the constraint
+        # set (current is continuous through a series EMF — contrast a #172
+        # junction port, whose row leaves it to drive net inflow). The port's
+        # drive/readout vector is the σ-signed unit indicator of that
+        # wire-end's directional basis (σ = +1 start / −1 end, the KCL
+        # outflow sign), so I_port is the current flowing from the node into
+        # the named wire and the pairing is Galerkin-reciprocal — mixed-port
+        # Y stays symmetric alongside gap feeds and junction ports. At a
+        # degree-2 vertex the member choice does not change Z (through
+        # current, both orientations agree); at degree ≥ 3 it names which
+        # arm the gap separates, NEC-5's tag/segment/end addressing. Ports
+        # order [feeds..., junction_ports..., node_gaps...].
+        self.node_gaps = []
+        if node_gaps is not None:
+            end_to_junction = {}
+            for j, jw in enumerate(self.junctions):
+                for member in jw:
+                    end_to_junction[member] = j
+            seen_members = set()
+            seen_junctions = set()
+            ported = {j for j, _v in self.junction_ports}
+            for i, g in enumerate(node_gaps):
+                if len(g) != 3:
+                    raise ValueError(
+                        f"node_gaps[{i}]: expected (wire_index, 'start'|'end',"
+                        f" voltage), got {g!r}"
+                    )
+                w_i, end_i, v_i = g
+                if not (0 <= w_i < n_w):
+                    raise ValueError(
+                        f"node_gaps[{i}]: wire_index {w_i} out of range [0, {n_w})"
+                    )
+                if end_i not in ("start", "end"):
+                    raise ValueError(
+                        f"node_gaps[{i}]: end must be 'start' or 'end', got {end_i!r}"
+                    )
+                member = (int(w_i), end_i)
+                j_idx = end_to_junction.get(member)
+                if j_idx is None:
+                    raise ValueError(
+                        f"node_gaps[{i}]: wire {w_i} {end_i!r} is not a member "
+                        "of any junction group — a series node gap lives at a "
+                        "junction; for a feed inside a wire use feeds="
+                    )
+                if len(self.junctions[j_idx]) < 2:
+                    raise ValueError(
+                        f"node_gaps[{i}]: junction {j_idx} has a single member "
+                        "— there is no through-current path to be in series "
+                        "with (a lone-end attachment is junction_ports=)"
+                    )
+                if member in seen_members:
+                    raise ValueError(
+                        f"node_gaps[{i}]: wire {w_i} {end_i!r} listed twice"
+                    )
+                if j_idx in seen_junctions:
+                    raise ValueError(
+                        f"node_gaps[{i}]: junction {j_idx} already carries a "
+                        "node gap — one series gap per junction"
+                    )
+                if j_idx in ported:
+                    raise ValueError(
+                        f"node_gaps[{i}]: junction {j_idx} is also a junction "
+                        "port — the shunt (#172) and series (#305) ports of "
+                        "one node cannot be driven together yet"
+                    )
+                seen_members.add(member)
+                seen_junctions.add(j_idx)
+                self.node_gaps.append((int(w_i), end_i, complex(v_i)))
 
         # `compute_impedance(...)` and `currents_at_knots(coeffs)` both call
         # `_build_geometry()` + `_build_basis_polynomials(geom)` from scratch
@@ -3238,8 +3311,45 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     def _port_count(self):
         """Ports `compute_port_solution` returns: [gap feeds…, junction
-        ports…]. Answered from the configuration, without solving."""
-        return len(self.feeds) + len(self.junction_ports)
+        ports…, node gaps…]. Answered from the configuration, without
+        solving."""
+        return len(self.feeds) + len(self.junction_ports) + len(self.node_gaps)
+
+    def _node_gap_columns(self, wire_basis_global, n_basis_total):
+        """`(cols, volts)` for the series node gaps (issue #305), in
+        `self.node_gaps` order: column p is the σ-signed unit indicator of the
+        named wire-end's directional basis — drive AND readout vector, like
+        every other port column, so mixed-port Y stays symmetric. σ is the
+        KCL outflow sign (+1 start / −1 end): I_port is the current flowing
+        from the node into the named wire, which makes the port invariant
+        under re-parametrizing the wire. k-independent."""
+        cols = np.zeros((n_basis_total, len(self.node_gaps)), dtype=np.float64)
+        volts = np.zeros(len(self.node_gaps), dtype=np.complex128)
+        if not self.node_gaps:
+            return cols, volts
+        grounded = self._grounded_junctions()
+        end_to_junction = {}
+        for j, jw in enumerate(self.junctions):
+            for member in jw:
+                end_to_junction[member] = j
+        for p, (w_i, end_i, v_i) in enumerate(self.node_gaps):
+            j_idx = end_to_junction[(w_i, end_i)]
+            if j_idx in grounded:
+                raise ValueError(
+                    f"node_gaps[{p}]: junction {j_idx} is grounded — a series "
+                    "gap between a wire and the ground stake is not supported "
+                    "(#151 grounds the node through the image instead)"
+                )
+            kept, local_to_global = wire_basis_global[w_i]
+            m_global = None
+            for kept_idx, (_j, kind, junc_idx, end_pos) in enumerate(kept):
+                if kind == "dir" and junc_idx == j_idx and end_pos == end_i:
+                    m_global = local_to_global[kept_idx]
+                    break
+            assert m_global is not None, (w_i, end_i, j_idx)
+            cols[m_global, p] = +1.0 if end_i == "start" else -1.0
+            volts[p] = v_i
+        return cols, volts
 
     def _gap_source_vectors(self, geom, wire_knots, wire_basis_global, n_basis_total):
         """One unit Galerkin source vector per configured gap feed, in feed
@@ -3269,10 +3379,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         Column j of `B` is port j's Galerkin source vector AND its readout
         vector — the reciprocity that makes `Y = Bᵀ X` symmetric. Ports run
-        [gap feeds…, junction ports…]: a ported junction's KCL row (#172)
-        leaves the constraint set and becomes a column here, which is why the
-        returned `kcl_con` is shorter than the `kcl_A` handed in. All of it is
-        k-independent, so the swept paths build it once for the sweep.
+        [gap feeds…, junction ports…, node gaps…]: a ported junction's KCL row
+        (#172) leaves the constraint set and becomes a column here, which is
+        why the returned `kcl_con` is shorter than the `kcl_A` handed in; a
+        node gap's column (#305) is the σ-signed indicator of its wire-end's
+        directional basis, and its junction's KCL row stays a constraint. All
+        of it is k-independent, so the swept paths build it once for the sweep.
         """
         B = np.zeros((n_basis_total, len(self.feeds)), dtype=np.complex128)
         for j, v_j in enumerate(
@@ -3280,7 +3392,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ):
             B[:, j] = v_j
         kcl_con, port_A, _port_V = self._split_kcl_ports(kcl_A)
-        return np.hstack([B, port_A.T.astype(np.complex128)]), kcl_con
+        gap_cols, _gap_V = self._node_gap_columns(wire_basis_global, n_basis_total)
+        return (
+            np.hstack(
+                [B, port_A.T.astype(np.complex128), gap_cols.astype(np.complex128)]
+            ),
+            kcl_con,
+        )
 
     def _feed_drive_and_readout(
         self, geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
@@ -3291,8 +3409,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Returns `(v, port_vectors, vpf_T, all_voltages, kcl_con)`: the RHS for
         the configured voltages, the per-port readout vectors as a list and as
         the `(n_basis, n_ports)` matrix the batched sweep contracts against,
-        the port voltages in [gap feeds…, junction ports…] order, and the
-        constraint rows left after the ported junctions become drives.
+        the port voltages in [gap feeds…, junction ports…, node gaps…] order,
+        and the constraint rows left after the ported junctions become drives.
         """
         n_feeds = len(self.feeds)
         v_per_feed = self._gap_source_vectors(
@@ -3308,14 +3426,28 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # rows leave the constraint matrix.
         kcl_con, port_A, port_V = self._split_kcl_ports(kcl_A)
         v += port_V @ port_A
-        port_vectors = v_per_feed + [port_A[i] for i in range(port_A.shape[0])]
-        all_voltages = np.concatenate([voltages, port_V])
+        # Node gaps (issue #305): same drive/readout algebra on the σ-signed
+        # wire-end indicator columns; their junctions' KCL rows stay put.
+        gap_cols, gap_V = self._node_gap_columns(wire_basis_global, n_basis_total)
+        v += gap_cols @ gap_V
+        port_vectors = (
+            v_per_feed
+            + [port_A[i] for i in range(port_A.shape[0])]
+            + [gap_cols[:, p] for p in range(gap_cols.shape[1])]
+        )
+        all_voltages = np.concatenate([voltages, port_V, gap_V])
         # Reshape keeps this 2-D at n_feeds == 0: np.array([]) is (0,) and
         # would break the hstack against port_A's rows (issue #175).
         vpf = np.asarray(v_per_feed, dtype=np.complex128).reshape(
             n_feeds, n_basis_total
         )
-        vpf_T = np.hstack([vpf.T, port_A.T.astype(np.complex128)])
+        vpf_T = np.hstack(
+            [
+                vpf.T,
+                port_A.T.astype(np.complex128),
+                gap_cols.astype(np.complex128),
+            ]
+        )
         return v, port_vectors, vpf_T, all_voltages, kcl_con
 
     def compute_impedance(self, same_edge_prep=None):

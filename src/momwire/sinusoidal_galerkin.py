@@ -632,6 +632,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         sibling has no equivalent and takes no such keyword: a node source
         samples to an identically zero collocation RHS.
 
+    `node_gaps`
+        `BSplineSolver`'s wire-end spelling of the same series port (#305):
+        `(wire_index, "start"|"end", voltage)` entries, each naming the one
+        member its gap is in series with — NEC-5's tag/segment/end
+        addressing. Normalized here onto the node-port list as the
+        COMPLEMENT bipartition, which by the span's KCL identity is the
+        single member's exact negation: that orientation flip is what makes
+        both families read I_port as the current from the node into the
+        named wire (the two σ conventions are mirrored). Entries order
+        after any explicit `node_ports`.
+
     `junction_ports=` — one-terminal net-inflow ports at junction nodes, with
     `BSplineSolver`'s rules (a junction index or an (index, voltage) pair, in
     range, no repeats, no grounded junction) and its Y ordering. M5 built
@@ -670,8 +681,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         feed_readout="centre",
         feed_model="segment",
         node_ports=None,
+        node_gaps=None,
         **kwargs,
     ):
+        # Seen by the base's feeds=[] check (its signature never learns the
+        # node-port kwargs): a solve driven entirely through node ports/gaps
+        # needs no gap feed, same as junction ports (#172/#305).
+        self._node_drive_declared = bool(node_ports or node_gaps)
         super().__init__(**kwargs)
         self.n_qp_test = int(n_qp_test)
         self.n_qp_near = int(n_qp_near)
@@ -704,7 +720,48 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 f"feed_model must be 'segment' or 'point', got {feed_model!r}"
             )
         self.feed_model = feed_model
-        self.node_ports = self._validate_node_ports(node_ports)
+        # Node gaps (issue #305) are BSplineSolver's wire-end spelling of the
+        # series port this family already carries as `node_ports` (M5b): each
+        # (wire_index, "start"|"end", voltage) names the single member on
+        # side_a, so the two spellings share one validation and one cut
+        # vector. Entries append after any explicit node_ports.
+        self.node_gaps = []
+        node_port_entries = list(node_ports) if node_ports else []
+        if node_gaps:
+            member_pos = {
+                (w, e): (j, m)
+                for j, jw in enumerate(self.junctions)
+                for m, (w, e) in enumerate(jw)
+            }
+            for i, g in enumerate(node_gaps):
+                if len(g) != 3:
+                    raise ValueError(
+                        f"node_gaps[{i}]: expected (wire_index, 'start'|'end',"
+                        f" voltage), got {g!r}"
+                    )
+                w_i, end_i, v_i = g
+                pos = member_pos.get((int(w_i), end_i))
+                if pos is None:
+                    raise ValueError(
+                        f"node_gaps[{i}]: wire {w_i} {end_i!r} is not a member "
+                        "of any junction group — a series node gap lives at a "
+                        "junction; for a feed inside a wire use feeds="
+                    )
+                j_idx, m_idx = pos
+                # side_a = every member EXCEPT the named one. By the KCL
+                # identity this family's span satisfies at every node, the
+                # complement's cut vector is exactly the NEGATION of the
+                # single member's — same physical gap, opposite orientation —
+                # and the flip is what aligns this port with BSplineSolver's
+                # convention (I_port = current from the node into the named
+                # wire): the two families' member signs are mirrored (σ here
+                # is +1 at a wire's natural end-2, B-spline's is −1 there).
+                side_a = tuple(
+                    m for m in range(len(self.junctions[j_idx])) if m != m_idx
+                )
+                node_port_entries.append((j_idx, side_a, complex(v_i)))
+                self.node_gaps.append((int(w_i), end_i, complex(v_i)))
+        self.node_ports = self._validate_node_ports(node_port_entries)
         # (base seg_view, k) → port-augmented seg_view. Keyed by identity on
         # the inherited view, which `_basis_coefs` already caches per (geom,
         # k, radius), so this rides that cache's validation.

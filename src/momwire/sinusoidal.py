@@ -470,8 +470,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.feeds = [(int(feed_wire_index), feed_arclength, 1.0 + 0.0j)]
         else:
             # feeds=[] is legal only when the model is driven entirely through
-            # junction ports (issue #172's rule, mirrored from BSplineSolver).
-            if len(feeds) == 0 and not junction_ports:
+            # junction ports (issue #172's rule, mirrored from BSplineSolver)
+            # or through node ports/gaps (#182/#305) — the Galerkin subclass
+            # declares those BEFORE super().__init__ runs, via the attribute,
+            # because this base's signature never learns the port kwargs.
+            if (
+                len(feeds) == 0
+                and not junction_ports
+                and not getattr(self, "_node_drive_declared", False)
+            ):
                 raise ValueError("feeds must contain at least one entry")
             norm = []
             for i, f in enumerate(feeds):
