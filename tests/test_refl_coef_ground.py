@@ -74,6 +74,25 @@ def test_dipole_matches_nec_gn0_in_window(frac, ground):
     assert abs(z - gn0) < abs(z_pec - gn0)
 
 
+def test_dipole_matches_nec_gn0_in_window_via_tensor_route_fallback(monkeypatch):
+    """#273: the same nec gn0 acceptance window as
+    `test_dipole_matches_nec_gn0_in_window` (frac=0.2, ground (10.0, 0.002)),
+    forced onto `_build_J_image_blocks`/`_image_Z_refl` — the no-accelerator
+    fallback `_compute_Z_operator` otherwise never reaches on a build with
+    the weighted-windowed C++ assembler, so this golden-oracle gate never
+    actually touched that code before."""
+    from momwire import bspline as bspline_mod
+
+    if not bspline_mod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("weighted windowed Z assembly accelerator not built")
+    monkeypatch.setattr(bspline_mod, "_HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL", False)
+    gn0 = GOLDEN[("dipole", 0.2, 10.0, 0.002)]["finite-fast"]
+    z = _solve("dipole", 0.2, ground_eps=(10.0, 0.002))
+    z_pec = _solve("dipole", 0.2)
+    assert abs(z - gn0) < 3.0
+    assert abs(z - gn0) < abs(z_pec - gn0)
+
+
 def test_inverted_l_junction_geometry_in_window():
     """Junction/KCL geometry runs through the weighted image path; residual
     at the measured ~1.5 Ω level (guard at 2.5)."""

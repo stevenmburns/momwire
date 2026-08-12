@@ -3068,6 +3068,91 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
     assert rel < 1e-10, f"chunked vs tensor grounded Z disagreement: rel {rel}"
 
 
+@pytest.mark.parametrize(
+    "ground_kw",
+    [
+        {},
+        {"ground_eps": (10.0, 0.002)},
+        {"ground_eps": (10.0, 0.002), "ground_model": "sommerfeld"},
+    ],
+    ids=["pec", "refl-coef", "sommerfeld"],
+)
+def test_bspline_grounded_tensor_route_dispatch_is_call_gated(ground_kw, monkeypatch):
+    """issue #273: `_build_J_image_blocks` (and `_image_Z_refl`/
+    `_ground_finite_Z` under it) must fire exactly when
+    `_HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL` is False and must never fire
+    when it is True — the dispatch condition `_compute_Z_operator` actually
+    branches on. #273's mutation-coverage hole was that on an accelerated
+    build (this box) no test forced that condition, so a defect confined to
+    the fallback chain was invisible to `compute_impedance()`; the two
+    assertions below are the reachability tripwire that keeps that hole
+    from reopening silently, and the rel-diff pins the fallback answers the
+    accelerated route to the same tolerance the (pre-existing)
+    `test_bspline_chunked_ground_matches_tensor_path` above already holds
+    for the internal-consistency side of this."""
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("weighted windowed Z assembly accelerator not built")
+
+    L = 2 * 0.962 * 22 / 4
+    h = 2.2  # strictly above ground, sommerfeld-legal
+    wires = [np.array([[0.0, -L / 2, h], [0.0, L / 2, h]])]
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=[[17]],
+        nsegs=17,
+        degree=2,
+        wavelength=22.0,
+        ground_z=0.0,
+        **ground_kw,
+    )
+
+    calls = []
+    orig = BSplineSolver._build_J_image_blocks
+
+    def spy(self, *a, **kw2):
+        calls.append(1)
+        return orig(self, *a, **kw2)
+
+    monkeypatch.setattr(BSplineSolver, "_build_J_image_blocks", spy)
+
+    # Accelerated route (the default on this box): the fallback must be
+    # dark.
+    z_accel, _ = BSplineSolver(**kw).compute_impedance()
+    assert calls == [], (
+        f"{ground_kw}: the accelerated route called _build_J_image_blocks "
+        f"{len(calls)} time(s) — it must stay on _accumulate_Z_image_chunked"
+    )
+
+    # Forced fallback: the tensor route must fire exactly once.
+    calls.clear()
+    saved = (
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL,
+        bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL,
+    )
+    try:
+        bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL = False
+        bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL = False
+        z_forced, _ = BSplineSolver(**kw).compute_impedance()
+    finally:
+        (
+            bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL,
+            bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL,
+        ) = saved
+    assert calls == [1], (
+        f"{ground_kw}: the forced fallback called _build_J_image_blocks "
+        f"{len(calls)} time(s), want exactly 1"
+    )
+
+    rel = abs(z_forced - z_accel) / abs(z_accel)
+    # Same 1e-10 cross-compiler reduction-order policy as the chunked-vs-
+    # tensor pin above (this is that same comparison, plus the call-count
+    # tripwire on top).
+    assert rel < 1e-10, f"{ground_kw}: forced-fallback vs accelerated rel {rel:.2e}"
+
+
 # --------------------------------------------------------------------------
 # Enrichment through the Y-matrix path (issue #165)
 # --------------------------------------------------------------------------

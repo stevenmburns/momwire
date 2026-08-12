@@ -68,6 +68,32 @@ def test_monopole_pec():
     _assert_cluster(zs, 25.0, 45.0, -45.0, 0.0)
 
 
+def test_monopole_pec_via_tensor_route_fallback(monkeypatch):
+    """#273: the same PyNEC golden window as `test_monopole_pec`, forced onto
+    `_build_J_image_blocks` (the no-accelerator PEC image fallback) instead
+    of the chunked accumulator every accelerated build silently prefers —
+    `_compute_Z_operator` picks the tensor route whenever
+    `_HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL` is False, independent of deck
+    size, so this box otherwise never exercises it through a physics gate."""
+    import momwire.bspline as bmod
+
+    if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("weighted windowed Z assembly accelerator not built")
+    monkeypatch.setattr(bmod, "_HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL", False)
+    s = BSplineSolver(
+        wires=_mono_wires(),
+        degree=2,
+        nsegs=21,
+        wavelength=WL,
+        wire_radius=0.001,
+        ground_z=0.0,
+        feeds=FEED,
+    )
+    z = _z(s)
+    assert 25.0 < z.real < 45.0
+    assert -45.0 < z.imag < 0.0
+
+
 def test_monopole_base_current_is_maximal():
     for k, s in _solvers(_mono_wires(), FEED).items():
         z, coeffs = s.compute_impedance()
