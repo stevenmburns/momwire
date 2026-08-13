@@ -404,3 +404,22 @@ def test_star_arms_are_three_different_ports():
     for i in range(3):
         for j in range(i + 1, 3):
             assert abs(zs[i] - zs[j]) > 30.0, (zs[i], zs[j])
+
+
+def test_sg_swept_ports_match_per_k():
+    """The SG family's swept path with a node-gap drive: hoisted port
+    columns per k must equal the single-k solve (measured 7e-10)."""
+    kw = dict(
+        wires=_split_wires(),
+        feeds=[],
+        node_gaps=[(0, "end", 1.0 + 0j)],
+        **_SPLIT_KW,
+    )
+    s = SinusoidalGalerkinSolver(**kw)
+    k0 = 2 * np.pi / WAVELENGTH
+    ks = k0 * np.array([0.9, 1.0, 1.1])
+    swept = np.atleast_1d(s.compute_impedance_swept(ks)).ravel()
+    for k, z_sw in zip(ks, swept):
+        s1 = SinusoidalGalerkinSolver(**dict(kw, wavelength=2 * np.pi / k))
+        z1 = complex(np.atleast_1d(s1.compute_impedance()[0])[0])
+        assert abs(z_sw - z1) < 1e-6 * abs(z1), (k, z_sw, z1)
