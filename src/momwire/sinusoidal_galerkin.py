@@ -682,6 +682,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         feed_model="segment",
         node_ports=None,
         node_gaps=None,
+        contact_atoms=0,
         **kwargs,
     ):
         # Seen by the base's feeds=[] check (its signature never learns the
@@ -765,6 +766,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # (base seg_view, k) → port-augmented seg_view. Keyed by identity on
         # the inherited view, which `_basis_coefs` already caches per (geom,
         # k, radius), so this rides that cache's validation.
+        # EXPERIMENTAL (#291): extra independent basis columns per ground
+        # contact (0 = off; 1 = interior bubble; 2 = bubble + node ramp).
+        self.contact_atoms = int(contact_atoms)
+        self._contact_atom_count = 0
         self._port_basis_cache = None
         # geom → {mirror: (group_obs, group_src)} for the EK pair rule.
         self._cached_ek_groups = None
@@ -912,7 +917,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
           solver, read as a statement about the TESTING rather than the basis.
         """
         N = geom["n_segs"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + len(self.junction_ports) + self._n_contact_atoms()
         grounded = geom["grounded_junctions"]
         out = np.zeros((n_basis, len(self.node_ports)), dtype=np.complex128)
         starts = seg_view["starts"]
@@ -1184,7 +1189,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         the mirrored separation is exact rather than an approximation.
         """
         N = geom["n_segs"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + len(self.junction_ports) + self._n_contact_atoms()
         a = float(self._uniform_radius)
         seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
         hh = 0.5 * np.asarray(geom["seg_h"], dtype=float)
@@ -1323,16 +1328,101 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
     def _basis_coefs(self, geom, k):
         """The inherited CSR basis view, extended with the junction-port
-        basis columns. Verbatim passthrough when there are no ports."""
+        basis columns and (experimentally, #291) per-contact atom columns.
+        Verbatim passthrough when there are neither."""
         base_view = super()._basis_coefs(geom, k)
-        if not self.junction_ports:
+        if not self.junction_ports and not self.contact_atoms:
             return base_view
         cached = self._port_basis_cache
         if cached is not None and cached[0] is base_view and cached[1] == k:
             return cached[2]
-        view = self._junction_port_view(geom, k, base_view)
+        view = base_view
+        if self.junction_ports:
+            view = self._junction_port_view(geom, k, view)
+        if self.contact_atoms:
+            view = self._contact_atom_view(geom, k, view)
         self._port_basis_cache = (base_view, k, view)
         return view
+
+    def _n_contact_atoms(self):
+        """Total experimental contact-atom columns (#291 instrument): set
+        by `_contact_atom_view` once the geometry names the contacts; 0
+        before any basis build and whenever the feature is off."""
+        return self._contact_atom_count
+
+    def _contact_atom_view(self, geom, k, base_view):
+        """EXPERIMENTAL (#291): append `contact_atoms` extra independent
+        basis columns on each ground-contact segment, enriching the local
+        span the ordinary PWS interpolation ties down. Atom shapes live in
+        the same three-term span {1, sin kξ, cos kξ}, so the entire fill —
+        every ground block, EK, the #282/#292 contact machinery (which
+        sweeps node values generically) — serves them unchanged:
+
+          atom 1 (bubble): f(0) = f(Δ) = 0 — interior charge freedom
+              A = 1, C = −1, B = −(1 − cos kΔ)/sin kΔ
+          atom 2 (ramp):   f(0) = 1, f(Δ) = 0 — an independent contact
+              node-current DOF (its (1−ρ) node-charge share rides #282)
+              A = 1, C = 0,  B = −1/sin kΔ
+        """
+        N = geom["n_segs"]
+        gm = np.asarray(geom["ground_minus"], dtype=bool)
+        gp = np.asarray(geom["ground_plus"], dtype=bool)
+        contact_segs = np.nonzero(gm | gp)[0]
+        n_new = len(contact_segs) * int(self.contact_atoms)
+        self._contact_atom_count = n_new
+        if n_new == 0:
+            return base_view
+        seg_h = np.asarray(geom["seg_h"], dtype=float)
+        n0 = N + len(self.junction_ports)
+
+        segs, bases, A, B, C, sig = [], [], [], [], [], []
+        col = n0
+        for s in contact_segs:
+            kd = float(k * seg_h[s])
+            # ξ runs from the segment's start; a ground_plus contact sits
+            # at the FAR end, so mirror the shapes there (swap the roles of
+            # the two ends by flipping sign of the sin coefficient pattern
+            # via the end the value lands on).
+            at_start = bool(gm[s])
+            shapes = []
+            if self.contact_atoms >= 1:
+                shapes.append((1.0, -(1.0 - np.cos(kd)) / np.sin(kd), -1.0))
+            if self.contact_atoms >= 2:
+                if at_start:
+                    shapes.append((1.0, -1.0 / np.sin(kd), 0.0))
+                else:
+                    shapes.append((0.0, 1.0 / np.sin(kd), 0.0))
+            for A_c, B_c, C_c in shapes[: self.contact_atoms]:
+                segs.append(np.array([s], dtype=np.int64))
+                bases.append(np.array([col], dtype=np.int64))
+                A.append(np.array([A_c]))
+                B.append(np.array([B_c]))
+                C.append(np.array([C_c]))
+                sig.append(np.array([1], dtype=np.int8))
+                col += 1
+
+        starts = base_view["starts"]
+        base_seg = np.repeat(np.arange(N, dtype=np.int64), np.diff(starts))
+        all_seg = np.concatenate([base_seg] + segs)
+        all_basis = np.concatenate([base_view["jbasis"]] + bases)
+        all_A = np.concatenate([base_view["A"]] + A).astype(np.complex128)
+        all_B = np.concatenate([base_view["B"]] + B).astype(np.complex128)
+        all_C = np.concatenate([base_view["C"]] + C).astype(np.complex128)
+        all_sigma = np.concatenate([base_view["sigma"]] + sig)
+
+        order = np.argsort(all_seg, kind="stable")
+        new_starts = np.zeros(N + 1, dtype=np.int64)
+        np.cumsum(np.bincount(all_seg, minlength=N), out=new_starts[1:])
+        A_ord, C_ord = all_A[order], all_C[order]
+        return {
+            "starts": new_starts,
+            "jbasis": all_basis[order],
+            "A": A_ord,
+            "B": all_B[order],
+            "C": C_ord,
+            "AC": A_ord + C_ord,
+            "sigma": all_sigma[order],
+        }
 
     # ------------------------------------------------------------------
     # Galerkin matrix assembly
@@ -2255,7 +2345,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         N = ctx["N"]
         i_of_entry = ctx["i_of_entry"]
         m_of_entry = ctx["m_of_entry"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + len(self.junction_ports) + self._n_contact_atoms()
         # Source-side coefficient values: the SAME per-entry coefficients the
         # collocation path builds, re-paired to the folded shapes.
         coefs = (ctx["sigAC"], ctx["B"], ctx["sigC"])
@@ -2619,7 +2709,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         N = geom["n_segs"]
         h = np.asarray(geom["seg_h"], dtype=float)
         starts = seg_view["starts"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + len(self.junction_ports) + self._n_contact_atoms()
         U = np.zeros((n_basis, self.n_ports), dtype=np.complex128)
         for j, fseg in enumerate(geom["feed_segs"]):
             s, e = starts[fseg], starts[fseg + 1]
