@@ -9,10 +9,12 @@ polylines, the resolved per-edge segment counts, and `currents_at_knots` — non
 of which is family-specific — so they belong here once rather than twice, and
 they belong in momwire rather than in each consumer's copy of the walk.
 
-The mixin lands on the two classes that define `currents_at_knots`
-(`SinusoidalSolver` and `BSplineSolver`); the other three public solvers
-(`SinusoidalGalerkinSolver`, `HMatrixSolver`, `ArrayBlockSolver`) inherit from
-one of those two and pick it up unchanged.
+The mixin lands on the classes that define their own `currents_at_knots`:
+`SinusoidalSolver`, `BSplineSolver`, and `RazorSolver` (momwire#309), each
+with its own basis-specific readout. The other three public solvers
+(`SinusoidalGalerkinSolver`, `HMatrixSolver`, `ArrayBlockSolver`) inherit
+`currents_at_knots` from `SinusoidalSolver` or `BSplineSolver` and pick up
+this mixin unchanged along with it.
 """
 
 from __future__ import annotations
