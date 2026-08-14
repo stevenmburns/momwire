@@ -4,6 +4,20 @@ A pure-Python method-of-moments antenna simulator with optional C++ accelerators
 
 Extracted from [antenna_designer](https://github.com/stevenmburns/antenna_designer).
 
+## Solvers
+
+`BSplineSolver` (degree-d Galerkin, default d=1/2) is the default solver;
+`HMatrixSolver` and `ArrayBlockSolver` are structural accelerators built on
+top of it. `SinusoidalSolver` and `SinusoidalGalerkinSolver` reproduce NEC2's
+three-term basis (collocation and Galerkin testing respectively) as
+in-codebase NEC comparators. `RazorSolver` is the NEC-5 formulation twin: a
+tent basis with razor-blade (RWG mixed-potential path) testing, transcribed
+from the NEC-5 Users Manual rather than NEC2's, free space only. Because its
+testing rule — not its basis, which it shares with `BSplineSolver(degree=1)`
+— is NEC-5's own, it reproduces NEC-5's characteristic slow O(1/N) impedance
+walk without needing the (licensed) NEC-5 binary; see
+[docs/razor-solver.md](docs/razor-solver.md) (momwire#309).
+
 ## Install
 
 ```bash
