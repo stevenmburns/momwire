@@ -2028,6 +2028,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         same fill-transient budget the batched sweep uses) instead of the
         full tensor — the difference between ~3 GB and ~0.25 GB on a
         4,700-segment mesh.
+
+        No N²-scale transient survives the fill: the pair tangent dot is
+        formed inside the assembler from the (N, 3) tangent table, rather
+        than from an N×N dot matrix that would sit alongside Z for the
+        whole build at half its size (issue #318).
         """
         d = self.degree
         a_row = self._seg_radius(geom)
@@ -2036,7 +2041,6 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_segs = geom["n_segs_total"]
         n_basis = supp_seg.shape[0]
         tangents = geom["tangents"]
-        td_all = tangents @ tangents.T
         ek = self._ek_spec(geom) if self.extended_kernel else None
         ek_se = _EK_SAME_EDGE if self.extended_kernel else None
 
@@ -2046,7 +2050,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
         supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
-        td_c = np.ascontiguousarray(td_all, dtype=np.float64)
+        tan_c = np.ascontiguousarray(tangents, dtype=np.float64)
         all_n = np.arange(n_basis, dtype=np.int64)
 
         def _accumulate(J_win, i0, i1, j0, j1, m_idx, n_idx):
@@ -2054,7 +2058,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 np.ascontiguousarray(J_win, dtype=np.complex128),
                 supp_c,
                 polys_c,
-                td_c,
+                tan_c,
                 m_idx,
                 n_idx,
                 int(i0),

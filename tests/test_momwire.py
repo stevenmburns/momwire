@@ -2459,6 +2459,70 @@ def test_bspline_chunked_dense_impedance_matches_tensor_path():
     assert rel < 1e-10, f"chunked vs tensor impedance disagreement: rel {rel}"
 
 
+def test_bspline_chunked_dense_z_holds_no_n_squared_transient():
+    """The chunked fill must not carry any N²-scale float64 side table
+    (issue #318). The tangent-dot matrix used to be built up front as
+    `tangents @ tangents.T` and handed to the windowed assembler, so it
+    stayed alive for the whole fill — 0.5x the dense Z's own size, added
+    to peak RSS at exactly the worst moment. The assembler now takes the
+    (n_segs, 3) tangent table and forms each pair's dot itself.
+
+    Arithmetic for the threshold, at the N = 1200 basis functions this
+    geometry builds (tracemalloc sees numpy's data allocations):
+
+      * Z itself is 16 N² = 23.0 MB, subtracted off below.
+      * the deleted td_all was 8 N² = 11.5 MB.
+      * everything else the fill allocates is O(n_segs), not O(N²): one
+        observer-row chunk (bounded by swept_mem_mb = 1) plus the
+        per-edge same-edge quadrature prep — measured together at
+        ~2.2 MB, so the old code peaked ~13.8 MB above Z.
+
+    6 MB therefore sits ~2.7x above the transient the fixed code needs
+    and ~2.3x below what the N × N table alone would have cost.
+    """
+    import tracemalloc
+
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    # One straight wire, split into many short edges: the same-edge
+    # correction blocks stay small, keeping every non-N² transient well
+    # clear of the threshold.
+    n_edges, seg_per_edge = 150, 8
+    L = 0.962 * 22 / 2
+    ys = np.linspace(-L / 2, L / 2, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.zeros_like(ys)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+    )
+    geom = sim._build_geometry()
+    supp, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    assert supp.shape[0] == n_edges * seg_per_edge  # N = 1200
+
+    sim.swept_mem_mb = 1
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        Z = sim._compute_Z_dense_chunked(geom, sim.k, supp, polys)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    transient = peak - Z.nbytes
+    assert transient < 6_000_000, (
+        f"chunked fill peaked {transient / 1e6:.2f} MB above Z "
+        f"(8 N**2 = {8 * Z.shape[0] ** 2 / 1e6:.2f} MB) — an N-squared "
+        "transient is back"
+    )
+
+
 def test_bspline_dense_dispatch_respects_memory_budget(monkeypatch):
     """Small tensors use the faster tensor path; oversized ones stay chunked."""
     import momwire.bspline as bmod
