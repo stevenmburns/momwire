@@ -139,6 +139,60 @@ _GX, _GW = np.polynomial.legendre.leggauss(_GAUSS_N)
 _ADAPT_DEPTH = 14
 
 
+def max_image_distance(seg_l, seg_r, ground_z, chunk_rows=None):
+    """Grid-sizing radius for a Sommerfeld build: the largest obs-to-image
+    -point distance over every pair of segment ENDPOINTS (issue #331).
+
+    Four call sites (`BSplineSolver._Z_sommerfeld_remainder`,
+    `._Q_sommerfeld_remainder_enrich`, `HMatrixSolver._somm_nodes`,
+    `SinusoidalGalerkinSolver._field_tensor_sommerfeld_remainder`) all sized
+    their grid the same way: the obs-to-image distance is convex in the two
+    segment parameters, so its max over all pairs is attained at endpoint
+    pairs, and `ex = concat(seg_l, seg_r)` is the `2N` real+image endpoint
+    set (image = the same points, reflected through `ground_z` inside the
+    distance formula below). This is that one shared computation, INCLUDING
+    the `* 1.001` grid-oversize fudge every site applied before handing the
+    result to `_somm_grid` / `get_grid` — the return value is exactly what
+    the deleted `r1_max = ...` line produced, no more.
+
+    Row-chunks the endpoint axis instead of materializing the full
+    `(2N, 2N)` distance matrix (a ~160-190 byte/pair transient that peaked
+    ~4 GB at N=4,700 — issue #331). This is exact, not an approximation:
+    max is order- and grouping-insensitive over non-NaN reals (these
+    distances are sums of squares under a sqrt, so never NaN), so
+    accumulating `r1 = max(r1, chunk.max())` over row bands is bit-identical
+    to the single full-matrix `.max()` it replaces.
+
+    `chunk_rows` bounds the transient at a few MB regardless of N: for `n`
+    endpoints, one row-chunk of `rows` rows allocates O(1) `(rows, n)`
+    float64 arrays (dxe/dye/hze plus their squares, sum, and sqrt) at 8
+    bytes each. The default `rows = max(1, 4_000_000 // (16 * n))` caps a
+    single `(rows, n)` array at `rows * n * 8 <= 2 MB`, so the handful of
+    such arrays alive at once stays a few MB total — far below the old
+    `8 * (2N)**2` full-matrix transient. Pass an explicit value to force a
+    particular chunking (e.g. to exercise a partial tail chunk in tests).
+    """
+    ex = np.concatenate([seg_l, seg_r])
+    n = ex.shape[0]
+    if n == 0:
+        return 0.0
+    x = ex[:, 0]
+    y = ex[:, 1]
+    z = ex[:, 2]
+    if chunk_rows is None:
+        chunk_rows = max(1, 4_000_000 // (16 * n))
+    r1 = 0.0
+    for i0 in range(0, n, chunk_rows):
+        i1 = min(i0 + chunk_rows, n)
+        dxe = x[i0:i1, None] - x[None, :]
+        dye = y[i0:i1, None] - y[None, :]
+        hze = (z[i0:i1, None] - ground_z) + (z[None, :] - ground_z)
+        chunk_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max())
+        if chunk_max > r1:
+            r1 = chunk_max
+    return r1 * 1.001
+
+
 def _gamma(lam, k):
     """(λ² − k²)^{1/2} with vertical cuts down from +k / up from −k."""
     return np.sqrt(-1j * (lam - k)) * np.sqrt(1j * (lam + k))
