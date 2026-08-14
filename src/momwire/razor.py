@@ -20,10 +20,11 @@ Formulation
 Unknowns are the interior knots of each wire — one unit tent Λ_n per
 interior knot, rising linearly in arc length over the segment before the
 knot and falling over the segment after, so the current vanishes at every
-wire endpoint. Row m tests along the path P_m that runs from the centroid
-of the segment before knot m, through the knot, to the centroid of the
-segment after (two straight half-segments, bent at the knot on a kinked
-wire):
+free wire endpoint — plus one junction tent per independent through-path
+where wire ends meet (see "Junctions" below). Row m tests along the path
+P_m that runs from the centroid of the segment before knot m, through the
+knot, to the centroid of the segment after (two straight half-segments,
+bent at the knot on a kinked wire):
 
     Z[m,n] = jωμ₀ · T1[m,n] − T2[m,n] / (jωε₀)
 
@@ -40,13 +41,34 @@ Excitation is NEC-5's EX-at-a-knot: the delta-gap voltage sits inside
 exactly one testing path, so it lands entirely in that knot's row and the
 solved tent coefficient at the feed knot *is* the drive-point current.
 
-Scope (momwire#309, unit 1)
---------------------------
-Free space, reduced kernel, one polyline per wire, no continuity across
-wires — separate wires are electrically separate. Cross-wire junctions,
-grounds, and the extended kernel are out of scope; each is refused with a
-message rather than silently mismodelled. Cross-wire junction support is
-unit 2 of momwire#309.
+Junctions (momwire#309, unit 2)
+-------------------------------
+A junction is a point where wire ENDS coincide (within `_JUNCTION_TOL`),
+including the single wire whose start and end coincide — a closed loop.
+They are detected from the geometry; there is no junction spec to write.
+
+K coincident ends carry K−1 independent through-currents, so a junction
+gets K−1 extra bases. The first-listed end at the point is the reference
+side A; every other end B_i gets one junction tent spanning A's terminal
+segment and B_i's, rising linearly to 1 at the junction on both sides.
+Its coefficient is the current flowing THROUGH the junction from A into
+B_i, in amperes, and its row is the razor path centroid(A) → junction →
+centroid(B_i) traversed in the direction of that flow. Because a wire may
+join by either of its ends, each half carries a sign relative to the
+wire's own arc direction; the charge doublet is then +1/h_A on A's
+terminal segment and −1/h_B on B_i's, which is Kirchhoff's law written
+into the basis rather than enforced by a constraint row. An interior-knot
+tent is the K=2 junction tent of a wire split at that knot, exactly — the
+split identities in `tests/test_razor_junctions.py` pin that.
+
+Scope
+-----
+Free space, reduced kernel, one polyline per wire. Grounds and the
+extended kernel are out of scope; each is refused with a message rather
+than silently mismodelled. Only wire ENDS junction: a wire end touching
+another wire's interior is not a contact here. A wire with a single
+segment cannot take part in a junction (its two junction tents would
+overlap on one segment) and is refused.
 """
 
 import numpy as np
@@ -80,9 +102,12 @@ _OUT_OF_SCOPE = {
     "degree": "RazorSolver has no degree: the razor-blade testing rule is "
     "defined against the tent (degree-1) expansion. Use "
     "BSplineSolver(degree=...) for higher-order bases with Galerkin testing",
-    "junctions": "cross-wire junctions are not supported yet — unit 2 of momwire#309",
-    "junction_ports": "cross-wire junctions are not supported yet — unit 2 "
-    "of momwire#309",
+    "junctions": "RazorSolver takes no junction spec: junctions are detected "
+    "from the geometry (coincident wire ends), so listing them is either "
+    "redundant or a disagreement with the mesh",
+    "junction_ports": "junction ports are not supported: a junction basis is "
+    "already a through-current unknown, and a source at a K>=3 junction has no "
+    "unambiguous branch pair to drive",
     "extended_kernel": "RazorSolver is reduced-kernel only: NEC-5's "
     "formulation is the comparison target, and its expansion is tested on "
     "the wire axis",
@@ -134,8 +159,8 @@ class RazorSolver(_Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
     The NEC-5 formulation twin — see the module docstring for the physics.
-    Free space, reduced kernel, one tent per interior knot, no continuity
-    across wires.
+    Free space, reduced kernel, one tent per interior knot plus K−1
+    through-current tents wherever K wire ends meet.
 
     wires: list of (M_w, 3) polyline arrays, M_w >= 2 anchor points per wire.
         A straight dipole is a single two-anchor wire; an inverted-V is one
@@ -156,10 +181,14 @@ class RazorSolver(_Cancelable):
         path (ignored when `feeds` is supplied).
     feed_arclength: arc length along the feed wire, from its first anchor,
         at which to place the source. None picks the wire's midpoint. The
-        source always snaps to the NEAREST INTERIOR KNOT: the razor testing
-        paths are knot-centred, so a between-knots delta-gap has no row to
-        land in. On an even segment count a midpoint feed is already the
-        exact centre knot.
+        source always snaps to the NEAREST KNOT THAT CARRIES A BASIS on
+        that wire — every interior knot, plus either end that meets other
+        wire ends at a junction: the razor testing paths are knot-centred,
+        so a between-knots delta-gap has no row to land in. On an even
+        segment count a midpoint feed is already the exact centre knot. A
+        feed that snaps to a junction of K >= 3 ends is refused (which
+        branch pair the source drives is ambiguous); K = 2 — the ordinary
+        split-wire feed — drives that junction's through-current basis.
     feeds: optional list of (wire_index, arclength_or_None, voltage) tuples
         describing several delta-gap sources with prescribed complex
         voltages. `compute_impedance()` then returns the per-feed
@@ -233,7 +262,6 @@ class RazorSolver(_Cancelable):
         for i, pl in enumerate(self.wires_polylines):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
-        self._refuse_junctions()
 
         n_w = len(self.wires_polylines)
         if n_per_edge_per_wire is None:
@@ -264,7 +292,9 @@ class RazorSolver(_Cancelable):
             if sum(npe) < 2:
                 raise ValueError(
                     f"wire {i}: needs >= 2 segments to have an interior knot "
-                    "(a one-segment wire carries no tent)"
+                    "(a one-segment wire carries no tent, and if it were "
+                    "junctioned at both ends its two junction tents would "
+                    "overlap on that one segment — split it in two)"
                 )
 
         if feeds is None:
@@ -299,43 +329,82 @@ class RazorSolver(_Cancelable):
     # ------------------------------------------------------------------
     # geometry
 
-    def _refuse_junctions(self):
-        """Refuse a geometry where two wires share an endpoint.
+    def _find_junctions(self):
+        """Group coincident wire ends into junctions.
 
-        With no cross-wire continuity, a shared endpoint would silently
-        model two wires that touch as two wires whose currents both go to
-        zero at the contact — physically wrong rather than approximate, so
-        it is an error, not a warning.
+        Returns a list of groups, each a list of ``(wire_index, "start" |
+        "end")`` in the order the ends are listed — first wire first, and
+        `start` before `end` within a wire. The first entry of a group is
+        the reference side A of every junction tent there, so this order is
+        part of the basis definition (not that the answer depends on it:
+        picking a different reference re-spells the same current space).
+
+        A wire whose own two ends coincide is a closed loop and forms a
+        group of two on its own. Grouping is by first match within
+        `_JUNCTION_TOL`, the same "same point" tolerance the caller-facing
+        geometry helpers use.
         """
         ends = []
         for i, pl in enumerate(self.wires_polylines):
             ends.append((i, "start", pl[0]))
             ends.append((i, "end", pl[-1]))
-        for p in range(len(ends)):
-            for q in range(p + 1, len(ends)):
-                wi, ei, pi = ends[p]
-                wj, ej, pj = ends[q]
-                if wi == wj:
-                    continue
-                if float(np.linalg.norm(pi - pj)) <= _JUNCTION_TOL:
-                    raise NotImplementedError(
-                        f"wire {wi} {ei} and wire {wj} {ej} share the point "
-                        f"{np.round(pi, 12).tolist()}: cross-wire junctions are "
-                        "not supported by RazorSolver yet (unit 2 of "
-                        "momwire#309). Model the connected structure as a "
-                        "single polyline wire, or use BSplineSolver, which "
-                        "carries junction bases with a KCL constraint."
-                    )
+
+        groups, points = [], []
+        for w, kind, p in ends:
+            for g, q in enumerate(points):
+                if float(np.linalg.norm(p - q)) <= _JUNCTION_TOL:
+                    groups[g].append((w, kind))
+                    break
+            else:
+                groups.append([(w, kind)])
+                points.append(p)
+        return [g for g in groups if len(g) >= 2]
+
+    def _junction_wings(self, seg_offsets, group):
+        """Wing descriptors for one junction group's K−1 tents.
+
+        Yields ``(seg_a, rise_a, sigma_a, seg_b, rise_b, sigma_b)`` per
+        tent. `rise` says the junction sits at the segment's far (arc-h)
+        end, so the tent rises with the segment's own arc coordinate;
+        `sigma` turns +1 A of through-current into a signed multiple of
+        that segment's arc direction. Side A carries the current INTO the
+        junction (so +1 along arc if the wire joins by its end, −1 if by
+        its start) and side B carries it back OUT (the mirror image).
+        """
+        (w_a, kind_a) = group[0]
+        for w_b, kind_b in group[1:]:
+            seg_a = seg_offsets[w_a + 1] - 1 if kind_a == "end" else seg_offsets[w_a]
+            seg_b = seg_offsets[w_b + 1] - 1 if kind_b == "end" else seg_offsets[w_b]
+            rise_a = kind_a == "end"
+            rise_b = kind_b == "end"
+            yield (
+                seg_a,
+                rise_a,
+                1.0 if rise_a else -1.0,
+                seg_b,
+                rise_b,
+                -1.0 if rise_b else 1.0,
+            )
 
     def _build_geometry(self):
         """Discretize every wire into segments and concatenate.
 
         Segments are stored by start point, unit tangent and length, which
         is the form both the static moments and the testing paths want.
-        `left_seg` / `right_seg` name the two segments meeting at each
-        interior knot: basis n rises over `left_seg[n]` and falls over
-        `right_seg[n]`, and row n's testing path runs from `left_seg[n]`'s
-        centroid to `right_seg[n]`'s.
+
+        Every basis — interior tent or junction tent — is described by two
+        WINGS, one per side of its knot, in flow order (side A first):
+
+            wing_seg[n, j]    the segment the wing lives on
+            wing_rise[n, j]   the knot is at that segment's arc-h end, so
+                              the tent shape there is τ/h (else 1 − τ/h)
+            wing_sigma[n, j]  ±1: the wing's current direction relative to
+                              its segment's own arc direction
+
+        An interior tent at knot n is ``([left, right], [True, False],
+        [+1, +1])`` — the unit-1 convention, unchanged. Junction tents are
+        appended after all interior bases, junction by junction, and get
+        their wings from :meth:`_junction_wings`.
         """
         if self._cached_geometry is not None:
             return self._cached_geometry
@@ -381,36 +450,102 @@ class RazorSolver(_Cancelable):
                 for w in range(len(per_wire))
             ]
         )
+        n_interior = int(basis_offsets[-1])
+        if n_interior == 0:
+            raise ValueError("no unknowns: every wire needs >= 2 segments")
+
+        groups = self._find_junctions()
+        j_seg, j_rise, j_sigma = [], [], []
+        junctions = []
+        for group in groups:
+            bases = []
+            for sa, ra, ga, sb, rb, gb in self._junction_wings(seg_offsets, group):
+                bases.append(n_interior + len(j_seg))
+                j_seg.append((sa, sb))
+                j_rise.append((ra, rb))
+                j_sigma.append((ga, gb))
+            junctions.append({"ends": group, "bases": bases})
+
+        n_junction = len(j_seg)
+        n_basis = n_interior + n_junction
+        wing_seg = np.empty((n_basis, 2), dtype=np.int64)
+        wing_rise = np.empty((n_basis, 2), dtype=bool)
+        wing_sigma = np.empty((n_basis, 2), dtype=np.float64)
+        wing_seg[:n_interior, 0] = left
+        wing_seg[:n_interior, 1] = left + 1
+        wing_rise[:n_interior, 0] = True
+        wing_rise[:n_interior, 1] = False
+        wing_sigma[:n_interior] = 1.0
+        if n_junction:
+            wing_seg[n_interior:] = np.asarray(j_seg, dtype=np.int64)
+            wing_rise[n_interior:] = np.asarray(j_rise, dtype=bool)
+            wing_sigma[n_interior:] = np.asarray(j_sigma, dtype=np.float64)
+
         geom = {
             "per_wire": per_wire,
             "seg_offsets": seg_offsets,
             "basis_offsets": basis_offsets,
             "n_segs_total": seg_offsets[-1],
-            "n_basis_total": basis_offsets[-1],
+            "n_basis_interior": n_interior,
+            "n_basis_total": n_basis,
             "seg_p0": np.vstack(p0_list),
             "seg_t": np.vstack(tan_list),
             "seg_h": np.concatenate(h_list),
-            "left_seg": left,
-            "right_seg": left + 1,
+            "wing_seg": wing_seg,
+            "wing_rise": wing_rise,
+            "wing_sigma": wing_sigma,
+            "junctions": junctions,
         }
-        if geom["n_basis_total"] == 0:
-            raise ValueError("no unknowns: every wire needs >= 2 segments")
         self._cached_geometry = geom
         return geom
+
+    def _feed_knots(self, geom, w):
+        """Every knot of wire `w` that carries a basis, as (arc, basis, K).
+
+        The interior knots, plus either wire end that meets other ends at a
+        junction — a junction knot's basis is that junction's through-
+        current unknown, and driving it is the split-wire feed. `K` is the
+        number of ends at the knot (1 for an interior knot), which is what
+        the K >= 3 refusal reads.
+        """
+        arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
+        base = geom["basis_offsets"][w]
+        knots = [
+            (float(arc_at_knot[j]), base + j - 1, 1)
+            for j in range(1, len(arc_at_knot) - 1)
+        ]
+        for jn in geom["junctions"]:
+            for w_e, kind in jn["ends"]:
+                if w_e != w:
+                    continue
+                arc = 0.0 if kind == "start" else float(arc_at_knot[-1])
+                knots.append((arc, jn["bases"][0], len(jn["ends"])))
+        return knots
 
     def _feed_basis_indices(self, geom):
         """Global basis index of each feed's knot.
 
-        Each feed snaps to the interior knot of its wire whose arc length
-        from that wire's first anchor is closest to the requested value
-        (None → the wire's midpoint).
+        Each feed snaps to the knot of its wire — interior or junction —
+        whose arc length from that wire's first anchor is closest to the
+        requested value (None → the wire's midpoint).
         """
         idx = []
-        for w, arc, _v in self.feeds:
+        for i, (w, arc, _v) in enumerate(self.feeds):
             arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
             target = arc if arc is not None else arc_at_knot[-1] / 2.0
-            m_local = int(np.argmin(np.abs(arc_at_knot[1:-1] - target)))
-            idx.append(int(geom["basis_offsets"][w] + m_local))
+            knots = self._feed_knots(geom, w)
+            arcs = np.array([a for a, _b, _k in knots])
+            pick = int(np.argmin(np.abs(arcs - target)))
+            _a, basis, k_ends = knots[pick]
+            if k_ends >= 3:
+                raise NotImplementedError(
+                    f"feeds[{i}]: the source snaps to a junction where "
+                    f"{k_ends} wire ends meet, and a delta-gap voltage there "
+                    "is ambiguous — it would have to name which pair of "
+                    "branches it drives. Feed an interior knot, or model the "
+                    "source on a short bridge wire off the junction."
+                )
+            idx.append(int(basis))
         return idx
 
     # ------------------------------------------------------------------
@@ -463,30 +598,48 @@ class RazorSolver(_Cancelable):
     # ------------------------------------------------------------------
     # assembly
 
+    def _knot_points(self, geom):
+        """The knot each basis is centred on, read off its side-A wing."""
+        seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
+        s_a = geom["wing_seg"][:, 0]
+        along = np.where(geom["wing_rise"][:, 0], seg_h[s_a], 0.0)
+        return seg_p0[s_a] + along[:, None] * seg_t[s_a]
+
     def _testing_paths(self, geom):
         """Quadrature points, tangents and weights of every testing path.
 
-        Path P_m runs centroid(left_seg[m]) → knot m → centroid(right_seg[m]).
-        Segment `right_seg[m]` starts at the knot, so the knot is just its
-        start point. Each half gets its own `n_qp_path` Gauss-Legendre rule
-        and its own segment tangent — on a kinked wire the two halves point
-        in different directions, which is exactly what T1's tangent dot
-        product has to see.
+        Path P_m runs centroid(wing A) → knot m → centroid(wing B), each
+        half traversed in the direction the basis current flows there. For
+        an interior tent that is the unit-1 path centroid(left) → knot →
+        centroid(right); for a junction tent it is A's terminal segment,
+        through the junction, into B's — which may run against either
+        wire's own arc direction, hence the ±1 wing signs.
+
+        Each half gets its own `n_qp_path` Gauss-Legendre rule and its own
+        tangent: on a kinked wire (or across a junction) the two halves
+        point in different directions, which is exactly what T1's tangent
+        dot product has to see.
 
         Returns ``(pts, tans, wts)`` shaped (n_basis, 2·n_qp_path, 3/3/–).
         """
-        seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
-        left, right = geom["left_seg"], geom["right_seg"]
-        cent = seg_p0 + 0.5 * seg_h[:, None] * seg_t
-        knot = seg_p0[right]
+        seg_t, seg_h = geom["seg_t"], geom["seg_h"]
+        wing_seg, wing_sigma = geom["wing_seg"], geom["wing_sigma"]
+        cent = geom["seg_p0"] + 0.5 * seg_h[:, None] * seg_t
+        knot = self._knot_points(geom)
         xo, wo = leggauss(self.n_qp_path)
 
+        s_a, s_b = wing_seg[:, 0], wing_seg[:, 1]
         pts, tans, wts = [], [], []
-        for lo_pt, hi_pt, seg in ((cent[left], knot, left), (knot, cent[right], right)):
+        for j, (lo_pt, hi_pt, seg) in enumerate(
+            ((cent[s_a], knot, s_a), (knot, cent[s_b], s_b))
+        ):
             mid = 0.5 * (lo_pt + hi_pt)
             half = 0.5 * (hi_pt - lo_pt)
             pts.append(mid[:, None, :] + half[:, None, :] * xo[None, :, None])
-            tans.append(np.repeat(seg_t[seg][:, None, :], xo.size, axis=1))
+            # The traversal direction IS the wing's flow direction: σ ±1
+            # times the segment's own unit tangent.
+            t_dir = wing_sigma[:, j][:, None] * seg_t[seg]
+            tans.append(np.repeat(t_dir[:, None, :], xo.size, axis=1))
             # Each half-path is h/2 long, so the Gauss-Legendre Jacobian
             # that maps [-1, 1] onto it is h/4, not h/2.
             wts.append(0.25 * seg_h[seg][:, None] * wo[None, :])
@@ -499,34 +652,51 @@ class RazorSolver(_Cancelable):
     def _assemble_Z(self, geom, k):
         """Fill the razor-blade impedance matrix.
 
-        Both terms are built from the same two segment moments. For tent n
-        with rising segment ``l`` and falling segment ``r`` of length h:
+        Both terms are built from the same two segment moments. A wing on
+        segment s of length h contributes to the vector potential
 
-            rise part of A_n = M1[l] / h_l        (Λ_n = τ'/h_l there)
-            fall part of A_n = M0[r] − M1[r] / h_r   (Λ_n = 1 − τ'/h_r)
+            A_n += σ · (M1[s] / h)              when the knot is at arc h
+            A_n += σ · (M0[s] − M1[s] / h)      when it is at arc 0
 
-        each carried by its own segment tangent, so the outer path point's
-        tangent contracts with them separately. The charge doublet is the
-        same moments' M0 differenced between the path's two bounding
-        centroids: Λ_n' = +1/h_l on the rising segment, −1/h_r on the
-        falling one.
+        carried by σ times that segment's tangent, so the outer path
+        point's tangent contracts with each wing separately. The charge
+        doublet is the constant dσΛ/dτ on each wing — which works out to
+        +1/h_A on side A and −1/h_B on side B whichever way round the two
+        wires are spelled, i.e. the unit charge that leaves A and lands on
+        B — differenced between the path's two bounding centroids.
         """
         seg_t, seg_h = geom["seg_t"], geom["seg_h"]
-        left, right = geom["left_seg"], geom["right_seg"]
-        n_basis = left.size
-        h_l, h_r = seg_h[left], seg_h[right]
+        wing_seg, wing_sigma, wing_rise = (
+            geom["wing_seg"],
+            geom["wing_sigma"],
+            geom["wing_rise"],
+        )
+        n_basis = wing_seg.shape[0]
+        s_a, s_b = wing_seg[:, 0], wing_seg[:, 1]
+        h_a, h_b = seg_h[s_a], seg_h[s_b]
+        # dΛ/dτ in the segment's own arc coordinate, signed by the flow.
+        q_a = wing_sigma[:, 0] * np.where(wing_rise[:, 0], 1.0, -1.0) / h_a
+        q_b = wing_sigma[:, 1] * np.where(wing_rise[:, 1], 1.0, -1.0) / h_b
 
         # --- scalar potential: M0 at every segment centroid.
         cent = geom["seg_p0"] + 0.5 * seg_h[:, None] * seg_t
         M0c, _ = self._seg_moments(cent, geom, k, need_m1=False)
-        dM0 = M0c[right] - M0c[left]  # (row, source segment)
-        T2 = dM0[:, left] / h_l[None, :] - dM0[:, right] / h_r[None, :]
+        dM0 = M0c[s_b] - M0c[s_a]  # (row, source segment)
+        T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
 
         # --- vector potential: the outer path integral, row-chunked.
         pts, tans, wts = self._testing_paths(geom)
         n_path = pts.shape[1]
-        td_left = seg_t[left].T  # (3, n_basis)
-        td_right = seg_t[right].T
+        # σ folded into the source-side tangent, so the dot product carries
+        # the wing's current direction with it.
+        td_a = (wing_sigma[:, 0][:, None] * seg_t[s_a]).T  # (3, n_basis)
+        td_b = (wing_sigma[:, 1][:, None] * seg_t[s_b]).T
+        # Columns whose wing falls (knot at the segment's arc-0 end) need
+        # M0 − M1/h instead of M1/h. On a junction-free model that is every
+        # B wing and no A wing, so patching the exceptions in place keeps
+        # the no-junction fill exactly as cheap as it was in unit 1.
+        fall_a = np.flatnonzero(~wing_rise[:, 0])
+        fall_b = np.flatnonzero(~wing_rise[:, 1])
         T1 = np.empty((n_basis, n_basis), dtype=np.complex128)
         rows = max(1, _CHUNK_ELEMS // max(1, n_path * n_basis))
         for lo in range(0, n_basis, rows):
@@ -534,10 +704,14 @@ class RazorSolver(_Cancelable):
             hi = min(lo + rows, n_basis)
             obs = pts[lo:hi].reshape(-1, 3)
             M0, M1 = self._seg_moments(obs, geom, k)
-            rise = M1[:, left] / h_l[None, :]
-            fall = M0[:, right] - M1[:, right] / h_r[None, :]
+            mom_a = M1[:, s_a] / h_a[None, :]
+            mom_b = M1[:, s_b] / h_b[None, :]
+            if fall_a.size:
+                mom_a[:, fall_a] = M0[:, s_a[fall_a]] - mom_a[:, fall_a]
+            if fall_b.size:
+                mom_b[:, fall_b] = M0[:, s_b[fall_b]] - mom_b[:, fall_b]
             t_out = tans[lo:hi].reshape(-1, 3)
-            integrand = (t_out @ td_left) * rise + (t_out @ td_right) * fall
+            integrand = (t_out @ td_a) * mom_a + (t_out @ td_b) * mom_b
             integrand *= wts[lo:hi].reshape(-1)[:, None]
             T1[lo:hi] = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
 
@@ -555,7 +729,10 @@ class RazorSolver(_Cancelable):
         superposed right-hand side Σ_i V_i e_{m_i}. `coeffs` is the solved
         coefficient vector — on a tent basis the coefficient at a knot IS
         the current there (amperes), so `coeffs` is the knot-current
-        distribution in basis order (per wire, interior knots in arc order).
+        distribution in basis order: per wire, interior knots in arc order,
+        then the junction through-currents (junctions in detection order,
+        K−1 per junction), each measured from its junction's side A into
+        that tent's side B.
         """
         geom = self._build_geometry()
         self._checkpoint()
@@ -575,3 +752,34 @@ class RazorSolver(_Cancelable):
         feed_currents = np.array([coeffs[m] for m in idx], dtype=np.complex128)
         z_per_feed = voltages / feed_currents
         return (z_per_feed[0] if len(self.feeds) == 1 else z_per_feed), coeffs
+
+    def compute_y_matrix(self):
+        """Short-circuit admittance matrix [Y_sc] at the configured feeds.
+
+        Ports are the `feeds` entries; their voltages are ignored here.
+        ``Y[i, j]`` is the current at port i when port j is driven with
+        1 V and every other port is held at 0 V — which on this delta-gap
+        model is simply an all-zero row entry, so the N columns are N
+        back-substitutions on one factored Z. Returns an
+        ``(n_ports, n_ports)`` complex array; invert it for the
+        open-circuit Z matrix of network analysis.
+
+        The result is NOT symmetric, and that is the formulation talking:
+        razor-blade testing weights the E-field boundary condition with
+        path integrals rather than with the basis itself, so reciprocity
+        is only recovered as the mesh refines (momwire#309). A Galerkin
+        scheme on the same basis would be symmetric to machine precision.
+        `tests/test_razor_junctions.py` pins the decay.
+        """
+        geom = self._build_geometry()
+        self._checkpoint()
+        Z = self._assemble_Z(geom, self.k)
+        self.z = Z
+
+        idx = self._feed_basis_indices(geom)
+        B = np.zeros((geom["n_basis_total"], len(idx)), dtype=np.complex128)
+        for j, m_j in enumerate(idx):
+            B[m_j, j] = 1.0
+
+        self._checkpoint()
+        return scipy.linalg.solve(Z, B)[idx, :]
