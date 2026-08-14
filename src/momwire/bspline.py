@@ -2054,8 +2054,20 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         all_n = np.arange(n_basis, dtype=np.int64)
 
         def _accumulate(J_win, i0, i1, j0, j1, m_idx, n_idx):
+            # Producer contract, not a conversion: every window handed here
+            # is already C-contiguous complex128, so the ascontiguousarray
+            # this used to wrap it in returned the SAME object on every
+            # path (issue #318 audit — C++ reduced kernel, C++ EK twin,
+            # numpy einsum fallback, the mixed-radius `concatenate`, and
+            # the same-edge `(A_st + A_reg) - J_edge` difference, which
+            # promotes float64 A_st to complex128 by itself). The assert
+            # pins the contract and vanishes under -O; the pybind
+            # `c_style | forcecast` on the assembler stays the safety net.
+            assert J_win.dtype == np.complex128 and J_win.flags.c_contiguous, (
+                f"moment window must be C-contiguous complex128, got {J_win.dtype}"
+            )
             _acc.assemble_Z_bspline_windowed(
-                np.ascontiguousarray(J_win, dtype=np.complex128),
+                J_win,
                 supp_c,
                 polys_c,
                 tan_c,
