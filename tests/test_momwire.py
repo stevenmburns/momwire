@@ -2542,6 +2542,112 @@ def test_bspline_chunked_dense_z_holds_no_n_squared_transient(extended_kernel):
     )
 
 
+@pytest.mark.parametrize(
+    "ground_kwargs",
+    [
+        pytest.param({}, id="pec"),
+        pytest.param({"ground_eps": (10.0, 0.002)}, id="refl-coef"),
+        pytest.param(
+            {"ground_eps": (10.0, 0.002), "ground_model": "sommerfeld"},
+            id="sommerfeld",
+        ),
+    ],
+)
+def test_bspline_chunked_image_fill_holds_no_n_squared_transient(ground_kwargs):
+    """The grounded chunked image fill must allocate nothing N²-scale
+    beyond Z itself (issue #323). The accumulator used to be handed the
+    same global (N, N) weight tables the tensor path builds and slice
+    them per observer chunk, so TWO complex128 (N, N) tables stayed
+    resident for the whole fill even though each chunk reads one row
+    band. `_image_weight_window_fn` now produces the windows per chunk.
+
+    Arithmetic for the threshold, at the N = 1200 basis functions this
+    geometry builds (tracemalloc sees numpy's data allocations; Z is
+    preallocated outside the traced region, so the peak below IS the
+    transient):
+
+      * the retired residency was 2 × 16 N² = 46.1 MB. One table alone
+        is 23.0 MB, and even the float64 gemm precursor the PEC branch
+        computes before its complex cast is 8 N² = 11.5 MB — that
+        11.5 MB is the smallest N²-scale object that can appear here.
+      * what the fixed code allocates is all chunk-bounded: the
+        mirrored-source moment window (capped by swept_mem_mb = 1),
+        the two (chunk, n_segs) complex128 weight windows, and — in
+        the refl-coef case — the five (chunk, n_segs) float64 specular
+        intermediates `specular_pair_tables` returns. At
+        swept_mem_mb = 1 the chunk is 6 observer rows, so all of that
+        is well under the moment window that sets the budget.
+
+    Measured peaks: 2.39 MB (pec), 2.42 MB (refl-coef), 2.38 MB
+    (sommerfeld) — flat across modes, as expected when nothing scales
+    with N. 6 MB therefore sits ~2.5x above the worst mode and ~1.9x
+    below the smallest N²-scale object that could come back. Restoring
+    the retired residency in the PEC branch alone measures 48.2 MB.
+
+    Unlike the grounded equality gates, which need bent decks so a
+    mirror-sign or dyad error cannot cancel, this one measures
+    ALLOCATION rather than algebra: a straight horizontal wire is fine
+    here, and it keeps the same-edge-free image fill's per-chunk work
+    uniform. It is lifted to z = 2.2 over ground_z = 0 because a deck
+    lying in the ground plane is degenerate for image builds.
+
+    The sommerfeld case gates the C2 exact-image term only — the smooth
+    `_Z_sommerfeld_remainder` is a separate, separately-chunked term
+    outside issue #323's scope and outside the call traced below.
+    """
+    import tracemalloc
+
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("weighted windowed Z assembly accelerator not built")
+
+    n_edges, seg_per_edge = 150, 8
+    L = 0.962 * 22 / 2
+    ys = np.linspace(-L / 2, L / 2, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 2.2)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+        ground_z=0.0,
+        **ground_kwargs,
+    )
+    geom = sim._build_geometry()
+    supp, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    assert supp.shape[0] == n_edges * seg_per_edge  # N = 1200
+
+    # Z is allocated (and zeroed) before tracing starts, so the peak the
+    # image fill reports is its own transient with nothing subtracted.
+    Z = np.zeros((supp.shape[0],) * 2, dtype=np.complex128, order="F")
+    sim.swept_mem_mb = 1
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        # The window producer is built INSIDE the traced region on purpose:
+        # a mode that went back to materialising its tables up front would
+        # do it here, in the closure's body, and escape a hoisted call.
+        sim._accumulate_Z_image_chunked(
+            Z, geom, sim.k, supp, polys, sim._image_weight_window_fn(geom)
+        )
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # Guard the guard: a fill that accumulated nothing would pass on
+    # allocation while measuring nothing at all.
+    assert np.any(Z != 0.0)
+    assert peak < 6_000_000, (
+        f"chunked image fill peaked {peak / 1e6:.2f} MB "
+        f"(one complex weight table = {16 * Z.shape[0] ** 2 / 1e6:.2f} MB, "
+        f"its float64 precursor = {8 * Z.shape[0] ** 2 / 1e6:.2f} MB) — an "
+        "N-squared weight residency is back"
+    )
+
+
 def test_bspline_dense_dispatch_respects_memory_budget(monkeypatch):
     """Small tensors use the faster tensor path; oversized ones stay chunked."""
     import momwire.bspline as bmod
