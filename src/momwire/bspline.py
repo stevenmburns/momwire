@@ -1953,17 +1953,30 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     def _same_edge_prep(self, geom):
         """k-independent per-same-edge precompute hoisted out of the swept-k
-        loop: each edge's analytic static-moment block plus the reg-kernel
-        quadrature geometry (R table + weighted powers). Returns a list of
-        `(global_slice, A_static, reg_geometry)`. Bounded memory — one edge's
-        tables at a time, identical footprint to the per-k path; only the
-        cheap `exp(-jkR)` + einsum is left per k.
+        loop: each edge's analytic static-moment block, plus the O(N_e)
+        ingredients (`ed_arc`, `a_w`) `_seg_seg_reg_geometry` needs to
+        rebuild the reg-kernel quadrature geometry on demand. Returns a
+        list of `(global_slice, A_static, ed_arc, a_w)`.
+
+        The reg-kernel geometry itself — an `(N_e·n_qp, N_e·n_qp)` R table,
+        128·N_e² bytes at the default `n_qp_pair=4` — is deliberately NOT
+        materialised here (issue #330): every swept caller holds this
+        return value's list across the WHOLE sweep, so a retained R table
+        per edge would be resident for the sweep's entire lifetime rather
+        than the one edge's turn it actually needs. `A_static` (72·N_e²
+        bytes) stays small enough to keep; `ed_arc` is the (N_e+1,) arc
+        array already owned by `geom` (a reference, not a copy) and `a_w`
+        is a scalar — both O(N_e). Consumers rebuild the R table from
+        these with `_seg_seg_reg_geometry(ed_arc, a_w, max_d=d,
+        n_qp=self.n_qp_pair, ek=...)` — same function, same inputs as this
+        method used to call, so the rebuilt table is bit-identical to the
+        one this used to retain.
 
         Same-edge pairs live on a single wire, so each edge's block uses
         that wire's own radius — and, under `extended_kernel`, is eligible
-        in its entirety (`_EK_SAME_EDGE`). The spec rides into the reg
-        GEOMETRY dict rather than the per-k call, so the swept callers that
-        share this prep across frequencies carry EK for free.
+        in its entirety (`_EK_SAME_EDGE`). Consumers recompute the SAME
+        `_EK_SAME_EDGE if self.extended_kernel else None` spec that built
+        `A_static` here, so EK rides through unchanged.
         """
         d = self.degree
         ek = _EK_SAME_EDGE if self.extended_kernel else None
@@ -1979,10 +1992,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for i_e in range(len(ed_off) - 1):
                 sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
                 A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek)
-                reg_geo = _seg_seg_reg_geometry(
-                    ed_arc[i_e], a_w, max_d=d, n_qp=self.n_qp_pair, ek=ek
-                )
-                prep.append((sl, A_st, reg_geo))
+                prep.append((sl, A_st, ed_arc[i_e], a_w))
         return prep
 
     def _same_edge_prep_swept_chunks(self, prep, k_array):
@@ -2000,23 +2010,56 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         independently of its chunk mates, so a sweep that fits in one chunk
         is byte-for-byte the old whole-sweep call, and a multi-chunk sweep
         matches it to the last ulp.
+
+        `prep`'s entries no longer carry a materialised reg-geometry table
+        (issue #330): each edge's R table is rebuilt HERE, once per (chunk,
+        edge) — the same granularity the old code consumed it at, since the
+        chunk loop below already called `_seg_seg_reg_moments_from_geometry_swept`
+        once per (chunk, edge) on a table the caller had pre-built. Rebuilding
+        instead of reusing means only one edge's R table is ever alive at a
+        time (the list comprehension drops each one immediately after its
+        einsum), instead of every edge's table riding in `prep` for the whole
+        generator's lifetime. Same function (`_seg_seg_reg_geometry`), same
+        inputs (`ed_arc`, `a_w`, `d`, `n_qp_pair`, `ek`) as the retired
+        materialise-once call, so this is bit-identical, not an approximation
+        — only the moment CHUNK COUNT changes the wall-clock cost, never the
+        answer.
         """
         k_array = np.asarray(k_array, dtype=float)
         n_k = k_array.shape[0]
-        nm = self.degree + 1
-        sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _A_st, _g in prep)
+        d = self.degree
+        nm = d + 1
+        n_qp = self.n_qp_pair
+        ek = _EK_SAME_EDGE if self.extended_kernel else None
+        sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _A_st, _arc, _a in prep)
+        max_ne2 = max(
+            ((sl.stop - sl.start) ** 2 for sl, _A_st, _arc, _a in prep), default=0
+        )
         bytes_per_k = nm * nm * sum_ne2 * 16
-        chunk = max(1, min(n_k, (self.swept_mem_mb << 20) // max(bytes_per_k, 1)))
+        # Budget honesty (issue #330): while a chunk's moment blocks are
+        # being built, one edge's rebuilt R table is transiently alive
+        # too — float64, (N_e·n_qp)² entries, 8 bytes each. Only the
+        # LARGEST edge's table is ever live at once (the list
+        # comprehension below drops each edge's table before starting the
+        # next), so reserve that much of the budget up front and size the
+        # k-chunk out of what is left, rather than pretending the rebuild
+        # is free.
+        transient_bytes = max_ne2 * n_qp * n_qp * 8
+        budget = max((self.swept_mem_mb << 20) - transient_bytes, 0)
+        chunk = max(1, min(n_k, budget // max(bytes_per_k, 1)))
         for c0 in range(0, n_k, chunk):
             self._checkpoint()  # before each chunk's batched reg-moment build
             ks = k_array[c0 : c0 + chunk]
             reg_chunk = [
-                _seg_seg_reg_moments_from_geometry_swept(reg_geo, ks)
-                for _sl, _A_st, reg_geo in prep
+                _seg_seg_reg_moments_from_geometry_swept(
+                    _seg_seg_reg_geometry(ed_arc, a_w, max_d=d, n_qp=n_qp, ek=ek), ks
+                )
+                for _sl, _A_st, ed_arc, a_w in prep
             ]
             for i in range(ks.shape[0]):
                 same_edge_k = [
-                    (sl, A_st, reg_chunk[e][i]) for e, (sl, A_st, _g) in enumerate(prep)
+                    (sl, A_st, reg_chunk[e][i])
+                    for e, (sl, A_st, _arc, _a) in enumerate(prep)
                 ]
                 yield c0 + i, ks[i], same_edge_k
 
@@ -3988,6 +4031,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the chunk's k axis, so tiny chunks re-derive geometry per k —
         chunk=1 costs ~+75% wall-clock; the win saturates by chunk ≈ 8-16.
         Budgets below ~64 MB buy little memory and cost real time.
+
+        `prep`'s reg geometry is rebuilt per (chunk, edge) rather than held
+        for the whole sweep (issue #330) — see `_same_edge_prep_swept_chunks`
+        for the full rationale; the chunk arithmetic here mirrors it.
         """
         d = self.degree
         n_k = k_array.shape[0]
@@ -3995,16 +4042,20 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         tangents = geom["tangents"]
         N = seg_l.shape[0]
         nm = d + 1
+        n_qp = self.n_qp_pair
 
-        # k-independent: same-edge reg geometry, tangent-dot tables,
-        # image segments — all built once for the whole sweep.
+        # k-independent: same-edge static moments + O(N_e) geometry inputs,
+        # tangent-dot tables, image segments — all built once for the whole
+        # sweep (the reg-kernel R table itself is rebuilt per chunk below).
         prep = self._same_edge_prep(geom)
         td_free = tangents @ tangents.T
         # Same specs as the per-k fills; the same-edge half already rides
-        # `prep` (its static blocks and reg geometry carry `_EK_SAME_EDGE`).
-        # Under EK the batched offedge kernels reach their own C++ twin
-        # (momwire#270 unit 2); only a build without it stacks per-k calls.
+        # `prep` (its static blocks carry `_EK_SAME_EDGE`, and the rebuilt
+        # reg geometry below uses the same spec). Under EK the batched
+        # offedge kernels reach their own C++ twin (momwire#270 unit 2);
+        # only a build without it stacks per-k calls.
         ek = self._ek_spec(geom) if self.extended_kernel else None
+        ek_se = _EK_SAME_EDGE if self.extended_kernel else None
         ek_img = None
         if self.ground_z is not None:
             td_img = self._image_tangent_dot(tangents)
@@ -4017,9 +4068,19 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # the all-pairs J tensor (nm² N² complex) plus the per-edge
         # same-edge reg moment blocks (nm² ΣN_e² complex); the PEC image
         # J reuses J's footprint (J is dropped before the image build).
-        sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _A_st, _g in prep)
+        sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _A_st, _arc, _a in prep)
+        max_ne2 = max(
+            ((sl.stop - sl.start) ** 2 for sl, _A_st, _arc, _a in prep), default=0
+        )
         bytes_per_k = nm * nm * (N * N + sum_ne2) * 16
-        chunk = max(1, min(n_k, (self.swept_mem_mb << 20) // max(bytes_per_k, 1)))
+        # Budget honesty (issue #330): rebuilding a chunk's same-edge reg
+        # moments transiently holds ONE edge's rebuilt R table at a time
+        # (float64, (N_e·n_qp)² entries, 8 bytes each) — the largest edge
+        # sets the high-water mark, since the loop below overwrites `reg_geo`
+        # edge by edge rather than keeping every edge's table alive together.
+        transient_bytes = max_ne2 * n_qp * n_qp * 8
+        budget = max((self.swept_mem_mb << 20) - transient_bytes, 0)
+        chunk = max(1, min(n_k, budget // max(bytes_per_k, 1)))
 
         def _assemble_swept(J_tensor, td, omega_chunk):
             return _acc.assemble_Z_bspline_swept(
@@ -4053,8 +4114,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # k axis, which captures nearly all of the full-sweep hoist's
             # win once chunk ≳ 8 while keeping the allocation inside the
             # memory budget (a full-sweep hoist is O(n_k·nm²·ΣN_e²) —
-            # ~1 GB on a 41-pt sweep of a single 400-seg wire).
-            for sl, A_st, reg_geo in prep:
+            # ~1 GB on a 41-pt sweep of a single 400-seg wire). The R table
+            # itself is rebuilt HERE from `ed_arc`/`a_w` rather than reused
+            # from `prep` (issue #330): same `_seg_seg_reg_geometry` call,
+            # same inputs, bit-identical result, but only one edge's table
+            # is alive at a time instead of every edge's riding in `prep`
+            # for the whole sweep.
+            for sl, A_st, ed_arc, a_w in prep:
+                reg_geo = _seg_seg_reg_geometry(
+                    ed_arc, a_w, max_d=d, n_qp=n_qp, ek=ek_se
+                )
                 J[:, :, :, sl, sl] = A_st[
                     None
                 ] + _seg_seg_reg_moments_from_geometry_swept(reg_geo, ks)
