@@ -3034,6 +3034,33 @@ def test_swept_dense_dispatch_escape_hatch_and_array_block_opt_out():
     assert not arr._swept_prefers_dense(), "array sweeps stay on the array operator"
 
 
+def _grounded_window_kw(**ground_kw):
+    """The grounded chunked-image deck: a 17-seg INVERTED-V over ground.
+
+    Bent, not the straight ŷ dipole it started as, because a straight one
+    leaves t_z ≡ 0 — and then the M = diag(1, 1, −1) image mirror is the
+    identity on every tangent, so dropping its sign in the image weights is
+    numerically invisible and none of the gates below can see it (the #249
+    trap from the other side, where an all-VERTICAL deck could not tell a
+    joint mirror labelling from a free-space one). The apex lift gives every
+    segment a z-component; the two legs give the refl-coef dyad a spread of
+    specular angles. Height 2.2 m keeps the whole wire strictly above ground,
+    which the Sommerfeld branch requires.
+    """
+    L = 2 * 0.962 * 22 / 4
+    h = 2.2
+    apex = np.array([[0.0, -L / 2, h], [0.0, 0.0, h + 0.6 * L], [0.0, L / 2, h]])
+    return dict(
+        wires=[apex],
+        n_per_edge_per_wire=[[8, 9]],
+        nsegs=17,
+        degree=2,
+        wavelength=22.0,
+        ground_z=0.0,
+        **ground_kw,
+    )
+
+
 @pytest.mark.parametrize(
     "ground_kw",
     [
@@ -3055,18 +3082,7 @@ def test_bspline_chunked_ground_y_matrix_matches_tensor_path(ground_kw):
     if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
         pytest.skip("weighted windowed Z assembly accelerator not built")
 
-    L = 2 * 0.962 * 22 / 4
-    h = 2.2  # strictly above ground, sommerfeld-legal
-    wires = [np.array([[0.0, -L / 2, h], [0.0, L / 2, h]])]
-    kw = dict(
-        wires=wires,
-        n_per_edge_per_wire=[[17]],
-        nsegs=17,
-        degree=2,
-        wavelength=22.0,
-        ground_z=0.0,
-        **ground_kw,
-    )
+    kw = _grounded_window_kw(**ground_kw)
     chunked = BSplineSolver(**kw)
     chunked.swept_mem_mb = 0
     Y_chunked = chunked.compute_y_matrix()
@@ -3112,18 +3128,7 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
     if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
         pytest.skip("weighted windowed Z assembly accelerator not built")
 
-    L = 2 * 0.962 * 22 / 4
-    h = 2.2  # strictly above ground, sommerfeld-legal
-    wires = [np.array([[0.0, -L / 2, h], [0.0, L / 2, h]])]
-    kw = dict(
-        wires=wires,
-        n_per_edge_per_wire=[[17]],
-        nsegs=17,
-        degree=2,
-        wavelength=22.0,
-        ground_z=0.0,
-        **ground_kw,
-    )
+    kw = _grounded_window_kw(**ground_kw)
     chunked = BSplineSolver(**kw)
     chunked.swept_mem_mb = 0
     z_chunked, _ = chunked.compute_impedance()
@@ -3149,6 +3154,90 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
     # 29345985527). Still 5+ orders below physical tolerance; this pins
     # the algebra, not the reduction order.
     assert rel < 1e-10, f"chunked vs tensor grounded Z disagreement: rel {rel}"
+
+
+def _image_weight_dense_tables(sim, geom):
+    """The (N, N) image weight tables the tensor/enrichment paths build —
+    the reference `_image_weight_window_fn`'s windows must reproduce."""
+    from momwire import _ground_refl
+
+    if sim.ground_eps is None:
+        w_A = sim._image_tangent_dot(geom["tangents"]).astype(np.complex128)
+        return w_A, np.ones_like(w_A)
+    if sim.ground_model == "sommerfeld":
+        eps_t = _ground_refl.eps_tilde(sim.ground_eps, sim.omega, sim.eps)
+        c2 = (eps_t - 1.0) / (eps_t + 1.0)
+        w_A = c2 * sim._image_tangent_dot(geom["tangents"])
+        return w_A, np.full_like(w_A, c2)
+    return sim._image_refl_weights(sim._image_refl_prep(geom), sim.omega)
+
+
+def _phi_mode_window_cases():
+    """One case per ground mode, refl-coef split by `ground_phi_mode`."""
+    from momwire import _ground_refl
+
+    eps = (10.0, 0.002)
+    return [
+        ({}, "pec"),
+        ({"ground_eps": eps, "ground_model": "sommerfeld"}, "sommerfeld"),
+        *[
+            ({"ground_eps": eps, "ground_phi_mode": m}, f"refl-{m}")
+            for m in _ground_refl.PHI_MODES
+        ],
+    ]
+
+
+@pytest.mark.parametrize(
+    "ground_kw",
+    [kw for kw, _ in _phi_mode_window_cases()],
+    ids=[name for _, name in _phi_mode_window_cases()],
+)
+def test_bspline_image_weight_windows_match_the_dense_tables(ground_kw):
+    """`_image_weight_window_fn` is row-local: window == dense rows (#323).
+
+    The chunked image fill used to be handed the same global (N, N) w_A/w_Phi
+    tables the tensor path builds and slice them per chunk — 2× the dense Z
+    resident for weights only ever read one row-band at a time. The windows
+    are now produced per chunk instead, so the equality that used to be free
+    (it *was* a slice) is what needs pinning: each mode's per-chunk algebra
+    must land on exactly the rows of its dense table, including the
+    frequency-only `eps_tilde` lift out of the loop and the rectangular
+    `specular_pair_tables` block the refl-coef mode uses in place of the
+    square `_image_refl_prep` cache.
+
+    Every `ground_phi_mode` is covered because two of the four
+    (`image`, `normal`) make `phi_term_weights` return a SCALAR — the
+    broadcast to window shape is a per-mode branch, not shared code.
+    """
+    from momwire.bspline import BSplineSolver
+
+    sim = BSplineSolver(**_grounded_window_kw(**ground_kw))
+    geom = sim._build_geometry()
+    n_segs = geom["n_segs_total"]
+    w_A_dense, w_Phi_dense = _image_weight_dense_tables(sim, geom)
+    weights_fn = sim._image_weight_window_fn(geom)
+
+    # Whole mesh, a 1-row window at the origin, an interior 1-row window
+    # (i0 > 0 — the sliced-source alignment a row-local producer can get
+    # wrong), and an interior band.
+    for i0, i1 in [(0, n_segs), (0, 1), (n_segs // 2, n_segs // 2 + 1), (3, 9)]:
+        w_A_win, w_Phi_win = weights_fn(i0, i1)
+        for win, dense, name in (
+            (w_A_win, w_A_dense, "w_A"),
+            (w_Phi_win, w_Phi_dense, "w_Phi"),
+        ):
+            assert win.shape == (i1 - i0, n_segs), f"{name} window shape [{i0}, {i1})"
+            assert win.dtype == np.complex128 and win.flags.c_contiguous, (
+                f"{name} window must reach the assembler as C-contiguous "
+                f"complex128, got {win.dtype} contiguous={win.flags.c_contiguous}"
+            )
+            np.testing.assert_allclose(
+                win,
+                dense[i0:i1],
+                rtol=1e-13,
+                atol=0.0,
+                err_msg=f"{name} window [{i0}, {i1}) != dense rows",
+            )
 
 
 @pytest.mark.parametrize(
@@ -3179,18 +3268,7 @@ def test_bspline_grounded_tensor_route_dispatch_is_call_gated(ground_kw, monkeyp
     if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
         pytest.skip("weighted windowed Z assembly accelerator not built")
 
-    L = 2 * 0.962 * 22 / 4
-    h = 2.2  # strictly above ground, sommerfeld-legal
-    wires = [np.array([[0.0, -L / 2, h], [0.0, L / 2, h]])]
-    kw = dict(
-        wires=wires,
-        n_per_edge_per_wire=[[17]],
-        nsegs=17,
-        degree=2,
-        wavelength=22.0,
-        ground_z=0.0,
-        **ground_kw,
-    )
+    kw = _grounded_window_kw(**ground_kw)
 
     calls = []
     orig = BSplineSolver._build_J_image_blocks
