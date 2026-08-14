@@ -109,6 +109,67 @@ _V_UNIT_INV: dict[int, np.ndarray] = {
 }
 
 
+def _design_matrix_rows(dm_csr, d):
+    """Split a `BSpline.design_matrix` CSR into per-row (values, columns).
+
+    Returns two (n_rows, d+1) arrays. The dense form of that CSR is
+    (n_rows, n_basis) with only d+1 nonzeros per row, so materialising it
+    costs O(n_rows · n_basis) for O(n_rows · d) of content (#329); every
+    consumer here reads inside the band, so none of them needs it.
+
+    The two structural facts this relies on — exactly d+1 stored entries
+    per row, at consecutive columns in ascending order — are scipy's
+    output shape rather than anything we control, so they are checked
+    here (O(n_rows · d), the same order as the gather itself) instead of
+    assumed.
+    """
+    width = d + 1
+    n_rows = dm_csr.shape[0]
+    if not np.array_equal(np.diff(dm_csr.indptr), np.full(n_rows, width)):
+        raise AssertionError(
+            "BSpline.design_matrix no longer stores exactly d+1 entries per row"
+        )
+    cols = dm_csr.indices.reshape(n_rows, width)
+    if width > 1 and not np.all(np.diff(cols, axis=1) == 1):
+        raise AssertionError(
+            "BSpline.design_matrix columns are no longer consecutive ascending"
+        )
+    return dm_csr.data.reshape(n_rows, width), cols
+
+
+def _design_matrix_band(dm_csr, n_seg, d):
+    """Per-segment basis values as (n_seg, d+1 samples, d+1 bases).
+
+    Band column b holds basis (seg + b): segment s lies inside the
+    support of exactly bases s .. s+d, so this band is all of the dense
+    design matrix that any per-segment consumer can read.
+
+    Sample rows are gathered by each row's OWN column start, not by a
+    shared per-segment offset. A segment's last sample sits on its
+    right-hand knot, and scipy resolves a sample on an interior knot into
+    the NEXT span; such a row starts one column higher and carries a
+    trailing entry for the basis whose support opens at that knot, which
+    is zero there. Whether a given segment's endpoint sample lands that
+    way is a floating-point question (arc[s] + h[s] need not round to
+    arc[s+1]), so the offset is read per row and the out-of-band column
+    is checked to be zero rather than reasoned about.
+    """
+    width = d + 1
+    data, cols = _design_matrix_rows(dm_csr, d)
+    data = data.reshape(n_seg, width, width)
+    starts = cols.reshape(n_seg, width, width)[:, :, 0]
+    off = starts - np.arange(n_seg)[:, None]
+    if off.min() < 0 or off.max() > 1:
+        raise AssertionError(
+            f"design-matrix span offset outside [0, 1]: {off.min()}..{off.max()}"
+        )
+    padded = np.zeros((n_seg, width, width + 1), dtype=np.float64)
+    np.put_along_axis(padded, off[:, :, None] + np.arange(width), data, axis=2)
+    if np.any(padded[:, :, width] != 0.0):
+        raise AssertionError("nonzero design-matrix entry outside the segment band")
+    return padded[:, :, :width].copy()
+
+
 # Module-level caches for `_build_geometry` and `_build_basis_polynomials`.
 # Both functions are pure functions of immutable geometry inputs (wires +
 # n_per_edge_per_wire, plus degree + junctions for the basis case) — they
@@ -1255,18 +1316,20 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             u_global_per_seg = arc_at_knot_w[:-1, None] + u_local_per_seg
             u_flat = u_global_per_seg.reshape(-1)
 
-            # All basis values at all sample points in one design_matrix call.
-            DM = BSpline.design_matrix(u_flat, knots, d).toarray()
-            # → (n_total_w, d+1, n_basis_w)
-            DM_seg = DM.reshape(n_total_w, d + 1, n_basis_w)
+            # All basis values at all sample points in one design_matrix
+            # call, kept in the (n_total_w, d+1, d+1) band: band column b
+            # of segment s is basis s+b, the only bases that segment sees.
+            DM_seg = _design_matrix_band(
+                BSpline.design_matrix(u_flat, knots, d), n_total_w, d
+            )
 
             # V_unit_inv @ vals: convert d+1 basis values per segment to
             # poly coeffs (in u_local). Then divide by h_seg^p column-wise
             # to recover coeffs in u_local = h_seg · u_unit terms.
             V_unit_inv = _V_UNIT_INV[d]
             inv_h_powers = h_per_seg_w[:, None] ** (-np.arange(d + 1))
-            # → (N, d+1, n_basis_w): for each segment, polynomial coeff p
-            # of each basis function expressed as Σ_p coeffs_p · u_local^p
+            # → (N, d+1, d+1): for each segment, polynomial coeff p of
+            # each in-band basis expressed as Σ_p coeffs_p · u_local^p
             poly_per_seg = np.einsum("ij,sjk->sik", V_unit_inv, DM_seg)
             poly_per_seg *= inv_h_powers[:, :, None]
 
@@ -1284,8 +1347,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
                 supp_seg_m = np.zeros(n_wings, dtype=np.int64)
                 polys_m = np.zeros((n_wings, n_poly), dtype=np.float64)
-                supp_seg_m[:n_actual] = seg_off + np.arange(seg_lo, seg_hi)
-                polys_m[:n_actual, :] = poly_per_seg[seg_lo:seg_hi, :, j]
+                seg_rows = np.arange(seg_lo, seg_hi)
+                supp_seg_m[:n_actual] = seg_off + seg_rows
+                # Basis j sits at band column j - s of segment s, which
+                # walks d, d-1, ... down the wing (or j, j-1, ... for the
+                # clamped start bases, whose support is truncated).
+                polys_m[:n_actual, :] = poly_per_seg[
+                    seg_rows[:, None],
+                    np.arange(n_poly)[None, :],
+                    (j - seg_rows)[:, None],
+                ]
 
                 all_supp_seg.append(supp_seg_m)
                 all_polys.append(polys_m)
