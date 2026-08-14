@@ -142,3 +142,56 @@ branch. When you need them:
 If you only need a couple of named regions inside the harness loop
 (not deep in the library), prefer the context-manager form in a
 throwaway script — no library edits required, no revert needed.
+
+## Chunked dense fill: memory model (as of #318)
+
+The bspline chunked dense-fill path (`_compute_Z_dense_chunked`) builds
+Z in observer-row chunks bounded by `swept_mem_mb`, rather than
+materializing the full `(d+1, d+1, N, N)` moment tensor (#136). As of
+#318 its peak RSS decomposes into three buckets:
+
+- **Z itself** — `16 N²` bytes (complex128 `(N, N)`), factored in
+  place at solve time (`overwrite_a=True`, F-order — #136), so it's
+  never copied.
+- **Chunk transients** — bounded by the `swept_mem_mb` budget (default
+  256 MB): one observer-row window of the all-pairs moment tensor plus
+  its same-edge correction blocks, dead again as soon as the window's
+  contribution has been accumulated into Z.
+- **O(N) tables** — the `(N, 3)` tangent table, per-segment radii, and
+  the support-segment / polynomial arrays. Before #318 this bucket
+  also carried an `(N, N)` tangent-dot matrix (`td_all`, 8 bytes/entry
+  — exactly half the size of Z) that stayed alive for the whole fill.
+  The windowed C++ assembler (`assemble_Z_bspline_windowed`) now takes
+  the `(N, 3)` tangent table directly and forms each pair's dot
+  product inline, so no N²-scale table survives the fill besides Z.
+
+Also audited in the same arc: the `_accumulate` closure used to wrap
+every incoming moment window in `np.ascontiguousarray(J_win)` "just in
+case." Every production path (C++ reduced kernel, C++ EK twin, numpy
+einsum fallback, the mixed-radius `concatenate`, and the same-edge
+`(A_st + A_reg) - J_edge` difference) already hands it a C-contiguous
+complex128 array, so the copy was a no-op on every call. It's been
+replaced by a contract assert that vanishes under `-O`; the pybind
+`c_style | forcecast` cast on the accelerator call stays as the real
+safety net.
+
+### Certified numbers
+
+Single dense solve, `arrays.bowtiearray2x4`, bs2, free space, 28.57 MHz,
+8,320 segments — fresh-subprocess peak RSS via
+`scripts/bench_converge.py::run_engine` (xps13, 16 GB):
+
+| | peak RSS | solve time |
+|---|---|---|
+| before (momwire main @ 9c41f8d) | 2,382 MB | 34.9 s |
+| after (#318, run 1) | 1,827.9 MB | 25.9 s |
+| after (#318, run 2) | 1,827.8 MB | 27.6 s |
+
+`Z[0]` agrees bit-for-bit with the before-value
+(`212.34285313452253 + 36.66494828784576j`) — moving the dot product
+into the windowed assembler introduced no numerical drift at this
+scale. The ~554 MB drop matches the predicted `td_all` footprint
+(`8 · 8320² ≈ 554 MB`) almost exactly. External ladder: antennaknobs
+`scratch/bs2-memory-ladder.json`, which swept peak RSS vs N across
+this same design and first identified `td_all` as the largest
+avoidable term.
