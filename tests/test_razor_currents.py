@@ -21,8 +21,6 @@ Both effects are real, not bugs, and the test accounts for both explicitly
 rather than papering over them with a looser tolerance.
 """
 
-import time
-
 import numpy as np
 import pytest
 
@@ -245,39 +243,42 @@ def test_swept_y_matrix_matches_single_solve():
 # 6. swept solves share the static fill work
 # --------------------------------------------------------------------------
 @pytest.mark.slow
-def test_swept_shares_static_work():
-    """`compute_impedance_swept` beats N independent single solves.
+def test_swept_shares_static_work(monkeypatch):
+    """The sweep prepares the k-independent fill work exactly once.
 
     Only the smooth kernel remainder exp(−jkR)−1 is k-dependent; the axis
-    frames, the closed-form static moments and R itself (its sqrt) are
-    shared across the sweep. That sqrt is a real but modest slice of the
-    total fill cost next to the complex exponential over the same
-    n_basis² * n_qp_source tensor, so the achievable speedup is bounded well
-    short of N-fold: measured here (8-point sweep, N=48 segments) is
-    consistently ~1.15-1.3x on this machine. The gate below is set
-    generously under that so it doesn't flake, while still failing if the
-    sharing regresses to a no-op (ratio ~1.0).
+    frames, the closed-form static moments and R itself are shared across
+    the sweep via `_assemble_Z_prepare`. Wall-clock is the wrong gate for
+    that (the shared sqrt is a modest slice next to the per-k complex
+    exponential — measured ~1.15-1.3x on an idle box, far too thin a margin
+    for a loaded CI runner), so this test pins the structure instead: one
+    prepare per sweep, and the replayed per-k fills agree with independent
+    single solves to solver precision.
     """
     wires = [np.array([[0.0, 0.0, 0.0], [0.0, BD1_LEN, 0.0]])]
     N = 48
     solver = RazorSolver(wires=wires, nsegs=N, wire_radius=BD1_RAD, wavelength=BD1_WL)
     k_array = solver.k * np.linspace(0.95, 1.05, 8)
 
-    t0 = time.time()
-    solver.compute_impedance_swept(k_array)
-    t_swept = time.time() - t0
-
-    t0 = time.time()
-    for k in k_array:
-        RazorSolver(
-            wires=wires, nsegs=N, wire_radius=BD1_RAD, wavelength=2 * np.pi / k
-        ).compute_impedance()
-    t_single = time.time() - t0
-
-    ratio = t_single / t_swept
-    assert ratio >= 1.1, (
-        f"swept={t_swept:.3f}s single={t_single:.3f}s ratio={ratio:.3f}"
+    calls = []
+    real_prepare = RazorSolver._assemble_Z_prepare
+    monkeypatch.setattr(
+        RazorSolver,
+        "_assemble_Z_prepare",
+        lambda self, geom: calls.append(1) or real_prepare(self, geom),
     )
+    z_swept = solver.compute_impedance_swept(k_array)
+    assert len(calls) == 1, f"prepare ran {len(calls)} times for one sweep"
+
+    z_single = np.array(
+        [
+            RazorSolver(
+                wires=wires, nsegs=N, wire_radius=BD1_RAD, wavelength=2 * np.pi / k
+            ).compute_impedance()[0]
+            for k in k_array
+        ]
+    )
+    np.testing.assert_allclose(z_swept, z_single, rtol=1e-9)
 
 
 # --------------------------------------------------------------------------
