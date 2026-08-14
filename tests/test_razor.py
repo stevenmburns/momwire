@@ -225,13 +225,20 @@ def test_no_token_result_unchanged():
 # --------------------------------------------------------------------------
 # scope refusals — a wrong answer is worse than no answer
 # --------------------------------------------------------------------------
-def test_shared_endpoint_is_refused():
+def test_shared_endpoint_is_a_junction():
+    """Unit 1 refused this geometry; unit 2 models it. The contact is found
+    from the mesh — nothing is declared — and the bent-L below solves. The
+    junction physics itself is pinned in `test_razor_junctions.py`."""
     wires = [
         np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]]),
         np.array([[0.0, 0.0, 2.0], [1.5, 0.0, 2.0]]),
     ]
-    with pytest.raises(NotImplementedError, match="309"):
-        RazorSolver(wires=wires, nsegs=10)
+    solver = RazorSolver(wires=wires, nsegs=10)
+    z, coeffs = solver.compute_impedance()
+    assert np.isfinite(z)
+    # 9 + 9 interior tents plus the one junction tent.
+    assert coeffs.shape == (19,)
+    assert len(solver._build_geometry()["junctions"]) == 1
 
 
 def test_distinct_endpoints_are_fine():
@@ -250,7 +257,10 @@ def test_distinct_endpoints_are_fine():
         {"ground_eps": 13.0},
         {"ground_model": "sommerfeld"},
         {"degree": 2},
+        # Junctions are DETECTED, never declared: an explicit spec is either
+        # redundant with the mesh or disagrees with it.
         {"junctions": [[(0, "end"), (1, "start")]]},
+        {"junction_ports": [(0, 1.0)]},
         {"extended_kernel": True},
     ],
 )
