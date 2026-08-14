@@ -1326,7 +1326,7 @@ assemble_Z_bspline_windowed_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
     py::array_t<double, py::array::c_style | py::array::forcecast> polys,
-    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
     int64_t i0, int64_t i1, int64_t j0, int64_t j1,
@@ -1341,7 +1341,7 @@ assemble_Z_bspline_windowed_kernel(
     auto j_view = J_chunk.unchecked<4>();
     auto ss_view = support_seg.unchecked<2>();
     auto p_view = polys.unchecked<3>();
-    auto td_view = td_all.unchecked<2>();
+    auto t_view = tangents.unchecked<2>();
     auto mi_view = m_idx.unchecked<1>();
     auto ni_view = n_idx.unchecked<1>();
 
@@ -1357,6 +1357,17 @@ assemble_Z_bspline_windowed_kernel(
         J_chunk.shape(2) != i1 - i0 || J_chunk.shape(3) != j1 - j0) {
         throw std::runtime_error(
             "J_chunk.shape must be (D+1, D+1, i1-i0, j1-j0)");
+    }
+    // tangents is the per-segment unit tangent table, (n_segs_total, 3);
+    // n_segs is not n_basis, so the only sound bound is the window's own
+    // segment range — every support_seg id the loops below touch lies in
+    // [i0, i1) or [j0, j1) by construction.
+    if (tangents.shape(1) != 3) {
+        throw std::runtime_error("tangents.shape must be (n_segs, 3)");
+    }
+    if (tangents.shape(0) < i1 || tangents.shape(0) < j1) {
+        throw std::runtime_error(
+            "tangents.shape(0) must cover the window's segment range");
     }
     if (Z.shape(0) != (long)n_basis || Z.shape(1) != (long)n_basis) {
         throw std::runtime_error("Z.shape must be (n_basis, n_basis)");
@@ -1386,7 +1397,12 @@ assemble_Z_bspline_windowed_kernel(
                 for (int b = 0; b < NM; b++) {
                     int64_t sn = ss_view(n, b);
                     if (sn < j0 || sn >= j1) continue;
-                    double td = td_view(sm, sn);
+                    // Tangent dot on the fly: the (N, N) table this used to
+                    // read was N-squared doubles alive across the whole
+                    // fill, right when Z is being accumulated (issue #318).
+                    double td = t_view(sm, 0) * t_view(sn, 0) +
+                                t_view(sm, 1) * t_view(sn, 1) +
+                                t_view(sm, 2) * t_view(sn, 2);
 
                     double wA_re = 0.0, wA_im = 0.0;
                     double wPhi_re = 0.0, wPhi_im = 0.0;
@@ -1432,7 +1448,7 @@ assemble_Z_bspline_windowed(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
     py::array_t<double, py::array::c_style | py::array::forcecast> polys,
-    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
     int64_t i0, int64_t i1, int64_t j0, int64_t j1,
@@ -1445,12 +1461,12 @@ assemble_Z_bspline_windowed(
     switch ((int)support_seg.shape(1) - 1) {
         case 1:
             assemble_Z_bspline_windowed_kernel<1>(
-                J_chunk, support_seg, polys, td_all, m_idx, n_idx,
+                J_chunk, support_seg, polys, tangents, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag);
             return;
         case 2:
             assemble_Z_bspline_windowed_kernel<2>(
-                J_chunk, support_seg, polys, td_all, m_idx, n_idx,
+                J_chunk, support_seg, polys, tangents, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag);
             return;
         default:
@@ -6047,9 +6063,13 @@ PYBIND11_MODULE(_accelerators, m) {
           "cols with support in the window; the (zA, zPhi) -> Z mixing is "
           "linear so per-window accumulation equals the all-at-once "
           "assembly. Lets the dense build skip the full (D+1, D+1, N, N) "
-          "tensor (issue #136). max_d is inferred from support_seg.",
+          "tensor (issue #136). `tangents` is the per-segment unit tangent "
+          "table, (n_segs, 3): the pair tangent dot is formed here from two "
+          "rows rather than read out of an (N, N) table the caller would "
+          "have to keep alive across the whole fill (issue #318). max_d is "
+          "inferred from support_seg.",
           py::arg("J_chunk"), py::arg("support_seg"),
-          py::arg("polys"), py::arg("td_all"),
+          py::arg("polys"), py::arg("tangents"),
           py::arg("m_idx"), py::arg("n_idx"),
           py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
           py::arg("omega"), py::arg("eps_"), py::arg("mu_"),
