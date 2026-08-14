@@ -2202,8 +2202,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ek=_ek_slice(ek, rows=slice(i0, i1)),
             )
             m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
+            # Same producer contract as `_accumulate` in the free-space
+            # chunked fill (issue #318 audit): the offedge producer emits
+            # C-contiguous complex128 on every path, so the wrapper this
+            # replaced was the same dead no-op. `forcecast` on the
+            # assembler stays the safety net.
+            assert J_chunk.dtype == np.complex128 and J_chunk.flags.c_contiguous, (
+                f"moment window must be C-contiguous complex128, got {J_chunk.dtype}"
+            )
             _acc.assemble_Z_bspline_weighted_windowed(
-                np.ascontiguousarray(J_chunk, dtype=np.complex128),
+                J_chunk,
                 supp_c,
                 polys_c,
                 wa_c,
