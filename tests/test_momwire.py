@@ -2459,7 +2459,8 @@ def test_bspline_chunked_dense_impedance_matches_tensor_path():
     assert rel < 1e-10, f"chunked vs tensor impedance disagreement: rel {rel}"
 
 
-def test_bspline_chunked_dense_z_holds_no_n_squared_transient():
+@pytest.mark.parametrize("extended_kernel", [False, True])
+def test_bspline_chunked_dense_z_holds_no_n_squared_transient(extended_kernel):
     """The chunked fill must not carry any N²-scale float64 side table
     (issue #318). The tangent-dot matrix used to be built up front as
     `tangents @ tangents.T` and handed to the windowed assembler, so it
@@ -2479,6 +2480,18 @@ def test_bspline_chunked_dense_z_holds_no_n_squared_transient():
 
     6 MB therefore sits ~2.7x above the transient the fixed code needs
     and ~2.3x below what the N × N table alone would have cost.
+
+    The extended-kernel case runs the SAME budget, deliberately: EK
+    routes the fill through the `..._ek` twins, and everything extra it
+    touches is bounded by the chunk, not by N². The whole-mesh `_EK`
+    spec is (n_segs,) group labels; `_ek_slice` hands each chunk a
+    *slice* of them, and the C++ EK kernels take the labels rather than
+    materialising any pair table. (On the numpy fallback `_ek_pair_mask`
+    is (chunk_rows, n_segs) bool — still chunk-bounded, and 1/16th the
+    moment chunk that sets the budget in the first place.) Measured at
+    N = 1200: 2.23 MB with EK against 2.24 MB without, i.e. flat. A
+    second N² table appearing only under EK is exactly what this case
+    exists to catch.
     """
     import tracemalloc
 
@@ -2490,7 +2503,8 @@ def test_bspline_chunked_dense_z_holds_no_n_squared_transient():
 
     # One straight wire, split into many short edges: the same-edge
     # correction blocks stay small, keeping every non-N² transient well
-    # clear of the threshold.
+    # clear of the threshold. One straight run of one radius is also a
+    # single coaxial EK group, so the EK case extends every pair.
     n_edges, seg_per_edge = 150, 8
     L = 0.962 * 22 / 2
     ys = np.linspace(-L / 2, L / 2, n_edges + 1)
@@ -2501,8 +2515,13 @@ def test_bspline_chunked_dense_z_holds_no_n_squared_transient():
         n_per_edge_per_wire=[[seg_per_edge] * n_edges],
         nsegs=n_edges * seg_per_edge,
         wavelength=22.0,
+        extended_kernel=extended_kernel,
     )
     geom = sim._build_geometry()
+    if extended_kernel:
+        # Guard the guard: a spec that labelled nothing eligible would
+        # make this case a duplicate of the reduced one.
+        assert sim._ek_spec(geom).group_i is not None
     supp, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
     assert supp.shape[0] == n_edges * seg_per_edge  # N = 1200
 
