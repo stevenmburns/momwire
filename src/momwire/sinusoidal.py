@@ -2926,11 +2926,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # Grid extent: obs-to-image-point distance is convex in the two
         # segment parameters, so its max is attained at endpoint pairs.
-        ex = np.concatenate([seg_l, seg_r])
-        dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
-        dye = ex[:, 1][:, None] - ex[:, 1][None, :]
-        hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
-        r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+        r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
         grid = _sommerfeld.get_grid(
             eps_t,
             k,

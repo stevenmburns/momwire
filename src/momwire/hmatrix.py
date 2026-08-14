@@ -753,11 +753,7 @@ class HMatrixSolver(BSplineSolver):
         w_node = 0.5 * h[:, None] * wg[None, :]
         W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
         gz = self.ground_z
-        ex = np.concatenate([seg_l, seg_r])
-        dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
-        dye = ex[:, 1][:, None] - ex[:, 1][None, :]
-        hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
-        r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+        r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
         zmin = min(seg_l[:, 2].min(), seg_r[:, 2].min()) - gz
         # Touching (zmin == 0) is allowed since #151: the ground-junction
         # basis handles contact, and the remainder quadrature samples

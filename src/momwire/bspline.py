@@ -1699,11 +1699,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Grid extent: obs-to-image-point distance is convex in the two
         # segment parameters, so its max over all pairs is attained at
         # endpoint pairs.
-        ex = np.concatenate([seg_l, seg_r])
-        dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
-        dye = ex[:, 1][:, None] - ex[:, 1][None, :]
-        hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
-        r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+        r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
         grid = self._somm_grid(eps_t, r1_max)
 
         # Fully-fused C++ path: interpolate + project + moment-quadrature +
@@ -1793,11 +1789,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # Same grid extent as _Z_sommerfeld_remainder: endpoint pairs bound the
         # obs-to-image distance, and every interior quad node sits inside it.
-        ex = np.concatenate([seg_l, seg_r])
-        dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
-        dye = ex[:, 1][:, None] - ex[:, 1][None, :]
-        hze = (ex[:, 2][:, None] - gz) + (ex[:, 2][None, :] - gz)
-        r1_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+        r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
         grid = self._somm_grid(eps_t, r1_max)
 
         # Enrichment-side nodes: the singular basis value Φ_sing(u) sampled at
