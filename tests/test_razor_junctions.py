@@ -187,8 +187,8 @@ def test_closed_loop_current_is_continuous_across_the_seam():
     coefficient must sit on the smooth current distribution its two
     neighbouring interior knots define, to within the curvature of that
     distribution over one segment pair (measured 1.3% — the seam sits on a
-    corner of the square, so there is real curvature to miss). A mis-signed
-    seam basis reads 199% off here, a missing one reads 100% off."""
+    corner of the square, so there is real curvature to miss). A seam tent
+    whose two wings disagree about the flow direction reads 199% off here."""
     loop = np.array(CORNERS + [CORNERS[0]])
     solver = RazorSolver(wires=[loop], feeds=[(0, SIDE / 2, 1.0 + 0j)], **LOOP_KW)
     _z, coeffs = solver.compute_impedance()
