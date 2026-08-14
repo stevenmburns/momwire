@@ -1399,6 +1399,79 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             w_Phi = np.full(w_A.shape, complex(w_Phi))
         return w_A, w_Phi
 
+    def _image_weight_window_fn(self, geom):
+        """Producer of the image weight WINDOWS the chunked accumulator
+        consumes: `weights_fn(i0, i1) -> (w_A, w_Phi)`, each complex128 of
+        shape (i1-i0, n_segs) — observer rows [i0, i1) against every source.
+
+        The chunked path used to be handed the same global (N, N) tables the
+        tensor path builds and slice them per chunk, which put 2× the dense
+        Z on the peak of every grounded solve for weights only ever read one
+        row-band at a time (issue #323). Each mode's algebra is row-local, so
+        the window is produced directly and nothing N² is ever allocated:
+
+          PEC        — the mirror tangent dot t_m·(M·t_n) on A, unit charge;
+          sommerfeld — the same dot scaled by the exact-image constant
+                       C2 = (ε̃−1)/(ε̃+1), with a constant C2 charge weight
+                       (the smooth remainder is a separate, already-chunked
+                       term);
+          refl-coef  — the rectangular form of the Fresnel producers
+                       (`specular_pair_tables` already takes an observer×
+                       source block), so the k-independent N² specular cache
+                       `_image_refl_prep` is bypassed entirely here. It stays
+                       for the tensor and enrichment paths, which do want the
+                       whole table.
+
+        ε̃ (and with it C2) is frequency- but not row-dependent, so it is
+        computed once when the closure is built.
+        """
+        tangents = geom["tangents"]
+        mirror = np.array([1.0, 1.0, -1.0])
+
+        if self.ground_eps is None:
+
+            def pec_weights(i0, i1):
+                # float64 gemm → C-contiguous; astype gives the complex128
+                # the assembler wants without a wrapper copy on top.
+                w_A = (tangents[i0:i1] @ (tangents * mirror).T).astype(np.complex128)
+                return w_A, np.ones_like(w_A)
+
+            return pec_weights
+
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+
+        if self.ground_model == "sommerfeld":
+            c2 = (eps_t - 1.0) / (eps_t + 1.0)
+
+            def sommerfeld_weights(i0, i1):
+                # complex scalar × float64 array → complex128 C-contiguous.
+                w_A = c2 * (tangents[i0:i1] @ (tangents * mirror).T)
+                return w_A, np.full(w_A.shape, c2)
+
+            return sommerfeld_weights
+
+        seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
+        phi_mode = self.ground_phi_mode
+
+        def refl_weights(i0, i1):
+            cos_th, td_img, P = _ground_refl.specular_pair_tables(
+                seg_c[i0:i1],
+                tangents[i0:i1],
+                self.ground_z,
+                src_centers=seg_c,
+                src_tangents=tangents,
+            )
+            rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
+            w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
+            w_Phi = _ground_refl.phi_term_weights(phi_mode, eps_t, rho_v)
+            if np.ndim(w_Phi) == 0:
+                # "image"/"normal" are pair-independent; "rho_v"/"blend"
+                # already come back as per-pair windows.
+                w_Phi = np.full(w_A.shape, complex(w_Phi))
+            return w_A, w_Phi
+
+        return refl_weights
+
     def _image_Z_refl(self, J_img, supp_seg, polys, geom):
         """Fresnel-weighted image sub-assembly for `ground_eps` (NEC-style
         reflection-coefficient finite ground). Returns the matrix to SUBTRACT
@@ -2158,7 +2231,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         return Z
 
-    def _accumulate_Z_image_chunked(self, Z, geom, k, supp_seg, polys, w_A, w_Phi):
+    def _accumulate_Z_image_chunked(self, Z, geom, k, supp_seg, polys, weights_fn):
         """Chunked ground-image accumulation: subtract the weighted image
         sub-assembly from Z without materialising the (d+1, d+1, N, N)
         image tensor OR an intermediate n_basis² matrix (issue #136,
@@ -2170,11 +2243,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         grounds: PEC (mirror tangent dot / ones), refl-coef (Fresnel
         dyad / image charge), Sommerfeld exact image (constant C2).
 
-        The assembler takes the weights as WINDOWS matching the chunk —
-        shape (i1-i0, j1-j0), aligned with the moment window's trailing
-        axes — not as global (N, N) tables (issue #323). `w_A` / `w_Phi`
-        still arrive dense here and are sliced per chunk; producing the
-        windows directly is what retires the 2× dense-Z peak."""
+        Weights arrive as `weights_fn(i0, i1) -> (w_A, w_Phi)`, called once
+        per observer chunk for WINDOWS of shape (i1-i0, n_segs) aligned with
+        the moment window's trailing axes — not as global (N, N) tables
+        (issue #323). Producing them per chunk is what retires the 2× dense-Z
+        residency this path used to carry: nothing N² in the weights is ever
+        allocated. See `_image_weight_window_fn` for the per-mode producers."""
         d = self.degree
         a_row = self._seg_radius(geom)
         seg_l = geom["seg_l"]
@@ -2187,8 +2261,6 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
-        wa_c = np.ascontiguousarray(w_A, dtype=np.complex128)
-        wp_c = np.ascontiguousarray(w_Phi, dtype=np.complex128)
         all_n = np.arange(n_basis, dtype=np.int64)
 
         row_bytes = (d + 1) ** 2 * n_segs * 16
@@ -2216,16 +2288,25 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             assert J_chunk.dtype == np.complex128 and J_chunk.flags.c_contiguous, (
                 f"moment window must be C-contiguous complex128, got {J_chunk.dtype}"
             )
+            # The window producers are gemm/elementwise expressions, so they
+            # emit C-contiguous complex128 of exactly the chunk's shape
+            # already — same producer contract as the moment window above,
+            # asserted rather than re-wrapped.
+            w_A_win, w_Phi_win = weights_fn(i0, i1)
+            assert all(
+                w.shape == (i1 - i0, n_segs)
+                and w.dtype == np.complex128
+                and w.flags.c_contiguous
+                for w in (w_A_win, w_Phi_win)
+            ), f"weight windows must be C-contiguous complex128 ({i1 - i0}, {n_segs})"
             _acc.assemble_Z_bspline_weighted_windowed(
                 J_chunk,
                 supp_c,
                 polys_c,
-                # Row slices of a C-contiguous array are themselves
-                # C-contiguous — no copy, and no wrapper (that would be the
-                # same dead no-op the audit above removed). The j-window is
-                # the full [0, n_segs), so columns stay whole.
-                wa_c[i0:i1],
-                wp_c[i0:i1],
+                # The j-window is the full [0, n_segs), so the producers hand
+                # back whole rows.
+                w_A_win,
+                w_Phi_win,
                 np.nonzero(m_mask)[0].astype(np.int64),
                 all_n,
                 int(i0),
@@ -3296,36 +3377,24 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
             ):
                 # Chunked image subtraction — no (d+1, d+1, N, N) image
-                # tensor, no intermediate n_basis² matrix (issue #136).
-                # Same weight tables as the tensor path below; the
-                # Sommerfeld remainder Q is already observer-chunked.
-                if self.ground_eps is not None:
-                    if self.ground_model == "sommerfeld":
-                        eps_t = _ground_refl.eps_tilde(
-                            self.ground_eps, self.omega, self.eps
-                        )
-                        c2 = (eps_t - 1.0) / (eps_t + 1.0)
-                        td_img = self._image_tangent_dot(geom["tangents"])
-                        w_A = c2 * td_img.astype(np.complex128)
-                        w_Phi = np.full_like(w_A, c2)
-                        self._accumulate_Z_image_chunked(
-                            Z, geom, self.k, supp_seg, polys, w_A, w_Phi
-                        )
-                        Z -= self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
-                    else:
-                        w_A, w_Phi = self._image_refl_weights(
-                            self._image_refl_prep(geom), self.omega
-                        )
-                        self._accumulate_Z_image_chunked(
-                            Z, geom, self.k, supp_seg, polys, w_A, w_Phi
-                        )
-                else:
-                    td_img = self._image_tangent_dot(geom["tangents"])
-                    w_A = td_img.astype(np.complex128)
-                    w_Phi = np.ones_like(w_A)
-                    self._accumulate_Z_image_chunked(
-                        Z, geom, self.k, supp_seg, polys, w_A, w_Phi
+                # tensor, no intermediate n_basis² matrix (issue #136), and
+                # no (N, N) weight table either: `_image_weight_window_fn`
+                # picks the mode and produces each observer chunk's window
+                # on demand (issue #323). The Sommerfeld remainder Q is a
+                # separate, already observer-chunked term.
+                self._accumulate_Z_image_chunked(
+                    Z,
+                    geom,
+                    self.k,
+                    supp_seg,
+                    polys,
+                    self._image_weight_window_fn(geom),
+                )
+                if self.ground_eps is not None and self.ground_model == "sommerfeld":
+                    eps_t = _ground_refl.eps_tilde(
+                        self.ground_eps, self.omega, self.eps
                     )
+                    Z -= self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
             else:
                 J_img = self._build_J_image_blocks(geom, self.k)
                 if self.ground_eps is not None:
