@@ -2166,9 +2166,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         full-kernel moments feed the weighted windowed assembler with
         scale = -1 (the seams' `Z - image` convention). Image pairs are
         never singular (`_build_J_image_blocks` docstring), so there is
-        no same-edge correction pass. The complex tables serve all three
+        no same-edge correction pass. The complex weights serve all three
         grounds: PEC (mirror tangent dot / ones), refl-coef (Fresnel
-        dyad / image charge), Sommerfeld exact image (constant C2)."""
+        dyad / image charge), Sommerfeld exact image (constant C2).
+
+        The assembler takes the weights as WINDOWS matching the chunk —
+        shape (i1-i0, j1-j0), aligned with the moment window's trailing
+        axes — not as global (N, N) tables (issue #323). `w_A` / `w_Phi`
+        still arrive dense here and are sliced per chunk; producing the
+        windows directly is what retires the 2× dense-Z peak."""
         d = self.degree
         a_row = self._seg_radius(geom)
         seg_l = geom["seg_l"]
@@ -2214,8 +2220,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 J_chunk,
                 supp_c,
                 polys_c,
-                wa_c,
-                wp_c,
+                # Row slices of a C-contiguous array are themselves
+                # C-contiguous — no copy, and no wrapper (that would be the
+                # same dead no-op the audit above removed). The j-window is
+                # the full [0, n_segs), so columns stay whole.
+                wa_c[i0:i1],
+                wp_c[i0:i1],
                 np.nonzero(m_mask)[0].astype(np.int64),
                 all_n,
                 int(i0),
