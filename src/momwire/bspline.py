@@ -4221,9 +4221,19 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if s_eval.shape[0] > 0:
                 # design_matrix at [0, wire_arc] — clip tiny FP overshoots that
                 # would push the endpoint epsilon outside the clamped knot range.
-                DM = BSpline.design_matrix(s_eval, knots_vec, d).toarray()
+                DM = BSpline.design_matrix(s_eval, knots_vec, d)
+                # Scatter the kept coefficients onto their bases (dropped
+                # free-end bases keep their 0) and sum each row over its
+                # own d+1 stored entries. Those entries are in ascending
+                # column order, so the per-row accumulation order matches
+                # the ascending-basis loop this replaces term for term —
+                # the terms it drops are the exact zeros off the band.
+                c_basis = np.zeros(len(knots_vec) - d - 1, dtype=np.complex128)
                 for kept_idx, (j_local, _, _, _) in enumerate(kept):
-                    I_out += coeffs[local_to_global[kept_idx]] * DM[:, j_local]
+                    c_basis[j_local] = coeffs[local_to_global[kept_idx]]
+                dm_vals, dm_cols = _design_matrix_rows(DM, d)
+                for e in range(d + 1):
+                    I_out += c_basis[dm_cols[:, e]] * dm_vals[:, e]
 
             if enrich_specs is not None:
                 seg_off_w = geom["seg_offsets"][w_idx]
