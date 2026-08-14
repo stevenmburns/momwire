@@ -1478,21 +1478,29 @@ assemble_Z_bspline_windowed(
 
 // Weighted + scaled windowed accumulator — the ground-image counterpart of
 // assemble_Z_bspline_windowed (issue #136 ground scope). Complex per-pair
-// tables wA_all / wPhi_all (global (N, N), indexed by absolute segment ids)
-// replace the real tangent-dot, exactly as assemble_Z_bspline_weighted
-// generalises assemble_Z_bspline; `scale` multiplies the window's
-// contribution before the += so the caller's Z -= image convention (PEC:
-// scale = -1; Sommerfeld exact image: constant-C2 tables, scale = -1) needs
-// no intermediate n_basis² matrix. Image pairs are never singular, so the
-// caller runs no same-edge correction pass.
+// weights replace the real tangent-dot, exactly as
+// assemble_Z_bspline_weighted generalises assemble_Z_bspline; `scale`
+// multiplies the window's contribution before the += so the caller's
+// Z -= image convention (PEC: scale = -1; Sommerfeld exact image:
+// constant-C2 weights, scale = -1) needs no intermediate n_basis² matrix.
+// Image pairs are never singular, so the caller runs no same-edge
+// correction pass.
+//
+// wA_win / wPhi_win are WINDOWS, not global tables: shape (i1-i0, j1-j0),
+// aligned with J_chunk's trailing axes and covering exactly the observer
+// rows [i0, i1) and source cols [j0, j1) of the conceptual global (N, N)
+// table (issue #323). Segment ids read out of support_seg are absolute, so
+// every weight lookup is window-relative — (sm - i0, sn - j0) — the same
+// shift J_chunk already needs. The caller therefore never has to keep two
+// global complex (N, N) tables alive across the whole fill.
 template<int D>
 static void
 assemble_Z_bspline_weighted_windowed_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
     py::array_t<double, py::array::c_style | py::array::forcecast> polys,
-    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_all,
-    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_all,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_win,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_win,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
     int64_t i0, int64_t i1, int64_t j0, int64_t j1,
@@ -1508,8 +1516,8 @@ assemble_Z_bspline_weighted_windowed_kernel(
     auto j_view = J_chunk.unchecked<4>();
     auto ss_view = support_seg.unchecked<2>();
     auto p_view = polys.unchecked<3>();
-    auto wa_view = wA_all.unchecked<2>();
-    auto wp_view = wPhi_all.unchecked<2>();
+    auto wa_view = wA_win.unchecked<2>();
+    auto wp_view = wPhi_win.unchecked<2>();
     auto mi_view = m_idx.unchecked<1>();
     auto ni_view = n_idx.unchecked<1>();
 
@@ -1526,9 +1534,11 @@ assemble_Z_bspline_weighted_windowed_kernel(
         throw std::runtime_error(
             "J_chunk.shape must be (D+1, D+1, i1-i0, j1-j0)");
     }
-    if (wA_all.shape(0) != wPhi_all.shape(0) ||
-        wA_all.shape(1) != wPhi_all.shape(1)) {
-        throw std::runtime_error("wA_all / wPhi_all shape mismatch");
+    if (wA_win.shape(0) != i1 - i0 || wA_win.shape(1) != j1 - j0) {
+        throw std::runtime_error("wA_win.shape must be (i1-i0, j1-j0)");
+    }
+    if (wPhi_win.shape(0) != i1 - i0 || wPhi_win.shape(1) != j1 - j0) {
+        throw std::runtime_error("wPhi_win.shape must be (i1-i0, j1-j0)");
     }
     if (Z.shape(0) != (long)n_basis || Z.shape(1) != (long)n_basis) {
         throw std::runtime_error("Z.shape must be (n_basis, n_basis)");
@@ -1558,8 +1568,8 @@ assemble_Z_bspline_weighted_windowed_kernel(
                 for (int b = 0; b < NM; b++) {
                     int64_t sn = ss_view(n, b);
                     if (sn < j0 || sn >= j1) continue;
-                    std::complex<double> wa = wa_view(sm, sn);
-                    std::complex<double> wp = wp_view(sm, sn);
+                    std::complex<double> wa = wa_view(sm - i0, sn - j0);
+                    std::complex<double> wp = wp_view(sm - i0, sn - j0);
 
                     std::complex<double> iA(0.0, 0.0);
                     std::complex<double> iPhi(0.0, 0.0);
@@ -1603,8 +1613,8 @@ assemble_Z_bspline_weighted_windowed(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
     py::array_t<double, py::array::c_style | py::array::forcecast> polys,
-    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_all,
-    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_all,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_win,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_win,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
     int64_t i0, int64_t i1, int64_t j0, int64_t j1,
@@ -1618,12 +1628,12 @@ assemble_Z_bspline_weighted_windowed(
     switch ((int)support_seg.shape(1) - 1) {
         case 1:
             assemble_Z_bspline_weighted_windowed_kernel<1>(
-                J_chunk, support_seg, polys, wA_all, wPhi_all, m_idx, n_idx,
+                J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag);
             return;
         case 2:
             assemble_Z_bspline_weighted_windowed_kernel<2>(
-                J_chunk, support_seg, polys, wA_all, wPhi_all, m_idx, n_idx,
+                J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag);
             return;
         default:
@@ -6044,14 +6054,18 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("a_ek"));
     m.def("assemble_Z_bspline_weighted_windowed", &assemble_Z_bspline_weighted_windowed,
           "Weighted + scaled windowed accumulator: like "
-          "assemble_Z_bspline_windowed but with complex per-pair tables "
-          "wA_all / wPhi_all (global (N, N)) on the A and charge terms and a "
-          "complex scale on the window's contribution before the +=. Serves "
-          "the chunked ground-image builds (PEC mirror-dot, Fresnel "
-          "refl-coef, Sommerfeld constant-C2) with scale = -1 for the "
-          "Z -= image convention. max_d inferred from support_seg.",
+          "assemble_Z_bspline_windowed but with complex per-pair weights "
+          "wA_win / wPhi_win on the A and charge terms and a complex scale "
+          "on the window's contribution before the +=. Serves the chunked "
+          "ground-image builds (PEC mirror-dot, Fresnel refl-coef, "
+          "Sommerfeld constant-C2) with scale = -1 for the Z -= image "
+          "convention. The weights are WINDOWS of shape (i1-i0, j1-j0) "
+          "aligned with J_chunk's trailing axes, not global (N, N) tables: "
+          "lookups are window-relative, so the caller never keeps two "
+          "global complex (N, N) tables alive across the fill (issue #323). "
+          "max_d inferred from support_seg.",
           py::arg("J_chunk"), py::arg("support_seg"),
-          py::arg("polys"), py::arg("wA_all"), py::arg("wPhi_all"),
+          py::arg("polys"), py::arg("wA_win"), py::arg("wPhi_win"),
           py::arg("m_idx"), py::arg("n_idx"),
           py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
           py::arg("omega"), py::arg("eps_"), py::arg("mu_"),
