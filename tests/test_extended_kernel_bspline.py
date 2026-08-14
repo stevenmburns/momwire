@@ -1556,10 +1556,19 @@ def test_image_chunked_route_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
     geom = sim._build_geometry()
     supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
     w_A = sim._image_tangent_dot(geom["tangents"]).astype(np.complex128)
+    w_Phi = np.ones_like(w_A)
     Z = np.zeros((supp_seg.shape[0],) * 2, dtype=np.complex128, order="F")
     offedge_ek_spy.clear()
     sim._accumulate_Z_image_chunked(
-        Z, geom, sim.k, supp_seg, polys, w_A, np.ones_like(w_A)
+        Z,
+        geom,
+        sim.k,
+        supp_seg,
+        polys,
+        # The accumulator takes a per-chunk window producer (#323); these
+        # explicit PEC tables are the thing under test, so slice them here
+        # rather than route through `_image_weight_window_fn`.
+        lambda i0, i1: (w_A[i0:i1], w_Phi[i0:i1]),
     )
     assert offedge_ek_spy, "no image fill happened"
     n_segs = geom["n_segs_total"]
@@ -2526,7 +2535,9 @@ def test_g19_refl_chunked_route_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
     w_A, w_Phi = sim._image_refl_weights(sim._image_refl_prep(geom), sim.omega)
     Z = np.zeros((supp_seg.shape[0],) * 2, dtype=np.complex128, order="F")
     offedge_ek_spy.clear()
-    sim._accumulate_Z_image_chunked(Z, geom, sim.k, supp_seg, polys, w_A, w_Phi)
+    sim._accumulate_Z_image_chunked(
+        Z, geom, sim.k, supp_seg, polys, lambda i0, i1: (w_A[i0:i1], w_Phi[i0:i1])
+    )
     assert offedge_ek_spy, "no image fill happened"
     row0 = 0
     for ek in offedge_ek_spy:
@@ -3511,10 +3522,11 @@ def test_u2_image_chunked_route_serves_the_joint_labels_to_cpp(
     geom = sim._build_geometry()
     supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
     w_A = sim._image_tangent_dot(geom["tangents"]).astype(np.complex128)
+    w_Phi = np.ones_like(w_A)
     Z = np.zeros((supp_seg.shape[0],) * 2, dtype=np.complex128, order="F")
     offedge_ek_spy.clear()
     sim._accumulate_Z_image_chunked(
-        Z, geom, sim.k, supp_seg, polys, w_A, np.ones_like(w_A)
+        Z, geom, sim.k, supp_seg, polys, lambda i0, i1: (w_A[i0:i1], w_Phi[i0:i1])
     )
     assert offedge_ek_spy, "no image fill happened"
     n_segs = geom["n_segs_total"]
