@@ -3732,3 +3732,245 @@ def test_bspline_enrichment_y_matrix_swept_matches_single_k():
     assert abs(Ys[0, 0, 0] - Y0[0, 0]) / abs(Y0[0, 0]) < 1e-10
     assert (s.k, s.omega, s.wavelength) == (k0, om0, wl0)
     assert abs(Ys[1, 0, 0] - Y0[0, 0]) / abs(Y0[0, 0]) > 1e-4  # k moved, Y moved
+
+
+def _reference_basis_polynomials_dense(sim, geom):
+    """The pre-#329 `_build_basis_polynomials` body, verbatim.
+
+    Kept here as the bit-exactness oracle for the banded rewrite: it
+    densifies the design matrix with `.toarray()` and contracts the full
+    (n_total_w, d+1, n_basis_w) block, so it exercises none of the CSR
+    banding the solver now uses.
+    """
+    from scipy.interpolate import BSpline
+
+    from momwire.bspline import _V_UNIT_INV
+
+    d = sim.degree
+    n_wings = d + 1
+    n_poly = d + 1
+
+    start_status, end_status = sim._wire_endpoint_status()
+
+    all_supp_seg = []
+    all_polys = []
+    junction_dirs = {j: [] for j in range(len(sim.junctions))}
+
+    m_global = 0
+    for w_idx, pw in enumerate(geom["per_wire"]):
+        arc = pw["arc_at_knot"]
+        wire_arc = arc[-1]
+        knots = np.concatenate([np.full(d, 0.0), arc.copy(), np.full(d, wire_arc)])
+        n_basis_w = len(knots) - d - 1
+
+        kept = []
+        if start_status[w_idx] == "free":
+            pass
+        elif start_status[w_idx] == "ground":
+            kept.append((0, "gnd", None, "start"))
+        else:
+            kept.append((0, "dir", start_status[w_idx], "start"))
+        for j in range(1, n_basis_w - 1):
+            kept.append((j, "int", None, None))
+        if end_status[w_idx] == "free":
+            pass
+        elif end_status[w_idx] == "ground":
+            kept.append((n_basis_w - 1, "gnd", None, "end"))
+        else:
+            kept.append((n_basis_w - 1, "dir", end_status[w_idx], "end"))
+
+        seg_off = geom["seg_offsets"][w_idx]
+        h_per_seg_w = pw["h_per_seg"]
+        arc_at_knot_w = pw["arc_at_knot"]
+        n_total_w = pw["n_total"]
+
+        unit = np.linspace(0.0, 1.0, d + 1)
+        u_local_per_seg = h_per_seg_w[:, None] * unit[None, :]
+        u_global_per_seg = arc_at_knot_w[:-1, None] + u_local_per_seg
+        u_flat = u_global_per_seg.reshape(-1)
+
+        DM = BSpline.design_matrix(u_flat, knots, d).toarray()
+        DM_seg = DM.reshape(n_total_w, d + 1, n_basis_w)
+
+        V_unit_inv = _V_UNIT_INV[d]
+        inv_h_powers = h_per_seg_w[:, None] ** (-np.arange(d + 1))
+        poly_per_seg = np.einsum("ij,sjk->sik", V_unit_inv, DM_seg)
+        poly_per_seg *= inv_h_powers[:, :, None]
+
+        for _kept_idx, (j, kind, junc_idx, end_pos) in enumerate(kept):
+            seg_lo = max(0, j - d)
+            seg_hi = min(n_total_w, j + 1)
+            n_actual = seg_hi - seg_lo
+
+            supp_seg_m = np.zeros(n_wings, dtype=np.int64)
+            polys_m = np.zeros((n_wings, n_poly), dtype=np.float64)
+            supp_seg_m[:n_actual] = seg_off + np.arange(seg_lo, seg_hi)
+            polys_m[:n_actual, :] = poly_per_seg[seg_lo:seg_hi, :, j]
+
+            all_supp_seg.append(supp_seg_m)
+            all_polys.append(polys_m)
+
+            if kind == "dir":
+                junction_dirs[junc_idx].append(
+                    (m_global, +1.0 if end_pos == "start" else -1.0)
+                )
+            m_global += 1
+
+    supp_seg = (
+        np.stack(all_supp_seg, axis=0)
+        if all_supp_seg
+        else np.zeros((0, n_wings), dtype=np.int64)
+    )
+    polys = (
+        np.stack(all_polys, axis=0)
+        if all_polys
+        else np.zeros((0, n_wings, n_poly), dtype=np.float64)
+    )
+
+    grounded = sim._grounded_junctions()
+    kcl_rows = [j for j in range(len(sim.junctions)) if j not in grounded]
+    kcl_A = np.zeros((len(kcl_rows), supp_seg.shape[0]), dtype=np.float64)
+    for row, j_idx in enumerate(kcl_rows):
+        for m_g, sign in junction_dirs[j_idx]:
+            kcl_A[row, m_g] = sign
+    return supp_seg, polys, kcl_A
+
+
+def _basis_case_kwargs(case):
+    """Geometry kwargs for the #329 bit-exactness matrix."""
+    if case == "single":
+        ys = np.linspace(-2.0, 2.0, 5)
+        w = np.column_stack([np.zeros_like(ys), ys, np.zeros_like(ys)])
+        return {"wires": [w], "n_per_edge_per_wire": [[4] * 4], "nsegs": 16}
+    if case == "nonuniform":
+        ys = np.linspace(-2.0, 2.0, 5)
+        w = np.column_stack([np.zeros_like(ys), ys, np.zeros_like(ys)])
+        # Unequal n_per_edge on unequal-length edges: h_per_seg varies
+        # segment to segment, so inv_h_powers is not a single constant.
+        return {"wires": [w], "n_per_edge_per_wire": [[3, 7, 2, 5]], "nsegs": 17}
+    if case == "junction":
+        w0 = np.array([[0.0, -2.0, 0.0], [0.0, 0.0, 0.0]])
+        w1 = np.array([[0.0, 0.0, 0.0], [1.5, 0.0, 0.0]])
+        w2 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.7]])
+        return {
+            "wires": [w0, w1, w2],
+            "n_per_edge_per_wire": [[6], [5], [4]],
+            "nsegs": 15,
+            "junctions": [[(0, "end"), (1, "start"), (2, "start")]],
+        }
+    if case == "ground":
+        # Wire 0 stands on the plane (ground end at z = 0); wire 1 joins it
+        # above the plane, so the case carries a ground end AND a junction.
+        w0 = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]])
+        w1 = np.array([[0.0, 0.0, 2.0], [1.3, 0.0, 2.0]])
+        return {
+            "wires": [w0, w1],
+            "n_per_edge_per_wire": [[7], [5]],
+            "nsegs": 12,
+            "junctions": [[(0, "end"), (1, "start")]],
+            "ground_z": 0.0,
+        }
+    raise AssertionError(case)
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize("case", ["single", "nonuniform", "junction", "ground"])
+def test_bspline_banded_basis_build_is_bit_exact(degree, case):
+    """The banded basis build (#329) must reproduce the densified route
+    bit for bit, not merely to tolerance.
+
+    The rewrite reads `BSpline.design_matrix` out of its CSR instead of
+    `.toarray()`, and the alignment it depends on is delicate: a sample
+    sitting exactly on an interior knot is resolved into the NEXT span,
+    so the d+1 rows of one segment do not share a column start. An
+    off-by-one there produces polynomials that are plausible — smooth,
+    right magnitude, wrong basis — and only an exact comparison catches
+    it, hence `array_equal` rather than `allclose`.
+
+    The matrix covers the paths where the alignment can differ: degree 1
+    and 2 (band width 2 vs 3), a single wire (both ends dropped), a
+    3-wire junction (directional bases kept at one shared knot), a
+    grounded end plus junction (#151 kept end basis, dropped KCL row),
+    and non-uniform n_per_edge (h_per_seg varying segment to segment, so
+    the `inv_h_powers` scaling is not a shared constant).
+    """
+    import momwire.bspline as bmod
+
+    kwargs = _basis_case_kwargs(case)
+    sim = BSplineSolver(degree=degree, wavelength=8.0, **kwargs)
+    geom = sim._build_geometry()
+    ref_supp, ref_polys, ref_kcl = _reference_basis_polynomials_dense(sim, geom)
+
+    bmod._BASIS_POLY_CACHE.clear()
+    sim._cached_basis_polynomials = None
+    supp, polys, kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+
+    assert np.array_equal(supp, ref_supp)
+    assert np.array_equal(kcl, ref_kcl)
+    assert polys.shape == ref_polys.shape
+    assert np.array_equal(polys, ref_polys), (
+        "banded basis build diverged from the dense route; max |Δ| = "
+        f"{np.max(np.abs(polys - ref_polys))}"
+    )
+
+
+def test_bspline_basis_build_holds_no_n_squared_transient():
+    """`_build_basis_polynomials` must not densify the design matrix
+    (issue #329). `BSpline.design_matrix(...).toarray()` used to expand a
+    CSR with exactly d+1 nonzeros per row into a (N_w·(d+1), N_w+d)
+    float64 block, and the einsum that follows materialised a second
+    array of the same shape — both fully resident, both scaling as N_w²
+    per WIRE, at 24-48 bytes per entry for d = 2.
+
+    Arithmetic for the threshold, at the N = 1200 segments this geometry
+    builds on ONE wire (tracemalloc sees numpy's data allocations):
+
+      * the dense DM alone was 8 · N · (d+1) · (N+d) ≈ 8 N² (d+1) =
+        34.6 MB at d = 2, and `poly_per_seg` was a second copy of it —
+        the pair measured 70.2 MB here. Even the single-copy 8 N² floor
+        is 11.5 MB.
+      * the banded build allocates O(N · (d+1)²) throughout: the CSR's
+        own data + indices, the (N, d+1, d+1) band, its einsum output,
+        and the per-basis (d+1, d+1) rows that get stacked into `polys`
+        — measured together at 1.29 MB, of which 0.38 MB is the returned
+        result itself.
+
+    3 MB therefore sits ~2.3x above what the fixed code needs and ~3.8x
+    below the 8 N² single-copy floor the old route could not go under.
+
+    The geometry must be FRESH per measurement: `_BASIS_POLY_CACHE` is a
+    module-level FIFO keyed on geometry, so re-using a shape measures a
+    cache hit instead of a build.
+    """
+    import tracemalloc
+
+    import momwire.bspline as bmod
+
+    n_edges, seg_per_edge = 150, 8
+    ys = np.linspace(-5.113, 5.113, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.zeros_like(ys)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+    )
+    geom = sim._build_geometry()
+    bmod._BASIS_POLY_CACHE.clear()
+    sim._cached_basis_polynomials = None
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        supp, _polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    n = supp.shape[0]
+    assert n == n_edges * seg_per_edge  # N = 1200
+    assert peak < 3_000_000, (
+        f"basis build peaked {peak / 1e6:.2f} MB (8 N**2 = "
+        f"{8 * n**2 / 1e6:.2f} MB) — the design matrix is dense again"
+    )
