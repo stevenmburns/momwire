@@ -209,7 +209,20 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         drive-point impedance vector V_i / I_i.
     n_qp_path: Gauss-Legendre order for the OUTER testing-path integral,
         per half-segment (T1 only; T2's path collapses to two endpoint
-        evaluations).
+        evaluations). Ignored under `nec5_quadrature`.
+    nec5_quadrature: evaluate ∫A·dl by NEC-5's own rule — the two-point
+        trapezoid at the path-end centroids (every potential at element
+        centroids, the classic mixed-potential idiom), identified by the
+        momwire#316 residue study: with it, the free-space ByDipole1
+        ladder matches NEC-5's printouts to a CONSTANT −0.004−0.037j Ω at
+        every rung, pair-walk signature identical to the third decimal.
+        Default False keeps the converged Gauss-Legendre path integral, so
+        the walk you see is the SCHEME's discretization error, cleanly.
+        On non-uniform meshes each wing weighs its own half-path length
+        (h_wing/2) at its centroid — the element-local reading, identical
+        to the whole-path trapezoid on the uniform meshes the rule was
+        identified on. Demonstration mode for the census rationale, not an
+        NEC-5 substitute (the licensed binary stays the oracle).
     n_qp_source: Gauss-Legendre order per source segment for the smooth
         remainder (exp(−jkR)−1)/(4πR); the static 1/(4πR) part is analytic.
     cancel: optional :class:`~momwire._cancel.CancelToken`; polled at the
@@ -234,6 +247,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         feeds=None,
         n_qp_path=32,
         n_qp_source=12,
+        nec5_quadrature=False,
         cancel=None,
         **unsupported,
     ):
@@ -267,6 +281,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
 
         self.n_qp_path = int(n_qp_path)
         self.n_qp_source = int(n_qp_source)
+        self.nec5_quadrature = bool(nec5_quadrature)
         if self.n_qp_path < 1 or self.n_qp_source < 1:
             raise ValueError("n_qp_path and n_qp_source must be >= 1")
 
@@ -682,6 +697,24 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         wing_seg, wing_sigma = geom["wing_seg"], geom["wing_sigma"]
         cent = geom["seg_p0"] + 0.5 * seg_h[:, None] * seg_t
         knot = self._knot_points(geom)
+
+        if self.nec5_quadrature:
+            # NEC-5's identified rule (momwire#316): one node per wing, AT
+            # the wing's centroid, weighted by that half-path's length —
+            # the two-point centroid trapezoid on a uniform mesh. The
+            # downstream fill consumes (pts, tans, wts) shape-agnostically.
+            s_a, s_b = wing_seg[:, 0], wing_seg[:, 1]
+            pts = np.stack([cent[s_a], cent[s_b]], axis=1)
+            tans = np.stack(
+                [
+                    wing_sigma[:, 0][:, None] * seg_t[s_a],
+                    wing_sigma[:, 1][:, None] * seg_t[s_b],
+                ],
+                axis=1,
+            )
+            wts = 0.5 * np.stack([seg_h[s_a], seg_h[s_b]], axis=1)
+            return pts, tans, wts
+
         xo, wo = leggauss(self.n_qp_path)
 
         s_a, s_b = wing_seg[:, 0], wing_seg[:, 1]

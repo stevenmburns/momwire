@@ -114,3 +114,20 @@ here is worse than no answer.
   shared Richardson limit, and `BSplineSolver(degree=1)` as the negative
   control showing the walk comes from razor-blade testing and not from the
   tent basis the two solvers share.
+
+## The identified quadrature (`nec5_quadrature`, momwire#316)
+
+The default solver evaluates the testing-path integral ∫A·dl with a
+converged Gauss-Legendre rule, so its O(1/N) walk is the SCHEME's
+discretization error and nothing else. NEC-5 itself does less: the #316
+residue study identified its rule as the two-point trapezoid at the
+path-end centroids — every potential evaluated at element centroids, the
+literal reading of the manual's "path integrals between centroids of
+connected elements". `RazorSolver(nec5_quadrature=True)` adopts that
+rule, and the free-space ByDipole1 ladder then matches NEC-5's printouts
+at EVERY rung up to a constant ≈ −0.004−0.037j Ω (an N-independent kernel
+nuance; the pair-walk signature agrees to the third decimal). Twin test 5
+pins both the size and the CONSTANCY of that residual. The mode exists so
+the census pair-recipe rationale is demonstrable rung-for-rung; it is not
+a step toward an NEC-5 substitute — the licensed binary remains the only
+oracle that can testify.

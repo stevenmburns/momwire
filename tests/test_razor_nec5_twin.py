@@ -24,6 +24,14 @@ in this ladder: at N=24 the gap is already (0.11, 1.33) Ω and only closes to
 together — and it is why test 1 uses per-N tolerances that shrink with N
 rather than one flat bound: the twin is a claim about the WALK, not about
 matching NEC-5's printout to a fixed tolerance at any single N.
+
+**The gap has a name now** (momwire#316 residue study): the pointwise
+difference is a clean C/N² term produced by NEC-5 evaluating ∫A·dl with the
+two-point trapezoid at the path-end centroids — every potential at element
+centroids, the classic mixed-potential idiom. `nec5_quadrature=True` adopts
+that rule, and test 5 pins the consequence: NEC-5's printout is matched at
+EVERY rung up to a CONSTANT ≈ −0.004−0.037j Ω residual (an N-independent
+kernel nuance, the last 0.04 Ω of the twin story).
 """
 
 import numpy as np
@@ -212,3 +220,59 @@ def test_galerkin_tent_does_not_walk_like_nec5(ladders):
 
     for bd, rd in zip(bspline_diffs[1:], razor_diffs[1:]):
         assert bd < 0.5 * rd, f"bspline {bspline_diffs[1:]} vs razor {razor_diffs[1:]}"
+
+
+# --------------------------------------------------------------------------
+# 5. nec5_quadrature: the identified rule closes the gap to a constant
+# --------------------------------------------------------------------------
+def test_nec5_quadrature_matches_every_rung():
+    """`nec5_quadrature=True` (momwire#316) swaps the converged path
+    quadrature for NEC-5's identified two-point centroid trapezoid. The
+    residual against the printouts must then be (a) small at EVERY rung —
+    no shrinking-tolerance ladder needed — and (b) CONSTANT across rungs
+    (measured −0.0036−0.0371j Ω, spread under 0.001 Ω): an N-independent
+    kernel nuance, not discretization. Constancy is the sharp claim — a
+    quadrature regression would reintroduce an N-dependent term long
+    before it moved the mean."""
+    gaps = []
+    for n in (12, 24, 48, 72, 100):
+        z, _ = RazorSolver(
+            wires=BD1_WIRE,
+            nsegs=n,
+            wire_radius=BD1_RAD,
+            wavelength=BD1_WL,
+            nec5_quadrature=True,
+        ).compute_impedance()
+        gaps.append(NEC5_LADDER[n] - z)
+    for n, g in zip((12, 24, 48, 72, 100), gaps):
+        assert abs(g.real) <= 0.01, f"N={n}: R residual {g.real}"
+        assert abs(g.imag) <= 0.05, f"N={n}: X residual {g.imag}"
+    spread = max(abs(a - b) for a in gaps for b in gaps)
+    assert spread <= 0.003, f"residual not constant: {gaps}"
+
+
+def test_nec5_quadrature_split_identity_holds():
+    """The mode's per-wing element-local weights (h_wing/2 at the wing
+    centroid) must keep the junction machinery exact: the two-wire
+    colinear split of ByDipole1 solves identically to the single wire."""
+    kw = dict(wire_radius=BD1_RAD, wavelength=BD1_WL, nec5_quadrature=True)
+    z_one, _ = RazorSolver(wires=BD1_WIRE, nsegs=20, **kw).compute_impedance()
+    h = BD1_LEN / 20
+    two = [
+        np.array([[0.0, 0.0, 0.0], [0.0, 8 * h, 0.0]]),
+        np.array([[0.0, 8 * h, 0.0], [0.0, BD1_LEN, 0.0]]),
+    ]
+    z_two, _ = RazorSolver(
+        wires=two,
+        n_per_edge_per_wire=[8, 12],
+        feeds=[(1, BD1_LEN / 2 - 8 * h, 1.0)],
+        **kw,
+    ).compute_impedance()
+    assert abs(z_two - z_one) / abs(z_one) < 1e-9, f"{z_two} vs {z_one}"
+
+
+def test_nec5_quadrature_default_off():
+    """The default stays the converged quadrature — the unmodified pins in
+    tests/test_razor.py are the real guard; this just pins the flag."""
+    s = RazorSolver(wires=BD1_WIRE, nsegs=12, wavelength=BD1_WL)
+    assert s.nec5_quadrature is False
