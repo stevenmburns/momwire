@@ -502,3 +502,120 @@ def test_fused_Q_rect_kernel_matches_numpy_fast_solvers(cls, monkeypatch):
     z_np = _solve("yagi", 0.2, cls=cls, **SOMM)
 
     assert np.abs(z_fused - z_np).max() / np.abs(z_np).max() < 1e-10
+
+
+# ---------------------------------------------------------------------------
+# `_sommerfeld.max_image_distance` (issue #331): the r1_max endpoint scan
+# used to be pasted verbatim at 4 call sites, each materializing a (2N, 2N)
+# float64 distance matrix just to read off its max. The shared, row-chunked
+# helper must be BIT-IDENTICAL to that deleted expression (not merely
+# close) — a max over row bands is exact, not an approximation, so any
+# drift here means the chunking broke something.
+# ---------------------------------------------------------------------------
+
+
+def _naive_r1_max(seg_l, seg_r, ground_z):
+    """The exact expression `max_image_distance` replaced at all 4 sites —
+    kept here, independent of the production helper, as the reference the
+    helper is checked against."""
+    ex = np.concatenate([seg_l, seg_r])
+    dxe = ex[:, 0][:, None] - ex[:, 0][None, :]
+    dye = ex[:, 1][:, None] - ex[:, 1][None, :]
+    hze = (ex[:, 2][:, None] - ground_z) + (ex[:, 2][None, :] - ground_z)
+    return float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max()) * 1.001
+
+
+def test_max_image_distance_matches_naive_on_random_cloud():
+    """(a) A 500-endpoint (250-segment) random cloud, default chunking —
+    exact equality, not allclose."""
+    rng = np.random.default_rng(331)
+    seg_l = rng.uniform(-40.0, 40.0, (250, 3))
+    seg_r = rng.uniform(-40.0, 40.0, (250, 3))
+    ground_z = 1.7
+    got = _sommerfeld.max_image_distance(seg_l, seg_r, ground_z)
+    want = _naive_r1_max(seg_l, seg_r, ground_z)
+    assert got == want
+
+
+def test_max_image_distance_finds_max_in_final_partial_chunk():
+    """(b) The winning pair's ROW sits in the final, PARTIAL row-chunk —
+    genuinely exercises the tail, not just the interior. 5 segments (10
+    endpoints) with an explicit `chunk_rows=3` gives row bands
+    [0:3), [3:6), [6:9), [9:10) — the last one width-1. The extreme point
+    (endpoint index 9, i.e. `seg_r[4]`) sits only in that final chunk: if
+    a chunking bug dropped the tail (e.g. `range(0, n - chunk, chunk)`),
+    this pair — and the correct r1_max — would go missing.
+    """
+    seg_l = np.zeros((5, 3))
+    seg_r = np.zeros((5, 3))
+    seg_r[4] = [0.0, 0.0, 100.0]  # ex[9] — last row, alone in its chunk
+    ground_z = 0.0
+
+    got = _sommerfeld.max_image_distance(seg_l, seg_r, ground_z, chunk_rows=3)
+    want = _naive_r1_max(seg_l, seg_r, ground_z)
+    assert got == want
+    # Guard the guard: the extreme pair really is row 9 pairing with
+    # itself (hze = 200), not something the interior chunks would also see.
+    assert want == pytest.approx(200.0 * 1.001)
+
+
+@pytest.mark.parametrize("n_seg", [1, 2])
+def test_max_image_distance_degenerate_clouds(n_seg):
+    """(c) N=1 and N=2 degenerate segment clouds (2 and 4 endpoints)."""
+    rng = np.random.default_rng(100 + n_seg)
+    seg_l = rng.uniform(-5.0, 5.0, (n_seg, 3))
+    seg_r = rng.uniform(-5.0, 5.0, (n_seg, 3))
+    ground_z = -0.3
+    got = _sommerfeld.max_image_distance(seg_l, seg_r, ground_z)
+    want = _naive_r1_max(seg_l, seg_r, ground_z)
+    assert got == want
+
+
+def test_max_image_distance_no_n_squared_transient():
+    """Tracemalloc gate: the helper's peak transient must stay a few MB
+    regardless of endpoint count, never scaling with the retired
+    `(2N, 2N)` full-matrix expression.
+
+    Arithmetic for the threshold, at n_seg = 2500 (5000 endpoints, so
+    N=2500 basis-scale — the issue's own N=4700 example peaked ~4 GB on
+    the deleted expression):
+
+      * default chunking picks `rows = max(1, 4_000_000 // (16 * 5000))
+        = 50`, so each `(rows, n)` float64 buffer (dxe/dye/hze, their
+        squares, the running sum, and the sqrt output) is capped at
+        `50 * 5000 * 8 = 2.0 MB`.
+      * measured peak (this test, tracemalloc): ~10.1 MB — a handful of
+        those 2 MB buffers alive at once during the elementwise chain,
+        stable across N (500 to 20,000 endpoints all measured 0.5-10.2
+        MB; it does NOT grow with N, since chunk_rows shrinks to hold
+        `rows * n` ~constant).
+      * the retired full-matrix expression at this same N would need
+        `8 * (2N)**2 = 8 * 5000**2 = 200 MB` for ONE real array, and the
+        issue measured ~10-12x that (multiple materialized temporaries)
+        at its N=4700 case — ~4 GB.
+
+    25 MB sits ~2.5x above the measured peak and ~8x below the single
+    undersized (2N, 2N) array this replaces, let alone the full ~2 GB+
+    transient the old code built at this N.
+    """
+    import tracemalloc
+
+    rng = np.random.default_rng(331)
+    n_seg = 2500
+    seg_l = rng.uniform(-30.0, 30.0, (n_seg, 3))
+    seg_r = rng.uniform(-30.0, 30.0, (n_seg, 3))
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, 0.5)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert r1_max > 0.0
+    assert peak < 25_000_000, (
+        f"max_image_distance peaked {peak / 1e6:.2f} MB at "
+        f"{2 * n_seg} endpoints — an N-squared transient is back "
+        f"(8 * (2N)**2 = {8 * (2 * n_seg) ** 2 / 1e6:.1f} MB)"
+    )
