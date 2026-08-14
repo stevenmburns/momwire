@@ -2833,7 +2833,7 @@ def test_bspline_swept_fallback_hoist_chunked_under_budget(monkeypatch):
     # The helper's own chunk arithmetic: nm² ΣN_e² complex128 per k.
     prep = s._same_edge_prep(s._build_geometry())
     nm = s.degree + 1
-    sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _a, _g in prep)
+    sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _a, _arc, _radius in prep)
     max_chunk = max(1, (budget_mb << 20) // (nm * nm * sum_ne2 * 16))
     assert max_chunk < n_k, "probe must need more than one chunk"
 
@@ -2924,6 +2924,170 @@ def test_bspline_swept_batched_path_skips_fallback_hoist(monkeypatch):
     s2 = BSplineSolver(**kw)
     monkeypatch.setattr(s2, "_same_edge_prep_swept_chunks", unexpected)
     s2.compute_y_matrix_swept(k_array)
+
+
+def test_bspline_swept_same_edge_prep_holds_no_reg_table(monkeypatch):
+    """`_same_edge_prep`'s return value — the list EVERY swept entry point
+    (`compute_impedance_swept`, `compute_y_matrix_swept`,
+    `compute_port_solution_swept`, on both the fallback and batched routes)
+    holds resident for the WHOLE sweep — must not carry each edge's
+    quadrature-squared reg-geometry table (issue #330). Pre-fix, each tuple
+    was `(slice, A_static, reg_geometry)` where `reg_geometry["R"]` is an
+    `(N_e·n_qp, N_e·n_qp)` float64 table: 128·N_e² bytes at the default
+    `n_qp_pair=4`. Post-fix each tuple is `(slice, A_static, ed_arc, a_w)`
+    — `ed_arc` is the (N_e+1,) arc array `geom` already owns (a reference,
+    not a copy) and `a_w` a scalar, both O(N_e); the R table is rebuilt at
+    consumption instead (`_same_edge_prep_swept_chunks` /
+    `_swept_batched_z_chunks`) and immediately discarded, one edge at a
+    time.
+
+    Structural check (exact, not a fuzzy memory-profiler threshold): no
+    tuple element is R-table-sized, `ed_arc` is exactly O(N_e), and the
+    ONLY ΣN_e²-scale array retained per edge is `A_static` itself — kept
+    deliberately, per the issue (72·N_e² bytes, small enough to ride the
+    sweep).
+
+    Numeric check: tracemalloc around the isolated `_same_edge_prep` call
+    (captured via a spy so the sweep still runs for real, forced onto the
+    fallback route — read `_swept_batched_available`'s guard, both routes
+    called `_same_edge_prep` pre-fix, but the fallback is the simpler one
+    to force). At n_edges=20, seg_per_edge=50 (ΣN_e² = 20·50² = 50,000):
+
+      * measured peak is 72·ΣN_e² = 3.60 MB on the nose — exactly
+        `A_static`'s own returned bytes, nothing else survives the call.
+      * a re-introduced R table would add 128·ΣN_e² = 6.40 MB more.
+
+    Those two coefficients (72 vs 128) are only 1.78x apart, tighter than
+    this file's usual ~2x-above-measured / well-below-the-old-floor
+    margin (issue #329's basis-build gate had an 11.5x floor to work
+    with) — there just isn't a wider gap available here without loosening
+    the threshold enough to hide a partial regression. 5.5 MB splits the
+    difference: 1.53x above the measured 3.60 MB, 14% below the 6.40 MB
+    an R table would add.
+    """
+    import tracemalloc
+
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    # Force the fallback route (`_same_edge_prep_swept_chunks`); the
+    # batched route (`_swept_batched_z_chunks`) held the same shape of
+    # `prep` pre-fix and is covered by the bit-exactness gates elsewhere.
+    monkeypatch.setattr(bmod, "_HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL", False)
+
+    n_edges, seg_per_edge = 20, 50
+    L = 0.962 * 22 / 2 * 10
+    ys = np.linspace(-L / 2, L / 2, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.zeros_like(ys)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+    )
+    assert not sim._swept_batched_available()
+
+    real_prep = bmod.BSplineSolver._same_edge_prep
+    captured = {}
+
+    def spy(self, geom):
+        tracemalloc.reset_peak()
+        prep = real_prep(self, geom)
+        _cur, peak = tracemalloc.get_traced_memory()
+        captured["prep"] = prep
+        captured["peak"] = peak
+        return prep
+
+    monkeypatch.setattr(bmod.BSplineSolver, "_same_edge_prep", spy)
+
+    k0 = 2 * np.pi / 22.0
+    k_array = np.linspace(0.94 * k0, 1.06 * k0, 4)
+
+    tracemalloc.start()
+    try:
+        sim.compute_impedance_swept(k_array)
+    finally:
+        tracemalloc.stop()
+
+    prep = captured["prep"]
+    sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _a, _arc, _r in prep)
+    assert sum_ne2 == n_edges * seg_per_edge**2  # 50,000
+
+    nm = sim.degree + 1
+    for sl, A_st, ed_arc, a_w in prep:
+        n_e = sl.stop - sl.start
+        # A_static: kept deliberately, exactly (nm, nm, N_e, N_e) float64.
+        assert A_st.nbytes == 8 * nm * nm * n_e * n_e
+        # ed_arc: O(N_e), not O(N_e^2) — the R table is gone from the tuple.
+        assert ed_arc.nbytes == 8 * (n_e + 1)
+        assert isinstance(a_w, float)
+
+    peak = captured["peak"]
+    assert peak < 5_500_000, (
+        f"_same_edge_prep peaked {peak / 1e6:.2f} MB "
+        f"(72*sum_ne2 = {72 * sum_ne2 / 1e6:.2f} MB expected, "
+        f"128*sum_ne2 = {128 * sum_ne2 / 1e6:.2f} MB is the retained-R "
+        "regression) — a reg-geometry table is being retained again"
+    )
+
+
+def test_bspline_swept_fallback_multi_edge_matches_per_freq(monkeypatch):
+    """The fallback route's rebuilt-per-chunk-per-edge reg geometry (issue
+    #330) must still pick each edge's OWN `ed_arc` / `a_w` — a wrong-edge
+    mistake in `_same_edge_prep_swept_chunks`'s rebuild (e.g. reusing edge
+    0's arc array for every edge) is invisible on the single-edge
+    geometries every other fallback test in this file uses, since there is
+    only one edge to get right. This wire has FIVE edges of different
+    lengths so a wrong-edge substitution changes the answer.
+
+    Regression coverage: introducing exactly that mistake (hardcoding the
+    first edge's `ed_arc` for the rebuild) passed the whole scoped suite
+    but failed this comparison at ~1.7e-11 relative (three orders above
+    the 1e-9 roundoff tolerance this test uses) — this test is what would
+    have caught it. The tolerance itself (not `==`) matches this file's
+    other swept-vs-per-k comparisons: the fallback route's per-k moments
+    come from `_seg_seg_reg_moments_from_geometry_swept` (geometry
+    precomputed once, moments batched over k) while `compute_impedance`'s
+    direct single-k path calls `_seg_seg_reg_moments` (quadrature done in
+    one shot) — same algebra, different floating-point reduction order.
+    """
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    monkeypatch.setattr(bmod, "_HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL", False)
+
+    # Five straight runs of different lengths on one wire (10, 8, 12, 6, 9
+    # segments), each a distinct edge with its own arc array.
+    seg_counts = [10, 8, 12, 6, 9]
+    step = 22.0 / 100  # short enough segments to stay well inside one wavelength
+    ys = [0.0]
+    for n in seg_counts:
+        ys.append(ys[-1] + n * step)
+    wires = [np.array([[0.0, y, 0.0] for y in ys])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[seg_counts],
+        nsegs=sum(seg_counts),
+        wavelength=22.0,
+    )
+    assert not sim._swept_batched_available()
+
+    k0 = 2 * np.pi / 22.0
+    k_array = np.linspace(0.95 * k0, 1.05 * k0, 6)
+    z_swept = sim.compute_impedance_swept(k_array)
+
+    for kk, zs in zip(k_array, z_swept):
+        sim_k = BSplineSolver(
+            wires=wires,
+            degree=2,
+            n_per_edge_per_wire=[seg_counts],
+            nsegs=sum(seg_counts),
+            wavelength=2 * np.pi / kk,
+        )
+        z_k, _ = sim_k.compute_impedance()
+        assert abs(zs - z_k) <= 1e-9 * abs(z_k), f"k={kk}: swept={zs}, per-k={z_k}"
 
 
 # ---- Swept size dispatch on the accelerated solvers (issue #262) ------------
