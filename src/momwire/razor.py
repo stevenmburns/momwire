@@ -61,6 +61,19 @@ into the basis rather than enforced by a constraint row. An interior-knot
 tent is the K=2 junction tent of a wire split at that knot, exactly — the
 split identities in `tests/test_razor_junctions.py` pin that.
 
+Field readout and sweeps (momwire#309, unit 3)
+------------------------------------------------
+`currents_at_knots` reads the solved coefficients back as one current per
+mesh knot per wire — see its docstring for how a junctioned end's current
+is rebuilt from its tents' wing signs, since this formulation's junction
+basis is not a per-wire end basis the way the retired triangular-family
+solver's was. `element_currents` (the `_ElementCurrents` mixin) rides on
+top of it. `compute_impedance_swept` / `compute_y_matrix_swept` solve a
+batch of wavenumbers, sharing the wing/path stencils and the closed-form
+static segment moments across the sweep (`_assemble_Z_prepare`) so only
+the smooth kernel remainder and the ω-dependent prefactors are redone per
+k; every solved point is still its own dense LU.
+
 Scope
 -----
 Free space, reduced kernel, one polyline per wire. Grounds and the
@@ -75,6 +88,7 @@ import numpy as np
 import scipy.linalg
 
 from ._cancel import _Cancelable
+from ._element_currents import _ElementCurrents
 from ._quadrature import leggauss
 
 # Two wire endpoints this close are a junction, not a coincidence. The same
@@ -155,7 +169,7 @@ def _static_axis_moments(u_r, rho2, seg_h):
     return m0, m1
 
 
-class RazorSolver(_Cancelable):
+class RazorSolver(_ElementCurrents, _Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
     The NEC-5 formulation twin — see the module docstring for the physics.
@@ -551,6 +565,67 @@ class RazorSolver(_Cancelable):
     # ------------------------------------------------------------------
     # kernel moments
 
+    def _seg_moments_prepare(self, obs, geom):
+        """K-independent ingredients of every segment's reduced-kernel moments.
+
+        The closed-form static moments ``(m0s, m1s, see
+        :func:`_static_axis_moments`)`` and the source-to-observer distance
+        ``R`` itself depend only on geometry — R = sqrt(u² + ρ²) with u, ρ²
+        from the axis frame (:func:`_axis_frame`) and the source quadrature
+        node's local arc τ, none of which a wavenumber sweep changes. Only
+        exp(−jkR) is k-dependent, so R is exactly the boundary: caching it
+        (rather than recomputing it from the axis frame every k) moves its
+        sqrt out of the per-k path along with the asinh/sqrt of the static
+        moments. Chunked exactly as :meth:`_seg_moments` used to chunk
+        internally, so a k-sweep can replay the same chunk boundaries
+        without recomputing them.
+
+        Returns a list of ``(lo, hi, R, m0s, m1s)`` chunks.
+        """
+        a = self.wire_radius
+        seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
+        n_seg = seg_h.size
+        n_obs = obs.shape[0]
+        xg, _wg = leggauss(self.n_qp_source)
+        tau = 0.5 * seg_h[:, None] * (1.0 + xg[None, :])
+        step = max(1, _CHUNK_ELEMS // max(1, n_seg * self.n_qp_source))
+        chunks = []
+        for lo in range(0, n_obs, step):
+            self._checkpoint()
+            hi = min(lo + step, n_obs)
+            u_r, rho2 = _axis_frame(obs[lo:hi], seg_p0, seg_t, a)
+            m0s, m1s = _static_axis_moments(u_r, rho2, seg_h)
+            u = tau[None, :, :] - u_r[:, :, None]
+            R = np.sqrt(u * u + rho2[:, :, None])
+            chunks.append((lo, hi, R, m0s, m1s))
+        return chunks
+
+    def _seg_moments_from_prepared(self, chunks, geom, k, n_obs, *, need_m1=True):
+        """Finish :meth:`_seg_moments_prepare`'s chunks at one wavenumber.
+
+        Only the smooth remainder (exp(−jkR)−1)/(4πR) is computed here —
+        everything k-independent (R and the static moments) already sits in
+        `chunks`. Returns the same ``(M0, M1)`` shape ``(n_obs, n_seg)``
+        that :meth:`_seg_moments` did.
+        """
+        seg_h = geom["seg_h"]
+        n_seg = seg_h.size
+        xg, wg = leggauss(self.n_qp_source)
+        # Source quadrature in each segment's own local arc coordinate.
+        tau = 0.5 * seg_h[:, None] * (1.0 + xg[None, :])
+        wq = 0.5 * seg_h[:, None] * wg[None, :]
+
+        M0 = np.empty((n_obs, n_seg), dtype=np.complex128)
+        M1 = np.empty((n_obs, n_seg), dtype=np.complex128) if need_m1 else None
+        inv4pi = 1.0 / (4.0 * np.pi)
+        for lo, hi, R, m0s, m1s in chunks:
+            self._checkpoint()
+            rem = (np.exp(-1j * k * R) - 1.0) / R
+            M0[lo:hi] = (m0s + np.einsum("psq,sq->ps", rem, wq)) * inv4pi
+            if need_m1:
+                M1[lo:hi] = (m1s + np.einsum("psq,sq->ps", rem, tau * wq)) * inv4pi
+        return M0, M1
+
     def _seg_moments(self, obs, geom, k, *, need_m1=True):
         """Reduced-kernel moments of every segment at every observation point.
 
@@ -565,35 +640,16 @@ class RazorSolver(_Cancelable):
         defined and takes plain Gauss-Legendre. `M1` is None when
         `need_m1` is False — the scalar-potential term only needs M0.
 
-        Chunked over observation points: the remainder's working tensor is
-        n_obs × n_seg × n_qp_source, which is the fill's memory high-water
-        mark.
+        A thin composition of :meth:`_seg_moments_prepare` and
+        :meth:`_seg_moments_from_prepared` for a single wavenumber; the
+        swept assembly (`compute_impedance_swept`, `compute_y_matrix_swept`)
+        calls those two halves directly so the prepare step runs once per
+        sweep instead of once per k.
         """
-        a = self.wire_radius
-        seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
-        n_seg = seg_h.size
-        xg, wg = leggauss(self.n_qp_source)
-        # Source quadrature in each segment's own local arc coordinate.
-        tau = 0.5 * seg_h[:, None] * (1.0 + xg[None, :])
-        wq = 0.5 * seg_h[:, None] * wg[None, :]
-
-        n_obs = obs.shape[0]
-        M0 = np.empty((n_obs, n_seg), dtype=np.complex128)
-        M1 = np.empty((n_obs, n_seg), dtype=np.complex128) if need_m1 else None
-        step = max(1, _CHUNK_ELEMS // max(1, n_seg * self.n_qp_source))
-        inv4pi = 1.0 / (4.0 * np.pi)
-        for lo in range(0, n_obs, step):
-            self._checkpoint()
-            hi = min(lo + step, n_obs)
-            u_r, rho2 = _axis_frame(obs[lo:hi], seg_p0, seg_t, a)
-            m0s, m1s = _static_axis_moments(u_r, rho2, seg_h)
-            u = tau[None, :, :] - u_r[:, :, None]
-            R = np.sqrt(u * u + rho2[:, :, None])
-            rem = (np.exp(-1j * k * R) - 1.0) / R
-            M0[lo:hi] = (m0s + np.einsum("psq,sq->ps", rem, wq)) * inv4pi
-            if need_m1:
-                M1[lo:hi] = (m1s + np.einsum("psq,sq->ps", rem, tau * wq)) * inv4pi
-        return M0, M1
+        chunks = self._seg_moments_prepare(obs, geom)
+        return self._seg_moments_from_prepared(
+            chunks, geom, k, obs.shape[0], need_m1=need_m1
+        )
 
     # ------------------------------------------------------------------
     # assembly
@@ -649,21 +705,17 @@ class RazorSolver(_Cancelable):
             np.concatenate(wts, axis=1),
         )
 
-    def _assemble_Z(self, geom, k):
-        """Fill the razor-blade impedance matrix.
+    def _assemble_Z_prepare(self, geom):
+        """K-independent work for the razor-blade fill: stencils and moments.
 
-        Both terms are built from the same two segment moments. A wing on
-        segment s of length h contributes to the vector potential
-
-            A_n += σ · (M1[s] / h)              when the knot is at arc h
-            A_n += σ · (M0[s] − M1[s] / h)      when it is at arc 0
-
-        carried by σ times that segment's tangent, so the outer path
-        point's tangent contracts with each wing separately. The charge
-        doublet is the constant dσΛ/dτ on each wing — which works out to
-        +1/h_A on side A and −1/h_B on side B whichever way round the two
-        wires are spelled, i.e. the unit charge that leaves A and lands on
-        B — differenced between the path's two bounding centroids.
+        Everything `_assemble_Z_from_prepared` needs that does not depend on
+        the wavenumber — the wing/path stencils built once in unit 1/2, and
+        the static (:meth:`_seg_moments_prepare`) halves of the segment
+        moments at both observation sets the fill uses (segment centroids
+        for T2, testing-path quadrature points for T1). A wavenumber sweep
+        calls this once and replays it through `_assemble_Z_from_prepared`
+        for every k, instead of rebuilding it per k the way a plain loop
+        over single solves would.
         """
         seg_t, seg_h = geom["seg_t"], geom["seg_h"]
         wing_seg, wing_sigma, wing_rise = (
@@ -678,13 +730,11 @@ class RazorSolver(_Cancelable):
         q_a = wing_sigma[:, 0] * np.where(wing_rise[:, 0], 1.0, -1.0) / h_a
         q_b = wing_sigma[:, 1] * np.where(wing_rise[:, 1], 1.0, -1.0) / h_b
 
-        # --- scalar potential: M0 at every segment centroid.
+        # --- scalar potential's observation set: segment centroids.
         cent = geom["seg_p0"] + 0.5 * seg_h[:, None] * seg_t
-        M0c, _ = self._seg_moments(cent, geom, k, need_m1=False)
-        dM0 = M0c[s_b] - M0c[s_a]  # (row, source segment)
-        T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
+        t2_chunks = self._seg_moments_prepare(cent, geom)
 
-        # --- vector potential: the outer path integral, row-chunked.
+        # --- vector potential's observation set: the outer path, row-chunked.
         pts, tans, wts = self._testing_paths(geom)
         n_path = pts.shape[1]
         # σ folded into the source-side tangent, so the dot product carries
@@ -697,13 +747,75 @@ class RazorSolver(_Cancelable):
         # the no-junction fill exactly as cheap as it was in unit 1.
         fall_a = np.flatnonzero(~wing_rise[:, 0])
         fall_b = np.flatnonzero(~wing_rise[:, 1])
-        T1 = np.empty((n_basis, n_basis), dtype=np.complex128)
         rows = max(1, _CHUNK_ELEMS // max(1, n_path * n_basis))
+        t1_row_chunks = []
         for lo in range(0, n_basis, rows):
-            self._checkpoint()
             hi = min(lo + rows, n_basis)
             obs = pts[lo:hi].reshape(-1, 3)
-            M0, M1 = self._seg_moments(obs, geom, k)
+            t1_row_chunks.append(
+                (lo, hi, obs.shape[0], self._seg_moments_prepare(obs, geom))
+            )
+
+        return {
+            "n_basis": n_basis,
+            "n_seg": seg_h.size,
+            "s_a": s_a,
+            "s_b": s_b,
+            "h_a": h_a,
+            "h_b": h_b,
+            "q_a": q_a,
+            "q_b": q_b,
+            "n_cent": cent.shape[0],
+            "t2_chunks": t2_chunks,
+            "n_path": n_path,
+            "tans": tans,
+            "wts": wts,
+            "td_a": td_a,
+            "td_b": td_b,
+            "fall_a": fall_a,
+            "fall_b": fall_b,
+            "t1_row_chunks": t1_row_chunks,
+        }
+
+    def _assemble_Z_from_prepared(self, geom, prepared, k, omega):
+        """Fill the razor-blade impedance matrix at one wavenumber.
+
+        Both terms are built from the same two segment moments. A wing on
+        segment s of length h contributes to the vector potential
+
+            A_n += σ · (M1[s] / h)              when the knot is at arc h
+            A_n += σ · (M0[s] − M1[s] / h)      when it is at arc 0
+
+        carried by σ times that segment's tangent, so the outer path
+        point's tangent contracts with each wing separately. The charge
+        doublet is the constant dσΛ/dτ on each wing — which works out to
+        +1/h_A on side A and −1/h_B on side B whichever way round the two
+        wires are spelled, i.e. the unit charge that leaves A and lands on
+        B — differenced between the path's two bounding centroids.
+
+        Only `k` and `omega` (=c·k, passed separately so a swept caller can
+        reuse one `omega_array` without recomputing it) vary here; every
+        other ingredient comes from `prepared` (`_assemble_Z_prepare`).
+        """
+        s_a, s_b = prepared["s_a"], prepared["s_b"]
+        h_a, h_b = prepared["h_a"], prepared["h_b"]
+        q_a, q_b = prepared["q_a"], prepared["q_b"]
+        n_basis = prepared["n_basis"]
+
+        M0c, _ = self._seg_moments_from_prepared(
+            prepared["t2_chunks"], geom, k, prepared["n_cent"], need_m1=False
+        )
+        dM0 = M0c[s_b] - M0c[s_a]  # (row, source segment)
+        T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
+
+        tans, wts = prepared["tans"], prepared["wts"]
+        n_path = prepared["n_path"]
+        td_a, td_b = prepared["td_a"], prepared["td_b"]
+        fall_a, fall_b = prepared["fall_a"], prepared["fall_b"]
+        T1 = np.empty((n_basis, n_basis), dtype=np.complex128)
+        for lo, hi, n_obs_chunk, static in prepared["t1_row_chunks"]:
+            self._checkpoint()
+            M0, M1 = self._seg_moments_from_prepared(static, geom, k, n_obs_chunk)
             mom_a = M1[:, s_a] / h_a[None, :]
             mom_b = M1[:, s_b] / h_b[None, :]
             if fall_a.size:
@@ -715,7 +827,19 @@ class RazorSolver(_Cancelable):
             integrand *= wts[lo:hi].reshape(-1)[:, None]
             T1[lo:hi] = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
 
-        return 1j * self.omega * self.mu * T1 - T2 / (1j * self.omega * self.eps)
+        return 1j * omega * self.mu * T1 - T2 / (1j * omega * self.eps)
+
+    def _assemble_Z(self, geom, k):
+        """Fill the razor-blade impedance matrix at one wavenumber.
+
+        A thin composition of `_assemble_Z_prepare` and
+        `_assemble_Z_from_prepared` for a single solve; `compute_impedance`
+        and `compute_y_matrix` call this one k at a time, while
+        `compute_impedance_swept` / `compute_y_matrix_swept` call the two
+        halves directly so the prepare step runs once per sweep.
+        """
+        prepared = self._assemble_Z_prepare(geom)
+        return self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
 
     # ------------------------------------------------------------------
     # solve
@@ -783,3 +907,162 @@ class RazorSolver(_Cancelable):
 
         self._checkpoint()
         return scipy.linalg.solve(Z, B)[idx, :]
+
+    # ------------------------------------------------------------------
+    # field readout
+
+    def currents_at_knots(self, coeffs, s_array=None):
+        """Per-wire complex current at every mesh knot (momwire#309 unit 3).
+
+        Returns a list of 1-D arrays, one per wire in `wires_polylines`
+        order, each of length ``n_segments_of_wire + 1`` — one value per
+        KNOT, not per basis.
+
+        Interior knot j of wire w reads straight off the tent coefficient:
+        interior tent n peaks at value 1 on its own knot and is zero at
+        every other knot, so the current there is
+        ``coeffs[basis_offsets[w] + j - 1]``.
+
+        A FREE wire end (no junction there) is 0 — the open-circuit BC the
+        tent basis already builds in.
+
+        A JUNCTIONED wire end is not itself a basis's home knot the way an
+        interior knot is: this formulation's junction tents (unlike the
+        retired triangular-family solver's directional end-bases) are
+        through-current unknowns shared between two DIFFERENT wires, each
+        carrying its own wing sign onto that shared knot. The current at a
+        junctioned end knot, expressed in THAT WIRE'S OWN ARC DIRECTION, is
+        therefore the signed sum of every junction tent with a wing sitting
+        on that (wire, end): each such wing contributes
+        ``wing_sigma · coeff`` — `wing_sigma` already carries the sign that
+        turns the tent's through-current into a multiple of this wire's own
+        arc-length direction (see the module docstring's "Junctions"
+        section and `_junction_wings`). At a K=2 junction (an ordinary
+        two-wire join, or an interior knot re-spelled as a split) exactly
+        one wing sits on each side and the sum is a single term; at a K>=3
+        junction, side A carries a wing from every one of the K−1 tents
+        there, so its knot sums all of them (Kirchhoff's law falling out of
+        the wing bookkeeping — `tests/test_razor_junctions.py`'s
+        `_currents_into_junction` helper is the same sum, used there to
+        check KCL rather than to read off a knot current).
+
+        With `s_array` given as a list of 1-D per-wire arc-length arrays,
+        the tent's own piecewise-linear shape means this is exactly a
+        linear interpolation of the knot values along the wire's cumulative
+        arc (`per_wire[w]["arc_at_knot"]`), not a re-solve of anything.
+        """
+        coeffs = np.asarray(coeffs)
+        geom = self._build_geometry()
+        per_wire = geom["per_wire"]
+        seg_offsets = geom["seg_offsets"]
+        basis_offsets = geom["basis_offsets"]
+        n_interior = geom["n_basis_interior"]
+        wing_seg, wing_rise, wing_sigma = (
+            geom["wing_seg"],
+            geom["wing_rise"],
+            geom["wing_sigma"],
+        )
+
+        out = []
+        for w_idx, pw in enumerate(per_wire):
+            n_knots = pw["arc_at_knot"].shape[0]
+            I = np.zeros(n_knots, dtype=np.complex128)
+            I[1:-1] = coeffs[basis_offsets[w_idx] : basis_offsets[w_idx + 1]]
+            out.append(I)
+
+        n_basis_total = wing_seg.shape[0]
+        if n_basis_total > n_interior:
+            # Flatten the junction tents' two wings into one (seg, rise,
+            # sigma, coeff) list per side, so a wire's end knot is just
+            # "every wing whose (segment, rise) is that end's".
+            j_seg = wing_seg[n_interior:].reshape(-1)
+            j_rise = wing_rise[n_interior:].reshape(-1)
+            j_sigma = wing_sigma[n_interior:].reshape(-1)
+            j_coeff = np.repeat(coeffs[n_interior:], 2)
+            for w_idx in range(len(per_wire)):
+                start_seg = seg_offsets[w_idx]
+                end_seg = seg_offsets[w_idx + 1] - 1
+                at_start = (j_seg == start_seg) & ~j_rise
+                if at_start.any():
+                    out[w_idx][0] = (j_sigma[at_start] * j_coeff[at_start]).sum()
+                at_end = (j_seg == end_seg) & j_rise
+                if at_end.any():
+                    out[w_idx][-1] = (j_sigma[at_end] * j_coeff[at_end]).sum()
+
+        if s_array is None:
+            return out
+
+        sampled = []
+        for w_idx, sv in enumerate(s_array):
+            arc = per_wire[w_idx]["arc_at_knot"]
+            knot_I = out[w_idx]
+            sv = np.asarray(sv, dtype=np.float64)
+            Ire = np.interp(sv, arc, knot_I.real)
+            Iim = np.interp(sv, arc, knot_I.imag)
+            sampled.append(Ire + 1j * Iim)
+        return sampled
+
+    # ------------------------------------------------------------------
+    # swept solve
+
+    def compute_impedance_swept(self, k_array):
+        """Drive-point impedance(s) over a batch of wavenumbers.
+
+        Same return convention as `compute_impedance` (scalar per k with
+        one feed, `(n_k, n_feeds)` with several), stacked over `k_array`
+        into shape `(n_k,)` / `(n_k, n_feeds)`. Shares every k-independent
+        piece of the fill — geometry, the wing/path stencils, and the
+        closed-form static segment moments — across the sweep via
+        `_assemble_Z_prepare`, so only the smooth kernel remainder and the
+        jωμ / 1/jωε prefactors (ω = c·k) are recomputed per k; each k still
+        gets its own dense solve.
+        """
+        k_array = np.asarray(k_array, dtype=np.float64)
+        geom = self._build_geometry()
+        self._checkpoint()
+        prepared = self._assemble_Z_prepare(geom)
+
+        idx = self._feed_basis_indices(geom)
+        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
+        rhs = np.zeros(geom["n_basis_total"], dtype=np.complex128)
+        for m_i, v_i in zip(idx, voltages):
+            rhs[m_i] += v_i
+
+        feed_currents = np.empty((k_array.shape[0], len(idx)), dtype=np.complex128)
+        for i, k in enumerate(k_array):
+            self._checkpoint()
+            k = float(k)
+            Z = self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
+            coeffs = scipy.linalg.solve(Z, rhs)
+            feed_currents[i] = coeffs[idx]
+
+        z_per_feed = voltages[None, :] / feed_currents
+        return z_per_feed[:, 0] if len(self.feeds) == 1 else z_per_feed
+
+    def compute_y_matrix_swept(self, k_array):
+        """Short-circuit admittance matrices over a batch of wavenumbers.
+
+        Returns an `(n_k, n_ports, n_ports)` complex array; `Y[i]` is
+        `compute_y_matrix()`'s result at `k_array[i]`, same port/sign
+        conventions (including the razor-blade non-reciprocity —
+        `tests/test_razor_junctions.py`). Shares the k-independent fill work
+        the same way `compute_impedance_swept` does.
+        """
+        k_array = np.asarray(k_array, dtype=np.float64)
+        geom = self._build_geometry()
+        self._checkpoint()
+        prepared = self._assemble_Z_prepare(geom)
+
+        idx = self._feed_basis_indices(geom)
+        n_ports = len(idx)
+        B = np.zeros((geom["n_basis_total"], n_ports), dtype=np.complex128)
+        for j, m_j in enumerate(idx):
+            B[m_j, j] = 1.0
+
+        Y = np.empty((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
+        for i, k in enumerate(k_array):
+            self._checkpoint()
+            k = float(k)
+            Z = self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
+            Y[i] = scipy.linalg.solve(Z, B)[idx, :]
+        return Y
