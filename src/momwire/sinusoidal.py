@@ -3088,6 +3088,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         S = None if consume is not None else np.empty((3, M, N), dtype=np.complex128)
         chunk = max(1, _REMAINDER_CHUNK_ELEMS // max(n_src, 1))
         if row_group > 1:
+            if M % row_group:
+                # The last chunk would be a partial group, which is the one
+                # thing the alignment exists to prevent. Raise rather than
+                # hand a consumer a group it cannot reduce whole.
+                raise ValueError(
+                    f"observer count {M} is not a multiple of row_group {row_group}"
+                )
             chunk = max(row_group, (chunk // row_group) * row_group)
         shp_w = shp * w_node[None]
         for i0 in range(0, M, chunk):
