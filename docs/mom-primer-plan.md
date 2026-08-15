@@ -1,7 +1,8 @@
 # MoM primer site plan — "A voltage in a gap"
 
 A tutorial/primer website on how the method of moments works, keyed off the
-actual momwire Python implementation, served at **momwire.antennaknobs.dev**.
+actual momwire Python implementation, served at **momwire.dev** (originally
+launched at momwire.antennaknobs.dev, which now 301s to the apex).
 
 ## The framing
 
