@@ -4062,6 +4062,9 @@ def _stub_sommerfeld_remainder_enrich(
     ],
     ids=["pec", "refl-coef", "sommerfeld"],
 )
+# ~16 s/case: dominated by the pre-existing pure-Python Z_pe/Z_ep loop in
+# `_assemble_Z_enrich_image_numpy`, not by anything this gate measures.
+@pytest.mark.slow
 def test_bspline_enrichment_image_fill_holds_no_n_squared_transient(
     ground_kw, monkeypatch
 ):
