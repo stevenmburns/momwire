@@ -219,7 +219,7 @@ FINITE ground — see #191 below for what a PEC ground costs instead.
 charge from the free-space source only, so any `ground_z` refused. Under PEC
 that refusal costs one repeat of the correction and no new object: the
 ground block IS the free-space field of mirrored sources, subtracted once
-(`_tested_ground_block`, one global minus sign), and the image of a point
+(`_fold_ground_block`, one global minus sign), and the image of a point
 charge is a point charge at the mirrored node. So the removed term's image
 is a mirror of a term already removed, and
 
@@ -1850,11 +1850,29 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         return real, img
 
     def _tested_contribs(
-        self, geom, k, ctx, projector, src_c=None, src_t=None, mirror=False
+        self,
+        geom,
+        k,
+        ctx,
+        projector,
+        src_c=None,
+        src_t=None,
+        mirror=False,
+        subtract_into=None,
     ):
         """Test-integrate one source block: (contrib_const, sin, cos−1), each
         (nnz, N) — the folded shape set (#203/#205), which is what the field
         kernel is asked for (`cos_shape="cos-1"`).
+
+        `subtract_into` is the ground path's residency lever (momwire#332):
+        given a triple, this block is SUBTRACTED into it entry by entry and
+        nothing is returned, instead of a parallel triple coming back for the
+        caller to difference. Minus one is the only weight any caller needs —
+        it is the ground's single global minus sign — and the two spellings
+        are the same float64 subtraction per matrix entry, so the fold is
+        bit-exact rather than a reassociation. The Sommerfeld ground's C2 is
+        NOT a second weight here: `c2·img − rem` has to stay associated as it
+        is written to keep that (see `_fold_ground_block`).
 
         `src_c` / `src_t` are the source geometry the field evaluator sees —
         the geometry's own segments for the free-space block, the mirrored
@@ -1883,6 +1901,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         the numpy loop unless the C++ EK twin is present: the reduced far fill
         takes no eligibility mask, so routing an EK-on block through it would
         drop the delta silently rather than fail.
+
+        Only the numpy loop can honour `subtract_into` as it fills: the C++
+        far fill allocates and returns its own three arrays, so an accelerated
+        block is folded in place after it returns. Peak while a ground block
+        is live is therefore one triple on the numpy path (the destination
+        alone) and two on the accelerated one (destination + the kernel's
+        return) — never the three the differenced spelling held.
         """
         N = ctx["N"]
         nq = ctx["nq"]
@@ -1911,7 +1936,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 self._apply_near_correction(
                     geom, k, ctx, contribs, projector, src_c, src_t, mirror
                 )
-            return contribs
+            if subtract_into is None:
+                return contribs
+            for dest, c in zip(subtract_into, contribs):
+                np.subtract(dest, c, out=dest)
+            return None
 
         # Blocked over test segments (#194): identical arithmetic per matrix
         # entry, but the kernel's source-quadrature scratch is (rows·nq, N,
@@ -1920,7 +1949,26 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         nnz = ctx["w_entry"].shape[0]
         a_obs = ctx["a_obs"]
         n_idx = np.arange(N)[None, :]
-        contribs = tuple(np.zeros((nnz, N), dtype=np.complex128) for _ in range(3))
+        if subtract_into is None:
+            contribs = tuple(np.zeros((nnz, N), dtype=np.complex128) for _ in range(3))
+            near_cells = None
+        else:
+            # Folding as we fill, the near correction can no longer run LAST:
+            # it overwrites its cells, and what it would overwrite here is the
+            # caller's free-space value rather than this block's own uniform
+            # one. So it runs FIRST — nothing it computes depends on the far
+            # half — subtracting the graded value straight off the free-space
+            # one, and hands back the cells it owns so the far loop can leave
+            # them alone. Subtracting zero there is exact, so the far half's
+            # arithmetic is unchanged on every other cell and absent on these.
+            contribs = subtract_into
+            near_cells = (
+                self._apply_near_correction(
+                    geom, k, ctx, contribs, projector, src_c, src_t, mirror, sub=True
+                )
+                if self.near_correction
+                else None
+            )
         blk = _fill_block(N, nq, self.n_qp_const)
         for m0 in range(0, N, blk):
             m1 = min(m0 + blk, N)
@@ -1950,11 +1998,25 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             e0, e1 = starts[m0], nnz if m1 == N else starts[m1]
             w = ctx["w_entry"][e0:e1]
             m_loc = ctx["m_of_entry"][e0:e1] - m0
+            if near_cells is not None:
+                # This block's share of the cells the near correction already
+                # owns, in block-local entry coordinates.
+                held = (near_cells[0] >= e0) & (near_cells[0] < e1)
+                held_e = near_cells[0][held] - e0
+                held_n = near_cells[1][held]
             for c_out, P in zip(contribs, Phi):
-                c_out[e0:e1] = self._tested_contrib_rows(
+                rows = self._tested_contrib_rows(
                     w, m_loc, nq, P.reshape(m1 - m0, nq, N)
                 )
+                if subtract_into is None:
+                    c_out[e0:e1] = rows
+                    continue
+                if near_cells is not None:
+                    rows[held_e, held_n] = 0.0
+                np.subtract(c_out[e0:e1], rows, out=c_out[e0:e1])
 
+        if subtract_into is not None:
+            return None
         if self.near_correction:
             self._apply_near_correction(
                 geom, k, ctx, contribs, projector, src_c, src_t, mirror
@@ -2115,11 +2177,18 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         return _project
 
-    def _tested_ground_block(self, geom, k, ctx):
+    def _fold_ground_block(self, geom, k, ctx, contribs):
         """The ground sub-assembly, tested exactly like the free-space block
-        and SUBTRACTED from it by the caller — the same single global minus
-        sign the point-matched `_assemble_Z` uses (the image current + image
-        charge sign flips reduce to it).
+        and SUBTRACTED from it in place — the same single global minus sign
+        the point-matched `_assemble_Z` uses (the image current + image charge
+        sign flips reduce to it).
+
+        Folded rather than returned (momwire#332). The differenced spelling
+        built a whole parallel triple and then a whole third one for
+        `free − ground`, so the peak under any ground was 3 × 16·nnz·N with
+        the fill's own scratch on top; the fold reaches the same entries with
+        the same float64 operations and holds at most the destination plus
+        whatever one block materializes.
 
         Reuse, per ground, of the evaluator the point-matched solver already
         validated against its own references:
@@ -2128,8 +2197,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         * `ground_eps` refl-coef — the same build with the Fresnel dyad
           (`_refl_projection`);
         * `ground_model="sommerfeld"` — NEC's decomposition, C2·(PEC image)
-          minus the smooth interpolated remainder, so that the caller's
-          subtraction reproduces `Phi_free − C2·Phi_img + S`.
+          minus the smooth interpolated remainder, so that the subtraction
+          reproduces `Phi_free − C2·Phi_img + S`.
 
         Every image block passes `mirror=True`, which is the extended kernel's
         only ground-specific decision: eligibility is scored between the real
@@ -2145,9 +2214,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         src_c_img, src_t_img = self._image_source_centers_tangents(geom)
         if self.ground_eps is None:
-            return self._tested_contribs(
-                geom, k, ctx, _plain_projection, src_c_img, src_t_img, mirror=True
+            self._tested_contribs(
+                geom,
+                k,
+                ctx,
+                _plain_projection,
+                src_c_img,
+                src_t_img,
+                mirror=True,
+                subtract_into=contribs,
             )
+            return
 
         eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
         if self.ground_model == "sommerfeld":
@@ -2156,9 +2233,21 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 geom, k, ctx, _plain_projection, src_c_img, src_t_img, mirror=True
             )
             rem = self._tested_sommerfeld_remainder(geom, k, ctx, eps_t)
-            return tuple(c2 * a - b for a, b in zip(img, rem))
+            # `c2·img − rem` in place, C2 on the LEFT, then the fold — the
+            # point-matched band's spelling (`sinusoidal.py`) and for its
+            # reason: complex multiply evaluates the imaginary part as
+            # x.re*y.im + x.im*y.re, so `img *= c2` reorders that sum and
+            # moves the last bit. The two terms are NOT distributed over the
+            # fold either — `free − (c2·img − rem)` is not `(free − c2·img) +
+            # rem` in float64 — which is why this ground composes its block
+            # first and cannot ride `subtract_into`'s single minus sign.
+            for dest, a, b in zip(contribs, img, rem):
+                np.multiply(c2, a, out=a)
+                a -= b
+                np.subtract(dest, a, out=dest)
+            return
 
-        return self._tested_contribs(
+        self._tested_contribs(
             geom,
             k,
             ctx,
@@ -2166,6 +2255,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             src_c_img,
             src_t_img,
             mirror=True,
+            subtract_into=contribs,
         )
 
     def _tested_sommerfeld_remainder(self, geom, k, ctx, eps_t):
@@ -2245,8 +2335,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         `SinusoidalSolver._folded_cos_fields` removes.
 
         With `ground_z` set, the ground's tested sub-assembly is subtracted
-        from the free-space one before the scatter — one more source block
-        through the same test quadrature, not a second scheme.
+        from the free-space one, in place, before the scatter — one more
+        source block through the same test quadrature, not a second scheme.
 
         With junction ports the index `i`/`j` runs over N+P bases rather than
         N (the port columns appended by `_junction_port_view`), so G grows to
@@ -2265,8 +2355,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         contribs = self._tested_contribs(geom, k, ctx, _plain_projection)
         if self.ground_z is not None:
-            gnd = self._tested_ground_block(geom, k, ctx)
-            contribs = tuple(c - g for c, g in zip(contribs, gnd))
+            self._fold_ground_block(geom, k, ctx, contribs)
 
         G = self._scatter_coef_product(ctx, contribs)
         self._ek_bracket_correction_tested(G, geom, k, ctx)
@@ -2338,10 +2427,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """momwire#299's end-bracket correction, assembled and SYMMETRIZED
         into G: `G −= ½(C + Cᵀ)`.
 
-        The blocks below mirror `_tested_ground_block`'s dispatch exactly —
+        The blocks below mirror `_fold_ground_block`'s dispatch exactly —
         free space, then the PEC image, the Fresnel-weighted image or the
-        C2-scaled Sommerfeld image, each with the sign the caller's
-        `contribs − gnd` gives it — because the bracket rides every one of them
+        C2-scaled Sommerfeld image, each with the sign that fold gives it —
+        because the bracket rides every one of them
         for the same reason the delta does. The Sommerfeld REMAINDER carries no
         delta (#287) and so has no bracket to take off.
 
@@ -2482,7 +2571,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         return G
 
     def _apply_near_correction(
-        self, geom, k, ctx, contribs, projector, src_c, src_t, mirror=False
+        self, geom, k, ctx, contribs, projector, src_c, src_t, mirror=False, sub=False
     ):
         """Recompute the near-pair test integrals on the endpoint-graded rule,
         overwriting the uniform-rule values in `contribs` (M2).
@@ -2490,6 +2579,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         Each (entry, source-segment) cell is owned by exactly one near pair —
         the entry fixes the test segment — so the overwrite is an assignment,
         not an accumulation.
+
+        `sub` is `_tested_contribs`' fold mode (momwire#332): `contribs` is
+        then the caller's free-space triple rather than this block's own, so
+        the graded value is SUBTRACTED off what is already in the cell instead
+        of replacing it, and the cells written come back as a flat
+        `(entry, source segment)` index pair so the far half can skip them.
+        Same float64 subtraction per entry as differencing two whole triples.
 
         Runs per source block (M4): the free-space block selects its near
         pairs against the real segments, an image block against the MIRRORED
@@ -2507,7 +2603,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         mm, nn = self._near_pairs(geom, src_c=src_c, src_t=src_t)
         if mm.size == 0:
-            return
+            return None
 
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
@@ -2582,7 +2678,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
             col = ni[lp]
             for contrib, Ph in zip((contrib_c, contrib_s, contrib_co), Phi):
-                contrib[ei, col] = np.einsum("eg,eg->e", w, Ph[lp])
+                val = np.einsum("eg,eg->e", w, Ph[lp])
+                if sub:
+                    contrib[ei, col] -= val
+                else:
+                    contrib[ei, col] = val
+
+        return (entry_of, nn[pair_of]) if sub else None
 
     # ------------------------------------------------------------------
     # Galerkin-tested source vector + solve
