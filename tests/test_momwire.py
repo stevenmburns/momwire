@@ -4552,3 +4552,75 @@ def test_sinusoidal_assembly_holds_no_whole_matrix_field_tensor(
         f"{16 * Z.shape[0] ** 2 / 1e6:.2f} MB) — a whole-matrix field tensor "
         "is back"
     )
+
+
+def test_sinusoidal_refl_coef_specular_tables_are_not_cached():
+    """`_image_refl_prep`'s five (N, N) specular tables must not survive a
+    point-matched `ground_eps` fill, and must not appear even transiently
+    during the FIRST fill (issue #332 unit B).
+
+    This is deliberately a SEPARATE gate from
+    `test_sinusoidal_assembly_holds_no_whole_matrix_field_tensor`: that one
+    warms `_assemble_Z` once before starting tracemalloc, specifically so
+    the warm-up (not the traced call) pays for whatever `_image_refl_prep`
+    built and cached — which is exactly what would hide a regression here.
+    Tracing the COLD first fill instead catches it directly: measured on
+    the pre-unit-B build (`_image_refl_prep` caching a whole-geometry
+    table `_field_tensor_image_refl` then row-sliced), this same N = 1200
+    cold fill peaked at 117.89 MB above Z — 8 N² = 11.52 MB is one table's
+    floor, and 5 × 8 N² = 57.6 MB is what the five cached tables alone cost
+    (the rest is the ρ_v/ρ_h complex128 pair fresnel_rho computes from
+    cos_th, also (N, N) but not cached — both are retired by producing
+    per-band tables directly). Post-unit-B this same measurement is 2.20 MB.
+
+    Budget is set well above the per-band build (a handful of MB, scaling
+    with `swept_mem_mb`) and well below the 11.52 MB single-table floor, so
+    it fails the instant any one whole-geometry specular table comes back
+    — from either transient allocation or renewed residency.
+
+    The direct instance-attribute check below is the second half of the
+    gate and does not depend on tracemalloc's accounting at all: a plain
+    `SinusoidalSolver` (not the Galerkin subclass, which legitimately still
+    populates this cache — see `_image_refl_prep`'s docstring) must leave
+    `_cached_image_refl_prep` at its `__init__` default of `None` after a
+    refl-coef solve, because nothing in the point-matched path is meant to
+    touch it anymore.
+    """
+    import tracemalloc
+
+    n_edges, seg_per_edge = 150, 8
+    lam = 22.0
+    ys = np.linspace(-0.962 * lam / 4, 0.962 * lam / 4, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])]
+    sim = SinusoidalSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=lam,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+    )
+    geom = sim._build_geometry()
+    assert geom["n_segs"] == n_edges * seg_per_edge  # N = 1200
+    sim.swept_mem_mb = 1
+
+    assert sim._cached_image_refl_prep is None  # nothing built yet
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        Z, _ = sim._assemble_Z(geom, sim.k)  # the FIRST fill — no warm-up
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    transient = peak - Z.nbytes
+    assert transient < 6_000_000, (
+        f"cold refl-coef fill peaked {transient / 1e6:.2f} MB above Z "
+        f"(one specular table = 8 N**2 = {8 * Z.shape[0] ** 2 / 1e6:.2f} MB) "
+        "— a whole-geometry specular table is back"
+    )
+    assert sim._cached_image_refl_prep is None, (
+        "the point-matched fill populated _cached_image_refl_prep — a "
+        "whole-geometry specular table is resident again"
+    )
