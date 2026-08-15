@@ -195,3 +195,48 @@ scale. The ~554 MB drop matches the predicted `td_all` footprint
 `scratch/bs2-memory-ladder.json`, which swept peak RSS vs N across
 this same design and first identified `td_all` as the largest
 avoidable term.
+
+## Memory-model addendum (as of 0.29.0 — the #329-#334 slate)
+
+The 2026-08-14 audit that followed #318/#323 filed and landed five more
+fixes; the peak model above still holds, with these amendments:
+
+- **The basis build is O(N)** (#329): `_build_basis_polynomials` reads
+  the B-spline design matrix out of its CSR band instead of
+  `.toarray()`. The old densification was a per-wire `24-48·N_w²`-byte
+  transient that set the process high-water of every solve at scale —
+  larger than Z itself on a single-wire mesh — before any moment was
+  computed. Bit-exact; gated by
+  `test_bspline_basis_build_holds_no_n_squared_transient`.
+- **Grounded chunked fills carry no N² weight tables** (#323, previous
+  cycle): per-chunk `w_A`/`w_Phi` windows; the refl-coef path also
+  bypasses the N² specular prep cache. Gated three-mode by
+  `test_bspline_chunked_image_fill_holds_no_n_squared_transient`.
+- **Swept paths stream their preps** (#330, #333): the same-edge
+  reg-geometry R tables are rebuilt per (k-chunk, edge) instead of
+  retained across the sweep (the k-chunk budget now reserves the
+  largest edge's transient), and the batched assembler takes two
+  `(N, 3)` tangent tables — no more resident `td_free`/`td_img`.
+- **Sommerfeld's `r1_max` scan is chunked** (#331) and the enrichment
+  assembly reads tangents in-kernel (#334); the remaining `Z = Z - X`
+  double-holds became in-place folds (#333/#334).
+
+### Certified numbers (release SHA, 2026-08-14)
+
+Straight 1,040-edge wire at z = 2.2 m, bs2, 8,320 basis
+(dense Z = 1,108 MB), fresh-subprocess VmHWM per phase (xps13, 16 GB;
+scratch instrument `phased_peak.py`, same runs used in the #329-#334
+PR bodies). Campaign-start values measured at main@10b85ef with the
+same instrument and geometry.
+
+| mode | campaign start | 0.29.0 | ×dense |
+|---|---|---|---|
+| free space | 2,382 MB (pre-#318, bowtie geometry) | 1,660 MB | 1.50× |
+| PEC ground | 4,303 MB | 1,788 MB | 1.61× |
+| refl-coef ground | 7,487 MB | 1,917 MB | 1.73× |
+
+Solve values unchanged to printed precision in every mode across the
+whole slate. The high-water is now set by the fill itself; the largest
+known reducible item is the fill transient's ~2× overshoot of its
+`swept_mem_mb` budget (#338). Not yet treated: the sinusoidal family
+(#332) and the enrichment image weight rectangles (#328).
