@@ -8,7 +8,7 @@ const SIMULATOR_URL = "https://app.antennaknobs.dev/";
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://momwire.antennaknobs.dev",
+  site: "https://momwire.dev",
   integrations: [
     starlight({
       title: "momwire",
@@ -42,10 +42,11 @@ export default defineConfig({
             href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap",
           },
         },
-        // Cloudflare Web Analytics — same token as the antennaknobs docs:
-        // momwire.antennaknobs.dev lives in the same antennaknobs.dev zone,
-        // so one beacon rolls all the doc traffic into one dashboard. The
-        // token is a public client-side id, not a secret.
+        // Cloudflare Web Analytics — same token as the antennaknobs docs,
+        // kept when the site moved to its own momwire.dev zone so all the
+        // doc traffic still rolls into one dashboard (the Web Analytics
+        // site must list momwire.dev as an allowed hostname). The token is
+        // a public client-side id, not a secret.
         {
           tag: "script",
           attrs: {
