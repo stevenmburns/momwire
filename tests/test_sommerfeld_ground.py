@@ -18,6 +18,8 @@ yagi 1.54 — the last a touch above degree 2's 0.98 on that off-resonance
 geometry, so yagi carries a per-degree gate).
 """
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -618,4 +620,184 @@ def test_max_image_distance_no_n_squared_transient():
         f"max_image_distance peaked {peak / 1e6:.2f} MB at "
         f"{2 * n_seg} endpoints — an N-squared transient is back "
         f"(8 * (2N)**2 = {8 * (2 * n_seg) ** 2 / 1e6:.1f} MB)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Observer banding of the fused remainder kernel (issue #343). `Jf`, the
+# kernel's internal (d+1, d+1, nsI, nsJ) moment tensor, used to be allocated
+# whole: 144 N^2 bytes at degree 2, ~9x the dense Z block it feeds, ~10 GB at
+# the 8,320-basis straight wire. It is now filled and consumed one observer
+# BAND at a time, with the band height set from a byte budget.
+# ---------------------------------------------------------------------------
+
+
+def _remainder_inputs(name="dipole", frac=0.2, **overrides):
+    """(solver, geom, supp_seg, polys, eps_t) for a direct
+    `_Z_sommerfeld_remainder` call."""
+    s = _solver(name, frac, **SOMM, **overrides)
+    geom = s._build_geometry()
+    supp_seg, polys, *_rest = s._build_basis_polynomials(geom)
+    eps_t = _ground_refl.eps_tilde(s.ground_eps, s.omega, s.eps)
+    return s, geom, supp_seg, polys, eps_t
+
+
+class _BandBudget:
+    """`_acc` proxy pinning the fused kernel's `max_jf_bytes`."""
+
+    def __init__(self, real, nbytes):
+        self._real = real
+        self._nbytes = nbytes
+
+    def __getattr__(self, name):
+        attr = getattr(self._real, name)
+        if name != "sommerfeld_remainder_bspline_Q":
+            return attr
+
+        def wrapped(*args, **kwargs):
+            kwargs["max_jf_bytes"] = self._nbytes
+            return attr(*args, **kwargs)
+
+        return wrapped
+
+
+# 1 byte forces band == 1: every basis's (d+1)-segment support straddles a
+# band boundary, so the straddle handling is exercised on EVERY row. The
+# larger budgets walk the band height up through partial straddling.
+@pytest.mark.parametrize("budget", [1, 4096, 1 << 16, 1 << 20])
+def test_fused_Q_banding_is_exact(budget, monkeypatch):
+    """Banding the observer axis must not move Q at all.
+
+    Q[m,n] is a plain sum over the (a, b) wing pairs of the two bases, and
+    a band partitions ONLY the observer wing axis `a` — each wing lives in
+    exactly one band. Each band seeds its accumulator from the running
+    Q[m,n] and adds its in-band pairs in increasing (a, b), so with the
+    non-decreasing support maps this solver builds the summation ORDER is
+    the unbanded one too: the result is bit-identical, not merely close.
+    The gate is stated at 1e-12 relative (house reassociation tolerance)
+    but bit-equality is asserted as well, since that is what is measured.
+    """
+    import momwire.bspline as bs
+
+    if bs._acc is None or not hasattr(bs._acc, "sommerfeld_remainder_bspline_Q"):
+        pytest.skip("fused sommerfeld kernel unavailable")
+
+    s, geom, supp_seg, polys, eps_t = _remainder_inputs()
+    real = bs._acc
+
+    # Reference: one band over all observer segments == the pre-#343 kernel.
+    monkeypatch.setattr(bs, "_acc", _BandBudget(real, 1 << 40))
+    q_ref = s._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+
+    monkeypatch.setattr(bs, "_acc", _BandBudget(real, budget))
+    q_banded = s._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+
+    rel = np.abs(q_banded - q_ref).max() / np.abs(q_ref).max()
+    assert rel <= 1e-12, f"banded Q drifted {rel:.3e} at max_jf_bytes={budget}"
+    assert np.array_equal(q_banded, q_ref), (
+        f"banding at max_jf_bytes={budget} is no longer bit-identical "
+        "(order-preserving accumulation broken?)"
+    )
+
+
+# The remainder's transient lives in a C++ `std::vector`, which tracemalloc
+# CANNOT see (that is the #343 lesson — the N-squared gates above all use
+# tracemalloc and would have stayed green through this bug). The gate must
+# therefore read real process memory, so it runs the solve in a CHILD and
+# reads that child's /proc VmHWM.
+_REMAINDER_RSS_CHILD = r"""
+import gc, sys
+sys.path.insert(0, sys.argv[1])
+import numpy as np
+from momwire import BSplineSolver, _ground_refl, _sommerfeld
+
+n_seg = int(sys.argv[2])
+
+
+def vm(key):
+    with open("/proc/self/status") as f:
+        for line in f:
+            if line.startswith(key):
+                return int(line.split()[1]) / 1024.0
+
+
+s = BSplineSolver(
+    wires=[[[0.0, -5.0, 2.2], [0.0, 5.0, 2.2]]],
+    n_per_edge_per_wire=[[n_seg]],
+    feeds=[(0, 5.0, 1 + 0j)],
+    wavelength=20.0,
+    wire_radius=0.0005,
+    ground_z=0.0,
+    ground_eps=(10.0, 0.002),
+    ground_model="sommerfeld",
+)
+geom = s._build_geometry()
+supp_seg, polys, *_rest = s._build_basis_polynomials(geom)
+eps_t = _ground_refl.eps_tilde(s.ground_eps, s.omega, s.eps)
+# Build the interpolation grid in an EARLIER phase so its footprint is part
+# of the baseline and not attributed to the remainder assembly.
+s._somm_grid(
+    eps_t, _sommerfeld.max_image_distance(geom["seg_l"], geom["seg_r"], s.ground_z)
+)
+gc.collect()
+rss0 = vm("VmRSS:")
+Q = s._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+print(vm("VmHWM:") - rss0, polys.shape[0], geom["seg_l"].shape[0])
+"""
+
+
+def test_sommerfeld_remainder_transient_is_slab_bounded():
+    """The remainder phase must stay inside the kernel's band-slab bound.
+
+    Straight wire, 1,200 segments / 1,200 bases, degree 2 (d+1 = 3),
+    sommerfeld ground. Arithmetic:
+
+      * pre-#343 Jf = 16 * (d+1)^2 * N^2 = 144 * 1200^2 = 198 MiB, plus the
+        23 MiB Q it assembles into -> a ~220 MiB remainder phase (measured
+        878 MiB at N = 2400, where the formula predicts 879).
+      * banded: the slab is capped at MAX_JF_SLAB_BYTES = 64 MiB (band =
+        64 MiB / (16 * 9 * N) = 194 observer segments here), so the phase is
+        64 + 23 = 87 MiB plus interpreter noise. Measured: 88 MiB.
+
+    The threshold is the 87 MiB bound + 25 MiB headroom = 112 MiB, which
+    sits well under the 220 MiB the unbanded kernel needs, so the gate
+    genuinely discriminates. N is kept at 1,200 to hold the child under
+    ~1.5 s wall.
+
+    tracemalloc is deliberately NOT used: the tensor is a C++ std::vector
+    and is invisible to it. This runs a child process and reads its
+    /proc VmHWM.
+    """
+    import subprocess
+    from pathlib import Path
+
+    import momwire
+
+    src_root = str(Path(momwire.__file__).resolve().parent.parent)
+    n_seg = 1200
+    out = subprocess.run(
+        [sys.executable, "-c", _REMAINDER_RSS_CHILD, src_root, str(n_seg)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert out.returncode == 0, out.stderr
+    phase_mb, n_basis, n_segs = out.stdout.split()
+    phase_mb, n_basis, n_segs = float(phase_mb), int(n_basis), int(n_segs)
+
+    d1 = 3
+    slab_mb = 64.0  # MAX_JF_SLAB_BYTES in _accelerators.cpp
+    q_mb = 16.0 * n_basis * n_basis / 2**20
+    dense_mb = 16.0 * d1 * d1 * n_segs * n_segs / 2**20 + q_mb
+    bound_mb = slab_mb + q_mb + 25.0
+
+    assert bound_mb < 0.7 * dense_mb, (
+        "gate no longer discriminates: bound "
+        f"{bound_mb:.0f} MiB vs unbanded {dense_mb:.0f} MiB"
+    )
+    assert phase_mb < bound_mb, (
+        f"sommerfeld remainder peaked {phase_mb:.0f} MiB at N = {n_segs} "
+        f"(bound {bound_mb:.0f} MiB = {slab_mb:.0f} slab + {q_mb:.0f} Q + 25 "
+        f"headroom) — the full (d+1)^2 N^2 moment tensor is back "
+        f"({dense_mb:.0f} MiB)"
     )
