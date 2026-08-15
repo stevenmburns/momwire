@@ -16,6 +16,7 @@ parser rather than a second pipeline.
 from __future__ import annotations
 
 from ._cards import Card, DeckError, parse_card, tokenize
+from ._nec2 import parse_nec2
 from .model import (
     DeckModel,
     DeckWire,
@@ -29,6 +30,7 @@ from .model import (
 )
 
 __all__ = [
+    "parse",
     "DeckError",
     "DeckModel",
     "DeckWire",
@@ -43,3 +45,22 @@ __all__ = [
     "parse_card",
     "tokenize",
 ]
+
+# One entry per shipped dialect.  The mapping is the error message's source
+# as well as the dispatch table, so a new front-end cannot be added without
+# the refusal learning its name.
+_DIALECTS = {"nec2": parse_nec2}
+
+
+def parse(text: str, dialect: str = "nec2") -> DeckModel:
+    """Parse a deck into a :class:`DeckModel`.
+
+    ``dialect="nec2"`` is the only value this release ships.  Raises
+    :class:`DeckError` with the spec's message for anything the dialect will
+    not run.
+    """
+    front_end = _DIALECTS.get(dialect)
+    if front_end is None:
+        known = ", ".join(repr(name) for name in sorted(_DIALECTS))
+        raise DeckError(f"unknown deck dialect {dialect!r}; known dialects: {known}")
+    return front_end(text)
