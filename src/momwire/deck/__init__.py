@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from ._cards import Card, DeckError, parse_card, tokenize
 from ._nec2 import parse_nec2
+from ._solver import BASES, BuiltSolver, PortPlan, PortSite, build_solver
 from .model import (
     DeckModel,
     DeckWire,
@@ -30,8 +31,10 @@ from .model import (
 )
 
 __all__ = [
+    # the two verbs
     "parse",
-    "DeckError",
+    "build_solver",
+    # the model
     "DeckModel",
     "DeckWire",
     "WireMaterial",
@@ -41,9 +44,16 @@ __all__ = [
     "NearFieldRequest",
     "PrintControl",
     "ExecuteGroup",
+    # what build_solver returns, and the roster it chooses from
+    "BuiltSolver",
+    "PortPlan",
+    "PortSite",
+    "BASES",
+    # the card reader, for a consumer that must echo a deck as written
     "Card",
     "parse_card",
     "tokenize",
+    "DeckError",
 ]
 
 # One entry per shipped dialect.  The mapping is the error message's source
