@@ -2104,12 +2104,27 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # tier's single panel is the payload's decision and not the kernel's.
         n_src = args[3].shape[0]
         ek_gx, ek_gw = self._ek_delta_rule(_N_QP_EK_DELTA, ek.n_panels)
+        # Producer contract, not a conversion (momwire#332 unit E, #318's
+        # "dead wrapper" pattern repeated): `_ek_pairs` builds `eligible` as
+        # `(gi == gj) & (gi >= 0)`, broadcasting (n_obs, 1) against
+        # (1, n_src) through `==`/`&` — numpy ufuncs always MATERIALIZE their
+        # output, so the result is already an owned, C-contiguous
+        # (n_obs, n_src) bool array and never a zero-stride broadcast view.
+        # `broadcast_to(ek.eligible, (n_obs, n_src))` was therefore a
+        # same-shape no-op view, and instrumenting it shows the
+        # `ascontiguousarray` wrapped around it never actually copied either
+        # — same-object every call, exactly #318's finding. The assert pins
+        # the contract this relies on and vanishes under -O; the pybind11
+        # `c_style | forcecast` array_t on the C++ side (:5153) stays the
+        # final safety net if it is ever wrong.
+        assert ek.eligible.shape == (n_obs, n_src) and ek.eligible.dtype == bool, (
+            f"eligible mask must be ({n_obs}, {n_src}) bool, got "
+            f"{ek.eligible.shape} {ek.eligible.dtype}"
+        )
         return _acc.sinusoidal_galerkin_far_fill_ek(
             *args,
             np.ascontiguousarray(np.reshape(ek.src_a, n_src), dtype=np.float64),
-            np.ascontiguousarray(
-                np.broadcast_to(ek.eligible, (n_obs, n_src)), dtype=bool
-            ),
+            ek.eligible,
             np.ascontiguousarray(ek_gx, dtype=np.float64),
             np.ascontiguousarray(ek_gw, dtype=np.float64),
             self._cancel_flag,
