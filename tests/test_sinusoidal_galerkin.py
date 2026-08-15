@@ -2447,6 +2447,219 @@ def test_far_fill_dispatch_is_projector_selective(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# momwire#332 unit C — the ground block folds into the free-space triple
+# ---------------------------------------------------------------------------
+# The tested assembly's structural cost is three (nnz, N) contribution arrays,
+# one per folded shape — nnz-major, and what the fill is FOR. What #332 unit C
+# took away is the grounded path's habit of building a second such triple for
+# the ground and a third for `free − ground`, so that any ground cost 3x the
+# free-space residency. `_fold_ground_block` subtracts in place instead: the
+# numpy fill accumulates as it blocks (one triple total), the fused C++ fill
+# still returns its own and is folded in on return (two). Both spellings do
+# the same float64 subtraction per matrix entry, so the answer is bit-equal
+# rather than reassociated — which is what the first gate below pins.
+
+
+def _differenced_grounded_G(sim, geom):
+    """G with the ground built as a whole parallel triple and differenced —
+    `_assemble_Z`'s pre-#332 spelling, kept here as the fold's reference.
+
+    Deliberately a second spelling of the orchestration rather than a call
+    into `_fold_ground_block` with a scratch destination: what is under test
+    is that folding in place reaches the same entries the difference did,
+    including the near-correction cells, which the fold has to write BEFORE
+    the far half rather than over the top of it.
+    """
+    from momwire import _ground_refl
+
+    k = sim.k
+    seg_view = sim._basis_coefs(geom, k)
+    ctx = sim._test_context(geom, seg_view, k)
+    contribs = sim._tested_contribs(geom, k, ctx, _plain_projection)
+
+    src_c, src_t = sim._image_source_centers_tangents(geom)
+    if sim.ground_eps is None:
+        gnd = sim._tested_contribs(
+            geom, k, ctx, _plain_projection, src_c, src_t, mirror=True
+        )
+    else:
+        eps_t = _ground_refl.eps_tilde(sim.ground_eps, sim.omega, sim.eps)
+        if sim.ground_model == "sommerfeld":
+            c2 = (eps_t - 1.0) / (eps_t + 1.0)
+            img = sim._tested_contribs(
+                geom, k, ctx, _plain_projection, src_c, src_t, mirror=True
+            )
+            rem = sim._tested_sommerfeld_remainder(geom, k, ctx, eps_t)
+            gnd = tuple(c2 * a - b for a, b in zip(img, rem))
+        else:
+            gnd = sim._tested_contribs(
+                geom,
+                k,
+                ctx,
+                sim._refl_projection(geom, eps_t),
+                src_c,
+                src_t,
+                mirror=True,
+            )
+    contribs = tuple(c - g for c, g in zip(contribs, gnd))
+
+    G = sim._scatter_coef_product(ctx, contribs)
+    sim._ek_bracket_correction_tested(G, geom, k, ctx)
+    sim._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
+    return G
+
+
+# Every (geometry, ground) M4 runs, reduced; plus the extended kernel on all
+# of them but the L. The L is left out of the EK half only for its cost — the
+# bracket correction on a junction is ~1 s a solve at any mesh, because the
+# graded rule the near cells take grows as the mesh COARSENS — and what it
+# would add over the vertical is a junction, which the free-space fill and
+# the scatter share with every case here.
+#
+# The ground-contact monopole is here under the FINITE grounds too, which
+# `M4_CASES` excludes on physics grounds (see
+# `test_finite_ground_at_a_ground_contact_is_an_inherited_defect`) — it is the
+# only geometry whose IMAGE block has near pairs at all, so it is the only one
+# that exercises the fold's near-correction reordering, and on a non-plain
+# projector that reordering is on the shipped dispatch rather than behind the
+# accelerator. Whether the answer means anything physically does not bear on
+# whether two spellings of it agree.
+_FOLD_CASES = (
+    [(g, gnd, False) for g, gnd in M4_CASES]
+    + [(g, gnd, True) for g, gnd in M4_CASES if g != "m4_lshape"]
+    + [("m4_monopole", "refl", ek) for ek in (False, True)]
+)
+
+
+@pytest.mark.parametrize("geom_name,ground,extended_kernel", _FOLD_CASES)
+@pytest.mark.parametrize("accel", [True, False], ids=["accel", "numpy-blocked"])
+def test_folded_ground_is_bit_equal_to_the_differenced_spelling(
+    monkeypatch, geom_name, ground, accel, extended_kernel
+):
+    """Exact equality, not a tolerance: the fold is the same subtraction per
+    entry, so anything at all here is a bug rather than reassociation.
+
+    Both dispatches are covered because they fold at different moments — the
+    numpy fill subtracts each block as it reduces it and has to run the near
+    correction FIRST (it overwrites its cells, and under the fold what it
+    would overwrite is the free-space value), while the accelerated fill folds
+    the kernel's own return afterwards. The numpy cases run at a one-segment
+    block budget so the near-correction cells are spread over many blocks, and
+    the extended kernel rides along on both because its delta reaches the
+    ground blocks through exactly these arrays.
+    """
+    from momwire import sinusoidal_galerkin as _sg
+
+    if not accel:
+        monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
+        monkeypatch.setattr(_sg, "_FILL_WORKSPACE_BYTES", 1)
+    over = {"extended_kernel": True} if extended_kernel else {}
+    # Coarser than the M4 physics gates' 21: what is under test is an
+    # arithmetic identity per matrix entry, which needs every branch of the
+    # dispatch present and nothing at all from the mesh. Odd, so the feed
+    # stays a segment centre and the geometries keep their usual shape.
+    sim = _m4_solver(SinusoidalGalerkinSolver, geom_name, ground, n=11, **over)
+    geom = sim._build_geometry()
+    G_folded, _ = sim._assemble_Z(geom, sim.k)
+    G_differenced = _differenced_grounded_G(sim, geom)
+    assert np.array_equal(G_folded, G_differenced), (
+        f"{geom_name}/{ground}: folding the ground moved the matrix by "
+        f"{np.abs(G_folded - G_differenced).max():.3e}"
+    )
+
+
+@pytest.mark.parametrize(
+    "ground_kwargs",
+    [
+        pytest.param({"ground_z": 0.0}, id="pec"),
+        pytest.param(
+            {"ground_z": 0.0, "ground_eps": (13.0, 0.005)},
+            id="refl-coef",
+        ),
+    ],
+)
+def test_grounded_fill_holds_no_parallel_ground_triple(monkeypatch, ground_kwargs):
+    """Tracemalloc gate on the real `_assemble_Z` path (issue #332).
+
+    Budget is stated in TRIPLES — 3 × 16·nnz·N, the fill's own structural
+    unit — because that is what the defect was denominated in. At the N = 300
+    segments this geometry builds, nnz = 898 (~3N) and one triple is
+    12.93 MB against G's 1.44 MB, so the triples are what the peak is made
+    of. Measured above G, cold:
+
+      * differenced (the pre-#332 spelling): 37.73 MB = 2.92 triples for the
+        PEC image and 41.33 MB = 3.20 for the refl-coef ground — free-space
+        triple, parallel ground triple, differenced result, plus the
+        refl-coef ground's specular and Fresnel tables;
+      * folded: 27.07 MB = 2.09 triples PEC (the destination plus the fused
+        kernel's own return, which is allocated in C++ and cannot be
+        accumulated into) and 24.00 MB = 1.86 refl-coef (one destination
+        triple, and its Fresnel tables).
+
+    2.5 triples therefore sits above both folded numbers and below both
+    differenced ones, by ~1.2x each way. That margin is thin by this suite's
+    standards and it is thin for a structural reason: the accelerated path
+    can only ever go from three triples to two, so no threshold separating
+    them has more room than 3:2 to spend.
+
+    Two module constants are shrunk for the trace, both fixed working sets
+    that do not scale with the triples and would otherwise bury them:
+    `_FILL_WORKSPACE_BYTES` (the numpy fill's per-block kernel scratch, which
+    the refl-coef ground pays and which is a whole gigabyte by default) and
+    `_PAIR_BLOCK` (the near correction's per-pair-block scratch, measured at
+    ~127 MB at the shipped 512 regardless of N). Same lever as the
+    point-matched gates' `swept_mem_mb = 1`.
+
+    The fill runs COLD, on purpose: a warm-up call would move the refl-coef
+    ground's cached specular tables out of the traced region, and the lesson
+    of the point-matched gate's own cold twin is that anything a warm-up
+    hides is something this gate stops being able to see.
+    """
+    import tracemalloc
+
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_FILL_WORKSPACE_BYTES", 1)
+    monkeypatch.setattr(_sg, "_PAIR_BLOCK", 8)
+
+    # 300 short segments on one straight wire, 4 m over the plane: N² and
+    # nnz·N both large enough that the triples dominate, small enough that
+    # the numpy-path refl-coef fill stays a couple of seconds.
+    n = 300
+    ys = np.linspace(-HD, HD, n + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])]
+    sim = SinusoidalGalerkinSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[1] * n],
+        nsegs=n,
+        wavelength=WL,
+        **ground_kwargs,
+    )
+    geom = sim._build_geometry()
+    N = geom["n_segs"]
+    assert N == n
+    nnz = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)[
+        "w_entry"
+    ].shape[0]
+    triple = 3 * 16 * nnz * N
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        G, _ = sim._assemble_Z(geom, sim.k)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    transient = peak - G.nbytes
+    assert transient < 2.5 * triple, (
+        f"grounded fill peaked {transient / 1e6:.2f} MB above G = "
+        f"{transient / triple:.2f} contribution triples (one triple = "
+        f"{triple / 1e6:.2f} MB) — a parallel ground triple is back"
+    )
+
+
+# ---------------------------------------------------------------------------
 # momwire#198 — sparse scatter/coefficient assembly
 # ---------------------------------------------------------------------------
 # `_assemble_Z`'s tail forms G = Σ_shape (R @ contrib[shape]) @ M[shape]. Both
