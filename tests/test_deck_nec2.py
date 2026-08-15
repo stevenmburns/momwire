@@ -16,7 +16,7 @@ import pytest
 from momwire.deck import DeckError, parse, parse_card, tokenize
 from momwire.deck._nec2 import _ARMING_CARDS, _GEOMETRY_CARDS, _REFUSED_BY_NAME
 from momwire.deck._nec2_geometry import build_geometry
-from momwire.deck.model import FarFieldRequest, NearFieldRequest
+from momwire.deck.model import FarFieldRequest, LoadSpec, NearFieldRequest, SecondMedium
 
 # A minimal runnable deck: one wire, driven, so `parse` gets past the
 # structural "nothing drives the structure" refusal.
@@ -450,6 +450,9 @@ def test_addressing_a_shattered_wire_lands_on_the_right_piece():
 
 
 BODY = "GW 1 5 -0.5 0. 0. 0.5 0. 0. 1.E-3\nGE 0\nEX 0 1 3 0 1.\nFR 0 1 0 0 14.\n"
+# BODY without its FR / EX card, for tests that supply their own.
+BODY_NO_FR = "GW 1 5 -0.5 0. 0. 0.5 0. 0. 1.E-3\nGE 0\nEX 0 1 3 0 1.\n"
+BODY_NO_EX = "GW 1 5 -0.5 0. 0. 0.5 0. 0. 1.E-3\nGE 0\nFR 0 1 0 0 14.\n"
 
 
 def test_the_first_execute_card_always_runs():
@@ -593,6 +596,468 @@ def test_a_deck_with_no_ex_card_is_refused():
 
 
 # ---------------------------------------------------------------------------
+# #gn--ground-parameters
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "code,expected",
+    [
+        (-1, None),
+        (1, "pec"),
+        (0, ("finite-fast", 13.0, 0.005)),
+        (2, ("finite", 13.0, 0.005)),
+    ],
+)
+def test_gn_type_maps_to_momwires_own_ground_spelling(code, expected):
+    """§#gn--ground-parameters: the four-row table."""
+    model = parse(BODY + f"GN {code} 0 0 0 13. .005\nXQ\nNX\n")
+    assert model.ground == expected
+
+
+def test_gn_free_and_pec_ignore_epsr_and_sig_but_still_read_them():
+    """§#gn--ground-parameters: ``GN -1`` and ``GN 1`` take no parameters;
+    F1/F2 are read but move nothing."""
+    assert parse(BODY + "GN -1 0 0 0 99. 99.\nXQ\nNX\n").ground is None
+    assert parse(BODY + "GN 1 0 0 0 99. 99.\nXQ\nNX\n").ground == "pec"
+
+
+def test_gn_refuses_an_unknown_type():
+    """§#gn--ground-parameters."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + "GN 3\nXQ\nNX\n")
+    assert str(exc.value) == "GN type 3 is not supported by this engine"
+
+
+@pytest.mark.parametrize("code", [0, 2])
+def test_gn_refuses_a_radial_ground_screen_on_the_reflection_coefficient_types(code):
+    """§#gn--ground-parameters: NEC folds a screen into the reflection
+    coefficient, so this is refused for the two ground types that HAVE one."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + f"GN {code} 4\nXQ\nNX\n")
+    assert str(exc.value) == (
+        f"GN {code} with a 4-wire radial ground screen is not supported by this engine"
+    )
+
+
+@pytest.mark.parametrize("code", [-1, 1])
+def test_gn_pec_and_free_space_do_not_check_nradl(code):
+    """§#gn--ground-parameters, oracle-verified (probe
+    ``gn_pec_radial_probe.nec``): nec2c's PEC and free-space branches never
+    look at NRADL — only the reflection-coefficient types (0, 2) fold a
+    screen into a reflection coefficient at all — so a nonzero radial count
+    on ``GN -1``/``GN 1`` runs rather than refusing."""
+    model = parse(BODY + f"GN {code} 4\nXQ\nNX\n")
+    assert model.ground == (None if code == -1 else "pec")
+
+
+def test_gn_second_medium_when_nradl_is_zero():
+    """§#gn--ground-parameters: F3-F6 carry a whole second medium in the
+    same four slots a GD card sets."""
+    model = parse(BODY + "GN 1 0 0 0 5. .001 20. -2.\nXQ\nNX\n")
+    assert model.second_medium == SecondMedium(20.0, -2.0, 0.0, 0.0)
+
+
+def test_a_bare_gn_clears_an_earlier_cliff():
+    """§#gn--ground-parameters: a GN that reaches the parser always rewrites
+    those four slots, so a bare ``GN 1`` clears an earlier cliff."""
+    model = parse(BODY + "GN 1 0 0 0 5. .001 20. -2.\nGN 1\nXQ\nNX\n")
+    assert model.second_medium == SecondMedium()
+
+
+def test_a_radial_screen_count_keeps_the_second_medium_slots():
+    """§#gn--ground-parameters: a nonzero NRADL takes F3/F4 as the screen's
+    own geometry and leaves any earlier cliff alone — measured through the
+    PEC/free-space escape hatch, since 0/2 refuse outright with NRADL set."""
+    model = parse(BODY + "GN 1 0 0 0 5. .001 20. -2.\nGN 1 4\nXQ\nNX\n")
+    assert model.second_medium == SecondMedium(20.0, -2.0, 0.0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# #gd--additional-ground-medium
+# ---------------------------------------------------------------------------
+
+
+def test_gd_sets_the_second_medium():
+    """§#gd--additional-ground-medium."""
+    model = parse(BODY + "GD 0 0 0 0 5. .001 20. -2.\nXQ\nNX\n")
+    assert model.second_medium == SecondMedium(5.0, 0.001, 20.0, -2.0)
+
+
+def test_a_bare_gd_runs_exactly_as_a_fully_populated_one_does():
+    """§#gd--additional-ground-medium: ``I1``-``I4``, ``F5`` and ``F6`` are
+    ignored."""
+    model = parse(BODY + "GD\nXQ\nNX\n")
+    assert model.second_medium == SecondMedium()
+
+
+def test_a_later_gd_or_gn_overwrites_an_earlier_one():
+    """§#gd--additional-ground-medium: a later ``GD`` (or a later ``GN`` with
+    ``NRADL = 0``) overwrites an earlier one."""
+    model = parse(
+        BODY + "GD 0 0 0 0 5. .001 20. -2.\nGD 0 0 0 0 9. .002 30. -3.\nXQ\nNX\n"
+    )
+    assert model.second_medium == SecondMedium(9.0, 0.002, 30.0, -3.0)
+    model = parse(
+        BODY
+        + "GD 0 0 0 0 5. .001 20. -2.\nGN 2 0 0 0 13. .005 9. .002 30. -3.\nXQ\nNX\n"
+    )
+    assert model.second_medium == SecondMedium(9.0, 0.002, 30.0, -3.0)
+
+
+def test_gd_is_not_an_arming_card():
+    """§#gd--additional-ground-medium and §#arming: it moves nothing outside
+    the far field's cliff modes."""
+    model = parse(BODY + "XQ\nGD 0 0 0 0 5. .001 20. -2.\nXQ\nNX\n")
+    assert model.groups[1] is None
+
+
+# ---------------------------------------------------------------------------
+# #fr--frequency
+# ---------------------------------------------------------------------------
+
+
+def test_fr_linear_sweep():
+    """§#fr--frequency: ``F1 + i*F2`` for ``i`` in ``0..NFRQ-1``."""
+    model = parse(BODY_NO_FR + "FR 0 4 0 0 14. 0.5\nXQ\nNX\n")
+    assert model.groups[0].frequencies == (14.0, 14.5, 15.0, 15.5)
+
+
+def test_fr_multiplicative_sweep():
+    """§#fr--frequency: ``F1 * F2**i``."""
+    model = parse(BODY_NO_FR + "FR 1 3 0 0 10. 2.\nXQ\nNX\n")
+    assert model.groups[0].frequencies == (10.0, 20.0, 40.0)
+
+
+@pytest.mark.parametrize("ratio", ["0.", "-1."])
+def test_fr_multiplicative_sweep_degenerates_on_a_non_positive_ratio(ratio):
+    """§#fr--frequency: a multiplicative sweep whose ratio is zero or
+    negative degenerates to NFRQ copies of F1."""
+    model = parse(BODY_NO_FR + f"FR 1 3 0 0 10. {ratio}\nXQ\nNX\n")
+    assert model.groups[0].frequencies == (10.0, 10.0, 10.0)
+
+
+def test_fr_nfrq_below_one_reads_as_one():
+    """§#fr--frequency."""
+    model = parse(BODY_NO_FR + "FR 0 0 0 0 14. 1.\nXQ\nNX\n")
+    assert model.groups[0].frequencies == (14.0,)
+
+
+def test_every_fr_is_read_and_a_later_one_replaces_the_list():
+    """§#fr--frequency: every FR in the deck is read; a later one replaces
+    the list entirely."""
+    model = parse(BODY_NO_FR + "FR 0 2 0 0 14. 1.\nXQ\nFR 0 3 0 0 20. 2.\nXQ\nNX\n")
+    assert model.groups[0].frequencies == (14.0, 15.0)
+    assert model.groups[1].frequencies == (20.0, 22.0, 24.0)
+
+
+def test_an_execute_card_with_no_new_fr_runs_at_the_last_frequency_only():
+    """§#frequency-groups."""
+    model = parse(BODY_NO_FR + "FR 0 3 0 0 14. 1.\nXQ\nEK\nXQ\nNX\n")
+    assert model.groups[0].frequencies == (14.0, 15.0, 16.0)
+    assert model.groups[1].frequencies == (16.0,)
+
+
+def test_a_deck_with_no_fr_card_runs_at_nec2cs_own_default():
+    """§#fr--frequency, oracle-verified (probe ``no_fr_probe.nec``): the spec
+    is silent on a deck with no FR card at all — every corpus deck sends
+    one — but nec2c's own FMHZ starts at 299.8 (a 1 m wavelength), not 0."""
+    model = parse(BODY_NO_FR + "XQ\nNX\n")
+    assert model.groups[0].frequencies == (299.8,)
+
+
+# ---------------------------------------------------------------------------
+# #ex--voltage-source
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("ex_type", [1, 2, 3, 4, 5, 6])
+def test_ex_refuses_every_type_but_zero(ex_type):
+    """§#ex--voltage-source."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + f"EX {ex_type} 1 3 0 1.\nXQ\nNX\n")
+    assert str(exc.value) == (
+        f"EX type {ex_type} is not a voltage source; this engine drives EX 0 only"
+    )
+
+
+def test_ex_places_the_source_at_the_segment_centre():
+    """§#ex--voltage-source: the same addressing EX/LD/IS/PT all share."""
+    model = parse(BODY + "XQ\nNX\n")
+    wire, arclength, volts = model.feeds[0]
+    assert wire == 0
+    # A 1 m wire, 5 segments: segment 3's centre is (3 - 1/2)/5 = 0.5 m
+    # from the wire's first vertex.
+    assert arclength == pytest.approx(0.5)
+    assert volts == complex(1.0, 0.0)
+
+
+def test_the_first_ex_after_an_execution_replaces_the_source_list():
+    """§#excitation-retention."""
+    model = parse(
+        BODY_NO_EX + "EX 0 1 1 0 1.\nEX 0 1 4 0 2.\nXQ\nEX 0 1 5 0 3.\nXQ\nNX\n"
+    )
+    # Group 0 drives both ports 0 and 1; group 1's fresh EX replaces the
+    # list, so only the new port (2) is driven.
+    assert model.groups[0].voltages == (complex(1.0), complex(2.0), 0j)
+    assert model.groups[1].voltages == (0j, 0j, complex(3.0))
+
+
+def test_an_execute_card_with_no_new_ex_redrives_the_previous_set():
+    """§#excitation-retention: an execute card with no EX since the previous
+    one re-drives the previous set unchanged.  Armed via ``EK`` rather than a
+    new ``EX``, so the second group is a real run rather than a no-op, and
+    the retained voltage is what it is measured against."""
+    model = parse(BODY_NO_EX + "EX 0 1 3 0 1.\nXQ\nEK\nXQ\nNX\n")
+    assert len(model.groups) == 2
+    assert model.groups[1] is not None
+    assert model.groups[1].voltages == model.groups[0].voltages == (complex(1.0),)
+
+
+def test_every_ex_segment_across_every_group_becomes_one_union_port_set():
+    """§#one-geometry-one-port-set: in discovery order, the same segment may
+    be driven in different groups at different voltages."""
+    model = parse(
+        BODY_NO_EX + "EX 0 1 1 0 1.\nXQ\nEX 0 1 4 0 2.\nXQ\nEX 0 1 1 0 9.\nXQ\nNX\n"
+    )
+    # Discovery order: segment 1 first (group 0), then segment 4 (group 1).
+    # Group 2 redrives segment 1 at a NEW voltage without adding a new port.
+    assert len(model.feeds) == 2
+    assert model.groups[0].voltages == (complex(1.0), 0j)
+    assert model.groups[1].voltages == (0j, complex(2.0))
+    assert model.groups[2].voltages == (complex(9.0), 0j)
+
+
+# ---------------------------------------------------------------------------
+# #ld--loading
+# ---------------------------------------------------------------------------
+
+
+def test_ld_minus_one_nullifies_every_load_but_not_is_insulation():
+    """§#ld--loading: ``LD -1`` clears the whole list — and only loads."""
+    model = parse(
+        BODY + "IS 0 1 0 0 5. 0. 0.002\nLD 0 1 2 2 50. 0. 0.\nLD -1\nXQ\nNX\n"
+    )
+    assert model.loads == ()
+    assert model.wires[0].material.insulation_radius == 0.002
+
+
+def test_ld_series_and_parallel_rlc():
+    """§#ld--loading: types 0 and 1."""
+    model = parse(BODY + "LD 0 1 3 3 50. 1.e-6 2.e-9\nXQ\nNX\n")
+    (load,) = model.loads
+    assert load[2] == LoadSpec("series", r=50.0, l=1e-6, c=2e-9)
+    model = parse(BODY + "LD 1 1 3 3 50. 1.e-6 2.e-9\nXQ\nNX\n")
+    (load,) = model.loads
+    assert load[2] == LoadSpec("parallel", r=50.0, l=1e-6, c=2e-9)
+
+
+def test_ld_fixed_impedance():
+    """§#ld--loading: type 4, R + jX."""
+    model = parse(BODY + "LD 4 1 3 3 100. -75.\nXQ\nNX\n")
+    (load,) = model.loads
+    assert load[2] == LoadSpec("fixed", r=100.0, x=-75.0)
+
+
+def test_zero_valued_loads_are_dropped_as_no_ops():
+    """§#ld--loading."""
+    assert parse(BODY + "LD 0 1 3 3 0. 0. 0.\nXQ\nNX\n").loads == ()
+    assert parse(BODY + "LD 4 1 3 3 0. 0.\nXQ\nNX\n").loads == ()
+
+
+@pytest.mark.parametrize("ldtyp", [2, 3, 6, 7, 8, 99])
+def test_ld_refuses_the_types_this_engine_does_not_support(ldtyp):
+    """§#ld--loading: 2/3 (per-metre) and 6/7 (4nec2 extensions) refuse, and
+    so does any type this engine does not recognise."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + f"LD {ldtyp} 1 3 3 1. 1. 1.\nXQ\nNX\n")
+    assert str(exc.value) == f"LD type {ldtyp} is not supported by this engine"
+
+
+def test_ld_expands_a_whole_tag_when_the_range_is_zero():
+    """§#ld--loading: I3 = 0 loads every segment of the tag (matching the
+    whole-structure form's own I2 = 0, I3 = 0 sentinel), oracle-verified
+    (probe ``ld_range_probe.nec``/``ld_range_probe4.nec``): I4 is ignored
+    entirely once I3 = 0, not treated as an upper bound."""
+    model = parse(BODY + "LD 0 1 0 0 50. 0. 0.\nXQ\nNX\n")
+    assert len(model.loads) == 5
+    # I4 = 3 does not restrict the range once I3 = 0 (oracle-verified).
+    model = parse(BODY + "LD 0 1 0 3 50. 0. 0.\nXQ\nNX\n")
+    assert len(model.loads) == 5
+
+
+def test_ld_over_eight_segments_is_refused():
+    """§#ld--loading: a range wider than 8 segments is refused rather than
+    silently truncated."""
+    body = "GW 1 20 -0.5 0. 0. 0.5 0. 0. 1.E-3\nGE 0\nEX 0 1 3 0 1.\nFR 0 1 0 0 14.\n"
+    with pytest.raises(DeckError) as exc:
+        parse(body + "LD 0 1 1 9 50. 0. 0.\nXQ\nNX\n")
+    assert str(exc.value) == (
+        "LD over 9 segments is not supported by this engine — at most 8 "
+        "segments expand into per-segment loads"
+    )
+
+
+def test_ld_refuses_a_second_load_on_the_same_segment():
+    """§#ld--loading."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + "LD 0 1 2 2 50. 0. 0.\nLD 4 1 2 2 10. 5.\nXQ\nNX\n")
+    assert str(exc.value) == (
+        "LD on a segment that already carries a load is not supported by "
+        "this engine — a second load on one segment is not merged"
+    )
+
+
+def test_ld5_whole_structure_form():
+    """§#ld--loading: type 5, ``I2 = 0, I3 = 0`` sets every wire."""
+    model = parse(
+        "GW 1 4 0. 0. 0. 1. 0. 0. 1.E-3\n"
+        "GW 2 4 0. 1. 0. 1. 1. 0. 1.E-3\n"
+        "GE 0\nEX 0 1 3 0 1.\nFR 0 1 0 0 14.\nLD 5 0 0 0 5.8e7\nXQ\nNX\n"
+    )
+    assert [w.material.conductivity for w in model.wires] == [5.8e7, 5.8e7]
+
+
+def test_ld5_ranged_form_sets_it_per_wire():
+    """§#ld--loading: a ranged form sets it per wire."""
+    model = parse(
+        "GW 1 4 0. 0. 0. 1. 0. 0. 1.E-3\n"
+        "GW 2 4 0. 1. 0. 1. 1. 0. 1.E-3\n"
+        "GE 0\nEX 0 1 3 0 1.\nFR 0 1 0 0 14.\nLD 5 1 0 0 5.8e7\nXQ\nNX\n"
+    )
+    assert model.wires[0].material.conductivity == 5.8e7
+    assert model.wires[1].material is None
+
+
+def test_ld5_refuses_a_partial_wire_range():
+    """§#ld--loading: the range must cover each touched wire in full."""
+    with pytest.raises(DeckError) as exc:
+        parse(
+            "GW 1 4 0. 0. 0. 1. 0. 0. 1.E-3\nGE 0\n"
+            "EX 0 1 3 0 1.\nFR 0 1 0 0 14.\nLD 5 1 1 2 5.8e7\nXQ\nNX\n"
+        )
+    assert str(exc.value) == (
+        "LD 5 conductivity on a partial-wire segment range is not "
+        "supported by this engine — per-wire conductivity covers whole "
+        "wires only"
+    )
+
+
+# ---------------------------------------------------------------------------
+# #is--insulated-sheath
+# ---------------------------------------------------------------------------
+
+
+def test_is_sets_the_wires_insulation_jacket():
+    """§#is--insulated-sheath."""
+    model = parse(BODY + "IS 0 1 0 0 5. 0. 0.002\nXQ\nNX\n")
+    material = model.wires[0].material
+    assert material.insulation_eps_r == 5.0
+    assert material.insulation_radius == 0.002
+
+
+def test_is_after_an_execute_request_is_refused():
+    """§#is--insulated-sheath: structural — one geometry, one set of
+    per-wire specs, every group."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + "XQ\nIS 0 1 0 0 5. 0. 0.002\nNX\n")
+    assert str(exc.value) == (
+        "IS after an execute request is not supported by this engine: wire "
+        "insulation is part of the structure, so it cannot change between "
+        "runs"
+    )
+
+
+def test_is_refuses_a_conductive_sheath():
+    """§#is--insulated-sheath."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + "IS 0 1 0 0 5. 0.1 0.002\nXQ\nNX\n")
+    assert str(exc.value) == (
+        "IS with a conductive sheath (F2 != 0) is not modelled by this "
+        "engine — the insulation jacket is a lossless dielectric; set the "
+        "sheath conductivity to 0"
+    )
+
+
+@pytest.mark.parametrize(
+    "eps_r,radius", [(5.0, 0.0), (5.0, -1.0), (0.5, 0.002), (1.0, 0.002)]
+)
+def test_is_drops_a_vacuum_jacket_as_a_no_op(eps_r, radius):
+    """§#is--insulated-sheath: F3 <= 0 or F1 <= 1 is electrically a vacuum."""
+    model = parse(BODY + f"IS 0 1 0 0 {eps_r} 0. {radius}\nXQ\nNX\n")
+    assert model.wires[0].material is None
+
+
+def test_is_refuses_a_partial_wire_range():
+    """§#is--insulated-sheath: exactly as a ranged LD 5 must."""
+    with pytest.raises(DeckError) as exc:
+        parse(
+            "GW 1 4 0. 0. 0. 1. 0. 0. 1.E-3\nGE 0\n"
+            "EX 0 1 3 0 1.\nFR 0 1 0 0 14.\nIS 0 1 1 2 5. 0. 0.002\nXQ\nNX\n"
+        )
+    assert str(exc.value) == (
+        "IS: insulation on a partial-wire segment range — per-wire specs "
+        "cover whole wires only"
+    )
+
+
+def test_is_refuses_a_jacket_that_does_not_clear_the_conductor():
+    """§#is--insulated-sheath."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + "IS 0 1 0 0 5. 0. 0.0005\nXQ\nNX\n")
+    assert str(exc.value) == (
+        "IS: insulation whose outer radius does not exceed the wire's conductor radius"
+    )
+
+
+def test_is_does_not_arm_the_next_execute_card():
+    """§#is--insulated-sheath: it does not arm, because a deck that changes
+    it between runs is refused outright."""
+    model = parse(BODY + "IS 0 1 0 0 5. 0. 0.002\nXQ\nNX\n")
+    assert len(model.groups) == 1
+
+
+# ---------------------------------------------------------------------------
+# #ek--extended-thin-wire-kernel
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("card,expected", [
+    ("EK", True), ("EK 0", True), ("EK 1", True), ("EK 2", True),
+    ("EK -2", True), ("EK -1", False),
+])  # fmt: skip
+def test_ek_the_test_is_i1_equals_minus_one_and_nothing_else(card, expected):
+    """§#ek--extended-thin-wire-kernel: matching NEC's own card reader."""
+    model = parse(BODY + f"{card}\nXQ\nNX\n")
+    assert model.groups[0].extended_kernel is expected
+
+
+def test_ek_is_carried_per_execute_group():
+    """§#ek--extended-thin-wire-kernel: one deck may answer two groups under
+    two kernels with two fills.  ``EK`` arms unconditionally (spec ``#ek--
+    extended-thin-wire-kernel``: "EK arms the next execute card"), so the
+    second XQ is a real run even though ``EK -1`` did not change the value
+    (it was already off)."""
+    model = parse(BODY + "XQ\nEK\nXQ\nNX\n")
+    assert model.groups[0].extended_kernel is False
+    assert model.groups[1] is not None
+    assert model.groups[1].extended_kernel is True
+    model = parse(BODY + "XQ\nEK -1\nXQ\nNX\n")
+    assert model.groups[0].extended_kernel is False
+    assert model.groups[1] is not None  # EK still arms, even at its own value
+    assert model.groups[1].extended_kernel is False
+
+
+def test_a_kernel_change_between_execute_cards_rearms_without_a_new_fr():
+    """§#ek--extended-thin-wire-kernel: a kernel change between two execute
+    cards re-arms without a new FR."""
+    model = parse(BODY + "XQ\nEK\nXQ\nNX\n")
+    assert model.groups[1] is not None
+    assert model.groups[1].refilled is False
+    assert model.groups[1].refilled_partial is True
+
+
+# ---------------------------------------------------------------------------
 # #refusals
 # ---------------------------------------------------------------------------
 
@@ -641,3 +1106,10 @@ def test_the_model_speaks_no_nec():
     fields = set(type(model).__dataclass_fields__)
     assert not fields & {"tags", "segments", "cards", "geometry", "data_cards"}
     assert not hasattr(model.wires[0], "tag")
+
+
+def test_a_finished_dialect_defers_nothing():
+    """§#the-deckmodel: ``deferred`` "exists so an unfinished [dialect] is
+    honest rather than silent" — every card this dialect reads now has real
+    semantics (momwire#359 unit C), so a parsed deck defers nothing."""
+    assert parse(DIPOLE).deferred == ()

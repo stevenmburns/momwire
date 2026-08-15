@@ -37,14 +37,18 @@ from pathlib import Path
 
 import pytest
 
+from momwire.deck import parse as momwire_parse
 from momwire.deck._cards import parse_card
 from momwire.deck._nec2 import _GEOMETRY_CARDS
 from momwire.deck._nec2_geometry import build_geometry
+from momwire.deck.model import SecondMedium
 
 nec_import = pytest.importorskip(
     "antennaknobs.nec_import", reason="the equivalence reference is not installed"
 )
 ak_geometry = pytest.importorskip("antennaknobs.geometry")
+nec_portal = pytest.importorskip("antennaknobs.nec_portal")
+ak_network = pytest.importorskip("antennaknobs.network")
 np = pytest.importorskip("numpy")
 
 
@@ -320,3 +324,218 @@ def test_the_synthetic_decks_actually_exercise_both_passes():
     assert tuple(corner.wires[1].p1) == tuple(corner.wires[0].p2)
     wide = geometry("wide_gap_corner")
     assert tuple(wide.wires[1].p1) != tuple(wide.wires[0].p2)
+
+
+# ---------------------------------------------------------------------------
+# Environment, source and load equivalence (momwire#359 unit C)
+#
+# The geometry tests above measure GW/GM/GS/connections; this section adds
+# GN/GD, FR, EX and LD/LD-5 — the state a deck's execute groups run under.
+# The reference for structure/execution is antennaknobs' OWN nec2 parser,
+# ``nec_portal.parse_deck`` — an independent implementation of the same
+# retention/arming state machine, not merely a translation of ours — and for
+# loading, ``antennaknobs.network``'s RLC formulas fed the raw card fields,
+# not momwire's own ``LoadSpec.impedance``. Address resolution reuses this
+# module's own ``build_geometry``/``Nec2Structure``, whose bitwise agreement
+# with antennaknobs is what the geometry tests above establish; unit C's
+# question is retention and card semantics, not geometry a second time.
+# ---------------------------------------------------------------------------
+
+# The 3 hand-authored network probes: refused by name in this dialect
+# (TL/NT), so they carry no DeckModel to compare here. They are still
+# measured for geometry in the corpus test above.
+_NETWORK_DECKS = {"dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_crossed"}
+
+
+def _portal_deck(text: str):
+    """The same deck body, read by antennaknobs' own nec2 parser."""
+    body = text.split("\nNX", 1)[0].split("\nEN", 1)[0]
+    return nec_portal.parse_deck(body)
+
+
+def _expected_port_loads(cards, structure):
+    """``LD`` types 0/1/4 as ``(model wire, arclength, kind, r, l, c, x)``,
+    reimplemented directly from the raw cards (not momwire's ``_ld``) as an
+    independent check.  Every corpus ``LD`` card is a single explicit
+    segment (``first == last``, both nonzero) — the assertion below is a
+    guard on that assumption, not a corpus fact this helper depends on
+    silently."""
+    loads = []
+    for card in cards:
+        if card.mnemonic != "LD":
+            continue
+        ldtyp = card.i(0)
+        if ldtyp == -1:
+            loads.clear()
+            continue
+        if ldtyp not in (0, 1, 4):
+            continue  # type 5 is conductivity, checked separately below
+        tag, first, last = card.i(1), card.i(2), card.i(3)
+        assert first == last and first > 0, (
+            "a corpus LD card range grew past a single explicit segment; "
+            "_expected_port_loads needs the same range-expansion this "
+            "dialect's _ld/ld_segment_range implements"
+        )
+        wire, arclength = structure.resolve(tag, first)
+        if ldtyp in (0, 1):
+            r, l, c = card.f(4), card.f(5), card.f(6)
+            if r == 0.0 and l == 0.0 and c == 0.0:
+                continue
+            loads.append(
+                (wire, arclength, "series" if ldtyp == 0 else "parallel", r, l, c, 0.0)
+            )
+        else:
+            r, x = card.f(4), card.f(5)
+            if r == 0.0 and x == 0.0:
+                continue
+            loads.append((wire, arclength, "fixed", r, 0.0, 0.0, x))
+    return loads
+
+
+def _expected_conductivity(cards, structure):
+    """``LD 5`` as ``{model wire index: conductivity}``, over every touched
+    MODEL wire (post-shatter) — the same shape ``DeckWire.material`` uses."""
+    global_sigma: float | None = None
+    per_flat_wire: dict[int, float] = {}
+    for card in cards:
+        if card.mnemonic != "LD":
+            continue
+        ldtyp = card.i(0)
+        if ldtyp == -1:
+            global_sigma = None
+            per_flat_wire = {}
+            continue
+        if ldtyp != 5:
+            continue
+        tag, first = card.i(1), card.i(2)
+        sigma = card.f(4)
+        if tag == 0 and first == 0:
+            global_sigma = sigma
+            continue
+        wire, _ = structure.locate(tag, first)
+        per_flat_wire[wire] = sigma
+    result = dict(per_flat_wire)
+    if global_sigma is not None:
+        for i in range(len(structure.wires)):
+            result.setdefault(i, global_sigma)
+    per_model_wire: dict[int, float] = {}
+    for flat_index, sigma in result.items():
+        for piece_index in structure.pieces_of_wire[flat_index]:
+            per_model_wire[piece_index] = sigma
+    return per_model_wire
+
+
+@pytest.mark.parametrize("path", CORPUS, ids=lambda p: p.stem)
+def test_environment_source_and_load_semantics_match_antennaknobs(path: Path):
+    """GN/GD, FR, EX retention and LD/LD-5, against antennaknobs' own nec2
+    parser and RLC formulas — momwire#359 unit C."""
+    if path.stem in _NETWORK_DECKS:
+        pytest.skip("refused by name in this dialect (TL/NT); see the geometry test")
+
+    text = path.read_text()
+    ours = momwire_parse(text)
+    portal = _portal_deck(text)
+    cards = _cards(text)
+    geometry_cards = [c for c in cards if c.mnemonic in _GEOMETRY_CARDS]
+    structure = build_geometry(geometry_cards)
+
+    # 0. every card this dialect reads has real semantics now (unit C): a
+    #    fully-populated model defers nothing.
+    assert ours.deferred == ()
+
+    # 1. ground mapping: type, constants, the second medium, and the GE flag.
+    assert ours.ground == portal.ground.momwire_spec()
+    assert ours.ground_plane_flag == portal.ground_plane_flag
+    if portal.second_medium is None:
+        assert ours.second_medium is None
+    else:
+        assert ours.second_medium == SecondMedium(
+            portal.second_medium.eps_r2,
+            portal.second_medium.sigma2,
+            portal.second_medium.edge_distance,
+            portal.second_medium.height,
+        )
+
+    # 2. one entry per execute card, in the same positions None (a no-op
+    #    XQ) falls in, and the same frequency list per group that ran.
+    assert len(ours.groups) == len(portal.groups)
+    for mine, ref in zip(ours.groups, portal.groups):
+        if ref is None:
+            assert mine is None
+            continue
+        assert mine is not None
+        assert mine.frequencies == pytest.approx(ref.freqs_mhz)
+
+    # 3. the union feed set (spec #one-geometry-one-port-set), rebuilt here
+    #    from the portal's OWN retained `sources` — an independent
+    #    retention trace — and resolved through our own structure.
+    order: list[tuple[int, int]] = []
+    position: dict[tuple[int, int], int] = {}
+    expected_volts: list[complex] = []
+    for ref in portal.groups:
+        if ref is None:
+            continue
+        for tag, seg, volts in ref.sources:
+            key = (tag, seg)
+            if key not in position:
+                position[key] = len(order)
+                order.append(key)
+                expected_volts.append(volts)
+    expected_feeds = [structure.resolve(tag, seg) for tag, seg in order]
+    assert len(ours.feeds) == len(expected_feeds)
+    for (wire, arclength, volts), (e_wire, e_arclength), e_volts in zip(
+        ours.feeds, expected_feeds, expected_volts
+    ):
+        assert wire == e_wire
+        assert arclength == pytest.approx(e_arclength, abs=1e-12)
+        assert volts == e_volts
+
+    for mine, ref in zip(ours.groups, portal.groups):
+        if ref is None:
+            continue
+        expected_voltages = [0j] * len(order)
+        for tag, seg, volts in ref.sources:
+            expected_voltages[position[(tag, seg)]] = volts
+        assert mine.voltages == tuple(expected_voltages)
+
+    # 4. LD 0/1/4 impedances at every frequency the deck actually runs,
+    #    against antennaknobs.network's RLC formulas fed the SAME raw
+    #    fields — a genuinely different implementation of the same physics.
+    expected_loads = _expected_port_loads(cards, structure)
+    assert len(ours.loads) == len(expected_loads)
+    all_freqs_mhz = sorted({f for g in ours.groups if g for f in g.frequencies})
+    for (wire, arclength, spec), (e_wire, e_arclength, kind, r, l, c, x) in zip(
+        ours.loads, expected_loads
+    ):
+        assert wire == e_wire
+        assert arclength == pytest.approx(e_arclength, abs=1e-12)
+        assert spec.kind == kind
+        for freq_mhz in all_freqs_mhz:
+            omega = 2.0 * math.pi * freq_mhz * 1e6
+            ours_z = spec.impedance(freq_mhz * 1e6)
+            if kind == "fixed":
+                ref_z = complex(r, x)
+            elif kind == "series":
+                ref_z = ak_network._series_rlc_impedance(
+                    r or None, l or None, c or None, omega
+                )
+            else:
+                ref_z = 1.0 / ak_network._parallel_rlc_admittance(
+                    r or None, l or None, c or None, omega
+                )
+            assert ours_z == pytest.approx(ref_z, rel=1e-9)
+
+    # 5. LD 5 conductivity, whole-structure and per-wire, against the raw
+    #    card values directly.
+    expected_conductivity = _expected_conductivity(cards, structure)
+    for wire_index, expected in expected_conductivity.items():
+        material = ours.wires[wire_index].material
+        assert material is not None
+        assert material.conductivity == expected
+
+
+def test_the_network_decks_are_still_the_three_the_geometry_test_measures():
+    """A guard on the skip above: if the corpus grows a new TL/NT deck, this
+    test — not a silently-passing skip — is what notices."""
+    stems = {p.stem for p in CORPUS if "network" in p.stem or "shunt_crossed" in p.stem}
+    assert stems == _NETWORK_DECKS
