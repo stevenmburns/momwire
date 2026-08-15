@@ -370,7 +370,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # image (cos θ, p̂ components, tangent·p̂ projections), cached per
         # geometry object — same identity-check pattern as _cached_basis /
         # bspline's `_image_refl_prep`. ρ_v/ρ_h are NOT cached: they depend
-        # on ε̃(ω) and are recomputed per frequency.
+        # on ε̃(ω) and are recomputed per frequency. Since momwire#332 unit
+        # B the point-matched fill no longer reads this cache — it builds
+        # its own per-band tables via `_image_refl_band` instead — so what
+        # is left resident here is only what `SinusoidalGalerkinSolver`
+        # still asks `_image_refl_prep` for.
         self._cached_image_refl_prep: tuple | None = None
 
         if not wires:
@@ -2699,6 +2703,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         per geometry object (identity check, same pattern as
         `_cached_basis`) so swept callers pay the O(N²) build once, not
         per frequency; ρ_v/ρ_h depend on ε̃(ω) and are NOT cached.
+
+        Point-matched no longer calls this — `_field_tensor_image_refl`
+        takes `_image_refl_band`'s per-band tables instead (#332 unit B).
+        What remains here is `SinusoidalGalerkinSolver._refl_projection`,
+        which fancy-indexes the whole table with per-quadrature-point
+        (test segment, source segment) pairs rather than a contiguous
+        observer slice, so it is not a band consumer the same way; its own
+        residency is issue #332's separate Galerkin section.
         """
         cached = self._cached_image_refl_prep
         if cached is not None and cached[0] is geom:
@@ -2717,6 +2729,38 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         prep = (cos_th, px, py, tm_p, tn_p)
         self._cached_image_refl_prep = (geom, prep)
         return prep
+
+    def _image_refl_band(self, geom, obs_rows=None):
+        """Per-BAND specular tables for the `ground_eps` weighted image:
+        the same cos θ / p̂ / tangent-projection quintet `_image_refl_prep`
+        builds, but shaped (band, N_src) for one observer band rather than
+        (N_obs, N_src) for the whole geometry, and never cached — the
+        point-matched fill's #332 unit B transplant of #323's window-
+        producer trade (bspline's `_image_weight_window_fn` retired the
+        same tables the same way). `specular_ray_tables` is O(band · N_src),
+        negligible next to the quadrature fill each band already pays for,
+        so recomputing it once per band per k costs nothing the residency
+        was worth keeping for.
+
+        `obs_rows = (i0, i1)` restricts the OBSERVER axis, same contract as
+        `_field_tensor`'s; `None` means the whole geometry (one band).
+        Sources stay the full, REAL (unmirrored) centers/tangents —
+        `specular_ray_tables`'s `src_centers` takes the rectangular case
+        directly, mirroring internally exactly as the square build did.
+        """
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        obs_c = seg_c if obs_rows is None else seg_c[slice(*obs_rows)]
+        obs_t = seg_t if obs_rows is None else seg_t[slice(*obs_rows)]
+        cos_th, px, py = _ground_refl.specular_ray_tables(
+            obs_c, self.ground_z, src_centers=seg_c
+        )
+        # t·p̂ tables: tm_p on the BAND's observer tangents, tn_p on the
+        # full source width — see `_image_refl_prep` for why the real
+        # source tangents serve the image-source projection unchanged.
+        tm_p = obs_t[:, 0][:, None] * px + obs_t[:, 1][:, None] * py
+        tn_p = seg_t[:, 0][None, :] * px + seg_t[:, 1][None, :] * py
+        return cos_th, px, py, tm_p, tn_p
 
     def _field_tensor_image_refl(self, geom, k, obs_rows=None):
         """Fresnel-weighted image field tensor for the `ground_eps` finite
@@ -2749,16 +2793,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         below is the bit-close reference / fallback for both.
 
         `obs_rows = (i0, i1)` restricts the observer axis, exactly as in
-        `_field_tensor`. The specular tables `_image_refl_prep` caches are
-        (N_obs, N_src), so they take the SAME row slice the observer
-        centres do — that pairing is what makes the band self-consistent,
-        and getting it wrong would silently mis-pair Fresnel geometry with
-        observers. The tables themselves stay whole-matrix here; retiring
-        that residency is #332's unit B.
+        `_field_tensor`. `_image_refl_band` builds the specular tables
+        directly at (band, N_src) for that SAME band — never the whole
+        (N_obs, N_src) table `_image_refl_prep` cached before #332's unit
+        B — so the geometry slice and the specular tables share one index
+        space (0 .. band size) by construction rather than by both taking
+        the same absolute row slice; a stale pairing between them is no
+        longer reachable here. `i0` below re-expresses the mixed-radius
+        runs (absolute geometry indices) in that same band-relative space.
         """
         src_c_img, src_t_img = self._image_source_centers_tangents(geom)
-        cos_th, px, py, tm_p, tn_p = self._image_refl_prep(geom)
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
         win = slice(None) if obs_rows is None else slice(*obs_rows)
+        obs_c = seg_c[win]
+        obs_t = seg_t[win]
+        cos_th, px, py, tm_p, tn_p = self._image_refl_band(geom, obs_rows)
+        i0 = 0 if obs_rows is None else obs_rows[0]
         # ε̃(ω) — per-frequency (the swept loops update self.omega
         # alongside k before assembling).
         eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
@@ -2774,8 +2825,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # `_field_tensor_image` (Sommerfeld's is that PEC tensor times the
         # scalar C₂; see `_assemble_Z`).
         if _HAVE_FIELD_TENSOR_EK_REFL and self.extended_kernel:
-            seg_c = geom["seg_centers"]
-            seg_t = geom["seg_tangents"]
             seg_h = geom["seg_h"]
             gx, gw = self._leggauss_cached(self.n_qp_const)
             # Source-indexed EK tables, exactly as `_field_tensor` passes
@@ -2788,12 +2837,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ind1, ind2 = self._ek_gating(geom)
             src_a = np.ascontiguousarray(self._seg_radius(geom), dtype=np.float64)
 
-            def _call_ek_refl(rows, a):
-                # Observer-side slicing: the (M, N) specular tables slice
-                # on their observer axis alongside the obs arrays.
+            def _call_ek_refl(rel_rows, a):
+                # `rel_rows` indexes the shared band-relative space (0 ..
+                # band size) that `obs_c`/`obs_t` and the `_image_refl_band`
+                # tables above are already built in — one slice serves both.
                 return _acc.sinusoidal_field_tensor_ek_refl(
-                    np.ascontiguousarray(seg_c[rows], dtype=np.float64),
-                    np.ascontiguousarray(seg_t[rows], dtype=np.float64),
+                    np.ascontiguousarray(obs_c[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(obs_t[rel_rows], dtype=np.float64),
                     np.ascontiguousarray(src_c_img, dtype=np.float64),
                     np.ascontiguousarray(src_t_img, dtype=np.float64),
                     np.ascontiguousarray(seg_h, dtype=np.float64),
@@ -2805,11 +2855,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     src_a,
                     np.ascontiguousarray(ind1, dtype=np.int8),
                     np.ascontiguousarray(ind2, dtype=np.int8),
-                    np.ascontiguousarray(cos_th[rows], dtype=np.float64),
-                    np.ascontiguousarray(px[rows], dtype=np.float64),
-                    np.ascontiguousarray(py[rows], dtype=np.float64),
-                    np.ascontiguousarray(tm_p[rows], dtype=np.float64),
-                    np.ascontiguousarray(tn_p[rows], dtype=np.float64),
+                    np.ascontiguousarray(cos_th[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(px[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(py[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(tm_p[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(tn_p[rel_rows], dtype=np.float64),
                     complex(eps_t),
                     self._cancel_flag,
                 )
@@ -2819,9 +2869,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # Spelled out rather than shared with the EK-OFF block below so
             # that block's diff stays empty (same reason as `_field_tensor`).
             if self._uniform_radius is not None:
-                return _call_ek_refl(win, self._uniform_radius)
+                return _call_ek_refl(slice(None), self._uniform_radius)
             parts = [
-                _call_ek_refl(slice(s, e), a)
+                _call_ek_refl(slice(s - i0, e - i0), a)
                 for s, e, a in self._radius_runs(geom, obs_rows)
             ]
             return tuple(
@@ -2838,17 +2888,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # in-kernel per pair from eps_t and cos_th (same principal-
             # branch sqrt as _ground_refl.fresnel_rho). The numpy path
             # below is the bit-close reference / fallback.
-            seg_c = geom["seg_centers"]
-            seg_t = geom["seg_tangents"]
             seg_h = geom["seg_h"]
             gx, gw = self._leggauss_cached(self.n_qp_const)
 
-            def _call(rows, a):
-                # Observer-side slicing: the (M, N) specular tables slice
-                # on their observer axis alongside the obs arrays.
+            def _call(rel_rows, a):
+                # `rel_rows` indexes the shared band-relative space (0 ..
+                # band size) that `obs_c`/`obs_t` and the `_image_refl_band`
+                # tables above are already built in — one slice serves both.
                 return _acc.sinusoidal_field_tensor_refl(
-                    np.ascontiguousarray(seg_c[rows], dtype=np.float64),
-                    np.ascontiguousarray(seg_t[rows], dtype=np.float64),
+                    np.ascontiguousarray(obs_c[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(obs_t[rel_rows], dtype=np.float64),
                     np.ascontiguousarray(src_c_img, dtype=np.float64),
                     np.ascontiguousarray(src_t_img, dtype=np.float64),
                     np.ascontiguousarray(seg_h, dtype=np.float64),
@@ -2857,21 +2906,22 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     float(self.eta),
                     np.ascontiguousarray(gx, dtype=np.float64),
                     np.ascontiguousarray(gw, dtype=np.float64),
-                    np.ascontiguousarray(cos_th[rows], dtype=np.float64),
-                    np.ascontiguousarray(px[rows], dtype=np.float64),
-                    np.ascontiguousarray(py[rows], dtype=np.float64),
-                    np.ascontiguousarray(tm_p[rows], dtype=np.float64),
-                    np.ascontiguousarray(tn_p[rows], dtype=np.float64),
+                    np.ascontiguousarray(cos_th[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(px[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(py[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(tm_p[rel_rows], dtype=np.float64),
+                    np.ascontiguousarray(tn_p[rel_rows], dtype=np.float64),
                     complex(eps_t),
                     self._cancel_flag,
                 )
 
             if self._uniform_radius is not None:
-                return _call(win, self._uniform_radius)
+                return _call(slice(None), self._uniform_radius)
             # Mixed per-wire radii: one call per constant-radius run of
             # observer rows (see `_field_tensor` / `_radius_runs`).
             parts = [
-                _call(slice(s, e), a) for s, e, a in self._radius_runs(geom, obs_rows)
+                _call(slice(s - i0, e - i0), a)
+                for s, e, a in self._radius_runs(geom, obs_rows)
             ]
             return tuple(
                 np.concatenate([p[i] for p in parts], axis=0) for i in range(3)
@@ -2884,8 +2934,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             src_tangents=src_t_img,
             **self._obs_window_kwargs(geom, obs_rows),
         )
-        # Row-slice the specular tables alongside the observer centres.
-        cos_th, px, py, tm_p, tn_p = (t[win] for t in (cos_th, px, py, tm_p, tn_p))
+        # `_image_refl_band` already built cos_th/px/py/tm_p/tn_p at this
+        # band's size — no row-slice needed here (contrast the pre-#332
+        # unit B build, which sliced them out of a whole-geometry cache).
         rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
 
         # ρ̂·p̂ from the image-build rho_vec (p̂ is horizontal, so only the

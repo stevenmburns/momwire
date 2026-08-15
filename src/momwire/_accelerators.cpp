@@ -3428,7 +3428,8 @@ static inline std::complex<double> refl_project(const ReflPair &p,
 // REFL=true is the reflection-coefficient finite-ground variant
 // (`sinusoidal_field_tensor_refl`): the caller passes the k-independent
 // per-pair specular tables (cos_th, px, py, tm_p, tn_p — see
-// _ground_refl.specular_ray_tables and SinusoidalSolver._image_refl_prep)
+// _ground_refl.specular_ray_tables and SinusoidalSolver._image_refl_band,
+// built fresh per observer band since momwire#332 unit B)
 // plus the complex ε̃, and the projection tail applies NEC's field dyad
 //     t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)·(E·p̂)
 // with the Fresnel ρ_v/ρ_h computed in-kernel at each pair's specular
@@ -6358,7 +6359,7 @@ PYBIND11_MODULE(_accelerators, m) {
           "t_m·D·E = rho_v·(t_m·E) − (rho_v+rho_h)·(t_m·p̂)(E·p̂) with "
           "rho_v/rho_h computed in-kernel at each pair's specular angle "
           "from eps_t and the k-independent tables (cos_th, px, py, tm_p, "
-          "tn_p — see SinusoidalSolver._image_refl_prep). Returns "
+          "tn_p — see SinusoidalSolver._image_refl_band). Returns "
           "(Phi_const, Phi_sin, Phi_cos), each (M, N) complex.",
           py::arg("obs_centers"), py::arg("obs_tangents"),
           py::arg("src_centers"), py::arg("src_tangents"),
