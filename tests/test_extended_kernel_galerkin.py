@@ -1137,7 +1137,11 @@ def test_gb5_the_refl_coef_image_rides_the_same_delta():
         sim = _monopole(extended_kernel=True, ground_z=0.0, ground_eps=(13.0, 0.005))
         geom = sim._build_geometry()
         ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
-        sim._tested_ground_block(geom, sim.k, ctx)
+        nnz, n_src = ctx["w_entry"].shape[0], ctx["N"]
+        dest = tuple(
+            np.zeros((nnz, n_src), dtype=np.complex128) for _ in range(3)
+        )  # the free-space triple the ground folds into (#332)
+        sim._fold_ground_block(geom, sim.k, ctx, dest)
     finally:
         SinusoidalGalerkinSolver._ek_pairs = original
     assert seen and all(seen), seen
