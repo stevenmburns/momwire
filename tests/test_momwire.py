@@ -3941,6 +3941,217 @@ def _hentenna_enrich_kwargs(
     return kw
 
 
+@pytest.mark.parametrize(
+    "ground_kw",
+    [
+        {},
+        {"ground_eps": (13.0, 0.005)},
+        {"ground_eps": (13.0, 0.005), "ground_model": "sommerfeld"},
+    ],
+    ids=["pec", "refl-coef", "sommerfeld"],
+)
+def test_bspline_enrichment_image_weight_blocks_match_the_dense_tables(ground_kw):
+    """`_image_weight_enrich_blocks`'s row/col/ee sub-blocks are exactly the
+    (N, n_enrich)-scale slices of the (N, N) dense weight tables the tensor
+    path builds (issue #328). `_enrichment_Z_assemble`'s `ground_z is not
+    None` branch used to build the full `w_A_all`/`w_Phi_all` tables
+    `_image_weight_dense_tables` reproduces here, and only ever read the
+    three sub-blocks pinned below out of them — the enrichment analog of
+    `test_bspline_image_weight_windows_match_the_dense_tables` (#323), for
+    the sub-block form instead of the row-window form.
+
+    A git-stash harness run (this fixture, n=21, all three modes) compared
+    `_enrichment_Z_assemble`'s full (Z_pe, Z_ep, Z_ee) output against the
+    pre-#328 code with `np.array_equal` and found ZERO bit difference in
+    every one of the nine matrices — this test is the permanent regression
+    guard for that result once the pre-#328 code is gone.
+    """
+    from momwire import _ground_refl
+
+    kw = _hentenna_enrich_kwargs(ground_clearance=0.25, **ground_kw)
+    sim = BSplineSolver(**kw)
+    geom = sim._build_geometry()
+    specs = sim._enrichment_specs(geom)
+    n_enrich = len(specs)
+    assert n_enrich > 0  # guard the guard: this deck must carry enrichment DOFs
+    seg_e_arr = np.fromiter((s[3] for s in specs), dtype=np.int64, count=n_enrich)
+
+    w_A_dense, w_Phi_dense = _image_weight_dense_tables(sim, geom)
+    eps_t = (
+        _ground_refl.eps_tilde(sim.ground_eps, sim.omega, sim.eps)
+        if sim.ground_eps is not None
+        else None
+    )
+    w_A_row, w_Phi_row, w_A_col, w_Phi_col, w_A_ee, w_Phi_ee = (
+        sim._image_weight_enrich_blocks(geom, seg_e_arr, eps_t=eps_t)
+    )
+
+    n_segs = geom["n_segs_total"]
+    cases = [
+        (
+            "row",
+            w_A_row,
+            w_Phi_row,
+            w_A_dense[seg_e_arr, :],
+            w_Phi_dense[seg_e_arr, :],
+            (n_enrich, n_segs),
+        ),
+        (
+            "col",
+            w_A_col,
+            w_Phi_col,
+            w_A_dense[:, seg_e_arr],
+            w_Phi_dense[:, seg_e_arr],
+            (n_segs, n_enrich),
+        ),
+        (
+            "ee",
+            w_A_ee,
+            w_Phi_ee,
+            w_A_dense[np.ix_(seg_e_arr, seg_e_arr)],
+            w_Phi_dense[np.ix_(seg_e_arr, seg_e_arr)],
+            (n_enrich, n_enrich),
+        ),
+    ]
+    for name, w_A_blk, w_Phi_blk, w_A_ref, w_Phi_ref, shape in cases:
+        for blk, ref, label in (
+            (w_A_blk, w_A_ref, "w_A"),
+            (w_Phi_blk, w_Phi_ref, "w_Phi"),
+        ):
+            assert blk.shape == shape, f"{name} {label} shape {blk.shape} != {shape}"
+            assert blk.dtype == np.complex128 and blk.flags.c_contiguous, (
+                f"{name} {label} must reach the assembler as C-contiguous "
+                f"complex128, got {blk.dtype} contiguous={blk.flags.c_contiguous}"
+            )
+            np.testing.assert_allclose(
+                blk,
+                ref,
+                rtol=1e-13,
+                atol=0.0,
+                err_msg=f"{name} {label} != dense sub-block",
+            )
+
+
+@pytest.mark.parametrize(
+    "ground_kw",
+    [
+        {},
+        {"ground_eps": (13.0, 0.005)},
+        {"ground_eps": (13.0, 0.005), "ground_model": "sommerfeld"},
+    ],
+    ids=["pec", "refl-coef", "sommerfeld"],
+)
+def test_bspline_enrichment_image_fill_holds_no_n_squared_transient(ground_kw):
+    """The grounded enrichment reaction must not allocate anything N²-scale
+    (issue #328). `_enrichment_Z_assemble`'s `ground_z is not None` branch
+    used to build the same global (N, N) `w_A_all`/`w_Phi_all` weight
+    tables the tensor path builds — for all three ground modes — even
+    though `_assemble_Z_enrich_image_numpy` only ever reads (N, n_enrich),
+    (n_enrich, N) and (n_enrich, n_enrich) sub-blocks of them (n_enrich = a
+    handful of enrichment DOFs, one per K≥`enrichment_min_k` junction).
+
+    Arithmetic at the N = 1203 basis functions this hentenna deck builds
+    (n=150; n_enrich=6; tracemalloc sees numpy's data allocations):
+
+      * one (N, N) complex128 table is 16 N² = 23.2 MB; the retired PEC/
+        sommerfeld branches built two of them (`w_A_all`, `w_Phi_all`), and
+        refl-coef built several more (N, N) float64/complex128
+        intermediates on top inside `_image_refl_prep`/`_image_refl_weights`
+        (cos θ, mirror dot, out-of-plane dyad, ρ_v, ρ_h).
+      * measured (git-stash harness against the pre-#328 code, isolating
+        just the weight-table build + `_assemble_Z_enrich_image_numpy`,
+        excluding the separately-chunked Sommerfeld smooth remainder — same
+        scoping `_image_weight_window_fn`'s own #323 gate uses for
+        `_Z_sommerfeld_remainder`): pec 46.72 MB, refl-coef 139.07 MB,
+        sommerfeld 58.30 MB.
+      * what the fixed code allocates is all n_enrich-bounded: the six
+        (N, n_enrich)/(n_enrich, N)/(n_enrich, n_enrich) weight sub-blocks
+        plus their small per-mode intermediates. Measured: pec 0.88 MB,
+        refl-coef 1.07 MB, sommerfeld 0.88 MB.
+
+    6 MB therefore sits ~5.5x above the fixed peak (worst mode measured)
+    and ~2x below the smallest N²-scale object that could come back (the
+    11.5 MB float64 gemm precursor the PEC branch casts from). The
+    Sommerfeld remainder-field reaction (`_Q_sommerfeld_remainder_enrich`)
+    is excluded on purpose here — a separate, already-addressed transient
+    outside this issue's scope.
+    """
+    import tracemalloc
+
+    from momwire import _ground_refl
+    from momwire._quadrature import leggauss
+    from momwire.bspline import _xfem_projection_coeffs
+
+    kw = _hentenna_enrich_kwargs(n=150, ground_clearance=0.25, **ground_kw)
+    sim = BSplineSolver(**kw)
+    geom = sim._build_geometry()
+    supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    n_segs = geom["n_segs_total"]
+
+    specs = sim._enrichment_specs(geom)
+    n_enrich = len(specs)
+    assert n_enrich > 0  # guard the guard
+    spec_seg = np.fromiter((s[3] for s in specs), dtype=np.int64, count=n_enrich)
+    spec_origin = np.fromiter(
+        (0 if s[4] == "left" else 1 for s in specs), dtype=np.int64, count=n_enrich
+    )
+    seg_l_arr = np.ascontiguousarray(geom["seg_l"], dtype=np.float64)
+    seg_r_arr = np.ascontiguousarray(geom["seg_r"], dtype=np.float64)
+    h_arr = np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64)
+    supp_arr = np.ascontiguousarray(supp_seg, dtype=np.int64)
+    polys_arr = np.ascontiguousarray(polys, dtype=np.float64)
+    a_squared = float(sim._uniform_radius) ** 2
+    gl_xi, gl_w = leggauss(sim.n_qp_sing)
+    t01_arr = np.ascontiguousarray(0.5 * (gl_xi + 1.0))
+    w01_arr = np.ascontiguousarray(0.5 * gl_w)
+    proj_arr = (
+        np.ascontiguousarray(_xfem_projection_coeffs(sim.degree))
+        if sim.enrichment_variant == "stable"
+        else np.ascontiguousarray(np.zeros(sim.degree + 1))
+    )
+    eps_t = (
+        _ground_refl.eps_tilde(sim.ground_eps, sim.omega, sim.eps)
+        if sim.ground_eps is not None
+        else None
+    )
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        blocks = sim._image_weight_enrich_blocks(geom, spec_seg, eps_t=eps_t)
+        _Z_pe, _Z_ep, Z_ee = sim._assemble_Z_enrich_image_numpy(
+            spec_seg,
+            spec_origin,
+            seg_l_arr,
+            seg_r_arr,
+            h_arr,
+            *blocks,
+            supp_arr,
+            polys_arr,
+            a_squared,
+            float(sim.k),
+            float(sim.omega),
+            float(sim.eps),
+            float(sim.mu),
+            t01_arr,
+            w01_arr,
+            proj_arr,
+            float(sim.ground_z),
+        )
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # Guard the guard: a fill that computed nothing would pass on
+    # allocation while measuring nothing at all.
+    assert np.any(Z_ee != 0.0)
+    assert peak < 6_000_000, (
+        f"enrichment image fill peaked {peak / 1e6:.2f} MB "
+        f"(one (N, N) complex table = {16 * n_segs**2 / 1e6:.2f} MB) — an "
+        "N-squared weight residency is back"
+    )
+
+
 @pytest.mark.parametrize("variant", ["raw", "stable", "tikhonov", "auto"])
 def test_bspline_enrichment_y_matrix_matches_impedance(variant):
     """Single feed: 1/Y[0,0] must equal compute_impedance's Z essentially
