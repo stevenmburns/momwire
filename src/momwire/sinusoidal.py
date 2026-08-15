@@ -2980,6 +2980,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cos_shape="cos",
         consume=None,
         row_group=1,
+        r1_max=None,
     ):
         """Smooth Sommerfeld-remainder tensor S[3, M, N]: the tangential
         remainder field of segment n's three source shapes (`cos_shape`) at the
@@ -3026,6 +3027,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         segment — sees every group whole inside one chunk and can reduce it
         without carrying a partial sum across the boundary. The default 1
         leaves the chunk arithmetic untouched.
+
+        `r1_max` is the grid-sizing radius (`max_image_distance` over the
+        geometry's endpoints, momwire#367): band- and k-invariant, so a
+        caller invoking this evaluator once per observer band — the
+        point-matched `_assemble_Z` fill — hoists the scan and passes it,
+        the same once-per-fill discipline as its eps_t/C2 hoist. Left at
+        None (the Galerkin caller, which calls once per solve), it is
+        computed here exactly as before.
         """
         gz = self.ground_z
         seg_c = geom["seg_centers"]
@@ -3067,7 +3076,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # Grid extent: obs-to-image-point distance is convex in the two
         # segment parameters, so its max is attained at endpoint pairs.
-        r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
+        if r1_max is None:
+            r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
         grid = _sommerfeld.get_grid(
             eps_t,
             k,
@@ -3572,6 +3582,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # constant are paid once per fill, as in the whole-tensor build.
             eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
             c2 = (eps_t - 1.0) / (eps_t + 1.0)
+            # The grid-sizing endpoint scan is band-invariant too, and at
+            # ~46 bands x O(N^2) it was the dominant cost of the banded
+            # fill (momwire#367: +128% single-solve at 8.3k basis). Same
+            # value the evaluator would compute; hoisted, not changed.
+            r1_max = _sommerfeld.max_image_distance(
+                geom["seg_l"], geom["seg_r"], self.ground_z
+            )
 
         # Below the dense-M threshold the whole fill is one chunk, budget or
         # no budget. Two reasons, and the first alone would settle it:
@@ -3632,6 +3649,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         eps_t,
                         obs_centers=seg_c[i0:i1],
                         obs_tangents=seg_t[i0:i1],
+                        r1_max=r1_max,
                     )
                     # `c2 * Φ_img − S` in place, and with C2 on the LEFT.
                     # Not cosmetic: complex128 multiply evaluates the
