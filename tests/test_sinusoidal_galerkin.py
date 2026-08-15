@@ -2460,6 +2460,36 @@ def test_far_fill_dispatch_is_projector_selective(monkeypatch):
 # rather than reassociated — which is what the first gate below pins.
 
 
+def _whole_slab_remainder(sim, ctx, geom, eps_t):
+    """The Sommerfeld remainder as a triple of its own, off the WHOLE
+    (3, N·nq, N) tensor — `_tested_sommerfeld_remainder`'s pre-#332-unit-D
+    body, kept here so the oracle below still spans old arithmetic against
+    new.
+
+    The shipped path streams instead: the evaluator's observer chunks are
+    reduced and folded one at a time and the tensor never exists whole. What
+    this reference holds fixed is the reduction the streaming version has to
+    reproduce — every entry's nq nodes summed in node order, off a slab that
+    was built in one piece — so an agreement here says the chunk boundaries
+    really do fall between test segments rather than through one.
+    """
+    N, nq = ctx["N"], ctx["nq"]
+    S = sim._field_tensor_sommerfeld_remainder(
+        geom,
+        sim.k,
+        eps_t,
+        obs_centers=ctx["obs_c"],
+        obs_tangents=ctx["obs_t"],
+        cos_shape="cos-1",
+    )
+    return tuple(
+        sim._tested_contrib_rows(
+            ctx["w_entry"], ctx["m_of_entry"], nq, s.reshape(N, nq, N)
+        )
+        for s in S
+    )
+
+
 def _differenced_grounded_G(sim, geom):
     """G with the ground built as a whole parallel triple and differenced —
     `_assemble_Z`'s pre-#332 spelling, kept here as the fold's reference.
@@ -2469,6 +2499,10 @@ def _differenced_grounded_G(sim, geom):
     is that folding in place reaches the same entries the difference did,
     including the near-correction cells, which the fold has to write BEFORE
     the far half rather than over the top of it.
+
+    The Sommerfeld half reaches further back still, to before unit D: its
+    remainder comes from `_whole_slab_remainder` above, so the comparison
+    covers the streamed reduction as well as the fold.
     """
     from momwire import _ground_refl
 
@@ -2489,7 +2523,7 @@ def _differenced_grounded_G(sim, geom):
             img = sim._tested_contribs(
                 geom, k, ctx, _plain_projection, src_c, src_t, mirror=True
             )
-            rem = sim._tested_sommerfeld_remainder(geom, k, ctx, eps_t)
+            rem = _whole_slab_remainder(sim, ctx, geom, eps_t)
             gnd = tuple(c2 * a - b for a, b in zip(img, rem))
         else:
             gnd = sim._tested_contribs(
@@ -2524,10 +2558,15 @@ def _differenced_grounded_G(sim, geom):
 # projector that reordering is on the shipped dispatch rather than behind the
 # accelerator. Whether the answer means anything physically does not bear on
 # whether two spellings of it agree.
+#
+# Under `somm` it is the GROUND-STANDING deck the streamed remainder needs
+# (#332 unit D) — the reduction it streams is keyed on the test-segment
+# support runs, so a geometry whose bases reach across a ground contact is
+# where a mis-sliced run would show.
 _FOLD_CASES = (
     [(g, gnd, False) for g, gnd in M4_CASES]
     + [(g, gnd, True) for g, gnd in M4_CASES if g != "m4_lshape"]
-    + [("m4_monopole", "refl", ek) for ek in (False, True)]
+    + [("m4_monopole", gnd, ek) for gnd in ("refl", "somm") for ek in (False, True)]
 )
 
 
@@ -2565,6 +2604,23 @@ def test_folded_ground_is_bit_equal_to_the_differenced_spelling(
     assert np.array_equal(G_folded, G_differenced), (
         f"{geom_name}/{ground}: folding the ground moved the matrix by "
         f"{np.abs(G_folded - G_differenced).max():.3e}"
+    )
+
+
+def _residency_deck(n, **ground_kwargs):
+    """`n` short segments on one straight wire, 4 m over the plane — the
+    residency gates' deck. N² and nnz·N are both large enough at n = 300 that
+    the triples dominate the trace, small enough that even the numpy-path
+    refl-coef fill stays a couple of seconds.
+    """
+    ys = np.linspace(-HD, HD, n + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])]
+    return SinusoidalGalerkinSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[1] * n],
+        nsegs=n,
+        wavelength=WL,
+        **ground_kwargs,
     )
 
 
@@ -2622,19 +2678,8 @@ def test_grounded_fill_holds_no_parallel_ground_triple(monkeypatch, ground_kwarg
     monkeypatch.setattr(_sg, "_FILL_WORKSPACE_BYTES", 1)
     monkeypatch.setattr(_sg, "_PAIR_BLOCK", 8)
 
-    # 300 short segments on one straight wire, 4 m over the plane: N² and
-    # nnz·N both large enough that the triples dominate, small enough that
-    # the numpy-path refl-coef fill stays a couple of seconds.
     n = 300
-    ys = np.linspace(-HD, HD, n + 1)
-    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])]
-    sim = SinusoidalGalerkinSolver(
-        wires=wires,
-        n_per_edge_per_wire=[[1] * n],
-        nsegs=n,
-        wavelength=WL,
-        **ground_kwargs,
-    )
+    sim = _residency_deck(n, **ground_kwargs)
     geom = sim._build_geometry()
     N = geom["n_segs"]
     assert N == n
@@ -2656,6 +2701,171 @@ def test_grounded_fill_holds_no_parallel_ground_triple(monkeypatch, ground_kwarg
         f"grounded fill peaked {transient / 1e6:.2f} MB above G = "
         f"{transient / triple:.2f} contribution triples (one triple = "
         f"{triple / 1e6:.2f} MB) — a parallel ground triple is back"
+    )
+
+
+# ---------------------------------------------------------------------------
+# momwire#332 unit D — the Sommerfeld remainder streams instead of slabbing
+# ---------------------------------------------------------------------------
+# The Sommerfeld ground's second half is a smooth remainder field, evaluated by
+# the point-matched solver's own tensor builder with this solver's test
+# quadrature points as its observers. That makes its tensor (3, N·n_qp_test, N)
+# — `n_qp_test` = 8 times the matrix, and several times the (nnz, N) triple it
+# immediately reduces to. Unit C's fold could not touch it: it was still the
+# largest single thing the grounded assembly held.
+#
+# Unit D reduces it INSIDE the evaluator's existing observer-chunk loop and
+# folds each chunk's rows straight off the C2-scaled image, so nothing bigger
+# than one chunk of it is ever live. The two gates below are the arithmetic
+# one (chunking must not reassociate a test entry's quadrature sum) and the
+# residency one.
+
+
+_SOMM_GROUND = {
+    "ground_z": 0.0,
+    "ground_eps": (10.0, 0.002),
+    "ground_model": "sommerfeld",
+}
+
+
+def _count_remainder_chunks(monkeypatch):
+    """Count the evaluator's observer chunks by counting the grid-interpolation
+    calls, which is one per chunk and happens nowhere else in a fill."""
+    from momwire import _sommerfeld as _sm
+
+    calls = []
+    original = _sm.remainder_field_proj
+
+    def counting(*a, **kw):
+        calls.append(a[0].shape[0])
+        return original(*a, **kw)
+
+    monkeypatch.setattr(_sm, "remainder_field_proj", counting)
+    return calls
+
+
+# Chunk budgets in complex entries, against the n = 11 decks below: n_src =
+# N·n_qp_sommerfeld = 33, so the shipped 1<<19 is ~15,900 observer rows and
+# swallows all 88 of them whole, while 660 is 20 rows (16 after the alignment
+# rounding = 2 test segments) and 1 is the degenerate floor, where the
+# alignment is the only thing keeping a chunk from splitting a test segment.
+_CHUNK_CASES = [
+    pytest.param(1, 11, id="chunk-one-segment"),
+    pytest.param(660, 6, id="chunk-two-segments"),
+    pytest.param(1 << 19, 1, id="chunk-shipped"),
+]
+
+
+@pytest.mark.parametrize("chunk_elems,n_chunks", _CHUNK_CASES)
+@pytest.mark.parametrize("extended_kernel", [False, True], ids=["reduced", "ek"])
+@pytest.mark.parametrize("geom_name", ["m4_dipole", "m4_monopole"])
+def test_streamed_remainder_is_bit_equal_at_every_chunk(
+    monkeypatch, geom_name, extended_kernel, chunk_elems, n_chunks
+):
+    """Exact equality against the whole-slab reduction, at three chunk sizes
+    down to one test segment per chunk.
+
+    This is the gate the streaming design is FOR. A test entry's contribution
+    is a sum over its `n_qp_test` quadrature nodes, accumulated one node at a
+    time; split those nodes across two chunks and the two halves could only
+    meet as a partial sum, which is a reassociation of the same products
+    (#203/#205's subject). The evaluator is therefore told to round its chunks
+    down to whole test segments (`row_group=nq`), and what that buys is
+    `array_equal` rather than a tolerance — at the shipped chunk, where the
+    88 observer rows of this deck fit in one piece, and at one segment per
+    chunk, where they do not.
+
+    The reference is built at the SHIPPED chunk in every case, so the
+    comparison also covers the evaluator's own claim that its per-chunk
+    einsum is chunk-independent — the contraction is over the source
+    quadrature axis alone, which no observer boundary touches.
+
+    Both decks are here because the reduction is keyed on the test segments'
+    support runs: the elevated dipole's bases stop at the wire ends, the
+    ground-standing monopole's reach across a ground contact (#151), and a
+    mis-sliced run would land differently in the two. The extended kernel
+    rides along because it reaches the C2-scaled image half of this ground
+    while the remainder itself stays reduced (momwire#287) — which is exactly
+    the composition the fold has to keep associated.
+    """
+    from momwire import sinusoidal as _sin
+
+    over = {"extended_kernel": True} if extended_kernel else {}
+    sim = SinusoidalGalerkinSolver(
+        **M4_GEOMETRIES[geom_name](11, **over), **_SOMM_GROUND
+    )
+    geom = sim._build_geometry()
+    G_ref = _differenced_grounded_G(sim, geom)
+
+    monkeypatch.setattr(_sin, "_REMAINDER_CHUNK_ELEMS", chunk_elems)
+    chunks = _count_remainder_chunks(monkeypatch)
+    G_streamed, _ = sim._assemble_Z(geom, sim.k)
+
+    assert len(chunks) == n_chunks, f"chunking not exercised: rows per chunk {chunks}"
+    assert np.array_equal(G_streamed, G_ref), (
+        f"{geom_name}: streaming the remainder at {chunk_elems} entries per "
+        f"chunk moved the matrix by {np.abs(G_streamed - G_ref).max():.3e}"
+    )
+
+
+def test_sommerfeld_fill_streams_the_remainder(monkeypatch):
+    """Tracemalloc gate on the real `_assemble_Z` path, Sommerfeld ground
+    (issue #332 unit D) — the sibling of
+    `test_grounded_fill_holds_no_parallel_ground_triple` above, same deck,
+    same shrunk constants, same TRIPLE unit (3 × 16·nnz·N).
+
+    This ground is the expensive one and it was the last thing #332 had not
+    reached. Measured above G on the n = 300 deck, cold, where one triple is
+    12.93 MB and G is 1.44 MB:
+
+      * before unit D: 81.05 MB = 6.27 triples. Unit C's fold had already
+        taken the composition from 3.91 to 2.91 triples, and the remainder's
+        own (3, N·n_qp_test, N) tensor — 34.56 MB = 2.67 triples here — plus
+        the (nnz, N) gathers its reduction made on top put it all back;
+      * after: 41.52 MB = 3.21 triples. Two triples are the accelerated
+        floor (the free-space destination and the image block the fused C++
+        kernel returns); the rest is ~8.4 MB of ONE observer chunk, which
+        `_REMAINDER_CHUNK_ELEMS` fixes regardless of N, and ~7.4 MB of cold
+        SommerfeldGrid.
+      * at N = 400 the same two: 143.78 MB = 56.16x G before, 60.63 MB =
+        23.68x G after — the fixed 16 MB shrinks against the triples as the
+        mesh grows, so 6.25 -> 2.64 triples there.
+
+    4.5 triples sits 1.40x above the streamed number and 1.39x below the
+    slabbed one — a wider margin each way than the fold gate's 1.2x, and it
+    is wider for the same structural reason stated there in reverse: what
+    unit D removed scales with `n_qp_test` rather than with 3:2.
+    """
+    import tracemalloc
+
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_FILL_WORKSPACE_BYTES", 1)
+    monkeypatch.setattr(_sg, "_PAIR_BLOCK", 8)
+
+    n = 300
+    sim = _residency_deck(n, **_SOMM_GROUND)
+    geom = sim._build_geometry()
+    N = geom["n_segs"]
+    assert N == n
+    nnz = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)[
+        "w_entry"
+    ].shape[0]
+    triple = 3 * 16 * nnz * N
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        G, _ = sim._assemble_Z(geom, sim.k)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    transient = peak - G.nbytes
+    assert transient < 4.5 * triple, (
+        f"sommerfeld fill peaked {transient / 1e6:.2f} MB above G = "
+        f"{transient / triple:.2f} contribution triples (one triple = "
+        f"{triple / 1e6:.2f} MB) — the remainder tensor is materialized again"
     )
 
 
