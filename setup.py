@@ -146,6 +146,8 @@ ext_modules = [
 setup(
     ext_modules=ext_modules,
     cmdclass={"build_ext": OptionalBuildExt},
-    packages=["momwire"],
+    # Listed explicitly rather than discovered: the list is short, and an
+    # explicit one cannot silently ship a stray directory under src/.
+    packages=["momwire", "momwire.deck"],
     package_dir={"": "src/"},
 )
