@@ -340,7 +340,7 @@ The ground model and its constants.
 | field | meaning |
 |---|---|
 | `I1` | ground type — see the table below |
-| `I2` | `NRADL`, radial ground-screen wire count. Must be `0` |
+| `I2` | `NRADL`, radial ground-screen wire count. Must be `0` for the reflection-coefficient grounds (`GN 0`, `GN 2`); `GN 1` and `GN -1` never read it (NEC's own reader checks it only on those two types — oracle-verified) |
 | `F1` | `EPSR`, relative dielectric constant of medium 1 |
 | `F2` | `SIG`, conductivity of medium 1, mhos/metre |
 | `F3 F4 F5 F6` | a second medium, when `NRADL = 0` — see below |
@@ -415,6 +415,11 @@ An `FR` arms the next execute card, and it also decides how much of the list
 that card runs — see [frequency groups](#frequency-groups). Every `FR` in the
 deck is read; a later one replaces the list entirely.
 
+A deck that executes without ever sending an `FR` runs at NEC's own default,
+**299.8 MHz** (`CVEL` — the frequency at which a wavelength is one metre;
+oracle-verified). No corpus deck relies on this, but the rule is NEC's, not
+an invention.
+
 ## EX — voltage source
 
 An applied-field (delta-gap) voltage source on one segment.
@@ -461,6 +466,11 @@ Lumped and distributed loading on a segment range.
 | `F1 F2 F3` | type-dependent |
 
 `F4`–`F6` are ignored.
+
+`I3 = 0` means **every segment of the tag**, and `I4` is then ignored
+entirely — it is not an upper bound (NEC's own reader takes this branch
+before it looks at `I4`; oracle-verified). With `I2 = 0` too, the range is
+the whole structure. The same rule serves [`IS`](#is--insulated-sheath).
 
 | `I1` | meaning | `F1 F2 F3` | status |
 |---|---|---|---|
@@ -763,7 +773,7 @@ unrecognised NEC card '<XX>'
 | `RP` | `I1 ∉ {0, 2, 3}` | `RP mode <m> is not supported by this engine (modes 0, 2, 3 only)` |
 | `NE` / `NH` | `I1 ≠ 0` | `<M> coordinate system <c> (spherical) is not supported by this engine; rectangular (0) only` |
 | `NE` / `NH` | finite ground | `<M> over a finite ground is not supported by this engine (the near field of a Sommerfeld half-space is not an image)` |
-| `GN` | `NRADL ≠ 0` | `GN <type> with a <n>-wire radial ground screen is not supported by this engine` |
+| `GN` | `NRADL ≠ 0` on `GN 0` / `GN 2` (the only types that read it) | `GN <type> with a <n>-wire radial ground screen is not supported by this engine` |
 | `GN` | `I1 ∉ {-1, 0, 1, 2}` | `GN type <type> is not supported by this engine` |
 | `LD` | `I1 ∈ {2, 3, 6, 7}` or unknown | `LD type <t> is not supported by this engine` |
 | `LD` | range > 8 segments | `LD over <n> segments is not supported by this engine — at most 8 segments expand into per-segment loads` |
