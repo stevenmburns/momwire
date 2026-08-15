@@ -437,7 +437,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the same-edge reg moment blocks (see `_swept_batched_z_chunks`;
         the per-k fallback sweeps chunk their same-edge hoist under the
         same budget, `_same_edge_prep_swept_chunks`).
-        Peak transient memory of a sweep ≈ this budget, so a
+        Peak transient memory of a sweep ≈ this budget (honest since #338:
+        the chunked fills `del` each observer-row window before the next
+        one is built, so the loop never holds two at once — it used to,
+        which silently doubled the real transient behind this knob), so a
         memory-constrained deployment caps it per solve (e.g. 64 on a
         small shared host). Speed saturates by ~256 (chunk ≈ 8-16 on
         production shapes); below ~64 the batching win starts eroding
@@ -2289,6 +2292,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # Row-chunk budget: bytes per observer row of the (d+1, d+1, ·, N)
         # chunk, against the same transient budget the swept path uses.
+        #
+        # Honest only if the loop itself never holds two windows at once
+        # (issue #338): `J_chunk = producer(...)` allocates the NEW window
+        # before rebinding the name, so without the `del` below the OLD
+        # window (still referenced by `J_chunk` from the prior iteration)
+        # stays resident while its replacement is built — one budget's
+        # worth of accidental double-buffering on top of the one the
+        # arithmetic accounts for. Measured at 8,320 basis,
+        # swept_mem_mb=256: 511 MB transient (1.997x budget) before this
+        # `del`, 255 MB (0.996x) after — bit-exact, since nothing about
+        # the windows' contents or the accumulation order changes.
         row_bytes = (d + 1) ** 2 * n_segs * 16
         chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
         for i0 in range(0, n_segs, chunk):
@@ -2306,7 +2320,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ek=_ek_slice(ek, rows=slice(i0, i1)),
             )
             _accumulate(J_chunk, i0, i1, 0, n_segs, _bases_touching(i0, i1), all_n)
-        del J_chunk
+            del J_chunk  # drop this window before the next one is built (#338)
 
         # Same-edge fixup: the sweep above added the full-kernel block for
         # every pair; each same-edge block must instead be the analytic
@@ -2352,6 +2366,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ek=_ek_slice(ek, rows=sl, cols=sl),
             )
             corr = (A_st + A_reg) - J_edge
+            del J_edge  # same lifetime discipline as the sweep above (#338)
             e_idx = _bases_touching(sl.start, sl.stop)
             _accumulate(corr, sl.start, sl.stop, sl.start, sl.stop, e_idx, e_idx)
 
@@ -2389,6 +2404,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
         all_n = np.arange(n_basis, dtype=np.int64)
 
+        # Same lifetime discipline as `_compute_Z_dense_chunked` (#338):
+        # `del` the window and weight arrays before the next iteration
+        # rebinds their names, so the loop never holds an old chunk and its
+        # replacement at once.
         row_bytes = (d + 1) ** 2 * n_segs * 16
         chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
         for i0 in range(0, n_segs, chunk):
@@ -2446,6 +2465,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 Z,
                 self._cancel_flag,
             )
+            del J_chunk, w_A_win, w_Phi_win  # (#338)
 
     # ------------------------------------------------------------------
     # Distributed series wire loading (stevenmburns/momwire#131)

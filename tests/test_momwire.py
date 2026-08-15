@@ -2657,6 +2657,77 @@ def test_bspline_chunked_dense_z_holds_no_n_squared_transient(extended_kernel):
     )
 
 
+def test_bspline_chunked_dense_z_fill_transient_honors_swept_mem_mb_budget():
+    """The chunked fill's own advertised budget must be honest: peak
+    transient above Z should track `swept_mem_mb`, not roughly double it
+    (issue #338).
+
+    Before this fix, the observer-chunk loop rebound `J_chunk` to a new
+    window each iteration WITHOUT dropping the old one first — `J_chunk =
+    producer(...)` builds the new array before the assignment retires the
+    old reference, so for one heartbeat the loop held both the just-used
+    window and its replacement at once. Nothing in the row-byte budget
+    arithmetic accounted for that: it sizes the chunk for ONE window, and
+    the loop transiently held two. `_compute_Z_dense_chunked` now `del`s
+    each window immediately after `_accumulate` consumes it, so only one
+    is ever alive.
+
+    At the N = 1200 geometry (150 edges x 8 segs) this file's other
+    chunked-fill gates use, swept_mem_mb = 8 sizes a chunk = 48 rows, i.e.
+    a ~8.29 MB window — comfortably above the O(N) same-edge-prep floor
+    (~1.4 MB total across all 150 edges) other gates in this file measure,
+    so the ratio below isolates the double-buffering effect rather than
+    noise from that floor.
+
+    Measured: 16.61 MB transient (1.980x budget) pre-fix, 8.33 MB
+    (0.993x) post-fix — the acceptance bar from #338 is <= 1.1x. Margin:
+    threshold is 1.1x budget, comfortably between the fixed value and the
+    doubled pre-fix one.
+    """
+    import tracemalloc
+
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    n_edges, seg_per_edge = 150, 8
+    L = 0.962 * 22 / 2
+    ys = np.linspace(-L / 2, L / 2, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.zeros_like(ys)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+    )
+    geom = sim._build_geometry()
+    supp, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    assert supp.shape[0] == n_edges * seg_per_edge  # N = 1200
+
+    budget_mb = 8
+    sim.swept_mem_mb = budget_mb
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        Z = sim._compute_Z_dense_chunked(geom, sim.k, supp, polys)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    budget_bytes = budget_mb * 1024 * 1024
+    transient = peak - Z.nbytes
+    ratio = transient / budget_bytes
+    assert ratio <= 1.1, (
+        f"chunked fill transient {transient / 1e6:.2f} MB is {ratio:.2f}x "
+        f"the {budget_mb} MB swept_mem_mb budget (want <= 1.1x) — the "
+        "budget arithmetic (or the loop holding two windows at once) is "
+        "dishonest again"
+    )
+
+
 @pytest.mark.parametrize(
     "ground_kwargs",
     [
