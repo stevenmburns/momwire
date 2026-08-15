@@ -2888,7 +2888,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_l,
         seg_r,
         h_per_seg,
-        td_all,
+        tangents,
         supp_seg_poly,
         polys_poly,
         a_squared,
@@ -2916,6 +2916,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         of length d+1 selects raw (all zeros → Φ_sing = t·log(t)) vs
         stable XFEM (subtract Σ_p proj_coeffs[p] t^p from both Φ and its
         derivative).
+
+        `tangents` is the (n_segs, 3) per-segment unit tangent table
+        (issue #334) — each tangent dot `td` is formed here at the single
+        (m, e) / (e, f) pair it is needed for, rather than read from a
+        precomputed (n_segs, n_segs) `td_all` matrix. `assemble_Z_enrich`
+        only ever reads that table at these same handful of pairs, so the
+        full N² table was pure transient.
         """
         n_enrich = spec_seg.shape[0]
         n_poly, n_wings = supp_seg_poly.shape
@@ -2969,7 +2976,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Z_ee: symmetric. Fill upper triangle, mirror.
         for e in range(n_enrich):
             for f in range(e, n_enrich):
-                td = td_all[seg_e_arr[e], seg_e_arr[f]]
+                td = float(np.dot(tangents[seg_e_arr[e]], tangents[seg_e_arr[f]]))
                 diff = pos_e_all[e, :, None, :] - pos_e_all[f, None, :, :]
                 R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
                 iR_4pi = inv_4pi / R
@@ -3021,8 +3028,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 pos_m[:, 2] = (1.0 - t) * seg_l[seg_m, 2] + t * seg_r[seg_m, 2]
                 for e in range(n_enrich):
                     seg_e = int(seg_e_arr[e])
-                    td_me = td_all[seg_m, seg_e]
-                    td_em = td_all[seg_e, seg_m]
+                    td_me = float(np.dot(tangents[seg_m], tangents[seg_e]))
+                    td_em = float(np.dot(tangents[seg_e], tangents[seg_m]))
                     # Z_pe leg: i = m-axis, j = e-axis
                     diff = pos_m[:, None, :] - pos_e_all[e, None, :, :]
                     R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
@@ -3306,7 +3313,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
         tangents = geom["tangents"]
-        td_all = np.ascontiguousarray(tangents @ tangents.T, dtype=np.float64)
+        # Pass the (n_segs, 3) tangent table straight through — the kernel
+        # forms each td = tangents[i]·tangents[j] dot in-kernel at the
+        # handful of (spec_seg[e], n) pairs it actually needs (issue #334).
+        # The old `tangents @ tangents.T` line built the full (N, N) table
+        # even for free-space geometry, and rebuilt it per k in an
+        # enrichment sweep.
+        tan_arr = np.ascontiguousarray(tangents, dtype=np.float64)
 
         gl_xi, gl_w = leggauss(self.n_qp_sing)
         t01 = 0.5 * (gl_xi + 1.0)
@@ -3337,7 +3350,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             seg_l_arr,
             seg_r_arr,
             h_arr,
-            td_all,
+            tan_arr,
             supp_arr,
             polys_arr,
             a_squared,
