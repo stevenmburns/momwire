@@ -3373,17 +3373,31 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
     def _fill_row_bytes(self, N):
-        """Bytes one observer row of `_assemble_Z`'s band costs.
+        """Bytes one observer row of `_assemble_Z`'s band costs, in
+        complex128 rows of N sources.
 
-        Per row the band holds one complex128 row of N sources for each
-        shape of each block the ground model switches on — free space
-        always, the image under any ground, the Sommerfeld remainder on
-        top of that — plus the three matmul products that reduce them into
-        Z. Three, not one: P_A and P_B are both live while their sum is
-        formed. Nothing else in the loop exceeds O(N), so dividing
-        `swept_mem_mb` by this bounds the whole fill transient."""
+        The band's high-water is whichever of its two phases is taller:
+
+          * the FILL — one row per shape of every block the ground model
+            switches on: free space always (3), the image under any ground
+            (3 more), the Sommerfeld remainder on top of that (3 more).
+            They coexist because the image is folded into the free-space
+            band and the remainder into the image band, so 3·blocks;
+          * the REDUCTION — the surviving free-space band (3) plus TWO.
+            One is the matmul product; the three products are accumulated
+            into Z one at a time rather than summed as an expression, so
+            only one is ever live. The other is scipy's: `dense @ sparse`
+            runs as `(M.T @ Φ.T).T`, and the sparse matmul needs its dense
+            operand C-contiguous, so Φ.T is copied. Measured at N = 1200,
+            single band: 6x Z peak free space, which is Z + 3 + 2 exactly.
+
+        Nothing else in the loop exceeds O(N), so dividing `swept_mem_mb`
+        by this bounds the whole fill transient. It is a bound on the
+        BANDS, not a guarantee about the fill: marshalling overhead runs
+        it ~1.7x over at small band heights, the same overshoot #338
+        tracks on the bspline side."""
         blocks = 1 + (self.ground_z is not None) + self._sommerfeld_ground()
-        return 3 * (blocks + 1) * N * 16
+        return max(3 * blocks, 3 + 2) * N * 16
 
     def _assemble_Z(self, geom, k):
         """Point-matched Z, filled in observer-row chunks (momwire#332).
@@ -3392,16 +3406,18 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rectangular in the observer count already (the mixed-radius
         dispatch has cut the kernels on that axis since #147), and the
         reduction into Z is a matmul on the SOURCE axis, so one output row
-        of Z depends on exactly one input row of Φ. Row chunking therefore
+        of Z depends on exactly one input row of Φ. Row banding therefore
         leaves each output element's reduction order untouched — this is a
         residency change, not a reassociation, and the answer is bit-equal
-        to the whole-tensor build (`test_sinusoidal_chunked_assembly_*`).
+        to the whole-tensor build (`test_sinusoidal_banded_assembly_is_
+        bit_equal`).
 
-        What that retires: the whole-matrix build held the free-space Φ
-        triple plus the matmul temporaries (~6x Z), the image triple on
-        top of that under a ground (~7x), and the Sommerfeld remainder
-        triple plus the C2-scaled differences on top of that (~12x). Peak
-        is now Z plus one band, bounded by `swept_mem_mb`.
+        What that retires, measured at N = 1200 above Z: 110 MB free space
+        (the Φ triple plus the matmul temporaries), 176 MB under a ground
+        (the image triple on top of that), 242 MB under sommerfeld (the
+        remainder triple and the C2-scaled differences on top of THAT) —
+        5x, 8x and 11x Z. Peak is now Z plus one band, bounded by
+        `swept_mem_mb`.
         """
         seg_view = self._basis_coefs(geom, k)
         N = geom["n_segs"]
@@ -3531,8 +3547,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 Phi_s -= Phi_i[1]
                 Phi_co -= Phi_i[2]
                 del Phi_i
-            G[i0:i1] = (Phi_c @ M_A) + (Phi_s @ M_B) + (Phi_co @ M_C)
-            del Phi_c, Phi_s, Phi_co
+            # One product at a time, released as it lands, rather than
+            # `(Φ_c@M_A) + (Φ_s@M_B) + (Φ_co@M_C)` — that expression holds
+            # two products plus their sum at once, which would make the
+            # reduction, not the fill, the band's high-water in free space.
+            # Same association: `x = A; x += B; x += C` is `(A + B) + C`.
+            G[i0:i1] = Phi_c @ M_A
+            del Phi_c
+            G[i0:i1] += Phi_s @ M_B
+            del Phi_s
+            G[i0:i1] += Phi_co @ M_C
+            del Phi_co
         self._contact_charge_correction(G, geom, k, seg_view)
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
