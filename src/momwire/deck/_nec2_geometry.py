@@ -442,14 +442,30 @@ class Nec2Structure:
             + (f"tag {tag}" if tag else "the structure")
         )
 
-    def element(self, tag: int, seg: int) -> tuple[int, int]:
-        """``(tag, segment)`` -> ``(model wire index, 0-based element)``."""
-        wire, local = self.locate(tag, seg)
+    def element_of(self, wire: int, local: int) -> tuple[int, int]:
+        """``(flat wire index, 1-based local segment)`` -> ``(model wire
+        index, 0-based element)``.  The part of :meth:`element` that does not
+        need a tag, factored out so a resolver that already has a flat wire
+        index (:meth:`Nec2Structure.ld_segment_range`) does not have to
+        re-walk the tag search in :meth:`locate`."""
         for piece_index in self.pieces_of_wire[wire]:
             piece = self.pieces[piece_index]
             if piece.first_seg < local <= piece.first_seg + piece.n_seg:
                 return piece_index, local - piece.first_seg - 1
         raise AssertionError("unreachable: the pieces of a wire cover it")
+
+    def element(self, tag: int, seg: int) -> tuple[int, int]:
+        """``(tag, segment)`` -> ``(model wire index, 0-based element)``."""
+        wire, local = self.locate(tag, seg)
+        return self.element_of(wire, local)
+
+    def resolve_of(self, wire: int, local: int) -> tuple[int, float]:
+        """``(flat wire index, 1-based local segment)`` -> ``(model wire
+        index, arclength in metres)``.  The part of :meth:`resolve` that does
+        not need a tag; see :meth:`element_of`."""
+        piece_index, element = self.element_of(wire, local)
+        piece = self.pieces[piece_index]
+        return piece_index, (element + 0.5) * piece.length / piece.n_seg
 
     def resolve(self, tag: int, seg: int) -> tuple[int, float]:
         """``(tag, segment)`` -> ``(model wire index, arclength in metres)``.
@@ -459,9 +475,8 @@ class Nec2Structure:
         point a feed, a load or a port lands on — is ``(k - 1/2)L/NS`` metres
         from the wire's first vertex.
         """
-        piece_index, element = self.element(tag, seg)
-        piece = self.pieces[piece_index]
-        return piece_index, (element + 0.5) * piece.length / piece.n_seg
+        wire, local = self.locate(tag, seg)
+        return self.resolve_of(wire, local)
 
     def wire_of_segment_range(
         self, tag: int, first: int, last: int
@@ -470,6 +485,41 @@ class Nec2Structure:
         if last < first:
             first, last = last, first
         return tuple(self.element(tag, s) for s in range(max(first, 1), last + 1))
+
+    def ld_segment_range(
+        self, tag: int, first: int, last: int
+    ) -> tuple[tuple[int, int], ...]:
+        """``(tag, first, last)`` -> every ``(flat wire index, 1-based local
+        segment)`` an ``LD``/``IS`` range covers.
+
+        NEC's own range rule for these two cards — verified against nec2c's
+        ``calculations.c: load()`` (oracle probes ``ld_range_probe*.nec``,
+        momwire#359 unit C): ``tag = 0, first = 0`` is the WHOLE STRUCTURE;
+        ``first = 0`` with a nonzero tag is every segment of that tag, with
+        ``last`` ignored entirely (confirmed on the oracle: ``LD 0 1 0 3 ...``
+        loads all of tag 1, not segments 1-3); otherwise it is the ordinary
+        local segment range ``[first, max(first, last)]``, resolved exactly
+        as a single address is (spec ``#addressing``).  This is a different
+        rule from ``PT``'s ``wire_of_segment_range`` (a plain min/max swap,
+        clamped at 1): PT's all-zero range means "no restriction", while
+        LD/IS's means "the whole tag or structure".
+        """
+        if tag == 0 and first == 0:
+            return tuple(
+                (i, s) for i, w in enumerate(self.wires) for s in range(1, w.n_seg + 1)
+            )
+        if first == 0:
+            pairs = tuple(
+                (i, s)
+                for i, w in enumerate(self.wires)
+                if w.tag == tag
+                for s in range(1, w.n_seg + 1)
+            )
+            if not pairs:
+                raise DeckError(f"no wire has tag {tag}")
+            return pairs
+        last = max(last, first)
+        return tuple(self.locate(tag, s) for s in range(first, last + 1))
 
 
 def build_geometry(cards: list[Card]) -> Nec2Structure:
