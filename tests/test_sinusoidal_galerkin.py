@@ -57,6 +57,7 @@ import functools
 import numpy as np
 import pytest
 import scipy.linalg
+import scipy.spatial.distance
 
 from momwire import (
     BSplineSolver,
@@ -452,6 +453,146 @@ def test_near_pairs_catches_close_approach_without_a_shared_node():
     # segment 0 of wire 0 (index 0) and segment 0 of wire 1 (index 10) face
     # each other across the gap with no shared node.
     assert (0, 10) in pairs and (10, 0) in pairs
+
+
+# ---------------------------------------------------------------------------
+# `_near_pairs` row-chunked prefilter (issue #334): `reach`/`cdist`/the
+# scaled-reach product/the `<=` boolean used to be built as one (N, N_src)
+# shot regardless of N — a ~25 bytes/element transient that collapses to
+# O(hits) index pairs. The row-chunked production code must select the
+# EXACT SAME pairs, in the EXACT SAME order, as that single-shot form, and
+# its own transient must stay bounded independent of N.
+# ---------------------------------------------------------------------------
+
+
+def _near_pairs_unchunked_reference(sim, geom, src_c=None, src_t=None, n_samples=5):
+    """The pre-#334 single-shot prefilter body, kept here independent of the
+    production `_near_pairs` as the oracle the row-chunked version is
+    checked against."""
+    c = geom["seg_centers"]
+    t = geom["seg_tangents"]
+    cs = c if src_c is None else src_c
+    ts = t if src_t is None else src_t
+    hh = 0.5 * np.asarray(geom["seg_h"], dtype=float)
+    reach = hh[:, None] + hh[None, :]
+
+    dc = scipy.spatial.distance.cdist(c, cs)
+    cand = np.argwhere(dc <= (1.0 + sim.near_factor) * reach)
+    m, n = cand[:, 0], cand[:, 1]
+
+    s = np.linspace(-1.0, 1.0, n_samples)
+
+    def _gap(ai, bi, ca, ta, cb, tb):
+        pts = (
+            ca[ai][:, None, :]
+            + (hh[ai][:, None] * s[None, :])[:, :, None] * ta[ai][:, None, :]
+        )
+        d = pts - cb[bi][:, None, :]
+        u = np.einsum("pgd,pd->pg", d, tb[bi])
+        u = np.clip(u, -hh[bi][:, None], hh[bi][:, None])
+        perp = d - u[..., None] * tb[bi][:, None, :]
+        return np.linalg.norm(perp, axis=-1).min(axis=1)
+
+    gap = np.minimum(
+        _gap(m, n, c, t, cs, ts),
+        _gap(n, m, cs, ts, c, t),
+    )
+    keep = gap <= sim.near_factor * reach[m, n]
+    return m[keep], n[keep]
+
+
+@pytest.mark.parametrize("geom_name", list(GEOMETRIES))
+def test_near_pairs_chunked_matches_unchunked_reference(geom_name):
+    """Default (auto-picked) chunking must select the exact same (m, n)
+    pairs, in the exact same order, as the pre-#334 single-shot reference —
+    not merely the same set."""
+    sim = SinusoidalGalerkinSolver(**GEOMETRIES[geom_name]())
+    geom = sim._build_geometry()
+    mm, nn = sim._near_pairs(geom)
+    want_m, want_n = _near_pairs_unchunked_reference(sim, geom)
+    assert np.array_equal(mm, want_m)
+    assert np.array_equal(nn, want_n)
+
+
+@pytest.mark.parametrize("chunk_rows", [1, 3, 7, 100])
+def test_near_pairs_chunked_matches_unchunked_reference_forced_tail(chunk_rows):
+    """Force small `chunk_rows` values on the 41-segment dipole so the final
+    row-block is genuinely partial for every value here (41 is not a
+    multiple of 1, 3, 7, or 100) — this exercises the tail concatenation,
+    not just interior full blocks. `chunk_rows=1` is the extreme case: every
+    block is a single row."""
+    sim = SinusoidalGalerkinSolver(**_dipole())
+    geom = sim._build_geometry()
+    mm, nn = sim._near_pairs(geom, chunk_rows=chunk_rows)
+    want_m, want_n = _near_pairs_unchunked_reference(sim, geom)
+    assert np.array_equal(mm, want_m)
+    assert np.array_equal(nn, want_n)
+
+
+def test_near_pairs_chunked_matches_unchunked_reference_image_block():
+    """Same equality check against the M4 image-block call shape
+    (`src_c`/`src_t` passed explicitly, mirrored geometry) — the branch
+    every ground model's near-correction actually goes through — with a
+    forced `chunk_rows` well below N so the tail is exercised here too."""
+    sim = SinusoidalGalerkinSolver(**_m4_monopole(M4_N), ground_z=0.0)
+    geom = sim._build_geometry()
+    img_c, img_t = sim._image_source_centers_tangents(geom)
+    mm, nn = sim._near_pairs(geom, src_c=img_c, src_t=img_t, chunk_rows=4)
+    want_m, want_n = _near_pairs_unchunked_reference(
+        sim, geom, src_c=img_c, src_t=img_t
+    )
+    assert np.array_equal(mm, want_m)
+    assert np.array_equal(nn, want_n)
+
+
+def test_near_pairs_prefilter_holds_no_n_squared_transient():
+    """Tracemalloc gate: the prefilter's peak transient must stay a few MB
+    on a ~2,000-segment geometry, not the ~25 bytes/element `(N, N)` stack
+    (reach + cdist + scaled-reach + bool) the row-chunking replaced.
+
+    Arithmetic for the threshold at N = 2,000 (near_factor=0.5 default, a
+    straight uniformly-meshed wire so the eventual hit set is the usual
+    O(N) self/neighbour pairs, not the transient this gate measures):
+
+      * default chunking picks `chunk_rows = max(1, 4_000_000 // (25 *
+        2000)) = 80`, so each `(chunk_rows, N)` block's reach/cdist/
+        scaled-reach/bool stack is capped at `80 * 2000 * 25 = 4.0 MB`.
+      * measured peak (this test, tracemalloc): ~6.5 MB — a couple of
+        those blocks' worth alive at once during the elementwise chain,
+        plus the small O(N) `cand_blk`/`m_parts`/`n_parts` accumulation.
+      * the retired single-shot form at this N would need
+        `25 * 2000**2 = 100 MB` for its reach/cdist/scaled-reach/bool
+        stack alone.
+
+    12 MB therefore sits ~1.85x above the measured peak and ~8x below the
+    single-shot transient this replaces.
+    """
+    import tracemalloc
+
+    n = 2000
+    wire = np.array([[0.0, 0.0, -50.0], [0.0, 0.0, 50.0]])
+    sim = SinusoidalGalerkinSolver(
+        wires=[wire],
+        n_per_edge_per_wire=[[n]],
+        nsegs=n,
+        wavelength=200.0,
+    )
+    geom = sim._build_geometry()
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        mm, nn = sim._near_pairs(geom)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert mm.size > 0
+    assert peak < 12_000_000, (
+        f"_near_pairs prefilter peaked {peak / 1e6:.2f} MB at N={n} "
+        f"(25 * N**2 = {25 * n**2 / 1e6:.1f} MB) — an N-squared transient "
+        "is back"
+    )
 
 
 # ---------------------------------------------------------------------------
