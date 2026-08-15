@@ -234,6 +234,7 @@ same instrument and geometry.
 | free space | 2,382 MB (pre-#318, bowtie geometry) | 1,660 MB | 1.50× |
 | PEC ground | 4,303 MB | 1,788 MB | 1.61× |
 | refl-coef ground | 7,487 MB | 1,917 MB | 1.73× |
+| sommerfeld ground | 11,720 MB (post-slate, pre-#343; campaign start infeasible on 16 GB) | 2,280 MB | 2.06× |
 
 Solve values unchanged to printed precision in every mode across the
 whole slate. The high-water is now set by the fill itself; the largest
@@ -241,14 +242,15 @@ known reducible item is the fill transient's ~2× overshoot of its
 `swept_mem_mb` budget (#338). Not yet treated: the sinusoidal family
 (#332) and the enrichment image weight rectangles (#328).
 
-**Sommerfeld ground is NOT yet at this model.** The slate helped it —
-#331 retired the r1_max scan (which alone would have added ~13 GB at
-this size; pre-slate an 8,320-basis Sommerfeld solve was infeasible on
-a 16 GB box) and #323 windowed its C2 exact-image term — but the fused
-remainder kernel materialises the full (d+1)²·N² Jf tensor internally
-(the numpy fallback holds the same tensor Python-side), measured at
-**11,720 MB whole-solve HWM** on the same 8,320-basis instrument:
-+9,931 MB in the remainder phase, ~5× everything else. Filed as #343
-(the kernel's existing rectangular obs/src interface makes an
-observer-blocked call the natural fix); until it lands, grounded
-Sommerfeld bs2 is capped near ~7k basis on an 8 GB budget.
+**Sommerfeld ground joined the model in the same cycle** (#343): the
+fused remainder kernel used to materialise the full (d+1)²·N² Jf
+tensor internally (invisible to tracemalloc — C++ allocation; the
+numpy fallback held the same tensor Python-side), measured at
+11,720 MB whole-solve HWM before the fix. The kernel now bands its
+moment slab over observer segments (64 MiB budget, exact and
+order-preserving — bit-identical output), and the fallback assembles
+per chunk. Certified after: **2,280 MB whole-solve HWM** at the same
+8,320-basis instrument (Z + the returned Q block + the slab), solve
+value bit-identical. Context: #331's r1_max fix in this same slate is
+what made the measurement possible at all — the old scan alone would
+have added ~13 GB at this size.
