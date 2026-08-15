@@ -4072,10 +4072,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_qp = self.n_qp_pair
 
         # k-independent: same-edge static moments + O(N_e) geometry inputs,
-        # tangent-dot tables, image segments — all built once for the whole
-        # sweep (the reg-kernel R table itself is rebuilt per chunk below).
+        # image segments — all built once for the whole sweep (the
+        # reg-kernel R table itself is rebuilt per chunk below). The
+        # tangent-dot is NOT hoisted as an (N, N) table here — the C++
+        # kernel forms it in-kernel from the (N, 3) tangent table(s) it's
+        # handed (issue #333, the swept-batched twin of #318); `tangents`
+        # itself is already O(N) and geom's own array, so nothing extra to
+        # hold for free space. The image term needs the mirrored copy,
+        # which is O(N) too.
         prep = self._same_edge_prep(geom)
-        td_free = tangents @ tangents.T
         # Same specs as the per-k fills; the same-edge half already rides
         # `prep` (its static blocks carry `_EK_SAME_EDGE`, and the rebuilt
         # reg geometry below uses the same spec). Under EK the batched
@@ -4084,8 +4089,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ek = self._ek_spec(geom) if self.extended_kernel else None
         ek_se = _EK_SAME_EDGE if self.extended_kernel else None
         ek_img = None
+        tangents_mirror = None
         if self.ground_z is not None:
-            td_img = self._image_tangent_dot(tangents)
+            tangents_mirror = tangents * np.array([1.0, 1.0, -1.0])
             seg_l_img = self._image_positions(seg_l)
             seg_r_img = self._image_positions(seg_r)
             if self.extended_kernel:
@@ -4109,12 +4115,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         budget = max((self.swept_mem_mb << 20) - transient_bytes, 0)
         chunk = max(1, min(n_k, budget // max(bytes_per_k, 1)))
 
-        def _assemble_swept(J_tensor, td, omega_chunk):
+        def _assemble_swept(J_tensor, t_row, t_col, omega_chunk):
             return _acc.assemble_Z_bspline_swept(
                 np.ascontiguousarray(J_tensor, dtype=np.complex128),
                 np.ascontiguousarray(supp_seg, dtype=np.int64),
                 np.ascontiguousarray(polys, dtype=np.float64),
-                np.ascontiguousarray(td, dtype=np.float64),
+                np.ascontiguousarray(t_row, dtype=np.float64),
+                np.ascontiguousarray(t_col, dtype=np.float64),
                 np.ascontiguousarray(omega_chunk, dtype=np.float64),
                 float(self.eps),
                 float(self.mu),
@@ -4154,7 +4161,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 J[:, :, :, sl, sl] = A_st[
                     None
                 ] + _seg_seg_reg_moments_from_geometry_swept(reg_geo, ks)
-            Z = _assemble_swept(J, td_free, omega_chunk)
+            Z = _assemble_swept(J, tangents, tangents, omega_chunk)
             if self.ground_z is not None:
                 del J  # let the image tensor reuse J's footprint
                 J_img = _seg_seg_full_moments_offedge_swept(
@@ -4168,7 +4175,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     self.n_qp_pair,
                     ek=ek_img,
                 )
-                Z = Z - _assemble_swept(J_img, td_img, omega_chunk)
+                Z = Z - _assemble_swept(J_img, tangents, tangents_mirror, omega_chunk)
             # Loading is Z'(ω)-scaled per k within the chunk (skin R ∝ √ω,
             # insulation X ∝ ω), added after the batched kernel assembly.
             Z = self._apply_loading(Z, omega=omega_chunk)
