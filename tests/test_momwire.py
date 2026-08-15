@@ -1509,6 +1509,96 @@ def test_bspline_assemble_z_enrich_cpp_matches_numpy():
             )
 
 
+def test_bspline_enrichment_assemble_holds_no_n_squared_tangent_table():
+    """`_enrichment_Z_assemble` must not build the free-space `(N, N)`
+    tangent-dot table (issue #334). `assemble_Z_enrich` (the C++ kernel and
+    its numpy twin) only ever reads that table at the handful of
+    (spec_seg[e], n) pairs the enrichment DOFs touch — a table scaling as
+    N² was pure transient, alive even when `ground_z is None`, and rebuilt
+    per k in an enrichment sweep.
+
+    Arithmetic for the threshold, at the N = 6,413 segments this scaled-up
+    hentenna geometry builds (tracemalloc sees numpy's data allocations;
+    the accelerator's own C++-side buffers are outside its reach, so this
+    measures the Python-side transient that used to be `tangents @
+    tangents.T`):
+
+      * the retired `td_all` table alone was `8 * N**2` = 328.9 MB.
+      * measured peak here (this test, tracemalloc): ~1.2 MB — the (N, 3)
+        tangent table passed straight through, plus the small enrichment-
+        side (n_enrich, n_qp) precompute arrays.
+
+    10 MB therefore sits ~8x above the measured peak and ~33x below the
+    retired N² table.
+    """
+    import tracemalloc
+
+    C_LIGHT = 299_792_458.0
+    freq_mhz = 28.47
+    wavelength = C_LIGHT / (freq_mhz * 1e6)
+    eps_feed = 0.05
+    width_factor = 0.1378
+    top_height_factor = 0.5081
+    mid_height_factor = 0.1094
+    half_w = wavelength * width_factor / 2
+    z_mid = wavelength * (mid_height_factor - top_height_factor)
+    z_bot = -wavelength * top_height_factor
+    A = (0.0, half_w, 0.0)
+    B_ = (0.0, half_w, z_mid)
+    F = (0.0, half_w, z_bot)
+    S = (0.0, eps_feed, z_mid)
+    C_ = (0.0, -half_w, 0.0)
+    D = (0.0, -half_w, z_mid)
+    E_ = (0.0, -half_w, z_bot)
+    T = (0.0, -eps_feed, z_mid)
+
+    n = 800  # per heavily-subdivided edge — N ~ 6,400 total
+    sim = BSplineSolver(
+        degree=2,
+        wires=[
+            np.array([T, S], dtype=float),
+            np.array([S, B_], dtype=float),
+            np.array([B_, A, C_, D], dtype=float),
+            np.array([T, D], dtype=float),
+            np.array([D, E_, F, B_], dtype=float),
+        ],
+        n_per_edge_per_wire=[[3], [n], [n, n, n], [n], [n, n, n]],
+        feed_wire_index=0,
+        feed_arclength=eps_feed,
+        wavelength=wavelength,
+        wire_radius=0.0005,
+        nsegs=n,
+        junctions=[
+            [(0, "end"), (1, "start")],
+            [(0, "start"), (3, "start")],
+            [(1, "end"), (2, "start"), (4, "end")],
+            [(2, "end"), (3, "end"), (4, "start")],
+        ],
+        use_singular_enrichment=True,
+        enrichment_variant="raw",
+    )
+    geom = sim._build_geometry()
+    supp_seg, polys, _kcl_A, _wire_knots, _wire_basis_global = (
+        sim._build_basis_polynomials(geom)
+    )
+    n_segs = geom["n_segs_total"]
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        enrich = sim._enrichment_Z_assemble(geom, supp_seg, polys)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert enrich is not None and enrich["n_enrich"] > 0
+    assert peak < 10_000_000, (
+        f"_enrichment_Z_assemble peaked {peak / 1e6:.2f} MB at N={n_segs} "
+        f"(8 * N**2 = {8 * n_segs**2 / 1e6:.1f} MB) — the free-space "
+        "tangent-dot table is dense again"
+    )
+
+
 def test_bspline_hentenna_enrichment_left_right_symmetry():
     """Hentenna is mirror-symmetric about y=0, so the BSpline+enrichment solve
     must produce mirror-symmetric per-knot currents on the upper and lower

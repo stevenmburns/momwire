@@ -2953,6 +2953,13 @@ seg_seg_static_moments_bspline_uniform_ek(double h, double a, size_t N, int max_
 // Parallelism: outer loop over m (polynomial basis index) for the (Z_pe, Z_ep)
 // work, which dominates cost (n_poly ≫ n_enrich). Z_ee is small (n_enrich²);
 // computed serially after.
+//
+// td (the tangent dot on a segment pair) is formed in-kernel from the
+// (n_segs, 3) `tangents` table rather than read from a precomputed (N, N)
+// td_all matrix (issue #334) — that table was N-squared doubles alive
+// across the whole free-space enrichment fill, rebuilt per k in an
+// enrichment sweep, though `assemble_Z_enrich` only ever reads it at the
+// handful of (spec_seg[e], n) pairs this kernel actually visits.
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>>
@@ -2962,7 +2969,7 @@ assemble_Z_enrich(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_l,
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_r,
     py::array_t<double, py::array::c_style | py::array::forcecast> h_per_seg,
-    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> supp_seg_poly,
     py::array_t<double, py::array::c_style | py::array::forcecast> polys_poly,
     double a_squared,
@@ -2979,7 +2986,22 @@ assemble_Z_enrich(
     auto sl_v      = seg_l.unchecked<2>();
     auto sr_v      = seg_r.unchecked<2>();
     auto h_v       = h_per_seg.unchecked<1>();
-    auto td_v      = td_all.unchecked<2>();
+    if (tangents.shape(1) != 3) {
+        throw std::runtime_error("tangents.shape must be (n_segs, 3)");
+    }
+    auto tan_v     = tangents.unchecked<2>();
+    // Tangent dot on the fly rather than reading an (N, N) td_all table:
+    // that table was N-squared doubles alive across the whole enrichment
+    // fill, and rebuilt per k in an enrichment sweep (issue #334, same
+    // shape as #318's assemble_Z_bspline_windowed_kernel fix). td_me and
+    // td_em below are each a fixed-order 3-term dot, so swapping the
+    // argument order still produces bit-identical values term-by-term
+    // (float multiplication is commutative), matching the old table's
+    // (mirror-index) symmetry.
+    auto tdot = [&tan_v](int64_t i, int64_t j) -> double {
+        return tan_v(i, 0) * tan_v(j, 0) + tan_v(i, 1) * tan_v(j, 1) +
+               tan_v(i, 2) * tan_v(j, 2);
+    };
     auto ss_v      = supp_seg_poly.unchecked<2>();
     auto polys_v   = polys_poly.unchecked<3>();
     auto t01_v     = gl_t01.unchecked<1>();
@@ -3094,7 +3116,7 @@ assemble_Z_enrich(
     // -----------------------------------------------------------------
     for (size_t e = 0; e < n_enrich; e++) {
         for (size_t f = e; f < n_enrich; f++) {
-            double td = td_v(seg_e_arr[e], seg_e_arr[f]);
+            double td = tdot(seg_e_arr[e], seg_e_arr[f]);
             double IA_re = 0.0, IA_im = 0.0;
             double IPhi_re = 0.0, IPhi_im = 0.0;
             for (size_t q = 0; q < n_qp; q++) {
@@ -3200,8 +3222,8 @@ assemble_Z_enrich(
 
                 for (size_t e = 0; e < n_enrich; e++) {
                     int64_t seg_e = seg_e_arr[e];
-                    double td_me = td_v(seg_m, seg_e);
-                    double td_em = td_v(seg_e, seg_m);
+                    double td_me = tdot(seg_m, seg_e);
+                    double td_em = tdot(seg_e, seg_m);
 
                     // Z_pe[m, e]: i = m-axis, j = e-axis.
                     double pe_IA_re = 0.0, pe_IA_im = 0.0;
@@ -6200,10 +6222,13 @@ PYBIND11_MODULE(_accelerators, m) {
           "enrichment is L²-orthogonal to the local polynomial space on "
           "each segment. proj_coeffs must have length degree+1 and match "
           "the polys_poly third dim. Z_ep is computed independently from "
-          "Z_pe (no .T shortcut). Single-k.",
+          "Z_pe (no .T shortcut). tangents is the (n_segs, 3) per-segment "
+          "unit tangent table (#334) — the tangent dot is formed in-kernel "
+          "per (m, e)/(e, f) pair rather than reading an (N, N) td_all "
+          "table. Single-k.",
           py::arg("spec_seg"), py::arg("spec_origin"),
           py::arg("seg_l"), py::arg("seg_r"),
-          py::arg("h_per_seg"), py::arg("td_all"),
+          py::arg("h_per_seg"), py::arg("tangents"),
           py::arg("supp_seg_poly"), py::arg("polys_poly"),
           py::arg("a_squared"), py::arg("k"),
           py::arg("omega"), py::arg("eps"), py::arg("mu"),
