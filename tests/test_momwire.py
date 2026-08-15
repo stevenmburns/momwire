@@ -4462,7 +4462,7 @@ def test_sinusoidal_banded_assembly_is_bit_equal(
                 "ground_model": "sommerfeld",
             },
             2,
-            16,
+            18,
             id="sommerfeld",
         ),
     ],
@@ -4480,31 +4480,30 @@ def test_sinusoidal_assembly_holds_no_whole_matrix_field_tensor(
     builds (tracemalloc sees numpy's data allocations; Z is allocated inside
     the fill, so it is subtracted off below):
 
-      * every table that could come back is complex128 (N, N) = 16 N² =
-        23.04 MB, and the ones that actually would come back are Φ TRIPLES
-        at 69.1 MB. 23.04 MB is the conservative floor, so both thresholds
-        only have to sit under it.
+      * one complex128 (N, N) table is 16 N² = 23.04 MB; what a real
+        regression restores is a Φ TRIPLE, 69.1 MB. 23.04 MB is the
+        paranoid floor and both thresholds sit under it.
       * measured on the pre-#332 whole-tensor fill, above Z: 110.2 MB free
         space, 176.1 MB PEC and refl-coef, 242.1 MB sommerfeld.
-      * measured on the banded fill, above Z: 1.35 MB free space, 1.08 MB
-        PEC, 1.08 MB refl-coef (all at swept_mem_mb = 1), 11.84 MB
+      * measured on the banded fill, above Z: 1.28 MB free space, 1.41 MB
+        PEC, 1.41 MB refl-coef (all at swept_mem_mb = 1), 12.39 MB
         sommerfeld (at 2 — see below).
 
-    6 MB therefore sits ~4.4x above the worst free/image mode and ~3.8x
-    below the smallest N²-scale object that could return.
+    6 MB therefore sits ~4.3x above the worst free/image mode and ~3.8x
+    below the paranoid floor.
 
-    Sommerfeld gets 16 MB instead because the remainder evaluator carries a
+    Sommerfeld gets 18 MB instead because the remainder evaluator carries a
     fixed working set for the interpolated grid dyad — issue #343's
     transient, measured flat at 10.07 / 10.15 / 10.31 MB for N = 300 / 600 /
     1200 and flat again across band heights of 1 to 64 rows. A constant is
     not an N² table, so it belongs under the threshold rather than in it,
-    but it does eat the margin: 16 MB is 1.35x over the measurement and
-    1.44x under the floor.
+    but it does eat the margin: 18 MB is 1.45x over the measurement, 1.28x
+    under the paranoid floor and 3.8x under the triple.
 
     That same fixed working set is rebuilt per band, at ~0.074 s each, so
-    the sommerfeld case runs at swept_mem_mb = 2 (9-row bands) rather than
-    1 (4-row): 20 s instead of 45 s for 1 MB more transient (10.93 →
-    11.84 MB). Each case pins its own `swept_mem_mb` because the band is
+    the sommerfeld case runs at swept_mem_mb = 2 (13-row bands) rather than
+    1 (6-row): 20 s instead of 30 s, for 1.1 MB more transient (11.29 →
+    12.39 MB). Each case pins its own `swept_mem_mb` because the band is
     itself part of the measured transient — what the gate catches is
     anything that does NOT shrink with the band.
 
