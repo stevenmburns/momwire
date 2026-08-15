@@ -254,3 +254,38 @@ per chunk. Certified after: **2,280 MB whole-solve HWM** at the same
 value bit-identical. Context: #331's r1_max fix in this same slate is
 what made the measurement possible at all — the old scan alone would
 have added ~13 GB at this size.
+
+## Memory + runtime addendum (as of 0.30.0 — the deck release)
+
+The 0.29.0 section's "not yet treated" list is now empty: this cycle
+treated the sinusoidal family (#332, five-unit arc), made the chunked
+fill's budget honest (#338 — the ~2× overshoot was consumer-side
+double-buffering, not a producer transient), and rectangularised the
+enrichment image weights (#328). All of it bit-exact: no tolerance
+moved anywhere in the three arcs.
+
+Certified at N = 1200 (the #318/#323 gate geometry), assembly transient
+above Z, point-matched sinusoidal: free 110→1.3 MB, PEC 176→1.4,
+refl-coef 176→1.4, sommerfeld 242→12.4. Galerkin grounded fills: PEC
+2.92→2.09 triples of 16·nnz·N, refl 3.20→1.86, sommerfeld 6.27→3.21
+(N=300; the fused far fill's own image triple is the remaining floor,
+#356). Whole-solve on the #927 runtime ladder (Haswell, 8,320 basis,
+point-matched sommerfeld): peak RSS 12.8 GB → 1.5 GB.
+
+**The runtime bill was found and paid in the same cycle.** The #927
+before/after ladder (antennaknobs `scratch/runtime-arcs-ladders.jsonl`,
+driver `scripts/bench_runtime_arcs.py`) caught the banded sommerfeld
+fill re-running the geometry-wide `max_image_distance` scan once per
+observer band — +128% single-solve at 8,320 basis (#367). Hoisted; the
+release-gate re-run at the mid rung now measures MAIN FASTER than
+0.29.0 — 13.66 s → 10.54 s single-solve at 4.4× less RSS — because the
+banding's cache behaviour wins once the scan is paid once. Priced
+residual costs, accepted and filed (#357): swept refl-coef pays
++27–33%/pt at small N for the per-k specular rebuild (decays to
++7%/pt by ~4k basis), and small-N point-matched solves carry a
++6–15% fixed banding overhead that flips to 5–15% faster at 3968+.
+
+This release also ships `momwire.deck` (#359): the antenna-only NEC
+dialect (normative grammar on the site's new Reference section),
+`parse()`/`build_solver()` onto all five families, proven bitwise
+against the antennaknobs portal path on the 41-deck corpus.
