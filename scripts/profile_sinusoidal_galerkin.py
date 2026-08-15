@@ -19,9 +19,9 @@ Phases (nested; `total` contains `assemble`, which contains the rest):
                is `_far_fill_accel`, which fuses the kernel WITH the reduction
                (#194 step 2), so `reduce` goes to zero and this column is the
                whole far fill.
-  reduce       the per-quad-node test-integration sum (`_tested_contrib_rows`
-               on the numpy far fill, `_tested_contrib` on the Sommerfeld
-               remainder)
+  reduce       the per-quad-node test-integration sum
+               (`_tested_contrib_rows`, on the numpy far fill and on the
+               Sommerfeld remainder alike)
   near         `_apply_near_correction` total (includes its kernel calls)
   assemble     `_assemble_Z` total
   total        `compute_impedance` total (assemble + factor/solve + readout)
@@ -108,13 +108,10 @@ class _ProfiledGalerkin(SinusoidalGalerkinSolver):
         # kernel_far and `reduce` stays empty on this path.
         return self._timed("kernel_far", super()._far_fill_accel, *a, **kw)
 
-    def _tested_contrib(self, *a, **kw):
-        return self._timed("reduce", super()._tested_contrib, *a, **kw)
-
     def _tested_contrib_rows(self, *a, **kw):
-        # An instance method shadowing the base staticmethod — the blocked
-        # numpy fill calls this directly rather than through
-        # `_tested_contrib`, so without it the reduce column reads zero.
+        # An instance method shadowing the base staticmethod — every reduction
+        # in the fill calls it directly (there is no whole-matrix entry point
+        # since #332), so without it the reduce column reads zero.
         return self._timed(
             "reduce", SinusoidalGalerkinSolver._tested_contrib_rows, *a, **kw
         )

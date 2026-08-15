@@ -1446,18 +1446,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "w_entry": w_entry,
         }
 
-    def _tested_contrib(self, ctx, Phi):
-        """contrib[entry, n] = Σ_q w_entry[entry, q] · Phi[m(entry), q, n]."""
-        return self._tested_contrib_rows(
-            ctx["w_entry"], ctx["m_of_entry"], ctx["nq"], Phi
-        )
-
     @staticmethod
     def _tested_contrib_rows(w_entry, m_local, nq, Phi):
-        """The reducer behind `_tested_contrib`, on caller-sliced rows:
-        `w_entry`/`m_local` cover one contiguous run of support entries and
-        `m_local` indexes Phi's first axis directly (the caller subtracts
-        its block offset).
+        """contrib[entry, n] = Σ_q w_entry[entry, q] · Phi[m(entry), q, n], on
+        caller-sliced rows: `w_entry`/`m_local` cover one contiguous run of
+        support entries and `m_local` indexes Phi's first axis directly (the
+        caller subtracts its block offset).
+
+        Every caller is blocked (momwire#332): the free-space and image fills
+        over test segments, the Sommerfeld remainder over the evaluator's own
+        observer chunks. There is no whole-matrix entry point left.
 
         Accumulated one quadrature node at a time: the equivalent einsum over
         `Phi[m_local]` would first materialize an (nnz, nq, N) gather, nq×
@@ -2232,18 +2230,25 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             img = self._tested_contribs(
                 geom, k, ctx, _plain_projection, src_c_img, src_t_img, mirror=True
             )
-            rem = self._tested_sommerfeld_remainder(geom, k, ctx, eps_t)
-            # `c2·img − rem` in place, C2 on the LEFT, then the fold — the
-            # point-matched band's spelling (`sinusoidal.py`) and for its
-            # reason: complex multiply evaluates the imaginary part as
-            # x.re*y.im + x.im*y.re, so `img *= c2` reorders that sum and
-            # moves the last bit. The two terms are NOT distributed over the
-            # fold either — `free − (c2·img − rem)` is not `(free − c2·img) +
-            # rem` in float64 — which is why this ground composes its block
-            # first and cannot ride `subtract_into`'s single minus sign.
-            for dest, a, b in zip(contribs, img, rem):
+            # `c2·img − rem` in place, C2 on the LEFT — the point-matched
+            # band's spelling (`sinusoidal.py`) and for its reason: complex
+            # multiply evaluates the imaginary part as x.re*y.im + x.im*y.re,
+            # so `img *= c2` reorders that sum and moves the last bit. The two
+            # terms are NOT distributed over the fold either — `free − (c2·img
+            # − rem)` is not `(free − c2·img) + rem` in float64 — which is why
+            # this ground composes its block first and cannot ride
+            # `subtract_into`'s single minus sign.
+            #
+            # The remainder is never a triple of its own (momwire#332 unit D):
+            # it is subtracted off the SCALED image as each observer chunk
+            # reduces, which is why the scaling runs over the whole image
+            # first. Per entry the arithmetic is unchanged — c2·img, minus the
+            # remainder, then the one fold — because both steps are elementwise
+            # and the chunking only decides when each entry is reached.
+            for a in img:
                 np.multiply(c2, a, out=a)
-                a -= b
+            self._tested_sommerfeld_remainder(geom, k, ctx, eps_t, img)
+            for dest, a in zip(contribs, img):
                 np.subtract(dest, a, out=dest)
             return
 
@@ -2258,8 +2263,28 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             subtract_into=contribs,
         )
 
-    def _tested_sommerfeld_remainder(self, geom, k, ctx, eps_t):
-        """Test-integrate the smooth Sommerfeld remainder tensor.
+    def _tested_sommerfeld_remainder(self, geom, k, ctx, eps_t, subtract_from):
+        """Test-integrate the smooth Sommerfeld remainder tensor, SUBTRACTING
+        it from `subtract_from` (the C2-scaled image triple) as it goes.
+
+        Streamed rather than returned (momwire#332 unit D). The evaluator's
+        tensor is (3, N·n_qp_test, N) here — `n_qp_test` = 8 times the matrix,
+        several times the (nnz, N) triple it reduces to, and on the measured
+        fill it was the single largest thing the grounded assembly held. The
+        evaluator already walked its observers in chunks, so this reduces each
+        chunk to its (nnz_chunk, N) rows and folds them the moment they exist;
+        the tensor never has to exist whole.
+
+        Chunk boundaries are aligned to whole test segments (`row_group=nq`),
+        which is what makes the streamed result BIT-EQUAL rather than merely
+        equivalent: a test entry's reduction is a sum over that entry's nq
+        quadrature nodes, and `_tested_contrib_rows` accumulates it one node at
+        a time in node order. Split an entry across two chunks and the two
+        halves would have to meet as a partial sum — a reassociation of the
+        same products (#203/#205 territory). Whole segments per chunk means
+        every entry's nodes stay together and each entry's sum is the same
+        float64 sequence it always was. The fold that follows is elementwise,
+        so the chunking decides only WHEN an entry is reached.
 
         The remainder evaluator is the point-matched solver's, called with the
         test-quadrature points as its observer set. No near-pair correction:
@@ -2288,15 +2313,37 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         N = ctx["N"]
         nq = ctx["nq"]
-        S = self._field_tensor_sommerfeld_remainder(
+        starts = ctx["starts"]
+        w_entry = ctx["w_entry"]
+        m_of_entry = ctx["m_of_entry"]
+        nnz = w_entry.shape[0]
+
+        def _reduce(i0, i1, block):
+            # Observer rows i0:i1 are test segments m0:m1 whole, so the
+            # entries they carry are the contiguous run starts[m0]:starts[m1]
+            # — the same slicing the blocked fill uses (`_tested_contribs`),
+            # and `_tested_contrib_rows`' m-index is block-local there too.
+            m0, m1 = i0 // nq, i1 // nq
+            e0 = starts[m0]
+            e1 = nnz if m1 == N else starts[m1]
+            w = w_entry[e0:e1]
+            m_loc = m_of_entry[e0:e1] - m0
+            for dest, s in zip(subtract_from, block):
+                rows = self._tested_contrib_rows(
+                    w, m_loc, nq, s.reshape(m1 - m0, nq, N)
+                )
+                np.subtract(dest[e0:e1], rows, out=dest[e0:e1])
+
+        self._field_tensor_sommerfeld_remainder(
             geom,
             k,
             eps_t,
             obs_centers=ctx["obs_c"],
             obs_tangents=ctx["obs_t"],
             cos_shape="cos-1",
+            consume=_reduce,
+            row_group=nq,
         )
-        return tuple(self._tested_contrib(ctx, s.reshape(N, nq, N)) for s in S)
 
     def _assemble_Z(self, geom, k):
         """Galerkin system matrix G (basis i tested against source basis j).
