@@ -4464,6 +4464,9 @@ def test_sinusoidal_banded_assembly_is_bit_equal(
             2,
             18,
             id="sommerfeld",
+            # ~14 s: the remainder's fixed per-band working set (#343) is
+            # rebuilt 93 times at these band heights.
+            marks=pytest.mark.slow,
         ),
     ],
 )
