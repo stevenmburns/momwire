@@ -5858,6 +5858,28 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
 // W_obs (d+1, nsI, q); likewise src_*; loc_I (nI, d+1) int64 indexes obs
 // segments, pI (nI, d+1, d+1); loc_J/pJ index src. Grid passed as in
 // remainder_field_proj_batch. Returns Q (nI, nJ).
+//
+// Observer banding (momwire#343). Jf over the FULL (nsI, nsJ) rectangle is
+// 16*(d+1)^2*nsI*nsJ bytes -- 144 N^2 at d=2, ~9x the dense Z it contributes
+// to, and ~10 GB at N=8320. The two stages are instead run band by band over
+// the observer segments: stage 1 fills Jf for the band [i0, i1) only, stage 2
+// immediately accumulates that band's wing contributions into Q, and the slab
+// is reused for the next band. Peak Jf residency is therefore
+//   16 * (d+1)^2 * band * nsJ  <=  MAX_JF_SLAB_BYTES
+// with `band` derived from that budget (>= 1, capped at nsI). One band means
+// the old single-shot behavior, so thin-obs callers (the ACA sampler) are
+// unaffected.
+//
+// Exactness of the split: Q[m,n] is a plain sum over the (a, b) wing pairs of
+// basis m and basis n, and banding partitions ONLY the `a` axis (each wing a
+// of m lands in exactly one band, the one holding segment loc_I[m,a]). Every
+// pair is therefore visited exactly once. The accumulation is also kept in
+// the original order: a band seeds its local accumulator from the current
+// Q[m,n] and adds its in-band (a, b) terms in increasing (a, b), so as long
+// as loc_I[m,:] is non-decreasing (true for b-spline supports and for the
+// searchsorted local maps the ACA sampler builds) the summation order across
+// bands is identical to the unbanded loop, and Q is bit-identical.
+static constexpr size_t MAX_JF_SLAB_BYTES = 64u << 20;  // 64 MiB
 static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_nodes,
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_tang,
@@ -5877,7 +5899,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
     std::vector<py::array_t<std::complex<double>,
                             py::array::c_style | py::array::forcecast>> reg_vals,
-    uintptr_t cancel_flag = 0) {
+    uintptr_t cancel_flag = 0, size_t max_jf_bytes = 0) {
     using somm_proj::cd;
     auto ndI = obs_nodes.unchecked<3>();
     auto tgI = obs_tang.unchecked<2>();
@@ -5912,6 +5934,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
 
     py::array_t<std::complex<double>> Q({nI, nJ});
     auto Qm = Q.mutable_unchecked<2>();
+    std::fill(Q.mutable_data(), Q.mutable_data() + (size_t)nI * nJ, cd(0.0, 0.0));
 
     py::gil_scoped_release release;
 
@@ -5921,72 +5944,113 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         somm_proj::tangent_decomp(tgJ(j, 0), tgJ(j, 1), tgJ(j, 2), sux[j],
                                   suy[j], sth[j], stz[j]);
 
-    // Stage 1: Jf[p,P,i,j] over the (nsI, nsJ) segment rectangle. Flat index
-    // (((p*d1+P)*nsI)+i)*nsJ+j.
-    std::vector<cd> Jf((size_t)d1 * d1 * nsI * nsJ);
-    const size_t seg2 = (size_t)nsI * nsJ;
+    // Observer band size: the largest number of obs segments whose Jf slab
+    // fits the budget (#343). `band == nsI` reproduces the unbanded kernel.
+    const size_t budget = max_jf_bytes ? max_jf_bytes : MAX_JF_SLAB_BYTES;
+    const size_t row_bytes = sizeof(cd) * (size_t)d1 * d1 * (size_t)nsJ;
+    py::ssize_t band = nsI;
+    if (row_bytes > 0) {
+        size_t fit = budget / row_bytes;
+        if (fit < 1) fit = 1;
+        if ((py::ssize_t)fit < band) band = (py::ssize_t)fit;
+    }
+    if (band < 1) band = 1;
+
+    // Stage 1 slab: Jf[p,P,i-i0,j] over the (band, nsJ) segment rectangle.
+    // Flat index (((p*d1+P)*ib)+(i-i0))*nsJ+j, ib = this band's height.
+    std::vector<cd> Jf((size_t)d1 * d1 * (size_t)band * nsJ);
+    std::vector<py::ssize_t> rows;
+    rows.reserve((size_t)std::min<py::ssize_t>(nI, band * d1 + d1));
 
     PYSIM_CANCEL_SETUP(cancel_flag);
-    #pragma omp parallel for schedule(dynamic)
-    for (py::ssize_t i = 0; i < nsI; ++i) {
-        PYSIM_CANCEL_POLL();
-        const double tox = tgI(i, 0), toy = tgI(i, 1), toz = tgI(i, 2);
-        std::vector<cd> fblk((size_t)q * q);
-        for (py::ssize_t j = 0; j < nsJ; ++j) {
-            for (py::ssize_t qi = 0; qi < q; ++qi) {
-                const double ox = ndI(i, qi, 0), oy = ndI(i, qi, 1),
-                             oz = ndI(i, qi, 2);
-                for (py::ssize_t rj = 0; rj < q; ++rj) {
-                    fblk[qi * q + rj] = somm_proj::proj_one(
-                        G, ground_z, k, ox, oy, oz, tox, toy, toz,
-                        ndJ(j, rj, 0), ndJ(j, rj, 1), ndJ(j, rj, 2),
-                        sux[j], suy[j], sth[j], stz[j]);
-                }
-            }
-            for (int p = 0; p < d1; ++p) {
-                for (int P = 0; P < d1; ++P) {
-                    cd acc(0.0, 0.0);
-                    for (py::ssize_t qi = 0; qi < q; ++qi) {
-                        const double wp = WvI(p, i, qi);
-                        cd row(0.0, 0.0);
-                        for (py::ssize_t rj = 0; rj < q; ++rj)
-                            row += fblk[qi * q + rj] * WvJ(P, j, rj);
-                        acc += wp * row;
+    for (py::ssize_t i0 = 0; i0 < nsI; i0 += band) {
+        const py::ssize_t i1 = std::min<py::ssize_t>(i0 + band, nsI);
+        const py::ssize_t ib = i1 - i0;
+        const size_t seg2 = (size_t)ib * nsJ;
+
+        // Stage 1: fill the band's moment slab.
+        #pragma omp parallel for schedule(dynamic)
+        for (py::ssize_t i = i0; i < i1; ++i) {
+            PYSIM_CANCEL_POLL();
+            const double tox = tgI(i, 0), toy = tgI(i, 1), toz = tgI(i, 2);
+            std::vector<cd> fblk((size_t)q * q);
+            for (py::ssize_t j = 0; j < nsJ; ++j) {
+                for (py::ssize_t qi = 0; qi < q; ++qi) {
+                    const double ox = ndI(i, qi, 0), oy = ndI(i, qi, 1),
+                                 oz = ndI(i, qi, 2);
+                    for (py::ssize_t rj = 0; rj < q; ++rj) {
+                        fblk[qi * q + rj] = somm_proj::proj_one(
+                            G, ground_z, k, ox, oy, oz, tox, toy, toz,
+                            ndJ(j, rj, 0), ndJ(j, rj, 1), ndJ(j, rj, 2),
+                            sux[j], suy[j], sth[j], stz[j]);
                     }
-                    Jf[((size_t)(p * d1 + P) * nsI + i) * nsJ + j] = acc;
+                }
+                for (int p = 0; p < d1; ++p) {
+                    for (int P = 0; P < d1; ++P) {
+                        cd acc(0.0, 0.0);
+                        for (py::ssize_t qi = 0; qi < q; ++qi) {
+                            const double wp = WvI(p, i, qi);
+                            cd row(0.0, 0.0);
+                            for (py::ssize_t rj = 0; rj < q; ++rj)
+                                row += fblk[qi * q + rj] * WvJ(P, j, rj);
+                            acc += wp * row;
+                        }
+                        Jf[((size_t)(p * d1 + P) * ib + (i - i0)) * nsJ + j] =
+                            acc;
+                    }
                 }
             }
         }
-    }
-    PYSIM_THROW_IF_ABORTED();
+        PYSIM_THROW_IF_ABORTED();
 
-    // Stage 2: basis assembly Q[m,n] from the segment moment tensor.
-    #pragma omp parallel for schedule(static)
-    for (py::ssize_t m = 0; m < nI; ++m) {
-        PYSIM_CANCEL_POLL();
-        for (py::ssize_t n = 0; n < nJ; ++n) {
-            cd qmn(0.0, 0.0);
+        // Which basis rows have at least one wing landing in this band? A
+        // row is listed once however many of its wings are in-band, so the
+        // parallel stage-2 loop below owns each Q row exclusively.
+        rows.clear();
+        for (py::ssize_t m = 0; m < nI; ++m) {
             for (int a = 0; a < d1; ++a) {
                 const py::ssize_t si = lI(m, a);
-                for (int b = 0; b < d1; ++b) {
-                    const py::ssize_t sj = lJ(n, b);
-                    cd inner(0.0, 0.0);
-                    for (int p = 0; p < d1; ++p) {
-                        const double pma = plI(m, a, p);
-                        const cd *jfp =
-                            &Jf[((size_t)(p * d1) * nsI + si) * nsJ + sj];
-                        cd s(0.0, 0.0);
-                        for (int P = 0; P < d1; ++P)
-                            s += jfp[(size_t)P * seg2] * plJ(n, b, P);
-                        inner += pma * s;
-                    }
-                    qmn += inner;
+                if (si >= i0 && si < i1) {
+                    rows.push_back(m);
+                    break;
                 }
             }
-            Qm(m, n) = qmn;
         }
+
+        // Stage 2: accumulate this band's wing contributions into Q. The
+        // out-of-band wings are skipped here and picked up by the band that
+        // owns them, so every (a, b) pair is summed exactly once.
+        const py::ssize_t n_rows = (py::ssize_t)rows.size();
+        #pragma omp parallel for schedule(static)
+        for (py::ssize_t r = 0; r < n_rows; ++r) {
+            PYSIM_CANCEL_POLL();
+            const py::ssize_t m = rows[(size_t)r];
+            for (py::ssize_t n = 0; n < nJ; ++n) {
+                cd qmn = Qm(m, n);  // seeded, so the a-order is preserved
+                for (int a = 0; a < d1; ++a) {
+                    const py::ssize_t si = lI(m, a);
+                    if (si < i0 || si >= i1) continue;
+                    const py::ssize_t sl = si - i0;
+                    for (int b = 0; b < d1; ++b) {
+                        const py::ssize_t sj = lJ(n, b);
+                        cd inner(0.0, 0.0);
+                        for (int p = 0; p < d1; ++p) {
+                            const double pma = plI(m, a, p);
+                            const cd *jfp =
+                                &Jf[((size_t)(p * d1) * ib + sl) * nsJ + sj];
+                            cd s(0.0, 0.0);
+                            for (int P = 0; P < d1; ++P)
+                                s += jfp[(size_t)P * seg2] * plJ(n, b, P);
+                            inner += pma * s;
+                        }
+                        qmn += inner;
+                    }
+                }
+                Qm(m, n) = qmn;
+            }
+        }
+        PYSIM_THROW_IF_ABORTED();
     }
-    PYSIM_THROW_IF_ABORTED();
     return Q;
 }
 
@@ -6399,7 +6463,11 @@ PYBIND11_MODULE(_accelerators, m) {
           "into the (nI, nJ) Q block directly (no Jf / einsum intermediates). "
           "Dense block = symmetric case (obs==src, loc==supp_seg); the ACA "
           "sampler passes thin segment subsets with local support maps. Grid as "
-          "in remainder_field_proj_batch.",
+          "in remainder_field_proj_batch. The internal moment slab is banded "
+          "over observer segments so its residency is bounded by "
+          "`max_jf_bytes` (0 = the 64 MiB default), never the full "
+          "(d+1)^2 * nsI * nsJ tensor (momwire#343); the banding is exact and "
+          "order-preserving, not an approximation.",
           py::arg("obs_nodes"), py::arg("obs_tang"), py::arg("W_obs"),
           py::arg("src_nodes"), py::arg("src_tang"), py::arg("W_src"),
           py::arg("loc_I"), py::arg("pI"), py::arg("loc_J"), py::arg("pJ"),
@@ -6407,5 +6475,5 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"),
-          py::arg("cancel_flag") = 0);
+          py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0);
 }
