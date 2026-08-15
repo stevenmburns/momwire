@@ -1543,6 +1543,84 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         return refl_weights
 
+    def _image_weight_enrich_blocks(self, geom, seg_e_arr, eps_t=None):
+        """Rectangular ground-image weight tables for the enrichment
+        reaction (issue #328): the (n_enrich, N), (N, n_enrich) and
+        (n_enrich, n_enrich) sub-blocks `_assemble_Z_enrich_image_numpy`
+        actually reads, in place of the (N, N) `w_A_all`/`w_Phi_all`
+        `_enrichment_Z_assemble` used to build (for all three ground modes)
+        for a handful of enrichment DOFs.
+
+        `seg_e_arr` is the per-enrichment-DOF segment id (`spec_seg`).
+        `eps_t` is the frequency-only complex ε̃, precomputed by the caller
+        so the sommerfeld/refl-coef branches don't redo `eps_tilde` (unused
+        for PEC). Returns (w_A_row, w_Phi_row, w_A_col, w_Phi_col, w_A_ee,
+        w_Phi_ee):
+
+          row (n_enrich, N)        — observer = enrichment segments, source
+                                      = every segment; feeds Z_ep's
+                                      `w_A_all[seg_e, seg_m]` read.
+          col (N, n_enrich)        — observer = every segment, source =
+                                      enrichment segments; feeds Z_pe's
+                                      `w_A_all[seg_m, seg_e]` read.
+          ee (n_enrich, n_enrich)  — both axes enrichment segments; feeds
+                                      Z_ee. Sliced out of `row` (whose
+                                      source axis already covers every
+                                      segment, enrichment ones included)
+                                      rather than built a third time.
+
+        Same per-mode algebra as `_image_weight_window_fn`. `row` and `col`
+        are each their own direct gemm / `specular_pair_tables` call,
+        restricted on their own natural axis — not one transposed into the
+        other — so bit-exactness against the retired full-table reads rests
+        on the #323 identity (slicing a gemm's output axes is exact when
+        its reduction axis is untouched), not on the image reaction's
+        reciprocity symmetry.
+        """
+        tangents = geom["tangents"]
+        mirror = np.array([1.0, 1.0, -1.0])
+        tan_e = tangents[seg_e_arr]
+
+        if self.ground_eps is None:
+            w_A_row = tan_e @ (tangents * mirror).T
+            w_A_col = tangents @ (tan_e * mirror).T
+            w_Phi_row = np.ones_like(w_A_row)
+            w_Phi_col = np.ones_like(w_A_col)
+        elif self.ground_model == "sommerfeld":
+            c2 = (eps_t - 1.0) / (eps_t + 1.0)
+            w_A_row = c2 * (tan_e @ (tangents * mirror).T)
+            w_A_col = c2 * (tangents @ (tan_e * mirror).T)
+            w_Phi_row = np.full(w_A_row.shape, c2)
+            w_Phi_col = np.full(w_A_col.shape, c2)
+        else:
+            seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
+            phi_mode = self.ground_phi_mode
+
+            def refl_block(obs_c, obs_t, src_c, src_t):
+                cos_th, td_img, P = _ground_refl.specular_pair_tables(
+                    obs_c, obs_t, self.ground_z, src_centers=src_c, src_tangents=src_t
+                )
+                rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
+                w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
+                w_Phi = _ground_refl.phi_term_weights(phi_mode, eps_t, rho_v)
+                if np.ndim(w_Phi) == 0:
+                    # "image"/"normal" are pair-independent; "rho_v"/"blend"
+                    # already come back as per-pair windows.
+                    w_Phi = np.full(w_A.shape, complex(w_Phi))
+                return w_A, w_Phi
+
+            seg_c_e = seg_c[seg_e_arr]
+            w_A_row, w_Phi_row = refl_block(seg_c_e, tan_e, seg_c, tangents)
+            w_A_col, w_Phi_col = refl_block(seg_c, tangents, seg_c_e, tan_e)
+
+        w_A_row = np.ascontiguousarray(w_A_row, dtype=np.complex128)
+        w_Phi_row = np.ascontiguousarray(w_Phi_row, dtype=np.complex128)
+        w_A_col = np.ascontiguousarray(w_A_col, dtype=np.complex128)
+        w_Phi_col = np.ascontiguousarray(w_Phi_col, dtype=np.complex128)
+        w_A_ee = np.ascontiguousarray(w_A_row[:, seg_e_arr], dtype=np.complex128)
+        w_Phi_ee = np.ascontiguousarray(w_Phi_row[:, seg_e_arr], dtype=np.complex128)
+        return w_A_row, w_Phi_row, w_A_col, w_Phi_col, w_A_ee, w_Phi_ee
+
     def _image_Z_refl(self, J_img, supp_seg, polys, geom):
         """Fresnel-weighted image sub-assembly for `ground_eps` (NEC-style
         reflection-coefficient finite ground). Returns the matrix to SUBTRACT
@@ -3102,8 +3180,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_l,
         seg_r,
         h_per_seg,
-        w_A_all,
-        w_Phi_all,
+        w_A_row,
+        w_Phi_row,
+        w_A_col,
+        w_Phi_col,
+        w_A_ee,
+        w_Phi_ee,
         supp_seg_poly,
         polys_poly,
         a_squared,
@@ -3126,11 +3208,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
           * the source-side quadrature positions are mirrored across
             `z = ground_z` (the `_image_positions` reflection), and
-          * the free-space tangent dot on the A term becomes the per-segment-
-            pair weight table `w_A_all[seg_m, seg_n]`, and the charge term
-            picks up `w_Phi_all[seg_m, seg_n]`.
+          * the free-space tangent dot on the A term becomes a per-segment-
+            pair weight, and the charge term picks up its own weight —
+            `w_A_row`/`w_Phi_row` (observer = enrichment segments, source =
+            every segment; Z_ep), `w_A_col`/`w_Phi_col` (observer = every
+            segment, source = enrichment segments; Z_pe) and `w_A_ee`/
+            `w_Phi_ee` (both axes enrichment segments; Z_ee) — the (N,
+            n_enrich)-scale sub-blocks of the (N, N) tables the polynomial
+            image block uses, sized to what this function actually reads
+            (issue #328; see `_image_weight_enrich_blocks`).
 
-        The same weight tables the polynomial block uses, so both grounds are
+        Same per-mode weights as the polynomial block, so both grounds are
         one code path: **PEC image** passes `w_A = t_m·(t_n,x, t_n,y, -t_n,z)`
         (the mirror tangent dot) and `w_Φ = 1`; the **fast finite ground**
         (refl-coef) passes the Fresnel dyad table `_ground_refl.a_term_weights`
@@ -3198,18 +3286,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         pos_e_img = pos_e_all.copy()
         pos_e_img[..., 2] = 2.0 * ground_z - pos_e_img[..., 2]
 
-        seg_e_arr = spec_seg.astype(np.int64, copy=False)
-
         # Z_ee image: real observer e against image source f. The image
         # reaction is symmetric (a mirror is an isometry, so reciprocity
         # holds), but both halves are computed independently to mirror the
         # free-space "no .T shortcut" convention. Complex per-pair weights
         # w_A / w_Φ (PEC: real td / 1; finite: Fresnel) fold in via
-        # Z = jωμ·w_A·I_A + w_Φ·I_Φ/(jωε).
+        # Z = jωμ·w_A·I_A + w_Φ·I_Φ/(jωε). `w_A_ee`/`w_Phi_ee` are already
+        # indexed by enrichment-DOF position (issue #328), no segment-id
+        # indirection needed.
         for e in range(n_enrich):
             for f in range(n_enrich):
-                w_A = w_A_all[seg_e_arr[e], seg_e_arr[f]]
-                w_Phi = w_Phi_all[seg_e_arr[e], seg_e_arr[f]]
+                w_A = w_A_ee[e, f]
+                w_Phi = w_Phi_ee[e, f]
                 diff = pos_e_all[e, :, None, :] - pos_e_img[f, None, :, :]
                 R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
                 iR_4pi = inv_4pi / R
@@ -3255,11 +3343,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 pos_m_img = pos_m.copy()
                 pos_m_img[:, 2] = 2.0 * ground_z - pos_m_img[:, 2]
                 for e in range(n_enrich):
-                    seg_e = int(seg_e_arr[e])
-                    wA_me = w_A_all[seg_m, seg_e]
-                    wPhi_me = w_Phi_all[seg_m, seg_e]
-                    wA_em = w_A_all[seg_e, seg_m]
-                    wPhi_em = w_Phi_all[seg_e, seg_m]
+                    # `w_A_col`/`w_A_row` are already restricted to the
+                    # enrichment DOFs on their small axis (issue #328); `e`
+                    # indexes that axis directly, `seg_m` the full-N one.
+                    wA_me = w_A_col[seg_m, e]
+                    wPhi_me = w_Phi_col[seg_m, e]
+                    wA_em = w_A_row[e, seg_m]
+                    wPhi_em = w_Phi_row[e, seg_m]
                     # Z_pe leg: real poly m vs image enrichment e.
                     diff = pos_m[:, None, :] - pos_e_img[e, None, :, :]
                     R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
@@ -3397,35 +3487,41 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             #   sommerfeld — the C2 exact-image weights, PLUS the smooth
             #                remainder-field reaction added below.
             # numpy-only — the handful of enrichment DOFs make the cost
-            # negligible beside the poly image fill.
+            # negligible beside the poly image fill. The weight tables
+            # themselves used to be the full (N, N) `w_A_all`/`w_Phi_all`
+            # the tensor path builds, even though the blocks below only ever
+            # index (N, n_enrich), (n_enrich, N) and (n_enrich, n_enrich)
+            # sub-blocks of them — the last N²-scale allocation left on a
+            # grounded enrichment solve (issue #328).
+            # `_image_weight_enrich_blocks` produces exactly those sub-blocks.
             sommerfeld = (
                 self.ground_eps is not None and self.ground_model == "sommerfeld"
             )
-            if sommerfeld:
-                eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-                c2 = (eps_t - 1.0) / (eps_t + 1.0)
-                td_img = self._image_tangent_dot(tangents)
-                w_A_all = np.ascontiguousarray(c2 * td_img, dtype=np.complex128)
-                w_Phi_all = np.full_like(w_A_all, c2)
-            elif self.ground_eps is not None:
-                w_A_all, w_Phi_all = self._image_refl_weights(
-                    self._image_refl_prep(geom), self.omega
-                )
-                w_A_all = np.ascontiguousarray(w_A_all, dtype=np.complex128)
-                w_Phi_all = np.ascontiguousarray(w_Phi_all, dtype=np.complex128)
-            else:
-                w_A_all = np.ascontiguousarray(
-                    self._image_tangent_dot(tangents), dtype=np.complex128
-                )
-                w_Phi_all = np.ones_like(w_A_all)
+            eps_t = (
+                _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+                if self.ground_eps is not None
+                else None
+            )
+            (
+                w_A_row,
+                w_Phi_row,
+                w_A_col,
+                w_Phi_col,
+                w_A_ee,
+                w_Phi_ee,
+            ) = self._image_weight_enrich_blocks(geom, spec_seg, eps_t=eps_t)
             Z_pe_img, Z_ep_img, Z_ee_img = self._assemble_Z_enrich_image_numpy(
                 spec_seg,
                 spec_origin,
                 seg_l_arr,
                 seg_r_arr,
                 h_arr,
-                w_A_all,
-                w_Phi_all,
+                w_A_row,
+                w_Phi_row,
+                w_A_col,
+                w_Phi_col,
+                w_A_ee,
+                w_Phi_ee,
                 supp_arr,
                 polys_arr,
                 a_squared,
