@@ -98,6 +98,14 @@ export default defineConfig({
           ],
         },
         {
+          // Reference material, not narrative: normative contracts the code
+          // is held to. Sits beside the acts rather than inside them.
+          label: "Reference",
+          items: [
+            { label: "The nec2 deck dialect", slug: "reference/deck-grammar-nec2" },
+          ],
+        },
+        {
           label: "Elsewhere",
           items: [
             { label: "Turn the knobs live", link: SIMULATOR_URL, attrs: { target: "_blank" } },
