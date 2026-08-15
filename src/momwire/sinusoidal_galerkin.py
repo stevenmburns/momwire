@@ -952,7 +952,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # Near-pair selection
     # ------------------------------------------------------------------
 
-    def _near_pairs(self, geom, src_c=None, src_t=None, n_samples=5):
+    def _near_pairs(self, geom, src_c=None, src_t=None, n_samples=5, chunk_rows=None):
         """Ordered (test, source) segment pairs whose test integral needs the
         graded rule, as two index arrays.
 
@@ -973,19 +973,48 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         a cheap centre-distance prefilter. That prefilter is a strict superset:
         |c_m − c_n| ≤ d_min + h_m + h_n always, so any pair meeting the
         `near_factor` criterion also meets the prefilter.
+
+        The prefilter itself is row-chunked over the test axis rather than
+        run on the full (N, N_src) arrays at once (issue #334): each stage —
+        `reach`, `cdist`, the scaled-reach product, and the `<=` boolean —
+        is its own (N, N_src) transient (3 float64 + 1 bool = 25 bytes per
+        element), alive together for a result that collapses to O(hits)
+        index pairs. A row-chunk of `chunk_rows` test segments bounds that
+        stack at `chunk_rows * N_src * 25` bytes; `chunk_rows=None` picks
+        `max(1, 4_000_000 // (25 * N_src))`, capping one block's transient
+        at ~4 MB regardless of N. `np.argwhere` on a C-contiguous array
+        already visits rows in order, and each block is processed in
+        increasing row order, so concatenating the per-block hits reproduces
+        the SAME pairs in the SAME lexicographic order as the unchunked call
+        — bit-exact, not an approximation. Pass an explicit `chunk_rows` to
+        force a particular chunking (e.g. to exercise a partial tail chunk
+        in tests).
         """
         c = geom["seg_centers"]
         t = geom["seg_tangents"]
         cs = c if src_c is None else src_c
         ts = t if src_t is None else src_t
         hh = 0.5 * np.asarray(geom["seg_h"], dtype=float)
-        reach = hh[:, None] + hh[None, :]
 
-        # cdist rather than an explicit (N, N, 3) difference: the prefilter
-        # should not cost 3× the memory of the matrix it is protecting.
-        dc = scipy.spatial.distance.cdist(c, cs)
-        cand = np.argwhere(dc <= (1.0 + self.near_factor) * reach)
-        m, n = cand[:, 0], cand[:, 1]
+        n_test = c.shape[0]
+        n_src = cs.shape[0]
+        if chunk_rows is None:
+            chunk_rows = max(1, 4_000_000 // (25 * max(1, n_src)))
+        thresh_factor = 1.0 + self.near_factor
+
+        m_parts, n_parts = [], []
+        for i0 in range(0, n_test, chunk_rows):
+            i1 = min(i0 + chunk_rows, n_test)
+            reach_blk = hh[i0:i1, None] + hh[None, :]
+            # cdist rather than an explicit (rows, N_src, 3) difference:
+            # the prefilter should not cost 3x the memory of the matrix
+            # it is protecting.
+            dc_blk = scipy.spatial.distance.cdist(c[i0:i1], cs)
+            cand_blk = np.argwhere(dc_blk <= thresh_factor * reach_blk)
+            m_parts.append(cand_blk[:, 0] + i0)
+            n_parts.append(cand_blk[:, 1])
+        m = np.concatenate(m_parts) if m_parts else np.empty(0, dtype=np.int64)
+        n = np.concatenate(n_parts) if n_parts else np.empty(0, dtype=np.int64)
 
         s = np.linspace(-1.0, 1.0, n_samples)
 
@@ -1006,7 +1035,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             _gap(m, n, c, t, cs, ts),  # test segment sampled against the source
             _gap(n, m, cs, ts, c, t),  # and the other way round
         )
-        keep = gap <= self.near_factor * reach[m, n]
+        keep = gap <= self.near_factor * (hh[m] + hh[n])
         return m[keep], n[keep]
 
     # ------------------------------------------------------------------
