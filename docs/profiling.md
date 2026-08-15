@@ -240,3 +240,15 @@ whole slate. The high-water is now set by the fill itself; the largest
 known reducible item is the fill transient's ~2× overshoot of its
 `swept_mem_mb` budget (#338). Not yet treated: the sinusoidal family
 (#332) and the enrichment image weight rectangles (#328).
+
+**Sommerfeld ground is NOT yet at this model.** The slate helped it —
+#331 retired the r1_max scan (which alone would have added ~13 GB at
+this size; pre-slate an 8,320-basis Sommerfeld solve was infeasible on
+a 16 GB box) and #323 windowed its C2 exact-image term — but the fused
+remainder kernel materialises the full (d+1)²·N² Jf tensor internally
+(the numpy fallback holds the same tensor Python-side), measured at
+**11,720 MB whole-solve HWM** on the same 8,320-basis instrument:
++9,931 MB in the remainder phase, ~5× everything else. Filed as #343
+(the kernel's existing rectangular obs/src interface makes an
+observer-blocked call the natural fix); until it lands, grounded
+Sommerfeld bs2 is capped near ~7k basis on an 8 GB budget.
