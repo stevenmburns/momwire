@@ -1664,8 +1664,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         surfaces, combined per source-tangent vertical/horizontal
         decomposition (eqs 143-147 azimuth factors), projected on the
         observer tangent, and integrated with the basis polynomials by
-        per-segment Gauss quadrature. Chunked over observer segments to
-        bound the (nodes x nodes) working set.
+        per-segment Gauss quadrature.
+
+        BOTH paths band the assembly over observer segments so no
+        (d+1)^2 * N^2 moment tensor is ever live (issue #343): the fused
+        kernel bands internally (64 MiB slab), the numpy fallback below
+        assembles each chunk into Q as it goes.
         """
         gz = self.ground_z
         seg_l = geom["seg_l"]
@@ -1703,10 +1707,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         grid = self._somm_grid(eps_t, r1_max)
 
         # Fully-fused C++ path: interpolate + project + moment-quadrature +
-        # basis-assemble straight into Q, skipping the Jf tensor and the two
-        # Galerkin einsums (sommerfeld-perf-plan Phase 4b stage 2). The dense
-        # block is the symmetric obs==src case of the rectangular kernel, with
-        # the support map == supp_seg (segment set is all segments).
+        # basis-assemble straight into Q, skipping the Python-side Jf tensor
+        # and the two Galerkin einsums (sommerfeld-perf-plan Phase 4b stage
+        # 2). The dense block is the symmetric obs==src case of the
+        # rectangular kernel, with the support map == supp_seg (segment set
+        # is all segments). The kernel's own moment slab is banded over
+        # observer segments (#343), so the full-N call is bounded too.
         if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
             nodes_c = np.ascontiguousarray(nodes, dtype=np.float64)
             tang_c = np.ascontiguousarray(tang, dtype=np.float64)
@@ -1734,10 +1740,19 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         src = nodes.reshape(n_nodes, 3)
         t_src = np.repeat(tang, q, axis=0)
 
-        Jf = np.empty((d + 1, d + 1, n_seg, n_seg), dtype=np.complex128)
+        # numpy fallback. The observer chunking bounds the field evaluation,
+        # but the moment tensor it filled used to be the FULL
+        # (d+1, d+1, n_seg, n_seg) block — 144 N^2 bytes, the same ~9x-dense
+        # transient the fused kernel carried (issue #343), and the assembly
+        # below then gathered a second copy of it per wing pair. Assemble
+        # each observer chunk's contribution into Q immediately instead: a
+        # basis row only sees the chunks holding its own support segments, so
+        # nothing bigger than (d+1, d+1, chunk, n_seg) is ever live.
+        n_basis = polys.shape[0]
+        Q = np.zeros((n_basis, n_basis), dtype=np.complex128)
         chunk = max(1, (1 << 19) // max(n_nodes * q, 1))
         for i0 in range(0, n_seg, chunk):
-            self._checkpoint()  # per observer chunk of the eval+einsum block
+            self._checkpoint()  # per observer chunk of the eval+assemble block
             i1 = min(i0 + chunk, n_seg)
             obs = nodes[i0:i1].reshape(-1, 3)
             t_obs = np.repeat(tang[i0:i1], q, axis=0)
@@ -1745,16 +1760,21 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 obs, t_obs, src, t_src, gz, self.k, grid
             )
             fq = proj.reshape(i1 - i0, q, n_seg, q)
-            Jf[:, :, i0:i1, :] = np.einsum("piq,iqjr,Pjr->pPij", W[:, i0:i1], fq, W)
-
-        n_basis = polys.shape[0]
-        Q = np.zeros((n_basis, n_basis), dtype=np.complex128)
-        for a in range(d + 1):
-            sm = supp_seg[:, a]
-            for b in range(d + 1):
-                sn = supp_seg[:, b]
-                J_blk = Jf[:, :, sm[:, None], sn[None, :]]
-                Q += np.einsum("mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :])
+            Jc = np.einsum("piq,iqjr,Pjr->pPij", W[:, i0:i1], fq, W)
+            for a in range(d + 1):
+                sm = supp_seg[:, a]
+                # Wings of this chunk only; every wing lands in exactly one
+                # chunk, so the (a, b) pair sum is complete and disjoint.
+                rows = np.nonzero((sm >= i0) & (sm < i1))[0]
+                if rows.size == 0:
+                    continue
+                sml = sm[rows] - i0
+                for b in range(d + 1):
+                    sn = supp_seg[:, b]
+                    J_blk = Jc[:, :, sml[:, None], sn[None, :]]
+                    Q[rows] += np.einsum(
+                        "mp,pPmn,nP->mn", polys[rows, a, :], J_blk, polys[:, b, :]
+                    )
         return Q
 
     def _Q_sommerfeld_remainder_enrich(
