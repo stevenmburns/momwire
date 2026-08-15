@@ -4175,7 +4175,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     self.n_qp_pair,
                     ek=ek_img,
                 )
-                Z = Z - _assemble_swept(J_img, tangents, tangents_mirror, omega_chunk)
+                # In-place fold (issue #333 part 2): `Z = Z - ...` held the
+                # old stack, the image stack, and the difference — three
+                # (chunk, n_basis, n_basis) complex stacks at the sweep's
+                # peak moment. `Z -=` holds two.
+                Z -= _assemble_swept(J_img, tangents, tangents_mirror, omega_chunk)
             # Loading is Z'(ω)-scaled per k within the chunk (skin R ∝ √ω,
             # insulation X ∝ ω), added after the batched kernel assembly.
             Z = self._apply_loading(Z, omega=omega_chunk)
