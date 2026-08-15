@@ -3527,9 +3527,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     Z -= self._ground_finite_Z(J_img, supp_seg, polys, geom)
                 else:
                     td_img = self._image_tangent_dot(geom["tangents"])
-                    Z = Z - self._assemble_Z(
-                        J_img, supp_seg, polys, geom, td_all=td_img
-                    )
+                    # Same in-place fold as the finite-ground branch above
+                    # (issue #334): two resident n_basis² matrices, not three.
+                    Z -= self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
 
         # Distributed series wire loading (independent of ground: it's a
         # wire property, added once to the final Z).
