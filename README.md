@@ -18,6 +18,76 @@ testing rule — not its basis, which it shares with `BSplineSolver(degree=1)`
 walk without needing the (licensed) NEC-5 binary; see
 [docs/razor-solver.md](docs/razor-solver.md) (momwire#309).
 
+## Ports
+
+Every solver family exposes the same port surface, and it is the surface to
+build on: `compute_port_solution()` runs **one** fill and **one**
+factorisation over every port at once, so a multi-port structure costs what a
+single-port one costs.
+
+Three kinds of port, declared at construction, and they can be mixed:
+
+| kwarg | what it is | entry |
+| --- | --- | --- |
+| `feeds=` | a delta gap at a point along a wire — NEC's `EX 0` | `(wire_index, arclength, voltage)` |
+| `junction_ports=` | a shunt port on a junction NODE's KCL row: the node drives net inflow (the node's row leaves the constraint set) | `(junction_index, voltage)`, or a bare index for 0 V |
+| `node_gaps=` | a SERIES EMF at a junction node, in series with one named wire end — the apex feed | `(wire_index, "start"\|"end", voltage)` |
+
+Ports are numbered `[feeds…, junction_ports…, node_gaps…]`, and that is the
+order every port readout is in.
+
+```python
+sol = solver.compute_port_solution()      # one fill, one factorisation
+sol.y                                     # (n_ports, n_ports) short-circuit Y
+sol.coeffs                                # (n_dof, n_ports) — column j is the
+                                          #   solution for 1 V at port j
+sol.port_currents                         # the same matrix as `y`, asserted
+```
+
+`compute_y_matrix()` is `compute_port_solution().y`, so the two cannot drift.
+Any other excitation is `coeffs @ V` with no second fill — that is the point
+of the class. To turn a column into currents on the structure, use the
+solver's `currents_at_knots(coeffs[:, j])`, or `element_currents(coeffs[:, j],
+subdiv=…)` for the `(mid, moment, nodes, delta)` source terms a field
+evaluator wants. `PortSolution.basis` is an opaque per-solve handle — do not
+introspect it.
+
+## Decks
+
+`momwire.deck` reads a NEC-2 deck and puts it on a solver. The dialect —
+which cards run, which are refused and in exactly what words — is specified
+at
+**[momwire.dev/reference/deck-grammar-nec2/](https://momwire.dev/reference/deck-grammar-nec2/)**;
+that page is normative, and the code is tested against its anchors.
+
+```python
+from momwire.deck import build_solver, parse
+
+deck = """CM 20 m dipole, 10 m up over average ground
+CE
+GW 1 21 -5.05 0. 10. 5.05 0. 10. 1.E-3
+GE 1
+GN 2 0 0 0 13. 0.005
+EX 0 1 11 0 1. 0.
+FR 0 1 0 0 14.1
+XQ
+EN
+"""
+built = build_solver(parse(deck), basis="bspline")
+y = built.solver.compute_port_solution().y
+port = built.ports.feed_ports[0]          # the solver row this EX card drives
+print(f"Z = {1.0 / y[port, port]:.1f} ohm")   # Z = 67.0-41.1j ohm
+```
+
+`parse()` returns a dialect-neutral `DeckModel`; `build_solver()` maps it onto
+one of the seven `BASES` names (five solver families — `"bspline"` is the
+default, the degree-2 B-spline) and returns the solver together with a
+`PortPlan`. The plan is what makes the solver's ports readable: which row is
+which `EX` or `LD` card, each load's `LoadSpec`, and one drive vector per
+execute group over a port set that never changes. Stamping a load impedance
+is port algebra and stays with the consumer — `momwire.deck` puts the gap in
+the matrix and hands over the spec.
+
 ## Install
 
 ```bash
