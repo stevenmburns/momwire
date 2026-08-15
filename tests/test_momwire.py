@@ -3961,6 +3961,27 @@ def test_bspline_enrichment_image_weight_blocks_match_the_dense_tables(ground_kw
             )
 
 
+def _stub_sommerfeld_remainder_enrich(
+    self, geom, supp_seg_poly, polys_poly, spec_seg, spec_origin, eps_t
+):
+    """Zero-returning stand-in for `_Q_sommerfeld_remainder_enrich`, used
+    only to keep its field-projection array — a separate, already-addressed
+    O(N) transient, not the (N, N) tables issue #328 is about, but big
+    enough on its own (double-digit MB at the N below) to swamp a tight
+    budget — out of the trace in
+    `test_bspline_enrichment_image_fill_holds_no_n_squared_transient`. It
+    runs AFTER `_enrichment_Z_assemble`'s ground weight-table branch, so
+    stubbing it changes nothing about what that test actually gates."""
+    n_poly = supp_seg_poly.shape[0]
+    n_enrich = spec_seg.shape[0]
+    z = np.complex128
+    return (
+        np.zeros((n_poly, n_enrich), dtype=z),
+        np.zeros((n_enrich, n_poly), dtype=z),
+        np.zeros((n_enrich, n_enrich), dtype=z),
+    )
+
+
 @pytest.mark.parametrize(
     "ground_kw",
     [
@@ -3970,7 +3991,9 @@ def test_bspline_enrichment_image_weight_blocks_match_the_dense_tables(ground_kw
     ],
     ids=["pec", "refl-coef", "sommerfeld"],
 )
-def test_bspline_enrichment_image_fill_holds_no_n_squared_transient(ground_kw):
+def test_bspline_enrichment_image_fill_holds_no_n_squared_transient(
+    ground_kw, monkeypatch
+):
     """The grounded enrichment reaction must not allocate anything N²-scale
     (issue #328). `_enrichment_Z_assemble`'s `ground_z is not None` branch
     used to build the same global (N, N) `w_A_all`/`w_Phi_all` weight
@@ -3979,101 +4002,63 @@ def test_bspline_enrichment_image_fill_holds_no_n_squared_transient(ground_kw):
     (n_enrich, N) and (n_enrich, n_enrich) sub-blocks of them (n_enrich = a
     handful of enrichment DOFs, one per K≥`enrichment_min_k` junction).
 
-    Arithmetic at the N = 1203 basis functions this hentenna deck builds
-    (n=150; n_enrich=6; tracemalloc sees numpy's data allocations):
+    The traced call is `_enrichment_Z_assemble` itself — the real
+    orchestration entry point, not an internal helper — so a regression
+    that reintroduces a full table build inside it (the likeliest
+    regression site: e.g. "simplifying" back to the tensor path's tables)
+    is caught here, not just in the sub-block equality test above.
 
-      * one (N, N) complex128 table is 16 N² = 23.2 MB; the retired PEC/
-        sommerfeld branches built two of them (`w_A_all`, `w_Phi_all`), and
-        refl-coef built several more (N, N) float64/complex128
-        intermediates on top inside `_image_refl_prep`/`_image_refl_weights`
-        (cos θ, mirror dot, out-of-plane dyad, ρ_v, ρ_h).
-      * measured (git-stash harness against the pre-#328 code, isolating
-        just the weight-table build + `_assemble_Z_enrich_image_numpy`,
-        excluding the separately-chunked Sommerfeld smooth remainder — same
-        scoping `_image_weight_window_fn`'s own #323 gate uses for
-        `_Z_sommerfeld_remainder`): pec 46.72 MB, refl-coef 139.07 MB,
-        sommerfeld 58.30 MB.
-      * what the fixed code allocates is all n_enrich-bounded: the six
-        (N, n_enrich)/(n_enrich, N)/(n_enrich, n_enrich) weight sub-blocks
-        plus their small per-mode intermediates. Measured: pec 0.88 MB,
-        refl-coef 1.07 MB, sommerfeld 0.88 MB.
+    The Sommerfeld smooth-remainder step (`_Q_sommerfeld_remainder_enrich`)
+    is monkeypatched to `_stub_sommerfeld_remainder_enrich` for the
+    duration of the trace: it runs AFTER the weight-table branch this issue
+    is about, and its own field-projection array is a separate,
+    already-addressed O(N) (not O(N²)) transient that would otherwise push
+    every mode's peak well past any budget tight enough to catch the actual
+    regression — the same kind of exclusion `_image_weight_window_fn`'s
+    #323 gate makes for `_Z_sommerfeld_remainder`, done here via monkeypatch
+    (rather than a narrower call) because the real entry point bundles both
+    steps together and the point of this test is to trace that entry point.
 
-    6 MB therefore sits ~5.5x above the fixed peak (worst mode measured)
-    and ~2x below the smallest N²-scale object that could come back (the
-    11.5 MB float64 gemm precursor the PEC branch casts from). The
-    Sommerfeld remainder-field reaction (`_Q_sommerfeld_remainder_enrich`)
-    is excluded on purpose here — a separate, already-addressed transient
-    outside this issue's scope.
+    Arithmetic at the N = 803 basis functions this hentenna deck builds
+    (n=100; n_enrich=6 K≥3 junctions; tracemalloc sees numpy's data
+    allocations; one (N, N) complex128 table is 16 N² = 10.3 MB):
+
+      * measured against the pre-#328 code (identical stub, single real
+        call to `_enrichment_Z_assemble`): pec 21.13 MB, refl-coef
+        62.19 MB, sommerfeld 26.34 MB.
+      * measured against the fix: pec 0.81 MB, refl-coef 0.88 MB,
+        sommerfeld 0.86 MB — flat across modes, as expected when nothing
+        scales with N.
+
+    6 MB sits ~7x above the fixed peak (worst mode) and ~3.5x below the
+    smallest pre-fix failure (PEC — the cheapest per-pair weight, and so
+    the tightest margin of the three modes).
     """
     import tracemalloc
 
-    from momwire import _ground_refl
-    from momwire._quadrature import leggauss
-    from momwire.bspline import _xfem_projection_coeffs
+    monkeypatch.setattr(
+        BSplineSolver,
+        "_Q_sommerfeld_remainder_enrich",
+        _stub_sommerfeld_remainder_enrich,
+    )
 
-    kw = _hentenna_enrich_kwargs(n=150, ground_clearance=0.25, **ground_kw)
+    kw = _hentenna_enrich_kwargs(n=100, ground_clearance=0.25, **ground_kw)
     sim = BSplineSolver(**kw)
     geom = sim._build_geometry()
     supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
     n_segs = geom["n_segs_total"]
 
-    specs = sim._enrichment_specs(geom)
-    n_enrich = len(specs)
-    assert n_enrich > 0  # guard the guard
-    spec_seg = np.fromiter((s[3] for s in specs), dtype=np.int64, count=n_enrich)
-    spec_origin = np.fromiter(
-        (0 if s[4] == "left" else 1 for s in specs), dtype=np.int64, count=n_enrich
-    )
-    seg_l_arr = np.ascontiguousarray(geom["seg_l"], dtype=np.float64)
-    seg_r_arr = np.ascontiguousarray(geom["seg_r"], dtype=np.float64)
-    h_arr = np.ascontiguousarray(geom["h_per_seg"], dtype=np.float64)
-    supp_arr = np.ascontiguousarray(supp_seg, dtype=np.int64)
-    polys_arr = np.ascontiguousarray(polys, dtype=np.float64)
-    a_squared = float(sim._uniform_radius) ** 2
-    gl_xi, gl_w = leggauss(sim.n_qp_sing)
-    t01_arr = np.ascontiguousarray(0.5 * (gl_xi + 1.0))
-    w01_arr = np.ascontiguousarray(0.5 * gl_w)
-    proj_arr = (
-        np.ascontiguousarray(_xfem_projection_coeffs(sim.degree))
-        if sim.enrichment_variant == "stable"
-        else np.ascontiguousarray(np.zeros(sim.degree + 1))
-    )
-    eps_t = (
-        _ground_refl.eps_tilde(sim.ground_eps, sim.omega, sim.eps)
-        if sim.ground_eps is not None
-        else None
-    )
-
     tracemalloc.start()
     try:
         tracemalloc.reset_peak()
-        blocks = sim._image_weight_enrich_blocks(geom, spec_seg, eps_t=eps_t)
-        _Z_pe, _Z_ep, Z_ee = sim._assemble_Z_enrich_image_numpy(
-            spec_seg,
-            spec_origin,
-            seg_l_arr,
-            seg_r_arr,
-            h_arr,
-            *blocks,
-            supp_arr,
-            polys_arr,
-            a_squared,
-            float(sim.k),
-            float(sim.omega),
-            float(sim.eps),
-            float(sim.mu),
-            t01_arr,
-            w01_arr,
-            proj_arr,
-            float(sim.ground_z),
-        )
+        enrich = sim._enrichment_Z_assemble(geom, supp_seg, polys)
         _cur, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
 
     # Guard the guard: a fill that computed nothing would pass on
     # allocation while measuring nothing at all.
-    assert np.any(Z_ee != 0.0)
+    assert enrich is not None and np.any(enrich["Z_ee"] != 0.0)
     assert peak < 6_000_000, (
         f"enrichment image fill peaked {peak / 1e6:.2f} MB "
         f"(one (N, N) complex table = {16 * n_segs**2 / 1e6:.2f} MB) — an "
