@@ -1,6 +1,7 @@
 # Fly.io config for the momwire primer site (static Astro/Starlight build,
-# served by nginx) — momwire.antennaknobs.dev. Same shape as the
-# antennaknobs-docs app: static files, scale-to-zero, near-free.
+# served by nginx) — momwire.dev (nginx 301s momwire.antennaknobs.dev and
+# www.momwire.dev to the apex). Same shape as the antennaknobs-docs app:
+# static files, scale-to-zero, near-free.
 #
 # Deploy from THIS directory so the build context is site/:
 #   cd site

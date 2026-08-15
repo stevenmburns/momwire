@@ -2,7 +2,7 @@
   "name": "momwire-primer-site",
   "version": "0.0.1",
   "private": true,
-  "description": "A voltage in a gap — a method-of-moments primer keyed to the momwire source, served at momwire.antennaknobs.dev. Built with Astro + Starlight.",
+  "description": "A voltage in a gap — a method-of-moments primer keyed to the momwire source, served at momwire.dev. Built with Astro + Starlight.",
   "type": "module",
   "scripts": {
     "dev": "astro dev",
