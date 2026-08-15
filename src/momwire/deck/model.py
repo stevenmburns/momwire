@@ -15,9 +15,10 @@ consumer needs in *card* terms — an echo, a table addressed by segment —
 travels alongside the model rather than inside it.
 
 Nothing here is populated by the geometry front-end alone: ``wires`` and the
-framing fields are filled by unit B of momwire#359, and the excitation,
-loading, ground and request fields by the units that follow.  The dataclass is
-complete from the start so the seam never moves.
+Every field here is a dialect front end's to fill and
+:func:`~momwire.deck.build_solver`'s to read; ``node_gaps`` is the one the
+``nec2`` dialect never writes, and it is here anyway because it is how a
+NEC-5 dialect's segment-end sources will land.
 """
 
 from __future__ import annotations
