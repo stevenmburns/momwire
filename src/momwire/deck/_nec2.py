@@ -9,9 +9,9 @@ This is where NEC's vocabulary lives and stops: the framing (comments,
 geometry, the ``GE`` terminator), the execute-card state machine, the
 environment (``GN``/``GD``), excitation and frequency (``EX``/``FR``),
 loading and insulation (``LD``/``IS``) and the extended kernel (``EK``) are
-all implemented here.  What remains for the next unit of momwire#359 is
-``build_solver`` — mapping the finished :class:`~momwire.deck.model.DeckModel`
-onto momwire's solver families — not any more card semantics.
+all implemented here.  Nothing downstream of this module speaks NEC: a model
+is handed to :func:`~momwire.deck.build_solver`, which knows about wires,
+arclengths and ports and has never heard of a tag.
 """
 
 from __future__ import annotations
