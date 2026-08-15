@@ -3520,7 +3520,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     # Finite ground: Fresnel-weighted image (same J fill,
                     # per-pair weight tables on both terms) instead of the
                     # PEC dot.
-                    Z = Z - self._ground_finite_Z(J_img, supp_seg, polys, geom)
+                    # In-place subtract (issue #334): `Z = Z - ...` held the
+                    # old Z, the new Z, and the finite-ground image block —
+                    # three n_basis² matrices at once. `Z -=` folds the
+                    # subtraction into Z's own buffer, holding two.
+                    Z -= self._ground_finite_Z(J_img, supp_seg, polys, geom)
                 else:
                     td_img = self._image_tangent_dot(geom["tangents"])
                     Z = Z - self._assemble_Z(
@@ -3743,6 +3747,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 n_total = n_p + n_e
                 Z_aug = np.zeros((n_total, n_total), dtype=np.complex128)
                 Z_aug[:n_p, :n_p] = Z
+                # Z is fully copied into Z_aug's polynomial block and never
+                # read again on this path (the branch returns below) — drop
+                # it here rather than at function exit, halving the peak
+                # (issue #334).
+                del Z
                 Z_aug[:n_p, n_p:] = enrich["Z_pe"]
                 Z_aug[n_p:, :n_p] = enrich["Z_ep"]
                 Z_aug[n_p:, n_p:] = enrich["Z_ee"]
@@ -3902,6 +3911,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 n_total = n_p + n_e
                 Z_aug = np.zeros((n_total, n_total), dtype=np.complex128)
                 Z_aug[:n_p, :n_p] = Z
+                # Z is fully copied into Z_aug's polynomial block and never
+                # read again on this path (the branch returns below) — drop
+                # it here rather than at function exit, halving the peak
+                # (issue #334).
+                del Z
                 Z_aug[:n_p, n_p:] = enrich["Z_pe"]
                 Z_aug[n_p:, :n_p] = enrich["Z_ep"]
                 Z_aug[n_p:, n_p:] = enrich["Z_ee"]
