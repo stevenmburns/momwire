@@ -1645,17 +1645,28 @@ assemble_Z_bspline_weighted_windowed(
 
 // Batched (swept-k) variant of assemble_Z_bspline_kernel. J carries a leading
 // k axis (n_k, NM, NM, N, N) and omega is an array; the basis tables
-// (support_seg, polys, td_all) are k-independent and reused across the sweep.
-// Returns (n_k, n_basis, n_basis). Lets compute_impedance_swept assemble the
-// whole sweep in one call instead of one per frequency, the bspline analog of
-// triangular's batched assemble_Z.
+// (support_seg, polys, tangents_row, tangents_col) are k-independent and
+// reused across the sweep. Returns (n_k, n_basis, n_basis). Lets
+// compute_impedance_swept assemble the whole sweep in one call instead of
+// one per frequency, the bspline analog of triangular's batched assemble_Z.
+//
+// tangents_row / tangents_col are (n_segs, 3) per-segment unit-tangent
+// tables — NOT the (N, N) dot-product table the kernel used to take
+// (issue #333, the swept-batched twin of #318's windowed fix). The tangent
+// dot for a given (sm, sn) pair is formed in-kernel from the two rows, same
+// as assemble_Z_bspline_windowed_kernel does. The caller passes
+// (tangents, tangents) for the free-space term and (tangents,
+// mirrored_tangents) for the PEC image term — row side is always the real
+// geometry, column side carries the mirror when one applies — so one kernel
+// serves both without ever materialising an N² table.
 template<int D>
 static py::array_t<std::complex<double>>
 assemble_Z_bspline_swept_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
     py::array_t<double, py::array::c_style | py::array::forcecast> polys,
-    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents_row,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents_col,
     py::array_t<double, py::array::c_style | py::array::forcecast> omega_array,
     double eps_,
     double mu_
@@ -1665,7 +1676,8 @@ assemble_Z_bspline_swept_kernel(
     auto j_view = J.unchecked<5>();
     auto ss_view = support_seg.unchecked<2>();
     auto p_view = polys.unchecked<3>();
-    auto td_view = td_all.unchecked<2>();
+    auto tr_view = tangents_row.unchecked<2>();
+    auto tc_view = tangents_col.unchecked<2>();
     auto om = omega_array.unchecked<1>();
 
     size_t n_k = (size_t)J.shape(0);
@@ -1678,6 +1690,18 @@ assemble_Z_bspline_swept_kernel(
     }
     if ((size_t)om.shape(0) != n_k) {
         throw std::runtime_error("omega_array length must match J.shape(0)");
+    }
+    if (tangents_row.shape(1) != 3 || tangents_col.shape(1) != 3) {
+        throw std::runtime_error(
+            "tangents_row / tangents_col shape must be (n_segs, 3)");
+    }
+    // support_seg ids are absolute segment indices into J's trailing (N, N)
+    // axes, so the only sound bound for the tangent tables is that they
+    // cover J's segment range — same convention as the windowed kernel.
+    if ((size_t)tangents_row.shape(0) < (size_t)J.shape(3) ||
+        (size_t)tangents_col.shape(0) < (size_t)J.shape(4)) {
+        throw std::runtime_error(
+            "tangents_row / tangents_col must cover J's segment range");
     }
 
     py::array_t<std::complex<double>> Z({n_k, n_basis, n_basis});
@@ -1699,7 +1723,11 @@ assemble_Z_bspline_swept_kernel(
                     int64_t sm = ss_view(m, a);
                     for (int b = 0; b < NM; b++) {
                         int64_t sn = ss_view(n, b);
-                        double td = td_view(sm, sn);
+                        // Tangent dot on the fly, not read from an (N, N)
+                        // table hoisted for the whole sweep (issue #333).
+                        double td = tr_view(sm, 0) * tc_view(sn, 0) +
+                                    tr_view(sm, 1) * tc_view(sn, 1) +
+                                    tr_view(sm, 2) * tc_view(sn, 2);
                         double wA_re = 0.0, wA_im = 0.0;
                         double wPhi_re = 0.0, wPhi_im = 0.0;
                         for (int p = 0; p < NM; p++) {
@@ -1895,7 +1923,8 @@ assemble_Z_bspline_swept(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
     py::array_t<double, py::array::c_style | py::array::forcecast> polys,
-    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents_row,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents_col,
     py::array_t<double, py::array::c_style | py::array::forcecast> omega_array,
     double eps_,
     double mu_,
@@ -1904,10 +1933,12 @@ assemble_Z_bspline_swept(
     switch (max_d) {
         case 1:
             return assemble_Z_bspline_swept_kernel<1>(
-                J, support_seg, polys, td_all, omega_array, eps_, mu_);
+                J, support_seg, polys, tangents_row, tangents_col,
+                omega_array, eps_, mu_);
         case 2:
             return assemble_Z_bspline_swept_kernel<2>(
-                J, support_seg, polys, td_all, omega_array, eps_, mu_);
+                J, support_seg, polys, tangents_row, tangents_col,
+                omega_array, eps_, mu_);
         default:
             throw std::runtime_error(
                 "assemble_Z_bspline_swept: max_d must be 1 or 2");
@@ -6133,11 +6164,15 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("cancel_flag") = 0);
     m.def("assemble_Z_bspline_swept", &assemble_Z_bspline_swept,
           "Batched (swept-k) assemble: J is (n_k, max_d+1, max_d+1, N, N) and "
-          "omega is an array; the basis tables are k-independent. Returns "
-          "(n_k, n_basis, n_basis) — the bspline analog of triangular's "
-          "batched assemble_Z.",
+          "omega is an array; the basis tables are k-independent. "
+          "tangents_row / tangents_col are (n_segs, 3) per-segment tangent "
+          "tables — the kernel forms each pair's dot in-kernel rather than "
+          "reading an (N, N) table (issue #333); pass (tangents, tangents) "
+          "for free space and (tangents, mirrored_tangents) for the PEC "
+          "image term. Returns (n_k, n_basis, n_basis) — the bspline analog "
+          "of triangular's batched assemble_Z.",
           py::arg("J"), py::arg("support_seg"),
-          py::arg("polys"), py::arg("td_all"),
+          py::arg("polys"), py::arg("tangents_row"), py::arg("tangents_col"),
           py::arg("omega_array"), py::arg("eps"), py::arg("mu"),
           py::arg("max_d"));
     m.def("bspline_assemble_offedge_block", &bspline_assemble_offedge_block,
