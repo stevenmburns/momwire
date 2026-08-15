@@ -4345,3 +4345,208 @@ def test_bspline_basis_build_holds_no_n_squared_transient():
         f"basis build peaked {peak / 1e6:.2f} MB (8 N**2 = "
         f"{8 * n**2 / 1e6:.2f} MB) — the design matrix is dense again"
     )
+
+
+# ----------------------------------------------------------------------
+# Observer-banded point-matched fill (momwire#332 unit A)
+# ----------------------------------------------------------------------
+
+_SIN_BAND_GROUNDS = [
+    pytest.param({}, id="free"),
+    pytest.param({"ground_z": 0.0}, id="pec"),
+    pytest.param({"ground_z": 0.0, "ground_eps": (13.0, 0.005)}, id="refl-coef"),
+    pytest.param(
+        {
+            "ground_z": 0.0,
+            "ground_eps": (13.0, 0.005),
+            "ground_model": "sommerfeld",
+        },
+        id="sommerfeld",
+    ),
+]
+
+
+def _sin_band_wires(mixed):
+    """One elevated half-wave wire, or two side by side when the case wants
+    two radii — mixed radii are what force `_radius_runs` to intersect its
+    runs with the observer band instead of dispatching whole."""
+    lam = 22.0
+    ys = np.linspace(-0.962 * lam / 4, 0.962 * lam / 4, 2)
+
+    def wire(x):
+        return np.column_stack([np.full_like(ys, x), ys, np.full_like(ys, 4.0)])
+
+    return [wire(0.0), wire(0.7)] if mixed else [wire(0.0)]
+
+
+@pytest.mark.parametrize(
+    "wire_radius",
+    [pytest.param(0.0005, id="uniform"), pytest.param([0.0005, 0.002], id="mixed")],
+)
+@pytest.mark.parametrize("extended_kernel", [False, True])
+@pytest.mark.parametrize("ground_kwargs", _SIN_BAND_GROUNDS)
+def test_sinusoidal_banded_assembly_is_bit_equal(
+    ground_kwargs, extended_kernel, wire_radius
+):
+    """`SinusoidalSolver._assemble_Z` must give the same matrix whatever the
+    observer band is (issue #332). Banding moves residency, not arithmetic:
+    each Z row is one Φ row reduced against M_{A,B,C} on the SOURCE axis, so
+    nothing about the band can reach an output element's reduction order.
+    Equality is exact, and this asserts exact — a tolerance would not be a
+    gate here.
+
+    Exact is the only useful gate for the EK cases in particular. EK-vs-
+    reduced deltas are themselves O((a/R)²), so a band that mis-sliced an EK
+    input would still land inside every physics tolerance in the suite while
+    being wrong. Same reasoning for the reflection-coefficient case's (N, N)
+    specular tables, which have to take the band on their observer axis
+    alongside the observer centres.
+
+    Both geometries sit above `_DENSE_ASSEMBLY_THRESHOLD` on purpose,
+    asserted below: under it `_assemble_Z` clamps to a single band, because
+    the reduction there is a dense zgemm whose k-blocking BLAS chooses from
+    the operand shape — banding it reassociates (measured 8.6e-15 relative
+    at N=25). Above it the reduction is CSC, which sums a column's ~3
+    nonzeros in storage order regardless of row count.
+    """
+    import momwire.sinusoidal as smod
+
+    mixed = not np.isscalar(wire_radius)
+    kw = dict(
+        wires=_sin_band_wires(mixed),
+        nsegs=40 if mixed else 81,
+        wavelength=22.0,
+        wire_radius=wire_radius,
+        extended_kernel=extended_kernel,
+        **ground_kwargs,
+    )
+
+    whole = SinusoidalSolver(**kw)
+    whole.swept_mem_mb = 1 << 20  # one band over every row: the pre-#332 fill
+    geom = whole._build_geometry()
+    N = geom["n_segs"]
+    # Guard the guard: below the threshold the band is clamped to N and every
+    # case here would be comparing the whole fill against itself.
+    assert N >= smod._DENSE_ASSEMBLY_THRESHOLD
+    if mixed:
+        assert len(whole._radius_runs(geom)) == 2
+    Z_whole, _ = whole._assemble_Z(geom, whole.k)
+
+    # 7 rows leaves a ragged final band at both N (81 = 11·7 + 4, 80 = 11·7
+    # + 3), which is where an off-by-one in the band bookkeeping would show;
+    # 1 row is the degenerate end of the range.
+    for rows_per_band in (1, 7):
+        sim = SinusoidalSolver(**kw)
+        # Ask for a row count through the solver's own budget arithmetic
+        # rather than restating it here.
+        sim.swept_mem_mb = rows_per_band * sim._fill_row_bytes(N) / (1 << 20)
+        Z_banded, _ = sim._assemble_Z(sim._build_geometry(), sim.k)
+        assert np.array_equal(Z_whole, Z_banded), (
+            f"{rows_per_band}-row bands disagree with the whole fill: max rel "
+            f"{np.abs(Z_banded - Z_whole).max() / np.abs(Z_whole).max():.3e}"
+        )
+
+
+@pytest.mark.parametrize(
+    "ground_kwargs, swept_mem_mb, budget_mb",
+    [
+        pytest.param({}, 1, 6, id="free"),
+        pytest.param({"ground_z": 0.0}, 1, 6, id="pec"),
+        pytest.param(
+            {"ground_z": 0.0, "ground_eps": (13.0, 0.005)}, 1, 6, id="refl-coef"
+        ),
+        pytest.param(
+            {
+                "ground_z": 0.0,
+                "ground_eps": (13.0, 0.005),
+                "ground_model": "sommerfeld",
+            },
+            2,
+            16,
+            id="sommerfeld",
+        ),
+    ],
+)
+def test_sinusoidal_assembly_holds_no_whole_matrix_field_tensor(
+    ground_kwargs, swept_mem_mb, budget_mb
+):
+    """The point-matched fill must not hold any (N, N) field tensor (issue
+    #332). It used to hold several: the free-space Φ triple plus the matmul
+    temporaries, the image triple on top of that under a ground, and the
+    Sommerfeld remainder triple plus the C2-scaled differences on top of
+    that. `_assemble_Z` now sweeps observer bands bounded by `swept_mem_mb`.
+
+    Arithmetic for the thresholds, at the N = 1200 segments this geometry
+    builds (tracemalloc sees numpy's data allocations; Z is allocated inside
+    the fill, so it is subtracted off below):
+
+      * every table that could come back is complex128 (N, N) = 16 N² =
+        23.04 MB, and the ones that actually would come back are Φ TRIPLES
+        at 69.1 MB. 23.04 MB is the conservative floor, so both thresholds
+        only have to sit under it.
+      * measured on the pre-#332 whole-tensor fill, above Z: 110.2 MB free
+        space, 176.1 MB PEC and refl-coef, 242.1 MB sommerfeld.
+      * measured on the banded fill, above Z: 1.35 MB free space, 1.08 MB
+        PEC, 1.08 MB refl-coef (all at swept_mem_mb = 1), 11.84 MB
+        sommerfeld (at 2 — see below).
+
+    6 MB therefore sits ~4.4x above the worst free/image mode and ~3.8x
+    below the smallest N²-scale object that could return.
+
+    Sommerfeld gets 16 MB instead because the remainder evaluator carries a
+    fixed working set for the interpolated grid dyad — issue #343's
+    transient, measured flat at 10.07 / 10.15 / 10.31 MB for N = 300 / 600 /
+    1200 and flat again across band heights of 1 to 64 rows. A constant is
+    not an N² table, so it belongs under the threshold rather than in it,
+    but it does eat the margin: 16 MB is 1.35x over the measurement and
+    1.44x under the floor.
+
+    That same fixed working set is rebuilt per band, at ~0.074 s each, so
+    the sommerfeld case runs at swept_mem_mb = 2 (9-row bands) rather than
+    1 (4-row): 20 s instead of 45 s for 1 MB more transient (10.93 →
+    11.84 MB). Each case pins its own `swept_mem_mb` because the band is
+    itself part of the measured transient — what the gate catches is
+    anything that does NOT shrink with the band.
+
+    `_image_refl_prep`'s specular tables are deliberately NOT in scope: five
+    float64 (N, N) tables cached per geometry, retired by #332's unit B. The
+    warm-up fill below is what moves them — and the Sommerfeld grid, and the
+    basis coefficients — outside the traced region, so this gate measures
+    the fill's own transient and nothing it merely reads.
+    """
+    import tracemalloc
+
+    # 150 short edges on one straight wire: N = 1200 with one radius, so one
+    # `_radius_runs` run and nothing per-segment large enough to compete with
+    # the band that sets the budget. Same shape as the #318/#323 gates.
+    n_edges, seg_per_edge = 150, 8
+    lam = 22.0
+    ys = np.linspace(-0.962 * lam / 4, 0.962 * lam / 4, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])]
+    sim = SinusoidalSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=lam,
+        **ground_kwargs,
+    )
+    geom = sim._build_geometry()
+    assert geom["n_segs"] == n_edges * seg_per_edge  # N = 1200
+    sim.swept_mem_mb = swept_mem_mb
+
+    Z, _ = sim._assemble_Z(geom, sim.k)  # warm the caches the fill only reads
+    del Z
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        Z, _ = sim._assemble_Z(geom, sim.k)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    transient = peak - Z.nbytes
+    assert transient < budget_mb * 1_000_000, (
+        f"banded fill peaked {transient / 1e6:.2f} MB above Z (16 N**2 = "
+        f"{16 * Z.shape[0] ** 2 / 1e6:.2f} MB) — a whole-matrix field tensor "
+        "is back"
+    )
