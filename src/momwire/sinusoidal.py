@@ -86,6 +86,14 @@ _CONTACT_TINY = 1e-30
 # Measured crossover on Kaby Lake R / OpenBLAS-pthreads ≈ 60.
 _DENSE_ASSEMBLY_THRESHOLD = 60
 
+# Complex entries per observer chunk of the Sommerfeld remainder evaluator
+# (`_field_tensor_sommerfeld_remainder`): the grid interpolation's block is
+# (rows, N·n_qp_sommerfeld), so this caps it at 8 MB whatever the mesh.
+# Named rather than inline since momwire#332 unit D gave the evaluator a
+# streaming outlet — the chunk is now the granularity a consumer reduces at,
+# so a gate has to be able to shrink it. Value unchanged.
+_REMAINDER_CHUNK_ELEMS = 1 << 19
+
 # The extended-kernel payload `_field_components_bcast` takes on its GALERKIN
 # path (momwire#246), as distinct from the point-matched path's plain
 # `(src_a, ind1, ind2)` triple:
@@ -2963,7 +2971,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return Phi_const, Phi_sin, Phi_cos
 
     def _field_tensor_sommerfeld_remainder(
-        self, geom, k, eps_t, obs_centers=None, obs_tangents=None, cos_shape="cos"
+        self,
+        geom,
+        k,
+        eps_t,
+        obs_centers=None,
+        obs_tangents=None,
+        cos_shape="cos",
+        consume=None,
+        row_group=1,
     ):
         """Smooth Sommerfeld-remainder tensor S[3, M, N]: the tangential
         remainder field of segment n's three source shapes (`cos_shape`) at the
@@ -2991,6 +3007,25 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         0.05-wl dipole (where the remainder is ~20 ohm, so a sign error
         is a ~2x miss), not derived here — same discipline as the
         ground-plan's PEC-limit sign pinning.
+
+        `consume` is the streaming outlet (momwire#332 unit D). The evaluator
+        has always walked its observers in chunks, sized so the grid
+        interpolation's own (rows, N·q) block stays bounded; with a consumer
+        given, each chunk's `(3, rows, N)` piece is handed straight to
+        `consume(i0, i1, block)` and NOTHING is returned, so the full S never
+        exists. That is the whole of unit D on the tested side: the Galerkin
+        caller's observers are the test quadrature points, M = N·n_qp_test,
+        and its S is `n_qp_test` times the matrix — several times the
+        (nnz, N) triple it reduces to. The point-matched callers pass no
+        consumer and get the tensor back exactly as before, chunk boundaries
+        included.
+
+        `row_group` is the consumer's alignment: chunks are rounded DOWN to a
+        multiple of it (never below one group), so a caller whose reduction
+        groups observers — the Galerkin one's `n_qp_test` nodes per test
+        segment — sees every group whole inside one chunk and can reduce it
+        without carrying a partial sum across the boundary. The default 1
+        leaves the chunk arithmetic untouched.
         """
         gz = self.ground_z
         seg_c = geom["seg_centers"]
@@ -3050,8 +3085,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         obs_t = seg_t if obs_tangents is None else np.asarray(obs_tangents, dtype=float)
         M = obs_c.shape[0]
 
-        S = np.empty((3, M, N), dtype=np.complex128)
-        chunk = max(1, (1 << 19) // max(n_src, 1))
+        S = None if consume is not None else np.empty((3, M, N), dtype=np.complex128)
+        chunk = max(1, _REMAINDER_CHUNK_ELEMS // max(n_src, 1))
+        if row_group > 1:
+            chunk = max(row_group, (chunk // row_group) * row_group)
+        shp_w = shp * w_node[None]
         for i0 in range(0, M, chunk):
             self._checkpoint()  # per observer chunk of the eval block
             i1 = min(i0 + chunk, M)
@@ -3059,7 +3097,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 obs_c[i0:i1], obs_t[i0:i1], srcf, t_src, gz, k, grid
             )
             fq = proj.reshape(i1 - i0, N, q)
-            S[:, i0:i1, :] = np.einsum("snq,mnq->smn", shp * w_node[None], fq)
+            # Per output element this is a sum over the q source nodes and
+            # nothing else, so it does not see the chunk it is in: the block
+            # a consumer gets is bit-identical to the same rows of the whole
+            # S, at any chunk size.
+            block = np.einsum("snq,mnq->smn", shp_w, fq)
+            del proj, fq
+            if consume is None:
+                S[:, i0:i1, :] = block
+            else:
+                consume(i0, i1, block)
+            del block
         return S
 
     # ------------------------------------------------------------------
