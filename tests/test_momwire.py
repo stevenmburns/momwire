@@ -2067,6 +2067,31 @@ def test_bspline_swept_fully_batched_matches_per_freq(degree, ground_z):
     _ = C_LIGHT  # (kept for symmetry with sibling tests)
 
 
+def test_bspline_swept_fully_batched_grounded_bent_deck_matches_per_freq():
+    """The fully batched swept fast path's PEC-image branch must agree with
+    per-frequency solves on a BENT deck, not the straight horizontal wire
+    `test_bspline_swept_fully_batched_matches_per_freq` uses for its
+    `ground_z=0.0` case. A straight horizontal wire has t_z == 0 on every
+    segment, so the image mirror M = diag(1, 1, -1) is the identity on
+    every tangent — a dropped or mis-signed mirror on the image tangent
+    table is then numerically invisible (the #323 trap, from the same side
+    as #333's mirrored tangent table). `_grounded_window_kw`'s inverted-V
+    gives every segment a z-component, so the mirror has to be applied
+    correctly for this to pass.
+    """
+    kw = _grounded_window_kw()
+    sim = BSplineSolver(**kw)
+    assert sim._swept_batched_available()
+
+    k0 = 2 * np.pi / kw["wavelength"]
+    k_array = np.linspace(0.94 * k0, 1.06 * k0, 6)
+    z_swept = sim.compute_impedance_swept(k_array)
+    for kk, zs in zip(k_array, z_swept):
+        sim_f = BSplineSolver(**{**kw, "wavelength": 2 * np.pi / kk})
+        z_f, _ = sim_f.compute_impedance()
+        assert abs(zs - z_f) <= 1e-9 * abs(z_f), f"k={kk}: swept={zs}, single={z_f}"
+
+
 def test_bspline_swept_fully_batched_multifeed_matches_per_freq():
     """Multi-feed variant of the batched fast path: per-feed driving-point
     vector must match per-frequency solves."""
@@ -3014,6 +3039,98 @@ def test_bspline_swept_batched_path_skips_fallback_hoist(monkeypatch):
     s2 = BSplineSolver(**kw)
     monkeypatch.setattr(s2, "_same_edge_prep_swept_chunks", unexpected)
     s2.compute_y_matrix_swept(k_array)
+
+
+def test_bspline_swept_batched_z_chunks_holds_no_n_squared_tangent_table(monkeypatch):
+    """`_swept_batched_z_chunks` must not hoist an (N, N) tangent-dot table
+    for the whole sweep (issue #333, the unconverted swept-batched twin of
+    #318). Pre-fix it built `td_free = tangents @ tangents.T` (8 N² bytes)
+    unconditionally, plus `td_img = self._image_tangent_dot(tangents)`
+    (another 8 N² bytes) when grounded — both alive across every chunk of
+    the sweep, exactly like #318's `td_all` was alive across the whole
+    dense fill. Post-fix the C++ kernel forms each pair's dot in-kernel
+    from the (N, 3) tangent table (`assemble_Z_bspline_swept`'s new
+    `tangents_row`/`tangents_col` args), so the only per-sweep tables are
+    `tangents` itself and, when grounded, its O(N) mirrored copy.
+
+    Isolating the setup cost (as opposed to the per-chunk J tensor, which
+    is deliberately large and budget-governed — a different concern from
+    this issue): a spy on `_seg_seg_full_moments_offedge_swept`, the first
+    thing each chunk iteration allocates, snapshots tracemalloc's CURRENT
+    (not peak) byte count the moment it's entered for chunk 0 — i.e.
+    everything `_swept_batched_z_chunks` built before the per-chunk loop's
+    first heavy allocation: `_same_edge_prep`'s per-edge `A_static` blocks
+    (kept deliberately, O(ΣN_e²) — see issue #330), `tangents`, and the
+    grounded mirrored copy — nothing O(N²) in segment count N.
+
+    Geometry mirrors #318/#329's N=1200 shape (150 edges × 8 segs), grounded
+    (PEC image, so BOTH retired tables would have been resident) so the
+    dropped floor is the full 16 N²:
+
+      * 16 N² = 23.04 MB is what the pre-fix code held here (measured:
+        23.86 MB — the extra ~0.8 MB is the same-edge `A_static` blocks
+        plus bookkeeping, present either way).
+      * measured post-fix: 0.85 MB.
+
+    3 MB sits ~3.5x above the measured 0.85 MB and ~6.6x below the 23.04 MB
+    two-table floor — the same margin discipline as this file's other
+    N²-transient gates (#318, #323, #329, #330).
+    """
+    import tracemalloc
+
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not (
+        bmod._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL
+        and bmod._HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL
+    ):
+        pytest.skip("batched swept accelerators not built")
+
+    n_edges, seg_per_edge = 150, 8
+    L = 0.962 * 22 / 2
+    ys = np.linspace(-L / 2, L / 2, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 7.0)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+        ground_z=0.0,
+    )
+    assert sim._swept_batched_available()
+    geom = sim._build_geometry()
+    supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    n = supp_seg.shape[0]
+    assert n == n_edges * seg_per_edge  # N = 1200
+
+    k0 = 2 * np.pi / 22.0
+    k_array = np.linspace(0.98 * k0, 1.02 * k0, 2)
+
+    real_offedge = bmod._seg_seg_full_moments_offedge_swept
+    captured = {}
+
+    def spy(*args, **kwargs):
+        cur, _peak = tracemalloc.get_traced_memory()
+        captured.setdefault("setup_bytes", cur)
+        return real_offedge(*args, **kwargs)
+
+    monkeypatch.setattr(bmod, "_seg_seg_full_moments_offedge_swept", spy)
+
+    tracemalloc.start()
+    try:
+        gen = sim._swept_batched_z_chunks(k_array, geom, supp_seg, polys)
+        next(gen)
+    finally:
+        tracemalloc.stop()
+
+    setup_bytes = captured["setup_bytes"]
+    assert setup_bytes < 3_000_000, (
+        f"_swept_batched_z_chunks setup peaked {setup_bytes / 1e6:.2f} MB "
+        f"at N={n} (16*N**2 = {16 * n**2 / 1e6:.2f} MB is the retired "
+        "two-table floor) — an N-squared tangent-dot table is back"
+    )
 
 
 def test_bspline_swept_same_edge_prep_holds_no_reg_table(monkeypatch):
