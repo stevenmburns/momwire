@@ -62,3 +62,42 @@ basis=...)` maps it onto the solver families. A NEC-5 dialect is therefore a
 second parser, not a second pipeline. Nothing NEC-2-specific may enter the
 model's vocabulary; `node_gaps` is already there because it is how NEC-5's
 segment-end sources will land.
+
+## The mesh `build_solver` builds
+
+`DeckModel` describes conductors span by span; a solver wants each electrical
+wire as one polyline with the shared nodes named in `junctions=`. That
+translation is `momwire/deck/_polylines.py`, and it is written to reproduce
+antennaknobs' `geometry.flat_wires_to_polylines` **bitwise** — the same
+polylines, in the same order, with the same junction groups and the same port
+arclengths, evaluated with the same float expressions.
+
+That is a deliberately strong target, and the reason is the rewire phase:
+after it the portal's answers come from here, and the reference path that
+could have noticed a moved number is gone. `tests/test_deck_nec2_corpus.py`
+holds the measurement — all 41 antenna decks of the corpus, constructor
+arguments and then `compute_port_solution().y`, bitwise.
+
+Two pieces of the translation are worth naming because they are not obvious
+from the model alone:
+
+* **A port's element becomes its own edge.** A feed or a load is stamped in
+  one element, and giving that element an edge of its own puts the port at
+  half of one edge length instead of a running sum over the mesh. The
+  exception is a port already sitting at its edge's midpoint — the only port
+  on an odd-element edge — where the split would move nothing and add two
+  knots. This also has to happen before a closed loop is cut, because the cut
+  goes through the port's edge.
+* **Cycles are cut at a port edge.** A loop has no node of degree other than
+  2, so nothing ends a polyline; the cut opens it, and the two cut nodes
+  become two-member junctions so KCL still carries the current round. A
+  parasitic loop has no port edge and is cut at its lowest-numbered one.
+
+One scoping difference from the reference is known and deliberate. The
+midpoint exception above is tested per EDGE here; antennaknobs tests it per
+NEC WIRE, so a wire that the junction shatter has already cut takes the split
+there and not here. No corpus deck reaches it — the shatter fires on no deck
+in the corpus — and the model has no way to say "NEC wire", which is the
+vocabulary the reference's version needs. Should a deck ever exercise both at
+once, the two meshes differ by two knots on one edge and by float noise in
+the answer, not by physics.
