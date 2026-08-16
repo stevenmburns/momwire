@@ -1473,6 +1473,32 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             w_Phi = np.full(w_A.shape, complex(w_Phi))
         return w_A, w_Phi
 
+    def _image_weight_row_bytes(self, n_segs):
+        """Bytes-per-observer-row `_image_weight_window_fn`'s closure holds
+        alongside one moment window, for the chunked image fill's row-byte
+        budget arithmetic (issue #347 — follow-up to #338, which sized that
+        arithmetic on the moment window alone).
+
+        PEC / sommerfeld (`pec_weights` / `sommerfeld_weights` above): the
+        two returned (chunk, n_segs) complex128 windows (w_A, w_Phi) — one
+        gemm output plus its `ones_like`/`full` sibling. Nothing else of
+        row-scale is built.
+
+        refl-coef (`refl_weights` above): `specular_pair_tables` builds
+        three (chunk, n_segs) float64 tables (cos_th, td_img, P), then
+        `fresnel_rho` builds two (chunk, n_segs) complex128 tables (rho_v,
+        rho_h) from `cos_th` — both live at once while `a_term_weights` /
+        `phi_term_weights` reduce them into the two returned complex128
+        windows (w_A, w_Phi). All seven arrays are row-shaped, so the
+        budget counts all seven at their true dtype width rather than
+        pretending everything is one size class.
+        """
+        if self.ground_eps is None or self.ground_model == "sommerfeld":
+            # w_A, w_Phi: two complex128 (chunk, n_segs) windows.
+            return 2 * n_segs * 16
+        # cos_th, td_img, P (float64) + rho_v, rho_h, w_A, w_Phi (complex128).
+        return 3 * n_segs * 8 + 4 * n_segs * 16
+
     def _image_weight_window_fn(self, geom):
         """Producer of the image weight WINDOWS the chunked accumulator
         consumes: `weights_fn(i0, i1) -> (w_A, w_Phi)`, each complex128 of
@@ -2486,7 +2512,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # `del` the window and weight arrays before the next iteration
         # rebinds their names, so the loop never holds an old chunk and its
         # replacement at once.
-        row_bytes = (d + 1) ** 2 * n_segs * 16
+        #
+        # #338 left this arithmetic sizing the moment window ALONE — the
+        # weight windows `weights_fn` returns (and, for refl-coef, the
+        # specular intermediates it builds them from) ride along on top of
+        # every chunk uncounted, which is why the grounded transient only
+        # improved to 1.22x (PEC) / 1.68x (refl-coef) budget there instead
+        # of the free-space fill's 0.996x. `_image_weight_row_bytes` prices
+        # those extra arrays in so the chunk shrinks to actually honor the
+        # budget (issue #347).
+        row_bytes = (d + 1) ** 2 * n_segs * 16 + self._image_weight_row_bytes(n_segs)
         chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
         for i0 in range(0, n_segs, chunk):
             self._checkpoint()  # per observer chunk of the image fill
