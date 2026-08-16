@@ -88,6 +88,29 @@ execute group over a port set that never changes. Stamping a load impedance
 is port algebra and stays with the consumer — `momwire.deck` puts the gap in
 the matrix and hands over the spec.
 
+## SimNEC portal
+
+Installing momwire puts **`momwire-nec2c`** on your path — a resident NEC
+engine speaking the protocol [SimNEC](https://ae6ty.com/smith_charts/) uses
+to drive `nec2c`, with momwire's solver behind it. Point SimNEC's NEC portal
+dialog at that command and its Smith chart, tuner and sweeps run on momwire.
+`python -m momwire.portal` is the long spelling, and `--selftest` is the
+deployment smoke.
+
+```bash
+momwire-nec2c -version                            # NEC2momwire.<major>.<minor>
+momwire-nec2c --selftest                          # PASS / FAIL, no checkout needed
+momwire-nec2c --basis sinusoidal < dipole.nec     # or run a deck by hand
+```
+
+Setup, the two filename rules SimNEC enforces, `--basis`, the caching flags
+and what refusals look like:
+**[momwire.dev/reference/portal-usage/](https://momwire.dev/reference/portal-usage/)**.
+
+`momwire.portal` may use the solver API and `momwire.deck`; nothing else in
+momwire may import from it. The SimNEC protocol is the portal's business
+alone, and a test enforces that.
+
 ## Install
 
 ```bash
