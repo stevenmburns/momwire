@@ -5147,6 +5147,136 @@ def test_sinusoidal_refl_coef_specular_tables_are_not_cached():
     )
 
 
+def _specular_reference(centers, ground_z, src_centers=None):
+    """The pre-#357 straight-line spelling of `specular_ray_tables`.
+
+    Transcribed, not imported: it is the anchor the tiled buffer-reusing
+    build has to reproduce bit for bit, so it has to survive that build
+    being rewritten again.
+    """
+    from momwire._ground_refl import _TINY
+
+    c = np.asarray(centers, dtype=float)
+    cs = c if src_centers is None else np.asarray(src_centers, dtype=float)
+    dx = c[:, 0][:, None] - cs[:, 0][None, :]
+    dy = c[:, 1][:, None] - cs[:, 1][None, :]
+    dz = c[:, 2][:, None] + cs[:, 2][None, :] - 2.0 * ground_z
+    hyp = np.hypot(dx, dy)
+    rmag = np.sqrt(dx * dx + dy * dy + dz * dz)
+    cos_th = dz / np.maximum(rmag, _TINY)
+    safe = hyp > _TINY
+    inv_hyp = np.where(safe, 1.0 / np.where(safe, hyp, 1.0), 1.0)
+    px = np.where(safe, -dy * inv_hyp, 1.0)
+    py = np.where(safe, dx * inv_hyp, 0.0)
+    return cos_th, px, py
+
+
+def _specular_geometries():
+    """Observer/source pairs that between them reach every branch: square
+    and rectangular, tiles that divide the observer axis evenly and tiles
+    that leave a ragged last one, and — the branch a random cloud never
+    hits — coincident horizontal positions, whose specular ray is vertical
+    and whose p̂ is therefore the x̂ fallback.
+    """
+    rng = np.random.default_rng(20250817)
+    out = []
+    for n_obs, n_src in ((1, 40), (7, 40), (40, 40), (37, 91), (91, 37)):
+        obs = rng.normal(size=(n_obs, 3))
+        src = rng.normal(size=(n_src, 3))
+        obs[:, 2] = np.abs(obs[:, 2]) + 0.5
+        src[:, 2] = np.abs(src[:, 2]) + 0.5
+        # Degenerate (vertical) rays: some observers directly over a source.
+        n_deg = min(n_obs, n_src, 3)
+        obs[:n_deg, :2] = src[:n_deg, :2]
+        out.append(pytest.param(obs, src, id=f"{n_obs}x{n_src}"))
+    return out
+
+
+@pytest.mark.parametrize("tile_elems", [1, 8, 64, 512, 1 << 15])
+@pytest.mark.parametrize("obs, src", _specular_geometries())
+def test_specular_ray_tables_are_bit_equal_to_the_plain_spelling(
+    monkeypatch, obs, src, tile_elems
+):
+    """`specular_ray_tables` must return the plain spelling's floats exactly,
+    at every tile size (issue #357 item 2).
+
+    The build now walks the observer axis in tiles, reuses three scratch
+    tables across them, and grows each output in place out of the
+    difference it started as. Every one of those is a claim about IEEE
+    arithmetic — that in-place accumulation keeps the same association,
+    that `-(a*b)` equals `(-a)*b`, that the reciprocal of an entry forced
+    to 1.0 is already 1.0 so the outer `where` is redundant. `array_equal`
+    against the transcribed original is what makes those claims checkable;
+    a tolerance would pass on any of them being wrong.
+
+    The tile size is swept from 1 pair (every row its own tile, ragged
+    everywhere) to the shipped 2**15 (one tile for all of these), because
+    the tile boundary is where a reused buffer would leak between rows.
+    """
+    from momwire import _ground_refl
+
+    monkeypatch.setattr(_ground_refl, "_SPECULAR_TILE_ELEMS", tile_elems)
+    got = _ground_refl.specular_ray_tables(obs, 0.0, src_centers=src)
+    want = _specular_reference(obs, 0.0, src_centers=src)
+    for name, g, w in zip(("cos_th", "px", "py"), got, want):
+        assert np.array_equal(g, w), (
+            f"{name} drifted from the plain spelling at tile_elems="
+            f"{tile_elems}, shape {obs.shape[0]}x{src.shape[0]}: max abs "
+            f"delta {np.abs(g - w).max():.3e}"
+        )
+    # The square-case call path (src_centers=None) shares the same body but
+    # a different argument, so it gets its own pass.
+    got_sq = _ground_refl.specular_ray_tables(obs, 0.0)
+    want_sq = _specular_reference(obs, 0.0)
+    assert all(np.array_equal(g, w) for g, w in zip(got_sq, want_sq))
+
+
+def test_specular_ray_tables_transient_is_one_tile():
+    """`specular_ray_tables` must allocate its three outputs and a bounded
+    tile, not a dozen whole-block intermediates (issue #357 item 2).
+
+    The plain spelling held nine (N_obs, N_src) float64 tables live at its
+    peak — dx, dy, dz, hyp, rmag, inv_hyp and the three returns — which is
+    what `BSplineSolver._image_weight_row_bytes` prices for it. The tiled
+    build holds the three returns plus a (3, tile) scratch block and one
+    bool tile, allocated once for the whole walk.
+
+    Measured at N = 700 (one float64 (N, N) table = 3.92 MB): 11.76 MB for
+    the three outputs plus 0.85 MB of scratch, against 35.3 MB for the
+    plain spelling's nine. The bar is 14 MB — 1.11x over the measurement
+    and 2.5x under the old peak, so it fails if even ONE whole-block
+    intermediate comes back (that alone would be 15.7 MB).
+    """
+    import tracemalloc
+
+    from momwire import _ground_refl
+
+    n = 700
+    rng = np.random.default_rng(11)
+    obs = rng.normal(size=(n, 3))
+    obs[:, 2] = np.abs(obs[:, 2]) + 1.0
+    src = rng.normal(size=(n, 3))
+    src[:, 2] = np.abs(src[:, 2]) + 1.0
+
+    _ground_refl.specular_ray_tables(obs, 0.0, src_centers=src)  # warm
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        out = _ground_refl.specular_ray_tables(obs, 0.0, src_centers=src)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    one_table_mb = 8 * n * n / 1e6
+    assert sum(t.nbytes for t in out) == 3 * 8 * n * n  # guard the guard
+    assert peak < 14_000_000, (
+        f"specular_ray_tables peaked {peak / 1e6:.2f} MB at N = {n} "
+        f"(three outputs = {3 * one_table_mb:.2f} MB, one more whole-block "
+        f"intermediate would be {one_table_mb:.2f} MB on top) — the "
+        "untiled working set is back"
+    )
+
+
 def _somm_remainder_solver(n_edges=75, seg_per_edge=8):
     """A straight sommerfeld wire for the #357 item-1 gates below."""
     lam = 22.0
