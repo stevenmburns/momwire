@@ -2861,8 +2861,19 @@ def test_bspline_chunked_image_fill_transient_honors_swept_mem_mb_budget(
     lifted to z = 2.2 over ground_z = 0.0 so the image build is
     non-degenerate. Measured at swept_mem_mb = 8 (row_bytes sizes a
     ~48-row chunk before this fix, same arithmetic the free-space gate
-    exercises): 1.219x (pec) / 1.677x (refl-coef) budget pre-fix, 0.99x /
-    1.06x post-fix — comfortably either side of the <= 1.1x bar from #338.
+    exercises): 1.219x (pec) / 1.677x (refl-coef) budget pre-fix.
+
+    First pass at the fix landed pec at 0.99x and refl-coef at 1.06x —
+    inside the <= 1.1x bar locally, but only by pricing the arrays
+    `specular_pair_tables`/`fresnel_rho` RETURN, not every array their
+    calls actually hold onto (CPython keeps every local alive for a
+    function's whole frame lifetime, not just what it returns). A GitHub
+    runner's BLAS/allocator pushed that same 1.06x to 1.11x and failed
+    the gate in CI. `_image_weight_row_bytes`'s refl-coef branch now
+    prices the full set of intermediates that stay live inside
+    `refl_weights` (see its docstring for the array inventory), which
+    measures 0.99x (pec) / 0.72x (refl-coef) here — real headroom under
+    1.1x for allocator variance rather than sitting right at the line.
     """
     import tracemalloc
 
