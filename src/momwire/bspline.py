@@ -71,6 +71,7 @@ from ._bspline_kernels import (
 )
 from ._quadrature import leggauss
 
+from . import _bspline_kernels
 from . import _ground_refl
 from . import _sommerfeld
 from . import _wire_loading
@@ -2318,6 +2319,42 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z_Phi = Z_Phi / (1j * self.omega * self.eps)
         return Z_A + Z_Phi
 
+    def _offedge_fallback_row_bytes(self, n_segs):
+        """Extra per-observer-row bytes the chunked fills' row-byte budget
+        must carry when `_seg_seg_full_moments_offedge` falls back to its
+        pure-numpy reference (issue #347 — follow-up to #338, which noted
+        but did not fix this: "the pure-Python/numpy fallback producer ...
+        genuinely does carry the ~7x internal-intermediate transient the
+        issue described").
+
+        Checked against the LIVE flag on the `_bspline_kernels` module
+        object (not a name imported at load time) so a test that
+        monkeypatches `_bspline_kernels._HAVE_BSPLINE_ACCEL` — the same
+        precedent `test_bspline_cpp_kernel_matches_numpy` uses to force the
+        numpy path — is honored here too. Zero whenever the C++
+        accelerator is available: its per-pair work is fixed-size stack
+        scratch inside the kernel, independent of N (issue #338).
+
+        Without the accelerator, `_seg_seg_full_moments_offedge`'s numpy
+        path builds three (row, n_qp, n_segs, n_qp[, 3]) pairwise tables
+        that all outlive each other before reducing to the (d+1, d+1, row,
+        n_segs) window this row-byte budget otherwise prices alone:
+        `diff` (float64, plus its own trailing length-3 axis, 24 bytes/
+        elem), `R` (float64, 8 bytes/elem), and `G` (complex128, plus the
+        `exp(-jkR)` temporary the expression that builds it needs before
+        the division, effectively 2x its own 16 bytes/elem). Measured in
+        isolation via tracemalloc (fit across several (n_segs, chunk,
+        n_qp) combinations): ~55-56 bytes/(pair-quadrature-point) at
+        n_qp=4, consistent with that accounting; 64 gives the arithmetic
+        below a safety margin over the measured coefficient without
+        shrinking the chunk more than the fit calls for.
+        """
+        if _bspline_kernels._HAVE_BSPLINE_ACCEL:
+            return 0
+        n_qp2 = self.n_qp_pair * self.n_qp_pair
+        bytes_per_pair_point = 64
+        return n_qp2 * n_segs * bytes_per_pair_point
+
     def _compute_Z_dense_chunked(self, geom, k, supp_seg, polys, same_edge_prep=None):
         """Free-space dense Z without materialising the (d+1, d+1, N, N)
         moment tensor (issue #136).
@@ -2407,7 +2444,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # swept_mem_mb=256: 511 MB transient (1.997x budget) before this
         # `del`, 255 MB (0.996x) after — bit-exact, since nothing about
         # the windows' contents or the accumulation order changes.
-        row_bytes = (d + 1) ** 2 * n_segs * 16
+        #
+        # `_offedge_fallback_row_bytes` adds the numpy-fallback producer's
+        # own internal-intermediate overhead (issue #347) — zero, and this
+        # collapses to the #338 arithmetic above, whenever the C++
+        # accelerator is available (the certified 8,320-basis numbers all
+        # exercise that path).
+        row_bytes = (d + 1) ** 2 * n_segs * 16 + self._offedge_fallback_row_bytes(
+            n_segs
+        )
         chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
         for i0 in range(0, n_segs, chunk):
             self._checkpoint()  # per observer chunk of the fill+assemble
@@ -2520,8 +2565,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # improved to 1.22x (PEC) / 1.68x (refl-coef) budget there instead
         # of the free-space fill's 0.996x. `_image_weight_row_bytes` prices
         # those extra arrays in so the chunk shrinks to actually honor the
-        # budget (issue #347).
-        row_bytes = (d + 1) ** 2 * n_segs * 16 + self._image_weight_row_bytes(n_segs)
+        # budget (issue #347). `_offedge_fallback_row_bytes` does the same
+        # for the mirrored-source moment window's own numpy-fallback
+        # overhead when the C++ accelerator is unavailable.
+        row_bytes = (
+            (d + 1) ** 2 * n_segs * 16
+            + self._image_weight_row_bytes(n_segs)
+            + self._offedge_fallback_row_bytes(n_segs)
+        )
         chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
         for i0 in range(0, n_segs, chunk):
             self._checkpoint()  # per observer chunk of the image fill
