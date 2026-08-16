@@ -2,20 +2,26 @@ import os
 import sys
 import warnings
 
+from pybind11.setup_helpers import Pybind11Extension
 from setuptools import setup
 from setuptools.command.build_ext import build_ext
-from pybind11.setup_helpers import Pybind11Extension
 
 # Build-time error classes. setuptools.errors is the modern home (distutils is
 # removed in Python 3.12+); fall back to distutils for very old setuptools.
 try:
-    from setuptools.errors import CCompilerError, ExecError, PlatformError, FileError
+    from setuptools.errors import CCompilerError, ExecError, FileError, PlatformError
 except ImportError:  # pragma: no cover - ancient setuptools
     from distutils.errors import (  # type: ignore[no-redef]
         CCompilerError,
+    )
+    from distutils.errors import (
         DistutilsExecError as ExecError,
-        DistutilsPlatformError as PlatformError,
+    )
+    from distutils.errors import (
         DistutilsFileError as FileError,
+    )
+    from distutils.errors import (
+        DistutilsPlatformError as PlatformError,
     )
 
 # momwire._accelerators is an *optional* C++ speedup: every module that imports
@@ -149,5 +155,10 @@ setup(
     # Listed explicitly rather than discovered: the list is short, and an
     # explicit one cannot silently ship a stray directory under src/.
     packages=["momwire", "momwire.deck", "momwire.portal"],
+    # The `momwire-nec2c-shared` client (issue #379). A top-level MODULE rather
+    # than part of the package on purpose: its whole value is that running it
+    # imports neither `momwire` nor NumPy, and a module inside the package
+    # would import `momwire/__init__.py` to get there.
+    py_modules=["momwire_nec2c_client"],
     package_dir={"": "src/"},
 )

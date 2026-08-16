@@ -68,8 +68,19 @@ validation = [
 # has to be a bare one-dot number — and afterwards runs the command through
 # `sh -c` with cwd=$HOME, so the entry point must never depend on the working
 # directory. Both properties are pinned in tests/test_portal.py.
+#
+# `momwire-nec2c-shared` (issue #379) is the OPT-IN sibling: a thin, stdlib-only
+# forwarder to one long-lived server process, for a session where SimNEC's
+# spawn-per-evaluation-burst behaviour makes the cold start (Python + NumPy +
+# parse + mesh + first fill) the dominant cost. It must NOT resolve into
+# `momwire.portal` — importing the package is the ~680 ms it exists to delete —
+# so it lives in its own top-level module with no momwire import in it, and the
+# `py_modules` entry in setup.py is what ships it. The name obeys the same two
+# filename rules as its stock sibling: it CONTAINS `nec2c` and it contains no
+# `out`, `nec5` or `nec42`. Both entries are pinned in tests/test_portal.py.
 [project.scripts]
 momwire-nec2c = "momwire.portal:main"
+momwire-nec2c-shared = "momwire_nec2c_client:main"
 
 [project.urls]
 Homepage = "https://github.com/stevenmburns/momwire"
