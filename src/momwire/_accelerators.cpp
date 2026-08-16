@@ -4494,16 +4494,33 @@ static inline double asinh_minus_arg_from_t(double t) {
     return -(std::sinh(t) - t);
 }
 
-// The extended kernel's payload for the fused far fill (momwire#246 unit C):
-// `SinusoidalGalerkinSolver._ek_pairs`' `_EKPairs`, flattened. `src_a` is one
-// radius per SOURCE segment (N), `eligible` the pair rule's mask over
-// (observer row, source segment) — M*nq rows, exactly the rows `obs_centers`
-// has — and `gx`/`gw` the composite sinh-mapped rule
-// `SinusoidalSolver._ek_delta_rule` built, passed in rather than rebuilt here
-// so the two backends integrate against the same nodes by construction.
+// The extended kernel's payload for the fused far fill (momwire#246 unit C).
+// `src_a` is one radius per SOURCE segment (N) and `gx`/`gw` are the composite
+// sinh-mapped rule `SinusoidalSolver._ek_delta_rule` built, passed in rather
+// than rebuilt here so the two backends integrate against the same nodes by
+// construction.
+//
+// Eligibility arrives as the pair rule's GROUP LABELS rather than as its mask
+// (momwire#358): `g_obs` per TEST segment (M) and `g_src` per source segment
+// (N), with the pair rule evaluated in the sweep as
+//
+//     eligible(observer row of test segment m, source n)
+//         = g_obs[m] >= 0 && g_obs[m] == g_src[n]
+//
+// which is `SinusoidalGalerkinSolver._ek_pairs`' `(gi == gj) & (gi >= 0)`
+// verbatim. The mask this replaces was an (M*nq, N) bool — 11.5 MB of
+// resident input at N = 1200 — whose rows were constant over one test
+// segment's nq observers by construction, because the caller built it by
+// indexing the observer axis through `m_of_obs = repeat(arange(M), nq)` and
+// the kernel already requires `obs_centers` to have exactly M*nq rows in that
+// order. So the labels carry the same information at 8·(M + N) bytes, the
+// blocked numpy fill's own spelling (its per-block mask has always been a
+// slice of the same predicate), and the test segment's label is hoisted out
+// of the source loop instead of being re-read from memory per pair.
 struct GalerkinEkBlock {
     const double *src_a;
-    const bool *eligible;
+    const int64_t *g_obs;
+    const int64_t *g_src;
     const double *gx;
     const double *gw;
     size_t n_gl;
@@ -4689,6 +4706,15 @@ galerkin_far_fill_impl(
         PYSIM_CANCEL_POLL();
         size_t e0 = (size_t)st_(m), e1 = (size_t)st_(m + 1);
         if (e1 == e0) continue;  // segment carries no basis support
+
+        // This test segment's extended-kernel group label, read once per
+        // segment rather than per pair (momwire#358). Every observer row this
+        // iteration fills belongs to segment `m`, so the eligibility the mask
+        // used to carry is `g_obs_m` against each source's own label — see
+        // `GalerkinEkBlock`. `-1` is the never-extend value of the label
+        // convention, so the reduced instantiation (null `ekb`) reaches the
+        // delta's guard with a label that can never match.
+        const int64_t g_obs_m = WITH_EK ? ekb->g_obs[m] : (int64_t)-1;
 
         // Rows e0:e1 belong to this test segment alone, so the accumulation
         // below owns them outright and needs them zeroed first.
@@ -5010,7 +5036,7 @@ galerkin_far_fill_impl(
                 // this point moves: the reduced tables are #205's own, and the
                 // delta is a separate sum at its own size added to them before
                 // the projection — exactly where the numpy seam adds it.
-                if (WITH_EK && ekb->eligible[o * N + n]) {
+                if (WITH_EK && g_obs_m >= 0 && ekb->g_src[n] == g_obs_m) {
                     // ζ = ρ·sinh t, R = ρ·cosh t. The variable is NOT ξ: in ξ
                     // the delta is a spike of width ρ inside a segment of half
                     // length H, so a fixed rule's accuracy is governed by ρ/H
@@ -5281,10 +5307,11 @@ sinusoidal_galerkin_far_fill(
         folding ? &fold : nullptr);
 }
 
-// The extended-kernel twin (momwire#246 unit C). Same arguments plus the
-// `_EKPairs` payload — one source radius per segment, the pair rule's mask
-// over (observer row, source segment), and the delta quadrature's composite
-// rule — and the same three arrays out.
+// The extended-kernel twin (momwire#246 unit C). Same arguments plus the EK
+// payload — one source radius per segment, the pair rule's GROUP LABELS
+// (momwire#358: per test segment and per source segment, the mask derived in
+// the sweep), and the delta quadrature's composite rule — and the same three
+// arrays out.
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>>
@@ -5302,7 +5329,8 @@ sinusoidal_galerkin_far_fill_ek(
                 py::array::c_style | py::array::forcecast> w_entry,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
     py::array_t<double, py::array::c_style | py::array::forcecast> src_a,
-    py::array_t<bool, py::array::c_style | py::array::forcecast> eligible,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_obs,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_src,
     py::array_t<double, py::array::c_style | py::array::forcecast> ek_gx,
     py::array_t<double, py::array::c_style | py::array::forcecast> ek_gw,
     uintptr_t cancel_flag = 0,
@@ -5310,23 +5338,32 @@ sinusoidal_galerkin_far_fill_ek(
     std::complex<double> scale = std::complex<double>(1.0, 0.0)
 ) {
     auto sa = src_a.unchecked<1>();
-    auto el = eligible.unchecked<2>();
+    auto go = group_obs.unchecked<1>();
+    auto gs = group_src.unchecked<1>();
     auto ex = ek_gx.unchecked<1>();
     auto ew = ek_gw.unchecked<1>();
     if (sa.shape(0) != src_centers.shape(0)) {
         throw std::runtime_error("src_a must have one radius per source segment");
     }
-    if (el.shape(0) != obs_centers.shape(0) ||
-        el.shape(1) != src_centers.shape(0)) {
+    // One observer label per TEST segment, not per observer row: the sweep
+    // reads it once per segment and the rows of one segment shared a mask row
+    // anyway (momwire#358). `starts` is the CSR's per-test-segment row index,
+    // so it has M + 1 entries.
+    if (go.shape(0) != starts.shape(0) - 1) {
         throw std::runtime_error(
-            "eligible must have shape (obs rows, source segments)");
+            "group_obs must have one label per test segment (len(starts) - 1)");
+    }
+    if (gs.shape(0) != src_centers.shape(0)) {
+        throw std::runtime_error(
+            "group_src must have one label per source segment");
     }
     if (ex.shape(0) != ew.shape(0) || ex.shape(0) < 1) {
         throw std::runtime_error("ek_gx and ek_gw must have matching length");
     }
     GalerkinEkBlock ekb;
     ekb.src_a = src_a.data();
-    ekb.eligible = eligible.data();
+    ekb.g_obs = group_obs.data();
+    ekb.g_src = group_src.data();
     ekb.gx = ek_gx.data();
     ekb.gw = ek_gw.data();
     ekb.n_gl = (size_t)ex.shape(0);
@@ -6595,9 +6632,14 @@ PYBIND11_MODULE(_accelerators, m) {
     m.def("sinusoidal_galerkin_far_fill_ek", &sinusoidal_galerkin_far_fill_ek,
           "Extended-kernel twin of sinusoidal_galerkin_far_fill "
           "(momwire#246): the same fused far fill, plus the folded EK delta "
-          "on the pairs `eligible` selects. `src_a` is one radius per SOURCE "
-          "segment, `eligible` the pair rule's (obs rows, N) mask, and "
-          "`ek_gx`/`ek_gw` the composite sinh-mapped rule "
+          "on the pairs the group labels select. `src_a` is one radius per "
+          "SOURCE segment; `group_obs` (one label per TEST segment, i.e. "
+          "len(starts) - 1) and `group_src` (one per source segment) are the "
+          "pair rule's coaxial-and-equal-radius labels, from which the sweep "
+          "derives eligibility as `g_obs[m] >= 0 and g_obs[m] == g_src[n]` "
+          "(momwire#358 — the (obs rows, N) mask this replaced was constant "
+          "over each test segment's observer rows). `ek_gx`/`ek_gw` are the "
+          "composite sinh-mapped rule "
           "`SinusoidalSolver._ek_delta_rule` built — passed in, not rebuilt "
           "here, so both backends integrate the delta on the same nodes. "
           "Returns the same three (nnz, N) arrays, and takes the same "
@@ -6608,7 +6650,7 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("k"), py::arg("eta"),
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("w_entry"), py::arg("starts"),
-          py::arg("src_a"), py::arg("eligible"),
+          py::arg("src_a"), py::arg("group_obs"), py::arg("group_src"),
           py::arg("ek_gx"), py::arg("ek_gw"),
           py::arg("cancel_flag") = 0,
           py::arg("out") = py::none(),
