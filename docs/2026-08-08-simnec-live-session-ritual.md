@@ -1,5 +1,16 @@
 # The live SimNEC session ritual (issue #804)
 
+> **Moved into momwire, 2026-08-15 (#846 phase III / #360).** This is a
+> DATED RECORD of a session that ran on 2026-08-08, kept verbatim: the
+> outcome table below is the evidence, and rewriting the commands it was run
+> with would make it a worse record, not a better one. Read every
+> `antennaknobs.nec_portal` here as `momwire.portal`, every
+> `pip install …/antennaknobs/…` as `pip install momwire`, and the probe
+> string `nec2c.ae6ty.9.1` as the `--legacy-probe` shape (the default became
+> `NEC2momwire.<major>.<minor>` in #828, and reports momwire's own version
+> from #360 on). To RUN the ritual again rather than read it, follow
+> momwire.dev/reference/portal-usage/ and record a new dated table here.
+
 Everything in `antennaknobs.nec_portal` is bench-tested against committed
 oracle printout (32/32 byte-layout, differential harness green). What has
 never happened is a real SimNEC session driving the momwire engine end to
