@@ -24,6 +24,7 @@ from ._nec2_geometry import Nec2Structure, build_geometry
 from .model import (
     DeckModel,
     DeckWire,
+    Environment,
     ExecuteGroup,
     FarFieldRequest,
     LoadSpec,
@@ -51,6 +52,26 @@ _EXECUTE_CARDS = frozenset({"XQ", "RP", "NE", "NH"})
 # modes, MP is advisory, and PT changes what a run prints, not what it
 # computes.  GN's membership is oracle-verified.
 _ARMING_CARDS = frozenset({"EX", "FR", "LD", "GN", "EK"})
+
+# The arming cards that move the OPERATOR — the matrix itself, not the drive
+# it is solved against.  One of these between two execute cards refills
+# without a fresh frequency list, which is `ExecuteGroup.refilled_partial`
+# (spec ``#arming``).
+#
+# Measured on the oracle (probes ``XQ / <card> / XQ``, 2026-08-15): a ``GN``
+# reprints the LOADING / ENVIRONMENT / MATRIX TIMING preamble with no
+# FREQUENCY block and the impedance moves with the new half-space; an ``EK``
+# prints the same shape; an ``EX`` prints no preamble at all, because moving
+# the drive does not move the matrix.  ``LD`` is deliberately ABSENT from
+# this set and present in `_ARMING_CARDS`: an ``LD`` between two execute
+# cards makes the LOADING TABLE itself per group, which is a second change
+# with its own fixture, and the flag alone would announce a table that had
+# not moved.
+#
+# The test is the CARD, not the value it carries: NEC rebuilds because a
+# ground or kernel card arrived, so ``EK`` at the kernel already in force
+# refills exactly as a change does.
+_OPERATOR_CARDS = frozenset({"GN", "EK"})
 
 # NX ends the deck; EN ends it and additionally ends the run.
 _TERMINATORS = frozenset({"NX", "EN"})
@@ -148,6 +169,7 @@ class _PendingGroup:
     print_control: PrintControl | None
     extended_kernel: bool
     multiprocessing: tuple[int, int] | None
+    environment: Environment
     refilled: bool
     refilled_partial: bool
 
@@ -177,6 +199,10 @@ class _Nec2Parser:
         self._print_control: PrintControl | None = None
         self._multiprocessing: tuple[int, int] | None = None
         self._saw_ex = False
+        # An operator card since the last execute card (see
+        # `_OPERATOR_CARDS`): the operator rebuilds, the frequency list does
+        # not.  Never set before the FIRST execute card, which refills whole.
+        self._operator_dirty = False
 
         # Excitation retention (spec ``#excitation-retention``): the first EX
         # after an execution REPLACES the list, every further one before the
@@ -198,12 +224,9 @@ class _Nec2Parser:
         self._second_medium: SecondMedium | None = None
 
         # EK (spec ``#ek--extended-thin-wire-kernel``): I1 == -1 is the only
-        # thing that turns it off.  `_kernel_dirty` is a change since the
-        # last execute card with no new FR — the operator rebuilds, but the
-        # frequency list does not (spec: "a kernel change ... re-arms without
-        # a new FR").
+        # thing that turns it off.  The card's effect on the refill lives in
+        # `_operator_dirty`, which every operator card sets.
         self._extended_kernel = False
-        self._kernel_dirty = False
 
         # LD / IS (spec ``#ld--loading`` / ``#is--insulated-sheath``).
         # `_loads` are the per-segment port loads (types 0, 1, 4); `_loaded`
@@ -311,10 +334,7 @@ class _Nec2Parser:
     def _ek(self, card: Card) -> None:
         # The test is I1 == -1 and nothing else: EK, EK 0, EK 1, EK 2 and
         # EK -2 all turn the extended kernel on.
-        wanted = card.i(0) != -1
-        if wanted != self._extended_kernel:
-            self._kernel_dirty = self._executed > 0
-        self._extended_kernel = wanted
+        self._extended_kernel = card.i(0) != -1
 
     # -- LD (spec ``#ld--loading``) ------------------------------------------
 
@@ -528,13 +548,20 @@ class _Nec2Parser:
                 print_control=self._print_control,
                 extended_kernel=self._extended_kernel,
                 multiprocessing=self._multiprocessing,
+                environment=Environment(
+                    ground=self._ground,
+                    # No card moves the plane; it is always z = 0 (spec
+                    # ``#gn--ground-parameters``).
+                    ground_z=0.0,
+                    second_medium=self._second_medium,
+                ),
                 refilled=refilled,
-                refilled_partial=self._kernel_dirty and not refilled,
+                refilled_partial=self._operator_dirty and not refilled,
             )
         )
         self._executed += 1
         self._fresh_fr = False
-        self._kernel_dirty = False
+        self._operator_dirty = False
         self._armed = False
         self._sources_stale = True
 
@@ -569,6 +596,8 @@ class _Nec2Parser:
             return
         if card.mnemonic in _ARMING_CARDS:
             self._armed = True
+            if card.mnemonic in _OPERATOR_CARDS and self._executed:
+                self._operator_dirty = True
         if card.mnemonic == "GN":
             self._gn(card)
             return
@@ -667,6 +696,7 @@ class _Nec2Parser:
                     multiprocessing=pending.multiprocessing,
                     refilled=pending.refilled,
                     refilled_partial=pending.refilled_partial,
+                    environment=pending.environment,
                 )
             )
         return feeds, tuple(groups)

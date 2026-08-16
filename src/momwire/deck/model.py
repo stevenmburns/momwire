@@ -32,6 +32,7 @@ __all__ = [
     "WireMaterial",
     "LoadSpec",
     "SecondMedium",
+    "Environment",
     "FarFieldRequest",
     "NearFieldRequest",
     "PrintControl",
@@ -186,6 +187,33 @@ class SecondMedium:
 
 
 @dataclass(frozen=True)
+class Environment:
+    """The half-space a run sits over: the ground, its plane, and the second
+    medium of a cliff.
+
+    The three spellings are :class:`DeckModel`'s own, gathered into one value
+    because a deck states them together and because they are a PER EXECUTE
+    GROUP quantity: a ground card arms the next execute card (spec
+    ``#arming``), so one deck may run once in free space and once over ground
+    and each group is answered over whatever the cards had reached by then.
+    :attr:`ExecuteGroup.environment` is the environment in force at that
+    group's execute card; ``DeckModel``'s own three fields are the deck's
+    LAST one (spec ``#the-deckmodel``).
+
+    Only :attr:`ground` and :attr:`ground_z` reach the matrix.
+    :attr:`second_medium` is read by a far-field request's cliff modes alone,
+    which is why a consumer keying a filled operator on the environment keys
+    it on the ground.
+    """
+
+    # None (free space), "pec", or (model, eps_r, sigma) with model one of
+    # "finite-fast" / "finite" — momwire's own spellings.
+    ground: None | str | tuple[str, float, float] = None
+    ground_z: float = 0.0
+    second_medium: SecondMedium | None = None
+
+
+@dataclass(frozen=True)
 class FarFieldRequest:
     """A far-field pattern.  ``mode`` 0 is the plain space wave, 2 and 3 the
     linear and circular cliffs that read :class:`SecondMedium`."""
@@ -230,10 +258,10 @@ class ExecuteGroup:
     """One execute card's worth of state.
 
     A group is a voltage vector over :attr:`DeckModel.feeds`, a frequency
-    list, and what it asks to be reported.  ``voltages`` is parallel to
-    ``feeds``: a port undriven in this group carries 0, which with a zero load
-    collapses to a shorted gap — present in the matrix, invisible to the
-    physics (spec ``#one-geometry-one-port-set``).
+    list, the environment it sits in, and what it asks to be reported.
+    ``voltages`` is parallel to ``feeds``: a port undriven in this group
+    carries 0, which with a zero load collapses to a shorted gap — present in
+    the matrix, invisible to the physics (spec ``#one-geometry-one-port-set``).
     """
 
     frequencies: tuple[float, ...] = ()
@@ -247,9 +275,15 @@ class ExecuteGroup:
     # True when the operator this group is answered from had to be rebuilt —
     # a fresh frequency list, or the first group of the deck.
     refilled: bool = True
-    # A kernel change between two execute cards rebuilds the operator without
-    # a new frequency list.
+    # An OPERATOR card between two execute cards rebuilds the operator without
+    # a new frequency list (spec ``#arming``).
     refilled_partial: bool = False
+    # The ground and cliff in force AT THIS EXECUTE CARD.  A ground card arms
+    # (spec ``#arming``), so this is not always the deck's — see
+    # :class:`Environment`.  Last in the field order because the class is
+    # public API: a positional construction written against an earlier
+    # release keeps meaning what it meant.
+    environment: Environment = field(default_factory=Environment)
 
 
 @dataclass(frozen=True)
@@ -278,8 +312,14 @@ class DeckModel:
     # (wire, arclength, spec) — stamped at the same kind of point a feed is.
     loads: tuple[tuple[int, float, LoadSpec], ...] = ()
 
-    # None (free space), "pec", or (model, eps_r, sigma) with model one of
-    # "finite-fast" / "finite" — momwire's own spellings.
+    # The deck's LAST environment (see :attr:`environment`).  A ground card
+    # arms, so a deck may pass through several: the per-group value is
+    # :attr:`ExecuteGroup.environment`, and these three are what the cards
+    # had reached by the end of the deck.  Most decks state their ground once
+    # before the first execute card, and then the two are the same thing.
+    #
+    # `ground` is None (free space), "pec", or (model, eps_r, sigma) with
+    # model one of "finite-fast" / "finite" — momwire's own spellings.
     ground: None | str | tuple[str, float, float] = None
     ground_z: float = 0.0
     # The second medium of a cliff, read only by a far-field request's modes
@@ -304,6 +344,21 @@ class DeckModel:
     # the card mnemonics they deferred here.  Empty in a finished dialect;
     # it exists so an unfinished one is honest rather than silent.
     deferred: tuple[str, ...] = field(default=())
+
+    @property
+    def environment(self) -> Environment:
+        """The deck's last environment, as one value.
+
+        The same three fields above, gathered so a consumer can pass "the
+        deck's half-space" around without unpacking it.  A run's environment
+        is its group's — :attr:`ExecuteGroup.environment` — and this is the
+        fallback for a model with no group to ask.
+        """
+        return Environment(
+            ground=self.ground,
+            ground_z=self.ground_z,
+            second_medium=self.second_medium,
+        )
 
     @property
     def frequencies(self) -> tuple[tuple[float, ...], ...]:
