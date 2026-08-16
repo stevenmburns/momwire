@@ -59,11 +59,13 @@ def main() -> int:
 
     def pump_in() -> None:
         seq = 0
+        unit: list[str] = []
         geom: list[str] = []
         fr = ""
         try:
             for line in sys.stdin:
                 child.stdin.write(line)
+                unit.append(line)
                 card = line.split()[0].upper() if line.split() else ""
                 if card in _GEOM_PREFIXES:
                     geom.append(line.strip())
@@ -80,10 +82,13 @@ def main() -> int:
                                 :12
                             ],
                             "cards": len(geom),
+                            # Full deck text: one captured session becomes a
+                            # replayable workload (bench_portal_replay.py).
+                            "deck": "".join(unit),
                         }
                     )
                     seq += 1
-                    geom, fr = [], ""
+                    unit, geom, fr = [], [], ""
         except (BrokenPipeError, ValueError):
             pass
         try:
