@@ -1,6 +1,6 @@
 ---
 title: "Running momwire as SimNEC's engine"
-description: Install the momwire-nec2c portal, point SimNEC at it, choose the physics with --basis, and read the version probe and the refusals.
+description: Install the momwire-nec2c portal, point SimNEC at it, choose the physics with --basis, read the version probe and the refusals, and swap in the shared resident engine.
 ---
 
 [SimNEC](https://ae6ty.com/smith_charts/) (AE6TY) does not link its NEC
@@ -262,6 +262,79 @@ hundred MB, and a full cache costs a re-solve rather than a failure.
 the win here is the single fill per geometry, not parallelism across decks —
 and they multiply the per-process floor by the segment count you are least
 expecting.
+
+## One resident engine: `momwire-nec2c-shared`
+
+SimNEC does not keep one engine per session. It starts a crew, sends a burst
+of decks, and destroys the processes — a live crew-16 session was measured
+starting **51 engines**, each alive about a second. Every one of them paid the
+full cold start (Python, NumPy, parse, mesh, first fill: ~650 ms measured
+here) before it answered anything, and every one took its `--cache` with it
+when it died, so the cache's main case — a value you retype a few minutes
+later — could never hit.
+
+No crew size fixes that. `momwire-nec2c-shared` changes the shape instead:
+
+```bash
+which momwire-nec2c-shared    # e.g. ~/.venvs/momwire/bin/momwire-nec2c-shared
+```
+
+Point the portal dialog at **that** path instead of `momwire-nec2c`, with the
+same flags you were using. Nothing else changes — no preference, no new
+setting, no restart discipline. What SimNEC now spawns is a few-hundred-line
+forwarder that imports neither momwire nor NumPy; it connects to one
+long-lived server holding the engine, and pumps your decks to it. On this
+box:
+
+| | stock `momwire-nec2c` | `momwire-nec2c-shared` |
+|---|---|---|
+| `-version` probe | 610 ms | **70 ms** |
+| one cached deck, spawn to `NX` sentinel | 650 ms | **79 ms** |
+
+The first client to arrive pays ~700 ms to start the server; every client
+after it is the right-hand column. The printout is identical either way —
+all 45 reference decks are compared byte for byte in the test suite,
+refusals included.
+
+### One server per engine, not per session
+
+The server is chosen by a name hashed from the momwire version, the
+interpreter, and the engine flags, under `$XDG_RUNTIME_DIR/momwire-portal/`
+(or `/tmp/momwire-portal-<uid>/` where that is unset). That is the same *two
+entries are two engines* rule the flags already carried: two portal-dialog
+entries differing only in `--basis` get two servers, and a crew of sixteen
+clients configured alike get **one**. So the crew arithmetic above inverts —
+one interpreter, one ~90 MB floor, one `--cache` warmed by every crew member
+at once instead of sixteen cold ones, and one thread-pool budget, since
+solves are serialised across connections.
+
+The server exits when no client has been connected for 15 minutes
+(`--idle-timeout SECONDS` on the same command line changes it) and removes
+its socket on the way out. A server killed less politely leaves a socket file
+behind; the next client notices it answers nothing, removes it, and starts a
+fresh one, so there is nothing to clean up by hand. Its log sits next to the
+socket — that is also where a deck's warnings go, since with several clients
+on one process there is no honest stderr to return them on.
+
+Upgrading momwire changes the hash, so the new version never gets served by
+whatever is still resident from the old one. Servers from before are left to
+their idle timeout.
+
+:::caution[POSIX only, and opt-in]
+The transport is a Unix-domain socket. Windows CPython gained `AF_UNIX` only
+in 3.12 and none of this has been exercised there, so the client refuses on
+one line and points you back at the stock engine. `momwire-nec2c` remains the
+default and is unchanged — this is a second entry point beside it, not a new
+version of it.
+:::
+
+Before pointing a session at it, run its own smoke — it starts a private
+server, sends decks through two separate client invocations, and checks that
+the second was answered by the process the first left behind:
+
+```bash
+momwire-nec2c-shared --selftest
+```
 
 ## Licensing
 
