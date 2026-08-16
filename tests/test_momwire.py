@@ -2915,6 +2915,84 @@ def test_bspline_chunked_image_fill_transient_honors_swept_mem_mb_budget(
     )
 
 
+def test_bspline_offedge_fallback_chunked_fill_transient_honors_budget():
+    """Without the C++ accelerator, `_seg_seg_full_moments_offedge`'s
+    pure-numpy path genuinely carries a large internal-intermediate
+    transient — `diff`, `R`, and `G` pairwise tables that all outlive each
+    other before reducing to the (d+1, d+1, row, n_segs) window the chunk
+    arithmetic otherwise prices alone. #338 measured this in isolation
+    (~7.1x the window's own footprint) but left it unpriced since the
+    certified numbers all exercise the accelerated path, where the C++
+    kernel's per-pair work is fixed-size stack scratch independent of N.
+    `_offedge_fallback_row_bytes` (issue #347) prices it in, gated on the
+    LIVE `_bspline_kernels._HAVE_BSPLINE_ACCEL` flag so it collapses to
+    zero — and this gate degenerates to the accelerated one above — the
+    moment the accelerator is available again.
+
+    Forces the fallback the same way `test_bspline_cpp_kernel_matches_numpy`
+    does: monkeypatching `_bspline_kernels._HAVE_BSPLINE_ACCEL` rather than
+    the name `bspline.py` imports, since `_seg_seg_full_moments_offedge`
+    (in `_bspline_kernels.py`) and `_offedge_fallback_row_bytes` (in
+    `bspline.py`) must observe the SAME flag at call time for the gate to
+    mean anything — a `from ._bspline_kernels import _HAVE_BSPLINE_ACCEL`
+    binding in `bspline.py` would freeze the import-time value and never
+    see this monkeypatch.
+
+    A small, CI-safe geometry (30 edges x 4 segs, N = 120): the fallback's
+    own O(n_qp² · n_segs · chunk) transient is what this measures, not
+    wall-clock scale, so N stays far below the certified 8,320-basis
+    numbers on purpose. Measured: 7.05x budget pre-fix, 0.84x post-fix.
+    """
+    import tracemalloc
+
+    import momwire._bspline_kernels as kmod
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("windowed Z assembly accelerator not built")
+
+    n_edges, seg_per_edge = 30, 4
+    L = 0.962 * 22 / 2
+    ys = np.linspace(-L / 2, L / 2, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.zeros_like(ys)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+    )
+    geom = sim._build_geometry()
+    supp, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    assert supp.shape[0] == n_edges * seg_per_edge  # N = 120
+
+    budget_mb = 2
+    sim.swept_mem_mb = budget_mb
+
+    saved = kmod._HAVE_BSPLINE_ACCEL
+    try:
+        kmod._HAVE_BSPLINE_ACCEL = False
+        tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            Z = sim._compute_Z_dense_chunked(geom, sim.k, supp, polys)
+            _cur, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+    finally:
+        kmod._HAVE_BSPLINE_ACCEL = saved
+
+    budget_bytes = budget_mb * 1024 * 1024
+    transient = peak - Z.nbytes
+    ratio = transient / budget_bytes
+    assert ratio <= 1.1, (
+        f"numpy-fallback chunked fill transient {transient / 1e6:.2f} MB is "
+        f"{ratio:.2f}x the {budget_mb} MB swept_mem_mb budget (want <= "
+        "1.1x) — the fallback-producer row-byte padding is dishonest again"
+    )
+
+
 def test_bspline_dense_dispatch_respects_memory_budget(monkeypatch):
     """Small tensors use the faster tensor path; oversized ones stay chunked."""
     import momwire.bspline as bmod
