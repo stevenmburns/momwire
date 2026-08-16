@@ -14,9 +14,20 @@ import math
 import pytest
 
 from momwire.deck import DeckError, parse, parse_card, tokenize
-from momwire.deck._nec2 import _ARMING_CARDS, _GEOMETRY_CARDS, _REFUSED_BY_NAME
+from momwire.deck._nec2 import (
+    _ARMING_CARDS,
+    _GEOMETRY_CARDS,
+    _OPERATOR_CARDS,
+    _REFUSED_BY_NAME,
+)
 from momwire.deck._nec2_geometry import build_geometry
-from momwire.deck.model import FarFieldRequest, LoadSpec, NearFieldRequest, SecondMedium
+from momwire.deck.model import (
+    Environment,
+    FarFieldRequest,
+    LoadSpec,
+    NearFieldRequest,
+    SecondMedium,
+)
 
 # A minimal runnable deck: one wire, driven, so `parse` gets past the
 # structural "nothing drives the structure" refusal.
@@ -493,6 +504,133 @@ def test_gd_mp_and_pt_are_explicitly_not_arming(card):
 def test_the_arming_set_is_exactly_the_pages_five_cards():
     """§#arming, as a set."""
     assert _ARMING_CARDS == {"EX", "FR", "LD", "GN", "EK"}
+
+
+# -- the operator cards, and the partial refill they produce -----------------
+
+
+def test_the_operator_set_is_exactly_the_pages_two_cards():
+    """§#arming: of the five arming cards, ``GN`` and ``EK`` move the
+    OPERATOR; the rest move the drive, the loading table or the frequency
+    list.  A subset of the arming set by construction."""
+    assert _OPERATOR_CARDS == {"GN", "EK"}
+    assert _OPERATOR_CARDS <= _ARMING_CARDS
+
+
+@pytest.mark.parametrize("card", ["GN 1", "EK"])
+def test_an_operator_card_between_execute_cards_refills_partially(card):
+    """§#arming: an operator card between two execute cards rebuilds the
+    operator without a new frequency list — ``refilled_partial``, not
+    ``refilled``.  ``GN`` alone is enough: no ``EK``, no fresh ``FR``."""
+    model = parse(BODY + f"XQ\n{card}\nXQ\nNX\n")
+    assert model.groups[0].refilled is True
+    assert model.groups[0].refilled_partial is False
+    assert model.groups[1] is not None
+    assert model.groups[1].refilled is False
+    assert model.groups[1].refilled_partial is True
+
+
+@pytest.mark.parametrize("card", ["EX 0 1 2 0 1.", "LD 0 1 3 3 50. 0. 0."])
+def test_an_arming_card_that_is_not_an_operator_card_refills_neither_way(card):
+    """§#arming: the run is real — the card armed it — but nothing announces
+    a rebuilt operator, because ``EX`` moves the drive and ``LD`` is stamped
+    outside the fill."""
+    model = parse(BODY + f"XQ\n{card}\nXQ\nNX\n")
+    assert model.groups[1] is not None
+    assert model.groups[1].refilled is False
+    assert model.groups[1].refilled_partial is False
+
+
+def test_a_fresh_fr_beats_a_partial_refill():
+    """§#arming: an operator card AND a fresh ``FR`` between two execute cards
+    is a whole refill — the frequency list moved too, so the group reports
+    ``refilled`` and not the partial form."""
+    model = parse(BODY + "XQ\nGN 1\nFR 0 1 0 0 21.\nXQ\nNX\n")
+    assert model.groups[1] is not None
+    assert model.groups[1].refilled is True
+    assert model.groups[1].refilled_partial is False
+
+
+def test_an_operator_card_before_the_first_execute_card_refills_whole():
+    """§#arming: the first execute card of a deck always refills, so the
+    partial flag is never set on it."""
+    model = parse(BODY + "GN 1\nEK\nXQ\nNX\n")
+    assert model.groups[0].refilled is True
+    assert model.groups[0].refilled_partial is False
+
+
+def test_the_operator_test_is_the_card_not_the_value_it_carries():
+    """§#arming: NEC rebuilds because a kernel card arrived, not because the
+    kernel differed.  ``EK -1`` on a deck already using the standard kernel
+    refills exactly as a change does."""
+    model = parse(BODY + "XQ\nEK -1\nXQ\nNX\n")
+    assert model.groups[1] is not None
+    assert model.groups[1].extended_kernel is False
+    assert model.groups[1].refilled_partial is True
+
+
+# -- the environment each group ran under ------------------------------------
+
+
+def test_a_group_carries_the_environment_in_force_at_its_execute_card():
+    """§#the-deckmodel: the environment is a per-execute-group quantity.  A
+    ``GN`` between two execute cards arms, so the deck runs once in free
+    space and once over ground and each group says which."""
+    model = parse(BODY + "XQ\nGN 1\nXQ\nNX\n")
+    assert model.groups[0].environment == Environment()
+    assert model.groups[1] is not None
+    assert model.groups[1].environment.ground == "pec"
+    assert model.groups[1].environment.ground_z == 0.0
+
+
+def test_a_ground_to_ground_transition_moves_the_groups_environment_too():
+    """§#the-deckmodel: not only free space to ground — a second ``GN`` over
+    a different half-space is the same per-group move."""
+    model = parse(
+        BODY + "GN 0 0 0 0 13. .005\nXQ\nGN 2 0 0 0 5. .001\nXQ\nNX\n",
+    )
+    assert model.groups[0].environment.ground == ("finite-fast", 13.0, 0.005)
+    assert model.groups[1] is not None
+    assert model.groups[1].environment.ground == ("finite", 5.0, 0.001)
+
+
+def test_the_deck_level_ground_is_the_decks_last_environment():
+    """§#the-deckmodel: ``DeckModel.ground`` keeps meaning what it always
+    meant — the environment the cards had reached at the END of the deck —
+    which for a multi-environment deck is the last group's, not every
+    group's."""
+    model = parse(BODY + "XQ\nGN 1\nXQ\nNX\n")
+    assert model.ground == "pec"
+    assert model.environment == model.groups[-1].environment
+    assert model.groups[0].environment.ground is None
+
+
+def test_a_gd_after_an_execute_card_reaches_no_group():
+    """§#gd--additional-ground-medium: ``GD`` does not arm, so a card that
+    arrives after the last execute card moves the DECK's second medium and no
+    group's — there is no further group for it to reach."""
+    model = parse(BODY + "XQ\nGD 0 0 0 0 5. .001 20. -2.\nXQ\nNX\n")
+    assert model.groups[1] is None
+    assert model.second_medium == SecondMedium(5.0, 0.001, 20.0, -2.0)
+    assert model.groups[0].environment.second_medium is None
+
+
+def test_a_gd_before_an_execute_card_rides_that_groups_environment():
+    """§#gd--additional-ground-medium: the cliff a far-field request reads is
+    the one in force at its own execute card."""
+    model = parse(BODY + "GD 0 0 0 0 5. .001 20. -2.\nXQ\nNX\n")
+    assert model.groups[0].environment.second_medium == SecondMedium(
+        5.0, 0.001, 20.0, -2.0
+    )
+
+
+def test_every_group_of_a_single_environment_deck_carries_the_decks_own():
+    """§#the-deckmodel: the common case, stated so the per-group field is not
+    read as a change of meaning.  Most decks state their ground once before
+    the first execute card, and then every group's environment IS the
+    deck's."""
+    model = parse(BODY + "GN 2 0 0 0 13. .005\nXQ\nEX 0 1 2 0 1.\nXQ\nNX\n")
+    assert [g.environment for g in model.groups] == [model.environment] * 2
 
 
 def test_a_fresh_fr_rebuilds_the_operator():
