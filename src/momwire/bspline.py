@@ -1485,20 +1485,51 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         gemm output plus its `ones_like`/`full` sibling. Nothing else of
         row-scale is built.
 
-        refl-coef (`refl_weights` above): `specular_pair_tables` builds
-        three (chunk, n_segs) float64 tables (cos_th, td_img, P), then
-        `fresnel_rho` builds two (chunk, n_segs) complex128 tables (rho_v,
-        rho_h) from `cos_th` — both live at once while `a_term_weights` /
-        `phi_term_weights` reduce them into the two returned complex128
-        windows (w_A, w_Phi). All seven arrays are row-shaped, so the
-        budget counts all seven at their true dtype width rather than
-        pretending everything is one size class.
+        refl-coef (`refl_weights` above): the first cut of this accounting
+        (issue #347, first pass) only priced the three arrays
+        `specular_pair_tables` RETURNS (cos_th, td_img, P) plus the two
+        `fresnel_rho` returns (rho_v, rho_h) plus the two final windows
+        (w_A, w_Phi) — 1.06x budget locally, but 1.11x on a CI runner
+        with different BLAS/allocator behavior: still dishonest, just by
+        less. CPython keeps every LOCAL VARIABLE in a function's frame
+        alive until the function returns (or the name is reassigned),
+        regardless of whether the code uses it again — not only the
+        values a function returns. Instrumented with per-statement
+        tracemalloc snapshots at the gate's own config (N=1200,
+        swept_mem_mb=8, chunk=30): `specular_ray_tables`' own peak
+        (before `specular_pair_tables` even builds P/td_img) already
+        holds dx, dy, dz, hyp, rmag, safe, inv_hyp alongside its cos_th,
+        px, py returns — none of which the first-pass accounting counted
+        because they die when `specular_ray_tables` returns, before
+        `_image_weight_window_fn`'s caller ever sees them.
+        `specular_pair_tables` itself adds tm_p, tn_p on top of its own
+        cos_th/td_img/P/px/py inputs and returns. `fresnel_rho` then adds
+        sin2 and root, both of which stay bound for its ENTIRE body (used
+        once each, in the `root = sqrt(...)` line, but never reassigned
+        after) — alive through both the rho_v and the rho_h expression,
+        each of which additionally repeats `eps_t * cos_th` textually and
+        so evaluates (and transiently allocates) it twice. Priced
+        additively, at true dtype width, the way the rest of this budget
+        already prices every named array it counts — not attempting to
+        model exactly which of these temporaries overlap in time, the
+        same conservative convention `_offedge_fallback_row_bytes` uses:
+          float64  (8 B/elem):  cos_th, td_img, P, px, py, tm_p, tn_p,
+                                 dx, dy, dz, hyp, rmag, inv_hyp, sin2 (14)
+          bool     (1 B/elem):  safe                             (1)
+          complex128 (16 B/elem): root, rho_v, rho_h, w_A, w_Phi (5)
+        Measured post-fix at the same N=1200/swept_mem_mb=8 config (the
+        larger array count shrinks the chunk further than the first pass
+        did): 0.72x budget — comfortable local headroom under the 1.1x
+        bar for the ~5% CI allocator variance that pushed the first pass
+        (1.06x locally) over on a GitHub runner (1.11x there).
         """
         if self.ground_eps is None or self.ground_model == "sommerfeld":
             # w_A, w_Phi: two complex128 (chunk, n_segs) windows.
             return 2 * n_segs * 16
-        # cos_th, td_img, P (float64) + rho_v, rho_h, w_A, w_Phi (complex128).
-        return 3 * n_segs * 8 + 4 * n_segs * 16
+        n_float64 = 14
+        n_bool = 1
+        n_complex128 = 5
+        return n_float64 * n_segs * 8 + n_bool * n_segs * 1 + n_complex128 * n_segs * 16
 
     def _image_weight_window_fn(self, geom):
         """Producer of the image weight WINDOWS the chunked accumulator
