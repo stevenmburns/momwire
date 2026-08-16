@@ -48,17 +48,24 @@ nec_import = pytest.importorskip(
     "antennaknobs.nec_import", reason="the equivalence reference is not installed"
 )
 ak_geometry = pytest.importorskip("antennaknobs.geometry")
-nec_portal = pytest.importorskip("antennaknobs.nec_portal")
 ak_network = pytest.importorskip("antennaknobs.network")
+
+# The portal's own reading of the same deck. It came home in #846 phase III,
+# so this is an intra-repo import now rather than an `importorskip` on
+# whatever antennaknobs happened to be installed — which matters: once
+# antennaknobs deletes its copy (phase IV) an importorskip here would skip
+# this module forever, silently, and the deck parser would lose the one
+# independent reader it is measured against.
+from momwire.portal import _portal as nec_portal  # noqa: E402
+
 np = pytest.importorskip("numpy")
 
 
 def _corpus() -> list[Path]:
-    """The 44 reference decks, found next to the installed antennaknobs."""
-    import antennaknobs
-
-    root = Path(antennaknobs.__file__).resolve().parents[2]
-    return sorted((root / "tests" / "fixtures" / "nec_portal").glob("*.deck"))
+    """The 44 reference decks — momwire's own, since #846 phase III."""
+    return sorted(
+        (Path(__file__).resolve().parent / "fixtures" / "nec_portal").glob("*.deck")
+    )
 
 
 CORPUS = _corpus()
@@ -332,9 +339,11 @@ def test_the_synthetic_decks_actually_exercise_both_passes():
 #
 # The geometry tests above measure GW/GM/GS/connections; this section adds
 # GN/GD, FR, EX and LD/LD-5 — the state a deck's execute groups run under.
-# The reference for structure/execution is antennaknobs' OWN nec2 parser,
+# The reference for structure/execution is the PORTAL's own nec2 parser,
 # ``nec_portal.parse_deck`` — an independent implementation of the same
-# retention/arming state machine, not merely a translation of ours — and for
+# retention/arming state machine, not merely a translation of ours (it was
+# antennaknobs' until #846 phase III brought it home; it is still an
+# independently written reader) — and for
 # loading, ``antennaknobs.network``'s RLC formulas fed the raw card fields,
 # not momwire's own ``LoadSpec.impedance``. Address resolution reuses this
 # module's own ``build_geometry``/``Nec2Structure``, whose bitwise agreement
@@ -349,7 +358,7 @@ _NETWORK_DECKS = {"dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_cro
 
 
 def _portal_deck(text: str):
-    """The same deck body, read by antennaknobs' own nec2 parser."""
+    """The same deck body, read by the portal's own nec2 parser."""
     body = text.split("\nNX", 1)[0].split("\nEN", 1)[0]
     return nec_portal.parse_deck(body)
 
