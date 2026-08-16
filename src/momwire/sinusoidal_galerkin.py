@@ -2420,6 +2420,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             self._fold_ground_block(geom, k, ctx, contribs)
 
         G = self._scatter_coef_product(ctx, contribs)
+        # The fill's triple is dead the moment its product exists, and what
+        # runs next used to be measured on top of it (momwire#355): the
+        # end-bracket correction is a second sub-assembly of the same shape,
+        # so holding this one across it doubled the fill's own footprint for
+        # nothing. Dropping the name here is not an optimization of the
+        # arithmetic — it changes no value — it just stops the peak from
+        # counting a triple nobody reads again.
+        del contribs
         self._ek_bracket_correction_tested(G, geom, k, ctx)
         self._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
         return G, seg_view
