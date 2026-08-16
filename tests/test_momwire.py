@@ -2834,6 +2834,87 @@ def test_bspline_chunked_image_fill_holds_no_n_squared_transient(ground_kwargs):
     )
 
 
+@pytest.mark.parametrize(
+    "ground_kwargs",
+    [
+        pytest.param({}, id="pec"),
+        pytest.param({"ground_eps": (10.0, 0.002)}, id="refl-coef"),
+    ],
+)
+def test_bspline_chunked_image_fill_transient_honors_swept_mem_mb_budget(
+    ground_kwargs,
+):
+    """The chunked GROUNDED image fill's own advertised budget must be
+    honest too — the follow-up half of #338 issue #347 left open.
+
+    #338 fixed the free-space chunked fill's rebind-before-del
+    double-buffering (this file's
+    `test_bspline_chunked_dense_z_fill_transient_honors_swept_mem_mb_budget`)
+    and noted, but did not fix, that the grounded image fill's `row_bytes`
+    sizes the mirrored-source moment window ALONE: `_image_weight_window_fn`
+    produces two (PEC) / more (refl-coef, which also builds several
+    specular intermediates before reducing to its two returned windows)
+    extra (chunk, n_segs) arrays every observer chunk that never counted
+    against the budget. `_image_weight_row_bytes` now prices those in.
+
+    Same geometry as the free-space gate (150 edges x 8 segs, N = 1200),
+    lifted to z = 2.2 over ground_z = 0.0 so the image build is
+    non-degenerate. Measured at swept_mem_mb = 8 (row_bytes sizes a
+    ~48-row chunk before this fix, same arithmetic the free-space gate
+    exercises): 1.219x (pec) / 1.677x (refl-coef) budget pre-fix, 0.99x /
+    1.06x post-fix — comfortably either side of the <= 1.1x bar from #338.
+    """
+    import tracemalloc
+
+    import momwire.bspline as bmod
+    from momwire.bspline import BSplineSolver
+
+    if not bmod._HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL:
+        pytest.skip("weighted windowed Z assembly accelerator not built")
+
+    n_edges, seg_per_edge = 150, 8
+    L = 0.962 * 22 / 2
+    ys = np.linspace(-L / 2, L / 2, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 2.2)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+        ground_z=0.0,
+        **ground_kwargs,
+    )
+    geom = sim._build_geometry()
+    supp, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    assert supp.shape[0] == n_edges * seg_per_edge  # N = 1200
+
+    budget_mb = 8
+    sim.swept_mem_mb = budget_mb
+    # Z is allocated (and zeroed) before tracing starts, so the peak below
+    # is the fill's own transient with nothing subtracted, same convention
+    # as the no-N²-transient gate above.
+    Z = np.zeros((supp.shape[0],) * 2, dtype=np.complex128, order="F")
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        sim._accumulate_Z_image_chunked(
+            Z, geom, sim.k, supp, polys, sim._image_weight_window_fn(geom)
+        )
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert np.any(Z != 0.0)  # guard the guard
+    budget_bytes = budget_mb * 1024 * 1024
+    ratio = peak / budget_bytes
+    assert ratio <= 1.1, (
+        f"chunked image fill transient {peak / 1e6:.2f} MB is {ratio:.2f}x "
+        f"the {budget_mb} MB swept_mem_mb budget (want <= 1.1x) — the "
+        "grounded row-byte budget arithmetic is dishonest again"
+    )
+
+
 def test_bspline_dense_dispatch_respects_memory_budget(monkeypatch):
     """Small tensors use the faster tensor path; oversized ones stay chunked."""
     import momwire.bspline as bmod
