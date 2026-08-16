@@ -1,4 +1,4 @@
-"""Geometry equivalence: ``momwire.deck``'s nec2 front-end vs antennaknobs.
+"""Parse agreement: ``momwire.deck``'s nec2 front-end vs antennaknobs.
 
 The nec2 dialect spec (``site/src/content/docs/reference/deck-grammar-nec2.md``,
 appendix ``#appendix-differences-from-antennaknobs-importer``) says the two
@@ -6,22 +6,35 @@ readers "agree on everything load-bearing for geometry: ``GW``, ``GM``,
 ``GS``, free-format tolerance, fused mnemonics, ``(tag, segment)`` addressing,
 and the connection tolerance and snapping — that code is shared, not merely
 equivalent."  This module is the measurement behind that sentence, run over
-the 45-deck reference corpus.
-
-It compares, per deck and BITWISE where the arithmetic is the same expression:
+the 45-deck reference corpus, using antennaknobs' ``nec_import`` — a reader
+independently written and maintained outside momwire — as the oracle:
 
   * the flat NEC wire list after every ``GM``/``GS`` transform and both
     connection passes — tag, segment count, both endpoints, radius;
   * the junction cut set, against antennaknobs' own ``_junction_cuts``;
   * the shattered pieces, against the spans antennaknobs' ``wire_tuples()``
     emits for the same wires;
-  * ``(tag, segment)`` resolution, against ``nec_import._locate_segment``; and
+  * ``(tag, segment)`` resolution, against ``nec_import._locate_segment``;
   * the resolved ``(wire, arclength)`` of every ``EX``/``LD``/``PT`` address
     in the deck, as a POINT IN SPACE — checked against both the flat wire's
     own segment centre and the arclength antennaknobs' polyline translation
     lands the same feed on.  The last comparison is a tolerance rather than a
     bitwise one: the two paths sum a different partition of the same
-    polyline, so their arclengths differ by float summation order alone.
+    polyline, so their arclengths differ by float summation order alone; and
+  * GN/GD retention, FR/EX/LD-LD5 semantics, and RLC loading — against the
+    portal's own parser and ``antennaknobs.network``'s formulas (momwire#359
+    unit C).
+
+This module used to also compare the SOLVE — the same decks built onto a
+solver by ``momwire.deck.build_solver`` and by antennaknobs' own portal path,
+at the port admittance matrix, bitwise (momwire#359 unit D).  That comparison
+ran 41/41 bitwise once (#363) and is recorded history, but phase II of the
+portal extraction (#846) rewired antennaknobs' portal onto ``build_solver``
+itself, so it had come to compare the pipeline with itself rather than an
+independent assembly path.  #373 decided to drop it rather than repair it:
+the fixture battery (real nec2c captures) is what now carries solve-level
+equivalence, and this module is reduced to what remains two independently
+written readers — the parse-agreement subset.
 
 antennaknobs is not a momwire dependency and will never be one, so the whole
 module skips when it is not importable — which is every CI run.  To run it,
@@ -37,7 +50,6 @@ from pathlib import Path
 
 import pytest
 
-from momwire.deck import build_solver
 from momwire.deck import parse as momwire_parse
 from momwire.deck._cards import parse_card
 from momwire.deck._nec2 import _GEOMETRY_CARDS
@@ -553,103 +565,3 @@ def test_the_network_decks_are_still_the_three_the_geometry_test_measures():
     test — not a silently-passing skip — is what notices."""
     stems = {p.stem for p in CORPUS if "network" in p.stem or "shunt_crossed" in p.stem}
     assert stems == _NETWORK_DECKS
-
-
-# ---------------------------------------------------------------------------
-# Z-level equivalence (momwire#359 unit D)
-#
-# The sections above measure the model.  This one measures the SOLVE: the
-# same 41 antenna decks, built onto a solver by `momwire.deck.build_solver`
-# and by antennaknobs' own portal path, compared at the port admittance
-# matrix `compute_port_solution().y`.
-#
-# The target is BITWISE, and it is reachable because the two paths are not
-# merely equivalent — they build the same mesh out of the same deck and hand
-# it to the same solver class.  Everything a solver's answer depends on is a
-# constructor argument, every one of them is checked here before the matrix
-# is, and floating-point arithmetic is deterministic: identical arguments
-# give identical arrays.  A tolerance would hide exactly the drift this gate
-# exists to catch — phase II deletes the reference path, and after that
-# nothing else can notice a deck whose impedance moved.
-# ---------------------------------------------------------------------------
-
-
-def _reference_solver(text: str):
-    """antennaknobs' own portal path, as directly as its code allows.
-
-    ``DeckSolver`` is the portal's whole front end — union ports, the
-    synthesized deck, the engine, the polyline translation — and ``at()`` is
-    its per-frequency fill.  Going through them rather than reassembling the
-    pieces is the point: the oracle is what the portal ACTUALLY runs, not a
-    reconstruction of it that could agree with us by sharing our mistakes.
-    """
-    body = text.split("\nNX", 1)[0].split("\nEN", 1)[0]
-    portal = nec_portal.parse_deck(body)
-    solver = nec_portal.DeckSolver(portal)
-    group = next(g for g in portal.groups if g is not None)
-    entry = solver.at(group.freqs_mhz[0], extended_kernel=group.ek)
-    return solver, entry
-
-
-@pytest.mark.parametrize("path", CORPUS, ids=lambda p: p.stem)
-def test_port_admittance_matches_antennaknobs(path: Path):
-    """One geometry, one basis, one frequency — and the same Y, bitwise."""
-    if path.stem in _NETWORK_DECKS:
-        pytest.skip("refused by name in this dialect (TL/NT); see the geometry test")
-
-    text = path.read_text()
-    reference, entry = _reference_solver(text)
-    built = build_solver(momwire_parse(text))
-
-    # 0. the same basis on both sides.  The portal's default is the degree-2
-    #    B-spline and so is ours; a change to either without the other would
-    #    make every comparison below meaningless rather than red.
-    assert nec_portal._active_basis[0] is type(built.solver)
-    assert nec_portal._active_basis[1] == {}
-
-    engine = reference.engine
-
-    # 1. the mesh: polylines bitwise, per-edge element counts exactly, and
-    #    the junction groups — including their ORDER, which decides the
-    #    matrix's KCL rows.
-    ours_wires = built.solver.wires_polylines
-    assert len(ours_wires) == len(engine._polylines)
-    for mine, theirs in zip(ours_wires, engine._polylines):
-        assert np.asarray(mine).shape == np.asarray(theirs).shape
-        assert np.array_equal(np.asarray(mine), np.asarray(theirs))
-    assert [list(c) for c in built.solver.n_per_edge_per_wire] == [
-        list(c) for c in engine._edge_segments
-    ]
-    assert [[tuple(m) for m in group] for group in built.solver.junctions] == [
-        [tuple(m) for m in group] for group in engine._junctions
-    ]
-
-    # 2. the ports: same positions, same order, and the plan agrees with the
-    #    portal's own feed/load index tables about which row is which card.
-    assert [(w, a) for w, a, _v in built.solver.feeds] == [
-        (w, a) for w, a, _v in engine._feeds
-    ]
-    assert built.ports.n_ports == entry["Y"].shape[0]
-    assert list(built.ports.feed_ports) == reference.feed_index
-    assert list(built.ports.load_ports) == [port for port, _ld in reference.load_ports]
-
-    # 3. the same frequency and the same kernel.
-    group = next(g for g in reference.portal_deck.groups if g is not None)
-    assert built.frequency_mhz == group.freqs_mhz[0]
-    assert built.extended_kernel == group.ek
-    assert built.wavelength == entry["wavelength"]
-
-    # 4. and therefore the same matrix, bitwise.
-    ours_y = built.solver.compute_port_solution().y
-    theirs_y = entry["solver"].compute_port_solution().y
-    assert ours_y.shape == theirs_y.shape
-    assert np.array_equal(ours_y, theirs_y), (
-        f"{path.stem}: port admittance differs by up to "
-        f"{np.abs(ours_y - theirs_y).max():.3e}"
-    )
-
-
-def test_the_z_level_gate_covers_every_antenna_deck():
-    """The gate is 41 decks — the corpus minus the three the dialect refuses
-    by name.  A corpus that grows must grow this number, not slip past it."""
-    assert len(CORPUS) - len(_NETWORK_DECKS) == 41
