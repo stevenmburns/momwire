@@ -11,16 +11,31 @@ NEC-2 that describes wire antennas and asks them questions.  Every dialect
 front-end parses into ONE model, and ``build_solver(model, basis=...)`` maps
 that model onto momwire's solver families, so a second dialect is a second
 parser rather than a second pipeline.
+
+A model's execute groups carry the OPERATING POINTS a deck asks for: a
+frequency list, an extended-kernel flag and an :class:`Environment` each.
+``build_solver`` takes all three off the selected group and lets a caller
+override any of them; :func:`prepare_mesh` freezes what none of them can
+move — the geometry — so a sweep translates the structure once.
 """
 
 from __future__ import annotations
 
 from ._cards import Card, DeckError, parse_card, tokenize
 from ._nec2 import parse_nec2
-from ._solver import BASES, BuiltSolver, PortPlan, PortSite, build_solver
+from ._solver import (
+    BASES,
+    BuiltSolver,
+    PortPlan,
+    PortSite,
+    PreparedMesh,
+    build_solver,
+    prepare_mesh,
+)
 from .model import (
     DeckModel,
     DeckWire,
+    Environment,
     ExecuteGroup,
     FarFieldRequest,
     LoadSpec,
@@ -34,12 +49,16 @@ __all__ = [
     # the two verbs
     "parse",
     "build_solver",
+    # translate a model's geometry once, for a swept caller
+    "prepare_mesh",
+    "PreparedMesh",
     # the model
     "DeckModel",
     "DeckWire",
     "WireMaterial",
     "LoadSpec",
     "SecondMedium",
+    "Environment",
     "FarFieldRequest",
     "NearFieldRequest",
     "PrintControl",
