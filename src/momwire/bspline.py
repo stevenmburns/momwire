@@ -4402,6 +4402,19 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # (chunk, n_basis, n_basis) complex stacks at the sweep's
                 # peak moment. `Z -=` holds two.
                 Z -= _assemble_swept(J_img, tangents, tangents_mirror, omega_chunk)
+                # (#347) same rebind-before-del gap #338 fixed on the other
+                # two chunked fills: this is a GENERATOR, so `J_img` stays
+                # bound across the `yield` below and into the top of the
+                # next iteration, where `J = producer(...)` rebuilds a new
+                # (chunk, nm, nm, N, N) stack before this one's reference is
+                # dropped — one budget's worth of accidental double
+                # buffering `bytes_per_k` never accounted for.
+                del J_img
+            else:
+                # (#347) same reasoning as the grounded `del J_img` above,
+                # for the free-space branch: without this, `J` rides across
+                # the yield and into the next iteration's rebind.
+                del J
             # Loading is Z'(ω)-scaled per k within the chunk (skin R ∝ √ω,
             # insulation X ∝ ω), added after the batched kernel assembly.
             Z = self._apply_loading(Z, omega=omega_chunk)
