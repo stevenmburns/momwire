@@ -331,7 +331,7 @@ _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
 # build without it — a pure-Python install, or one whose extension predates
 # #246 — this is False and `_tested_contribs` routes an EK-on fill through the
 # numpy block loop instead, because the reduced far fill takes no eligibility
-# mask and would silently drop the delta.
+# payload and would silently drop the delta.
 _HAVE_GALERKIN_FAR_FILL_EK = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill_ek"
 )
@@ -383,6 +383,25 @@ _EKBracketPlan = collections.namedtuple(
         "projector src_c src_t scale bad_lo bad_hi group_obs group_src "
         "near_key cols col_of xg wg"
     ),
+)
+
+
+# The FUSED far fill's extended-kernel payload (momwire#358). `_EKPairs`, which
+# every numpy-side caller of `_field_components_bcast` still takes, carries the
+# pair rule already EVALUATED as a mask shaped like that call's field tables;
+# this one carries the rule's group labels — one per test segment, one per
+# source segment — and lets the C++ sweep evaluate `g_obs[m] == g_src[n] and
+# g_obs[m] >= 0` per pair. Same predicate, same eligible set, but nothing of
+# the fill's (n_obs, N) shape is built in Python to express it: at N = 1200
+# that mask was 11.5 MB of resident input, and it was the whole of what the
+# grounded accelerated block still held over its destination triple after
+# momwire#356.
+#
+# `src_a` stays one radius per source segment, as the kernel indexes it, and
+# `n_panels` stays the delta quadrature's density so the far tier's single
+# panel remains the caller's decision rather than the kernel's.
+_EKFarLabels = collections.namedtuple(
+    "_EKFarLabels", "src_a group_obs group_src n_panels", defaults=(1,)
 )
 
 
@@ -1560,15 +1579,51 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         cached[1][mirror] = hit
         return hit
 
+    def _ek_far_labels(self, geom, mirror, n_panels=1):
+        """The `_EKFarLabels` payload for one FUSED far-fill call, or None when
+        the extended kernel is off (momwire#358).
+
+        The same pair rule `_ek_pairs` evaluates, handed to the C++ sweep
+        UNEVALUATED: the two label arrays and one radius per source segment,
+        with `eligible = g_obs[m] == g_src[n] and g_obs[m] >= 0` scored per
+        pair inside the kernel.
+
+        Labels per TEST SEGMENT are enough for the fused fill, which the mask
+        spelling obscured. Its observer axis is the fill's `obs_c` rows, and
+        those rows are `m_of_obs = repeat(arange(N), nq)` — the kernel checks
+        that it was given exactly `M*nq` of them and reconstructs
+        `o = m*nq + qt` itself. So a mask row depended on its observer only
+        through that observer's test segment, and every one of a segment's nq
+        rows carried the identical row. `_ek_pairs`' own construction says the
+        same thing from the other side: it indexes `group_obs` by the caller's
+        `m_idx`, which for this call is `m_of_obs[:, None]`.
+
+        Mirroring is carried by the labels and not by the observers.
+        `_ek_axis_labels(geom, True)` returns DIFFERENT obs and src halves out
+        of one joint scan — the real segments and their reflections — so an
+        image block scores the real test segment against the MIRRORED source,
+        which is what makes a vertical monopole eligible against its own image
+        and a horizontal wire not. Passing both halves keeps that asymmetry
+        where it was; passing one array twice would silently restore #151's
+        "every wire is coaxial with its image" bug on the image block.
+        """
+        if not self.extended_kernel:
+            return None
+        group_obs, group_src = self._ek_axis_labels(geom, mirror)
+        return _EKFarLabels(self._seg_radius(geom), group_obs, group_src, n_panels)
+
     def _ek_pairs(self, geom, m_idx, n_idx, mirror, n_panels=1):
-        """The `_EKPairs` payload for one field-kernel call, or None when the
-        extended kernel is off.
+        """The `_EKPairs` payload for one NUMPY field-kernel call, or None when
+        the extended kernel is off.
 
         `m_idx` / `n_idx` are the (test segment, source segment) index arrays
         of whatever pairing the caller has built — (rows, 1) against (1, N) for
-        a far-fill block, (P, 1) against (P, 1) for the near-pair path — so the
-        returned mask and source radius broadcast against that call's field
-        tables exactly as the indices do.
+        one block of the numpy far loop, (P, 1) against (P, 1) for the
+        near-pair path — so the returned mask and source radius broadcast
+        against that call's field tables exactly as the indices do. The FUSED
+        far fill no longer comes here: it takes the labels themselves
+        (`_ek_far_labels`), because it is the one caller whose pairing is
+        big enough for the materialized mask to be a residency item.
 
         Eligibility is `group_obs[m] == group_src[n]`, i.e. #249 §4's PAIR
         rule, and NOT `SinusoidalSolver._ek_gating`'s per-END IND codes. That
@@ -1937,8 +1992,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         With the extended kernel on (momwire#246) the far half falls back to
         the numpy loop unless the C++ EK twin is present: the reduced far fill
-        takes no eligibility mask, so routing an EK-on block through it would
-        drop the delta silently rather than fail.
+        takes no eligibility payload, so routing an EK-on block through it
+        would drop the delta silently rather than fail.
 
         Both halves honour `subtract_into` as they fill, so a grounded block
         holds ONE triple whichever backend serves it — the destination alone
@@ -1969,12 +2024,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             and projector is _plain_projection
             and (not self.extended_kernel or _HAVE_GALERKIN_FAR_FILL_EK)
         ):
+            # Guarded at the call site as well as inside, like every other EK
+            # entry point here: G-B4's counter gate is that an EK-off solve
+            # does not so much as ENTER this code.
             ek_pairs = (
-                self._ek_pairs(
-                    geom, ctx["m_of_obs"][:, None], np.arange(N)[None, :], mirror
-                )
-                if self.extended_kernel
-                else None
+                self._ek_far_labels(geom, mirror) if self.extended_kernel else None
             )
             if subtract_into is None:
                 contribs = self._far_fill_accel(k, ctx, src_c, src_t, ek=ek_pairs)
@@ -2118,14 +2172,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         remainder keep the numpy path, so their callers still see the blocked
         loop above.
 
-        `ek` picks the entry point (momwire#246 unit C). With no payload the
-        call is the pre-#246 one, byte for byte — the reduced symbol is
-        compiled from the shared implementation with the delta's code absent,
-        so an EK-off fill cannot pay for the option or be perturbed by it.
-        With one, `sinusoidal_galerkin_far_fill_ek` adds the folded delta on
-        the eligible pairs inside the same fused sweep, which is what keeps
-        the extended kernel on the accelerated path at all: the numpy block
-        loop it replaces measured 25-30x slower on the N=101...401 dipole.
+        `ek` picks the entry point (momwire#246 unit C) and is an
+        `_EKFarLabels`, the pair rule's group labels rather than its evaluated
+        mask (momwire#358). With no payload the call is the pre-#246 one, byte
+        for byte — the reduced symbol is compiled from the shared
+        implementation with the delta's code absent, so an EK-off fill cannot
+        pay for the option or be perturbed by it. With one,
+        `sinusoidal_galerkin_far_fill_ek` scores eligibility per pair from the
+        labels and adds the folded delta on the eligible ones inside the same
+        fused sweep, which is what keeps the extended kernel on the
+        accelerated path at all: the numpy block loop it replaces measured
+        25-30x slower on the N=101...401 dipole.
         The toggle itself costs ~6x there, and that is the honest worst case
         — every pair of a straight wire is coaxial, so every pair takes the
         delta's 16-node quadrature.
@@ -2184,42 +2241,54 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             np.ascontiguousarray(ctx["starts"], dtype=np.int64),
         )
         # `out`/`scale` ride as KEYWORDS, behind the eligibility payload's
-        # positional slots, so momwire#358's swap of that payload (the
-        # (n_obs, N) mask for (N,) group labels) is a change to `args` alone
-        # and never touches the fold.
+        # positional slots. That is what let momwire#358 swap that payload —
+        # the (n_obs, N) mask out, the two (N,) label arrays in — as a change
+        # to the EK call's positionals alone, never touching the fold.
         fold = {} if out is None else {"out": tuple(out), "scale": complex(scale)}
         if ek is None:
             return _acc.sinusoidal_galerkin_far_fill(*args, self._cancel_flag, **fold)
-        # The EK twin takes the payload flattened to the shapes the kernel
-        # indexes: one radius per SOURCE segment, the mask over (observer row,
-        # source segment) — the rows of `obs_c` — and the delta quadrature's
+        # The EK twin takes the payload at the shapes the kernel indexes: one
+        # radius per SOURCE segment, the pair rule's group labels — one per
+        # TEST segment and one per source segment — and the delta quadrature's
         # composite rule, built HERE rather than in C++ so the two backends
         # integrate against the same nodes by construction rather than by
         # transcription. `n_panels` rides along from the payload, so the far
         # tier's single panel is the payload's decision and not the kernel's.
+        #
+        # The labels are what the eligibility argument USED to be an (n_obs,
+        # n_src) bool mask of (momwire#358). Nothing of the fill's own shape is
+        # built in Python any more: the kernel scores `g_obs[m] == g_src[n] and
+        # g_obs[m] >= 0` as it reaches each pair, which is `_ek_pairs`' formula
+        # unchanged and the numpy block loop's own per-block derivation moved
+        # one level in. What that mask cost was resident input, not a
+        # transient — 11.5 MB at N = 1200, and the whole of what a grounded
+        # accelerated block still held over its destination triple after #356.
         n_src = args[3].shape[0]
+        n_test = args[11].shape[0] - 1
         ek_gx, ek_gw = self._ek_delta_rule(_N_QP_EK_DELTA, ek.n_panels)
         # Producer contract, not a conversion (momwire#332 unit E, #318's
-        # "dead wrapper" pattern repeated): `_ek_pairs` builds `eligible` as
-        # `(gi == gj) & (gi >= 0)`, broadcasting (n_obs, 1) against
-        # (1, n_src) through `==`/`&` — numpy ufuncs always MATERIALIZE their
-        # output, so the result is already an owned, C-contiguous
-        # (n_obs, n_src) bool array and never a zero-stride broadcast view.
-        # `broadcast_to(ek.eligible, (n_obs, n_src))` was therefore a
-        # same-shape no-op view, and instrumenting it shows the
-        # `ascontiguousarray` wrapped around it never actually copied either
-        # — same-object every call, exactly #318's finding. The assert pins
-        # the contract this relies on and vanishes under -O; the pybind11
-        # `c_style | forcecast` array_t on the C++ side (:5153) stays the
-        # final safety net if it is ever wrong.
-        assert ek.eligible.shape == (n_obs, n_src) and ek.eligible.dtype == bool, (
-            f"eligible mask must be ({n_obs}, {n_src}) bool, got "
-            f"{ek.eligible.shape} {ek.eligible.dtype}"
+        # "dead wrapper" pattern repeated, now on arrays 1e3 times smaller):
+        # `_ek_axis_labels` returns owned, C-contiguous int64 arrays straight
+        # out of `_ek_axis_groups`, so the `ascontiguousarray` these would
+        # otherwise be wrapped in never copies. The assert pins that contract
+        # and vanishes under -O; the pybind11 `c_style | forcecast` array_t on
+        # the C++ side stays the final safety net if it is ever wrong, and the
+        # kernel checks both lengths itself.
+        assert (
+            ek.group_obs.shape == (n_test,)
+            and ek.group_src.shape == (n_src,)
+            and ek.group_obs.dtype == np.int64
+            and ek.group_src.dtype == np.int64
+        ), (
+            f"group labels must be ({n_test},)/({n_src},) int64, got "
+            f"{ek.group_obs.shape} {ek.group_obs.dtype} / "
+            f"{ek.group_src.shape} {ek.group_src.dtype}"
         )
         return _acc.sinusoidal_galerkin_far_fill_ek(
             *args,
             np.ascontiguousarray(np.reshape(ek.src_a, n_src), dtype=np.float64),
-            ek.eligible,
+            ek.group_obs,
+            ek.group_src,
             np.ascontiguousarray(ek_gx, dtype=np.float64),
             np.ascontiguousarray(ek_gw, dtype=np.float64),
             self._cancel_flag,
