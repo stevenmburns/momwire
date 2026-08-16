@@ -136,6 +136,7 @@ stderr; the protocol is byte-identical in all three modes.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -147,9 +148,16 @@ from types import MappingProxyType
 
 import numpy as np
 
-from ..deck import BASES, Card, DeckError, Environment, build_solver, prepare_mesh
+from ..deck import (
+    BASES,
+    Card,
+    DeckError,
+    Environment,
+    build_solver,
+    parse_card,
+    prepare_mesh,
+)
 from ..deck import parse as parse_dialect
-from ..deck import parse_card
 
 # The NEC-level view of a deck's geometry: the flat wire list after every
 # GM/GS transform and both connection passes, carrying the TAGS and the
@@ -1568,7 +1576,7 @@ def _union_ports(deck: PortalDeck) -> list[tuple[int, int]]:
     return ports
 
 
-def _series_rlc_impedance(r, l, c, omega):  # noqa: E741 — NEC's own field name
+def _series_rlc_impedance(r, l, c, omega):
     """Series R + jwL + 1/(jwC). Any of r/l/c may be None (omitted term).
 
     COPIED, not imported, from ``antennaknobs.network._series_rlc_impedance``
@@ -3117,21 +3125,21 @@ def _selftest(stdout) -> int:
     return 0 if passed else 1
 
 
-def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) -> int:
-    """The daemon. ``-version`` probes; otherwise read decks until stdin ends.
+def configure_engine(argv: list[str], stdout) -> tuple[list[str], bool, int | None]:
+    """Read the engine flags off the command line; return what is left.
 
-    Decks are framed on stdin by an ``NX`` card — no length prefix, no
-    sentinel of our own — and the process is never restarted between them
-    (``NEC2Daemon.submit``). ``EN`` also terminates a frame but then ends the
-    run, so an unmodified ``.nec`` file redirected in solves and exits (#901);
-    SimNEC itself never sends it. A body left unterminated at EOF is discarded
-    with a stderr warning naming the framing rule.
+    ``(rest, legacy_probe, code)`` — a non-``None`` ``code`` is an exit status
+    whose message has already gone to ``stdout``.
+
+    Split out of :func:`main` (#379) so the shared server reads its command
+    line through THIS code and no other: the flags are the engine's identity,
+    and an engine reachable two ways whose flags are parsed twice is an engine
+    with two dialects. Everything it touches is INVOCATION state — the basis,
+    the cache and its two flags are reset here exactly as a fresh process
+    would have them — so it must be called ONCE per process. The shared
+    server depends on that literally: a per-connection call would empty the
+    cross-deck cache the server exists to hold warm.
     """
-    argv = sys.argv[1:] if argv is None else argv
-    stdin = sys.stdin if stdin is None else stdin
-    stdout = sys.stdout if stdout is None else stdout
-    stderr = sys.stderr if stderr is None else stderr
-
     # --basis rides the necCommand line itself: SimNEC launches engines via
     # `sh -c <command>` / `cmd.exe /c`, so the portal-dialog string can carry
     # arguments — two entries differing only in --basis are two engines. An
@@ -3161,7 +3169,7 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
                 f"unknown --basis {name!r}; choices: {', '.join(sorted(_BASES))}\n"
             )
             stdout.flush()
-            return 3
+            return [], False, 3
         _active_basis = _BASES[name]
         _active_basis_name = name
 
@@ -3186,7 +3194,7 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
         if not path or path.startswith("-"):
             stdout.write("--cache-stats needs a file path\n")
             stdout.flush()
-            return 3
+            return [], False, 3
         _cache_stats_path = path
 
     # --cache is a bare flag on purpose: it has no parameter to get wrong, and
@@ -3201,15 +3209,35 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
     legacy_probe = "--legacy-probe" in argv
     argv = [a for a in argv if a != "--legacy-probe"]
 
-    if any(a.lstrip("-").lower() == "version" for a in argv):
-        stdout.write(f"{LEGACY_PROBE_VERSION if legacy_probe else PROBE_VERSION}\n")
-        stdout.flush()
-        return 0
+    return argv, legacy_probe, None
 
-    if any(a.lstrip("-").lower() == "selftest" for a in argv):
-        return _selftest(stdout)
 
-    # The banner belongs to process start-up; every later one trails an NX.
+def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
+    """The banner, then decks off ``stdin`` until it ends. The protocol itself.
+
+    Decks are framed on stdin by an ``NX`` card — no length prefix, no
+    sentinel of our own — and the stream is never restarted between them
+    (``NEC2Daemon.submit``). ``EN`` also terminates a frame but then ends the
+    run, so an unmodified ``.nec`` file redirected in solves and exits (#901);
+    SimNEC itself never sends it. A body left unterminated at EOF is discarded
+    with a stderr warning naming the framing rule.
+
+    Split out of :func:`main` (#379) for the same reason as
+    :func:`configure_engine`: the shared server runs one of these per
+    connection, over socket file objects, and the ONLY way to guarantee its
+    printout is byte-identical to the stock daemon's is for it to be the same
+    loop rather than a second copy of it. What "process start-up" means is the
+    one thing that differs — for the stock daemon it is the process, for the
+    server it is the connection — and that is the caller's business, since it
+    is the caller who decides when to call this.
+
+    ``solve_lock`` is a context manager held across the solve, and is how the
+    server serialises decks arriving on different connections into one
+    thread-pool budget; the stock daemon has one stream and passes nothing.
+    """
+    lock = contextlib.nullcontext() if solve_lock is None else solve_lock
+
+    # The banner belongs to start-up; every later one trails an NX.
     stdout.write("\n".join(_banner_lines()) + "\n")
     stdout.flush()
 
@@ -3219,7 +3247,8 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
         if head not in (["NX"], ["EN"]):
             body.append(line.rstrip("\n"))
             continue
-        out, err = deck_frame("\n".join(body), terminator=head[0])
+        with lock:
+            out, err = deck_frame("\n".join(body), terminator=head[0])
         stdout.write("\n".join(out) + "\n")
         stdout.flush()
         if err:
@@ -3236,3 +3265,30 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
         )
         stderr.flush()
     return 0
+
+
+def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) -> int:
+    """The daemon. ``-version`` probes; otherwise read decks until stdin ends.
+
+    One invocation is one process: :func:`configure_engine` reads the engine
+    off the command line once, then :func:`resident_loop` speaks the protocol
+    on the process's own stdin/stdout for as long as SimNEC keeps it.
+    """
+    argv = sys.argv[1:] if argv is None else argv
+    stdin = sys.stdin if stdin is None else stdin
+    stdout = sys.stdout if stdout is None else stdout
+    stderr = sys.stderr if stderr is None else stderr
+
+    argv, legacy_probe, code = configure_engine(list(argv), stdout)
+    if code is not None:
+        return code
+
+    if any(a.lstrip("-").lower() == "version" for a in argv):
+        stdout.write(f"{LEGACY_PROBE_VERSION if legacy_probe else PROBE_VERSION}\n")
+        stdout.flush()
+        return 0
+
+    if any(a.lstrip("-").lower() == "selftest" for a in argv):
+        return _selftest(stdout)
+
+    return resident_loop(stdin, stdout, stderr)
