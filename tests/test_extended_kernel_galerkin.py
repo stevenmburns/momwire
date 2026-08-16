@@ -1015,6 +1015,7 @@ _EK_ENTRY_POINTS = [
     (SinusoidalGalerkinSolver, "_ek_axis_labels"),
     (SinusoidalGalerkinSolver, "_ek_pairs"),
     (SinusoidalGalerkinSolver, "_ek_reduced_ends"),
+    (SinusoidalGalerkinSolver, "_ek_bracket_plans"),
     (SinusoidalGalerkinSolver, "_ek_bracket_block"),
 ]
 
@@ -1968,11 +1969,14 @@ def test_gs4_ek_on_over_sommerfeld_enters_the_ek_code(ek_call_counts):
     z_off, _ = SinusoidalGalerkinSolver(**kw).compute_impedance()
     z_on, _ = SinusoidalGalerkinSolver(**kw, extended_kernel=True).compute_impedance()
     for attr, n in ek_call_counts.items():
-        # `_ek_end_bracket_fields` is the one entry point a deck can honestly
-        # leave alone: it evaluates only where a node SPLITS (momwire#299) and
-        # this deck is a straight wire. `_ek_bracket_block` is still entered —
-        # it is what asks the question — so the route is covered either way.
-        if attr == "_ek_end_bracket_fields":
+        # Two entry points a deck can honestly leave alone, both for the same
+        # reason: they run only where a node SPLITS (momwire#299) and this
+        # deck is a straight wire. `_ek_end_bracket_fields` evaluates the
+        # bracket, and since momwire#355 `_ek_bracket_block` is only reached
+        # for a source block that HAS a bad end. `_ek_bracket_plans` is what
+        # asks the question now, and it is counted above, so the route is
+        # covered either way.
+        if attr in ("_ek_end_bracket_fields", "_ek_bracket_block"):
             continue
         assert n > 0, f"{attr} never called with EK on over the Sommerfeld ground"
     assert z_on != z_off
@@ -2311,21 +2315,19 @@ def _bracket_matrix(radius, name="L"):
     )
     geom = sim._build_geometry()
     ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    N = ctx["N"]
+    # The whole-triple spelling on purpose: one band over every test segment,
+    # every source column retained, and the fill's own scatter product. What
+    # this gate measures is C's structure, not how it is assembled.
+    (plan,) = sim._ek_bracket_plans(
+        geom, ctx, [(_plain_projection, None, None, False, 1.0)]
+    )
+    every = np.arange(N)
+    plan = plan._replace(cols=every, col_of=every)
     corr = tuple(
-        np.zeros((ctx["w_entry"].shape[0], ctx["N"]), dtype=np.complex128)
-        for _ in range(3)
+        np.zeros((ctx["w_entry"].shape[0], N), dtype=np.complex128) for _ in range(3)
     )
-    sim._ek_bracket_block(
-        geom,
-        sim.k,
-        ctx,
-        corr,
-        _plain_projection,
-        geom["seg_centers"],
-        geom["seg_tangents"],
-        False,
-        1.0,
-    )
+    sim._ek_bracket_block(geom, sim.k, ctx, corr, plan, 0, N)
     return np.asarray(sim._scatter_coef_product(ctx, corr))
 
 
@@ -2450,3 +2452,266 @@ def test_gd7_the_bent_deck_of_287_is_usable_again():
         for other in ("bsp", "pm"):
             rel = abs(shifts["gal"] - shifts[other]) / abs(shifts[other])
             assert rel < _SHIFT_BAR, (ground, other, rel, shifts)
+
+
+# ---------------------------------------------------------------------------
+# G-D8 — the correction streams: no triple of its own (momwire#355)
+# ---------------------------------------------------------------------------
+# `_ek_bracket_correction_tested` used to build a whole (nnz, N) triple of its
+# own — a second copy of the largest object in the fill — and it built it while
+# `_assemble_Z` still held the fill's. Two things take that away without
+# moving a float:
+#
+#   * the correction can only ever write the SOURCE columns that have a bad end
+#     (`_ek_reduced_ends`), so its triple is allocated over those alone; every
+#     column dropped was identically zero, and `x + 0` is `x` in float64 under
+#     any association;
+#   * what is left is banded over TEST segments and folded into the scatter
+#     band by band, so nothing of matrix size is ever whole. Test segments are
+#     the axis that keeps this bit-exact: a matrix cell's writers are its own
+#     test segment's entries, so a cell is finished inside one band.
+#
+# G-D8a is the arithmetic gate for both — widen the columns back to all N, or
+# band the correction one test segment at a time, and G must not move by a
+# bit. G-D8b and G-D8c are the residency ones.
+
+
+def _gd8_bend(n, **ground):
+    """Two straight arms meeting at a right angle 4 m over the plane: ONE
+    split node, so `cols` is 2 of N and the column narrowing is what pays."""
+    half = 0.962 * _GD8_WL / 4
+    ys = np.linspace(0.0, half, n // 2 + 1)
+    xs = np.linspace(0.0, half, n - n // 2 + 1)[1:]
+    pts = [[0.0, y, 4.0] for y in ys] + [[x, half, 4.0] for x in xs]
+    return SinusoidalGalerkinSolver(
+        wires=[np.array(pts)],
+        n_per_edge_per_wire=[[1] * n],
+        nsegs=n,
+        wavelength=_GD8_WL,
+        extended_kernel=True,
+        **ground,
+    )
+
+
+def _gd8_zigzag(n, **ground):
+    """Every node a bend: `cols` is EVERY source column, so the narrowing buys
+    nothing and the banding is the whole of the fix. This is the deck the
+    streaming exists for."""
+    half = 0.962 * _GD8_WL / 4
+    ys = np.linspace(-half, half, n + 1)
+    xs = 0.02 * _GD8_WL * (np.arange(n + 1) % 2)
+    return SinusoidalGalerkinSolver(
+        wires=[np.column_stack([xs, ys, np.full_like(ys, 4.0)])],
+        n_per_edge_per_wire=[[1] * n],
+        nsegs=n,
+        wavelength=_GD8_WL,
+        extended_kernel=True,
+        **ground,
+    )
+
+
+_GD8_WL = 22.0
+_GD8_DECKS = {"bend": _gd8_bend, "zigzag": _gd8_zigzag}
+_GD8_GROUNDS = {
+    "free": {},
+    "pec": {"ground_z": 0.0},
+    "refl": {"ground_z": 0.0, "ground_eps": (13.0, 0.005)},
+}
+
+
+@contextlib.contextmanager
+def _gd8_every_column():
+    """Run the correction over ALL N source columns instead of the bad-end
+    ones — the pre-#355 column set, reached through the shipped dispatch."""
+    from momwire import sinusoidal_galerkin as _sg
+
+    orig = _sg.SinusoidalGalerkinSolver._ek_bracket_plans
+
+    def wide(self, geom, ctx, blocks):
+        cols = np.arange(ctx["N"])
+        return [p._replace(cols=cols) for p in orig(self, geom, ctx, blocks)]
+
+    _sg.SinusoidalGalerkinSolver._ek_bracket_plans = wide
+    try:
+        yield
+    finally:
+        _sg.SinusoidalGalerkinSolver._ek_bracket_plans = orig
+
+
+@pytest.mark.parametrize("name", list(_gd_decks(0.02)))
+@pytest.mark.parametrize("ground", list(_GD8_GROUNDS))
+def test_gd8a_narrowing_and_banding_move_the_matrix_by_nothing(
+    monkeypatch, name, ground
+):
+    """Exact equality, not a tolerance, on all five node kinds and all three
+    grounds — the two narrowings are index bookkeeping and the banding sums
+    each cell in the order it always did, so anything at all here is a bug.
+
+    Three spellings are compared against the shipped one: every column
+    retained (which is the whole (nnz, N) triple back), one test segment per
+    band (the finest streaming the band rule allows), and both at once — which
+    together ARE the pre-#355 arithmetic, differing from it only in that the
+    scatter is reached band by band.
+    """
+    from momwire import sinusoidal_galerkin as _sg
+
+    kw = dict(_gd_decks(0.02)[name], feed_arclength=1.0, wavelength=_GD_LAM)
+    if ground != "free":
+        # Lift the deck off the plane: these are free-space fixtures.
+        kw["wires"] = [np.asarray(w) + np.array([0.0, 0.0, 1.0]) for w in kw["wires"]]
+        kw.update(_GD8_GROUNDS[ground])
+    sim = SinusoidalGalerkinSolver(**kw, extended_kernel=True)
+    geom = sim._build_geometry()
+    ref, _ = sim._assemble_Z(geom, sim.k)
+
+    for wide in (False, True):
+        for band in (False, True):
+            if not wide and not band:
+                continue
+            monkeypatch.setattr(_sg, "_EK_BRACKET_BAND_BYTES", 1 if band else 1 << 25)
+            with _gd8_every_column() if wide else contextlib.nullcontext():
+                got, _ = SinusoidalGalerkinSolver(
+                    **kw, extended_kernel=True
+                )._assemble_Z(geom, sim.k)
+            assert np.array_equal(ref, got), (
+                f"{name}/{ground} wide={wide} band={band}: the bracket moved G "
+                f"by {np.abs(ref - got).max():.3e}"
+            )
+
+
+# Peak transient of the correction ALONE, in triples of 3 x 16 x nnz x N, at
+# the N = 300 decks above with the band budget shrunk to one test segment.
+# Measured, before (main) -> after:
+#
+#   bend    free 1.45 -> 0.34   pec 1.45 -> 0.34   refl 1.95 -> 0.84
+#   zigzag  free 1.65 -> 0.68   pec 1.65 -> 0.68   refl 2.15 -> 1.18
+#
+# The refl-coef column carries ~0.5 triple of specular/Fresnel tables in both
+# spellings — a per-segment-pair cache, not a fill object — so its bar is
+# offset by exactly that. The bend deck's floor is the (n_basis, 2) scatter,
+# i.e. nothing; the zigzag's is the (n_basis, N) one, which is a third of a
+# triple and is the smallest a symmetrized C can be assembled from.
+_GD8_BAR = {
+    ("bend", "free"): 0.75,
+    ("bend", "pec"): 0.75,
+    ("bend", "refl"): 1.30,
+    ("zigzag", "free"): 1.10,
+    ("zigzag", "pec"): 1.10,
+    ("zigzag", "refl"): 1.60,
+}
+
+
+@pytest.mark.parametrize("deck", list(_GD8_DECKS))
+@pytest.mark.parametrize("ground", list(_GD8_GROUNDS))
+def test_gd8b_the_bracket_correction_holds_no_triple(monkeypatch, deck, ground):
+    """Tracemalloc gate on `_ek_bracket_correction_tested` itself (#355).
+
+    Budget is in TRIPLES — 3 x 16 x nnz x N, the fill's own structural unit —
+    because a second one of those is what the correction used to build. At
+    N = 300 nnz is 898 and a triple is 12.93 MB. Every bar in `_GD8_BAR` sits
+    at least 1.3x above the streamed number and at least 1.3x below the
+    whole-triple one, which is the headroom momwire#347 taught this suite to
+    leave: a gate that passed locally at 1.06x its bar failed on the GitHub
+    runner at 1.11x.
+
+    The correction is called on its own rather than through `_assemble_Z` so
+    that what is measured is the correction and not the fill — the extended
+    kernel's near correction holds a per-pair working set several times this
+    on the same deck, which is `_PAIR_BLOCK`'s business and not this gate's.
+    G is a zero matrix of the right shape: the correction only subtracts into
+    it, and its size is charged to the caller either way.
+
+    `_EK_BRACKET_BAND_BYTES` is shrunk to one test segment's worth, the same
+    lever `test_grounded_fill_holds_no_parallel_ground_triple` pulls on
+    `_FILL_WORKSPACE_BYTES`: at N = 300 the shipped 32 MB budget is not
+    binding, and what this gate is for is the behaviour at the sizes where it
+    is. `_PAIR_BLOCK` is shrunk for the same reason it is there — the pair
+    scratch is a fixed working set that would otherwise bury the triples.
+    """
+    import tracemalloc
+
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_EK_BRACKET_BAND_BYTES", 1)
+    monkeypatch.setattr(_sg, "_PAIR_BLOCK", 8)
+
+    n = 300
+    sim = _GD8_DECKS[deck](n, **_GD8_GROUNDS[ground])
+    geom = sim._build_geometry()
+    N = geom["n_segs"]
+    assert N == n
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    triple = 3 * 16 * ctx["w_entry"].shape[0] * N
+    G = np.zeros((N, N), dtype=np.complex128)
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        sim._ek_bracket_correction_tested(G, geom, sim.k, ctx)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    bar = _GD8_BAR[(deck, ground)]
+    assert peak < bar * triple, (
+        f"{deck}/{ground}: the end-bracket correction peaked "
+        f"{peak / 1e6:.2f} MB = {peak / triple:.2f} triples (one triple = "
+        f"{triple / 1e6:.2f} MB), bar {bar} — it is building a triple again"
+    )
+
+
+def test_gd8c_the_free_space_ek_assembly_holds_one_fill_not_two(monkeypatch):
+    """The whole `_assemble_Z` peak, which is what momwire#355 was opened on.
+
+    Free space only, and that is the finding rather than a convenience: with a
+    ground the peak belongs to the FILL — the fused C++ image block allocates
+    its own triple to fold, and the refl-coef ground its specular tables — so
+    the grounded assembly reads 2.47 -> 2.09 (PEC) and 2.98 -> 2.82 (refl-coef)
+    here, differences too small for any bar to sit inside. Free space is where
+    the correction is the peak, and it moves 2.47 -> 1.36 triples: the
+    correction's own triple, plus the fill's, which `_assemble_Z` used to hold
+    across it and now drops.
+
+    1.8 sits 1.32x above the streamed number and 1.37x below the whole-triple
+    one — the momwire#347 headroom, on the tightest of these three gates.
+
+    The issue's own headline number, ~4.1 triples in every mode, is NOT this
+    and is not the correction: at the shipped `_PAIR_BLOCK` the extended
+    kernel's near correction holds ~5.9 MB per pair in the block, 53 MB at a
+    block of 8, and that fixed working set — not the matrix — is what the
+    original measurement saw. It is unchanged by this gate's subject and is
+    left to `_PAIR_BLOCK`'s own issue; shrinking the pair block to 1 here is
+    what lets the triples be seen at all.
+    """
+    import tracemalloc
+
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_FILL_WORKSPACE_BYTES", 1)
+    monkeypatch.setattr(_sg, "_EK_BRACKET_BAND_BYTES", 1)
+    monkeypatch.setattr(_sg, "_PAIR_BLOCK", 1)
+
+    n = 300
+    sim = _gd8_bend(n)
+    geom = sim._build_geometry()
+    N = geom["n_segs"]
+    nnz = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)[
+        "w_entry"
+    ].shape[0]
+    triple = 3 * 16 * nnz * N
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        G, _ = sim._assemble_Z(geom, sim.k)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    transient = peak - G.nbytes
+    assert transient < 1.8 * triple, (
+        f"the free-space EK assembly peaked {transient / 1e6:.2f} MB above G "
+        f"= {transient / triple:.2f} contribution triples (one triple = "
+        f"{triple / 1e6:.2f} MB) — the bracket's own triple is back, or the "
+        f"fill's is being held across it"
+    )
