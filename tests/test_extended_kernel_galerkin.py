@@ -857,14 +857,26 @@ def test_gb2_fat_wire_asymmetry_is_test_quadrature_limited(ground):
     assert fine <= 10.0 * _sym_ratio(_monopole(n_qp_test=16, n_qp_near=16, **kw))
 
 
-def test_gb2_an_asymmetric_mask_breaks_reciprocity_and_refinement_cannot_fix_it():
+def test_gb2_an_asymmetric_mask_breaks_reciprocity_and_refinement_cannot_fix_it(
+    monkeypatch,
+):
     """The falsifying contrast, and the reason the pair rule exists.
 
     Extend only the pairs with j > i — a caricature of a per-source-segment
     decision — and ‖G−Gᵀ‖/‖G‖ jumps by orders of magnitude AND stops
     responding to the test rule, because the asymmetry is now in what is
     being integrated rather than in how well.
+
+    On the NUMPY backend, forced. The caricature is `mask & (j > i)`, and
+    since momwire#358 the fused fill no longer takes a mask: it takes the
+    pair rule's group LABELS and scores `g_obs[m] == g_src[n]` itself, which
+    is symmetric by construction and cannot express an upper-triangular
+    mutation at all. Forcing the backend that still evaluates `_ek_pairs`
+    keeps the caricature exactly as written; the two backends agree to 1e-15
+    on the honest fill (G-C1/G-C3), so nothing about the statement is
+    backend-specific.
     """
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
     original = SinusoidalGalerkinSolver._ek_pairs
 
     def upper_only(self, geom, m_idx, n_idx, mirror, n_panels=1):
@@ -1019,6 +1031,14 @@ _EK_ENTRY_POINTS = [
     (SinusoidalGalerkinSolver, "_ek_bracket_block"),
 ]
 
+# The fused fill's own eligibility payload (momwire#358) joins the roster only
+# on a build that has the C++ EK twin to consume it: without one an EK-on fill
+# correctly takes the numpy block loop and never builds it, and the "they all
+# fire with EK on" control below would be demanding a call that must not
+# happen. The "EK off enters no EK code" half covers it either way.
+if _sg._HAVE_GALERKIN_FAR_FILL and _sg._HAVE_GALERKIN_FAR_FILL_EK:
+    _EK_ENTRY_POINTS.append((SinusoidalGalerkinSolver, "_ek_far_labels"))
+
 
 @pytest.fixture
 def ek_call_counts(monkeypatch):
@@ -1056,16 +1076,19 @@ def test_gb4b_ek_off_enters_no_ek_code(ek_call_counts, name):
 
 
 def test_gb4_the_fused_far_fill_refuses_an_ek_payload_it_cannot_serve(monkeypatch):
-    """The reduced C++ far fill takes no eligibility mask, so routing an EK-on
-    block through it would drop the delta silently. Unit C added the twin and
-    flipped `_HAVE_GALERKIN_FAR_FILL_EK`; on a build WITHOUT it — a
+    """The reduced C++ far fill takes no eligibility payload, so routing an
+    EK-on block through it would drop the delta silently. Unit C added the twin
+    and flipped `_HAVE_GALERKIN_FAR_FILL_EK`; on a build WITHOUT it — a
     pure-Python install, or an extension predating #246 — `_tested_contribs`
     must take the numpy path and `_far_fill_accel` must refuse an EK payload
     rather than ignore it. That is what this simulates."""
     monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL_EK", False)
     sim = _monopole(extended_kernel=True)
+    payload = _sg._EKFarLabels(
+        np.zeros(1), np.zeros(1, np.int64), np.zeros(1, np.int64)
+    )
     with pytest.raises(NotImplementedError, match="unit C"):
-        sim._far_fill_accel(sim.k, None, None, None, ek=_EKPairs(np.zeros(1), None))
+        sim._far_fill_accel(sim.k, None, None, None, ek=payload)
 
 
 # ---------------------------------------------------------------------------
@@ -1100,25 +1123,35 @@ def test_gb5_pec_image_shift_matches_the_point_matched_one():
     assert err < _SHIFT_BAR, f"galerkin {d_gal} vs collocation {d_col} ({err:.1%})"
 
 
-def test_gb5_the_image_block_carries_its_own_delta():
+def test_gb5_the_image_block_carries_its_own_delta(monkeypatch):
     """Not a ride-along: force the image block's payload to None and the
     grounded answer moves, by more than the free-space block's own EK shift
-    would explain."""
-    original = SinusoidalGalerkinSolver._ek_pairs
+    would explain.
 
-    def free_space_only(self, geom, m_idx, n_idx, mirror, n_panels=1):
+    BOTH payload builders are neutered, because since momwire#358 the fused
+    far fill takes `_ek_far_labels` while the near correction and the numpy
+    block loop still take `_ek_pairs`. Patching only one would leave the
+    image block half-extended and make the gate measure the wrong mutation.
+    """
+    orig_pairs = SinusoidalGalerkinSolver._ek_pairs
+    orig_labels = SinusoidalGalerkinSolver._ek_far_labels
+
+    def pairs_free_space_only(self, geom, m_idx, n_idx, mirror, n_panels=1):
         if mirror:
             return None
-        return original(self, geom, m_idx, n_idx, mirror, n_panels)
+        return orig_pairs(self, geom, m_idx, n_idx, mirror, n_panels)
+
+    def labels_free_space_only(self, geom, mirror, n_panels=1):
+        if mirror:
+            return None
+        return orig_labels(self, geom, mirror, n_panels)
 
     z_both, _ = _monopole(extended_kernel=True, ground_z=0.0).compute_impedance()
-    try:
-        SinusoidalGalerkinSolver._ek_pairs = free_space_only
-        z_free_only, _ = _monopole(
-            extended_kernel=True, ground_z=0.0
-        ).compute_impedance()
-    finally:
-        SinusoidalGalerkinSolver._ek_pairs = original
+    monkeypatch.setattr(SinusoidalGalerkinSolver, "_ek_pairs", pairs_free_space_only)
+    monkeypatch.setattr(
+        SinusoidalGalerkinSolver, "_ek_far_labels", labels_free_space_only
+    )
+    z_free_only, _ = _monopole(extended_kernel=True, ground_z=0.0).compute_impedance()
     assert abs(z_both - z_free_only) > 1e-3 * abs(z_both)
 
 
@@ -1292,11 +1325,20 @@ def test_gc1_the_ek_twin_actually_moves_the_far_fill(name, monkeypatch):
 
 
 @pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
-def test_gc2_an_all_ineligible_mask_gives_the_reduced_fill_to_the_bit():
-    """The delta's code path is entered per PAIR, so a mask with nothing in it
-    must leave the reduced arithmetic alone — not to a tolerance, to the bit.
-    This is the C++ half of `test_gb3_zero_radius_gives_the_reduced_fill_to_
-    the_bit`, and it is what says the twin's reduced half is the frozen one.
+def test_gc2_an_all_ineligible_label_set_gives_the_reduced_fill_to_the_bit():
+    """The delta's code path is entered per PAIR, so labels that make nothing
+    eligible must leave the reduced arithmetic alone — not to a tolerance, to
+    the bit. This is the C++ half of `test_gb3_zero_radius_gives_the_reduced_
+    fill_to_the_bit`, and it is what says the twin's reduced half is the
+    frozen one.
+
+    Both ways of emptying the set, because momwire#358 moved the predicate
+    `g_obs[m] >= 0 and g_obs[m] == g_src[n]` into the kernel and either half
+    of it can now be the thing that fails: labels that MISMATCH (0 against 1)
+    and labels that carry the never-extend marker on both sides (−1 against
+    −1, equal and still ineligible). The third row is the control — labels
+    that DO match, with zero radii, which reaches the delta and finds it
+    identically zero.
     """
     from momwire._accel import acc
 
@@ -1304,6 +1346,7 @@ def test_gc2_an_all_ineligible_mask_gives_the_reduced_fill_to_the_bit():
     geom = sim._build_geometry()
     ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
     n_obs, n_src = ctx["obs_c"].shape[0], ctx["N"]
+    n_test = ctx["starts"].shape[0] - 1
     args = (
         np.ascontiguousarray(ctx["obs_c"]),
         np.ascontiguousarray(ctx["obs_t"]),
@@ -1319,19 +1362,171 @@ def test_gc2_an_all_ineligible_mask_gives_the_reduced_fill_to_the_bit():
     )
     ek_gx, ek_gw = sim._ek_delta_rule(_N_QP_EK_DELTA, 1)
     red = acc.sinusoidal_galerkin_far_fill(*args)
-    for radius, mask in (
-        (sim._seg_radius(geom), np.zeros((n_obs, n_src), dtype=bool)),
-        (np.zeros(n_src), np.ones((n_obs, n_src), dtype=bool)),
+    zeros_t = np.zeros(n_test, dtype=np.int64)
+    zeros_s = np.zeros(n_src, dtype=np.int64)
+    for why, radius, g_obs, g_src in (
+        ("mismatched labels", sim._seg_radius(geom), zeros_t, zeros_s + 1),
+        ("the never-extend marker", sim._seg_radius(geom), zeros_t - 1, zeros_s - 1),
+        ("eligible, zero radius", np.zeros(n_src), zeros_t, zeros_s),
     ):
         got = acc.sinusoidal_galerkin_far_fill_ek(
             *args,
             np.ascontiguousarray(radius, dtype=np.float64),
-            mask,
+            np.ascontiguousarray(g_obs, dtype=np.int64),
+            np.ascontiguousarray(g_src, dtype=np.int64),
             np.ascontiguousarray(ek_gx),
             np.ascontiguousarray(ek_gw),
         )
         for a, b in zip(got, red):
-            assert np.array_equal(a, b)
+            assert np.array_equal(a, b), why
+
+
+def _ek_selection(sim, geom, ctx, g_obs, g_src):
+    """Which (test segment, source segment) pairs the C++ twin actually gave
+    the delta to, read back EXACTLY rather than inferred.
+
+    G-C2 is what makes the readback exact: an ineligible pair's entry is bit
+    identical to the reduced fill, because the delta's code path is not
+    entered for it at all. So `ek != reduced`, cell by cell, IS the eligible
+    set — no tolerance anywhere — and folding the entry axis onto its test
+    segment turns it back into the (M, N) shape the old mask had.
+    """
+    from momwire._accel import acc
+
+    args, ek = _gc4_args(sim, geom, ctx)
+    payload = list(ek)
+    payload[1] = np.ascontiguousarray(g_obs, dtype=np.int64)
+    payload[2] = np.ascontiguousarray(g_src, dtype=np.int64)
+    red = acc.sinusoidal_galerkin_far_fill(*args)
+    got = acc.sinusoidal_galerkin_far_fill_ek(*args, *payload)
+    moved = np.zeros(red[0].shape, dtype=bool)
+    for a, b in zip(got, red):
+        moved |= a != b
+    sel = np.zeros((ctx["starts"].shape[0] - 1, ctx["N"]), dtype=bool)
+    np.logical_or.at(sel, ctx["m_of_entry"], moved)
+    return sel
+
+
+def _label_patterns(sim, geom):
+    """Adversarial (observer, source) label pairs for the predicate gate."""
+    n = geom["n_segs"]
+    z = np.zeros(n, dtype=np.int64)
+    plain, plain_src = sim._ek_axis_labels(geom, False)
+    out = {
+        # The two controls: everything and nothing.
+        "all eligible": (z, z.copy()),
+        # Equal labels that must STILL be ineligible — the `>= 0` half of the
+        # predicate, which a kernel that only compared labels would drop and
+        # no shift or symmetry gate would notice.
+        "the never-extend marker, both sides": (z - 1, z - 1),
+        "never-extend observers against real sources": (z - 1, z.copy()),
+        "never-extend sources against real observers": (z.copy(), z - 1),
+        # Mixed −1s: alternate observers opt out, sources all in one group.
+        "alternating never-extend observers": (
+            np.where(np.arange(n) % 2 == 0, 0, -1).astype(np.int64),
+            z.copy(),
+        ),
+        # A junction fan: three groups, permuted between the two axes, so the
+        # eligible set is a scattered pattern and not a block.
+        "three groups, permuted": (
+            (np.arange(n) % 3).astype(np.int64),
+            ((np.arange(n) + 1) % 3).astype(np.int64),
+        ),
+        "three groups, aligned": (
+            (np.arange(n) % 3).astype(np.int64),
+            (np.arange(n) % 3).astype(np.int64),
+        ),
+        # An observer group with no source in it at all.
+        "observer group absent from the sources": (z + 7, z.copy()),
+        # The real thing, unmirrored.
+        "the deck's own labels": (plain, plain_src),
+    }
+    # And mirrored, where the deck has a ground to mirror through. That pair
+    # is the asymmetric one: `_ek_axis_labels(geom, True)` scans the real and
+    # reflected segments TOGETHER and splits the result, so its two halves are
+    # different arrays and passing either one twice is a different eligible
+    # set — which is exactly what the swapped row below shows.
+    if sim.ground_z is not None:
+        real, image = sim._ek_axis_labels(geom, True)
+        out["the deck's own MIRRORED labels"] = (real, image)
+        out["mirrored labels, halves swapped"] = (image, real)
+    return out
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("deck", ["fat dipole", "vee", "PEC ground"])
+def test_gc2_the_in_kernel_predicate_is_the_mask_formula(deck):
+    """momwire#358's whole correctness claim, pinned per pair.
+
+    The twin used to be handed `_ek_pairs`' materialized (n_obs, N) mask; it
+    is now handed the group labels and scores `g_obs[m] >= 0 and g_obs[m] ==
+    g_src[n]` itself. So the eligible set it reaches must equal that formula
+    evaluated in numpy — the mask builder's own expression, spelled here
+    exactly as `_ek_pairs` spells it — on every label pattern that could tell
+    the two apart: mixed −1s, permuted junction-fan groups, an observer group
+    with no sources in it, and the mirror-asymmetric label pair whose two
+    halves are different arrays.
+    """
+    sim = _gc_solver(deck)
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+
+    seen = set()
+    for why, (g_obs, g_src) in _label_patterns(sim, geom).items():
+        expect = (g_obs[:, None] == g_src[None, :]) & (g_obs[:, None] >= 0)
+        got = _ek_selection(sim, geom, ctx, g_obs, g_src)
+        assert np.array_equal(got, expect), (
+            f"{deck} / {why}: kernel selected {got.sum()} pairs, "
+            f"the mask formula {expect.sum()}"
+        )
+        seen.add(expect.tobytes())
+
+    # The gate is only worth anything if the patterns disagree with each other
+    # and if both answers occur — an all-True and an all-False readback would
+    # pass against a kernel that ignored the labels entirely.
+    assert len(seen) > 4, "the label patterns did not separate"
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+def test_gc2_the_selection_readback_is_not_vacuous():
+    """The control for the gate above: its two extremes really are extreme, so
+    `ek != reduced` is measuring the delta's presence and not float noise."""
+    sim = _gc_solver("fat dipole")
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    n = geom["n_segs"]
+    z = np.zeros(n, dtype=np.int64)
+    assert _ek_selection(sim, geom, ctx, z, z).all(), "no pair took the delta"
+    assert not _ek_selection(sim, geom, ctx, z - 1, z - 1).any(), "every pair did"
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+def test_gc2_the_twin_checks_its_label_lengths():
+    """The mask carried its own shape and the kernel checked it against the
+    observer rows; the labels carry one length each, and getting either wrong
+    would read off the end of the array rather than mis-select a pair
+    (momwire#358). So both are refused."""
+    from momwire._accel import acc
+
+    sim = _gc_solver("fat dipole")
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    args, ek = _gc4_args(sim, geom, ctx)
+    n_test, n_src = ek[1].shape[0], ek[2].shape[0]
+    assert n_test == ctx["starts"].shape[0] - 1 and n_src == ctx["N"]
+    bad = {
+        "obs labels per observer ROW": (1, np.zeros(ctx["obs_c"].shape[0], np.int64)),
+        "obs labels one short": (1, np.zeros(n_test - 1, np.int64)),
+        "src labels one long": (2, np.zeros(n_src + 1, np.int64)),
+    }
+    for why, (slot, labels) in bad.items():
+        payload = list(ek)
+        payload[slot] = labels
+        try:
+            acc.sinusoidal_galerkin_far_fill_ek(*args, *payload)
+        except (RuntimeError, TypeError, ValueError):
+            continue
+        pytest.fail(f"{why}: accepted")
 
 
 @pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
@@ -1427,9 +1622,14 @@ def _gc4_args(sim, geom, ctx):
         np.ascontiguousarray(ctx["starts"], dtype=np.int64),
     )
     ek_gx, ek_gw = sim._ek_delta_rule(_N_QP_EK_DELTA, 1)
+    # All-eligible, in the label vocabulary momwire#358 gave the twin: one
+    # label per TEST segment and one per source segment, all equal and all
+    # non-negative.
+    n_test = ctx["starts"].shape[0] - 1
     ek = (
         np.ascontiguousarray(sim._seg_radius(geom), dtype=np.float64),
-        np.ones((n_obs, n_src), dtype=bool),
+        np.zeros(n_test, dtype=np.int64),
+        np.zeros(n_src, dtype=np.int64),
         np.ascontiguousarray(ek_gx),
         np.ascontiguousarray(ek_gw),
     )
@@ -1595,11 +1795,13 @@ def test_gc5_the_grounded_accelerated_fold_holds_no_triple(monkeypatch, n):
     4.15 at N = 300, i.e. noise. That is G-D8c's finding repeated, and it is
     why the subject is measured on its own here.
 
-    What is left inside the bar is not the fill: at 0.23 triples in both
-    sizes it scales as N^2, not as nnz*N, and it is the extended kernel's
-    (n_obs, N) eligibility mask and its build temporaries. momwire#358
-    replaces that mask with (N,) group labels, so this number is expected to
-    fall again and never to rise.
+    What is left inside the bar is not the fill. momwire#358 took the
+    eligibility mask and its build temporary out of it — 1.18 -> 0.23 -> 0.176
+    triples at N = 300, 0.23 -> 0.175 at N = 400 — and G-C6 below measures
+    what remains without the near correction in the way: 0.009 triples, i.e.
+    nothing of matrix shape at all. The 0.176 this gate sees is
+    `_apply_near_correction`'s own N^2 pair search (`_near_pairs`), which is
+    neither the fill nor #356's or #358's subject.
     """
     import tracemalloc
 
@@ -1627,6 +1829,79 @@ def test_gc5_the_grounded_accelerated_fold_holds_no_triple(monkeypatch, n):
         f"N={n}: the PEC image block peaked {peak / 1e6:.2f} MB = "
         f"{peak / triple:.2f} triples (one triple = {triple / 1e6:.2f} MB), "
         f"bar {_GC5_BAR} — the fused fill is allocating its own again"
+    )
+
+
+# ===========================================================================
+# G-C6 — the eligibility payload is not of matrix shape (momwire#358)
+# ===========================================================================
+# The EK twin took its eligibility as an (n_obs, N) bool mask — n_obs = N*nq
+# rows, so 8 bytes per matrix cell of RESIDENT input, 11.5 MB at N = 1200 —
+# built in Python as `(gi == gj) & (gi >= 0)`, which materializes the `==`
+# result first and so peaks at two of them. It now takes the group labels
+# themselves, one per test segment and one per source segment, and scores the
+# same predicate per pair inside the sweep.
+#
+# G-C5 above cannot see the whole of that: with the near correction on, its
+# number is dominated by `_near_pairs`' own N^2 search. So this gate measures
+# the grounded fill with the near correction OFF — G-C1's isolation, for
+# G-C1's reason — where what is left IS the fill's own working set. Measured
+# on the same `_gd8_bend` decks, main (61e22da) -> this branch:
+#
+#   N=300   1.50 MB = 0.1157 triples  ->  0.11 MB = 0.0087 triples
+#   N=400   2.63 MB = 0.1144 triples  ->  0.15 MB = 0.0065 triples
+#
+# The 1.39 MB and 2.45 MB that went are 2 x 8 x N^2 to the byte: the mask and
+# the `==` temporary under it. What is left is O(N) — the `ascontiguousarray`
+# copies of the observer tables and the delta rule — so it FALLS as a fraction
+# of the triple with N, which is the shape of the claim.
+#
+# 0.03 sits 3.4x above the folded number and 3.9x below main's, and unlike
+# G-C5's bar it is red on main: it is a gate on this change specifically, so
+# it is pinned against the value main actually measured rather than against a
+# round number. (Red on main is checkable here even though the new C++
+# signature is not, because this is a residency measurement of main's own
+# code, taken with main's own .so.)
+_GC6_BAR = 0.03
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("n", [300, 400])
+def test_gc6_the_fused_ek_fill_holds_nothing_of_matrix_shape(monkeypatch, n):
+    """Tracemalloc gate on the grounded EK fill alone (momwire#358).
+
+    Near correction off, so the subject is the fused fill and its payload and
+    not `_apply_near_correction`'s pair search — the same isolation
+    `_far_blocks` makes for G-C1, and the reason G-C5's number stalls at 0.176
+    while this one reads 0.009.
+    """
+    import tracemalloc
+
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_PAIR_BLOCK", 8)
+
+    sim = _gd8_bend(n, ground_z=0.0)
+    sim.near_correction = False
+    geom = sim._build_geometry()
+    N = geom["n_segs"]
+    assert N == n
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    triple = 3 * 16 * ctx["w_entry"].shape[0] * N
+    contribs = sim._tested_contribs(geom, sim.k, ctx, _plain_projection)
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        sim._fold_ground_block(geom, sim.k, ctx, contribs)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < _GC6_BAR * triple, (
+        f"N={n}: the PEC image fill peaked {peak / 1e6:.3f} MB = "
+        f"{peak / triple:.4f} triples (one triple = {triple / 1e6:.2f} MB), "
+        f"bar {_GC6_BAR} — something of matrix shape is back in the payload"
     )
 
 
@@ -2128,13 +2403,18 @@ def test_gs3_symmetry_survives_the_extended_kernel_over_sommerfeld():
         assert ext < 1e-6, f"{name}: {ext:.2e}"
 
 
-def test_gs3_an_asymmetric_mask_breaks_reciprocity_over_sommerfeld_too():
+def test_gs3_an_asymmetric_mask_breaks_reciprocity_over_sommerfeld_too(monkeypatch):
     """The falsifying contrast, on this ground: extend only the `j > i` pairs
     — the caricature of NEC's per-source-END decision — and ‖G−Gᵀ‖/‖G‖ jumps
     from 6.6e-8 to 6.6e-1, seven orders, AND stops responding to the test rule
     (6.63e-1 at `n_qp_test` 8 and 16 alike), because the asymmetry is now in
     what is integrated rather than in how well.
+
+    On the numpy backend for G-B2's momwire#358 reason: an upper-triangular
+    mutation is not a thing the label payload the fused fill now takes can
+    say.
     """
+    monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
     original = SinusoidalGalerkinSolver._ek_pairs
 
     def upper_only(self, geom, m_idx, n_idx, mirror, n_panels=1):
@@ -2238,22 +2518,38 @@ def test_gs5_the_sommerfeld_image_block_carries_its_own_delta():
     the whole image block is eligible. Measured 1.9e-2 of |Z|, against the
     3.5e-3 the reduced remainder is worth on a comparable deck: the mixture is
     a correction to an effect that is really there, not the whole of it.
-    """
-    original = SinusoidalGalerkinSolver._ek_pairs
 
-    def no_image(self, geom, m_idx, n_idx, mirror, n_panels=1):
-        pairs = original(self, geom, m_idx, n_idx, mirror, n_panels)
+    Both payload builders again (momwire#358): the Sommerfeld image block is
+    plainly projected, so its far half is the fused fill reading
+    `_ek_far_labels` and its near half is `_ek_pairs`. On the label side the
+    neutering is spelled in the labels' own vocabulary — the observer half set
+    to the never-extend value −1 — which is the same empty eligible set the
+    zeroed mask gives.
+    """
+    orig_pairs = SinusoidalGalerkinSolver._ek_pairs
+    orig_labels = SinusoidalGalerkinSolver._ek_far_labels
+
+    def no_image_pairs(self, geom, m_idx, n_idx, mirror, n_panels=1):
+        pairs = orig_pairs(self, geom, m_idx, n_idx, mirror, n_panels)
         if not mirror:
             return pairs
         return pairs._replace(eligible=np.zeros_like(pairs.eligible))
 
+    def no_image_labels(self, geom, mirror, n_panels=1):
+        lab = orig_labels(self, geom, mirror, n_panels)
+        if not mirror:
+            return lab
+        return lab._replace(group_obs=np.full_like(lab.group_obs, -1))
+
     kw = _GROUND_KW["sommerfeld"]
     z_full, _ = _monopole(extended_kernel=True, **kw).compute_impedance()
     try:
-        SinusoidalGalerkinSolver._ek_pairs = no_image
+        SinusoidalGalerkinSolver._ek_pairs = no_image_pairs
+        SinusoidalGalerkinSolver._ek_far_labels = no_image_labels
         z_flat, _ = _monopole(extended_kernel=True, **kw).compute_impedance()
     finally:
-        SinusoidalGalerkinSolver._ek_pairs = original
+        SinusoidalGalerkinSolver._ek_pairs = orig_pairs
+        SinusoidalGalerkinSolver._ek_far_labels = orig_labels
     assert abs(z_flat - z_full) > 1e-3 * abs(z_full), (z_full, z_flat)
 
 
