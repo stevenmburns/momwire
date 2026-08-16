@@ -105,6 +105,7 @@ export default defineConfig({
           label: "Reference",
           items: [
             { label: "The nec2 deck dialect", slug: "reference/deck-grammar-nec2" },
+            { label: "Running momwire as SimNEC's engine", slug: "reference/portal-usage" },
           ],
         },
         {
