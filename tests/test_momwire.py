@@ -4984,12 +4984,9 @@ def test_sinusoidal_banded_assembly_is_bit_equal(
                 "ground_eps": (13.0, 0.005),
                 "ground_model": "sommerfeld",
             },
-            2,
-            18,
+            1,
+            6,
             id="sommerfeld",
-            # ~14 s: the remainder's fixed per-band working set (#343) is
-            # rebuilt 93 times at these band heights.
-            marks=pytest.mark.slow,
         ),
     ],
 )
@@ -5012,26 +5009,27 @@ def test_sinusoidal_assembly_holds_no_whole_matrix_field_tensor(
       * measured on the pre-#332 whole-tensor fill, above Z: 110.2 MB free
         space, 176.1 MB PEC and refl-coef, 242.1 MB sommerfeld.
       * measured on the banded fill, above Z: 1.28 MB free space, 1.41 MB
-        PEC, 1.41 MB refl-coef (all at swept_mem_mb = 1), 12.39 MB
-        sommerfeld (at 2 — see below).
+        PEC, 1.41 MB refl-coef, 2.89 MB sommerfeld — all at
+        swept_mem_mb = 1.
 
-    6 MB therefore sits ~4.3x above the worst free/image mode and ~3.8x
-    below the paranoid floor.
+    6 MB therefore sits ~4.3x above the worst free/image mode, ~2.1x above
+    sommerfeld, and ~3.8x below the paranoid floor.
 
-    Sommerfeld gets 18 MB instead because the remainder evaluator carries a
-    fixed working set for the interpolated grid dyad — issue #343's
-    transient, measured flat at 10.07 / 10.15 / 10.31 MB for N = 300 / 600 /
-    1200 and flat again across band heights of 1 to 64 rows. A constant is
-    not an N² table, so it belongs under the threshold rather than in it,
-    but it does eat the margin: 18 MB is 1.45x over the measurement, 1.28x
-    under the paranoid floor and 3.8x under the triple.
+    Sommerfeld ran on its own looser settings until momwire#357: 18 MB at
+    swept_mem_mb = 2, marked slow at ~20 s. Both were consequences of the
+    grid-sizing endpoint scan, which the remainder evaluator used to run
+    per band — a ~10.3 MB transient and ~0.074 s each, flat in N and in
+    band height, which is what forced the wider budget and the taller band.
+    momwire#367 hoisted that scan to once per fill (where Z, allocated
+    after it, is bigger than its peak and masks it entirely at this N), and
+    momwire#357 did the same for the rest of the evaluator's source side.
+    What is left tracks the band like every other mode, so this case now
+    runs on the same swept_mem_mb = 1 and the same 6 MB as its siblings —
+    a tighter gate, at 1.2 s instead of 20.
 
-    That same fixed working set is rebuilt per band, at ~0.074 s each, so
-    the sommerfeld case runs at swept_mem_mb = 2 (13-row bands) rather than
-    1 (6-row): 20 s instead of 30 s, for 1.1 MB more transient (11.29 →
-    12.39 MB). Each case pins its own `swept_mem_mb` because the band is
-    itself part of the measured transient — what the gate catches is
-    anything that does NOT shrink with the band.
+    Each case pins its own `swept_mem_mb` because the band is itself part
+    of the measured transient — what the gate catches is anything that does
+    NOT shrink with the band.
 
     `_image_refl_prep`'s specular tables are deliberately NOT in scope: five
     float64 (N, N) tables cached per geometry, retired by #332's unit B. The
@@ -5146,4 +5144,157 @@ def test_sinusoidal_refl_coef_specular_tables_are_not_cached():
     assert sim._cached_image_refl_prep is None, (
         "the point-matched fill populated _cached_image_refl_prep — a "
         "whole-geometry specular table is resident again"
+    )
+
+
+def _somm_remainder_solver(n_edges=75, seg_per_edge=8):
+    """A straight sommerfeld wire for the #357 item-1 gates below."""
+    lam = 22.0
+    ys = np.linspace(-0.962 * lam / 4, 0.962 * lam / 4, n_edges + 1)
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])]
+    return SinusoidalSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=lam,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+    )
+
+
+@pytest.mark.parametrize("band", [1, 7, 100, 600])
+def test_sinusoidal_sommerfeld_remainder_replay_is_bit_equal(band):
+    """One prepared state replayed across bands must give the same floats as
+    a fresh prepare per band (issue #357 item 1).
+
+    This is the half the fill actually leans on: the prepared tables are
+    built once and handed to every band, so anything the replay mutates —
+    an in-place fold into `shp_w`, a `srcf` reshaped under a later band's
+    shape — would poison every band after the first while leaving the first
+    one right. Comparing a SHARED prepare against a per-band fresh one puts
+    exactly that failure in the frame, at band heights from a single row to
+    the whole observer axis. `array_equal`, not `allclose`: nothing here is
+    allowed to move at all.
+
+    What prepare BUILDS is anchored separately, by
+    `test_sinusoidal_sommerfeld_remainder_prepare_matches_the_inline_build`
+    — this gate could not see that, because both sides of it come from the
+    same prepare.
+    """
+    from momwire import _ground_refl, _sommerfeld
+
+    sim = _somm_remainder_solver()
+    geom = sim._build_geometry()
+    n = geom["n_segs"]
+    assert n == 600
+    seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
+    eps_t = _ground_refl.eps_tilde(sim.ground_eps, sim.omega, sim.eps)
+    r1_max = _sommerfeld.max_image_distance(geom["seg_l"], geom["seg_r"], sim.ground_z)
+
+    shared = sim._sommerfeld_remainder_prepare(geom, sim.k, eps_t, r1_max=r1_max)
+    for i0 in range(0, n, band):
+        i1 = min(i0 + band, n)
+        fresh = sim._sommerfeld_remainder_prepare(geom, sim.k, eps_t, r1_max=r1_max)
+        expect = sim._replay_sommerfeld_remainder(
+            fresh, obs_centers=seg_c[i0:i1], obs_tangents=seg_t[i0:i1]
+        )
+        got = sim._replay_sommerfeld_remainder(
+            shared, obs_centers=seg_c[i0:i1], obs_tangents=seg_t[i0:i1]
+        )
+        assert np.array_equal(got, expect), (
+            f"the shared prepared state drifted from a fresh one on rows "
+            f"{i0}:{i1} at band height {band} — the replay is mutating it"
+        )
+
+
+@pytest.mark.parametrize("cos_shape", ["cos", "fold"])
+def test_sinusoidal_sommerfeld_remainder_prepare_matches_the_inline_build(cos_shape):
+    """What `_sommerfeld_remainder_prepare` holds must be, float for float,
+    what the pre-#357 evaluator built inline on every band.
+
+    The split's whole safety claim is that no expression producing a float
+    moved or changed — only where it is evaluated from. That claim needs an
+    anchor OUTSIDE the split, because `_field_tensor_sommerfeld_remainder`
+    is now the composition of the two halves and so cannot contradict them:
+    a prepare that computed the wrong shapes would agree with itself
+    perfectly. The reference below is the retired inline spelling,
+    transcribed, so a rewrite of prepare's arithmetic fails here even when
+    every other Sommerfeld test still passes inside its tolerance.
+
+    Both `cos_shape` values are pinned: the fold is the one the free-space
+    tensor's `cos_shape` contract (momwire#205) makes load-bearing, and the
+    one a careless edit would quietly drop.
+    """
+    from momwire import _ground_refl
+
+    sim = _somm_remainder_solver()
+    geom = sim._build_geometry()
+    seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
+    k = sim.k
+    eps_t = _ground_refl.eps_tilde(sim.ground_eps, sim.omega, sim.eps)
+    prepared = sim._sommerfeld_remainder_prepare(geom, k, eps_t, cos_shape=cos_shape)
+
+    n, q = geom["n_segs"], sim.n_qp_sommerfeld
+    h_half = 0.5 * geom["seg_h"]
+    gx, gw = sim._leggauss_cached(q)
+    zloc = h_half[:, None] * gx[None, :]
+    src = seg_c[:, None, :] + zloc[..., None] * seg_t[:, None, :]
+    w_node = h_half[:, None] * gw[None, :]
+    shp_cos = (
+        np.cos(k * zloc) if cos_shape == "cos" else -2.0 * np.sin(0.5 * k * zloc) ** 2
+    )
+    shp = np.stack([np.ones_like(zloc), np.sin(k * zloc), shp_cos])
+
+    assert prepared["n_src"] == n * q
+    assert np.array_equal(prepared["srcf"], src.reshape(n * q, 3))
+    assert np.array_equal(prepared["t_src"], np.repeat(seg_t, q, axis=0))
+    assert np.array_equal(prepared["shp_w"], shp * w_node[None])
+
+
+def test_sinusoidal_sommerfeld_remainder_prepared_state_is_o_n():
+    """The prepared state must stay O(N) (issue #357 item 1, gate 3).
+
+    A prepare/replay split earns its keep only if what it holds across the
+    band loop is smaller than what the bands stop rebuilding. The three
+    tables prepare owns are (N·q, 3) source nodes, (N·q, 3) source tangents
+    and (3, N, q) k-weighted shapes — 72·q·N bytes all told, i.e. 216 bytes
+    per segment at the default q = 3, and nothing that squares.
+
+    Two checks, because either alone is weak: the total must scale linearly
+    when N doubles (an N² table would quadruple it), and at the larger N it
+    must sit far under one float64 (N, N) table — the smallest whole-matrix
+    object that could appear here. Everything else in the dict is borrowed,
+    not built: the geometry's own centre/tangent arrays and the module-level
+    cached grid, asserted by identity so a defensive copy would fail too.
+    """
+    from momwire import _ground_refl, _sommerfeld
+
+    owned = ("srcf", "t_src", "shp_w")
+    sizes = {}
+    for n_edges in (75, 150):
+        sim = _somm_remainder_solver(n_edges=n_edges)
+        geom = sim._build_geometry()
+        n = geom["n_segs"]
+        eps_t = _ground_refl.eps_tilde(sim.ground_eps, sim.omega, sim.eps)
+        prepared = sim._sommerfeld_remainder_prepare(geom, sim.k, eps_t)
+        sizes[n] = sum(prepared[key].nbytes for key in owned)
+        assert prepared["seg_c"] is geom["seg_centers"]
+        assert prepared["seg_t"] is geom["seg_tangents"]
+        assert prepared["grid"] is _sommerfeld.get_grid(
+            eps_t,
+            sim.k,
+            _sommerfeld.max_image_distance(geom["seg_l"], geom["seg_r"], sim.ground_z),
+            omega=sim.omega,
+            mu=sim.mu,
+        )
+
+    small, large = sizes[600], sizes[1200]
+    assert large <= 2.2 * small, (
+        f"prepared state grew {large / small:.2f}x when N doubled "
+        f"({small} -> {large} bytes) — something in it scales with N**2"
+    )
+    assert large < 8 * 1200 * 1200 / 20, (
+        f"prepared state is {large / 1e6:.2f} MB at N = 1200, within reach "
+        f"of one float64 (N, N) table ({8 * 1200 * 1200 / 1e6:.2f} MB)"
     )
