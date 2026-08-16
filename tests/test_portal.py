@@ -3729,6 +3729,63 @@ def test_the_gn_rearm_block_is_a_partial_refill():
     assert "FREQUENCY :" not in between, "a GN re-arm must not reprint FREQUENCY"
 
 
+def test_each_group_carries_the_model_groups_own_environment():
+    """The source of truth is ``momwire.deck``'s ``ExecuteGroup.environment``
+    (momwire#370). The portal recovered the per-group ground by re-parsing the
+    deck prefix that ended at each execute card until then — correct, and
+    O(groups·deck), and a second reader of the ``GN``/``GD`` rules living
+    beside the dialect's."""
+    deck = nec_portal.parse_deck(GN_REARM_DECK)
+    model = deck.model
+    assert [g.environment for g in deck.groups] == [g.environment for g in model.groups]
+    assert deck.groups[0].environment.ground is None
+    assert deck.groups[1].environment.ground == "pec"
+    # The printout's view derives from it rather than being stored beside it.
+    assert deck.groups[0].ground.kind == "free"
+    assert deck.groups[1].ground.kind == "pec"
+    # And the DECK-level record is the deck's last environment, unchanged.
+    assert deck.ground.kind == "pec"
+
+
+def test_the_deck_solver_fills_each_group_over_its_own_environment():
+    """The environment reaches the OPERATOR, not merely the printout: two
+    groups of one deck at one frequency get two fills and two impedances."""
+    deck = nec_portal.parse_deck(GN_REARM_DECK)
+    solver = nec_portal.DeckSolver(deck)
+    free, ground = (
+        solver.solve_group(group, group.freqs_mhz[0]) for group in deck.groups
+    )
+    assert free["solver"] is not ground["solver"]
+    assert free["ground_z"] is None
+    assert ground["ground_z"] == 0.0
+    z_free = free["v_gap"][0] / free["i_port"][0]
+    z_ground = ground["v_gap"][0] / ground["i_port"][0]
+    assert z_free != z_ground
+
+
+def test_the_deck_solver_translates_the_geometry_once():
+    """momwire#370: the mesh is the STRUCTURE's, not the operating point's,
+    so every fill replays one prepared handle — the same coordinate arrays,
+    not a fresh walk per frequency."""
+    deck = nec_portal.parse_deck(GN_REARM_DECK)
+    solver = nec_portal.DeckSolver(deck)
+    first = solver.at(14.1)["solver"]
+    second = solver.at(21.0)["solver"]
+    assert first is not second
+    for left, right in zip(first.wires_polylines, second.wires_polylines):
+        assert left is right
+
+
+def test_the_prefix_reparse_workaround_is_gone():
+    """The grep the rewire is measured by: nothing in the portal stamps a
+    ground onto the model any more, and no second parse recovers one."""
+    source = Path(nec_portal.__file__).read_text()
+    assert "replace(model" not in source
+    assert "_environments_per_group" not in source
+    assert "parse_dialect" in source  # the ONE parse, still there
+    assert source.count("parse_dialect(") == 1
+
+
 def test_the_gn_rearm_fixture_matches_the_oracle_section_walk():
     """The committed oracle capture of the same probe, section for section."""
     assert section_walk(printout("dipole_gn_rearm")) == section_walk(
