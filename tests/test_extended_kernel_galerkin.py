@@ -1390,6 +1390,247 @@ def test_gc3_the_two_backends_solve_the_same_deck(name, monkeypatch):
 
 
 # ===========================================================================
+# G-C4/G-C5 — the fill folds into the caller's triple (momwire#356)
+# ===========================================================================
+# Both fused entry points took no destination, so they allocated and returned
+# three (nnz, N) arrays whatever the caller wanted. A grounded accelerated
+# block therefore floored at TWO triples live — the free-space destination
+# plus the kernel's return — where the numpy path has held one since #332
+# unit C. `out=` (three arrays) plus `scale` fixes that: each finished entry
+# is folded on as `out += scale * value`, scale on the LEFT.
+#
+#   G-C4  the fold is the allocating call's arithmetic, to the bit: scale 1
+#         into zeros is the return value, scale −1 off a triple is
+#         `np.subtract`, and a complex scale is `np.multiply(scale, value)`
+#         — the operand order `sinusoidal.py`'s C2 convention pins. Plus the
+#         default preservation both halves of this rest on: `out=None` is the
+#         allocating path, and `scale` without `out` is inert.
+#   G-C5  the residency the whole thing is for, in triples.
+
+
+def _gc4_args(sim, geom, ctx):
+    """The positional argument tuple both entry points take, and the EK
+    payload the twin takes after it — built exactly as `_far_fill_accel`
+    does, so what these gates exercise is the shipped call."""
+    n_obs, n_src = ctx["obs_c"].shape[0], ctx["N"]
+    args = (
+        np.ascontiguousarray(ctx["obs_c"]),
+        np.ascontiguousarray(ctx["obs_t"]),
+        np.full(n_obs, float(sim._uniform_radius)),
+        np.ascontiguousarray(geom["seg_centers"]),
+        np.ascontiguousarray(geom["seg_tangents"]),
+        np.ascontiguousarray(ctx["hh"]),
+        float(sim.k),
+        float(sim.eta),
+        *[np.ascontiguousarray(v) for v in sim._leggauss_cached(sim.n_qp_const)],
+        np.ascontiguousarray(ctx["w_entry"], dtype=np.complex128),
+        np.ascontiguousarray(ctx["starts"], dtype=np.int64),
+    )
+    ek_gx, ek_gw = sim._ek_delta_rule(_N_QP_EK_DELTA, 1)
+    ek = (
+        np.ascontiguousarray(sim._seg_radius(geom), dtype=np.float64),
+        np.ones((n_obs, n_src), dtype=bool),
+        np.ascontiguousarray(ek_gx),
+        np.ascontiguousarray(ek_gw),
+    )
+    return args, ek
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("twin", [False, True], ids=["reduced", "ek"])
+def test_gc4_the_fold_is_the_allocating_fill_to_the_bit(twin):
+    """`out=`/`scale` may not be a second arithmetic (momwire#356).
+
+    The fold applies `scale` ONCE per entry, to the finished test-quadrature
+    sum, which is why the kernel accumulates into a per-test-segment scratch
+    band when a destination is given. Folding node by node instead would be
+    `((dst − t1) − t2) − …` against the caller's `dst − (t1 + t2 + …)`: a
+    reassociation, and one no tolerance-level gate would ever notice. So all
+    three comparisons below are `array_equal`.
+
+    The complex case is `np.multiply(scale, value)` and NOT `value * scale`:
+    complex128 multiply evaluates the imaginary part as `x.re*y.im +
+    x.im*y.re`, so the operand order moves the last bit, and the whole reason
+    `scale` exists is the Sommerfeld ground's C2 — which `sinusoidal.py`
+    documents as being on the LEFT.
+    """
+    from momwire._accel import acc
+
+    fill = (
+        acc.sinusoidal_galerkin_far_fill_ek
+        if twin
+        else acc.sinusoidal_galerkin_far_fill
+    )
+    sim = _gc_solver("fat dipole")
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    args, ek = _gc4_args(sim, geom, ctx)
+    args = args + ek if twin else args
+
+    ref = fill(*args)
+
+    zeros = tuple(np.zeros_like(a) for a in ref)
+    got = fill(*args, out=zeros, scale=1.0)
+    assert all(g is z for g, z in zip(got, zeros)), "out= must return out"
+    for a, b in zip(ref, zeros):
+        assert np.array_equal(a, b)
+
+    # scale −1 off a triple of the fill's own magnitude: the ground fold.
+    rng = np.random.default_rng(356)
+    base = tuple(
+        (rng.standard_normal(a.shape) + 1j * rng.standard_normal(a.shape))
+        * np.max(np.abs(a))
+        for a in ref
+    )
+    folded = tuple(b.copy() for b in base)
+    fill(*args, out=folded, scale=-1.0)
+    for b, r, f in zip(base, ref, folded):
+        assert np.array_equal(b - r, f)
+
+    # A complex scale, spelled the C2 way.
+    c2 = complex(0.3129384756, -0.7182736451)
+    scaled = tuple(np.zeros_like(a) for a in ref)
+    fill(*args, out=scaled, scale=c2)
+    for r, s in zip(ref, scaled):
+        assert np.array_equal(np.multiply(c2, r), s)
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("twin", [False, True], ids=["reduced", "ek"])
+def test_gc4_the_defaults_are_the_pre_356_call(twin):
+    """The additive half of G-C4, and what lets G-C2's byte-freeze survive a
+    signature change: `out=None` allocates and returns as it always did, and
+    `scale` alone is inert — there is no destination for it to weight, and a
+    caller who passes one without the other must not silently get a scaled
+    fill back.
+    """
+    from momwire._accel import acc
+
+    fill = (
+        acc.sinusoidal_galerkin_far_fill_ek
+        if twin
+        else acc.sinusoidal_galerkin_far_fill
+    )
+    sim = _gc_solver("fat dipole")
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    args, ek = _gc4_args(sim, geom, ctx)
+    args = args + ek if twin else args
+
+    ref = fill(*args)
+    for kw in ({}, {"out": None}, {"scale": 1.0}, {"scale": complex(-4.0, 9.0)}):
+        for a, b in zip(ref, fill(*args, **kw)):
+            assert np.array_equal(a, b), kw
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+def test_gc4_a_destination_the_kernel_cannot_write_is_refused():
+    """The kernel folds into `out`'s buffer directly, so anything pybind11
+    would have had to COPY to accept — wrong dtype, wrong shape, a non-C
+    layout, a read-only array — has to raise rather than land the fold in the
+    copy and hand the caller back an untouched destination.
+    """
+    from momwire._accel import acc
+
+    sim = _gc_solver("fat dipole")
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    args, _ek = _gc4_args(sim, geom, ctx)
+    ref = acc.sinusoidal_galerkin_far_fill(*args)
+    shape = ref[0].shape
+
+    def _ok():
+        return [np.zeros(shape, dtype=np.complex128) for _ in range(3)]
+
+    bad = {
+        "two arrays": _ok()[:2],
+        "float dtype": _ok()[:2] + [np.zeros(shape, dtype=np.float64)],
+        "wrong shape": _ok()[:2] + [np.zeros((shape[0] + 1, shape[1]), np.complex128)],
+        "fortran order": _ok()[:2] + [np.zeros(shape, np.complex128, order="F")],
+        "a transposed view": _ok()[:2] + [np.zeros(shape[::-1], np.complex128).T],
+        "read-only": _ok()[:2] + [_readonly(np.zeros(shape, np.complex128))],
+    }
+    for why, out in bad.items():
+        with pytest.raises((RuntimeError, TypeError, ValueError)):
+            acc.sinusoidal_galerkin_far_fill(*args, out=out)
+        assert all(not a.any() for a in out[:2]), f"{why}: it wrote anyway"
+
+
+def _readonly(a):
+    a.flags.writeable = False
+    return a
+
+
+# The ground block's OWN peak, in triples of 3 x 16 x nnz x N, extended
+# kernel on, at the N = 300 bend `_gd8_bend` builds. Measured, main -> #356:
+#
+#   PEC image         1.18 -> 0.23      (15.20 -> 3.00 MB of a 12.93 MB triple)
+#   PEC image, N=400  1.18 -> 0.23      (27.03 -> 5.31 MB of a 23.00 MB triple)
+#
+# and the two grounds this does not move, for the record:
+#
+#   refl-coef         1.90 -> 1.90      (numpy projector: never came here)
+#   sommerfeld        2.30 -> 2.30      (N=400: 1.73 -> 1.73)
+#
+# The Sommerfeld floor is structural under `out=` and is called out in
+# `_fold_ground_block`: `c2*img - rem` has to stay associated, so the image
+# triple must exist WHOLE before the fold can start. Banding the fill over
+# observers is what would fold it, and that is momwire#356's option 2.
+#
+# 0.6 sits 2.6x above the folded number and 2.0x below the allocating one —
+# far more headroom than the 1.3x momwire#347 asks for, because this fix goes
+# from two triples to one rather than trimming a transient.
+_GC5_BAR = 0.6
+
+
+@pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
+@pytest.mark.parametrize("n", [300, 400])
+def test_gc5_the_grounded_accelerated_fold_holds_no_triple(monkeypatch, n):
+    """Tracemalloc gate on `_fold_ground_block` itself (momwire#356).
+
+    The BLOCK and not the whole assembly, deliberately. With the extended
+    kernel on, `_assemble_Z`'s peak at these sizes is the near correction's
+    per-pair working set — ~53 MB at `_PAIR_BLOCK` 8, fixed against N — and
+    it buries a triple either way: the whole-assembly number reads 4.10 ->
+    4.15 at N = 300, i.e. noise. That is G-D8c's finding repeated, and it is
+    why the subject is measured on its own here.
+
+    What is left inside the bar is not the fill: at 0.23 triples in both
+    sizes it scales as N^2, not as nnz*N, and it is the extended kernel's
+    (n_obs, N) eligibility mask and its build temporaries. momwire#358
+    replaces that mask with (N,) group labels, so this number is expected to
+    fall again and never to rise.
+    """
+    import tracemalloc
+
+    from momwire import sinusoidal_galerkin as _sg
+
+    monkeypatch.setattr(_sg, "_PAIR_BLOCK", 8)
+
+    sim = _gd8_bend(n, ground_z=0.0)
+    geom = sim._build_geometry()
+    N = geom["n_segs"]
+    assert N == n
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    triple = 3 * 16 * ctx["w_entry"].shape[0] * N
+    contribs = sim._tested_contribs(geom, sim.k, ctx, _plain_projection)
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        sim._fold_ground_block(geom, sim.k, ctx, contribs)
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak < _GC5_BAR * triple, (
+        f"N={n}: the PEC image block peaked {peak / 1e6:.2f} MB = "
+        f"{peak / triple:.2f} triples (one triple = {triple / 1e6:.2f} MB), "
+        f"bar {_GC5_BAR} — the fused fill is allocating its own again"
+    )
+
+
+# ===========================================================================
 # G-S — the extended kernel over the SOMMERFELD ground (momwire#287)
 # ===========================================================================
 #
