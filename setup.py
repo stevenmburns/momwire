@@ -148,6 +148,6 @@ setup(
     cmdclass={"build_ext": OptionalBuildExt},
     # Listed explicitly rather than discovered: the list is short, and an
     # explicit one cannot silently ship a stray directory under src/.
-    packages=["momwire", "momwire.deck"],
+    packages=["momwire", "momwire.deck", "momwire.portal"],
     package_dir={"": "src/"},
 )
