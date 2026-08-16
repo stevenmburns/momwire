@@ -340,10 +340,13 @@ def test_the_synthetic_decks_actually_exercise_both_passes():
 # The geometry tests above measure GW/GM/GS/connections; this section adds
 # GN/GD, FR, EX and LD/LD-5 — the state a deck's execute groups run under.
 # The reference for structure/execution is the PORTAL's own nec2 parser,
-# ``nec_portal.parse_deck`` — an independent implementation of the same
-# retention/arming state machine, not merely a translation of ours (it was
-# antennaknobs' until #846 phase III brought it home; it is still an
-# independently written reader) — and for
+# ``nec_portal.parse_deck`` — an independently coded retention/arming state
+# machine for the FR/EX execute groups, not merely a translation of ours (it
+# was antennaknobs' until #846 phase III brought it home). Its GROUND record
+# is the one exception: antennaknobs#930 rebuilt ``Ground`` as
+# ``Ground.from_model(model.ground)`` rather than a second GN read, so
+# assertion 1 below checks that the portal's construction reflects the SAME
+# parse this test calls — a wiring check, not a second reader. For
 # loading, ``antennaknobs.network``'s RLC formulas fed the raw card fields,
 # not momwire's own ``LoadSpec.impedance``. Address resolution reuses this
 # module's own ``build_geometry``/``Nec2Structure``, whose bitwise agreement
@@ -454,7 +457,8 @@ def test_environment_source_and_load_semantics_match_antennaknobs(path: Path):
     assert ours.deferred == ()
 
     # 1. ground mapping: type, constants, the second medium, and the GE flag.
-    assert ours.ground == portal.ground.momwire_spec()
+    #    (a wiring check, not a second GN read — see the section note above)
+    assert portal.ground == nec_portal.Ground.from_model(ours.ground)
     assert ours.ground_plane_flag == portal.ground_plane_flag
     if portal.second_medium is None:
         assert ours.second_medium is None
