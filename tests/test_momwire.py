@@ -2993,6 +2993,89 @@ def test_bspline_offedge_fallback_chunked_fill_transient_honors_budget():
     )
 
 
+@pytest.mark.parametrize(
+    "ground_kwargs",
+    [
+        pytest.param({}, id="free-space"),
+        pytest.param({"ground_z": 0.0}, id="grounded-pec"),
+    ],
+)
+def test_bspline_swept_batched_z_chunks_transient_honors_budget(ground_kwargs):
+    """`_swept_batched_z_chunks` (issue #347) had the same rebind-before-del
+    gap #338 fixed on the other two chunked fills, just across a `yield`
+    instead of a plain loop iteration: it is a GENERATOR, so the per-chunk
+    moment stack `J` (or, grounded, `J_img`) stayed bound to its name
+    across the `yield` and into the next iteration's `J = producer(...)`,
+    which builds the NEW (chunk, nm, nm, N, N) stack before the old
+    reference is dropped — one `bytes_per_k`-budget's worth of accidental
+    double buffering the chunk-sizing arithmetic never accounted for.
+
+    A real consumer (`compute_impedance_swept`) drops each yielded `Z`
+    once it's used, so this gate does too (`del Z` each iteration) —
+    otherwise it would measure the caller's own retention, not the
+    generator's.
+
+    N = 240 (60 edges x 4 segs) keeps this CI-fast; swept_mem_mb = 30 is
+    sized so `bytes_per_k` (one k's all-pairs J tensor, ~8.4 MB at this N)
+    lets the budget arithmetic pick chunk > 1 — a chunk pinned to 1 by a
+    tiny budget can't show a rebind-before-del effect, since there is
+    only ever one chunk's worth of intent per iteration either way.
+    Measured: free-space 1.67x budget pre-fix, 0.97x post-fix;
+    grounded-pec 1.76x pre-fix, 0.97x post-fix.
+    """
+    import tracemalloc
+
+    from momwire.bspline import BSplineSolver
+
+    n_edges, seg_per_edge = 60, 4
+    L = 0.962 * 22 / 2
+    ys = np.linspace(-L / 2, L / 2, n_edges + 1)
+    z = 2.2 if ground_kwargs else 0.0
+    wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, z)])]
+    sim = BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=[[seg_per_edge] * n_edges],
+        nsegs=n_edges * seg_per_edge,
+        wavelength=22.0,
+        **ground_kwargs,
+    )
+    if not sim._swept_batched_available():
+        pytest.skip("batched swept C++ accelerators not built")
+
+    geom = sim._build_geometry()
+    supp, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    assert supp.shape[0] == n_edges * seg_per_edge  # N = 240
+
+    n_k = 40
+    freqs = np.linspace(0.9, 1.1, n_k) * (299792458.0 / 22.0)
+    k_array = 2 * np.pi * freqs / 299792458.0
+
+    budget_mb = 30
+    sim.swept_mem_mb = budget_mb
+    n_chunks = 0
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        for _c0, _ks, Z in sim._swept_batched_z_chunks(k_array, geom, supp, polys):
+            n_chunks += 1
+            del Z
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # Guard the guard: a single chunk covering the whole sweep can't show
+    # a rebind-before-del effect between chunks.
+    assert n_chunks > 1, f"budget sized only {n_chunks} chunk(s) — widen n_k"
+    budget_bytes = budget_mb * 1024 * 1024
+    ratio = peak / budget_bytes
+    assert ratio <= 1.1, (
+        f"swept batched chunk transient {peak / 1e6:.2f} MB is {ratio:.2f}x "
+        f"the {budget_mb} MB swept_mem_mb budget (want <= 1.1x) — the "
+        "generator is holding a chunk's moment stack across the yield again"
+    )
+
+
 def test_bspline_dense_dispatch_respects_memory_budget(monkeypatch):
     """Small tensors use the faster tensor path; oversized ones stay chunked."""
     import momwire.bspline as bmod
