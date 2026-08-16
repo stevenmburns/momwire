@@ -295,6 +295,8 @@ Still deferred: wire loading — it raises rather than returning plausible
 wrong numbers.
 """
 
+import collections
+
 import numpy as np
 import scipy.linalg
 import scipy.sparse
@@ -351,6 +353,30 @@ def _fill_block(n_segs, nq, n_qp_const):
     """
     per_seg = nq * n_segs * 16 * (5 * n_qp_const + 16)
     return max(1, _FILL_WORKSPACE_BYTES // per_seg)
+
+
+# Byte budget for one band of momwire#299's end-bracket correction
+# (momwire#355). The correction walks test segments in bands and folds each
+# band into its scatter, so this — not the matrix — is what it holds. 32 MB is
+# a fifth of the whole (nnz, N) triple at N = 300 and a twenty-fifth of it at
+# N = 2401, i.e. the streaming turns itself on exactly as the matrix outgrows
+# a fixed working set. The band is capped a second way, by the scatter it
+# feeds (see `_ek_bracket_correction_tested`), so on the small decks where
+# this budget is not binding the buffer still cannot outweigh the answer.
+_EK_BRACKET_BAND_BYTES = 1 << 25
+
+
+# One source block of momwire#299's end-bracket correction, with everything
+# the band loop would otherwise recompute per (band, block) resolved once:
+# see `_ek_bracket_plans`. `col_of` is filled in by the caller, which cannot
+# know the retained source columns until every block has named its own.
+_EKBracketPlan = collections.namedtuple(
+    "_EKBracketPlan",
+    (
+        "projector src_c src_t scale bad_lo bad_hi group_obs group_src "
+        "near_key cols col_of xg wg"
+    ),
+)
 
 
 def _graded_endpoint_rule(eps, n_per_panel, leggauss):
@@ -1651,13 +1677,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         cached[1][mirror] = hit
         return hit
 
-    def _ek_bracket_block(
-        self, geom, k, ctx, corr, projector, src_c, src_t, mirror, scale
-    ):
-        """One source block's share of momwire#299's end-bracket correction,
-        ACCUMULATED into `corr` (the same three (nnz, N) arrays a fill block
-        produces) with weight `scale` — never applied to the fill's own
-        contributions, which `_ek_bracket_correction_tested` explains.
+    def _ek_bracket_block(self, geom, k, ctx, corr, plan, m0, m1):
+        """One source block's share of momwire#299's end-bracket correction
+        over the test segments `m0:m1`, ACCUMULATED into `corr` with weight
+        `plan.scale` — never applied to the fill's own contributions, which
+        `_ek_bracket_correction_tested` explains.
+
+        `corr` is the band's three arrays, shaped (entries of m0:m1,
+        `plan.cols`) — the (nnz, N) triple a fill block produces, narrowed to
+        one band of test rows and to the source columns that can carry a bad
+        end at all (momwire#355). Both narrowings are index bookkeeping: the
+        rows are offset by the band's first entry and the columns go through
+        `plan.col_of`, and every cell reached is the cell the whole-triple
+        spelling reached.
 
         What is collected, and what is NOT
         ----------------------------------
@@ -1698,10 +1730,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         if not self.extended_kernel:
             return
-        bad_lo, bad_hi = self._ek_reduced_ends(geom, mirror)
-        if not (bad_lo.any() or bad_hi.any()):
-            return
-        group_obs, group_src = self._ek_axis_labels(geom, mirror)
+        projector, src_c, src_t = plan.projector, plan.src_c, plan.src_t
+        group_src = plan.group_src
         N, nq = ctx["N"], ctx["nq"]
         hh = ctx["hh"]
         a_seg = ctx["a_seg"]
@@ -1710,32 +1740,30 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         starts, counts = ctx["starts"], ctx["counts"]
         sigAC, B, sigC = ctx["sigAC"], ctx["B"], ctx["sigC"]
         corr_c, corr_s, corr_co = corr
-
-        # The near set is the fill's own, selected against the same source
-        # geometry the caller filled with, so "which rule did this cell get"
-        # is answered by the same predicate that decided it.
-        if self.near_correction:
-            mm, nn = self._near_pairs(geom, src_c=src_c, src_t=src_t)
-            near_key = mm * N + nn
-        else:
-            near_key = np.empty(0, dtype=np.int64)
-        xg, wg = _graded_endpoint_rule(
-            float(np.min(a_all / hh)), self.n_qp_near, self._leggauss_cached
-        )
+        near_key = plan.near_key
+        xg, wg = plan.xg, plan.wg
+        scale = plan.scale
+        # The band's observers, and the entry its first test segment owns —
+        # `corr`'s row zero.
+        g_obs = plan.group_obs[m0:m1]
+        e_base = starts[m0]
         gq = np.arange(nq)
 
-        for sign, bad in ((-1.0, bad_lo), (+1.0, bad_hi)):
+        for sign, bad in ((-1.0, plan.bad_lo), (+1.0, plan.bad_hi)):
             nb = np.flatnonzero(bad)
             if nb.size == 0:
                 continue
             # Every pair the fill capped at this end: eligibility is #246's,
             # unchanged, because the cap being taken off is the one it added.
-            elig = (group_obs[:, None] == group_src[nb][None, :]) & (
-                group_obs[:, None] >= 0
-            )
+            elig = (g_obs[:, None] == group_src[nb][None, :]) & (g_obs[:, None] >= 0)
             m_sel, j_sel = np.nonzero(elig)
             if m_sel.size == 0:
                 continue
+            # `np.nonzero` is row-major, so the band's pairs come out in the
+            # same (observer, then source) order the whole-matrix scan gave
+            # them, and the bands run in ascending observer order — the pair
+            # SEQUENCE is unbanded, only its cutting into calls is new.
+            m_sel = m_sel + m0
             n_sel = nb[j_sel]
             is_near = np.isin(m_sel * N + n_sel, near_key)
             for graded in (False, True):
@@ -1803,14 +1831,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                         w = (wg[None, :] * hh[mi][lp][:, None]) * fval
                     else:
                         w = ctx["w_entry"][ei]
-                    col = ni[lp]
+                    # `ei` stays the fill's own entry index — it reads the
+                    # global coefficient and weight tables above — and only
+                    # the WRITE moves onto the band's rows and the retained
+                    # source columns.
+                    row = ei - e_base
+                    col = plan.col_of[ni[lp]]
                     # One (entry, source) cell per (pair, entry) and the pairs
                     # of a group are distinct, so the cells are distinct and
                     # this is an assignment-shaped update, not an accumulation
                     # — the two END groups are two separate statements, which
                     # is how a segment bad at BOTH ends pays twice.
                     for c_out, Ph in zip((corr_c, corr_s, corr_co), Phi):
-                        c_out[ei, col] += scale * np.einsum("eg,eg->e", w, Ph[lp])
+                        c_out[row, col] += scale * np.einsum("eg,eg->e", w, Ph[lp])
 
     def _contact_ek_masks(self, geom, i, sgn, obs_seg):
         """momwire#292's masks under #246's PAIR rule.
@@ -2526,6 +2559,37 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         No-op with the extended kernel off, and on any geometry whose nodes all
         pass the predicate (every straight deck, and every deck in G-B4/G-C/G-S
         — which is what keeps their numbers bit-identical).
+
+        Residency: neither C nor its triple is ever whole (momwire#355)
+        ---------------------------------------------------------------
+        Spelled literally this built its own (nnz, N) triple — a second copy of
+        the fill's largest object, live while the fill's own was still named in
+        `_assemble_Z` — and then scattered it. Two facts take that away without
+        moving a single float:
+
+        * The bracket can only ever write the source columns that HAVE a bad
+          end (`_ek_reduced_ends`), so the triple is allocated over those
+          columns alone. Every column it drops was identically zero, and
+          dropping exact zeros out of the scatter's sums and the coefficient
+          product's is exact in float64 — `x + 0` is `x` under any
+          association, so this is bit-equality rather than agreement. On the
+          decks the correction actually fires for that is a handful of columns
+          out of N: the bad nodes are the bends, and a mesh is mostly straight.
+        * What survives the columns is streamed into the SCATTER rather than
+          accumulated first. The blocks band over test segments on the fill's
+          own block size (`_fill_block`), each band's rows are folded into
+          T[shape] = R @ corr[shape] the moment every block has written them,
+          and the band buffer dies. Banding over TEST segments (not source
+          columns, and not per block) is what keeps it bit-exact: a matrix
+          cell's writers are its own test segment's entries, so a cell is
+          finished inside one band and `np.add.at` reaches it in the same
+          ascending-entry order the whole-triple scatter did. Folding per
+          BLOCK instead — the other shape momwire#355 floated — would have
+          re-associated the free-space and image writes into G, which is not
+          the same float64 sum.
+
+        The symmetrization still needs all of C, and gets it: C is (n_basis,
+        n_basis), the size of the answer, not of a fill.
         """
         if not self.extended_kernel:
             return
@@ -2550,23 +2614,135 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                         )
                     )
         nnz, N = ctx["w_entry"].shape[0], ctx["N"]
-        corr = tuple(np.zeros((nnz, N), dtype=np.complex128) for _ in range(3))
-        for projector, src_c, src_t, mirror, scale in blocks:
-            self._ek_bracket_block(
-                geom,
-                k,
-                ctx,
-                corr,
-                projector,
-                geom["seg_centers"] if src_c is None else src_c,
-                geom["seg_tangents"] if src_t is None else src_t,
-                mirror,
-                scale,
-            )
-        if not any(np.any(c) for c in corr):
+        plans = self._ek_bracket_plans(geom, ctx, blocks)
+        if not plans:
             return
-        C = self._scatter_coef_product(ctx, corr)
+        cols = np.unique(np.concatenate([p.cols for p in plans]))
+        col_of = np.full(N, -1, dtype=np.int64)
+        col_of[cols] = np.arange(cols.size)
+        plans = [p._replace(col_of=col_of) for p in plans]
+
+        starts = ctx["starts"]
+        i_of_entry = ctx["i_of_entry"]
+        n_basis = N + len(self.junction_ports)
+        T = tuple(np.zeros((n_basis, cols.size), dtype=np.complex128) for _ in range(3))
+        # Test segments per band, capped twice: by the byte budget, and by the
+        # scatter the band folds into — a band buffer bigger than T would be
+        # streaming into something it dwarfs, which is how a deck whose nodes
+        # are ALL bends (cols = N) would otherwise slab the whole triple again
+        # and pay for T on top of it.
+        per_seg = 48 * cols.size * max(1, nnz // N)
+        blk = min(
+            max(1, _EK_BRACKET_BAND_BYTES // per_seg),
+            max(1, (n_basis * N) // nnz),
+        )
+        for m0 in range(0, N, blk):
+            m1 = min(m0 + blk, N)
+            e0, e1 = starts[m0], nnz if m1 == N else starts[m1]
+            corr = tuple(
+                np.zeros((e1 - e0, cols.size), dtype=np.complex128) for _ in range(3)
+            )
+            for plan in plans:
+                self._ek_bracket_block(geom, k, ctx, corr, plan, m0, m1)
+            if not any(np.any(c) for c in corr):
+                continue
+            rows = i_of_entry[e0:e1]
+            for dest, c in zip(T, corr):
+                # The scatter's own accumulation, reached one band early.
+                # `np.add.at` is unbuffered and walks the band in ascending
+                # entry order, which is the order `R @ corr` sums a basis
+                # row's entries in — and the bands are ascending too, so every
+                # T cell sees exactly the sequence of additions the
+                # whole-triple product performed.
+                np.add.at(dest, rows, c)
+        if not any(np.any(t) for t in T):
+            return
+        C = self._bracket_coef_product(ctx, T, cols, col_of)
         G -= 0.5 * (C + C.T)
+
+    def _ek_bracket_plans(self, geom, ctx, blocks):
+        """Per-block prep for `_ek_bracket_block` that does NOT depend on the
+        test band: the bad-end masks, the axis labels, the near set and the
+        graded rule.
+
+        Hoisted out of the block itself because the band loop calls it once
+        per (band, block) and every one of these is a whole-geometry query —
+        `_near_pairs` in particular is the near set of the entire fill, which
+        no band narrows. Blocks with no bad end at all are dropped here rather
+        than returned and skipped, so a straight deck leaves the caller with
+        nothing to allocate.
+        """
+        N = ctx["N"]
+        a_all = self._seg_radius(geom)
+        xg, wg = _graded_endpoint_rule(
+            float(np.min(a_all / ctx["hh"])), self.n_qp_near, self._leggauss_cached
+        )
+        plans = []
+        for projector, src_c, src_t, mirror, scale in blocks:
+            bad_lo, bad_hi = self._ek_reduced_ends(geom, mirror)
+            if not (bad_lo.any() or bad_hi.any()):
+                continue
+            group_obs, group_src = self._ek_axis_labels(geom, mirror)
+            src_c = geom["seg_centers"] if src_c is None else src_c
+            src_t = geom["seg_tangents"] if src_t is None else src_t
+            # The near set is the fill's own, selected against the same source
+            # geometry the caller filled with, so "which rule did this cell
+            # get" is answered by the same predicate that decided it.
+            if self.near_correction:
+                mm, nn = self._near_pairs(geom, src_c=src_c, src_t=src_t)
+                near_key = mm * N + nn
+            else:
+                near_key = np.empty(0, dtype=np.int64)
+            plans.append(
+                _EKBracketPlan(
+                    projector=projector,
+                    src_c=src_c,
+                    src_t=src_t,
+                    scale=scale,
+                    bad_lo=bad_lo,
+                    bad_hi=bad_hi,
+                    group_obs=group_obs,
+                    group_src=group_src,
+                    near_key=near_key,
+                    cols=np.flatnonzero(bad_lo | bad_hi),
+                    col_of=None,
+                    xg=xg,
+                    wg=wg,
+                )
+            )
+        return plans
+
+    def _bracket_coef_product(self, ctx, T, cols, col_of):
+        """Σ_shape T[shape] @ M[shape] for the end-bracket's COLUMN-RESTRICTED,
+        already-scattered triple — `_scatter_coef_product`'s second half, on a
+        source axis that runs over `cols` instead of all N segments.
+
+        The scatter half is not repeated here because the caller already did
+        it band by band (see `_ek_bracket_correction_tested`). What is left is
+        the same product against the same per-entry source coefficients, with
+        the entries whose segment is not a retained column struck out: their
+        T column is identically zero, so the terms they contributed to every
+        C cell were exact zeros and removing them is exact.
+        """
+        N = ctx["N"]
+        n_basis = N + len(self.junction_ports)
+        coefs = (ctx["sigAC"], ctx["B"], ctx["sigC"])
+        row = col_of[ctx["m_of_entry"]]
+        sel = row >= 0
+        mi = (row[sel], ctx["i_of_entry"][sel])
+
+        if N < _DENSE_ASSEMBLY_THRESHOLD:
+
+            def _coef_matrix(coef):
+                M = np.zeros((cols.size, n_basis), dtype=np.complex128)
+                M[mi] = coef[sel]
+                return M
+
+            return sum(t @ _coef_matrix(coef) for t, coef in zip(T, coefs))
+        return sum(
+            t @ scipy.sparse.csc_matrix((coef[sel], mi), shape=(cols.size, n_basis))
+            for t, coef in zip(T, coefs)
+        )
 
     def _contact_charge_correction_tested(self, G, geom, k, seg_view, ctx):
         """#282's ground-contact charge correction, test-integrated.
