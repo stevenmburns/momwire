@@ -1,5 +1,14 @@
 # SimNEC's `nec2/Execute` printout grammar — the contract a momwire engine must meet
 
+> **Moved into momwire, 2026-08-15 (#846 phase III / #360).** The findings
+> are unchanged — this documents SimNEC's parser, not ours, and none of it
+> moved. Only the file names it cites did: `src/antennaknobs/nec_portal.py`
+> is now `src/momwire/portal/_portal.py`, and `tests/test_nec_portal*.py`
+> are `tests/test_portal*.py`. Kept IN-REPO rather than published: it is an
+> anatomy of someone else's jar, load-bearing for maintaining the portal but
+> not ours to put on a website. The site documents *our* contract — the deck
+> grammar and the usage page — and this documents theirs.
+
 Status doc for issue #792 ("momwire as a SimNEC engine").  §1–§10 are unit
 1's survey; §11 is what unit 2 resolved, §12 unit 3, §13 what was still open
 after it, §14 what unit 4 resolved, §15 the `TL` layout issue #799 pinned, and
