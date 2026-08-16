@@ -4509,6 +4509,39 @@ struct GalerkinEkBlock {
     size_t n_gl;
 };
 
+// The FOLD destination for the fused far fill (momwire#356). Without one the
+// fill allocates its own three (nnz, N) arrays and the caller differences them
+// off its own triple afterwards, so any accelerated grounded block floors at
+// two triples live. With one, the caller's arrays ARE the output buffers and
+// each test segment's rows are folded on as
+//
+//     dst[e, n] += scale * value[e, n]
+//
+// with `scale` on the LEFT of the complex product — `sinusoidal.py`'s
+// documented C2 convention, because complex multiply evaluates the imaginary
+// part as x.re*y.im + x.im*y.re and swapping the operands reorders that sum
+// and moves the last bit.
+//
+// The value folded on is the FULLY reduced entry, not a running partial: the
+// test-quadrature accumulation runs into a per-test-segment scratch band and
+// the fold happens once, after it. Accumulating `dst -= t_qt` node by node
+// instead would be `((dst − t1) − t2) − …` where the caller's spelling is
+// `dst − (t1 + t2 + …)`, which is a reassociation and not a fold.
+//
+// `scale` with a zero imaginary part takes a real path — `dst.re += s·v.re`,
+// `dst.im += s·v.im`. At the fold's own scale, −1, that is bit-for-bit
+// `np.subtract(dst, value, out=dst)`: IEEE addition of an exactly-negated
+// operand is the subtraction, signed zeros included. The general complex path
+// spells numpy's `np.multiply(scale, value)` term for term.
+//
+// A cancelled fill leaves the destination partly folded. That is the same
+// contract the allocating path has — the caller drops what the kernel was
+// building when `SolveAborted` comes out of it — one array further along.
+struct GalerkinFoldBlock {
+    py::array_t<std::complex<double>> dst_const, dst_sin, dst_cos;
+    double s_re, s_im;
+};
+
 // One implementation, two instantiations. `WITH_EK` is a compile-time
 // constant, so the reduced entry point below compiles with every line of the
 // delta gone — which is what keeps `sinusoidal_galerkin_far_fill` byte-frozen
@@ -4533,7 +4566,8 @@ galerkin_far_fill_impl(
                 py::array::c_style | py::array::forcecast> w_entry,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
     uintptr_t cancel_flag,
-    const GalerkinEkBlock *ekb
+    const GalerkinEkBlock *ekb,
+    const GalerkinFoldBlock *fold
 ) {
     auto oc = obs_centers.unchecked<2>();
     auto ot = obs_tangents.unchecked<2>();
@@ -4575,9 +4609,20 @@ galerkin_far_fill_impl(
         throw std::runtime_error("starts[-1] must equal w_entry's row count");
     }
 
-    py::array_t<std::complex<double>> out_const({nnz, N});
-    py::array_t<std::complex<double>> out_sin({nnz, N});
-    py::array_t<std::complex<double>> out_cos({nnz, N});
+    // Folding, the caller's arrays ARE the output buffers — nothing is
+    // allocated here and nothing is returned that the caller did not already
+    // hold. Not folding, the three arrays below are this fill's own, exactly
+    // as they were before momwire#356.
+    const bool folding = (fold != nullptr);
+    py::array_t<std::complex<double>> out_const =
+        folding ? fold->dst_const : py::array_t<std::complex<double>>({nnz, N});
+    py::array_t<std::complex<double>> out_sin =
+        folding ? fold->dst_sin : py::array_t<std::complex<double>>({nnz, N});
+    py::array_t<std::complex<double>> out_cos =
+        folding ? fold->dst_cos : py::array_t<std::complex<double>>({nnz, N});
+    const double fold_re = folding ? fold->s_re : 1.0;
+    const double fold_im = folding ? fold->s_im : 0.0;
+    const bool fold_real = (fold_im == 0.0);
     std::complex<double> *oc_p = out_const.mutable_data();
     std::complex<double> *os_p = out_sin.mutable_data();
     std::complex<double> *oco_p = out_cos.mutable_data();
@@ -4645,12 +4690,34 @@ galerkin_far_fill_impl(
         size_t e0 = (size_t)st_(m), e1 = (size_t)st_(m + 1);
         if (e1 == e0) continue;  // segment carries no basis support
 
-        // Rows e0:e1 belong to this test segment alone; zero them here rather
-        // than allocating a zeroed output, so the accumulation below can add
-        // straight into the result.
-        std::fill(oc_p + e0 * N, oc_p + e1 * N, std::complex<double>(0.0, 0.0));
-        std::fill(os_p + e0 * N, os_p + e1 * N, std::complex<double>(0.0, 0.0));
-        std::fill(oco_p + e0 * N, oco_p + e1 * N, std::complex<double>(0.0, 0.0));
+        // Rows e0:e1 belong to this test segment alone, so the accumulation
+        // below owns them outright and needs them zeroed first.
+        //
+        // Not folding, they are zeroed IN the output — which is why the fill
+        // allocates an uninitialized array and not a zeroed one. Folding, the
+        // output already holds the caller's own values and the accumulation
+        // runs into a scratch band of this segment's rows instead, so that
+        // the fold below sees each entry's finished sum exactly once
+        // (momwire#356). The band is one test segment wide — a few support
+        // entries by N — so it is a working set and not a triple: at N = 400
+        // with three entries a segment it is 58 kB a thread against the
+        // 23 MB triple it replaces.
+        size_t nrows = e1 - e0;
+        std::vector<std::complex<double>> band;
+        std::complex<double> *bc, *bs, *bco;
+        if (folding) {
+            band.assign(3 * nrows * N, std::complex<double>(0.0, 0.0));
+            bc = band.data();
+            bs = bc + nrows * N;
+            bco = bs + nrows * N;
+        } else {
+            bc = oc_p + e0 * N;
+            bs = os_p + e0 * N;
+            bco = oco_p + e0 * N;
+            std::fill(bc, bc + nrows * N, std::complex<double>(0.0, 0.0));
+            std::fill(bs, bs + nrows * N, std::complex<double>(0.0, 0.0));
+            std::fill(bco, bco + nrows * N, std::complex<double>(0.0, 0.0));
+        }
 
         std::vector<double> ph(P), cphb(P), sphb(P);
         std::vector<double> rho_eval_a(N), dz1_a(N), dz2_a(N),
@@ -5083,9 +5150,9 @@ galerkin_far_fill_impl(
             for (size_t e = e0; e < e1; e++) {
                 double wr = w_p[e * nq + qt].real();
                 double wi = w_p[e * nq + qt].imag();
-                double *rc  = reinterpret_cast<double *>(oc_p + e * N);
-                double *rs  = reinterpret_cast<double *>(os_p + e * N);
-                double *rco = reinterpret_cast<double *>(oco_p + e * N);
+                double *rc  = reinterpret_cast<double *>(bc + (e - e0) * N);
+                double *rs  = reinterpret_cast<double *>(bs + (e - e0) * N);
+                double *rco = reinterpret_cast<double *>(bco + (e - e0) * N);
                 PYSIM_OMP_SIMD()
                 for (size_t n = 0; n < N; n++) {
                     rc[2*n]     += wr * phi_c_re[n]  - wi * phi_c_im[n];
@@ -5097,15 +5164,94 @@ galerkin_far_fill_impl(
                 }
             }
         }
+
+        // ---- The fold: dst[e0:e1] += scale * band, scale on the LEFT -----
+        // Once per test segment, off the finished sums (momwire#356). Rows
+        // e0:e1 belong to this m alone, so this writes where no other thread
+        // reads and needs no more synchronisation than the accumulation did.
+        if (folding) {
+            const std::complex<double> *src[3] = {bc, bs, bco};
+            std::complex<double> *dst[3] = {oc_p + e0 * N, os_p + e0 * N,
+                                            oco_p + e0 * N};
+            for (int t = 0; t < 3; t++) {
+                const double *b = reinterpret_cast<const double *>(src[t]);
+                double *d = reinterpret_cast<double *>(dst[t]);
+                if (fold_real) {
+                    // Re and im are the same scaling, so the interleaved
+                    // buffer is one flat axpy. At scale −1 this is exactly
+                    // `np.subtract(dst, value, out=dst)`.
+                    PYSIM_OMP_SIMD()
+                    for (size_t i = 0; i < 2 * nrows * N; i++) {
+                        d[i] += fold_re * b[i];
+                    }
+                } else {
+                    PYSIM_OMP_SIMD()
+                    for (size_t i = 0; i < nrows * N; i++) {
+                        double vr = b[2*i], vi = b[2*i + 1];
+                        d[2*i]     += fold_re * vr - fold_im * vi;
+                        d[2*i + 1] += fold_re * vi + fold_im * vr;
+                    }
+                }
+            }
+        }
     }
 
     PYSIM_THROW_IF_ABORTED();
     return std::make_tuple(out_const, out_sin, out_cos);
 }
 
+// One of the three fold destinations, checked (momwire#356). It has to be
+// exactly the array the allocating path would have returned — (nnz, N)
+// complex128, C-contiguous and writeable — because the kernel folds into its
+// buffer in place. A forcecast `array_t` would silently accept a copy here
+// and the fold would land in the copy, so the cast below is the strict one
+// and the shape/layout checks are explicit.
+static py::array_t<std::complex<double>> galerkin_fold_dest(
+    py::handle h, py::ssize_t nnz, py::ssize_t N, const char *which
+) {
+    if (!py::isinstance<py::array_t<std::complex<double>>>(h)) {
+        throw std::runtime_error(
+            std::string("out[") + which + "] must be a complex128 array");
+    }
+    auto a = py::reinterpret_borrow<py::array_t<std::complex<double>>>(h);
+    if (a.ndim() != 2 || a.shape(0) != nnz || a.shape(1) != N) {
+        throw std::runtime_error(
+            std::string("out[") + which + "] must have shape (nnz, N)");
+    }
+    if ((a.flags() & py::array::c_style) == 0 || !a.writeable()) {
+        throw std::runtime_error(
+            std::string("out[") + which +
+            " must be C-contiguous and writeable");
+    }
+    return a;
+}
+
+// `out` (a 3-sequence of destinations, or None) and `scale` into a fold
+// block. Returns false for `out=None`, which is the pre-#356 behaviour: the
+// fill allocates and returns its own triple and never touches a caller array.
+static bool galerkin_fold_block(
+    const py::object &out, std::complex<double> scale,
+    py::ssize_t nnz, py::ssize_t N, GalerkinFoldBlock &blk
+) {
+    if (out.is_none()) return false;
+    auto seq = py::cast<py::sequence>(out);
+    if (py::len(seq) != 3) {
+        throw std::runtime_error(
+            "out must be (const, sin, cos) — three (nnz, N) complex arrays");
+    }
+    blk.dst_const = galerkin_fold_dest(seq[0], nnz, N, "const");
+    blk.dst_sin = galerkin_fold_dest(seq[1], nnz, N, "sin");
+    blk.dst_cos = galerkin_fold_dest(seq[2], nnz, N, "cos");
+    blk.s_re = scale.real();
+    blk.s_im = scale.imag();
+    return true;
+}
+
 // The reduced entry point. Byte-frozen against its pre-#246 build: the
 // instantiation below has WITH_EK false, so not one line of the delta is
-// compiled into it (gate G-C2).
+// compiled into it (gate G-C2). momwire#356's `out`/`scale` are additive and
+// default to `None`/1, which reaches `galerkin_far_fill_impl` with a null
+// fold block — the allocating path, unchanged.
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>>
@@ -5122,11 +5268,17 @@ sinusoidal_galerkin_far_fill(
     py::array_t<std::complex<double>,
                 py::array::c_style | py::array::forcecast> w_entry,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    py::object out = py::none(),
+    std::complex<double> scale = std::complex<double>(1.0, 0.0)
 ) {
+    GalerkinFoldBlock fold;
+    bool folding = galerkin_fold_block(
+        out, scale, w_entry.shape(0), src_centers.shape(0), fold);
     return galerkin_far_fill_impl<false>(
         obs_centers, obs_tangents, obs_radius, src_centers, src_tangents,
-        src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag, nullptr);
+        src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag, nullptr,
+        folding ? &fold : nullptr);
 }
 
 // The extended-kernel twin (momwire#246 unit C). Same arguments plus the
@@ -5153,7 +5305,9 @@ sinusoidal_galerkin_far_fill_ek(
     py::array_t<bool, py::array::c_style | py::array::forcecast> eligible,
     py::array_t<double, py::array::c_style | py::array::forcecast> ek_gx,
     py::array_t<double, py::array::c_style | py::array::forcecast> ek_gw,
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    py::object out = py::none(),
+    std::complex<double> scale = std::complex<double>(1.0, 0.0)
 ) {
     auto sa = src_a.unchecked<1>();
     auto el = eligible.unchecked<2>();
@@ -5176,9 +5330,13 @@ sinusoidal_galerkin_far_fill_ek(
     ekb.gx = ek_gx.data();
     ekb.gw = ek_gw.data();
     ekb.n_gl = (size_t)ex.shape(0);
+    GalerkinFoldBlock fold;
+    bool folding = galerkin_fold_block(
+        out, scale, w_entry.shape(0), src_centers.shape(0), fold);
     return galerkin_far_fill_impl<true>(
         obs_centers, obs_tangents, obs_radius, src_centers, src_tangents,
-        src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag, &ekb);
+        src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag, &ekb,
+        folding ? &fold : nullptr);
 }
 
 
@@ -6419,14 +6577,21 @@ PYBIND11_MODULE(_accelerators, m) {
           "CSR support-entry count (`starts` is that CSR's per-test-segment "
           "row index). src_* are the geometry's segments (free-space block) "
           "or the MIRRORED ones (PEC image block); the reflection-coefficient "
-          "and Sommerfeld blocks stay on the numpy path.",
+          "and Sommerfeld blocks stay on the numpy path. With `out` — three "
+          "(nnz, N) complex128 C-contiguous arrays — nothing is allocated "
+          "and each entry is folded on as `out += scale * value`, scale on "
+          "the LEFT of the complex product; the same three arrays come back. "
+          "`out=None` with `scale=1` is the pre-momwire#356 behaviour to the "
+          "bit.",
           py::arg("obs_centers"), py::arg("obs_tangents"),
           py::arg("obs_radius"),
           py::arg("src_centers"), py::arg("src_tangents"), py::arg("src_hh"),
           py::arg("k"), py::arg("eta"),
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("w_entry"), py::arg("starts"),
-          py::arg("cancel_flag") = 0);
+          py::arg("cancel_flag") = 0,
+          py::arg("out") = py::none(),
+          py::arg("scale") = std::complex<double>(1.0, 0.0));
     m.def("sinusoidal_galerkin_far_fill_ek", &sinusoidal_galerkin_far_fill_ek,
           "Extended-kernel twin of sinusoidal_galerkin_far_fill "
           "(momwire#246): the same fused far fill, plus the folded EK delta "
@@ -6435,7 +6600,8 @@ PYBIND11_MODULE(_accelerators, m) {
           "`ek_gx`/`ek_gw` the composite sinh-mapped rule "
           "`SinusoidalSolver._ek_delta_rule` built — passed in, not rebuilt "
           "here, so both backends integrate the delta on the same nodes. "
-          "Returns the same three (nnz, N) arrays.",
+          "Returns the same three (nnz, N) arrays, and takes the same "
+          "momwire#356 `out`/`scale` fold destination.",
           py::arg("obs_centers"), py::arg("obs_tangents"),
           py::arg("obs_radius"),
           py::arg("src_centers"), py::arg("src_tangents"), py::arg("src_hh"),
@@ -6444,7 +6610,9 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("w_entry"), py::arg("starts"),
           py::arg("src_a"), py::arg("eligible"),
           py::arg("ek_gx"), py::arg("ek_gw"),
-          py::arg("cancel_flag") = 0);
+          py::arg("cancel_flag") = 0,
+          py::arg("out") = py::none(),
+          py::arg("scale") = std::complex<double>(1.0, 0.0));
     m.def("remainder_field_proj_batch", &remainder_field_proj_batch,
           "Fused Sommerfeld smooth-remainder assembly: interpolate the four "
           "grid surfaces (4x4 Lagrange) and project t_m.F(r_m,r_n).t_n per "

@@ -274,6 +274,13 @@ numpy, as does the O(N) near-pair correction. The numpy path remains the
 reference implementation and the oracle, and is what runs when the extension
 is absent.
 
+Since #356 the fill also takes the caller's triple as its `out=`, folding
+`out += scale·value` per finished entry instead of allocating and returning
+three arrays of its own. That is what lets a grounded accelerated block hold
+ONE triple rather than two — the fold weight is −1, and `a + (−b)` is `a − b`
+to the bit, so it costs no arithmetic. `scale` multiplies from the LEFT,
+`sinusoidal.py`'s C2 convention.
+
 **The folded source shape (#205).** The third shape the fill returns is
 cos kξ − 1, not cos kξ, on both paths (`cos_shape="cos-1"`). #203 had folded
 that pair everywhere it could be folded from outside the kernel — the basis
@@ -1933,12 +1940,24 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         takes no eligibility mask, so routing an EK-on block through it would
         drop the delta silently rather than fail.
 
-        Only the numpy loop can honour `subtract_into` as it fills: the C++
-        far fill allocates and returns its own three arrays, so an accelerated
-        block is folded in place after it returns. Peak while a ground block
-        is live is therefore one triple on the numpy path (the destination
-        alone) and two on the accelerated one (destination + the kernel's
-        return) — never the three the differenced spelling held.
+        Both halves honour `subtract_into` as they fill, so a grounded block
+        holds ONE triple whichever backend serves it — the destination alone
+        (momwire#356). The C++ fill is handed the destination as its `out=`
+        with `scale=-1`, which folds each finished entry on as
+        `dst += (−1)·value`; the numpy loop accumulates its blocks into the
+        destination directly. Neither is a reassociation of the differenced
+        spelling: IEEE addition of an exactly-negated operand IS the
+        subtraction, and the reduction each entry's value comes out of is the
+        same sum in the same order either way.
+
+        The near correction is what makes the accelerated fold non-trivial.
+        It OVERWRITES its cells rather than accumulating, so on the numpy path
+        it has to run FIRST (`sub=True`) and hand back the cells the far half
+        must then skip. The fused kernel cannot skip cells — it is one sweep
+        over every (entry, source) pair — so this path instead SAVES those
+        cells' values across the fill and puts them back: an exact copy out
+        and an exact copy in, leaving `free − graded` where the pre-#356
+        spelling left `free − graded` and the far value nowhere.
         """
         N = ctx["N"]
         nq = ctx["nq"]
@@ -1950,27 +1969,48 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             and projector is _plain_projection
             and (not self.extended_kernel or _HAVE_GALERKIN_FAR_FILL_EK)
         ):
-            contribs = self._far_fill_accel(
-                k,
-                ctx,
-                src_c,
-                src_t,
-                ek=(
-                    self._ek_pairs(
-                        geom, ctx["m_of_obs"][:, None], np.arange(N)[None, :], mirror
-                    )
-                    if self.extended_kernel
-                    else None
-                ),
-            )
-            if self.near_correction:
-                self._apply_near_correction(
-                    geom, k, ctx, contribs, projector, src_c, src_t, mirror
+            ek_pairs = (
+                self._ek_pairs(
+                    geom, ctx["m_of_obs"][:, None], np.arange(N)[None, :], mirror
                 )
+                if self.extended_kernel
+                else None
+            )
             if subtract_into is None:
+                contribs = self._far_fill_accel(k, ctx, src_c, src_t, ek=ek_pairs)
+                if self.near_correction:
+                    self._apply_near_correction(
+                        geom, k, ctx, contribs, projector, src_c, src_t, mirror
+                    )
                 return contribs
-            for dest, c in zip(subtract_into, contribs):
-                np.subtract(dest, c, out=dest)
+            near_cells = (
+                self._apply_near_correction(
+                    geom,
+                    k,
+                    ctx,
+                    subtract_into,
+                    projector,
+                    src_c,
+                    src_t,
+                    mirror,
+                    sub=True,
+                )
+                if self.near_correction
+                else None
+            )
+            # O(N) pairs' worth of cells, saved as flat gathers — the whole
+            # point of the fold is that nothing (nnz, N) is allocated here.
+            held = (
+                [dest[near_cells].copy() for dest in subtract_into]
+                if near_cells is not None
+                else None
+            )
+            self._far_fill_accel(
+                k, ctx, src_c, src_t, ek=ek_pairs, out=subtract_into, scale=-1.0
+            )
+            if held is not None:
+                for dest, saved in zip(subtract_into, held):
+                    dest[near_cells] = saved
             return None
 
         # Blocked over test segments (#194): identical arithmetic per matrix
@@ -2054,7 +2094,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
         return contribs
 
-    def _far_fill_accel(self, k, ctx, src_c, src_t, ek=None):
+    def _far_fill_accel(self, k, ctx, src_c, src_t, ek=None, out=None, scale=1.0):
         """C++ far fill for the PLAIN projection: kernel and test reduction
         fused, (contrib_const, sin, cos−1) each (nnz, N) — the same three arrays
         the numpy loop above builds (#194).
@@ -2089,6 +2129,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         The toggle itself costs ~6x there, and that is the honest worst case
         — every pair of a straight wire is coaxial, so every pair takes the
         delta's 16-node quadrature.
+
+        `out` is the ground fold's residency lever (momwire#356): a triple the
+        caller already holds, which the kernel writes into as
+        `out += scale·value` instead of allocating and returning three arrays
+        of its own. Without it a grounded accelerated block floors at two
+        triples live — the destination plus the kernel's return — where the
+        numpy path has always held one.
+
+        `scale` multiplies from the LEFT (`sinusoidal.py`'s C2 convention: a
+        complex128 multiply evaluates the imaginary part as
+        `x.re*y.im + x.im*y.re`, so the operand order moves the last bit) and
+        is applied ONCE per entry, to the finished test-quadrature sum — not
+        to each node's contribution, which would reassociate the reduction.
+        The ground fold's own weight is −1, a real scale, and there the fold
+        is `np.subtract(out, value, out=out)` to the bit: `a + (−b)` is `a − b`
+        in IEEE arithmetic, signed zeros included. `scale` without `out` is
+        inert — there is no destination for it to weight.
         """
         if ek is not None and not _HAVE_GALERKIN_FAR_FILL_EK:
             # Deliberately not silent: the caller admits an EK payload here
@@ -2126,8 +2183,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             np.ascontiguousarray(ctx["w_entry"], dtype=np.complex128),
             np.ascontiguousarray(ctx["starts"], dtype=np.int64),
         )
+        # `out`/`scale` ride as KEYWORDS, behind the eligibility payload's
+        # positional slots, so momwire#358's swap of that payload (the
+        # (n_obs, N) mask for (N,) group labels) is a change to `args` alone
+        # and never touches the fold.
+        fold = {} if out is None else {"out": tuple(out), "scale": complex(scale)}
         if ek is None:
-            return _acc.sinusoidal_galerkin_far_fill(*args, self._cancel_flag)
+            return _acc.sinusoidal_galerkin_far_fill(*args, self._cancel_flag, **fold)
         # The EK twin takes the payload flattened to the shapes the kernel
         # indexes: one radius per SOURCE segment, the mask over (observer row,
         # source segment) — the rows of `obs_c` — and the delta quadrature's
@@ -2161,6 +2223,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             np.ascontiguousarray(ek_gx, dtype=np.float64),
             np.ascontiguousarray(ek_gw, dtype=np.float64),
             self._cancel_flag,
+            **fold,
         )
 
     def _refl_projection(self, geom, eps_t):
@@ -2235,6 +2298,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         the fill's own scratch on top; the fold reaches the same entries with
         the same float64 operations and holds at most the destination plus
         whatever one block materializes.
+
+        Since momwire#356 that holds on the ACCELERATED path too: the fused
+        C++ fill takes the destination as its `out=` and folds into it with
+        `scale=-1`, where before it allocated and returned a triple of its own
+        for `_tested_contribs` to difference off afterwards. Measured on the
+        N = 300 bend, extended kernel on, this block's own peak goes 1.18 →
+        0.23 triples over a PEC image, and 1.18 → 0.23 at N = 400.
+
+        The SOMMERFELD composition is the one that does not move, and `out=`
+        cannot move it: `c2·img − rem` has to stay associated (below), so the
+        image block's whole triple must exist before the fold can start —
+        1.73 triples at N = 400, the same number unit D left. Folding it needs
+        the fill BANDED over observers so that image, remainder and fold meet
+        one band at a time, which is momwire#356's option 2 and not this.
 
         Reuse, per ground, of the evaluator the point-matched solver already
         validated against its own references:
