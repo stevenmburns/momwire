@@ -14,7 +14,15 @@ import math
 import numpy as np
 import pytest
 
-from momwire.deck import BASES, DeckModel, LoadSpec, build_solver, parse
+from momwire.deck import (
+    BASES,
+    DeckModel,
+    Environment,
+    LoadSpec,
+    build_solver,
+    parse,
+    prepare_mesh,
+)
 from momwire.deck._polylines import to_polylines
 from momwire.deck._solver import _ground, _sites, _wire_loading
 from momwire.deck.model import DeckWire, ExecuteGroup, WireMaterial
@@ -372,23 +380,23 @@ def test_a_group_that_ran_nothing_cannot_be_selected():
 
 def test_free_space_passes_no_plane():
     """``ground_z=None`` is "no plane"; 0.0 would be a plane at the origin."""
-    assert _ground(DeckModel()) == {"ground_z": None}
+    assert _ground(Environment()) == {"ground_z": None}
 
 
 def test_pec_ground_passes_the_plane_and_no_constants():
-    assert _ground(DeckModel(ground="pec")) == {"ground_z": 0.0}
+    assert _ground(Environment(ground="pec")) == {"ground_z": 0.0}
 
 
 def test_the_reflection_coefficient_ground_names_no_model():
     """refl-coef is every solver's default, so naming it would be a second
     spelling of the same solve."""
-    model = DeckModel(ground=("finite-fast", 13.0, 0.005))
-    assert _ground(model) == {"ground_z": 0.0, "ground_eps": (13.0, 0.005)}
+    environment = Environment(ground=("finite-fast", 13.0, 0.005))
+    assert _ground(environment) == {"ground_z": 0.0, "ground_eps": (13.0, 0.005)}
 
 
 def test_the_sommerfeld_ground_names_its_model():
-    model = DeckModel(ground=("finite", 13.0, 0.005))
-    assert _ground(model) == {
+    environment = Environment(ground=("finite", 13.0, 0.005))
+    assert _ground(environment) == {
         "ground_z": 0.0,
         "ground_eps": (13.0, 0.005),
         "ground_model": "sommerfeld",
@@ -397,7 +405,7 @@ def test_the_sommerfeld_ground_names_its_model():
 
 def test_an_unrecognised_ground_refuses():
     with pytest.raises(ValueError, match="unrecognised ground spec"):
-        _ground(DeckModel(ground=("swamp", 1.0, 1.0)))
+        _ground(Environment(ground=("swamp", 1.0, 1.0)))
 
 
 def test_bare_wire_passes_no_loading_kwargs():
@@ -432,6 +440,115 @@ def test_a_ground_deck_builds_with_the_plane_in_place():
     assert model.ground == ("finite", 13.0, 0.005)
     built = build_solver(model)
     assert built.solver.compute_port_solution().y.shape == (1, 1)
+
+
+# ---------------------------------------------------------------------------
+# the environment: the group's, not the deck's
+# ---------------------------------------------------------------------------
+
+# A wire well clear of the plane, run once in free space and once over perfect
+# ground.  ``GN`` arms, so the two execute cards are two real runs over two
+# different half-spaces (spec ``#arming``).
+GN_REARM = """CM gn between executes
+CE
+GW 1 9 0. 0. 2.0 0. 0. 7.0 0.001
+GE -1
+EX 0 1 5 0 1.
+FR 0 1 0 0 14.1
+XQ
+GN 1
+XQ
+NX
+"""
+
+
+def test_a_solver_is_built_over_the_selected_groups_environment():
+    """The environment is an operating-point choice like the frequency and
+    the kernel, and ``group=`` selects all three together."""
+    model = parse(GN_REARM)
+    assert build_solver(model, group=0).solver.ground_z is None  # free space
+    assert build_solver(model, group=1).solver.ground_z == 0.0  # the plane
+
+
+def test_the_environment_override_beats_the_groups():
+    """What a caller sweeping one structure over several grounds needs, and
+    the shape the portal uses."""
+    model = parse(GN_REARM)
+    built = build_solver(model, group=1, environment=Environment())
+    assert built.solver.ground_z is None
+
+
+def test_a_model_with_no_group_falls_back_to_the_deck_environment():
+    model = DeckModel(
+        wires=(
+            DeckWire(
+                vertices=((-0.5, 0.0, 5.0), (0.5, 0.0, 5.0)),
+                radius=1e-3,
+                edge_elements=(5,),
+            ),
+        ),
+        feeds=((0, 0.5, 1 + 0j),),
+        ground="pec",
+    )
+    assert model.groups == ()
+    assert build_solver(model, frequency_mhz=14.0).solver.ground_z == 0.0
+
+
+# ---------------------------------------------------------------------------
+# the prepared mesh: translate once, fill many times
+# ---------------------------------------------------------------------------
+
+
+def test_a_prepared_mesh_hands_every_solver_the_same_arrays():
+    """The reuse is by identity, not by equality: two solvers built from one
+    handle share the coordinate arrays rather than each rounding the same
+    walk for itself."""
+    model = parse(DIPOLE)
+    handle = prepare_mesh(model)
+    a = build_solver(model, mesh=handle, frequency_mhz=14.0)
+    b = build_solver(model, mesh=handle, frequency_mhz=21.0)
+    assert a.ports is b.ports is handle.ports
+    for left, right in zip(a.solver.wires_polylines, b.solver.wires_polylines):
+        assert left is right
+        assert np.shares_memory(left, right)
+    # And the same arrays the handle carries, not copies of them.
+    for solver_array, mesh_array in zip(
+        a.solver.wires_polylines, handle.mesh.polylines
+    ):
+        assert np.shares_memory(solver_array, mesh_array)
+
+
+@pytest.mark.parametrize("deck", [DIPOLE, LOOP, TEE])
+def test_a_prepared_solve_is_bit_equal_to_an_unprepared_one(deck):
+    """The handle is a saved computation, not a different one."""
+    model = parse(deck)
+    plain = build_solver(model).solver.compute_port_solution().y
+    prepared = (
+        build_solver(model, mesh=prepare_mesh(model)).solver.compute_port_solution().y
+    )
+    assert np.array_equal(plain, prepared)
+
+
+def test_a_prepared_mesh_carries_the_plan_the_unprepared_path_builds():
+    model = parse(TEE)
+    assert prepare_mesh(model).ports == build_solver(model).ports
+
+
+def test_a_handle_prepared_for_another_model_refuses():
+    """A silent wrong answer is the alternative: the handle names polylines
+    and port rows, and another structure's are different integers."""
+    handle = prepare_mesh(parse(DIPOLE))
+    with pytest.raises(ValueError, match="different model"):
+        build_solver(parse(TEE), mesh=handle)
+
+
+def test_an_equal_model_replays_a_handle():
+    """Equality, not identity: a model reparsed from the same text describes
+    the same structure, and the handle is about the structure."""
+    handle = prepare_mesh(parse(DIPOLE))
+    twin = parse(DIPOLE)
+    assert twin is not handle.model
+    assert build_solver(twin, mesh=handle).ports is handle.ports
 
 
 # ---------------------------------------------------------------------------

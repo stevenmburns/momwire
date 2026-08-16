@@ -27,8 +27,16 @@ ignores it; neither has to re-derive where the gap went.
 **One geometry, every group.**  The port set is the union over every execute
 group, so a deck with two ``XQ`` cards under two different ``EX`` sets is one
 fill and two drive vectors — :attr:`PortPlan.voltages` is those vectors.  Only
-the frequency and the extended-kernel flag can force a second solver, which is
-why they are :func:`build_solver` arguments rather than plan entries.
+the frequency, the extended-kernel flag and the environment can force a second
+solver, which is why all three are :func:`build_solver` arguments rather than
+plan entries.
+
+**Translate once, fill many times.**  Nothing above depends on the operating
+point: the port set, the chaining into polylines and the plan's numbering are
+the STRUCTURE's, and a sweep rebuilds them at every step for nothing.
+:func:`prepare_mesh` freezes them into a :class:`PreparedMesh` that
+``build_solver(model, mesh=…)`` replays, handing every solver the same
+polyline arrays rather than a fresh rounding of the same walk.
 """
 
 from __future__ import annotations
@@ -44,10 +52,18 @@ from ..bspline import BSplineSolver
 from ..hmatrix import HMatrixSolver
 from ..sinusoidal import SinusoidalSolver
 from ..sinusoidal_galerkin import SinusoidalGalerkinSolver
-from ._polylines import to_polylines
-from .model import DeckModel, LoadSpec
+from ._polylines import Mesh, to_polylines
+from .model import DeckModel, Environment, LoadSpec
 
-__all__ = ["BuiltSolver", "PortPlan", "PortSite", "build_solver", "BASES"]
+__all__ = [
+    "BuiltSolver",
+    "PortPlan",
+    "PortSite",
+    "PreparedMesh",
+    "build_solver",
+    "prepare_mesh",
+    "BASES",
+]
 
 _C_LIGHT = 299_792_458.0
 
@@ -250,19 +266,23 @@ def _wire_loading(materials) -> dict[str, np.ndarray]:
     return kwargs
 
 
-def _ground(model: DeckModel) -> dict[str, Any]:
-    """``ground_z`` / ``ground_eps`` / ``ground_model`` for the model's ground.
+def _ground(environment: Environment) -> dict[str, Any]:
+    """``ground_z`` / ``ground_eps`` / ``ground_model`` for one environment.
 
     Free space passes ``ground_z=None`` rather than omitting it: a solver
     reads "no plane" off that argument, and ``0.0`` would be a plane at the
     origin.  ``"finite-fast"`` passes no ``ground_model`` at all — the
     reflection-coefficient model is every solver's default, and a solve that
     names it must stay bit-identical to one that does not.
+
+    The environment's second medium is not read here and never will be: it
+    reaches an answer through a far-field request's cliff modes alone, and
+    the moment method never sees it.
     """
-    ground = model.ground
+    ground = environment.ground
     if ground is None:
         return {"ground_z": None}
-    kwargs: dict[str, Any] = {"ground_z": float(model.ground_z)}
+    kwargs: dict[str, Any] = {"ground_z": float(environment.ground_z)}
     if ground == "pec":
         return kwargs
     if (
@@ -281,6 +301,74 @@ def _ground(model: DeckModel) -> dict[str, Any]:
     raise ValueError(f"unrecognised ground spec: {ground!r}")
 
 
+@dataclass(frozen=True)
+class PreparedMesh:
+    """A model's geometry, translated once and replayable.
+
+    Everything :func:`build_solver` does that depends on the GEOMETRY alone —
+    the union port set, the chaining into polylines, the renumbering of the
+    plan onto the mesh's port order — and nothing that depends on the
+    operating point.  A sweep translates once and fills many times:
+    ``build_solver(model, mesh=prepare_mesh(model), frequency_mhz=f)`` per
+    step, where the unprepared call redoes the whole walk at every frequency.
+
+    The reuse is by IDENTITY, not by equality: the polyline arrays a prepared
+    mesh hands a solver are the same ``ndarray`` objects every time (no
+    solver writes to them), so two solvers built from one handle see bitwise
+    the same coordinates rather than two roundings of one computation.
+
+    :attr:`model` is the model the handle was built from, kept so
+    :func:`build_solver` can refuse a handle prepared for a different
+    structure instead of silently answering the wrong deck.
+    """
+
+    model: DeckModel
+    mesh: Mesh
+    ports: PortPlan
+
+
+def prepare_mesh(model: DeckModel) -> PreparedMesh:
+    """Translate ``model``'s geometry once, for repeated :func:`build_solver`.
+
+    The frequency, the kernel and the environment are all operating-point
+    choices and none of them appears here; what the handle freezes is the
+    structure, which no operating point can move.
+    """
+    sites, feed_ports, load_ports = _sites(model)
+    mesh = to_polylines(model, tuple((site.wire, site.arclength) for site in sites))
+
+    # The mesh decided the solver's port order; renumber the plan onto it so
+    # a plan index and a Y row are the same integer.
+    ordered = [sites[model_port] for model_port in mesh.port_order]
+    solver_of_model = {model_port: i for i, model_port in enumerate(mesh.port_order)}
+    feed_ports = [solver_of_model[p] for p in feed_ports]
+    load_ports = [solver_of_model[p] for p in load_ports]
+    node_gap_ports = [len(ordered) + k for k in range(len(model.node_gaps))]
+
+    voltages: list[tuple[complex, ...] | None] = []
+    for entry in model.groups:
+        if entry is None:
+            voltages.append(None)
+            continue
+        drive = [0j] * len(ordered)
+        for feed_index, volts in enumerate(entry.voltages):
+            drive[feed_ports[feed_index]] = volts
+        drive += [complex(v) for _w, _v0, v in model.node_gaps]
+        voltages.append(tuple(drive))
+
+    return PreparedMesh(
+        model=model,
+        mesh=mesh,
+        ports=PortPlan(
+            sites=tuple(ordered),
+            feed_ports=tuple(feed_ports),
+            load_ports=tuple(load_ports),
+            node_gap_ports=tuple(node_gap_ports),
+            voltages=tuple(voltages),
+        ),
+    )
+
+
 def build_solver(
     model: DeckModel,
     *,
@@ -288,6 +376,8 @@ def build_solver(
     group: int | None = None,
     frequency_mhz: float | None = None,
     extended_kernel: bool | None = None,
+    environment: Environment | None = None,
+    mesh: PreparedMesh | None = None,
     cancel: Any = None,
 ) -> BuiltSolver:
     """Construct a solver for ``model`` and return it with its port plan.
@@ -296,11 +386,17 @@ def build_solver(
     ``--basis`` takes, so a deck solved through either front end can be asked
     for the same physics by the same word.
 
-    ``group`` selects which execute group's frequency and extended-kernel
-    setting the solver is built for; the default is the deck's first group
-    that ran.  ``frequency_mhz`` and ``extended_kernel`` override that
-    group's, which is what a sweep does — one plan, one geometry, a solver
-    per frequency.
+    ``group`` selects which execute group's frequency, extended-kernel
+    setting and ENVIRONMENT the solver is built for; the default is the
+    deck's first group that ran, and a model with no group at all falls back
+    to :attr:`DeckModel.environment`.  ``frequency_mhz``, ``extended_kernel``
+    and ``environment`` override that group's, which is what a sweep does —
+    one plan, one geometry, a solver per frequency.
+
+    ``mesh`` is a :func:`prepare_mesh` handle: pass one and the geometry
+    translation is not repeated, which is the whole of the per-operating-point
+    cost that does not belong to the fill.  Passing a handle prepared for a
+    different model raises.
 
     Raises ``ValueError`` for an unknown basis, a model with no wires, and a
     port set the geometry cannot host.
@@ -326,36 +422,20 @@ def build_solver(
         raise ValueError(f"frequency must be > 0 MHz, got {frequency_mhz}")
     if extended_kernel is None:
         extended_kernel = bool(armed.extended_kernel) if armed else False
+    if environment is None:
+        environment = armed.environment if armed else model.environment
 
-    sites, feed_ports, load_ports = _sites(model)
-    mesh = to_polylines(model, tuple((site.wire, site.arclength) for site in sites))
-
-    # The mesh decided the solver's port order; renumber the plan onto it so
-    # a plan index and a Y row are the same integer.
-    ordered = [sites[model_port] for model_port in mesh.port_order]
-    solver_of_model = {model_port: i for i, model_port in enumerate(mesh.port_order)}
-    feed_ports = [solver_of_model[p] for p in feed_ports]
-    load_ports = [solver_of_model[p] for p in load_ports]
-    node_gap_ports = [len(ordered) + k for k in range(len(model.node_gaps))]
-
-    voltages: list[tuple[complex, ...] | None] = []
-    for entry in model.groups:
-        if entry is None:
-            voltages.append(None)
-            continue
-        drive = [0j] * len(ordered)
-        for feed_index, volts in enumerate(entry.voltages):
-            drive[feed_ports[feed_index]] = volts
-        drive += [complex(v) for _w, _v0, v in model.node_gaps]
-        voltages.append(tuple(drive))
-
-    plan = PortPlan(
-        sites=tuple(ordered),
-        feed_ports=tuple(feed_ports),
-        load_ports=tuple(load_ports),
-        node_gap_ports=tuple(node_gap_ports),
-        voltages=tuple(voltages),
-    )
+    if mesh is None:
+        prepared = prepare_mesh(model)
+    elif mesh.model is model or mesh.model == model:
+        prepared = mesh
+    else:
+        raise ValueError(
+            "the prepared mesh was built for a different model — a handle "
+            "describes one structure and cannot be replayed onto another"
+        )
+    plan = prepared.ports
+    built_mesh = prepared.mesh
 
     # The gap voltages the solver is CONSTRUCTED with are the selected
     # group's: a Y-matrix readout ignores them entirely (it enumerates ports),
@@ -367,34 +447,34 @@ def build_solver(
             arclength,
             complex(drive[index]) if drive is not None else 0j,
         )
-        for index, (polyline, arclength) in enumerate(mesh.ports)
+        for index, (polyline, arclength) in enumerate(built_mesh.ports)
     ]
 
-    radii = list(mesh.radii)
+    radii = list(built_mesh.radii)
     wire_radius = radii[0] if len(set(radii)) == 1 else radii
 
     kwargs: dict[str, Any] = {}
-    if mesh.node_gap_members:
+    if built_mesh.node_gap_members:
         kwargs["node_gaps"] = [
             (polyline, end, complex(volts))
             for (polyline, end), (_w, _v, volts) in zip(
-                mesh.node_gap_members, model.node_gaps
+                built_mesh.node_gap_members, model.node_gaps
             )
         ]
     if extended_kernel:
         kwargs["extended_kernel"] = True
 
     solver = solver_class(
-        wires=list(mesh.polylines),
-        n_per_edge_per_wire=[list(counts) for counts in mesh.edge_elements],
+        wires=list(built_mesh.polylines),
+        n_per_edge_per_wire=[list(counts) for counts in built_mesh.edge_elements],
         feeds=feeds,
         wavelength=_C_LIGHT / (frequency_mhz * 1e6),
         wire_radius=wire_radius,
-        junctions=[list(entry) for entry in mesh.junctions] or None,
+        junctions=[list(entry) for entry in built_mesh.junctions] or None,
         cancel=cancel,
         **kwargs,
-        **_wire_loading(mesh.materials),
-        **_ground(model),
+        **_wire_loading(built_mesh.materials),
+        **_ground(environment),
         **basis_kwargs,
     )
     return BuiltSolver(
