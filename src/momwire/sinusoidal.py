@@ -3035,6 +3035,49 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the same once-per-fill discipline as its eps_t/C2 hoist. Left at
         None (the Galerkin caller, which calls once per solve), it is
         computed here exactly as before.
+
+        A thin composition of `_sommerfeld_remainder_prepare` and
+        `_replay_sommerfeld_remainder` (momwire#357 item 1) — the one-shot
+        spelling, for callers that evaluate one observer set per k. The
+        banded fill calls the two halves itself so the source-side working
+        set is built once per fill instead of once per band.
+        """
+        prepared = self._sommerfeld_remainder_prepare(
+            geom, k, eps_t, cos_shape=cos_shape, r1_max=r1_max
+        )
+        return self._replay_sommerfeld_remainder(
+            prepared,
+            obs_centers=obs_centers,
+            obs_tangents=obs_tangents,
+            consume=consume,
+            row_group=row_group,
+        )
+
+    def _sommerfeld_remainder_prepare(
+        self, geom, k, eps_t, cos_shape="cos", r1_max=None
+    ):
+        """Observer-INDEPENDENT half of the remainder evaluator (#357 item 1).
+
+        Everything `_replay_sommerfeld_remainder` needs that does not depend
+        on which observer rows it is asked for: the source-side quadrature
+        nodes and tangents, the k-weighted source shapes, the interpolation
+        grid, and the submerged-geometry refusal. A caller that walks the
+        observer axis in bands — the point-matched `_assemble_Z` fill —
+        calls this ONCE per fill and replays it per band, instead of
+        rebuilding it per band the way a plain loop over one-shot calls
+        does. Same shape as `RazorSolver._assemble_Z_prepare`: a plain
+        dict, held by the caller for exactly as long as the loop it feeds,
+        with no instance cache and so nothing to invalidate.
+
+        Residency is O(N), never O(N²): the three tables are (N·q, 3),
+        (N·q, 3) and (3, N, q) float64 — 0.09 MB each at N = 1200, q = 3.
+        The grid is the module-level cached object, borrowed not copied.
+
+        The state is keyed by its arguments alone (geometry, k, ε̃,
+        `cos_shape`), so replaying it against a k the caller has since
+        stepped away from is the one misuse available; `_assemble_Z` builds
+        it inside the same scope that fixes k, and the Galerkin caller
+        composes the two in one expression.
         """
         gz = self.ground_z
         seg_c = geom["seg_centers"]
@@ -3088,15 +3131,63 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
         n_src = N * q
-        srcf = src.reshape(n_src, 3)
-        t_src = np.repeat(seg_t, q, axis=0)
+        return {
+            "k": k,
+            "gz": gz,
+            "N": N,
+            "q": q,
+            "n_src": n_src,
+            "grid": grid,
+            "srcf": src.reshape(n_src, 3),
+            "t_src": np.repeat(seg_t, q, axis=0),
+            # `shp * w_node[None]`, the one k-dependent table, folded here
+            # rather than in the replay so the per-band pass owns nothing
+            # that outlives its own chunk.
+            "shp_w": shp * w_node[None],
+            "seg_c": seg_c,
+            "seg_t": seg_t,
+        }
 
-        obs_c = seg_c if obs_centers is None else np.asarray(obs_centers, dtype=float)
-        obs_t = seg_t if obs_tangents is None else np.asarray(obs_tangents, dtype=float)
+    def _replay_sommerfeld_remainder(
+        self,
+        prepared,
+        obs_centers=None,
+        obs_tangents=None,
+        consume=None,
+        row_group=1,
+    ):
+        """Observer-DEPENDENT half: evaluate `prepared` at one observer set.
+
+        Chunking, streaming (`consume`), and `row_group` alignment are
+        exactly as `_field_tensor_sommerfeld_remainder` documents them —
+        this IS that loop, with the source-side build lifted out. Every
+        expression the block is built from is untouched, and the chunk
+        boundaries are still derived from `_REMAINDER_CHUNK_ELEMS // n_src`,
+        so the floats are the one-shot spelling's floats bit for bit.
+        """
+        N = prepared["N"]
+        q = prepared["q"]
+        gz = prepared["gz"]
+        k = prepared["k"]
+        grid = prepared["grid"]
+        srcf = prepared["srcf"]
+        t_src = prepared["t_src"]
+        shp_w = prepared["shp_w"]
+
+        obs_c = (
+            prepared["seg_c"]
+            if obs_centers is None
+            else np.asarray(obs_centers, dtype=float)
+        )
+        obs_t = (
+            prepared["seg_t"]
+            if obs_tangents is None
+            else np.asarray(obs_tangents, dtype=float)
+        )
         M = obs_c.shape[0]
 
         S = None if consume is not None else np.empty((3, M, N), dtype=np.complex128)
-        chunk = max(1, _REMAINDER_CHUNK_ELEMS // max(n_src, 1))
+        chunk = max(1, _REMAINDER_CHUNK_ELEMS // max(prepared["n_src"], 1))
         if row_group > 1:
             if M % row_group:
                 # The last chunk would be a partial group, which is the one
@@ -3106,7 +3197,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     f"observer count {M} is not a multiple of row_group {row_group}"
                 )
             chunk = max(row_group, (chunk // row_group) * row_group)
-        shp_w = shp * w_node[None]
         for i0 in range(0, M, chunk):
             self._checkpoint()  # per observer chunk of the eval block
             i1 = min(i0 + chunk, M)
@@ -3589,6 +3679,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             r1_max = _sommerfeld.max_image_distance(
                 geom["seg_l"], geom["seg_r"], self.ground_z
             )
+            # The remainder's whole SOURCE side — quadrature nodes, their
+            # tangents, the k-weighted shapes, the grid handle — is
+            # observer-independent, so the bands replay one prepared state
+            # instead of rebuilding it each (momwire#357 item 1). O(N), and
+            # it dies with this fill.
+            somm_prep = self._sommerfeld_remainder_prepare(
+                geom, k, eps_t, r1_max=r1_max
+            )
 
         # Below the dense-M threshold the whole fill is one chunk, budget or
         # no budget. Two reasons, and the first alone would settle it:
@@ -3638,18 +3736,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     # the sign pinning). eps->inf: C2 -> 1, S -> 0, PEC
                     # image exactly; eps -> 1: both vanish, free space.
                     #
-                    # The remainder evaluator already takes observer
-                    # centres/tangents, so the band is a plain argument
-                    # there; it is the only block that has to be told which
-                    # rows it is on rather than shown them.
+                    # The remainder evaluator's replay half already takes
+                    # observer centres/tangents, so the band is a plain
+                    # argument there; it is the only block that has to be
+                    # told which rows it is on rather than shown them. Its
+                    # observer-independent half is `somm_prep`, built once
+                    # above (#357 item 1).
                     Phi_i = list(self._field_tensor_image(geom, k, obs_rows=rows))
-                    S = self._field_tensor_sommerfeld_remainder(
-                        geom,
-                        k,
-                        eps_t,
+                    S = self._replay_sommerfeld_remainder(
+                        somm_prep,
                         obs_centers=seg_c[i0:i1],
                         obs_tangents=seg_t[i0:i1],
-                        r1_max=r1_max,
                     )
                     # `c2 * Φ_img − S` in place, and with C2 on the LEFT.
                     # Not cosmetic: complex128 multiply evaluates the
