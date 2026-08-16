@@ -337,8 +337,77 @@ _HAVE_GALERKIN_FAR_FILL_EK = _acc is not None and hasattr(
 )
 
 # Pairs are corrected in blocks so the (P, G, n_qp_const) source-quadrature
-# scratch inside the field kernel stays bounded regardless of model size.
+# scratch inside the field kernel stays bounded regardless of model size. It
+# is still literally the block for `_ek_bracket_correction_tested`, whose
+# per-pair scratch is the closed-form bracket's and carries no third axis;
+# for `_apply_near_correction` it is now the CEILING rather than the block,
+# `_near_block` sizing that one to the byte budget below (momwire#383). Kept
+# as a plain name either way because it is the seam every residency gate in
+# the suite already shrinks to see past the pair scratch.
 _PAIR_BLOCK = 512
+
+# Byte budget for one pair block of the near correction (momwire#383).
+#
+# What the block holds, per pair, measured per statement with tracemalloc on
+# the #355 bend deck (G = the endpoint-graded rule's node count, nq_c =
+# `n_qp_const`, n_d = `_N_QP_EK_DELTA` x `_N_PANEL_EK_DELTA_NEAR` = 128):
+#
+#   * the REDUCED field kernel's own tables and their source-quadrature
+#     scratch — 16·G·(12.5·nq_c + 65) bytes, i.e. ~165 (G,) arrays' worth at
+#     the shipped nq_c = 8, of which the (G, nq_c) tensors under `int_G0` and
+#     `_folded_cos_fields` are the nq_c half. 254 KB/pair at G = 96;
+#   * with the extended kernel on, `_folded_ek_delta_fields`' quadrature in
+#     the sinh-mapped variable, which carries a THIRD axis of n_d = 128
+#     nodes: ~25 live (G, n_d) complex arrays at its peak — t, cosh_t, R,
+#     zeta, xi, w, r2, x, x2, x3, x4, a1…a4, inv2, phase, base, g1…g4, t_c,
+#     t_z, l_z, l_r, kxi, s_cos and the sin shape — 4.88 MB/pair at G = 96,
+#     i.e. 20x the reduced path's whole per-pair cost and 23x the fill's own
+#     per-pair share.
+#
+# At the shipped `_PAIR_BLOCK` of 512 that second term alone was 2.63 GB of
+# fixed working set, independent of N, riding every extended-kernel Galerkin
+# assembly with the near correction on — the transient momwire#355 measured
+# and could not account for. 8 MB instead, and the block that fits it is one
+# pair under the extended kernel and 32 under the reduced one.
+#
+# 8 MB and not more because the measured wall clock agrees with the budget
+# rather than trading against it: the per-pair set is already 5 MB, so a
+# bigger block buys no cache locality and no kernel-call amortization it had
+# not bought at one pair. Measured on the bend deck at N = 300 (min of 9),
+# the correction alone runs 2.24 s at the budgeted block and 6.25 s at 512
+# under the extended kernel, 131 ms vs 183 ms reduced. This is the rare
+# budget that costs nothing to honour.
+_NEAR_WORKSPACE_BYTES = 1 << 23
+
+
+def _near_block(nq_graded, n_qp_const, extended_kernel):
+    """Near pairs per correction block: live kernel scratch ≈ the budget.
+
+    `nq_graded` is `_graded_endpoint_rule`'s node count (the G above), which
+    the deck's thinnest Δ/a fixes; the per-pair coefficients are the measured
+    ones quoted at `_NEAR_WORKSPACE_BYTES`, rounded up. Capped at
+    `_PAIR_BLOCK` so a rule coarse enough to make the budget non-binding
+    still cannot ask for an unbounded block, and floored at one pair so a
+    rule fine enough to overrun the budget on its own still makes progress —
+    the same two ends `_fill_block` has.
+
+    The block size moves no float: each pair's contribution is computed and
+    ASSIGNED into its own cells (`_apply_near_correction`), with no
+    accumulator crossing pairs, so blockmates never reach each other's
+    arithmetic. G-D9a pins it, and carries the one caveat: numpy evaluates a
+    one-expression complex product by a different loop once the temporary
+    passes 256 KB, which is `_field_components_bcast`'s `bracket_sin_*` and
+    moves `Erho_sin`/`Ez_sin` in the last bits. The shipped 512-pair block
+    sat on the far side of that boundary on a thin-wire deck and every
+    budgeted block is on the near side, with the small blocks the residency
+    gates already run — so the budget moves G onto the plateau rather than
+    off it (G-D9c pins the boundary).
+    """
+    per_pair = 16 * nq_graded * (13 * n_qp_const + 66)
+    if extended_kernel:
+        per_pair += 16 * nq_graded * 26 * _N_QP_EK_DELTA * _N_PANEL_EK_DELTA_NEAR
+    return max(1, min(_PAIR_BLOCK, _NEAR_WORKSPACE_BYTES // per_pair))
+
 
 # The far fill is likewise blocked over TEST segments so the field kernel's
 # (rows·nq, N, n_qp_const) source-quadrature scratch stays bounded (#194):
@@ -3021,8 +3090,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         )
 
         contrib_c, contrib_s, contrib_co = contribs
-        for p0 in range(0, mm.size, _PAIR_BLOCK):
-            p1 = min(p0 + _PAIR_BLOCK, mm.size)
+        # Pairs per block from the byte budget rather than a flat 512
+        # (momwire#383): under the extended kernel the block holds
+        # `_folded_ek_delta_fields`' (P, G, n_d) quadrature, 4.9 MB per pair
+        # at this rule, and 512 of those was 2.6 GB of fixed working set.
+        blk = _near_block(xg.shape[0], self.n_qp_const, self.extended_kernel)
+        for p0 in range(0, mm.size, blk):
+            p1 = min(p0 + blk, mm.size)
             mi, ni = mm[p0:p1], nn[p0:p1]
 
             # (P, G, 3) observer points along each test segment.
