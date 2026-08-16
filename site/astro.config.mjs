@@ -42,17 +42,19 @@ export default defineConfig({
             href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap",
           },
         },
-        // Cloudflare Web Analytics — same token as the antennaknobs docs,
-        // kept when the site moved to its own momwire.dev zone so all the
-        // doc traffic still rolls into one dashboard (the Web Analytics
-        // site must list momwire.dev as an allowed hostname). The token is
-        // a public client-side id, not a secret.
+        // Cloudflare Web Analytics — momwire.dev's OWN site/token (created
+        // 2026-08-15, "Enable with JS Snippet installation" mode: the zone
+        // is DNS-only — Fly terminates TLS — so Cloudflare cannot inject
+        // the beacon; this manual snippet is the only path that records).
+        // Formerly shared antennaknobs' token, a rationale that died when
+        // the site left that zone. The token is a public client-side id,
+        // not a secret.
         {
           tag: "script",
           attrs: {
             defer: true,
             src: "https://static.cloudflareinsights.com/beacon.min.js",
-            "data-cf-beacon": '{"token": "a7ed2b6512b5461fbd0beac3d6e13d71"}',
+            "data-cf-beacon": '{"token": "a1446be3e55f4096893cb315122220e7"}',
           },
         },
       ],
