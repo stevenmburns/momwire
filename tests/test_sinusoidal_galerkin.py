@@ -2662,8 +2662,11 @@ def test_grounded_fill_holds_no_parallel_ground_triple(monkeypatch, ground_kwarg
     that do not scale with the triples and would otherwise bury them:
     `_FILL_WORKSPACE_BYTES` (the numpy fill's per-block kernel scratch, which
     the refl-coef ground pays and which is a whole gigabyte by default) and
-    `_PAIR_BLOCK` (the near correction's per-pair-block scratch, measured at
-    ~127 MB at the shipped 512 regardless of N). Same lever as the
+    `_PAIR_BLOCK` (the near correction's per-pair-block scratch, which was
+    ~124 MB at the flat 512 that used to ship, regardless of N; momwire#383
+    now sizes that block to `_NEAR_WORKSPACE_BYTES` and it is ~8 MB on this
+    reduced-kernel deck, so the shrink to 8 pairs is a ceiling under a
+    budget rather than the whole of the lever). Same lever as the
     point-matched gates' `swept_mem_mb = 1`.
 
     The fill runs COLD, on purpose: a warm-up call would move the refl-coef

@@ -1789,11 +1789,19 @@ def test_gc5_the_grounded_accelerated_fold_holds_no_triple(monkeypatch, n):
     """Tracemalloc gate on `_fold_ground_block` itself (momwire#356).
 
     The BLOCK and not the whole assembly, deliberately. With the extended
-    kernel on, `_assemble_Z`'s peak at these sizes is the near correction's
-    per-pair working set — ~53 MB at `_PAIR_BLOCK` 8, fixed against N — and
-    it buries a triple either way: the whole-assembly number reads 4.10 ->
-    4.15 at N = 300, i.e. noise. That is G-D8c's finding repeated, and it is
-    why the subject is measured on its own here.
+    kernel on, `_assemble_Z`'s peak at these sizes used to be the near
+    correction's per-pair working set — 5.14 MB per pair, fixed against N,
+    41 MB at `_PAIR_BLOCK` 8 and 2.63 GB at the 512 that shipped — and it
+    buried a triple either way: the whole-assembly number read 4.10 -> 4.15
+    at N = 300, i.e. noise. That is G-D8c's finding repeated, and it is why
+    the subject is measured on its own here.
+
+    momwire#383 has since byte-budgeted that block (G-D9), so the shrink
+    below now buys less than it did: `_near_block` already returns one pair
+    under the extended kernel at this deck's rule, and `_PAIR_BLOCK` = 8 is
+    a ceiling it is under. The monkeypatch stays because the ceiling is
+    what this gate means to pin — that no future block size can bury its
+    subject — and because it is what the number quoted below was taken at.
 
     What is left inside the bar is not the fill. momwire#358 took the
     eligibility mask and its build temporary out of it — 1.18 -> 0.23 -> 0.176
@@ -3213,12 +3221,16 @@ def test_gd8c_the_free_space_ek_assembly_holds_one_fill_not_two(monkeypatch):
     one — the momwire#347 headroom, on the tightest of these three gates.
 
     The issue's own headline number, ~4.1 triples in every mode, is NOT this
-    and is not the correction: at the shipped `_PAIR_BLOCK` the extended
-    kernel's near correction holds ~5.9 MB per pair in the block, 53 MB at a
-    block of 8, and that fixed working set — not the matrix — is what the
-    original measurement saw. It is unchanged by this gate's subject and is
-    left to `_PAIR_BLOCK`'s own issue; shrinking the pair block to 1 here is
-    what lets the triples be seen at all.
+    and is not the correction: at the `_PAIR_BLOCK` of 512 that shipped when
+    momwire#355 landed, the extended kernel's near correction held 5.14 MB
+    per pair in the block — 2.63 GB — and that fixed working set, not the
+    matrix, is what the original measurement saw. momwire#383 has since sized
+    that block to a byte budget (G-D9), and the free-space assembly's whole
+    transient at the SHIPPED configuration is now 17.6 MB against 2.63 GB.
+    Shrinking the pair block to 1 here is therefore belt-and-braces rather
+    than the only way to see the triples; it stays because a ceiling this
+    gate pins itself against cannot be inherited from another issue's
+    constant.
     """
     import tracemalloc
 
@@ -3251,4 +3263,279 @@ def test_gd8c_the_free_space_ek_assembly_holds_one_fill_not_two(monkeypatch):
         f"= {transient / triple:.2f} contribution triples (one triple = "
         f"{triple / 1e6:.2f} MB) — the bracket's own triple is back, or the "
         f"fill's is being held across it"
+    )
+
+
+# ===========================================================================
+# G-D9 — the near correction's working set is byte-budgeted (momwire#383)
+# ===========================================================================
+# G-D8c above recorded a transient it could not account for: ~4.1 triples on
+# every deck and every ground, unmoved by the bracket streaming and unmoved by
+# the matrix. It was `_apply_near_correction`, and it was not of matrix shape
+# at all — a FIXED working set of one pair block, riding every extended-kernel
+# Galerkin assembly with the near correction on.
+#
+# Per statement, with tracemalloc, on the #355 bend deck at N = 300 (the
+# endpoint-graded rule there is G = 96 nodes, the delta rule n_d = 128):
+#
+#   reduced path   16·G·(12.5·nq_c + 65)  = 254 KB/pair — the Eqs 76-79
+#                  tables and the (G, nq_c) source-quadrature scratch under
+#                  `int_G0` and `_folded_cos_fields`;
+#   extended path  + ~25 live (G, n_d) complex arrays inside
+#                  `_folded_ek_delta_fields` — t, cosh_t, R, zeta, xi, w, r2,
+#                  x, x2, x3, x4, a1…a4, inv2, phase, base, g1…g4, t_c, t_z,
+#                  l_z, l_r, kxi and the two shapes — 4.88 MB/pair, 20x the
+#                  whole reduced cost.
+#
+# Measured slope, block 1 -> 32: 5.14 MB/pair extended, 0.25 MB/pair reduced,
+# flat in N. At the shipped `_PAIR_BLOCK` of 512 that is 2.63 GB and 112 MB.
+# `_NEAR_WORKSPACE_BYTES` (8 MB) now sizes the block instead: one pair under
+# the extended kernel at this rule, 32 under the reduced one.
+#
+#   G-D9a  the block size moves no float;
+#   G-D9b  the budget is honoured at the SHIPPED configuration — no gate in
+#          this suite has been able to assert that before, because the
+#          shipped configuration was the one nobody could afford to trace.
+#
+# The reuse the issue also asked about is not available and does not need to
+# be: those ~25 arrays are one vectorized call's live temporaries, not a
+# per-pair allocation inside a Python loop, so there is nothing to hoist out
+# of a loop that does not exist. Sizing the call is the whole of the fix.
+
+
+def _gd9_bend(n, ek, **kw):
+    """The G-D8 bend on a FAT wire (Δ/a ~ 5), which is the near correction's
+    own worst case — the extended-minus-reduced delta is largest there — and
+    which coarsens the endpoint-graded rule enough that even a 512-pair block
+    is affordable to allocate in a test."""
+    half = 0.962 * _GD8_WL / 4
+    ys = np.linspace(0.0, half, n // 2 + 1)
+    xs = np.linspace(0.0, half, n - n // 2 + 1)[1:]
+    pts = [[0.0, y, 4.0] for y in ys] + [[x, half, 4.0] for x in xs]
+    return SinusoidalGalerkinSolver(
+        wires=[np.array(pts)],
+        n_per_edge_per_wire=[[1] * n],
+        nsegs=n,
+        wavelength=_GD8_WL,
+        wire_radius=0.02,
+        extended_kernel=ek,
+        feeds=[(0, 0, 1.0)],
+        **kw,
+    )
+
+
+def _gd9_monopole(n, ek, **kw):
+    """A quarter-wave monopole standing ON the plane: the near-pair-rich
+    geometry of momwire#356's sweep, where the contact node puts a segment
+    next to its own image and the near set is at its densest."""
+    z = np.linspace(0.0, _GD8_WL / 4, n + 1)
+    pts = np.column_stack([np.zeros(n + 1), np.zeros(n + 1), z])
+    return SinusoidalGalerkinSolver(
+        wires=[pts],
+        n_per_edge_per_wire=[[1] * n],
+        nsegs=n,
+        wavelength=_GD8_WL,
+        wire_radius=0.02,
+        extended_kernel=ek,
+        feeds=[(0, 0, 1.0)],
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        **kw,
+    )
+
+
+_GD9_DECKS = {"bend": _gd9_bend, "monopole": _gd9_monopole}
+
+
+@pytest.mark.parametrize("ek", [True, False])
+@pytest.mark.parametrize("deck", list(_GD9_DECKS))
+def test_gd9a_the_near_block_size_moves_no_float(monkeypatch, deck, ek):
+    """G and Z are the same to the BIT however the near pairs are blocked.
+
+    The arithmetic reason: each near pair's contribution is computed from its
+    own (test segment, source segment) geometry and ASSIGNED into its own
+    cells — `_apply_near_correction`'s docstring states the ownership, and no
+    accumulator crosses pairs inside a block — so blockmates never reach each
+    other's floats. Blocking is a scheduling decision, and this pins it.
+
+    Four block sizes: 1, 8, whatever `_near_block` computes for the deck
+    (2-4 here, and 1 on a thin wire) and the pre-momwire#383 flat 512, which
+    on these decks covers every pair in one call.
+
+    ONE caveat, found while measuring this and true of main as well: numpy
+    evaluates a one-expression complex product by a different loop once the
+    temporary passes 256 KB, which is `bracket_sin_2`/`bracket_sin_1` in
+    `_field_components_bcast` and moves `Erho_sin`/`Ez_sin` in the last bits.
+    A (P, G) table crosses 256 KB at P = 128 for G = 128, so on a thin-wire
+    deck the SHIPPED 512-pair block was on the far side of that boundary and
+    the small blocks every residency gate here monkeypatches were not:
+    measured 8.2e-20 of ‖G‖ between them at N = 80, i.e. a last-bit
+    difference, not a plateau this test could pin at 512. It is pinned
+    instead by `test_gd9c_the_budgeted_block_stays_under_numpys_threshold`,
+    which shows the budgeted block is always on the small-block side — so
+    the fix lands G where blocks 1 through 64 already were, and it is the
+    512 that was the outlier. `_folded_ek_delta_fields` already names its
+    steps for exactly this reason; `_field_components_bcast` does not, and
+    that is its own issue rather than this one's.
+    """
+    ref_G = ref_Z = None
+    for blk in (1, 8, None, 512):
+        if blk is not None:
+            monkeypatch.setattr(_sg, "_near_block", lambda *a, _b=blk: _b)
+        else:
+            monkeypatch.undo()
+        sim = _GD9_DECKS[deck](24, ek)
+        G, _seg_view = sim._assemble_Z(sim._build_geometry(), sim.k)
+        Z = sim.compute_y_matrix()
+        if ref_G is None:
+            ref_G, ref_Z = G, Z
+            continue
+        assert np.array_equal(G, ref_G), (
+            f"{deck}/ek={ek}: blocking the near pairs {blk} at a time moved G "
+            f"by {np.max(np.abs(G - ref_G)):.3e} — the block size is reaching "
+            f"the arithmetic"
+        )
+        assert np.array_equal(Z, ref_Z), f"{deck}/ek={ek}: Y moved at blk={blk}"
+
+
+@pytest.mark.parametrize(
+    "nq_graded,n_qp_const,ek",
+    [
+        (g, c, e)
+        for g in (16, 32, 96, 144, 512)
+        for c in (4, 8, 16)
+        for e in (True, False)
+    ],
+)
+def test_gd9c_the_budgeted_block_stays_under_numpys_threshold(
+    nq_graded, n_qp_const, ek
+):
+    """The budgeted block's (P, G) field tables are under 256 KB, always.
+
+    That is the boundary G-D9a's caveat records — above it numpy evaluates a
+    one-expression complex product by a different loop, and the near
+    correction's rounding would depend on how the pairs were cut into calls.
+    The budget puts every block on the same side of it by construction:
+    P·G·16 ≤ `_NEAR_WORKSPACE_BYTES`/(13·nq_c + 66) ≤ 8 MB/118 = 71 KB, and
+    the `_PAIR_BLOCK` cap can only lower it. Structural, so it is checked
+    structurally rather than on a deck.
+    """
+    blk = _sg._near_block(nq_graded, n_qp_const, ek)
+    assert blk >= 1
+    assert blk * nq_graded * 16 < 256 * 1024, (
+        f"G={nq_graded}, nq_c={n_qp_const}, ek={ek}: the budgeted block of "
+        f"{blk} pairs makes a {blk * nq_graded * 16 / 1024:.0f} KB field "
+        f"table, over numpy's 256 KB loop boundary"
+    )
+
+
+# The bar for G-D9b, in units of the budget the block is sized to. Measured on
+# the N = 200 bend, all three grounds: 5.25 MB extended (0.63 of the 8 MB
+# budget, the block being one pair whose set does not fill it) and 8.11 MB
+# reduced (0.97, a 32-pair block sized to fill it). 1.4 sits 1.44x above the
+# larger of those — the momwire#347 headroom — and 224x below the 2.63 GB the
+# shipped 512-pair block held before momwire#383 (512 pairs x 5.14 MB, which
+# is what this measurement reads on main).
+_GD9_BAR = 1.4
+
+
+@pytest.mark.parametrize("ek", [True, False])
+@pytest.mark.parametrize("ground", list(_GD8_GROUNDS))
+def test_gd9b_the_near_correction_holds_one_budget(ek, ground):
+    """Tracemalloc gate on `_apply_near_correction` at the SHIPPED block.
+
+    Nothing is monkeypatched — that is the point of this gate and the thing
+    G-D8b, G-D8c, G-C5 and G-C6 could not do. Each of them shrinks
+    `_PAIR_BLOCK` to 8 or 1 to see past this working set, and each says so;
+    what none of them measures is the configuration that actually ships. At
+    `_PAIR_BLOCK = 512` with the extended kernel on, that configuration held
+    2.63 GB — fixed, independent of N, on a 16 GB machine.
+
+    The correction is called on its own, as G-D8b calls the bracket: the
+    subject is a per-pair working set and not the fill, and the destination
+    triple is the caller's either way.
+    """
+    import tracemalloc
+
+    n = 200
+    sim = _gd8_bend(n, **_GD8_GROUNDS[ground])
+    sim.extended_kernel = ek
+    geom = sim._build_geometry()
+    N = geom["n_segs"]
+    assert N == n
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    nnz = ctx["w_entry"].shape[0]
+    contribs = tuple(np.zeros((nnz, N), dtype=np.complex128) for _ in range(3))
+
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        base = tracemalloc.get_traced_memory()[0]
+        sim._apply_near_correction(
+            geom,
+            sim.k,
+            ctx,
+            contribs,
+            _plain_projection,
+            geom["seg_centers"],
+            geom["seg_tangents"],
+            False,
+        )
+        _cur, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    budget = _sg._NEAR_WORKSPACE_BYTES
+    assert peak - base < _GD9_BAR * budget, (
+        f"ek={ek}/{ground}: the near correction peaked "
+        f"{(peak - base) / 1e6:.2f} MB = {(peak - base) / budget:.2f} of its "
+        f"{budget / 1e6:.2f} MB budget, bar {_GD9_BAR} — the pair block is "
+        f"not being sized to the budget"
+    )
+
+
+def test_gd9b_has_teeth():
+    """G-D9b's companion: widen the budget and the same measurement blows
+    through the bar, so what it is watching is live.
+
+    16x the budget, which is a 16-pair block on this deck and ~84 MB — the
+    smallest multiple that makes the point without allocating the 2.63 GB the
+    unbudgeted block would.
+    """
+    import tracemalloc
+
+    n = 200
+    sim = _gd8_bend(n)
+    geom = sim._build_geometry()
+    ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
+    nnz = ctx["w_entry"].shape[0]
+    contribs = tuple(np.zeros((nnz, n), dtype=np.complex128) for _ in range(3))
+    args = (
+        geom,
+        sim.k,
+        ctx,
+        contribs,
+        _plain_projection,
+        geom["seg_centers"],
+        geom["seg_tangents"],
+        False,
+    )
+    budget = _sg._NEAR_WORKSPACE_BYTES
+    real = _sg._near_block
+    try:
+        _sg._near_block = lambda g, c, e: 16 * real(g, c, e)
+        tracemalloc.start()
+        try:
+            tracemalloc.reset_peak()
+            base = tracemalloc.get_traced_memory()[0]
+            sim._apply_near_correction(*args)
+            _cur, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+    finally:
+        _sg._near_block = real
+
+    assert peak - base > _GD9_BAR * budget, (
+        f"a 16x block peaked only {(peak - base) / 1e6:.2f} MB — G-D9b's bar "
+        f"is not measuring the pair block at all"
     )
