@@ -88,6 +88,26 @@ execute group over a port set that never changes. Stamping a load impedance
 is port algebra and stays with the consumer — `momwire.deck` puts the gap in
 the matrix and hands over the spec.
 
+A deck's **execute groups** are what the model says about running it: one per
+execute card, each carrying its own frequency list, kernel flag and
+`Environment` (the ground, its plane and a cliff's second medium). A `GN` card
+arms, so a deck may run once in free space and once over ground and each group
+says which; `build_solver(model, group=k)` builds over group `k`'s, and
+`frequency_mhz=`, `extended_kernel=` and `environment=` override it.
+
+Only the operating point moves between those calls, never the geometry, so a
+swept caller translates once:
+
+```python
+from momwire.deck import prepare_mesh
+
+mesh = prepare_mesh(model)                       # the polylines, the port plan
+solvers = [build_solver(model, mesh=mesh, frequency_mhz=f) for f in sweep]
+```
+
+Every solver built from one handle is given the same coordinate arrays, so a
+prepared solve is bit-equal to an unprepared one.
+
 ## SimNEC portal
 
 Installing momwire puts **`momwire-nec2c`** on your path — a resident NEC
