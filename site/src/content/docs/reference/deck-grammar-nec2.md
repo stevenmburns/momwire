@@ -172,7 +172,8 @@ NEC's:
 | `feeds` | `(wire, arclength, volts)` — a delta gap at a point on a wire, complex volts |
 | `node_gaps` | gaps at a wire **knot** rather than mid-segment. The `nec2` dialect emits none; the seam exists because a NEC-5 dialect's edge sources are exactly this |
 | `loads` | `(wire, arclength, impedance)` — series or parallel RLC, or a fixed complex `Z`, stamped at the same kind of point a feed occupies |
-| `ground` | `None` (free space), `"pec"`, or `(model, eps_r, sigma)` with `model` one of `"finite-fast"` / `"finite"`; plus the ground plane's `z` |
+| `ground` | `None` (free space), `"pec"`, or `(model, eps_r, sigma)` with `model` one of `"finite-fast"` / `"finite"`; plus the ground plane's `z` and a cliff's second medium. The deck's **last** environment — see below |
+| `environment` | the same three values as one record, per execute group: the ground, its plane and the second medium in force **at that group's execute card** |
 | `frequencies` | the frequency list, in MHz, per execute group |
 | `requests` | what each execute group asks for: nothing (a plain solve), a far-field pattern, a near-field grid, and the print controls that shape the readout |
 | `comments` | the deck's free text, in card order |
@@ -181,6 +182,26 @@ The model carries no tags, no segment numbers, no mnemonics and no card
 ordinals. Anything a consumer needs in those terms — a printout that echoes
 cards, a table addressed by segment — is the *dialect's* business and travels
 alongside the model, not inside it.
+
+### The environment is per execute group
+
+`GN` **arms** (see [Arming](#arming)), so a deck may run once in free space
+and once over ground, and each group is answered over whatever the cards had
+reached by the time its execute card fired. The environment is therefore a
+per-group quantity, carried on the execute group beside its frequency list and
+its kernel flag.
+
+The model's deck-level `ground`, `ground_z` and `second_medium` are the
+environment the cards had reached at the **end** of the deck — the last
+group's, and for the overwhelming majority of decks, which state their ground
+once before the first execute card, every group's. A consumer that solves a
+group reads the group's; a consumer that asks "what ground is this deck over"
+reads the deck's, and gets the same answer whenever there is only one.
+
+`build_solver(model, group=k)` builds over group `k`'s environment, and takes
+an `environment=` override beside its `frequency_mhz=` and `extended_kernel=`
+ones — the three operating-point choices a swept caller varies over one
+geometry.
 
 ## Execution
 
@@ -200,6 +221,28 @@ far field's cliff modes; `MP` is advisory; `PT` changes what a run prints, not
 what it computes. None of them can turn a bare `XQ` into a fresh run.
 
 The first execute card of a deck always runs.
+
+#### What a re-armed group rebuilds
+
+Two of the five arming cards move the **operator** — the matrix itself, rather
+than the drive it is solved against. Those are `GN` and `EK`: a ground card
+changes the half-space the fill runs over, a kernel card changes how the fill
+integrates. The other three do not: `EX` moves the drive, `FR` moves the
+frequency list, and `LD` is stamped outside the fill.
+
+So a re-armed group reports one of three shapes:
+
+| between two execute cards | the group reports |
+|---|---|
+| a fresh `FR` (with or without anything else) | a whole refill — new frequency list, new operator |
+| `GN` or `EK`, and no fresh `FR` | a **partial** refill: the operator was rebuilt, the frequency list was not |
+| `EX` or `LD` only | neither — the operator is untouched |
+
+The first execute card of a deck always reports a whole refill.
+
+The test is the **card**, not the value it carries: NEC rebuilds because a
+ground or kernel card arrived, so an `EK` naming the kernel already in force
+refills exactly as a change does.
 
 ### Frequency groups
 
@@ -356,6 +399,12 @@ The ground model and its constants.
 
 The ground plane is at `z = 0`.
 
+`GN` **arms** the next execute card, and a `GN` between two execute cards
+rebuilds the operator without a new `FR`. So a deck may run once in free space
+and once over ground: each execute group carries the environment in force at
+its own execute card — see [The environment is per execute
+group](#the-environment-is-per-execute-group).
+
 **The second medium on a `GN` card.** When `NRADL` is zero, `F3`–`F6` carry a
 whole second medium — the same four values a [`GD`](#gd--additional-ground-medium)
 card sets, written into the same four slots by NEC's own card reader. A deck
@@ -394,7 +443,9 @@ coefficient per direction. Under `RP 0` a deck with a `GD` and the same deck
 without it produce identical patterns.
 
 A later `GD` (or a later `GN` with `NRADL = 0`) overwrites an earlier one.
-`GD` does not arm the next execute card.
+`GD` does not arm the next execute card. Like the ground, the second medium is
+carried per execute group: the cliff a pattern reads is the one in force when
+its own execute card fired.
 
 ## FR — frequency
 
@@ -565,8 +616,10 @@ The flag is honoured, not advisory — it selects the operator, the same `O(a²)
 on-axis tube expansion the card asks for. It is carried **per execute group**,
 so one deck may answer two groups under two kernels with two fills.
 
-`EK` arms the next execute card. A kernel change between two execute cards
-re-arms without a new `FR`.
+`EK` arms the next execute card. An `EK` between two execute cards rebuilds
+the operator without a new `FR` — a partial refill, the same shape a `GN`
+there produces (see [What a re-armed group
+rebuilds](#what-a-re-armed-group-rebuilds)).
 
 ## XQ — execute
 
