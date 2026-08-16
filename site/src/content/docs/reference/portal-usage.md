@@ -1,0 +1,271 @@
+---
+title: "Running momwire as SimNEC's engine"
+description: Install the momwire-nec2c portal, point SimNEC at it, choose the physics with --basis, and read the version probe and the refusals.
+---
+
+[SimNEC](https://ae6ty.com/smith_charts/) (AE6TY) does not link its NEC
+solver — it shells out to a `nec2c` executable, starts one copy, and keeps
+it. Decks go down that process's stdin framed by an `NX` card, printouts come
+back on stdout, and SimNEC's own circuit solver reads two numbers per
+feedpoint out of each printout to build the antenna's Y matrix.
+
+momwire ships that process. `pip install momwire` puts **`momwire-nec2c`** on
+your path: a drop-in for the engine binary, with momwire's solver behind it.
+The Smith chart, the tuner and the sweeps stay SimNEC's; the
+electromagnetics become momwire's.
+
+The deck language is momwire's own **`nec2` dialect** — antenna-only, and
+specified card by card in [the deck grammar](/reference/deck-grammar-nec2/).
+This page is about running the engine; that page is about what it accepts.
+
+:::caution[Not a supported configuration]
+No part of SimNEC knows momwire exists, and nothing here has been reviewed or
+endorsed by SimNEC's author. Treat it as a cross-check you can run yourself.
+:::
+
+## Install
+
+```bash
+pip install momwire
+which momwire-nec2c        # e.g. ~/.venvs/momwire/bin/momwire-nec2c
+momwire-nec2c -version     # NEC2momwire.<major>.<minor>
+```
+
+`python -m momwire.portal` is the same program under its long name, for an
+environment where the console script is awkward to reach.
+
+Before a live session, run the built-in smoke. It needs no checkout: it
+spawns one resident copy of itself, sends embedded decks through it the way
+SimNEC does, exercises every basis, and prints `PASS` or `FAIL`.
+
+```bash
+momwire-nec2c --selftest
+```
+
+## Pointing SimNEC at it
+
+Open SimNEC's NEC portal dialog and give it the path the `which` above
+printed. Two rules decide whether SimNEC accepts the command, and both fail
+in ways that look nothing like their causes.
+
+**The filename must contain `nec2c`.** SimNEC picks the engine — deck
+dialect, daemon protocol, printout parse offsets, all of it — off the
+command's file name, lowercased, before anything inside the file is
+consulted. A name carrying none of `nec2c` / `nec5` / `nec42` is refused with
+*NO NEC Command Available*, and a name carrying `nec5` or `nec42` selects a
+different column layout that this engine does not emit. That is why the
+script is called `momwire-nec2c` and not something tidier.
+
+**The full path must not contain the substring `out`.** SimNEC refuses any
+command whose path contains it — *Can't execute 'out' file:* — a guard
+against pointing the engine field at a printout file. The shipped name is
+clear of it; your install prefix may not be. A venv under
+`~/checkouts/routing/` or `C:\Users\scout\` refuses this engine no matter
+what it is called, and the fix is to install momwire somewhere else.
+
+Both rules apply to wrappers and symlinks exactly as they do to the script.
+
+## Choosing the physics: `--basis`
+
+The portal accepts a `--basis` flag on its command line:
+
+```text
+momwire-nec2c --basis bspline                        # the default — degree-2 B-spline
+momwire-nec2c --basis bspline-d1                     # the same physics at degree 1 (tent basis)
+momwire-nec2c --basis sinusoidal                     # closest to NEC-2's own formulation
+momwire-nec2c --basis sinusoidal-galerkin            # the same basis, tested variationally
+momwire-nec2c --basis sinusoidal-galerkin-converged  # for near-open, high-Q feeds
+momwire-nec2c --basis hmatrix                        # same physics, hierarchical (ACA) solve
+momwire-nec2c --basis arrayblock                     # same physics, element-block/FFT solve
+```
+
+Three axes live in that list. `sinusoidal` and the two Galerkin entries are
+the **fidelity** ladder: the three-term basis point-matched with NEC's own
+delta-gap source answers "does this reproduce NEC-2's behaviour, mesh walk
+and all", and the Galerkin variants and the B-spline default answer "what
+does a better-converged basis say". There is no `sinusoidal-converged`: a
+zero-width gap has no collocation right-hand side, so the flag does not offer
+a name the solver refuses. `bspline-d1` is the **degree** axis — the same
+B-spline physics at degree 1, so pairing it with the default is the cheapest
+convergence check available. `hmatrix` and `arrayblock` are the **solve**
+axis, not a physics choice: the same B-spline operator held compressed and
+solved iteratively, so a large array answers without a dense fill.
+`arrayblock` is the one to reach for on a repeated-element array — identical
+elements on a regular lattice become an FFT convolution over the element grid
+— and it degrades to the hierarchical solve on a deck with no repeated
+structure, so it is safe to leave on. Its answers must agree with `bspline`'s;
+if they do not, the deck is telling you about conditioning, not about basis.
+
+**Two portal entries differing only in `--basis` give you cross-basis
+validation inside SimNEC itself.** Switch engines from the dialog and watch
+whether the answer holds. The printout banner records which physics answered
+(`VERSION:nec2c.ae6ty.momwire.9.1+sgc`), and a mistyped basis fails the
+version probe loudly at configure time rather than serving the default.
+
+### When the dialog is a file picker
+
+SimNEC selects the NEC command through a file dialog, which leaves nowhere to
+type arguments. Make the flags *be* a file — one wrapper per combination:
+
+```bash
+mkdir -p ~/nec-wrappers
+cat > ~/nec-wrappers/momwire-nec2c-sin <<'SH'
+#!/bin/sh
+exec /path/to/momwire-nec2c --basis sinusoidal "$@"
+SH
+chmod +x ~/nec-wrappers/momwire-nec2c-sin
+```
+
+The wrapper is the command SimNEC inspects, so both filename rules above
+apply to it: keep `nec2c` in the name, and keep `out` out of the whole path.
+
+## The version probe
+
+SimNEC runs `<command> -version` and reads the first line. The portal answers
+
+```text
+NEC2momwire.<major>.<minor>
+```
+
+which is SimNEC's own engine-family form: the `NEC2` prefix declares the deck
+dialect, and the text after it is free. SimNEC shows the string in the portal
+dialog's `NECVersion` row, stamps it as a `CM version` comment card on every
+deck it sends, and stores it in saved circuits — so a momwire session is
+identifiable as one everywhere the version travels.
+
+**The number is momwire's own version** — the engine's, which is the number
+that changes solve results. An engine release moves it; nothing else does.
+
+For a SimNEC build old enough to predate that form, `--legacy-probe` on the
+portal command line restores the older `nec2c.ae6ty.9.1` shape. Nothing else
+about the session changes either way. The probe line never carries the
+`--basis` suffix; only the printout banner does.
+
+## Running a deck from the command line
+
+The portal reads a deck file directly, the way you would test any NEC engine:
+
+```bash
+momwire-nec2c --basis sinusoidal < dipole.nec > dipole.printout
+```
+
+One framing rule makes this work: a deck is solved when its terminator card
+arrives. Inside SimNEC that card is `NX`, appended automatically. Standalone,
+a stock `.nec` file's final `EN` card does the same job and then ends the run.
+A file with neither — a deck that stops at `XQ` — produces only the banner,
+and the body is discarded at end of input with a warning on stderr naming
+this rule.
+
+## What refusals look like
+
+A deck this engine cannot model is **reported and stepped over**, never
+guessed at. The printout names the offending card and why, and still carries
+the `NX` sentinel SimNEC blocks in `readLine()` waiting for — an engine that
+dies or forgets the sentinel hangs SimNEC's UI with no timeout, which is
+strictly worse than an error message. The daemon survives and runs the next
+deck.
+
+The refusal leads with a line whose first word is exactly `ERROR:`, which is
+what trips SimNEC's own *NEC ERROR (1)* frame, so a refused deck surfaces as
+a visible error dialog rather than an empty result with no explanation.
+
+The complete list — cards refused by name, fields refused by value, and the
+structural refusals — is the grammar's, with the exact message text:
+
+* [cards refused by name](/reference/deck-grammar-nec2/#cards-refused-by-name)
+  — `TL` and `NT` (this dialect is antenna-only; a network deck goes to
+  antennaknobs' importer), the out-of-dialect geometry cards, `SP` / `SM`;
+* [fields refused by value](/reference/deck-grammar-nec2/#fields-refused-by-value)
+  — `EX` types other than 0, `RP` modes 1 and 4–6, spherical `NE` / `NH`
+  grids, near fields over finite ground, `GN` radial ground screens, the
+  unsupported `LD` types, and the four `IS` cases a lossless whole-wire
+  jacket cannot express;
+* [structural refusals](/reference/deck-grammar-nec2/#structural-refusals) —
+  malformed cards, and addresses that name nothing.
+
+Two behaviours upstream of any engine are worth knowing, because no engine
+can report them:
+
+* **SimNEC deletes `SP` cards from a script silently** before the deck
+  reaches a NEC-2-class engine. A pasted patch model solves as bare wire with
+  no warning from anyone. SimNEC's own *Surface elements* are properly
+  wire-gridded instead, and those run here fine.
+* **No apostrophes in `CM` / `CE` lines** pasted into the script editor —
+  SimNEC's script parser reads `'` as a quote and errors.
+
+## One fill per geometry
+
+SimNEC probes an N-port antenna by sending N excitation groups in one deck,
+and a stock `nec2c` refills and refactors the whole moment matrix for each —
+N fills for one matrix. This engine takes the union of every group's ports,
+fills and factors **once** per geometry and frequency, and answers each group
+by back-substitution on the cached factors. A three-port deck costs one fill,
+not three.
+
+The deck need not be the boundary either. The protocol is stateless — a sweep
+arrives as N separate decks, each re-sending the whole geometry — but the
+engine may remember. With `--cache`, a solved structure is kept under a key
+built from everything that decides its moment matrix (geometry after
+transforms, ground, loading, port placement, kernel flag, basis), so a knob
+dragged back to a value already probed, or a restarted sweep, is answered
+without parsing, meshing or filling anything. The same structure at a new
+frequency reuses the mesh and pays only the fill.
+
+That is **off by default**, because what the cache exploits is how often a
+real session re-sends a structure it has already sent — a property of your
+sessions, not of the bench. Measure first:
+
+```text
+momwire-nec2c --cache-stats /tmp/nec-cache-stats.json
+```
+
+Put that in the portal dialog's engine command and run a normal session.
+Every deck is solved exactly as it is without the flag — nothing is cached,
+nothing retained, the answers are the stock answers — but the engine computes
+each deck's key and counts how many decks a cache *would* have served. The
+file is rewritten after every deck, because SimNEC ends a session by killing
+the process and anything written at exit is never written:
+
+```json
+{"mode": "dry-run", "decks_rendered": 412, "hits": 273, "misses": 139,
+ "fills": 412, "evictions": 0, "bytes": 0, "entries": 0}
+```
+
+`hits` against `decks_rendered` is the saving on offer. SimNEC runs a **crew**
+of engine processes, and each counts only its own stream — give each portal
+entry its own stats path (`--cache-stats /tmp/nec-stats.$$.json` in a
+wrapper) or the crew members overwrite one file. If the numbers justify it:
+
+```text
+momwire-nec2c --cache
+momwire-nec2c --cache --cache-stats /tmp/nec-cache-stats.json
+```
+
+The first serves; the second serves *and* keeps measuring, which is the one
+to run for a while after switching over — `entries` and `bytes` then report
+what the process is actually holding. Neither flag changes a byte of the
+printout, in any mode.
+
+## How many engines to run
+
+A momwire process is not a 2 MB C binary: each carries NumPy, SciPy and
+momwire — about 90 MB resident before it solves anything — plus the dense
+complex matrix and its factors, which grow as the square of the segment
+count. It is also much quicker per deck once warm, so a smaller crew keeps up
+with a larger one of the C engine.
+
+Without `--cache` that is the whole budget; a process keeps nothing between
+decks. With it, each process's memory of past structures is capped at a few
+hundred MB, and a full cache costs a re-solve rather than a failure.
+
+**On a 16 GB machine, set the NEC crew size to 4.** Larger crews buy little —
+the win here is the single fill per geometry, not parallelism across decks —
+and they multiply the per-process floor by the segment count you are least
+expecting.
+
+## Licensing
+
+SimNEC is proprietary freeware. This engine reproduces the printout *layout*
+SimNEC's reader expects, worked out from observed output, and contains no
+`nec2c` code — interoperability of the same kind as emitting a NEC deck or a
+Touchstone file.
