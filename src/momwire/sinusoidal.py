@@ -2745,10 +2745,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (N_obs, N_src) for the whole geometry, and never cached — the
         point-matched fill's #332 unit B transplant of #323's window-
         producer trade (bspline's `_image_weight_window_fn` retired the
-        same tables the same way). `specular_ray_tables` is O(band · N_src),
-        negligible next to the quadrature fill each band already pays for,
-        so recomputing it once per band per k costs nothing the residency
-        was worth keeping for.
+        same tables the same way).
+
+        The quintet is k-INDEPENDENT, so a sweep rebuilds the same numbers
+        at every frequency: the residency #332 retired was, seen from the
+        k loop, a cache. It is not coming back and it cannot be replayed
+        either — replay would need the k loop innermost, which means every
+        k's Z live at once (20 x 16N² = 115 MB at the N = 600, 20-point
+        sweep momwire#357 measures) against the 5 x 8N² = 14.4 MB the cache
+        cost. So #357 item 2 bought the recompute down instead of buying it
+        back: `specular_ray_tables` now tiles its own elementwise build so
+        it runs out of cache, and the two tangent projections below hold
+        one scratch buffer between them rather than four temporaries. Same
+        floats, ~0.6x the per-band cost, no residency at all.
 
         `obs_rows = (i0, i1)` restricts the OBSERVER axis, same contract as
         `_field_tensor`'s; `None` means the whole geometry (one band).
@@ -2766,8 +2775,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # t·p̂ tables: tm_p on the BAND's observer tangents, tn_p on the
         # full source width — see `_image_refl_prep` for why the real
         # source tangents serve the image-source projection unchanged.
-        tm_p = obs_t[:, 0][:, None] * px + obs_t[:, 1][:, None] * py
-        tn_p = seg_t[:, 0][None, :] * px + seg_t[:, 1][None, :] * py
+        # `a*px + b*py` accumulated through one shared scratch buffer: same
+        # association, two (band, N_src) temporaries instead of four.
+        tm_p = obs_t[:, 0][:, None] * px
+        scratch = obs_t[:, 1][:, None] * py
+        tm_p += scratch
+        tn_p = seg_t[:, 0][None, :] * px
+        np.multiply(seg_t[:, 1][None, :], py, out=scratch)
+        tn_p += scratch
         return cos_th, px, py, tm_p, tn_p
 
     def _field_tensor_image_refl(self, geom, k, obs_rows=None):
