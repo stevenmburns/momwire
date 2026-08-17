@@ -36,14 +36,19 @@ jobs:
       - run: pip install --upgrade pip
       # Build (isolated, pybind11 from build-system.requires) + core + test deps.
       - run: pip install -e .[test]
-      - run: pytest tests/ -m "not slow"
+      # Explicit -m: PR lanes must not depend on pyproject's addopts default
+      # to keep memgate out. (Also now redundant with addopts — kept explicit
+      # on purpose, see #400.)
+      - run: pytest tests/ -m "not slow and not memgate"
 
   test-slow:
-    # The 12 slow-marked tests are the solver-regression pins (M3/M4
-    # reference constants, near-open collapse, section-6 oracle) — until
-    # #219 NO lane ran them, so week-old pins had never executed in CI.
-    # Measured 81 s: fits the PR path as a parallel job at zero added
-    # wall time (the test job is ~2:56).
+    # The slow-marked tests are the solver-regression pins (M3/M4 reference
+    # constants, near-open collapse, section-6 oracle, EK brute-force sweep)
+    # — until #219 NO lane ran them, so week-old pins had never executed in
+    # CI. Disjoint from memgate (#400): a slow test is never also a memgate
+    # test, so this excludes memgate explicitly for the same reason as the
+    # test job above, even though today nothing marked slow is also marked
+    # memgate.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -53,7 +58,27 @@ jobs:
           cache: pip
       - run: pip install --upgrade pip
       - run: pip install -e .[test]
-      - run: pytest tests/ -m slow
+      - run: pytest tests/ -m "slow and not memgate"
+
+  test-memgate:
+    # Residency/budget certification gates (#400): tracemalloc peaks and
+    # byte-budget checks. These pin actual measured allocations, which drift
+    # ~5% under CI's allocator noise — cheap to run, but not worth the
+    # attention cost on every PR iteration. Runs once, on push to main, so a
+    # regression is caught right after merge instead of on every review
+    # cycle. Must NOT run on pull_request: the `if` below is the enforcement
+    # (this workflow's own `pull_request` trigger would otherwise start it).
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install --upgrade pip
+      - run: pip install -e .[test]
+      - run: pytest tests/ -m memgate
 
   test-pynec:
     # Validate that the PyNEC backend agrees with momwire
