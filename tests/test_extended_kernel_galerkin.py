@@ -3362,21 +3362,20 @@ def test_gd9a_the_near_block_size_moves_no_float(monkeypatch, deck, ek):
     (2-4 here, and 1 on a thin wire) and the pre-momwire#383 flat 512, which
     on these decks covers every pair in one call.
 
-    ONE caveat, found while measuring this and true of main as well: numpy
-    evaluates a one-expression complex product by a different loop once the
-    temporary passes 256 KB, which is `bracket_sin_2`/`bracket_sin_1` in
-    `_field_components_bcast` and moves `Erho_sin`/`Ez_sin` in the last bits.
-    A (P, G) table crosses 256 KB at P = 128 for G = 128, so on a thin-wire
-    deck the SHIPPED 512-pair block was on the far side of that boundary and
-    the small blocks every residency gate here monkeypatches were not:
-    measured 8.2e-20 of ‖G‖ between them at N = 80, i.e. a last-bit
-    difference, not a plateau this test could pin at 512. It is pinned
-    instead by `test_gd9c_the_budgeted_block_stays_under_numpys_threshold`,
-    which shows the budgeted block is always on the small-block side — so
-    the fix lands G where blocks 1 through 64 already were, and it is the
-    512 that was the outlier. `_folded_ek_delta_fields` already names its
-    steps for exactly this reason; `_field_components_bcast` does not, and
-    that is its own issue rather than this one's.
+    This carried ONE caveat until momwire#392, recorded here because the
+    caveat was true of main as well: numpy elides a dead temporary on the
+    RIGHT of a complex product into an in-place multiply once it passes
+    256 KB, and the in-place loop does not round like the out-of-place one,
+    so `_field_components_bcast`'s `G0_e * (bracket)` moved `Erho_sin` and
+    `Ez_sin` in the last bits with the batch shape. A (P, G) table crosses
+    256 KB at P = 128 for G = 128, so on a thin-wire deck the SHIPPED
+    512-pair block was on the far side of that boundary and the small blocks
+    every residency gate here monkeypatches were not: measured 8.2e-20 of
+    ‖G‖ between them at N = 80. #383 could only contain that (G-D9c, the
+    budgeted block being always on the small-block side); #392 named the
+    operands, and G-D9d pins the kernel's shape independence outright. The
+    512 was never a plateau this test could have pinned, and there is now no
+    block size at which it is not the plateau.
     """
     ref_G = ref_Z = None
     for blk in (1, 8, None, 512):
@@ -3412,10 +3411,15 @@ def test_gd9c_the_budgeted_block_stays_under_numpys_threshold(
 ):
     """The budgeted block's (P, G) field tables are under 256 KB, always.
 
-    That is the boundary G-D9a's caveat records — above it numpy evaluates a
-    one-expression complex product by a different loop, and the near
-    correction's rounding would depend on how the pairs were cut into calls.
-    The budget puts every block on the same side of it by construction:
+    That is the boundary G-D9a's caveat recorded — above it numpy elides a
+    dead temporary into an in-place complex multiply that rounds differently,
+    and the near correction's rounding would depend on how the pairs were cut
+    into calls. momwire#392 removed the dependence at its source, so this is
+    no longer what makes the correction's arithmetic safe (G-D9d is), and it
+    is kept for what it still says: the budget cannot put the near
+    correction's tables anywhere near a size where anything about the
+    evaluation strategy changes. The budget puts every block on the same side
+    of it by construction:
     P·G·16 ≤ `_NEAR_WORKSPACE_BYTES`/(13·nq_c + 66) ≤ 8 MB/118 = 71 KB, and
     the `_PAIR_BLOCK` cap can only lower it. Structural, so it is checked
     structurally rather than on a deck.
@@ -3538,4 +3542,171 @@ def test_gd9b_has_teeth():
     assert peak - base > _GD9_BAR * budget, (
         f"a 16x block peaked only {(peak - base) / 1e6:.2f} MB — G-D9b's bar "
         f"is not measuring the pair block at all"
+    )
+
+
+# ---------------------------------------------------------------------------
+# G-D9d: the field kernel is a function of its PAIRS, not of its batch shape
+# (momwire#392). This is the caveat G-D9a carried and G-D9c could only
+# contain: numpy elides a dead temporary that is the RIGHT operand of a
+# complex product into an in-place multiply once it passes 256 KB
+# (`NPY_MIN_ELIDE_BYTES`), and for complex128 the in-place loop does not round
+# like the out-of-place one. `_field_components_bcast` spelled its endpoint
+# brackets as `G0_e * (…)` and its prefactor as `pref_rho * (…)`, so a caller
+# whose tables crossed 256 KB got different last bits for the same pair —
+# making the near correction's block size, the far fill's block size and even
+# the collocation solver's N reach the arithmetic. The fix names those
+# operands; these gates pin the property rather than the spelling.
+# ---------------------------------------------------------------------------
+
+_GD9D_WL = 22.0
+
+
+def _gd9d_pairs(n_pairs, n_obs, delta, a):
+    """`n_pairs` source segments along z, each with `n_obs` observers ON it.
+
+    Deliberately the near correction's own shape — the observer inside the
+    source segment's span, one radius off the axis — because that is where a
+    fill spends its most important pairs. The observers are offset by a
+    per-pair factor so no two pairs share a float and a difference cannot
+    hide behind a repeat.
+    """
+    hh = 0.5 * delta
+    src_c = np.zeros((n_pairs, 1, 3))
+    src_c[:, 0, 2] = np.arange(n_pairs) * delta
+    src_t = np.zeros((n_pairs, 1, 3))
+    src_t[:, 0, 2] = 1.0
+    grade = np.linspace(-0.97, 0.97, n_obs)[None, :]
+    off = hh * grade * (1.0 + 1e-3 * np.arange(n_pairs)[:, None])
+    obs_c = np.zeros((n_pairs, n_obs, 3))
+    obs_c[:, :, 2] = src_c[:, :, 2] + off
+    obs_c[:, :, 0] = a
+    obs_t = np.zeros((n_pairs, n_obs, 3))
+    obs_t[:, :, 2] = 1.0
+    return dict(
+        obs_c=obs_c,
+        obs_t=obs_t,
+        a=a,
+        src_c=src_c,
+        src_t=src_t,
+        src_hh=np.full((n_pairs, 1), hh),
+    )
+
+
+def _gd9d_sim(**kw):
+    z = np.linspace(-_GD9D_WL / 4, _GD9D_WL / 4, 3)
+    return SinusoidalSolver(
+        wires=[np.column_stack([np.zeros(3), np.zeros(3), z])],
+        n_per_edge_per_wire=[[1, 1]],
+        nsegs=2,
+        wavelength=_GD9D_WL,
+        wire_radius=0.001,
+        **kw,
+    )
+
+
+# (label, cos_shape, ek payload builder). All four combinations the dispatch
+# accepts: the two reduced shapes, EKSCX's per-end gating on the literal
+# shape, and the folded reduced-plus-delta pair rule.
+_GD9D_PAYLOADS = {
+    "reduced-cos": ("cos", None),
+    "reduced-folded": ("cos-1", None),
+    "ekscx": ("cos", "ekscx"),
+    "reduced+delta": ("cos-1", "pairs"),
+}
+
+
+@pytest.mark.parametrize("payload", list(_GD9D_PAYLOADS))
+def test_gd9d_the_field_kernel_ignores_its_batch_shape(payload):
+    """The same pairs, cut into blocks of 1 … 256, give the same tables — bit
+    for bit, on every shape and every extended-kernel payload.
+
+    256 pairs x 128 observers is a 512 KB table, twice numpy's threshold, so
+    the unnamed spelling fails this at blocks 128 and 256 and passes at every
+    smaller one. Nothing about a pair's field depends on its blockmates —
+    each is computed from its own (observer, source) geometry — so any
+    difference here is the evaluation strategy reading the temporary's size.
+    """
+    a = 0.001
+    n_pairs, n_obs = 256, 128
+    cos_shape, kind = _GD9D_PAYLOADS[payload]
+    sim = _gd9d_sim(extended_kernel=kind is not None)
+    geo = _gd9d_pairs(n_pairs, n_obs, _GD9D_WL / 80.0, a)
+    k = 2.0 * np.pi / _GD9D_WL
+    assert n_pairs * n_obs * 16 > 256 * 1024
+
+    def ek_for(count):
+        if kind is None:
+            return None
+        on = np.ones((count, 1), dtype=bool)
+        if kind == "ekscx":
+            return (a, on, on)
+        return _EKPairs(a, on, n_panels=4)
+
+    def tables(block):
+        out = {}
+        for p0 in range(0, n_pairs, block):
+            p1 = min(p0 + block, n_pairs)
+            cm = sim._field_components_bcast(
+                k,
+                obs_c=geo["obs_c"][p0:p1],
+                obs_t=geo["obs_t"][p0:p1],
+                a=geo["a"],
+                src_c=geo["src_c"][p0:p1],
+                src_t=geo["src_t"][p0:p1],
+                src_hh=geo["src_hh"][p0:p1],
+                cos_shape=cos_shape,
+                ek=ek_for(p1 - p0),
+            )
+            for key, val in cm.items():
+                out.setdefault(key, []).append(np.asarray(val))
+        return {key: np.concatenate(v, axis=0) for key, v in out.items()}
+
+    ref = tables(1)
+    scale = np.max(np.abs(ref["Ez_const"])) + np.max(np.abs(ref["Erho_const"]))
+    assert scale > 0.0
+    for block in (8, 64, 128, 256):
+        got = tables(block)
+        for key, want in ref.items():
+            if want.dtype != np.complex128:
+                continue
+            assert np.array_equal(got[key], want), (
+                f"{payload}: {key} moved by "
+                f"{np.max(np.abs(got[key] - want)) / scale:.2e} of the const "
+                f"field between a 1-pair and a {block}-pair call — the batch "
+                f"shape is reaching the arithmetic (momwire#392)"
+            )
+
+
+def test_gd9d_has_teeth():
+    """The property G-D9d pins is not free: the spelling it forbids fails it.
+
+    `G0 * (bracket)` is re-created here on the same tables — one array times a
+    dead temporary — and compared against the same product with the temporary
+    named. Below the threshold the two agree; above it they do not, which is
+    the whole mechanism in four lines. If numpy ever stops eliding, this test
+    goes quiet and G-D9d becomes a tautology, so the failure message says so.
+    """
+    rng = np.random.default_rng(392)
+
+    def spellings(n):
+        g0 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+        u = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+        v = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+        elided = g0 * (u + v)
+        named = u + v
+        named = g0 * named
+        return elided, named
+
+    small = spellings(1000)  # 16 KB
+    assert np.array_equal(*small), (
+        "the elided and named spellings differ BELOW numpy's threshold — the "
+        "fix would then be a change of arithmetic, not of evaluation strategy"
+    )
+    big = spellings(40_000)  # 625 KB
+    assert not np.array_equal(*big), (
+        "numpy no longer rounds an elided complex product differently above "
+        "256 KB, so G-D9d cannot fail and is watching nothing. Confirm that "
+        "before relaxing the named spellings in `_field_components_bcast` / "
+        "`_ek_end_gxx`"
     )

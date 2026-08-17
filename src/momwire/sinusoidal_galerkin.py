@@ -394,14 +394,16 @@ def _near_block(nq_graded, n_qp_const, extended_kernel):
     The block size moves no float: each pair's contribution is computed and
     ASSIGNED into its own cells (`_apply_near_correction`), with no
     accumulator crossing pairs, so blockmates never reach each other's
-    arithmetic. G-D9a pins it, and carries the one caveat: numpy evaluates a
-    one-expression complex product by a different loop once the temporary
-    passes 256 KB, which is `_field_components_bcast`'s `bracket_sin_*` and
-    moves `Erho_sin`/`Ez_sin` in the last bits. The shipped 512-pair block
-    sat on the far side of that boundary on a thin-wire deck and every
-    budgeted block is on the near side, with the small blocks the residency
-    gates already run — so the budget moves G onto the plateau rather than
-    off it (G-D9c pins the boundary).
+    arithmetic. G-D9a pins it, unconditionally since momwire#392 — until then
+    it carried a caveat, that numpy elides a dead temporary on the right of a
+    complex product into an in-place multiply above 256 KB and the two loops
+    round differently, so `_field_components_bcast`'s tables were a function
+    of the block that asked for them. #383 could only CONTAIN that by keeping
+    every budgeted block under the boundary (G-D9c, which is why the budget
+    once had a correctness reading); #392 removed it at the source by naming
+    those operands, and G-D9d pins the kernel's shape independence directly.
+    The budget is a residency decision again, which is all it should ever
+    have been.
     """
     per_pair = 16 * nq_graded * (13 * n_qp_const + 66)
     if extended_kernel:
@@ -415,8 +417,13 @@ def _near_block(nq_graded, n_qp_const, extended_kernel):
 # complex — 18.6 GiB at N=1601, OOM at N≈2000 on a 24 GiB budget (the M6
 # census ceiling). The block size adapts to N so the live fill workspace
 # stays near this budget; the arithmetic per matrix entry is identical, so
-# the assembled G is bit-for-bit the unblocked one. Governs the NUMPY fill
-# only — the fused C++ far fill never forms that scratch.
+# the assembled G is bit-for-bit the unblocked one — a property of the
+# arithmetic only since momwire#392. Before it the field kernel's tables
+# moved in the last bits across numpy's 256 KB temporary boundary, and this
+# claim held only because a block small enough to matter never happens: the
+# budget binds only once the tables are hundreds of MB, so blocked and
+# unblocked sat on the same side of it. Governs the NUMPY fill only — the
+# fused C++ far fill never forms that scratch.
 _FILL_WORKSPACE_BYTES = 1 << 30
 
 
