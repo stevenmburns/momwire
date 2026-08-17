@@ -319,6 +319,13 @@ class FieldGround:
     chunk sizes, `subtract_into`, the order the fold reaches entries in —
     is deliberately not here and does not move (sketch, "what stays out").
 
+    Two consumers, one decision each way it can be asked for it: the
+    point-matched fill takes the weighted image as a TENSOR (`image_field`,
+    which picks the evaluator) and the Galerkin fill takes it as a
+    PROJECTOR handed to its test integration (`projector`). Both are the
+    same ternary over the same `pair_weights`, spelled at the two solvers'
+    own interfaces so that neither has to know which ground it is filling.
+
     Attributes:
 
     `mode` — `"fold"` (PEC, refl-coef, and the screen when it lands): the
