@@ -16,7 +16,12 @@ supposed to be invisible to all of them.
 import numpy as np
 import pytest
 
-from momwire import SinusoidalSolver, _field_ground, _ground_refl
+from momwire import (
+    SinusoidalGalerkinSolver,
+    SinusoidalSolver,
+    _field_ground,
+    _ground_refl,
+)
 
 LAM = 20.0
 EPS = (13.0, 0.005)
@@ -41,6 +46,21 @@ def _solver(ground, **extra):
     return SinusoidalSolver(
         wires=wires,
         nsegs=21,
+        wavelength=LAM,
+        wire_radius=0.002,
+        **GROUND_KWARGS[ground],
+        **extra,
+    )
+
+
+def _galerkin(ground, **extra):
+    """The same elevated dipole on the GALERKIN solver, which reaches the
+    ground through a fold and a projector rather than through image tensors —
+    the second consumer of the same object (unit 3)."""
+    wires = [[[0.0, -0.24 * LAM, 3.0], [0.0, 0.24 * LAM, 3.0]]]
+    return SinusoidalGalerkinSolver(
+        wires=wires,
+        nsegs=11,
         wavelength=LAM,
         wire_radius=0.002,
         **GROUND_KWARGS[ground],
@@ -271,3 +291,112 @@ def test_the_point_matched_fill_follows_the_object_not_the_strings(monkeypatch):
         "the fill ignored the ground object it was handed — the band loop is "
         "reading ground_eps/ground_model again"
     )
+
+
+def test_the_galerkin_fill_follows_the_object_not_the_strings(monkeypatch):
+    """Unit 3's structural row, the Galerkin twin of the one above:
+    `_fold_ground_block` reads the `FieldGround`, so handing the fill a
+    DIFFERENT ground than its own strings describe changes the matrix.
+
+    A solver configured for the refl-coef ground is given a PEC ground
+    object; because the fold branches on `mode` and weights with
+    `projector` instead of reading `ground_eps` / `ground_model`, the result
+    is the PEC solver's matrix bit for bit. This solver reaches the ground by
+    a different route than the point-matched one — a projector handed to the
+    test integration, not an image tensor — so the swap has to be gated on
+    both trunks or the second one could quietly keep its strings.
+
+    The deck is elevated for the same reason as the point-matched row: the
+    one thing downstream that still reads `ground_eps` is the #282
+    contact-charge correction (`_contact_charge_correction_tested`), a
+    testing-scheme correction the sketch deliberately leaves out, and with no
+    wire end in the plane it has nothing to correct and cannot mask the swap.
+
+    Call counts on the positive side: one ground per fill (its construction
+    IS the per-fill hoist — this fill is not banded), one projector per fill,
+    and one remainder replay under the composing ground and none under a
+    folding one. The replay count is per FILL rather than per band because
+    the streaming here is inside one call: the chunks are the evaluator's,
+    and `row_group` alignment keeps them on whole test segments.
+    """
+    calls = {"built": 0, "projector": 0, "replay": 0}
+    real_factory = _field_ground.field_ground_for
+    real_projector = _field_ground.FieldGround.projector
+    real_replay = _field_ground.Remainder.replay
+
+    def spy_factory(*a, **kw):
+        calls["built"] += 1
+        return real_factory(*a, **kw)
+
+    def spy_projector(self, tables=None):
+        calls["projector"] += 1
+        return real_projector(self, tables)
+
+    def spy_replay(self, *a, **kw):
+        calls["replay"] += 1
+        return real_replay(self, *a, **kw)
+
+    monkeypatch.setattr(_field_ground, "field_ground_for", spy_factory)
+    monkeypatch.setattr(_field_ground.FieldGround, "projector", spy_projector)
+    monkeypatch.setattr(_field_ground.Remainder, "replay", spy_replay)
+
+    G_ref = {}
+    for ground in ("pec", "refl-coef", "sommerfeld"):
+        sim = _galerkin(ground)
+        geom = sim._build_geometry()
+        calls["built"] = calls["projector"] = calls["replay"] = 0
+        G_ref[ground], _ = sim._assemble_Z(geom, sim.k)
+        assert calls["built"] == 1, "the fill built more than one ground"
+        assert calls["projector"] == 1, "the fold asked for more than one weight"
+        assert calls["replay"] == (1 if ground == "sommerfeld" else 0)
+
+    assert not np.array_equal(G_ref["pec"], G_ref["refl-coef"])
+
+    # The swap: a refl-coef solver handed the PEC ground object.
+    sim = _galerkin("refl-coef")
+    geom = sim._build_geometry()
+    pec_ground = _field_ground.FieldGround(
+        sim,
+        geom,
+        sim.k,
+        sim.omega,
+        mode="fold",
+        weighted=False,
+        eps_tilde=None,
+        image_coefficient=1.0,
+    )
+    monkeypatch.setattr(_field_ground, "field_ground_for", lambda *a, **kw: pec_ground)
+    G_swapped, _ = sim._assemble_Z(geom, sim.k)
+    assert np.array_equal(G_swapped, G_ref["pec"]), (
+        "the Galerkin fold ignored the ground object it was handed — "
+        "`_fold_ground_block` is reading ground_eps/ground_model again"
+    )
+
+
+def test_an_unweighted_ground_never_builds_specular_tables():
+    """`projector`'s supplier is a callable so that the ternary can decline to
+    call it: PEC and sommerfeld take the plain projection, and neither may pay
+    for the O(N²) specular quintet the dyad needs.
+
+    That is what lets the Galerkin consumer pass its per-geometry
+    `_image_refl_prep` cache unconditionally — the cache is its schedule, and
+    the ground decides whether the schedule ever runs.
+    """
+    asked = []
+
+    def supplier():
+        asked.append(1)
+        raise AssertionError("an unweighted ground built specular tables")
+
+    for ground in ("pec", "sommerfeld"):
+        _geom, fg = _ground_of(_solver(ground))
+        assert fg.projector(supplier) is _field_ground.plain_projection
+    assert not asked
+
+    _geom, fg = _ground_of(_solver("refl-coef"))
+    tabs = fg.pair_weights()
+    proj = fg.projector(lambda: tabs)
+    assert proj is not _field_ground.plain_projection
+    # The weighted answer IS `PairWeights.project` at this ground's eps-tilde,
+    # bound to the tables the supplier handed over and to nothing else.
+    assert proj.__func__ is _field_ground.PairWeights.project
