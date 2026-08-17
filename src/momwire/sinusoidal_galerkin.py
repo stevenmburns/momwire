@@ -298,8 +298,9 @@ structural test-vs-source asymmetry rather than its rounding. The fill costs
 ~1.5× what it did: the folded spelling needs half-angle phases, and the
 sweep that produces them is most of the kernel.
 
-Still deferred: wire loading — it raises rather than returning plausible
-wrong numbers.
+Distributed series wire loading is served in the testing scheme's own form
+(momwire#395): the Galerkin overlap Σ_w Z'_w·∫f_i f_j of the three-term
+sinusoidal shapes, closed-form per segment, in `_apply_loading`.
 """
 
 import collections
@@ -794,8 +795,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     on, carries #246's delta on the eligible pairs in the same pass.
     Everything else is numpy: the reflection-coefficient and Sommerfeld ground
     blocks, the near-pair correction, and the whole fill when the extension is
-    not loaded. Wire loading is deliberately not wired and raises where
-    reached.
+    not loaded. Distributed wire loading is numpy too, and sparse: the
+    Galerkin overlap term of `_apply_loading`, closed-form on the shapes.
     """
 
     def __init__(
@@ -2660,13 +2661,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         (N+P, N+P). The source index `n` still runs over the N segments —
         a port basis is a current distribution on real segments like any
         other, so it needs no new field kernel and gets none.
-        """
-        if self._loading_active:
-            raise NotImplementedError(
-                "SinusoidalGalerkinSolver wire loading (Galerkin overlap form) "
-                "is not implemented yet (momwire#182)"
-            )
 
+        Distributed wire loading enters here and nowhere else (see
+        `_apply_loading`): every solve on this family reaches its matrix
+        through this method, so one call covers `compute_impedance`,
+        `compute_port_solution`/`compute_y_matrix`, both swept loops, and
+        `_assemble_Z_ported`, which wraps this one.
+        """
         seg_view = self._basis_coefs(geom, k)
         ctx = self._test_context(geom, seg_view, k)
 
@@ -2685,7 +2686,114 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         del contribs
         self._ek_bracket_correction_tested(G, geom, k, ctx)
         self._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
+        self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
+
+    # ------------------------------------------------------------------
+    # Distributed series wire loading, Galerkin form (momwire#131, #395)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _shared_segment_pairs(starts):
+        """(left, right, m_of_left) — every ORDERED pair of support entries
+        that shares a segment, from the segment-major CSR's `starts`.
+
+        The CSR holds one entry per (segment, basis) pair, so segment s's
+        entries name distinct bases and the pairs of run `starts[s]:starts[s+1]`
+        are exactly the (test, source) basis pairs whose supports meet on s.
+        A given (i, j) pair can recur across segments (adjacent bases overlap
+        on one segment, a basis with itself on two), so consumers must
+        accumulate unbuffered.
+
+        Built by ragged expansion rather than a per-segment loop: `left`
+        repeats each entry once per entry of its own segment and `right`
+        walks that segment's run for each repeat.
+        """
+        counts = np.diff(starts)
+        nnz = int(starts[-1])
+        m_of_entry = np.repeat(np.arange(counts.shape[0], dtype=np.int64), counts)
+        reps = counts[m_of_entry]
+        left = np.repeat(np.arange(nnz, dtype=np.int64), reps)
+        # ramp = 0,1,…,reps[e]-1 per source entry e, i.e. arange minus the
+        # exclusive prefix sum broadcast back over each run.
+        ramp = np.arange(int(reps.sum()), dtype=np.int64) - np.repeat(
+            np.cumsum(reps) - reps, reps
+        )
+        right = np.repeat(starts[m_of_entry], reps) + ramp
+        return left, right, m_of_entry[left]
+
+    def _apply_loading(self, G, geom, seg_view, k):
+        """The Galerkin form of NEC's impedance boundary condition, in place;
+        no-op when loading is off.
+
+        A distributed series impedance changes the wire surface condition to
+        E_scat − Z'_w·I = −E_app. Testing that with the same basis set the
+        expansion uses turns the point-matched subtraction of the inherited
+        `SinusoidalSolver._apply_loading` (one match point per row) into an
+        overlap over the shared support:
+
+            G[i, j] −= Σ_w Z'_w(ω) · Σ_{s ∈ w} ∫_s f_i(ξ)·f_j(ξ) dξ
+
+        — the same global sign, because it is the same equation, only tested
+        differently.
+
+        On segment s each basis carries ONE support entry with the three-term
+        shape f_e(ξ) = P_e + Q_e·sin kξ + R_e·cos kξ, (P, Q, R) = (σA, B, σC),
+        so the segment's block is the outer product of its entries under the
+        closed-form bilinear form on ξ ∈ [−h/2, h/2]. Two of the six shape
+        products integrate to zero because their integrands are odd:
+
+            ∫1·1   = h                      ∫1·sin   = 0
+            ∫1·cos = (2/k)·sin(kh/2)        ∫sin·cos = 0
+            ∫sin·sin = h/2 − sin(kh)/2k     ∫cos·cos = h/2 + sin(kh)/2k
+
+        giving
+
+            L_s[e, f] = P_eP_f·h + (P_eR_f + R_eP_f)·(2/k)sin(kh/2)
+                      + Q_eQ_f·(h/2 − sin(kh)/2k)
+                      + R_eR_f·(h/2 + sin(kh)/2k).
+
+        That is the bilinear (unconjugated) sibling of the |I|² family
+        `SinusoidalSolver.wire_loss_power` integrates for the power readout,
+        which this family inherits unchanged — a physical integral does not
+        care which testing scheme produced the coefficients.
+
+        Unlike `BSplineSolver._loading_gram`'s polynomial moments these VALUES
+        move with k, because {1, sin kξ, cos kξ} carries k; only the sparsity
+        STRUCTURE is geometry-only. Nothing is cached: the structure is a
+        handful of integer ops per support entry and the values a handful of
+        flops, against a fill that is O(N²) kernel evaluations.
+
+        Junction-port columns need no special case. A port basis is a current
+        distribution on real segments like any other (`_junction_port_view`),
+        so its entries carry the same three-term shape on their member
+        segments and enter the same overlap; M5b's node-charge correction
+        acts on the port's CHARGE, so it cannot interact with a term built
+        from current alone.
+        """
+        if not self._loading_active:
+            return G
+        starts = seg_view["starts"]
+        left, right, m_of_pair = self._shared_segment_pairs(starts)
+
+        sig = seg_view["sigma"].astype(np.complex128)
+        P = sig * seg_view["A"]
+        Q = seg_view["B"]
+        R = sig * seg_view["C"]
+        h = np.asarray(geom["seg_h"], dtype=float)[m_of_pair]
+        w_pr = (2.0 / k) * np.sin(0.5 * k * h)
+        half_sin = np.sin(k * h) / (2.0 * k)
+        vals = (
+            P[left] * P[right] * h
+            + (P[left] * R[right] + R[left] * P[right]) * w_pr
+            + Q[left] * Q[right] * (0.5 * h - half_sin)
+            + R[left] * R[right] * (0.5 * h + half_sin)
+        )
+        zw = self._loading_zw(k * self.c)  # (n_w,), zeros where switched off
+        vals *= zw[self._wire_of_seg(geom)[m_of_pair]]
+        # Unbuffered: a basis pair recurs once per shared segment.
+        np.subtract.at(G, (seg_view["jbasis"][left], seg_view["jbasis"][right]), vals)
+        return G
 
     def _scatter_coef_product(self, ctx, contribs):
         """Σ_shape T[shape] @ M[shape] — the (n_basis, n_basis) matrix a triple

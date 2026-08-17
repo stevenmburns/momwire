@@ -18,12 +18,18 @@ Oracles, cheapest-first:
   fixed frequency).
 * Path parity: swept vs per-k, y-matrix vs impedance, HMatrix zblock vs
   dense assembly — the loading must ride every Z consumer identically.
+
+Three testing schemes carry the same physical Z'(ω), each in its own form —
+BSpline's polynomial Galerkin Gram, the point-matched sinusoidal impedance
+boundary condition, and (momwire#395) the sinusoidal Galerkin overlap — so
+each gets the same oracle set, and the cross-scheme ΔZ rows tie them
+together.
 """
 
 import numpy as np
 import pytest
 
-from momwire import BSplineSolver, SinusoidalSolver
+from momwire import BSplineSolver, SinusoidalGalerkinSolver, SinusoidalSolver
 from momwire import _wire_loading
 from momwire.hmatrix import HMatrixSolver
 
@@ -374,3 +380,191 @@ def test_sinusoidal_swept_and_y_matrix_parity():
     Y = _ssolver(**LOSSY_KW).compute_y_matrix()
     z, _ = _ssolver(**LOSSY_KW).compute_impedance()
     assert 1.0 / Y[0, 0] == pytest.approx(z, rel=1e-9)
+
+
+# ----------------------------------------------------------------------
+# SinusoidalGalerkinSolver (momwire#395): the GALERKIN overlap form of the
+# same three-term shapes — the third testing scheme, and the one that
+# closes the family's only shipping capability hole.
+# ----------------------------------------------------------------------
+
+
+def _gsolver(**kw):
+    base = dict(wires=DIPOLE, nsegs=81, wavelength=WL, wire_radius=A_28)
+    base.update(kw)
+    return SinusoidalGalerkinSolver(**base)
+
+
+def test_sg_lossless_default_bit_identical():
+    """The overlap term must be a true no-op when loading is off — not a
+    multiply by zero — so the whole assembled matrix, not just the solved
+    impedance, has to come back bit-identical."""
+    s_default, s_nan = _gsolver(), _gsolver(wire_conductivity=np.nan)
+    geom = s_default._build_geometry()
+    G_default, _ = s_default._assemble_Z(geom, s_default.k)
+    G_nan, _ = s_nan._assemble_Z(s_nan._build_geometry(), s_nan.k)
+    assert np.array_equal(G_nan, G_default)
+
+    z_default, c_default = s_default.compute_impedance()
+    z_nan, c_nan = s_nan.compute_impedance()
+    assert z_nan == z_default
+    np.testing.assert_array_equal(c_nan, c_default)
+
+
+def test_sg_loading_matches_variational_perturbation():
+    """Unlike the collocation G, this one IS complex-symmetric (asserted
+    below, measured 1.4e-13 relative at N=81), so the Galerkin perturbation
+    oracle applies rather than the adjoint one: ΔZ_in = c₀ᵀ·L·c₀ / I₀² from
+    the UNLOADED solve, transpose and not conjugate.
+
+    The identity also wants the readout to be the exact dual of the drive,
+    and the DEFAULT gap readout is the segment-centre current while the
+    drive is the gap-integrated one — they differ at O((kΔ)²). That shows
+    up as the oracle's own floor: 1.1e-4 relative here against the 6.6e-5
+    the exact adjoint form (wᵀLα₀ with w = G⁻ᵀr) gives on the same numbers,
+    both far inside the gate. Pins the overlap Gram, its sign, and the
+    Z'(ω) scaling through the real solve.
+    """
+    sigma_big = 5.8e10  # tiny loss → first-order error ~(ΔZ/Z)² negligible
+    s0 = _gsolver()
+    z0, c0 = s0.compute_impedance()
+    s1 = _gsolver(wire_conductivity=sigma_big)
+    z1, _ = s1.compute_impedance()
+
+    geom = s0._build_geometry()
+    seg_view = s0._basis_coefs(geom, s0.k)
+    G, _ = s0._assemble_Z(geom, s0.k)
+    assert np.linalg.norm(G - G.T) < 1e-11 * np.linalg.norm(G)
+
+    n = G.shape[0]  # single wire, no ports: coeffs are all basis coeffs
+    L = np.zeros((n, n), dtype=np.complex128)
+    s1._apply_loading(L, geom, seg_view, s0.k)  # writes −L into zeros
+    i0 = 1.0 / z0  # unit-V delta gap: I = V/Z
+    dz_pred = -(c0 @ L @ c0) / i0**2
+    assert z1 - z0 == pytest.approx(dz_pred, rel=1e-3)
+
+
+def test_sg_copper_dipole_physics_window():
+    """Same physics windows as the other two schemes: ΔR within 15% of
+    R'·L/2, ΔX ≈ ΔR (strong skin), efficiency in the 0.91–0.95 window from
+    the inherited closed-form ∫|I|² readout — which needs no Galerkin
+    variant, a dissipated-power integral being basis-scheme-independent."""
+    z0, _ = _gsolver().compute_impedance()
+    s = _gsolver(wire_conductivity=SIGMA_CU)
+    z1, c1 = s.compute_impedance()
+
+    rp = np.real(_wire_loading.wire_internal_impedance(s.omega, A_28, SIGMA_CU))
+    assert z1.real - z0.real == pytest.approx(rp * L_DIP / 2, rel=0.15)
+    assert z1.imag - z0.imag == pytest.approx(z1.real - z0.real, rel=0.20)
+
+    p_wire, per_wire = s.wire_loss_power(c1)
+    p_in = 0.5 * np.real(1.0 / np.conj(z1))
+    assert 0.91 < 1.0 - p_wire / p_in < 0.95
+    assert per_wire.shape == (1,)
+    assert per_wire[0] == pytest.approx(p_wire)
+
+
+def test_sg_matches_other_schemes_delta_z():
+    """Cross-testing-scheme: one physical loading, three testing schemes.
+    Measured at N=81 — Galerkin-sinusoidal vs point-matched sinusoidal
+    2.1e-4 relative on ΔZ (2.1e-4 on ΔR, 2.0e-4 on ΔX), vs Galerkin
+    BSpline 7.8e-4 (1.5e-4 on ΔR, 1.2e-3 on ΔX). The tolerance stays the
+    sin↔bspline precedent's 1% rather than tightening onto today's
+    numbers: what the gate must catch is a wrong operator, and the spread
+    it is allowed is the basis gap between the schemes at this mesh."""
+    z0g, _ = _gsolver().compute_impedance()
+    z1g, _ = _gsolver(wire_conductivity=SIGMA_CU).compute_impedance()
+    z0s, _ = _ssolver().compute_impedance()
+    z1s, _ = _ssolver(wire_conductivity=SIGMA_CU).compute_impedance()
+    z0b, _ = _solver().compute_impedance()
+    z1b, _ = _solver(wire_conductivity=SIGMA_CU).compute_impedance()
+    assert (z1g - z0g) == pytest.approx(z1s - z0s, rel=0.01)
+    assert (z1g - z0g) == pytest.approx(z1b - z0b, rel=0.01)
+
+
+def test_sg_insulation_shift_and_direction():
+    z0, _ = _gsolver().compute_impedance()
+    b, eps_r = 0.4e-3, 3.0
+    s = _gsolver(insulation_radius=b, insulation_eps_r=eps_r)
+    z1, c1 = s.compute_impedance()
+
+    lp = _wire_loading.insulation_inductance(A_28, b, eps_r)
+    assert z1.imag - z0.imag == pytest.approx(s.omega * lp * L_DIP / 2, rel=0.15)
+    assert z1.imag > z0.imag
+    p_wire, _ = s.wire_loss_power(c1)
+    assert p_wire == 0.0  # purely reactive
+    assert z1.real == pytest.approx(z0.real, rel=0.1)
+
+
+def test_sg_swept_and_y_matrix_parity():
+    """Every solve on this family reaches its matrix through `_assemble_Z`,
+    so one call site has to carry the loading to all of them."""
+    ks = 2 * np.pi / np.array([WL * 0.98, WL, WL * 1.02])
+    zs = _gsolver(**LOSSY_KW).compute_impedance_swept(ks)
+    for i, kk in enumerate(ks):
+        z_i, _ = _gsolver(wavelength=2 * np.pi / kk, **LOSSY_KW).compute_impedance()
+        # rel 1e-8 for the same reason as the collocation parity row: the
+        # per-k constructor re-derives k from wavelength=2π/k.
+        assert zs[i] == pytest.approx(z_i, rel=1e-8)
+
+    Y = _gsolver(**LOSSY_KW).compute_y_matrix()
+    z, _ = _gsolver(**LOSSY_KW).compute_impedance()
+    assert 1.0 / Y[0, 0] == pytest.approx(z, rel=1e-9)
+
+
+def test_sg_junction_port_loading_matches_perturbation():
+    """The ported path takes the loading through the same seg-view: a port
+    basis is a current distribution on real segments, so its entries carry
+    the same three-term shape, and M5b's node-charge correction acts on the
+    port's CHARGE and cannot interact with a current-only term.
+
+    Oracle is the variational one again — `_assemble_Z_ported` keeps G
+    symmetric (asserted; the correction adds the same scalars to both
+    halves) and a junction port's readout is the exact dual of its drive,
+    so this form is if anything cleaner here than at a gap feed. The
+    one-terminal port's Z is not a physical antenna impedance (it carries
+    none of the node's self-capacitance — see `_assemble_Z_ported`); the
+    perturbation identity is algebra on the assembled system and does not
+    care.
+    """
+    half = np.array([[0.0, 0.0, -L_DIP / 2], [0.0, 0.0, 0.0]])
+    wires = [half, half[::-1] * np.array([1.0, 1.0, -1.0])]
+
+    def ported(**kw):
+        base = dict(
+            wires=wires,
+            n_per_edge_per_wire=[[40], [40]],
+            feeds=[],
+            junctions=[[(0, "end"), (1, "start")]],
+            junction_ports=[(0, 1.0 + 0j)],
+            wavelength=WL,
+            wire_radius=A_28,
+        )
+        base.update(kw)
+        return SinusoidalGalerkinSolver(**base)
+
+    s0 = ported()
+    z0, c0 = s0.compute_impedance()
+    s1 = ported(wire_conductivity=5.8e10)
+    z1, _ = s1.compute_impedance()
+
+    geom = s0._build_geometry()
+    seg_view = s0._basis_coefs(geom, s0.k)
+    G, _ = s0._assemble_Z_ported(geom, s0.k)
+    assert np.linalg.norm(G - G.T) < 1e-10 * np.linalg.norm(G)
+    n = G.shape[0]
+    assert n == geom["n_segs"] + 1  # the port basis is a column of G
+
+    L = np.zeros((n, n), dtype=np.complex128)
+    s1._apply_loading(L, geom, seg_view, s0.k)
+    assert np.any(L[n - 1] != 0.0)  # the port row is loaded like any other
+    i0 = 1.0 / z0
+    assert z1 - z0 == pytest.approx(-(c0 @ L @ c0) / i0**2, rel=1e-3)
+
+    # …and the inherited power readout survives the extra basis column.
+    s_cu = ported(wire_conductivity=SIGMA_CU)
+    _z, c_cu = s_cu.compute_impedance()
+    p_wire, per_wire = s_cu.wire_loss_power(c_cu)
+    assert per_wire.shape == (2,)
+    assert p_wire == pytest.approx(per_wire.sum())
+    assert per_wire[0] == pytest.approx(per_wire[1], rel=1e-6)  # symmetric halves
