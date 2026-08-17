@@ -42,20 +42,21 @@ staging:
 
 | # | criterion | maps to | note |
 |---|---|---|---|
-| 1 | **remove `SinusoidalGalerkinSolver`'s second complete implementation of the ground modes** | stage 1, field trunk | the *within-trunk* half of stage 1 — same formulation, so `FieldGround` serves both solvers with no representation question. The easiest of the three, and the first to attempt |
+| 1 | **remove `SinusoidalGalerkinSolver`'s second complete implementation of the ground modes** | stage 1, field trunk | the *within-trunk* half of stage 1 — same formulation, so `FieldGround` serves both solvers with no representation question. The easiest of the set, and the first to attempt |
 | 2 | **complete `RazorSolver` to production level** | stage 1 (potential trunk) + pilot | grounds via `PotentialGround` (the pilot as proposed), then the rest of razor's refusal row — wire loading, per-wire radii, node gaps — each a test of whether a capability lands through the shared layers or around them |
 | 3 | **remove antennaknobs' separately curated knowledge of momwire capabilities** | stage 0 | the registry, plus an antennaknobs change consuming it — the definition of done is the deletion of `_GROUND_EPS_SOLVERS` / `_WIRE_LOADING_SOLVERS` and the prose in `_extended_kernel_refusal` |
-| 4 | *(stretch)* **a new ground model lands once and serves every solver** | stages 1+2 | the extension test rather than a dedup test; not required for the criteria above to count |
+| 4 | **wire loading on `SinusoidalGalerkinSolver`** (momwire#182) | independent | added 2026-08-17. Basis/testing-level, no ground interaction — can land any time. Load-bearing for criterion 3: `_WIRE_LOADING_SOLVERS` exists *solely because* of this hole, so filling it is what lets the tuple be deleted instead of ported into the registry as a special case |
+| 5 | *(stretch)* **a new ground model lands once and serves every solver** | stages 1+2 | the extension test rather than a dedup test; not required for the criteria above to count. §6.1 picks the target |
 
 What this decision *defers*: stages 2–4 as programmes of their own. The
 schedule layer (stage 2) is built only as far as criteria 1–2 force it;
 `zblock` everywhere (stage 4) and the kernel-algebra consolidation (stage 3)
 wait until the matrix actually expands. §9's first question is thereby
 answered: the slate is not committed, so the correct response is the
-front half of the staging, driven by the three criteria.
+front half of the staging, driven by the four criteria.
 
 momwire#388 remains relevant as the *shape* of future expansion — its
-plane-wave drive is still the cheapest fourth test if criterion 4 is wanted
+plane-wave drive is still a cheap additional test if the stretch (criterion 5) is wanted
 — but it is no longer the forcing function.
 
 ---
@@ -536,6 +537,36 @@ shared **drive** across all three trunks. It proves a different axis composes,
 it is smaller, and it fills a real gap — but it proves less, because the drive
 axis never touches the fill machinery that this document is mostly about.
 
+### 6.1 The stretch test's target: which "new ground model"
+
+Two candidates were examined (2026-08-17), and only one is a test.
+
+**The MININEC-type ground is not a new ground model.** It is a name for a
+composition this project already shipped and then superseded:
+`refl-coef-ground-plan.md` records that before antennaknobs PR #251 the
+engine folded every finite ground to *PEC-image solve + Fresnel far field —
+"the EZNEC MININEC-style ground"* — and measured why it was replaced (~18–20 Ω
+reactance error at 0.2λ heights). The `("finite", …)` far-field path still is
+PEC image + Fresnel on the reflected component; only the solve was upgraded.
+A named `"mininec"` option is therefore an antennaknobs-level composition of
+existing pieces (PEC solve + existing Fresnel far field) — worth having for
+EZNEC parity and for grounded verticals with a finite-ground pattern, roughly
+an afternoon, and it touches the momwire fill **zero**. It proves nothing
+about this architecture and must not be counted as the stretch test.
+
+**The radial-wire screen ground is the real test** (`GN` with `NRADL`,
+momwire#388 priority 4): a screen surface impedance in parallel with the
+earth, modifying the reflection coefficients. It is common in real
+installations (verticals over radials), it is oracle-checkable against NEC-2,
+and its physics lands in `_ground_refl.py`'s coefficient layer — so under the
+factored architecture it should reach every solver through the weight tables
+with **zero per-solver assembly work**. If it needs per-solver work, the
+architecture failed its goal metric. Until stage 1 exists it should NOT be
+built (it would be paid through today's quadruplicated plumbing — the exact
+cost the metric exists to escape); its role now is as a **design constraint**:
+`FieldGround` / `PotentialGround` are designed against five grounds, not
+four, so the interface cannot overfit to the existing set.
+
 ---
 
 ## 7. What this subsumes, and what it does not
@@ -593,11 +624,11 @@ the reasoning.)*
 
 1. **Is #388's slate actually going to be worked?** — *Answered: not committed;
    expansion is expected but its shape and timing are unknown. Therefore
-   stages 0–1 driven by the three acceptance criteria, stages 2–4 deferred.*
-2. **Does `SinusoidalGalerkinSolver` get wire loading?** It is the one shipping
-   hole a consumer works around today. It is small, and it is a clean test of
-   whether a capability can be added through the registry rather than around
-   it. Not covered by the three criteria; still open.
+   stages 0–1 driven by the acceptance criteria of §0.1, stages 2–4 deferred.*
+2. **Does `SinusoidalGalerkinSolver` get wire loading?** — *Answered
+   2026-08-17: yes — adopted as acceptance criterion 4. It is also what makes
+   criterion 3 clean: `_WIRE_LOADING_SOLVERS` exists solely because of this
+   hole.*
 3. **Is `RazorSolver` meant to grow?** — *Answered: yes — completing razor to
    production level is acceptance criterion 2, so the pilot stands as
    proposed.*
