@@ -95,6 +95,23 @@ def test_combination_falls_back_to_first_refused_single_cell():
     assert _FAKE.refusal("extended_kernel", "node_gaps") == "no EK here"
 
 
+def test_unmatched_condition_token_is_served():
+    """A condition token ("finite_ground", "mixed_radii") is not a
+    capability: it carries meaning only through a declared "a+b" key, so on
+    a row WITHOUT that key it must read as served — else every solver that
+    serves the combination would spuriously refuse it. This is the call
+    shape the antennaknobs consumer uses, so the real case is pinned too:
+    BSplineSolver serves junction ports over a finite ground and declares
+    no such key."""
+    assert _FAKE.refusal("wire_loading", "finite_ground") is None
+    assert _FAKE.refusal("mixed_radii") is None
+    assert BSplineSolver.capabilities.refusal("junction_ports", "finite_ground") is None
+    assert (
+        SinusoidalGalerkinSolver.capabilities.refusal("junction_ports", "finite_ground")
+        is not None
+    )
+
+
 def test_capabilities_importable_from_top_level():
     import momwire
 
