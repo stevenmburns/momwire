@@ -629,7 +629,9 @@ consumption of it. **Unit 2 landed the pilot's actual claim**:
 image, consuming the object and writing no reflection of its own. What it
 took, in full: mirrored sources into `_seg_moments_prepare`, the image sign
 on razor's own `(3, n_basis)` tangent table, and one `Z_free − Z_image` at
-the seam. Roughly 60 lines of fill, no new physics, no new kernel.
+the seam. **83 executable lines in `razor.py`** — 49 of fill, 12 of
+constructor plumbing, and 22 spent *refusing* ground contact. No new
+physics, no new kernel, no C++.
 
 The one thing that had to change in the shared layer is the interesting
 result. `ImageGeometry` had been shaped entirely by its first consumer
