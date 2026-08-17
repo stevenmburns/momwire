@@ -88,6 +88,7 @@ import numpy as np
 import scipy.linalg
 
 from ._cancel import _Cancelable
+from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
 from ._quadrature import leggauss
 
@@ -128,6 +129,14 @@ _OUT_OF_SCOPE = {
     "node_gaps": "node gaps are not supported yet — the delta-gap feed lands "
     "in a whole testing row here, so a gap is not a local basis edit",
 }
+
+# Reused by the wire_radius scalar-only check in __init__ (momwire#147: this
+# formulation twin takes no per-wire radii) and by `capabilities.refusals`
+# below — one message, not a copy in each.
+_PER_WIRE_RADIUS_REFUSAL = (
+    "wire_radius must be a scalar for RazorSolver; per-wire radii "
+    "(momwire#147) are not supported by this formulation twin"
+)
 
 
 def _axis_frame(obs, seg_p0, seg_t, a):
@@ -233,6 +242,29 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
+    # momwire#396: free space only, no loading/EK/junction_ports/node_gaps/
+    # per-wire radii/enrichment — the whole row is refused, reusing
+    # `_OUT_OF_SCOPE`'s prose (built at __init__ from unsupported kwargs)
+    # plus the wire_radius scalar-only check for per_wire_radius.
+    capabilities = Capabilities(
+        grounds=frozenset(),
+        wire_loading=False,
+        extended_kernel=False,
+        junction_ports=False,
+        node_gaps=False,
+        per_wire_radius=False,
+        singular_enrichment=False,
+        refusals={
+            "pec": _OUT_OF_SCOPE["ground_z"],
+            "refl-coef": _OUT_OF_SCOPE["ground_eps"],
+            "sommerfeld": _OUT_OF_SCOPE["ground_model"],
+            "junction_ports": _OUT_OF_SCOPE["junction_ports"],
+            "node_gaps": _OUT_OF_SCOPE["node_gaps"],
+            "extended_kernel": _OUT_OF_SCOPE["extended_kernel"],
+            "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL,
+        },
+    )
+
     def __init__(
         self,
         *,
@@ -265,10 +297,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         self.halfdriver_factor = float(halfdriver_factor)
         self.nsegs = int(nsegs)
         if not np.isscalar(wire_radius):
-            raise NotImplementedError(
-                "wire_radius must be a scalar for RazorSolver; per-wire radii "
-                "(momwire#147) are not supported by this formulation twin"
-            )
+            raise NotImplementedError(_PER_WIRE_RADIUS_REFUSAL)
         self.wire_radius = float(wire_radius)
         if self.wire_radius <= 0.0:
             raise ValueError("wire_radius must be positive (reduced kernel)")
