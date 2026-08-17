@@ -71,17 +71,35 @@ kernels: each one is the existing per-ground source-field evaluator called
 with the Gauss points along the test segment as its observers instead of the
 segment centres.
 
-* **PEC image** — the mirrored-source build (`_image_source_centers_tangents`)
-  through the same Eqs 76-79 evaluator, plain tangential projection.
+Since momwire#397 unit 3 this file holds none of that ground's *physics*. One
+`_field_ground.FieldGround` is built per fill (`_assemble_Z`) and every ground
+decision is read off it — the mirror map, the per-pair weight
+(`FieldGround.projector`), the image coefficient, and whether the block folds
+or must be composed first — so `ground_z` / `ground_eps` / `ground_model` are
+read nowhere on this trunk. What stays here is the SCHEDULE, which is the
+solver's own and is what the three bullets below actually describe:
+
+* **PEC image** — the mirrored-source build through the same Eqs 76-79
+  evaluator, plain tangential projection (`_field_ground.plain_projection`).
 * **Reflection-coefficient** (`ground_eps`) — the same mirrored build with
   NEC's Fresnel field dyad applied before the projection. The dyad's specular
-  tables (cos θ, p̂) are per (observer, source) *pair*, so they are rebuilt at
-  the quadrature points via `_ground_refl.specular_ray_tables_bcast` rather
-  than reused from the segment-centre cache.
+  tables (cos θ, p̂) are per (observer, source) *pair* and are built once for
+  the whole geometry and cached (`_image_refl_prep`, this solver's schedule
+  choice), then read at whatever segment-pair pairing each block names —
+  where the point-matched fill builds them per observer band instead. Both go
+  through one builder and one projector (`_field_ground.specular_pair_prep`,
+  `PairWeights.project`).
 * **Sommerfeld** (`ground_model="sommerfeld"`) — NEC's C2·(PEC image) plus the
-  smooth interpolated remainder, the latter from the point-matched solver's
-  `_field_tensor_sommerfeld_remainder` with its observer set overridden to the
-  quadrature points.
+  smooth interpolated remainder, the latter from the ground's own
+  prepare/replay pair (`FieldGround.remainder("cos-1")`, the point-matched
+  evaluator underneath) with its observer set overridden to the quadrature
+  points. The alignment of its streamed chunks to whole test segments is this
+  solver's schedule and stays in `_tested_sommerfeld_remainder`.
+
+A fourth ground — the radial-wire screen — is designed to land as modified
+reflection coefficients one level down in `_ground_refl` with **no edit to
+this file**, which is criterion 1's acceptance test
+(`docs/design/solver-architecture.md` §0.2).
 
 The image blocks get the SAME graded near-pair treatment as the free-space
 block, selected against the mirrored source geometry — which matters exactly
@@ -310,7 +328,7 @@ import scipy.linalg
 import scipy.sparse
 import scipy.spatial.distance
 
-from . import _ground_refl
+from . import _field_ground
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from ._port_solution import PortSolution
@@ -553,23 +571,13 @@ def _basis_value(sigAC, B, sigC, k, xi):
     return sigAC + B * np.sin(k * xi) - 2.0 * sigC * (half * half)
 
 
-def _plain_projection(cm, m_idx, n_idx):
-    """Tangential projection of the Eqs 76-79 component tables — NEC's rule
-    E_t = (t_obs·t_src)·E_z + ((ρ⃗·t_obs)/ρ')·E_ρ, the same expression
-    `SinusoidalSolver._field_tensor`'s numpy path uses.
-
-    Serves the free-space block and the PEC image block; the (test-segment,
-    source-segment) index arrays are the projector-protocol signature (see
-    `SinusoidalGalerkinSolver._tested_contribs`) and are unused here — only
-    the Fresnel-weighted projector needs to look anything up per pair.
-    """
-    td = cm["td"]
-    rp = cm["rho_proj_factor"]
-    return (
-        td * cm["Ez_const"] + rp * cm["Erho_const"],
-        td * cm["Ez_sin"] + rp * cm["Erho_sin"],
-        td * cm["Ez_cos"] + rp * cm["Erho_cos"],
-    )
+# The unweighted projector, serving the FREE-SPACE block here and returned by
+# `FieldGround.projector` for every ground that has no dyad. It is bound, not
+# defined: `_tested_contribs` gates its fused C++ far fill on `projector is
+# _plain_projection`, so the name and the object the ground hands back have to
+# be the same function or the accelerator would quietly stop serving the
+# grounded fills (momwire#397 unit 3).
+_plain_projection = _field_ground.plain_projection
 
 
 class SinusoidalGalerkinSolver(SinusoidalSolver):
@@ -1489,6 +1497,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         G[:, N:] -= D
         G[N:, :] -= D.T
         G[N:, N:] += self._node_charge_pair_block(geom, k)
+        # The #151/#191 node charge is the Galerkin analogue of the point-
+        # matched contact-charge read: a TESTING-SCHEME correction that happens
+        # to involve the image, deliberately outside the `FieldGround` sketch
+        # (`docs/design/field-ground-interface.md`, "what stays out"), so it
+        # still reads `ground_z` here rather than the fill's ground object.
+        # Only PEC reaches it — finite grounds are refused upstream.
         if self.ground_z is not None:
             D_img = self._node_charge_columns(
                 geom, seg_view, k, nodes=self._port_node_positions(geom, mirror=True)
@@ -2264,9 +2278,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         reassociation-level, not algorithmic (~1e-15 relative on G).
 
         Only the plain projector's blocks come here — free space and the PEC
-        image. `_refl_projection`'s per-pair Fresnel tables and the Sommerfeld
+        image, i.e. exactly the grounds whose `FieldGround.projector` is
+        `_plain_projection` (that identity is the gate, in `_tested_contribs`).
+        A Fresnel-weighted image's per-pair tables and the Sommerfeld
         remainder keep the numpy path, so their callers still see the blocked
-        loop above.
+        loop above. Nothing here computes a dyad, which is why this solver has
+        no analogue of the point-matched fused refl kernels and no use for
+        `FieldGround.standard_fresnel`: a coefficient-modified ground reaches
+        the same numpy projector the shipped one does.
 
         `ek` picks the entry point (momwire#246 unit C) and is an
         `_EKFarLabels`, the pair rule's group labels rather than its evaluated
@@ -2391,18 +2410,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             **fold,
         )
 
-    def _refl_projection(self, geom, eps_t):
-        """Projector applying NEC's Fresnel field dyad to the image-source
-        field before the tangential projection — the `ground_eps`
-        reflection-coefficient ground (IPERF=0).
+    def _image_projector(self, geom, fg):
+        """`fg`'s image projector, taken off THIS solver's per-geometry
+        specular-table cache.
 
-        Not identical algebra to `SinusoidalSolver._field_tensor_image_refl`'s
-        numpy path — the SAME algebra, since momwire#397 unit 1: both are
-        `_field_ground.PairWeights.project`, whose signature `(cm, m_idx,
-        n_idx)` IS the projector protocol `_tested_contribs` documents, so
-        this method is now schedule only. What it schedules is the per-
-        geometry `_image_refl_prep` cache (rather than the point-matched
-        per-band build) and the ε̃ the weights are taken at.
+        The whole of what unit 3 left behind of `_refl_projection`, and it is
+        schedule rather than physics: which projector a ground takes is
+        `FieldGround.projector`'s ternary, and the dyad itself is
+        `_field_ground.PairWeights.project` (unit 1's single spelling).
+        What is local is only WHEN the tables are built — once per geometry
+        and cached (`_image_refl_prep`), where the point-matched fill builds
+        them per observer band and throws them away. The supplier is a
+        callable so an unweighted ground never triggers the O(N²) build at
+        all.
 
         The weights are read at the per-SEGMENT-PAIR pairing each block
         names, off tables built once for the whole geometry. That is
@@ -2423,9 +2443,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         `tm_p = t_m·p̂` from the segment tangents is exact for them, not an
         approximation.
         """
-        return self._image_refl_prep(geom).weights(eps_t).project
+        return fg.projector(lambda: self._image_refl_prep(geom))
 
-    def _fold_ground_block(self, geom, k, ctx, contribs):
+    def _fold_ground_block(self, geom, k, ctx, contribs, fg):
         """The ground sub-assembly, tested exactly like the free-space block
         and SUBTRACTED from it in place — the same single global minus sign
         the point-matched `_assemble_Z` uses (the image current + image charge
@@ -2452,15 +2472,28 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         the fill BANDED over observers so that image, remainder and fold meet
         one band at a time, which is momwire#356's option 2 and not this.
 
+        What this method is, since momwire#397 unit 3, is that schedule and
+        nothing else. `fg` is the fill's one `_field_ground.FieldGround`, and
+        every ground DECISION is read off it: the mirror map
+        (`image_sources`), the per-pair weight (`projector`), the image
+        coefficient, and whether the block may ride `subtract_into`'s single
+        minus (`mode == "fold"`) or has to be composed first
+        (`mode == "compose"`). Nothing here reads `ground_z`, `ground_eps` or
+        `ground_model`, so a ground this file has never heard of — the
+        radial-wire screen, which is a coefficient change one level down in
+        `_ground_refl` — folds through the branch it already has.
+
         Reuse, per ground, of the evaluator the point-matched solver already
-        validated against its own references:
+        validated against its own references — now read off `fg` rather than
+        chosen here:
 
         * PEC image — the mirrored-source Eqs 76-79 build, plain projection;
         * `ground_eps` refl-coef — the same build with the Fresnel dyad
-          (`_refl_projection`);
+          (`PairWeights.project`, via `_image_projector`);
         * `ground_model="sommerfeld"` — NEC's decomposition, C2·(PEC image)
           minus the smooth interpolated remainder, so that the subtraction
-          reproduces `Phi_free − C2·Phi_img + S`.
+          reproduces `Phi_free − C2·Phi_img + S`. This is the whole membership
+          of `mode == "compose"` today.
 
         Every image block passes `mirror=True`, which is the extended kernel's
         only ground-specific decision: eligibility is scored between the real
@@ -2474,13 +2507,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         The Sommerfeld REMAINDER, the second half of that model, stays reduced
         on the measured argument in the class docstring.
         """
-        src_c_img, src_t_img = self._image_source_centers_tangents(geom)
-        if self.ground_eps is None:
+        src_c_img, src_t_img = fg.image_sources()
+        projector = self._image_projector(geom, fg)
+        if fg.mode == "fold":
             self._tested_contribs(
                 geom,
                 k,
                 ctx,
-                _plain_projection,
+                projector,
                 src_c_img,
                 src_t_img,
                 mirror=True,
@@ -2488,46 +2522,33 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
             return
 
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-        if self.ground_model == "sommerfeld":
-            c2 = (eps_t - 1.0) / (eps_t + 1.0)
-            img = self._tested_contribs(
-                geom, k, ctx, _plain_projection, src_c_img, src_t_img, mirror=True
-            )
-            # `c2·img − rem` in place, C2 on the LEFT — the point-matched
-            # band's spelling (`sinusoidal.py`) and for its reason: complex
-            # multiply evaluates the imaginary part as x.re*y.im + x.im*y.re,
-            # so `img *= c2` reorders that sum and moves the last bit. The two
-            # terms are NOT distributed over the fold either — `free − (c2·img
-            # − rem)` is not `(free − c2·img) + rem` in float64 — which is why
-            # this ground composes its block first and cannot ride
-            # `subtract_into`'s single minus sign.
-            #
-            # The remainder is never a triple of its own (momwire#332 unit D):
-            # it is subtracted off the SCALED image as each observer chunk
-            # reduces, which is why the scaling runs over the whole image
-            # first. Per entry the arithmetic is unchanged — c2·img, minus the
-            # remainder, then the one fold — because both steps are elementwise
-            # and the chunking only decides when each entry is reached.
-            for a in img:
-                np.multiply(c2, a, out=a)
-            self._tested_sommerfeld_remainder(geom, k, ctx, eps_t, img)
-            for dest, a in zip(contribs, img):
-                np.subtract(dest, a, out=dest)
-            return
-
-        self._tested_contribs(
-            geom,
-            k,
-            ctx,
-            self._refl_projection(geom, eps_t),
-            src_c_img,
-            src_t_img,
-            mirror=True,
-            subtract_into=contribs,
+        img = self._tested_contribs(
+            geom, k, ctx, projector, src_c_img, src_t_img, mirror=True
         )
+        # `coef·img − rem` in place, the coefficient on the LEFT — the
+        # point-matched band's spelling (`sinusoidal.py`), and the ground
+        # object's own interface contract, for its reason: complex multiply
+        # evaluates the imaginary part as x.re*y.im + x.im*y.re, so
+        # `img *= coef` reorders that sum and moves the last bit. The two
+        # terms are NOT distributed over the fold either — `free − (c2·img
+        # − rem)` is not `(free − c2·img) + rem` in float64 — which is what
+        # `mode == "compose"` declares, and why this block cannot ride
+        # `subtract_into`'s single minus sign.
+        #
+        # The remainder is never a triple of its own (momwire#332 unit D):
+        # it is subtracted off the SCALED image as each observer chunk
+        # reduces, which is why the scaling runs over the whole image
+        # first. Per entry the arithmetic is unchanged — coef·img, minus the
+        # remainder, then the one fold — because both steps are elementwise
+        # and the chunking only decides when each entry is reached.
+        coef = fg.image_coefficient
+        for a in img:
+            np.multiply(coef, a, out=a)
+        self._tested_sommerfeld_remainder(ctx, fg, img)
+        for dest, a in zip(contribs, img):
+            np.subtract(dest, a, out=dest)
 
-    def _tested_sommerfeld_remainder(self, geom, k, ctx, eps_t, subtract_from):
+    def _tested_sommerfeld_remainder(self, ctx, fg, subtract_from):
         """Test-integrate the smooth Sommerfeld remainder tensor, SUBTRACTING
         it from `subtract_from` (the C2-scaled image triple) as it goes.
 
@@ -2550,8 +2571,18 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         float64 sequence it always was. The fold that follows is elementwise,
         so the chunking decides only WHEN an entry is reached.
 
-        The remainder evaluator is the point-matched solver's, called with the
-        test-quadrature points as its observer set. No near-pair correction:
+        The remainder evaluator is the ground's — `fg.remainder("cos-1")`,
+        whose prepare half is the point-matched solver's and whose replay
+        forwards this method's `consume` and `row_group` untouched (momwire
+        #397 unit 3). Which is to say the DECISION that this ground has a
+        remainder at all, and the source shape it is built on, are the
+        object's; the streaming schedule below, and the chunk alignment that
+        makes it bit-equal, are this method's and stay here. `"cos-1"` is the
+        folded shape set the free-space triple this is subtracted from was
+        built on (#205), so both halves are on the same shapes.
+
+        Observers are the test-quadrature points rather than the segment
+        centres. No near-pair correction:
         the remainder kernel lives on the distance to the IMAGE point, which
         stays smooth even where a wire touches the plane (r₁ → 0 has a finite
         limit the grid carries), so the width-`a` endpoint spike the graded
@@ -2598,13 +2629,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 )
                 np.subtract(dest[e0:e1], rows, out=dest[e0:e1])
 
-        self._field_tensor_sommerfeld_remainder(
-            geom,
-            k,
-            eps_t,
+        fg.remainder("cos-1").replay(
             obs_centers=ctx["obs_c"],
             obs_tangents=ctx["obs_t"],
-            cos_shape="cos-1",
             consume=_reduce,
             row_group=nq,
         )
@@ -2664,9 +2691,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         seg_view = self._basis_coefs(geom, k)
         ctx = self._test_context(geom, seg_view, k)
 
+        # The ground, as ONE object (momwire#397 unit 3), built here because
+        # this is the scope that fixes k: which per-pair weight, which image
+        # coefficient, which composition. `None` is free space and is not a
+        # null object — the two ground blocks below are then structurally
+        # absent rather than skipped, so not one float operation differs
+        # (the `extended_kernel=False` standard). Nothing downstream of this
+        # line reads `ground_z`, `ground_eps` or `ground_model` on the fill
+        # path; what they branch on is `fg.mode`.
+        fg = _field_ground.field_ground_for(self, geom, k, self.omega)
+
         contribs = self._tested_contribs(geom, k, ctx, _plain_projection)
-        if self.ground_z is not None:
-            self._fold_ground_block(geom, k, ctx, contribs)
+        if fg is not None:
+            self._fold_ground_block(geom, k, ctx, contribs, fg)
 
         G = self._scatter_coef_product(ctx, contribs)
         # The fill's triple is dead the moment its product exists, and what
@@ -2677,7 +2714,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # arithmetic — it changes no value — it just stops the peak from
         # counting a triple nobody reads again.
         del contribs
-        self._ek_bracket_correction_tested(G, geom, k, ctx)
+        self._ek_bracket_correction_tested(G, geom, k, ctx, fg)
         self._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
@@ -2849,16 +2886,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
         return G
 
-    def _ek_bracket_correction_tested(self, G, geom, k, ctx):
+    def _ek_bracket_correction_tested(self, G, geom, k, ctx, fg):
         """momwire#299's end-bracket correction, assembled and SYMMETRIZED
         into G: `G −= ½(C + Cᵀ)`.
 
         The blocks below mirror `_fold_ground_block`'s dispatch exactly —
-        free space, then the PEC image, the Fresnel-weighted image or the
-        C2-scaled Sommerfeld image, each with the sign that fold gives it —
-        because the bracket rides every one of them
-        for the same reason the delta does. The Sommerfeld REMAINDER carries no
-        delta (#287) and so has no bracket to take off.
+        free space, then the image block with the projector and the signed
+        coefficient the fold gives it — because the bracket rides every one of
+        them for the same reason the delta does. The Sommerfeld REMAINDER
+        carries no delta (#287) and so has no bracket to take off.
+
+        Since momwire#397 unit 3 "mirrors exactly" is structural rather than
+        maintained: the image row reads the same `fg` the fold read, so its
+        three-way string branch collapses to `−fg.image_coefficient` on the
+        one image block (1 for PEC and refl-coef, C2 for sommerfeld — the
+        three scales it used to spell out) with `fg.projector`'s choice of
+        weight. A ground added to the object appears here with no edit, which
+        is the half of criterion 1's acceptance test that is NOT the fill.
 
         Why it is applied here and not to the fill's contributions
         ----------------------------------------------------------
@@ -2917,25 +2961,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         if not self.extended_kernel:
             return
         blocks = [(_plain_projection, None, None, False, 1.0)]
-        if self.ground_z is not None:
-            src_c_img, src_t_img = self._image_source_centers_tangents(geom)
-            if self.ground_eps is None:
-                blocks.append((_plain_projection, src_c_img, src_t_img, True, -1.0))
-            else:
-                eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-                if self.ground_model == "sommerfeld":
-                    c2 = (eps_t - 1.0) / (eps_t + 1.0)
-                    blocks.append((_plain_projection, src_c_img, src_t_img, True, -c2))
-                else:
-                    blocks.append(
-                        (
-                            self._refl_projection(geom, eps_t),
-                            src_c_img,
-                            src_t_img,
-                            True,
-                            -1.0,
-                        )
-                    )
+        if fg is not None:
+            src_c_img, src_t_img = fg.image_sources()
+            blocks.append(
+                (
+                    self._image_projector(geom, fg),
+                    src_c_img,
+                    src_t_img,
+                    True,
+                    -fg.image_coefficient,
+                )
+            )
         nnz, N = ctx["w_entry"].shape[0], ctx["N"]
         plans = self._ek_bracket_plans(geom, ctx, blocks)
         if not plans:
