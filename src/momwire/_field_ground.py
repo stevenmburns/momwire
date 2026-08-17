@@ -14,8 +14,12 @@ modes. Landed in units:
 * **unit 2** — `FieldGround` itself, `field_ground_for`, `Remainder`, and
   the point-matched consumption: `SinusoidalSolver._assemble_Z` reads ONE
   object where it used to read `ground_z` / `ground_eps` / `ground_model`.
-* **unit 3** — the Galerkin consumption (`_fold_ground_block`), still to
-  come; nothing here is shaped for it beyond what the sketch promises.
+* **unit 3** — the Galerkin consumption: `SinusoidalGalerkinSolver`'s fold
+  reads the same object, through `FieldGround.projector` (the sketch's
+  per-pair-weight row, as the projector protocol that solver's
+  `_tested_contribs` already takes) and `plain_projection` below, which
+  moved here from `sinusoidal_galerkin` because it is what "this ground
+  has no dyad" *returns*.
 
 The physics is one level down, in `_ground_refl` (ε̃, the Fresnel
 coefficients, the specular ray tables) — that layer is where a
@@ -63,6 +67,37 @@ from __future__ import annotations
 import numpy as np
 
 from . import _ground_refl, _sommerfeld
+
+
+def plain_projection(cm, m_idx, n_idx):
+    """Tangential projection of the Eqs 76-79 component tables, with no
+    per-pair weight at all — NEC's rule
+
+        E_t = (t_obs·t_src)·E_z + ((ρ⃗·t_obs)/ρ')·E_ρ,
+
+    the same expression `SinusoidalSolver._field_tensor`'s numpy path uses.
+
+    The ε̃ → ∞ limit of `PairWeights.project` and its counterpart in the
+    projector protocol `SinusoidalGalerkinSolver._tested_contribs`
+    documents: `m_idx` / `n_idx` name the (test segment, source segment)
+    each entry belongs to and are unused here, because only a weighted
+    ground looks anything up per pair.
+
+    It lives in this module rather than in the Galerkin solver because it is
+    the ANSWER `FieldGround.projector` gives for a ground with no dyad — the
+    free-space block, the PEC image and the Sommerfeld image — and a ground
+    cannot return a projector it has to import a solver to name. Identity
+    matters to one caller: `_tested_contribs` gates its fused C++ far fill on
+    `projector is _plain_projection`, so `sinusoidal_galerkin` binds that name
+    to THIS function object rather than defining a second one.
+    """
+    td = cm["td"]
+    rp = cm["rho_proj_factor"]
+    return (
+        td * cm["Ez_const"] + rp * cm["Erho_const"],
+        td * cm["Ez_sin"] + rp * cm["Erho_sin"],
+        td * cm["Ez_cos"] + rp * cm["Erho_cos"],
+    )
 
 
 class PairWeights:
@@ -395,6 +430,37 @@ class FieldGround:
         if not self._weighted:
             return None
         return self._solver._image_refl_band(self._geom, obs_rows)
+
+    def projector(self, tables=None):
+        """The projector this ground's IMAGE block takes: `plain_projection`
+        when there is no per-pair dyad, the Fresnel one when there is.
+
+        The ternary IS the ground's decision, and it is the same one
+        `image_field` makes on the point-matched trunk — spelled as a
+        projector here because the Galerkin fill applies its weight through
+        `_tested_contribs`' projector protocol rather than by choosing an
+        evaluator. `plain_projection` is PEC and the sommerfeld IMAGE part
+        (the sketch's rows 2 and 4, whose weighting is the scalar
+        `image_coefficient`); anything weighted is
+        `PairTables.weights(ε̃).project`, which is the ONE spelling of the
+        dyad since unit 1. A ground with modified ρ_v/ρ_h — the radial-wire
+        screen — arrives through the same branch with no edit here and none
+        in the caller.
+
+        `tables` is the caller's own SUPPLIER of `PairTables`: a
+        zero-argument callable, consulted only when this ground is weighted,
+        so a PEC or Sommerfeld fill never builds an O(N²) specular table it
+        would not read. That indirection is what keeps the *schedule* out of
+        this object while the decision stays in it — the Galerkin consumer
+        passes its per-geometry `_image_refl_prep` cache, the point-matched
+        one would pass a per-band build, and neither choice is visible here.
+        Omit it and the ground builds its own whole-geometry tables through
+        `pair_weights`, cached nowhere.
+        """
+        if not self._weighted:
+            return plain_projection
+        prep = self.pair_weights() if tables is None else tables()
+        return prep.weights(self.eps_tilde).project
 
     def image_field(self, obs_rows=None) -> tuple:
         """The image field tensor `(Φ_const, Φ_sin, Φ_cos)` for one

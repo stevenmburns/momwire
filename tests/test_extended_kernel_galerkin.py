@@ -497,6 +497,7 @@ def test_no_other_path_can_reach_the_delta(monkeypatch):
 # And the two decisions that are not tolerances: which ground models are
 # served, and which pairs an IMAGE block extends.
 
+from momwire import _field_ground  # noqa: E402
 from momwire import sinusoidal_galerkin as _sg  # noqa: E402
 from momwire.sinusoidal_galerkin import (  # noqa: E402
     SinusoidalGalerkinSolver,
@@ -1175,7 +1176,8 @@ def test_gb5_the_refl_coef_image_rides_the_same_delta():
         dest = tuple(
             np.zeros((nnz, n_src), dtype=np.complex128) for _ in range(3)
         )  # the free-space triple the ground folds into (#332)
-        sim._fold_ground_block(geom, sim.k, ctx, dest)
+        fg = _field_ground.field_ground_for(sim, geom, sim.k, sim.omega)
+        sim._fold_ground_block(geom, sim.k, ctx, dest, fg)
     finally:
         SinusoidalGalerkinSolver._ek_pairs = original
     assert seen and all(seen), seen
@@ -1825,11 +1827,14 @@ def test_gc5_the_grounded_accelerated_fold_holds_no_triple(monkeypatch, n):
     ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
     triple = 3 * 16 * ctx["w_entry"].shape[0] * N
     contribs = sim._tested_contribs(geom, sim.k, ctx, _plain_projection)
+    # Built where `_assemble_Z` builds it: outside the block this gate
+    # measures, because that is where the fill pays for it (#397 unit 3).
+    fg = _field_ground.field_ground_for(sim, geom, sim.k, sim.omega)
 
     tracemalloc.start()
     try:
         tracemalloc.reset_peak()
-        sim._fold_ground_block(geom, sim.k, ctx, contribs)
+        sim._fold_ground_block(geom, sim.k, ctx, contribs, fg)
         _cur, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
@@ -1899,11 +1904,14 @@ def test_gc6_the_fused_ek_fill_holds_nothing_of_matrix_shape(monkeypatch, n):
     ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
     triple = 3 * 16 * ctx["w_entry"].shape[0] * N
     contribs = sim._tested_contribs(geom, sim.k, ctx, _plain_projection)
+    # Built where `_assemble_Z` builds it: outside the block this gate
+    # measures, because that is where the fill pays for it (#397 unit 3).
+    fg = _field_ground.field_ground_for(sim, geom, sim.k, sim.omega)
 
     tracemalloc.start()
     try:
         tracemalloc.reset_peak()
-        sim._fold_ground_block(geom, sim.k, ctx, contribs)
+        sim._fold_ground_block(geom, sim.k, ctx, contribs, fg)
         _cur, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
@@ -2816,7 +2824,7 @@ def test_gd2_the_served_grounds_have_no_split_node(name):
 def _without_the_299_bracket_correction():
     cls = SinusoidalGalerkinSolver
     orig = cls._ek_bracket_correction_tested
-    cls._ek_bracket_correction_tested = lambda self, G, geom, k, ctx: None
+    cls._ek_bracket_correction_tested = lambda self, G, geom, k, ctx, fg: None
     try:
         yield
     finally:
@@ -3191,11 +3199,14 @@ def test_gd8b_the_bracket_correction_holds_no_triple(monkeypatch, deck, ground):
     ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
     triple = 3 * 16 * ctx["w_entry"].shape[0] * N
     G = np.zeros((N, N), dtype=np.complex128)
+    # Built where `_assemble_Z` builds it: outside the correction this gate
+    # measures, because that is where the fill pays for it (#397 unit 3).
+    fg = _field_ground.field_ground_for(sim, geom, sim.k, sim.omega)
 
     tracemalloc.start()
     try:
         tracemalloc.reset_peak()
-        sim._ek_bracket_correction_tested(G, geom, sim.k, ctx)
+        sim._ek_bracket_correction_tested(G, geom, sim.k, ctx, fg)
         _cur, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
