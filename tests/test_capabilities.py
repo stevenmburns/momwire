@@ -120,14 +120,54 @@ def test_capabilities_importable_from_top_level():
 
 
 # --------------------------------------------------------------------------
-# 2. RazorSolver — refuses the whole row
+# 2. RazorSolver — the PEC ground is served; the rest of the row is refused
 # --------------------------------------------------------------------------
+
+
+def test_razor_pec_ground_is_served():
+    """momwire#398 unit 2: the razor-grounds pilot's first capability.
+
+    `RazorSolver` shipped refusing every ground; `PotentialGround` gave it
+    the PEC image without razor writing a mirror of its own, so the declared
+    row gained `"pec"` and the constructor accepts `ground_z`. Both halves
+    are checked together — a served declaration with a refusing constructor
+    is exactly the drift this file exists to catch.
+    """
+    c = RazorSolver.capabilities
+    assert "pec" in c.grounds
+    assert c.refusal("pec") is None
+    assert "pec" not in c.refusals
+
+    wires, npe = _wire(z=1.0)
+    sim = RazorSolver(
+        wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, ground_z=0.0
+    )
+    assert sim.ground_z == 0.0
+    z, _ = sim.compute_impedance()
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+
+
+def test_razor_ground_contact_refuses():
+    """The PEC FILL landed; ground CONTACT did not, and says so.
+
+    Not a capability cell (no solver declares "ground contact" as an axis),
+    so this pins the constructor's own refusal rather than a declaration —
+    the honest boundary of what unit 2 shipped.
+    """
+    wires, npe = _wire(z=0.0)
+    with pytest.raises(NotImplementedError, match="touches the ground plane"):
+        RazorSolver(
+            wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, ground_z=0.0
+        )
+    with pytest.raises(ValueError, match="dips below the ground plane"):
+        RazorSolver(
+            wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, ground_z=1.0
+        )
 
 
 @pytest.mark.parametrize(
     "cell,kwarg",
     [
-        ("pec", {"ground_z": 0.0}),
         ("refl-coef", {"ground_eps": 10 - 1j}),
         ("sommerfeld", {"ground_model": "sommerfeld"}),
         ("junction_ports", {"junction_ports": [0]}),
@@ -177,9 +217,9 @@ def test_razor_unsupported_kwargs_are_typeerrors(cell, kwarg):
         )
 
 
-def test_razor_served_row_is_empty():
+def test_razor_served_row_is_the_pec_ground_and_nothing_else():
     c = RazorSolver.capabilities
-    assert c.grounds == frozenset()
+    assert c.grounds == frozenset({"pec"})
     assert not any(
         [
             c.wire_loading,

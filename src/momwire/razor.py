@@ -74,19 +74,37 @@ static segment moments across the sweep (`_assemble_Z_prepare`) so only
 the smooth kernel remainder and the ω-dependent prefactors are redone per
 k; every solved point is still its own dense LU.
 
+Ground (momwire#398 unit 2)
+--------------------------
+`ground_z` puts a perfectly conducting plane under the model. The fill
+becomes `Z = Z_free − Z_image`: the same rows, the same testing paths and
+the same tent basis, evaluated a second time against sources reflected
+through the plane, subtracted once. The mirror itself comes from
+`_potential_ground.PotentialGround` — this module writes no reflection of
+its own, which is the point of the pilot `docs/design/solver-architecture.md`
+§6 proposes: a ground method landing on a solver that never implemented
+one. `_assemble_Z_from_prepared` carries the sign argument.
+
+Wires must stand CLEAR of the plane. Ground contact — a wire end in the
+plane, whose current the image continues instead of the tent basis zeroing
+it — is a change to the basis rather than to the fill, and is refused.
+Finite grounds are refused too: agreement there has its own bar and its own
+unit.
+
 Scope
 -----
-Free space, reduced kernel, one polyline per wire. Grounds and the
-extended kernel are out of scope; each is refused with a message rather
-than silently mismodelled. Only wire ENDS junction: a wire end touching
-another wire's interior is not a contact here. A wire with a single
-segment cannot take part in a junction (its two junction tents would
-overlap on one segment) and is refused.
+Free space and the PEC image, reduced kernel, one polyline per wire.
+Finite grounds, ground contact and the extended kernel are out of scope;
+each is refused with a message rather than silently mismodelled. Only wire
+ENDS junction: a wire end touching another wire's interior is not a contact
+here. A wire with a single segment cannot take part in a junction (its two
+junction tents would overlap on one segment) and is refused.
 """
 
 import numpy as np
 import scipy.linalg
 
+from . import _potential_ground
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -107,13 +125,18 @@ _CHUNK_ELEMS = 2_000_000
 # deliberately does not, with the reason each is refused. Anything else
 # unexpected is a caller typo and stays a TypeError.
 _OUT_OF_SCOPE = {
-    "ground_z": "ground planes are out of scope for RazorSolver (free space "
-    "only): NEC-5's ground is Michalski, which carries its own limit offset "
-    "and would contaminate the formulation comparison this class exists for",
-    "ground_eps": "finite ground is out of scope for RazorSolver (free space only)",
-    "ground_model": "finite ground is out of scope for RazorSolver (free space only)",
-    "ground_phi_mode": "finite ground is out of scope for RazorSolver (free "
-    "space only)",
+    "ground_eps": "finite ground is out of scope for RazorSolver (PEC image "
+    "only): NEC-5's finite ground is Michalski, which carries its own limit "
+    "offset and would contaminate the formulation comparison this class "
+    "exists for. The PEC image carries no such offset — it is the same exact "
+    "image NEC-5's own `GN 1` uses — which is why it is the ground that "
+    "landed first (momwire#398 unit 2)",
+    "ground_model": "finite ground is out of scope for RazorSolver (PEC image "
+    "only): see the `ground_eps` refusal for why the finite-ground bar is "
+    "deferred rather than merely unwritten",
+    "ground_phi_mode": "finite ground is out of scope for RazorSolver (PEC "
+    "image only): the image-charge weighting is a reflection-coefficient "
+    "knob, and RazorSolver serves no reflection-coefficient ground",
     "degree": "RazorSolver has no degree: the razor-blade testing rule is "
     "defined against the tent (degree-1) expansion. Use "
     "BSplineSolver(degree=...) for higher-order bases with Galerkin testing",
@@ -182,8 +205,8 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
     The NEC-5 formulation twin — see the module docstring for the physics.
-    Free space, reduced kernel, one tent per interior knot plus K−1
-    through-current tents wherever K wire ends meet.
+    Free space or a PEC ground, reduced kernel, one tent per interior knot
+    plus K−1 through-current tents wherever K wire ends meet.
 
     wires: list of (M_w, 3) polyline arrays, M_w >= 2 anchor points per wire.
         A straight dipole is a single two-anchor wire; an inverted-V is one
@@ -196,6 +219,21 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     nsegs: default segment count when `n_per_edge_per_wire` doesn't specify.
     wire_radius: scalar thin-wire radius, the a in the reduced kernel's
         R = sqrt(|r−r'|² + a²). Per-wire radii are not supported here.
+    ground_z: height of a perfectly conducting ground plane, or None for
+        free space. PEC ONLY, and that is a statement about which bar has
+        been met rather than about which physics is hard. Over PEC this
+        solver is gated against the licensed NEC-5 binary's own `GN 1`
+        printouts on four ladder geometries, at the sharp tolerance the
+        formulation twin can actually hold (`tests/test_razor_pec_ground.py`)
+        — the exact image is the same object in both codes, so there is
+        nothing to disagree about but quadrature. A finite ground is not:
+        NEC-5's is Michalski, carrying a limit offset of its own that would
+        contaminate the formulation comparison this class exists for, so
+        `ground_eps` / `ground_model` / `ground_phi_mode` stay refused until
+        that bar is written (momwire#398 §6; `BSplineSolver` serves them
+        today). Every wire must stand clear of the plane — ground CONTACT
+        needs the image to continue the current at a grounded end, which is
+        a basis change this formulation has not taken.
     wavelength: measurement wavelength in metres; k = 2π / wavelength.
     halfdriver_factor: informational only when `wires` is given explicitly
         (the polylines fully determine the geometry); kept for signature
@@ -242,12 +280,13 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
-    # momwire#396: free space only, no loading/EK/junction_ports/node_gaps/
-    # per-wire radii/enrichment — the whole row is refused, reusing
+    # momwire#396: free space plus the PEC image (momwire#398 unit 2), no
+    # finite ground / loading / EK / junction_ports / node_gaps / per-wire
+    # radii / enrichment — the rest of the row is refused, reusing
     # `_OUT_OF_SCOPE`'s prose (built at __init__ from unsupported kwargs)
     # plus the wire_radius scalar-only check for per_wire_radius.
     capabilities = Capabilities(
-        grounds=frozenset(),
+        grounds=frozenset({"pec"}),
         wire_loading=False,
         extended_kernel=False,
         junction_ports=False,
@@ -255,7 +294,6 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         per_wire_radius=False,
         singular_enrichment=False,
         refusals={
-            "pec": _OUT_OF_SCOPE["ground_z"],
             "refl-coef": _OUT_OF_SCOPE["ground_eps"],
             "sommerfeld": _OUT_OF_SCOPE["ground_model"],
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
@@ -272,6 +310,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         n_per_edge_per_wire=None,
         nsegs=101,
         wire_radius=0.0005,
+        ground_z=None,
         wavelength=22,
         halfdriver_factor=0.962,
         feed_wire_index=0,
@@ -302,6 +341,17 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         if self.wire_radius <= 0.0:
             raise ValueError("wire_radius must be positive (reduced kernel)")
 
+        # The ground, in the four attributes `_potential_ground`'s factory
+        # reads. Only the PEC plane is served; the other three are refused
+        # above via `_OUT_OF_SCOPE` and are pinned to None here so the
+        # factory's own branching lands on the PEC row and nowhere else.
+        self.ground_z = None if ground_z is None else float(ground_z)
+        if self.ground_z is not None and not np.isfinite(self.ground_z):
+            raise ValueError("ground_z must be finite")
+        self.ground_eps = None
+        self.ground_model = None
+        self.ground_phi_mode = None
+
         self.c = 1 / np.sqrt(self.eps * self.mu)
         self.freq = self.c / self.wavelength
         self.omega = 2 * np.pi * self.freq
@@ -320,6 +370,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         for i, pl in enumerate(self.wires_polylines):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
+        self._check_ground_clearance()
 
         n_w = len(self.wires_polylines)
         if n_per_edge_per_wire is None:
@@ -386,6 +437,50 @@ class RazorSolver(_ElementCurrents, _Cancelable):
 
     # ------------------------------------------------------------------
     # geometry
+
+    def _check_ground_clearance(self):
+        """Every wire must stand clear of the ground plane, or be refused.
+
+        Two different failures, and they get two different exception types
+        because they are two different kinds of mistake:
+
+        * a wire that dips BELOW `ground_z` is a geometry error — there is
+          no such antenna — and raises `ValueError`, the same reading and
+          the same wording `BSplineSolver._wire_endpoint_status` gives it;
+        * a wire that TOUCHES the plane is ground CONTACT, which is real
+          physics this formulation does not model yet, and raises
+          `NotImplementedError`. The tent basis pins the current to zero at
+          a free wire end; a grounded end instead needs its image to supply
+          the continuation (the momwire#151 fold `BSplineSolver` carries),
+          which is a basis change, not a fill change. Unit 2 of the
+          razor-grounds pilot is the fill.
+
+        The touch tolerance is `BSplineSolver._ground_touch_tol`'s: 1e-6 of
+        the wire's polyline length, loose enough for deck-import float
+        noise at z=0 and far tighter than any deliberate stand-off.
+        """
+        gz = self.ground_z
+        if gz is None:
+            return
+        for i, pl in enumerate(self.wires_polylines):
+            length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
+            tol = 1e-6 * max(length, 1e-30)
+            zmin = float(pl[:, 2].min())
+            if zmin < gz - tol:
+                raise ValueError(
+                    f"wire {i} dips below the ground plane "
+                    f"(min z = {zmin:.6g} < ground_z = {gz:g})"
+                )
+            if zmin <= gz + tol:
+                raise NotImplementedError(
+                    f"wire {i} touches the ground plane (min z = {zmin:.6g}, "
+                    f"ground_z = {gz:g}): ground CONTACT is not supported by "
+                    "RazorSolver, whose tent basis zeroes the current at a "
+                    "free wire end. Only wires standing clear of the plane "
+                    "are served — raise the wire, or use "
+                    "BSplineSolver(ground_z=...), which carries the grounded-"
+                    "end fold (momwire#151)"
+                )
 
     def _find_junctions(self):
         """Group coincident wire ends into junctions.
@@ -767,6 +862,43 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             np.concatenate(wts, axis=1),
         )
 
+    def _image_sources(self, geom):
+        """The mirrored source geometry, or None in free space.
+
+        The PEC image is a SOURCE-SIDE substitution and nothing else: the
+        moment builder is handed the same three arrays it always gets, with
+        every segment origin reflected through `z = ground_z` and every
+        segment tangent z-flipped. Segment LENGTHS are untouched, and that
+        is what makes the substitution total — a mirrored segment's local
+        arc coordinate τ maps point-for-point onto the real one's
+        (M(p₀ + τ t) = M p₀ + τ M t), so every wing shape, every charge
+        doublet ±1/h and every quadrature node index means the same thing on
+        both source sets. Observers stay real throughout; only the sources
+        move.
+
+        Both operations come from the ground object's `image_geometry()`
+        (momwire#398 unit 1, reduced to mirror operations in unit 2), so
+        this solver spells no reflection of its own — which is the pilot's
+        whole claim: the capability arrives through the shared layer.
+        """
+        ground = _potential_ground.potential_ground_for(self, geom, self.k, self.omega)
+        if ground is None:
+            return None
+        # PEC only (the constructor refuses every finite ground), so the
+        # object is a pure mirror map here: `mode` is "fold", there is no
+        # remainder and no weight table, and nothing it hands back depends
+        # on k or ω. That is what lets a swept solve build it once in the
+        # prepare half and replay it at every wavenumber; a future
+        # refl-coef unit CANNOT do that, because its weights are ω-dependent
+        # and would have to be rebuilt in `_assemble_Z_from_prepared`.
+        img = ground.image_geometry()
+        return {
+            "seg_p0": img.mirror_positions(geom["seg_p0"]),
+            "seg_t": img.mirror_tangents(geom["seg_t"]),
+            "seg_h": geom["seg_h"],
+            "mirror_tangents": img.mirror_tangents,
+        }
+
     def _assemble_Z_prepare(self, geom):
         """K-independent work for the razor-blade fill: stencils and moments.
 
@@ -778,6 +910,40 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         calls this once and replays it through `_assemble_Z_from_prepared`
         for every k, instead of rebuilding it per k the way a plain loop
         over single solves would.
+
+        Over a PEC ground the same work is done a SECOND time against the
+        mirrored sources (:meth:`_image_sources`) and cached beside the
+        first, under `prepared["image"]`. **Doubling the cache rather than
+        rebuilding the image half per k is a deliberate schedule decision**
+        (momwire#398 unit 2), because the mirrored static moments are
+        exactly as k-independent as the real ones: R, `asinh` and `sqrt`
+        over mirrored sources do not know what wavenumber will be asked
+        for. Caching them keeps the prepare/replay contract whole — a swept
+        point pays only the smooth remainder, on both source sets — and it
+        keeps the two halves of the fold symmetric, which is what lets
+        `_assemble_Z_source_block` serve both with one body.
+
+        Priced on the ByDipole1 N=96 deck at h = 5 m over PEC, so the
+        trade is on the record rather than asserted:
+
+        | lane               | image cache | rebuild-per-k costs |
+        |--------------------|-------------|---------------------|
+        | `nec5_quadrature`  | 3.1 MB      | +15.8 % per swept k |
+        | default GL path    | 66.4 MB     | +15.6 % per swept k |
+
+        The cache is *exactly* the size of the free-space one it sits
+        beside — a grounded razor solve is a 2x-residency solve, in the same
+        proportion the grounded fill already doubles the arithmetic — and
+        the alternative buys that memory back at about a sixth of every
+        swept point. On the 16 GB working assumption the doubling is
+        affordable at any mesh this formulation is used at (a 4,000-segment
+        GL fill is the first place it would matter, and razor's O(N²) dense
+        LU bites first). Should that stop being true, the switch is local:
+        drop `prepared["image"]`'s chunk lists and rebuild them inside
+        `_assemble_Z_source_block`. `scripts/capture_razor_pec_nec5_lane.py`
+        does not measure this — the numbers above come from the unit's
+        report, and re-measuring is a ten-line script against
+        `_seg_moments_prepare`.
         """
         seg_t, seg_h = geom["seg_t"], geom["seg_h"]
         wing_seg, wing_sigma, wing_rise = (
@@ -801,24 +967,37 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         n_path = pts.shape[1]
         # σ folded into the source-side tangent, so the dot product carries
         # the wing's current direction with it.
-        td_a = (wing_sigma[:, 0][:, None] * seg_t[s_a]).T  # (3, n_basis)
-        td_b = (wing_sigma[:, 1][:, None] * seg_t[s_b]).T
+        tan_a = wing_sigma[:, 0][:, None] * seg_t[s_a]
+        tan_b = wing_sigma[:, 1][:, None] * seg_t[s_b]
+        td_a = tan_a.T  # (3, n_basis)
+        td_b = tan_b.T
         # Columns whose wing falls (knot at the segment's arc-0 end) need
         # M0 − M1/h instead of M1/h. On a junction-free model that is every
         # B wing and no A wing, so patching the exceptions in place keeps
         # the no-junction fill exactly as cheap as it was in unit 1.
         fall_a = np.flatnonzero(~wing_rise[:, 0])
         fall_b = np.flatnonzero(~wing_rise[:, 1])
+        # The image, if there is one: the SAME observers and the SAME row
+        # windows, against mirrored sources. Built inside the one loop so
+        # free space allocates nothing extra and keeps no reference to
+        # `pts` past this method — the ground layer is structurally absent
+        # when off, not skipped (architecture doc §6, gate (b)).
+        img_src = self._image_sources(geom)
         rows = max(1, _CHUNK_ELEMS // max(1, n_path * n_basis))
         t1_row_chunks = []
+        t1_row_chunks_img = [] if img_src is not None else None
         for lo in range(0, n_basis, rows):
             hi = min(lo + rows, n_basis)
             obs = pts[lo:hi].reshape(-1, 3)
             t1_row_chunks.append(
                 (lo, hi, obs.shape[0], self._seg_moments_prepare(obs, geom))
             )
+            if img_src is not None:
+                t1_row_chunks_img.append(
+                    (lo, hi, obs.shape[0], self._seg_moments_prepare(obs, img_src))
+                )
 
-        return {
+        prepared = {
             "n_basis": n_basis,
             "n_seg": seg_h.size,
             "s_a": s_a,
@@ -837,10 +1016,61 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             "fall_a": fall_a,
             "fall_b": fall_b,
             "t1_row_chunks": t1_row_chunks,
+            "image": None,
         }
+
+        if img_src is not None:
+            mirror = img_src["mirror_tangents"]
+            prepared["image"] = {
+                "t2_chunks": self._seg_moments_prepare(cent, img_src),
+                # The image sign, in razor's own (3, n_basis) idiom: M·t on
+                # the SOURCE tangent table only. Nothing N² is formed, and
+                # nothing on the observer side moves.
+                "td_a": mirror(tan_a).T,
+                "td_b": mirror(tan_b).T,
+                "t1_row_chunks": t1_row_chunks_img,
+            }
+        return prepared
 
     def _assemble_Z_from_prepared(self, geom, prepared, k, omega):
         """Fill the razor-blade impedance matrix at one wavenumber.
+
+        Free space is one source block. Over a PEC ground it is that block
+        minus the image's:
+
+            Z = Z_free − Z_image
+
+        one global minus at the very end, exactly as the mixed-potential
+        trunk's other solvers spell their fold (`PotentialGround.mode ==
+        "fold"`, architecture doc §2.2). Both halves of the minus are real
+        physics and they arrive together: the horizontal image current runs
+        anti-parallel and the image charge is opposite, so *both* the
+        vector-potential term and the charge term change sign — which is
+        why the sign can be taken once on the assembled block instead of
+        term by term. What the mirrored tangent table supplies is the rest:
+        M·t restores the +z component the global minus would otherwise have
+        flipped the wrong way, so a vertical current's image stays parallel.
+
+        Only `k` and `omega` (=c·k, passed separately so a swept caller can
+        reuse one `omega_array` without recomputing it) vary here; every
+        other ingredient comes from `prepared` (`_assemble_Z_prepare`).
+        """
+        Z = self._assemble_Z_source_block(geom, prepared, prepared, k, omega)
+        image = prepared["image"]
+        if image is not None:
+            Z -= self._assemble_Z_source_block(geom, prepared, image, k, omega)
+        return Z
+
+    def _assemble_Z_source_block(self, geom, prepared, sources, k, omega):
+        """One source set's contribution to the razor-blade matrix.
+
+        `sources` supplies the three source-side pieces — the two moment
+        chunk lists and the `(3, n_basis)` tangent tables — and is either
+        `prepared` itself (the real sources) or `prepared["image"]` (the
+        mirrored ones). Everything else is shared: the observers, the
+        testing paths and their weights, the wing stencils, the charge
+        doublets. That split IS the PEC image: same rows, same test
+        functions, moved sources.
 
         Both terms are built from the same two segment moments. A wing on
         segment s of length h contributes to the vector potential
@@ -854,10 +1084,6 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         +1/h_A on side A and −1/h_B on side B whichever way round the two
         wires are spelled, i.e. the unit charge that leaves A and lands on
         B — differenced between the path's two bounding centroids.
-
-        Only `k` and `omega` (=c·k, passed separately so a swept caller can
-        reuse one `omega_array` without recomputing it) vary here; every
-        other ingredient comes from `prepared` (`_assemble_Z_prepare`).
         """
         s_a, s_b = prepared["s_a"], prepared["s_b"]
         h_a, h_b = prepared["h_a"], prepared["h_b"]
@@ -865,17 +1091,17 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         n_basis = prepared["n_basis"]
 
         M0c, _ = self._seg_moments_from_prepared(
-            prepared["t2_chunks"], geom, k, prepared["n_cent"], need_m1=False
+            sources["t2_chunks"], geom, k, prepared["n_cent"], need_m1=False
         )
         dM0 = M0c[s_b] - M0c[s_a]  # (row, source segment)
         T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
 
         tans, wts = prepared["tans"], prepared["wts"]
         n_path = prepared["n_path"]
-        td_a, td_b = prepared["td_a"], prepared["td_b"]
+        td_a, td_b = sources["td_a"], sources["td_b"]
         fall_a, fall_b = prepared["fall_a"], prepared["fall_b"]
         T1 = np.empty((n_basis, n_basis), dtype=np.complex128)
-        for lo, hi, n_obs_chunk, static in prepared["t1_row_chunks"]:
+        for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
             self._checkpoint()
             M0, M1 = self._seg_moments_from_prepared(static, geom, k, n_obs_chunk)
             mom_a = M1[:, s_a] / h_a[None, :]
