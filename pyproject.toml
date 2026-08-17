@@ -49,10 +49,13 @@ test = [
     # -n auto) serialize behind thread contention instead of parallelizing.
     # No correctness/flakiness surfaced (same 3369 passed/5 skipped either
     # way, portal/server tests included) — this is a pure perf regression, not
-    # a safety one. Left installed for a developer who wants to experiment
-    # with a thread-pinned `-n auto` run by hand; fixing it properly means
-    # pinning OMP_NUM_THREADS per worker, which is out of this issue's
-    # marker-only scope.
+    # a safety one. tests/conftest.py carries the thread fix — a per-worker
+    # OMP pin plus portal/memgate xdist groups — and the opt-in
+    # `pytest tests -n auto --dist loadgroup` measures ~1m52s with FOUR
+    # known failures: the portal exactness tests are execution-order-
+    # sensitive (stock() inherits in-process cache warmth; #403). Kept OUT
+    # of addopts by maintainer decision (#400): the default run stays
+    # serial and green rather than fast and asterisked.
     "pytest-xdist",
     "matplotlib",
     "scikit-rf",
@@ -123,8 +126,13 @@ markers = [
     "oracle_binary: shells out to SimNEC's nec2c oracle; skipped when it is not installed",
 ]
 # Default local run (issue #400): skip the slow convergence ladders/oracle
-# sweeps and the memgate certification gates, so a bare `pytest tests` stays
-# around 2 minutes with nothing over ~5 s. A CLI `-m` REPLACES this rather
+# sweeps and the memgate certification gates — measured 4m41s serial with
+# nothing over ~5 s (maintainer accepted over the original 2-minute wish
+# rather than wiring xdist into the default). The opt-in fast spelling
+# `pytest tests -n auto --dist loadgroup` (~1m52s; tests/conftest.py pins
+# OMP per worker and groups portal/memgate) is EXPERIMENTAL: four portal
+# exactness tests are execution-order-sensitive and fail under it (#403).
+# A CLI `-m` REPLACES this rather
 # than ANDing with it (verified: `pytest tests -m ""` runs everything,
 # `pytest tests -m memgate` runs only memgate — not "addopts AND memgate"),
 # so `pytest tests -m ""` is the full-suite spelling for humans, and CI lanes
