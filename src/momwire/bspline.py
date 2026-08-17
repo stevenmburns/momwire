@@ -1516,17 +1516,27 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return w_A, w_Phi
 
     def _image_weight_row_bytes(self, n_segs):
-        """Bytes-per-observer-row `_image_weight_window_fn`'s closure holds
-        alongside one moment window, for the chunked image fill's row-byte
-        budget arithmetic (issue #347 — follow-up to #338, which sized that
-        arithmetic on the moment window alone).
+        """Bytes-per-observer-row `PotentialGround.weight_windows`' closure
+        holds alongside one moment window, for the chunked image fill's
+        row-byte budget arithmetic (issue #347 — follow-up to #338, which
+        sized that arithmetic on the moment window alone).
 
-        PEC / sommerfeld (`pec_weights` / `sommerfeld_weights` above): the
+        This is the one place on the chunked route that still reads
+        `ground_eps` / `ground_model` after momwire#398 unit 1, and it stays
+        deliberately: it prices what a chunk allocates, which is budget —
+        the same scheduling layer the field trunk's object also keeps out
+        (`_field_ground`'s "what stays out"). The three branches below must
+        track `weight_windows`' three producers, which is what the memory
+        gates measure.
+
+        PEC / sommerfeld (`weight_windows`' `pec_weights` /
+        `sommerfeld_weights`): the
         two returned (chunk, n_segs) complex128 windows (w_A, w_Phi) — one
         gemm output plus its `ones_like`/`full` sibling. Nothing else of
         row-scale is built.
 
-        refl-coef (`refl_weights` above): the first cut of this accounting
+        refl-coef (`weight_windows`' `refl_weights`): the first cut of this
+        accounting
         (issue #347, first pass) only priced the three arrays
         `specular_pair_tables` RETURNS (cos_th, td_img, P) plus the two
         `fresnel_rho` returns (rho_v, rho_h) plus the two final windows
@@ -1542,7 +1552,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         holds dx, dy, dz, hyp, rmag, safe, inv_hyp alongside its cos_th,
         px, py returns — none of which the first-pass accounting counted
         because they die when `specular_ray_tables` returns, before
-        `_image_weight_window_fn`'s caller ever sees them.
+        `weight_windows`' caller ever sees them.
         `specular_pair_tables` itself adds tm_p, tn_p on top of its own
         cos_th/td_img/P/px/py inputs and returns. `fresnel_rho` then adds
         sin2 and root, both of which stay bound for its ENTIRE body (used
@@ -1619,7 +1629,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                                       segment, enrichment ones included)
                                       rather than built a third time.
 
-        Same per-mode algebra as `_image_weight_window_fn`. `row` and `col`
+        Same per-mode algebra as `PotentialGround.weight_windows` (a third
+        weight SHAPE, not yet migrated — momwire#398 unit 1). `row` and `col`
         are each their own direct gemm / `specular_pair_tables` call,
         restricted on their own natural axis — not one transposed into the
         other — so bit-exactness against the retired full-table reads rests
@@ -1689,6 +1700,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ~3× the PEC image assembly cost on a 41-freq grounded sweep
         (scripts/perf_refl_coef_sweep.py). The einsum loop below stays as
         the no-accelerator fallback and bit-exact reference.
+
+        Since momwire#398 unit 1 the dense fill reaches this pairing through
+        `PotentialGround.weight_tables()` (whose refl-coef branch calls the
+        same two methods, in the same order) rather than through this
+        method, so what is left here is the SPELLING the block-path tests
+        and the perf script name — the whole-geometry refl-coef image, as
+        one call.
         """
         w_A, w_Phi = self._image_refl_weights(self._image_refl_prep(geom), self.omega)
         return self._image_Z_weighted(J_img, supp_seg, polys, w_A, w_Phi)
@@ -2579,7 +2597,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the moment window's trailing axes — not as global (N, N) tables
         (issue #323). Producing them per chunk is what retires the 2× dense-Z
         residency this path used to carry: nothing N² in the weights is ever
-        allocated. See `_image_weight_window_fn` for the per-mode producers."""
+        allocated. See `PotentialGround.weight_windows` for the per-mode
+        producers."""
         d = self.degree
         a_row = self._seg_radius(geom)
         seg_l = geom["seg_l"]
