@@ -1104,13 +1104,19 @@ def test_m3_reference_constants_are_reproducible():
             )
 
 
-def test_loading_is_not_yet_supported():
-    """Still deferred, and it fails loudly rather than silently producing wrong
-    numbers (wire loading → after M5). Grounds arrived in M4 — see below."""
+def test_loading_is_served_in_the_galerkin_form():
+    """Wire loading landed after M5 (momwire#395) as the overlap term the
+    testing scheme asks for; the refusal that used to stand here is gone.
+    The physics, the oracles and the cross-scheme agreement live in
+    `tests/test_wire_loading.py` — this row only pins that the solve runs
+    and that the loading is what moved it."""
     dip_hi = np.array([[0.0, -HD, 2.0], [0.0, HD, 2.0]])
     common = dict(wires=[dip_hi], n_per_edge_per_wire=[[41]], nsegs=41)
-    with pytest.raises(NotImplementedError):
-        SinusoidalGalerkinSolver(**common, wire_conductivity=5.8e7).compute_impedance()
+    z0, _ = SinusoidalGalerkinSolver(**common).compute_impedance()
+    z1, _ = SinusoidalGalerkinSolver(
+        **common, wire_conductivity=5.8e7
+    ).compute_impedance()
+    assert z1.real > z0.real  # a resistive loading can only add loss
 
 
 # ---------------------------------------------------------------------------
