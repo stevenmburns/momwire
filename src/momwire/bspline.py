@@ -77,6 +77,7 @@ from . import _sommerfeld
 from . import _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
+from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
 from ._port_solution import PortSolution, _SweptPortSolutions
 
@@ -300,6 +301,30 @@ class _SplineBasis:
     n_poly: int
 
 
+# momwire#396: three `use_singular_enrichment` combination refusals, reused
+# by their `__init__` raises below and by `capabilities.refusals` — one
+# message per combination, not a copy in each.
+_ENRICHMENT_WIRE_LOADING_REFUSAL = (
+    "use_singular_enrichment + distributed wire loading together "
+    "not supported yet — the enrichment bases don't carry the "
+    "loading overlap term"
+)
+_ENRICHMENT_EXTENDED_KERNEL_REFUSAL = (
+    "extended_kernel=True + use_singular_enrichment=True not "
+    "supported yet — the enrichment DOFs bypass the moment "
+    "kernels entirely (they carry their own Φ_sing "
+    "quadrature), they exist only at K >= 3 junctions where "
+    "NEC's own gating turns EK off, and the O(a²) tube "
+    "expansion was never derived for the s^(-1/2) shapes "
+    "(stevenmburns/momwire#249 follow-up C)"
+)
+_ENRICHMENT_PER_WIRE_RADIUS_REFUSAL = (
+    "use_singular_enrichment + mixed per-wire radii together "
+    "not supported yet — the enrichment kernels take a single "
+    "radius (stevenmburns/momwire#147)"
+)
+
+
 class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
@@ -451,6 +476,26 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
+    # momwire#396: everything is served on its own — the three refusals are
+    # all `use_singular_enrichment` combinations (`__init__`'s three raises,
+    # reused here). `HMatrixSolver` / `ArrayBlockSolver` fall back to the
+    # dense path under enrichment rather than refusing it, so they inherit
+    # this row unchanged (see those modules — no override).
+    capabilities = Capabilities(
+        grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
+        wire_loading=True,
+        extended_kernel=True,
+        junction_ports=True,
+        node_gaps=True,
+        per_wire_radius=True,
+        singular_enrichment=True,
+        refusals={
+            "wire_loading+singular_enrichment": _ENRICHMENT_WIRE_LOADING_REFUSAL,
+            "extended_kernel+singular_enrichment": _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
+            "per_wire_radius+singular_enrichment": _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
+        },
+    )
+
     def __init__(
         self,
         *,
@@ -502,11 +547,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if use_singular_enrichment and (
             wire_conductivity is not None or insulation_radius is not None
         ):
-            raise NotImplementedError(
-                "use_singular_enrichment + distributed wire loading together "
-                "not supported yet — the enrichment bases don't carry the "
-                "loading overlap term"
-            )
+            raise NotImplementedError(_ENRICHMENT_WIRE_LOADING_REFUSAL)
 
         self.degree = int(degree)
         self.wavelength = wavelength
@@ -569,15 +610,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # One refusal rather than a half-served path (#249 §5). The
             # second (finite ground) was lifted by momwire#269 — see below.
             if use_singular_enrichment:
-                raise NotImplementedError(
-                    "extended_kernel=True + use_singular_enrichment=True not "
-                    "supported yet — the enrichment DOFs bypass the moment "
-                    "kernels entirely (they carry their own Φ_sing "
-                    "quadrature), they exist only at K >= 3 junctions where "
-                    "NEC's own gating turns EK off, and the O(a²) tube "
-                    "expansion was never derived for the s^(-1/2) shapes "
-                    "(stevenmburns/momwire#249 follow-up C)"
-                )
+                raise NotImplementedError(_ENRICHMENT_EXTENDED_KERNEL_REFUSAL)
             # Finite ground (`ground_eps`, both models) is served since
             # momwire#269. What #249 refused as "an ungated mixture" now has
             # its gates: the refl-coef image rides the same EK-aware moment
@@ -656,11 +689,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._radius_per_wire = radius
         self._uniform_radius = float(radius[0]) if np.all(radius == radius[0]) else None
         if use_singular_enrichment and self._uniform_radius is None:
-            raise NotImplementedError(
-                "use_singular_enrichment + mixed per-wire radii together "
-                "not supported yet — the enrichment kernels take a single "
-                "radius (stevenmburns/momwire#147)"
-            )
+            raise NotImplementedError(_ENRICHMENT_PER_WIRE_RADIUS_REFUSAL)
 
         # Distributed series wire impedance (stevenmburns/momwire#131):
         # finite conductivity (skin-effect internal impedance) and/or a
