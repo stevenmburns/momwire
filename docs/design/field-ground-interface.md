@@ -92,11 +92,30 @@ file**, which is criterion 1's acceptance test (§0.2). A future
 Sommerfeld-class ground (own remainder operator) lands as a fourth mode-
 "compose" row — new physics in the object, still zero solver edits.
 
-## Amendments from the build (units 1-2, binding on unit 3)
+Measured at the end of unit 3, that claim holds of the **fill** and needs
+two qualifications, both outside the object by design and neither of them
+a ground DECISION:
 
-The page above is the approved sketch; these are the three places the
+* the **configuration surface** is still `SinusoidalSolver.__init__`'s —
+  `ground_model`'s whitelist (`"refl-coef"`/`"sommerfeld"`) and whatever
+  kwarg carries the screen's geometry. Accepting a new ground is an edit
+  to `sinusoidal.py`; *filling* it is not. (`_capabilities`' ground
+  enumeration is the same kind of edit, in its own file.)
+* the **#282 contact-charge correction** calls `_ground_refl.fresnel_rho`
+  directly on both solvers (`_contact_charge_fresnel`, and the
+  `ground_model == "sommerfeld"` branches in the two charge kernels). A
+  screen deck with a wire END IN THE PLANE would take the bare earth's
+  ρ_v/ρ_h there. That is the testing-scheme correction this sketch puts
+  out of scope, so it is not a broken promise — but it is a wrong answer
+  rather than a missing feature, and whoever lands the screen has to route
+  those coefficients through the ground or refuse ground contacts under it.
+
+## Amendments from the build (units 1-3)
+
+The page above is the approved sketch; these are the four places the
 implemented object differs from it, each recorded here rather than
-discovered later.
+discovered later. 1-3 came out of units 1-2 and were binding on unit 3; 4
+is unit 3's own.
 
 1. **The dyad has a third spelling, so the fused kernels need a key.**
    `sinusoidal_field_tensor_refl` and its EK twin compute ρ_v/ρ_h
@@ -127,6 +146,25 @@ discovered later.
    `Remainder.replay` forwards `consume` / `row_group` untouched, so the
    streaming schedule stays the caller's.
 
+4. **The weight row has a second spelling, so the object serves a
+   projector too — and `plain_projection` moved with it.** The Galerkin
+   fill does not build an image tensor; it hands a *projector* to its test
+   integration. `FieldGround.projector(tables)` is therefore the same
+   ternary as `image_field`, returning `_field_ground.plain_projection`
+   (moved here from `sinusoidal_galerkin`, because "this ground has no
+   dyad" is what it *returns*) or `PairTables.weights(ε̃).project`. Two
+   consequences worth having written down: the identity of that plain
+   projector is load-bearing — `_tested_contribs` gates its fused C++ far
+   fill on `projector is _plain_projection`, so the solver binds the name
+   rather than defining a second function — and `tables` is a zero-argument
+   SUPPLIER, not a table, so the ground can decline to call it and an
+   unweighted fill never builds the O(N²) specular quintet. That is what
+   let the Galerkin solver keep its whole-geometry `_image_refl_prep` cache
+   as schedule (option one of the unit-2 finding) without the object
+   growing a `cached` flag. Unit 3 also took `_ek_bracket_correction_
+   tested`, which was not in its brief but mirrored the fold's string
+   dispatch exactly; its three scales collapse to `−fg.image_coefficient`.
+
 ## What deliberately stays out
 
 - **Scheduling** — bands, folds, budgets, `subtract_into`: stage 2.
@@ -155,7 +193,14 @@ discovered later.
    and `subtract_into` schedule but loses its physics to the object.
    Gate: bit-identity (`test_folded_ground_is_bit_equal...`,
    `test_streamed_remainder_is_bit_equal...`), and the schedule shim that
-   remains is measured in lines and reported in the PR.
+   remains is measured in lines and reported in the PR. **Landed**: 61
+   lines of ground code left in `sinusoidal_galerkin.py`, all schedule —
+   the fold (23), the streamed remainder (23), the EK bracket's image row
+   (11), the fill's entry (3) and the cache supplier (1), against 84
+   before — plus the 7-line plain projector, which moved to
+   `_field_ground` and is a one-line binding here now. Bit-identical over
+   34 arrays (three decks × four grounds × two kernels, the streamed
+   remainder at two forced chunk sizes, the ported PEC path).
 
 Each unit is delegable once this sketch is approved; the arc lands as one
 integration PR per the house stacked-arc pattern.
@@ -165,7 +210,12 @@ integration PR per the house stacked-arc pattern.
 - §8 risk 1 (the two grounds are three): if unit 3 finds the Galerkin fill
   needs a *different* `pair_weights` contract than the tensor build — not
   just a different pairing — the shared-builder claim fails and this page
-  gets amended before unit 3 lands, not after.
+  gets amended before unit 3 lands, not after. **Did not fire.** The
+  Galerkin fill needed a different *shape* of answer (a projector, not a
+  tensor) but the same contract underneath: `PairWeights.project` serves
+  both, and unit 3 added no table, no ρ and no pairing rule. What it did
+  add is amendment 4's supplier callable, which is a scheduling
+  concession, not a contract change.
 - The `compose` mode currently has exactly one member; if the screen turns
   out to need remainder-like structure (it should not — it is coefficient-
   level by construction), `mode` was the wrong axis and should become a
