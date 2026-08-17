@@ -59,6 +59,60 @@ momwire#388 remains relevant as the *shape* of future expansion — its
 plane-wave drive is still a cheap additional test if the stretch (criterion 5) is wanted
 — but it is no longer the forcing function.
 
+### 0.2 Step-size review (2026-08-17)
+
+Asked directly — is this too big, too small, and is the end state the right
+one — three honest qualifications, recorded so the criteria are judged
+against what the architecture can actually deliver.
+
+**Criterion 1 will not empty the file, and should not be judged as if it
+could.** SG's ground duplication is entangled with scheduling: the Sommerfeld
+fold order (`c2·img − rem` stays associated, §3.4) is *why*
+`_fold_ground_block` and `_tested_sommerfeld_remainder` exist as they do. The
+realistic end state is: physics and composition move to `FieldGround`, a thin
+schedule shim (~100 lines) stays per solver. The measurable acceptance test
+is therefore NOT "the file got smaller" but:
+
+> **a new coefficient-level ground requires zero edits to
+> `sinusoidal_galerkin.py`** (nor to `sinusoidal.py`) —
+
+with the radial screen (§6.1) as its instrument. The same restated test for
+criterion 3: a solver absent from every deleted tuple still runs end-to-end.
+
+**"Lands once" means: coefficient layer once, composition twice.** Under the
+two-object ground layer, a structurally new ground (another Sommerfeld-class
+model, with its own remainder operator) lands in both `FieldGround` and
+`PotentialGround`. Only coefficient-level grounds — those that modify the
+reflection coefficients, like the radial screen — land literally once, in
+`_ground_refl`. 4× → 1 for the common case, 4× → 2 for the hard case.
+Criterion 5 as worded is achievable only for the first class, which the
+chosen target is.
+
+**The throwaway tier is the metric, and it is stage 0's real deliverable.**
+The historically dominant experiment class here is a new basis or testing
+scheme (the seven-basis roster, razor, the Galerkin fork) — and none of
+criteria 1–5 directly buys "new basis in hours." But the hours-mode nearly
+exists already, and `RazorSolver` is the existence proof: it shipped
+refusing junction ports, node gaps, per-wire radii, every ground and EK —
+gracefully — and was useful from day one. What breaks the pattern today is
+only that antennaknobs' hard-coded tuples punish any solver not on the list.
+So stage 0's definition of done is stated as a test:
+
+> **a ~200-line free-space, point-matched prototype solver, declaring only
+> what it serves, runs end-to-end in antennaknobs with graceful refusals —
+> written and running in hours.**
+
+The registry must stay small enough that this is true: roughly one declared
+class attribute and one refusal helper, on the `_ElementCurrents` model
+(120 LOC, thin adapter, no ceremony). If stage 0 grows validation machinery
+or a plugin system, it has failed even if every criterion passes.
+
+**Deliberately deferred, restated for completeness:** streaming stays
+quadruplicated until the matrix expansion forces stage 2, so a *production*
+new basis (budgets, EK, grounds) still costs days. The throwaway tier is what
+keeps that from blocking experiments; stage 2 is what would fix it for
+production, and it waits by decision.
+
 ---
 
 ## 1. What the matrix actually is
