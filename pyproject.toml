@@ -40,6 +40,20 @@ dependencies = [
 # platform-specific --find-links wheel, not a PyPI package a name could pin).
 test = [
     "pytest",
+    # Evaluated for the default lane (#400) and NOT wired into addopts: `-n
+    # auto` measured 486 s against the marker-only lane's 280 s on this box's
+    # 8 cores — worse, not better. The accelerator is built `-fopenmp`
+    # (setup.py), and absent per-worker thread pinning each xdist worker
+    # process spawns its own full-width OpenMP pool, so the BLAS/OMP-heavy
+    # tests (tests/test_hmatrix.py in particular — 1 s serial, 30-60 s under
+    # -n auto) serialize behind thread contention instead of parallelizing.
+    # No correctness/flakiness surfaced (same 3369 passed/5 skipped either
+    # way, portal/server tests included) — this is a pure perf regression, not
+    # a safety one. Left installed for a developer who wants to experiment
+    # with a thread-pinned `-n auto` run by hand; fixing it properly means
+    # pinning OMP_NUM_THREADS per worker, which is out of this issue's
+    # marker-only scope.
+    "pytest-xdist",
     "matplotlib",
     "scikit-rf",
 ]
@@ -91,6 +105,14 @@ Issues = "https://github.com/stevenmburns/momwire/issues"
 testpaths = ["tests"]
 markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
+    # Certification gates on memory residency/budget — tracemalloc peaks and
+    # byte-budget arithmetic checked against a live allocation (issue #400).
+    # These earn their keep on merge to main, not on every PR iteration or
+    # local edit-test loop: `-m memgate` in ci.yml's push-to-main-only job,
+    # `pytest -m memgate` locally. Disjoint from `slow` — a memgate test is
+    # never also marked slow, so `-m "slow and not memgate"` (the CI
+    # test-slow lane) and `-m memgate` partition cleanly.
+    "memgate: residency/budget certification gates (tracemalloc, byte budgets) — run on merge-to-main CI and via -m memgate, not in the default run",
     # Tests that shell out to the NEC-2 oracle binary SimNEC ships
     # (nec2c-ubuntu-x86, under ~/.SimNEC/<major>/<minor>/Examples/). CI has no
     # such binary — that is exactly why tests/fixtures/nec_portal/ is
@@ -100,6 +122,14 @@ markers = [
     # Deselect explicitly with `-m "not oracle_binary"`.
     "oracle_binary: shells out to SimNEC's nec2c oracle; skipped when it is not installed",
 ]
+# Default local run (issue #400): skip the slow convergence ladders/oracle
+# sweeps and the memgate certification gates, so a bare `pytest tests` stays
+# around 2 minutes with nothing over ~5 s. A CLI `-m` REPLACES this rather
+# than ANDing with it (verified: `pytest tests -m ""` runs everything,
+# `pytest tests -m memgate` runs only memgate — not "addopts AND memgate"),
+# so `pytest tests -m ""` is the full-suite spelling for humans, and CI lanes
+# spell their own `-m` explicitly rather than leaning on this default.
+addopts = ["-m", "not slow and not memgate"]
 # Put the project root on sys.path so the `validation` harness package (which
 # lives next to `tests/`, not under src/) is importable from the backend tests.
 pythonpath = ["."]
@@ -119,9 +149,11 @@ test-requires = "pytest"
 #
 # Then run only the three core solver modules — they exercise the accelerator
 # without the PyNEC cross-check backend (a separately-built wheel, test-only).
-# -m skips slow. cibuildwheel runs this from a temp dir against the
-# installed wheel, so `import momwire` resolves to the wheel, not src/.
-test-command = 'python -c "import momwire._accelerators; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow"'
+# -m skips slow and memgate (#400: certification gates run on merge-to-main
+# CI, not in a wheel smoke test). cibuildwheel runs this from a temp dir
+# against the installed wheel, so `import momwire` resolves to the wheel, not
+# src/.
+test-command = 'python -c "import momwire._accelerators; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not memgate"'
 
 [tool.cibuildwheel.linux]
 # glibc >= 2.28 ships libmvec; manylinux2014 (glibc 2.17) does NOT, so the
