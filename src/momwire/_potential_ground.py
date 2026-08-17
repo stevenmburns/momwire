@@ -37,6 +37,20 @@ now a `mode` test. The solver's existing evaluators stay exactly where
 they are and this object delegates to them, the same division
 `FieldGround` draws.
 
+Unit 2 lands the pilot's actual claim: `razor.py` — which implemented
+**zero** ground methods — gains the PEC image by consuming this object and
+writing no reflection of its own. It changed one thing here, and the
+change is the interesting part of the unit. `ImageGeometry` had been
+shaped entirely by its first consumer (mirrored segment ENDPOINTS and an
+N² tangent-dot table, because that is what the B-spline moment builder
+eats); razor quadratures in each segment's own arc frame and must never
+materialise anything N², so it needs a mirrored (origin, tangent) pair and
+an O(N) tangent table instead. Neither shape is the mirror — so the class
+now exposes the two OPERATIONS (`mirror_positions` / `mirror_tangents`)
+and keeps both consumers' shapes as conveniences on top. That is the
+generalisation a second consumer is supposed to force, and it is the
+cheapest possible one: no new concept, one layer removed.
+
 **What stays out**, deliberately, and named here so its later migration is
 a decision rather than a discovery:
 
@@ -73,42 +87,101 @@ import numpy as np
 
 from . import _ground_refl
 
+# M = diag(1, 1, −1) as the row it multiplies a `(..., 3)` array by. One
+# array, so `ImageGeometry.mirror_tangents` and `weight_windows`' PEC /
+# Sommerfeld closures below are visibly the same reflection.
+_MIRROR = np.array([1.0, 1.0, -1.0])
+
 
 class ImageGeometry:
-    """The mirror map, in the shape the mixed-potential trunk wants it.
+    """The mirror map, as OPERATIONS first and tables second.
 
-    Two parts, because the potential trunk splits the image into two
-    unrelated pieces where the field trunk has one:
+    The reflection through `z = ground_z` is M = diag(1, 1, −1) applied to
+    positions about the plane and to direction vectors about the origin,
+    and those two are the whole of it:
 
-    `seg_l` / `seg_r` — the segment ENDPOINTS mirrored across
-    `z = ground_z`, which is what the moment builder consumes (it
-    quadratures from endpoints, not from centres and tangents).
+    `mirror_positions(p)` — any `(..., 3)` array of points, reflected.
+    `mirror_tangents(t)` — any `(..., 3)` array of directions, z-flipped.
 
-    `tangent_dot()` — the `(N_obs, N_src)` table `t_m · M·t_n` with
-    M = diag(1, 1, −1). This is the potential trunk's IMAGE SIGN, fused
-    into a table rather than carried as a separate factor: the horizontal
-    image current's anti-parallel direction and the image charge's sign
-    flip are both absorbed by it plus the seams' single global minus
-    (architecture doc §2.2, "image sign fused into the `td_all` table").
-    It is O(N²) and built only when asked, so a consumer that wants only
-    the mirrored endpoints — the moment builder — never pays for it.
+    Everything else on this class is a CONVENIENCE built out of those two,
+    in the shape one consumer happens to want. Unit 1 shipped only the
+    conveniences and unit 2 (razor's PEC ground) is what forced the split:
+    the B-spline fill wants mirrored segment endpoints and an N² table
+    because its moment builder quadratures from endpoints and its kernel
+    contracts tangents pairwise; the razor fill wants a mirrored segment
+    ORIGIN + TANGENT pair (it quadratures in each segment's own arc frame)
+    and a `(3, n_basis)` tangent table, and it must never materialise
+    anything N². Two solvers, two shapes, one mirror — so the mirror is
+    what the object exposes, and neither consumer is the other's shape.
 
-    Both delegate to the solver's `_image_positions` / `_image_tangent_dot`,
-    which stay where they are: hmatrix's block paths call them on their own
-    sub-blocks and are not migrated by this unit.
+    The conveniences, both B-spline-shaped and both lazy (a razor `geom`
+    dict does not even carry the keys they read, and never touches them):
+
+    `seg_l` / `seg_r` — the segment ENDPOINTS mirrored, which is what the
+    B-spline moment builder consumes.
+
+    `tangent_dot()` — the `(N_obs, N_src)` table `t_m · M·t_n`. This is the
+    potential trunk's IMAGE SIGN, fused into a table rather than carried as
+    a separate factor: the horizontal image current's anti-parallel
+    direction and the image charge's sign flip are both absorbed by it plus
+    the seams' single global minus (architecture doc §2.2, "image sign
+    fused into the `td_all` table"). It is O(N²) and built only when asked.
+    Razor gets the same sign from `mirror_tangents` on its own
+    `(3, n_basis)` table plus the same single minus, which is the same
+    physics at O(N) storage.
+
+    `BSplineSolver._image_positions` / `_image_tangent_dot` still spell the
+    same two operations, because hmatrix's block paths call them on their
+    own sub-blocks and are not migrated yet; `tests/test_potential_ground.py`
+    pins the two spellings bit-equal so they cannot drift apart before that
+    migration lands.
     """
 
-    __slots__ = ("_solver", "_tangents", "seg_l", "seg_r")
+    __slots__ = ("_geom", "_ground_z", "_seg_l", "_seg_r")
 
-    def __init__(self, solver, seg_l, seg_r, tangents):
-        self._solver = solver
-        self._tangents = tangents
-        self.seg_l = seg_l
-        self.seg_r = seg_r
+    def __init__(self, ground_z, geom):
+        self._ground_z = ground_z
+        self._geom = geom
+        self._seg_l = None
+        self._seg_r = None
+
+    # --- the operations ------------------------------------------------
+
+    def mirror_positions(self, positions):
+        """Reflect `(..., 3)` POINTS through the plane `z = ground_z`."""
+        out = positions.copy()
+        out[..., 2] = 2 * self._ground_z - out[..., 2]
+        return out
+
+    def mirror_tangents(self, tangents):
+        """Reflect `(..., 3)` DIRECTIONS: `t → (t_x, t_y, −t_z)`.
+
+        The plane's offset does not enter — a direction is a difference of
+        positions, and `2·ground_z` cancels — so this is a pure z-flip and
+        `ground_z` is deliberately unread here.
+        """
+        return tangents * _MIRROR
+
+    # --- the B-spline-shaped conveniences ------------------------------
+
+    @property
+    def seg_l(self):
+        """Mirrored segment start points, built on first read."""
+        if self._seg_l is None:
+            self._seg_l = self.mirror_positions(self._geom["seg_l"])
+        return self._seg_l
+
+    @property
+    def seg_r(self):
+        """Mirrored segment end points, built on first read."""
+        if self._seg_r is None:
+            self._seg_r = self.mirror_positions(self._geom["seg_r"])
+        return self._seg_r
 
     def tangent_dot(self):
         """`t_m · M·t_n`, complex-free (float64) — the PEC mirror table."""
-        return self._solver._image_tangent_dot(self._tangents)
+        tangents = self._geom["tangents"]
+        return tangents @ self.mirror_tangents(tangents).T
 
 
 class Remainder:
@@ -261,23 +334,16 @@ class PotentialGround:
     # ------------------------------------------------------------------
 
     def image_geometry(self) -> ImageGeometry:
-        """Mirrored segment endpoints plus the image tangent-dot table.
+        """The mirror map: two operations, plus lazy conveniences on top.
 
-        Built fresh on every call and cached nowhere — the endpoints are
-        O(N) and the table is only materialised if `tangent_dot()` is
-        actually asked for. EK policy is NOT here: `_ek_spec(geom,
-        mirror=True)` stays with the moment builder, the same line
-        `FieldGround.image_sources` draws (the ground supplies mirrored
-        geometry, never the extended kernel's opinion about it).
+        Built fresh on every call and cached nowhere — the object itself is
+        two attributes, and everything it can produce is either O(N) or
+        materialised only when asked for. EK policy is NOT here:
+        `_ek_spec(geom, mirror=True)` stays with the moment builder, the
+        same line `FieldGround.image_sources` draws (the ground supplies
+        mirrored geometry, never the extended kernel's opinion about it).
         """
-        geom = self._geom
-        solver = self._solver
-        return ImageGeometry(
-            solver,
-            solver._image_positions(geom["seg_l"]),
-            solver._image_positions(geom["seg_r"]),
-            geom["tangents"],
-        )
+        return ImageGeometry(self._solver.ground_z, self._geom)
 
     # ------------------------------------------------------------------
     # the weight tables — this trunk's (w_A, w_Φ) row
@@ -321,7 +387,7 @@ class PotentialGround:
             # singular behaviour, plus the smooth remainder block. ε̃ → ∞:
             # C₂ → 1 and Q → 0, PEC image exactly; ε̃ → 1: both vanish.
             c2 = self.image_coefficient
-            td_img = self._solver._image_tangent_dot(self._geom["tangents"])
+            td_img = self.image_geometry().tangent_dot()
             w_A = c2 * td_img.astype(np.complex128)
             return w_A, np.full_like(w_A, c2)
         solver = self._solver
@@ -353,7 +419,7 @@ class PotentialGround:
         """
         geom = self._geom
         tangents = geom["tangents"]
-        mirror = np.array([1.0, 1.0, -1.0])
+        mirror = _MIRROR
 
         if self.eps_tilde is None:
 
