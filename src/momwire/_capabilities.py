@@ -68,7 +68,15 @@ class Capabilities(NamedTuple):
     def _served(self, cell: str) -> bool:
         if cell in ("pec", "refl-coef", "sommerfeld"):
             return cell in self.grounds
-        return bool(getattr(self, cell, False))
+        if cell in _AXES:
+            return bool(getattr(self, cell))
+        # A condition token ("finite_ground", "mixed_radii", …) is not a
+        # capability — it carries meaning only through a declared "a+b"
+        # combination key. Treating an unknown token as refused would make
+        # every solver WITHOUT that combination key spuriously refuse it
+        # (BSplineSolver serves junction_ports over a finite ground and
+        # declares no such key), so an unmatched condition is served.
+        return True
 
     def refusal(self, *cells: str) -> str | None:
         """The declared reason `cells` is refused, or None if it is served.
@@ -77,7 +85,9 @@ class Capabilities(NamedTuple):
         exact "a+b" key first (`_combo_key`'s canonical order), then each
         single cell in the order given: the first one this solver does not
         serve returns its `refusals` entry when one exists, else a
-        generated one-line default. Nothing refused returns None.
+        generated one-line default. Nothing refused returns None — and a
+        condition token that matches no combination key is served, per
+        `_served`.
         """
         if len(cells) > 1:
             hit = self.refusals.get(_combo_key(cells))
