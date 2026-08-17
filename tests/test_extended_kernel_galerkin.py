@@ -3626,6 +3626,16 @@ def test_gd9d_the_field_kernel_ignores_its_batch_shape(payload):
     smaller one. Nothing about a pair's field depends on its blockmates —
     each is computed from its own (observer, source) geometry — so any
     difference here is the evaluation strategy reading the temporary's size.
+
+    What this ASSERTS is host-independent; what would make it FAIL is not.
+    Whether the elided in-place complex multiply rounds differently from the
+    out-of-place one is a matter of which SIMD loop numpy dispatches to, and
+    that follows the CPU: it differs on the machine momwire#392 was found on
+    and does not on this repo's CI runner, where the unnamed spelling passes
+    this gate as well. `test_gd9d_has_teeth` probes for it and skips rather
+    than fails where it is absent. The named spellings are required either
+    way — a value that depends on the host's vector width is worse than one
+    that depends on the block size, not better.
     """
     a = 0.001
     n_pairs, n_obs = 256, 128
@@ -3678,35 +3688,52 @@ def test_gd9d_the_field_kernel_ignores_its_batch_shape(payload):
             )
 
 
-def test_gd9d_has_teeth():
-    """The property G-D9d pins is not free: the spelling it forbids fails it.
+def _gd9d_elide_spellings(n):
+    """`G0 * (bracket)` against the same product with the bracket named.
 
-    `G0 * (bracket)` is re-created here on the same tables — one array times a
-    dead temporary — and compared against the same product with the temporary
-    named. Below the threshold the two agree; above it they do not, which is
-    the whole mechanism in four lines. If numpy ever stops eliding, this test
-    goes quiet and G-D9d becomes a tautology, so the failure message says so.
+    The forbidden spelling and its fix, on `n` synthetic complex entries and
+    nothing else — the whole mechanism in four lines.
     """
     rng = np.random.default_rng(392)
+    g0 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    u = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    v = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    elided = g0 * (u + v)
+    named = u + v
+    named = g0 * named
+    return elided, named
 
-    def spellings(n):
-        g0 = rng.standard_normal(n) + 1j * rng.standard_normal(n)
-        u = rng.standard_normal(n) + 1j * rng.standard_normal(n)
-        v = rng.standard_normal(n) + 1j * rng.standard_normal(n)
-        elided = g0 * (u + v)
-        named = u + v
-        named = g0 * named
-        return elided, named
 
-    small = spellings(1000)  # 16 KB
+def test_gd9d_has_teeth():
+    """Whether G-D9d can fail on THIS host, reported rather than assumed.
+
+    The two spellings differ only in whether numpy elides the temporary into
+    an in-place multiply, so any difference between them is a difference
+    between two SIMD loops — and which loop runs follows the CPU. On the
+    machine momwire#392 was found on they differ above 256 KB and agree
+    below it, which is what gives G-D9d its bite; on this repo's CI runner
+    they agree at both sizes, and G-D9d passes there with or without the fix.
+
+    So this SKIPS where the mechanism is absent instead of failing: the
+    absence is a fact about the host, not a regression. What it still
+    asserts unconditionally is the half that must hold everywhere — that the
+    two spellings agree BELOW the threshold. If that ever broke, the named
+    spellings would be changing the arithmetic rather than pinning the
+    evaluation strategy, and momwire#392's central claim (that the fix lands
+    on the value every small batch already produced) would be false.
+    """
+    small = _gd9d_elide_spellings(1000)  # 16 KB
     assert np.array_equal(*small), (
         "the elided and named spellings differ BELOW numpy's threshold — the "
         "fix would then be a change of arithmetic, not of evaluation strategy"
     )
-    big = spellings(40_000)  # 625 KB
-    assert not np.array_equal(*big), (
-        "numpy no longer rounds an elided complex product differently above "
-        "256 KB, so G-D9d cannot fail and is watching nothing. Confirm that "
-        "before relaxing the named spellings in `_field_components_bcast` / "
-        "`_ek_end_gxx`"
-    )
+    big = _gd9d_elide_spellings(40_000)  # 625 KB
+    if np.array_equal(*big):
+        pytest.skip(
+            "this host's numpy rounds the elided and the named complex "
+            "product identically at 625 KB, so G-D9d cannot fail here. That "
+            "is not a reason to relax the named spellings in "
+            "`_field_components_bcast` / `_ek_end_gxx`: on the hosts where "
+            "the two DO differ, the same deck at the same N disagrees "
+            "between machines and between block sizes without them"
+        )
