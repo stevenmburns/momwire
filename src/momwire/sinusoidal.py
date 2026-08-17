@@ -42,7 +42,7 @@ import numpy as np
 import scipy.linalg
 import scipy.sparse
 
-from . import _ground_refl, _sommerfeld, _wire_loading
+from . import _field_ground, _ground_refl, _sommerfeld, _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
@@ -414,14 +414,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cached_geometry: dict | None = None
         self._cached_basis: tuple[dict, float, float | bytes, list] | None = None
         # k-independent specular-ray tables for the `ground_eps` weighted
-        # image (cos θ, p̂ components, tangent·p̂ projections), cached per
-        # geometry object — same identity-check pattern as _cached_basis /
-        # bspline's `_image_refl_prep`. ρ_v/ρ_h are NOT cached: they depend
-        # on ε̃(ω) and are recomputed per frequency. Since momwire#332 unit
-        # B the point-matched fill no longer reads this cache — it builds
-        # its own per-band tables via `_image_refl_band` instead — so what
-        # is left resident here is only what `SinusoidalGalerkinSolver`
-        # still asks `_image_refl_prep` for.
+        # image (a `_field_ground.PairTables`: cos θ, p̂ components,
+        # tangent·p̂ projections), cached per geometry object — same
+        # identity-check pattern as _cached_basis / bspline's
+        # `_image_refl_prep`. ρ_v/ρ_h are NOT cached: they depend on ε̃(ω)
+        # and are recomputed per frequency by `PairTables.weights`. Since
+        # momwire#332 unit B the point-matched fill no longer reads this
+        # cache — it builds its own per-band tables via `_image_refl_band`
+        # instead — so what is left resident here is only what
+        # `SinusoidalGalerkinSolver` still asks `_image_refl_prep` for.
         self._cached_image_refl_prep: tuple | None = None
 
         if not wires:
@@ -2773,47 +2774,50 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
     def _image_refl_prep(self, geom):
-        """k-independent per-pair specular tables for the `ground_eps`
-        weighted image: incidence cosine cos θ, p̂ components (px, py),
-        and the tangent projections tm_p = t_m·p̂, tn_p = t_n·p̂. Cached
-        per geometry object (identity check, same pattern as
-        `_cached_basis`) so swept callers pay the O(N²) build once, not
-        per frequency; ρ_v/ρ_h depend on ε̃(ω) and are NOT cached.
+        """The whole-geometry `_field_ground.PairTables` for the `ground_eps`
+        weighted image, cached per geometry object (identity check, same
+        pattern as `_cached_basis`) so swept callers pay the O(N²) build
+        once, not per frequency; ρ_v/ρ_h depend on ε̃(ω) and are NOT cached
+        — they come from `PairTables.weights` per ω.
 
-        Point-matched no longer calls this — `_field_tensor_image_refl`
-        takes `_image_refl_band`'s per-band tables instead (#332 unit B).
-        What remains here is `SinusoidalGalerkinSolver._refl_projection`,
-        which fancy-indexes the whole table with per-quadrature-point
-        (test segment, source segment) pairs rather than a contiguous
-        observer slice, so it is not a band consumer the same way; its own
-        residency is issue #332's separate Galerkin section.
+        Delegates: the tables themselves are built by
+        `_field_ground.specular_pair_prep`, which is the ONE spelling of
+        this geometry in the field trunk since momwire#397 unit 1. What
+        this method still owns is the SCHEDULE — the per-geometry cache.
+
+        Point-matched does not call this — `_field_tensor_image_refl` takes
+        `_image_refl_band`'s per-band tables instead (#332 unit B). What
+        remains here is `SinusoidalGalerkinSolver._refl_projection`, which
+        fancy-indexes the whole table with per-quadrature-point (test
+        segment, source segment) pairs rather than a contiguous observer
+        slice, so it is not a band consumer the same way; its own residency
+        is issue #332's separate Galerkin section.
         """
         cached = self._cached_image_refl_prep
         if cached is not None and cached[0] is geom:
             return cached[1]
-        seg_c = geom["seg_centers"]
-        seg_t = geom["seg_tangents"]
-        # Square case: sources = observers; specular geometry from the
-        # REAL (unmirrored) source centers — specular_ray_tables does the
-        # mirroring internally (dz = z_m + z_n − 2·ground_z).
-        cos_th, px, py = _ground_refl.specular_ray_tables(seg_c, self.ground_z)
-        # t·p̂ tables. p̂ has zero z-component and the image tangent only
-        # flips z, so t_img·p̂ = t_src·p̂ — the REAL source tangents serve
-        # for the image-source projection too.
-        tm_p = seg_t[:, 0][:, None] * px + seg_t[:, 1][:, None] * py
-        tn_p = seg_t[:, 0][None, :] * px + seg_t[:, 1][None, :] * py
-        prep = (cos_th, px, py, tm_p, tn_p)
+        # Square case: sources = observers. The specular geometry is taken
+        # from the REAL (unmirrored) source centers — `specular_pair_prep`
+        # mirrors internally (dz = z_m + z_n − 2·ground_z).
+        prep = _field_ground.specular_pair_prep(
+            geom["seg_centers"], geom["seg_tangents"], self.ground_z
+        )
         self._cached_image_refl_prep = (geom, prep)
         return prep
 
     def _image_refl_band(self, geom, obs_rows=None):
-        """Per-BAND specular tables for the `ground_eps` weighted image:
-        the same cos θ / p̂ / tangent-projection quintet `_image_refl_prep`
-        builds, but shaped (band, N_src) for one observer band rather than
-        (N_obs, N_src) for the whole geometry, and never cached — the
-        point-matched fill's #332 unit B transplant of #323's window-
-        producer trade (bspline's `_image_weight_window_fn` retired the
-        same tables the same way).
+        """Per-BAND `_field_ground.PairTables` for the `ground_eps` weighted
+        image: the same cos θ / p̂ / tangent-projection quintet
+        `_image_refl_prep` builds, but shaped (band, N_src) for one observer
+        band rather than (N_obs, N_src) for the whole geometry, and never
+        cached — the point-matched fill's #332 unit B transplant of #323's
+        window-producer trade (bspline's `_image_weight_window_fn` retired
+        the same tables the same way).
+
+        Delegates to `_field_ground.specular_pair_prep`, the shared builder
+        (momwire#397 unit 1); the band-vs-whole choice this method makes IS
+        the schedule, and is all that distinguishes it from
+        `_image_refl_prep`.
 
         The quintet is k-INDEPENDENT, so a sweep rebuilds the same numbers
         at every frequency: the residency #332 retired was, seen from the
@@ -2823,35 +2827,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         sweep momwire#357 measures) against the 5 x 8N² = 14.4 MB the cache
         cost. So #357 item 2 bought the recompute down instead of buying it
         back: `specular_ray_tables` now tiles its own elementwise build so
-        it runs out of cache, and the two tangent projections below hold
-        one scratch buffer between them rather than four temporaries. Same
+        it runs out of cache, and the two tangent projections hold one
+        scratch buffer between them rather than four temporaries. Same
         floats, ~0.6x the per-band cost, no residency at all.
 
         `obs_rows = (i0, i1)` restricts the OBSERVER axis, same contract as
         `_field_tensor`'s; `None` means the whole geometry (one band).
-        Sources stay the full, REAL (unmirrored) centers/tangents —
-        `specular_ray_tables`'s `src_centers` takes the rectangular case
-        directly, mirroring internally exactly as the square build did.
+        Sources stay the full, REAL (unmirrored) centers/tangents.
         """
-        seg_c = geom["seg_centers"]
-        seg_t = geom["seg_tangents"]
-        obs_c = seg_c if obs_rows is None else seg_c[slice(*obs_rows)]
-        obs_t = seg_t if obs_rows is None else seg_t[slice(*obs_rows)]
-        cos_th, px, py = _ground_refl.specular_ray_tables(
-            obs_c, self.ground_z, src_centers=seg_c
+        return _field_ground.specular_pair_prep(
+            geom["seg_centers"], geom["seg_tangents"], self.ground_z, obs_rows
         )
-        # t·p̂ tables: tm_p on the BAND's observer tangents, tn_p on the
-        # full source width — see `_image_refl_prep` for why the real
-        # source tangents serve the image-source projection unchanged.
-        # `a*px + b*py` accumulated through one shared scratch buffer: same
-        # association, two (band, N_src) temporaries instead of four.
-        tm_p = obs_t[:, 0][:, None] * px
-        scratch = obs_t[:, 1][:, None] * py
-        tm_p += scratch
-        tn_p = seg_t[:, 0][None, :] * px
-        np.multiply(seg_t[:, 1][None, :], py, out=scratch)
-        tn_p += scratch
-        return cos_th, px, py, tm_p, tn_p
 
     def _field_tensor_image_refl(self, geom, k, obs_rows=None):
         """Fresnel-weighted image field tensor for the `ground_eps` finite
@@ -2862,15 +2848,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         projection, with p̂ the horizontal unit normal to the plane of
         incidence of the specular ray (image midpoint → observer midpoint)
         and ρ_v/ρ_h the Fresnel coefficients at that ray's incidence angle
-        — per-pair constants, NEC's approximation. Expanding the
-        projection (t_m has unit norm, p̂·p̂ = 1):
-
-            t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)·(E·p̂)
-
-        with both scalars available from the unprojected component tables:
-            t_m·E = td·E_z + rho_proj·E_ρ    (the plain projection)
-            E·p̂  = (t_n·p̂)·E_z + (ρ̂·p̂)·E_ρ  (t_img·p̂ = t_n·p̂; ρ̂ = rho_vec
-                                              /rho_eval as in the E_ρ rule)
+        — per-pair constants, NEC's approximation. The algebra is
+        `_field_ground.PairWeights.project`'s, which is where it lives for
+        the whole field trunk since momwire#397 unit 1; what this method
+        owns is the SCHEDULE — the observer band, the mixed-radius runs,
+        and the choice of backend.
 
         PEC limit ε̃ → ∞: ρ_v → +1, ρ_h → −1, so the p̂ correction vanishes
         and this reduces exactly to `_field_tensor_image` — the ε̃=1e16
@@ -2899,7 +2881,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         win = slice(None) if obs_rows is None else slice(*obs_rows)
         obs_c = seg_c[win]
         obs_t = seg_t[win]
-        cos_th, px, py, tm_p, tn_p = self._image_refl_band(geom, obs_rows)
+        tabs = self._image_refl_band(geom, obs_rows)
+        # The five tables the fused kernels take positionally, unpacked so
+        # their call sites read as they did before the shared builder.
+        cos_th, px, py = tabs.cos_th, tabs.px, tabs.py
+        tm_p, tn_p = tabs.tm_p, tabs.tn_p
         i0 = 0 if obs_rows is None else obs_rows[0]
         # ε̃(ω) — per-frequency (the swept loops update self.omega
         # alongside k before assembling).
@@ -3025,33 +3011,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             src_tangents=src_t_img,
             **self._obs_window_kwargs(geom, obs_rows),
         )
-        # `_image_refl_band` already built cos_th/px/py/tm_p/tn_p at this
-        # band's size — no row-slice needed here (contrast the pre-#332
-        # unit B build, which sliced them out of a whole-geometry cache).
-        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
-
-        # ρ̂·p̂ from the image-build rho_vec (p̂ is horizontal, so only the
-        # x/y components contribute). Same radius-regularized rho_eval
-        # denominator as the E_ρ projection rule, so the two E_ρ pickups
-        # stay mutually consistent; near-vertical rays have rho_vec → 0,
-        # which kills this term along with the p̂ ambiguity.
-        rho_p = (cm["rho_vec"][..., 0] * px + cm["rho_vec"][..., 1] * py) / cm[
-            "rho_eval"
-        ]
-
-        td = cm["td"]
-        rho_proj_factor = cm["rho_proj_factor"]
-        rvh = rho_v + rho_h  # → 0 in the PEC limit
-
-        def _project_weighted(Ez, Erho):
-            tm_E = td * Ez + rho_proj_factor * Erho  # t_m · E
-            E_p = tn_p * Ez + rho_p * Erho  # E · p̂
-            return rho_v * tm_E - rvh * tm_p * E_p
-
-        Phi_const = _project_weighted(cm["Ez_const"], cm["Erho_const"])
-        Phi_sin = _project_weighted(cm["Ez_sin"], cm["Erho_sin"])
-        Phi_cos = _project_weighted(cm["Ez_cos"], cm["Erho_cos"])
-        return Phi_const, Phi_sin, Phi_cos
+        # `_image_refl_band` already built the specular tables at this
+        # band's size — no row-slice, and no index arrays, because the
+        # weights are ALREADY at the pairing `cm` is in (contrast the pre-
+        # #332 unit B build, which sliced them out of a whole-geometry
+        # cache, and the Galerkin consumer, which names its pairing).
+        return tabs.weights(eps_t).project(cm)
 
     def _field_tensor_sommerfeld_remainder(
         self,
