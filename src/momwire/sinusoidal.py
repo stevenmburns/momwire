@@ -3641,7 +3641,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     def _sommerfeld_ground(self):
         """True when the fill carries NEC's exact-image + interpolated
-        remainder decomposition rather than a PEC or Fresnel image."""
+        remainder decomposition rather than a PEC or Fresnel image.
+
+        Since momwire#397 unit 2 this predicate has exactly two readers:
+        `_field_ground.field_ground_for`, which turns it into
+        `mode="compose"` once per fill, and `_fill_row_bytes`, which is
+        residency arithmetic rather than physics and counts blocks with it.
+        The fill itself branches on the ground object and reads no strings.
+        """
         return (
             self.ground_z is not None
             and self.ground_eps is not None
