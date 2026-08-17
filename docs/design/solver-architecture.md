@@ -29,9 +29,34 @@ object unchanged, and — uniquely among candidate pilots — it has an
 **external oracle**, since the reference engine it twins solves the same
 grounds.
 
-The forcing function is momwire#388. That inventory is a list of new cells to
-fill; the matrix cost is about to be paid several times over. The architecture
-question is worth answering *before* those land, not after.
+### 0.1 Decision record (2026-08-17)
+
+The goal metric, stated by the maintainer, is **time-to-prototype**: the
+matrix will expand, but how and when is unknown, and right now a new idea
+costs *days* of work. The architecture succeeds when a throwaway idea is back
+to costing *hours*. That reframes the scoring — composition is not an
+aesthetic property, it is what makes an experiment cheap enough to discard.
+
+Accepted acceptance criteria, in the maintainer's terms, mapped onto the
+staging:
+
+| # | criterion | maps to | note |
+|---|---|---|---|
+| 1 | **remove `SinusoidalGalerkinSolver`'s second complete implementation of the ground modes** | stage 1, field trunk | the *within-trunk* half of stage 1 — same formulation, so `FieldGround` serves both solvers with no representation question. The easiest of the three, and the first to attempt |
+| 2 | **complete `RazorSolver` to production level** | stage 1 (potential trunk) + pilot | grounds via `PotentialGround` (the pilot as proposed), then the rest of razor's refusal row — wire loading, per-wire radii, node gaps — each a test of whether a capability lands through the shared layers or around them |
+| 3 | **remove antennaknobs' separately curated knowledge of momwire capabilities** | stage 0 | the registry, plus an antennaknobs change consuming it — the definition of done is the deletion of `_GROUND_EPS_SOLVERS` / `_WIRE_LOADING_SOLVERS` and the prose in `_extended_kernel_refusal` |
+| 4 | *(stretch)* **a new ground model lands once and serves every solver** | stages 1+2 | the extension test rather than a dedup test; not required for the criteria above to count |
+
+What this decision *defers*: stages 2–4 as programmes of their own. The
+schedule layer (stage 2) is built only as far as criteria 1–2 force it;
+`zblock` everywhere (stage 4) and the kernel-algebra consolidation (stage 3)
+wait until the matrix actually expands. §9's first question is thereby
+answered: the slate is not committed, so the correct response is the
+front half of the staging, driven by the three criteria.
+
+momwire#388 remains relevant as the *shape* of future expansion — its
+plane-wave drive is still the cheapest fourth test if criterion 4 is wanted
+— but it is no longer the forcing function.
 
 ---
 
@@ -563,16 +588,20 @@ being touched for another reason.
 
 ## 9. Open questions for the decision
 
-1. **Is #388's slate actually going to be worked?** The entire urgency argument
-   rests on new cells arriving. If the answer is "one or two gaps, opportunistically",
-   stage 0 + stage 1 is the whole correct response and stages 2–4 should wait.
+*(1 and 3 were answered by the 2026-08-17 decision record, §0.1; kept here for
+the reasoning.)*
+
+1. **Is #388's slate actually going to be worked?** — *Answered: not committed;
+   expansion is expected but its shape and timing are unknown. Therefore
+   stages 0–1 driven by the three acceptance criteria, stages 2–4 deferred.*
 2. **Does `SinusoidalGalerkinSolver` get wire loading?** It is the one shipping
    hole a consumer works around today. It is small, and it is a clean test of
-   whether a capability can be added through the registry rather than around it.
-3. **Is `RazorSolver` meant to grow?** The pilot's value depends on razor being
-   a solver momwire intends to develop, not a demonstration twin. If it is the
-   latter, the pilot should be plane-wave drive instead (§6, second choice).
+   whether a capability can be added through the registry rather than around
+   it. Not covered by the three criteria; still open.
+3. **Is `RazorSolver` meant to grow?** — *Answered: yes — completing razor to
+   production level is acceptance criterion 2, so the pilot stands as
+   proposed.*
 4. **What is the tolerance policy for re-certified cells?** §3.1 establishes
    the per-trunk bar for *preserved* behaviour. For *new* cells (razor's
    ground) the bar has to be set against the external oracle, and that number
-   should be agreed before the pilot rather than after it.
+   should be agreed before the pilot rather than after it. Still open.
