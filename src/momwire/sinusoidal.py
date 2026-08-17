@@ -2839,7 +2839,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             geom["seg_centers"], geom["seg_tangents"], self.ground_z, obs_rows
         )
 
-    def _field_tensor_image_refl(self, geom, k, obs_rows=None):
+    def _field_tensor_image_refl(self, geom, k, obs_rows=None, ground=None):
         """Fresnel-weighted image field tensor for the `ground_eps` finite
         ground (NEC IPERF=0 reflection-coefficient approximation).
 
@@ -2874,22 +2874,36 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the same absolute row slice; a stale pairing between them is no
         longer reachable here. `i0` below re-expresses the mixed-radius
         runs (absolute geometry indices) in that same band-relative space.
+
+        `ground` is the `_field_ground.FieldGround` this band belongs to —
+        the fill passes its own, so the mirror map, the per-pair weights
+        and ε̃ all come from the one object (momwire#397 unit 2). Called
+        without one (the direct-evaluator tests, and any caller outside a
+        fill) it builds the solver's own, which is the same ground by
+        construction. What the object decides here is the BACKEND: the
+        fused C++ kernels compute ρ_v/ρ_h in-kernel, so they serve
+        `standard_fresnel` grounds only, and a coefficient-modified ground
+        (the radial-wire screen) falls to the numpy `project` path below
+        without this method being edited for it.
         """
-        src_c_img, src_t_img = self._image_source_centers_tangents(geom)
+        if ground is None:
+            ground = _field_ground.field_ground_for(self, geom, k, self.omega)
+        src_c_img, src_t_img = ground.image_sources()
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
         win = slice(None) if obs_rows is None else slice(*obs_rows)
         obs_c = seg_c[win]
         obs_t = seg_t[win]
-        tabs = self._image_refl_band(geom, obs_rows)
+        tabs = ground.pair_weights(obs_rows)
         # The five tables the fused kernels take positionally, unpacked so
         # their call sites read as they did before the shared builder.
         cos_th, px, py = tabs.cos_th, tabs.px, tabs.py
         tm_p, tn_p = tabs.tm_p, tabs.tn_p
         i0 = 0 if obs_rows is None else obs_rows[0]
         # ε̃(ω) — per-frequency (the swept loops update self.omega
-        # alongside k before assembling).
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        # alongside k before assembling), hoisted onto the ground object
+        # so a banded fill pays it once rather than once per band.
+        eps_t = ground.eps_tilde
 
         # `extended_kernel=True` has its own fused Fresnel kernel since
         # momwire#259 — EKSCX's E_z/E_ρ tables under the SAME dyad tail, which
@@ -2901,7 +2915,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Sommerfeld image blocks already ride #245's kernel through
         # `_field_tensor_image` (Sommerfeld's is that PEC tensor times the
         # scalar C₂; see `_assemble_Z`).
-        if _HAVE_FIELD_TENSOR_EK_REFL and self.extended_kernel:
+        if (
+            _HAVE_FIELD_TENSOR_EK_REFL
+            and self.extended_kernel
+            and ground.standard_fresnel
+        ):
             seg_h = geom["seg_h"]
             gx, gw = self._leggauss_cached(self.n_qp_const)
             # Source-indexed EK tables, exactly as `_field_tensor` passes
@@ -2959,7 +2977,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # EK-ON solve reaches this branch only when that accelerator is
         # unavailable — in which case it takes the numpy reference below, same
         # as an EK-OFF solve would.
-        if _HAVE_FIELD_TENSOR_REFL and not self.extended_kernel:
+        if (
+            _HAVE_FIELD_TENSOR_REFL
+            and not self.extended_kernel
+            and ground.standard_fresnel
+        ):
             # Fused C++ path: Eqs 76-79 field components + the Fresnel
             # dyad projection in one pass, with rho_v/rho_h computed
             # in-kernel per pair from eps_t and cos_th (same principal-
@@ -3713,28 +3735,24 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             M_B = scipy.sparse.csc_matrix((B_eff, (n_idx_arr, j_idx_arr)), shape=(N, N))
             M_C = scipy.sparse.csc_matrix((C_eff, (n_idx_arr, j_idx_arr)), shape=(N, N))
 
-        sommerfeld = self._sommerfeld_ground()
-        if sommerfeld:
-            # ε̃ is per-frequency (swept loops update self.omega alongside k),
-            # but not per-chunk — hoisted so the grid lookup and the C2
-            # constant are paid once per fill, as in the whole-tensor build.
-            eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-            c2 = (eps_t - 1.0) / (eps_t + 1.0)
-            # The grid-sizing endpoint scan is band-invariant too, and at
-            # ~46 bands x O(N^2) it was the dominant cost of the banded
-            # fill (momwire#367: +128% single-solve at 8.3k basis). Same
-            # value the evaluator would compute; hoisted, not changed.
-            r1_max = _sommerfeld.max_image_distance(
-                geom["seg_l"], geom["seg_r"], self.ground_z
-            )
-            # The remainder's whole SOURCE side — quadrature nodes, their
-            # tangents, the k-weighted shapes, the grid handle — is
-            # observer-independent, so the bands replay one prepared state
-            # instead of rebuilding it each (momwire#357 item 1). O(N), and
-            # it dies with this fill.
-            somm_prep = self._sommerfeld_remainder_prepare(
-                geom, k, eps_t, r1_max=r1_max
-            )
+        # The ground, as ONE object (momwire#397 unit 2): which per-pair
+        # weight, which image coefficient, which composition. `None` is
+        # free space, and the band branch below is then structurally
+        # absent rather than skipped. Nothing here reads `ground_z`,
+        # `ground_eps` or `ground_model` anymore — the strings are the
+        # factory's, and what this fill branches on is `mode`.
+        #
+        # Everything per-fill and observer-independent is paid at
+        # construction or on the `remainder()` call: ε̃ and C2 (per
+        # frequency, not per chunk — swept loops update self.omega
+        # alongside k), the grid-sizing endpoint scan (band-invariant, and
+        # at ~46 bands x O(N^2) the dominant cost of the banded fill before
+        # momwire#367), and the remainder's whole SOURCE side — quadrature
+        # nodes, their tangents, the k-weighted shapes, the grid handle —
+        # which the bands replay instead of rebuilding (momwire#357 item
+        # 1). O(N), and it dies with `fg` at the end of this fill.
+        fg = _field_ground.field_ground_for(self, geom, k, self.omega)
+        somm_rem = None if fg is None else fg.remainder()
 
         # Below the dense-M threshold the whole fill is one chunk, budget or
         # no budget. Two reasons, and the first alone would settle it:
@@ -3763,18 +3781,26 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             i1 = min(i0 + chunk, N)
             rows = (i0, i1)
             Phi_c, Phi_s, Phi_co = self._field_tensor(geom, k, obs_rows=rows)
-            if self.ground_z is not None:
+            if fg is not None:
                 # Image ground: subtract the sub-assembly built from the
                 # image field tensor. The image source's mirrored geometry +
                 # flipped z-tangent already encode both the anti-parallel
                 # horizontal image current and the parallel vertical image
                 # current; the combined image-current + image-charge sign
                 # flip reduces to a single minus sign on the image-Z block
-                # (same as BSpline). With `ground_eps` set, the image field
-                # is additionally Fresnel-dyad weighted (NEC IPERF=0); the
-                # subtraction sign is unchanged because the weighted tensor
-                # reduces to the PEC one in the ε̃ → ∞ limit.
-                if sommerfeld:
+                # (same as BSpline). Which per-pair weight rides on that
+                # image — none for PEC, the Fresnel dyad under `ground_eps`
+                # (NEC IPERF=0) — is `fg.image_field`'s decision, not this
+                # loop's; the subtraction sign is unchanged either way
+                # because the weighted tensor reduces to the PEC one in the
+                # ε̃ → ∞ limit.
+                if fg.mode == "compose":
+                    # `coef·img − remainder` has to be associated BEFORE the
+                    # single minus below, because `free − (c2·img − S)` is
+                    # not `(free − c2·img) + S` in float64. That is the
+                    # whole of what "compose" declares, and it is the ONE
+                    # ground fact this schedule needs (sommerfeld today).
+                    #
                     # NEC's decomposition (theory manual eqs 136-147):
                     # exact image scaled by the constant C2, which absorbs
                     # all the singular behavior — a plain scalar on the
@@ -3784,15 +3810,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     # the sign pinning). eps->inf: C2 -> 1, S -> 0, PEC
                     # image exactly; eps -> 1: both vanish, free space.
                     #
-                    # The remainder evaluator's replay half already takes
-                    # observer centres/tangents, so the band is a plain
-                    # argument there; it is the only block that has to be
-                    # told which rows it is on rather than shown them. Its
-                    # observer-independent half is `somm_prep`, built once
-                    # above (#357 item 1).
-                    Phi_i = list(self._field_tensor_image(geom, k, obs_rows=rows))
-                    S = self._replay_sommerfeld_remainder(
-                        somm_prep,
+                    # The remainder's replay half already takes observer
+                    # centres/tangents, so the band is a plain argument
+                    # there; it is the only block that has to be told which
+                    # rows it is on rather than shown them. Its
+                    # observer-independent half was prepared once above
+                    # (#357 item 1).
+                    Phi_i = list(fg.image_field(obs_rows=rows))
+                    S = somm_rem.replay(
                         obs_centers=seg_c[i0:i1],
                         obs_tangents=seg_t[i0:i1],
                     )
@@ -3803,15 +3828,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     # (measured: 1e-17 relative on the assembled Z, i.e. one
                     # ULP, on every Sommerfeld config). `Pi *= c2` is the
                     # swapped order; `np.multiply(c2, Pi, out=Pi)` is the
-                    # whole-matrix build's order, in place.
+                    # whole-matrix build's order, in place — and it is the
+                    # coefficient's own interface contract, which is why the
+                    # left operand is read off the object here.
+                    c2 = fg.image_coefficient
                     for Pi, Si in zip(Phi_i, S):
                         np.multiply(c2, Pi, out=Pi)
                         Pi -= Si
                     del S
-                elif self.ground_eps is not None:
-                    Phi_i = self._field_tensor_image_refl(geom, k, obs_rows=rows)
                 else:
-                    Phi_i = self._field_tensor_image(geom, k, obs_rows=rows)
+                    Phi_i = fg.image_field(obs_rows=rows)
                 Phi_c -= Phi_i[0]
                 Phi_s -= Phi_i[1]
                 Phi_co -= Phi_i[2]
