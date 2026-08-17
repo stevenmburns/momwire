@@ -573,6 +573,7 @@ def test_max_image_distance_degenerate_clouds(n_seg):
     assert got == want
 
 
+@pytest.mark.memgate
 def test_max_image_distance_no_n_squared_transient():
     """Tracemalloc gate: the helper's peak transient must stay a few MB
     regardless of endpoint count, never scaling with the retired

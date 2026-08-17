@@ -1783,6 +1783,7 @@ def _readonly(a):
 _GC5_BAR = 0.6
 
 
+@pytest.mark.memgate
 @pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
 @pytest.mark.parametrize("n", [300, 400])
 def test_gc5_the_grounded_accelerated_fold_holds_no_triple(monkeypatch, n):
@@ -1873,6 +1874,7 @@ def test_gc5_the_grounded_accelerated_fold_holds_no_triple(monkeypatch, n):
 _GC6_BAR = 0.03
 
 
+@pytest.mark.memgate
 @pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")
 @pytest.mark.parametrize("n", [300, 400])
 def test_gc6_the_fused_ek_fill_holds_nothing_of_matrix_shape(monkeypatch, n):
@@ -3146,6 +3148,7 @@ _GD8_BAR = {
 }
 
 
+@pytest.mark.memgate
 @pytest.mark.parametrize("deck", list(_GD8_DECKS))
 @pytest.mark.parametrize("ground", list(_GD8_GROUNDS))
 def test_gd8b_the_bracket_correction_holds_no_triple(monkeypatch, deck, ground):
@@ -3205,6 +3208,7 @@ def test_gd8b_the_bracket_correction_holds_no_triple(monkeypatch, deck, ground):
     )
 
 
+@pytest.mark.memgate
 def test_gd8c_the_free_space_ek_assembly_holds_one_fill_not_two(monkeypatch):
     """The whole `_assemble_Z` peak, which is what momwire#355 was opened on.
 
@@ -3443,6 +3447,7 @@ def test_gd9c_the_budgeted_block_stays_under_numpys_threshold(
 _GD9_BAR = 1.4
 
 
+@pytest.mark.memgate
 @pytest.mark.parametrize("ek", [True, False])
 @pytest.mark.parametrize("ground", list(_GD8_GROUNDS))
 def test_gd9b_the_near_correction_holds_one_budget(ek, ground):
@@ -3498,6 +3503,7 @@ def test_gd9b_the_near_correction_holds_one_budget(ek, ground):
     )
 
 
+@pytest.mark.memgate
 def test_gd9b_has_teeth():
     """G-D9b's companion: widen the budget and the same measurement blows
     through the bar, so what it is watching is live.

@@ -545,6 +545,7 @@ def test_near_pairs_chunked_matches_unchunked_reference_image_block():
     assert np.array_equal(nn, want_n)
 
 
+@pytest.mark.memgate
 def test_near_pairs_prefilter_holds_no_n_squared_transient():
     """Tracemalloc gate: the prefilter's peak transient must stay a few MB
     on a ~2,000-segment geometry, not the ~25 bytes/element `(N, N)` stack
@@ -2630,6 +2631,7 @@ def _residency_deck(n, **ground_kwargs):
     )
 
 
+@pytest.mark.memgate
 @pytest.mark.parametrize(
     "ground_kwargs",
     [
@@ -2817,6 +2819,7 @@ def test_streamed_remainder_is_bit_equal_at_every_chunk(
     )
 
 
+@pytest.mark.memgate
 def test_sommerfeld_fill_streams_the_remainder(monkeypatch):
     """Tracemalloc gate on the real `_assemble_Z` path, Sommerfeld ground
     (issue #332 unit D) — the sibling of
