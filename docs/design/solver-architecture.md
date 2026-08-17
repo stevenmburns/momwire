@@ -621,6 +621,74 @@ cost the metric exists to escape); its role now is as a **design constraint**:
 `FieldGround` / `PotentialGround` are designed against five grounds, not
 four, so the interface cannot overfit to the existing set.
 
+### 6.2 Pilot status (2026-08-17)
+
+**Unit 1** landed `PotentialGround` and the B-spline dense fill's
+consumption of it. **Unit 2 landed the pilot's actual claim**:
+`RazorSolver` — which implemented zero ground methods — now serves the PEC
+image, consuming the object and writing no reflection of its own. What it
+took, in full: mirrored sources into `_seg_moments_prepare`, the image sign
+on razor's own `(3, n_basis)` tangent table, and one `Z_free − Z_image` at
+the seam. Roughly 60 lines of fill, no new physics, no new kernel.
+
+The one thing that had to change in the shared layer is the interesting
+result. `ImageGeometry` had been shaped entirely by its first consumer
+(mirrored segment endpoints plus a fused N² tangent-dot table, because that
+is what the B-spline moment builder eats). Razor quadratures in each
+segment's own arc frame and must never materialise anything N², so it needs
+a mirrored (origin, tangent) pair and an O(N) tangent table from the *same*
+mirror. Neither is the mirror, so the class now exposes the two operations
+— `mirror_positions` / `mirror_tangents` — with both consumers' shapes as
+lazy conveniences over them. **A second consumer forced exactly one
+generalisation, one layer deep, and no new concept.** That is the shape of
+evidence the goal metric wants.
+
+Gates, as met:
+
+| gate (§6) | result |
+|---|---|
+| (a) PEC reproduces the analytic image | **exact**, not approximate: on razor's own discretization a dipole over PEC and the explicit mirrored twin driven −1 V are the same linear algebra (`[[A,B],[B,A]]` against `[+e, −e]` reduces to `(A−B)c = e`, and `A−B` *is* the grounded matrix). Measured agreement 6.6e−14 relative |
+| (b) free space bit-for-bit | **held**, on 6 deck shapes × 2 quadrature lanes × 3 entry points (`_assemble_Z`, `compute_impedance_swept`, `compute_y_matrix`). The ground layer is structurally absent when off — `prepared["image"] is None`, no mirrored cache built and then multiplied by zero |
+| (c) agreement with the reference engine | **held with ≥ 2.7× margin** on the maintainer's sharp-lane bar (below) |
+| (d) B-spline grounded results bit-unchanged | **held** across PEC / refl-coef / Sommerfeld / grounded-junction / EK, and on hmatrix and array_block |
+
+The **sharp lane** is the maintainer's decision of 2026-08-17: razor with
+`nec5_quadrature=True` over PEC, four ladder geometries × rungs N ≥ 24,
+against the licensed binary's printed `GN 1` impedances —
+|ΔZ| ≤ max(0.20 Ω, 0.25 %·|Z|) per rung, and the offset constant down each
+ladder to 0.05 Ω. Worst measured: 0.078 Ω against a 0.211 Ω bar (fat
+dipole, N = 96); worst constancy spread 0.0398 Ω of 0.05 (same deck, in X).
+Every other geometry sits at 0.036–0.076 Ω. See
+`tests/test_razor_pec_ground.py` and `scripts/capture_razor_pec_nec5_lane.py`.
+
+**Deferred, deliberately, and not attempted here:** the production
+(Gauss-Legendre) lane's bar against NEC-5, every finite ground on razor
+(`ground_eps` / `ground_model` / `ground_phi_mode` stay refused), and
+ground CONTACT — a wire end in the plane needs the image to continue its
+current, which is a change to the tent basis rather than to the fill, so
+razor refuses it and points at `BSplineSolver`'s momwire#151 fold. The
+recorded GL deltas live in `tests/golden_razor_pec_nec5.py` so the deferred
+bar has a starting point on file: ΔR stays inside 0.01–0.14 Ω on the three
+open geometries but runs 0.39–0.93 Ω on the loop, and ΔX runs 0.12–1.37 Ω
+(dipoles), 0.55–1.31 Ω (inverted-V) and 1.7–4.4 Ω (loop). The production
+lane is therefore a *different* claim, not a slacker version of this one —
+exactly what the twin's free-space story predicts, since converged
+Gauss-Legendre is deliberately *not* NEC-5's rule.
+
+**What unit 3 (finite grounds on razor) will hit first** is a schedule
+question this unit could dodge. Razor's `_assemble_Z_prepare` /
+`_assemble_Z_from_prepared` split is a k-independent / k-dependent split,
+and the PEC mirror is entirely k-independent — so the image cache lives in
+the prepare half and replays across a sweep for free. A
+reflection-coefficient ground's `(w_A, w_Φ)` are ω-dependent: they cannot
+live there, and the pairing-agnostic weight question unit 1 raised gets its
+sharpest form here. Razor never forms an (N, N) pair table at all — its
+weights would have to be applied per (row-chunk × source-segment) window
+inside the k-dependent half, which is the `weight_windows` producer shape
+and *not* the `weight_tables` one. That is evidence for the windows being
+the trunk's primary weight surface and the whole-geometry tables being the
+convenience, which is the reverse of how unit 1 ordered them.
+
 ---
 
 ## 7. What this subsumes, and what it does not
