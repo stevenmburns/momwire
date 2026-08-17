@@ -328,6 +328,26 @@ from .sinusoidal import (
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
 )
+
+# Reused by `_refuse_junction_port_solve` (the raises) and
+# `capabilities.refusals` below — one message per combination, not a copy
+# in each.
+_JUNCTION_PORTS_FINITE_GROUND_REFUSAL = (
+    "junction_ports over a FINITE ground are not implemented on "
+    "SinusoidalGalerkinSolver: M5b's node-charge correction removes the "
+    "node's own lumped charge, and #191 removes its PEC image too, but the "
+    "reflection-coefficient and Sommerfeld images of a point charge are not "
+    "point charges, so part of the M5 blocker "
+    "(Z_pp ~ 1/(jw*4*pi*eps*a)) would survive. Use BSplineSolver, a PEC "
+    "ground (ground_z alone), or free space"
+)
+_JUNCTION_PORTS_MIXED_RADII_REFUSAL = (
+    "junction_ports with mixed per-wire radii are not implemented on "
+    "SinusoidalGalerkinSolver: the kernel is not reciprocal under mixed "
+    "radii at all (momwire#182 M2) and the node-charge correction's "
+    "regularization radius is ambiguous at a node whose members disagree "
+    "about `a`. Use one radius, or BSplineSolver"
+)
 # The EXTENDED-kernel twin of that fused far fill (momwire#246 unit C). On a
 # build without it — a pure-Python install, or one whose extension predates
 # #246 — this is False and `_tested_contribs` routes an EK-on fill through the
@@ -799,6 +819,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     Galerkin overlap term of `_apply_loading`, closed-form on the shapes.
     """
 
+    # momwire#396: differs from `SinusoidalSolver.capabilities` in exactly
+    # the two axes this class's docstring describes — junction_ports and
+    # node_gaps are served here (M5b / #305) — plus the two combination
+    # refusals `_refuse_junction_port_solve` still carries. Wire loading
+    # rides the base class's overlap term (#395) unchanged.
+    capabilities = SinusoidalSolver.capabilities._replace(
+        junction_ports=True,
+        node_gaps=True,
+        refusals={
+            "junction_ports+finite_ground": _JUNCTION_PORTS_FINITE_GROUND_REFUSAL,
+            "junction_ports+mixed_radii": _JUNCTION_PORTS_MIXED_RADII_REFUSAL,
+        },
+    )
+
     def __init__(
         self,
         *,
@@ -996,24 +1030,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         if not self.junction_ports:
             return
         if self.ground_z is not None and self.ground_eps is not None:
-            raise NotImplementedError(
-                "junction_ports over a FINITE ground are not implemented on "
-                "SinusoidalGalerkinSolver: M5b's node-charge correction "
-                "removes the node's own lumped charge, and #191 removes its "
-                "PEC image too, but the reflection-coefficient and Sommerfeld "
-                "images of a point charge are not point charges, so part of "
-                "the M5 blocker (Z_pp ~ 1/(jw*4*pi*eps*a)) would survive. Use "
-                "BSplineSolver, a PEC ground (ground_z alone), or free space"
-            )
+            raise NotImplementedError(_JUNCTION_PORTS_FINITE_GROUND_REFUSAL)
         if self._uniform_radius is None:
-            raise NotImplementedError(
-                "junction_ports with mixed per-wire radii are not implemented "
-                "on SinusoidalGalerkinSolver: the kernel is not reciprocal "
-                "under mixed radii at all (momwire#182 M2) and the node-charge "
-                "correction's regularization radius is ambiguous at a node "
-                "whose members disagree about `a`. Use one radius, or "
-                "BSplineSolver"
-            )
+            raise NotImplementedError(_JUNCTION_PORTS_MIXED_RADII_REFUSAL)
 
     def _node_cut_vectors(self, geom, seg_view, k):
         """(n_basis, P_node) — per node port, each basis's current THROUGH the
