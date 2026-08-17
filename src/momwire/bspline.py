@@ -73,6 +73,7 @@ from ._quadrature import leggauss
 
 from . import _bspline_kernels
 from . import _ground_refl
+from . import _potential_ground
 from . import _sommerfeld
 from . import _wire_loading
 from ._accel import acc as _acc
@@ -1445,17 +1446,28 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """t_m · t_image_n with t_image_n = (t_n_x, t_n_y, -t_n_z)."""
         return tangents @ (tangents * np.array([1.0, 1.0, -1.0])).T
 
-    def _build_J_image_blocks(self, geom, k):
+    def _build_J_image_blocks(self, geom, k, ground=None):
         """Build the J moment tensor with j-segments mirrored across the
-        PEC ground plane. The image is always far enough from the original
+        ground plane. The image is always far enough from the original
         that the analytic same-edge static + reg split doesn't apply — full
         off-edge quadrature handles every (i, j) pair uniformly.
+
+        The mirrored source geometry comes from the ground object's
+        `image_geometry()` (momwire#398 unit 1) — the mirror map is the
+        ground's, and this is the same reading `_image_positions` gave when
+        it was spelled here. `ground` is the caller's already-built
+        `PotentialGround` when it has one; callers that don't (tests, the
+        perf scripts) get one built here, which for every ground momwire
+        ships is a handful of scalar operations.
         """
         d = self.degree
         seg_l = geom["seg_l"]
         seg_r = geom["seg_r"]
-        seg_l_img = self._image_positions(seg_l)
-        seg_r_img = self._image_positions(seg_r)
+        if ground is None:
+            ground = _potential_ground.potential_ground_for(self, geom, k, self.omega)
+        img = ground.image_geometry()
+        seg_l_img = img.seg_l
+        seg_r_img = img.seg_r
         # Observers (rows) are the real segments — the per-observer radius
         # convention applies to the image block unchanged. Under EK the
         # source side is the MIRRORED geometry, so eligibility is scored
@@ -1569,69 +1581,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         tensor path builds and slice them per chunk, which put 2× the dense
         Z on the peak of every grounded solve for weights only ever read one
         row-band at a time (issue #323). Each mode's algebra is row-local, so
-        the window is produced directly and nothing N² is ever allocated:
+        the window is produced directly and nothing N² is ever allocated.
 
-          PEC        — the mirror tangent dot t_m·(M·t_n) on A, unit charge;
-          sommerfeld — the same dot scaled by the exact-image constant
-                       C2 = (ε̃−1)/(ε̃+1), with a constant C2 charge weight
-                       (the smooth remainder is a separate, already-chunked
-                       term);
-          refl-coef  — the rectangular form of the Fresnel producers
-                       (`specular_pair_tables` already takes an observer×
-                       source block), so the k-independent N² specular cache
-                       `_image_refl_prep` is bypassed entirely here. It stays
-                       for the tensor and enrichment paths, which do want the
-                       whole table.
-
-        ε̃ (and with it C2) is frequency- but not row-dependent, so it is
-        computed once when the closure is built.
+        Since momwire#398 unit 1 the three per-mode producers, and the
+        choice between them, are `PotentialGround.weight_windows` — the
+        `(w_A, w_Φ)` weight row the architecture doc §2.2 assigns to this
+        trunk's ground object. This stays as the solver-side spelling the
+        fill and the existing gates name.
         """
-        tangents = geom["tangents"]
-        mirror = np.array([1.0, 1.0, -1.0])
-
-        if self.ground_eps is None:
-
-            def pec_weights(i0, i1):
-                # float64 gemm → C-contiguous; astype gives the complex128
-                # the assembler wants without a wrapper copy on top.
-                w_A = (tangents[i0:i1] @ (tangents * mirror).T).astype(np.complex128)
-                return w_A, np.ones_like(w_A)
-
-            return pec_weights
-
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-
-        if self.ground_model == "sommerfeld":
-            c2 = (eps_t - 1.0) / (eps_t + 1.0)
-
-            def sommerfeld_weights(i0, i1):
-                # complex scalar × float64 array → complex128 C-contiguous.
-                w_A = c2 * (tangents[i0:i1] @ (tangents * mirror).T)
-                return w_A, np.full(w_A.shape, c2)
-
-            return sommerfeld_weights
-
-        seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
-        phi_mode = self.ground_phi_mode
-
-        def refl_weights(i0, i1):
-            cos_th, td_img, P = _ground_refl.specular_pair_tables(
-                seg_c[i0:i1],
-                tangents[i0:i1],
-                self.ground_z,
-                src_centers=seg_c,
-                src_tangents=tangents,
-            )
-            rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
-            w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
-            w_Phi = _ground_refl.phi_term_weights(phi_mode, eps_t, rho_v)
-            if np.ndim(w_Phi) == 0:
-                # "image"/"normal" are pair-independent; "rho_v"/"blend"
-                # already come back as per-pair windows.
-                w_Phi = np.full(w_A.shape, complex(w_Phi))
-            return w_A, w_Phi
-
-        return refl_weights
+        return _potential_ground.potential_ground_for(
+            self, geom, self.k, self.omega
+        ).weight_windows()
 
     def _image_weight_enrich_blocks(self, geom, seg_e_arr, eps_t=None):
         """Rectangular ground-image weight tables for the enrichment
@@ -1785,29 +1745,50 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z_Phi = Z_Phi / (1j * self.omega * self.eps)
         return Z_A + Z_Phi
 
-    def _ground_finite_Z(self, J_img, supp_seg, polys, geom):
-        """Finite-ground matrix to SUBTRACT from the free-space Z (the
-        seams' `Z - ...` convention, shared with the PEC image).
+    def _ground_finite_Z(self, J_img, supp_seg, polys, geom, ground=None):
+        """Ground-image matrix to SUBTRACT from the free-space Z (the
+        seams' `Z - ...` convention), from the moment-tensor route's
+        already-built image blocks `J_img`. Serves all three grounds.
 
-        refl-coef: the Fresnel-weighted image (`_image_Z_refl`).
+        Since momwire#398 unit 1 this reads ONE `PotentialGround` where it
+        used to branch on `ground_model` and rebuild ε̃ and C2 by hand:
 
-        sommerfeld: NEC's decomposition (theory manual eqs 136-147) — the
-        exact image scaled by the constant C2 = (eps-1)/(eps+1), which
-        absorbs all the singular behavior and reuses the weighted-image
-        kernel with constant tables, plus the smooth Sommerfeld remainder
-        block. In the eps->inf limit C2 -> 1 and the remainder vanishes,
-        reproducing the PEC image exactly; at eps -> 1 both terms vanish,
-        reproducing free space. Both limits are unit-tested.
+        * `weight_tables() is None` — PEC. Assemble unweighted, with the
+          image tangent-dot table (a different kernel, not a special case
+          of the weighted one; see `PotentialGround.weight_tables`).
+        * `mode == "fold"` with tables — refl-coef. The Fresnel-weighted
+          image, the same pair `_image_Z_refl` builds.
+        * `mode == "compose"` — sommerfeld. NEC's decomposition (theory
+          manual eqs 136-147): the exact image scaled by the constant
+          C2 = (eps-1)/(eps+1), which absorbs all the singular behavior
+          and reuses the weighted-image kernel with constant tables, plus
+          the smooth Sommerfeld remainder block. The association is the
+          mode's whole point — `C2·img + Q` is summed HERE, before the
+          caller's single minus. In the eps->inf limit C2 -> 1 and the
+          remainder vanishes, reproducing the PEC image exactly; at
+          eps -> 1 both terms vanish, reproducing free space. Both limits
+          are unit-tested.
+
+        `ground` is the caller's already-built object when it has one.
         """
-        if self.ground_model != "sommerfeld":
-            return self._image_Z_refl(J_img, supp_seg, polys, geom)
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-        c2 = (eps_t - 1.0) / (eps_t + 1.0)
-        td_img = self._image_tangent_dot(geom["tangents"])
-        w_A = c2 * td_img.astype(np.complex128)
-        w_Phi = np.full_like(w_A, c2)
-        M = self._image_Z_weighted(J_img, supp_seg, polys, w_A, w_Phi)
-        return M + self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+        if ground is None:
+            ground = _potential_ground.potential_ground_for(
+                self, geom, self.k, self.omega
+            )
+        weights = ground.weight_tables()
+        if weights is None:
+            return self._assemble_Z(
+                J_img,
+                supp_seg,
+                polys,
+                geom,
+                td_all=ground.image_geometry().tangent_dot(),
+            )
+        M = self._image_Z_weighted(J_img, supp_seg, polys, *weights)
+        remainder = ground.remainder()
+        if remainder is None:
+            return M
+        return M + remainder.evaluate(supp_seg, polys)
 
     def _somm_grid(self, eps_t, r1_max):
         return _sommerfeld.get_grid(
@@ -3643,7 +3624,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         else:
             Z_pe, Z_ep, Z_ee = self._assemble_Z_enrich_numpy(*kernel_args)
 
-        if self.ground_z is not None:
+        ground = _potential_ground.potential_ground_for(self, geom, self.k, self.omega)
+        if ground is not None:
             # Ground image reaction for the enrichment DOFs (#167). Same
             # global-minus + per-segment-pair weight convention as the
             # polynomial image block. Three grounds, one image kernel with the
@@ -3659,15 +3641,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # index (N, n_enrich), (n_enrich, N) and (n_enrich, n_enrich)
             # sub-blocks of them — the last N²-scale allocation left on a
             # grounded enrichment solve (issue #328).
-            # `_image_weight_enrich_blocks` produces exactly those sub-blocks.
-            sommerfeld = (
-                self.ground_eps is not None and self.ground_model == "sommerfeld"
-            )
-            eps_t = (
-                _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-                if self.ground_eps is not None
-                else None
-            )
+            # `_image_weight_enrich_blocks` produces exactly those sub-blocks;
+            # momwire#398 unit 1 moved the two hoists it needs — "is this the
+            # composing ground" and ε̃ — onto the ground object, but left its
+            # per-mode algebra (a THIRD weight shape: row / col / ee
+            # rectangular sub-blocks) where it is.
+            sommerfeld = ground.mode == "compose"
+            eps_t = ground.eps_tilde
             (
                 w_A_row,
                 w_Phi_row,
@@ -3766,52 +3746,47 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             Z = self._assemble_Z(J, supp_seg, polys, geom)
             del J
 
-        if self.ground_z is not None:
+        ground = _potential_ground.potential_ground_for(self, geom, self.k, self.omega)
+        if ground is not None:
             self._checkpoint()  # between fills: before the image J-block fill
-            # PEC image method: subtract the same-shape assembly built from
-            # J integrals over image segments + (tx, ty, -tz)-modified
-            # tangent dot products. The minus sign captures both the
+            # Image method: subtract the same-shape assembly built from
+            # J integrals over image segments + the ground's own weights on
+            # the A and Φ terms (PEC: the (tx, ty, -tz)-modified tangent dot
+            # products, unweighted charge). The minus sign captures both the
             # image current's horizontal anti-parallel direction and the
-            # image charge's sign flip (one minus combined).
+            # image charge's sign flip (one minus combined) — which is why
+            # a `"fold"` ground may take it entry by entry and a
+            # `"compose"` one may not (momwire#398 unit 1).
             if (
                 _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL
                 and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
             ):
                 # Chunked image subtraction — no (d+1, d+1, N, N) image
                 # tensor, no intermediate n_basis² matrix (issue #136), and
-                # no (N, N) weight table either: `_image_weight_window_fn`
-                # picks the mode and produces each observer chunk's window
-                # on demand (issue #323). The Sommerfeld remainder Q is a
-                # separate, already observer-chunked term.
+                # no (N, N) weight table either: `weight_windows` produces
+                # each observer chunk's window on demand (issue #323).
+                # `"compose"`'s remainder Q is a separate, already
+                # observer-chunked term, and the composition survives being
+                # split across the two calls only because the accumulator's
+                # `scale = -1` and this `Z -=` are the SAME single minus.
                 self._accumulate_Z_image_chunked(
                     Z,
                     geom,
                     self.k,
                     supp_seg,
                     polys,
-                    self._image_weight_window_fn(geom),
+                    ground.weight_windows(),
                 )
-                if self.ground_eps is not None and self.ground_model == "sommerfeld":
-                    eps_t = _ground_refl.eps_tilde(
-                        self.ground_eps, self.omega, self.eps
-                    )
-                    Z -= self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)
+                remainder = ground.remainder()
+                if remainder is not None:
+                    Z -= remainder.evaluate(supp_seg, polys)
             else:
-                J_img = self._build_J_image_blocks(geom, self.k)
-                if self.ground_eps is not None:
-                    # Finite ground: Fresnel-weighted image (same J fill,
-                    # per-pair weight tables on both terms) instead of the
-                    # PEC dot.
-                    # In-place subtract (issue #334): `Z = Z - ...` held the
-                    # old Z, the new Z, and the finite-ground image block —
-                    # three n_basis² matrices at once. `Z -=` folds the
-                    # subtraction into Z's own buffer, holding two.
-                    Z -= self._ground_finite_Z(J_img, supp_seg, polys, geom)
-                else:
-                    td_img = self._image_tangent_dot(geom["tangents"])
-                    # Same in-place fold as the finite-ground branch above
-                    # (issue #334): two resident n_basis² matrices, not three.
-                    Z -= self._assemble_Z(J_img, supp_seg, polys, geom, td_all=td_img)
+                J_img = self._build_J_image_blocks(geom, self.k, ground=ground)
+                # In-place subtract (issue #334): `Z = Z - ...` held the
+                # old Z, the new Z, and the image block — three n_basis²
+                # matrices at once. `Z -=` folds the subtraction into Z's
+                # own buffer, holding two.
+                Z -= self._ground_finite_Z(J_img, supp_seg, polys, geom, ground=ground)
 
         # Distributed series wire loading (independent of ground: it's a
         # wire property, added once to the final Z).
