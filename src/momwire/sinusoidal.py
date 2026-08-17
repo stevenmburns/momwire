@@ -1592,9 +1592,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         z-derivatives (Eqs 90-96), and the reduced-kernel z-derivative that
         only the constant-current correction term uses.
         """
-        # Multi-step spelling throughout (momwire#205): a one-expression
-        # complex product with a dead operand changes rounding above numpy's
-        # temporary-elision threshold, making the fill depend on block size.
+        # Multi-step spelling throughout (momwire#205, momwire#392): a complex
+        # product whose RIGHT operand is a dead temporary is elided into an
+        # in-place multiply above numpy's 256 KB threshold, and the in-place
+        # loop rounds differently — which would make the fill depend on block
+        # size. Every such operand is bound to a name first.
         r2 = zz * zz + rh * rh
         r = np.sqrt(r2)
         kr = k * r
@@ -1613,10 +1615,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         gz = np.exp(-1j * kr) / r  # reduced kernel e^{-jkR}/R
         # Eq 89: the circumferentially averaged kernel, ρ-flavoured (G2) and
         # z-flavoured (G1, which carries the extra -T2·C1 term).
-        g2 = gz * (1.0 + t1 * c2)
+        f2 = 1.0 + t1 * c2
+        g2 = gz * f2
         g1 = g2 - t2 * c1 * gz
         gzr = gz / r2
-        g2p = gzr * (t1 * c3 - c1)
+        f2p = t1 * c3 - c1
+        g2p = gzr * f2p
         gzp_t = t2 * c2 * gzr
         g3 = g2p + gzp_t
         g1p = g3 * zz
@@ -1771,9 +1775,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         int_G0 = int_inv_r0 + np.einsum("...q,q->...", reg_qp, gw) * H
         bk = k * b
         bk2 = 0.25 * bk * bk
-        ez_const = -con * (
-            g1p_2 - g1p_1 + k * k * (1.0 - bk2) * int_G0 - bk2 * (gzz_2 - gzz_1)
-        )
+        d_gzz = gzz_2 - gzz_1  # named: `bk2 * (…)` would otherwise elide (#392)
+        ez_const = -con * (g1p_2 - g1p_1 + k * k * (1.0 - bk2) * int_G0 - bk2 * d_gzz)
         return {
             "Erho_const": erho_const,
             "Ez_const": ez_const,
@@ -2029,6 +2032,29 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         G0_2 = np.exp(-1j * k * r0_2) / r0_2
         G0_1 = np.exp(-1j * k * r0_1) / r0_1
 
+        # Evaluation-order discipline for every complex product below
+        # (momwire#392). numpy ELIDES a temporary that is the RIGHT operand of
+        # an array product into an in-place multiply once it passes 256 KB
+        # (`NPY_MIN_ELIDE_BYTES`), and for complex128 the in-place loop is not
+        # the one that runs out of place — the two round differently in the
+        # last bit. Measured: `named * (temp)` moves at 625 KB and does not at
+        # 16 KB, while `(temp) * named` and a complex-by-real divide move at
+        # neither. `G0_e * (bracket)` and `pref_rho * (difference)` are exactly
+        # the shape that moves, so each such right-hand operand is BOUND TO A
+        # NAME first — a named array carries a second reference and cannot be
+        # elided. Nothing is reassociated: same expression, same order, and
+        # the value is the one every batch shape UNDER the boundary already
+        # produced. Without it these tables are a function of the caller's
+        # block size (`_near_block`, `_fill_block`), which is a scheduling
+        # decision and not arithmetic. `_folded_cos_fields` and
+        # `_folded_ek_delta_fields` name their steps for the same reason.
+        #
+        # `pref_z` and `pref_rho_const` are python scalars, not arrays, so
+        # `pref_z * (…)` is a scalar-array product and takes the same loop
+        # either way — measured not to move at any shape, which is why those
+        # brackets are left as one expression. `pref_rho` IS an array (it
+        # carries 1/ρ_eval), and it is the one prefactor that had to be split.
+
         # Common scalar prefactors. λ = 2π/k → k²λ = 2πk → jη/(2k²λ) = jη/(4πk).
         # Eqs 76-79 carry a "-I_0/λ · jη/(2k²ρ)" (E_ρ) or "I_0/λ · jη/(2k²)"
         # (E_z) prefactor. For unit I_0 = 1, factor pulled out:
@@ -2084,43 +2110,45 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cos2 = np.cos(k * H)
         sin1 = np.sin(-k * H)  # at z'_1 = -H
         cos1 = np.cos(-k * H)
-        bracket_sin_2 = G0_2 * (
+        b_sin_2 = (
             k * dz2 * cos2
             + (1.0 - dz2 * dz2 * (1.0 + 1j * k * r0_2) / (r0_2 * r0_2)) * sin2
         )
-        bracket_sin_1 = G0_1 * (
+        bracket_sin_2 = G0_2 * b_sin_2
+        b_sin_1 = (
             k * dz1 * cos1
             + (1.0 - dz1 * dz1 * (1.0 + 1j * k * r0_1) / (r0_1 * r0_1)) * sin1
         )
-        Erho_sin = pref_rho * (bracket_sin_2 - bracket_sin_1)
+        bracket_sin_1 = G0_1 * b_sin_1
+        d_sin = bracket_sin_2 - bracket_sin_1
+        Erho_sin = pref_rho * d_sin
         # E_z^f = pref_z · G_0 · {k cos(kz') - (1+jkr_0)(z-z')/r_0² sin(kz')}_{z1}^{z2}
-        bracket_sin_z_2 = G0_2 * (
-            k * cos2 - (1.0 + 1j * k * r0_2) * dz2 / (r0_2 * r0_2) * sin2
-        )
-        bracket_sin_z_1 = G0_1 * (
-            k * cos1 - (1.0 + 1j * k * r0_1) * dz1 / (r0_1 * r0_1) * sin1
-        )
+        b_sin_z_2 = k * cos2 - (1.0 + 1j * k * r0_2) * dz2 / (r0_2 * r0_2) * sin2
+        bracket_sin_z_2 = G0_2 * b_sin_z_2
+        b_sin_z_1 = k * cos1 - (1.0 + 1j * k * r0_1) * dz1 / (r0_1 * r0_1) * sin1
+        bracket_sin_z_1 = G0_1 * b_sin_z_1
         Ez_sin = pref_z * (bracket_sin_z_2 - bracket_sin_z_1)
 
         if cos_shape == "cos":
             # ---- Cosine source (I = cos(k·z'_local)): same as Eqs 76, 77 with
             #      the "(cos kz'/-sin kz')" toggle picking the lower row, i.e.
             #      swap sin↔cos and negate the (sin-row → -sin) term.
-            bracket_cos_2 = G0_2 * (
+            b_cos_2 = (
                 -k * dz2 * sin2
                 + (1.0 - dz2 * dz2 * (1.0 + 1j * k * r0_2) / (r0_2 * r0_2)) * cos2
             )
-            bracket_cos_1 = G0_1 * (
+            bracket_cos_2 = G0_2 * b_cos_2
+            b_cos_1 = (
                 -k * dz1 * sin1
                 + (1.0 - dz1 * dz1 * (1.0 + 1j * k * r0_1) / (r0_1 * r0_1)) * cos1
             )
-            Erho_cos = pref_rho * (bracket_cos_2 - bracket_cos_1)
-            bracket_cos_z_2 = G0_2 * (
-                -k * sin2 - (1.0 + 1j * k * r0_2) * dz2 / (r0_2 * r0_2) * cos2
-            )
-            bracket_cos_z_1 = G0_1 * (
-                -k * sin1 - (1.0 + 1j * k * r0_1) * dz1 / (r0_1 * r0_1) * cos1
-            )
+            bracket_cos_1 = G0_1 * b_cos_1
+            d_cos = bracket_cos_2 - bracket_cos_1
+            Erho_cos = pref_rho * d_cos
+            b_cos_z_2 = -k * sin2 - (1.0 + 1j * k * r0_2) * dz2 / (r0_2 * r0_2) * cos2
+            bracket_cos_z_2 = G0_2 * b_cos_z_2
+            b_cos_z_1 = -k * sin1 - (1.0 + 1j * k * r0_1) * dz1 / (r0_1 * r0_1) * cos1
+            bracket_cos_z_1 = G0_1 * b_cos_z_1
             Ez_cos = pref_z * (bracket_cos_z_2 - bracket_cos_z_1)
         else:
             Erho_cos, Ez_cos = self._folded_cos_fields(
@@ -2344,7 +2372,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # c₂ − c₁ = −ρ²X/(r₁r₂), from the same rationalized numerator as X.
         w_odd = 1j * sH * (-(rho * rho * X) / (r1 * r2)) * sph
         W = (G2 * r2) * (cph - 1j * sph) * (w_even + w_odd)
-        Erho = pref_rho * (-k * W + rho * rho * cm1 * (T2 - T1))
+        # `pref_rho` is an ARRAY (it carries 1/ρ), so the bracket is named
+        # before the product rather than left as a dead temporary on the
+        # right of it — the one place in this routine that had been left as
+        # one expression, and the shape `_field_components_bcast` fixed in
+        # momwire#392. Inert on every table measured there; named so it
+        # cannot become the exception the rule is written against.
+        e_rho_brk = -k * W + rho * rho * cm1 * (T2 - T1)
+        Erho = pref_rho * e_rho_brk
         return Erho, Ez
 
     def _ek_delta_rule(self, n_gl, n_panels):
