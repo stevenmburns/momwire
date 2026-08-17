@@ -162,23 +162,62 @@ def test_the_weight_windows_never_answer_none():
 
 
 def test_the_mirror_map_is_the_grounds():
-    """`image_geometry` is the mirror map: mirrored ENDPOINTS for the moment
-    builder plus the fused image-sign table `td_img`.
+    """`image_geometry` is the mirror map: two OPERATIONS, and the
+    B-spline-shaped conveniences built on top of them.
 
-    Two parts because this trunk splits the image in two where the field
-    trunk has one mirrored source set — and `tangent_dot()` is built only
-    when asked, so the moment builder (which wants endpoints alone) never
-    pays for the O(N²) table. This is the surface razor consumes in unit 2.
+    Unit 2 turned this class inside out. It used to be its first consumer's
+    shape — mirrored segment ENDPOINTS plus a fused N² image-sign table,
+    because that is what the B-spline moment builder eats — and razor,
+    which quadratures in each segment's own arc frame and must not
+    materialise anything N², needed a different shape from the same
+    mirror. So `mirror_positions` / `mirror_tangents` are the object now,
+    `seg_l` / `seg_r` / `tangent_dot()` are conveniences over them, and the
+    conveniences are LAZY: razor's `geom` dict does not even carry the keys
+    they read.
     """
     sim = _solver("pec")
     geom, pg = _ground_for(sim)
     img = pg.image_geometry()
+
+    # the operations, on arbitrary arrays neither consumer's geom holds
+    pts = np.array([[1.0, -2.0, 3.0], [0.0, 0.0, 0.0]])
+    assert np.array_equal(
+        img.mirror_positions(pts),
+        np.array([[1.0, -2.0, 2 * sim.ground_z - 3.0], [0.0, 0.0, 2 * sim.ground_z]]),
+    )
+    assert np.array_equal(img.mirror_tangents(pts), pts * np.array([1.0, 1.0, -1.0]))
+    # ...non-destructive, and an involution
+    assert np.array_equal(img.mirror_positions(img.mirror_positions(pts)), pts)
+    assert np.array_equal(pts[0], [1.0, -2.0, 3.0])
+
+    # the conveniences, still bit-equal to the solver methods hmatrix's
+    # un-migrated block paths keep calling — the anti-drift pin
     assert np.array_equal(img.seg_l, sim._image_positions(geom["seg_l"]))
     assert np.array_equal(img.seg_r, sim._image_positions(geom["seg_r"]))
     assert np.array_equal(img.tangent_dot(), sim._image_tangent_dot(geom["tangents"]))
     # The mirror is an involution about the plane, and only z moves.
     assert np.array_equal(img.seg_l[:, :2], geom["seg_l"][:, :2])
     assert np.allclose(img.seg_l[:, 2], 2 * sim.ground_z - geom["seg_l"][:, 2])
+
+
+def test_the_conveniences_are_lazy_and_the_operations_are_not():
+    """A `geom` without the B-spline keys still yields a working mirror.
+
+    This is exactly razor's situation (its geometry is `seg_p0` / `seg_t` /
+    `seg_h`, no `seg_l` / `seg_r` / `tangents`), and it is the property
+    that lets one ground object serve two differently-shaped fills. Reading
+    a convenience that the geometry cannot supply is a `KeyError` and not a
+    silent wrong answer.
+    """
+    from momwire._potential_ground import ImageGeometry
+
+    img = ImageGeometry(2.0, {"seg_p0": np.zeros((3, 3))})
+    assert np.array_equal(
+        img.mirror_positions(np.array([[0.0, 0.0, 5.0]])),
+        np.array([[0.0, 0.0, -1.0]]),
+    )
+    with pytest.raises(KeyError):
+        img.seg_l
 
 
 def test_the_dense_fill_follows_the_object_not_the_strings(monkeypatch):
