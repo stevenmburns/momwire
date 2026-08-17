@@ -45,6 +45,7 @@ import scipy.sparse
 from . import _ground_refl, _sommerfeld, _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
+from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
 from ._port_solution import PortSolution, _SweptPortSolutions
 
@@ -136,6 +137,25 @@ _N_QP_EK_DELTA = 16
 # far pairs, whose mapped interval is short and holds no spike at all, are
 # converged on one panel and take the default.
 _N_PANEL_EK_DELTA_NEAR = 8
+
+# Reused by `_reject_junction_ports` (the raise) and `capabilities.refusals`
+# below — one message, not a copy in each.
+_JUNCTION_PORTS_REFUSAL = (
+    "junction_ports are not supported on SinusoidalSolver: the "
+    "sinusoidal basis enforces KCL identically, so a node-current "
+    "port is outside its span (momwire#177; same limitation as "
+    "NEC-2). Use BSplineSolver, or do what NEC requires: mesh a "
+    "short bridge wire across the gap and gap-feed it"
+)
+
+# No node_gaps kwarg exists on this solver at all (unlike BSplineSolver /
+# SinusoidalGalerkinSolver) — passing one is a plain TypeError, not a
+# NotImplementedError, so there is no raise to reuse this from.
+_NODE_GAPS_REFUSAL = (
+    "node_gaps are not accepted by SinusoidalSolver: the point-matched "
+    "basis has no node-gap treatment (see SinusoidalGalerkinSolver or "
+    "BSplineSolver, which both do)"
+)
 
 
 def _sin_minus_arg(u):
@@ -237,6 +257,25 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
+
+    # momwire#396: every ground, wire loading and the extended kernel are
+    # served (this is NEC2's own basis); junction_ports and node_gaps are
+    # not (`_reject_junction_ports`; node_gaps has no kwarg here at all).
+    # Per-wire radii are served (momwire#147); singular enrichment doesn't
+    # exist on this family (no kwarg — same TypeError shape as node_gaps).
+    capabilities = Capabilities(
+        grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
+        wire_loading=True,
+        extended_kernel=True,
+        junction_ports=False,
+        node_gaps=False,
+        per_wire_radius=True,
+        singular_enrichment=False,
+        refusals={
+            "junction_ports": _JUNCTION_PORTS_REFUSAL,
+            "node_gaps": _NODE_GAPS_REFUSAL,
+        },
+    )
 
     def __init__(
         self,
@@ -567,13 +606,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (momwire#182 M5: the port basis's node charge is priced at the
         wire radius by this family's field kernel). See that class.
         """
-        raise NotImplementedError(
-            "junction_ports are not supported on SinusoidalSolver: the "
-            "sinusoidal basis enforces KCL identically, so a node-current "
-            "port is outside its span (momwire#177; same limitation as "
-            "NEC-2). Use BSplineSolver, or do what NEC requires: mesh a "
-            "short bridge wire across the gap and gap-feed it"
-        )
+        raise NotImplementedError(_JUNCTION_PORTS_REFUSAL)
 
     def _reject_point_feed_model(self):
         """Refuse `feed_model="point"` on the point-matched solver.
