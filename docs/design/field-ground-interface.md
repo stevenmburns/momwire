@@ -92,6 +92,41 @@ file**, which is criterion 1's acceptance test (§0.2). A future
 Sommerfeld-class ground (own remainder operator) lands as a fourth mode-
 "compose" row — new physics in the object, still zero solver edits.
 
+## Amendments from the build (units 1-2, binding on unit 3)
+
+The page above is the approved sketch; these are the three places the
+implemented object differs from it, each recorded here rather than
+discovered later.
+
+1. **The dyad has a third spelling, so the fused kernels need a key.**
+   `sinusoidal_field_tensor_refl` and its EK twin compute ρ_v/ρ_h
+   *in-kernel* from ε̃ and cos θ — the survey's two spellings were three.
+   The fused kernels therefore stay an optimization keyed to
+   standard-Fresnel grounds: `FieldGround.standard_fresnel` (True for all
+   four grounds momwire ships) gates the backend dispatch inside
+   `_field_tensor_image_refl`, and a coefficient-modified ground — the
+   radial-wire screen — sets it False and is served by the numpy
+   `PairWeights.project` path with zero solver edits. `pair_weights` is
+   therefore DATA (unit 1's `PairTables` / `PairWeights`) and not a
+   sealed operator.
+2. **`pair_weights` takes an observer window, not a pairing.** Unit 1
+   split the sketch's one method in two along the existing prep/weights
+   line: `FieldGround.pair_weights(obs_rows)` hands back the k-independent
+   `PairTables` for a window (`None` = the whole geometry), and
+   `PairTables.weights(ε̃).project(cm, m_idx, n_idx)` is the sketch's
+   pairing-agnostic projector. The point-matched fill asks per band and
+   caches nothing; a consumer that wants the whole-geometry table cached
+   per geometry — the Galerkin one — owns that as part of its schedule,
+   as `_image_refl_prep` does today.
+3. **`image_field` is on the object.** "Which image tensor does this
+   ground build" is the decision the band loop used to make from strings,
+   so it belongs with the other three; it delegates to the solver's own
+   `_field_tensor_image` / `_field_tensor_image_refl`, which keep the
+   band, the mixed-radius runs and the backend choice. `remainder` also
+   takes `cos_shape` (`"cos"` point-matched, `"cos-1"` Galerkin) and
+   `Remainder.replay` forwards `consume` / `row_group` untouched, so the
+   streaming schedule stays the caller's.
+
 ## What deliberately stays out
 
 - **Scheduling** — bands, folds, budgets, `subtract_into`: stage 2.
