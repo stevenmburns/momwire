@@ -63,6 +63,7 @@ from momwire import (
     BSplineSolver,
     SinusoidalGalerkinSolver,
     SinusoidalSolver,
+    _field_ground,
 )
 from momwire.sinusoidal_galerkin import (
     _basis_value,
@@ -2510,6 +2511,14 @@ def _differenced_grounded_G(sim, geom):
     The Sommerfeld half reaches further back still, to before unit D: its
     remainder comes from `_whole_slab_remainder` above, so the comparison
     covers the streamed reduction as well as the fold.
+
+    The three-way ground branch is spelled out from `ground_eps` /
+    `ground_model` here on purpose, and stayed that way through momwire#397
+    unit 3 while `_fold_ground_block` stopped reading those strings: what this
+    reference has to be independent of is the production DISPATCH. The dyad
+    itself is the shared builder's (`_image_refl_prep(...).weights(...)
+    .project`, one spelling since unit 1) because a hand-rolled second
+    Fresnel chain would be measuring the projector, not the fold.
     """
     from momwire import _ground_refl
 
@@ -2537,7 +2546,7 @@ def _differenced_grounded_G(sim, geom):
                 geom,
                 k,
                 ctx,
-                sim._refl_projection(geom, eps_t),
+                sim._image_refl_prep(geom).weights(eps_t).project,
                 src_c,
                 src_t,
                 mirror=True,
@@ -2545,7 +2554,9 @@ def _differenced_grounded_G(sim, geom):
     contribs = tuple(c - g for c, g in zip(contribs, gnd))
 
     G = sim._scatter_coef_product(ctx, contribs)
-    sim._ek_bracket_correction_tested(G, geom, k, ctx)
+    sim._ek_bracket_correction_tested(
+        G, geom, k, ctx, _field_ground.field_ground_for(sim, geom, k, sim.omega)
+    )
     sim._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
     return G
 
