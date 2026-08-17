@@ -206,3 +206,83 @@ def test_refl_kernel_matches_numpy_reference():
         finally:
             sin_mod._HAVE_FIELD_TENSOR_REFL = True
         np.testing.assert_allclose(z_numpy, z_kernel, rtol=1e-9)
+
+
+def test_both_solvers_reach_the_shared_pair_weight_builder(monkeypatch):
+    """Structural row for momwire#397 unit 1: the point-matched and Galerkin
+    refl-coef paths must both go through `_field_ground` for their per-pair
+    Fresnel weights, so a regression to per-solver private copies of the
+    cos-theta -> rho_v/rho_h -> dyad chain fails here rather than silently.
+
+    Both halves of the shared surface are pinned, because a call site could
+    plausibly regress either one alone: `specular_pair_prep` (the
+    k-independent geometry) and `PairWeights.project` (the per-omega dyad).
+    The point-matched hot path is the fused C++ kernel, which consumes the
+    shared PREP but computes the dyad in-kernel; its numpy reference is the
+    spelling `project` serves, so both accelerator flags come off here.
+
+    What the row also pins is that the SCHEDULE stayed with each solver: the
+    point-matched consumer names no pairing at all (its band tables are
+    already at `cm`'s shape, momwire#332 unit B), while the Galerkin
+    consumer names one per block off whole-geometry tables. Same builder,
+    two schedules — which is the unit's whole claim.
+    """
+    import momwire.sinusoidal as sin_mod
+    from momwire import SinusoidalGalerkinSolver, _field_ground
+
+    preps, pairings = [], []
+    real_prep = _field_ground.specular_pair_prep
+    real_project = _field_ground.PairWeights.project
+
+    def spy_prep(*args, **kwargs):
+        tables = real_prep(*args, **kwargs)
+        preps.append(tables.cos_th.shape)
+        return tables
+
+    def spy_project(self, cm, m_idx=None, n_idx=None):
+        pairings.append(m_idx is not None)
+        return real_project(self, cm, m_idx, n_idx)
+
+    monkeypatch.setattr(_field_ground, "specular_pair_prep", spy_prep)
+    monkeypatch.setattr(_field_ground.PairWeights, "project", spy_project)
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_REFL", False)
+    monkeypatch.setattr(sin_mod, "_HAVE_FIELD_TENSOR_EK_REFL", False)
+
+    kw = dict(
+        wires=[[[0.0, -1.4, 1.0], [0.0, 1.4, 1.0]]],
+        nsegs=7,
+        wavelength=10.0,
+        wire_radius=0.002,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+    )
+    seen = {}
+    for cls in (SinusoidalSolver, SinusoidalGalerkinSolver):
+        preps.clear()
+        pairings.clear()
+        sim = cls(**kw)
+        geom = sim._build_geometry()
+        sim._assemble_Z(geom, sim.k)
+        seen[cls.__name__] = (list(preps), list(pairings))
+
+    for name, (built, named) in seen.items():
+        assert built, (
+            f"{name}'s refl-coef fill never called "
+            "_field_ground.specular_pair_prep — it has a private copy of the "
+            "specular pair tables again"
+        )
+        assert named, (
+            f"{name}'s refl-coef fill never called "
+            "_field_ground.PairWeights.project — it has a private copy of the "
+            "Fresnel dyad chain again"
+        )
+
+    assert not any(seen["SinusoidalSolver"][1]), (
+        "the point-matched consumer gathered at a named pairing — its band "
+        "tables are supposed to be at cm's own shape already (#332 unit B)"
+    )
+    assert all(seen["SinusoidalGalerkinSolver"][1]), (
+        "the Galerkin consumer stopped naming its (test, source) pairing — "
+        "the projector protocol's index arrays are how it reads the shared "
+        "whole-geometry tables"
+    )

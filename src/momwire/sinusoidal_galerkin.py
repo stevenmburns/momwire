@@ -2396,13 +2396,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         field before the tangential projection — the `ground_eps`
         reflection-coefficient ground (IPERF=0).
 
-        Identical algebra to `SinusoidalSolver._field_tensor_image_refl`'s
-        numpy path,
+        Not identical algebra to `SinusoidalSolver._field_tensor_image_refl`'s
+        numpy path — the SAME algebra, since momwire#397 unit 1: both are
+        `_field_ground.PairWeights.project`, whose signature `(cm, m_idx,
+        n_idx)` IS the projector protocol `_tested_contribs` documents, so
+        this method is now schedule only. What it schedules is the per-
+        geometry `_image_refl_prep` cache (rather than the point-matched
+        per-band build) and the ε̃ the weights are taken at.
 
-            t_m · D · E = ρ_v·(t_m·E) − (ρ_v + ρ_h)·(t_m·p̂)·(E·p̂),
-
-        reading the specular tables straight out of `_image_refl_prep` — the
-        same per-SEGMENT-PAIR cache the point-matched solver uses. That is
+        The weights are read at the per-SEGMENT-PAIR pairing each block
+        names, off tables built once for the whole geometry. That is
         deliberate and it is what NEC's IPERF=0 model actually says: ρ_v/ρ_h
         are evaluated once at the midpoint-to-image-midpoint specular angle
         and held **constant over the segment pair**. The test quadrature
@@ -2415,41 +2418,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         Galerkin matrix loses reciprocity (‖G−Gᵀ‖/‖G‖ = 3.0e-9 on the
         h=0.1λ dipole, 2.3e-9 on the L-shape, and *insensitive to
         quadrature refinement* — 3.00e-9 at n_qp_test 8, 16 and 32, i.e.
-        structural). The pair-constant form below sits at the free-space
-        floor instead. Since the observers are points ON test segment m,
+        structural). The pair-constant form sits at the free-space floor
+        instead. Since the observers are points ON test segment m,
         `tm_p = t_m·p̂` from the segment tangents is exact for them, not an
         approximation.
         """
-        cos_th, px, py, tm_p, tn_p = self._image_refl_prep(geom)
-        rho_v_t, rho_h_t = _ground_refl.fresnel_rho(eps_t, cos_th)
-
-        def _project(cm, m_idx, n_idx):
-            rho_v = rho_v_t[m_idx, n_idx]
-            rvh = rho_v + rho_h_t[m_idx, n_idx]  # → 0 in the PEC limit
-            tmp = tm_p[m_idx, n_idx]
-            tnp = tn_p[m_idx, n_idx]
-            # ρ̂·p̂ from the image-build rho_vec (p̂ is horizontal, so only the
-            # x/y components contribute), same radius-regularized denominator
-            # as the E_ρ projection rule.
-            rho_p = (
-                cm["rho_vec"][..., 0] * px[m_idx, n_idx]
-                + cm["rho_vec"][..., 1] * py[m_idx, n_idx]
-            ) / cm["rho_eval"]
-            td = cm["td"]
-            rp = cm["rho_proj_factor"]
-
-            def _weighted(Ez, Erho):
-                tm_E = td * Ez + rp * Erho  # t_m · E
-                E_p = tnp * Ez + rho_p * Erho  # E · p̂
-                return rho_v * tm_E - rvh * tmp * E_p
-
-            return (
-                _weighted(cm["Ez_const"], cm["Erho_const"]),
-                _weighted(cm["Ez_sin"], cm["Erho_sin"]),
-                _weighted(cm["Ez_cos"], cm["Erho_cos"]),
-            )
-
-        return _project
+        return self._image_refl_prep(geom).weights(eps_t).project
 
     def _fold_ground_block(self, geom, k, ctx, contribs):
         """The ground sub-assembly, tested exactly like the free-space block
