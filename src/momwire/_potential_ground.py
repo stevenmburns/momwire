@@ -1,0 +1,485 @@
+"""Mixed-potential-trunk ground composition: the `PotentialGround` object.
+
+The potential-trunk sibling of `_field_ground.FieldGround`, and the first
+unit of the razor-grounds pilot (momwire#398) that
+`docs/design/solver-architecture.md` §6 proposes and §0.1 criterion 2 buys.
+`FieldGround` serves `Z_mn = ⟨t_m, E[b_n]⟩`; this object serves
+
+    Z_mn = jωμ (t_m·t_n) ⟨f_m, G f_n⟩ + (1/jωε) ⟨f′_m, G f′_n⟩,
+
+which is `bspline.py` / `hmatrix.py` / `array_block.py` / `razor.py`. The
+two never merge into one class — §2.2 of the architecture doc is explicit
+about why, and the three rows of its table are visible in this file:
+
+* the image is **mirrored geometry into the moment builder**, with the
+  image sign **fused into the tangent-dot table** (`ImageGeometry` below),
+  not a mirrored source handed to a field evaluator;
+* the reflection-coefficient weight is **two scalars per pair**
+  `(w_A, w_Φ)` — the Fresnel dyad pre-resolved into the potential
+  decomposition — not a projector on `(E_ρ, E_z)`;
+* `ground_phi_mode` exists at all. The field form never separates the
+  charge term, so it has no analogue; here it is part of the weights'
+  physics and rides inside `weight_tables` / `weight_windows`.
+
+What IS shared with the field trunk is exactly the vocabulary the sketch
+(`docs/design/field-ground-interface.md`, "what deliberately stays out")
+promised would be shared: the FACTORY shape (`potential_ground_for(solver,
+geom, k, omega) -> object | None`, with `None` meaning free space) and the
+MODE contract (`"fold"` vs `"compose"`). Nothing else, and nothing is
+imported from `_field_ground`.
+
+Unit 1 lands the object and the **bspline dense fill's** consumption of
+it: `_compute_Z_operator`'s image branch, both of its routes (the chunked
+weighted-windowed accumulator and the no-accelerator moment-tensor
+fallback), the enrichment fill's ε̃/sommerfeld hoists, and
+`_ground_finite_Z`, whose `ground_model != "sommerfeld"` string test is
+now a `mode` test. The solver's existing evaluators stay exactly where
+they are and this object delegates to them, the same division
+`FieldGround` draws.
+
+**What stays out**, deliberately, and named here so its later migration is
+a decision rather than a discovery:
+
+* **the schedule** — bands, chunk sizes, budgets, the `Z -=` seams. In
+  particular `BSplineSolver._image_weight_row_bytes` still reads
+  `ground_eps` / `ground_model`: it prices what a chunk's weight producer
+  allocates, which is budget arithmetic, and the field trunk's precedent
+  keeps budgets out of the object.
+* **the hmatrix / array_block block paths** (`_zblock_image`,
+  `_zblock_image_refl`, `_refl_weight_tables`,
+  `_zblock_sommerfeld_remainder`). They inherit `BSplineSolver` and keep
+  calling the methods this object delegates to, so they are unaffected;
+  migrating them is a later unit.
+* **`_image_weight_enrich_blocks`** — the enrichment reaction's third
+  weight shape (row / col / ee rectangular sub-blocks). Its ε̃ and its
+  "is this sommerfeld" question now come from this object; its per-mode
+  algebra does not yet.
+* **the batched swept fill** (`_swept_batched_z_chunks`). It is PEC-only
+  by `_swept_batched_available`, and its weight is a FOURTH spelling —
+  the C++ batched assembler forms the tangent dot in-kernel from two
+  `(N, 3)` tangent tables (momwire#333), so there is no `(w_A, w_Φ)` pair
+  to hand it at all.
+
+Evaluation-order discipline is part of this module's interface for the
+same reason it is part of `_field_ground`'s (momwire#392, architecture doc
+§3.4): every expression below is the call site's own, moved and not
+rewritten, which is what makes the migration bit-identical rather than
+merely equivalent.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+
+from . import _ground_refl
+
+
+class ImageGeometry:
+    """The mirror map, in the shape the mixed-potential trunk wants it.
+
+    Two parts, because the potential trunk splits the image into two
+    unrelated pieces where the field trunk has one:
+
+    `seg_l` / `seg_r` — the segment ENDPOINTS mirrored across
+    `z = ground_z`, which is what the moment builder consumes (it
+    quadratures from endpoints, not from centres and tangents).
+
+    `tangent_dot()` — the `(N_obs, N_src)` table `t_m · M·t_n` with
+    M = diag(1, 1, −1). This is the potential trunk's IMAGE SIGN, fused
+    into a table rather than carried as a separate factor: the horizontal
+    image current's anti-parallel direction and the image charge's sign
+    flip are both absorbed by it plus the seams' single global minus
+    (architecture doc §2.2, "image sign fused into the `td_all` table").
+    It is O(N²) and built only when asked, so a consumer that wants only
+    the mirrored endpoints — the moment builder — never pays for it.
+
+    Both delegate to the solver's `_image_positions` / `_image_tangent_dot`,
+    which stay where they are: hmatrix's block paths call them on their own
+    sub-blocks and are not migrated by this unit.
+    """
+
+    __slots__ = ("_solver", "_tangents", "seg_l", "seg_r")
+
+    def __init__(self, solver, seg_l, seg_r, tangents):
+        self._solver = solver
+        self._tangents = tangents
+        self.seg_l = seg_l
+        self.seg_r = seg_r
+
+    def tangent_dot(self):
+        """`t_m · M·t_n`, complex-free (float64) — the PEC mirror table."""
+        return self._solver._image_tangent_dot(self._tangents)
+
+
+class Remainder:
+    """The Sommerfeld remainder operator: the Galerkin block `Q` that the
+    C₂-scaled exact image is composed WITH.
+
+    Deliberately NOT the field trunk's prepare/replay pair. There, the
+    remainder is evaluated at whatever observer set a caller reaches, so
+    the observer-independent state has to be hoisted out of the schedule by
+    hand (momwire#357 item 1). Here it is one Galerkin block over the whole
+    geometry — `_Z_sommerfeld_remainder` builds its own grid, does its own
+    observer banding (momwire#343) and hands back a finished `(n_basis,
+    n_basis)` matrix — so a `prepare` would have nothing to hold and a
+    `replay` nothing to vary. The prepare/replay split is a property of the
+    field trunk's *schedule*, not of the physics, and the mode contract is
+    what the two trunks actually share.
+
+    `evaluate` therefore takes the basis description rather than an
+    observer set, because the basis IS this trunk's observer set.
+    """
+
+    __slots__ = ("_eps_tilde", "_geom", "_solver")
+
+    def __init__(self, solver, geom, eps_tilde):
+        self._solver = solver
+        self._geom = geom
+        self._eps_tilde = eps_tilde
+
+    def evaluate(self, supp_seg, polys):
+        """`Q[m, n]` over the whole basis, as `_Z_sommerfeld_remainder`
+        returns it. Sign convention unchanged: the caller ADDS this to the
+        C₂ image and takes one global minus (`C2·img + Q`, then `Z -=`),
+        which is the composition `mode == "compose"` names.
+        """
+        return self._solver._Z_sommerfeld_remainder(
+            self._geom, supp_seg, polys, self._eps_tilde
+        )
+
+
+class PotentialGround:
+    """One solve's ground, in the mixed-potential trunk: which weights,
+    which coefficient, which composition.
+
+    Frozen per `(geom, k, ω)` and built by `potential_ground_for`, which is
+    the ONE place the `ground_z` / `ground_eps` / `ground_model` /
+    `ground_phi_mode` strings are read on this trunk's dense fill. A
+    consumer branches on `mode` and applies the members below.
+
+    Attributes:
+
+    `mode` — `"fold"` (PEC, refl-coef, and the radial-wire screen when it
+    lands): the image block may go through the seams' single `Z -= …`
+    entry by entry, in any order. `"compose"` (sommerfeld):
+    `C₂·img + Q` must be associated BEFORE that minus, because
+    `free − (c2·img + Q) ≠ (free − c2·img) − Q` in float64. Same contract,
+    same words, as `FieldGround.mode` — the one piece of vocabulary the two
+    trunks share besides the factory. (The `+ Q` where the field trunk
+    writes `− rem` is this trunk's own sign convention, not a difference in
+    the contract: `_Z_sommerfeld_remainder` returns `Q` with the EFIE
+    contribution `−Q` already folded into the seams' minus.)
+
+    `image_coefficient` — 1.0, or C₂ = (ε̃−1)/(ε̃+1) for sommerfeld.
+    **Spelled differently from the field trunk, on purpose.** There, C₂ is
+    applied by the consumer to a finished image block, and the operand
+    order (`np.multiply(coef, block, out=block)` — coefficient on the LEFT)
+    is a measured one-ULP contract. Here it never reaches a block: it
+    enters through the constant `(w_A, w_Φ)` tables, which is how
+    `_ground_finite_Z` has always spelled it, so the multiply happens once
+    per pair inside the assembly kernel instead of once per matrix entry
+    afterwards. The attribute is exposed anyway because it is the same
+    physical quantity and the same shared vocabulary — a consumer that
+    wants to know "how strong is this image" asks it here — but a
+    potential-trunk consumer must NOT apply it itself: `weight_tables` and
+    `weight_windows` have already folded it in, and applying it twice is
+    the obvious bug this sentence exists to prevent.
+
+    `eps_tilde` — the complex relative permittivity ε̃(ω) the weights are
+    taken at; `None` over a PEC ground (and the tell for "PEC" throughout
+    this class). Hoisted into the factory so a chunked fill pays
+    `_ground_refl.eps_tilde` once per fill rather than once per chunk —
+    same value either way, it is a pure function of arguments the fill
+    holds fixed.
+
+    `phi_mode` — `ground_phi_mode` for a refl-coef ground, `None`
+    otherwise. The potential trunk's own knob, with NO field-trunk
+    analogue (architecture doc §2.2's tell): the field form never
+    separates the charge term, so it cannot express a modelling choice
+    about the image charge. It is not a scheduling flag and consumers do
+    not read it — it is carried here because it is part of what
+    `weight_tables` means, and named on the object so that "which Φ
+    weighting" is visibly a ground decision.
+
+    `standard_fresnel` — True when this ground's per-pair weights are the
+    stock Fresnel ones. **On the field trunk this gates a backend
+    dispatch; here, on the dense fill, it does not, and the difference is
+    a finding rather than an oversight.** The bspline dense fill's fused
+    kernels (`assemble_Z_bspline_weighted` and its windowed twin) take
+    `w_A` / `w_Phi` as complex128 DATA and never compute a reflection
+    coefficient, so they already serve ANY coefficient-level ground — the
+    radial-wire screen included — with no kernel work and no key. What
+    keeps the attribute from being purely vestigial is that this trunk
+    DOES have an in-kernel spelling, one layer out from unit 1's scope:
+    `bspline_assemble_offedge_block_refl` (and its EK twin) computes ρ_v /
+    ρ_h from ε̃ inside the loop and takes `ground_phi_mode` as the two
+    coefficients `_ground_refl.phi_mode_coeffs` reduces it to. That kernel
+    is hmatrix's / array_block's block path, which this unit does not
+    migrate; when it is migrated, `standard_fresnel` is the key its
+    dispatch must consult, exactly as `_field_tensor_image_refl`'s does.
+    Until then no unit-1 consumer reads it, and the ground-row test is
+    what keeps it honest.
+    """
+
+    __slots__ = (
+        "_geom",
+        "_k",
+        "_omega",
+        "_solver",
+        "eps_tilde",
+        "image_coefficient",
+        "mode",
+        "phi_mode",
+        "standard_fresnel",
+    )
+
+    def __init__(
+        self,
+        solver,
+        geom,
+        k,
+        omega,
+        *,
+        mode,
+        eps_tilde,
+        image_coefficient,
+        phi_mode=None,
+        standard_fresnel=True,
+    ):
+        self._solver = solver
+        self._geom = geom
+        self._k = k
+        self._omega = omega
+        self.mode = mode
+        self.eps_tilde = eps_tilde
+        self.image_coefficient = image_coefficient
+        self.phi_mode = phi_mode
+        self.standard_fresnel = standard_fresnel
+
+    # ------------------------------------------------------------------
+    # the mirror map
+    # ------------------------------------------------------------------
+
+    def image_geometry(self) -> ImageGeometry:
+        """Mirrored segment endpoints plus the image tangent-dot table.
+
+        Built fresh on every call and cached nowhere — the endpoints are
+        O(N) and the table is only materialised if `tangent_dot()` is
+        actually asked for. EK policy is NOT here: `_ek_spec(geom,
+        mirror=True)` stays with the moment builder, the same line
+        `FieldGround.image_sources` draws (the ground supplies mirrored
+        geometry, never the extended kernel's opinion about it).
+        """
+        geom = self._geom
+        solver = self._solver
+        return ImageGeometry(
+            solver,
+            solver._image_positions(geom["seg_l"]),
+            solver._image_positions(geom["seg_r"]),
+            geom["tangents"],
+        )
+
+    # ------------------------------------------------------------------
+    # the weight tables — this trunk's (w_A, w_Φ) row
+    # ------------------------------------------------------------------
+
+    def weight_tables(self):
+        """The whole-geometry `(w_A, w_Φ)` pair, or `None` for PEC.
+
+        `None` means "assemble the image UNWEIGHTED, with the image
+        tangent-dot table" — the free/PEC kernel `_assemble_Z(...,
+        td_all=…)`, whose Φ term carries no weight at all and whose A term
+        takes a real table. That is a genuinely different kernel, not a
+        `w_A = td_img, w_Φ = 1` special case of the weighted one, which is
+        why `None` is the honest answer rather than a pair of synthesised
+        tables.
+
+        Otherwise:
+
+        * refl-coef — the Fresnel pair, through the solver's cached
+          k-independent specular prep (`_image_refl_prep`) and its per-ω
+          weights (`_image_refl_weights`). The cache is the solver's
+          SCHEDULE and stays there, exactly as `_image_refl_prep` is the
+          Galerkin field fill's schedule in the sibling module.
+        * sommerfeld — the constant C₂ tables that carry the exact-image
+          part. This is the `image_coefficient` spelling difference the
+          class docstring describes: C₂ multiplies the mirror table here,
+          not the assembled block later.
+
+        Beware the asymmetry with `weight_windows` below: the same PEC
+        ground answers `None` here and a real `(td_img, ones)` pair there.
+        It is not an inconsistency in the ground, it is the two kernels:
+        the windowed assembler speaks only weighted, so the chunked route
+        has to spell PEC's "no weight" as tables, while the tensor route
+        has a kernel that can say it structurally.
+        """
+        if self.eps_tilde is None:
+            return None
+        if self.mode == "compose":
+            # NEC's decomposition (theory manual eqs 136-147): the exact
+            # image scaled by the constant C₂, which absorbs all the
+            # singular behaviour, plus the smooth remainder block. ε̃ → ∞:
+            # C₂ → 1 and Q → 0, PEC image exactly; ε̃ → 1: both vanish.
+            c2 = self.image_coefficient
+            td_img = self._solver._image_tangent_dot(self._geom["tangents"])
+            w_A = c2 * td_img.astype(np.complex128)
+            return w_A, np.full_like(w_A, c2)
+        solver = self._solver
+        return solver._image_refl_weights(
+            solver._image_refl_prep(self._geom), self._omega
+        )
+
+    def weight_windows(self):
+        """A producer `weights_fn(i0, i1) -> (w_A, w_Φ)` of observer-row
+        WINDOWS, each complex128 `(i1-i0, n_segs)`.
+
+        The chunked accumulator's contract (momwire#323): the windows are
+        produced per chunk and nothing N²-scale in the weights is ever
+        allocated, which is what retired the 2× dense-Z residency the
+        grounded fill used to carry. Every mode's algebra is row-local, so
+        each producer restricts on the observer axis directly rather than
+        slicing a global table — the refl-coef one bypasses the
+        `_image_refl_prep` cache entirely for that reason
+        (`specular_pair_tables` already takes a rectangular observer ×
+        source block); the cache stays for `weight_tables` and the
+        enrichment path, which do want the whole thing.
+
+        ε̃ and C₂ are frequency- but not row-dependent and are the
+        factory's, so the closures capture them and no chunk recomputes
+        them.
+
+        Unlike `weight_tables`, this NEVER returns `None`: see that
+        method's last paragraph for why PEC has to spell itself out here.
+        """
+        geom = self._geom
+        tangents = geom["tangents"]
+        mirror = np.array([1.0, 1.0, -1.0])
+
+        if self.eps_tilde is None:
+
+            def pec_weights(i0, i1):
+                # float64 gemm → C-contiguous; astype gives the complex128
+                # the assembler wants without a wrapper copy on top.
+                w_A = (tangents[i0:i1] @ (tangents * mirror).T).astype(np.complex128)
+                return w_A, np.ones_like(w_A)
+
+            return pec_weights
+
+        eps_t = self.eps_tilde
+
+        if self.mode == "compose":
+            c2 = self.image_coefficient
+
+            def sommerfeld_weights(i0, i1):
+                # complex scalar × float64 array → complex128 C-contiguous.
+                # The smooth remainder is a separate, already-chunked term.
+                w_A = c2 * (tangents[i0:i1] @ (tangents * mirror).T)
+                return w_A, np.full(w_A.shape, c2)
+
+            return sommerfeld_weights
+
+        seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
+        phi_mode = self.phi_mode
+        ground_z = self._solver.ground_z
+
+        def refl_weights(i0, i1):
+            cos_th, td_img, P = _ground_refl.specular_pair_tables(
+                seg_c[i0:i1],
+                tangents[i0:i1],
+                ground_z,
+                src_centers=seg_c,
+                src_tangents=tangents,
+            )
+            rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
+            w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
+            w_Phi = _ground_refl.phi_term_weights(phi_mode, eps_t, rho_v)
+            if np.ndim(w_Phi) == 0:
+                # "image"/"normal" are pair-independent; "rho_v"/"blend"
+                # already come back as per-pair windows.
+                w_Phi = np.full(w_A.shape, complex(w_Phi))
+            return w_A, w_Phi
+
+        return refl_weights
+
+    # ------------------------------------------------------------------
+    # the remainder
+    # ------------------------------------------------------------------
+
+    def remainder(self) -> Remainder | None:
+        """The remainder operator, or `None` for a ground that has none
+        (PEC and refl-coef).
+
+        Present exactly when `mode == "compose"` — the remainder IS what
+        the composition is about, so the two are the same fact asked two
+        ways, and a consumer may branch on either.
+        """
+        if self.mode != "compose":
+            return None
+        return Remainder(self._solver, self._geom, self.eps_tilde)
+
+
+def potential_ground_for(solver, geom, k, omega) -> PotentialGround | None:
+    """The factory: `solver`'s ground as one object, or `None` for free
+    space.
+
+    `None` is not a null object and must not become one — the free-space
+    fill takes the path it always took, with the ground branch
+    structurally absent rather than skipped, so not one float operation
+    differs. Same standard as `extended_kernel=False`, and the same
+    standard `FieldGround` holds itself to.
+
+    The four grounds momwire ships, and the fifth this interface is
+    designed against (architecture doc §6.1: the radial-wire screen must
+    land by changing coefficient functions in `_ground_refl`, not
+    assembly code in any solver):
+
+    | ground        | mode    | weight_tables | coef  | remainder |
+    |---------------|---------|---------------|-------|-----------|
+    | free          | *(None — no object)*                        |
+    | PEC           | fold    | None          | 1     | None      |
+    | refl-coef     | fold    | Fresnel w_A/w_Φ | 1   | None      |
+    | sommerfeld    | compose | constant C₂   | C₂(ε̃) | evaluate  |
+    | radial screen | fold    | screen-modified ρ_v/ρ_h through the same
+                                `a_term_weights` / `phi_term_weights`
+                                pair; `standard_fresnel=False`          |
+
+    The screen row is the acceptance test, not a promise about today: it
+    lands as a modified reflection-coefficient function one level down and
+    a `standard_fresnel=False` row here, with zero edits to `bspline.py`'s
+    fill — the dense assembly kernels take the weights as data (see
+    `standard_fresnel`), so on THIS trunk's dense route even the fused
+    path serves it unchanged.
+    """
+    if solver.ground_z is None:
+        return None
+    if solver.ground_eps is None:
+        return PotentialGround(
+            solver,
+            geom,
+            k,
+            omega,
+            mode="fold",
+            eps_tilde=None,
+            image_coefficient=1.0,
+        )
+    eps_t = _ground_refl.eps_tilde(solver.ground_eps, omega, solver.eps)
+    if solver.ground_model == "sommerfeld":
+        return PotentialGround(
+            solver,
+            geom,
+            k,
+            omega,
+            mode="compose",
+            eps_tilde=eps_t,
+            image_coefficient=(eps_t - 1.0) / (eps_t + 1.0),
+        )
+    return PotentialGround(
+        solver,
+        geom,
+        k,
+        omega,
+        mode="fold",
+        eps_tilde=eps_t,
+        image_coefficient=1.0,
+        phi_mode=solver.ground_phi_mode,
+    )
