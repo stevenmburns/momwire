@@ -1509,6 +1509,7 @@ def test_bspline_assemble_z_enrich_cpp_matches_numpy():
             )
 
 
+@pytest.mark.memgate
 def test_bspline_enrichment_assemble_holds_no_n_squared_tangent_table():
     """`_enrichment_Z_assemble` must not build the free-space `(N, N)`
     tangent-dot table (issue #334). `assemble_Z_enrich` (the C++ kernel and
@@ -2574,6 +2575,7 @@ def test_bspline_chunked_dense_impedance_matches_tensor_path():
     assert rel < 1e-10, f"chunked vs tensor impedance disagreement: rel {rel}"
 
 
+@pytest.mark.memgate
 @pytest.mark.parametrize("extended_kernel", [False, True])
 def test_bspline_chunked_dense_z_holds_no_n_squared_transient(extended_kernel):
     """The chunked fill must not carry any N²-scale float64 side table
@@ -2657,6 +2659,7 @@ def test_bspline_chunked_dense_z_holds_no_n_squared_transient(extended_kernel):
     )
 
 
+@pytest.mark.memgate
 def test_bspline_chunked_dense_z_fill_transient_honors_swept_mem_mb_budget():
     """The chunked fill's own advertised budget must be honest: peak
     transient above Z should track `swept_mem_mb`, not roughly double it
@@ -2728,6 +2731,7 @@ def test_bspline_chunked_dense_z_fill_transient_honors_swept_mem_mb_budget():
     )
 
 
+@pytest.mark.memgate
 @pytest.mark.parametrize(
     "ground_kwargs",
     [
@@ -2834,6 +2838,7 @@ def test_bspline_chunked_image_fill_holds_no_n_squared_transient(ground_kwargs):
     )
 
 
+@pytest.mark.memgate
 @pytest.mark.parametrize(
     "ground_kwargs",
     [
@@ -2926,6 +2931,7 @@ def test_bspline_chunked_image_fill_transient_honors_swept_mem_mb_budget(
     )
 
 
+@pytest.mark.memgate
 def test_bspline_offedge_fallback_chunked_fill_transient_honors_budget():
     """Without the C++ accelerator, `_seg_seg_full_moments_offedge`'s
     pure-numpy path genuinely carries a large internal-intermediate
@@ -3004,6 +3010,7 @@ def test_bspline_offedge_fallback_chunked_fill_transient_honors_budget():
     )
 
 
+@pytest.mark.memgate
 @pytest.mark.parametrize(
     "ground_kwargs",
     [
@@ -3365,6 +3372,7 @@ def test_bspline_swept_batched_path_skips_fallback_hoist(monkeypatch):
     s2.compute_y_matrix_swept(k_array)
 
 
+@pytest.mark.memgate
 def test_bspline_swept_batched_z_chunks_holds_no_n_squared_tangent_table(monkeypatch):
     """`_swept_batched_z_chunks` must not hoist an (N, N) tangent-dot table
     for the whole sweep (issue #333, the unconverted swept-batched twin of
@@ -3457,6 +3465,7 @@ def test_bspline_swept_batched_z_chunks_holds_no_n_squared_tangent_table(monkeyp
     )
 
 
+@pytest.mark.memgate
 def test_bspline_swept_same_edge_prep_holds_no_reg_table(monkeypatch):
     """`_same_edge_prep`'s return value — the list EVERY swept entry point
     (`compute_impedance_swept`, `compute_y_matrix_swept`,
@@ -4317,7 +4326,9 @@ def _stub_sommerfeld_remainder_enrich(
 )
 # ~16 s/case: dominated by the pre-existing pure-Python Z_pe/Z_ep loop in
 # `_assemble_Z_enrich_image_numpy`, not by anything this gate measures.
-@pytest.mark.slow
+# memgate, not slow (#400): a tracemalloc certification gate, not a
+# convergence ladder/oracle sweep.
+@pytest.mark.memgate
 def test_bspline_enrichment_image_fill_holds_no_n_squared_transient(
     ground_kw, monkeypatch
 ):
@@ -4808,6 +4819,7 @@ def test_bspline_banded_basis_build_is_bit_exact(degree, case):
     )
 
 
+@pytest.mark.memgate
 def test_bspline_basis_build_holds_no_n_squared_transient():
     """`_build_basis_polynomials` must not densify the design matrix
     (issue #329). `BSpline.design_matrix(...).toarray()` used to expand a
@@ -4970,6 +4982,7 @@ def test_sinusoidal_banded_assembly_is_bit_equal(
         )
 
 
+@pytest.mark.memgate
 @pytest.mark.parametrize(
     "ground_kwargs, swept_mem_mb, budget_mb",
     [
@@ -5075,6 +5088,7 @@ def test_sinusoidal_assembly_holds_no_whole_matrix_field_tensor(
     )
 
 
+@pytest.mark.memgate
 def test_sinusoidal_refl_coef_specular_tables_are_not_cached():
     """`_image_refl_prep`'s five (N, N) specular tables must not survive a
     point-matched `ground_eps` fill, and must not appear even transiently
@@ -5231,6 +5245,7 @@ def test_specular_ray_tables_are_bit_equal_to_the_plain_spelling(
     assert all(np.array_equal(g, w) for g, w in zip(got_sq, want_sq))
 
 
+@pytest.mark.memgate
 def test_specular_ray_tables_transient_is_one_tile():
     """`specular_ray_tables` must allocate its three outputs and a bounded
     tile, not a dozen whole-block intermediates (issue #357 item 2).
