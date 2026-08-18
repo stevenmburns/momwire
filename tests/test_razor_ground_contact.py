@@ -356,28 +356,78 @@ def test_geometries_that_are_not_a_grounded_end_are_refused():
         )
 
 
-@pytest.mark.parametrize(
-    "extra", ({"ground_eps": 13.0}, {"ground_model": "sommerfeld"})
-)
-def test_contact_over_a_finite_ground_is_refused_citing_282(extra):
-    """PEC only, and contact makes that stricter rather than looser.
+def test_contact_over_a_finite_ground_is_refused_citing_282():
+    """Contact makes the finite ground stricter rather than looser.
 
-    The fold hard-codes image coefficient 1 — it IS the PEC image — so a
-    grounded end over a finite ground would take spurious contact charge
-    (momwire#282). The constructor refuses the finite-ground kwargs before
-    any geometry is read, so the refusal that fires is the kwarg one; what
-    this pins is that its prose names the contact case and the issue.
+    Since momwire#398 unit 4 the reflection-coefficient ground IS served —
+    for a wire standing clear of the plane. A grounded END over it is not,
+    and the reason is the one #282 names: the fold hard-codes image
+    coefficient 1, i.e. PEC, and the grounded tent's lower wing IS that
+    image. Weighting the image block cannot repair a basis function that
+    is wrong, so the refusal is a geometry one now — read off the wire
+    ends, after the ground kwargs are accepted — and it must name both the
+    contact and the issue.
+
+    It fires when only SOME wire touches, which is the case a refusal keyed
+    on "is there any ground contact" would be tempted to miss: the second
+    deck below is an elevated dipole (perfectly serviceable over
+    `ground_eps` on its own) standing beside one grounded vertical, and the
+    message must point at the vertical by name.
     """
-    with pytest.raises(NotImplementedError, match="momwire#282") as exc:
-        RazorSolver(
-            wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, MONO_LEN]])],
-            nsegs=8,
+    mono = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, MONO_LEN]])
+    clear = np.array([[2.0, -2.0, 4.0], [2.0, 2.0, 4.0]])
+    kw = dict(wire_radius=RAD, wavelength=WL, ground_z=0.0, ground_eps=13.0 - 0.4j)
+
+    for wires, npe, name in (
+        ([mono], [[8]], "wire 0 start"),
+        ([clear, mono], [[8], [8]], "wire 1 start"),
+        ([mono, clear], [[8], [8]], "wire 0 start"),
+    ):
+        with pytest.raises(NotImplementedError, match="momwire#282") as exc:
+            RazorSolver(wires=wires, n_per_edge_per_wire=npe, **kw)
+        msg = str(exc.value)
+        assert name in msg
+        assert "CONTACT" in msg or "contact" in msg
+
+    # The same decks over the PEC plane are served, so the refusal is about
+    # the finite ground and not about the geometry.
+    for wires, npe in (([mono], [[8]]), ([clear, mono], [[8], [8]])):
+        z, _ = RazorSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
             wire_radius=RAD,
             wavelength=WL,
             ground_z=0.0,
-            **extra,
-        )
-    assert "CONTACT" in str(exc.value) or "contact" in str(exc.value)
+            feed_arclength=0.0,
+        ).compute_impedance()
+        assert np.isfinite(z.real) and np.isfinite(z.imag)
+
+
+def test_the_composing_ground_is_refused_on_its_own_terms():
+    """`ground_model='sommerfeld'` is refused for a different reason than
+    contact is, and says so.
+
+    Unit 4 served the FOLDING finite ground. The composing one is a
+    Galerkin remainder block summed with the scaled exact image before the
+    fold's minus, and this formulation's rows are razor-blade path
+    integrals — so the refusal names the composition, not momwire#282, and
+    it fires whether or not anything touches the plane.
+    """
+    for wires, npe in (
+        ([np.array([[0.0, 0.0, 0.0], [0.0, 0.0, MONO_LEN]])], [[8]]),
+        ([np.array([[2.0, -2.0, 4.0], [2.0, 2.0, 4.0]])], [[8]]),
+    ):
+        with pytest.raises(NotImplementedError, match="compose") as exc:
+            RazorSolver(
+                wires=wires,
+                n_per_edge_per_wire=npe,
+                wire_radius=RAD,
+                wavelength=WL,
+                ground_z=0.0,
+                ground_eps=13.0,
+                ground_model="sommerfeld",
+            )
+        assert "momwire#282" not in str(exc.value)
 
 
 # --------------------------------------------------------------------------
