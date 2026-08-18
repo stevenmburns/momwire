@@ -218,7 +218,7 @@ tents would overlap on one segment) and is refused.
 import numpy as np
 import scipy.linalg
 
-from . import _ground_refl, _potential_ground, _wire_loading
+from . import _ground_refl, _ground_spec, _potential_ground, _wire_loading
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -770,7 +770,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         A straight edge takes its minimum z at an anchor, so scanning the
         anchors sees every contact there is.
 
-        The touch tolerance is `BSplineSolver._ground_touch_tol`'s: 1e-6 of
+        The touch tolerance is `_ground_spec.ground_touch_tol`'s: 1e-6 of
         the wire's polyline length, loose enough for deck-import float
         noise at z=0 and far tighter than any deliberate stand-off.
         """
@@ -779,8 +779,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             return frozenset()
         touching = set()
         for i, pl in enumerate(self.wires_polylines):
-            length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
-            tol = 1e-6 * max(length, 1e-30)
+            tol = _ground_spec.ground_touch_tol(pl)
             zmin = float(pl[:, 2].min())
             if zmin < gz - tol:
                 raise ValueError(
@@ -821,8 +820,31 @@ class RazorSolver(_ElementCurrents, _Cancelable):
 
         A wire whose own two ends coincide is a closed loop and forms a
         group of two on its own. Grouping is by first match within
-        `_JUNCTION_TOL`, the same "same point" tolerance the caller-facing
-        geometry helpers use.
+        `_JUNCTION_TOL`, which is **this module's own** absolute 1e-9 and
+        agrees with nothing else in the tree. This paragraph used to claim
+        it was "the same 'same point' tolerance the caller-facing geometry
+        helpers use"; that was false, and momwire#429 correction 2 caught
+        it. The layer that actually produces `junctions=` is the deck
+        front end, which fuses span endpoints onto a
+        `deck/_polylines._NODE_EPS` = 1e-6 m grid — a THOUSAND times
+        looser, and a different algorithm (grid quantization, not
+        first-match) under a different norm (per-coordinate rounding, not
+        the Euclidean distance used here). Two ends the deck calls one
+        node can therefore reach this grouping as two.
+
+        What keeps that from biting today is the deck's own invariant, not
+        an agreement between the numbers: `_polylines` documents that "by
+        the time a model exists its coincident ends are already exactly
+        equal", so the coarse grid is absorbing transform ulps rather than
+        deciding connectivity. A caller assembling `junctions=` by hand,
+        or a future front end that relaxes that invariant, would see the
+        gap.
+
+        Six disagreeing tolerances live across three algorithms and two
+        norms in this tree, and unifying them is a deliberate future
+        decision, NOT part of momwire#429's pure moves — that unit shared
+        the TOUCH tolerance (`_ground_spec.ground_touch_tol`, five
+        byte-identical spellings) and changed no value anywhere.
 
         A group survives if it carries a through-path (K >= 2 ends) or if it
         is GROUNDED, because the plane is then one more branch at the point:

@@ -42,7 +42,14 @@ import numpy as np
 import scipy.linalg
 import scipy.sparse
 
-from . import _field_ground, _ground_mirror, _ground_refl, _sommerfeld, _wire_loading
+from . import (
+    _field_ground,
+    _ground_mirror,
+    _ground_refl,
+    _ground_spec,
+    _sommerfeld,
+    _wire_loading,
+)
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
@@ -824,8 +831,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 w0, end0 = jn[0]
                 pl0 = np.asarray(self.wires_polylines[w0], dtype=np.float64)
                 pt = pl0[0] if end0 == "start" else pl0[-1]
-                length0 = float(np.sum(np.linalg.norm(np.diff(pl0, axis=0), axis=1)))
-                if abs(pt[2] - gz) <= 1e-6 * max(length0, 1e-30):
+                if abs(pt[2] - gz) <= _ground_spec.ground_touch_tol(pl0):
                     grounded_junctions.add(j_i)
 
         # Junction neighbours: small Python loop (junctions count is O(1)
@@ -933,8 +939,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     junctioned.add((w, end))
             for w_idx, pl in enumerate(self.wires_polylines):
                 pl_arr = np.asarray(pl, dtype=np.float64)
-                length = float(np.sum(np.linalg.norm(np.diff(pl_arr, axis=0), axis=1)))
-                tol = 1e-6 * max(length, 1e-30)
+                tol = _ground_spec.ground_touch_tol(pl_arr)
                 if float(pl_arr[:, 2].min()) < gz - tol:
                     raise ValueError(
                         f"wire {w_idx} dips below the ground plane "

@@ -1074,6 +1074,84 @@ in four solvers is already true here: `RazorSolver._loading_spec` is exactly
 that half, isolated behind a plain per-segment/per-knot description so the
 extraction of a shared `loading_for(solver, ω)` has one seam to cut.
 
+### 6.8 The shared-layer consolidation (momwire#429, 2026-08-18)
+
+Four **pure moves** on the ground layer, from the sharing audit's ranked
+backlog (momwire#429 ranks 2, 5, 6, 7). None of them is a generalisation:
+§6.2/§6.4/§6.5 each recorded a second consumer forcing one new operation
+one layer down, and this unit is the other half of that pattern — the
+places where the operation was already right and only the SPELLING was
+duplicated. Every answer is bit-identical by construction and gated as
+such: **293 pinned entries** (275 arrays + 18 recorded refusals) across
+bspline degree 1-2 × 4 grounds × 3 decks × both image routes × the EK
+fill, hmatrix's grounded `zblock` and impedance, array_block, both
+sinusoidal solvers, razor on both quadrature lanes, and pulse, compared
+with `array_equal` against the branch point.
+
+| unit | rank | the move |
+|---|---|---|
+| 1 | 2 | the refl-coef **weight chain** (`_image_refl_prep` / `_image_refl_weights`) into `_potential_ground`, and `hmatrix._refl_weight_tables` onto `weight_windows` |
+| 2 | 5 | **`_ground_spec.ground_config`** — one decision tree feeding both trunk factories |
+| 3 | 6 | **`_ground_mirror`** — one mirror map, retiring 14 spellings across 6 files |
+| 4 | 7 | **`_ground_spec.ground_touch_tol`** — one touch tolerance, retiring 5 |
+
+**Unit 1 closes momwire#416's first interface finding.** `weight_tables()`
+was documented as the whole geometry's weights and could not produce them
+for anyone but `BSplineSolver`, because its refl-coef branch called back
+into two solver-private methods. The chain is in `_potential_ground` now;
+the CACHE stayed on the solver, because it is schedule, and reaches the
+object through `weight_tables(prep=…)` — the same supplier indirection
+`FieldGround.projector(tables=…)` uses one trunk over. The audit's
+prediction that `hmatrix._refl_weight_tables` maps onto
+`weight_windows(observers, sources)` with **no generalisation** held: §6.4
+had already reshaped that producer for razor, and the rectangle form was
+waiting.
+
+**Unit 2 is what §6.4's precedent implies for the factories themselves.**
+They were 82 % literally identical; the shared part reads four solver
+strings and answers `(mode, eps_tilde, image_coefficient,
+standard_fresnel)`, which is not a piece of either formulation. `weighted`
+on the field trunk and "does this ground carry a `phi_mode`" on the
+potential trunk turned out to be one predicate. `_ground_spec` imports
+only `_ground_refl`, so neither trunk acquires the other's dependencies —
+and §6.1's radial screen is now **one row instead of two**, which is the
+stretch criterion's instrument getting cheaper before it is used.
+
+**Unit 3's caution earned its keep.** One site of the fourteen is NOT the
+mirror and stays: `_ground_refl.specular_ray_tables`' `cos_th -= 2.0 *
+ground_z` is the fused in-place `z_m − (2g − z_n)` observer-minus-image
+difference, in a tiled scratch buffer whose association momwire#357 item 2
+fixed. Two field-trunk sites spelled a mirrored position as `p·M + 2g·ẑ`
+where the potential trunk writes `z → 2g − z`; the two agree bit for bit,
+and the gate confirms it through the mirrored **EK axis-label scans**,
+where a changed label would move the answer rather than merely the
+rounding.
+
+**Unit 4 also fixed a false docstring.** `RazorSolver._find_junctions`
+claimed `_JUNCTION_TOL` (absolute 1e-9, Euclidean, first-match) was "the
+same tolerance the caller-facing geometry helpers use"; the deck layer
+that actually writes `junctions=` fuses on a 1e-6 m per-coordinate grid.
+What keeps the gap from biting is the deck's own invariant that coincident
+ends are already exactly equal — not an agreement between the numbers.
+**No tolerance value changed anywhere in this arc.** Six disagreeing
+tolerances across three algorithms and two norms remain, and unifying them
+is a decision, not a move.
+
+**Cost, measured the way units 2-7 were** (executable lines — no blanks,
+comments or docstrings): **5,924 → 5,934 across the eleven touched files,
+net +10**, of which 28 are the two new modules (`_ground_spec` 19,
+`_ground_mirror` 9) — so the consuming files shed 18 between them, with
+`bspline.py` down 13 and `hmatrix.py` down 6. The two modules are 207
+lines on disk, which is to say ~86 % prose. What the +10 buys is not size
+but arity: 14 mirror spellings → 2 functions, 5 touch tolerances → 1,
+2 factory decision trees → 1, 2 weight chains → 1.
+
+**What this says about the goal metric.** Nothing new can be *done* that
+could not be done before — which is exactly why these sit below the
+constructor normaliser (rank 1) and `loading_for` (rank 4) in the audit's
+ranking, both of which unblock capabilities. What they buy is that the
+fifth ground, when it comes, is written once.
+
 ---
 
 ## 7. What this subsumes, and what it does not

@@ -153,7 +153,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg
 
-from . import _potential_ground
+from . import _ground_spec, _potential_ground
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -413,15 +413,14 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         the contact case needs — but nothing in this probe measures that,
         and an unmeasured claim is not a capability.
 
-        Tolerance is `BSplineSolver._ground_touch_tol`'s: 1e-6 of the wire's
+        Tolerance is `_ground_spec.ground_touch_tol`'s: 1e-6 of the wire's
         polyline length.
         """
         gz = self.ground_z
         if gz is None:
             return
         for i, pl in enumerate(self.wires_polylines):
-            length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
-            tol = 1e-6 * max(length, 1e-30)
+            tol = _ground_spec.ground_touch_tol(pl)
             zmin = float(pl[:, 2].min())
             if zmin < gz - tol:
                 raise ValueError(

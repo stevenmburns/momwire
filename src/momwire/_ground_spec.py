@@ -38,6 +38,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+import numpy as np
+
 from . import _ground_refl
 
 
@@ -120,3 +122,32 @@ def ground_config(solver, omega) -> GroundConfig | None:
             image_coefficient=(eps_t - 1.0) / (eps_t + 1.0),
         )
     return GroundConfig(mode="fold", eps_tilde=eps_t, image_coefficient=1.0)
+
+
+def ground_touch_tol(polyline):
+    """Snap distance for "this endpoint touches the ground plane": 1e-6 of
+    the wire's own polyline length.
+
+    Loose enough for deck-import float noise at z = 0, far tighter than
+    any deliberate clearance (a 1 mm stand-off on a 10 m vertical is 100×
+    the tolerance). It scales with each wire's length rather than being
+    absolute, which is why it can disagree with an ABSOLUTE grouping
+    tolerance about a plane two coincident ends share — see
+    `RazorSolver._find_junctions`, which handles that disagreement on
+    purpose.
+
+    momwire#429 unit 4 (the audit's rank 7): five byte-identical spellings
+    of these two lines lived in `bspline`, `razor`, `pulse` and
+    `sinusoidal` (twice), the B-spline one already cited BY NAME from the
+    other three's docstrings. The VALUE is unchanged and this unit changed
+    no tolerance anywhere — the tree carries six disagreeing tolerances
+    across three algorithms and two norms, and unifying those is a
+    separate decision (momwire#429's correction 2).
+
+    It lives in the ground spec layer because "does this wire end touch
+    the plane" is a question about the GROUND, asked identically by every
+    solver, and answered before any formulation is chosen.
+    """
+    pl = np.asarray(polyline, dtype=np.float64)
+    length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
+    return 1e-6 * max(length, 1e-30)
