@@ -273,6 +273,82 @@ two mixed-radius geometries × free space and `GN 1`
 `scripts/capture_razor_mixed_radius_nec5_lane.py`) — worst |ΔZ| 0.0586 Ω
 against a 0.20 Ω bar, offsets constant to 0.0211 Ω against 0.05 Ω.
 
+## The deck front end (momwire#432)
+
+`momwire.deck.build_solver(model, basis="razor")` — and `"razor-nec5"` for
+the identified quadrature below — construct this class from a parsed
+`nec2` deck (`momwire.deck.parse`). Both names are the same `RazorSolver`,
+in `momwire.deck.BASES` beside the other five families; `"razor-nec5"`
+binds `nec5_quadrature=True`, the same "one class, one extra kwarg" shape
+`"bspline-d1"` uses for the degree axis.
+
+**Card translation.** `LD 0`/`LD 1`/`LD 4` (series RLC, parallel RLC, a
+fixed R+jX — `momwire.deck.model.LoadSpec`'s three `kind`s) become
+`lumped_loads=[(wire, arclength, Z)]`, `Z` evaluated at the build's own
+frequency via `LoadSpec.impedance`. There is no separate sweep case: a
+sweep already calls `build_solver` once per frequency step (the module
+docstring's "translate once, fill many times" — the geometry is prepared
+once and replayed, but a solver, and with it a load's `Z(ω)`, is an
+OPERATING POINT and is not), so evaluating per call already is the swept
+behaviour. `LD 5` and `IS` reach `wire_conductivity` /
+`insulation_radius` / `insulation_eps_r` exactly as they do for every
+sibling — this class takes that part of the loading API verbatim
+(momwire#427) — so the deck front end does nothing razor-specific for
+them at all.
+
+**The knot a load lands on is the port-algebra route's own.** A load's
+`(wire, arclength)` is read off the mesh `to_polylines` already built to
+place every feed AND load site on an explicit knot, for every basis —
+the SAME walk the siblings' port-algebra route uses to decide where a
+`LD` card's zero-volt port goes. Razor's own knot-snapping
+(`feed_arclength` "snaps to the NEAREST KNOT THAT CARRIES A BASIS", see
+above) never has anything to snap TO here: the position handed to
+`lumped_loads` already IS a knot, so the two routes are comparable by
+construction rather than by a second, independent placement rule that
+could disagree with the first.
+
+**A load-only site is not a port here.** The siblings serve `LD` as a
+zero-volt, zero-impedance gap a caller stamps afterward
+(`PortPlan.loaded_ports()`); this formulation instead bakes the loaded
+impedance directly into the fill (`Z_driven = Z_unloaded + Z_L` at the fed
+knot is exact, per the section above), so a load-only site becomes ONLY a
+`lumped_loads` entry — no phantom zero-volt `feeds` entry alongside it, since
+a port this class does not need would be a fabricated drive point with
+nothing to answer for. A site that is BOTH fed and loaded keeps its real
+feed AND gets a `lumped_loads` entry at the same knot, which is the
+Z_driven identity's own case.
+
+**What still refuses, and how.** `build_solver` does not special-case any
+of `node_gaps`, `extended_kernel` or ground CONTACT over a finite ground —
+constructing this class with any of them raises with exactly the message
+this page and `capabilities.refusals` already carry, because `build_solver`
+passes the same kwargs it always does and this class's own `**unsupported`
+dispatch does the refusing. The one kwarg `build_solver` DOES withhold is
+`junctions`: every sibling takes it (a geometry hint the mesh already
+computed), and this class takes no such argument at all — not even
+`None`, since it is not a declared parameter and any spelling of it lands
+in `**unsupported` — so the roster entry omits the keyword rather than
+passing a value that would refuse.
+
+**Not reached: the portal.** This class has no `compute_port_solution()` (it
+exposes `compute_impedance()` only — see "No C++ accelerator" above), so
+`momwire.portal`'s Y-matrix-based deck runner cannot yet drive a live
+solve under either roster name, even though both are valid `--basis`
+choices the moment they join `deck.BASES` (the portal reads that roster
+directly, #846 phase III). A `compute_port_solution` for this class is a
+unit of its own, tracked as a follow-up rather than attempted by #432,
+which is scoped to the library/script front end
+(`momwire.deck.build_solver`) alone.
+
+Gates: `tests/test_deck_build_solver_razor.py` — a battery of eight decks
+(free dipole, `LD 4` mid-element, `LD 5` copper, a `GN 1` base-fed contact
+monopole, a `GN 1` elevated inverted-V, both finite grounds, a mixed-radius
+two-wire deck) each checked against an independently-constructed
+`RazorSolver` to LU roundoff; a convergence ladder showing the translation's
+answer converges to the port-algebra route's own (`BSplineSolver`) with N;
+and the `node_gaps` / contact-over-finite-ground refusals surfacing through
+`build_solver` unchanged.
+
 ## Twin-gate tests
 
 - `tests/test_razor.py` — instrument parity against a standalone
