@@ -81,8 +81,8 @@ def mesh_of(text: str):
 
 
 def test_every_basis_builds_the_same_model():
-    """All five solver families construct from one deck, under the seven
-    names antennaknobs' ``--basis`` takes."""
+    """All six solver families construct from one deck, under the nine
+    names the roster takes (momwire#432 added ``razor`` / ``razor-nec5``)."""
     model = parse(DIPOLE)
     families = set()
     for name, (solver_class, _kwargs) in BASES.items():
@@ -90,7 +90,7 @@ def test_every_basis_builds_the_same_model():
         assert isinstance(built.solver, solver_class)
         assert built.basis == name
         families.add(solver_class)
-    assert len(families) == 5
+    assert len(families) == 6
 
 
 def test_the_default_basis_is_the_degree_2_bspline():
