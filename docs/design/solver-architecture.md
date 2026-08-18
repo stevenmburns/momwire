@@ -978,6 +978,35 @@ the composing fill is the first place on this solver where that is a
 throughput decision rather than a policy one, since the grid interpolation
 it leans on is already accelerated while the assembly around it is not.
 
+### 6.6 Unit 6: the production bars (maintainer decision, 2026-08-17)
+
+This closes §9's question 4 for the razor row. The two quadrature lanes
+carry two different claims and each is gated on its own terms:
+
+* **The `nec5_quadrature` lane claims the formulation twin** — a fixed,
+  N-independent offset from the licensed binary's printed answers — and
+  keeps the sharp bar (§6.2 for clearance, §6.3's mirror-deck oracle for
+  contact). Nothing new.
+* **The Gauss-Legendre lane claims convergence to the continuum.**
+  Converged GL is deliberately not NEC-5's rule, so its NEC-5 residual is a
+  quadrature difference that must *vanish* with the mesh — and measured, it
+  does on five of the six recorded ladders (dipole 1.372 → 0.116 Ω, fat
+  dipole 0.957 → 0.130, inverted-V 1.314 → 0.548, monopole 0.195 → 0.029,
+  inverted-L 0.520 → 0.140 over N = 24…96). **The decision: gate the
+  production lane by DECAY** — residual strictly shrinking down each
+  ladder, finest rung pinned at its measured level +25 % — rather than by a
+  fixed offset, which is the other lane's claim. The loop is the recorded
+  exception (non-monotone, 1.78 → 4.54 → 3.11; four junctions, slowest
+  mesh) and carries a 5 Ω envelope pin only.
+  `tests/test_razor_production_lane.py`.
+* **The finite grounds take no NEC-5 bar at all** (Michalski limit offset,
+  §6.4). Their production bars are the cross-formulation
+  difference-of-columns gates units 4 and 5 landed — |Δgap − Δgap_free| ≤
+  0.25 Ω at N = 192 against three in-house rows — **ratified as final** by
+  the same decision, together with the PEC-limit decay pins and the
+  low-height formulation-split agreement (22.81 Ω vs 22.837 Ω at 0.04 λ)
+  as the standing evidence set.
+
 ---
 
 ## 7. What this subsumes, and what it does not
