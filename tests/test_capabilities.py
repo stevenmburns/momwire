@@ -176,6 +176,49 @@ def test_razor_refl_coef_ground_is_served():
     assert np.isfinite(z.real) and np.isfinite(z.imag)
 
 
+def test_razor_sommerfeld_ground_is_served():
+    """momwire#398 unit 5: the third row, and the first COMPOSING ground on
+    this solver.
+
+    Same two halves as the rows above. The extra check is the one that says
+    the declaration is not a rename of the refl-coef row: the composing
+    ground has to reach a DIFFERENT matrix, because C2 image + remainder is
+    not any weighting of the Fresnel image. `ground_phi_mode` is accepted
+    and unread over it, exactly as in `BSplineSolver`. The physics lives in
+    `tests/test_razor_sommerfeld_ground.py`.
+    """
+    c = RazorSolver.capabilities
+    assert "sommerfeld" in c.grounds
+    assert c.refusal("sommerfeld") is None
+    assert "sommerfeld" not in c.refusals
+
+    wires, npe = _wire(z=1.0)
+    base = dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        wavelength=WAVELENGTH,
+        ground_z=0.0,
+        ground_eps=10 - 1j,
+    )
+    sim = RazorSolver(**base, ground_model="sommerfeld")
+    assert sim.ground_model == "sommerfeld"
+    z, _ = sim.compute_impedance()
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    z_refl, _ = RazorSolver(**base).compute_impedance()
+    assert abs(z - z_refl) > 1e-6
+
+    # ...and the permittivity is not optional: sommerfeld is the exact
+    # ground OF something, so there is nothing to be exact about without it.
+    with pytest.raises(ValueError, match="requires ground_eps"):
+        RazorSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            wavelength=WAVELENGTH,
+            ground_z=0.0,
+            ground_model="sommerfeld",
+        )
+
+
 def test_razor_ground_contact_is_served_at_a_wire_end():
     """Ground CONTACT landed in unit 3, and the geometry refusals moved.
 
@@ -210,7 +253,6 @@ def test_razor_ground_contact_is_served_at_a_wire_end():
 @pytest.mark.parametrize(
     "cell,kwarg",
     [
-        ("sommerfeld", {"ground_model": "sommerfeld"}),
         ("junction_ports", {"junction_ports": [0]}),
         ("node_gaps", {"node_gaps": [(0, "end", 1.0 + 0j)]}),
         ("extended_kernel", {"extended_kernel": True}),
@@ -258,12 +300,16 @@ def test_razor_unsupported_kwargs_are_typeerrors(cell, kwarg):
         )
 
 
-def test_razor_served_row_is_the_two_folding_grounds_and_nothing_else():
-    """PEC (unit 2) and refl-coef (unit 4) — the two FOLDING grounds. The
-    composing one is refused, and every non-ground cell still is."""
+def test_razor_served_row_is_every_ground_and_no_other_axis():
+    """PEC (unit 2), refl-coef (unit 4) and sommerfeld (unit 5) — the whole
+    ground column, for wires clear of the plane. Every non-ground cell is
+    still refused, and the one combination that is refused inside the
+    served column (contact over a finite ground, momwire#282) says so
+    through its own key rather than by removing a ground."""
     c = RazorSolver.capabilities
-    assert c.grounds == frozenset({"pec", "refl-coef"})
-    assert "sommerfeld" not in c.grounds and c.refusal("sommerfeld")
+    assert c.grounds == frozenset({"pec", "refl-coef", "sommerfeld"})
+    assert c.refusal("contact", "finite_ground") == c.refusals["contact+finite_ground"]
+    assert "momwire#282" in c.refusal("contact", "finite_ground")
     assert not any(
         [
             c.wire_loading,

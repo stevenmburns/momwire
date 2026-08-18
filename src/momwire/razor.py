@@ -109,12 +109,43 @@ this formulation can honestly claim: the ground must not widen the
 razor-vs-Galerkin gap that its own O(1/N) walk already opens in free
 space. `tests/test_razor_refl_coef_ground.py` measures it.
 
-Ground CONTACT over a finite ground stays refused, and momwire#282 is the
-reason: the fold hard-codes image coefficient 1, so the grounded-end
-tent's lower wing — which IS that image — would take spurious contact
-charge. `ground_model="sommerfeld"` stays refused too, on its own terms:
-that ground composes a Galerkin remainder block with the scaled exact
-image, and these rows are razor-blade path integrals.
+Sommerfeld ground (momwire#398 unit 5)
+--------------------------------------
+`ground_model="sommerfeld"` puts the exact (NEC `GN 2` style) finite
+ground under the model, again for wires standing CLEAR of the plane. It
+is this solver's first COMPOSING ground — `PotentialGround.mode ==
+"compose"` — and composing is the whole of what is new:
+
+    Z = Z_free − (C₂·image + Q)
+
+The first term needs no new code at all. C₂ = (ε̃−1)/(ε̃+1) arrives as
+`weight_windows`' constant `(w_A, w_Φ)` pair, so unit 4's weighted fill
+assembles the scaled exact image with the same two lines it uses for the
+Fresnel one — the coefficient enters THROUGH the windows and is never
+applied to a block. The second is the smooth remainder field Q, and it is
+where the composing ground differs from the folding ones twice over:
+
+* it is a FIELD, not a potential pair, so it takes no jωμ / 1/jωε
+  prefactor and is summed into the image block AFTER those — inside
+  `_assemble_Z_source_block`, before the seam's single minus, because
+  `free − (C₂·img + Q) ≠ (free − C₂·img) − Q` in float64;
+* its interpolation grid is measured in WAVELENGTHS, so unlike unit 4's
+  weights (ω-dependent) it is k-dependent, and it may not cross the
+  prepare/replay boundary in any form. Grid and source nodes are built per
+  solved wavenumber, inside the producer `Remainder.field_windows` returns.
+
+Razor's rows are path integrals, not Galerkin projections, so it cannot
+consume `Remainder.evaluate`'s finished block; unit 5's shared-layer edit
+is the operation underneath it, which hands back the remainder field of
+each source segment's tent moments at an arbitrary observer set. The
+`PulseSolver` probe (momwire#416) had independently asked for the same
+thing. `tests/test_razor_sommerfeld_ground.py` carries the physics, and
+the bar is again cross-formulation rather than NEC-5.
+
+Ground CONTACT over a finite ground stays refused, over BOTH of them, and
+momwire#282 is the reason: the fold hard-codes image coefficient 1, so the
+grounded-end tent's lower wing — which IS that image — would take spurious
+contact charge.
 
 Ground contact (momwire#398 unit 3)
 -----------------------------------
@@ -144,15 +175,15 @@ term keeps only the segment-centroid end.
 
 Scope
 -----
-Free space, the PEC image and the reflection-coefficient ground, reduced
-kernel, one polyline per wire. The Sommerfeld ground and the extended
-kernel are out of scope; each is refused with a message rather than
-silently mismodelled, as are ground contact over a finite ground and the
-contacts that are not a wire end in the plane (an interior anchor touching
-down, an edge lying in the plane, a wire dipping below it). Only wire ENDS
-junction: a wire end touching another wire's interior is not a contact
-here. A wire with a single segment cannot take part in a junction (its two
-junction tents would overlap on one segment) and is refused.
+Free space and all three grounds — PEC, reflection-coefficient and
+Sommerfeld — reduced kernel, one polyline per wire. The extended kernel is
+out of scope and is refused with a message rather than silently
+mismodelled, as are ground contact over a finite ground and the contacts
+that are not a wire end in the plane (an interior anchor touching down, an
+edge lying in the plane, a wire dipping below it). Only wire ENDS junction:
+a wire end touching another wire's interior is not a contact here. A wire
+with a single segment cannot take part in a junction (its two junction
+tents would overlap on one segment) and is refused.
 """
 
 import numpy as np
@@ -217,31 +248,21 @@ _PER_WIRE_RADIUS_REFUSAL = (
     "(momwire#147) are not supported by this formulation twin"
 )
 
-# The one finite ground still refused, and the one geometry the served
-# finite ground refuses. Both are checked in __init__ (they are values of
-# named arguments, not stray kwargs, so `_OUT_OF_SCOPE` cannot carry them)
-# and both are quoted by `capabilities.refusals`.
-_SOMMERFELD_REFUSAL = (
-    "ground_model='sommerfeld' is out of scope for RazorSolver: the "
-    "Sommerfeld ground is a COMPOSING ground (`PotentialGround.mode == "
-    "'compose'`) — the C2-scaled exact image plus a smooth remainder block "
-    "that must be summed before the fold's single minus — and its remainder "
-    "is a Galerkin block over the whole basis, which this formulation's "
-    "razor-blade rows are not. RazorSolver serves the PEC image "
-    "(momwire#398 unit 2) and the reflection-coefficient ground "
-    "(momwire#398 unit 4); use BSplineSolver or SinusoidalSolver for "
-    "ground_model='sommerfeld'"
-)
+# The one geometry both served finite grounds refuse. Checked in __init__
+# (it is a combination of named arguments, not a stray kwarg, so
+# `_OUT_OF_SCOPE` cannot carry it) and quoted by `capabilities.refusals`.
 _CONTACT_OVER_FINITE_REFUSAL = (
     "ground CONTACT over a finite ground is refused: the fold hard-codes "
     "image coefficient 1, i.e. PEC, so a grounded end over anything else "
     "would take spurious contact charge (momwire#282). The grounded-end "
     "tent's lower wing IS its own image, and it only carries the charge "
-    "that cancels the real wing's when that image is exact — over a "
-    "reflection-coefficient ground it is not, and no weighting of the "
-    "image block repairs a basis function that is wrong. Either raise the "
-    "wire clear of the plane (ground_eps is served for wires standing "
-    "clear, 0.1-0.5 lambda up) or drop ground_eps for the PEC image"
+    "that cancels the real wing's when that image is exact — over a finite "
+    "ground it is not: the reflection-coefficient image is scaled by the "
+    "Fresnel coefficients and the Sommerfeld one by C2 = (eps-1)/(eps+1), "
+    "and no weighting of the image block repairs a basis function that is "
+    "wrong. Either raise the wire clear of the plane (both finite grounds "
+    "are served there — refl-coef in its 0.1-0.5 lambda validity window, "
+    "sommerfeld at any height) or drop ground_eps for the PEC image"
 )
 
 
@@ -325,15 +346,18 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         charge term takes w_Φ, which the PEC path leaves unweighted. Both
         weights come from `_potential_ground.PotentialGround.weight_windows`
         — this solver computes no reflection coefficient of its own.
-        Validity window (momwire#151/#153): 0.1–0.5 λ above the plane. Below
-        that the Φ term's approximate weighting degrades, and NO ground
-        CONTACT is served over it at all (momwire#282 — the fold hard-codes
-        image coefficient 1, so a grounded end would take spurious contact
-        charge); a wire end in the plane with `ground_eps` set is refused.
-        NEC-5 is NOT the oracle here: its finite ground is Michalski,
-        carrying a limit offset of its own, so this ground is gated by
-        cross-formulation agreement against momwire's own B-spline and
-        sinusoidal solvers instead (`tests/test_razor_refl_coef_ground.py`).
+        Validity window (momwire#151/#153): 0.1–0.5 λ above the plane, for
+        `ground_model="refl-coef"`. Below that the Φ term's approximate
+        weighting degrades — use `ground_model="sommerfeld"`, which is exact
+        at every height. NO ground CONTACT is served over either finite
+        ground (momwire#282 — the fold hard-codes image coefficient 1, so a
+        grounded end would take spurious contact charge); a wire end in the
+        plane with `ground_eps` set is refused. NEC-5 is NOT the oracle for
+        either: its finite ground is Michalski, carrying a limit offset of
+        its own, so both are gated by cross-formulation agreement against
+        momwire's own B-spline and sinusoidal solvers instead
+        (`tests/test_razor_refl_coef_ground.py`,
+        `tests/test_razor_sommerfeld_ground.py`).
     ground_phi_mode: which image-charge (Φ-term) weighting the
         reflection-coefficient ground uses — one of
         `_ground_refl.PHI_MODES` ("rho_v", "image", "normal", "blend"),
@@ -343,10 +367,16 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         the charge term, so the image charge's weight is a modelling
         choice. Ignored without `ground_eps`.
     ground_model: "refl-coef" (the default, and what `ground_eps` selects)
-        or "sommerfeld", which is REFUSED here — the Sommerfeld ground
-        composes a Galerkin remainder block with the scaled exact image,
-        and this formulation's rows are razor-blade path integrals, not
-        Galerkin ones. `BSplineSolver` and `SinusoidalSolver` serve it.
+        or "sommerfeld" — the exact NEC `GN 2` style ground (momwire#398
+        unit 5), which requires `ground_eps` to be the permittivity of, and
+        is served at ANY height rather than in a validity window. It is
+        this solver's one COMPOSING ground: the image block is the exact
+        image scaled by the constant C₂ = (ε̃−1)/(ε̃+1) (which arrives
+        through the same weight windows the Fresnel ground uses) PLUS the
+        smooth remainder field, summed before the fold's single minus. See
+        the module docstring for what composing costs the schedule.
+        `ground_phi_mode` is unread over it: the Sommerfeld image
+        coefficient is exact and has no knob, exactly as in `BSplineSolver`.
     wavelength: measurement wavelength in metres; k = 2π / wavelength.
     halfdriver_factor: informational only when `wires` is given explicitly
         (the polylines fully determine the geometry); kept for signature
@@ -390,6 +420,13 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         NEC-5 substitute (the licensed binary stays the oracle).
     n_qp_source: Gauss-Legendre order per source segment for the smooth
         remainder (exp(−jkR)−1)/(4πR); the static 1/(4πR) part is analytic.
+    n_qp_sommerfeld: Gauss-Legendre order per source segment for the
+        SOMMERFELD remainder field's tent moments, unread unless
+        `ground_model="sommerfeld"`. Same name, same default and same
+        meaning as `BSplineSolver`'s: that field is smooth on the scale of
+        a segment (its singular C₂-image part has been removed by
+        construction), so a low order converges — measured at 5e-4 Ω
+        between orders 3 and 8 in `tests/test_razor_sommerfeld_ground.py`.
     cancel: optional :class:`~momwire._cancel.CancelToken`; polled at the
         phase boundaries (after geometry, between the fill chunks, before
         the dense solve).
@@ -398,15 +435,18 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
-    # momwire#396: free space, the PEC image (momwire#398 unit 2) and the
-    # reflection-coefficient ground (unit 4), no Sommerfeld / loading / EK /
-    # junction_ports / node_gaps / per-wire radii / enrichment — the rest of
+    # momwire#396: free space and all three grounds — the PEC image
+    # (momwire#398 unit 2), the reflection-coefficient ground (unit 4) and
+    # the Sommerfeld ground (unit 5) — for wires standing clear of the
+    # plane, plus ground contact over PEC (unit 3). No loading / EK /
+    # junction_ports / node_gaps / per-wire radii / enrichment: the rest of
     # the row is refused, reusing `_OUT_OF_SCOPE`'s prose (built at __init__
-    # from unsupported kwargs) plus the wire_radius scalar-only check for
-    # per_wire_radius and `_SOMMERFELD_REFUSAL` for the one ground that is a
-    # named argument rather than a stray kwarg.
+    # from unsupported kwargs), the wire_radius scalar-only check for
+    # per_wire_radius, and `_CONTACT_OVER_FINITE_REFUSAL` for the one
+    # geometry the finite grounds refuse (a combination of named arguments
+    # rather than a stray kwarg).
     capabilities = Capabilities(
-        grounds=frozenset({"pec", "refl-coef"}),
+        grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=False,
         extended_kernel=False,
         junction_ports=False,
@@ -414,7 +454,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         per_wire_radius=False,
         singular_enrichment=False,
         refusals={
-            "sommerfeld": _SOMMERFELD_REFUSAL,
+            "contact+finite_ground": _CONTACT_OVER_FINITE_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "node_gaps": _OUT_OF_SCOPE["node_gaps"],
             "extended_kernel": _OUT_OF_SCOPE["extended_kernel"],
@@ -440,6 +480,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         feeds=None,
         n_qp_path=32,
         n_qp_source=12,
+        n_qp_sommerfeld=3,
         nec5_quadrature=False,
         cancel=None,
         **unsupported,
@@ -464,13 +505,13 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             raise ValueError("wire_radius must be positive (reduced kernel)")
 
         # The ground, in the four attributes `_potential_ground`'s factory
-        # reads. Two of its rows are served — the PEC plane (unit 2) and the
-        # reflection-coefficient ground (unit 4) — so these four are the
-        # solver's own state, validated here exactly as `BSplineSolver`
-        # validates them (same values, same wording, same ValueErrors), and
-        # the factory's branching then lands where the caller asked. Only
-        # the composing row is refused, and it is refused here rather than
-        # through `_OUT_OF_SCOPE` because it is a VALUE of a served argument.
+        # reads. All three of its rows are served now — the PEC plane (unit
+        # 2), the reflection-coefficient ground (unit 4) and the Sommerfeld
+        # one (unit 5) — so these four are the solver's own state, validated
+        # here exactly as `BSplineSolver` validates them (same values, same
+        # wording, same ValueErrors, including sommerfeld's requirement of a
+        # ground_eps to be the permittivity OF), and the factory's branching
+        # then lands where the caller asked.
         self.ground_z = None if ground_z is None else float(ground_z)
         if self.ground_z is not None and not np.isfinite(self.ground_z):
             raise ValueError("ground_z must be finite")
@@ -479,8 +520,8 @@ class RazorSolver(_ElementCurrents, _Cancelable):
                 "ground_model must be 'refl-coef' or 'sommerfeld', "
                 f"got {ground_model!r}"
             )
-        if ground_model == "sommerfeld":
-            raise NotImplementedError(f"ground_model: {_SOMMERFELD_REFUSAL}")
+        if ground_model == "sommerfeld" and ground_eps is None:
+            raise ValueError("ground_model='sommerfeld' requires ground_eps")
         if ground_eps is not None and self.ground_z is None:
             raise ValueError("ground_eps requires ground_z to be set")
         if ground_phi_mode not in _ground_refl.PHI_MODES:
@@ -500,9 +541,10 @@ class RazorSolver(_ElementCurrents, _Cancelable):
 
         self.n_qp_path = int(n_qp_path)
         self.n_qp_source = int(n_qp_source)
+        self.n_qp_sommerfeld = int(n_qp_sommerfeld)
         self.nec5_quadrature = bool(nec5_quadrature)
-        if self.n_qp_path < 1 or self.n_qp_source < 1:
-            raise ValueError("n_qp_path and n_qp_source must be >= 1")
+        if self.n_qp_path < 1 or self.n_qp_source < 1 or self.n_qp_sommerfeld < 1:
+            raise ValueError("n_qp_path, n_qp_source and n_qp_sommerfeld must be >= 1")
 
         if not wires:
             raise ValueError("wires must be non-empty")
@@ -1113,17 +1155,22 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         ground = _potential_ground.potential_ground_for(self, geom, self.k, self.omega)
         if ground is None:
             return None
-        # Every ground this solver serves folds (the composing one is
-        # refused), so the object is a pure mirror map HERE whichever it is:
-        # the mirrored geometry and its static moments do not know what
-        # wavenumber will be asked for, which is what lets a swept solve
-        # build them once in the prepare half and replay them at every k.
-        # What DOES depend on ω is the reflection-coefficient ground's
-        # `(w_A, w_Φ)`, and `weighted` is the one bit of the ground this
-        # method carries forward for it: the weights themselves are built
-        # per solved wavenumber in `_assemble_Z_from_prepared`, and all the
-        # k-independent half owes them is the observer geometry the
-        # specular ray is drawn to (`_assemble_Z_prepare`).
+        # The object is a pure mirror map HERE whichever ground it is — even
+        # the composing one, whose exact-image half is the same mirrored
+        # geometry scaled by C2. The mirrored geometry and its static
+        # moments do not know what wavenumber will be asked for, which is
+        # what lets a swept solve build them once in the prepare half and
+        # replay them at every k.
+        #
+        # What DOES depend on ω is everything else the finite grounds need:
+        # the reflection-coefficient `(w_A, w_Φ)` through ε̃(ω), and — one
+        # step further — the Sommerfeld remainder's interpolation grid,
+        # whose whole lattice is measured in wavelengths. So this method
+        # carries forward only two BITS of the ground, `weighted` and
+        # `compose`, both of which are properties of the ground MODEL and
+        # not of the frequency; the weights and the grid are built per
+        # solved wavenumber in `_assemble_Z_from_prepared`, and all the
+        # k-independent half owes them is geometry (`_assemble_Z_prepare`).
         img = ground.image_geometry()
         return {
             "seg_p0": img.mirror_positions(geom["seg_p0"]),
@@ -1131,6 +1178,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             "seg_h": geom["seg_h"],
             "mirror_tangents": img.mirror_tangents,
             "weighted": ground.eps_tilde is not None,
+            "compose": ground.mode == "compose",
         }
 
     def _assemble_Z_prepare(self, geom):
@@ -1172,6 +1220,22 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         window costs an order of magnitude more per (observer, source) pair
         than a moment window does; that is a memory decision and the answer
         does not depend on it.
+
+        **And nothing at all of the Sommerfeld remainder** (momwire#398
+        unit 5), which is the sharper form of the same rule. Its weights
+        are constant (C₂ does not vary over the geometry), but its
+        interpolation grid is a k-dependent object from top to bottom — the
+        lattice is spaced in wavelengths, `max_image_distance` is bucketed
+        in wavelengths, and the surfaces carry an ωμ normalisation — so a
+        grid on this side of the boundary would be a wavenumber cached in
+        the one place that must hold none. The composing fill therefore
+        takes exactly two more arrays from here, both of them geometry: the
+        REAL source segment endpoints (`src_l` / `src_r` — unmirrored, since
+        the plane enters the remainder through the grid rather than through
+        a mirrored source). Grid, source nodes and moment weights are built
+        per solved wavenumber inside the producer
+        `Remainder.field_windows` returns, and the swept gate in
+        `tests/test_razor_sommerfeld_ground.py` is what proves it.
 
         Priced on the ByDipole1 N=96 deck at h = 5 m over PEC, so the
         trade is on the record rather than asserted:
@@ -1298,6 +1362,16 @@ class RazorSolver(_ElementCurrents, _Cancelable):
                 prepared["image"]["obs_tans"] = tans.reshape(-1, 3)
                 prepared["image"]["src_c"] = cent
                 prepared["image"]["src_t"] = seg_t
+            if img_src["compose"]:
+                # The composing ground's remainder integrates over the REAL
+                # source segments — the plane enters its field through the
+                # interpolation grid, not through a mirrored source — so
+                # these endpoints are unmirrored even though they ride in
+                # the image block's dict, which is where the term is summed
+                # (`_assemble_Z_source_block`). Endpoints rather than
+                # centroids because that axis is integrated, not sampled.
+                prepared["image"]["src_l"] = geom["seg_p0"]
+                prepared["image"]["src_r"] = geom["seg_p0"] + seg_h[:, None] * seg_t
         return prepared
 
     def _assemble_Z_from_prepared(self, geom, prepared, k, omega):
@@ -1313,7 +1387,11 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         "fold"`, architecture doc §2.2) — and the same one minus whether
         the image is the PEC one or the Fresnel-weighted one, because a
         weight is a per-pair scale on the image block and cannot move a
-        sign the fold takes once. Both halves of the minus are real
+        sign the fold takes once. It is the same one minus over the
+        COMPOSING ground too (unit 5), and that is the point of composing
+        rather than a coincidence: `C₂·img + Q` is associated inside
+        `_assemble_Z_source_block`, so what arrives here is one block
+        again. Both halves of the minus are real
         physics and they arrive together: the horizontal image current runs
         anti-parallel and the image charge is opposite, so *both* the
         vector-potential term and the charge term change sign — which is
@@ -1411,15 +1489,43 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         Neither term multiplies `ground.image_coefficient`: on this trunk
         the coefficient enters THROUGH the weights (`PotentialGround`'s
         class docstring is explicit that applying it again is the obvious
-        bug), and for a folding ground it is 1 in any case. The seam's
-        single global minus stays exactly where it was.
+        bug), and for a folding ground it is 1 in any case. Over the
+        composing ground it is C₂ and the same sentence holds — the
+        constant `(w_A, w_Φ)` pair `weight_windows` returns for
+        `mode == "compose"` IS C₂ times the PEC mirror table, so the two
+        terms above assemble the scaled exact image with no branch of their
+        own. The seam's single global minus stays exactly where it was.
+
+        **The composing ground's third term** (momwire#398 unit 5) is the
+        one thing here that is not a weighting of the fold. Q is the smooth
+        Sommerfeld remainder FIELD, tested by this formulation's own rule:
+        the testing-path integral of the field of each source segment's
+        tent moments, projected on the path's tangent. It rides T1's
+        observer windows — same chunks, same path weights — and reaches
+        them through `Remainder.field_windows`, the operation unit 5 split
+        out of the Galerkin block `Remainder.evaluate` returns (razor's
+        rows are not Galerkin projections, so the block was unusable at any
+        shape). Three properties of Q are worth naming, because each is a
+        way to get it wrong:
+
+        * **no prefactor.** F is already an E-field (theory manual eq 123's
+          unit current moment), so Q takes neither jωμ nor 1/jωε; it is
+          added to the assembled block, not to T1 or T2;
+        * **real sources.** Q integrates over the REAL segments — the plane
+          is inside F, through the interpolation grid — even though it is
+          summed into the IMAGE block, which is simply where the
+          composition happens;
+        * **before the minus.** `C₂·img + Q` is associated here so the
+          caller's `Z -=` lands both terms; distributing it would be a
+          different float64 answer, which is the whole content of the
+          `"compose"` mode contract.
         """
         s_a, s_b = prepared["s_a"], prepared["s_b"]
         h_a, h_b = prepared["h_a"], prepared["h_b"]
         q_a, q_b = prepared["q_a"], prepared["q_b"]
         n_basis = prepared["n_basis"]
 
-        w_A_fn = w_Phi_fn = None
+        w_A_fn = w_Phi_fn = rem_fn = None
         if ground is not None and ground.eps_tilde is not None:
             # Two observer sets, one source set. T2's observers ARE the
             # source set, which is what the producer's square default
@@ -1429,6 +1535,19 @@ class RazorSolver(_ElementCurrents, _Cancelable):
                 observers=(sources["obs_pts"], sources["obs_tans"]), sources=src
             )
             w_Phi_fn = ground.weight_windows(sources=src)
+            remainder = ground.remainder()
+            if remainder is not None:
+                # The composing ground's second term, over the SAME observer
+                # windows T1 already walks and the REAL source segments.
+                # `n_moment=2` is the tent: ∫Λ and ∫τΛ, from which the same
+                # two combinations the reduced-kernel moments take (M1/h on
+                # a rising wing, M0 − M1/h on a falling one) fall out below.
+                rem_fn = remainder.field_windows(
+                    (sources["obs_pts"], sources["obs_tans"]),
+                    (sources["src_l"], sources["src_r"], sources["src_t"]),
+                    n_moment=2,
+                    n_qp=self.n_qp_sommerfeld,
+                )
 
         M0c, _ = self._seg_moments_from_prepared(
             sources["t2_chunks"], geom, k, prepared["n_cent"], need_m1=False
@@ -1464,6 +1583,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         # `td_b`, which the weight window replaces wholesale.
         sig_a, sig_b = geom["wing_sigma"][:, 0], geom["wing_sigma"][:, 1]
         T1 = np.empty((n_basis, n_basis), dtype=np.complex128)
+        Q = None if rem_fn is None else np.empty_like(T1)
         for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
             self._checkpoint()
             M0, M1 = self._seg_moments_from_prepared(static, geom, k, n_obs_chunk)
@@ -1487,8 +1607,33 @@ class RazorSolver(_ElementCurrents, _Cancelable):
                 integrand = wA_a * mom_a + wA_b * mom_b
             integrand *= wts[lo:hi].reshape(-1)[:, None]
             T1[lo:hi] = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
+            if rem_fn is not None:
+                # The remainder rides the same window, and the same wing
+                # algebra one axis over: the moment axis carries ∫Λ and
+                # ∫τΛ of the projected field where `mom_a` / `mom_b` carry
+                # M0 and M1 of the kernel. σ multiplies afterwards for the
+                # same reason it does on w_A — the field is linear in the
+                # source tangent — and no jωμ / 1/jωε prefactor is applied
+                # at all, because F is already a field.
+                f_mom = rem_fn(lo * n_path, hi * n_path)
+                rem_a = f_mom[:, s_a, 1] / h_a[None, :]
+                rem_b = f_mom[:, s_b, 1] / h_b[None, :]
+                if fall_a.size:
+                    rem_a[:, fall_a] = f_mom[:, s_a[fall_a], 0] - rem_a[:, fall_a]
+                if fall_b.size:
+                    rem_b[:, fall_b] = f_mom[:, s_b[fall_b], 0] - rem_b[:, fall_b]
+                rem_int = rem_a * sig_a[None, :] + rem_b * sig_b[None, :]
+                rem_int *= wts[lo:hi].reshape(-1)[:, None]
+                Q[lo:hi] = rem_int.reshape(hi - lo, n_path, n_basis).sum(axis=1)
 
-        return 1j * omega * self.mu * T1 - T2 / (1j * omega * self.eps)
+        block = 1j * omega * self.mu * T1 - T2 / (1j * omega * self.eps)
+        if Q is None:
+            return block
+        # `C2·img + Q`, associated BEFORE the seam's single minus — the
+        # whole content of `mode == "compose"`, since
+        # `free − (C2·img + Q) ≠ (free − C2·img) − Q` in float64. The two
+        # halves meet HERE and the caller's `Z -=` is untouched.
+        return block + Q
 
     def _assemble_Z(self, geom, k):
         """Fill the razor-blade impedance matrix at one wavenumber.

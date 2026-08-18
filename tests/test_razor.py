@@ -258,9 +258,10 @@ def test_distinct_endpoints_are_fine():
         # this list only because BD1_WIRE lies at z=0 — a geometry refusal
         # wearing an out-of-scope test's clothes. Nor is `ground_eps`, since
         # unit 4: the reflection-coefficient ground is served for a wire
-        # standing clear of the plane. `ground_model` stays, at the one
-        # value that is still refused.
-        {"ground_model": "sommerfeld"},
+        # standing clear of the plane. Nor is `ground_model="sommerfeld"`,
+        # since unit 5 — the whole ground column is served now, and what is
+        # refused inside it is a GEOMETRY (contact over a finite ground),
+        # not a kwarg.
         {"degree": 2},
         # Junctions are DETECTED, never declared: an explicit spec is either
         # redundant with the mesh or disagrees with it.
