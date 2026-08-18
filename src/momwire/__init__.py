@@ -9,6 +9,7 @@ from ._port_solution import PortSolution
 from .bspline import BSplineSolver
 from .hmatrix import HMatrixSolver
 from .array_block import ArrayBlockSolver, LatticeFFTUnavailable
+from .pulse import PulseSolver
 from .razor import RazorSolver
 from .sinusoidal import SinusoidalSolver
 from .sinusoidal_galerkin import SinusoidalGalerkinSolver
@@ -27,6 +28,7 @@ __all__ = [
     "HMatrixSolver",
     "ArrayBlockSolver",
     "RazorSolver",
+    "PulseSolver",
     "LatticeFFTUnavailable",
     "PortSolution",
     "Capabilities",
