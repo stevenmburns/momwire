@@ -425,8 +425,10 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         `ground_model="sommerfeld"`. Same name, same default and same
         meaning as `BSplineSolver`'s: that field is smooth on the scale of
         a segment (its singular C₂-image part has been removed by
-        construction), so a low order converges — measured at 5e-4 Ω
-        between orders 3 and 8 in `tests/test_razor_sommerfeld_ground.py`.
+        construction), so a low order converges — measured at 3.6e-6 Ω
+        between orders 3 and 8 on the hardest deck this unit gates (a
+        dipole 0.04 λ up, where the remainder is worth 22 Ω), in
+        `tests/test_razor_sommerfeld_ground.py`.
     cancel: optional :class:`~momwire._cancel.CancelToken`; polled at the
         phase boundaries (after geometry, between the fill chunks, before
         the dense solve).
