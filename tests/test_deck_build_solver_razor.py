@@ -404,20 +404,50 @@ def test_a_node_gaps_deck_refuses():
         build_solver(model, basis="razor", frequency_mhz=30.0)
 
 
-def test_extended_kernel_refuses():
-    text = DIPOLE.replace("EX 0 1 5", "EK\nEX 0 1 5")
-    model = parse(text)
-    with pytest.raises(NotImplementedError, match="extended_kernel"):
-        build_solver(model, basis="razor")
+@pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
+def test_extended_kernel_card_reaches_the_solver(basis):
+    """An `EK` card arms the extended kernel on this class too (momwire#436).
+
+    It used to be refused. The taper study identified the NEC-5 binary as
+    extended-kernel EVERYWHERE, which made the refusal a statement about the
+    reference that was false, so razor takes the house kwarg now and
+    `build_solver` needed no razor-specific line to deliver it — the same
+    `kwargs["extended_kernel"] = True` that serves every sibling.
+    """
+    model = parse(DIPOLE.replace("EX 0 1 5", "EK\nEX 0 1 5"))
+    built = build_solver(model, basis=basis)
+    assert built.extended_kernel is True
+    assert built.solver.extended_kernel is True
+    # and it is not merely stored: the kernel moves the answer.
+    reduced = build_solver(model, basis=basis, extended_kernel=False)
+    assert reduced.solver.extended_kernel is False
+    z_ek, _ = built.solver.compute_impedance()
+    z_red, _ = reduced.solver.compute_impedance()
+    assert z_ek != z_red
+
+
+def test_a_deck_without_ek_stays_reduced():
+    model = parse(DIPOLE)
+    built = build_solver(model, basis="razor")
+    assert built.extended_kernel is False
+    assert built.solver.extended_kernel is False
 
 
 def test_the_refusals_are_not_bare_key_or_type_errors():
     """The issue's own wording: a `KeyError`/`TypeError` here would mean the
     translation dropped the card silently instead of naming razor's reason."""
-    text = DIPOLE.replace("EX 0 1 5", "EK\nEX 0 1 5")
-    model = parse(text)
+    model = DeckModel(
+        wires=(
+            DeckWire(
+                vertices=((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+                radius=1e-3,
+                edge_elements=(4,),
+            ),
+        ),
+        node_gaps=((0, 0, 1 + 0j),),
+    )
     try:
-        build_solver(model, basis="razor")
+        build_solver(model, basis="razor", frequency_mhz=30.0)
     except NotImplementedError:
         pass
     else:
