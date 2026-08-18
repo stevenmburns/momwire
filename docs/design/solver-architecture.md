@@ -776,6 +776,102 @@ but momwire#282 is now load-bearing rather than advisory, since a contact
 deck over refl-coef must either fix the image-coefficient assumption or keep
 refusing.
 
+### 6.4 Unit 4: the reflection-coefficient ground on razor (2026-08-17)
+
+The finite-ground unit §6.2 predicted, landing where §6.3's contact unit sat
+in the queue. `RazorSolver` now serves `ground_eps` for wires standing clear
+of the plane, consuming `PotentialGround.weight_windows` and writing no
+Fresnel coefficient of its own. `ground_model="sommerfeld"` and ground
+CONTACT over a finite ground stay refused, the latter citing momwire#282 —
+which §6.3 flagged as having become load-bearing, and which this unit
+confirms: the grounded tent's lower wing IS the image, so a weighted image
+does not repair it, and no amount of `(w_A, w_Φ)` is a fix for a wrong basis
+function.
+
+**§6.2's two predictions were both right, and the second one cost the unit
+its one shared-layer edit.** The weights are ω-dependent and could not live
+in the k-independent prepare half — confirmed, and the split is exactly
+where §6.2 said it would be: `prepare` keeps the mirrored geometry and its
+static moments plus (new) the observer POINTS the specular rays are drawn
+to; `_assemble_Z_from_prepared` builds one ground object per solved
+wavenumber and both weight producers from it. And razor's weights had to be
+applied per (row-chunk × source-segment) window rather than as an (N, N)
+table — confirmed, with nothing N²-scale allocated in the weights at any
+point.
+
+What that forced is the same shape of generalisation unit 2 forced on
+`ImageGeometry`, one row down the §2.2 table. `weight_windows` had been
+shaped by its first consumer too: "observer rows" meant rows of the
+geometry's own square segment × segment table, because the B-spline fill's
+observers ARE its segments. Razor has **two** observer sets and neither is
+the source set — the testing-path quadrature points, each carrying the
+path's own tangent (T1), and the segment centroids the charge term
+differences between (T2) — and its `geom` dict does not even carry the keys
+the old spelling read. So the producer now takes an observer set and a
+source set as `(centres, tangents)` pairs, with the square case as a
+DEFAULT (`own_segments`) rather than the definition. **A second consumer
+forced exactly one generalisation, one layer deep, and no new concept —
+twice now, on two different members of the same object.**
+
+The physics detail worth recording is why the windows exist at all. The
+whole-geometry `weight_tables` fuse the observer tangent dot INTO w_A
+(`a_term_weights` contracts the Fresnel dyad with both tangents to one
+number per pair), which is exactly right for a fill whose observers are
+segments and exactly unusable for one whose tangent table is `(3, n_basis)`
+and whose observers are quadrature points. Razor therefore consumes w_A in
+the slot where the PEC fill writes `t_out · M·t_n`, applying the wing's σ
+after the gather — legitimate because w_A is linear in the source tangent —
+and the PEC limit ρ_v → 1, ρ_h → −1 returns w_A to that number identically.
+T2 takes w_Φ on the image kernel at each centroid before the two centroids
+are differenced, which is the pilot's finding 4 realised: this formulation
+separates the charge term explicitly, so `ground_phi_mode` applies to the
+image-side doublets directly rather than through a field dyad that cannot
+express it.
+
+Cost, measured the way units 2 and 3 were (executable lines — no blanks,
+comments or docstrings): **91 added and 27 retired in `razor.py`, net
++64**, of which 22 are the two refusal messages' prose (`_SOMMERFELD_REFUSAL`
+and `_CONTACT_OVER_FINITE_REFUSAL`, 11 lines each) and most of the 27
+retired are the three `_OUT_OF_SCOPE` entries they replace — leaving ~42
+lines of constructor validation and weighted fill together. In
+`_potential_ground.py`: **15 added and 9 retired, net +6**, and even that
+overstates it, since the retired nine are the closures' captured arrays
+being renamed from `tangents` / `seg_c` to `obs_t` / `src_t` / `obs_c` /
+`src_c`. No new physics, no new kernel, no C++.
+
+| gate | result |
+|---|---|
+| PEC limit | **held and rate-checked.** \|Z(ε̃) − Z_PEC\| on the dipole@0.25λ deck at N = 48: 15.318, 5.876, 1.991, 0.6441, 0.06503 Ω at ε̃ = 10, 10², 10³, 10⁴, 10⁶ — monotone, both lanes, lossless and lossy. The single-decade ratios 2.61 / 2.95 / 3.09 climb toward √10 from below, which is the coefficients' own O(ε̃^{−1/2}) rate rather than a tolerance being met |
+| cross-formulation agreement | **held, in the form this formulation can honestly claim.** Razor's disagreement with `BSplineSolver(degree=2)` / `SinusoidalSolver` / `SinusoidalGalerkinSolver` at N = 192 over `ground_eps` = 13 − 0.03j equals its FREE-SPACE disagreement with the same solver to within 0.133 Ω (worst; dipole@0.25λ, GL lane, sin-galerkin). The gap itself is 0.43–1.05 Ω and is razor's own O(1/N) walk — the dipole ladder closes on the Galerkin answer 5.217 → 2.887 → 1.653 → 0.951 Ω, ratios 1.81 / 1.75 / 1.74 |
+| swept == per-k | **bit for bit**, over a `(eps_r, sigma)` ground whose ε̃ moves with ω — the gate that would catch weights hoisted into the prepare half |
+| free space + PEC + contact bit-identity | **held**: 170 razor arrays (7 deck shapes × up to 3 grounds × 2 quadrature lanes × 5 readouts) unmoved against the branch point. Both golden modules unmoved |
+| B-spline grounded bit-identity | **held**: 24 arrays across PEC / refl-coef / two Φ modes / Sommerfeld × degree 1-2 × clear and contact decks, unmoved by the `weight_windows` generalisation; the two spellings pinned `array_equal` |
+
+**The honest negative, recorded rather than tuned.** On the inverted-V deck
+`SinusoidalSolver` sits 12.6 Ω from the other four solvers — in FREE SPACE,
+unchanged by any ground. That is a free-space property of the sinusoidal
+basis on a bent three-anchor wire and has nothing to do with this unit; it
+is named here because it is exactly the reason the gate is written on the
+difference between the refl-coef and free-space columns rather than on the
+refl-coef column alone. A ground unit that gated on absolute cross-solver
+agreement would have had to either exclude that solver or invent a
+tolerance to cover it.
+
+**What unit 5 (Sommerfeld / `mode == "compose"`) inherits.** The fold side
+is now proven twice over on this solver, and the composing side is the part
+that has no answer yet. `Remainder.evaluate(supp_seg, polys)` is a B-spline
+signature — it takes the basis description that `_Z_sommerfeld_remainder`
+consumes, and returns an `(n_basis, n_basis)` Galerkin block. Razor has no
+`supp_seg`/`polys`, and its rows are path integrals rather than Galerkin
+projections, so unit 5 cannot consume the existing `Remainder` at all: it
+needs the remainder FIELD sampled at razor's own testing-path points, which
+is a different operation from the block `evaluate` returns, not a different
+shape of the same one. The specific ask is in the unit-4 report; the short
+version is that `Remainder` must grow an operation ("the remainder field at
+these observers, from these source segments") with `evaluate` kept as the
+Galerkin convenience over it — which is, for the third time, the same
+generalisation this pilot keeps producing.
+
 ---
 
 ## 7. What this subsumes, and what it does not

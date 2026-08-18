@@ -105,14 +105,32 @@ image coefficient 1, i.e. PEC (momwire#282).
 
 ## Scope
 
-Free space and the PEC image, reduced kernel, one polyline per wire —
-deliberately, not as an initial-version gap:
+Free space, the PEC image and the reflection-coefficient ground, reduced
+kernel, one polyline per wire — the remaining gaps deliberate, not
+initial-version:
 
-- **Finite grounds are out of scope.** NEC-5's is Michalski, which carries
-  its own limit offset; mixing that into this comparison would contaminate
-  the one thing this class exists to isolate (the testing rule). The PEC
-  image carries no such offset — it is the same exact image NEC-5's own
-  `GN 1` uses — which is why it is the ground that landed.
+- **The reflection-coefficient ground is served** (`ground_eps`,
+  momwire#398 unit 4) for wires standing CLEAR of the plane, with
+  `ground_phi_mode` picking the image-charge weighting exactly as
+  `BSplineSolver` does. **NEC-5 is not its oracle**, and that is a
+  statement about the physics: NEC-5's finite ground is Michalski, which
+  carries its own limit offset, and mixing that in would contaminate the
+  one thing this class exists to isolate (the testing rule). The PEC image
+  carries no such offset — it is the same exact image NEC-5's own `GN 1`
+  uses — which is why it is the ground that could be oracle-gated. The
+  finite one is gated by cross-formulation agreement instead, in the form
+  this formulation can honestly claim: the ground must not widen the
+  razor-vs-Galerkin gap that razor's own O(1/N) walk already opens in
+  free space (measured within 0.133 Ω of it, on two decks × two lanes ×
+  three reference solvers).
+- **The Sommerfeld ground is out of scope.** It composes a Galerkin
+  remainder block with the C₂-scaled exact image; these rows are
+  razor-blade path integrals, not Galerkin projections.
+- **Ground contact over a finite ground is out of scope**, and stays
+  refused citing momwire#282: the fold hard-codes image coefficient 1, so
+  the grounded-end tent's lower wing — which IS that image — would take
+  spurious contact charge. Weighting the image block cannot repair a wrong
+  basis function.
 - **The extended kernel is out of scope.** NEC-5's formulation tests the
   expansion on the wire axis with the reduced kernel; extending it would
   again be answering a different question than the one this solver was
@@ -123,11 +141,11 @@ deliberately, not as an initial-version gap:
   bit-exact regression tests against a pure-numpy reference, which this
   class does not yet have to pay for.
 
-`RazorSolver` refuses `ground_eps`/`ground_model`/`ground_phi_mode`,
-`degree`, `junctions`, `junction_ports`, `extended_kernel`, `node_gaps` and
-non-scalar `wire_radius` at construction with a message explaining why,
-rather than silently mismodelling — a wrong answer here is worse than no
-answer.
+`RazorSolver` refuses `ground_model="sommerfeld"`, `degree`, `junctions`,
+`junction_ports`, `extended_kernel`, `node_gaps`, non-scalar `wire_radius`
+and `ground_eps` on a deck that touches the plane, at construction with a
+message explaining why, rather than silently mismodelling — a wrong answer
+here is worse than no answer.
 
 ## Twin-gate tests
 
@@ -143,6 +161,13 @@ answer.
 - `tests/test_razor_pec_ground.py` — the PEC image: exactness against the
   explicit mirrored twin, and four clearance ladders against NEC-5's
   printed `GN 1` impedances at the sharp lane's bar.
+- `tests/test_razor_refl_coef_ground.py` — the finite ground: the ε̃ → ∞
+  collapse onto the PEC image at the coefficients' own O(ε̃^{−1/2}) rate,
+  the cross-formulation ladders (two decks × two lanes × `BSplineSolver` /
+  `SinusoidalSolver` / `SinusoidalGalerkinSolver`, to N = 192), the
+  ω-boundary (swept == per-k over a ground whose ε̃ moves with ω), and the
+  structural row showing the fill follows the `PotentialGround` object in
+  BOTH directions.
 - `tests/test_razor_ground_contact.py` — the grounded-end tent: four
   geometry classes proved exactly equal to half their free-space mirror
   models, plus two contact ladders against NEC-5 (and the finding that
