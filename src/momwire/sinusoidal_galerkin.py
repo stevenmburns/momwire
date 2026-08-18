@@ -832,12 +832,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # node_gaps are served here (M5b / #305) — plus the two combination
     # refusals `_refuse_junction_port_solve` still carries. Wire loading
     # rides the base class's overlap term (#395) unchanged.
+    #
+    # `refusals` REPLACES rather than extends, so the base's entries have to
+    # be carried across by hand: the contact/refl-coef withdrawal
+    # (momwire#282 stage 1) is inherited behaviour — this class's
+    # constructor IS the base's — and the declaration has to say so or the
+    # row reads as serving what the constructor refuses. `junction_ports`
+    # and `node_gaps` are the two the base refused and this class does not,
+    # so they are the two deliberately dropped.
     capabilities = SinusoidalSolver.capabilities._replace(
         junction_ports=True,
         node_gaps=True,
         refusals={
             "junction_ports+finite_ground": _JUNCTION_PORTS_FINITE_GROUND_REFUSAL,
             "junction_ports+mixed_radii": _JUNCTION_PORTS_MIXED_RADII_REFUSAL,
+            "contact+refl-coef": SinusoidalSolver.capabilities.refusals[
+                "contact+refl-coef"
+            ],
         },
     )
 

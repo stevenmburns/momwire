@@ -684,7 +684,14 @@ def test_gb1_thin_wire_galerkin_shift_exceeds_the_point_matched_one(radius):
 _GROUND_KW = {
     "free space": {},
     "PEC": dict(ground_z=0.0),
-    "refl-coef": dict(ground_z=0.0, ground_eps=(13.0, 0.005)),
+    # The plane sits 0.3 m BELOW the monopole's base rather than at it since
+    # momwire#282 stage 1 (2026-08-18) withdrew ground CONTACT under
+    # `ground_model="refl-coef"`. Lowering the plane rather than lifting the
+    # wire keeps `_monopole`'s geometry, mesh and feed identical across all
+    # four rows, so the ground is still the only thing that varies — and the
+    # Fresnel weight tables, which is what this row is here to reach, are
+    # reached the same way at any clearance.
+    "refl-coef": dict(ground_z=-0.3, ground_eps=(13.0, 0.005)),
     # momwire#287. The remainder half of this model stays reduced, on the
     # measurement G-S1 makes at the bottom of this file.
     "sommerfeld": dict(
@@ -986,13 +993,18 @@ _G4_DECKS = {
         feed_arclength=0.085,
         ground_z=0.0,
     ),
+    # `ground_z = -0.3`, not 0.0, since momwire#282 stage 1 (2026-08-18):
+    # ground contact under `ground_model="refl-coef"` is refused. The plane
+    # moves rather than the wire so this deck stays the PEC deck above with
+    # one thing changed — the ground constant — which is the comparison the
+    # gates below are built on.
     "refl-coef ground": dict(
         wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.4]])],
         n_per_edge_per_wire=[[14]],
         nsegs=14,
         wire_radius=0.02,
         feed_arclength=0.085,
-        ground_z=0.0,
+        ground_z=-0.3,
         ground_eps=(13.0, 0.005),
     ),
     "sommerfeld ground": dict(
@@ -1159,7 +1171,13 @@ def test_gb5_the_image_block_carries_its_own_delta(monkeypatch):
 def test_gb5_the_refl_coef_image_rides_the_same_delta():
     """The Fresnel dyad is a per-segment-pair weight applied AFTER the field
     tables, so the reflection-coefficient block needs no EK code of its own —
-    and this is the statement that it got the delta anyway."""
+    and this is the statement that it got the delta anyway.
+
+    On `_GROUND_KW["refl-coef"]`'s plane (0.3 m below the base) rather than
+    on a contact one since momwire#282 stage 1. The spy counts which BLOCKS
+    asked `_ek_pairs` for a mirrored eligibility decision, which is a
+    property of there being an image block at all.
+    """
     original = SinusoidalGalerkinSolver._ek_pairs
     seen = []
 
@@ -1169,7 +1187,7 @@ def test_gb5_the_refl_coef_image_rides_the_same_delta():
 
     try:
         SinusoidalGalerkinSolver._ek_pairs = spy
-        sim = _monopole(extended_kernel=True, ground_z=0.0, ground_eps=(13.0, 0.005))
+        sim = _monopole(extended_kernel=True, **_GROUND_KW["refl-coef"])
         geom = sim._build_geometry()
         ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
         nnz, n_src = ctx["w_entry"].shape[0], ctx["N"]
@@ -3340,9 +3358,17 @@ def _gd9_bend(n, ek, **kw):
 
 
 def _gd9_monopole(n, ek, **kw):
-    """A quarter-wave monopole standing ON the plane: the near-pair-rich
-    geometry of momwire#356's sweep, where the contact node puts a segment
-    next to its own image and the near set is at its densest."""
+    """A quarter-wave monopole standing 2 cm off the plane: the near-pair-
+    rich geometry of momwire#356's sweep, where the lowest segment sits
+    next to its own image and the near set is at its densest.
+
+    It stood ON the plane until momwire#282 stage 1 (2026-08-18) withdrew
+    ground contact under `ground_model="refl-coef"`. The clearance is 2 cm
+    against a segment length of ~0.6 m, so the image is still an order of
+    magnitude closer than one segment and the near set is unchanged in
+    character — which is all this bit-identity gate reads. The deck's
+    ANSWER is not gated here and never was.
+    """
     z = np.linspace(0.0, _GD8_WL / 4, n + 1)
     pts = np.column_stack([np.zeros(n + 1), np.zeros(n + 1), z])
     return SinusoidalGalerkinSolver(
@@ -3353,7 +3379,7 @@ def _gd9_monopole(n, ek, **kw):
         wire_radius=0.02,
         extended_kernel=ek,
         feeds=[(0, 0, 1.0)],
-        ground_z=0.0,
+        ground_z=-0.02,
         ground_eps=(13.0, 0.005),
         **kw,
     )

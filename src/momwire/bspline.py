@@ -480,11 +480,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
-    # momwire#396: everything is served on its own — the three refusals are
-    # all `use_singular_enrichment` combinations (`__init__`'s three raises,
-    # reused here). `HMatrixSolver` / `ArrayBlockSolver` fall back to the
-    # dense path under enrichment rather than refusing it, so they inherit
-    # this row unchanged (see those modules — no override).
+    # momwire#396: everything is served on its own — three of the four
+    # refusals are `use_singular_enrichment` combinations (`__init__`'s
+    # three raises, reused here). `HMatrixSolver` / `ArrayBlockSolver` fall
+    # back to the dense path under enrichment rather than refusing it, so
+    # they inherit this row unchanged (see those modules — no override).
+    #
+    # The fourth is momwire#282 stage 1's withdrawal: ground CONTACT under
+    # `ground_model="refl-coef"`. Ground contact is not a declared AXIS (no
+    # solver has one), so it says so through a combination key, exactly as
+    # `RazorSolver` says its own contact refusal through
+    # `"contact+finite_ground"`. The ground stays in `grounds`: refl-coef is
+    # served, and is still the default, for wires clear of the plane.
     capabilities = Capabilities(
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
@@ -497,6 +504,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "wire_loading+singular_enrichment": _ENRICHMENT_WIRE_LOADING_REFUSAL,
             "extended_kernel+singular_enrichment": _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
             "per_wire_radius+singular_enrichment": _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
+            "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
         },
     )
 
@@ -666,6 +674,23 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for i, pl in enumerate(self.wires_polylines):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
+
+        # momwire#282 stage 1: ground CONTACT under the reflection-
+        # coefficient ground is refused, at construction, before any
+        # geometry is built. It is checked HERE rather than beside the other
+        # ground validation above because it is the one ground check that
+        # needs the wires. The condition is exactly `contact_ends` — a wire
+        # END in the plane, junctioned or not, which is what
+        # `_wire_endpoint_status` will tag `"ground"` — so the refusal and
+        # the grounded basis agree on what contact is by construction.
+        if self.ground_eps is not None and self.ground_model == "refl-coef":
+            touching = _ground_spec.contact_ends(self.wires_polylines, self.ground_z)
+            if touching:
+                where = ", ".join(f"wire {w} {kind}" for w, kind in touching)
+                raise NotImplementedError(
+                    f"{where} lies in the ground plane: "
+                    f"{_ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL}"
+                )
 
         n_w = len(self.wires_polylines)
 

@@ -127,19 +127,27 @@ def test_three_wire_junction_at_ground():
     _assert_cluster(zs, 28.0, 46.0, -40.0, 0.0)
 
 
-def test_refl_coef_ground_contact_solves():
-    s = SinusoidalSolver(
-        wires=_mono_wires(),
-        nsegs=21,
-        wavelength=WL,
-        wire_radius=0.001,
-        ground_z=0.0,
-        ground_eps=(13.0, 0.005),
-        feeds=FEED,
-    )
-    z = _z(s)
-    assert np.isfinite(z.real) and np.isfinite(z.imag)
-    assert z.real > 0.0
+def test_refl_coef_ground_contact_is_refused():
+    """WITHDRAWN by momwire#282 stage 1 (maintainer decision D3,
+    2026-08-18). This test used to assert that the reflection-coefficient
+    ground SOLVES at contact, which it did — to a number 27 Ω from this
+    solver's own Sommerfeld answer on the same deck and on the wrong side
+    of PEC (`docs/design/contact-over-finite-ground.md` §3.6). A finite
+    answer was never the claim worth gating; it was the claim that let a
+    silently wrong default ship. The refusal now IS the behaviour, and the
+    per-solver surface is gated below in "The refl-coef contact
+    withdrawal".
+    """
+    with pytest.raises(NotImplementedError, match="ground CONTACT under"):
+        SinusoidalSolver(
+            wires=_mono_wires(),
+            nsegs=21,
+            wavelength=WL,
+            wire_radius=0.001,
+            ground_z=0.0,
+            ground_eps=(13.0, 0.005),
+            feeds=FEED,
+        )
 
 
 def test_sommerfeld_ground_contact_allowed():
@@ -165,6 +173,137 @@ def test_sommerfeld_ground_contact_allowed():
         z = _z(s)
         assert np.isfinite(z.real) and np.isfinite(z.imag), cls.__name__
         assert z.real > 0.0, cls.__name__
+
+
+# ----------------------------------------------------------------------
+# The refl-coef contact withdrawal (momwire#282 stage 1, decision D3)
+# ----------------------------------------------------------------------
+#
+# `docs/design/contact-over-finite-ground.md` put the licensed binary
+# behind a row that had shipped ungated since #151/#282, and the
+# reflection-coefficient half of it failed: a base-fed quarter-wave
+# vertical over average soil reads 27.0+12.6j Ω against 51.5+23.2j Ω from
+# the same solver's Sommerfeld path and 52.4+22.7j Ω printed by the binary
+# (§3.6). It is not a degraded approximation — it is on the far side of the
+# 40.7+23.3j Ω PEC answer — and `ground_model="refl-coef"` is the DEFAULT,
+# so the failure mode was a user writing nothing at all and getting a wrong
+# monopole. The maintainer's decision (2026-08-18) was to withdraw the row
+# rather than warn about it.
+#
+# The refusal is a property of the GROUND, not of either basis, so it is
+# one condition checked in one place per trunk and inherited by the
+# subclasses. These gates say so on every solver that used to serve it, and
+# — the half that matters more — say that nothing ELSE moved: refl-coef
+# clear of the plane, PEC at contact, and Sommerfeld at contact all still
+# solve.
+
+_WITHDRAWN_SOLVERS = (
+    "BSplineSolver",
+    "HMatrixSolver",
+    "ArrayBlockSolver",
+    "SinusoidalSolver",
+    "SinusoidalGalerkinSolver",
+)
+
+
+def _withdrawn_cls(name):
+    import momwire
+
+    return getattr(momwire, name)
+
+
+@pytest.mark.parametrize("name", _WITHDRAWN_SOLVERS)
+def test_refl_coef_contact_is_refused_at_construction(name):
+    """Every solver that served it refuses it, and refuses it in `__init__`
+    — before any geometry is built, any matrix is sized or any quadrature
+    is chosen — so a caller cannot get half a solve out of it."""
+    cls = _withdrawn_cls(name)
+    with pytest.raises(NotImplementedError) as exc:
+        cls(
+            wires=_mono_wires(),
+            nsegs=21,
+            wavelength=WL,
+            wire_radius=0.001,
+            ground_z=0.0,
+            ground_eps=(13.0, 0.005),
+            feeds=FEED,
+        )
+    msg = str(exc.value)
+    # The geometry it names, then the decision, then the measurement, then
+    # the way out. Pinned because this message is the whole user-facing
+    # surface of a capability that was withdrawn: it has to carry the
+    # number that justifies the withdrawal, or it reads as an arbitrary
+    # restriction.
+    assert "wire 0 start lies in the ground plane" in msg
+    assert "ground CONTACT under ground_model='refl-coef' is refused" in msg
+    assert "momwire#282 stage 1" in msg
+    assert "27.0+12.6j ohm" in msg and "51.5+23.2j ohm" in msg
+    assert "ground_model='sommerfeld'" in msg
+    assert "docs/design/contact-over-finite-ground.md" in msg
+
+
+@pytest.mark.parametrize("name", _WITHDRAWN_SOLVERS)
+def test_refl_coef_clear_of_the_plane_still_solves(name):
+    """The withdrawal is contact-only. The same wire raised 0.15 λ — inside
+    momwire#153's 0.1-0.5 λ validity window, where refl-coef is what it was
+    always gated to be — solves on every one of them, with the DEFAULT
+    ground model, unchanged."""
+    cls = _withdrawn_cls(name)
+    h = 0.15 * WL
+    sim = cls(
+        wires=[np.array([(0.0, 0.0, h), (0.0, 0.0, h + H)])],
+        nsegs=21,
+        wavelength=WL,
+        wire_radius=0.001,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        feeds=[(0, 0.5 * H, 1.0 + 0j)],
+    )
+    z = _z(sim)
+    assert np.isfinite(z.real) and np.isfinite(z.imag), name
+    assert z.real > 0.0, name
+
+
+@pytest.mark.parametrize("name", _WITHDRAWN_SOLVERS)
+def test_pec_contact_still_solves(name):
+    """`ground_eps=None` is the PEC image and is not touched by any of
+    this: the refusal is gated on a finite ground, so the #151 monopole
+    that started this whole line of work still runs on every solver."""
+    cls = _withdrawn_cls(name)
+    sim = cls(
+        wires=_mono_wires(),
+        nsegs=21,
+        wavelength=WL,
+        wire_radius=0.001,
+        ground_z=0.0,
+        feeds=FEED,
+    )
+    z = _z(sim)
+    assert np.isfinite(z.real) and np.isfinite(z.imag), name
+    assert z.real > 0.0, name
+
+
+def test_refl_coef_contact_refusal_names_the_end_that_touches():
+    """A wire hanging DOWN to the plane touches with its `end`, not its
+    `start`, and a deck with two grounded wires names both. The refusal
+    reads `_ground_spec.contact_ends`, which is the same anchor scan the
+    grounded basis itself is built from, so the two cannot drift apart
+    about what contact is."""
+    wires = [
+        np.array([(0.0, 0.0, H), (0.0, 0.0, 0.0)]),
+        np.array([(1.0, 0.0, 0.0), (1.0, 0.0, H)]),
+    ]
+    with pytest.raises(NotImplementedError) as exc:
+        SinusoidalSolver(
+            wires=wires,
+            nsegs=21,
+            wavelength=WL,
+            wire_radius=0.001,
+            ground_z=0.0,
+            ground_eps=(13.0, 0.005),
+            feeds=[(0, 0.5 * H, 1.0 + 0j)],
+        )
+    assert "wire 0 end, wire 1 start lies in the ground plane" in str(exc.value)
 
 
 def test_below_plane_rejected_bspline():
@@ -233,14 +372,20 @@ def test_elevated_end_stays_free():
 _282_LAM = 299.792458 / 30.0
 _282_H = _282_LAM / 4
 _282_NS = (11, 21, 41, 61, 81)
+# momwire#282 stage 1 (2026-08-18) WITHDREW the two refl-coef rows this
+# table used to carry ("refl-coef soil" and "refl-coef lossless"): ground
+# contact under `ground_model="refl-coef"` is refused at construction now,
+# so those decks cannot be built. The correction itself is untouched and is
+# still what makes this trunk answerable at contact at all — it just has
+# one served ground to be answerable over. See "The refl-coef contact
+# withdrawal" above for the measurement that decided it.
 _282_GROUNDS = {
-    "refl-coef soil": dict(ground_eps=(13.0, 0.005)),
-    "refl-coef lossless": dict(ground_eps=(13.0, 0.0)),
     "sommerfeld soil": dict(ground_eps=(13.0, 0.005), ground_model="sommerfeld"),
+    "sommerfeld lossless": dict(ground_eps=(13.0, 0.0), ground_model="sommerfeld"),
 }
 
 
-def _282_z(cls, ns, **ground):
+def _282_kwargs(cls, ns, **ground):
     """The issue's own deck: a base-fed quarter-wave vertical whose base
     LIES IN the plane, a = 0.02 (Δ/a from 11 down to 1.5 over the ladder)."""
     kw = dict(
@@ -255,7 +400,11 @@ def _282_z(cls, ns, **ground):
     if cls is BSplineSolver:
         kw.update(degree=2, feed_model="segment")
     kw.update(ground)
-    return complex(cls(**kw).compute_impedance()[0])
+    return kw
+
+
+def _282_z(cls, ns, **ground):
+    return complex(cls(**_282_kwargs(cls, ns, **ground)).compute_impedance()[0])
 
 
 @pytest.mark.parametrize("ground", list(_282_GROUNDS))
@@ -321,10 +470,67 @@ def test_282_leaves_an_elevated_wire_untouched():
 
 def test_282_correction_vanishes_in_the_pec_limit():
     """ε̃ → ∞ drives the correction to zero continuously, so the finite-ground
-    path meets the PEC path rather than jumping to it."""
+    path meets the PEC path rather than jumping to it.
+
+    Restated by momwire#282 stage 1 (2026-08-18). It used to read the
+    IMPEDANCE under a refl-coef ground at ε̃ = 1e12 and demand it land
+    within 1e-3 of the PEC answer. Refl-coef contact is withdrawn, and the
+    Sommerfeld path cannot carry that bar at contact for a reason that has
+    nothing to do with this correction: the interpolation grid's near-PEC
+    floor (momwire#443, `docs/design/contact-over-finite-ground.md` §3.7),
+    which is an instrument limit of the shared remainder machinery and is
+    measured below rather than fixed here.
+
+    So the test now reads the CORRECTION COLUMN itself, which is what the
+    title has always named. It is exactly |1 − C₂| ∝ 1/ε̃ at contact, and
+    the two decades below show it: 1.3e-6 at ε̃ = 1e6, 1.3e-12 at 1e12 —
+    six orders per six orders, continuous, no jump.
+    """
+
+    def _corr_rel(**ground):
+        s = SinusoidalSolver(**_282_kwargs(SinusoidalSolver, 21, **ground))
+        geom = s._build_geometry()
+        G, seg_view = s._assemble_Z(geom, s.k)
+        G2 = G.copy()
+        s._contact_charge_correction(G2, geom, s.k, seg_view)
+        return float(np.abs(G2 - G).max() / np.abs(G).max())
+
+    soil = _corr_rel(ground_eps=(13.0, 0.005), ground_model="sommerfeld")
+    big = _corr_rel(ground_eps=(1e6, 0.0), ground_model="sommerfeld")
+    huge = _corr_rel(ground_eps=(1e12, 0.0), ground_model="sommerfeld")
+    assert soil > 1e-2, f"correction is not live over soil: {soil:.3e}"
+    assert big < 1e-5, f"correction at eps_r=1e6 is {big:.3e}"
+    assert huge < 1e-11, f"correction at eps_r=1e12 is {huge:.3e}"
+    # 1/ε̃, to within the decade: six orders of ε̃ buy six orders of column.
+    assert 1e-7 < huge / big < 1e-5, f"not 1/eps_tilde: {big:.3e} -> {huge:.3e}"
+
+
+def test_282_pec_limit_impedance_floors_on_the_sommerfeld_grid():
+    """What is LEFT over when the correction has gone to zero, pinned at
+    today's value and not at zero — momwire#443.
+
+    With the contact charge cancelled to 1.3e-12 (above), a Sommerfeld
+    ground at ε̃ = 1e12 should return the PEC contact answer. It returns it
+    to 0.053 Ω, not to rounding, and the residual does not shrink with more
+    permittivity: it is the interpolation grid's error failing to scale with
+    the ~1/√ε̃ surfaces at the small R₁ that only a CONTACT deck queries
+    (`docs/design/contact-over-finite-ground.md` §3.7 measured the mechanism
+    directly, and §5.2 declined to promise a gate the grid cannot carry).
+
+    This gate exists to keep that number visible and honest rather than to
+    hold it down. Do NOT tighten it here: fixing the grid is momwire#443's
+    unit, and when it lands this pin is what should fail.
+    """
     z_pec = _282_z(SinusoidalSolver, 21)
-    z_big = _282_z(SinusoidalSolver, 21, ground_eps=(1e12, 0.0))
-    assert abs(z_big - z_pec) < 1e-3 * abs(z_pec), f"{z_big} vs PEC {z_pec}"
+    z_huge = _282_z(
+        SinusoidalSolver, 21, ground_eps=(1e12, 0.0), ground_model="sommerfeld"
+    )
+    resid = abs(z_huge - z_pec)
+    assert resid < 0.20, f"near-PEC floor grew to {resid:.4f} ohm (was 0.053)"
+    assert resid > 1e-3, (
+        f"near-PEC floor collapsed to {resid:.3e} ohm — if momwire#443 fixed "
+        "the grid, celebrate and re-derive this pin"
+    )
 
 
 def test_282_brings_the_ground_shift_onto_the_cross_basis_reference():
@@ -332,9 +538,17 @@ def test_282_brings_the_ground_shift_onto_the_cross_basis_reference():
     differences cancel out of — now tracks the b-spline family instead of
     being 20x it. Measured at NS = 41: δ_bspline = −0.302−0.168j,
     δ_sinusoidal = −0.298−0.091j (was 1.312−20.232j).
+
+    momwire#282 stage 1 dropped the "refl-coef soil" half of this loop with
+    the rest of the withdrawal (2026-08-18). Worth recording what that half
+    was actually saying: the two trunks agreed with EACH OTHER on the
+    refl-coef shift the whole time, and both were 27 Ω from the binary.
+    Cross-formulation agreement at contact was never evidence that the
+    ground model was right — which is the study's §5.3 warning, and the
+    reason stage 1 built an external lane instead of a third trunk.
     """
     ns = 41
-    for ground in ("refl-coef soil", "sommerfeld soil"):
+    for ground in ("sommerfeld soil",):
         kw = _282_GROUNDS[ground]
         d_s = (_282_z(SinusoidalSolver, ns, **kw) - _282_z(SinusoidalSolver, ns)) / abs(
             _282_z(SinusoidalSolver, ns)
@@ -362,8 +576,12 @@ def test_282_brings_the_ground_shift_onto_the_cross_basis_reference():
 # over NS = 11 → 41 where EK-off had come down to 0.13). #292 builds the
 # subtraction from the same per-end GXX quantities the fill uses.
 
+# The "refl-coef soil" row went with momwire#282 stage 1's withdrawal
+# (2026-08-18) — contact under `ground_model="refl-coef"` is refused at
+# construction. #292's twin is unchanged: it is chosen by the fill's own IND
+# code, not by the ground model, and the C2-weighted Sommerfeld branch that
+# momwire#287 opened is the one left carrying it.
 _292_EK_GROUNDS = {
-    "refl-coef soil": dict(ground_eps=(13.0, 0.005)),
     "sommerfeld soil": dict(ground_eps=(13.0, 0.005), ground_model="sommerfeld"),
 }
 
@@ -454,7 +672,15 @@ def test_292_leaves_an_elevated_ek_wire_untouched():
 
 
 def _292_contact_solver(top, ek=True):
-    """A contacting wire from the origin to `top`, over average soil."""
+    """A contacting wire from the origin to `top`, over average soil.
+
+    Sommerfeld since momwire#282 stage 1 (2026-08-18): this used to take the
+    default refl-coef ground, which is refused at contact now. Nothing these
+    gates measure moves with the ground model — `_contact_ek_masks` reads
+    the fill's IND codes and the geometry, and the two brackets' RATIO
+    divides the ground factor out — so they are the same gates on the served
+    ground.
+    """
     return SinusoidalSolver(
         wires=[np.array([[0.0, 0.0, 0.0], top])],
         n_per_edge_per_wire=[[21]],
@@ -464,6 +690,7 @@ def _292_contact_solver(top, ek=True):
         ground_z=0.0,
         wavelength=_282_LAM,
         ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
         extended_kernel=ek,
     )
 
@@ -555,6 +782,10 @@ def _292_delta_at_tilted_observers(radius):
         ground_z=0.0,
         wavelength=lam,
         ground_eps=(13.0, 0.005),
+        # Sommerfeld since momwire#282 stage 1: refl-coef contact is
+        # refused. The a → 0 collapse this probe pins is a property of the
+        # EK end-charge bracket, which the ground only scales.
+        ground_model="sommerfeld",
         extended_kernel=True,
     )
     geom = s._build_geometry()

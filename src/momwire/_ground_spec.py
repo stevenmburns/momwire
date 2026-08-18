@@ -151,3 +151,92 @@ def ground_touch_tol(polyline):
     pl = np.asarray(polyline, dtype=np.float64)
     length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
     return 1e-6 * max(length, 1e-30)
+
+
+def contact_ends(polylines, ground_z):
+    """Which wire ENDS lie in the ground plane: `(wire_index, "start"|"end")`.
+
+    A pure geometry question — no formulation, no ground model — answered
+    with `ground_touch_tol`'s per-wire tolerance, so it agrees end for end
+    with `BSplineSolver._wire_endpoint_status`'s `"ground"` tagging,
+    `SinusoidalSolver`'s `ground_minus`/`ground_plus` marking and
+    `RazorSolver._ground_ends`. Returns a sorted tuple, empty in free space
+    and over a plane nothing touches.
+
+    It answers ONLY about the two anchors of each polyline, because that is
+    what "ground contact" means everywhere in this tree: a wire END in the
+    plane, whose current the image continues. An INTERIOR anchor in the
+    plane is mid-span touchdown, which is a different (and refused, or
+    unmodelled) thing on every solver, and this helper deliberately does not
+    speak for it. Geometry that is outright wrong — a wire dipping BELOW the
+    plane, or an edge lying IN it — is not diagnosed here either: each
+    solver already raises its own `ValueError` for those, with its own
+    wording, and duplicating the check would only make two error messages
+    race.
+    """
+    if ground_z is None:
+        return ()
+    gz = float(ground_z)
+    ends = []
+    for i, pl in enumerate(polylines):
+        pl_arr = np.asarray(pl, dtype=np.float64)
+        tol = ground_touch_tol(pl_arr)
+        if abs(float(pl_arr[0, 2]) - gz) <= tol:
+            ends.append((i, "start"))
+        if abs(float(pl_arr[-1, 2]) - gz) <= tol:
+            ends.append((i, "end"))
+    return tuple(sorted(ends))
+
+
+# The one geometry the reflection-coefficient ground served and should not
+# have. Raised at construction by `BSplineSolver` (and its `HMatrixSolver` /
+# `ArrayBlockSolver` subclasses) and by `SinusoidalSolver` (and its
+# `SinusoidalGalerkinSolver` subclass), and quoted by each one's
+# `capabilities.refusals["contact+refl-coef"]`.
+#
+# This WITHDRAWS a capability that shipped. momwire#151 gave the mixed-
+# potential trunk a grounded-end basis and momwire#282 gave the direct-field
+# trunk its contact-charge correction, and both then answered a `refl-coef`
+# contact deck — the DEFAULT ground model — without complaint and without
+# any reference behind them. `docs/design/contact-over-finite-ground.md`
+# put a reference behind them (the licensed NEC-5 binary's printed
+# impedances) and the refl-coef row failed it by 27 Ω, which is the measured
+# fact this prose states. The maintainer's decision to withdraw rather than
+# warn is dated 2026-08-18 in that document's decision record (D3).
+#
+# The MODEL is what fails, not momwire's implementation of it, and the
+# refusal says so because the alternative reading — "momwire cannot do what
+# other codes can" — is the wrong lesson to leave a user with. NEC-2's own
+# reflection-coefficient ground was run on the same deck class as a
+# post-study cross-check (stock nec2c, `GN 0`, 5.35 m contact monopole at
+# 14 MHz): 175 − 779j Ω over average soil and 155 − 1248j Ω over poor soil,
+# against a sane 39.4 + 22.1j Ω from the same binary over `GN 1`. Hundreds
+# of ohms of spurious reactance, in the reference implementation of the
+# model. A reflection coefficient is a plane-wave object evaluated on a
+# specular ray, and at zero clearance there is no such ray to evaluate it
+# on; no code has a valid story there.
+CONTACT_UNDER_REFL_COEF_REFUSAL = (
+    "ground CONTACT under ground_model='refl-coef' is refused "
+    "(momwire#282 stage 1, 2026-08-18): the reflection-coefficient "
+    "ground's Phi-term weight is a specular-angle approximation with no "
+    "validity at zero clearance (momwire#153), and at contact it does not "
+    "approximate the answer at all. Measured on a base-fed quarter-wave "
+    "vertical over average soil (eps_r 13, sigma 0.005 S/m) at 14 MHz, "
+    "N=41: refl-coef gives 27.0+12.6j ohm against this solver's own "
+    "sommerfeld answer of 51.5+23.2j ohm on the same deck and the NEC-5 "
+    "binary's printed 52.4+22.7j ohm — 27 ohm out, and on the WRONG SIDE "
+    "of the 40.7+23.3j ohm PEC answer, so it is not a degraded "
+    "approximation but a different number. This row was served and "
+    "silently wrong; docs/design/contact-over-finite-ground.md 3.6 has "
+    "the measurement. The MODEL is what has no story at the plane, not "
+    "momwire's implementation of it: NEC-2's own reflection-coefficient "
+    "ground (nec2c, GN 0) prints 175-779j ohm over average soil and "
+    "155-1248j ohm over poor soil on the same contact monopole, against a "
+    "sane 39.4+22.1j ohm over GN 1 — a reflection coefficient is a "
+    "plane-wave object evaluated on a specular ray, and at zero clearance "
+    "there is no such ray. Use ground_model='sommerfeld', which is "
+    "contact-capable (momwire#151) and gated there against the binary, or "
+    "raise the wire clear of the plane — refl-coef stays served, and stays "
+    "the default, for wires standing clear in its 0.1-0.5 lambda validity "
+    "window"
+)

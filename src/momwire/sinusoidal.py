@@ -271,6 +271,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # not (`_reject_junction_ports`; node_gaps has no kwarg here at all).
     # Per-wire radii are served (momwire#147); singular enrichment doesn't
     # exist on this family (no kwarg — same TypeError shape as node_gaps).
+    #
+    # momwire#282 stage 1 withdrew one combination inside the served ground
+    # column: ground CONTACT under `ground_model="refl-coef"`. Same key,
+    # same prose and same reasoning as `BSplineSolver`'s — contact is not a
+    # declared axis anywhere, so it is a combination key on the pattern
+    # `RazorSolver` set with `"contact+finite_ground"`.
     capabilities = Capabilities(
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
@@ -282,6 +288,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         refusals={
             "junction_ports": _JUNCTION_PORTS_REFUSAL,
             "node_gaps": _NODE_GAPS_REFUSAL,
+            "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
         },
     )
 
@@ -439,6 +446,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for i, pl in enumerate(self.wires_polylines):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
+
+        # momwire#282 stage 1: ground CONTACT under the reflection-
+        # coefficient ground is refused, at construction. Same condition,
+        # same prose and same place in the constructor as `BSplineSolver`'s
+        # — this is a statement about the GROUND, which both trunks share,
+        # and not about either basis. The #282 contact-charge correction
+        # (`_contact_charge_correction`) is what made this row answerable on
+        # this trunk at all; it is unaffected, and keeps serving contact
+        # under `ground_model="sommerfeld"`.
+        if self.ground_eps is not None and self.ground_model == "refl-coef":
+            touching = _ground_spec.contact_ends(self.wires_polylines, self.ground_z)
+            if touching:
+                where = ", ".join(f"wire {w} {kind}" for w, kind in touching)
+                raise NotImplementedError(
+                    f"{where} lies in the ground plane: "
+                    f"{_ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL}"
+                )
 
         n_w = len(self.wires_polylines)
 
