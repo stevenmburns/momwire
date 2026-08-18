@@ -568,3 +568,69 @@ def test_sg_junction_port_loading_matches_perturbation():
     assert per_wire.shape == (2,)
     assert p_wire == pytest.approx(per_wire.sum())
     assert per_wire[0] == pytest.approx(per_wire[1], rel=1e-6)  # symmetric halves
+
+
+# ----------------------------------------------------------------------
+# The shared spec layer (momwire#428): one producer, four testing rules
+# ----------------------------------------------------------------------
+
+
+def test_loading_for_is_one_producer_across_every_row():
+    """`_wire_loading.loading_for` is formulation-independent, and the four
+    rows that serve loading prove it by agreeing BIT-FOR-BIT on Z'_w(ω) for
+    the same kwargs — the claim the extraction rests on. Each row's own
+    share is the term (`_apply_loading` / `_loading_gram` /
+    `_loading_stencil`), which is why those are NOT compared here."""
+    from momwire import RazorSolver
+
+    kw = dict(
+        wires=DIPOLE,
+        nsegs=21,
+        wavelength=WL,
+        wire_radius=A_28,
+        wire_conductivity=SIGMA_CU,
+        insulation_radius=0.4e-3,
+        insulation_eps_r=3.0,
+    )
+    sims = [
+        BSplineSolver(**kw),
+        SinusoidalSolver(**kw),
+        SinusoidalGalerkinSolver(**kw),
+        RazorSolver(**kw),
+    ]
+    ref = _wire_loading.loading_for(sims[0], sims[0].omega).z_wire
+    assert ref.shape == (1,)
+    for sim in sims[1:]:
+        got = _wire_loading.loading_for(sim, sim.omega).z_wire
+        assert np.array_equal(got, ref)
+    # ...and the per-SEGMENT form is the per-wire one gathered, on every row
+    # whose fill indexes segments.
+    for sim in sims[1:]:
+        geom = sim._build_geometry()
+        spec = _wire_loading.loading_for(sim, sim.omega, geom)
+        assert np.array_equal(spec.z_seg, spec.z_wire[sim._wire_of_seg(geom)])
+    # An (n_k,) sweep broadcasts on the wire axis, which is what a swept
+    # fill consumes; nothing is cached, so the skin effect cannot leak
+    # across the prepare/replay boundary.
+    ks = np.array([0.9, 1.0, 1.1]) * sims[0].omega
+    assert _wire_loading.loading_for(sims[0], ks).z_wire.shape == (1, 3)
+
+
+def test_loading_for_is_absent_rather_than_zero_when_nothing_is_configured():
+    spec = _wire_loading.loading_for(_solver(), 2 * np.pi * 14e6)
+    assert spec.z_wire is None and spec.z_seg is None and spec.lumped is None
+
+
+def test_lumped_load_normalisation_is_shared():
+    """The lumped-load sequence is normalised by the shared layer even
+    though only `RazorSolver` accepts one today (the siblings reach the
+    same physics as deck-level port algebra over a `node_gaps` port)."""
+    out = _wire_loading.normalize_lumped_loads([(0, None, 50)], 1)
+    assert out == [(0, None, 50 + 0j)]
+    with pytest.raises(ValueError, match="out of range"):
+        _wire_loading.normalize_lumped_loads([(3, 1.0, 50)], 1)
+    with pytest.raises(ValueError, match="must be finite"):
+        _wire_loading.normalize_lumped_loads([(0, 1.0, complex("nan"))], 1)
+    with pytest.raises(ValueError, match="expected"):
+        _wire_loading.normalize_lumped_loads([(0, 1.0)], 1)
+    assert _wire_loading.normalize_lumped_loads(None, 1) == []

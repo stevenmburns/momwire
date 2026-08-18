@@ -647,70 +647,16 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         # a load at a knot is a delta in Z_s(l) sitting inside exactly one
         # testing path, i.e. one diagonal entry (`_loading_stencil`).
         #
-        # Only NORMALISATION happens here. Everything the fill consumes is
-        # produced by `_loading_spec` as a plain per-segment / per-knot
-        # description, so the shared `loading_for(solver, ω)` object a later
-        # unit extracts from all four solvers has one seam to cut, not a
-        # parsing pass smeared through the assembly.
-        self.wire_conductivity = _wire_loading.normalize_per_wire(
-            wire_conductivity, n_w, "wire_conductivity"
+        # Only NORMALISATION happens here, and since momwire#428 not even
+        # that is written here: `configure_loading` is the one normaliser
+        # all four formulations run, and `_wire_loading.loading_for(self, ω,
+        # geom)` is the one producer the fill reads (per-segment Z_s and the
+        # resolved lumped sites). What stays razor's is the term —
+        # `_loading_stencil` and `_apply_loading`.
+        _wire_loading.configure_loading(
+            self, n_w, wire_conductivity, insulation_radius, insulation_eps_r
         )
-        self.insulation_radius = _wire_loading.normalize_per_wire(
-            insulation_radius, n_w, "insulation_radius"
-        )
-        self.insulation_eps_r = _wire_loading.normalize_per_wire(
-            insulation_eps_r, n_w, "insulation_eps_r"
-        )
-        if (self.insulation_radius is None) != (self.insulation_eps_r is None):
-            raise ValueError(
-                "insulation_radius and insulation_eps_r must be given together"
-            )
-        if self.insulation_radius is not None:
-            finite_b = np.isfinite(self.insulation_radius)
-            if not np.array_equal(finite_b, np.isfinite(self.insulation_eps_r)):
-                raise ValueError(
-                    "insulation_radius and insulation_eps_r must be finite "
-                    "on the same wires (NaN switches a wire off in both)"
-                )
-            for w in np.nonzero(finite_b)[0]:
-                _wire_loading.insulation_inductance(
-                    self._radius_per_wire[w],
-                    self.insulation_radius[w],
-                    self.insulation_eps_r[w],
-                )
-        if self.wire_conductivity is not None:
-            for w in np.nonzero(np.isfinite(self.wire_conductivity))[0]:
-                if self.wire_conductivity[w] <= 0.0:
-                    raise ValueError(
-                        f"wire_conductivity[{w}] must be > 0 S/m, "
-                        f"got {self.wire_conductivity[w]}"
-                    )
-        self._loading_active = self.wire_conductivity is not None or (
-            self.insulation_radius is not None
-        )
-
-        if lumped_loads is None:
-            self.lumped_loads = []
-        else:
-            norm = []
-            for i, entry in enumerate(lumped_loads):
-                if len(entry) != 3:
-                    raise ValueError(
-                        f"lumped_loads[{i}]: expected "
-                        f"(wire_index, arclength, impedance), got {entry!r}"
-                    )
-                w_i, arc_i, z_i = entry
-                if not (0 <= w_i < n_w):
-                    raise ValueError(
-                        f"lumped_loads[{i}]: wire_index {w_i} out of range [0, {n_w})"
-                    )
-                z_i = complex(z_i)
-                if not np.isfinite(z_i.real) or not np.isfinite(z_i.imag):
-                    raise ValueError(
-                        f"lumped_loads[{i}]: impedance must be finite, got {z_i}"
-                    )
-                norm.append((int(w_i), None if arc_i is None else float(arc_i), z_i))
-            self.lumped_loads = norm
+        self.lumped_loads = _wire_loading.normalize_lumped_loads(lumped_loads, n_w)
 
         if feeds is None:
             if not (0 <= feed_wire_index < n_w):
@@ -1352,71 +1298,36 @@ class RazorSolver(_ElementCurrents, _Cancelable):
 
         Not a capability: `wire_radius` is still scalar-only here
         (`_PER_WIRE_RADIUS_REFUSAL` fires in `__init__`, momwire#147), and
-        every entry of this array is the same float. It exists so
-        `_loading_zw` below is BYTE-IDENTICAL to `SinusoidalSolver`'s and
-        `BSplineSolver`'s rather than a third spelling that differs only in
-        which radius attribute it reads — which makes the shared
-        `loading_for(solver, ω)` extraction a pure move.
+        every entry of this array is the same float. It exists so the shared
+        `_wire_loading.loading_for` reads one attribute name across all four
+        formulations rather than branching on which radius spelling a solver
+        keeps (momwire#428).
         """
         return np.full(len(self.wires_polylines), self.wire_radius)
 
-    def _loading_zw(self, omega):
-        """Per-wire series impedance Z'_w(ω) [Ω/m]; zeros when a wire's
-        loading is switched off (NaN entries)."""
-        return _wire_loading.series_impedance_per_wire(
-            omega,
-            self._radius_per_wire,
-            self.wire_conductivity,
-            self.insulation_radius,
-            self.insulation_eps_r,
-        )
+    def _lumped_site_index(self, geom, i, wire, arclength):
+        """Basis index a lumped load's site names — the `loading_for` hook.
 
-    def _loading_spec(self, geom, omega):
-        """What the fill needs to know about loading at ω, as plain arrays.
-
-        This is the whole of the API-facing half of momwire#427 — kwargs,
-        units, the skin-effect model, and resolving a lumped load's site to
-        a knot — reduced to a description that names no testing rule:
-
-        * ``z_seg``  — ``(n_segs,)`` complex Z_s(ω) [Ω/m] per SEGMENT, or
-          None when no distributed loading is configured. Per segment rather
-          than per wire because that is the granularity a fill indexes, and
-          because it is the form a formulation-independent loading object
-          would hand back.
-        * ``lumped`` — ``(basis indices, Z_L [Ω])`` for the configured
-          lumped loads, or None. The index is the knot's basis, resolved
-          through the same `_snap_to_knot` the feeds use.
-
-        Nothing here is razor-specific except the basis index, and that is
-        the one thing a caller cannot compute for itself. Keeping the seam
-        here is deliberate: a later unit extracts `loading_for(solver, ω)`
-        out of all four solvers the way `PotentialGround` was extracted, and
-        this method is the shape it will replace.
+        The site is resolved through the same `_snap_to_knot` the feeds use,
+        because a load and a source name a site the same way and must land
+        on the same knot when they name the same one (momwire#427 gate 2 is
+        exactly `Z_driven == Z_unloaded + Z_L`). A K >= 3 junction is
+        refused here rather than in the shared layer: what is ambiguous
+        there is a basis-layer fact, and the sentence differs from the
+        feed's (which branch pair a load sits BETWEEN, not which pair a
+        source drives).
         """
-        z_seg = None
-        if self._loading_active:
-            z_seg = self._loading_zw(omega)[self._wire_of_seg(geom)]
-        lumped = None
-        if self.lumped_loads:
-            idx, z_l = [], []
-            for i, (w, arc, z) in enumerate(self.lumped_loads):
-                basis, k_ends = self._snap_to_knot(geom, w, arc)
-                if k_ends >= 3:
-                    raise NotImplementedError(
-                        f"lumped_loads[{i}]: the load snaps to a junction "
-                        f"where {k_ends} wire ends meet, and a series "
-                        "impedance there is ambiguous — it would have to "
-                        "name which pair of branches it sits between. Load "
-                        "an interior knot, or model the load on a short "
-                        "bridge wire off the junction."
-                    )
-                idx.append(basis)
-                z_l.append(z)
-            lumped = (
-                np.asarray(idx, dtype=np.int64),
-                np.asarray(z_l, dtype=np.complex128),
+        basis, k_ends = self._snap_to_knot(geom, wire, arclength)
+        if k_ends >= 3:
+            raise NotImplementedError(
+                f"lumped_loads[{i}]: the load snaps to a junction "
+                f"where {k_ends} wire ends meet, and a series "
+                "impedance there is ambiguous — it would have to "
+                "name which pair of branches it sits between. Load "
+                "an interior knot, or model the load on a short "
+                "bridge wire off the junction."
             )
-        return {"z_seg": z_seg, "lumped": lumped}
+        return basis
 
     def _loading_stencil(self, geom):
         """The k-independent half of the loading term: which (row, column)
@@ -1576,19 +1487,24 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     def _apply_loading(Z, stencil, spec):
         """`Z += L` in place: the loading term at one ω (`_loading_stencil`).
 
+        `spec` is the shared `_wire_loading.LoadingSpec` (momwire#428) — the
+        per-segment Z_s(ω) and the resolved lumped sites, neither of which
+        names a testing rule; the stencil is this formulation's whole share
+        of the term.
+
         Unbuffered on both halves — a basis pair recurs once per shared
         segment, and two lumped loads may name the same knot (they are in
         series there, so they add).
         """
-        z_seg = spec["z_seg"]
+        z_seg = spec.z_seg
         if z_seg is not None:
             np.add.at(
                 Z,
                 (stencil["rows"], stencil["cols"]),
                 z_seg[stencil["seg"]] * stencil["vals"],
             )
-        if spec["lumped"] is not None:
-            idx, z_l = spec["lumped"]
+        if spec.lumped is not None:
+            idx, z_l = spec.lumped
             np.add.at(Z, (idx, idx), z_l)
         return Z
 
@@ -1850,7 +1766,9 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         # per ground: this one line serves free space, both folding grounds
         # and the composing one.
         if prepared["loading"] is not None:
-            self._apply_loading(Z, prepared["loading"], self._loading_spec(geom, omega))
+            self._apply_loading(
+                Z, prepared["loading"], _wire_loading.loading_for(self, omega, geom)
+            )
         return Z
 
     def _assemble_Z_source_block(
@@ -2302,7 +2220,8 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             * (np.abs(i_lo) ** 2 + np.real(i_lo * np.conj(i_hi)) + np.abs(i_hi) ** 2)
             / 3.0
         )
-        r_w = np.real(self._loading_zw(omega))  # zeros where switched off
+        # zeros where switched off
+        r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
         wire_of = self._wire_of_seg(geom)
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
         return float(per_wire.sum()), per_wire

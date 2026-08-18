@@ -204,7 +204,7 @@ def test_mixed_radius_loading_uses_each_wires_radius():
         nsegs=15,
         wire_conductivity=5.8e7,
     )
-    zw = sim._loading_zw(sim.omega)
+    zw = _wire_loading.loading_for(sim, sim.omega).z_wire
     assert zw[0].real < zw[1].real
     for w, rad in enumerate([0.005, 0.0005]):
         expected = _wire_loading.wire_internal_impedance(sim.omega, rad, 5.8e7)
