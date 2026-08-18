@@ -280,9 +280,17 @@ def test_unknown_kwarg_is_a_typo():
         RazorSolver(wires=BD1_WIRE, nsegs=10, wavelenght=22.0)
 
 
-def test_per_wire_radius_refused():
-    with pytest.raises(NotImplementedError, match="scalar"):
-        RazorSolver(wires=BD1_WIRE, nsegs=10, wire_radius=[1e-3])
+def test_wire_radius_validation():
+    """Per-wire radii are served since momwire#147 (see
+    `tests/test_razor_mixed_radius.py`); what is still refused is a bad
+    one, in the siblings' words."""
+    RazorSolver(wires=BD1_WIRE, nsegs=10, wire_radius=[1e-3])
+    with pytest.raises(ValueError, match="length-1"):
+        RazorSolver(wires=BD1_WIRE, nsegs=10, wire_radius=[1e-3, 2e-3])
+    with pytest.raises(ValueError, match="positive and finite"):
+        RazorSolver(wires=BD1_WIRE, nsegs=10, wire_radius=0.0)
+    with pytest.raises(ValueError, match="positive and finite"):
+        RazorSolver(wires=BD1_WIRE, nsegs=10, wire_radius=[-1e-3])
 
 
 # --------------------------------------------------------------------------

@@ -202,6 +202,23 @@ The stencil is pure geometry and rides `_assemble_Z_prepare`; Z_s(ω) is
 not (skin effect and insulation reactance both move with ω) and is built
 per solved wavenumber beside the reflection-coefficient weights.
 
+Per-wire radius (momwire#147)
+-----------------------------
+`wire_radius` takes a scalar or one radius per wire, the siblings' spelling.
+The reduced kernel's a² is regularised with the SOURCE segment's radius, so
+a fat/thin junction's tent takes each wing's own segment's radius and no
+special case is written for it: the tent is two wings on two segments, and
+each wing's moments were already computed against its own source column.
+A uniform model keeps the scalar path and is bit-identical to it.
+
+The convention is a choice, not an oracle finding — which is itself the
+finding. On the only geometry where the two candidates diverge (a collinear
+fat/thin STEP, where the perpendicular distance vanishes and a² is all
+there is), source and observer conventions differ by ~1e-5 Ω at a 10:1
+radius step against a 0.20 Ω twin-lane bar, so the licensed binary cannot
+separate them. `_seg_moments_prepare` records the numbers and the reason
+the source reading is taken.
+
 Scope
 -----
 Free space and all three grounds — PEC, reflection-coefficient and
@@ -282,14 +299,6 @@ _OUT_OF_SCOPE = {
     "in a whole testing row here, so a gap is not a local basis edit",
 }
 
-# Reused by the wire_radius scalar-only check in __init__ (momwire#147: this
-# formulation twin takes no per-wire radii) and by `capabilities.refusals`
-# below — one message, not a copy in each.
-_PER_WIRE_RADIUS_REFUSAL = (
-    "wire_radius must be a scalar for RazorSolver; per-wire radii "
-    "(momwire#147) are not supported by this formulation twin"
-)
-
 # The one geometry both served finite grounds refuse. Checked in __init__
 # (it is a combination of named arguments, not a stray kwarg, so
 # `_OUT_OF_SCOPE` cannot carry it) and quoted by `capabilities.refusals`.
@@ -324,8 +333,19 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         per-edge count. None for the whole argument means every wire uses
         `nsegs` on every edge.
     nsegs: default segment count when `n_per_edge_per_wire` doesn't specify.
-    wire_radius: scalar thin-wire radius, the a in the reduced kernel's
-        R = sqrt(|r−r'|² + a²). Per-wire radii are not supported here.
+    wire_radius: thin-wire radius, the a in the reduced kernel's
+        R = sqrt(|r−r'|² + a²). A scalar applies to every wire; a
+        length-n_wires sequence gives each wire (polyline) its own conductor
+        radius (momwire#147), the same spelling `BSplineSolver` and
+        `SinusoidalSolver` take. Every entry must be positive and finite.
+        A uniform model — however it was spelled — keeps the scalar code
+        path and is bit-identical to the scalar. **Mixed radii use the
+        SOURCE segment's radius** in the a²-regularised kernel; the tents of
+        a fat/thin JUNCTION therefore take each wing's own segment's radius,
+        with no special case, which is the same statement. See
+        `_seg_moments_prepare` for the convention's measurement against the
+        binary (which cannot separate it from the observer convention the
+        siblings use), and `tests/test_razor_mixed_radius.py` for the gates.
     ground_z: height of the ground plane, or None for free space. With
         `ground_eps` unset the plane is a perfect conductor. Over PEC this
         solver is gated against the licensed NEC-5 binary's own `GN 1`
@@ -446,11 +466,11 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     # plane, plus ground contact over PEC (unit 3), plus wire loading
     # (momwire#427 — distributed loss and insulation through the house
     # kwargs, and lumped loads at knots, which the siblings serve as
-    # deck-level port algebra instead). No EK / junction_ports / node_gaps /
-    # per-wire radii / enrichment: the rest of
-    # the row is refused, reusing `_OUT_OF_SCOPE`'s prose (built at __init__
-    # from unsupported kwargs), the wire_radius scalar-only check for
-    # per_wire_radius, and `_CONTACT_OVER_FINITE_REFUSAL` for the one
+    # deck-level port algebra instead), plus PER-WIRE RADII (momwire#147,
+    # gated against the binary's own mixed-radius `GW` decks). No EK /
+    # junction_ports / node_gaps / enrichment: the rest of the row is
+    # refused, reusing `_OUT_OF_SCOPE`'s prose (built at __init__ from
+    # unsupported kwargs) and `_CONTACT_OVER_FINITE_REFUSAL` for the one
     # geometry the finite grounds refuse (a combination of named arguments
     # rather than a stray kwarg).
     capabilities = Capabilities(
@@ -459,14 +479,13 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         extended_kernel=False,
         junction_ports=False,
         node_gaps=False,
-        per_wire_radius=False,
+        per_wire_radius=True,
         singular_enrichment=False,
         refusals={
             "contact+finite_ground": _CONTACT_OVER_FINITE_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "node_gaps": _OUT_OF_SCOPE["node_gaps"],
             "extended_kernel": _OUT_OF_SCOPE["extended_kernel"],
-            "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL,
         },
     )
 
@@ -568,13 +587,17 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             )
 
         n_w = len(self.wires_polylines)
-        # One `a` for the whole model: the reduced kernel here takes a
-        # scalar, so the shared normaliser is asked to REFUSE a sequence
-        # rather than to spread one (momwire#147/#425). Everything else —
-        # the positivity check, the (n_wires,) array the loading spec reads
-        # through `_radius_per_wire` — is the siblings' verbatim.
-        self._radius_per_wire, self.wire_radius = _wire_spec.normalize_wire_radius(
-            wire_radius, n_w, per_wire_refusal=_PER_WIRE_RADIUS_REFUSAL
+        # Per-wire conductor radius (stevenmburns/momwire#147), spelled
+        # exactly as the siblings spell it: `wire_radius` keeps the caller's
+        # value, `_radius_per_wire` is the normalized (n_wires,) array and
+        # `_uniform_radius` is the scalar fast path — the common radius when
+        # every wire shares one (however it was spelled), else None. The
+        # reduced kernel takes the SOURCE segment's radius; see
+        # `_seg_moments_prepare` for the convention, and for what the NEC-5
+        # lane can and cannot say about it.
+        self.wire_radius = wire_radius
+        self._radius_per_wire, self._uniform_radius = _wire_spec.normalize_wire_radius(
+            wire_radius, n_w
         )
 
         if n_per_edge_per_wire is None:
@@ -1054,7 +1077,29 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     # ------------------------------------------------------------------
     # kernel moments
 
-    def _seg_moments_prepare(self, obs, geom):
+    def _seg_radius(self, geom):
+        """``(n_segs,)`` per-segment radius — each segment inherits its
+        wire's (stevenmburns/momwire#147), the same spelling and the same
+        `seg_offsets` reading `BSplineSolver._seg_radius` uses."""
+        seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
+        return np.repeat(self._radius_per_wire, np.diff(seg_off))
+
+    def _kernel_radius(self, geom):
+        """The `a` the reduced kernel is regularised with, for every source
+        segment: the scalar when the model is uniform (the historical fast
+        path, bit-identical), else the ``(n_segs,)`` per-source-segment
+        column. See :meth:`_seg_moments_prepare` for why it is the SOURCE's.
+
+        Read off the REAL geometry and handed to the mirrored source set
+        unchanged: an image segment is its own segment's reflection, so it
+        carries that segment's radius, exactly as its length and its local
+        arc coordinate are carried across (`_image_sources`).
+        """
+        if self._uniform_radius is not None:
+            return self._uniform_radius
+        return self._seg_radius(geom)
+
+    def _seg_moments_prepare(self, obs, geom, a):
         """K-independent ingredients of every segment's reduced-kernel moments.
 
         The closed-form static moments ``(m0s, m1s, see
@@ -1069,9 +1114,31 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         internally, so a k-sweep can replay the same chunk boundaries
         without recomputing them.
 
+        `a` is the reduced kernel's regularising radius
+        (:meth:`_kernel_radius`): the scalar for a uniform model, or a
+        ``(n_segs,)`` column indexed by SOURCE segment. **The convention is
+        the source's, and — unlike the sinusoidal family's — it is a choice
+        rather than an oracle finding, because this formulation's oracle
+        cannot see the difference.** Measured against the licensed binary on
+        a fat/thin collinear STEP (the geometry where the two candidates
+        diverge at all, since a² only matters where the perpendicular
+        distance vanishes): source and observer conventions differ by
+        3.0e-6 … 1.1e-5 Ω on a 10:1 step and 1.4e-3 … 2.1e-3 Ω on a 100:1
+        one, against a twin-lane bar of 0.20 Ω — the difference lives in
+        near-diagonal entries worth ~1400 Ω, where 0.1 Ω of it is 2e-5
+        relative and the solve absorbs it. The source reading is taken
+        because it is the reduced kernel's own derivation (the source
+        current averaged over ITS surface ring onto its axis, observed on
+        the axis) and because it is chunk-invariant: the chunks split the
+        OBSERVER axis, so every chunk sees the whole column and a mesh
+        refinement cannot move a chunk boundary into the answer. The
+        siblings' observer convention (NEC-2's `EFLD`, PyNEC-oracled for
+        `SinusoidalSolver`, where it was worth 11 Ω) is recorded here as
+        immaterial for THIS formulation rather than as wrong. See
+        `docs/design/solver-architecture.md` §6.9.
+
         Returns a list of ``(lo, hi, R, m0s, m1s)`` chunks.
         """
-        a = self.wire_radius
         seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
         n_seg = seg_h.size
         n_obs = obs.shape[0]
@@ -1135,7 +1202,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         calls those two halves directly so the prepare step runs once per
         sweep instead of once per k.
         """
-        chunks = self._seg_moments_prepare(obs, geom)
+        chunks = self._seg_moments_prepare(obs, geom, self._kernel_radius(geom))
         return self._seg_moments_from_prepared(
             chunks, geom, k, obs.shape[0], need_m1=need_m1
         )
@@ -1562,9 +1629,15 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         q_a = wing_sigma[:, 0] * np.where(wing_rise[:, 0], 1.0, -1.0) / h_a
         q_b = wing_sigma[:, 1] * np.where(wing_rise[:, 1], 1.0, -1.0) / h_b
 
+        # The reduced kernel's `a`, per SOURCE segment (or the scalar, when
+        # the model is uniform). Read once off the real geometry and reused
+        # for the mirrored source set: an image segment carries its own
+        # segment's radius, the same way it carries its length.
+        a_src = self._kernel_radius(geom)
+
         # --- scalar potential's observation set: segment centroids.
         cent = geom["seg_p0"] + 0.5 * seg_h[:, None] * seg_t
-        t2_chunks = self._seg_moments_prepare(cent, geom)
+        t2_chunks = self._seg_moments_prepare(cent, geom, a_src)
 
         # --- vector potential's observation set: the outer path, row-chunked.
         pts, tans, wts = self._testing_paths(geom)
@@ -1596,11 +1669,16 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             hi = min(lo + rows, n_basis)
             obs = pts[lo:hi].reshape(-1, 3)
             t1_row_chunks.append(
-                (lo, hi, obs.shape[0], self._seg_moments_prepare(obs, geom))
+                (lo, hi, obs.shape[0], self._seg_moments_prepare(obs, geom, a_src))
             )
             if img_src is not None:
                 t1_row_chunks_img.append(
-                    (lo, hi, obs.shape[0], self._seg_moments_prepare(obs, img_src))
+                    (
+                        lo,
+                        hi,
+                        obs.shape[0],
+                        self._seg_moments_prepare(obs, img_src, a_src),
+                    )
                 )
 
         prepared = {
@@ -1643,7 +1721,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         if img_src is not None:
             mirror = img_src["mirror_tangents"]
             prepared["image"] = {
-                "t2_chunks": self._seg_moments_prepare(cent, img_src),
+                "t2_chunks": self._seg_moments_prepare(cent, img_src, a_src),
                 # The image sign, in razor's own (3, n_basis) idiom: M·t on
                 # the SOURCE tangent table only. Nothing N² is formed, and
                 # nothing on the observer side moves.
