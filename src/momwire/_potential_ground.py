@@ -355,7 +355,12 @@ class Remainder:
           reduced-kernel moments already take;
         * `n_moment = 1` — a PULSE, or any point-matched consumer: the
           trailing axis is length 1 and `[..., 0]` is the plain rectangular
-          `(n_obs, n_src)` field the momwire#416 probe asked for;
+          `(n_obs, n_src)` table the momwire#416 probe asked for. Note that
+          the source axis is still INTEGRATED over its segment (weight 1,
+          which is exactly a pulse's own basis shape); the probe's sketch
+          left that implicit by passing `src_seg_l` / `src_seg_r`, and
+          spelling it as the zeroth moment is what makes the two consumers
+          one call rather than two;
         * `n_moment = degree + 1` — the B-spline moments `evaluate`'s own
           fused kernel forms internally.
 
