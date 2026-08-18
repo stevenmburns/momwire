@@ -1215,18 +1215,43 @@ REFL_EPS = {
     "sea_water": (81.0, 5.0),
 }
 
+# momwire#282 stage 1 (2026-08-18) — read this before the fixtures.
+#
+# Three decks here (`monopole_contact`, `grounded_ell_radii`,
+# `grounded_radius_step_skew`) stood IN the plane, which is ground CONTACT
+# over a finite ground and is refused under `ground_model="refl-coef"` now
+# (`docs/design/contact-over-finite-ground.md` §3.6: that row sat 27 Ω from
+# the Sommerfeld answer on the same deck). Each keeps its NAME — the PEC
+# battery above uses the same names for the same geometries, and the
+# parallel is what makes the two readable side by side — but the PLANE has
+# moved 1 cm below the wires' feet. What that costs and what it does not:
+#
+# * KEPT: the degenerate specular geometry, which is the reason these
+#   fixtures exist. A 1 cm clearance against a 0.17 m segment leaves the
+#   image an order of magnitude closer than one segment, so rho_axis is
+#   still ~0 on the collinear decks, ρ̂·p̂ is still a-regularized noise, and
+#   the IRA arm on the image build still fires with both swaps present.
+# * LOST: NEC's ICON == J ground-contact arm of IND = 0, which no deck can
+#   reach through the Fresnel image kernel any more, because reaching it
+#   needs a contact and a refl-coef ground at once. IND = 0 ITSELF is still
+#   covered, by its other arm (a collinear equal-radius two-segment
+#   junction), and the contact arm is still covered by the PEC battery above
+#   and by the Sommerfeld decks. `test_cpp_ek_refl_battery_is_decisive` says
+#   all of that in place rather than quietly dropping an assertion.
+# * LOST: momwire#292's contact-charge bracket on this battery, which is why
+#   `test_cpp_ek_refl_path_does_not_re_enter_the_numpy_kernel` now expects
+#   NO `_ek_end_gxx` call at all rather than exactly one.
 REFL_EK_BATTERY = {
-    # Vertical monopole STANDING IN the plane: NEC's ICON == J ground-contact
-    # IND = 0 arm, and the specular geometry's degenerate limit — the image is
-    # the collinear continuation, so rho_axis = 0 and ρ̂·p̂ is pure a-regularized
-    # noise the dyad must not amplify.
+    # Vertical monopole GRAZING the plane: the specular geometry's degenerate
+    # limit — the image is the collinear continuation, so rho_axis = 0 and
+    # ρ̂·p̂ is pure a-regularized noise the dyad must not amplify.
     "monopole_contact": dict(
         wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]])],
         n_per_edge_per_wire=[[15]],
         wire_radius=0.03,
         nsegs=15,
         feed_arclength=0.1,
-        ground_z=0.0,
+        ground_z=-0.01,
     ),
     # The same monopole LIFTED clear of the plane: both ends IND = 1 now, and
     # the image sits a real distance away.
@@ -1259,7 +1284,7 @@ REFL_EK_BATTERY = {
         feed_arclength=1.0,
         ground_z=0.0,
     ),
-    # Ground contact AND mixed radii: two observer-radius runs, so the (M, N)
+    # A grazing base AND mixed radii: two observer-radius runs, so the (M, N)
     # specular tables have to slice on their observer axis in step with the
     # obs arrays and the EK tables have to NOT slice (they are source-indexed).
     "grounded_ell_radii": dict(
@@ -1271,10 +1296,10 @@ REFL_EK_BATTERY = {
         wire_radius=[0.03, 0.008],
         nsegs=16,
         feed_arclength=0.15,
-        ground_z=0.0,
+        ground_z=-0.01,
         junctions=[[(0, "end"), (1, "start")]],
     ),
-    # EKSCX's IRA arm on the IMAGE build. A grounded fat/thin collinear stack
+    # EKSCX's IRA arm on the IMAGE build. A grazing fat/thin collinear stack
     # puts the thin wire's centres on the fat wire's axis, so the MIRRORED fat
     # sources swap too (rho_eval = 0.005 < src_a = 0.02); the skew wire beside
     # it is what stops the arm from cancelling out of Φ, exactly as in Gate 8's
@@ -1289,7 +1314,7 @@ REFL_EK_BATTERY = {
         wire_radius=[0.02, 0.005, 0.005],
         nsegs=14,
         feed_arclength=1.0,
-        ground_z=0.0,
+        ground_z=-0.01,
         junctions=[[(0, "end"), (1, "start")]],
     ),
     # A FAR mirror plane — the conditioning regime, in the battery rather than
@@ -1440,7 +1465,6 @@ def test_cpp_ek_refl_battery_is_decisive():
     asserted rather than trusted to the fixtures staying as written."""
     codes, swaps, uniform = set(), set(), set()
     multirun = False
-    ground_contact_extends = False
     horizontal = False
     for name in REFL_EK_BATTERY:
         sim = _refl_solver(name, extended_kernel=True)
@@ -1452,21 +1476,30 @@ def test_cpp_ek_refl_battery_is_decisive():
         # The Fresnel image block resolves its IRA on the MIRRORED sources.
         src_c, src_t = sim._image_source_centers_tangents(geom)
         swaps |= set(np.unique(_swap_mask(sim, geom, src_c, src_t)).tolist())
-        at_plane = np.flatnonzero(geom["ground_minus"])
-        if at_plane.size:
-            ground_contact_extends = ground_contact_extends or bool(
-                (ind1[at_plane] == 0).all()
-            )
+        # No `ground_minus` end can exist on this battery any more — see the
+        # withdrawal note above `REFL_EK_BATTERY` — and the assertion below
+        # states that as a fact rather than letting it pass unnoticed.
+        assert not geom["ground_minus"].any(), (
+            f"{name} contacts the plane: ground contact under refl-coef is "
+            "refused (momwire#282 stage 1), so this deck cannot be built"
+        )
         # A wire with a real horizontal run: t·p̂ is what makes the second half
         # of the dyad load-bearing, and every vertical fixture zeroes it.
         horizontal = horizontal or bool(
             np.max(np.abs(geom["seg_tangents"][:, :2])) > 0.5
         )
+    # All three codes are still reached. What momwire#282 stage 1 removed is
+    # narrower than a code: IND = 0 has two arms (`_ek_gating`'s docstring),
+    # the collinear equal-radius two-segment junction and the perpendicular
+    # GROUND CONTACT, and only the second is out of this kernel's reach now,
+    # because reaching it needs a contact and a reflection-coefficient ground
+    # at once. The collinear arm carries IND = 0 here, as it always did on
+    # every multi-segment straight wire; the contact arm is still exercised
+    # by the PEC battery above and by the Sommerfeld decks.
     assert codes == {0, 1, 2}, codes
     assert swaps == {False, True}, "EKSCX's IRA arm is uncovered on the image build"
     assert uniform == {False, True}, "both radius dispatch shapes are needed"
     assert multirun, "no fixture produces more than one observer-radius run"
-    assert ground_contact_extends, "the perpendicular ground-contact IND=0 arm is unhit"
     assert horizontal, "no fixture gives the p̂ half of the dyad any weight"
 
 
@@ -1518,15 +1551,14 @@ def test_cpp_ek_refl_path_does_not_re_enter_the_numpy_kernel(monkeypatch):
     `_extended_kernel_fields`. Before it, the free-space block went to C++ and
     the Fresnel image block silently did not — the residue #245 left.
 
-    One caller of the END routines is legitimate, and is COUNTED here rather
-    than forbidden, so that it cannot grow silently: momwire#292's
-    contact-charge twin calls `_ek_end_gxx` once per contact node per fill,
-    to build the same EKSCX end-charge bracket the C++ fill carries so that
-    #282's subtraction cancels it. That is a rank-one post-assembly term with
-    no C++ twin (`SinusoidalSolver._contact_charge_ek_delta`), not the field
-    kernel, and `grounded_ell_radii` has exactly one contact node. A fill
-    that fell back would show up as `_extended_kernel_fields` in the list, or
-    as many more than one `_ek_end_gxx`.
+    The list must now be EMPTY. It used to hold exactly one `_ek_end_gxx`:
+    momwire#292's contact-charge twin called it once per contact node per
+    fill, and `grounded_ell_radii` had exactly one contact node. momwire#282
+    stage 1 (2026-08-18) refused ground contact under
+    `ground_model="refl-coef"` and the fixture grazes the plane instead, so
+    there is no contact node and no bracket to build — which makes this the
+    STRICTER statement of the two: any call at all is now a fault. A fill
+    that fell back would show up as `_extended_kernel_fields` in the list.
     """
     import inspect
 
@@ -1550,10 +1582,7 @@ def test_cpp_ek_refl_path_does_not_re_enter_the_numpy_kernel(monkeypatch):
         monkeypatch.setattr(SinusoidalSolver, attr, trip)
 
     _refl_solver("grounded_ell_radii", extended_kernel=True).compute_impedance()
-    assert calls == ["_ek_end_gxx"], (
-        f"EK-ON refl solve fell back to the numpy kernel: {calls} "
-        "(one _ek_end_gxx is momwire#292's contact-charge bracket)"
-    )
+    assert calls == [], f"EK-ON refl solve fell back to the numpy kernel: {calls}"
 
 
 def test_ek_refl_kernel_is_never_entered_when_ek_is_off(monkeypatch):
@@ -1579,26 +1608,43 @@ def test_ek_refl_kernel_is_never_entered_when_ek_is_off(monkeypatch):
 
 
 # Four corners of each of the three EK-OFF Fresnel image tensors on the deck
-# below, captured on the pre-#259 build (`git stash` on the #259 diff) and
-# reproduced BIT-FOR-BIT by the branch. Hex floats so the comparison is exact.
+# below. Hex floats so the comparison is exact.
+#
+# RE-ANCHORED 2026-08-18 by momwire#282 stage 1, and the provenance is worth
+# spelling out because an exact pin is worth exactly its provenance. The
+# original capture was made on the pre-#259 build (`git stash` on the #259
+# diff) with the deck's two wires STANDING IN the plane, and every build
+# since reproduced it bit for bit. That deck is ground contact over a
+# reflection-coefficient ground and is refused now, so the plane moved 1 cm
+# below the wires' feet — which changes the image geometry and therefore the
+# tensor, unavoidably: the tensor is a function of the mirror plane's
+# position.
+#
+# The chain was not broken, it was re-forged, and here is the link. Both
+# decks were run through a SHADOW checkout of the branch point (the last
+# commit before this change) and through this branch: the shadow reproduces
+# the historical literals exactly on the old deck, and the shadow and this
+# branch agree bit for bit on the new one. So these numbers are still the
+# pre-#259 kernel's output — the kernel did not move, the deck did — and the
+# gate keeps doing what it was written to do.
 _EK_OFF_REFL_PIN = [
     (
-        "0x1.57bc9f1612964p+8",
-        "0x1.4e0a45375b9a9p+11",
-        "0x1.23912cc2197fbp-2",
-        "0x1.590d30a10b1fep-1",
+        "0x1.ef751dcf79f6bp+7",
+        "0x1.e0a30f96357efp+10",
+        "0x1.2298bc3a95de5p-2",
+        "0x1.539ef9dd8199ap-1",
     ),
     (
-        "-0x1.6a8d36530c0b7p+3",
-        "-0x1.61eada0d8b0e5p+6",
-        "-0x1.d77647c1f7964p-14",
-        "-0x1.7201fb9f4aa72p-10",
+        "-0x1.e2cefbbfd104ap+2",
+        "-0x1.d74efa4723db1p+5",
+        "-0x1.cd8d6e3471e19p-14",
+        "-0x1.6b9474b566f39p-10",
     ),
     (
-        "0x1.575ac9d27970cp+8",
-        "0x1.4dab14dd8b3b0p+11",
-        "0x1.2354755624f41p-2",
-        "0x1.58c5447715a4ep-1",
+        "0x1.eeeda4c3f96afp+7",
+        "0x1.e01f716c67d70p+10",
+        "0x1.225c38afeb2e0p-2",
+        "0x1.53582f9cbb9a9p-1",
     ),
 ]
 
@@ -1615,6 +1661,10 @@ def test_ek_off_refl_tensor_is_unmoved_by_the_new_kernel():
     them differently. Both numbers pass every relative tolerance in this file,
     which is exactly why the pin is exact and why the reduced kernel keeps an
     open-coded copy of the tail instead.
+
+    The deck grazes the plane by 1 cm rather than standing in it since
+    momwire#282 stage 1 (2026-08-18); `_EK_OFF_REFL_PIN` above carries the
+    re-anchoring and the shadow-checkout chain that keeps it honest.
     """
     import momwire.sinusoidal as sin_mod
 
@@ -1633,7 +1683,7 @@ def test_ek_off_refl_tensor_is_unmoved_by_the_new_kernel():
         wire_radius=[0.03, 0.008],
         nsegs=16,
         feed_arclength=0.15,
-        ground_z=0.0,
+        ground_z=-0.01,
         ground_eps=(4.0, 0.2),
         junctions=[[(0, "end"), (1, "start")]],
         extended_kernel=False,

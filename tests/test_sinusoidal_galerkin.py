@@ -1249,21 +1249,49 @@ def _m4_monopole(n, **over):
     return dict(wires=[w], n_per_edge_per_wire=[[n]], nsegs=n, **over)
 
 
+# 1e-3 λ — two thousandths of the monopole's own length. Not a physical
+# clearance and not claimed as one: it is the smallest lift that gets a deck
+# out of ground CONTACT while leaving the image block's near pairs where they
+# were, which is the only property the fold's bit-equality gate reads.
+_LIFT = 1e-3 * WL
+
+
+def _m4_monopole_lifted(n, **over):
+    """The `_m4_monopole` deck raised clear of the plane by 1e-3 λ.
+
+    momwire#282 stage 1 (2026-08-18) withdrew ground CONTACT under
+    `ground_model="refl-coef"`, and the contact monopole was the only deck in
+    this file whose IMAGE block carries NEAR pairs — the property the fold's
+    accelerated-vs-differenced bit-equality gate is built on, and the only
+    reason that geometry appears under the finite grounds at all (`M4_CASES`
+    excludes it on physics grounds). Lifting it preserves exactly that
+    property: the image is still within a segment of the wire, the near
+    correction still fires inside the image block, and no claim is made about
+    the ANSWER — the gate compares two spellings of the same arithmetic.
+    """
+    w = np.array([[0.0, 0.0, _LIFT], [0.0, 0.0, _LIFT + MONO_L]])
+    return dict(wires=[w], n_per_edge_per_wire=[[n]], nsegs=n, **over)
+
+
 M4_GEOMETRIES = {
     "m4_dipole": _m4_dipole,
     "m4_vertical": _m4_vertical,
     "m4_lshape": _m4_lshape,
     "m4_monopole": _m4_monopole,
+    # Not in `M4_CASES` — it exists only for the fold's bit-equality gate,
+    # which is the one place the withdrawn refl-coef contact deck was
+    # carrying coverage nothing else carries. See `_m4_monopole_lifted`.
+    "m4_monopole_lifted": _m4_monopole_lifted,
 }
 
 # (geometry, ground) pairs the gates run over. The ground-contact monopole is
-# PEC-only: see `test_finite_ground_at_a_ground_contact_is_an_inherited_defect`
+# PEC-only: see `test_finite_ground_at_a_ground_contact_converges_since_282`
 # for why the finite grounds have no meaning there on EITHER sinusoidal solver.
 M4_CASES = [
     (g, gnd)
     for g in M4_GEOMETRIES
     for gnd in M4_GROUNDS
-    if not (g == "m4_monopole" and gnd != "pec")
+    if not (g.startswith("m4_monopole") and gnd != "pec") and g != "m4_monopole_lifted"
 ]
 
 M4_N = 21  # mesh the symmetry / quadrature gates are measured at
@@ -1880,17 +1908,35 @@ def test_finite_ground_at_a_ground_contact_converges_since_282():
     does not reflect, and the mixed-potential solvers never had the charge at
     all (`BSplineSolver` builds its charge term from the basis derivative, so
     a ground-contact basis has no end charge — which is why it converges).
-    Both sinusoidal schemes now settle to 0.4% over a 7x refinement and agree
-    with EACH OTHER to 0.3%.
 
-    What they do NOT do is agree with the b-spline reference: 63.9 vs 41.7 in
-    R on this thin-wire deck (Δ/a = 238, where the contact term is at its most
-    violent). That gap is recorded, not gated — the two families now differ by
-    a cross-basis contact-model difference of fixed size rather than by a
-    divergence, and NEC-2 forbids this configuration outright (a wire may not
-    connect to a finite ground; only GN 1 or a ground screen).
+    **Re-derived on the SOMMERFELD ground by momwire#282 stage 1
+    (2026-08-18).** Everything above, and the two ladders in the table, were
+    measured under `ground_model="refl-coef"`, which is now refused at
+    contact: `docs/design/contact-over-finite-ground.md` §3.6 put the
+    licensed binary behind that row and it missed by 27 Ω. The gate keeps
+    its subject — does the contact answer settle on both sinusoidal schemes
+    — on the ground that is still served. Measured over NS = 11/21/81,
+    ε̃ = (10, 0.002):
+
+        collocation   97.96+52.00j   98.48+53.27j   98.94+54.42j   spread 2.4%
+        galerkin      98.51+54.40j   98.74+54.59j   99.01+54.80j   spread 0.6%
+        dense bspline 90.46+42.36j   90.65+42.77j   90.84+43.15j   spread 0.9%
+
+    Two things move with the ground and are worth having on the record.
+    The collocation ladder's 2.4 % is not noise and not a regression: it is
+    momwire#291's slow ~N^0.4 contact walk, which is intrinsic to
+    collocating this basis at the contact node and has its own gate in
+    `tests/test_ground_junction.py`. And the cross-basis gap CLOSES over the
+    served ground — 0.14 here against the 0.2-1.0 the refl-coef version
+    recorded. The two trunks were never as far apart as the withdrawn ground
+    made them look.
+
+    The gap is still recorded rather than gated shut: the two families
+    differ by a cross-basis contact-model difference of fixed size rather
+    than by a divergence, and NEC-2 forbids this configuration outright (a
+    wire may not connect to a finite ground; only GN 1 or a ground screen).
     """
-    e = {"ground_eps": (10.0, 0.002)}
+    e = {"ground_eps": (10.0, 0.002), "ground_model": "sommerfeld"}
     ns = (11, 21, 81)
     zb = [
         BSplineSolver(
@@ -1907,7 +1953,11 @@ def test_finite_ground_at_a_ground_contact_converges_since_282():
         ]
         zs[cls.__name__] = z
         spread = abs(z[-1] - z[0]) / abs(z[0])
-        assert spread < 0.02, (
+        # 0.024 collocation / 0.006 Galerkin, measured. The bar is the
+        # collocation ladder's #291 walk with room, not a tight convergence
+        # claim — what it forbids is the pre-#282 excursion, which was 40x
+        # this and grew.
+        assert spread < 0.05, (
             f"{cls.__name__} no longer converges at a finite-ground contact "
             f"(spread {spread:.3f} over NS={ns}): {z}"
         )
@@ -1915,15 +1965,20 @@ def test_finite_ground_at_a_ground_contact_converges_since_282():
         errs = [abs(v - z[-1]) for v in z]
         assert errs[0] > errs[1], f"{cls.__name__} is not settling: {z}"
     # The two sinusoidal schemes agree with each other — the same contact
-    # model through two different testing schemes.
+    # model through two different testing schemes. 0.022 measured; the
+    # coarse rung carries most of it, and it is the same #291 walk seen from
+    # the side (the Galerkin ladder has largely finished walking by NS = 11).
     a, b = zs["SinusoidalSolver"], zs["SinusoidalGalerkinSolver"]
-    assert max(abs(x - y) / abs(x) for x, y in zip(a, b)) < 0.01, (
+    assert max(abs(x - y) / abs(x) for x, y in zip(a, b)) < 0.05, (
         f"the sinusoidal family disagrees with itself at contact: {a} vs {b}"
     )
     # The recorded cross-basis gap, pinned loosely so a real convergence onto
     # the b-spline answer would show up as a failure to be celebrated.
+    # 0.138 over the Sommerfeld ground, against the 0.2-1.0 window the
+    # withdrawn refl-coef version of this test recorded (momwire#282 stage
+    # 1). Closing it the rest of the way is stage 2's subject.
     gap = abs(a[-1] - zb[-1]) / abs(zb[-1])
-    assert 0.2 < gap < 1.0, (
+    assert 0.05 < gap < 0.30, (
         f"the sinusoidal/bspline contact gap moved to {gap:.3f} — if it "
         "closed, re-derive this test around the agreement"
     )
@@ -2570,7 +2625,7 @@ def _differenced_grounded_G(sim, geom):
 #
 # The ground-contact monopole is here under the FINITE grounds too, which
 # `M4_CASES` excludes on physics grounds (see
-# `test_finite_ground_at_a_ground_contact_is_an_inherited_defect`) — it is the
+# `test_finite_ground_at_a_ground_contact_converges_since_282`) — it is the
 # only geometry whose IMAGE block has near pairs at all, so it is the only one
 # that exercises the fold's near-correction reordering, and on a non-plain
 # projector that reordering is on the shipped dispatch rather than behind the
@@ -2584,7 +2639,13 @@ def _differenced_grounded_G(sim, geom):
 _FOLD_CASES = (
     [(g, gnd, False) for g, gnd in M4_CASES]
     + [(g, gnd, True) for g, gnd in M4_CASES if g != "m4_lshape"]
-    + [("m4_monopole", gnd, ek) for gnd in ("refl", "somm") for ek in (False, True)]
+    + [("m4_monopole", "somm", ek) for ek in (False, True)]
+    # momwire#282 stage 1 (2026-08-18): the `("m4_monopole", "refl", ek)`
+    # pair that used to sit here cannot be built — ground contact under
+    # `ground_model="refl-coef"` is refused. The near-image-pair fold
+    # coverage it carried moves to the same deck lifted 1e-3 λ clear, which
+    # is the only property this gate reads (see `_m4_monopole_lifted`).
+    + [("m4_monopole_lifted", "refl", ek) for ek in (False, True)]
 )
 
 

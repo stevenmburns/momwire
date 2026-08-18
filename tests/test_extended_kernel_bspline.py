@@ -938,8 +938,15 @@ _G7_BSPLINE = {
     # exercises a route the PEC deck does not — the Fresnel weight tables
     # (`PotentialGround.weight_tables`) and the Sommerfeld remainder
     # respectively.
+    # Lifted 0.3 m clear of the plane — the same clearance its Sommerfeld
+    # sibling below has always had — since momwire#282 stage 1 (2026-08-18)
+    # withdrew ground CONTACT under `ground_model="refl-coef"`. This deck was
+    # a contact deck for no reason connected to what it gates: what it is
+    # here for is the Fresnel weight-table route, which a clear deck takes
+    # identically, and the byte identity and entry-point counters read
+    # nothing about the plane at all.
     "refl-coef ground": dict(
-        wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.4]])],
+        wires=[np.array([[0.0, 0.0, 0.3], [0.0, 0.0, 2.7]])],
         n_per_edge_per_wire=[[14]],
         wire_radius=0.02,
         ground_z=0.0,
@@ -2098,7 +2105,7 @@ def _g16_mismatch(deck, ground):
 # Measured on this box (mismatch |δ_bsp − δ_sin|/|δ_sin|):
 #
 #   deck            PEC      refl soil  refl sea  somm soil  somm sea
-#   mono_contact    0.1532   0.4561*    0.1196    0.0808     0.1529
+#   mono_contact    0.1532   withdrawn  withdrawn 0.0808     0.1529
 #   mono_lifted     0.0738   0.0715     0.0736    0.0721     0.0737
 #   horizontal      0.2769   0.2829     0.2773    0.2792     0.2770
 #   bent            0.4389   0.4444     0.4391    0.4463     0.4392
@@ -2129,24 +2136,25 @@ def _g16_mismatch(deck, ground):
 #   refl-coef soil    33.67→29.54 +21j    33.64→29.76 +20j     0.129 / 0.127
 #   sommerfeld soil   53.64→52.84 +26j    53.59→52.70 +25j     0.020 / 0.027
 #
-# so all five contact cells are now measured. `test_g16c_*` pins those
-# ladders directly, on both kernels, so neither half can rot.
+# so all five contact cells were measured. `test_g16c_*` pins those ladders
+# directly, on both kernels, so neither half can rot.
 #
-# (*) SCORED ON THE NUMERATOR, not the ratio — see `_G16_ABSOLUTE`.
-
-# The one pairing whose RATIO is not a usable statistic. Over average soil
-# the reflection-coefficient ground very nearly cancels the sinusoidal
-# solver's EK shift in the real part (δ_sin = −0.026 − 0.309j at NS = 21,
-# against −0.185 − 0.487j under PEC), so |δ_sin| is a small denominator and
-# the ratio inflates to 0.456 while the two bases' shift VECTORS agree to
-# 0.141 — 1.8x the PEC control's 0.080, on the one ground where the two
-# bases already disagree by 11% on Z itself at a contact (28.74+15.82j vs
-# 32.12+22.80j: the reflection-coefficient ground is the Φ-approximation
-# #153 bounded to 0.1-0.5λ, and a contact is below that window). That is
-# the same denominator noise the G16b contact bar already exists for, and
-# it is measured here where it is honest: on |δ_bsp − δ_sin| itself.
-_G16_ABSOLUTE = {("mono_contact", "refl-coef soil")}
-_G16_ABS_TOL = 0.30
+# momwire#282 stage 1 (2026-08-18) WITHDREW the two `mono_contact` x
+# refl-coef cells: ground contact under `ground_model="refl-coef"` is
+# refused at construction now, so those two decks cannot be built.
+# `docs/design/contact-over-finite-ground.md` §3.6 is why — that row sat
+# 27 Ω from the Sommerfeld answer on the same deck.
+#
+# It removed one piece of machinery with them, and the reason is worth
+# keeping. `refl soil` was the only pairing whose RATIO was not a usable
+# statistic: over average soil the reflection-coefficient ground very nearly
+# cancelled the sinusoidal solver's EK shift in the real part (δ_sin =
+# −0.026 − 0.309j at NS = 21, against −0.185 − 0.487j under PEC), so |δ_sin|
+# was a small denominator, the ratio inflated to 0.456, and the cell had to
+# be scored on |δ_bsp − δ_sin| = 0.141 instead. That small denominator was
+# itself a symptom: the ground whose EK shift nearly cancels the other
+# trunk's at a contact is the ground that is not modelling the contact. With
+# the cell gone the whole table is scored on one metric again.
 
 # Absolute bar per deck: #249 §7.2's 0.30 where the deck's own PEC control
 # meets it, the PEC value + ~15% headroom where it does not.
@@ -2159,25 +2167,27 @@ _G16_TOL = {
 
 _G16_FINITE = [g for g in _G16_GROUNDS if g != "pec"]
 
+_G16_CASES = [
+    (deck, ground)
+    for deck in _G16_DECKS
+    for ground in _G16_FINITE
+    if not (deck == "mono_contact" and ground.startswith("refl-coef"))
+]
 
-def _g16_score(deck, ground, absolute):
-    """The number G16/G16b gate on this pairing: the ratio normally, the
-    bare |δ_bsp − δ_sin| for the `_G16_ABSOLUTE` pairing. `absolute` is
-    passed rather than re-derived so G16b scores a pairing's PEC control on
-    the SAME metric as the pairing."""
+
+def _g16_score(deck, ground):
+    """The number G16/G16b gate on this pairing: |δ_bsp − δ_sin|/|δ_sin|."""
     ratio, d_bsp, d_sin = _g16_mismatch(deck, ground)
-    return (abs(d_bsp - d_sin) if absolute else ratio), d_bsp, d_sin
+    return ratio, d_bsp, d_sin
 
 
-@pytest.mark.parametrize("ground", _G16_FINITE)
-@pytest.mark.parametrize("deck", list(_G16_DECKS))
+@pytest.mark.parametrize("deck,ground", _G16_CASES)
 def test_g16_finite_ground_shift_matches_sinusoidal(deck, ground):
-    absolute = (deck, ground) in _G16_ABSOLUTE
-    score, d_bsp, d_sin = _g16_score(deck, ground, absolute)
-    tol = _G16_ABS_TOL if absolute else _G16_TOL[deck]
+    score, d_bsp, d_sin = _g16_score(deck, ground)
+    tol = _G16_TOL[deck]
     assert score <= tol, (
         f"{deck} / {ground}: δ_bsp={d_bsp} vs sinusoidal δ={d_sin}, "
-        f"{'|δ_bsp − δ_sin|' if absolute else 'mismatch'} {score:.4f} > {tol}"
+        f"mismatch {score:.4f} > {tol}"
     )
 
 
@@ -2193,23 +2203,21 @@ def test_g16_finite_ground_shift_matches_sinusoidal(deck, ground):
 # worst |mismatch_ground − mismatch_PEC| over the 12 non-contact pairings:
 # 0.0073 (bent / sommerfeld soil). Gated at 0.03, ~4x the worst.
 #
-# The four contact pairings get their own looser bound. Their δ real parts
-# are small (−0.16 bspline, −0.30 sinusoidal on sommerfeld sea), so the
-# ratio is noisy even where the vectors agree — measured 0.0336 (refl sea),
-# 0.0724 (somm soil), 0.0003 (somm sea) against a 0.153 PEC control, and
-# 0.0616 for refl soil, which is scored absolutely (`_G16_ABSOLUTE`:
-# |δ_bsp − δ_sin| = 0.141 against its PEC control's 0.080).
+# The two surviving contact pairings get their own looser bound. Their δ
+# real parts are small (−0.16 bspline, −0.30 sinusoidal on sommerfeld sea),
+# so the ratio is noisy even where the vectors agree — measured 0.0724
+# (somm soil), 0.0003 (somm sea) against a 0.153 PEC control. The two
+# refl-coef contact cells that used to sit beside them (0.0336 and, scored
+# absolutely, 0.0616) went with momwire#282 stage 1's withdrawal.
 
 _G16B_TOL = 0.03
 _G16B_TOL_CONTACT = 0.15
 
 
-@pytest.mark.parametrize("ground", _G16_FINITE)
-@pytest.mark.parametrize("deck", list(_G16_DECKS))
+@pytest.mark.parametrize("deck,ground", _G16_CASES)
 def test_g16b_finite_ground_does_not_move_the_pec_mismatch(deck, ground):
-    absolute = (deck, ground) in _G16_ABSOLUTE
-    mm_g = _g16_score(deck, ground, absolute)[0]
-    mm_pec = _g16_score(deck, "pec", absolute)[0]
+    mm_g = _g16_score(deck, ground)[0]
+    mm_pec = _g16_score(deck, "pec")[0]
     tol = _G16B_TOL_CONTACT if deck == "mono_contact" else _G16B_TOL
     assert abs(mm_g - mm_pec) <= tol, (
         f"{deck} / {ground}: mismatch {mm_g:.4f} vs PEC control {mm_pec:.4f} "
@@ -2273,6 +2281,14 @@ def test_g16c_the_contact_oracle_converges_on_both_kernels():
     fix fails this test long before it fails a tolerance elsewhere — the
     EK-on bars are set at 2x the measured EK-off spread, which the pre-#292
     numbers miss by an order of magnitude.
+
+    The refl-coef half of the loop went with momwire#282 stage 1's
+    withdrawal (2026-08-18) — the deck cannot be built. The historical
+    numbers above are left in place because they are the record of what #282
+    and #292 fixed, and that record does not become untrue when the ground
+    stops being served. Note in passing what it says: the refl-coef contact
+    ladder converged at 0.129 the whole time, six times worse than the
+    Sommerfeld one's 0.020 and stable at it. Converging is not agreeing.
     """
     soil = dict(ground_eps=_G16_EPS["soil"])
     somm = dict(soil, ground_model="sommerfeld")
@@ -2280,10 +2296,10 @@ def test_g16c_the_contact_oracle_converges_on_both_kernels():
     assert _g16c_spread(SinusoidalSolver) < 0.05, (
         "the sinusoidal PEC control is unstable"
     )
-    assert _g16c_spread(BSplineSolver, **soil) < 0.10, (
+    assert _g16c_spread(BSplineSolver, **somm) < 0.10, (
         "the bspline contact answer over soil stopped converging"
     )
-    for name, ground in (("refl-coef", soil), ("sommerfeld", somm)):
+    for name, ground in (("sommerfeld", somm),):
         # #282: the EK-OFF oracle converges, within 4x of this solver's own
         # spread. Measured 0.129 / 0.020.
         off = _g16c_spread(SinusoidalSolver, **ground)

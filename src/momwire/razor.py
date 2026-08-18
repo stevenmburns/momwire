@@ -305,18 +305,43 @@ _OUT_OF_SCOPE = {
 # The one geometry both served finite grounds refuse. Checked in __init__
 # (it is a combination of named arguments, not a stray kwarg, so
 # `_OUT_OF_SCOPE` cannot carry it) and quoted by `capabilities.refusals`.
+#
+# The PROSE was corrected by momwire#282 stage 1 (2026-08-18) and the
+# refusal itself was not: this solver refuses exactly what it refused
+# before, on the same condition, in the same place.
+# `docs/design/contact-over-finite-ground.md` §4.3 read the fill and found
+# the old wording wrong on its own mechanism three ways — `_ground_spec`
+# assigns `image_coefficient = 1` to the reflection-coefficient ground too,
+# so coefficient 1 is not the tell for PEC; the "spurious contact charge"
+# is the DIRECT-FIELD trunk's 1/Δ point charge (momwire#282's own
+# pathology), while razor's grounded row carries a bounded DOUBLET (−1/h on
+# the real segment, +1/h on its image, `_fill`'s own note) and no point
+# charge at all; and the licensed binary announces coefficient-1
+# continuation at contact over EVERY ground, in printed output, so weighting
+# the wing would depart from the reference rather than approach it. What the
+# study argues razor actually lacks — the plane-reference term the T2 drop
+# discards — is a reading of the code plus a physical argument, not a
+# measurement, so it is stated below as what stage 3 will TEST, not as what
+# is known.
 _CONTACT_OVER_FINITE_REFUSAL = (
-    "ground CONTACT over a finite ground is refused: the fold hard-codes "
-    "image coefficient 1, i.e. PEC, so a grounded end over anything else "
-    "would take spurious contact charge (momwire#282). The grounded-end "
-    "tent's lower wing IS its own image, and it only carries the charge "
-    "that cancels the real wing's when that image is exact — over a finite "
-    "ground it is not: the reflection-coefficient image is scaled by the "
-    "Fresnel coefficients and the Sommerfeld one by C2 = (eps-1)/(eps+1), "
-    "and no weighting of the image block repairs a basis function that is "
-    "wrong. Either raise the wire clear of the plane (both finite grounds "
-    "are served there — refl-coef in its 0.1-0.5 lambda validity window, "
-    "sommerfeld at any height) or drop ground_eps for the PEC image"
+    "ground CONTACT over a finite ground is refused: a grounded row takes "
+    "the plane as its potential reference, which is exact only over a "
+    "perfect conductor. Over a finite ground the plane is not an "
+    "equipotential — the folded scalar potential there is (1 - w_Phi)*M0 "
+    "rather than zero — and this fill drops that term. The grounded tent's "
+    "image wing is correct as it stands and must NOT be weighted: charge "
+    "conservation fixes the BASIS's continuation coefficient at 1 over "
+    "every ground, whatever the GROUND MODEL's image coefficient is "
+    "(momwire#282 is the direct-field trunk's account of what weighting it "
+    "costs — a 1/Delta point charge at the contact node, which this "
+    "formulation's doublet does not have). Restoring the dropped term is a "
+    "hypothesis, not a diagnosis: see "
+    "docs/design/contact-over-finite-ground.md 4.3 and its stage 3. Either "
+    "use BSplineSolver, which serves contact over "
+    "ground_model='sommerfeld', or raise the wire clear of the plane (both "
+    "finite grounds are served there — refl-coef in its 0.1-0.5 lambda "
+    "validity window, sommerfeld at any height), or drop ground_eps for "
+    "the PEC image"
 )
 
 
@@ -508,6 +533,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         singular_enrichment=False,
         refusals={
             "contact+finite_ground": _CONTACT_OVER_FINITE_REFUSAL,
+            # The same refusal under the two spellings a consumer holding a
+            # concrete deck actually has (momwire#282 stage 1). A caller
+            # knows which ground it asked for, not the abstraction
+            # "finite_ground", and once `BSplineSolver` and
+            # `SinusoidalSolver` declare `"contact+refl-coef"` a row that
+            # answered None to that question would be reading as SERVED on
+            # the one solver that has refused it since #398. Aliases, not
+            # new refusals: the constructor check is unchanged and still
+            # fires on `ground_eps` alone.
+            "contact+refl-coef": _CONTACT_OVER_FINITE_REFUSAL,
+            "contact+sommerfeld": _CONTACT_OVER_FINITE_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "node_gaps": _OUT_OF_SCOPE["node_gaps"],
             "extended_kernel": _OUT_OF_SCOPE["extended_kernel"],
