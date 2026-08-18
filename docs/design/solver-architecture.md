@@ -1280,6 +1280,72 @@ phase III), so the CLI accepts it and then breaks — a real gap, tracked as a
 follow-up rather than fixed here, since a `compute_port_solution` for razor
 is a unit of its own and #432 is scoped to the library/script front end.
 
+### 6.11 The port solution (the sharing audit's #429 rank-9 item, 2026-08-18)
+
+Closes the gap §6.10 left open. `RazorSolver` gains `compute_port_solution`
+and `compute_port_solution_swept` so `_y_and_port_coeffs` in
+`momwire.portal._portal` now drives `--basis razor` / `--basis razor-nec5`
+exactly like every other roster entry, through the one shared
+`_y_and_port_coeffs(solver) -> sol.y, sol.coeffs` call (§6.10's "Not reached:
+the portal" paragraph is left in place above, uncorrected, as the record of
+what was true at #432's landing; this section is the update).
+
+One narrower portal-side gap surfaced by this unit is tracked as its own
+issue rather than folded in here: **#439**, `_port_signs` indexing
+`solver.feeds` by `PortPlan.sites` — true for a driven site, and true for a
+site that is both fed and loaded, but not for a load-only site razor bakes
+straight into `lumped_loads` rather than the port-algebra route every other
+family takes (`docs/razor-solver.md`'s "A remaining portal-side gap").
+
+**Which sibling spelling.** Two exist: `BSplineSolver`'s batched-swept
+version (a fully batched fast path whose per-k core is NOT
+`compute_port_solution`, to preserve the chunking that bounds
+`swept_mem_mb`) and `SinusoidalSolver`'s plain one (no batched assembly on
+that family, so the per-k core IS the single-k entry point, and the swept Y
+cannot drift from the stacked single-k Y by so much as an ulp). Razor has no
+batched C++ accelerator (§6's registry note, "No C++ accelerator"), so it
+takes `SinusoidalSolver`'s spelling: `_port_solutions_swept` is a bare loop
+over `compute_port_solution(prepared=...)`, sharing the fill's k-independent
+half exactly the way `compute_impedance_swept` / `compute_y_matrix_swept`
+already did.
+
+**The bit gate held by construction, as predicted.** `_assemble_Z(geom, k)`
+was already documented as `_assemble_Z_prepare` once + `_assemble_Z_from_prepared`
+per k; `compute_port_solution` calls that same pair (with the prepared block
+optionally hoisted in), so a swept point's `Z` cannot differ from a
+freshly-constructed single-k solve's — replaying a k-independent prepare is
+the same arithmetic as rebuilding it, just fewer times. Measured directly:
+`compute_port_solution_swept` over a reflection-coefficient ground built as
+an `(eps_r, sigma)` tuple — so ε̃ moves with ω exactly as the ground-unit
+4/5 swept gates already exercise — matches a per-k `compute_port_solution`
+loop `.tobytes()`-equal on both `y` and `coeffs`, at every rung, in both
+quadrature lanes and over all three served grounds.
+
+**What changed in the file.** `compute_y_matrix` is now
+`compute_port_solution().y` (one line, matching every other family since
+#232) instead of its own fill-and-solve; the hand-rolled
+`compute_y_matrix_swept` is deleted in favour of `_SweptPortSolutions`'s
+generic implementation over the new `_port_solutions_swept` generator.
+`compute_impedance` / `compute_impedance_swept` are untouched — they solve a
+superposed single right-hand side rather than one column per port, so they
+stay their own entry points exactly as they are for every sibling family.
+Net line count: `git diff --numstat` on `razor.py` reads +129/−26 — nowhere
+near the audit's "net ≈ −6 lines," but almost all of the excess is this
+module's own extremely literate docstring convention (`compute_port_solution`
+alone carries a ~35-line docstring matching the siblings' own port-solution
+docstrings line for line in level of detail); the CODE the two hand-rolled
+Y-matrix fills lost against what `_port_count` / `compute_port_solution` /
+`_port_solutions_swept` / `_RazorBasis` gained is close to a wash, which is
+what the audit's estimate was actually about.
+
+Gates: `tests/test_razor_port_solution.py` — the four gates `_port_solution.py`
+promises every family (`y` IS `compute_port_solution().y`, the columns solve
+their own port, `coeffs @ V` reproduces `compute_impedance`, one fill and one
+factorisation per call), the swept ω-boundary bit gate above, and the
+multi-feed port-order check; `tests/test_portal.py` gains the portal
+end-to-end gate, `--basis razor` and `--basis razor-nec5` on a deck with a
+load and a ground.
+
 ---
 
 ## 7. What this subsumes, and what it does not
