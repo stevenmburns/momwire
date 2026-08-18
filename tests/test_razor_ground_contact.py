@@ -403,31 +403,40 @@ def test_contact_over_a_finite_ground_is_refused_citing_282():
         assert np.isfinite(z.real) and np.isfinite(z.imag)
 
 
-def test_the_composing_ground_is_refused_on_its_own_terms():
-    """`ground_model='sommerfeld'` is refused for a different reason than
-    contact is, and says so.
+def test_the_composing_ground_refuses_contact_for_the_same_reason():
+    """momwire#398 unit 5 moved this test's claim, and the move is the
+    point.
 
-    Unit 4 served the FOLDING finite ground. The composing one is a
-    Galerkin remainder block summed with the scaled exact image before the
-    fold's minus, and this formulation's rows are razor-blade path
-    integrals — so the refusal names the composition, not momwire#282, and
-    it fires whether or not anything touches the plane.
+    Unit 4's version read "`ground_model='sommerfeld'` is refused on its
+    own terms — the composition — whether or not anything touches the
+    plane". Unit 5 serves the composition, so what is left is the SAME
+    contact refusal the folding finite ground gets, for the same #282
+    reason: the composing ground's image coefficient is C₂, not 1, so a
+    grounded tent's lower wing is no more its own exact image over
+    Sommerfeld than over Fresnel. A ground unit that had quietly let
+    contact through here would be mismodelling exactly the class of
+    antenna (the monopole) this solver's contact work exists for.
     """
-    for wires, npe in (
-        ([np.array([[0.0, 0.0, 0.0], [0.0, 0.0, MONO_LEN]])], [[8]]),
-        ([np.array([[2.0, -2.0, 4.0], [2.0, 2.0, 4.0]])], [[8]]),
-    ):
-        with pytest.raises(NotImplementedError, match="compose") as exc:
-            RazorSolver(
-                wires=wires,
-                n_per_edge_per_wire=npe,
-                wire_radius=RAD,
-                wavelength=WL,
-                ground_z=0.0,
-                ground_eps=13.0,
-                ground_model="sommerfeld",
-            )
-        assert "momwire#282" not in str(exc.value)
+    mono = [np.array([[0.0, 0.0, 0.0], [0.0, 0.0, MONO_LEN]])]
+    clear = [np.array([[2.0, -2.0, 4.0], [2.0, 2.0, 4.0]])]
+    somm = dict(
+        wire_radius=RAD,
+        wavelength=WL,
+        ground_z=0.0,
+        ground_eps=13.0 - 0.4j,
+        ground_model="sommerfeld",
+    )
+
+    with pytest.raises(NotImplementedError, match="momwire#282") as exc:
+        RazorSolver(wires=mono, n_per_edge_per_wire=[[8]], **somm)
+    assert "wire 0 start" in str(exc.value)
+
+    # ...and the deck that does NOT touch is served, so the refusal is the
+    # geometry's and not the ground model's.
+    z, _ = RazorSolver(
+        wires=clear, n_per_edge_per_wire=[[8]], **somm
+    ).compute_impedance()
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
 
 
 # --------------------------------------------------------------------------
