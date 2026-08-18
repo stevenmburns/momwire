@@ -133,19 +133,37 @@ momwire#429 unit 1 moved that chain down into `_potential_ground`, and
 tables are served on this solver and equal the full-width window. See
 `docs/design/pulse-probe.md`.
 
-Sommerfeld is refused, and the refusal names the signature that blocked
-it: `Remainder.evaluate(supp_seg, polys)` wants a B-spline basis
-description and hands back a finished GALERKIN block. Both halves are
-wrong for a point-matched consumer — see `_OUT_OF_SCOPE["ground_model"]`.
+Sommerfeld (momwire#430) is the ground's third row, `PotentialGround.mode
+== "compose"`, and it needed no new branch for the exact-image half: C₂ =
+(ε̃−1)/(ε̃+1) arrives through `weight_windows`' constant `(w_A, w_Φ)` pair
+exactly as PEC's mirror table does, so `_source_block`'s two lines fill
+the scaled exact image unchanged. What composing adds is one more term, Q
+— the smooth Sommerfeld remainder field — reached through
+`Remainder.field_windows(observers, sources, n_moment=1)`, momwire#398
+unit 5's generalisation of the Galerkin-only `evaluate(supp_seg, polys)`
+that blocked this row when momwire#416's probe first asked
+(`docs/design/pulse-probe.md` §4.1). `n_moment = 1` is exactly this
+basis's own shape: the zeroth arc moment of a source segment, i.e. weight
+1 over the segment, is a pulse. Q is tested by this row's own rule — one
+centroid per row, the SAME `h_m` scaling `_seg_M0`'s vector term already
+carries — takes no jωμ / 1/jωε prefactor (F is already a field, theory
+manual eq 123's unit current moment), integrates over the REAL source
+segments even though it is summed into the mirrored block (the plane
+enters through the interpolation grid, not through a mirrored source),
+and is associated as `C₂·img + Q` inside `_source_block`, BEFORE
+`_assemble_Z`'s single global minus — the same `"compose"` contract
+`razor.py` states and pins, because `Z_free − (C₂·img + Q) ≠ (Z_free −
+C₂·img) − Q` in float64.
 
 Scope
 -----
-Free space, the PEC image and the reflection-coefficient ground; reduced
-kernel; one scalar radius; one polyline per wire; delta-gap sources on
-segments. Ground CONTACT is refused (the basis looks structurally ready
-for it — a contact node's real and image charges coincide and cancel —
-but the bar is unwritten, and an unwritten bar is not a capability).
-Everything else is refused through `capabilities` and `_OUT_OF_SCOPE`.
+Free space, the PEC image, the reflection-coefficient ground and the
+Sommerfeld ground; reduced kernel; one scalar radius; one polyline per
+wire; delta-gap sources on segments. Ground CONTACT is refused (the basis
+looks structurally ready for it — a contact node's real and image charges
+coincide and cancel — but the bar is unwritten, and an unwritten bar is
+not a capability). Everything else is refused through `capabilities` and
+`_OUT_OF_SCOPE`.
 """
 
 from __future__ import annotations
@@ -176,21 +194,6 @@ _CHUNK_ELEMS = 2_000_000
 # deliberately does not, with the reason each is refused. Anything else
 # unexpected is a caller typo and stays a TypeError.
 _OUT_OF_SCOPE = {
-    "ground_model": "ground_model='sommerfeld' is not supported by "
-    "PulseSolver. The blocker is a SIGNATURE, and naming it is half of why "
-    "this solver exists (momwire#416, #398 unit 5): the shared layer offers "
-    "the remainder as `Remainder.evaluate(supp_seg, polys)`, which asks for "
-    "a B-spline basis description — one (n_basis, degree+1) support map and "
-    "one (n_basis, degree+1, degree+1) table of per-wing polynomial "
-    "coefficients — and returns a finished GALERKIN block Q[m,n]. A pulse "
-    "basis can spell the first half (degree 0: supp_seg = arange(N)[:, None], "
-    "polys = ones((N, 1, 1))) but not the second: point matching needs the "
-    "remainder FIELD tested at chosen observation points, not a block already "
-    "integrated against the basis. The signature that would serve both is the "
-    "field trunk's shape — evaluate(obs_points, obs_tangents, source_segments) "
-    "-> (n_obs, n_src) — leaving the testing rule to the consumer, which is "
-    "what `_field_ground` already does and what this trunk's `Remainder` "
-    "chose not to. Use BSplineSolver(ground_model='sommerfeld')",
     "degree": "PulseSolver has no degree: the pulse expansion IS the "
     "degree-0 basis, and point matching is defined against it. Use "
     "BSplineSolver(degree=...) for higher-order bases with Galerkin testing",
@@ -223,7 +226,8 @@ class PulseSolver(_ElementCurrents, _Cancelable):
     """Piecewise-constant (pulse) current basis, point-matched.
 
     See the module docstring for the formulation. One unknown per segment,
-    free space or a PEC / reflection-coefficient ground, reduced kernel.
+    free space or a PEC / reflection-coefficient / Sommerfeld ground,
+    reduced kernel.
 
     wires: list of (M_w, 3) polyline arrays, M_w >= 2 anchor points per wire.
     n_per_edge_per_wire: list of (int or sequence). Per-wire segment counts
@@ -234,9 +238,15 @@ class PulseSolver(_ElementCurrents, _Cancelable):
     ground_eps: complex relative permittivity of the ground; None (the
         default) with `ground_z` set is the PEC image.
     ground_phi_mode: image-charge weighting for the reflection-coefficient
-        ground, passed through to `PotentialGround` untouched.
-    ground_model: "refl-coef" only; "sommerfeld" is refused with the
-        signature finding that blocks it.
+        ground, passed through to `PotentialGround` untouched. Accepted and
+        UNREAD under `ground_model="sommerfeld"`, exactly as `BSplineSolver`
+        and `RazorSolver` treat it: the factory sets `phi_mode=None` on a
+        composing ground, so there is nothing for the fill to read.
+    ground_model: "refl-coef" (the default) or "sommerfeld" — the exact
+        NEC `GN 2` style ground (momwire#398 unit 5, momwire#430), which
+        requires `ground_eps` and is consumed through
+        `Remainder.field_windows(..., n_moment=1)` with zero ground
+        arithmetic of its own. See the module docstring's Ground section.
     wavelength: measurement wavelength in metres; k = 2π / wavelength.
     halfdriver_factor: informational only, for signature parity with the
         sibling solvers.
@@ -253,12 +263,13 @@ class PulseSolver(_ElementCurrents, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
-    # momwire#396 / #416: free space, the PEC image and the reflection-
-    # coefficient ground — all three arriving through `PotentialGround` with
-    # no ground arithmetic in this file. Everything else refused, reusing
-    # `_OUT_OF_SCOPE`'s prose rather than restating it.
+    # momwire#396 / #416 / #430: free space and all three grounds — PEC, the
+    # reflection-coefficient ground and now the Sommerfeld one — all
+    # arriving through `PotentialGround` with no ground arithmetic in this
+    # file. Everything else refused, reusing `_OUT_OF_SCOPE`'s prose rather
+    # than restating it.
     capabilities = Capabilities(
-        grounds=frozenset({"pec", "refl-coef"}),
+        grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=False,
         extended_kernel=False,
         junction_ports=False,
@@ -266,7 +277,6 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         per_wire_radius=False,
         singular_enrichment=False,
         refusals={
-            "sommerfeld": _OUT_OF_SCOPE["ground_model"],
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "node_gaps": _OUT_OF_SCOPE["node_gaps"],
             "extended_kernel": _OUT_OF_SCOPE["extended_kernel"],
@@ -318,11 +328,14 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         self.ground_z = None if ground_z is None else float(ground_z)
         if self.ground_z is not None and not np.isfinite(self.ground_z):
             raise ValueError("ground_z must be finite")
+        if ground_model not in ("refl-coef", "sommerfeld"):
+            raise ValueError(
+                "ground_model must be 'refl-coef' or 'sommerfeld', "
+                f"got {ground_model!r}"
+            )
+        if ground_model == "sommerfeld" and ground_eps is None:
+            raise ValueError("ground_model='sommerfeld' requires ground_eps")
         self.ground_eps = None if ground_eps is None else complex(ground_eps)
-        if ground_model == "sommerfeld":
-            raise NotImplementedError(f"ground_model: {_OUT_OF_SCOPE['ground_model']}")
-        if ground_model != "refl-coef":
-            raise ValueError(f"ground_model must be 'refl-coef', got {ground_model!r}")
         self.ground_model = ground_model
         self.ground_phi_mode = ground_phi_mode
 
@@ -581,21 +594,56 @@ class PulseSolver(_ElementCurrents, _Cancelable):
     # ------------------------------------------------------------------
     # assembly
 
-    def _source_block(self, geom, src, k, omega, w_A, w_Phi):
-        """One source set's contribution: ``jωμ h_m w_A M0 + w_Φ ΔΔg / jωε``.
+    def _source_block(self, geom, src, k, omega, w_A, w_Phi, remainder=None):
+        """One source set's contribution: ``jωμ h_m w_A M0 + w_Φ ΔΔg / jωε``,
+        plus the Sommerfeld remainder Q when `remainder` is given.
 
         `src` is the real geometry or the mirrored one; `w_A` / `w_Phi` are
         the per-pair weights — the free-space pairing ``t_m·t_n`` and 1 for
         the real sources, and `PotentialGround.weight_windows`' pair for
-        the image. Nothing else differs between the two calls, which is
-        what makes the ground a source-side substitution here exactly as it
-        is on the razor row.
+        the image (PEC's mirror-tangent-dot table, or `mode == "compose"`'s
+        C₂-scaled copy of the same table — no branch of its own, see the
+        module docstring). Nothing else differs between the two calls,
+        which is what makes the ground a source-side substitution here
+        exactly as it is on the razor row.
+
+        `remainder` is `PotentialGround.remainder()` — `None` for every
+        ground but Sommerfeld's, and passed only on the IMAGE call
+        (`_assemble_Z`). Q is the smooth Sommerfeld remainder field, tested
+        by THIS row's own rule: one centroid per row, with the SAME `h_m`
+        row scaling `T1` already carries above (`field_windows((cent,
+        geom["tangents"]), ..., n_moment=1)` is exactly a pulse basis's own
+        zeroth arc moment — the shape momwire#398 unit 5 split out of the
+        Galerkin-only `Remainder.evaluate` that blocked this row when
+        momwire#416's probe first asked). Q takes no jωμ / 1/jωε prefactor
+        (F is already a field) and integrates over the REAL source segments
+        — `geom`, never `src` — even when this call IS the image one,
+        because the plane enters Q through the interpolation grid rather
+        than through a mirrored source. `C₂·img + Q` is associated HERE,
+        before `_assemble_Z`'s single global minus takes it — the
+        `mode == "compose"` contract, unchanged from `razor.py`'s.
         """
         h = geom["h_per_seg"]
         cent = 0.5 * (geom["seg_l"] + geom["seg_r"])
         T1 = (h[:, None] * w_A) * self._seg_M0(cent, src, k)
         T2 = w_Phi * self._charge_stencil(geom, src, k)
-        return 1j * omega * self.mu * T1 + T2 / (1j * omega * self.eps)
+        block = 1j * omega * self.mu * T1 + T2 / (1j * omega * self.eps)
+        if remainder is None:
+            return block
+
+        fw = remainder.field_windows(
+            (cent, geom["tangents"]),
+            (geom["seg_l"], geom["seg_r"], geom["tangents"]),
+            n_moment=1,
+        )
+        n_obs = h.size
+        Q = np.empty((n_obs, n_obs), dtype=np.complex128)
+        step = max(1, _CHUNK_ELEMS // max(1, n_obs))
+        for lo in range(0, n_obs, step):
+            self._checkpoint()
+            hi = min(lo + step, n_obs)
+            Q[lo:hi] = h[lo:hi, None] * fw(lo, hi)[..., 0]
+        return block + Q
 
     def _assemble_Z(self, geom, k):
         """Fill the point-matched impedance matrix at one wavenumber.
@@ -605,13 +653,23 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         "fold"` contract (architecture doc §2.2), correct for BOTH terms at
         once because the image current runs anti-parallel and the image
         charge is opposite, and the direction bookkeeping that survives
-        that minus is already inside `w_A`.
+        that minus is already inside `w_A`. Over the composing (Sommerfeld)
+        ground it is the same single minus taken on `C₂·img + Q` instead of
+        `img` alone — `mode == "compose"`, associated inside
+        `_source_block` because `Z_free − (C₂·img + Q) ≠ (Z_free − C₂·img)
+        − Q` in float64.
 
         `weight_windows()(0, n)` is the whole-geometry window — the N²
         weight surface momwire#416 predicted a dense point-matched fill
         would want. It is asked for once per fill, and `image_coefficient`
         is deliberately NOT applied here: the object's docstring is
         explicit that the tables already carry it.
+
+        This solver has no prepare/replay split, so there is no schedule
+        question: `ground.remainder()` — `None` for every ground but
+        Sommerfeld's — is asked for once per fill, structurally reading the
+        ground OBJECT's `mode` rather than `self.ground_model`, exactly as
+        the weight windows above already do.
         """
         omega = self.c * k
         ground = _potential_ground.potential_ground_for(self, geom, k, omega)
@@ -629,7 +687,9 @@ class PulseSolver(_ElementCurrents, _Cancelable):
             "tangents": img.mirror_tangents(geom["tangents"]),
             "h_per_seg": geom["h_per_seg"],
         }
-        return Z - self._source_block(geom, mirrored, k, omega, w_A, w_Phi)
+        return Z - self._source_block(
+            geom, mirrored, k, omega, w_A, w_Phi, remainder=ground.remainder()
+        )
 
     # ------------------------------------------------------------------
     # solve
