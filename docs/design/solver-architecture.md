@@ -1246,6 +1246,40 @@ and the NEC-5 binary 68.88, while the same deck at a uniform radius has
 all of them inside 0.1 Ω. That is momwire#435, filed against those
 solvers rather than worked around here.
 
+### 6.10 The deck front end (momwire#432, 2026-08-18)
+
+Razor reaches `momwire.deck.build_solver`, closing #432 — the release-blocking
+unit PR #431 left as a follow-up. Two roster entries (`"razor"`,
+`"razor-nec5"` for the identified quadrature, momwire#316), keyed on class in
+a new `_NATIVE_LOADING` set rather than threaded through `basis_kwargs`: LD
+0/1/4 translate to `lumped_loads=[(wire, arclength, Z(ω))]`, evaluated at the
+build's own frequency (a sweep already calls `build_solver` once per step,
+so per-call evaluation already is the swept behaviour — no separate sweep
+case to write); LD 5 and `IS` reach `wire_conductivity` /
+`insulation_radius` / `insulation_eps_r` unchanged, since razor takes the
+siblings' distributed-loading kwargs verbatim (momwire#427). The arclength
+is read off the mesh `to_polylines` already built for the port-algebra
+route's OWN ports, so a load lands on the identical knot either route would
+have used — no separate snapping logic to disagree with the siblings'.
+`node_gaps`, `extended_kernel` and contact-over-a-finite-ground refuse with
+razor's own constructor messages, unmodified: `build_solver` does not special
+case any of them, because razor's `**unsupported` dispatch already produces
+exactly the message §6's registry declares. The one thing `build_solver` DOES
+special-case is `junctions=`: every sibling takes it, razor takes no such
+argument at all (not even `None` — it is not a declared parameter, so any
+spelling of it lands in `**unsupported` and refuses), so the roster's two new
+entries skip the keyword entirely rather than passing a value razor would
+reject.
+
+**Not reached: the portal.** `RazorSolver` has no `compute_port_solution()`
+(§6's registry note stands — it exposes `compute_impedance()` only), so
+`_y_and_port_coeffs` in `momwire.portal._portal` raises on the first solve
+under `--basis razor`. The name is a valid `--basis` choice the moment it
+joins `deck.BASES` (the portal's own roster is `deck.BASES` read once, #846
+phase III), so the CLI accepts it and then breaks — a real gap, tracked as a
+follow-up rather than fixed here, since a `compute_port_solution` for razor
+is a unit of its own and #432 is scoped to the library/script front end.
+
 ---
 
 ## 7. What this subsumes, and what it does not
