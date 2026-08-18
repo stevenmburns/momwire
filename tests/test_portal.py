@@ -2458,6 +2458,117 @@ def test_require_lattice_fft_names_the_unmet_gate_on_a_single_pair():
         nec_portal._y_and_port_coeffs(solver)
 
 
+# --- --basis razor / razor-nec5: the NEC-5 formulation twin ------------------
+#
+# #432 put razor on `deck.BASES`, but `RazorSolver` had no
+# `compute_port_solution()` — the portal's `_y_and_port_coeffs` (every basis
+# above goes through the ONE call, no per-family branch since #232) raised
+# `AttributeError` the moment a deck actually solved under either roster
+# name, which is why neither had a live gate here. The sharing audit's #429
+# rank-9 item closes it: `_y_and_port_coeffs` drives razor exactly like every
+# other family now.
+#
+# Known gap (filed as its own follow-up issue, #439, not fixed here):
+# `_port_signs` assumes every `PortPlan` site has a
+# matching `RazorSolver.feeds` entry, which holds for a driven site and for
+# a site that is BOTH fed and loaded (`_sites()` merges the two into one
+# `PortSite`), but not for a LOAD-ONLY site on a DIFFERENT segment from
+# every `EX` — razor bakes that one straight into `lumped_loads`
+# (`docs/razor-solver.md` "A load-only site is not a port here"), so it
+# never reaches `RazorSolver.feeds` at all, and `_port_signs` indexes past
+# the end of the list. The load-and-ground deck below sidesteps it by
+# loading the FED segment (a legal, documented razor configuration in its
+# own right — `docs/razor-solver.md`'s "Z_driven identity"), which is what
+# the gate below actually exercises end to end.
+
+
+def _razor_solver(**kwargs):
+    """A 9-segment 5 m dipole on plain RazorSolver, fed at its centre — the
+    same shape `_sin_solver` builds, for the same shim comparison."""
+    import numpy as np
+    from momwire import RazorSolver
+
+    return RazorSolver(
+        wires=[np.array([[0.0, 0.0, -2.5], [0.0, 0.0, 2.5]])],
+        n_per_edge_per_wire=[[8]],
+        feeds=[(0, 2.5, 1.0)],
+        wavelength=nec_portal.C_LIGHT / 14.0e6,
+        wire_radius=0.001,
+        **kwargs,
+    )
+
+
+def test_the_razor_shim_reproduces_momwires_own_y_matrix():
+    import numpy as np
+
+    y_shim, _x = nec_portal._y_and_port_coeffs(_razor_solver())
+    y_lib = np.asarray(_razor_solver().compute_y_matrix(), dtype=np.complex128)
+    assert np.allclose(y_shim, y_lib, rtol=1e-10, atol=0.0)
+
+
+def test_the_razor_shim_columns_are_the_one_volt_drive_coefficients():
+    """Column j of X must be the solve momwire would do for a 1 V drive at
+    port j — the identity `solve_group` leans on to turn one fill into
+    every excitation (``coeffs = X @ V``)."""
+    import numpy as np
+
+    _y, x = nec_portal._y_and_port_coeffs(_razor_solver())
+    _z, alpha = _razor_solver().compute_impedance()
+    driven = x @ np.array([1.0 + 0.0j])
+    assert np.allclose(driven, alpha, rtol=1e-10, atol=0.0)
+
+
+@pytest.mark.parametrize(
+    "basis,suffix", [("razor", "+razor"), ("razor-nec5", "+razor5")]
+)
+def test_razor_basis_flag_solves_and_stamps_the_banner(basis, suffix):
+    deck = (
+        "CE razor basis\n"
+        "GW 1 11 0. -5. 10. 0. 5. 10. 0.001\n"
+        "GE 0\nEX 0 1 6 0 1.\nFR 0 1 0 0 14.0 1\nXQ\nNX\n"
+    )
+    rc, out, err = _run_main(["--basis", basis], deck=deck)
+    assert rc == 0 and err == ""
+    assert f"VERSION:nec2c.ae6ty.momwire.9.1{suffix}" in out
+    assert "ANTENNA INPUT PARAMETERS" in out
+    rows = _aip_rows(out)
+    assert rows, f"no AIP data row under --basis {basis}"
+    assert all(math.isfinite(v) for row in rows for v in row)
+
+
+# A deck exercising a LOAD and a GROUND together in one pass: a PEC ground
+# (`GN 1`, wire clear of the plane — the same geometry
+# `dipole_pec_ground.deck` uses) plus a series RLC load (`LD 0`) on the SAME
+# segment the `EX` card drives, so the site is one `RazorSolver` port that is
+# both fed and loaded (`docs/razor-solver.md`'s "Z_driven identity" case) —
+# legal today, and the case the requirement asks this gate to cover.
+_RAZOR_LOAD_AND_GROUND_DECK = (
+    "CE razor load and ground\n"
+    "GW 1 9 0. 0. 2.0 0. 0. 7.0 0.001\n"
+    "GE -1\n"
+    "GN 1\n"
+    "LD 0 1 5 5 50. 1.e-6 0.\n"
+    "EX 0 1 5 0 1.\n"
+    "FR 0 1 0 0 14.1 0\n"
+    "XQ\nNX\n"
+)
+
+
+@pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
+def test_razor_basis_answers_a_deck_with_a_load_and_a_ground(basis):
+    """The portal gap #432 left open — no live solve under either razor
+    roster name — is closed by `RazorSolver.compute_port_solution` (the
+    sharing audit's #429 rank-9 item): both names answer a deck exercising
+    a load AND a ground in one pass, with finite AIP data."""
+    rc, out, err = _run_main(["--basis", basis], deck=_RAZOR_LOAD_AND_GROUND_DECK)
+    assert rc == 0 and err == ""
+    assert "ERROR-NEC2C" not in out, f"razor basis {basis} took the error path"
+    assert "ANTENNA INPUT PARAMETERS" in out
+    rows = _aip_rows(out)
+    assert rows, f"no AIP data row for the load+ground deck under {basis}"
+    assert all(math.isfinite(v) for row in rows for v in row)
+
+
 # --- the EK card, honoured for real (issue #849) ------------------------------
 #
 # Until momwire 0.26.0 the portal parsed `EK`, threaded it through the execute
