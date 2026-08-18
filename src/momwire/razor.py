@@ -232,6 +232,8 @@ with a single segment cannot take part in a junction (its two junction
 tents would overlap on one segment) and is refused.
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 import scipy.linalg
 
@@ -252,6 +254,7 @@ from ._element_currents import _ElementCurrents
 # moving that import. Migrating pulse's import line is a one-liner, on
 # pulse's own branch.
 from ._kernel_moments import _axis_frame, _static_axis_moments
+from ._port_solution import PortSolution, _SweptPortSolutions
 from ._quadrature import leggauss
 
 # Two wire endpoints this close are a junction, not a coincidence. The same
@@ -317,7 +320,29 @@ _CONTACT_OVER_FINITE_REFUSAL = (
 )
 
 
-class RazorSolver(_ElementCurrents, _Cancelable):
+@dataclass(frozen=True)
+class _RazorBasis:
+    """Opaque `PortSolution.basis` payload for `RazorSolver` (#429 rank-9).
+
+    The per-solve context: the geometry — wing/path stencils, knot layout,
+    junction table — that a solved `coeffs` column is expressed against, and
+    the wavenumber it was solved at. `currents_at_knots` does not actually
+    read this handle: it rebuilds geometry off `self._build_geometry()`'s own
+    cache, which is stable for the solver's whole lifetime (one `wires`
+    config, one mesh), so nothing here is load-bearing for TODAY's readout.
+    It exists so the `basis` field has a concrete, private-typed home rather
+    than `None` or the bare geometry dict — #232's contract is an opaque
+    handle a consumer never introspects, and a future readout that DOES need
+    solve-scoped context (a batched accelerator, say) has somewhere to add
+    it without changing the field's meaning. Private on purpose. Not stable
+    across solves.
+    """
+
+    geom: dict
+    k: float
+
+
+class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
     The NEC-5 formulation twin — see the module docstring for the physics.
@@ -2095,19 +2120,89 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         is only recovered as the mesh refines (momwire#309). A Galerkin
         scheme on the same basis would be symmetric to machine precision.
         `tests/test_razor_junctions.py` pins the decay.
+
+        This is the `y` field of `compute_port_solution()` and nothing else
+        — see there for the per-port solution columns this throws away
+        (momwire#232, #429 rank-9).
+        """
+        return self.compute_port_solution().y
+
+    def _port_count(self):
+        """Ports `compute_port_solution` returns — the configured `feeds`
+        and nothing else. Junction ports and node gaps are both refused at
+        construction (`_OUT_OF_SCOPE`), so there is nothing after them."""
+        return len(self.feeds)
+
+    def compute_port_solution(self, prepared=None) -> PortSolution:
+        """Solve every port from ONE fill and ONE factorisation (#429 rank-9).
+
+        Returns a `PortSolution` whose `y` is identical to
+        `compute_y_matrix()` — that method is implemented as
+        `compute_port_solution().y`, so the two cannot drift apart — and
+        whose `coeffs` column j is the tent/junction coefficient vector for
+        a 1 V drive at port j with every other port shorted. On this basis
+        the coefficient AT a knot IS the current there, so `port_currents`
+        (== `y`) is read straight off `coeffs` at the feed rows, with no
+        separate readout function the way the segment-basis families need
+        one. Ports are the configured `feeds`, in order — this formulation
+        refuses `junction_ports` and `node_gaps` at construction, so there
+        is nothing after them (unlike the B-spline / sinusoidal-Galerkin
+        families, whose ports run feeds-then-junction-ports).
+
+        The fill is exactly `_assemble_Z`'s own composition — one
+        k-independent `_assemble_Z_prepare` and one `_assemble_Z_from_prepared`
+        at `(self.k, self.c * self.k)`, the same omega expression `_assemble_Z`
+        itself uses rather than the separately-stashed `self.omega` — so this
+        method's `Z` cannot diverge from `compute_impedance` /
+        `compute_y_matrix`'s, not even by the 1-ULP omega drift a bare
+        `self.omega` read would cost it. Each call factors and
+        solves fresh (`scipy.linalg.solve`, not a stashed LU): no
+        factorisation is reused ACROSS `compute_impedance` /
+        `compute_y_matrix` / `compute_port_solution` calls on one instance,
+        but WITHIN this call every port shares the one fill and the one
+        `scipy.linalg.solve` over all `n_ports` right-hand-side columns at
+        once — the "one fill, one factorisation" the swept generator below
+        relies on.
+
+        `prepared` is the sweep's hoisted `_assemble_Z_prepare` result (see
+        `_port_solutions_swept`); it changes nothing about the answer, it
+        just spares the per-k rebuild of the wing/path stencils and the
+        closed-form static segment moments when the sweep drives this
+        method frequency by frequency — the same schedule
+        `compute_impedance_swept` / `compute_y_matrix_swept` already use.
+
+        `basis` is an opaque `_RazorBasis` handle, stable across the ports
+        of this one solution and NOT across solves.
         """
         geom = self._build_geometry()
         self._checkpoint()
-        Z = self._assemble_Z(geom, self.k)
+        if prepared is None:
+            prepared = self._assemble_Z_prepare(geom)
+        # `self.c * self.k`, not `self.omega`: `_assemble_Z` (and every
+        # existing entry point built on it — `compute_impedance`, the old
+        # `compute_y_matrix`, both swept loops) computes omega this way,
+        # never from the stashed `self.omega`. The two are mathematically
+        # identical but not bit-identical (`2·π·(c/λ)` at `__init__` time vs
+        # `c·(2·π/λ)` here), so reading `self.omega` would cost this method
+        # the branch point's bit-for-bit answer over a 1-ULP omega drift.
+        Z = self._assemble_Z_from_prepared(geom, prepared, self.k, self.c * self.k)
         self.z = Z
 
         idx = self._feed_basis_indices(geom)
-        B = np.zeros((geom["n_basis_total"], len(idx)), dtype=np.complex128)
+        n_ports = len(idx)
+        B = np.zeros((geom["n_basis_total"], n_ports), dtype=np.complex128)
         for j, m_j in enumerate(idx):
             B[m_j, j] = 1.0
 
         self._checkpoint()
-        return scipy.linalg.solve(Z, B)[idx, :]
+        X = scipy.linalg.solve(Z, B)
+        Y = X[idx, :]
+        return PortSolution(
+            y=Y,
+            coeffs=X,
+            port_currents=Y,  # the same object: the readout IS the Y matrix
+            basis=_RazorBasis(geom=geom, k=self.k),
+        )
 
     # ------------------------------------------------------------------
     # field readout
@@ -2301,30 +2396,39 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         z_per_feed = voltages[None, :] / feed_currents
         return z_per_feed[:, 0] if len(self.feeds) == 1 else z_per_feed
 
-    def compute_y_matrix_swept(self, k_array):
-        """Short-circuit admittance matrices over a batch of wavenumbers.
+    def _port_solutions_swept(self, k_array):
+        """Per-k `PortSolution` generator behind `compute_y_matrix_swept` and
+        `compute_port_solution_swept` (momwire#252, #429 rank-9).
 
-        Returns an `(n_k, n_ports, n_ports)` complex array; `Y[i]` is
-        `compute_y_matrix()`'s result at `k_array[i]`, same port/sign
-        conventions (including the razor-blade non-reciprocity —
-        `tests/test_razor_junctions.py`). Shares the k-independent fill work
-        the same way `compute_impedance_swept` does.
+        Shares the k-independent fill work the same way
+        `compute_impedance_swept` does: geometry, the wing/path stencils and
+        the closed-form static segment moments are built ONCE via
+        `_assemble_Z_prepare` and replayed at every k through
+        `compute_port_solution(prepared=...)`, which is exactly the
+        composition `_assemble_Z` documents — prepare once, finish per k —
+        so this loop cannot diverge from calling `compute_port_solution()`
+        fresh at every point. The old hand-rolled `compute_y_matrix_swept`
+        this replaces did the identical fill-and-solve inline; routing it
+        through the single-k entry point instead means the swept Y and the
+        stacked single-k Y are the SAME code path evaluated in a loop, not
+        two copies of the port algebra that could drift apart (the
+        sharing-audit #429 rank-9 finding this closes).
+
+        `self.k` is the mutated frequency `compute_port_solution` reads
+        implicitly (matching `compute_impedance` / `compute_y_matrix`'s own
+        convention — it derives omega as `self.c * self.k`, so `self.omega`
+        never has to be read); `_set_k` / `_k_restored`
+        (`_SweptPortSolutions`) rebind the whole frequency triple per k and
+        put it back — including on an exception or an abandoned generator —
+        so a caller who only consumes part of the sweep leaves the instance
+        exactly as it found it.
         """
         k_array = np.asarray(k_array, dtype=np.float64)
         geom = self._build_geometry()
         self._checkpoint()
         prepared = self._assemble_Z_prepare(geom)
-
-        idx = self._feed_basis_indices(geom)
-        n_ports = len(idx)
-        B = np.zeros((geom["n_basis_total"], n_ports), dtype=np.complex128)
-        for j, m_j in enumerate(idx):
-            B[m_j, j] = 1.0
-
-        Y = np.empty((k_array.shape[0], n_ports, n_ports), dtype=np.complex128)
-        for i, k in enumerate(k_array):
-            self._checkpoint()
-            k = float(k)
-            Z = self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
-            Y[i] = scipy.linalg.solve(Z, B)[idx, :]
-        return Y
+        with self._k_restored():
+            for kk in k_array:
+                self._checkpoint()
+                self._set_k(float(kk))
+                yield self.compute_port_solution(prepared=prepared)
