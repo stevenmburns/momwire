@@ -1,0 +1,1264 @@
+# Ground CONTACT over a FINITE ground — a design study
+
+**Status:** design study, for maintainer review before any implementation.
+Nothing here is a plan of record. No code beyond probe scripts was written.
+Written 2026-08-18 against momwire v0.32.0, in the shape of
+`solver-architecture.md` (the momwire#376 study): survey, measure, propose,
+and be explicit about what is not known.
+
+**Scope.** A wire END lying in the ground plane, over a ground that is not a
+perfect conductor. The ground-mounted vertical over real earth — the single
+most-requested antenna class no momwire row serves with a gate behind it.
+
+**On the licensed binary.** Every NEC-5 number in this document is a number
+the binary PRINTED. No NEC-5 source was read, quoted, or reasoned from.
+Where this document says what NEC-5 "does", it means what NEC-5 printed, and
+says so.
+
+**On the probe scripts.** The suites cited as `sN_*.py` are study artifacts,
+not repo code; they live in the session scratch directory
+(`.../scratchpad/study282/`, with every deck and printout under `decks/`) and
+are inventoried in the appendix. If any of this becomes a plan of record, the
+lane script Stage 1 proposes is what lands in `scripts/`.
+
+---
+
+## 0. Recommendation, in one page
+
+**The study's first finding is that the question in the issue title is not
+the question the code is asking.** Ground contact over a finite ground is
+not uniformly refused: it is *served, ungated, on three solvers* and refused
+on two, and the two refusals cite each other's mechanism.
+
+| solver | contact over PEC | contact over refl-coef | contact over sommerfeld |
+|---|---|---|---|
+| `BSplineSolver` (+ `HMatrixSolver`, `ArrayBlockSolver`) | served | **served** | **served** |
+| `SinusoidalSolver` / `SinusoidalGalerkinSolver` | served | **served**, with the #282 charge correction | **served**, with the #282 charge correction |
+| `RazorSolver` | served | refused (`_CONTACT_OVER_FINITE_REFUSAL`) | refused (same) |
+| `PulseSolver` | refused | refused | refused |
+
+So the honest framing of momwire#282 today is **not** "add a capability". It
+is:
+
+1. **A served capability with no oracle behind it.** `BSplineSolver` has
+   solved a base-fed vertical standing in lossy earth since momwire#151, and
+   nothing in the tree has ever compared that answer to a reference engine.
+   The gates that exist (`test_282_*`, `test_g16c`) are *self-consistency*
+   gates: they check that the answer stops walking and that the two trunks
+   agree with each other. Both trunks agreeing on a wrong answer would pass
+   every one of them.
+2. **A measurable error inside that served capability.** Measured here
+   against the binary's printed numbers (§3.5): the ground-induced impedance
+   shift at contact agrees to 0.005 Ω over "very good" ground and to
+   0.31 Ω over sea water, but misses by **1.2 Ω over average soil and
+   3.3 Ω over poor soil**, and the miss *grows with mesh refinement* — it is
+   a limit difference, not a discretization one.
+3. **A refusal whose stated mechanism does not survive contact with the
+   record.** Razor's refusal says the fold "hard-codes image coefficient 1,
+   i.e. PEC". But `_ground_spec.ground_config` assigns `image_coefficient=1`
+   to the *reflection-coefficient* ground too (§4.1), the binary's own
+   printed environment banner says it continues the contact current to the
+   image *regardless of the ground constants* (§3.1), and `BSplineSolver`
+   converges at contact over both finite grounds with coefficient 1 in
+   place. Coefficient 1 is not the defect. §4.3 identifies what razor's
+   actual defect is, and it is a different thing wearing the same name.
+
+**The recommendation** — model (b), the lumped base termination, is **not**
+the first unit, and neither is (c). The recommended ordering is:
+
+> **Stage 1 — gate what is already shipped.** Build the NEC-5 contact lane
+> (difference-of-columns against printed impedances) and let it decide, per
+> ground, whether the served row keeps serving. On today's measurements that
+> means: **refuse `refl-coef` at contact** (it sits ~27 Ω from momwire's own
+> Sommerfeld answer on the same deck, §3.6), and pin `sommerfeld` at contact
+> at its measured residual, which is honest for high-conductivity grounds
+> and openly loose for low-permittivity ones.
+>
+> **Stage 2 — close, or explain, the low-ε_r gap.** The 2.6–3.3 Ω under-
+> prediction of ground-loss resistance over poor soil is the study's one
+> unexplained number. §5.4 names three candidate causes and the experiment
+> that separates them. This is where model (b) becomes relevant — but as a
+> *diagnosis* of the missing ohms, not as a shipping model.
+>
+> **Stage 3 — razor's grounded tent over a finite ground.** The actual
+> standing refusal. §4.3 argues the fix is *not* to weight the image wing
+> (that would make it wrong, not right) but to replace razor's T2 plane-
+> reference drop, which is where the PEC assumption really lives.
+>
+> **Model (b) — the lumped base termination — is recommended as a
+> documented antennaknobs-level composition, not as a momwire ground.**
+> §2.3 explains why: it is not a MoM model at all, it has no place to live
+> in either trunk's basis, and its one real virtue (matching the ARRL
+> ground-system tables that hams actually use) is a station-modelling
+> concern that antennaknobs already has the vocabulary for.
+
+**Maintainer decision points** are collected in §7. The three that gate
+everything else: (D1) does an ungated served capability get gated or
+withdrawn; (D2) what bar shape the contact lane carries; (D3) whether the
+refl-coef contact row is refused, warned, or left alone.
+
+---
+
+## 1. What momwire#282 actually is, in the record
+
+### 1.1 The issue, and what closed it
+
+momwire#282 was filed against `SinusoidalSolver`: a base-fed vertical
+contacting the plane over lossy earth *diverged under mesh refinement*, with
+the extended kernel off. The recorded table:
+
+| NS | bspline refl soil | sinusoidal refl soil | sinusoidal somm soil |
+|---|---|---|---|
+| 11 | 28.23+15.44j | 66.84−392.22j | 80.66−107.05j |
+| 21 | 28.74+15.82j | 91.04−702.06j | 101.10−207.36j |
+| 41 | 29.22+16.26j | 112.75−1019.03j | 121.23−314.69j |
+| 61 | 29.48+16.54j | 109.14−1054.33j | 122.34−335.55j |
+
+Read that table again with the trunks in mind: **the bspline column is
+already converged.** #282 was never a statement that momwire could not solve
+a grounded vertical over earth; it was a statement that one of two
+formulations could not.
+
+What closed it is a **rank-one column correction** on the sinusoidal trunk
+(`sinusoidal.py:3572`, `_contact_charge_correction`; the Galerkin twin at
+`sinusoidal_galerkin.py:3106`), subtracting the field of the spurious point
+charge that the direct-field formulation leaves at the contact node. Its own
+docstring names bspline as the reference it restores agreement with
+(`sinusoidal.py:3341-3345`):
+
+> The mixed-potential solvers never had it: `BSplineSolver` builds its charge
+> term from the basis DERIVATIVE over the support, so a ground-contact basis
+> simply has no end charge, which is why it converges here and is the
+> reference this correction restores agreement with.
+
+### 1.2 What the recorded mechanism note gets wrong
+
+The maintainer's mechanism note for #282 reads: *"#151 fold hard-codes image
+coeff 1 (PEC); spurious contact charge; fix = unmerge fold, keep free/image
+tensors separate."* Three corrections, in increasing order of consequence:
+
+1. **There is no per-basis fold to unmerge in `bspline.py`.** The image
+   enters once, globally, after the free-space operator is complete
+   (`bspline.py:3699-3739`): one `Z -= (image assembly)` against the *same*
+   `supp_seg` and `polys` the free assembly used. "Image coefficient 1" is
+   therefore a **structural identification** — the mirrored half of every
+   basis is driven by the same unknown as its real half — not a literal
+   multiply that could be un-hard-coded.
+2. **Free and image tensors are already separate**, and the weighting hook
+   already exists. `_image_Z_weighted` (`bspline.py:1691`) applies per-pair
+   `(w_A, w_Φ)` from `PotentialGround.weight_windows` to the image block
+   alone. The reflection-coefficient ground *is* "the fold with a weighted
+   image", shipped since momwire#151/#153.
+3. **The fix that shipped was not this fix.** It was a rank-one post-
+   assembly subtraction on the other trunk, and the mixed-potential trunk
+   needed nothing.
+
+The note is best read as a *razor-era* note: razor's refusal prose was
+written in that language (`razor.py:305-320`) and inherits the same framing.
+§4.3 argues that even for razor the framing is off by one layer.
+
+### 1.3 The standing limitation the record does record honestly
+
+`tests/test_ground_junction.py:607`,
+`test_291_contact_over_finite_ground_still_diverges_slowly`, asserts that the
+*sinusoidal* contact answer still walks over NS 81→641 while pinning bspline
+as the converged reference (`drift_b < 0.5` between NS=81 and NS=321). So the
+tree already knows one trunk is not finished at contact. What it does not
+know is whether the trunk it treats as finished is *right*.
+
+---
+
+## 2. The physics of a wire–ground contact over lossy earth
+
+### 2.1 What actually happens at the junction
+
+A conductor ends at `z = 0` on a half-space of complex permittivity
+ε̃ = ε_r − jσ/(ωε₀). The current I₀ arriving at the end does not stop; it
+crosses the interface as conduction-plus-displacement current and spreads
+into the earth. Three length scales govern the near field, and a thin-wire
+MoM code resolves none of them:
+
+* **The electrode scale, ~a.** Immediately around the contact the problem is
+  the quasi-static spreading-current problem of a small electrode in a
+  conducting medium. For a hemispherical electrode of radius a the spreading
+  admittance is `Y = 2π(σ + jωε)a`. At 14 MHz over average soil
+  (13, 0.005 S/m), σ + jωε = 0.005 + j0.0101 S/m, so a 5 mm rod tip alone
+  presents |Z| ≈ 2.8 kΩ. This is not the impedance a NEC-class code returns,
+  and it should not be: a real ground connection is a stake or a radial
+  system, not a wire tip, and the electrode geometry lives entirely below any
+  mesh a wire code will ever build.
+* **The mesh scale, Δ.** What a MoM code actually models is the current
+  leaving the *lowest segment*, spread over a region of order Δ. As Δ→0 that
+  region shrinks toward the electrode scale but the model does not follow it
+  there — the basis has no radial spreading shape, only an axial one.
+* **The skin/wavelength scale in the earth**, |1/k₁| = λ/(2π√|ε̃|). At
+  14 MHz over average soil that is 0.94 m; over poor soil (5, 0.001), 1.5 m.
+  This is the scale over which the earth's own field structure — including
+  the lateral wave along the interface — varies.
+
+**Consequence, and it is the single most important physical statement in this
+study:** *the contact impedance of a wire ending on earth is not determined by
+the wire model.* Every code that solves this problem is making a modelling
+choice about what happens below the mesh scale, and the choices differ. A
+gate that demands two codes agree at contact is demanding they made the same
+choice, not that either is right. §5 is written around that constraint.
+
+### 2.2 Where "image continuation" breaks, and what replaces it
+
+Over a perfect conductor, the boundary condition at the plane makes a
+vertical wire's grounded end *exactly* the mid-point of the wire and its
+mirror image: the monopole IS half a dipole, the tangential E vanishes on the
+plane, and the current is continuous with coefficient exactly 1. No
+approximation anywhere.
+
+Over a finite ground, three separate things that coincide at PEC come apart:
+
+| at PEC | over a finite ground |
+|---|---|
+| the ground's field = the exact image's field | the ground's field ≠ any image's field; the exact image is the leading term of a decomposition with a remainder |
+| the plane is an equipotential (Φ = 0) | the plane is **not** an equipotential |
+| the physical current continues into the image with coefficient 1 | the physical current continues into the earth — as a spreading current, not as a filament — but it **still continues**; nothing about a lossy ground makes current stop at the interface |
+
+The third row is where the standing refusal and the record both slip. **The
+image coefficient in the GROUND MODEL (how the ground's field is
+represented) and the continuation coefficient in the BASIS (where the
+physical current goes) are different numbers**, and only the first one
+depends on ε̃. Charge conservation fixes the second at 1: whatever current
+arrives at the node leaves it. `_ground_spec.py`'s own table says the same
+thing in code — `image_coefficient` is **1** for the reflection-coefficient
+ground, which is not PEC, and the Fresnel physics arrives separately as
+per-pair `(w_A, w_Φ)` weights.
+
+The binary agrees, in printed output. §3.1.
+
+### 2.3 The four modelling traditions
+
+#### (a) Exact-image continuation scaled by a coefficient c ≠ 1
+
+*What naive un-hard-coding would give.* Let the contact basis continue into
+the image with amplitude c (the Fresnel ρ_v, or the Sommerfeld C₂). Then the
+current arriving at the node is I₀ and the current leaving is c·I₀, so
+`(1−c)·I₀` has nowhere to go and appears as a **point charge at the contact
+node**:
+
+```
+    Q = (1 − c) · I₀ / (jω)
+```
+
+Its potential at the nearest collocation point, a distance ≈ Δ/2 away, gives
+an impedance contribution of order
+
+```
+    |ΔZ| ≈ |1 − c| / (ω · 4πε₀ · Δ/2)         [ohms, Δ in metres]
+```
+
+which **diverges like 1/Δ under mesh refinement**. This is exactly momwire#282's
+recorded pathology, and it is exactly what `sinusoidal.py:3327-3345`
+describes. The estimate was checked here by switching the #282 correction off
+(`scratchpad/study282/s17_scaling.py`; λ/4 vertical, 14 MHz, a = 5 mm,
+refl-coef over (13, 0.005), ρ_v(normal) = 0.5891 − 0.0756j, |1−ρ_v| = 0.4178):
+
+| N | Δ (m) | Z with correction | Z with correction OFF | \|off − on\| | 1/Δ estimate |
+|---|---|---|---|---|---|
+| 11 | 0.4867 | 32.852+23.152j | 105.913−392.662j | 422.2 | 175.4 |
+| 21 | 0.2549 | 32.132+22.387j | 174.243−775.454j | 810.4 | 334.9 |
+| 41 | 0.1306 | 31.195+21.445j | 310.069−1532.388j | 1578.7 | 653.9 |
+| 81 | 0.0661 | 29.950+20.242j | 571.199−2986.020j | 3054.6 | 1291.8 |
+| 161 | 0.0333 | 28.279+18.667j | 1017.456−5486.047j | 5592.9 | 2567.6 |
+
+The measured term tracks 1/Δ to within 8 % per rung and sits a near-constant
+2.2–2.4× above the crude single-collocation-point estimate — the factor being
+the rest of the structure the point charge also illuminates. The N = 11
+"off" value (105.9 − 392.7j) reproduces momwire#282's recorded 66.84 −
+392.22j in its reactance to 0.44 Ω. The two decks are not identical (the
+recorded one uses a = 0.02), so the closeness of that particular match is
+partly luck — the 1/Δ scaling law, not the coincidence, is the point.
+
+**Verdict on (a): not a candidate. It is the defect, quantified.** Model (a)
+is what you get by taking the ground model's image coefficient and applying
+it to the basis, and it violates charge conservation by construction. This
+study's clearest single conclusion is that **the right image coefficient for
+the contact BASIS is 1, over every ground.**
+
+* *models:* nothing. It is a bookkeeping error with a physical-looking name.
+* *ignores:* charge conservation.
+* *cost:* negative — it is the thing to avoid.
+* *oracle:* the 1/Δ growth above is itself the detector; any contact
+  formulation whose answer walks like 1/Δ has this bug.
+
+#### (b) A lumped ground-loss termination at the base
+
+*The classic engineering model.* Model the antenna over a perfect ground,
+then add a series resistance R_g at the base representing the ground system
+(the ARRL/Sevick tables: ~2 Ω for 120 buried radials, 10–20 Ω for four
+radials, 30–100 Ω for a single stake in poor soil). Feed impedance becomes
+`Z_pec + R_g`, and efficiency `R_rad/(R_rad + R_g)`.
+
+* *models:* the aggregate near-field loss of a real ground system, which is
+  precisely the quantity a builder can change (add radials) and precisely the
+  quantity full-wave codes model worst, because it lives below the mesh
+  (§2.1).
+* *ignores:* everything else — the reactance shift, the pattern, the ground's
+  effect on the current distribution, and any frequency dependence beyond
+  what the tabulated R_g carries.
+* *where it would sit in a MoM basis:* **nowhere.** This is the finding that
+  decides its place. A series R at the base is a load on a *port*, and the
+  grounded end is not a port — `bspline.py:1167-1171` already refuses a
+  grounded junction as a junction port ("a grounded node's voltage is pinned
+  by the ground image, so it cannot also be a driven port") and
+  `bspline.py:3771-3775` refuses a node gap there ("a series gap between a
+  wire and the ground stake is not supported"). To make (b) a momwire ground
+  you would have to unpin the grounded node's voltage, i.e. introduce the
+  very unknown those two refusals exist to deny. The cheap alternative — a
+  `LD 4`-style series load on the lowest segment — is not the same thing and
+  is measurably not the same thing on a refined mesh, because the lowest
+  segment shrinks.
+* *cost per trunk:* as a momwire ground, high and structural (a new unknown
+  class at grounded nodes, both trunks). As an antennaknobs composition
+  (PEC solve + `Z += R_g` on the port + efficiency bookkeeping), **an
+  afternoon and zero momwire edits** — the same shape as
+  `solver-architecture.md` §6.1's verdict on the MININEC ground.
+* *oracle:* EZNEC/4nec2 parity for the composed answer; the ARRL tables for
+  R_g itself. No NEC oracle, because no NEC has this model.
+
+**Verdict on (b): recommended, as an antennaknobs composition, and
+explicitly not as a momwire ground.** It is the model most users actually
+want and it proves nothing about momwire's fill. It also has genuine
+diagnostic value here: §3.5's missing 2.6 Ω of resistance over poor soil is
+exactly the magnitude of a base-loss term, which is a lead, not a
+coincidence, and §5.4 turns it into an experiment.
+
+#### (c) The rigorous route: the half-space formulation's own contact
+
+*What the theory requires.* The Sommerfeld half-space Green's function is
+exact for sources above the interface, and momwire composes it as
+`C₂·(exact image) + Q`, with `Q` the smooth remainder
+(`_potential_ground.Remainder`, theory manual eqs 143–147). Two questions
+matter at contact:
+
+**Does the remainder machinery extend to a basis touching the plane?** In
+code, yes, and deliberately (`bspline.py:1784-1794`):
+
+> Touching (`zmin == 0`) is allowed since #151: the ground-junction basis
+> handles contact, and the remainder quadrature samples Gauss nodes strictly
+> interior to segments, so `z+z' > 0` holds even for a wire ending in the
+> plane.
+
+That is true and it is not the whole story. The remainder's interpolation
+surfaces are tabulated in `(R₁, θ)` with `R₁ = |r − r'_image|` and
+`θ = atan2(z+z', ρ)`. **Ground contact is the only geometry that drives
+`R₁ → 0`**: for a clear deck the lowest source and the highest image are
+separated by twice the clearance, so `R₁` has a floor; at contact the near-
+diagonal blocks query `R₁ ~ Δ`, which shrinks with the mesh. §3.7 measures
+what the grid does down there.
+
+**What singular behaviour appears?** The Sommerfeld integrands converge
+because of an `exp(−λ(z+z'))` factor. At contact that factor → 1 for the
+nearest pairs, so the spectral integrals lose their decay exactly where the
+mesh is finest. This is the classical difficulty of a source *on* an
+interface, and it is a property of the formulation, not of momwire's
+implementation of it. Everything else about contact — the basis, the fold,
+the coefficient — is easy by comparison.
+
+* *models:* the earth exactly, as a homogeneous half-space, given a
+  filamentary current continuation across the interface.
+* *ignores:* the sub-mesh electrode geometry (§2.1); the radial spreading of
+  the current, which it replaces with an axial continuation; earth
+  inhomogeneity and stratification.
+* *cost per trunk:* **on the mixed-potential trunk, already paid** — bspline
+  serves it today. On razor, §4.3. On the direct-field trunk, paid via the
+  #282 correction, with a residual walk (`test_291_*`).
+* *oracle:* NEC-5's printed impedances, which are a rigorous half-space
+  formulation applied to the same class of problem. §3 and §5.
+
+**Verdict on (c): this is the shipping model, and it already ships. The work
+is gating it, not building it.**
+
+#### (d) Radial-screen approximations (GN NRADL-style)
+
+*Coefficient-level.* NEC-2's `NRADL` models a buried radial screen as a
+surface impedance in parallel with the earth, modifying the reflection
+coefficients — `solver-architecture.md` §6.1 nominates it as the
+architecture's stretch test precisely because its physics lands in
+`_ground_refl.py`'s coefficient layer and should reach every solver for free.
+
+Contact interacts with screens in a specific and awkward way, and
+`field-ground-interface.md:104-111` already records it:
+
+> the **#282 contact-charge correction** calls `_ground_refl.fresnel_rho`
+> directly on both solvers … A screen deck with a wire END IN THE PLANE
+> would take the bare earth's ρ_v/ρ_h there … it is a wrong answer rather
+> than a missing feature, and whoever lands the screen has to route those
+> coefficients through the ground or refuse ground contacts under it.
+
+That prescription is written for the direct-field trunk. Note what it means
+for the mixed-potential trunk: **nothing**, because bspline has no contact-
+specific coefficient call to route — its contact basis is an ordinary basis
+and the screen would reach it through the ordinary weights. The screen is
+therefore *easier* at contact on the trunk that serves contact, which is the
+opposite of the note's implication.
+
+The genuinely hard part is physical, not architectural: a surface-impedance
+screen is a **far-field/reflection** device. It is derived from a plane wave
+striking the interface. A wire in contact with the screen is in its near
+field, where a surface impedance is not the right object at all — the real
+answer is the radials as *wires*, which momwire can already model
+explicitly, at N-radial cost.
+
+* *models:* the effect of a screen on reflected fields.
+* *ignores:* the near-field current sharing between the vertical and the
+  radials — i.e. the entire mechanism by which radials help a ground-mounted
+  vertical.
+* *cost per trunk:* per `solver-architecture.md` §6.1, zero per-solver work
+  if the architecture holds; the contact interaction is one direct
+  `fresnel_rho` call to reroute on the direct-field trunk, and nothing on
+  the mixed-potential trunk.
+* *oracle:* **not NEC-5, on this dialect.** §3.8 records the probe: NEC-5's
+  `GN` card has no `NRADL` field, and NEC-2's radial parameters land silently
+  on the permeability fields.
+
+**Verdict on (d): out of scope for #282, and worth saying so in the
+refusal.** A user who wants radials modelled correctly at contact should be
+pointed at modelling the radials as wires. If (d) ships for reflected fields,
+it should refuse or warn at contact rather than silently apply a plane-wave
+surface impedance to a near-field junction.
+
+---
+
+## 3. What the licensed binary prints
+
+All decks and printouts are kept beside the probe scripts (see the header
+note). Unless noted: base-fed λ/4 vertical, 14 MHz
+(λ = 21.414 m), height 5.3535 m, radius 5 mm, `GE 1 0`, source at the
+grounded base knot. NEC-5's ground cards, as our own adapter records them:
+`GN 1` is PEC, `GN 0 … NOFILE` is its native Sommerfeld solution (NEC-5 has
+no reflection-coefficient ground at all).
+
+### 3.1 It accepts contact, and it says what it does there
+
+The environment banner the binary prints for **every** grounded deck,
+before any `GN` card is read — identically for `GN 1` and for `GN 0` with
+lossy constants:
+
+```
+   GROUND PLANE SPECIFIED.
+
+   WHERE WIRE ENDS TOUCH GROUND, CURRENT WILL BE INTERPOLATED TO IMAGE IN GROUND PLANE.
+```
+
+Two things follow from that printed line, and only from it:
+
+1. **Contact is a first-class, documented case**, not a tolerated one.
+2. **The continuation rule is announced independently of the ground
+   constants.** This is the printed-output corroboration of §2.2: the
+   reference engine's contact basis does not carry ε̃, and the finite-ground
+   physics reaches it through the kernel. It is direct evidence against the
+   premise of razor's refusal.
+
+A second printed fact pins the same point from the other side. A voltage
+source at a **free** wire end, in free space, is rejected:
+
+```
+ SORVT1: ERROR - Voltage source specified where there is no basis function.  IELEM, INODE =        1   2
+```
+
+while the identical source at a **grounded** end solves. The grounded end has
+a basis function; the free end does not. That is exactly momwire#151's
+`"gnd"`-vs-`"free"` distinction (`bspline.py:1261-1283`), independently
+observed.
+
+### 3.2 Ground constants × mesh, at contact
+
+`scratchpad/study282/s2_grounds.py`. Printed impedance, Ω:
+
+| ground | N=11 | N=21 | N=41 | N=61 |
+|---|---|---|---|---|
+| PEC (`GN 1`) | 39.882+19.260j | 40.379+21.087j | 40.643+22.018j | 40.745+22.361j |
+| sea 81 / 5.0 | 41.843+20.315j | 42.505+22.422j | 42.858+23.573j | 42.988+24.010j |
+| v.good 20 / 0.0303 | 51.936+22.261j | 52.662+24.677j | 53.031+25.926j | 53.170+26.376j |
+| average 13 / 0.005 | 51.286+19.207j | 52.006+21.505j | 52.372+22.685j | 52.508+23.110j |
+| poor 5 / 0.001 | 43.571+15.113j | 44.244+17.169j | 44.587+18.222j | 44.713+18.607j |
+| v.poor 3 / 0.0001 | 33.396+14.159j | 33.942+16.017j | 34.221+16.967j | 34.325+17.320j |
+| ε_r=2, σ=1e−5 | 23.730+11.044j | 24.198+12.702j | 24.438+13.547j | 24.526+13.866j |
+| ε_r=1.05, σ=1e−9 | 4.678+2.187j | 5.024+3.455j | 5.204+4.096j | 5.271+4.347j |
+| ε_r=1, σ=0 | 3.091+1.348j | 3.427+2.584j | 3.602+3.209j | 3.668+3.455j |
+
+**Findings.**
+
+* Every row converges cleanly, at the usual O(1/N) walk. There is no analogue
+  of momwire#282's divergence anywhere in the reference engine's contact
+  behaviour, over any ground.
+* The resistance is **non-monotone in ground quality**: PEC 40.4 → sea 42.5 →
+  very good 52.7 → average 52.0 → poor 44.2 → very poor 33.9. The classic
+  ground-loss hump, peaking around ε_r 13–20, and worth knowing before
+  designing any gate that assumes monotonicity.
+* **The printed POWER BUDGET carries no ground loss.** At every finite
+  ground, `RADIATED POWER = INPUT POWER`, `WIRE LOSS = 0`, `EFFICIENCY =
+  100.00 PERCENT`. An efficiency-based gate would have to come from an `RP`
+  run's `AVERAGE POWER GAIN`, not from the plain `XQ` budget.
+
+A second geometry, a grounded inverted-L (3 m vertical + 6 m top wire),
+converges the same way (`s5_limits.py`, S6): PEC 264.2+910.8j → 294.4+956.9j
+→ 313.6+983.9j over N = 12/24/48; average soil 358.6+796.1j → 391.9+823.4j →
+412.0+837.7j; poor soil 337.4+754.8j → 363.8+776.0j → 378.6+786.2j.
+
+### 3.3 The ε̃ → ∞ limit: contact recovers PEC, at C₂'s rate
+
+`s5_limits.py` S5(i). ε_r = 13 fixed, σ swept, N = 41 contact; PEC reference
+`GN 1` = 40.643 + 22.018j.
+
+| σ (S/m) | printed Z | \|Z − Z_PEC\| |
+|---|---|---|
+| 1e−2 | 53.807+23.269j | 13.223 |
+| 1e−1 | 49.847+27.114j | 10.521 |
+| 1e0 | 44.750+24.916j | 5.027 |
+| 1e1 | 42.308+23.179j | 2.030 |
+| 1e2 | 41.249+22.411j | 0.722 |
+| 1e3 | 40.846+22.142j | 0.238 |
+| 1e4 | 40.708+22.055j | 0.0748 |
+| 1e6 | 40.649+22.019j | 0.0061 |
+| 1e8 | 40.643+22.016j | 0.0020 |
+
+Single-decade ratios from σ = 1 upward: 2.48, 2.81, 3.03, 3.18 → √10 from
+below, then a floor at ≈ 0.002 Ω which is the printed precision. **That is
+C₂'s rate** — the same rate `solver-architecture.md` §6.5 measured for the
+clearance case on razor. So the analytic PEC limit is available at contact,
+it is clean in the reference engine, and its shape is known: √10 per decade
+of σ down to a 0.002 Ω floor. §5.2 makes a gate of it, and §3.7 records that
+momwire fails it.
+
+### 3.4 The ε̃ → 1 limit: contact does not become free space, and both codes agree it doesn't
+
+`s5_limits.py` S5(ii), σ = 0, N = 41 contact:
+
+| ε_r | printed Z |
+|---|---|
+| 10 | 49.428+23.552j |
+| 4 | 39.172+19.964j |
+| 2 | 24.360+13.714j |
+| 1.5 | 16.345+9.904j |
+| 1.2 | 9.503+6.411j |
+| 1.05 | 5.204+4.096j |
+| 1.01 | 3.930+3.391j |
+| 1.001 | 3.635+3.227j |
+| **1.0** | **3.602+3.209j** |
+
+The sequence is smooth and converges to a definite finite value. It is **not**
+free space: the same wire in free space, fed at the first interior knot,
+prints 11.247 − 4917.8j.
+
+The reason is physical and it answers the study's brief directly. Asking
+"what should ε̃ → 1 recover at contact?" presumes there is a well-posed
+free-space problem to recover. There is not: **the ground is the current's
+return path.** Remove the ground and the base feed has nothing to push
+against; the wire end reverts to a free end, which (per §3.1's printed error)
+has no basis function at all. The ε̃ → 1 contact limit is a limit of a family
+whose endpoint is a different problem, and what the codes print there is the
+numerical residue of that degeneracy.
+
+The surprise is that **momwire prints almost the same residue.**
+`BSplineSolver(degree=2)`, N = 41, contact, sommerfeld, ε_r → 1 at σ = 0
+(`s10_mw_limits.py`): 47.574+24.213j, 35.790+19.376j, 20.979+12.590j,
+13.872+9.132j, 8.273+6.326j, 4.964+4.636j, 4.015+4.147j, **3.775+4.024j** at
+ε_r = 1.0001 — against the binary's 3.602+3.209j. Two independent
+formulations converge on the same degenerate object to 0.83 Ω. That is worth
+recording, but §5.2 declines to make a gate of it: agreeing about a
+degenerate limit is not evidence of agreeing about physics.
+
+### 3.5 The headline measurement: momwire vs the binary at contact
+
+The comparison that matters is the **ground-induced shift**
+`δ = Z(soil) − Z(PEC)` at matched N — the difference-of-columns pattern,
+which cancels the formulation's own discretization offset (at PEC contact,
+N = 41: binary 40.643+22.018j, bspline 40.662+23.278j — 1.26 Ω apart in X,
+all of it basis difference). `s15_columns.py`, `BSplineSolver(degree=2,
+feed_model="segment")`, `ground_model="sommerfeld"`:
+
+| soil | N | δ momwire | δ binary (printed) | \|difference\| |
+|---|---|---|---|---|
+| sea 81/5.0 | 11 | 2.119+1.741j | 1.961+1.055j | 0.704 |
+| | 21 | 2.131+1.860j | 2.126+1.335j | 0.525 |
+| | 41 | 2.146+1.921j | 2.215+1.555j | 0.372 |
+| | 61 | 2.154+1.941j | 2.243+1.649j | **0.306** |
+| v.good 20/0.0303 | 11 | 12.243+3.960j | 12.054+3.001j | 0.977 |
+| | 21 | 12.310+3.939j | 12.283+3.590j | 0.350 |
+| | 41 | 12.387+3.913j | 12.388+3.908j | **0.005** |
+| | 61 | 12.424+3.898j | 12.425+4.015j | 0.117 |
+| average 13/0.005 | 11 | 10.734−0.007j | 11.404−0.053j | 0.672 |
+| | 21 | 10.782−0.044j | 11.627+0.418j | 0.963 |
+| | 41 | 10.840−0.082j | 11.729+0.667j | 1.163 |
+| | 61 | 10.867−0.101j | 11.763+0.749j | **1.236** |
+| poor 5/0.001 | 11 | 1.238−5.725j | 3.689−4.147j | 2.915 |
+| | 21 | 1.268−5.703j | 3.865−3.918j | 3.151 |
+| | 41 | 1.288−5.701j | 3.944−3.796j | 3.269 |
+| | 61 | 1.294−5.702j | 3.968−3.754j | **3.309** |
+
+The sinusoidal trunk on the same decks: sea 0.013 → 0.136 (degrading),
+very good 1.174 → 0.643, average 2.808 → 1.859, poor 6.640 → 4.376. Both
+trunks are wrong in the same direction on poor soil, by different amounts.
+
+**Findings.**
+
+1. **Two rows converge onto the binary and two walk away from it.** Sea and
+   very-good ground close with mesh (0.70→0.31, 0.98→0.005/0.12); average and
+   poor *open* with mesh (0.67→1.24, 2.92→3.31, both saturating). A gap that
+   grows with refinement and then flattens is a **difference of limits**, not
+   a discretization artifact.
+2. **The error tracks low ε_r, not low conductivity.** Sea (ε̃ = 81 − 6424j)
+   and very good (20 − 38.9j) are fine; average (13 − 6.42j) misses by
+   1.2 Ω; poor (5 − 1.284j) by 3.3 Ω. The ordering is by ε_r, and poor soil
+   is the outlier at both frequencies tested.
+3. **Nearly all the poor-soil miss is in RESISTANCE**: momwire's ground adds
+   1.29 Ω of R where the binary adds 3.94 Ω. **momwire under-predicts the
+   ground-loss resistance of a grounded vertical over poor soil by ~2.7 Ω** —
+   ≈6 points of efficiency on a full-size 40 Ω monopole (90.1 % against
+   96.5 %), and a much larger one on the
+   short loaded verticals this class of user actually builds.
+4. It is not a 14 MHz artifact. At **3.5 MHz** (`s16_freq.py`, quarter-wave
+   = 21.414 m): average soil closes to 0.13 Ω (N=21) / 0.32 Ω (N=41), very
+   good to 0.61/0.29 — but poor soil stays at **2.38/2.64 Ω**, still almost
+   all in R (momwire δ = 10.599−7.272j vs printed 11.686−4.865j at N=41).
+
+### 3.6 The refl-coef contact row is served and is ~27 Ω off
+
+`s9_momwire.py`/`s10_mw_limits.py`, `BSplineSolver(degree=2)`, contact,
+average soil (13, 0.005), N = 41:
+
+| model | Z |
+|---|---|
+| PEC | 40.662+23.278j |
+| **sommerfeld** | **51.502+23.196j** |
+| **refl-coef** | **26.997+12.619j** |
+| binary (`GN 0`, printed) | 52.372+22.685j |
+
+The reflection-coefficient ground at contact is **26.7 Ω from momwire's own
+Sommerfeld answer on the same deck, and 27.3 Ω from the binary's** — and it
+is on the wrong side of PEC. The sinusoidal trunk's refl-coef contact answer
+(31.195+21.445j at N=41, still walking down: 32.85 → 32.13 → 31.19 → 30.51
+over N = 11…61) is differently wrong.
+
+This is not new physics; momwire#153's validity window is stated in
+`bspline.py:568-575` and names contact explicitly:
+
+> Below ~0.1λ or for ground-touching wires, prefer `ground_model="sommerfeld"`
+> (exact everywhere, contact-capable since #151)
+
+But it is a docstring, not a refusal. **A user who writes
+`ground_model="refl-coef"` — the default — on a ground-mounted vertical gets
+a silently wrong answer today.** §6 Stage 1 proposes refusing it.
+
+### 3.7 momwire fails the PEC limit at contact, and only at contact
+
+`s11_floor.py`. `|Z(ε_r=13, σ) − Z_PEC|` for `BSplineSolver(degree=2)`; the
+"clear" deck is the same wire with its base 2 m (0.093 λ) up, fed at
+mid-height.
+
+**`ground_model="sommerfeld"`:**
+
+| deck | N | σ=1e2 | σ=1e4 | σ=1e6 | σ=1e8 |
+|---|---|---|---|---|---|
+| contact | 11 | 0.8646 | 0.3706 | 0.3355 | **0.3324** |
+| contact | 21 | 0.9768 | 0.5129 | 0.4796 | **0.4766** |
+| contact | 41 | 1.0376 | 0.5855 | 0.5529 | **0.5499** |
+| contact | 81 | 1.0709 | 0.6242 | 0.5918 | **0.5888** |
+| clear | 11 | 0.0280 | 0.0028 | 0.00028 | 0.00003 |
+| clear | 21 | 0.0264 | 0.0026 | 0.00026 | 0.00003 |
+| clear | 41 | 0.0254 | 0.0025 | 0.00025 | 0.00003 |
+| clear | 81 | 0.0248 | 0.0025 | 0.00025 | 0.00002 |
+
+**`ground_model="refl-coef"` (control — the folding ground):**
+
+| deck | N | σ=1e2 | σ=1e4 | σ=1e6 | σ=1e8 |
+|---|---|---|---|---|---|
+| contact | 11 | 0.2315 | 0.0232 | 0.00232 | 0.00023 |
+| contact | 41 | 0.2306 | 0.0231 | 0.00231 | 0.00023 |
+| clear | 11 | 0.0369 | 0.0037 | 0.00037 | 0.00004 |
+| clear | 41 | 0.0334 | 0.0033 | 0.00033 | 0.00003 |
+
+**Findings.**
+
+* The clear deck converges to PEC at the textbook rate (10× per decade of σ)
+  and reaches 3e−5 Ω. So does refl-coef, at contact and clear alike.
+* **The Sommerfeld ground at contact floors** at 0.33 / 0.48 / 0.55 / 0.59 Ω,
+  and the floor *rises with mesh refinement*. It does not go away.
+* It is not under-quadrature (`s12_knobs.py`): raising `n_qp_sommerfeld` 3 →
+  5 → 8 → 12 moves the residual 0.553 → 0.600 → 0.618 → 0.625, i.e. the
+  quadrature **converges to a wrong number**. It is not a radius effect
+  either (a = 5/20/50 mm: 0.5529/0.5522/0.5512).
+* **The direct-field trunk shows the same signature**: `SinusoidalSolver` at
+  contact floors at 0.817/0.320/0.285 Ω over σ = 1e2/1e4/1e6 under
+  sommerfeld, while its refl-coef control converges to 0.0014. The defect is
+  in the shared composing-ground machinery, not in either basis.
+
+**Mechanism, measured.** `s13_grid.py`/`s14_smallR.py` compare
+`SommerfeldGrid.eval` against `iv_surfaces_direct` at θ = 45°, sweeping R₁:
+
+| ε̃ | R₁ = 0.5λ | 0.1λ | 0.02λ | 0.006λ | 0.002λ | 2e−4 λ |
+|---|---|---|---|---|---|---|
+| 13 − 6.42j (average) | 1.8e−4 | 7.5e−5 | 7.3e−4 | 9.0e−4 | 3.9e−4 | 5.6e−5 |
+| 5 − 1.284j (poor) | 1.5e−4 | 1.5e−4 | 5.3e−4 | 6.3e−4 | 3.9e−4 | 1.9e−4 |
+| 13 − 6.42e9j (σ=1e6) | 2.3e−3 | 7.2e−3 | **4.9e+2** | **4.4e+2** | **1.9e+2** | **2.0e+1** |
+
+(relative error on `IzV`; the other three surfaces behave the same.)
+
+Two conclusions, and they point in opposite directions:
+
+1. **The PEC-limit failure at contact is an INSTRUMENT defect, not a physics
+   defect.** In the near-PEC regime the true surfaces are ~1/√ε̃ small
+   (|IzV| = 4.2e−3 at R₁ = 0.02λ against 7.1 for average soil), and the
+   grid's absolute interpolation error does not shrink with them, so the
+   remainder Q stops vanishing. Contact is the only geometry that queries
+   R₁ ≲ 0.02λ, which is why only contact sees it. **The ε̃ → ∞ gate at
+   contact cannot be run through the Sommerfeld path as currently
+   instrumented**, and a stage-1 plan that assumes it can will burn a week.
+2. **It does NOT explain §3.5.** At real soils the grid holds 1e−4–1e−3
+   relative accuracy all the way down to R₁ = 1e−5 λ. The 1.2 Ω and 3.3 Ω
+   misses against the binary are somewhere else, and this study did not find
+   them. §5.4 lists the candidates.
+
+### 3.8 The lift-off ladder: contact is not the limit of clearance
+
+`s4_liftoff.py`. Two families, both fed at the same knot (end 2 of segment 1)
+so the only thing that changes is whether the lower end is grounded or free.
+
+**(A) "clear"** — one wire from z = h to z = h + 5.3535, N = 21:
+
+| h (m) | over PEC | over average soil |
+|---|---|---|
+| 0 (contact) | 40.113+21.523j | 51.594+22.210j |
+| 1e−4 | 30.657−2687.1j | 58.220−2732.3j |
+| 1e−3 | 30.634−2690.7j | 57.986−2735.5j |
+| 1e−2 | 30.409−2723.2j | 55.845−2764.1j |
+| 1e−1 | 28.726−2883.9j | 44.161−2906.3j |
+| 5e−1 | 25.449−3011.4j | 30.681−3019.9j |
+
+**(B) "stubbed"** — a one-segment contacting stub z = 0…h plus the radiator,
+fed at the stub's grounded base:
+
+| h (m) | over PEC | over average soil |
+|---|---|---|
+| 1e−4 | 40.539+20.988j | 52.138+21.367j |
+| 1e−3 | 40.556+21.098j | 52.185+21.478j |
+| 1e−2 | 40.751+22.166j | 52.447+22.632j |
+| 1e−1 | 43.071+32.625j | 55.040+33.016j |
+| 5e−1 | 55.034+80.251j | 67.875+78.746j |
+
+**Findings.**
+
+* **Ladder A answers the brief's question with a flat no.** Lifting the base
+  by 0.1 mm — 5 millionths of a wavelength — moves the reactance by
+  **−2750 Ω** and then holds it essentially constant over four decades of h.
+  The limit `lim_{h→0} Z_clear(h)` exists and is perfectly well behaved; it
+  is simply a *different antenna*. A free end carries no current, a grounded
+  end carries maximum current, and no amount of closing the gap interpolates
+  between them, because a thin-wire kernel has no tip capacitance to
+  interpolate with. **"Contact = the lift-off limit" is dead as a serving
+  strategy and dead as an oracle.**
+* **Ladder B is the useful one.** With contact preserved, an arbitrarily
+  short contacting segment reproduces the direct contact deck: at h = 0.1 mm
+  (a 0.1 mm first segment!) PEC gives 40.539+20.988j against the plain
+  contact deck's 40.379+21.087j at the same segment count elsewhere, and
+  average soil 52.138+21.367j against 52.006+21.505j. **The reference
+  engine's contact treatment is numerically stable down to degenerate
+  contacting segments**, which makes it a usable own-code gate: §5.3.
+
+### 3.9 Radial screens: not probeable on this dialect
+
+`s5_limits.py` S7 / `s8_confirm.py`. NEC-2's `GN 2 NRADL … FRATI FRATIS`
+spelling was tried four ways. Findings, from printed output alone:
+
+* `GN 0`, `GN 2` and `GN 1` with I2 = 16 (NEC-2's `NRADL` slot) print
+  **exactly** the same environment banner and the same impedance as with
+  I2 = 0 — 52.006+21.505j for the finite ground, 40.379+21.087j for PEC.
+  I2/I3/I4 are inert (checked to I2=16, I3=99, I4=7).
+* No line containing "RADIAL" or "SCREEN" is printed by any variant.
+* The apparent effect seen in the first pass was a **dialect trap**: NEC-2's
+  radial-length/radius fields F3/F4 are NEC-5's permeability FMUR/FMUI.
+  Writing NEC-2's `NRADL` parameters produces a silently *magnetic* ground —
+  `GN 0 … 13.0 0.005 5.3535 0.001` prints 57.416+19.224j against the
+  correct 52.006+21.505j, with the printed banner still reading
+  `RELATIVE DIELECTRIC CONST.= 13.000 / CONDUCTIVITY= 5.000E-03`, i.e. the
+  banner does not reveal the substitution.
+
+**Consequence:** the radial screen has **no NEC-5 oracle through this
+spelling**, and any future NEC-5 deck front end must guard the GN F3/F4
+fields. If (d) is ever built, its oracle is NEC-2 (nec2c/PyNEC), and it
+should refuse contact rather than compose with it (§2.3(d)).
+
+---
+
+## 4. The two trunks' mechanics
+
+### 4.1 `BSplineSolver` — the #151 fold, concretely
+
+**What exists.** A wire end within `1e-6 × (polyline length)` of `ground_z`
+is tagged `"ground"` by `_wire_endpoint_status` (`bspline.py:1075`), and the
+basis assembly (`bspline.py:1261-1283`) then **keeps** the value-1 boundary
+basis it would otherwise drop:
+
+```python
+elif start_status[w_idx] == "ground":
+    # Ground junction: keep the value-1 end basis so the end
+    # current is a real dof — its image (integrated by the
+    # ground blocks like every basis's) is the continuation
+    # through the plane. No KCL partner: the image IS the
+    # return path.
+    kept.append((0, "gnd", None, "start"))
+```
+
+A grounded end is therefore *a junction end minus the constraint*: same
+bases, but `"gnd"` never enters `junction_dirs`, so no KCL row references it.
+`_grounded_junctions` (`bspline.py:1119`) drops the closure row for a K-way
+junction lying in the plane, for the same reason.
+
+**Where "coefficient 1" lives.** Not in a fold, and not in a multiply. The
+image enters once, after the free operator is complete
+(`bspline.py:3699-3739`), as one subtraction of an assembly built from the
+*mirrored* segments contracted against **the same `supp_seg` and `polys`**:
+
+```python
+Z -= self._ground_finite_Z(J_img, supp_seg, polys, geom, ground=ground)
+```
+
+Because the image block is contracted against the same coefficient vector,
+the mirrored half of every basis is driven by the same unknown as its real
+half — amplitude ratio exactly 1, structurally, with nothing to un-hard-code.
+The image *sign* (mirrored direction + image charge flip, "one minus
+combined") is the single `-=` plus the mirror tangent-dot table.
+
+**The charge bookkeeping at the contact point, exactly.** bspline's Φ term is
+built from the basis **derivative** over its support
+(`bspline.py:2306-2311`), and only from it — there is no endpoint term
+anywhere in the assembly. So:
+
+* the grounded basis *does* have non-zero divergence right up to the contact
+  point (it rises 0→1 across its support), and it *does* carry net charge
+  over that support;
+* but that charge is a **bounded line density on the contact segment**, not a
+  point charge at the node;
+* the image half carries the mirrored density with the opposite sign, so at
+  PEC the pair is charge-neutral at the contact;
+* over a finite ground the Φ-image is scaled per-pair by `w_Φ`, so the
+  cancellation is *imperfect* — and the residual, being a difference of two
+  bounded distributions, stays bounded. That is precisely why bspline
+  converges where the direct-field trunk diverged, and it is why **no
+  compensating term is needed on this trunk.**
+
+**What "unmerge the fold" would actually mean here**, for the record, since
+the note asked: it would mean giving the image block its own coefficient
+vector — a second unknown per basis. That is model (a) of §2.3, it violates
+charge conservation, and it would introduce the 1/Δ point charge bspline
+currently does not have. **It should not be built.**
+
+### 4.2 The shared layers, and what they would carry
+
+`_ground_spec.GroundConfig` — `(mode, eps_tilde, image_coefficient,
+standard_fresnel)`, from four solver attributes. Its table:
+
+| ground | mode | eps_tilde | image_coefficient | weighted |
+|---|---|---|---|---|
+| PEC | fold | None | **1** | False |
+| refl-coef | fold | ε̃(ω) | **1** | True |
+| sommerfeld | compose | ε̃(ω) | C₂ = (ε̃−1)/(ε̃+1) | False |
+
+Note row 2: a genuinely finite ground with `image_coefficient == 1`. The
+refusal's "coefficient 1, i.e. PEC" equation is not the code's equation.
+
+`_potential_ground.PotentialGround` exposes `image_geometry()`,
+`weight_tables()`, `weight_windows(observers, sources)` and `remainder()`;
+`_field_ground.FieldGround` the direct-field analogues. **Neither carries any
+concept of contact.** An exhaustive grep of the five ground modules for
+`contact|clearance|touch` returns only `_ground_spec.ground_touch_tol` — a
+tolerance, which answers "does this end touch the plane" and nothing else.
+
+Two structural facts a contact-aware ground layer would have to face:
+
+1. **The weight APIs are defined per (observer, source segment) pair at a
+   specular angle** (`_potential_ground.py:744-750`): ρ_v/ρ_h are evaluated
+   once per pair on the ray from the source segment's *image midpoint* to
+   the observer. **A contact node is its own image**, so that ray
+   degenerates and the API has no spelling for it. The sinusoidal trunk
+   works around this by calling `_ground_refl.fresnel_rho` directly
+   (`sinusoidal.py:3294`, "The node IS its own mirror image, so the specular
+   ray is simply (node → observer)") — which is exactly the bypass
+   `field-ground-interface.md:104-111` flags as the screen's future problem.
+2. **The one thing a contact-aware layer would genuinely need to add** is not
+   a coefficient. It is an answer to *"what is the folded scalar potential at
+   a point IN the plane?"* — which is `(1 − w_Φ)·M0(plane)`, zero at PEC and
+   non-zero otherwise, and which §4.3 shows is the load-bearing quantity for
+   razor. That is one new operation, on the potential trunk only, with a
+   degenerate-specular convention to pin.
+
+### 4.3 `RazorSolver` — what its refusal actually protects
+
+**The basis.** A grounded end gets a junction tent between the wire end and
+its own image, with only the real wing spelled: the image wing is a σ = 0
+ghost that the fold's second pass supplies (`razor.py:880-885`, six lines).
+The row is the real half of the testing path only, halved by the self-image
+invariance `E(M·r) = −M·E(r)`, and the fill states the charge story
+(`razor.py:1866-1873`):
+
+> σ_A = 0 empties its half of both terms, and the fold's second pass supplies
+> the mirrored wing with the opposite charge, so the through-basis's two
+> doublet halves are −1/h on the real segment and **+1/h on its image**. The
+> unit of current that flows into the plane leaves no net charge at the
+> contact point.
+
+**Read that carefully: razor's contact charge is a doublet on the two
+segments, not a point charge at the node.** Razor is structurally on
+bspline's side of §2.3(a), not on the sinusoidal trunk's side. The refusal's
+phrase "would take spurious contact charge (momwire#282)" imports language
+from a formulation that has a 1/Δ node charge; razor does not have one.
+
+**What razor genuinely has that bspline does not** is the T2 plane-reference
+drop (`razor.py:1981-1993`):
+
+```python
+dM0 = M0c[s_b] - M0c[s_a]
+if grounded.size:
+    # A grounded row's testing path starts AT the plane, where the
+    # folded scalar potential is identically zero: a point in the
+    # plane is equidistant from every source and its image, so the
+    # two blocks' contributions there are the same number and the
+    # fold's minus cancels them. ...
+    dM0[grounded] = M0c[s_b[grounded]]
+```
+
+This routine runs **twice** — once over real sources, once over mirrored —
+and dropping the plane endpoint in both passes is exact *only because the two
+passes produce the identical number there*. Over a finite ground the image
+kernel is multiplied by `w_Φ` **before** the difference (`razor.py:1973-1980`,
+`M0c[c0:c1] *= w_Phi`), so the two plane-endpoint terms become `M0(plane)` and
+`w_Φ·M0(plane)`, and the drop silently discards `(1 − w_Φ)·M0(plane)` instead
+of zero.
+
+**So the defect is a missing term in the row's potential reference, not a
+wrong basis function.** The physics is the second row of §2.2's table: *the
+plane is not an equipotential over a finite ground*, so a formulation that
+uses "Φ = 0 on the plane" as its reference must earn that reference back.
+Three consequences:
+
+* **A weighted image wing is the wrong fix and the refusal is right to reject
+  it** — for the reason §2.3(a) gives, not the reason the refusal gives.
+  Keep the wing at coefficient 1.
+* **The right fix is bounded and local**: restore the dropped term as
+  `(1 − w_Φ)·M0(plane)` (identically zero at PEC, so PEC stays bit-for-bit),
+  which needs one new operation on `PotentialGround` — a weight at a
+  degenerate specular geometry (§4.2, point 2). Under `mode == "compose"` the
+  same statement is `(1 − C₂)·M0(plane) − Q(plane)`, with the association
+  rule unchanged.
+* **This study did not build it, so this is a hypothesis, not a finding.**
+  §5.5 names the experiment that settles it in an afternoon: implement the
+  restored term behind a flag and check razor against bspline on the S15
+  decks with the difference-of-columns bar. If razor lands on bspline, the
+  hypothesis holds; if it does not, the refusal was protecting something this
+  study has not identified, and that is worth knowing before Stage 3 is
+  scheduled.
+
+**What razor's grounded row also assumes**, and which should be checked in
+the same experiment: the row halving rests on `E(M·r) = −M·E(r)`, the
+self-image invariance, which is a PEC statement. Over a finite ground the
+image half of the testing path is **not** worth the identical number, so the
+factor of 2 is also in question. That is a second, independent term, and it
+is not obvious that it is small.
+
+### 4.4 What the direct-field trunk does, for contrast
+
+`SinusoidalSolver`'s contact machinery is a rank-one column subtraction
+(`sinusoidal.py:3572`) removing the field of the `(1−ρ)I₀/jω` point charge
+its formulation genuinely creates, per §2.3(a). It is *not self-adjoint*
+(`sinusoidal_galerkin.py`'s
+`test_the_282_contact_correction_is_not_self_adjoint`), it bypasses both
+ground objects to call `_ground_refl.fresnel_rho` directly, and it leaves a
+residual walk (`test_291_*`). It is the one place in the tree that already
+handles a non-unit image coefficient at a contact node — and it handles it by
+*cancelling* it, which is the same conclusion §2.3(a) reaches from the
+physics.
+
+---
+
+## 5. Oracle strategy and acceptance bars
+
+### 5.1 Is the CONTACT case gateable against printed output at all?
+
+**Yes, and better than the standing refusal prose assumes** — but on a
+difference-of-columns bar, not an absolute one, and with an explicit
+per-ground shape.
+
+The evidence, all from §3: the binary accepts contact over its Sommerfeld
+ground; announces its contact rule in printed output; converges cleanly on
+two geometries and nine grounds; recovers PEC at C₂'s rate; and is stable
+under a degenerate contacting stub. That is a well-behaved oracle. What it is
+*not* is an absolute reference for `Z` — at PEC contact momwire and the
+binary already sit 1.26 Ω apart in X, all of it formulation.
+
+So the bar is on `δ = Z(ground) − Z(PEC)` at matched N and matched geometry,
+which is the pattern `solver-architecture.md` §6.5 used for the clearance
+case ("every Sommerfeld delta is its own free-space delta to within 0.047 Ω").
+
+**Bar shape, per §3.5's measurements.** The two behaviours seen are
+different claims and should not share a number:
+
+* **Convergent rows** (sea, very good — the high-|ε̃| grounds): the residual
+  *shrinks* down the ladder. Gate by **decay**, finest rung pinned at its
+  measured level + 25 %. That is §6.6's production-lane rule, unchanged.
+* **Divergent-then-flat rows** (average, poor — the low-ε_r grounds): the
+  residual *grows and saturates*. There is no honest tight bar here. Gate by
+  an **envelope pin** at the measured saturation (1.5 Ω average, 4.0 Ω poor),
+  recorded as a known gap with the issue number on it, exactly as §6.6
+  handled the loop.
+
+That asymmetry is the honest outcome and it should be written into the gate,
+not averaged away.
+
+### 5.2 The analytic limits
+
+* **ε̃ → ∞ must recover PEC contact.** Available in principle and *broken in
+  practice* through the Sommerfeld path (§3.7): the residual floors at
+  0.33–0.59 Ω and rises with mesh, because the interpolation grid's error
+  stops scaling with the ~1/√ε̃ surfaces at the small R₁ only contact
+  queries. **Recommended: run this gate on the refl-coef path (where it
+  passes to 2e−4 Ω at contact) and on the Sommerfeld path only at moderate
+  σ ≤ 1e2, with the near-PEC floor recorded as a known instrument limit.**
+  A stage that promises "bit or near-bit PEC recovery at contact under
+  Sommerfeld" is promising something the current grid cannot deliver, and
+  fixing the grid is its own unit.
+* **ε̃ → 1 recovers nothing** (§3.4). The ground is the current's return
+  path; remove it and the base feed has nothing to push against. The limit is
+  degenerate, both codes print a finite residue, and the residues agree to
+  0.83 Ω. **Recommended: record the value as a regression pin against
+  momwire's own history; do not gate against the binary.** Gating agreement
+  about a degenerate object is a false comfort.
+
+### 5.3 Own-code gates that do not need the binary
+
+* **The stubbed-limit gate** (§3.8 ladder B, and it is the study's most
+  useful accidental find): a contact deck must equal the same deck with its
+  contact replaced by a vanishing grounded stub. The binary holds this to
+  ~0.19 Ω down to a 0.1 mm stub. It is cheap, formulation-agnostic, needs no
+  licensed binary, and catches every class of contact-node bookkeeping error
+  including model (a)'s.
+* **The 1/Δ detector**: any contact formulation whose answer walks like 1/Δ
+  under refinement has the §2.3(a) point charge. `test_291_*` already encodes
+  the negative of this for the sinusoidal trunk.
+* **Cross-formulation agreement, difference-of-columns.** Both trunks
+  implementing the same model must agree on δ. Today they do not at contact —
+  average soil N = 61: bspline 10.867−0.101j, sinusoidal 10.491+2.105j, a
+  2.2 Ω gap, both of them wrong against the binary in the same direction.
+  A cross-formulation gate at contact should be set at the *measured* gap and
+  tightened as Stage 2 closes it — not set at the clearance bar and expected
+  to hold.
+* **PEC bit-identity.** Any contact work must leave the PEC contact fill
+  bit-for-bit unmoved. `test_282_leaves_the_pec_contact_fill_bit_identical`
+  is the pattern; razor's Stage-3 term is identically zero at PEC by
+  construction, so this is achievable rather than aspirational.
+
+### 5.4 The one unexplained number, and how to separate its causes
+
+momwire under-predicts the ground-induced resistance at contact by 2.6–3.3 Ω
+over poor soil and 0.9 Ω over average soil, growing with mesh and present on
+both trunks at two frequencies (§3.5). It is **not** the interpolation grid
+(§3.7: 1e−4 relative at real soils down to R₁ = 1e−5 λ). Three candidates,
+and an experiment for each:
+
+1. **The remainder's near-interface behaviour.** The `exp(−λ(z+z'))` decay
+   that makes the spectral integrals converge is absent for the contact
+   segment's near-diagonal pairs. *Experiment:* recompute the near-diagonal
+   remainder blocks by direct evaluation at very high `rtol`, bypassing the
+   grid entirely, at N = 41 poor soil, and see whether the 3.3 Ω moves. If it
+   does, this is it and it is a quadrature/asymptotics problem in `Q`.
+2. **A genuine model difference at the contact node.** The binary and
+   momwire may be continuing the current differently below the mesh (§2.1).
+   *Experiment:* the ladder-B stub test (§5.3) run in momwire — if momwire's
+   own stubbed limit disagrees with its own contact deck by ~3 Ω over poor
+   soil while the binary's agree to 0.19 Ω, the disagreement is in momwire's
+   contact node, not in its ground.
+3. **The missing base-loss resistance is real and momwire is right to lack
+   it.** §2.3(b)'s tables give 2–100 Ω for exactly this quantity. *This is
+   the least likely* — the binary is a full-wave code with no lumped base
+   term either — but it would be settled by (1) and (2) coming back negative.
+
+**This is the study's honest gap.** It is a served capability with a
+measurable error of unknown cause, and §6 puts it in Stage 2 rather than
+pretending Stage 1 closes it.
+
+### 5.5 The razor experiment
+
+Per §4.3: implement the restored plane-reference term `(1 − w_Φ)·M0(plane)`
+behind a flag, keep the image wing at coefficient 1, and measure razor
+against bspline on the §3.5 decks under the difference-of-columns bar,
+plus PEC bit-identity. Also measure the row-halving assumption separately
+(compare a grounded-row solve against the explicitly mirrored twin over a
+finite ground, which no longer reduces analytically). **Until that experiment
+runs, Stage 3 has no schedule.**
+
+---
+
+## 6. A staged plan
+
+House style: each unit names its gates, and each stage names what stays
+refused.
+
+### Stage 1 — gate what is already shipped *(the smallest honest first unit)*
+
+**Content.** Build `scripts/capture_contact_nec5_lane.py` on the pattern of
+`capture_razor_pec_nec5_lane.py`: the §3.5 decks (monopole + inverted-L ×
+PEC/sea/very-good/average/poor × N = 11/21/41/61), capturing the binary's
+printed impedances into a `tests/golden_contact_nec5.py` of pure literals.
+Then gate `BSplineSolver` against it on the difference-of-columns bar of
+§5.1, with the two bar shapes it earns. Add the stubbed-limit gate (§5.3).
+
+**And make the two decisions the measurements force:**
+
+* **Refuse `ground_model="refl-coef"` at contact** (§3.6) — a new refusal
+  string on the mixed-potential trunk and the direct-field trunk, replacing a
+  docstring warning with an error, pointing at `sommerfeld`. This *removes* a
+  served capability, which is why it is D3.
+* **Record the near-PEC grid floor** (§3.7) as a known instrument limit, with
+  the ε̃ → ∞ gate run on the refl-coef path and on σ ≤ 1e2 Sommerfeld.
+
+**Gates:** difference-of-columns vs the golden binary numbers, per ground,
+per §5.1's two shapes; stubbed-limit ≤ 0.3 Ω; PEC contact bit-identity across
+the whole change; `test_282_*` / `test_291_*` / `test_g16c` unmoved.
+
+**Still refused after Stage 1:** contact on razor (unchanged prose, but
+corrected — see §6.4); contact on pulse; contact under refl-coef (new);
+mid-span touchdown; radial screens.
+
+**Why this is first.** It is the only unit that reduces risk rather than
+adding surface. Everything downstream needs the lane, and the lane's first
+run is what tells the maintainer whether §3.5's gap is a one-geometry
+artifact.
+
+### Stage 2 — close, or name, the low-ε_r gap
+
+**Content.** Run §5.4's three experiments in order and act on whichever
+fires. If (1), the fix is in the remainder's near-interface evaluation and
+lands in `_sommerfeld.py` / `_potential_ground.Remainder` — shared, both
+trunks, no basis change. If (2), the fix is in the contact node's
+bookkeeping and is per-trunk. If neither, the gap is documented as a
+formulation difference and the envelope pins from Stage 1 become permanent.
+
+**Gates:** the Stage-1 bars, tightened to the newly measured level; no
+regression on the clearance ladders (`solver-architecture.md` §6.5's 0.047 Ω);
+no change to any PEC result.
+
+**Still refused after Stage 2:** as Stage 1, minus nothing. Stage 2 improves
+an answer; it does not open a row.
+
+### Stage 3 — razor's grounded tent over a finite ground
+
+**Content.** §5.5's experiment first, as a spike, with a written go/no-go.
+If go: restore the plane-reference term, keep the image wing at coefficient
+1, add the degenerate-specular weight operation to `PotentialGround`, and
+check the row-halving factor separately.
+
+**Gates:** razor vs bspline on the §3.5 decks, difference-of-columns, at the
+gap Stage 2 leaves; razor vs the binary on the same bar; PEC contact
+bit-identity (the new term is identically zero at PEC); every existing razor
+golden unmoved.
+
+**Still refused after Stage 3:** contact under refl-coef on razor, unless the
+same term repairs it (it should, by construction — but measure); pulse;
+mid-span touchdown; screens at contact.
+
+### Stage 4 *(optional, antennaknobs-side)* — the lumped base termination
+
+**Content.** §2.3(b) as an antennaknobs composition: PEC solve + `R_g` on the
+port + efficiency bookkeeping + the ARRL radial tables as data. Zero momwire
+edits.
+
+**Gates:** EZNEC/4nec2 parity on the composed number; a documentation gate
+that the model's limits are stated where the user meets it.
+
+**This stage is independent of 1–3 and can run at any time.** It is also the
+stage most users would notice.
+
+### Refusal prose evolution
+
+Today, razor's `_CONTACT_OVER_FINITE_REFUSAL` says the fold "hard-codes image
+coefficient 1, i.e. PEC, so a grounded end over anything else would take
+spurious contact charge (momwire#282)". Three problems: `image_coefficient`
+is 1 for the refl-coef ground too; the "spurious contact charge" is the
+direct-field trunk's 1/Δ node charge, which razor's doublet does not have;
+and the binary announces coefficient-1 continuation over every ground.
+
+Proposed replacement, if §5.5's hypothesis survives — stating what razor
+actually lacks:
+
+> ground CONTACT over a finite ground is refused on this solver: a grounded
+> row takes the plane as its potential reference, which is exact only over a
+> perfect conductor. Over a finite ground the plane is not an equipotential,
+> and the folded scalar potential there is (1 − w_Φ)·M0 rather than zero — a
+> term this fill drops. The grounded tent's image wing is correct as it
+> stands and must NOT be weighted: charge conservation fixes the basis's
+> continuation coefficient at 1 over every ground (momwire#282 is the
+> direct-field trunk's account of what weighting it costs). Use
+> `BSplineSolver`, which serves contact over `ground_model="sommerfeld"`, or
+> raise the wire clear of the plane.
+
+And a **new** refusal for Stage 1's refl-coef withdrawal, on both trunks:
+
+> ground CONTACT under `ground_model="refl-coef"` is refused: the
+> reflection-coefficient ground's Φ-term weight is a specular-angle
+> approximation with no validity at zero clearance (momwire#153), and at
+> contact it lands ~27 Ω from the Sommerfeld answer on the same deck rather
+> than approximating it. Use `ground_model="sommerfeld"`, which is
+> contact-capable and gated there.
+
+---
+
+## 7. Maintainer decision points
+
+| # | decision | what hangs on it |
+|---|---|---|
+| **D1** | **Does an ungated served capability get gated, or withdrawn?** momwire has solved grounded verticals over earth since #151 with no reference comparison. Stage 1 says gate it. The alternative — refuse contact over finite grounds entirely until gated — is defensible and much more disruptive. | the whole plan's shape |
+| **D2** | **The contact lane's bar shape.** §5.1 proposes two shapes (decay for high-\|ε̃\|, envelope pin for low-ε_r) rather than one number. One bar would be simpler and would be a lie on one half of the table. | Stage 1's gate |
+| **D3** | **Refuse refl-coef at contact?** It is a silently wrong default answer (§3.6) and refusing it removes a capability users may be relying on. Options: refuse / warn / leave and document. | Stage 1; user-visible |
+| **D4** | **Is the near-PEC grid floor (§3.7) worth its own issue?** It breaks the ε̃ → ∞ gate at contact and is a shared-layer accuracy defect, not a contact defect. It may matter for high-σ clearance work too. | Stage 1's limit gates; possibly a separate unit |
+| **D5** | **How much is 2.6 Ω of missing ground-loss resistance worth?** On a full-size 40 Ω monopole it is ~6 points of efficiency (90.1 % against 96.5 %). On the short loaded verticals this audience builds it is much larger. If the answer is "a lot", Stage 2 moves ahead of Stage 1's polish. | Stage 2's priority |
+| **D6** | **Does razor need contact over finite grounds at all?** bspline serves it. Razor's value is the NEC-5 twin claim, which at contact is measured (§3.5) to be the thing in question. Stage 3 is a consistency argument, not a capability argument. | Stage 3's existence |
+| **D7** | **Is model (b) an antennaknobs deliverable?** §2.3(b) says it is the model most users want and proves nothing about momwire. It is also the only one of the four that a user can act on. | Stage 4 |
+
+---
+
+## 8. What this study does not know
+
+* **Why momwire's contact answer misses the binary's by 2.6–3.3 Ω over poor
+  soil.** §5.4 narrows it to three candidates and rules out the
+  interpolation grid, but does not close it.
+* **Whether §4.3's diagnosis of razor is right.** It is a reading of the
+  code plus a physical argument, not a measurement. §5.5 is the measurement.
+* **Whether razor's grounded-row halving survives a finite ground.** The
+  identity it rests on is a PEC identity. Not measured here.
+* **What NEC-5 does at the contact node.** Only what it printed is recorded:
+  that it continues the current to the image, over every ground, and that the
+  result converges and recovers PEC at C₂'s rate. No inference beyond that
+  was attempted, and none should be.
+* **Whether any of this generalizes past a vertical.** Two geometries were
+  probed (monopole, inverted-L). A grounded K-way junction, a slant wire into
+  the plane, and a tower with guys are all untested at finite ground.
+
+---
+
+## Appendix: probe inventory
+
+All in the session scratch directory's `study282/` (decks and printouts in
+`decks/`); none of them are repo code.
+
+| script | what it establishes |
+|---|---|
+| `probe.py` | deck builder + runner + printed-output parsers |
+| `s1_address.py` | base-feed address; the free-end "no basis function" printed error |
+| `s2_grounds.py` | §3.2 ground × mesh table; the power-budget finding |
+| `s4_liftoff.py` | §3.8 both lift-off ladders |
+| `s5_limits.py` | §3.3 PEC limit, §3.4 free-space limit, S6 inverted-L, S7 screens |
+| `s8_confirm.py` | §3.9 GN field semantics (the permeability trap) |
+| `s9_momwire.py` | momwire's own contact ladders, all trunks × grounds |
+| `s10_mw_limits.py` | momwire's analytic limits at contact; razor's refusal |
+| `s11_floor.py` | §3.7 the PEC-limit floor, contact vs clear, both ground models |
+| `s12_knobs.py` | §3.7 quadrature/radius controls; the sinusoidal twin |
+| `s13_grid.py`, `s14_smallR.py` | §3.7 grid-vs-direct accuracy, the small-R₁ corner |
+| `s15_columns.py` | §3.5 the headline difference-of-columns table |
+| `s16_freq.py` | §3.5 finding 4, the 3.5 MHz repeat |
+| `s17_scaling.py` | §2.3(a) the measured 1/Δ spurious-charge law |
