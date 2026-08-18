@@ -68,6 +68,24 @@ geometry-shaped case as the DEFAULT rather than the definition
 exposed, the existing consumer's call unchanged and bit-identical, no
 new concept.
 
+Unit 5 lands razor's SOMMERFELD ground — `mode == "compose"`, the third
+row of the §2.2 table and the first COMPOSING ground on this solver —
+and it forced the same generalisation a third time, on `Remainder`. That
+class had one method, `evaluate(supp_seg, polys)`, which takes a B-spline
+basis description and returns a finished `(n_basis, n_basis)` GALERKIN
+block; razor's rows are razor-blade path integrals, so the block is the
+wrong OPERATION for it rather than the wrong shape of the right one. Two
+independent consumers said so before a line was written — unit 4's report
+and the `PulseSolver` probe (momwire#416,
+`docs/design/pulse-probe.md` §4.1), which was blocked by the identical
+signature — and both named the same fix, which is the one taken:
+`field_windows(observers, sources)` hands back the remainder FIELD of each
+source segment's basis arc moments, projected on the observer tangents, in
+observer-row windows, and `evaluate` stays as the Galerkin convenience over
+it. `_sommerfeld.remainder_field_proj` was already that primitive one level
+down, so once again the generalisation exposes a layer that exists rather
+than inventing one.
+
 **What stays out**, deliberately, and named here so its later migration is
 a decision rather than a discovery:
 
@@ -102,12 +120,20 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import _ground_refl
+from . import _ground_refl, _sommerfeld
+from ._quadrature import leggauss
 
 # M = diag(1, 1, −1) as the row it multiplies a `(..., 3)` array by. One
 # array, so `ImageGeometry.mirror_tangents` and `weight_windows`' PEC /
 # Sommerfeld closures below are visibly the same reflection.
 _MIRROR = np.array([1.0, 1.0, -1.0])
+
+# Default per-source-segment Gauss order for `Remainder.field_windows`. The
+# remainder field is smooth on the scale of a segment (it is the ground
+# field with its singular C₂-image part already removed), so a low order
+# converges: this is `BSplineSolver.n_qp_sommerfeld`'s own default, and a
+# consumer that carries its own knob passes `n_qp=` instead of taking it.
+_N_QP_REMAINDER = 3
 
 
 class ImageGeometry:
@@ -202,36 +228,207 @@ class ImageGeometry:
 
 
 class Remainder:
-    """The Sommerfeld remainder operator: the Galerkin block `Q` that the
-    C₂-scaled exact image is composed WITH.
+    """The Sommerfeld remainder operator: the smooth field `Q` that the
+    C₂-scaled exact image is composed WITH — as an OPERATION first and a
+    Galerkin block second.
 
-    Deliberately NOT the field trunk's prepare/replay pair. There, the
-    remainder is evaluated at whatever observer set a caller reaches, so
-    the observer-independent state has to be hoisted out of the schedule by
-    hand (momwire#357 item 1). Here it is one Galerkin block over the whole
-    geometry — `_Z_sommerfeld_remainder` builds its own grid, does its own
-    observer banding (momwire#343) and hands back a finished `(n_basis,
-    n_basis)` matrix — so a `prepare` would have nothing to hold and a
-    `replay` nothing to vary. The prepare/replay split is a property of the
-    field trunk's *schedule*, not of the physics, and the mode contract is
-    what the two trunks actually share.
+    `field_windows(observers, sources)` — the remainder FIELD of each
+    source segment's basis ARC MOMENTS, already projected on the observer
+    tangents, produced in observer-row windows.
 
-    `evaluate` therefore takes the basis description rather than an
-    observer set, because the basis IS this trunk's observer set.
+    `evaluate(supp_seg, polys)` — the finished `(n_basis, n_basis)`
+    Galerkin block, i.e. that field with the B-spline fill's own testing
+    rule already applied. A CONVENIENCE, in the shape of the first
+    consumer, exactly as `ImageGeometry`'s `seg_l` / `tangent_dot` (unit 2)
+    and `weight_windows`' square `own_segments` default (unit 4) are.
+
+    Unit 5 is what forced the split, and TWO independent consumers named
+    the same reason (momwire#398 unit 4's report §6.4; the `PulseSolver`
+    probe, momwire#416, `docs/design/pulse-probe.md` §4.1):
+
+    * **razor** tests on PATH INTEGRALS between element centroids, not on
+      Galerkin projections. A finished Galerkin block is the wrong
+      OPERATION for it at any argument shape — it would have to undo one
+      testing rule to apply another. What it needs is the field of each
+      source segment's tent moments (∫Λ and ∫τΛ, `n_moment = 2`) at its
+      testing-path quadrature points, which is `field_windows` with the
+      path points as observers;
+    * **pulse** point-matches, so it needs the plain rectangular
+      `(n_obs, n_src)` field at one centroid per row — the same call with
+      `n_moment = 1`, whose trailing axis it drops.
+
+    And `_sommerfeld.remainder_field_proj(obs, t_obs, src, t_src, gz, k,
+    grid)` was ALREADY that primitive one level down: this generalisation
+    exposes the layer that exists rather than inventing one, which is the
+    same "one layer removed, no new concept" move units 2 and 4 made.
+
+    **Why `evaluate` is not spelled as a composition of `field_windows`,
+    when unit 2's conveniences were.** `_Z_sommerfeld_remainder`'s hot path
+    is a single fused C++ kernel (`sommerfeld_remainder_bspline_Q`) that
+    interpolates, projects, moment-quadratures on BOTH axes and assembles
+    into `Q` without ever forming the intermediate this operation returns —
+    the same reason `weight_tables` answers `None` for PEC where
+    `weight_windows` spells the tables out: there are two kernels, not one
+    kernel behind two shapes. So `evaluate` keeps delegating, is
+    bit-identical across this generalisation, and
+    `tests/test_potential_ground.py` pins the two spellings against each
+    other at the quadrature's own agreement instead of at `array_equal`.
+
+    Deliberately NOT the field trunk's prepare/replay pair, and unit 5 did
+    not change that either. There, the remainder is evaluated at whatever
+    observer set a caller reaches, so the observer-independent state has to
+    be hoisted out of the schedule by hand (momwire#357 item 1). Here
+    `field_windows` IS that hoist — the grid, the source nodes and the
+    moment weights are built once when the producer is made and every
+    window replays them — so the split the field trunk spells as two
+    methods is spelled here as a closure, which is the same shape
+    `weight_windows` already uses on this trunk.
+
+    **The k this object carries is the GROUND's, not the solver's.** Both
+    are the same number for `BSplineSolver` (its factory call passes
+    `self.k`, and its swept path moves `self.k` itself), but razor sweeps
+    by passing k to the factory while `self.k` stays at the constructor's
+    value — so a grid built off `solver.k` would silently freeze at one
+    wavenumber down a sweep. The Sommerfeld grid is k-dependent through
+    and through (its lattice is in wavelengths), which is why unit 5's
+    schedule rule is that nothing here may cross a prepare/replay
+    boundary.
     """
 
-    __slots__ = ("_eps_tilde", "_geom", "_solver")
+    __slots__ = ("_eps_tilde", "_geom", "_k", "_omega", "_solver")
 
-    def __init__(self, solver, geom, eps_tilde):
+    def __init__(self, solver, geom, eps_tilde, k, omega):
         self._solver = solver
         self._geom = geom
         self._eps_tilde = eps_tilde
+        self._k = k
+        self._omega = omega
+
+    # --- the operation --------------------------------------------------
+
+    def source_segments(self):
+        """This geometry's own `(seg_l, seg_r, tangents)` — the default
+        `field_windows` takes on its source axis.
+
+        The B-spline-shaped reading of "where the sources are", and lazy
+        for the same reason `PotentialGround.own_segments` is: a razor
+        `geom` dict carries none of the keys it reads, and razor names its
+        own source set instead. Endpoints rather than centres, because the
+        source axis is INTEGRATED over here, not sampled at a point.
+        """
+        geom = self._geom
+        return geom["seg_l"], geom["seg_r"], geom["tangents"]
+
+    def field_windows(
+        self, observers, sources=None, *, n_moment=1, n_qp=_N_QP_REMAINDER
+    ):
+        """A producer `moments_fn(i0, i1) -> (i1-i0, n_src, n_moment)` of
+        observer-row windows of the projected remainder field's source arc
+        moments.
+
+        Entry `[m, n, p]` is
+
+            ∫_{segment n} τ^p · t̂_m · F(r_m, r'(τ)) · t̂_n dτ
+
+        with τ the source's local arc length from its segment start, F the
+        smooth remainder field of a unit current MOMENT (theory manual
+        eqs 143-147, the ground field minus its C₂-scaled exact image) and
+        t̂_m the observer's own tangent. Sign convention unchanged and
+        shared with `evaluate`: the caller ADDS this term's contribution to
+        the C₂ image and takes one global minus (`C2·img + Q`, then
+        `Z -=`), which is the composition `mode == "compose"` names.
+
+        `observers` is a `(points, tangents)` pair of `(n_obs, 3)` arrays —
+        the same spelling `weight_windows` takes, and for the same reason:
+        an observer is a point plus the direction the row projects on, and
+        no consumer's observers have to be its segments. `sources` is a
+        `(seg_l, seg_r, tangents)` triple and **defaults to
+        `source_segments()`**, the geometry-shaped case.
+
+        `n_moment` is how many arc moments the caller's basis needs on the
+        source segment, and it is the whole of what separates the two
+        known consumers:
+
+        * `n_moment = 2` — a TENT (razor): `[..., 0]` is ∫Λ-shaped and
+          `[..., 1]` the first moment, from which `M1/h` (rising wing) and
+          `M0 − M1/h` (falling wing) are the same two combinations razor's
+          reduced-kernel moments already take;
+        * `n_moment = 1` — a PULSE, or any point-matched consumer: the
+          trailing axis is length 1 and `[..., 0]` is the plain rectangular
+          `(n_obs, n_src)` field the momwire#416 probe asked for;
+        * `n_moment = degree + 1` — the B-spline moments `evaluate`'s own
+          fused kernel forms internally.
+
+        Everything observer-independent is hoisted into the producer and
+        every window replays it: the interpolation grid, the source
+        quadrature nodes and their moment weights. The grid's extent is
+        sized from the SOURCE segment endpoints exactly as
+        `_Z_sommerfeld_remainder` sizes it (`max_image_distance`, issue
+        #331); observers lying on those segments are covered by convexity,
+        and anything further out is clamped by the grid's own `r1_max`
+        (issue #157) rather than silently extrapolated.
+        """
+        if sources is None:
+            sources = self.source_segments()
+        seg_l, seg_r, src_t = sources
+        obs_p, obs_t = observers
+        solver = self._solver
+        gz = solver.ground_z
+        k = self._k
+        cancel_flag = solver._cancel_flag
+
+        # k-dependent, so it is built HERE — inside the per-solve, per-ω
+        # object — and can never be cached across a wavenumber.
+        r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
+        grid = _sommerfeld.get_grid(
+            self._eps_tilde,
+            k,
+            r1_max,
+            omega=self._omega,
+            mu=solver.mu,
+            cancel_flag=cancel_flag,
+        )
+
+        n_src = seg_l.shape[0]
+        xg, wg = leggauss(n_qp)
+        tq = 0.5 * (xg + 1.0)
+        span = seg_r - seg_l
+        nodes = seg_l[:, None, :] + tq[None, :, None] * span[:, None, :]
+        h = np.linalg.norm(span, axis=1)
+        u_phys = h[:, None] * tq[None, :]  # (n_src, n_qp) physical arc offsets
+        w_node = 0.5 * h[:, None] * wg[None, :]
+        # Moment weights W[p, j, q] = w_q · u_q^p, the quadrature dual of
+        # the source basis's own u^p moments — the same convention
+        # `_Z_sommerfeld_remainder` builds for the B-spline polynomials.
+        W = w_node[None] * u_phys[None] ** np.arange(n_moment)[:, None, None]
+        src = nodes.reshape(n_src * n_qp, 3)
+        t_src = np.repeat(src_t, n_qp, axis=0)
+
+        def field_moments(i0, i1):
+            proj = _sommerfeld.remainder_field_proj(
+                obs_p[i0:i1],
+                obs_t[i0:i1],
+                src,
+                t_src,
+                gz,
+                k,
+                grid,
+                cancel_flag=cancel_flag,
+            )
+            return np.einsum("ojq,pjq->ojp", proj.reshape(i1 - i0, n_src, n_qp), W)
+
+        return field_moments
+
+    # --- the B-spline-shaped convenience --------------------------------
 
     def evaluate(self, supp_seg, polys):
         """`Q[m, n]` over the whole basis, as `_Z_sommerfeld_remainder`
-        returns it. Sign convention unchanged: the caller ADDS this to the
-        C₂ image and takes one global minus (`C2·img + Q`, then `Z -=`),
-        which is the composition `mode == "compose"` names.
+        returns it — the Galerkin block, i.e. `field_windows`' operation
+        with the B-spline fill's own testing rule already applied.
+
+        Sign convention unchanged: the caller ADDS this to the C₂ image and
+        takes one global minus (`C2·img + Q`, then `Z -=`), which is the
+        composition `mode == "compose"` names.
         """
         return self._solver._Z_sommerfeld_remainder(
             self._geom, supp_seg, polys, self._eps_tilde
@@ -539,7 +736,7 @@ class PotentialGround:
         """
         if self.mode != "compose":
             return None
-        return Remainder(self._solver, self._geom, self.eps_tilde)
+        return Remainder(self._solver, self._geom, self.eps_tilde, self._k, self._omega)
 
 
 def potential_ground_for(solver, geom, k, omega) -> PotentialGround | None:
