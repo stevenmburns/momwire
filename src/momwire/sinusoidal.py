@@ -42,7 +42,7 @@ import numpy as np
 import scipy.linalg
 import scipy.sparse
 
-from . import _field_ground, _ground_refl, _sommerfeld, _wire_loading
+from . import _field_ground, _ground_mirror, _ground_refl, _sommerfeld, _wire_loading
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
@@ -2754,10 +2754,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
-        src_c_img = seg_c * np.array([1.0, 1.0, -1.0]) + np.array(
-            [0.0, 0.0, 2.0 * self.ground_z]
-        )
-        src_t_img = seg_t * np.array([1.0, 1.0, -1.0])
+        src_c_img = _ground_mirror.mirror_positions(seg_c, self.ground_z)
+        src_t_img = _ground_mirror.mirror_tangents(seg_t)
         return src_c_img, src_t_img
 
     def _field_tensor_image(self, geom, k, obs_rows=None):

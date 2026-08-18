@@ -46,7 +46,7 @@ from scipy.sparse.linalg import splu
 
 from .bspline import BSplineSolver, _SplineBasis, _EK_SAME_EDGE, _ek_slice
 from ._port_solution import PortSolution
-from . import _ground_refl, _potential_ground, _sommerfeld
+from . import _ground_mirror, _ground_refl, _potential_ground, _sommerfeld
 from ._bspline_kernels import (
     _ek_radius,
     _seg_seg_full_moments_offedge,
@@ -660,7 +660,7 @@ class HMatrixSolver(BSplineSolver):
         ``t_I @ _image_tangent_dot_cols(t_J)`` is the image tangent-dot table
         (rows = real test, cols = image trial) — the block form of
         `BSplineSolver._image_tangent_dot`."""
-        return (tangents_J * np.array([1.0, 1.0, -1.0])).T
+        return _ground_mirror.mirror_tangents(tangents_J).T
 
     def _assemble_Z_block_weighted(
         self, Jsub, supp_I_local, polys_I, supp_J_local, polys_J, wA_sub, wPhi_sub
@@ -1264,13 +1264,12 @@ class HMatrixSolver(BSplineSolver):
         d = self.degree
         glt, glw = self._gl01()
         omega, eps, mu = self.omega, self.eps, self.mu
-        flip = np.array([1.0, 1.0, -1.0])
 
         def mirror_pos(p):
             return self._image_positions(p) if mirror_J else p
 
         def mirror_tan(t):
-            return t * flip if mirror_J else t
+            return _ground_mirror.mirror_tangents(t) if mirror_J else t
 
         segI = np.unique(supp_seg[I].ravel())
         segJ = np.unique(supp_seg[J].ravel())

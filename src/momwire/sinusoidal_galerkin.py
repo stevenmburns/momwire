@@ -328,7 +328,7 @@ import scipy.linalg
 import scipy.sparse
 import scipy.spatial.distance
 
-from . import _field_ground
+from . import _field_ground, _ground_mirror
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from ._port_solution import PortSolution
@@ -1332,9 +1332,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         )
         if not mirror:
             return nodes
-        return nodes * np.array([1.0, 1.0, -1.0]) + np.array(
-            [0.0, 0.0, 2.0 * self.ground_z]
-        )
+        return _ground_mirror.mirror_positions(nodes, self.ground_z)
 
     def _node_charge_columns(self, geom, seg_view, k, nodes=None):
         """D[i, p] = ∫ f_i(s) ŝ·E_q(s) ds — every basis tested against the
@@ -1674,12 +1672,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         seg_a = self._seg_radius(geom)
         if mirror:
             n = seg_c.shape[0]
-            flip = np.array([1.0, 1.0, -1.0])
-            shift = np.array([0.0, 0.0, 2.0 * self.ground_z])
+            gz = self.ground_z
+            mirror_positions = _ground_mirror.mirror_positions
             joint = _ek_axis_groups(
-                np.vstack([seg_l, seg_l * flip + shift]),
-                np.vstack([seg_r, seg_r * flip + shift]),
-                np.vstack([seg_t, seg_t * flip]),
+                np.vstack([seg_l, mirror_positions(seg_l, gz)]),
+                np.vstack([seg_r, mirror_positions(seg_r, gz)]),
+                np.vstack([seg_t, _ground_mirror.mirror_tangents(seg_t)]),
                 np.concatenate([seg_a, seg_a]),
             )
             hit = (joint[:n], joint[n:])
