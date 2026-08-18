@@ -936,7 +936,8 @@ _G7_BSPLINE = {
     # rather than in their own gate so they inherit BOTH halves: the byte
     # identity above and the "no EK code was entered" counter below. Each
     # exercises a route the PEC deck does not — the Fresnel weight tables
-    # (`_image_refl_weights`) and the Sommerfeld remainder respectively.
+    # (`PotentialGround.weight_tables`) and the Sommerfeld remainder
+    # respectively.
     "refl-coef ground": dict(
         wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.4]])],
         n_per_edge_per_wire=[[14]],

@@ -74,6 +74,7 @@ from ._quadrature import leggauss
 from . import _bspline_kernels
 from . import _ground_mirror
 from . import _ground_refl
+from . import _ground_spec
 from . import _potential_ground
 from . import _sommerfeld
 from . import _wire_loading
@@ -1140,7 +1141,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         gz = self.ground_z
         if gz is not None:
             for w_idx, pl in enumerate(self.wires_polylines):
-                tol = self._ground_touch_tol(pl)
+                tol = _ground_spec.ground_touch_tol(pl)
                 pl_arr = np.asarray(pl, dtype=np.float64)
                 if float(pl_arr[:, 2].min()) < gz - tol:
                     raise ValueError(
@@ -1160,15 +1161,6 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     end_status[w_idx] = "ground"
         return start_status, end_status
 
-    def _ground_touch_tol(self, polyline):
-        """Snap distance for "this endpoint touches the ground plane":
-        1e-6 of the wire's polyline length — loose enough for deck-import
-        float noise at z=0, far tighter than any deliberate clearance (a
-        1 mm stand-off on a 10 m vertical is 100× the tolerance)."""
-        pl = np.asarray(polyline, dtype=np.float64)
-        length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
-        return 1e-6 * max(length, 1e-30)
-
     def _grounded_junctions(self):
         """Indices of junctions whose shared point lies in the ground plane.
 
@@ -1184,7 +1176,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             w, end = jw[0]
             pl = self.wires_polylines[w]
             pt = pl[0] if end == "start" else pl[-1]
-            if abs(pt[2] - gz) <= self._ground_touch_tol(pl):
+            if abs(pt[2] - gz) <= _ground_spec.ground_touch_tol(pl):
                 grounded.add(j_idx)
         return frozenset(grounded)
 
@@ -3637,7 +3629,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # polynomial image block. Three grounds, one image kernel with the
             # matching weight tables:
             #   PEC        — mirror tangent dot on A, unit charge weight;
-            #   refl-coef  — Fresnel weight tables (`_image_refl_weights`);
+            #   refl-coef  — Fresnel weight tables
+            #                (`_potential_ground.refl_weight_tables`);
             #   sommerfeld — the C2 exact-image weights, PLUS the smooth
             #                remainder-field reaction added below.
             # numpy-only — the handful of enrichment DOFs make the cost
