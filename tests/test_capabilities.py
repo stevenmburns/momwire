@@ -147,15 +147,28 @@ def test_razor_pec_ground_is_served():
     assert np.isfinite(z.real) and np.isfinite(z.imag)
 
 
-def test_razor_ground_contact_refuses():
-    """The PEC FILL landed; ground CONTACT did not, and says so.
+def test_razor_ground_contact_is_served_at_a_wire_end():
+    """Ground CONTACT landed in unit 3, and the geometry refusals moved.
 
     Not a capability cell (no solver declares "ground contact" as an axis),
-    so this pins the constructor's own refusal rather than a declaration —
-    the honest boundary of what unit 2 shipped.
+    so this pins the constructor's own behaviour rather than a declaration —
+    the honest boundary of what unit 3 shipped: a wire END in the plane is
+    served, a wire lying IN it or dipping BELOW it is not.
+    `tests/test_razor_ground_contact.py` carries the physics.
     """
+    vertical = [np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 1.0)])]
+    sim = RazorSolver(
+        wires=vertical,
+        n_per_edge_per_wire=[[4]],
+        wavelength=WAVELENGTH,
+        ground_z=0.0,
+        feed_arclength=0.0,
+    )
+    z, _ = sim.compute_impedance()
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+
     wires, npe = _wire(z=0.0)
-    with pytest.raises(NotImplementedError, match="touches the ground plane"):
+    with pytest.raises(ValueError, match="edge lying in the ground plane"):
         RazorSolver(
             wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, ground_z=0.0
         )

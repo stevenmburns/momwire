@@ -85,20 +85,45 @@ its own, which is the point of the pilot `docs/design/solver-architecture.md`
 §6 proposes: a ground method landing on a solver that never implemented
 one. `_assemble_Z_from_prepared` carries the sign argument.
 
-Wires must stand CLEAR of the plane. Ground contact — a wire end in the
-plane, whose current the image continues instead of the tent basis zeroing
-it — is a change to the basis rather than to the fill, and is refused.
-Finite grounds are refused too: agreement there has its own bar and its own
-unit.
+Finite grounds are refused: agreement there has its own bar and its own
+unit, and the fold hard-codes the image coefficient 1 (momwire#282).
+
+Ground contact (momwire#398 unit 3)
+-----------------------------------
+A wire END may lie IN the plane. Such an end keeps a degree of freedom
+instead of being zeroed the way the tent basis zeroes a free end: its basis
+is the junction tent between the wire and its own image — a monopole plus
+its image IS a dipole — whose upper wing is the real contact segment and
+whose lower wing is that segment mirrored. Only the upper wing is spelled
+in the basis tables, because the fold already evaluates every basis against
+the mirrored sources: the image wing arrives with the right shape, the
+right direction (−M·t̂, parallel to the real current for a vertical
+contact) and the opposite charge, so no net charge sits at the contact
+point.
+
+The grounded tent's testing path is the REAL half only, from the contact
+point to the centroid of the contact segment, in the direction the current
+leaves the plane. The image half of that path contributes the identical
+number (the total field of a system that is its own image obeys
+E(M·r) = −M·E(r), which is exactly the invariance the razor path integral
+contracts), so taking the real half alone halves the row — and halving the
+row is what makes the feed voltage the voltage of the base GAP rather than
+of the equivalent dipole's whole gap. On that spelling a base-fed monopole
+returns Z_dipole/2 to LU roundoff, which is the first gate in
+`tests/test_razor_ground_contact.py`. The row's other endpoint is the
+plane, where the folded scalar potential is identically zero, so the T2
+term keeps only the segment-centroid end.
 
 Scope
 -----
 Free space and the PEC image, reduced kernel, one polyline per wire.
-Finite grounds, ground contact and the extended kernel are out of scope;
-each is refused with a message rather than silently mismodelled. Only wire
-ENDS junction: a wire end touching another wire's interior is not a contact
-here. A wire with a single segment cannot take part in a junction (its two
-junction tents would overlap on one segment) and is refused.
+Finite grounds and the extended kernel are out of scope; each is refused
+with a message rather than silently mismodelled, as are the contacts that
+are not a wire end in the plane (an interior anchor touching down, an edge
+lying in the plane, a wire dipping below it). Only wire ENDS junction: a
+wire end touching another wire's interior is not a contact here. A wire
+with a single segment cannot take part in a junction (its two junction
+tents would overlap on one segment) and is refused.
 """
 
 import numpy as np
@@ -130,10 +155,14 @@ _OUT_OF_SCOPE = {
     "offset and would contaminate the formulation comparison this class "
     "exists for. The PEC image carries no such offset — it is the same exact "
     "image NEC-5's own `GN 1` uses — which is why it is the ground that "
-    "landed first (momwire#398 unit 2)",
+    "landed first (momwire#398 unit 2). Ground CONTACT over a finite ground "
+    "is refused twice over: the fold hard-codes image coefficient 1, i.e. "
+    "PEC, so a grounded end over anything else would take spurious contact "
+    "charge (momwire#282)",
     "ground_model": "finite ground is out of scope for RazorSolver (PEC image "
     "only): see the `ground_eps` refusal for why the finite-ground bar is "
-    "deferred rather than merely unwritten",
+    "deferred rather than merely unwritten, and why ground contact over a "
+    "finite ground stays refused with it (momwire#282)",
     "ground_phi_mode": "finite ground is out of scope for RazorSolver (PEC "
     "image only): the image-charge weighting is a reflection-coefficient "
     "knob, and RazorSolver serves no reflection-coefficient ground",
@@ -231,9 +260,12 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         contaminate the formulation comparison this class exists for, so
         `ground_eps` / `ground_model` / `ground_phi_mode` stay refused until
         that bar is written (momwire#398 §6; `BSplineSolver` serves them
-        today). Every wire must stand clear of the plane — ground CONTACT
-        needs the image to continue the current at a grounded end, which is
-        a basis change this formulation has not taken.
+        today). A wire END may lie in the plane — ground CONTACT, the
+        grounded-end tent whose lower wing is its own image (momwire#398
+        unit 3, and the module docstring for the physics) — which is what
+        the vertical/monopole class needs. A wire that dips below the
+        plane, has an edge lying in it, or touches it at an interior
+        anchor is refused instead.
     wavelength: measurement wavelength in metres; k = 2π / wavelength.
     halfdriver_factor: informational only when `wires` is given explicitly
         (the polylines fully determine the geometry); kept for signature
@@ -244,12 +276,17 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         at which to place the source. None picks the wire's midpoint. The
         source always snaps to the NEAREST KNOT THAT CARRIES A BASIS on
         that wire — every interior knot, plus either end that meets other
-        wire ends at a junction: the razor testing paths are knot-centred,
-        so a between-knots delta-gap has no row to land in. On an even
-        segment count a midpoint feed is already the exact centre knot. A
-        feed that snaps to a junction of K >= 3 ends is refused (which
-        branch pair the source drives is ambiguous); K = 2 — the ordinary
-        split-wire feed — drives that junction's through-current basis.
+        wire ends at a junction, plus either end that touches the ground
+        plane: the razor testing paths are knot-centred, so a between-knots
+        delta-gap has no row to land in. On an even segment count a
+        midpoint feed is already the exact centre knot. A feed that snaps
+        to a junction of K >= 3 ends is refused (which branch pair the
+        source drives is ambiguous); K = 2 — the ordinary split-wire feed —
+        drives that junction's through-current basis. A base-fed monopole
+        is `feed_arclength=0.0` on a wire whose first anchor lies in the
+        plane (or the wire's full arc length, if it is the last anchor that
+        touches): the source is then the gap between the plane and that
+        end, and V / I is the drive-point impedance measured there.
     feeds: optional list of (wire_index, arclength_or_None, voltage) tuples
         describing several delta-gap sources with prescribed complex
         voltages. `compute_impedance()` then returns the per-feed
@@ -370,7 +407,9 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         for i, pl in enumerate(self.wires_polylines):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
-        self._check_ground_clearance()
+        # Validates the geometry against the plane (and is re-read at
+        # basis-build time for the grounded ends themselves).
+        self._ground_ends()
 
         n_w = len(self.wires_polylines)
         if n_per_edge_per_wire is None:
@@ -438,22 +477,31 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     # ------------------------------------------------------------------
     # geometry
 
-    def _check_ground_clearance(self):
-        """Every wire must stand clear of the ground plane, or be refused.
+    def _ground_ends(self):
+        """Which wire ENDS lie in the ground plane; everything else refused.
 
-        Two different failures, and they get two different exception types
-        because they are two different kinds of mistake:
+        Returns the frozen set of ``(wire_index, "start" | "end")`` whose
+        anchor is in the plane — empty in free space. A member of that set
+        is a grounded end, and gets the grounded tent
+        (:meth:`_junction_wings`) whose lower wing is its own image.
+
+        The three geometries that are NOT ground contact, and stay refused:
 
         * a wire that dips BELOW `ground_z` is a geometry error — there is
           no such antenna — and raises `ValueError`, the same reading and
           the same wording `BSplineSolver._wire_endpoint_status` gives it;
-        * a wire that TOUCHES the plane is ground CONTACT, which is real
-          physics this formulation does not model yet, and raises
-          `NotImplementedError`. The tent basis pins the current to zero at
-          a free wire end; a grounded end instead needs its image to supply
-          the continuation (the momwire#151 fold `BSplineSolver` carries),
-          which is a basis change, not a fill change. Unit 2 of the
-          razor-grounds pilot is the fill.
+        * an EDGE lying in the plane (both its anchors at `ground_z`) is
+          degenerate over a conducting ground: the edge coincides with its
+          own image, so the fold cancels it and it carries no independent
+          current. `ValueError`, `BSplineSolver`'s wording again;
+        * an INTERIOR anchor in the plane is a wire that touches down
+          mid-span. That is real physics — the knot there would carry its
+          ordinary tent AND a second unknown for the current leaving into
+          the plane — but it is a second basis change on top of this one
+          and is not written, so `NotImplementedError`.
+
+        A straight edge takes its minimum z at an anchor, so scanning the
+        anchors sees every contact there is.
 
         The touch tolerance is `BSplineSolver._ground_touch_tol`'s: 1e-6 of
         the wire's polyline length, loose enough for deck-import float
@@ -461,7 +509,8 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         """
         gz = self.ground_z
         if gz is None:
-            return
+            return frozenset()
+        touching = set()
         for i, pl in enumerate(self.wires_polylines):
             length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
             tol = 1e-6 * max(length, 1e-30)
@@ -471,32 +520,53 @@ class RazorSolver(_ElementCurrents, _Cancelable):
                     f"wire {i} dips below the ground plane "
                     f"(min z = {zmin:.6g} < ground_z = {gz:g})"
                 )
-            if zmin <= gz + tol:
-                raise NotImplementedError(
-                    f"wire {i} touches the ground plane (min z = {zmin:.6g}, "
-                    f"ground_z = {gz:g}): ground CONTACT is not supported by "
-                    "RazorSolver, whose tent basis zeroes the current at a "
-                    "free wire end. Only wires standing clear of the plane "
-                    "are served — raise the wire, or use "
-                    "BSplineSolver(ground_z=...), which carries the grounded-"
-                    "end fold (momwire#151)"
+            at = np.abs(pl[:, 2] - gz) <= tol
+            if np.any(at[:-1] & at[1:]):
+                raise ValueError(
+                    f"wire {i} has an edge lying in the ground plane "
+                    "(both endpoints at ground_z) — degenerate over a "
+                    "conducting ground"
                 )
+            if np.any(at[1:-1]):
+                raise NotImplementedError(
+                    f"wire {i} touches the ground plane at an interior "
+                    "anchor: RazorSolver serves ground contact at a wire END "
+                    "only (momwire#398 unit 3). A mid-span touchdown needs a "
+                    "second unknown at a knot that already carries a tent — "
+                    "split the wire there, so the contact is two wire ends"
+                )
+            if at[0]:
+                touching.add((i, "start"))
+            if at[-1]:
+                touching.add((i, "end"))
+        return frozenset(touching)
 
     def _find_junctions(self):
-        """Group coincident wire ends into junctions.
+        """Group coincident wire ends into junctions, grounded ones marked.
 
-        Returns a list of groups, each a list of ``(wire_index, "start" |
-        "end")`` in the order the ends are listed — first wire first, and
-        `start` before `end` within a wire. The first entry of a group is
-        the reference side A of every junction tent there, so this order is
-        part of the basis definition (not that the answer depends on it:
-        picking a different reference re-spells the same current space).
+        Returns a list of ``{"ends": [...], "grounded": bool}``; `ends` is a
+        list of ``(wire_index, "start" | "end")`` in the order the ends are
+        listed — first wire first, and `start` before `end` within a wire.
+        The first entry is the reference side A of every junction tent
+        there, so this order is part of the basis definition (not that the
+        answer depends on it: picking a different reference re-spells the
+        same current space).
 
         A wire whose own two ends coincide is a closed loop and forms a
         group of two on its own. Grouping is by first match within
         `_JUNCTION_TOL`, the same "same point" tolerance the caller-facing
         geometry helpers use.
+
+        A group survives if it carries a through-path (K >= 2 ends) or if it
+        is GROUNDED, because the plane is then one more branch at the point:
+        a lone grounded end is a group of one, and its one tent is the
+        current leaving into the ground. `grounded` is `any` over the
+        group's ends rather than `all` — the two tolerances differ (the
+        touch tolerance scales with each wire's own length, the grouping
+        tolerance is absolute), so coincident ends could otherwise disagree
+        about a plane they share.
         """
+        grounded_ends = self._ground_ends()
         ends = []
         for i, pl in enumerate(self.wires_polylines):
             ends.append((i, "start", pl[0]))
@@ -511,10 +581,15 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             else:
                 groups.append([(w, kind)])
                 points.append(p)
-        return [g for g in groups if len(g) >= 2]
+        out = []
+        for g in groups:
+            grounded = any(e in grounded_ends for e in g)
+            if len(g) >= 2 or grounded:
+                out.append({"ends": g, "grounded": grounded})
+        return out
 
     def _junction_wings(self, seg_offsets, group):
-        """Wing descriptors for one junction group's K−1 tents.
+        """Wing descriptors for one junction group's tents.
 
         Yields ``(seg_a, rise_a, sigma_a, seg_b, rise_b, sigma_b)`` per
         tent. `rise` says the junction sits at the segment's far (arc-h)
@@ -522,10 +597,34 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         `sigma` turns +1 A of through-current into a signed multiple of
         that segment's arc direction. Side A carries the current INTO the
         junction (so +1 along arc if the wire joins by its end, −1 if by
-        its start) and side B carries it back OUT (the mirror image).
+        its start) and side B carries it back OUT (the mirror image). A
+        free-air group of K ends yields K−1 such tents.
+
+        A GROUNDED group yields K tents instead, one per end (momwire#398
+        unit 3): the plane is one more branch, so K real ends meeting there
+        carry K independent currents and no through-path is distinguished.
+        Each grounded tent is the junction tent between a wire end and its
+        OWN IMAGE — the through-current tent of the monopole-plus-image
+        dipole, whose upper wing is the real contact segment and whose
+        lower wing is that segment mirrored. Only the real wing is spelled
+        here: the fold `Z = Z_free − Z_image` already evaluates every basis
+        against the mirrored sources, so the image wing arrives with the
+        right shape (the mirror preserves each segment's local arc
+        coordinate), the right direction (−M·t̂, parallel for a vertical
+        contact) and the opposite charge, for free. Side A — the image side
+        — is therefore spelled as a wing carrying `sigma = 0`, which zeroes
+        its tangent (T1), its charge doublet (T2) and its half of the
+        testing path at once; its `(segment, rise)` copy side B's so that
+        `_knot_points` still reads the contact point off wing A.
         """
-        (w_a, kind_a) = group[0]
-        for w_b, kind_b in group[1:]:
+        if group["grounded"]:
+            for w, kind in group["ends"]:
+                seg = seg_offsets[w + 1] - 1 if kind == "end" else seg_offsets[w]
+                rise = kind == "end"
+                yield (seg, rise, 0.0, seg, rise, -1.0 if rise else 1.0)
+            return
+        (w_a, kind_a) = group["ends"][0]
+        for w_b, kind_b in group["ends"][1:]:
             seg_a = seg_offsets[w_a + 1] - 1 if kind_a == "end" else seg_offsets[w_a]
             seg_b = seg_offsets[w_b + 1] - 1 if kind_b == "end" else seg_offsets[w_b]
             rise_a = kind_a == "end"
@@ -557,7 +656,11 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         An interior tent at knot n is ``([left, right], [True, False],
         [+1, +1])`` — the unit-1 convention, unchanged. Junction tents are
         appended after all interior bases, junction by junction, and get
-        their wings from :meth:`_junction_wings`.
+        their wings from :meth:`_junction_wings`. A GROUNDED end's tent is
+        one of those, with `wing_sigma[n, 0] == 0`: its side-A wing is the
+        image's, which the fold supplies, so nothing real lives on it.
+        `grounded_bases` lists those tents' indices, which is what the fill
+        reads to give their ROW the plane as its potential reference.
         """
         if self._cached_geometry is not None:
             return self._cached_geometry
@@ -609,7 +712,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
 
         groups = self._find_junctions()
         j_seg, j_rise, j_sigma = [], [], []
-        junctions = []
+        junctions, grounded_bases = [], []
         for group in groups:
             bases = []
             for sa, ra, ga, sb, rb, gb in self._junction_wings(seg_offsets, group):
@@ -617,7 +720,13 @@ class RazorSolver(_ElementCurrents, _Cancelable):
                 j_seg.append((sa, sb))
                 j_rise.append((ra, rb))
                 j_sigma.append((ga, gb))
-            junctions.append({"ends": group, "bases": bases})
+            # A grounded group's bases run parallel to its ends (one tent
+            # per end); a free-air group's run parallel to ends[1:].
+            junctions.append(
+                {"ends": group["ends"], "bases": bases, "grounded": group["grounded"]}
+            )
+            if group["grounded"]:
+                grounded_bases.extend(bases)
 
         n_junction = len(j_seg)
         n_basis = n_interior + n_junction
@@ -648,6 +757,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             "wing_rise": wing_rise,
             "wing_sigma": wing_sigma,
             "junctions": junctions,
+            "grounded_bases": np.asarray(grounded_bases, dtype=np.int64),
         }
         self._cached_geometry = geom
         return geom
@@ -657,9 +767,17 @@ class RazorSolver(_ElementCurrents, _Cancelable):
 
         The interior knots, plus either wire end that meets other ends at a
         junction — a junction knot's basis is that junction's through-
-        current unknown, and driving it is the split-wire feed. `K` is the
-        number of ends at the knot (1 for an interior knot), which is what
-        the K >= 3 refusal reads.
+        current unknown, and driving it is the split-wire feed — plus
+        either wire end that TOUCHES the plane, whose basis is that end's
+        grounded tent: the source then sits in the gap between the plane
+        and that wire end, which is how a monopole is driven.
+
+        `K` is the number of ends at the knot (1 for an interior knot),
+        which is what the K >= 3 refusal reads. A grounded end reports 1
+        whatever else meets it there, and that is not a fudge: the gap a
+        source at a grounded end occupies is between the plane and THIS
+        wire's end, so there is no branch pair left to name — each end at a
+        grounded point has a tent of its own.
         """
         arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
         base = geom["basis_offsets"][w]
@@ -668,11 +786,14 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             for j in range(1, len(arc_at_knot) - 1)
         ]
         for jn in geom["junctions"]:
-            for w_e, kind in jn["ends"]:
+            for e_i, (w_e, kind) in enumerate(jn["ends"]):
                 if w_e != w:
                     continue
                 arc = 0.0 if kind == "start" else float(arc_at_knot[-1])
-                knots.append((arc, jn["bases"][0], len(jn["ends"])))
+                if jn["grounded"]:
+                    knots.append((arc, jn["bases"][e_i], 1))
+                else:
+                    knots.append((arc, jn["bases"][0], len(jn["ends"])))
         return knots
 
     def _feed_basis_indices(self, geom):
@@ -1016,6 +1137,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             "fall_a": fall_a,
             "fall_b": fall_b,
             "t1_row_chunks": t1_row_chunks,
+            "grounded": geom["grounded_bases"],
             "image": None,
         }
 
@@ -1084,6 +1206,15 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         +1/h_A on side A and −1/h_B on side B whichever way round the two
         wires are spelled, i.e. the unit charge that leaves A and lands on
         B — differenced between the path's two bounding centroids.
+
+        A GROUNDED tent (momwire#398 unit 3) is that with side A carried by
+        the image instead of by a wire: σ_A = 0 empties its half of both
+        terms, and the fold's second pass supplies the mirrored wing with
+        the opposite charge, so the through-basis's two doublet halves are
+        −1/h on the real segment and +1/h on its image. The unit of current
+        that flows into the plane leaves no net charge at the contact point
+        — the image takes exactly the charge the real wing deposits, which
+        is the same statement as Φ = 0 on the conductor.
         """
         s_a, s_b = prepared["s_a"], prepared["s_b"]
         h_a, h_b = prepared["h_a"], prepared["h_b"]
@@ -1094,6 +1225,17 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             sources["t2_chunks"], geom, k, prepared["n_cent"], need_m1=False
         )
         dM0 = M0c[s_b] - M0c[s_a]  # (row, source segment)
+        grounded = prepared["grounded"]
+        if grounded.size:
+            # A grounded row's testing path starts AT the plane, where the
+            # folded scalar potential is identically zero: a point in the
+            # plane is equidistant from every source and its image, so the
+            # two blocks' contributions there are the same number and the
+            # fold's minus cancels them. Dropping the term in each block is
+            # therefore exact rather than approximate — and it is what makes
+            # the plane this formulation's potential reference, the discrete
+            # form of Φ = 0 on a perfect conductor.
+            dM0[grounded] = M0c[s_b[grounded]]
         T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
 
         tans, wts = prepared["tans"], prepared["wts"]
@@ -1144,7 +1286,9 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         distribution in basis order: per wire, interior knots in arc order,
         then the junction through-currents (junctions in detection order,
         K−1 per junction), each measured from its junction's side A into
-        that tent's side B.
+        that tent's side B. A GROUNDED point contributes K of them instead,
+        one per wire end there, each the current flowing out of the plane
+        into that end.
         """
         geom = self._build_geometry()
         self._checkpoint()
@@ -1211,8 +1355,15 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         every other knot, so the current there is
         ``coeffs[basis_offsets[w] + j - 1]``.
 
-        A FREE wire end (no junction there) is 0 — the open-circuit BC the
-        tent basis already builds in.
+        A FREE wire end (no junction there, and not in the ground plane) is
+        0 — the open-circuit BC the tent basis already builds in.
+
+        A GROUNDED wire end reads its grounded tent the same way a
+        junctioned end reads its junction tents: the tent's real wing sits
+        on that end with `wing_sigma` ±1, and the ghost wing carrying the
+        image contributes 0 by construction (`wing_sigma` 0), so the sum
+        below is that one term — the current crossing the plane into the
+        wire, in the wire's own arc direction.
 
         A JUNCTIONED wire end is not itself a basis's home knot the way an
         interior knot is: this formulation's junction tents (unlike the
