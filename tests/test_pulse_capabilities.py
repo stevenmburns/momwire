@@ -21,20 +21,27 @@ def _wire(z=0.0, n=2):
     return [np.array([(0.0, 0.0, z), (0.0, 1.0, z)])], [[n]]
 
 
-def test_pulse_serves_free_space_pec_and_refl_coef():
-    """The row momwire#416 predicted: a brand-new solver that wrote no
-    ground code declares TWO grounds, because `PotentialGround` served
-    both through one surface. Declaration and constructor are checked
-    together — a served declaration with a refusing constructor is exactly
-    the drift this file exists to catch.
+def test_pulse_serves_free_space_pec_refl_coef_and_sommerfeld():
+    """The row momwire#416 predicted, updated by momwire#430: a solver that
+    wrote no ground code of its own declares THREE grounds, because
+    `PotentialGround` served all three through one surface — the third,
+    Sommerfeld's, only once #398 unit 5 shipped `Remainder.field_windows`.
+    Declaration and constructor are checked together — a served declaration
+    with a refusing constructor is exactly the drift this file exists to
+    catch.
     """
     c = PulseSolver.capabilities
-    assert c.grounds == frozenset({"pec", "refl-coef"})
-    assert c.refusal("pec") is None and c.refusal("refl-coef") is None
-    assert "pec" not in c.refusals and "refl-coef" not in c.refusals
+    assert c.grounds == frozenset({"pec", "refl-coef", "sommerfeld"})
+    for ground_name in ("pec", "refl-coef", "sommerfeld"):
+        assert c.refusal(ground_name) is None
+        assert ground_name not in c.refusals
 
     wires, npe = _wire(z=1.0)
-    for ground in (dict(ground_z=0.0), dict(ground_z=0.0, ground_eps=10 - 1j)):
+    for ground in (
+        dict(ground_z=0.0),
+        dict(ground_z=0.0, ground_eps=10 - 1j),
+        dict(ground_z=0.0, ground_eps=10 - 1j, ground_model="sommerfeld"),
+    ):
         z, _ = PulseSolver(
             wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, **ground
         ).compute_impedance()
@@ -60,7 +67,6 @@ def test_pulse_ground_contact_refuses():
 @pytest.mark.parametrize(
     "cell,kwarg",
     [
-        ("sommerfeld", {"ground_model": "sommerfeld"}),
         ("junction_ports", {"junction_ports": [0]}),
         ("node_gaps", {"node_gaps": [(0, "end", 1.0 + 0j)]}),
         ("extended_kernel", {"extended_kernel": True}),
@@ -72,6 +78,24 @@ def test_pulse_out_of_scope_kwargs_refuse(cell, kwarg):
     with pytest.raises(NotImplementedError):
         PulseSolver(
             wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, **kwarg
+        )
+
+
+def test_pulse_sommerfeld_without_ground_eps_is_a_valueerror_not_a_refusal():
+    """`ground_model="sommerfeld"` is no longer `_OUT_OF_SCOPE` (momwire#430)
+    — it is a served capability with its own constructor contract, so a bare
+    `ground_model="sommerfeld"` (no `ground_eps`, no `ground_z`) fails the
+    same way `BSplineSolver` fails it: a `ValueError` about `ground_eps`,
+    not a `NotImplementedError` about being out of scope.
+    """
+    wires, npe = _wire()
+    with pytest.raises(ValueError, match="requires ground_eps"):
+        PulseSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            wavelength=WAVELENGTH,
+            ground_z=0.0,
+            ground_model="sommerfeld",
         )
 
 
@@ -118,8 +142,9 @@ def test_pulse_unsupported_kwargs_are_typeerrors(cell, kwarg):
         )
 
 
-def test_pulse_served_row_is_two_grounds_and_nothing_else():
+def test_pulse_served_row_is_three_grounds_and_nothing_else():
     c = PulseSolver.capabilities
+    assert c.grounds == frozenset({"pec", "refl-coef", "sommerfeld"})
     assert not any(
         [
             c.wire_loading,
