@@ -691,6 +691,91 @@ and *not* the `weight_tables` one. That is evidence for the windows being
 the trunk's primary weight surface and the whole-geometry tables being the
 convenience, which is the reverse of how unit 1 ordered them.
 
+### 6.3 Unit 3: ground CONTACT (2026-08-17)
+
+The unit that actually landed in this slot is ground **contact**, not the
+finite grounds §6.2 above expected — the paragraph above stands as written
+for whichever unit takes the finite-ground bar. Contact was §6.2's own named
+deferral ("a wire end in the plane needs the image to continue its current,
+which is a change to the tent basis rather than to the fill"), and closing it
+is what unlocks the vertical/monopole class.
+
+**It is a basis change and nothing else — the fill is untouched.** A wire end
+in the plane keeps a degree of freedom instead of being zeroed: its basis is
+the junction tent between the wire and its own image (monopole + image *is* a
+dipole), of which only the REAL wing is spelled, because `Z = Z_free −
+Z_image` already evaluates every basis against the mirrored sources. The
+image wing therefore arrives with the right shape, the right direction
+(−M·t̂, parallel for a vertical contact) and the opposite charge for free.
+In code that is: side A of the tent carries `sigma = 0` — which empties its
+tangent (T1), its charge doublet (T2) and its half of the testing path in one
+stroke — plus a two-line patch giving the grounded ROW the plane as its
+potential reference (Φ = 0 there, so the T2 endpoint drops), plus the
+grounded end becoming feedable. Measured, the same way unit 2's 83 was:
+**59 executable lines added and 20 retired in `razor.py`, net +39**, of
+which the geometry validation that replaces the old refusal is 34 (it now
+has three refusals to spell instead of one) — leaving ~25 lines of actual
+basis change, 2 of them in the fill. No new physics, no new kernel, and no
+change to `PotentialGround` at all: the shared layer took a second
+capability with **zero** edits, which is the stronger half of what unit 2
+demonstrated by taking one edit.
+
+The row's halving is the one genuine derivation. The grounded row tests the
+REAL half-path only; the image half contributes the identical number
+(E(M·r) = −M·E(r) for a system that is its own image), so halving is what
+makes the feed voltage the BASE gap's rather than the equivalent dipole's
+whole gap — i.e. what makes a monopole return Z_dipole/2 rather than
+Z_dipole.
+
+| gate | result |
+|---|---|
+| exact half-dipole oracle | **exact**, four geometry classes × both quadrature lanes: monopole vs 2L dipole, inverted-L vs the "Z", both-feet-grounded inverted-U vs the closed loop, and a grounded K=2 junction vs its explicit four-wire twin. Worst relative agreement 1.8e−13, best 5.7e−16 |
+| NEC-5, sharp lane | **held with 10.5× margin** — against the binary's own MIRROR decks (see below): worst 0.0190 Ω of a 0.20 Ω bar, offset constancy 0.0004 Ω of 0.05 |
+| free space bit-for-bit | **held**, 7 deck shapes × 2 lanes × 3 entry points, against the branch point |
+| clear-of-plane PEC bit-for-bit | **held**, same shapes × 2 plane heights; `tests/golden_razor_pec_nec5.py` unmoved |
+
+**The finding, and the one place this unit does not meet the bar as
+originally stated.** Razor's grounded answer is its own mirror model halved,
+exactly. NEC-5's grounded answer is *not* its own mirror model halved: run
+the binary twice — once on the grounded deck (`GE 1` + `GN 1`, N segments)
+and once on the same radiator plus its image in free space (2N segments,
+centre-driven) — and the two disagree by −0.133+0.285j Ω at N=24 on the
+monopole ladder, decaying to −0.097+0.074j at N=96 (inverted-L:
++0.102+0.064j → +0.010+0.026j). So against NEC-5's CONTACT deck razor's
+residual *decays* instead of holding constant, and misses the constancy half
+of the sharp bar (0.21 Ω spread in X on the monopole, 0.09 Ω in R on the
+inverted-L) plus the per-rung half at the two coarsest monopole rungs (0.30
+and 0.24 Ω against 0.20). Against NEC-5's MIRROR deck the twin property is
+sharper than any clearance geometry unit 2 measured: a constant
++0.001..0.003 + 0.019j Ω, spread ≤ 0.0004 Ω down each ladder. The gated lane
+is therefore the mirror-deck column, with the contact column recorded and
+its decay pinned (`tests/test_razor_ground_contact.py`, tests 6-7). The
+reading: this is a grounded-end *discretization* difference between the two
+codes that vanishes with the mesh — both ladders are still walking at N=96,
+this formulation's O(1/N) walk — and not a formulation error in either. What
+it is on NEC-5's side is not knowable from printed output alone, and no
+attempt was made to infer it.
+
+**Scope held deliberately narrow.** A wire END may be in the plane, at any
+number of ends per point (K real ends at a grounded point get K tents, one
+each — the plane is one more branch, so there is no through-path to
+distinguish and no KCL row to drop, which is the same physics
+`BSplineSolver`'s momwire#151 spells as "grounded junctions keep their
+directional bases and lose the closure row"). An interior anchor touching
+down is refused (`NotImplementedError`) — it would need a second unknown at a
+knot that already carries a tent, a second basis change; an edge lying in the
+plane and a wire dipping below it stay `ValueError`s with `BSplineSolver`'s
+own wording. Contact over a finite ground is refused twice over and says so:
+the fold hard-codes image coefficient 1, so a grounded end over anything but
+PEC would take spurious contact charge (momwire#282).
+
+**What the finite-ground unit inherits from this one:** the grounded tent is
+pure basis bookkeeping and lives entirely in the k-independent prepare half,
+so it costs a reflection-coefficient ground nothing extra in schedule terms —
+but momwire#282 is now load-bearing rather than advisory, since a contact
+deck over refl-coef must either fix the image-coefficient assumption or keep
+refusing.
+
 ---
 
 ## 7. What this subsumes, and what it does not

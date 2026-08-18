@@ -72,14 +72,47 @@ junction tents would overlap on that one segment) and is refused, as is a
 delta-gap feed that snaps to a K≥3 junction — the branch pair it would drive
 is ambiguous.
 
+## The PEC ground, and ground contact (momwire#398 units 2-3)
+
+`ground_z` puts a perfectly conducting plane under the model. The fill
+becomes `Z = Z_free − Z_image`: the same rows, the same testing paths and
+the same tent basis, evaluated a second time against sources reflected
+through the plane, subtracted once. The mirror comes from
+`_potential_ground.PotentialGround`, the shared object
+`docs/design/solver-architecture.md` §6 proposes — razor writes no
+reflection of its own.
+
+A wire END may lie IN the plane. Such an end keeps a degree of freedom
+instead of being zeroed the way the tent basis zeroes a free end: its basis
+is the junction tent between the wire and its own image — a monopole plus
+its image *is* a dipole — of which only the real wing is spelled, since the
+fold already evaluates every basis against the mirrored sources. Its testing
+path is the real half only, which is what makes the feed voltage the base
+GAP's rather than the equivalent dipole's whole gap, so a base-fed monopole
+returns exactly half its mirror model's impedance. A monopole is therefore
+
+```python
+RazorSolver(wires=[[[0, 0, 0], [0, 0, 5.35]]], nsegs=48,
+            ground_z=0.0, feed_arclength=0.0)   # the base gap is the port
+```
+
+K wire ends meeting at one point in the plane get K tents, one each: the
+plane is one more branch there, so no through-path is distinguished and
+current may leave into the ground. What is refused: a wire dipping below
+the plane, an edge lying in it, an interior anchor touching down (split the
+wire there instead), and contact over a finite ground — the fold hard-codes
+image coefficient 1, i.e. PEC (momwire#282).
+
 ## Scope
 
-Free space, reduced kernel, one polyline per wire — deliberately, not as an
-initial-version gap:
+Free space and the PEC image, reduced kernel, one polyline per wire —
+deliberately, not as an initial-version gap:
 
-- **Grounds are out of scope.** NEC-5's ground is Michalski, which carries
+- **Finite grounds are out of scope.** NEC-5's is Michalski, which carries
   its own limit offset; mixing that into this comparison would contaminate
-  the one thing this class exists to isolate (the testing rule).
+  the one thing this class exists to isolate (the testing rule). The PEC
+  image carries no such offset — it is the same exact image NEC-5's own
+  `GN 1` uses — which is why it is the ground that landed.
 - **The extended kernel is out of scope.** NEC-5's formulation tests the
   expansion on the wire axis with the reduced kernel; extending it would
   again be answering a different question than the one this solver was
@@ -90,11 +123,11 @@ initial-version gap:
   bit-exact regression tests against a pure-numpy reference, which this
   class does not yet have to pay for.
 
-`RazorSolver` refuses `ground_z`/`ground_eps`/`ground_model`/
-`ground_phi_mode`, `degree`, `junctions`, `junction_ports`,
-`extended_kernel`, and non-scalar `wire_radius` at construction with a
-message explaining why, rather than silently mismodelling — a wrong answer
-here is worse than no answer.
+`RazorSolver` refuses `ground_eps`/`ground_model`/`ground_phi_mode`,
+`degree`, `junctions`, `junction_ports`, `extended_kernel`, `node_gaps` and
+non-scalar `wire_radius` at construction with a message explaining why,
+rather than silently mismodelling — a wrong answer here is worse than no
+answer.
 
 ## Twin-gate tests
 
@@ -107,6 +140,13 @@ here is worse than no answer.
   measured property of razor-blade testing at a finite mesh, not a bug).
 - `tests/test_razor_currents.py` — field readout (`currents_at_knots`,
   `element_currents`) and the swept-solve work-sharing structure.
+- `tests/test_razor_pec_ground.py` — the PEC image: exactness against the
+  explicit mirrored twin, and four clearance ladders against NEC-5's
+  printed `GN 1` impedances at the sharp lane's bar.
+- `tests/test_razor_ground_contact.py` — the grounded-end tent: four
+  geometry classes proved exactly equal to half their free-space mirror
+  models, plus two contact ladders against NEC-5 (and the finding that
+  NEC-5's own contact deck is not NEC-5's own mirror deck halved).
 - `tests/test_razor_nec5_twin.py` — the only file comparing against real
   NEC-5 printouts (LLNL-CODE-746721) rather than an in-Python instrument:
   pointwise tracking from N=24 up with per-N tolerances that shrink with N,
