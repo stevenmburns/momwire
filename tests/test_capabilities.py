@@ -147,6 +147,35 @@ def test_razor_pec_ground_is_served():
     assert np.isfinite(z.real) and np.isfinite(z.imag)
 
 
+def test_razor_refl_coef_ground_is_served():
+    """momwire#398 unit 4: the second row the shared layer handed razor.
+
+    Same two halves as the PEC row above — the declaration and the
+    constructor together — plus the two knobs that come with it
+    (`ground_phi_mode`, and `ground_model` at its served value). The
+    physics lives in `tests/test_razor_refl_coef_ground.py`.
+    """
+    c = RazorSolver.capabilities
+    assert "refl-coef" in c.grounds
+    assert c.refusal("refl-coef") is None
+    assert "refl-coef" not in c.refusals
+
+    wires, npe = _wire(z=1.0)
+    sim = RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        wavelength=WAVELENGTH,
+        ground_z=0.0,
+        ground_eps=10 - 1j,
+        ground_phi_mode="rho_v",
+        ground_model="refl-coef",
+    )
+    assert sim.ground_eps == 10 - 1j
+    assert sim.ground_phi_mode == "rho_v"
+    z, _ = sim.compute_impedance()
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+
+
 def test_razor_ground_contact_is_served_at_a_wire_end():
     """Ground CONTACT landed in unit 3, and the geometry refusals moved.
 
@@ -181,7 +210,6 @@ def test_razor_ground_contact_is_served_at_a_wire_end():
 @pytest.mark.parametrize(
     "cell,kwarg",
     [
-        ("refl-coef", {"ground_eps": 10 - 1j}),
         ("sommerfeld", {"ground_model": "sommerfeld"}),
         ("junction_ports", {"junction_ports": [0]}),
         ("node_gaps", {"node_gaps": [(0, "end", 1.0 + 0j)]}),
@@ -230,9 +258,12 @@ def test_razor_unsupported_kwargs_are_typeerrors(cell, kwarg):
         )
 
 
-def test_razor_served_row_is_the_pec_ground_and_nothing_else():
+def test_razor_served_row_is_the_two_folding_grounds_and_nothing_else():
+    """PEC (unit 2) and refl-coef (unit 4) — the two FOLDING grounds. The
+    composing one is refused, and every non-ground cell still is."""
     c = RazorSolver.capabilities
-    assert c.grounds == frozenset({"pec"})
+    assert c.grounds == frozenset({"pec", "refl-coef"})
+    assert "sommerfeld" not in c.grounds and c.refusal("sommerfeld")
     assert not any(
         [
             c.wire_loading,
