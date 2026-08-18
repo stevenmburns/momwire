@@ -51,6 +51,23 @@ and keeps both consumers' shapes as conveniences on top. That is the
 generalisation a second consumer is supposed to force, and it is the
 cheapest possible one: no new concept, one layer removed.
 
+Unit 4 lands razor's REFLECTION-COEFFICIENT ground, and it forced the
+same generalisation one row down the table — on `weight_windows` this
+time, and for the same reason. That producer had been shaped by its
+first consumer too: "observer rows" meant rows of the geometry's own
+square segment × segment table, because the B-spline fill's observers
+ARE its segments. Razor's are not. Its A-term observers are the
+testing-path quadrature points (each with the path's own tangent) and
+its Φ-term observers are the segment centroids its charge term
+differences between — two different observer sets, neither of them the
+source set, and its `geom` dict does not even carry the keys the old
+spelling read. So `weight_windows` now takes an observer set and a
+source set as `(centres, tangents)` pairs, with the square
+geometry-shaped case as the DEFAULT rather than the definition
+(`own_segments`). Same shape of result as unit 2's: one operation
+exposed, the existing consumer's call unchanged and bit-identical, no
+new concept.
+
 **What stays out**, deliberately, and named here so its later migration is
 a decision rather than a discovery:
 
@@ -395,9 +412,21 @@ class PotentialGround:
             solver._image_refl_prep(self._geom), self._omega
         )
 
-    def weight_windows(self):
+    def own_segments(self):
+        """This geometry's own `(centres, tangents)` — the default both
+        axes of `weight_windows` take.
+
+        The B-spline-shaped reading of "where the weights live", and lazy
+        for the same reason `ImageGeometry`'s conveniences are: a razor
+        `geom` dict carries none of the keys it reads, and razor never
+        calls it (it names its own observer and source sets instead).
+        """
+        geom = self._geom
+        return 0.5 * (geom["seg_l"] + geom["seg_r"]), geom["tangents"]
+
+    def weight_windows(self, observers=None, sources=None):
         """A producer `weights_fn(i0, i1) -> (w_A, w_Φ)` of observer-row
-        WINDOWS, each complex128 `(i1-i0, n_segs)`.
+        WINDOWS, each complex128 `(i1-i0, n_src)`.
 
         The chunked accumulator's contract (momwire#323): the windows are
         produced per chunk and nothing N²-scale in the weights is ever
@@ -410,6 +439,32 @@ class PotentialGround:
         source block); the cache stays for `weight_tables` and the
         enrichment path, which do want the whole thing.
 
+        `observers` and `sources` are each a `(centres, tangents)` pair of
+        `(n, 3)` arrays. **`sources` defaults to `own_segments()` and
+        `observers` defaults to `sources`** — the square, geometry-shaped
+        case the B-spline fill takes, in which a window is a band of the
+        square table. That default is a CONVENIENCE over the operation,
+        exactly the split `ImageGeometry` draws between `mirror_positions`
+        / `mirror_tangents` and its `seg_l` / `seg_r` / `tangent_dot`
+        conveniences — and unit 4 (razor's refl-coef ground) is what forced
+        it, the same way unit 2 forced that one. Razor's A-term observers
+        are its testing-path QUADRATURE POINTS, each with the path's own
+        tangent there, and its Φ-term observers are the segment centroids
+        its charge term differences between; neither is "the geometry's
+        segments", and razor's `geom` does not even carry the keys the
+        default reads. So the object exposes the operation — Fresnel
+        weights between an observer set and a source set — and keeps the
+        first consumer's shape as the default, bit for bit (the two
+        spellings are pinned equal in `tests/test_potential_ground.py`).
+
+        A weight pair is per (observer, SOURCE SEGMENT): the Fresnel
+        coefficients are evaluated once per pair at the specular angle of
+        the ray from the source segment's image midpoint to the observer,
+        and held constant over the source segment. Both axes' tangents
+        enter only through the A-term dyad (`w_Φ` never reads them), which
+        is why a consumer that wants the Φ weighting alone may hand the
+        same set in twice.
+
         ε̃ and C₂ are frequency- but not row-dependent and are the
         factory's, so the closures capture them and no chunk recomputes
         them.
@@ -417,8 +472,12 @@ class PotentialGround:
         Unlike `weight_tables`, this NEVER returns `None`: see that
         method's last paragraph for why PEC has to spell itself out here.
         """
-        geom = self._geom
-        tangents = geom["tangents"]
+        if sources is None:
+            sources = self.own_segments()
+        if observers is None:
+            observers = sources
+        obs_c, obs_t = observers
+        src_c, src_t = sources
         mirror = _MIRROR
 
         if self.eps_tilde is None:
@@ -426,7 +485,7 @@ class PotentialGround:
             def pec_weights(i0, i1):
                 # float64 gemm → C-contiguous; astype gives the complex128
                 # the assembler wants without a wrapper copy on top.
-                w_A = (tangents[i0:i1] @ (tangents * mirror).T).astype(np.complex128)
+                w_A = (obs_t[i0:i1] @ (src_t * mirror).T).astype(np.complex128)
                 return w_A, np.ones_like(w_A)
 
             return pec_weights
@@ -439,22 +498,21 @@ class PotentialGround:
             def sommerfeld_weights(i0, i1):
                 # complex scalar × float64 array → complex128 C-contiguous.
                 # The smooth remainder is a separate, already-chunked term.
-                w_A = c2 * (tangents[i0:i1] @ (tangents * mirror).T)
+                w_A = c2 * (obs_t[i0:i1] @ (src_t * mirror).T)
                 return w_A, np.full(w_A.shape, c2)
 
             return sommerfeld_weights
 
-        seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
         phi_mode = self.phi_mode
         ground_z = self._solver.ground_z
 
         def refl_weights(i0, i1):
             cos_th, td_img, P = _ground_refl.specular_pair_tables(
-                seg_c[i0:i1],
-                tangents[i0:i1],
+                obs_c[i0:i1],
+                obs_t[i0:i1],
                 ground_z,
-                src_centers=seg_c,
-                src_tangents=tangents,
+                src_centers=src_c,
+                src_tangents=src_t,
             )
             rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
             w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
