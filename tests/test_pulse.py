@@ -174,21 +174,21 @@ def test_free_space_ladder_approaches_the_reference_monotonically():
 
     |    N | Δ/a  | Z (Ω)               | |Z − Z_ref| |
     |------|------|---------------------|-------------|
-    |   32 | 15.9 |  54.202 − 416.353j  |    417.8    |
-    |   64 |  7.9 |  60.202 − 155.668j  |    157.2    |
-    |  128 |  4.0 |  67.682 −  40.672j  |     42.0    |
-    |  256 |  2.0 |  71.919 −   3.575j  |      4.6    |
-    |  512 |  1.0 |  72.734 +   1.101j  |      0.38   |
+    |   32 | 15.9 |  54.202 − 416.352j  |   417.88    |
+    |   64 |  7.9 |  60.202 − 155.668j  |   157.27    |
+    |  128 |  4.0 |  67.682 −  40.672j  |    42.07    |
+    |  256 |  2.0 |  71.919 −   3.575j  |     4.73    |
+    |  512 |  1.0 |  72.734 +   1.101j  |     0.29    |
     | ref  |      |  72.445 +   1.125j  |             |
 
     Every rung improves on the one before, by better than 2.5× — and the
-    ratio GROWS (2.7, 3.7, 9.1, 12.2) because two error mechanisms retire
+    ratio GROWS (2.7, 3.7, 8.9, 16.3) because two error mechanisms retire
     together as the mesh refines: the O(Δ/λ) discretization every scheme
     pays, and the point-charge concentration error that is this scheme's
     own (see the Δ/a test below).
 
     The pins are the honest ones: a factor-2.5 improvement per rung, and
-    0.6 Ω at the last — 1.6× the 0.38 Ω measured, room for the ~5 %
+    0.6 Ω at the last — 2× the 0.29 Ω measured, room for the ~5 %
     allocator/BLAS variance the house sees on CI without room to hide a
     regression that would show as a percent of a 72 Ω impedance.
     """
@@ -209,15 +209,16 @@ def test_the_scheme_is_governed_by_delta_over_a_not_delta_over_lambda():
     momwire#248's "never validate below Δ/a ≈ 1" arrives here as a
     property of the scheme rather than as a comparison convention.
 
-    On a 50 mm-radius conductor (measured 2026-08-18): Δ/a = 3.2 → 5.0 Ω
-    from the reference, Δ/a = 1.6 → 1.5 Ω, and then Δ/a = 0.4 → 55 Ω, a
-    36× regression from a mesh four times finer.
+    On a 50 mm-radius conductor (measured 2026-08-18): Δ/a = 3.2 is 16.8 Ω
+    from the reference, Δ/a = 1.6 is 5.1 Ω — and then Δ/a = 0.4 is 61.5 Ω,
+    a 12× regression bought with a mesh four times finer. Pinned at 5×, so
+    the test states the reversal without pretending to know its size.
     """
     fat = 0.05
     ref = _z_reference(radius=fat)
     err = {n: abs(_z_pulse(n, radius=fat) - ref) for n in (64, 128, 512)}
     assert err[128] < err[64], "above the floor, refining must still help"
-    assert err[512] > 10 * err[128], (
+    assert err[512] > 5 * err[128], (
         "below Δ/a ≈ 1 the point-charge model must come apart — it did not, "
         f"so the floor this scheme documents has moved: {err}"
     )
