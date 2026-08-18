@@ -1486,34 +1486,24 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
     def _image_refl_prep(self, geom):
-        """k-independent per-pair specular tables (cos θ, PEC mirror dot,
-        out-of-plane dyad component) for the `ground_eps` weighted image.
-        Cached per geometry object so swept callers pay for the O(N²)
-        build once, not per frequency.
+        """The CACHE over `_potential_ground.specular_prep`: k-independent
+        per-pair specular tables (cos θ, PEC mirror dot, out-of-plane dyad
+        component) for the `ground_eps` weighted image, memoised per
+        geometry object so swept callers pay for the O(N²) build once, not
+        per frequency.
+
+        The build itself moved to `_potential_ground` with momwire#429
+        unit 1; what is left here is the SCHEDULE, which the fill hands to
+        `PotentialGround.weight_tables(prep=…)` exactly as
+        `SinusoidalGalerkinSolver` hands its own cache to
+        `FieldGround.projector(tables=…)` on the sibling trunk.
         """
         cached = self._cached_image_refl_prep
         if cached is not None and cached[0] is geom:
             return cached[1]
-        seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
-        tables = _ground_refl.specular_pair_tables(
-            seg_c, geom["tangents"], self.ground_z
-        )
+        tables = _potential_ground.specular_prep(geom, self.ground_z)
         self._cached_image_refl_prep = (geom, tables)
         return tables
-
-    def _image_refl_weights(self, prep, omega):
-        """Per-frequency weight tables from the k-independent specular prep:
-        ε̃(ω) → ρ_v/ρ_h at each pair's specular angle → A-term dyad table
-        w_A and Φ-term image-charge table w_Φ (mode: `ground_phi_mode`).
-        """
-        cos_th, td_img, P = prep
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
-        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
-        w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
-        w_Phi = _ground_refl.phi_term_weights(self.ground_phi_mode, eps_t, rho_v)
-        if np.ndim(w_Phi) == 0:
-            w_Phi = np.full(w_A.shape, complex(w_Phi))
-        return w_A, w_Phi
 
     def _image_weight_row_bytes(self, n_segs):
         """Bytes-per-observer-row `PotentialGround.weight_windows`' closure
@@ -1702,13 +1692,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the no-accelerator fallback and bit-exact reference.
 
         Since momwire#398 unit 1 the dense fill reaches this pairing through
-        `PotentialGround.weight_tables()` (whose refl-coef branch calls the
-        same two methods, in the same order) rather than through this
-        method, so what is left here is the SPELLING the block-path tests
-        and the perf script name — the whole-geometry refl-coef image, as
-        one call.
+        `PotentialGround.weight_tables()` rather than through this method,
+        so what is left here is the SPELLING the block-path tests and the
+        perf script name — the whole-geometry refl-coef image, as one call
+        — and since momwire#429 unit 1 it reaches it the same way they do,
+        handing the object this solver's `_image_refl_prep` cache.
         """
-        w_A, w_Phi = self._image_refl_weights(self._image_refl_prep(geom), self.omega)
+        ground = _potential_ground.potential_ground_for(self, geom, self.k, self.omega)
+        w_A, w_Phi = ground.weight_tables(prep=lambda: self._image_refl_prep(geom))
         return self._image_Z_weighted(J_img, supp_seg, polys, w_A, w_Phi)
 
     def _image_Z_weighted(self, J_img, supp_seg, polys, w_A, w_Phi):
@@ -1793,7 +1784,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ground = _potential_ground.potential_ground_for(
                 self, geom, self.k, self.omega
             )
-        weights = ground.weight_tables()
+        weights = ground.weight_tables(prep=lambda: self._image_refl_prep(geom))
         if weights is None:
             return self._assemble_Z(
                 J_img,
