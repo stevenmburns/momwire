@@ -34,7 +34,7 @@ GROUND_KWARGS = {
 }
 
 
-def _solver(ground, **extra):
+def _solver(ground, degree=2, **extra):
     """An elevated half-wave dipole over `ground` — high enough that no wire
     end touches the plane, so the ground-junction basis (#151) is a no-op
     and the fill's ground arithmetic is the only thing that varies."""
@@ -44,7 +44,7 @@ def _solver(ground, **extra):
         nsegs=21,
         wavelength=LAM,
         wire_radius=0.02,
-        degree=2,
+        degree=degree,
         **GROUND_KWARGS[ground],
         **extra,
     )
@@ -281,6 +281,150 @@ def test_the_conveniences_are_lazy_and_the_operations_are_not():
     )
     with pytest.raises(KeyError):
         img.seg_l
+
+
+def _galerkin_Q_from_the_operation(sim, geom, supp_seg, polys, pg):
+    """`evaluate`'s Galerkin block, rebuilt from `field_windows` alone.
+
+    The B-spline testing rule written out by hand on top of the shared
+    operation: source arc moments come from the producer, the observer-side
+    moment quadrature and the basis assembly are this caller's own — which
+    is exactly the division razor and pulse need and the division
+    `_Z_sommerfeld_remainder`'s fused kernel does internally.
+    """
+    from momwire._quadrature import leggauss
+
+    rem = pg.remainder()
+    d, q = sim.degree, sim.n_qp_sommerfeld
+    seg_l, seg_r, tang = rem.source_segments()
+    h = geom["h_per_seg"]
+    n_seg = seg_l.shape[0]
+
+    xg, wg = leggauss(q)
+    tq = 0.5 * (xg + 1.0)
+    nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
+    u = h[:, None] * tq[None, :]
+    W = (0.5 * h[:, None] * wg[None, :])[None] * u[None] ** np.arange(d + 1)[
+        :, None, None
+    ]
+
+    obs = nodes.reshape(n_seg * q, 3)
+    t_obs = np.repeat(tang, q, axis=0)
+    fm = rem.field_windows((obs, t_obs), n_moment=d + 1, n_qp=q)(0, n_seg * q)
+    Jc = np.einsum("piq,iqjP->pPij", W, fm.reshape(n_seg, q, n_seg, d + 1))
+
+    Q = np.zeros((polys.shape[0], polys.shape[0]), dtype=np.complex128)
+    for a in range(d + 1):
+        sm = supp_seg[:, a]
+        for b in range(d + 1):
+            sn = supp_seg[:, b]
+            J_blk = Jc[:, :, sm[:, None], sn[None, :]]
+            Q += np.einsum("mp,pPmn,nP->mn", polys[:, a, :], J_blk, polys[:, b, :])
+    return Q
+
+
+@pytest.mark.parametrize("degree", [1, 2])
+def test_the_remainder_exposes_the_field_and_evaluate_is_the_convenience(degree):
+    """The unit-5 generalisation, pinned the only way it can be.
+
+    `Remainder` had exactly one method, `evaluate(supp_seg, polys)`, and it
+    is a B-spline signature twice over: the arguments are that basis's
+    description and the return value is a finished Galerkin block. Two
+    independent consumers — razor (path-integral rows) and pulse (point
+    matching, momwire#416 §4.1) — reported the same blocker, so the class
+    now exposes the OPERATION: the remainder FIELD of each source segment's
+    arc moments, projected on the observer tangents, in observer windows.
+
+    Unlike units 2 and 4, the two spellings are pinned at the quadrature's
+    own agreement rather than at `array_equal`, and that is a property of
+    the kernels rather than of the physics: `evaluate`'s hot path is the
+    fused C++ `sommerfeld_remainder_bspline_Q`, which never forms the
+    intermediate this operation returns. Measured worst relative residual
+    over the two degrees: 2.9e-15 (degree 1; 2.0e-15 at degree 2) — the
+    same class as the existing
+    fused-vs-numpy gate in `tests/test_sommerfeld_ground.py`, which is what
+    says the two are the same integral and not merely similar ones.
+    """
+    sim = _solver("sommerfeld", degree=degree)
+    geom = sim._build_geometry()
+    supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
+    _g, pg = _ground_for(sim)
+
+    Q_ref = pg.remainder().evaluate(supp_seg, polys)
+    Q_op = _galerkin_Q_from_the_operation(sim, geom, supp_seg, polys, pg)
+    rel = np.abs(Q_op - Q_ref).max() / np.abs(Q_ref).max()
+    assert rel < 1e-11, f"degree {degree}: the two spellings differ by {rel:.3e}"
+
+
+def test_the_field_windows_are_rows_and_the_pulse_shape_is_the_first_moment():
+    """The producer's contract: windows are row bands of one table, and
+    `n_moment` is the only thing that separates the two consumers.
+
+    Row-locality has to be exact (`array_equal`, not `allclose`) or a
+    consumer's answer would depend on its chunk schedule — the same
+    property `weight_windows` holds, and the same one razor's fill gates
+    end-to-end. `n_moment = 1` is pulse's plain rectangular field and
+    `n_moment = 2` razor's tent pair; the zeroth moment must be the
+    identical array in both, or the two consumers are integrating
+    different things.
+    """
+    sim = _solver("sommerfeld")
+    geom, pg = _ground_for(sim)
+    rem = pg.remainder()
+    seg_c, tang = pg.own_segments()
+    n = geom["n_segs_total"]
+    obs = (seg_c, tang)
+
+    full = rem.field_windows(obs, n_moment=2)(0, n)
+    assert full.shape == (n, n, 2)
+    assert full.dtype == np.complex128
+    band = rem.field_windows(obs, n_moment=2)(3, 9)
+    assert np.array_equal(band, full[3:9])
+
+    pulse = rem.field_windows(obs, n_moment=1)(0, n)
+    assert pulse.shape == (n, n, 1)
+    assert np.array_equal(pulse[..., 0], full[..., 0])
+
+    # ...and the source axis defaults to the geometry's own segments.
+    explicit = rem.field_windows(obs, rem.source_segments(), n_moment=2)(0, n)
+    assert np.array_equal(explicit, full)
+    assert np.array_equal(rem.source_segments()[0], geom["seg_l"])
+
+
+def test_the_remainder_grid_is_built_at_the_grounds_wavenumber(monkeypatch):
+    """The unit-5 schedule rule, at the layer it is decided.
+
+    The Sommerfeld grid is k-dependent through and through (its lattice is
+    in wavelengths), so a consumer with a prepare/replay split must build
+    it per SOLVED wavenumber. `BSplineSolver` cannot tell the difference —
+    its factory call passes `self.k` and its swept path moves `self.k`
+    itself — but razor sweeps by passing k to the factory while `self.k`
+    stays put, so a grid keyed off the solver would freeze at the
+    constructor's frequency and every swept point would be wrong.
+    """
+    from momwire import _sommerfeld
+
+    seen = []
+    real = _sommerfeld.get_grid
+    monkeypatch.setattr(
+        _sommerfeld,
+        "get_grid",
+        lambda eps_t, k2, r1_max, **kw: (
+            seen.append((k2, kw["omega"])) or real(eps_t, k2, r1_max, **kw)
+        ),
+    )
+
+    sim = _solver("sommerfeld")
+    geom = sim._build_geometry()
+    k, omega = 1.37 * sim.k, 1.37 * sim.omega
+    pg = _potential_ground.potential_ground_for(sim, geom, k, omega)
+    obs = pg.own_segments()
+    pg.remainder().field_windows(obs)(0, 2)
+
+    assert seen == [(k, omega)], (
+        f"the remainder built its grid at {seen}, not at the ground's own "
+        f"({k}, {omega}) — it is reading solver.k"
+    )
 
 
 def test_the_dense_fill_follows_the_object_not_the_strings(monkeypatch):
