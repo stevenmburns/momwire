@@ -171,7 +171,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg
 
-from . import _ground_spec, _potential_ground
+from . import _ground_spec, _potential_ground, _wire_spec
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -182,7 +182,7 @@ from ._quadrature import leggauss
 # imported rather than copied so the probe's line count measures what a new
 # row actually costs. That the import reaches into a SIBLING SOLVER and not
 # into a shared module is itself one of momwire#416's findings.
-from .razor import _axis_frame, _static_axis_moments
+from ._kernel_moments import _axis_frame, _static_axis_moments
 
 # Working-array budget for the chunked fills, in complex128 elements
 # (~32 MB per temporary), razor's constant and razor's reason: the moment
@@ -317,11 +317,15 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         self.wavelength = float(wavelength)
         self.halfdriver_factor = float(halfdriver_factor)
         self.nsegs = int(nsegs)
-        if not np.isscalar(wire_radius):
-            raise NotImplementedError(_PER_WIRE_RADIUS_REFUSAL)
-        self.wire_radius = float(wire_radius)
-        if self.wire_radius <= 0.0:
-            raise ValueError("wire_radius must be positive (reduced kernel)")
+        # One spelling of the scalar-only refusal for the whole tree
+        # (momwire#147 / #429 rank 3): `per_wire_refusal=` is the argument
+        # that exists precisely for this formulation now. It guarantees a
+        # scalar, so the wire count is immaterial here (any sequence —
+        # even length-1 — is refused, exactly as before).
+        _radii, uniform = _wire_spec.normalize_wire_radius(
+            wire_radius, 1, per_wire_refusal=_PER_WIRE_RADIUS_REFUSAL
+        )
+        self.wire_radius = uniform
 
         # The four attributes `_potential_ground`'s factory reads, and the
         # only place this class touches a ground string at all.
