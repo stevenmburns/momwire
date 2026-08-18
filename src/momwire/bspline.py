@@ -78,6 +78,7 @@ from . import _ground_spec
 from . import _potential_ground
 from . import _sommerfeld
 from . import _wire_loading
+from . import _wire_spec
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
@@ -677,20 +678,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Mixed radii use the OBSERVER wire's radius in the a²-regularised
         # kernel — see docs/sinusoidal_basis_design.md "Per-wire radius"
         # for the convention and its PyNEC oracle validation.
-        radius = np.asarray(wire_radius, dtype=float)
-        if radius.ndim == 0:
-            radius = np.full(n_w, float(radius))
-        elif radius.shape != (n_w,):
-            raise ValueError(
-                f"wire_radius: expected a scalar or a length-{n_w} sequence "
-                f"(one entry per wire), got shape {radius.shape}"
-            )
-        if not np.all(np.isfinite(radius)) or np.any(radius <= 0.0):
-            raise ValueError(
-                f"wire_radius entries must be positive and finite, got {radius}"
-            )
-        self._radius_per_wire = radius
-        self._uniform_radius = float(radius[0]) if np.all(radius == radius[0]) else None
+        self._radius_per_wire, self._uniform_radius = _wire_spec.normalize_wire_radius(
+            wire_radius, n_w
+        )
         if use_singular_enrichment and self._uniform_radius is None:
             raise NotImplementedError(_ENRICHMENT_PER_WIRE_RADIUS_REFUSAL)
 

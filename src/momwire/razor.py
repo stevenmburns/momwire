@@ -218,10 +218,23 @@ tents would overlap on one segment) and is refused.
 import numpy as np
 import scipy.linalg
 
-from . import _ground_refl, _ground_spec, _potential_ground, _wire_loading
+from . import (
+    _ground_refl,
+    _ground_spec,
+    _potential_ground,
+    _wire_loading,
+    _wire_spec,
+)
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
+
+# Re-exported under their own names, deliberately: `pulse.py` imports them
+# FROM this module (momwire#419, where the coupling was left visible on
+# purpose), and momwire#425 moved the bodies to `_kernel_moments` without
+# moving that import. Migrating pulse's import line is a one-liner, on
+# pulse's own branch.
+from ._kernel_moments import _axis_frame, _static_axis_moments
 from ._quadrature import leggauss
 
 # Two wire endpoints this close are a junction, not a coincidence. The same
@@ -293,45 +306,6 @@ _CONTACT_OVER_FINITE_REFUSAL = (
     "are served there — refl-coef in its 0.1-0.5 lambda validity window, "
     "sommerfeld at any height) or drop ground_eps for the PEC image"
 )
-
-
-def _axis_frame(obs, seg_p0, seg_t, a):
-    """Project observation points onto every segment's axis.
-
-    Returns ``(u_r, rho2)`` of shape ``(n_obs, n_seg)``: the signed axial
-    coordinate of the projection, measured from the segment's start point,
-    and the squared perpendicular distance plus a². In that frame the
-    reduced kernel's distance to a source at local arc τ is simply
-    R² = (τ − u_r)² + ρ², which is what both the closed-form static
-    moments and the quadratured remainder consume.
-    """
-    d = obs[:, None, :] - seg_p0[None, :, :]
-    u_r = np.einsum("psc,sc->ps", d, seg_t)
-    # The perpendicular part can go a few ulps negative for a truly
-    # collinear observation point; a² dominates it either way.
-    rho2 = np.maximum(np.einsum("psc,psc->ps", d, d) - u_r * u_r, 0.0) + a * a
-    return u_r, rho2
-
-
-def _static_axis_moments(u_r, rho2, seg_h):
-    """Closed-form static moments of the reduced kernel over each segment.
-
-    Given the axis frame from :func:`_axis_frame`, returns ``(m0, m1)``:
-
-        m0 = ∫₀^h dτ / R,   m1 = ∫₀^h τ dτ / R
-
-    with τ the source's local arc length from the segment start and
-    R = sqrt(|r − r'|² + a²). In the axis frame these are the collinear
-    forms with u = τ − u_r: ∫du/R = asinh(u/ρ) and ∫u du/R = sqrt(u² + ρ²),
-    then m1 = u_r·m0 + [sqrt(u² + ρ²)]. ρ ≥ a > 0 always, which is exactly
-    what the reduced kernel's a² buys — the formula never sees a bare axis.
-    """
-    rho = np.sqrt(rho2)
-    u0 = -u_r
-    u1 = seg_h[None, :] - u_r
-    m0 = np.arcsinh(u1 / rho) - np.arcsinh(u0 / rho)
-    m1 = u_r * m0 + (np.sqrt(u1 * u1 + rho2) - np.sqrt(u0 * u0 + rho2))
-    return m0, m1
 
 
 class RazorSolver(_ElementCurrents, _Cancelable):
@@ -536,12 +510,6 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         self.wavelength = float(wavelength)
         self.halfdriver_factor = float(halfdriver_factor)
         self.nsegs = int(nsegs)
-        if not np.isscalar(wire_radius):
-            raise NotImplementedError(_PER_WIRE_RADIUS_REFUSAL)
-        self.wire_radius = float(wire_radius)
-        if self.wire_radius <= 0.0:
-            raise ValueError("wire_radius must be positive (reduced kernel)")
-
         # The ground, in the four attributes `_potential_ground`'s factory
         # reads. All three of its rows are served now — the PEC plane (unit
         # 2), the reflection-coefficient ground (unit 4) and the Sommerfeld
@@ -600,6 +568,15 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             )
 
         n_w = len(self.wires_polylines)
+        # One `a` for the whole model: the reduced kernel here takes a
+        # scalar, so the shared normaliser is asked to REFUSE a sequence
+        # rather than to spread one (momwire#147/#425). Everything else —
+        # the positivity check, the (n_wires,) array the loading spec reads
+        # through `_radius_per_wire` — is the siblings' verbatim.
+        self._radius_per_wire, self.wire_radius = _wire_spec.normalize_wire_radius(
+            wire_radius, n_w, per_wire_refusal=_PER_WIRE_RADIUS_REFUSAL
+        )
+
         if n_per_edge_per_wire is None:
             n_per_edge_per_wire = [None] * n_w
         if len(n_per_edge_per_wire) != n_w:
@@ -1290,20 +1267,6 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         """``(n_segs,)`` int array mapping segment index → wire index."""
         off = np.asarray(geom["seg_offsets"], dtype=np.int64)
         return np.repeat(np.arange(off.shape[0] - 1, dtype=np.int64), np.diff(off))
-
-    @property
-    def _radius_per_wire(self):
-        """``(n_wires,)`` conductor radii — this formulation's ONE radius,
-        broadcast.
-
-        Not a capability: `wire_radius` is still scalar-only here
-        (`_PER_WIRE_RADIUS_REFUSAL` fires in `__init__`, momwire#147), and
-        every entry of this array is the same float. It exists so the shared
-        `_wire_loading.loading_for` reads one attribute name across all four
-        formulations rather than branching on which radius spelling a solver
-        keeps (momwire#428).
-        """
-        return np.full(len(self.wires_polylines), self.wire_radius)
 
     def _lumped_site_index(self, geom, i, wire, arclength):
         """Basis index a lumped load's site names — the `loading_for` hook.

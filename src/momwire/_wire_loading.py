@@ -74,6 +74,8 @@ integral).
 import numpy as np
 from scipy.special import ive
 
+from . import _wire_spec
+
 MU0 = 1.25663706127e-6
 
 
@@ -135,7 +137,9 @@ def series_impedance_per_wire(
     `wire_radius` is a scalar (every wire) or a length-n_wires sequence
     (each wire's own conductor radius — stevenmburns/momwire#147): the
     skin-loss internal impedance and the insulation-jacket inductance are
-    both evaluated at wire w's own radius. `conductivity` /
+    both evaluated at wire w's own radius, through the SAME normaliser the
+    constructors use (momwire#425 — this was the third, weaker copy of it:
+    same message, no positivity check). `conductivity` /
     `insulation_radius` / `insulation_eps_r` are the normalized (n_wires,)
     arrays (or None) from `normalize_per_wire`; NaN entries switch the
     effect off for that wire. `omega` may be scalar or (n_k,); the result
@@ -147,14 +151,7 @@ def series_impedance_per_wire(
         if conductivity is not None
         else insulation_radius.shape[0]
     )
-    radius = np.asarray(wire_radius, dtype=float)
-    if radius.ndim == 0:
-        radius = np.broadcast_to(radius, (n_w,))
-    elif radius.shape != (n_w,):
-        raise ValueError(
-            f"wire_radius: expected a scalar or a length-{n_w} sequence "
-            f"(one entry per wire), got shape {radius.shape}"
-        )
+    radius, _uniform = _wire_spec.normalize_wire_radius(wire_radius, n_w)
     out = np.zeros((n_w,) + omega.shape, dtype=np.complex128)
     for w in range(n_w):
         if conductivity is not None and np.isfinite(conductivity[w]):

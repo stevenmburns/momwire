@@ -49,6 +49,7 @@ from . import (
     _ground_spec,
     _sommerfeld,
     _wire_loading,
+    _wire_spec,
 )
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
@@ -448,20 +449,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # historical scalar code paths (and the single-`a` C++ kernels)
         # bit-identical whenever all wires share one radius, including
         # when that radius arrived as a uniform array.
-        radius = np.asarray(wire_radius, dtype=float)
-        if radius.ndim == 0:
-            radius = np.full(n_w, float(radius))
-        elif radius.shape != (n_w,):
-            raise ValueError(
-                f"wire_radius: expected a scalar or a length-{n_w} sequence "
-                f"(one entry per wire), got shape {radius.shape}"
-            )
-        if not np.all(np.isfinite(radius)) or np.any(radius <= 0.0):
-            raise ValueError(
-                f"wire_radius entries must be positive and finite, got {radius}"
-            )
-        self._radius_per_wire = radius
-        self._uniform_radius = float(radius[0]) if np.all(radius == radius[0]) else None
+        self._radius_per_wire, self._uniform_radius = _wire_spec.normalize_wire_radius(
+            wire_radius, n_w
+        )
 
         # Distributed series wire impedance (stevenmburns/momwire#131,
         # sinusoidal support #134): finite conductivity and/or a dielectric
