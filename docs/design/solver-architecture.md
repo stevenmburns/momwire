@@ -1522,6 +1522,108 @@ the extended kernel, and rewriting `docs/razor-solver.md` accordingly — is
 §6.13/D1, deliberately not done here: this unit's `fat` envelope pins on
 `razor`/`bs1` are the PRE-EK record that unit will revisit.
 
+### 6.13 The extended kernel on razor (momwire#398 D1, 2026-08-18)
+
+**The maintainer's decision, 2026-08-18: give `RazorSolver` the extended
+kernel.** This overrides the taper study's own D1 recommendation — the study
+proposed keeping the refusal and publishing the boundary, on the argument
+that `bspline-d1 + EK` already covers the fat-wire niche and that razor's
+value is being a *different* discretization. The decision goes the other way,
+and the kill-test is why.
+
+**What the measurement said.** NEC-5 has no `EK` card, which is consistent
+with two opposite worlds: reduced-kernel-only, or extended everywhere. The
+study settled it from printed output alone, isolating the kernel with
+`BSplineSolver(degree=1)` run reduced against EK on an otherwise identical
+setup and driving Δ/a from 10 down through 0.5 along two independent paths.
+The binary sits on the **EK side of the kernel gap at every rung of both
+ladders** — α → 1.09 / 1.02, within 4–9 % of the EK row across a 43–113 Ω
+gap — and prints no warning or clamp anywhere, which a reduced-kernel code
+returning `113.653 + 3.752j` for a fat dipole would have every reason to do.
+The control that removes quadrature as the explanation is razor itself:
+`nec5_quadrature` is the reduced kernel running the binary's own identified
+quadrature idiom (momwire#316), and at Δ/a = 0.5 it reads **32.3 Ω** from the
+binary where the EK row reads 4.3 Ω.
+
+So the refusal's prose — *"RazorSolver is reduced-kernel only: NEC-5's
+formulation is the comparison target, and its expansion is tested on the wire
+axis"* — was **half right, and its own reasoning argued for EK.** The
+expansion is tested on the axis; the SOURCE it is tested against is a tube.
+Three of the study's findings collapse into that one fact: razor's 43×
+offset-constancy failure on fat wire, its 4.86 Ω limit gap there, and its
+inability to open Ward Harriman's flagship deck (which carries an `EK` card)
+were never three findings.
+
+**Why this rather than D1(b).** The study's argument for keeping the refusal
+was that EK razor would be "a near-duplicate of `bs1-ek`" and cost the
+cross-check. The measurement says otherwise on both halves. On the `fat`
+control the two rows are not near-duplicates — `razor-EK-n5q` extrapolates
+0.047 Ω from the binary and `bs1-ek` 0.405 Ω, at the same rungs — because the
+two discretizations remain as different as they ever were; the kernel was
+never the thing that made them independent. And the cross-check survives
+intact, in a sharper form: the two formulations can now be asked whether they
+report the SAME kernel perturbation, which is the units-4/5
+difference-of-differences and is gated at 0.25 Ω.
+
+**The kill-test numbers, on the study's uniform `fat` control** (ten colinear
+25 mm sections, 14.2 MHz, matched feed at NEC-5's knot, ladder gated to
+N ≤ 200 so the fat end stays above the Δ/a ≈ 2 floor of momwire#248):
+
+| row | offset from NEC-5, N = 20 → 200 | dR spread | dX spread | Richardson limit gap |
+|---|---|---|---|---|
+| razor reduced, n5q | +0.02+0.06j → +0.58+0.54j Ω | 0.555 | 0.475 | **4.863 Ω** |
+| **razor EK, n5q** | +0.005+0.022j → +0.005+0.011j Ω | **0.012** | **0.021** | **0.047 Ω** |
+| `bs1-ek` (same rungs) | — | 1.53 | 5.03 | 0.405 Ω |
+
+against the `nec5_quadrature` sharp-lane constancy bar of **0.05 Ω** (§6.2).
+On Ward's actual 10-step taper the same lane holds the bar in dR (0.020) and
+runs 1.6× over it in dX (0.078) — the eligibility rule's own documented
+conservatism at a radius step, where momwire extends only coaxial
+EQUAL-radius pairs and NEC still extends some cross-arm pairs (`IND = 2`,
+#249 §4.3, O(h) in the refinement limit). The uniform control has no step and
+is therefore the clean measurement of the kernel.
+
+**What the unit did NOT have to build, which is the pilot's claim again.**
+The eligibility rule is `_bspline_kernels._ek_axis_groups`, unchanged and
+un-forked — the shared layer's fourth consumer. The mirror policy is the
+shared layer's too: over a ground, eligibility is ONE joint scan of the real
+segments stacked on the mirrored ones, so the ground supplies mirrored
+GEOMETRY and never the kernel's opinion, and ground CONTACT — whose grounded
+tent has its own image for a lower wing — needed no line at all. What is new
+is one closed form (`_kernel_moments._static_axis_moments_ek`: the extended
+kernel's k → 0 limit `1/R − a²/(2R³) + 3a⁴/(4R⁵)` integrated over a segment,
+with the two 1/R terms collected as `ρ² − a²` so that the exact cancellation
+at ρ = a is exact in IEEE rather than catastrophic) plus the mask threaded
+through `_seg_moments_prepare`'s chunk. The EK statics are as k-independent
+as the reduced ones, so the prepare/replay split is unchanged in shape.
+
+**Two axes that are orthogonal, said once.** The QUADRATURE rule
+(`nec5_quadrature`) and the KERNEL (`extended_kernel`) are independent axes
+and all four combinations are served. The lane decides where the testing path
+is sampled; the kernel decides what is sampled there. The fat-wire twin is
+both of NEC-5's identifications at once.
+
+**Gates.** `tests/test_razor_extended_kernel.py` against
+`tests/golden_razor_taper_nec5.py` (captured by
+`scripts/capture_razor_taper_nec5_lane.py`): the fat twin bar above, its
+negative control on the reduced row, thin-wire kernel agreement
+(|EK − reduced| ≤ 0.0014 Ω where the twin's own residual is 0.037), the
+cross-formulation difference-of-differences at 0.25 Ω, eligibility and mirror
+policy, every capability × both lanes with the kernel on, and the swept
+prepare/replay split. Gate (b) of §6 — EK off is structurally absent — is
+held by a monkeypatch-counter on razor's five EK entry points, with 84
+shadow arrays (21 configurations × Z matrix, impedance, coefficients, a
+three-point sweep) measured bit-for-bit identical to the branch point.
+
+**What this leaves open.** The taper study's other units are untouched:
+the standing taper golden ladder for the *other* rows (its unit 1), the
+`EX` segment-centre/knot translation rule (unit 2), `GC` in the nec2 dialect
+(unit 4) and the `sg-ek` divergence refusal (unit 5). The razor doc's
+requalification (its unit 3) is subsumed here rather than deferred — the
+claim it wanted requalified is now *true* on fat wire rather than merely
+bounded — but the routing half of D1(c) ("`--basis razor` on a deck with an
+`EK` card names `bspline-d1` instead") is moot: razor opens that deck now.
+
 ---
 
 ## 7. What this subsumes, and what it does not

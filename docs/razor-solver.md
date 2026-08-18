@@ -211,7 +211,7 @@ twin lane on `LD` cards (`tests/golden_razor_loading_nec5.py`, captured by
 ## Scope
 
 Free space and all three grounds — PEC, reflection-coefficient and
-Sommerfeld — reduced kernel, one polyline per wire; the remaining gaps
+Sommerfeld — either kernel, one polyline per wire; the remaining gaps
 deliberate, not initial-version:
 
 - **Both finite grounds are served** for wires standing CLEAR of the plane
@@ -223,20 +223,136 @@ deliberate, not initial-version:
   the coefficient is C₂ rather than the Fresnel pair, and the argument is
   unchanged: no weighting of the image block repairs a wrong basis
   function.
-- **The extended kernel is out of scope.** NEC-5's formulation tests the
-  expansion on the wire axis with the reduced kernel; extending it would
-  again be answering a different question than the one this solver was
-  built for.
+- **The extended kernel is served** (momwire#436) — `extended_kernel=True`,
+  the house kwarg. It used to be refused, on the claim that "NEC-5's
+  formulation is the comparison target, and its expansion is tested on the
+  wire axis"; the 2026-08-18 kernel identification showed that claim was
+  half right and the half it got wrong was the kernel. See "The extended
+  kernel" below.
 - **No C++ accelerator.** The formulation-comparison role this solver plays
   needs correctness and a checkable derivation far more than it needs
   throughput; every sibling solver's accelerator work also had to survive
   bit-exact regression tests against a pure-numpy reference, which this
   class does not yet have to pay for.
 
-`RazorSolver` refuses `degree`, `junctions`, `junction_ports`,
-`extended_kernel`, `node_gaps` and either finite ground on a deck that
-touches the plane, at construction with a message explaining why, rather
-than silently mismodelling — a wrong answer here is worse than no answer.
+`RazorSolver` refuses `degree`, `junctions`, `junction_ports`, `node_gaps`
+and either finite ground on a deck that touches the plane, at construction
+with a message explaining why, rather than silently mismodelling — a wrong
+answer here is worse than no answer.
+
+## The extended kernel (momwire#436)
+
+`extended_kernel=True` swaps NEC's EXTENDED (tubular) kernel in for the
+reduced one on the eligible pairs. The default is `False`, and an EK-off
+solve is bit-for-bit what this class computed before the kernel existed, on
+every lane it serves.
+
+### Why the refusal fell
+
+The refusal this replaces read: *"RazorSolver is reduced-kernel only: NEC-5's
+formulation is the comparison target, and its expansion is tested on the wire
+axis."* The 2026-08-18 taper study measured that premise instead of assuming
+it, and found it **half right**. NEC-5 has no `EK` card, which is consistent
+with two opposite worlds — reduced-only, or extended everywhere. Driving
+Δ/a from 10 down through 0.5 along two independent paths (refine N at fixed
+radius; fatten the radius at fixed N) and isolating the kernel with
+`BSplineSolver(degree=1)` run reduced against EK on an otherwise identical
+setup, the binary sits on the **EK side of the kernel gap at every rung of
+both ladders**: within 4–9 % of the EK row across a 43–113 Ω gap, and it
+prints no warning or clamp anywhere, which a reduced-kernel code returning
+`113.653 + 3.752j` for a fat dipole would have every reason to do.
+
+The control that removes quadrature as the explanation is *this class*:
+`nec5_quadrature` is the reduced kernel running NEC-5's own identified
+quadrature idiom, and at Δ/a = 0.5 it reads 32.3 Ω from the binary where the
+EK row reads 4.3 Ω. Basis, testing and quadrature held fixed, the rows still
+part company; only the kernel is left. So the expansion *is* tested on the
+axis, exactly as the refusal said — but the source it is tested against is a
+tube, and the refusal's own reasoning therefore argued for EK rather than
+against it.
+
+### The honest new statement
+
+**Which kernel makes razor the twin depends on the wire, and the two claims
+partition the domain rather than competing:**
+
+| domain | the twin lane | why |
+|---|---|---|
+| fat / tapered sections (a/λ ≳ 5e-4) | `extended_kernel=True` + `nec5_quadrature=True` | the reference's kernel, on the reference's basis, testing and quadrature |
+| thin wire (a/λ ≲ 5e-4) | either — the reduced one is the cheaper spelling | the two kernels agree there to ~1e-4 Ω; EK buys nothing and costs nothing |
+
+Measured on the study's `fat` control (a uniform 25 mm dipole at 14.2 MHz —
+the fattest section of Ward Harriman AE6TY's 20:1 taper — fed at NEC-5's own
+knot, ladder N = 20…200 so the fat end stays above the Δ/a ≈ 2 floor
+momwire#248 established):
+
+| row | offset from NEC-5, coarsest → finest | dR spread | dX spread | limit gap |
+|---|---|---|---|---|
+| reduced, `nec5_quadrature` | +0.02+0.06j → +0.58+0.54j Ω | 0.555 | 0.475 | **4.863 Ω** |
+| **EK, `nec5_quadrature`** | +0.005+0.022j → +0.005+0.011j Ω | **0.012** | **0.021** | **0.047 Ω** |
+
+against the `nec5_quadrature` offset-constancy bar of **0.05 Ω**. The
+reduced row failed that bar by 43× on this deck (the study's headline
+finding about razor); the EK row holds it with 4× margin, and its Richardson
+limit lands 0.047 Ω from the binary's where the reduced row's lands 4.86 Ω
+away. That is the twin claim, restored on the reference's home turf.
+
+On Ward's actual 10-step taper the same lane holds the bar to Δ/a ≳ 3
+(dR 0.012, dX 0.040 over N = 20…140) and runs 1.6× over it in dX at
+Δ/a = 2.1 (dR 0.020, dX 0.078). The residual drift there is not a defect but
+the eligibility rule's own documented conservatism: momwire extends only
+COAXIAL EQUAL-RADIUS pairs, so it declines to extend ACROSS each of the nine
+radius steps, where NEC still extends some cross-arm pairs (`IND = 2`,
+#249 §4.3 — O(h) in the refinement limit). The uniform `fat` control, which
+has no step, is the clean measurement of the kernel and it is the sharp one.
+
+### How it is spelled
+
+Eligibility is the **shared** rule — `_bspline_kernels._ek_axis_groups`,
+already used by `BSplineSolver` and `SinusoidalGalerkinSolver` — and is not
+re-derived here: two segments share a label iff they are COAXIAL and of EQUAL
+RADIUS on NEC's own thresholds, and a pair is extended iff its labels match.
+That is the B-spline trunk's PAIR rule rather than `SinusoidalSolver`'s
+per-END `IND1`/`IND2` gating, because this formulation is mixed-potential:
+its rows are path integrals over arbitrary (observer point, source segment)
+pairs, not per-end brackets. An observer's label is the label of the segment
+it lies ON — a testing path's two halves run along the two wing segments, so
+each half's quadrature points inherit that wing's label.
+
+The kernel enters the moments in the two halves the prepare/replay split
+already has, and the split stays honest because the EK statics are as
+k-independent as the reduced ones:
+
+* **static half** (`_kernel_moments._static_axis_moments_ek`, closed form).
+  The extended kernel's k → 0 limit is `1/R − a²/(2R³) + 3a⁴/(4R⁵)`, whose
+  segment moments `∫dτ` and `∫τ dτ` are elementary in the same axis frame
+  the reduced ones use. The two 1/R terms are collected as `ρ² − a²` — the
+  observer's squared perpendicular offset — rather than left separate,
+  because on an eligible pair the observer is on the source's own axis, so
+  `ρ = a` and those two terms cancel *exactly*; written apart the
+  cancellation would be catastrophic, written together it is 0.0 in IEEE.
+* **replay half** (Gauss-Legendre, `n_qp_source`). The eligible pairs'
+  smooth remainder becomes `[(e^{−jkR} − 1)·fac + extra]/(4πR)` with `fac`
+  and `extra = fac − fac_static` the shared `_ek_factor` / `_ek_reg_extra` —
+  spelled term for term as `_bspline_kernels` spells them, because the two
+  formulations must share ONE kernel for a cross-formulation comparison to
+  mean anything. Eligible entries are gathered by the chunk's mask rather
+  than computed everywhere and selected, so the transient scales with the
+  eligible pairs.
+
+### What it composes with
+
+| axis | how |
+|---|---|
+| the two quadrature lanes | **orthogonal, and both serve it.** `nec5_quadrature` picks where the testing path is sampled; `extended_kernel` picks which kernel is sampled there. Neither reads the other; all four combinations are live |
+| PEC / refl-coef / Sommerfeld grounds | the ground supplies mirrored GEOMETRY, never the kernel's opinion. Eligibility over a ground is ONE scan of the shared rule over the real segments stacked on the mirrored ones, so a vertical wire (image coaxial, equal radius) extends — NEC's `IND = 0` perpendicular-ground branch — and a horizontal one (image merely parallel) does not. Two separate scans would call every real/image pair coaxial, the trap `BSplineSolver._ek_axis_labels` records |
+| ground CONTACT | no code at all. The grounded tent's lower wing IS its own image, so the mirror policy above already decides it, and for the vertical contact that motivates the basis it decides "extend" |
+| per-wire radii | eligibility is equal-radius pairwise, so a taper extends within each section and not across a step. The pair's radius IS the kernel call's `a`, since eligibility requires the two to be equal |
+| wire loading | orthogonal, no interaction: `L` is a surface-impedance path integral outside the fold and never sees the kernel |
+
+No combination is refused: every capability this class serves is served with
+the extended kernel on, and gated with it on
+(`tests/test_razor_extended_kernel.py`).
 
 ## Per-wire radius (momwire#147)
 

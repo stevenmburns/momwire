@@ -32,10 +32,13 @@ bent at the knot on a kinked wire):
     A_n(r)  = ∫ Λ_n(l') g(r,r') t̂(r') dl'
     T2[m,n] = ∫ Λ_n'(l') [ g(c_after, r') − g(c_before, r') ] dl'
 
-with the reduced thin-wire kernel g = exp(−jkR)/(4πR),
-R = sqrt(|r−r'|² + a²), the source running along the segment *axis*, and
-Λ_n' the tent's ±1/h charge doublet. T1 carries the tangent dot product
-(both tangents turn at a bend); T2 does not.
+with the thin-wire kernel g = exp(−jkR)/(4πR), R = sqrt(|r−r'|² + a²), the
+source running along the segment *axis*, and Λ_n' the tent's ±1/h charge
+doublet. T1 carries the tangent dot product (both tangents turn at a bend);
+T2 does not. `g` is the REDUCED kernel by default and the EXTENDED one under
+`extended_kernel=True` — see "The extended kernel" below, and note that the
+kernel is an axis of its own: it does not change a single line of the
+formulation above.
 
 Excitation is NEC-5's EX-at-a-knot: the delta-gap voltage sits inside
 exactly one testing path, so it lands entirely in that knot's row and the
@@ -219,17 +222,105 @@ radius step against a 0.20 Ω twin-lane bar, so the licensed binary cannot
 separate them. `_seg_moments_prepare` records the numbers and the reason
 the source reading is taken.
 
+The extended kernel (momwire#436)
+--------------------------------
+`extended_kernel=True` swaps the reduced kernel for NEC's EXTENDED (tubular)
+one on the pairs that are eligible for it. The default is False and the
+reduced kernel, and an EK-off solve is bit-for-bit the answer this class
+gave before the kernel existed, on every lane.
+
+**Why the twin needs it.** The taper study of 2026-08-18 identified the
+NEC-5 binary as extended-kernel EVERYWHERE — it has no `EK` card because its
+formulation does not offer the choice — by driving Δ/a from 10 down through
+0.5 along two independent paths and watching which side of the kernel gap
+the binary's printed impedance sits on (α → 1.09 / 1.02, the binary within
+4–9 % of the EK row across a 43–113 Ω gap). The control that removes
+quadrature as the explanation is this class: `nec5_quadrature` running the
+REDUCED kernel — NEC-5's own testing, basis and quadrature idiom — sits
+32.3 Ω from the binary at Δ/a = 0.5 where the EK row sits 4.3 Ω away. So the
+older refusal here ("NEC-5's formulation is the comparison target, and its
+expansion is tested on the wire axis") had the basis, the testing and the
+quadrature right and the KERNEL wrong: the expansion is indeed tested on the
+axis, but the source it is tested against is a tube. The measurement
+overturned the premise and the refusal fell with it.
+
+**What it buys, measured** (the study's `fat` control — a uniform 25 mm
+dipole at 14.2 MHz, the fattest section of Ward Harriman's 20:1 taper, fed
+at NEC-5's own knot; the ladder gated to Δ/a ≥ 2 per momwire#248):
+
+    row                    offset from NEC-5, N = 20 … 200      limit gap
+    razor (reduced, n5q)   +0.02+0.06j … +0.58+0.54j Ω          4.863 Ω
+    razor (EK, n5q)        +0.005+0.022j … +0.005+0.011j Ω      0.047 Ω
+
+i.e. the EK row is a CONSTANT offset at the sharp `nec5_quadrature` bar
+(dR spread 0.012 Ω, dX 0.021 Ω against 0.05 Ω) on the very deck where the
+reduced row failed that bar by 43×. **This is the twin claim, restored on
+fat wire.** On THIN wire the two kernels agree and the reduced row remains
+the twin it always was; the two statements do not compete, they partition
+the domain by a/λ.
+
+**The eligibility rule is the shared one and is not re-derived here.**
+`_bspline_kernels._ek_axis_groups` labels two segments alike iff they are
+COAXIAL and of EQUAL RADIUS, on NEC's own thresholds, and a PAIR is extended
+iff its two labels match. That is the B-spline trunk's rule rather than
+`SinusoidalSolver`'s per-END IND1/IND2 gating, and the reason is that this
+formulation is mixed-potential: its rows are path integrals over arbitrary
+(observer point, source segment) pairs, not per-end brackets, so the pair
+rule is the precedent that fits. An observation point's label is the label
+of the segment it LIES ON — the testing path's two halves run along the two
+wing segments, so each half's quadrature points inherit that wing's label.
+
+**Five things it composes with, and how:**
+
+* **the two quadrature lanes.** The quadrature rule and the kernel are
+  ORTHOGONAL axes and both lanes serve the kernel. `nec5_quadrature` decides
+  where the testing path is sampled; `extended_kernel` decides what kernel is
+  sampled there. Neither reads the other: the lane only changes how many
+  observation points a path has (2 versus 2·`n_qp_path`), and the EK labels
+  are attached per point either way. The four combinations are all live, and
+  the one that is the FAT-WIRE TWIN is `extended_kernel=True,
+  nec5_quadrature=True` — both of NEC-5's identifications at once.
+* **the PEC and finite grounds.** The ground supplies mirrored GEOMETRY and
+  never the kernel's opinion. Eligibility over a ground is one scan of the
+  shared rule over the real segments STACKED ON the mirrored ones, so a
+  vertical wire — whose image is coaxial with it and of equal radius — is one
+  group and extends, which is NEC's own IND = 0 perpendicular-ground branch,
+  while a horizontal wire and its image are merely parallel and do not.
+  Scanning the two sets separately would declare every real/image pair
+  coaxial and is the trap `BSplineSolver._ek_axis_labels` records.
+* **ground CONTACT.** Nothing is written for it. The grounded tent's lower
+  wing IS its own image, so it is extended exactly when the joint scan says
+  the mirrored source is coaxial with the observer — which for the vertical
+  contact that motivates the basis it is. The contact case needed no branch
+  because the mirror policy already covers it.
+* **per-wire radii.** EK eligibility is EQUAL-RADIUS pairwise, so the shared
+  rule handles a taper by refusing to extend ACROSS a radius step while
+  extending within each section. That is strictly more conservative than
+  NEC, which still extends some cross-arm pairs at an `IND = 2` step
+  (#249 §4.3, O(h) in the refinement limit) — and it is visible as the one
+  place the fat-wire constancy is not quite as sharp: on Ward's 10-step
+  taper the same EK twin lane holds the 0.05 Ω bar to Δ/a ≳ 3 and runs
+  1.6× over it (dX) at Δ/a = 2.1, against the uniform `fat` control's 0.021.
+  The pair's radius IS the kernel call's own `a`, because eligibility
+  requires the two to be equal.
+* **loading.** Orthogonal, with no interaction at all: `L` is the testing-
+  path integral of the conductor's surface impedance and lives outside the
+  fold, so it neither sees the kernel nor is seen by it.
+
 Scope
 -----
 Free space and all three grounds — PEC, reflection-coefficient and
-Sommerfeld — reduced kernel, one polyline per wire. The extended kernel is
-out of scope and is refused with a message rather than silently
-mismodelled, as are ground contact over a finite ground and the contacts
-that are not a wire end in the plane (an interior anchor touching down, an
-edge lying in the plane, a wire dipping below it). Only wire ENDS junction:
-a wire end touching another wire's interior is not a contact here. A wire
-with a single segment cannot take part in a junction (its two junction
-tents would overlap on one segment) and is refused.
+Sommerfeld — either kernel, one polyline per wire. Ground contact over a
+finite ground stays refused with a message rather than silently
+mismodelled, as do the contacts that are not a wire end in the plane (an
+interior anchor touching down, an edge lying in the plane, a wire dipping
+below it). Only wire ENDS junction: a wire end touching another wire's
+interior is not a contact here. A wire with a single segment cannot take
+part in a junction (its two junction tents would overlap on one segment)
+and is refused. The extended kernel adds no combination hole of its own:
+every capability this class serves — all three grounds, contact, junctions,
+loading, mixed radii, both quadrature lanes, swept solves — is served with
+it on, and each is gated with it on.
 """
 
 from dataclasses import dataclass
@@ -244,6 +335,14 @@ from . import (
     _wire_loading,
     _wire_spec,
 )
+from ._bspline_kernels import (
+    _EK,
+    _ek_axis_groups,
+    _ek_factor,
+    _ek_pair_mask,
+    _ek_radius,
+    _ek_reg_extra,
+)
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -253,7 +352,11 @@ from ._element_currents import _ElementCurrents
 # purpose), and momwire#425 moved the bodies to `_kernel_moments` without
 # moving that import. Migrating pulse's import line is a one-liner, on
 # pulse's own branch.
-from ._kernel_moments import _axis_frame, _static_axis_moments
+from ._kernel_moments import (
+    _axis_frame,
+    _static_axis_moments,
+    _static_axis_moments_ek,
+)
 from ._port_solution import PortSolution, _SweptPortSolutions
 from ._quadrature import leggauss
 
@@ -295,9 +398,6 @@ _OUT_OF_SCOPE = {
     "junction_ports": "junction ports are not supported: a junction basis is "
     "already a through-current unknown, and a source at a K>=3 junction has no "
     "unambiguous branch pair to drive",
-    "extended_kernel": "RazorSolver is reduced-kernel only: NEC-5's "
-    "formulation is the comparison target, and its expansion is tested on "
-    "the wire axis",
     "node_gaps": "node gaps are not supported yet — the delta-gap feed lands "
     "in a whole testing row here, so a gap is not a local basis edit",
 }
@@ -371,8 +471,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
     The NEC-5 formulation twin — see the module docstring for the physics.
-    Free space or a PEC ground, reduced kernel, one tent per interior knot
-    plus K−1 through-current tents wherever K wire ends meet.
+    Free space or any of the three grounds, either kernel, one tent per
+    interior knot plus K−1 through-current tents wherever K wire ends meet.
 
     wires: list of (M_w, 3) polyline arrays, M_w >= 2 anchor points per wire.
         A straight dipole is a single two-anchor wire; an inverted-V is one
@@ -396,6 +496,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `_seg_moments_prepare` for the convention's measurement against the
         binary (which cannot separate it from the observer convention the
         siblings use), and `tests/test_razor_mixed_radius.py` for the gates.
+        Under `extended_kernel` the same number is also the EK radius, since
+        eligibility requires the pair's two radii to be equal.
+    extended_kernel: use NEC's EXTENDED (tubular) kernel on the eligible
+        pairs instead of the reduced one (momwire#436). False — the default —
+        is the reduced kernel and is bit-for-bit what this class always
+        computed. True is the row the taper study's kernel identification
+        calls for on fat wire: the NEC-5 binary is extended-kernel
+        everywhere, so `extended_kernel=True, nec5_quadrature=True` is the
+        twin on fat and tapered sections (measured: a constant offset to
+        0.012/0.021 Ω down the study's `fat` ladder against a 0.05 Ω bar,
+        and a continuum limit 0.047 Ω from the binary's, where the reduced
+        row sits 4.86 Ω away), while the reduced kernel stays the twin on
+        thin wire, where the two kernels agree to 1e-4 Ω and the extra
+        arithmetic buys nothing. Eligibility is the shared coaxial-and-
+        equal-radius pair rule (`_bspline_kernels._ek_axis_groups`) — see the
+        module docstring for how it composes with the grounds, ground
+        contact, per-wire radii, loading and the two quadrature lanes, all of
+        which are served with it on. The house kwarg name and semantics,
+        identical to `BSplineSolver`'s and `SinusoidalSolver`'s, so a deck's
+        `EK` card reaches this class through the same `build_solver` line
+        that reaches them.
     ground_z: height of the ground plane, or None for free space. With
         `ground_eps` unset the plane is a perfect conductor. Over PEC this
         solver is gated against the licensed NEC-5 binary's own `GN 1`
@@ -491,6 +612,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         to the whole-path trapezoid on the uniform meshes the rule was
         identified on. Demonstration mode for the census rationale, not an
         NEC-5 substitute (the licensed binary stays the oracle).
+        **Orthogonal to `extended_kernel`**: this chooses where the testing
+        path is sampled, that chooses which kernel is sampled there, and
+        neither reads the other. All four combinations are served; the
+        fat-wire twin is both of them on at once, which is the two
+        independent NEC-5 identifications (momwire#316's quadrature idiom and
+        momwire#436's kernel) applied together.
     n_qp_source: Gauss-Legendre order per source segment for the smooth
         remainder (exp(−jkR)−1)/(4πR); the static 1/(4πR) part is analytic.
     n_qp_sommerfeld: Gauss-Legendre order per source segment for the
@@ -517,16 +644,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # (momwire#427 — distributed loss and insulation through the house
     # kwargs, and lumped loads at knots, which the siblings serve as
     # deck-level port algebra instead), plus PER-WIRE RADII (momwire#147,
-    # gated against the binary's own mixed-radius `GW` decks). No EK /
-    # junction_ports / node_gaps / enrichment: the rest of the row is
-    # refused, reusing `_OUT_OF_SCOPE`'s prose (built at __init__ from
-    # unsupported kwargs) and `_CONTACT_OVER_FINITE_REFUSAL` for the one
-    # geometry the finite grounds refuse (a combination of named arguments
-    # rather than a stray kwarg).
+    # gated against the binary's own mixed-radius `GW` decks), plus the
+    # EXTENDED KERNEL (momwire#436 — the taper study identified the
+    # reference as extended-kernel everywhere, so the twin needs it on fat
+    # wire; module docstring, "The extended kernel"). No junction_ports /
+    # node_gaps / enrichment: the rest of the row is refused, reusing
+    # `_OUT_OF_SCOPE`'s prose (built at __init__ from unsupported kwargs)
+    # and `_CONTACT_OVER_FINITE_REFUSAL` for the one geometry the finite
+    # grounds refuse (a combination of named arguments rather than a stray
+    # kwarg).
     capabilities = Capabilities(
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
-        extended_kernel=False,
+        extended_kernel=True,
         junction_ports=False,
         node_gaps=False,
         per_wire_radius=True,
@@ -546,7 +676,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "contact+sommerfeld": _CONTACT_OVER_FINITE_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "node_gaps": _OUT_OF_SCOPE["node_gaps"],
-            "extended_kernel": _OUT_OF_SCOPE["extended_kernel"],
         },
     )
 
@@ -557,6 +686,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_per_edge_per_wire=None,
         nsegs=101,
         wire_radius=0.0005,
+        extended_kernel=False,
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
@@ -660,6 +790,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._radius_per_wire, self._uniform_radius = _wire_spec.normalize_wire_radius(
             wire_radius, n_w
         )
+        # The extended kernel (momwire#436). Off is the default and is
+        # structurally absent, not skipped: `_ek_labels` is never called, no
+        # EK spec is built, and `_seg_moments_prepare` takes `ek=None` — the
+        # EK-off answer is bit-for-bit the answer this class gave before the
+        # kernel existed, on every lane. The eligibility scan is O(N·G) and
+        # is cached per geometry object and per mirror flag, exactly as
+        # `BSplineSolver._ek_axis_labels` caches it.
+        self.extended_kernel = bool(extended_kernel)
+        self._cached_ek_groups = None
 
         if n_per_edge_per_wire is None:
             n_per_edge_per_wire = [None] * n_w
@@ -1160,8 +1299,107 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return self._uniform_radius
         return self._seg_radius(geom)
 
-    def _seg_moments_prepare(self, obs, geom, a):
-        """K-independent ingredients of every segment's reduced-kernel moments.
+    def _ek_labels(self, geom, mirror=False):
+        """Per-segment EK eligibility labels, as ``(source, mirrored source)``.
+
+        The shared rule and nothing else: `_ek_axis_groups` labels two
+        segments alike iff they are COAXIAL and of EQUAL RADIUS, on NEC's own
+        thresholds. This solver does not re-derive it and does not soften it
+        — in particular it does NOT reuse `SinusoidalSolver`'s per-END
+        IND1/IND2 gating, which is the sinusoidal family's spelling of the
+        same NEC rule against per-segment neighbour tables. Razor is
+        mixed-potential like the B-spline trunk, its rows are path integrals
+        over arbitrary (observer point, source segment) pairs rather than
+        per-end brackets, so the PAIR rule is the precedent that fits
+        (`_bspline_kernels`, "NEC's per-END gating ... is deliberately NOT
+        reused").
+
+        **The mirror policy.** Over a ground the eligibility scan runs ONCE
+        over the real segments stacked on the mirrored ones, and the two
+        halves of the answer are handed back separately. That is the whole
+        of the ground's involvement: the ground object supplies mirrored
+        GEOMETRY (`_image_sources`) and the shared rule then reads it exactly
+        as it reads any other geometry — the ground has no opinion about the
+        kernel, and no ground branch appears in the EK code at all. Scanning
+        the two sets JOINTLY rather than separately is what makes the answer
+        right, and `BSplineSolver._ek_axis_labels` records the same trap: two
+        independent scans would label a wire and its image 0 and 0 and
+        declare every real/image pair coaxial, when a HORIZONTAL wire and its
+        image are merely parallel, offset by twice the height. Jointly, a
+        vertical wire mirrors onto its own axis and IS one group — NEC's
+        IND = 0 perpendicular-ground branch, and the case that matters, since
+        it is the grounded-contact tent's own lower wing.
+
+        Cached per geometry OBJECT (identity) and per mirror flag, so a
+        grounded swept solve pays the O(N·G) scan once rather than per k.
+        """
+        cached = self._cached_ek_groups
+        if cached is None or cached[0] is not geom:
+            cached = (geom, {})
+            self._cached_ek_groups = cached
+        hit = cached[1].get(mirror)
+        if hit is not None:
+            return hit
+
+        seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
+        seg_l = seg_p0
+        seg_r = seg_p0 + seg_h[:, None] * seg_t
+        seg_a = self._seg_radius(geom)
+        if mirror:
+            img = self._image_sources(geom)
+            img_l = img["seg_p0"]
+            img_r = img["seg_p0"] + seg_h[:, None] * img["seg_t"]
+            n = seg_l.shape[0]
+            joint = _ek_axis_groups(
+                np.vstack([seg_l, img_l]),
+                np.vstack([seg_r, img_r]),
+                np.vstack([seg_t, img["seg_t"]]),
+                np.concatenate([seg_a, seg_a]),
+            )
+            hit = (joint[:n], joint[n:])
+        else:
+            labels = _ek_axis_groups(seg_l, seg_r, seg_t, seg_a)
+            hit = (labels, labels)
+        cached[1][mirror] = hit
+        return hit
+
+    def _ek_obs_labels_path(self, geom, labels):
+        """The EK label of every TESTING-PATH quadrature point, ``(n_basis·n_path,)``.
+
+        A path point is an observer, and the pair rule wants the label of the
+        segment that observer lies ON. Path P_m is two straight halves, the
+        first running along wing A's segment and the second along wing B's
+        (`_testing_paths`), so each half's points inherit that wing segment's
+        label — which is also the honest reading of what the razor row is:
+        the field of the source segment tested along the OBSERVER wire's
+        axis, and "same axis, same radius" is a statement about those two
+        wires.
+
+        Shaped and flattened exactly as `_assemble_Z_prepare` flattens
+        `pts[lo:hi]`, so a row chunk's labels are that chunk's slice of this
+        array. The two quadrature lanes need no branch: `n_path` is
+        2·`n_qp_path` on the Gauss-Legendre path and 2 under
+        `nec5_quadrature`, and either way the first half of the columns is
+        wing A and the second is wing B.
+        """
+        s_a, s_b = geom["wing_seg"][:, 0], geom["wing_seg"][:, 1]
+        half = self._path_nodes_per_wing()
+        return np.concatenate(
+            [
+                np.repeat(labels[s_a][:, None], half, axis=1),
+                np.repeat(labels[s_b][:, None], half, axis=1),
+            ],
+            axis=1,
+        ).reshape(-1)
+
+    def _path_nodes_per_wing(self):
+        """Quadrature nodes per testing-path HALF — the one place the two
+        lanes differ, and the only thing the EK observer labelling needs to
+        know about them."""
+        return 1 if self.nec5_quadrature else self.n_qp_path
+
+    def _seg_moments_prepare(self, obs, geom, a, *, ek=None):
+        """K-independent ingredients of every segment's kernel moments.
 
         The closed-form static moments ``(m0s, m1s, see
         :func:`_static_axis_moments`)`` and the source-to-observer distance
@@ -1198,7 +1436,21 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         immaterial for THIS formulation rather than as wrong. See
         `docs/design/solver-architecture.md` §6.9.
 
-        Returns a list of ``(lo, hi, R, m0s, m1s)`` chunks.
+        `ek` is the `_EK` spec of the extended kernel (momwire#436) or None,
+        which is the default and the reduced kernel. Its `group_i` labels
+        THIS call's observers and its `group_j` labels `geom`'s source
+        segments; `_ek_pair_mask` turns them into the (observer, segment)
+        eligibility mask, and every eligible entry takes
+        :func:`_static_axis_moments_ek` in place of
+        :func:`_static_axis_moments`. **The EK statics are as k-independent
+        as the reduced ones** — the extended kernel's k → 0 limit is a
+        function of R and a alone — so they belong on this side of the
+        prepare/replay boundary exactly as the reduced ones do, and the mask
+        rides along in the chunk so the replay half can weight the smooth
+        remainder by the same pairs without re-deriving eligibility per k.
+
+        Returns a list of ``(lo, hi, R, m0s, m1s, ekc)`` chunks, `ekc` being
+        None off the extended kernel and ``(mask, a_ek)`` on it.
         """
         seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
         n_seg = seg_h.size
@@ -1212,9 +1464,26 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             hi = min(lo + step, n_obs)
             u_r, rho2 = _axis_frame(obs[lo:hi], seg_p0, seg_t, a)
             m0s, m1s = _static_axis_moments(u_r, rho2, seg_h)
+            ekc = None
+            if ek is not None:
+                # The shared pair rule, restricted to this chunk's observer
+                # rows. `a_ek` is the pair's common radius: eligibility
+                # REQUIRES equal radii, so the source column `a` already is
+                # it, which is what `_EK(a=None, ...)` means here exactly as
+                # it means in `BSplineSolver._ek_spec`.
+                mask = _ek_pair_mask(
+                    _EK(a=ek.a, group_i=ek.group_i[lo:hi], group_j=ek.group_j),
+                    hi - lo,
+                    n_seg,
+                )
+                a_ek = _ek_radius(ek, a)
+                m0e, m1e = _static_axis_moments_ek(u_r, rho2, seg_h, a_ek)
+                m0s = np.where(mask, m0e, m0s)
+                m1s = np.where(mask, m1e, m1s)
+                ekc = (mask, a_ek)
             u = tau[None, :, :] - u_r[:, :, None]
             R = np.sqrt(u * u + rho2[:, :, None])
-            chunks.append((lo, hi, R, m0s, m1s))
+            chunks.append((lo, hi, R, m0s, m1s, ekc))
         return chunks
 
     def _seg_moments_from_prepared(self, chunks, geom, k, n_obs, *, need_m1=True):
@@ -1224,6 +1493,22 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         everything k-independent (R and the static moments) already sits in
         `chunks`. Returns the same ``(M0, M1)`` shape ``(n_obs, n_seg)``
         that :meth:`_seg_moments` did.
+
+        Under the extended kernel (momwire#436) the eligible pairs' remainder
+        is the same object with NEC Eq 89's coaxial factor in it,
+
+            [ (e^{−jkR} − 1)·fac + extra ] / (4πR)
+
+        with `fac = _ek_factor(R, a, k)` and `extra = fac − fac_static =
+        _ek_reg_extra(R, a, k)` — the k → 0 part of the factor having already
+        been taken analytically by :func:`_static_axis_moments_ek` on the
+        other side of the prepare boundary. It is spelled exactly as
+        `_bspline_kernels` spells it, term for term, because the two
+        formulations must share one kernel for a cross-formulation
+        difference-of-columns to mean anything. The eligible entries are
+        gathered by the chunk's own mask rather than computed everywhere and
+        selected, so an EK fill's transient stays proportional to the
+        eligible pairs and a mostly-ineligible model costs almost nothing.
         """
         seg_h = geom["seg_h"]
         n_seg = seg_h.size
@@ -1235,16 +1520,43 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         M0 = np.empty((n_obs, n_seg), dtype=np.complex128)
         M1 = np.empty((n_obs, n_seg), dtype=np.complex128) if need_m1 else None
         inv4pi = 1.0 / (4.0 * np.pi)
-        for lo, hi, R, m0s, m1s in chunks:
+        for lo, hi, R, m0s, m1s, ekc in chunks:
             self._checkpoint()
-            rem = (np.exp(-1j * k * R) - 1.0) / R
+            if ekc is None:
+                rem = (np.exp(-1j * k * R) - 1.0) / R
+            else:
+                mask, a_ek = ekc
+                num = np.exp(-1j * k * R) - 1.0
+                scalar_a = np.ndim(a_ek) == 0
+                if mask.all():
+                    # The straight-uniform-wire case, and the one the fat
+                    # twin lane runs: every pair eligible, so the gather
+                    # below would copy the whole array to reach all of it.
+                    # Elementwise-identical to the gathered branch — same
+                    # operands in the same order, only the broadcast shape
+                    # of `a` differs.
+                    a_m = a_ek if scalar_a else np.asarray(a_ek)[None, :, None]
+                    num = num * _ek_factor(R, a_m, k) + _ek_reg_extra(R, a_m, k)
+                else:
+                    Rm = R[mask]
+                    a_m = (
+                        a_ek
+                        if scalar_a
+                        else np.broadcast_to(np.asarray(a_ek)[None, :], mask.shape)[
+                            mask
+                        ][:, None]
+                    )
+                    num[mask] = num[mask] * _ek_factor(Rm, a_m, k) + _ek_reg_extra(
+                        Rm, a_m, k
+                    )
+                rem = num / R
             M0[lo:hi] = (m0s + np.einsum("psq,sq->ps", rem, wq)) * inv4pi
             if need_m1:
                 M1[lo:hi] = (m1s + np.einsum("psq,sq->ps", rem, tau * wq)) * inv4pi
         return M0, M1
 
-    def _seg_moments(self, obs, geom, k, *, need_m1=True):
-        """Reduced-kernel moments of every segment at every observation point.
+    def _seg_moments(self, obs, geom, k, *, need_m1=True, ek=None):
+        """Kernel moments of every segment at every observation point.
 
         Returns ``(M0, M1)`` of shape ``(n_obs, n_seg)`` with
 
@@ -1262,8 +1574,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         swept assembly (`compute_impedance_swept`, `compute_y_matrix_swept`)
         calls those two halves directly so the prepare step runs once per
         sweep instead of once per k.
+
+        `ek` is passed straight through. It is not defaulted from
+        `self.extended_kernel`, because eligibility is a property of the
+        (observer, source) PAIR and `obs` here is an arbitrary point set this
+        method cannot label — the fill knows which segment each of its
+        observers lies on (`_ek_obs_labels_path`) and supplies the spec.
         """
-        chunks = self._seg_moments_prepare(obs, geom, self._kernel_radius(geom))
+        chunks = self._seg_moments_prepare(obs, geom, self._kernel_radius(geom), ek=ek)
         return self._seg_moments_from_prepared(
             chunks, geom, k, obs.shape[0], need_m1=need_m1
         )
@@ -1690,15 +2008,34 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         q_a = wing_sigma[:, 0] * np.where(wing_rise[:, 0], 1.0, -1.0) / h_a
         q_b = wing_sigma[:, 1] * np.where(wing_rise[:, 1], 1.0, -1.0) / h_b
 
-        # The reduced kernel's `a`, per SOURCE segment (or the scalar, when
-        # the model is uniform). Read once off the real geometry and reused
-        # for the mirrored source set: an image segment carries its own
-        # segment's radius, the same way it carries its length.
+        # The kernel's `a`, per SOURCE segment (or the scalar, when the model
+        # is uniform). Read once off the real geometry and reused for the
+        # mirrored source set: an image segment carries its own segment's
+        # radius, the same way it carries its length. Under the extended
+        # kernel it is also the EK radius, because eligibility requires equal
+        # radii and the pair's common radius is therefore the source column's
+        # (`_EK(a=None, ...)`).
         a_src = self._kernel_radius(geom)
 
+        # The extended kernel's eligibility labels (momwire#436), or None
+        # when it is off — in which case nothing below builds a spec and no
+        # EK code is entered at all. `src_lab` labels the REAL source
+        # segments and `img_lab` the mirrored ones; the observers are real in
+        # both blocks, so the observer labels are read off `src_lab` either
+        # way and only the source half of the spec moves. That is the mirror
+        # policy in one line: the ground supplies mirrored geometry, the
+        # shared rule reads it, and the kernel has no ground branch.
+        src_lab = img_lab = None
+        if self.extended_kernel:
+            src_lab, img_lab = self._ek_labels(geom, mirror=self.ground_z is not None)
+
         # --- scalar potential's observation set: segment centroids.
+        # Centroid i lies on segment i, so the centroid observers' labels ARE
+        # the segment labels.
         cent = geom["seg_p0"] + 0.5 * seg_h[:, None] * seg_t
-        t2_chunks = self._seg_moments_prepare(cent, geom, a_src)
+        ek_cent = None if src_lab is None else _EK(None, src_lab, src_lab)
+        ek_cent_img = None if img_lab is None else _EK(None, src_lab, img_lab)
+        t2_chunks = self._seg_moments_prepare(cent, geom, a_src, ek=ek_cent)
 
         # --- vector potential's observation set: the outer path, row-chunked.
         pts, tans, wts = self._testing_paths(geom)
@@ -1724,21 +2061,32 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         weighted = img_src is not None and img_src["weighted"]
         budget = _WEIGHTED_CHUNK_ELEMS if weighted else _CHUNK_ELEMS
         rows = max(1, budget // max(1, n_path * n_basis))
+        # Each path point's EK label is the label of the wing segment it lies
+        # on, in the same flattening the observers themselves take.
+        path_lab = None if src_lab is None else self._ek_obs_labels_path(geom, src_lab)
         t1_row_chunks = []
         t1_row_chunks_img = [] if img_src is not None else None
         for lo in range(0, n_basis, rows):
             hi = min(lo + rows, n_basis)
             obs = pts[lo:hi].reshape(-1, 3)
+            o_lab = None if path_lab is None else path_lab[lo * n_path : hi * n_path]
+            ek_path = None if o_lab is None else _EK(None, o_lab, src_lab)
             t1_row_chunks.append(
-                (lo, hi, obs.shape[0], self._seg_moments_prepare(obs, geom, a_src))
+                (
+                    lo,
+                    hi,
+                    obs.shape[0],
+                    self._seg_moments_prepare(obs, geom, a_src, ek=ek_path),
+                )
             )
             if img_src is not None:
+                ek_path_img = None if img_lab is None else _EK(None, o_lab, img_lab)
                 t1_row_chunks_img.append(
                     (
                         lo,
                         hi,
                         obs.shape[0],
-                        self._seg_moments_prepare(obs, img_src, a_src),
+                        self._seg_moments_prepare(obs, img_src, a_src, ek=ek_path_img),
                     )
                 )
 
@@ -1782,7 +2130,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if img_src is not None:
             mirror = img_src["mirror_tangents"]
             prepared["image"] = {
-                "t2_chunks": self._seg_moments_prepare(cent, img_src, a_src),
+                "t2_chunks": self._seg_moments_prepare(
+                    cent, img_src, a_src, ek=ek_cent_img
+                ),
                 # The image sign, in razor's own (3, n_basis) idiom: M·t on
                 # the SOURCE tangent table only. Nothing N² is formed, and
                 # nothing on the observer side moves.

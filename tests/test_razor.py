@@ -267,7 +267,10 @@ def test_distinct_endpoints_are_fine():
         # redundant with the mesh or disagrees with it.
         {"junctions": [[(0, "end"), (1, "start")]]},
         {"junction_ports": [(0, 1.0)]},
-        {"extended_kernel": True},
+        # `extended_kernel` is NOT here since momwire#436: the taper study
+        # identified the NEC-5 binary as extended-kernel everywhere, so the
+        # kernel the old refusal declined is the reference's own. See
+        # tests/test_razor_extended_kernel.py.
     ],
 )
 def test_out_of_scope_kwargs_refused(kw):
