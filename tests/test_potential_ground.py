@@ -161,6 +161,69 @@ def test_the_weight_windows_never_answer_none():
     assert np.array_equal(w_Phi, np.ones_like(w_A))
 
 
+@pytest.mark.parametrize("ground", ["pec", "refl-coef", "sommerfeld"])
+def test_the_weight_windows_default_to_the_geometrys_own_segments(ground):
+    """`weight_windows()` is `weight_windows(observers=own, sources=own)`,
+    bit for bit — the unit-4 anti-drift pin.
+
+    Unit 4 (razor's refl-coef ground) generalised this producer the same
+    way unit 2 generalised `ImageGeometry`: the OPERATION is "Fresnel
+    weights between an observer set and a source set", and the B-spline
+    fill's square geometry-shaped call is now a DEFAULT over it rather
+    than the definition. Razor's observers are its testing-path quadrature
+    points and its segment centroids — neither is the source set, and its
+    `geom` carries none of the keys the default reads.
+
+    A default that merely *agreed* with the explicit spelling would be a
+    latent divergence: `array_equal` here, not `allclose`, is what keeps
+    the B-spline fill's every grounded answer unmoved by the
+    generalisation.
+    """
+    sim = _solver(ground)
+    geom, pg = _ground_for(sim)
+    n = geom["n_segs_total"]
+    own = pg.own_segments()
+    assert np.array_equal(own[0], 0.5 * (geom["seg_l"] + geom["seg_r"]))
+    assert own[1] is geom["tangents"]
+
+    for i0, i1 in ((0, n), (3, 9)):
+        a = pg.weight_windows()(i0, i1)
+        b = pg.weight_windows(observers=own, sources=own)(i0, i1)
+        c = pg.weight_windows(sources=own)(i0, i1)
+        for x, y, z in zip(a, b, c):
+            assert np.array_equal(x, y)
+            assert np.array_equal(x, z)
+
+
+def test_the_weight_windows_take_an_observer_set_that_is_not_the_sources():
+    """The operation itself: an arbitrary observer set, at a shape no
+    geometry axis has.
+
+    Razor's A-term observers are `(n_basis · n_path)` path quadrature
+    points against `n_segs` sources — a rectangular block whose row count
+    is unrelated to the source count — and each row carries the PATH's
+    tangent there, not a segment's. The result must be exactly the rows
+    the square call would give when those observers happen to BE the
+    segments, which is what makes the razor fill's PEC limit land on the
+    PEC image.
+    """
+    sim = _solver("refl-coef")
+    geom, pg = _ground_for(sim)
+    seg_c, tang = pg.own_segments()
+    n = geom["n_segs_total"]
+
+    # A deliberately odd observer set: three segment centres in reverse
+    # order, so it is neither a slice of the source axis nor its length.
+    picks = [n - 1, 0, n // 2]
+    obs = (seg_c[picks], tang[picks])
+    w_A, w_Phi = pg.weight_windows(observers=obs, sources=(seg_c, tang))(0, 3)
+    assert w_A.shape == (3, n)
+    ref_A, ref_Phi = pg.weight_windows()(0, n)
+    for got, ref in ((w_A, ref_A), (w_Phi, ref_Phi)):
+        for row, pick in enumerate(picks):
+            assert np.array_equal(got[row], ref[pick])
+
+
 def test_the_mirror_map_is_the_grounds():
     """`image_geometry` is the mirror map: two OPERATIONS, and the
     B-spline-shaped conveniences built on top of them.
