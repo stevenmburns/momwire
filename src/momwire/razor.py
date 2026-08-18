@@ -799,9 +799,9 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     def _feed_basis_indices(self, geom):
         """Global basis index of each feed's knot.
 
-        Each feed snaps to the knot of its wire — interior or junction —
-        whose arc length from that wire's first anchor is closest to the
-        requested value (None → the wire's midpoint).
+        Each feed snaps to the knot of its wire — interior, junction or
+        grounded end — whose arc length from that wire's first anchor is
+        closest to the requested value (None → the wire's midpoint).
         """
         idx = []
         for i, (w, arc, _v) in enumerate(self.feeds):
