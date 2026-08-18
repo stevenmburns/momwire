@@ -75,3 +75,43 @@ For the low-antenna case — a receiving loop on the grass, a Beverage, an NVIS
 dipole a tenth of a wavelength up — the cheap mirror isn't good enough, and there
 is no shortcut. Chapter 10 pays Sommerfeld's full price, and tells the story of
 making that price affordable.
+
+## And at zero height, it stops
+
+Follow that curve all the way down and it doesn't just get worse — it runs out
+of meaning. A reflection coefficient is a plane wave striking the interface at a
+definite angle. A wire end lying *in* the plane has no such angle: the contact
+node is its own mirror image, and there is no ray left to evaluate `Γ` on.
+
+So momwire **refuses** it. Ask for a ground-mounted vertical — the base at
+`z = 0` — with `ground_model="refl-coef"`, which is the default, and you get an
+error rather than a number:
+
+```python
+BSplineSolver(wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.35]])],
+              nsegs=21, wavelength=21.41, ground_z=0.0,
+              ground_eps=(13.0, 0.005))   # <- NotImplementedError
+```
+
+This is not momwire being fussy where other codes cope. Run the same deck
+through NEC-2 and its `GN 0` prints `175 − 779j Ω` over average soil and
+`155 − 1248j Ω` over poor — hundreds of ohms of reactance on an antenna whose
+answer is near `50 + 23j`. The model has no story at the plane in *any*
+implementation; momwire used to quietly return a number about 27 Ω off, and
+now it says so instead.
+
+The fix is one argument, and it is the argument the error names:
+
+```python
+solver = BSplineSolver(wires=[wire], nsegs=21, wavelength=21.41, wire_radius=0.005,
+                       degree=2, ground_z=0.0, ground_eps=(13.0, 0.005),
+                       ground_model="sommerfeld",      # <- exact at the plane
+                       feed_wire_index=0, feed_arclength=0.0)
+```
+
+Chapter 10's Sommerfeld solve is exact right down to the interface, and it is
+[gated against a reference engine there](https://github.com/stevenmburns/momwire/blob/main/tests/test_contact_nec5_lane.py):
+within a quarter of an ohm over sea water and very good ground, and inside a
+declared envelope of 1.5 Ω over average soil and 4 Ω over poor — a known,
+documented gap rather than a silent one. Raising the wire clear of the plane
+also works, of course: above 0.1 λ the cheap mirror is back in its element.

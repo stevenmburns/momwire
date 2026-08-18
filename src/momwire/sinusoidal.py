@@ -375,7 +375,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # ρ-weighted on the image side and not on the wire's, and the
         # residual is a point charge on the plane. It cannot be reweighted
         # in place for want of that same split, so it is subtracted whole —
-        # see `_contact_charge_kernel` (momwire#282).
+        # see `_contact_charge_kernel` (momwire#282). That subtraction now
+        # runs only under `ground_model="sommerfeld"`: momwire#282 stage 1
+        # refused contact under the reflection-coefficient ground, so the
+        # ρ-weighted branch of `_contact_charge_kernel` is reachable from
+        # this constructor no longer. The branch stays because the kernel is
+        # also the derivation's own statement of what the charge IS.
         if ground_eps is not None and ground_z is None:
             raise ValueError("ground_eps requires ground_z to be set")
         self.ground_eps = ground_eps

@@ -421,6 +421,28 @@ GN <type> with a <n>-wire radial ground screen is not supported by this engine
 GN type <type> is not supported by this engine
 ```
 
+**`GN 0` decks whose geometry touches the plane are refused, by design.** A
+`GN 0` ground plus a `GW` with an endpoint at `z = 0` — the ground-mounted
+vertical, the most-imported deck of its class — builds a solver that raises
+
+```text
+wire <i> start lies in the ground plane: ground CONTACT under
+ground_model='refl-coef' is refused (momwire#282 ...)
+```
+
+The reflection-coefficient model is a plane-wave construction evaluated on a
+specular ray, and a contact node is its own mirror image, so at zero clearance
+there is no ray to evaluate it on. This is not a momwire limitation to route
+around: NEC-2 itself prints `175 − 779j Ω` on such a deck over average soil
+and `155 − 1248j Ω` over poor, against `39 + 22j Ω` from the same binary over
+`GN 1`. momwire served the same class of deck until momwire#282 stage 1 and
+was ~27 Ω from its own Sommerfeld answer doing it.
+
+Change the deck's `GN 0` to a [`GN 2`](#gn--ground-parameters) — NEC's
+Sommerfeld/Norton solution, which momwire serves at contact and gates against
+a reference engine there — or lift the geometry clear of the plane. `GN 1`
+(perfect ground) at contact is unaffected and always has been.
+
 ## GD — additional ground medium
 
 A second ground medium and the edge where medium 1 stops.

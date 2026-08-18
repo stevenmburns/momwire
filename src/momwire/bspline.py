@@ -576,11 +576,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Validity window (#153): this mixed-potential refl-coef path is
         # accurate for wires 0.1–0.5λ above the plane — the Φ-term has no
         # exact Fresnel weight, and its θ=0 approximation degrades in the
-        # quasi-static near field (|ΔΓ| ~0.02 at 0.1λ, ~0.13 at 0.05λ,
-        # worse at contact). Below ~0.1λ or for ground-touching wires,
-        # prefer `ground_model="sommerfeld"` (exact everywhere, contact-
-        # capable since #151) or the field-based SinusoidalSolver, which
-        # applies NEC's dyad exactly at any height.
+        # quasi-static near field (|ΔΓ| ~0.02 at 0.1λ, ~0.13 at 0.05λ).
+        # Below ~0.1λ prefer `ground_model="sommerfeld"` (exact everywhere,
+        # contact-capable since #151) or the field-based SinusoidalSolver,
+        # which applies NEC's dyad exactly at any height.
+        #
+        # AT the plane it is no longer advice. Ground CONTACT under this
+        # ground model is REFUSED (momwire#282 stage 1, below) — the window
+        # does not merely degrade at zero clearance, it ends, and this
+        # comment used to be the only thing saying so while the code
+        # answered anyway.
         if ground_eps is not None and ground_z is None:
             raise ValueError("ground_eps requires ground_z to be set")
         if ground_phi_mode not in _ground_refl.PHI_MODES:

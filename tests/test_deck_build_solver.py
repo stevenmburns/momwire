@@ -408,6 +408,32 @@ def test_an_unrecognised_ground_refuses():
         _ground(Environment(ground=("swamp", 1.0, 1.0)))
 
 
+def test_a_gn0_deck_that_touches_the_plane_refuses_at_build():
+    """The most-imported deck of its class — a ground-mounted vertical with
+    `GN 0` — refuses BY DESIGN since momwire#282 stage 1 (2026-08-18).
+
+    The front end passes `GN 0` through as the solvers' default ground and
+    the solver's own constructor is what refuses, so this is a plumbing
+    check rather than a second refusal: the deck path must not have some
+    way around the withdrawal. It is gated because
+    `site/src/content/docs/reference/deck-grammar-nec2.md` tells importers
+    this in so many words, and a documented refusal that does not fire is
+    worse than an undocumented one.
+    """
+    deck = (
+        "CM ground-mounted vertical over GN 0\nCE\n"
+        "GW 1 21 0. 0. 0. 0. 0. 5.35 5.E-3\n"
+        "GE 1\nGN 0 0 0 0 13. .005\n"
+        "EX 0 1 1 0 1. 0.\nFR 0 1 0 0 14.\nXQ\nEN\n"
+    )
+    with pytest.raises(NotImplementedError, match="ground CONTACT under"):
+        build_solver(parse(deck))
+
+    # `GN 2` — the Sommerfeld solution — is the way through, and it builds.
+    somm = deck.replace("GN 0 0 0 0 13. .005", "GN 2 0 0 0 13. .005")
+    assert build_solver(parse(somm)) is not None
+
+
 def test_bare_wire_passes_no_loading_kwargs():
     assert _wire_loading((None, None)) == {}
 

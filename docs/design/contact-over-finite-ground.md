@@ -1262,3 +1262,143 @@ All in the session scratch directory's `study282/` (decks and printouts in
 | `s15_columns.py` | §3.5 the headline difference-of-columns table |
 | `s16_freq.py` | §3.5 finding 4, the 3.5 MHz repeat |
 | `s17_scaling.py` | §2.3(a) the measured 1/Δ spurious-charge law |
+
+---
+
+## Decision record — 2026-08-18
+
+*Appended after maintainer review. The study above is unchanged and stays
+the record of what was measured before any decision was taken; this section
+records what was decided and what stage 1 then measured while implementing
+it. Where the two disagree, this section is later and wins, and says so.*
+
+### The decisions
+
+**D1 — gate, don't withdraw wholesale.** The served-but-ungated capability
+is gated rather than refused across the board. Stage 1 builds the lane and
+lets it decide per ground, which is §6's recommended ordering.
+
+**D2 — two bar shapes, as §5.1 proposed.** A DECAY bar on the high-|ε̃|
+grounds (sea water, very good — the residual shrinks with mesh, gated at the
+finest rung's measured level + 25 % with net decay required) and an ENVELOPE
+PIN on the low-ε_r grounds (average 1.5 Ω, poor 4.0 Ω), each carrying a
+docstring that names stage 2 as the investigation that may tighten it. The
+envelope rows additionally carry a SATURATION check — the last rung's
+increment under a quarter of the first's — because an envelope on a residual
+that is still growing is worthless.
+
+**D3 — refl-coef at contact is REFUSED**, on every solver that served it:
+`BSplineSolver` and its `HMatrixSolver` / `ArrayBlockSolver` subclasses, and
+`SinusoidalSolver` with its `SinusoidalGalerkinSolver` subclass. At
+construction, on the same anchor scan the grounded basis itself is built
+from (`_ground_spec.contact_ends`), with the measurement in the message.
+This WITHDRAWS a served capability and every test that exercised it was
+changed with a comment naming this decision.
+
+**D4 — the near-PEC grid floor (§3.7) gets its own issue: momwire#443.** It
+is a shared-layer accuracy defect in the interpolation grid, not a contact
+defect, and it may matter for high-σ clearance work too. Stage 1 pins the
+floor where it is (0.477 / 0.550 / 0.589 Ω at N = 21/41/81 on the
+mixed-potential trunk) with the issue number on the pin, and does not try to
+fix it.
+
+**The dialect landmine (§3.9) is filed as momwire#444.** NEC-2's
+`GN 2 NRADL … FRATI FRATIS` spelling writes NEC-2's radial-length/radius
+fields into NEC-5's permeability fields, producing a silently MAGNETIC
+ground whose printed banner does not reveal the substitution. Any NEC-5 deck
+front end must guard `GN` F3/F4.
+
+**Model (b), the lumped base termination, is filed as antennaknobs#951** —
+an antennaknobs composition (PEC solve + `R_g` on the port + efficiency
+bookkeeping + the ARRL radial tables as data), with zero momwire edits, per
+§2.3(b) and D7.
+
+**A post-study cross-check strengthens D1 and D3.** The maintainer asked
+what NEC-2's own reflection-coefficient ground does at contact. Measured on
+stock nec2c, the same 5.35 m contact monopole at 14 MHz: `GN 1` prints
+39.4 + 22.1j Ω (sane); `GN 0` over average soil (13, 0.005) prints
+175 − 779j Ω and over poor soil (4, 0.001) prints 155 − 1248j Ω; the same
+wire lifted 0.5 m (0.023 λ) over `GN 0` prints 45 − 10472j Ω. Hundreds to
+thousands of ohms of spurious reactance, in the reference implementation of
+the model, below its own validity floor. So the refl-coef row's failure at
+contact is a property of the MODEL and not of momwire's implementation of
+it, and the refusal message says so — which matters, because the wrong
+lesson for a user to take from a refusal is "momwire cannot do what other
+codes can".
+
+### What stage 1 measured while implementing this
+
+Four findings, in descending order of consequence for stage 2.
+
+**1. The low-ε_r gap belongs to the GROUND, not to the geometry.** The
+study measured §3.5 on one geometry and §8 lists "whether any of this
+generalizes past a vertical" as something it did not know. The lane carries a
+second deck — the same quarter wave bent into an inverted-L, with an interior
+bend and a second edge between the contact node and the far end — and the
+saturated residuals land on top of each other:
+
+| ground | monopole (N = 81) | inverted-L (N = 96) |
+|---|---|---|
+| sea | 0.2703 | 0.2484 |
+| very good | 0.1766 | 0.2398 |
+| average | **1.2712** | **1.2646** |
+| poor | **3.3274** | **3.3244** |
+
+Under 1 % apart on both envelope rows. Stage 2 should look at the shared
+half-space machinery (§5.4 candidate 1), not at the vertical's contact node.
+
+**2. §5.4 candidate 2 is dead.** The study proposed the ladder-B stub test
+in momwire as the experiment that would separate a contact-node fault from a
+ground fault: *"if momwire's own stubbed limit disagrees with its own
+contact deck by ~3 Ω over poor soil … the disagreement is in momwire's
+contact node."* Measured: **0.011 Ω** over poor soil, at every mesh
+(N = 21/41/81), the same size as the PEC and average-soil figures, which
+carry no gap to explain at all. Whatever momwire is missing over poor soil,
+it is not the contact node's bookkeeping. That leaves candidates 1 and 3,
+and finding 1 above points at the same place.
+
+**3. A correction to §3.8's ladder B, which makes it a much sharper
+instrument.** The study's stubbed ladder is fed AT the stub's grounded base,
+which is what NEC's `EX` on segment 1 does. But then the feed segment
+shrinks with the stub, so the ladder measures the delta-gap source model as
+much as it measures the contact node: fed that way momwire's own PEC ladder
+is **53 Ω** out at a 0.1 mm stub, which is a statement about a delta-gap
+over a 0.1 mm gap and nothing at all about the ground. Move the feed onto the
+radiator, where the segment length is fixed, and the same ladder holds to
+**3.2e-4 Ω** at the same stub — three orders sharper than the ~0.19 Ω §3.8
+records for the binary, whose own wobble down that ladder is very likely the
+same effect seen through its own source model. Anyone re-running ladder B in
+any code should move the feed first.
+
+**4. §6's proposed second deck is not usable, and the reason is the deck.**
+Stage 1 was specified with the study's 3 m + 6 m inverted-L (§3.2 / S6) as
+the lane's second geometry. It was captured and rejected: at 0.42 λ it sits
+near the grounded half-wave antiresonance, where |Z| ≈ 1050 Ω and neither
+code is converged — over N = 12 → 96 the binary's own PEC answer walks
+264+911j → 328+1004j (+24 % in R) and `BSplineSolver`'s walks 133+659j →
+269+917j (+103 %). The difference of columns cancels a formulation offset
+but cannot cancel two offsets that are both still moving, and the residuals
+came out at 30–95 Ω on every ground, including the high-|ε̃| ones the
+monopole closes to 0.27 Ω. That is a statement about an antiresonant deck at
+coarse mesh, not about ground contact. The lane takes the bent quarter wave
+instead.
+
+### Two smaller corrections to the study's text
+
+* §5.1's envelope numbers were proposed as "1.5 Ω average, 4.0 Ω poor" and
+  are shipped at exactly those values, but note the monopole's average-soil
+  residual is 1.271 Ω at N = 81 and still creeping — the 1.5 Ω envelope has
+  about 18 % of headroom, not much. A finer rung would want re-derivation.
+* §4.3's razor diagnosis is a hypothesis and stage 1 did not test it. Razor's
+  `_CONTACT_OVER_FINITE_REFUSAL` prose was corrected — the three things §4.3
+  showed the old wording got wrong about its own mechanism are gone, and the
+  doublet is stated correctly — but the replacement says the plane-reference
+  term is what stage 3 will TEST, not what is known. No razor behaviour
+  changed; only prose, and two alias keys in the capability declaration so a
+  consumer holding a concrete ground reads the truth on every row.
+
+### What is still refused after stage 1
+
+Contact on razor (both finite grounds, unchanged); contact on pulse;
+**contact under refl-coef, on every trunk (new)**; mid-span touchdown;
+radial screens.
