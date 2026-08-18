@@ -701,43 +701,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # per-wire sequence (NaN entries switch a wire off). The loading
         # enters Z as Σ_w Z'_w(ω)·S_w over same-wire basis overlaps — see
         # `_loading_gram` / `_apply_loading`.
-        self.wire_conductivity = _wire_loading.normalize_per_wire(
-            wire_conductivity, n_w, "wire_conductivity"
-        )
-        self.insulation_radius = _wire_loading.normalize_per_wire(
-            insulation_radius, n_w, "insulation_radius"
-        )
-        self.insulation_eps_r = _wire_loading.normalize_per_wire(
-            insulation_eps_r, n_w, "insulation_eps_r"
-        )
-        if (self.insulation_radius is None) != (self.insulation_eps_r is None):
-            raise ValueError(
-                "insulation_radius and insulation_eps_r must be given together"
-            )
-        if self.insulation_radius is not None:
-            finite_b = np.isfinite(self.insulation_radius)
-            if not np.array_equal(finite_b, np.isfinite(self.insulation_eps_r)):
-                raise ValueError(
-                    "insulation_radius and insulation_eps_r must be finite "
-                    "on the same wires (NaN switches a wire off in both)"
-                )
-            # Fail fast on bad geometry/material values (the same checks
-            # run inside insulation_inductance, but per-solve is too late).
-            for w in np.nonzero(finite_b)[0]:
-                _wire_loading.insulation_inductance(
-                    self._radius_per_wire[w],
-                    self.insulation_radius[w],
-                    self.insulation_eps_r[w],
-                )
-        if self.wire_conductivity is not None:
-            for w in np.nonzero(np.isfinite(self.wire_conductivity))[0]:
-                if self.wire_conductivity[w] <= 0.0:
-                    raise ValueError(
-                        f"wire_conductivity[{w}] must be > 0 S/m, "
-                        f"got {self.wire_conductivity[w]}"
-                    )
-        self._loading_active = self.wire_conductivity is not None or (
-            self.insulation_radius is not None
+        _wire_loading.configure_loading(
+            self, n_w, wire_conductivity, insulation_radius, insulation_eps_r
         )
         # Per-instance cache for the k-independent loading Gram structure
         # (rows, cols, vals, wire_of_nnz) — see `_loading_gram`.
@@ -2741,16 +2706,6 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cached_loading_gram = result
         return result
 
-    def _loading_zw(self, omega):
-        """Per-wire series impedance Z'_w(ω) [Ω/m]; (n_w,) or (n_w, n_k)."""
-        return _wire_loading.series_impedance_per_wire(
-            omega,
-            self._radius_per_wire,
-            self.wire_conductivity,
-            self.insulation_radius,
-            self.insulation_eps_r,
-        )
-
     def _apply_loading(self, Z, omega=None):
         """Add the loading term into Z in place; no-op when loading is off.
 
@@ -2763,7 +2718,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rows, cols, vals, wire_ids = self._loading_gram()
         if omega is None:
             omega = self.omega
-        zw = self._loading_zw(omega)  # (n_w,) or (n_w, n_k)
+        # (n_w,) or (n_w, n_k) — the shared spec layer (momwire#428); the
+        # Gram is keyed by wire, so this row consumes the per-WIRE form.
+        zw = _wire_loading.loading_for(self, omega).z_wire
         if Z.ndim == 2:
             np.add.at(Z, (rows, cols), zw[wire_ids] * vals)
         else:
@@ -2784,7 +2741,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             geom = self._build_geometry()
             supp_seg, _p, _k, _wk, _wbg = self._build_basis_polynomials(geom)
             n = supp_seg.shape[0]
-            zw = self._loading_zw(omega)
+            zw = _wire_loading.loading_for(self, omega).z_wire
             L = scipy.sparse.coo_matrix(
                 (zw[wire_ids] * vals, (rows, cols)), shape=(n, n)
             ).tocsr()
@@ -2810,7 +2767,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         geom = self._build_geometry()
         supp_seg, _p, _k, _wk, _wbg = self._build_basis_polynomials(geom)
         c = np.asarray(coeffs)[: supp_seg.shape[0]]
-        r_w = np.real(self._loading_zw(self.omega if omega is None else omega))
+        r_w = np.real(
+            _wire_loading.loading_for(
+                self, self.omega if omega is None else omega
+            ).z_wire
+        )
         contrib = 0.5 * r_w[wire_ids] * np.real(np.conj(c[rows]) * c[cols]) * vals
         np.add.at(per_wire, wire_ids, contrib)
         return float(per_wire.sum()), per_wire

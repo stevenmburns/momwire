@@ -1067,12 +1067,15 @@ is the units-4/5 difference-of-differences at N = 192 with the same 0.25 Ω
 bar, measured +0.0025 (copper dipole) to −0.33 (trap-loaded inverted-V).
 `tests/test_razor_loading.py`.
 
-**One finding for the next unit.** The maintainer's observation that the
-API-facing half of loading — kwargs, units, the skin-effect model, resolving
-a lumped load to a position — is formulation-independent and about to exist
-in four solvers is already true here: `RazorSolver._loading_spec` is exactly
-that half, isolated behind a plain per-segment/per-knot description so the
-extraction of a shared `loading_for(solver, ω)` has one seam to cut.
+**One finding for the next unit, now taken.** The maintainer's observation
+that the API-facing half of loading — kwargs, units, the skin-effect model,
+resolving a lumped load to a position — is formulation-independent and about
+to exist in four solvers was already true here: `RazorSolver._loading_spec`
+was exactly that half, isolated behind a plain per-segment/per-knot
+description so the extraction had one seam to cut. momwire#428 cut it — the
+spec layer is `_wire_loading.configure_loading` / `normalize_lumped_loads` /
+`loading_for(solver, ω, geom)`, and every row's `_apply_loading` now consumes
+one producer (§6.9).
 
 ### 6.8 The shared-layer consolidation (momwire#429, 2026-08-18)
 

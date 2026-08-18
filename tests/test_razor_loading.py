@@ -49,7 +49,7 @@ import numpy as np
 import pytest
 import scipy.linalg
 
-from momwire import RazorSolver
+from momwire import RazorSolver, _wire_loading
 from momwire.bspline import BSplineSolver
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 from golden_razor_loading_nec5 import LOAD_Z, LOADED_LADDERS, SIGMA_CU
@@ -430,7 +430,11 @@ def test_distributed_loss_scales_as_the_skin_effect_says():
     eff = [
         zs[s].real
         / float(
-            np.real(_sim(DIPOLE, [[24]], wire_conductivity=s)._loading_zw(sim.omega)[0])
+            np.real(
+                _wire_loading.loading_for(
+                    _sim(DIPOLE, [[24]], wire_conductivity=s), sim.omega
+                ).z_wire[0]
+            )
         )
         for s in (5.8e9, 5.8e7)
     ]

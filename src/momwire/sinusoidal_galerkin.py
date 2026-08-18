@@ -328,7 +328,7 @@ import scipy.linalg
 import scipy.sparse
 import scipy.spatial.distance
 
-from . import _field_ground, _ground_mirror
+from . import _field_ground, _ground_mirror, _wire_loading
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from ._port_solution import PortSolution
@@ -2817,8 +2817,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             + Q[left] * Q[right] * (0.5 * h - half_sin)
             + R[left] * R[right] * (0.5 * h + half_sin)
         )
-        zw = self._loading_zw(k * self.c)  # (n_w,), zeros where switched off
-        vals *= zw[self._wire_of_seg(geom)[m_of_pair]]
+        # (n_segs,), zeros where switched off — the shared spec layer
+        # (momwire#428); the overlap VALUES above are this rule's own share.
+        z_seg = _wire_loading.loading_for(self, k * self.c, geom).z_seg
+        vals *= z_seg[m_of_pair]
         # Unbuffered: a basis pair recurs once per shared segment.
         np.subtract.at(G, (seg_view["jbasis"][left], seg_view["jbasis"][right]), vals)
         return G

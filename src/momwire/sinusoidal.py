@@ -473,41 +473,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Galerkin overlap the BSpline family uses. `wire_loss_power` DOES
         # use the closed-form ∫|I|² overlaps (a physical integral is basis-
         # scheme-independent).
-        self.wire_conductivity = _wire_loading.normalize_per_wire(
-            wire_conductivity, n_w, "wire_conductivity"
-        )
-        self.insulation_radius = _wire_loading.normalize_per_wire(
-            insulation_radius, n_w, "insulation_radius"
-        )
-        self.insulation_eps_r = _wire_loading.normalize_per_wire(
-            insulation_eps_r, n_w, "insulation_eps_r"
-        )
-        if (self.insulation_radius is None) != (self.insulation_eps_r is None):
-            raise ValueError(
-                "insulation_radius and insulation_eps_r must be given together"
-            )
-        if self.insulation_radius is not None:
-            finite_b = np.isfinite(self.insulation_radius)
-            if not np.array_equal(finite_b, np.isfinite(self.insulation_eps_r)):
-                raise ValueError(
-                    "insulation_radius and insulation_eps_r must be finite "
-                    "on the same wires (NaN switches a wire off in both)"
-                )
-            for w in np.nonzero(finite_b)[0]:
-                _wire_loading.insulation_inductance(
-                    self._radius_per_wire[w],
-                    self.insulation_radius[w],
-                    self.insulation_eps_r[w],
-                )
-        if self.wire_conductivity is not None:
-            for w in np.nonzero(np.isfinite(self.wire_conductivity))[0]:
-                if self.wire_conductivity[w] <= 0.0:
-                    raise ValueError(
-                        f"wire_conductivity[{w}] must be > 0 S/m, "
-                        f"got {self.wire_conductivity[w]}"
-                    )
-        self._loading_active = self.wire_conductivity is not None or (
-            self.insulation_radius is not None
+        _wire_loading.configure_loading(
+            self, n_w, wire_conductivity, insulation_radius, insulation_eps_r
         )
 
         if n_per_edge_per_wire is None:
@@ -3870,17 +3837,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
 
-    def _loading_zw(self, omega):
-        """Per-wire series impedance Z'_w(ω) [Ω/m]; zeros when a wire's
-        loading is switched off (NaN entries)."""
-        return _wire_loading.series_impedance_per_wire(
-            omega,
-            self._radius_per_wire,
-            self.wire_conductivity,
-            self.insulation_radius,
-            self.insulation_eps_r,
-        )
-
     @staticmethod
     def _wire_of_seg(geom):
         """(n_segs,) int array mapping segment index → wire index."""
@@ -3947,7 +3903,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if not self._loading_active:
             return G
         omega = k * self.c
-        zw = self._loading_zw(omega)  # (n_w,)
+        # (n_segs,) Z_s(ω), zeros where switched off — the shared spec layer
+        # (momwire#428); this method's share is the boundary condition below.
+        z_seg = _wire_loading.loading_for(self, omega, geom).z_seg
         starts = seg_view["starts"]
         n_segs = geom["n_segs"]
         rows = np.repeat(np.arange(n_segs, dtype=np.int64), starts[1:] - starts[:-1])
@@ -3955,7 +3913,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         i_center = seg_view["sigma"] * (seg_view["A"] + seg_view["C"])
         # Each (seg, basis) pair is unique in seg_view (see _basis_coefs),
         # so plain fancy-index subtraction is exact.
-        G[rows, cols] -= zw[self._wire_of_seg(geom)[rows]] * i_center
+        G[rows, cols] -= z_seg[rows] * i_center
         return G
 
     def wire_loss_power(self, coeffs, omega=None):
@@ -4006,7 +3964,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             + np.abs(Q) ** 2 * (0.5 * h - sin_kh / (2.0 * k))
             + np.abs(R) ** 2 * (0.5 * h + sin_kh / (2.0 * k))
         )
-        r_w = np.real(self._loading_zw(omega))  # zeros where switched off
+        # zeros where switched off
+        r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
         wire_of = self._wire_of_seg(geom)
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
         return float(per_wire.sum()), per_wire
