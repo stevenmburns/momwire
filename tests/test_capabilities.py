@@ -281,10 +281,21 @@ def test_razor_per_wire_radius_refuses():
         )
 
 
+def test_razor_wire_loading_accepted():
+    """momwire#427 moved this cell out of the TypeError list below."""
+    wires, npe = _wire()
+    RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        wavelength=WAVELENGTH,
+        wire_conductivity=1e7,
+        lumped_loads=[(0, None, 50.0 + 0.0j)],
+    )
+
+
 @pytest.mark.parametrize(
     "cell,kwarg",
     [
-        ("wire_loading", {"wire_conductivity": 1e7}),
         ("singular_enrichment", {"use_singular_enrichment": True}),
     ],
 )
@@ -300,19 +311,21 @@ def test_razor_unsupported_kwargs_are_typeerrors(cell, kwarg):
         )
 
 
-def test_razor_served_row_is_every_ground_and_no_other_axis():
+def test_razor_served_row_is_every_ground_plus_loading():
     """PEC (unit 2), refl-coef (unit 4) and sommerfeld (unit 5) — the whole
-    ground column, for wires clear of the plane. Every non-ground cell is
-    still refused, and the one combination that is refused inside the
-    served column (contact over a finite ground, momwire#282) says so
-    through its own key rather than by removing a ground."""
+    ground column, for wires clear of the plane — plus wire loading
+    (momwire#427). Every other cell is still refused, and the one
+    combination that is refused inside the served column (contact over a
+    finite ground, momwire#282) says so through its own key rather than by
+    removing a ground."""
     c = RazorSolver.capabilities
     assert c.grounds == frozenset({"pec", "refl-coef", "sommerfeld"})
+    assert c.wire_loading
+    assert c.refusal("wire_loading") is None
     assert c.refusal("contact", "finite_ground") == c.refusals["contact+finite_ground"]
     assert "momwire#282" in c.refusal("contact", "finite_ground")
     assert not any(
         [
-            c.wire_loading,
             c.extended_kernel,
             c.junction_ports,
             c.node_gaps,
