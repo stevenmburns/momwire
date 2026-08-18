@@ -24,6 +24,14 @@ and costs nothing) and hands the ``LoadSpec`` over.  A consumer that wants
 NEC's loaded impedance stamps it; a consumer that wants the bare structure
 ignores it; neither has to re-derive where the gap went.
 
+**One exception: razor.**  ``RazorSolver`` (momwire#432) refuses the
+port-algebra route's zero-volt gap and serves a load through its own
+``lumped_loads`` kwarg instead, so for that one family ``build_solver`` bakes
+the ``LoadSpec`` into the fill itself rather than leaving it on the plan for
+a consumer to stamp — :attr:`PortPlan.loaded_ports` still names the site (the
+plan does not change shape by basis), but nothing further needs doing with
+it when the basis is ``"razor"`` or ``"razor-nec5"``.
+
 **One geometry, every group.**  The port set is the union over every execute
 group, so a deck with two ``XQ`` cards under two different ``EX`` sets is one
 fill and two drive vectors — :attr:`PortPlan.voltages` is those vectors.  Only
@@ -50,6 +58,7 @@ import numpy as np
 from ..array_block import ArrayBlockSolver
 from ..bspline import BSplineSolver
 from ..hmatrix import HMatrixSolver
+from ..razor import RazorSolver
 from ..sinusoidal import SinusoidalSolver
 from ..sinusoidal_galerkin import SinusoidalGalerkinSolver
 from ._polylines import Mesh, to_polylines
@@ -68,10 +77,21 @@ __all__ = [
 _C_LIGHT = 299_792_458.0
 
 # The basis roster, spelled as antennaknobs' ``--basis`` names so one string
-# selects the same physics on either side of the portal.  Five solver
-# FAMILIES, seven entries: the extra two are a degree and a feed model, not
-# new code paths.  "bspline" is the degree-2 B-spline — the default here as
-# it is there.
+# selects the same physics on either side of the portal.  Six solver
+# FAMILIES, nine entries: the extra three are a degree, a feed model and a
+# quadrature rule, not new code paths.  "bspline" is the degree-2 B-spline —
+# the default here as it is there.
+#
+# "razor" (momwire#432) is the NEC-5 formulation twin — see
+# ``docs/razor-solver.md``. "razor-nec5" is the quadrature-lane variant
+# (momwire#316): same class, `nec5_quadrature=True`, the same "one class,
+# one extra kwarg" shape `bspline-d1` set for a degree axis. RazorSolver's
+# translation differs from every sibling's in two ways `build_solver` has to
+# know about (see below): it takes no `junctions` spec (detected from the
+# geometry) and it serves a lumped load as its own `lumped_loads` kwarg
+# rather than as a deck-level port-algebra site, which is why it is keyed by
+# CLASS in `_NATIVE_LOADING` rather than threaded through `basis_kwargs`
+# here — a future razor variant inherits the translation for free.
 BASES = MappingProxyType(
     {
         "bspline": (BSplineSolver, MappingProxyType({})),
@@ -84,8 +104,16 @@ BASES = MappingProxyType(
             SinusoidalGalerkinSolver,
             MappingProxyType({"feed_model": "point"}),
         ),
+        "razor": (RazorSolver, MappingProxyType({})),
+        "razor-nec5": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
     }
 )
+
+# Solver classes that take a lumped load as their own kwarg instead of the
+# deck-level port-algebra route every other family shares (momwire#432).
+# `build_solver` reads this to decide how to spell `feeds` / a load's
+# translation; nothing else in the roster keys off it.
+_NATIVE_LOADING = (RazorSolver,)
 
 
 @dataclass(frozen=True)
@@ -266,6 +294,34 @@ def _wire_loading(materials) -> dict[str, np.ndarray]:
     return kwargs
 
 
+def _lumped_loads(
+    sites: tuple[PortSite, ...],
+    ports: tuple[tuple[int, float], ...],
+    freq_hz: float,
+) -> list[tuple[int, float, complex]]:
+    """``lumped_loads=[(wire, arclength, Z)]`` for a solver in
+    :data:`_NATIVE_LOADING` (momwire#432).
+
+    ``sites`` and ``ports`` are :attr:`PortPlan.sites` and
+    ``Mesh.ports`` — parallel, both in SOLVER port order — so a load's
+    position is read off the exact knot the mesh already placed for it,
+    the same one the port-algebra siblings would load: ``to_polylines``
+    forced a vertex there for every site (feed or load) before any basis
+    saw the geometry, so there is no separate snapping to get wrong.  ``Z``
+    is evaluated at ``freq_hz`` here rather than left symbolic because
+    ``lumped_loads`` takes one impedance and a sweep already calls
+    :func:`build_solver` once per step (see the module docstring's
+    "translate once, fill many times" — an OPERATING POINT, unlike the
+    geometry, is not reused across steps), so evaluating per call already
+    is the swept behaviour, not an approximation of it.
+    """
+    return [
+        (polyline, arclength, site.load_spec.impedance(freq_hz))
+        for site, (polyline, arclength) in zip(sites, ports)
+        if site.load_spec is not None
+    ]
+
+
 def _ground(environment: Environment) -> dict[str, Any]:
     """``ground_z`` / ``ground_eps`` / ``ground_model`` for one environment.
 
@@ -441,14 +497,9 @@ def build_solver(
     # group's: a Y-matrix readout ignores them entirely (it enumerates ports),
     # and a direct solve wants exactly this group's drive.
     drive = plan.voltages[group] if group is not None else None
-    feeds = [
-        (
-            polyline,
-            arclength,
-            complex(drive[index]) if drive is not None else 0j,
-        )
-        for index, (polyline, arclength) in enumerate(built_mesh.ports)
-    ]
+
+    def _voltage(index: int) -> complex:
+        return complex(drive[index]) if drive is not None else 0j
 
     radii = list(built_mesh.radii)
     wire_radius = radii[0] if len(set(radii)) == 1 else radii
@@ -464,13 +515,36 @@ def build_solver(
     if extended_kernel:
         kwargs["extended_kernel"] = True
 
+    if issubclass(solver_class, _NATIVE_LOADING):
+        # A load-only site needs no port of its own here: the fill carries
+        # the Z_s bump directly through `lumped_loads`, at the exact knot
+        # `_lumped_loads` reads off the mesh, so only genuine EX sites
+        # become `feeds` — a load-only site would otherwise be a spurious
+        # zero-volt source with no row to add.  And this formulation takes
+        # no `junctions` spec at all (not even `None`: it is a bare kwarg
+        # name this constructor never declared), so the key stays out of
+        # `kwargs` entirely rather than being set and refused.
+        feeds = [
+            (polyline, arclength, _voltage(index))
+            for index, (polyline, arclength) in enumerate(built_mesh.ports)
+            if plan.sites[index].feed is not None
+        ]
+        loads = _lumped_loads(plan.sites, built_mesh.ports, frequency_mhz * 1e6)
+        if loads:
+            kwargs["lumped_loads"] = loads
+    else:
+        feeds = [
+            (polyline, arclength, _voltage(index))
+            for index, (polyline, arclength) in enumerate(built_mesh.ports)
+        ]
+        kwargs["junctions"] = [list(entry) for entry in built_mesh.junctions] or None
+
     solver = solver_class(
         wires=list(built_mesh.polylines),
         n_per_edge_per_wire=[list(counts) for counts in built_mesh.edge_elements],
         feeds=feeds,
         wavelength=_C_LIGHT / (frequency_mhz * 1e6),
         wire_radius=wire_radius,
-        junctions=[list(entry) for entry in built_mesh.junctions] or None,
         cancel=cancel,
         **kwargs,
         **_wire_loading(built_mesh.materials),
