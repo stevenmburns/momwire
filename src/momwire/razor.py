@@ -173,6 +173,35 @@ returns Z_dipole/2 to LU roundoff, which is the first gate in
 plane, where the folded scalar potential is identically zero, so the T2
 term keeps only the segment-centroid end.
 
+Wire loading (momwire#427)
+--------------------------
+A loaded wire's surface condition is E_tan = Z_s(l)·I(l) rather than
+E_tan = 0, and razor tests the condition on a path, so the loading term is
+the testing-path integral of Z_s against each tent:
+
+    L[m, n] = ∫_{P_m} Z_s(l) Λ_n(l) dl,        Z = Z_free + L
+
+In the wing idiom that is two numbers per shared segment — 3h/8 when the
+path half and the tent ramp rise at the same end of the segment, h/8 when
+they rise at opposite ends — times the σ·σ that dots the path's direction
+with the current's. `_loading_stencil` carries the full derivation, the
+sign's oracle, the junction and grounded-end readings, and why the
+resulting L is symmetric while the field matrix is not.
+
+DISTRIBUTED loading (`wire_conductivity`, `insulation_radius`,
+`insulation_eps_r`) is the siblings' API verbatim, over the same
+`_wire_loading` physics. LUMPED loads (`lumped_loads`, a sequence of
+``(wire_index, arclength, impedance)``) are razor's own kwarg: the other
+rows serve a lumped load as port algebra over a `node_gaps` port, which
+this formulation refuses, but a delta in Z_s at a knot collapses the
+integral above to a single diagonal entry — so `Z_driven = Z_unloaded +
+Z_L` at the fed knot is exact here rather than arranged. `wire_loss_power`
+reads back the dissipated watts (distributed only, like the siblings').
+
+The stencil is pure geometry and rides `_assemble_Z_prepare`; Z_s(ω) is
+not (skin effect and insulation reactance both move with ω) and is built
+per solved wavenumber beside the reflection-coefficient weights.
+
 Scope
 -----
 Free space and all three grounds — PEC, reflection-coefficient and
@@ -189,7 +218,7 @@ tents would overlap on one segment) and is refused.
 import numpy as np
 import scipy.linalg
 
-from . import _ground_refl, _potential_ground
+from . import _ground_refl, _potential_ground, _wire_loading
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -440,8 +469,11 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     # momwire#396: free space and all three grounds — the PEC image
     # (momwire#398 unit 2), the reflection-coefficient ground (unit 4) and
     # the Sommerfeld ground (unit 5) — for wires standing clear of the
-    # plane, plus ground contact over PEC (unit 3). No loading / EK /
-    # junction_ports / node_gaps / per-wire radii / enrichment: the rest of
+    # plane, plus ground contact over PEC (unit 3), plus wire loading
+    # (momwire#427 — distributed loss and insulation through the house
+    # kwargs, and lumped loads at knots, which the siblings serve as
+    # deck-level port algebra instead). No EK / junction_ports / node_gaps /
+    # per-wire radii / enrichment: the rest of
     # the row is refused, reusing `_OUT_OF_SCOPE`'s prose (built at __init__
     # from unsupported kwargs), the wire_radius scalar-only check for
     # per_wire_radius, and `_CONTACT_OVER_FINITE_REFUSAL` for the one
@@ -449,7 +481,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
     # rather than a stray kwarg).
     capabilities = Capabilities(
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
-        wire_loading=False,
+        wire_loading=True,
         extended_kernel=False,
         junction_ports=False,
         node_gaps=False,
@@ -471,6 +503,10 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         n_per_edge_per_wire=None,
         nsegs=101,
         wire_radius=0.0005,
+        wire_conductivity=None,
+        insulation_radius=None,
+        insulation_eps_r=None,
+        lumped_loads=None,
         ground_z=None,
         ground_eps=None,
         ground_phi_mode="normal",
@@ -596,6 +632,85 @@ class RazorSolver(_ElementCurrents, _Cancelable):
                     "junctioned at both ends its two junction tents would "
                     "overlap on that one segment — split it in two)"
                 )
+
+        # ---- wire loading, the house API (momwire#427) -------------------
+        # Two kinds, one equation. DISTRIBUTED series impedance Z'_w(ω)
+        # [Ω/m] is spelled exactly as `BSplineSolver` / `SinusoidalSolver` /
+        # `SinusoidalGalerkinSolver` spell it — same three kwargs, same
+        # normalize/validate contract, same `_wire_loading` physics — so a
+        # consumer swapping formulations passes the same dict. LUMPED loads
+        # are razor's own kwarg, because the siblings serve a lumped load as
+        # deck-level port algebra over a `node_gaps` port (see
+        # `momwire.deck._solver`) and this formulation refuses node gaps:
+        # its delta gap lands in a whole testing ROW, so a gap is not a
+        # local basis edit. What razor can do instead is exact and cheaper —
+        # a load at a knot is a delta in Z_s(l) sitting inside exactly one
+        # testing path, i.e. one diagonal entry (`_loading_stencil`).
+        #
+        # Only NORMALISATION happens here. Everything the fill consumes is
+        # produced by `_loading_spec` as a plain per-segment / per-knot
+        # description, so the shared `loading_for(solver, ω)` object a later
+        # unit extracts from all four solvers has one seam to cut, not a
+        # parsing pass smeared through the assembly.
+        self.wire_conductivity = _wire_loading.normalize_per_wire(
+            wire_conductivity, n_w, "wire_conductivity"
+        )
+        self.insulation_radius = _wire_loading.normalize_per_wire(
+            insulation_radius, n_w, "insulation_radius"
+        )
+        self.insulation_eps_r = _wire_loading.normalize_per_wire(
+            insulation_eps_r, n_w, "insulation_eps_r"
+        )
+        if (self.insulation_radius is None) != (self.insulation_eps_r is None):
+            raise ValueError(
+                "insulation_radius and insulation_eps_r must be given together"
+            )
+        if self.insulation_radius is not None:
+            finite_b = np.isfinite(self.insulation_radius)
+            if not np.array_equal(finite_b, np.isfinite(self.insulation_eps_r)):
+                raise ValueError(
+                    "insulation_radius and insulation_eps_r must be finite "
+                    "on the same wires (NaN switches a wire off in both)"
+                )
+            for w in np.nonzero(finite_b)[0]:
+                _wire_loading.insulation_inductance(
+                    self._radius_per_wire[w],
+                    self.insulation_radius[w],
+                    self.insulation_eps_r[w],
+                )
+        if self.wire_conductivity is not None:
+            for w in np.nonzero(np.isfinite(self.wire_conductivity))[0]:
+                if self.wire_conductivity[w] <= 0.0:
+                    raise ValueError(
+                        f"wire_conductivity[{w}] must be > 0 S/m, "
+                        f"got {self.wire_conductivity[w]}"
+                    )
+        self._loading_active = self.wire_conductivity is not None or (
+            self.insulation_radius is not None
+        )
+
+        if lumped_loads is None:
+            self.lumped_loads = []
+        else:
+            norm = []
+            for i, entry in enumerate(lumped_loads):
+                if len(entry) != 3:
+                    raise ValueError(
+                        f"lumped_loads[{i}]: expected "
+                        f"(wire_index, arclength, impedance), got {entry!r}"
+                    )
+                w_i, arc_i, z_i = entry
+                if not (0 <= w_i < n_w):
+                    raise ValueError(
+                        f"lumped_loads[{i}]: wire_index {w_i} out of range [0, {n_w})"
+                    )
+                z_i = complex(z_i)
+                if not np.isfinite(z_i.real) or not np.isfinite(z_i.imag):
+                    raise ValueError(
+                        f"lumped_loads[{i}]: impedance must be finite, got {z_i}"
+                    )
+                norm.append((int(w_i), None if arc_i is None else float(arc_i), z_i))
+            self.lumped_loads = norm
 
         if feeds is None:
             if not (0 <= feed_wire_index < n_w):
@@ -957,12 +1072,7 @@ class RazorSolver(_ElementCurrents, _Cancelable):
         """
         idx = []
         for i, (w, arc, _v) in enumerate(self.feeds):
-            arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
-            target = arc if arc is not None else arc_at_knot[-1] / 2.0
-            knots = self._feed_knots(geom, w)
-            arcs = np.array([a for a, _b, _k in knots])
-            pick = int(np.argmin(np.abs(arcs - target)))
-            _a, basis, k_ends = knots[pick]
+            basis, k_ends = self._snap_to_knot(geom, w, arc)
             if k_ends >= 3:
                 raise NotImplementedError(
                     f"feeds[{i}]: the source snaps to a junction where "
@@ -971,8 +1081,30 @@ class RazorSolver(_ElementCurrents, _Cancelable):
                     "branches it drives. Feed an interior knot, or model the "
                     "source on a short bridge wire off the junction."
                 )
-            idx.append(int(basis))
+            idx.append(basis)
         return idx
+
+    def _snap_to_knot(self, geom, w, arc):
+        """``(basis index, ends at that knot)`` for one site on wire `w`.
+
+        The site is an arc length from that wire's first anchor, or None for
+        the wire's midpoint; it snaps to the nearest knot of wire `w` that
+        carries a basis — interior, junction or grounded end
+        (:meth:`_feed_knots`). Shared by the feeds and by the lumped loads
+        (momwire#427), because a load and a source name a site the same way
+        and must land on the same knot when they name the same one: gate 2
+        of #427 is precisely `Z_driven == Z_unloaded + Z_L`, and it holds
+        only if `feeds` and `lumped_loads` resolve identically. Each caller
+        writes its own K >= 3 refusal, since what is ambiguous there differs
+        (which branch pair a source drives, which branch pair a load is in).
+        """
+        arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
+        target = arc if arc is not None else arc_at_knot[-1] / 2.0
+        knots = self._feed_knots(geom, w)
+        arcs = np.array([a for a, _b, _k in knots])
+        pick = int(np.argmin(np.abs(arcs - target)))
+        _a, basis, k_ends = knots[pick]
+        return int(basis), int(k_ends)
 
     # ------------------------------------------------------------------
     # kernel moments
@@ -1183,6 +1315,261 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             "compose": ground.mode == "compose",
         }
 
+    # ------------------------------------------------------------------
+    # wire loading (momwire#427)
+
+    def _wire_of_seg(self, geom):
+        """``(n_segs,)`` int array mapping segment index → wire index."""
+        off = np.asarray(geom["seg_offsets"], dtype=np.int64)
+        return np.repeat(np.arange(off.shape[0] - 1, dtype=np.int64), np.diff(off))
+
+    @property
+    def _radius_per_wire(self):
+        """``(n_wires,)`` conductor radii — this formulation's ONE radius,
+        broadcast.
+
+        Not a capability: `wire_radius` is still scalar-only here
+        (`_PER_WIRE_RADIUS_REFUSAL` fires in `__init__`, momwire#147), and
+        every entry of this array is the same float. It exists so
+        `_loading_zw` below is BYTE-IDENTICAL to `SinusoidalSolver`'s and
+        `BSplineSolver`'s rather than a third spelling that differs only in
+        which radius attribute it reads — which makes the shared
+        `loading_for(solver, ω)` extraction a pure move.
+        """
+        return np.full(len(self.wires_polylines), self.wire_radius)
+
+    def _loading_zw(self, omega):
+        """Per-wire series impedance Z'_w(ω) [Ω/m]; zeros when a wire's
+        loading is switched off (NaN entries)."""
+        return _wire_loading.series_impedance_per_wire(
+            omega,
+            self._radius_per_wire,
+            self.wire_conductivity,
+            self.insulation_radius,
+            self.insulation_eps_r,
+        )
+
+    def _loading_spec(self, geom, omega):
+        """What the fill needs to know about loading at ω, as plain arrays.
+
+        This is the whole of the API-facing half of momwire#427 — kwargs,
+        units, the skin-effect model, and resolving a lumped load's site to
+        a knot — reduced to a description that names no testing rule:
+
+        * ``z_seg``  — ``(n_segs,)`` complex Z_s(ω) [Ω/m] per SEGMENT, or
+          None when no distributed loading is configured. Per segment rather
+          than per wire because that is the granularity a fill indexes, and
+          because it is the form a formulation-independent loading object
+          would hand back.
+        * ``lumped`` — ``(basis indices, Z_L [Ω])`` for the configured
+          lumped loads, or None. The index is the knot's basis, resolved
+          through the same `_snap_to_knot` the feeds use.
+
+        Nothing here is razor-specific except the basis index, and that is
+        the one thing a caller cannot compute for itself. Keeping the seam
+        here is deliberate: a later unit extracts `loading_for(solver, ω)`
+        out of all four solvers the way `PotentialGround` was extracted, and
+        this method is the shape it will replace.
+        """
+        z_seg = None
+        if self._loading_active:
+            z_seg = self._loading_zw(omega)[self._wire_of_seg(geom)]
+        lumped = None
+        if self.lumped_loads:
+            idx, z_l = [], []
+            for i, (w, arc, z) in enumerate(self.lumped_loads):
+                basis, k_ends = self._snap_to_knot(geom, w, arc)
+                if k_ends >= 3:
+                    raise NotImplementedError(
+                        f"lumped_loads[{i}]: the load snaps to a junction "
+                        f"where {k_ends} wire ends meet, and a series "
+                        "impedance there is ambiguous — it would have to "
+                        "name which pair of branches it sits between. Load "
+                        "an interior knot, or model the load on a short "
+                        "bridge wire off the junction."
+                    )
+                idx.append(basis)
+                z_l.append(z)
+            lumped = (
+                np.asarray(idx, dtype=np.int64),
+                np.asarray(z_l, dtype=np.complex128),
+            )
+        return {"z_seg": z_seg, "lumped": lumped}
+
+    def _loading_stencil(self, geom):
+        """The k-independent half of the loading term: which (row, column)
+        pairs it touches, on which segment, with what geometric weight.
+
+        **The derivation.** A loaded wire's surface condition is not
+        E_tan = 0 but E_tan = Z_s(l)·I(l): the tangential field no longer
+        vanishes on the conductor, it equals the series impedance per metre
+        times the current there. Razor-blade testing enforces the condition
+        as a PATH INTEGRAL along P_m (module docstring), so the loaded
+        equation tested by row m is
+
+            ∫_{P_m} E_tan dl  =  ∫_{P_m} Z_s(l)·I(l) dl
+
+        and with I(l) = Σ_n I_n Λ_n(l) the extra term is a matrix, not a
+        vector:
+
+            L[m, n] = ∫_{P_m} Z_s(l) Λ_n(l) dl,      Z = Z_free + L
+
+        — the testing-path integral of Z_s times each tent. The sign is
+        `+`: the fill's Z is the voltage a unit current needs, and a series
+        impedance in the path needs Z_s·I more of it. (`SinusoidalSolver` /
+        `SinusoidalGalerkinSolver` spell the same physics with a MINUS
+        because their G is assembled with the opposite global sign; the
+        oracle that fixes it here is #427 gate 2, `Z_driven = Z_unloaded +
+        Z_L` — the sign is not a convention this module gets to choose.)
+
+        **In the path/wing idiom it is four numbers.** Both P_m and Λ_n are
+        built out of wings. Row m's wings are HALF-segments: the half of
+        wing i's segment adjacent to knot m. Column n's wings are the tent's
+        two linear ramps. So a (row wing, column wing) pair contributes only
+        when they live on the SAME segment, and then the integral is one of
+        two numbers on a segment of length h:
+
+            ∫ over the knot-side half of the ramp that peaks at that knot
+                = ∫_{h/2}^{h} (τ/h) dτ = 3h/8
+            ∫ over the same half of the ramp that peaks at the OTHER end
+                = ∫_{h/2}^{h} (1 − τ/h) dτ = h/8
+
+        i.e. `3h/8` when the two wings rise at the same end of the segment
+        and `h/8` when they rise at opposite ends — `wing_rise` is exactly
+        that bit. The path integral is over |dl| with the traversal
+        direction carried in the tangent (`_testing_paths`), and Z_s·I is a
+        vector along the wire, so the pair also carries σ_row·σ_col: the dot
+        product of the path's direction with the current's. That is the
+        whole term:
+
+            L[m, n] = Σ_{wings i of m, j of n on a shared segment s}
+                      σ_{m,i} σ_{n,j} · Z_s(segment s) ·
+                      (3h_s/8 if rise_i == rise_j else h_s/8)
+
+        Two sanity readings. On a uniform wire the row sums to
+        Z'·(3h/4 + h/8 + h/8) = Z'·h, the exact ∫Z' dl over a path of length
+        h, which is the statement that a CONSTANT current sees the whole
+        path's impedance and no more. And L is SYMMETRIC — swapping row and
+        column swaps `rise_i`/`rise_j`, which the comparison above does not
+        see — even though razor's field matrix is not: a surface impedance
+        is a local, reciprocal object and the testing rule does not spoil
+        that. It is not, however, the Galerkin Gram (h/3, h/6 per segment);
+        `wire_loss_power` uses that one, because dissipated power is a
+        physical integral and does not care which rule tested the equation.
+
+        **Junction tents need no special case.** A junction tent is two
+        wings on two real segments exactly like an interior tent's, with σ
+        telling each half which way the through-current runs there; a load
+        on either arm of a junction is picked up by whichever wings share
+        that arm's terminal segment.
+
+        **The grounded-end tent takes the real half, and nothing else.**
+        Its side-A wing is its own IMAGE (`_junction_wings`), spelled with
+        σ_A = 0 — so entries with σ = 0 are dropped here, and both the
+        grounded ROW (its testing path is the real half only) and the
+        grounded COLUMN (only the real wing is a conductor) reduce to the
+        contact segment. That is the physically right answer and it needs no
+        branch: loading ON a grounded tent means loading the real base
+        segment, at half the equivalent dipole's tented length, which is the
+        same halving that makes a base-fed monopole return Z_dipole/2. A
+        lumped load at the contact knot is likewise the base GAP's load, in
+        series with the base gap's source, and lands on that tent's diagonal
+        at full value — the same convention as the feed voltage there.
+
+        **Lumped loads are the delta case of the same integral.** A load at
+        knot p is Z_s(l) = Z_L·δ(l − l_p). Only P_p contains knot p (its
+        neighbours' paths stop at the bounding centroids), and Λ_n(l_p) =
+        δ_np because a tent is 1 at its own knot and 0 at every other, so
+        the integral collapses to L[p, p] += Z_L — one diagonal entry, no
+        stencil, no geometry. `_apply_loading` adds it directly.
+
+        **The closed form is lane-independent, deliberately.**
+        `nec5_quadrature` swaps the path rule for NEC-5's identified
+        two-point centroid trapezoid (momwire#316), but that is a
+        quadrature choice about a KERNEL integrand; this integrand is a
+        product of two linear ramps, so there is no accuracy to trade and
+        the closed form above IS the path integral in both lanes. Measured
+        against the binary before it was decided: applying the trapezoid to
+        the loading integral too moves the `LD 5` copper increment by
+        ~0.002 Ω (0.8180 → 0.8162 + …j at N=24), which is below the
+        printed resolution the twin lane is gated at — so the binary cannot
+        discriminate, and the exact integral is chosen on principle rather
+        than on a fit.
+
+        Returns ``(rows, cols, seg, vals)`` arrays for the distributed term;
+        `vals` is the real geometric weight above, so the per-solve work is
+        one gather of Z_s and one unbuffered scatter-add. Pure geometry, so
+        this lives on the k-independent side of `_assemble_Z_prepare` even
+        though the VALUES it is multiplied by are not (skin effect moves
+        with ω, and the swept gate in `tests/test_razor_loading.py` is what
+        proves the split is on the right side).
+        """
+        wing_seg, wing_rise = geom["wing_seg"], geom["wing_rise"]
+        wing_sigma = geom["wing_sigma"]
+        n_basis, n_seg = wing_seg.shape[0], geom["n_segs_total"]
+
+        ent_basis = np.repeat(np.arange(n_basis, dtype=np.int64), 2)
+        ent_seg = wing_seg.reshape(-1)
+        ent_rise = wing_rise.reshape(-1)
+        ent_sigma = wing_sigma.reshape(-1)
+        # σ == 0 is the grounded tent's image wing: no conductor lives there,
+        # so it is dropped rather than multiplied by zero. Structural, not
+        # arithmetic — the same standard the ground blocks are held to.
+        keep = ent_sigma != 0.0
+        ent_basis, ent_seg = ent_basis[keep], ent_seg[keep]
+        ent_rise, ent_sigma = ent_rise[keep], ent_sigma[keep]
+
+        order = np.argsort(ent_seg, kind="stable")
+        ent_basis, ent_seg = ent_basis[order], ent_seg[order]
+        ent_rise, ent_sigma = ent_rise[order], ent_sigma[order]
+        starts = np.searchsorted(ent_seg, np.arange(n_seg + 1))
+
+        # Every ORDERED pair of entries sharing a segment, by ragged
+        # expansion of the segment-major runs — the same construction
+        # `SinusoidalGalerkinSolver._shared_segment_pairs` uses on its own
+        # CSR, written out here because the two solvers share no view type.
+        counts = np.diff(starts)
+        nnz = int(starts[-1])
+        seg_of_entry = np.repeat(np.arange(n_seg, dtype=np.int64), counts)
+        reps = counts[seg_of_entry]
+        left = np.repeat(np.arange(nnz, dtype=np.int64), reps)
+        ramp = np.arange(int(reps.sum()), dtype=np.int64) - np.repeat(
+            np.cumsum(reps) - reps, reps
+        )
+        right = np.repeat(starts[seg_of_entry], reps) + ramp
+
+        seg = seg_of_entry[left]
+        h = np.asarray(geom["seg_h"], dtype=np.float64)[seg]
+        same_end = ent_rise[left] == ent_rise[right]
+        vals = np.where(same_end, 0.375, 0.125) * h
+        vals *= ent_sigma[left] * ent_sigma[right]
+        return {
+            "rows": ent_basis[left],
+            "cols": ent_basis[right],
+            "seg": seg,
+            "vals": vals,
+        }
+
+    @staticmethod
+    def _apply_loading(Z, stencil, spec):
+        """`Z += L` in place: the loading term at one ω (`_loading_stencil`).
+
+        Unbuffered on both halves — a basis pair recurs once per shared
+        segment, and two lumped loads may name the same knot (they are in
+        series there, so they add).
+        """
+        z_seg = spec["z_seg"]
+        if z_seg is not None:
+            np.add.at(
+                Z,
+                (stencil["rows"], stencil["cols"]),
+                z_seg[stencil["seg"]] * stencil["vals"],
+            )
+        if spec["lumped"] is not None:
+            idx, z_l = spec["lumped"]
+            np.add.at(Z, (idx, idx), z_l)
+        return Z
+
     def _assemble_Z_prepare(self, geom):
         """K-independent work for the razor-blade fill: stencils and moments.
 
@@ -1336,6 +1723,20 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             "t1_row_chunks": t1_row_chunks,
             "grounded": geom["grounded_bases"],
             "image": None,
+            # Wire loading's k-independent half (momwire#427). The stencil
+            # is pure geometry — which path half meets which tent ramp on
+            # which segment, and the 3h/8 / h/8 that is — so it belongs
+            # here; the Z_s(ω) it is scaled by does NOT, because the
+            # skin-effect internal impedance and the insulation reactance
+            # both move with ω, so they are built per solved wavenumber in
+            # `_assemble_Z_from_prepared` exactly as the refl-coef weights
+            # are. `None` when nothing is loaded, so an unloaded fill is
+            # structurally unchanged rather than adding a zero.
+            "loading": (
+                self._loading_stencil(geom)
+                if (self._loading_active or self.lumped_loads)
+                else None
+            ),
         }
 
         if img_src is not None:
@@ -1419,6 +1820,15 @@ class RazorSolver(_ElementCurrents, _Cancelable):
             Z -= self._assemble_Z_source_block(
                 geom, prepared, image, k, omega, ground=ground
             )
+        # Loading last, and OUTSIDE the fold: `Z = (Z_free − Z_image) + L`.
+        # The loading term is a property of the conductor's surface, not of
+        # the field, so it takes no image and no weight — the plane's
+        # presence changes which fields the wire sees, never the impedance
+        # per metre of the wire itself. That is also why it needs no branch
+        # per ground: this one line serves free space, both folding grounds
+        # and the composing one.
+        if prepared["loading"] is not None:
+            self._apply_loading(Z, prepared["loading"], self._loading_spec(geom, omega))
         return Z
 
     def _assemble_Z_source_block(
@@ -1821,6 +2231,59 @@ class RazorSolver(_ElementCurrents, _Cancelable):
 
     # ------------------------------------------------------------------
     # swept solve
+
+    def wire_loss_power(self, coeffs, omega=None):
+        """Ohmic power dissipated in the wire metal, from a solve's coeffs.
+
+        P_wire = ½ Σ_w Re[Z'_w(ω)] · ∫_w |I(l)|² dl — the readout the
+        downstream power budget reports, with the same signature and the
+        same ``(total_watts, per_wire_watts)`` return as
+        `BSplineSolver.wire_loss_power` and `SinusoidalSolver`'s. Insulation
+        loading is purely reactive and contributes nothing here.
+
+        This is a PHYSICAL integral over the conductor, so it is the
+        Galerkin overlap of the tent basis with itself, not the testing-path
+        stencil `_loading_stencil` builds: on a segment of length h carrying
+        end currents a (at arc 0) and b (at arc h) the linear current
+        interpolates between them and
+
+            ∫_0^h |a(1−τ/h) + b τ/h|² dτ = h(|a|² + Re[a b̄] + |b|²)/3.
+
+        A grounded end's tent contributes its REAL wing only (σ = 0 empties
+        the image wing), which is right: the image is not metal. Lumped
+        loads are not counted — they are components, not wire, and the
+        siblings' readout covers distributed loading only.
+        """
+        n_w = len(self.wires_polylines)
+        per_wire = np.zeros(n_w, dtype=np.float64)
+        if not self._loading_active:
+            return 0.0, per_wire
+        if omega is None:
+            omega = self.omega
+        geom = self._build_geometry()
+        alpha = np.asarray(coeffs, dtype=np.complex128)[: geom["n_basis_total"]]
+
+        n_seg = geom["n_segs_total"]
+        ent_seg = geom["wing_seg"].reshape(-1)
+        ent_rise = geom["wing_rise"].reshape(-1)
+        ent_val = np.repeat(alpha, 2) * geom["wing_sigma"].reshape(-1)
+        # The knot current each wing deposits at its segment's two ends: a
+        # rising wing peaks at arc h, a falling one at arc 0.
+        i_lo = np.zeros(n_seg, dtype=np.complex128)
+        i_hi = np.zeros(n_seg, dtype=np.complex128)
+        np.add.at(i_hi, ent_seg[ent_rise], ent_val[ent_rise])
+        np.add.at(i_lo, ent_seg[~ent_rise], ent_val[~ent_rise])
+
+        h = np.asarray(geom["seg_h"], dtype=np.float64)
+        int_abs_i2 = (
+            h
+            * (np.abs(i_lo) ** 2 + np.real(i_lo * np.conj(i_hi)) + np.abs(i_hi) ** 2)
+            / 3.0
+        )
+        r_w = np.real(self._loading_zw(omega))  # zeros where switched off
+        wire_of = self._wire_of_seg(geom)
+        np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
+        return float(per_wire.sum()), per_wire
 
     def compute_impedance_swept(self, k_array):
         """Drive-point impedance(s) over a batch of wavenumbers.
