@@ -21,6 +21,13 @@ modes. Landed in units:
   moved here from `sinusoidal_galerkin` because it is what "this ground
   has no dyad" *returns*.
 
+momwire#429 unit 2 took the FACTORY's decision tree out from under this
+module and its potential-trunk sibling both: `_ground_spec.ground_config`
+answers "which ground, at this ω" once, and `field_ground_for` is now
+this trunk's object construction and nothing else. The sketch's "only the
+factory is shared vocabulary" was an understatement — the two factories
+were 82 % identical — and the amendment is recorded in the sketch itself.
+
 The physics is one level down, in `_ground_refl` (ε̃, the Fresnel
 coefficients, the specular ray tables) — that layer is where a
 coefficient-level ground such as the radial-wire screen will land, which
@@ -66,7 +73,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import _ground_refl, _sommerfeld
+from . import _ground_refl, _ground_spec, _sommerfeld
 
 
 def plain_projection(cm, m_idx, n_idx):
@@ -531,6 +538,14 @@ def field_ground_for(solver, geom, k, omega) -> FieldGround | None:
     """The factory: `solver`'s ground as one object, or `None` for free
     space.
 
+    Since momwire#429 unit 2 the DECISION is `_ground_spec.ground_config`,
+    shared with `potential_ground_for` — the two factories were 82 %
+    literally identical, and the shared 82 % was never a piece of either
+    formulation. What is left here is this trunk's own construction. In
+    particular `weighted` is `cfg.weighted`, which is the same predicate
+    the potential trunk spells as "does this ground carry a `phi_mode`":
+    the reflection-coefficient ground alone.
+
     `None` is not a null object and must not become one — the free-space
     fill takes the path it always took, with the ground branch structurally
     absent rather than skipped, so not one float operation differs. Same
@@ -549,42 +564,17 @@ def field_ground_for(solver, geom, k, omega) -> FieldGround | None:
     | refl-coef  | fold    | Fresnel dyad | 1     | None      |
     | sommerfeld | compose | None         | C₂(ε̃) | prepare/replay |
     """
-    if solver.ground_z is None:
+    cfg = _ground_spec.ground_config(solver, omega)
+    if cfg is None:
         return None
-    if solver.ground_eps is None:
-        return FieldGround(
-            solver,
-            geom,
-            k,
-            omega,
-            mode="fold",
-            weighted=False,
-            eps_tilde=None,
-            image_coefficient=1.0,
-        )
-    eps_t = _ground_refl.eps_tilde(solver.ground_eps, omega, solver.eps)
-    if solver._sommerfeld_ground():
-        # NEC's decomposition (theory manual eqs 136-147): the exact image
-        # scaled by C₂, which absorbs all the singular behaviour, plus the
-        # smooth interpolated remainder. ε̃ → ∞: C₂ → 1, remainder → 0, PEC
-        # image exactly; ε̃ → 1: both vanish, free space.
-        return FieldGround(
-            solver,
-            geom,
-            k,
-            omega,
-            mode="compose",
-            weighted=False,
-            eps_tilde=eps_t,
-            image_coefficient=(eps_t - 1.0) / (eps_t + 1.0),
-        )
     return FieldGround(
         solver,
         geom,
         k,
         omega,
-        mode="fold",
-        weighted=True,
-        eps_tilde=eps_t,
-        image_coefficient=1.0,
+        mode=cfg.mode,
+        weighted=cfg.weighted,
+        eps_tilde=cfg.eps_tilde,
+        image_coefficient=cfg.image_coefficient,
+        standard_fresnel=cfg.standard_fresnel,
     )

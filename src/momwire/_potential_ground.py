@@ -123,6 +123,14 @@ solver (it is schedule) and reaches this object through
 `weight_tables(prep=…)`, the same supplier indirection
 `FieldGround.projector(tables=…)` uses on the sibling trunk.
 
+Unit 2 of momwire#429 (rank 5) took the FACTORY's decision tree out from
+under this module and `_field_ground` both. `potential_ground_for` and
+`field_ground_for` were 82 % literally identical — the same four-way
+branch answering the same three numbers — so the branch is
+`_ground_spec.ground_config` now and each factory keeps only its own
+object construction. `ground_phi_mode` stays here, because it is the one
+part of the decision the field form cannot express.
+
 Evaluation-order discipline is part of this module's interface for the
 same reason it is part of `_field_ground`'s (momwire#392, architecture doc
 §3.4): every expression below is the call site's own, moved and not
@@ -134,7 +142,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import _ground_refl, _sommerfeld
+from . import _ground_refl, _ground_spec, _sommerfeld
 from ._quadrature import leggauss
 
 # M = diag(1, 1, −1) as the row it multiplies a `(..., 3)` array by. One
@@ -817,6 +825,13 @@ def potential_ground_for(solver, geom, k, omega) -> PotentialGround | None:
     """The factory: `solver`'s ground as one object, or `None` for free
     space.
 
+    Since momwire#429 unit 2 the DECISION is `_ground_spec.ground_config`,
+    shared with `field_ground_for` — free space, PEC, the refl-coef fold,
+    the Sommerfeld composition and the three numbers each implies — and
+    what is left here is this trunk's own construction: the object, and
+    `ground_phi_mode`, which is the one part of the decision the field
+    form cannot express (architecture doc §2.2).
+
     `None` is not a null object and must not become one — the free-space
     fill takes the path it always took, with the ground branch
     structurally absent rather than skipped, so not one float operation
@@ -845,36 +860,19 @@ def potential_ground_for(solver, geom, k, omega) -> PotentialGround | None:
     `standard_fresnel`), so on THIS trunk's dense route even the fused
     path serves it unchanged.
     """
-    if solver.ground_z is None:
+    cfg = _ground_spec.ground_config(solver, omega)
+    if cfg is None:
         return None
-    if solver.ground_eps is None:
-        return PotentialGround(
-            solver,
-            geom,
-            k,
-            omega,
-            mode="fold",
-            eps_tilde=None,
-            image_coefficient=1.0,
-        )
-    eps_t = _ground_refl.eps_tilde(solver.ground_eps, omega, solver.eps)
-    if solver.ground_model == "sommerfeld":
-        return PotentialGround(
-            solver,
-            geom,
-            k,
-            omega,
-            mode="compose",
-            eps_tilde=eps_t,
-            image_coefficient=(eps_t - 1.0) / (eps_t + 1.0),
-        )
     return PotentialGround(
         solver,
         geom,
         k,
         omega,
-        mode="fold",
-        eps_tilde=eps_t,
-        image_coefficient=1.0,
-        phi_mode=solver.ground_phi_mode,
+        mode=cfg.mode,
+        eps_tilde=cfg.eps_tilde,
+        image_coefficient=cfg.image_coefficient,
+        # This trunk's own knob, with no field-trunk analogue: carried
+        # for the one ground that has a per-pair weight to apply it to.
+        phi_mode=solver.ground_phi_mode if cfg.weighted else None,
+        standard_fresnel=cfg.standard_fresnel,
     )

@@ -179,6 +179,17 @@ is unit 3's own.
   are shared vocabulary. §2.2 of the architecture doc says why they never
   merge.
 
+  > **Amended 2026-08-18 (momwire#429 unit 2, the sharing audit's rank 5
+  > and correction 3).** "Only the factory is shared vocabulary"
+  > understated it: the two factories turned out to be **82 % literally
+  > identical**, which is an extraction and not a vocabulary. The shared
+  > part — free / PEC / refl-coef fold / Sommerfeld compose, and the
+  > `(mode, eps_tilde, image_coefficient, standard_fresnel)` each implies
+  > — now lives in `_ground_spec.ground_config`, which both factories
+  > consume; each keeps only its own object construction, plus
+  > `ground_phi_mode` on the potential side. The classes still never
+  > merge, for §2.2's reasons, unchanged.
+
 ## Migration units and gates (the stacked arc, once this is approved)
 
 1. **Unify the Fresnel pair tables** — one builder behind `pair_weights`,

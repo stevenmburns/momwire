@@ -3643,11 +3643,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """True when the fill carries NEC's exact-image + interpolated
         remainder decomposition rather than a PEC or Fresnel image.
 
-        Since momwire#397 unit 2 this predicate has exactly two readers:
-        `_field_ground.field_ground_for`, which turns it into
-        `mode="compose"` once per fill, and `_fill_row_bytes`, which is
-        residency arithmetic rather than physics and counts blocks with it.
-        The fill itself branches on the ground object and reads no strings.
+        Since momwire#429 unit 2 this predicate has exactly ONE reader:
+        `_fill_row_bytes`, which is residency arithmetic rather than
+        physics and counts blocks with it. The factory that used to be the
+        other reader now asks `_ground_spec.ground_config`, whose
+        `ground_model == "sommerfeld"` is this test with the two leading
+        conjuncts already established by the branches above it — the same
+        answer, spelled once for both trunks. The fill itself branches on
+        the ground object and reads no strings.
         """
         return (
             self.ground_z is not None
