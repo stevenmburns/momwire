@@ -202,15 +202,17 @@ from ..deck._nec2_geometry import build_geometry
 # rather than refusing, so both entries are safe on arbitrary decks.
 # `razor` / `razor-nec5` (momwire#432) are the NEC-5 formulation twin — a
 # suffix is required the moment either name joins `deck.BASES` (this dict
-# comprehension is total over it), but neither is a WORKING portal entry
-# yet: `RazorSolver` has no `compute_port_solution()` (it exposes
-# `compute_impedance()` only — see `docs/razor-solver.md` "No C++
-# accelerator"), so `_y_and_port_coeffs` raises `AttributeError` the moment a
-# deck actually solves under either name. momwire#432 is scoped to
-# `momwire.deck.build_solver` — a library/script consumer building a
-# `RazorSolver` straight off a parsed deck — not to the portal's Y-matrix
-# port algebra, which is a separate, larger unit (a `compute_port_solution`
-# for razor) filed as a follow-up rather than attempted here.
+# comprehension is total over it), and both ARE working portal entries:
+# `RazorSolver.compute_port_solution()` (the sharing audit's #429 rank-9
+# item) closed the gap #432 left as a follow-up, so `_y_and_port_coeffs`
+# drives either name exactly like every other roster entry, through the same
+# one-fill-all-ports call. Nothing razor-specific lives past this point — the
+# port algebra, the Y-matrix readout and the field evaluation are all the
+# shared code every basis rides. (One narrower gap remains and is tracked as
+# its own issue, #439: a deck-level LOAD-ONLY site on a segment no `EX`
+# drives has no matching `RazorSolver.feeds` entry, since razor bakes it
+# straight into `lumped_loads` instead of the port-algebra route every other
+# family takes — see `docs/razor-solver.md` "A remaining portal-side gap".)
 _BANNER_SUFFIXES = {
     "bspline": "",
     "bspline-d1": "+bs1",

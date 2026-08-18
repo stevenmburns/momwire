@@ -330,15 +330,37 @@ computed), and this class takes no such argument at all — not even
 in `**unsupported` — so the roster entry omits the keyword rather than
 passing a value that would refuse.
 
-**Not reached: the portal.** This class has no `compute_port_solution()` (it
-exposes `compute_impedance()` only — see "No C++ accelerator" above), so
-`momwire.portal`'s Y-matrix-based deck runner cannot yet drive a live
-solve under either roster name, even though both are valid `--basis`
-choices the moment they join `deck.BASES` (the portal reads that roster
-directly, #846 phase III). A `compute_port_solution` for this class is a
-unit of its own, tracked as a follow-up rather than attempted by #432,
-which is scoped to the library/script front end
-(`momwire.deck.build_solver`) alone.
+**The portal (the sharing audit's #429 rank-9 item).**
+`compute_port_solution()` / `compute_port_solution_swept()` close the gap
+#432 left as a follow-up. Ports are the configured `feeds`, in order —
+`junction_ports` and `node_gaps` are both refused at
+construction, so there is nothing after them the way the B-spline /
+sinusoidal-Galerkin families' feeds-then-junction-ports order has. On a
+tent basis the coefficient AT a knot IS the current there, so
+`port_currents` (== `y`) is read straight off the solved `coeffs` at the
+feed rows — no separate per-port readout function the segment-basis
+families need. Both entry points assemble the fill through the module's
+own `_assemble_Z_prepare` / `_assemble_Z_from_prepared` split — the same
+one `compute_impedance_swept` / `compute_y_matrix_swept` already use — so
+`compute_y_matrix()` (now `compute_port_solution().y`) and the swept
+generator behind `compute_port_solution_swept()` share one code path with
+the single-k entry point rather than a second copy of the port algebra:
+`momwire.portal`'s Y-matrix-based deck runner (`_y_and_port_coeffs`) drives
+`--basis razor` and `--basis razor-nec5` exactly like every other roster
+entry now, through the same one-fill-all-ports call.
+
+**A remaining portal-side gap, not in this class.** The portal's
+`_port_signs` assumes every `PortPlan` site (every `EX` AND every `LD`) has
+a matching `RazorSolver.feeds` entry — true for a driven site, and true for
+a site that is both fed and loaded (`_sites()` merges the two into one
+`PortSite`, see "A load-only site is not a port here" above) — but a
+LOAD-ONLY site on a segment no `EX` drives never reaches `feeds` at all
+(it is baked straight into `lumped_loads`), so `_port_signs` indexes past
+the end of the list on that one deck shape. Filed as a portal-side
+follow-up rather than fixed alongside `compute_port_solution`: repairing it
+means teaching `_portal.py`'s load-stamping algebra (built on `plan.n_ports`
+== the Y-matrix size) that this family already baked a load into the fill,
+not changing anything in this module.
 
 Gates: `tests/test_deck_build_solver_razor.py` — a battery of eight decks
 (free dipole, `LD 4` mid-element, `LD 5` copper, a `GN 1` base-fed contact
@@ -391,6 +413,16 @@ and the `node_gaps` / contact-over-finite-ground refusals surfacing through
   NEC-5 twin lane on a fat-parasitic deck and a fat/thin junction deck in
   free space and over `GN 1`, the junction convention read structurally off
   the wing arrays, and the cross-formulation difference-of-columns.
+- `tests/test_razor_port_solution.py` — `compute_port_solution` /
+  `compute_port_solution_swept` (#429 rank-9): `compute_y_matrix()` bit for
+  bit against `compute_port_solution().y` over free space and all three
+  grounds in both quadrature lanes, the columns solving their own port
+  against an independently reassembled operator, `coeffs @ V`
+  superposition, feeds-in-order port ORDER, one fill and one factorisation
+  per call, and the swept ω-boundary bit gate over a moving-ε̃ ground.
+  `tests/test_portal.py`'s `--basis razor` / `--basis razor-nec5` battery
+  carries the portal end-to-end gate — a live deck with a load AND a
+  ground, both roster names, finite AIP data.
 - `tests/test_razor_nec5_twin.py` — the only file comparing against real
   NEC-5 printouts (LLNL-CODE-746721) rather than an in-Python instrument:
   pointwise tracking from N=24 up with per-N tolerances that shrink with N,
