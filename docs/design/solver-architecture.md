@@ -872,6 +872,112 @@ these observers, from these source segments") with `evaluate` kept as the
 Galerkin convenience over it — which is, for the third time, the same
 generalisation this pilot keeps producing.
 
+### 6.5 Unit 5: the Sommerfeld ground on razor (2026-08-17)
+
+The composing ground, and with it the whole ground column for wires
+standing clear of the plane: `RazorSolver.capabilities.grounds` is now
+`{"pec", "refl-coef", "sommerfeld"}` on a solver that implemented **zero**
+ground methods when the pilot began.
+
+**§6.4's prediction was right, and it was right for a reason that made the
+unit's shared-layer edit predictable to the line.** Unit 4 recorded that
+`Remainder.evaluate(supp_seg, polys)` is a B-spline signature twice over
+(basis description in, finished Galerkin block out) and that razor's
+path-integral rows need a different OPERATION rather than a different shape
+of the same one. What makes this the strongest instance of the pilot's
+central claim so far is that a **second, independent consumer said the same
+thing first**: the `PulseSolver` probe (momwire#416,
+`docs/design/pulse-probe.md` §4.1) was blocked by the identical signature
+in the identical way — it needs the plain rectangular field at one centroid
+per row — and proposed the identical fix, down to naming
+`_sommerfeld.remainder_field_proj` as the primitive that already exists one
+level down. Two consumers, arrived at from different formulations on
+different days, agreeing on the shape of a generalisation before it was
+made, is a different quality of evidence from one consumer forcing one.
+
+So `Remainder` grew `field_windows(observers, sources)`: the remainder
+FIELD of each source segment's basis ARC MOMENTS, projected on the observer
+tangents, produced in observer-row windows `(i1-i0, n_src, n_moment)`. The
+moment count is the whole of what separates the consumers — 2 for razor's
+tent (the M0/M1 analogue), 1 for a pulse's rectangular field, `degree + 1`
+for the B-spline moments `evaluate`'s own fused kernel forms internally.
+`evaluate` stays, unchanged and bit-identical, as the Galerkin convenience
+over it. **Third generalisation, third time one layer deep, third time with
+no new concept** — after `ImageGeometry` (unit 2) and `weight_windows`
+(unit 4), on three different members of the same object.
+
+One honest asymmetry, recorded because units 2 and 4 did not have it. Their
+conveniences are literally built out of their operations and are pinned
+`array_equal`. `evaluate` is not: its hot path is the fused C++
+`sommerfeld_remainder_bspline_Q`, which interpolates, projects,
+moment-quadratures on both axes and assembles into `Q` without ever forming
+the intermediate `field_windows` returns. That is the same *two kernels,
+not one kernel behind two shapes* situation `weight_tables`' `None` already
+describes, so the two spellings are pinned at the quadrature's own
+agreement instead — 2.9e-15 relative, the same class as the existing
+fused-vs-numpy gate.
+
+**The schedule finding is the unit's own, and it is sharper than unit 4's.**
+Unit 4's weights are ω-dependent, so they could not live in the
+k-independent prepare half. The Sommerfeld grid is k-dependent *in every
+part*: its lattice is spaced in wavelengths, its extent is bucketed in
+wavelengths, and its surface values carry an ω·μ normalisation. So nothing
+of it may cross the prepare/replay boundary in any form — not the grid, not
+the source quadrature nodes derived alongside it. The composing fill takes
+exactly two more arrays from `prepare`, both pure geometry (the real source
+segment endpoints), and builds everything else per solved wavenumber inside
+the producer `field_windows` returns. The gate watches
+`_sommerfeld.get_grid` itself rather than inferring the schedule from the
+answer.
+
+The composition is where the mode contract earns its existence. `C₂·img`
+needs no new fill code at all — C₂ arrives as `weight_windows`' constant
+`(w_A, w_Φ)` pair, so unit 4's weighted fill assembles the scaled exact
+image with the same two lines it uses for the Fresnel one — and `Q` is
+summed into that block **inside `_assemble_Z_source_block`, before the
+seam's single minus**, because `free − (C₂·img + Q) ≠ (free − C₂·img) − Q`
+in float64. Three properties of Q are each a way to get it wrong, and each
+is spelled at its seam: it is a FIELD (no jωμ / 1/jωε prefactor), it
+integrates over the REAL source segments (the plane is inside the field,
+through the grid) even though it rides in the image block, and it is
+associated before the minus. §8 risk 2 — "stage 2 cannot hold the
+Sommerfeld fold order" — is answered for this trunk: the association is one
+line in the solver, and the object names it.
+
+Cost, measured as units 2-4 were (executable lines — no blanks, comments or
+docstrings): **44 added and 24 retired in `razor.py`, net +20**, of which
+~25 added are the fill (the producer, the in-loop wing algebra, the
+association) and the rest is constructor plumbing — the `n_qp_sommerfeld`
+knob and the `ground_eps` requirement — while 15 of the 24 retired are
+`_SOMMERFELD_REFUSAL`'s prose, deleted because the capability arrived. In
+`_potential_ground.py`: **55 added and 4 retired, net +51**, all of it the
+new operation. **The shared layer grew more than the consumer did**, which
+is the first time in this pilot that has happened and is exactly what one
+expects when a unit's content is an interface rather than a capability. No
+new physics, no new kernel, no C++.
+
+| gate | result |
+|---|---|
+| ε̃ → 1 is free space | **bit for bit**, both quadrature lanes — C₂ = 0 and the six λ-integrals short-circuit to exact zeros, so the layer collapses arithmetically rather than approximately |
+| PEC limit | **held and rate-checked.** \|Z(ε̃) − Z_PEC\| on dipole@0.25λ, N = 48: 16.625, 6.3687, 2.1477, 0.69348, 0.069959 Ω at ε̃ = 10 … 10⁶, single-decade ratios 2.61 / 2.97 / 3.10 → √10 from below. That is C₂'s rate, not the remainder's, and seeing it means both terms converge rather than one cancelling the other's error |
+| the remainder is alive | **22.81 Ω** between the two finite grounds on a dipole 0.04 λ up (48.918 − 21.346j refl-coef vs 71.112 − 16.087j Sommerfeld, N = 48), where `BSplineSolver(degree=2)` splits by 22.837 Ω — the two formulations agree about what the GROUND did to 0.03 Ω. At 0.25 λ the same comparison is 1.211 vs 1.218 Ω, which is why the low deck had to be added |
+| cross-formulation agreement | **held**, unit 4's bar and unit 4's form: every Sommerfeld delta is its own free-space delta to within **0.047 Ω** (worst; 3 decks × 2 lanes × 3 reference formulations at N = 192) against 0.25 Ω. Absolute worst 0.968 Ω against the Galerkin siblings; both dipole ladders close monotonically at the O(1/N) rate (0.25 λ: 5.207 → 0.949, ratios 1.81/1.75/1.74; 0.04 λ: 4.692 → 0.864) |
+| swept == per-k | **bit for bit**, and `get_grid` observed to fire once per solved wavenumber AT that wavenumber |
+| razor bit-identity | **held**: 204 razor arrays (7 deck shapes × up to 3 grounds × 2 lanes × 6 readouts) unmoved against the branch point, free space / PEC clear / PEC contact / refl-coef. Both golden modules unmoved |
+| B-spline grounded bit-identity | **held**: 50 arrays unmoved by the `Remainder` generalisation — 48 across PEC / refl-coef / two Φ modes / Sommerfeld × degree 1-2 × three deck shapes (clear, contact, bent), plus the two 41-band grounded swept replays, over refl-coef and over Sommerfeld |
+
+**What is still refused on this row, and why** — the input unit 6's bar
+proposal needs. Ground CONTACT over either finite ground (momwire#282: the
+composing ground's image coefficient is C₂, not 1, so a grounded tent's
+lower wing is no more its own exact image over Sommerfeld than over
+Fresnel — the same argument, now with a second ground behind it). A
+mid-span touchdown (a second unknown at a knot that already carries a
+tent). The extended kernel (NEC-5 tests on the wire axis). Wire loading,
+junction ports, node gaps, per-wire radii, singular enrichment. And no C++:
+the composing fill is the first place on this solver where that is a
+throughput decision rather than a policy one, since the grid interpolation
+it leans on is already accelerated while the assembly around it is not.
+
 ---
 
 ## 7. What this subsumes, and what it does not
