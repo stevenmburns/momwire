@@ -376,3 +376,69 @@ three qualifications that are the actual content of the finding:
 6. Ground CONTACT for `PulseSolver`: the basis looks structurally ready
    (a contact node's real and image charges coincide and cancel), but
    nothing here measures it, so it is refused.
+
+## 8. Correction (momwire#430, 2026-08-18): §4.1's blocker is resolved
+
+Section 4.1 above is left exactly as it was written — this is an appended
+correction, not a rewrite, because a refusal message is a physics finding
+on the record and the record should show what was true and when.
+
+§4.1 was right about the mechanism and wrong about its shelf life. #398
+unit 5 landed one week after this probe, and it landed the EXACT signature
+§4.1 asked for: `Remainder.field_windows(observers, sources, n_moment=…)`,
+hanging the remainder FIELD back at chosen observation points instead of a
+finished Galerkin block. `n_moment = 1` — the zeroth arc moment of a
+source segment, i.e. weight 1 over the segment — IS this basis's own
+shape, exactly as §4.1 predicted a generalised signature would serve. So
+the refusal `_OUT_OF_SCOPE["ground_model"]` pinned, and the test that pinned
+it (`test_sommerfeld_refusal_names_the_signature_that_blocked_it`), were
+asserting a blocker that had already been removed from underneath them —
+which is what momwire#430 filed against.
+
+**momwire#430's resolution was (a): grant the capability**, not (b):
+reword the refusal. `pulse.py` now consumes `field_windows` the same way
+`razor.py` does — Q, the smooth Sommerfeld remainder field, added to the
+image block as `C₂·img + Q` before `_assemble_Z`'s single global minus,
+`mode == "compose"`'s contract, unchanged — with zero new branch for the
+C₂-scaled exact-image half (it rides the same `weight_windows` pair PEC's
+mirror table already uses). `PulseSolver.capabilities.grounds` gained
+`"sommerfeld"`; the refusal and its test are gone, not reworded.
+
+Measured (2026-08-18), on this row's own Δ/a ≈ 1 floor (§5.3):
+
+* **ε̃ → 1 is free space, bit for bit** (`array_equal`, not `allclose`):
+  the exact-image half and Q both vanish structurally at C₂ = 0.
+* **ε̃ → PEC decays at C₂'s own O(ε̃^{-1/2}) rate**, independent of N:
+  |Z(ε̃) − Z_PEC| at ε̃ = 10, 10², 10³, 10⁴, 10⁶ on the dipole@0.25λ deck,
+  N = 64: 14.677, 5.626, 1.898, 0.613, 0.0618 Ω — the same shape
+  `tests/test_razor_sommerfeld_ground.py` measured on a different
+  formulation entirely.
+* **Q is alive at low height.** Refl-vs-Sommerfeld split on the
+  dipole@0.04λ deck, this row's own N ladder up to its Δ/a ≈ 1 floor:
+  20.366, 21.982, 22.932, 23.167 Ω at N = 64, 128, 256, 512 — tens of ohms,
+  as unit 5 found — agreeing with `BSplineSolver(degree=2)`'s 23.126 Ω
+  split at N = 512 to 0.042 Ω, well inside the 1 Ω this basis's slower
+  convergence would excuse (razor agreed with `BSplineSolver` to 0.03 Ω).
+* **The ground adds no cross-formulation gap at 0.25λ beyond this row's
+  own free-space one**: |Z_pulse − Z_bspline(400)| widens by 0.089 / 0.422
+  Ω at N = 256 / 512 when the ground switches from free space to
+  Sommerfeld — the same order as this row's own free-space residual at
+  that N, not a new source of error.
+* **Structural**: the fill reads the ground OBJECT's `mode`, not
+  `self.ground_model` — a composing `PotentialGround` handed to a
+  refl-coef-configured solver (and the reverse) fills the composed (folded)
+  matrix bit for bit; a ground that LIES about `image_coefficient` while
+  its `weight_windows` / `remainder` stay honest moves nothing, because
+  this consumer never applies the coefficient itself; `ground_phi_mode` is
+  accepted and unread under Sommerfeld exactly as `BSplineSolver` and
+  `RazorSolver` treat it.
+* **Bit-identical to the pre-#430 branch point** on every path this unit
+  did not touch: free space, PEC and refl-coef fills reproduce the branch
+  point's matrices exactly (`array_equal`, 3/3 measured), and the full
+  existing `test_pulse.py` / `test_pulse_ground.py` /
+  `test_pulse_capabilities.py` suites stayed green except the two tests
+  this correction replaced.
+
+Gates in `tests/test_pulse_ground.py` §5 and `tests/test_pulse_capabilities.py`.
+Follow-up 2 above (re-shaping `Remainder.evaluate`, the reason this section
+exists) is CLOSED by #398 unit 5; the rest of §7's list is unaffected.
