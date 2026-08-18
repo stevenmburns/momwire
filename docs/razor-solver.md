@@ -103,34 +103,73 @@ the plane, an edge lying in it, an interior anchor touching down (split the
 wire there instead), and contact over a finite ground — the fold hard-codes
 image coefficient 1, i.e. PEC (momwire#282).
 
+## The finite grounds (momwire#398 units 4-5)
+
+`ground_eps` puts a finite ground under the model, for wires standing CLEAR
+of the plane, in either of momwire's two flavours:
+
+```python
+RazorSolver(..., ground_z=0.0, ground_eps=(13.0, 0.005))            # GN 0
+RazorSolver(..., ground_z=0.0, ground_eps=(13.0, 0.005),
+            ground_model="sommerfeld")                              # GN 2
+```
+
+**`"refl-coef"`** (the default) weights the image block per (observer,
+source segment) pair by the Fresnel coefficients at that pair's specular
+angle: the A term takes `w_A` where the PEC fill writes `t̂_out · M·t̂_n`,
+and the charge term takes `w_Φ`, which the PEC path leaves unweighted and
+which `ground_phi_mode` selects. Validity window 0.1–0.5 λ above the plane
+(momwire#151/#153).
+
+**`"sommerfeld"`** is the exact ground and has no validity window — it is
+the one to use below 0.1 λ, and the difference is not subtle: on a
+half-wave dipole 0.04 λ up the two grounds disagree by 22.8 Ω. It is this
+solver's one COMPOSING ground:
+
+```
+Z = Z_free − (C₂·image + Q),   C₂ = (ε̃−1)/(ε̃+1)
+```
+
+The scaled exact image needs no fill code of its own — C₂ arrives as the
+constant weight pair, through the same slot the Fresnel weights use — and
+`Q`, the smooth remainder field, is tested by this formulation's own rule:
+the testing-path integral of the field of each source segment's tent
+moments. The sum is associated before the fold's single minus, which is
+what "composing" means. `ground_phi_mode` is accepted and unread over it
+(the Sommerfeld image coefficient is exact and has no knob), exactly as in
+`BSplineSolver`, and `n_qp_sommerfeld` is the remainder's per-segment
+quadrature order — converged at its default 3 to 3.6e-6 Ω.
+
+Both weights and the remainder come from
+`_potential_ground.PotentialGround`; razor computes no reflection
+coefficient and evaluates no Sommerfeld integral of its own.
+
+**NEC-5 is not the oracle for either**, and that is a statement about the
+physics: NEC-5's finite ground is Michalski, which carries its own limit
+offset, and mixing that in would contaminate the one thing this class
+exists to isolate (the testing rule). The PEC image carries no such offset
+— it is the same exact image NEC-5's own `GN 1` uses — which is why it is
+the ground that could be oracle-gated. The finite ones are gated by
+cross-formulation agreement instead, in the form this formulation can
+honestly claim: the ground must not widen the razor-vs-Galerkin gap that
+razor's own O(1/N) walk already opens in free space. Measured within
+0.133 Ω of it for refl-coef and 0.047 Ω for Sommerfeld.
+
 ## Scope
 
-Free space, the PEC image and the reflection-coefficient ground, reduced
-kernel, one polyline per wire — the remaining gaps deliberate, not
-initial-version:
+Free space and all three grounds — PEC, reflection-coefficient and
+Sommerfeld — reduced kernel, one polyline per wire; the remaining gaps
+deliberate, not initial-version:
 
-- **The reflection-coefficient ground is served** (`ground_eps`,
-  momwire#398 unit 4) for wires standing CLEAR of the plane, with
-  `ground_phi_mode` picking the image-charge weighting exactly as
-  `BSplineSolver` does. **NEC-5 is not its oracle**, and that is a
-  statement about the physics: NEC-5's finite ground is Michalski, which
-  carries its own limit offset, and mixing that in would contaminate the
-  one thing this class exists to isolate (the testing rule). The PEC image
-  carries no such offset — it is the same exact image NEC-5's own `GN 1`
-  uses — which is why it is the ground that could be oracle-gated. The
-  finite one is gated by cross-formulation agreement instead, in the form
-  this formulation can honestly claim: the ground must not widen the
-  razor-vs-Galerkin gap that razor's own O(1/N) walk already opens in
-  free space (measured within 0.133 Ω of it, on two decks × two lanes ×
-  three reference solvers).
-- **The Sommerfeld ground is out of scope.** It composes a Galerkin
-  remainder block with the C₂-scaled exact image; these rows are
-  razor-blade path integrals, not Galerkin projections.
-- **Ground contact over a finite ground is out of scope**, and stays
-  refused citing momwire#282: the fold hard-codes image coefficient 1, so
-  the grounded-end tent's lower wing — which IS that image — would take
-  spurious contact charge. Weighting the image block cannot repair a wrong
-  basis function.
+- **Both finite grounds are served** for wires standing CLEAR of the plane
+  — see the section above for what each is and how they are gated.
+- **Ground contact over a finite ground is out of scope**, over BOTH of
+  them, and stays refused citing momwire#282: the fold hard-codes image
+  coefficient 1, so the grounded-end tent's lower wing — which IS that
+  image — would take spurious contact charge. Over the Sommerfeld ground
+  the coefficient is C₂ rather than the Fresnel pair, and the argument is
+  unchanged: no weighting of the image block repairs a wrong basis
+  function.
 - **The extended kernel is out of scope.** NEC-5's formulation tests the
   expansion on the wire axis with the reduced kernel; extending it would
   again be answering a different question than the one this solver was
@@ -141,10 +180,10 @@ initial-version:
   bit-exact regression tests against a pure-numpy reference, which this
   class does not yet have to pay for.
 
-`RazorSolver` refuses `ground_model="sommerfeld"`, `degree`, `junctions`,
-`junction_ports`, `extended_kernel`, `node_gaps`, non-scalar `wire_radius`
-and `ground_eps` on a deck that touches the plane, at construction with a
-message explaining why, rather than silently mismodelling — a wrong answer
+`RazorSolver` refuses `degree`, `junctions`, `junction_ports`,
+`extended_kernel`, `node_gaps`, non-scalar `wire_radius` and either finite
+ground on a deck that touches the plane, at construction with a message
+explaining why, rather than silently mismodelling — a wrong answer
 here is worse than no answer.
 
 ## Twin-gate tests
@@ -161,6 +200,12 @@ here is worse than no answer.
 - `tests/test_razor_pec_ground.py` — the PEC image: exactness against the
   explicit mirrored twin, and four clearance ladders against NEC-5's
   printed `GN 1` impedances at the sharp lane's bar.
+- `tests/test_razor_sommerfeld_ground.py` — the composing ground: both
+  limits (ε̃ → 1 free space bit-for-bit, ε̃ → ∞ onto the PEC image at
+  C₂'s own O(ε̃^{−1/2}) rate), the 22.8 Ω refl-vs-Sommerfeld split on a
+  0.04 λ deck that says the remainder term is alive, cross-formulation
+  ladders on three decks, and the schedule — `_sommerfeld.get_grid`
+  observed firing once per solved wavenumber, and swept == per-k.
 - `tests/test_razor_refl_coef_ground.py` — the finite ground: the ε̃ → ∞
   collapse onto the PEC image at the coefficients' own O(ε̃^{−1/2}) rate,
   the cross-formulation ladders (two decks × two lanes × `BSplineSolver` /
