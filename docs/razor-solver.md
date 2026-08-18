@@ -234,10 +234,44 @@ deliberate, not initial-version:
   class does not yet have to pay for.
 
 `RazorSolver` refuses `degree`, `junctions`, `junction_ports`,
-`extended_kernel`, `node_gaps`, non-scalar `wire_radius` and either finite
-ground on a deck that touches the plane, at construction with a message
-explaining why, rather than silently mismodelling — a wrong answer
-here is worse than no answer.
+`extended_kernel`, `node_gaps` and either finite ground on a deck that
+touches the plane, at construction with a message explaining why, rather
+than silently mismodelling — a wrong answer here is worse than no answer.
+
+## Per-wire radius (momwire#147)
+
+`wire_radius` takes a scalar or one radius per wire, the same spelling
+`BSplineSolver` and `SinusoidalSolver` take. A uniform model — however it
+was spelled — keeps the scalar code path and is bit-identical to it.
+
+**The convention is the SOURCE segment's radius**: the reduced kernel's a²
+is added to the perpendicular distance from the source segment's axis, and
+the source column already carries one radius per segment. A junction whose
+arms have different radii therefore needs no special case at all — a tent
+is two wings on two segments, and each wing's moments were built against
+its own source column, so each wing's wired radius is its own segment's.
+That is the same statement twice, which is the point.
+
+**The convention is a choice here, and that is itself the finding.** The
+two candidates — source radius, and the observer radius NEC-2's `EFLD` uses
+and which momwire's sinusoidal family adopted on a PyNEC oracle that moved
+11 Ω — differ only where the perpendicular distance vanishes, i.e. on a
+COLLINEAR radius step. Measured there against the licensed binary: 3.0e-6 …
+1.1e-5 Ω apart on a 10:1 step and 1.4e-3 … 2.1e-3 Ω on a 100:1 one, against
+a 0.20 Ω twin-lane bar. The difference lives in near-diagonal matrix entries
+worth ~1400 Ω, where 0.1 Ω of it is 2e-5 relative and the solve absorbs it.
+The binary cannot separate them, so the source reading is taken on two
+grounds that are not fits: it is the reduced kernel's own derivation (the
+source current averaged over ITS surface ring onto its axis), and it is
+chunk-invariant — the fill chunks the OBSERVER axis, so a per-source column
+is seen whole by every chunk and no mesh refinement can move a chunk
+boundary into the answer.
+
+Gates: `tests/test_razor_mixed_radius.py`, including the NEC-5 twin lane on
+two mixed-radius geometries × free space and `GN 1`
+(`tests/golden_razor_mixed_radius_nec5.py`, captured by
+`scripts/capture_razor_mixed_radius_nec5_lane.py`) — worst |ΔZ| 0.0586 Ω
+against a 0.20 Ω bar, offsets constant to 0.0211 Ω against 0.05 Ω.
 
 ## Twin-gate tests
 
@@ -276,6 +310,11 @@ here is worse than no answer.
   quadrature, the NEC-5 `LD` lane on the loading INCREMENT, the
   cross-formulation difference-of-differences at N = 192, and the schedule
   (swept == per-k over a skin-effect loss that moves with ω).
+- `tests/test_razor_mixed_radius.py` — per-wire radii: the scalar fast
+  path bit-frozen on five ground states × two lanes × matrix and swept, the
+  NEC-5 twin lane on a fat-parasitic deck and a fat/thin junction deck in
+  free space and over `GN 1`, the junction convention read structurally off
+  the wing arrays, and the cross-formulation difference-of-columns.
 - `tests/test_razor_nec5_twin.py` — the only file comparing against real
   NEC-5 printouts (LLNL-CODE-746721) rather than an in-Python instrument:
   pointwise tracking from N=24 up with per-N tolerances that shrink with N,

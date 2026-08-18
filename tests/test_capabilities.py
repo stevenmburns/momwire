@@ -268,17 +268,22 @@ def test_razor_out_of_scope_kwargs_refuse(cell, kwarg):
         )
 
 
-def test_razor_per_wire_radius_refuses():
-    wires, npe = _wire()
-    reason = RazorSolver.capabilities.refusal("per_wire_radius")
-    assert reason
-    with pytest.raises(NotImplementedError):
-        RazorSolver(
-            wires=wires,
-            n_per_edge_per_wire=npe,
-            wire_radius=[0.001, 0.0015],
-            wavelength=WAVELENGTH,
-        )
+def test_razor_per_wire_radius_accepted():
+    """momwire#147 filled this cell: `wire_radius` takes the siblings'
+    per-wire sequence, gated against the binary's own mixed-radius `GW`
+    decks (`tests/test_razor_mixed_radius.py`)."""
+    assert RazorSolver.capabilities.per_wire_radius
+    assert RazorSolver.capabilities.refusal("per_wire_radius") is None
+    wires = [
+        np.array([(0.0, 0.0, 0.0), (0.0, 1.0, 0.0)]),
+        np.array([(1.0, 0.0, 0.0), (1.0, 1.0, 0.0)]),
+    ]
+    RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[4], [4]],
+        wire_radius=[0.001, 0.0015],
+        wavelength=WAVELENGTH,
+    )
 
 
 def test_razor_wire_loading_accepted():
@@ -311,17 +316,19 @@ def test_razor_unsupported_kwargs_are_typeerrors(cell, kwarg):
         )
 
 
-def test_razor_served_row_is_every_ground_plus_loading():
+def test_razor_served_row_is_every_ground_plus_loading_and_radii():
     """PEC (unit 2), refl-coef (unit 4) and sommerfeld (unit 5) — the whole
     ground column, for wires clear of the plane — plus wire loading
-    (momwire#427). Every other cell is still refused, and the one
-    combination that is refused inside the served column (contact over a
-    finite ground, momwire#282) says so through its own key rather than by
-    removing a ground."""
+    (momwire#427) and per-wire radii (momwire#147). Every other cell is
+    still refused, and the one combination that is refused inside the served
+    column (contact over a finite ground, momwire#282) says so through its
+    own key rather than by removing a ground."""
     c = RazorSolver.capabilities
     assert c.grounds == frozenset({"pec", "refl-coef", "sommerfeld"})
     assert c.wire_loading
+    assert c.per_wire_radius
     assert c.refusal("wire_loading") is None
+    assert c.refusal("per_wire_radius") is None
     assert c.refusal("contact", "finite_ground") == c.refusals["contact+finite_ground"]
     assert "momwire#282" in c.refusal("contact", "finite_ground")
     assert not any(
@@ -329,7 +336,6 @@ def test_razor_served_row_is_every_ground_plus_loading():
             c.extended_kernel,
             c.junction_ports,
             c.node_gaps,
-            c.per_wire_radius,
             c.singular_enrichment,
         ]
     )

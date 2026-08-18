@@ -1155,6 +1155,97 @@ constructor normaliser (rank 1) and `loading_for` (rank 4) in the audit's
 ranking, both of which unblock capabilities. What they buy is that the
 fifth ground, when it comes, is written once.
 
+### 6.9 The radius arc (momwire#428, #425, #147, 2026-08-18)
+
+Three units on one branch, and the shape of the arc is the architecture's
+own claim tested end to end: **two extractions that buy nothing on their
+own, then the capability they were the price of.** §6.8 closed with the
+observation that the ground consolidations could not unblock anything;
+this arc is the other case.
+
+| unit | issue | the move |
+|---|---|---|
+| A | #428 | `loading_for` — one loading spec layer under four testing rules |
+| B | #425 | `_kernel_moments.py`, and one radius normaliser (audit rank 3) |
+| C | #147 | per-wire radii on `RazorSolver` |
+
+**Unit A is the audit's rank 4, and it went exactly as predicted: a pure
+move.** Loading cannot share its MATRIX assembly — SG overlaps, sinusoidal
+collocates, razor path-integrates, bspline spline-overlaps, the same
+two-object reason the ground layer has — but everything upstream of the
+term is formulation-independent and existed four times. It is now
+`_wire_loading.configure_loading` (the kwargs, the units, the fail-fast
+validation), `normalize_lumped_loads`, and `loading_for(solver, ω, geom)`
+returning a `LoadingSpec` of per-wire Z'_w(ω), per-SEGMENT Z_s(ω) and the
+lumped loads resolved to sites. What could NOT be shared is exactly one
+step — which index a formulation names a site by — so that is a solver
+hook (`RazorSolver._lumped_site_index`), carrying its own K≥3 refusal
+prose because what is ambiguous at a junction differs from the feed's.
+`loading_for` takes ω as an argument and caches nothing, which puts it on
+the correct side of every prepare/replay boundary by construction rather
+than by discipline.
+
+**Unit B answers a coupling the previous arc left visible on purpose.**
+`PulseSolver` imported `razor._axis_frame` / `_static_axis_moments` —
+module-level privates of a sibling — and momwire#419 left that import in
+place so the finding would surface. The bodies are now `_kernel_moments`,
+razor re-exports both names so pulse's import keeps working across the
+move (migrating that line is pulse's own one-liner), and a test pins every
+consumer naming the same function object. The radius normaliser landed
+beside it in a new `_wire_spec.py`, the audit's rank-1 home: three copies
+retired, including a weaker one inside `series_impedance_per_wire` that
+had the same message and no positivity check, and razor's refusal variant
+folded in as a `per_wire_refusal=` argument — which is what made unit C's
+constructor change *dropping an argument*.
+
+**Unit C is what the extractions were for.** `_axis_frame`'s `a` enters
+only as `a * a` added to ρ², so accepting a `(n_segs,)` column instead of
+a float is arithmetically free — the audit called this correctly, and the
+scalar path stayed bit-identical through all three units (193 pinned
+answers, `array_equal`, every unit). Everything else the radius touches
+had already been made per-wire by unit A: the loading spec reads
+`_radius_per_wire`, which on razor stopped being a broadcast fiction and
+became the real array.
+
+**The convention, and why it is a choice here.** The reduced kernel's a²
+is the source segment's — so a fat/thin junction's tent takes each wing's
+own segment's radius with no special case, since each wing's moments were
+already built against its own source column. The rival is the OBSERVER
+radius NEC-2's `EFLD` uses, which momwire's sinusoidal family adopted
+after a PyNEC oracle moved 11 Ω. **For this formulation the binary cannot
+tell them apart**: they differ only where the perpendicular distance
+vanishes (a collinear radius step), and measured there they are 3.0e-6 …
+1.1e-5 Ω apart at a 10:1 step, 1.4e-3 … 2.1e-3 Ω at 100:1, against a
+0.20 Ω bar — the difference lives in near-diagonal entries worth ~1400 Ω,
+2e-5 relative, which the solve absorbs. The source reading is taken
+because it is the reduced kernel's own derivation and because it is
+chunk-invariant (the fill chunks the OBSERVER axis). **Recording that a
+sibling's oracle finding does not transfer is the point of writing it
+down**: the two solvers disagree about the convention and agree about the
+answer, and nobody should re-litigate it from the sinusoidal doc alone.
+
+**Bars.** NEC-5 twin lane on decks that carry per-`GW` radii natively —
+like-for-like, no translation step for a convention to hide in — on a
+thin-driven/fat-parasitic pair and a fat/thin junction, free space and
+`GN 1`, ladders N = 24…96: worst |ΔZ| **0.0586 Ω** against
+max(0.20 Ω, 0.25 %), offsets constant to **0.0211 Ω** against 0.05 Ω.
+Cross-formulation difference-of-columns at N = 192 vs `BSplineSolver`:
+**0.063 Ω** on the junction deck against a 0.25 Ω bar.
+
+**A finding about the references, and why the parasitic deck is gated
+differently.** On the parasitic deck the absolute difference-of-columns is
+0.24 Ω — but so is the UNIFORM-radius control's (0.19 thin / 0.26 fat),
+because the two Galerkin references disagree with each other by 0.23 Ω
+over that ground at any radius. An absolute bar there would be gating the
+references, so what is gated is the claim the capability makes: the mixed
+model's number is BRACKETED by its own two uniform controls. And on the
+fat/thin STEP both sinusoidal-family solvers are the unconverged party and
+walk AWAY — at N = 192 `SinusoidalGalerkinSolver` reads 113.8 Ω and
+`SinusoidalSolver` 100.8 Ω where `BSplineSolver` reads 69.23, razor 69.06
+and the NEC-5 binary 68.88, while the same deck at a uniform radius has
+all of them inside 0.1 Ω. That is momwire#435, filed against those
+solvers rather than worked around here.
+
 ---
 
 ## 7. What this subsumes, and what it does not
