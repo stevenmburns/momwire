@@ -41,6 +41,7 @@ import numpy as np
 import pytest
 from scipy.integrate import dblquad, quad
 
+from momwire import _potential_ground
 from momwire._bspline_ek_moments import D_ek_moment
 from momwire._bspline_kernels import (
     _EK,
@@ -2526,13 +2527,14 @@ def _refl_image_solver(cls, extended_kernel=True, **over):
 
 def test_g19_refl_chunked_route_fills_with_a_mirrored_ek_spec(offedge_ek_spy):
     """Route 1: the Fresnel-weighted chunked image fill, driven with the
-    solver's OWN weight tables (`_image_refl_weights`) rather than the PEC
-    ones the #270 gate above uses, so the route under test is the one a
-    `ground_eps` solve takes."""
+    solver's OWN weight tables (`PotentialGround.weight_tables`) rather
+    than the PEC ones the #270 gate above uses, so the route under test is
+    the one a `ground_eps` solve takes."""
     sim = _refl_image_solver(BSplineSolver)
     geom = sim._build_geometry()
     supp_seg, polys, _kcl, _wk, _wbg = sim._build_basis_polynomials(geom)
-    w_A, w_Phi = sim._image_refl_weights(sim._image_refl_prep(geom), sim.omega)
+    ground = _potential_ground.potential_ground_for(sim, geom, sim.k, sim.omega)
+    w_A, w_Phi = ground.weight_tables()
     Z = np.zeros((supp_seg.shape[0],) * 2, dtype=np.complex128, order="F")
     offedge_ek_spy.clear()
     sim._accumulate_Z_image_chunked(

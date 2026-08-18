@@ -211,34 +211,37 @@ def test_free_space_builds_no_ground_object_at_all():
 # --------------------------------------------------------------------------
 
 
-def test_weight_tables_is_not_consumable_by_a_non_bspline_solver():
-    """momwire#416's first interface finding, pinned so it cannot dissolve
-    quietly into a later refactor.
+def test_weight_tables_are_served_on_a_non_bspline_solver():
+    """momwire#416's first interface finding, now closed — the positive
+    replacement for `test_weight_tables_is_not_consumable_by_a_non_bspline_
+    solver`, which momwire#429 unit 1 deleted rather than loosened.
 
     `PotentialGround.weight_tables()` is documented as the whole-geometry
-    `(w_A, w_Φ)` pair — exactly what a dense fill wants — but its
-    refl-coef branch does not compute it: it calls back into
-    `BSplineSolver._image_refl_prep` / `._image_refl_weights`, the
-    caching SCHEDULE of its first consumer. A second consumer therefore
-    gets an `AttributeError`, not a weight table.
+    `(w_A, w_Φ)` pair, and until unit 1 its refl-coef branch did not
+    compute it: it called back into `BSplineSolver._image_refl_prep` /
+    `._image_refl_weights`, the caching SCHEDULE of its first consumer, so
+    a second consumer got an `AttributeError` instead of a weight table.
+    The chain lives in `_potential_ground` now and the cache reaches the
+    object through `weight_tables(prep=…)`, so a solver that has no cache
+    to offer simply omits it.
 
-    `weight_windows()` is self-contained (it reaches `_ground_refl`
-    directly) and IS consumable, which is why this row uses it with one
-    full-width window. If a later unit moves the two prep methods down
-    into `_potential_ground` this test should be deleted along with the
-    finding, not loosened.
+    The claim is not merely "it returns something": the tables must be the
+    full-width `weight_windows` rectangle, entry for entry, because that
+    is the surface this row's fill actually consumes and the two must not
+    be allowed to drift into two different reflection coefficients.
     """
     sim = _pulse(ground_z=0.0, ground_eps=GROUND_EPS)
     geom = sim._build_geometry()
     ground = _potential_ground.potential_ground_for(sim, geom, sim.k, sim.omega)
-
-    with pytest.raises(AttributeError, match="_image_refl"):
-        ground.weight_tables()
-
-    w_A, w_Phi = ground.weight_windows()(0, geom["h_per_seg"].size)
     n = geom["h_per_seg"].size
+
+    w_A, w_Phi = ground.weight_tables()
     assert w_A.shape == (n, n) and w_Phi.shape == (n, n)
     assert w_A.dtype == np.complex128 and w_Phi.dtype == np.complex128
+
+    win_A, win_Phi = ground.weight_windows()(0, n)
+    assert np.array_equal(w_A, win_A)
+    assert np.array_equal(w_Phi, win_Phi)
 
 
 def test_pec_weight_window_is_the_mirror_tangent_dot_and_a_unit_phi():

@@ -95,10 +95,12 @@ a decision rather than a discovery:
   allocates, which is budget arithmetic, and the field trunk's precedent
   keeps budgets out of the object.
 * **the hmatrix / array_block block paths** (`_zblock_image`,
-  `_zblock_image_refl`, `_refl_weight_tables`,
-  `_zblock_sommerfeld_remainder`). They inherit `BSplineSolver` and keep
-  calling the methods this object delegates to, so they are unaffected;
-  migrating them is a later unit.
+  `_zblock_image_refl`, `_zblock_sommerfeld_remainder`). They inherit
+  `BSplineSolver` and keep calling the methods this object delegates to,
+  so they are unaffected; migrating them is a later unit.
+  `_refl_weight_tables` came over with momwire#429 unit 1 and is now
+  `weight_windows` taken as one full-width rectangle — the audit's
+  prediction that the rectangle form maps with NO generalisation, held.
 * **`_image_weight_enrich_blocks`** — the enrichment reaction's third
   weight shape (row / col / ee rectangular sub-blocks). Its ε̃ and its
   "is this sommerfeld" question now come from this object; its per-mode
@@ -108,6 +110,18 @@ a decision rather than a discovery:
   the C++ batched assembler forms the tangent dot in-kernel from two
   `(N, 3)` tangent tables (momwire#333), so there is no `(w_A, w_Φ)` pair
   to hand it at all.
+
+Unit 1 of momwire#429 (the sharing audit's rank 2, filed as momwire#424)
+finished the job on the WEIGHT chain. `weight_tables`' refl-coef branch
+had called back into `BSplineSolver._image_refl_prep` /
+`._image_refl_weights`, so the one surface documented as "the whole
+geometry's weights" raised `AttributeError` on every other solver —
+momwire#416's first interface finding, found the way all four of the
+pilot's generalisations were found, by a second consumer. The chain is
+`specular_prep` / `refl_weight_tables` here now; the CACHE stayed on the
+solver (it is schedule) and reaches this object through
+`weight_tables(prep=…)`, the same supplier indirection
+`FieldGround.projector(tables=…)` uses on the sibling trunk.
 
 Evaluation-order discipline is part of this module's interface for the
 same reason it is part of `_field_ground`'s (momwire#392, architecture doc
@@ -127,6 +141,47 @@ from ._quadrature import leggauss
 # array, so `ImageGeometry.mirror_tangents` and `weight_windows`' PEC /
 # Sommerfeld closures below are visibly the same reflection.
 _MIRROR = np.array([1.0, 1.0, -1.0])
+
+
+def specular_prep(geom, ground_z):
+    """The k-INDEPENDENT half of the reflection-coefficient weight chain:
+    per-pair specular geometry (cos θ, the PEC mirror tangent dot, the
+    out-of-plane dyad component) for a geometry's own segments against
+    themselves, mirrored across `z = ground_z`.
+
+    Moved here from `BSplineSolver._image_refl_prep` (momwire#429 unit 1,
+    the audit's rank 2). What stayed behind is the CACHE — that method is
+    now a memo over this function, keyed on the geometry object, which is
+    its first consumer's SCHEDULE and not part of what the ground means.
+    The expression is that method's own, moved and not rewritten.
+    """
+    seg_c = 0.5 * (geom["seg_l"] + geom["seg_r"])
+    return _ground_refl.specular_pair_tables(seg_c, geom["tangents"], ground_z)
+
+
+def refl_weight_tables(prep, eps_tilde, phi_mode):
+    """The per-ω half: `(w_A, w_Φ)` from the k-independent specular `prep`.
+
+    ε̃ at this ω → ρ_v/ρ_h at each pair's specular angle → the A-term dyad
+    table `w_A` and the Φ-term image-charge table `w_Φ` (`phi_mode` picks
+    which image-charge weighting, this trunk's own knob). A scalar `w_Φ`
+    — "image" and "normal" are pair-independent — is broadcast to the pair
+    shape so both tables reach the assembler as complex128 blocks.
+
+    Moved here from `BSplineSolver._image_refl_weights` (momwire#429
+    unit 1). It took ε̃ from `ground_eps`/`omega` itself; the ground has
+    already hoisted exactly that value into `eps_tilde`, so the caller
+    passes it rather than recomputing a pure function of arguments the
+    fill holds fixed.
+    """
+    cos_th, td_img, P = prep
+    rho_v, rho_h = _ground_refl.fresnel_rho(eps_tilde, cos_th)
+    w_A = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
+    w_Phi = _ground_refl.phi_term_weights(phi_mode, eps_tilde, rho_v)
+    if np.ndim(w_Phi) == 0:
+        w_Phi = np.full(w_A.shape, complex(w_Phi))
+    return w_A, w_Phi
+
 
 # Default per-source-segment Gauss order for `Remainder.field_windows`. The
 # remainder field is smooth on the scale of a segment (it is the ground
@@ -568,7 +623,7 @@ class PotentialGround:
     # the weight tables — this trunk's (w_A, w_Φ) row
     # ------------------------------------------------------------------
 
-    def weight_tables(self):
+    def weight_tables(self, prep=None):
         """The whole-geometry `(w_A, w_Φ)` pair, or `None` for PEC.
 
         `None` means "assemble the image UNWEIGHTED, with the image
@@ -581,15 +636,29 @@ class PotentialGround:
 
         Otherwise:
 
-        * refl-coef — the Fresnel pair, through the solver's cached
-          k-independent specular prep (`_image_refl_prep`) and its per-ω
-          weights (`_image_refl_weights`). The cache is the solver's
-          SCHEDULE and stays there, exactly as `_image_refl_prep` is the
-          Galerkin field fill's schedule in the sibling module.
+        * refl-coef — the Fresnel pair, `specular_prep` then
+          `refl_weight_tables`, both of them module functions here since
+          momwire#429 unit 1. Before that unit this branch called back
+          into `BSplineSolver._image_refl_prep` / `._image_refl_weights`
+          and therefore raised `AttributeError` on any other solver
+          (momwire#416's first interface finding); it is self-contained
+          now, and `tests/test_pulse_ground.py` pins it served on a
+          non-B-spline solver.
         * sommerfeld — the constant C₂ tables that carry the exact-image
           part. This is the `image_coefficient` spelling difference the
           class docstring describes: C₂ multiplies the mirror table here,
           not the assembled block later.
+
+        `prep` is the caller's own SUPPLIER of the k-independent specular
+        tables: a zero-argument callable, consulted only on the refl-coef
+        branch, so no other ground builds an O(N²) table it would not
+        read. That is the indirection `FieldGround.projector(tables=...)`
+        already uses on the sibling trunk and for the same reason — the
+        DECISION is the ground's and the CACHE is the caller's schedule.
+        `BSplineSolver._image_refl_prep` is that cache and the B-spline
+        fill passes it, so a swept grounded fill still pays the O(N²)
+        specular build once per geometry rather than once per frequency.
+        Omit it and the ground builds its own, cached nowhere.
 
         Beware the asymmetry with `weight_windows` below: the same PEC
         ground answers `None` here and a real `(td_img, ones)` pair there.
@@ -609,10 +678,10 @@ class PotentialGround:
             td_img = self.image_geometry().tangent_dot()
             w_A = c2 * td_img.astype(np.complex128)
             return w_A, np.full_like(w_A, c2)
-        solver = self._solver
-        return solver._image_refl_weights(
-            solver._image_refl_prep(self._geom), self._omega
+        tables = (
+            specular_prep(self._geom, self._solver.ground_z) if prep is None else prep()
         )
+        return refl_weight_tables(tables, self.eps_tilde, self.phi_mode)
 
     def own_segments(self):
         """This geometry's own `(centres, tangents)` — the default both

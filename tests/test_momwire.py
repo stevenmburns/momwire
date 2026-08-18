@@ -3969,7 +3969,7 @@ def test_bspline_chunked_ground_matches_tensor_path(ground_kw):
 def _image_weight_dense_tables(sim, geom):
     """The (N, N) image weight tables the tensor/enrichment paths build —
     the reference `_image_weight_window_fn`'s windows must reproduce."""
-    from momwire import _ground_refl
+    from momwire import _ground_refl, _potential_ground
 
     if sim.ground_eps is None:
         w_A = sim._image_tangent_dot(geom["tangents"]).astype(np.complex128)
@@ -3979,7 +3979,8 @@ def _image_weight_dense_tables(sim, geom):
         c2 = (eps_t - 1.0) / (eps_t + 1.0)
         w_A = c2 * sim._image_tangent_dot(geom["tangents"])
         return w_A, np.full_like(w_A, c2)
-    return sim._image_refl_weights(sim._image_refl_prep(geom), sim.omega)
+    ground = _potential_ground.potential_ground_for(sim, geom, sim.k, sim.omega)
+    return ground.weight_tables()
 
 
 def _phi_mode_window_cases():

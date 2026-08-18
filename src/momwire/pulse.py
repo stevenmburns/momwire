@@ -122,11 +122,16 @@ global minus, per architecture doc §2.2 — this module never applies
 `image_coefficient` itself, which the object's docstring is explicit is
 already inside the tables.
 
-`weight_tables()` is NOT what this consumer uses, and that is a finding
-rather than a preference: its refl-coef branch calls back into
+`weight_tables()` is NOT what this consumer uses — the fill is chunked,
+so the windows are the right surface — but it is now CONSUMABLE here,
+which it was not when this row was written. That was momwire#416's first
+interface finding: the refl-coef branch called back into
 `BSplineSolver._image_refl_prep` / `._image_refl_weights`, two methods a
-non-B-spline solver does not have, so it raises `AttributeError` here.
-`weight_windows()` is self-contained. See `docs/design/pulse-probe.md`.
+non-B-spline solver does not have, so it raised `AttributeError`.
+momwire#429 unit 1 moved that chain down into `_potential_ground`, and
+`tests/test_pulse_ground.py` now pins the positive statement instead: the
+tables are served on this solver and equal the full-width window. See
+`docs/design/pulse-probe.md`.
 
 Sommerfeld is refused, and the refusal names the signature that blocked
 it: `Remainder.evaluate(supp_seg, polys)` wants a B-spline basis

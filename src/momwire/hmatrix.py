@@ -46,7 +46,7 @@ from scipy.sparse.linalg import splu
 
 from .bspline import BSplineSolver, _SplineBasis, _EK_SAME_EDGE, _ek_slice
 from ._port_solution import PortSolution
-from . import _ground_refl, _sommerfeld
+from . import _ground_refl, _potential_ground, _sommerfeld
 from ._bspline_kernels import (
     _ek_radius,
     _seg_seg_full_moments_offedge,
@@ -701,26 +701,26 @@ class HMatrixSolver(BSplineSolver):
 
     def _refl_weight_tables(self, ctx, seg_I, seg_J):
         """(wA, wPhi) tables over a (seg_I, seg_J) segment-index rectangle,
-        from the REAL (unmirrored) geometry — the rectangular counterpart of
-        `BSplineSolver._image_refl_weights`. O(|I|·|J|) closed-form; no
+        from the REAL (unmirrored) geometry. O(|I|·|J|) closed-form; no
         global (N, N) table is ever built, so large-N fast-solver problems
-        stay out of quadratic weight memory."""
+        stay out of quadratic weight memory.
+
+        Since momwire#429 unit 1 this is `PotentialGround.weight_windows`
+        taken as ONE full-width window over a named observer set and a
+        named source set — which is exactly the shape momwire#398 unit 4
+        gave that producer for razor, so the block path needed no
+        generalisation at all to consume it (the audit's rank-2 finding,
+        confirmed). The weights this reads are ω-dependent and the object
+        is built per call for that reason; ε̃ comes from the factory's own
+        hoist rather than a second `eps_tilde` call here."""
         seg_mid = 0.5 * (ctx["seg_l"] + ctx["seg_r"])
         tangents = ctx["tangents"]
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-        cos_th, td_img, P = _ground_refl.specular_pair_tables(
-            seg_mid[seg_I],
-            tangents[seg_I],
-            self.ground_z,
-            src_centers=seg_mid[seg_J],
-            src_tangents=tangents[seg_J],
+        ground = _potential_ground.potential_ground_for(self, ctx, self.k, self.omega)
+        windows = ground.weight_windows(
+            observers=(seg_mid[seg_I], tangents[seg_I]),
+            sources=(seg_mid[seg_J], tangents[seg_J]),
         )
-        rho_v, rho_h = _ground_refl.fresnel_rho(eps_t, cos_th)
-        wA = _ground_refl.a_term_weights(rho_v, rho_h, td_img, P)
-        wPhi = _ground_refl.phi_term_weights(self.ground_phi_mode, eps_t, rho_v)
-        if np.ndim(wPhi) == 0:
-            wPhi = np.full(wA.shape, complex(wPhi))
-        return wA, wPhi
+        return windows(0, seg_I.shape[0])
 
     def _somm_eps_c2(self):
         """(eps_t, C2) for the sommerfeld decomposition at the current

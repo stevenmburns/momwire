@@ -179,6 +179,16 @@ the brief's rule was to record.
 Pinned by `test_weight_tables_is_not_consumable_by_a_non_bspline_solver`,
 which should be **deleted** when that move lands, not loosened.
 
+> **Landed 2026-08-18 (momwire#429 unit 1, the sharing audit's rank 2).**
+> The move is exactly the one sketched above: `_potential_ground.specular_prep`
+> and `_potential_ground.refl_weight_tables` are module functions there,
+> `BSplineSolver._image_refl_prep` is the cache wrapper the sweep wants and
+> is handed to `weight_tables(prep=…)` by its own fill, and
+> `weight_tables()` called bare is self-contained. The test above was
+> deleted, not loosened, and replaced by
+> `test_weight_tables_are_served_on_a_non_bspline_solver`, which pins the
+> tables equal to the full-width `weight_windows` on this solver.
+
 ### 4.3 The reduced-kernel segment moment has no home
 
 `_seg_M0` needs `∫_seg exp(−jkR)/(4πR) dl'` split into a closed-form
@@ -350,8 +360,9 @@ three qualifications that are the actual content of the finding:
 
 ## 7. Follow-ups worth filing
 
-1. Move `_image_refl_prep` / `_image_refl_weights` bodies into
-   `_potential_ground` so `weight_tables()` serves any consumer (§4.2).
+1. ~~Move `_image_refl_prep` / `_image_refl_weights` bodies into
+   `_potential_ground` so `weight_tables()` serves any consumer (§4.2).~~
+   **Done 2026-08-18**, momwire#429 unit 1 (filed as momwire#424).
 2. Re-shape `Remainder.evaluate` to the field-trunk signature — the
    remainder FIELD at given observers — feeding momwire#398 unit 5 (§4.1).
 3. A `_kernel_moments.py` for the reduced-kernel segment moment, retiring
