@@ -256,8 +256,10 @@ def test_distinct_endpoints_are_fine():
         # `ground_z` is NOT here: the PEC plane is served (momwire#398 unit
         # 2) and so is contact at a wire end (unit 3). It used to raise from
         # this list only because BD1_WIRE lies at z=0 — a geometry refusal
-        # wearing an out-of-scope test's clothes.
-        {"ground_eps": 13.0},
+        # wearing an out-of-scope test's clothes. Nor is `ground_eps`, since
+        # unit 4: the reflection-coefficient ground is served for a wire
+        # standing clear of the plane. `ground_model` stays, at the one
+        # value that is still refused.
         {"ground_model": "sommerfeld"},
         {"degree": 2},
         # Junctions are DETECTED, never declared: an explicit spec is either
