@@ -1007,6 +1007,73 @@ carry two different claims and each is gated on its own terms:
   low-height formulation-split agreement (22.81 Ω vs 22.837 Ω at 0.04 λ)
   as the standing evidence set.
 
+### 6.7 Unit 7: wire loading on razor (momwire#427, 2026-08-17)
+
+The first CRITERION-2 row completion after the ground units — not a ground
+at all, and that is why it is worth recording here: the pilot's claim was
+that a capability lands on this solver through a shared layer plus a
+testing-idiom term, and loading is the same shape of work with a different
+shared layer (`_wire_loading` in place of `PotentialGround`).
+
+**The term.** A loaded wire's surface condition is E_tan = Z_s(l)·I(l), and
+razor tests on a path, so `Z = Z_free + L` with
+
+    L[m, n] = ∫_{P_m} Z_s(l) Λ_n(l) dl
+
+In the path/wing idiom that integral is two constants on a shared segment —
+`3h/8` when the row's path half and the column's tent ramp rise at the same
+end, `h/8` when they rise at opposite ends — times σ_row·σ_col. Junction
+tents need no case (a junction tent is two wings on two real segments like
+any other), and the grounded-end tent needs no case either: its side-A wing
+is its own image and carries σ = 0, which drops both the image half of its
+testing path and the image half of its column, leaving the real base
+segment. That is the loading-side statement of the halved row that already
+makes a base-fed monopole return Z_dipole/2.
+
+**The sign is an oracle result, not a convention.** The siblings assemble G
+with the opposite global sign and therefore SUBTRACT their loading term;
+this trunk adds. What fixes it is the drive-point identity — a lumped Z_L at
+the fed knot must give `Z_driven = Z_unloaded + Z_L` — which is
+Sherman-Morrison on a rank-1 diagonal stamp and holds to LU roundoff (1e-14
+… 1e-17 relative, both lanes, dipole and grounded monopole).
+
+**A lumped load is razor's own kwarg, and the reason is architectural.** The
+other three rows serve a lumped load as deck-level port algebra over a
+`node_gaps` port (`momwire.deck._solver`: "stamping a load is port algebra…
+and it belongs to whoever owns the answer"). Razor refuses `node_gaps`
+because its delta gap lands in a whole testing ROW rather than in a local
+basis edit — so the port route is closed here. But the same integral above
+with Z_s = Z_L·δ(l − l_p) collapses to ONE diagonal entry, because only P_p
+contains knot p and Λ_n(l_p) = δ_np. So the formulation that cannot serve
+the house idiom serves the physics directly and more cheaply, and the two
+are proved equal on razor itself (a load at a non-driven knot equals the
+two-port reduction of razor's own unloaded Y terminated in Z_L, to LU
+roundoff, on an asymmetric deck with a non-reciprocal Y).
+
+**Schedule.** The stencil is pure geometry and rides `_assemble_Z_prepare`;
+Z_s(ω) is NOT — skin effect goes as √ω and the insulation reactance as ω —
+so it is rebuilt per solved wavenumber beside the reflection-coefficient
+weights, and the swept gates prove it by sweeping ±20 % in wavelength. The
+term is applied OUTSIDE the ground fold, `Z = (Z_free − Z_image) + L`, since
+a surface impedance is a property of the conductor and takes no image and no
+Fresnel weight; that is why one line serves free space, both folding grounds
+and the composing one.
+
+**Bars.** The NEC-5 twin lane is gated on the loading INCREMENT (razor and
+NEC-5 never agree pointwise) at 0.05 Ω per rung, measured worst 0.021 Ω;
+conventions were verified from printed output first, and `LD` on segment j
+turns out to address the same knot `EX` on segment j does. Cross-formulation
+is the units-4/5 difference-of-differences at N = 192 with the same 0.25 Ω
+bar, measured +0.0025 (copper dipole) to −0.33 (trap-loaded inverted-V).
+`tests/test_razor_loading.py`.
+
+**One finding for the next unit.** The maintainer's observation that the
+API-facing half of loading — kwargs, units, the skin-effect model, resolving
+a lumped load to a position — is formulation-independent and about to exist
+in four solvers is already true here: `RazorSolver._loading_spec` is exactly
+that half, isolated behind a plain per-segment/per-knot description so the
+extraction of a shared `loading_for(solver, ω)` has one seam to cut.
+
 ---
 
 ## 7. What this subsumes, and what it does not

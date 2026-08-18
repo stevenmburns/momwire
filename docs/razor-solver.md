@@ -155,6 +155,59 @@ honestly claim: the ground must not widen the razor-vs-Galerkin gap that
 razor's own O(1/N) walk already opens in free space. Measured within
 0.133 Ω of it for refl-coef and 0.047 Ω for Sommerfeld.
 
+## Wire loading (momwire#427)
+
+A loaded wire's surface condition is `E_tan = Z_s(l)·I(l)` rather than
+`E_tan = 0`, and razor tests the condition on a path, so the loading term is
+the testing-path integral of `Z_s` against each tent:
+
+```
+L[m, n] = ∫_{P_m} Z_s(l) Λ_n(l) dl,        Z = Z_free + L
+```
+
+In the wing idiom that integral is two constants on a shared segment —
+`3h/8` when the row's path half and the column's tent ramp rise at the same
+end of it, `h/8` when they rise at opposite ends — times the `σ_row·σ_col`
+that dots the path's traversal direction with the current's. The resulting
+`L` is symmetric even though razor's field matrix is not (a surface
+impedance is a local reciprocal object); it is *not* the Galerkin Gram
+(`h/3`, `h/6`), which is what `wire_loss_power` uses instead, because
+dissipated power is a physical integral and does not care which rule tested
+the equation.
+
+Two spellings, one equation:
+
+- **Distributed** — `wire_conductivity`, `insulation_radius`,
+  `insulation_eps_r`, the siblings' API verbatim over the same
+  `_wire_loading` physics (exact solid-cylinder I₀/I₁ internal impedance,
+  King's insulated-antenna jacket inductance, per-wire with `NaN` switching
+  a wire off). `wire_loss_power(coeffs)` reads back the dissipated watts.
+- **Lumped** — `lumped_loads=[(wire_index, arclength, impedance), …]`, which
+  is razor's own kwarg. The other solvers serve a lumped load as deck-level
+  port algebra over a `node_gaps` port, and this formulation refuses node
+  gaps; but a delta in `Z_s` at a knot collapses the integral above to a
+  single diagonal entry, so `Z_driven = Z_unloaded + Z_L` at the fed knot is
+  exact here rather than arranged. A load resolves to a knot through the
+  same snapping the feeds use, two loads at one knot are in series, and a
+  load at a K ≥ 3 junction is refused for the reason a source there is.
+
+Junction tents need no special case. The **grounded-end tent** needs none
+either: its side-A wing is its own image and carries `σ = 0`, which drops
+both the image half of its testing path and the image half of its column —
+so loading it means loading the real base segment, and a lumped load at the
+contact knot is the base GAP's load at full value. Unfolded, a loaded
+monopole over PEC is exactly half its loaded mirror dipole (with a base load
+`Z_L` answering to `2·Z_L` in the dipole's centre gap).
+
+The stencil is pure geometry and rides the k-independent prepare half;
+`Z_s(ω)` is not (skin effect goes as `√ω`, insulation reactance as `ω`) and
+is rebuilt per solved wavenumber. The term is applied outside the ground
+fold — `Z = (Z_free − Z_image) + L` — because a surface impedance takes no
+image and no Fresnel weight, which is why one line serves free space and all
+three grounds. Gates: `tests/test_razor_loading.py`, including the NEC-5
+twin lane on `LD` cards (`tests/golden_razor_loading_nec5.py`, captured by
+`scripts/capture_razor_loading_nec5_lane.py`).
+
 ## Scope
 
 Free space and all three grounds — PEC, reflection-coefficient and
@@ -217,6 +270,12 @@ here is worse than no answer.
   geometry classes proved exactly equal to half their free-space mirror
   models, plus two contact ladders against NEC-5 (and the finding that
   NEC-5's own contact deck is not NEC-5's own mirror deck halved).
+- `tests/test_razor_loading.py` — wire loading: the drive-point and
+  Thevenin identities exact to LU roundoff, the loaded monopole halved onto
+  its loaded mirror dipole three ways, the stencil against a direct path
+  quadrature, the NEC-5 `LD` lane on the loading INCREMENT, the
+  cross-formulation difference-of-differences at N = 192, and the schedule
+  (swept == per-k over a skin-effect loss that moves with ω).
 - `tests/test_razor_nec5_twin.py` — the only file comparing against real
   NEC-5 printouts (LLNL-CODE-746721) rather than an in-Python instrument:
   pointwise tracking from N=24 up with per-N tolerances that shrink with N,
