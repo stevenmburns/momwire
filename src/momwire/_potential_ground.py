@@ -131,6 +131,12 @@ branch answering the same three numbers — so the branch is
 object construction. `ground_phi_mode` stays here, because it is the one
 part of the decision the field form cannot express.
 
+Unit 3 of momwire#429 (rank 6) promoted the MIRROR MAP out of this file.
+`ImageGeometry`'s two operations were the tree's only named ones and its
+`_MIRROR` array the tree's only named one of those; the audit counted
+fourteen spellings across six files, so both live in `_ground_mirror` now
+and `ImageGeometry` binds `ground_z` over them.
+
 Evaluation-order discipline is part of this module's interface for the
 same reason it is part of `_field_ground`'s (momwire#392, architecture doc
 §3.4): every expression below is the call site's own, moved and not
@@ -142,13 +148,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import _ground_refl, _ground_spec, _sommerfeld
+from . import _ground_mirror, _ground_refl, _ground_spec, _sommerfeld
 from ._quadrature import leggauss
-
-# M = diag(1, 1, −1) as the row it multiplies a `(..., 3)` array by. One
-# array, so `ImageGeometry.mirror_tangents` and `weight_windows`' PEC /
-# Sommerfeld closures below are visibly the same reflection.
-_MIRROR = np.array([1.0, 1.0, -1.0])
 
 
 def specular_prep(geom, ground_z):
@@ -209,6 +210,12 @@ class ImageGeometry:
     `mirror_positions(p)` — any `(..., 3)` array of points, reflected.
     `mirror_tangents(t)` — any `(..., 3)` array of directions, z-flipped.
 
+    Both are `_ground_mirror`'s since momwire#429 unit 3 — this class
+    binds `ground_z` and is otherwise a pass-through. Naming the two
+    operations here was the pilot's move (unit 2 below); promoting them to
+    a module both trunks and every solver import is the audit's rank 6,
+    which retired fourteen spellings of the same reflection.
+
     Everything else on this class is a CONVENIENCE built out of those two,
     in the shape one consumer happens to want. Unit 1 shipped only the
     conveniences and unit 2 (razor's PEC ground) is what forced the split:
@@ -255,9 +262,7 @@ class ImageGeometry:
 
     def mirror_positions(self, positions):
         """Reflect `(..., 3)` POINTS through the plane `z = ground_z`."""
-        out = positions.copy()
-        out[..., 2] = 2 * self._ground_z - out[..., 2]
-        return out
+        return _ground_mirror.mirror_positions(positions, self._ground_z)
 
     def mirror_tangents(self, tangents):
         """Reflect `(..., 3)` DIRECTIONS: `t → (t_x, t_y, −t_z)`.
@@ -266,7 +271,7 @@ class ImageGeometry:
         positions, and `2·ground_z` cancels — so this is a pure z-flip and
         `ground_z` is deliberately unread here.
         """
-        return tangents * _MIRROR
+        return _ground_mirror.mirror_tangents(tangents)
 
     # --- the B-spline-shaped conveniences ------------------------------
 
@@ -757,14 +762,14 @@ class PotentialGround:
             observers = sources
         obs_c, obs_t = observers
         src_c, src_t = sources
-        mirror = _MIRROR
+        mirror_tangents = _ground_mirror.mirror_tangents
 
         if self.eps_tilde is None:
 
             def pec_weights(i0, i1):
                 # float64 gemm → C-contiguous; astype gives the complex128
                 # the assembler wants without a wrapper copy on top.
-                w_A = (obs_t[i0:i1] @ (src_t * mirror).T).astype(np.complex128)
+                w_A = (obs_t[i0:i1] @ mirror_tangents(src_t).T).astype(np.complex128)
                 return w_A, np.ones_like(w_A)
 
             return pec_weights
@@ -777,7 +782,7 @@ class PotentialGround:
             def sommerfeld_weights(i0, i1):
                 # complex scalar × float64 array → complex128 C-contiguous.
                 # The smooth remainder is a separate, already-chunked term.
-                w_A = c2 * (obs_t[i0:i1] @ (src_t * mirror).T)
+                w_A = c2 * (obs_t[i0:i1] @ mirror_tangents(src_t).T)
                 return w_A, np.full(w_A.shape, c2)
 
             return sommerfeld_weights

@@ -72,6 +72,7 @@ from ._bspline_kernels import (
 from ._quadrature import leggauss
 
 from . import _bspline_kernels
+from . import _ground_mirror
 from . import _ground_refl
 from . import _potential_ground
 from . import _sommerfeld
@@ -1438,13 +1439,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     def _image_positions(self, positions):
         """Mirror an array of 3D positions across z = ground_z."""
-        out = positions.copy()
-        out[..., 2] = 2 * self.ground_z - out[..., 2]
-        return out
+        return _ground_mirror.mirror_positions(positions, self.ground_z)
 
     def _image_tangent_dot(self, tangents):
         """t_m · t_image_n with t_image_n = (t_n_x, t_n_y, -t_n_z)."""
-        return tangents @ (tangents * np.array([1.0, 1.0, -1.0])).T
+        return tangents @ _ground_mirror.mirror_tangents(tangents).T
 
     def _build_J_image_blocks(self, geom, k, ground=None):
         """Build the J moment tensor with j-segments mirrored across the
@@ -1629,18 +1628,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         reciprocity symmetry.
         """
         tangents = geom["tangents"]
-        mirror = np.array([1.0, 1.0, -1.0])
+        mirror_tangents = _ground_mirror.mirror_tangents
         tan_e = tangents[seg_e_arr]
 
         if self.ground_eps is None:
-            w_A_row = tan_e @ (tangents * mirror).T
-            w_A_col = tangents @ (tan_e * mirror).T
+            w_A_row = tan_e @ mirror_tangents(tangents).T
+            w_A_col = tangents @ mirror_tangents(tan_e).T
             w_Phi_row = np.ones_like(w_A_row)
             w_Phi_col = np.ones_like(w_A_col)
         elif self.ground_model == "sommerfeld":
             c2 = (eps_t - 1.0) / (eps_t + 1.0)
-            w_A_row = c2 * (tan_e @ (tangents * mirror).T)
-            w_A_col = c2 * (tangents @ (tan_e * mirror).T)
+            w_A_row = c2 * (tan_e @ mirror_tangents(tangents).T)
+            w_A_col = c2 * (tangents @ mirror_tangents(tan_e).T)
             w_Phi_row = np.full(w_A_row.shape, c2)
             w_Phi_col = np.full(w_A_col.shape, c2)
         else:
@@ -2095,11 +2094,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_a = self._seg_radius(geom)
         if mirror:
             n = seg_l.shape[0]
-            flip = np.array([1.0, 1.0, -1.0])
             joint = _ek_axis_groups(
                 np.vstack([seg_l, self._image_positions(seg_l)]),
                 np.vstack([seg_r, self._image_positions(seg_r)]),
-                np.vstack([tangents, tangents * flip]),
+                np.vstack([tangents, _ground_mirror.mirror_tangents(tangents)]),
                 np.concatenate([seg_a, seg_a]),
             )
             hit = (joint[:n], joint[n:])
@@ -3440,8 +3438,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             pos_e_all[e, :, 2] = (1.0 - t) * seg_l[se, 2] + t * seg_r[se, 2]
 
         # Image sources: mirror z across the ground plane.
-        pos_e_img = pos_e_all.copy()
-        pos_e_img[..., 2] = 2.0 * ground_z - pos_e_img[..., 2]
+        pos_e_img = _ground_mirror.mirror_positions(pos_e_all, ground_z)
 
         # Z_ee image: real observer e against image source f. The image
         # reaction is symmetric (a mirror is an isometry, so reciprocity
@@ -3497,8 +3494,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 pos_m[:, 0] = (1.0 - t) * seg_l[seg_m, 0] + t * seg_r[seg_m, 0]
                 pos_m[:, 1] = (1.0 - t) * seg_l[seg_m, 1] + t * seg_r[seg_m, 1]
                 pos_m[:, 2] = (1.0 - t) * seg_l[seg_m, 2] + t * seg_r[seg_m, 2]
-                pos_m_img = pos_m.copy()
-                pos_m_img[:, 2] = 2.0 * ground_z - pos_m_img[:, 2]
+                pos_m_img = _ground_mirror.mirror_positions(pos_m, ground_z)
                 for e in range(n_enrich):
                     # `w_A_col`/`w_A_row` are already restricted to the
                     # enrichment DOFs on their small axis (issue #328); `e`
@@ -4358,7 +4354,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ek_img = None
         tangents_mirror = None
         if self.ground_z is not None:
-            tangents_mirror = tangents * np.array([1.0, 1.0, -1.0])
+            tangents_mirror = _ground_mirror.mirror_tangents(tangents)
             seg_l_img = self._image_positions(seg_l)
             seg_r_img = self._image_positions(seg_r)
             if self.extended_kernel:

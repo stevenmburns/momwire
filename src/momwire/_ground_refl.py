@@ -26,6 +26,8 @@ geometry, negligible next to the J-block quadrature fill.
 
 import numpy as np
 
+from . import _ground_mirror
+
 # Guard for coincident observer/image points (a segment pair lying *in* the
 # ground plane). Real geometries sit above ground so rmag ≥ 2·min height;
 # this only prevents 0/0 from degenerate input.
@@ -215,7 +217,7 @@ def specular_pair_tables(
     tn_p = ts[:, 0][None, :] * px + ts[:, 1][None, :] * py
     P = tm_p * tn_p
 
-    td_img = t @ (ts * np.array([1.0, 1.0, -1.0])).T
+    td_img = t @ _ground_mirror.mirror_tangents(ts).T
 
     return cos_th, td_img, P
 
