@@ -200,6 +200,17 @@ from ..deck._nec2_geometry import build_geometry
 # iterative solve tolerance. `arrayblock` degrades to the parent H-matrix on
 # a deck with no repeated-block structure (momwire#143 `_degenerate_partition`)
 # rather than refusing, so both entries are safe on arbitrary decks.
+# `razor` / `razor-nec5` (momwire#432) are the NEC-5 formulation twin — a
+# suffix is required the moment either name joins `deck.BASES` (this dict
+# comprehension is total over it), but neither is a WORKING portal entry
+# yet: `RazorSolver` has no `compute_port_solution()` (it exposes
+# `compute_impedance()` only — see `docs/razor-solver.md` "No C++
+# accelerator"), so `_y_and_port_coeffs` raises `AttributeError` the moment a
+# deck actually solves under either name. momwire#432 is scoped to
+# `momwire.deck.build_solver` — a library/script consumer building a
+# `RazorSolver` straight off a parsed deck — not to the portal's Y-matrix
+# port algebra, which is a separate, larger unit (a `compute_port_solution`
+# for razor) filed as a follow-up rather than attempted here.
 _BANNER_SUFFIXES = {
     "bspline": "",
     "bspline-d1": "+bs1",
@@ -208,6 +219,8 @@ _BANNER_SUFFIXES = {
     "sinusoidal": "+sin",
     "sinusoidal-galerkin": "+sg",
     "sinusoidal-galerkin-converged": "+sgc",
+    "razor": "+razor",
+    "razor-nec5": "+razor5",
 }
 # ONE roster, read one way (#846 phase III). The portal and the dialect used
 # to keep parallel tables spelt to match (momwire#359); as siblings in one
