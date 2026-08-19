@@ -156,7 +156,7 @@ jobs:
           path: wheelhouse
       - run: pip install --upgrade pip
       # Install the BUILT momwire wheel (NOT source) + the test deps.
-      - run: pip install wheelhouse/momwire-*-cp312-cp312-macosx_*_arm64.whl pytest matplotlib scikit-rf
+      - run: pip install wheelhouse/momwire-*-cp312-cp312-macosx_*_arm64.whl pytest pytest-xdist matplotlib scikit-rf
       - name: Install pynec-accel (the build under test)
         # Distribution is `pynec-accel` (import name stays PyNEC); --no-index
         # pins the wheel to the release under test.
@@ -200,7 +200,7 @@ jobs:
       # Install the BUILT momwire wheel (NOT source) + the test deps. bash shell
       # so the wheel glob expands (pwsh would pass it through literally).
       - shell: bash
-        run: pip install wheelhouse/momwire-*-cp312-cp312-win_amd64.whl pytest matplotlib scikit-rf
+        run: pip install wheelhouse/momwire-*-cp312-cp312-win_amd64.whl pytest pytest-xdist matplotlib scikit-rf
       - name: Install pynec-accel (the build under test)
         run: pip install pynec-accel --no-index --find-links "${{ inputs.pynec_find_links }}"
       - name: Assert both accelerated extensions coexist in one process
@@ -238,7 +238,7 @@ jobs:
           path: wheelhouse
       - run: pip install --upgrade pip
       # Install the BUILT momwire wheel (NOT source) + the test deps.
-      - run: pip install wheelhouse/momwire-*-cp312-cp312-*manylinux*_x86_64.whl pytest matplotlib scikit-rf
+      - run: pip install wheelhouse/momwire-*-cp312-cp312-*manylinux*_x86_64.whl pytest pytest-xdist matplotlib scikit-rf
       - name: Install pynec-accel (the build under test)
         run: pip install pynec-accel --no-index --find-links "${{ inputs.pynec_find_links }}"
       - name: Assert the wheel's accelerator loads against the shared system libgomp

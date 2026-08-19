@@ -40,25 +40,18 @@ dependencies = [
 # platform-specific --find-links wheel, not a PyPI package a name could pin).
 test = [
     "pytest",
-    # Evaluated for the default lane (#400) and NOT wired into addopts: `-n
-    # auto` measured 486 s against the marker-only lane's 280 s on this box's
-    # 8 cores — worse, not better. The accelerator is built `-fopenmp`
-    # (setup.py), and absent per-worker thread pinning each xdist worker
-    # process spawns its own full-width OpenMP pool, so the BLAS/OMP-heavy
-    # tests (tests/test_hmatrix.py in particular — 1 s serial, 30-60 s under
-    # -n auto) serialize behind thread contention instead of parallelizing.
-    # No correctness/flakiness surfaced (same 3369 passed/5 skipped either
-    # way, portal/server tests included) — this is a pure perf regression, not
-    # a safety one. tests/conftest.py carries the thread fix — a per-worker
-    # OMP pin plus portal/memgate xdist groups (the group markers need
-    # tryfirst, see conftest) — and the opt-in
-    # `pytest tests -n auto --dist loadgroup` measures ~2m00s GREEN since
-    # #403 closed: the four portal exactness failures were the engine
-    # printing the magnitude-and-angle of numerical zero in the pattern
-    # table's cross-pol dust, which moved with process history under load;
-    # the components are now floored at NEC's own _FIELD_FLOOR2 before they
-    # print. Kept OUT of addopts by maintainer decision (#400): the default
-    # run stays serial.
+    # xdist is the DEFAULT lane since #403 closed (see the addopts note).
+    # History, because both halves were hard-won: #400's first evaluation
+    # measured `-n auto` at 486 s against the serial 280 s — each worker
+    # spawned a full-width OpenMP pool (the accelerator is built -fopenmp)
+    # and the BLAS/OMP-heavy tests serialized behind thread contention.
+    # tests/conftest.py fixed that with a per-worker OMP/OpenBLAS pin plus
+    # portal/memgate xdist groups (the group markers need tryfirst, see
+    # conftest). Then #403 fixed the four order-sensitive portal exactness
+    # failures (the pattern table printed the magnitude-and-angle of
+    # numerical zero, which moved with process history under load; the
+    # components are floored at NEC's own _FIELD_FLOOR2 since). Measured
+    # after both: ~2m00s, 3710 green.
     "pytest-xdist",
     "matplotlib",
     "scikit-rf",
@@ -128,20 +121,28 @@ markers = [
     # Deselect explicitly with `-m "not oracle_binary"`.
     "oracle_binary: shells out to SimNEC's nec2c oracle; skipped when it is not installed",
 ]
-# Default local run (issue #400): skip the slow convergence ladders/oracle
-# sweeps and the memgate certification gates — measured 4m41s serial with
-# nothing over ~5 s (maintainer accepted over the original 2-minute wish
-# rather than wiring xdist into the default). The opt-in fast spelling
-# `pytest tests -n auto --dist loadgroup` (~2m00s; tests/conftest.py pins
-# OMP per worker and groups portal/memgate) is SUPPORTED since #403 closed
-# — the order-sensitive portal exactness failures were the pattern table
-# printing the angle of numerical zero, floored in the engine since.
-# A CLI `-m` REPLACES this rather
-# than ANDing with it (verified: `pytest tests -m ""` runs everything,
-# `pytest tests -m memgate` runs only memgate — not "addopts AND memgate"),
-# so `pytest tests -m ""` is the full-suite spelling for humans, and CI lanes
-# spell their own `-m` explicitly rather than leaning on this default.
-addopts = ["-m", "not slow and not memgate"]
+# Default local run: skip the slow convergence ladders/oracle sweeps and the
+# memgate certification gates, and run PARALLEL — `-n auto --dist loadgroup`
+# is the default since #403 closed (maintainer decision 2026-08-19,
+# reversing #400's serial default now that its premise — four
+# order-sensitive portal failures — is fixed). Measured ~2m00s against the
+# serial lane's 4m41-5m45s on 8 cores. tests/conftest.py pins OMP/OpenBLAS
+# to 1 per worker automatically (nothing to export) and groups the
+# portal/memgate files onto one worker; the default run is thereby also a
+# continuous order fuzzer, and MOMWIRE_403_DUMP=<dir> captures any byte-
+# oracle mismatch it ever surfaces.
+#
+# Escape hatches: `-n0` on the CLI turns xdist off (single-test loops,
+# `--pdb`, precise `-x`); serial runs keep full threading, which is what
+# the perf lanes were certified with. A CLI `-m` REPLACES the default `-m`
+# rather than ANDing with it (verified: `pytest tests -m ""` runs
+# everything, `pytest tests -m memgate` runs only memgate), so
+# `pytest tests -m ""` is the full-suite spelling for humans, and CI lanes
+# spell their own `-m` explicitly. The `-n` is NOT replaced by a CLI `-m`,
+# so CI's test/test-slow lanes inherit the parallelism; the memgate lane
+# opts out with an explicit `-n0` (memory certification cannot share a
+# box), and the wheel-smoke jobs install pytest-xdist so the addopts parse.
+addopts = ["-m", "not slow and not memgate", "-n", "auto", "--dist", "loadgroup"]
 # Put the project root on sys.path so the `validation` harness package (which
 # lives next to `tests/`, not under src/) is importable from the backend tests.
 pythonpath = ["."]
