@@ -319,7 +319,7 @@ def test_razor_served_row_is_every_ground_plus_loading_radii_and_the_kernel():
     """PEC (unit 2), refl-coef (unit 4) and sommerfeld (unit 5) — the whole
     ground column, for wires clear of the plane — plus wire loading
     (momwire#427), per-wire radii (momwire#147) and the EXTENDED KERNEL
-    (momwire#436, filled when the taper study identified the NEC-5 binary as
+    (momwire#398 D1, filled when the taper study identified the NEC-5 binary as
     extended-kernel everywhere). Every other cell is still refused, and the
     one combination that is refused inside the served column (contact over a
     finite ground, momwire#282) says so through its own key rather than by

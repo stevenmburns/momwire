@@ -1,4 +1,4 @@
-"""`RazorSolver(extended_kernel=True)` — the fat-wire twin (momwire#436).
+"""`RazorSolver(extended_kernel=True)` — the fat-wire twin (momwire#398 D1).
 
 The refusal this replaces said "RazorSolver is reduced-kernel only: NEC-5's
 formulation is the comparison target, and its expansion is tested on the wire

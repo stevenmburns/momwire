@@ -406,7 +406,7 @@ def test_a_node_gaps_deck_refuses():
 
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
 def test_extended_kernel_card_reaches_the_solver(basis):
-    """An `EK` card arms the extended kernel on this class too (momwire#436).
+    """An `EK` card arms the extended kernel on this class too (momwire#398 D1).
 
     It used to be refused. The taper study identified the NEC-5 binary as
     extended-kernel EVERYWHERE, which made the refusal a statement about the
