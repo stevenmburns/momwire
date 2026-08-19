@@ -1,0 +1,19 @@
+CM k9ay_orig, trimmed to the cards the symmetric cell acts on (momwire#415).
+CM Source: xnec2c examples/k9ay_orig.nec, a K9AY directional receiving loop.
+CM Two wires meeting at (5, 0, 1.5); GX 2 100 reflects them in X=0, so the
+CM cell is tags 1 and 2 and its image is tags 3 and 4.  EX drives tag 4 -- an
+CM IMAGE -- and LD loads tag 2, which is inside the cell, so the 470 ohms
+CM lands on tag 4 as well and the deck reads ~470 ohms higher than a naive
+CM single-tag expansion would.  Free space and one frequency: the corpus
+CM deck's Sommerfeld ground and 13-point sweep move both forms alike and are
+CM not what this fixture is about.
+CE
+GW 1 8 0. 0. 8.5 5. 0. 1.5 1.5E-3
+GW 2 5 0. 0. 0. 5. 0. 1.5 1.5E-3
+GX 2 100
+GE 0
+EX 0 4 1 0 1. 0.
+LD 4 2 1 1 470. 0.
+FR 0 1 0 0 1.8 0
+XQ
+NX

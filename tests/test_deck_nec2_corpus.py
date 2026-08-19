@@ -6,7 +6,7 @@ readers "agree on everything load-bearing for geometry: ``GW``, ``GM``,
 ``GS``, free-format tolerance, fused mnemonics, ``(tag, segment)`` addressing,
 and the connection tolerance and snapping — that code is shared, not merely
 equivalent."  This module is the measurement behind that sentence, run over
-the 45-deck reference corpus, using antennaknobs' ``nec_import`` — a reader
+the 47-deck reference corpus, using antennaknobs' ``nec_import`` — a reader
 independently written and maintained outside momwire — as the oracle:
 
   * the flat NEC wire list after every ``GM``/``GS`` transform and both
@@ -74,7 +74,7 @@ np = pytest.importorskip("numpy")
 
 
 def _corpus() -> list[Path]:
-    """The 45 reference decks — momwire's own, since #846 phase III."""
+    """The 47 reference decks — momwire's own, since #846 phase III."""
     return sorted(
         (Path(__file__).resolve().parent / "fixtures" / "nec_portal").glob("*.deck")
     )
@@ -251,11 +251,15 @@ def test_geometry_matches_antennaknobs(path: Path):
 
 
 def test_corpus_is_the_whole_reference_set():
-    """The gate is the WHOLE corpus, not whatever happened to be on disk."""
-    assert len(CORPUS) == 45
+    """The gate is the WHOLE corpus, not whatever happened to be on disk.
+
+    45 through #458; 47 since momwire#415 added a ``GX`` and a ``GR`` deck,
+    which this module's geometry comparison covers for free — the reference
+    importer implements both cards too, and unit 1 ported them from it."""
+    assert len(CORPUS) == 47
 
 
-# The corpus is 45 clean exported decks: measured, not one of them has an
+# The corpus is 47 clean exported decks: measured, not one of them has an
 # endpoint the connection passes move, or a wire another wire's end lands on
 # mid-span. So the two most delicate pieces of shared arithmetic — the
 # snapping tolerance and the junction shatter — would go unmeasured on the

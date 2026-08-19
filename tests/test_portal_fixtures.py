@@ -135,10 +135,16 @@ def test_every_out_ends_a_run_with_the_nx_echo(name):
 
 @pytest.mark.parametrize("name", NAMES)
 def test_every_deck_is_portal_dialect_and_ends_with_nx(name):
-    """Decks use only cards nec2/NECSource emits, and terminate with NX."""
+    """Decks use only cards this engine's dialect serves, and terminate with NX.
+
+    The set is ``FIXTURE_CARDS`` — nec2/NECSource's own card list plus the two
+    geometry cards momwire#415 added for the xnec2c corpus (``GX``/``GR``),
+    which NECSource does not emit and which only the two hand-authored
+    reflection/rotation fixtures use.
+    """
     deck = _deck(name)
     assert deck.endswith("NX\n")
-    allowed = set(CAPTURE.PORTAL_CARDS) | {"NX"}
+    allowed = set(CAPTURE.FIXTURE_CARDS) | {"NX"}
     for line in deck.splitlines():
         if not line.strip():
             continue

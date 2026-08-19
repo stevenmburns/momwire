@@ -1,0 +1,9 @@
+CE dipole reflected in X=0 plus a driven element
+GW 1 9 1. 0. -2.5 1. 0. 2.5 0.001
+GX 1 100
+GW 3 9 0. 1. -2.5 0. 1. 2.5 0.001
+GE 0
+EX 0 3 5 0 1.
+FR 0 1 0 0 30. 0
+XQ
+NX
