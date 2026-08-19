@@ -288,13 +288,20 @@ momwire#248 established):
 
 | row | offset from NEC-5, coarsest → finest | dR spread | dX spread | limit gap |
 |---|---|---|---|---|
-| reduced, `nec5_quadrature` | +0.02+0.06j → +0.58+0.54j Ω | 0.555 | 0.475 | **4.863 Ω** |
+| reduced, `nec5_quadrature` | +0.02+0.06j → +0.58+0.54j Ω | 0.555 | 0.475 | 1.400 Ω |
 | **EK, `nec5_quadrature`** | +0.005+0.022j → +0.005+0.011j Ω | **0.012** | **0.021** | **0.047 Ω** |
 
+The limit gap is Richardson on the two finest gated rungs, against NEC-5's
+own limit from the same pair. Extrapolated from the study's N = 280/400
+instead — outside the Δ/a ≈ 2 domain, which moves the reference's own limit
+by 0.57 Ω — the two read 4.863 and 0.666 Ω. Either pair says the same thing
+about the ratio.
+
 against the `nec5_quadrature` offset-constancy bar of **0.05 Ω**. The
-reduced row failed that bar by 43× on this deck (the study's headline
-finding about razor); the EK row holds it with 4× margin, and its Richardson
-limit lands 0.047 Ω from the binary's where the reduced row's lands 4.86 Ω
+reduced row misses that bar on this deck by 11× on these same gated rungs
+and by 43× on the study's full ladder to N = 400 — the study's headline
+finding about razor. The EK row holds it with 4× margin, and its continuum
+limit lands 0.047 Ω from the binary's where the reduced row's lands 1.40 Ω
 away. That is the twin claim, restored on the reference's home turf.
 
 On Ward's actual 10-step taper the same lane holds the bar to Δ/a ≳ 3
