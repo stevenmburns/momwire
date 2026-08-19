@@ -78,7 +78,9 @@ jobs:
           cache: pip
       - run: pip install --upgrade pip
       - run: pip install -e .[test]
-      - run: pytest tests/ -m memgate
+      # -n0: memory-certification gates measure peak RSS and cannot share a
+      # box with concurrent workers; this lane opts out of addopts' xdist.
+      - run: pytest tests/ -m memgate -n0
 
   test-pynec:
     # Validate that the PyNEC backend agrees with momwire
