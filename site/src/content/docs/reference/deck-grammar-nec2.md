@@ -35,9 +35,8 @@ The dialect describes **a structure of thin wires, driven by voltage sources,
 optionally over a ground**. It does not describe circuits attached to that
 structure. Transmission lines (`TL`) and two-port networks (`NT`) are refused
 by name: solve the network outside the engine, or import the deck with
-antennaknobs, which keeps NEC's full network grammar. Surface patches, arcs,
-helices and structure reflections are refused too — see
-[Refusals](#refusals) for each message.
+antennaknobs, which keeps NEC's full network grammar. Surface patches, arcs
+and helices are refused too — see [Refusals](#refusals) for each message.
 
 The restriction is a measurement, not a preference. Across the 44-deck
 reference corpus the card histogram is `GW` 104, `EX` 55, `XQ` 52, `FR` 49,
@@ -390,18 +389,20 @@ so NEC fills and factors the matrix on **one cell** and reuses it — the
 `SEGMENTS IN A SYMMETRIC CELL` line in its printout. The cell is the
 structure exactly as it stood when the card fired, and its images follow it
 contiguously; there is no hierarchy, and a `GX` selecting two planes still
-reports one cell and four copies of it. A second `GX` resets the cell to the
-whole prior structure rather than nesting inside the first one's.
+reports one cell and four copies of it. A second `GX`/[`GR`](#gr--cylindrical-structure-rotation)
+resets the cell to the whole prior structure rather than nesting inside the
+first one's.
 
-Only `GX` creates symmetry. What the other geometry cards do to it:
+Only `GX` and `GR` create symmetry. What the other geometry cards do to it:
 
-| card after `GX` | symmetry |
+| card after `GX`/`GR` | symmetry |
 |---|---|
 | `GS`, any form | **kept** |
 | `GM` over the whole structure (`ITS` unset, `NRPT = 0`) | **kept** |
 | `GM` restricted to a tag, or with `NRPT > 0` | destroyed |
 | `GW` | destroyed |
 | `GX` selecting no plane at all (`I2 = 0`) | destroyed |
+| `GR` again, any `nop` — including `nop = 1` | **reset**, not destroyed |
 
 Symmetry survives a congruence of the *entire* structure and dies the moment
 anything is added or transformed selectively. The typical real deck builds a
@@ -418,12 +419,65 @@ answering with the load where it was written (which reads 53 % off on the
 `k9ay_orig` deck):
 
 ```text
-LD while a GX symmetric cell is in force is not supported by this engine yet (momwire#415): NEC applies a load addressed inside the cell to every copy of it and silently drops one addressed outside it, and that rule is not implemented here
+LD while a GX/GR symmetric cell is in force is not supported by this engine yet (momwire#415): NEC applies a load addressed inside the cell to every copy of it and silently drops one addressed outside it, and that rule is not implemented here
 ```
 
 Excitation is exempt — `EX` is the right-hand side, not the operator, and an
 asymmetric drive is exact under symmetry decomposition. A deck whose symmetry
-is dead at `GE`, or which carries no `LD`, is served in full.
+is dead at `GE`, or which carries no `LD`, is served in full. The guard is one
+check against `symmetry`, so it fires identically whichever card — `GX` or
+`GR` — declared the live cell.
+
+## GR — cylindrical structure rotation
+
+Rotate the whole structure built so far about the **Z axis**, forming a
+cylindrical structure of `nop` copies.
+
+| field | meaning |
+|---|---|
+| `I1` | tag increment applied to each copy |
+| `I2` | `nop`, the total number of structures (the original plus `nop - 1` copies). Must be ≥ 1 |
+
+The structure is copied `nop - 1` times, each copy rotated `2π / nop` radians
+further about Z than the one before it, and **each copy is built from the
+previous copy's coordinates** — not the original structure's — so the
+rotations compound around the cylinder. A wire tagged `0` keeps tag `0` in
+every copy.
+
+**The tag increment does not double, the way `GX`'s does — it accumulates.**
+Each copy adds `I1` to the *previous* copy's tag, so the `k`-th copy (the
+original counts as copy 0) carries tag `original + k * I1`:
+
+```text
+GW 1 5  0. 0. 0.  1. 0. 0.  1.E-3
+GR 1 4
+```
+
+lays out as one cell and three copies, contiguously — segments 1–5 the cell
+(tag 1), 6–10 the first copy (tag 2), 11–15 the second (tag 3), 16–20 the
+third (tag 4).
+
+`I1 = 0` is legal and common: every copy then shares the original's tag, and
+a tag-addressed card resolves across **all** of them, in structure order —
+`GW 1 5 ...` followed by `GR 0 4` addresses tag 1 as all 20 segments, not
+just the first 5.
+
+`nop < 1` is a geometry error:
+
+```text
+structure count must be >= 1, got <n>
+```
+
+`nop = 1` is legal and produces no copies at all — the structure is
+unchanged. It still **declares a symmetric cell**, though: NEC's own reader
+sends every `GR` card through the same routine as `GX`, and that routine sets
+the symmetry flag before it ever looks at `nop`, so even a `GR n 1` reports a
+cell equal to the (unchanged) whole structure rather than leaving symmetry
+untouched. This dialect follows that reading rather than treating `nop = 1`
+as a no-op for the cell, the same way `GX n 0` deliberately *retires*
+symmetry instead of falling through — see [the symmetric
+cell](#the-symmetric-cell) above, which `GR` declares exactly as `GX` does,
+including the shared `LD` guard.
 
 ## GS — scale
 
@@ -959,7 +1013,6 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 | `NT` | `NT (two-port network) is not part of this engine's nec2 dialect, which is antenna-only; antennaknobs imports decks with networks` |
 | `GA` | `GA (wire arc) is not part of this engine's nec2 dialect, whose geometry is GW with GM / GS transforms` |
 | `GH` | `GH (helix) is not part of this engine's nec2 dialect, whose geometry is GW with GM / GS transforms` |
-| `GR` | `GR (cylindrical structure rotation) is not part of this engine's nec2 dialect, whose geometry is GW with GM / GS transforms` |
 | `GC` | `GC (tapered wire continuation) is not part of this engine's nec2 dialect` |
 | `GF` | `GF (numerical Green's function) is not part of this engine's nec2 dialect` |
 | `SY` | `SY (4nec2 symbolic variables) is not part of this engine's nec2 dialect` |
@@ -972,11 +1025,11 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 | `WG` | `WG (NGF write request) is not supported by this engine` |
 | `ZO` | `ZO (impedance normalisation) is not supported by this engine` |
 
-`GA`/`GH`/`GR` are refused rather than translated because the corpus never
-uses them and an untested geometry path is worse than an honest no.
-([`GX`](#gx--structure-reflection) was one of them and is now built.) The
-three "yet" messages mark the cards a patch model would bring, not a dialect
-decision.
+`GA`/`GH` are refused rather than translated because the corpus never uses
+them and an untested geometry path is worse than an honest no.
+([`GX`](#gx--structure-reflection) and [`GR`](#gr--cylindrical-structure-rotation) were
+two of them and are now built.) The three "yet" messages mark the cards a
+patch model would bring, not a dialect decision.
 
 Anything else:
 
@@ -1009,7 +1062,8 @@ unrecognised NEC card '<XX>'
 | `GW` | radius ≤ 0 | `GW with a non-positive radius announces a tapered wire (GW + GC continuation), which is not part of this engine's nec2 dialect` |
 | `GS` | factor ≤ 0 | `scale factor must be > 0, got <f>` |
 | `GX` | a wire lying in or crossing a firing plane | `a wire lies in or crosses the <p> symmetry plane` |
-| `LD` | a `GX` symmetric cell still live | `LD while a GX symmetric cell is in force is not supported by this engine yet (momwire#415): NEC applies a load addressed inside the cell to every copy of it and silently drops one addressed outside it, and that rule is not implemented here` |
+| `GR` | `nop < 1` | `structure count must be >= 1, got <n>` |
+| `LD` | a `GX`/`GR` symmetric cell still live | `LD while a GX/GR symmetric cell is in force is not supported by this engine yet (momwire#415): NEC applies a load addressed inside the cell to every copy of it and silently drops one addressed outside it, and that rule is not implemented here` |
 
 ### Structural refusals
 
@@ -1035,8 +1089,8 @@ anyone moving a deck between them:
 | topic | antennaknobs importer | this dialect |
 |---|---|---|
 | `TL` / `NT` | translated into circuit branches | refused by name |
-| `GA` / `GH` / `GR` | built as geometry | refused by name |
-| `LD` under a live `GX` symmetry | the geometry expands; the symmetric-cell load rule is not applied | refused (momwire#415) |
+| `GA` / `GH` | built as geometry | refused by name |
+| `LD` under a live `GX`/`GR` symmetry | the geometry expands; the symmetric-cell load rule is not applied | refused (momwire#415) |
 | `GE` ground flag | `GE I1 ≠ 0` alone marks the deck as grounded | records the flag; ground physics comes from `GN` only |
 | `FR` | only the **first** `FR` is read, and it collapses to a `(min, max)` range | every `FR` is read; the list drives execute groups |
 | `EX` type | accepts `0`, `5` (voltage) and `6` (4nec2 current source, network path) | accepts `0` only |

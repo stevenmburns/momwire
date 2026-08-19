@@ -37,10 +37,10 @@ from .model import (
 __all__ = ["parse_nec2"]
 
 
-# The geometry section.  GA/GH/GR are NEC geometry too, and are refused by
-# name below: the corpus never uses them and an untested geometry path is
-# worse than an honest no.
-_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GE"})
+# The geometry section.  GA/GH are NEC geometry too, and are refused by name
+# below: the corpus never uses them and an untested geometry path is worse
+# than an honest no.
+_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GR", "GE"})
 
 # Cards that RUN the pending group.  RP/NE/NH are not merely report requests:
 # the engine executes on reading them and prints their table afterwards.
@@ -104,10 +104,6 @@ _REFUSED_BY_NAME = MappingProxyType(
         "GH": (
             "GH (helix) is not part of this engine's nec2 dialect, whose "
             "geometry is GW with GM / GS transforms"
-        ),
-        "GR": (
-            "GR (cylindrical structure rotation) is not part of this engine's "
-            "nec2 dialect, whose geometry is GW with GM / GS transforms"
         ),
         "GC": (
             "GC (tapered wire continuation) is not part of this engine's nec2 dialect"
@@ -347,7 +343,7 @@ class _Nec2Parser:
         return LoadSpec("fixed", r=r, x=x)
 
     def _refuse_a_load_under_a_live_symmetry(self) -> None:
-        """``LD`` while a ``GX`` symmetric cell is still in force.
+        """``LD`` while a ``GX``/``GR`` symmetric cell is still in force.
 
         A load enters the MATRIX, and while symmetry is live the matrix is
         the cell's, so NEC's ``LOAD`` stamps the cell's loading onto every
@@ -356,7 +352,9 @@ class _Nec2Parser:
         dropped with no diagnostic (issue #415, oracle-verified on nec2c and
         nec5cl to every printed digit).  Serving the deck with the load where
         it was written is not an approximation — ``k9ay_orig`` reads 53 %
-        off — so the combination refuses until the cell rule lands.
+        off — so the combination refuses until the cell rule lands.  The
+        guard keys off ``self.structure.symmetry`` alone, so it fires the
+        same way whichever card declared the cell.
 
         It costs two decks in the 34-deck corpus census: the other 32 either
         collapse their symmetry before ``GE`` (30 of them, the usual feed
@@ -366,8 +364,8 @@ class _Nec2Parser:
         if self.structure.symmetry is None:
             return
         raise DeckError(
-            "LD while a GX symmetric cell is in force is not supported by "
-            "this engine yet (momwire#415): NEC applies a load addressed "
+            "LD while a GX/GR symmetric cell is in force is not supported "
+            "by this engine yet (momwire#415): NEC applies a load addressed "
             "inside the cell to every copy of it and silently drops one "
             "addressed outside it, and that rule is not implemented here"
         )
