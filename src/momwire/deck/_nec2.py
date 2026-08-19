@@ -122,6 +122,7 @@ _REFUSED_BY_NAME = MappingProxyType(
         "SY": "SY (4nec2 symbolic variables) is not part of this engine's nec2 dialect",
         "SP": "SP (surface patch) is not supported by this engine yet",
         "SM": "SM (multiple-patch surface) is not supported by this engine yet",
+        "SC": "SC (surface patch continuation) is not supported by this engine yet",
         "KH": "KH (interaction approximation limit) is not supported by this engine",
         "PQ": "PQ (charge print control) is not supported by this engine",
         "CP": "CP (coupling request) is not supported by this engine",

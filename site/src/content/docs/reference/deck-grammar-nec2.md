@@ -858,6 +858,7 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 | `SY` | `SY (4nec2 symbolic variables) is not part of this engine's nec2 dialect` |
 | `SP` | `SP (surface patch) is not supported by this engine yet` |
 | `SM` | `SM (multiple-patch surface) is not supported by this engine yet` |
+| `SC` | `SC (surface patch continuation) is not supported by this engine yet` |
 | `KH` | `KH (interaction approximation limit) is not supported by this engine` |
 | `PQ` | `PQ (charge print control) is not supported by this engine` |
 | `CP` | `CP (coupling request) is not supported by this engine` |
@@ -867,7 +868,7 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 
 `GA`/`GH`/`GX`/`GR` are refused rather than translated because the corpus
 never uses them and an untested geometry path is worse than an honest no. The
-two "yet" messages mark the cards a patch model would bring, not a dialect
+three "yet" messages mark the cards a patch model would bring, not a dialect
 decision.
 
 Anything else:
