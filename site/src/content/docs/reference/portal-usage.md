@@ -96,6 +96,23 @@ elements on a regular lattice become an FFT convolution over the element grid
 structure, so it is safe to leave on. Its answers must agree with `bspline`'s;
 if they do not, the deck is telling you about conditioning, not about basis.
 
+**On a tapered or stepped-radius wire, `sinusoidal` and
+`sinusoidal-galerkin` are NEC-2-identified, not NEC-5-accurate.** Both ride
+NEC-2's per-segment end-condition convention, so on a radius step they
+reproduce NEC-2's own stepped-radius error rather than resolving it —
+measured converging onto nec2c's answer to 0.01-0.1 Ω while sitting tens of
+ohms from the licensed NEC-5 reference on the same geometry
+(momwire#398/#435). That is by design: this row exists to be the
+NEC-2-closest rung of the ladder, and inheriting NEC-2's own defect on a
+taper is what "closest" means there. Reach for `bspline-d1` with `EK` armed
+(the `EK` card, above) for a tapered or fat-conductor deck instead — it is
+the row measured closest to NEC-5 on Ward Harriman AE6TY's flagship 20:1
+tapered dipole. `sinusoidal-galerkin` additionally REFUSES `EK` outright on
+any deck where two wires of different radii meet at a junction — measured
+divergent rather than merely inaccurate there; see the `EK` card entry in
+[the nec2 deck grammar
+reference](/reference/deck-grammar-nec2/#ek--extended-thin-wire-kernel).
+
 **Two portal entries differing only in `--basis` give you cross-basis
 validation inside SimNEC itself.** Switch engines from the dialog and watch
 whether the answer holds. The printout banner records which physics answered
