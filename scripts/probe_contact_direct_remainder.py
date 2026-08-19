@@ -37,15 +37,20 @@ residual against the binary moves 3.3274 -> 3.3305 ohm at N = 81 and 3.2691
 `n_qp_sommerfeld` 3 -> 12 at N = 41 poor moves it 3.2691 -> 3.2409. Neither
 knob is worth 3 ohm, so the remainder's evaluation is not the gap.
 
-What the grid IS worth, which is not nothing and belongs to momwire#443 —
+What the grid WAS worth, which is not nothing and belonged to momwire#443 —
 two measures, do not mix them. On the ANSWER, |z(grid) - z(direct)| on SEA
-WATER is 0.13 ohm at every mesh; very good ground 0.0037, average 0.0008,
-poor 0.0032. On the RESIDUAL, sea water moves 0.0803/0.0965/0.1092 at
+WATER was 0.13 ohm at every mesh; very good ground 0.0037, average 0.0008,
+poor 0.0032. On the RESIDUAL, sea water moved 0.0803/0.0965/0.1092 at
 N = 21/41/81 (0.5248/0.3721/0.2703 with the grid, 0.4445/0.2756/0.1611
 without) — 32 % of that row's decay bar on the residual measure, ~40 % on
-the answer measure. That is exactly momwire#443's shape — a near-PEC error
+the answer measure. That was exactly momwire#443's shape — a near-PEC error
 at the small R1 only contact geometries query — showing up in a shipped
 answer rather than in a limit gate.
+
+POST-#443 (2026-08-19, boundary-layer keyed grid): sea water's answer
+measure fell 0.13 -> 0.0013 and its residuals landed on the direct column
+above (finest rung 0.1614 vs the predicted 0.1611); poor soil is unchanged
+at 0.0032 because its layer was already resolved and its grid is untouched.
 
 Usage:
     python scripts/probe_contact_direct_remainder.py --n 41 --ground poor

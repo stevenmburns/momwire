@@ -167,7 +167,7 @@ def test_remainder_field_proj_accel_matches_python_far_zone(monkeypatch):
     The split is lowered so a cheap grid exercises both zones."""
     monkeypatch.setattr(sm, "_SOMM_R1_NEAR_LAMBDA", 0.5)
     grid = sm.SommerfeldGrid(EPS_AVG, K2, 1.6 * LAM)
-    assert len(grid._regions) == 5
+    assert len(grid._regions) == 6  # 2 inner bands (momwire#443) + 2 near + 2 far
     obs, t_obs, src, t_src = _proj_sample(seed=5)
     fast = sm.remainder_field_proj(obs, t_obs, src, t_src, 0.0, K2, grid)
     monkeypatch.setattr(sm, "_acc", None)

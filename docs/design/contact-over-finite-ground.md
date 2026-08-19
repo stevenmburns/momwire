@@ -1623,6 +1623,15 @@ high-|ε̃| DECAY rows are partly gating the instrument. If #443 is fixed,
 sea water's finest rung should fall to ~0.16 Ω and that bar wants
 re-deriving; the numbers to beat are in the table above.
 
+*(Closed 2026-08-19: momwire#443 landed — the grid's steep-band R₁ spacing
+is now keyed to the near-interface boundary layer 1/|k₁|. Sea water's
+finest rung measured **0.1614** against the 0.1611 predicted above, the
+decay pins are re-derived at the new levels, the answer-measure share fell
+0.13 → 0.0013, and the ε̃ → ∞ contact recovery went from a rising
+0.48–0.59 Ω floor to ~0.001 Ω — the same class as the binary's own §3.3
+ladder. The lossy soils' grids are untouched and their envelope rows are
+unchanged, so stage 2's verdict and the #282 pins are unaffected.)*
+
 ### What stage 2 shipped
 
 * `diel` (ε_r = 2.5, σ = 1e−5) joins the lane on both geometries — the row
