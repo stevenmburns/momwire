@@ -249,13 +249,18 @@ dipole at 14.2 MHz, the fattest section of Ward Harriman's 20:1 taper, fed
 at NEC-5's own knot; the ladder gated to Δ/a ≥ 2 per momwire#248):
 
     row                    offset from NEC-5, N = 20 … 200      limit gap
-    razor (reduced, n5q)   +0.02+0.06j … +0.58+0.54j Ω          4.863 Ω
+    razor (reduced, n5q)   +0.02+0.06j … +0.58+0.54j Ω          1.400 Ω
     razor (EK, n5q)        +0.005+0.022j … +0.005+0.011j Ω      0.047 Ω
+
+(the limit gap Richardson on the two finest gated rungs; extrapolated from
+the study's N = 280/400 instead, outside the valid Δ/a domain, the two read
+4.863 and 0.666 Ω — see `docs/design/solver-architecture.md` §6.13)
 
 i.e. the EK row is a CONSTANT offset at the sharp `nec5_quadrature` bar
 (dR spread 0.012 Ω, dX 0.021 Ω against 0.05 Ω) on the very deck where the
-reduced row failed that bar by 43×. **This is the twin claim, restored on
-fat wire.** On THIN wire the two kernels agree and the reduced row remains
+reduced row misses that bar — by 11× on these same gated rungs, and by 43×
+on the study's full ladder to N = 400. **This is the twin claim, restored
+on fat wire.** On THIN wire the two kernels agree and the reduced row remains
 the twin it always was; the two statements do not compete, they partition
 the domain by a/λ.
 
@@ -507,7 +512,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         twin on fat and tapered sections (measured: a constant offset to
         0.012/0.021 Ω down the study's `fat` ladder against a 0.05 Ω bar,
         and a continuum limit 0.047 Ω from the binary's, where the reduced
-        row sits 4.86 Ω away), while the reduced kernel stays the twin on
+        row sits 1.40 Ω away), while the reduced kernel stays the twin on
         thin wire, where the two kernels agree to 1e-4 Ω and the extra
         arithmetic buys nothing. Eligibility is the shared coaxial-and-
         equal-radius pair rule (`_bspline_kernels._ek_axis_groups`) — see the

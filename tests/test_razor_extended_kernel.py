@@ -143,9 +143,11 @@ def test_d_the_fat_wire_twin_offset_is_constant():
 
     `fat` is the CONTROL deck: ten colinear sections at one 25 mm radius, so
     it carries no radius step and measures the kernel and nothing else. It is
-    also the deck where the study measured razor's reduced twin claim failing
-    the offset-constancy bar by 43x (dR spread 2.133 ohm) and its continuum
-    limit sitting 4.863 ohm from NEC-5's.
+    also the deck where the STUDY measured razor's reduced twin claim failing
+    the offset-constancy bar by 43x (dR spread 2.133 ohm, over its full
+    ladder to N = 400) and its continuum limit sitting 4.863 ohm from
+    NEC-5's. On the gated rungs here the same reduced row reads 0.555 in dR
+    and 1.400 ohm at the limit — the same finding, inside the valid domain.
 
     With the extended kernel the same lane's offset is a CONSTANT
     +0.005 + 0.011j ohm-ish at every rung. Both spreads are gated at the

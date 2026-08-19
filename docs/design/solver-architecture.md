@@ -1569,13 +1569,33 @@ difference-of-differences and is gated at 0.25 Ω.
 25 mm sections, 14.2 MHz, matched feed at NEC-5's knot, ladder gated to
 N ≤ 200 so the fat end stays above the Δ/a ≈ 2 floor of momwire#248):
 
-| row | offset from NEC-5, N = 20 → 200 | dR spread | dX spread | Richardson limit gap |
+| row | offset from NEC-5, N = 20 → 200 | dR spread | dX spread | limit gap |
 |---|---|---|---|---|
-| razor reduced, n5q | +0.02+0.06j → +0.58+0.54j Ω | 0.555 | 0.475 | **4.863 Ω** |
+| razor reduced, n5q | +0.02+0.06j → +0.58+0.54j Ω | 0.555 | 0.475 | 1.400 Ω |
 | **razor EK, n5q** | +0.005+0.022j → +0.005+0.011j Ω | **0.012** | **0.021** | **0.047 Ω** |
 | `bs1-ek` (same rungs) | — | 1.53 | 5.03 | 0.405 Ω |
 
+Every column is the gated ladder: the limit gap is Richardson on rungs
+140/200, against NEC-5's own limit from the same pair. Extrapolated instead
+from the study's 280/400 — outside the valid Δ/a domain, see the correction
+below — the same three read 4.863 / 0.666 / 1.189 Ω. The ratio is what
+survives either choice: **EK moves razor an order of magnitude closer to the
+reference on fat wire, and past `bs1-ek` while doing it.**
+
 against the `nec5_quadrature` sharp-lane constancy bar of **0.05 Ω** (§6.2).
+(The study's own "43×" is the same reduced row measured over its FULL ladder
+to N = 400; on the gated rungs above it is 11×. Both are the same finding.)
+
+**One correction to the study, found while gating this.** Its §2.3 `fat`
+limits — including NEC-5's own `89.854 + 43.902j` — are Richardson
+extrapolations from rungs 280 and 400, i.e. from Δ/a = 1.50 and 1.05, both
+BELOW the Δ/a ≈ 2 floor the study itself establishes in §2.4. Redone inside
+the valid domain (rungs 140/200), the reference's limit is
+`89.326 + 44.114j`, 0.57 Ω away, and every row's published gap moves with
+it: `bs1-ek` 1.189 → **0.405 Ω**, `bs1` 6.881 → 1.708, `razor` reduced
+4.863 → 1.388. The study's D4 recommendation ("gate to 200, record to 400")
+should extend to the LIMITS it publishes and not only to the gates; the
+ranking is unchanged, the magnitudes are not.
 On Ward's actual 10-step taper the same lane holds the bar in dR (0.020) and
 runs 1.6× over it in dX (0.078) — the eligibility rule's own documented
 conservatism at a radius step, where momwire extends only coaxial
