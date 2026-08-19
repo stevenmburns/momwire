@@ -412,21 +412,83 @@ it.
 The geometry this engine builds is the fully expanded structure either way —
 identical, wire for wire and segment for segment, to writing the images out
 as `GW` cards by hand. The cell matters only for the cards that move the
-**matrix**: while symmetry is live, NEC applies an `LD` addressed *inside*
-the cell to every copy of it, and silently drops one addressed *outside* it.
-That rule is not implemented yet, so the combination refuses rather than
-answering with the load where it was written (which reads 53 % off on the
-`k9ay_orig` deck):
+**matrix**.
+
+#### The cell rule
+
+While symmetry is live the matrix is the **cell's**, so NEC reads a load
+against the cell and stamps the result onto every copy afterwards. Two rules,
+each verified on nec2c and on nec5cl to every printed digit (momwire#415):
+
+| the load addresses | NEC | this dialect |
+|---|---|---|
+| a segment **inside** the cell | applies it to the corresponding segment of **every copy** | **served** — the load is expanded onto every copy |
+| a segment **outside** the cell (a copy) | **silently drops it**, with no diagnostic, while still echoing the card in its `DATA CARD` list | **refused by name** |
+
+Replication is served because it is the faithful answer and the one the
+author meant. Putting the load where it was written instead is not an
+approximation: on `k9ay_orig` the cell load also lands on the driven image,
+and the deck reads 960.79 Ω rather than 490.79 Ω on the oracle — 53 % apart.
+A deck written this way and the same deck with the reflection expanded into
+`GW` cards and one `LD` per copy produce **the same model**: the same wires,
+the same feed, the same load list, term for term.
+
+The drop is refused because NEC's silence is a defect rather than a
+behaviour worth matching — a card the user wrote is discarded and reported as
+honoured. No corpus deck addresses outside a live cell, so the divergence
+costs nothing observed, and the message names what NEC does so a reader
+cross-checking against it is not surprised:
 
 ```text
-LD while a GX/GR symmetric cell is in force is not supported by this engine yet (momwire#415): NEC applies a load addressed inside the cell to every copy of it and silently drops one addressed outside it, and that rule is not implemented here
+LD addresses <n> segment(s) outside the GX/GR symmetric cell in force (the cell is segments 1-<c> of <t>), which this engine does not serve (momwire#415): while the symmetry is live the matrix is the cell's, so NEC silently drops such a card rather than loading the copy — address the cell instead, where a load applies to every copy of it, or write the GX/GR out as explicit GW cards
 ```
 
-Excitation is exempt — `EX` is the right-hand side, not the operator, and an
-asymmetric drive is exact under symmetry decomposition. A deck whose symmetry
-is dead at `GE`, or which carries no `LD`, is served in full. The guard is one
-check against `symmetry`, so it fires identically whichever card — `GX` or
-`GR` — declared the live cell.
+The rule reads the **segments** a card resolves to, not the way its tag field
+spelled them. Three consequences:
+
+- **Whole-structure addressing coincides with the cell.** Under a live
+  symmetry the whole structure *is* cell plus copies, so `LD ... 0 0 0` and a
+  card on the cell's own tag name the same set — which is exactly what the
+  oracle prints (tag 0 and tag 1 are byte-identical there). It is served, and
+  the replication does not stamp the copies a second time.
+- **A global segment range is classified like a tag.** `LD 4 0 1 1 ...` and
+  `LD 4 1 1 1 ...` are the same card when global segment 1 is the cell's
+  first segment, and both replicate.
+- **`LD 5` conductivity is cell-scoped too.** It is read under the `LD`
+  mnemonic and lands in the same matrix diagonal. Its whole-structure form
+  (`LD 5 0 0 0 <σ>`) already names every copy and is served directly.
+
+The [≤ 8-segment expansion limit](#ld--loading) counts the range the deck
+**typed**, not the total after replication: NEC's own reader never sees the
+replicas as a range — they are stamped on one segment at a time, by a rule
+that has no width. So `LD 4 1 1 8 ...` under a `GR 1 4` serves as thirty-two
+loads, and it is the ninth *typed* segment that refuses. The
+[doubled-load refusal](#ld--loading) is unaffected in the other direction:
+replication widens the "already loaded" set rather than weakening it, so a
+deck that genuinely loads one cell segment through two cards still refuses.
+
+**`EX` is exempt.** Excitation is the right-hand side, not the operator, and
+an asymmetric drive is exact under symmetry decomposition (even/odd for a
+plane, Fourier modes for an n-fold rotation) — the oracle's cell-driven probe
+matches an expanded twin carrying a single source to six figures.
+`PT`/`PQ`/`GD`/`FR`/`GN`/`EK` address no tag into the structure and are
+unaffected.
+
+**`IS` refuses under a live cell.** A sheath moves the matrix the way a load
+does, so the cell rule must apply to it — but `IS` is this dialect's own card,
+absent from NEC-2, so there is no oracle to measure that rule against the way
+`LD`'s was measured. It refuses rather than guessing, which costs nothing: no
+corpus deck pairs an `IS` with a live cell.
+
+```text
+IS while a GX/GR symmetric cell is in force is not supported by this engine (momwire#415): a sheath moves the matrix the way a load does, so the cell rule applies to it, but NEC-2 has no IS card to measure that rule against — write the GX/GR out as explicit GW cards
+```
+
+A deck whose symmetry is dead at `GE` — 30 of the 34 corpus decks that use
+these cards, the usual feed wire or mast — never meets any of this: ordinary
+per-tag addressing comes back untouched. The rule is one check against
+`symmetry`, so it reads identically whichever card, `GX` or `GR`, declared
+the live cell.
 
 ## GR — cylindrical structure rotation
 
@@ -477,7 +539,7 @@ untouched. This dialect follows that reading rather than treating `nop = 1`
 as a no-op for the cell, the same way `GX n 0` deliberately *retires*
 symmetry instead of falling through — see [the symmetric
 cell](#the-symmetric-cell) above, which `GR` declares exactly as `GX` does,
-including the shared `LD` guard.
+including [the cell rule](#the-cell-rule) that governs `LD` while it is live.
 
 ## GS — scale
 
@@ -746,6 +808,12 @@ LD 5 conductivity on a partial-wire segment range is not supported by this engin
 LD on a segment that already carries a load is not supported by this engine — a second load on one segment is not merged
 ```
 
+While a [`GX`/`GR` symmetric cell](#the-symmetric-cell) is live, an `LD` is
+read against the **cell** rather than against the segments it names: see
+[the cell rule](#the-cell-rule), which governs the whole card, types 0, 1, 4
+and 5 alike, and which the 8-segment limit and the doubled-load refusal above
+both interact with.
+
 ## IS — insulated sheath
 
 A dielectric jacket over a wire.
@@ -774,7 +842,9 @@ outright.
 
 Where an unmodellable `IS` could plausibly be dropped with a warning, it is
 refused instead: solving a bare wire where the deck asked for a jacket is a
-wrong answer, not a translation compromise.
+wrong answer, not a translation compromise. An `IS` under a live
+[`GX`/`GR` symmetric cell](#the-symmetric-cell) is refused for the same
+reason — [the cell rule](#the-cell-rule) has no NEC-2 oracle for this card.
 
 ```text
 IS after an execute request is not supported by this engine: wire insulation is part of the structure, so it cannot change between runs
@@ -1063,7 +1133,8 @@ unrecognised NEC card '<XX>'
 | `GS` | factor ≤ 0 | `scale factor must be > 0, got <f>` |
 | `GX` | a wire lying in or crossing a firing plane | `a wire lies in or crosses the <p> symmetry plane` |
 | `GR` | `nop < 1` | `structure count must be >= 1, got <n>` |
-| `LD` | a `GX`/`GR` symmetric cell still live | `LD while a GX/GR symmetric cell is in force is not supported by this engine yet (momwire#415): NEC applies a load addressed inside the cell to every copy of it and silently drops one addressed outside it, and that rule is not implemented here` |
+| `LD` | a segment addressed outside a live `GX`/`GR` [cell](#the-cell-rule) | `LD addresses <n> segment(s) outside the GX/GR symmetric cell in force (the cell is segments 1-<c> of <t>), which this engine does not serve (momwire#415): while the symmetry is live the matrix is the cell's, so NEC silently drops such a card rather than loading the copy — address the cell instead, where a load applies to every copy of it, or write the GX/GR out as explicit GW cards` |
+| `IS` | a `GX`/`GR` symmetric [cell](#the-cell-rule) still live | `IS while a GX/GR symmetric cell is in force is not supported by this engine (momwire#415): a sheath moves the matrix the way a load does, so the cell rule applies to it, but NEC-2 has no IS card to measure that rule against — write the GX/GR out as explicit GW cards` |
 
 ### Structural refusals
 
@@ -1090,7 +1161,8 @@ anyone moving a deck between them:
 |---|---|---|
 | `TL` / `NT` | translated into circuit branches | refused by name |
 | `GA` / `GH` | built as geometry | refused by name |
-| `LD` under a live `GX`/`GR` symmetry | the geometry expands; the symmetric-cell load rule is not applied | refused (momwire#415) |
+| `LD` under a live `GX`/`GR` symmetry | the geometry expands; the symmetric-cell load rule is not applied, so the load stays where it was written | [the cell rule](#the-cell-rule): a cell load is expanded onto every copy, and a copy-addressed load is refused rather than silently dropped |
+| `IS` under a live `GX`/`GR` symmetry | applied where written | refused (momwire#415) — no NEC-2 oracle for the cell rule on this card |
 | `GE` ground flag | `GE I1 ≠ 0` alone marks the deck as grounded | records the flag; ground physics comes from `GN` only |
 | `FR` | only the **first** `FR` is read, and it collapses to a `(min, max)` range | every `FR` is read; the list drives execute groups |
 | `EX` type | accepts `0`, `5` (voltage) and `6` (4nec2 current source, network path) | accepts `0` only |

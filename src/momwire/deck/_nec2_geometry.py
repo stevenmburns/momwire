@@ -728,6 +728,60 @@ class Nec2Structure:
         last = max(last, first)
         return tuple(self.locate(tag, s) for s in range(first, last + 1))
 
+    def under_the_cell_rule(
+        self, pairs: tuple[tuple[int, int], ...]
+    ) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]]:
+        """An ``LD`` address list read under the cell: ``(applied, dropped)``.
+
+        Spec ``#the-symmetric-cell``.  While a ``GX``/``GR`` cell is live the
+        matrix is the CELL's, so NEC's ``LOAD`` stamps the cell's loading onto
+        every copy once every ``LD`` card has been read: a segment of the cell
+        loads the corresponding segment of EVERY copy, and a segment of a copy
+        is overwritten by whatever the cell said for it — dropped, with no
+        diagnostic.  Both halves are oracle-verified on nec2c and nec5cl to
+        every printed digit (issue #415).
+
+        The correspondence is pure index arithmetic, which is what makes the
+        rule cheap.  :class:`Symmetry` records the cell as a PREFIX of
+        :attr:`wires` and its copies follow contiguously in the same order, so
+        wire ``i`` of the cell has its counterpart at ``i + k * cell_wires``
+        in copy ``k``, with the same segment count and therefore the same
+        local segment numbers.  The list is exactly ``copies * cell_wires``
+        long: only ``GX``/``GR`` create a cell and each MULTIPLIES the list,
+        while the cards that preserve one (``GS``, a whole-structure ``GM``)
+        add no wires.
+
+        ``dropped`` is the addresses NEC would discard, which the caller
+        refuses over rather than following into silence.  It is empty both
+        when nothing was addressed outside the cell and when what was
+        addressed outside is already exactly the replication of what was
+        addressed inside — which is how whole-structure addressing (``LD
+        ... 0 0 0``) serves without double-stamping: the cell rule and "every
+        segment" name the same set.
+
+        With no live symmetry this is the identity, so a caller can run every
+        load address through it unconditionally.
+        """
+        symmetry = self.symmetry
+        if symmetry is None:
+            return pairs, ()
+        cell = symmetry.cell_wires
+        copies = len(self.wires) // cell
+        applied: list[tuple[int, int]] = []
+        seen: set[tuple[int, int]] = set()
+        for wire, seg in pairs:
+            if wire >= cell:
+                continue
+            for k in range(copies):
+                key = (wire + k * cell, seg)
+                if key not in seen:
+                    seen.add(key)
+                    applied.append(key)
+        # Sorted, so the load list a cell card produces is in structure order
+        # — the order a hand-expanded twin's one-card-per-copy deck produces,
+        # which is what makes the two models comparable term by term.
+        return tuple(sorted(applied)), tuple(p for p in pairs if p not in seen)
+
 
 def build_geometry(cards: list[Card]) -> Nec2Structure:
     """Run a deck's geometry section and close it.

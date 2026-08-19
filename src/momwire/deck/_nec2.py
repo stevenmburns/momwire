@@ -85,6 +85,14 @@ _DEFAULT_FREQUENCY_MHZ = 299.8
 
 # LD types 0, 1 and 4 expand into one port per segment; the range width
 # beyond which that expansion is refused rather than silently truncated.
+#
+# The width counted is the CARD AS WRITTEN — the range the deck's author
+# typed — not the total after a live symmetric cell replicates it onto every
+# copy (spec ``#the-symmetric-cell``).  NEC's own reader never sees the
+# replicas as a range: they are stamped on afterwards, one segment at a time,
+# by a rule that has no width at all.  So `LD 4 1 1 8` under a `GR 1 4` is
+# eight segments as far as this limit is concerned and thirty-two loads
+# afterwards, and it is the ninth typed segment that refuses.
 _LD_EXPAND_MAX = 8
 
 _REFUSED_BY_NAME = MappingProxyType(
@@ -342,32 +350,50 @@ class _Nec2Parser:
             return None
         return LoadSpec("fixed", r=r, x=x)
 
-    def _refuse_a_load_under_a_live_symmetry(self) -> None:
-        """``LD`` while a ``GX``/``GR`` symmetric cell is still in force.
+    def _cell_rule(
+        self, pairs: tuple[tuple[int, int], ...]
+    ) -> tuple[tuple[int, int], ...]:
+        """The segments an ``LD`` card really reaches (spec
+        ``#the-symmetric-cell``).
 
-        A load enters the MATRIX, and while symmetry is live the matrix is
-        the cell's, so NEC's ``LOAD`` stamps the cell's loading onto every
-        copy: a card addressing a tag INSIDE the cell loads the matching
-        segment of every image, and a card addressing a tag OUTSIDE it is
-        dropped with no diagnostic (issue #415, oracle-verified on nec2c and
-        nec5cl to every printed digit).  Serving the deck with the load where
-        it was written is not an approximation — ``k9ay_orig`` reads 53 %
-        off — so the combination refuses until the cell rule lands.  The
-        guard keys off ``self.structure.symmetry`` alone, so it fires the
-        same way whichever card declared the cell.
+        A load enters the MATRIX, and while a ``GX``/``GR`` symmetry is live
+        the matrix is the cell's, so an address INSIDE the cell loads the
+        corresponding segment of every copy — identical to writing one card
+        per copy by hand — and an address OUTSIDE it is silently dropped
+        (issue #415, oracle-verified on nec2c and nec5cl to every printed
+        digit).  The arithmetic is
+        :meth:`Nec2Structure.under_the_cell_rule`; what lives here is the
+        dialect's half of the decision.
 
-        It costs two decks in the 34-deck corpus census: the other 32 either
-        collapse their symmetry before ``GE`` (30 of them, the usual feed
-        wire or mast) or carry no ``LD``, and those serve fully, because the
-        geometry expansion is exact everywhere.
+        This engine SERVES the replication and REFUSES the drop.  Serving the
+        replication is the faithful answer and the one the deck's author
+        meant: putting the load where it was written instead reads 53 % off
+        on ``k9ay_orig``.  Refusing the drop is a deliberate divergence from
+        NEC, whose silence is a defect: a card the user wrote is discarded
+        with no diagnostic and still echoed in the ``DATA CARD`` list as if
+        honoured.  No corpus deck addresses outside a live cell, so the
+        divergence costs nothing observed, and the message says what NEC does
+        so a reader cross-checking against it is not surprised.
+
+        With the symmetry dead — 30 of the 34 corpus decks, the usual feed
+        wire or mast after the ``GX`` — this is the identity and ordinary
+        per-tag addressing comes back untouched.
         """
-        if self.structure.symmetry is None:
-            return
+        applied, dropped = self.structure.under_the_cell_rule(pairs)
+        if not dropped:
+            return applied
+        symmetry = self.structure.symmetry
+        assert symmetry is not None  # nothing is dropped without a live cell
+        n = len(dropped)
         raise DeckError(
-            "LD while a GX/GR symmetric cell is in force is not supported "
-            "by this engine yet (momwire#415): NEC applies a load addressed "
-            "inside the cell to every copy of it and silently drops one "
-            "addressed outside it, and that rule is not implemented here"
+            f"LD addresses {n} segment{'' if n == 1 else 's'} outside the "
+            f"GX/GR symmetric cell in force (the cell is segments 1-"
+            f"{symmetry.cell_segments} of {self.structure.n_segments}), which "
+            f"this engine does not serve (momwire#415): while the symmetry is "
+            f"live the matrix is the cell's, so NEC silently drops such a card "
+            f"rather than loading the copy — address the cell instead, where a "
+            f"load applies to every copy of it, or write the GX/GR out as "
+            f"explicit GW cards"
         )
 
     def _ld(self, card: Card) -> None:
@@ -392,7 +418,6 @@ class _Nec2Parser:
             # A conductivity is read under the LD mnemonic and lands in the
             # same matrix diagonal, so it is cell-scoped exactly as a lumped
             # load is.
-            self._refuse_a_load_under_a_live_symmetry()
             self._ld5(tag, first, last, card.f(4))
             return
 
@@ -406,10 +431,11 @@ class _Nec2Parser:
         spec = self._load_spec(ldtyp, card)
         if spec is None:
             return  # a zero-valued load is a no-op, dropped
-        # After the no-op test, so a deck whose LD is byte-identical to
-        # omitting the card is not refused for a rule it cannot trip.
-        self._refuse_a_load_under_a_live_symmetry()
-        for wire, seg in pairs:
+        # The cell rule comes AFTER the no-op test, so a deck whose LD is
+        # byte-identical to omitting the card is not refused for a rule it
+        # cannot trip — and after the expansion limit, which counts the card
+        # AS WRITTEN (see `_LD_EXPAND_MAX`).
+        for wire, seg in self._cell_rule(pairs):
             piece_index, elem = self.structure.element_of(wire, seg)
             key = (piece_index, elem)
             if key in self._loaded:
@@ -424,11 +450,22 @@ class _Nec2Parser:
 
     def _ld5(self, tag: int, first: int, last: int, sigma: float) -> None:
         """``LD 5`` — whole-structure or per-wire conductivity, not a lumped
-        element (spec: "a material property")."""
+        element (spec: "a material property").
+
+        The whole-structure form is served under a live symmetry without
+        going near the cell rule: it already names every copy, so there is
+        nothing to replicate and nothing to drop.  The ranged form runs
+        through :meth:`_cell_rule` like any other load, which for a cell
+        address widens the wire set to the matching wire of every copy.  The
+        whole-wire test then reads the WIDENED set, which changes no outcome
+        — replication maps a whole wire to whole wires and a partial range to
+        partial ranges — while leaving the out-of-cell refusal as the first
+        thing a copy-addressed card hears.
+        """
         if tag == 0 and first == 0:
             self._global_conductivity = sigma
             return
-        pairs = self.structure.ld_segment_range(tag, first, last)
+        pairs = self._cell_rule(self.structure.ld_segment_range(tag, first, last))
         by_wire: dict[int, set[int]] = {}
         for wire, seg in pairs:
             by_wire.setdefault(wire, set()).add(seg)
@@ -461,6 +498,21 @@ class _Nec2Parser:
             )
         if radius <= 0.0 or eps_r <= 1.0:
             return  # electrically a vacuum: a no-op
+        if self.structure.symmetry is not None:
+            # A sheath moves the matrix the way a load does, so the cell rule
+            # of spec ``#the-symmetric-cell`` must apply to it — but IS is
+            # this dialect's own extension, absent from NEC-2, so there is no
+            # oracle to measure that rule against the way `LD`'s was measured
+            # on nec2c and nec5cl.  Refusing costs nothing observed (no
+            # corpus deck pairs an IS with a live cell) and beats guessing at
+            # a scoping rule nothing can check.
+            raise DeckError(
+                "IS while a GX/GR symmetric cell is in force is not "
+                "supported by this engine (momwire#415): a sheath moves the "
+                "matrix the way a load does, so the cell rule applies to it, "
+                "but NEC-2 has no IS card to measure that rule against — "
+                "write the GX/GR out as explicit GW cards"
+            )
         pairs = self.structure.ld_segment_range(tag, first, last)
         by_wire: dict[int, set[int]] = {}
         for wire, seg in pairs:

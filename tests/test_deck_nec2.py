@@ -1448,36 +1448,97 @@ def test_ld_refuses_a_second_load_on_the_same_segment():
 
 
 _K9AY_DECK = K9AY + "GE 0\nEX 0 4 1 0 1. 0.\nFR 0 1 0 0 14.\n{ld}XQ\nNX\n"
-_CELL_LOAD_REFUSAL = (
-    "LD while a GX/GR symmetric cell is in force is not supported by this "
-    "engine yet (momwire#415): NEC applies a load addressed inside the cell "
-    "to every copy of it and silently drops one addressed outside it, and "
-    "that rule is not implemented here"
+
+# The same structure with the reflection written out by hand — the twin the
+# cell rule is gated against.  Tags 3 and 4 are the images of 1 and 2, so
+# there is no symmetry at `GE` and every tag addresses its own segments.
+_K9AY_TWIN = (
+    "GW 1 8 0. 0. 8.5  5. 0. 1.5 1.5E-3\n"
+    "GW 2 5 0. 0. 0.   5. 0. 1.5 1.5E-3\n"
+    "GW 3 8 0. 0. 8.5 -5. 0. 1.5 1.5E-3\n"
+    "GW 4 5 0. 0. 0.  -5. 0. 1.5 1.5E-3\n"
+    "GE 0\nEX 0 4 1 0 1. 0.\nFR 0 1 0 0 14.\n{ld}XQ\nNX\n"
+)
+
+_OUT_OF_CELL_REFUSAL = (
+    "LD addresses {n} segment{s} outside the GX/GR symmetric cell in force "
+    "(the cell is segments 1-{cell} of {total}), which this engine does not "
+    "serve (momwire#415): while the symmetry is live the matrix is the "
+    "cell's, so NEC silently drops such a card rather than loading the copy "
+    "— address the cell instead, where a load applies to every copy of it, "
+    "or write the GX/GR out as explicit GW cards"
 )
 
 
-@pytest.mark.parametrize(
-    "ld",
-    [
-        "LD 4 2 1 1 470. 0.\n",  # k9ay_orig's own card, inside the cell
-        "LD 4 3 1 1 470. 0.\n",  # outside it — dropped by NEC, also refused
-        "LD 5 0 0 0 5.8e7\n",  # a conductivity is cell-scoped too
-    ],
-)
-def test_ld_under_a_live_gx_symmetry_is_refused(ld):
-    """§#gx--structure-reflection: the cell rule is not implemented, so the
-    combination refuses rather than putting the load where it was written —
-    which reads 53 % off on this deck (momwire#415)."""
+def test_a_load_inside_a_live_cell_lands_on_every_copy():
+    """§#the-symmetric-cell: ``k9ay_orig``'s own card. Tag 2 is in the cell,
+    so the 470 Ω lands on tag 2 AND on tag 4 — the image, which is also the
+    driven wire, which is why the deck reads 960.79 Ω rather than 490.79 on
+    the oracle (momwire#415)."""
+    model = parse(_K9AY_DECK.format(ld="LD 4 2 1 1 470. 0.\n"))
+    assert [wire for wire, _, _ in model.loads] == [1, 3]
+    assert {spec for _, _, spec in model.loads} == {LoadSpec("fixed", r=470.0, x=0.0)}
+
+
+def test_the_cell_rule_reproduces_the_hand_expanded_twin_exactly():
+    """§#the-symmetric-cell, the gating property of momwire#415: a cell load
+    is *identical* to writing one card per copy by hand.
+
+    The issue states the transferable form — "each engine's cell-load result
+    equals its own all-copies-loaded expansion exactly" — and momwire can
+    gate it one level below a solve: the two decks produce the same wires,
+    the same feed and the same load list, term for term, so no solver is
+    needed to know the answers agree."""
+    written = parse(_K9AY_DECK.format(ld="LD 4 2 1 1 470. 0.\n"))
+    expanded = parse(_K9AY_TWIN.format(ld="LD 4 2 1 1 470. 0.\nLD 4 4 1 1 470. 0.\n"))
+    assert written.wires == expanded.wires
+    assert written.feeds == expanded.feeds
+    assert written.loads == expanded.loads
+
+
+def test_the_cell_rule_differs_from_the_naive_single_tag_twin():
+    """§#the-symmetric-cell: the other half of the gate — putting the load
+    only where the card wrote it is a DIFFERENT model, one load short, and
+    the missing one sits on the driven wire (53 % on the oracle)."""
+    written = parse(_K9AY_DECK.format(ld="LD 4 2 1 1 470. 0.\n"))
+    naive = parse(_K9AY_TWIN.format(ld="LD 4 2 1 1 470. 0.\n"))
+    assert written.wires == naive.wires
+    assert len(naive.loads) == 1
+    assert written.loads != naive.loads
+
+
+def test_without_the_load_the_two_forms_already_agree():
+    """§#the-symmetric-cell: delete the ``LD`` and the as-written deck and
+    its hand-expanded twin are the same model — which is what isolates the
+    cell rule to LOADING rather than to the geometry expansion."""
+    written = parse(_K9AY_DECK.format(ld=""))
+    expanded = parse(_K9AY_TWIN.format(ld=""))
+    assert written.wires == expanded.wires
+    assert written.feeds == expanded.feeds
+    assert written.loads == expanded.loads == ()
+
+
+def test_a_load_outside_a_live_cell_refuses_by_name():
+    """§#the-symmetric-cell: NEC drops this card in silence and still echoes
+    it in its ``DATA CARD`` list; this engine says so instead."""
     with pytest.raises(DeckError) as exc:
-        parse(_K9AY_DECK.format(ld=ld))
-    assert str(exc.value) == _CELL_LOAD_REFUSAL
+        parse(_K9AY_DECK.format(ld="LD 4 3 1 1 470. 0.\n"))
+    assert str(exc.value) == _OUT_OF_CELL_REFUSAL.format(n=1, s="", cell=13, total=26)
+
+
+def test_the_out_of_cell_refusal_counts_the_segments_it_names():
+    """§#the-symmetric-cell: the count is the dropped segments, not the
+    card's whole range — here all eight of tag 3."""
+    with pytest.raises(DeckError) as exc:
+        parse(_K9AY_DECK.format(ld="LD 5 3 0 0 5.8e7\n"))
+    assert str(exc.value) == _OUT_OF_CELL_REFUSAL.format(n=8, s="s", cell=13, total=26)
 
 
 def test_a_zero_valued_ld_under_a_live_symmetry_is_still_a_no_op():
-    """§#gx--structure-reflection: a card byte-identical to omitting it is
-    not refused for a rule it cannot trip."""
-    model = parse(_K9AY_DECK.format(ld="LD 4 2 1 1 0. 0.\n"))
-    assert model.loads == ()
+    """§#the-symmetric-cell: a card byte-identical to omitting it is not
+    refused for a rule it cannot trip — inside the cell or outside it."""
+    assert parse(_K9AY_DECK.format(ld="LD 4 2 1 1 0. 0.\n")).loads == ()
+    assert parse(_K9AY_DECK.format(ld="LD 4 3 1 1 0. 0.\n")).loads == ()
 
 
 def test_a_deck_whose_symmetry_is_dead_at_ge_serves_its_ld():
@@ -1508,14 +1569,22 @@ _GR_LIVE_DECK = (
 )
 
 
-def test_ld_under_a_live_gr_symmetry_is_refused():
-    """§#gr--cylindrical-structure-rotation: the guard from
-    ``#gx--structure-reflection`` keys off ``structure.symmetry`` alone, so
-    a ``GR``-declared cell trips it exactly as a ``GX``-declared one does —
-    same message, both cards named."""
+def test_a_load_inside_a_live_gr_cell_lands_on_every_copy():
+    """§#gr--cylindrical-structure-rotation: the cell rule reads
+    ``structure.symmetry`` alone, so a ``GR``-declared cell replicates
+    exactly as a ``GX``-declared one does — segment 3 of the cell becomes
+    segment 3 of all four copies, at the same arclength on each."""
+    model = parse(_GR_LIVE_DECK.format(ld="LD 4 1 3 3 50. 0.\n"))
+    assert [wire for wire, _, _ in model.loads] == [0, 1, 2, 3]
+    assert len({arclength for _, arclength, _ in model.loads}) == 1
+
+
+def test_a_load_outside_a_live_gr_cell_refuses_by_name():
+    """§#gr--cylindrical-structure-rotation: and the refusal is the one
+    ``GX`` gets, from the same code path."""
     with pytest.raises(DeckError) as exc:
         parse(_GR_LIVE_DECK.format(ld="LD 4 2 3 3 50. 0.\n"))
-    assert str(exc.value) == _CELL_LOAD_REFUSAL
+    assert str(exc.value) == _OUT_OF_CELL_REFUSAL.format(n=1, s="", cell=5, total=20)
 
 
 def test_a_deck_whose_gr_symmetry_is_dead_at_ge_serves_its_ld():
@@ -1530,6 +1599,110 @@ def test_a_deck_whose_gr_symmetry_is_dead_at_ge_serves_its_ld():
     )
     assert len(model.loads) == 1
     assert model.loads[0][2] == LoadSpec("fixed", r=50.0, x=0.0)
+
+
+# One cell wire of two segments and one copy of it: the smallest structure
+# that can tell "replicated onto the copy" from "written on the copy".
+_CELL_PAIR = (
+    "GW 1 2 1. 0. 0. 2. 0. 0. .001\nGR 1 2\nGE 0\n"
+    "EX 0 1 1 0 1. 0.\nFR 0 1 0 0 14.\n{ld}XQ\nNX\n"
+)
+
+
+def test_whole_structure_addressing_under_a_live_cell_does_not_double_stamp():
+    """§#the-symmetric-cell: ``LD ... 0 0 0`` is the whole structure, which
+    under a live symmetry IS cell plus copies — so the cell rule and
+    whole-structure addressing name the same set (the oracle prints tag 0 and
+    tag 1 identically, momwire#415), and the replication must not stamp the
+    copies a second time."""
+    model = parse(_CELL_PAIR.format(ld="LD 4 0 0 0 50. 0.\n"))
+    assert [wire for wire, _, _ in model.loads] == [0, 0, 1, 1]
+
+
+def test_a_global_segment_range_inside_the_cell_replicates_like_a_tag():
+    """§#the-symmetric-cell: the rule is read off the SEGMENTS a card
+    resolves to, not off how the tag field spelled them — so tag 0 segment 1
+    and tag 1 segment 1 are the same card, exactly as the oracle's probe
+    table shows."""
+    by_structure = parse(_CELL_PAIR.format(ld="LD 4 0 1 1 50. 0.\n"))
+    by_tag = parse(_CELL_PAIR.format(ld="LD 4 1 1 1 50. 0.\n"))
+    assert by_structure.loads == by_tag.loads
+    assert [wire for wire, _, _ in by_tag.loads] == [0, 1]
+
+
+def test_replication_does_not_trip_the_doubled_load_refusal():
+    """§#the-symmetric-cell: two cell cards on DIFFERENT segments replicate
+    into four loads without colliding — the dedup set sees each copy's
+    segment once."""
+    model = parse(_CELL_PAIR.format(ld="LD 4 1 1 1 50. 0.\nLD 4 1 2 2 60. 0.\n"))
+    assert len(model.loads) == 4
+
+
+def test_two_cell_cards_on_one_segment_still_refuse():
+    """§#ld--loading: replication widens the dedup set, it does not weaken
+    it — a deck that genuinely double-loads a cell segment refuses as it
+    always did."""
+    with pytest.raises(DeckError) as exc:
+        parse(_CELL_PAIR.format(ld="LD 4 1 1 1 50. 0.\nLD 0 1 1 1 10. 0. 0.\n"))
+    assert str(exc.value) == (
+        "LD on a segment that already carries a load is not supported by "
+        "this engine — a second load on one segment is not merged"
+    )
+
+
+def test_the_expansion_limit_counts_the_card_as_written_not_the_replicas():
+    """§#the-symmetric-cell: the ≤ 8-segment expansion limit is read against
+    the range the deck TYPED, because NEC's own reader never sees the
+    replicas as a range — they are stamped on afterwards, one segment at a
+    time.  Eight typed segments over a two-copy cell serve as sixteen loads;
+    a ninth typed segment refuses."""
+    wide = "GW 1 8 1. 0. 0. 2. 0. 0. .001\nGR 1 2\nGE 0\nEX 0 1 1 0 1. 0.\n{ld}XQ\nNX\n"
+    assert len(parse(wide.format(ld="LD 4 1 1 8 50. 0.\n")).loads) == 16
+    with pytest.raises(DeckError) as exc:
+        parse(wide.format(ld="LD 4 0 1 9 50. 0.\n"))
+    assert str(exc.value) == (
+        "LD over 9 segments is not supported by this engine — at most 8 "
+        "segments expand into per-segment loads"
+    )
+
+
+def test_ld5_conductivity_inside_a_live_cell_reaches_every_copy():
+    """§#the-symmetric-cell: a type-5 conductivity lands in the same matrix
+    diagonal a lumped load does, so it is cell-scoped the same way."""
+    model = parse(_CELL_PAIR.format(ld="LD 5 1 0 0 5.8e7\n"))
+    assert [w.material.conductivity for w in model.wires] == [5.8e7, 5.8e7]
+
+
+def test_ld5_whole_structure_conductivity_serves_under_a_live_cell():
+    """§#the-symmetric-cell: the whole-structure form already names every
+    copy, so it never reaches the cell rule at all."""
+    model = parse(_CELL_PAIR.format(ld="LD 5 0 0 0 5.8e7\n"))
+    assert [w.material.conductivity for w in model.wires] == [5.8e7, 5.8e7]
+
+
+def test_is_under_a_live_cell_refuses_by_name():
+    """§#the-symmetric-cell: ``IS`` is this dialect's own card, absent from
+    NEC-2, so the cell rule that was measured for ``LD`` has no oracle here —
+    it refuses rather than guessing."""
+    with pytest.raises(DeckError) as exc:
+        parse(_CELL_PAIR.format(ld="IS 0 1 0 0 2.3 0. .002\n"))
+    assert str(exc.value) == (
+        "IS while a GX/GR symmetric cell is in force is not supported by "
+        "this engine (momwire#415): a sheath moves the matrix the way a load "
+        "does, so the cell rule applies to it, but NEC-2 has no IS card to "
+        "measure that rule against — write the GX/GR out as explicit GW cards"
+    )
+
+
+def test_is_under_a_dead_symmetry_serves():
+    """§#the-symmetric-cell: the ``IS`` refusal is scoped to a LIVE cell, so
+    a deck that collapses its symmetry insulates its wires as usual."""
+    model = parse(
+        "GW 1 2 1. 0. 0. 2. 0. 0. .001\nGR 1 2\n"
+        "GW 9 1 0. 0. 3. 0. 0. 4. .001\nGE 0\n"
+        "EX 0 1 1 0 1. 0.\nFR 0 1 0 0 14.\nIS 0 1 0 0 2.3 0. .002\nXQ\nNX\n"
+    )
+    assert model.wires[0].material.insulation_eps_r == 2.3
 
 
 def test_ld5_whole_structure_form():
