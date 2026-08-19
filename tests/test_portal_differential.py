@@ -20,7 +20,8 @@ and port currents and **±0.5 dB** on pattern gain.
 
 Measured at authoring time (2026-08-08, momwire 0.23.0, nec2c 5b4az.ae6ty.1.17;
 the five ``dipole_rp*`` cliff/gain-only rows added 2026-08-09 for issue #802;
-the three network rows retired 2026-08-15 for #930) — worst case over every
+the three network rows retired 2026-08-15 for #930, and
+``dipole_gd_second_medium`` 2026-08-19 for #458) — worst case over every
 row of every table in each fixture:
 
 ===================================  ======  ======  ======  ======  =====
@@ -41,7 +42,6 @@ dipole_ek_rearm                       0.76%   0.76%       -   0.96%      -   (i)
 dipole_fr_sweep                       1.29%   1.29%       -   0.96%      -
 dipole_free_space                     0.76%   0.76%       -   0.96%      -
 dipole_gd_cliff_sommerfeld            2.24%   2.23%       -   4.35%      -   (f)
-dipole_gd_second_medium               2.23%   2.23%       -   4.35%      -   (f)
 dipole_gm_translated_pair             1.10%   1.10%       -   1.13%      -
 dipole_gs_scaled                      0.76%   0.76%       -   0.96%      -
 dipole_load_ld0                       1.79%   1.79%       -   1.95%      -
@@ -138,14 +138,18 @@ fails.
     two thresholds nec2c spells 1e-20 come apart exactly here, which is what
     ``test_nec_portal.py``'s gain-only pair asserts directly.
 
-(f) is the same kind of control, for ``GD`` (issue #800's tail). Each fixture
-    is its ground fixture plus one card — ``dipole_pec_ground`` and
-    ``dipole_sommerfeld_ground`` respectively — and each reproduces its base
-    row to the digit on BOTH engines. That is the claim GD's treatment rests
-    on: NEC-2 uses the second medium in the FAR FIELD only, and there only in
-    ``RP``'s cliff modes, so nothing in the matrix can see it. If these rows
-    ever drift away from their bases', the card has stopped being inert for
-    the impedance path and this engine is wrong to record it and move on.
+(f) is the same kind of control, for ``GD`` (issue #800's tail). The fixture
+    is its ground fixture plus one card — ``dipole_sommerfeld_ground`` — and
+    reproduces its base row to the digit on BOTH engines. (Its PEC twin,
+    ``dipole_gd_second_medium`` over ``dipole_pec_ground``, carried the same
+    control at 2.23 % until #458 made a second medium under a ``GN 1`` a
+    refusal — the MININEC-type ground idiom. The two cliff fixtures, which
+    ARE that ground and do read the record, keep the PEC half of the claim.)
+    That is the claim GD's treatment rests on: NEC-2 uses the second medium
+    in the FAR FIELD only, and there only in ``RP``'s cliff modes, so nothing
+    in the matrix can see it. If that row ever drifts away from its base's,
+    the card has stopped being inert for the impedance path and this engine
+    is wrong to record it and move on.
     Since #802 the far-field half is no longer "and there we refuse": the
     cliff modes run, so the same control is asserted on them too, by
     ``test_the_cliff_never_reaches_the_matrix``.
@@ -379,12 +383,19 @@ def pair():
 # Decks the daemon runs end to end. After unit 3 that is the whole corpus; the
 # list is written out rather than computed so that a card silently falling back
 # to the error path shows up as a failure here instead of as a quiet nothing.
-# ...minus the three the dialect refuses by name: TL and NT are circuits
-# attached to the structure, and this engine's language is antenna-only
-# (#930, design doc #846 §1). Their refusal is pinned in
-# ``test_nec_portal.py``'s ``NETWORK_FIXTURES`` battery; here they only have
-# to stay OUT of every gate written against a solved printout.
-REFUSED = ("dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_crossed")
+# ...minus the four the dialect refuses: TL and NT are circuits attached to
+# the structure, and this engine's language is antenna-only (#930, design doc
+# #846 §1); ``dipole_gd_second_medium`` states a second medium under a ``GN
+# 1``, which is the MININEC-type ground idiom and refuses since #458 rather
+# than answering as plain perfect ground. Their refusals are pinned in
+# ``test_portal.py``; here they only have to stay OUT of every gate written
+# against a solved printout.
+REFUSED = (
+    "dipole_nt_network",
+    "dipole_tl_network",
+    "dipole_tl_shunt_crossed",
+    "dipole_gd_second_medium",
+)
 SUPPORTED = tuple(n for n in NAMES if n not in REFUSED)
 
 # Portal-dialect cards no fixture covers, with the substring the error path
@@ -428,9 +439,9 @@ def test_supported_fixtures_run_clean(name):
 def test_the_support_matrix_covers_the_whole_corpus():
     assert set(SUPPORTED) | set(REFUSED) == set(NAMES)
     # 41 at the rewire (#930), plus the `dipole_gn_rearm` probe it landed
-    # with. The count is written out so a deck that quietly stops being
-    # measured shows up here.
-    assert len(SUPPORTED) == 42
+    # with, minus `dipole_gd_second_medium` (#458). The count is written out
+    # so a deck that quietly stops being measured shows up here.
+    assert len(SUPPORTED) == 41
 
 
 @pytest.mark.parametrize(("marker", "deck"), sorted(UNSUPPORTED.items()))
@@ -550,10 +561,13 @@ def test_mp_moves_no_number_on_either_engine(name, pair):
         assert mine.currents == base.currents, f"{name}: MP moved a segment current"
 
 
-GD_FIXTURES = (
-    ("dipole_gd_second_medium", "dipole_pec_ground"),
-    ("dipole_gd_cliff_sommerfeld", "dipole_sommerfeld_ground"),
-)
+# ``dipole_gd_second_medium`` / ``dipole_pec_ground`` was the other pair
+# until #458: that deck's ``GD`` rides a ``GN 1``, which is the MININEC-type
+# ground idiom and refuses now. The claim it carried here is unchanged and
+# still measured — by the ``GN 2`` pair below, and by the two cliff fixtures'
+# own ``test_the_cliff_never_reaches_the_matrix``, which is this test over a
+# perfect ground.
+GD_FIXTURES = (("dipole_gd_cliff_sommerfeld", "dipole_sommerfeld_ground"),)
 
 
 @pytest.mark.parametrize(("name", "base"), GD_FIXTURES)

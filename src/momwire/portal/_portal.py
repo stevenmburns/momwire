@@ -731,6 +731,16 @@ class SecondMedium:
     :func:`_cliff_image_moments` implements the medium selection — so this
     record is load-bearing rather than a receipt, and the honesty argument has
     moved from "we are never asked" to "we answer it the way ``FFLD`` does".
+
+    **The one shape that never arrives here: a medium under a perfect
+    ground.** ``GN 1`` + ``GD`` is not a cliff a frontend meant — it is how
+    both of them spell MININEC-type ground (4nec2 manufactures it from its own
+    ``GN 3``; EZNEC writes the media payload), and NEC-2 answers it as plain
+    perfect ground because ``RP 0`` never reads the record. The dialect
+    refuses that pairing at the execute card (momwire#458,
+    ``_Nec2Parser._refuse_the_mininec_ground_idiom``),
+    so a ``GN 1`` deck reaching this class carries either no medium or an
+    ``RP 2``/``RP 3`` that genuinely reads one.
     """
 
     eps_r2: float = 0.0
@@ -3053,10 +3063,14 @@ _SELFTEST_DECKS = (
     # NECSource writes it: a ground card followed by GD, the second card
     # whose refusal broke a live session (see SecondMedium). It rides here
     # for the same reason EK rides in deck 1 — so a deployment gate can never
-    # pass while a card the live path sends is being refused.
+    # pass while a card the live path sends is being refused. Its ground is
+    # `GN 2`: the `GN 1` this deck carried until momwire#458 is the
+    # MININEC-type ground idiom, which the dialect now refuses by name rather
+    # than answering as plain perfect ground, so a served GD is a GD over a
+    # ground that reads it.
     "CE selftest 4\n"
     "GW 1 11 0. 0. 0.5 0. 0. 10.5 0.001\n"
-    "GE -1\nGN 1\nGD 2,0,0,0,13.,.005,0.,0.\n"
+    "GE -1\nGN 2 0 0 0 13. .005\nGD 2,0,0,0,13.,.005,0.,0.\n"
     "EX 0 1 1 0 1.\nFR 0 1 0 0 14.0 1\nXQ\nNX\n",
 )
 

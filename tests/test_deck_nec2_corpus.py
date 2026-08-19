@@ -371,6 +371,12 @@ def test_the_synthetic_decks_actually_exercise_both_passes():
 # measured for geometry in the corpus test above.
 _NETWORK_DECKS = {"dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_crossed"}
 
+# ...and the one deck refused by FIELD rather than by name: a second medium
+# under a `GN 1` is the MININEC-type ground idiom (#458), so it too carries no
+# DeckModel. Same treatment, different reason, kept separate so the network
+# guard below still means what it says.
+_REFUSED_DECKS = _NETWORK_DECKS | {"dipole_gd_second_medium"}
+
 
 def _portal_deck(text: str):
     """The same deck body, read by the portal's own nec2 parser."""
@@ -454,8 +460,8 @@ def _expected_conductivity(cards, structure):
 def test_environment_source_and_load_semantics_match_antennaknobs(path: Path):
     """GN/GD, FR, EX retention and LD/LD-5, against antennaknobs' own nec2
     parser and RLC formulas — momwire#359 unit C."""
-    if path.stem in _NETWORK_DECKS:
-        pytest.skip("refused by name in this dialect (TL/NT); see the geometry test")
+    if path.stem in _REFUSED_DECKS:
+        pytest.skip("refused by this dialect; see the geometry test")
 
     text = path.read_text()
     ours = momwire_parse(text)
