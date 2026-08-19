@@ -407,14 +407,15 @@ def test_grid_far_zone_layout(far_grid):
     assert som._SOMM_R1_NEAR_LAMBDA == pytest.approx(4.0)
     g = far_grid
     assert g.r_near == pytest.approx(4.0)  # lambda = 1 in these units
-    assert len(g._regions) == 5
-    near2, near3, far2, far3 = g._regions[1:]
+    assert len(g._regions) == 6
+    near2, near3, far2, far3 = g._regions[2:]
     # Near regions tabulate to r_near (last row may pad one dr past it).
     for reg in (near2, near3):
         r_last = reg["r0"] + reg["dr"] * (reg["n_r"] - 1)
         assert g.r_near <= r_last < g.r_near + reg["dr"] + 1e-12
-    # dth2 keys to r_near, not r1_max: 0.07/4 rad = 1.002 deg -> 21 columns.
-    assert near2["n_th"] == 21
+    # dth2 keys to r_near, not r1_max: 0.07/4 rad = 1.002 deg over the
+    # 30-deg grazing band -> 31 columns.
+    assert near2["n_th"] == 31
     # Far regions: [r_near, r1_max] on the coarse lattice.
     for reg, dth_deg in ((far2, som._SOMM_DTH_FAR_DEG), (far3, 10.0)):
         assert reg["r0"] == pytest.approx(g.r_near)
@@ -424,7 +425,9 @@ def test_grid_far_zone_layout(far_grid):
         assert g.r1_max <= r_last < g.r1_max + reg["dr"] + 1e-12
     # The point of the split: far fewer nodes than the near-keyed layout
     # (~6.6k at 7 lambda) and the count now grows linearly with extent.
-    assert sum(r["n_r"] * r["n_th"] for r in g._regions) < 3100
+    # (3300 since momwire#443's theta split moved to 30 deg — the outer
+    # grazing bands carry a third more columns than at 20.)
+    assert sum(r["n_r"] * r["n_th"] for r in g._regions) < 3300
 
 
 def test_grid_far_zone_accuracy(far_grid):
@@ -448,7 +451,7 @@ def test_grid_far_zone_matches_near_keyed_layout(far_grid, monkeypatch):
     past r1_max) to within the two interpolants' own error budgets."""
     monkeypatch.setattr(som, "_SOMM_R1_NEAR_LAMBDA", 100.0)
     ref = som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=7.0)
-    assert len(ref._regions) == 3  # the old layout
+    assert len(ref._regions) == 4  # the old (no-far-zone) layout
     rng = np.random.default_rng(23)
     r1 = rng.uniform(4.05, 6.95, 80)
     th = rng.uniform(0.0, np.pi / 2, r1.size)
@@ -459,14 +462,63 @@ def test_grid_far_zone_matches_near_keyed_layout(far_grid, monkeypatch):
         assert np.max(np.abs(a[kk] - b[kk])) < 2e-3 * scale, kk
 
 
+def test_grid_resolves_the_near_interface_boundary_layer():
+    """momwire#443: ground contact queries the grid at R1 << lambda in the
+    steep band, where the surfaces carry a boundary layer of width ~1/|k1|
+    that the flat 0.01-lambda spacing could not see — on sea water that
+    was worth 0.13 ohm on every shipped contact answer and a 0.5 ohm
+    RISING floor on the eps~ -> infinity recovery gate.
+
+    Two regimes, gated on the band real decks query (theta > 30 deg):
+
+    * resolvable layer (every physical ground; sea water is the worst at
+      2e-3 lambda): the steep band's dr is keyed to layer/4 and the grid
+      must hold its ordinary relative accuracy at contact-scale R1;
+    * unresolvable layer (the eps~ -> infinity decks, layer ~ 4e-7
+      lambda): the node count is capped and the R1 = 0 node is filled on
+      the smooth tail, so the gate is a small ABSOLUTE bar — the surfaces
+      themselves are ~1/sqrt(eps~) small, and the lane's PEC-recovery
+      test (0.001 ohm) is what proves the bar is small enough.
+
+    The grazing band is exempt by design: two points at grazing-small R1
+    are both ON the plane (radial screens, refused), and its rows are the
+    direct evaluator's slow path — see the SommerfeldGrid layout comment.
+    """
+    rng = np.random.default_rng(7)
+    r1 = rng.uniform(3e-4, 0.05, 60)  # lambda = 1: contact-scale R1
+    th = rng.uniform(np.radians(31.0), 0.5 * np.pi, r1.size)
+
+    # Sea water at 14 MHz: eps~ = 81 - 6420j, layer ~ 2e-3 lambda, keyed.
+    eps_sea = 81.0 - 6420.0j
+    g = som.SommerfeldGrid(eps_sea, K2, r1_max=0.7)
+    gi = g.eval(r1, th)
+    di = som.iv_surfaces_direct(eps_sea, K2, r1, th, rtol=1e-8)
+    for kk in som._SURF_KEYS:
+        scale = np.max(np.abs(di[kk]))
+        if scale < 1e-12:
+            continue
+        assert np.max(np.abs(gi[kk] - di[kk])) < 2e-3 * scale, kk
+
+    # The eps~ -> infinity deck: layer unresolvable at any sane node
+    # count; the tail-filled R1 = 0 node keeps the error a small absolute
+    # number (measured 8.9e-3 on this cloud against pre-fix ~8.6).
+    eps_pec = 13.0 - 1.28e11j
+    g = som.SommerfeldGrid(eps_pec, K2, r1_max=0.7)
+    gi = g.eval(r1, th)
+    di = som.iv_surfaces_direct(eps_pec, K2, r1, th, rtol=1e-8)
+    for kk in som._SURF_KEYS:
+        assert np.max(np.abs(gi[kk] - di[kk])) < 2e-2, kk
+
+
 def test_grid_small_extent_keeps_pre_split_layout():
-    """r1_max at/below the split builds exactly the pre-#159 grid: three
-    regions, theta keying to r1_max, no far tables."""
+    """r1_max at/below the split builds exactly the pre-#159 near-only
+    grid: four regions (momwire#443's inner theta split included), theta
+    keying to r1_max, no far tables."""
     g = som.SommerfeldGrid(10.0 - 1.26j, K2, r1_max=3.0)
-    assert len(g._regions) == 3
+    assert len(g._regions) == 4
     assert g.r_near == pytest.approx(g.r1_max)
-    # dth2 keyed to r1_max: 0.07/3 rad = 1.337 deg -> ceil(20/1.337)+1 = 16.
-    assert g._regions[1]["n_th"] == 16
+    # dth2 keyed to r1_max: 0.07/3 rad = 1.337 deg -> ceil(30/1.337)+1 = 24.
+    assert g._regions[2]["n_th"] == 24
 
 
 def test_grid_r1_max_is_capped(monkeypatch):

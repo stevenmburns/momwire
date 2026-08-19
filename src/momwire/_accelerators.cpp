@@ -5854,9 +5854,9 @@ static inline void lagrange4(double u, double *w) {
 // and the region-select breakpoints. Populated from the pybind arrays by both
 // callers (build_grid_view).
 struct GridView {
-    const cd *vptr[5];
-    py::ssize_t nR[5], nTh[5];
-    double rr0[5], rdr[5], rth0[5], rdth[5];
+    const cd *vptr[6];
+    py::ssize_t nR[6], nTh[6];
+    double rr0[6], rdr[6], rth0[6], rdth[6];
     double r1_max, r_break, th_split, r_near, tiny, half_pi;
 };
 
@@ -5868,9 +5868,11 @@ static GridView build_grid_view(
     const py::detail::unchecked_reference<double, 1> &dthb,
     const std::vector<py::array_t<cd, py::array::c_style | py::array::forcecast>>
         &reg_vals) {
+    // 4/6 since the momwire#443 inner-zone theta split; a 3/5-region grid
+    // here means a stale momwire/_sommerfeld.py — fail loudly either way.
     const size_t n_reg = reg_vals.size();
-    if (n_reg != 3 && n_reg != 5)
-        throw std::runtime_error("expected 3 or 5 region value tables");
+    if (n_reg != 4 && n_reg != 6)
+        throw std::runtime_error("expected 4 or 6 region value tables");
     GridView G;
     for (size_t g = 0; g < n_reg; ++g) {
         auto v = reg_vals[g].template unchecked<3>();
@@ -5887,9 +5889,9 @@ static GridView build_grid_view(
     G.r1_max = r1_max;
     G.r_break = r_break;
     G.th_split = th_split;
-    // 3-region grids have r_near == r1_max, so clamped queries never route
+    // 4-region grids have r_near == r1_max, so clamped queries never route
     // far; guard anyway so a stale r_near can't index missing tables.
-    G.r_near = n_reg == 5 ? r_near : r1_max;
+    G.r_near = n_reg == 6 ? r_near : r1_max;
     G.tiny = 1e-12 * r1_max;
     G.half_pi = 0.5 * M_PI;
     return G;
@@ -5917,9 +5919,9 @@ static inline cd proj_one(
     if (theta < 0.0) theta = 0.0; else if (theta > G.half_pi) theta = G.half_pi;
     const double r1c = r1 > G.r1_max ? G.r1_max : r1;  // interp clamps; g uses r1
     const int reg = (r1c <= G.r_break)
-                        ? 0
-                        : (r1c <= G.r_near ? (theta <= G.th_split ? 1 : 2)
-                                           : (theta <= G.th_split ? 3 : 4));
+                        ? (theta <= G.th_split ? 0 : 1)
+                        : (r1c <= G.r_near ? (theta <= G.th_split ? 2 : 3)
+                                           : (theta <= G.th_split ? 4 : 5));
     const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
     const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
     int i0 = (int)std::floor(fr) - 1;
@@ -5973,8 +5975,8 @@ static inline void tangent_decomp(double tx, double ty, double tz, double &ux,
 }  // namespace somm_proj
 
 // obs/t_obs (M,3), src/t_src (S,3); returns (M,S) complex. The grid is passed
-// flattened: the three regions' (r0, dr, th0, dth) as length-3 arrays, plus a
-// list of three (4, n_r, n_th) complex value tables. r_break / th_split select
+// flattened: the regions' (r0, dr, th0, dth) as per-region arrays, plus a
+// list of four-or-six (4, n_r, n_th) complex value tables. r_break / th_split select
 // the region exactly as SommerfeldGrid.eval.
 static py::array_t<std::complex<double>> remainder_field_proj_batch(
     py::array_t<double, py::array::c_style | py::array::forcecast> obs,

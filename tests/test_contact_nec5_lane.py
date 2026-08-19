@@ -205,24 +205,31 @@ def test_the_pec_columns_agree_well_enough_to_difference(geom):
 # 1. The DECAY rows — sea water and very good ground
 # --------------------------------------------------------------------------
 #
-# Measured 2026-08-18, |delta_mw - delta_n5| coarse -> fine:
+# Measured 2026-08-19, after momwire#443's grid fix, |delta_mw - delta_n5|
+# coarse -> fine:
 #
-#   monopole  sea    0.7039 0.5248 0.3721 0.3056 0.2703   (N = 11/21/41/61/81)
-#   monopole  vgood  0.9772 0.3498 0.0053 0.1166 0.1766
-#   invl      sea    0.6866 0.4882 0.3395 0.2798 0.2484   (N = 12/24/48/72/96)
-#   invl      vgood  0.9011 0.3119 0.1528 0.2021 0.2398
+#   monopole  sea    0.6503 0.4450 0.2760 0.2014 0.1614   (N = 11/21/41/61/81)
+#   monopole  vgood  0.9785 0.3509 0.0061 0.1157 0.1757
+#   invl      sea    0.6263 0.4091 0.2446 0.1773 0.1415   (N = 12/24/48/72/96)
+#   invl      vgood  0.9026 0.3137 0.1541 0.2027 0.2401
 #
-# The `vgood` rows are not monotone — they pass THROUGH agreement (0.005 on
+# The sea rows are the re-derivation stage 2 handed to momwire#443: with the
+# interpolation grid's near-PEC boundary-layer error fixed, the finest rung
+# fell 0.2703 -> 0.1614, within a millohm of what stage 2's DirectGrid probe
+# predicted (0.1611). The vgood rows moved ~0.001 — their |eps~| is small
+# enough that the old spacing already resolved most of their layer.
+#
+# The `vgood` rows are not monotone — they pass THROUGH agreement (0.006 on
 # the monopole at N = 41, which is the two codes crossing rather than
 # meeting) and come back up slightly. So the claim is net decay, coarsest to
 # finest, not rung-by-rung descent: pretending otherwise would be pinning a
 # crossing point.
 
 _DECAY_FINEST = {
-    ("monopole", "sea"): 0.2703,
-    ("monopole", "vgood"): 0.1766,
-    ("invl", "sea"): 0.2484,
-    ("invl", "vgood"): 0.2398,
+    ("monopole", "sea"): 0.1614,
+    ("monopole", "vgood"): 0.1757,
+    ("invl", "sea"): 0.1415,
+    ("invl", "vgood"): 0.2401,
 }
 
 
@@ -478,11 +485,12 @@ def test_the_gap_is_not_the_interpolation_grid():
     function, `iv_surfaces_direct`, answering every query directly) into the
     numpy remainder path. Costs ~0.1 s.
 
-    The bar is 3x the measured value, not tight, because this number is
-    momwire#443's to change: the grid's absolute error at small R1 is a
-    known defect there, and on SEA WATER the same swap is worth 0.13 ohm.
-    If #443 lands and this number drops, celebrate and re-derive; if it
-    GROWS past the bar, the grid is back in candidate 1's frame.
+    The bar is 3x the measured value, not tight. Before momwire#443's grid
+    fix the same swap was worth 0.13 ohm on SEA WATER — the near-PEC
+    boundary-layer error stage 2 handed to that issue; after it, sea water
+    measures 0.0013 and poor soil is unchanged at 0.0032 (its layer was
+    already resolved, so its grid is untouched). If this GROWS past the
+    bar, the grid is back in candidate 1's frame.
     """
     import sys
     from pathlib import Path
@@ -502,27 +510,28 @@ def test_the_gap_is_not_the_interpolation_grid():
 
 
 # --------------------------------------------------------------------------
-# 4. The eps~ -> infinity limit, pinned at the floor it actually has
+# 4. The eps~ -> infinity limit, recovered (momwire#443 fixed)
 # --------------------------------------------------------------------------
 
 
-def test_the_pec_limit_at_contact_floors_on_the_sommerfeld_grid():
+def test_the_pec_limit_at_contact_is_recovered():
     """A Sommerfeld ground at enormous conductivity must return the PEC
-    contact answer. It returns it to ~0.55 Ω, and the floor RISES with mesh
-    refinement instead of falling — 0.477 / 0.550 / 0.589 at N = 21/41/81.
+    contact answer, and now it does: ~0.001 Ω at every mesh.
 
-    This is momwire#443 and it is not a contact defect. Study §3.7 measured
-    the mechanism directly: in the near-PEC regime the true Sommerfeld
-    surfaces are ~1/sqrt(eps~) small, the interpolation grid's ABSOLUTE
-    error does not shrink with them, and the remainder therefore stops
-    vanishing. Ground contact is simply the only geometry that queries the
-    grid at the small R1 where that happens — a wire clear of the plane has
-    a floor under R1 and converges to PEC at the textbook 10x per decade,
-    reaching 3e-5 Ω.
+    This gate spent stage 1 pinned at a 0.477–0.589 Ω floor that ROSE with
+    refinement — momwire#443, the interpolation grid's near-PEC error at
+    the small R1 only contact geometries query (study §3.7: the true
+    surfaces are ~1/sqrt(eps~) small there, and the grid's absolute error
+    did not shrink with them). The #443 fix keyed the grid's steep-band R1
+    spacing to the boundary layer and filled the R1 = 0 node on the smooth
+    tail when the layer is unresolvable; the floor fell 0.550 -> 0.0010 at
+    N = 41 (measured 0.0009 / 0.0010 / 0.0011 at N = 21/41/81), which is
+    the same recovery class as the binary's own printed eps~ -> infinity
+    ladder (~0.002, study §3.3).
 
-    Pinned WHERE IT IS, deliberately, with room in both directions. Do not
-    tighten it: fixing the grid is momwire#443's unit, and when it lands
-    this pin is what should fail.
+    The bar is 10x the measured level — a real recovery claim now, not a
+    pinned defect. If it fails, the grid's near-PEC accuracy regressed and
+    momwire#443 reopens.
     """
     floors = []
     for n in (21, 41, 81):
@@ -541,13 +550,10 @@ def test_the_pec_limit_at_contact_floors_on_the_sommerfeld_grid():
             ground_model="sommerfeld",
         ).compute_impedance()
         floors.append(abs(complex(z_big) - z_pec))
-    assert all(0.2 < f < 1.0 for f in floors), (
-        f"the near-PEC contact floor moved: {['%.4f' % f for f in floors]} "
-        "(measured 0.477 / 0.550 / 0.589 at N = 21/41/81)"
-    )
-    assert floors[0] < floors[-1], (
-        f"the floor stopped rising with mesh: {['%.4f' % f for f in floors]} "
-        "— if momwire#443 was fixed, celebrate and re-derive this pin"
+    assert all(f < 0.01 for f in floors), (
+        f"the near-PEC contact recovery regressed: {['%.4f' % f for f in floors]} "
+        "(measured 0.0009 / 0.0010 / 0.0011 at N = 21/41/81 after momwire#443; "
+        "0.477 / 0.550 / 0.589 before it)"
     )
 
 

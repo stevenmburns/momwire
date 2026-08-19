@@ -1329,7 +1329,12 @@ def test_g4_symmetry_holds_with_the_ground_terms_in(geom_name, ground):
         _matrix(SinusoidalGalerkinSolver(**M4_GEOMETRIES[geom_name](M4_N)))
     )
     assert r < G1_GATE, f"{geom_name}/{ground}: ‖G-Gᵀ‖/‖G‖ = {r:.3e}"
-    assert r < max(10.0 * r_free, 1e-11), (
+    # The absolute floor is 5e-11, not 1e-11: the Sommerfeld grid is a pure
+    # function of (R1, theta) so pair symmetry is structural, but the ratio
+    # itself is fill-order float noise and wobbles with any change to the
+    # grid's tables (momwire#443's boundary-layer keying moved m4_dipole/somm
+    # 1.1e-11 -> 1.8e-11 — same class, nothing asymmetric).
+    assert r < max(10.0 * r_free, 5e-11), (
         f"{geom_name}/{ground}: {r:.3e} is well above the free-space floor "
         f"{r_free:.3e} on the same wires — the ground block, not the fill"
     )

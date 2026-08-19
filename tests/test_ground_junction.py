@@ -505,31 +505,30 @@ def test_282_correction_vanishes_in_the_pec_limit():
     assert 1e-7 < huge / big < 1e-5, f"not 1/eps_tilde: {big:.3e} -> {huge:.3e}"
 
 
-def test_282_pec_limit_impedance_floors_on_the_sommerfeld_grid():
-    """What is LEFT over when the correction has gone to zero, pinned at
-    today's value and not at zero — momwire#443.
+def test_282_pec_limit_impedance_is_recovered_on_the_sommerfeld_grid():
+    """What is LEFT over when the correction has gone to zero — now
+    rounding-class, since momwire#443 fixed the grid.
 
     With the contact charge cancelled to 1.3e-12 (above), a Sommerfeld
-    ground at ε̃ = 1e12 should return the PEC contact answer. It returns it
-    to 0.053 Ω, not to rounding, and the residual does not shrink with more
-    permittivity: it is the interpolation grid's error failing to scale with
-    the ~1/√ε̃ surfaces at the small R₁ that only a CONTACT deck queries
-    (`docs/design/contact-over-finite-ground.md` §3.7 measured the mechanism
-    directly, and §5.2 declined to promise a gate the grid cannot carry).
-
-    This gate exists to keep that number visible and honest rather than to
-    hold it down. Do NOT tighten it here: fixing the grid is momwire#443's
-    unit, and when it lands this pin is what should fail.
+    ground at ε̃ = 1e12 should return the PEC contact answer. Through
+    stage 1 it returned it to 0.053 Ω and this test pinned that floor:
+    the interpolation grid's error was failing to scale with the ~1/√ε̃
+    surfaces at the small R₁ that only a CONTACT deck queries (study
+    §3.7). momwire#443 keyed the grid's steep-band R₁ spacing to the
+    near-interface boundary layer and filled the R₁ = 0 node on the
+    smooth tail when the layer is unresolvable; the floor fell
+    0.053 → 2.4e-4 Ω on this deck. The bar is 10x the measured value —
+    a recovery claim now. If it fails, the grid's near-PEC accuracy
+    regressed and momwire#443 reopens.
     """
     z_pec = _282_z(SinusoidalSolver, 21)
     z_huge = _282_z(
         SinusoidalSolver, 21, ground_eps=(1e12, 0.0), ground_model="sommerfeld"
     )
     resid = abs(z_huge - z_pec)
-    assert resid < 0.20, f"near-PEC floor grew to {resid:.4f} ohm (was 0.053)"
-    assert resid > 1e-3, (
-        f"near-PEC floor collapsed to {resid:.3e} ohm — if momwire#443 fixed "
-        "the grid, celebrate and re-derive this pin"
+    assert resid < 2.5e-3, (
+        f"near-PEC contact recovery regressed to {resid:.3e} ohm "
+        "(measured 2.4e-4 after momwire#443; 0.053 before it)"
     )
 
 

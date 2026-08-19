@@ -102,6 +102,17 @@ _SOMM_R1_NEAR_LAMBDA = float(os.environ.get("MOMWIRE_SOMM_R1_NEAR_LAMBDA") or "4
 _SOMM_DR_FAR_LAMBDA = 0.2
 _SOMM_DTH_FAR_DEG = 2.5
 
+# Steep-band R1 node-count cap for the momwire#443 boundary-layer keying:
+# its dr never goes below r_break/(cap - 1), so the eps~ -> infinity decks
+# (layer ~ 1e-7 lambda) cannot explode the fill. 513 puts the floor at
+# ~3.9e-4 lambda, which fully resolves every physical ground (sea water,
+# the worst, needs 5e-4).
+_SOMM_N0_CAP = 513
+
+# The grazing/steep theta split, degrees, all zones (see the momwire#443
+# layout comment in SommerfeldGrid.__init__ for why it sits at 30).
+_SOMM_TH_SPLIT_DEG = 30.0
+
 # Frequency-axis grid reuse (issue #159, phase 2). In wavelength coordinates
 # the four surfaces obey S = omega * mu * G(eps_t; R1/lambda, theta): omega
 # and mu enter iv_surfaces_direct only through the linear eq-123
@@ -636,24 +647,30 @@ _SURF_KEYS = ("IrhoV", "IzV", "IrhoH", "IphiH")
 class SommerfeldGrid:
     """NEC-style bivariate interpolation grid over `iv_surfaces_direct`.
 
-    Three uniform (R₁, θ) near regions per theory-manual fig 12, spacings
-    in wavelengths of k₂ (Δθ in degrees), with `r_near` = min(r1_max,
-    `_SOMM_R1_NEAR_LAMBDA`·λ):
+    Uniform (R₁, θ) near regions per theory-manual fig 12, spacings in
+    wavelengths of k₂ (Δθ in degrees), with `r_near` = min(r1_max,
+    `_SOMM_R1_NEAR_LAMBDA`·λ) and every zone split at `_SOMM_TH_SPLIT_DEG`
+    = 30° so the inner zone's two bands can carry different R₁ lattices
+    (momwire#443):
 
-      1: R₁ ∈ [0, 0.2λ],      θ ∈ [0°, 90°], ΔR₁ = 0.01λ, Δθ = 10°
-      2: R₁ ∈ [0.2λ, r_near], θ ∈ [0°, 20°], ΔR₁ = 0.05λ†, Δθ = 5°
-      3: R₁ ∈ [0.2λ, r_near], θ ∈ [20°, 90°], ΔR₁ = 0.1λ†,  Δθ = 10°
+      1: R₁ ∈ [0, 0.2λ],      θ ∈ [0°, 30°],  ΔR₁ = 0.01λ, Δθ = 10°
+      2: R₁ ∈ [0, 0.2λ],      θ ∈ [30°, 90°], ΔR₁ = 0.01λ‡, Δθ = 10°
+      3: R₁ ∈ [0.2λ, r_near], θ ∈ [0°, 30°],  ΔR₁ = 0.05λ†, Δθ = 5°
+      4: R₁ ∈ [0.2λ, r_near], θ ∈ [30°, 90°], ΔR₁ = 0.1λ†,  Δθ = 10°
 
     († capped at one sixth of the lateral-wave beat length 2π/|k₁ − k₂| —
     the manual's own caveat that grid 2 needs finer ΔR₁ for high-εr
-    low-loss grounds, applied to both outer regions.)
+    low-loss grounds, applied to both outer near regions.)
+    (‡ keyed down to the near-interface boundary layer width 1/(4|k₁|),
+    floored at 0.2λ/(`_SOMM_N0_CAP` − 1) — the momwire#443 contact fix,
+    see the layout comment in `__init__`.)
 
     When the geometry extends past `r_near`, two coarse far regions cover
     the rest (issue #159 — the surfaces' fine lateral-wave structure has
     decayed out there, see the `_SOMM_R1_NEAR_LAMBDA` note):
 
-      4: R₁ ∈ [r_near, r1_max], θ ∈ [0°, 20°],  ΔR₁ = 0.2λ, Δθ = 2.5°
-      5: R₁ ∈ [r_near, r1_max], θ ∈ [20°, 90°], ΔR₁ = 0.2λ, Δθ = 10°
+      5: R₁ ∈ [r_near, r1_max], θ ∈ [0°, 30°],  ΔR₁ = 0.2λ, Δθ = 2.5°
+      6: R₁ ∈ [r_near, r1_max], θ ∈ [30°, 90°], ΔR₁ = 0.2λ, Δθ = 10°
 
     Two modernizations vs NEC: `r1_max` is sized to the geometry that
     will query the grid (instead of a hard 1λ plus Norton asymptotics
@@ -704,29 +721,72 @@ class SommerfeldGrid:
         # fixed 2.5° suffices — keying to the full extent (pre-#159) grew
         # the node count ~quadratically with geometry size.
         dth2_target = min(5.0, np.degrees(0.07 * lam / self.r_near))
-        n_th2 = int(np.ceil(20.0 / dth2_target)) + 1
-        dth2 = 20.0 / (n_th2 - 1)
+        n_th2 = int(np.ceil(_SOMM_TH_SPLIT_DEG / dth2_target)) + 1
+        dth2 = _SOMM_TH_SPLIT_DEG / (n_th2 - 1)
 
-        r_break = 0.2 * lam
+        self.r_break = 0.2 * lam
+
+        # The near zone is split at th_split like the outer zones, because
+        # its two bands need different R1 lattices (momwire#443). Ground
+        # contact queries the surfaces at R1 = z + z' << lambda and theta
+        # near 90 deg, where they carry a boundary layer of width
+        # ~1/|k1| = lambda/(2 pi sqrt|eps~|): on sea water that is 2e-3
+        # lambda — entirely inside the first 0.01-lambda cell — and
+        # interpolating across it cost 0.13 ohm on every shipped contact
+        # answer (#282 stage 2's measurement). The steep band (region 1)
+        # resolves it at ~4 nodes per layer width, capped so the
+        # eps~ -> infinity decks (|k1|/k2 ~ 1e5, layer 4e-7 lambda) cannot
+        # explode the node count. The grazing band (region 0) keeps the
+        # 0.01-lambda spacing: there the layer variable h = R1 sin(theta)
+        # stretches it out in R1, no physical deck queries small R1 at
+        # grazing (two points at grazing-small R1 means both are ON the
+        # plane — radial screens, which are refused), and its rows are
+        # where the direct evaluator is ~100x slower, so keying them would
+        # multiply the fill cost for queries nothing makes. The split
+        # sits at 30 deg, not the outer zones' historical 20, because the
+        # evaluator's slow contours reach past 20 deg: at 30 the steep
+        # band's keyed rows are all on the fast path (sea water fills in
+        # ~0.7 s against 3.6 s per slow row), and the band the slow rows
+        # do cover keeps exactly its pre-#443 node budget. Grounds whose
+        # layer the 0.01-lambda spacing already resolves (poor/average
+        # soil, the lossless dielectric) key to 0.01 lambda exactly.
+        layer = 1.0 / max(abs(k1), 1e-300)
+        dr0 = min(0.01 * lam, max(layer / 4.0, self.r_break / (_SOMM_N0_CAP - 1)))
+        # When the layer is unresolvable even at the cap, the R1 = 0 node
+        # (the analytic eqs 169-172 limit, O(1)) poisons the first cells,
+        # whose true values are the smooth small tail the layer decays to.
+        # Fill that node at half a cell instead: every real query sits far
+        # past the layer there, so the interpolant should follow the tail,
+        # not bleed the layer top across the cells the queries do hit.
+        self._r0_fill = 0.5 * dr0 if layer < 0.25 * dr0 else 0.0
+
+        split = _SOMM_TH_SPLIT_DEG
         layout = [
-            (0.0, r_break, 0.01 * lam, 0.0, 90.0, 10.0),
-            (r_break, self.r_near, min(0.05 * lam, beat / 6.0), 0.0, 20.0, dth2),
-            (r_break, self.r_near, min(0.1 * lam, beat / 6.0), 20.0, 90.0, 10.0),
+            (0.0, self.r_break, 0.01 * lam, 0.0, split, 10.0),
+            (0.0, self.r_break, dr0, split, 90.0, 10.0),
+            (self.r_break, self.r_near, min(0.05 * lam, beat / 6.0), 0.0, split, dth2),
+            (self.r_break, self.r_near, min(0.1 * lam, beat / 6.0), split, 90.0, 10.0),
         ]
         if self.r1_max > self.r_near * (1.0 + 1e-9):
             dr_far = _SOMM_DR_FAR_LAMBDA * lam
             layout += [
-                (self.r_near, self.r1_max, dr_far, 0.0, 20.0, _SOMM_DTH_FAR_DEG),
-                (self.r_near, self.r1_max, dr_far, 20.0, 90.0, 10.0),
+                (self.r_near, self.r1_max, dr_far, 0.0, split, _SOMM_DTH_FAR_DEG),
+                (self.r_near, self.r1_max, dr_far, split, 90.0, 10.0),
             ]
 
         self._regions = []
-        for r0, r1, dr, th0, th1, dth in layout:
+        for reg_idx, (r0, r1, dr, th0, th1, dth) in enumerate(layout):
             n_r = max(int(np.ceil((r1 - r0) / dr)) + 1, 4)
             n_th = int(round((th1 - th0) / dth)) + 1
             r_nodes = r0 + dr * np.arange(n_r)  # last row may pad past r1
             th_nodes = np.radians(th0 + dth * np.arange(n_th))
             rr, tt = np.meshgrid(r_nodes, th_nodes, indexing="ij")
+            if reg_idx == 1 and self._r0_fill > 0.0:
+                # The unresolvable-layer case: node 0 keeps lattice
+                # position R1 = 0 but is FILLED at half a cell (see the
+                # layout comment).
+                rr = rr.copy()
+                rr[0, :] = self._r0_fill
             surf = iv_surfaces_direct(
                 self.eps_t,
                 self.k2,
@@ -784,13 +844,16 @@ class SommerfeldGrid:
             raise ValueError("query R1 must be non-negative")
         r_f = np.minimum(r_f, self.r1_max)
 
-        r_break = self._regions[1]["r0"]
-        th_split = np.radians(20.0)
-        # Near/far select: for 3-region grids r_near == r1_max, so the
+        th_split = np.radians(_SOMM_TH_SPLIT_DEG)
+        # Near/far select: for 4-region grids r_near == r1_max, so the
         # clamped queries all land near and this reduces to the old routing.
-        near = np.where(th_f <= th_split, 1, 2)
-        far = np.where(th_f <= th_split, 3, 4)
-        region_of = np.where(r_f <= r_break, 0, np.where(r_f <= self.r_near, near, far))
+        grazing = th_f <= th_split
+        inner = np.where(grazing, 0, 1)
+        near = np.where(grazing, 2, 3)
+        far = np.where(grazing, 4, 5)
+        region_of = np.where(
+            r_f <= self.r_break, inner, np.where(r_f <= self.r_near, near, far)
+        )
 
         out = np.empty((len(_SURF_KEYS), r_f.size), dtype=np.complex128)
         for idx, reg in enumerate(self._regions):
@@ -832,7 +895,9 @@ class SommerfeldGrid:
         g.omega = float(omega)
         g.mu = float(mu)
         g.r1_max = self.r1_max * scale
+        g.r_break = self.r_break * scale
         g.r_near = self.r_near * scale
+        g._r0_fill = self._r0_fill * scale
         g._regions = [
             {
                 "r0": reg["r0"] * scale,
@@ -851,8 +916,8 @@ class SommerfeldGrid:
 def grid_cpp_args(grid):
     """Flatten a `SommerfeldGrid` into the positional args the C++ remainder
     kernels take after (ground_z, k): (r1_max, r_break, th_split, r_near,
-    reg_r0, reg_dr, reg_th0, reg_dth, reg_vals). The three (near-only grids)
-    or five (with the #159 far zone) region value tables are made
+    reg_r0, reg_dr, reg_th0, reg_dth, reg_vals). The four (near-only grids)
+    or six (with the #159 far zone) region value tables are made
     C-contiguous complex128 once; callers that sample the same grid many
     times (the ACA path) should hoist this out of their loop.
     """
@@ -860,8 +925,8 @@ def grid_cpp_args(grid):
     reg_vals = [np.ascontiguousarray(r["vals"], dtype=np.complex128) for r in regs]
     return (
         float(grid.r1_max),
-        float(regs[1]["r0"]),  # r_break (= SommerfeldGrid.eval)
-        float(math.radians(20.0)),  # th_split
+        float(grid.r_break),
+        float(math.radians(_SOMM_TH_SPLIT_DEG)),
         float(grid.r_near),
         np.array([r["r0"] for r in regs], dtype=float),
         np.array([r["dr"] for r in regs], dtype=float),
