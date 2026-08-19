@@ -47,12 +47,20 @@ ALL_NAMES = tuple(
     for entry in json.loads((FIXTURE_DIR / "manifest.json").read_text())["decks"]
 )
 
-# The three decks the dialect refuses by name: TL and NT are circuits attached
-# to the structure, and this engine's language is antenna-only (#930, design
-# doc #846 §1). They stay in the corpus as REFUSAL fixtures — see
-# ``NETWORK_FIXTURES`` below — so every gate written against a solved printout
-# runs over the other 41.
-REFUSED_NAMES = ("dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_crossed")
+# The four decks the dialect refuses: TL and NT are circuits attached to the
+# structure, and this engine's language is antenna-only (#930, design doc #846
+# §1); ``dipole_gd_second_medium`` is a ``GD`` under a ``GN 1``, which is how
+# both frontends spell MININEC-type ground and which #458 stopped answering as
+# plain perfect ground. They stay in the corpus as REFUSAL fixtures — see
+# ``NETWORK_FIXTURES`` and ``test_the_mininec_ground_fixture_refuses_by_name``
+# below — so every gate written against a solved printout runs over the other
+# 41.
+REFUSED_NAMES = (
+    "dipole_nt_network",
+    "dipole_tl_network",
+    "dipole_tl_shunt_crossed",
+    "dipole_gd_second_medium",
+)
 ANTENNA_NAMES = tuple(n for n in ALL_NAMES if n not in REFUSED_NAMES)
 
 # nec2/Execute.versionA — the regex SimNEC applies to `<cmd> -version`.
@@ -1373,10 +1381,19 @@ def test_pt_is_not_an_arming_card():
 # issue #800 (tail): GD, the additional-ground-parameters card
 # --------------------------------------------------------------------------
 
-# The two committed pairs: (with the card, the identical deck without it).
-GD_PAIRS = (
-    ("dipole_gd_second_medium", "dipole_pec_ground"),
-    ("dipole_gd_cliff_sommerfeld", "dipole_sommerfeld_ground"),
+# The committed pair: (with the card, the identical deck without it).
+# ``dipole_gd_second_medium`` was the second entry until #458 — its ``GD``
+# rides a ``GN 1``, which is the MININEC-type ground idiom and refuses now;
+# it is measured as a REFUSAL fixture below.
+GD_PAIRS = (("dipole_gd_cliff_sommerfeld", "dipole_sommerfeld_ground"),)
+
+# Quoted from the normative grammar
+# (momwire.dev/reference/deck-grammar-nec2/#gd--additional-ground-medium).
+MININEC_GROUND_REFUSAL = (
+    "GD with a perfect ground (GN 1) in force is the MININEC-type ground "
+    "idiom (4nec2 GN 3; EZNEC 'MININEC-type'), which this engine does not "
+    "implement (momwire#456): use GN 2 for a finite Sommerfeld ground, or "
+    "drop the GD for perfect ground"
 )
 
 
@@ -1389,6 +1406,25 @@ def test_gd_deck_runs_instead_of_being_refused():
         text = printout(name)
         assert "ERROR-NEC2C" not in text, name
         assert "ANTENNA INPUT PARAMETERS" in text, name
+
+
+def test_the_mininec_ground_fixture_refuses_by_name():
+    """#458: ``dipole_gd_second_medium`` is ``GN 1`` + ``GD 2,0,0,0,13.,.005``
+    under an ``XQ`` — the shape 4nec2 manufactures from its own ``GN 3`` and
+    the shape EZNEC writes for MININEC-type ground.
+
+    The oracle answers it as PLAIN PERFECT GROUND (the committed ``.out``
+    still says so, and its ``GD`` echo is the only trace of the card), which
+    is the substitution the frontend never sees — 34 % in R on the EZNEC
+    twin's measurement of it. So this deck is a refusal fixture: it must say
+    what it will not do, print nothing solved, and still emit the sentinel a
+    blocked ``readLine()`` is waiting on.
+    """
+    text = run_deck(fixture_deck("dipole_gd_second_medium"))[0]
+    assert f"ERROR: {MININEC_GROUND_REFUSAL}" in text
+    assert f"ERROR-NEC2C: {MININEC_GROUND_REFUSAL}" in text
+    assert "ANTENNA INPUT PARAMETERS" not in text
+    assert NX_ECHO.search(text), "no NX sentinel on the error path"
 
 
 @pytest.mark.parametrize(("name", "_base"), GD_PAIRS)
@@ -1482,8 +1518,13 @@ def test_gd_is_not_an_arming_card():
 def test_the_comma_delimited_gd_simnec_sends_parses_like_the_spaced_form():
     """``NECSource`` writes the card comma-delimited — ``GD
     2,0,0,0,13.,.005,0.,0.`` is the literal Cardioid line. Measured identical
-    to the spaced form on the oracle; identical here too."""
-    head = "CE gd commas\nGW 1 9 0. 0. 0.5 0. 0. 5.0 0.001\nGE 1\nGN 1\n"
+    to the spaced form on the oracle; identical here too.
+
+    The Cardioid's own ``GN 1`` became a refusal in #458 (that pairing is
+    MININEC-type ground), so the free-format read is measured over the ground
+    that keeps the deck running — the card being read is the same one.
+    """
+    head = "CE gd commas\nGW 1 9 0. 0. 0.5 0. 0. 5.0 0.001\nGE 1\nGN 2 0 0 0 13. .005\n"
     tail = "EX 0 1 1 0 1.\nFR 0 1 0 0 14.1 0\nXQ\n"
     commas = run_deck(head + "GD 2,0,0,0,13.,.005,0.,0.\n" + tail)[0]
     spaces = run_deck(head + "GD 2 0 0 0 13. .005 0. 0.\n" + tail)[0]
@@ -2034,7 +2075,7 @@ def test_the_sinusoidal_shim_columns_are_the_one_volt_drive_coefficients():
 
 
 # The classes that exercise everything the shim's coefficients feed: a
-# Sommerfeld and a two-medium ground (both carried on the fill), a lumped load
+# Sommerfeld and a perfect ground (both carried on the fill), a lumped load
 # and a series RLC (the power-budget and port-algebra paths), a multi-wire
 # structure with a junction, the PT readout, and a pattern (which resamples the
 # solved current through `currents_at_knots`).
@@ -2042,10 +2083,13 @@ def test_the_sinusoidal_shim_columns_are_the_one_volt_drive_coefficients():
 # The two network decks left this roster in #930 — TL and NT are out of
 # dialect — and the classes they stood for (a second gap the drive does not
 # reach; port algebra outside the fill) are covered by the loaded decks and the
-# multi-wire one that replaced them.
+# multi-wire one that replaced them.  `dipole_gd_second_medium` stood in the
+# PEC slot until #458 refused it (the MININEC-type ground idiom); the class it
+# actually exercised on the fill was the image ground, so its own base deck
+# took the slot — the `GD` never reached a fill to begin with.
 _SIN_HARD_FIXTURES = (
     "dipole_sommerfeld_ground",
-    "dipole_gd_second_medium",
+    "dipole_pec_ground",
     "dipole_load_ld0",
     "split_dipole_qq",
     "dipole_load_ld4",
@@ -3162,10 +3206,13 @@ def test_a_new_frequency_reuses_the_geometry_and_pays_only_the_fill():
 # What makes that safe is that a hit rebinds `portal_deck` to the arriving
 # deck, and the comparison here is against a FRESH PROCESS rather than against
 # the served run itself — so this stays a proof if GD ever grows a far field.
+# The ground is `GN 2` rather than the `GN 1` this deck carried before #458:
+# a second medium under a perfect ground is the MININEC-type ground idiom and
+# refuses now, and a refused deck caches nothing.
 GD_BASE = (
     "CE gd probe\n"
     "GW 1 9 0. 0. 2.0 0. 0. 7.0 0.001\n"
-    "GE -1\nGN 1\nGD 2,0,0,0,13.,.005,0.,0.\n"
+    "GE -1\nGN 2 0 0 0 13. .005\nGD 2,0,0,0,13.,.005,0.,0.\n"
     "EX 0 1 5 0 1.\nFR 0 1 0 0 14.1 0\nXQ\n"
 )
 
