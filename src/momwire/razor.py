@@ -1449,8 +1449,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rides along in the chunk so the replay half can weight the smooth
         remainder by the same pairs without re-deriving eligibility per k.
 
-        Returns a list of ``(lo, hi, R, m0s, m1s, ekc)`` chunks, `ekc` being
-        None off the extended kernel and ``(mask, a_ek)`` on it.
+        Returns a list of ``(lo, hi, R, m0s, m1s, ekc)`` chunks. `ekc` is None
+        off the extended kernel, and ``(mask, a_ek)`` on it — with `mask`
+        itself None when EVERY pair of the chunk is eligible, the common case
+        and the one a straight uniform wire is.
         """
         seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
         n_seg = seg_h.size
@@ -1478,8 +1480,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
                 a_ek = _ek_radius(ek, a)
                 m0e, m1e = _static_axis_moments_ek(u_r, rho2, seg_h, a_ek)
-                m0s = np.where(mask, m0e, m0s)
-                m1s = np.where(mask, m1e, m1s)
+                if mask.all():
+                    # Eligibility is GEOMETRY, so "every pair of this chunk
+                    # extends" — a straight uniform wire, and the fat twin
+                    # lane's own case — is settled here rather than rescanned
+                    # at every solved wavenumber. `None` in the chunk means
+                    # exactly that, and the replay half then skips the gather
+                    # instead of copying the whole array to reach all of it.
+                    m0s, m1s, mask = m0e, m1e, None
+                else:
+                    m0s = np.where(mask, m0e, m0s)
+                    m1s = np.where(mask, m1e, m1s)
                 ekc = (mask, a_ek)
             u = tau[None, :, :] - u_r[:, :, None]
             R = np.sqrt(u * u + rho2[:, :, None])
@@ -1528,13 +1539,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 mask, a_ek = ekc
                 num = np.exp(-1j * k * R) - 1.0
                 scalar_a = np.ndim(a_ek) == 0
-                if mask.all():
-                    # The straight-uniform-wire case, and the one the fat
-                    # twin lane runs: every pair eligible, so the gather
-                    # below would copy the whole array to reach all of it.
-                    # Elementwise-identical to the gathered branch — same
-                    # operands in the same order, only the broadcast shape
-                    # of `a` differs.
+                if mask is None:
+                    # `None` = every pair of this chunk is eligible, settled
+                    # on the geometry side. Elementwise-identical to the
+                    # gathered branch — same operands in the same order, only
+                    # the broadcast shape of `a` differs.
                     a_m = a_ek if scalar_a else np.asarray(a_ek)[None, :, None]
                     num = num * _ek_factor(R, a_m, k) + _ek_reg_extra(R, a_m, k)
                 else:
