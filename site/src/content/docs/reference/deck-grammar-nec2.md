@@ -470,6 +470,32 @@ A later `GD` (or a later `GN` with `NRADL = 0`) overwrites an earlier one.
 carried per execute group: the cliff a pattern reads is the one in force when
 its own execute card fired.
 
+**A second medium under a perfect ground is refused.** `GD` alongside a
+[`GN 1`](#gn--ground-parameters) is how both frontends spell **MININEC-type
+ground** — perfect ground for the currents, a finite ground for the far field.
+4nec2 manufactures `GN 1` + `GD 0 0 0 0 <eps> <sigma>` from its own `GN 3`, and
+EZNEC writes the `GD` with the media payload. NEC-2 has no such ground: the
+record reaches the answer through the cliff modes alone, and these decks ask
+for `RP 0`, so the deck would run as plain perfect ground and the substitution
+would never be printed. It is not a small one — the EZNEC twin measures 34 % in
+`R` on the same substitution — so an execute card whose environment is perfect
+ground with a second medium in force refuses:
+
+```text
+GD with a perfect ground (GN 1) in force is the MININEC-type ground idiom
+(4nec2 GN 3; EZNEC 'MININEC-type'), which this engine does not implement
+(momwire#456): use GN 2 for a finite Sommerfeld ground, or drop the GD for
+perfect ground
+```
+
+The refusal is exactly as wide as the silence. A medium whose `EPSR2` and
+`SIG2` are both zero is no medium — it is what a bare `GN 1` writes when it
+clears a cliff — and does not trip it. An `RP 2`/`RP 3` group *does* read the
+record, cliff edge and all, so a perfect-ground cliff is answered rather than
+refused. And because the environment is [per execute
+group](#the-environment-is-per-execute-group), a deck that states the pair and
+then switches to `GN 2` before it ever executes is not in the idiom and runs.
+
 ## FR — frequency
 
 | field | meaning |
@@ -860,6 +886,7 @@ unrecognised NEC card '<XX>'
 | `NE` / `NH` | finite ground | `<M> over a finite ground is not supported by this engine (the near field of a Sommerfeld half-space is not an image)` |
 | `GN` | `NRADL ≠ 0` on `GN 0` / `GN 2` (the only types that read it) | `GN <type> with a <n>-wire radial ground screen is not supported by this engine` |
 | `GN` | `I1 ∉ {-1, 0, 1, 2}` | `GN type <type> is not supported by this engine` |
+| `GD` | a medium with `EPSR2` or `SIG2` nonzero in force at an execute card whose ground is `GN 1` and whose request is not `RP 2`/`RP 3` | `GD with a perfect ground (GN 1) in force is the MININEC-type ground idiom (4nec2 GN 3; EZNEC 'MININEC-type'), which this engine does not implement (momwire#456): use GN 2 for a finite Sommerfeld ground, or drop the GD for perfect ground` |
 | `LD` | `I1 ∈ {2, 3, 6, 7}` or unknown | `LD type <t> is not supported by this engine` |
 | `LD` | range > 8 segments | `LD over <n> segments is not supported by this engine — at most 8 segments expand into per-segment loads` |
 | `LD 5` | partial-wire range | `LD 5 conductivity on a partial-wire segment range is not supported by this engine — per-wire conductivity covers whole wires only` |
