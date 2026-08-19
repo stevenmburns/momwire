@@ -2701,23 +2701,49 @@ def _gd_shift(name, radius, cls=SinusoidalGalerkinSolver):
     return complex(on) - complex(off)
 
 
+# momwire#398 D2 (2026-08-18, the taper-readiness study's unit 1): a longer,
+# more realistic radius step (momwire#435's two-wire deck, 10:1 over a
+# 10.19 m dipole) showed `extended_kernel=True` on ANY stepped-radius
+# junction DIVERGES under refinement — this file's own "radius step" deck
+# (2:1, `_GD_LAM`-scale, N never pushed past a few dozen segments below)
+# never got mesh-refined far enough to see it. `SinusoidalGalerkinSolver`
+# now REFUSES the combination at construction
+# (`_EK_STEPPED_RADIUS_JUNCTION_REFUSAL`,
+# `tests/test_sinusoidal_galerkin_stepped_ek.py`), so every EK-on
+# parametrization below drops "radius step" — the deck stays in
+# `_gd_decks()` for this file's REDUCED-kernel call sites (`test_gd5`'s own
+# `red = _sym_ratio(SinusoidalGalerkinSolver(**kw))` line, `_gd_decks` itself
+# is fine on its own). This is not a retraction of momwire#299's arithmetic:
+# the bracket-correction fix this file gates is still correct in the coarse-
+# mesh regime it shipped in (measured, not assumed — G-D1/G-D5/G-D6 all held
+# on "radius step" up to the N these tests ran at); D2 is a later, broader
+# finding that the whole extended-kernel-on-a-step combination needs
+# excluding regardless.
+_EK_DECK_NAMES = [n for n in _gd_decks(0.02) if n != "radius step"]
+
+
 # ---------------------------------------------------------------------------
 # G-D1 — a → 0 on every node kind
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("name", list(_gd_decks(0.02)))
+@pytest.mark.parametrize("name", _EK_DECK_NAMES)
 def test_gd1_the_fill_collapses_on_every_node_kind(name):
-    """G-B3's idiom off the straight dipole and onto the four decks whose
-    nodes split. δZ over a = 0.02 / 0.01 / 0.005 / 0.002:
+    """G-B3's idiom off the straight dipole and onto the decks whose nodes
+    split. δZ over a = 0.02 / 0.01 / 0.005 / 0.002:
 
         straight      −0.143 − 1.097j … −0.007 − 0.079j   (unmoved)
         L             −0.071 − 1.040j … −0.004 − 0.075j
         vee           −0.154 − 1.069j … −0.008 − 0.078j
-        radius step   −1.072 − 3.535j … −0.036 − 0.213j
         T             −0.140 − 1.039j … −0.007 − 0.075j
 
-    Monotone, worst ratio 0.452 per halving (0.425 on the radius step), and
-    every deck now lands within a factor of two of the straight dipole it
-    used to be three orders of magnitude away from.
+    Monotone, worst ratio 0.452 per halving, and every deck now lands within
+    a factor of two of the straight dipole it used to be three orders of
+    magnitude away from.
+
+    "radius step" measured the same way (−1.072 − 3.535j … −0.036 − 0.213j,
+    monotone, 0.425 per halving) but is EXCLUDED from `_EK_DECK_NAMES` —
+    momwire#398 D2, see the comment above that constant: EK on a stepped-
+    radius junction is refused outright now, on a divergence this narrow
+    a/N range never reached.
     """
     prev = None
     for radius in _GD_A:
@@ -2729,13 +2755,14 @@ def test_gd1_the_fill_collapses_on_every_node_kind(name):
         prev = d
 
 
-@pytest.mark.parametrize("name", ["L", "vee", "radius step", "T"])
+@pytest.mark.parametrize("name", ["L", "vee", "T"])
 def test_gd1_the_collapse_tracks_the_bspline_family(name):
     """Order, not value: the collapse factor over the whole ladder against
     `BSplineSolver`'s on the same deck — 13.8x against 16.0x on the L
-    (1.16), 13.7/15.8 vee, 16.6/17.4 radius step, 13.8/16.0 T. The two bases
-    disagree about the SIZE of the EK shift by #249 §7's cross-basis margin;
-    they must not disagree about its ORDER in a.
+    (1.16), 13.7/15.8 vee, 13.8/16.0 T ("radius step" measured 16.6/17.4
+    the same way but is excluded here — momwire#398 D2, see `_EK_DECK_NAMES`
+    above). The two bases disagree about the SIZE of the EK shift by #249
+    §7's cross-basis margin; they must not disagree about its ORDER in a.
     """
     fat, thin = _GD_A[0], _GD_A[-1]
     gal = abs(_gd_shift(name, fat)) / abs(_gd_shift(name, thin))
@@ -2789,14 +2816,20 @@ def _bad_ends(sim, mirror=False):
 
 
 @pytest.mark.parametrize(
-    "name,n_bad", [("straight", 0), ("L", 2), ("vee", 2), ("radius step", 2), ("T", 3)]
+    "name,n_bad", [("straight", 0), ("L", 2), ("vee", 2), ("T", 3)]
 )
 def test_gd2_the_node_predicate_marks_exactly_the_split_nodes(name, n_bad):
     """One marked end per segment meeting the split node, and nothing else: a
-    bend and a radius step have two members, the T has three, and the straight
-    wire — whose only nodes are its own free ends and its collinear
-    equal-radius interior — has none. Free ends are never marked, which is
-    what keeps every straight deck's numbers where they were.
+    bend has two members, the T has three, and the straight wire — whose only
+    nodes are its own free ends and its collinear equal-radius interior — has
+    none. Free ends are never marked, which is what keeps every straight
+    deck's numbers where they were.
+
+    "radius step" isn't parametrized here any more (momwire#398 D2 —
+    `extended_kernel=True` on it is now refused at construction, before this
+    predicate would even run) but the predicate itself still marked it
+    correctly (2 bad ends) when this test last measured it, same as the
+    bend.
     """
     sim = SinusoidalGalerkinSolver(
         **dict(_gd_decks(0.02)[name], feed_arclength=1.0, wavelength=_GD_LAM),
@@ -2937,7 +2970,7 @@ def test_gd4_the_bracket_correction_diverges_symmetrically():
 # ---------------------------------------------------------------------------
 # G-D5 — reciprocity
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("name", list(_gd_decks(0.02)))
+@pytest.mark.parametrize("name", _EK_DECK_NAMES)
 @pytest.mark.parametrize("radius", [0.02, 0.002])
 def test_gd5_reciprocity_is_unmoved_by_the_bracket_correction(name, radius):
     """G-B2's statement on the decks the correction actually fires on.
@@ -2946,16 +2979,17 @@ def test_gd5_reciprocity_is_unmoved_by_the_bracket_correction(name, radius):
         straight      1.34e−12 / 6.09e−13     2.32e−12 / 2.31e−12
         L             1.04e−10 / 6.16e−11     4.85e−11 / 5.09e−11
         vee           3.72e−11 / 6.50e−12     4.27e−11 / 4.03e−11
-        radius step   1.14e−01 / 1.15e−01     5.85e−02 / 5.85e−02
         T             4.17e−10 / 1.64e−10     3.10e−10 / 2.09e−10
 
-    — the free-space floor everywhere except the radius-step deck, whose 1e−1
-    is its MIXED-RADIUS reduced fill's own and moves by 1 % under the extended
-    kernel. The correction as literally spelled — the source-sided bracket
-    subtracted where the node rule says, without the transpose average — gives
-    1.6e−3 on the L and 2.9e−3 on the T instead, seven orders worse than the
-    reduced fill and the reason `_ek_bracket_correction_tested` halves C with
-    its transpose.
+    — the free-space floor everywhere. ("radius step" measured 1.14e−01 /
+    1.15e−01 the same way, its MIXED-RADIUS reduced fill's own floor, and
+    moved by 1 % under the extended kernel — comfortably inside this bar
+    too, but the deck is excluded from this parametrization regardless,
+    momwire#398 D2.) The correction as literally spelled — the source-sided
+    bracket subtracted where the node rule says, without the transpose
+    average — gives 1.6e−3 on the L and 2.9e−3 on the T instead, seven
+    orders worse than the reduced fill and the reason
+    `_ek_bracket_correction_tested` halves C with its transpose.
     """
     kw = dict(_gd_decks(radius)[name], feed_arclength=1.0, wavelength=_GD_LAM)
     red = _sym_ratio(SinusoidalGalerkinSolver(**kw))
@@ -2963,18 +2997,19 @@ def test_gd5_reciprocity_is_unmoved_by_the_bracket_correction(name, radius):
     assert ext < 8.0 * red, f"{name} a={radius}: {ext:.2e} vs reduced {red:.2e}"
     # And in absolute terms: still at the fill's own floor, not merely close
     # to a reduced number that happens to be large.
-    assert ext < 1e-8 or name == "radius step", f"{name} a={radius}: {ext:.2e}"
+    assert ext < 1e-8, f"{name} a={radius}: {ext:.2e}"
 
 
 # ---------------------------------------------------------------------------
 # G-D6 — the falsifier
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("name", ["L", "radius step", "T"])
+@pytest.mark.parametrize("name", ["L", "T"])
 def test_gd6_without_the_correction_these_decks_still_diverge(name):
     """The control for all of the above: every gate here would pass vacuously
     on a correction that never fired, so this removes it and demands the
     defect back. δZ must GROW from a = 0.02 to a = 0.002, by 2x on the L and
-    the T and 2.2x on the radius step — the numbers from main."""
+    the T ("radius step" grew 2.2x the same way, from the numbers on main,
+    but the deck no longer runs under EK at all — momwire#398 D2)."""
     with _without_the_299_bracket_correction():
         fat = abs(_gd_shift(name, 0.02))
         thin = abs(_gd_shift(name, 0.002))
@@ -3111,14 +3146,16 @@ def _gd8_every_column():
         _sg.SinusoidalGalerkinSolver._ek_bracket_plans = orig
 
 
-@pytest.mark.parametrize("name", list(_gd_decks(0.02)))
+@pytest.mark.parametrize("name", _EK_DECK_NAMES)
 @pytest.mark.parametrize("ground", list(_GD8_GROUNDS))
 def test_gd8a_narrowing_and_banding_move_the_matrix_by_nothing(
     monkeypatch, name, ground
 ):
-    """Exact equality, not a tolerance, on all five node kinds and all three
-    grounds — the two narrowings are index bookkeeping and the banding sums
-    each cell in the order it always did, so anything at all here is a bug.
+    """Exact equality, not a tolerance, on all four EK-eligible node kinds
+    ("radius step" is excluded — momwire#398 D2, `_EK_DECK_NAMES` above) and
+    all three grounds — the two narrowings are index bookkeeping and the
+    banding sums each cell in the order it always did, so anything at all
+    here is a bug.
 
     Three spellings are compared against the shipped one: every column
     retained (which is the whole (nnz, N) triple back), one test segment per
