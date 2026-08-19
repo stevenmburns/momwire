@@ -1402,3 +1402,205 @@ instead.
 Contact on razor (both finite grounds, unchanged); contact on pulse;
 **contact under refl-coef, on every trunk (new)**; mid-span touchdown;
 radial screens.
+
+---
+
+## Stage 2 record — 2026-08-19
+
+*Same convention as the stage-1 record above: the study body is unchanged
+and stays what was measured before any decision was taken. This section is
+later and wins where the two disagree, and says so.*
+
+Stage 2's brief (§6) was "run §5.4's three experiments in order and act on
+whichever fires". All three have now been run. **None of them fired**, and
+no fourth candidate replaced them, so §6's own fallback applies: the gap is
+a formulation difference, and stage 1's envelope pins are permanent.
+
+That is a smaller headline than "closed", so this record is mostly about
+what is now *known* rather than merely suspected — because the difference
+between a shrug and a result is whether the next person can tell which doors
+are already shut.
+
+### The three candidates, and how each died
+
+**Candidate 2 — a genuine model difference at the contact node — died in
+stage 1** (the stub ladder: momwire's own stubbed limit agrees with its own
+contact deck to 0.011 Ω over poor soil, where the study predicted ~3 Ω if
+the contact node's bookkeeping were at fault). Recorded above; repeated here
+so the three verdicts sit together.
+
+**Candidate 1 — the remainder's near-interface behaviour — is dead.** The
+study specified the experiment exactly: *"recompute the near-diagonal
+remainder blocks by direct evaluation at very high rtol, bypassing the grid
+entirely, at N = 41 poor soil, and see whether the 3.3 Ω moves."*
+`scripts/probe_contact_direct_remainder.py` is that experiment. It swaps a
+`DirectGrid` — same `eval(R1, θ)` contract, answering with
+`iv_surfaces_direct` instead of a cubic Lagrange stencil — into the numpy
+remainder path, and masks the two grid-consuming accelerator kernels so that
+path runs.
+
+| ground | N | residual, shipped | residual, no grid, rtol 1e−11 |
+|---|---|---|---|
+| poor | 41 | 3.2691 | 3.2722 |
+| poor | 81 | 3.3274 | 3.3305 |
+| average | 81 | 1.2712 | 1.2715 |
+
+The grid is worth 0.003 Ω on the row that has 3.3 Ω to explain. The other
+half of "quadrature/asymptotics in Q" — the remainder's *spatial* order —
+was swept too: `n_qp_sommerfeld` 3 → 5 → 8 → 12 at N = 41 poor moves the
+residual 3.2691 → 3.2506 → 3.2436 → 3.2409, i.e. 0.03 Ω converging. Neither
+knob is worth 3 Ω.
+
+**Candidate 3 — "the missing base-loss resistance is real and momwire is
+right to lack it" — is dead, and this is the measurement stage 2 did not
+expect to be able to make.** `scripts/probe_contact_halfspace_sweep.py`
+sweeps the half-space against the binary at a conductivity whose loss
+tangent stays under 1e−2 across the whole sweep — a ground that cannot
+dissipate. |discrepancy| at N = 41, monopole:
+
+| ε_r | 1.5 | 2.0 | **2.5** | 3.0 | 4.0 | 5.0 | 6.5 | 8.0 | 10 | 13 | 16 | 20 | 30 | 50 | 81 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Ω | 3.21 | 4.15 | **4.36** | 4.28 | 3.87 | 3.42 | 2.84 | 2.40 | 1.97 | 1.53 | 1.24 | 0.98 | 0.67 | 0.47 | 0.41 |
+
+A missing LOSS term cannot be at its maximum over a ground with no loss in
+it. The gap is not a loss term, and §2.3(b)'s 2–100 Ω tables are not what
+momwire is missing.
+
+### What the half-space map says
+
+The sweep above is the first picture of the gap as a function of the ground
+rather than as four soils, and it reorganises the stage-1 table:
+
+* The discrepancy is a **smooth single-peaked curve vanishing at both
+  physical limits** — ε̃ → 1 (no ground) and ε̃ → ∞ (PEC) — peaking near
+  ε_r = 2.5. Both zeros are structural, so the curve had to look roughly
+  like this; what is informative is *where* the peak is and how large.
+* A second, independent path through the ε̃ plane agrees. `--mode sigma` at
+  ε_r = 5 walks σ from 0 to 1: the discrepancy is 3.42 Ω at σ = 0 and falls
+  monotonically to a 0.2–0.35 Ω floor by σ = 0.03.
+* **Stage 1's four-soil table was reading a sign crossing as agreement.**
+  Very good ground's 0.005 Ω residual at N = 41 is not the two codes meeting;
+  it is the imaginary part of the discrepancy passing through zero between
+  sea water (+0.37∠101°) and average soil (−0.89 − 0.75j). At σ → 0 the same
+  ε_r = 20 ground shows a 0.98 Ω discrepancy. The `vgood` row's non-monotone
+  ladder, which stage 1 handled by demanding *net* decay rather than
+  rung-by-rung descent, is that crossing.
+* Along both paths the **real part tracks the uncancelled image-charge
+  fraction** `1 − C₂ = 2/(ε̃ + 1)`: `disc.real / (1 − C₂)` is −10.3 ± 0.3
+  over ε_r ∈ [10, 30] and −9.2 ± 0.2 along the whole σ path from 0 to 3e−3.
+  **This is a good description and not a law.** It drifts ~40 % below
+  ε_r = 6, and the constant is −8.6 on the bent quarter wave and −10 to −12
+  across a 100× wire-radius range. It is quoted here because it is the
+  sharpest quantitative handle anyone has on the gap, not because it should
+  be gated.
+
+### The hypothesis the evidence now points at, stated as a hypothesis
+
+Everything measured is consistent with the gap living in **§2.2's third row
+— what continues the current into the earth at the contact node** — and
+nothing else is left standing. The charge bookkeeping is where to look, and
+it means **correcting a piece of this study's own reasoning**.
+
+§4.1 records the one structural asymmetry a grounded basis has, and dismisses
+it:
+
+> the image half carries the mirrored density with the opposite sign, so at
+> PEC the pair is charge-neutral at the contact; over a finite ground the
+> Φ-image is scaled per-pair by `w_Φ`, so the cancellation is *imperfect* —
+> and the residual, being a difference of two bounded distributions, stays
+> bounded. That is precisely why bspline converges where the direct-field
+> trunk diverged, and it is why **no compensating term is needed on this
+> trunk.**
+
+The first three clauses are right and the conclusion does not follow.
+*Bounded* explains why bspline converges where sinusoidal diverges; it says
+nothing about *what it converges to*. The grounded basis integrates to 1 at
+the node and its image to −w_Φ, so the composite carries a net contact
+charge proportional to `1 − w_Φ = 1 − C₂` that does **not** shrink under
+refinement — which is the shape of a limit difference that saturates with
+mesh, vanishes at PEC, and scales the way the measured one scales.
+
+Two things stop this being a finding rather than a hypothesis, and both were
+tested:
+
+* **A symmetry test cannot fire.** The obvious sharp check — a dropped
+  testing-side bracket `[f_m Φ_n]` would break `Z = Zᵀ` — is a null by
+  construction: both sides of the Φ term carry a basis derivative, so the
+  weak form is symmetric whatever the bracket does. Measured
+  `max|Z − Zᵀ|/max|Z|` is 7e−11 at PEC and identical on every finite ground,
+  contact and clearance alike.
+* **Forcing `w_Φ = 1` near the contact does not close the gap and is not a
+  fix.** Setting the Φ-image weight to its charge-conserving value on the
+  bottom 1/2/3/5 segments moves the poor-soil residual 3.269 → 3.318 →
+  3.375 → 3.386 → 3.315 — the wrong direction, and small. It is also not the
+  local operation it looks like: the same patch moves the *clearance* deck by
+  27–117 Ω, because `w_Φ` is the ground's charge response for those segments
+  and not a property of the junction. Whatever the right compensating term
+  is, it is not a re-weighting of the existing table.
+
+So: the contact node is where to look, a naive weight patch is not the
+answer, and nobody should start building until there is a derivation. That
+is a stage-3-sized piece of work and it is not scheduled here.
+
+### The instrument's validity condition, which cost stage 2 real time
+
+Stage 1 found one deck the difference-of-columns cannot measure (finding 4:
+the 3 m + 6 m inverted-L, antiresonant, both codes' PEC columns still
+walking). Stage 2 found three more while looking for the law behind the gap,
+and they all fail the same way:
+
+| deck | PEC column offset | what the residual did |
+|---|---|---|
+| quarter wave @ 14 MHz (the lane's) | 0.02 Ω in R, 1.26 Ω in X | clean, reproducible |
+| bent quarter wave (the lane's) | 0.056 Ω in R, 0.66 Ω in X | clean, tracks the monopole to 1 % |
+| same wire @ 21 MHz (0.375 λ) | 41 Ω in R | `K` walks 17 → 14, sign-inconsistent |
+| grounded half wave (0.5 λ) | 349 Ω in R (43 %) | `K` walks 151 → 276 |
+| grounded inverted-U | 20.8 Ω | `K` walks −25 → +11 |
+
+A difference of columns cancels a *constant* formulation offset; it cannot
+cancel two offsets that are both still moving. `test_the_pec_columns_agree_
+well_enough_to_difference` is now the lane's first test so that a third deck
+fails there rather than publishing a residual that means nothing.
+
+### What stage 2 hands to momwire#443
+
+The direct-grid probe measures what the interpolation grid is worth on a
+shipped answer, per ground, which the ε̃ → ∞ gate could not:
+
+| ground | grid's share of the residual |
+|---|---|
+| sea water | **0.13 Ω at every mesh** (N = 21/41/81: 0.5248/0.3721/0.2703 with the grid, 0.4445/0.2756/0.1611 without) |
+| very good | 0.0037 Ω |
+| average | 0.0008 Ω |
+| poor | 0.0032 Ω |
+
+That is exactly momwire#443's shape — a near-PEC error at the small R₁ only
+contact geometries query — and on sea water it is **about 40 % of stage 1's
+decay bar**. So the high-|ε̃| DECAY rows are partly gating the instrument. If
+#443 is fixed, sea water's finest rung should fall to ~0.16 Ω and that bar
+wants re-deriving; the numbers to beat are in the table above.
+
+### What stage 2 shipped
+
+* `diel` (ε_r = 2.5, σ = 1e−5) joins the lane on both geometries — the row
+  that kills candidate 3, kept as a gate rather than as a paragraph. It is
+  also the best-behaved row in the table: the **largest** residual anywhere
+  (4.341 monopole / 4.314 inverted-L at the finest rung), and **flat** —
+  4.4905 → 4.3410 from N = 11 to N = 81, a 3 % walk where average soil nearly
+  doubles down its ladder. A residual already at its limit on an 11-segment
+  mesh needs no saturation argument at all, which is why this row is gated on
+  its level *and* its flatness and the soil rows still need theirs.
+* The PEC-column conditioning guard described above.
+* `test_the_gap_is_not_the_remainder_grid` — the binary-free half of the
+  candidate-1 kill, pinning that the answer stays insensitive to the
+  remainder's quadrature order, so candidate 1 reopens loudly if that
+  changes.
+* The two probes, promoted out of scratch:
+  `scripts/probe_contact_direct_remainder.py` and
+  `scripts/probe_contact_halfspace_sweep.py`.
+
+### What is still refused after stage 2
+
+Unchanged from stage 1 — stage 2 improved understanding, not capability.
+Contact on razor (both finite grounds); contact on pulse; contact under
+refl-coef, on every trunk; mid-span touchdown; radial screens.
