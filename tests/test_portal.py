@@ -25,7 +25,7 @@ cwd=$HOME).
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
 import io
 import json
 import math
@@ -435,16 +435,34 @@ def test_en_after_an_nx_frame_echoes_and_exits_without_running():
     ]
 
 
+def _canonical_printout(text: str) -> str:
+    """The capture script's timing canonicaliser, for equality claims between
+    two independent runs: the wall-clock numbers are the only
+    non-deterministic printout fields, and raw byte equality flakes exactly
+    (and only) under a loaded full-suite xdist run — the momwire#403 lesson
+    ``test_portal_shared.same_printout`` already encodes."""
+    path = Path(__file__).resolve().parent.parent / "scripts" / "nec_portal_capture.py"
+    spec = importlib.util.spec_from_file_location("nec_portal_capture", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.canonicalize_timings(text)
+
+
 def test_unterminated_body_at_eof_solves_as_if_it_ended_with_en():
     """#458: end of input is a terminator. NEC's own card reader synthesizes
     an EN when stdin runs out mid-deck and runs what it has (seen live in the
     #413 4nec2 capture, on a bundled model ending at its NE card), so the same
-    deck with and without its EN must produce the same printout. The earlier
+    deck with and without its EN must produce the same printout — timings
+    canonicalized, since the two solves run seconds apart. The earlier
     discard was invisible to every captured host — they read only the
     printout — and arrived as an empty answer blamed on the engine."""
     rc, out, err = _run_main([], deck=_EN_DIPOLE)
     rc_en, out_en, err_en = _run_main([], deck=_EN_DIPOLE + "EN\n")
-    assert (rc, out, err) == (rc_en, out_en, err_en)
+    assert (rc, _canonical_printout(out), err) == (
+        rc_en,
+        _canonical_printout(out_en),
+        err_en,
+    )
     assert rc == 0
     assert err == ""
     assert out.count("ANTENNA INPUT PARAMETERS") == 1
