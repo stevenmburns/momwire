@@ -330,6 +330,17 @@ ETA0 = 376.730_313_668
 # -999.99 and blank) and confirmed against ``dipole_rp_crossed_quadrature.out``
 # (E_theta = 2.7098E-15 -> VERTC -999.99 but SENSE still LINEAR, because
 # E_phi is large). Grammar doc §4.14.
+#
+# ``_FIELD_FLOOR2`` has a third consumer since momwire#403, and it is a
+# deliberate DEPARTURE from nec2c: a field component under the floor is
+# zeroed before its magnitude/phase columns print, where the oracle prints
+# its own rounding dust raw. The dust's digits are the angle of zero — they
+# move with process history at the ULP level, which is nondeterminism in a
+# printout two of which are asserted byte-identical. Nothing downstream can
+# read anything out of 1e-21 volts but noise, and the differential lane
+# never compares E columns against the oracle (only gains, with the -999.99
+# floor rows skipped), so the departure is invisible everywhere except in
+# the printout becoming deterministic.
 _FIELD_FLOOR2 = 1.0e-20
 _GAIN_FLOOR2 = 1.0e-20
 _GAIN_FLOOR_DB = -999.99
@@ -2612,9 +2623,21 @@ def _pattern_lines(
             f"{math.degrees(math.atan2(prop.imag, prop.real)):8.2f} DEGREES",
         ]
     out += ["", *_PATTERN_TABLE_HEADER]
+    raw2 = floor_scale * floor_scale
     for j in range(n_phi):
         for i in range(n_theta):
             et, ep = complex(e_theta[i, j]), complex(e_phi[i, j])
+            # A component under NEC's own field floor is the fill's rounding
+            # dust (a linear dipole's cross-pol lands ~16 orders under the
+            # co-pol), and printing it would print the MAGNITUDE AND ANGLE OF
+            # ZERO — digits that move with process history (heap layout
+            # steers vectorized-math lane splits at the ULP level) and
+            # reddened the served==stock exactness gates under xdist load
+            # (momwire#403). Zero it before anything derived from it prints.
+            if (et.real * et.real + et.imag * et.imag) * raw2 <= _FIELD_FLOOR2:
+                et = 0j
+            if (ep.real * ep.real + ep.imag * ep.imag) * raw2 <= _FIELD_FLOOR2:
+                ep = 0j
             axial, tilt, sense = _polarisation(et, ep, floor_scale)
             out.append(
                 fmt_pattern_row(
