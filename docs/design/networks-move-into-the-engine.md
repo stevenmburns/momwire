@@ -91,37 +91,54 @@ Compatibility: `antennaknobs.network` / `antennaknobs.network_reduce` become
 re-export shims for one release so the ~40 design files and 52 test files
 don't churn in the move PR.
 
-## Pre-move chores (before the boundary hardens)
+## Pre-move prerequisites, and what is deliberately deferred
 
-1. **The label-string contract.** `schematic.py` pattern-matches the
-   reducer's power-budget label strings ("TL rig→feed", …) — a documented
-   drift hazard *inside one repo*, an undeclared cross-repo contract after
-   the move. Replace with a structured probe identity (branch kind +
-   terminals as data, label rendered app-side) **first**.
-2. **Split `network.py`.** The ~148 geometry lines out of the circuit
-   module; mechanical but wide-blast-radius (engine/builder/web/designs all
-   import from it).
-3. **Touchstone protocol** as above.
-4. Consolidate the `C_LIGHT` duplicates onto the momwire-side constant at
-   move time (four owners today).
+antennaknobs stays as untouched as the move allows (maintainer direction,
+2026-08-19): after it, `antennaknobs.network` / `antennaknobs.network_reduce`
+are re-export shims over `momwire.networks`, so every existing consumer keeps
+its imports. Exactly two antennaknobs changes are prerequisites — the move
+cannot compile without them:
+
+1. **Split `network.py`.** The ~148 geometry lines (wire/cable catalogs,
+   `as_wire`, …) stay behind; the circuit half moves. Invisible to consumers
+   behind the shim.
+2. **Touchstone protocol.** `TouchstoneLoad.data` / `TouchstoneTwoPort.data`
+   retyped to a ~10-line `y_at(f_hz)`/`nports` protocol, because momwire
+   cannot import antennaknobs' Touchstone parser without inverting the
+   dependency. The parser stays put.
+
+Deferred, with a tracking issue rather than a phase: **the label-string
+contract** (`schematic.py` pattern-matches the reducer's power-budget label
+strings). The strings move as-is and keep working; the accepted risk is that
+future label edits become cross-repo coordination, so the labels are frozen
+until the structured-probe replacement happens. `C_LIGHT` consolidation rides
+the move commit (four owners today).
 
 ## The dialect: parse per-reader, semantics once
 
 The split the geometry code already uses ("shared, not merely equivalent"):
 
-* **Parsing stays per-dialect.** The importer keeps its permissive full
-  grammar and skip-lists; the portal's nec2 dialect gets strict `TL`/`NT`
-  sections written into `deck-grammar-nec2.md` first, tests citing anchors.
+* **Parsing stays per-dialect, and nothing preparses for anything.** The
+  portal's strict dialect keeps refusing `SY` (and units, gauges, `'`
+  comments) because those never reach an engine: 4nec2 resolves them before
+  the process boundary, and EZNEC/SimNEC never emit them. Hand-authored
+  permissive decks remain the antennaknobs importer's domain — its full
+  grammar, `SY` evaluation and skip-lists are untouched by every phase here.
+  The portal's nec2 dialect gets strict `TL`/`NT` sections written into
+  `deck-grammar-nec2.md` first, tests citing anchors.
 * **Card semantics live once, in momwire**: crossed lines via negative Z₀
   (normalised to a `transposed` polarity flag, *not* a negated Z₀),
   zero-length auto-distance from segment midpoints, the three shunt-stub
   forms, `NT` Y-triples vs the exact resistive-π reduction, signed
   addressing. Ported from `nec_import.py`'s translation layer
   (`_translate_network_cards`, `_end_shunt`), which is wild-corpus
-  validated; antennaknobs' `NecDeck.network()` then delegates its card→
-  branch mapping down so the two readers cannot drift on exactly the cards
-  where a subtle divergence costs the most (the W7EL triple's config C is a
-  70 % error from one canonicalization mistake).
+  validated. Because momwire's copy is ported from the importer's, the two
+  start identical; whether `NecDeck.network()` later delegates its card→
+  branch mapping down (phase D) is **optional** — maintainer direction
+  2026-08-19 accepts the importer keeping its own translation, with drift
+  guarded by the PyNEC oracles and both suites' fixtures. Revisit only if a
+  divergence ever surfaces (the class of risk to watch: the W7EL triple's config C
+  is a 70 % error from one canonicalization mistake).
 * The abstraction gap named by the inventory — momwire's deck pipeline
   speaks `PortPlan`, the core speaks a named-port `Network` — is closed on
   the deck side: `deck/_solver` builds `port_to_idx` from the deck's union
@@ -172,9 +189,10 @@ strength:
 Each phase is one stacked arc; no phase starts before the prior's gates are
 green. No release is scheduled until there is a consumer for one.
 
-* **Phase A — prep (antennaknobs):** label-string contract → structured
-  probes; `network.py` split; Touchstone protocol. Gates: full antennaknobs
-  suite, schematic tests, zero behavior change.
+* **Phase A — prep (antennaknobs, minimal):** the two prerequisites only —
+  `network.py` split behind shims; Touchstone protocol. The label-string
+  hardening is deferred to a tracking issue. Gates: full antennaknobs suite,
+  schematic tests, zero behavior change.
 * **Phase B — the move:** `momwire.networks` lands with the core + its
   portable tests (the synthetic-Y oracle battery); antennaknobs rewires via
   shims; the PyNEC oracles stay behind and must stay green. Gates: both
@@ -184,9 +202,10 @@ green. No release is scheduled until there is a consumer for one.
   reducer composition + printout blocks; the byte-differential gates above;
   the #157 and symmetry decisions taken and implemented or explicitly
   refused-by-name.
-* **Phase D — consumers converge:** `NecDeck.network()` delegates card
-  semantics to momwire; the census ladder re-measured; #456 checklist
-  updated.
+* **Phase D — optional convergence:** `NecDeck.network()` delegating its
+  card semantics to momwire is deliberately NOT scheduled (maintainer
+  direction 2026-08-19); the census ladder is re-measured and the #456
+  checklist updated at the end of phase C instead.
 
 ## Non-goals
 
