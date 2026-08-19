@@ -1593,7 +1593,7 @@ BELOW the Δ/a ≈ 2 floor the study itself establishes in §2.4. Redone inside
 the valid domain (rungs 140/200), the reference's limit is
 `89.326 + 44.114j`, 0.57 Ω away, and every row's published gap moves with
 it: `bs1-ek` 1.189 → **0.405 Ω**, `bs1` 6.881 → 1.708, `razor` reduced
-4.863 → 1.388. The study's D4 recommendation ("gate to 200, record to 400")
+4.863 → 1.400. The study's D4 recommendation ("gate to 200, record to 400")
 should extend to the LIMITS it publishes and not only to the gates; the
 ranking is unchanged, the magnitudes are not.
 On Ward's actual 10-step taper the same lane holds the bar in dR (0.020) and
