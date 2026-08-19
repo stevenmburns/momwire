@@ -1,0 +1,33 @@
+CM 1MHz_tower's LD set exactly as the corpus deck writes it (momwire#415):
+CM one card per leg, tags 3, 6, 9 and 12, under a live GR cell.  Tags 6, 9
+CM and 12 are OUTSIDE the cell, so NEC drops all three in silence -- and then
+CM replicates tag 3's load onto them anyway, which is why the oracle's answer
+CM for this deck is 1MHz_tower.deck's to every printed digit.  momwire
+CM refuses it by name instead: a card discarded without a diagnostic is a
+CM defect worth naming, and the deck's author cannot tell from the printout
+CM which of the two rules produced the number.
+CE
+GW 1 1 1.249 0. 1.249 0. 1.249 1.249 5.E-2
+GW 1 1 1.249 0. 0. 0. 1.249 1.249 5.E-2
+GM 0 8 0. 0. 0. 0. 0. 1.249 0.
+GW 1 6 1.249 0. 0. 1.249 0. 11.24 5.E-2
+GM 0 0 0. 0. 0. 0. 0. 1.249 0.
+GW 2 4 8.925 -1.836 12.49 1.249 0. 12.49 5.E-2
+GW 2 4 8.925 1.836 12.49 1.249 0. 12.49 5.E-2
+GW 2 4 7.395 -4.953 12.49 1.249 0. 12.49 5.E-2
+GW 2 4 7.395 4.953 12.49 1.249 0. 12.49 5.E-2
+GW 2 1 1.249 0. 1.249 0. 1.249 1.249 5.E-2
+GW 3 1 1.249 0. 0. 1.249 0. 1.249 5.E-2
+GS 0 0 1.25
+GR 3 4
+GE 1
+GN 1
+EK
+EX 0 3 1 0 1. 0.
+LD 0 3 1 1 0. 8.5E-5 0.
+LD 0 6 1 1 0. 8.5E-5 0.
+LD 0 9 1 1 0. 8.5E-5 0.
+LD 0 12 1 1 0. 8.5E-5 0.
+FR 0 1 0 0 1. 0
+XQ
+NX

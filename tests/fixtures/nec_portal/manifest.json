@@ -129,10 +129,24 @@
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     },
     {
+      "name": "dipole_gr_rotated_ring",
+      "returncode": 253,
+      "deck_sha256": "cf2cdd87c0af886f1a94b17cb228e9c0330300a65fbae84ed93b81961a9a5843",
+      "out_sha256": "08095ff6d11b902aa9328e62f22f42087c73e149f874484e65cc1360f57b7705",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
       "name": "dipole_gs_scaled",
       "returncode": 253,
       "deck_sha256": "73294306e3002fc7a6e4a509c85ba3193bf72f91fd95f7d42284229cdf5ee5ab",
       "out_sha256": "90d052945750e2e6e9ef1cb6fc369a09c17ca985af26a4d8bd6ceccbf161d0fb",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "dipole_gx_reflected_pair",
+      "returncode": 253,
+      "deck_sha256": "21d199dd68c437158258e89a5036ae7aa561cd64230b4a249c66ba12e19b7bf1",
+      "out_sha256": "7a5e7c20271af94f2a7d4ac759bb9a61855b1a0cd343c55de771e0aa2a6efbe3",
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     },
     {

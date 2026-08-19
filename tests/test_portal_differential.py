@@ -43,7 +43,9 @@ dipole_fr_sweep                       1.29%   1.29%       -   0.96%      -
 dipole_free_space                     0.76%   0.76%       -   0.96%      -
 dipole_gd_cliff_sommerfeld            2.24%   2.23%       -   4.35%      -   (f)
 dipole_gm_translated_pair             1.10%   1.10%       -   1.13%      -
+dipole_gr_rotated_ring                1.96%   1.96%       -   1.10%      -   (j)
 dipole_gs_scaled                      0.76%   0.76%       -   0.96%      -
+dipole_gx_reflected_pair              2.15%   2.15%       -   0.73%      -   (j)
 dipole_load_ld0                       1.79%   1.79%       -   1.95%      -
 dipole_load_ld4                       1.64%   1.64%       -   1.62%      -
 dipole_load_ld5_conductivity          0.76%   0.76%       -   0.97%      -
@@ -166,6 +168,19 @@ fails.
     this corpus at all (no committed deck is fat enough); it is measured
     against the oracle in ``test_nec_portal.py``'s fat-wire pair, where
     ``Δ/a = 2.27`` and both engines move ~8 %.
+
+(j) are the two geometry-replication fixtures of momwire#415, captured
+    2026-08-19 when the dialect learned ``GX`` and ``GR``. Both are ordinary
+    rows — three and five parallel elements, no ground, no loading — and both
+    are deliberately framed with a ``GW`` AFTER the replication card, which
+    retires the symmetric cell. With the symmetry still live at ``GE`` the
+    oracle would fill and factor on one cell and print a cell count this
+    engine has no equivalent of, and the printout would stop being comparable
+    row for row; that is a different fixture and a different question. This
+    pair measures what the corpus mostly needs — the EXPANSION, which is 30 of
+    its 36 ``GX``/``GR`` decks. Their numbers agree; their STRUCTURE
+    SPECIFICATION bytes do not yet, which is ``test_portal.py``'s
+    ``STRUCTURE_SPEC_GAP``.
 """
 
 from __future__ import annotations
@@ -439,9 +454,10 @@ def test_supported_fixtures_run_clean(name):
 def test_the_support_matrix_covers_the_whole_corpus():
     assert set(SUPPORTED) | set(REFUSED) == set(NAMES)
     # 41 at the rewire (#930), plus the `dipole_gn_rearm` probe it landed
-    # with, minus `dipole_gd_second_medium` (#458). The count is written out
-    # so a deck that quietly stops being measured shows up here.
-    assert len(SUPPORTED) == 41
+    # with, minus `dipole_gd_second_medium` (#458), plus the two `GX`/`GR`
+    # fixtures of momwire#415. The count is written out so a deck that quietly
+    # stops being measured shows up here.
+    assert len(SUPPORTED) == 43
 
 
 @pytest.mark.parametrize(("marker", "deck"), sorted(UNSUPPORTED.items()))
