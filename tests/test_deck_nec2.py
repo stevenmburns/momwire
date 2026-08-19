@@ -434,6 +434,97 @@ def test_adding_or_selectively_transforming_destroys_the_symmetry(card):
 
 
 # ---------------------------------------------------------------------------
+# #gr--cylindrical-structure-rotation
+# ---------------------------------------------------------------------------
+
+
+def test_the_issues_flat_layout_example():
+    """§#gr--cylindrical-structure-rotation: momwire#415's own worked
+    example — one cell and three copies, laid out flat and contiguous, each
+    copy's tag one more than the last."""
+    built = geometry("GW 1 5 0. 0. 0. 1. 0. 0. 1.E-3\nGR 1 4\nGE 0\n")
+    assert [w.tag for w in built.wires] == [1, 2, 3, 4]
+    assert [w.n_seg for w in built.wires] == [5, 5, 5, 5]
+    assert built.n_segments == 20
+    # segments 1-5 the cell, 6-10 / 11-15 / 16-20 the three copies in order.
+    assert built.locate(1, 5) == (0, 5)
+    assert built.locate(2, 1) == (1, 1)
+    assert built.locate(3, 1) == (2, 1)
+    assert built.locate(4, 5) == (3, 5)
+
+
+def test_gr_rotates_each_copy_from_the_previous_ones_coordinates():
+    """§#gr--cylindrical-structure-rotation: each copy is built by rotating
+    the PREVIOUS copy about Z, not the original structure, so the rotations
+    compound around the cylinder — a 90-degree step run four times returns
+    to the start."""
+    built = geometry("GW 1 5 0. 0. 0. 1. 0. 0. 1.E-3\nGR 1 4\nGE 0\n")
+    assert built.wires[0].p2 == pytest.approx([1.0, 0.0, 0.0], abs=1e-9)
+    assert built.wires[1].p2 == pytest.approx([0.0, 1.0, 0.0], abs=1e-9)
+    assert built.wires[2].p2 == pytest.approx([-1.0, 0.0, 0.0], abs=1e-9)
+    assert built.wires[3].p2 == pytest.approx([0.0, -1.0, 0.0], abs=1e-9)
+
+
+def test_gr_keeps_tag_zero_at_zero():
+    """§#gr--cylindrical-structure-rotation: a wire tagged 0 is tagged 0 in
+    every copy, exactly as under ``GX``/``GM``."""
+    built = geometry(
+        "GW 0 2 1. 0. 0. 2. 0. 0. 1.E-3\nGW 7 2 1. 1. 0. 2. 1. 0. 1.E-3\nGR 5 3\nGE 0\n"
+    )
+    assert [w.tag for w in built.wires] == [0, 7, 0, 12, 0, 17]
+
+
+def test_gr_0_shares_the_original_tag_across_all_copies():
+    """§#gr--cylindrical-structure-rotation: ``I1 = 0`` is legal and
+    common — every copy then carries the ORIGINAL tag, and a tag-addressed
+    card resolves across all of them, in structure order."""
+    built = geometry("GW 1 5 0. 0. 0. 1. 0. 0. 1.E-3\nGR 0 4\nGE 0\n")
+    assert [w.tag for w in built.wires] == [1, 1, 1, 1]
+    assert built.n_segments == 20
+    assert built.locate(1, 6) == (1, 1)
+    assert built.locate(1, 20) == (3, 5)
+
+
+@pytest.mark.parametrize("nop", [0, -1, -4])
+def test_gr_refuses_a_nonpositive_structure_count(nop):
+    """§#gr--cylindrical-structure-rotation: ``nop < 1`` is a geometry
+    error, not a silent no-op."""
+    with pytest.raises(DeckError) as exc:
+        geometry(f"GW 1 2 0. 0. 0. 1. 0. 0. 1.E-3\nGR 1 {nop}\nGE 0\n")
+    assert str(exc.value) == f"structure count must be >= 1, got {nop}"
+
+
+def test_gr_declares_a_symmetric_cell_of_the_structure_so_far():
+    """§#gr--cylindrical-structure-rotation: the cell is the structure as it
+    stood when the card fired — the same rule ``GX`` follows."""
+    built = geometry("GW 1 5 1. 0. 0. 2. 0. 0. 1.E-3\nGR 1 4\nGE 0\n")
+    assert built.symmetry == Symmetry(cell_wires=1, cell_segments=5)
+    assert built.n_segments == 20
+
+
+def test_a_degenerate_gr_of_one_structure_still_declares_symmetry():
+    """§#gr--cylindrical-structure-rotation: nec2c sends ``GR`` through the
+    same routine as ``GX`` and sets the symmetry flag before it ever looks
+    at ``nop``, so ``nop = 1`` — no copies at all — still declares a cell,
+    equal to the (unchanged) whole structure. This is a deliberate reading,
+    not a fall-through: unlike ``GX n 0``, there is no ``GR`` spelling that
+    retires symmetry."""
+    built = geometry("GW 1 5 1. 0. 0. 2. 0. 0. 1.E-3\nGR 3 1\nGE 0\n")
+    assert len(built.wires) == 1
+    assert built.symmetry == Symmetry(cell_wires=1, cell_segments=5)
+
+
+def test_a_gr_then_gx_resets_the_cell_to_the_whole_prior_structure():
+    """§#gr--cylindrical-structure-rotation + §#gx--structure-reflection:
+    two separate symmetry-creating cards do not nest — the later one resets
+    the cell to the whole prior structure. momwire#415's own worked
+    example: ``GR 1 4`` then ``GX 4 1`` gives cell 20 / total 40."""
+    built = geometry("GW 1 5 1. 0. 0. 1. 0. 1. 1.E-3\nGR 1 4\nGX 4 1\nGE 0\n")
+    assert built.symmetry == Symmetry(cell_wires=4, cell_segments=20)
+    assert built.n_segments == 40
+
+
+# ---------------------------------------------------------------------------
 # #gs--scale
 # ---------------------------------------------------------------------------
 
@@ -1358,7 +1449,7 @@ def test_ld_refuses_a_second_load_on_the_same_segment():
 
 _K9AY_DECK = K9AY + "GE 0\nEX 0 4 1 0 1. 0.\nFR 0 1 0 0 14.\n{ld}XQ\nNX\n"
 _CELL_LOAD_REFUSAL = (
-    "LD while a GX symmetric cell is in force is not supported by this "
+    "LD while a GX/GR symmetric cell is in force is not supported by this "
     "engine yet (momwire#415): NEC applies a load addressed inside the cell "
     "to every copy of it and silently drops one addressed outside it, and "
     "that rule is not implemented here"
@@ -1409,6 +1500,36 @@ def test_a_live_symmetry_with_no_ld_serves_in_full():
     model = parse(_K9AY_DECK.format(ld=""))
     assert len(model.wires) == 4
     assert sum(w.edge_elements[0] for w in model.wires) == 26
+
+
+_GR_LIVE_DECK = (
+    "GW 1 5 1. 0. 0. 2. 0. 0. .001\nGR 1 4\nGE 0\n"
+    "EX 0 1 3 0 1. 0.\nFR 0 1 0 0 14.\n{ld}XQ\nNX\n"
+)
+
+
+def test_ld_under_a_live_gr_symmetry_is_refused():
+    """§#gr--cylindrical-structure-rotation: the guard from
+    ``#gx--structure-reflection`` keys off ``structure.symmetry`` alone, so
+    a ``GR``-declared cell trips it exactly as a ``GX``-declared one does —
+    same message, both cards named."""
+    with pytest.raises(DeckError) as exc:
+        parse(_GR_LIVE_DECK.format(ld="LD 4 2 3 3 50. 0.\n"))
+    assert str(exc.value) == _CELL_LOAD_REFUSAL
+
+
+def test_a_deck_whose_gr_symmetry_is_dead_at_ge_serves_its_ld():
+    """§#gr--cylindrical-structure-rotation: a feed wire or mast added
+    after ``GR`` collapses the symmetry, same as it does after ``GX``, and
+    ordinary per-tag addressing comes back."""
+    model = parse(
+        "GW 1 5 1. 0. 0. 2. 0. 0. .001\nGR 1 4\n"
+        "GW 9 1 0. 0. 0. 0. 0. 1. .001\n"
+        "GE 0\nEX 0 1 3 0 1. 0.\nFR 0 1 0 0 14.\n"
+        "LD 4 1 3 3 50. 0.\nXQ\nNX\n"
+    )
+    assert len(model.loads) == 1
+    assert model.loads[0][2] == LoadSpec("fixed", r=50.0, x=0.0)
 
 
 def test_ld5_whole_structure_form():
@@ -1577,7 +1698,7 @@ def test_the_refusal_table_is_the_pages_table():
     """§#cards-refused-by-name, as a set: nothing in this dialect is accepted
     and silently ignored."""
     assert set(_REFUSED_BY_NAME) == {
-        "TL", "NT", "GA", "GH", "GR", "GC", "GF", "SY",
+        "TL", "NT", "GA", "GH", "GC", "GF", "SY",
         "SP", "SM", "SC", "KH", "CP", "PL", "WG", "ZO",
     }  # fmt: skip
 

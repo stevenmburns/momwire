@@ -78,7 +78,7 @@ Scope (units 2 and 3 — the whole portal dialect bar the long tail):
   near electric/magnetic fields.
 
 Refused by name, with the grammar's own message: ``TL``/``NT`` (networks),
-``GA``/``GH``/``GX``/``GR``/``GC``/``GF`` (geometry out of dialect),
+``GA``/``GH``/``GC``/``GF`` (geometry out of dialect),
 ``SY``, ``SP``/``SM`` (surface patches), ``RP`` modes 1 and 4-6, spherical
 ``NE``/``NH`` grids, ``GN`` radial-wire ground screens, ``EX`` types other
 than 0, ``LD`` types 2/3/6/7 and the ranges that cannot expand, and the four
@@ -586,19 +586,19 @@ _DECK_REFUSALS = (PortalError, DeckError)
 #
 # Card TOKENIZATION and every dialect refusal now belong to ``momwire.deck``
 # (#846 phase II): ``parse_card`` above is momwire's, and the refusal table —
-# ``TL``/``NT`` by name, ``GA``/``GH``/``GX``/``GR``, ``SP``/``SM``, the ``EX``
-# type gate, the ``RP`` mode gate, ``GN``'s radial screens, the ``LD`` types
-# and ranges, ``IS``'s four cases — is the normative grammar's, published at
+# ``TL``/``NT`` by name, ``GA``/``GH``, ``SP``/``SM``, the ``EX`` type gate,
+# the ``RP`` mode gate, ``GN``'s radial screens, the ``LD`` types and ranges,
+# ``IS``'s four cases — is the normative grammar's, published at
 # momwire.dev/reference/deck-grammar-nec2. This module frames those messages;
 # it no longer writes them.
 
 # Cards echoed inside STRUCTURE SPECIFICATION rather than as DATA CARD lines.
-# The dialect's geometry is GW with GM / GS / GX transforms and the GE
-# terminator; GA/GH/GR are refused by name upstream, so nothing else reaches
-# here. GX joined when momwire#415 served it — a geometry card echoing as a
-# DATA CARD line would diverge from nec2c's printout, which the #415
-# differential fixtures pin.
-_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GE"})
+# The dialect's geometry is GW with GM / GS / GX / GR transforms and the GE
+# terminator; GA/GH are refused by name upstream, so nothing else reaches
+# here. GX and GR joined when momwire#415 served them — a geometry card
+# echoing as a DATA CARD line would diverge from nec2c's printout, which the
+# #415 differential fixtures pin.
+_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GR", "GE"})
 
 # Cards that RUN the pending excitation group. ``RP``/``NE``/``NH`` are not
 # just report requests: nec2c executes on reading them and then prints their
