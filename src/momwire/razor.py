@@ -222,7 +222,7 @@ radius step against a 0.20 Ω twin-lane bar, so the licensed binary cannot
 separate them. `_seg_moments_prepare` records the numbers and the reason
 the source reading is taken.
 
-The extended kernel (momwire#436)
+The extended kernel (momwire#398 D1)
 --------------------------------
 `extended_kernel=True` swaps the reduced kernel for NEC's EXTENDED (tubular)
 one on the pairs that are eligible for it. The default is False and the
@@ -504,7 +504,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Under `extended_kernel` the same number is also the EK radius, since
         eligibility requires the pair's two radii to be equal.
     extended_kernel: use NEC's EXTENDED (tubular) kernel on the eligible
-        pairs instead of the reduced one (momwire#436). False — the default —
+        pairs instead of the reduced one (momwire#398 D1). False — the default —
         is the reduced kernel and is bit-for-bit what this class always
         computed. True is the row the taper study's kernel identification
         calls for on fat wire: the NEC-5 binary is extended-kernel
@@ -622,7 +622,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         neither reads the other. All four combinations are served; the
         fat-wire twin is both of them on at once, which is the two
         independent NEC-5 identifications (momwire#316's quadrature idiom and
-        momwire#436's kernel) applied together.
+        momwire#398 D1's kernel) applied together.
     n_qp_source: Gauss-Legendre order per source segment for the smooth
         remainder (exp(−jkR)−1)/(4πR); the static 1/(4πR) part is analytic.
     n_qp_sommerfeld: Gauss-Legendre order per source segment for the
@@ -650,7 +650,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # kwargs, and lumped loads at knots, which the siblings serve as
     # deck-level port algebra instead), plus PER-WIRE RADII (momwire#147,
     # gated against the binary's own mixed-radius `GW` decks), plus the
-    # EXTENDED KERNEL (momwire#436 — the taper study identified the
+    # EXTENDED KERNEL (momwire#398 D1 — the taper study identified the
     # reference as extended-kernel everywhere, so the twin needs it on fat
     # wire; module docstring, "The extended kernel"). No junction_ports /
     # node_gaps / enrichment: the rest of the row is refused, reusing
@@ -795,7 +795,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._radius_per_wire, self._uniform_radius = _wire_spec.normalize_wire_radius(
             wire_radius, n_w
         )
-        # The extended kernel (momwire#436). Off is the default and is
+        # The extended kernel (momwire#398 D1). Off is the default and is
         # structurally absent, not skipped: `_ek_labels` is never called, no
         # EK spec is built, and `_seg_moments_prepare` takes `ek=None` — the
         # EK-off answer is bit-for-bit the answer this class gave before the
@@ -1441,7 +1441,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         immaterial for THIS formulation rather than as wrong. See
         `docs/design/solver-architecture.md` §6.9.
 
-        `ek` is the `_EK` spec of the extended kernel (momwire#436) or None,
+        `ek` is the `_EK` spec of the extended kernel (momwire#398 D1) or None,
         which is the default and the reduced kernel. Its `group_i` labels
         THIS call's observers and its `group_j` labels `geom`'s source
         segments; `_ek_pair_mask` turns them into the (observer, segment)
@@ -1510,7 +1510,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `chunks`. Returns the same ``(M0, M1)`` shape ``(n_obs, n_seg)``
         that :meth:`_seg_moments` did.
 
-        Under the extended kernel (momwire#436) the eligible pairs' remainder
+        Under the extended kernel (momwire#398 D1) the eligible pairs' remainder
         is the same object with NEC Eq 89's coaxial factor in it,
 
             [ (e^{−jkR} − 1)·fac + extra ] / (4πR)
@@ -2031,7 +2031,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # (`_EK(a=None, ...)`).
         a_src = self._kernel_radius(geom)
 
-        # The extended kernel's eligibility labels (momwire#436), or None
+        # The extended kernel's eligibility labels (momwire#398 D1), or None
         # when it is off — in which case nothing below builds a spec and no
         # EK code is entered at all. `src_lab` labels the REAL source
         # segments and `img_lab` the mirrored ones; the observers are real in

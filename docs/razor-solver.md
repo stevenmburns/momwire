@@ -223,7 +223,7 @@ deliberate, not initial-version:
   the coefficient is C₂ rather than the Fresnel pair, and the argument is
   unchanged: no weighting of the image block repairs a wrong basis
   function.
-- **The extended kernel is served** (momwire#436) — `extended_kernel=True`,
+- **The extended kernel is served** (momwire#398 D1) — `extended_kernel=True`,
   the house kwarg. It used to be refused, on the claim that "NEC-5's
   formulation is the comparison target, and its expansion is tested on the
   wire axis"; the 2026-08-18 kernel identification showed that claim was
@@ -240,7 +240,7 @@ and either finite ground on a deck that touches the plane, at construction
 with a message explaining why, rather than silently mismodelling — a wrong
 answer here is worse than no answer.
 
-## The extended kernel (momwire#436)
+## The extended kernel (momwire#398 D1)
 
 `extended_kernel=True` swaps NEC's EXTENDED (tubular) kernel in for the
 reduced one on the eligible pairs. The default is `False`, and an EK-off
