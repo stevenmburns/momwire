@@ -366,6 +366,31 @@ _JUNCTION_PORTS_MIXED_RADII_REFUSAL = (
     "regularization radius is ambiguous at a node whose members disagree "
     "about `a`. Use one radius, or BSplineSolver"
 )
+# momwire#398 (taper-readiness study) D2: extended_kernel=True on a wire
+# STEPPED at a junction — two members with different radii meeting at one
+# node — is refused rather than fixed. Reused by __init__'s raise below and
+# by `capabilities.refusals`, same one-message-per-combination idiom as the
+# two above and as BSplineSolver's `_ENRICHMENT_*_REFUSAL` trio (#396).
+_EK_STEPPED_RADIUS_JUNCTION_REFUSAL = (
+    "extended_kernel=True with a radius step at a junction is not "
+    "implemented on SinusoidalGalerkinSolver: measured DIVERGENT, not "
+    "merely inaccurate. On momwire#435's two-wire step deck (10:1 radius "
+    "step at the midspan junction, 10.19 m dipole @ 14.2 MHz) the "
+    "extrapolated continuum limit is 7.110 - 483.925j against NEC-5's "
+    "132.560 - 11.921j, with the residual GROWING every rung refined "
+    "(23.2 Ohm -> 285.8 Ohm) and a 286 Ohm dX spread down the ladder — "
+    "materially worse than the reduced `sg` row's ~20 Ohm walk-away #435 "
+    "already documents (that is a formulation gap; this is a divergence). "
+    "The mechanism is under the mixed end-condition constants the extended "
+    "delta's end bracket takes at a stepped node — the same node kind "
+    "momwire#299 gates for the UNIFORM-radius case, not yet derived here "
+    "for a step. Use `extended_kernel=False` (the reduced `sg` row, "
+    "correctly documented as NEC-2-identified rather than NEC-5-accurate "
+    "on any radius step), or `BSplineSolver(extended_kernel=True)` / "
+    "`SinusoidalSolver(extended_kernel=True)`, both of which are served on "
+    "a step (taper-readiness study Sec 2-3, maintainer decision D2, "
+    "stevenmburns/momwire#398)"
+)
 # The EXTENDED-kernel twin of that fused far fill (momwire#246 unit C). On a
 # build without it — a pure-Python install, or one whose extension predates
 # #246 — this is False and `_tested_contribs` routes an EK-on fill through the
@@ -829,9 +854,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
     # momwire#396: differs from `SinusoidalSolver.capabilities` in exactly
     # the two axes this class's docstring describes — junction_ports and
-    # node_gaps are served here (M5b / #305) — plus the two combination
-    # refusals `_refuse_junction_port_solve` still carries. Wire loading
-    # rides the base class's overlap term (#395) unchanged.
+    # node_gaps are served here (M5b / #305) — plus the three combination
+    # refusals __init__'s raises still carry. Wire loading rides the base
+    # class's overlap term (#395) unchanged. `extended_kernel+
+    # stepped_radius_junction` is momwire#398 D2 (taper-readiness study):
+    # unlike the two junction_ports combos above, this one is a measured
+    # DIVERGENCE, not an unimplemented feature — see
+    # `_EK_STEPPED_RADIUS_JUNCTION_REFUSAL`.
     #
     # `refusals` REPLACES rather than extends, so the base's entries have to
     # be carried across by hand: the contact/refl-coef withdrawal
@@ -849,6 +878,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "contact+refl-coef": SinusoidalSolver.capabilities.refusals[
                 "contact+refl-coef"
             ],
+            "extended_kernel+stepped_radius_junction": (
+                _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
+            ),
         },
     )
 
@@ -892,6 +924,21 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 "self and node-sharing pairs on the far tier's rule "
                 "(momwire#246)"
             )
+        if self.extended_kernel and self.junctions:
+            # momwire#398 D2: a radius step AT a junction under EK is refused
+            # at construction, not left to diverge at solve time — see
+            # `_EK_STEPPED_RADIUS_JUNCTION_REFUSAL` for the measurement.
+            # Uniform-radius junctions (every member sharing one `a`, the
+            # overwhelmingly common case) are untouched by this check: the
+            # comparison is exact float equality because `self._radius_per_wire`
+            # only ever disagrees across wires when the caller asked it to
+            # (`wire_radius` given as a per-wire sequence), never from any
+            # solver-side rounding.
+            radii = self._radius_per_wire
+            for jw in self.junctions:
+                member_radii = {radii[w] for w, _end in jw}
+                if len(member_radii) > 1:
+                    raise NotImplementedError(_EK_STEPPED_RADIUS_JUNCTION_REFUSAL)
         if feed_readout not in ("centre", "variational"):
             raise ValueError(
                 f"feed_readout must be 'centre' or 'variational', got {feed_readout!r}"
