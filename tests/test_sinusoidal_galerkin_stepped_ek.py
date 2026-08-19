@@ -102,16 +102,24 @@ def test_ek_on_uniform_radius_junction_is_not_refused():
     SinusoidalGalerkinSolver(extended_kernel=True, **kw)  # does not raise
 
 
-def test_ek_on_uniform_radius_answer_is_bit_identical_to_the_pre_unit_value():
+def test_ek_on_uniform_radius_answer_is_unchanged_from_the_pre_unit_value():
     """Pinned once against this exact solve, before momwire#398 unit 1's
     `__init__` check landed — the check is a pure early-return gate with no
-    other code path touched, so a uniform-radius solve must be untouched to
-    the bit.
+    other code path touched, so a uniform-radius solve must be unchanged.
+
+    This is a NO-CODE-PATH-TOUCHED claim, not a bit claim, and the bar is
+    rel=1e-10 on purpose (momwire#451): the original rel=1e-12 pin was
+    bit-identical on the authoring machine but 3.795e-12 off on part of the
+    GitHub runner fleet — same commit, different CPU's FMA contraction — so
+    it randomly reddened unrelated PRs. 1e-10 is still ~26x wider than the
+    measured fleet spread and ~9 orders tighter than any change that could
+    mean anything physically. Do not re-tighten it: cross-build bit equality
+    is not a property this tree has (the momwire#249 lesson).
     """
     kw = _two_wire([1.0e-2, 1.0e-2])
     z, _ = SinusoidalGalerkinSolver(extended_kernel=True, **kw).compute_impedance()
     assert z == pytest.approx(
-        209.4439774792844 + 79.14170016358155j, abs=0.0, rel=1e-12
+        209.4439774792844 + 79.14170016358155j, abs=0.0, rel=1e-10
     )
 
 
