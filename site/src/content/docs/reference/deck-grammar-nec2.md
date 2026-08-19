@@ -643,6 +643,13 @@ the operator without a new `FR` — a partial refill, the same shape a `GN`
 there produces (see [What a re-armed group
 rebuilds](#what-a-re-armed-group-rebuilds)).
 
+On `--basis sinusoidal-galerkin`, `EK` is REFUSED at solver construction if
+the deck has a junction where two `GW` sections carry different radii —
+measured divergent there, not merely inaccurate (momwire#398 D2). Every
+other basis serves `EK` on a stepped-radius deck; see [Choosing the
+physics](/reference/portal-usage/#choosing-the-physics---basis) for the
+row-by-row guidance on tapered and stepped-radius wire.
+
 ## XQ — execute
 
 Run the structure with whatever is in force. `I1` and every other field are

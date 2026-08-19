@@ -1346,6 +1346,182 @@ multi-feed port-order check; `tests/test_portal.py` gains the portal
 end-to-end gate, `--basis razor` and `--basis razor-nec5` on a deck with a
 load and a ground.
 
+### 6.12 The taper agreement floor (momwire#398 unit 1, 2026-08-18)
+
+The taper-readiness study (momwire#398 — the tapered half of the
+maintainer's north star, "NEC-5's two irreplaceable use cases are tapered
+wires and ground contact; momwire must match or beat it on both") measured
+momwire against the licensed NEC-5 binary across four decks spanning a 20:1
+range of Δ/a: `ward` (Ward Harriman AE6TY's flagship 20:1 tapered dipole,
+antenna-problem-decks issue #1), `step2` (momwire#435's two-wire 10:1 radius
+step), and `fat`/`thin` (Ward's fattest/thinnest section, uniform, as Δ/a
+floor controls). This unit lands that measurement as a standing gate rather
+than a one-time study doc, plus the two maintainer decisions (D2, D3) it
+forced onto real numbers.
+
+**The kernel identification, one line.** The study's other half-finding —
+which kernel the NEC-5 binary uses, since it carries no `EK` mode card at
+all — is that the binary is **extended/tubular-kernel everywhere**,
+identified (not assumed) from printed output alone on two independent Δ/a
+paths: at Δ/a = 0.5 the binary prints `89.682 + 43.581j` where a matched
+`bspline-d1 + EK` solve reads `93.389 + 41.415j` (4.3 Ω away) and the
+reduced kernel reads `113.653 + 3.752j` (24 Ω away); the reduced-kernel
+quadrature control (`razor-nec5`, the binary's own path rule on a reduced
+kernel) sits 32.3 Ω from the binary on the refine-N path and 111.1 Ω on the
+fatten-a path; the binary prints zero warnings or clamps at any rung of
+either path. This unit's §6.13 sibling (momwire#398 D1, "razor and the
+extended kernel") is where that finding's consequences for `RazorSolver`'s
+own twin claim are worked out — **razor + EK is a four-axis twin (basis +
+testing + quadrature + kernel), `bspline-d1 + EK` a two-axis one (basis +
+kernel, Galerkin-tested); the reduced razor lane stays, as the deliberately
+different-discretization cross-check, not something this finding retires.**
+Full derivation: the study document (kept beside `scripts/
+capture_taper_nec5_lane.py` at capture time; not in the standing tree, since
+its role — establishing WHICH kernel the binary uses — is done once this
+unit's identification gate (below) protects the conclusion going forward).
+
+**Four decks, golden ladders.** `scripts/capture_taper_nec5_lane.py`
+regenerates `tests/golden_taper_nec5.py` as pure literals — the
+`capture_razor_pec_nec5_lane.py` house pattern, so the suite needs neither
+the NEC-5 binary nor antennaknobs. Every momwire row is built DIRECTLY with
+`feed_arclength` at the exact knot NEC-5's `EX` field-4 end code addresses,
+not through the deck path: NEC-2's `EX` drives a segment CENTRE and NEC-5's
+drives a KNOT, a half-element-apart mismatch the study's §1.4 measured
+charging momwire up to 2.6 Ω for a feed-placement difference with nothing
+to do with physics. `nec2c` (open source) is captured once alongside NEC-5
+and pinned as a literal too, the same choice `tests/test_extended_kernel.py`
+already made for its own oracle deck, rather than depended on at test time.
+
+**D4 (gate depth).** N=400 on `ward` puts the fat end at Δ/a ≈ 1.05, past
+where any reduced-kernel row means anything (momwire#248). The standing
+gate stops at Δ/a ≈ 2.1 (`GATE_MAX_N`: N=200 on `ward`/`fat`/`thin`, N=400 —
+its full captured ladder, worst Δ/a ≈ 4.4 — on `step2`, which never
+approaches the floor); the finer, recorded-not-gated rungs (`ward`/`fat`/
+`thin` to N=400) stay in the golden module for §6.13 to build on.
+
+**Bars, exactly as the study's §8 proposed-first-unit list specified, with
+one deviation (below):**
+
+| deck | row(s) | bar | measured |
+|---|---|---|---|
+| `thin` | `razor-nec5` | offset constancy ≤ 0.05 Ω (the twin claim, where it holds) | dR spread 0.0011, dX spread 0.0013 |
+| `ward` | `bs1-ek`, `bs2-ek` | decay, finest gated rung +25% | 5.006→0.626 Ω (bar 0.782); 7.551→1.348 (bar 1.685) |
+| `step2` | `bs1-ek`, `bs2-ek` | decay, finest gated rung +25% (whole ladder is gated here) | 7.845→0.552 Ω (bar 0.690); 12.394→1.656 (bar 2.070) |
+| `fat` | `bs1-ek`, `bs2-ek` | decay, finest gated rung +25% | 5.881→0.705 Ω (bar 0.881); 8.876→1.689 (bar 2.112) |
+| `fat` | `razor`, `bs1` | envelope only, non-monotone | max in gated range 1.270 Ω (bar 1.588); 6.134 Ω (bar 7.668) |
+| `step2`, `thin` | `sin` vs `nec2c` | ≤ 0.1 Ω at the finest rung (D3) | 0.058 Ω; 0.090 Ω |
+| kernel-ID path A, Δ/a ≤ 1.0 | `bs1`/`bs1-ek`/`razor-nec5` vs NEC-5 | α ≥ 0.9 AND \|B\| ≤ 0.35·\|D\| | worst α 1.086, worst \|B\|/\|D\| 0.281 |
+
+The one deviation from the study's proposal: the sin/nec2c gate runs on
+`step2` and `thin` (the maintainer's explicit D3 spelling), not the study's
+originally suggested `ward`/`fat` — `step2` is momwire#435's own deck class
+and `thin` is the uniform control confirming the identification is not an
+artifact of the step. `ward`/`fat` are a defensible follow-up, not required
+here.
+
+**Why `fat`'s `razor`/`bs1` get an envelope, not a decay bar.** Inside the
+gated window (N ≤ 200) `bs1`'s residual happens to still be falling —
+gating it by decay there would look correct today and go false the moment a
+future gate (or a user) refines further: both rows turn around by N = 280
+(`bs1`: 1.816 Ω rising to 3.146 at N=400; `razor`: 1.165 rising to 2.155),
+exactly the Δ/a ≈ 2 floor momwire#248 predicts and §5's kernel
+identification explains — a reduced kernel is answering the wrong physics
+on fat wire past that point, and refining the mesh cannot fix wrong
+physics. `tests/test_taper_agreement_floor.py` gates the non-monotonicity
+itself as a property (over the FULL recorded ladder, so it cannot pass by
+accident of where the gate happens to stop), specifically so a future
+change that makes this row decay cleanly is *caught* rather than silently
+outgrowing an envelope pin that had quietly become a decay claim.
+
+**D2 — `sinusoidal-galerkin + EK` on a stepped-radius junction: excluded,
+gated.** Measured DIVERGENT on `step2` (extrapolated limit
+`7.110 − 483.925j` against NEC-5's `132.560 − 11.921j`, residual growing
+every rung, 286 Ω dX spread) — worse than momwire#435's reduced-`sg`
+finding, not a variant of it. `SinusoidalGalerkinSolver.__init__` now
+refuses `extended_kernel=True` at construction whenever any junction's
+members carry different radii, following `BSplineSolver`'s
+`use_singular_enrichment` combination-refusal idiom (momwire#396):
+`_EK_STEPPED_RADIUS_JUNCTION_REFUSAL` is reused by the `__init__` raise and
+by `capabilities.refusals["extended_kernel+stepped_radius_junction"]`, and
+carries the measured numbers in its text. Uniform-radius EK solves —
+including junctioned uniform-radius decks — are untouched (pinned
+bit-identical in `tests/test_sinusoidal_galerkin_stepped_ek.py`); the
+refusal has no solve-time cost since it never gets that far.
+
+**D3 — `sin` reproducing NEC-2's stepped-radius defect: a feature, gated as
+one.** `SinusoidalSolver` (reduced kernel) converges onto nec2c's own
+answer on a radius step — including nec2c's defect — because it shares
+NEC-2's per-segment end-condition convention; momwire#435 closes as an
+IDENTIFICATION rather than a bug: the sinusoidal row exists to be the
+NEC-2-closest rung of the basis ladder, and inheriting NEC-2's defect on a
+taper is what "closest" means on this deck class.
+`tests/test_taper_sin_identification.py` gates `|Z_sin − Z_nec2c| ≤ 0.1 Ω`
+at the finest captured rung on `step2` and `thin` as a PROTECTED property:
+`sin` is required to agree with nec2c and explicitly allowed to disagree
+with NEC-5 (the same file's last test confirms both hold simultaneously on
+`step2` — 0.058 Ω from nec2c against >1 Ω from NEC-5 at the same rung).
+
+**Docs.** `site/src/content/docs/reference/portal-usage.md`'s `--basis`
+section gains the D3/D2 caveat for `sinusoidal`/`sinusoidal-galerkin` on
+tapered or stepped-radius decks, pointing at `bspline-d1` + `EK` as the row
+measured closest to NEC-5 there; `deck-grammar-nec2.md`'s `EK` card entry
+cross-links it.
+
+**Files.** `scripts/capture_taper_nec5_lane.py`,
+`tests/golden_taper_nec5.py` (generated), `tests/test_taper_agreement_
+floor.py`, `tests/test_taper_sin_identification.py`,
+`tests/test_sinusoidal_galerkin_stepped_ek.py`,
+`src/momwire/sinusoidal_galerkin.py` (the D2 refusal),
+`tests/test_extended_kernel_galerkin.py` (nine `[radius step]` cases
+re-scoped, above), the two doc edits above, this section.
+
+**Gates.** All four measured bars pass at their measured level (table
+above; nothing tuned — every bar is the measured value +25% or the study's
+own proposed fixed threshold). The capture script is deterministic: run
+twice, `tests/golden_taper_nec5.py` is byte-identical (the script now pipes
+its own literal writer through `ruff format` before returning, so a
+re-capture is a content diff or nothing, never a formatting one). Bit-
+identity: every UNIFORM-radius answer is untouched — the D2 check is one
+early `if` inside `SinusoidalGalerkinSolver.__init__` that only ever fires
+when `extended_kernel=True` AND a declared junction's members disagree
+about `wire_radius`, so a solve that never sets both together cannot reach
+the new branch at all.
+
+**A finding the D2 exclusion surfaced outside the taper decks entirely.**
+`tests/test_extended_kernel_galerkin.py` (momwire#299's own gate file)
+carried a "radius step" node kind — a SMALL, 2:1 ratio, at the modest N its
+G-D unit runs at — as one of five node kinds exercised under
+`extended_kernel=True`, and it was passing. Blindly landing D2's blanket
+refusal would have broken nine of those tests. Rather than narrow the
+refusal (D2 asks for a simple construction-time, deck-shape check, matching
+the house combo-refusal idiom — not one conditioned on mesh size), this unit
+re-measured the discrepancy directly: even that mild 2:1 deck, pushed past
+the N that file ever ran it at, shows the same non-convergent behaviour
+momwire#435's 10:1 step does (chaotic, not merely slow, beyond N ≈ 128 in a
+quick probe). #299's bracket-correction fix is not wrong in the regime it
+shipped and was gated in — it is real physics at coarse-to-moderate mesh —
+but the mesh-refined regime this unit's ladders probe was never checked
+before, and there the whole EK-on-a-step combination is unsound regardless
+of the fix. The nine tests were updated in place: `_EK_DECK_NAMES` factors
+out the four node kinds ("straight", "L", "vee", "T") that stay under EK,
+"radius step" is dropped from every EK-on parametrization with a comment
+pointing here, and the historical measurements stay in each docstring so
+the record is not lost, only reclassified. `test_gd5`'s reduced-kernel call
+sites and `_gd_decks()` itself are untouched — only the EK combination
+narrows.
+
+**What this does not do.** Path B of the kernel-identification ladder (fix
+N, fatten a) is recorded in the study but not captured into the golden
+module — path A alone already clears both thresholds this unit gates, and
+path B is a defensible next increment rather than a requirement. The `GC`
+tapered-wire continuation stays refused (momwire#398 unit 4, undone here).
+The `EX` segment-centre-vs-knot translation rule stays undocumented as a
+first-class dialect fact outside this file's method section (momwire#398
+unit 2). And razor's own twin-claim requalification — giving it (or not)
+the extended kernel, and rewriting `docs/razor-solver.md` accordingly — is
+§6.13/D1, deliberately not done here: this unit's `fat` envelope pins on
+`razor`/`bs1` are the PRE-EK record that unit will revisit.
+
 ---
 
 ## 7. What this subsumes, and what it does not
