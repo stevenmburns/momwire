@@ -414,7 +414,7 @@ def test_en_terminates_a_frame_and_ends_the_run():
 def test_en_after_an_nx_frame_echoes_and_exits_without_running():
     """EN arriving with an empty body (right after an NX frame) is echoed as
     card 1 of an empty deck and ends the run — nothing solves twice. Blank
-    lines left behind must not trip the EOF warning either."""
+    lines left behind must not become a deck of their own either."""
     rc, out, err = _run_main([], deck=_EN_DIPOLE + "NX\n\nEN\n\n")
     assert rc == 0
     assert err == ""
@@ -427,14 +427,32 @@ def test_en_after_an_nx_frame_echoes_and_exits_without_running():
     ]
 
 
-def test_unterminated_body_at_eof_warns_on_stderr():
-    """#901: a deck body abandoned by EOF (no NX, no EN) used to vanish
-    without a trace — banner-only stdout and exit 0 read as a broken install.
-    The discard must name the framing rule on stderr."""
+def test_unterminated_body_at_eof_solves_as_if_it_ended_with_en():
+    """#458: end of input is a terminator. NEC's own card reader synthesizes
+    an EN when stdin runs out mid-deck and runs what it has (seen live in the
+    #413 4nec2 capture, on a bundled model ending at its NE card), so the same
+    deck with and without its EN must produce the same printout. The earlier
+    discard was invisible to every captured host — they read only the
+    printout — and arrived as an empty answer blamed on the engine."""
     rc, out, err = _run_main([], deck=_EN_DIPOLE)
+    rc_en, out_en, err_en = _run_main([], deck=_EN_DIPOLE + "EN\n")
+    assert (rc, out, err) == (rc_en, out_en, err_en)
     assert rc == 0
-    assert "ANTENNA INPUT PARAMETERS" not in out
-    assert "WARNING" in err and "NX or EN" in err
+    assert err == ""
+    assert out.count("ANTENNA INPUT PARAMETERS") == 1
+    assert re.findall(r"DATA CARD No:\s+(\d+) (\w\w)", out)[-1] == ("4", "EN")
+
+
+def test_whitespace_only_residual_at_eof_runs_nothing():
+    """The EOF terminator is for a deck, not for the blank lines a caller
+    leaves behind after its last NX: a residual body with nothing in it must
+    still solve nothing and print nothing beyond the next-deck banner."""
+    rc, out, err = _run_main([], deck=_EN_DIPOLE + "NX\n\n   \n")
+    assert rc == 0
+    assert err == ""
+    # One solve — the NX frame's — and no second data-card echo after it.
+    assert out.count("ANTENNA INPUT PARAMETERS") == 1
+    assert re.findall(r"DATA CARD No:\s+(\d+) (\w\w)", out)[-1] == ("4", "NX")
 
 
 def test_an_unsupported_card_still_emits_the_sentinel():

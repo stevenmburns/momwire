@@ -3257,8 +3257,10 @@ def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
     sentinel of our own — and the stream is never restarted between them
     (``NEC2Daemon.submit``). ``EN`` also terminates a frame but then ends the
     run, so an unmodified ``.nec`` file redirected in solves and exits (#901);
-    SimNEC itself never sends it. A body left unterminated at EOF is discarded
-    with a stderr warning naming the framing rule.
+    SimNEC itself never sends it. A non-empty body still open when stdin ends
+    is solved as though it had ended with ``EN``, which is what NEC's own card
+    reader does at EOF (#458); a body that is empty or whitespace-only ends
+    the run silently.
 
     Split out of :func:`main` (#379) for the same reason as
     :func:`configure_engine`: the shared server runs one of these per
@@ -3295,13 +3297,21 @@ def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
         if head == ["EN"]:
             return 0
         body = []
+    # EOF is a terminator too. NEC's card reader synthesizes an EN when input
+    # runs out mid-deck and runs what it has — observed live in the #413
+    # 4nec2 capture, where a bundled model ending at its NE card solved and
+    # echoed the synthesized card. Discarding it instead (the pre-#458
+    # behaviour) was invisible to every captured host: both read only the
+    # printout, so a dropped deck arrived as an empty answer blamed on the
+    # engine. A body of nothing but blank lines still runs nothing.
     if any(ln.strip() for ln in body):
-        stderr.write(
-            "WARNING: deck discarded — stdin ended before an NX or EN card. "
-            "The portal solves a deck only at its frame terminator: SimNEC "
-            "appends NX itself; a standalone .nec file must end with EN.\n"
-        )
-        stderr.flush()
+        with lock:
+            out, err = deck_frame("\n".join(body), terminator="EN")
+        stdout.write("\n".join(out) + "\n")
+        stdout.flush()
+        if err:
+            stderr.write("\n".join(err) + "\n")
+            stderr.flush()
     return 0
 
 
