@@ -124,7 +124,6 @@ _REFUSED_BY_NAME = MappingProxyType(
         "SM": "SM (multiple-patch surface) is not supported by this engine yet",
         "SC": "SC (surface patch continuation) is not supported by this engine yet",
         "KH": "KH (interaction approximation limit) is not supported by this engine",
-        "PQ": "PQ (charge print control) is not supported by this engine",
         "CP": "CP (coupling request) is not supported by this engine",
         "PL": "PL (plot request) is not supported by this engine",
         "WG": "WG (NGF write request) is not supported by this engine",
@@ -515,6 +514,23 @@ class _Nec2Parser:
             )
         return PrintControl()
 
+    def _pq(self, card: Card) -> None:
+        """``PQ`` — charge-density print control (spec ``#pq--charge-print-
+        control``).
+
+        ``I1`` (``IPTFLQ``) negative *suppresses* the charge report — the
+        default state, and a no-op here since this engine's printout never
+        had a charge report to suppress.  Nonnegative is a *request* to
+        print one, which this engine does not produce.
+        """
+        flag = card.i(0)
+        if flag < 0:
+            return
+        raise DeckError(
+            f"PQ {flag} requests a charge-density report this engine does "
+            f"not produce; PQ -1 (suppress) is the only form served"
+        )
+
     def _multiprocessing_card(self, card: Card) -> tuple[int, int]:
         """``MP`` — advisory, and read strictly: NEC's integer-field reader
         refuses a fractional field, and so does this one."""
@@ -670,6 +686,9 @@ class _Nec2Parser:
             return
         if card.mnemonic == "PT":
             self._print_control = self._print_control_card(card)
+            return
+        if card.mnemonic == "PQ":
+            self._pq(card)
             return
         if card.mnemonic == "MP":
             self._multiprocessing = self._multiprocessing_card(card)

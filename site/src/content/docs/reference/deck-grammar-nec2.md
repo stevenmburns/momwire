@@ -782,6 +782,33 @@ what it computes, so it never arms an execute card.
 another `PT` moves it. One deck may therefore suppress the first run's report
 and restore the second's.
 
+## PQ — charge print control
+
+Whether a run prints a charge-density report. `PQ` changes what a run
+prints, not what it computes, so — like `PT` — it never arms an execute
+card.
+
+| field | meaning |
+|---|---|
+| `I1` | flag (`IPTFLQ`) — see below |
+| `I2` | tag |
+| `I3` | first segment of the range |
+| `I4` | last segment of the range |
+
+| `I1` | effect |
+|---|---|
+| negative (`-1` default) | suppress the charge-density report |
+| `0` or greater | print a charge-density report, optionally restricted to `I2`–`I4` |
+
+momwire's printout has no charge-density report to suppress, so the
+suppression form is a no-op: `PQ -1` (and any other negative flag) parses and
+changes nothing. A nonnegative flag is a *request* for the report this
+engine does not produce, and refuses:
+
+```text
+PQ <n> requests a charge-density report this engine does not produce; PQ -1 (suppress) is the only form served
+```
+
 ## MP — multiprocessing hint
 
 A matrix-fill parallelism hint. Read, recorded, and then ignored.
@@ -860,7 +887,6 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 | `SM` | `SM (multiple-patch surface) is not supported by this engine yet` |
 | `SC` | `SC (surface patch continuation) is not supported by this engine yet` |
 | `KH` | `KH (interaction approximation limit) is not supported by this engine` |
-| `PQ` | `PQ (charge print control) is not supported by this engine` |
 | `CP` | `CP (coupling request) is not supported by this engine` |
 | `PL` | `PL (plot request) is not supported by this engine` |
 | `WG` | `WG (NGF write request) is not supported by this engine` |
@@ -896,6 +922,7 @@ unrecognised NEC card '<XX>'
 | `IS` | `F2 ≠ 0` | `IS with a conductive sheath (F2 != 0) is not modelled by this engine — the insulation jacket is a lossless dielectric; set the sheath conductivity to 0` |
 | `IS` | partial-wire range | `IS: insulation on a partial-wire segment range — per-wire specs cover whole wires only` |
 | `IS` | jacket inside the conductor | `IS: insulation whose outer radius does not exceed the wire's conductor radius` |
+| `PQ` | `I1 >= 0` | `PQ <n> requests a charge-density report this engine does not produce; PQ -1 (suppress) is the only form served` |
 | `MP` | fractional field | `MP field <k> must be an integer, not <v>` |
 | `GW` | `NS < 1` | `segment count must be >= 1, got <n>` |
 | `GW` | radius ≤ 0 | `GW with a non-positive radius announces a tapered wire (GW + GC continuation), which is not part of this engine's nec2 dialect` |
@@ -936,7 +963,7 @@ anyone moving a deck between them:
 | unmodellable `IS` | skipped, with a note | refused |
 | `SY` | 4nec2 symbolic variables are evaluated | refused |
 | `'` comments | a leading apostrophe comments out a line; an inline one truncates it | not recognised — an apostrophe is a mnemonic error |
-| unhandled cards | a documented set (`KH`, `PQ`, `CP`, `PL`, `WG`, `ZO`, …) is silently ignored | refused by name |
+| unhandled cards | a documented set (`KH`, `CP`, `PL`, `WG`, `ZO`, …) is silently ignored | refused by name |
 | `GC` / `GF` | refused | refused |
 
 The two readers agree on everything load-bearing for geometry: `GW`, `GM`,

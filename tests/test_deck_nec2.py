@@ -492,11 +492,13 @@ def test_the_arming_cards_re_arm_the_next_execute_card(card):
     assert model.groups[1] is not None
 
 
-@pytest.mark.parametrize("card", ["GD 0 0 0 0 5. .001 20. -2.", "MP 4 8", "PT -1"])
+@pytest.mark.parametrize(
+    "card", ["GD 0 0 0 0 5. .001 20. -2.", "MP 4 8", "PT -1", "PQ -1"]
+)
 def test_gd_mp_and_pt_are_explicitly_not_arming(card):
     """§#arming: ``GD`` moves nothing outside the far field's cliff modes,
-    ``MP`` is advisory, and ``PT`` changes what a run prints, not what it
-    computes.  None of them can turn a bare ``XQ`` into a fresh run."""
+    ``MP`` is advisory, and ``PT``/``PQ`` change what a run prints, not what
+    it computes.  None of them can turn a bare ``XQ`` into a fresh run."""
     model = parse(BODY + f"XQ\n{card}\nXQ\nNX\n")
     assert model.groups[1] is None
 
@@ -711,6 +713,26 @@ def test_pt_zero_restricts_the_report_to_a_resolved_element_range():
     assert parse(BODY + "PT 0 1 0 0\nXQ\nNX\n").groups[0].print_control.elements is None
     # 1, 2 and 3 are no restriction too.
     assert parse(BODY + "PT 2 0 0 0\nXQ\nNX\n").groups[0].print_control.elements is None
+
+
+def test_pq_negative_parses_and_solves_identically_to_no_pq_at_all():
+    """§#pq--charge-print-control: momwire's printout never had a charge
+    report to suppress, so ``PQ -1`` (the suppression form) is a no-op —
+    the parsed model is identical with or without it."""
+    with_pq = parse(BODY + "PQ -1\nXQ\nNX\n")
+    without_pq = parse(BODY + "XQ\nNX\n")
+    assert with_pq == without_pq
+
+
+def test_pq_nonnegative_refuses_the_missing_charge_report():
+    """§#pq--charge-print-control: ``I1 >= 0`` is a print REQUEST, and this
+    engine produces no charge-density report to print."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + "PQ 0\nXQ\nNX\n")
+    assert str(exc.value) == (
+        "PQ 0 requests a charge-density report this engine does not produce; "
+        "PQ -1 (suppress) is the only form served"
+    )
 
 
 def test_mp_is_recorded_per_group_and_changes_nothing():
@@ -1309,7 +1331,7 @@ def test_the_refusal_table_is_the_pages_table():
     and silently ignored."""
     assert set(_REFUSED_BY_NAME) == {
         "TL", "NT", "GA", "GH", "GX", "GR", "GC", "GF", "SY",
-        "SP", "SM", "SC", "KH", "PQ", "CP", "PL", "WG", "ZO",
+        "SP", "SM", "SC", "KH", "CP", "PL", "WG", "ZO",
     }  # fmt: skip
 
 
