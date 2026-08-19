@@ -49,9 +49,13 @@ The envelope rows were stage 2's subject: momwire under-predicts the
 ground-induced resistance of a grounded vertical over poor soil by ~2.7 Ω
 (~6 points of efficiency on a full-size 40 Ω monopole). Study §5.4 named
 three candidates and stage 2 killed all three — candidate 2 in stage 1 (the
-stub ladder, 0.011 Ω), candidate 1 by bypassing the interpolation grid
-entirely (3.3274 -> 3.3305 Ω), candidate 3 by the `diel` row below, where the
-discrepancy is at its LARGEST over a half-space that cannot dissipate.
+stub ladder, 0.011 Ω: an INTERNALLY INCONSISTENT contact node is excluded;
+a formulation difference shared with the stubbed limit is not, see the stub
+tests below), candidate 1 by bypassing the grid's interpolation (3.3274 ->
+3.3305 Ω, with the contour machinery cleared separately — see
+`scripts/probe_contact_direct_remainder.py`), candidate 3 by the `diel` row
+below, where the discrepancy is at its LARGEST over a half-space that
+cannot dissipate.
 
 So the gap is a formulation difference at the contact node, the pins are
 permanent until someone changes that node, and this file's job changed from
@@ -164,12 +168,34 @@ def test_the_pec_columns_agree_well_enough_to_difference(geom):
     publishing a residual that means nothing. The bar is a fraction of the
     smallest residual the lane gates, not an accuracy claim about either
     code's PEC answer.
+
+    The guard covers the LADDER the gates use, not just the finest rung,
+    because the envelope and diel gates take max(res) over the ladder and
+    that max lands on the coarsest rung. And the ladder's conditioning is
+    NOT uniform — measured PEC column offsets, coarse to fine:
+
+        monopole  3.9818 2.1347 1.2604 0.9570 0.7951   (N = 11/21/41/61/81)
+        invl      1.6733 0.9641 0.6627 0.5534 0.4913   (N = 12/24/48/72/96)
+
+    The coarse rungs FAIL the 1.5 Ω bar the fine rungs meet; the 1.5 Ω
+    standard holds from the middle of the ladder down. So the ladder-wide
+    claim this guard can honestly make is two-part: the columns CONVERGE
+    toward each other monotonically (two offsets still walking apart would
+    make every rung suspect), and the finest rung — the one the decay pins
+    and the saturated levels are read at — is inside 1.5 Ω. Any gate that
+    leans on a coarse rung (the diel row's max(res) does) is leaning on a
+    rung of poorer conditioning, and says so in its own docstring rather
+    than here.
     """
     nec = dict(CONTACT_LADDERS[geom]["pec"])
-    n = max(nec)
-    offset = abs(_momwire_z(geom, n, "pec") - nec[n])
-    assert offset <= 1.5, (
-        f"{geom}: the two codes' PEC contact columns are {offset:.4f} Ω "
+    offsets = [abs(_momwire_z(geom, n, "pec") - nec[n]) for n in sorted(nec)]
+    assert all(a > b for a, b in zip(offsets, offsets[1:])), (
+        f"{geom}: the two codes' PEC contact columns stopped converging "
+        f"down the ladder: {['%.4f' % o for o in offsets]}. Two offsets "
+        "still moving apart cannot be cancelled by differencing, at any rung."
+    )
+    assert offsets[-1] <= 1.5, (
+        f"{geom}: the two codes' PEC contact columns are {offsets[-1]:.4f} Ω "
         "apart at the finest rung. Differencing them no longer isolates the "
         "ground, and every residual this file gates is suspect."
     )
@@ -304,9 +330,10 @@ def test_the_low_eps_gap_belongs_to_the_ground_and_not_to_the_geometry():
 
     So it is the ground. Stage 1 read that as pointing at the shared
     half-space machinery (study §5.4 candidate 1); stage 2 went there and
-    found nothing (see `test_the_gap_is_not_the_remainder_grid` below), so
-    what it points at now is the contact NODE's formulation, which is the
-    one thing both geometries share and the clearance ladders do not have.
+    found nothing (see `test_the_gap_is_not_the_remainder_quadrature` and
+    `test_the_gap_is_not_the_interpolation_grid` below), so what it points
+    at now is the contact NODE's formulation, which is the one thing both
+    geometries share and the clearance ladders do not have.
     """
     for ground in (*ENVELOPE_GROUNDS, DIEL_GROUND):
         mono = _residuals("monopole", ground)[-1]
@@ -336,6 +363,14 @@ def test_the_low_eps_gap_belongs_to_the_ground_and_not_to_the_geometry():
 # limit on an 11-segment mesh cannot be a discretization artifact, so this is
 # the row that needs no saturation argument at all.
 #
+# One honesty note on that flatness claim: it spans rungs of UNEQUAL
+# conditioning. At N = 11 the two codes' PEC columns are 3.98 Ω apart —
+# well outside the 1.5 Ω bar the conditioning guard holds the finest rung
+# to — so the coarse end of this ladder is read through a poorer instrument
+# than the fine end, and max(res) (which sets the envelope below) is
+# attained exactly there. The flatness is still evidence of a limit
+# difference; it is just evidence with wider error bars on its left edge.
+#
 # And it is what killed study §5.4's candidate 3, "the missing base-loss
 # resistance is real and momwire is right to lack it". A missing LOSS term
 # cannot be at its maximum over a ground with no loss in it. Swept against
@@ -361,6 +396,13 @@ def test_contact_lane_dielectric_row_is_a_flat_limit_difference(geom):
     Same instruction as the envelope pins: do not tighten by hand. This is
     momwire#282's open gap and the way it comes down is by someone closing
     it, at which point this fails and gets re-derived.
+
+    Unlike its siblings this envelope is TIGHT: 4.7 against a measured
+    max(res) of 4.4905 is under 5 % of headroom, where the soil envelopes
+    carry 18-20 %. That is deliberate — the row is flat, so there is no
+    growth to leave room for — but it means a small upstream shift trips
+    this gate first. If it trips by a few hundredths, re-measure before
+    assuming the gap moved.
     """
     res = _residuals(geom, DIEL_GROUND)
     assert max(res) <= _DIEL_ENVELOPE, (
@@ -375,27 +417,26 @@ def test_contact_lane_dielectric_row_is_a_flat_limit_difference(geom):
     )
 
 
-def test_the_gap_is_not_the_remainder_grid():
-    """Study §5.4 candidate 1, killed, and kept killed.
+def test_the_gap_is_not_the_remainder_quadrature():
+    """Study §5.4 candidate 1, the QUADRATURE half, kept killed.
 
     The study's own experiment: "recompute the near-diagonal remainder
     blocks by direct evaluation at very high rtol, bypassing the grid
     entirely ... and see whether the 3.3 ohm moves. If it does, this is it
     and it is a quadrature/asymptotics problem in Q." Stage 2 ran it
     (`scripts/probe_contact_direct_remainder.py`): with the interpolation
-    grid gone and the six lambda-integrals evaluated directly at rtol 1e-11,
-    the poor-soil residual moves 3.3274 -> 3.3305 ohm, and raising the
-    remainder's spatial quadrature order from 3 to 12 moves it 0.03 ohm.
+    bypassed the poor-soil residual moves 3.3274 -> 3.3305 ohm, the direct
+    path's rtol axis is saturated (1e-7 through 1e-13 agree to 1e-6 ohm),
+    and raising the remainder's spatial quadrature order from 3 to 12 moves
+    the residual 0.03 ohm (3.2691 -> 3.2409 at N = 41).
 
-    What this test pins is the cheap, binary-free half of that: the answer
-    must not be sensitive to the remainder's quadrature order. If a future
-    change makes it sensitive, the remainder IS back in play and candidate 1
-    reopens.
-
-    (The probe also measured what the grid IS worth, which is not nothing
-    and is not here: 0.13 ohm at every mesh on the SEA WATER row, i.e. ~40 %
-    of that row's decay bar. That is momwire#443's near-PEC grid floor
-    showing up in a shipped answer rather than in a limit gate.)
+    What this test pins is the cheap, binary-free spatial half of that: the
+    ANSWER must not be sensitive to the remainder's quadrature order. Two
+    quantities, kept apart on purpose: the answer's own movement under
+    n_qp 3 -> 8 is 0.0373 ohm (what the bar holds), the residual's movement
+    is 0.0255 — the bar is on the first. If a future change makes the answer
+    sensitive, the remainder IS back in play and candidate 1 reopens. The
+    grid's interpolation half has its own gate in the next test.
     """
     n = 41
     pec = _momwire_z("monopole", n, "pec")
@@ -422,15 +463,46 @@ def test_the_gap_is_not_the_remainder_grid():
     moved = abs(with_n_qp(8) - base)
     assert moved < 0.1, (
         "the poor-soil contact answer moved "
-        f"{moved:.4f} ohm when the remainder's quadrature order went 3 -> 8. "
-        "Study §5.4 candidate 1 was killed on the claim that it does not "
-        "(0.03 ohm measured, 3 -> 12); if it moves now, the remainder is "
-        "back in play and momwire#282 stage 2's conclusion needs re-running."
+        f"{moved:.4f} ohm when the remainder's quadrature order went 3 -> 8 "
+        "(0.0373 ohm measured). If it moves now, the remainder is back in "
+        "play and momwire#282 stage 2's conclusion needs re-running."
+    )
+
+
+def test_the_gap_is_not_the_interpolation_grid():
+    """Study §5.4 candidate 1, the INTERPOLATION half, kept killed.
+
+    |z(shipped grid) - z(DirectGrid)| on the deck with 3.3 ohm to explain:
+    the whole interpolation stencil is worth 0.0032 ohm at N = 41 poor soil,
+    measured by swapping the probe's `DirectGrid` (the grid's own fill
+    function, `iv_surfaces_direct`, answering every query directly) into the
+    numpy remainder path. Costs ~0.1 s.
+
+    The bar is 3x the measured value, not tight, because this number is
+    momwire#443's to change: the grid's absolute error at small R1 is a
+    known defect there, and on SEA WATER the same swap is worth 0.13 ohm.
+    If #443 lands and this number drops, celebrate and re-derive; if it
+    GROWS past the bar, the grid is back in candidate 1's frame.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+    from probe_contact_direct_remainder import solve
+
+    n = 41
+    z_ship, _ = solve(n, "poor")
+    z_direct, _ = solve(n, "poor", direct=1e-9)
+    gap = abs(z_ship - z_direct)
+    assert gap < 0.01, (
+        f"the interpolation grid is now worth {gap:.4f} ohm on the N = 41 "
+        "poor-soil contact answer (0.0032 measured). The grid is back in "
+        "candidate 1's frame and momwire#282 stage 2's kill needs re-running."
     )
 
 
 # --------------------------------------------------------------------------
-# 3. The eps~ -> infinity limit, pinned at the floor it actually has
+# 4. The eps~ -> infinity limit, pinned at the floor it actually has
 # --------------------------------------------------------------------------
 
 
@@ -480,7 +552,7 @@ def test_the_pec_limit_at_contact_floors_on_the_sommerfeld_grid():
 
 
 # --------------------------------------------------------------------------
-# 4. The stubbed-limit gate — no binary needed
+# 5. The stubbed-limit gate — no binary needed
 # --------------------------------------------------------------------------
 #
 # Study §5.3, and the study's most useful accidental find: a contact deck
@@ -594,12 +666,24 @@ def test_the_stubbed_limit_kills_the_contact_node_as_a_stage_2_candidate():
 
     It disagrees by 0.011 Ω — three hundred times smaller than the gap it
     would have to explain, and the same size as the PEC and average-soil
-    figures, which carry no such gap at all. Candidate 2 is dead: whatever
-    momwire is missing over poor soil, it is not in the contact node's
-    bookkeeping. That leaves candidate 1 (the remainder's near-interface
-    behaviour, in shared half-space machinery) and candidate 3, and it is
-    the same conclusion `test_the_low_eps_gap_belongs_to_the_ground_and_
-    not_to_the_geometry` reaches from the other direction.
+    figures, which carry no such gap at all. Candidate 2 as the study wrote
+    it is dead.
+
+    Be precise about what died, because stage 2's verdict puts the gap AT
+    the contact node and the two must not read as a contradiction. This
+    ladder is momwire against momwire — a SELF-CONSISTENCY instrument. It
+    excludes an INTERNALLY INCONSISTENT contact node (the 1/delta
+    double-counting pathology momwire#282 was originally about, and any
+    bookkeeping error that would make the contact deck part company with
+    its own stubbed limit). It is blind, by construction, to a formulation
+    difference the contact deck SHARES with the stubbed geometry — and
+    stage 2 measured that the suspect quantity IS shared: `w_Phi` is the
+    ground's charge response for every low segment, not a property of the
+    junction (patching it moves the CLEARANCE deck by 27-117 Ω; see
+    `scripts/probe_contact_node_structure.py --mode phi-weight`). So a
+    shared, self-consistent contact-node formulation difference walks
+    through this gate untouched, which is exactly where stage 2's verdict
+    landed.
     """
     poor = abs(_stub_z(41, 1e-4, "poor") - _plain_z(41, "poor"))
     envelope = max(_residuals("monopole", "poor"))

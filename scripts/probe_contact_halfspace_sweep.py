@@ -3,11 +3,11 @@ swept against the binary rather than against four soils.
 
 Study §5.4 named three candidates for the low-eps_r gap and stage 1 killed
 the second. The first (the remainder's near-interface behaviour) is killed
-by `probe_contact_direct_remainder.py`: bypassing the interpolation grid
-entirely and evaluating the six lambda-integrals directly at rtol 1e-11
-moves the poor-soil residual from 3.3274 to 3.3305 ohm, and raising the
-remainder's spatial quadrature order 3 -> 12 moves it 0.03 ohm. Neither is
-3 ohm.
+by `probe_contact_direct_remainder.py`: with the interpolation grid bypassed
+(the rtol axis is saturated — see that probe's docstring for what the bypass
+does and does not exclude) the poor-soil residual moves from 3.3274 to
+3.3305 ohm, and raising the remainder's spatial quadrature order 3 -> 12
+moves it 0.03 ohm. Neither is 3 ohm.
 
 The third candidate is "the missing base-loss resistance is real". This
 script is its kill-or-confirm: sweep eps_r at a conductivity small enough
@@ -20,26 +20,32 @@ WHAT IT MEASURED (2026-08-19, N = 41 monopole, contact)
 --------------------------------------------------------
 `--mode epsr` at sigma = 1e-5. |discrepancy|, ohm:
 
-  eps_r  1.5   2.0   2.5   3.0   4.0   5.0   6.5   8.0
-         3.21  4.15  4.36  4.28  3.87  3.42  2.84  2.40
-  eps_r  10    13    16    20    30    50    81
-         1.97  1.53  1.24  0.98  0.67  0.47  0.41
+  eps_r  1.02  1.05  1.1   1.2   1.35  1.5   2.0   2.5   3.0   4.0
+         0.46  0.70  1.11  1.82  2.63  3.21  4.15  4.36  4.28  3.87
+  eps_r  5.0   6.5   8.0   10    13    16    20    30    50    81
+         3.42  2.84  2.40  1.97  1.53  1.24  0.98  0.67  0.47  0.41
 
 A smooth single-peaked curve, vanishing at both physical limits (eps~ -> 1,
 no ground; eps~ -> infinity, PEC) and PEAKING at 4.36 ohm over a dielectric
-with no loss in it. Candidate 3 is dead.
+with no loss in it. Candidate 3 is dead. The low end MEASURES the
+eps~ -> 1 zero rather than asserting it: monotone to zero down to 0.46 ohm
+at eps_r = 1.02.
 
 `--mode sigma` at eps_r = 5 walks the second axis and agrees: the
 discrepancy is 3.42 ohm at sigma = 0 and falls monotonically as the ground
 becomes conductive, reaching the 0.2-0.35 ohm floor by sigma = 0.03.
 
 Along both paths the REAL part tracks the uncancelled image-charge fraction
-`1 - C2 = 2/(eps~ + 1)`: disc.real / (1 - C2) sits at -10.3 +- 0.3 over
+`1 - C2 = 2/(eps~ + 1)`: K = Re(disc / (1 - C2)) sits at -10.3 +- 0.3 over
 eps_r in [10, 30] and at -9.2 +- 0.2 along the whole sigma path from 0 to
-3e-3. It is a good description, not a law — it drifts 40 % below eps_r = 6,
-and the constant is -8.6 on the bent quarter wave and -10 to -12 across a
-100x wire-radius range, so it is not universal. See the study's stage-2
-record for what it does and does not license.
+3e-3. NOTE the spelling — with complex eps~, disc.real / (1 - C2) is a
+different quantity and walks -9.19 -> -6.88 along the sigma path; K is what
+reproduces. It is a good description, not a law: it drifts 40 % below
+eps_r = 6, the constant is -8.6 on the bent quarter wave, and across the
+wire radii whose decks actually pass the 1.5 ohm PEC-conditioning bar
+(0.5-5 mm, a 10x range — see `probe_contact_deck_conditioning.py`) it is
+-9.51 to -10.41. See the study's stage-2 record for what it does and does
+not license.
 
 Runs the binary, so: antennaknobs venv, NEC5_EXE set.
 
@@ -69,6 +75,11 @@ MONO_H = 5.3535
 # everywhere on the sweep; `sigma` holds eps_r at poor soil's 5.0 and walks
 # the conductivity over five decades through it.
 EPSR_SWEEP = [
+    1.02,
+    1.05,
+    1.1,
+    1.2,
+    1.35,
     1.5,
     2.0,
     2.5,
@@ -159,7 +170,7 @@ def main():
     rows = []
     hdr = (
         f"{label:>8} {'tan_d':>9} {'N':>3}  {'d_mw':>19} {'d_n5':>19} "
-        f"{'discrepancy':>19} {'|.|':>7} {'arg':>7}"
+        f"{'discrepancy':>19} {'|.|':>7} {'arg':>7} {'K':>8}"
     )
     print(hdr)
     print("-" * len(hdr))
@@ -174,6 +185,11 @@ def main():
             d_mw = z_mw - z_pec_mw
             disc = d_mw - d_n5
             tan_d = sigma / (omega * EPS0 * eps_r)
+            # NOTE the spelling: K = Re(disc/(1-C2)), NOT disc.real/(1-C2).
+            # With complex eps~ the two differ, and only the first reproduces
+            # the -10.3/-9.2 constants the stage-2 record quotes.
+            eps_t = eps_r - 1j * sigma / (omega * EPS0)
+            k_real = float(np.real(disc * (eps_t + 1.0) / 2.0))
             rows.append(
                 dict(
                     n=n,
@@ -187,6 +203,7 @@ def main():
                     disc=[disc.real, disc.imag],
                     mag=abs(disc),
                     arg_deg=float(np.degrees(np.angle(disc))),
+                    k_real=k_real,
                 )
             )
             shown = eps_r if args.mode == "epsr" else sigma
@@ -194,7 +211,7 @@ def main():
                 f"{shown:>8.4g} {tan_d:>9.3g} {n:>3}  "
                 f"{d_mw.real:>9.3f}{d_mw.imag:>+9.3f}j  {d_n5.real:>9.3f}{d_n5.imag:>+9.3f}j  "
                 f"{disc.real:>9.3f}{disc.imag:>+9.3f}j  {abs(disc):>7.3f} "
-                f"{np.degrees(np.angle(disc)):>7.1f}",
+                f"{np.degrees(np.angle(disc)):>7.1f} {k_real:>8.2f}",
                 flush=True,
             )
 
