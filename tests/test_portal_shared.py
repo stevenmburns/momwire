@@ -177,7 +177,22 @@ def stock(decks: str, argv: list[str] | None = None) -> str:
 
 
 def same_printout(left: str, right: str) -> bool:
-    return CAPTURE.canonicalize_timings(left) == CAPTURE.canonicalize_timings(right)
+    a = CAPTURE.canonicalize_timings(left)
+    b = CAPTURE.canonicalize_timings(right)
+    if a != b and os.environ.get("MOMWIRE_403_DUMP"):
+        # Diagnostic tap, kept from the momwire#403 hunt: byte-oracle
+        # mismatches only ever reproduced under a loaded full-suite xdist
+        # run, where no debugger reaches. Set the env var to a directory and
+        # every mismatch drops its canonicalized (served, stock) pair there
+        # for offline diffing.
+        import time as _time
+
+        stamp = f"{os.getpid()}-{_time.monotonic_ns()}"
+        root = Path(os.environ["MOMWIRE_403_DUMP"])
+        root.mkdir(parents=True, exist_ok=True)
+        (root / f"{stamp}-served.txt").write_text(a)
+        (root / f"{stamp}-stock.txt").write_text(b)
+    return a == b
 
 
 # --------------------------------------------------------------------------
@@ -297,6 +312,44 @@ def test_every_fixture_deck_answers_exactly_what_the_stock_engine_answers(
         assert "ERROR:" in served.stdout
     else:
         assert NX_ECHO.search(served.stdout), "no sentinel — SimNEC blocks forever"
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "dipole_rp2_linear_cliff",
+        "dipole_rp3_circular_cliff",
+        "dipole_rp3_cliff_sommerfeld",
+    ),
+)
+def test_pattern_dust_prints_as_exact_zero(name):
+    """momwire#403's regression gate: no E column may print the angle of zero.
+
+    A linear deck's cross-pol lands ~16 orders under the co-pol — pure fill
+    round-off — and its printed magnitude AND phase move with process history
+    (heap layout steers vectorized-math lane splits at the ULP level). That
+    made served==stock order-sensitive: the byte oracle above reddened under
+    xdist load while every serial replay of the same tests passed. The engine
+    now zeroes any component under NEC's own _FIELD_FLOOR2 before it prints
+    (a deliberate, documented departure from nec2c, which prints its own
+    dust raw), so the whole class is gone: this asserts the cliff decks'
+    pattern rows carry no sub-floor magnitudes and that every zero magnitude
+    prints with a zero phase.
+    """
+    rows = [
+        ln
+        for ln in stock(fixture_deck(name)).splitlines()
+        if len(ln.split()) == 12 and "LINEAR" in ln
+    ]
+    assert rows, f"{name}: no pattern rows found"
+    for ln in rows:
+        tok = ln.split()
+        for mag, phase in ((tok[8], tok[9]), (tok[10], tok[11])):
+            assert float(mag) == 0.0 or float(mag) > 1e-15, (
+                f"{name}: sub-floor dust printed raw: {ln}"
+            )
+            if float(mag) == 0.0:
+                assert float(phase) == 0.0, f"{name}: the angle of zero: {ln}"
 
 
 def test_two_decks_down_one_connection_frame_the_way_the_stock_loop_does(runtime):

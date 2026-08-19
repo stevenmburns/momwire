@@ -29,6 +29,8 @@ Groups are inert outside xdist: a serial run ignores them entirely.
 
 import os
 
+import pytest as _pytest
+
 
 def pytest_configure(config):
     # xdist worker detection: only workers carry `workerinput`. The
@@ -48,11 +50,18 @@ _PORTAL_GROUP_FILES = (
 )
 
 
+# tryfirst is LOAD-BEARING (momwire#403). xdist's worker hook rewrites each
+# grouped item's nodeid to "id@group" in its own pytest_collection_modifyitems,
+# and that hook runs BEFORE a conftest's plain hookimpl — so a group marker
+# added here without tryfirst is silently ignored and loadgroup degrades to
+# plain load: portal tests spread across every worker (measured: all 4, and
+# the cliff exactness tests reddened). A file-level pytestmark would also
+# work for the portal files, but memgate grouping keys on a MARKER, which
+# only a hook can see.
+@_pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(config, items):
-    import pytest
-
     for item in items:
         if item.get_closest_marker("memgate") is not None:
-            item.add_marker(pytest.mark.xdist_group("memgate"))
+            item.add_marker(_pytest.mark.xdist_group("memgate"))
         elif item.path.name in _PORTAL_GROUP_FILES:
-            item.add_marker(pytest.mark.xdist_group("portal"))
+            item.add_marker(_pytest.mark.xdist_group("portal"))
