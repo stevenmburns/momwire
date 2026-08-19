@@ -1542,9 +1542,9 @@ def test_a_zero_valued_ld_under_a_live_symmetry_is_still_a_no_op():
 
 
 def test_a_deck_whose_symmetry_is_dead_at_ge_serves_its_ld():
-    """§#gx--structure-reflection: the 30-of-34 corpus case — a feed wire or
-    mast after the ``GX`` collapses the symmetry, and ordinary per-tag
-    addressing comes back."""
+    """§#gx--structure-reflection: the common corpus case (all but four of the
+    36 decks that use these cards) — a feed wire or mast after the ``GX``
+    collapses the symmetry, and ordinary per-tag addressing comes back."""
     model = parse(
         K9AY
         + "GW 9 1 0. 0. 0. 0. 0. 1. 1.5E-3\n"

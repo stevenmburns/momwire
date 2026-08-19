@@ -371,13 +371,22 @@ class _Nec2Parser:
         on ``k9ay_orig``.  Refusing the drop is a deliberate divergence from
         NEC, whose silence is a defect: a card the user wrote is discarded
         with no diagnostic and still echoed in the ``DATA CARD`` list as if
-        honoured.  No corpus deck addresses outside a live cell, so the
-        divergence costs nothing observed, and the message says what NEC does
-        so a reader cross-checking against it is not surprised.
+        honoured, and the message says what NEC does so a reader
+        cross-checking against it is not surprised.
 
-        With the symmetry dead — 30 of the 34 corpus decks, the usual feed
-        wire or mast after the ``GX`` — this is the identity and ordinary
-        per-tag addressing comes back untouched.
+        It costs one corpus deck, measured (momwire#415 unit 4, and stated
+        here rather than in the earlier claim that it cost none):
+        ``1MHz_tower`` writes one ``LD`` per tower leg under a ``GR 3 4``, so
+        three of its four cards address copies.  NEC drops those three onto
+        exactly the segments it then replicates the surviving card onto, so
+        its printout is the one-card form's to every digit — the drop is real
+        and invisible at once, which is the case for refusing rather than
+        against it.  Both forms are committed under
+        ``tests/fixtures/nec2_symmetry/``.
+
+        With the symmetry dead — the usual feed wire or mast after the ``GX``,
+        and all but four of the 36 corpus decks that use these cards — this is
+        the identity and ordinary per-tag addressing comes back untouched.
         """
         applied, dropped = self.structure.under_the_cell_rule(pairs)
         if not dropped:

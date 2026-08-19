@@ -1,0 +1,9 @@
+CE dipole rotated about Z into four, plus a driven element
+GW 1 9 2.5 0. -2.5 2.5 0. 2.5 0.001
+GR 1 4
+GW 5 9 0. 0. -2.5 0. 0. 2.5 0.001
+GE 0
+EX 0 5 5 0 1.
+FR 0 1 0 0 30. 0
+XQ
+NX

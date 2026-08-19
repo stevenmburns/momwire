@@ -256,6 +256,47 @@ def _synthetic_decks() -> dict[str, str]:
         "XQ\n"
     )
 
+    # GX — reflect the structure so far in X=0, then add a driven element
+    # (momwire#415).  The trailing GW is deliberate and load-bearing: a GW
+    # after a GX retires the symmetric cell, so the deck reaches GE with
+    # SYMMETRY FLAG 0 and every table in the printout — TOTAL SEGMENTS USED,
+    # the symmetric-cell line, the segmentation rows, the currents — is
+    # comparable row for row.  A deck whose symmetry is still LIVE at GE
+    # would make the oracle fill and factor on one cell and print a cell
+    # count momwire has no equivalent of, which is a different fixture and a
+    # different question.  Three parallel elements, none touching: the
+    # reflection is measured on its own, without a junction in the way.
+    decks["dipole_gx_reflected_pair"] = (
+        "CE dipole reflected in X=0 plus a driven element\n"
+        "GW 1 9 1. 0. -2.5 1. 0. 2.5 0.001\n"
+        "GX 1 100\n"
+        "GW 3 9 0. 1. -2.5 0. 1. 2.5 0.001\n"
+        "GE 0\n"
+        "EX 0 3 5 0 1.\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+    )
+
+    # GR — rotate the structure so far about Z into four copies, then add the
+    # driven element on the axis (momwire#415).  Same dead-symmetry framing as
+    # the GX deck above, and the same reason for it.  The four ring elements
+    # sit a quarter wave off the axis and the driver sits on it, so again
+    # nothing touches; the radius is deliberately not tighter than that,
+    # because at one metre the ring shorts the driver down to a 0.3 Ohm feed
+    # and the pair's ordinary basis difference then reads as 4 % of a very
+    # small number — the high-|Z| class of antennaknobs #459, and nothing to
+    # do with GR.
+    decks["dipole_gr_rotated_ring"] = (
+        "CE dipole rotated about Z into four, plus a driven element\n"
+        "GW 1 9 2.5 0. -2.5 2.5 0. 2.5 0.001\n"
+        "GR 1 4\n"
+        "GW 5 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
+        "GE 0\n"
+        "EX 0 5 5 0 1.\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+    )
+
     # NT — a two-port network between two segments.
     decks["dipole_nt_network"] = (
         "CE two dipoles joined by an NT network\n"
@@ -651,6 +692,14 @@ PORTAL_CARDS = frozenset(
         "XQ",  # execute (Ward's YY report card retired in #839)
     }
 )
+
+# The cards a fixture DECK may use.  This is a superset of `PORTAL_CARDS`,
+# which is a statement about nec2/NECSource and must stay one: `GX` and `GR`
+# are momwire's own dialect (momwire#415) and NECSource emits neither, but the
+# corpus carries a hand-authored fixture for each because the xnec2c corpus's
+# single biggest geometry blocker was `GR`. Catalog decks are still massaged
+# down to `PORTAL_CARDS` — `nec_export` writes no `GX`/`GR` either way.
+FIXTURE_CARDS = PORTAL_CARDS | {"GX", "GR"}
 
 
 def _to_portal_dialect(deck: str) -> str:

@@ -435,13 +435,21 @@ the same feed, the same load list, term for term.
 
 The drop is refused because NEC's silence is a defect rather than a
 behaviour worth matching — a card the user wrote is discarded and reported as
-honoured. No corpus deck addresses outside a live cell, so the divergence
-costs nothing observed, and the message names what NEC does so a reader
-cross-checking against it is not surprised:
+honoured. The message names what NEC does, so a reader cross-checking against
+it is not surprised:
 
 ```text
 LD addresses <n> segment(s) outside the GX/GR symmetric cell in force (the cell is segments 1-<c> of <t>), which this engine does not serve (momwire#415): while the symmetry is live the matrix is the cell's, so NEC silently drops such a card rather than loading the copy — address the cell instead, where a load applies to every copy of it, or write the GX/GR out as explicit GW cards
 ```
+
+It costs one real deck. `1MHz_tower` in the xnec2c examples writes one `LD`
+per tower leg — tags 3, 6, 9 and 12 under a `GR 3 4` whose cell is tags 1-3 —
+so three of its four cards are dropped, and dropped onto exactly the segments
+the surviving card is then replicated onto. nec2c prints the same impedance
+for that deck as for the one-card form, to every digit; the drop is real and
+invisible, and this engine refuses instead of choosing silently between two
+readings the printout cannot tell apart. Both forms are committed as fixtures
+(`tests/fixtures/nec2_symmetry/1MHz_tower*.deck`).
 
 The rule reads the **segments** a card resolves to, not the way its tag field
 spelled them. Three consequences:
@@ -484,9 +492,12 @@ corpus deck pairs an `IS` with a live cell.
 IS while a GX/GR symmetric cell is in force is not supported by this engine (momwire#415): a sheath moves the matrix the way a load does, so the cell rule applies to it, but NEC-2 has no IS card to measure that rule against — write the GX/GR out as explicit GW cards
 ```
 
-A deck whose symmetry is dead at `GE` — 30 of the 34 corpus decks that use
-these cards, the usual feed wire or mast — never meets any of this: ordinary
-per-tag addressing comes back untouched. The rule is one check against
+A deck whose symmetry is dead at `GE` — the great majority, the usual feed
+wire or mast after the replication — never meets any of this: ordinary
+per-tag addressing comes back untouched. Of the 36 xnec2c example decks that
+write a `GX` or a `GR`, only four reach `GE` with a cell still live
+(`40m-moxon`, `70cm_collinear`, `k9ay_orig`, `1MHz_tower`), and only the last
+two of those also carry an `LD`. The rule is one check against
 `symmetry`, so it reads identically whichever card, `GX` or `GR`, declared
 the live cell.
 
