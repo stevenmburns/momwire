@@ -1345,8 +1345,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_l = seg_p0
         seg_r = seg_p0 + seg_h[:, None] * seg_t
         seg_a = self._seg_radius(geom)
-        if mirror:
-            img = self._image_sources(geom)
+        img = self._image_sources(geom) if mirror else None
+        if img is not None:
             img_l = img["seg_p0"]
             img_r = img["seg_p0"] + seg_h[:, None] * img["seg_t"]
             n = seg_l.shape[0]
