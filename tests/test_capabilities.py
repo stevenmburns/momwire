@@ -255,7 +255,6 @@ def test_razor_ground_contact_is_served_at_a_wire_end():
     [
         ("junction_ports", {"junction_ports": [0]}),
         ("node_gaps", {"node_gaps": [(0, "end", 1.0 + 0j)]}),
-        ("extended_kernel", {"extended_kernel": True}),
     ],
 )
 def test_razor_out_of_scope_kwargs_refuse(cell, kwarg):
@@ -316,24 +315,27 @@ def test_razor_unsupported_kwargs_are_typeerrors(cell, kwarg):
         )
 
 
-def test_razor_served_row_is_every_ground_plus_loading_and_radii():
+def test_razor_served_row_is_every_ground_plus_loading_radii_and_the_kernel():
     """PEC (unit 2), refl-coef (unit 4) and sommerfeld (unit 5) — the whole
     ground column, for wires clear of the plane — plus wire loading
-    (momwire#427) and per-wire radii (momwire#147). Every other cell is
-    still refused, and the one combination that is refused inside the served
-    column (contact over a finite ground, momwire#282) says so through its
-    own key rather than by removing a ground."""
+    (momwire#427), per-wire radii (momwire#147) and the EXTENDED KERNEL
+    (momwire#436, filled when the taper study identified the NEC-5 binary as
+    extended-kernel everywhere). Every other cell is still refused, and the
+    one combination that is refused inside the served column (contact over a
+    finite ground, momwire#282) says so through its own key rather than by
+    removing a ground."""
     c = RazorSolver.capabilities
     assert c.grounds == frozenset({"pec", "refl-coef", "sommerfeld"})
     assert c.wire_loading
     assert c.per_wire_radius
+    assert c.extended_kernel
     assert c.refusal("wire_loading") is None
     assert c.refusal("per_wire_radius") is None
+    assert c.refusal("extended_kernel") is None
     assert c.refusal("contact", "finite_ground") == c.refusals["contact+finite_ground"]
     assert "momwire#282" in c.refusal("contact", "finite_ground")
     assert not any(
         [
-            c.extended_kernel,
             c.junction_ports,
             c.node_gaps,
             c.singular_enrichment,
