@@ -593,9 +593,12 @@ _DECK_REFUSALS = (PortalError, DeckError)
 # it no longer writes them.
 
 # Cards echoed inside STRUCTURE SPECIFICATION rather than as DATA CARD lines.
-# The dialect's geometry is GW with GM / GS transforms and the GE terminator;
-# GA/GH/GX/GR are refused by name upstream, so nothing else reaches here.
-_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GE"})
+# The dialect's geometry is GW with GM / GS / GX transforms and the GE
+# terminator; GA/GH/GR are refused by name upstream, so nothing else reaches
+# here. GX joined when momwire#415 served it — a geometry card echoing as a
+# DATA CARD line would diverge from nec2c's printout, which the #415
+# differential fixtures pin.
+_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GE"})
 
 # Cards that RUN the pending excitation group. ``RP``/``NE``/``NH`` are not
 # just report requests: nec2c executes on reading them and then prints their
