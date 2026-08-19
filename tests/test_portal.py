@@ -63,43 +63,15 @@ REFUSED_NAMES = (
 )
 ANTENNA_NAMES = tuple(n for n in ALL_NAMES if n not in REFUSED_NAMES)
 
-# momwire#415 unit 4, and the one thing the GX/GR differential fixtures found:
-# their NUMBERS reproduce the oracle (tests/test_portal_differential.py, 1.96 %
-# and 2.15 %) but their STRUCTURE SPECIFICATION section does not reproduce its
-# BYTES, in two ways, both in ``_portal._structure_rows``:
-#
-#   1. nec2c annotates the replication inside the section — geometry.c prints
-#      ``STRUCTURE REFLECTED ALONG THE AXES X * * - TAGS INCREMENTED BY 1``
-#      for a GX and ``STRUCTURE ROTATED ABOUT Z-AXIS 4 TIMES - LABELS
-#      INCREMENTED BY 1`` for a GR, on the line where the card fired. This
-#      renderer emits neither, so its section is one line short.
-#   2. the FIRST SEG / LAST SEG columns of a GW row AFTER a GX/GR must count
-#      the segments the replication added: the oracle numbers the trailing
-#      wire 19-27 (GX) and 37-45 (GR) where this renderer numbers it 10-18,
-#      because its running total advances by GW cards alone.
-#
-# Units 1-2 put GX/GR into ``_portal._GEOMETRY_CARDS`` so the cards echo INSIDE
-# this section rather than as DATA CARD lines, and that half is right and is
-# asserted below (``test_gx_and_gr_never_echo_as_data_card_lines``). The rest
-# of the echo is unwritten. Both gaps are pinned as STRICT xfails rather than
-# excluded, so whoever writes it sees them turn green.
-STRUCTURE_SPEC_GAP = {
-    "dipole_gx_reflected_pair": "no STRUCTURE REFLECTED row, and the GW after "
-    "the GX is numbered 10-18 where nec2c numbers it 19-27",
-    "dipole_gr_rotated_ring": "no STRUCTURE ROTATED row, and the GW after the "
-    "GR is numbered 10-18 where nec2c numbers it 37-45",
-}
-
-
-def _layout_param(name: str):
-    if name not in STRUCTURE_SPEC_GAP:
-        return name
-    return pytest.param(
-        name,
-        marks=pytest.mark.xfail(
-            strict=True, reason=f"momwire#415: {STRUCTURE_SPEC_GAP[name]}"
-        ),
-    )
+# momwire#415: the two decks whose STRUCTURE SPECIFICATION section carries a
+# replication — the annotation row (``STRUCTURE REFLECTED ALONG THE AXES X * *
+# - TAGS INCREMENTED BY 1`` / ``STRUCTURE ROTATED ABOUT Z-AXIS 4 TIMES -
+# LABELS INCREMENTED BY 1``, nec2c geometry.c) and the FIRST/LAST SEG columns
+# of a GW written after the card, which count the segments the replication
+# added (the trailing wire is 19-27 / 37-45, not 10-18). Both halves are
+# byte-asserted against the captured oracle section below
+# (``test_the_gx_gr_structure_specification_reproduces_the_oracle``).
+REPLICATED_SPEC_NAMES = ("dipole_gr_rotated_ring", "dipole_gx_reflected_pair")
 
 
 # nec2/Execute.versionA — the regex SimNEC applies to `<cmd> -version`.
@@ -832,7 +804,7 @@ def test_loaded_deck_spends_power_in_the_load():
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("name", [_layout_param(n) for n in ANTENNA_NAMES])
+@pytest.mark.parametrize("name", ANTENNA_NAMES)
 def test_every_fixture_matches_the_oracle_column_layout(name):
     """The score the unit reports: every committed oracle printout, line for
     line and column for column.
@@ -841,8 +813,6 @@ def test_every_fixture_matches_the_oracle_column_layout(name):
     reader is likely to be debugging; this one is the gate. Both are cheap —
     the whole corpus solves in about a second and a half.
 
-    The two ``GX``/``GR`` fixtures are strict xfails here; see
-    ``STRUCTURE_SPEC_GAP``.
     """
     ours = body_lines(printout(name))
     theirs = body_lines(fixture_out(name))
@@ -881,7 +851,7 @@ def structure_specification(text: str) -> list[str]:
     return out
 
 
-@pytest.mark.parametrize("name", sorted(STRUCTURE_SPEC_GAP))
+@pytest.mark.parametrize("name", REPLICATED_SPEC_NAMES)
 def test_gx_and_gr_never_echo_as_data_card_lines(name):
     """The half of the echo units 1-2 got right, on both engines.
 
@@ -904,17 +874,11 @@ def test_gx_and_gr_never_echo_as_data_card_lines(name):
     assert total.search(printout(name)).group(1) == expected
 
 
-@pytest.mark.parametrize("name", sorted(STRUCTURE_SPEC_GAP))
-@pytest.mark.xfail(strict=True, reason="momwire#415: see STRUCTURE_SPEC_GAP")
+@pytest.mark.parametrize("name", REPLICATED_SPEC_NAMES)
 def test_the_gx_gr_structure_specification_reproduces_the_oracle(name):
-    """The other half, unwritten — the two divergences ``STRUCTURE_SPEC_GAP``
-    names, asserted as the fix would leave them.
-
-    Kept as a strict xfail rather than a comment so that the day
-    ``_structure_rows`` learns to annotate a replication and to advance its
-    segment counter past one, this turns red for passing and the exclusion in
-    the layout gate comes out with it.
-    """
+    """``_structure_rows`` reproduces the oracle's replicated sections to the
+    byte: the annotation row on the line where the card fired, and a trailing
+    GW numbered from the post-replication segment total (momwire#415)."""
     assert structure_specification(printout(name)) == structure_specification(
         fixture_out(name)
     )

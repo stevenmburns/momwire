@@ -2454,7 +2454,13 @@ def _structure_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
     them, with the transform annotations the oracle interleaves."""
     rows: list[str] = []
     wire_no = 0
-    first_seg = 1
+    # Running REAL segment count: GX/GR multiply the structure, and the
+    # oracle numbers a GW written after one from the post-replication total
+    # (`dipole_gx_reflected_pair`: the trailing GW is segments 19-27, not
+    # 10-18). GM's replicating form also grows the structure, but only by the
+    # ITS-selected block — no committed fixture pins that numbering yet, so
+    # it keeps the card-count behavior for now.
+    seg_total = 0
     for card in deck.geometry:
         if card.mnemonic == "GW":
             wire_no += 1
@@ -2466,12 +2472,35 @@ def _structure_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
                     (card.f(5), card.f(6), card.f(7)),
                     card.f(8),
                     n_seg,
-                    first_seg,
-                    first_seg + n_seg - 1,
+                    seg_total + 1,
+                    seg_total + n_seg,
                     card.i(0),
                 )
             )
-            first_seg += n_seg
+            seg_total += n_seg
+        elif card.mnemonic == "GX":
+            # nec2c geometry.c case 1: flags normalized to 0/1, printed X Y Z
+            # with '*' for an unselected plane, then reflc doubles N per
+            # firing plane.
+            code = card.i(1)
+            ix = int((code // 100) % 10 != 0)
+            iy = int((code // 10) % 10 != 0)
+            iz = int(code % 10 != 0)
+            rows.append(
+                "      STRUCTURE REFLECTED ALONG THE AXES "
+                f"{'*X'[ix]} {'*Y'[iy]} {'*Z'[iz]}"
+                f" - TAGS INCREMENTED BY {card.i(0)}"
+            )
+            seg_total *= 2 ** (ix + iy + iz)
+        elif card.mnemonic == "GR":
+            # nec2c geometry.c case 2; reflc's rotation branch multiplies N
+            # by the structure count.
+            nop = card.i(1)
+            rows.append(
+                f"  STRUCTURE ROTATED ABOUT Z-AXIS {nop} TIMES"
+                f" - LABELS INCREMENTED BY {card.i(0)}"
+            )
+            seg_total *= max(nop, 1)
         elif card.mnemonic == "GS":
             rows.append(f"     STRUCTURE SCALED BY FACTOR: {card.f(2):10.5f}")
         elif card.mnemonic == "GM":

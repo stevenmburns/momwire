@@ -180,7 +180,7 @@ fails.
     pair measures what the corpus mostly needs — the EXPANSION, which is 30 of
     its 36 ``GX``/``GR`` decks. Their numbers agree; their STRUCTURE
     SPECIFICATION bytes do not yet, which is ``test_portal.py``'s
-    ``STRUCTURE_SPEC_GAP``.
+    ``test_portal.REPLICATED_SPEC_NAMES``.
 """
 
 from __future__ import annotations
