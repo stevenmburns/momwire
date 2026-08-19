@@ -424,11 +424,22 @@ def test_deck_warnings_go_to_the_server_log_not_back_down_the_socket(runtime):
     the UI). The refusal contract is untouched by that — ``ERROR:`` lines live
     in the PRINTOUT and the sentinel is always answered — so the only thing
     rerouted is advice nobody was reading."""
-    unterminated = deck_body("dipole_free_space")
-    served = run_client(runtime, unterminated)
+    served = run_client(runtime, fixture_deck("split_dipole_qq_daemon_framed"))
     assert served.returncode == 0
-    assert served.stderr == "", "deck warnings reached the client"
-    assert "stdin ended before an NX or EN card" in logs(runtime)
+    assert served.stderr == "", "deck stderr reached the client"
+    assert "reducedField:2" in logs(runtime)
+
+
+def test_a_body_unterminated_at_eof_is_served_over_the_socket(runtime):
+    """#458: the connection's end of input terminates the deck the way NEC's
+    own reader does. Through the shared server the stream ends when the client
+    closes, so a body with its NX taken off must answer exactly as the same
+    deck ending in EN — a dropped deck here would reach the host as an empty
+    printout with nothing on any channel it reads."""
+    served = run_client(runtime, deck_body("dipole_free_space"))
+    assert served.returncode == 0
+    assert served.stderr == ""
+    assert same_printout(served.stdout, stock(deck_ending_in_en("dipole_free_space")))
 
 
 def test_the_basis_flag_reaches_the_server_and_stamps_the_banner(runtime):

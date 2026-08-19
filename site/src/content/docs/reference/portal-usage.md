@@ -169,9 +169,8 @@ momwire-nec2c --basis sinusoidal < dipole.nec > dipole.printout
 One framing rule makes this work: a deck is solved when its terminator card
 arrives. Inside SimNEC that card is `NX`, appended automatically. Standalone,
 a stock `.nec` file's final `EN` card does the same job and then ends the run.
-A file with neither — a deck that stops at `XQ` — produces only the banner,
-and the body is discarded at end of input with a warning on stderr naming
-this rule.
+End of input terminates a deck too, exactly as `EN` does — so a file with
+neither, a deck that stops at `XQ`, solves and exits the same way.
 
 ## What refusals look like
 

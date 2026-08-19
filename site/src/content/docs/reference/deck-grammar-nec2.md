@@ -79,8 +79,9 @@ Ordering rules the dialect enforces:
   structure, so it cannot change between runs. See [IS](#is--insulated-sheath).
 * **`NX` ends the deck.** It is the frame terminator, and its echo is the
   sentinel a resident caller waits on. `EN` also terminates a deck and
-  additionally ends the run. Everything after `NX` is a new deck; a body left
-  unterminated at end of input is discarded.
+  additionally ends the run. Everything after `NX` is a new deck; a body still
+  open at end of input parses as though it ended with `EN`, matching NEC's own
+  card reader, which synthesizes `EN` at EOF.
 
 Two mnemonic-level errors are raised before any card is interpreted:
 
@@ -790,7 +791,9 @@ on **every** path — including a refused deck.
 ## EN — end of run
 
 Terminates a deck exactly as `NX` does, and additionally ends the run. A
-standalone `.nec` file ending in `EN` therefore solves and exits.
+standalone `.nec` file ending in `EN` therefore solves and exits. End of input
+is the same terminator: a deck whose last card is an execute card, with no `EN`
+written, solves and exits identically.
 
 ## CM / CE — comments
 
