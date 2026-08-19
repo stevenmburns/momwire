@@ -37,10 +37,10 @@ from .model import (
 __all__ = ["parse_nec2"]
 
 
-# The geometry section.  GA/GH/GX/GR are NEC geometry too, and are refused by
+# The geometry section.  GA/GH/GR are NEC geometry too, and are refused by
 # name below: the corpus never uses them and an untested geometry path is
 # worse than an honest no.
-_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GE"})
+_GEOMETRY_CARDS = frozenset({"GW", "GM", "GS", "GX", "GE"})
 
 # Cards that RUN the pending group.  RP/NE/NH are not merely report requests:
 # the engine executes on reading them and prints their table afterwards.
@@ -104,10 +104,6 @@ _REFUSED_BY_NAME = MappingProxyType(
         "GH": (
             "GH (helix) is not part of this engine's nec2 dialect, whose "
             "geometry is GW with GM / GS transforms"
-        ),
-        "GX": (
-            "GX (structure reflection) is not part of this engine's nec2 "
-            "dialect, whose geometry is GW with GM / GS transforms"
         ),
         "GR": (
             "GR (cylindrical structure rotation) is not part of this engine's "
@@ -350,6 +346,32 @@ class _Nec2Parser:
             return None
         return LoadSpec("fixed", r=r, x=x)
 
+    def _refuse_a_load_under_a_live_symmetry(self) -> None:
+        """``LD`` while a ``GX`` symmetric cell is still in force.
+
+        A load enters the MATRIX, and while symmetry is live the matrix is
+        the cell's, so NEC's ``LOAD`` stamps the cell's loading onto every
+        copy: a card addressing a tag INSIDE the cell loads the matching
+        segment of every image, and a card addressing a tag OUTSIDE it is
+        dropped with no diagnostic (issue #415, oracle-verified on nec2c and
+        nec5cl to every printed digit).  Serving the deck with the load where
+        it was written is not an approximation — ``k9ay_orig`` reads 53 %
+        off — so the combination refuses until the cell rule lands.
+
+        It costs two decks in the 34-deck corpus census: the other 32 either
+        collapse their symmetry before ``GE`` (30 of them, the usual feed
+        wire or mast) or carry no ``LD``, and those serve fully, because the
+        geometry expansion is exact everywhere.
+        """
+        if self.structure.symmetry is None:
+            return
+        raise DeckError(
+            "LD while a GX symmetric cell is in force is not supported by "
+            "this engine yet (momwire#415): NEC applies a load addressed "
+            "inside the cell to every copy of it and silently drops one "
+            "addressed outside it, and that rule is not implemented here"
+        )
+
     def _ld(self, card: Card) -> None:
         ldtyp = card.i(0)
         if ldtyp == -1:
@@ -369,6 +391,10 @@ class _Nec2Parser:
         tag, first, last = card.i(1), card.i(2), card.i(3)
 
         if ldtyp == 5:
+            # A conductivity is read under the LD mnemonic and lands in the
+            # same matrix diagonal, so it is cell-scoped exactly as a lumped
+            # load is.
+            self._refuse_a_load_under_a_live_symmetry()
             self._ld5(tag, first, last, card.f(4))
             return
 
@@ -382,6 +408,9 @@ class _Nec2Parser:
         spec = self._load_spec(ldtyp, card)
         if spec is None:
             return  # a zero-valued load is a no-op, dropped
+        # After the no-op test, so a deck whose LD is byte-identical to
+        # omitting the card is not refused for a rule it cannot trip.
+        self._refuse_a_load_under_a_live_symmetry()
         for wire, seg in pairs:
             piece_index, elem = self.structure.element_of(wire, seg)
             key = (piece_index, elem)

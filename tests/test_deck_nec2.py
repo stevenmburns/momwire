@@ -20,7 +20,7 @@ from momwire.deck._nec2 import (
     _OPERATOR_CARDS,
     _REFUSED_BY_NAME,
 )
-from momwire.deck._nec2_geometry import build_geometry
+from momwire.deck._nec2_geometry import Symmetry, build_geometry
 from momwire.deck.model import (
     Environment,
     FarFieldRequest,
@@ -239,6 +239,198 @@ def test_gm_refuses_an_unknown_tag():
     with pytest.raises(DeckError) as exc:
         geometry("GW 1 2 0 0 0 1 0 0 1E-3\nGM 0 0 0 0 0 0 0 0 9\nGE 0\n")
     assert str(exc.value) == "no wire has tag 9"
+
+
+# ---------------------------------------------------------------------------
+# #gx--structure-reflection
+# ---------------------------------------------------------------------------
+
+# The gating fixture of momwire#415, k9ay_orig's geometry: two wires meeting a
+# reflection plane at one end each, mirrored in X=0 with a tag increment of 2,
+# so the cell is tags 1 and 2 and its image is tags 3 and 4.
+K9AY = (
+    "GW 1 8 0. 0. 8.5 5. 0. 1.5 1.5E-3\nGW 2 5 0. 0. 0.  5. 0. 1.5 1.5E-3\nGX 2 100\n"
+)
+
+
+def test_gx_reflects_the_whole_structure_so_far():
+    """§#gx--structure-reflection: one plane copies every wire built so far,
+    negating one coordinate and adding the increment to every nonzero tag."""
+    built = geometry(K9AY + "GE 0\n")
+    assert [w.tag for w in built.wires] == [1, 2, 3, 4]
+    assert built.wires[2].p1 == [0.0, 0.0, 8.5]
+    assert built.wires[2].p2 == [-5.0, 0.0, 1.5]
+    assert built.wires[3].p2 == [-5.0, 0.0, 1.5]
+    # The image is a copy in every other respect.
+    assert [w.n_seg for w in built.wires] == [8, 5, 8, 5]
+    assert [w.radius for w in built.wires] == [1.5e-3] * 4
+
+
+def test_gx_fires_z_then_y_then_x_and_doubles_the_tag_increment():
+    """§#gx--structure-reflection: the planes fire in NEC's own order, and
+    the increment doubles after each one, so one wire tagged 1 under all
+    three planes becomes eight wires tagged 1 through 8."""
+    built = geometry("GW 1 2 1. 1. 1. 2. 2. 2. 1.E-3\nGX 1 111\nGE 0\n")
+    assert [w.tag for w in built.wires] == [1, 2, 3, 4, 5, 6, 7, 8]
+    # Z first (tag 2), then Y over both (tags 3, 4), then X over all four
+    # (tags 5-8): the sign pattern is the firing order read backwards.
+    assert [w.p1 for w in built.wires] == [
+        [1.0, 1.0, 1.0],
+        [1.0, 1.0, -1.0],
+        [1.0, -1.0, 1.0],
+        [1.0, -1.0, -1.0],
+        [-1.0, 1.0, 1.0],
+        [-1.0, 1.0, -1.0],
+        [-1.0, -1.0, 1.0],
+        [-1.0, -1.0, -1.0],
+    ]
+
+
+def test_the_k9ay_orig_cell_is_the_one_nec2c_prints():
+    """§#gx--structure-reflection, the gating fixture of momwire#415.
+
+    nec2c on the deck this geometry is taken from:
+
+        TOTAL SEGMENTS USED: 26   SEGMENTS IN A SYMMETRIC CELL: 13
+        SYMMETRY FLAG: 1   STRUCTURE HAS 1 PLANES OF SYMMETRY
+    """
+    built = geometry(K9AY + "GE 0\n")
+    assert built.n_segments == 26
+    assert built.symmetry == Symmetry(cell_wires=2, cell_segments=13)
+
+
+def test_gx_images_are_reachable_by_their_own_tags():
+    """§#gx--structure-reflection + §#addressing: the doubling exists so that
+    every image keeps a unique tag, which is what makes a deck's ``EX``/``LD``
+    able to name one — k9ay_orig drives tag 4, an image."""
+    built = geometry(K9AY + "GE 0\n")
+    assert built.locate(3, 1) == (2, 1)
+    assert built.locate(4, 5) == (3, 5)
+    # Two planes, increment 1: the Y image of tag 1 is tag 2, and the X
+    # images are tags 3 and 4 — the increment having doubled once.
+    two = geometry("GW 1 2 1. 1. 0. 2. 1. 0. 1.E-3\nGX 1 110\nGE 0\n")
+    assert [w.tag for w in two.wires] == [1, 2, 3, 4]
+    assert two.locate(4, 1) == (3, 1)
+
+
+def test_gx_keeps_tag_zero_at_zero():
+    """§#gx--structure-reflection: a wire tagged 0 is tagged 0 in every
+    image, exactly as under ``GM``."""
+    built = geometry(
+        "GW 0 2 1. 0. 0. 2. 0. 0. 1.E-3\n"
+        "GW 7 2 1. 1. 0. 2. 1. 0. 1.E-3\n"
+        "GX 5 100\nGE 0\n"
+    )
+    assert [w.tag for w in built.wires] == [0, 7, 0, 12]
+
+
+@pytest.mark.parametrize(
+    "code,plane",
+    [("001", "Z=0"), ("010", "Y=0"), ("100", "X=0")],
+)
+def test_gx_refuses_a_wire_lying_in_a_firing_plane(code, plane):
+    """§#gx--structure-reflection: both ends on the plane — the image would
+    land on top of the wire."""
+    with pytest.raises(DeckError) as exc:
+        geometry(f"GW 1 2 0. 0. 0. 0. 0. 0. 1.E-3\nGX 1 {code}\nGE 0\n")
+    assert str(exc.value) == f"a wire lies in or crosses the {plane} symmetry plane"
+
+
+def test_gx_refuses_a_wire_crossing_a_firing_plane():
+    """§#gx--structure-reflection: the two ends on opposite sides — the image
+    would land inside the wire.
+
+    This wire crosses at a SEGMENT BOUNDARY, which is the one shape where the
+    per-wire test is stronger than NEC's per-segment one: nec2c accepts this
+    deck and reports ``TOTAL SEGMENTS USED: 4 ... SYMMETRIC CELL: 2``, two of
+    those four segments being duplicates lying on top of the other two.  The
+    page says this dialect refuses the degenerate structure instead.
+    """
+    with pytest.raises(DeckError) as exc:
+        geometry("GW 1 2 -1. 1. 0. 1. 1. 0. 1.E-3\nGX 1 100\nGE 0\n")
+    assert str(exc.value) == "a wire lies in or crosses the X=0 symmetry plane"
+
+
+def test_gx_only_tests_the_planes_that_fire():
+    """§#gx--structure-reflection: a wire lying in Y=0 is fine under a
+    reflection that only selects X=0 — the error is per firing plane."""
+    built = geometry("GW 1 2 1. 0. 0. 2. 0. 0. 1.E-3\nGX 1 100\nGE 0\n")
+    assert len(built.wires) == 2
+
+
+def test_gx_allows_a_wire_touching_a_firing_plane_at_one_end():
+    """§#gx--structure-reflection: legal and common — that is how a symmetric
+    loop or an inverted-L is built, and it is what k9ay_orig does."""
+    built = geometry("GW 1 2 0. 1. 0. 1. 1. 0. 1.E-3\nGX 1 100\nGE 0\n")
+    assert len(built.wires) == 2
+    assert built.wires[1].p1 == [0.0, 1.0, 0.0]
+    assert built.wires[1].p2 == [-1.0, 1.0, 0.0]
+
+
+def test_gx_declares_a_symmetric_cell_of_the_structure_so_far():
+    """§#gx--structure-reflection: the cell is the structure as it stood when
+    the card fired — nec2c's ``SEGMENTS IN A SYMMETRIC CELL``."""
+    built = geometry("GW 1 5 1. 0. 0. 1. 0. 1. 1.E-3\nGX 1 100\nGE 0\n")
+    assert built.symmetry == Symmetry(cell_wires=1, cell_segments=5)
+    assert built.n_segments == 10
+
+
+def test_a_two_plane_gx_still_declares_one_cell():
+    """§#gx--structure-reflection: there is no hierarchy — two planes give
+    one cell and four copies of it, not a cell of a cell."""
+    built = geometry("GW 1 5 1. 1. 0. 1. 1. 1. 1.E-3\nGX 1 110\nGE 0\n")
+    assert built.symmetry == Symmetry(cell_wires=1, cell_segments=5)
+    assert len(built.wires) == 4 and built.n_segments == 20
+
+
+def test_a_second_gx_resets_the_cell_to_the_whole_prior_structure():
+    """§#gx--structure-reflection: two cards do not nest."""
+    built = geometry("GW 1 5 1. 1. 0. 1. 1. 1. 1.E-3\nGX 1 100\nGX 4 010\nGE 0\n")
+    assert built.symmetry == Symmetry(cell_wires=2, cell_segments=10)
+    assert len(built.wires) == 4 and built.n_segments == 20
+
+
+def test_a_gx_selecting_no_plane_retires_the_symmetry():
+    """§#gx--structure-reflection: NEC resets the cell before it reads the
+    plane code, so ``GX n 0`` is not a no-op — it ends the symmetry."""
+    built = geometry("GW 1 5 1. 0. 0. 1. 0. 1. 1.E-3\nGX 1 100\nGX 9 0\nGE 0\n")
+    assert built.symmetry is None
+    assert len(built.wires) == 2
+
+
+LIVE = "GW 1 5 1. 1. 0. 1. 1. 1. 1.E-3\nGX 1 100\n"
+
+
+@pytest.mark.parametrize(
+    "card",
+    [
+        "GM 0 0 0. 0. 90. 0. 0. 0. 0",  # whole-structure rotate
+        "GM 0 0 0. 0. 0. 0. 0. 3. 0",  # whole-structure translate
+        "GM 0 0 0. 0. 0. 0. 0. 3. 1",  # ITS naming the FIRST wire's tag
+        "GS 0 0 2.",  # whole-structure scale
+        "GS 1 2 2.",  # a ranged scale is still a scale
+    ],
+)
+def test_a_congruence_of_the_whole_structure_preserves_the_symmetry(card):
+    """§#gx--structure-reflection: symmetry survives a transform of the
+    ENTIRE structure — nec2c's ``move`` returns before touching ``NP``, and
+    its ``GS`` never touches it at all."""
+    built = geometry(LIVE + card + "\nGE 0\n")
+    assert built.symmetry == Symmetry(cell_wires=1, cell_segments=5)
+
+
+@pytest.mark.parametrize(
+    "card",
+    [
+        "GW 9 3 5. 5. 0. 5. 5. 1. 1.E-3",  # anything ADDED
+        "GM 0 0 0. 0. 0. 0. 0. 3. 2",  # ITS restricting to the image
+        "GM 1 1 0. 0. 0. 0. 0. 3. 0",  # NRPT replicating
+    ],
+)
+def test_adding_or_selectively_transforming_destroys_the_symmetry(card):
+    """§#gx--structure-reflection: symmetry dies the moment anything is added
+    or transformed selectively — nec2c's ``NP = N``."""
+    assert geometry(LIVE + card + "\nGE 0\n").symmetry is None
 
 
 # ---------------------------------------------------------------------------
@@ -1164,6 +1356,61 @@ def test_ld_refuses_a_second_load_on_the_same_segment():
     )
 
 
+_K9AY_DECK = K9AY + "GE 0\nEX 0 4 1 0 1. 0.\nFR 0 1 0 0 14.\n{ld}XQ\nNX\n"
+_CELL_LOAD_REFUSAL = (
+    "LD while a GX symmetric cell is in force is not supported by this "
+    "engine yet (momwire#415): NEC applies a load addressed inside the cell "
+    "to every copy of it and silently drops one addressed outside it, and "
+    "that rule is not implemented here"
+)
+
+
+@pytest.mark.parametrize(
+    "ld",
+    [
+        "LD 4 2 1 1 470. 0.\n",  # k9ay_orig's own card, inside the cell
+        "LD 4 3 1 1 470. 0.\n",  # outside it — dropped by NEC, also refused
+        "LD 5 0 0 0 5.8e7\n",  # a conductivity is cell-scoped too
+    ],
+)
+def test_ld_under_a_live_gx_symmetry_is_refused(ld):
+    """§#gx--structure-reflection: the cell rule is not implemented, so the
+    combination refuses rather than putting the load where it was written —
+    which reads 53 % off on this deck (momwire#415)."""
+    with pytest.raises(DeckError) as exc:
+        parse(_K9AY_DECK.format(ld=ld))
+    assert str(exc.value) == _CELL_LOAD_REFUSAL
+
+
+def test_a_zero_valued_ld_under_a_live_symmetry_is_still_a_no_op():
+    """§#gx--structure-reflection: a card byte-identical to omitting it is
+    not refused for a rule it cannot trip."""
+    model = parse(_K9AY_DECK.format(ld="LD 4 2 1 1 0. 0.\n"))
+    assert model.loads == ()
+
+
+def test_a_deck_whose_symmetry_is_dead_at_ge_serves_its_ld():
+    """§#gx--structure-reflection: the 30-of-34 corpus case — a feed wire or
+    mast after the ``GX`` collapses the symmetry, and ordinary per-tag
+    addressing comes back."""
+    model = parse(
+        K9AY
+        + "GW 9 1 0. 0. 0. 0. 0. 1. 1.5E-3\n"
+        + "GE 0\nEX 0 4 1 0 1. 0.\nFR 0 1 0 0 14.\n"
+        + "LD 4 2 1 1 470. 0.\nXQ\nNX\n"
+    )
+    assert len(model.loads) == 1
+    assert model.loads[0][2] == LoadSpec("fixed", r=470.0, x=0.0)
+
+
+def test_a_live_symmetry_with_no_ld_serves_in_full():
+    """§#gx--structure-reflection: expansion is exact, so the two decks with
+    live symmetry and no ``LD`` need nothing further."""
+    model = parse(_K9AY_DECK.format(ld=""))
+    assert len(model.wires) == 4
+    assert sum(w.edge_elements[0] for w in model.wires) == 26
+
+
 def test_ld5_whole_structure_form():
     """§#ld--loading: type 5, ``I2 = 0, I3 = 0`` sets every wire."""
     model = parse(
@@ -1330,7 +1577,7 @@ def test_the_refusal_table_is_the_pages_table():
     """§#cards-refused-by-name, as a set: nothing in this dialect is accepted
     and silently ignored."""
     assert set(_REFUSED_BY_NAME) == {
-        "TL", "NT", "GA", "GH", "GX", "GR", "GC", "GF", "SY",
+        "TL", "NT", "GA", "GH", "GR", "GC", "GF", "SY",
         "SP", "SM", "SC", "KH", "CP", "PL", "WG", "ZO",
     }  # fmt: skip
 
