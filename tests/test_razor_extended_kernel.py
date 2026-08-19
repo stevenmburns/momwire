@@ -653,13 +653,20 @@ def test_the_kernel_moments_closed_form_matches_its_integrand():
 
             for u_r in (-0.7, 0.13, 0.2, 1.9):
                 m0, m1 = _km._static_axis_moments_ek(np.array([[u_r]]), rho2, seg_h, a)
-                q0 = quad(f, 0.0, h, args=(a, rho2[0, 0], u_r), limit=400)[0]
+                # `points` puts the integrand's peak (t = u_r, where R is
+                # smallest) on a panel boundary. Without it `quad` cannot
+                # resolve a millimetre-wide spike inside a 0.4 m interval and
+                # warns — the REFERENCE struggling, not the closed form.
+                args = (a, rho2[0, 0], u_r)
+                pts = [u_r] if 0.0 < u_r < h else None
+                q0 = quad(f, 0.0, h, args=args, limit=400, points=pts)[0]
                 q1 = quad(
                     lambda t, *ar: t * f(t, *ar),
                     0.0,
                     h,
-                    args=(a, rho2[0, 0], u_r),
+                    args=args,
                     limit=400,
+                    points=pts,
                 )[0]
                 assert abs(m0[0, 0] - q0) < 1e-9 * abs(q0)
                 assert abs(m1[0, 0] - q1) < 1e-8 * max(abs(q1), 1e-3)
