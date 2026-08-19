@@ -1,6 +1,6 @@
 """momwire#282 stage 2, experiment §5.4-(1): does the low-eps_r contact gap
-survive when the Sommerfeld remainder is evaluated DIRECTLY, bypassing the
-interpolation grid entirely, at a tolerance far tighter than production's?
+survive when the Sommerfeld remainder is evaluated DIRECTLY, with the
+interpolation grid bypassed?
 
 The study's wording: "recompute the near-diagonal remainder blocks by direct
 evaluation at very high rtol, bypassing the grid entirely, at N = 41 poor
@@ -13,29 +13,44 @@ requested rtol instead of a cubic Lagrange stencil. Only the two
 grid-consuming accelerator kernels are masked, so the numpy body that calls
 `grid.eval` runs while the rest of the fill stays accelerated.
 
+BE PRECISE ABOUT WHAT THE BYPASS BYPASSES. `iv_surfaces_direct` is the
+shipped grid's own fill function, so this probe removes the INTERPOLATION
+and sweeps the integration TOLERANCE; the `_six_integrals` contour machinery
+underneath is reused, not checked. Two facts close that half. The rtol axis
+is SATURATED — 1e-7 through 1e-13 all give residual 3.272166 at N = 41 poor,
+so the 1e-9 production default was already converged and the whole 0.003 ohm
+shift is interpolation. And the contours carry their own exactness check,
+`greens_free_space_check` (the Sommerfeld-identity self-test), which is
+2.6e-12 relative at rtol 1e-11 on the smallest argument this deck actually
+queries (h = 0.0294 m, twice the lowest Gauss node on the N = 41 contact
+segment), on both the fig-13 and fig-14 paths.
+
 It is cheap on a vertical because every pair collapses onto rho = 0, so the
 distinct (R1, theta) arguments number in the hundreds rather than the tens
 of thousands: N = 81 poor soil is 1,691 direct evaluations and ~0.2 s.
 
 WHAT IT MEASURED (2026-08-19, momwire#282 stage 2)
 ---------------------------------------------------
-Candidate 1 is dead. With the grid gone and rtol at 1e-11, the monopole's
-poor-soil residual against the binary moves 3.3274 -> 3.3305 ohm at N = 81
-and 3.2691 -> 3.2722 at N = 41; average soil moves 1.2712 -> 1.2715. Raising
+Candidate 1 is dead. With the interpolation gone, the monopole's poor-soil
+residual against the binary moves 3.3274 -> 3.3305 ohm at N = 81 and 3.2691
+-> 3.2722 at N = 41; average soil moves 1.2712 -> 1.2715. Raising
 `n_qp_sommerfeld` 3 -> 12 at N = 41 poor moves it 3.2691 -> 3.2409. Neither
 knob is worth 3 ohm, so the remainder's evaluation is not the gap.
 
-What the grid IS worth, which is not nothing and belongs to momwire#443: on
-SEA WATER the grid costs 0.13 ohm at every mesh (N = 21/41/81 residuals
-0.5248/0.3721/0.2703 with the grid, 0.4445/0.2756/0.1611 without), i.e.
-about 40 % of that row's decay bar. On very good ground it is 0.0037, on
-average 0.0008, on poor 0.0032. That is exactly momwire#443's shape — a
-near-PEC error at the small R1 only contact geometries query — showing up
-in a shipped answer rather than in a limit gate.
+What the grid IS worth, which is not nothing and belongs to momwire#443 —
+two measures, do not mix them. On the ANSWER, |z(grid) - z(direct)| on SEA
+WATER is 0.13 ohm at every mesh; very good ground 0.0037, average 0.0008,
+poor 0.0032. On the RESIDUAL, sea water moves 0.0803/0.0965/0.1092 at
+N = 21/41/81 (0.5248/0.3721/0.2703 with the grid, 0.4445/0.2756/0.1611
+without) — 32 % of that row's decay bar on the residual measure, ~40 % on
+the answer measure. That is exactly momwire#443's shape — a near-PEC error
+at the small R1 only contact geometries query — showing up in a shipped
+answer rather than in a limit gate.
 
 Usage:
     python scripts/probe_contact_direct_remainder.py --n 41 --ground poor
     python scripts/probe_contact_direct_remainder.py --n 21 41 81 --ground sea
+    python scripts/probe_contact_direct_remainder.py --n 41 --ground diel
 """
 
 from __future__ import annotations
@@ -44,10 +59,15 @@ import argparse
 import json
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
-from momwire import BSplineSolver, _sommerfeld, bspline
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
+
+from golden_contact_nec5 import CONTACT_LADDERS, GROUND_EPS  # noqa: E402
+
+from momwire import BSplineSolver, _sommerfeld, bspline  # noqa: E402
 
 C = 299792458.0
 FREQ_MHZ = 14.0
@@ -55,50 +75,10 @@ WL = C / (FREQ_MHZ * 1e6)
 RAD = 0.005
 MONO_H = 5.3535
 
-GROUND_EPS = {
-    "sea": (81.0, 5.0),
-    "vgood": (20.0, 0.0303),
-    "avg": (13.0, 0.005),
-    "poor": (5.0, 0.001),
-}
-
-# tests/golden_contact_nec5.py, monopole rows, as (N, Z).
-NEC5 = {
-    "pec": {
-        11: 39.8820 + 19.2600j,
-        21: 40.3790 + 21.0870j,
-        41: 40.6430 + 22.0180j,
-        61: 40.7450 + 22.3610j,
-        81: 40.8040 + 22.5510j,
-    },
-    "sea": {
-        11: 41.8430 + 20.3150j,
-        21: 42.5050 + 22.4220j,
-        41: 42.8580 + 23.5730j,
-        61: 42.9880 + 24.0100j,
-        81: 43.0590 + 24.2500j,
-    },
-    "vgood": {
-        11: 51.9360 + 22.2610j,
-        21: 52.6620 + 24.6770j,
-        41: 53.0310 + 25.9260j,
-        61: 53.1700 + 26.3760j,
-        81: 53.2480 + 26.6160j,
-    },
-    "avg": {
-        11: 51.2860 + 19.2070j,
-        21: 52.0060 + 21.5050j,
-        41: 52.3720 + 22.6850j,
-        61: 52.5080 + 23.1100j,
-    },
-    "poor": {
-        11: 43.5710 + 15.1130j,
-        21: 44.2440 + 17.1690j,
-        41: 44.5870 + 18.2220j,
-        61: 44.7130 + 18.6070j,
-        81: 44.7830 + 18.8170j,
-    },
-}
+# The golden module is the single source for both the binary's printed
+# impedances and the (eps_r, sigma) each GN card carried — a hand copy here
+# already drifted once (it lacked avg/81 and all of diel).
+NEC5 = {ground: dict(rows) for ground, rows in CONTACT_LADDERS["monopole"].items()}
 
 
 class MaskedAcc:
