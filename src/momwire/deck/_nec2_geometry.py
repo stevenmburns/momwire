@@ -2,14 +2,15 @@
 
 Normative spec: ``site/src/content/docs/reference/deck-grammar-nec2.md``
 ("The nec2 deck dialect"), sections ``#gw--straight-wire``, ``#gm--move-and-
-replicate``, ``#gs--scale``, ``#ge--end-of-geometry``, ``#connections`` and
-``#addressing``.
+replicate``, ``#gx--structure-reflection``, ``#gs--scale``,
+``#ge--end-of-geometry``, ``#connections`` and ``#addressing``.
 
 This module is the ONLY place in ``momwire.deck`` where NEC's ``(tag,
 segment)`` vocabulary exists.  It turns a deck's geometry cards into
 
-  1. a flat list of straight NEC wires, after every ``GM``/``GS`` transform
-     and after the two connection passes (:func:`snap_connections`);
+  1. a flat list of straight NEC wires, after every ``GM``/``GS``/``GX``
+     transform and after the two connection passes
+     (:func:`snap_connections`);
   2. that same list shattered at the interior boundaries other wires' ends
      land on, so every electrical connection in the structure is a shared
      wire END (:func:`junction_cuts`, :func:`shatter`); and
@@ -38,6 +39,7 @@ from ._cards import Card, DeckError
 __all__ = [
     "FlatWire",
     "Piece",
+    "Symmetry",
     "Nec2Structure",
     "build_geometry",
     "snap_connections",
@@ -96,6 +98,33 @@ class Piece:
     @property
     def length(self) -> float:
         return math.dist(self.p1, self.p2)
+
+
+@dataclass(frozen=True)
+class Symmetry:
+    """The symmetric cell a ``GX`` declared, while it is still live.
+
+    Spec ``#gx--structure-reflection``.  NEC does not merely replicate a
+    reflected structure: it declares the structure SYMMETRIC and fills and
+    factors the matrix on one cell, which is what its ``SEGMENTS IN A
+    SYMMETRIC CELL`` line reports (nec2c's ``NP``, set by ``reflc``).
+
+    The layout is flat and contiguous, with no hierarchy: the cell is the
+    structure exactly as it stood when the card fired, and its images follow
+    it, so the cell is a PREFIX of :attr:`Nec2Structure.wires` — the first
+    ``cell_wires`` of them, carrying ``cell_segments`` segments between them.
+    A second ``GX`` resets the cell to the whole prior structure rather than
+    nesting inside the first one's.
+
+    The cell is recorded as a prefix LENGTH rather than a wire list because
+    the prefix survives everything that happens to the list afterwards:
+    ``GM``/``GS`` rewrite coordinates in place, snapping rewrites endpoints,
+    and :func:`shatter` indexes pieces back to their parent wire — none of
+    which moves a wire's position in the list.
+    """
+
+    cell_wires: int
+    cell_segments: int
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +236,120 @@ def _gs(card: Card, wires: list[FlatWire]) -> None:
         w.radius *= factor
 
 
-_GEOMETRY_BUILDERS = {"GW": _gw, "GM": _gm, "GS": _gs}
+def _planes(card: Card) -> tuple[tuple[int, int, str], ...]:
+    """``GX``'s ``I2`` decoded into ``(axis, flag, plane name)``, in nec2c's
+    ``reflc`` firing order: Z=0 first, then Y=0, then X=0."""
+    code = card.i(1)
+    ix, iy, iz = (code // 100) % 10, (code // 10) % 10, code % 10
+    return ((2, iz, "Z=0"), (1, iy, "Y=0"), (0, ix, "X=0"))
+
+
+def _reflect(wires: list[FlatWire], axis: int, iti: int, plane: str) -> None:
+    """One reflection: copy every wire so far with one coordinate negated.
+
+    The plane test is nec2c's (``reflc``), by way of antennaknobs'
+    ``nec_import._reflect``: a wire whose two ends both sit on the plane LIES
+    in it, and a wire whose two ends straddle it CROSSES it.  Either is a
+    geometry error, because the image would land on top of the original or
+    inside it.  Touching the plane at ONE end is legal and common — that is
+    how a symmetric loop or a V is built.
+
+    Reading it per WIRE is the reference importer's form, corpus-validated;
+    nec2c reads the same expression per SEGMENT, which differs only for a
+    wire crossing the plane exactly at a segment boundary (nec2c accepts it
+    and then duplicates the wire onto itself) and for a wire whose SEGMENTS
+    are shorter than the 1e-5 absolute tolerance.  The two readers must agree
+    on geometry, so this follows the reference.
+    """
+    images: list[FlatWire] = []
+    for w in wires:
+        e1, e2 = w.p1[axis], w.p2[axis]
+        if abs(e1) + abs(e2) <= 1.0e-5 or e1 * e2 < -1.0e-6:
+            raise DeckError(f"a wire lies in or crosses the {plane} symmetry plane")
+        q1, q2 = list(w.p1), list(w.p2)
+        q1[axis], q2[axis] = -e1, -e2
+        images.append(
+            FlatWire(w.tag + iti if w.tag != 0 else 0, w.n_seg, q1, q2, w.radius)
+        )
+    wires.extend(images)
+
+
+def _gx(card: Card, wires: list[FlatWire]) -> None:
+    """``GX`` — reflect the whole structure so far in one, two or three
+    coordinate planes (spec ``#gx--structure-reflection``).
+
+    Transcribed from nec2c's ``reflc`` by way of antennaknobs'
+    ``nec_import._gx``.  Each reflection that fires copies the ENTIRE
+    structure defined so far, and the tag increment DOUBLES afterwards, so
+    every image keeps a tag of its own: with ``I1 = 1`` and all three planes
+    selected, one wire tagged 1 becomes eight wires tagged 1 through 8.  A
+    wire tagged 0 stays tagged 0 in every image.
+    """
+    iti = card.i(0)
+    for axis, flag, plane in _planes(card):
+        if flag:
+            _reflect(wires, axis, iti, plane)
+            iti *= 2
+
+
+_GEOMETRY_BUILDERS = {"GW": _gw, "GM": _gm, "GS": _gs, "GX": _gx}
+
+
+def _symmetry_after(
+    card: Card,
+    wires: list[FlatWire],
+    before: tuple[int, int],
+    symmetry: Symmetry | None,
+) -> Symmetry | None:
+    """The symmetry state after ``card`` ran; ``before`` is the ``(wires,
+    segments)`` extent the structure had before it (spec
+    ``#gx--structure-reflection``, "The symmetric cell").
+
+    Only ``GX`` ever CREATES symmetry.  What the other geometry cards do to
+    it was measured on nec2c (issue #415) and is confirmed in its source —
+    the state is ``NP`` (the cell) and ``IPSYM`` (the flag):
+
+    | card after ``GX``           | symmetry  | nec2c                     |
+    |-----------------------------|-----------|---------------------------|
+    | ``GS`` (any)                | kept      | ``scale`` touches neither |
+    | ``GM`` whole-structure      | kept      | ``move`` returns early    |
+    | ``GM`` selective / ``NRPT`` | destroyed | ``move``: ``NP = N``      |
+    | ``GW``                      | destroyed | ``wire``: ``NP = N``      |
+    | ``GX``                      | reset     | ``reflc``: ``NP = N``     |
+
+    Symmetry survives a congruence of the ENTIRE structure and dies the
+    moment anything is added (``GW``, a replicating ``GM``) or transformed
+    selectively (a ``GM`` whose block does not start at the first wire).
+
+    This is deliberately the conservative half of nec2c's state machine: it
+    never reports symmetry DEAD where nec2c keeps it alive.  Two of nec2c's
+    further rules only ever shrink a cell — ``conect`` doubles ``NP`` when a
+    ground plane meets a Z=0 reflection, and a ``GM`` rotating about X or Y
+    scales ``IPSYM`` out of range — so leaving them out can only over-report
+    liveness, which costs a refusal rather than a wrong answer.
+    """
+    mnemonic = card.mnemonic
+    if mnemonic == "GX":
+        if not any(flag for _, flag, _ in _planes(card)):
+            # `reflc` sets NP = N and IPSYM = 0 BEFORE it looks at the plane
+            # code, so a GX that selects no plane is not a no-op: it retires
+            # whatever symmetry was in force.
+            return None
+        return Symmetry(*before)
+    if mnemonic == "GS":
+        return symmetry
+    if mnemonic == "GW":
+        return None
+    # GM.  `move` preserves only when it neither replicates nor restricts:
+    # `if (nrpt == 0 && ix == 1) return;`, where `ix` is the first segment of
+    # the affected block.  The block start is re-resolved here rather than
+    # threaded out of `_gm` because it does not move: a replicating GM
+    # APPENDS its copies, so the first wire carrying ITS keeps its index.
+    if card.i(1) != 0:
+        return None
+    if _first_wire_with_tag(wires, int(card.f(8) + 0.5)) != 0:
+        return None
+    return symmetry
 
 
 # ---------------------------------------------------------------------------
@@ -415,6 +557,12 @@ class Nec2Structure:
     # The GE ground-plane flag.  It records that the structure sits over a
     # plane and drives nothing else; the ground's physics comes from GN.
     ground_plane_flag: bool = False
+    # The symmetric cell still in force at the end of the geometry section,
+    # or None if no GX declared one or a later card destroyed it.  A live
+    # symmetry changes how NEC reads the cards that move the MATRIX (see
+    # `Symmetry` and spec ``#gx--structure-reflection``); the geometry
+    # itself is fully expanded either way.
+    symmetry: Symmetry | None = None
 
     @property
     def n_segments(self) -> int:
@@ -531,13 +679,16 @@ def build_geometry(cards: list[Card]) -> Nec2Structure:
     """
     wires: list[FlatWire] = []
     ground_plane_flag = False
+    symmetry: Symmetry | None = None
     for card in cards:
         if card.mnemonic == "GE":
             # I2 and every real field are ignored, and the flag specifies no
             # ground: it records that the structure sits over a plane.
             ground_plane_flag = card.i(0) != 0
             continue
+        before = (len(wires), sum(w.n_seg for w in wires))
         _GEOMETRY_BUILDERS[card.mnemonic](card, wires)
+        symmetry = _symmetry_after(card, wires, before, symmetry)
 
     snap_connections(wires)
     cuts = junction_cuts(wires)
@@ -548,4 +699,5 @@ def build_geometry(cards: list[Card]) -> Nec2Structure:
         pieces=pieces,
         pieces_of_wire=pieces_of_wire,
         ground_plane_flag=ground_plane_flag,
+        symmetry=symmetry,
     )
