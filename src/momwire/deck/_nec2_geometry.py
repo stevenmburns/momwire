@@ -2,7 +2,8 @@
 
 Normative spec: ``site/src/content/docs/reference/deck-grammar-nec2.md``
 ("The nec2 deck dialect"), sections ``#gw--straight-wire``, ``#gm--move-and-
-replicate``, ``#gx--structure-reflection``, ``#gs--scale``,
+replicate``, ``#gx--structure-reflection``,
+``#gr--cylindrical-structure-rotation``, ``#gs--scale``,
 ``#ge--end-of-geometry``, ``#connections`` and ``#addressing``.
 
 This module is the ONLY place in ``momwire.deck`` where NEC's ``(tag,
@@ -102,19 +103,21 @@ class Piece:
 
 @dataclass(frozen=True)
 class Symmetry:
-    """The symmetric cell a ``GX`` declared, while it is still live.
+    """The symmetric cell a ``GX``/``GR`` declared, while it is still live.
 
-    Spec ``#gx--structure-reflection``.  NEC does not merely replicate a
-    reflected structure: it declares the structure SYMMETRIC and fills and
-    factors the matrix on one cell, which is what its ``SEGMENTS IN A
-    SYMMETRIC CELL`` line reports (nec2c's ``NP``, set by ``reflc``).
+    Spec ``#gx--structure-reflection`` and
+    ``#gr--cylindrical-structure-rotation``.  NEC does not merely replicate a
+    reflected or rotated structure: it declares the structure SYMMETRIC and
+    fills and factors the matrix on one cell, which is what its ``SEGMENTS IN
+    A SYMMETRIC CELL`` line reports (nec2c's ``NP``, set by ``reflc`` — the
+    one routine behind both cards).
 
     The layout is flat and contiguous, with no hierarchy: the cell is the
     structure exactly as it stood when the card fired, and its images follow
     it, so the cell is a PREFIX of :attr:`Nec2Structure.wires` — the first
     ``cell_wires`` of them, carrying ``cell_segments`` segments between them.
-    A second ``GX`` resets the cell to the whole prior structure rather than
-    nesting inside the first one's.
+    A second ``GX``/``GR`` resets the cell to the whole prior structure
+    rather than nesting inside the first one's.
 
     The cell is recorded as a prefix LENGTH rather than a wire list because
     the prefix survives everything that happens to the list afterwards:
@@ -292,7 +295,49 @@ def _gx(card: Card, wires: list[FlatWire]) -> None:
             iti *= 2
 
 
-_GEOMETRY_BUILDERS = {"GW": _gw, "GM": _gm, "GS": _gs, "GX": _gx}
+def _gr(card: Card, wires: list[FlatWire]) -> None:
+    """``GR`` — rotate the whole structure so far about Z, ``nop - 1`` times,
+    to form a cylindrical structure of ``nop`` copies (spec
+    ``#gr--cylindrical-structure-rotation``).
+
+    Transcribed from nec2c's ``reflc`` by way of antennaknobs' ``nec_import.
+    _gr``.  ``GR``'s own reader calls the same ``reflc`` that ``GX`` does,
+    with ``ix = -1``, which sends it down ``reflc``'s ROTATION branch instead
+    of the reflection one.  Unlike ``GX`` the tag increment does not double:
+    each copy is built by rotating the PREVIOUS copy's wires (not the
+    original structure) and adding ``I1`` to the previous copy's tags, so the
+    increment accumulates — the ``k``-th copy (1-based, ``k = 1`` is the
+    first image) carries tag ``original + k * I1``. A wire tagged 0 stays
+    tagged 0 in every copy.
+    """
+    itg, nop = card.i(0), card.i(1)
+    if nop < 1:
+        raise DeckError(f"structure count must be >= 1, got {nop}")
+    sam = 2.0 * math.pi / nop
+    cs, ss = math.cos(sam), math.sin(sam)
+
+    def rot(p):
+        return [p[0] * cs - p[1] * ss, p[0] * ss + p[1] * cs, p[2]]
+
+    block = wires[:]
+    for _ in range(nop - 1):
+        # Each repetition rotates the PREVIOUS copy, exactly as `_gm`'s
+        # replicating form compounds a repeated transform — that is how one
+        # bay becomes a tower's worth of copies.
+        block = [
+            FlatWire(
+                w.tag + itg if w.tag != 0 else 0,
+                w.n_seg,
+                rot(w.p1),
+                rot(w.p2),
+                w.radius,
+            )
+            for w in block
+        ]
+        wires.extend(block)
+
+
+_GEOMETRY_BUILDERS = {"GW": _gw, "GM": _gm, "GS": _gs, "GX": _gx, "GR": _gr}
 
 
 def _symmetry_after(
@@ -303,19 +348,20 @@ def _symmetry_after(
 ) -> Symmetry | None:
     """The symmetry state after ``card`` ran; ``before`` is the ``(wires,
     segments)`` extent the structure had before it (spec
-    ``#gx--structure-reflection``, "The symmetric cell").
+    ``#gx--structure-reflection``, "The symmetric cell", and
+    ``#gr--cylindrical-structure-rotation``).
 
-    Only ``GX`` ever CREATES symmetry.  What the other geometry cards do to
-    it was measured on nec2c (issue #415) and is confirmed in its source —
-    the state is ``NP`` (the cell) and ``IPSYM`` (the flag):
+    Only ``GX`` and ``GR`` ever CREATE symmetry.  What the other geometry
+    cards do to it was measured on nec2c (issue #415) and is confirmed in its
+    source — the state is ``NP`` (the cell) and ``IPSYM`` (the flag):
 
-    | card after ``GX``           | symmetry  | nec2c                     |
+    | card after ``GX``/``GR``    | symmetry  | nec2c                     |
     |-----------------------------|-----------|---------------------------|
     | ``GS`` (any)                | kept      | ``scale`` touches neither |
     | ``GM`` whole-structure      | kept      | ``move`` returns early    |
     | ``GM`` selective / ``NRPT`` | destroyed | ``move``: ``NP = N``      |
     | ``GW``                      | destroyed | ``wire``: ``NP = N``      |
-    | ``GX``                      | reset     | ``reflc``: ``NP = N``     |
+    | ``GX``/``GR``               | reset     | ``reflc``: ``NP = N``     |
 
     Symmetry survives a congruence of the ENTIRE structure and dies the
     moment anything is added (``GW``, a replicating ``GM``) or transformed
@@ -335,6 +381,19 @@ def _symmetry_after(
             # code, so a GX that selects no plane is not a no-op: it retires
             # whatever symmetry was in force.
             return None
+        return Symmetry(*before)
+    if mnemonic == "GR":
+        # `GR`'s own card reader calls `reflc` with `ix = -1`, which always
+        # takes the ROTATION branch and always sets `IPSYM = -1` with
+        # `NP` = the pre-card segment count — there is no GX-shaped "selects
+        # nothing" case to special-case here, because a `GR` card carries no
+        # analogous "off" state: `nop < 1` already refused in `_gr`, so every
+        # card that reaches this point is a `nop >= 1` rotation.  This
+        # includes the degenerate `nop = 1`: nec2c's source sets IPSYM = -1
+        # unconditionally before it ever multiplies `N` by `nop`, so a `GR n
+        # 1` declares symmetry with a cell equal to the whole (unchanged)
+        # structure — resolved deliberately here rather than left to fall
+        # through to the GM branch below.
         return Symmetry(*before)
     if mnemonic == "GS":
         return symmetry
