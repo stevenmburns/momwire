@@ -1309,7 +1309,7 @@ def test_the_refusal_table_is_the_pages_table():
     and silently ignored."""
     assert set(_REFUSED_BY_NAME) == {
         "TL", "NT", "GA", "GH", "GX", "GR", "GC", "GF", "SY",
-        "SP", "SM", "KH", "PQ", "CP", "PL", "WG", "ZO",
+        "SP", "SM", "SC", "KH", "PQ", "CP", "PL", "WG", "ZO",
     }  # fmt: skip
 
 
