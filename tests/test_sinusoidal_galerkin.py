@@ -1735,13 +1735,19 @@ M4_REFS = {
         coll_161=48.097236 - 4.733933j,
         rich_coll=48.108123 - 4.587350j,
     ),
+    # Re-derived 2026-08-19 after momwire#443 split the Sommerfeld grid's
+    # zones at theta = 30 deg: the horizontal dipole is the one m4 deck
+    # whose pairs query across the re-banded seam (the vertical's
+    # theta = 90 stencil rows are identical before and after), and its
+    # answer shifted ~1.4e-5 relative. The other somm rows moved < 1e-7
+    # and keep their original pins.
     ("m4_dipole", "somm"): dict(
-        gal_161=56.409201 - 8.712697j,
-        rich_gal=56.408636 - 8.639097j,
-        coll_161=56.399501 - 8.801966j,
-        rich_coll=56.406698 - 8.665026j,
-        bspl_161=56.405042 - 8.723017j,
-        rich_bspl=56.408964 - 8.641944j,
+        gal_161=56.409088 - 8.711934j,
+        rich_gal=56.408525 - 8.638329j,
+        coll_161=56.399389 - 8.801206j,
+        rich_coll=56.406591 - 8.664271j,
+        bspl_161=56.404930 - 8.722257j,
+        rich_bspl=56.408855 - 8.641187j,
     ),
     ("m4_vertical", "pec"): dict(
         gal_161=75.632971 - 26.411502j,
