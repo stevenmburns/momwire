@@ -154,7 +154,7 @@ setup(
     cmdclass={"build_ext": OptionalBuildExt},
     # Listed explicitly rather than discovered: the list is short, and an
     # explicit one cannot silently ship a stray directory under src/.
-    packages=["momwire", "momwire.deck", "momwire.portal"],
+    packages=["momwire", "momwire.deck", "momwire.networks", "momwire.portal"],
     # The `momwire-nec2c-shared` client (issue #379). A top-level MODULE rather
     # than part of the package on purpose: its whole value is that running it
     # imports neither `momwire` nor NumPy, and a module inside the package
