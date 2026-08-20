@@ -818,11 +818,15 @@ class _Nec5Parser:
         )
 
     def _pq(self, card: Card) -> None:
-        """``PQ`` — accepted, inert.
+        """``PQ`` — accepted and recorded; serving it is U4's business.
 
-        Measured across all 49 printouts: ``PQ 0`` produces no charge block
-        at all, so unlike the nec2 dialect's by-value gate there is nothing
-        here to refuse.  The value is recorded and nothing acts on it.
+        Every captured printout carries a ``Wire Charge Densities`` block
+        under ``PQ 0`` (all ten byte-gate fixtures; the header is mixed-case,
+        which briefly hid it from the scored matrix's first pass), so unlike
+        the nec2 dialect — which refuses charge requests — this seam owes the
+        block: charge density is a readout from the solved current,
+        q = -(1/jω) dI/ds.  The parser records the value; the physics unit
+        answers it.
         """
         self.pq = card.i(0)
 
