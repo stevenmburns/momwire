@@ -190,6 +190,11 @@ Two spellings, one equation:
   exact here rather than arranged. A load resolves to a knot through the
   same snapping the feeds use, two loads at one knot are in series, and a
   load at a K ≥ 3 junction is refused for the reason a source there is.
+  `lumped_load_power(coeffs)` reads back each load's OWN watts,
+  `½·Re(Z_L)·|I(knot)|²`, in the same `(total, per_load)` shape — a separate
+  readout because `wire_loss_power` counts metal and a load is a component,
+  so a power budget wanting both has to add both. Both take ONE solve's
+  coefficient vector; neither answers a `compute_port_solution()` block.
 
 Junction tents need no special case. The **grounded-end tent** needs none
 either: its side-A wing is its own image and carries `σ = 0`, which drops
@@ -472,6 +477,19 @@ the single-k entry point rather than a second copy of the port algebra:
 `--basis razor` and `--basis razor-nec5` exactly like every other roster
 entry now, through the same one-fill-all-ports call.
 
+**The portal's load stamp, and its budget (momwire#433).** The portal knows
+this family loads natively — it reads `momwire.deck._solver._NATIVE_LOADING`,
+the same tuple `build_solver` keys the translation off — and acts on it
+twice. `_load_impedances` returns a structurally zero vector, so the port
+algebra does NOT stamp Z_L a second time on top of the fill's own copy: a
+fed-and-loaded site read `Z_unloaded + 2·Z_L` until this was fixed (+50 Ω on
+a plain 50 Ω `LD 4`, against every sibling basis's answer). And the power
+budget gains a third dissipation term, `lumped_load_power`, beside `p_load`
+(now identically zero here) and `p_wire` (which excludes lumped loads by
+contract) — without it the load's watts would fall into `p_radiated` by
+subtraction and the printed `EFFICIENCY` would read a lossy antenna as a
+good one.
+
 **A remaining portal-side gap, not in this class.** The portal's
 `_port_signs` assumes every `PortPlan` site (every `EX` AND every `LD`) has
 a matching `RazorSolver.feeds` entry — true for a driven site, and true for
@@ -479,11 +497,12 @@ a site that is both fed and loaded (`_sites()` merges the two into one
 `PortSite`, see "A load-only site is not a port here" above) — but a
 LOAD-ONLY site on a segment no `EX` drives never reaches `feeds` at all
 (it is baked straight into `lumped_loads`), so `_port_signs` indexes past
-the end of the list on that one deck shape. Filed as a portal-side
-follow-up rather than fixed alongside `compute_port_solution`: repairing it
-means teaching `_portal.py`'s load-stamping algebra (built on `plan.n_ports`
-== the Y-matrix size) that this family already baked a load into the fill,
-not changing anything in this module.
+the end of the list on that one deck shape. Still a portal-side follow-up:
+momwire#433 taught the STAMP and the BUDGET about native loading, which is
+the half that was silently wrong; what remains is the port-COUNT half —
+`plan.n_ports` counts a load-only site that this family's `feeds` (and
+therefore its Y matrix) does not — and repairing it changes nothing in this
+module either.
 
 Gates: `tests/test_deck_build_solver_razor.py` — a battery of eight decks
 (free dipole, `LD 4` mid-element, `LD 5` copper, a `GN 1` base-fed contact
@@ -545,7 +564,12 @@ and the `node_gaps` / contact-over-finite-ground refusals surfacing through
   per call, and the swept ω-boundary bit gate over a moving-ε̃ ground.
   `tests/test_portal.py`'s `--basis razor` / `--basis razor-nec5` battery
   carries the portal end-to-end gate — a live deck with a load AND a
-  ground, both roster names, finite AIP data.
+  ground, both roster names, finite AIP data — plus the momwire#433 budget
+  gates: `Z_loaded − Z_unloaded == Z_L` exactly (the load applied once, not
+  twice), the printed `STRUCTURE LOSS` equalling the closed-form
+  `½·R_L·|I_port|²` on a lossless deck, wire loss and lumped loss as
+  separate additive terms on a `LD 5` + `LD 4` deck, and the efficiency
+  agreeing with a port-algebra sibling basis on one shared deck.
 - `tests/test_razor_nec5_twin.py` — the only file comparing against real
   NEC-5 printouts (LLNL-CODE-746721) rather than an in-Python instrument:
   pointwise tracking from N=24 up with per-N tolerances that shrink with N,

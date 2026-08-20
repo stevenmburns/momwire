@@ -190,6 +190,15 @@ from ..deck import parse as parse_dialect
 # only thing that module cannot know, which is the antenna's admittance.
 from ..deck._networks import build_reducer, card_branches, live_cards
 
+# Which solver families take a deck's ``LD`` lumped load as their OWN
+# construction kwarg instead of as the port-algebra stamp every other family
+# shares (momwire#432 — razor today).  ``build_solver`` reads it to decide how
+# to spell a load's translation; the power budget has to read the same tuple,
+# because "the fill already carries Z_L" and "the port algebra must stamp Z_L"
+# are the same fact asked from two directions, and a budget that guessed
+# separately would be exactly the disagreement momwire#433 found.
+from ..deck._solver import _NATIVE_LOADING
+
 # The NEC-level view of a deck's geometry: the flat wire list after every
 # GM/GS transform and both connection passes, carrying the TAGS and the
 # (tag, segment) resolver. ``momwire.deck``'s public surface deliberately
@@ -2011,6 +2020,15 @@ class DeckSolver:
         # insulation). ``momwire.deck`` folds both into the model's per-wire
         # material record.
         self._lossy = any(w.material is not None for w in self.model.wires)
+        # Whether this basis took the deck's ``LD`` loads INTO the fill rather
+        # than leaving them for the port algebra (momwire#432's
+        # ``_NATIVE_LOADING``, razor today).  One ``--basis`` per process, and
+        # the basis is in the operator key, so this is a property of the whole
+        # DeckSolver rather than of one cached entry.  It decides two things
+        # that must agree: whether ``_load_impedances`` stamps Z_L at all, and
+        # whether the budget reads the load's watts back off the solver
+        # (momwire#433).
+        self._native_loading = isinstance(built.solver, _NATIVE_LOADING)
         self._cache[(seed, seed_ek, seed_env.ground)] = self._entry(built)
 
     # -- construction ------------------------------------------------------
@@ -2101,14 +2119,32 @@ class DeckSolver:
         return entry
 
     def _load_impedances(self, omega: float) -> np.ndarray:
-        """The per-port load impedance vector at one angular frequency.
+        """The per-port load impedance the PORT ALGEBRA still has to stamp, at
+        one angular frequency.
 
         The plan says which solver port each ``LD`` card landed on and hands
         over its :class:`~momwire.deck.model.LoadSpec`; stamping it is the
-        consumer's job, because the load is an impedance in the port's own
-        current path rather than anything the fill knows about.
+        consumer's job, because for every family but one the load is an
+        impedance in the port's own current path rather than anything the fill
+        knows about.
+
+        The exception is a :data:`~momwire.deck._solver._NATIVE_LOADING` basis
+        (momwire#432): ``build_solver`` hands those the same ``LD`` cards as a
+        ``lumped_loads`` kwarg, so Z_L is already on the fill's diagonal and
+        the admittance this method's caller solves against ALREADY carries it.
+        Stamping again would apply one load twice — measured before momwire#433
+        as a fed-and-loaded site reading ``Z_unloaded + 2·Z_L``, +50 Ω on a
+        50 Ω ``LD`` — so the vector is structurally zero there and the load's
+        watts come back from the solver's own ``lumped_load_power`` in
+        :meth:`solve_group` instead of from this vector's ``p_load`` term.
+        Returning zeros rather than skipping the stamp at each of the three
+        consumer sites (the ``1 + Z·Y`` solve, the gap voltage, the network
+        fold) is deliberate: one place to be right about, and every consumer
+        keeps its single expression.
         """
         z = np.zeros(self.n_ports, dtype=np.complex128)
+        if self._native_loading:
+            return z
         for idx, ld in self.load_ports:
             if ld.kind == "fixed":
                 z[idx] += complex(ld.r, ld.x)
@@ -2311,7 +2347,18 @@ class DeckSolver:
         p_wire = 0.0
         if self._lossy:
             p_wire = float(entry["solver"].wire_loss_power(coeffs)[0])
-        p_structure = p_load + p_wire
+        # The third dissipation term, and the one only a _NATIVE_LOADING basis
+        # has (momwire#433): its ``LD`` loads are INSIDE the fill, so ``p_load``
+        # above is structurally zero for it and ``p_wire`` excludes them by
+        # contract (``wire_loss_power`` counts metal, not components). Without
+        # this the load's watts would land in ``p_rad`` by subtraction and the
+        # printed EFFICIENCY would read a lossy antenna as a good one — and
+        # disagree with every sibling basis on the same deck, which counts the
+        # same watts in ``p_load``.
+        p_lumped = 0.0
+        if self._native_loading and getattr(entry["solver"], "lumped_loads", ()):
+            p_lumped = float(entry["solver"].lumped_load_power(coeffs)[0])
+        p_structure = p_load + p_wire + p_lumped
         if reducer is None:
             p_rad = p_in - p_structure
         else:
@@ -2321,9 +2368,13 @@ class DeckSolver:
             # the network. NEC keeps the same books: on
             # ``dipole_tl_shunt_crossed`` its RADIATED POWER is the sum of the
             # POWER column of the excitation block to the last printed digit,
-            # and its NETWORK LOSS is the remainder.
+            # and its NETWORK LOSS is the remainder. Under a native-loading
+            # basis the loads are BEHIND the gaps too, so their watts come off
+            # the same side as the wire's; ``p_load`` is zero there, which
+            # leaves ``p_network`` reading the whole source-to-gap shortfall,
+            # exactly as it should when nothing was stamped at the port.
             p_gap = 0.5 * float(np.sum(np.real(v_gap * np.conj(i_port))))
-            p_rad = p_gap - p_wire
+            p_rad = p_gap - p_wire - p_lumped
             p_network = p_in - p_load - p_gap
             if abs(p_network) <= _NETWORK_LOSS_FLOOR * abs(p_in):
                 p_network = 0.0

@@ -3247,6 +3247,177 @@ def test_razor_basis_answers_a_deck_with_a_load_and_a_ground(basis):
     assert all(math.isfinite(v) for row in rows for v in row)
 
 
+# --- the LD load is applied ONCE and paid for ONCE (momwire#433) --------------
+#
+# A `_NATIVE_LOADING` basis (razor) is handed the deck's `LD` cards as its own
+# `lumped_loads` kwarg, so Z_L is on the FILL's diagonal and the admittance the
+# portal solves against already carries it.  Two things followed from the
+# portal not knowing that:
+#
+#   * `_load_impedances` stamped Z_L a SECOND time through the port algebra
+#     (`1 + Z·Y`), so a fed-and-loaded site read `Z_unloaded + 2·Z_L` — a plain
+#     50 Ω `LD 4` measured 111.3 Ω against the sibling bases' 62.2 Ω;
+#   * the budget's dissipation terms were `p_load` (the external stamp) and
+#     `p_wire`, and `wire_loss_power` excludes lumped loads BY CONTRACT
+#     (`razor.py`: "components, not wire"), so once the stamp is gone there is
+#     no term left holding the load's watts and they would land in `p_rad` by
+#     subtraction — a resistor reported as radiation.
+#
+# `lumped_load_power` (momwire#433) is the missing term, and `p_load` is
+# structurally zero here.  The two gates below pin the impedance side and the
+# power side; the sibling comparison pins the agreement that was silently lost.
+#
+# All three load the FED segment, which is not a taste: a load-only site on a
+# DIFFERENT segment from every `EX` never reaches `RazorSolver.feeds`, and
+# `_port_signs` indexes past the end of that list — the pre-existing #439 gap
+# recorded above, unchanged by momwire#433 and not fixed here.  A driven-segment
+# load is razor's documented `Z_driven = Z_unloaded + Z_L` case
+# (`docs/razor-solver.md`), which makes the expected impedance EXACT rather
+# than approximate, so it is the sharper gate anyway.
+
+_RAZOR_LD_R = 50.0
+_RAZOR_LD_DECK = (
+    "CE razor fed-and-loaded dipole\n"
+    "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
+    "GE 0\n"
+    f"LD 4 1 5 5 {_RAZOR_LD_R} 0.\n"
+    "EX 0 1 5 0 1.\n"
+    "FR 0 1 0 0 14.0 0\n"
+    "XQ\nNX\n"
+)
+_RAZOR_NO_LD_DECK = _RAZOR_LD_DECK.replace(f"LD 4 1 5 5 {_RAZOR_LD_R} 0.\n", "")
+
+
+def _budget(text: str) -> dict[str, float]:
+    """The printed POWER BUDGET block as a name → watts/percent mapping."""
+    return {
+        line.split("=")[0].strip(): float(line.split("=")[1].split()[0])
+        for line in text.splitlines()
+        if "=" in line and ("POWER" in line or "LOSS" in line or "EFFICIENCY" in line)
+    }
+
+
+def _one_aip(text: str) -> tuple[complex, complex]:
+    """``(I_port, Z_in)`` off the single AIP data row."""
+    (row,) = _aip_rows(text)
+    return complex(row[2], row[3]), complex(row[4], row[5])
+
+
+@pytest.mark.parametrize("basis", ["razor", "razor-nec5", "bspline"])
+def test_a_driven_segment_load_is_applied_exactly_once(basis):
+    """`Z_loaded − Z_unloaded == Z_L`, on the native-loading bases and on a
+    port-algebra sibling alike.
+
+    On razor this is exact, not approximate: a lumped stamp is one diagonal
+    entry and the load sits on the fed knot, which is razor's own documented
+    `Z_driven = Z_unloaded + Z_L` identity.  Before momwire#433 the portal
+    stamped Z_L through the port algebra on TOP of the fill's own copy and
+    this delta read 2·Z_L.
+    """
+    rc, loaded, err = _run_main(["--basis", basis], deck=_RAZOR_LD_DECK)
+    assert rc == 0 and err == "" and "ERROR-NEC2C" not in loaded
+    rc, bare, err = _run_main(["--basis", basis], deck=_RAZOR_NO_LD_DECK)
+    assert rc == 0 and err == "" and "ERROR-NEC2C" not in bare
+
+    _i_loaded, z_loaded = _one_aip(loaded)
+    _i_bare, z_bare = _one_aip(bare)
+    delta = z_loaded - z_bare
+    # printed to five significant figures, so a 1e-4 relative bar is the
+    # printout's own resolution and nothing looser.
+    assert delta.real == pytest.approx(_RAZOR_LD_R, rel=1e-4), (
+        f"{basis}: R moved by {delta.real} for a {_RAZOR_LD_R} Ω load"
+    )
+    assert abs(delta.imag) <= 1e-4 * abs(z_bare.imag), (
+        f"{basis}: a purely resistive load moved X by {delta.imag}"
+    )
+
+
+@pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
+def test_the_razor_budget_charges_the_lumped_load_its_own_watts(basis):
+    """The budget closes with the load's watts INSIDE the structure loss.
+
+    The deck is lossless wire and one resistor, so ``lumped_load_power`` is
+    the ONLY dissipation term and the whole structure loss must equal the
+    closed form ½·R_L·|I_port|² read off the printed AIP row — a number the
+    printout carries independently of the budget block.  Radiated is then the
+    remainder, and positive.
+    """
+    rc, out, err = _run_main(["--basis", basis], deck=_RAZOR_LD_DECK)
+    assert rc == 0 and err == "" and "ERROR-NEC2C" not in out
+    i_port, _z_in = _one_aip(out)
+    budget = _budget(out)
+
+    expected = 0.5 * _RAZOR_LD_R * abs(i_port) ** 2
+    assert budget["STRUCTURE LOSS"] == pytest.approx(expected, rel=2e-4), (
+        f"{basis}: structure loss {budget['STRUCTURE LOSS']} vs ½·R·|I|² = {expected}"
+    )
+    assert budget["RADIATED POWER"] == pytest.approx(
+        budget["INPUT POWER"] - budget["STRUCTURE LOSS"], rel=1e-3
+    )
+    assert budget["RADIATED POWER"] > 0.0
+    assert budget["EFFICIENCY"] == pytest.approx(
+        100.0 * budget["RADIATED POWER"] / budget["INPUT POWER"], rel=1e-2
+    )
+
+
+def test_the_razor_budget_agrees_with_a_sibling_basis_on_a_loaded_deck():
+    """The cross-basis agreement momwire#433 restores.
+
+    Two bases on one deck are two discretisations of one antenna, so their
+    budgets differ by the basis gap and nothing else — a few percent on nine
+    segments.  Before the fix razor read 55.1 % efficient where every sibling
+    read 19.6 %, because razor's load was applied twice and paid for once:
+    the deck it solved was not the deck the sibling solved.
+    """
+    rc, razor, err = _run_main(["--basis", "razor"], deck=_RAZOR_LD_DECK)
+    assert rc == 0 and err == ""
+    rc, sibling, err = _run_main(["--basis", "bspline"], deck=_RAZOR_LD_DECK)
+    assert rc == 0 and err == ""
+
+    b_razor, b_sib = _budget(razor), _budget(sibling)
+    assert b_razor["EFFICIENCY"] == pytest.approx(b_sib["EFFICIENCY"], rel=0.15), (
+        f"razor {b_razor['EFFICIENCY']}% vs bspline {b_sib['EFFICIENCY']}%"
+    )
+    _i_razor, z_razor = _one_aip(razor)
+    _i_sib, z_sib = _one_aip(sibling)
+    assert abs(z_razor - z_sib) <= 0.05 * abs(z_sib), f"{z_razor} vs {z_sib}"
+
+
+def test_the_razor_budget_counts_wire_loss_and_the_load_as_separate_terms():
+    """A deck that is BOTH lossy and loaded: the two dissipation terms are
+    additive and neither swallows the other.
+
+    ``wire_loss_power`` excludes lumped loads by contract and
+    ``lumped_load_power`` excludes the metal, so the printed structure loss
+    must be their SUM: the load's closed-form ½·R_L·|I_port|² read off the AIP
+    row, plus a strictly positive copper remainder small beside a 50 Ω
+    resistor.  Neither term may swallow the other, and the remainder going to
+    zero would mean the ``LD 5`` never reached the fill.
+
+    This combination also crashed outright until momwire#433: ``LD 5`` and
+    ``LD 4`` together give a `RazorSolver` both a conductivity and a
+    ``lumped_loads`` entry, and ``wire_loss_power`` asked
+    ``_wire_loading.loading_for`` for the spec without handing over the
+    geometry the lumped-site resolution needs.
+    """
+    lossy = _RAZOR_LD_DECK.replace("GE 0\n", "GE 0\nLD 5 1 1 9 5.8E7\n")
+    rc, out, err = _run_main(["--basis", "razor"], deck=lossy)
+    assert rc == 0 and err == "" and "ERROR-NEC2C" not in out
+    i_port, _z = _one_aip(out)
+    budget = _budget(out)
+    p_lumped = 0.5 * _RAZOR_LD_R * abs(i_port) ** 2
+    assert budget["STRUCTURE LOSS"] > p_lumped, (
+        "the copper term vanished: structure loss is exactly the load's watts"
+    )
+    p_wire = budget["STRUCTURE LOSS"] - p_lumped
+    assert 0.0 < p_wire < 0.02 * p_lumped, (
+        f"copper loss {p_wire} is not a small share beside a 50 Ω load"
+    )
+    assert budget["RADIATED POWER"] == pytest.approx(
+        budget["INPUT POWER"] - budget["STRUCTURE LOSS"], rel=1e-3
+    )
+
+
 # --- the EK card, honoured for real (issue #849) ------------------------------
 #
 # Until momwire 0.26.0 the portal parsed `EK`, threaded it through the execute

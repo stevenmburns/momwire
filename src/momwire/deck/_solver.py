@@ -114,7 +114,13 @@ BASES = MappingProxyType(
 # Solver classes that take a lumped load as their own kwarg instead of the
 # deck-level port-algebra route every other family shares (momwire#432).
 # `build_solver` reads this to decide how to spell `feeds` / a load's
-# translation; nothing else in the roster keys off it.
+# translation; nothing else in the ROSTER keys off it.
+#
+# One consumer outside this module: the portal's power budget (momwire#433).
+# "the fill already carries Z_L" and "the port algebra must not stamp Z_L" are
+# the same fact asked from two directions, so the budget reads this tuple
+# rather than keeping its own list of which bases load natively — a second
+# list is a second thing to forget when a family is added here.
 _NATIVE_LOADING = (RazorSolver,)
 
 
