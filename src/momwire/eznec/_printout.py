@@ -55,9 +55,11 @@ from ..deck._nec5 import Nec5Deck
 
 __all__ = [
     "STUB_REFUSAL",
+    "ENVIRONMENT_FINITE_GROUND",
     "ENVIRONMENT_FREE_SPACE",
     "ENVIRONMENT_PERFECT_GROUND",
     "ChargeRow",
+    "GroundMedium",
     "LineRow",
     "LoadRow",
     "NetworkRow",
@@ -416,12 +418,30 @@ class PatternBlock:
     power_radiated_4pi: float | None = None
 
 
-# The two environments this arc serves.  Finite grounds print their own
-# banner (``FINITE GROUND.  SOMMERFELD SOLUTION``, shared by ``GN 0`` and
-# bare ``GD`` — the scored matrix's warning that the banner is not a mode
-# signal) and belong to rungs 2 and 3.
+# The three environments this arc serves.  The finite banner is SHARED by
+# ``GN 0`` and by the bare ``GD`` MININEC ground (scored matrix, "Probe family
+# 1"), which is the arc's standing warning that the banner is not a mode
+# signal: rung 2 serves ``GN 0`` under it and rung 3 will serve ``GD`` under
+# the same four words with different physics behind them.
 ENVIRONMENT_FREE_SPACE = "FREE SPACE"
 ENVIRONMENT_PERFECT_GROUND = "PERFECT GROUND"
+ENVIRONMENT_FINITE_GROUND = "FINITE GROUND.  SOMMERFELD SOLUTION"
+
+
+@dataclass(frozen=True)
+class GroundMedium:
+    """The three medium cells a finite-ground environment block prints.
+
+    Numbers only, εc included: the complex dielectric constant is PHYSICS —
+    it needs the frequency, which this module does not have and does not want
+    — so it is computed by whoever solves the deck and carried here, exactly
+    as a current's magnitude is.  (:mod:`._serve` measures the engine's own
+    folding constant off the printed cell; see its ``EPSC_OHM_METRE_MHZ``.)
+    """
+
+    eps_r: float
+    sigma: float
+    eps_c: complex
 
 
 @dataclass(frozen=True)
@@ -442,6 +462,11 @@ class RunData:
     frequency_mhz: float = 0.0
     wavelength_m: float = 0.0
     environment: str = ENVIRONMENT_FREE_SPACE
+    # The medium under a finite-ground environment, and ``None`` under the two
+    # that have none.  It is what picks the environment block's LAYOUT: the
+    # two bannerless environments print their name centred, a finite one
+    # prints four left-aligned lines (see :func:`_environment`).
+    ground: GroundMedium | None = None
     # -- the tables --------------------------------------------------------
     loads: tuple[LoadRow, ...] = ()
     # One table, two row types — an ``NT`` card's admittance matrix and a
@@ -513,11 +538,17 @@ _CARD_ECHO_PREFIX = " ***** INPUT LINE"
 _FREQUENCY_HEADING = " " * 33 + "- - - - - - FREQUENCY - - - - - -"
 _ENVIRONMENT_HEADING = " " * 34 + "- - - ANTENNA ENVIRONMENT - - -"
 
-# Both observed environment names sit centred on the same column (44 blanks
-# before ``FREE SPACE``, 42 before ``PERFECT GROUND``).  Centring in a
-# 98-column field reproduces both; a 99-column field would too, and no
+# Both observed bannerless environment names sit centred on the same column
+# (44 blanks before ``FREE SPACE``, 42 before ``PERFECT GROUND``).  Centring
+# in a 98-column field reproduces both; a 99-column field would too, and no
 # odd-length banner has been captured to tell them apart.
 _ENVIRONMENT_WIDTH = 98
+
+# The finite-ground block is NOT centred — all four of its lines start in
+# column 41 (0021/0022/0047/0048, measured), and centring the 35-character
+# banner in the 98-column field above would start it in column 32.  Two
+# different formats, so two different constants.
+_MEDIUM_INDENT = " " * 40
 
 _LOADING_HEADING = " " * 31 + "- - - STRUCTURE IMPEDANCE LOADING - - -"
 _NOT_LOADED = " " * 35 + "THIS STRUCTURE IS NOT LOADED"
@@ -701,10 +732,42 @@ def _frequency(data: RunData) -> list[str]:
 
 
 def _environment(data: RunData) -> list[str]:
+    """The heading, one blank, and the environment — in one of its two forms.
+
+    ONE blank under the heading in both, which is the reading the captures
+    force once the ``SOMMPD.NEX`` cache blocks are taken out of them.  A
+    finite-ground capture appears to carry two (0047 lines 71-72), but each
+    cache block prints its OWN leading blank and there are two blocks in a
+    two-frequency run — where the count would otherwise have to be three.
+    Dropping "a blank and the cache lines that follow it" leaves every
+    captured environment block with exactly one blank under its heading, which
+    is also what ``FREE SPACE`` and ``PERFECT GROUND`` print.  The seam emits
+    no cache block at all: it never reads and never writes that file.
+
+    The three medium cells are the captures' own formats, measured against the
+    linux oracle across four media (ε 1.5/5/13/80/100, σ 1.234E-6 to 12.345):
+    ``F7.3`` for the relative constant (``100.000`` fills the field and
+    ``  5.000`` pads it), ``E10.3`` for the conductivity, and two glued
+    ``E12.5`` cells for the complex constant — whose imaginary part carries no
+    ``j`` and wears its sign against the mantissa.
+    """
+    if data.ground is None:
+        return [
+            _ENVIRONMENT_HEADING,
+            "",
+            data.environment.center(_ENVIRONMENT_WIDTH).rstrip(),
+        ]
+    medium = data.ground
     return [
         _ENVIRONMENT_HEADING,
         "",
-        data.environment.center(_ENVIRONMENT_WIDTH).rstrip(),
+        _MEDIUM_INDENT + data.environment,
+        _MEDIUM_INDENT + f"RELATIVE DIELECTRIC CONST.={medium.eps_r:7.3f}",
+        _MEDIUM_INDENT + f"CONDUCTIVITY={medium.sigma:10.3E} MHOS/METER",
+        _MEDIUM_INDENT
+        + "COMPLEX DIELECTRIC CONSTANT="
+        + _e(medium.eps_c.real, 12, 5)
+        + _e(medium.eps_c.imag, 12, 5),
     ]
 
 
