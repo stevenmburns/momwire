@@ -255,8 +255,11 @@ def test_corpus_is_the_whole_reference_set():
 
     45 through #458; 47 since momwire#415 added a ``GX`` and a ``GR`` deck,
     which this module's geometry comparison covers for free — the reference
-    importer implements both cards too, and unit 1 ported them from it."""
-    assert len(CORPUS) == 47
+    importer implements both cards too, and unit 1 ported them from it; 51
+    since momwire#456 phase C captured four network decks (a zero-length line,
+    an all-zero ``NT``, an ``LD``/``NT`` pair on one segment, and the ``EX 6``
+    gyrator idiom)."""
+    assert len(CORPUS) == 51
 
 
 # The corpus is 47 clean exported decks: measured, not one of them has an
@@ -370,16 +373,25 @@ def test_the_synthetic_decks_actually_exercise_both_passes():
 # question is retention and card semantics, not geometry a second time.
 # ---------------------------------------------------------------------------
 
-# The 3 hand-authored network probes: refused by name in this dialect
-# (TL/NT), so they carry no DeckModel to compare here. They are still
-# measured for geometry in the corpus test above.
-_NETWORK_DECKS = {"dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_crossed"}
+# The hand-authored network probes. They carried no DeckModel while the
+# dialect refused TL/NT by name (#930), so this module skipped them; since
+# momwire#456 phase C they parse, solve, and have exactly the model this test
+# compares — so they are IN, and the guard below counts them instead of
+# excusing them.
+_NETWORK_DECKS = {
+    "dipole_nt_network",
+    "dipole_tl_network",
+    "dipole_tl_shunt_crossed",
+    "dipole_tl_zero_length",
+    "dipole_nt_all_zero",
+    "dipole_ld_nt_colocated",
+    "dipole_ex6_gyrator",
+}
 
-# ...and the one deck refused by FIELD rather than by name: a second medium
-# under a `GN 1` is the MININEC-type ground idiom (#458), so it too carries no
-# DeckModel. Same treatment, different reason, kept separate so the network
-# guard below still means what it says.
-_REFUSED_DECKS = _NETWORK_DECKS | {"dipole_gd_second_medium"}
+# The one deck still refused, and by FIELD rather than by name: a second
+# medium under a `GN 1` is the MININEC-type ground idiom (#458), so it carries
+# no DeckModel.
+_REFUSED_DECKS = {"dipole_gd_second_medium"}
 
 
 def _portal_deck(text: str):
@@ -570,8 +582,22 @@ def test_environment_source_and_load_semantics_match_antennaknobs(path: Path):
         assert material.conductivity == expected
 
 
-def test_the_network_decks_are_still_the_three_the_geometry_test_measures():
-    """A guard on the skip above: if the corpus grows a new TL/NT deck, this
-    test — not a silently-passing skip — is what notices."""
-    stems = {p.stem for p in CORPUS if "network" in p.stem or "shunt_crossed" in p.stem}
-    assert stems == _NETWORK_DECKS
+def test_every_network_deck_carries_the_cards_it_states():
+    """The network decks are compared like every other deck now, so what is
+    left to guard is that they are actually IN the comparison: a deck whose
+    ``TL``/``NT`` silently failed to parse would have an empty ``networks``
+    tuple and would sail through every assertion above.
+
+    The set is written out for the same reason the differential suite's count
+    is — a corpus deck that quietly stops carrying a network shows up here.
+    """
+    on_disk = {p.stem for p in CORPUS}
+    assert _NETWORK_DECKS <= on_disk
+    for stem in sorted(_NETWORK_DECKS):
+        path = next(p for p in CORPUS if p.stem == stem)
+        text = path.read_text()
+        stated = sum(
+            1 for line in text.splitlines() if line.split()[:1] in (["TL"], ["NT"])
+        )
+        assert stated, f"{stem} states no network card"
+        assert len(momwire_parse(text).networks) == stated, stem

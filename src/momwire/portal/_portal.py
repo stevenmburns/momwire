@@ -94,12 +94,20 @@ non-contiguous destroy pattern). Every one of them takes the error path below
 rather than crashing the daemon — the printout says which card and why, and
 the ``NX`` sentinel is still emitted.
 
-**Staged, and temporary:** ``momwire.deck`` reads ``TL``/``NT`` and resolves
-where they attach, but ``build_solver`` declines a model carrying networks —
-the composition of the network with the antenna's port admittance is
-momwire#456 phase C's next unit. So a network deck is parsed, echoed and then
-refused, on the error path above, and this paragraph goes away with the unit
-that lands the solve.
+**How a network is answered.** ``momwire.deck`` reads ``TL``/``NT``, resolves
+where they attach and translates their six reals into circuit branches
+(``deck/_networks.py``); every endpoint becomes a port, sharing the gap when a
+feed or a load already cut one there; and ``DeckSolver.solve_group`` hands the
+loaded structure's port admittance to ``momwire.networks``' ``NetworkReducer``
+as one matrix. Two blocks then join the printout ahead of ``ANTENNA INPUT
+PARAMETERS`` — ``NETWORK DATA`` and ``STRUCTURE EXCITATION DATA AT NETWORK
+CONNECTION POINTS`` — and ``NETWORK LOSS`` in the power budget stops being
+identically zero.
+
+The composition is guarded so that a deck with no network cards takes the
+arithmetic it always took, unchanged to the bit: 44 of the 51 reference
+fixtures print the same bytes before and after the network solve landed, which
+is the gate that says this widened the dialect rather than perturbed it.
 
 Where the physics citations point
 ---------------------------------
@@ -174,6 +182,13 @@ from ..deck import (
     prepare_mesh,
 )
 from ..deck import parse as parse_dialect
+
+# The card semantics of ``TL``/``NT`` — the six reals as circuit branches, and
+# the flat ``Network`` its reducer takes. It lives in ``momwire.deck`` because
+# semantics live ONCE and the dialect is where a card's meaning is decided
+# (design doc ``networks-move-into-the-engine.md``); the portal supplies the
+# only thing that module cannot know, which is the antenna's admittance.
+from ..deck._networks import build_reducer, card_branches
 
 # The NEC-level view of a deck's geometry: the flat wire list after every
 # GM/GS transform and both connection passes, carrying the TAGS and the
@@ -495,6 +510,57 @@ _CURRENTS_TABLE_HEADER = (
 )
 
 _POWER_HEADER = "                               ---------- POWER BUDGET ---------"
+
+# A network loss this far under the input power is the RESIDUAL, not a
+# dissipation: `NETWORK LOSS` is what the source delivered less what crossed
+# the gaps, so a lossless line reports the difference of two equal numbers and
+# lands on ±1e-19 — printing as `0.0000E+00` or `-8.6736E-19` depending on the
+# BLAS thread count (measured: 8 runs against 4 out of 12, momwire#456 phase
+# C). The bar is `momwire.networks`' own: `NetworkReducer.excited_state` snaps
+# its lossless power budget at exactly this ratio and for exactly this reason,
+# and the two numbers describe the same physics, so they agree on where noise
+# stops. Seven orders of clearance measured — `dipole_tl_shunt_crossed`'s
+# genuinely lossy shunt stubs report 21 % of the input power.
+_NETWORK_LOSS_FLOOR = 1e-9
+
+# The two network blocks (momwire#456 phase C), byte for byte out of
+# dipole_tl_shunt_crossed.out — the one committed fixture that prints both row
+# kinds.  ``NETWORK DATA`` carries ONE banner and then a per-kind table header;
+# the header is re-emitted when the row kind changes, and only then (measured:
+# a STRAIGHT line followed by a CROSSED one prints one header, not two).
+_NETWORK_DATA_HEADER = (
+    "                                            ---------- NETWORK DATA ----------"
+)
+_NETWORK_TL_TABLE_HEADER = (
+    "  -- FROM -  --- TO --      TRANSMISSION LINE        --------- SHUNT"
+    " ADMITTANCES (MHOS) ---------   LINE",
+    "  TAG   SEG  TAG   SEG    IMPEDANCE      LENGTH     ----- END ONE -----   "
+    "   ----- END TWO -----   TYPE",
+    "  No:   No:  No:   No:         OHMS      METERS      REAL      IMAGINARY  "
+    "    REAL      IMAGINARY",
+)
+_NETWORK_NT_TABLE_HEADER = (
+    "  -- FROM -  --- TO --            -------- ADMITTANCE MATRIX ELEMENTS"
+    " (MHOS) ---------",
+    "  TAG   SEG  TAG   SEG   ----- (ONE,ONE) ------   ----- (ONE,TWO) -----  "
+    " ----- (TWO,TWO) -------",
+    "  No:   No:  No:   No:      REAL      IMAGINARY      REAL     IMAGINARY  "
+    "     REAL      IMAGINARY",
+)
+
+_NETWORK_EXCITATION_HEADER = (
+    "                          --------- STRUCTURE EXCITATION DATA AT NETWORK"
+    " CONNECTION POINTS --------"
+)
+# One column MORE of padding than `_AIP_TABLE_HEADER` in three places — the
+# two tables are neighbours in the printout and are NOT the same bytes, which
+# is exactly the sort of near-miss a copy would introduce silently.
+_NETWORK_EXCITATION_TABLE_HEADER = (
+    "  TAG   SEG       VOLTAGE (VOLTS)          CURRENT (AMPS)         IMPEDANCE"
+    " (OHMS)       ADMITTANCE (MHOS)     POWER",
+    "  No:   No:     REAL      IMAGINARY     REAL      IMAGINARY     REAL      "
+    "IMAGINARY     REAL      IMAGINARY   (WATTS)",
+)
 
 # ---------------------------------------------------------------------------
 # unit 3 chrome — copied byte for byte out of dipole_nt_network.out,
@@ -1138,8 +1204,20 @@ def fmt_data_card(number: int, card: Card) -> str:
     """The ``DATA CARD No:`` echo. The ``NX`` form of this line is SimNEC's
     end-of-run sentinel (grammar doc §2): ``partsMatch(parts, "DATA", "CARD",
     "No:", "", "NX")``. Two spaces, the literal, the ordinal, the mnemonic,
-    four integer fields, six ``%13.5E`` reals."""
-    ints = "".join(f"{card.i(k):4d}" if k == 0 else f"{card.i(k):6d}" for k in range(4))
+    four integer fields, six ``%13.5E`` reals.
+
+    The first integer field is ``" %3d"`` and the other three ``" %5d"``, which
+    below 1000 is indistinguishable from a plain ``%4d`` / ``%6d`` and above it
+    is not: the ``EX 6`` gyrator idiom parks its phantom wire on tag 9901, and
+    a ``%4d`` prints ``NT9901`` where the oracle prints ``NT 9901`` — the
+    mnemonic and the tag run together and SimNEC's tokeniser reads one word
+    where there are two. Nothing in the corpus addressed a four-digit tag on a
+    card's FIRST field until ``dipole_ex6_gyrator`` (momwire#456 phase C), so
+    the two spellings had been the same bytes for the whole corpus's life.
+    """
+    ints = "".join(
+        f" {card.i(k):3d}" if k == 0 else f"{card.i(k):6d}" for k in range(4)
+    )
     reals = "".join(f"{card.f(4 + k):13.5E}" for k in range(6))
     return f"  DATA CARD No:{number:4d} {card.mnemonic}{ints}{reals}"
 
@@ -1173,6 +1251,29 @@ def fmt_aip_row(tag, seg, voltage, current, impedance, admittance, power) -> str
         f" {impedance.real:11.4E} {impedance.imag:11.4E}"
         f" {admittance.real:11.4E} {admittance.imag:11.4E}"
         f" {power:11.4E}"
+    )
+
+
+def fmt_network_row(tag_a, seg_a, tag_b, seg_b, values, kind) -> str:
+    """One ``NETWORK DATA`` row — the SAME layout for a ``TL`` and an ``NT``.
+
+    The two tables print different QUANTITIES under different column headers
+    but the identical field widths, and they end with the same 8-wide right
+    justified word: ``STRAIGHT`` / ``CROSSED`` for a line, and empty for an
+    admittance matrix — which is why an ``NT`` row carries nine trailing
+    spaces the fixtures preserve. Writing it as one function rather than two
+    is the honest reading of that: a divergence between the two would be a
+    change in the oracle, not a change in one of them.
+
+    ``seg_a``/``seg_b`` are GLOBAL segment numbers even though the card
+    addressed them relative to a tag — ``TL 1 5 2 5`` prints as ``1 5 2 14``.
+    """
+    (v1, v2, v3, v4, v5, v6) = values
+    return (
+        f" {tag_a:4d} {seg_a:5d} {tag_b:4d} {seg_b:5d}"
+        f"  {v1:11.4E} {v2:11.4E}"
+        f"  {v3:11.4E} {v4:11.4E}"
+        f"  {v5:11.4E} {v6:11.4E} {kind:>8s}"
     )
 
 
@@ -1991,33 +2092,181 @@ class DeckSolver:
                 )
         return z
 
-    def solve_group(self, group: ExecuteGroup, freq_mhz: float) -> dict:
+    def _composed(self, reducer, y, z_load, wavelength, driven):
+        """``(V_applied, I_structure, I_source)`` from the network solve.
+
+        ``Y_eff = Y·(1 + Z·Y)⁻¹`` folds the deck's ``LD`` loads into the
+        admittance the reducer stamps onto, because that is where NEC has
+        them: an ``LD`` goes on the impedance matrix's diagonal, before
+        ``netwk`` ever reads the structure's admittance at a connection point.
+        When no port is loaded the fold is the identity and ``Y`` is passed
+        through UNTOUCHED rather than through a solve that would only round
+        it — the overwhelmingly common case, and one where a needless inverse
+        would move the last digits of every network deck's printout.
+
+        The stamp keeps the IDEAL generator (``z_ref = 0``): NEC's ``EX`` is
+        an ideal source and its port voltages ARE the excitation the currents
+        are reconstructed from, so a source impedance would divide the drive.
+        """
+        n = self.n_ports
+        if np.any(z_load):
+            y_eff = np.linalg.solve(
+                (np.eye(n, dtype=np.complex128) + z_load[:, None] * y).T, y.T
+            ).T
+        else:
+            y_eff = y
+        system = reducer.apply_branches(y_eff, wavelength)
+        v, j = system.solve()
+        v_applied = np.asarray(v[:n], dtype=np.complex128).copy()
+        # A pinned port's voltage is a BOUNDARY CONDITION, not a result: the
+        # termination row the reducer stamped for it says v_k = E, and reading
+        # E back out of the solution vector only adds the solve's round-off to
+        # a number that was exact going in. Restoring it is not a floor and
+        # loses no information — but it does decide the SIGN OF ZERO, and that
+        # is a byte the printout shows: an EX of 1+0j came back with an
+        # imaginary part of ±1e-17 and printed `0.0000E+00` or `-0.0000E+00`
+        # depending on the BLAS thread count, which reddened the served ==
+        # stock oracle in one run out of six (measured, momwire#456 phase C;
+        # the same defect class as momwire#403's pattern dust and #464's near
+        # field, and the same rule — never print the angle of zero).
+        for port, volts in zip(reducer.driven_port_idx, reducer.driven_voltages):
+            v_applied[port] = volts
+        i_port = y_eff @ v_applied
+        # Everywhere but a driven port the two are the same current; at a
+        # driven one the termination branch carries antenna PLUS network,
+        # which is what the source actually delivered.
+        i_source = i_port.copy()
+        for port, _segment, _volts in driven:
+            i_source[port] = j[system.terminations[port][0]]
+        return v_applied, i_port, i_source
+
+    def network_connection_points(self, group_index: int) -> list[tuple[int, int, int]]:
+        """``(tag, global segment, solver port)`` per live network connection
+        point, in the order the oracle prints them.
+
+        Which is NOT card order and not port order: NEC partitions the
+        connection segments into the ones that carry no source and the ones
+        that do — its ``nteq`` and ``ntsc`` lists — and prints the first
+        partition before the second, each in discovery order (a card's end A
+        before its end B, cards in deck order, a segment named twice named
+        once).  ``dipole_tl_shunt_crossed`` shows the split and the EX 6
+        gyrator fixture shows it the other way round, with the DRIVEN point
+        second even though its card names it first.
+
+        The tag is the SEGMENT's, not the card's: they agree whenever the card
+        addressed the segment through its tag, and a card that addressed it
+        absolutely (``tag 0``) still prints the segment's own.
+        """
+        seen: list[tuple[int, int]] = []  # (global segment, port)
+        for card, (port_a, port_b) in zip(self.model.networks, self.plan.network_ports):
+            if group_index < card.first_group:
+                continue
+            for (tag, seg), port in (
+                (card.address_a, port_a),
+                (card.address_b, port_b),
+            ):
+                entry = (self.global_segment(*self.structure.locate(tag, seg)), port)
+                if entry not in seen:
+                    seen.append(entry)
+        sourced = {segment for _p, segment, _v in self._driven_of(group_index)}
+        return [
+            (self.segments[segment - 1].tag, segment, port)
+            for segment, port in seen
+            if segment not in sourced
+        ] + [
+            (self.segments[segment - 1].tag, segment, port)
+            for segment, port in seen
+            if segment in sourced
+        ]
+
+    def _driven_of(self, group_index: int) -> list[tuple[int, int, complex]]:
+        group = self.portal_deck.groups[group_index]
+        return self._driven(group) if group is not None else []
+
+    def _driven(self, group: ExecuteGroup) -> list[tuple[int, int, complex]]:
+        """``(solver port, global segment, volts)`` per ``EX`` of this group."""
+        driven: list[tuple[int, int, complex]] = []
+        for (tag, seg), port in zip(self.ports, self.feed_index):
+            for s_tag, s_seg, volts in group.sources:
+                if (s_tag, s_seg) == (tag, seg):
+                    wire, local = self.structure.locate(tag, seg)
+                    driven.append((port, self.global_segment(wire, local), volts))
+        return driven
+
+    def solve_group(
+        self, group: ExecuteGroup, freq_mhz: float, group_index: int | None = None
+    ) -> dict:
         """One execute group at one frequency: port currents, segment
         currents, and the power budget — all from the cached factorisation.
 
         The group's ``EK`` picks the operator (issue #849), so two groups of
-        one deck under two kernels get two fills and two answers."""
+        one deck under two kernels get two fills and two answers.
+
+        ``group_index`` is the group's ordinal in the deck, and it matters only
+        to a deck carrying ``TL``/``NT``: a network card is retained from where
+        it is read to the end of the deck, so a group EARLIER than a card is
+        answered with no network at all (spec ``#network-retention``).  It
+        defaults to the deck's first armed group, which is the whole story for
+        every deck that states its networks before its first execute card.
+
+        **The composition.**  Without networks this is the port algebra it has
+        always been: ``V_gap = (1 + Z·Y)⁻¹·V_source``, an ``LD`` impedance in
+        the port's own current path, and the source current IS the segment
+        current.  With them, the same loaded structure is handed to
+        :class:`~momwire.networks.NetworkReducer` as ONE admittance —
+        ``Y_eff = Y·(1 + Z·Y)⁻¹``, which is the port admittance of the loaded
+        structure and therefore exactly what NEC's ``netwk`` sees after ``LD``
+        has been added to the matrix diagonal.  The loads are not restamped in
+        the reducer: they are already inside, in series inside the segment,
+        which is where NEC composes them and where an ``LD`` and an ``NT`` on
+        one segment have to meet.
+
+        Three currents come out of that and they are three different numbers:
+
+        * ``i_port`` — the STRUCTURE current at the gap, ``Y_eff·V``.  The
+          currents table and the ``STRUCTURE EXCITATION DATA`` block print it.
+        * ``i_source`` — the current the SOURCE delivers, antenna plus
+          network, read off the reducer's termination branch.  The
+          ``ANTENNA INPUT PARAMETERS`` row prints it, and it is the only one
+          SimNEC reads.
+        * the branch currents, which nothing prints.
+
+        Without a network the first two are the same number, which is why the
+        stub they replace could get away with saying so.
+        """
+        if group_index is None:
+            group_index = self._group if self._group is not None else 0
         entry = self.at(
             freq_mhz, extended_kernel=group.ek, environment=group.environment
         )
         omega = 2.0 * math.pi * freq_mhz * 1e6
         y = entry["Y"]
         v_source = np.zeros(self.n_ports, dtype=np.complex128)
-        driven: list[tuple[int, int, complex]] = []  # (port idx, global seg, V)
-        for (tag, seg), port in zip(self.ports, self.feed_index):
-            for s_tag, s_seg, volts in group.sources:
-                if (s_tag, s_seg) == (tag, seg):
-                    v_source[port] = volts
-                    wire, local = self.structure.locate(tag, seg)
-                    driven.append((port, self.global_segment(wire, local), volts))
+        driven = self._driven(group)
+        for port, _segment, volts in driven:
+            v_source[port] = volts
         z_load = self._load_impedances(omega)
-        system = np.eye(self.n_ports, dtype=np.complex128) + (z_load[:, None] * y)
-        v_gap = np.linalg.solve(system, v_source)
-        i_port = y @ v_gap
-        # No network branch can reach this engine: ``TL`` and ``NT`` are
-        # refused by name (the dialect is antenna-only), so the source current
-        # IS the segment current and the network loss is identically zero.
-        i_source = i_port
+        reducer = build_reducer(
+            self.model, self.plan, group=group_index, voltages=v_source
+        )
+
+        if reducer is None:
+            system = np.eye(self.n_ports, dtype=np.complex128) + (z_load[:, None] * y)
+            v_gap = np.linalg.solve(system, v_source)
+            i_port = y @ v_gap
+            # No network branch reaches this group, so the source current IS
+            # the segment current, the applied voltage IS the gap's, and the
+            # network loss is identically zero. This branch is the pre-network
+            # arithmetic to the bit, which is what keeps every antenna-only
+            # fixture's printout where it was.
+            v_applied = v_gap
+            i_source = i_port
+            p_network = 0.0
+        else:
+            v_applied, i_port, i_source = self._composed(
+                reducer, y, z_load, entry["wavelength"], driven
+            )
+            v_gap = v_applied - z_load * i_port
 
         coeffs = entry["X"] @ (entry["signs"] * v_gap)
         seg_currents = self._segment_currents(entry["solver"], coeffs)
@@ -2030,18 +2279,36 @@ class DeckSolver:
         if self._lossy:
             p_wire = float(entry["solver"].wire_loss_power(coeffs)[0])
         p_structure = p_load + p_wire
-        p_rad = p_in - p_structure
+        if reducer is None:
+            p_rad = p_in - p_structure
+        else:
+            # The power that crosses the gaps into the structure, ½ Re(V_gap ·
+            # I*) summed over every port, is radiation plus wire loss — and
+            # what the source delivered but the gaps did not receive went into
+            # the network. NEC keeps the same books: on
+            # ``dipole_tl_shunt_crossed`` its RADIATED POWER is the sum of the
+            # POWER column of the excitation block to the last printed digit,
+            # and its NETWORK LOSS is the remainder.
+            p_gap = 0.5 * float(np.sum(np.real(v_gap * np.conj(i_port))))
+            p_rad = p_gap - p_wire
+            p_network = p_in - p_load - p_gap
+            if abs(p_network) <= _NETWORK_LOSS_FLOOR * abs(p_in):
+                p_network = 0.0
         return {
             "driven": driven,
             "v_gap": v_gap,
+            "v_applied": v_applied,
             "i_port": i_port,
             "i_source": i_source,
+            "network_points": self.network_connection_points(group_index)
+            if reducer is not None
+            else [],
             "segment_currents": seg_currents,
             "coeffs": coeffs,
             "solver": entry["solver"],
             "p_in": p_in,
             "p_structure": p_structure,
-            "p_network": 0.0,
+            "p_network": p_network,
             "p_radiated": p_rad,
             "efficiency": (100.0 * p_rad / p_in) if p_in > 0 else 0.0,
             "fill_ms": entry["fill_ms"],
@@ -2323,6 +2590,14 @@ def _operator_key(deck: PortalDeck) -> tuple:
         tuple(g.environment.ground for g in deck.groups if g is not None),
         model.loads,
         tuple((wire, arclength) for wire, arclength, _volts in model.feeds),
+        # The network cards, WHOLE — endpoints, payload and `first_group`.
+        # Their endpoints cut gaps, so they move the port set and therefore
+        # the matrix; their payloads and scoping do not, but a cache hit
+        # rebinds only ``portal_deck`` and answers out of the CACHED
+        # instance's model, so a deck differing from a resident one in a
+        # single admittance would otherwise be served the resident one's
+        # network. Silent and wrong, for a key entry that costs nothing.
+        model.networks,
         tuple(g.ek for g in deck.groups if g is not None),
         (cls.__name__, tuple(sorted(kwargs.items())), suffix),
     )
@@ -2861,10 +3136,100 @@ def _printed_segments(pt: PrintControl | None, solver: DeckSolver) -> list[_Segm
     return [s for s in solver.segments if first <= s.number <= last]
 
 
+def _network_lines(solver: DeckSolver, result: dict, group_index: int) -> list[str]:
+    """The two network blocks, or nothing at all for an antenna-only group.
+
+    ``NETWORK DATA`` first — one banner, then the rows grouped by KIND with
+    the table header re-emitted when the kind changes.  That grouping is the
+    oracle's, and it is not card order: a deck that reads ``TL``, ``NT``,
+    ``TL`` prints both lines under one header and then the admittance matrix
+    (probe ``p3``), while a deck that reads ``NT`` first prints the matrix
+    first.  Within a kind the cards keep their deck order, and a ``STRAIGHT``
+    line followed by a ``CROSSED`` one is ONE table, not two.
+
+    Then ``STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS``, which is
+    the same eleven-column row as ``ANTENNA INPUT PARAMETERS`` reading the
+    STRUCTURE current rather than the source's — at a driven connection point
+    the two rows print the same segment and different currents, and the
+    difference is what the network carried.
+    """
+    points = result["network_points"]
+    if not points:
+        return []
+    model = solver.model
+    live = [
+        (card, pair)
+        for card, pair in zip(model.networks, solver.plan.network_ports)
+        if group_index >= card.first_group
+    ]
+    out = [_NETWORK_DATA_HEADER]
+    for kind in _kind_order(card.kind for card, _pair in live):
+        out += _NETWORK_TL_TABLE_HEADER if kind == "TL" else _NETWORK_NT_TABLE_HEADER
+        for card, _pair in live:
+            if card.kind != kind:
+                continue
+            out.append(_network_row(solver, card))
+    out += ["", "", _NETWORK_EXCITATION_HEADER, *_NETWORK_EXCITATION_TABLE_HEADER]
+    v_applied = result["v_applied"]
+    i_port = result["i_port"]
+    for tag, segment, port in points:
+        volts = complex(v_applied[port])
+        current = complex(i_port[port])
+        out.append(
+            fmt_aip_row(
+                tag,
+                segment,
+                volts,
+                current,
+                volts / current if current != 0 else complex(0.0, 0.0),
+                current / volts if volts != 0 else complex(0.0, 0.0),
+                0.5 * (volts * np.conj(current)).real,
+            )
+        )
+    return [*out, "", ""]
+
+
+def _kind_order(kinds) -> list[str]:
+    """The distinct row kinds in first-appearance order."""
+    seen: list[str] = []
+    for kind in kinds:
+        if kind not in seen:
+            seen.append(kind)
+    return seen
+
+
+def _network_row(solver: DeckSolver, card) -> str:
+    """One ``NETWORK DATA`` row for one card.
+
+    The ``TL`` row prints the RESOLVED length, so a zero-length card's
+    automatic straight-line distance between the two segment centres shows up
+    here before it shows up in any impedance — which is the cheapest possible
+    gate on that rule and the reason ``dipole_tl_zero_length`` is a fixture.
+    """
+    ends = []
+    for tag, seg in (card.address_a, card.address_b):
+        segment = solver.global_segment(*solver.structure.locate(tag, seg))
+        ends += [solver.segments[segment - 1].tag, segment]
+    f1, f2, f3, f4, f5, f6 = card.payload
+    if card.kind == "NT":
+        return fmt_network_row(*ends, (f1, f2, f3, f4, f5, f6), "")
+    branches = card_branches(card, 0, 1, solver.model.wires)
+    line = branches[0]
+    return fmt_network_row(
+        *ends,
+        (line.z0, line.length, f3, f4, f5, f6),
+        "CROSSED" if line.transposed else "STRAIGHT",
+    )
+
+
 def _run_block(
-    deck: PortalDeck, solver: DeckSolver, group: ExecuteGroup, freq_mhz: float
+    deck: PortalDeck,
+    solver: DeckSolver,
+    group: ExecuteGroup,
+    freq_mhz: float,
+    group_index: int = 0,
 ) -> list[str]:
-    result = solver.solve_group(group, freq_mhz)
+    result = solver.solve_group(group, freq_mhz, group_index)
     wavelength = result["wavelength"]
     out: list[str] = []
     if group.refilled:
@@ -2905,6 +3270,7 @@ def _run_block(
             "",
             "",
         ]
+    out += _network_lines(solver, result, group_index)
     out += [_AIP_HEADER, *_AIP_TABLE_HEADER]
     i_source = result["i_source"]
     for port, global_seg, volts in result["driven"]:
@@ -3038,7 +3404,7 @@ def render_deck(body: str) -> tuple[list[str], list[str]]:
             for i, freq in enumerate(group.freqs_mhz):
                 if i:
                     out += ["", ""]
-                out += _run_block(deck, solver, group, freq)
+                out += _run_block(deck, solver, group, freq, group_index - 1)
         except (
             PortalError,
             ValueError,

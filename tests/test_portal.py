@@ -47,20 +47,19 @@ ALL_NAMES = tuple(
     for entry in json.loads((FIXTURE_DIR / "manifest.json").read_text())["decks"]
 )
 
-# The four decks the dialect refuses: TL and NT are circuits attached to the
-# structure, and this engine's language is antenna-only (#930, design doc #846
-# §1); ``dipole_gd_second_medium`` is a ``GD`` under a ``GN 1``, which is how
-# both frontends spell MININEC-type ground and which #458 stopped answering as
-# plain perfect ground. They stay in the corpus as REFUSAL fixtures — see
-# ``NETWORK_FIXTURES`` and ``test_the_mininec_ground_fixture_refuses_by_name``
-# below — so every gate written against a solved printout runs over the other
-# 41.
-REFUSED_NAMES = (
-    "dipole_nt_network",
-    "dipole_tl_network",
-    "dipole_tl_shunt_crossed",
-    "dipole_gd_second_medium",
-)
+# The one deck the dialect refuses: ``dipole_gd_second_medium`` is a ``GD``
+# under a ``GN 1``, which is how both frontends spell MININEC-type ground and
+# which #458 stopped answering as plain perfect ground. It stays in the corpus
+# as a REFUSAL fixture — see
+# ``test_the_mininec_ground_fixture_refuses_by_name`` below — so every gate
+# written against a solved printout runs over the other 50.
+#
+# ``TL`` and ``NT`` left this list in momwire#456 phase C. They were here from
+# #930 on the argument that this engine's language is antenna-only; the phase
+# C design doc took the opposite decision and the dialect now SOLVES them, so
+# the three network decks are ordinary answered fixtures and the
+# ``NETWORK_FIXTURES`` battery below pins the answer instead of the refusal.
+REFUSED_NAMES = ("dipole_gd_second_medium",)
 ANTENNA_NAMES = tuple(n for n in ALL_NAMES if n not in REFUSED_NAMES)
 
 # momwire#415: the two decks whose STRUCTURE SPECIFICATION section carries a
@@ -1121,103 +1120,184 @@ def test_a_pec_ground_doubles_the_near_field_sources():
 
 
 # --------------------------------------------------------------------------
-# TL and NT: parsed, not yet solved (momwire#456 phase C, unit 1)
+# TL and NT: solved, and printed (momwire#456 phase C)
 # --------------------------------------------------------------------------
 #
 # The dialect used to be antenna-only and refused both cards BY NAME (#930).
-# Phase C widened it: `TL`/`NT` are read, their endpoints resolved against the
-# structure, and recorded on `DeckModel.networks` — the spec's
-# `#tl--transmission-line` and `#nt--two-port-network`. Composing that network
-# with the antenna's port admittance is the NEXT unit, so `build_solver`
-# declines a model carrying networks with one interim message.
+# Phase C reversed that decision (design doc
+# `docs/design/networks-move-into-the-engine.md`): unit 1 landed the parser,
+# and this unit composes the resolved cards with the antenna's port admittance
+# through `momwire.networks` and prints the two blocks nec2c prints for them.
 #
-# The three decks therefore still REFUSE end to end, which is the point of
-# keeping this battery: the byte-oracle contract (`test_portal_shared.py`'s
-# `REFUSED_NAMES`, `test_portal_differential.py`'s refusal list) does not move
-# under a parser change. What moved is WHERE the refusal comes from — solve
-# time, not card time — and therefore that the printout now reaches the
-# COMMENTS block before it stops.
+# The battery below is the same seven decks the byte oracle and the
+# cross-engine differential run, asked here for the printout's SHAPE — which
+# banner, in which order, with which rows — because that is the half
+# `test_portal_differential.py` deliberately does not check.
 
-NETWORK_FIXTURES = ("dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_crossed")
-
-# Quoted from ``momwire.deck.build_solver``. This one is NOT in the grammar's
-# refusal tables and must not be: the spec describes the finished dialect, in
-# which these cards solve. It is a staging message with a shelf life, and the
-# unit that lands the solve deletes it along with this constant.
-NETWORK_STAGED_REFUSAL = (
-    "parse in this dialect but do not yet solve: the network solve "
-    "lands in the next unit of momwire#456 phase C"
+NETWORK_FIXTURES = (
+    "dipole_nt_network",
+    "dipole_tl_network",
+    "dipole_tl_shunt_crossed",
+    "dipole_tl_zero_length",
+    "dipole_nt_all_zero",
+    "dipole_ld_nt_colocated",
+    "dipole_ex6_gyrator",
 )
 
 
 @pytest.mark.parametrize("name", NETWORK_FIXTURES)
-def test_the_network_fixtures_refuse_at_solve_time(name):
-    """Each of the three network decks is READ and then declined.
+def test_every_network_fixture_answers(name):
+    """No network deck may quietly fall back to the error path.
 
-    The message counts the cards it read, which is the observable that says
-    the parser got that far: ``dipole_tl_shunt_crossed`` carries a ``TL`` and
-    an ``NT`` and reports two.
+    The direct inversion of `test_the_network_fixtures_refuse_at_solve_time`,
+    which stood here for one unit and pinned the staged message this replaces.
     """
-    deck = fixture_deck(name)
-    text = run_deck(deck)[0]
-    n = sum(
-        1
-        for line in deck.splitlines()
-        if line.split() and line.split()[0].upper() in ("TL", "NT")
+    text = run_deck(fixture_deck(name))[0]
+    assert "ERROR" not in text, "\n".join(
+        ln for ln in text.splitlines() if "ERROR" in ln
     )
-    plural = "" if n == 1 else "s"
-    expected = f"this deck's {n} TL/NT network card{plural} {NETWORK_STAGED_REFUSAL}"
-    assert f"ERROR: {expected}" in text
-    assert f"ERROR-NEC2C: {expected}" in text
+    assert "ANTENNA INPUT PARAMETERS" in text
+    assert NX_ECHO.search(text), "no sentinel — SimNEC blocks forever"
 
 
 @pytest.mark.parametrize("name", NETWORK_FIXTURES)
-def test_a_refused_network_deck_still_emits_the_nx_sentinel(name):
-    """The sentinel is mandatory on EVERY path — a refused deck that swallows
-    it leaves SimNEC blocked in ``readLine()`` forever.
+def test_a_network_deck_prints_both_blocks_in_the_oracle_order(name):
+    """`NETWORK DATA`, then the excitation block, then the antenna's own.
 
-    The path this now takes is the *second* error frame in ``render_deck``
-    (the one after a successful parse), which is exactly why it is worth
-    re-pinning rather than assuming: a refusal that moved from one frame to
-    the other could have dropped the sentinel on the way.
+    Order is the whole assertion: all three tables address `(tag, segment)`
+    rows and two of them share a column layout, so a reader that met them in
+    the wrong order would parse plausible numbers out of the wrong table.
     """
     text = run_deck(fixture_deck(name))[0]
-    assert NX_ECHO.search(text), "no NX sentinel on the error path"
+    banners = [
+        "---------- NETWORK DATA ----------",
+        "STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS",
+        "--------- ANTENNA INPUT PARAMETERS ---------",
+    ]
+    at = [text.index(b) for b in banners]
+    assert at == sorted(at), f"{name}: blocks out of order"
 
 
-@pytest.mark.parametrize("name", NETWORK_FIXTURES)
-def test_a_refused_network_deck_prints_no_solved_section(name):
-    """A refusal is a refusal: no impedance table, no currents, no network
-    tables, and none of the numbers a reader could mistake for an answer.
+@pytest.mark.parametrize(
+    ("name", "kinds"),
+    (
+        ("dipole_nt_network", ["NT"]),
+        ("dipole_tl_network", ["TL"]),
+        ("dipole_tl_shunt_crossed", ["TL", "NT"]),
+        ("dipole_tl_zero_length", ["TL"]),
+        ("dipole_ex6_gyrator", ["NT"]),
+    ),
+)
+def test_the_network_table_header_re_emits_once_per_row_kind(name, kinds):
+    """One banner, and one column header per KIND of row under it.
 
-    Parsing further than before must not print further than before — the
-    network blocks in particular, which this dialect now knows enough to draw
-    and deliberately does not.
+    `dipole_tl_shunt_crossed` is the deck that can show this: it carries a
+    line and an admittance matrix, so its `NETWORK DATA` block has two column
+    headers where every other network fixture has one. A renderer that emitted
+    the header per ROW, or only ever once, agrees with every other fixture in
+    the corpus and disagrees with this one.
     """
     text = run_deck(fixture_deck(name))[0]
-    for banner in (
-        "ANTENNA INPUT PARAMETERS",
-        "CURRENTS AND LOCATION",
-        "NETWORK DATA",
-        "STRUCTURE EXCITATION DATA",
-    ):
-        assert banner not in text, f"{name} still prints {banner}"
+    block = text[
+        text.index("---------- NETWORK DATA ----------") : text.index(
+            "STRUCTURE EXCITATION DATA"
+        )
+    ]
+    assert block.count("---------- NETWORK DATA ----------") == 1
+    assert block.count("TRANSMISSION LINE") == kinds.count("TL")
+    assert block.count("ADMITTANCE MATRIX ELEMENTS") == kinds.count("NT")
 
 
-def test_the_staged_refusal_says_it_is_staged():
-    """The message's job is to be honest about a half-built dialect: the deck
-    is not wrong and the card is not out of dialect, so a user must not be
-    sent away to rewrite either. It names the unit that finishes the job."""
-    assert "momwire#456" in NETWORK_STAGED_REFUSAL
-    assert "not yet" in NETWORK_STAGED_REFUSAL
-    for word in ("antenna-only", "antennaknobs"):
-        assert word not in NETWORK_STAGED_REFUSAL
+def test_the_network_table_addresses_global_segment_numbers():
+    """`TL 1 5 2 5` prints as `1 5 2 14`.
+
+    The card addresses a segment RELATIVE to its tag and every table in this
+    printout addresses it absolutely, so the row has to carry the translation.
+    Segment 5 of tag 2 is the fourteenth segment of a structure whose first
+    wire has nine, and printing `2 5` there would look entirely reasonable.
+    """
+    text = run_deck(fixture_deck("dipole_tl_network"))[0]
+    row = next(
+        ln for ln in text.splitlines() if "6.0000E+02" in ln and "STRAIGHT" in ln
+    )
+    assert row.split()[:4] == ["1", "5", "2", "14"]
 
 
-def test_a_network_card_after_the_execute_card_is_read_not_refused_by_name():
-    """Position no longer decides. An ``NT`` past the only execute card is in
-    dialect, parses, and stops at the same staged solve refusal as one before
-    it — with nothing left of the old by-name message anywhere in the frame."""
+def test_the_crossed_line_prints_its_impedance_positive_and_says_so():
+    """NEC spells a crossed line as a NEGATIVE z0 and echoes |z0| with the
+    word `CROSSED` in the type column. The sign is a polarity, not an
+    impedance: a renderer that passed the card's field straight through would
+    print `-4.5000E+02` and lose the word."""
+    text = run_deck(fixture_deck("dipole_tl_shunt_crossed"))[0]
+    row = next(ln for ln in text.splitlines() if "CROSSED" in ln)
+    assert "4.5000E+02" in row and "-4.5000E+02" not in row
+
+
+def test_a_zero_length_line_prints_the_distance_it_resolved_to():
+    """`TL 1 5 2 5 450. 0.` — F2 = 0 means "measure it", and the LENGTH column
+    shows what was measured. The two connection segments' centres are the
+    origin and (1, 0, 0), so the answer is one metre, and it is visible in the
+    printout before it is visible in any impedance."""
+    text = run_deck(fixture_deck("dipole_tl_zero_length"))[0]
+    row = next(
+        ln for ln in text.splitlines() if "4.5000E+02" in ln and "STRAIGHT" in ln
+    )
+    assert "1.0000E+00" in row
+
+
+def test_the_excitation_block_reads_the_segment_current_not_the_sources():
+    """At a driven connection point the two tables print the SAME segment and
+    DIFFERENT currents, and the difference is what the network carried.
+
+    `dipole_nt_network` drives tag 1 segment 5 and hangs an NT on it, so the
+    row appears in both blocks: the excitation block reports what the antenna
+    took and `ANTENNA INPUT PARAMETERS` what the source delivered. An engine
+    that printed one number twice would look completely plausible.
+    """
+    text = run_deck(fixture_deck("dipole_nt_network"))[0]
+    excitation = text[
+        text.index("STRUCTURE EXCITATION DATA") : text.index("ANTENNA INPUT PARAMETERS")
+    ]
+    antenna = text[text.index("ANTENNA INPUT PARAMETERS") :]
+    at_gap = next(ln for ln in excitation.splitlines() if ln.split()[:2] == ["1", "5"])
+    at_source = next(ln for ln in antenna.splitlines() if ln.split()[:2] == ["1", "5"])
+    assert at_gap.split()[2:4] == at_source.split()[2:4], "same applied voltage"
+    assert at_gap.split()[4:6] != at_source.split()[4:6], "the network carried nothing"
+
+
+def test_the_gyrator_idiom_delivers_one_amp():
+    """The manufactured `EX 6`: 52 of the 457 models bundled with 4nec2 build
+    an ideal current source out of a phantom wire, an ordinary `EX 0` volt on
+    it and a gyrator `NT` (Y12 = j1). The whole idiom is worth exactly one
+    assertion — that the real segment ends up carrying 1 A — and nothing else
+    in the corpus makes that claim.
+    """
+    text = run_deck(fixture_deck("dipole_ex6_gyrator"))[0]
+    excitation = text[
+        text.index("STRUCTURE EXCITATION DATA") : text.index("ANTENNA INPUT PARAMETERS")
+    ]
+    row = next(ln for ln in excitation.splitlines() if ln.split()[:2] == ["1", "5"])
+    assert float(row.split()[4]) == pytest.approx(1.0, abs=1e-6)
+    assert float(row.split()[5]) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_an_antenna_only_deck_prints_neither_block():
+    """The blocks are the network's, not the printout's furniture."""
+    text = run_deck(fixture_deck("dipole_free_space"))[0]
+    assert "NETWORK DATA" not in text
+    assert "STRUCTURE EXCITATION DATA" not in text
+
+
+def test_a_network_card_after_the_execute_card_answers_without_it():
+    """A card is retained from where it is READ, so a group that already ran
+    is answered as though it were not there.
+
+    That is the oracle's own behaviour and it is a strange-looking one — the
+    deck states a network and the printout shows none — which is exactly why
+    it is pinned: an engine that scoped the card to the whole DECK instead of
+    to the groups after it would print a NETWORK DATA block here and change
+    the impedance, and the deck would still look answered.
+    """
     deck = (
         "CE nt after the execute card\n"
         "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
@@ -1225,9 +1305,10 @@ def test_a_network_card_after_the_execute_card_is_read_not_refused_by_name():
         "NT 1 3 1 7 0. 0.02 0. 0. 0. 0.02\n"
     )
     text = run_deck(deck)[0]
-    assert f"this deck's 1 TL/NT network card {NETWORK_STAGED_REFUSAL}" in text
+    assert "ERROR" not in text
+    assert "ANTENNA INPUT PARAMETERS" in text
+    assert "NETWORK DATA" not in text
     assert "is not part of this engine's nec2 dialect" not in text
-    assert "ANTENNA INPUT PARAMETERS" not in text
 
 
 # --------------------------------------------------------------------------

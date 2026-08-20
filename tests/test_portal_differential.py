@@ -20,9 +20,10 @@ and port currents and **±0.5 dB** on pattern gain.
 
 Measured at authoring time (2026-08-08, momwire 0.23.0, nec2c 5b4az.ae6ty.1.17;
 the five ``dipole_rp*`` cliff/gain-only rows added 2026-08-09 for issue #802;
-the three network rows retired 2026-08-15 for #930, and
-``dipole_gd_second_medium`` 2026-08-19 for #458) — worst case over every
-row of every table in each fixture:
+the three network rows retired 2026-08-15 for #930 and RESTORED 2026-08-20 for
+momwire#456 phase C, which also added four more of them; and
+``dipole_gd_second_medium`` retired 2026-08-19 for #458) — worst case over
+every row of every table in each fixture:
 
 ===================================  ======  ======  ======  ======  =====
 fixture                               Z err   I err  YY err  I curve  dGain
@@ -39,6 +40,7 @@ catalog_verticals_vertical            2.79%   2.79%       -   0.18%      -
 catalog_wire_w8jk                     1.98%   1.99%       -   0.84%      -
 dipole_ek_extended                    0.74%   0.75%       -   0.96%      -   (i)
 dipole_ek_rearm                       0.76%   0.76%       -   0.96%      -   (i)
+dipole_ex6_gyrator                    0.76%   0.76%       -   1.02%      -   (k)
 dipole_fr_sweep                       1.29%   1.29%       -   0.96%      -
 dipole_free_space                     0.76%   0.76%       -   0.96%      -
 dipole_gd_cliff_sommerfeld            2.24%   2.23%       -   4.35%      -   (f)
@@ -46,6 +48,7 @@ dipole_gm_translated_pair             1.10%   1.10%       -   1.13%      -
 dipole_gr_rotated_ring                1.96%   1.96%       -   1.10%      -   (j)
 dipole_gs_scaled                      0.76%   0.76%       -   0.96%      -
 dipole_gx_reflected_pair              2.15%   2.15%       -   0.73%      -   (j)
+dipole_ld_nt_colocated                0.88%   0.88%       -   2.05%      -   (l)
 dipole_load_ld0                       1.79%   1.79%       -   1.95%      -
 dipole_load_ld4                       1.64%   1.64%       -   1.62%      -
 dipole_load_ld5_conductivity          0.76%   0.76%       -   0.97%      -
@@ -53,6 +56,8 @@ dipole_mp_multiprocessor              0.76%   0.76%       -   0.96%      -   (e)
 dipole_mp_single_process              0.76%   0.76%       -   0.96%      -   (e)
 dipole_ne_nearfield                   0.76%   0.76%       -   0.96%      -
 dipole_nh_nearfield                   0.76%   0.76%       -   0.96%      -
+dipole_nt_all_zero                    0.52%   0.52%       -   1.24%      -   (m)
+dipole_nt_network                     1.31%   1.31%       -   4.07%      -   (b)
 dipole_pec_ground                     2.23%   2.23%       -   4.35%      -
 dipole_pt_segment_range               2.47%   2.47%       -   0.52%      -
 dipole_pt_toggle                      2.47%   2.47%   2.83%   1.10%      -
@@ -65,6 +70,9 @@ dipole_rp_crossed_quadrature          0.76%   0.76%       -   0.96%   0.09
 dipole_rp_gain_only                   0.76%   0.76%       -   0.96%   0.10   (h)
 dipole_rp_pattern                     0.76%   0.76%       -   0.96%   0.12
 dipole_sommerfeld_ground              2.24%   2.23%       -   4.35%      -
+dipole_tl_network                     0.27%   0.26%       -   1.27%      -   (d)
+dipole_tl_shunt_crossed               1.14%   1.14%       -   1.12%      -
+dipole_tl_zero_length                 0.10%   0.10%       -   1.27%      -
 split_dipole_qq                      12.02%  12.02%       -   6.00%      -   (c)
 split_dipole_qq_daemon_framed        12.02%  12.02%       -   6.00%      -   (c)
 resident_two_decks                    0.77%   0.77%       -   0.96%      -
@@ -87,16 +95,19 @@ residual between two large, nearly cancelling numbers:
     the antenna's own capacitive reactance.  ``Re(Z)`` agrees to 1.8 %; the
     reactance differs by 8.4 Ω, which is **1.0 % of the coil**.  The 45 % is
     the residual, not the physics.
-(b) was ``dipole_nt_network``, retired from this table in #930 along with the
-    two ``dipole_tl_*`` rows and footnote (d).  ``TL`` and ``NT`` are back in
-    the dialect since momwire#456 phase C — the parser reads them — but the
-    SOLVE is staged one unit further on, so all three decks are still REFUSAL
-    fixtures and this table is unmoved.  They come back to byte comparison,
-    scores and all, when the network solve lands.  The
-    scores they carried (0.27 %, 1.14 %, 1.31 %, and the residual mechanism
-    behind the last one) are kept in the git history of this docstring rather
-    than deleted, because they are what said the network translation was
-    right while it existed.
+(b) ``dipole_nt_network``: the NT branch (j0.02 S) drives most of the current
+    that would otherwise flow in the driven segment, so the segment current
+    printed in STRUCTURE EXCITATION DATA is a residual and differs by 12 %.
+    The number SimNEC actually reads — the ANTENNA INPUT PARAMETERS *source*
+    current — agrees to 1.3 %.
+
+    This row and the two ``dipole_tl_*`` ones were RETIRED in #930, when the
+    dialect went antenna-only, and restored by momwire#456 phase C.  They came
+    back at 1.31 %, 0.27 % and 1.14 % — the same three numbers to the
+    hundredth that they carried before, from a translation written fresh
+    against the same oracle.  That is the strongest single statement in this
+    file about the network semantics being right, and it is why the scores
+    were kept in prose across the retirement rather than deleted.
 (c) ``split_dipole_qq`` (the jar test deck's YY-free successor, #839):
 port 1 is the gap at the centre of a full-wave split
     dipole, a current null with ``|Z| ≈ 3.5 kΩ``.  High-|Z| feeds are the known
@@ -107,9 +118,17 @@ Each of those is asserted at its own tolerance below, WITH the identity that
 makes it benign, so a future regression that is not this phenomenon still
 fails.
 
-(d) recorded the ``TL`` decks' exposure to the same cancellation — a line at
-    an odd quarter wave is an impedance INVERTER, so a small basis difference
-    at the far end comes back magnified at the near one. Retired with (b).
+(d) is a *near* miss worth recording rather than an outlier. ``TL`` decks are
+    exposed to the same cancellation the three above are: a line at an odd
+    quarter wave is an impedance INVERTER, so a small basis difference at the
+    far end comes back magnified at the near one, and two branches across one
+    pair of gaps make a loop whose port admittance is a residual. The first
+    draft of ``dipole_tl_shunt_crossed`` hung its NT back across the same pair
+    as the TL and measured 6.6 % — 5x the same deck with the NT chained onto a
+    third dipole (1.14 %), for a structure whose printout layout is identical
+    either way. The committed decks are the chained ones; nothing here needs a
+    widened bar, and if a future TL fixture does, this is the mechanism to
+    check first.
 
 (e) is a control rather than a measurement (issue #800). Both ``MP`` fixtures
     are ``dipole_free_space``'s geometry plus one card, and both reproduce its
@@ -183,6 +202,34 @@ fails.
     its 36 ``GX``/``GR`` decks. Their numbers agree; their STRUCTURE
     SPECIFICATION bytes do not yet, which is ``test_portal.py``'s
     ``test_portal.REPLICATED_SPEC_NAMES``.
+
+(k) ``dipole_ex6_gyrator`` is the manufactured ``EX 6`` current source — a
+    phantom wire on tag 9901, an ``EX 0`` volt on it, and a gyrator ``NT``
+    (Y12 = j1) turning that into an amp at the real segment. 52 of the 457
+    models 4nec2 bundles arrive this way, so this row is a corpus-coverage
+    claim rather than a physics one, and its number says so: 0.76 %, which is
+    ``dipole_free_space``'s own row to the digit. The gyrator forces the
+    current, so the two engines are being asked the same question about the
+    same dipole and the network contributes no disagreement of its own. The
+    phantom sits 991 wavelengths away and both engines agree it is
+    electromagnetically irrelevant (measured, phase C M3/M4).
+
+(l) ``dipole_ld_nt_colocated`` puts an ``LD`` and an ``NT`` on ONE segment,
+    which is the composition question rather than either card's own: NEC puts
+    the load on the impedance matrix's diagonal, in series inside the segment,
+    and composes the network on top of the admittance that results. The two
+    orders are a series and a parallel connection of the same two elements and
+    they are far apart — stamping the load as a second branch across the port
+    instead moves this row to 20 %, so the 0.88 % is load-bearing.
+
+(m) ``dipole_nt_all_zero``'s far endpoint is an OPEN gap, and both engines
+    print round-off in its excitation row (nec2c 1.5e-17 A against ours
+    1.1e-18). Nothing compares that row — the tables this file reads are the
+    ANTENNA INPUT PARAMETERS and CURRENTS ones — and the 0.52 % is the driven
+    port, which is perfectly well conditioned. The deck is here because an
+    engine that treated an all-zero card as a no-op would SHORT that gap
+    instead of opening it, and would then be answering a different antenna at
+    a number that still looks reasonable.
 """
 
 from __future__ import annotations
@@ -400,20 +447,16 @@ def pair():
 # Decks the daemon runs end to end. After unit 3 that is the whole corpus; the
 # list is written out rather than computed so that a card silently falling back
 # to the error path shows up as a failure here instead of as a quiet nothing.
-# ...minus the four this engine does not yet answer: the three network decks
-# parse since momwire#456 phase C but their solve is staged one unit on, so
-# they still take the error path; ``dipole_gd_second_medium`` states a second
-# medium under a ``GN 1``, which is the MININEC-type ground idiom and refuses
-# since #458 rather than answering as plain perfect ground. Their refusals are
-# pinned in
-# ``test_portal.py``; here they only have to stay OUT of every gate written
-# against a solved printout.
-REFUSED = (
-    "dipole_nt_network",
-    "dipole_tl_network",
-    "dipole_tl_shunt_crossed",
-    "dipole_gd_second_medium",
-)
+# ...minus the ONE this engine does not answer: ``dipole_gd_second_medium``
+# states a second medium under a ``GN 1``, which is the MININEC-type ground
+# idiom and refuses since #458 rather than answering as plain perfect ground.
+# Its refusal is pinned in ``test_portal.py``; here it only has to stay OUT of
+# every gate written against a solved printout.
+#
+# The three network decks were in this list from #930 until momwire#456 phase
+# C. They are back in SUPPORTED, at the scores footnote (b) records, together
+# with the four network decks that unit captured.
+REFUSED = ("dipole_gd_second_medium",)
 SUPPORTED = tuple(n for n in NAMES if n not in REFUSED)
 
 # Portal-dialect cards no fixture covers, with the substring the error path
@@ -458,9 +501,10 @@ def test_the_support_matrix_covers_the_whole_corpus():
     assert set(SUPPORTED) | set(REFUSED) == set(NAMES)
     # 41 at the rewire (#930), plus the `dipole_gn_rearm` probe it landed
     # with, minus `dipole_gd_second_medium` (#458), plus the two `GX`/`GR`
-    # fixtures of momwire#415. The count is written out so a deck that quietly
-    # stops being measured shows up here.
-    assert len(SUPPORTED) == 43
+    # fixtures of momwire#415, plus the three network decks momwire#456 phase C
+    # un-retired and the four it captured. The count is written out so a deck
+    # that quietly stops being measured shows up here.
+    assert len(SUPPORTED) == 50
 
 
 @pytest.mark.parametrize(("marker", "deck"), sorted(UNSUPPORTED.items()))
@@ -610,18 +654,66 @@ def test_gd_moves_no_number_on_either_engine(name, base, pair):
         assert mine.currents == reference.currents, f"{name}: GD moved a current"
 
 
-def test_no_antenna_deck_prints_a_network_section():
-    """No deck in SUPPORTED carries a network card, so the two network
-    sections are absent from every printout this gate walks — which is also why
-    the gate that used to compare their rows against the oracle is gone.
-    ``Execute`` never read either one (its state machine arms on the ANTENNA
-    INPUT PARAMETERS banner), so nothing downstream notices.  The unit that
-    lands the network solve moves the three network decks into SUPPORTED and
-    brings that comparison back; until then this asserts the absence."""
+def test_a_deck_prints_the_network_sections_exactly_when_it_has_networks():
+    """The two network sections belong to the CARDS, both ways round.
+
+    Inverted by momwire#456 phase C from the absence-only assertion that stood
+    while the dialect was antenna-only.  Both halves matter and for different
+    reasons: a network deck that printed no block would be answering the cards
+    silently and wrongly, and an antenna-only deck that printed one would be
+    emitting a section ``Execute`` has no state for.  Read off the DECK rather
+    than off a list, so a fixture added to either side is covered the day it
+    lands.
+    """
     for name in SUPPORTED:
+        cards = [
+            line
+            for line in (FIXTURE_DIR / f"{name}.deck").read_text().splitlines()
+            if line.split()[:1] in (["TL"], ["NT"])
+        ]
         text = our_printout(name)
-        assert "NETWORK DATA" not in text, name
-        assert "STRUCTURE EXCITATION DATA" not in text, name
+        for banner in ("NETWORK DATA", "STRUCTURE EXCITATION DATA"):
+            assert (banner in text) == bool(cards), f"{name}: {banner}"
+
+
+def test_the_network_blocks_agree_with_the_oracle_row_for_row():
+    """The excitation block's own numbers, against nec2c's.
+
+    ``test_port_impedances_and_currents_agree`` reads the ANTENNA INPUT
+    PARAMETERS table alone, because that is the table SimNEC consumes.  This
+    one reads the block above it — same rows, same order, the STRUCTURE
+    current instead of the source's — so the composition is checked where the
+    two engines can actually disagree about the NETWORK rather than about the
+    antenna.
+
+    ``dipole_nt_network`` needs the wider bar and footnote (b) is why: its
+    segment current is a residual of two larger numbers, and 12 % of it is
+    2 parts in 10 000 of what the network carries.
+
+    Two rows are excluded, both because the quantity in them is round-off on
+    BOTH engines rather than because they disagree: ``dipole_nt_all_zero``'s
+    far endpoint is an open gap (nec2c 1.5e-17 A, footnote (m)), and
+    ``dipole_ex6_gyrator``'s phantom-wire row is a 2.4e-4 m sliver parked 991
+    wavelengths away carrying ~1e-7 A, which is the deck's whole point — the
+    phantom exists to be irrelevant, and the row that says so is the one row
+    of the block nobody should be gating. Its REAL row, the amp the gyrator
+    delivers into tag 1 segment 5, is checked here at the ordinary bar and
+    again in ``test_portal.py``.
+    """
+    tolerance = {"dipole_nt_network": 0.15}
+    dust = {"dipole_nt_all_zero": (0,), "dipole_ex6_gyrator": (1,)}
+    for name in SUPPORTED:
+        ours = read_printout(our_printout(name))
+        theirs = read_printout(oracle_printout(name))
+        assert len(ours.network) == len(theirs.network), f"{name}: block shape"
+        for row, ((i_a, z_a), (i_b, z_b)) in enumerate(
+            zip(ours.network, theirs.network, strict=True)
+        ):
+            if row in dust.get(name, ()):
+                continue
+            bar = tolerance.get(name, Z_TOL)
+            assert relative(i_a, i_b) <= bar, f"{name} row {row}: I {i_a} vs {i_b}"
+            assert relative(z_a, z_b) <= bar, f"{name} row {row}: Z {z_a} vs {z_b}"
 
 
 @pytest.mark.parametrize("name", SUPPORTED)
