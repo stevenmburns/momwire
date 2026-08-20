@@ -744,6 +744,24 @@ class NetworkReducer:
         for k in sorted(set(emf) | set(forced) | set(loads_by_node)):
             loads = loads_by_node.get(k, [])  # [(Load, instance_path, branch_index)]
             zs = [load_impedance(ld, omega) for ld, _p, _i in loads]
+            # ONE budget row per contributing Load (issue #956), emitted here
+            # rather than twice below: the forced-current and voltage
+            # terminations stamp different elements but probe the same Loads,
+            # through the same shared branch current, so each Load's share is
+            # ½·Re(z_i)·|j|² either way ("termination_share"). Folding several
+            # co-located Loads into one row would make the second one's branch
+            # identity unrepresentable, which is exactly what the structured
+            # key exists to fix. Ordering is unaffected: probes are read after
+            # the solve, and each iteration appends only its own node's rows.
+            for (ld, ld_path, ld_idx), z_ld in zip(loads, zs):
+                probes.append(
+                    _Probe(
+                        f"Load {ld.port}",
+                        "termination_share",
+                        (k, z_ld),
+                        (ld_path, ld_idx, "load"),
+                    )
+                )
             if k in forced:
                 # Forced-current termination (DrivenCurrent, issue #442):
                 # constitutive row j = I, independent of any series loads —
@@ -759,22 +777,6 @@ class NetworkReducer:
                 elements.append(
                     _Group2Element(None, k, c_v=0j, c_j=1.0 + 0j, e=forced[k])
                 )
-                if loads:
-                    names = [ld.port for ld, _p, _i in loads]
-                    # Several Loads sharing one node fold into one probe;
-                    # the first contributing branch anchors its key. That
-                    # branch never gets a probe of its own in the main loop
-                    # (a Load only ever reaches loads_by_node), so this
-                    # cannot collide with another probe's key.
-                    lead_p, lead_i = loads[0][1], loads[0][2]
-                    probes.append(
-                        _Probe(
-                            f"Load {'+'.join(names)}",
-                            "termination",
-                            k,
-                            (lead_p, lead_i, "load"),
-                        )
-                    )
                 continue
             e = emf.get(k, 0j)
             # Γ-referenced source (issue #746): a DRIVEN port's EMF sits behind
@@ -809,17 +811,6 @@ class NetworkReducer:
                 el = _Group2Element(None, k, c_v=0j, c_j=1.0 + 0j, e=0j)
             terminations[k] = (len(elements), e, "v", 0j)
             elements.append(el)
-            if loads:
-                names = [ld.port for ld, _p, _i in loads]
-                lead_p, lead_i = loads[0][1], loads[0][2]
-                probes.append(
-                    _Probe(
-                        f"Load {'+'.join(names)}",
-                        "termination",
-                        k,
-                        (lead_p, lead_i, "load"),
-                    )
-                )
 
         return MNASystem(
             G,
@@ -876,15 +867,15 @@ class NetworkReducer:
           budget      -- list of ``_BudgetEntry`` per network branch, in
                          branch order (issue #299): TL and parallel-Shunt
                          stamps via ½·Re(v†·Y_br·v), TwoPort/series-Shunt
-                         via their explicit branch currents, Loads via the
-                         termination drop. Lossless branches report ~0. Power
-                         delivered to the antenna (radiated + any wire/ground
-                         loss inside the MoM solve) is p_in − Σ watts. Each
-                         entry still unpacks as ``(label, watts)`` (issue
-                         #956) and additionally carries ``.key`` —
-                         ``(instance_path, branch_index, subprobe)`` — a
-                         structured identity a consumer can match on instead
-                         of the label string.
+                         via their explicit branch currents, Loads via
+                         ½·Re(z_load)·|j|² on the termination branch they
+                         share. Lossless branches report ~0. Power delivered
+                         to the antenna (radiated + any wire/ground loss
+                         inside the MoM solve) is p_in − Σ watts. Each entry
+                         still unpacks as ``(label, watts)`` (issue #956) and
+                         additionally carries ``.key`` — ``(instance_path,
+                         branch_index, subprobe)`` — a structured identity a
+                         consumer can match on instead of the label string.
 
         A CAVEAT for anyone keying on ``.key`` (issue #956): the budget a real
         consumer sees is a MIXED list. antennaknobs' engine layer appends its
