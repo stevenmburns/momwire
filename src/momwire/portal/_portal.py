@@ -188,7 +188,7 @@ from ..deck import parse as parse_dialect
 # semantics live ONCE and the dialect is where a card's meaning is decided
 # (design doc ``networks-move-into-the-engine.md``); the portal supplies the
 # only thing that module cannot know, which is the antenna's admittance.
-from ..deck._networks import build_reducer, card_branches
+from ..deck._networks import build_reducer, card_branches, live_cards
 
 # The NEC-level view of a deck's geometry: the flat wire list after every
 # GM/GS transform and both connection passes, carrying the TAGS and the
@@ -2158,9 +2158,7 @@ class DeckSolver:
         absolutely (``tag 0``) still prints the segment's own.
         """
         seen: list[tuple[int, int]] = []  # (global segment, port)
-        for card, (port_a, port_b) in zip(self.model.networks, self.plan.network_ports):
-            if group_index < card.first_group:
-                continue
+        for card, (port_a, port_b) in live_cards(self.model, self.plan, group_index):
             for (tag, seg), port in (
                 (card.address_a, port_a),
                 (card.address_b, port_b),
@@ -3156,12 +3154,7 @@ def _network_lines(solver: DeckSolver, result: dict, group_index: int) -> list[s
     points = result["network_points"]
     if not points:
         return []
-    model = solver.model
-    live = [
-        (card, pair)
-        for card, pair in zip(model.networks, solver.plan.network_ports)
-        if group_index >= card.first_group
-    ]
+    live = live_cards(solver.model, solver.plan, group_index)
     out = [_NETWORK_DATA_HEADER]
     for kind in _kind_order(card.kind for card, _pair in live):
         out += _NETWORK_TL_TABLE_HEADER if kind == "TL" else _NETWORK_NT_TABLE_HEADER

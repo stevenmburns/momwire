@@ -56,6 +56,7 @@ dipole_mp_multiprocessor              0.76%   0.76%       -   0.96%      -   (e)
 dipole_mp_single_process              0.76%   0.76%       -   0.96%      -   (e)
 dipole_ne_nearfield                   0.76%   0.76%       -   0.96%      -
 dipole_nh_nearfield                   0.76%   0.76%       -   0.96%      -
+dipole_nt_after_xq                    2.47%   2.47%       -   4.07%      -   (n)
 dipole_nt_all_zero                    0.52%   0.52%       -   1.24%      -   (m)
 dipole_nt_network                     1.31%   1.31%       -   4.07%      -   (b)
 dipole_pec_ground                     2.23%   2.23%       -   4.35%      -
@@ -230,6 +231,16 @@ fails.
     engine that treated an all-zero card as a no-op would SHORT that gap
     instead of opening it, and would then be answering a different antenna at
     a number that still looks reasonable.
+
+(n) ``dipole_nt_after_xq`` runs two groups from one deck — the bare antenna,
+    then the same antenna with an ``NT`` attached — and the row above is the
+    WORSE of the two. Its second group is ``dipole_nt_network``'s 1.31 %; its
+    first is 2.47 %, which is this parasitic-pair geometry's ordinary basis
+    difference and not the network's doing: that group reproduces a
+    network-free control deck's printed row to the BYTE, which is what says
+    the endpoint gap cut for the second group perturbs the first not at all
+    (``test_portal.py``'s
+    ``test_the_group_before_the_network_card_reproduces_the_control_exactly``).
 """
 
 from __future__ import annotations
@@ -504,7 +515,7 @@ def test_the_support_matrix_covers_the_whole_corpus():
     # fixtures of momwire#415, plus the three network decks momwire#456 phase C
     # un-retired and the four it captured. The count is written out so a deck
     # that quietly stops being measured shows up here.
-    assert len(SUPPORTED) == 50
+    assert len(SUPPORTED) == 51
 
 
 @pytest.mark.parametrize(("marker", "deck"), sorted(UNSUPPORTED.items()))
@@ -686,7 +697,8 @@ def test_the_network_blocks_agree_with_the_oracle_row_for_row():
     two engines can actually disagree about the NETWORK rather than about the
     antenna.
 
-    ``dipole_nt_network`` needs the wider bar and footnote (b) is why: its
+    ``dipole_nt_network`` and ``dipole_nt_after_xq`` — the same NT on the same
+    structure — need the wider bar, and footnote (b) is why: their
     segment current is a residual of two larger numbers, and 12 % of it is
     2 parts in 10 000 of what the network carries.
 
@@ -700,7 +712,7 @@ def test_the_network_blocks_agree_with_the_oracle_row_for_row():
     delivers into tag 1 segment 5, is checked here at the ordinary bar and
     again in ``test_portal.py``.
     """
-    tolerance = {"dipole_nt_network": 0.15}
+    tolerance = {"dipole_nt_network": 0.15, "dipole_nt_after_xq": 0.15}
     dust = {"dipole_nt_all_zero": (0,), "dipole_ex6_gyrator": (1,)}
     for name in SUPPORTED:
         ours = read_printout(our_printout(name))

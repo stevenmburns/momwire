@@ -55,6 +55,15 @@ The translation, card by card
   at the far endpoint of ~1e-17 A).  Skipping the card would leave the gaps
   SHORTED instead, which is a different antenna.
 
+  Worth knowing precisely where that comes from, because it is a property of
+  the design rather than of the stamp: the open circuit is produced by
+  CREATING THE PORTS, not by stamping the zero.  A port the reducer sees but
+  no source pins and no branch touches floats at ``I_ext = 0``, which is an
+  open gap; the zero admittance adds nothing to it.  So dropping the zero
+  branch while still creating its ports would be physically neutral — the
+  measured-equivalent mutation — and it is the ports, and only the ports, that
+  a future optimisation must not skip.
+
 Addressing, symmetry and retention are the reader's business and are already
 settled by the time anything here runs.
 """
@@ -97,15 +106,30 @@ def network_endpoints(model: DeckModel) -> tuple[tuple[int, float], ...]:
     return tuple(seen)
 
 
-def live_cards(model: DeckModel, group: int) -> tuple[NetworkCard, ...]:
-    """The cards in force at execute group ``group``, in card order.
+def live_cards(
+    model: DeckModel, plan, group: int
+) -> tuple[tuple[NetworkCard, tuple[int, int]], ...]:
+    """``(card, (port a, port b))`` for every card in force at execute group
+    ``group``, in card order.
 
     A network card is RETAINED from where it is read to the end of the deck
     (spec ``#network-retention``), so the scoping is one comparison: a group
     that ran BEFORE the card was read is answered with no network at all,
-    which is what the oracle prints.
+    which is what the oracle prints (fixture ``dipole_nt_after_xq``).
+
+    **This is the only place that comparison is written.**  It briefly lived in
+    four — here, the port-pair walk beside it, and both printout walks in
+    ``momwire.portal`` — and four copies of a scoping rule is four chances to
+    answer one group with another group's networks, silently.  Returning the
+    card WITH its ports rather than the card alone is what lets every caller
+    share it: they all need both, and pairing them here means a filtered card
+    list can never be zipped against an unfiltered port list.
     """
-    return tuple(card for card in model.networks if group >= card.first_group)
+    return tuple(
+        (card, pair)
+        for card, pair in zip(model.networks, plan.network_ports)
+        if group >= card.first_group
+    )
 
 
 def _point_at(wire: DeckWire, arclength: float) -> tuple[float, ...]:
@@ -203,7 +227,7 @@ def build_network(
     carries the SOURCE current — antenna plus network — which is the number
     the ``ANTENNA INPUT PARAMETERS`` row prints.
     """
-    cards = live_cards(model, group)
+    cards = live_cards(model, plan, group)
     if not cards:
         return None
 
@@ -216,7 +240,7 @@ def build_network(
 
     branches: list[object] = []
     endpoints: set[int] = set()
-    for card, (port_a, port_b) in zip(cards, _live_port_pairs(model, plan, group)):
+    for card, (port_a, port_b) in cards:
         branches += card_branches(card, port_a, port_b, model.wires)
         endpoints.add(port_a)
         endpoints.add(port_b)
@@ -228,16 +252,6 @@ def build_network(
     ]
     network = Network(ports=ports, branches=branches, sources=sources)
     return network, port_to_idx
-
-
-def _live_port_pairs(model: DeckModel, plan, group: int):
-    """``(port a, port b)`` per live card, in the same order as
-    :func:`live_cards`."""
-    return [
-        pair
-        for card, pair in zip(model.networks, plan.network_ports)
-        if group >= card.first_group
-    ]
 
 
 def build_reducer(model: DeckModel, plan, *, group: int, voltages):
