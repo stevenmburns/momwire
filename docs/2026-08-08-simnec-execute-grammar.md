@@ -909,6 +909,16 @@ across the two segments' gaps, in parallel with the structure, and
 * Row order in `STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS` is the
   far end first: `NT 1 5 2 5` prints `(2, 14)` then `(1, 5)`.
 * `NETWORK DATA` rows are padded to 106 columns with nine trailing spaces.
+* An OPEN connection point (an all-zero `NT`'s endpoint, or any gap the
+  circuit leaves undriven) prints exact zeros for its current, impedance,
+  admittance and power once the current is under `_FIELD_FLOOR2` — the same
+  deliberate DEPARTURE from nec2c as §12.4's near-field floor, on the third
+  print path this class has surfaced (momwire#403 → #477 → here). nec2c
+  prints its own fill dust in that row (`dipole_nt_all_zero.out` reads
+  `1.4898E-17` A and `4.2696E+16` Ω); ours moved with process history —
+  caught by CI's served==stock byte oracle on the first run after the #476
+  dump tap was armed — and the impedance of an open computed from dust is
+  noise over noise, so the row prints the zeros the physics means.
 * Both network sections are *(ignored)* by `Execute` — its state machine arms
   on the `ANTENNA INPUT PARAMETERS` banner alone, and the excitation table
   repeats the `No: No: REAL` header with the same 11-token rows without ever

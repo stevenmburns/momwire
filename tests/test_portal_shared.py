@@ -420,6 +420,72 @@ def test_ne_dust_prints_as_exact_zero():
         assert (tok[3], tok[4]) == ("0.0000E+00", "0.00"), tok
 
 
+def _excitation_rows(text: str) -> list[list[str]]:
+    """The STRUCTURE EXCITATION DATA rows of a printout: eleven numeric
+    tokens, scanned only between that banner and the next blank-blank gap so
+    no other eleven-token table can drift into the gate."""
+    rows = []
+    in_block = False
+    for ln in text.splitlines():
+        if "STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS" in ln:
+            in_block = True
+            continue
+        if in_block:
+            tok = ln.split()
+            if len(tok) != 11:
+                if not tok:
+                    in_block = False
+                continue
+            try:
+                int(tok[0])
+            except ValueError:
+                continue
+            rows.append(tok)
+    return rows
+
+
+def test_connection_point_dust_prints_as_exact_zero():
+    """momwire#403's dust floor, third print path (the second was #477's
+    near-field table): an OPEN network connection point has an analytically
+    zero current, and the row derived from it — impedance V/I, admittance
+    I/V, power — must print exact zeros, never ~1e-19 A residue whose sign
+    moves with process history and ~1e16 Ω of noise over noise.  CI's byte
+    oracle caught exactly that on ``dipole_nt_all_zero`` on the first run
+    after the #476 dump tap was armed; nec2c prints its own dust there
+    (1.5e-17 A, 4.3e16 Ω in the committed capture), a documented departure.
+
+    Generic half: every excitation row's current magnitude is either exactly
+    zero (with every derived column exactly zero alongside it) or a real
+    reading strictly above the floor.  Specific half: the all-zero NT's open
+    endpoint row, pinned column by column."""
+    for name in (
+        "dipole_nt_all_zero",
+        "dipole_nt_network",
+        "dipole_tl_network",
+        "dipole_tl_shunt_crossed",
+        "dipole_ex6_gyrator",
+    ):
+        rows = _excitation_rows(stock(fixture_deck(name)))
+        assert rows, f"{name}: no excitation rows found"
+        for tok in rows:
+            i_mag = abs(complex(float(tok[4]), float(tok[5])))
+            assert i_mag == 0.0 or i_mag > 1e-10, (
+                f"{name}: sub-floor connection current printed raw: {tok}"
+            )
+            if i_mag == 0.0:
+                assert tok[4:] == ["0.0000E+00"] * 7, (
+                    f"{name}: the digits of zero: {tok}"
+                )
+
+    open_rows = [
+        tok
+        for tok in _excitation_rows(stock(fixture_deck("dipole_nt_all_zero")))
+        if tok[0] == "2"
+    ]
+    assert len(open_rows) == 1, open_rows
+    assert open_rows[0][4:] == ["0.0000E+00"] * 7, open_rows[0]
+
+
 def test_two_decks_down_one_connection_frame_the_way_the_stock_loop_does(runtime):
     """The banner belongs to the CONNECTION here, not to the process — the
     server is already warm when SimNEC's engine starts. One connection must
