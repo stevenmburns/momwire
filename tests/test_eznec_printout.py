@@ -14,11 +14,18 @@ the other half (are they the right numbers) by feeding a solve into the same
 :class:`RunData`, which is why :func:`extract` builds one the way a solver
 would rather than a parallel structure of its own.
 
-The comparison is byte-exact after CRLF-to-LF alone.  The manifest lists
-three more normalizations — the ``FILL=``/``RUN TIME`` timing lines, signed
-zero in the pattern TILT column, the ``GMPINO`` preamble — and none of them
-is needed here: timings and signed zeros are carried through the round trip
-verbatim, and no rung-1 capture has a preamble.  They exist for U4, where the
+The comparison is byte-exact after two of the manifest's normalizations:
+CRLF-to-LF, and the ``SOMMPD.NEX`` cache blocks (:func:`printout_text`).  The
+cache blocks are dropped HERE, at the reader, rather than in the byte-gate,
+because they are not a rendering choice this engine gets to make: the seam
+never reads and never writes that file, so it has no cache state to report and
+no printout it writes can carry one.  Every consumer of a captured printout
+therefore wants the same file, which makes one normalization at the reader
+right and several at the gates wrong.
+
+The manifest's other two — the ``FILL=``/``RUN TIME`` timing lines and signed
+zero in the pattern TILT column — are not needed here: both are carried
+through the round trip verbatim.  They exist for the serve gates, where the
 numbers come from a solver and a machine's clock instead of from the file.
 """
 
@@ -49,7 +56,15 @@ from momwire.eznec._printout import (
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "eznec"
 MANIFEST = json.loads((FIXTURE_DIR / "manifest.json").read_text())
 
-GATED = tuple(entry for entry in MANIFEST["captures"] if entry.get("printout"))
+# Every capture that shipped a printout, and the subset this renderer has a
+# form for.  They differ by one: 0022 asks for a near field, which is refused
+# at this seam, so its printout carries a ``NEAR ELECTRIC FIELDS`` block that
+# no rung of this arc renders yet (manifest ``unrendered``).  Its file is
+# committed anyway — it carries the only VALID ``SOMMPD.NEX`` cache block in
+# the corpus, and the normalization has to answer that form too.
+CAPTURED = tuple(entry for entry in MANIFEST["captures"] if entry.get("printout"))
+CAPTURED_IDS = tuple(entry["id"] for entry in CAPTURED)
+GATED = tuple(entry for entry in CAPTURED if not entry.get("unrendered"))
 GATED_IDS = tuple(entry["id"] for entry in GATED)
 
 
@@ -64,10 +79,58 @@ def deck_text(cid: str) -> str:
     return (FIXTURE_DIR / capture(cid)["deck"]).read_bytes().decode("latin-1")
 
 
+# The ``SOMMPD.NEX`` cache lines, by the sentence each one opens with.  Four
+# block forms are observed and they are listed in the manifest's
+# ``normalizations``; what they have in common is that every one of them
+# reports the state of a FILE — read, stale, missing, written — and none of
+# them reports anything about the antenna.
+_SOMMPD_MARKERS = (
+    "GMPINO:",
+    "should be",
+    "Will compute Sommerfeld-ground tables",
+    "Sommerfeld integral tables",
+    "Potentials:",
+    "E, H:",
+    "E and H:",
+)
+
+
+def _sommpd_line(line: str) -> bool:
+    return any(line.strip().startswith(marker) for marker in _SOMMPD_MARKERS)
+
+
+def drop_sommpd_blocks(text: str) -> str:
+    """Every ``SOMMPD.NEX`` cache block, blank line and all.
+
+    A block is ONE BLANK LINE followed by a run of cache lines, and the blank
+    belongs to it — see :func:`~momwire.eznec._printout._environment`, where
+    that reading is what leaves a finite-ground environment block the same
+    shape as ``FREE SPACE``'s.  The rule is uniform over all four observed
+    forms and over a two-frequency run's TWO consecutive blocks, which is what
+    picked it: no other reading gives every block the same shape.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        if (
+            not lines[index].strip()
+            and index + 1 < len(lines)
+            and _sommpd_line(lines[index + 1])
+        ):
+            index += 1
+            while index < len(lines) and _sommpd_line(lines[index]):
+                index += 1
+            continue
+        out.append(lines[index])
+        index += 1
+    return "\n".join(out)
+
+
 def printout_text(cid: str) -> str:
-    """A captured printout, CRLF-normalized per the manifest."""
+    """A captured printout, CRLF- and cache-normalized per the manifest."""
     raw = (FIXTURE_DIR / capture(cid)["printout"]).read_bytes().decode("latin-1")
-    return raw.replace("\r\n", "\n")
+    return drop_sommpd_blocks(raw.replace("\r\n", "\n"))
 
 
 # --------------------------------------------------------------------------
@@ -305,6 +368,20 @@ def extract(text: str) -> RunData:
     run_time = next(line for line in lines if line.startswith(" RUN TIME ="))
     environment = _section(lines, "- - - ANTENNA ENVIRONMENT - - -")
     assert environment is not None
+    # A finite-ground block names its medium in the three lines under the
+    # banner.  Read by splitting on the ``=`` each label ends with, so the
+    # widths this reading recovers are independent of the ones the renderer
+    # writes — the complex constant's two glued cells being the one place they
+    # could not be, so they are sliced at the E12.5 boundary the capture's own
+    # column shows.
+    ground = None
+    if lines[environment + 2].strip() == _printout.ENVIRONMENT_FINITE_GROUND:
+        epsc = lines[environment + 5].partition("=")[2]
+        ground = _printout.GroundMedium(
+            eps_r=float(lines[environment + 3].partition("=")[2]),
+            sigma=float(lines[environment + 4].partition("=")[2].split()[0]),
+            eps_c=complex(float(epsc[:12]), float(epsc[12:24])),
+        )
 
     return RunData(
         node_count=_count(lines, " Number of nodes :"),
@@ -314,6 +391,7 @@ def extract(text: str) -> RunData:
         frequency_mhz=float(frequency.split()[1]),
         wavelength_m=float(wavelength.split()[1]),
         environment=lines[environment + 2].strip(),
+        ground=ground,
         loads=loads,
         networks=networks,
         network_excitation=network_excitation,
@@ -410,6 +488,95 @@ def test_a_ground_plane_deck_prints_the_interpolation_note():
     assert "GROUND PLANE SPECIFIED" not in free
 
 
+def test_a_finite_ground_environment_prints_its_medium_under_the_banner():
+    """0047's four-line block, verbatim, and the two constants it turns on.
+
+    ``RELATIVE DIELECTRIC CONST.`` is an ``F7.3`` — 13.000 fills six of its
+    seven columns and the oracle's ``100.000`` fills all seven — the
+    conductivity an ``E10.3``, and the complex constant two glued ``E12.5``
+    cells whose imaginary part carries no ``j`` and wears its sign against the
+    mantissa.  ``FREE SPACE`` and ``PERFECT GROUND`` print their name centred
+    instead, which is a different format and not a different indent.
+    """
+    lines = printout_text("0047").split("\n")
+    at = _section(lines, "- - - ANTENNA ENVIRONMENT - - -")
+    assert lines[at + 1] == ""
+    assert lines[at + 2 : at + 6] == [
+        " " * 40 + "FINITE GROUND.  SOMMERFELD SOLUTION",
+        " " * 40 + "RELATIVE DIELECTRIC CONST.= 13.000",
+        " " * 40 + "CONDUCTIVITY= 5.000E-03 MHOS/METER",
+        " " * 40 + "COMPLEX DIELECTRIC CONSTANT= 1.30000E+01-1.28400E+01",
+    ]
+    assert lines[at + 6] == ""
+
+    data = extract(printout_text("0047"))
+    assert data.environment == _printout.ENVIRONMENT_FINITE_GROUND
+    assert data.ground == _printout.GroundMedium(13.0, 0.005, complex(13.0, -12.84))
+    # 0048 is the same medium a fifth of a percent up the band, and its own
+    # cell is what pins the frequency dependence.
+    assert extract(printout_text("0048")).ground.eps_c == complex(13.0, -12.8034)
+    # The two bannerless forms keep the centred layout they had.
+    assert extract(printout_text("0019")).ground is None
+    assert extract(printout_text("0010")).ground is None
+
+
+def test_a_cache_block_is_dropped_with_the_blank_line_that_opens_it():
+    """All four observed ``SOMMPD.NEX`` forms, and the reading that unifies them.
+
+    Each block is one blank line and the cache lines after it.  That reading —
+    rather than "the lines and the blank after them" — is what makes the
+    finite-ground environment block come out with ONE blank under its heading,
+    the same shape ``FREE SPACE`` has, and it is the only reading that also
+    survives a two-frequency run's two consecutive blocks (measured on the
+    linux oracle 2026-08-20; the alternative needs the trailing blank to be
+    optional, and optional exactly where a banner follows).
+    """
+    stale = "\n".join(
+        (
+            " GMPINO: EPSC from file = 1.30000E+01-4.90612E+01",
+            "              should be  1.30000E+01-1.28400E+01",
+            " Will compute Sommerfeld-ground tables",
+        )
+    )
+    valid = "Sommerfeld integral tables read:\nPotentials: 11 12 13 14 15\nE, H:"
+    absent = (
+        " GMPINO: Unable to open file SOMMPD.NEX" + " " * 30
+    ) + "\n Will compute Sommerfeld-ground tables"
+    written = (
+        "Sommerfeld integral tables written in previous run:\n"
+        "Potentials: 11 12 13 14 15\nE and H: 11 12 13 14 15"
+    )
+    for form in (stale, valid, absent, written):
+        assert drop_sommpd_blocks(f"HEAD\n\n{form}\nTAIL") == "HEAD\nTAIL"
+        # Two blocks back to back — the two-frequency case — collapse too.
+        assert drop_sommpd_blocks(f"HEAD\n\n{form}\n\n{absent}\nTAIL") == "HEAD\nTAIL"
+    # A blank line with no cache under it is an ordinary blank and survives.
+    assert drop_sommpd_blocks("HEAD\n\nTAIL") == "HEAD\n\nTAIL"
+
+
+def test_the_captures_still_carry_their_cache_blocks_on_disk():
+    """The normalization is a READER's, not an edit: the committed bytes are
+    the engine's own, cache reports and all.
+
+    Worth its own gate because the fixtures were converted CRLF-to-LF on the
+    way in, and a conversion is exactly the moment someone might also tidy.
+    0021 and 0047 are the same deck run four days apart with a differently
+    stale cache; 0022 carries the corpus's only VALID block; and all four
+    carry the postamble the engine writes after the ``EN`` echo.
+    """
+    for cid, marker in (
+        ("0021", " GMPINO: EPSC from file = 2.00000E+01-3.89052E+01"),
+        ("0047", " GMPINO: EPSC from file = 1.30000E+01-4.90612E+01"),
+        ("0048", " GMPINO: EPSC from file = 1.30000E+01-1.28400E+01"),
+        ("0022", "Sommerfeld integral tables read:"),
+    ):
+        raw = (FIXTURE_DIR / capture(cid)["printout"]).read_bytes().decode("latin-1")
+        assert "\r" not in raw  # committed LF, per the manifest
+        assert marker in raw
+        assert "Sommerfeld integral tables written in previous run:" in raw
+        assert marker not in printout_text(cid)
+
+
 def test_a_null_gain_row_prints_a_blank_sense_column():
     """-999.99 with an empty SENSE, and an ordinary row with ``LINEAR`` in the
     same columns — the blank is a value, so it is carried as one."""
@@ -466,7 +633,7 @@ def test_the_loaded_captures_print_a_blank_reactance_cell():
 
 
 def test_the_unloaded_captures_say_so_in_one_line():
-    for cid in ("0010", "0013", "0019", "0035", "0043", "0044"):
+    for cid in ("0010", "0013", "0019", "0021", "0035", "0043", "0044", "0047", "0048"):
         assert extract(printout_text(cid)).loads == ()
         assert "THIS STRUCTURE IS NOT LOADED" in printout_text(cid)
 

@@ -204,12 +204,14 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     """The fault-injection table's three obligations at once: the file is
     written, the stamp echo is in it, and the refusal sits AFTER the echo.
 
-    0047 is the deck for it since U4 — a well-formed capture whose ``GN 0``
-    puts it on rung 2, so it still exercises the refusal path end to end
-    while 0043 (which this gate used to send) now comes back solved.
+    0045 is the deck for it since the ground rung — a well-formed capture
+    whose bare ``GD`` puts it on rung 3, so it still exercises the refusal
+    path end to end.  It is the third tenant of this gate: 0043 came back
+    solved when rung 1 landed and 0047 when rung 2 did, which is what a
+    ladder does to the decks that used to demonstrate its top.
     """
     deck = tmp_path / "EZN5.NEC"
-    deck.write_bytes((FIXTURE_DIR / capture("0047")["deck"]).read_bytes())
+    deck.write_bytes((FIXTURE_DIR / capture("0045")["deck"]).read_bytes())
     out = tmp_path / "NEC5.OUT"
 
     proc = run_engine([str(deck), str(out)])
@@ -222,8 +224,8 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     assert _ERROR_PREFIX in written
     assert written.index(stamp) < written.index(_ERROR_PREFIX)
     reason = written.rsplit(_ERROR_PREFIX, 1)[1].strip()
-    assert reason.startswith("GN 0 asks for the finite-ground Sommerfeld solution")
-    assert written == eznec.render_refusal(deck_text("0047"), reason)
+    assert reason.startswith("GD asks for the MININEC-type ground")
+    assert written == eznec.render_refusal(deck_text("0045"), reason)
 
 
 def test_paths_resolve_against_the_working_directory(tmp_path):
