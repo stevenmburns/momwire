@@ -1101,10 +1101,11 @@ def test_gn_pec_and_free_space_do_not_check_nradl(code):
 
 def test_gn_second_medium_when_nradl_is_zero():
     """§#gn--ground-parameters: F3-F6 carry a whole second medium in the
-    same four slots a GD card sets.  Stated on a ``GN 2`` because the same
-    four slots under a ``GN 1`` are the MININEC-type ground idiom, refused
-    at the execute card (§#gd--additional-ground-medium)."""
-    model = parse(BODY + "GN 2 0 0 0 13. .005 20. -2.\nXQ\nNX\n")
+    same four slots a GD card sets.  On a ``GN 1``, which is where 4nec2
+    writes it: the same four slots under a perfect ground are the
+    MININEC-type ground idiom, served since momwire#487 (#458 moved this
+    case to a ``GN 2`` while it refused)."""
+    model = parse(BODY + "GN 1 0 0 0 5. .001 20. -2.\nXQ\nNX\n")
     assert model.second_medium == SecondMedium(20.0, -2.0, 0.0, 0.0)
 
 
@@ -1118,9 +1119,8 @@ def test_a_bare_gn_clears_an_earlier_cliff():
 def test_a_radial_screen_count_keeps_the_second_medium_slots():
     """§#gn--ground-parameters: a nonzero NRADL takes F3/F4 as the screen's
     own geometry and leaves any earlier cliff alone — measured through the
-    free-space escape hatch, since 0/2 refuse outright with NRADL set and a
-    cliff under ``GN 1`` is the MININEC-type ground idiom."""
-    model = parse(BODY + "GN -1 0 0 0 5. .001 20. -2.\nGN -1 4\nXQ\nNX\n")
+    PEC escape hatch, since 0/2 refuse outright with NRADL set."""
+    model = parse(BODY + "GN 1 0 0 0 5. .001 20. -2.\nGN 1 4\nXQ\nNX\n")
     assert model.second_medium == SecondMedium(20.0, -2.0, 0.0, 0.0)
 
 
@@ -1163,14 +1163,7 @@ def test_gd_is_not_an_arming_card():
     assert model.groups[1] is None
 
 
-# -- the MININEC-type ground idiom (#458) -----------------------------------
-
-MININEC_GROUND = (
-    "GD with a perfect ground (GN 1) in force is the MININEC-type ground "
-    "idiom (4nec2 GN 3; EZNEC 'MININEC-type'), which this engine does not "
-    "implement (momwire#456): use GN 2 for a finite Sommerfeld ground, or "
-    "drop the GD for perfect ground"
-)
+# -- the MININEC-type ground idiom (#458 refused it; momwire#487 serves it) --
 
 
 @pytest.mark.parametrize(
@@ -1187,31 +1180,45 @@ MININEC_GROUND = (
         # A near-field request reads the record no more than ``RP 0`` does.
         "GN 1\nGD 0 0 0 0 13. .005\nNE 0 1 1 1 0. 0. 1. 0. 0. 0.\n",
         # The whole cliff stated on the GN card itself (F3-F6), with no GD
-        # anywhere: the same state, so the same refusal.
+        # anywhere: the same state, so the same answer.
         "GN 1 0 0 0 0. 0. 13. .005\nXQ\n",
     ],
 )
-def test_a_second_medium_under_a_perfect_ground_refuses_by_name(cards):
+def test_a_second_medium_under_a_perfect_ground_is_carried_and_not_read(cards):
     """§#gd--additional-ground-medium: ``GD`` under a ``GN 1`` is how both
-    frontends spell MININEC-type ground, and NEC-2 answers it as plain
-    perfect ground — 34 % in R, silently."""
-    with pytest.raises(DeckError) as exc:
-        parse(BODY + cards + "NX\n")
-    assert str(exc.value) == MININEC_GROUND
+    frontends spell MININEC-type ground, and NEC-2 answers it as PLAIN
+    PERFECT GROUND — the record is carried into the group and no request
+    below ``RP 2`` ever reads it.
+
+    #458 refused these five for a while, on the argument that answering them
+    substitutes a half-space silently. momwire#487 measured the oracle on all
+    five shapes and found perfect-ground physics on the other side (fixtures
+    ``mininec_gp80_seam``, ``mininec_vertical_rp0``,
+    ``mininec_vertical_gd2_rp0``, ``dipole_gd_second_medium``), so what is
+    pinned here is that the environment reaches the group INTACT: the ground
+    is perfect, and the second medium is the one the deck stated rather than
+    a cleared or a substituted one.
+    """
+    model = parse(BODY + cards + "NX\n")
+    group = model.groups[0]
+    assert model.ground == "pec"
+    assert group.environment.ground == "pec"
+    assert group.environment.second_medium == SecondMedium(13.0, 0.005, 0.0, 0.0)
 
 
-def test_a_bare_perfect_ground_still_serves():
+def test_a_bare_perfect_ground_carries_no_medium():
     """§#gd--additional-ground-medium: an all-zero second medium is no
-    medium — it is what a bare ``GN 1`` writes into the four slots — so the
-    commonest ground card in the corpus does not trip the gate."""
+    medium — it is what a bare ``GN 1`` writes into the four slots, and it is
+    what tells the far field there is no cliff to reflect off."""
     model = parse(BODY + "GN 1\nXQ\nNX\n")
     assert model.ground == "pec"
     assert model.groups[0].environment.second_medium == SecondMedium()
 
 
-def test_a_perfect_ground_cliff_under_rp2_and_rp3_still_serves():
-    """§#gd--additional-ground-medium: modes 2 and 3 READ the record, so
-    nothing is silent — those groups are answered, not refused (fixtures
+def test_a_perfect_ground_cliff_under_rp2_and_rp3_reaches_the_request():
+    """§#gd--additional-ground-medium: modes 2 and 3 are the ONLY readers of
+    the record, and this is the same environment the ``RP 0`` cases above
+    carry — the difference is the request, not the ground (fixtures
     ``dipole_rp2_linear_cliff`` / ``dipole_rp3_circular_cliff``)."""
     for mode in (2, 3):
         model = parse(
@@ -1225,8 +1232,8 @@ def test_a_perfect_ground_cliff_under_rp2_and_rp3_still_serves():
 
 
 def test_a_genuine_cliff_over_a_finite_ground_still_serves():
-    """§#gd--additional-ground-medium: the gate is perfect ground's alone —
-    ``GN 0`` and ``GN 2`` answer the second medium in every mode."""
+    """§#gd--additional-ground-medium: every ground carries the record the
+    same way — ``GN 0`` and ``GN 2`` answer the second medium in every mode."""
     for code in (0, 2):
         for request in ("XQ", "RP 2 9 5 1001 0. 0. 10. 45. 1000."):
             model = parse(
@@ -1242,16 +1249,16 @@ def test_a_genuine_cliff_over_a_finite_ground_still_serves():
 
 def test_free_space_with_a_second_medium_still_serves():
     """§#gd--additional-ground-medium: ``GD`` is read by the cliff modes only,
-    and free space has no reflection at all — there is no substitution to
-    make, so ``GN -1`` is untouched."""
+    and free space has no reflection at all, so ``GN -1`` is untouched."""
     model = parse(BODY + "GN -1\nGD 0 0 0 0 13. .005\nXQ\nNX\n")
     assert model.groups[0].environment.ground is None
 
 
 def test_the_idiom_is_judged_per_execute_group():
     """§#the-environment-is-per-execute-group: a deck that states the pair
-    and then switches to ``GN 2`` before its only execute card never runs the
-    idiom, so it is not refused for having written it."""
+    and then switches to ``GN 2`` before its only execute card runs over the
+    finite ground, not the perfect one — the environment is the one in force
+    at the execute card and nowhere else."""
     model = parse(BODY + "GN 1\nGD 0 0 0 0 13. .005\nGN 2 0 0 0 13. .005\nXQ\nNX\n")
     assert model.groups[0].environment.ground == ("finite", 13.0, 0.005)
 
