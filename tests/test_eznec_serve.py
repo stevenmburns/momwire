@@ -437,6 +437,17 @@ def test_the_current_and_charge_tables_sit_inside_their_measured_envelopes(cid):
         / charge_peak
         <= CHARGE_BAR[cid]
     )
+    # The magnitude envelope cannot see the charge's SIGN — q and -q print
+    # the same Mag column and differ by 180 in Phase.  The continuity sign
+    # (q = -(1/jw) dI/ds) lands within ~10 deg of NEC-5's printed phase on
+    # every element that carries real charge (measured on 0010; the worst
+    # rows sit beside the charge null, where phase swings), so 45 deg is a
+    # bar that survives formulation noise and kills a sign flip dead.
+    for a, b in zip(want.charges, got.charges):
+        if a.magnitude < 0.1 * charge_peak:
+            continue
+        wrap = (b.phase_deg - a.phase_deg + 180.0) % 360.0 - 180.0
+        assert abs(wrap) <= 45.0
 
 
 def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
