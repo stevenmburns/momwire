@@ -614,8 +614,16 @@ class Nec2Structure:
     pieces: list[Piece] = field(default_factory=list)
     pieces_of_wire: list[list[int]] = field(default_factory=list)
     # The GE ground-plane flag.  It records that the structure sits over a
-    # plane and drives nothing else; the ground's physics comes from GN.
+    # plane and specifies no ground; the ground's physics comes from GN.
     ground_plane_flag: bool = False
+    # ...and the flag's SIGN, which NEC reads separately: a POSITIVE ``GE``
+    # asks for the ground-contact current expansion, so a wire end standing on
+    # the plane connects to its own image rather than to nothing.  Here it
+    # drives the printout alone — the second ground-plane banner line and the
+    # ``I-``/``I+`` connection column of a touching segment (both oracle-pinned
+    # against the ``mininec_*`` fixtures).  The SOLVE does not consult it and
+    # interpolates either way, which is momwire#489.
+    ground_plane_interpolates: bool = False
     # The symmetric cell still in force at the end of the geometry section,
     # or None if no GX declared one or a later card destroyed it.  A live
     # symmetry changes how NEC reads the cards that move the MATRIX (see
@@ -792,12 +800,16 @@ def build_geometry(cards: list[Card]) -> Nec2Structure:
     """
     wires: list[FlatWire] = []
     ground_plane_flag = False
+    ground_plane_interpolates = False
     symmetry: Symmetry | None = None
     for card in cards:
         if card.mnemonic == "GE":
             # I2 and every real field are ignored, and the flag specifies no
-            # ground: it records that the structure sits over a plane.
+            # ground: it records that the structure sits over a plane.  Its
+            # SIGN is the ground-contact current expansion (see the field's
+            # note on `Nec2Structure`).
             ground_plane_flag = card.i(0) != 0
+            ground_plane_interpolates = card.i(0) > 0
             continue
         before = (len(wires), sum(w.n_seg for w in wires))
         _GEOMETRY_BUILDERS[card.mnemonic](card, wires)
@@ -812,5 +824,6 @@ def build_geometry(cards: list[Card]) -> Nec2Structure:
         pieces=pieces,
         pieces_of_wire=pieces_of_wire,
         ground_plane_flag=ground_plane_flag,
+        ground_plane_interpolates=ground_plane_interpolates,
         symmetry=symmetry,
     )

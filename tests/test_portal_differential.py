@@ -284,12 +284,11 @@ fails.
     — and the second is ``dipole_rp_pattern``'s own row to the digit, because
     it is that deck plus one card that does nothing.
 
-    What these rows do NOT cover is the printout: the six ground-contacting
-    decks are held out of ``test_portal.py``'s column-layout gate for a
-    two-line ground-contact gap (an unprinted banner and an unwritten ``I-``
-    connection column), pinned there by
-    ``test_the_ground_contact_printout_gap_is_exactly_two_lines``. The
-    numbers agree; two lines of the layout do not yet.
+    The printout half of this class was a known gap when the decks landed
+    (#488: an unprinted ground-plane banner and an unwritten ``I-``
+    connection column). U2 closed it, so these decks are in
+    ``test_portal.py``'s column-layout gate with everything else and the
+    ground-contact printout has its own direct assertion there.
 """
 
 from __future__ import annotations

@@ -80,25 +80,13 @@ REPLICATED_SPEC_NAMES = ("dipole_gr_rotated_ring", "dipole_gx_reflected_pair")
 # momwire#487: the decks whose structure TOUCHES the ground plane under a
 # ``GE 1``. They are the first in the corpus to do so — every earlier ground
 # fixture either stands clear of z = 0 (``dipole_pec_ground``,
-# ``catalog_verticals_vertical``) or writes ``GE -1`` — and they arrived with
-# a known, PRE-EXISTING two-line gap between this engine's printout and the
-# oracle's, pinned line for line by
-# ``test_the_ground_contact_printout_gap_is_exactly_two_lines`` below rather
-# than waved through here.
-#
-# The gap is not cosmetic underneath: nec2c reads ``GE``'s SIGN as the
-# instruction to interpolate a ground-touching current into its image, and
-# answers ``GE -1`` on this geometry with 57 - 4012j against ``GE 1``'s
-# 39.8 + 23.3j; this engine interpolates either way. Every real deck in the
-# class writes ``GE 1``, which is why the fixtures do and why the numbers
-# agree to 0.91 % — but the flag is unread, and the two missing printout
-# lines are where that shows.
-#
-# The four names the serving flip added are the same geometry and the same
-# gap: three were refusal fixtures until it and so were not in
-# ``ANTENNA_NAMES`` at all, and the fourth is the cliff-at-zero deck captured
-# with it.
-GROUND_CONTACT_GAP_NAMES = (
+# ``catalog_verticals_vertical``) or writes ``GE -1``. They arrived (#488)
+# with a known two-line printout gap against the oracle, held out of the
+# column-layout gate and asserted exactly; U2 CLOSED it, so they are in
+# ``LAYOUT_NAMES`` with everything else and this tuple is what the
+# ground-contact printout is asserted on directly
+# (``test_the_ground_contact_printout_says_the_ends_are_connected``).
+GROUND_CONTACT_NAMES = (
     "mininec_gd_reset_by_gn_rp0",
     "mininec_gp80_seam",
     "mininec_vertical_gd2_rp0",
@@ -108,8 +96,10 @@ GROUND_CONTACT_GAP_NAMES = (
     "mininec_vertical_rp3_clt",
 )
 
-# The oracle's second ground-plane banner line: printed for ``GE 1`` and not
-# for ``GE -1``, and only when a wire end actually reaches z = 0.
+# The oracle's second ground-plane banner line. nec2c's ``conect()`` prints it
+# for a POSITIVE ``GE`` and not for ``GE -1``/``GE 0``, and unconditionally on
+# the geometry — a ``GE 1`` deck standing clear of the plane prints it too
+# (measured on the oracle, 2026-08-20).
 GROUND_CONTACT_BANNER = (
     "     WHERE WIRE ENDS TOUCH GROUND, CURRENT WILL BE "
     "INTERPOLATED TO IMAGE IN GROUND PLANE."
@@ -846,7 +836,7 @@ def test_loaded_deck_spends_power_in_the_load():
 # --------------------------------------------------------------------------
 
 
-LAYOUT_NAMES = tuple(n for n in ANTENNA_NAMES if n not in GROUND_CONTACT_GAP_NAMES)
+LAYOUT_NAMES = ANTENNA_NAMES
 
 
 @pytest.mark.parametrize("name", LAYOUT_NAMES)
@@ -858,9 +848,9 @@ def test_every_fixture_matches_the_oracle_column_layout(name):
     reader is likely to be debugging; this one is the gate. Both are cheap —
     the whole corpus solves in about a second and a half.
 
-    The seven ``GROUND_CONTACT_GAP_NAMES`` are held out, and only they: their
-    gap is a known two-line one and is asserted exactly, and to the line,
-    immediately below.
+    Nothing is held out. The ground-contact decks were, between #488 and
+    momwire#487 U2, for a two-line printout gap that is now closed — see
+    ``test_the_ground_contact_printout_says_the_ends_are_connected``.
     """
     ours = body_lines(printout(name))
     theirs = body_lines(fixture_out(name))
@@ -882,61 +872,71 @@ def test_every_fixture_walks_the_oracle_section_order(name):
     assert section_walk(printout(name)) == section_walk(fixture_out(name))
 
 
-@pytest.mark.parametrize("name", GROUND_CONTACT_GAP_NAMES)
-def test_the_ground_contact_printout_gap_is_exactly_two_lines(name):
-    """The held-out decks' gap, stated so it cannot grow and cannot rot.
+def _first_segment_row(text: str) -> list[str]:
+    """Segment 1's SEGMENTATION DATA row, as tokens (``I-`` is index 8)."""
+    lines = text.splitlines()
+    start = next(i for i, ln in enumerate(lines) if "SEGMENTATION DATA" in ln)
+    return next(
+        ln.split()
+        for ln in lines[start:]
+        if len(ln.split()) == 12 and ln.split()[0] == "1"
+    )
 
-    A wire END standing on the ground plane under a ``GE 1`` is a case the
-    corpus reached for the first time in momwire#487, and this engine's
-    printout differs from the oracle's in exactly two places for it, neither
-    of them a number it computed:
 
-    1. the oracle prints a SECOND ground-plane banner line naming the image
-       interpolation, and this engine prints only the first; and
-    2. the ground-touching segment's ``I-`` connection column is its own
-       segment number on the oracle — the ground counting as the thing on the
-       far side of that end — and zero here, which is what this engine writes
-       for a free end.
+@pytest.mark.parametrize("name", GROUND_CONTACT_NAMES)
+def test_the_ground_contact_printout_says_the_ends_are_connected(name):
+    """A wire END standing on the plane under a ``GE 1``, in both places the
+    oracle records it — the gap #488 pinned, now closed and gated forwards.
 
-    Take the banner line out of the oracle's side and the rest matches column
-    for column, which is what the third assertion says. So this is a gate on
-    a known gap rather than an exemption from the gate: close either half and
-    this test fails until the deck moves back into ``LAYOUT_NAMES``, and open
-    a third divergence and it fails immediately.
+    ``GE``'s SIGN is the ground-contact current expansion, and nec2c's
+    ``conect()`` reads it twice over: it prints a SECOND ground-plane banner
+    line naming the interpolation, and it tests each segment end against
+    ``z = 0`` before it looks for a touching segment, writing the segment's
+    OWN number in the connection column when it lands there. Both are the
+    positive flag's alone — the ten ``GE -1`` fixtures print neither, which
+    ``test_every_fixture_matches_the_oracle_column_layout`` covers by running
+    over the whole corpus with nothing held out.
+
+    What is still open underneath is momwire#489: the SOLVE does not consult
+    the sign and interpolates either way, so a ``GE -1`` deck whose wire
+    touches the plane gets the ``GE 1`` answer here and 57 - 4012j from the
+    oracle. Every real deck in the class writes ``GE 1``, which is why these
+    fixtures do and why their numbers agree to 0.91 %; this test is the
+    printout half, and it says nothing about the physics half.
     """
-    ours = body_lines(printout(name))
-    theirs = body_lines(fixture_out(name))
+    ours = printout(name)
+    theirs = fixture_out(name)
     assert GROUND_CONTACT_BANNER in theirs, "the oracle stopped printing it"
-    assert GROUND_CONTACT_BANNER not in ours, (
-        "this engine prints the interpolation banner now — move the deck into "
-        "LAYOUT_NAMES and delete this half of the test"
+    assert GROUND_CONTACT_BANNER in ours, "the interpolation banner went missing"
+    assert _first_segment_row(theirs)[8] == "1", "the oracle's I- moved"
+    assert _first_segment_row(ours)[8] == "1", (
+        "segment 1 stands on the plane and reads as a free end again"
     )
 
-    def first_segment_row(text: str) -> list[str]:
-        lines = text.splitlines()
-        start = next(i for i, ln in enumerate(lines) if "SEGMENTATION DATA" in ln)
-        return next(
-            ln.split()
-            for ln in lines[start:]
-            if len(ln.split()) == 12 and ln.split()[0] == "1"
+
+def test_the_interpolation_banner_is_the_positive_ge_flags_alone():
+    """The other side of the same claim, over the whole corpus: the banner
+    follows ``GE``'s SIGN and nothing else.
+
+    Ten fixtures write ``GE -1`` and get ``GROUND PLANE SPECIFIED.`` without
+    the second line; the rest write ``GE 0`` and get neither. Read off both
+    engines, so a deck cannot join either set on one side only.
+    """
+    for name in ANTENNA_NAMES:
+        flag = next(
+            (
+                int(ln.split()[1])
+                for ln in fixture_deck(name).splitlines()
+                if ln.split()[:1] == ["GE"] and len(ln.split()) > 1
+            ),
+            0,
         )
-
-    assert first_segment_row(fixture_out(name))[8] == "1", "the oracle's I- moved"
-    assert first_segment_row(printout(name))[8] == "0", (
-        "this engine writes the ground connection now — move the deck into "
-        "LAYOUT_NAMES and delete this half of the test"
-    )
-
-    remainder = [ln for ln in theirs if ln != GROUND_CONTACT_BANNER]
-    assert len(ours) == len(remainder), (
-        f"{name}: a THIRD divergence — {len(ours)} body lines against {len(remainder)}"
-    )
-    for i, (a, b) in enumerate(zip(ours, remainder, strict=True)):
-        if "DIELECTRIC CONSTANT" in b:
-            continue
-        assert layout_signature(a) == layout_signature(b), (
-            f"{name} line {i}\n  ours   {a!r}\n  oracle {b!r}"
-        )
+        for who, text in (("ours", printout(name)), ("oracle", fixture_out(name))):
+            assert ("GROUND PLANE SPECIFIED." in text) == (flag != 0), (who, name)
+            assert (GROUND_CONTACT_BANNER in text) == (flag > 0), (who, name)
+    assert set(GROUND_CONTACT_NAMES) == {
+        name for name in ANTENNA_NAMES if GROUND_CONTACT_BANNER in fixture_out(name)
+    }
 
 
 # --------------------------------------------------------------------------
