@@ -47,31 +47,24 @@ ALL_NAMES = tuple(
     for entry in json.loads((FIXTURE_DIR / "manifest.json").read_text())["decks"]
 )
 
-# The decks the dialect refuses, all four the same refusal: a ``GD`` in force
-# under a ``GN 1`` at an execute card that will not read it, which is how both
-# frontends spell MININEC-type ground and which #458 stopped answering as
-# plain perfect ground. They stay in the corpus as REFUSAL fixtures — see
-# ``test_the_mininec_ground_fixtures_refuse_by_name`` below — so every gate
-# written against a solved printout runs over the other 55.
+# No corpus deck is refused: every fixture here is byte-compared against the
+# oracle's own printout, and this tuple is the empty statement of that.
 #
-# The three ``mininec_*`` entries arrived with momwire#487 as the ground truth
-# for momwire#456 ws2's remaining ground decision: the oracle answers all
-# three as plain perfect ground (their committed ``.out`` files say so), which
-# is what the decision turns on. If that decision lands as "serve", this tuple
-# empties and the four decks become byte-compared fixtures; nothing else about
-# them changes.
-#
-# ``TL`` and ``NT`` left this list in momwire#456 phase C. They were here from
-# #930 on the argument that this engine's language is antenna-only; the phase
-# C design doc took the opposite decision and the dialect now SOLVES them, so
-# the three network decks are ordinary answered fixtures and the
-# ``NETWORK_FIXTURES`` battery below pins the answer instead of the refusal.
-REFUSED_NAMES = (
-    "dipole_gd_second_medium",
-    "mininec_gp80_seam",
-    "mininec_vertical_gd2_rp0",
-    "mininec_vertical_rp0",
-)
+# It has been emptied twice, both times by a design doc reversing a hygiene
+# decision. ``TL`` and ``NT`` were here from #930 on the argument that this
+# engine's language is antenna-only; momwire#456 phase C took the opposite
+# decision and the dialect SOLVES them, so the ``NETWORK_FIXTURES`` battery
+# below pins the answer instead of the refusal. Then the four MININEC-ground
+# decks — ``dipole_gd_second_medium`` and the three ``mininec_*`` forms
+# momwire#487 captured — left it when the measurement came in: a ``GD`` under
+# a ``GN 1`` at an execute card that will not read it is answered as PLAIN
+# PERFECT GROUND by every reference engine, banner and all, so the refusal
+# #458 installed was the divergence rather than the safety margin
+# (momwire#487; ``docs/design/mininec-ground-idiom.md``). The tuple is kept
+# rather than deleted because the gates below are written to run over
+# ``ANTENNA_NAMES``, and a future refusal must land here rather than by
+# quietly dropping a deck out of a list.
+REFUSED_NAMES: tuple[str, ...] = ()
 ANTENNA_NAMES = tuple(n for n in ALL_NAMES if n not in REFUSED_NAMES)
 
 # momwire#415: the two decks whose STRUCTURE SPECIFICATION section carries a
@@ -84,9 +77,9 @@ ANTENNA_NAMES = tuple(n for n in ALL_NAMES if n not in REFUSED_NAMES)
 # (``test_the_gx_gr_structure_specification_reproduces_the_oracle``).
 REPLICATED_SPEC_NAMES = ("dipole_gr_rotated_ring", "dipole_gx_reflected_pair")
 
-# momwire#487: the answered decks whose structure TOUCHES the ground plane
-# under a ``GE 1``. They are the first in the corpus to do so — every earlier
-# ground fixture either stands clear of z = 0 (``dipole_pec_ground``,
+# momwire#487: the decks whose structure TOUCHES the ground plane under a
+# ``GE 1``. They are the first in the corpus to do so — every earlier ground
+# fixture either stands clear of z = 0 (``dipole_pec_ground``,
 # ``catalog_verticals_vertical``) or writes ``GE -1`` — and they arrived with
 # a known, PRE-EXISTING two-line gap between this engine's printout and the
 # oracle's, pinned line for line by
@@ -101,13 +94,17 @@ REPLICATED_SPEC_NAMES = ("dipole_gr_rotated_ring", "dipole_gx_reflected_pair")
 # agree to 0.91 % — but the flag is unread, and the two missing printout
 # lines are where that shows.
 #
-# ``mininec_gp80_seam``, ``mininec_vertical_rp0`` and
-# ``mininec_vertical_gd2_rp0`` are the same geometry and the same gap; they
-# are absent here only because they are refusal fixtures today and so are not
-# in ``ANTENNA_NAMES`` at all. They join this tuple the day the refusal flips.
+# The four names the serving flip added are the same geometry and the same
+# gap: three were refusal fixtures until it and so were not in
+# ``ANTENNA_NAMES`` at all, and the fourth is the cliff-at-zero deck captured
+# with it.
 GROUND_CONTACT_GAP_NAMES = (
     "mininec_gd_reset_by_gn_rp0",
+    "mininec_gp80_seam",
+    "mininec_vertical_gd2_rp0",
+    "mininec_vertical_rp0",
     "mininec_vertical_rp3_ch",
+    "mininec_vertical_rp3_cliff_at_zero",
     "mininec_vertical_rp3_clt",
 )
 
@@ -861,7 +858,7 @@ def test_every_fixture_matches_the_oracle_column_layout(name):
     reader is likely to be debugging; this one is the gate. Both are cheap —
     the whole corpus solves in about a second and a half.
 
-    The three ``GROUND_CONTACT_GAP_NAMES`` are held out, and only they: their
+    The seven ``GROUND_CONTACT_GAP_NAMES`` are held out, and only they: their
     gap is a known two-line one and is asserted exactly, and to the line,
     immediately below.
     """
@@ -1754,10 +1751,12 @@ def test_pt_is_not_an_arming_card():
 # issue #800 (tail): GD, the additional-ground-parameters card
 # --------------------------------------------------------------------------
 
-# The committed pairs: (with the card, the identical deck without it).
-# ``dipole_gd_second_medium`` was the second entry until #458 — its ``GD``
-# rides a ``GN 1``, which is the MININEC-type ground idiom and refuses now;
-# it is measured as a REFUSAL fixture below.
+# The committed pairs: (with the card, the identical deck without it), one
+# per ground the card can ride.
+#
+# ``dipole_gd_second_medium`` is the PEC one — the MININEC-type ground idiom
+# on an elevated dipole. It was a refusal fixture between #458 and
+# momwire#487 and is back to byte comparison with the rest.
 #
 # ``mininec_gd_without_gn_rp0`` (momwire#487) is ``dipole_rp_pattern`` plus a
 # ``GD`` and NO ``GN`` at all, which is the third of the card's three
@@ -1765,17 +1764,9 @@ def test_pt_is_not_an_arming_card():
 # so the card is inert for a reason unrelated to the two above and the same
 # four assertions have to hold anyway.
 GD_PAIRS = (
+    ("dipole_gd_second_medium", "dipole_pec_ground"),
     ("dipole_gd_cliff_sommerfeld", "dipole_sommerfeld_ground"),
     ("mininec_gd_without_gn_rp0", "dipole_rp_pattern"),
-)
-
-# Quoted from the normative grammar
-# (momwire.dev/reference/deck-grammar-nec2/#gd--additional-ground-medium).
-MININEC_GROUND_REFUSAL = (
-    "GD with a perfect ground (GN 1) in force is the MININEC-type ground "
-    "idiom (4nec2 GN 3; EZNEC 'MININEC-type'), which this engine does not "
-    "implement (momwire#456): use GN 2 for a finite Sommerfeld ground, or "
-    "drop the GD for perfect ground"
 )
 
 
@@ -1790,31 +1781,15 @@ def test_gd_deck_runs_instead_of_being_refused():
         assert "ANTENNA INPUT PARAMETERS" in text, name
 
 
-def test_the_mininec_ground_fixture_refuses_by_name():
-    """#458: ``dipole_gd_second_medium`` is ``GN 1`` + ``GD 2,0,0,0,13.,.005``
-    under an ``XQ`` — the shape 4nec2 manufactures from its own ``GN 3`` and
-    the shape EZNEC writes for MININEC-type ground.
-
-    The oracle answers it as PLAIN PERFECT GROUND (the committed ``.out``
-    still says so, and its ``GD`` echo is the only trace of the card), which
-    is the substitution the frontend never sees — 34 % in R on the EZNEC
-    twin's measurement of it. So this deck is a refusal fixture: it must say
-    what it will not do, print nothing solved, and still emit the sentinel a
-    blocked ``readLine()`` is waiting on.
-    """
-    text = run_deck(fixture_deck("dipole_gd_second_medium"))[0]
-    assert f"ERROR: {MININEC_GROUND_REFUSAL}" in text
-    assert f"ERROR-NEC2C: {MININEC_GROUND_REFUSAL}" in text
-    assert "ANTENNA INPUT PARAMETERS" not in text
-    assert NX_ECHO.search(text), "no NX sentinel on the error path"
-
-
 # --------------------------------------------------------------------------
 # momwire#487: the MININEC-type ground idiom, captured as the oracle answers it
 # --------------------------------------------------------------------------
 
-# The three fixtures momwire#487 added on the refusing side. Each is the idiom
-# in a form the corpus did not already carry:
+# The IDIOM itself: a ``GD`` in force under a ``GN 1`` at an execute card
+# that will not read the record. momwire#458 refused this shape; momwire#487
+# measured the oracle and found perfect-ground physics on the other side, so
+# it is served letter-faithfully and each of these is byte-compared like any
+# other fixture. Each is the idiom in a form the corpus did not already carry:
 #
 # * ``mininec_gp80_seam`` is 4nec2's OWN emitted deck, verbatim (capture 0038,
 #   a three-element 80 m ground plane): ``GN 1`` + ``GD 0`` and no ``RP`` card
@@ -1830,45 +1805,50 @@ def test_the_mininec_ground_fixture_refuses_by_name():
 #   deck in its bundle uses. The oracle ignores the field: the two committed
 #   printouts differ in that one echoed integer and in nothing else, which is
 #   what says a parser may read F1-F4 and stop.
-MININEC_REFUSAL_NAMES = (
+MININEC_IDIOM_NAMES = (
+    "dipole_gd_second_medium",
     "mininec_gp80_seam",
     "mininec_vertical_rp0",
     "mininec_vertical_gd2_rp0",
 )
 
-# The served half of the same capture — the four neighbouring shapes the
-# refusal must NOT reach, each for its own reason.
-MININEC_SERVED_NAMES = (
+# The rest of the same capture — the neighbouring shapes, each of which the
+# refusal had to reach past for its own reason, and which are the controls
+# that say serving the idiom did not swallow them. ``*_rp3_cliff_at_zero`` is
+# the MININEC far field itself: the cliff at distance zero and height zero,
+# which is exactly what 4nec2's manual says its ``GN 3`` expands to.
+MININEC_NEIGHBOUR_NAMES = (
     "mininec_gd_reset_by_gn_rp0",
     "mininec_gd_without_gn_rp0",
     "mininec_vertical_rp3_clt",
     "mininec_vertical_rp3_ch",
+    "mininec_vertical_rp3_cliff_at_zero",
 )
 
 
-@pytest.mark.parametrize("name", MININEC_REFUSAL_NAMES)
-def test_the_mininec_ground_fixtures_refuse_by_name(name):
-    """Same contract ``dipole_gd_second_medium`` gets, at the three forms of
-    the idiom the corpus gained in momwire#487.
+@pytest.mark.parametrize("name", MININEC_IDIOM_NAMES)
+def test_the_mininec_ground_fixtures_answer_plain_perfect_ground(name):
+    """The flip, at the four forms of the idiom the corpus carries.
 
     The committed ``.out`` beside each of these is the oracle's own answer and
-    it is PLAIN PERFECT GROUND — banner and all — so what this test pins is a
-    deliberate divergence from the oracle rather than agreement with it. It
-    therefore states all four halves of the refusal contract: the ``ERROR:``
-    line ``Execute``'s warning frame arms on, the ``ERROR-NEC2C:`` line for
-    grep, nothing solved, and the ``NX`` sentinel a blocked ``readLine()`` is
-    waiting on.
+    it is PLAIN PERFECT GROUND — banner and all, the ``GD``'s only trace the
+    DATA CARD echo. So the test is agreement rather than the divergence #458
+    pinned here: the deck solves, prints the same banner, announces no second
+    medium anywhere, and still emits the sentinel a blocked ``readLine()`` is
+    waiting on. The numbers are ``test_portal_differential``'s; the bytes are
+    ``test_every_fixture_matches_the_oracle_column_layout``'s, which these
+    decks are no longer held out of.
     """
-    assert "PERFECT GROUND" in fixture_out(name), (
-        f"{name}: the oracle's own answer is no longer perfect ground — the "
-        "refusal is a divergence from THIS printout and the note has to move "
-        "with it"
-    )
-    text = run_deck(fixture_deck(name))[0]
-    assert f"ERROR: {MININEC_GROUND_REFUSAL}" in text
-    assert f"ERROR-NEC2C: {MININEC_GROUND_REFUSAL}" in text
-    assert "ANTENNA INPUT PARAMETERS" not in text
-    assert NX_ECHO.search(text), "no NX sentinel on the error path"
+    theirs = fixture_out(name)
+    assert "PERFECT GROUND" in theirs, f"{name}: the oracle moved"
+    text = printout(name)
+    assert "ERROR-NEC2C" not in text, name
+    assert "PERFECT GROUND" in text, name
+    assert "ANTENNA INPUT PARAMETERS" in text, name
+    for banner in ("CLIFF", "SECOND MEDIUM", "FAR FIELD GROUND PARAMETERS"):
+        assert banner not in text, f"{name}: {banner} on a request that cannot read it"
+        assert banner not in theirs, f"{name}: the oracle grew a {banner} block"
+    assert NX_ECHO.search(run_deck(fixture_deck(name))[0]), name
 
 
 def test_the_gp80_seam_deck_is_the_request_less_form_4nec2_actually_emits():
@@ -1921,20 +1901,25 @@ def test_the_gd_integer_field_does_not_change_the_oracles_answer():
     assert differing[0][0].split()[6:] == differing[0][1].split()[6:]
 
 
-@pytest.mark.parametrize("name", MININEC_SERVED_NAMES)
+@pytest.mark.parametrize("name", MININEC_NEIGHBOUR_NAMES)
 def test_the_shapes_next_to_the_idiom_are_answered(name):
-    """The refusal is narrow, and this is where the edges are.
+    """The idiom's edges, still where they were.
 
     Two of these have no second medium in force at the execute card (a ``GN``
     resets the four slots a ``GD`` writes, so ``GD``-then-``GN 1`` is plain
     perfect ground; a ``GD`` with no ``GN`` under it has no image to modify)
-    and two ask a request that DOES read the record. Widen the refusal by one
-    of its three conditions and one of these four stops answering.
+    and three ask a request that DOES read the record. They were the decks
+    #458's refusal had to reach past, and they are what says the flip
+    generalised the answer rather than moving the boundary: the cliff decks
+    must still print a cliff, and the ``RP 0`` ones must still not.
     """
     text = printout(name)
     assert "ERROR-NEC2C" not in text, name
     assert "ANTENNA INPUT PARAMETERS" in text, name
     assert NX_ECHO.search(text), name
+    reads_the_record = "RP 3 " in fixture_deck(name)
+    assert ("CLIFF" in text) is reads_the_record, name
+    assert ("CLIFF" in fixture_out(name)) is reads_the_record, name
 
 
 def test_a_gn_card_resets_the_second_medium_a_gd_wrote():
@@ -1999,6 +1984,45 @@ def test_the_cliff_requests_read_the_record_the_rp0_decks_ignore():
     for name in ("mininec_vertical_rp3_clt", "mininec_vertical_rp3_ch"):
         assert "CIRCULAR CLIFF" in fixture_out(name), name
     assert "CLIFF" not in fixture_out("mininec_vertical_rp0")
+
+
+def test_the_cliff_at_zero_is_the_mininec_far_field_over_the_same_currents():
+    """``mininec_vertical_rp3_cliff_at_zero`` — the request 4nec2's manual
+    says its ``GN 3`` expands to, on the deck the idiom exists for.
+
+    ``GN 1`` + ``GD 13. .005 0. 0.`` + ``RP 3``: distance zero and height
+    zero, so medium 2 is under every ray and the whole pattern reflects off
+    it, while the impedance stays the perfect-ground one. That is "PEC
+    currents, real-ground far field" spelled as what it is — a REQUEST, not a
+    ground type — and it is the same four fields ``mininec_vertical_rp0``
+    carries and ignores.
+
+    So the two decks differ in exactly one card and in the pattern alone: the
+    ANTENNA INPUT PARAMETERS row is identical on the oracle's side, and the
+    gains move by several dB at low angles (the finite ground eats what the
+    perfect one reflected).
+    """
+    flat = fixture_out("mininec_vertical_rp0")
+    cliff = fixture_out("mininec_vertical_rp3_cliff_at_zero")
+    assert "PERFECT GROUND" in cliff, "the currents stopped being perfect-ground"
+    assert "CIRCULAR CLIFF" in cliff
+    assert aip_tables(flat)[0][0][6:8] == aip_tables(cliff)[0][0][6:8], (
+        "the cliff reached the matrix"
+    )
+
+    flat_gain = _pattern_gains(flat)
+    cliff_gain = _pattern_gains(cliff)
+    # Every row but the theta = 0 ones, which are the vertical's own zenith
+    # null (-999.99 dB): a reflection coefficient cannot move a zero.
+    live = {a for a in flat_gain if a[0] != 0.0}
+    moved = {a for a in live if cliff_gain[a] != flat_gain[a]}
+    assert moved == live, sorted(live - moved)
+    assert all(flat_gain[a] < -900.0 for a in flat_gain if a[0] == 0.0)
+    assert cliff_gain[(80.0, 0.0)] - flat_gain[(80.0, 0.0)] < -5.0
+
+    ours = _pattern_gains(printout("mininec_vertical_rp3_cliff_at_zero"))
+    worst = max(abs(ours[a] - cliff_gain[a]) for a in cliff_gain)
+    assert worst <= 0.5, f"cross-engine pattern gap {worst:.3f} dB"
 
 
 def _pattern_gains(text: str) -> dict[tuple[float, float], float]:
@@ -2111,11 +2135,11 @@ def test_the_comma_delimited_gd_simnec_sends_parses_like_the_spaced_form():
     2,0,0,0,13.,.005,0.,0.`` is the literal Cardioid line. Measured identical
     to the spaced form on the oracle; identical here too.
 
-    The Cardioid's own ``GN 1`` became a refusal in #458 (that pairing is
-    MININEC-type ground), so the free-format read is measured over the ground
-    that keeps the deck running — the card being read is the same one.
+    Over the Cardioid's own ``GN 1`` again: #458 moved this probe to a
+    ``GN 2`` while the pairing refused, and momwire#487 moved it back, so the
+    free-format read is measured on the literal line SimNEC sends.
     """
-    head = "CE gd commas\nGW 1 9 0. 0. 0.5 0. 0. 5.0 0.001\nGE 1\nGN 2 0 0 0 13. .005\n"
+    head = "CE gd commas\nGW 1 9 0. 0. 0.5 0. 0. 5.0 0.001\nGE 1\nGN 1\n"
     tail = "EX 0 1 1 0 1.\nFR 0 1 0 0 14.1 0\nXQ\n"
     commas = run_deck(head + "GD 2,0,0,0,13.,.005,0.,0.\n" + tail)[0]
     spaces = run_deck(head + "GD 2 0 0 0 13. .005 0. 0.\n" + tail)[0]
@@ -2675,9 +2699,10 @@ def test_the_sinusoidal_shim_columns_are_the_one_volt_drive_coefficients():
 # dialect — and the classes they stood for (a second gap the drive does not
 # reach; port algebra outside the fill) are covered by the loaded decks and the
 # multi-wire one that replaced them.  `dipole_gd_second_medium` stood in the
-# PEC slot until #458 refused it (the MININEC-type ground idiom); the class it
-# actually exercised on the fill was the image ground, so its own base deck
-# took the slot — the `GD` never reached a fill to begin with.
+# PEC slot until #458 refused it (the MININEC-type ground idiom).  momwire#487
+# un-refused it and it did not come back here: the class it exercised on the
+# fill was the image ground, its own base deck holds that slot, and a `GD`
+# never reached a fill to begin with.
 _SIN_HARD_FIXTURES = (
     "dipole_sommerfeld_ground",
     "dipole_pec_ground",
@@ -3797,13 +3822,14 @@ def test_a_new_frequency_reuses_the_geometry_and_pays_only_the_fill():
 # What makes that safe is that a hit rebinds `portal_deck` to the arriving
 # deck, and the comparison here is against a FRESH PROCESS rather than against
 # the served run itself — so this stays a proof if GD ever grows a far field.
-# The ground is `GN 2` rather than the `GN 1` this deck carried before #458:
-# a second medium under a perfect ground is the MININEC-type ground idiom and
-# refuses now, and a refused deck caches nothing.
+# The ground is `GN 1` — the MININEC-type ground idiom, which is where the
+# live GD knob-drags actually come from. #458 moved this probe to a `GN 2`
+# while the pairing refused (a refused deck caches nothing) and momwire#487
+# moved it back.
 GD_BASE = (
     "CE gd probe\n"
     "GW 1 9 0. 0. 2.0 0. 0. 7.0 0.001\n"
-    "GE -1\nGN 2 0 0 0 13. .005\nGD 2,0,0,0,13.,.005,0.,0.\n"
+    "GE -1\nGN 1\nGD 2,0,0,0,13.,.005,0.,0.\n"
     "EX 0 1 5 0 1.\nFR 0 1 0 0 14.1 0\nXQ\n"
 )
 
