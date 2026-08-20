@@ -2757,8 +2757,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             * (np.abs(i_lo) ** 2 + np.real(i_lo * np.conj(i_hi)) + np.abs(i_hi) ** 2)
             / 3.0
         )
-        # zeros where switched off
-        r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
+        # zeros where switched off. `geom` goes in even though only `z_wire`
+        # is read from the spec: `loading_for` ALSO resolves the lumped sites,
+        # and `_lumped_site_index` needs the geometry to snap them — omitting
+        # it raised `TypeError` on any solver carrying BOTH a conductivity and
+        # a `lumped_loads` entry, which is every lossy loaded deck.
+        r_w = np.real(_wire_loading.loading_for(self, omega, geom).z_wire)
         wire_of = self._wire_of_seg(geom)
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
         return float(per_wire.sum()), per_wire

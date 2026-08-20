@@ -999,6 +999,50 @@ def test_lumped_load_power_refuses_a_multi_port_coefficient_block():
         _sim(DIPOLE, [[24]]).lumped_load_power(block)
 
 
+def test_both_loss_readouts_answer_a_lossy_AND_lumped_solver():
+    """The two readouts have to coexist on ONE solver, and they split the
+    watts rather than sharing them.
+
+    `wire_loss_power` asked `_wire_loading.loading_for` for the spec without
+    passing the geometry, which is fine while only the DISTRIBUTED half is
+    configured — but the shared read also resolves the lumped sites, and
+    `_lumped_site_index` cannot snap a site without `geom`.  A solver
+    carrying BOTH a `wire_conductivity` and a `lumped_loads` entry therefore
+    raised `TypeError` out of the sibling readout: every lossy loaded deck,
+    including a `LD 5` + `LD 4` deck under the portal's razor basis.
+    """
+    sim = _sim(
+        DIPOLE,
+        [[24]],
+        feed_arclength=DIP_HALF,
+        wire_conductivity=SIGMA,
+        lumped_loads=[(0, DIP_HALF * 0.55, 75.0 + 0j)],
+    )
+    z_in, coeffs = sim.compute_impedance()
+    p_wire, per_wire = sim.wire_loss_power(coeffs)
+    p_lumped, per_load = sim.lumped_load_power(coeffs)
+    assert p_wire > 0.0 and per_wire.shape == (1,)
+    assert p_lumped > 0.0 and per_load.shape == (1,)
+    # Each readout is switched by its OWN configuration and reads nothing of
+    # the other's: the same geometry with the load dialled to 0 Ω still burns
+    # copper, and reports exactly zero lumped watts.
+    bare = _sim(
+        DIPOLE,
+        [[24]],
+        feed_arclength=DIP_HALF,
+        wire_conductivity=SIGMA,
+        lumped_loads=[(0, DIP_HALF * 0.55, 0.0j)],
+    )
+    _z_bare, c_bare = bare.compute_impedance()
+    assert bare.lumped_load_power(c_bare)[0] == 0.0
+    assert bare.wire_loss_power(c_bare)[0] > 0.0
+    assert p_wire < 0.1 * p_lumped  # copper is a small share beside 75 Ω
+    (idx_feed,) = sim._feed_basis_indices(sim._build_geometry())
+    i_feed = np.asarray(coeffs, dtype=np.complex128)[idx_feed]
+    p_in = 0.5 * z_in.real * abs(i_feed) ** 2
+    assert p_in > p_wire + p_lumped  # the remainder radiates
+
+
 @pytest.mark.parametrize("lane", LANES, ids=LANE_IDS)
 @pytest.mark.parametrize("deck", ("dipole", "monopole"))
 def test_lumped_load_power_is_exact_at_the_fed_knot(deck, lane):
