@@ -50,9 +50,14 @@ from momwire.portal import main as portal_main
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "nec_portal"
 ALL_NAMES = tuple(sorted(p.stem for p in FIXTURE_DIR.glob("*.deck")))
-# The three hand-authored network probes, which answer with an ERROR printout
-# by design. They are in the byte oracle deliberately: a refusal is an answer.
-REFUSED_NAMES = ("dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_crossed")
+# Nothing in the corpus refuses any more. The three hand-authored network
+# probes were here from #930 until momwire#456 phase C — a refusal is an
+# answer, so they belonged in the byte oracle either way — and they SOLVE now,
+# alongside the four decks that unit added (`dipole_tl_zero_length`,
+# `dipole_nt_all_zero`, `dipole_ld_nt_colocated`, `dipole_ex6_gyrator`). The
+# name survives, empty, because the oracle below still has to say what it
+# expects of a refused deck if one ever comes back.
+REFUSED_NAMES = ()
 
 NX_ECHO = re.compile(r"^\s*DATA CARD No:\s+\d+ NX\b", re.MULTILINE)
 LISTENING = re.compile(r"^\S+ listening pid=(\d+) socket=(\S+)$", re.MULTILINE)
@@ -300,9 +305,16 @@ def test_every_fixture_deck_answers_exactly_what_the_stock_engine_answers(
 
     The client forwards bytes and the server runs the stock frame loop, so the
     printout must be the stock printout — banner, sections, columns, the ``NX``
-    echo, and for the three network decks the ``ERROR:`` refusal, which is as
-    much a part of the contract as any answer. Timings are canonicalised
-    because they are wall clock; nothing else is touched.
+    echo, and since momwire#456 phase C the two NETWORK blocks of the seven
+    decks that carry a ``TL`` or an ``NT``. Timings are canonicalised because
+    they are wall clock; nothing else is touched.
+
+    Two of those blocks' numbers are residuals and had to be made deterministic
+    before they could be gated here rather than after: a pinned port's voltage
+    read back out of the solve printed ``0.0000E+00`` or ``-0.0000E+00`` by
+    BLAS thread count, and a lossless network's loss printed ``0.0000E+00`` or
+    ``-8.6736E-19``. Both are snapped at the source in ``_portal``; this test
+    is what would have caught them, one run in six.
     """
     deck = fixture_deck(name)
     served = run_client(runtime, deck)

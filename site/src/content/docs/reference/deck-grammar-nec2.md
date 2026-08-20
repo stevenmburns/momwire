@@ -1111,6 +1111,39 @@ Exempt, measured, and set out under [the cell rule](#the-cell-rule): a network
 card attaches once, exactly as addressed, and its endpoints resolve against
 the fully generated structure including the image tags a `GX`/`GR` created.
 
+### Printout ordering
+
+A deck's networks reach the printout twice, in two blocks that order their
+rows on different rules. Both were measured against the oracle rather than
+assumed, because both look like card order and neither is.
+
+**`NETWORK DATA` groups by row KIND.** The block carries one banner and then
+one column header per kind of row beneath it, and the header re-emits when the
+kind changes. The kind of the *first* card decides which group prints first;
+within a group the cards keep their deck order. So a deck reading `TL`, `NT`,
+`TL` prints both lines under one header and then the admittance matrix — the
+`NT` last, though it was written second. A deck reading `NT`, `TL` prints the
+matrix first. A `STRAIGHT` line followed by a `CROSSED` one is one table, not
+two: `STRAIGHT`/`CROSSED` is a column, not a kind.
+
+Addressing in this block is `(tag, global segment)`, so `TL 1 5 2 5` on a
+structure whose first wire has nine segments prints as `1 5 2 14`. A `TL`'s
+`LENGTH` column shows the **resolved** length, which is where a
+[zero-length card](#zero-length-lines)'s substituted distance becomes visible.
+
+**`STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS` partitions by
+source.** Every distinct connection segment appears once — a card's end one
+before its end two, cards in deck order, a segment named twice named once —
+but the ones carrying no `EX` are printed *before* the ones that do. A deck
+driving the first endpoint of its only card therefore prints that row second.
+
+The rows report what the STRUCTURE took at each connection point: the voltage
+the circuit put across the gap and the current the antenna drew through it.
+At a driven connection point that current is **not** the one
+[`ANTENNA INPUT PARAMETERS`](#ex--voltage-source) prints on the same segment —
+that row is the source current, antenna plus network — and the difference
+between the two rows is what the network carried.
+
 ## EK — extended thin-wire kernel
 
 | field | meaning |

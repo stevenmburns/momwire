@@ -351,6 +351,92 @@ def _synthetic_decks() -> dict[str, str]:
         "XQ\n"
     )
 
+    # The zero-length TL, which is a RULE and not a degenerate case: NEC reads
+    # F2 = 0 as "measure it", and the length it measures is the straight-line
+    # distance between the two connection segments' CENTRES. Cheap to get
+    # wrong and cheap to catch, because the oracle echoes the RESOLVED length
+    # in the NETWORK DATA table's LENGTH column — segment 5 of wire 1 sits at
+    # the origin and segment 5 of wire 2 one metre away, so the deck says 0.
+    # and the printout must say 1.0000E+00. The end shunts are here too, real
+    # at one end and reactive at the other and no crossing anywhere, which is
+    # the half of the TL card `dipole_tl_shunt_crossed` can only show mixed
+    # with a CROSSED line and an NT.
+    decks["dipole_tl_zero_length"] = (
+        "CE zero-length TL with shunt stubs, resolved by distance\n"
+        + _DIPOLE_GW
+        + "GW 2 9 1.0 0. -2.5 1.0 0. 2.5 0.001\n"
+        "GE 0\n"
+        "EX 0 1 5 0 1.\n"
+        "TL 1 5 2 5 450. 0. 2.e-3 0. 0. 1.5e-3\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+    )
+
+    # An all-zero NT. Not a no-op, and that is the whole point: the card still
+    # creates its two connection points, and a zero admittance between them
+    # leaves both gaps OPEN rather than shorted. Measured on the oracle, the
+    # far endpoint then carries ~1e-17 A — an open circuit, not a joined pair
+    # — while the driven segment answers the ordinary impedance of a dipole
+    # with a gap cut in its neighbour. An engine that "optimised away" the
+    # zero card would print a different antenna here and nowhere else.
+    decks["dipole_nt_all_zero"] = (
+        "CE an all-zero NT is not a no-op\n"
+        + _DIPOLE_GW
+        + "GW 2 9 1.0 0. -2.5 1.0 0. 2.5 0.001\n"
+        "GE 0\n"
+        "EX 0 1 5 0 1.\n"
+        "NT 1 5 2 5 0. 0. 0. 0. 0. 0.\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+    )
+
+    # LD and NT on the SAME segment — the composition proof. The two cards
+    # meet in NEC at a specific place and in a specific order: the load goes
+    # on the impedance matrix's diagonal, in series inside the segment, and
+    # the network is composed on top of the structure admittance that results.
+    # Get the order wrong (stamp the load as a second branch across the port,
+    # say) and the two elements end up in parallel instead of in series, which
+    # is a different circuit and a different answer. The load is 50 ohms on
+    # tag 2 segment 5, which is exactly where the NT's far end lands.
+    decks["dipole_ld_nt_colocated"] = (
+        "CE an LD and an NT on one segment\n"
+        + _DIPOLE_GW
+        + "GW 2 9 1.0 0. -2.5 1.0 0. 2.5 0.001\n"
+        "GE 0\n"
+        "EX 0 1 5 0 1.\n"
+        "LD 0 2 5 5 50. 0. 0.\n"
+        "NT 1 5 2 5 0. 0.02 0. -0.02 0. 0.02\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+    )
+
+    # The manufactured EX 6 form, verbatim. 4nec2 has no NEC-2 card for an
+    # ideal CURRENT source, so it builds one: a phantom wire parked at
+    # z = <its own tag> metres, an ordinary EX 0 voltage source on it, and a
+    # GYRATOR NT (Y11 = Y22 = 0, Y12 = j1) that converts that volt into an amp
+    # at the real segment. 52 of the 457 models bundled with 4nec2 arrive this
+    # way — the single largest network idiom in the corpus — so the constants
+    # below are the capture doc's own, digit for digit, rather than rounded
+    # equivalents (the census script's rounded copy is a separate bug, tracked
+    # for phase C's last unit).
+    #
+    # It is a hard deck for a reason worth naming: the phantom sits 9901 m
+    # away, which at 30 MHz is 991 wavelengths, and it is 2.4e-4 m long with
+    # an L/a of 40. Both engines say the phantom itself is electromagnetically
+    # irrelevant (measured, phase C M3/M4) — the deck is a test of the
+    # GYRATOR, and the oracle's answer for it is a clean 1.0000E+00 A into
+    # tag 1 segment 5.
+    decks["dipole_ex6_gyrator"] = (
+        "CE the manufactured EX 6 current source\n"
+        + _DIPOLE_GW
+        + "GW 9901 1 -1.1945E-4 0 9901. 1.19452E-4 0 9901. 5.97258E-6\n"
+        "GE 0\n"
+        "EX 0 9901 1 0 0 1\n"
+        "NT 9901 1 1 5 0 0 0 1 0 0\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+    )
+
     # MP — the ae6ty multiprocessing hint (issue #800). SimNEC emits it
     # AUTOMATICALLY once a structure's segment count reaches
     # NEC2PortalDialog.getMPInfo()[0] (prefs `necMP #segs #Proc blockSize`,
