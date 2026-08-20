@@ -418,11 +418,14 @@ class PatternBlock:
     power_radiated_4pi: float | None = None
 
 
-# The three environments this arc serves.  The finite banner is SHARED by
-# ``GN 0`` and by the bare ``GD`` MININEC ground (scored matrix, "Probe family
-# 1"), which is the arc's standing warning that the banner is not a mode
-# signal: rung 2 serves ``GN 0`` under it and rung 3 will serve ``GD`` under
-# the same four words with different physics behind them.
+# The three environments this arc serves — three names for FOUR ground cards,
+# because the finite banner is SHARED by ``GN 0`` and by the bare ``GD``
+# MININEC ground (scored matrix, "Probe family 1").  That is the arc's
+# standing warning that the banner is not a mode signal, and both rungs have
+# now landed under it: rung 2 solves IN the medium, rung 3 only reflects off
+# it, and their environment blocks are byte-identical all four lines (0045
+# against 0047, gated in ``tests/test_eznec_serve.py``).  A renderer must
+# reproduce the shared banner; nothing may ever read it back as a mode.
 ENVIRONMENT_FREE_SPACE = "FREE SPACE"
 ENVIRONMENT_PERFECT_GROUND = "PERFECT GROUND"
 ENVIRONMENT_FINITE_GROUND = "FINITE GROUND.  SOMMERFELD SOLUTION"

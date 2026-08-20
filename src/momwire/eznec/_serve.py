@@ -6,17 +6,17 @@ momwire solve and reads the answer back into the numbers the printout wants.
 It computes physics and formats nothing, exactly as :mod:`._printout`
 formats and computes nothing.
 
-Rungs 1 and 2 of the scored ladder (antennaknobs
-``docs/status/2026-08-20-eznec-nec5-scored-matrix.md``) are what is served:
-``GN -1`` free space, ``GN 1`` perfect ground and ``GN 0`` / ``GN 2``
-Sommerfeld finite ground, one ``EX 0``/``EX 4`` source at a node, ``LD 4``
-fixed impedances, node-addressed ``TL``/``NT`` networks, and the ``RP 0`` /
-``XQ`` / ``PQ 0`` requests.  Everything above them — the bare ``GD`` MININEC
-mode, phased multi-``EX`` drive, the near field — refuses BY NAME through
-:func:`refusal`, because a seam that answers a question it has no gate for is
-worse than one that says so.  A network deck over a ground this seam cannot
-solve refuses at the GROUND rung, which is what the ordering in
-:func:`refusal` is for.
+Rungs 1 through 3 of the scored ladder (antennaknobs
+``docs/status/2026-08-20-eznec-nec5-scored-matrix.md``) are what is served,
+and with rung 3 the GROUND is finished: all four cards the dialect writes —
+``GN -1`` free space, ``GN 1`` perfect ground, ``GN 0`` / ``GN 2`` Sommerfeld
+finite ground and the bare ``GD`` MININEC-type ground — plus one
+``EX 0``/``EX 4`` source at a node, ``LD 4`` fixed impedances, node-addressed
+``TL``/``NT`` networks, and the ``RP 0`` / ``XQ`` / ``PQ 0`` requests.
+Everything above them — phased multi-``EX`` drive, the near field, a table
+carrying ``TL`` and ``NT`` at once — refuses BY NAME through :func:`refusal`,
+because a seam that answers a question it has no gate for is worse than one
+that says so.
 
 Courtesy stance, the arc's throughout: every NEC-5 fact below was measured
 off captured decks and captured printouts under ``tests/fixtures/eznec/``,
@@ -108,6 +108,46 @@ which differs by 5e-5 of the imaginary part — two orders below the frequency
 slack ``SPEED_OF_LIGHT_MHZ_M`` already carries and many below this seam's
 basis offset.  The printed cell is the ENGINE's, because the byte-gate
 compares it; the solved medium is momwire's, because that is what solved it.
+
+One medium, two things to do with it
+------------------------------------
+``GN 0`` and the bare ``GD`` carry the SAME two media fields, print the SAME
+three cells from them under the SAME banner — and are two different grounds.
+``GN 0`` solves in the medium.  ``GD``, EZNEC's "Real / MININEC type", solves
+over a PERFECT image and spends the medium entirely on the far field: PEC
+currents plus a second-medium pattern under an ordinary ``RP 0``, on
+contacting and elevated geometry alike (scored matrix, probe family 1).
+
+The consequence is an identity, and it is the sharpest fact this rung has:
+``Z`` under ``GD`` IS ``Z`` under ``GN 1``.  Measured on the engine — the
+contact vertical answers 35.571 − j1.4223 both ways (0043/0044 against
+0015/0020/0045) and an elevated half-wave 89.933 + j52.053 both ways — and
+reproduced here mechanically rather than approximately: :func:`_solver_for`
+hands ``GD`` the same single ``ground_z=0.0`` kwarg it hands ``GN 1``, so the
+two runs are the same constructor call and every solved number in them is
+bit-identical.  ``tests/test_eznec_serve.py`` gates that on both geometry
+classes at ``==``, and gates the other side of it too: the same deck under
+``GN 0`` answers 47.789 − j0.78525, which is 34 % away in R.  Aliasing ``GD``
+onto ``GN 0`` is the trap this rung exists to not fall into, and the identity
+is what makes falling in visible.
+
+What the medium then DOES is the pattern, and the two modes part company
+there by a level rather than by a shape: 0045 and 0047 are one wire over one
+medium at one frequency, and their printed cuts sit 1.28-1.29 dB apart at
+every one of the 178 non-null rows — the MININEC mode hotter, because a PEC
+structure keeps the current a lossy ground would have loaded, and the pattern
+is normalized by an input power that moved with it.  The seam reproduces that
+DIFFERENCE to 0.02 dB across the cut, which is the gate an aliased ``GD``
+could not pass at all: it would print 0.00.
+
+The far field itself is a Fresnel-weighted image and this module says so in
+the portal's own vocabulary (:func:`_far_ground`).  No Sommerfeld integral
+answers anything under ``GD`` — the captures show it in the one printed cell
+that is not the banner, ``FILL= 0.000 SEC.`` against 0047's ``0.094``, and in
+what 0045 does NOT print: the ``Sommerfeld integral tables written in
+previous run`` postamble that all four ``GN 0`` captures carry.  The engine
+announces ``Will compute Sommerfeld-ground tables`` from a stale cache check
+and then computes none, because this mode never wanted any.
 
 The budget's own arithmetic
 ---------------------------
@@ -250,12 +290,6 @@ _NODE_EPS = 1e-6
 # person looking at EZNEC's viewer.  U1's catch-all stub stays behind them all
 # for the genuinely unforeseen.
 
-_REFUSE_MININEC = (
-    "GD asks for the MININEC-type ground (PEC currents with a second-medium "
-    "far field), which this engine does not yet serve at this seam: the grounds "
-    "served are GN -1 (free space), GN 1 (perfect) and GN 0 / GN 2 (finite, "
-    "Sommerfeld solution)"
-)
 _REFUSE_MIXED_NETWORKS = (
     "this deck carries TL and NT cards together; the NETWORK DATA table has "
     "one heading per card type and no captured printout shows what a table "
@@ -300,19 +334,19 @@ def refusal(deck: Nec5Deck) -> str | None:
 
     Order is deliberate — grounds first, then the cards, then the drive, then
     the request — so a deck that is out of scope in several ways names the
-    reason a reader would fix first.  The corpus leans on it: every 4-square
-    feed-system deck carries six ``TL`` cards over a bare ``GD``, and what it
-    needs to hear is that the GROUND is unserved, not that its networks are
-    (they are not).
+    reason a reader would fix first.  It is the ladder's own shape, and every
+    rung that lands moves decks DOWN it rather than changing it: 0022 used to
+    name its ``GN 0`` and named its ``NE`` once the ground rung landed, and
+    with the ``GD`` rung the three mixed-card decks (0000, 0023, 0025) stop
+    naming their ground and name their TL-and-NT table, which is now the first
+    rung they fall through and the one a reader would actually have to fix.
 
-    The ordering survived the ground rung landing even though the deck that
-    demonstrated it changed sides: 0022 used to name its ``GN 0`` and now
-    names its ``NE``, because the ground it stands over is served and the
-    REQUEST is the thing left to fix.
+    There is no ground refusal left to put first.  All four cards this dialect
+    writes are served — ``GN -1``, ``GN 1``, ``GN 0``/``GN 2`` and the bare
+    ``GD`` — so the body below opens on the cards, and "grounds first" is kept
+    written down as the rule a fifth ground card would land under rather than
+    as a description of a line that is still there.
     """
-    ground = deck.ground
-    if isinstance(ground, Nec5MininecGround):
-        return _REFUSE_MININEC
     if deck.transmission_lines and deck.networks:
         return _REFUSE_MIXED_NETWORKS
     if not deck.sources:
@@ -766,18 +800,36 @@ def _site_for(
 def _medium(ground: Nec5Ground, wavelength: float) -> GroundMedium | None:
     """A finite ground's ``(εr, σ, εc)``, or ``None`` for the two that have none.
 
-    Both spellings of the sixth field arrive here and only one leaves (module
-    docstring, "One finite ground"): a POSITIVE field is a conductivity and
-    ``εc = εr − j·σ·λ·59.96``; a NEGATIVE one IS ``Im εc``, and the
+    THREE cards arrive here and one medium leaves: ``GN 0``, ``GN 2`` and the
+    bare ``GD``, which carry the same two media fields on different mnemonics
+    and print the same three cells from them.  What the medium is FOR differs —
+    ``GN 0`` solves in it, ``GD`` only reflects off it (module docstring, "One
+    medium, two things to do with it") — and that difference is
+    :func:`_solver_for`'s and :func:`_far_ground`'s, not this function's.
+
+    Both spellings of the sixth field arrive here too and only one leaves
+    (module docstring, "One finite ground"): a POSITIVE field is a conductivity
+    and ``εc = εr − j·σ·λ·59.96``; a NEGATIVE one IS ``Im εc``, and the
     conductivity printed beside it is the engine's own back-derivation, which
     is the same division run the other way.  Measured against the linux oracle
     2026-08-20, and it is an identity rather than an approximation:
     ``-12.84`` at 7 MHz prints ``CONDUCTIVITY= 5.000E-03`` and ``-3851.99``
     prints ``1.500E+00``, both to every printed digit.
+
+    The two records spell that ONE convention two ways and the difference is
+    the parser's, not the engine's: ``GD`` carries a ``sigma_sets_im_epsc``
+    flag (the dialect study measured the convention on that card first), and
+    ``GN 0`` carries no flag at all, so its own sign IS the flag — the parser
+    sets ``GD``'s from exactly the same ``sigma < 0`` test.  Read the flag
+    where there is one; read the sign where there is not.
     """
-    if not isinstance(ground, Nec5SommerfeldGround):
+    if isinstance(ground, Nec5MininecGround):
+        negative = ground.sigma_sets_im_epsc
+    elif isinstance(ground, Nec5SommerfeldGround):
+        negative = ground.sigma < 0.0
+    else:
         return None
-    if ground.sigma < 0.0:
+    if negative:
         eps_c = complex(ground.eps_r, ground.sigma)
         sigma = -ground.sigma / (wavelength * EPSC_CONDUCTIVITY_FACTOR)
     else:
@@ -805,6 +857,14 @@ def _solver_for(
     the geometry every one of these captures writes.  The medium goes in as
     ``(εr, σ)`` and momwire folds it with the SI ε₀; the 5e-5 that separates
     that from the engine's printed εc is discussed in the module docstring.
+
+    And the bare ``GD`` is ``ground_z`` alone — the SAME constructor call
+    ``GN 1`` makes, with no ``ground_eps`` and no ``ground_model``.  That line
+    is the mechanical origin of the identity the module docstring measures: the
+    MININEC-type ground solves its currents over a PERFECT image and spends its
+    medium entirely on the far field, so the deck's ε and σ reach
+    :func:`_far_ground` and reach nothing else.  A ``GD`` routed down the
+    branch above it would be ``GN 0``, which is 34 % wrong in R.
     """
     radii = [piece.radius for piece in mesh.pieces]
     feeds = [
@@ -823,7 +883,7 @@ def _solver_for(
     gaps = [(site.piece, site.end, 0j) for site in mesh.gaps]
 
     ground: dict[str, object] = {}
-    if isinstance(deck.ground, Nec5PerfectGround):
+    if isinstance(deck.ground, (Nec5PerfectGround, Nec5MininecGround)):
         ground["ground_z"] = 0.0
     elif medium is not None:
         ground = {
@@ -1251,18 +1311,35 @@ def _element_currents_and_charges(
 def _far_ground(deck: Nec5Deck, medium: GroundMedium | None) -> Ground:
     """The environment in the far-field readout's own vocabulary.
 
-    Three kinds and no fourth: ``pec`` is the geometric image, ``sommerfeld``
-    is that image weighted by the Fresnel coefficients of a medium, ``free``
-    is no image at all.  The name is the PORTAL's for a family of ground
+    Three shapes and no fourth: ``pec`` is the geometric image, ``free`` is no
+    image at all, and a MEDIUM is that image weighted by the Fresnel
+    coefficients of it.  The name is the PORTAL's for a family of ground
     models and not a claim about which integral answered the near field — the
     far field of a Sommerfeld solve is a Fresnel-weighted image in NEC too
-    (the reflected wave is a plane wave at infinity), which is why one word
+    (the reflected wave is a plane wave at infinity), which is why one shape
     covers both halves here.
+
+    Which is also why the two finite rungs spell that shape differently while
+    reaching the same arithmetic.  ``refl`` and ``sommerfeld`` are ONE branch
+    in ``_far_moments`` — both fall through to ``_image_coeffs``, and the seam
+    gates that they answer bit for bit — so the choice between them buys
+    nothing but a name, and a name is worth spending on the truth.  ``GN 0``
+    says ``sommerfeld`` because a Sommerfeld integral really did answer its
+    near field and the far field is that same run's.  ``GD`` says ``refl``
+    because nothing Sommerfeld happened anywhere in its solve: the currents
+    came off a PEC image (:func:`_solver_for`) and the only thing the medium
+    ever did was weight the reflection.  Claiming otherwise in a served run's
+    own vocabulary would be the banner's lie repeated where nobody forced it —
+    the captures make the ENGINE print ``SOMMERFELD SOLUTION`` over a ``GD``
+    run and this seam reproduces that byte for byte, but it does not have to
+    believe it.
     """
     if isinstance(deck.ground, Nec5PerfectGround):
         return Ground("pec")
     if medium is None:
         return Ground("free")
+    if isinstance(deck.ground, Nec5MininecGround):
+        return Ground("refl", medium.eps_r, medium.sigma)
     return Ground("sommerfeld", medium.eps_r, medium.sigma)
 
 
