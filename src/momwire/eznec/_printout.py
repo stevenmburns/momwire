@@ -436,7 +436,8 @@ class GroundMedium:
     it needs the frequency, which this module does not have and does not want
     — so it is computed by whoever solves the deck and carried here, exactly
     as a current's magnitude is.  (:mod:`._serve` measures the engine's own
-    folding constant off the printed cell; see its ``EPSC_OHM_METRE_MHZ``.)
+    folding constant off the printed cell; see its
+    ``EPSC_CONDUCTIVITY_FACTOR``.)
     """
 
     eps_r: float
