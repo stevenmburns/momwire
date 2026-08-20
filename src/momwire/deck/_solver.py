@@ -62,7 +62,7 @@ from ..hmatrix import HMatrixSolver
 from ..razor import RazorSolver
 from ..sinusoidal import SinusoidalSolver
 from ..sinusoidal_galerkin import SinusoidalGalerkinSolver
-from ._cards import DeckError
+from ._networks import network_endpoints
 from ._polylines import Mesh, to_polylines
 from .model import DeckModel, Environment, LoadSpec
 
@@ -134,6 +134,13 @@ class PortSite:
     feed: int | None = None
     load: int | None = None
     load_spec: LoadSpec | None = None
+    # Whether a ``TL``/``NT`` endpoint landed here.  A network attaches to a
+    # SEGMENT, and the admittance NEC's own network solve reads at that
+    # segment is the one seen across a gap in it — so an endpoint cuts a gap
+    # exactly the way a feed does, and shares the site when a feed or a load
+    # already cut one there.  Last in the field order because the class is
+    # public API.
+    network: bool = False
 
 
 @dataclass(frozen=True)
@@ -157,6 +164,11 @@ class PortPlan:
     # One drive vector over the full port set per execute group, None where
     # the model's group is None (an execute card that ran nothing).
     voltages: tuple[tuple[complex, ...] | None, ...]
+    # ``(port a, port b)`` per DeckModel.networks entry, parallel to it: the
+    # two solver ports one ``TL``/``NT`` card spans.  Empty for the ordinary
+    # antenna-only deck, and defaulted (and last) so a positional construction
+    # written against an earlier release keeps meaning what it meant.
+    network_ports: tuple[tuple[int, int], ...] = ()
 
     @property
     def n_ports(self) -> int:
@@ -205,13 +217,17 @@ def _first_armed_group(model: DeckModel) -> int | None:
 
 
 def _sites(model: DeckModel) -> tuple[list[PortSite], list[int], list[int]]:
-    """The union port set: every feed, then every load not already on one.
+    """The union port set: every feed, every load not already on one, and
+    every network endpoint not already on either.
 
     Coincidence is decided on the model's own ``(wire, arclength)`` — the
-    dialect front end resolved both cards through the same addressing, so a
-    load on a driven segment produces the SAME float, not a nearby one, and
+    dialect front end resolved all three cards through the same addressing, so
+    a load on a driven segment produces the SAME float, not a nearby one, and
     an equality test is the honest comparison rather than a tolerance whose
-    width nothing would justify.
+    width nothing would justify.  A network endpoint that lands on a driven or
+    loaded segment SHARES that gap, first claimant naming it, which is the
+    composition NEC itself performs: an ``LD`` sits inside the segment and an
+    ``NT`` hangs off the same connection point.
     """
     sites: list[PortSite] = []
     at: dict[tuple[int, float], int] = {}
@@ -252,6 +268,22 @@ def _sites(model: DeckModel) -> tuple[list[PortSite], list[int], list[int]]:
             feed=site.feed,
             load=index,
             load_spec=spec,
+        )
+
+    for key in network_endpoints(model):
+        existing = at.get(key)
+        if existing is None:
+            at[key] = len(sites)
+            sites.append(PortSite(wire=key[0], arclength=key[1], network=True))
+            continue
+        site = sites[existing]
+        sites[existing] = PortSite(
+            wire=site.wire,
+            arclength=site.arclength,
+            feed=site.feed,
+            load=site.load,
+            load_spec=site.load_spec,
+            network=True,
         )
     return sites, feed_ports, load_ports
 
@@ -414,6 +446,9 @@ def prepare_mesh(model: DeckModel) -> PreparedMesh:
         drive += [complex(v) for _w, _v0, v in model.node_gaps]
         voltages.append(tuple(drive))
 
+    at = {(site.wire, site.arclength): index for index, site in enumerate(ordered)}
+    network_ports = tuple((at[card.end_a], at[card.end_b]) for card in model.networks)
+
     return PreparedMesh(
         model=model,
         mesh=mesh,
@@ -423,6 +458,7 @@ def prepare_mesh(model: DeckModel) -> PreparedMesh:
             load_ports=tuple(load_ports),
             node_gap_ports=tuple(node_gap_ports),
             voltages=tuple(voltages),
+            network_ports=network_ports,
         ),
     )
 
@@ -459,21 +495,6 @@ def build_solver(
     Raises ``ValueError`` for an unknown basis, a model with no wires, and a
     port set the geometry cannot host.
     """
-    if model.networks:
-        # STAGED, and code-only: the spec describes the finished dialect, in
-        # which these cards solve.  The nec2 front end reads TL/NT and resolves
-        # where they attach (momwire#456 phase C, unit 1); composing the
-        # network with the antenna's port admittance is the next unit's.
-        # Refusing HERE rather than at the card keeps a half-built dialect
-        # honest — a deck with a network is read, echoed and then declined,
-        # never answered as though the network were not there.
-        n = len(model.networks)
-        raise DeckError(
-            f"this deck's {n} TL/NT network card{'' if n == 1 else 's'} "
-            f"parse in this dialect but do not yet solve: the network solve "
-            f"lands in the next unit of momwire#456 phase C"
-        )
-
     try:
         solver_class, basis_kwargs = BASES[basis]
     except KeyError:
@@ -544,7 +565,7 @@ def build_solver(
         feeds = [
             (polyline, arclength, _voltage(index))
             for index, (polyline, arclength) in enumerate(built_mesh.ports)
-            if plan.sites[index].feed is not None
+            if plan.sites[index].feed is not None or plan.sites[index].network
         ]
         loads = _lumped_loads(plan.sites, built_mesh.ports, frequency_mhz * 1e6)
         if loads:

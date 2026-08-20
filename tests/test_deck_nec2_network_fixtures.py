@@ -72,8 +72,9 @@ from pathlib import Path
 
 import pytest
 
-from momwire.deck import DeckError, build_solver, parse
+from momwire.deck import parse
 from momwire.deck._nec2_geometry import Symmetry
+from momwire.portal._portal import DeckSolver, parse_deck
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "nec2_symmetry"
 
@@ -128,6 +129,30 @@ def without_networks(name: str) -> str:
 
 def networks(name: str):
     return parse(body(name)).networks
+
+
+_SOLVED: dict[str, complex] = {}
+
+
+def driving_point(text: str) -> complex:
+    """``V / I`` at the deck's one source — the ``ANTENNA INPUT PARAMETERS``
+    impedance at full precision instead of the printout's five figures.
+
+    The SOURCE current, so a network's share of it is in there: at a driven
+    connection point the segment carries only what the antenna took, and the
+    difference is exactly the thing these decks exist to measure.  Same helper
+    (and same cache) as ``test_deck_nec2_cell_fixtures.py``'s, because the two
+    modules are asking the same question about two different cards.
+    """
+    if text in _SOLVED:
+        return _SOLVED[text]
+    deck = parse_deck(text)
+    solver = DeckSolver(deck)
+    group = next(g for g in deck.groups if g is not None)
+    result = solver.solve_group(group, group.freqs_mhz[0])
+    port, _segment, volts = result["driven"][0]
+    _SOLVED[text] = complex(volts / result["i_source"][port])
+    return _SOLVED[text]
 
 
 def test_the_fixture_set_is_the_one_this_module_measures():
@@ -226,20 +251,65 @@ def test_no_cell_guard_fires_on_any_of_the_eight(name):
     assert model.networks, f"{name} parsed no network card"
 
 
-@pytest.mark.parametrize("name", NAMES)
-def test_every_fixture_still_stops_at_the_staged_solve_refusal(name):
-    """The unit boundary, pinned so it cannot rot silently: these decks parse
-    and do not yet solve.  Unit 2 deletes this test and puts the answer-level
-    identities of ``ORACLE_Z`` in its place."""
-    with pytest.raises(DeckError, match="momwire#456 phase C"):
-        build_solver(parse(body(name)))
+# ---------------------------------------------------------------------------
+# the ANSWER, since momwire#456 phase C unit 2 composed the network
+# ---------------------------------------------------------------------------
+
+# A basis difference, not a translation difference: the widest of the nine
+# decks below sits at 0.18 %, against the 5 % the cross-engine differential
+# suite runs the whole fixture corpus at. The bar is written tight ON PURPOSE
+# — every deck here is one geometry asked four ways, so a translation error
+# that survived at 5 % would have to be a very peculiar one, and at 0.5 % it
+# has nowhere to hide.
+Z_TOL = 0.005
 
 
 @pytest.mark.parametrize("name", NAMES)
-def test_the_control_form_of_every_fixture_solves(name):
+def test_every_fixture_answers_the_oracle_impedance(name):
+    """The answer-level gate the parser unit staged, one deck at a time.
+
+    ``ORACLE_Z`` is nec2c's own driving-point impedance for each of the eight,
+    recorded when the decks were authored.  Reproducing all eight — the cell
+    form, its hand-expanded twin, the falsifier and the image-tag form — is
+    what says the composition attached the card where the oracle attached it
+    AND stamped what the oracle stamped, because those two errors show up in
+    different rows of this table.
+    """
+    z = driving_point(body(name))
+    oracle = ORACLE_Z[name]
+    assert abs(z - oracle) / abs(oracle) <= Z_TOL, f"{name}: {z} vs {oracle}"
+
+
+@pytest.mark.parametrize("cell,naive", (NT_QUARTET[:2], TL_QUARTET[:2]))
+def test_the_cell_and_naive_answers_are_the_same_number(cell, naive):
+    """§#the-cell-rule at the answer: EXACTLY equal, not merely close.
+
+    The parser test above showed the two decks resolve to the same endpoints.
+    This is the consequence — one attachment on the cell structure and one on
+    its hand-written expansion are the same circuit on the same matrix, so the
+    two impedances agree to the last bit rather than to a tolerance.  nec2c
+    agrees with itself here too (same printed digits, byte-identical network
+    blocks), which is why an exact comparison is the honest one.
+    """
+    assert driving_point(body(cell)) == driving_point(body(naive))
+
+
+@pytest.mark.parametrize("cell,expanded", (NT_QUARTET[::2], TL_QUARTET[::2]))
+def test_the_replicated_reading_is_a_different_antenna_at_the_answer(cell, expanded):
+    """The falsifier, at the answer.  An engine that grew a cell rule for
+    networks by analogy with ``LD`` would put one card on every copy and land
+    on the ``expanded`` number instead — 52 ohms of resistance away for the
+    ``NT`` pair, 59 ohms of reactance for the ``TL`` pair.  Those gaps are
+    enormous beside this module's 0.5 % bar, so this is not a near miss that
+    could pass by accident."""
+    assert abs(driving_point(body(cell)) - driving_point(body(expanded))) > 5.0
+
+
+@pytest.mark.parametrize("name", NAMES)
+def test_the_control_form_of_every_fixture_answers_the_bare_structure(name):
     """Delete the network card and the deck is an ordinary antenna again —
-    which is what says the staged refusal above is about the network and not
-    about the geometry these fixtures happen to use.
+    which is what says the numbers above are about the network and not about
+    the geometry these fixtures happen to use.
 
     All eight controls are the same two structures, so all eight are the
     oracle's 0.10161 + j514.86 (``ORACLE_Z["control"]``); the cell and expanded
@@ -247,4 +317,6 @@ def test_the_control_form_of_every_fixture_solves(name):
     for free."""
     model = parse(without_networks(name))
     assert not model.networks
-    assert build_solver(model) is not None
+    z = driving_point(without_networks(name))
+    oracle = ORACLE_Z["control"]
+    assert abs(z - oracle) / abs(oracle) <= Z_TOL, f"{name} control: {z} vs {oracle}"
