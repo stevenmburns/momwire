@@ -389,6 +389,11 @@ class DeckModel:
     # ground's physics — that is `ground` alone — but a structure-report
     # annotation the dialect records as written.
     ground_plane_flag: bool = False
+    # The same card's SIGN: a positive `GE` asks for the ground-contact
+    # current expansion.  Printout-only here — it names the interpolation
+    # banner and a touching segment's connection column; the solve does not
+    # read it (momwire#489).
+    ground_plane_interpolates: bool = False
 
     # One entry per execute card, in deck order; None marks an execute card
     # that ran nothing (nothing had changed since the previous one).

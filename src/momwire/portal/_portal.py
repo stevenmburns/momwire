@@ -202,7 +202,7 @@ from ..deck._networks import build_reducer, card_branches, live_cards
 # asks whether ``Nec2Structure`` should be promoted to ``momwire.deck``'s
 # public surface anyway, which only becomes load-bearing if the portal is
 # ever a third-party consumer again.
-from ..deck._nec2_geometry import build_geometry
+from ..deck._nec2_geometry import _SMIN, build_geometry
 
 # --basis choices (mirrors the CLI's MOMWIRE_BASES/VARIANTS subset that makes
 # sense behind SimNEC): name -> (solver class, solver kwargs, banner suffix).
@@ -1087,6 +1087,11 @@ class PortalDeck:
     # record of what arrived; it moves no number here (see :class:`SecondMedium`).
     second_medium: SecondMedium | None = None
     ground_plane_flag: bool = False
+    # ``GE``'s sign: a positive flag asks for the ground-contact current
+    # expansion, and the printout says so twice — the interpolation banner
+    # under STRUCTURE SPECIFICATION and the connection column of a segment
+    # whose end stands on the plane.
+    ground_plane_interpolates: bool = False
     quiet: bool = False
     reduced_field: int | None = None
     # momwire's own reading of the same deck: what gets solved, and the
@@ -1195,6 +1200,7 @@ def parse_deck(body: str) -> PortalDeck:
         ground=Ground.from_model(model.ground),
         second_medium=SecondMedium.from_model(model.second_medium),
         ground_plane_flag=model.ground_plane_flag,
+        ground_plane_interpolates=model.ground_plane_interpolates,
         quiet=model.quiet,
         reduced_field=model.reduced_field,
         model=model,
@@ -1827,13 +1833,23 @@ def _junction_rows(wires) -> list[str]:
     return rows
 
 
-def _connection_data(wires) -> list[tuple[int, int]]:
+def _connection_data(wires, interpolates: bool = False) -> list[tuple[int, int]]:
     """Per global segment, NEC's ``(I-, I+)`` connection columns.
 
     Inside a wire the neighbours are the adjacent segments. At a wire end the
     engine names whatever other segment touches the node, signed by which of
     that segment's ends lands there — so a chain reads ``k-1, k, k+1`` and a
     closed loop wraps.
+
+    ``interpolates`` is ``GE``'s sign (:attr:`PortalDeck.ground_plane_interpolates`).
+    Under a positive flag the GROUND is a connection too: nec2c's ``conect()``
+    tests each end against ``z = 0`` BEFORE it searches for a touching
+    segment, and writes the segment's OWN number in the column when it lands
+    there — the ground counting as the thing on the far side of that end.
+    Under ``GE -1`` or ``GE 0`` it never runs that test and a ground-touching
+    end reads as free, which is why the flag has to reach this far. The
+    tolerance is the geometry reader's own ``_SMIN``, which is nec2c's, so
+    "lands on the plane" means the same thing in both places.
     """
     ends, _order = _segment_end_nodes(wires)
     eps = 1e-9
@@ -1847,15 +1863,23 @@ def _connection_data(wires) -> list[tuple[int, int]]:
         p1 = np.asarray(w.p1, dtype=float)
         p2 = np.asarray(w.p2, dtype=float)
         step = (p2 - p1) / w.n_seg
+        slen = float(np.linalg.norm(step)) * _SMIN
         for k in range(w.n_seg):
             idx += 1
-            here = ends[key(p1 + k * step)]
-            there = ends[key(p1 + (k + 1) * step)]
+            a = p1 + k * step
+            b = p1 + (k + 1) * step
+            here = ends[key(a)]
+            there = ends[key(b)]
             # An entry m is +seg when the node is that segment's END 2 and
             # -seg when it is END 1, which is already NEC's I- convention;
             # I+ is the same reading from the other side, hence the flip.
             i_minus = next((m for m in here if abs(m) != idx), 0)
             i_plus = -next((m for m in there if abs(m) != idx), 0)
+            if interpolates:
+                if abs(float(a[2])) <= slen:
+                    i_minus = idx
+                if abs(float(b[2])) <= slen:
+                    i_plus = idx
             out.append((i_minus, i_plus))
     return out
 
@@ -2808,6 +2832,18 @@ def _structure_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
     if deck.ground_plane_flag:
         rows.append("")
         rows.append("     GROUND PLANE SPECIFIED.")
+        if deck.ground_plane_interpolates:
+            # nec2c geometry.c ``conect()``: the second line is the POSITIVE
+            # flag's alone, and it is unconditional on the geometry — a
+            # ``GE 1`` deck standing clear of the plane prints it too
+            # (measured on the oracle, 2026-08-20).  It is the one line here
+            # the oracle terminates itself, which is where the extra blank
+            # before TOTAL SEGMENTS comes from.
+            rows.append(
+                "     WHERE WIRE ENDS TOUCH GROUND, CURRENT WILL BE "
+                "INTERPOLATED TO IMAGE IN GROUND PLANE."
+            )
+            rows.append("")
     total = solver.n_segments
     rows.append("")
     rows.append(
@@ -2817,9 +2853,9 @@ def _structure_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
     return rows
 
 
-def _segmentation_rows(solver: DeckSolver) -> list[str]:
+def _segmentation_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
     rows = []
-    connections = _connection_data(solver.wires)
+    connections = _connection_data(solver.wires, deck.ground_plane_interpolates)
     for seg, (i_minus, i_plus) in zip(solver.segments, connections):
         d = seg.direction
         length = float(np.linalg.norm(d))
@@ -3400,7 +3436,7 @@ def render_deck(body: str) -> tuple[list[str], list[str]]:
         out += _SEGMENTATION_NOTES
         out.append("")
         out += _SEGMENTATION_TABLE_HEADER
-        out += _segmentation_rows(solver)
+        out += _segmentation_rows(deck, solver)
         out += ["", ""]
     out.append("")
 
