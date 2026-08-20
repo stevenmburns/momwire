@@ -70,7 +70,9 @@ def fixture_deck(name: str) -> str:
     return (FIXTURE_DIR / f"{name}.deck").read_text()
 
 
-def run_client(room: str, decks: str, timeout: float = 120.0) -> subprocess.CompletedProcess:
+def run_client(
+    room: str, decks: str, timeout: float = 120.0
+) -> subprocess.CompletedProcess:
     return subprocess.run(
         CLIENT_ARGV,
         input=decks,
@@ -127,13 +129,17 @@ def inject_digit_fault(text: str) -> str:
     raise AssertionError("no NE table row found to inject a fault into")
 
 
-def run_round(room: str, rng: random.Random, dump_dir: Path | None, round_id: int, inject: bool):
+def run_round(
+    room: str, rng: random.Random, dump_dir: Path | None, round_id: int, inject: bool
+):
     seq = random_sequence(rng, 3, 10)
     decks = "".join(fixture_deck(n) for n in seq)
     served = run_client(room, decks)
     if served.returncode != 0:
         return {
-            "round": round_id, "seq": seq, "ok": False,
+            "round": round_id,
+            "seq": seq,
+            "ok": False,
             "reason": f"client rc={served.returncode}: {served.stderr[-500:]}",
         }
     served_out = served.stdout
@@ -153,16 +159,20 @@ def run_round(room: str, rng: random.Random, dump_dir: Path | None, round_id: in
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--rounds", type=int, default=60)
-    ap.add_argument("--workers", type=int, default=8, help="concurrent client processes per batch")
+    ap.add_argument(
+        "--workers", type=int, default=8, help="concurrent client processes per batch"
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--dump-dir", type=Path, default=None)
     ap.add_argument(
-        "--inject-fault", action="store_true",
+        "--inject-fault",
+        action="store_true",
         help="self-test: corrupt round 0's served output and confirm it is flagged",
     )
     args = ap.parse_args()
 
-    rng = random.Random(args.seed)
+    # Each round carries its OWN Random, derived from the seed and the round
+    # index, so a sweep is reproducible whatever order the pool runs them in.
     room = tempfile.mkdtemp(prefix="mw464fuzz-")
     dump_dir = args.dump_dir
     mismatches = []
@@ -170,7 +180,14 @@ def main() -> int:
     try:
         with ThreadPoolExecutor(max_workers=args.workers) as pool:
             futures = [
-                pool.submit(run_round, room, random.Random(args.seed * 100_003 + i), dump_dir, i, args.inject_fault)
+                pool.submit(
+                    run_round,
+                    room,
+                    random.Random(args.seed * 100_003 + i),
+                    dump_dir,
+                    i,
+                    args.inject_fault,
+                )
                 for i in range(args.rounds)
             ]
             for fut in futures:
@@ -182,7 +199,9 @@ def main() -> int:
         # runtime fixture does: SIGTERM by pid, not by name.
         log_files = list(Path(room).glob("*.log"))
         text = "".join(p.read_text(errors="replace") for p in log_files)
-        for pid_str, _sock in re.findall(r"^\S+ listening pid=(\d+) socket=(\S+)$", text, re.MULTILINE):
+        for pid_str, _sock in re.findall(
+            r"^\S+ listening pid=(\d+) socket=(\S+)$", text, re.MULTILINE
+        ):
             try:
                 os.kill(int(pid_str), signal.SIGTERM)
             except OSError:
@@ -191,7 +210,9 @@ def main() -> int:
         shutil.rmtree(room, ignore_errors=True)
 
     dt = time.monotonic() - t0
-    print(f"rounds={args.rounds} workers={args.workers} seed={args.seed} elapsed={dt:.1f}s")
+    print(
+        f"rounds={args.rounds} workers={args.workers} seed={args.seed} elapsed={dt:.1f}s"
+    )
     print(f"mismatches={len(mismatches)}")
     for m in mismatches:
         reason = m.get("reason", "byte mismatch after canonicalize_timings")
@@ -199,7 +220,9 @@ def main() -> int:
         print(f"    sequence: {' -> '.join(m['seq'])}")
     if args.inject_fault:
         hit = any(m["round"] == 0 for m in mismatches)
-        print(f"inject-fault self-test: {'CAUGHT' if hit else 'MISSED (BUG IN FUZZER)'}")
+        print(
+            f"inject-fault self-test: {'CAUGHT' if hit else 'MISSED (BUG IN FUZZER)'}"
+        )
         return 0 if hit else 1
     return 0
 

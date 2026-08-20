@@ -387,7 +387,12 @@ def test_ne_dust_prints_as_exact_zero():
         assert rows, f"{name}: no near-field rows found"
         for tok in rows:
             for mag, phase in ((tok[3], tok[4]), (tok[5], tok[6]), (tok[7], tok[8])):
-                assert float(mag) == 0.0 or float(mag) > 1e-9, (
+                # The bar IS the floor: _FIELD_FLOOR2 is applied to the
+                # printed value on this path, so anything the engine let
+                # through must be strictly above 1e-10. (The RP sibling's
+                # 1e-15 is a loose "no dust" heuristic because its floor is
+                # tested in the pre-rescale FFLD basis, not on the printout.)
+                assert float(mag) == 0.0 or float(mag) > 1e-10, (
                     f"{name}: sub-floor dust printed raw: {tok}"
                 )
                 if float(mag) == 0.0:

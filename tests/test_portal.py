@@ -1071,10 +1071,10 @@ def test_near_field_off_the_conductor_tracks_the_oracle():
                 magnitude = 3 + 2 * component
                 mine, oracle = float(a[magnitude]), float(b[magnitude])
                 if oracle <= 1e-4 * live:
-                    # A component the symmetry kills. Both engines print their
-                    # own numerical zero there (nec2c 2.4E-09 against our
-                    # 1.1E-16) and neither number means anything; all that is
-                    # testable is that the component IS dead.
+                    # A component the symmetry kills. nec2c prints its own
+                    # fill dust there (2.4E-09) and it means nothing; we print
+                    # an exact zero since momwire#464 floored this table, so
+                    # all that is testable is that the component IS dead.
                     assert mine <= 1e-4 * live, f"{name}: {a} / {b}"
                     continue
                 assert mine == pytest.approx(oracle, rel=0.02), f"{name}: {a} / {b}"
