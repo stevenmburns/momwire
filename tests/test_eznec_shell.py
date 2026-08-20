@@ -204,14 +204,16 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     """The fault-injection table's three obligations at once: the file is
     written, the stamp echo is in it, and the refusal sits AFTER the echo.
 
-    0045 is the deck for it since the ground rung — a well-formed capture
-    whose bare ``GD`` puts it on rung 3, so it still exercises the refusal
-    path end to end.  It is the third tenant of this gate: 0043 came back
-    solved when rung 1 landed and 0047 when rung 2 did, which is what a
-    ladder does to the decks that used to demonstrate its top.
+    0031 is the deck for it since the ``GD`` rung — the 40-meter four-square,
+    a well-formed capture whose FOUR phased ``EX`` cards put it above the
+    served rungs, so it still exercises the refusal path end to end.  It is
+    the fourth tenant of this gate, and the turnover is the arc's own shape:
+    0043 came back solved when rung 1 landed, 0047 when rung 2 did and 0045
+    when rung 3 did.  The ground cards are finished, so this gate has moved
+    off them for good and onto a card no ground rung can reach.
     """
     deck = tmp_path / "EZN5.NEC"
-    deck.write_bytes((FIXTURE_DIR / capture("0045")["deck"]).read_bytes())
+    deck.write_bytes((FIXTURE_DIR / capture("0031")["deck"]).read_bytes())
     out = tmp_path / "NEC5.OUT"
 
     proc = run_engine([str(deck), str(out)])
@@ -224,8 +226,8 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     assert _ERROR_PREFIX in written
     assert written.index(stamp) < written.index(_ERROR_PREFIX)
     reason = written.rsplit(_ERROR_PREFIX, 1)[1].strip()
-    assert reason.startswith("GD asks for the MININEC-type ground")
-    assert written == eznec.render_refusal(deck_text("0045"), reason)
+    assert reason.startswith("this deck carries 4 EX cards")
+    assert written == eznec.render_refusal(deck_text("0031"), reason)
 
 
 def test_paths_resolve_against_the_working_directory(tmp_path):
