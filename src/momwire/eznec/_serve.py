@@ -6,16 +6,17 @@ momwire solve and reads the answer back into the numbers the printout wants.
 It computes physics and formats nothing, exactly as :mod:`._printout`
 formats and computes nothing.
 
-Rung 1 of the scored ladder (antennaknobs
-``docs/status/2026-08-20-eznec-nec5-scored-matrix.md``) is what is served:
-``GN -1`` free space and ``GN 1`` perfect ground, one ``EX 0``/``EX 4``
-source at a node, ``LD 4`` fixed impedances, node-addressed ``TL``/``NT``
-networks, and the ``RP 0`` / ``XQ`` / ``PQ 0`` requests.  Everything above
-it — the Sommerfeld ground, the bare ``GD`` MININEC mode, phased multi-``EX``
-drive, the near field — refuses BY NAME through :func:`refusal`, because a
-seam that answers a question it has no gate for is worse than one that says
-so.  A network deck over a ground this seam cannot solve refuses at the
-GROUND rung, which is what the ordering in :func:`refusal` is for.
+Rungs 1 and 2 of the scored ladder (antennaknobs
+``docs/status/2026-08-20-eznec-nec5-scored-matrix.md``) are what is served:
+``GN -1`` free space, ``GN 1`` perfect ground and ``GN 0`` / ``GN 2``
+Sommerfeld finite ground, one ``EX 0``/``EX 4`` source at a node, ``LD 4``
+fixed impedances, node-addressed ``TL``/``NT`` networks, and the ``RP 0`` /
+``XQ`` / ``PQ 0`` requests.  Everything above them — the bare ``GD`` MININEC
+mode, phased multi-``EX`` drive, the near field — refuses BY NAME through
+:func:`refusal`, because a seam that answers a question it has no gate for is
+worse than one that says so.  A network deck over a ground this seam cannot
+solve refuses at the GROUND rung, which is what the ordering in
+:func:`refusal` is for.
 
 Courtesy stance, the arc's throughout: every NEC-5 fact below was measured
 off captured decks and captured printouts under ``tests/fixtures/eznec/``,
@@ -83,6 +84,31 @@ and gives the far side the SAME solver column with the opposite sign
 really are.  At a junction of three or more wires two addresses would be two
 genuinely different cuts, no capture writes one, and it refuses by name.
 
+One finite ground, two ways to spell its loss
+---------------------------------------------
+``GN 0``'s sixth field is a conductivity when it is positive and Im(εc)
+itself when it is NEGATIVE — the same convention the dialect's ``GD`` record
+already flags, measured here on ``GN 0`` against the linux oracle
+(2026-08-20).  ``GN 0,0,0,0,13.,-12.84,…`` and ``GN 0,0,0,0,13.,.005,…``
+print the same ``CONDUCTIVITY= 5.000E-03`` cell, the same
+``1.30000E+01-1.28400E+01``, and the same 47.789 − j0.78525 Ω: the engine
+back-derives the conductivity from the imaginary part and runs the identical
+medium.  So this module folds the negative spelling into its equivalent
+σ at :func:`_medium` and nothing downstream — not the solve, not the far
+field, not the printout — has to know which spelling arrived.
+
+The two constants in that fold are BOTH measured, not assumed.  The printed
+``COMPLEX DIELECTRIC CONSTANT`` is ``εr − j·σ·λ·59.96``: at 7 MHz and
+σ = 0.005 the captures print ``1.30000E+01-1.28400E+01`` and 0048's 7.02 MHz
+twin prints ``-1.28034E+01``, which pins the product σ·λ·59.96 to six digits
+(the oracle sweep 1/3/7/14.25/299.8 MHz gives 59.9600 ± 0.0002; NEC-2's own
+59.958 would print ``1.79754E+04`` at 1 MHz where the engine prints
+``1.79760E+04``).  momwire's own solve folds ε̃ from σ with the SI ε₀ instead,
+which differs by 5e-5 of the imaginary part — two orders below the frequency
+slack ``SPEED_OF_LIGHT_MHZ_M`` already carries and many below this seam's
+basis offset.  The printed cell is the ENGINE's, because the byte-gate
+compares it; the solved medium is momwire's, because that is what solved it.
+
 The budget's own arithmetic
 ---------------------------
 ``RADIATED POWER`` is not ``INPUT − losses`` here.  Measured on all six
@@ -121,6 +147,7 @@ from ..bspline import BSplineSolver
 from ..deck._nec5 import (
     Nec5Deck,
     Nec5FarFieldRequest,
+    Nec5Ground,
     Nec5MininecGround,
     Nec5NearFieldRequest,
     Nec5Network,
@@ -157,9 +184,11 @@ from ..portal._portal import (
     _polarisation,
 )
 from ._printout import (
+    ENVIRONMENT_FINITE_GROUND,
     ENVIRONMENT_FREE_SPACE,
     ENVIRONMENT_PERFECT_GROUND,
     ChargeRow,
+    GroundMedium,
     LineRow,
     LoadRow,
     NetworkRow,
@@ -171,7 +200,13 @@ from ._printout import (
     WireCurrentRow,
 )
 
-__all__ = ["BASIS", "SPEED_OF_LIGHT_MHZ_M", "refusal", "serve"]
+__all__ = [
+    "BASIS",
+    "EPSC_CONDUCTIVITY_FACTOR",
+    "SPEED_OF_LIGHT_MHZ_M",
+    "refusal",
+    "serve",
+]
 
 
 # NEC's own metre-megahertz product, MEASURED off the printed WAVELENGTH
@@ -184,6 +219,15 @@ __all__ = ["BASIS", "SPEED_OF_LIGHT_MHZ_M", "refusal", "serve"]
 # far below this seam's basis offset, and one constant is easier to defend
 # than two.
 SPEED_OF_LIGHT_MHZ_M = 299.8
+
+# The engine's own conductivity-to-permittivity constant, MEASURED off the
+# printed `COMPLEX DIELECTRIC CONSTANT` cell (module docstring, "One finite
+# ground"): eps_c = eps_r - j*sigma*wavelength*59.96.  Written in the same
+# wavelength-and-a-constant shape NEC-2 writes it in rather than as
+# sigma/(omega*eps0), because that is the shape the measurement recovers —
+# the product is constant to six digits across a 1 MHz to 299.8 MHz sweep,
+# with the wavelength taken at SPEED_OF_LIGHT_MHZ_M.
+EPSC_CONDUCTIVITY_FACTOR = 59.96
 
 # The basis, spelled as `momwire.deck.build_solver` spells it.  Recorded as a
 # name so a reader of a served printout can ask what solved it.
@@ -206,15 +250,11 @@ _NODE_EPS = 1e-6
 # person looking at EZNEC's viewer.  U1's catch-all stub stays behind them all
 # for the genuinely unforeseen.
 
-_REFUSE_SOMMERFELD = (
-    "GN 0 asks for the finite-ground Sommerfeld solution, which this engine "
-    "does not yet serve at this seam: rung 1 is GN -1 (free space) and GN 1 "
-    "(perfect ground)"
-)
 _REFUSE_MININEC = (
     "GD asks for the MININEC-type ground (PEC currents with a second-medium "
-    "far field), which this engine does not yet serve at this seam: rung 1 is "
-    "GN -1 (free space) and GN 1 (perfect ground)"
+    "far field), which this engine does not yet serve at this seam: the grounds "
+    "served are GN -1 (free space), GN 1 (perfect) and GN 0 / GN 2 (finite, "
+    "Sommerfeld solution)"
 )
 _REFUSE_MIXED_NETWORKS = (
     "this deck carries TL and NT cards together; the NETWORK DATA table has "
@@ -237,9 +277,10 @@ _REFUSE_MULTI_EX = (
     "served at this seam yet, and one EX is what every rung-1 capture writes"
 )
 _REFUSE_NE = (
-    "NE (near electric field) is not served at this seam yet: the one captured "
-    "NE deck stands over GN 0, so a near field answered here would have no "
-    "captured printout to be gated against"
+    "NE (near electric field) is not served at this seam yet: the NEAR ELECTRIC "
+    "FIELDS block has a layout of its own and no rung of this arc renders it, "
+    "so a near field answered here would have no printed form to be gated "
+    "against"
 )
 _REFUSE_NO_EX = "this deck carries no EX card - nothing drives the structure"
 _REFUSE_NO_FR = "this deck carries no FR card - there is no frequency to solve at"
@@ -255,7 +296,7 @@ _REFUSE_RP_RANGE = (
 
 
 def refusal(deck: Nec5Deck) -> str | None:
-    """The reason this deck is not rung-1, or ``None`` when it is.
+    """The reason this deck is out of scope, or ``None`` when it is not.
 
     Order is deliberate — grounds first, then the cards, then the drive, then
     the request — so a deck that is out of scope in several ways names the
@@ -263,10 +304,13 @@ def refusal(deck: Nec5Deck) -> str | None:
     feed-system deck carries six ``TL`` cards over a bare ``GD``, and what it
     needs to hear is that the GROUND is unserved, not that its networks are
     (they are not).
+
+    The ordering survived the ground rung landing even though the deck that
+    demonstrated it changed sides: 0022 used to name its ``GN 0`` and now
+    names its ``NE``, because the ground it stands over is served and the
+    REQUEST is the thing left to fix.
     """
     ground = deck.ground
-    if isinstance(ground, Nec5SommerfeldGround):
-        return _REFUSE_SOMMERFELD
     if isinstance(ground, Nec5MininecGround):
         return _REFUSE_MININEC
     if deck.transmission_lines and deck.networks:
@@ -719,12 +763,48 @@ def _site_for(
 # --------------------------------------------------------------------------
 
 
-def _solver_for(deck: Nec5Deck, mesh: _Mesh, wavelength: float) -> BSplineSolver:
+def _medium(ground: Nec5Ground, wavelength: float) -> GroundMedium | None:
+    """A finite ground's ``(εr, σ, εc)``, or ``None`` for the two that have none.
+
+    Both spellings of the sixth field arrive here and only one leaves (module
+    docstring, "One finite ground"): a POSITIVE field is a conductivity and
+    ``εc = εr − j·σ·λ·59.96``; a NEGATIVE one IS ``Im εc``, and the
+    conductivity printed beside it is the engine's own back-derivation, which
+    is the same division run the other way.  Measured against the linux oracle
+    2026-08-20, and it is an identity rather than an approximation:
+    ``-12.84`` at 7 MHz prints ``CONDUCTIVITY= 5.000E-03`` and ``-3851.99``
+    prints ``1.500E+00``, both to every printed digit.
+    """
+    if not isinstance(ground, Nec5SommerfeldGround):
+        return None
+    if ground.sigma < 0.0:
+        eps_c = complex(ground.eps_r, ground.sigma)
+        sigma = -ground.sigma / (wavelength * EPSC_CONDUCTIVITY_FACTOR)
+    else:
+        sigma = ground.sigma
+        eps_c = complex(ground.eps_r, -sigma * wavelength * EPSC_CONDUCTIVITY_FACTOR)
+    return GroundMedium(eps_r=ground.eps_r, sigma=sigma, eps_c=eps_c)
+
+
+def _solver_for(
+    deck: Nec5Deck, mesh: _Mesh, wavelength: float, medium: GroundMedium | None
+) -> BSplineSolver:
     """The constructed solver, one port per declared cut.
 
     Two kwargs carry the deck's ports and momwire orders their rows
     ``[gap feeds…, junction ports…, node gaps…]`` — the order
     :func:`_assign_columns` already wrote down.
+
+    Three ground kwargs carry the environment, and which of them appear is the
+    whole of the difference between the rungs.  ``GN 1`` is ``ground_z``
+    alone.  ``GN 0`` adds the medium and asks for momwire's SOMMERFELD model
+    rather than its reflection-coefficient one — not a preference: the
+    captured decks stand a wire END in the plane, and the refl-coef model is
+    documented valid only from about 0.1λ up (``docs/refl-coef-ground-plan.md``,
+    momwire#151), so it is the wrong tool for a base-fed vertical by exactly
+    the geometry every one of these captures writes.  The medium goes in as
+    ``(εr, σ)`` and momwire folds it with the SI ε₀; the 5e-5 that separates
+    that from the engine's printed εc is discussed in the module docstring.
     """
     radii = [piece.radius for piece in mesh.pieces]
     feeds = [
@@ -742,6 +822,16 @@ def _solver_for(deck: Nec5Deck, mesh: _Mesh, wavelength: float) -> BSplineSolver
     ]
     gaps = [(site.piece, site.end, 0j) for site in mesh.gaps]
 
+    ground: dict[str, object] = {}
+    if isinstance(deck.ground, Nec5PerfectGround):
+        ground["ground_z"] = 0.0
+    elif medium is not None:
+        ground = {
+            "ground_z": 0.0,
+            "ground_eps": (medium.eps_r, medium.sigma),
+            "ground_model": "sommerfeld",
+        }
+
     return BSplineSolver(
         wires=[piece.points for piece in mesh.pieces],
         n_per_edge_per_wire=[[piece.n_elements] for piece in mesh.pieces],
@@ -751,7 +841,7 @@ def _solver_for(deck: Nec5Deck, mesh: _Mesh, wavelength: float) -> BSplineSolver
         degree=_DEGREE,
         wire_radius=radii[0] if len(set(radii)) == 1 else radii,
         wavelength=wavelength,
-        ground_z=0.0 if isinstance(deck.ground, Nec5PerfectGround) else None,
+        **ground,  # type: ignore[arg-type]
     )
 
 
@@ -1158,11 +1248,30 @@ def _element_currents_and_charges(
     return currents, charges
 
 
+def _far_ground(deck: Nec5Deck, medium: GroundMedium | None) -> Ground:
+    """The environment in the far-field readout's own vocabulary.
+
+    Three kinds and no fourth: ``pec`` is the geometric image, ``sommerfeld``
+    is that image weighted by the Fresnel coefficients of a medium, ``free``
+    is no image at all.  The name is the PORTAL's for a family of ground
+    models and not a claim about which integral answered the near field — the
+    far field of a Sommerfeld solve is a Fresnel-weighted image in NEC too
+    (the reflected wave is a plane wave at infinity), which is why one word
+    covers both halves here.
+    """
+    if isinstance(deck.ground, Nec5PerfectGround):
+        return Ground("pec")
+    if medium is None:
+        return Ground("free")
+    return Ground("sommerfeld", medium.eps_r, medium.sigma)
+
+
 def _pattern(
     request: Nec5FarFieldRequest,
     solver: BSplineSolver,
     coeffs: np.ndarray,
-    deck: Nec5Deck,
+    ground: Ground,
+    frequency_mhz: float,
     wavelength: float,
     p_in: float,
 ) -> PatternBlock:
@@ -1180,11 +1289,18 @@ def _pattern(
     and its rows are what the spherical formulae give when a negative theta
     is put straight into them (the E(THETA) phase flips by 180 across the
     zenith, 87.28 to -92.72, which is theta_hat turning over).
+
+    Neither does the HORIZON, and that is the ground rung's own evidence.
+    0044 over perfect ground prints its PEAK, 5.15 dB, at theta = 90; 0047,
+    the same wire over 13/0.005 earth, prints -999.99 there and 0.06 dB from
+    the capture at every other angle of the same cut.  Nothing here tests for
+    grazing incidence: the Fresnel coefficients go to -1 as theta_i goes to
+    90, the direct wave and its weighted image cancel term for term, and the
+    null falls out of ``_far_moments`` on the row the capture put it.
     """
     thetas = request.theta0_deg + request.d_theta_deg * np.arange(request.n_theta)
     phis = request.phi0_deg + request.d_phi_deg * np.arange(request.n_phi)
     k = 2.0 * math.pi / wavelength
-    pec = isinstance(deck.ground, Nec5PerfectGround)
     mid, moment, _nodes, _delta = solver.element_currents(coeffs)
     m_theta, m_phi = _far_moments(
         mid,
@@ -1192,9 +1308,9 @@ def _pattern(
         k,
         np.radians(thetas),
         np.radians(phis),
-        Ground("pec") if pec else Ground("free"),
+        ground,
         0.0,
-        (deck.frequency_mhz or 0.0) * 1e6,
+        frequency_mhz * 1e6,
     )
     e_theta = -1j * ETA0 * k / (4.0 * math.pi) * m_theta
     e_phi = -1j * ETA0 * k / (4.0 * math.pi) * m_phi
@@ -1300,8 +1416,9 @@ def serve(deck: Nec5Deck) -> RunData:
     wavelength = SPEED_OF_LIGHT_MHZ_M / frequency
     omega = 2.0 * math.pi * frequency * 1e6
 
+    medium = _medium(deck.ground, wavelength)
     cards = _cards(deck, structure, mesh)
-    solver = _solver_for(deck, mesh, wavelength)
+    solver = _solver_for(deck, mesh, wavelength, medium)
     solution = solver.compute_port_solution()
     state = _port_state(deck, mesh, cards, solution.y, wavelength)
     # Back across T: the structure is driven by the SOLVER's gap EMFs, which
@@ -1351,10 +1468,13 @@ def serve(deck: Nec5Deck) -> RunData:
         frequency_mhz=frequency,
         wavelength_m=wavelength,
         environment=(
-            ENVIRONMENT_PERFECT_GROUND
+            ENVIRONMENT_FINITE_GROUND
+            if medium is not None
+            else ENVIRONMENT_PERFECT_GROUND
             if isinstance(deck.ground, Nec5PerfectGround)
             else ENVIRONMENT_FREE_SPACE
         ),
+        ground=medium,
         loads=tuple(
             LoadRow(
                 tag=load.at.tag,
@@ -1422,7 +1542,15 @@ def serve(deck: Nec5Deck) -> RunData:
             efficiency_percent=(100.0 * p_radiated / p_in) if p_in > 0 else 0.0,
         ),
         patterns=tuple(
-            _pattern(request, solver, coeffs, deck, wavelength, p_in)
+            _pattern(
+                request,
+                solver,
+                coeffs,
+                _far_ground(deck, medium),
+                frequency,
+                wavelength,
+                p_in,
+            )
             for request in deck.requests
             if isinstance(request, Nec5FarFieldRequest)
         ),

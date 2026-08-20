@@ -18,10 +18,16 @@ added node-addressed ``TL``/``NT`` networks, which is what turns a seam that
 serves bare wires into one that serves feed systems: EZNEC parks the whole
 network — source included — on a virtual wire 100 λ away and reaches the
 antenna through transmission lines, and a deck the user thinks carries only
-lumped loads can still arrive as ``NT`` cards.  Twenty of the forty-nine
-captured decks are served; the rest name their ground.
+lumped loads can still arrive as ``NT`` cards.
 
-Everything above rung 1 still refuses, and refuses BY NAME.  That is not a
+Issue #504 climbs the ground rungs on top of that.  Its U1 added ``GN 0`` /
+``GN 2``, the finite Sommerfeld ground — the environment most of the corpus
+actually stands over — which takes the served count from twenty of the
+forty-nine captured decks to twenty-seven.  The twenty-two still refused are
+twenty bare-``GD`` MININEC decks, one ``NE`` near field and one phased
+multi-``EX`` drive, and each names its own card.
+
+Everything above the served rungs still refuses, and refuses BY NAME.  That is not a
 placeholder: a refusing engine that speaks the protocol correctly tells the
 operator, in EZNEC's own viewer, exactly which card it could not stand
 behind, which is the one thing a wrong answer cannot do.
@@ -49,10 +55,12 @@ and none may be added.
 from __future__ import annotations
 
 from ._printout import (
+    ENVIRONMENT_FINITE_GROUND,
     ENVIRONMENT_FREE_SPACE,
     ENVIRONMENT_PERFECT_GROUND,
     STUB_REFUSAL,
     ChargeRow,
+    GroundMedium,
     LineRow,
     LoadRow,
     NetworkRow,
@@ -70,10 +78,12 @@ from ._serve import refusal, serve
 from ._shell import main, render, run
 
 __all__ = [
+    "ENVIRONMENT_FINITE_GROUND",
     "ENVIRONMENT_FREE_SPACE",
     "ENVIRONMENT_PERFECT_GROUND",
     "STUB_REFUSAL",
     "ChargeRow",
+    "GroundMedium",
     "LineRow",
     "LoadRow",
     "NetworkRow",
