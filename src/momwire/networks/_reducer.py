@@ -779,6 +779,15 @@ class NetworkReducer:
                 probes.append((f"Load {'+'.join(names)}", "termination", k))
                 probe_keys.append((lead_p, lead_i, "load"))
 
+        # The two lists are hand-paired at ~17 emission sites, so a probe
+        # added without its key would misalign every key after it — and the
+        # zip in `excited_state` would SILENTLY truncate rather than say so.
+        # Assert here, where the offending site is still on the stack.
+        assert len(probes) == len(probe_keys), (
+            f"probe/key misalignment: {len(probes)} probes, "
+            f"{len(probe_keys)} keys — every probes.append() needs its "
+            "probe_keys.append() (antennaknobs#956)"
+        )
         return MNASystem(
             G,
             elements,
@@ -889,7 +898,11 @@ class NetworkReducer:
                 p_in += 0.5 * float(np.real(e * np.conj(j[col])))
         budget = [
             _BudgetEntry(label, system.branch_power((label, kind, payload)), pkey)
-            for (label, kind, payload), pkey in zip(system.probes, system.probe_keys)
+            # strict: a length mismatch is a dropped probe, not a short
+            # budget — house idiom, and the loud half of the assert above.
+            for (label, kind, payload), pkey in zip(
+                system.probes, system.probe_keys, strict=True
+            )
         ]
         p_diss = sum(w for _label, w in budget)
         # A lossless network's probes read pure float noise (|w| ~ 1e-17·p_in
