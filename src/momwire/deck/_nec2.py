@@ -51,8 +51,14 @@ _EXECUTE_CARDS = frozenset({"XQ", "RP", "NE", "NH"})
 # cards that move the operator or the drive (spec ``#arming``).  GD, MP and PT
 # are deliberately absent: GD moves nothing outside the far field's cliff
 # modes, MP is advisory, and PT changes what a run prints, not what it
-# computes.  GN's membership is oracle-verified.
-_ARMING_CARDS = frozenset({"EX", "FR", "LD", "GN", "EK"})
+# computes.  GN's membership is oracle-verified, and so is TL/NT's (probe
+# ``c_xq_only``, momwire#456 phase C): a network card alone between two
+# execute cards produces a whole second answer, and produces it WITHOUT a
+# refill — one MATRIX TIMING block, one FREQUENCY block, two ANTENNA INPUT
+# PARAMETERS blocks.  That is EX's shape exactly, which is the same fact from
+# the other side as the cell-rule exemption: a network moves the composition
+# on top of the operator, never the operator.
+_ARMING_CARDS = frozenset({"EX", "FR", "LD", "GN", "EK", "TL", "NT"})
 
 # The arming cards that move the OPERATOR — the matrix itself, not the drive
 # it is solved against.  One of these between two execute cards refills
@@ -851,6 +857,14 @@ class _Nec2Parser:
             return
         if (message := _REFUSED_BY_NAME.get(card.mnemonic)) is not None:
             raise DeckError(message)
+        if card.mnemonic in _ARMING_CARDS:
+            # Above the network dispatch below, so TL/NT arm through the one
+            # set the spec's ``#arming`` publishes rather than through a
+            # second rule written out by hand.  No geometry card is in the
+            # set, so the order against `_GEOMETRY_CARDS` does not matter.
+            self._armed = True
+            if card.mnemonic in _OPERATOR_CARDS and self._executed:
+                self._operator_dirty = True
         if card.mnemonic in _NETWORK_CARDS:
             self._network(card)
             return
@@ -864,10 +878,6 @@ class _Nec2Parser:
         if card.mnemonic in _GEOMETRY_CARDS:
             self._geometry(card)
             return
-        if card.mnemonic in _ARMING_CARDS:
-            self._armed = True
-            if card.mnemonic in _OPERATOR_CARDS and self._executed:
-                self._operator_dirty = True
         if card.mnemonic == "GN":
             self._gn(card)
             return

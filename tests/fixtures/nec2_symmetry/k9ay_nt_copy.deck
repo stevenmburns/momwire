@@ -1,0 +1,18 @@
+CM k9ay-shaped NT probe, IMAGE-TAG form (momwire#456 phase C): the cell
+CM structure, with the NT addressing tags 3 and 4 -- wires that exist only
+CM because the GX generated them, and that lie OUTSIDE the cell.  An LD
+CM written this way is silently DROPPED by NEC and refused by this dialect
+CM (see k9ay_orig.deck's rule).  A network card is not: nec2c resolves it
+CM against the fully generated structure, attaches it, and answers
+CM 55.036 + j497.78 -- no drop, no diagnostic, no error.  This deck is what
+CM says network endpoint resolution must see the IMAGES, not just the cell.
+CE
+GW 1 8 0. 0. 8.5 5. 0. 1.5 1.5E-3
+GW 2 5 0. 0. 0. 5. 0. 1.5 1.5E-3
+GX 2 100
+GE 0
+EX 0 4 1 0 1. 0.
+NT 3 4 4 3 0.02 0. -0.02 0. 0.02 0.
+FR 0 1 0 0 1.8 0
+XQ
+NX

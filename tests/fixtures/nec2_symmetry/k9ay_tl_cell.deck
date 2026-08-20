@@ -1,0 +1,15 @@
+CM k9ay_nt_cell.deck's TL twin (momwire#456 phase C): the same question asked
+CM of the other network card, because TL and NT reach NEC's network solve by
+CM the same door and a rule measured on one card is not measured on both.
+CM A 300-ohm, 5 m line between tag 1 seg 4 and tag 2 seg 3, under a live
+CM GX 2 100.  Answers identically to k9ay_tl_naive.deck: exempt, same as NT.
+CE
+GW 1 8 0. 0. 8.5 5. 0. 1.5 1.5E-3
+GW 2 5 0. 0. 0. 5. 0. 1.5 1.5E-3
+GX 2 100
+GE 0
+EX 0 4 1 0 1. 0.
+TL 1 4 2 3 300. 5.0
+FR 0 1 0 0 1.8 0
+XQ
+NX

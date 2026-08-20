@@ -1,0 +1,18 @@
+CM k9ay_nt_cell's NAIVE twin (momwire#456 phase C): the GX written out as
+CM four GW cards, carrying the ONE NT card exactly as the cell deck wrote it.
+CM "Naive" is the reading an engine produces if it expands GX geometrically
+CM and then attaches the network where the card says, with no cell rule at
+CM all.  For LD that reading is 53 % wrong (see k9ay_orig_naive.deck); for a
+CM network it is RIGHT -- this deck and k9ay_nt_cell.deck agree to every
+CM printed digit on nec2c, and their network printout blocks agree byte for byte.
+CE
+GW 1 8 0. 0. 8.5 5. 0. 1.5 1.5E-3
+GW 2 5 0. 0. 0. 5. 0. 1.5 1.5E-3
+GW 3 8 0. 0. 8.5 -5. 0. 1.5 1.5E-3
+GW 4 5 0. 0. 0. -5. 0. 1.5 1.5E-3
+GE 0
+EX 0 4 1 0 1. 0.
+NT 1 4 2 3 0.02 0. -0.02 0. 0.02 0.
+FR 0 1 0 0 1.8 0
+XQ
+NX

@@ -1,0 +1,18 @@
+CM k9ay-shaped NT probe, CELL form (momwire#456 phase C).  A GX 2 100 is still
+CM live at GE, so nec2c fills and factors one 13-segment cell -- and the NT
+CM below addresses tag 1 (in the cell) and tag 2 (in the cell).  What this
+CM deck measures is whether a network card obeys the SYMMETRIC CELL RULE the
+CM way LD does (replicated onto every copy) or is EXEMPT the way EX is
+CM (attached once, exactly as addressed).  Its twin k9ay_nt_naive.deck is the
+CM same structure written out as four GW cards with the SAME ONE card; the
+CM two answer identically on the oracle, so the answer is: exempt.
+CE
+GW 1 8 0. 0. 8.5 5. 0. 1.5 1.5E-3
+GW 2 5 0. 0. 0. 5. 0. 1.5 1.5E-3
+GX 2 100
+GE 0
+EX 0 4 1 0 1. 0.
+NT 1 4 2 3 0.02 0. -0.02 0. 0.02 0.
+FR 0 1 0 0 1.8 0
+XQ
+NX
