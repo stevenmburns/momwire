@@ -148,15 +148,26 @@ def main(argv: list[str] | None = None) -> int:
         # stderr nor the exit code), and a missing file would be read as a
         # broken installation.  So the crash is reported the only way that
         # reaches a human: as a refusal, in the printout, exit 0.
-        _report_internal_error(printout_path, exc)
+        _report_internal_error(deck_path, printout_path, exc)
     return 0
 
 
-def _report_internal_error(printout_path: str | Path, exc: BaseException) -> None:
-    """Last-ditch printout for a failure the shell did not anticipate."""
+def _report_internal_error(
+    deck_path: str | Path, printout_path: str | Path, exc: BaseException
+) -> None:
+    """Last-ditch printout for a failure the shell did not anticipate.
+
+    The deck is re-read so the refusal still carries the comment echo:
+    without the stamp, EZNEC rejects the file as stale and the message
+    never reaches anyone (capture doc, "Error convention").  Re-reading is
+    the simplest way to have the text here without threading it through
+    every failure path, and the deck is still on disk — EZNEC wrote it
+    moments ago.
+    """
     reason = f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
     try:
-        write_printout(Path(printout_path), _printout.render_refusal(None, reason))
+        deck_text = read_deck(Path(deck_path))
+        write_printout(Path(printout_path), _printout.render_refusal(deck_text, reason))
     except OSError:
         # The output path itself is unwritable; there is no channel left, and
         # a non-zero exit would only be discarded. Stay quiet, stay zero.
