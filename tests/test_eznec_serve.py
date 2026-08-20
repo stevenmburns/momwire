@@ -1,4 +1,4 @@
-"""Rung-1 and rung-2 physics, gated against the captures (#497 U4, #504 U1).
+"""Rung-1 to rung-3 physics, gated (#497 U4, #504 U1, #504 U2).
 
 Three gates carry this unit, and the split between them is the point.
 
@@ -20,9 +20,11 @@ the table below so the next person can see what moved rather than only that
 something did.  A pin that tightens is a finding; a pin that loosens is a
 regression.
 
-**The refusals.**  Everything above rung 1 still refuses BY NAME, through the
+**The refusals.**  Everything above rung 3 still refuses BY NAME, through the
 real shell, at exit 0, with the comment stamp intact — because a refusal that
-does not reach EZNEC's viewer reaches nobody.
+does not reach EZNEC's viewer reaches nobody.  With the ground cards finished
+there is nothing hand-edited left in the refusal tables: every deck in them is
+the capture verbatim, reaching its own card at last.
 
 The manifest's normalizations for a served run are applied on the way in and
 nowhere else: CRLF to LF and the ``SOMMPD.NEX`` cache blocks at the reader
@@ -44,12 +46,17 @@ import numpy as np
 import pytest
 
 from momwire import BSplineSolver
-from momwire.deck._nec5 import parse_nec5
+from momwire.deck._nec5 import Nec5FarFieldRequest, parse_nec5
 from momwire.eznec import _serve
 from momwire.eznec._shell import render
+
+# The far-field readout the seam imports, imported here for the one gate that
+# is ABOUT that import: `refl` and `sommerfeld` are one branch of it.
+from momwire.portal._portal import Ground, _far_moments
 from test_eznec_printout import (
     FIXTURE_DIR,
     GATED_IDS,
+    MANIFEST,
     capture,
     deck_text,
     drop_sommpd_blocks,
@@ -57,30 +64,42 @@ from test_eznec_printout import (
     printout_text,
 )
 
-# The BARE-STRUCTURE captures that shipped a printout — the six this unit is
-# gated against.  The other seven gated captures carry ``TL``/``NT`` cards and
-# belong to the network unit, which measures its own table in
+# The BARE-STRUCTURE captures that shipped a printout — the thirteen this unit
+# is gated against.  The other seven gated captures carry ``TL``/``NT`` cards
+# and belong to the network unit, which measures its own table in
 # ``test_eznec_networks.py``; they still appear below, in the counting-rule
 # gate, because the count is a property of the deck's geometry and not of what
 # answers it.
 SERVED_IDS = (
     "0010",
     "0013",
+    "0015",
     "0019",
+    "0020",
     "0021",
     "0035",
     "0043",
     "0044",
+    "0045",
+    "0046",
     "0047",
     "0048",
 )
 
-# The three of them that stand over a finite ``GN 0`` ground — the rung this
-# unit adds.  One 10.3 m base-fed vertical over 13/0.005 earth, three times:
+# The three of them that stand over a finite ``GN 0`` ground — the rung #504 U1
+# added.  One 10.3 m base-fed vertical over 13/0.005 earth, three times:
 # 0047 with a 181-point elevation cut at 7.00 MHz, 0021 its 2026-08-16 twin
 # (same deck, different launch stamp, a differently stale ``SOMMPD.NEX``), and
 # 0048 the same antenna answered by ``XQ`` at 7.02 MHz.
 FINITE_IDS = ("0021", "0047", "0048")
+
+# The four that stand over a bare ``GD`` — U2's rung, and the same 10.3 m
+# vertical again.  0045/0015/0020 are ONE deck (``GD 0,…,13.,.005,1.,0.`` with
+# a 181-point cut at 7.00 MHz) captured at three separate launches, and 0046 is
+# its ``XQ`` twin at 7.01 MHz.  Paired against 0047/0021/0048 they are the
+# corpus's controlled experiment: same wire, same medium, same frequency, one
+# card changed.
+MININEC_IDS = ("0015", "0020", "0045", "0046")
 
 # The rung-1 captures with no printout: seven ``XQ``-only dipoles EZNEC wrote
 # while stepping a frequency.  Nothing to byte-compare, but a deck that
@@ -88,14 +107,77 @@ FINITE_IDS = ("0021", "0047", "0048")
 # status.
 SERVED_UNGATED_IDS = ("0036", "0037", "0038", "0039", "0040", "0041", "0042")
 
-# The captures the GROUND rung brought in with no printout of their own, and
-# they are the four most interesting decks this seam now answers: 0011/0030
+# The captures the ``GN 0`` rung brought in with no printout of their own, and
+# they are the four most interesting decks that rung answered: 0011/0030
 # hang a coax ``TL`` off a dipole over ``GN 0`` (the first network over a
 # finite ground), and 0033/0034 are elevated radial systems whose radials
 # stand 1.8 cm — 1e-4 λ — above it.  Nothing here can be gated against a
 # printout; what IS gated is that they answer at all, with finite numbers,
 # under the right banner.  A capture errand for the next Windows session.
 FINITE_UNGATED_IDS = ("0011", "0030", "0033", "0034")
+
+# And the twelve the ``GD`` rung brought in the same way — the biggest single
+# fall-in of the arc, and the corpus's real feed systems: 0001-0009 are W7EL's
+# 4-square with six ``TL`` cards and a three-``LD``-pinned virtual anchor 100 λ
+# out (0001 with a 361-point azimuth cut, 0002-0009 stepping the frequency
+# under ``XQ``), 0024 is the same shape with seven pins, 0026 is the Cardioid
+# feed system, and 0029 is a dipole with a coax feedline over 20/0.0303 earth.
+#
+# They are cheap, and WHY is the rung's own point: under ``GD`` the fill is
+# PEC, so a 100 λ anchor is ordinary geometry — the whole twelve render in
+# about two seconds.  The same decks over ``GN 0`` would be momwire#157's
+# Sommerfeld-grid shape (the scored matrix prices that as a hang), which is one
+# more reason a ``GD`` aliased onto ``GN 0`` would be wrong in a way nobody
+# would enjoy.  A capture errand for the next Windows session.
+MININEC_UNGATED_IDS = (
+    "0001",
+    "0002",
+    "0003",
+    "0004",
+    "0005",
+    "0006",
+    "0007",
+    "0008",
+    "0009",
+    "0024",
+    "0026",
+    "0029",
+)
+
+# Every capture id this seam answers after #504 U2, pinned.  The ladder number
+# is 43 of 49 and the six that are left are named in
+# :func:`test_the_corpus_ladder_stands_where_u2_left_it`.
+SERVED_AFTER_U2 = (
+    *MININEC_UNGATED_IDS[:9],  # 0001-0009
+    "0010",
+    "0011",
+    "0012",
+    "0013",
+    "0014",
+    "0015",
+    "0016",
+    "0017",
+    "0018",
+    "0019",
+    "0020",
+    "0021",
+    "0024",
+    "0026",
+    "0027",
+    "0028",
+    "0029",
+    "0030",
+    "0033",
+    "0034",
+    "0035",
+    *SERVED_UNGATED_IDS,  # 0036-0042
+    "0043",
+    "0044",
+    "0045",
+    "0046",
+    "0047",
+    "0048",
+)
 
 
 # --------------------------------------------------------------------------
@@ -108,11 +190,15 @@ FINITE_UNGATED_IDS = ("0011", "0030", "0033", "0034")
 #   id    Z (capture)          Z (served)          |dZ|    peak dB   d(peak)
 #   0010  79.948 +29.919j      85.073 +45.369j    16.278   2.18/2.09   0.09
 #   0013  55.621 + 8.2725j     58.876 +19.210j    11.412   1.90/1.80   0.10
+#   0015  35.571 - 1.4223j     36.499 + 2.0789j    3.622  -0.02/-0.05  0.03
 #   0019  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
+#   0020  35.571 - 1.4223j     36.499 + 2.0789j    3.622  -0.02/-0.05  0.03
 #   0021  47.789 - 0.78525j    48.867 + 2.5635j    3.518  -1.31/-1.33  0.02
 #   0035  23.343 -24.594j      23.926 -20.079j     4.552   9.88/9.84   0.04
 #   0043  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
 #   0044  35.571 - 1.4223j     36.499 + 2.0789j    3.622   5.15/5.13   0.02
+#   0045  35.571 - 1.4223j     36.499 + 2.0789j    3.622  -0.02/-0.05  0.03
+#   0046  35.735 - 0.68499j    36.675 + 2.8243j    3.633   (XQ, none)   —
 #   0047  47.789 - 0.78525j    48.867 + 2.5635j    3.518  -1.31/-1.33  0.02
 #   0048  48.155 + 0.65170j    49.254 + 4.0055j    3.529   (XQ, none)   —
 #
@@ -121,13 +207,21 @@ FINITE_UNGATED_IDS = ("0011", "0030", "0033", "0034")
 # the feed region, which is exactly the formulation difference the scored
 # matrix priced when it moved this unit's gate off byte equality.
 #
-# The finite-ground rows are the SMALLEST offsets in the table (3.5 Ω on a
-# 48 Ω row, against 16 on the free-space dipole), and the reason is worth
-# writing down: the Sommerfeld ground loads the feed region, so the same
-# formulation difference sits on a bigger, lossier admittance and shows less.
-# The offset is also within 3 % of the perfect-ground twins' 3.622 on the same
-# 10.3 m wire (0019/0043/0044), which says the ground model added almost none
-# of it — the gap is the feed's, as it is everywhere else in this table.
+# The ``GN 0`` rows are the SMALLEST offsets in the table (3.5 Ω on a 48 Ω row,
+# against 16 on the free-space dipole), and the reason is worth writing down:
+# the Sommerfeld ground loads the feed region, so the same formulation
+# difference sits on a bigger, lossier admittance and shows less.  The offset
+# is also within 3 % of the perfect-ground twins' 3.622 on the same 10.3 m wire
+# (0019/0043/0044), which says the ground model added almost none of it — the
+# gap is the feed's, as it is everywhere else in this table.
+#
+# The four ``GD`` rows carry that argument to its end.  0015/0020/0045 do not
+# merely sit NEAR 0019/0043/0044's row, they ARE it — 35.571 − 1.4223j captured
+# and 36.499 + 2.0789j served, the same |dZ| = 3.622 to fifteen digits — because
+# the MININEC-type ground solves over a perfect image and the two decks are one
+# solve wearing two ground cards.  A ``GD`` row that drifted off the
+# perfect-ground row would be the aliasing bug, visible right here in the table
+# before any dedicated gate ran.
 #
 # The peak-gain bar is |d| plus 25 % OR 0.05 dB, whichever is larger: the
 # printed cell is quantized at 0.01 dB, so a bar under a few hundredths would
@@ -135,11 +229,15 @@ FINITE_UNGATED_IDS = ("0011", "0030", "0033", "0034")
 Z_BAR = {
     "0010": 20.35,
     "0013": 14.27,
+    "0015": 4.53,
     "0019": 4.53,
+    "0020": 4.53,
     "0021": 4.40,
     "0035": 5.69,
     "0043": 4.53,
     "0044": 4.53,
+    "0045": 4.53,
+    "0046": 4.55,
     "0047": 4.40,
     "0048": 4.42,
 }
@@ -148,9 +246,12 @@ Z_BAR = {
 PEAK_BAR = {
     "0010": 0.12,
     "0013": 0.13,
+    "0015": 0.05,
+    "0020": 0.05,
     "0021": 0.05,
     "0035": 0.05,
     "0044": 0.05,
+    "0045": 0.05,
     "0047": 0.05,
 }
 
@@ -162,6 +263,12 @@ PEAK_BAR = {
 # 178 rows that are not the three -999.99 nulls: 0.06 dB, at theta = +-1 and
 # +-2 degrees, where the cut is falling through 30 dB in two degrees and the
 # printed cell is quantized at 0.01.  Plus 25 %.
+#
+# The same 0.06 on the ``GD`` cuts (0015/0020/0045), which is the number that
+# says the MININEC mode's far field is the RIGHT Fresnel-weighted image and not
+# just a plausible one: the currents underneath it are a different solve
+# (PEC, not Sommerfeld-loaded), so a cut that agreed at 178 angles by accident
+# would have had to do it twice over.
 PATTERN_BAR = 0.075
 
 # NEC's own floor for a gain cell, as a number rather than as the text the
@@ -176,22 +283,30 @@ _NULL_DB = -999.99
 CURRENT_BAR = {
     "0010": 0.028,
     "0013": 0.025,
+    "0015": 0.0129,
     "0019": 0.013,
+    "0020": 0.0129,
     "0021": 0.0123,
     "0035": 0.228,
     "0043": 0.013,
     "0044": 0.013,
+    "0045": 0.0129,
+    "0046": 0.0129,
     "0047": 0.0123,
     "0048": 0.0124,
 }
 CHARGE_BAR = {
     "0010": 0.086,
     "0013": 0.078,
+    "0015": 0.0777,
     "0019": 0.078,
+    "0020": 0.0777,
     "0021": 0.076,
     "0035": 0.186,
     "0043": 0.078,
     "0044": 0.078,
+    "0045": 0.0777,
+    "0046": 0.0778,
     "0047": 0.076,
     "0048": 0.077,
 }
@@ -201,6 +316,19 @@ CHARGE_BAR = {
 def served(cid: str) -> str:
     """The printout this engine writes for a capture's deck."""
     return render(deck_text(cid))
+
+
+@functools.lru_cache(maxsize=None)
+def corpus() -> dict[str, str]:
+    """Every one of the 49 captured decks, rendered once.
+
+    Two gates read the whole corpus — the served-id ladder and the catch-all
+    stub — and rendering it twice would double the slowest thing in this file
+    for nothing.  Cached here so the sweep happens once per session.
+    """
+    return {
+        entry["id"]: render(deck_text(entry["id"])) for entry in MANIFEST["captures"]
+    }
 
 
 def _z_of(text: str) -> complex:
@@ -495,7 +623,7 @@ def test_the_pattern_peak_lands_where_the_capture_puts_it(cid):
     assert abs(best_got.total_db - best_want.total_db) <= PEAK_BAR[cid]
 
 
-@pytest.mark.parametrize("cid", ("0021", "0047"))
+@pytest.mark.parametrize("cid", ("0015", "0020", "0021", "0045", "0047"))
 def test_the_finite_ground_elevation_cut_agrees_at_every_printed_angle(cid):
     """All 181 rows of the ``RP 0`` cut, not just its peak.
 
@@ -504,6 +632,11 @@ def test_the_finite_ground_elevation_cut_agrees_at_every_printed_angle(cid):
     direction — so agreeing at 181 angles is a statement about the MEDIUM in a
     way that agreeing at the peak is not.  Worst row is 0.06 dB, at
     theta = ±1° and ±2°, where the cut falls through 30 dB in two degrees.
+
+    Both finite modes are here, over the same medium and the same wire: 0021
+    and 0047 solve IN it, 0015/0020/0045 only reflect off it.  Same bar, same
+    worst row, same three nulls — the medium is doing the same job in both, and
+    what differs is the current it is doing it to.
 
     The three ``-999.99`` rows are skipped HERE and gated harder elsewhere:
     they are never masked, so the structure gate already compares them byte
@@ -736,8 +869,16 @@ def test_the_served_printout_carries_no_cache_preamble_of_its_own():
     pass either way if the served side quietly grew one too — a normalization
     applied to both sides cannot see a line it deletes.  So the served side is
     checked directly: none of the four block forms may appear anywhere in it.
+
+    The ``GD`` captures are in the loop too, and their own cache lines are the
+    reason the rule has to be about the FILE rather than about the mode: all
+    four of them print a STALE block and ``Will compute Sommerfeld-ground
+    tables`` over a run that computes none (module docstring, "One medium").
+    The engine checks that file before it knows what it is about to do; a seam
+    that emitted the block only for the modes that need it would still be
+    emitting a block it has no cache for.
     """
-    for cid in FINITE_IDS:
+    for cid in FINITE_IDS + MININEC_IDS:
         text = served(cid)
         assert drop_sommpd_blocks(text) == text
         for marker in ("SOMMPD", "GMPINO", "Sommerfeld integral tables"):
@@ -766,6 +907,281 @@ def test_the_epsilon_c_constant_is_the_engine_s_own_and_not_the_si_fold():
 
 
 # --------------------------------------------------------------------------
+# the MININEC rung's own facts
+# --------------------------------------------------------------------------
+#
+# A bare `GD` and a `GN 0` carry the same two media fields, print the same four
+# environment lines and mean two different grounds (module docstring of
+# `momwire.eznec._serve`, "One medium, two things to do with it").  Each gate
+# below is one way they differ or one way they deliberately do not, and each is
+# written so that the ALIASING bug — routing `GD` down the `GN 0` branch, or
+# down `GN 1`'s all the way to the pattern — fails it loudly.
+#
+# The two decks under test are the corpus's own, one per geometry class, which
+# is what the scored matrix's probe family 1 measured the mode on: 0045 stands
+# a wire END in the plane (the contact case) and 0029 hangs a dipole 9.144 m up
+# with a coax feedline (the elevated case, nothing touching the ground at all).
+
+_GD_CARDS = {
+    "0045": "GD 0,0,0,0,13.,.005,1.,0.",
+    "0029": "GD 0,0,0,0,20.,.0303,1.,0.",
+}
+
+# The measured |Z(GD) - Z(GN 0)| on each, this tree, 2026-08-20: 0045 answers
+# 36.499 + 2.0789j against 48.867 + 2.5635j, and 0029 25.697 - 13.306j against
+# 26.597 - 11.755j.  Gated as a FLOOR at half the measured value rather than as
+# a pin, because the gate's job is "these are two grounds" and not "this
+# difference never moves"; the aliasing bug puts it at exactly zero.
+_ALIAS_GAP = {"0045": 12.3775, "0029": 1.7932}
+
+
+def _swap_ground(cid: str, card: str) -> str:
+    """A ``GD`` deck with its ground line replaced, and nothing else."""
+    text = deck_text(cid)
+    assert _GD_CARDS[cid] in text, cid
+    return text.replace(_GD_CARDS[cid], card)
+
+
+def _run(text: str):
+    """One deck's :class:`RunData`, straight off the solve.
+
+    Not through the printout: the identity below is exact, and reading it back
+    out of an ``E12.4`` cell would only prove it to four digits.
+    """
+    return _serve.serve(parse_nec5(text))
+
+
+@pytest.mark.parametrize("cid", sorted(_GD_CARDS))
+def test_a_bare_gd_is_the_perfect_ground_solve_wearing_another_card(cid):
+    """The rung's headline identity, on both geometry classes, at ``==``.
+
+    NEC-5's MININEC-type ground solves its currents over a PERFECT image and
+    spends its medium entirely on the far field, so ``Z`` under ``GD`` IS ``Z``
+    under ``GN 1``: the engine answers 35.571 − j1.4223 both ways on the
+    contact vertical and 89.933 + j52.053 both ways on an elevated half-wave
+    (scored matrix, probe family 1).
+
+    Gated at EXACT equality rather than inside an envelope, and the difference
+    matters.  This seam does not APPROXIMATE the identity, it inherits it:
+    ``_solver_for`` hands ``GD`` the same lone ``ground_z=0.0`` kwarg it hands
+    ``GN 1``, so the two runs are the same constructor call on the same mesh
+    and every solved float in them is the same float.  ``==`` on the whole
+    dataclass is therefore the honest bar, and it is also the sharpest — a
+    ``GD`` that had picked up so much as a rounding difference would have
+    picked up a code path.
+
+    What must NOT be equal is here too, because an identity with nothing on the
+    other side of it would be satisfied by a seam that ignored the ground card
+    entirely: the environment block is the finite one and not ``PERFECT
+    GROUND``, and the pattern is the medium's rather than the image's.
+    """
+    gd = _run(deck_text(cid))
+    pec = _run(_swap_ground(cid, "GN 1"))
+
+    assert gd.sources == pec.sources
+    assert gd.currents == pec.currents
+    assert gd.charges == pec.charges
+    assert gd.power == pec.power
+    assert gd.network_excitation == pec.network_excitation
+
+    assert gd.environment == "FINITE GROUND.  SOMMERFELD SOLUTION"
+    assert pec.environment == "PERFECT GROUND"
+    assert gd.ground is not None and pec.ground is None
+    (gd_pattern,), (pec_pattern,) = gd.patterns, pec.patterns
+    worst = max(
+        abs(a.total_db - b.total_db)
+        for a, b in zip(gd_pattern.rows, pec_pattern.rows)
+        if a.total_db > -900 and b.total_db > -900
+    )
+    # 23.3 dB apart on 0045, 7.7 on 0029 — the medium is doing all of it.
+    assert worst > 5.0, f"{cid}: patterns only {worst:.2f} dB apart"
+
+
+@pytest.mark.parametrize("cid", sorted(_GD_CARDS))
+def test_a_bare_gd_is_not_the_sommerfeld_solve_of_the_same_medium(cid):
+    """The other half of the identity, and the trap it exists to kill.
+
+    ``GD`` and ``GN 0`` differ only in their mnemonic — same ε, same σ, same
+    printed cells, same banner — so a seam that read the medium and forgot to
+    ask which card carried it would route ``GD`` into the Sommerfeld solve and
+    answer with a straight face.  Measured on the engine, that is 34 % wrong in
+    R on the contact vertical (35.571 against 47.789); measured on this tree it
+    is the two gaps in ``_ALIAS_GAP``.
+
+    Both geometry classes are gated because the trap is not equally visible in
+    them: the elevated dipole's two answers sit 1.8 Ω apart where the contact
+    vertical's sit 12.4, and a gate written only on the loud case would let a
+    half-fixed routing through.
+    """
+    gd = _run(deck_text(cid)).sources[0].impedance
+    somm = _run(_swap_ground(cid, "GN" + _GD_CARDS[cid][2:])).sources[0].impedance
+    gap = abs(gd - somm)
+    assert gap > 0.5 * _ALIAS_GAP[cid], f"{cid}: GD and GN 0 only {gap:.4f} Ohm apart"
+
+
+def _environment_block(text: str) -> list[str]:
+    """The ``ANTENNA ENVIRONMENT`` section's lines, heading included.
+
+    Ends at the next section heading; trailing blanks are dropped so that the
+    comparison is about the block and not about how much air follows it.
+    """
+    lines = text.split("\n")
+    start = next(i for i, line in enumerate(lines) if "ANTENNA ENVIRONMENT" in line)
+    end = next(i for i in range(start + 1, len(lines)) if "- - -" in lines[i])
+    while end > start and not lines[end - 1].strip():
+        end -= 1
+    return lines[start:end]
+
+
+def test_the_two_finite_grounds_print_one_environment_block_byte_for_byte():
+    """The banner lies, and the renderer lies with it.
+
+    0045 and 0047 are one wire over one medium at one frequency under two
+    different ground modes, and their ``ANTENNA ENVIRONMENT`` sections are the
+    same four lines to the byte — ``FINITE GROUND.  SOMMERFELD SOLUTION``
+    included, over a run that computes no Sommerfeld anything.  The captures
+    say so and the seam reproduces it, which is the whole obligation: the block
+    is a card image plus a medium, not a report of what the engine did.
+
+    The rule that follows is the one worth guarding.  Nothing anywhere in this
+    tree may read that banner back as a mode signal, and this gate is the
+    reason it cannot: the two modes are byte-identical exactly here.  What
+    tells them apart in a captured printout is the MATRIX TIMING cell (0045's
+    ``FILL= 0.000 SEC.`` against 0047's ``0.094``), which this seam drops as a
+    property of the machine, and 0047's ``Sommerfeld integral tables written in
+    previous run`` postamble, which is a cache report and is normalized away.
+    """
+    assert _environment_block(printout_text("0045")) == _environment_block(
+        printout_text("0047")
+    )
+    served_block = _environment_block(served("0045"))
+    assert served_block == _environment_block(served("0047"))
+    assert served_block == _environment_block(printout_text("0045"))
+    assert served_block[2].strip() == "FINITE GROUND.  SOMMERFELD SOLUTION"
+
+
+def test_the_two_finite_grounds_answer_patterns_that_differ_by_the_captured_amount():
+    """One byte of deck, 178 rows of consequence — and the seam reproduces it.
+
+    0045 and 0047 print elevation cuts that are 1.28-1.29 dB apart at every one
+    of the 178 rows that are not the three ``-999.99`` nulls, the MININEC mode
+    hotter throughout.  The SHAPE is common (both are the same medium's
+    Fresnel-weighted image, and the difference varies by less than the printed
+    cell's own 0.01 dB quantization across a 90° sweep); what moved is the
+    LEVEL, because a PEC structure keeps the current a lossy ground would have
+    loaded and the pattern is normalized by an input power that moved with it.
+
+    Gating the DIFFERENCE rather than the two cuts is what makes this the
+    anti-aliasing gate on the far-field side: the two cuts are each already
+    pinned against their own capture, but a seam that answered ``GN 0`` for
+    ``GD`` would print two identical cuts and a difference of 0.00 dB.  Worst
+    row here is 0.02 dB against the captured difference.
+    """
+    cut = {
+        name: {row.theta_deg: row.total_db for row in extract(text).patterns[0].rows}
+        for name, text in (
+            ("cap_gd", printout_text("0045")),
+            ("cap_gn", printout_text("0047")),
+            ("gd", served("0045")),
+            ("gn", served("0047")),
+        )
+    }
+    angles = [
+        theta
+        for theta in sorted(cut["cap_gd"], reverse=True)
+        if cut["cap_gd"][theta] > -900 and cut["cap_gn"][theta] > -900
+    ]
+    assert len(angles) == 178
+
+    captured = [cut["cap_gd"][t] - cut["cap_gn"][t] for t in angles]
+    got = [cut["gd"][t] - cut["gn"][t] for t in angles]
+    assert min(captured) >= 1.27 and max(captured) <= 1.30
+    # The floor is what an aliased GD fails: it would put every row at 0.00.
+    assert min(got) > 1.0
+    worst = max(abs(a - b) for a, b in zip(captured, got))
+    assert worst <= 0.025, f"worst row {worst:.4f} dB"
+
+
+def test_the_reflection_and_the_sommerfeld_spelling_are_one_far_field():
+    """``GD`` names its far ground ``refl`` and ``GN 0`` names it
+    ``sommerfeld``, and the two names reach the same arithmetic.
+
+    Both fall through to ``_image_coeffs`` in the portal's ``_far_moments`` —
+    one branch, bit-identical output — so the choice buys nothing but a name,
+    which is why the seam spends it on the truth: under ``GD`` no Sommerfeld
+    integral answered anything, the currents came off a PEC image, and the
+    medium's only job was to weight the reflection.  Calling that a Sommerfeld
+    far field would be the banner's lie repeated where nobody forced it.
+
+    Gated so that the naming decision stays a naming decision.  If the two
+    kinds ever stop being one path, this fails here rather than silently
+    changing what every ``GD`` deck in the corpus answers.
+    """
+    mid = np.array([[0.0, 0.0, 1.0], [0.0, 0.0, 3.0], [0.5, 0.25, 2.0]])
+    moment = np.array(
+        [[0.0, 0.0, 1.0 + 0j], [0.0, 0.0, 0.5 - 0.25j], [0.1 + 0.2j, 0.0, 0.0]]
+    )
+    theta = np.radians(np.array([90.0, 63.0, 30.0, 1.0, -45.0]))
+    phi = np.radians(np.array([0.0, 37.0]))
+    answers = [
+        _far_moments(mid, moment, 2.0 * math.pi / 42.8286, theta, phi, ground, 0.0, 7e6)
+        for ground in (Ground("refl", 13.0, 0.005), Ground("sommerfeld", 13.0, 0.005))
+    ]
+    for a, b in zip(*answers):
+        assert np.array_equal(a, b)
+
+    gd, gn = parse_nec5(deck_text("0045")), parse_nec5(deck_text("0047"))
+    medium = _serve._medium(gd.ground, 42.8286)
+    assert _serve._far_ground(gd, medium).kind == "refl"
+    assert (
+        _serve._far_ground(gn, _serve._medium(gn.ground, 42.8286)).kind == "sommerfeld"
+    )
+
+
+def test_the_negative_conductivity_convention_is_read_off_the_gd_flag():
+    """``GD 0,…,-38.9052,…`` and ``GD 0,…,.0303,…`` are ONE ground at 14 MHz.
+
+    The same fold ``GN 0`` gets, reached the other way round.  ``GN 0`` carries
+    no flag, so ``_medium`` reads the SIGN of its sixth field; the ``GD``
+    record carries ``sigma_sets_im_epsc``, which the parser sets from exactly
+    that test, so the flag is what is read here.  Two spellings of one
+    convention, and this gate is what says the seam did not implement it twice.
+
+    0029's own medium supplies the numbers: 20/0.0303 at 14 MHz folds to
+    Im εc = −38.905217, and the negative spelling of it has to come back as the
+    same medium, the same impedance and the same cut.
+
+    The tolerances are what the CARD can carry and no tighter, which is the
+    honest reading of a convention that travels through a decimal field.  The
+    ``E12.5`` cell a printout shows is six significant figures, so a deck
+    written from one — ``-38.9052`` — recovers σ to 4.5e-7 relative and no
+    better; pinning that at machine precision would be pinning the
+    transcription rather than the fold.  Written with the digits the arithmetic
+    actually has, the same test closes at 8e-9, two orders tighter, which is
+    what says the residual is the card's and not the code's.
+
+    The impedance is EXACTLY equal on both spellings, and that is not slack in
+    the gate — it is this rung's own identity showing through from the other
+    side.  Under ``GD`` the medium never reaches the solve at all, so no
+    spelling of σ can move a single current; the only place the last digits can
+    land is the pattern, and they land 2e-7 dB into it.
+    """
+    positive = _run(deck_text("0029"))
+    printed = _run(_swap_ground("0029", "GD 0,0,0,0,20.,-38.9052,1.,0."))
+    exact = _run(_swap_ground("0029", "GD 0,0,0,0,20.,-38.905217,1.,0."))
+    assert positive.ground.eps_c.imag == pytest.approx(-38.905217, abs=5e-7)
+    for negative, tolerance in ((printed, 1e-6), (exact, 1e-7)):
+        assert negative.ground.eps_r == positive.ground.eps_r
+        assert negative.ground.sigma == pytest.approx(
+            positive.ground.sigma, rel=tolerance
+        )
+        assert negative.sources[0].impedance == positive.sources[0].impedance
+        (want,), (got,) = positive.patterns, negative.patterns
+        for a, b in zip(want.rows, got.rows, strict=True):
+            assert a.total_db == pytest.approx(b.total_db, abs=1e-4)
+
+
+# --------------------------------------------------------------------------
 # gate 3 — the refusals
 # --------------------------------------------------------------------------
 
@@ -774,27 +1190,21 @@ def test_the_epsilon_c_constant_is_the_engine_s_own_and_not_the_si_fold():
 # that carries BOTH is refused for its table layout instead, and that refusal
 # is gated in ``test_eznec_networks.py`` beside the rest of the network unit.
 #
-# 0031 is the corpus's own deck with its ground card swapped for `GN 1`, and it
-# has to be: every captured multi-`EX` deck stands over a bare `GD`, so as
-# written it is refused a rung earlier and its own card never gets a hearing.
-# The card under test is the capture's verbatim (four phased `EX 4` rows); only
-# the ground line moved.  0022 left this list with the ground rung — its
-# `GN 0` is served now, so its `NE 0,1,1,1,…` is heard exactly as EZNEC wrote
-# it, which is the point of the ordering test below.
-_ON_PERFECT_GROUND = ("0031",)
-
+# Every deck here is now the capture VERBATIM, which it was not before.  0022
+# left this list with the `GN 0` rung — its ground is served, so its
+# `NE 0,1,1,1,…` is heard exactly as EZNEC wrote it — and 0031 stopped needing
+# its ground card swapped when the `GD` rung landed: as captured it is four
+# phased `EX 4` rows over a bare `GD`, and until U2 the ground answered first
+# and the multi-`EX` card never got a hearing.  A refusal table with no
+# hand-edited decks left in it is what a finished ground ladder looks like.
 REFUSALS = {
-    "0045": "GD asks for the MININEC-type ground",
     "0031": "this deck carries 4 EX cards",
     "0022": "NE (near electric field) is not served at this seam yet",
 }
 
 
 def _refusal_deck(cid: str) -> bytes:
-    text = (FIXTURE_DIR / capture(cid)["deck"]).read_bytes().decode("latin-1")
-    if cid in _ON_PERFECT_GROUND:
-        text = re.sub(r"^G[ND] 0,.*$", "GN 1", text, flags=re.MULTILINE)
-    return text.encode("latin-1")
+    return (FIXTURE_DIR / capture(cid)["deck"]).read_bytes()
 
 
 @pytest.mark.parametrize("cid,reason", sorted(REFUSALS.items()))
@@ -853,10 +1263,44 @@ def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
     a sentence that names its card, so the stub reason — which said only that
     the dialect was unserved — must appear nowhere.
     """
-    for path in sorted((FIXTURE_DIR / "decks").glob("*.nec")):
-        text = path.read_bytes().decode("latin-1")
-        assert "NEC-5 DIALECT NOT YET SERVED" not in render(text), path.name
-        assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in render(text), path.name
+    assert len(corpus()) == 49
+    assert sorted(entry["deck"] for entry in MANIFEST["captures"]) == sorted(
+        f"decks/{path.name}" for path in (FIXTURE_DIR / "decks").glob("*.nec")
+    )
+    for cid, text in corpus().items():
+        assert "NEC-5 DIALECT NOT YET SERVED" not in text, cid
+        assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in text, cid
+
+
+def test_the_corpus_ladder_stands_where_u2_left_it():
+    """The served-id SET, pinned — 43 of the 49 captured decks.
+
+    A rung that lands moves decks across this line and a regression moves them
+    back, and neither should be able to happen quietly: the set is written out
+    id by id so that changing it is an edit somebody made on purpose, with the
+    new number in the diff beside the old one.  #504 U1 took it from 20 to 27
+    and U2 from 27 to 43 — the biggest single step of the arc, because the bare
+    ``GD`` is the corpus's second-most-common ground and it carries the feed
+    systems (nine 4-squares, two cardioids, a coax-fed dipole) with it.
+
+    The six that are left name three different cards and no ground:
+
+    * 0000, 0023, 0025 — ``TL`` and ``NT`` in one deck.  This is the entry that
+      moved: all three stand over a ``GD``, so until U2 they were told their
+      ground was unserved, and now they are told the truth, which is that the
+      ``NETWORK DATA`` table has no observed layout carrying both card types.
+    * 0031, 0032 — phased multi-``EX``.  0031 stands over a ``GD`` too and now
+      reaches its own card as captured, which is why the refusal table above no
+      longer hand-edits it.
+    * 0022 — ``NE``, the near field, which no rung of this arc renders.
+    """
+    served_ids = tuple(
+        cid for cid, text in sorted(corpus().items()) if "NEC ERROR" not in text
+    )
+    assert served_ids == SERVED_AFTER_U2
+    assert len(served_ids) == 43
+    refused = sorted(set(corpus()) - set(served_ids))
+    assert refused == ["0000", "0022", "0023", "0025", "0031", "0032"]
 
 
 @pytest.mark.parametrize("cid", SERVED_UNGATED_IDS)
@@ -905,6 +1349,53 @@ def test_the_ungated_finite_ground_captures_answer_with_finite_numbers(cid):
     assert all(math.isfinite(row.total_db) for row in block.rows)
     assert math.isfinite(abs(data.sources[0].impedance))
     assert data.ground is not None
+
+
+@pytest.mark.parametrize("cid", MININEC_UNGATED_IDS)
+def test_the_ungated_mininec_captures_answer_with_finite_numbers(cid):
+    """The twelve decks the ``GD`` rung brought in with no printout to gate.
+
+    The same liveness claims the ``GN 0`` fall-ins get, on decks that are worth
+    a good deal more: these are the corpus's FEED SYSTEMS — W7EL's 4-square
+    with six ``TL`` cards run off a three-pin virtual anchor 100 λ from the
+    antenna (0001-0009, 0024), the Cardioid feed system (0026), and a coax-fed
+    dipole (0029).  Every trap this arc has met at once: node addressing, the
+    ``1.E+10`` pin idiom, the anchor, a network over a real ground.
+
+    What is claimed is only what can be: they answer rather than refuse, under
+    the finite banner, with a medium, with every printed cell a number, and
+    with the ``RP`` row count the card asked for.  A capture errand for the
+    next Windows session — and the numbers below are then a byte gate away.
+
+    The 100 λ anchor is the reason to say the timing out loud: under ``GD`` the
+    fill is PEC, so the anchor is ordinary geometry and these twelve render in
+    about two seconds all told.  The same decks over ``GN 0`` would be building
+    a Sommerfeld grid across 100 λ of extent (momwire#157, priced as a hang in
+    the scored matrix), which is what makes "route ``GD`` to the Sommerfeld
+    solve" the kind of aliasing bug that reports itself as the machine locking
+    up rather than as a wrong number.
+    """
+    text = render(deck_text(cid))
+    assert "NEC ERROR" not in text
+    assert "FINITE GROUND.  SOMMERFELD SOLUTION" in text
+    for token in ("NAN", "nan", "INF", "Infinity", "*****E"):
+        assert token not in text.replace(" ***** INPUT LINE", ""), token
+    data = extract(text)
+    assert data.ground is not None
+    assert math.isfinite(abs(data.sources[0].impedance))
+    assert all(math.isfinite(row.magnitude) for row in data.currents)
+    assert all(math.isfinite(row.magnitude) for row in data.charges)
+    # The row count is the RP card's own N_THETA * N_PHI, or no block at all
+    # for the eight XQ-only frequency steps.
+    requests = [
+        request
+        for request in parse_nec5(deck_text(cid)).requests
+        if isinstance(request, Nec5FarFieldRequest)
+    ]
+    assert len(data.patterns) == len(requests)
+    for block, request in zip(data.patterns, requests, strict=True):
+        assert len(block.rows) == request.n_theta * request.n_phi
+        assert all(math.isfinite(row.total_db) for row in block.rows)
 
 
 def test_the_favored_wire_carries_physics_at_a_five_wire_junction():

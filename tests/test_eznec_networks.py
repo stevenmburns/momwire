@@ -30,7 +30,6 @@ number is pinned at its measured difference plus 25 %.
 from __future__ import annotations
 
 import functools
-import re
 from pathlib import Path
 
 import pytest
@@ -553,18 +552,29 @@ def test_the_two_decks_whose_source_stands_on_a_connection_point_read_200_percen
 # --------------------------------------------------------------------------
 
 
-def test_a_network_deck_over_an_unserved_ground_refuses_at_the_ground():
-    """0001 — the 4-square with six ``TL`` cards over a bare ``GD`` — is the
-    deck the refusal ORDER exists for.
+def test_the_deck_the_refusal_order_existed_for_now_falls_all_the_way_through():
+    """0001 — the 4-square with six ``TL`` cards over a bare ``GD`` — used to
+    be the deck the refusal ORDER existed for, and is now the deck that says
+    the ladder was climbed.
 
-    Its networks are served now; its ground is not.  Naming the networks here
-    would send the reader after the one thing about the deck that is fine, so
-    grounds come first in the ladder and this pins it: ten of the corpus's
-    forty-nine decks are this shape.
+    Its networks were served by U5 and its ground by #504 U2, so nothing about
+    it refuses any more: six ``TL`` rows, a driven virtual anchor 100 λ out,
+    three ``1.E+10`` pins and a 361-point azimuth cut over 13/0.005 earth.  Ten
+    of the corpus's forty-nine decks are this shape and all ten now answer.
+
+    The order itself did not change and did not need to; what changed is that
+    there is no ground rung left to fall through.  The test below is where the
+    ordering is still visible.
     """
     printout = render(deck_text("0001"))
-    assert "GD asks for the MININEC-type ground" in printout
-    assert "ANTENNA INPUT PARAMETERS" not in printout
+    assert "NEC ERROR" not in printout
+    assert "- - - ANTENNA INPUT PARAMETERS - - -" in printout
+    assert "FINITE GROUND.  SOMMERFELD SOLUTION" in printout
+    data = extract(printout)
+    assert len(data.networks) == 6
+    assert len(data.loads) == 3
+    (block,) = data.patterns
+    assert len(block.rows) == 361
 
 
 def test_a_deck_carrying_both_card_types_refuses_for_its_table_and_not_its_physics():
@@ -572,15 +582,20 @@ def test_a_deck_carrying_both_card_types_refuses_for_its_table_and_not_its_physi
 
     The ``NETWORK DATA`` table has one column heading per card type and no
     captured printout shows a table carrying both, so the honest answer is a
-    sentence rather than a guessed heading.  The corpus's three mixed decks
-    (0000, 0023, 0025) all stand over a ``GD`` ground and never reach this
-    rung; the deck under test is 0000 with its ground card swapped, which is
-    how the refusal gets a hearing at all.
+    sentence rather than a guessed heading.
+
+    0000 is the capture VERBATIM here, which it was not before.  The corpus's
+    three mixed decks (0000, 0023, 0025) all stand over a bare ``GD``, so until
+    #504 U2 they were told their GROUND was unserved and this refusal had to be
+    given a hearing by swapping the card.  Now the ground is served and the
+    mixed table is the first rung they fall through — which is the refusal
+    order doing exactly its job, one rung further down than it used to.
     """
-    mixed = re.sub(r"^GD .*$", "GN -1", deck_text("0000"), flags=re.MULTILINE)
-    printout = render(mixed)
+    printout = render(deck_text("0000"))
     assert "this deck carries TL and NT cards together" in printout
     assert "ANTENNA INPUT PARAMETERS" not in printout
+    # And the reason names the table rather than the ground it stands over.
+    assert "GD" not in printout.split(" ***** NEC ERROR - ")[1]
 
 
 def test_two_addresses_at_a_five_wire_junction_refuse_rather_than_guess():
