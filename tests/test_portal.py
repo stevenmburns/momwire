@@ -1142,6 +1142,7 @@ NETWORK_FIXTURES = (
     "dipole_nt_all_zero",
     "dipole_ld_nt_colocated",
     "dipole_ex6_gyrator",
+    "dipole_nt_after_xq",
 )
 
 
@@ -1174,7 +1175,11 @@ def test_a_network_deck_prints_both_blocks_in_the_oracle_order(name):
         "STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS",
         "--------- ANTENNA INPUT PARAMETERS ---------",
     ]
-    at = [text.index(b) for b in banners]
+    # LAST occurrence, not first: `dipole_nt_after_xq` runs two groups and only
+    # the second has a network, so its first ANTENNA INPUT PARAMETERS precedes
+    # every network banner in the file. Taken per group the order holds, and
+    # the last of each is the last group's.
+    at = [text.rindex(b) for b in banners]
     assert at == sorted(at), f"{name}: blocks out of order"
 
 
@@ -1286,6 +1291,91 @@ def test_an_antenna_only_deck_prints_neither_block():
     text = run_deck(fixture_deck("dipole_free_space"))[0]
     assert "NETWORK DATA" not in text
     assert "STRUCTURE EXCITATION DATA" not in text
+
+
+# The network-free twin of `dipole_nt_after_xq`: the same two dipoles, the same
+# source and frequency, and no network card anywhere — so no gap is cut at the
+# far endpoint at all. Written here rather than captured because its whole
+# purpose is to be compared against a group of another deck.
+_AFTER_XQ_CONTROL = (
+    "CE control\n"
+    "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
+    "GW 2 9 1.0 0. -2.5 1.0 0. 2.5 0.001\n"
+    "GE 0\nEX 0 1 5 0 1.\nFR 0 1 0 0 30. 0\nXQ\n"
+)
+
+
+def _aip_row_lines(text: str) -> list[str]:
+    """Every ANTENNA INPUT PARAMETERS data row VERBATIM, in printout order.
+
+    The sibling ``_aip_rows`` below parses the same rows into floats; this one
+    keeps the bytes, because the one thing it is used for is a byte comparison.
+    """
+    rows, armed = [], False
+    for line in text.splitlines():
+        if "ANTENNA INPUT PARAMETERS" in line:
+            armed = True
+        elif armed and len(line.split()) == 11 and line.split()[0].isdigit():
+            rows.append(line)
+            armed = False
+    return rows
+
+
+def test_a_network_read_after_an_execute_card_is_scoped_to_the_groups_after_it():
+    """Retention runs FORWARD from the card and not backward.
+
+    ``dipole_nt_after_xq`` runs the bare antenna, attaches an ``NT``, and runs
+    again — one deck, two answers, in that order, which is what nec2c prints.
+    No single-group deck can express this rule: every other network fixture
+    states its cards before the first execute card, so an engine that ignored
+    the scoping entirely would answer all of them correctly and both of this
+    one's groups wrong.
+    """
+    text = run_deck(fixture_deck("dipole_nt_after_xq"))[0]
+    before, after = text.split("DATA CARD No:   4 NT", 1)
+    assert "NETWORK DATA" not in before, "the group that ran first got a network"
+    assert "STRUCTURE EXCITATION DATA" not in before
+    assert "NETWORK DATA" in after, "the group after the card got none"
+    assert "STRUCTURE EXCITATION DATA" in after
+
+    rows = _aip_row_lines(text)
+    assert len(rows) == 2, rows
+    assert rows[0].split()[4:6] != rows[1].split()[4:6], (
+        "both groups answered the same current — the card moved nothing"
+    )
+
+
+def test_the_group_before_the_network_card_reproduces_the_control_exactly():
+    """And it reproduces it to the BYTE, which is the stronger claim.
+
+    The port set is the deck's, not the group's: the ``NT``'s far endpoint cuts
+    a gap at segment 14 for the whole run, including the group that has no
+    network. That gap has to be invisible there — an undriven, unloaded,
+    un-networked port is pinned at zero volts and collapses to a plain shorted
+    segment — and "invisible" is testable against a deck where the gap was
+    never cut at all.
+
+    Bit-identical rather than within-tolerance on purpose: this is the same
+    matrix answering the same question, so anything less than equality would
+    mean the gap is perturbing the structure, and a tolerance would hide how
+    much.
+    """
+    ours = _aip_row_lines(run_deck(fixture_deck("dipole_nt_after_xq"))[0])[0]
+    control = _aip_row_lines(run_deck(_AFTER_XQ_CONTROL)[0])[0]
+    assert ours == control
+
+
+def test_the_network_card_arms_the_next_execute_card_without_refilling():
+    """An ``NT`` between two execute cards re-arms execution but rebuilds
+    nothing: the oracle prints no FREQUENCY / LOADING / ENVIRONMENT / MATRIX
+    TIMING preamble for the second group, the way a bare second ``XQ`` under
+    one ``FR`` prints none. Pinned because the alternative — treating the card
+    as an operator change — is a plausible reading that would insert a whole
+    preamble block into the middle of this printout."""
+    text = run_deck(fixture_deck("dipole_nt_after_xq"))[0]
+    _before, after = text.split("DATA CARD No:   4 NT", 1)
+    for banner in ("FREQUENCY :", "MATRIX TIMING", "STRUCTURE IMPEDANCE LOADING"):
+        assert banner not in after, f"the NT group refilled: {banner}"
 
 
 def test_a_network_card_after_the_execute_card_answers_without_it():

@@ -258,8 +258,9 @@ def test_corpus_is_the_whole_reference_set():
     importer implements both cards too, and unit 1 ported them from it; 51
     since momwire#456 phase C captured four network decks (a zero-length line,
     an all-zero ``NT``, an ``LD``/``NT`` pair on one segment, and the ``EX 6``
-    gyrator idiom)."""
-    assert len(CORPUS) == 51
+    gyrator idiom) and a fifth, `dipole_nt_after_xq`, for network retention at
+    the answer."""
+    assert len(CORPUS) == 52
 
 
 # The corpus is 47 clean exported decks: measured, not one of them has an
@@ -386,6 +387,7 @@ _NETWORK_DECKS = {
     "dipole_nt_all_zero",
     "dipole_ld_nt_colocated",
     "dipole_ex6_gyrator",
+    "dipole_nt_after_xq",
 }
 
 # The one deck still refused, and by FIELD rather than by name: a second
