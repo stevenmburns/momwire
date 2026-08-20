@@ -220,7 +220,7 @@ fails.
     and composes the network on top of the admittance that results. The two
     orders are a series and a parallel connection of the same two elements and
     they are far apart — stamping the load as a second branch across the port
-    instead moves this row to 20 %, so the 0.88 % is load-bearing.
+    instead moves this row to 19 %, so the 0.88 % is load-bearing.
 
 (m) ``dipole_nt_all_zero``'s far endpoint is an OPEN gap, and both engines
     print round-off in its excitation row (nec2c 1.5e-17 A against ours
