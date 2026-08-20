@@ -23,6 +23,23 @@ from __future__ import annotations
 
 from ._cards import Card, DeckError, parse_card, tokenize
 from ._nec2 import parse_nec2
+from ._nec5 import (
+    Nec5Deck,
+    Nec5ExecuteRequest,
+    Nec5FarFieldRequest,
+    Nec5FreeSpace,
+    Nec5Load,
+    Nec5MininecGround,
+    Nec5NearFieldRequest,
+    Nec5Network,
+    Nec5Node,
+    Nec5PerfectGround,
+    Nec5SommerfeldGround,
+    Nec5Source,
+    Nec5TransmissionLine,
+    Nec5Wire,
+    parse_nec5,
+)
 from ._solver import (
     BASES,
     BuiltSolver,
@@ -65,6 +82,22 @@ __all__ = [
     "PrintControl",
     "ExecuteGroup",
     "NetworkCard",
+    # the nec5 dialect, which parses into its OWN model (see below)
+    "parse_nec5",
+    "Nec5Deck",
+    "Nec5Node",
+    "Nec5Wire",
+    "Nec5FreeSpace",
+    "Nec5PerfectGround",
+    "Nec5SommerfeldGround",
+    "Nec5MininecGround",
+    "Nec5Source",
+    "Nec5Load",
+    "Nec5TransmissionLine",
+    "Nec5Network",
+    "Nec5FarFieldRequest",
+    "Nec5NearFieldRequest",
+    "Nec5ExecuteRequest",
     # what build_solver returns, and the roster it chooses from
     "BuiltSolver",
     "PortPlan",
@@ -77,9 +110,16 @@ __all__ = [
     "DeckError",
 ]
 
-# One entry per shipped dialect.  The mapping is the error message's source
-# as well as the dispatch table, so a new front-end cannot be added without
-# the refusal learning its name.
+# One entry per shipped dialect THAT PARSES INTO `DeckModel`.  The mapping is
+# the error message's source as well as the dispatch table, so a new
+# front-end cannot be added without the refusal learning its name.
+#
+# ``nec5`` is deliberately absent.  NEC-5's connection cards address nodes
+# through a favored wire, which `DeckModel` has no vocabulary for and must
+# not be given one by aliasing (the W7EL gate: two addresses naming one
+# geometric point are NOT interchangeable), so :func:`parse_nec5` returns its
+# own :class:`Nec5Deck` and is called by name rather than through ``parse``,
+# whose contract is a `DeckModel`.
 _DIALECTS = {"nec2": parse_nec2}
 
 
