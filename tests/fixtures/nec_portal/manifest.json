@@ -339,6 +339,55 @@
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     },
     {
+      "name": "mininec_gd_reset_by_gn_rp0",
+      "returncode": 253,
+      "deck_sha256": "6fba04168d2cb812e35d487f9edff5f4ae9aef9dfba2796e5b654e7a5f895ff2",
+      "out_sha256": "f24ea6326bbb8982e53e60df407b77aed615d5da96d0de3f71beddfb60ca73ac",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "mininec_gd_without_gn_rp0",
+      "returncode": 253,
+      "deck_sha256": "68c11a3fd65c9e87ab0356922760d1623f71668c7518890b1f9b1045065ca0b4",
+      "out_sha256": "aecb4384c194b966e960082e7aafa858db8d6cc576bf4d19d63afe9cd337e36f",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "mininec_gp80_seam",
+      "returncode": 253,
+      "deck_sha256": "3b74b128a60f5bc5cd722a3563b6127d9c5d85c1c32a46dd51a1eeaeb49bc3d6",
+      "out_sha256": "36122c85099a401dcc35c782ca51ca9917c85d7ceeff6e7cc0964de0597bd2aa",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "mininec_vertical_gd2_rp0",
+      "returncode": 253,
+      "deck_sha256": "96e11b241c3c8c9a44f53f2f71d6adbc5299e9713c022ddd48dd8650949c3ff2",
+      "out_sha256": "e79fb93b4395657d5e2ae6090b3a14ddf8e1830f8fa7098d47e4b62f69544f38",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "mininec_vertical_rp0",
+      "returncode": 253,
+      "deck_sha256": "589704c217df7ac84d2bec1abad9e2c4e79bb6641d94b4b3b882eee73a5711c8",
+      "out_sha256": "2d17a8b75f6e6b51e40ad987dec6a1e5dd04dd02dd1a8adbca921140ee29565e",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "mininec_vertical_rp3_ch",
+      "returncode": 253,
+      "deck_sha256": "1fde3fcc8beb4a105a0fae1034cab0a61692cfb37f57ea2625fe56395abe66ab",
+      "out_sha256": "025583b8fa03d369365e72c54e16bc84ed59d528bcee2a81ecbbe8965eb3ae30",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "mininec_vertical_rp3_clt",
+      "returncode": 253,
+      "deck_sha256": "e0e53de6192f8026e3aabf4be777c7dfaeef2c5cc72bbba6a55bbfbdfac4f193",
+      "out_sha256": "d083df9be9c330beeb9ccfaa384bb73d19b6755ad2e301047c2574629243fc0d",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
       "name": "resident_two_decks",
       "returncode": 253,
       "deck_sha256": "d69635af3681c91eca822dc961edc5105fa17ee8ee30221d5250f277c710becc",

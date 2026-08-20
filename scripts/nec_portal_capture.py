@@ -713,6 +713,166 @@ def _synthetic_decks() -> dict[str, str]:
         "XQ\n"
     )
 
+    # ------------------------------------------------------------------
+    # The MININEC-type ground idiom (momwire#487) — a GD in force under a
+    # GN 1, which is how BOTH frontends spell "perfect ground for the
+    # currents, real ground for the far field"
+    # ------------------------------------------------------------------
+    #
+    # 4nec2 manufactures the pair from its own `GN 3` and EZNEC writes it
+    # directly. NEC-2 has no such ground: the second-medium record reaches an
+    # answer only through `RP`'s cliff modes, so under `RP 0` or a
+    # request-less execute the oracle runs the deck as PLAIN PERFECT GROUND
+    # and the `GD` echo in the DATA CARD listing is its only trace. Measured
+    # on this oracle 2026-08-20 (momwire#456 ws2 C0) and confirmed against
+    # 4nec2's own bundled NEC-2D engine on the GP80 capture below.
+    #
+    # These decks are the ground truth for that claim, captured while momwire
+    # still REFUSES the idiom under a request-less/`RP 0` execute
+    # (`_refuse_the_mininec_ground_idiom`, momwire#458) — the first three
+    # below are refusal fixtures the way `dipole_gd_second_medium` is, and
+    # the last four are answered today and byte-compared today.
+    #
+    # The vertical is the idiom's own geometry rather than the corpus's
+    # elevated dipole: a quarter wave standing ON the ground plane at 30 MHz,
+    # which is the case the idiom exists for (it keeps the perfect-ground
+    # feed impedance instead of the unpredictable one a ground-contacting
+    # wire gets over a finite ground). `GE 1` and not `GE -1`: the flag
+    # decides whether the current expansion is interpolated into the image,
+    # and on THIS geometry that is the difference between a 39.8 + 23.3j feed
+    # and a 57 - 4012j one on the oracle. Every real deck in the class writes
+    # `GE 1`.
+    _MININEC_VERTICAL = "GW 1 9 0. 0. 0. 0. 0. 2.5 0.001\nGE 1\n"
+    _MININEC_DRIVE = "EX 0 1 1 0 1.\nFR 0 1 0 0 30. 0\n"
+    # theta 0-80 in tens, phi 0-180 in 45s — the cliff decks' own grid, and
+    # for their reason: at theta = 90 the medium selection is decided by
+    # `tan(90 deg)` in double precision, which is a fine thing for one engine
+    # to do and a terrible one to hold a second to.
+    _MININEC_GRID = "9 5 1001 0 0 10 45 1000\n"
+
+    # The seam artifact itself, verbatim from 4nec2's own emitted deck
+    # (capture 0038, `post/out__GP80.inp`, a three-element 80 m ground plane
+    # by EU1TT): `GN 1` + `GD 0` + `XQ` with no `RP` card at all, which is
+    # what 26 of the bundle's 29 `GN 3` models look like when 4nec2 runs them
+    # for impedance. Only the trailing whitespace is touched (the corpus is
+    # written rstripped) and the terminator; the cards are the frontend's
+    # bytes, including the `LD 0` at the feed and the `GE 1`.
+    decks["mininec_gp80_seam"] = (
+        "CM 3el GP80 CW by EU1TT\n"
+        "CE\n"
+        "GW 1 12 0.0 0.0 0.0 0.0 0.0 23.5 .04\n"
+        "GW 2 13 -2. 0.0 23.0 -18. 0.0 2.0 .002\n"
+        "GW 3 8 -18. 0.0 2.0 -2.5 0.0 2.0 .002\n"
+        "GW 4 13 2.0 0.0 23.0 17.5 0.0 2.0 .002\n"
+        "GW 5 5 7.0 0.0 2.0 17.5 0.0 2.0 .002\n"
+        "GE 1\n"
+        "EX 0 1 1 0 1.0 0.0\n"
+        "LD 0 1 1 1 0 0 3.78e-10\n"
+        "GN 1\n"
+        "GD 0 0 0 0 13 0.005\n"
+        "FR 0 1 0 0 3.55 1\n"
+        "XQ\n"
+    )
+
+    # The three `RP 0` decks below deliberately share ONE title line, the way
+    # the `MP` fixtures share `dipole_free_space`'s: they differ by one card
+    # each and the whole claim is that their printouts do not differ at all
+    # past the DATA CARD echo, which a per-deck comment would hide behind a
+    # difference nobody is asking about.
+    _MININEC_TITLE = "CE grounded vertical over perfect ground\n"
+
+    # The idiom with a pattern request that does NOT read the record: an
+    # ordinary `RP 0`. This is the deck the folklore is about — "perfect
+    # ground currents, real ground pattern" — and the printout is the measured
+    # answer to it: the pattern is the perfect-ground pattern, everywhere.
+    decks["mininec_vertical_rp0"] = (
+        _MININEC_TITLE + _MININEC_VERTICAL + "GN 1\n"
+        "GD 0 0 0 0 13. .005 0. 0.\n"
+        + _MININEC_DRIVE
+        + "RP 0 "
+        + _MININEC_GRID
+        + "XQ\n"
+    )
+
+    # The same deck with the integer field set to 2 — the NEC-4 slot 4nec2
+    # writes, and the form all four hand-written `GD` decks in its bundle
+    # use. The oracle ignores the field entirely (measured: this printout and
+    # the one above differ in the `GD` echo's first integer column and
+    # nowhere else), so the pair is what says a parser may read F1-F4 and
+    # stop.
+    decks["mininec_vertical_gd2_rp0"] = (
+        _MININEC_TITLE + _MININEC_VERTICAL + "GN 1\n"
+        "GD 2 0 0 0 13. .005 0. 0.\n"
+        + _MININEC_DRIVE
+        + "RP 0 "
+        + _MININEC_GRID
+        + "XQ\n"
+    )
+
+    # The order that is NOT the idiom, and looks exactly like it in a grep. A
+    # `GN` card whose radial count is zero rewrites the same four /FPAT/
+    # slots a `GD` writes, so a `GD` READ BEFORE a `GN 1` is cleared by it and
+    # the deck is plain perfect ground with nothing in force at the execute
+    # card. Measured: this printout is the bare `GN 1` deck's, line for line,
+    # once the extra `GD` echo (and the card numbering it shifts) is taken
+    # out.
+    decks["mininec_gd_reset_by_gn_rp0"] = (
+        _MININEC_TITLE + _MININEC_VERTICAL + "GD 0 0 0 0 13. .005 0. 0.\n"
+        "GN 1\n" + _MININEC_DRIVE + "RP 0 " + _MININEC_GRID + "XQ\n"
+    )
+
+    # A `GD` with no ground under it at all. There is no image to modify, so
+    # the card is inert and the deck is free space: this is `dipole_rp_pattern`
+    # plus one card, and reproduces it to the byte apart from the echo.
+    decks["mininec_gd_without_gn_rp0"] = (
+        "CE dipole with radiation pattern\n" + _DIPOLE_GW + "GE 0\n"
+        "GD 0 0 0 0 13. .005 0. 0.\n"
+        "EX 0 1 5 0 1.\n"
+        "FR 0 1 0 0 30. 0\n"
+        "RP 0 7 13 1001 0 0 30 30 1000\n"
+        "XQ\n"
+    )
+
+    # The two requests that DO read the record, on the idiom's own geometry,
+    # one non-zero real field each — which is what makes them a pair rather
+    # than a second copy of `dipole_rp3_circular_cliff` (that deck carries
+    # CLT and CHT together, on an ELEVATED vertical over a cliff 10 m out and
+    # 2 m down).
+    #
+    # CLT alone, 10 m out: the segments run z = 0.14 to 2.36 m, so the
+    # specular point `z*tan(theta)` clears 10 m only in the last row of the
+    # sweep. Measured on both engines: exactly the theta = 80 row moves
+    # (-0.79 dB at phi 0) and the other eight are the perfect-ground pattern
+    # to the digit. A CLT read as anything but a distance from the origin
+    # moves rows that must not move.
+    decks["mininec_vertical_rp3_clt"] = (
+        "CE grounded vertical, media join ten metres out\n"
+        + _MININEC_VERTICAL
+        + "GN 1\n"
+        "GD 0 0 0 0 13. .005 10. 0.\n"
+        + _MININEC_DRIVE
+        + "RP 3 "
+        + _MININEC_GRID
+        + "XQ\n"
+    )
+
+    # CHT alone, 2 m: with the join at distance zero the second medium is
+    # under every ray, so the height is the only thing left to read and it is
+    # read everywhere — 40 of the 45 rows move, by up to 11 dB, against the
+    # 2-3 dB the same deck moves at CHT = 0. That gap is the whole reason
+    # this is a fixture: an engine that dropped the field would still print a
+    # plausible finite-ground pattern.
+    decks["mininec_vertical_rp3_ch"] = (
+        "CE grounded vertical, second medium two metres up\n"
+        + _MININEC_VERTICAL
+        + "GN 1\n"
+        "GD 0 0 0 0 13. .005 0. 2.\n"
+        + _MININEC_DRIVE
+        + "RP 3 "
+        + _MININEC_GRID
+        + "XQ\n"
+    )
+
     # NE — rectangular near-field grid, the non-polar branch of
     # nec2/NECSource.generateNENH.
     decks["dipole_ne_nearfield"] = (
