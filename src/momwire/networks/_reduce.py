@@ -2,10 +2,11 @@
 impedances, on top of a raw multiport antenna admittance matrix.
 
 Arrived from antennaknobs per ``docs/design/networks-move-into-the-engine.md``
-(momwire#456 workstream 2). This unit lands the TYPE-FREE half — the TL/chain
+(momwire#456 workstream 2). This module is the TYPE-FREE half — the TL/chain
 math and the MNA core, which never see a port name or a branch dataclass. The
-spec layer and `NetworkReducer` append here in the next unit, so the ordering
-below mirrors the file it came from.
+spec layer landed alongside in `._spec` and `NetworkReducer` in `._reducer`
+rather than appended here: `._spec` reuses `_series_rlc_impedance` below, so
+keeping the three apart is what makes the arrows acyclic.
 
 antennaknobs' MomwireEngine and PyNECEngine assemble the antenna's short-circuit
 Y at the real (`PortOnWire`) ports, then hand it here with a port-name -> matrix-
@@ -413,7 +414,8 @@ def _series_rlc_impedance(r, l, c, omega, ql=None, qc=None):
     Moved down with the MNA core (momwire#456) rather than left behind with
     the spec layer: `_series_group2` is the only caller in this half, and it
     is the sole first-party dependency the extraction survey missed. Private
-    here; the spec-layer unit reuses it rather than landing a second copy.
+    here; `._spec` imports it rather than landing a second copy, which is the
+    one arrow that fixes the module order (spec -> reduce, never back).
     """
     z = 0.0 + 0.0j
     if r is not None:
