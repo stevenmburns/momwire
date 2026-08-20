@@ -54,11 +54,12 @@ from test_eznec_printout import (
     printout_text,
 )
 
-# The rung-1 captures that shipped a printout — the six this unit is gated
-# against.  The other four gated captures (0012/0014/0016/0017) carry ``NT``
-# cards and belong to the network unit; they still appear below, in the
-# counting-rule gate, because the count is a property of the deck's geometry
-# and not of what answers it.
+# The BARE-STRUCTURE captures that shipped a printout — the six this unit is
+# gated against.  The other seven gated captures carry ``TL``/``NT`` cards and
+# belong to the network unit, which measures its own table in
+# ``test_eznec_networks.py``; they still appear below, in the counting-rule
+# gate, because the count is a property of the deck's geometry and not of what
+# answers it.
 SERVED_IDS = ("0010", "0013", "0019", "0035", "0043", "0044")
 
 # The rung-1 captures with no printout: seven ``XQ``-only dipoles EZNEC wrote
@@ -156,6 +157,12 @@ _MASK = "#" * 4
 # and 3 are the CURRENT, which for an `EX 4` deck is the card's own drive and
 # has to survive unmasked; the rest is solved.
 _PORT_CELLS = tuple(k for k in range(9) if k not in (2, 3))
+# The network table shares the format and not that exemption: the current at a
+# connection point is the STRUCTURE's, solved, even on the row whose port the
+# deck drives (0027 prints 1.4142E+00 under ANTENNA INPUT PARAMETERS and
+# 3.3124E-09 for the same port here — all of the difference went down the two
+# transmission lines).
+_NETWORK_PORT_CELLS = tuple(range(9))
 
 # Pattern row column edges, measured on 0013 (which prints every form: a
 # blank SENSE, a `-999.99` null, and ordinary rows).
@@ -174,7 +181,16 @@ _NULL = "-999.99"
 _NUMBER = re.compile(r"[-+]?\d+\.\d+(?:[Ee][-+]?\d+)?")
 
 # How many lines each table puts between its heading and its first row.
+#
+# NETWORK DATA is deliberately absent: every cell in it is an ECHO of a card
+# (0012's admittances, 0028's impedances and STRAIGHT/CROSSED flags) or a
+# distance between two nodes (0028's four zero-length feeders), so none of it
+# is a solved number and all of it is compared byte for byte.
 _TABLES = {
+    "- - - STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS - - -": (
+        "network",
+        3,
+    ),
     "- - - ANTENNA INPUT PARAMETERS - - -": ("port", 3),
     "- - - Wire Currents - - -": ("wire", 5),
     "- - - Wire Charge Densities - - -": ("wire", 5),
@@ -183,9 +199,9 @@ _TABLES = {
 }
 
 
-def _mask_port_row(line: str) -> str:
+def _mask_port_row(line: str, solved: tuple[int, ...] = _PORT_CELLS) -> str:
     cells = [line[12 + 12 * k : 24 + 12 * k] for k in range(9)]
-    for k in _PORT_CELLS:
+    for k in solved:
         cells[k] = _MASK.rjust(12)
     return line[:12] + "".join(cells)
 
@@ -257,6 +273,8 @@ def mask(text: str) -> str:
             continue
         if kind == "port":
             out.append(_mask_port_row(line))
+        elif kind == "network":
+            out.append(_mask_port_row(line, _NETWORK_PORT_CELLS))
         elif kind == "wire":
             out.append(line[:12] + _MASK)
         elif kind == "power":
@@ -314,19 +332,21 @@ def test_the_shell_writes_the_served_printout_and_still_exits_zero(tmp_path):
 
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_the_counting_rule_reproduces_every_captured_count(cid):
-    """``Σ max(degree − 1, 0)`` over the fused nodes, on all TEN printouts.
+    """``Σ max(degree − 1, 0)`` over the fused nodes, on every printout.
 
-    The rule was DERIVED from these ten numbers and has to answer all of them
+    The rule was DERIVED from ten of these numbers and has to answer all of them
     or it is a coincidence: a free wire end contributes nothing, an interior
     node one, a junction of m wires m − 1 (0013's five-wire apex is the only
     capture that separates that from "one per junction"), and a wire end
     standing in a declared ground plane counts its image as one more element
     end (0019, the only capture that separates that from "free end").
 
-    The four network captures are here too.  They are not served — ``NT``
-    refuses by name — but their geometry is counted by the same walk, and
-    0012's 17 nodes / 15 elements / 13 unknowns is the one deck in the set
-    with several two-wire junctions AND a wire that touches nothing.
+    The seven network captures are here too, and three of them were added
+    after the rule was written: 0018, 0027 and 0028 answered it unchanged,
+    which is the only kind of evidence a derived rule can get.  0012's 17
+    nodes / 15 elements / 13 unknowns is the deck with several two-wire
+    junctions AND a wire that touches nothing; 0027 pairs a ``GE 1`` ground
+    plane with a virtual wire far above it.
     """
     structure = _serve.structure_of(parse_nec5(deck_text(cid)))
     data = extract(printout_text(cid))
@@ -486,9 +506,9 @@ def test_a_lossless_rung_one_deck_radiates_everything_it_is_given(cid):
 # --------------------------------------------------------------------------
 
 # One capture per refusal, each the smallest deck in the corpus carrying the
-# card.  0028 rather than 0011 for `TL`: 0011 also stands over `GN 0`, and a
-# deck that is out of scope twice names its GROUND first (see the ordering
-# test below).
+# card.  `TL` and `NT` left this table with U5, which serves them; the deck
+# that carries BOTH is refused for its table layout instead, and that refusal
+# is gated in ``test_eznec_networks.py`` beside the rest of the network unit.
 #
 # The last two entries are the corpus's own decks with their ground card swapped
 # for `GN 1`, and they have to be: every captured multi-`EX` deck and the one
@@ -501,8 +521,6 @@ _ON_PERFECT_GROUND = ("0031", "0022")
 REFUSALS = {
     "0045": "GD asks for the MININEC-type ground",
     "0047": "GN 0 asks for the finite-ground Sommerfeld solution",
-    "0028": "TL (transmission line) is not served at this seam yet",
-    "0012": "NT (two-port network) is not served at this seam yet",
     "0031": "this deck carries 4 EX cards",
     "0022": "NE (near electric field) is not served at this seam yet",
 }
@@ -633,11 +651,11 @@ def test_a_source_on_a_free_wire_end_refuses_rather_than_guessing():
 # LD 4 — in scope, and with no capture of its own
 # --------------------------------------------------------------------------
 #
-# Rung 1 includes `LD 4`, but every captured deck that carries one also
-# carries an `NT` (the four W7EL network tests are the corpus's only loaded
-# decks), so the loaded path has no byte-gate until the network unit lands.
-# These two tests are what it has instead: an identity that holds exactly, and
-# the `1.E+10` pin idiom doing the one thing it exists to do.
+# Rung 1 includes `LD 4`, but every captured deck that carries one also carries
+# a network card (the loaded decks in the corpus are exactly the network ones),
+# so the loaded path is byte-gated in `test_eznec_networks.py` and not here.
+# These two tests are what this unit has instead: an identity that holds
+# exactly, and the `1.E+10` pin idiom doing the one thing it exists to do.
 
 
 def test_a_load_at_the_driven_node_adds_its_own_ohms_to_the_feedpoint():
@@ -665,8 +683,7 @@ def test_the_pin_idiom_leaves_the_virtual_wire_carrying_nothing():
 
     Measured: the virtual wire carries 4.7e-17 A against the dipole's 1.44 A,
     seventeen orders down, and the loading table renders the two rows exactly
-    as 0012 printed them — which is the loaded path's only byte gate until the
-    network unit brings the four W7EL captures into scope.
+    as 0012 printed them.
     """
     virtual = "GW 4,3,99.99998,99.99998,99.99998,100.003,100.003,100.003,1.0000E-4\n"
     pins = "LD 4,4,1,0,1.E+10,0.\nLD 4,4,2,0,1.E+10,0.\n"
@@ -786,9 +803,10 @@ def test_every_refusal_sentence_survives_the_printout_s_own_codec():
     """A printout is written latin-1 (U1's ``_CODEC``), so a refusal carrying
     a character that codec cannot spell is a refusal that never gets written.
 
-    Measured the hard way: the ``TL`` and ``NT`` sentences were first drafted
-    with an em dash, and the shell answered 0012 with an internal-error
-    printout instead of the sentence.  This gate is why they are ASCII.
+    Measured the hard way: the ``TL`` and ``NT`` sentences (U4's, since
+    retired) were first drafted with an em dash, and the shell answered 0012
+    with an internal-error printout instead of the sentence.  This gate is why
+    they are ASCII.
     """
     for name, value in vars(_serve).items():
         if name.startswith("_REFUSE") and isinstance(value, str):
