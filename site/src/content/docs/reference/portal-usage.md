@@ -14,8 +14,9 @@ your path: a drop-in for the engine binary, with momwire's solver behind it.
 The Smith chart, the tuner and the sweeps stay SimNEC's; the
 electromagnetics become momwire's.
 
-The deck language is momwire's own **`nec2` dialect** — antenna-only, and
-specified card by card in [the deck grammar](/reference/deck-grammar-nec2/).
+The deck language is momwire's own **`nec2` dialect** — wire structures and
+the two-port cards attached to them, specified card by card in
+[the deck grammar](/reference/deck-grammar-nec2/).
 This page is about running the engine; that page is about what it accepts.
 
 :::caution[Not a supported configuration]
@@ -189,13 +190,14 @@ The complete list — cards refused by name, fields refused by value, and the
 structural refusals — is the grammar's, with the exact message text:
 
 * [cards refused by name](/reference/deck-grammar-nec2/#cards-refused-by-name)
-  — `TL` and `NT` (this dialect is antenna-only; a network deck goes to
-  antennaknobs' importer), the out-of-dialect geometry cards, `SP` / `SM`;
+  — the out-of-dialect geometry cards, `SP` / `SM`, and the rest of what is
+  not a wire;
 * [fields refused by value](/reference/deck-grammar-nec2/#fields-refused-by-value)
   — `EX` types other than 0, `RP` modes 1 and 4–6, spherical `NE` / `NH`
   grids, near fields over finite ground, `GN` radial ground screens, the
-  unsupported `LD` types, and the four `IS` cases a lossless whole-wire
-  jacket cannot express;
+  unsupported `LD` types, the four `IS` cases a lossless whole-wire jacket
+  cannot express, and the three `TL` / `NT` cases NEC itself halts on or
+  destroys in silence;
 * [structural refusals](/reference/deck-grammar-nec2/#structural-refusals) —
   malformed cards, and addresses that name nothing.
 
