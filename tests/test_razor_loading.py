@@ -924,3 +924,243 @@ def test_the_swept_and_single_fills_agree_bit_for_bit_with_loading():
     g4 = fresh._build_geometry()
     assert np.allclose(three, fresh._assemble_Z(g4, fresh.k), rtol=1e-13, atol=0.0)
     assert scipy.linalg.norm(three - one) > 0.0
+
+
+# --------------------------------------------------------------------------
+# 8. the lumped-load dissipation readout (momwire#433, following #427/#431)
+# --------------------------------------------------------------------------
+# `RazorSolver.lumped_load_power` reads P_load[i] = ½·Re(Z_Li)·|I(knot_i)|²
+# straight off the solved coefficients — `coeffs[idx]` IS the knot current
+# in amps, because a tent basis is normalised to 1 at its own knot
+# (`_loading_stencil`'s Λ_n(l_p) = δ_np reading), unlike `wire_loss_power`'s
+# `wing_sigma` reconstruction, which answers a different question (a
+# SEGMENT's own local-arc current, needed for the physical Gram integral).
+# The gates below are in the order momwire#433 asked for: an independent
+# oracle first (the Y-matrix termination, gate 2's own mechanism reused),
+# then the exact feed identity, then the power-budget closure with its
+# known razor-vs-Galerkin caveat measured explicitly, then an adversarial
+# probe that a magnitude-only check could not catch.
+
+
+def test_lumped_load_power_is_structurally_absent_with_no_loads():
+    """No `lumped_loads` configured ⇒ `(0.0, empty array)`, not a crash —
+    the same "zeros, not a stencil" shape `wire_loss_power` returns when
+    nothing is loaded."""
+    sim = _sim(DIPOLE, [[16]])
+    total, per_load = sim.lumped_load_power(
+        np.zeros(sim._build_geometry()["n_basis_total"])
+    )
+    assert total == 0.0
+    assert per_load.shape == (0,)
+    # ...and a Z_L = 0 load is on the books (unlike "no load"), just silent.
+    sim0 = _sim(DIPOLE, [[16]], lumped_loads=[(0, DIP_HALF, 0.0j)])
+    _z0, c0 = sim0.compute_impedance()
+    total0, per0 = sim0.lumped_load_power(c0)
+    assert total0 == 0.0
+    assert per0.shape == (1,) and per0[0] == 0.0
+
+
+@pytest.mark.parametrize("lane", LANES, ids=LANE_IDS)
+@pytest.mark.parametrize("deck", ("dipole", "monopole"))
+def test_lumped_load_power_is_exact_at_the_fed_knot(deck, lane):
+    """The closed-form identity: at the FED knot, ½·Re(Z_L)·|I_feed|² is
+    checkable directly from the drive-point solve with no reference to
+    `lumped_load_power`'s own internals.
+
+    The monopole row is the grounded tent — its side-A wing is the image
+    (σ = 0), side-B the real base segment (σ = ±1) — so this is also the
+    grounded-end reading `_loading_stencil` promises: the load lands on
+    the tent's diagonal at full value and `coeffs[idx]` is still exactly
+    the base current, no halving, no extra sign game visible in |I|².
+    """
+    if deck == "dipole":
+        wires, npe, arc, ground = DIPOLE, [[24]], DIP_HALF, {}
+    else:
+        wires, npe, arc, ground = MONOPOLE, [[24]], 0.0, {"ground_z": 0.0}
+    common = dict(feed_arclength=arc, **ground, **lane)
+    sim = _sim(wires, npe, lumped_loads=[(0, arc, ZL)], **common)
+    _z1, c1 = sim.compute_impedance()
+    geom = sim._build_geometry()
+    (idx,) = sim._feed_basis_indices(geom)
+    i_feed = np.asarray(c1, dtype=np.complex128)[idx]
+    closed_form = 0.5 * ZL.real * abs(i_feed) ** 2
+
+    total, per_load = sim.lumped_load_power(c1)
+    assert per_load.shape == (1,)
+    rel = abs(total - closed_form) / closed_form
+    assert rel < 1e-11, f"{total} != {closed_form} (rel {rel:.3e})"
+    assert per_load[0] == pytest.approx(total)
+
+
+@pytest.mark.parametrize("lane", LANES, ids=LANE_IDS)
+def test_lumped_load_power_agrees_with_the_y_matrix_termination(lane):
+    """The INDEPENDENT oracle: a load away from the feed is a Y-matrix
+    termination (`test_a_lumped_load_elsewhere_is_the_y_matrix_termination`
+    establishes the impedance side of this), so the watts it burns are
+    computable a SECOND way — from the unloaded two-port Y and the
+    series-load self-consistency V_1 = −Z_L·I_1 — with no call to
+    `lumped_load_power` anywhere in the reference.
+
+        I_1 = Y_10·V_0 / (1 + Y_11·Z_L)          (port 1 self-terminated)
+        P_load = ½·Re(Z_L)·|I_1|²
+
+    Measured relative agreement: see the assertion below (both lanes).
+    The deck is the same asymmetric inverted-V gate 3 of #427 uses, so the
+    reference current I_1 is not protected by any symmetry either.
+    """
+    npe = [[16, 16]]
+    simL = _sim(
+        INVVEE,
+        npe,
+        feed_arclength=IV_FEED_ARC,
+        lumped_loads=[(0, IV_LOAD_ARC, ZL)],
+        **lane,
+    )
+    _zL, cL = simL.compute_impedance()
+    total, per_load = simL.lumped_load_power(cL)
+
+    Y = _sim(
+        INVVEE, npe, feeds=[(0, IV_FEED_ARC, 1.0), (0, IV_LOAD_ARC, 0.0)], **lane
+    ).compute_y_matrix()
+    i1 = (Y[1, 0] * 1.0) / (1.0 + Y[1, 1] * ZL)
+    p_oracle = 0.5 * ZL.real * abs(i1) ** 2
+
+    rel = abs(total - p_oracle) / p_oracle
+    assert rel < 1e-11, f"{total} vs {p_oracle} (rel {rel:.3e})"
+    assert per_load[0] == pytest.approx(total)
+
+    # ...and the current agrees too, not just the (squared) power — a wrong
+    # sign or a stray conjugate would still pass the power check above.
+    geomL = simL._build_geometry()
+    idxL = simL._lumped_site_index(geomL, 0, 0, IV_LOAD_ARC)
+    i_direct = np.asarray(cL, dtype=np.complex128)[idxL]
+    rel_i = abs(i1 - i_direct) / abs(i_direct)
+    assert rel_i < 1e-11, f"{i1} vs {i_direct} (rel {rel_i:.3e})"
+
+
+def test_two_loads_at_one_knot_split_but_sum_to_the_series_reading():
+    """Requirement: two loads at the SAME knot are in series, and each
+    gets its OWN share of the watts, not half each and not the total
+    twice — `test_two_loads_at_one_knot_are_in_series` pins the impedance
+    side; this pins the power side.
+
+    `_apply_loading` sums both Z_L onto one diagonal entry with
+    `np.add.at`, so both loads see the SAME knot current; ½·Re(Z_L1)|I|²
+    and ½·Re(Z_L2)|I|² are each a load's own honest reading, and because
+    Re is linear they sum to what the single series-equivalent load
+    Z_L1 + Z_L2 would report on its own.
+    """
+    a, b = 30.0 + 10.0j, -5.0 + 200.0j
+    sim_two = _sim(DIPOLE, [[24]], lumped_loads=[(0, DIP_HALF, a), (0, DIP_HALF, b)])
+    _z_two, c_two = sim_two.compute_impedance()
+    total_two, per_two = sim_two.lumped_load_power(c_two)
+
+    sim_one = _sim(DIPOLE, [[24]], lumped_loads=[(0, DIP_HALF, a + b)])
+    _z_one, c_one = sim_one.compute_impedance()
+    total_one, per_one = sim_one.lumped_load_power(c_one)
+
+    assert per_two.shape == (2,)
+    # the two shares are each load's own R times the SAME |I|^2 — Re(b) is
+    # NEGATIVE here on purpose, so this also shows a share need not be
+    # smaller than the total: their RATIO is exactly Re(a)/Re(b), because
+    # both multiply the one knot current the series stamp gives them.
+    assert per_two[0] / per_two[1] == pytest.approx(a.real / b.real, rel=1e-9)
+    assert per_two.sum() == pytest.approx(total_two)
+    # ...and matches the series-equivalent single load's own reading.
+    assert total_two == pytest.approx(total_one, rel=1e-9)
+    assert per_two[0] + per_two[1] == pytest.approx(per_one[0], rel=1e-9)
+
+
+def test_lumped_load_power_budget_closes_for_a_lossless_wire():
+    """Power-budget closure: a LOSSLESS wire (no `wire_conductivity`) and
+    one lumped resistor away from the feed, so `wire_loss_power` is
+    structurally zero and every dissipated watt not radiated must be in
+    the load.
+
+    `P_in − P_wire − P_lumped` is, to floating-point roundoff, the
+    bilinear reaction power `½·Re(I^H · Z_rad · I)` of the UNLOADED
+    radiation matrix at the LOADED current — an algebraic identity
+    (`Z = Z_rad + diag(Z_L)` exactly, so `I^H Z I` splits into that plus
+    `Re(Z_L)|I_p|² == 2·P_lumped` with zero cross term) that carries no
+    error of `lumped_load_power`'s own. Measured here: residual/bilinear
+    agree to ~1e-15 relative — see the assertion.
+
+    Whether that residual equals the TRUE Poynting-flux radiated power is
+    not independently checkable: momwire keeps no far-field power reader.
+    What IS checkable is the scale of razor's own razor-vs-Galerkin gap
+    (module docstring) on the SAME `Z_rad`: #427's gate notes record a
+    ~5.4 % ΔR_in-vs-loss_power separation for DISTRIBUTED loss (comparing
+    a RE-SOLVE's ΔR_in against `wire_loss_power`/|I_feed|²), and this test
+    reproduces that comparison on the same copper 24-segment dipole the
+    rest of this module uses, measuring 5.36 % here. That gap is
+    `wire_loss_power`'s and a re-solve's, not this closure's — the
+    closure below uses no re-solve and no distributed loss, so 0 % of its
+    residual is that known separation; the residual is `Z_rad`'s own
+    reaction power at the loaded current, reported as a number rather
+    than folded into a tolerance.
+    """
+    # (a) reproduce the #427-style distributed-loss gap, for scale.
+    z0, _c0 = _z(DIPOLE, [[24]])
+    sim_lossy = _sim(DIPOLE, [[24]], wire_conductivity=SIGMA)
+    z1, c1 = sim_lossy.compute_impedance()
+    dR_resolve = z1.real - z0.real
+    p_wire_lossy, _ = sim_lossy.wire_loss_power(c1)
+    geom_lossy = sim_lossy._build_geometry()
+    (idx_lossy,) = sim_lossy._feed_basis_indices(geom_lossy)
+    i_feed_lossy = np.asarray(c1, dtype=np.complex128)[idx_lossy]
+    dR_from_loss_power = p_wire_lossy / (0.5 * abs(i_feed_lossy) ** 2)
+    gap = abs(dR_resolve - dR_from_loss_power) / dR_resolve
+    assert 0.04 < gap < 0.07, f"razor-vs-Galerkin ΔR gap moved: {gap:.4f}"
+
+    # (b) the closure itself: lossless wire, one off-feed resistor.
+    load_arc = DIP_HALF * 0.55
+    simL = _sim(
+        DIPOLE, [[24]], feed_arclength=DIP_HALF, lumped_loads=[(0, load_arc, 75.0 + 0j)]
+    )
+    zL, cL = simL.compute_impedance()
+    geomL = simL._build_geometry()
+    (idx_feed,) = simL._feed_basis_indices(geomL)
+    i_feed = np.asarray(cL, dtype=np.complex128)[idx_feed]
+    p_in = 0.5 * zL.real * abs(i_feed) ** 2
+    p_lumped, _ = simL.lumped_load_power(cL)
+    p_wire, _ = simL.wire_loss_power(cL)
+    assert p_wire == 0.0  # no wire_conductivity configured: structurally off
+    residual = p_in - p_lumped - p_wire
+    assert residual > 0.0  # a positive "radiated" reading, not a fluke sign
+
+    Z_rad = _sim(DIPOLE, [[24]], feed_arclength=DIP_HALF)._assemble_Z(
+        _sim(DIPOLE, [[24]], feed_arclength=DIP_HALF)._build_geometry(), simL.k
+    )
+    n_b = geomL["n_basis_total"]
+    i_full = np.asarray(cL, dtype=np.complex128)[:n_b]
+    bilinear_rad = 0.5 * np.real(np.conj(i_full) @ Z_rad @ i_full)
+    rel = abs(bilinear_rad - residual) / residual
+    assert rel < 1e-9, f"{bilinear_rad} vs {residual} (rel {rel:.3e})"
+
+
+def test_lumped_load_power_adversarial_probe():
+    """A magnitude-only gate cannot tell ½·R·|I|² from R·|I|², and cannot
+    tell the right knot from a wrong one — this test can, and shows both
+    mutations moving the readout far outside the oracle agreement gate 2
+    above holds to 1e-11.
+    """
+    sim = _sim(
+        DIPOLE, [[24]], feed_arclength=DIP_HALF, lumped_loads=[(0, DIP_HALF, ZL)]
+    )
+    _z1, c1 = sim.compute_impedance()
+    geom = sim._build_geometry()
+    (idx,) = sim._feed_basis_indices(geom)
+    i_feed = np.asarray(c1, dtype=np.complex128)[idx]
+    total, _per = sim.lumped_load_power(c1)
+
+    # dropping the 1/2 doubles the reading outright.
+    dropped_half = ZL.real * abs(i_feed) ** 2
+    assert dropped_half == pytest.approx(2.0 * total)
+    assert abs(dropped_half - total) / total > 0.9
+
+    # reading the WRONG knot (an interior knot elsewhere on the same wire)
+    # lands on a current with no relation to the fed/loaded one.
+    wrong_idx = 0 if idx != 0 else 1
+    i_wrong = np.asarray(c1, dtype=np.complex128)[wrong_idx]
+    wrong_knot = 0.5 * ZL.real * abs(i_wrong) ** 2
+    assert abs(wrong_knot - total) / total > 0.5
