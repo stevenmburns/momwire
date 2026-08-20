@@ -578,6 +578,23 @@ def test_ge_records_the_ground_plane_flag(flag, expected):
     )
 
 
+@pytest.mark.parametrize("flag,expected", [("0", False), ("1", True), ("-1", False)])
+def test_ge_records_the_flags_sign_as_the_ground_contact_expansion(flag, expected):
+    """§#ge--end-of-geometry: a POSITIVE flag asks for the ground-contact
+    current expansion, and NEC reads the sign separately from the presence.
+
+    Here it drives the printout only — the interpolation banner and a
+    touching segment's connection column (``test_portal.py``'s
+    ``test_the_ground_contact_printout_says_the_ends_are_connected``). The
+    SOLVE does not consult it, which is momwire#489.
+    """
+    structure = geometry(f"GW 1 2 0 0 0 1 0 0 1E-3\nGE {flag}\n")
+    assert structure.ground_plane_interpolates is expected
+    assert parse(DIPOLE.replace("GE 0", f"GE {flag}")).ground_plane_interpolates is (
+        expected
+    )
+
+
 def test_ge_does_not_specify_a_ground():
     """§#ge--end-of-geometry: a deck with ``GE -1`` and no ``GN`` solves in
     free space — the flag drives the structure report and nothing else."""

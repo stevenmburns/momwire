@@ -977,6 +977,7 @@ class _Nec2Parser:
             ground_z=0.0,
             second_medium=self._second_medium,
             ground_plane_flag=structure.ground_plane_flag,
+            ground_plane_interpolates=structure.ground_plane_interpolates,
             groups=groups,
             comments=tuple(self.comments),
             quiet=self.quiet,
