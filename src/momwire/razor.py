@@ -2805,6 +2805,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         is no `omega` parameter because Z_L is a fixed complex constant
         from construction (`_wire_loading.normalize_lumped_loads`), unlike
         Z'_w(ω), so there is nothing to rebuild per solved wavenumber.
+        That is also why the `(indices, Z_L)` resolution is taken straight
+        off `_wire_loading.loading_for` — the SAME read the fill's own
+        stamp used (momwire#428's "one shared resolution, four rows"), so
+        a site this readout charges can never be a different knot from the
+        site the matrix was bumped at, whatever `_lumped_site_index` later
+        decides about snapping. `loading_for`'s ω-dependent half is the
+        DISTRIBUTED one; the lumped branch it hands back does not read
+        `omega` at all, so passing `self.omega` here is a formality, not a
+        claim about when this readout is valid.
+
+        ONE solve's coefficients only: `coeffs` must be a 1-D vector, and
+        a 2-D multi-port block raises rather than broadcasting. `alpha[idx]`
+        on an `(n_basis, n_ports)` block is `(n_loads, n_ports)`, and the
+        power expression would silently sum ONE load's watts across EVERY
+        port excitation whenever `n_loads` is 1 or equals `n_ports` — a
+        wrong number with a right-looking shape. `wire_loss_power` refuses
+        the same input already (its `repeat`/`wing_sigma` product cannot
+        line up), so this only spells that shared contract out loud rather
+        than narrowing it. The check runs BEFORE the no-loads early return:
+        a contract that holds only when the solver happens to be loaded is
+        not a contract a caller can rely on.
 
         **The power-budget closure, and where razor's own gap lives.**
         Razor's rows are PATH integrals, not Galerkin projections (module
@@ -2828,22 +2849,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         at roughly the distributed term's few-percent scale, not this
         readout's.
         """
-        n_loads = len(self.lumped_loads)
-        per_load = np.zeros(n_loads, dtype=np.float64)
-        if n_loads == 0:
-            return 0.0, per_load
+        alpha = np.asarray(coeffs, dtype=np.complex128)
+        if alpha.ndim != 1:
+            raise ValueError(
+                "lumped_load_power: coeffs must be ONE solve's coefficient "
+                f"vector, got shape {alpha.shape} — a multi-port block would "
+                "sum each load's watts across every excitation. Read one "
+                "column at a time."
+            )
+        if not self.lumped_loads:
+            return 0.0, np.zeros(0, dtype=np.float64)
         geom = self._build_geometry()
-        idx = np.fromiter(
-            (
-                self._lumped_site_index(geom, i, w, arc)
-                for i, (w, arc, _z) in enumerate(self.lumped_loads)
-            ),
-            dtype=np.int64,
-            count=n_loads,
-        )
-        z_l = np.asarray([z for _w, _a, z in self.lumped_loads], dtype=np.complex128)
-        alpha = np.asarray(coeffs, dtype=np.complex128)[: geom["n_basis_total"]]
-        i_knot = alpha[idx]
+        idx, z_l = _wire_loading.loading_for(self, self.omega, geom).lumped
+        i_knot = alpha[: geom["n_basis_total"]][idx]
         per_load = 0.5 * np.real(z_l) * np.abs(i_knot) ** 2
         return float(per_load.sum()), per_load
 
