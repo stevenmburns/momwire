@@ -9,13 +9,17 @@ is the whole interface.
 Issue #497 builds this seam in units.  U1 laid down the SEAM itself — the
 process shell, the printout header, and a stub that refuses every deck by
 name; U2 added the nec5 dialect front-end (:mod:`momwire.deck._nec5`); U3
-added the rest of the printout, so this package can now lay out a complete
-NEC-5 result file given the numbers.  Rung-1 physics (U4) and node-addressed
-networks (U5) — the units that PRODUCE those numbers, and the ones that wire
-the renderer into the shell in place of the stub refusal — plug in behind it.
-A refusing engine that speaks the protocol correctly is already useful — it
-tells the operator, in EZNEC's own viewer, why their model was not served —
-and it is the only order in which the later units can be byte-gated at all.
+added the rest of the printout, so this package can lay out a complete NEC-5
+result file given the numbers; U4 (:mod:`._serve`) is the physics that
+PRODUCES them for rung 1 of the scored ladder — free space and perfect
+ground, one source at a node, fixed-impedance loads, ``RP 0``/``XQ``/``PQ 0``
+— and wires the renderer into the shell in place of the stub refusal.
+Node-addressed networks (U5) plug in behind it.
+
+Everything above rung 1 still refuses, and refuses BY NAME.  That is not a
+placeholder: a refusing engine that speaks the protocol correctly tells the
+operator, in EZNEC's own viewer, exactly which card it could not stand
+behind, which is the one thing a wrong answer cannot do.
 
 The module path is U1's naming decision: ``momwire.eznec`` names the
 APPLICATION on the far side of the seam (EZNEC), not the dialect underneath
@@ -56,7 +60,8 @@ from ._printout import (
     render_printout,
     render_refusal,
 )
-from ._shell import main, run
+from ._serve import refusal, serve
+from ._shell import main, render, run
 
 __all__ = [
     "ENVIRONMENT_FREE_SPACE",
@@ -72,8 +77,11 @@ __all__ = [
     "RunData",
     "WireCurrentRow",
     "main",
+    "refusal",
+    "render",
     "render_header",
     "render_printout",
     "render_refusal",
     "run",
+    "serve",
 ]
