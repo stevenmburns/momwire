@@ -727,11 +727,12 @@ def _synthetic_decks() -> dict[str, str]:
     # on this oracle 2026-08-20 (momwire#456 ws2 C0) and confirmed against
     # 4nec2's own bundled NEC-2D engine on the GP80 capture below.
     #
-    # These decks are the ground truth for that claim, captured while momwire
-    # still REFUSES the idiom under a request-less/`RP 0` execute
-    # (`_refuse_the_mininec_ground_idiom`, momwire#458) — the first three
-    # below are refusal fixtures the way `dipole_gd_second_medium` is, and
-    # the last four are answered today and byte-compared today.
+    # These decks are the ground truth for that claim. They were captured
+    # while momwire still REFUSED the idiom under a request-less/`RP 0`
+    # execute (momwire#458), and it is what they measured that retired the
+    # refusal (momwire#487, decision record
+    # `docs/design/mininec-ground-idiom.md`): every deck below is answered and
+    # byte-compared now.
     #
     # The vertical is the idiom's own geometry rather than the corpus's
     # elevated dipole: a quarter wave standing ON the ground plane at 30 MHz,
@@ -869,6 +870,29 @@ def _synthetic_decks() -> dict[str, str]:
         + _MININEC_VERTICAL
         + "GN 1\n"
         "GD 0 0 0 0 13. .005 0. 2.\n"
+        + _MININEC_DRIVE
+        + "RP 3 "
+        + _MININEC_GRID
+        + "XQ\n"
+    )
+
+    # The MININEC far field ITSELF: the cliff at distance zero and height
+    # zero, which is precisely what 4nec2's manual says its `GN 3` expands to
+    # ("a combination of perfect ground (GN 1) and a second circular cliff
+    # ground-medium ... distance zero ... height of zero"). With the join
+    # under every ray the whole pattern reflects off medium 2 while the
+    # currents and the impedance stay the perfect-ground ones — the folklore,
+    # spelled as the request mode it actually is. Its two neighbours above
+    # each move ONE of `CLT`/`CHT` off zero; this deck is the both-zero
+    # corner they are measured against, and it is the shape a `GN 3` model
+    # run for a pattern emits. Measured 0.030 dB cross-engine (momwire#487
+    # C0), which is the same class as the `RP 0` decks and says the cliff
+    # path and the perfect-ground path agree about the currents underneath.
+    decks["mininec_vertical_rp3_cliff_at_zero"] = (
+        "CE grounded vertical, the MININEC far field itself\n"
+        + _MININEC_VERTICAL
+        + "GN 1\n"
+        "GD 0 0 0 0 13. .005 0. 0.\n"
         + _MININEC_DRIVE
         + "RP 3 "
         + _MININEC_GRID
