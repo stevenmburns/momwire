@@ -3168,6 +3168,24 @@ def _network_lines(solver: DeckSolver, result: dict, group_index: int) -> list[s
     for tag, segment, port in points:
         volts = complex(v_applied[port])
         current = complex(i_port[port])
+        # The momwire#403 dust floor, on its third print path (#477 was the
+        # second).  An OPEN connection point — an all-zero NT, or any card
+        # whose circuit leaves the gap undriven — has an analytically-zero
+        # current, and printing the raw residual prints the magnitude and
+        # angle of zero: ~1e-19 A whose sign and digits move with process
+        # history, plus an impedance and power that are noise over noise
+        # (~1e16 Ω).  CI's byte oracle caught exactly that on
+        # ``dipole_nt_all_zero`` the first run after the #476 dump tap was
+        # armed.  Under the floor the current IS zero, and the derived
+        # columns follow it through the existing guards: Z's ``current != 0``
+        # branch, Y = 0/V, P = 0.  nec2c prints its own dust here (the
+        # committed capture reads 1.5e-17 A, 4.3e16 Ω) — a documented
+        # departure, same as the near-field table's.  The floor applies to
+        # the printed unit (amps); the weakest legitimate connection current
+        # in the corpus is ~1e-7 A (the ex6 gyrator's phantom row), three
+        # orders above it.
+        if current.real * current.real + current.imag * current.imag <= _FIELD_FLOOR2:
+            current = 0j
         out.append(
             fmt_aip_row(
                 tag,
