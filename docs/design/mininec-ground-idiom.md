@@ -82,15 +82,20 @@ Concretely:
   sits 2.3–2.8 dB hot vs Sommerfeld at low angles — consistent with the
   EZNEC capture's 34 %-in-R `GD` vs `GN 0` finding.
 
-### The one open capture (does not gate the arc)
+### The one open capture — CLOSED, observed (2026-08-20, same day)
 
-No capture pairs `GD` with any `RP` card, so "4nec2 emits `RP 3` on
-far-field runs of `GN 3` models" is inferred from the manual's "circular
-cliff" plus the engine source, not observed. One Windows capture (far-field
-run of GP80) settles it. Either outcome leaves this decision intact — the
-emitted deck is served byte-faithfully in both worlds; the capture only
-decides which sentence the 4nec2 capture doc gets. Worth batching with the
-pending Coax.nec contiguity capture on the same box.
+The Windows capture session (antennaknobs#963, captures 0039/0040) observed
+exactly what this record inferred: 4nec2's far-field runs of the `GN 3`
+model emit **mode digit 3** — `RP 3 19 73 1503` for the pattern and
+`RP 3 37 1 1500` for the sweep — over the manufactured `GN 1` + `GD`. The
+finite far field is asked for as the circular cliff, the impedance runs are
+the request-less form this engine serves as perfect ground, and no world
+remains in which the served bytes and the host's meaning diverge. The same
+session pinned EZNEC's ground menu: MININEC type emits a **bare `GD` with
+no `GN` card at all** — confirming the workstream-3 inheritance below (the
+NEC-5 dialect reads a bare `GD` as MININEC-type ground, where this dialect
+measured it free-space-inert), with the `GD 0,0,0,0,ε,σ,1.,0.` payload for
+ws3 to pin its field layout against.
 
 ## What workstream 3 (EZNEC / NEC-5 dialect) inherits
 
