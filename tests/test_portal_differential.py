@@ -88,9 +88,11 @@ residual between two large, nearly cancelling numbers:
     reactance differs by 8.4 Ω, which is **1.0 % of the coil**.  The 45 % is
     the residual, not the physics.
 (b) was ``dipole_nt_network``, retired from this table in #930 along with the
-    two ``dipole_tl_*`` rows and footnote (d): ``TL`` and ``NT`` are out of the
-    engine's dialect now, which is antenna-only, and all three decks are
-    REFUSAL fixtures — see ``test_nec_portal.py``'s ``NETWORK_FIXTURES``. The
+    two ``dipole_tl_*`` rows and footnote (d).  ``TL`` and ``NT`` are back in
+    the dialect since momwire#456 phase C — the parser reads them — but the
+    SOLVE is staged one unit further on, so all three decks are still REFUSAL
+    fixtures and this table is unmoved.  They come back to byte comparison,
+    scores and all, when the network solve lands.  The
     scores they carried (0.27 %, 1.14 %, 1.31 %, and the residual mechanism
     behind the last one) are kept in the git history of this docstring rather
     than deleted, because they are what said the network translation was
@@ -398,11 +400,12 @@ def pair():
 # Decks the daemon runs end to end. After unit 3 that is the whole corpus; the
 # list is written out rather than computed so that a card silently falling back
 # to the error path shows up as a failure here instead of as a quiet nothing.
-# ...minus the four the dialect refuses: TL and NT are circuits attached to
-# the structure, and this engine's language is antenna-only (#930, design doc
-# #846 §1); ``dipole_gd_second_medium`` states a second medium under a ``GN
-# 1``, which is the MININEC-type ground idiom and refuses since #458 rather
-# than answering as plain perfect ground. Their refusals are pinned in
+# ...minus the four this engine does not yet answer: the three network decks
+# parse since momwire#456 phase C but their solve is staged one unit on, so
+# they still take the error path; ``dipole_gd_second_medium`` states a second
+# medium under a ``GN 1``, which is the MININEC-type ground idiom and refuses
+# since #458 rather than answering as plain perfect ground. Their refusals are
+# pinned in
 # ``test_portal.py``; here they only have to stay OUT of every gate written
 # against a solved printout.
 REFUSED = (
@@ -608,11 +611,13 @@ def test_gd_moves_no_number_on_either_engine(name, base, pair):
 
 
 def test_no_antenna_deck_prints_a_network_section():
-    """The dialect is antenna-only, so the two network sections are gone from
-    every printout this engine produces — which is also why the gate that used
-    to walk their rows against the oracle is gone. ``Execute`` never read
-    either one (its state machine arms on the ANTENNA INPUT PARAMETERS banner),
-    so nothing downstream notices."""
+    """No deck in SUPPORTED carries a network card, so the two network
+    sections are absent from every printout this gate walks — which is also why
+    the gate that used to compare their rows against the oracle is gone.
+    ``Execute`` never read either one (its state machine arms on the ANTENNA
+    INPUT PARAMETERS banner), so nothing downstream notices.  The unit that
+    lands the network solve moves the three network decks into SUPPORTED and
+    brings that comparison back; until then this asserts the absence."""
     for name in SUPPORTED:
         text = our_printout(name)
         assert "NETWORK DATA" not in text, name

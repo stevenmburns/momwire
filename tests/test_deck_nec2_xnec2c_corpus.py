@@ -121,6 +121,13 @@ ISSUE_18 = (
 # for something OTHER than GX/GR — the two cards themselves refuse nothing any
 # more — except ``1MHz_tower``, whose refusal is unit 3's cell rule and is the
 # one entry in this table that is about the feature under test.
+#
+# Five decks moved from refused to served in momwire#456 phase C, when the
+# dialect learned to read TL: ``2m_Lindenblad`` (four lines), ``40m-moxon``
+# (three), and the three stacked arrays (two each).  ``40m-moxon`` is the one
+# worth naming — its three TL cards sit under a symmetric cell that is STILL
+# LIVE at GE, so it is the wild-corpus witness for the cell-rule exemption
+# that the hand-written k9ay probes measure.
 _EXPECTED: dict[str, str | None] = {
     "10-30m-box": "radial ground screen",
     "10-30m_bipyramid": "radial ground screen",
@@ -140,17 +147,17 @@ _EXPECTED: dict[str, str | None] = {
     "2m_1to4l-gp_on_pole": None,
     "2m_1to4l-horiz_gp_on_pole": None,
     "2m_5to8l-gp_on_pole": None,
-    "2m_Lindenblad": "TL (transmission line)",
+    "2m_Lindenblad": None,
     "2m_bigwheel": "GA (wire arc)",
     "2m_halo_stack": "GA (wire arc)",
-    "2m_sqr_halo_stack": "TL (transmission line)",
+    "2m_sqr_halo_stack": None,
     "2m_xpol_omni": None,
-    "2m_xpol_omni_stack": "TL (transmission line)",
-    "40m-moxon": "TL (transmission line)",
+    "2m_xpol_omni_stack": None,
+    "40m-moxon": None,
     "6-17m_bipyramid": None,
     "6-20m_fan": None,
     "6-20m_inv_cone": None,
-    "6m_big-square_stack": "TL (transmission line)",
+    "6m_big-square_stack": None,
     "6m_bigwheel-stack": "GA (wire arc)",
     "70cm_collinear": None,
     "T12m-H24m": "radial ground screen",
@@ -367,3 +374,25 @@ def test_the_live_cell_decks_split_into_two_with_a_load_and_two_without(name):
     (``test_deck_nec2_cell_fixtures.py``)."""
     has_ld = any(c.mnemonic == "LD" and c.i(0) != 5 for c in DECKS[name])
     assert has_ld == (name in _LIVE_WITH_LD)
+
+
+def test_40m_moxon_is_the_wild_witness_for_the_network_cell_exemption():
+    """momwire#456 phase C, on a deck nobody wrote for the purpose.
+
+    ``40m-moxon`` reaches ``GE`` with a symmetric cell still live AND carries
+    three ``TL`` cards, which is the exact combination the hand-written
+    ``k9ay_{nt,tl}_*`` probes were built to measure.  It is served — one
+    network record per card, no replication onto the copies, no cell-rule
+    refusal — which is what says the exemption holds outside the probes.
+
+    It is also the only deck in this 36-deck slice where the two rules meet,
+    so if the exemption were wrong this is where the corpus would say so."""
+    model = parse((CORPUS / "40m-moxon.nec").read_text())
+    built = build_geometry(geometry_cards("40m-moxon"))
+    assert built.symmetry is not None, "the premise: the cell must still be live"
+    assert [c.kind for c in model.networks] == ["TL", "TL", "TL"]
+    # Every endpoint resolves onto a real wire of the generated structure.
+    for card in model.networks:
+        for wire, arclength in (card.end_a, card.end_b):
+            assert 0 <= wire < len(model.wires)
+            assert 0.0 < arclength < model.wires[wire].length
