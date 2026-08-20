@@ -381,6 +381,13 @@
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     },
     {
+      "name": "mininec_vertical_rp3_cliff_at_zero",
+      "returncode": 253,
+      "deck_sha256": "d2e879bbd8d0b77fbdda6eab9a538b9dcfb5cc98e7a161dd08d46213df5f0ab9",
+      "out_sha256": "0b1e3b0ed8e5a5815d0bcb23e8ea62d5d17680150f5bc930144096c07de4f8d7",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
       "name": "mininec_vertical_rp3_clt",
       "returncode": 253,
       "deck_sha256": "e0e53de6192f8026e3aabf4be777c7dfaeef2c5cc72bbba6a55bbfbdfac4f193",
