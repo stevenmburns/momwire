@@ -960,6 +960,45 @@ def test_lumped_load_power_is_structurally_absent_with_no_loads():
     assert per0.shape == (1,) and per0[0] == 0.0
 
 
+def test_lumped_load_power_refuses_a_multi_port_coefficient_block():
+    """ONE solve's coefficients, not `compute_port_solution`'s whole block.
+
+    `alpha[idx]` on an `(n_basis, n_ports)` block is `(n_loads, n_ports)`,
+    and `0.5 * Re(Z_L) * |·|²` broadcasts against a `(n_loads,)` Z_L
+    without complaint whenever `n_loads` is 1 or equals `n_ports` — the
+    sum would then be ONE load's watts added up over every port's
+    excitation, a wrong number wearing a right-looking shape.  The
+    sibling `wire_loss_power` already refuses the same input (its
+    `repeat`/`wing_sigma` product cannot line up), so the guard makes a
+    shared contract explicit rather than narrowing it.
+    """
+    sim = _sim(
+        DIPOLE,
+        [[24]],
+        feeds=[(0, DIP_HALF, 1.0), (0, DIP_HALF * 0.5, 0.0)],
+        lumped_loads=[(0, DIP_HALF, ZL)],
+    )
+    block = np.asarray(sim.compute_port_solution().coeffs, dtype=np.complex128)
+    assert block.ndim == 2 and block.shape[1] == 2  # n_loads == 1, would broadcast
+    with pytest.raises(ValueError, match="ONE solve's coefficient vector"):
+        sim.lumped_load_power(block)
+    # the sibling refuses it too, which is the contract being mirrored.
+    with pytest.raises(ValueError):
+        _sim(
+            DIPOLE,
+            [[24]],
+            feeds=[(0, DIP_HALF, 1.0), (0, DIP_HALF * 0.5, 0.0)],
+            wire_conductivity=SIGMA,
+        ).wire_loss_power(block)
+    # ...and column by column is the supported read, one honest number each.
+    per_column = [sim.lumped_load_power(block[:, j])[0] for j in range(2)]
+    assert all(p > 0.0 for p in per_column)
+    # the refusal fires whatever the loading is: a contract that held only
+    # on a loaded solver is not one a caller could rely on.
+    with pytest.raises(ValueError, match="ONE solve's coefficient vector"):
+        _sim(DIPOLE, [[24]]).lumped_load_power(block)
+
+
 @pytest.mark.parametrize("lane", LANES, ids=LANE_IDS)
 @pytest.mark.parametrize("deck", ("dipole", "monopole"))
 def test_lumped_load_power_is_exact_at_the_fed_knot(deck, lane):
@@ -1128,9 +1167,8 @@ def test_lumped_load_power_budget_closes_for_a_lossless_wire():
     residual = p_in - p_lumped - p_wire
     assert residual > 0.0  # a positive "radiated" reading, not a fluke sign
 
-    Z_rad = _sim(DIPOLE, [[24]], feed_arclength=DIP_HALF)._assemble_Z(
-        _sim(DIPOLE, [[24]], feed_arclength=DIP_HALF)._build_geometry(), simL.k
-    )
+    sim_rad = _sim(DIPOLE, [[24]], feed_arclength=DIP_HALF)
+    Z_rad = sim_rad._assemble_Z(sim_rad._build_geometry(), simL.k)
     n_b = geomL["n_basis_total"]
     i_full = np.asarray(cL, dtype=np.complex128)[:n_b]
     bilinear_rad = 0.5 * np.real(np.conj(i_full) @ Z_rad @ i_full)
