@@ -42,7 +42,9 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from . import _printout
+from ..deck import DeckError
+from ..deck._nec5 import parse_nec5
+from . import _printout, _serve
 
 __all__ = [
     "ARGUMENT_ERROR_INPUT",
@@ -94,14 +96,41 @@ def write_printout(printout_path: Path, text: str) -> None:
         handle.write(text)
 
 
+def render(text: str) -> str:
+    """One deck's text as a printout: the results, or a refusal that says why.
+
+    Three gates in order, and each of them names the thing that stopped it:
+
+    1. the dialect front end (U2) refuses a card that is not in the observed
+       vocabulary, or a field form no capture has shown;
+    2. :func:`~momwire.eznec._serve.refusal` refuses a deck that parses but
+       is above rung 1 of the scored ladder — the Sommerfeld ground, the
+       MININEC ground, a network, a phased multi-source drive, a near field;
+    3. the translation itself refuses an address the mesh cannot host.
+
+    The stub refusal U1 shipped stays behind all three, and only for a case
+    none of them foresaw: a deck that parses, passes the ladder check, builds
+    a mesh, and still fails somewhere the seam has no sentence for.  That
+    surfaces through :func:`main`'s last line of defence rather than here.
+    """
+    try:
+        deck = parse_nec5(text)
+    except DeckError as exc:
+        return _printout.render_refusal(text, str(exc))
+    try:
+        data = _serve.serve(deck)
+    except _serve.ServeRefusal as exc:
+        return _printout.render_refusal(text, str(exc))
+    return _printout.render_printout(deck, data)
+
+
 def run(deck_path: str | Path, printout_path: str | Path) -> str:
     """Serve one deck: read it, render a printout, write the printout.
 
     Returns the text written, which is the whole of what this process
-    communicates.  In U1 that text is always a refusal — the seam speaks the
-    protocol byte-faithfully and refuses the physics by name — so a deck that
-    parses and a deck that is line noise differ only in what their comment
-    echo says.
+    communicates.  A rung-1 deck comes back as a full printout; everything
+    else comes back as the same header with one ``NEC ERROR`` line under it,
+    naming the card or the reason.
 
     Paths are used as given, so they resolve against the current directory the
     way EZNEC's cwd-relative ``"EZN5.NEC"`` does.
@@ -113,7 +142,7 @@ def run(deck_path: str | Path, printout_path: str | Path) -> str:
     if text is None:
         printout = _printout.render_refusal(None, f"UNABLE TO READ INPUT FILE {deck}")
     else:
-        printout = _printout.render_refusal(text, _printout.STUB_REFUSAL)
+        printout = render(text)
 
     write_printout(out, printout)
     return printout

@@ -71,8 +71,11 @@ __all__ = [
     "render_refusal",
 ]
 
-# The stub refusal U1 hands to every deck.  U2 replaces it with per-card
-# refusals from the dialect parser; U4 replaces the served decks entirely.
+# U1's stub refusal.  Since U4 nothing in the captured corpus reaches it: the
+# dialect front end refuses an unknown card by name, :mod:`._serve` refuses a
+# deck above rung 1 by name, and everything else is answered.  It survives as
+# the shell's last line of defence — a deck that fails somewhere none of those
+# three foresaw still comes back with a sentence rather than an empty file.
 STUB_REFUSAL = "NEC-5 DIALECT NOT YET SERVED BY THIS ENGINE"
 
 # --------------------------------------------------------------------------
