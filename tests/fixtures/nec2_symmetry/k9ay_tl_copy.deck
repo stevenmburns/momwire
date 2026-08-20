@@ -1,0 +1,13 @@
+CM k9ay_tl_cell's IMAGE-TAG twin (momwire#456 phase C): the cell structure
+CM with the TL addressing tags 3 and 4, the wires the GX generated.
+CM 0.096328 + j573.61 on the oracle -- resolved and attached, not dropped.
+CE
+GW 1 8 0. 0. 8.5 5. 0. 1.5 1.5E-3
+GW 2 5 0. 0. 0. 5. 0. 1.5 1.5E-3
+GX 2 100
+GE 0
+EX 0 4 1 0 1. 0.
+TL 3 4 4 3 300. 5.0
+FR 0 1 0 0 1.8 0
+XQ
+NX

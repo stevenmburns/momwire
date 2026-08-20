@@ -152,7 +152,16 @@ def load_tags(name: str) -> list[int]:
 
 
 def test_the_fixture_set_is_the_one_this_module_measures():
-    assert tuple(sorted(p.stem for p in FIXTURE_DIR.glob("*.deck"))) == NAMES
+    """Every ``LD``-carrying deck in the fixture directory is measured here.
+
+    The directory grew a second tenant in momwire#456 phase C — the eight
+    ``k9ay_{nt,tl}_*`` decks that ask the same cell question of the NETWORK
+    cards, measured by ``test_deck_nec2_network_fixtures.py``.  They carry no
+    ``LD``, which is the property this reads: the set is still closed, and a
+    ninth network deck cannot quietly land in this module's blind spot.
+    """
+    on_disk = tuple(sorted(p.stem for p in FIXTURE_DIR.glob("*.deck")))
+    assert NAMES == tuple(n for n in on_disk if "\nLD" in body(n))
 
 
 # ---------------------------------------------------------------------------

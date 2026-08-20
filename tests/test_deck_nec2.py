@@ -786,9 +786,14 @@ def test_gd_mp_and_pt_are_explicitly_not_arming(card):
     assert model.groups[1] is None
 
 
-def test_the_arming_set_is_exactly_the_pages_five_cards():
-    """§#arming, as a set."""
-    assert _ARMING_CARDS == {"EX", "FR", "LD", "GN", "EK"}
+def test_the_arming_set_is_exactly_the_pages_seven_cards():
+    """§#arming, as a set.
+
+    ``TL`` and ``NT`` joined it in momwire#456 phase C, oracle-measured: a
+    network card alone between two execute cards produces a whole second
+    answer.  They arm without refilling, which is ``EX``'s shape — see
+    ``#network-retention``."""
+    assert _ARMING_CARDS == {"EX", "FR", "LD", "GN", "EK", "TL", "NT"}
 
 
 # -- the operator cards, and the partial refill they produce -----------------
@@ -1812,6 +1817,260 @@ def test_is_does_not_arm_the_next_execute_card():
     it between runs is refused outright."""
     model = parse(BODY + "IS 0 1 0 0 5. 0. 0.002\nXQ\nNX\n")
     assert len(model.groups) == 1
+
+
+# ---------------------------------------------------------------------------
+# #tl--transmission-line and #nt--two-port-network
+# ---------------------------------------------------------------------------
+#
+# A two-wire body, because a network needs two places to attach and the
+# one-wire BODY above can only give it two segments of the same wire (which is
+# legal, and used below where the point is the addressing rather than the
+# topology).
+
+PAIR = (
+    "GW 1 5 -0.5 0. 0. 0.5 0. 0. 1.E-3\n"
+    "GW 2 5 -0.5 1. 0. 0.5 1. 0. 1.E-3\n"
+    "GE 0\nEX 0 1 3 0 1.\nFR 0 1 0 0 14.\n"
+)
+
+
+def test_tl_and_nt_are_read_rather_than_refused_by_name():
+    """§#tl--transmission-line, §#nt--two-port-network: the dialect's identity
+    change.  Both cards used to refuse by name as out of an antenna-only
+    grammar; they are part of it now."""
+    model = parse(PAIR + "TL 1 3 2 3 450. 2.\nNT 1 3 2 3 0. .02 0. 0. 0. .02\nXQ\nNX\n")
+    assert [c.kind for c in model.networks] == ["TL", "NT"]
+
+
+def test_a_network_endpoint_resolves_the_way_a_feed_does():
+    """§#tl--transmission-line: an endpoint is a ``(tag, seg)`` address like
+    any other, and it lands on the SEGMENT CENTRE (§#addressing) — the same
+    point ``EX 0 1 3`` drives, arclength for arclength."""
+    model = parse(PAIR + "TL 1 3 2 3 450. 2.\nXQ\nNX\n")
+    (card,) = model.networks
+    feed_wire, feed_arc, _volts = model.feeds[0]
+    assert card.end_a == (feed_wire, feed_arc)
+    assert card.end_b == (1, feed_arc)
+
+
+def test_a_network_card_keeps_its_nec_addressing_alongside_the_resolution():
+    """§#nt--two-port-network: the ``NETWORK DATA`` printout is addressed in
+    tags and segments, and a deck whose tags repeat cannot have them
+    reconstructed from an arclength — so the card's own pair is recorded."""
+    model = parse(PAIR + "NT 2 4 1 2 0. .02 0. 0. 0. .02\nXQ\nNX\n")
+    (card,) = model.networks
+    assert (card.address_a, card.address_b) == ((2, 4), (1, 2))
+    assert card.end_a[0] == 1 and card.end_b[0] == 0
+
+
+def test_the_payload_is_recorded_verbatim_and_uninterpreted():
+    """§#tl--transmission-line: F1-F6 as the deck wrote them.  A crossed line
+    is spelled with a NEGATIVE Z0 and the sign is kept — normalising it here
+    would decide a semantics question this reader does not own."""
+    model = parse(PAIR + "TL 1 3 2 3 -450. 2. 1.E-3 2.E-3 3.E-3 -4.E-3\nXQ\nNX\n")
+    (card,) = model.networks
+    assert card.payload == (-450.0, 2.0, 1.0e-3, 2.0e-3, 3.0e-3, -4.0e-3)
+
+
+@pytest.mark.parametrize(
+    "card,expected",
+    [
+        ("TL 1 3 2 3 450.", (450.0, 0.0, 0.0, 0.0, 0.0, 0.0)),
+        ("TL 1 3 2 3 450. 2.", (450.0, 2.0, 0.0, 0.0, 0.0, 0.0)),
+        ("NT 1 3 2 3 .02", (0.02, 0.0, 0.0, 0.0, 0.0, 0.0)),
+    ],
+)
+def test_a_short_network_card_zero_fills(card, expected):
+    """§#field-numbering: a field the deck did not write reads as 0, exactly
+    as NEC's zero-filled card image does.  Measured on the oracle: an ``NT``
+    with its six reals omitted entirely and the same card with six explicit
+    zeros produce byte-identical printouts."""
+    model = parse(PAIR + card + "\nXQ\nNX\n")
+    assert model.networks[0].payload == expected
+
+
+def test_an_all_zero_nt_is_read_and_not_dropped():
+    """§#nt--two-port-network: the all-zero admittance matrix is NOT a no-op,
+    which is the trap this pins.  An ``LD`` of zero value is dropped as one
+    (§#ld--loading), and antennaknobs' importer skips an all-zero ``NT`` too —
+    but the oracle does neither: it attaches a network of zero admittance,
+    which OPEN-CIRCUITS both addressed segments.  Measured: the deck answers
+    0.68923 - j4651.8 against the no-card control's 0.10161 + j514.86, with
+    both connection-point currents collapsed to ~1e-20."""
+    model = parse(PAIR + "NT 1 3 2 3 0. 0. 0. 0. 0. 0.\nXQ\nNX\n")
+    (card,) = model.networks
+    assert card.payload == (0.0,) * 6
+
+
+# -- the by-value refusals ---------------------------------------------------
+
+
+@pytest.mark.parametrize("mnemonic", ("TL", "NT"))
+@pytest.mark.parametrize("seg", (0, -3))
+def test_a_nonpositive_segment_number_refuses(mnemonic, seg):
+    """§#fields-refused-by-value: NEC halts the whole run on this card, and
+    the guard exists because ``locate`` would otherwise read segment 0 as
+    segment 1 and attach a deck NEC refuses outright to the wrong place."""
+    with pytest.raises(DeckError) as exc:
+        parse(PAIR + f"{mnemonic} 1 3 2 {seg} 450. 2.\nXQ\nNX\n")
+    assert str(exc.value) == (
+        f"{mnemonic} addresses segment {seg} of tag 2, which is not a segment: "
+        "NEC halts on this card with CHECK DATA, PARAMETER SPECIFYING SEGMENT "
+        "POSITION IN A GROUP OF EQUAL TAGS MUST NOT BE ZERO — a network "
+        "endpoint names one segment, so its segment number must be 1 or more"
+    )
+
+
+def test_the_segment_guard_reads_the_segment_field_alone():
+    """§#fields-refused-by-value: it fires with a ZERO tag too, where the
+    segment number is a global index rather than a position within a group of
+    equal tags.  NEC's own check is on the segment field and runs before the
+    tag is looked at, so a deck written ``NT 0 0 ...`` gets the same halt —
+    measured (probes ``c_tag0_zero``, ``c_tag0_neg``)."""
+    with pytest.raises(DeckError) as exc:
+        parse(PAIR + "NT 0 0 0 8 .02 0. 0. 0. .02 0.\nXQ\nNX\n")
+    assert "addresses segment 0 of the structure" in str(exc.value)
+
+
+def test_a_zero_characteristic_impedance_refuses():
+    """§#fields-refused-by-value: NEC aborts reading the deck on this card.
+    A short ``TL`` reaches the same guard, and should — a card that names two
+    endpoints and no line is not a transmission line."""
+    expected = (
+        "TL with a zero characteristic impedance is not a transmission line — "
+        "NEC aborts reading the deck on this card; Z0 must be nonzero, and its "
+        "SIGN, not its magnitude, is what selects a crossed line"
+    )
+    with pytest.raises(DeckError) as exc:
+        parse(PAIR + "TL 1 3 2 3 0. 2.\nXQ\nNX\n")
+    assert str(exc.value) == expected
+    with pytest.raises(DeckError) as exc:
+        parse(PAIR + "TL 1 3 2 3\nXQ\nNX\n")
+    assert str(exc.value) == expected
+
+
+def test_an_nt_of_zero_admittance_is_not_the_z0_refusal():
+    """§#nt--two-port-network: the zero test is ``TL``'s alone.  ``NT``'s F1
+    is an admittance, not an impedance, and zero is a legal value for it —
+    the oracle runs the card."""
+    assert len(parse(PAIR + "NT 1 3 2 3 0. 0. 0. 0. 0. 0.\nXQ\nNX\n").networks) == 1
+
+
+# -- contiguity (§#network-contiguity) ---------------------------------------
+
+
+def _contiguity_message(mnemonic: str, destroyer: str) -> str:
+    return (
+        f"{mnemonic} with an interposed {destroyer} card between it and an "
+        f"earlier network card is not supported by this engine (momwire#456): "
+        f"NEC silently DESTROYS every TL/NT read before such a card, so this "
+        f"deck's earlier network cards would vanish with no diagnostic while "
+        f"still being echoed in its DATA CARD list as read — keep a deck's "
+        f"TL/NT cards contiguous (only PT, PQ and MP may sit between them)"
+    )
+
+
+@pytest.mark.parametrize(
+    "destroyer,line",
+    [
+        ("LD", "LD 4 1 2 2 10. 0."),
+        ("EX", "EX 0 2 3 0 1."),
+        ("FR", "FR 0 1 0 0 14."),
+        ("GN", "GN 1"),
+        ("EK", "EK"),
+        ("GD", "GD 0 0 0 0 5. 0.001"),
+        ("XQ", "XQ"),
+    ],
+)
+def test_an_interposed_card_of_the_destroy_class_refuses(destroyer, line):
+    """§#network-contiguity: every member of the measured destroy class.
+
+    Each row was run on the oracle as ``TL / <card> / NT`` and read back off
+    the network printout block: in every one the ``TL`` is simply gone, with
+    no diagnostic and the card still echoed in the ``DATA CARD`` list as read.
+    Silence of that kind is what this dialect refuses rather than matches."""
+    deck = (
+        PAIR + f"TL 1 3 2 3 450. 2.\n{line}\nNT 1 3 2 3 0. .02 0. 0. 0. .02\nXQ\nNX\n"
+    )
+    with pytest.raises(DeckError) as exc:
+        parse(deck)
+    assert str(exc.value) == _contiguity_message("NT", destroyer)
+
+
+@pytest.mark.parametrize("line", ("PT -1", "PQ -1", "MP 16 32"))
+def test_the_print_control_cards_may_sit_between_network_cards(line):
+    """§#network-contiguity: the transparent half, and equally measured — PT,
+    PQ and MP change what a run REPORTS, not what it computes, and the oracle
+    keeps both network cards across them.  Serving these matters: SimNEC
+    appends ``MP`` on structure size alone."""
+    model = parse(
+        PAIR + f"TL 1 3 2 3 450. 2.\n{line}\nNT 1 3 2 3 0. .02 0. 0. 0. .02\nXQ\nNX\n"
+    )
+    assert [c.kind for c in model.networks] == ["TL", "NT"]
+
+
+def test_the_contiguity_message_names_the_first_interposed_card():
+    """§#network-contiguity: with several cards between the two networks it is
+    the FIRST that is the deck's mistake, so that is the one named."""
+    deck = (
+        PAIR + "TL 1 3 2 3 450. 2.\nFR 0 1 0 0 14.\nGN 1\n"
+        "NT 1 3 2 3 0. .02 0. 0. 0. .02\nXQ\nNX\n"
+    )
+    with pytest.raises(DeckError) as exc:
+        parse(deck)
+    assert str(exc.value) == _contiguity_message("NT", "FR")
+
+
+def test_a_deck_with_one_network_card_never_meets_the_contiguity_rule():
+    """§#network-contiguity: the rule is about a card DESTROYED by a later
+    one, so a deck with a single network card is unaffected wherever the card
+    sits and whatever follows it."""
+    model = parse(PAIR + "TL 1 3 2 3 450. 2.\nGN 1\nFR 0 1 0 0 14.\nXQ\nNX\n")
+    assert len(model.networks) == 1
+
+
+# -- retention (§#network-retention) -----------------------------------------
+
+
+def test_networks_are_retained_across_execute_groups():
+    """§#network-retention: a contiguous network group persists to the end of
+    the deck the way an ``EX`` set does — the oracle prints the same two rows
+    in both groups' network blocks (probe ``persist_xq``).  So the model
+    carries them once, deck-level, rather than per group."""
+    model = parse(
+        PAIR + "TL 1 3 2 3 450. 2.\nNT 1 3 2 3 0. .02 0. 0. 0. .02\n"
+        "XQ\nFR 0 1 0 0 21.\nXQ\nNX\n"
+    )
+    assert len(model.groups) == 2
+    assert [c.kind for c in model.networks] == ["TL", "NT"]
+    assert [c.first_group for c in model.networks] == [0, 0]
+
+
+def test_a_network_card_arms_the_next_execute_card_without_refilling():
+    """§#arming, §#network-retention: a bare ``XQ`` after a lone network card
+    is a real second run, so ``TL``/``NT`` arm — but they arm the way ``EX``
+    does, moving the composition on top of the operator rather than the
+    operator, so the group is not marked refilled.
+
+    Measured (probe ``c_xq_only``): the oracle prints two ANTENNA INPUT
+    PARAMETERS blocks and exactly one each of MATRIX TIMING, FREQUENCY and
+    STRUCTURE IMPEDANCE LOADING."""
+    model = parse(PAIR + "XQ\nTL 1 3 2 3 450. 2.\nXQ\nNX\n")
+    assert model.groups[1] is not None
+    assert not model.groups[1].refilled
+    assert not model.groups[1].refilled_partial
+
+
+def test_a_network_stated_after_an_execute_card_records_where_it_starts():
+    """§#network-retention: retention runs FORWARD from the card, not
+    backward.  A deck that runs the bare antenna and then attaches a network
+    is answered without one in the first group, which the oracle prints
+    (probe ``c_after_xq``: group 1's network block carries only the earlier
+    card).  ``first_group`` is the whole of that scoping."""
+    model = parse(PAIR + "XQ\nTL 1 3 2 3 450. 2.\nXQ\nNX\n")
+    (card,) = model.networks
+    assert card.first_group == 1
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,19 @@
+CM k9ay_nt_cell's REPLICATED twin (momwire#456 phase C): the expansion with
+CM ONE NT PER COPY, which is what the cell rule would mean if it applied to
+CM networks.  It does not: this deck answers 109.75 + j492.48 against the
+CM cell deck's 57.233 + j501.94 on the oracle, so replicating a network card
+CM is a measurably WRONG reading.  Committed as the falsifier -- an engine
+CM that grew a cell rule for TL/NT by analogy with LD would match this deck
+CM instead of k9ay_nt_naive.deck, and the pair is what tells them apart.
+CE
+GW 1 8 0. 0. 8.5 5. 0. 1.5 1.5E-3
+GW 2 5 0. 0. 0. 5. 0. 1.5 1.5E-3
+GW 3 8 0. 0. 8.5 -5. 0. 1.5 1.5E-3
+GW 4 5 0. 0. 0. -5. 0. 1.5 1.5E-3
+GE 0
+EX 0 4 1 0 1. 0.
+NT 1 4 2 3 0.02 0. -0.02 0. 0.02 0.
+NT 3 4 4 3 0.02 0. -0.02 0. 0.02 0.
+FR 0 1 0 0 1.8 0
+XQ
+NX
