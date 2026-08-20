@@ -43,6 +43,7 @@ from momwire.networks import (
     Transformer,
     TwoPort,
 )
+from momwire.networks._reducer import _BudgetEntry
 from momwire.networks._spec import _branch_port_refs
 
 FREQ_MHZ = 28.0
@@ -299,6 +300,150 @@ def test_branch_paths_do_not_change_the_answer():
     z_paths = reducer(_tuner_net(["tuner1.", "tuner1.", ""])).driven_impedance(y, WL)[0]
     z_bare = reducer(_tuner_net([])).driven_impedance(y, WL)[0]
     assert z_paths == pytest.approx(z_bare, rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# 2b. Structured probe identity (antennaknobs#956): every budget entry also
+# carries `.key` = (instance_path, branch_index, subprobe) — independent of
+# the (still frozen) label spelling, and unique across a budget.
+# ---------------------------------------------------------------------------
+
+
+def _nested_autotransformer_net():
+    """A 2-level-nested composite (`outer.` / `outer.auto.`) whose middle
+    branch is an `Autotransformer`, which emits TWO probes ("lower"/"upper")
+    off one branch — the case the issue calls out as needing distinct
+    `subprobe` tokens within a single branch index."""
+    return Network(
+        ports={
+            "f": PortOnWire("f"),
+            "in": PortVirtual("in"),
+            "tap": PortVirtual("tap"),
+            "top": PortVirtual("top"),
+        },
+        branches=[
+            TwoPort(a="in", b="tap", r=1.0),
+            Autotransformer(a="tap", b="top", l_lower=1e-6, l_upper=4e-6, ql=50.0),
+            TL(a="top", b="f", z0=50.0, length=1.0),
+        ],
+        sources=[Driven(port="f")],
+        branch_paths=["outer.", "outer.auto.", ""],
+    )
+
+
+def test_probe_keys_are_unique_in_a_nested_composite_with_an_autotransformer():
+    """Gate 3: uniqueness across a budget, on the network shape the issue
+    names — nested instance paths plus an autotransformer's two sub-probes
+    sharing one branch."""
+    _v, _eff, _p_in, budget = reducer(_nested_autotransformer_net()).excited_state(
+        synth_y(1, 4), WL
+    )
+    keys = [entry.key for entry in budget]
+    assert len(keys) == len(set(keys)), f"duplicate probe keys: {keys}"
+
+    # instance_path is the RAW `branch_paths` entry, not the "{p[:-1]}: "
+    # label-display form (the design explicitly calls this out).
+    paths = [k[0] for k in keys]
+    assert "outer." in paths and "outer.auto." in paths
+    assert not any(p.endswith(": ") for p in paths if p)
+
+    # The autotransformer's two probes: same (instance_path, branch_index),
+    # distinct subprobe tokens.
+    auto_keys = [k for k in keys if k[0] == "outer.auto."]
+    assert len(auto_keys) == 2
+    assert auto_keys[0][:2] == auto_keys[1][:2]
+    assert {k[2] for k in auto_keys} == {"lower", "upper"}
+
+
+def test_probe_keys_are_unique_across_a_composite_with_shared_loads():
+    """Gate 3 (continued): two `Load`s on the same node fold into one
+    "termination" probe, and instance-path branches at multiple nesting
+    depths must still all resolve to distinct keys."""
+    net = Network(
+        ports={
+            "f": PortOnWire("f"),
+            "in": PortVirtual("in"),
+            "tuner1.m": PortVirtual("tuner1.m"),
+        },
+        branches=[
+            TwoPort(a="in", b="tuner1.m", l=1.2e-6, r=0.8),
+            Shunt(port="tuner1.m", r=900.0, c=60e-12),
+            Load(port="f", r=5.0),
+            Load(port="f", l=1e-7),
+            TL(a="tuner1.m", b="f", z0=50.0, length=2.0),
+        ],
+        sources=[Driven(port="in")],
+        branch_paths=["tuner1.", "tuner1.", "", "", ""],
+    )
+    _v, _eff, _p_in, budget = reducer(net).excited_state(synth_y(1, 4), WL)
+    keys = [entry.key for entry in budget]
+    assert len(keys) == len(set(keys)), f"duplicate probe keys: {keys}"
+    # The two co-located Loads combine into ONE probe, anchored on the first
+    # Load branch's own (path, index) — branch index 2 in `branches` above.
+    term_keys = [k for k in keys if k[2] == "load"]
+    assert term_keys == [("", 2, "load")]
+
+
+def test_budget_key_is_independent_of_label_spelling():
+    """The decisive gate (antennaknobs#956): the label strings the reducer
+    emits are still frozen (byte-identical), but `.key` is not DERIVED from
+    them — it comes from the index-aligned `system.probe_keys`, not from any
+    parsing of `system.probes`' label text. Prove it with a local re-render —
+    take the reducer's own `(label, kind, payload)` probes (the real ones
+    `apply_branches` built) and re-render an entirely different display
+    string per probe from the same (kind, payload) data. If the key were
+    secretly built from the label text, mangling the label would perturb it;
+    it does not, and the watts values (kind/payload-derived) do not move
+    either."""
+    net = _nested_autotransformer_net()
+    system = reducer(net).apply_branches(synth_y(1, 4), WL)
+
+    def render(labeller):
+        return [
+            _BudgetEntry(
+                labeller(label, i), system.branch_power((label, kind, payload)), key
+            )
+            for i, ((label, kind, payload), key) in enumerate(
+                zip(system.probes, system.probe_keys)
+            )
+        ]
+
+    original = render(lambda label, i: label)
+    # A future momwire-side label wording change, simulated: nothing about
+    # this touches kind/payload/key, only the display string.
+    reworded = render(lambda label, i: f"renamed probe #{i}!!")
+
+    orig_labels = [e[0] for e in original]
+    new_labels = [e[0] for e in reworded]
+    assert orig_labels != new_labels  # the label genuinely changed
+    assert new_labels == [f"renamed probe #{i}!!" for i in range(len(new_labels))]
+
+    assert [e.key for e in original] == [e.key for e in reworded]
+    assert [e[1] for e in original] == [e[1] for e in reworded]  # watts untouched
+    keys = [e.key for e in reworded]
+    assert len(keys) == len(set(keys))  # still unique after the rewording
+
+
+def test_budget_entries_unpack_as_two_tuples_backward_compat():
+    """Gate 4: `for label, watts in budget` — the exact idiom `cli.py` and
+    `schematic.py` (antennaknobs) and `_reducer.py` itself use — must keep
+    working unchanged; `.key` rides along as an attribute, not a 3rd slot."""
+    _v, _eff, _p_in, budget = reducer(
+        _tuner_net(["tuner1.", "tuner1.", ""])
+    ).excited_state(synth_y(1, 4), WL)
+    assert budget  # nonempty, or the loop below proves nothing
+    total = 0.0
+    unpacked = 0
+    for label, watts in budget:  # must not raise ValueError: too many values
+        assert isinstance(label, str)
+        assert isinstance(watts, float)
+        total += watts
+        unpacked += 1
+    assert unpacked == len(budget)
+    assert total == pytest.approx(sum(entry[1] for entry in budget))
+    for entry in budget:
+        assert len(entry) == 2
+        assert isinstance(entry.key, tuple) and len(entry.key) == 3
 
 
 # ---------------------------------------------------------------------------
