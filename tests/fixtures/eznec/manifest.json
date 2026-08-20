@@ -1,7 +1,7 @@
 {
   "citation": "NEC-5 printouts captured as End-User Reports; NEC-5 is (c) LLNL, LLNL-CODE-746721. The binary is user-licensed and never distributed. Decks were emitted by EZNEC Pro/2+ v7.0.4 driving NEC5CL_x13.exe (antennaknobs capture sessions, momwire#390/#456); printouts are the Windows engine\u2019s own, byte-verbatim including CRLF line endings.",
   "source": "antennaknobs scratch/eznec-capture/ (capture ids preserved); scored matrix: antennaknobs docs/status/2026-08-20-eznec-nec5-scored-matrix.md",
-  "normalizations": "byte-compare after: CRLF->LF; drop FILL=/RUN TIME timing lines; normalize -0.00 vs 0.00 signed zero in pattern TILT columns; drop GMPINO/SOMMPD.NEX preamble lines",
+  "normalizations": "byte-compare after: CRLF->LF; drop FILL=/RUN TIME timing lines; normalize -0.00 vs 0.00 signed zero in pattern TILT columns; drop every SOMMPD.NEX cache block, each of which is ONE BLANK LINE followed by a run of cache lines (the blank is part of the block; dropping it leaves the finite-ground ANTENNA ENVIRONMENT block the same heading/blank/name shape FREE SPACE and PERFECT GROUND already have). Four block forms are observed across these captures: STALE, ' GMPINO: EPSC from file = <epsc>' + '              should be  <epsc>' + ' Will compute Sommerfeld-ground tables' (0021/0047/0048); VALID, 'Sommerfeld integral tables read:' + 'Potentials: 11 12 13 14 15' + 'E, H:' (0022); ABSENT, ' GMPINO: Unable to open file SOMMPD.NEX' (blank-padded to 70 columns) + ' Will compute Sommerfeld-ground tables' (measured on the linux oracle 2026-08-20, no capture); and the POSTAMBLE all four print between the EN echo and RUN TIME, 'Sommerfeld integral tables written in previous run:' + 'Potentials: 11 12 13 14 15' + 'E and H:' (0022 writes 'E and H: 11 12 13 14 15'). The seam never reads and never writes SOMMPD.NEX, so it emits none of them.",
   "w7el_gate": {
     "a": [
       "0012",
@@ -137,12 +137,15 @@
     {
       "id": "0021",
       "title": "Vertical over real ground",
-      "deck": "decks/0021_vertical-over-real-ground.nec"
+      "deck": "decks/0021_vertical-over-real-ground.nec",
+      "printout": "printouts/0021_vertical-over-real-ground.out"
     },
     {
       "id": "0022",
       "title": "Vertical over real ground",
-      "deck": "decks/0022_vertical-over-real-ground.nec"
+      "deck": "decks/0022_vertical-over-real-ground.nec",
+      "printout": "printouts/0022_vertical-over-real-ground.out",
+      "unrendered": "carries a NEAR ELECTRIC FIELDS block, and NE is refused at this seam, so there is no form for the renderer to round-trip. Committed for its ground card (the served GN 0), for its refusal, and because its SOMMPD.NEX cache block is the corpus's only VALID form."
     },
     {
       "id": "0023",
@@ -272,12 +275,14 @@
     {
       "id": "0047",
       "title": "Vertical over real ground",
-      "deck": "decks/0047_vertical-over-real-ground.nec"
+      "deck": "decks/0047_vertical-over-real-ground.nec",
+      "printout": "printouts/0047_vertical-over-real-ground.out"
     },
     {
       "id": "0048",
       "title": "Vertical over real ground",
-      "deck": "decks/0048_vertical-over-real-ground.nec"
+      "deck": "decks/0048_vertical-over-real-ground.nec",
+      "printout": "printouts/0048_vertical-over-real-ground.out"
     }
   ]
 }
