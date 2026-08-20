@@ -1,0 +1,163 @@
+"""The one-shot process shell EZNEC launches: argv in, printout out, exit 0.
+
+EZNEC Pro+ v7 runs its NEC-5 console engine once per calculation, as
+
+    NEC5CL_x13.exe "EZN5.NEC" "NEC5.OUT"      cwd = the engine's directory
+
+— two quoted positional arguments (input deck, output printout), resolved
+against the current directory, stdin never read, stderr empty, exit 0.  This
+module is that protocol and nothing else; :mod:`momwire.eznec._printout` owns
+the bytes it writes, and U2 onward own what goes below the header.
+
+Everything here is derived from CAPTURED INPUT/OUTPUT ONLY — the launch lines,
+the fault-injection table, and the engine's own argument-error paths recorded
+in antennaknobs ``docs/status/2026-08-16-eznec-nec5-dialect-capture.md``, with
+the deck/printout corpus in ``docs/status/2026-08-20-eznec-nec5-scored-matrix.md``
+and ``tests/fixtures/eznec/``.  No NEC-5 internals are described or relied on.
+
+Three rules, and they are the whole unit
+----------------------------------------
+1. **Exit 0, always.**  EZNEC never reads the exit status: a byte-perfect
+   printout returned with exit 1 produced normal results and no complaint.
+   Success, refusal, unreadable deck, wrong argument count, an unexpected
+   traceback — all exit 0.  The exit code is not a channel in either
+   direction, so a drop-in gains nothing by using it and loses nothing by
+   returning zero.
+
+2. **Always write the printout.**  Deleting it (or never creating it) sends
+   EZNEC down the "this may be due to the location of the external NEC
+   program, try a different location" path, which blames the user's install
+   for what is actually a refusal.  The file is the only channel there is.
+
+3. **Never read stdin.**  The real engine, given no arguments, prompts for a
+   filename — but it reads that from the console device, not stdin, so a
+   piped answer is ignored and it dies at end-of-file.  EZNEC never takes
+   that path, so this engine does not implement the prompt loop at all: the
+   argv form is the whole interface, and stdin stays untouched whether it is
+   a terminal, a pipe carrying bytes, or /dev/null.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+from . import _printout
+
+__all__ = [
+    "ARGUMENT_ERROR_INPUT",
+    "ARGUMENT_ERROR_OUTPUT",
+    "main",
+    "run",
+]
+
+# Observed verbatim: `NEC5CL_x13.exe deck.nec` with no second argument prints
+# exactly this to stdout and exits 0 (capture doc, "Invocation protocol").
+ARGUMENT_ERROR_OUTPUT = "ERROR getting output file from command line"
+
+# NOT observed — the real engine answers a bare command line with its console
+# prompt loop, which is deliberately not implemented (see rule 3 above).  The
+# same shape and the same exit 0 is the honest stand-in for a path EZNEC never
+# takes; it is spelled symmetrically so a human reading a terminal sees which
+# half of the command line went missing.
+ARGUMENT_ERROR_INPUT = "ERROR getting input file from command line"
+
+# Decks and printouts are handled as bytes wearing a lossless 1-byte codec:
+# whatever a comment card holds has to survive into the echo unchanged, and a
+# strict decode would turn one stray byte into a crash on a deck that is
+# otherwise perfectly readable.
+_CODEC = "latin-1"
+
+
+def read_deck(deck_path: Path) -> str | None:
+    """The deck's text, or ``None`` when it cannot be read at all.
+
+    ``None`` is not an exception because an unreadable input is not an
+    exceptional outcome at this seam — it is one more thing the printout has
+    to say out loud (rule 2).
+    """
+    try:
+        return deck_path.read_bytes().decode(_CODEC)
+    except OSError:
+        return None
+
+
+def write_printout(printout_path: Path, text: str) -> None:
+    """Write the printout with LF endings, whatever the platform prefers.
+
+    The captured printouts are the Windows engine's own and arrived CRLF; the
+    byte-gates normalize line endings before comparing (fixture manifest,
+    ``normalizations``), so the engine writes the platform-neutral form and
+    nothing downstream cares.
+    """
+    with printout_path.open("w", encoding=_CODEC, newline="\n") as handle:
+        handle.write(text)
+
+
+def run(deck_path: str | Path, printout_path: str | Path) -> str:
+    """Serve one deck: read it, render a printout, write the printout.
+
+    Returns the text written, which is the whole of what this process
+    communicates.  In U1 that text is always a refusal — the seam speaks the
+    protocol byte-faithfully and refuses the physics by name — so a deck that
+    parses and a deck that is line noise differ only in what their comment
+    echo says.
+
+    Paths are used as given, so they resolve against the current directory the
+    way EZNEC's cwd-relative ``"EZN5.NEC"`` does.
+    """
+    deck = Path(deck_path)
+    out = Path(printout_path)
+
+    text = read_deck(deck)
+    if text is None:
+        printout = _printout.render_refusal(None, f"UNABLE TO READ INPUT FILE {deck}")
+    else:
+        printout = _printout.render_refusal(text, _printout.STUB_REFUSAL)
+
+    write_printout(out, printout)
+    return printout
+
+
+def main(argv: list[str] | None = None) -> int:
+    """The process entry point.  Returns 0.  Always returns 0.
+
+    Argument errors go to stdout and write no printout — that is what the real
+    engine does, and it is the one case where writing a file would be wrong:
+    there is no output path to write it to.  Every other failure, including an
+    unexpected exception from anywhere below, still leaves a printout behind
+    with a ``NEC ERROR`` line in it.
+    """
+    args = list(sys.argv[1:] if argv is None else argv)
+
+    if len(args) < 1:
+        print(ARGUMENT_ERROR_INPUT)
+        return 0
+    if len(args) != 2:
+        # One argument is the observed case.  More than two is not observed —
+        # EZNEC always sends exactly two, quoted — and is treated the same
+        # way: the command line did not resolve to an output file.
+        print(ARGUMENT_ERROR_OUTPUT)
+        return 0
+
+    deck_path, printout_path = args
+    try:
+        run(deck_path, printout_path)
+    except Exception as exc:  # noqa: BLE001 - the last line of defence
+        # A traceback on stderr would be invisible (EZNEC captures neither
+        # stderr nor the exit code), and a missing file would be read as a
+        # broken installation.  So the crash is reported the only way that
+        # reaches a human: as a refusal, in the printout, exit 0.
+        _report_internal_error(printout_path, exc)
+    return 0
+
+
+def _report_internal_error(printout_path: str | Path, exc: BaseException) -> None:
+    """Last-ditch printout for a failure the shell did not anticipate."""
+    reason = f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
+    try:
+        write_printout(Path(printout_path), _printout.render_refusal(None, reason))
+    except OSError:
+        # The output path itself is unwritable; there is no channel left, and
+        # a non-zero exit would only be discarded. Stay quiet, stay zero.
+        pass
