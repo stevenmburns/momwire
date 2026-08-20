@@ -50,14 +50,22 @@ from momwire.portal import main as portal_main
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "nec_portal"
 ALL_NAMES = tuple(sorted(p.stem for p in FIXTURE_DIR.glob("*.deck")))
-# Nothing in the corpus refuses any more. The three hand-authored network
-# probes were here from #930 until momwire#456 phase C — a refusal is an
-# answer, so they belonged in the byte oracle either way — and they SOLVE now,
-# alongside the four decks that unit added (`dipole_tl_zero_length`,
-# `dipole_nt_all_zero`, `dipole_ld_nt_colocated`, `dipole_ex6_gyrator`). The
-# name survives, empty, because the oracle below still has to say what it
-# expects of a refused deck if one ever comes back.
-REFUSED_NAMES = ()
+# The corpus decks whose answer is a REFUSAL, which travels the socket like
+# any other answer and is gated by the same byte oracle. All four are the
+# MININEC-type ground idiom — a ``GD`` in force under a ``GN 1`` at an execute
+# card that will not read it (#458; the three ``mininec_*`` decks captured by
+# momwire#487).
+#
+# The three hand-authored network probes were here from #930 until
+# momwire#456 phase C and they SOLVE now, alongside the four decks that unit
+# added (`dipole_tl_zero_length`, `dipole_nt_all_zero`,
+# `dipole_ld_nt_colocated`, `dipole_ex6_gyrator`).
+REFUSED_NAMES = (
+    "dipole_gd_second_medium",
+    "mininec_gp80_seam",
+    "mininec_vertical_gd2_rp0",
+    "mininec_vertical_rp0",
+)
 
 NX_ECHO = re.compile(r"^\s*DATA CARD No:\s+\d+ NX\b", re.MULTILINE)
 LISTENING = re.compile(r"^\S+ listening pid=(\d+) socket=(\S+)$", re.MULTILINE)

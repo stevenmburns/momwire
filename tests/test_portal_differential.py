@@ -74,6 +74,10 @@ dipole_sommerfeld_ground              2.24%   2.23%       -   4.35%      -
 dipole_tl_network                     0.27%   0.26%       -   1.27%      -   (d)
 dipole_tl_shunt_crossed               1.14%   1.14%       -   1.12%      -
 dipole_tl_zero_length                 0.10%   0.10%       -   1.27%      -
+mininec_gd_reset_by_gn_rp0            0.91%   0.91%       -   0.41%   0.03   (o)
+mininec_gd_without_gn_rp0             0.76%   0.76%       -   0.96%   0.12   (o)
+mininec_vertical_rp3_ch               0.91%   0.91%       -   0.41%   0.03   (o)
+mininec_vertical_rp3_clt              0.91%   0.91%       -   0.41%   0.03   (o)
 split_dipole_qq                      12.02%  12.02%       -   6.00%      -   (c)
 split_dipole_qq_daemon_framed        12.02%  12.02%       -   6.00%      -   (c)
 resident_two_decks                    0.77%   0.77%       -   0.96%      -
@@ -241,6 +245,31 @@ fails.
     the endpoint gap cut for the second group perturbs the first not at all
     (``test_portal.py``'s
     ``test_the_group_before_the_network_card_reproduces_the_control_exactly``).
+
+(o) are the four decks momwire#487 captured on the SERVED side of the
+    MININEC-type ground idiom, and three of them are the corpus's first
+    ground-CONTACTING geometry: a quarter wave standing on the plane at
+    30 MHz under a ``GE 1``, which is the shape the idiom exists for. They
+    are the loosest thing about that class and they are 0.91 %, with the
+    current distribution at 0.41 % and every pattern row inside 0.03 dB — so
+    the contact junction, which is the piece of physics a reader would expect
+    to be expensive here, costs nothing measurable against nec2c.
+
+    Two of the four ask a ``GD`` question the older fixtures could not: the
+    cliff decks carry ONE non-zero real each (edge distance on one, second-
+    medium height on the other), where ``dipole_rp3_circular_cliff`` carries
+    both together and could not tell a swapped pair from a read one. The
+    other two are controls on inertness from the other side — a ``GD`` a
+    later ``GN`` resets, and a ``GD`` with no ``GN`` under it at all — and
+    the second is ``dipole_rp_pattern``'s own row to the digit, because it is
+    that deck plus one card that does nothing.
+
+    What these rows do NOT cover is the printout: the same three decks are
+    held out of ``test_portal.py``'s column-layout gate for a two-line
+    ground-contact gap (an unprinted banner and an unwritten ``I-``
+    connection column), pinned there by
+    ``test_the_ground_contact_printout_gap_is_exactly_two_lines``. The
+    numbers agree; two lines of the layout do not yet.
 """
 
 from __future__ import annotations
@@ -467,7 +496,20 @@ def pair():
 # The three network decks were in this list from #930 until momwire#456 phase
 # C. They are back in SUPPORTED, at the scores footnote (b) records, together
 # with the four network decks that unit captured.
-REFUSED = ("dipole_gd_second_medium",)
+#
+# momwire#487 added three more of the same refusal — 4nec2's own emitted
+# ``GP80`` deck verbatim, and the idiom stated on a GROUNDED vertical with an
+# explicit ``RP 0``, in both the ``GD 0`` and the ``GD 2`` spellings. Their
+# committed ``.out`` files are the oracle answering all three as plain perfect
+# ground, which is the ground truth momwire#456 ws2's ground decision turns
+# on; here, like the deck above, they only have to stay OUT of every gate
+# written against a solved printout.
+REFUSED = (
+    "dipole_gd_second_medium",
+    "mininec_gp80_seam",
+    "mininec_vertical_gd2_rp0",
+    "mininec_vertical_rp0",
+)
 SUPPORTED = tuple(n for n in NAMES if n not in REFUSED)
 
 # Portal-dialect cards no fixture covers, with the substring the error path
@@ -513,9 +555,11 @@ def test_the_support_matrix_covers_the_whole_corpus():
     # 41 at the rewire (#930), plus the `dipole_gn_rearm` probe it landed
     # with, minus `dipole_gd_second_medium` (#458), plus the two `GX`/`GR`
     # fixtures of momwire#415, plus the three network decks momwire#456 phase C
-    # un-retired and the four it captured. The count is written out so a deck
-    # that quietly stops being measured shows up here.
-    assert len(SUPPORTED) == 51
+    # un-retired and the four it captured, plus the four momwire#487 captured
+    # on the SERVED side of the MININEC-type ground idiom (its three refused
+    # ones are in `REFUSED` above). The count is written out so a deck that
+    # quietly stops being measured shows up here.
+    assert len(SUPPORTED) == 55
 
 
 @pytest.mark.parametrize(("marker", "deck"), sorted(UNSUPPORTED.items()))
@@ -775,6 +819,14 @@ PATTERN_FIXTURES = (
     "dipole_rp2_cliff_on_the_gn_card",
     "dipole_rp3_circular_cliff",
     "dipole_rp3_cliff_sommerfeld",
+    # momwire#487's four answered decks, all of which carry an RP card: the
+    # two `RP 0` controls on which a `GD` is inert, and the two cliff requests
+    # that read one non-zero GD real each over a GROUND-CONTACTING vertical —
+    # a geometry no earlier pattern fixture had.
+    "mininec_gd_reset_by_gn_rp0",
+    "mininec_gd_without_gn_rp0",
+    "mininec_vertical_rp3_clt",
+    "mininec_vertical_rp3_ch",
 )
 
 # The two cliff fixtures that differ by one digit of the RP card, and the
