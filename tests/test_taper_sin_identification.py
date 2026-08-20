@@ -54,6 +54,43 @@ THIN_RADIUS = 1.250000e-03
 # the golden module is the source of truth for n_total and the two Z's.
 _SEC_COUNT = {"step2": 2, "thin": 10}
 
+# Anti-stale bar on the recorded Z_sin column — how far the live solve may sit
+# from the literal before we call it drift rather than arithmetic. It is NOT
+# the 5e-6 the rest of the golden-taper suite uses (momwire#483): that bar is
+# sized for the literal's own 6-decimal rounding (at most sqrt(2)*5e-7 =
+# 7.1e-7, see `scripts/capture_taper_nec5_lane.py`), and it holds only while
+# the solve stays well conditioned. The rung THIS test gates is the ladder's
+# worst — kappa(G) runs 2.0e3 -> 2.3e5 over step2's N=26..402 and 2.0e3 ->
+# 1.7e5 over thin's N=30..410.
+#
+# The fill is not bit-reproducible across arithmetic paths, and not at the ulp
+# level either: the collocation matrix moves by ||dG||_F/||G||_F ~ 9e-12 (~4e4
+# ulp — the Eq 76-79 endpoint brackets cancel) between the three fill paths
+# available on one box, all of them supported. The C++ accelerator's SIMD
+# sincos binds `_ZGVdN4v_sin`, an IFUNC whose implementation glibc picks from
+# the host's hwcaps; masking FMA (GLIBC_TUNABLES=glibc.cpu.hwcaps=-FMA) picks
+# a different one for the same symbol; and `_accel.py` documents the pure-
+# numpy fallback as a deliberate pure-Python install. The linear-solve bound
+# turns that into
+#
+#   |dZ| <= kappa(G) * ||dG||/||G|| * |Z|
+#         = 2.3e5 * 9.0e-12 * 116.8 = 2.4e-4 ohm   (step2, N=402)
+#         = 1.7e5 * 8.2e-12 *  89.9 = 1.3e-4 ohm   (thin,  N=410)
+#
+# and the bar below is that bound, rounded up to cover both rows. The largest
+# spread actually measured — worst pair over those three fill paths plus the
+# recording box's own column — is 5.3e-5 (step2) / 2.3e-5 (thin), so the bound
+# is conservative by ~5x and that is where the margin sits.
+#
+# This is arithmetic, not a stale literal: down the ladder the live-vs-
+# recorded gap stays at or near the literal's rounding floor (<= 1.8e-6 at
+# every rung up to N=282/290) and only the finest rung, where kappa peaks,
+# exceeds 5e-6 (1.6e-5 step2 / 1.4e-5 thin on a Haswell box whose libmvec
+# variant differs from CI's). Nor is the widened bar decorative: it is ~40x
+# tighter than the claim it guards, since `thin` clears the 0.1 ohm D3 gate
+# below with only 0.0104 ohm to spare.
+_GOLDEN_DRIFT_BAR = 2.5e-4
+
 
 def _gw(tag, n, x0, x1, z, rad):
     return (
@@ -109,7 +146,10 @@ def test_sin_converges_onto_nec2c_at_the_finest_rung(name):
     n_total, z_sin_recorded, z_nec2c = SIN_NEC2C_LADDERS[name][-1]
     n_per_sec = n_total // _SEC_COUNT[name]
     z_sin = _sin_z(name, n_per_sec)
-    assert abs(z_sin - z_sin_recorded) < 5e-6, f"{name}: sin moved from golden literal"
+    assert abs(z_sin - z_sin_recorded) < _GOLDEN_DRIFT_BAR, (
+        f"{name}: sin moved from golden literal by "
+        f"{abs(z_sin - z_sin_recorded):.3e} > {_GOLDEN_DRIFT_BAR:g}"
+    )
     assert abs(z_sin - z_nec2c) <= 0.1, (
         f"{name} N={n_total}: |Z_sin - Z_nec2c| = {abs(z_sin - z_nec2c):.4f} > 0.1 ohm"
     )
