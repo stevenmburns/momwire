@@ -710,7 +710,7 @@ def _site_for(
     raise ServeRefusal(
         f"{tag},{Nec5Node(tag, node).written} addresses a FREE end of wire "
         f"{tag} - nothing carries current past a lone conductor end, so there "
-        f"is no path for a source or a load to sit in"
+        f"is no path for a source, a load or a network connection to sit in"
     )
 
 
