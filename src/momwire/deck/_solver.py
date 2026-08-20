@@ -62,6 +62,7 @@ from ..hmatrix import HMatrixSolver
 from ..razor import RazorSolver
 from ..sinusoidal import SinusoidalSolver
 from ..sinusoidal_galerkin import SinusoidalGalerkinSolver
+from ._cards import DeckError
 from ._polylines import Mesh, to_polylines
 from .model import DeckModel, Environment, LoadSpec
 
@@ -458,6 +459,21 @@ def build_solver(
     Raises ``ValueError`` for an unknown basis, a model with no wires, and a
     port set the geometry cannot host.
     """
+    if model.networks:
+        # STAGED, and code-only: the spec describes the finished dialect, in
+        # which these cards solve.  The nec2 front end reads TL/NT and resolves
+        # where they attach (momwire#456 phase C, unit 1); composing the
+        # network with the antenna's port admittance is the next unit's.
+        # Refusing HERE rather than at the card keeps a half-built dialect
+        # honest — a deck with a network is read, echoed and then declined,
+        # never answered as though the network were not there.
+        n = len(model.networks)
+        raise DeckError(
+            f"this deck's {n} TL/NT network card{'' if n == 1 else 's'} "
+            f"parse in this dialect but do not yet solve: the network solve "
+            f"lands in the next unit of momwire#456 phase C"
+        )
+
     try:
         solver_class, basis_kwargs = BASES[basis]
     except KeyError:

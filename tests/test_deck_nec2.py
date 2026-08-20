@@ -1871,9 +1871,14 @@ def test_the_refusal_table_is_the_pages_table():
     """§#cards-refused-by-name, as a set: nothing in this dialect is accepted
     and silently ignored."""
     assert set(_REFUSED_BY_NAME) == {
-        "TL", "NT", "GA", "GH", "GC", "GF", "SY",
+        "GA", "GH", "GC", "GF", "SY",
         "SP", "SM", "SC", "KH", "CP", "PL", "WG", "ZO",
     }  # fmt: skip
+    # TL and NT left this set in momwire#456 phase C: the dialect reads them
+    # now, and what they refuse is by VALUE (§#fields-refused-by-value) —
+    # nonpositive segment addressing, a zero TL characteristic impedance, and
+    # the non-contiguous destroy pattern.
+    assert not {"TL", "NT"} & set(_REFUSED_BY_NAME)
 
 
 def test_an_unknown_card_is_refused_by_name():

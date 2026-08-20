@@ -37,6 +37,7 @@ __all__ = [
     "NearFieldRequest",
     "PrintControl",
     "ExecuteGroup",
+    "NetworkCard",
 ]
 
 
@@ -287,6 +288,65 @@ class ExecuteGroup:
 
 
 @dataclass(frozen=True)
+class NetworkCard:
+    """One two-port circuit attached between two points on the structure.
+
+    NEC spells these ``TL`` (a transmission line) and ``NT`` (an explicit
+    two-port admittance matrix); the spec's ``#tl--transmission-line`` and
+    ``#nt--two-port-network`` are the normative field layouts.  Both are the
+    same SHAPE — two endpoints and six reals — so they are one record with a
+    :attr:`kind` discriminator rather than two.
+
+    The record is deliberately *half* translated.  Its endpoints are in the
+    model's own vocabulary — ``(wire index, arclength)``, the segment CENTRE,
+    resolved exactly the way a feed's ``EX`` address is (spec
+    ``#addressing``) — because addressing is the dialect's job and no consumer
+    downstream of this module has ever heard of a tag.  Its :attr:`payload` is
+    the card's six real fields VERBATIM, uninterpreted: what those six numbers
+    mean is card semantics (a characteristic impedance and a sign that selects
+    a crossed line, or three Y-matrix entries with a forced reciprocity), and
+    that translation belongs to whoever composes the network with the antenna,
+    not to the reader that resolved where it attaches.
+
+    :attr:`address_a` / :attr:`address_b` keep the card's own ``(tag, seg)``
+    pair alongside the resolved endpoint.  That is NEC vocabulary inside the
+    model, which the rest of this module refuses on principle — it is here
+    because the ``NETWORK DATA`` printout block is addressed in exactly those
+    terms and reconstructing them from an arclength is not possible for a deck
+    whose tags repeat.  Nothing in the physics reads them.
+    """
+
+    # "TL" or "NT" — the card that wrote this record.
+    kind: str
+    # (model wire index, arclength in metres) at each end.
+    end_a: tuple[int, float] = (0, 0.0)
+    end_b: tuple[int, float] = (0, 0.0)
+    # The card's own NEC addressing, (tag, segment), for the printout only.
+    address_a: tuple[int, int] = (0, 0)
+    address_b: tuple[int, int] = (0, 0)
+    # F1-F6 as the deck wrote them, zero-filled for a short card.  For TL:
+    # Z0, length, then the two end shunt admittances (G, B) per end.  For NT:
+    # Y11, Y12, Y22 as (real, imaginary) pairs.
+    payload: tuple[float, float, float, float, float, float] = (
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    # The first execute group this card is live for — the number of execute
+    # cards that preceded it.  A network card is RETAINED from there to the
+    # end of the deck (spec ``#network-retention``), so this is the whole of
+    # its group scoping: 0 for the ordinary deck that states its networks
+    # before the first execute card, and nonzero only for one that runs the
+    # bare antenna first and then attaches a network.  A group EARLIER than
+    # this one is answered with no network at all, which is what the oracle
+    # prints (probe ``c_after_xq``).
+    first_group: int = 0
+
+
+@dataclass(frozen=True)
 class DeckModel:
     """A parsed deck, in momwire's vocabulary.
 
@@ -344,6 +404,15 @@ class DeckModel:
     # the card mnemonics they deferred here.  Empty in a finished dialect;
     # it exists so an unfinished one is honest rather than silent.
     deferred: tuple[str, ...] = field(default=())
+
+    # The deck's TL/NT cards, in card order, endpoints resolved (spec
+    # ``#tl--transmission-line`` / ``#nt--two-port-network``).  DECK-LEVEL and
+    # not per group: a network card is retained across execute cards the way
+    # an EX is (spec ``#network-retention``), so the set in force at a group
+    # is the set in force at the deck's end.  Last in the field order for the
+    # same reason `ExecuteGroup.environment` is: a positional construction
+    # written against an earlier release keeps meaning what it meant.
+    networks: tuple[NetworkCard, ...] = ()
 
     @property
     def environment(self) -> Environment:

@@ -40,6 +40,7 @@ from .model import (
     FarFieldRequest,
     LoadSpec,
     NearFieldRequest,
+    NetworkCard,
     PrintControl,
     SecondMedium,
     WireMaterial,
@@ -63,6 +64,7 @@ __all__ = [
     "NearFieldRequest",
     "PrintControl",
     "ExecuteGroup",
+    "NetworkCard",
     # what build_solver returns, and the roster it chooses from
     "BuiltSolver",
     "PortPlan",

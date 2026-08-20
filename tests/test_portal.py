@@ -1121,61 +1121,66 @@ def test_a_pec_ground_doubles_the_near_field_sources():
 
 
 # --------------------------------------------------------------------------
-# TL and NT: out of dialect (#930, design doc #846 §1)
+# TL and NT: parsed, not yet solved (momwire#456 phase C, unit 1)
 # --------------------------------------------------------------------------
 #
-# This engine's deck language is antenna-only: a structure of thin wires,
-# driven by voltage sources, optionally over a ground. Circuits attached to
-# that structure are somebody else's job — SimNEC's, which recomputes
-# everything it cares about from the ANTENNA INPUT PARAMETERS currents and
-# never reads the NETWORK DATA section at all, or antennaknobs' importer,
-# which keeps NEC's full network grammar for `.nec` import.
+# The dialect used to be antenna-only and refused both cards BY NAME (#930).
+# Phase C widened it: `TL`/`NT` are read, their endpoints resolved against the
+# structure, and recorded on `DeckModel.networks` — the spec's
+# `#tl--transmission-line` and `#nt--two-port-network`. Composing that network
+# with the antenna's port admittance is the NEXT unit, so `build_solver`
+# declines a model carrying networks with one interim message.
 #
-# Until #930 the portal translated both cards into circuit branches and drew
-# the two sections nec2c prints for them. The tests that pinned that behaviour
-# lived here; they are replaced by the refusal, because the refusal IS the
-# behaviour now. The three decks that exercised it stay in the corpus — a
-# refusal fixture is worth as much as a solving one, and more than a deleted
-# deck.
+# The three decks therefore still REFUSE end to end, which is the point of
+# keeping this battery: the byte-oracle contract (`test_portal_shared.py`'s
+# `REFUSED_NAMES`, `test_portal_differential.py`'s refusal list) does not move
+# under a parser change. What moved is WHERE the refusal comes from — solve
+# time, not card time — and therefore that the printout now reaches the
+# COMMENTS block before it stops.
 
 NETWORK_FIXTURES = ("dipole_nt_network", "dipole_tl_network", "dipole_tl_shunt_crossed")
 
-# Quoted from the normative grammar's refusal table
-# (momwire.dev/reference/deck-grammar-nec2/#cards-refused-by-name).
-NETWORK_REFUSALS = {
-    "TL": (
-        "TL (transmission line) is not part of this engine's nec2 dialect, "
-        "which is antenna-only; antennaknobs imports decks with networks"
-    ),
-    "NT": (
-        "NT (two-port network) is not part of this engine's nec2 dialect, "
-        "which is antenna-only; antennaknobs imports decks with networks"
-    ),
-}
+# Quoted from ``momwire.deck.build_solver``. This one is NOT in the grammar's
+# refusal tables and must not be: the spec describes the finished dialect, in
+# which these cards solve. It is a staging message with a shelf life, and the
+# unit that lands the solve deletes it along with this constant.
+NETWORK_STAGED_REFUSAL = (
+    "parse in this dialect but do not yet solve: the network solve "
+    "lands in the next unit of momwire#456 phase C"
+)
 
 
 @pytest.mark.parametrize("name", NETWORK_FIXTURES)
-def test_the_network_fixtures_refuse_by_name(name):
-    """Each of the three network decks refuses, naming the card that did it.
+def test_the_network_fixtures_refuse_at_solve_time(name):
+    """Each of the three network decks is READ and then declined.
 
-    ``dipole_tl_shunt_crossed`` carries both cards; the refusal fires on the
-    first one in card order, which is its ``TL``.
+    The message counts the cards it read, which is the observable that says
+    the parser got that far: ``dipole_tl_shunt_crossed`` carries a ``TL`` and
+    an ``NT`` and reports two.
     """
     deck = fixture_deck(name)
     text = run_deck(deck)[0]
-    first = next(
-        line.split()[0].upper()
+    n = sum(
+        1
         for line in deck.splitlines()
         if line.split() and line.split()[0].upper() in ("TL", "NT")
     )
-    assert f"ERROR: {NETWORK_REFUSALS[first]}" in text
-    assert f"ERROR-NEC2C: {NETWORK_REFUSALS[first]}" in text
+    plural = "" if n == 1 else "s"
+    expected = f"this deck's {n} TL/NT network card{plural} {NETWORK_STAGED_REFUSAL}"
+    assert f"ERROR: {expected}" in text
+    assert f"ERROR-NEC2C: {expected}" in text
 
 
 @pytest.mark.parametrize("name", NETWORK_FIXTURES)
 def test_a_refused_network_deck_still_emits_the_nx_sentinel(name):
     """The sentinel is mandatory on EVERY path — a refused deck that swallows
-    it leaves SimNEC blocked in ``readLine()`` forever."""
+    it leaves SimNEC blocked in ``readLine()`` forever.
+
+    The path this now takes is the *second* error frame in ``render_deck``
+    (the one after a successful parse), which is exactly why it is worth
+    re-pinning rather than assuming: a refusal that moved from one frame to
+    the other could have dropped the sentinel on the way.
+    """
     text = run_deck(fixture_deck(name))[0]
     assert NX_ECHO.search(text), "no NX sentinel on the error path"
 
@@ -1183,7 +1188,12 @@ def test_a_refused_network_deck_still_emits_the_nx_sentinel(name):
 @pytest.mark.parametrize("name", NETWORK_FIXTURES)
 def test_a_refused_network_deck_prints_no_solved_section(name):
     """A refusal is a refusal: no impedance table, no currents, no network
-    tables, and none of the numbers a reader could mistake for an answer."""
+    tables, and none of the numbers a reader could mistake for an answer.
+
+    Parsing further than before must not print further than before — the
+    network blocks in particular, which this dialect now knows enough to draw
+    and deliberately does not.
+    """
     text = run_deck(fixture_deck(name))[0]
     for banner in (
         "ANTENNA INPUT PARAMETERS",
@@ -1194,18 +1204,20 @@ def test_a_refused_network_deck_prints_no_solved_section(name):
         assert banner not in text, f"{name} still prints {banner}"
 
 
-def test_the_refusal_names_the_card_and_points_somewhere():
-    """The migration path is part of the message. A user whose pasted deck
-    stops working has to be told where the network grammar went, not merely
-    that this engine will not run it."""
-    for message in NETWORK_REFUSALS.values():
-        assert "antennaknobs" in message
-        assert "antenna-only" in message
+def test_the_staged_refusal_says_it_is_staged():
+    """The message's job is to be honest about a half-built dialect: the deck
+    is not wrong and the card is not out of dialect, so a user must not be
+    sent away to rewrite either. It names the unit that finishes the job."""
+    assert "momwire#456" in NETWORK_STAGED_REFUSAL
+    assert "not yet" in NETWORK_STAGED_REFUSAL
+    for word in ("antenna-only", "antennaknobs"):
+        assert word not in NETWORK_STAGED_REFUSAL
 
 
-def test_a_network_card_refuses_wherever_it_sits_in_the_deck():
-    """Refused by NAME, not by position: an ``NT`` after the execute card is
-    as out of dialect as one before it."""
+def test_a_network_card_after_the_execute_card_is_read_not_refused_by_name():
+    """Position no longer decides. An ``NT`` past the only execute card is in
+    dialect, parses, and stops at the same staged solve refusal as one before
+    it — with nothing left of the old by-name message anywhere in the frame."""
     deck = (
         "CE nt after the execute card\n"
         "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
@@ -1213,7 +1225,8 @@ def test_a_network_card_refuses_wherever_it_sits_in_the_deck():
         "NT 1 3 1 7 0. 0.02 0. 0. 0. 0.02\n"
     )
     text = run_deck(deck)[0]
-    assert NETWORK_REFUSALS["NT"] in text
+    assert f"this deck's 1 TL/NT network card {NETWORK_STAGED_REFUSAL}" in text
+    assert "is not part of this engine's nec2 dialect" not in text
     assert "ANTENNA INPUT PARAMETERS" not in text
 
 
