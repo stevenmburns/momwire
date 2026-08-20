@@ -6,13 +6,16 @@ server: the protocol delta against :mod:`momwire.portal`, which is a resident
 daemon SimNEC talks to over stdin.  ``python -m momwire.eznec <deck> <printout>``
 is the whole interface.
 
-Unit 1 (issue #497) builds the SEAM: the process shell, the printout header,
-and a stub that refuses every deck by name.  The dialect parser (U2), the
-renderer (U3), rung-1 physics (U4) and node-addressed networks (U5) plug in
-behind it.  A refusing engine that speaks the protocol correctly is already
-useful — it tells the operator, in EZNEC's own viewer, why their model was
-not served — and it is the only order in which the later units can be
-byte-gated at all.
+Issue #497 builds this seam in units.  U1 laid down the SEAM itself — the
+process shell, the printout header, and a stub that refuses every deck by
+name; U2 added the nec5 dialect front-end (:mod:`momwire.deck._nec5`); U3
+added the rest of the printout, so this package can now lay out a complete
+NEC-5 result file given the numbers.  Rung-1 physics (U4) and node-addressed
+networks (U5) — the units that PRODUCE those numbers, and the ones that wire
+the renderer into the shell in place of the stub refusal — plug in behind it.
+A refusing engine that speaks the protocol correctly is already useful — it
+tells the operator, in EZNEC's own viewer, why their model was not served —
+and it is the only order in which the later units can be byte-gated at all.
 
 The module path is U1's naming decision: ``momwire.eznec`` names the
 APPLICATION on the far side of the seam (EZNEC), not the dialect underneath
@@ -36,13 +39,41 @@ and none may be added.
 
 from __future__ import annotations
 
-from ._printout import STUB_REFUSAL, render_header, render_refusal
+from ._printout import (
+    ENVIRONMENT_FREE_SPACE,
+    ENVIRONMENT_PERFECT_GROUND,
+    STUB_REFUSAL,
+    ChargeRow,
+    LoadRow,
+    NetworkRow,
+    PatternBlock,
+    PatternRow,
+    PortRow,
+    PowerBudget,
+    RunData,
+    WireCurrentRow,
+    render_header,
+    render_printout,
+    render_refusal,
+)
 from ._shell import main, run
 
 __all__ = [
+    "ENVIRONMENT_FREE_SPACE",
+    "ENVIRONMENT_PERFECT_GROUND",
     "STUB_REFUSAL",
+    "ChargeRow",
+    "LoadRow",
+    "NetworkRow",
+    "PatternBlock",
+    "PatternRow",
+    "PortRow",
+    "PowerBudget",
+    "RunData",
+    "WireCurrentRow",
     "main",
     "render_header",
+    "render_printout",
     "render_refusal",
     "run",
 ]
