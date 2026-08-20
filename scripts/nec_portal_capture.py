@@ -861,9 +861,11 @@ def _synthetic_decks() -> dict[str, str]:
     # read everywhere — 40 of the 45 rows move, by up to 11 dB, against the
     # 2-3 dB the same deck moves at CHT = 0. That gap is the whole reason
     # this is a fixture: an engine that dropped the field would still print a
-    # plausible finite-ground pattern.
+    # plausible finite-ground pattern. The sign points DOWN: a positive CHT
+    # is the cliff's height, the second medium's surface CHT below z = 0 —
+    # FFLD adds the extra image path 2·CHT·cosθ as a phase lag.
     decks["mininec_vertical_rp3_ch"] = (
-        "CE grounded vertical, second medium two metres up\n"
+        "CE grounded vertical, second medium two metres down\n"
         + _MININEC_VERTICAL
         + "GN 1\n"
         "GD 0 0 0 0 13. .005 0. 2.\n"
