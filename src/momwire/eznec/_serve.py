@@ -9,11 +9,13 @@ formats and computes nothing.
 Rung 1 of the scored ladder (antennaknobs
 ``docs/status/2026-08-20-eznec-nec5-scored-matrix.md``) is what is served:
 ``GN -1`` free space and ``GN 1`` perfect ground, one ``EX 0``/``EX 4``
-source at a node, ``LD 4`` fixed impedances, and the ``RP 0`` / ``XQ`` /
-``PQ 0`` requests.  Everything above it — the Sommerfeld ground, the bare
-``GD`` MININEC mode, ``TL``/``NT`` networks, phased multi-``EX`` drive, the
-near field — refuses BY NAME through :func:`refusal`, because a seam that
-answers a question it has no gate for is worse than one that says so.
+source at a node, ``LD 4`` fixed impedances, node-addressed ``TL``/``NT``
+networks, and the ``RP 0`` / ``XQ`` / ``PQ 0`` requests.  Everything above
+it — the Sommerfeld ground, the bare ``GD`` MININEC mode, phased multi-``EX``
+drive, the near field — refuses BY NAME through :func:`refusal`, because a
+seam that answers a question it has no gate for is worse than one that says
+so.  A network deck over a ground this seam cannot solve refuses at the
+GROUND rung, which is what the ordering in :func:`refusal` is for.
 
 Courtesy stance, the arc's throughout: every NEC-5 fact below was measured
 off captured decks and captured printouts under ``tests/fixtures/eznec/``,
@@ -45,6 +47,58 @@ Three drive spellings, and the address picks between them
   conductor end for a series EMF to sit in, momwire says so at the
   constructor, and no captured deck asks for one.
 
+Two conventions, and the one matrix between them
+------------------------------------------------
+A card's ``(favored tag, node)`` names a port in the DECK's convention: the
+current it reports is the one flowing along the favored wire in that wire's
+own end-1 → end-2 direction, and the voltage goes with it (0017 prints the
+two sides of one junction with IDENTICAL currents, which is what fixes this
+reading).  momwire's node-gap port reports the current flowing FROM the node
+INTO the named wire — the same number up to the ``sigma`` of the wire end
+that named it.  So the two conventions differ by one signed matrix ``T``
+(:func:`_transform`), and every number in this module lives on the deck's
+side of it: the loads, the network cards, the port tables, the power budget.
+``T`` is applied twice, at the two places the solver is touched, and nowhere
+else.
+
+That matters because a network is the first thing at this seam that can SEE
+the sign.  With one source a global flip is gauge — it cancels between the
+voltage and the current and the printed impedance never moves — but a
+network relates two ports to each other, and a relative sign between them is
+a different circuit.  The W7EL triple is the gate: config C's two
+admittances sit on OPPOSITE sides of the wire-2/wire-3 junction and combine
+in SERIES (195.34 − j57.458), where A's and B's sit on one side and combine
+in parallel (114.47 + j21.096).  A seam that loses the relative sign, or
+that folds the two addresses into one node, answers A's number for C.
+
+One cut, two addresses
+----------------------
+Which leads to the other half of the same fact.  ``2,3`` and ``3,-1`` name
+the two sides of ONE cut through a two-wire node, so the antenna presents
+ONE port to both of them: their currents are equal and their EMFs add.
+momwire says as much at its constructor — "one series gap per junction" —
+and this module does not ask it for a second one.  It declares the cut once
+and gives the far side the SAME solver column with the opposite sign
+(:func:`_assign_columns`), which is the rank-1 two-port those two addresses
+really are.  At a junction of three or more wires two addresses would be two
+genuinely different cuts, no capture writes one, and it refuses by name.
+
+The budget's own arithmetic
+---------------------------
+``RADIATED POWER`` is not ``INPUT − losses`` here.  Measured on all six
+network captures, NEC-5 prints ``INPUT + Σ(network connection point powers)
+− WIRE LOSS`` and ``NETWORK LOSS = −Σ``: on 0012 that is 114.47 − 36.714 =
+77.756 against a printed 7.7758E+01, and on 0027 — whose source stands ON a
+connection point, so the source's own watts are counted a second time
+through it — it is 23.422 + 23.422 = 46.844 against a printed 4.6844E+01,
+with ``EFFICIENCY = 200.00 PERCENT`` and no ``NETWORK LOSS`` line at all.
+The line prints when that number is POSITIVE, which is 4 of 6 captures.  The
+double count is the engine's; reproducing it is this seam's job, and the two
+200 % budgets are the evidence it is real rather than a slip.  The pattern
+is normalized by INPUT power and is untouched by any of it (0012's peak row
+gives 4π|rE|²/2η at 0.50 dB = 114.36 W, which is the input power and not the
+radiated one).
+
 What this module does NOT reproduce
 -----------------------------------
 The solved numbers.  momwire's B-spline formulation and NEC-5's are two
@@ -69,11 +123,25 @@ from ..deck._nec5 import (
     Nec5FarFieldRequest,
     Nec5MininecGround,
     Nec5NearFieldRequest,
+    Nec5Network,
     Nec5Node,
     Nec5PerfectGround,
     Nec5SommerfeldGround,
+    Nec5TransmissionLine,
     Nec5Wire,
 )
+
+# The network solve is momwire's and it has ONE owner too.  What six real
+# fields on a `TL` or an `NT` MEAN — the crossed-line polarity flag hiding in
+# the sign of Z0, the end shunts, the forced Y21 = Y12 — is card semantics,
+# written down once in `deck._networks` for the nec2 dialect and read from
+# there here (design doc `networks-move-into-the-engine.md`: *parse
+# per-reader, semantics once*).  This module resolves the ADDRESSING, which is
+# the dialect's own, and hands the semantics a record with its fields already
+# in NEC's order.
+from ..deck._networks import card_branches, port_name
+from ..deck.model import NetworkCard
+from ..networks import Driven, Network, NetworkReducer, PortOnWire
 
 # The far-field readout is momwire's, and it has ONE owner: the portal's
 # NEC-2 front end already turns element currents into E(THETA)/E(PHI), the
@@ -92,7 +160,9 @@ from ._printout import (
     ENVIRONMENT_FREE_SPACE,
     ENVIRONMENT_PERFECT_GROUND,
     ChargeRow,
+    LineRow,
     LoadRow,
+    NetworkRow,
     PatternBlock,
     PatternRow,
     PortRow,
@@ -146,15 +216,21 @@ _REFUSE_MININEC = (
     "far field), which this engine does not yet serve at this seam: rung 1 is "
     "GN -1 (free space) and GN 1 (perfect ground)"
 )
-_REFUSE_TL = (
-    "TL (transmission line) is not served at this seam yet - a node-addressed "
-    "network is the gate unit of this arc and is answered against the W7EL "
-    "oracle triple, not against this engine's own arithmetic"
+_REFUSE_MIXED_NETWORKS = (
+    "this deck carries TL and NT cards together; the NETWORK DATA table has "
+    "one heading per card type and no captured printout shows what a table "
+    "carrying both looks like, so the layout is refused rather than guessed"
 )
-_REFUSE_NT = (
-    "NT (two-port network) is not served at this seam yet - a node-addressed "
-    "network is the gate unit of this arc and is answered against the W7EL "
-    "oracle triple, not against this engine's own arithmetic"
+_REFUSE_TWO_CUTS = (
+    "{first} and {second} address a node where {count} wires meet, which is "
+    "two different cuts through one junction; this seam serves the two sides "
+    "of a SINGLE cut (a node where exactly two wires meet) and no captured "
+    "deck asks for more"
+)
+_REFUSE_ZERO_LENGTH_LINE = (
+    "a TL card between {first} and {second} writes no length and the two "
+    "nodes are the same point, so there is no distance for NEC's "
+    "zero-length rule to resolve it to"
 )
 _REFUSE_MULTI_EX = (
     "this deck carries {count} EX cards; a phased multi-source drive is not "
@@ -181,19 +257,20 @@ _REFUSE_RP_RANGE = (
 def refusal(deck: Nec5Deck) -> str | None:
     """The reason this deck is not rung-1, or ``None`` when it is.
 
-    Order is deliberate — grounds first, then networks, then the drive, then
+    Order is deliberate — grounds first, then the cards, then the drive, then
     the request — so a deck that is out of scope in several ways names the
-    reason a reader would fix first.
+    reason a reader would fix first.  The corpus leans on it: every 4-square
+    feed-system deck carries six ``TL`` cards over a bare ``GD``, and what it
+    needs to hear is that the GROUND is unserved, not that its networks are
+    (they are not).
     """
     ground = deck.ground
     if isinstance(ground, Nec5SommerfeldGround):
         return _REFUSE_SOMMERFELD
     if isinstance(ground, Nec5MininecGround):
         return _REFUSE_MININEC
-    if deck.transmission_lines:
-        return _REFUSE_TL
-    if deck.networks:
-        return _REFUSE_NT
+    if deck.transmission_lines and deck.networks:
+        return _REFUSE_MIXED_NETWORKS
     if not deck.sources:
         return _REFUSE_NO_EX
     if len(deck.sources) > 1:
@@ -369,7 +446,19 @@ class _Piece:
 
 @dataclass
 class _Site:
-    """One momwire port, and the card address that asked for it."""
+    """One card address, and the momwire port it reaches.
+
+    A site is a DECK port: everything on it — its load, its drive, its rows
+    in the two port tables — is in the deck's own convention.  Two fields
+    carry it across to the solver's, and they are the whole of the sign story
+    (module docstring, "Two conventions"):
+
+    :attr:`column` is the momwire port it lands on, and :attr:`weight` is the
+    ``+-1`` that relates the two.  They are usually one address to one port,
+    with the weight equal to :attr:`sign`; the exception is the far side of a
+    cut another address already declared, which shares the column and takes
+    the opposite weight.
+    """
 
     at: Nec5Node
     # "gap" (a delta gap on a grounded wire end) or "node" (a series node gap)
@@ -383,7 +472,9 @@ class _Site:
     # the only thing standing between a served current table and one printed
     # 180 degrees out.
     sign: float
-    port: int = -1
+    index: int = -1
+    column: int = -1
+    weight: float = 0.0
     load: complex = 0j
     driven: bool = False
 
@@ -395,6 +486,32 @@ class _Mesh:
     sites: list[_Site] = field(default_factory=list)
     # deck element index (0-based, global) -> (piece, element within piece)
     element_of: list[tuple[int, int]] = field(default_factory=list)
+    # The solver's ports, in momwire's own order — every gap feed, then every
+    # node gap — each named by the site that DECLARED it.  A site that shares
+    # a column appears in neither list.
+    feeds: list[_Site] = field(default_factory=list)
+    gaps: list[_Site] = field(default_factory=list)
+
+    @property
+    def n_columns(self) -> int:
+        return len(self.feeds) + len(self.gaps)
+
+
+def _network_ends(deck: Nec5Deck):
+    """Every ``TL``/``NT`` endpoint, card by card, end A before end B.
+
+    Card order is the deck's: no deck that reaches here writes both kinds
+    (the three that do stand over a ``GD`` ground and refuse a rung earlier,
+    and a mixed deck under a served ground refuses for its table layout), so
+    lines-then-networks IS the order they were read in.  The order is not
+    decoration — the
+    ``STRUCTURE EXCITATION DATA`` block prints its connection points in
+    exactly this discovery order, a point named twice printed once (0028's
+    six rows against its five cards).
+    """
+    for card in (*deck.transmission_lines, *deck.networks):
+        yield card.end_a
+        yield card.end_b
 
 
 def _addressed_nodes(deck: Nec5Deck) -> dict[int, set[int]]:
@@ -404,6 +521,8 @@ def _addressed_nodes(deck: Nec5Deck) -> dict[int, set[int]]:
         at.setdefault(source.at.tag, set()).add(source.at.node)
     for load in deck.loads:
         at.setdefault(load.at.tag, set()).add(load.at.node)
+    for end in _network_ends(deck):
+        at.setdefault(end.tag, set()).add(end.node)
     return at
 
 
@@ -464,8 +583,88 @@ def build_mesh(deck: Nec5Deck, structure: Structure) -> _Mesh:
     # -- one site per addressed node ---------------------------------------
     for tag, nodes in sorted(addressed.items()):
         for node in sorted(nodes):
-            mesh.sites.append(_site_for(structure, mesh, piece_of_node, tag, node))
+            site = _site_for(structure, mesh, piece_of_node, tag, node)
+            site.index = len(mesh.sites)
+            mesh.sites.append(site)
+    _assign_columns(mesh)
     return mesh
+
+
+def _assign_columns(mesh: _Mesh) -> None:
+    """Give every site a solver port and the sign that reaches it.
+
+    One site is one port, except where two addresses name the two sides of
+    one cut — ``2,3`` and ``3,-1`` at a two-wire node, which is config C of
+    the W7EL triple.  momwire allows ONE series gap per junction and is right
+    to: at a two-wire node the second gap is not a second cut, it is the far
+    side of the first, carrying the same current with the EMFs in series.  So
+    the second address shares the first's column and takes the opposite
+    weight, and the two-port those two addresses present is the rank-1 one
+    the physics has (0017 prints both sides with the same current, 7.7427E-01
+    − 4.9839E-01j, and voltages in the 2:1 ratio of their two admittances —
+    which is series, and is what makes C 195.34 − j57.458 where A and B are
+    114.47 + j21.096).
+
+    The weight follows from KCL and nothing else.  ``sign`` is momwire's
+    sigma: the current from the node into the named wire is the current along
+    that wire's own direction, times ``sign``.  At a two-wire node the two
+    outflows sum to zero, so the far side's momwire current is minus the
+    declared side's — which is the ``-sign`` below, and which comes out as
+    two EQUAL deck-convention currents whenever the two wires run through the
+    node (the 0017 case) and two opposite ones when they meet head to head.
+    """
+    junction_of = {
+        member: index
+        for index, members in enumerate(mesh.junctions)
+        for member in members
+    }
+    declared: dict[int, _Site] = {}
+    for site in mesh.sites:
+        if site.spelling == "gap":
+            site.column, site.weight = len(mesh.feeds), site.sign
+            mesh.feeds.append(site)
+            continue
+        junction = junction_of[(site.piece, site.end)]
+        first = declared.get(junction)
+        if first is None:
+            declared[junction] = site
+            site.column, site.weight = len(mesh.gaps), site.sign
+            mesh.gaps.append(site)
+            continue
+        members = mesh.junctions[junction]
+        if len(members) != 2:
+            raise ServeRefusal(
+                _REFUSE_TWO_CUTS.format(
+                    first=f"{first.at.tag},{first.at.written}",
+                    second=f"{site.at.tag},{site.at.written}",
+                    count=len(members),
+                )
+            )
+        site.column, site.weight = first.column, -site.sign
+    # momwire orders its ports [gap feeds..., junction ports..., node gaps...]
+    # and this seam declares no junction ports, so a node gap's column is its
+    # place in that list offset by the feeds.  Applied here rather than at the
+    # readout because a port index that is wrong is a printout addressed to
+    # the wrong wire and nothing red anywhere.
+    for site in mesh.sites:
+        if site.spelling == "node":
+            site.column += len(mesh.feeds)
+
+
+def _transform(mesh: _Mesh) -> np.ndarray:
+    """``T``: solver ports on one side, deck ports on the other.
+
+    ``V_solver = T . V_deck`` for the drives and ``I_deck = T^T . I_solver``
+    for the readouts — one matrix for both, which is what keeps the composed
+    admittance ``T^T Y T`` symmetric and the power identical on the two
+    sides.  It is a signed selection matrix: one nonzero per site, and one
+    column per site rather than per port, because a shared cut has two sites
+    on one port.
+    """
+    t = np.zeros((mesh.n_columns, len(mesh.sites)))
+    for site in mesh.sites:
+        t[site.column, site.index] = site.weight
+    return t
 
 
 def _site_for(
@@ -521,14 +720,11 @@ def _site_for(
 
 
 def _solver_for(deck: Nec5Deck, mesh: _Mesh, wavelength: float) -> BSplineSolver:
-    """The constructed solver, with every site's port row recorded on it.
+    """The constructed solver, one port per declared cut.
 
-    Two kwargs carry the deck's sources and loads and momwire orders their
-    rows ``[gap feeds…, junction ports…, node gaps…]``.  This seam declares no
-    junction ports, so a site's row is its place in whichever of the two lists
-    it went into, offset by the first list's length — written out here rather
-    than derived at the readout, because a port index that is wrong is a
-    printout addressed to the wrong wire and nothing red anywhere.
+    Two kwargs carry the deck's ports and momwire orders their rows
+    ``[gap feeds…, junction ports…, node gaps…]`` — the order
+    :func:`_assign_columns` already wrote down.
     """
     radii = [piece.radius for piece in mesh.pieces]
     feeds = [
@@ -542,21 +738,9 @@ def _solver_for(deck: Nec5Deck, mesh: _Mesh, wavelength: float) -> BSplineSolver
             0.0 if site.end == "start" else mesh.pieces[site.piece].length,
             0j,
         )
-        for site in mesh.sites
-        if site.spelling == "gap"
+        for site in mesh.feeds
     ]
-    gaps = [
-        (site.piece, site.end, 0j) for site in mesh.sites if site.spelling == "node"
-    ]
-    port = 0
-    for site in mesh.sites:
-        if site.spelling == "gap":
-            site.port = port
-            port += 1
-    for site in mesh.sites:
-        if site.spelling == "node":
-            site.port = port
-            port += 1
+    gaps = [(site.piece, site.end, 0j) for site in mesh.gaps]
 
     return BSplineSolver(
         wires=[piece.points for piece in mesh.pieces],
@@ -571,56 +755,357 @@ def _solver_for(deck: Nec5Deck, mesh: _Mesh, wavelength: float) -> BSplineSolver
     )
 
 
-def _port_algebra(deck: Nec5Deck, mesh: _Mesh, y: np.ndarray):
-    """``(v_gap, i_port, v_source, z_load)``, in MOMWIRE's sign convention.
+# --------------------------------------------------------------------------
+# the networks: two cards, one composed circuit
+# --------------------------------------------------------------------------
+
+
+def _segment_of(structure: Structure, at: Nec5Node) -> int:
+    """The GLOBAL element number a ``(tag, node)`` address prints as.
+
+    Node 0 and node 1 share one: 0012's ``3,-1`` prints segment 10 and 0018's
+    ``2,2`` prints 8, so the rule is the tag's first element plus the node,
+    with node 0 reading as node 1 and the SIGN carried separately (the
+    ``NETWORK DATA`` table prints it as ``-10``; the excitation table prints
+    ``10`` and a trailing 2).
+    """
+    return structure.first_element(at.tag) + max(at.node, 1) - 1
+
+
+def _node_point(structure: Structure, at: Nec5Node) -> np.ndarray:
+    return np.asarray(
+        structure.points[structure.index_of(at.tag)][at.node], dtype=float
+    )
+
+
+@dataclass(frozen=True)
+class _Card:
+    """One ``TL``/``NT`` card, resolved: where it attaches and what it prints.
+
+    :attr:`card` is the nec2 dialect's own record, carrying this card's six
+    fields in NEC's order so that :func:`~momwire.deck._networks.card_branches`
+    — the one place in the tree that says what they mean — can read them.  Its
+    ADDRESSES are not used and cannot be: they are ``(wire, arclength)`` pairs
+    from a dialect whose connections land on segment centres, and this one's
+    land on nodes.  The two indices beside it are this seam's addressing, and
+    the length is resolved before the record is built for the same reason.
+    """
+
+    card: NetworkCard
+    site_a: int
+    site_b: int
+    row: NetworkRow | LineRow
+
+
+def _line_card(
+    line: Nec5TransmissionLine, structure: Structure, sites: dict[Nec5Node, int]
+) -> _Card:
+    """One ``TL``.
+
+    NEC's zero-length rule, measured: a card whose length field is zero is
+    the straight-line distance between the two addressed NODES, and the
+    printout shows the RESOLVED number.  0028's four crossed feeders all
+    write ``0.`` and print 9.9764E-01, 7.9826E-01, 6.3831E-01 and 5.1090E-01,
+    which are the node-to-node distances to every printed digit.  SEGMENT
+    centres — what the nec2 dialect's own reader measures between, a NEC-2
+    network landing on a segment rather than on a node — would give four
+    different numbers, so the captured column is what picks the reading.
+    """
+    length = line.length_m or float(
+        np.linalg.norm(
+            _node_point(structure, line.end_a) - _node_point(structure, line.end_b)
+        )
+    )
+    if length == 0.0:
+        raise ServeRefusal(
+            _REFUSE_ZERO_LENGTH_LINE.format(
+                first=f"{line.end_a.tag},{line.end_a.written}",
+                second=f"{line.end_b.tag},{line.end_b.written}",
+            )
+        )
+    return _Card(
+        # F1 keeps its sign: `card_branches` reads the crossed-line polarity
+        # flag off it and takes the magnitude for the impedance, which is not
+        # the same circuit as a negated Z0.
+        card=NetworkCard(kind="TL", payload=(line.z0, length, *line.shunt)),
+        site_a=sites[line.end_a],
+        site_b=sites[line.end_b],
+        row=LineRow(
+            tag_from=line.end_a.tag,
+            segment_from=_signed_segment(structure, line.end_a),
+            tag_to=line.end_b.tag,
+            segment_to=_signed_segment(structure, line.end_b),
+            z0=abs(line.z0),
+            length_m=length,
+            shunt_a=complex(line.shunt[0], line.shunt[1]),
+            shunt_b=complex(line.shunt[2], line.shunt[3]),
+            crossed=line.crossed,
+        ),
+    )
+
+
+def _network_card(
+    net: Nec5Network, structure: Structure, sites: dict[Nec5Node, int]
+) -> _Card:
+    """One ``NT``: three complex entries, and ``Y21 = Y12`` by construction."""
+    return _Card(
+        card=NetworkCard(
+            kind="NT",
+            payload=(
+                net.y11.real,
+                net.y11.imag,
+                net.y12.real,
+                net.y12.imag,
+                net.y22.real,
+                net.y22.imag,
+            ),
+        ),
+        site_a=sites[net.end_a],
+        site_b=sites[net.end_b],
+        row=NetworkRow(
+            tag_from=net.end_a.tag,
+            segment_from=_signed_segment(structure, net.end_a),
+            tag_to=net.end_b.tag,
+            segment_to=_signed_segment(structure, net.end_b),
+            y11=net.y11,
+            y12=net.y12,
+            y22=net.y22,
+        ),
+    )
+
+
+def _signed_segment(structure: Structure, at: Nec5Node) -> int:
+    """The ``NETWORK DATA`` address: the segment, negated for a ``-1`` node.
+
+    "Negative segment numbers are a flag, not an index" (capture study,
+    "Dialect notes"): the table echoes the deck's own spelling through a
+    tag-to-global conversion that the sign survives — 0012's ``NT 3,-1``
+    prints ``3   -10`` and 0016's ``NT 2,3`` prints ``2     9`` for the same
+    physical point.
+    """
+    segment = _segment_of(structure, at)
+    return -segment if at.written == -1 else segment
+
+
+def _cards(deck: Nec5Deck, structure: Structure, mesh: _Mesh) -> tuple[_Card, ...]:
+    """The deck's network cards, resolved onto sites, in deck order."""
+    sites = {site.at: site.index for site in mesh.sites}
+    return tuple(
+        [_line_card(line, structure, sites) for line in deck.transmission_lines]
+        + [_network_card(net, structure, sites) for net in deck.networks]
+    )
+
+
+def _connection_points(cards: tuple[_Card, ...]) -> tuple[int, ...]:
+    """The connection-point sites, in the order the printout lists them.
+
+    Discovery order — a card's end A before its end B, cards in deck order, a
+    site named twice named once — which reproduces all six captured blocks
+    including 0028's, where five cards give six rows.  Unlike the NEC-2
+    printout this seam's sibling serves, there is no sourced/unsourced
+    partition: 0027 prints its DRIVEN point first because its first card
+    names it first, and 0028 prints its driven point fifth for the same
+    reason.
+    """
+    seen: list[int] = []
+    for card in cards:
+        for site in (card.site_a, card.site_b):
+            if site not in seen:
+                seen.append(site)
+    return tuple(seen)
+
+
+def _reducer_for(
+    cards: tuple[_Card, ...], n_sites: int, voltages: np.ndarray
+) -> NetworkReducer:
+    """The deck's cards as one flat network over the site ports.
+
+    Every port that is NOT a network endpoint is pinned with a ``Driven``
+    source at its applied voltage, zero included — the reducer floats an
+    untouched port at ``I_ext = 0``, which is an OPEN gap, where this
+    pipeline's undriven port is a SHORTED one.  A zero-volt pin is the
+    reducer's own hard ``V = 0``, so the two conventions meet exactly where
+    the network stops.  An endpoint that IS driven gets its source anyway,
+    and the reducer's termination branch then carries antenna plus network.
+    """
+    branches: list[object] = []
+    endpoints: set[int] = set()
+    for entry in cards:
+        # `wires=()` is safe and is the point of resolving the length above:
+        # the zero-length rule is the only thing `card_branches` would reach
+        # for geometry for, and this dialect's rule measures something else.
+        branches += card_branches(entry.card, entry.site_a, entry.site_b, ())
+        endpoints.update((entry.site_a, entry.site_b))
+    sources = [
+        Driven(port_name(k), complex(voltages[k]))
+        for k in range(n_sites)
+        if k not in endpoints or voltages[k] != 0
+    ]
+    ports = {port_name(k): PortOnWire(name=port_name(k)) for k in range(n_sites)}
+    network = Network(ports=ports, branches=branches, sources=sources)
+    return NetworkReducer(network, {port_name(k): k for k in range(n_sites)}, n_sites)
+
+
+@dataclass(frozen=True)
+class _PortState:
+    """What the solve says at every site, in the DECK's convention.
+
+    Four vectors and they are four different numbers, which is the whole
+    reason this is a record rather than a return tuple:
+
+    * :attr:`v_applied` — the voltage ACROSS the site, load drop included.
+      Both port tables print it.
+    * :attr:`v_gap` — what is left of it at the gap, and therefore what
+      drives the structure and reconstructs the currents.
+    * :attr:`i_port` — the STRUCTURE current at the gap.  The wire-current
+      table and the ``STRUCTURE EXCITATION DATA`` block print it.
+    * :attr:`i_source` — what the GENERATOR delivered, antenna plus network.
+      The ``ANTENNA INPUT PARAMETERS`` row prints it, and it differs from
+      ``i_port`` only where the deck drives a network connection point —
+      0027, where the same port prints 1.4142 A as a source and 3.3124E-09 A
+      as a structure current, all of the difference having gone down the two
+      transmission lines.
+    """
+
+    v_applied: np.ndarray
+    v_gap: np.ndarray
+    i_port: np.ndarray
+    i_source: np.ndarray
+    z_load: np.ndarray
+
+
+def _port_state(
+    deck: Nec5Deck,
+    mesh: _Mesh,
+    cards: tuple[_Card, ...],
+    y_solver: np.ndarray,
+    wavelength: float,
+) -> _PortState:
+    """Solve the deck's ports, networks and all.
+
+    The antenna arrives as momwire's port admittance and is turned once, by
+    ``T^T Y T``, into the deck's own convention; everything below that line
+    is in the deck's terms and can be read straight off a card or into a
+    printed row.
 
     An ``LD`` is an impedance in the port's own current path, so the deck's
     loads fold in exactly as they do in the portal's NEC-2 half:
-    ``V_gap = (1 + Z·Y)^-1 · V_source`` and ``I = Y·V_gap``.  The generator
+    ``V_gap = (1 + Z·Y)^-1 · V_applied`` and ``I = Y·V_gap``.  The generator
     stays ideal — NEC's ``EX`` is an ideal source, and a source impedance
-    would divide the drive.
+    would divide the drive.  With networks the SAME loaded structure is
+    handed to :class:`~momwire.networks.NetworkReducer` as one admittance,
+    ``Y_eff = Y·(1 + Z·Y)^-1``, which is the port admittance of the loaded
+    structure and therefore what NEC's own network solve sees after ``LD``
+    has been added to the matrix diagonal.  The loads are not restamped in
+    the reducer: they are already inside, in series inside the port, which is
+    where an ``LD`` and a ``TL`` on one node have to meet (0027 pins its
+    driven virtual node with ``LD 4,3,1,0,1.E+10,0.`` and hangs both lines
+    off it).
 
-    Two voltages come out and they are two different numbers.  ``V_gap`` is
-    what drives the structure and reconstructs the currents; ``V_source`` is
-    what the generator applied, load drop included, and it is the one the
-    ``ANTENNA INPUT PARAMETERS`` row prints — so a load stamped on the driven
-    node lands INSIDE the reported impedance, which is where NEC puts it (it
-    adds ``LD`` to the impedance matrix's own diagonal before anything reads
-    a driving point off it).  Without a load the two are one number, which is
-    every captured rung-1 deck.
-
-    ``EX 4`` is the current source, and the scored matrix's "readout
-    transform" is this line: with one port driven, ``I = Y_eff·V`` is linear
-    in the drive, so the voltage that delivers ``I0`` is ``I0`` divided by
-    the loaded structure's own driving-point admittance, and the solve is the
-    voltage-driven one rescaled rather than a second fill.
+    The drive is a UNIT probe and the answer is rescaled afterwards, which is
+    what the scored matrix means by ``EX 4`` being a "readout transform":
+    with one source the whole system is linear in its voltage, so the volts
+    that deliver ``I0`` are found by dividing rather than by a second fill.
+    ``EX 0`` takes the same road with the scale known in advance.
     """
+    t = _transform(mesh)
+    y = t.T @ y_solver @ t
+    n = len(mesh.sites)
+    z_load = np.array([site.load for site in mesh.sites], dtype=np.complex128)
     (source,) = deck.sources
-    (site,) = [s for s in mesh.sites if s.driven]
-    n = y.shape[0]
-    z_load = np.zeros(n, dtype=np.complex128)
-    for other in mesh.sites:
-        z_load[other.port] += other.load
-    system = np.eye(n, dtype=np.complex128) + z_load[:, None] * y
+    (driven,) = [site.index for site in mesh.sites if site.driven]
+    probe = np.zeros(n, dtype=np.complex128)
+    probe[driven] = 1.0
+    loaded = np.eye(n, dtype=np.complex128) + z_load[:, None] * y
 
-    unit = np.zeros(n, dtype=np.complex128)
-    unit[site.port] = 1.0
-    if source.kind == 0:
-        # A voltage source drives the gap it sits in; the deck's volts are in
-        # the favored wire's direction, momwire's in the polyline's.
-        scale = site.sign * source.drive
+    if not cards:
+        # No network reaches this deck, so the source current IS the port
+        # current and the applied voltage is the gap's plus the load drop.
+        # This branch is U4's arithmetic, conjugated by T and no more, which
+        # is what keeps every bare capture's printout where it was.
+        v_gap = np.linalg.solve(loaded, probe)
+        i_port = y @ v_gap
+        i_source = i_port
+        v_applied = v_gap + z_load * i_port
     else:
-        i_of_unit = y @ np.linalg.solve(system, unit)
-        scale = site.sign * source.drive / i_of_unit[site.port]
+        y_eff = y if not np.any(z_load) else np.linalg.solve(loaded.T, y.T).T
+        reducer = _reducer_for(cards, n, probe)
+        system = reducer.apply_branches(y_eff, wavelength)
+        v, j = system.solve()
+        v_applied = np.asarray(v[:n], dtype=np.complex128).copy()
+        # A pinned port's voltage is a boundary condition, not a result:
+        # reading it back out of the solve only adds round-off to a number
+        # that was exact going in, and it decides the sign of a zero — which
+        # is a byte the printout shows (the portal restores its driven port
+        # voltages for the same reason, momwire#456 phase C).
+        for port, volts in zip(reducer.driven_port_idx, reducer.driven_voltages):
+            v_applied[port] = volts
+        i_port = y_eff @ v_applied
+        i_source = i_port.copy()
+        # At a driven port the reducer's termination branch carries antenna
+        # PLUS network, which is what the source actually delivered.
+        i_source[driven] = j[system.terminations[driven][0]]
+        v_gap = v_applied - z_load * i_port
 
-    v_gap = np.linalg.solve(system, unit * scale)
-    i_port = y @ v_gap
-    return v_gap, i_port, v_gap + z_load * i_port, z_load
+    scale = (
+        source.drive
+        if source.kind == 0
+        else source.drive / complex(i_source[driven])  # EX 4: the current is set
+    )
+    return _PortState(
+        v_applied=v_applied * scale,
+        v_gap=v_gap * scale,
+        i_port=i_port * scale,
+        i_source=i_source * scale,
+        z_load=z_load,
+    )
 
 
 # --------------------------------------------------------------------------
 # the readouts
 # --------------------------------------------------------------------------
+
+
+def _ratio(numerator: complex, denominator: complex) -> complex:
+    """``a / b``, answering an open port with an infinity rather than raising.
+
+    No capture reaches it — the pinned virtual nodes carry ~1e-32 A and print
+    ~1e+25 Ω rather than nothing at all — but a port that a network leaves
+    exactly open is one subtraction away, and a printout is the only channel
+    this engine has.
+    """
+    if denominator == 0:
+        return complex(math.inf, math.inf) if numerator else 0j
+    return numerator / denominator
+
+
+def _port_row(
+    structure: Structure, mesh: _Mesh, state: _PortState, index: int
+) -> PortRow:
+    """One ``STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS`` row.
+
+    The voltage is the one ACROSS the site, load drop included: 0027's driven
+    virtual node prints 1.0000E+10 − 2.6855E+04j there, which is its ``LD``
+    pin plus the little wire's own gap impedance, and only an applied voltage
+    can say that.  The current is the STRUCTURE's, not the source's.
+    """
+    site = mesh.sites[index]
+    voltage = complex(state.v_applied[index])
+    current = complex(state.i_port[index])
+    return PortRow(
+        tag=site.at.tag,
+        segment=_segment_of(structure, site.at),
+        # The trailing index tracks the DECK's spelling, 9 of 9 rows in the
+        # capture study: node 0 written -1 prints 2, a positive node field
+        # prints 1.  Both sides of 0017's junction are connection points and
+        # they print 2 and 1 accordingly, on one geometric node.
+        end_index=2 if site.at.written == -1 else 1,
+        voltage=voltage,
+        current=current,
+        impedance=_ratio(voltage, current),
+        admittance=_ratio(current, voltage),
+        power=0.5 * (voltage * current.conjugate()).real,
+    )
 
 
 def _element_geometry(structure: Structure, wavelength: float):
@@ -815,14 +1300,17 @@ def serve(deck: Nec5Deck) -> RunData:
     wavelength = SPEED_OF_LIGHT_MHZ_M / frequency
     omega = 2.0 * math.pi * frequency * 1e6
 
+    cards = _cards(deck, structure, mesh)
     solver = _solver_for(deck, mesh, wavelength)
     solution = solver.compute_port_solution()
-    v_gap, i_port, v_source, z_load = _port_algebra(deck, mesh, solution.y)
-    coeffs = solution.coeffs @ v_gap
+    state = _port_state(deck, mesh, cards, solution.y, wavelength)
+    # Back across T: the structure is driven by the SOLVER's gap EMFs, which
+    # is the one place besides the admittance that the two conventions meet.
+    coeffs = solution.coeffs @ (_transform(mesh) @ state.v_gap)
 
     site = by_address[source.at]
-    voltage = site.sign * v_source[site.port]
-    current = site.sign * i_port[site.port]
+    voltage = complex(state.v_applied[site.index])
+    current = complex(state.i_source[site.index])
     # Whichever of the two the card SET is a boundary condition, not a
     # result: reading it back out of the solve only adds round-off to a
     # number that was exact going in, and it decides the sign of a zero —
@@ -835,12 +1323,19 @@ def serve(deck: Nec5Deck) -> RunData:
     else:
         current = source.drive
     p_in = 0.5 * float((voltage * np.conj(current)).real)
-    # The only dissipation rung 1 can have: every wire is a perfect conductor
-    # (this dialect has no LD 5 and no IS) and there are no networks, so the
-    # budget's WIRE LOSS line carries the LD loads' watts and nothing else —
-    # which is where 0012's two 1.E+10 pins print theirs (5.0797E-54 W).
-    p_load = 0.5 * float(np.sum(np.real(z_load) * np.abs(i_port) ** 2))
-    p_radiated = p_in - p_load
+    # Every wire is a perfect conductor at this seam (the dialect has no
+    # LD 5 and no IS), so the budget's WIRE LOSS line carries the LD loads'
+    # watts and nothing else — which is where 0012's two 1.E+10 pins print
+    # theirs (5.0797E-54 W) and where 0027's single pin prints 7.1165E-08.
+    p_load = 0.5 * float(np.sum(np.real(state.z_load) * np.abs(state.i_port) ** 2))
+    points = _connection_points(cards)
+    connections = tuple(_port_row(structure, mesh, state, index) for index in points)
+    # The budget's own arithmetic (module docstring): RADIATED is INPUT plus
+    # what the connection points delivered, less the load's watts, and the
+    # NETWORK LOSS line is the negative of the first sum — printed only when
+    # it is positive, which is 4 of the 6 captured network budgets.
+    p_network = -sum(row.power for row in connections)
+    p_radiated = p_in - p_network - p_load
 
     centres, lengths, tags = _element_geometry(structure, wavelength)
     currents, charges = _element_currents_and_charges(solver, mesh, coeffs, omega)
@@ -870,12 +1365,12 @@ def serve(deck: Nec5Deck) -> RunData:
             )
             for load in deck.loads
         ),
+        networks=tuple(card.row for card in cards),
+        network_excitation=connections,
         sources=(
             PortRow(
                 tag=source.at.tag,
-                segment=structure.first_element(source.at.tag)
-                + max(source.at.node, 1)
-                - 1,
+                segment=_segment_of(structure, source.at),
                 # The trailing index tracks the DECK's spelling, 9 of 9 rows
                 # in the capture study: node 0 written -1 prints 2, a
                 # positive node field prints 1.
@@ -923,6 +1418,7 @@ def serve(deck: Nec5Deck) -> RunData:
             input_power=p_in,
             radiated_power=p_radiated,
             wire_loss=p_load,
+            network_loss=p_network if p_network > 0 else None,
             efficiency_percent=(100.0 * p_radiated / p_in) if p_in > 0 else 0.0,
         ),
         patterns=tuple(
