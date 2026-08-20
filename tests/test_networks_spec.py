@@ -424,6 +424,44 @@ def test_budget_key_is_independent_of_label_spelling():
     assert len(keys) == len(set(keys))  # still unique after the rewording
 
 
+def test_budget_key_survives_a_label_change_made_at_the_SOURCE():
+    """The same claim as above, but proved where it has to hold.
+
+    The test above re-renders labels in the test body and hands the SAME key
+    object to both renders, so it would still pass if `apply_branches` built
+    its keys by parsing label text. This one changes the label the reducer
+    itself emits: port names are what `_short(br.a)`/`_short(br.b)` splice
+    into every label, so a topologically IDENTICAL network with renamed
+    ports emits different label strings from the same branch list, in the
+    same order, under the same `branch_paths`. The keys are structural —
+    (instance_path, branch_index, subprobe) — so they must not move.
+    """
+    twin = Network(
+        ports={
+            "fx": PortOnWire("fx"),
+            "inx": PortVirtual("inx"),
+            "tapx": PortVirtual("tapx"),
+            "topx": PortVirtual("topx"),
+        },
+        branches=[
+            TwoPort(a="inx", b="tapx", r=1.0),
+            Autotransformer(a="tapx", b="topx", l_lower=1e-6, l_upper=4e-6, ql=50.0),
+            TL(a="topx", b="fx", z0=50.0, length=1.0),
+        ],
+        sources=[Driven(port="fx")],
+        branch_paths=["outer.", "outer.auto.", ""],
+    )
+    _v, _e, _p, base = reducer(_nested_autotransformer_net()).excited_state(
+        synth_y(1, 4), WL
+    )
+    _v2, _e2, _p2, renamed = reducer(twin).excited_state(synth_y(1, 4), WL)
+
+    # The reducer really did emit different labels...
+    assert [e[0] for e in base] != [e[0] for e in renamed]
+    # ...and the structural identity did not move.
+    assert [e.key for e in base] == [e.key for e in renamed]
+
+
 def test_budget_entries_unpack_as_two_tuples_backward_compat():
     """Gate 4: `for label, watts in budget` — the exact idiom `cli.py` and
     `schematic.py` (antennaknobs) and `_reducer.py` itself use — must keep
