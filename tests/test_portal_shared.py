@@ -352,6 +352,57 @@ def test_pattern_dust_prints_as_exact_zero(name):
                 assert float(phase) == 0.0, f"{name}: the angle of zero: {ln}"
 
 
+def _near_field_rows(text: str) -> list[list[str]]:
+    rows = []
+    for ln in text.splitlines():
+        tok = ln.split()
+        if len(tok) != 9:
+            continue
+        try:
+            float(tok[0])
+        except ValueError:
+            continue  # the header ("X"/"METERS" rows are 9 tokens too)
+        rows.append(tok)
+    return rows
+
+
+def test_ne_dust_prints_as_exact_zero():
+    """momwire#464's regression gate, sibling to the one above for the
+    NEAR ELECTRIC/MAGNETIC FIELDS table: no E/H column may print the angle
+    of zero.
+
+    A z-oriented centre-fed dipole's field on the x-axis at the mid-plane is
+    analytically zero in EX; the engine used to print the fill's rounding
+    dust there instead — ``EX = 9.1237E-17`` against ``EZ = 2.6506E-01`` at
+    the same point (``dipole_ne_nearfield``, x = -1/+1, y = 0, z = 0) — the
+    same "angle of zero" class momwire#403 fixed for the RP table, left
+    unfixed on this print path until now. Checked on both fixtures that
+    exercise ``NE``/``NH`` (``fmt_near_field_row`` cannot tell which card
+    produced its row): every near-field row's magnitude/phase pair is either
+    exactly zero or a real, above-floor reading, and the two known dust
+    cells print exact zero with exact zero phase.
+    """
+    for name in ("dipole_ne_nearfield", "dipole_nh_nearfield"):
+        rows = _near_field_rows(stock(fixture_deck(name)))
+        assert rows, f"{name}: no near-field rows found"
+        for tok in rows:
+            for mag, phase in ((tok[3], tok[4]), (tok[5], tok[6]), (tok[7], tok[8])):
+                assert float(mag) == 0.0 or float(mag) > 1e-9, (
+                    f"{name}: sub-floor dust printed raw: {tok}"
+                )
+                if float(mag) == 0.0:
+                    assert float(phase) == 0.0, f"{name}: the angle of zero: {tok}"
+
+    dust_rows = [
+        tok
+        for tok in _near_field_rows(stock(fixture_deck("dipole_ne_nearfield")))
+        if tok[0] in ("-1.0000", "1.0000") and tok[2] == "0.0000"
+    ]
+    assert len(dust_rows) == 2, dust_rows
+    for tok in dust_rows:
+        assert (tok[3], tok[4]) == ("0.0000E+00", "0.00"), tok
+
+
 def test_two_decks_down_one_connection_frame_the_way_the_stock_loop_does(runtime):
     """The banner belongs to the CONNECTION here, not to the process — the
     server is already warm when SimNEC's engine starts. One connection must

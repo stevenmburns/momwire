@@ -825,6 +825,20 @@ next data-card echo, where a plain `XQ` block ends with three.
   captured for exactly this.
 * Rows are `%10.4f`×3 then `(%13.4E, %8.2f)`×3 — nine tokens, which is what
   `Execute`'s `PROCESSINGNEARFIELD` state requires.
+* A component under `_FIELD_FLOOR2` (`|value|^2 <= 1e-20`, applied straight to
+  the printed value — this table has no `FFLD`-basis rescale to undo first,
+  unlike §12.1/§4.14's pattern floor) prints magnitude `0.0000E+00` and phase
+  `0.00`, a deliberate DEPARTURE from nec2c, which prints its own fill dust
+  raw here: `dipole_ne_nearfield.out`'s EX cells at x = ∓1, y = 0, z = 0 read
+  `2.3656E-09`, ours read `0.0000E+00` (momwire#464, same mechanism as
+  momwire#403 — the dust digits move with process history and reddened the
+  served==stock byte oracle under load). Neither differential lane walks this
+  table's E/H columns against the raw dust digit: `tests/
+  test_portal_differential.py`'s per-fixture table (§12.8) carries no E
+  column for these two fixtures, and `tests/test_portal.py`'s direct
+  cross-engine check floors a dead component at `1e-4` of the row's live one
+  (five orders above `_FIELD_FLOOR2`'s `1e-10`), so it never reads the raw
+  digit either.
 
 **Does momwire have a near-field API? No.** `BSplineSolver` exposes
 `compute_impedance`, `compute_y_matrix`, `currents_at_knots` and
