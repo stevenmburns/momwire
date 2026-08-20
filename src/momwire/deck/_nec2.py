@@ -744,53 +744,6 @@ class _Nec2Parser:
 
     # -- execution ---------------------------------------------------------
 
-    def _refuse_the_mininec_ground_idiom(
-        self, request: FarFieldRequest | NearFieldRequest | None
-    ) -> None:
-        """A second medium under a perfect ground that no request will read.
-
-        Both frontends spell MININEC-type ground — perfect ground for the
-        currents, a finite ground for the far field — as this pair of cards:
-        4nec2 manufactures ``GN 1`` + ``GD 0 0 0 0 <eps> <sigma>`` from its
-        own ``GN 3``, and EZNEC writes the ``GD`` with the media payload.
-        NEC-2 has no such ground: the ``GD`` record reaches the answer only
-        through the ``RP`` cliff modes, and these decks ask for ``RP 0``, so
-        the deck runs as PLAIN PERFECT GROUND and the substitution is silent.
-        It is not small — the EZNEC twin measures 34 % in R on the same
-        substitution — so the pair refuses here rather than answering the
-        wrong half-space (momwire#458; momwire#456 owns implement-vs-exclude).
-
-        Two things narrow it to the idiom itself.  A meaningful medium is one
-        whose ``EPSR2``/``SIG2`` are not both zero: those two fields are all
-        the cliff's reflection coefficients read (the portal's
-        ``_image_coeffs``, where an all-zero pair collapses to vacuum), and an
-        all-zero record describes no medium at all — which is what a bare
-        ``GN 1`` writes into the four slots, so clearing a cliff never trips
-        this.  And a request that DOES read the record — ``RP 2``/``RP 3``, a
-        cliff whose near medium is perfect ground — is answered, not refused:
-        nothing is silent there, and it is oracle-verified (fixtures
-        ``dipole_rp2_linear_cliff``, ``dipole_rp3_circular_cliff``).
-
-        The check belongs at the execute card because the environment is a
-        per-execute-group quantity (spec
-        ``#the-environment-is-per-execute-group``): a deck that states the
-        pair and then switches to ``GN 2`` before it ever executes is not in
-        the idiom.
-        """
-        second = self._second_medium
-        if self._ground != "pec" or second is None:
-            return
-        if not second.eps_r and not second.sigma:
-            return
-        if isinstance(request, FarFieldRequest) and request.mode in (2, 3):
-            return
-        raise DeckError(
-            "GD with a perfect ground (GN 1) in force is the MININEC-type "
-            "ground idiom (4nec2 GN 3; EZNEC 'MININEC-type'), which this "
-            "engine does not implement (momwire#456): use GN 2 for a finite "
-            "Sommerfeld ground, or drop the GD for perfect ground"
-        )
-
     def _execute(self, card: Card) -> None:
         if not self._armed and self._executed:
             # An execute card with nothing new since the previous one
@@ -802,7 +755,6 @@ class _Nec2Parser:
             request = self._far_field(card)
         elif card.mnemonic in ("NE", "NH"):
             request = self._near_field(card)
-        self._refuse_the_mininec_ground_idiom(request)
         refilled = self._fresh_fr or not self._executed
         self.groups.append(
             _PendingGroup(
@@ -819,6 +771,25 @@ class _Nec2Parser:
                     # No card moves the plane; it is always z = 0 (spec
                     # ``#gn--ground-parameters``).
                     ground_z=0.0,
+                    # The second medium travels AS STATED, including under a
+                    # perfect ground — ``GN 1`` + ``GD`` is how both frontends
+                    # spell MININEC-type ground and it is served letter-
+                    # faithfully to NEC-2 (momwire#487; decision record
+                    # ``docs/design/mininec-ground-idiom.md``, which retired
+                    # momwire#458's refusal here).  Two facts that refusal
+                    # encoded stay true and stay worth knowing:
+                    #
+                    # * an all-zero ``EPSR2``/``SIG2`` pair is NO MEDIUM, not
+                    #   a vacuum one — it is what a bare ``GN 1`` writes into
+                    #   these same four /FPAT/ slots when it clears a cliff.
+                    #   The cliff path collapses it to vacuum instead and is
+                    #   wrong to (momwire#490); nothing on THIS side of the
+                    #   record depends on the difference.
+                    # * only ``RP 2``/``RP 3`` ever read the record.  Under
+                    #   ``RP 0`` or a request-less execute the medium is
+                    #   carried and never consulted, which is exactly what
+                    #   the oracle does — byte-level, banner ``PERFECT
+                    #   GROUND``, the ``GD`` echo its only trace.
                     second_medium=self._second_medium,
                 ),
                 refilled=refilled,
