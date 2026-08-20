@@ -199,10 +199,19 @@ def test_a_network_may_address_the_image_tags_a_load_may_not(name):
     and attaches: model wires 2 and 3, the images of 0 and 1."""
     (card,) = networks(name)
     assert (card.address_a, card.address_b) == ((3, 4), (4, 3))
-    assert card.end_a[0] == 2 and card.end_b[0] == 3
-    # And the image endpoints are the mirror of the cell deck's, arclength for
-    # arclength — the same point on the same wire, one reflection away.
+    # Absolute, not merely "the same as the cell deck's": the images are model
+    # wires 2 and 3, and the arclengths are segment CENTRES on them — 3.5/8 and
+    # 2.5/5 of each wire's length.  Pinned as numbers because a resolver broken
+    # to fold every address back into the cell would move the cell deck's
+    # endpoints by the same amount and a cross-deck comparison would not see it.
+    assert card.end_a[0] == 2
+    assert card.end_b[0] == 3
+    assert card.end_a[1] == pytest.approx(3.763517304331149, abs=1e-12)
+    assert card.end_b[1] == pytest.approx(2.6100766272276377, abs=1e-12)
+    # And they ARE the cell deck's, reflected: same wire-local point, one
+    # mirror away — which is the geometric content of "no replication".
     (cell_card,) = networks(name.replace("_copy", "_cell"))
+    assert cell_card.end_a[0] == 0 and cell_card.end_b[0] == 1
     assert card.end_a[1] == pytest.approx(cell_card.end_a[1], abs=1e-12)
     assert card.end_b[1] == pytest.approx(cell_card.end_b[1], abs=1e-12)
 
