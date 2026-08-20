@@ -1,6 +1,6 @@
 ---
 title: "The nec2 deck dialect"
-description: The normative card-by-card grammar of momwire's antenna-only NEC dialect — which cards run, which fields are read, which are ignored, and the exact text of every refusal.
+description: The normative card-by-card grammar of momwire's NEC dialect — wire structures and the network cards attached to them: which cards run, which fields are read, which are ignored, and the exact text of every refusal.
 ---
 
 This page is the contract. `momwire.deck.parse(text, dialect="nec2")` accepts
@@ -16,9 +16,9 @@ lowercased, with the em dash dropped and spaces hyphenated.
 
 An engine's dialect is part of its identity. nec2c reads NEC-2's deck
 language, NEC-5 reads its own, and momwire reads **`nec2`** — a restricted
-NEC-2 that describes wire antennas and asks them questions. It is the first of
-a planned family: a NEC-5 flavour is the probable second, and the seam is
-built for it from day one.
+NEC-2 that describes wire antennas, the two-port circuits attached to them,
+and asks them questions. It is the first of a planned family: a NEC-5 flavour
+is the probable second, and the seam is built for it from day one.
 
 Every dialect front-end parses into one dialect-neutral [`DeckModel`](#the-deckmodel),
 and `build_solver(model, basis=...)` maps that model onto momwire's solver
@@ -29,21 +29,33 @@ and card mnemonics stop at the parser.
 
 `dialect="nec2"` is the only value this release ships.
 
-### What "antenna-only" excludes
+### What the dialect describes, and what it excludes
 
 The dialect describes **a structure of thin wires, driven by voltage sources,
-optionally over a ground**. It does not describe circuits attached to that
-structure. Transmission lines (`TL`) and two-port networks (`NT`) are refused
-by name: solve the network outside the engine, or import the deck with
-antennaknobs, which keeps NEC's full network grammar. Surface patches, arcs
-and helices are refused too — see [Refusals](#refusals) for each message.
+optionally over a ground, with two-port circuits attached to it**: a
+transmission line ([`TL`](#tl--transmission-line)) or an explicit admittance
+matrix ([`NT`](#nt--two-port-network)) between two segments. That is NEC-2's
+network vocabulary, in full, minus nothing.
 
-The restriction is a measurement, not a preference. Across the 44-deck
+What it does not describe is anything that is not a **wire**. Surface patches
+(`SP`, `SM`, `SC`), arcs (`GA`), helices (`GH`) and tapered-wire continuations
+(`GC`) are refused by name; so is the numerical Green's function (`GF`), and
+so are the 4nec2 authoring extensions (`SY`) that never reach an engine
+anyway. See [Refusals](#refusals) for each message.
+
+The line is drawn at a measurement, not at a preference. Across the 44-deck
 reference corpus the card histogram is `GW` 104, `EX` 55, `XQ` 52, `FR` 49,
 `NX` 45, `GE` 45, `CE` 45, `CM` 21, `GN` 16, `RP` 7, `LD` 7, `GD` 5, `PT` 3,
-`EK` 3, `MP` 2, and one each of `NE`, `NH`, `GS`, `GM` — plus two `TL` and two
-`NT`, confined to three hand-authored probe decks. The dialect covers what
-real decks contain.
+`EK` 3, `MP` 2, two `TL`, two `NT`, and one each of `NE`, `NH`, `GS`, `GM`.
+Zero patches, zero arcs, zero helices. The dialect covers what real decks
+contain.
+
+The network cards were themselves once outside it, refused by name as out of
+an "antenna-only" grammar. That reading did not survive contact with the
+seams: `NT` reaches the engine in 53 of the 457 bundled 4nec2 models and `TL`
+in 45, and EZNEC's feed-system examples are network models outright. NEC-2
+solves these cards natively, so serving them makes this dialect *more*
+faithful to the engine it emulates, not less.
 
 ## Deck framing
 
@@ -176,12 +188,23 @@ NEC's:
 | `environment` | the same three values as one record, per execute group: the ground, its plane and the second medium in force **at that group's execute card** |
 | `frequencies` | the frequency list, in MHz, per execute group |
 | `requests` | what each execute group asks for: nothing (a plain solve), a far-field pattern, a near-field grid, and the print controls that shape the readout |
+| `networks` | the deck's [`TL`](#tl--transmission-line) / [`NT`](#nt--two-port-network) cards in card order: which card, both endpoints as `(wire, arclength)`, the six real fields **verbatim**, and the first execute group each is live for |
 | `comments` | the deck's free text, in card order |
 
 The model carries no tags, no segment numbers, no mnemonics and no card
 ordinals. Anything a consumer needs in those terms — a printout that echoes
 cards, a table addressed by segment — is the *dialect's* business and travels
 alongside the model, not inside it.
+
+`networks` is the one deliberate exception, and it is worth naming as one. A
+network record keeps the card's own `(tag, segment)` pair **alongside** its
+resolved endpoint, and its mnemonic alongside its fields, because the
+`NETWORK DATA` block is addressed in exactly those terms and a deck whose tags
+repeat cannot have them recovered from an arclength. Nothing in the physics
+reads them. The endpoints are resolved the way every other address in this
+model is, and the six real fields are recorded *uninterpreted*: what they mean
+is card semantics, which belongs to whoever composes the network rather than
+to the reader that found where it attaches.
 
 ### The environment is per execute group
 
@@ -212,9 +235,10 @@ produce a group's worth of output.
 ### Arming
 
 An execute card runs only if something has changed since the last one. The
-**arming** cards are `EX`, `FR`, `LD`, `GN` and `EK` — the cards that move the
-operator or the drive. A second execute card with nothing new between it and
-the first produces no output at all.
+**arming** cards are `EX`, `FR`, `LD`, `GN`, `EK`, `TL` and `NT` — the cards
+that move the operator, the drive, or the network composed with them. A second
+execute card with nothing new between it and the first produces no output at
+all.
 
 Explicitly **not** arming: `GD`, `MP` and `PT`. `GD` moves nothing outside the
 far field's cliff modes; `MP` is advisory; `PT` changes what a run prints, not
@@ -224,11 +248,12 @@ The first execute card of a deck always runs.
 
 #### What a re-armed group rebuilds
 
-Two of the five arming cards move the **operator** — the matrix itself, rather
-than the drive it is solved against. Those are `GN` and `EK`: a ground card
-changes the half-space the fill runs over, a kernel card changes how the fill
-integrates. The other three do not: `EX` moves the drive, `FR` moves the
-frequency list, and `LD` is stamped outside the fill.
+Two of the seven arming cards move the **operator** — the matrix itself,
+rather than the drive it is solved against. Those are `GN` and `EK`: a ground
+card changes the half-space the fill runs over, a kernel card changes how the
+fill integrates. The other five do not: `EX` moves the drive, `FR` moves the
+frequency list, `LD` is stamped outside the fill, and `TL`/`NT` are composed
+with the solved matrix rather than entering it.
 
 So a re-armed group reports one of three shapes:
 
@@ -236,7 +261,12 @@ So a re-armed group reports one of three shapes:
 |---|---|
 | a fresh `FR` (with or without anything else) | a whole refill — new frequency list, new operator |
 | `GN` or `EK`, and no fresh `FR` | a **partial** refill: the operator was rebuilt, the frequency list was not |
-| `EX` or `LD` only | neither — the operator is untouched |
+| `EX`, `LD`, `TL` or `NT` only | neither — the operator is untouched |
+
+The network row is oracle-verified: a deck that writes `FR`, `TL`, `XQ`, `NT`,
+`XQ` prints two `ANTENNA INPUT PARAMETERS` blocks against exactly one each of
+`MATRIX TIMING`, `FREQUENCY` and `STRUCTURE IMPEDANCE LOADING`. The second run
+is real and the matrix behind it is the first run's.
 
 The first execute card of a deck always reports a whole refill.
 
@@ -481,6 +511,36 @@ plane, Fourier modes for an n-fold rotation) — the oracle's cell-driven probe
 matches an expanded twin carrying a single source to six figures.
 `PT`/`PQ`/`GD`/`FR`/`GN`/`EK` address no tag into the structure and are
 unaffected.
+
+**`TL` and `NT` are exempt too**, for the same reason one step further out: a
+network is composed with the *solved* matrix rather than being a term inside
+it, so there is nothing for the cell to replicate. A network card attaches
+**once, exactly as addressed**, and its endpoints resolve against the fully
+generated structure — **image tags included**, which is precisely the address
+an `LD` is refused for.
+
+Measured, not argued. The eight probe decks
+`tests/fixtures/nec2_symmetry/k9ay_{nt,tl}_*.deck` ask the question four ways
+per card, on a k9ay-shaped structure with a live `GX 2 100` at `GE`:
+
+| form | the card | nec2c (`NT` / `TL`) |
+|---|---|---|
+| *(no network card)* | — | 0.10161 + j514.86 |
+| `..._cell` | one card, cell tags, `GX` live | 57.233 + j501.94 / 0.098596 + j577.58 |
+| `..._naive` | the same one card over the hand-expanded structure | **identical**, to every printed digit |
+| `..._expanded` | one card **per copy** — what a cell rule would mean | 109.75 + j492.48 / 0.094537 + j636.49 |
+| `..._copy` | one card on the **image** tags, `GX` live | 55.036 + j497.78 / 0.096328 + j573.61 |
+
+The cell form and the naive form are not merely close: their whole network
+printout blocks are byte-identical. The replicated form is a measurably
+different antenna, so replicating a network card would be wrong rather than
+merely redundant. And the image-tag form resolves, attaches and answers — no
+drop, no diagnostic, no error — which is where a network's addressing parts
+company with a load's.
+
+The practical consequence is that a symmetric deck with network cards needs no
+special handling at all: the cross-boundary transmission lines real decks
+write under a live `GX` are well defined exactly as typed.
 
 **`IS` refuses under a live cell.** A sheath moves the matrix the way a load
 does, so the cell rule must apply to it — but `IS` is this dialect's own card,
@@ -864,6 +924,193 @@ IS: insulation on a partial-wire segment range — per-wire specs cover whole wi
 IS: insulation whose outer radius does not exceed the wire's conductor radius
 ```
 
+## TL — transmission line
+
+An ideal two-wire transmission line between two segments of the structure,
+with an optional shunt admittance across each end.
+
+| field | meaning |
+|---|---|
+| `I1` | tag of end one |
+| `I2` | segment of end one |
+| `I3` | tag of end two |
+| `I4` | segment of end two |
+| `F1` | characteristic impedance, ohms. **Must be nonzero**; a negative value selects a [crossed line](#crossed-lines) |
+| `F2` | line length, metres. `0` means [the distance between the two segments](#zero-length-lines) |
+| `F3`, `F4` | shunt admittance across end one, `G + jB` mhos |
+| `F5`, `F6` | shunt admittance across end two, `G + jB` mhos |
+
+The line is lossless and its velocity factor is 1: `F2` is an *electrical*
+length in metres, and a deck modelling a velocity factor scales it before
+writing the card. Both ends attach at the **centre** of the addressed segment,
+the same point an [`EX`](#ex--voltage-source) drives — see
+[Addressing](#addressing).
+
+Both endpoints of one card may name the same segment, and several cards may
+share an endpoint; nothing here is one-per-segment.
+
+### Crossed lines
+
+A negative `F1` is NEC's spelling for a line whose conductors are transposed
+between the two ends — a half-turn of the pair, which inverts the sign of the
+voltage carried across it. The magnitude is the impedance; the sign is a
+topology flag and nothing else. nec2c prints the distinction in its network
+block's `LINE TYPE` column as `STRAIGHT` or `CROSSED`.
+
+This dialect keeps the two apart at the model level: the card's fields are
+recorded as written, and the reading that matters — that this is a *positive*
+impedance with a transposed polarity, never a negative impedance — is the
+semantics the network solve applies. A negated impedance would be a different
+and unphysical line.
+
+### Zero-length lines
+
+`F2 = 0` does not mean a zero-length line. It means "as long as the gap it
+spans": NEC substitutes the **straight-line distance between the two segment
+midpoints**, which is what makes a card written between two nearby feedpoints
+model the stub that is physically there. A deck wanting a genuinely
+zero-length connection writes a small nonzero length or an
+[`NT`](#nt--two-port-network).
+
+### End shunts
+
+`F3`–`F6` are two admittances in mhos, one across each end, in parallel with
+the line's own port. They are how NEC spells an open or shorted stub, a
+loading coil at a feedpoint, or the resistor of a terminated line. Zero — the
+usual case, and the value a short card supplies — is no shunt at all rather
+than a short circuit.
+
+A `TL` with `F1 = 0` is refused. NEC does not run it either: the oracle aborts
+while *reading* the deck.
+
+```text
+TL with a zero characteristic impedance is not a transmission line — NEC aborts reading the deck on this card; Z0 must be nonzero, and its SIGN, not its magnitude, is what selects a crossed line
+```
+
+## NT — two-port network
+
+An explicit two-port admittance matrix between two segments of the structure —
+NEC's general network card, and the one every circuit that is not a
+transmission line arrives as.
+
+| field | meaning |
+|---|---|
+| `I1` | tag of end one |
+| `I2` | segment of end one |
+| `I3` | tag of end two |
+| `I4` | segment of end two |
+| `F1`, `F2` | `Y11`, real and imaginary, mhos |
+| `F3`, `F4` | `Y12`, real and imaginary, mhos |
+| `F5`, `F6` | `Y22`, real and imaginary, mhos |
+
+**`Y21 = Y12` by construction.** The card carries three entries, not four:
+NEC's network is reciprocal by definition and there is no field in which to
+say otherwise. A deck needing a non-reciprocal two-port cannot say so in this
+grammar.
+
+Addressing is [`TL`](#tl--transmission-line)'s exactly — segment centres, the
+same points `EX` drives.
+
+### An all-zero `NT` is not a no-op
+
+An `NT` whose six real fields are all zero is a **real card with a real
+effect**, and this is worth stating because two other readings are tempting
+and both are wrong. A zero-valued [`LD`](#ld--loading) *is* dropped as a no-op
+by this dialect; antennaknobs' importer skips an all-zero `NT` as
+unmodellable. NEC does neither. It attaches a network of zero admittance,
+which **open-circuits both addressed segments**: their currents collapse to
+numerical zero and the structure is cut at those two points.
+
+Measured on a probe whose control answers 0.10161 + j514.86: with an all-zero
+`NT` across two of its segments the same deck answers 0.68923 − j4651.8, with
+both connection-point currents at ~1e-20. The card is read as written and the
+zero admittance is honoured.
+
+## Network addressing, retention and ordering
+
+The rules below are `TL`'s and `NT`'s in common — they are one card as far as
+NEC's reader is concerned, and a deck may mix them freely.
+
+### Segment numbers must be positive
+
+Unlike every other addressed card in this dialect, a network endpoint's
+segment number may not be zero or negative. NEC does not clamp it, ignore it
+or treat it as "the whole tag": it **halts the entire run**, printing
+
+```text
+CHECK DATA, PARAMETER SPECIFYING SEGMENT POSITION IN A GROUP OF EQUAL TAGS MUST NOT BE ZERO
+```
+
+The check is on the segment field alone and runs before the tag is looked at,
+so `NT 0 0 ...` — where the segment number would be a global index rather than
+a position within a group of equal tags — halts exactly as `NT 1 -3 ...` does.
+This dialect refuses in kind rather than resolving something NEC would not:
+
+```text
+<M> addresses segment <s> of tag <t>, which is not a segment: NEC halts on this card with CHECK DATA, PARAMETER SPECIFYING SEGMENT POSITION IN A GROUP OF EQUAL TAGS MUST NOT BE ZERO — a network endpoint names one segment, so its segment number must be 1 or more
+```
+
+No corpus deck writes one: 0 of the 46 hand-written `TL`/`NT` decks surveyed
+use a nonpositive endpoint.
+
+### Network retention
+
+Network cards are **retained across execute cards**, the way an
+[`EX` set is](#excitation-retention) and unlike a frequency list. A deck that
+states its networks once and then runs several groups is answered with the
+same networks in every one — nec2c prints the identical network block in each.
+
+Retention runs forward from the card and not backward: an execute card that
+has already run is not retroactively given a network stated after it. A deck
+that runs the bare antenna and then attaches a line gets two different
+answers, in that order, which is what the oracle prints.
+
+### Network contiguity
+
+This is the one place where NEC's own behaviour is a defect this dialect
+refuses to reproduce.
+
+NEC keeps a single list of network cards and **resets it** whenever it reads a
+network card whose predecessor was not one. The effect is that a card of the
+wrong kind sitting between two network cards **silently destroys every network
+card before it** — while still echoing those cards in the `DATA CARD` list as
+though they had been read and honoured. Nothing in the printout says the line
+is gone. The impedance is simply the impedance of a different antenna.
+
+The class was measured card by card, each probe written as `TL`, *card*, `NT`
+and read back off the network block:
+
+| interposed card | the earlier `TL` |
+|---|---|
+| `PT`, `PQ`, `MP` | **survives** — the block is byte-identical to the contiguous control |
+| `LD`, `EX`, `FR`, `GN`, `EK`, `GD` | destroyed, in silence |
+| `XQ`, `RP`, `NE`, `NH` | destroyed, in silence |
+
+The transparent cards are exactly the ones that change what a run *reports*
+rather than what it computes, which is why serving them matters: SimNEC
+appends an `MP` on structure size alone, without being asked.
+
+This dialect serves contiguous network groups and refuses the destroy pattern
+by name. It costs nothing measured — 0 of the 46 hand-written network decks
+surveyed hit it, and the `EX 6` forms 4nec2 manufactures are contiguous by
+construction — and the alternative is answering a question the deck did not
+ask.
+
+```text
+<M> with an interposed <C> card between it and an earlier network card is not supported by this engine (momwire#456): NEC silently DESTROYS every TL/NT read before such a card, so this deck's earlier network cards would vanish with no diagnostic while still being echoed in its DATA CARD list as read — keep a deck's TL/NT cards contiguous (only PT, PQ and MP may sit between them)
+```
+
+`<C>` is the **first** interposed card, which is the deck's actual mistake.
+
+A deck with a single network card never meets this rule: the pattern is about
+a card destroyed by a later one, so what follows a lone `TL` is irrelevant.
+
+### Networks under a symmetric cell
+
+Exempt, measured, and set out under [the cell rule](#the-cell-rule): a network
+card attaches once, exactly as addressed, and its endpoints resolve against
+the fully generated structure including the image tags a `GX`/`GR` created.
+
 ## EK — extended thin-wire kernel
 
 | field | meaning |
@@ -1090,8 +1337,6 @@ runs or refuses. `parse()` raises with the message; a caller frames it.
 
 | card | message |
 |---|---|
-| `TL` | `TL (transmission line) is not part of this engine's nec2 dialect, which is antenna-only; antennaknobs imports decks with networks` |
-| `NT` | `NT (two-port network) is not part of this engine's nec2 dialect, which is antenna-only; antennaknobs imports decks with networks` |
 | `GA` | `GA (wire arc) is not part of this engine's nec2 dialect, whose geometry is GW with GM / GS transforms` |
 | `GH` | `GH (helix) is not part of this engine's nec2 dialect, whose geometry is GW with GM / GS transforms` |
 | `GC` | `GC (tapered wire continuation) is not part of this engine's nec2 dialect` |
@@ -1111,6 +1356,11 @@ them and an untested geometry path is worse than an honest no.
 ([`GX`](#gx--structure-reflection) and [`GR`](#gr--cylindrical-structure-rotation) were
 two of them and are now built.) The three "yet" messages mark the cards a
 patch model would bring, not a dialect decision.
+
+`TL` and `NT` were on this table and have left it: the dialect reads them, and
+what they refuse is [by value](#fields-refused-by-value) — a nonpositive
+endpoint segment, a zero characteristic impedance, and the non-contiguous
+destroy pattern.
 
 Anything else:
 
@@ -1146,6 +1396,9 @@ unrecognised NEC card '<XX>'
 | `GR` | `nop < 1` | `structure count must be >= 1, got <n>` |
 | `LD` | a segment addressed outside a live `GX`/`GR` [cell](#the-cell-rule) | `LD addresses <n> segment(s) outside the GX/GR symmetric cell in force (the cell is segments 1-<c> of <t>), which this engine does not serve (momwire#415): while the symmetry is live the matrix is the cell's, so NEC silently drops such a card rather than loading the copy — address the cell instead, where a load applies to every copy of it, or write the GX/GR out as explicit GW cards` |
 | `IS` | a `GX`/`GR` symmetric [cell](#the-cell-rule) still live | `IS while a GX/GR symmetric cell is in force is not supported by this engine (momwire#415): a sheath moves the matrix the way a load does, so the cell rule applies to it, but NEC-2 has no IS card to measure that rule against — write the GX/GR out as explicit GW cards` |
+| `TL` / `NT` | either endpoint's [segment number](#segment-numbers-must-be-positive) `< 1`, with any tag | `<M> addresses segment <s> of tag <t>, which is not a segment: NEC halts on this card with CHECK DATA, PARAMETER SPECIFYING SEGMENT POSITION IN A GROUP OF EQUAL TAGS MUST NOT BE ZERO — a network endpoint names one segment, so its segment number must be 1 or more` |
+| `TL` | `F1 = 0`, including a card that omits it | `TL with a zero characteristic impedance is not a transmission line — NEC aborts reading the deck on this card; Z0 must be nonzero, and its SIGN, not its magnitude, is what selects a crossed line` |
+| `TL` / `NT` | a card of the [destroy class](#network-contiguity) between this card and an earlier network card | `<M> with an interposed <C> card between it and an earlier network card is not supported by this engine (momwire#456): NEC silently DESTROYS every TL/NT read before such a card, so this deck's earlier network cards would vanish with no diagnostic while still being echoed in its DATA CARD list as read — keep a deck's TL/NT cards contiguous (only PT, PQ and MP may sit between them)` |
 
 ### Structural refusals
 
@@ -1170,7 +1423,10 @@ anyone moving a deck between them:
 
 | topic | antennaknobs importer | this dialect |
 |---|---|---|
-| `TL` / `NT` | translated into circuit branches | refused by name |
+| `TL` / `NT` | translated into circuit branches | read, resolved and solved — both readers serve them |
+| `TL` / `NT` non-contiguity | the cards are collected wherever they appear; NEC's destroy rule is not reproduced | [refused](#network-contiguity) rather than answered as a different antenna |
+| all-zero `NT` | skipped as unmodellable, with a note in an "ignored" list | [read as written](#an-all-zero-nt-is-not-a-no-op) — the oracle open-circuits both segments, so skipping it is a wrong answer |
+| `TL` / `NT` nonpositive segment | resolved | [refused](#segment-numbers-must-be-positive), as NEC halts on it |
 | `GA` / `GH` | built as geometry | refused by name |
 | `LD` under a live `GX`/`GR` symmetry | the geometry expands; the symmetric-cell load rule is not applied, so the load stays where it was written | [the cell rule](#the-cell-rule): a cell load is expanded onto every copy, and a copy-addressed load is refused rather than silently dropped |
 | `IS` under a live `GX`/`GR` symmetry | applied where written | refused (momwire#415) — no NEC-2 oracle for the cell rule on this card |

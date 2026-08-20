@@ -31,14 +31,20 @@ for: NEC's tags and global segment numbers, the column-exact printout, the
 resident stdin framing, and the port algebra that stamps a load onto a
 solution the fill knows nothing about.
 
-The dialect is **antenna-only**, which is what the restriction buys: a
-structure of thin wires, driven by voltage sources, optionally over a ground.
-``TL`` and ``NT`` are refused by name — solve the network outside the engine,
-or import the deck with antennaknobs, which keeps NEC's full network grammar
-(``nec_import.parse_nec``). Across the 44-deck reference corpus the two cards
-appear in three hand-authored probe decks and nowhere else; SimNEC's own
-``NECSource`` never writes them and its state machine never reads the sections
-they would print.
+The dialect describes a structure of thin wires, driven by voltage sources,
+optionally over a ground, **plus the two-port circuits NEC attaches to it**:
+``TL`` and ``NT``. What it excludes is what is not a wire — surface patches,
+arcs, helices, the numerical Green's function.
+
+The network cards were once refused by name here, as out of an "antenna-only"
+grammar (#930). momwire#456 phase C reversed that: NEC-2 solves them natively,
+so serving them makes this dialect *more* byte-faithful to the engine it
+emulates, and two of the three drop-in seams emit them (``NT`` in 53 of the
+457 bundled 4nec2 models, ``TL`` in 45; EZNEC's feed-system examples are
+network models outright). SimNEC's own ``NECSource`` is the exception that
+does not care — it never writes them and its state machine never reads the
+sections they print — which is why the three network decks in the reference
+corpus are hand-authored probes.
 
 Scope (units 2 and 3 — the whole portal dialect bar the long tail):
 
@@ -77,14 +83,23 @@ Scope (units 2 and 3 — the whole portal dialect bar the long tail):
   parameters, currents and location, power budget, radiation patterns,
   near electric/magnetic fields.
 
-Refused by name, with the grammar's own message: ``TL``/``NT`` (networks),
-``GA``/``GH``/``GC``/``GF`` (geometry out of dialect),
-``SY``, ``SP``/``SM`` (surface patches), ``RP`` modes 1 and 4-6, spherical
-``NE``/``NH`` grids, ``GN`` radial-wire ground screens, ``EX`` types other
-than 0, ``LD`` types 2/3/6/7 and the ranges that cannot expand, and the four
-``IS`` cases a lossless whole-wire jacket cannot express. Every one of them
-takes the error path below rather than crashing the daemon — the printout says
-which card and why, and the ``NX`` sentinel is still emitted.
+Refused, with the grammar's own message: ``GA``/``GH``/``GC``/``GF``
+(geometry out of dialect), ``SY``, ``SP``/``SM`` (surface patches), ``RP``
+modes 1 and 4-6, spherical ``NE``/``NH`` grids, ``GN`` radial-wire ground
+screens, ``EX`` types other than 0, ``LD`` types 2/3/6/7 and the ranges that
+cannot expand, the four ``IS`` cases a lossless whole-wire jacket cannot
+express, and the three network cases NEC itself halts on or destroys in
+silence (a nonpositive endpoint segment, a zero ``TL`` impedance, the
+non-contiguous destroy pattern). Every one of them takes the error path below
+rather than crashing the daemon — the printout says which card and why, and
+the ``NX`` sentinel is still emitted.
+
+**Staged, and temporary:** ``momwire.deck`` reads ``TL``/``NT`` and resolves
+where they attach, but ``build_solver`` declines a model carrying networks —
+the composition of the network with the antenna's port admittance is
+momwire#456 phase C's next unit. So a network deck is parsed, echoed and then
+refused, on the error path above, and this paragraph goes away with the unit
+that lands the solve.
 
 Where the physics citations point
 ---------------------------------
@@ -3082,11 +3097,13 @@ _SELFTEST_DECKS = (
     "GE 0\n"
     "EX 0 1 6 0 1.\nFR 0 1 0 0 14.0 1\nXQ\n"
     "EX 0 2 6 0 1.\nFR 0 1 0 0 14.0 1\nXQ\nNX\n",
-    # Deck 3 carried a TL station until #930 made TL out of dialect (the
-    # engine is antenna-only, and a network deck goes to antennaknobs'
-    # importer). What it was really smoking out is a MULTI-WIRE deck with a
-    # port on a parasitic element, so it keeps that and takes an LD load —
-    # the other card whose port algebra runs outside the fill.
+    # Deck 3 carried a TL station until #930 made TL out of dialect.  TL is
+    # back IN dialect since momwire#456 phase C, but this deck stays as it is
+    # and deliberately: what it was really smoking out is a MULTI-WIRE deck
+    # with a port on a parasitic element, so it keeps that and takes an LD
+    # load — the other card whose port algebra runs outside the fill.  A
+    # self-test deck has to SOLVE, and until the network solve lands a TL
+    # here would make the start-up self-test refuse.
     "CE selftest 3\n"
     "GW 1 11 0. -5. 10. 0. 5. 10. 0.001\n"
     "GW 2 3 20. -0.5 10. 20. 0.5 10. 0.001\n"
