@@ -410,6 +410,31 @@ def _synthetic_decks() -> dict[str, str]:
         "XQ\n"
     )
 
+    # Network RETENTION, at the answer. A network card is retained forward from
+    # where it is read and not backward, so this deck's two XQ groups get two
+    # different answers in one printout: the first runs the bare antenna and
+    # prints NO network blocks at all, the second runs the same structure with
+    # the NT attached. That is the whole of the scoping rule, and it is the one
+    # rule about these cards that no single-group deck can express — every
+    # other network fixture states its cards before the first execute card, so
+    # an engine that ignored `first_group` entirely would answer all of them
+    # correctly and this one wrong in both groups.
+    #
+    # The NT arms the second XQ without refilling: the oracle prints no
+    # FREQUENCY / LOADING / ENVIRONMENT / MATRIX TIMING preamble for it, which
+    # makes this a layout fixture as well as a physics one.
+    decks["dipole_nt_after_xq"] = (
+        "CE nt attached between two runs\n"
+        + _DIPOLE_GW
+        + "GW 2 9 1.0 0. -2.5 1.0 0. 2.5 0.001\n"
+        "GE 0\n"
+        "EX 0 1 5 0 1.\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+        "NT 1 5 2 5 0. 0.02 0. -0.02 0. 0.02\n"
+        "XQ\n"
+    )
+
     # The manufactured EX 6 form, verbatim. 4nec2 has no NEC-2 card for an
     # ideal CURRENT source, so it builds one: a phantom wire parked at
     # z = <its own tag> metres, an ordinary EX 0 voltage source on it, and a
