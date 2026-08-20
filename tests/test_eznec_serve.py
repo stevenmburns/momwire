@@ -1,4 +1,4 @@
-"""Rung-1 physics, gated against the captures (#497, U4).
+"""Rung-1 and rung-2 physics, gated against the captures (#497 U4, #504 U1).
 
 Three gates carry this unit, and the split between them is the point.
 
@@ -24,15 +24,17 @@ regression.
 real shell, at exit 0, with the comment stamp intact — because a refusal that
 does not reach EZNEC's viewer reaches nobody.
 
-The three normalizations the fixture manifest lists for a served run are
-applied here and nowhere else: CRLF to LF, the ``FILL=``/``RUN TIME`` timing
-lines dropped (a timing is a property of the machine), and signed zero folded
-in the pattern TILT column.
+The manifest's normalizations for a served run are applied on the way in and
+nowhere else: CRLF to LF and the ``SOMMPD.NEX`` cache blocks at the reader
+(``test_eznec_printout.printout_text``), the ``FILL=``/``RUN TIME`` timing
+lines dropped here (a timing is a property of the machine), and signed zero
+folded in the pattern TILT column.
 """
 
 from __future__ import annotations
 
 import functools
+import math
 import re
 import subprocess
 import sys
@@ -50,6 +52,7 @@ from test_eznec_printout import (
     GATED_IDS,
     capture,
     deck_text,
+    drop_sommpd_blocks,
     extract,
     printout_text,
 )
@@ -60,13 +63,39 @@ from test_eznec_printout import (
 # ``test_eznec_networks.py``; they still appear below, in the counting-rule
 # gate, because the count is a property of the deck's geometry and not of what
 # answers it.
-SERVED_IDS = ("0010", "0013", "0019", "0035", "0043", "0044")
+SERVED_IDS = (
+    "0010",
+    "0013",
+    "0019",
+    "0021",
+    "0035",
+    "0043",
+    "0044",
+    "0047",
+    "0048",
+)
+
+# The three of them that stand over a finite ``GN 0`` ground — the rung this
+# unit adds.  One 10.3 m base-fed vertical over 13/0.005 earth, three times:
+# 0047 with a 181-point elevation cut at 7.00 MHz, 0021 its 2026-08-16 twin
+# (same deck, different launch stamp, a differently stale ``SOMMPD.NEX``), and
+# 0048 the same antenna answered by ``XQ`` at 7.02 MHz.
+FINITE_IDS = ("0021", "0047", "0048")
 
 # The rung-1 captures with no printout: seven ``XQ``-only dipoles EZNEC wrote
 # while stepping a frequency.  Nothing to byte-compare, but a deck that
 # refuses is a deck that stopped being served, so they are run for their exit
 # status.
 SERVED_UNGATED_IDS = ("0036", "0037", "0038", "0039", "0040", "0041", "0042")
+
+# The captures the GROUND rung brought in with no printout of their own, and
+# they are the four most interesting decks this seam now answers: 0011/0030
+# hang a coax ``TL`` off a dipole over ``GN 0`` (the first network over a
+# finite ground), and 0033/0034 are elevated radial systems whose radials
+# stand 1.8 cm — 1e-4 λ — above it.  Nothing here can be gated against a
+# printout; what IS gated is that they answer at all, with finite numbers,
+# under the right banner.  A capture errand for the next Windows session.
+FINITE_UNGATED_IDS = ("0011", "0030", "0033", "0034")
 
 
 # --------------------------------------------------------------------------
@@ -80,14 +109,25 @@ SERVED_UNGATED_IDS = ("0036", "0037", "0038", "0039", "0040", "0041", "0042")
 #   0010  79.948 +29.919j      85.073 +45.369j    16.278   2.18/2.09   0.09
 #   0013  55.621 + 8.2725j     58.876 +19.210j    11.412   1.90/1.80   0.10
 #   0019  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
+#   0021  47.789 - 0.78525j    48.867 + 2.5635j    3.518  -1.31/-1.33  0.02
 #   0035  23.343 -24.594j      23.926 -20.079j     4.552   9.88/9.84   0.04
 #   0043  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
 #   0044  35.571 - 1.4223j     36.499 + 2.0789j    3.622   5.15/5.13   0.02
+#   0047  47.789 - 0.78525j    48.867 + 2.5635j    3.518  -1.31/-1.33  0.02
+#   0048  48.155 + 0.65170j    49.254 + 4.0055j    3.529   (XQ, none)   —
 #
 # The impedance bar is that |dZ| plus 25 %.  The reactance carries almost all
 # of it — a node source and a segment gap store different amounts of energy in
 # the feed region, which is exactly the formulation difference the scored
 # matrix priced when it moved this unit's gate off byte equality.
+#
+# The finite-ground rows are the SMALLEST offsets in the table (3.5 Ω on a
+# 48 Ω row, against 16 on the free-space dipole), and the reason is worth
+# writing down: the Sommerfeld ground loads the feed region, so the same
+# formulation difference sits on a bigger, lossier admittance and shows less.
+# The offset is also within 3 % of the perfect-ground twins' 3.622 on the same
+# 10.3 m wire (0019/0043/0044), which says the ground model added almost none
+# of it — the gap is the feed's, as it is everywhere else in this table.
 #
 # The peak-gain bar is |d| plus 25 % OR 0.05 dB, whichever is larger: the
 # printed cell is quantized at 0.01 dB, so a bar under a few hundredths would
@@ -96,18 +136,37 @@ Z_BAR = {
     "0010": 20.35,
     "0013": 14.27,
     "0019": 4.53,
+    "0021": 4.40,
     "0035": 5.69,
     "0043": 4.53,
     "0044": 4.53,
+    "0047": 4.40,
+    "0048": 4.42,
 }
 
 # (peak total gain dB, theta, phi) as the capture prints it, and the bar.
 PEAK_BAR = {
     "0010": 0.12,
     "0013": 0.13,
+    "0021": 0.05,
     "0035": 0.05,
     "0044": 0.05,
+    "0047": 0.05,
 }
+
+# The finite-ground patterns are gated at EVERY printed angle and not only at
+# the peak, which is the evidence that the Fresnel-weighted image is the right
+# one rather than merely well aimed: over a real ground the whole elevation
+# cut is the ground's doing, and a wrong medium would show up in the low-angle
+# rows long before it moved the peak.  Measured worst |d(TOTAL dB)| over the
+# 178 rows that are not the three -999.99 nulls: 0.06 dB, at theta = +-1 and
+# +-2 degrees, where the cut is falling through 30 dB in two degrees and the
+# printed cell is quantized at 0.01.  Plus 25 %.
+PATTERN_BAR = 0.075
+
+# NEC's own floor for a gain cell, as a number rather than as the text the
+# mask compares.
+_NULL_DB = -999.99
 
 # Largest per-element difference in the WIRE CURRENTS table, relative to that
 # table's own peak current, and in the CHARGE DENSITIES table relative to its
@@ -118,17 +177,23 @@ CURRENT_BAR = {
     "0010": 0.028,
     "0013": 0.025,
     "0019": 0.013,
+    "0021": 0.0123,
     "0035": 0.228,
     "0043": 0.013,
     "0044": 0.013,
+    "0047": 0.0123,
+    "0048": 0.0124,
 }
 CHARGE_BAR = {
     "0010": 0.086,
     "0013": 0.078,
     "0019": 0.078,
+    "0021": 0.076,
     "0035": 0.186,
     "0043": 0.078,
     "0044": 0.078,
+    "0047": 0.076,
+    "0048": 0.077,
 }
 
 
@@ -411,7 +476,7 @@ def test_the_feedpoint_impedance_sits_inside_its_measured_envelope(cid):
 
 @pytest.mark.parametrize("cid", sorted(PEAK_BAR))
 def test_the_pattern_peak_lands_where_the_capture_puts_it(cid):
-    """The peak DIRECTION is exact on all four patterned captures; the peak
+    """The peak DIRECTION is exact on all six patterned captures; the peak
     LEVEL is inside a tenth of a dB.
 
     The direction is the part a formulation difference does not get to move —
@@ -430,6 +495,36 @@ def test_the_pattern_peak_lands_where_the_capture_puts_it(cid):
     assert abs(best_got.total_db - best_want.total_db) <= PEAK_BAR[cid]
 
 
+@pytest.mark.parametrize("cid", ("0021", "0047"))
+def test_the_finite_ground_elevation_cut_agrees_at_every_printed_angle(cid):
+    """All 181 rows of the ``RP 0`` cut, not just its peak.
+
+    Over a real ground the whole elevation pattern is the ground's doing — the
+    direct wave and its Fresnel-weighted image interfere direction by
+    direction — so agreeing at 181 angles is a statement about the MEDIUM in a
+    way that agreeing at the peak is not.  Worst row is 0.06 dB, at
+    theta = ±1° and ±2°, where the cut falls through 30 dB in two degrees.
+
+    The three ``-999.99`` rows are skipped HERE and gated harder elsewhere:
+    they are never masked, so the structure gate already compares them byte
+    for byte and would fail if the served run put a null anywhere the capture
+    did not.  Which it does not — the horizon nulls at θ = ±90° (a vertical
+    over any ground has no grazing field) and the zenith null at θ = 0° land
+    on exactly the captured rows.
+    """
+    (want,) = extract(printout_text(cid)).patterns
+    (got,) = extract(served(cid)).patterns
+    assert len(got.rows) == len(want.rows) == 181
+    nulls = [row.theta_deg for row in want.rows if row.total_db == _NULL_DB]
+    assert nulls == [90.0, 0.0, -90.0]
+    worst = max(
+        abs(a.total_db - b.total_db)
+        for a, b in zip(want.rows, got.rows)
+        if a.total_db != _NULL_DB
+    )
+    assert worst <= PATTERN_BAR, f"{cid}: worst row {worst:.4f} dB"
+
+
 @pytest.mark.parametrize("cid", SERVED_IDS)
 def test_the_current_and_charge_tables_sit_inside_their_measured_envelopes(cid):
     """Every element's current AND its charge density, against the capture.
@@ -437,8 +532,11 @@ def test_the_current_and_charge_tables_sit_inside_their_measured_envelopes(cid):
     The charge block is the one readout in this unit with no second opinion
     anywhere in the tree, so this is the gate that says it is physics rather
     than plausible-looking arithmetic: ``q = −(1/jω)·dI/ds``, differentiated
-    in the B-spline basis, lands within 8 % of NEC-5's own on five of the six
-    captures and within 19 % on the Yagi, whose currents differ by as much.
+    in the B-spline basis, lands within 8 % of NEC-5's own on eight of the
+    nine captures and within 19 % on the Yagi, whose currents differ by as
+    much.  The three finite-ground captures are the TIGHTEST in the table —
+    6.1 % on the charge and 1.0 % on the current — which is the same story the
+    impedance envelope tells from the other end.
     """
     want = extract(printout_text(cid))
     got = extract(served(cid))
@@ -490,15 +588,181 @@ def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
 
 
 @pytest.mark.parametrize("cid", SERVED_IDS)
-def test_a_lossless_rung_one_deck_radiates_everything_it_is_given(cid):
-    """Free space and perfect ground dissipate nothing and this dialect has no
+def test_a_lossless_deck_radiates_everything_it_is_given(cid):
+    """Every wire here is a perfect conductor and this dialect has no
     conductivity card, so INPUT = RADIATED, WIRE LOSS = 0 and EFFICIENCY reads
-    100.00 — which is what all six captures print."""
+    100.00 — which is what all nine captures print.
+
+    Including the three over LOSSY GROUND, which is the entry worth reading
+    twice: 0047 dumps a good fraction of its input into the earth and still
+    prints ``EFFICIENCY    = 100.00 PERCENT``.  NEC's POWER BUDGET counts what
+    the STRUCTURE dissipates, and the ground is not part of the structure —
+    so a reader who wants the ground loss has to take it out of the pattern's
+    average gain, not out of this block.  Reproducing that means reproducing
+    the convention, not correcting it."""
     power = extract(served(cid)).power
     assert power.wire_loss == 0.0
     assert power.input_power == power.radiated_power
     assert power.efficiency_percent == 100.0
     assert power.network_loss is None
+
+
+# --------------------------------------------------------------------------
+# the ground rung's own facts
+# --------------------------------------------------------------------------
+#
+# Three things about `GN 0` that no capture states on its own and that the
+# seam would otherwise be free to get wrong quietly: the second spelling of the
+# card, the second spelling of its loss field, and the cache file it must not
+# touch.
+
+
+def _with_ground(cid: str, card: str) -> str:
+    """0047's deck with its ground line replaced, and nothing else."""
+    text = deck_text(cid)
+    assert "GN 0,0,0,0,13.,.005,1.,0." in text
+    return text.replace("GN 0,0,0,0,13.,.005,1.,0.", card)
+
+
+def test_the_gn_two_spelling_is_the_same_ground_and_still_echoes_its_own_card():
+    """``GN 2`` is the NEC-4-compatible spelling of ``GN 0`` and the dialect
+    records which one arrived rather than normalizing it away.
+
+    Both halves of that matter and they pull opposite ways: the ANSWER has to
+    be identical to the last printed digit (probe family 1 measured the two
+    grounds equal, so a seam that treated them differently would be inventing
+    a distinction), while the CARD ECHO has to show the deck's own field,
+    because the echo is a card image and 0047's shows ``GN   0``.  Comparing
+    the whole printout catches both at once: exactly one line may differ.
+    """
+    zero = render(deck_text("0047"))
+    two = render(_with_ground("0047", "GN 2,0,0,0,13.,.005,1.,0."))
+    differ = [
+        (a, b) for a, b in zip(zero.split("\n"), two.split("\n"), strict=True) if a != b
+    ]
+    assert len(differ) == 1
+    assert differ[0][0].startswith(" ***** INPUT LINE  2  GN   0")
+    assert differ[0][1].startswith(" ***** INPUT LINE  2  GN   2")
+
+
+def test_a_negative_conductivity_field_is_the_imaginary_part_itself():
+    """``GN 0,…,-12.84,…`` and ``GN 0,…,.005,…`` are ONE ground at 7 MHz.
+
+    Measured on the linux oracle 2026-08-20: the negative spelling sets
+    Im(εc) directly, the engine back-derives the conductivity from it, and
+    both decks print ``CONDUCTIVITY= 5.000E-03``, ``1.30000E+01-1.28400E+01``
+    and 4.7789E+01 − 7.8525E-01 Ω to every digit.  So this seam folds the
+    spelling at the door and everything downstream sees one medium — which is
+    what makes the two printouts below identical rather than merely close.
+
+    The captures cannot say this: all four write a positive field.  It is here
+    because the convention is real, the dialect's ``GD`` record already flags
+    it, and a seam that read ``-12.84`` as a conductivity would hand momwire
+    an ACTIVE ground and answer with a straight face.
+
+    Gated at the printed digit rather than at the byte, and the gap between
+    those two is the whole reason to say so: the equivalent σ is recovered by
+    a DIVISION, so it is 0.005 to fifteen digits and not to sixteen, and the
+    last ulps travel as far as the horizon rows' 2.4E-14 V of numerical dust
+    (which prints ``-999.99`` on both sides either way).  Every cell that
+    carries an antenna — the environment block, the impedance, all 543 gain
+    cells, both tables — is identical.
+    """
+    plain = render(deck_text("0047"))
+    folded = render(_with_ground("0047", "GN 0,0,0,0,13.,-12.84,1.,0."))
+    assert "CONDUCTIVITY= 5.000E-03 MHOS/METER" in folded
+    # The card echo is a card image and prints the deck's own field, which is
+    # the same exemption `GN 2` gets above.
+    lines = [
+        (a, b)
+        for a, b in zip(plain.split("\n"), folded.split("\n"), strict=True)
+        if a != b and not a.startswith(" ***** INPUT LINE  2  GN")
+    ]
+    assert all(row[0][:72] == row[1][:72] for row in lines), lines
+
+    want, got = extract(plain), extract(folded)
+    assert (want.ground, want.environment) == (got.ground, got.environment)
+    assert want.sources == got.sources
+    assert want.currents == got.currents
+    assert want.charges == got.charges
+    (wp,), (gp,) = want.patterns, got.patterns
+    for a, b in zip(wp.rows, gp.rows, strict=True):
+        assert (a.vert_db, a.hor_db, a.total_db) == (b.vert_db, b.hor_db, b.total_db)
+
+
+def test_the_engine_writes_no_sommerfeld_cache_and_reads_none(tmp_path):
+    """``SOMMPD.NEX`` is inert at this seam: not read, not written, not made.
+
+    The captured printouts are full of that file — stale, valid, missing,
+    written — because the Windows engine caches its Sommerfeld tables there
+    and reports what it found.  This engine has no such cache, so a run in a
+    directory carrying one has to be BYTE-IDENTICAL to a run in a directory
+    that does not, the file has to come back untouched, and no new one may
+    appear.  Anything else is a seam that has started keeping state between
+    runs in the user's model directory.
+    """
+    junk = b"not a Sommerfeld table\n\x00\xff"
+    outputs = []
+    for cache in (False, True):
+        room = tmp_path / f"cache-{cache}"
+        room.mkdir()
+        deck = room / "EZN5.NEC"
+        deck.write_bytes((FIXTURE_DIR / capture("0047")["deck"]).read_bytes())
+        out = room / "NEC5.OUT"
+        if cache:
+            (room / "SOMMPD.NEX").write_bytes(junk)
+        proc = subprocess.run(
+            [sys.executable, "-m", "momwire.eznec", str(deck), str(out)],
+            capture_output=True,
+            text=True,
+            cwd=room,
+        )
+        assert proc.returncode == 0
+        outputs.append(out.read_bytes())
+        assert sorted(p.name for p in room.iterdir()) == (
+            ["EZN5.NEC", "NEC5.OUT", "SOMMPD.NEX"]
+            if cache
+            else ["EZN5.NEC", "NEC5.OUT"]
+        )
+    assert (tmp_path / "cache-True" / "SOMMPD.NEX").read_bytes() == junk
+    assert mask(outputs[0].decode("latin-1")) == mask(outputs[1].decode("latin-1"))
+
+
+def test_the_served_printout_carries_no_cache_preamble_of_its_own():
+    """The other half of the same rule, read off the bytes.
+
+    The captures' cache blocks are normalized out of the CAPTURED side
+    (``test_eznec_printout.drop_sommpd_blocks``), and the structure gate would
+    pass either way if the served side quietly grew one too — a normalization
+    applied to both sides cannot see a line it deletes.  So the served side is
+    checked directly: none of the four block forms may appear anywhere in it.
+    """
+    for cid in FINITE_IDS:
+        text = served(cid)
+        assert drop_sommpd_blocks(text) == text
+        for marker in ("SOMMPD", "GMPINO", "Sommerfeld integral tables"):
+            assert marker not in text, f"{cid}: {marker}"
+    # And the banner that DOES belong to a finite ground is present, once.
+    assert served("0047").count("FINITE GROUND.  SOMMERFELD SOLUTION") == 1
+
+
+def test_the_epsilon_c_constant_is_the_engine_s_own_and_not_the_si_fold():
+    """``εc = εr − j·σ·λ·59.96``, measured off the printed cell.
+
+    0047 at 7.00 MHz prints ``1.30000E+01-1.28400E+01`` and 0048 at 7.02 MHz
+    prints ``-1.28034E+01``; the SI fold ``σ/(ωε₀)`` gives 12.8393 and 12.8027
+    and would print two different cells.  The difference is 5e-5 of the
+    imaginary part — far below this seam's basis offset, and irrelevant to the
+    solve — but it is the difference between a byte-gate that passes and one
+    that does not, so the constant is pinned rather than derived.
+    """
+    assert _serve.EPSC_CONDUCTIVITY_FACTOR == 59.96
+    for cid, wanted in (("0047", -12.8400), ("0048", -12.8034)):
+        medium = extract(served(cid)).ground
+        assert (medium.eps_r, medium.sigma) == (13.0, 0.005)
+        # The cell is an E12.5, so "matches" means to the printed digit.
+        assert medium.eps_c.imag == pytest.approx(wanted, abs=5e-5)
+        assert medium == extract(printout_text(cid)).ground
 
 
 # --------------------------------------------------------------------------
@@ -510,17 +774,17 @@ def test_a_lossless_rung_one_deck_radiates_everything_it_is_given(cid):
 # that carries BOTH is refused for its table layout instead, and that refusal
 # is gated in ``test_eznec_networks.py`` beside the rest of the network unit.
 #
-# The last two entries are the corpus's own decks with their ground card swapped
-# for `GN 1`, and they have to be: every captured multi-`EX` deck and the one
-# captured `NE` deck stand over a finite ground, so as written they are refused
-# a rung earlier and their own card never gets a hearing.  The cards under test
-# are the captures' verbatim (0031's four phased `EX 4` rows, 0022's
-# `NE 0,1,1,1,…` at EZNEC's defaults); only the ground line moved.
-_ON_PERFECT_GROUND = ("0031", "0022")
+# 0031 is the corpus's own deck with its ground card swapped for `GN 1`, and it
+# has to be: every captured multi-`EX` deck stands over a bare `GD`, so as
+# written it is refused a rung earlier and its own card never gets a hearing.
+# The card under test is the capture's verbatim (four phased `EX 4` rows); only
+# the ground line moved.  0022 left this list with the ground rung — its
+# `GN 0` is served now, so its `NE 0,1,1,1,…` is heard exactly as EZNEC wrote
+# it, which is the point of the ordering test below.
+_ON_PERFECT_GROUND = ("0031",)
 
 REFUSALS = {
     "0045": "GD asks for the MININEC-type ground",
-    "0047": "GN 0 asks for the finite-ground Sommerfeld solution",
     "0031": "this deck carries 4 EX cards",
     "0022": "NE (near electric field) is not served at this seam yet",
 }
@@ -565,17 +829,21 @@ def test_an_out_of_scope_capture_refuses_by_name_through_the_shell(
     assert "ANTENNA INPUT PARAMETERS" not in written
 
 
-def test_a_deck_out_of_scope_twice_names_its_ground_first():
-    """0022 as EZNEC wrote it carries BOTH a ``GN 0`` and an ``NE``, and the
-    sentence a reader gets is the ground's.
+def test_a_served_ground_hands_the_refusal_to_the_card_still_out_of_scope():
+    """0022 carries BOTH a ``GN 0`` and an ``NE``, and which one speaks moved
+    when the ground rung landed.
 
-    The order is a choice and it is worth pinning: a near field over a ground
-    this seam cannot solve is not a near-field problem, so naming ``NE`` there
-    would send the reader after the wrong card.
+    It used to name the GROUND — a near field over a ground the seam could not
+    solve is not a near-field problem, so naming ``NE`` there would have sent
+    the reader after the wrong card.  Now the ground IS solved, so the request
+    is the only thing left to fix and it is the request that answers.  The
+    ordering in :func:`~momwire.eznec._serve.refusal` did not change; what
+    changed is which of its rungs this deck falls through, which is the shape
+    a ladder is supposed to have.
     """
     printout = render(deck_text("0022"))
-    assert REFUSALS["0047"] in printout
-    assert REFUSALS["0022"] not in printout
+    assert REFUSALS["0022"] in printout
+    assert "GN 0" not in printout.split(" ***** NEC ERROR - ")[1]
 
 
 def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
@@ -606,6 +874,37 @@ def test_the_ungated_rung_one_captures_still_serve(cid):
     assert extract(text).frequency_mhz == pytest.approx(
         parse_nec5(deck_text(cid)).frequency_mhz, rel=1e-4
     )
+
+
+@pytest.mark.parametrize("cid", FINITE_UNGATED_IDS)
+def test_the_ungated_finite_ground_captures_answer_with_finite_numbers(cid):
+    """The four decks the ground rung brought in with no printout to gate.
+
+    A liveness gate and it says so: with nothing to compare against, the
+    honest claims are that the deck is answered rather than refused, that it
+    is answered under the FINITE GROUND banner, that its ``RP`` came back with
+    all 181 rows, and that no cell in it is a NaN or an infinity — which is
+    the failure mode a finite ground actually has, since ``sqrt(εc − sin²θ)``
+    and a wire 1e-4 λ off the plane are both places an answer can stop being a
+    number without stopping being printed.
+
+    0011/0030 are the first NETWORK over a finite ground anywhere in this
+    corpus (a coax ``TL`` from a dipole down to a feedpoint), and 0033/0034
+    are elevated radial systems — the geometry the reflection-coefficient
+    ground model would have been wrong about and the Sommerfeld one is not
+    (``docs/refl-coef-ground-plan.md``, momwire#151).
+    """
+    text = render(deck_text(cid))
+    assert "NEC ERROR" not in text
+    assert "FINITE GROUND.  SOMMERFELD SOLUTION" in text
+    for token in ("NAN", "nan", "INF", "Infinity", "*****E"):
+        assert token not in text.replace(" ***** INPUT LINE", ""), token
+    data = extract(text)
+    (block,) = data.patterns
+    assert len(block.rows) == 181
+    assert all(math.isfinite(row.total_db) for row in block.rows)
+    assert math.isfinite(abs(data.sources[0].impedance))
+    assert data.ground is not None
 
 
 def test_the_favored_wire_carries_physics_at_a_five_wire_junction():
