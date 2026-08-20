@@ -46,9 +46,12 @@ GATED_IDS = tuple(
 # before it.
 _STRUCTURE = "- - - STRUCTURE SPECIFICATION - - -"
 
-# The refusal U1 hands every deck, framed as the fault-injection experiment
-# observed it reaching the operator.
-_ERROR_LINE = f" ***** NEC ERROR - {eznec.STUB_REFUSAL}"
+# The refusal frame, as the fault-injection experiment observed it reaching the
+# operator.  U1 filled it with one stub reason for every deck; since U4 the
+# reason names the card or the rung, so the gates below match on the FRAME and
+# leave the sentence to the units that own it.
+_ERROR_PREFIX = " ***** NEC ERROR - "
+_ERROR_LINE = f"{_ERROR_PREFIX}{eznec.STUB_REFUSAL}"
 
 
 def capture(cid: str) -> dict:
@@ -199,9 +202,14 @@ def test_a_refusal_with_no_deck_has_no_comment_box():
 
 def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     """The fault-injection table's three obligations at once: the file is
-    written, the stamp echo is in it, and the refusal sits AFTER the echo."""
+    written, the stamp echo is in it, and the refusal sits AFTER the echo.
+
+    0047 is the deck for it since U4 — a well-formed capture whose ``GN 0``
+    puts it on rung 2, so it still exercises the refusal path end to end
+    while 0043 (which this gate used to send) now comes back solved.
+    """
     deck = tmp_path / "EZN5.NEC"
-    deck.write_bytes((FIXTURE_DIR / capture("0043")["deck"]).read_bytes())
+    deck.write_bytes((FIXTURE_DIR / capture("0047")["deck"]).read_bytes())
     out = tmp_path / "NEC5.OUT"
 
     proc = run_engine([str(deck), str(out)])
@@ -209,11 +217,13 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     assert proc.returncode == 0
     assert out.exists()
     written = out.read_bytes().decode("latin-1")
-    stamp = "EZNEC Pro/2+ v. 7.0.4  2026-08-20 08:14:05"
+    stamp = "EZNEC Pro/2+ v. 7.0.4"
     assert stamp in written
-    assert _ERROR_LINE in written
-    assert written.index(stamp) < written.index(_ERROR_LINE)
-    assert written == eznec.render_refusal(deck_text("0043"), eznec.STUB_REFUSAL)
+    assert _ERROR_PREFIX in written
+    assert written.index(stamp) < written.index(_ERROR_PREFIX)
+    reason = written.rsplit(_ERROR_PREFIX, 1)[1].strip()
+    assert reason.startswith("GN 0 asks for the finite-ground Sommerfeld solution")
+    assert written == eznec.render_refusal(deck_text("0047"), reason)
 
 
 def test_paths_resolve_against_the_working_directory(tmp_path):
@@ -256,7 +266,7 @@ def test_garbage_deck_bytes_still_leave_a_printout(tmp_path):
     assert proc.returncode == 0
     written = out.read_bytes().decode("latin-1")
     assert "NUMERICAL ELECTROMAGNETICS CODE (NEC-5)" in written
-    assert _ERROR_LINE in written
+    assert _ERROR_PREFIX in written
 
 
 def test_a_missing_deck_still_leaves_a_printout_naming_it(tmp_path):
