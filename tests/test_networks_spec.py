@@ -384,18 +384,85 @@ def _shared_loads_net():
 
 
 def test_probe_keys_are_unique_across_a_composite_with_shared_loads():
-    """Gate 3 (continued): two `Load`s on the same node fold into one
-    "termination" probe, and instance-path branches at multiple nesting
-    depths must still all resolve to distinct keys."""
+    """Gate 3 (continued): co-located `Load`s each get their OWN budget row
+    and key, and instance-path branches at multiple nesting depths must still
+    all resolve to distinct keys."""
     _v, _eff, _p_in, budget = reducer(_shared_loads_net()).excited_state(
         synth_y(1, 4), WL
     )
     keys = [entry.key for entry in budget]
     assert len(keys) == len(set(keys)), f"duplicate probe keys: {keys}"
-    # The two co-located Loads combine into ONE probe, anchored on the first
-    # Load branch's own (path, index) — branch index 2 in `branches` above.
-    term_keys = [k for k in keys if k[2] == "load"]
-    assert term_keys == [("", 2, "load")]
+    # ONE row per contributing Load, each keyed on its own branch — branch
+    # indices 2 and 3 in `_shared_loads_net`'s list. Folding them into a
+    # single row (as the first cut of #956 did) makes the second Load's
+    # identity unrepresentable, which is the thing the key exists to fix.
+    load_rows = [e for e in budget if e.key[2] == "load"]
+    assert [e.key for e in load_rows] == [("", 2, "load"), ("", 3, "load")]
+
+
+def test_co_located_loads_get_their_own_watts_not_a_shared_row():
+    """The per-Load rows carry per-Load PHYSICS, not a split label on one
+    number: series loads share a current, so each burns ½·Re(z_i)·|j|². The
+    resistor burns everything and the pure inductor burns nothing — an
+    attribution no folded "Load f+f" row could ever express — and the two
+    shares add up to exactly what the whole chain dissipates."""
+    net = _shared_loads_net()
+    red = reducer(net)
+    _v, _eff, _p_in, budget = red.excited_state(synth_y(1, 4), WL)
+    r_row, l_row = [e for e in budget if e.key[2] == "load"]
+
+    assert r_row[0] == "Load f" and l_row[0] == "Load f"
+    assert r_row[1] > 0.0  # the 5 Ω resistor is the only lossy part
+    assert l_row[1] == 0.0  # jωL is pure reactance: no watts, exactly
+
+    # The shares partition the chain: the historical whole-branch
+    # "termination" probe (still `branch_power`'s documented kind) reads the
+    # same total the two rows sum to.
+    system = red.apply_branches(synth_y(1, 4), WL)
+    node = red.port_to_idx["f"]
+    whole = system.branch_power(("Load f+f", "termination", node))
+    assert r_row[1] + l_row[1] == pytest.approx(whole, rel=1e-9)
+
+
+def test_co_located_loads_split_under_a_forced_current_source_too():
+    """The per-Load rows are emitted ONCE, above the forced-current /
+    voltage split, because both terminations probe the same Loads at the
+    same shared branch current. A `DrivenCurrent` port is the other half of
+    that block: same rows, same keys, and the shares still add up to the
+    chain dissipation ½·Re(Σz)·|I|² at the forced amps."""
+    net = Network(
+        ports={"f": PortOnWire("f")},
+        branches=[Load(port="f", r=7.0), Load(port="f", r=3.0, l=2e-7)],
+        sources=[DrivenCurrent(port="f", current=0.4 + 0j)],
+    )
+    red = reducer(net)
+    _v, _eff, _p_in, budget = red.excited_state(synth_y(1, 11), WL)
+    load_rows = [e for e in budget if e.key[2] == "load"]
+    assert [e.key for e in load_rows] == [("", 0, "load"), ("", 1, "load")]
+    # Forced current: each share is exactly ½·R_i·|I|², independent of the
+    # antenna Y — the property that makes a current source worth having.
+    i2 = abs(0.4) ** 2
+    assert load_rows[0][1] == pytest.approx(0.5 * 7.0 * i2, rel=1e-12)
+    assert load_rows[1][1] == pytest.approx(0.5 * 3.0 * i2, rel=1e-12)
+
+
+def test_a_trap_at_resonance_gets_a_keyed_row_worth_zero_watts():
+    """A parallel-LC Load at ω₀ has Z = ∞ — the intended open circuit. The
+    per-Load share is Re(z)·|j|², so the naive form would read inf·0 = nan
+    and poison the whole budget; the row must read exactly 0 W, the watts an
+    open burns, and still carry its key."""
+    l = 1.0e-6
+    c = 1.0 / (OMEGA**2 * l)  # resonate the tank exactly at FREQ_MHZ
+    net = Network(
+        ports={"f": PortOnWire("f"), "arm": PortOnWire("arm")},
+        branches=[Load(port="arm", l=l, c=c, parallel=True)],
+        sources=[Driven(port="f")],
+    )
+    _v, eff, _p_in, budget = reducer(net).excited_state(synth_y(2, 5), WL)
+    (row,) = [e for e in budget if e.key[2] == "load"]
+    assert row[1] == 0.0  # not nan, not inf
+    assert row.key == ("", 0, "load")
+    assert eff == pytest.approx(1.0)
 
 
 def test_budget_key_is_independent_of_label_spelling():

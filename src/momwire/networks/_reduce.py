@@ -520,7 +520,9 @@ class MNASystem:
         # (label, kind, payload) probes for the power budget (issue #299):
         # kind "group1" → payload (node_idx_list, stamped Y block);
         # kind "group2" → payload element index; kind "termination" →
-        # payload node index (dissipation = the Load part of the branch).
+        # payload node index (dissipation = the whole Load part of the
+        # branch); kind "termination_share" → payload (node index, one
+        # Load's impedance), that Load's share of the same branch.
         # `NetworkReducer` builds these as `_Probe`, a 3-tuple subclass that
         # also carries a structured `.key` (issue #956) — the arity stays 3
         # deliberately, because `branch_power` destructures all three
@@ -545,7 +547,12 @@ class MNASystem:
         Terminations: ½·Re((E − v_k)·j*), the drop across the Load part
         (the EMF term is the port's input power, not dissipation); a
         forced-current termination's loads dissipate ½·Re(z_chain)·|j|²
-        instead — the drop across the chain at the forced current."""
+        instead — the drop across the chain at the forced current.
+        Termination shares: ½·Re(z_i)·|j|² for ONE Load of the chain
+        (issue #956), at the current the whole chain carries. Series loads
+        share one current, so the shares partition the chain's dissipation
+        exactly — for a lone Load the share IS the drop above, since the
+        stamp makes E − v_k = z_chain·j identically."""
         v, j = self.solve()
         label, kind, payload = label_kind_payload
         if kind == "group1":
@@ -591,6 +598,16 @@ class MNASystem:
             # dissipation and the other half negative.
             idx, r = payload
             return 0.5 * float(r) * float(abs(j[idx])) ** 2
+        if kind == "termination_share":
+            # One Load's share of the termination branch it shares with the
+            # source and any co-located Loads (issue #956). A non-finite z is
+            # a trap at resonance: the chain is an open, the stamp forces
+            # j = 0, and Re(inf)·0 is nan rather than the 0 W an open burns.
+            node, z_load = payload
+            col = self.terminations[node][0]
+            if not np.isfinite(z_load):
+                return 0.0
+            return 0.5 * float(np.real(z_load)) * float(abs(j[col])) ** 2
         # termination: the Load part of the source/load branch at node k. The
         # z_ref the driven stamp sits behind is a modelling reference, not a
         # resistor in the design, so its share of the drop comes back out.
