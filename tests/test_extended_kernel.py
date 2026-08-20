@@ -345,20 +345,32 @@ def test_gating_is_load_bearing():
 # Gate 4 — disabled-path armor
 # ----------------------------------------------------------------------
 
-# Impedances of a representative geometry set, captured on `main` (i.e. with
-# the #233 diff stashed) and reproduced BIT-FOR-BIT by this branch's default.
-# Hex floats so the comparison is exact rather than repr-rounded.
-MAIN_SIDE = {
-    name: (float.fromhex(re), float.fromhex(im))
-    for name, (re, im) in {
-        "dipole": ("0x1.6651bc56a91bfp+6", "0x1.8c83037a303dcp+5"),
-        "vee": ("0x1.1d2c092cabf47p+6", "-0x1.51256e4c55fedp+7"),
-        "tee_radii": ("0x1.3aa72a4355b88p+8", "0x1.e96509b03d599p+7"),
-        "ground_pec": ("0x1.604543e8acef3p+4", "-0x1.b9e0c6df28707p+8"),
-        "ground_refl": ("0x1.2a4bd618bebcdp+4", "-0x1.bd2c7e67eadb0p+8"),
-        "galerkin": ("0x1.656e033053765p+6", "0x1.86e6e8c152246p+5"),
-    }.items()
-}
+# The pre-#233 `main` capture that used to be pinned here — six geometries as
+# hex floats, gated at 1e-12 relative — is GONE (momwire#483). It was drift
+# armor, not the claim this section is named for, and it could not survive at
+# a bit-level bar: swapping ONLY the fill's arithmetic path on ONE box moves
+# these impedances by up to 2.6e-12 relative, so which case sits nearest the
+# 1e-12 line is a lottery over the host's libm. Measured here (Haswell,
+# glibc 2.35), relative to that capture:
+#
+#                        libmvec+FMA   libmvec, FMA masked   pure-numpy fill
+#   vee                     1.00e-12              6.04e-14          2.12e-13
+#   tee_radii               1.02e-13              8.31e-13          2.56e-12
+#
+# The three paths are all supported: the C++ accelerator's SIMD sincos binds
+# `_ZGVdN4v_sin`, an IFUNC glibc resolves from the host's hwcaps (masking FMA
+# with GLIBC_TUNABLES picks a different kernel for the same symbol), and
+# `_accel.py` documents the numpy fallback as a deliberate pure-Python
+# install. `vee` was not special — it was merely the case the local libm
+# pushed over the line first.
+#
+# Nothing is lost by dropping it. The claim is structural and needs no
+# literal: `test_extended_kernel_code_is_never_entered_when_off` proves the
+# #233 code objects are never entered with the flag off, and the test below
+# proves the flag changes not one bit of the answer, defaulted vs explicit,
+# against a run-it-twice control. Portable coverage of the EK-OFF numbers
+# themselves is Gate 1's `test_reduced_kernel_still_answers_the_ek_off_
+# question` (nec2c's EK-OFF column, 1.3%).
 
 _DIPOLE_W = [np.array([[0.0, 0.0, -2.5], [0.0, 0.0, 2.5]])]
 _VERT_W = [np.array([[0.0, 0.0, 0.5], [0.0, 0.0, 3.0]])]
@@ -437,21 +449,17 @@ def test_extended_kernel_off_is_bit_identical_to_main(name, explicit):
     and identical whether it is defaulted or passed explicitly.
     """
     z, _ = _armor_solver(name).compute_impedance()
-    if explicit:
-        # Defaulted vs explicit MUST be bit-identical — same machine, same
-        # run, so exact equality is the honest gate here.
-        z_x, _ = _armor_solver(name, extended_kernel=False).compute_impedance()
-        assert z.real == z_x.real and z.imag == z_x.imag, name
-    # Against the pre-#233 captures the gate is the house cross-machine
-    # margin, NOT bit equality: the pinned values are one dev box's
-    # reduction order, and CI runners land 1 ulp away (the main run on
-    # 31352791540 failed exact comparison at the 16th digit — same policy
-    # call as the 1e-10 comments in test_momwire.py). The true bit-identity
-    # claim was established pre-merge against the actual pre-#233 code on
-    # one machine (PR #244's gate 4); THIS pin is drift armor.
-    re, im = MAIN_SIDE[name]
-    ref = complex(re, im)
-    assert abs(z - ref) <= 1e-12 * abs(ref), f"{name}: {z!r} vs {ref!r}"
+    # `explicit` is the treatment/control axis. TREATMENT (True): passing the
+    # flag off must be bit-identical to leaving it defaulted — that is the
+    # no-op claim. CONTROL (False): the SAME defaulted construction, built and
+    # solved a second time, must be bit-identical too — without it a green
+    # treatment could be read as "nothing here reproduces to the bit anyway",
+    # and run-to-run bit-drift is a live failure mode in this repo (#403,
+    # #464). Same machine, same run, so exact equality is the honest gate for
+    # both, and neither needs a recorded value to compare against.
+    off = dict(extended_kernel=False) if explicit else {}
+    z_x, _ = _armor_solver(name, **off).compute_impedance()
+    assert z.real == z_x.real and z.imag == z_x.imag, name
 
 
 @pytest.mark.parametrize("name", list(ARMOR_CASES))
