@@ -13,8 +13,13 @@ added the rest of the printout, so this package can lay out a complete NEC-5
 result file given the numbers; U4 (:mod:`._serve`) is the physics that
 PRODUCES them for rung 1 of the scored ladder — free space and perfect
 ground, one source at a node, fixed-impedance loads, ``RP 0``/``XQ``/``PQ 0``
-— and wires the renderer into the shell in place of the stub refusal.
-Node-addressed networks (U5) plug in behind it.
+— and wires the renderer into the shell in place of the stub refusal.  U5
+added node-addressed ``TL``/``NT`` networks, which is what turns a seam that
+serves bare wires into one that serves feed systems: EZNEC parks the whole
+network — source included — on a virtual wire 100 λ away and reaches the
+antenna through transmission lines, and a deck the user thinks carries only
+lumped loads can still arrive as ``NT`` cards.  Twenty of the forty-nine
+captured decks are served; the rest name their ground.
 
 Everything above rung 1 still refuses, and refuses BY NAME.  That is not a
 placeholder: a refusing engine that speaks the protocol correctly tells the
@@ -48,6 +53,7 @@ from ._printout import (
     ENVIRONMENT_PERFECT_GROUND,
     STUB_REFUSAL,
     ChargeRow,
+    LineRow,
     LoadRow,
     NetworkRow,
     PatternBlock,
@@ -68,6 +74,7 @@ __all__ = [
     "ENVIRONMENT_PERFECT_GROUND",
     "STUB_REFUSAL",
     "ChargeRow",
+    "LineRow",
     "LoadRow",
     "NetworkRow",
     "PatternBlock",
