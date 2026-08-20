@@ -20,12 +20,19 @@ network — source included — on a virtual wire 100 λ away and reaches the
 antenna through transmission lines, and a deck the user thinks carries only
 lumped loads can still arrive as ``NT`` cards.
 
-Issue #504 climbs the ground rungs on top of that.  Its U1 added ``GN 0`` /
-``GN 2``, the finite Sommerfeld ground — the environment most of the corpus
-actually stands over — which takes the served count from twenty of the
-forty-nine captured decks to twenty-seven.  The twenty-two still refused are
-twenty bare-``GD`` MININEC decks, one ``NE`` near field and one phased
-multi-``EX`` drive, and each names its own card.
+Issue #504 climbs the ground rungs on top of that, and finishes them.  Its U1
+added ``GN 0`` / ``GN 2``, the finite Sommerfeld ground — the environment most
+of the corpus actually stands over — taking the served count from twenty of
+the forty-nine captured decks to twenty-seven.  Its U2 added the bare ``GD``,
+EZNEC's "Real / MININEC type" ground, which is the corpus's second-most-common
+and answers with PEC currents under a second-medium far field; that takes the
+count to FORTY-THREE, and every ground card this dialect writes is now served.
+
+The six still refused are the three decks carrying ``TL`` and ``NT`` cards at
+once (an unobserved table layout), two phased multi-``EX`` drives and one
+``NE`` near field — and each names its own card.  Three of those six used to
+name their ground instead: 0000, 0023 and 0025 stand over a ``GD``, so U2 is
+what let their real problem speak.
 
 Everything above the served rungs still refuses, and refuses BY NAME.  That is not a
 placeholder: a refusing engine that speaks the protocol correctly tells the
