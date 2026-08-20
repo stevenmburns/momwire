@@ -39,7 +39,23 @@ jobs:
       # Explicit -m: PR lanes must not depend on pyproject's addopts default
       # to keep memgate out. (Also now redundant with addopts — kept explicit
       # on purpose, see #400.)
+      #
+      # MOMWIRE_403_DUMP arms the byte-oracle mismatch tap (momwire#464):
+      # every same_printout mismatch drops its canonicalized (served, stock)
+      # pair into the dump dir, and the artifact step ships them on failure.
+      # Without this, a flake's assertion repr truncates both printouts and
+      # the occurrence burns its own evidence — three did before this step
+      # existed (PR #460, the #415 arc twice, PR #474).
       - run: pytest tests/ -m "not slow and not memgate"
+        env:
+          MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
+      - name: Upload byte-oracle mismatch dumps (momwire#464)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: momwire-464-dumps
+          path: 464-dumps/
+          if-no-files-found: ignore
 
   test-slow:
     # The slow-marked tests are the solver-regression pins (M3/M4 reference
