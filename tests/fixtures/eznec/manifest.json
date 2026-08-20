@@ -17,7 +17,8 @@
       "a": "114.47+21.096j",
       "b": "114.47+21.096j (must equal a to every printed digit)",
       "c": "195.34-57.458j (a seam that canonicalizes 2,3 == 3,-1 answers a and is wrong by 70%)"
-    }
+    },
+    "snap_0018": "225.39-60.593j (load a genuine segment away from the junction)"
   },
   "captures": [
     {
@@ -119,7 +120,8 @@
     {
       "id": "0018",
       "title": "Network Connection Test",
-      "deck": "decks/0018_network-connection-test.nec"
+      "deck": "decks/0018_network-connection-test.nec",
+      "printout": "printouts/0018_network-connection-test.out"
     },
     {
       "id": "0019",
@@ -165,12 +167,14 @@
     {
       "id": "0027",
       "title": "Cardioid with feed system",
-      "deck": "decks/0027_cardioid-with-feed-system.nec"
+      "deck": "decks/0027_cardioid-with-feed-system.nec",
+      "printout": "printouts/0027_cardioid-with-feed-system.out"
     },
     {
       "id": "0028",
       "title": "17-10m Log Per - ARRL Ant Book",
-      "deck": "decks/0028_17-10m-log-per-arrl-ant-book.nec"
+      "deck": "decks/0028_17-10m-log-per-arrl-ant-book.nec",
+      "printout": "printouts/0028_17-10m-log-per-arrl-ant-book.out"
     },
     {
       "id": "0029",
