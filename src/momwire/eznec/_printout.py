@@ -58,6 +58,7 @@ __all__ = [
     "ENVIRONMENT_FREE_SPACE",
     "ENVIRONMENT_PERFECT_GROUND",
     "ChargeRow",
+    "LineRow",
     "LoadRow",
     "NetworkRow",
     "PatternBlock",
@@ -292,6 +293,41 @@ class NetworkRow:
 
 
 @dataclass(frozen=True)
+class LineRow:
+    """One row of ``NETWORK DATA``'s OTHER form: a ``TL`` card.
+
+    The same table heading covers both, and the two rows START identically —
+    four address fields then six ``E14.4`` cells, which is why 0012's ``NT``
+    row and 0027's ``TL`` row line up column for column.  What differs is the
+    COLUMN HEADINGS above them (an admittance matrix against an impedance, a
+    length and two end shunts) and a seventh field the ``NT`` form has no room
+    for: :attr:`crossed`, printed as ``STRAIGHT`` or ``CROSSED`` (0028's
+    phase-reversal feeder is the corpus's only ``CROSSED``).
+
+    :attr:`length_m` is the RESOLVED length in metres, not the card's field: a
+    ``TL`` whose length field is zero prints the straight-line distance between
+    the two addressed NODES (0028's four crossed lines all write ``0.`` and
+    print 9.9764E-01 / 7.9826E-01 / 6.3831E-01 / 5.1090E-01, which are those
+    node-to-node distances to every printed digit).  Resolving it is physics
+    and belongs upstream; this row carries the number that was printed.
+    """
+
+    tag_from: int
+    segment_from: int
+    tag_to: int
+    segment_to: int
+    z0: float
+    length_m: float
+    shunt_a: complex
+    shunt_b: complex
+    crossed: bool = False
+
+    @property
+    def line_type(self) -> str:
+        return "CROSSED" if self.crossed else "STRAIGHT"
+
+
+@dataclass(frozen=True)
 class WireCurrentRow:
     """One segment's row in the mixed-case ``Wire Currents`` table."""
 
@@ -321,9 +357,12 @@ class ChargeRow:
 class PowerBudget:
     """The four-or-five line ``POWER BUDGET`` block.
 
-    :attr:`network_loss` is the fifth line and prints only when the model
-    carries networks (0012/0014/0016/0017 have it; 0010/0013/0019/0035/0043/
-    0044 do not), so it is optional rather than zero.
+    :attr:`network_loss` is the fifth line, and carrying networks is not
+    enough to earn it: 0012/0014/0016/0017/0018 print it, and 0027/0028 —
+    which carry ``TL`` cards and print a whole ``NETWORK DATA`` table — do
+    not.  What separates them is the SIGN (see :mod:`._serve`, "the budget's
+    own arithmetic"), so the line is optional rather than zero, and whoever
+    computes it decides whether there is one.
     """
 
     input_power: float
@@ -405,7 +444,12 @@ class RunData:
     environment: str = ENVIRONMENT_FREE_SPACE
     # -- the tables --------------------------------------------------------
     loads: tuple[LoadRow, ...] = ()
-    networks: tuple[NetworkRow, ...] = ()
+    # One table, two row types — an ``NT`` card's admittance matrix and a
+    # ``TL`` card's line.  No captured deck writes both (the corpus's three
+    # mixed decks all stand over a ``GD`` ground and refuse a rung earlier),
+    # so the heading a mixed table would carry is unobserved and the renderer
+    # takes it from the first row.
+    networks: tuple[NetworkRow | LineRow, ...] = ()
     network_excitation: tuple[PortRow, ...] = ()
     sources: tuple[PortRow, ...] = ()
     currents: tuple[WireCurrentRow, ...] = ()
@@ -499,6 +543,18 @@ _NETWORK_COLUMNS: tuple[str, ...] = (
     "      TAG   SEG.   TAG  SEG.             (ONE,ONE)                   "
     "(ONE,TWO)                   (TWO,TWO)",
     "      NO.   NO.   NO.   NO.        REAL          IMAG.         REAL   "
+    "       IMAG.         REAL          IMAG.",
+)
+# The ``TL`` form of the same table (0027, 0028).  Note the first heading row
+# spells ``SEG.`` with one space less than the ``NT`` form does — the two
+# headers were written separately in the engine and this transcription keeps
+# both as they came.
+_LINE_COLUMNS: tuple[str, ...] = (
+    "      - FROM -    - TO -           TRANSMISSION LINE               "
+    "-  -  SHUNT ADMITTANCES (MHOS)  -  -              LINE",
+    "      TAG  SEG.   TAG  SEG.      IMPEDANCE      LENGTH            "
+    "- END ONE -                 - END TWO -            TYPE",
+    "      NO.   NO.   NO.   NO.         OHMS        METERS         REAL   "
     "       IMAG.         REAL          IMAG.",
 )
 _NETWORK_EXCITATION_HEADING = (
@@ -725,9 +781,27 @@ def _port_row(row: PortRow) -> str:
     )
 
 
-def _network_data(data: RunData) -> list[str]:
-    lines = [_NETWORK_HEADING, "", *_NETWORK_COLUMNS]
-    for row in data.networks:
+def _network_row(row: NetworkRow | LineRow) -> str:
+    """One ``NETWORK DATA`` row, either form.
+
+    I9 then three I6, then ONE blank column, then six E14.4 cells: the gap
+    between the addresses and the payload is a column wider than the gaps
+    inside it (0012, where ``13`` ends in column 27 and the first admittance
+    in column 42, against 14 for every cell after it).  Both forms share every
+    one of those widths — the ``TL`` form adds a three-space gap and its line
+    type, and nothing else (0027 against 0012, column for column).
+    """
+    if isinstance(row, LineRow):
+        cells = (
+            row.z0,
+            row.length_m,
+            row.shunt_a.real,
+            row.shunt_a.imag,
+            row.shunt_b.real,
+            row.shunt_b.imag,
+        )
+        tail = "   " + row.line_type
+    else:
         cells = (
             row.y11.real,
             row.y11.imag,
@@ -736,16 +810,26 @@ def _network_data(data: RunData) -> list[str]:
             row.y22.real,
             row.y22.imag,
         )
-        # I9 then three I6, then ONE blank column, then six E14.4 cells: the
-        # gap between the addresses and the matrix is a column wider than the
-        # gaps inside the matrix (0012, where ``13`` ends in column 27 and the
-        # first admittance in column 42, against 14 for every cell after it).
-        lines.append(
-            f"{row.tag_from:9d}{row.segment_from:6d}"
-            f"{row.tag_to:6d}{row.segment_to:6d} "
-            + "".join(_e(value, 14, 4) for value in cells)
-        )
-    return lines
+        tail = ""
+    return (
+        f"{row.tag_from:9d}{row.segment_from:6d}"
+        f"{row.tag_to:6d}{row.segment_to:6d} "
+        + "".join(_e(value, 14, 4) for value in cells)
+        + tail
+    )
+
+
+def _network_data(data: RunData) -> list[str]:
+    """The table, under whichever of its two column headers the rows want.
+
+    The header is taken from the FIRST row because no captured deck mixes the
+    two forms and so no capture says what a mixed table's heading looks like
+    (:mod:`._serve` refuses a mixed deck rather than guess).
+    """
+    columns = (
+        _LINE_COLUMNS if isinstance(data.networks[0], LineRow) else _NETWORK_COLUMNS
+    )
+    return [_NETWORK_HEADING, "", *columns, *(_network_row(r) for r in data.networks)]
 
 
 def _currents(data: RunData) -> list[str]:
