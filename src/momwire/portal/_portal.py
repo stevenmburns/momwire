@@ -762,8 +762,10 @@ class SecondMedium:
     ``F2``      ``SIG2`` — conductivity of medium 2, mhos/metre
     ``F3``      ``CLT`` — distance from the origin to the edge where the
                 two media join (the cliff's EDGE DISTANCE)
-    ``F4``      ``CHT`` — height of medium 2's surface relative to
-                medium 1's, signed (negative = the far side is lower)
+    ``F4``      ``CHT`` — the drop from medium 1's surface to medium 2's,
+                signed: POSITIVE = the far side is lower (``FFLD`` adds the
+                extra image path ``2·CHT·cosθ`` as a lag; isolated by the
+                ``mininec_vertical_rp3_ch`` fixture, momwire#487)
     ==========  =========================================================
 
     The readings come from the oracle's own printout, not from a manual: a
@@ -1455,8 +1457,10 @@ def _cliff_image_moments(
     ``(rho_h, rho_v)``, add.
 
     The far side also carries an extra phase. Its surface is ``CHT`` below
-    medium 1's (signed, negative = lower), so its image sits ``2·CHT`` further
-    along the vertical and the ray to it is ``2·CHT·cos(theta)`` longer:
+    medium 1's (signed, POSITIVE = lower — the fixture that isolates the
+    field is ``mininec_vertical_rp3_ch``, momwire#487), so its image sits
+    ``2·CHT`` further along the vertical and the ray to it is
+    ``2·CHT·cos(theta)`` longer:
     ``FFLD`` spells that ``DARG=-TP*2.*CH*ROZ`` (``TP`` = 2π, ``CH`` = ``CHT``
     in wavelengths, ``ROZ`` = cos θ) and adds it to the image phase, which is
     the same ``exp(-2jk·CHT·cosθ)`` applied here.
