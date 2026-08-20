@@ -4517,6 +4517,69 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 z_out[i] = z
         return z_out
 
+    def current_slopes(self, coeffs, s_array=None):
+        """Per-wire ``dI/ds`` — the solved current's arc-length derivative.
+
+        The twin of :meth:`currents_at_knots`, differentiated in the basis
+        rather than around it: a B-spline of degree ``d`` is a polynomial on
+        each knot span and scipy's :class:`~scipy.interpolate.BSpline` hands
+        back its exact derivative as a spline of degree ``d-1``, so this is
+        the same sum evaluated with the same coefficients and no step size
+        anywhere.
+
+        Returned per wire, in ``wires_polylines`` order, at the mesh knots
+        (``s_array=None``) or at the arc positions given per wire — the same
+        two calling conventions, and the same clipping into the clamped knot
+        range, that :meth:`currents_at_knots` uses.
+
+        **Why it exists** (momwire#497): the linear charge density a NEC
+        printout reports is ``q = -(1/jω)·dI/ds`` at each element's centre,
+        and differencing knot currents to get it would report a
+        discretisation of a quantity this basis already knows exactly. At
+        ``degree >= 2`` the derivative is continuous across a knot; at
+        ``degree == 1`` it is piecewise constant and a sample taken AT a knot
+        lands on whichever span scipy assigns it, so ask for centres.
+
+        Singular enrichment is refused rather than silently dropped: the
+        enrichment shape ``(u/h)·log(u/h)`` contributes nothing to the
+        current AT a knot but its slope diverges there, so an evaluation
+        that ignored it would be wrong wherever it matters most.
+        """
+        if self.use_singular_enrichment:
+            raise NotImplementedError(
+                "current_slopes does not serve use_singular_enrichment=True: "
+                "the enrichment shape's slope is singular at the junction "
+                "knot, so dropping it would be a silent error rather than an "
+                "approximation"
+            )
+        coeffs = np.asarray(coeffs)
+        geom = self._build_geometry()
+        _, _, _, wire_knots, wire_basis_global = self._build_basis_polynomials(geom)
+        d = self.degree
+
+        out = []
+        for w_idx in range(len(self.wires_polylines)):
+            arc_at_knot = geom["per_wire"][w_idx]["arc_at_knot"]
+            knots_vec = wire_knots[w_idx]
+            if s_array is None:
+                s_eval = np.clip(arc_at_knot, knots_vec[0], knots_vec[-1])
+            else:
+                s_eval = np.clip(
+                    np.asarray(s_array[w_idx], dtype=np.float64),
+                    knots_vec[0],
+                    knots_vec[-1],
+                )
+            kept, local_to_global = wire_basis_global[w_idx]
+            c_basis = np.zeros(len(knots_vec) - d - 1, dtype=np.complex128)
+            for kept_idx, (j_local, _, _, _) in enumerate(kept):
+                c_basis[j_local] = coeffs[local_to_global[kept_idx]]
+            if s_eval.shape[0] == 0:
+                out.append(np.zeros(0, dtype=np.complex128))
+                continue
+            spline = BSpline(knots_vec, c_basis, d, extrapolate=False)
+            out.append(np.asarray(spline.derivative(1)(s_eval), dtype=np.complex128))
+        return out
+
     def currents_at_knots(self, coeffs, s_array=None):
         """Per-wire complex current at every mesh knot.
 
