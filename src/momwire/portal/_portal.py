@@ -2803,11 +2803,30 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: dict) -> list[str]
     table = _NEAR_H_TABLE_HEADER if magnetic else _NEAR_E_TABLE_HEADER
     out = [header, "", *table] if magnetic else [header, *table]
     for point, value in zip(points, field, strict=True):
-        out.append(
-            fmt_near_field_row(
-                point, complex(value[0]), complex(value[1]), complex(value[2])
-            )
-        )
+        fx, fy, fz = complex(value[0]), complex(value[1]), complex(value[2])
+        # Same departure as _pattern_lines (momwire#403), extended to this
+        # table (momwire#464): a symmetry-killed component is fill round-off,
+        # not signal, and printing it prints the MAGNITUDE AND ANGLE OF ZERO
+        # -- digits that move with process history and reddened the
+        # served==stock byte oracle under load. Unlike the RP path, there is
+        # no FFLD-basis rescale to undo first: _element_fields already
+        # returns the printed unit (volts/metre for NE, amps/metre for NH)
+        # at the point, so the floor applies directly to it. |value| <=
+        # 1e-10 is six orders under the observed dust (EX = 9.1237E-17
+        # against a 2.6506E-01 EZ at the same point, dipole_ne_nearfield) and
+        # nowhere near a legitimate weak reading: a 1 W dipole's far field
+        # only falls to 1e-10 V/m past ~1e11 m, and the differential lane
+        # never compares this table's E/H columns against the oracle
+        # (test_portal_differential.py has no E-column; test_portal.py's
+        # cross-engine check floors a dead component at 1e-4 of the row's
+        # live one, five orders above this bar).
+        if fx.real * fx.real + fx.imag * fx.imag <= _FIELD_FLOOR2:
+            fx = 0j
+        if fy.real * fy.real + fy.imag * fy.imag <= _FIELD_FLOOR2:
+            fy = 0j
+        if fz.real * fz.real + fz.imag * fz.imag <= _FIELD_FLOOR2:
+            fz = 0j
+        out.append(fmt_near_field_row(point, fx, fy, fz))
     out.append(_NEAR_FIELD_TIME)
     return out
 
