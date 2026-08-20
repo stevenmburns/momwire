@@ -317,6 +317,11 @@ class Nec5Deck:
 
     comments: tuple[str, ...] = ()
     ce_text: str = ""
+    # The deck exactly as it arrived.  The printout renderer echoes card
+    # IMAGES — the fields as written, not as parsed — so it needs the text
+    # this model was read from; keeping it here is what lets a served run be
+    # `(deck, data)` rather than `(deck, text, data)`.
+    source_text: str = ""
     wires: tuple[Nec5Wire, ...] = ()
     ge_flag: int = 0
     ge_second: int = -1
@@ -914,7 +919,7 @@ class _Nec5Parser:
 
     # -- the deck ----------------------------------------------------------
 
-    def deck(self) -> Nec5Deck:
+    def deck(self, source_text: str = "") -> Nec5Deck:
         if self.ge_flag is None:
             raise DeckError(
                 "deck has no GE card; GE closes the geometry section and carries the "
@@ -923,6 +928,7 @@ class _Nec5Parser:
         return Nec5Deck(
             comments=tuple(self.comments),
             ce_text=self.ce_text or "",
+            source_text=source_text,
             wires=tuple(self.wires),
             ge_flag=self.ge_flag,
             ge_second=self.ge_second,
@@ -946,4 +952,4 @@ def parse_nec5(text: str) -> Nec5Deck:
     """
     parser = _Nec5Parser()
     parser.feed(text)
-    return parser.deck()
+    return parser.deck(text)
