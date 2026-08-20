@@ -413,3 +413,24 @@ def test_every_path_exits_zero(tmp_path):
     assert [run_engine(args, cwd=tmp_path).returncode for args in invocations] == [
         0
     ] * len(invocations)
+
+
+def test_an_internal_crash_still_carries_the_comment_echo(tmp_path, monkeypatch):
+    """A refusal without the stamp echo is one EZNEC discards as stale, so
+    even the last-ditch internal-error printout must echo the deck's CM
+    block (re-read from disk) ahead of its NEC ERROR line."""
+    from momwire.eznec import _printout, _shell
+
+    deck = FIXTURE_DIR / "decks" / "0043_vertical-over-real-ground.nec"
+    deck_text = deck.read_text(encoding="latin-1")
+    out = tmp_path / "NEC5.OUT"
+
+    def boom(deck_path, printout_path):
+        raise RuntimeError("injected")
+
+    monkeypatch.setattr(_shell, "run", boom)
+    assert _shell.main([str(deck), str(out)]) == 0
+    text = out.read_text(encoding="latin-1")
+    assert text.startswith(_printout.render_header(deck_text))
+    assert "NEC ERROR - INTERNAL ERROR IN MOMWIRE ENGINE" in text
+    assert "injected" in text
