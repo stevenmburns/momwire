@@ -376,8 +376,8 @@
     {
       "name": "mininec_vertical_rp3_ch",
       "returncode": 253,
-      "deck_sha256": "1fde3fcc8beb4a105a0fae1034cab0a61692cfb37f57ea2625fe56395abe66ab",
-      "out_sha256": "025583b8fa03d369365e72c54e16bc84ed59d528bcee2a81ecbbe8965eb3ae30",
+      "deck_sha256": "bb866edaf2ce8aeea14b5e819ddb11045dad0739e1073a9ea4451cce7908463e",
+      "out_sha256": "d2c7ecc83694100536e630f4deb21c8ea1f82d6e9ee8e7d577622ebcbb012db8",
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     },
     {
