@@ -46,6 +46,7 @@ from scipy.special import hankel2, jv
 
 from ._accel import acc as _acc
 from ._cancel import SolveAborted
+from ._constants import C_LIGHT
 
 # Far-pair grid-extent cap, in wavelengths (issue #157). The interpolation
 # grid's radius `r1_max` is sized to the geometry's largest image-point
@@ -139,7 +140,7 @@ _SOMM_EPS_IM_BUCKET = float(os.environ.get("MOMWIRE_SOMM_EPS_IM_BUCKET") or "0.0
 # Reference scales the normalized masters are filled at (lambda_ref = 1).
 _K2_REF = 2.0 * np.pi
 
-_C_LIGHT = 299792458.0
+_C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 _MU0 = 4e-7 * np.pi
 
 # Gauss–Legendre rule shared by all contour sections.

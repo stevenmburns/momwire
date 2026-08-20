@@ -55,6 +55,7 @@ from typing import Any
 
 import numpy as np
 
+from .._constants import C_LIGHT
 from ..array_block import ArrayBlockSolver
 from ..bspline import BSplineSolver
 from ..hmatrix import HMatrixSolver
@@ -74,7 +75,7 @@ __all__ = [
     "BASES",
 ]
 
-_C_LIGHT = 299_792_458.0
+_C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 
 # The basis roster, spelled as antennaknobs' ``--basis`` names so one string
 # selects the same physics on either side of the portal.  Six solver
