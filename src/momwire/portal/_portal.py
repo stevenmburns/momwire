@@ -148,6 +148,7 @@ from types import MappingProxyType
 
 import numpy as np
 
+from .._constants import C_LIGHT as _C_LIGHT
 from ..deck import (
     BASES,
     Card,
@@ -302,7 +303,7 @@ LEGACY_PROBE_VERSION = "nec2c.ae6ty.9.1"
 # actually are.
 BANNER_VERSION = "nec2c.ae6ty.momwire.9.1"
 
-C_LIGHT = 299_792_458.0
+C_LIGHT = _C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 EPS0 = 8.854_187_817e-12
 ETA0 = 376.730_313_668
 
