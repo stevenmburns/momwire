@@ -259,8 +259,11 @@ def test_corpus_is_the_whole_reference_set():
     since momwire#456 phase C captured four network decks (a zero-length line,
     an all-zero ``NT``, an ``LD``/``NT`` pair on one segment, and the ``EX 6``
     gyrator idiom) and a fifth, `dipole_nt_after_xq`, for network retention at
-    the answer."""
-    assert len(CORPUS) == 52
+    the answer; 59 since momwire#487 captured the seven MININEC-type ground
+    idiom decks, which this module covers for free in the half that matters to
+    it — ``GN``/``GD`` retention, where the two readers must agree that a
+    ``GN`` resets the four second-medium slots a ``GD`` writes."""
+    assert len(CORPUS) == 59
 
 
 # The corpus is 47 clean exported decks: measured, not one of them has an
@@ -390,10 +393,20 @@ _NETWORK_DECKS = {
     "dipole_nt_after_xq",
 }
 
-# The one deck still refused, and by FIELD rather than by name: a second
-# medium under a `GN 1` is the MININEC-type ground idiom (#458), so it carries
-# no DeckModel.
-_REFUSED_DECKS = {"dipole_gd_second_medium"}
+# The decks still refused, and by FIELD rather than by name: a second medium
+# under a `GN 1` at an execute card that will not read it is the MININEC-type
+# ground idiom (#458), so none of these carries a DeckModel. The three
+# `mininec_*` entries are momwire#487's refusal fixtures; the served half of
+# that capture — including `mininec_gd_reset_by_gn_rp0`, which is the same
+# cards in the order that CLEARS the medium — goes through this module's gates
+# like any other deck, which is where the two readers' agreement about the
+# reset is measured.
+_REFUSED_DECKS = {
+    "dipole_gd_second_medium",
+    "mininec_gp80_seam",
+    "mininec_vertical_gd2_rp0",
+    "mininec_vertical_rp0",
+}
 
 
 def _portal_deck(text: str):
