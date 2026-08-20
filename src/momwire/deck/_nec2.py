@@ -29,6 +29,7 @@ from .model import (
     FarFieldRequest,
     LoadSpec,
     NearFieldRequest,
+    NetworkCard,
     PrintControl,
     SecondMedium,
     WireMaterial,
@@ -97,14 +98,6 @@ _LD_EXPAND_MAX = 8
 
 _REFUSED_BY_NAME = MappingProxyType(
     {
-        "TL": (
-            "TL (transmission line) is not part of this engine's nec2 dialect, "
-            "which is antenna-only; antennaknobs imports decks with networks"
-        ),
-        "NT": (
-            "NT (two-port network) is not part of this engine's nec2 dialect, "
-            "which is antenna-only; antennaknobs imports decks with networks"
-        ),
         "GA": (
             "GA (wire arc) is not part of this engine's nec2 dialect, whose "
             "geometry is GW with GM / GS transforms"
@@ -130,6 +123,27 @@ _REFUSED_BY_NAME = MappingProxyType(
         "ZO": "ZO (impedance normalisation) is not supported by this engine",
     }
 )
+
+# The two network cards.  They share a shape — two ``(tag, seg)`` endpoints
+# and six reals — and therefore one handler and one model record (spec
+# ``#tl--transmission-line``, ``#nt--two-port-network``).
+_NETWORK_CARDS = frozenset({"TL", "NT"})
+
+# The cards a network card may be read ACROSS without NEC discarding the
+# network cards before it (spec ``#network-contiguity``).  Everything else is
+# the "destroy class": NEC resets its network list on reading a network card
+# whose predecessor was not one, so an interposed card of any other kind makes
+# every earlier TL/NT vanish with no diagnostic at all.
+#
+# Measured on the oracle, 2026-08-19/20 (probes ``contig_*``, ``c_*``, one per
+# card, each read as "does the earlier TL still appear in NETWORK DATA"):
+# transparent are PT, PQ and MP — the print-control and advisory cards, which
+# change what a run reports and not what it computes; destroying are LD, EX,
+# FR, GN, EK, GD and the execute cards themselves.  The set is written as the
+# TRANSPARENT one because that is the short, measured, closed list; a card
+# this dialect grows later destroys until somebody measures otherwise, which
+# is the safe direction (a refusal, never a silent divergence).
+_NETWORK_TRANSPARENT = frozenset({"PT", "PQ", "MP"})
 
 # Far-field modes this engine computes.  1 is the surface wave (nothing here
 # computes one); 4-6 fold a radial-wire screen into the reflection
@@ -235,6 +249,14 @@ class _Nec2Parser:
         # the LD-family conductivity state (type 5 is read under the LD
         # mnemonic too) — but never `_wire_insulation`, which is IS's own
         # card and a wire property, not a load (spec: "and *only* loads").
+        # TL / NT (spec ``#tl--transmission-line``, ``#nt--two-port-network``).
+        # `_networks` is the deck's network cards with their endpoints already
+        # resolved; `_network_destroyer` is the mnemonic of the first card of
+        # the destroy class read since one, which is what the contiguity
+        # refusal names (see `_NETWORK_TRANSPARENT`).
+        self._networks: list[NetworkCard] = []
+        self._network_destroyer: str | None = None
+
         self._loads: list[tuple[int, float, LoadSpec]] = []
         self._loaded: set[tuple[int, int]] = set()
         self._global_conductivity: float | None = None
@@ -541,6 +563,91 @@ class _Nec2Parser:
         for wire in by_wire:
             self._wire_insulation[wire] = (radius, eps_r)
 
+    # -- TL / NT (spec ``#tl--transmission-line``, ``#nt--two-port-network``)
+
+    def _network(self, card: Card) -> None:
+        """One ``TL`` or ``NT``, resolved but not interpreted.
+
+        The two cards share a field layout for their first four integers — a
+        ``(tag, seg)`` pair per end — so the addressing guard and the
+        resolution are one piece of code; only the ``Z0`` test below is
+        ``TL``'s alone.  What the six reals MEAN is deliberately not decided
+        here (see :class:`~momwire.deck.model.NetworkCard`): this reader
+        resolves where a network attaches and records what the deck said about
+        it.
+
+        Three staged guards, in the order NEC's own reader meets them, each
+        measured against the oracle rather than reasoned about.  The
+        contiguity test comes first because it is about the card's POSITION,
+        which is settled before a single field of it is read.
+
+        No symmetry guard, unlike :meth:`_ld` and :meth:`_is`.  Networks are
+        EXEMPT from the cell rule (spec ``#the-cell-rule``): a ``GX``/``GR``
+        cell replicates what enters the MATRIX, and NEC's network solve is a
+        composition on top of the solved matrix rather than a term in it — the
+        same argument that already exempts ``EX``.  Measured, not assumed: the
+        probe triple under ``tests/fixtures/nec2_symmetry/`` puts an ``NT``
+        under a live ``GX 2 100`` and the oracle's answer is byte-identical to
+        the hand-expanded deck carrying ONE card as written, while the deck
+        carrying one card per copy differs.  So the endpoints resolve against
+        the fully generated structure, image tags and all, and the card
+        attaches exactly once, exactly where it is addressed.
+        """
+        if self._network_destroyer is not None:
+            raise DeckError(
+                f"{card.mnemonic} with an interposed {self._network_destroyer} "
+                f"card between it and an earlier network card is not supported "
+                f"by this engine (momwire#456): NEC silently DESTROYS every "
+                f"TL/NT read before such a card, so this deck's earlier network "
+                f"cards would vanish with no diagnostic while still being "
+                f"echoed in its DATA CARD list as read — keep a deck's TL/NT "
+                f"cards contiguous (only PT, PQ and MP may sit between them)"
+            )
+        ends = ((card.i(0), card.i(1)), (card.i(2), card.i(3)))
+        for tag, seg in ends:
+            if seg < 1:
+                # NEC halts the whole run here — the message quoted is its
+                # own, printed by ISEGNO — and it does so whether or not the
+                # paired tag is zero, which is why this reads the segment
+                # field alone (probes ``neg_seg``, ``c_tag0_zero``,
+                # ``c_tag0_neg``).  It matters because `locate` reads a
+                # nonpositive segment as 1, so without this guard a deck NEC
+                # refuses outright would quietly attach to the wrong segment.
+                raise DeckError(
+                    f"{card.mnemonic} addresses segment {seg} of "
+                    + (f"tag {tag}" if tag else "the structure")
+                    + ", which is not a segment: NEC halts on this card with "
+                    "CHECK DATA, PARAMETER SPECIFYING SEGMENT POSITION IN A "
+                    "GROUP OF EQUAL TAGS MUST NOT BE ZERO — a network endpoint "
+                    "names one segment, so its segment number must be 1 or more"
+                )
+        if card.mnemonic == "TL" and card.f(4) == 0.0:
+            # NEC aborts reading the deck on this one rather than running a
+            # line of no impedance (probe ``zero_z0``: "Error reading input
+            # file - aborting").  A short TL card reaches here too, and
+            # should: a card that names two endpoints and no line is not a
+            # transmission line.
+            raise DeckError(
+                "TL with a zero characteristic impedance is not a "
+                "transmission line — NEC aborts reading the deck on this "
+                "card; Z0 must be nonzero, and its SIGN, not its magnitude, "
+                "is what selects a crossed line"
+            )
+        self._networks.append(
+            NetworkCard(
+                kind=card.mnemonic,
+                end_a=self.structure.resolve(*ends[0]),
+                end_b=self.structure.resolve(*ends[1]),
+                address_a=ends[0],
+                address_b=ends[1],
+                payload=tuple(card.f(k) for k in range(4, 10)),  # type: ignore[arg-type]
+                # Retention runs from HERE (spec ``#network-retention``): an
+                # execute card already read is answered without this network,
+                # which is what the oracle prints.
+                first_group=len(self.groups),
+            )
+        )
+
     # -- requests ----------------------------------------------------------
 
     def _far_field(self, card: Card) -> FarFieldRequest:
@@ -744,6 +851,16 @@ class _Nec2Parser:
             return
         if (message := _REFUSED_BY_NAME.get(card.mnemonic)) is not None:
             raise DeckError(message)
+        if card.mnemonic in _NETWORK_CARDS:
+            self._network(card)
+            return
+        if self._networks and card.mnemonic not in _NETWORK_TRANSPARENT:
+            # The first such card ARMS the contiguity refusal; a second one
+            # must not overwrite the mnemonic, because the deck's mistake is
+            # the first interposition and that is the card the message should
+            # name (spec ``#network-contiguity``).
+            if self._network_destroyer is None:
+                self._network_destroyer = card.mnemonic
         if card.mnemonic in _GEOMETRY_CARDS:
             self._geometry(card)
             return
@@ -884,6 +1001,7 @@ class _Nec2Parser:
             quiet=self.quiet,
             reduced_field=self.reduced_field,
             deferred=(),
+            networks=tuple(self._networks),
         )
 
 
