@@ -1,0 +1,793 @@
+"""Rung-1 physics, gated against the captures (#497, U4).
+
+Three gates carry this unit, and the split between them is the point.
+
+**The structure gate.**  A served printout, taken all the way through the
+shell that EZNEC launches, has to BE the captured file everywhere the file is
+not a solved number: every heading, every blank line, every card echo, every
+count, every row of every table, the frequency block, the drive current cell,
+and the ``-999.99`` null convention with its blank SENSE column.  Only the
+cells a solver filled in are masked, on both sides, and everything else is
+compared byte for byte.
+
+**The envelope pins.**  momwire's B-spline formulation and NEC-5's are two
+discretizations of one physics and they do not agree to printed precision —
+the same Ω-class offset ``tests/test_contact_nec5_lane.py`` measures on a
+base-fed monopole, and the reason the golden lanes in this tree gate deltas
+rather than impedances.  So the physics is pinned the golden-lane way: a bar
+per capture at the MEASURED difference plus 25 %, with the measurements in
+the table below so the next person can see what moved rather than only that
+something did.  A pin that tightens is a finding; a pin that loosens is a
+regression.
+
+**The refusals.**  Everything above rung 1 still refuses BY NAME, through the
+real shell, at exit 0, with the comment stamp intact — because a refusal that
+does not reach EZNEC's viewer reaches nobody.
+
+The three normalizations the fixture manifest lists for a served run are
+applied here and nowhere else: CRLF to LF, the ``FILL=``/``RUN TIME`` timing
+lines dropped (a timing is a property of the machine), and signed zero folded
+in the pattern TILT column.
+"""
+
+from __future__ import annotations
+
+import functools
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+from momwire import BSplineSolver
+from momwire.deck._nec5 import parse_nec5
+from momwire.eznec import _serve
+from momwire.eznec._shell import render
+from test_eznec_printout import (
+    FIXTURE_DIR,
+    GATED_IDS,
+    capture,
+    deck_text,
+    extract,
+    printout_text,
+)
+
+# The rung-1 captures that shipped a printout — the six this unit is gated
+# against.  The other four gated captures (0012/0014/0016/0017) carry ``NT``
+# cards and belong to the network unit; they still appear below, in the
+# counting-rule gate, because the count is a property of the deck's geometry
+# and not of what answers it.
+SERVED_IDS = ("0010", "0013", "0019", "0035", "0043", "0044")
+
+# The rung-1 captures with no printout: seven ``XQ``-only dipoles EZNEC wrote
+# while stepping a frequency.  Nothing to byte-compare, but a deck that
+# refuses is a deck that stopped being served, so they are run for their exit
+# status.
+SERVED_UNGATED_IDS = ("0036", "0037", "0038", "0039", "0040", "0041", "0042")
+
+
+# --------------------------------------------------------------------------
+# the measured table the pins come from
+# --------------------------------------------------------------------------
+#
+# Measured 2026-08-20 on this tree, with the served printout read back through
+# `test_eznec_printout.extract` and compared cell for cell with the capture's:
+#
+#   id    Z (capture)          Z (served)          |dZ|    peak dB   d(peak)
+#   0010  79.948 +29.919j      85.073 +45.369j    16.278   2.18/2.09   0.09
+#   0013  55.621 + 8.2725j     58.876 +19.210j    11.412   1.90/1.80   0.10
+#   0019  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
+#   0035  23.343 -24.594j      23.926 -20.079j     4.552   9.88/9.84   0.04
+#   0043  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
+#   0044  35.571 - 1.4223j     36.499 + 2.0789j    3.622   5.15/5.13   0.02
+#
+# The impedance bar is that |dZ| plus 25 %.  The reactance carries almost all
+# of it — a node source and a segment gap store different amounts of energy in
+# the feed region, which is exactly the formulation difference the scored
+# matrix priced when it moved this unit's gate off byte equality.
+#
+# The peak-gain bar is |d| plus 25 % OR 0.05 dB, whichever is larger: the
+# printed cell is quantized at 0.01 dB, so a bar under a few hundredths would
+# be pinning the rounding rather than the physics.
+Z_BAR = {
+    "0010": 20.35,
+    "0013": 14.27,
+    "0019": 4.53,
+    "0035": 5.69,
+    "0043": 4.53,
+    "0044": 4.53,
+}
+
+# (peak total gain dB, theta, phi) as the capture prints it, and the bar.
+PEAK_BAR = {
+    "0010": 0.12,
+    "0013": 0.13,
+    "0035": 0.05,
+    "0044": 0.05,
+}
+
+# Largest per-element difference in the WIRE CURRENTS table, relative to that
+# table's own peak current, and in the CHARGE DENSITIES table relative to its
+# peak magnitude.  Measured, plus 25 %.  The charge bar is the gate on the
+# analytic charge readout: a q that were merely plausible would not sit
+# inside 8 % of a different code's on five decks at once.
+CURRENT_BAR = {
+    "0010": 0.028,
+    "0013": 0.025,
+    "0019": 0.013,
+    "0035": 0.228,
+    "0043": 0.013,
+    "0044": 0.013,
+}
+CHARGE_BAR = {
+    "0010": 0.086,
+    "0013": 0.078,
+    "0019": 0.078,
+    "0035": 0.186,
+    "0043": 0.078,
+    "0044": 0.078,
+}
+
+
+@functools.lru_cache(maxsize=None)
+def served(cid: str) -> str:
+    """The printout this engine writes for a capture's deck."""
+    return render(deck_text(cid))
+
+
+def _z_of(text: str) -> complex:
+    """The feedpoint impedance one deck's served printout reports."""
+    return extract(render(text)).sources[0].impedance
+
+
+# --------------------------------------------------------------------------
+# the mask: every cell a solver filled in, and nothing else
+# --------------------------------------------------------------------------
+#
+# Column edges are the captures', read off the printouts rather than off the
+# renderer's own table — a mask built from the code it gates would agree with
+# a wrong width.
+
+_MASK = "#" * 4
+
+# ANTENNA INPUT PARAMETERS: three integers, then nine E12.4 cells.  Cells 2
+# and 3 are the CURRENT, which for an `EX 4` deck is the card's own drive and
+# has to survive unmasked; the rest is solved.
+_PORT_CELLS = tuple(k for k in range(9) if k not in (2, 3))
+
+# Pattern row column edges, measured on 0013 (which prints every form: a
+# blank SENSE, a `-999.99` null, and ordinary rows).
+_PATTERN_COLUMNS = {
+    "angles": (0, 17),
+    "vert": (17, 28),
+    "hor": (28, 36),
+    "total": (36, 44),
+    "axial": (44, 55),
+    "tilt": (55, 64),
+    "sense": (64, 72),
+    "fields": (72, 120),
+}
+
+_NULL = "-999.99"
+_NUMBER = re.compile(r"[-+]?\d+\.\d+(?:[Ee][-+]?\d+)?")
+
+# How many lines each table puts between its heading and its first row.
+_TABLES = {
+    "- - - ANTENNA INPUT PARAMETERS - - -": ("port", 3),
+    "- - - Wire Currents - - -": ("wire", 5),
+    "- - - Wire Charge Densities - - -": ("wire", 5),
+    "- - - POWER BUDGET - - -": ("power", 1),
+    "- - - RADIATION PATTERNS - - -": ("pattern", 4),
+}
+
+
+def _mask_port_row(line: str) -> str:
+    cells = [line[12 + 12 * k : 24 + 12 * k] for k in range(9)]
+    for k in _PORT_CELLS:
+        cells[k] = _MASK.rjust(12)
+    return line[:12] + "".join(cells)
+
+
+def _mask_pattern_row(line: str) -> str:
+    def cell(name: str) -> str:
+        lo, hi = _PATTERN_COLUMNS[name]
+        return line[lo:hi]
+
+    def gain(name: str) -> str:
+        text = cell(name)
+        # The null itself is the convention, so it is never masked: a served
+        # row that fell short of NEC's own DB10 floor has to fall short on the
+        # same rows the capture did, and a row that did not has to print a
+        # number on the same rows too.
+        return text if text.strip() == _NULL else _MASK.rjust(len(text))
+
+    sense = cell("sense")
+    return (
+        cell("angles")
+        + gain("vert")
+        + gain("hor")
+        + gain("total")
+        # AXIAL / TILT are the polarisation ellipse of a field whose CROSS
+        # component is five to sixteen orders under its co-polar one; which
+        # way that dust leans is a property of a formulation, not of an
+        # antenna, and the two codes disagree about it on 1848 of 0013's 2701
+        # rows.  Masked, and the blank-vs-filled SENSE below is what still
+        # gates the convention they DO share.
+        + _MASK.rjust(len(cell("axial")))
+        + _MASK.rjust(len(cell("tilt")))
+        + (sense if not sense.strip() else _MASK.rjust(len(sense)))
+        + _MASK.rjust(len(cell("fields")))
+    )
+
+
+def mask(text: str) -> str:
+    """A printout with its solved cells replaced, table by table.
+
+    Also applies the manifest's two remaining served-run normalizations: the
+    timing lines are dropped outright, and nothing else about them is looked
+    at.
+    """
+    lines = text.split("\n")
+    out: list[str] = []
+    kind: str | None = None
+    skip = 0
+    for line in lines:
+        if "FILL=" in line or line.startswith(" RUN TIME ="):
+            continue
+        if "AVERAGE POWER GAIN" in line or "POWER RADIATED" in line:
+            # The 3-D form's trailer sits BELOW the blank line that ends the
+            # pattern table, so it is recognised by what it says rather than
+            # by which table it is inside.
+            out.append(_NUMBER.sub(_MASK, line))
+            continue
+        heading = next((h for h in _TABLES if h in line), None)
+        if heading is not None:
+            kind, skip = _TABLES[heading]
+            out.append(line)
+            continue
+        if skip:
+            skip -= 1
+            out.append(line)
+            continue
+        if kind is None or not line.strip():
+            kind = None
+            out.append(line)
+            continue
+        if kind == "port":
+            out.append(_mask_port_row(line))
+        elif kind == "wire":
+            out.append(line[:12] + _MASK)
+        elif kind == "power":
+            label, sep, _value = line.partition("=")
+            out.append(label + sep + _MASK)
+        elif kind == "pattern":
+            out.append(_mask_pattern_row(line))
+    return "\n".join(out)
+
+
+# --------------------------------------------------------------------------
+# gate 1 — the structure
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cid", SERVED_IDS)
+def test_a_served_printout_is_the_capture_wherever_it_is_not_a_solved_number(cid):
+    """The unit's whole shape, six times over.
+
+    What this proves, and it is most of the file: the row counts, the tag and
+    element numbering, the geometry summary, the ``ALLOCATE CM`` allocation,
+    the card echoes, the environment banner, the frequency and wavelength, the
+    drive current cell, the section order and the blank lines between sections
+    are all correct — and the ``-999.99`` nulls fall on exactly the directions
+    the capture put them, with SENSE blank on exactly the same rows.
+    """
+    assert mask(served(cid)) == mask(printout_text(cid))
+
+
+def test_the_shell_writes_the_served_printout_and_still_exits_zero(tmp_path):
+    """Through the real process, the way EZNEC launches it: two positional
+    paths, nothing on stdin, exit 0, and a full result file on disk."""
+    deck = tmp_path / "EZN5.NEC"
+    deck.write_bytes((FIXTURE_DIR / capture("0044")["deck"]).read_bytes())
+    out = tmp_path / "NEC5.OUT"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "momwire.eznec", str(deck), str(out)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert proc.returncode == 0
+    assert proc.stdout == ""
+    written = out.read_bytes().decode("latin-1")
+    assert "NEC ERROR" not in written
+    assert mask(written) == mask(printout_text("0044"))
+
+
+# --------------------------------------------------------------------------
+# gate 1b — the counting rule, on all ten captures
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cid", GATED_IDS)
+def test_the_counting_rule_reproduces_every_captured_count(cid):
+    """``Σ max(degree − 1, 0)`` over the fused nodes, on all TEN printouts.
+
+    The rule was DERIVED from these ten numbers and has to answer all of them
+    or it is a coincidence: a free wire end contributes nothing, an interior
+    node one, a junction of m wires m − 1 (0013's five-wire apex is the only
+    capture that separates that from "one per junction"), and a wire end
+    standing in a declared ground plane counts its image as one more element
+    end (0019, the only capture that separates that from "free end").
+
+    The four network captures are here too.  They are not served — ``NT``
+    refuses by name — but their geometry is counted by the same walk, and
+    0012's 17 nodes / 15 elements / 13 unknowns is the one deck in the set
+    with several two-wire junctions AND a wire that touches nothing.
+    """
+    structure = _serve.structure_of(parse_nec5(deck_text(cid)))
+    data = extract(printout_text(cid))
+    assert (
+        structure.node_count,
+        structure.wire_element_count,
+        structure.patch_element_count,
+        structure.unknown_count,
+    ) == (
+        data.node_count,
+        data.wire_element_count,
+        data.patch_element_count,
+        data.unknown_count,
+    )
+
+
+# --------------------------------------------------------------------------
+# gate 1c — the geometry columns are the deck's own
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cid", SERVED_IDS)
+def test_the_current_table_s_geometry_columns_are_the_captured_ones(cid):
+    """Segment centres and lengths, compared as NUMBERS rather than bytes.
+
+    They are masked in the structure gate for one cell's sake: 0010's sixth
+    element is centred at the dipole's midpoint, where the true coordinate is
+    zero and both engines print their own rounding dust (3.46936E-17 against
+    -1.38774E-17).  Neither engine's digits mean anything there, and no
+    arithmetic reproduces the other's, so the column is gated at 1e-9 metres
+    instead — three hundred million times tighter than the dust and eight
+    orders tighter than the printed precision on every cell that is not dust.
+    """
+    want = extract(printout_text(cid))
+    got = extract(served(cid))
+    assert len(got.currents) == len(want.currents)
+    for a, b in zip(want.currents, got.currents):
+        assert (a.element, a.tag) == (b.element, b.tag)
+        assert a.length == pytest.approx(b.length, abs=1e-9)
+        for wanted, served_ in zip(a.center, b.center):
+            assert wanted == pytest.approx(served_, abs=1e-9)
+
+
+# --------------------------------------------------------------------------
+# gate 2 — the envelope pins
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cid", SERVED_IDS)
+def test_the_feedpoint_impedance_sits_inside_its_measured_envelope(cid):
+    """|Z_served − Z_captured| against a per-capture bar (see the table above).
+
+    An ENVELOPE and not an agreement claim: the difference is a formulation
+    difference, it does not shrink with anything this unit controls, and the
+    bar exists so that a change to the basis, the drive spelling or the port
+    algebra is visible the day it lands.
+    """
+    want = extract(printout_text(cid)).sources[0].impedance
+    got = extract(served(cid)).sources[0].impedance
+    assert abs(got - want) <= Z_BAR[cid], f"{cid}: served {got}, captured {want}"
+
+
+@pytest.mark.parametrize("cid", sorted(PEAK_BAR))
+def test_the_pattern_peak_lands_where_the_capture_puts_it(cid):
+    """The peak DIRECTION is exact on all four patterned captures; the peak
+    LEVEL is inside a tenth of a dB.
+
+    The direction is the part a formulation difference does not get to move —
+    it is set by the geometry and the current's shape, not by the feed
+    region — so it is gated exactly, and the level is gated by envelope.
+    """
+    (want,) = extract(printout_text(cid)).patterns
+    (got,) = extract(served(cid)).patterns
+    assert len(got.rows) == len(want.rows)
+    best_want = max(want.rows, key=lambda row: row.total_db)
+    best_got = max(got.rows, key=lambda row: row.total_db)
+    assert (best_got.theta_deg, best_got.phi_deg) == (
+        best_want.theta_deg,
+        best_want.phi_deg,
+    )
+    assert abs(best_got.total_db - best_want.total_db) <= PEAK_BAR[cid]
+
+
+@pytest.mark.parametrize("cid", SERVED_IDS)
+def test_the_current_and_charge_tables_sit_inside_their_measured_envelopes(cid):
+    """Every element's current AND its charge density, against the capture.
+
+    The charge block is the one readout in this unit with no second opinion
+    anywhere in the tree, so this is the gate that says it is physics rather
+    than plausible-looking arithmetic: ``q = −(1/jω)·dI/ds``, differentiated
+    in the B-spline basis, lands within 8 % of NEC-5's own on five of the six
+    captures and within 19 % on the Yagi, whose currents differ by as much.
+    """
+    want = extract(printout_text(cid))
+    got = extract(served(cid))
+    peak = max(row.magnitude for row in want.currents)
+    assert (
+        max(
+            abs(complex(a.real, a.imag) - complex(b.real, b.imag))
+            for a, b in zip(want.currents, got.currents)
+        )
+        / peak
+        <= CURRENT_BAR[cid]
+    )
+    charge_peak = max(row.magnitude for row in want.charges)
+    assert (
+        max(abs(a.magnitude - b.magnitude) for a, b in zip(want.charges, got.charges))
+        / charge_peak
+        <= CHARGE_BAR[cid]
+    )
+
+
+def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
+    """0010's ``EX 4 … 1.414214,0.`` prints its drive back EXACTLY, and the
+    rest of the row is that drive times the driving-point impedance.
+
+    Which is the whole of what the scored matrix means by "readout
+    transform": with one port, ``I = Y·V`` is linear, so the current source is
+    the voltage-driven solve rescaled, and the printed row has to close on
+    itself — ``V = Z·I``, ``Y = 1/Z``, ``P = ½·Re(V·I*) = ½·|I|²·R``, which is
+    how the capture's own 7.9948E+01 watts is |1.414214|²/2 times its 79.948 Ω.
+    """
+    row = extract(served("0010")).sources[0]
+    assert row.current == complex(1.4142, 0.0)  # printed E12.4, drive verbatim
+    assert row.voltage == pytest.approx(row.impedance * row.current, rel=1e-4)
+    assert row.admittance == pytest.approx(1.0 / row.impedance, rel=1e-4)
+    assert row.power == pytest.approx(
+        0.5 * abs(row.current) ** 2 * row.impedance.real, rel=1e-4
+    )
+
+
+@pytest.mark.parametrize("cid", SERVED_IDS)
+def test_a_lossless_rung_one_deck_radiates_everything_it_is_given(cid):
+    """Free space and perfect ground dissipate nothing and this dialect has no
+    conductivity card, so INPUT = RADIATED, WIRE LOSS = 0 and EFFICIENCY reads
+    100.00 — which is what all six captures print."""
+    power = extract(served(cid)).power
+    assert power.wire_loss == 0.0
+    assert power.input_power == power.radiated_power
+    assert power.efficiency_percent == 100.0
+    assert power.network_loss is None
+
+
+# --------------------------------------------------------------------------
+# gate 3 — the refusals
+# --------------------------------------------------------------------------
+
+# One capture per refusal, each the smallest deck in the corpus carrying the
+# card.  0028 rather than 0011 for `TL`: 0011 also stands over `GN 0`, and a
+# deck that is out of scope twice names its GROUND first (see the ordering
+# test below).
+#
+# The last two entries are the corpus's own decks with their ground card swapped
+# for `GN 1`, and they have to be: every captured multi-`EX` deck and the one
+# captured `NE` deck stand over a finite ground, so as written they are refused
+# a rung earlier and their own card never gets a hearing.  The cards under test
+# are the captures' verbatim (0031's four phased `EX 4` rows, 0022's
+# `NE 0,1,1,1,…` at EZNEC's defaults); only the ground line moved.
+_ON_PERFECT_GROUND = ("0031", "0022")
+
+REFUSALS = {
+    "0045": "GD asks for the MININEC-type ground",
+    "0047": "GN 0 asks for the finite-ground Sommerfeld solution",
+    "0028": "TL (transmission line) is not served at this seam yet",
+    "0012": "NT (two-port network) is not served at this seam yet",
+    "0031": "this deck carries 4 EX cards",
+    "0022": "NE (near electric field) is not served at this seam yet",
+}
+
+
+def _refusal_deck(cid: str) -> bytes:
+    text = (FIXTURE_DIR / capture(cid)["deck"]).read_bytes().decode("latin-1")
+    if cid in _ON_PERFECT_GROUND:
+        text = re.sub(r"^G[ND] 0,.*$", "GN 1", text, flags=re.MULTILINE)
+    return text.encode("latin-1")
+
+
+@pytest.mark.parametrize("cid,reason", sorted(REFUSALS.items()))
+def test_an_out_of_scope_capture_refuses_by_name_through_the_shell(
+    cid, reason, tmp_path
+):
+    """Named, after the comment echo, in a file that exists, at exit 0.
+
+    All four obligations at once, because dropping any one of them is a
+    refusal that never reaches the operator: EZNEC reads the printout and
+    nothing else, and it discards one whose stamp echo is missing as belonging
+    to an earlier run.
+    """
+    deck = tmp_path / "EZN5.NEC"
+    deck.write_bytes(_refusal_deck(cid))
+    out = tmp_path / "NEC5.OUT"
+
+    proc = subprocess.run(
+        [sys.executable, "-m", "momwire.eznec", str(deck), str(out)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+
+    assert proc.returncode == 0
+    written = out.read_bytes().decode("latin-1")
+    error = " ***** NEC ERROR - "
+    assert error in written
+    stamp = "EZNEC Pro/2+ v. 7.0.4"
+    assert written.index(stamp) < written.index(error)
+    assert reason in written
+    assert "ANTENNA INPUT PARAMETERS" not in written
+
+
+def test_a_deck_out_of_scope_twice_names_its_ground_first():
+    """0022 as EZNEC wrote it carries BOTH a ``GN 0`` and an ``NE``, and the
+    sentence a reader gets is the ground's.
+
+    The order is a choice and it is worth pinning: a near field over a ground
+    this seam cannot solve is not a near-field problem, so naming ``NE`` there
+    would send the reader after the wrong card.
+    """
+    printout = render(deck_text("0022"))
+    assert REFUSALS["0047"] in printout
+    assert REFUSALS["0022"] not in printout
+
+
+def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
+    """U1's catch-all is now a backstop and not a behaviour.
+
+    Every one of the 49 captured decks comes back either solved or refused by
+    a sentence that names its card, so the stub reason — which said only that
+    the dialect was unserved — must appear nowhere.
+    """
+    for path in sorted((FIXTURE_DIR / "decks").glob("*.nec")):
+        text = path.read_bytes().decode("latin-1")
+        assert "NEC-5 DIALECT NOT YET SERVED" not in render(text), path.name
+        assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in render(text), path.name
+
+
+@pytest.mark.parametrize("cid", SERVED_UNGATED_IDS)
+def test_the_ungated_rung_one_captures_still_serve(cid):
+    """0036-0042 are the same dipole at seven frequencies with ``XQ`` and no
+    ``RP``, so they carry no printout to compare against — but a deck that
+    started refusing would be a regression, and the frequency block is one
+    thing about them that IS checkable."""
+    text = render(deck_text(cid))
+    assert "NEC ERROR" not in text
+    assert "- - - ANTENNA INPUT PARAMETERS - - -" in text
+    assert "- - - RADIATION PATTERNS - - -" not in text
+    # The FREQUENCY cell is an E11.4, so a deck asking for 299.793 MHz gets
+    # 2.9979E+02 back and the comparison is at the printed precision.
+    assert extract(text).frequency_mhz == pytest.approx(
+        parse_nec5(deck_text(cid)).frequency_mhz, rel=1e-4
+    )
+
+
+def test_the_favored_wire_carries_physics_at_a_five_wire_junction():
+    """0013's apex is one geometric point that five ``GW`` cards name, and
+    WHICH card names it changes the answer.
+
+    ``EX 4,5,-1`` — the capture's own card, the source in series with the
+    vertical's first element — is served as 58.876 + 19.210 Ω.  Move the same
+    card to ``EX 4,1,-1``, the identical point through a radial's tag, and the
+    seam answers 43.684 − 7.5465 Ω: 35 % away, because the gap now separates a
+    different arm from the node.  The four symmetric radials answer alike,
+    which is the control — a difference between tag 1 and tag 2 would be a
+    bug, and a difference between tag 1 and tag 5 is the physics.
+
+    This is the W7EL oracle's principle one unit early.  A seam that
+    canonicalized ``(tag, node)`` into a geometric point could not tell these
+    three cards apart, and the gate unit's 70 % error is the same mistake
+    further downstream.
+    """
+    vertical = _z_of(deck_text("0013"))
+    radial_one = _z_of(deck_text("0013").replace("EX 4,5,-1,", "EX 4,1,-1,"))
+    radial_two = _z_of(deck_text("0013").replace("EX 4,5,-1,", "EX 4,2,-1,"))
+    assert radial_one == radial_two
+    assert abs(vertical - radial_one) / abs(vertical) > 0.3
+
+
+def test_a_source_on_a_free_wire_end_refuses_rather_than_guessing():
+    """Nothing carries current past a lone conductor end, so there is no path
+    for a series source to sit in — momwire refuses one at its constructor and
+    this seam refuses it earlier, with the address in the sentence.
+
+    Built from 0010 by moving its ``EX`` to node 0 of the same wire, which in
+    free space is the dipole's tip.  No capture asks for this; the refusal
+    exists so that one arriving is a sentence rather than a traceback.
+    """
+    text = deck_text("0010").replace("EX 4,1,6,", "EX 4,1,-1,")
+    printout = render(text)
+    assert "addresses a FREE end of wire 1" in printout
+    assert "ANTENNA INPUT PARAMETERS" not in printout
+
+
+# --------------------------------------------------------------------------
+# LD 4 — in scope, and with no capture of its own
+# --------------------------------------------------------------------------
+#
+# Rung 1 includes `LD 4`, but every captured deck that carries one also
+# carries an `NT` (the four W7EL network tests are the corpus's only loaded
+# decks), so the loaded path has no byte-gate until the network unit lands.
+# These two tests are what it has instead: an identity that holds exactly, and
+# the `1.E+10` pin idiom doing the one thing it exists to do.
+
+
+def test_a_load_at_the_driven_node_adds_its_own_ohms_to_the_feedpoint():
+    """An ``LD 4`` is an impedance in the port's own current path, so one
+    stamped at the DRIVEN node is in series with the source and moves the
+    printed impedance by exactly itself — an identity, not an approximation,
+    and the sharpest available check that the port algebra put the load where
+    NEC puts it."""
+    bare = _z_of(deck_text("0010"))
+    loaded = _z_of(deck_text("0010").replace("PQ 0\n", "LD 4,1,6,0,50.,25.\nPQ 0\n"))
+    # The cells are E12.4, so "exactly" means to the printed digit: the
+    # measured shift is 49.997 + 25.000j against a 135 Ω row.
+    assert loaded - bare == pytest.approx(complex(50.0, 25.0), abs=0.02)
+
+
+def test_the_pin_idiom_leaves_the_virtual_wire_carrying_nothing():
+    """W7EL's own idiom, on a deck that has no network to need it yet.
+
+    The ``Network Connection Test`` captures build a 100 λ-away three-segment
+    wire and pin both of its interior nodes with ``LD 4,4,n,0,1.E+10,0.``, so
+    the wire exists only to hang network cards off.  Bolted onto 0010 — same
+    ``GW`` card, same two ``LD`` cards, verbatim — it has to be invisible:
+    the dipole's feedpoint impedance must not move by so much as a printed
+    digit, and the pinned wire's own current must be nothing at all.
+
+    Measured: the virtual wire carries 4.7e-17 A against the dipole's 1.44 A,
+    seventeen orders down, and the loading table renders the two rows exactly
+    as 0012 printed them — which is the loaded path's only byte gate until the
+    network unit brings the four W7EL captures into scope.
+    """
+    virtual = "GW 4,3,99.99998,99.99998,99.99998,100.003,100.003,100.003,1.0000E-4\n"
+    pins = "LD 4,4,1,0,1.E+10,0.\nLD 4,4,2,0,1.E+10,0.\n"
+    text = deck_text("0010").replace("GE 0,-1\n", virtual + "GE 0,-1\n")
+    text = text.replace("PQ 0\n", pins + "PQ 0\n")
+
+    printout = render(text)
+    data = extract(printout)
+    assert data.sources[0].impedance == extract(served("0010")).sources[0].impedance
+    dipole = max(row.magnitude for row in data.currents if row.tag == 1)
+    assert max(row.magnitude for row in data.currents if row.tag == 4) < 1e-12 * dipole
+    # 0012's own two rows, byte for byte (the trailing blank in the TYPE field
+    # is real).
+    rows = [line for line in printout.split("\n") if "FIXED IMPEDANCE" in line]
+    captured = [
+        line for line in printout_text("0012").split("\n") if "FIXED IMPEDANCE" in line
+    ]
+    assert rows == captured
+
+
+# --------------------------------------------------------------------------
+# the charge readout's own gate
+# --------------------------------------------------------------------------
+#
+# `BSplineSolver.current_slopes` is new with this unit and the charge block is
+# its only consumer, so its gate lives here: the envelope pins above say it
+# lands near NEC-5's charge densities, and these two say it is the derivative
+# it claims to be rather than something that happens to be close.
+
+
+@functools.lru_cache(maxsize=None)
+def _dipole_solution():
+    """0010's dipole, solved directly, with its element-centre arc positions."""
+    solver = BSplineSolver(
+        wires=[np.array([[0.0, -0.25, 0.0], [0.0, 0.25, 0.0]])],
+        n_per_edge_per_wire=[[11]],
+        feeds=[(0, 6 * 0.5 / 11, 1.0 + 0j)],
+        wire_radius=0.0005,
+        wavelength=299.8 / 299.7925,
+    )
+    coeffs = solver.compute_port_solution().coeffs[:, 0]
+    step = 0.5 / 11
+    return solver, coeffs, [(np.arange(11) + 0.5) * step]
+
+
+def test_the_slope_readout_is_the_current_s_own_derivative():
+    """``current_slopes`` against a central difference of ``currents_at_knots``.
+
+    An independent check by construction — one evaluates the derivative
+    spline, the other samples the value spline twice — and it has to agree to
+    the difference's own truncation error, which at ``h = 1e-6`` on a segment
+    of 0.045 m is parts in 1e9.  Taken at segment CENTRES because that is
+    where the charge block reads it and because a degree-2 spline's slope,
+    while continuous, is only piecewise smooth at a knot.
+    """
+    solver, coeffs, centres = _dipole_solution()
+    exact = solver.current_slopes(coeffs, centres)
+    h = 1e-6
+    ahead = solver.currents_at_knots(coeffs, [c + h for c in centres])
+    behind = solver.currents_at_knots(coeffs, [c - h for c in centres])
+    for got, up, down in zip(exact, ahead, behind):
+        difference = (up - down) / (2.0 * h)
+        scale = max(abs(v) for v in difference)
+        assert max(abs(got - difference)) < 1e-6 * scale
+
+
+def test_the_slope_readout_refuses_the_enriched_basis_rather_than_dropping_it():
+    """The singular enrichment's shape has a log-divergent slope at the
+    junction knot, so a readout that ignored it would be wrong exactly where
+    the charge density is most interesting.  It says so instead."""
+    solver = BSplineSolver(
+        wires=[np.array([[0.0, -0.25, 0.0], [0.0, 0.25, 0.0]])],
+        n_per_edge_per_wire=[[11]],
+        feeds=[(0, 0.25, 1.0 + 0j)],
+        wire_radius=0.0005,
+        wavelength=1.0,
+        use_singular_enrichment=True,
+    )
+    with pytest.raises(NotImplementedError, match="singular"):
+        solver.current_slopes(np.zeros(1), [np.zeros(1)])
+
+
+# --------------------------------------------------------------------------
+# the constants a reader would otherwise have to take on trust
+# --------------------------------------------------------------------------
+
+
+def test_the_wavelength_is_nec_s_own_metre_megahertz_product():
+    """299.8, not the SI c.  0019 prints ``WAVELENGTH= 4.2829E+01 METERS`` at
+    7 MHz: 299.8/7 = 42.8286 rounds to that cell and 299792458/7e6 = 42.8275
+    does not.  The same constant normalizes the geometry columns of the
+    current and charge tables, which is why gate 1c passes at 1e-9 rather
+    than at 1e-5."""
+    assert _serve.SPEED_OF_LIGHT_MHZ_M == 299.8
+    for cid in SERVED_IDS:
+        wanted = 299.8 / parse_nec5(deck_text(cid)).frequency_mhz
+        # Both cells are E11.4, so the comparison is at printed precision —
+        # which is exactly where 299.8 and the SI c part company (0019 prints
+        # 4.2829E+01; the SI c would print 4.2827E+01).
+        assert extract(served(cid)).wavelength_m == pytest.approx(wanted, rel=1e-4)
+        assert extract(printout_text(cid)).wavelength_m == pytest.approx(
+            wanted, rel=1e-4
+        )
+
+
+def test_the_basis_is_the_house_default():
+    """``bspline`` — ``BSplineSolver`` at degree 2, which is what
+    ``momwire.deck.build_solver``'s default entry constructs and what the
+    portal answers every NEC-2 deck with.  Recorded as a gate because a
+    silent change of basis would move every number in every printout this
+    seam writes and break nothing else."""
+    assert _serve.BASIS == "bspline"
+    assert _serve._DEGREE == 2
+
+
+def test_every_refusal_sentence_survives_the_printout_s_own_codec():
+    """A printout is written latin-1 (U1's ``_CODEC``), so a refusal carrying
+    a character that codec cannot spell is a refusal that never gets written.
+
+    Measured the hard way: the ``TL`` and ``NT`` sentences were first drafted
+    with an em dash, and the shell answered 0012 with an internal-error
+    printout instead of the sentence.  This gate is why they are ASCII.
+    """
+    for name, value in vars(_serve).items():
+        if name.startswith("_REFUSE") and isinstance(value, str):
+            value.encode("latin-1")
+
+
+def test_the_module_never_reaches_for_a_second_far_field_implementation():
+    """The pattern readout is the portal's, by import: one owner for the
+    moments, the gain floor and the polarisation ellipse (the ranked
+    extraction backlog, momwire#429, is where that import is paid off)."""
+    source = Path(_serve.__file__).read_text()
+    assert "from ..portal._portal import" in source
+    assert "def _far_moments" not in source
