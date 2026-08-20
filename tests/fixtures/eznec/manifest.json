@@ -1,0 +1,279 @@
+{
+  "citation": "NEC-5 printouts captured as End-User Reports; NEC-5 is (c) LLNL, LLNL-CODE-746721. The binary is user-licensed and never distributed. Decks were emitted by EZNEC Pro/2+ v7.0.4 driving NEC5CL_x13.exe (antennaknobs capture sessions, momwire#390/#456); printouts are the Windows engine\u2019s own, byte-verbatim including CRLF line endings.",
+  "source": "antennaknobs scratch/eznec-capture/ (capture ids preserved); scored matrix: antennaknobs docs/status/2026-08-20-eznec-nec5-scored-matrix.md",
+  "normalizations": "byte-compare after: CRLF->LF; drop FILL=/RUN TIME timing lines; normalize -0.00 vs 0.00 signed zero in pattern TILT columns; drop GMPINO/SOMMPD.NEX preamble lines",
+  "w7el_gate": {
+    "a": [
+      "0012",
+      "0014"
+    ],
+    "b": [
+      "0016"
+    ],
+    "c": [
+      "0017"
+    ],
+    "z": {
+      "a": "114.47+21.096j",
+      "b": "114.47+21.096j (must equal a to every printed digit)",
+      "c": "195.34-57.458j (a seam that canonicalizes 2,3 == 3,-1 answers a and is wrong by 70%)"
+    }
+  },
+  "captures": [
+    {
+      "id": "0000",
+      "title": "Cardioid - L Network Feed",
+      "deck": "decks/0000_cardioid-l-network-feed.nec"
+    },
+    {
+      "id": "0001",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0001_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0002",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0002_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0003",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0003_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0004",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0004_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0005",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0005_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0006",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0006_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0007",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0007_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0008",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0008_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0009",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0009_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0010",
+      "title": "Dipole in free space",
+      "deck": "decks/0010_dipole-in-free-space.nec",
+      "printout": "printouts/0010_dipole-in-free-space.out"
+    },
+    {
+      "id": "0011",
+      "title": "Dipole with coax feedline",
+      "deck": "decks/0011_dipole-with-coax-feedline.nec"
+    },
+    {
+      "id": "0012",
+      "title": "Network Connection Test",
+      "deck": "decks/0012_network-connection-test.nec",
+      "printout": "printouts/0012_network-connection-test.out"
+    },
+    {
+      "id": "0013",
+      "title": "VHF Ground Plane",
+      "deck": "decks/0013_vhf-ground-plane.nec",
+      "printout": "printouts/0013_vhf-ground-plane.out"
+    },
+    {
+      "id": "0014",
+      "title": "Network Connection Test",
+      "deck": "decks/0014_network-connection-test.nec",
+      "printout": "printouts/0014_network-connection-test.out"
+    },
+    {
+      "id": "0015",
+      "title": "Vertical over real ground",
+      "deck": "decks/0015_vertical-over-real-ground.nec"
+    },
+    {
+      "id": "0016",
+      "title": "Network Connection Test",
+      "deck": "decks/0016_network-connection-test.nec",
+      "printout": "printouts/0016_network-connection-test.out"
+    },
+    {
+      "id": "0017",
+      "title": "Network Connection Test",
+      "deck": "decks/0017_network-connection-test.nec",
+      "printout": "printouts/0017_network-connection-test.out"
+    },
+    {
+      "id": "0018",
+      "title": "Network Connection Test",
+      "deck": "decks/0018_network-connection-test.nec"
+    },
+    {
+      "id": "0019",
+      "title": "Vertical over real ground",
+      "deck": "decks/0019_vertical-over-real-ground.nec",
+      "printout": "printouts/0019_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0020",
+      "title": "Vertical over real ground",
+      "deck": "decks/0020_vertical-over-real-ground.nec"
+    },
+    {
+      "id": "0021",
+      "title": "Vertical over real ground",
+      "deck": "decks/0021_vertical-over-real-ground.nec"
+    },
+    {
+      "id": "0022",
+      "title": "Vertical over real ground",
+      "deck": "decks/0022_vertical-over-real-ground.nec"
+    },
+    {
+      "id": "0023",
+      "title": "4-Square Array - L Ntwk Feed",
+      "deck": "decks/0023_4-square-array-l-ntwk-feed.nec"
+    },
+    {
+      "id": "0024",
+      "title": "4-square array w/feed system",
+      "deck": "decks/0024_4-square-array-w-feed-system.nec"
+    },
+    {
+      "id": "0025",
+      "title": "4 Sq - L Ntwrk & Z Match",
+      "deck": "decks/0025_4-sq-l-ntwrk-z-match.nec"
+    },
+    {
+      "id": "0026",
+      "title": "Cardioid with feed system",
+      "deck": "decks/0026_cardioid-with-feed-system.nec"
+    },
+    {
+      "id": "0027",
+      "title": "Cardioid with feed system",
+      "deck": "decks/0027_cardioid-with-feed-system.nec"
+    },
+    {
+      "id": "0028",
+      "title": "17-10m Log Per - ARRL Ant Book",
+      "deck": "decks/0028_17-10m-log-per-arrl-ant-book.nec"
+    },
+    {
+      "id": "0029",
+      "title": "Dipole with coax feedline",
+      "deck": "decks/0029_dipole-with-coax-feedline.nec"
+    },
+    {
+      "id": "0030",
+      "title": "Dipole with coax feedline",
+      "deck": "decks/0030_dipole-with-coax-feedline.nec"
+    },
+    {
+      "id": "0031",
+      "title": "40-meter four-square array",
+      "deck": "decks/0031_40-meter-four-square-array.nec"
+    },
+    {
+      "id": "0032",
+      "title": "Cardioid",
+      "deck": "decks/0032_cardioid.nec"
+    },
+    {
+      "id": "0033",
+      "title": "Elevated radial system",
+      "deck": "decks/0033_elevated-radial-system.nec"
+    },
+    {
+      "id": "0034",
+      "title": "Elevated radial system",
+      "deck": "decks/0034_elevated-radial-system.nec"
+    },
+    {
+      "id": "0035",
+      "title": "Five-element Yagi",
+      "deck": "decks/0035_five-element-yagi.nec",
+      "printout": "printouts/0035_five-element-yagi.out"
+    },
+    {
+      "id": "0036",
+      "title": "Dipole in free space",
+      "deck": "decks/0036_dipole-in-free-space.nec"
+    },
+    {
+      "id": "0037",
+      "title": "Dipole in free space",
+      "deck": "decks/0037_dipole-in-free-space.nec"
+    },
+    {
+      "id": "0038",
+      "title": "Dipole in free space",
+      "deck": "decks/0038_dipole-in-free-space.nec"
+    },
+    {
+      "id": "0039",
+      "title": "Dipole in free space",
+      "deck": "decks/0039_dipole-in-free-space.nec"
+    },
+    {
+      "id": "0040",
+      "title": "Dipole in free space",
+      "deck": "decks/0040_dipole-in-free-space.nec"
+    },
+    {
+      "id": "0041",
+      "title": "Dipole in free space",
+      "deck": "decks/0041_dipole-in-free-space.nec"
+    },
+    {
+      "id": "0042",
+      "title": "Dipole in free space",
+      "deck": "decks/0042_dipole-in-free-space.nec"
+    },
+    {
+      "id": "0043",
+      "title": "Vertical over real ground",
+      "deck": "decks/0043_vertical-over-real-ground.nec",
+      "printout": "printouts/0043_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0044",
+      "title": "Vertical over real ground",
+      "deck": "decks/0044_vertical-over-real-ground.nec",
+      "printout": "printouts/0044_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0045",
+      "title": "Vertical over real ground",
+      "deck": "decks/0045_vertical-over-real-ground.nec"
+    },
+    {
+      "id": "0046",
+      "title": "Vertical over real ground",
+      "deck": "decks/0046_vertical-over-real-ground.nec"
+    },
+    {
+      "id": "0047",
+      "title": "Vertical over real ground",
+      "deck": "decks/0047_vertical-over-real-ground.nec"
+    },
+    {
+      "id": "0048",
+      "title": "Vertical over real ground",
+      "deck": "decks/0048_vertical-over-real-ground.nec"
+    }
+  ]
+}
