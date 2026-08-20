@@ -199,7 +199,8 @@ rows serve a lumped load as port algebra over a `node_gaps` port, which
 this formulation refuses, but a delta in Z_s at a knot collapses the
 integral above to a single diagonal entry — so `Z_driven = Z_unloaded +
 Z_L` at the fed knot is exact here rather than arranged. `wire_loss_power`
-reads back the dissipated watts (distributed only, like the siblings').
+reads back the DISTRIBUTED dissipated watts (like the siblings');
+`lumped_load_power` (momwire#433) reads back each load's own share.
 
 The stencil is pure geometry and rides `_assemble_Z_prepare`; Z_s(ω) is
 not (skin effect and insulation reactance both move with ω) and is built
@@ -2727,8 +2728,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         A grounded end's tent contributes its REAL wing only (σ = 0 empties
         the image wing), which is right: the image is not metal. Lumped
-        loads are not counted — they are components, not wire, and the
-        siblings' readout covers distributed loading only.
+        loads are not counted — they are components, not wire; their own
+        watts are `lumped_load_power`, right below.
         """
         n_w = len(self.wires_polylines)
         per_wire = np.zeros(n_w, dtype=np.float64)
@@ -2761,6 +2762,90 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wire_of = self._wire_of_seg(geom)
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
         return float(per_wire.sum()), per_wire
+
+    def lumped_load_power(self, coeffs):
+        """Ohmic power dissipated in each LUMPED load, from a solve's coeffs
+        (momwire#433, following on #427/#431).
+
+        P_load[i] = ½·Re(Z_Li)·|I(knot_i)|² — the same ``(total_watts,
+        per_load_watts)`` convention as `wire_loss_power`, but this is a
+        SUM over the loads' own delta terms, not a physical integral over
+        the wire: `_loading_stencil`'s "Lumped loads are the delta case of
+        the same integral" reading says a load at knot p is Z_s(l) =
+        Z_L·δ(l − l_p), so its readout is one term per load, not a Gram.
+
+        **Why `coeffs[idx]` is already I(knot) in amps — no wing_sigma.**
+        `wire_loss_power` reconstructs current as `repeat(alpha, 2) *
+        wing_sigma` because it needs each wire SEGMENT's own local-arc
+        current for a per-segment integral. A knot current is a simpler
+        question the tent basis answers directly: `_loading_stencil`
+        collapses the loading integral at a lumped site because "Λ_n(l_p)
+        = δ_np — a tent is 1 at its own knot and 0 at every other", i.e.
+        I(l_p) = Σ_n I_n Λ_n(l_p) = I_p. The coefficient IS the nodal
+        current; `wing_sigma` only re-expresses that same current in a
+        segment's own arc direction for a different (segment-length)
+        integral, and does not change here because |σ| = 1 on every wing a
+        load can reach: an interior knot's two wings are both σ = 1; a K=2
+        junction's real wing is ±1; a grounded end's side-A wing is its
+        image (σ = 0, unused) and side-B — the real base segment — is ±1.
+        (`_lumped_site_index` refuses K >= 3, so no other shape reaches
+        here.) ±1 flips a sign that |I|² erases, so `coeffs[idx]` —
+        NOT `coeffs[idx] * wing_sigma` — is exactly right, and a grounded
+        load lands on its tent's diagonal at full value, the same
+        convention as the feed voltage there (`_loading_stencil`).
+
+        Two loads named at the same knot (`_apply_loading` sums both Z_L
+        onto one diagonal entry) share that knot's current, so their
+        shares ½·Re(Z_L1)|I|² and ½·Re(Z_L2)|I|² sum to
+        ½·Re(Z_L1+Z_L2)|I|² — the series-equivalent load's own reading,
+        because Re is linear. No special case is needed for it here.
+
+        No loads configured ⇒ the structurally absent shape `(0.0, empty
+        array)`, matching `wire_loss_power`'s "zeros, not a crash": there
+        is no `omega` parameter because Z_L is a fixed complex constant
+        from construction (`_wire_loading.normalize_lumped_loads`), unlike
+        Z'_w(ω), so there is nothing to rebuild per solved wavenumber.
+
+        **The power-budget closure, and where razor's own gap lives.**
+        Razor's rows are PATH integrals, not Galerkin projections (module
+        docstring), so `Re(Z)` does not exactly satisfy the power/reaction
+        theorem a Galerkin `Z` would — #427's gate notes measured this as a
+        gap between ΔR_in from RE-SOLVING a loaded system and ΔR predicted
+        by `wire_loss_power`/|I_feed|², ~5.4 % on all four solvers; this
+        readout's own test module reproduces that comparison at 5.36 % on
+        the copper (`wire_conductivity=5.8e7`) 24-segment dipole gate
+        `tests/test_razor_loading.py` already runs. That gap belongs to
+        `wire_loss_power` and a RE-SOLVE, not to this readout: because a
+        lumped stamp is Sherman-Morrison-exact on one diagonal entry,
+        `P_in − P_wire − P_lumped` equals `½·Re(I^H · Z_rad · I)` — the
+        bilinear reaction power of the UNLOADED radiation matrix at the
+        LOADED current — to 1.5e-15 relative, an algebraic identity
+        (`Z = Z_rad + diag(Z_L)` exactly) that contributes zero error of
+        its own. Whether that
+        number equals the true Poynting-flux radiated power cannot be
+        checked directly — momwire keeps no far-field power reader — but
+        it inherits whatever razor-vs-Galerkin gap `Z_rad` itself carries,
+        at roughly the distributed term's few-percent scale, not this
+        readout's.
+        """
+        n_loads = len(self.lumped_loads)
+        per_load = np.zeros(n_loads, dtype=np.float64)
+        if n_loads == 0:
+            return 0.0, per_load
+        geom = self._build_geometry()
+        idx = np.fromiter(
+            (
+                self._lumped_site_index(geom, i, w, arc)
+                for i, (w, arc, _z) in enumerate(self.lumped_loads)
+            ),
+            dtype=np.int64,
+            count=n_loads,
+        )
+        z_l = np.asarray([z for _w, _a, z in self.lumped_loads], dtype=np.complex128)
+        alpha = np.asarray(coeffs, dtype=np.complex128)[: geom["n_basis_total"]]
+        i_knot = alpha[idx]
+        per_load = 0.5 * np.real(z_l) * np.abs(i_knot) ** 2
+        return float(per_load.sum()), per_load
 
     def compute_impedance_swept(self, k_array):
         """Drive-point impedance(s) over a batch of wavenumbers.
