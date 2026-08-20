@@ -471,7 +471,6 @@ class MNASystem:
         couplings=(),
         z_ref=0j,
         z_ref_at=None,
-        probe_keys=None,
     ):
         n = G.shape[0]
         m = len(elements)
@@ -522,17 +521,14 @@ class MNASystem:
         # kind "group1" → payload (node_idx_list, stamped Y block);
         # kind "group2" → payload element index; kind "termination" →
         # payload node index (dissipation = the Load part of the branch).
-        # This stays a 3-tuple deliberately (issue #956): antennaknobs'
-        # `tests/test_gamma_reference.py` indexes `system.probes[0]` and
-        # feeds it straight to `branch_power`, so the arity here is its own
-        # frozen contract, separate from the label-string one.
+        # `NetworkReducer` builds these as `_Probe`, a 3-tuple subclass that
+        # also carries a structured `.key` (issue #956) — the arity stays 3
+        # deliberately, because `branch_power` destructures all three
+        # positions and antennaknobs' `tests/test_gamma_reference.py` reads
+        # `system.probes[0]` and hands it straight back here. A hand-built
+        # plain 3-tuple works everywhere `branch_power` is called directly;
+        # only the budget readout wants the key.
         self.probes = probes or []
-        # Structured probe identity (issue #956), index-aligned with
-        # `self.probes`: `probe_keys[i]` is the `(instance_path,
-        # branch_index, subprobe)` key for `self.probes[i]`. A caller that
-        # only wants `branch_power` never needs this; `NetworkReducer.
-        # excited_state` zips the two to build the power-budget rows.
-        self.probe_keys = list(probe_keys) if probe_keys is not None else []
         # Called only when the solve goes singular, to name the branch that
         # did it (issue #647). A closure rather than stored state: the walk
         # costs nothing on the happy path, which is every path but one.

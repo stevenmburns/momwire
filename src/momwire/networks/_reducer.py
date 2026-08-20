@@ -22,11 +22,18 @@ The power-budget label strings the probes carry are a FROZEN cross-repo
 contract (antennaknobs#956): antennaknobs' schematic layer pattern-matches
 them, so they moved here spelled exactly as they were and are not to be
 reworded until the structured-probe replacement lands. That replacement's
-momwire half is in: every probe (`apply_branches`, ~line 334 on) now also
-carries a structured `(instance_path, branch_index, subprobe)` key, and
-`excited_state`'s ``budget`` exposes it as `_BudgetEntry.key`. The freeze
-stays ON here — the antennaknobs schematic consumer has not switched to the
-structured key yet — until that side lands and lifts it on both.
+momwire half is in: every probe `apply_branches` emits is a `_Probe`, a
+3-tuple carrying a structured `(instance_path, branch_index, subprobe)` key
+beside its label, and `excited_state`'s ``budget`` re-exposes that key as
+`_BudgetEntry.key`.
+
+The freeze stays ON here, for two reasons rather than one. The antennaknobs
+schematic consumer has not switched to the structured key yet — and even once
+it does, the budget list it receives is MIXED: that repo's engine layer
+appends unkeyed plain 2-tuples of its own (see `excited_state`'s docstring).
+So the migration cannot finish until those appenders carry keys too; until
+then a consumer must tolerate rows without `.key`, and the labels stay as
+they are spelled.
 """
 
 from __future__ import annotations
@@ -89,6 +96,39 @@ class _BudgetEntry(tuple):
         self = super().__new__(cls, (label, watts))
         self.key = key
         return self
+
+    def __getnewargs__(self):
+        # tuple's inherited __getnewargs__ hands `__new__` ONE argument (the
+        # plain tuple), so pickle/copy/deepcopy would call this 3-arg
+        # `__new__` with 1 and raise TypeError. Spelling the real arguments
+        # is what makes a budget row survive a round trip — with its key.
+        return (self[0], self[1], self.key)
+
+
+class _Probe(tuple):
+    """One power-budget probe: `(label, kind, payload)` plus `.key`.
+
+    Indexes and unpacks exactly as the historical 3-tuple — `MNASystem.
+    branch_power` destructures all three positions and antennaknobs'
+    `tests/test_gamma_reference.py` reads `system.probes[0][0]` and hands
+    the whole thing back to `branch_power`, so the arity is a contract of
+    its own. The structured identity (issue #956) rides as an attribute for
+    the same reason it does on `_BudgetEntry`: an added slot would be an
+    arity change.
+
+    A subclass rather than a fourth list running alongside `probes`:
+    hand-paired lists have to be kept aligned at every emission site, and
+    the failure mode of a missed pairing is a silently misattributed key
+    rather than an error.
+    """
+
+    def __new__(cls, label, kind, payload, key):
+        self = super().__new__(cls, (label, kind, payload))
+        self.key = key
+        return self
+
+    def __getnewargs__(self):
+        return (self[0], self[1], self[2], self.key)
 
 
 class NetworkReducer:
@@ -352,9 +392,6 @@ class NetworkReducer:
         elements = []
         loads_by_node = {}
         probes = []
-        # Index-aligned with `probes` (issue #956) — see `MNASystem.probes`
-        # for why `probes` itself stays a plain 3-tuple.
-        probe_keys = []
         # Instance paths (issue #489): branch_paths aligns with branches
         # ("" for top-level). Budget labels get a "tuner1: " prefix and the
         # instance's own namespace stripped from its port names, so a
@@ -365,12 +402,16 @@ class NetworkReducer:
         for _bidx, (br, _bpath) in enumerate(zip(self.network.branches, branch_paths)):
             _short = lambda n, p=_bpath: n[len(p) :] if p and n.startswith(p) else n  # noqa: E731
             lab = lambda s, p=_bpath: f"{p[:-1]}: {s}" if p else s  # noqa: E731
-            # Structured probe identity (issue #956): (instance_path,
-            # branch_index, subprobe). `subprobe` is a fixed vocabulary
-            # token, never derived from the label string, so a label
-            # rewording cannot perturb the key — that independence is the
-            # whole point of the identity channel.
-            key = lambda subprobe="", p=_bpath, i=_bidx: (p, i, subprobe)  # noqa: E731
+            # Structured probe identity (issue #956): every probe this branch
+            # emits carries `(instance_path, branch_index, subprobe)` beside
+            # its label. `subprobe` is a fixed vocabulary token naming WHICH
+            # of a multi-probe branch's probes this is (""/"mag"/"lower"/
+            # "upper"/"load"), never derived from the label string — a label
+            # rewording cannot perturb the key, which is the whole point of
+            # having an identity channel separate from the display one.
+            probe = lambda label, kind, payload, sub="", p=_bpath, i=_bidx: _Probe(  # noqa: E731
+                label, kind, payload, (p, i, sub)
+            )
             if isinstance(br, TL):
                 a, b = self.port_to_idx[br.a], self.port_to_idx[br.b]
                 leg = _stamp_abcd(
@@ -381,9 +422,10 @@ class NetworkReducer:
                     tl_abcd(br.z0, br.length, wavelength, vf=br.vf, k1=br.k1, k2=br.k2),
                 )
                 probes.append(
-                    (lab(f"TL {_short(br.a)}→{_short(br.b)}"), "group2abcd", (leg,))
+                    probe(
+                        lab(f"TL {_short(br.a)}→{_short(br.b)}"), "group2abcd", (leg,)
+                    )
                 )
-                probe_keys.append(key())
             elif isinstance(br, BalancedLine):
                 # Balanced 4-terminal line (issues #575/#576/#746): the same
                 # even/odd decomposition `balanced_admittance_4x4` writes as a
@@ -421,7 +463,7 @@ class NetworkReducer:
                         )
                     )
                 probes.append(
-                    (
+                    probe(
                         lab(
                             f"BalancedLine {_short(br.a1)},{_short(br.a2)}"
                             f"→{_short(br.b1)},{_short(br.b2)}"
@@ -430,7 +472,6 @@ class NetworkReducer:
                         tuple(legs),
                     )
                 )
-                probe_keys.append(key())
             elif isinstance(br, Admittance):
                 # Fixed complex Y stamped verbatim — no ω scaling, no auxiliary
                 # current (issue #416). A pure node-admittance block, exactly
@@ -439,13 +480,12 @@ class NetworkReducer:
                 yb = np.array(br.y, dtype=np.complex128)
                 G[np.ix_(idxs, idxs)] += yb
                 probes.append(
-                    (
+                    probe(
                         lab(f"Admittance {'→'.join(map(_short, br.ports))}"),
                         "group1",
                         (idxs, yb),
                     )
                 )
-                probe_keys.append(key())
             elif isinstance(br, TouchstoneLoad):
                 # Measured 1-port (.s2p→.s1p) as a node-to-datum admittance
                 # (issue #593): y = 1/Z(f) interpolated from the file, stamped
@@ -454,13 +494,12 @@ class NetworkReducer:
                 yb = br.data.y_at(C_LIGHT / wavelength)
                 G[k, k] += yb[0, 0]
                 probes.append(
-                    (
+                    probe(
                         lab(f"Touchstone {_short(br.port)}"),
                         "group1",
                         ([k], np.array([[yb[0, 0]]])),
                     )
                 )
-                probe_keys.append(key())
             elif isinstance(br, TouchstoneTwoPort):
                 # Measured 2-port (.s2p) as an in-line 2×2 admittance block
                 # (issue #593): [S](f)→[Y](f) interpolated from the file, stamped
@@ -469,23 +508,21 @@ class NetworkReducer:
                 yb = br.data.y_at(C_LIGHT / wavelength)
                 G[np.ix_([a, b], [a, b])] += yb
                 probes.append(
-                    (
+                    probe(
                         lab(f"Touchstone {_short(br.a)}→{_short(br.b)}"),
                         "group1",
                         ([a, b], yb),
                     )
                 )
-                probe_keys.append(key())
             elif isinstance(br, TwoPort):
                 a, b = self.port_to_idx[br.a], self.port_to_idx[br.b]
                 probes.append(
-                    (
+                    probe(
                         lab(f"TwoPort {_short(br.a)}→{_short(br.b)}"),
                         "group2",
                         len(elements),
                     )
                 )
-                probe_keys.append(key())
                 elements.append(
                     _series_group2(a, b, br.r, br.l, br.c, omega, ql=br.ql, qc=br.qc)
                 )
@@ -497,18 +534,16 @@ class NetworkReducer:
                     )
                     G[k, k] += y_sh
                     probes.append(
-                        (
+                        probe(
                             lab(f"Shunt {_short(br.port)}"),
                             "group1",
                             ([k], np.array([[y_sh]])),
                         )
                     )
-                    probe_keys.append(key())
                 else:
                     probes.append(
-                        (lab(f"Shunt {_short(br.port)}"), "group2", len(elements))
+                        probe(lab(f"Shunt {_short(br.port)}"), "group2", len(elements))
                     )
-                    probe_keys.append(key())
                     elements.append(
                         _series_group2(
                             k, None, br.r, br.l, br.c, omega, ql=br.ql, qc=br.qc
@@ -528,13 +563,12 @@ class NetworkReducer:
                 # current j is i_a (into winding A); KCL carries j out of a
                 # and n·j into b; constitutive row v_a − n·v_b − r_w·j = 0.
                 probes.append(
-                    (
+                    probe(
                         lab(f"Transformer {_short(br.a)}→{_short(br.b)}"),
                         "group2",
                         len(elements),
                     )
                 )
-                probe_keys.append(key())
                 elements.append(
                     _Group2Element(
                         a,
@@ -553,13 +587,13 @@ class NetworkReducer:
                     y_mag = 1.0 / zl
                     G[a, a] += y_mag
                     probes.append(
-                        (
+                        probe(
                             lab(f"Transformer {_short(br.a)}→{_short(br.b)} (mag)"),
                             "group1",
                             ([a], np.array([[y_mag]])),
+                            "mag",
                         )
                     )
-                    probe_keys.append(key("mag"))
             elif isinstance(br, Autotransformer):
                 if not 0.0 <= br.k <= 1.0:
                     raise ValueError(
@@ -593,10 +627,8 @@ class NetworkReducer:
                 i1, i2 = len(elements), len(elements) + 1
                 lo = lab(f"Autotransformer {_short(br.a)}→{_short(br.b)} (lower)")
                 hi = lab(f"Autotransformer {_short(br.a)}→{_short(br.b)} (upper)")
-                probes.append((lo, "group2r", (i1, r1)))
-                probe_keys.append(key("lower"))
-                probes.append((hi, "group2r", (i2, r2)))
-                probe_keys.append(key("upper"))
+                probes.append(probe(lo, "group2r", (i1, r1), "lower"))
+                probes.append(probe(hi, "group2r", (i2, r2), "upper"))
                 elements.append(_Group2Element(None, a_i, c_v=1.0 + 0j, c_j=z1, e=0j))
                 elements.append(_Group2Element(a_i, b_i, c_v=1.0 + 0j, c_j=z2, e=0j))
                 # v_a = z1·j1 + zm·j2 and v_b − v_a = zm·j1 + z2·j2: the
@@ -622,7 +654,7 @@ class NetworkReducer:
                 # constitutive row v_a − v_b − n·v_p = r_w·j refers the winding
                 # R to the secondary; the ideal element is lossless.
                 probes.append(
-                    (
+                    probe(
                         lab(
                             f"FloatingBalun {_short(br.primary)}→"
                             f"({_short(br.a)},{_short(br.b)})"
@@ -631,7 +663,6 @@ class NetworkReducer:
                         len(elements),
                     )
                 )
-                probe_keys.append(key())
                 elements.append(
                     _Group2Element(
                         a,
@@ -653,16 +684,16 @@ class NetworkReducer:
                     y_mag = 1.0 / zl
                     G[p, p] += y_mag
                     probes.append(
-                        (
+                        probe(
                             lab(
                                 f"FloatingBalun {_short(br.primary)}→"
                                 f"({_short(br.a)},{_short(br.b)}) (mag)"
                             ),
                             "group1",
                             ([p], np.array([[y_mag]])),
+                            "mag",
                         )
                     )
-                    probe_keys.append(key("mag"))
             elif isinstance(br, Load):
                 # A series load needs a real current path to sit in: a gap
                 # port's segment, or (issue #910) a vertex port's through-
@@ -676,11 +707,10 @@ class NetworkReducer:
                         "impedance in an antenna current path, which only "
                         "PortOnWire and PortAtVertex have"
                     )
-                # Structured identity for the termination probe(s) this Load
-                # feeds (issue #956): several Loads on one node fold into a
-                # single "termination" probe below, so each contributing
-                # branch's own (path, index) is carried through and the
-                # first one anchors the combined probe's key.
+                # Every Load at a node shares ONE termination branch (and so
+                # one current), but each keeps its own budget row and its own
+                # structured identity (issue #956) — carry the branch's path
+                # and index along to the emission site below.
                 loads_by_node.setdefault(self.port_to_idx[br.port], []).append(
                     (br, _bpath, _bidx)
                 )
@@ -737,8 +767,14 @@ class NetworkReducer:
                     # (a Load only ever reaches loads_by_node), so this
                     # cannot collide with another probe's key.
                     lead_p, lead_i = loads[0][1], loads[0][2]
-                    probes.append((f"Load {'+'.join(names)}", "termination", k))
-                    probe_keys.append((lead_p, lead_i, "load"))
+                    probes.append(
+                        _Probe(
+                            f"Load {'+'.join(names)}",
+                            "termination",
+                            k,
+                            (lead_p, lead_i, "load"),
+                        )
+                    )
                 continue
             e = emf.get(k, 0j)
             # Γ-referenced source (issue #746): a DRIVEN port's EMF sits behind
@@ -776,24 +812,20 @@ class NetworkReducer:
             if loads:
                 names = [ld.port for ld, _p, _i in loads]
                 lead_p, lead_i = loads[0][1], loads[0][2]
-                probes.append((f"Load {'+'.join(names)}", "termination", k))
-                probe_keys.append((lead_p, lead_i, "load"))
+                probes.append(
+                    _Probe(
+                        f"Load {'+'.join(names)}",
+                        "termination",
+                        k,
+                        (lead_p, lead_i, "load"),
+                    )
+                )
 
-        # The two lists are hand-paired at ~17 emission sites, so a probe
-        # added without its key would misalign every key after it — and the
-        # zip in `excited_state` would SILENTLY truncate rather than say so.
-        # Assert here, where the offending site is still on the stack.
-        assert len(probes) == len(probe_keys), (
-            f"probe/key misalignment: {len(probes)} probes, "
-            f"{len(probe_keys)} keys — every probes.append() needs its "
-            "probe_keys.append() (antennaknobs#956)"
-        )
         return MNASystem(
             G,
             elements,
             terminations,
             probes=probes,
-            probe_keys=probe_keys,
             diagnose=lambda wl=wavelength: self._singularity_report(wl),
             couplings=couplings,
             z_ref=z_ref,
@@ -845,14 +877,24 @@ class NetworkReducer:
                          branch order (issue #299): TL and parallel-Shunt
                          stamps via ½·Re(v†·Y_br·v), TwoPort/series-Shunt
                          via their explicit branch currents, Loads via the
-                         termination drop. Lossless branches report ~0.
-                         Power delivered to the antenna (radiated + any
-                         wire/ground loss inside the MoM solve) is
-                         p_in − Σ watts. Each entry still unpacks as
-                         ``(label, watts)`` (issue #956) and additionally
-                         carries ``.key`` — ``(instance_path, branch_index,
-                         subprobe)`` — a structured identity a consumer can
-                         match on instead of the label string.
+                         termination drop. Lossless branches report ~0. Power
+                         delivered to the antenna (radiated + any wire/ground
+                         loss inside the MoM solve) is p_in − Σ watts. Each
+                         entry still unpacks as ``(label, watts)`` (issue
+                         #956) and additionally carries ``.key`` —
+                         ``(instance_path, branch_index, subprobe)`` — a
+                         structured identity a consumer can match on instead
+                         of the label string.
+
+        A CAVEAT for anyone keying on ``.key`` (issue #956): the budget a real
+        consumer sees is a MIXED list. antennaknobs' engine layer appends its
+        own rows to this one — its momwire engine adds the wire-loss row as a
+        plain 2-tuple, and its nec5 engine builds the whole budget out of
+        plain 2-tuples — so a consumer must tolerate rows without ``.key``
+        (``getattr(row, "key", None)``) rather than assume every row has one.
+        Until those appenders emit keyed rows, ``.key`` is an ADDITION to the
+        label channel, not a replacement for it, and the label freeze this
+        module's docstring records cannot be lifted.
 
         The termination branches carry the physical port currents, so the
         source power reads directly off the solution vector:
@@ -897,12 +939,7 @@ class NetworkReducer:
             else:
                 p_in += 0.5 * float(np.real(e * np.conj(j[col])))
         budget = [
-            _BudgetEntry(label, system.branch_power((label, kind, payload)), pkey)
-            # strict: a length mismatch is a dropped probe, not a short
-            # budget — house idiom, and the loud half of the assert above.
-            for (label, kind, payload), pkey in zip(
-                system.probes, system.probe_keys, strict=True
-            )
+            _BudgetEntry(p[0], system.branch_power(p), p.key) for p in system.probes
         ]
         p_diss = sum(w for _label, w in budget)
         # A lossless network's probes read pure float noise (|w| ~ 1e-17·p_in

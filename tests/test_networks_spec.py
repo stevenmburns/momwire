@@ -18,6 +18,9 @@ Every antenna Y here is synthetic, so a failure names a stamp, not a design.
 
 from __future__ import annotations
 
+import copy
+import pickle
+
 import numpy as np
 import pytest
 
@@ -309,6 +312,10 @@ def test_branch_paths_do_not_change_the_answer():
 # ---------------------------------------------------------------------------
 
 
+def _pickled(obj):
+    return pickle.loads(pickle.dumps(obj))
+
+
 def _nested_autotransformer_net():
     """A 2-level-nested composite (`outer.` / `outer.auto.`) whose middle
     branch is an `Autotransformer`, which emits TWO probes ("lower"/"upper")
@@ -355,11 +362,10 @@ def test_probe_keys_are_unique_in_a_nested_composite_with_an_autotransformer():
     assert {k[2] for k in auto_keys} == {"lower", "upper"}
 
 
-def test_probe_keys_are_unique_across_a_composite_with_shared_loads():
-    """Gate 3 (continued): two `Load`s on the same node fold into one
-    "termination" probe, and instance-path branches at multiple nesting
-    depths must still all resolve to distinct keys."""
-    net = Network(
+def _shared_loads_net():
+    """Two co-located `Load`s (a resistor and a pure inductor, both on port
+    "f") sharing one termination branch, under a composite's instance path."""
+    return Network(
         ports={
             "f": PortOnWire("f"),
             "in": PortVirtual("in"),
@@ -375,7 +381,15 @@ def test_probe_keys_are_unique_across_a_composite_with_shared_loads():
         sources=[Driven(port="in")],
         branch_paths=["tuner1.", "tuner1.", "", "", ""],
     )
-    _v, _eff, _p_in, budget = reducer(net).excited_state(synth_y(1, 4), WL)
+
+
+def test_probe_keys_are_unique_across_a_composite_with_shared_loads():
+    """Gate 3 (continued): two `Load`s on the same node fold into one
+    "termination" probe, and instance-path branches at multiple nesting
+    depths must still all resolve to distinct keys."""
+    _v, _eff, _p_in, budget = reducer(_shared_loads_net()).excited_state(
+        synth_y(1, 4), WL
+    )
     keys = [entry.key for entry in budget]
     assert len(keys) == len(set(keys)), f"duplicate probe keys: {keys}"
     # The two co-located Loads combine into ONE probe, anchored on the first
@@ -387,25 +401,20 @@ def test_probe_keys_are_unique_across_a_composite_with_shared_loads():
 def test_budget_key_is_independent_of_label_spelling():
     """The decisive gate (antennaknobs#956): the label strings the reducer
     emits are still frozen (byte-identical), but `.key` is not DERIVED from
-    them — it comes from the index-aligned `system.probe_keys`, not from any
-    parsing of `system.probes`' label text. Prove it with a local re-render —
-    take the reducer's own `(label, kind, payload)` probes (the real ones
-    `apply_branches` built) and re-render an entirely different display
-    string per probe from the same (kind, payload) data. If the key were
-    secretly built from the label text, mangling the label would perturb it;
-    it does not, and the watts values (kind/payload-derived) do not move
-    either."""
+    them — the probe carries it as its own channel, not as something parsed
+    back out of its label text. Prove it with a local re-render — take the
+    reducer's own probes (the real ones `apply_branches` built) and re-render
+    an entirely different display string per probe from the same (kind,
+    payload) data. If the key were secretly built from the label text,
+    mangling the label would perturb it; it does not, and the watts values
+    (kind/payload-derived) do not move either."""
     net = _nested_autotransformer_net()
     system = reducer(net).apply_branches(synth_y(1, 4), WL)
 
     def render(labeller):
         return [
-            _BudgetEntry(
-                labeller(label, i), system.branch_power((label, kind, payload)), key
-            )
-            for i, ((label, kind, payload), key) in enumerate(
-                zip(system.probes, system.probe_keys)
-            )
+            _BudgetEntry(labeller(p[0], i), system.branch_power(p), p.key)
+            for i, p in enumerate(system.probes)
         ]
 
     original = render(lambda label, i: label)
@@ -482,6 +491,38 @@ def test_budget_entries_unpack_as_two_tuples_backward_compat():
     for entry in budget:
         assert len(entry) == 2
         assert isinstance(entry.key, tuple) and len(entry.key) == 3
+
+
+@pytest.mark.parametrize("clone", [_pickled, copy.copy, copy.deepcopy])
+def test_budget_rows_and_probes_survive_being_copied(clone):
+    """A tuple subclass with a multi-argument `__new__` is NOT copyable by
+    default: pickle and both copies reconstruct through `__new__` using the
+    arguments `__getnewargs__` reports, and tuple's inherited version reports
+    ONE (the plain tuple), so the 3-/4-argument `__new__` here raises
+    TypeError. That bites the moment a budget lands in anything that
+    round-trips — a multiprocessing sweep, a result cache, `copy.deepcopy` of
+    a solve result. Both classes spell their own `__getnewargs__`, which
+    fixes the crash AND carries `.key` across the copy."""
+    _v, _eff, _p_in, budget = reducer(_shared_loads_net()).excited_state(
+        synth_y(1, 4), WL
+    )
+    system = reducer(_shared_loads_net()).apply_branches(synth_y(1, 4), WL)
+
+    for row in budget:
+        again = clone(row)
+        assert type(again) is type(row)
+        assert tuple(again) == tuple(row)
+        assert again.key == row.key
+
+    for probe in system.probes:
+        again = clone(probe)
+        assert type(again) is type(probe)
+        assert again[0] == probe[0] and again[1] == probe[1]
+        assert again.key == probe.key
+
+    # The whole list at once — the shape a cache or a worker boundary
+    # actually moves.
+    assert [e.key for e in clone(budget)] == [e.key for e in budget]
 
 
 # ---------------------------------------------------------------------------
