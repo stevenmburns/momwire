@@ -480,10 +480,10 @@ class RunData:
     # -- the tables --------------------------------------------------------
     loads: tuple[LoadRow, ...] = ()
     # One table, two row types — an ``NT`` card's admittance matrix and a
-    # ``TL`` card's line.  No captured deck writes both (the corpus's three
-    # mixed decks all stand over a ``GD`` ground and refuse a rung earlier),
-    # so the heading a mixed table would carry is unobserved and the renderer
-    # takes it from the first row.
+    # ``TL`` card's line — and three captured decks (0000, 0023, 0025) write
+    # both, under one heading, in one sub-table each.  :func:`_network_data`
+    # heads each RUN of same-kind rows, so the order of this tuple IS the
+    # order of the sub-tables.
     networks: tuple[NetworkRow | LineRow, ...] = ()
     network_excitation: tuple[PortRow, ...] = ()
     sources: tuple[PortRow, ...] = ()
@@ -589,7 +589,9 @@ _NETWORK_COLUMNS: tuple[str, ...] = (
 # The ``TL`` form of the same table (0027, 0028).  Note the first heading row
 # spells ``SEG.`` with one space less than the ``NT`` form does — the two
 # headers were written separately in the engine and this transcription keeps
-# both as they came.
+# both as they came, and 0000/0023/0025 print them eight lines apart under one
+# heading, which is where that difference stops being a transcription worry and
+# becomes a byte the mixed-table gate compares.
 _LINE_COLUMNS: tuple[str, ...] = (
     "      - FROM -    - TO -           TRANSMISSION LINE               "
     "-  -  SHUNT ADMITTANCES (MHOS)  -  -              LINE",
@@ -893,16 +895,44 @@ def _network_row(row: NetworkRow | LineRow) -> str:
 
 
 def _network_data(data: RunData) -> list[str]:
-    """The table, under whichever of its two column headers the rows want.
+    """The table: one heading, and one sub-table per RUN of same-kind rows.
 
-    The header is taken from the FIRST row because no captured deck mixes the
-    two forms and so no capture says what a mixed table's heading looks like
-    (:mod:`._serve` refuses a mixed deck rather than guess).
+    ONE ``- - - NETWORK DATA - - -`` heading covers the whole thing, however
+    many card kinds are under it, and each run of rows carries its own column
+    header block; consecutive sub-tables are separated by a single blank line.
+    Measured on the corpus's three mixed decks (0000, 0023, 0025), whose
+    printouts land the ``TL`` block, one blank, and then the ``NT`` block —
+    0000's two lines and one network, 0023's four and one, 0025's four and
+    three.  A single-kind table is the same rule with one run, which is why the
+    seven single-kind captures come through this unchanged.
+
+    Grouping by RUN rather than by kind is the reading with the least invented
+    in it.  Both models that fit the captures — "the engine sorts the table by
+    card kind" and "the engine prints cards in order and re-heads whenever the
+    kind changes" — agree on every observed table, because every captured deck
+    writes all of its ``TL`` cards before any of its ``NT`` cards; runs is what
+    they have in common.  Where they part company, on a deck that interleaves,
+    :mod:`._serve` refuses rather than pick one.
     """
-    columns = (
-        _LINE_COLUMNS if isinstance(data.networks[0], LineRow) else _NETWORK_COLUMNS
-    )
-    return [_NETWORK_HEADING, "", *columns, *(_network_row(r) for r in data.networks)]
+    lines = [_NETWORK_HEADING, ""]
+    for index, run in enumerate(_network_runs(data.networks)):
+        if index:
+            lines.append("")
+        columns = _LINE_COLUMNS if isinstance(run[0], LineRow) else _NETWORK_COLUMNS
+        lines += [*columns, *(_network_row(row) for row in run)]
+    return lines
+
+
+def _network_runs(
+    rows: tuple[NetworkRow | LineRow, ...],
+) -> list[list[NetworkRow | LineRow]]:
+    """``rows`` split into maximal runs of one row type, order preserved."""
+    runs: list[list[NetworkRow | LineRow]] = []
+    for row in rows:
+        if not runs or type(runs[-1][0]) is not type(row):
+            runs.append([])
+        runs[-1].append(row)
+    return runs
 
 
 def _currents(data: RunData) -> list[str]:
