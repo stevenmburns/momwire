@@ -50,3 +50,55 @@ def normalize_wire_radius(value, n_wires, *, per_wire_refusal=None):
         )
     uniform = float(radius[0]) if np.all(radius == radius[0]) else None
     return radius, uniform
+
+
+# The validation floor: the deck front fuses span endpoints onto its
+# `deck/_polylines._NODE_EPS` = 1e-6 m grid, so two ends it calls one node
+# can differ by up to ~1.8e-6 m Euclidean. 1e-5 m accepts everything that
+# grid can produce with a 5x margin, whatever the mesh scale.
+_JUNCTION_COINCIDENCE_FLOOR = 1e-5
+
+
+def check_junction_coincidence(wires_polylines, n_per_edge_per_wire, junctions):
+    """Refuse junction groups whose member wire-ends do not coincide.
+
+    momwire#522, the #518 postmortem's guardrail: an explicit ``junctions=``
+    spec with a wrong wire index welds ends that sit nowhere near each other
+    (KCL between non-coincident points), and the member whose entry was lost
+    is silently zeroed instead — both produce a well-posed WRONG model that
+    converges cleanly, which is why the mistake must refuse at construction
+    rather than surface as physics.
+
+    ``junctions`` is the solver's already-normalized list of
+    ``[(wire_idx, "start"|"end"), ...]`` groups. Each group's first member is
+    the reference; every other member must lie within tolerance of it. The
+    tolerance is scale-aware — 1e-3 of the shortest terminal segment among
+    the group's members — floored at ``_JUNCTION_COINCIDENCE_FLOOR`` so the
+    deck front's node-grid quantization can never fire it. Raises
+    ``ValueError`` naming the group, both ends, the distance and the
+    tolerance; returns None on success.
+    """
+    for j, group in enumerate(junctions):
+        anchors = []
+        seg_lens = []
+        for w, end in group:
+            pl = np.asarray(wires_polylines[w], dtype=float)
+            npe = n_per_edge_per_wire[w]
+            if end == "start":
+                anchor, edge, count = pl[0], pl[1] - pl[0], npe[0]
+            else:
+                anchor, edge, count = pl[-1], pl[-1] - pl[-2], npe[-1]
+            anchors.append(anchor)
+            seg_lens.append(float(np.linalg.norm(edge)) / max(int(count), 1))
+        tol = max(_JUNCTION_COINCIDENCE_FLOOR, 1e-3 * min(seg_lens))
+        w0, end0 = group[0]
+        for (w, end), anchor in zip(group[1:], anchors[1:]):
+            dist = float(np.linalg.norm(anchor - anchors[0]))
+            if dist > tol:
+                raise ValueError(
+                    f"junction {j}: members do not coincide - wire {w} {end} at "
+                    f"{tuple(anchor)} is {dist:.6g} m from wire {w0} {end0} at "
+                    f"{tuple(anchors[0])} (tolerance {tol:.3g} m, 1e-3 of the "
+                    f"shortest terminal segment; a junction group must name "
+                    f"ONE point - momwire#522)"
+                )

@@ -862,6 +862,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         )
                     normalized.append((int(w), end))
                 self.junctions.append(normalized)
+            _wire_spec.check_junction_coincidence(
+                self.wires_polylines, self.n_per_edge_per_wire, self.junctions
+            )
 
         # Junction ports (issue #172): junction groups promoted to network
         # ports. Each entry is (junction_index, voltage) — a plain int means

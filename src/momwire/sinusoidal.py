@@ -575,6 +575,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         )
                     normalized.append((int(w), end))
                 self.junctions.append(normalized)
+            _wire_spec.check_junction_coincidence(
+                self.wires_polylines, self.n_per_edge_per_wire, self.junctions
+            )
 
         self.junction_ports = self._normalize_junction_ports(junction_ports)
 
