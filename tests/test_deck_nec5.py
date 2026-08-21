@@ -334,7 +334,7 @@ REFUSALS = [
     pytest.param(("RP 4,1,361,1000,90.,0.,0.,1.,0.",), "RP", id="rp-mode-4"),
     pytest.param(("RP 0,1,361,1002,90.,0.,0.,1.,0.",), "RP", id="rp-xnda-1002"),
     pytest.param(("QQ 0",), "QQ", id="unknown-card"),
-    pytest.param(("NH 0,1,1,1,0.,0.,0.,0.,0.,0.",), "NH", id="near-magnetic"),
+    pytest.param(("NH 1,1,1,1,0.,0.,0.,0.,0.,0.",), "NH", id="nh-spherical"),
     pytest.param(("GX 0,101",), "GX", id="symmetry"),
     pytest.param(("FR 0,3,0,0,14.,0.05",), "FR", id="fr-multipoint"),
     pytest.param(("EX 4,1,-2,0,1.,0.",), "EX", id="node-minus-two"),
@@ -500,6 +500,30 @@ def test_the_request_cards_follow_the_display():
             step=(0.0, 0.0, 0.0),
         ),
     )
+
+
+def test_nh_parses_as_ne_s_twin_with_the_magnetic_flag_up():
+    """momwire#513: capture sitting 4 falsified "EZNEC never emits NH" —
+    capture 0111 wrote one (the Near Field Analysis dialog's E/H radio
+    button picks the mnemonic).  Same ten fields, same handler, one flag;
+    the spherical form refuses exactly as NE's does (the REFUSALS table)."""
+    def dipole_with(card: str) -> str:
+        lines = DIPOLE.splitlines()
+        at = lines.index("RP 0,1,361,1000,90.,0.,0.,1.,0.")
+        return "\n".join([*lines[:at], card, *lines[at + 1 :]]) + "\n"
+
+    (request,) = parse_nec5(dipole_with("NH 0,5,3,1,-1.,-2.,10.,0.5,1.,0.")).requests
+    assert request == Nec5NearFieldRequest(
+        coordinates=0,
+        counts=(5, 3, 1),
+        origin=(-1.0, -2.0, 10.0),
+        step=(0.5, 1.0, 0.0),
+        magnetic=True,
+    )
+    # And NE's own record keeps the flag DOWN - 0022 above is the gate that
+    # the default did not drift.
+    (electric,) = parse_nec5(dipole_with("NE 0,1,1,1,0.,0.,0.,0.,0.,0.")).requests
+    assert electric.magnetic is False
 
 
 def test_the_frequency_is_one_point_in_mhz():
