@@ -42,6 +42,16 @@ was refused for four units as an unobserved layout.  Their own printouts show
 it: one heading, the ``TL`` sub-table under its own column header block, one
 blank, and the ``NT`` sub-table under its.  The refusal is gone and the layout
 is gated byte for byte, headers included.
+
+**momwire#511** adds four more and a seventh gate: the corpus's only decks that
+are BOTH phased and networked, which is the shape the last drive refusal named.
+0116/0117 are 0031's four-square with ONE ``TL`` bolted across a diagonal;
+0120/0121 are 0000's L-network cardioid with ONE second ``EX 4`` added.  Each
+pair therefore has a captured control on the other side of exactly one card,
+which is what lets gate 7 ask what the added card was WORTH rather than only
+whether the composed answer is plausible — and the answers are large: the line
+breaks a symmetry the four-square's own capture prints twice, and the second
+source moves the first source's port by 31 Ω.
 """
 
 from __future__ import annotations
@@ -49,6 +59,7 @@ from __future__ import annotations
 import functools
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from momwire.deck._nec5 import parse_nec5
@@ -58,11 +69,15 @@ from momwire.eznec._printout import LineRow, NetworkRow
 from momwire.eznec._shell import render
 from momwire.networks import TL
 from test_eznec_printout import deck_text, extract, printout_text
-from test_eznec_serve import drive_cells, mask, served
+from test_eznec_serve import _NETWORK_LOSS_DUST, drive_cells, mask, served
 
 # Every capture carrying a ``TL`` or an ``NT`` card AND a printout to gate it
 # against — the seven #497 U5 brought into scope, and the seventeen whose
 # printouts landed with #504 U3.
+#
+# momwire#511 takes it to twenty-eight and the four it adds are the corpus's
+# only decks that are BOTH phased and networked — the shape the drive refusal
+# named until they arrived.
 NETWORK_IDS = (
     "0000",
     "0001",
@@ -88,13 +103,24 @@ NETWORK_IDS = (
     "0028",
     "0029",
     "0030",
+    # momwire#511's four: the corpus's only decks that are BOTH phased and
+    # networked.  Gate 7 is theirs.
+    "0116",
+    "0117",
+    "0120",
+    "0121",
 )
 
-# The three whose table carries both card kinds.  All three stand over a bare
-# ``GD``, all three write every ``TL`` before every ``NT``, and all three print
+# The FIVE whose table carries both card kinds.  All five stand over a bare
+# ``GD``, all five write every ``TL`` before every ``NT``, and all five print
 # the two sub-tables in that order — which is the measurement that dissolved
 # ``_REFUSE_MIXED_NETWORKS``.
-MIXED_IDS = ("0000", "0023", "0025")
+#
+# It was three until momwire#511, and the two that joined are 0000's own cards
+# with a second ``EX`` on them: the mixed-table layout is a property of the
+# NETWORK DATA block and not of the drive, which is worth having on the record
+# now that a deck can be mixed and phased at once.
+MIXED_IDS = ("0000", "0023", "0025", "0120", "0121")
 
 # The oracle triple, by configuration.  0014 is A again with ``XQ`` in place
 # of ``RP`` — the same cards, so it is the control on the request card rather
@@ -174,6 +200,28 @@ Z_SNAP = complex(225.39, -60.593)
 # impedances are.  That is a formulation difference being AMPLIFIED by the
 # array, and it is the clearest picture of the offset's shape anywhere in the
 # corpus.
+#
+# And momwire#511's four, measured 2026-08-21.  The row quoted is the FIRST
+# ``ANTENNA INPUT PARAMETERS`` row, so that the sweep this table drives keeps
+# one shape; every other row of every one of them is pinned in
+# :data:`PHASED_NETWORK_Z_BAR` below.
+#
+#   id    Z (capture)        Z (served)        |dZ|    peak cap/served  d
+#   0116  -45.158-52.766j    -45.494-46.064j    6.710   (XQ, none)     —
+#   0117  -45.158-52.766j    -45.494-46.064j    6.710    5.45 / 5.39   0.06
+#   0120   0.22391+48.345j   -0.064422+48.581j  0.373   (XQ, none)     —
+#   0121   0.22391+48.345j   -0.064422+48.581j  0.373   -0.94 /-0.97   0.03
+#
+# Two families, and each lands in the one its DRIVE puts it in rather than the
+# one its cards do.  0116/0117 are 0031's four-square with one ``TL`` bolted
+# across it and their four rows sit at 5.13 to 7.92 Ω, which is 0031's own
+# 6.27-to-8.31 family to the tenth: the sources still stand on the antenna's
+# four bases, the network hangs between two UNDRIVEN interior nodes, and the
+# printed impedance is a feedpoint impedance with all of the feed region's
+# formulation offset in it.  0120/0121 are the cardioid whose two sources stand
+# ON connection points, and their 0.37 and 0.56 Ω sit with the seventeen
+# driven-through-a-network rows above rather than with the four-square — the
+# same argument those rows make, arriving now on a deck with TWO generators.
 Z_BAR = {
     "0000": 0.14,
     "0001": 0.61,
@@ -199,6 +247,10 @@ Z_BAR = {
     "0028": 24.42,
     "0029": 2.45,
     "0030": 2.71,
+    "0116": 8.39,
+    "0117": 8.39,
+    "0120": 0.47,
+    "0121": 0.47,
 }
 
 # |(Z_C - Z_A) served - (Z_C - Z_A) captured|: the SEPARATION between the
@@ -224,6 +276,8 @@ PEAK_BAR = {
     "0028": 0.05,
     "0029": 0.05,
     "0030": 0.05,
+    "0117": 0.075,
+    "0121": 0.05,
 }
 
 # Largest per-row difference in TOTAL gain among the rows the capture puts
@@ -258,6 +312,8 @@ SHAPE_BAR = {
     "0028": 0.08,
     "0029": 0.05,
     "0030": 0.05,
+    "0117": 0.25,
+    "0121": 0.34,
 }
 
 # Wire-current and charge-density tables, worst element relative to that
@@ -295,6 +351,10 @@ CURRENT_BAR = {
     "0028": 0.113,
     "0029": 0.073,
     "0030": 0.077,
+    "0116": 0.026,
+    "0117": 0.026,
+    "0120": 0.029,
+    "0121": 0.029,
 }
 CHARGE_BAR = {
     "0000": 0.095,
@@ -321,6 +381,10 @@ CHARGE_BAR = {
     "0028": 0.114,
     "0029": 0.092,
     "0030": 0.096,
+    "0116": 0.083,
+    "0117": 0.083,
+    "0120": 0.097,
+    "0121": 0.097,
 }
 
 # Connection points that are ANTENNA terminals — the pinned virtual nodes,
@@ -356,6 +420,10 @@ CONNECTION_BAR = {
     "0028": 16.3,
     "0029": 1456.2,
     "0030": 1379.7,
+    "0116": 4.03,
+    "0117": 4.03,
+    "0120": 2.51,
+    "0121": 2.51,
 }
 CONNECTION_CUTOFF = 1e4
 
@@ -364,6 +432,12 @@ CONNECTION_CUTOFF = 1e4
 # that read 200 % — where the number is structural rather than solved.
 # Measured worst, plus 25 %.  #504 U3's seventeen add nothing to it: 0.20 on
 # 0023/0025, 0.13 on 0000, 0.11 on 0024 and exactly 0.00 on the other thirteen.
+# Nor do momwire#511's four: 0.00 on 0116/0117, whose budget is structural for
+# the opposite reason (a lossless line between two undriven points delivers
+# nothing, so RADIATED is INPUT and the efficiency is 100.00 on both sides),
+# and 0.18 on 0120/0121, the corpus's first budget strictly BETWEEN 100 % and
+# 200 % (:func:`test_the_cardioid_s_two_driven_connection_points_read_161_
+# percent`).
 EFFICIENCY_BAR = 0.83
 
 
@@ -742,10 +816,28 @@ def test_the_budget_closes_the_way_the_engine_closes_it(cid):
     exactly what 0027 and 0028 print, and the line is then omitted rather
     than printed negative.  Reproducing that is not endorsing it; it is what
     a drop-in replacement is for.
+
+    The presence claim carries one exemption and momwire#511 is what found it.
+    0116/0117 hang ONE lossless ``TL`` between two undriven points, so the sum
+    is exactly zero and the engine's own crumb decided the sign: it printed
+    ``2.1316E-13 WATTS`` against a 1.1538E+02 input, this seam's crumb lands at
+    −3.6e-14, and no rule change reaches that.  The sign of a zero is not a
+    number (:data:`~test_eznec_serve._NETWORK_LOSS_DUST`, the same
+    normalization the structure gate applies).  What is still gated on those two
+    is everything else in the budget — the sum, the arithmetic and the
+    efficiency — and the presence claim itself everywhere the number means
+    anything, which is the other twenty-six.
     """
     data = extract(served(cid))
     power, want = data.power, extract(printout_text(cid)).power
-    assert (power.network_loss is None) == (want.network_loss is None)
+    captured_loss = want.network_loss
+    dust = captured_loss is not None and abs(captured_loss) <= (
+        _NETWORK_LOSS_DUST * power.input_power
+    )
+    if not dust:
+        # Including every capture that prints NO line: an ABSENT one is never
+        # dust, so 0027 and 0028 keep the claim in full.
+        assert (power.network_loss is None) == (captured_loss is None)
     loss = power.network_loss or -sum(row.power for row in data.network_excitation)
     assert loss == pytest.approx(
         -sum(row.power for row in data.network_excitation), rel=1e-4
@@ -914,6 +1006,400 @@ def test_two_addresses_at_a_five_wire_junction_refuse_rather_than_guess():
     assert "address a node where 5 wires meet" in printout
     assert "1,-1 and 2,-1" in printout
     assert "ANTENNA INPUT PARAMETERS" not in printout
+
+
+# --------------------------------------------------------------------------
+# gate 7 — the phased drive THROUGH a network (momwire#511)
+# --------------------------------------------------------------------------
+#
+# The composition, and the four captures that made it checkable.  Until
+# 2026-08-20 this was a refusal by name: the reducer served networks, the
+# sub-block solve served phased drives, composing them was a short edit, and
+# nothing in forty-nine captures said what the engine did with the pair.  Four
+# printouts arrived and said it.
+#
+# What the composition IS, in one sentence, because every gate below is a way
+# of not taking it on trust: an `EX 4` fixes a port's SOURCE current — antenna
+# plus network, the reducer's termination branch — so the seam measures the map
+# from the driven sites' applied voltages to their source currents one unit
+# probe at a time through the same reduced system the final solve uses, inverts
+# it against the set currents, and solves once more at the answer.
+#
+# The two pairs are a CONTROLLED EXPERIMENT and that is why these four and not
+# any four.  0117 is 0031 with one `TL` card added and nothing else changed;
+# 0121 is 0000 with one `EX` card added and nothing else changed.  So each half
+# of "phased AND networked" has a captured control on the other side of it, and
+# the gates below can ask what the added card was WORTH rather than only
+# whether the answer is plausible.
+PHASED_NETWORK_IDS = ("0116", "0117", "0120", "0121")
+
+# The two with an `RP` cut; the other two answer `XQ`.
+PHASED_NETWORK_CUTS = ("0117", "0121")
+
+# Every row of the four tables, measured 2026-08-21 and barred |dZ| plus 25 %,
+# the same shape ``test_eznec_serve.py``'s :data:`~test_eznec_serve.
+# PHASED_Z_BAR` uses on the network-free pair.  Per ROW, for that data's
+# reason: four coupled ports are four different impedances and a seam that
+# solved one wrong could still average into a plausible first row.
+#
+#   id    tag  Z (capture)        Z (served)         |dZ|
+#   0116   1   -45.158-52.766j    -45.494-46.064j    6.710
+#   0116   2    32.820-27.022j     33.414-21.526j    5.528
+#   0116   3    72.032-65.530j     72.811-60.461j    5.129
+#   0116   4    55.690+37.801j     58.338+45.265j    7.920
+#   0120   3    0.22391+48.345j   -0.064422+48.581j  0.373
+#   0120   2    49.710-4.6729j     50.224-4.4527j    0.559
+#
+# 0117 and 0121 are the same six rows again (only the request card differs), so
+# they carry the same bars rather than measured twins of them — which is itself
+# a claim, and :func:`test_the_request_card_does_not_move_the_drive` is where
+# it is checked.
+#
+# 0120's first row is the one entry here where the SIGN of R differs between
+# the two codes, +0.224 Ω captured against −0.064 Ω served, and it is not the
+# 0031 case: that port is a virtual node behind an `LD 4 … 1.E+10` pin and an
+# L-network, its resistance is 0.5 % of its own |Z|, and the whole row is
+# 0.22 W of a 49.93 W budget.  0031's −1.779 Ω and 0116's −45.158 Ω are
+# absorbing ELEMENTS, tens of ohms deep and reproduced with the sign intact
+# (:func:`test_the_networked_four_square_s_absorbing_element_stays_negative`);
+# this is a number passing through zero.
+PHASED_NETWORK_Z_BAR = {
+    "0116": (8.39, 6.91, 6.41, 9.90),
+    "0117": (8.39, 6.91, 6.41, 9.90),
+    "0120": (0.47, 0.70),
+    "0121": (0.47, 0.70),
+}
+
+# The 361-row azimuth cuts, gated at EVERY printed angle and again over the
+# rows within 10 dB of the peak — U4's two-bar treatment
+# (``test_eznec_serve.py::test_the_phased_azimuth_cut_agrees_at_every_printed_
+# angle``), for U4's reason: an array's azimuth cut is shaped by the PHASING,
+# direction by direction, so agreeing across a full turn says the drives
+# reached the right ports with the right phases.  Here it says one thing more,
+# because the phases arrive through a network: a composition that solved the
+# map but mis-ordered its columns would aim the pattern somewhere else.
+#
+#   id    rows  worst (all)  worst (<=10 dB down)  peak cap/served
+#   0117   361     0.76 dB         0.20 dB           5.45 / 5.39
+#   0121   361     0.50 dB         0.27 dB          -0.94 / -0.97
+#
+# Measured plus 25 %.  0117's whole-cut worst is 0031's own 0.58 family and
+# lands, as 0031's does, in the deep rear null.
+PHASED_NETWORK_AZIMUTH_BAR = {"0117": 0.95, "0121": 0.63}
+PHASED_NETWORK_LOBE_BAR = {"0117": 0.25, "0121": 0.34}
+_LOBE_FLOOR = 10.0
+
+
+@pytest.mark.parametrize("cid", PHASED_NETWORK_IDS)
+def test_every_phased_network_row_sits_inside_its_own_measured_envelope(cid):
+    """All four of 0116's rows and both of 0120's, row by row.
+
+    The feedpoint envelope above reads ``sources[0]`` and would pass a seam
+    that composed the first port correctly and the rest by accident, so these
+    four get their whole table pinned instead.  The TAG and SEGMENT of each row
+    are gated exactly, because they are the deck's own: 0116 prints tags
+    1/2/3/4 at global segments 1/7/13/19 in DECK order, and 0120 prints tag 3
+    BEFORE tag 2 because that is the order its two ``EX`` cards are written.
+    """
+    want = extract(printout_text(cid)).sources
+    got = extract(served(cid)).sources
+    bars = PHASED_NETWORK_Z_BAR[cid]
+    assert len(got) == len(want) == len(bars)
+    for a, b, bar in zip(want, got, bars):
+        assert (b.tag, b.segment, b.end_index) == (a.tag, a.segment, a.end_index)
+        assert abs(b.impedance - a.impedance) <= bar, (
+            f"{cid} tag {a.tag}: served {b.impedance}, captured {a.impedance}"
+        )
+
+
+@pytest.mark.parametrize("cid", PHASED_NETWORK_IDS)
+def test_every_phased_network_row_prints_the_current_its_own_card_set(cid):
+    """The drive constraint, to the byte, once per row — and here it is a
+    statement about the COMPOSITION rather than about a restore.
+
+    On a network-free deck the set current is the sub-block solve's own answer
+    and printing it back is bookkeeping.  Here the port's source current and
+    its structure current are two different numbers — 0120's driven virtual
+    node reports 1.4142 A of source against 3.1645E-11 A of structure, all of
+    the rest having gone down an ``NT`` and two ``TL``s — so a seam that had
+    composed the map on the wrong one of them would still print the card's
+    current in this cell and would be wrong everywhere else.  Which is why this
+    test is cheap and the envelope above is the expensive one; both are needed.
+
+    The exact zeros are the part that would break first: a drive read back out
+    of the solve rather than restored prints ``1.1102E-16`` where the capture
+    prints ``0.0000E+00``.
+    """
+    (fixed,) = {source.kind for source in parse_nec5(deck_text(cid)).sources}
+    assert fixed == 4
+    drives = [source.drive for source in parse_nec5(deck_text(cid)).sources]
+    want = extract(printout_text(cid)).sources
+    got = extract(served(cid)).sources
+    for row, captured, drive in zip(got, want, drives, strict=True):
+        assert row.current == captured.current
+        assert row.current == pytest.approx(drive, abs=5e-5)
+        assert (row.current.real == 0.0) == (drive.real == 0.0)
+        assert (row.current.imag == 0.0) == (drive.imag == 0.0)
+
+
+def test_one_added_tl_card_is_worth_the_whole_four_square():
+    """0117 IS 0031 with one ``TL`` card added, so the network's worth is a
+    number both captures print.
+
+    Nothing else about the two decks differs — same four wires, same ``GD``,
+    same four ``EX 4`` cards, same 361-point cut at theta = 67 — and the single
+    ``TL 1,3,3,3,50.,3.048`` between two UNDRIVEN interior nodes moves tag 1
+    from −1.7790 − 24.192j to −45.158 − 52.766j.
+
+    The sharpest part is a SYMMETRY, and it is the reason this pair is worth
+    more than a synthetic edit.  0031's tags 2 and 3 are the array's two side
+    elements, carry the same drive and print one row twice (36.783 − 27.955j on
+    both).  0117's line runs from wire 1 to wire 3, which is a diagonal, so the
+    mirror is gone and the capture prints 32.820 − 27.022j against
+    72.032 − 65.530j — 45 Ω apart on two ports whose ``EX`` cards are identical.
+    A seam that hung the network anywhere but where the deck says would keep the
+    two rows equal, and it would pass every envelope in this file doing it.
+    """
+    bare = extract(printout_text("0031")).sources
+    lined = extract(printout_text("0117")).sources
+    assert bare[1].impedance == bare[2].impedance
+    assert abs(lined[1].impedance - lined[2].impedance) > 25.0
+
+    served_bare = extract(served("0031")).sources
+    served_lined = extract(served("0117")).sources
+    assert served_bare[1].impedance == served_bare[2].impedance
+    assert abs(served_lined[1].impedance - served_lined[2].impedance) > 25.0
+    # And the move the card is worth, on a port it does not touch, on both
+    # sides: 43 Ω captured, 44 Ω served.
+    assert abs(lined[0].impedance - bare[0].impedance) > 25.0
+    assert abs(served_lined[0].impedance - served_bare[0].impedance) > 25.0
+    # The two decks really are one edit apart.
+    assert (
+        deck_text("0117")
+        .replace("TL 1,3,3,3,50.,3.048,0.,0.,0.,0.\n", "")
+        .split("CE\n")[1]
+        == deck_text("0031").split("CE\n")[1]
+    )
+
+
+def test_one_added_ex_card_is_worth_the_whole_cardioid():
+    """0121 IS 0000 with one ``EX`` card added, which is the same experiment
+    from the other side.
+
+    0000 drives the L-network's virtual node alone and prints 31.592 + 25.945j
+    there.  0121 adds ``EX 4,2,-1,0,0.,-1.414214`` — a second generator, on the
+    far vertical's base, itself a ``TL`` endpoint — and the SAME port's row
+    becomes 0.22391 + 48.345j.  The second source is not a perturbation of the
+    first deck's answer; it is a different boundary condition on the same
+    circuit, and the port that did not change reads 31 Ω differently because of
+    it.
+
+    Which is the claim a single-source seam cannot make and a wrongly composed
+    one gets wrong quietly: if the composition had solved each source
+    independently and added, the printed row would still be near 0000's.
+    """
+    alone = extract(printout_text("0000")).sources[0]
+    paired = extract(printout_text("0121")).sources[0]
+    assert (alone.tag, alone.segment) == (paired.tag, paired.segment)
+    assert abs(paired.impedance - alone.impedance) > 25.0
+
+    served_alone = extract(served("0000")).sources[0]
+    served_paired = extract(served("0121")).sources[0]
+    assert abs(served_paired.impedance - served_alone.impedance) > 25.0
+    assert (
+        deck_text("0121").replace("EX 4,2,-1,0,0.,-1.414214\n", "").split("CE\n")[1]
+        == deck_text("0000").split("CE\n")[1]
+    )
+
+
+@pytest.mark.parametrize(
+    "cid,card,flipped",
+    [
+        ("0117", "EX 4,4,-1,0,-1.414214,0.", "EX 4,4,-1,0,1.414214,0."),
+        ("0121", "EX 4,2,-1,0,0.,-1.414214", "EX 4,2,-1,0,0.,1.414214"),
+    ],
+)
+def test_reversing_one_drive_moves_the_ports_it_did_not_touch(cid, card, flipped):
+    """The composition's own mechanism, stated as the thing it is NOT.
+
+    Four (two) cards are a simultaneous boundary condition on coupled ports, so
+    every port's answer is a function of ALL the drives — and here the coupling
+    runs through the STRUCTURE and through the NETWORK at once.  Reverse one
+    card and a port whose own card was not touched has to move, with its printed
+    current unchanged: 0117's tag 1 moves 33 Ω, 0121's first row 78 Ω.  A seam
+    that had composed the drive as independent scales would print the same row
+    both times.
+
+    And the array stops being one: 0117's 361-row cut flattens from a 24.6 dB
+    spread to 1.2 dB, which is the four-square with two elements now in phase.
+    """
+    text = deck_text(cid)
+    assert card in text
+    base = serve(parse_nec5(text)).sources
+    moved = serve(parse_nec5(text.replace(card, flipped))).sources
+    assert moved[0].current == base[0].current
+    assert abs(moved[0].impedance - base[0].impedance) > 20.0
+
+
+def test_the_networked_four_square_s_absorbing_element_stays_negative():
+    """0116's tag-1 row prints −45.158 Ω and −45.158 W, and so does this seam's.
+
+    0031's own absorbing element is −1.7790 Ω; add the ``TL`` and it becomes
+    twenty-five times deeper, because the line now carries power into that
+    element on top of what the mutual coupling was already delivering.  The
+    generator on tag 1 is being driven hard, and the printed ``INPUT POWER =
+    1.1538E+02`` is the other three rows with 45 W taken OFF.
+
+    Gated as a sign and an arithmetic identity rather than as a value, for the
+    reason U4's twin gives: a bar of 6.7 Ω on a row whose R is −45 is satisfied
+    by −38, and by nothing on the wrong side of zero.  A composition that took a
+    magnitude anywhere — or that clamped the budget to positive watts — lands
+    there and inside every envelope in this file.
+    """
+    captured = extract(printout_text("0116")).sources[0]
+    row = extract(served("0116")).sources[0]
+    assert captured.impedance.real < 0 and captured.power < 0
+    assert row.impedance.real < 0, f"served R = {row.impedance.real}"
+    assert row.power < 0, f"served P = {row.power}"
+    assert row.power == pytest.approx(
+        0.5 * (row.voltage * row.current.conjugate()).real, rel=1e-4
+    )
+    # The budget is the SIGNED sum: summing magnitudes would print 2.0570E+02.
+    data = extract(served("0116"))
+    assert data.power.input_power == pytest.approx(
+        sum(r.power for r in data.sources), rel=2e-4
+    )
+
+
+def test_the_cardioid_s_two_driven_connection_points_read_161_percent():
+    """0120/0121 answer the question the brief for this unit asked: what
+    happens when a driven site is ALSO a network connection point, twice.
+
+    Both are.  ``EX 4,3,1`` stands on the ``NT``'s end A and on a ``TL``'s end
+    A; ``EX 4,2,-1`` stands on the other ``TL``'s end B.  So 0027's
+    double-count precedent governs and the capture confirms it to the digit:
+    the four connection-point powers sum to 4.9934E+01, which IS the input
+    power (a lossless feed system delivers everything it is given), and
+    ``RADIATED = INPUT + Σ − WIRE LOSS`` prints 8.0582E+01 against an input of
+    4.9934E+01 — 161.38 %, the corpus's first budget strictly between 100 and
+    200.  What keeps it off 200 is the 19.285 W in the two 18 Ω base loads.
+
+    0116/0117 are the control and they are the OTHER answer to the same
+    question: their ``TL`` hangs between two nodes neither ``EX`` touches, the
+    two connection-point powers are ±4.0323E+01 and cancel, and the budget
+    reads 100.00 % with ``RADIATED = INPUT``.  Nothing in the seam tests for
+    which case it is in — the sum is the sum — and that these two decks land on
+    two different budgets from one rule is the evidence the rule is the
+    engine's.
+    """
+    for cid in ("0120", "0121"):
+        power = extract(served(cid)).power
+        data = extract(served(cid))
+        assert power.network_loss is None
+        assert power.efficiency_percent == pytest.approx(161.38, abs=EFFICIENCY_BAR)
+        assert sum(row.power for row in data.network_excitation) == pytest.approx(
+            power.input_power, rel=1e-3
+        )
+    for cid in ("0116", "0117"):
+        data = extract(served(cid))
+        assert data.power.efficiency_percent == pytest.approx(100.0, abs=1e-2)
+        assert data.power.radiated_power == pytest.approx(
+            data.power.input_power, rel=1e-6
+        )
+        assert sum(row.power for row in data.network_excitation) == pytest.approx(
+            0.0, abs=1e-9 * data.power.input_power
+        )
+
+
+@pytest.mark.parametrize("cid", PHASED_NETWORK_CUTS)
+def test_the_phased_network_azimuth_cut_agrees_at_every_printed_angle(cid):
+    """All 361 rows, and the lobe rows twice — U4's two-bar treatment, on the
+    two composed decks that ask for a cut.
+
+    Neither has a single ``-999.99`` row, which is checked rather than assumed:
+    a null appearing on one side and not the other would otherwise be silently
+    skipped.
+    """
+    (want,) = extract(printout_text(cid)).patterns
+    (got,) = extract(served(cid)).patterns
+    assert len(got.rows) == len(want.rows) == 361
+    assert not [row for row in want.rows + got.rows if row.total_db == -999.99]
+
+    peak = max(row.total_db for row in want.rows)
+    worst = max(abs(a.total_db - b.total_db) for a, b in zip(want.rows, got.rows))
+    assert worst <= PHASED_NETWORK_AZIMUTH_BAR[cid], f"{cid}: worst row {worst:.4f} dB"
+    lobe = max(
+        abs(a.total_db - b.total_db)
+        for a, b in zip(want.rows, got.rows)
+        if peak - a.total_db <= _LOBE_FLOOR
+    )
+    assert lobe <= PHASED_NETWORK_LOBE_BAR[cid], f"{cid}: worst lobe row {lobe:.4f} dB"
+
+
+@pytest.mark.parametrize("pair", [("0116", "0117"), ("0120", "0121")])
+def test_the_request_card_does_not_move_the_drive(pair):
+    """0116/0117 and 0120/0121 are two decks each, differing only in ``XQ``
+    against ``RP``, so the composed drive must come out BIT identical.
+
+    The pins above lean on that — the two members of each pair share one row of
+    the measured table rather than carrying twins of it — and it is the control
+    on the whole pipeline besides: a solve that depended in any way on which
+    request card followed it would be reading the deck in the wrong order.
+    """
+    xq, rp = (serve(parse_nec5(deck_text(cid))).sources for cid in pair)
+    assert [row.impedance for row in xq] == [row.impedance for row in rp]
+    assert [row.voltage for row in xq] == [row.voltage for row in rp]
+
+
+def test_the_composition_solves_the_drive_rather_than_asserting_it():
+    """The sharpest statement gate 7 can make, and the only one that reaches
+    past the printed cell.
+
+    Every ``ANTENNA INPUT PARAMETERS`` row prints the current its card set
+    because :func:`~momwire.eznec._serve._source_row` restores it — that is the
+    U1 rule and it would print the same cell over a composition that had solved
+    nothing at all.  So this test goes back to the reduced system with the
+    applied voltages the seam actually printed and reads the TERMINATION-branch
+    currents out of it: antenna plus network, at every driven site, on the same
+    circuit the answer came from.  They have to BE the set currents, and to the
+    solve's own round-off rather than to the cell's four digits.
+
+    Measured at 1e-12 relative on all four, which is a linear solve's residual
+    and not an agreement.
+    """
+    for cid in PHASED_NETWORK_IDS:
+        deck = parse_nec5(deck_text(cid))
+        structure = _serve.structure_of(deck)
+        mesh = _serve.build_mesh(deck, structure)
+        by_address = {site.at: site for site in mesh.sites}
+        for load in deck.loads:
+            by_address[load.at].load += load.impedance
+        for source in deck.sources:
+            by_address[source.at].driven = True
+        wavelength = _serve.SPEED_OF_LIGHT_MHZ_M / float(deck.frequency_mhz)
+        medium = _serve._medium(deck.ground, wavelength)
+        cards = _serve._cards(deck, structure, mesh)
+        solver = _serve._solver_for(deck, mesh, wavelength, medium)
+        state = _serve._port_state(
+            deck, mesh, cards, solver.compute_port_solution().y, wavelength
+        )
+
+        n = len(mesh.sites)
+        t = _serve._transform(mesh)
+        y = t.T @ solver.compute_port_solution().y @ t
+        z_load = np.array([site.load for site in mesh.sites], dtype=np.complex128)
+        loaded = np.eye(n, dtype=np.complex128) + z_load[:, None] * y
+        y_eff = np.linalg.solve(loaded.T, y.T).T if np.any(z_load) else y
+        driven = tuple(site.index for site in mesh.sites if site.driven)
+        _v, _i, i_source = _serve._reduced_state(
+            cards, n, state.v_applied, driven, y_eff, wavelength
+        )
+
+        for source in deck.sources:
+            index = by_address[source.at].index
+            assert i_source[index] == pytest.approx(
+                source.drive, rel=1e-12, abs=1e-12
+            ), f"{cid} at {source.at.tag},{source.at.written}"
 
 
 # --------------------------------------------------------------------------

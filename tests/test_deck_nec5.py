@@ -68,9 +68,13 @@ EN
 # -- gate 1: the corpus -----------------------------------------------------
 
 
-def test_the_corpus_is_all_49_captures():
-    """The gate is only a gate if it is the whole corpus."""
-    assert len(CORPUS) == 49
+def test_the_corpus_is_all_53_captures():
+    """The gate is only a gate if it is the whole corpus.
+
+    49 until momwire#511 landed the four decks that are BOTH phased and
+    networked (0116/0117/0120/0121).
+    """
+    assert len(CORPUS) == 53
 
 
 @pytest.mark.parametrize("path", CORPUS, ids=lambda p: p.stem)
@@ -92,7 +96,7 @@ def test_every_captured_deck_parses(path: Path):
 
 
 def test_the_corpus_census_reproduces_the_published_weights():
-    """Parsing all 49 decks recovers the scored matrix's own counts.
+    """Parsing all 53 decks recovers the scored matrix's own counts.
 
     "Parses without error" is a weak gate on its own: a front-end that read
     every ``GD`` as a ``GN 0`` would pass it while being 34 % wrong in R on
@@ -100,6 +104,12 @@ def test_the_corpus_census_reproduces_the_published_weights():
     ``docs/status/2026-08-20-eznec-nec5-scored-matrix.md`` ("The scored
     matrix") were counted independently of this code, so agreeing with them
     says the decks were read as the study read them.
+
+    momwire#511's four decks are the one addition since the matrix was scored,
+    and every column moves by exactly what they are: four more bare ``GD``
+    grounds (20 to 24), four more ``GE 1,-1`` (33 to 37), and two more of each
+    request card, because the four are two decks captured twice, once under
+    ``XQ`` and once under ``RP``.
     """
     grounds = Counter()
     ge = Counter()
@@ -118,11 +128,11 @@ def test_the_corpus_census_reproduces_the_published_weights():
         ge[(parsed.ge_flag, parsed.ge_second)] += 1
         requests[type(parsed.requests[0]).__name__] += 1
 
-    assert grounds == {"GD": 20, "GN -1": 16, "GN 0": 8, "GN 1": 5}
-    assert ge == {(1, -1): 33, (0, -1): 16}
+    assert grounds == {"GD": 24, "GN -1": 16, "GN 0": 8, "GN 1": 5}
+    assert ge == {(1, -1): 37, (0, -1): 16}
     assert requests == {
-        Nec5FarFieldRequest.__name__: 26,
-        Nec5ExecuteRequest.__name__: 22,
+        Nec5FarFieldRequest.__name__: 28,
+        Nec5ExecuteRequest.__name__: 24,
         Nec5NearFieldRequest.__name__: 1,
     }
 

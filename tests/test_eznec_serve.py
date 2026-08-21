@@ -170,10 +170,10 @@ SERVED_UNGATED_IDS = ("0037", "0039", "0040", "0041", "0042")
 # reported rather than pinned: a bar at 344 Ω would record the gap as normal.
 DIVERGENT_IDS = ("0033", "0034")
 
-# Every capture id this seam answers after #504 U4, pinned.  The ladder number
-# is 48 of 49 and the one that is left is named in
-# :func:`test_the_corpus_ladder_stands_where_u4_left_it`.
-SERVED_AFTER_U4 = (
+# Every capture id this seam answers after momwire#511, pinned.  The ladder
+# number is 52 of 53 and the one that is left is named in
+# :func:`test_the_corpus_ladder_stands_where_511_left_it`.
+SERVED_AFTER_511 = (
     "0000",
     "0001",
     "0002",
@@ -210,8 +210,8 @@ SERVED_AFTER_U4 = (
     "0036",
     "0037",  # )
     "0038",  # ) the frequency-stepping dipole session: 0036 and 0038 are gated
-    "0039",  # ) captures since momwire#511, the other five are
-    "0040",  # ) SERVED_UNGATED_IDS
+    "0039",  # ) captures since #511, the other five are SERVED_UNGATED_IDS
+    "0040",  # )
     "0041",  # )
     "0042",  # )
     "0043",
@@ -220,6 +220,14 @@ SERVED_AFTER_U4 = (
     "0046",
     "0047",
     "0048",
+    # momwire#511's four: the phased drive reaching the structure through a
+    # network.  0117 is 0031 with ONE `TL` card added and 0121 is 0000 with ONE
+    # `EX` card added, which is what makes them a controlled experiment rather
+    # than four more decks (``test_eznec_networks.py``, gate 7).
+    "0116",
+    "0117",
+    "0120",
+    "0121",
 )
 
 
@@ -278,14 +286,15 @@ SERVED_AFTER_U4 = (
 # 0031 prints four ``ANTENNA INPUT PARAMETERS`` rows and 0032 two, and every
 # one of them is pinned in :data:`PHASED_Z_BAR` below.  The row quoted here is
 # the first, so that the sweep this table drives keeps one shape.  0031's first
-# row is also the corpus's only NEGATIVE resistance, which makes it the one
-# entry in this table where the served number has to land inside the bar AND on
-# the correct side of zero (:func:`test_the_four_square_s_absorbing_element_
-# stays_negative`).
+# row is also this table's only NEGATIVE resistance, which makes it the one
+# entry here where the served number has to land inside the bar AND on the
+# correct side of zero (:func:`test_the_four_square_s_absorbing_element_
+# stays_negative`).  momwire#511's 0116/0117 print a second one, twenty-five
+# times deeper, and it is pinned beside them in ``test_eznec_networks.py``.
 #
-# 0036 and 0038 are momwire#511's, and they are the least surprising rows in
-# this table on purpose: the same free-space dipole 0010 drives, stepped to
-# 299.793 and 299.79 MHz and answered by ``XQ``, landing on the SAME 16.278 Ω
+# 0036 and 0038 are momwire#511's other half and they are the least surprising
+# rows in this table on purpose: the same free-space dipole 0010 drives, stepped
+# to 299.793 and 299.79 MHz and answered by ``XQ``, landing on the SAME 16.278 Ω
 # 0010 lands on.  A frequency step of 4 parts in 1e5 that moved the offset would
 # be saying something about this seam rather than about the antenna.
 Z_BAR = {
@@ -501,8 +510,9 @@ def drive_cells(cid: str) -> tuple[int, ...]:
     ONE answer for the whole table, which is a claim and not a convenience: a
     deck whose cards disagreed about their kind refuses by name
     (``_REFUSE_MIXED_DRIVE_KINDS``), so every row a served table carries was
-    fixed in the same two cells.  #504 U4's two multi-``EX`` captures write
-    ``EX 4`` four times and twice, and the set is asserted rather than sampled.
+    fixed in the same two cells.  The corpus's six multi-``EX`` captures write
+    ``EX 4`` four times (0031, 0116, 0117) and twice (0032, 0120, 0121), and the
+    set is asserted rather than sampled.
     """
     kinds = {source.kind for source in parse_nec5(deck_text(cid)).sources}
     assert len(kinds) == 1, f"{cid}: mixed EX kinds {sorted(kinds)}"
@@ -524,6 +534,29 @@ _PATTERN_COLUMNS = {
 
 _NULL = "-999.99"
 _NUMBER = re.compile(r"[-+]?\d+\.\d+(?:[Ee][-+]?\d+)?")
+
+# The one place a solved number decides the PRESENCE of a printed line rather
+# than its contents, and therefore the one normalization this mask has to make
+# that the manifest's four do not already cover.
+#
+# ``NETWORK LOSS`` is ``-Σ(connection point powers)`` and NEC-5 prints the line
+# when that is positive (``test_eznec_networks.py``, the budget gate).  0116 and
+# 0117 hang ONE lossless ``TL`` between two undriven points, so the true sum is
+# exactly zero and what the engine actually tested the sign of was its own
+# round-off: it prints ``NETWORK LOSS  = 2.1316E-13 WATTS`` against an
+# ``INPUT POWER`` of 1.1538E+02, which is 1.8e-15 of it — eight ulps.  This seam
+# does the same arithmetic in a different order and its crumb lands at
+# −3.6e-14, on the other side of zero, so it omits the line.
+#
+# Neither engine is wrong and no rule change would help: the sign of a zero is
+# not a number, which is exactly what the pattern TILT column's own
+# normalization already says.  So a ``NETWORK LOSS`` line worth less than
+# ``_NETWORK_LOSS_DUST`` of the run's ``INPUT POWER`` is dropped from BOTH sides
+# and the line's presence is gated everywhere else.  The floor sits six orders
+# above the dust and fifteen below the smallest REAL network loss in the corpus
+# (0012's 36.714 W on a 114.47 W input, 32 %), so nothing that means anything
+# can hide under it.
+_NETWORK_LOSS_DUST = 1e-9
 
 # How many lines each table puts between its heading and its first row.
 #
@@ -593,13 +626,15 @@ def mask(text: str, drive: tuple[int, ...] = (2, 3)) -> str:
 
     Also applies the manifest's two remaining served-run normalizations: the
     timing lines are dropped outright, and nothing else about them is looked
-    at.
+    at.  And one of its own, :data:`_NETWORK_LOSS_DUST`, for the single line in
+    this printout whose PRESENCE a solved number decides.
     """
     port_cells = tuple(k for k in range(9) if k not in drive)
     lines = text.split("\n")
     out: list[str] = []
     kind: str | None = None
     skip = 0
+    input_power = 0.0
     for line in lines:
         if "FILL=" in line or line.startswith(" RUN TIME ="):
             continue
@@ -629,7 +664,14 @@ def mask(text: str, drive: tuple[int, ...] = (2, 3)) -> str:
         elif kind == "wire":
             out.append(line[:12] + _MASK)
         elif kind == "power":
-            label, sep, _value = line.partition("=")
+            label, sep, value = line.partition("=")
+            name = label.strip()
+            if name.startswith("INPUT POWER"):
+                input_power = abs(float(value.split()[0]))
+            elif name.startswith("NETWORK LOSS") and abs(
+                float(value.split()[0])
+            ) < _NETWORK_LOSS_DUST * max(input_power, 1.0):
+                continue
             out.append(label + sep + _MASK)
         elif kind == "pattern":
             out.append(_mask_pattern_row(line))
@@ -1723,11 +1765,11 @@ def test_nh_parses_now_and_refuses_beside_ne_by_its_own_name():
 def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
     """U1's catch-all is now a backstop and not a behaviour.
 
-    Every one of the 49 captured decks comes back either solved or refused by
+    Every one of the 53 captured decks comes back either solved or refused by
     a sentence that names its card, so the stub reason — which said only that
     the dialect was unserved — must appear nowhere.
     """
-    assert len(corpus()) == 49
+    assert len(corpus()) == 53
     assert sorted(entry["deck"] for entry in MANIFEST["captures"]) == sorted(
         f"decks/{path.name}" for path in (FIXTURE_DIR / "decks").glob("*.nec")
     )
@@ -1736,15 +1778,24 @@ def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
         assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in text, cid
 
 
-def test_the_corpus_ladder_stands_where_u4_left_it():
-    """The served-id SET, pinned — 48 of the 49 captured decks.
+def test_the_corpus_ladder_stands_where_511_left_it():
+    """The served-id SET, pinned — 52 of the 53 captured decks.
 
     A rung that lands moves decks across this line and a regression moves them
     back, and neither should be able to happen quietly: the set is written out
     id by id so that changing it is an edit somebody made on purpose, with the
     new number in the diff beside the old one.  #504 U1 took it from 20 to 27,
     U2 from 27 to 43, U3 from 43 to 46, and U4 from 46 to 48 — the last two are
-    0031 and 0032, the corpus's only phased arrays.
+    0031 and 0032, the corpus's first phased arrays.
+
+    momwire#511 moves the DENOMINATOR instead, which is the other way a ladder
+    can climb and the first time this one has done it: the corpus grew from 49
+    decks to 53, and all four of the new ones are served.  They are the shape
+    the last drive refusal named — a phased drive reaching the structure
+    through a ``TL`` or an ``NT`` — so the sentence that said "none of the 49
+    captured decks writes one" stopped being true and the refusal went with it.
+    48 of 49 became 52 of 53 with nothing crossing the line in either
+    direction.
 
     ONE deck is left, and it names a card no ground and no drive can reach:
     0022's ``NE``, the near electric field, whose printed block has a layout of
@@ -1753,7 +1804,7 @@ def test_the_corpus_ladder_stands_where_u4_left_it():
     every drive the corpus writes, and says so about the one request it does
     not.
 
-    What this number does NOT claim is that all 48 are right.  0033 and 0034
+    What this number does NOT claim is that all 52 are right.  0033 and 0034
     are served, are in this set, and disagree with their captures by 275 and
     188 Ω (:data:`DIVERGENT_IDS`); the ladder counts decks that get an ANSWER
     rather than decks that get a pinned one, and that distinction is why the
@@ -1762,10 +1813,13 @@ def test_the_corpus_ladder_stands_where_u4_left_it():
     served_ids = tuple(
         cid for cid, text in sorted(corpus().items()) if "NEC ERROR" not in text
     )
-    assert served_ids == SERVED_AFTER_U4
-    assert len(served_ids) == 48
+    assert served_ids == SERVED_AFTER_511
+    assert len(served_ids) == 52
     refused = sorted(set(corpus()) - set(served_ids))
     assert refused == ["0022"]
+    # The 49 the ladder used to count still stand 48 of 49, which is what says
+    # #511 added decks rather than moving any (0116/0117/0120/0121 sort last).
+    assert len([cid for cid in served_ids if cid < "0049"]) == 48
 
 
 @pytest.mark.parametrize("cid", SERVED_UNGATED_IDS)
@@ -1862,16 +1916,22 @@ def test_the_favored_wire_carries_physics_at_a_five_wire_junction():
 
 
 # --------------------------------------------------------------------------
-# the four multi-source shapes nothing has printed
+# the three multi-source shapes nothing has printed
 # --------------------------------------------------------------------------
 #
-# #504 U4 serves ONE multi-`EX` shape — every card an `EX 4`, no network on the
-# deck, one card per port — because that is the only shape the corpus prints.
-# Four ways out of it are refused BY NAME, and none of them has a capture, so
-# each is probed by editing one that does.  0032 is the base for all four: the
+# #504 U4 served ONE multi-`EX` shape and momwire#511 serves two: every card an
+# `EX 4`, one card per port, with or without a network on the deck.  Three ways
+# out of that are refused BY NAME, and none of them has a capture, so each is
+# probed by editing one that does.  0032 is the base for all three: the
 # smallest phased deck in the corpus, two six-segment verticals over `GN 1`.
 #
-# Why four sentences rather than one "unsupported drive" line: each would be
+# There were FOUR until #511.  The one that left said a phased drive through a
+# `TL`/`NT` was unobserved, which was the exact truth until four printouts of
+# one arrived (`test_eznec_networks.py`, gate 7) — and the probe that used to
+# gate it is now `test_a_phased_drive_through_a_network_is_served_now` below,
+# the same edit to the same deck with the opposite expectation.
+#
+# Why three sentences rather than one "unsupported drive" line: each would be
 # fixed by a different capture, and a refusal's whole job is to tell the person
 # reading it in EZNEC's viewer which card to go and change.
 
@@ -1918,23 +1978,35 @@ def test_a_multi_voltage_drive_refuses_by_name():
     assert "multi-VOLTAGE drive is not served" in reason
 
 
-def test_a_phased_drive_through_a_network_refuses_by_name():
-    """A ``TL`` card on a two-``EX`` deck.
+def test_a_phased_drive_through_a_network_is_served_now():
+    """The refusal that used to live here, inverted — the same two edits to the
+    same deck, expecting an answer.
 
-    This is the refusal that costs something to keep, and it is the one worth
-    keeping most.  The machinery is all present — the reducer serves networks,
-    the sub-block solve serves phased drives — and composing them is a short
-    edit with an obvious-looking answer.  What is missing is any evidence that
-    the obvious answer is NEC-5's: not one of the forty-nine captures drives
-    more than one port on a deck carrying ``TL`` or ``NT``, so a served answer
-    here would be a guess wearing a printout.
+    It was the refusal that cost something to keep and the one worth keeping
+    most: the machinery was all present, composing it was a short edit, and the
+    obvious-looking answer had nothing to check it against.  momwire#511's four
+    captures are that check (``test_eznec_networks.py``, gate 7), so the
+    sentence went and the composition landed — and this test is kept, pointed
+    the other way, because the probe deck is the cheapest statement that BOTH
+    card kinds reach the composed path rather than only the ones the captures
+    happen to write.
 
-    Both card kinds reach it, because a deck can carry either.
+    What is asserted about the numbers is only what a synthetic deck can honestly
+    assert: both rows still print the current their own card set, and the two
+    cards give DIFFERENT answers, so neither is being quietly ignored.
     """
+    bare = extract(served("0032")).sources
     for card in ("TL 1,3,2,3,50.,1.,0.,0.,0.,0.", "NT 1,3,2,3,0.,.01,0.,0.,0.,.01"):
-        reason = _refused(deck_text("0032").replace("PQ 0\n", f"{card}\nPQ 0\n"))
-        assert reason.startswith("this deck carries 2 EX cards and a TL/NT network")
-        assert "constrained drive composed with the network reducer" in reason
+        text = deck_text("0032").replace("PQ 0\n", f"{card}\nPQ 0\n")
+        printout = render(text)
+        assert "NEC ERROR" not in printout
+        rows = extract(printout).sources
+        assert [row.current for row in rows] == [row.current for row in bare]
+        # The card is load-bearing: a network hung across the two ports moves
+        # both of them, by 248 Ω (the TL, a quarter-wave at 299.79 MHz) and by
+        # 43 and 49 Ω (the NT) on a 20 Ω-class pair of rows.
+        assert abs(rows[0].impedance - bare[0].impedance) > 5.0
+        assert abs(rows[1].impedance - bare[1].impedance) > 5.0
 
 
 def test_two_ex_cards_at_one_address_refuse_by_name():
@@ -1977,10 +2049,10 @@ def test_two_ex_cards_on_the_two_sides_of_one_cut_refuse_by_name():
 
 
 def test_the_served_phased_shape_is_the_one_the_probes_all_left():
-    """The control on the five refusals above: 0032 itself is SERVED.
+    """The control on the four refusals above: 0032 itself is SERVED.
 
     Each probe is one edit away from a capture that answers, so a refusal
-    firing on all six decks would look exactly like a working gate.  This is
+    firing on all five decks would look exactly like a working gate.  This is
     the line that says the edits are what did it.
     """
     for cid in PHASED_IDS:
