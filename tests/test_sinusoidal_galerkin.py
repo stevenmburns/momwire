@@ -3129,6 +3129,13 @@ def _coefficient_product(ctx, contribs, n_ports, dtype, *, folded):
     return G
 
 
+# The 80-bit reference instrument exists only where np.longdouble is x87
+# extended precision. On macOS ARM (PR #529's CI lane) longdouble IS float64,
+# so every claim measured against the reference has no instrument there and
+# skips rather than asserting against a reference that is the thing itself.
+_LD_EXTENDED = np.finfo(np.longdouble).eps < 1e-18
+
+
 def _longdouble_coefficient_product(sim):
     """G's coefficient product in 80-bit arithmetic, from the SAME float64
     tested contributions every assembly path starts from — so the only
@@ -3232,6 +3239,10 @@ def _basis_eval_errors(sim):
     )
 
 
+@pytest.mark.skipif(
+    not _LD_EXTENDED,
+    reason="no 80-bit longdouble on this platform - the reference does not exist",
+)
 def test_folded_basis_evaluation_is_orders_more_accurate():
     """Site 1: the value. `_basis_value` must be the accurate spelling, not
     merely a different one — the coefficients are held fixed and only the
@@ -3710,6 +3721,8 @@ def test_folded_fill_agrees_with_the_pre_205_fill_and_is_closer_to_exact(
     G_old = _G_pre_205(monkeypatch, **kw)
     G_ref = _G_pre_205(monkeypatch, ld_kernel=True, **kw)
     assert _rel_matrix_delta(G_new, G_old) < PRE_205_AGREEMENT
+    if not _LD_EXTENDED:
+        return  # the closer-to-exact half needs the 80-bit reference
     err_new = _rel_matrix_delta(G_new, G_ref)
     err_old = _rel_matrix_delta(G_old, G_ref)
     # 47× (k3_star, 12 segments per arm) to 1100× (the 41-segment dipole):
@@ -3735,7 +3748,8 @@ def test_folded_fill_asymmetry_is_now_structural_not_rounding(monkeypatch, geom_
     """
     kw = GEOMETRIES[geom_name]()
     r_new = _sym_ratio(_matrix(SinusoidalGalerkinSolver(**kw)))
-    r_ref = _sym_ratio(_G_pre_205(monkeypatch, ld_kernel=True, **kw))
-    assert abs(r_new - r_ref) < 0.05 * r_ref, (r_new, r_ref)
+    if _LD_EXTENDED:  # the structural-not-rounding half needs the reference
+        r_ref = _sym_ratio(_G_pre_205(monkeypatch, ld_kernel=True, **kw))
+        assert abs(r_new - r_ref) < 0.05 * r_ref, (r_new, r_ref)
     if geom_name == "dipole":
         assert r_new < FOLDED_FILL_G1, r_new

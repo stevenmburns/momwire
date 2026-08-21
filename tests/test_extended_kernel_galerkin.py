@@ -3151,11 +3151,13 @@ def _gd8_every_column():
 def test_gd8a_narrowing_and_banding_move_the_matrix_by_nothing(
     monkeypatch, name, ground
 ):
-    """Exact equality, not a tolerance, on all four EK-eligible node kinds
-    ("radius step" is excluded — momwire#398 D2, `_EK_DECK_NAMES` above) and
-    all three grounds — the two narrowings are index bookkeeping and the
-    banding sums each cell in the order it always did, so anything at all
-    here is a bug.
+    """Ulp-scale equality on all four EK-eligible node kinds ("radius step"
+    is excluded — momwire#398 D2, `_EK_DECK_NAMES` above) and all three
+    grounds — the two narrowings are index bookkeeping and the banding sums
+    each cell in the order it always did. Exact on any one build; across FP
+    environments the compiler may contract the band-by-band spelling
+    differently (macOS ARM moved it by 1.4e-17, PR #529), so the bound is
+    1e-13 relative — the momwire#451 spelling of "nothing".
 
     Three spellings are compared against the shipped one: every column
     retained (which is the whole (nnz, N) triple back), one test segment per
@@ -3183,9 +3185,10 @@ def test_gd8a_narrowing_and_banding_move_the_matrix_by_nothing(
                 got, _ = SinusoidalGalerkinSolver(
                     **kw, extended_kernel=True
                 )._assemble_Z(geom, sim.k)
-            assert np.array_equal(ref, got), (
+            moved = float(np.abs(ref - got).max())
+            assert moved <= 1e-13 * float(np.abs(ref).max()), (
                 f"{name}/{ground} wide={wide} band={band}: the bracket moved G "
-                f"by {np.abs(ref - got).max():.3e}"
+                f"by {moved:.3e}"
             )
 
 
