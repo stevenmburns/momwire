@@ -88,6 +88,8 @@ SERVED_IDS = (
     "0031",
     "0032",
     "0035",
+    "0036",
+    "0038",
     "0043",
     "0044",
     "0045",
@@ -125,11 +127,19 @@ FINITE_IDS = ("0021", "0047", "0048")
 # card changed.
 MININEC_IDS = ("0015", "0020", "0045", "0046")
 
-# The rung-1 captures with no printout: seven ``XQ``-only dipoles EZNEC wrote
-# while stepping a frequency.  Nothing to byte-compare, but a deck that
-# refuses is a deck that stopped being served, so they are run for their exit
-# status.
-SERVED_UNGATED_IDS = ("0036", "0037", "0038", "0039", "0040", "0041", "0042")
+# The rung-1 captures with no printout: five of the seven ``XQ``-only dipoles
+# EZNEC wrote while stepping a frequency.  Nothing to byte-compare, but a deck
+# that refuses is a deck that stopped being served, so they are run for their
+# exit status.
+#
+# It was all seven until momwire#511.  The other two, 0036 and 0038, shipped
+# complete 144-line engine printouts all along and were held back so the
+# session kept one treatment (manifest ``withheld_printouts``); #511 landed
+# them, and they are in :data:`SERVED_IDS` above with every other gated
+# capture.  What is left is genuinely unusable — an EMPTY file, a missing one,
+# two carrying an early prototype of THIS seam's refusal rather than the
+# engine's output, and one that stops mid-printout at 40 lines.
+SERVED_UNGATED_IDS = ("0037", "0039", "0040", "0041", "0042")
 
 # The two elevated radial systems, and the only decks in the corpus whose
 # printout landed and whose numbers then did not fit.  Both are the same
@@ -197,7 +207,13 @@ SERVED_AFTER_U4 = (
     *PHASED_IDS,  # 0031-0032
     *DIVERGENT_IDS,  # 0033-0034
     "0035",
-    *SERVED_UNGATED_IDS,  # 0036-0042
+    "0036",
+    "0037",  # )
+    "0038",  # ) the frequency-stepping dipole session: 0036 and 0038 are gated
+    "0039",  # ) captures since momwire#511, the other five are
+    "0040",  # ) SERVED_UNGATED_IDS
+    "0041",  # )
+    "0042",  # )
     "0043",
     "0044",
     "0045",
@@ -224,6 +240,8 @@ SERVED_AFTER_U4 = (
 #   0031  -1.7790-24.192j      -1.7032-17.926j     6.267   5.38/5.32   0.06
 #   0032  19.139 -24.569j      19.769 -18.570j     6.032   8.23/8.18   0.05
 #   0035  23.343 -24.594j      23.926 -20.079j     4.552   9.88/9.84   0.04
+#   0036  79.948 +29.921j      85.074 +45.371j    16.278   (XQ, none)   —
+#   0038  79.946 +29.910j      85.071 +45.360j    16.278   (XQ, none)   —
 #   0043  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
 #   0044  35.571 - 1.4223j     36.499 + 2.0789j    3.622   5.15/5.13   0.02
 #   0045  35.571 - 1.4223j     36.499 + 2.0789j    3.622  -0.02/-0.05  0.03
@@ -264,6 +282,12 @@ SERVED_AFTER_U4 = (
 # entry in this table where the served number has to land inside the bar AND on
 # the correct side of zero (:func:`test_the_four_square_s_absorbing_element_
 # stays_negative`).
+#
+# 0036 and 0038 are momwire#511's, and they are the least surprising rows in
+# this table on purpose: the same free-space dipole 0010 drives, stepped to
+# 299.793 and 299.79 MHz and answered by ``XQ``, landing on the SAME 16.278 Ω
+# 0010 lands on.  A frequency step of 4 parts in 1e5 that moved the offset would
+# be saying something about this seam rather than about the antenna.
 Z_BAR = {
     "0010": 20.35,
     "0013": 14.27,
@@ -274,6 +298,8 @@ Z_BAR = {
     "0031": 7.84,
     "0032": 7.55,
     "0035": 5.69,
+    "0036": 20.35,
+    "0038": 20.35,
     "0043": 4.53,
     "0044": 4.53,
     "0045": 4.53,
@@ -385,6 +411,8 @@ CURRENT_BAR = {
     "0031": 0.0265,
     "0032": 0.0164,
     "0035": 0.228,
+    "0036": 0.028,
+    "0038": 0.028,
     "0043": 0.013,
     "0044": 0.013,
     "0045": 0.0129,
@@ -402,6 +430,8 @@ CHARGE_BAR = {
     "0031": 0.0842,
     "0032": 0.0587,
     "0035": 0.186,
+    "0036": 0.086,
+    "0038": 0.086,
     "0043": 0.078,
     "0044": 0.078,
     "0045": 0.0777,
@@ -1740,10 +1770,15 @@ def test_the_corpus_ladder_stands_where_u4_left_it():
 
 @pytest.mark.parametrize("cid", SERVED_UNGATED_IDS)
 def test_the_ungated_rung_one_captures_still_serve(cid):
-    """0036-0042 are the same dipole at seven frequencies with ``XQ`` and no
-    ``RP``, so they carry no printout to compare against — but a deck that
-    started refusing would be a regression, and the frequency block is one
-    thing about them that IS checkable."""
+    """The five decks of the frequency-stepping session whose printouts are
+    unusable — an empty file, a missing one, two carrying an early prototype of
+    this seam's own refusal, and one truncated at 40 lines (manifest
+    ``withheld_printouts``).
+
+    Nothing to compare against, but a deck that started refusing would be a
+    regression, and the frequency block is one thing about them that IS
+    checkable.  Their two siblings, 0036 and 0038, left this list for
+    :data:`SERVED_IDS` when momwire#511 landed their printouts."""
     text = render(deck_text(cid))
     assert "NEC ERROR" not in text
     assert "- - - ANTENNA INPUT PARAMETERS - - -" in text
