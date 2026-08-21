@@ -1,7 +1,8 @@
-"""The rest of the NEC-5 printout, byte-gated against the captures (#497, U3).
+"""The rest of the NEC-5 printout, byte-gated against the captures (#497 U3).
 
-One gate carries this unit: **extract and re-render**.  For each of the ten
-captured printouts under ``tests/fixtures/eznec/printouts/``, :func:`extract`
+One gate carries this unit: **extract and re-render**.  For each of the
+thirty-nine captured printouts under ``tests/fixtures/eznec/printouts/`` (ten
+when the unit landed; #504 U1/U2/U3 quadrupled them), :func:`extract`
 reads the file back into a :class:`~momwire.eznec.RunData` — every number
 lifted from the engine's own text, none of them recomputed — and
 :func:`~momwire.eznec.render_printout` writes it out again.  The result has
@@ -423,7 +424,7 @@ def extract(text: str) -> RunData:
 
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_every_captured_printout_round_trips_byte_for_byte(cid):
-    """The unit's whole contract, ten times over.
+    """The unit's whole contract, thirty-nine times over.
 
     Failure here is a formatting bug and nothing else: the numbers came out
     of the same file they are being compared against, so any difference is a
@@ -436,9 +437,10 @@ def test_every_captured_printout_round_trips_byte_for_byte(cid):
 
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_the_allocation_is_the_square_of_the_unknown_count(cid):
-    """``ALLOCATE CM:`` is unknowns² on all ten captures — 100 = 10², 169 =
-    13², 784 = 28², 8100 = 90² — which is why the renderer computes it from
-    the unknown count instead of carrying it as a number of its own."""
+    """``ALLOCATE CM:`` is unknowns² on all thirty-nine captures — 100 = 10²,
+    169 = 13², 784 = 28², 8100 = 90², and fourteen distinct counts between —
+    which is why the renderer computes it from the unknown count instead of
+    carrying it as a number of its own."""
     data = extract(printout_text(cid))
     printed = next(
         int(line.removeprefix("ALLOCATE CM:"))
@@ -649,8 +651,8 @@ def test_the_unloaded_captures_say_so_in_one_line():
 
 
 def test_the_charge_block_answers_pq_and_matches_the_current_block():
-    """``PQ 0`` is in all ten decks and all ten printouts carry the block, one
-    charge row per current row, at the same segment centres."""
+    """``PQ 0`` is in all thirty-nine decks and all thirty-nine printouts carry
+    the block, one charge row per current row, at the same segment centres."""
     for cid in GATED_IDS:
         data = extract(printout_text(cid))
         assert len(data.charges) == len(data.currents) > 0

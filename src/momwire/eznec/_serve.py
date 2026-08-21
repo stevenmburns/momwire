@@ -462,7 +462,8 @@ class Structure:
     def unknown_count(self) -> int:
         """``Σ max(degree − 1, 0)`` over the fused nodes.
 
-        DERIVED from the ten captured printouts, and it reproduces all ten:
+        DERIVED from the ten printouts committed when this rule was written,
+        and it reproduces all thirty-nine committed since:
         an interior node of a wire has two element ends and one unknown; a
         free wire end has one and none; a junction of ``m`` wires has ``m``
         and ``m − 1`` (0013's five-wire apex contributes 4, which is what

@@ -39,11 +39,14 @@ turns a rounding difference into a byte difference, and because the numbers
 belong to U4/U5 and the columns belong here.
 
 Every column width, every blank column and every float format below was
-MEASURED off the ten captured printouts in ``tests/fixtures/eznec/printouts/``
+MEASURED off the captured printouts in ``tests/fixtures/eznec/printouts/``
 and is cited by capture id where a reader might reasonably doubt it.  The
 round-trip gate in ``tests/test_eznec_printout.py`` re-derives a
 :class:`RunData` from each captured printout and re-renders it, so a width
-that is wrong anywhere is a failing test rather than a comment.
+that is wrong anywhere is a failing test rather than a comment.  There were
+ten of those printouts when this module was written and there are thirty-nine
+since #504 U3; a citation reading "the ten captures" below means the ten this
+module measured a rule from, not the corpus it now answers.
 """
 
 from __future__ import annotations
@@ -572,8 +575,10 @@ _LOADING_COLUMNS: tuple[str, ...] = (
 # ALLOCATE CM is the one result line with nothing in front of it — every
 # other line in the printout is indented at least one column — and the only
 # integer in it is the matrix's element count: 100 = 10², 169 = 13²,
-# 784 = 28², 8100 = 90² on the ten captures, i.e. unknowns squared every
-# time.  Rendered from the unknown count so the identity cannot drift.
+# 784 = 28², 8100 = 90² on the ten captures the rule came off, and it holds
+# on all thirty-nine since — fourteen distinct unknown counts from 10 to 90,
+# i.e. unknowns squared every time.  Rendered from the unknown count so the
+# identity cannot drift.
 _ALLOCATE_LABEL = "ALLOCATE CM:"
 
 _TIMING_HEADING = " " * 32 + "- - - MATRIX TIMING - - -"
@@ -586,7 +591,8 @@ _NETWORK_COLUMNS: tuple[str, ...] = (
     "      NO.   NO.   NO.   NO.        REAL          IMAG.         REAL   "
     "       IMAG.         REAL          IMAG.",
 )
-# The ``TL`` form of the same table (0027, 0028).  Note the first heading row
+# The ``TL`` form of the same table (0027, 0028, and #504 U3's fourteen more).
+# Note the first heading row
 # spells ``SEG.`` with one space less than the ``NT`` form does — the two
 # headers were written separately in the engine and this transcription keeps
 # both as they came, and 0000/0023/0025 print them eight lines apart under one
@@ -788,7 +794,7 @@ def _loading(data: RunData) -> list[str]:
 
     ``ALLOCATE CM:`` follows immediately, with no blank line between — it is
     printed by whatever allocates the matrix rather than by this section, and
-    lands here in all ten captures.
+    lands here in all thirty-nine captures.
     """
     lines = [_LOADING_HEADING, ""]
     if not data.loads:
@@ -904,7 +910,7 @@ def _network_data(data: RunData) -> list[str]:
     printouts land the ``TL`` block, one blank, and then the ``NT`` block —
     0000's two lines and one network, 0023's four and one, 0025's four and
     three.  A single-kind table is the same rule with one run, which is why the
-    seven single-kind captures come through this unchanged.
+    twenty-one single-kind captures come through this unchanged.
 
     Grouping by RUN rather than by kind is the reading with the least invented
     in it.  Both models that fit the captures — "the engine sorts the table by
