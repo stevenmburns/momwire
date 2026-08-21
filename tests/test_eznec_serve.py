@@ -1,4 +1,4 @@
-"""Rung-1 to rung-3 physics, gated (#497 U4, #504 U1, #504 U2).
+"""Rung-1 to rung-3 physics, gated (#497 U4, #504 U1, #504 U2, #504 U3).
 
 Three gates carry this unit, and the split between them is the point.
 
@@ -26,6 +26,14 @@ does not reach EZNEC's viewer reaches nobody.  With the ground cards finished
 there is nothing hand-edited left in the refusal tables: every deck in them is
 the capture verbatim, reaching its own card at last.
 
+**And one deck class that is gated by neither.**  #504 U3 landed a printout
+for every served capture that had one, which is what turned the U1/U2
+liveness gates into structure gates and envelope pins — except on 0033/0034,
+where the numbers arrived and DISAGREED, far outside the family (see
+:data:`DIVERGENT_IDS`).  Their layout is gated like everything else and their
+physics is not pinned at all, because a bar drawn round a 275 Ω gap would be
+recording the gap as normal rather than as the finding it is.
+
 The manifest's normalizations for a served run are applied on the way in and
 nowhere else: CRLF to LF and the ``SOMMPD.NEX`` cache blocks at the reader
 (``test_eznec_printout.printout_text``), the ``FILL=``/``RUN TIME`` timing
@@ -46,7 +54,7 @@ import numpy as np
 import pytest
 
 from momwire import BSplineSolver
-from momwire.deck._nec5 import Nec5FarFieldRequest, parse_nec5
+from momwire.deck._nec5 import parse_nec5
 from momwire.eznec import _serve
 from momwire.eznec._shell import render
 
@@ -64,8 +72,8 @@ from test_eznec_printout import (
     printout_text,
 )
 
-# The BARE-STRUCTURE captures that shipped a printout — the thirteen this unit
-# is gated against.  The other seven gated captures carry ``TL``/``NT`` cards
+# The BARE-STRUCTURE captures whose physics is PINNED — the thirteen this unit
+# measures envelopes for.  The other gated captures carry ``TL``/``NT`` cards
 # and belong to the network unit, which measures its own table in
 # ``test_eznec_networks.py``; they still appear below, in the counting-rule
 # gate, because the count is a property of the deck's geometry and not of what
@@ -107,29 +115,40 @@ MININEC_IDS = ("0015", "0020", "0045", "0046")
 # status.
 SERVED_UNGATED_IDS = ("0036", "0037", "0038", "0039", "0040", "0041", "0042")
 
-# The captures the ``GN 0`` rung brought in with no printout of their own, and
-# they are the four most interesting decks that rung answered: 0011/0030
-# hang a coax ``TL`` off a dipole over ``GN 0`` (the first network over a
-# finite ground), and 0033/0034 are elevated radial systems whose radials
-# stand 1.8 cm — 1e-4 λ — above it.  Nothing here can be gated against a
-# printout; what IS gated is that they answer at all, with finite numbers,
-# under the right banner.  A capture errand for the next Windows session.
-FINITE_UNGATED_IDS = ("0011", "0030", "0033", "0034")
-
-# And the twelve the ``GD`` rung brought in the same way — the biggest single
-# fall-in of the arc, and the corpus's real feed systems: 0001-0009 are W7EL's
-# 4-square with six ``TL`` cards and a three-``LD``-pinned virtual anchor 100 λ
-# out (0001 with a 361-point azimuth cut, 0002-0009 stepping the frequency
-# under ``XQ``), 0024 is the same shape with seven pins, 0026 is the Cardioid
-# feed system, and 0029 is a dipole with a coax feedline over 20/0.0303 earth.
+# The two elevated radial systems, and the only decks in the corpus whose
+# printout landed and whose numbers then did not fit.  Both are the same
+# antenna at 1.832 MHz — a 35.56 m vertical over four 39.624 m radials — with
+# every radial and the feedpoint standing 1.778 cm above a ``GN 0`` earth,
+# which is 1.09e-4 of a 163.6 m wavelength.  0033 meshes it in five segments a
+# wire, 0034 in a 44-wire taper down to 1.8 cm elements.
 #
-# They are cheap, and WHY is the rung's own point: under ``GD`` the fill is
-# PEC, so a 100 λ anchor is ordinary geometry — the whole twelve render in
-# about two seconds.  The same decks over ``GN 0`` would be momwire#157's
-# Sommerfeld-grid shape (the scored matrix prices that as a hang), which is one
-# more reason a ``GD`` aliased onto ``GN 0`` would be wrong in a way nobody
-# would enjoy.  A capture errand for the next Windows session.
-MININEC_UNGATED_IDS = (
+# What is gated: the STRUCTURE, exactly as for every other capture — the
+# counting rule, the geometry columns, every heading and row and null.  All of
+# it passes, which is what says the divergence is not this seam's addressing.
+#
+# What is NOT gated: the physics.  Measured 2026-08-20 (#504 U3):
+#
+#   id    Z (capture)          Z (served)          |dZ|     peak cap/served
+#   0033  38.791 -49.583j      45.325+225.59j     275.25    -0.76 / -1.26
+#   0034  40.730 -43.452j      91.615+137.87j     188.33    -0.91 / -4.22
+#
+# The family this table sits in spans 0.05 to 19.5 Ω and 0.01 to 0.25 dB, so
+# these are not wide envelopes, they are a different answer: the reactance
+# changes SIGN.  Probing the ground card (the same deck at ``GN 1``, ``GD``,
+# ``GN -1``, and lifted to 1 m and 5 m) puts it in momwire's finite-ground
+# solve rather than at this seam — 0033 answers 25.550 − 83.466j over a
+# perfect image, 25.659 − 128.65j at 1 m and 16.103 − 234.55j at 5 m, so the
+# height dependence is steep and the 1.8 cm answer is the outlier of its own
+# family.  That is momwire#151/#157 territory (a Sommerfeld grid asked about a
+# horizontal wire 1e-4 λ up), it is not fixable inside this package, and it is
+# reported rather than pinned: a bar at 344 Ω would record the gap as normal.
+DIVERGENT_IDS = ("0033", "0034")
+
+# Every capture id this seam answers after #504 U3, pinned.  The ladder number
+# is 46 of 49 and the three that are left are named in
+# :func:`test_the_corpus_ladder_stands_where_u3_left_it`.
+SERVED_AFTER_U3 = (
+    "0000",
     "0001",
     "0002",
     "0003",
@@ -139,16 +158,6 @@ MININEC_UNGATED_IDS = (
     "0007",
     "0008",
     "0009",
-    "0024",
-    "0026",
-    "0029",
-)
-
-# Every capture id this seam answers after #504 U2, pinned.  The ladder number
-# is 43 of 49 and the six that are left are named in
-# :func:`test_the_corpus_ladder_stands_where_u2_left_it`.
-SERVED_AFTER_U2 = (
-    *MININEC_UNGATED_IDS[:9],  # 0001-0009
     "0010",
     "0011",
     "0012",
@@ -161,14 +170,15 @@ SERVED_AFTER_U2 = (
     "0019",
     "0020",
     "0021",
+    "0023",
     "0024",
+    "0025",
     "0026",
     "0027",
     "0028",
     "0029",
     "0030",
-    "0033",
-    "0034",
+    *DIVERGENT_IDS,  # 0033-0034
     "0035",
     *SERVED_UNGATED_IDS,  # 0036-0042
     "0043",
@@ -346,16 +356,32 @@ def _z_of(text: str) -> complex:
 
 _MASK = "#" * 4
 
-# ANTENNA INPUT PARAMETERS: three integers, then nine E12.4 cells.  Cells 2
-# and 3 are the CURRENT, which for an `EX 4` deck is the card's own drive and
-# has to survive unmasked; the rest is solved.
-_PORT_CELLS = tuple(k for k in range(9) if k not in (2, 3))
+# ANTENNA INPUT PARAMETERS: three integers, then nine E12.4 cells.  Which pair
+# of them is the CARD's rather than the solver's follows the EX card's own
+# kind, and #504 U3's captures are what forced that to be a lookup instead of a
+# constant: an `EX 4` deck sets its CURRENT (cells 2 and 3) and reads back a
+# voltage, an `EX 0` deck sets its VOLTAGE (cells 0 and 1) and reads back a
+# current.  0033 and 0034 are the corpus's only two `EX 0` decks and they
+# arrived with this unit; before them every gated capture was `EX 4` and the
+# exemption could be — and was — written down as one pair.
+_DRIVE_CELLS = {0: (0, 1), 4: (2, 3)}
 # The network table shares the format and not that exemption: the current at a
 # connection point is the STRUCTURE's, solved, even on the row whose port the
 # deck drives (0027 prints 1.4142E+00 under ANTENNA INPUT PARAMETERS and
 # 3.3124E-09 for the same port here — all of the difference went down the two
 # transmission lines).
 _NETWORK_PORT_CELLS = tuple(range(9))
+
+
+def drive_cells(cid: str) -> tuple[int, ...]:
+    """The ``ANTENNA INPUT PARAMETERS`` cells this capture's ``EX`` card SET.
+
+    Read off the deck, because that is where the answer is: a printout cannot
+    say which of its own numbers was a boundary condition.
+    """
+    (source,) = parse_nec5(deck_text(cid)).sources
+    return _DRIVE_CELLS[source.kind]
+
 
 # Pattern row column edges, measured on 0013 (which prints every form: a
 # blank SENSE, a `-999.99` null, and ordinary rows).
@@ -392,7 +418,7 @@ _TABLES = {
 }
 
 
-def _mask_port_row(line: str, solved: tuple[int, ...] = _PORT_CELLS) -> str:
+def _mask_port_row(line: str, solved: tuple[int, ...]) -> str:
     cells = [line[12 + 12 * k : 24 + 12 * k] for k in range(9)]
     for k in solved:
         cells[k] = _MASK.rjust(12)
@@ -431,13 +457,19 @@ def _mask_pattern_row(line: str) -> str:
     )
 
 
-def mask(text: str) -> str:
+def mask(text: str, drive: tuple[int, ...] = (2, 3)) -> str:
     """A printout with its solved cells replaced, table by table.
+
+    ``drive`` names the two ``ANTENNA INPUT PARAMETERS`` cells the deck's own
+    ``EX`` card fixed, which survive unmasked; :func:`drive_cells` reads it off
+    the deck.  The default is the ``EX 4`` pair, which is what every capture in
+    the corpus but 0033 and 0034 writes.
 
     Also applies the manifest's two remaining served-run normalizations: the
     timing lines are dropped outright, and nothing else about them is looked
     at.
     """
+    port_cells = tuple(k for k in range(9) if k not in drive)
     lines = text.split("\n")
     out: list[str] = []
     kind: str | None = None
@@ -465,7 +497,7 @@ def mask(text: str) -> str:
             out.append(line)
             continue
         if kind == "port":
-            out.append(_mask_port_row(line))
+            out.append(_mask_port_row(line, port_cells))
         elif kind == "network":
             out.append(_mask_port_row(line, _NETWORK_PORT_CELLS))
         elif kind == "wire":
@@ -483,18 +515,27 @@ def mask(text: str) -> str:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cid", SERVED_IDS)
+@pytest.mark.parametrize("cid", SERVED_IDS + DIVERGENT_IDS)
 def test_a_served_printout_is_the_capture_wherever_it_is_not_a_solved_number(cid):
-    """The unit's whole shape, six times over.
+    """The unit's whole shape, fifteen times over.
 
     What this proves, and it is most of the file: the row counts, the tag and
     element numbering, the geometry summary, the ``ALLOCATE CM`` allocation,
     the card echoes, the environment banner, the frequency and wavelength, the
-    drive current cell, the section order and the blank lines between sections
-    are all correct — and the ``-999.99`` nulls fall on exactly the directions
-    the capture put them, with SENSE blank on exactly the same rows.
+    drive cell, the section order and the blank lines between sections are all
+    correct — and the ``-999.99`` nulls fall on exactly the directions the
+    capture put them, with SENSE blank on exactly the same rows.
+
+    The two divergent captures are here and belong here.  A printout whose
+    numbers are wrong can still have every heading, count and null right, and
+    saying which half is which is the entire value of splitting a structure
+    gate from an envelope: 0033 and 0034 pass this line and are pinned
+    nowhere, so the finding stays a finding instead of hiding inside a wide
+    bar.
     """
-    assert mask(served(cid)) == mask(printout_text(cid))
+    assert mask(served(cid), drive_cells(cid)) == mask(
+        printout_text(cid), drive_cells(cid)
+    )
 
 
 def test_the_shell_writes_the_served_printout_and_still_exits_zero(tmp_path):
@@ -561,7 +602,7 @@ def test_the_counting_rule_reproduces_every_captured_count(cid):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cid", SERVED_IDS)
+@pytest.mark.parametrize("cid", SERVED_IDS + DIVERGENT_IDS)
 def test_the_current_table_s_geometry_columns_are_the_captured_ones(cid):
     """Segment centres and lengths, compared as NUMBERS rather than bytes.
 
@@ -623,7 +664,24 @@ def test_the_pattern_peak_lands_where_the_capture_puts_it(cid):
     assert abs(best_got.total_db - best_want.total_db) <= PEAK_BAR[cid]
 
 
-@pytest.mark.parametrize("cid", ("0015", "0020", "0021", "0045", "0047"))
+# The 181-row elevation cuts and the ``-999.99`` rows each puts where.  The
+# five verticals null at the horizon AND at the zenith; the three coax-fed
+# dipoles (#504 U3's, and the corpus's only networks over a finite ground with
+# an elevation cut) null at the horizon only, because a horizontal dipole's
+# field does not vanish overhead.
+_ELEVATION_NULLS = {
+    "0011": [90.0, -90.0],
+    "0015": [90.0, 0.0, -90.0],
+    "0020": [90.0, 0.0, -90.0],
+    "0021": [90.0, 0.0, -90.0],
+    "0029": [90.0, -90.0],
+    "0030": [90.0, -90.0],
+    "0045": [90.0, 0.0, -90.0],
+    "0047": [90.0, 0.0, -90.0],
+}
+
+
+@pytest.mark.parametrize("cid", sorted(_ELEVATION_NULLS))
 def test_the_finite_ground_elevation_cut_agrees_at_every_printed_angle(cid):
     """All 181 rows of the ``RP 0`` cut, not just its peak.
 
@@ -638,18 +696,28 @@ def test_the_finite_ground_elevation_cut_agrees_at_every_printed_angle(cid):
     worst row, same three nulls — the medium is doing the same job in both, and
     what differs is the current it is doing it to.
 
-    The three ``-999.99`` rows are skipped HERE and gated harder elsewhere:
-    they are never masked, so the structure gate already compares them byte
-    for byte and would fail if the served run put a null anywhere the capture
-    did not.  Which it does not — the horizon nulls at θ = ±90° (a vertical
-    over any ground has no grazing field) and the zenith null at θ = 0° land
-    on exactly the captured rows.
+    #504 U3 adds a third shape to that list and it is the one that generalizes
+    the claim off the base-fed vertical: 0011/0029/0030 are a half-wave dipole
+    9.144 m up with a coax ``TL`` running down to a feedpoint 3 mm off the
+    ground, over 20/0.0303 earth, and their cuts agree at 0.04 dB across all
+    179 non-null rows.  A different antenna, a different height, a different
+    medium, a network in the middle of it — and both ground modes are
+    represented (0011/0030 ``GN 0``, 0029 ``GD``), so the same three decks say
+    the two modes' far fields are each right rather than jointly plausible.
+
+    The ``-999.99`` rows are skipped HERE and gated harder elsewhere: they are
+    never masked, so the structure gate already compares them byte for byte and
+    would fail if the served run put a null anywhere the capture did not.
+    Which it does not — the horizon nulls at θ = ±90° (nothing over any ground
+    has a grazing field) and the vertical's zenith null at θ = 0° land on
+    exactly the captured rows, and the dipoles' overhead rows carry numbers on
+    both sides.
     """
     (want,) = extract(printout_text(cid)).patterns
     (got,) = extract(served(cid)).patterns
     assert len(got.rows) == len(want.rows) == 181
     nulls = [row.theta_deg for row in want.rows if row.total_db == _NULL_DB]
-    assert nulls == [90.0, 0.0, -90.0]
+    assert nulls == _ELEVATION_NULLS[cid]
     worst = max(
         abs(a.total_db - b.total_db)
         for a, b in zip(want.rows, got.rows)
@@ -720,11 +788,11 @@ def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
     )
 
 
-@pytest.mark.parametrize("cid", SERVED_IDS)
+@pytest.mark.parametrize("cid", SERVED_IDS + DIVERGENT_IDS)
 def test_a_lossless_deck_radiates_everything_it_is_given(cid):
     """Every wire here is a perfect conductor and this dialect has no
     conductivity card, so INPUT = RADIATED, WIRE LOSS = 0 and EFFICIENCY reads
-    100.00 — which is what all nine captures print.
+    100.00 — which is what all fifteen captures print.
 
     Including the three over LOSSY GROUND, which is the entry worth reading
     twice: 0047 dumps a good fraction of its input into the earth and still
@@ -732,7 +800,11 @@ def test_a_lossless_deck_radiates_everything_it_is_given(cid):
     the STRUCTURE dissipates, and the ground is not part of the structure —
     so a reader who wants the ground loss has to take it out of the pattern's
     average gain, not out of this block.  Reproducing that means reproducing
-    the convention, not correcting it."""
+    the convention, not correcting it.
+
+    The two divergent captures belong in a STRUCTURAL claim like this one:
+    with no loads and no networks the budget is an identity, so it holds on a
+    deck whose numbers are wrong for reasons of its own."""
     power = extract(served(cid)).power
     assert power.wire_loss == 0.0
     assert power.input_power == power.radiated_power
@@ -1272,35 +1344,38 @@ def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
         assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in text, cid
 
 
-def test_the_corpus_ladder_stands_where_u2_left_it():
-    """The served-id SET, pinned — 43 of the 49 captured decks.
+def test_the_corpus_ladder_stands_where_u3_left_it():
+    """The served-id SET, pinned — 46 of the 49 captured decks.
 
     A rung that lands moves decks across this line and a regression moves them
     back, and neither should be able to happen quietly: the set is written out
     id by id so that changing it is an edit somebody made on purpose, with the
-    new number in the diff beside the old one.  #504 U1 took it from 20 to 27
-    and U2 from 27 to 43 — the biggest single step of the arc, because the bare
-    ``GD`` is the corpus's second-most-common ground and it carries the feed
-    systems (nine 4-squares, two cardioids, a coax-fed dipole) with it.
+    new number in the diff beside the old one.  #504 U1 took it from 20 to 27,
+    U2 from 27 to 43, and U3 from 43 to 46 — the last three are 0000, 0023 and
+    0025, the decks whose ``NETWORK DATA`` table carries ``TL`` and ``NT`` rows
+    at once, and their layout is no longer unobserved: their own printouts
+    landed with this unit and show it.
 
-    The six that are left name three different cards and no ground:
+    The three that are left name two cards and no ground:
 
-    * 0000, 0023, 0025 — ``TL`` and ``NT`` in one deck.  This is the entry that
-      moved: all three stand over a ``GD``, so until U2 they were told their
-      ground was unserved, and now they are told the truth, which is that the
-      ``NETWORK DATA`` table has no observed layout carrying both card types.
-    * 0031, 0032 — phased multi-``EX``.  0031 stands over a ``GD`` too and now
-      reaches its own card as captured, which is why the refusal table above no
-      longer hand-edits it.
+    * 0031, 0032 — phased multi-``EX``.  0031 stands over a ``GD`` and reaches
+      its own card as captured, which is why the refusal table above no longer
+      hand-edits it.
     * 0022 — ``NE``, the near field, which no rung of this arc renders.
+
+    What this number does NOT claim is that all 46 are right.  0033 and 0034
+    are served, are in this set, and disagree with their captures by 275 and
+    188 Ω (:data:`DIVERGENT_IDS`); the ladder counts decks that get an ANSWER
+    rather than decks that get a pinned one, and that distinction is why the
+    envelope tables are written out separately.
     """
     served_ids = tuple(
         cid for cid, text in sorted(corpus().items()) if "NEC ERROR" not in text
     )
-    assert served_ids == SERVED_AFTER_U2
-    assert len(served_ids) == 43
+    assert served_ids == SERVED_AFTER_U3
+    assert len(served_ids) == 46
     refused = sorted(set(corpus()) - set(served_ids))
-    assert refused == ["0000", "0022", "0023", "0025", "0031", "0032"]
+    assert refused == ["0022", "0031", "0032"]
 
 
 @pytest.mark.parametrize("cid", SERVED_UNGATED_IDS)
@@ -1320,82 +1395,51 @@ def test_the_ungated_rung_one_captures_still_serve(cid):
     )
 
 
-@pytest.mark.parametrize("cid", FINITE_UNGATED_IDS)
-def test_the_ungated_finite_ground_captures_answer_with_finite_numbers(cid):
-    """The four decks the ground rung brought in with no printout to gate.
+@pytest.mark.parametrize("cid", DIVERGENT_IDS)
+def test_the_elevated_radial_systems_disagree_with_their_captures_on_purpose(cid):
+    """The finding, written down as a gate so it cannot be pinned by accident.
 
-    A liveness gate and it says so: with nothing to compare against, the
-    honest claims are that the deck is answered rather than refused, that it
-    is answered under the FINITE GROUND banner, that its ``RP`` came back with
-    all 181 rows, and that no cell in it is a NaN or an infinity — which is
-    the failure mode a finite ground actually has, since ``sqrt(εc − sin²θ)``
-    and a wire 1e-4 λ off the plane are both places an answer can stop being a
-    number without stopping being printed.
+    0033 and 0034 are the two decks whose printouts landed with #504 U3 and
+    whose numbers did not fit anything: 275 Ω and 188 Ω of impedance against a
+    family that spans 0.05 to 19.5, with the REACTANCE changing sign, and 0.50
+    and 3.31 dB on the pattern peak against a family that spans 0.01 to 0.25.
+    Both are the same antenna — a 35.56 m vertical over four 39.624 m radials
+    at 1.832 MHz — with everything but the vertical standing 1.778 cm above a
+    ``GN 0`` earth, 1.09e-4 of the 163.6 m wavelength.
 
-    0011/0030 are the first NETWORK over a finite ground anywhere in this
-    corpus (a coax ``TL`` from a dipole down to a feedpoint), and 0033/0034
-    are elevated radial systems — the geometry the reflection-coefficient
-    ground model would have been wrong about and the Sommerfeld one is not
-    (``docs/refl-coef-ground-plan.md``, momwire#151).
+    Three things are asserted and each one is load-bearing.
+
+    The gap is REAL and large, so nobody quietly widens an envelope until it
+    covers this; if a fix lands, this test fails and the fixer has to come back
+    and pin the new number properly, which is exactly the conversation the
+    failure should start.
+
+    The two decks agree with EACH OTHER about the antenna, roughly.  0033
+    meshes it in five segments a wire and 0034 in a 44-wire taper down to 1.8 cm
+    elements, and they are the same physical model; the captures answer 38.791
+    − 49.583j and 40.730 − 43.452j, 7 Ω apart, and this seam answers 45.325 +
+    225.59j and 91.615 + 137.87j, which is 100 Ω apart.  The engine is mesh-
+    insensitive here and this seam is not, and a mesh sensitivity that appears
+    only 1e-4 λ off a Sommerfeld plane is a statement about the ground model
+    rather than about the basis.
+
+    And the STRUCTURE is right, which is what puts the finding outside this
+    package: the counting rule, the geometry columns and the whole printout
+    layout pass their own gates on these two decks.  What is left is momwire's
+    finite-ground solve at grazing height (``docs/refl-coef-ground-plan.md``,
+    momwire#151/#157), reached through kwargs this seam only passes on.
     """
-    text = render(deck_text(cid))
-    assert "NEC ERROR" not in text
-    assert "FINITE GROUND.  SOMMERFELD SOLUTION" in text
-    for token in ("NAN", "nan", "INF", "Infinity", "*****E"):
-        assert token not in text.replace(" ***** INPUT LINE", ""), token
-    data = extract(text)
-    (block,) = data.patterns
-    assert len(block.rows) == 181
-    assert all(math.isfinite(row.total_db) for row in block.rows)
-    assert math.isfinite(abs(data.sources[0].impedance))
-    assert data.ground is not None
-
-
-@pytest.mark.parametrize("cid", MININEC_UNGATED_IDS)
-def test_the_ungated_mininec_captures_answer_with_finite_numbers(cid):
-    """The twelve decks the ``GD`` rung brought in with no printout to gate.
-
-    The same liveness claims the ``GN 0`` fall-ins get, on decks that are worth
-    a good deal more: these are the corpus's FEED SYSTEMS — W7EL's 4-square
-    with six ``TL`` cards run off a three-pin virtual anchor 100 λ from the
-    antenna (0001-0009, 0024), the Cardioid feed system (0026), and a coax-fed
-    dipole (0029).  Every trap this arc has met at once: node addressing, the
-    ``1.E+10`` pin idiom, the anchor, a network over a real ground.
-
-    What is claimed is only what can be: they answer rather than refuse, under
-    the finite banner, with a medium, with every printed cell a number, and
-    with the ``RP`` row count the card asked for.  A capture errand for the
-    next Windows session — and the numbers below are then a byte gate away.
-
-    The 100 λ anchor is the reason to say the timing out loud: under ``GD`` the
-    fill is PEC, so the anchor is ordinary geometry and these twelve render in
-    about two seconds all told.  The same decks over ``GN 0`` would be building
-    a Sommerfeld grid across 100 λ of extent (momwire#157, priced as a hang in
-    the scored matrix), which is what makes "route ``GD`` to the Sommerfeld
-    solve" the kind of aliasing bug that reports itself as the machine locking
-    up rather than as a wrong number.
-    """
-    text = render(deck_text(cid))
-    assert "NEC ERROR" not in text
-    assert "FINITE GROUND.  SOMMERFELD SOLUTION" in text
-    for token in ("NAN", "nan", "INF", "Infinity", "*****E"):
-        assert token not in text.replace(" ***** INPUT LINE", ""), token
-    data = extract(text)
-    assert data.ground is not None
-    assert math.isfinite(abs(data.sources[0].impedance))
-    assert all(math.isfinite(row.magnitude) for row in data.currents)
-    assert all(math.isfinite(row.magnitude) for row in data.charges)
-    # The row count is the RP card's own N_THETA * N_PHI, or no block at all
-    # for the eight XQ-only frequency steps.
-    requests = [
-        request
-        for request in parse_nec5(deck_text(cid)).requests
-        if isinstance(request, Nec5FarFieldRequest)
-    ]
-    assert len(data.patterns) == len(requests)
-    for block, request in zip(data.patterns, requests, strict=True):
-        assert len(block.rows) == request.n_theta * request.n_phi
-        assert all(math.isfinite(row.total_db) for row in block.rows)
+    want = extract(printout_text(cid)).sources[0].impedance
+    got = extract(served(cid)).sources[0].impedance
+    assert abs(got - want) > 100.0, (
+        f"{cid}: served {got} against captured {want} — if this closed, "
+        "measure the new offset and give the deck a real envelope pin"
+    )
+    # The captures agree with each other about the antenna; the seam does not.
+    captured = [extract(printout_text(k)).sources[0].impedance for k in DIVERGENT_IDS]
+    served_z = [extract(served(k)).sources[0].impedance for k in DIVERGENT_IDS]
+    assert abs(captured[0] - captured[1]) < 10.0
+    assert abs(served_z[0] - served_z[1]) > 50.0
 
 
 def test_the_favored_wire_carries_physics_at_a_five_wire_junction():
