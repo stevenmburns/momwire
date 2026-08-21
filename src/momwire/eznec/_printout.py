@@ -238,6 +238,12 @@ class LoadRow:
     IMAGINARY column BLANK where the card wrote ``0.``  Whether the engine
     blanks a zero or never prints that column for ``LD 4`` is unobserved, so
     the cell is carried as present-or-absent rather than guessed at.
+
+    :attr:`node_from` and :attr:`node_thru` are the DECODED node, and the
+    contrast with :class:`NetworkRow` is the point: the same ``-1`` address
+    that prints as a negative segment there prints as ``1`` here (0025's
+    ``LD 4,1,-1`` against its ``TL 5,3,1,-1``, in one printout).  The loading
+    table carries no sign at all.
     """
 
     tag: int
