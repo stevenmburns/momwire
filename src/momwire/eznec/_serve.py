@@ -6,18 +6,20 @@ momwire solve and reads the answer back into the numbers the printout wants.
 It computes physics and formats nothing, exactly as :mod:`._printout`
 formats and computes nothing.
 
-Rungs 1 through 3 of the scored ladder (antennaknobs
+Rungs 1 through 4 of the scored ladder (antennaknobs
 ``docs/status/2026-08-20-eznec-nec5-scored-matrix.md``) are what is served,
 and with rung 3 the GROUND is finished: all four cards the dialect writes —
 ``GN -1`` free space, ``GN 1`` perfect ground, ``GN 0`` / ``GN 2`` Sommerfeld
-finite ground and the bare ``GD`` MININEC-type ground — plus one
-``EX 0``/``EX 4`` source at a node, ``LD 4`` fixed impedances, node-addressed
-``TL`` and ``NT`` networks — separately and, since #504 U3, together in one
-``NETWORK DATA`` table — and the ``RP 0`` / ``XQ`` / ``PQ 0`` requests.
-Everything above them — phased multi-``EX`` drive, the near field, a mixed
-table whose deck INTERLEAVES the two card kinds — refuses BY NAME through
-:func:`refusal`, because a seam that answers a question it has no gate for is
-worse than one that says so.
+finite ground and the bare ``GD`` MININEC-type ground — plus ``EX 0``/``EX 4``
+sources at a node, ``LD 4`` fixed impedances, node-addressed ``TL`` and ``NT``
+networks — separately and, since #504 U3, together in one ``NETWORK DATA``
+table — and the ``RP 0`` / ``XQ`` / ``PQ 0`` requests.  Rung 4 is the PHASED
+drive: several ``EX 4`` cards at once, which is how this dialect spells an
+array (a four-square is four set currents and no network at all).
+Everything above them — the near field, a mixed table whose deck INTERLEAVES
+the two card kinds, the three multi-source shapes nothing has printed —
+refuses BY NAME through :func:`refusal`, because a seam that answers a
+question it has no gate for is worse than one that says so.
 
 Courtesy stance, the arc's throughout: every NEC-5 fact below was measured
 off captured decks and captured printouts under ``tests/fixtures/eznec/``,
@@ -48,6 +50,16 @@ Three drive spellings, and the address picks between them
 * a FREE wire end is refused.  There is no through-current path at a lone
   conductor end for a series EMF to sit in, momwire says so at the
   constructor, and no captured deck asks for one.
+
+The address picks the spelling one card at a time, and #504 U4 changes
+nothing about that: a phased deck is several cards each picking its own, and
+0031's four are four ground-contact feeds because all four verticals stand in
+the plane.  What the phased deck DOES change is the drive: with one source the
+card is a scale on a unit probe, with four it is a simultaneous boundary
+condition on four coupled ports and the volts that deliver them come out of a
+4x4 solve (:func:`_multi_drive_state`).  Two cards on ONE port would be a
+boundary condition written twice; both ways to write that — the same address
+twice, and the two sides of one cut — refuse by name.
 
 Two conventions, and the one matrix between them
 ------------------------------------------------
@@ -152,6 +164,18 @@ and then computes none, because this mode never wanted any.
 
 The budget's own arithmetic
 ---------------------------
+``INPUT POWER`` is the SUM of the ``ANTENNA INPUT PARAMETERS`` rows, one row
+per ``EX`` card, each row's own ``½·Re(V·I*)``.  With one source that is a
+sentence about nothing; with four it is the rung's sharpest arithmetic, and
+0031 is why.  Its tag-1 vertical prints ``-1.7790E+00`` OHMS and
+``-1.7790E+00`` WATTS — a negative driving-point resistance, because at that
+phasing the element takes more power out of the array through the mutual
+coupling than its own generator puts in — and the printed ``INPUT POWER =
+1.2831E+02`` is the other three rows with that one SUBTRACTED.  Nothing in
+this module clamps, flags or apologises for a negative row: it rides through
+the sum, through ``EFFICIENCY``, and through the pattern's normalization
+untouched, because that is what the capture shows the engine doing.
+
 ``RADIATED POWER`` is not ``INPUT − losses`` here.  Measured on all six
 network captures, NEC-5 prints ``INPUT + Σ(network connection point powers)
 − WIRE LOSS`` and ``NETWORK LOSS = −Σ``: on 0012 that is 114.47 − 36.714 =
@@ -196,6 +220,7 @@ from ..deck._nec5 import (
     Nec5Node,
     Nec5PerfectGround,
     Nec5SommerfeldGround,
+    Nec5Source,
     Nec5TransmissionLine,
     Nec5Wire,
 )
@@ -310,9 +335,34 @@ _REFUSE_ZERO_LENGTH_LINE = (
     "nodes are the same point, so there is no distance for NEC's "
     "zero-length rule to resolve it to"
 )
-_REFUSE_MULTI_EX = (
-    "this deck carries {count} EX cards; a phased multi-source drive is not "
-    "served at this seam yet, and one EX is what every rung-1 capture writes"
+_REFUSE_MIXED_DRIVE_KINDS = (
+    "this deck carries {count} EX cards writing BOTH kinds - {voltages} EX 0 "
+    "(a set voltage) and {currents} EX 4 (a set current); a multi-source drive "
+    "is served only where every card sets a CURRENT, which is what both "
+    "captured multi-EX decks write, and a mixed drive has no printed row "
+    "anywhere to be gated against"
+)
+_REFUSE_MULTI_EX_VOLTAGE = (
+    "this deck carries {count} EX 0 cards; a multi-VOLTAGE drive is not served "
+    "at this seam - none of the 49 captured decks writes one, so nothing says "
+    "what the engine prints for it"
+)
+_REFUSE_MULTI_EX_NETWORKS = (
+    "this deck carries {count} EX cards and a TL/NT network; a phased "
+    "multi-source drive that reaches the structure THROUGH a network is not "
+    "served at this seam - none of the 49 captured decks writes one, and a "
+    "constrained drive composed with the network reducer is unobserved"
+)
+_REFUSE_DUPLICATE_EX = (
+    "two EX cards address {at}; one node is one port, so the second card is a "
+    "second generator in series across the same gap - no captured deck writes "
+    "that, and this seam will not decide how two set currents share one path"
+)
+_REFUSE_TWO_DRIVES_ONE_PORT = (
+    "{first} and {second} are the two sides of ONE cut and an EX card drives "
+    "each; the antenna presents a single port to both, so the two set currents "
+    "are one boundary condition written twice - no captured deck writes that, "
+    "and this seam will not decide which of them wins"
 )
 _REFUSE_NE = (
     "NE (near electric field) is not served at this seam yet: the NEAR ELECTRIC "
@@ -340,27 +390,31 @@ def refusal(deck: Nec5Deck) -> str | None:
     the request — so a deck that is out of scope in several ways names the
     reason a reader would fix first.  It is the ladder's own shape, and every
     rung that lands moves decks DOWN it rather than changing it: 0022 used to
-    name its ``GN 0`` and named its ``NE`` once the ground rung landed, and the
+    name its ``GN 0`` and named its ``NE`` once the ground rung landed; the
     three mixed-card decks (0000, 0023, 0025) named their ground, then their
-    TL-and-NT table, and now name nothing at all.
+    TL-and-NT table, and now name nothing at all; and 0031 named its ground,
+    then its four ``EX`` cards, and now names nothing either.
 
-    There is no ground refusal left to put first, and no mixed-table refusal
-    either.  All four ground cards this dialect writes are served — ``GN -1``,
-    ``GN 1``, ``GN 0``/``GN 2`` and the bare ``GD`` — and a table carrying both
-    card kinds is served in the layout the three mixed captures print.  What is
-    left on that rung is an ORDER: every captured deck writes all of its ``TL``
-    cards before any of its ``NT`` cards, both readings of the sub-table rule
-    agree while that holds, and a deck that interleaves them separates the two
-    readings with nothing to pick between them.  So "grounds first" survives as
-    the rule a fifth ground card would land under rather than as a description
-    of a line that is still there.
+    There is no ground refusal left to put first, no mixed-table refusal and,
+    since #504 U4, no plain multi-source one.  All four ground cards this
+    dialect writes are served, a table carrying both card kinds is served, and a
+    deck driven by several ``EX 4`` cards at once is served as the constrained
+    drive it is.  What is left on those rungs is one ORDER and five shapes nothing
+    has ever printed.  The order: every captured deck writes all of its
+    ``TL`` cards before any of its ``NT`` cards, both readings of the sub-table
+    rule agree while that holds, and a deck that interleaves them separates the
+    two readings with nothing to pick between them.  The shapes are
+    :func:`_drive_refusal`'s.  So "grounds first" survives as the rule a fifth
+    ground card would land under rather than as a description of a line that is
+    still there.
     """
     if deck.transmission_lines and deck.networks and _interleaves_networks(deck):
         return _REFUSE_MIXED_ORDER
     if not deck.sources:
         return _REFUSE_NO_EX
-    if len(deck.sources) > 1:
-        return _REFUSE_MULTI_EX.format(count=len(deck.sources))
+    drive = _drive_refusal(deck)
+    if drive is not None:
+        return drive
     if deck.frequency_mhz is None or deck.frequency_mhz <= 0.0:
         return _REFUSE_NO_FR
     for request in deck.requests:
@@ -370,6 +424,52 @@ def refusal(deck: Nec5Deck) -> str | None:
             return _REFUSE_RP_RANGE
     if not deck.requests:
         return _REFUSE_NO_REQUEST
+    return None
+
+
+def _drive_refusal(deck: Nec5Deck) -> str | None:
+    """The multi-``EX`` shapes this seam still has no capture for.
+
+    One ``EX`` is always in scope and always has been.  Several are in scope
+    since #504 U4 in exactly ONE shape — every card an ``EX 4``, no ``TL`` and
+    no ``NT`` on the deck, one card per port — because that shape is the one
+    the corpus prints: 0031's four phased verticals over a bare ``GD`` and
+    0032's two over a perfect ground, and nothing else.  The four refusals below
+    are four ways a deck can leave it, and each is worth naming separately
+    rather than folding into one "unsupported drive" line, because each would
+    be fixed by a different capture.
+
+    A mixed drive would need the engine's rule for a voltage source and a
+    current source in one matrix; a multi-``EX 0`` would need its rule for
+    several set voltages; a phased drive through a network would need to say
+    how the reducer's termination branches compose with a constrained current —
+    a question with an obvious-looking answer, which is exactly why guessing it
+    would be the expensive mistake; and two cards at one address would need it
+    to say which of two set currents wins.  All four are 0 of 49.
+
+    A FIFTH way out lands two cards on one port through two different
+    addresses, and only the mesh can see it — :func:`_check_one_port_per_drive`
+    catches that one, on the far side of :func:`build_mesh`.
+    """
+    kinds = [source.kind for source in deck.sources]
+    if len(kinds) == 1:
+        return None
+    voltages = kinds.count(0)
+    if voltages and voltages != len(kinds):
+        return _REFUSE_MIXED_DRIVE_KINDS.format(
+            count=len(kinds), voltages=voltages, currents=len(kinds) - voltages
+        )
+    if voltages:
+        return _REFUSE_MULTI_EX_VOLTAGE.format(count=voltages)
+    if deck.transmission_lines or deck.networks:
+        return _REFUSE_MULTI_EX_NETWORKS.format(count=len(kinds))
+    seen: set[Nec5Node] = set()
+    for source in deck.sources:
+        if source.at in seen:
+            return _REFUSE_DUPLICATE_EX.format(
+                at=f"{source.at.tag},{source.at.written}"
+            )
+        seen.add(source.at)
     return None
 
 
@@ -1192,11 +1292,20 @@ def _port_state(
     with one source the whole system is linear in its voltage, so the volts
     that deliver ``I0`` are found by dividing rather than by a second fill.
     ``EX 0`` takes the same road with the scale known in advance.
+
+    A PHASED drive is that same trick with the division become an inversion,
+    and it goes down :func:`_multi_drive_state` rather than through here.  The
+    single-source path below is left exactly as #504 U3 left it — not for
+    elegance but because forty-six captured printouts are byte-gated against
+    it, and a rearrangement that is algebraically identical is not necessarily
+    identical in its last bits.
     """
     t = _transform(mesh)
     y = t.T @ y_solver @ t
     n = len(mesh.sites)
     z_load = np.array([site.load for site in mesh.sites], dtype=np.complex128)
+    if len(deck.sources) > 1:
+        return _multi_drive_state(deck, mesh, y, z_load)
     (source,) = deck.sources
     (driven,) = [site.index for site in mesh.sites if site.driven]
     probe = np.zeros(n, dtype=np.complex128)
@@ -1246,6 +1355,74 @@ def _port_state(
     )
 
 
+def _multi_drive_state(
+    deck: Nec5Deck,
+    mesh: _Mesh,
+    y: np.ndarray,
+    z_load: np.ndarray,
+) -> _PortState:
+    """Several ``EX 4`` cards at once: the CONSTRAINED current drive.
+
+    A phased array is the one place in this dialect where a drive is not a
+    scale.  Four cards fix four currents simultaneously, the four ports are
+    coupled through the structure, and no single number rescales the answer —
+    0031's own row table is the proof, since its four ports report four
+    different impedances and one of them is NEGATIVE.
+
+    The algebra is the single-source branch's, read the other way round.  The
+    loaded structure's port admittance ``Y_eff = Y·(1 + Z·Y)^-1`` maps applied
+    voltages to port currents; an UNDRIVEN site is shorted, ``V = 0``, which is
+    the same boundary condition the unit probe already imposes on every site it
+    is not at; so the drive is the square sub-block on the driven sites::
+
+        Y_eff[driven, driven] · V_driven = I_spec
+
+    one solve, no second fill, and the whole of what "phased" costs over
+    "scaled".  The undriven sites then read out of the same ``Y_eff`` and the
+    gap voltages come back through the load drop exactly as they do above.
+
+    ``I_spec`` is in the DECK's convention, which is where every number in this
+    module lives (module docstring, "Two conventions"): the current an ``EX 4``
+    sets is the one flowing along the favored wire's own end-1 → end-2
+    direction, and ``T`` has already put ``y`` on that side of the transform.
+
+    The set currents are restored afterwards rather than read back.  They come
+    out of the solve equal to what went in, to round-off — that is what the
+    equation says — and round-off is exactly what would print ``1.1102E-16``
+    where the capture prints ``0.0000E+00`` (0032's second row sets a pure
+    imaginary current and its real part is a zero that has to stay one).  The
+    U1 restore rule, once per row.
+
+    No network reaches here: a phased drive on a deck carrying ``TL`` or ``NT``
+    refuses by name in :func:`_drive_refusal`, so there is no reducer to
+    compose with and the only difference between ``i_source`` and ``i_port`` is
+    that restore.
+    """
+    n = len(mesh.sites)
+    driven = [site.index for site in mesh.sites if site.driven]
+    loaded = np.eye(n, dtype=np.complex128) + z_load[:, None] * y
+    y_eff = y if not np.any(z_load) else np.linalg.solve(loaded.T, y.T).T
+
+    site_of = {site.at: site.index for site in mesh.sites}
+    row_of = {index: k for k, index in enumerate(driven)}
+    spec = np.zeros(len(driven), dtype=np.complex128)
+    for source in deck.sources:
+        spec[row_of[site_of[source.at]]] = source.drive
+
+    v_applied = np.zeros(n, dtype=np.complex128)
+    v_applied[driven] = np.linalg.solve(y_eff[np.ix_(driven, driven)], spec)
+    i_port = y_eff @ v_applied
+    i_source = i_port.copy()
+    i_source[driven] = spec
+    return _PortState(
+        v_applied=v_applied,
+        v_gap=v_applied - z_load * i_port,
+        i_port=i_port,
+        i_source=i_source,
+        z_load=z_load,
+    )
+
+
 # --------------------------------------------------------------------------
 # the readouts
 # --------------------------------------------------------------------------
@@ -1291,6 +1468,76 @@ def _port_row(
         admittance=_ratio(current, voltage),
         power=0.5 * (voltage * current.conjugate()).real,
     )
+
+
+def _source_row(
+    structure: Structure, site: _Site, state: _PortState, source: Nec5Source
+) -> PortRow:
+    """One ``ANTENNA INPUT PARAMETERS`` row, for one ``EX`` card.
+
+    Whichever of the two quantities the card SET is a boundary condition, not a
+    result: reading it back out of the solve only adds round-off to a number
+    that was exact going in, and it decides the sign of a zero — 0010's
+    ``EX 4 … 1.414214,0.`` came back with an imaginary part of 1.1e-16 and
+    printed ``1.1102E-16`` where the capture prints ``0.0000E+00``.  The portal
+    restores its driven port voltages for the same reason (momwire#456 phase
+    C); this is that rule on the other card, and #504 U4 applies it once per
+    row rather than once per deck.
+
+    ``POWER`` is this row's own ``½·Re(V·I*)`` and it is allowed to be
+    NEGATIVE.  0031's tag-1 row prints ``-1.7790E+00`` watts against a
+    ``-1.7790E+00`` Ω resistance: the element is absorbing from the other three
+    through the mutual coupling, its generator is being driven rather than
+    driving, and the array's INPUT POWER is the sum of the four rows with that
+    one taken off.  Nothing here clamps, flags or apologises for it — a
+    negative row is arithmetic, and the budget that carries it is the engine's.
+    """
+    voltage = complex(state.v_applied[site.index])
+    current = complex(state.i_source[site.index])
+    if source.kind == 0:
+        voltage = source.drive
+    else:
+        current = source.drive
+    return PortRow(
+        tag=source.at.tag,
+        segment=_segment_of(structure, source.at),
+        # The trailing index tracks the DECK's spelling, 9 of 9 rows in the
+        # capture study: node 0 written -1 prints 2, a positive node field
+        # prints 1.  0031 and 0032 print ``2`` on every one of their six rows,
+        # which is six more of the same.
+        end_index=2 if source.at.written == -1 else 1,
+        voltage=voltage,
+        current=current,
+        impedance=_ratio(voltage, current),
+        admittance=_ratio(current, voltage),
+        power=0.5 * (voltage * current.conjugate()).real,
+    )
+
+
+def _check_one_port_per_drive(
+    deck: Nec5Deck, by_address: dict[Nec5Node, _Site]
+) -> None:
+    """Two ``EX`` cards may not land on one solver column.
+
+    :func:`_drive_refusal` already caught the two cards that write the SAME
+    address; this is the other way to reach one port, and only the mesh can see
+    it — ``2,3`` and ``3,-1`` are two addresses, two sites and one cut, sharing
+    a column by :func:`_assign_columns` because that is the rank-1 two-port
+    they really are.  One EX card there is a source in the gap; two are one
+    boundary condition written twice, with nothing to say which wins.
+    """
+    seen: dict[int, Nec5Node] = {}
+    for source in deck.sources:
+        site = by_address[source.at]
+        first = seen.get(site.column)
+        if first is not None:
+            raise ServeRefusal(
+                _REFUSE_TWO_DRIVES_ONE_PORT.format(
+                    first=f"{first.tag},{first.written}",
+                    second=f"{source.at.tag},{source.at.written}",
+                )
+            )
+        seen[site.column] = source.at
 
 
 def _element_geometry(structure: Structure, wavelength: float):
@@ -1521,8 +1768,9 @@ def serve(deck: Nec5Deck) -> RunData:
     by_address = {site.at: site for site in mesh.sites}
     for load in deck.loads:
         by_address[load.at].load += load.impedance
-    (source,) = deck.sources
-    by_address[source.at].driven = True
+    for source in deck.sources:
+        by_address[source.at].driven = True
+    _check_one_port_per_drive(deck, by_address)
 
     frequency = float(deck.frequency_mhz or 0.0)
     wavelength = SPEED_OF_LIGHT_MHZ_M / frequency
@@ -1537,21 +1785,16 @@ def serve(deck: Nec5Deck) -> RunData:
     # is the one place besides the admittance that the two conventions meet.
     coeffs = solution.coeffs @ (_transform(mesh) @ state.v_gap)
 
-    site = by_address[source.at]
-    voltage = complex(state.v_applied[site.index])
-    current = complex(state.i_source[site.index])
-    # Whichever of the two the card SET is a boundary condition, not a
-    # result: reading it back out of the solve only adds round-off to a
-    # number that was exact going in, and it decides the sign of a zero —
-    # 0010's ``EX 4 … 1.414214,0.`` came back with an imaginary part of
-    # 1.1e-16 and printed ``1.1102E-16`` where the capture prints
-    # ``0.0000E+00``.  The portal restores its driven port voltages for the
-    # same reason (momwire#456 phase C); this is that rule on the other card.
-    if source.kind == 0:
-        voltage = source.drive
-    else:
-        current = source.drive
-    p_in = 0.5 * float((voltage * np.conj(current)).real)
+    # One row per EX card, in DECK order — which is the order 0031 prints its
+    # four in, and which is not the order the sites were built in (those are
+    # sorted by tag and node).  Every row is the same three spelling rules the
+    # single-source row always followed; what is new is that there are several
+    # of them and that the budget is their SUM.
+    source_rows = tuple(
+        _source_row(structure, by_address[source.at], state, source)
+        for source in deck.sources
+    )
+    p_in = float(sum(row.power for row in source_rows))
     # Every wire is a perfect conductor at this seam (the dialect has no
     # LD 5 and no IS), so the budget's WIRE LOSS line carries the LD loads'
     # watts and nothing else — which is where 0012's two 1.E+10 pins print
@@ -1611,21 +1854,7 @@ def serve(deck: Nec5Deck) -> RunData:
         ),
         networks=tuple(card.row for card in cards),
         network_excitation=connections,
-        sources=(
-            PortRow(
-                tag=source.at.tag,
-                segment=_segment_of(structure, source.at),
-                # The trailing index tracks the DECK's spelling, 9 of 9 rows
-                # in the capture study: node 0 written -1 prints 2, a
-                # positive node field prints 1.
-                end_index=2 if source.at.written == -1 else 1,
-                voltage=complex(voltage),
-                current=complex(current),
-                impedance=complex(voltage / current),
-                admittance=complex(current / voltage),
-                power=p_in,
-            ),
-        ),
+        sources=source_rows,
         currents=tuple(
             WireCurrentRow(
                 element=index + 1,
