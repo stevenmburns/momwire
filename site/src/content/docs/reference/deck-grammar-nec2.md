@@ -1,6 +1,6 @@
 ---
 title: "The nec2 deck dialect"
-description: The normative card-by-card grammar of momwire's NEC dialect — wire structures and the network cards attached to them: which cards run, which fields are read, which are ignored, and the exact text of every refusal.
+description: "The normative card-by-card grammar of momwire's NEC dialect — wire structures and the network cards attached to them: which cards run, which fields are read, which are ignored, and the exact text of every refusal."
 ---
 
 This page is the contract. `momwire.deck.parse(text, dialect="nec2")` accepts
