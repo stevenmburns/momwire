@@ -15,7 +15,9 @@ sources at a node, ``LD 4`` fixed impedances, node-addressed ``TL`` and ``NT``
 networks — separately and, since #504 U3, together in one ``NETWORK DATA``
 table — and the ``RP 0`` / ``XQ`` / ``PQ 0`` requests.  Rung 4 is the PHASED
 drive: several ``EX 4`` cards at once, which is how this dialect spells an
-array (a four-square is four set currents and no network at all).
+array, and since momwire#511 that drive may reach the structure THROUGH a
+network — a four-square is four set currents, and whether a ``TL`` hangs off
+it is the deck's business rather than the drive's.
 Everything above them — the near field, a mixed table whose deck INTERLEAVES
 the two card kinds, the three multi-source shapes nothing has printed —
 refuses BY NAME through :func:`refusal`, because a seam that answers a
@@ -51,13 +53,16 @@ Three drive spellings, and the address picks between them
   conductor end for a series EMF to sit in, momwire says so at the
   constructor, and no captured deck asks for one.
 
-The address picks the spelling one card at a time, and #504 U4 changes
-nothing about that: a phased deck is several cards each picking its own, and
-0031's four are four ground-contact feeds because all four verticals stand in
-the plane.  What the phased deck DOES change is the drive: with one source the
-card is a scale on a unit probe, with four it is a simultaneous boundary
+The address picks the spelling one card at a time, and neither #504 U4 nor
+momwire#511 changes that: a phased deck is several cards each picking its own,
+and 0031's four are four ground-contact feeds because all four verticals stand
+in the plane.  What the phased deck DOES change is the drive: with one source
+the card is a scale on a unit probe, with four it is a simultaneous boundary
 condition on four coupled ports and the volts that deliver them come out of a
-4x4 solve (:func:`_multi_drive_state`).  Two cards on ONE port would be a
+4x4 solve (:func:`_multi_drive_state`).  Put a network under it and the 4x4 is
+still a 4x4 — what moves is where its entries come from, because what an
+``EX 4`` fixes is the SOURCE current and a driven connection point's source
+current is not its structure current.  Two cards on ONE port would be a
 boundary condition written twice; both ways to write that — the same address
 twice, and the two sides of one cut — refuse by name.
 
@@ -347,12 +352,6 @@ _REFUSE_MULTI_EX_VOLTAGE = (
     "at this seam - none of the 49 captured decks writes one, so nothing says "
     "what the engine prints for it"
 )
-_REFUSE_MULTI_EX_NETWORKS = (
-    "this deck carries {count} EX cards and a TL/NT network; a phased "
-    "multi-source drive that reaches the structure THROUGH a network is not "
-    "served at this seam - none of the 49 captured decks writes one, and a "
-    "constrained drive composed with the network reducer is unobserved"
-)
 _REFUSE_DUPLICATE_EX = (
     "two EX cards address {at}; one node is one port, so the second card is a "
     "second generator in series across the same gap - no captured deck writes "
@@ -402,11 +401,13 @@ def refusal(deck: Nec5Deck) -> str | None:
     then its four ``EX`` cards, and now names nothing either.
 
     There is no ground refusal left to put first, no mixed-table refusal and,
-    since #504 U4, no plain multi-source one.  All four ground cards this
+    since #504 U4, no plain multi-source one — and since momwire#511 no
+    multi-source-through-a-network one either.  All four ground cards this
     dialect writes are served, a table carrying both card kinds is served, and a
     deck driven by several ``EX 4`` cards at once is served as the constrained
-    drive it is.  What is left on those rungs is one ORDER and five shapes nothing
-    has ever printed.  The order: every captured deck writes all of its
+    drive it is, whether or not the drive reaches the structure through a
+    ``TL``/``NT``.  What is left on those rungs is one ORDER and four shapes
+    nothing has ever printed.  The order: every captured deck writes all of its
     ``TL`` cards before any of its ``NT`` cards, both readings of the sub-table
     rule agree while that holds, and a deck that interleaves them separates the
     two readings with nothing to pick between them.  The shapes are
@@ -437,23 +438,29 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
     """The multi-``EX`` shapes this seam still has no capture for.
 
     One ``EX`` is always in scope and always has been.  Several are in scope
-    since #504 U4 in exactly ONE shape — every card an ``EX 4``, no ``TL`` and
-    no ``NT`` on the deck, one card per port — because that shape is the one
-    the corpus prints: 0031's four phased verticals over a bare ``GD`` and
-    0032's two over a perfect ground, and nothing else.  The four refusals below
-    are four ways a deck can leave it, and each is worth naming separately
-    rather than folding into one "unsupported drive" line, because each would
-    be fixed by a different capture.
+    since #504 U4 in one shape and since momwire#511 in two: every card an
+    ``EX 4``, one card per port, with or without a ``TL``/``NT`` network on the
+    deck.  U4's shape is the network-free one the corpus prints twice (0031's
+    four phased verticals over a bare ``GD``, 0032's two over a perfect
+    ground); #511's is the same drive reaching the structure THROUGH a network,
+    which the corpus now prints four more times (0116/0117's four-square with a
+    ``TL``, 0120/0121's cardioid over an ``NT`` and two ``TL``s).  The three
+    refusals below are three ways a deck can leave BOTH, and each is worth
+    naming separately rather than folding into one "unsupported drive" line,
+    because each would be fixed by a different capture.
 
     A mixed drive would need the engine's rule for a voltage source and a
     current source in one matrix; a multi-``EX 0`` would need its rule for
-    several set voltages; a phased drive through a network would need to say
-    how the reducer's termination branches compose with a constrained current —
-    a question with an obvious-looking answer, which is exactly why guessing it
-    would be the expensive mistake; and two cards at one address would need it
-    to say which of two set currents wins.  All four are 0 of 49.
+    several set voltages; and two cards at one address would need it to say
+    which of two set currents wins.  All three are 0 of 53.
 
-    A FIFTH way out lands two cards on one port through two different
+    The one that LEFT is the phased drive through a network, and it left the
+    way a refusal should: not because the answer became obvious but because
+    four printouts arrived to check it against.  Its sentence used to say that
+    "a constrained drive composed with the network reducer is unobserved", and
+    that was the exact truth until 2026-08-20.
+
+    A FOURTH way out lands two cards on one port through two different
     addresses, and only the mesh can see it — :func:`_check_one_port_per_drive`
     catches that one, on the far side of :func:`build_mesh`.
     """
@@ -467,8 +474,6 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
         )
     if voltages:
         return _REFUSE_MULTI_EX_VOLTAGE.format(count=voltages)
-    if deck.transmission_lines or deck.networks:
-        return _REFUSE_MULTI_EX_NETWORKS.format(count=len(kinds))
     seen: set[Nec5Node] = set()
     for source in deck.sources:
         if source.at in seen:
@@ -1207,7 +1212,10 @@ def _connection_points(cards: tuple[_Card, ...]) -> tuple[int, ...]:
 
 
 def _reducer_for(
-    cards: tuple[_Card, ...], n_sites: int, voltages: np.ndarray
+    cards: tuple[_Card, ...],
+    n_sites: int,
+    voltages: np.ndarray,
+    driven: tuple[int, ...],
 ) -> NetworkReducer:
     """The deck's cards as one flat network over the site ports.
 
@@ -1218,6 +1226,17 @@ def _reducer_for(
     reducer's own hard ``V = 0``, so the two conventions meet exactly where
     the network stops.  An endpoint that IS driven gets its source anyway,
     and the reducer's termination branch then carries antenna plus network.
+
+    ``driven`` is what says which endpoints those are, and it is a parameter
+    rather than "the ports whose voltage is not zero" because momwire#511's
+    probes ask for exactly that distinction.  With one source the two readings
+    agree — the probe is a 1 at the driven port — and the sources list this
+    builds for a single-source deck is character for character the one #504 U3
+    built.  With several, one probe at a time, the OTHER driven ports carry a
+    probe voltage of zero and still have to be sources: a driven endpoint that
+    silently became a floating network node between the probes and the final
+    solve would be two different circuits superposed, which is not superposition
+    at all.
     """
     branches: list[object] = []
     endpoints: set[int] = set()
@@ -1227,14 +1246,64 @@ def _reducer_for(
         # for geometry for, and this dialect's rule measures something else.
         branches += card_branches(entry.card, entry.site_a, entry.site_b, ())
         endpoints.update((entry.site_a, entry.site_b))
+    held = frozenset(driven)
     sources = [
         Driven(port_name(k), complex(voltages[k]))
         for k in range(n_sites)
-        if k not in endpoints or voltages[k] != 0
+        if k not in endpoints or k in held or voltages[k] != 0
     ]
     ports = {port_name(k): PortOnWire(name=port_name(k)) for k in range(n_sites)}
     network = Network(ports=ports, branches=branches, sources=sources)
     return NetworkReducer(network, {port_name(k): k for k in range(n_sites)}, n_sites)
+
+
+def _reduced_state(
+    cards: tuple[_Card, ...],
+    n_sites: int,
+    voltages: np.ndarray,
+    driven: tuple[int, ...],
+    y_eff: np.ndarray,
+    wavelength: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """One reducer solve: ``(V_applied, I_structure, I_source)`` at every site.
+
+    The one place this module hands a loaded antenna and a deck's network cards
+    to :class:`~momwire.networks.NetworkReducer`, and it is one place on
+    purpose: the single-source path, momwire#511's N unit probes and #511's
+    final solve all have to go through the SAME reduced system or the
+    superposition between them means nothing.  Sharing the function is how that
+    is said structurally rather than in a comment — the probes cannot drift from
+    the solve they are probing, because there is only one of them.
+
+    Three vectors out and they are three different numbers (:class:`_PortState`
+    says which table prints which).  ``V_applied`` is the solve's, with the
+    PINNED ports written back from their own boundary condition rather than read
+    out — round-off in a number that was exact going in decides the sign of a
+    zero, and the printout shows that byte (momwire#456 phase C).  ``I_source``
+    is ``I_structure`` everywhere except at a driven site, where it is the
+    reducer's TERMINATION-branch current: antenna plus network, which is what
+    the generator actually delivered (0027, where one port is 1.4142 A of source
+    and 3.3124E-09 A of structure, all of the difference having gone down two
+    transmission lines).
+    """
+    reducer = _reducer_for(cards, n_sites, voltages, driven)
+    system = reducer.apply_branches(y_eff, wavelength)
+    v, j = system.solve()
+    v_applied = np.asarray(v[:n_sites], dtype=np.complex128).copy()
+    # A pinned port's voltage is a boundary condition, not a result: reading it
+    # back out of the solve only adds round-off to a number that was exact going
+    # in, and it decides the sign of a zero — which is a byte the printout shows
+    # (the portal restores its driven port voltages for the same reason,
+    # momwire#456 phase C).
+    for port, volts in zip(reducer.driven_port_idx, reducer.driven_voltages):
+        v_applied[port] = volts
+    i_port = y_eff @ v_applied
+    i_source = i_port.copy()
+    # At a driven port the reducer's termination branch carries antenna PLUS
+    # network, which is what the source actually delivered.
+    for index in driven:
+        i_source[index] = j[system.terminations[index][0]]
+    return v_applied, i_port, i_source
 
 
 @dataclass(frozen=True)
@@ -1311,7 +1380,7 @@ def _port_state(
     n = len(mesh.sites)
     z_load = np.array([site.load for site in mesh.sites], dtype=np.complex128)
     if len(deck.sources) > 1:
-        return _multi_drive_state(deck, mesh, y, z_load)
+        return _multi_drive_state(deck, mesh, cards, y, z_load, wavelength)
     (source,) = deck.sources
     (driven,) = [site.index for site in mesh.sites if site.driven]
     probe = np.zeros(n, dtype=np.complex128)
@@ -1329,22 +1398,9 @@ def _port_state(
         v_applied = v_gap + z_load * i_port
     else:
         y_eff = y if not np.any(z_load) else np.linalg.solve(loaded.T, y.T).T
-        reducer = _reducer_for(cards, n, probe)
-        system = reducer.apply_branches(y_eff, wavelength)
-        v, j = system.solve()
-        v_applied = np.asarray(v[:n], dtype=np.complex128).copy()
-        # A pinned port's voltage is a boundary condition, not a result:
-        # reading it back out of the solve only adds round-off to a number
-        # that was exact going in, and it decides the sign of a zero — which
-        # is a byte the printout shows (the portal restores its driven port
-        # voltages for the same reason, momwire#456 phase C).
-        for port, volts in zip(reducer.driven_port_idx, reducer.driven_voltages):
-            v_applied[port] = volts
-        i_port = y_eff @ v_applied
-        i_source = i_port.copy()
-        # At a driven port the reducer's termination branch carries antenna
-        # PLUS network, which is what the source actually delivered.
-        i_source[driven] = j[system.terminations[driven][0]]
+        v_applied, i_port, i_source = _reduced_state(
+            cards, n, probe, (driven,), y_eff, wavelength
+        )
         v_gap = v_applied - z_load * i_port
 
     scale = (
@@ -1364,8 +1420,10 @@ def _port_state(
 def _multi_drive_state(
     deck: Nec5Deck,
     mesh: _Mesh,
+    cards: tuple[_Card, ...],
     y: np.ndarray,
     z_load: np.ndarray,
+    wavelength: float,
 ) -> _PortState:
     """Several ``EX 4`` cards at once: the CONSTRAINED current drive.
 
@@ -1399,10 +1457,31 @@ def _multi_drive_state(
     imaginary current and its real part is a zero that has to stay one).  The
     U1 restore rule, once per row.
 
-    No network reaches here: a phased drive on a deck carrying ``TL`` or ``NT``
-    refuses by name in :func:`_drive_refusal`, so there is no reducer to
-    compose with and the only difference between ``i_source`` and ``i_port`` is
-    that restore.
+    And with a NETWORK on the deck (momwire#511) the sub-block ``Y_eff`` is not
+    the map to invert, because what an ``EX 4`` fixes is the SOURCE current —
+    antenna plus network, the reducer's termination branch — and at a driven
+    site that is also a connection point those are two different numbers.  0120
+    prints both: the same port reads 1.4142 A of source and 3.1645E-11 A of
+    structure, the rest having gone down an ``NT`` and two ``TL``s.  So the map
+    is measured instead, one column at a time, exactly as this module measures
+    everything else it cannot write down: N unit probes through the SAME reduced
+    system the final solve uses (:func:`_reduced_state`), each giving one column
+    of ``M``, the map from the driven sites' applied VOLTAGES to their source
+    currents.  ``M·V = I_spec`` is then the same N×N solve U4 already does, and
+    one last reducer solve at ``V`` produces the full state.
+
+    N + 1 reducer solves where the network-free branch does one, and that is the
+    honest price rather than an accepted inefficiency: N is 2 or 4 on every deck
+    the corpus writes, the antenna's own fill and factor happened once before any
+    of this, and a one-solve formulation that reproduced the captures would still
+    have had to be checked against this one.  Superposition is what makes it
+    exact — every probe and the final solve carry the same branches, the same
+    zero-volt pins on the undriven non-endpoint sites and the same
+    network-governed endpoints, so the columns are columns of ONE linear map and
+    not four different circuits.  The load is inside ``Y_eff`` on all of them
+    (module docstring; :func:`_port_state`), which is what keeps 0120's four
+    ``LD`` cards — two 18 Ω base resistors and two 1e10 Ω virtual pins — in the
+    probes as well as in the answer.
     """
     n = len(mesh.sites)
     driven = [site.index for site in mesh.sites if site.driven]
@@ -1415,9 +1494,24 @@ def _multi_drive_state(
     for source in deck.sources:
         spec[row_of[site_of[source.at]]] = source.drive
 
-    v_applied = np.zeros(n, dtype=np.complex128)
-    v_applied[driven] = np.linalg.solve(y_eff[np.ix_(driven, driven)], spec)
-    i_port = y_eff @ v_applied
+    if not cards:
+        v_applied = np.zeros(n, dtype=np.complex128)
+        v_applied[driven] = np.linalg.solve(y_eff[np.ix_(driven, driven)], spec)
+        i_port = y_eff @ v_applied
+    else:
+        m = np.zeros((len(driven), len(driven)), dtype=np.complex128)
+        for column, index in enumerate(driven):
+            probe = np.zeros(n, dtype=np.complex128)
+            probe[index] = 1.0
+            _v, _i, i_probe = _reduced_state(
+                cards, n, probe, tuple(driven), y_eff, wavelength
+            )
+            m[:, column] = i_probe[driven]
+        volts = np.zeros(n, dtype=np.complex128)
+        volts[driven] = np.linalg.solve(m, spec)
+        v_applied, i_port, _i_source = _reduced_state(
+            cards, n, volts, tuple(driven), y_eff, wavelength
+        )
     i_source = i_port.copy()
     i_source[driven] = spec
     return _PortState(
