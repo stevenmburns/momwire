@@ -10,7 +10,7 @@ Issue #497 builds this seam in units.  U1 laid down the SEAM itself — the
 process shell, the printout header, and a stub that refuses every deck by
 name; U2 added the nec5 dialect front-end (:mod:`momwire.deck._nec5`); U3
 added the rest of the printout, so this package can lay out a complete NEC-5
-result file given the numbers; U4 (:mod:`._serve`) is the physics that
+result file given the numbers; #497 U4 (:mod:`._serve`) is the physics that
 PRODUCES them for rung 1 of the scored ladder — free space and perfect
 ground, one source at a node, fixed-impedance loads, ``RP 0``/``XQ``/``PQ 0``
 — and wires the renderer into the shell in place of the stub refusal.  U5
@@ -29,11 +29,23 @@ and answers with PEC currents under a second-medium far field; that takes the
 count to forty-three, and every ground card this dialect writes is now served.
 Its U3 renders the ``NETWORK DATA`` table that carries ``TL`` and ``NT`` rows
 at once — one heading, one sub-table each, in the order the decks write them —
-and takes the count to FORTY-SIX.
+and takes the count to FORTY-SIX.  Its U4 serves the PHASED drive: several
+``EX 4`` cards at once, which is how this dialect spells an array and which no
+network is involved in — a four-square is four set currents on four ports.
+That takes the count to FORTY-EIGHT and finishes the arc's climb.
 
-The three still refused are two phased multi-``EX`` drives and one ``NE`` near
-field, and each names its own card.  Nothing in the corpus is refused for a
-ground or for a table layout any more.
+ONE capture is still refused, and it names a REQUEST rather than a card the
+model carries: 0022's ``NE``, the near electric field, whose printed block has
+a layout of its own that no rung of this arc renders.  Nothing in the corpus
+is refused for a ground, for a table layout or for a drive any more.
+
+What U4 has instead of refused captures is refused SHAPES.  A multi-source
+drive is served in exactly the form the two phased captures write — every card
+an ``EX 4``, no network on the deck, one card per port — and the four ways out
+of that each refuse by their own name: a drive mixing ``EX 0`` with ``EX 4``, a
+multi-``EX 0`` drive, a phased drive on a deck carrying ``TL``/``NT``, and two
+cards landing on one port.  All four are zero of forty-nine, so each is probed
+in the tests by editing a capture rather than by finding one.
 
 What U3 mostly did, though, was land printouts.  The U1/U2 capture errand was
 scoped off the fixture manifest rather than off the corpus, and every deck
