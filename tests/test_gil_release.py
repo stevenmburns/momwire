@@ -13,8 +13,10 @@ large input arrays releases the GIL on its own, so *some* concurrent progress
 happens even when the compute region holds it. The bug this guards against is
 an event-loop *freeze*: a single uninterruptible stretch where no other thread
 runs for the whole compute. So we run a watcher thread that timestamps itself
-in a tight loop and look at the largest gap between consecutive samples — the
-longest interval it was starved — during one big native fill.
+in a sleep-and-wake loop (1 ms — an event loop's shape, and immune to the
+spin-starvation flake described at the watcher) and look at the largest gap
+between consecutive samples — the longest interval it was starved — during
+one big native fill.
 
 - GIL held for the compute region (the old behavior): the watcher is frozen for
   ~the entire fill, so max_gap ≈ fill_duration (ratio ≈ 1).
@@ -56,8 +58,20 @@ def test_seg_seg_full_moments_bspline_swept_releases_gil():
     stop = threading.Event()
 
     def watch():
+        # Sleep-and-wake, NOT a spin loop, and the difference is the whole
+        # flake history of this test on the 3-vCPU macOS runners: during the
+        # fill the OpenMP pool saturates every core, and a busy-spinning
+        # watcher is exactly the thread Darwin's usage-decay scheduling
+        # starves — 150 ms stalls with the GIL correctly RELEASED (ratios
+        # 0.49/0.57 observed on CI, 2026-08-21). A sleeping thread takes the
+        # scheduler's wakeup boost instead, so its max gap measures wakeup
+        # latency — milliseconds under load — while a held GIL still freezes
+        # it for ≈ the whole fill (sleep returns, reacquisition blocks).
+        # This is also the truer probe: the motivating victim is an asyncio
+        # event loop, which sleeps and wakes; nothing real spins.
         while not stop.is_set():
             samples.append(time.perf_counter())
+            time.sleep(0.001)
 
     thread = threading.Thread(target=watch, daemon=True)
     thread.start()
