@@ -88,6 +88,20 @@ sub-percent level, and the in-house NEC-5 formulation twin
 (`razor-nec5`) rides the licensed engine's own convergence path at the
 0.01 % level — the receipts behind the word "emulates".
 
-A packaged Windows executable for pointing EZNEC's engine path at — no
-Python environment required — is in preparation; today the `python -m
-momwire.eznec` spelling above is the supported form.
+## The packaged Windows executable
+
+For pointing EZNEC's engine path at without a Python environment, every
+release ships a frozen build:
+[`momwire-eznec-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-eznec-windows.zip).
+Unzip it anywhere, keep the folder together (the exe needs the `_internal`
+runtime beside it), and point EZNEC's external-engine path at
+`momwire-eznec.exe` inside. It is the same `momwire.eznec` module frozen
+with PyInstaller, gated in CI to produce byte-identical printouts to the
+`python -m momwire.eznec` spelling above — which remains the supported form
+wherever a Python environment is at hand.
+
+One launch costs on the order of a second (the frozen interpreter's import
+cost; the one-file packaging that re-extracts on every launch was measured
+at 17 s and rejected). A long SWR sweep is therefore slower through the
+frozen exe than through the licensed engine's 18–37 ms launches — the
+per-point economics, not the physics, are the current gap.

@@ -369,16 +369,30 @@ def test_pattern_dust_prints_as_exact_zero(name):
 
 
 def _near_field_rows(text: str) -> list[list[str]]:
+    """The NEAR ELECTRIC/MAGNETIC FIELDS rows of a printout, scanned only
+    between that banner and its ``Near Field Compute Time`` terminator
+    (momwire#479): anchored the way ``_excitation_rows`` is, so no other
+    nine-token numeric table can drift into the gate, and an absent banner
+    yields no rows (which the callers assert on) instead of quietly
+    matching something else."""
     rows = []
+    in_block = False
     for ln in text.splitlines():
-        tok = ln.split()
-        if len(tok) != 9:
+        if "NEAR ELECTRIC FIELDS" in ln or "NEAR MAGNETIC FIELDS" in ln:
+            in_block = True
             continue
-        try:
-            float(tok[0])
-        except ValueError:
-            continue  # the header ("X"/"METERS" rows are 9 tokens too)
-        rows.append(tok)
+        if in_block:
+            if ln.startswith("    Near Field Compute Time"):
+                in_block = False
+                continue
+            tok = ln.split()
+            if len(tok) != 9:
+                continue
+            try:
+                float(tok[0])
+            except ValueError:
+                continue  # the column headers ("X"/"METERS") are 9 tokens too
+            rows.append(tok)
     return rows
 
 
@@ -403,10 +417,11 @@ def test_ne_dust_prints_as_exact_zero():
         assert rows, f"{name}: no near-field rows found"
         for tok in rows:
             for mag, phase in ((tok[3], tok[4]), (tok[5], tok[6]), (tok[7], tok[8])):
-                # The bar IS the floor: _FIELD_FLOOR2 is applied to the
-                # printed value on this path, so anything the engine let
+                # The bar IS the floor: _PRINTED_DUST_FLOOR2 is applied to
+                # the printed value on this path, so anything the engine let
                 # through must be strictly above 1e-10. (The RP sibling's
-                # 1e-15 is a loose "no dust" heuristic because its floor is
+                # 1e-15 is a loose "no dust" heuristic because its floor —
+                # _FIELD_FLOOR2, a separate constant since momwire#480 — is
                 # tested in the pre-rescale FFLD basis, not on the printout.)
                 assert float(mag) == 0.0 or float(mag) > 1e-10, (
                     f"{name}: sub-floor dust printed raw: {tok}"
@@ -422,6 +437,19 @@ def test_ne_dust_prints_as_exact_zero():
     assert len(dust_rows) == 2, dust_rows
     for tok in dust_rows:
         assert (tok[3], tok[4]) == ("0.0000E+00", "0.00"), tok
+
+
+def test_the_two_dust_floors_are_pinned_separately():
+    """momwire#480's coupling gate. ``_FIELD_FLOOR2`` (nec2c's own RDPAT
+    bar, tested in the pre-rescale FFLD basis) and ``_PRINTED_DUST_FLOOR2``
+    (the #403/#464 departure, tested on the printed unit) are numerically
+    equal and derived independently — one traces to NEC's source, the other
+    to the corpus's weakest legitimate readings. Pinning both by name means
+    a retune arising on either side has to edit this test and say which
+    floor it intends to move; before the split, an RP-side retune moved the
+    near-field bar silently in a basis where its reasoning never applied."""
+    assert nec_portal._FIELD_FLOOR2 == 1.0e-20
+    assert nec_portal._PRINTED_DUST_FLOOR2 == 1.0e-20
 
 
 def _excitation_rows(text: str) -> list[list[str]]:
