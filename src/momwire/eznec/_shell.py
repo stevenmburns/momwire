@@ -104,8 +104,9 @@ def render(text: str) -> str:
     1. the dialect front end (U2) refuses a card that is not in the observed
        vocabulary, or a field form no capture has shown;
     2. :func:`~momwire.eznec._serve.refusal` refuses a deck that parses but
-       is above rung 1 of the scored ladder — the Sommerfeld ground, the
-       MININEC ground, a network, a phased multi-source drive, a near field;
+       is above the served rungs of the scored ladder — a near field, an
+       interleaved network table, a multi-source drive in one of the shapes
+       no capture writes;
     3. the translation itself refuses an address the mesh cannot host.
 
     The stub refusal U1 shipped stays behind all three, and only for a case
