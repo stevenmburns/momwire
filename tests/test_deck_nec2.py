@@ -2179,6 +2179,30 @@ def test_ge_sign_refusal_fires_only_at_the_divergent_combination():
     assert parse(_vertical(-1, gn="")) is not None
 
 
+def test_cliff_with_no_second_medium_refuses_by_name():
+    """momwire#490: a cliff request over a ground with an all-zero second
+    medium is a state the oracle cannot answer (its whole pattern table is
+    NaN — measured 2026-08-21 on every route in: no GD at all, an empty GD,
+    a GD cleared by a later GN, perfect AND finite grounds), and the
+    vacuum-image cliff momwire used to serve there was a confident wrong
+    answer (~3.6 dB at theta 5 on this deck). The sentence names the state
+    and both remedies."""
+    base = (
+        "CE p\nGW 1 21 0 0 0 0 0 2.5 .001\nGE 1\n{env}"
+        "EX 0 1 1 0 1.\nFR 0 1 0 0 30.\n{rp}\nNX\n"
+    )
+    rp3 = "RP 3 10 1 1000 5. 0. 10. 0. 100."
+    for env in ("GN 1\n", "GN 1\nGD 0 0 0 0 0. 0. 0. 0.\n", "GN 0 0 0 0 13. .005\n"):
+        with pytest.raises(DeckError) as exc:
+            parse(base.format(env=env, rp=rp3))
+        assert "no second medium stated" in str(exc.value)
+    # The boundary: a stated medium, a plain RP 0, and a free-space cliff
+    # (no image for the medium to steer) all serve.
+    assert parse(base.format(env="GN 1\nGD 0 0 0 0 13. .005 0. 100.\n", rp=rp3))
+    assert parse(base.format(env="GN 1\n", rp="RP 0 10 1 1000 5. 0. 10. 0. 0."))
+    assert parse(base.format(env="", rp="RP 2 10 1 1000 5. 0. 10. 0. 100."))
+
+
 def test_sy_refuses_by_name_before_its_symbolic_fields_tokenize():
     """momwire#486: a real 4nec2 ``SY`` card carries symbolic fields
     (``FREQ=146``), which the tokenizer cannot convert — so the by-name
