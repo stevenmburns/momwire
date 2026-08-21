@@ -1,10 +1,11 @@
 """The rest of the NEC-5 printout, byte-gated against the captures (#497 U3).
 
 One gate carries this unit: **extract and re-render**.  For each of the
-thirty-nine captured printouts under ``tests/fixtures/eznec/printouts/`` (ten
-when the unit landed; #504 U1/U2/U3 quadrupled them), :func:`extract`
-reads the file back into a :class:`~momwire.eznec.RunData` — every number
-lifted from the engine's own text, none of them recomputed — and
+fifty-seven captured printouts under ``tests/fixtures/eznec/printouts/`` (ten
+when the unit landed; #504 U1/U2/U3 quadrupled them and momwire#511/#516 took
+them past fifty), :func:`extract` reads the file back into a
+:class:`~momwire.eznec.RunData` — every number lifted from the engine's own
+text, none of them recomputed — and
 :func:`~momwire.eznec.render_printout` writes it out again.  The result has
 to be the captured file, byte for byte.
 
@@ -44,6 +45,8 @@ from momwire.eznec._printout import (
     ChargeRow,
     LineRow,
     LoadRow,
+    NearFieldBlock,
+    NearFieldRow,
     NetworkRow,
     PatternBlock,
     PatternRow,
@@ -58,11 +61,18 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "eznec"
 MANIFEST = json.loads((FIXTURE_DIR / "manifest.json").read_text())
 
 # Every capture that shipped a printout, and the subset this renderer has a
-# form for.  They differ by one: 0022 asks for a near field, which is refused
-# at this seam, so its printout carries a ``NEAR ELECTRIC FIELDS`` block that
-# no rung of this arc renders yet (manifest ``unrendered``).  Its file is
-# committed anyway — it carries the only VALID ``SOMMPD.NEX`` cache block in
-# the corpus, and the normalization has to answer that form too.
+# form for.  Since momwire#516 they are the SAME set and the ``unrendered``
+# manifest key has no tenant: 0022's ``NEAR ELECTRIC FIELDS`` block was the
+# only thing this renderer had no layout for, and the near-field rung gives it
+# one.  The key is deliberately not deleted from the manifest's vocabulary —
+# a capture whose printout carries a block this package cannot lay out is a
+# real thing to be able to say — but nothing wears it today.
+#
+# Rendering a block is not serving it.  Six of the seven near-field captures
+# stand over a finite ground, whose numbers :mod:`momwire.eznec._serve`
+# refuses by name; their printouts round-trip here all the same, because this
+# unit is handed the engine's own numbers and asked only whether it prints the
+# file the engine printed.
 CAPTURED = tuple(entry for entry in MANIFEST["captures"] if entry.get("printout"))
 CAPTURED_IDS = tuple(entry["id"] for entry in CAPTURED)
 GATED = tuple(entry for entry in CAPTURED if not entry.get("unrendered"))
@@ -356,6 +366,27 @@ def extract(text: str) -> RunData:
     if (at := _section(lines, "- - - POWER BUDGET - - -")) is not None:
         power = _power_budget(lines, at + 2)
 
+    near_fields: list[NearFieldBlock] = []
+    for heading, magnetic in (
+        ("- - - NEAR ELECTRIC FIELDS - - -", False),
+        ("- - - NEAR MAGNETIC FIELDS - - -", True),
+    ):
+        if (at := _section(lines, heading)) is None:
+            continue
+        near_fields.append(
+            NearFieldBlock(
+                rows=tuple(
+                    NearFieldRow(
+                        point=(v[0], v[1], v[2]),
+                        magnitudes=(v[3], v[5], v[7]),
+                        phases_deg=(v[4], v[6], v[8]),
+                    )
+                    for v in (_floats(row) for row in _rows(lines, at + 5))
+                ),
+                magnetic=magnetic,
+            )
+        )
+
     patterns: list[PatternBlock] = []
     if (at := _section(lines, "- - - RADIATION PATTERNS - - -")) is not None:
         rows = tuple(_pattern_row(row) for row in _rows(lines, at + 5))
@@ -410,6 +441,7 @@ def extract(text: str) -> RunData:
         currents=currents,
         charges=charges,
         power=power,
+        near_fields=tuple(near_fields),
         patterns=tuple(patterns),
         fill_seconds=float(timing.split("=")[1].split()[0]),
         factor_seconds=float(timing.split("=")[2].split()[0]),
@@ -424,7 +456,7 @@ def extract(text: str) -> RunData:
 
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_every_captured_printout_round_trips_byte_for_byte(cid):
-    """The unit's whole contract, thirty-nine times over.
+    """The unit's whole contract, fifty-seven times over.
 
     Failure here is a formatting bug and nothing else: the numbers came out
     of the same file they are being compared against, so any difference is a
@@ -437,7 +469,7 @@ def test_every_captured_printout_round_trips_byte_for_byte(cid):
 
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_the_allocation_is_the_square_of_the_unknown_count(cid):
-    """``ALLOCATE CM:`` is unknowns² on all thirty-nine captures — 100 = 10²,
+    """``ALLOCATE CM:`` is unknowns² on all fifty-seven captures — 100 = 10²,
     169 = 13², 784 = 28², 8100 = 90², and fourteen distinct counts between —
     which is why the renderer computes it from the unknown count instead of
     carrying it as a number of its own."""
@@ -651,7 +683,7 @@ def test_the_unloaded_captures_say_so_in_one_line():
 
 
 def test_the_charge_block_answers_pq_and_matches_the_current_block():
-    """``PQ 0`` is in all thirty-nine decks and all thirty-nine printouts carry
+    """``PQ 0`` is in all fifty-seven decks and all fifty-seven printouts carry
     the block, one charge row per current row, at the same segment centres."""
     for cid in GATED_IDS:
         data = extract(printout_text(cid))
@@ -667,6 +699,63 @@ def test_the_printout_is_written_with_lf_endings():
     )
     assert "\r" not in rendered
     assert rendered.endswith(" RUN TIME =     0.000\n")
+
+
+def test_the_near_field_block_sits_between_the_budget_and_the_patterns():
+    """Section order, on the seven captures that carry one.
+
+    Every near-field printout in the corpus prints its table directly under
+    ``EFFICIENCY`` and none of them carries an ``RP`` as well, so this is the
+    only placement the captures can settle — and it is settled on all seven.
+    """
+    for cid in ("0022", "0107", "0108", "0110", "0111", "0112", "0113", "0115"):
+        text = printout_text(cid)
+        heading = next(h for h in ("ELECTRIC", "MAGNETIC") if f"NEAR {h}" in text)
+        assert text.index("- - - POWER BUDGET - - -") < text.index(f"NEAR {heading}")
+        assert "- - - RADIATION PATTERNS - - -" not in text
+
+
+def test_the_two_near_field_mnemonics_differ_in_three_words_and_nothing_else():
+    """0111 against 0110 — the same deck, the same grid, ``NE`` respelled ``NH``.
+
+    The block is byte-identical after ``MAGNETIC``/``ELECTRIC``, ``H``/``E`` on
+    the component letters and ``AMPS/M``/``VOLTS/M`` in the units, which is
+    what lets one renderer serve both.  Compared on the HEADER lines only: the
+    rows below them are two different fields and are supposed to differ.
+    """
+
+    def header(cid: str) -> list[str]:
+        lines = printout_text(cid).split("\n")
+        at = next(i for i, line in enumerate(lines) if "- - - NEAR " in line)
+        return lines[at : at + 5]
+
+    electric = header("0110")
+    magnetic = header("0111")
+    folded = [
+        line.replace("MAGNETIC", "ELECTRIC")
+        .replace("HX", "EX")
+        .replace("HY", "EY")
+        .replace("HZ", "EZ")
+        .replace(" AMPS/M", "VOLTS/M")
+        for line in magnetic
+    ]
+    assert folded == electric
+
+
+def test_the_near_field_points_are_metres_and_the_current_table_is_not():
+    """The one geometry column in the printout that is NOT wavelength-normalized.
+
+    0108's ``NE`` grid asks for ``1., 0., 2.`` at 7 MHz and the row prints
+    ``1.0000E+00``; the current table's own centres on the same printout are
+    normalized by the 42.83 m wavelength (element 1 at 1.20247E-02 for a
+    0.515 m height).  Reading a near-field point as normalized would put the
+    whole grid 43 times too close to the wire.
+    """
+    data = extract(printout_text("0108"))
+    (block,) = data.near_fields
+    assert block.rows[0].point == (1.0, 0.0, 2.0)
+    assert block.rows[-1].point == (5.0, 0.0, 10.0)
+    assert data.currents[0].center[2] == pytest.approx(0.515 / data.wavelength_m, 1e-3)
 
 
 def test_a_deck_remembers_the_text_it_was_read_from():

@@ -68,13 +68,14 @@ EN
 # -- gate 1: the corpus -----------------------------------------------------
 
 
-def test_the_corpus_is_all_53_captures():
+def test_the_corpus_is_all_62_captures():
     """The gate is only a gate if it is the whole corpus.
 
     49 until momwire#511 landed the four decks that are BOTH phased and
-    networked (0116/0117/0120/0121).
+    networked (0116/0117/0120/0121), and 53 until momwire#516 landed the nine
+    of the near-field errand (0107-0115).
     """
-    assert len(CORPUS) == 53
+    assert len(CORPUS) == 62
 
 
 @pytest.mark.parametrize("path", CORPUS, ids=lambda p: p.stem)
@@ -96,7 +97,7 @@ def test_every_captured_deck_parses(path: Path):
 
 
 def test_the_corpus_census_reproduces_the_published_weights():
-    """Parsing all 53 decks recovers the scored matrix's own counts.
+    """Parsing all 62 decks recovers the scored matrix's own counts.
 
     "Parses without error" is a weak gate on its own: a front-end that read
     every ``GD`` as a ``GN 0`` would pass it while being 34 % wrong in R on
@@ -105,18 +106,28 @@ def test_the_corpus_census_reproduces_the_published_weights():
     matrix") were counted independently of this code, so agreeing with them
     says the decks were read as the study read them.
 
-    momwire#511's four decks are the one addition since the matrix was scored,
-    and every column moves by exactly what they are: four more bare ``GD``
-    grounds (20 to 24), four more ``GE 1,-1`` (33 to 37), and two more of each
-    request card, because the four are two decks captured twice, once under
-    ``XQ`` and once under ``RP``.
+    momwire#511's four decks were the first addition since the matrix was
+    scored, and every column moved by exactly what they are: four more bare
+    ``GD`` grounds (20 to 24), four more ``GE 1,-1`` (33 to 37), and two more
+    of each request card, because the four are two decks captured twice, once
+    under ``XQ`` and once under ``RP``.
+
+    momwire#516's nine are the second, and they move the census the way a
+    capture errand aimed at ONE card should: the ``NE``/``NH`` count goes from
+    1 to 9 while ``XQ`` does not move at all.  The other columns move because
+    the errand needed the same grid under four different grounds — two more
+    ``GD``, four more ``GN 0``, one more ``GN 1``, two more ``GN -1`` — and one
+    of the nine (0114) is an ``RP``, the free-space control 0115's ``NE`` is
+    scored against.
     """
     grounds = Counter()
     ge = Counter()
     requests = Counter()
+    magnetic = 0
     for path in CORPUS:
         parsed = parse_nec5(path.read_text())
         ground = parsed.ground
+        magnetic += bool(getattr(parsed.requests[0], "magnetic", False))
         if isinstance(ground, Nec5SommerfeldGround):
             grounds[f"GN {ground.spelling}"] += 1
         else:
@@ -128,13 +139,17 @@ def test_the_corpus_census_reproduces_the_published_weights():
         ge[(parsed.ge_flag, parsed.ge_second)] += 1
         requests[type(parsed.requests[0]).__name__] += 1
 
-    assert grounds == {"GD": 24, "GN -1": 16, "GN 0": 8, "GN 1": 5}
-    assert ge == {(1, -1): 37, (0, -1): 16}
+    assert grounds == {"GD": 26, "GN -1": 18, "GN 0": 12, "GN 1": 6}
+    assert ge == {(1, -1): 44, (0, -1): 18}
     assert requests == {
-        Nec5FarFieldRequest.__name__: 28,
+        Nec5FarFieldRequest.__name__: 29,
         Nec5ExecuteRequest.__name__: 24,
-        Nec5NearFieldRequest.__name__: 1,
+        Nec5NearFieldRequest.__name__: 9,
     }
+    # Eight ``NE`` and ONE ``NH``: the fifteenth mnemonic costs one radio
+    # button in the Near Field Analysis dialog and the errand spent it once,
+    # on 0111, which is 0110 with nothing else changed.
+    assert magnetic == 1
 
 
 # -- gate 2: the favored wire ----------------------------------------------

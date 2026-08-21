@@ -3,6 +3,7 @@
   "source": "antennaknobs scratch/eznec-capture/ (capture ids preserved); scored matrix: antennaknobs docs/status/2026-08-20-eznec-nec5-scored-matrix.md",
   "normalizations": "byte-compare after: CRLF->LF; drop FILL=/RUN TIME timing lines; normalize -0.00 vs 0.00 signed zero in pattern TILT columns; drop every SOMMPD.NEX cache block, each of which is ONE BLANK LINE followed by a run of cache lines (the blank is part of the block; dropping it leaves the finite-ground ANTENNA ENVIRONMENT block the same heading/blank/name shape FREE SPACE and PERFECT GROUND already have). Four block forms are observed across these captures and #504 U3's nineteen new printouts and #504 U4's two add no fifth, and neither do momwire#511's six: STALE, ' GMPINO: EPSC from file = <epsc>' + '              should be  <epsc>' + ' Will compute Sommerfeld-ground tables' (0003-0009, 0011, 0021, 0023, 0025, 0026, 0029, 0030, 0033, 0047, 0048, and the nine bare-GD captures 0015/0020/0031/0045/0046 and #511's 0116/0117/0120/0121); #511's other two, 0036 and 0038, are GN -1 free space and carry no block of any form; VALID, 'Sommerfeld integral tables read:' + 'Potentials: <numbers>' + 'E, H: <numbers>' (0000, 0001, 0002, 0022, 0034); ABSENT, ' GMPINO: Unable to open file SOMMPD.NEX' (blank-padded to 70 columns) + ' Will compute Sommerfeld-ground tables' (measured on the linux oracle 2026-08-20, no capture); and the POSTAMBLE, printed between the EN echo and RUN TIME, 'Sommerfeld integral tables written in previous run:' + 'Potentials: <numbers>' + 'E and H: <numbers>' (0000, 0001, 0002, 0011, 0022, 0030, 0033, 0034, 0047, 0048). The number list after each label is what varies and it may be EMPTY on any of them - 0000/0001/0002 write a bare 'Potentials:' beside a filled 'E, H: 11 12 13 14 15 21 23', and 0011/0030/0033/0034 write a bare 'E and H:' beside a filled 'Potentials:' - so a cache line is recognised by the LABEL it opens with and never by a whole line. The POSTAMBLE is a report about the FILE and not about the mode, which is a correction #504 U3's captures forced: the eight-printout corpus this key was first written against carried it on its four GN 0 captures and on none of its four bare-GD ones, and 0000/0001/0002 are bare-GD runs that carry it. What IS a statement about the mode is the MATRIX TIMING cell (0045's FILL= 0.000 SEC. against 0047's 0.094): a GD run announces 'Will compute Sommerfeld-ground tables' off the cache check and then computes none. The seam never reads and never writes SOMMPD.NEX, so it emits none of these blocks.",
   "withheld_printouts": "FIVE of the seven decks in the 2026-08-17 frequency-stepping dipole session ship no printout, and the reason is the session rather than the decks: 0037's OUT is EMPTY and 0042 has none at all; 0039 and 0041 carry a one- and a forty-two-line file whose last line is ' ***** NEC ERROR - MOMWIRE REFUSES THIS DECK...', which is an early prototype of THIS seam answering in place of NEC5CL rather than the engine; and 0040 stops mid-printout at 40 lines. Nothing in those five is an engine printout, so there is nothing to land and no follow-up left on them. 0036 and 0038 ARE complete 144-line engine printouts carrying their own decks' stamps, and momwire#511 landed them: #504 U3 held them back so the session kept ONE treatment, which cost the corpus two free-space XQ gates for a tidiness this key can state in a sentence instead. The remaining five keep the liveness gate tests/test_eznec_serve.py::test_the_ungated_rung_one_captures_still_serve.",
+  "near_field_family": "momwire#516's capture family, sitting 4 (2026-08-20): 0107-0115, the NE/NH rungs. Nine decks over four grounds, and the family is a controlled experiment rather than nine samples. 0107/0108 are a bare GD; 0109 is GN 1; 0110/0111/0112 are GN 0 (0112 is 0022's deck at a later stamp and its table agrees to every printed digit); 0113/0114/0115 are the elevated 'Back yard dipole' over GN 0 (0113) and free space (0114's RP, 0115's NE). 0108 and 0110 are ONE grid over ONE medium with only the ground MNEMONIC changed, and 0111 is 0110 with only the mnemonic NE -> NH changed. What that pair settles is the serving matrix in momwire.eznec._serve: the engine's near field over a bare GD is the GN 0 answer to about 2 %, EY dust included (1.7359E-02 against 1.7342E-02 in a column a PEC image makes exactly zero), so a MININEC-type ground reflects off its medium in the far field and SOLVES the near field in it. Every one of the nine printouts is round-trip gated; the six over a finite ground are refused physics and rendered layout, which is the split this manifest key exists to name.",
   "w7el_gate": {
     "a": [
       "0012",
@@ -158,8 +159,7 @@
       "id": "0022",
       "title": "Vertical over real ground",
       "deck": "decks/0022_vertical-over-real-ground.nec",
-      "printout": "printouts/0022_vertical-over-real-ground.out",
-      "unrendered": "carries a NEAR ELECTRIC FIELDS block, and NE is refused at this seam, so there is no form for the renderer to round-trip. Committed for its ground card (the served GN 0), for its refusal, and because its SOMMPD.NEX cache block is the corpus's only VALID form."
+      "printout": "printouts/0022_vertical-over-real-ground.out"
     },
     {
       "id": "0023",
@@ -311,6 +311,60 @@
       "title": "Vertical over real ground",
       "deck": "decks/0048_vertical-over-real-ground.nec",
       "printout": "printouts/0048_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0107",
+      "title": "Vertical over real ground",
+      "deck": "decks/0107_vertical-over-real-ground.nec",
+      "printout": "printouts/0107_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0108",
+      "title": "Vertical over real ground",
+      "deck": "decks/0108_vertical-over-real-ground.nec",
+      "printout": "printouts/0108_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0109",
+      "title": "Vertical over real ground",
+      "deck": "decks/0109_vertical-over-real-ground.nec",
+      "printout": "printouts/0109_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0110",
+      "title": "Vertical over real ground",
+      "deck": "decks/0110_vertical-over-real-ground.nec",
+      "printout": "printouts/0110_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0111",
+      "title": "Vertical over real ground",
+      "deck": "decks/0111_vertical-over-real-ground.nec",
+      "printout": "printouts/0111_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0112",
+      "title": "Vertical over real ground",
+      "deck": "decks/0112_vertical-over-real-ground.nec",
+      "printout": "printouts/0112_vertical-over-real-ground.out"
+    },
+    {
+      "id": "0113",
+      "title": "Back yard dipole",
+      "deck": "decks/0113_back-yard-dipole.nec",
+      "printout": "printouts/0113_back-yard-dipole.out"
+    },
+    {
+      "id": "0114",
+      "title": "Back yard dipole",
+      "deck": "decks/0114_back-yard-dipole.nec",
+      "printout": "printouts/0114_back-yard-dipole.out"
+    },
+    {
+      "id": "0115",
+      "title": "Back yard dipole",
+      "deck": "decks/0115_back-yard-dipole.nec",
+      "printout": "printouts/0115_back-yard-dipole.out"
     },
     {
       "id": "0116",
