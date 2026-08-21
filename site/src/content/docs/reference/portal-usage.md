@@ -1,6 +1,6 @@
 ---
 title: "Running momwire as SimNEC's engine"
-description: Install the momwire-nec2c portal, point SimNEC at it, choose the physics with --basis, read the version probe and the refusals, and swap in the shared resident engine.
+description: Install the momwire-nec2c portal, point SimNEC at it, pick an engine by name (one command per solver since 0.36.1), read the version probe and the refusals, and swap in the shared resident engine.
 ---
 
 [SimNEC](https://ae6ty.com/smith_charts/) (AE6TY) does not link its NEC
@@ -66,21 +66,34 @@ what it is called, and the fix is to install momwire somewhere else.
 
 Both rules apply to wrappers and symlinks exactly as they do to the script.
 
-## Choosing the physics: `--basis`
+## Choosing the physics: one command per engine
 
-The portal accepts a `--basis` flag on its command line:
+Since momwire 0.36.1 every solver is its own command — `pip install momwire`
+puts all of these on your path, and SimNEC's engine dialog takes any of them
+directly, no arguments and no wrapper scripts:
 
 ```text
-momwire-nec2c --basis bspline                        # the default — degree-2 B-spline
-momwire-nec2c --basis bspline-d1                     # the same physics at degree 1 (tent basis)
-momwire-nec2c --basis sinusoidal                     # closest to NEC-2's own formulation
-momwire-nec2c --basis sinusoidal-galerkin            # the same basis, tested variationally
-momwire-nec2c --basis sinusoidal-galerkin-converged  # for near-open, high-Q feeds
-momwire-nec2c --basis hmatrix                        # same physics, hierarchical (ACA) solve
-momwire-nec2c --basis arrayblock                     # same physics, element-block/FFT solve
+momwire-nec2c                                # the default — degree-2 B-spline (bs2)
+momwire-nec2c-bspline-d1                     # the same physics at degree 1 (tent basis)
+momwire-nec2c-razor-nec5                     # the NEC-5 formulation twin, NEC-5 quadrature
+momwire-nec2c-razor                          # the same twin with Gauss-Legendre quadrature
+momwire-nec2c-sinusoidal                     # closest to NEC-2's own formulation
+momwire-nec2c-sinusoidal-galerkin            # the same basis, tested variationally
+momwire-nec2c-sinusoidal-galerkin-converged  # for near-open, high-Q feeds
+momwire-nec2c-hmatrix                        # same physics, hierarchical (ACA) solve
+momwire-nec2c-arrayblock                     # same physics, element-block/FFT solve
 ```
 
-Three axes live in that list. `sinusoidal` and the two Galerkin entries are
+The mechanism is the *name*: everything after `nec2c-` in the executable's
+basename selects the basis (a Windows `.exe` suffix is stripped first), so a
+copy, symlink or hard link you make yourself works exactly like the shipped
+commands. A name that matches no solver fails the `-version` probe loudly at
+configure time, naming its source. The same choice has two other spellings
+with a fixed precedence — an explicit `--basis <name>` flag beats the
+filename, and the filename beats a `MOMWIRE_NEC2C_BASIS` environment
+variable; the plain `momwire-nec2c` with neither is the default.
+
+Four axes live in that list. `sinusoidal` and the two Galerkin entries are
 the **fidelity** ladder: the three-term basis point-matched with NEC's own
 delta-gap source answers "does this reproduce NEC-2's behaviour, mesh walk
 and all", and the Galerkin variants and the B-spline default answer "what
@@ -96,6 +109,13 @@ elements on a regular lattice become an FFT convolution over the element grid
 — and it degrades to the hierarchical solve on a deck with no repeated
 structure, so it is safe to leave on. Its answers must agree with `bspline`'s;
 if they do not, the deck is telling you about conditioning, not about basis.
+The two `razor` rows are the **twin** axis: NEC-5's own formulation — tent
+basis, razor-blade testing — rebuilt from its public description, with
+`razor-nec5` additionally carrying NEC-5's quadrature. On the models where we
+hold a licensed NEC-5 reference, `razor-nec5` rides its convergence path at
+the 0.01 % level, which makes it the reference lane for "what would NEC-5
+say" — while the B-spline default typically reaches the shared converged
+answer at coarser meshes than either.
 
 **On a tapered or stepped-radius wire, `sinusoidal` and
 `sinusoidal-galerkin` are NEC-2-identified, not NEC-5-accurate.** Both ride
@@ -122,20 +142,11 @@ version probe loudly at configure time rather than serving the default.
 
 ### When the dialog is a file picker
 
-SimNEC selects the NEC command through a file dialog, which leaves nowhere to
-type arguments. Make the flags *be* a file — one wrapper per combination:
-
-```bash
-mkdir -p ~/nec-wrappers
-cat > ~/nec-wrappers/momwire-nec2c-sin <<'SH'
-#!/bin/sh
-exec /path/to/momwire-nec2c --basis sinusoidal "$@"
-SH
-chmod +x ~/nec-wrappers/momwire-nec2c-sin
-```
-
-The wrapper is the command SimNEC inspects, so both filename rules above
-apply to it: keep `nec2c` in the name, and keep `out` out of the whole path.
+It always is — and the named commands above exist precisely so that the file
+*is* the choice. Point the dialog at `momwire-nec2c-razor-nec5` and that is
+the engine; two entries differing only in name are two engines. Both
+filename rules above apply to every spelling, shipped or hand-made: keep
+`nec2c` in the name, and keep `out` out of the whole path.
 
 ## The version probe
 
