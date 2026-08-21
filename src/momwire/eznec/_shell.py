@@ -85,14 +85,21 @@ def read_deck(deck_path: Path) -> str | None:
 
 
 def write_printout(printout_path: Path, text: str) -> None:
-    """Write the printout with LF endings, whatever the platform prefers.
+    """Write the printout with CRLF endings, whatever the platform prefers.
 
-    The captured printouts are the Windows engine's own and arrived CRLF; the
-    byte-gates normalize line endings before comparing (fixture manifest,
-    ``normalizations``), so the engine writes the platform-neutral form and
-    nothing downstream cares.
+    Downstream DOES care, and momwire#512 is the measurement: EZNEC refuses
+    an engine whose printout is LF-only, behind the misleading popup "Output
+    file NEC.OUT is present, but was written earlier from another
+    calculation" — naming a file that never existed in any run.  Proven by
+    controlled substitution on the Windows box (capture sitting 4,
+    antennaknobs PR #970): a wrapper changing NOTHING but the line endings
+    made EZNEC render this engine's results first try.  The captured
+    printouts are the Windows engine's own and arrived CRLF; this seam
+    writes what the engine writes, and the byte-gates that compare the
+    RENDERED STRING keep normalizing per the fixture manifest while the
+    shell gate compares the written bytes — the layer this defect hid in.
     """
-    with printout_path.open("w", encoding=_CODEC, newline="\n") as handle:
+    with printout_path.open("w", encoding=_CODEC, newline="\r\n") as handle:
         handle.write(text)
 
 

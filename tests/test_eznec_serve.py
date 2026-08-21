@@ -650,7 +650,7 @@ def test_the_shell_writes_the_served_printout_and_still_exits_zero(tmp_path):
 
     assert proc.returncode == 0
     assert proc.stdout == ""
-    written = out.read_bytes().decode("latin-1")
+    written = out.read_bytes().decode("latin-1").replace("\r\n", "\n")
     assert "NEC ERROR" not in written
     assert mask(written) == mask(printout_text("0044"))
 
@@ -1650,7 +1650,7 @@ def test_an_out_of_scope_capture_refuses_by_name_through_the_shell(
     )
 
     assert proc.returncode == 0
-    written = out.read_bytes().decode("latin-1")
+    written = out.read_bytes().decode("latin-1").replace("\r\n", "\n")
     error = " ***** NEC ERROR - "
     assert error in written
     stamp = "EZNEC Pro/2+ v. 7.0.4"
@@ -1674,6 +1674,20 @@ def test_a_served_ground_hands_the_refusal_to_the_card_still_out_of_scope():
     printout = render(deck_text("0022"))
     assert REFUSALS["0022"] in printout
     assert "GN 0" not in printout.split(" ***** NEC ERROR - ")[1]
+
+
+def test_nh_parses_now_and_refuses_beside_ne_by_its_own_name():
+    """momwire#513, the other half: NH is in the vocabulary (capture 0111
+    falsified the never-emitted premise), so a deck carrying one must reach
+    :func:`refusal` and be told the CARD is unserved — not that the card does
+    not exist.  0022's deck with its NE respelled NH is the probe: same ten
+    fields, one mnemonic, and the refusal switches sentences with it."""
+    nh_deck = deck_text("0022").replace("NE 0,1,1,1,", "NH 0,1,1,1,")
+    printout = render(nh_deck)
+    reason = printout.split(" ***** NEC ERROR - ")[1]
+    assert reason.startswith("NH (near magnetic field) is not served")
+    assert "not a card" not in reason
+    assert "NE (near electric field)" not in reason
 
 
 def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
