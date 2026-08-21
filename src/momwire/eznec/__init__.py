@@ -26,13 +26,26 @@ of the corpus actually stands over — taking the served count from twenty of
 the forty-nine captured decks to twenty-seven.  Its U2 added the bare ``GD``,
 EZNEC's "Real / MININEC type" ground, which is the corpus's second-most-common
 and answers with PEC currents under a second-medium far field; that takes the
-count to FORTY-THREE, and every ground card this dialect writes is now served.
+count to forty-three, and every ground card this dialect writes is now served.
+Its U3 renders the ``NETWORK DATA`` table that carries ``TL`` and ``NT`` rows
+at once — one heading, one sub-table each, in the order the decks write them —
+and takes the count to FORTY-SIX.
 
-The six still refused are the three decks carrying ``TL`` and ``NT`` cards at
-once (an unobserved table layout), two phased multi-``EX`` drives and one
-``NE`` near field — and each names its own card.  Three of those six used to
-name their ground instead: 0000, 0023 and 0025 stand over a ``GD``, so U2 is
-what let their real problem speak.
+The three still refused are two phased multi-``EX`` drives and one ``NE`` near
+field, and each names its own card.  Nothing in the corpus is refused for a
+ground or for a table layout any more.
+
+What U3 mostly did, though, was land printouts.  The U1/U2 capture errand was
+scoped off the fixture manifest rather than off the corpus, and every deck
+those rungs served already had a printout waiting in the capture tree:
+nineteen of them landed, and the arc's structure gates and envelope pins went
+from thirteen captures to thirty-nine.  Two of the nineteen then disagreed —
+the elevated radial systems 0033/0034, whose radials stand 1e-4 λ over a
+``GN 0`` earth and whose impedance lands 275 Ω and 188 Ω from the engine's.
+Their LAYOUT is gated like everything else and their physics is pinned
+nowhere; the divergence is momwire's finite-ground solve at grazing height
+rather than anything this package can reach, and it is named in
+``tests/test_eznec_serve.py`` rather than hidden inside a wide bar.
 
 Everything above the served rungs still refuses, and refuses BY NAME.  That is not a
 placeholder: a refusing engine that speaks the protocol correctly tells the

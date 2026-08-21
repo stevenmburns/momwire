@@ -1,4 +1,4 @@
-"""Node-addressed networks, gated against the captures (#497, U5).
+"""Node-addressed networks, gated against the captures (#497 U5, #504 U3).
 
 The gate unit.  U4's three gates carry over unchanged — a structure gate that
 byte-compares everything that is not a solved number, envelope pins on the
@@ -25,6 +25,23 @@ identity holds exactly (a connection point terminated by an admittance and
 nothing else reports ``-1/Y``, whatever the antenna does; two ports in series
 carry one current), a card echo is compared byte for byte, and a solved
 number is pinned at its measured difference plus 25 %.
+
+**#504 U3** takes this file from seven captures to twenty-four, and the new
+seventeen are the corpus's whole feed-system population: ten 4-squares run
+through six ``TL`` cards off a virtual anchor 100 λ out (0001-0009, 0024),
+three coax-fed dipoles over real earth (0011, 0029, 0030), two cardioid feed
+systems (0000, 0026), and the two L-network 4-squares (0023, 0025).  They were
+served from #504 U2 and gated only for liveness, because the fixture manifest
+had no printout for any of them; the printouts existed all along, in the
+capture tree, and landing them turned nineteen liveness assertions into real
+gates.
+
+Three of the new ones are the reason this unit had a refusal at all.  0000,
+0023 and 0025 carry ``TL`` AND ``NT`` cards, and their ``NETWORK DATA`` table
+was refused for four units as an unobserved layout.  Their own printouts show
+it: one heading, the ``TL`` sub-table under its own column header block, one
+blank, and the ``NT`` sub-table under its.  The refusal is gone and the layout
+is gated byte for byte, headers included.
 """
 
 from __future__ import annotations
@@ -36,16 +53,48 @@ import pytest
 
 from momwire.deck._nec5 import parse_nec5
 from momwire.deck._networks import card_branches
-from momwire.eznec import _serve, serve
+from momwire.eznec import _printout, _serve, serve
 from momwire.eznec._printout import LineRow, NetworkRow
 from momwire.eznec._shell import render
 from momwire.networks import TL
 from test_eznec_printout import deck_text, extract, printout_text
-from test_eznec_serve import mask, served
+from test_eznec_serve import drive_cells, mask, served
 
-# The seven captures this unit brings into scope, taking the served corpus
-# from 13 of 49 to 20.
-NETWORK_IDS = ("0012", "0014", "0016", "0017", "0018", "0027", "0028")
+# Every capture carrying a ``TL`` or an ``NT`` card AND a printout to gate it
+# against — the seven #497 U5 brought into scope, and the seventeen whose
+# printouts landed with #504 U3.
+NETWORK_IDS = (
+    "0000",
+    "0001",
+    "0002",
+    "0003",
+    "0004",
+    "0005",
+    "0006",
+    "0007",
+    "0008",
+    "0009",
+    "0011",
+    "0012",
+    "0014",
+    "0016",
+    "0017",
+    "0018",
+    "0023",
+    "0024",
+    "0025",
+    "0026",
+    "0027",
+    "0028",
+    "0029",
+    "0030",
+)
+
+# The three whose table carries both card kinds.  All three stand over a bare
+# ``GD``, all three write every ``TL`` before every ``NT``, and all three print
+# the two sub-tables in that order — which is the measurement that dissolved
+# ``_REFUSE_MIXED_NETWORKS``.
+MIXED_IDS = ("0000", "0023", "0025")
 
 # The oracle triple, by configuration.  0014 is A again with ``XQ`` in place
 # of ``RP`` — the same cards, so it is the control on the request card rather
@@ -76,21 +125,80 @@ Z_SNAP = complex(225.39, -60.593)
 #   0027   23.422+12.770j     23.203+12.869j    0.240    7.89 / 8.14   0.25
 #   0028  129.50 -73.453j    119.24 -56.832j   19.533    4.71 / 4.67   0.04
 #
-# Two things in that table are worth reading twice.  The three W7EL configs
-# sit 13.4 Ω from their captures and 0017 sits 6.8 Ω from ITS capture, which
-# is the same formulation offset U4 measured on the bare decks and not
-# something the networks added — the network arithmetic is exact, and what
-# differs is the antenna underneath it.  And 0028, the log-periodic, is the
-# widest at 19.5 Ω on a 148 Ω row: five coupled elements whose currents are
-# set by a feeder network is the most basis-sensitive model in the corpus.
+# and #504 U3's seventeen, measured the same way on the same day:
+#
+#   id    Z (capture)        Z (served)        |dZ|    peak cap/served  d
+#   0000   31.592+25.945j     31.564+26.048j    0.107   -1.34 /-1.28   0.06
+#   0001   13.949 +5.6027j    13.853 +5.1309j   0.482    5.12 / 5.25   0.13
+#   0002   13.949 +5.6027j    13.853 +5.1309j   0.482    (XQ, none)     —
+#   0003   13.977 +5.2920j    13.807 +5.1872j   0.200    (XQ, none)     —
+#   0004   13.938 +5.1811j    13.849 +5.4369j   0.271    (XQ, none)     —
+#   0005   13.920 +5.2737j    14.035 +5.8309j   0.569    (XQ, none)     —
+#   0006   13.995 +5.5407j    14.396 +6.3146j   0.872    (XQ, none)     —
+#   0007   14.210 +5.9359j    14.944 +6.8373j   1.162    (XQ, none)     —
+#   0008   14.591 +6.4102j    15.681 +7.3555j   1.443    (XQ, none)     —
+#   0009   15.148 +6.9187j    16.603 +7.8314j   1.718    (XQ, none)     —
+#   0011   24.442-11.533j     26.597-11.755j    2.166    7.05 / 7.03   0.02
+#   0023   10.453 +3.7826j    10.449 +3.7179j   0.065    3.51 / 3.52   0.01
+#   0024   11.294 +0.36884j   11.252 +0.40380j  0.055    3.50 / 3.52   0.02
+#   0025   42.902 -0.093298j  42.888 -0.35190j  0.259    3.40 / 3.41   0.01
+#   0026   34.162+13.096j     34.167+13.214j    0.118   -1.31 /-1.28   0.03
+#   0029   23.760-13.033j     25.697-13.306j    1.956    6.77 / 6.76   0.01
+#   0030   24.442-11.533j     26.597-11.755j    2.166    7.05 / 7.03   0.02
+#
+# Three things in those tables are worth reading twice.
+#
+# The three W7EL configs sit 13.4 Ω from their captures and 0017 sits 6.8 Ω
+# from ITS capture, which is the same formulation offset U4 measured on the
+# bare decks and not something the networks added — the network arithmetic is
+# exact, and what differs is the antenna underneath it.  And 0028, the
+# log-periodic, is the widest at 19.5 Ω on a 148 Ω row: five coupled elements
+# whose currents are set by a feeder network is the most basis-sensitive model
+# in the corpus.
+#
+# U3's seventeen are the TIGHTEST rows anywhere in this arc — 0.055 to 2.2 Ω,
+# where the bare captures span 3.5 to 16.3 and the older network ones 0.24 to
+# 19.5 — and the reason is the same one that makes 0027's 0.240 the tightest
+# of the old seven: every one of them is DRIVEN THROUGH A NETWORK.  The source
+# stands on a virtual node 100 λ from the antenna and the printed impedance is
+# what a transmission line presents at its own end, so the antenna's feed
+# region — the place the two formulations disagree — reaches the printed cell
+# through a line that flattens it.  0011/0029/0030's 2 Ω is the widest of the
+# seventeen and they are the three with the SHORTEST line (a 13.85 m coax
+# rather than a 100 λ anchor).
+#
+# 0002-0009 are one deck stepped 7.15 to 7.5 MHz and their offsets climb
+# monotonically with frequency, 0.20 Ω to 1.72 Ω: a 4-square is a phased array
+# and the further it is driven from the frequency its feed system was cut for,
+# the more the element currents depend on exactly what the elements' mutual
+# impedances are.  That is a formulation difference being AMPLIFIED by the
+# array, and it is the clearest picture of the offset's shape anywhere in the
+# corpus.
 Z_BAR = {
+    "0000": 0.14,
+    "0001": 0.61,
+    "0002": 0.61,
+    "0003": 0.25,
+    "0004": 0.34,
+    "0005": 0.72,
+    "0006": 1.09,
+    "0007": 1.46,
+    "0008": 1.81,
+    "0009": 2.15,
+    "0011": 2.71,
     "0012": 16.72,
     "0014": 16.72,
     "0016": 16.72,
     "0017": 8.52,
     "0018": 7.84,
+    "0023": 0.082,
+    "0024": 0.069,
+    "0025": 0.33,
+    "0026": 0.15,
     "0027": 0.30,
     "0028": 24.42,
+    "0029": 2.45,
+    "0030": 2.71,
 }
 
 # |(Z_C - Z_A) served - (Z_C - Z_A) captured|: the SEPARATION between the
@@ -102,48 +210,160 @@ GAP_BAR = 8.2
 
 # Peak total gain: |d| plus 25 % or 0.05 dB, whichever is larger, the printed
 # cell being quantized at 0.01 dB.
-PEAK_BAR = {"0012": 0.08, "0016": 0.08, "0027": 0.32, "0028": 0.05}
+PEAK_BAR = {
+    "0000": 0.075,
+    "0001": 0.163,
+    "0011": 0.05,
+    "0012": 0.08,
+    "0016": 0.08,
+    "0023": 0.05,
+    "0024": 0.05,
+    "0025": 0.05,
+    "0026": 0.05,
+    "0027": 0.32,
+    "0028": 0.05,
+    "0029": 0.05,
+    "0030": 0.05,
+}
 
 # Largest per-row difference in TOTAL gain among the rows the capture puts
-# within 10 dB of its own peak, measured and plus 25 %.  0027 is the outlier
-# by an order of magnitude and it is the physics: a cardioid is a NULL
-# pattern, its null depth is set by how exactly two feed currents cancel, and
-# two formulations that disagree by 0.2 Ω at the feedpoint disagree by whole
-# dB down in the notch (8.3 dB at 20 dB below the peak, 1.7 within 10).
-SHAPE_BAR = {"0012": 0.15, "0016": 0.15, "0027": 2.10, "0028": 0.08}
+# within 10 dB of its own peak, measured and plus 25 % — or 0.05 dB, whichever
+# is larger, for the peak bar's reason.  0027 is the outlier by an order of
+# magnitude and it is the physics: a cardioid is a NULL pattern, its null depth
+# is set by how exactly two feed currents cancel, and two formulations that
+# disagree by 0.2 Ω at the feedpoint disagree by whole dB down in the notch
+# (8.3 dB at 20 dB below the peak, 1.7 within 10).
+#
+# The same effect is why the ten new AZIMUTH cuts are gated within 10 dB and
+# not at every angle.  0011/0029/0030's 181-row ELEVATION cuts agree at 0.04 dB
+# across every non-null row and are gated that way in
+# ``test_eznec_serve.py::test_the_finite_ground_elevation_cut_agrees_at_every_printed_angle``;
+# the 361-row azimuth cuts of the arrays are 1.96 dB (0000), 6.59 (0001), 2.32
+# (0023/0025), 3.06 (0024) and 2.45 (0026) at their worst row, and every one of
+# those worst rows sits in the array's deep rear null, 20 to 40 dB down, where
+# a null's depth is a difference of two nearly equal numbers and a bar drawn
+# round it would be pinning a cancellation rather than a pattern.  The
+# within-10-dB numbers on the same cuts are 0.29, 0.30, 0.04, 0.09 and 0.18.
+SHAPE_BAR = {
+    "0000": 0.363,
+    "0001": 0.375,
+    "0011": 0.05,
+    "0012": 0.15,
+    "0016": 0.15,
+    "0023": 0.05,
+    "0024": 0.113,
+    "0025": 0.05,
+    "0026": 0.225,
+    "0027": 2.10,
+    "0028": 0.08,
+    "0029": 0.05,
+    "0030": 0.05,
+}
 
 # Wire-current and charge-density tables, worst element relative to that
 # table's own peak, measured and plus 25 % — same shape as U4's.
+#
+# 0001-0009 are the widest current rows in the whole arc at 15 to 22 % and the
+# reason is the same one that made 0028 wide: a 4-square's element currents are
+# what its feed system SETS, so a formulation difference at four feedpoints
+# arrives in the current table four times over.  Their impedance rows are the
+# tightest in the arc at the same time, which is not a contradiction — the
+# printed impedance is measured 100 λ away through a line, and the currents are
+# measured on the elements.
 CURRENT_BAR = {
+    "0000": 0.033,
+    "0001": 0.269,
+    "0002": 0.269,
+    "0003": 0.270,
+    "0004": 0.265,
+    "0005": 0.255,
+    "0006": 0.241,
+    "0007": 0.225,
+    "0008": 0.209,
+    "0009": 0.193,
+    "0011": 0.077,
     "0012": 0.023,
     "0014": 0.023,
     "0016": 0.023,
     "0017": 0.022,
     "0018": 0.030,
+    "0023": 0.046,
+    "0024": 0.047,
+    "0025": 0.046,
+    "0026": 0.026,
     "0027": 0.177,
     "0028": 0.113,
+    "0029": 0.073,
+    "0030": 0.077,
 }
 CHARGE_BAR = {
+    "0000": 0.095,
+    "0001": 0.155,
+    "0002": 0.155,
+    "0003": 0.128,
+    "0004": 0.104,
+    "0005": 0.087,
+    "0006": 0.078,
+    "0007": 0.090,
+    "0008": 0.114,
+    "0009": 0.136,
+    "0011": 0.096,
     "0012": 0.079,
     "0014": 0.079,
     "0016": 0.079,
     "0017": 0.071,
     "0018": 0.072,
+    "0023": 0.091,
+    "0024": 0.111,
+    "0025": 0.091,
+    "0026": 0.099,
     "0027": 0.129,
     "0028": 0.114,
+    "0029": 0.092,
+    "0030": 0.096,
 }
 
 # Connection points that are ANTENNA terminals — the pinned virtual nodes,
 # which report 1e10 and 2e5 Ω against currents of 1e-9 and 1e-16 A, are dust
 # on both sides and are left out by the cutoff.  Worst row measured, plus
 # 25 %: 0027's two line ends at 6.8 and 8.3 Ω, 0028's five at up to 13.0.
-CONNECTION_BAR = {"0027": 10.4, "0028": 16.3}
+#
+# #504 U3's seventeen sit either side of that.  The 4-squares' six line ends
+# land at 15.2 to 18.4 Ω on 60 Ω-class points and the cardioids' at 1.4 to 3.2,
+# which is the same story the impedance table tells.  The three coax dipoles
+# are the entry to read the scale off rather than the number: their far
+# connection point is a near-open at 6.7 to 7.4 kΩ, and 1104 to 1165 Ω on that
+# is 15 % — the SAME relative offset as the 6.3 Ω their antenna-side point
+# carries on 85 Ω.  One formulation difference, two points, two very different
+# absolute numbers, because a half-wave of coax transforms it.
+CONNECTION_BAR = {
+    "0000": 2.18,
+    "0001": 19.03,
+    "0002": 19.03,
+    "0003": 19.43,
+    "0004": 19.89,
+    "0005": 20.40,
+    "0006": 20.98,
+    "0007": 21.61,
+    "0008": 22.30,
+    "0009": 23.04,
+    "0011": 1379.7,
+    "0023": 3.96,
+    "0024": 3.76,
+    "0025": 3.96,
+    "0026": 1.75,
+    "0027": 10.4,
+    "0028": 16.3,
+    "0029": 1456.2,
+    "0030": 1379.7,
+}
 CONNECTION_CUTOFF = 1e4
 
 # EFFICIENCY, in percentage points: 0.29 on the three W7EL configs that share
 # an answer, 0.66 on config C, 0.58 on the snapped one, and 0.00 on the two
 # that read 200 % — where the number is structural rather than solved.
-# Measured worst, plus 25 %.
+# Measured worst, plus 25 %.  #504 U3's seventeen add nothing to it: 0.20 on
+# 0023/0025, 0.13 on 0000, 0.11 on 0024 and exactly 0.00 on the other thirteen.
 EFFICIENCY_BAR = 0.83
 
 
@@ -178,7 +398,9 @@ def test_a_served_network_printout_is_the_capture_wherever_it_is_not_solved(cid)
     its row COUNT, its row ORDER, its tags, its segments and its sign-tracking
     end index compared exactly.
     """
-    assert mask(served(cid)) == mask(printout_text(cid))
+    assert mask(served(cid), drive_cells(cid)) == mask(
+        printout_text(cid), drive_cells(cid)
+    )
 
 
 @pytest.mark.parametrize("cid", NETWORK_IDS)
@@ -329,11 +551,18 @@ def test_the_sign_tracking_end_index_follows_the_deck_and_nothing_else(cid):
     """The trailing index after ``TAG``/``SEG.``: 2 for a ``-1`` node, 1 for
     a positive one, on every captured row of every network block.
 
-    The capture study measured 9 of 9 rows; these seven printouts carry 26,
-    and every one of them is compared against the deck's own spelling AND
+    The capture study measured 9 of 9 rows; these twenty-four printouts carry
+    123, and every one of them is compared against the deck's own spelling AND
     against the captured row.  It is not an end-one/end-two flag and not a
     port index — 0017 prints 2 and 1 for two points on ONE geometric node —
     which is why it is carried from the address rather than derived.
+
+    Comparing the LISTS rather than the sets is what makes this the
+    connection-point ORDER gate too, and #504 U3 is where that stopped being
+    free: the mixed decks are the first that could have had their two card
+    kinds discovered in either order, and 0025's eight rows off seven cards
+    (four ``TL``, three ``NT``, one node named twice) are the longest such
+    block in the corpus.
     """
     deck = parse_nec5(deck_text(cid))
     want = extract(printout_text(cid)).network_excitation
@@ -562,9 +791,15 @@ def test_the_deck_the_refusal_order_existed_for_now_falls_all_the_way_through():
     three ``1.E+10`` pins and a 361-point azimuth cut over 13/0.005 earth.  Ten
     of the corpus's forty-nine decks are this shape and all ten now answer.
 
+    #504 U3 landed its printout, so every claim below is now also made against
+    the capture in the gates above and the counts here are the captured ones
+    rather than plausible ones.  Kept anyway, and deliberately: it reads as the
+    one-line description of the deck the whole refusal ORDER was built around,
+    which a parametrized byte-gate cannot do.
+
     The order itself did not change and did not need to; what changed is that
-    there is no ground rung left to fall through.  The test below is where the
-    ordering is still visible.
+    there is no ground rung left to fall through, and since this unit no mixed
+    table either.  The tests below are where the ordering is still visible.
     """
     printout = render(deck_text("0001"))
     assert "NEC ERROR" not in printout
@@ -577,25 +812,88 @@ def test_the_deck_the_refusal_order_existed_for_now_falls_all_the_way_through():
     assert len(block.rows) == 361
 
 
-def test_a_deck_carrying_both_card_types_refuses_for_its_table_and_not_its_physics():
-    """``TL`` and ``NT`` together: the physics is served, the LAYOUT is not.
+@pytest.mark.parametrize("cid", MIXED_IDS)
+def test_a_deck_carrying_both_card_types_prints_two_sub_tables_under_one_heading(cid):
+    """``TL`` and ``NT`` together: the layout, measured at last.
 
-    The ``NETWORK DATA`` table has one column heading per card type and no
-    captured printout shows a table carrying both, so the honest answer is a
-    sentence rather than a guessed heading.
+    This was a REFUSAL for four units — the ``NETWORK DATA`` table has one
+    column header block per card kind and no committed printout showed a table
+    carrying both, so the seam said so rather than guess a heading.  The
+    printouts existed; they were in the capture tree, unlanded, because the
+    U1/U2 capture errand was scoped off the fixture manifest instead of off the
+    corpus.  #504 U3 landed them and there is nothing left to guess.
 
-    0000 is the capture VERBATIM here, which it was not before.  The corpus's
-    three mixed decks (0000, 0023, 0025) all stand over a bare ``GD``, so until
-    #504 U2 they were told their GROUND was unserved and this refusal had to be
-    given a hearing by swapping the card.  Now the ground is served and the
-    mixed table is the first rung they fall through — which is the refusal
-    order doing exactly its job, one rung further down than it used to.
+    What they show, and every clause of it is gated here: ONE
+    ``- - - NETWORK DATA - - -`` heading; one blank; the ``TL`` sub-table under
+    the ``TL`` column header block; ONE blank; the ``NT`` sub-table under the
+    ``NT`` block; then the section's ordinary three.  The two header blocks are
+    compared BYTE for byte against the capture rather than masked, which is the
+    point of doing it here as well as in the structure gate — they are the
+    bytes that were unobserved, they differ from each other in ways a
+    transcription could easily smooth (the ``TL`` block spells ``SEG.`` one
+    space narrower on its first row), and a renderer that emitted one heading
+    for both kinds would still pass a gate that only counted rows.
     """
-    printout = render(deck_text("0000"))
-    assert "this deck carries TL and NT cards together" in printout
+    captured = printout_text(cid).split("\n")
+    got = served(cid).split("\n")
+    at = next(
+        i for i, line in enumerate(captured) if "- - - NETWORK DATA - - -" in line
+    )
+    assert got.index(captured[at]) == at
+    # The whole table, heading to the blank run that ends it, byte for byte.
+    end = next(
+        i
+        for i in range(at + 1, len(captured))
+        if not captured[i].strip() and not captured[i + 1].strip()
+    )
+    block = captured[at:end]
+    assert got[at:end] == block
+
+    # And the shape of it, said out loud so a failure names the clause.
+    assert block[1] == ""
+    headers = [i for i, line in enumerate(block) if "- FROM -" in line]
+    assert len(headers) == 2
+    assert block[headers[0] : headers[0] + 3] == list(_printout._LINE_COLUMNS)
+    assert block[headers[1] : headers[1] + 3] == list(_printout._NETWORK_COLUMNS)
+    # Exactly one blank between the last TL row and the NT header block.
+    assert block[headers[1] - 1] == ""
+    assert block[headers[1] - 2].endswith("STRAIGHT")
+
+    rows = extract(served(cid)).networks
+    lines = [row for row in rows if isinstance(row, LineRow)]
+    nets = [row for row in rows if isinstance(row, NetworkRow)]
+    assert rows == tuple(lines + nets), "the sub-tables are not TL-then-NT"
+    assert lines and nets
+
+
+def test_a_deck_that_interleaves_the_two_card_kinds_refuses_by_name():
+    """The one thing the mixed captures still cannot say.
+
+    All three of them write every ``TL`` before every ``NT``, so two different
+    rules fit every observed table — "the engine groups the sub-tables by card
+    kind" and "the engine prints cards in order and re-heads whenever the kind
+    changes" — and they part company only on a deck that interleaves.  So do
+    the ``STRUCTURE EXCITATION DATA`` connection points, which print in card
+    discovery order and would therefore start somewhere else.
+
+    No capture writes one and EZNEC does not emit one; the probe below is
+    synthetic, 0000's own deck with its ``NT`` card moved above its two ``TL``
+    cards and nothing else touched.  It refuses, and it refuses for the ORDER
+    rather than for the mixture — which is the distinction the sentence has to
+    carry, because a reader whose deck was refused for carrying both kinds
+    would go and remove one.
+    """
+    text = deck_text("0000")
+    (nt,) = [line for line in text.split("\n") if line.startswith("NT ")]
+    moved = text.replace(nt + "\n", "").replace("TL 3,1,", nt + "\nTL 3,1,", 1)
+    assert moved.index("NT ") < moved.index("TL ")
+
+    printout = render(moved)
+    assert "this deck writes an NT card before a TL card" in printout
     assert "ANTENNA INPUT PARAMETERS" not in printout
-    # And the reason names the table rather than the ground it stands over.
-    assert "GD" not in printout.split(" ***** NEC ERROR - ")[1]
+    # The cards themselves are fine and the seam says so by not naming them:
+    # the same deck in the captured order serves.
+    assert "NEC ERROR" not in render(text)
 
 
 def test_two_addresses_at_a_five_wire_junction_refuse_rather_than_guess():
@@ -638,7 +936,10 @@ def test_the_card_semantics_are_the_engine_s_and_not_a_second_copy():
     assert "from ..deck._networks import card_branches" in source
     assert "transposed" not in source
     assert "def card_branches" not in source
-    # And the rows it hands the renderer are the two the table has, no more.
+    # And the rows it hands the renderer are the two the table has, no more —
+    # separately on twenty-one of the captures and both at once on the three
+    # mixed ones.
     for cid in NETWORK_IDS:
         kinds = {type(row) for row in serve(parse_nec5(deck_text(cid))).networks}
-        assert kinds in ({NetworkRow}, {LineRow})
+        assert kinds in ({NetworkRow}, {LineRow}, {NetworkRow, LineRow})
+        assert (len(kinds) == 2) == (cid in MIXED_IDS)
