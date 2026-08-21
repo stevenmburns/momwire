@@ -153,7 +153,7 @@ def test_gn1_monopole_base_fed_contact():
     text = """CM base fed monopole over PEC
 CE
 GW 1 20 0. 0. 0. 0. 0. 5. 1.E-3
-GE -1
+GE 1
 GN 1
 EX 0 1 1 0 1. 0.
 FR 0 1 0 0 14.1
@@ -373,7 +373,7 @@ def test_contact_over_finite_ground_refuses():
     text = """CM base fed over a finite ground
 CE
 GW 1 20 0. 0. 0. 0. 0. 5. 1.E-3
-GE -1
+GE 1
 GN 2 0 0 0 13. 0.005
 EX 0 1 1 0 1. 0.
 FR 0 1 0 0 14.1
