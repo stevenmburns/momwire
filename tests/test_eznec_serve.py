@@ -560,7 +560,7 @@ def test_the_shell_writes_the_served_printout_and_still_exits_zero(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# gate 1b — the counting rule, on all ten captures
+# gate 1b — the counting rule, on every capture that shipped a printout
 # --------------------------------------------------------------------------
 
 
@@ -575,12 +575,13 @@ def test_the_counting_rule_reproduces_every_captured_count(cid):
     standing in a declared ground plane counts its image as one more element
     end (0019, the only capture that separates that from "free end").
 
-    The seven network captures are here too, and three of them were added
-    after the rule was written: 0018, 0027 and 0028 answered it unchanged,
-    which is the only kind of evidence a derived rule can get.  0012's 17
-    nodes / 15 elements / 13 unknowns is the deck with several two-wire
-    junctions AND a wire that touches nothing; 0027 pairs a ``GE 1`` ground
-    plane with a virtual wire far above it.
+    Twenty-nine captures have been added since the rule was written and every
+    one of them answered it unchanged, which is the only kind of evidence a
+    derived rule can get.  0012's 17 nodes / 15 elements / 13 unknowns is the
+    deck with several two-wire junctions AND a wire that touches nothing; 0027
+    pairs a ``GE 1`` ground plane with a virtual wire far above it; and #504
+    U3's 0034 is the hardest of them, 44 wires meeting five at a time at a
+    tapered base, 81 nodes / 80 elements / 79 unknowns.
     """
     structure = _serve.structure_of(parse_nec5(deck_text(cid)))
     data = extract(printout_text(cid))
