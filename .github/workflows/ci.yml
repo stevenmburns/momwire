@@ -57,6 +57,35 @@ jobs:
           path: 464-dumps/
           if-no-files-found: ignore
 
+  test-macos:
+    # The platform Ward runs SimNEC on (momwire#527/#528): the suite must
+    # pass where the portal's real users live, not only where wheels build.
+    # Same lane as `test` (fast marker subset); slow/memgate stay linux-only.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install libomp (macOS OpenMP runtime)
+        # Apple clang has no bundled OpenMP runtime; setup.py's darwin
+        # branch links Homebrew's libomp (LIBOMP_PREFIX) — same step the
+        # wheels workflow uses.
+        run: brew install libomp
+      - run: pip install --upgrade pip
+      - run: pip install -e .[test]
+      - run: pytest tests/ -m "not slow and not memgate"
+        env:
+          MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
+      - name: Upload byte-oracle mismatch dumps (momwire#464)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: momwire-464-dumps-macos
+          path: 464-dumps/
+          if-no-files-found: ignore
+
   test-slow:
     # The slow-marked tests are the solver-regression pins (M3/M4 reference
     # constants, near-open collapse, section-6 oracle, EK brute-force sweep)
