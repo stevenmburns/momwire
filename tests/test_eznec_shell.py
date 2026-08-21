@@ -271,7 +271,9 @@ def test_paths_resolve_against_the_working_directory(tmp_path):
     proc = run_engine(["EZN5.NEC", "NEC5.OUT"], cwd=tmp_path)
 
     assert proc.returncode == 0
-    written = (tmp_path / "NEC5.OUT").read_bytes().decode("latin-1").replace("\r\n", "\n")
+    written = (
+        (tmp_path / "NEC5.OUT").read_bytes().decode("latin-1").replace("\r\n", "\n")
+    )
     assert written.startswith(header_prefix("0010"))
 
 
@@ -287,7 +289,12 @@ def test_a_path_with_spaces_needs_no_quoting_in_argv(tmp_path):
     proc = run_engine([str(deck), str(out)])
 
     assert proc.returncode == 0
-    assert out.read_bytes().decode("latin-1").replace("\r\n", "\n").startswith(header_prefix("0043"))
+    assert (
+        out.read_bytes()
+        .decode("latin-1")
+        .replace("\r\n", "\n")
+        .startswith(header_prefix("0043"))
+    )
 
 
 def test_garbage_deck_bytes_still_leave_a_printout(tmp_path):

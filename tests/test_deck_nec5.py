@@ -507,6 +507,7 @@ def test_nh_parses_as_ne_s_twin_with_the_magnetic_flag_up():
     capture 0111 wrote one (the Near Field Analysis dialog's E/H radio
     button picks the mnemonic).  Same ten fields, same handler, one flag;
     the spherical form refuses exactly as NE's does (the REFUSALS table)."""
+
     def dipole_with(card: str) -> str:
         lines = DIPOLE.splitlines()
         at = lines.index("RP 0,1,361,1000,90.,0.,0.,1.,0.")
