@@ -205,17 +205,20 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     written, the stamp echo is in it, and the refusal sits AFTER the echo.
 
     0022 is the deck for it since #504 U4 — a 10.3 m vertical over a ``GN 0``
-    earth asking for a NEAR ELECTRIC FIELD, and the LAST capture in the corpus
-    that refuses anything.  It is the fifth tenant of this gate, and the
-    turnover is the whole arc's shape written out one eviction at a time: 0043
-    came back solved when rung 1 landed, 0047 when the Sommerfeld ground did,
-    0045 when the MININEC ground did, and 0031 when the phased drive did.
+    earth asking for a NEAR ELECTRIC FIELD.  It is the fifth tenant of this
+    gate, and the turnover is the whole arc's shape written out one eviction at
+    a time: 0043 came back solved when rung 1 landed, 0047 when the Sommerfeld
+    ground did, 0045 when the MININEC ground did, and 0031 when the phased
+    drive did.
 
-    There is no sixth tenant waiting.  Every ground card, every network table
-    and every drive the corpus writes is now served, so the only capture left
-    to hold this gate open is the one naming a REQUEST — and when the near
-    field lands, this gate needs a hand-edited deck or a new capture, which is
-    a fact worth knowing before that unit starts rather than after.
+    The #504 U4 version of this docstring warned that the near-field rung would
+    evict this tenant too and leave the gate needing a hand-edited deck.  It did
+    not: momwire#516 measured the near field under all four ground cards, found
+    that a finite half-space's cannot be answered here, and moved 0022's
+    sentence from the CARD to the GROUND under it rather than deleting it.  The
+    gate keeps a real capture, and it has six more waiting (0107, 0108, 0110,
+    0111, 0112, 0113) rather than none — which is the answer to a question a
+    docstring is allowed to have got wrong, as long as the next one says so.
     """
     deck = tmp_path / "EZN5.NEC"
     deck.write_bytes((FIXTURE_DIR / capture("0022")["deck"]).read_bytes())
@@ -231,7 +234,9 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     assert _ERROR_PREFIX in written
     assert written.index(stamp) < written.index(_ERROR_PREFIX)
     reason = written.rsplit(_ERROR_PREFIX, 1)[1].strip()
-    assert reason.startswith("NE (near electric field) is not served")
+    assert reason.startswith(
+        "NE (near electric field) over a GN 0 finite ground is not served"
+    )
     assert written == eznec.render_refusal(deck_text("0022"), reason)
 
 
