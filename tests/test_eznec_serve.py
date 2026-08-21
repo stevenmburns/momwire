@@ -85,6 +85,8 @@ SERVED_IDS = (
     "0019",
     "0020",
     "0021",
+    "0031",
+    "0032",
     "0035",
     "0043",
     "0044",
@@ -93,6 +95,20 @@ SERVED_IDS = (
     "0047",
     "0048",
 )
+
+# The two PHASED captures — #504 U4's rung, and the corpus's only decks whose
+# ``ANTENNA INPUT PARAMETERS`` table has more than one row.  0031 is a 40 m
+# four-square: four 9.98 m verticals on a 10.49 m square over a bare ``GD``,
+# driven ``1.414214∠0``, ``-j1.414214`` twice and ``-1.414214`` — the classic
+# 0/-90/-90/-180 four-square phasing — with a 361-point azimuth cut at
+# theta = 67.  0032 is a two-element cardioid, quarter-wave spacing and
+# quarter-wave phasing at 299.7925 MHz over ``GN 1``, with a 361-point azimuth
+# cut at the horizon.
+#
+# Both drive their ports with a set CURRENT and no network anywhere, which is
+# not a coincidence: it is how EZNEC spells a phased array in this dialect, and
+# it is the whole of what rung 4 serves.
+PHASED_IDS = ("0031", "0032")
 
 # The three of them that stand over a finite ``GN 0`` ground — the rung #504 U1
 # added.  One 10.3 m base-fed vertical over 13/0.005 earth, three times:
@@ -144,10 +160,10 @@ SERVED_UNGATED_IDS = ("0036", "0037", "0038", "0039", "0040", "0041", "0042")
 # reported rather than pinned: a bar at 344 Ω would record the gap as normal.
 DIVERGENT_IDS = ("0033", "0034")
 
-# Every capture id this seam answers after #504 U3, pinned.  The ladder number
-# is 46 of 49 and the three that are left are named in
-# :func:`test_the_corpus_ladder_stands_where_u3_left_it`.
-SERVED_AFTER_U3 = (
+# Every capture id this seam answers after #504 U4, pinned.  The ladder number
+# is 48 of 49 and the one that is left is named in
+# :func:`test_the_corpus_ladder_stands_where_u4_left_it`.
+SERVED_AFTER_U4 = (
     "0000",
     "0001",
     "0002",
@@ -178,6 +194,7 @@ SERVED_AFTER_U3 = (
     "0028",
     "0029",
     "0030",
+    *PHASED_IDS,  # 0031-0032
     *DIVERGENT_IDS,  # 0033-0034
     "0035",
     *SERVED_UNGATED_IDS,  # 0036-0042
@@ -204,6 +221,8 @@ SERVED_AFTER_U3 = (
 #   0019  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
 #   0020  35.571 - 1.4223j     36.499 + 2.0789j    3.622  -0.02/-0.05  0.03
 #   0021  47.789 - 0.78525j    48.867 + 2.5635j    3.518  -1.31/-1.33  0.02
+#   0031  -1.7790-24.192j      -1.7032-17.926j     6.267   5.38/5.32   0.06
+#   0032  19.139 -24.569j      19.769 -18.570j     6.032   8.23/8.18   0.05
 #   0035  23.343 -24.594j      23.926 -20.079j     4.552   9.88/9.84   0.04
 #   0043  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (XQ, none)   —
 #   0044  35.571 - 1.4223j     36.499 + 2.0789j    3.622   5.15/5.13   0.02
@@ -236,6 +255,15 @@ SERVED_AFTER_U3 = (
 # The peak-gain bar is |d| plus 25 % OR 0.05 dB, whichever is larger: the
 # printed cell is quantized at 0.01 dB, so a bar under a few hundredths would
 # be pinning the rounding rather than the physics.
+#
+# The two PHASED rows are this table's FIRST rows rather than its only ones —
+# 0031 prints four ``ANTENNA INPUT PARAMETERS`` rows and 0032 two, and every
+# one of them is pinned in :data:`PHASED_Z_BAR` below.  The row quoted here is
+# the first, so that the sweep this table drives keeps one shape.  0031's first
+# row is also the corpus's only NEGATIVE resistance, which makes it the one
+# entry in this table where the served number has to land inside the bar AND on
+# the correct side of zero (:func:`test_the_four_square_s_absorbing_element_
+# stays_negative`).
 Z_BAR = {
     "0010": 20.35,
     "0013": 14.27,
@@ -243,6 +271,8 @@ Z_BAR = {
     "0019": 4.53,
     "0020": 4.53,
     "0021": 4.40,
+    "0031": 7.84,
+    "0032": 7.55,
     "0035": 5.69,
     "0043": 4.53,
     "0044": 4.53,
@@ -252,6 +282,33 @@ Z_BAR = {
     "0048": 4.42,
 }
 
+# Every row of the two phased tables, measured 2026-08-20 the same way and
+# barred the same way (|dZ| plus 25 %).  Written per ROW because that is what a
+# phased drive newly has and what a regression would newly break: the four
+# ports of a four-square are four different impedances, coupled, and a seam
+# that solved one of them wrong could still average out into a plausible first
+# row.
+#
+#   id    tag  Z (capture)          Z (served)          |dZ|
+#   0031   1   -1.7790-24.192j      -1.7032-17.926j     6.267
+#   0031   2   36.783 -27.955j      37.749 -22.631j     5.411
+#   0031   3   36.783 -27.955j      37.749 -22.631j     5.411
+#   0031   4   56.525 +41.575j      59.333 +49.392j     8.306
+#   0032   1   19.139 -24.569j      19.769 -18.570j     6.032
+#   0032   2   49.318 +12.169j      51.224 +19.361j     7.440
+#
+# The family is the same one the single-source table sits in — the reactance
+# carries nearly all of it, 5.3 to 7.8 Ω of X against 0.08 to 2.8 Ω of R, which
+# is the feed-region formulation difference these captures' six-segment
+# verticals show at exactly the size 0010's dipole shows it at 16.3.  Nothing
+# about the PHASING is loose: the two symmetric rows of 0031 are identical on
+# both sides (:func:`test_the_four_square_s_two_quadrature_elements_print_one_
+# row_twice`), which is a statement about the solve that no envelope makes.
+PHASED_Z_BAR = {
+    "0031": (7.84, 6.77, 6.77, 10.39),
+    "0032": (7.55, 9.31),
+}
+
 # (peak total gain dB, theta, phi) as the capture prints it, and the bar.
 PEAK_BAR = {
     "0010": 0.12,
@@ -259,6 +316,8 @@ PEAK_BAR = {
     "0015": 0.05,
     "0020": 0.05,
     "0021": 0.05,
+    "0031": 0.075,
+    "0032": 0.07,
     "0035": 0.05,
     "0044": 0.05,
     "0045": 0.05,
@@ -281,6 +340,32 @@ PEAK_BAR = {
 # would have had to do it twice over.
 PATTERN_BAR = 0.075
 
+# The AZIMUTH cuts get the same every-angle treatment and cannot get the same
+# single bar, because what they sweep through is not a horizon — it is an
+# array's own null, and a null is where two nearly-equal fields cancel and a
+# small difference in either becomes a large difference in the remainder.
+#
+# So each phased cut is gated twice.  ``AZIMUTH_BAR`` is the whole 361 rows,
+# nulls included, at the measured worst plus 25 %; ``AZIMUTH_LOBE_BAR`` is the
+# rows within 10 dB of the peak, where the level is a level rather than a
+# cancellation, at the same plus 25 %.  Measured 2026-08-20:
+#
+#   id    rows  worst (all)  worst (<=10 dB down)   depth of the deepest null
+#   0031   361     0.58 dB          0.13 dB          -25.32 dB (30.7 down)
+#   0032   361     0.76 dB          0.09 dB          -25.24 dB (33.5 down)
+#
+# The shape of that is the evidence, and it is worth more than either number:
+# the error climbs MONOTONICALLY as the captured level falls — 0031 runs 0.07 /
+# 0.09 / 0.13 / 0.19 / 0.29 / 0.36 / 0.58 dB as the floor drops 3 / 6 / 10 / 15
+# / 20 / 25 / 30 dB below its peak — which is what a small current difference
+# does to a cancellation and is not what a wrong phasing, a wrong drive
+# convention or a mis-normalized pattern does to one.  Those show up at the
+# PEAK, and the peak is inside 0.06 dB on both.
+AZIMUTH_BAR = {"0031": 0.73, "0032": 0.95}
+AZIMUTH_LOBE_BAR = {"0031": 0.17, "0032": 0.12}
+# How far below the peak "the lobe" reaches, in dB.
+_LOBE_FLOOR = 10.0
+
 # NEC's own floor for a gain cell, as a number rather than as the text the
 # mask compares.
 _NULL_DB = -999.99
@@ -297,6 +382,8 @@ CURRENT_BAR = {
     "0019": 0.013,
     "0020": 0.0129,
     "0021": 0.0123,
+    "0031": 0.0265,
+    "0032": 0.0164,
     "0035": 0.228,
     "0043": 0.013,
     "0044": 0.013,
@@ -312,6 +399,8 @@ CHARGE_BAR = {
     "0019": 0.078,
     "0020": 0.0777,
     "0021": 0.076,
+    "0031": 0.0842,
+    "0032": 0.0587,
     "0035": 0.186,
     "0043": 0.078,
     "0044": 0.078,
@@ -374,13 +463,20 @@ _NETWORK_PORT_CELLS = tuple(range(9))
 
 
 def drive_cells(cid: str) -> tuple[int, ...]:
-    """The ``ANTENNA INPUT PARAMETERS`` cells this capture's ``EX`` card SET.
+    """The ``ANTENNA INPUT PARAMETERS`` cells this capture's ``EX`` cards SET.
 
     Read off the deck, because that is where the answer is: a printout cannot
     say which of its own numbers was a boundary condition.
+
+    ONE answer for the whole table, which is a claim and not a convenience: a
+    deck whose cards disagreed about their kind refuses by name
+    (``_REFUSE_MIXED_DRIVE_KINDS``), so every row a served table carries was
+    fixed in the same two cells.  #504 U4's two multi-``EX`` captures write
+    ``EX 4`` four times and twice, and the set is asserted rather than sampled.
     """
-    (source,) = parse_nec5(deck_text(cid)).sources
-    return _DRIVE_CELLS[source.kind]
+    kinds = {source.kind for source in parse_nec5(deck_text(cid)).sources}
+    assert len(kinds) == 1, f"{cid}: mixed EX kinds {sorted(kinds)}"
+    return _DRIVE_CELLS[kinds.pop()]
 
 
 # Pattern row column edges, measured on 0013 (which prints every form: a
@@ -1255,23 +1351,274 @@ def test_the_negative_conductivity_convention_is_read_off_the_gd_flag():
 
 
 # --------------------------------------------------------------------------
+# the phased rung's own facts
+# --------------------------------------------------------------------------
+#
+# Four things a phased drive has that a single source does not, and each is
+# something the seam would otherwise be free to get wrong quietly: several rows
+# instead of one, a set current per row instead of a global scale, a budget
+# that is a SUM rather than a product, and a row that comes out negative.
+
+
+@pytest.mark.parametrize("cid", PHASED_IDS)
+def test_every_phased_row_sits_inside_its_own_measured_envelope(cid):
+    """All four of 0031's rows and both of 0032's, row by row.
+
+    The single-source envelope gate above reads ``sources[0]`` and would pass a
+    seam that solved the four-square's first port correctly and the other three
+    by accident, so the phased captures get their whole table pinned instead.
+    Same bar shape as everywhere else — the measured ``|dZ|`` plus 25 %, listed
+    in :data:`PHASED_Z_BAR` — and the same reading: an envelope, not an
+    agreement claim.
+
+    The TAG and SEGMENT of each row are gated exactly, because they are the
+    deck's own and not a solved number: 0031 prints tags 1/2/3/4 at global
+    segments 1/7/13/19, in DECK order, which is the order its four ``EX`` cards
+    are written and not the order anything else in this module sorts things in.
+    """
+    want = extract(printout_text(cid)).sources
+    got = extract(served(cid)).sources
+    bars = PHASED_Z_BAR[cid]
+    assert len(got) == len(want) == len(bars)
+    for a, b, bar in zip(want, got, bars):
+        assert (b.tag, b.segment, b.end_index) == (a.tag, a.segment, a.end_index)
+        assert abs(b.impedance - a.impedance) <= bar, (
+            f"{cid} tag {a.tag}: served {b.impedance}, captured {a.impedance}"
+        )
+
+
+@pytest.mark.parametrize("cid", PHASED_IDS)
+def test_every_phased_row_prints_the_current_its_own_card_set(cid):
+    """The drive constraint, to the byte, once per row.
+
+    This is the one thing about a phased solve that is NOT an envelope.  Each
+    ``EX 4`` fixes its port's current exactly, so every served row's CURRENT
+    cell has to be the card's own complex pair and the captured cell at the
+    same time — 0031's four are ``1.4142+0j``, ``-1.4142j``, ``-1.4142j`` and
+    ``-1.4142+0j``, read back out of an ``E12.4`` cell on both sides.
+
+    The exact zeros are the part that would break first.  A drive read back out
+    of the solve rather than restored comes back with 1e-16 of the other
+    component on it and prints ``1.1102E-16`` where the capture prints
+    ``0.0000E+00`` — U1's lesson, applied here once per row rather than once
+    per deck — and comparing the CELLS rather than the complex numbers is what
+    makes that visible: the two agree as floats either way.
+    """
+    (fixed,) = {source.kind for source in parse_nec5(deck_text(cid)).sources}
+    assert fixed == 4
+    drives = [source.drive for source in parse_nec5(deck_text(cid)).sources]
+    want = extract(printout_text(cid)).sources
+    got = extract(served(cid)).sources
+    for row, captured, drive in zip(got, want, drives, strict=True):
+        assert row.current == captured.current
+        # The deck writes 1.414214 and the cell holds four digits, so "is the
+        # card's current" means to the printed digit.
+        assert row.current == pytest.approx(drive, abs=5e-5)
+        assert (row.current.real == 0.0) == (drive.real == 0.0)
+        assert (row.current.imag == 0.0) == (drive.imag == 0.0)
+
+
+def test_the_four_square_s_two_quadrature_elements_print_one_row_twice():
+    """0031's tags 2 and 3 are the same row, and tags 1 and 4 are not.
+
+    The phase RELATIONSHIPS are what a phased drive is for, and an envelope
+    cannot see them: four rows could each sit inside their bar with the
+    coupling between them wrong.  0031's geometry settles it.  Its four
+    verticals sit on a square, tags 2 and 3 are the two side elements, they
+    carry the SAME drive (``-j1.414214``) and stand in mirror-image positions
+    about the array's own diagonal — so the engine prints them with identical
+    voltages and identical impedances, 36.783 − 27.955j both, and this seam has
+    to as well, to the last bit rather than to the printed digit.
+
+    Tags 1 and 4 are the ends of the same diagonal with opposite drives and
+    they must NOT match: -1.7790 − 24.192j against 56.525 + 41.575j is the
+    array doing its job, and a seam that had lost the drives' phases would
+    flatten that difference.  So the symmetry is gated to the PRINTED BYTE and
+    the asymmetry at a floor, which together say the four drives arrived as
+    four different complex numbers and reached the right four ports.
+
+    "To the printed byte" and not to the last bit, deliberately.  The 4x4 drive
+    solve is an LU with pivoting and it does not have to be symmetric in its
+    round-off — the two rows come out 2e-13 apart in X — so ``==`` on the
+    floats would be pinning the pivot order.  What the capture actually asserts
+    is that the two ROWS are the same row, and comparing the rendered table
+    lines is that claim exactly, at the precision the file has.
+    """
+    printout = served("0031")
+    rows = extract(printout).sources
+    assert [row.tag for row in rows] == [1, 2, 3, 4]
+    assert rows[1].voltage == rows[2].voltage
+    assert rows[1].impedance == rows[2].impedance
+    assert rows[1].power == rows[2].power
+    # The same claim on the bytes, with the two address columns taken off:
+    # everything a solver filled in is character for character identical.
+    table = printout.split("- - - ANTENNA INPUT PARAMETERS - - -")[1].split("\n")
+    printed = [line[12:] for line in table[4:8]]
+    assert printed[1] == printed[2]
+    assert printed[0] != printed[3]
+    # The captured pair is identical too, which is what says the symmetry is
+    # the antenna's rather than this seam's arithmetic being reused.
+    captured = extract(printout_text("0031")).sources
+    assert captured[1].impedance == captured[2].impedance
+    # 58 Ω apart served, 71 Ω captured — the diagonal is not a mirror.
+    assert abs(rows[0].impedance - rows[3].impedance) > 25.0
+
+
+def test_the_four_square_s_absorbing_element_stays_negative():
+    """0031's tag-1 row prints NEGATIVE watts and negative ohms, and so does
+    this seam's.
+
+    The capture's own row is ``-1.7790E+00`` in the IMPEDANCE REAL cell and
+    ``-1.7790E+00`` in POWER: at this phasing the element takes more power out
+    of the array through the mutual coupling than its generator puts in, so its
+    driving-point resistance is below zero and its generator is being driven.
+    NEC-5 prints that as-is and the printed ``INPUT POWER = 1.2831E+02`` is the
+    other three rows with it SUBTRACTED.
+
+    Gated as a SIGN rather than as a value because that is the part a bar
+    cannot hold: ``|dZ|`` of 6.27 on a row whose R is −1.78 would be satisfied
+    by +4.5, which is a different physical claim about the same antenna.  A
+    seam that took a magnitude anywhere, or that clamped a budget to positive
+    watts, lands on the wrong side of this line and inside every envelope in
+    the file.
+    """
+    captured = extract(printout_text("0031")).sources[0]
+    row = extract(served("0031")).sources[0]
+    assert captured.impedance.real < 0 and captured.power < 0
+    assert row.impedance.real < 0, f"served R = {row.impedance.real}"
+    assert row.power < 0, f"served P = {row.power}"
+    # P = 1/2 Re(V I*) with the same current every other row uses: the negative
+    # is arithmetic on an ordinary row, not a special case.
+    assert row.power == pytest.approx(
+        0.5 * (row.voltage * row.current.conjugate()).real, rel=1e-4
+    )
+
+
+@pytest.mark.parametrize("cid", PHASED_IDS)
+def test_the_phased_budget_is_the_sum_of_its_printed_rows(cid):
+    """``INPUT POWER`` = Σ rows, to the printed digit, on both captures.
+
+    Read off the CAPTURES first, because that is where the rule comes from:
+    0031's four rows are −1.7790 + 36.783 + 36.783 + 56.525 = 128.312 against a
+    printed ``1.2831E+02``, and 0032's two are 19.139 + 49.318 = 68.457 against
+    ``6.8457E+01``.  Then required of the served run, whose own rows are
+    different numbers and have to close the same way.
+
+    Which is the gate on the one arithmetic decision this rung makes.  The sum
+    is signed — 0031's negative row comes OFF the total, and a seam that summed
+    magnitudes would print 131.87 and still radiate 100 % of it.
+    """
+    for data in (extract(printout_text(cid)), extract(served(cid))):
+        total = sum(row.power for row in data.sources)
+        # The budget cell is an E11.4 and the row cells are E12.4, so the sum
+        # closes at the coarser of the two.
+        assert data.power.input_power == pytest.approx(total, rel=2e-4)
+        assert data.power.radiated_power == pytest.approx(total, rel=2e-4)
+
+
+@pytest.mark.parametrize("cid", PHASED_IDS)
+def test_the_phased_azimuth_cut_agrees_at_every_printed_angle(cid):
+    """All 361 rows of the ``RP 0`` azimuth cut, and the lobe rows twice.
+
+    The elevation gate above says the MEDIUM is right by agreeing at every
+    angle of a cut the ground shapes.  This is its azimuth sibling and it says
+    something else: an array's azimuth cut is shaped by the PHASING, direction
+    by direction, so agreeing across a full 360° turn is the statement that the
+    four (two) drives reached the right four (two) ports with the right four
+    (two) phases.  Nothing about the feed region's Ω-class offset can aim a
+    pattern.
+
+    Two bars, and the second is where the claim lives.  The whole cut is barred
+    at :data:`AZIMUTH_BAR`, which the deep back nulls set — 0031 is 30.7 dB down
+    at φ = 235° and 0032 is 33.5 dB down behind the cardioid, and a null is a
+    cancellation whose remainder amplifies any difference in what cancelled.
+    The rows within 10 dB of the peak are barred at :data:`AZIMUTH_LOBE_BAR`,
+    0.17 and 0.12 dB, which is the same family the elevation cuts sit in.
+
+    Neither cut has a single ``-999.99`` row: over a ground at a fixed theta
+    there is no direction where the field vanishes to NEC's own floor, so all
+    361 rows carry numbers and all 361 are compared.  That is checked here
+    rather than assumed, because a null appearing on one side and not the other
+    would otherwise be silently skipped.
+    """
+    (want,) = extract(printout_text(cid)).patterns
+    (got,) = extract(served(cid)).patterns
+    assert len(got.rows) == len(want.rows) == 361
+    assert not [row for row in want.rows + got.rows if row.total_db == _NULL_DB]
+
+    peak = max(row.total_db for row in want.rows)
+    worst = max(abs(a.total_db - b.total_db) for a, b in zip(want.rows, got.rows))
+    assert worst <= AZIMUTH_BAR[cid], f"{cid}: worst row {worst:.4f} dB"
+    lobe = max(
+        abs(a.total_db - b.total_db)
+        for a, b in zip(want.rows, got.rows)
+        if peak - a.total_db <= _LOBE_FLOOR
+    )
+    assert lobe <= AZIMUTH_LOBE_BAR[cid], f"{cid}: worst lobe row {lobe:.4f} dB"
+
+
+def test_a_phased_drive_is_a_solve_and_not_a_scale():
+    """The rung's own mechanism, stated as the thing it is NOT.
+
+    A single ``EX 4`` is a readout transform: one port, ``I = Y·V``, so the
+    answer is the unit-probe solve divided through and the impedance does not
+    depend on the drive at all.  Four cards are not that.  The four ports are
+    coupled, the drives are a simultaneous boundary condition, and each port's
+    printed impedance is a function of ALL FOUR drives — which is exactly why
+    0031's first element can present a negative resistance while its own card
+    is unchanged.
+
+    Measured here by moving one card and watching a DIFFERENT port answer
+    differently: reverse tag 4's drive and tag 1's impedance moves from
+    −1.703 − 17.93j to 7.231 − 56.29j, 39 Ω, on a port whose own ``EX`` card
+    was not touched and whose printed current is unchanged.  A seam that had
+    implemented the phased drive as four independent scales would print the
+    same tag-1 row both times.
+
+    The array stops being one, too, and in the way the geometry says it should:
+    with tags 1 and 4 driven alike on one diagonal and 2 and 3 alike on the
+    other, the four-square becomes symmetric, its two diagonals print identical
+    rows, and its azimuth cut flattens from a 30.6 dB spread to 0.94.
+    """
+    text = deck_text("0031")
+    assert "EX 4,4,-1,0,-1.414214,0." in text
+    flipped = text.replace("EX 4,4,-1,0,-1.414214,0.", "EX 4,4,-1,0,1.414214,0.")
+
+    base = _serve.serve(parse_nec5(text)).sources
+    moved = _serve.serve(parse_nec5(flipped)).sources
+    # Tag 4's own card changed, so its current changed and nothing is claimed
+    # about it; tag 1's card did not, and its current is identical.
+    assert moved[0].current == base[0].current
+    assert abs(moved[0].impedance - base[0].impedance) > 20.0
+
+    # And the array stopped being one: the deep-null cut flattens out.
+    def span(data) -> float:
+        rows = data.patterns[0].rows
+        return max(r.total_db for r in rows) - min(r.total_db for r in rows)
+
+    assert span(_serve.serve(parse_nec5(text))) > 25.0
+    assert span(_serve.serve(parse_nec5(flipped))) < 3.0
+    # Symmetric drives, symmetric rows: the two diagonals answer alike, to the
+    # drive solve's own round-off (the same 2e-13 the captured deck's symmetric
+    # pair comes out at above, and far under the printed cell either way).
+    assert moved[0].impedance == pytest.approx(moved[3].impedance, rel=1e-12)
+
+
+# --------------------------------------------------------------------------
 # gate 3 — the refusals
 # --------------------------------------------------------------------------
 
-# One capture per refusal, each the smallest deck in the corpus carrying the
-# card.  `TL` and `NT` left this table with U5, which serves them; the deck
-# that carries BOTH is refused for its table layout instead, and that refusal
-# is gated in ``test_eznec_networks.py`` beside the rest of the network unit.
+# One capture per refusal, and after #504 U4 there is exactly ONE.  `TL` and
+# `NT` left this table with U5, which serves them; the deck that carries BOTH
+# is refused for its table layout instead, and that refusal is gated in
+# ``test_eznec_networks.py`` beside the rest of the network unit.  0031 left it
+# with this unit, which serves its four phased `EX 4` cards.
 #
-# Every deck here is now the capture VERBATIM, which it was not before.  0022
-# left this list with the `GN 0` rung — its ground is served, so its
-# `NE 0,1,1,1,…` is heard exactly as EZNEC wrote it — and 0031 stopped needing
-# its ground card swapped when the `GD` rung landed: as captured it is four
-# phased `EX 4` rows over a bare `GD`, and until U2 the ground answered first
-# and the multi-`EX` card never got a hearing.  A refusal table with no
-# hand-edited decks left in it is what a finished ground ladder looks like.
+# 0022 is the last tenant and it is the capture VERBATIM: its `GN 0` was served
+# by the ground rung, so its `NE 0,1,1,1,…` is heard exactly as EZNEC wrote it.
+# Every OTHER refusal this seam can reach is now a shape no capture writes, and
+# each is probed below by editing a capture deck rather than by finding one.
 REFUSALS = {
-    "0031": "this deck carries 4 EX cards",
     "0022": "NE (near electric field) is not served at this seam yet",
 }
 
@@ -1345,26 +1692,24 @@ def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
         assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in text, cid
 
 
-def test_the_corpus_ladder_stands_where_u3_left_it():
-    """The served-id SET, pinned — 46 of the 49 captured decks.
+def test_the_corpus_ladder_stands_where_u4_left_it():
+    """The served-id SET, pinned — 48 of the 49 captured decks.
 
     A rung that lands moves decks across this line and a regression moves them
     back, and neither should be able to happen quietly: the set is written out
     id by id so that changing it is an edit somebody made on purpose, with the
     new number in the diff beside the old one.  #504 U1 took it from 20 to 27,
-    U2 from 27 to 43, and U3 from 43 to 46 — the last three are 0000, 0023 and
-    0025, the decks whose ``NETWORK DATA`` table carries ``TL`` and ``NT`` rows
-    at once, and their layout is no longer unobserved: their own printouts
-    landed with this unit and show it.
+    U2 from 27 to 43, U3 from 43 to 46, and U4 from 46 to 48 — the last two are
+    0031 and 0032, the corpus's only phased arrays.
 
-    The three that are left name two cards and no ground:
+    ONE deck is left, and it names a card no ground and no drive can reach:
+    0022's ``NE``, the near electric field, whose printed block has a layout of
+    its own that no rung of this arc renders.  That is the whole refusal
+    roster now — this seam answers every ground card, every network table and
+    every drive the corpus writes, and says so about the one request it does
+    not.
 
-    * 0031, 0032 — phased multi-``EX``.  0031 stands over a ``GD`` and reaches
-      its own card as captured, which is why the refusal table above no longer
-      hand-edits it.
-    * 0022 — ``NE``, the near field, which no rung of this arc renders.
-
-    What this number does NOT claim is that all 46 are right.  0033 and 0034
+    What this number does NOT claim is that all 48 are right.  0033 and 0034
     are served, are in this set, and disagree with their captures by 275 and
     188 Ω (:data:`DIVERGENT_IDS`); the ladder counts decks that get an ANSWER
     rather than decks that get a pinned one, and that distinction is why the
@@ -1373,10 +1718,10 @@ def test_the_corpus_ladder_stands_where_u3_left_it():
     served_ids = tuple(
         cid for cid, text in sorted(corpus().items()) if "NEC ERROR" not in text
     )
-    assert served_ids == SERVED_AFTER_U3
-    assert len(served_ids) == 46
+    assert served_ids == SERVED_AFTER_U4
+    assert len(served_ids) == 48
     refused = sorted(set(corpus()) - set(served_ids))
-    assert refused == ["0022", "0031", "0032"]
+    assert refused == ["0022"]
 
 
 @pytest.mark.parametrize("cid", SERVED_UNGATED_IDS)
@@ -1465,6 +1810,133 @@ def test_the_favored_wire_carries_physics_at_a_five_wire_junction():
     radial_two = _z_of(deck_text("0013").replace("EX 4,5,-1,", "EX 4,2,-1,"))
     assert radial_one == radial_two
     assert abs(vertical - radial_one) / abs(vertical) > 0.3
+
+
+# --------------------------------------------------------------------------
+# the four multi-source shapes nothing has printed
+# --------------------------------------------------------------------------
+#
+# #504 U4 serves ONE multi-`EX` shape — every card an `EX 4`, no network on the
+# deck, one card per port — because that is the only shape the corpus prints.
+# Four ways out of it are refused BY NAME, and none of them has a capture, so
+# each is probed by editing one that does.  0032 is the base for all four: the
+# smallest phased deck in the corpus, two six-segment verticals over `GN 1`.
+#
+# Why four sentences rather than one "unsupported drive" line: each would be
+# fixed by a different capture, and a refusal's whole job is to tell the person
+# reading it in EZNEC's viewer which card to go and change.
+
+_PROBE_BASE = "0032"
+
+
+def _refused(text: str) -> str:
+    """The sentence a deck comes back refused with, through the real render."""
+    printout = render(text)
+    assert " ***** NEC ERROR - " in printout, "this deck was SERVED"
+    assert "ANTENNA INPUT PARAMETERS" not in printout
+    return printout.rsplit(" ***** NEC ERROR - ", 1)[1].strip()
+
+
+def test_a_drive_that_mixes_the_two_ex_kinds_refuses_by_name():
+    """One ``EX 0`` and one ``EX 4`` on the same deck.
+
+    A voltage source and a current source in one matrix is a mixed boundary
+    condition, the engine has a rule for it and no captured printout shows the
+    rule, so this seam does not invent one.  Zero of the forty-nine captures
+    write it — 47 are all-``EX 4`` and 2 are single ``EX 0`` — and the refusal
+    counts both kinds in its sentence so the reader can see which card is the
+    odd one.
+    """
+    text = deck_text("0032").replace("EX 4,2,-1", "EX 0,2,-1")
+    reason = _refused(text)
+    assert reason.startswith("this deck carries 2 EX cards writing BOTH kinds")
+    assert "1 EX 0 (a set voltage) and 1 EX 4 (a set current)" in reason
+
+
+def test_a_multi_voltage_drive_refuses_by_name():
+    """Two ``EX 0`` cards.
+
+    The other half of the same hole and a different sentence, because it is a
+    different missing capture: a multi-voltage drive is coherent physics —
+    voltages pinned, currents solved — and this seam simply has no printed row
+    anywhere to say what NEC-5 does with the pair.  The corpus's two ``EX 0``
+    decks (0033, 0034) each write exactly one.
+    """
+    text = deck_text("0032").replace("EX 4,1,-1", "EX 0,1,-1")
+    text = text.replace("EX 4,2,-1", "EX 0,2,-1")
+    reason = _refused(text)
+    assert reason.startswith("this deck carries 2 EX 0 cards")
+    assert "multi-VOLTAGE drive is not served" in reason
+
+
+def test_a_phased_drive_through_a_network_refuses_by_name():
+    """A ``TL`` card on a two-``EX`` deck.
+
+    This is the refusal that costs something to keep, and it is the one worth
+    keeping most.  The machinery is all present — the reducer serves networks,
+    the sub-block solve serves phased drives — and composing them is a short
+    edit with an obvious-looking answer.  What is missing is any evidence that
+    the obvious answer is NEC-5's: not one of the forty-nine captures drives
+    more than one port on a deck carrying ``TL`` or ``NT``, so a served answer
+    here would be a guess wearing a printout.
+
+    Both card kinds reach it, because a deck can carry either.
+    """
+    for card in ("TL 1,3,2,3,50.,1.,0.,0.,0.,0.", "NT 1,3,2,3,0.,.01,0.,0.,0.,.01"):
+        reason = _refused(deck_text("0032").replace("PQ 0\n", f"{card}\nPQ 0\n"))
+        assert reason.startswith("this deck carries 2 EX cards and a TL/NT network")
+        assert "constrained drive composed with the network reducer" in reason
+
+
+def test_two_ex_cards_at_one_address_refuse_by_name():
+    """The same ``(tag, node)`` twice.
+
+    One node is one port, so the second card is a second generator in series
+    across the same gap and the two set currents are one constraint written
+    twice.  Caught at the CARDS, before any mesh is built, because the deck can
+    already say it.
+    """
+    text = deck_text("0032").replace("PQ 0\n", "EX 4,1,-1,0,1.,0.\nPQ 0\n")
+    reason = _refused(text)
+    assert reason.startswith("two EX cards address 1,-1")
+    assert "second generator in series across the same gap" in reason
+
+
+def test_two_ex_cards_on_the_two_sides_of_one_cut_refuse_by_name():
+    """``1,6`` and ``2,-1`` at a node where wires 1 and 2 meet.
+
+    The same collision reached the other way, and the only one the CARDS cannot
+    see: two different addresses, two sites, one cut — the rank-1 two-port
+    ``_assign_columns`` shares a column for, which is config C of the W7EL
+    triple and which the network unit relies on.  One ``EX`` there is a source
+    in the gap; two are one boundary condition written twice, with nothing in
+    any capture to say which of the two currents the engine honours.
+
+    So this refusal lives in the translation rather than in :func:`refusal`,
+    and it names both addresses.  The probe bends 0032's second vertical into
+    an inverted-L hanging off the first one's top, which is the shortest way to
+    put a two-wire node in a deck that has none.
+    """
+    text = deck_text("0032").replace(
+        "GW 2,6,.25,0.,0.,.25,0.,.242,.000121",
+        "GW 2,6,0.,0.,.242,.25,0.,.242,.000121",
+    )
+    text = text.replace("EX 4,1,-1,0,1.414214,0.", "EX 4,1,6,0,1.414214,0.")
+    reason = _refused(text)
+    assert reason.startswith("1,6 and 2,-1 are the two sides of ONE cut")
+    assert "one boundary condition written twice" in reason
+
+
+def test_the_served_phased_shape_is_the_one_the_probes_all_left():
+    """The control on the five refusals above: 0032 itself is SERVED.
+
+    Each probe is one edit away from a capture that answers, so a refusal
+    firing on all six decks would look exactly like a working gate.  This is
+    the line that says the edits are what did it.
+    """
+    for cid in PHASED_IDS:
+        assert "NEC ERROR" not in served(cid)
+    assert "ANTENNA INPUT PARAMETERS" in served(_PROBE_BASE)
 
 
 def test_a_source_on_a_free_wire_end_refuses_rather_than_guessing():
