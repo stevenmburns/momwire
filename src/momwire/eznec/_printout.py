@@ -44,9 +44,10 @@ and is cited by capture id where a reader might reasonably doubt it.  The
 round-trip gate in ``tests/test_eznec_printout.py`` re-derives a
 :class:`RunData` from each captured printout and re-renders it, so a width
 that is wrong anywhere is a failing test rather than a comment.  There were
-ten of those printouts when this module was written and there are thirty-nine
-since #504 U3; a citation reading "the ten captures" below means the ten this
-module measured a rule from, not the corpus it now answers.
+ten of those printouts when this module was written and there are FIFTY-SEVEN
+since #504 U3, momwire#511 and momwire#516; a citation reading "the ten
+captures" below means the ten this module measured a rule from, not the corpus
+it now answers.
 """
 
 from __future__ import annotations
@@ -65,6 +66,8 @@ __all__ = [
     "GroundMedium",
     "LineRow",
     "LoadRow",
+    "NearFieldBlock",
+    "NearFieldRow",
     "NetworkRow",
     "PatternBlock",
     "PatternRow",
@@ -427,6 +430,46 @@ class PatternBlock:
     power_radiated_4pi: float | None = None
 
 
+@dataclass(frozen=True)
+class NearFieldRow:
+    """One observation point of a ``NEAR ELECTRIC``/``MAGNETIC FIELDS`` table.
+
+    Three magnitudes and three phases, in the printout's own column order
+    (x, y, z), against the point they were read at.  The point is in METRES
+    and unnormalized — the only geometry table in the printout that is, the
+    two current tables above it being wavelength-normalized — which is what
+    the third header line says and what 0108 shows: its ``NE`` grid asks for
+    ``1., 0., 2.`` and the row prints ``1.0000E+00  0.0000E+00  2.0000E+00``
+    at 7 MHz, where a normalized column would print 2.3e-2.
+
+    The values are PEAK amplitudes, in the deck's own drive basis.  EZNEC
+    writes ``EX 4,1,-1,0,1.414214,0.`` for what its own dialog calls 1 A, so
+    the whole printout is √2 above the RMS numbers the GUI displays: 0107
+    prints ``6.6673E+02`` V/m where EZNEC showed 471.465 V/m RMS, and
+    666.73/471.465 = 1.41417.  Nothing here scales anything — the ratio is
+    the deck's, not the engine's, and a served run inherits it by solving
+    the drive the deck wrote.
+    """
+
+    point: tuple[float, float, float]
+    magnitudes: tuple[float, float, float]
+    phases_deg: tuple[float, float, float]
+
+
+@dataclass(frozen=True)
+class NearFieldBlock:
+    """One ``NE``/``NH`` card's answer, and which of the two asked.
+
+    :attr:`magnetic` picks the heading, the component letters and the unit
+    word, and nothing else: the two blocks are the same five header lines and
+    the same nine columns, measured on 0111 against 0110 (the same deck, the
+    same grid, one mnemonic changed).
+    """
+
+    rows: tuple[NearFieldRow, ...] = ()
+    magnetic: bool = False
+
+
 # The three environments this arc serves — three names for FOUR ground cards,
 # because the finite banner is SHARED by ``GN 0`` and by the bare ``GD``
 # MININEC ground (scored matrix, "Probe family 1").  That is the arc's
@@ -493,6 +536,12 @@ class RunData:
     currents: tuple[WireCurrentRow, ...] = ()
     charges: tuple[ChargeRow, ...] = ()
     power: PowerBudget | None = None
+    # The near-field tables sit BETWEEN the power budget and the patterns, and
+    # that placement is the captures' (0107/0108/0110-0113/0115/0022 all print
+    # theirs directly under ``EFFICIENCY``) rather than a choice.  See
+    # :func:`_near_field` for the one deck shape that would move it and for why
+    # no captured deck is that shape.
+    near_fields: tuple[NearFieldBlock, ...] = ()
     patterns: tuple[PatternBlock, ...] = ()
     # -- the timings -------------------------------------------------------
     #
@@ -576,7 +625,7 @@ _LOADING_COLUMNS: tuple[str, ...] = (
 # other line in the printout is indented at least one column — and the only
 # integer in it is the matrix's element count: 100 = 10², 169 = 13²,
 # 784 = 28², 8100 = 90² on the ten captures the rule came off, and it holds
-# on all thirty-nine since — fourteen distinct unknown counts from 10 to 90,
+# on all fifty-seven since — fourteen distinct unknown counts from 10 to 90,
 # i.e. unknowns squared every time.  Rendered from the unknown count so the
 # identity cannot drift.
 _ALLOCATE_LABEL = "ALLOCATE CM:"
@@ -639,6 +688,26 @@ _CHARGES_COLUMNS: tuple[str, ...] = (
 _POWER_HEADING = " " * 40 + "- - - POWER BUDGET - - -"
 _POWER_INDENT = " " * 43
 _POWER_LABEL_WIDTH = 14
+
+_NEAR_HEADING = " " * 38 + "- - - NEAR {kind} FIELDS - - -"
+# The two header lines that do not move, and the third one built beside them.
+# Every column edge below was read off the captures with the renderer's own
+# table nowhere in sight: the location cells end at 14/26/38, the magnitude
+# cells at 53/76/99 and the phase cells at 62/85/108, on all seven captured
+# tables and on both mnemonics.
+_NEAR_COLUMNS: tuple[str, str] = (
+    "              -  LOCATION  -                     -  {c}X  -"
+    "               -  {c}Y  -               -  {c}Z  -",
+    "        X           Y           Z           MAGNITUDE   PHASE"
+    "      MAGNITUDE   PHASE      MAGNITUDE   PHASE",
+)
+_NEAR_METERS = "      METERS      METERS      METERS"
+# The unit word is RIGHT-justified and the two mnemonics' words are different
+# lengths, which is the whole of the difference between 0115's third header
+# line and 0111's: ``VOLTS/M`` in 16/13/13 and ``AMPS/M`` in the same fields,
+# one space further right.
+_NEAR_UNIT_WIDTHS = (16, 13, 13)
+_NEAR_DEGREES_WIDTH = 10
 
 _PATTERN_HEADING = " " * 48 + "- - - RADIATION PATTERNS - - -"
 _PATTERN_COLUMNS: tuple[str, ...] = (
@@ -794,7 +863,7 @@ def _loading(data: RunData) -> list[str]:
 
     ``ALLOCATE CM:`` follows immediately, with no blank line between — it is
     printed by whatever allocates the matrix rather than by this section, and
-    lands here in all thirty-nine captures.
+    lands here in all fifty-seven captures.
     """
     lines = [_LOADING_HEADING, ""]
     if not data.loads:
@@ -994,6 +1063,50 @@ def _power_budget(power: PowerBudget) -> list[str]:
     return lines
 
 
+def _near_field(block: NearFieldBlock) -> list[str]:
+    """One ``NE``/``NH`` answer: a heading, four header lines, a row a point.
+
+    The whole block is the same shape on both mnemonics and the substitutions
+    are three: ``ELECTRIC``/``MAGNETIC`` in the heading, ``E``/``H`` on the
+    component letters, ``VOLTS/M``/``AMPS/M`` in the units.
+
+    Where it goes in the printout is measured too, and it has one edge this
+    renderer does not reach.  Every captured near-field deck asks for ONE
+    request card, so the block lands under the power budget and the question
+    of order never arises; a deck with TWO request cards echoes each card
+    after the first hard against its own block instead of in the header run
+    (linux oracle, 2026-08-21: an ``NE``-then-``RP`` deck prints the near
+    field, then ``***** INPUT LINE 6 RP``, then the pattern, and the same
+    deck with the cards swapped prints them the other way round).  No deck
+    EZNEC emits is that shape — all 62 captures write exactly one request
+    card — so the shape is recorded here rather than served.
+    """
+    kind = "MAGNETIC" if block.magnetic else "ELECTRIC"
+    letter = "H" if block.magnetic else "E"
+    unit = "AMPS/M" if block.magnetic else "VOLTS/M"
+    units = _NEAR_METERS + "".join(
+        unit.rjust(width) + "DEGREES".rjust(_NEAR_DEGREES_WIDTH)
+        for width in _NEAR_UNIT_WIDTHS
+    )
+    lines = [
+        _NEAR_HEADING.format(kind=kind),
+        "",
+        _NEAR_COLUMNS[0].format(c=letter),
+        _NEAR_COLUMNS[1],
+        units,
+    ]
+    for row in block.rows:
+        x, y, z = row.point
+        cells = "".join(
+            _e(magnitude, width, 4) + f"{phase:9.2f}"
+            for magnitude, phase, width in zip(
+                row.magnitudes, row.phases_deg, (15, 14, 14), strict=True
+            )
+        )
+        lines.append(_e(x, 14, 4) + _e(y, 12, 4) + _e(z, 12, 4) + cells)
+    return lines
+
+
 def _pattern(block: PatternBlock) -> list[str]:
     """One ``RP`` answer.  The 3-D trailer prints only when it is carried."""
     lines = [_PATTERN_HEADING, "", *_PATTERN_COLUMNS]
@@ -1076,6 +1189,9 @@ def render_printout(deck: Nec5Deck, data: RunData) -> str:
         body += _blank(_SECTION_GAP)
     if data.power is not None:
         body += _power_budget(data.power)
+        body += _blank(_SECTION_GAP)
+    for near in data.near_fields:
+        body += _near_field(near)
         body += _blank(_SECTION_GAP)
     for block in data.patterns:
         body += _pattern(block)

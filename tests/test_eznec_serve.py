@@ -170,10 +170,10 @@ SERVED_UNGATED_IDS = ("0037", "0039", "0040", "0041", "0042")
 # reported rather than pinned: a bar at 344 Ω would record the gap as normal.
 DIVERGENT_IDS = ("0033", "0034")
 
-# Every capture id this seam answers after momwire#511, pinned.  The ladder
-# number is 52 of 53 and the one that is left is named in
-# :func:`test_the_corpus_ladder_stands_where_511_left_it`.
-SERVED_AFTER_511 = (
+# Every capture id this seam answers after momwire#516, pinned.  The ladder
+# number is 53 of 62 and the nine that are left are named in
+# :func:`test_the_corpus_ladder_stands_where_516_left_it`.
+SERVED_AFTER_516 = (
     "0000",
     "0001",
     "0002",
@@ -220,6 +220,11 @@ SERVED_AFTER_511 = (
     "0046",
     "0047",
     "0048",
+    # momwire#516's near-field family: nine decks over four grounds
+    # (manifest ``near_field_family``).  0114 is the only one this commit
+    # serves — it is an ordinary free-space ``RP``, the twin of 0115's ``NE``,
+    # and it is here to be the control the near-field rung is scored against.
+    "0114",
     # momwire#511's four: the phased drive reaching the structure through a
     # network.  0117 is 0031 with ONE `TL` card added and 0121 is 0000 with ONE
     # `EX` card added, which is what makes them a controlled experiment rather
@@ -1765,11 +1770,11 @@ def test_nh_parses_now_and_refuses_beside_ne_by_its_own_name():
 def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
     """U1's catch-all is now a backstop and not a behaviour.
 
-    Every one of the 53 captured decks comes back either solved or refused by
+    Every one of the 62 captured decks comes back either solved or refused by
     a sentence that names its card, so the stub reason — which said only that
     the dialect was unserved — must appear nowhere.
     """
-    assert len(corpus()) == 53
+    assert len(corpus()) == 62
     assert sorted(entry["deck"] for entry in MANIFEST["captures"]) == sorted(
         f"decks/{path.name}" for path in (FIXTURE_DIR / "decks").glob("*.nec")
     )
@@ -1778,8 +1783,8 @@ def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
         assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in text, cid
 
 
-def test_the_corpus_ladder_stands_where_511_left_it():
-    """The served-id SET, pinned — 52 of the 53 captured decks.
+def test_the_corpus_ladder_stands_where_516_left_it():
+    """The served-id SET, pinned — 53 of the 62 captured decks.
 
     A rung that lands moves decks across this line and a regression moves them
     back, and neither should be able to happen quietly: the set is written out
@@ -1790,21 +1795,20 @@ def test_the_corpus_ladder_stands_where_511_left_it():
 
     momwire#511 moves the DENOMINATOR instead, which is the other way a ladder
     can climb and the first time this one has done it: the corpus grew from 49
-    decks to 53, and all four of the new ones are served.  They are the shape
-    the last drive refusal named — a phased drive reaching the structure
-    through a ``TL`` or an ``NT`` — so the sentence that said "none of the 49
-    captured decks writes one" stopped being true and the refusal went with it.
-    48 of 49 became 52 of 53 with nothing crossing the line in either
-    direction.
+    decks to 53 and all four of the new ones are served, so 48 of 49 became 52
+    of 53 with nothing crossing the line in either direction.
 
-    ONE deck is left, and it names a card no ground and no drive can reach:
-    0022's ``NE``, the near electric field, whose printed block has a layout of
-    its own that no rung of this arc renders.  That is the whole refusal
-    roster now — this seam answers every ground card, every network table and
-    every drive the corpus writes, and says so about the one request it does
-    not.
+    momwire#516 moves the denominator AGAIN and, for the first time in this
+    arc, moves it further than the numerator.  Its capture errand went looking
+    for the near field on purpose — nine decks over four grounds (manifest
+    ``near_field_family``) — and eight of the nine carry the ``NE``/``NH``
+    request this seam does not answer yet.  One of the nine does not, and it is
+    the point of the errand rather than a leftover: 0114 is 0115's deck with
+    its ``NE`` replaced by an ``RP``, a free-space pattern this seam has served
+    since #497 U4, and it is the control the near-field rung will be scored
+    against.  53 of 62.
 
-    What this number does NOT claim is that all 52 are right.  0033 and 0034
+    What this number does NOT claim is that all 53 are right.  0033 and 0034
     are served, are in this set, and disagree with their captures by 275 and
     188 Ω (:data:`DIVERGENT_IDS`); the ladder counts decks that get an ANSWER
     rather than decks that get a pinned one, and that distinction is why the
@@ -1813,12 +1817,22 @@ def test_the_corpus_ladder_stands_where_511_left_it():
     served_ids = tuple(
         cid for cid, text in sorted(corpus().items()) if "NEC ERROR" not in text
     )
-    assert served_ids == SERVED_AFTER_511
-    assert len(served_ids) == 52
+    assert served_ids == SERVED_AFTER_516
+    assert len(served_ids) == 53
     refused = sorted(set(corpus()) - set(served_ids))
-    assert refused == ["0022"]
-    # The 49 the ladder used to count still stand 48 of 49, which is what says
-    # #511 added decks rather than moving any (0116/0117/0120/0121 sort last).
+    assert refused == [
+        "0022",
+        "0107",
+        "0108",
+        "0109",
+        "0110",
+        "0111",
+        "0112",
+        "0113",
+        "0115",
+    ]
+    # The 49 the ladder first counted still stand 48 of 49, which is what says
+    # #511 and #516 added decks rather than moving any.
     assert len([cid for cid in served_ids if cid < "0049"]) == 48
 
 
