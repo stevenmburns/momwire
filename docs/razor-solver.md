@@ -594,3 +594,16 @@ pins both the size and the CONSTANCY of that residual. The mode exists so
 the census pair-recipe rationale is demonstrable rung-for-rung; it is not
 a step toward an NEC-5 substitute — the licensed binary remains the only
 oracle that can testify.
+
+**The constancy is a thin-wire statement (2026-08-17, momwire#405).** On
+a fat dipole (a = 1e-2 m, a/λ ≈ 4.7e-4) the residual is NOT constant: it
+walks monotonically 0.0293 → 0.0715 Ω from Ntot = 12 to 96 — a 2.4×
+drift, forty times the thin-dipole spread (0.0007 Ω) — while the thin
+dipole, inverted-V and square loop reproduce their constants exactly.
+The radius dependence says the residual is a thin-wire-kernel nuance,
+not a pure quadrature-idiom artifact. Consequences: the claim above is
+scoped to the thin-radius ladders it was measured on, and any future
+constancy gate on a fat-radius deck (the #398 sharp lane's 0.05 Ω bar is
+calibrated on thin wires) must budget the drift rather than inherit the
+bar. Mechanism analysis — which kernel term carries the a-dependence —
+is optional follow-on, relevant if razor ever grows EK.
