@@ -1555,8 +1555,20 @@ def serve(deck: Nec5Deck) -> RunData:
         loads=tuple(
             LoadRow(
                 tag=load.at.tag,
-                node_from=load.at.written,
-                node_thru=load.at.written,
+                # The loading table prints the DECODED node and drops the
+                # deck's spelling, which is the opposite of what NETWORK DATA
+                # does with the same address (:func:`_signed_segment`).  0025
+                # settles it: ``LD 4,1,-1`` prints ``1    1`` and ``LD 4,5,3``
+                # prints ``3    3``, so the rule is the segment a node names,
+                # wire-local — node 0 reading as node 1 exactly as it does in
+                # :func:`_segment_of`, and no sign surviving anywhere.
+                #
+                # #504 U1's four loaded captures could not say this: all eight
+                # of their ``LD`` cards write a positive node.  The nine mixed
+                # and feed-system captures that landed with U3 write ``-1``
+                # twenty-two times and print ``1`` twenty-two times.
+                node_from=max(load.at.node, 1),
+                node_thru=max(load.at.node, 1),
                 resistance=load.impedance.real,
                 reactance=load.impedance.imag or None,
             )
