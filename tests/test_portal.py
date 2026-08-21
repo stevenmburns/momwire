@@ -4843,3 +4843,32 @@ def test_unknown_env_basis_fails_the_probe_fast(monkeypatch):
     monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "nope")
     rc, out, _ = _run_main(["-version"], prog="/usr/bin/momwire-nec2c")
     assert rc == 3 and "MOMWIRE_NEC2C_BASIS" in out
+
+
+def test_every_basis_ships_as_a_named_entry_point():
+    """momwire#528's Windows/macOS answer: pip creates momwire-nec2c-<basis>
+    commands on every platform, so no host ever needs a symlink, a copy or a
+    wrapper. The roster and the scripts table must stay in lockstep — a new
+    basis without its command re-fails here, and every named command must
+    resolve through the argv[0] mechanism to a real basis."""
+    import tomllib
+    from pathlib import Path
+
+    from momwire.deck import BASES
+    from momwire.portal import _portal as nec_portal
+
+    scripts = tomllib.loads(
+        (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text()
+    )["project"]["scripts"]
+    named = {
+        name: target
+        for name, target in scripts.items()
+        if name.startswith("momwire-nec2c-") and name != "momwire-nec2c-shared"
+    }
+    for name, target in named.items():
+        assert target == "momwire.portal:main", name
+        suffix = nec_portal._filename_basis(name)
+        assert suffix in BASES, name
+    assert set(BASES) == {nec_portal._filename_basis(n) for n in named}, (
+        "roster and scripts table out of lockstep"
+    )

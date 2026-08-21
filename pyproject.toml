@@ -94,6 +94,19 @@ validation = [
 [project.scripts]
 momwire-nec2c = "momwire.portal:main"
 momwire-nec2c-shared = "momwire_nec2c_client:main"
+# The named engines (momwire#528): every basis as its own command, so a
+# filename-only host dialog (SimNEC's, and Windows generally — no symlinks
+# needed) selects the solver by pointing at the right name. No code behind
+# these beyond portal:main — argv[0]'s "nec2c-<suffix>" does the selection.
+momwire-nec2c-bspline = "momwire.portal:main"
+momwire-nec2c-bspline-d1 = "momwire.portal:main"
+momwire-nec2c-hmatrix = "momwire.portal:main"
+momwire-nec2c-arrayblock = "momwire.portal:main"
+momwire-nec2c-sinusoidal = "momwire.portal:main"
+momwire-nec2c-sinusoidal-galerkin = "momwire.portal:main"
+momwire-nec2c-sinusoidal-galerkin-converged = "momwire.portal:main"
+momwire-nec2c-razor = "momwire.portal:main"
+momwire-nec2c-razor-nec5 = "momwire.portal:main"
 
 [project.urls]
 Homepage = "https://github.com/stevenmburns/momwire"
