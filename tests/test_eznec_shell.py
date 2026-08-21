@@ -225,7 +225,7 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
 
     assert proc.returncode == 0
     assert out.exists()
-    written = out.read_bytes().decode("latin-1")
+    written = out.read_bytes().decode("latin-1").replace("\r\n", "\n")
     stamp = "EZNEC Pro/2+ v. 7.0.4"
     assert stamp in written
     assert _ERROR_PREFIX in written
@@ -233,6 +233,33 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     reason = written.rsplit(_ERROR_PREFIX, 1)[1].strip()
     assert reason.startswith("NE (near electric field) is not served")
     assert written == eznec.render_refusal(deck_text("0022"), reason)
+
+
+def test_the_printout_bytes_are_crlf_all_the_way_down(tmp_path):
+    """momwire#512: EZNEC refuses an LF-only printout, behind a popup blaming
+    a file that never existed ("Output file NEC.OUT is present, but was
+    written earlier from another calculation").  Proven by controlled
+    substitution on the Windows box: a wrapper changing NOTHING but line
+    endings made EZNEC render this engine's results first try.
+
+    So the WRITTEN BYTES are the gate — the byte-gates elsewhere compare the
+    rendered string, which is exactly the layer this defect hid beneath.
+    Every newline must be CRLF, results and refusals alike, and the file must
+    end with one.
+    """
+    for cid in ("0043", "0022"):  # a served run and a refusal
+        room = tmp_path / cid
+        room.mkdir()
+        deck = room / "EZN5.NEC"
+        deck.write_bytes((FIXTURE_DIR / capture(cid)["deck"]).read_bytes())
+        out = room / "NEC5.OUT"
+        proc = run_engine([str(deck), str(out)])
+        assert proc.returncode == 0
+        raw = out.read_bytes()
+        assert raw, cid
+        assert raw.count(b"\n") == raw.count(b"\r\n"), f"{cid}: bare LF written"
+        assert raw.endswith(b"\r\n"), cid
+        assert b"\r\n" in raw, cid
 
 
 def test_paths_resolve_against_the_working_directory(tmp_path):
@@ -244,7 +271,7 @@ def test_paths_resolve_against_the_working_directory(tmp_path):
     proc = run_engine(["EZN5.NEC", "NEC5.OUT"], cwd=tmp_path)
 
     assert proc.returncode == 0
-    written = (tmp_path / "NEC5.OUT").read_bytes().decode("latin-1")
+    written = (tmp_path / "NEC5.OUT").read_bytes().decode("latin-1").replace("\r\n", "\n")
     assert written.startswith(header_prefix("0010"))
 
 
@@ -260,7 +287,7 @@ def test_a_path_with_spaces_needs_no_quoting_in_argv(tmp_path):
     proc = run_engine([str(deck), str(out)])
 
     assert proc.returncode == 0
-    assert out.read_bytes().decode("latin-1").startswith(header_prefix("0043"))
+    assert out.read_bytes().decode("latin-1").replace("\r\n", "\n").startswith(header_prefix("0043"))
 
 
 def test_garbage_deck_bytes_still_leave_a_printout(tmp_path):
@@ -273,7 +300,7 @@ def test_garbage_deck_bytes_still_leave_a_printout(tmp_path):
     proc = run_engine([str(deck), str(out)])
 
     assert proc.returncode == 0
-    written = out.read_bytes().decode("latin-1")
+    written = out.read_bytes().decode("latin-1").replace("\r\n", "\n")
     assert "NUMERICAL ELECTROMAGNETICS CODE (NEC-5)" in written
     assert _ERROR_PREFIX in written
 
@@ -288,7 +315,7 @@ def test_a_missing_deck_still_leaves_a_printout_naming_it(tmp_path):
 
     assert proc.returncode == 0
     assert out.exists()
-    written = out.read_bytes().decode("latin-1")
+    written = out.read_bytes().decode("latin-1").replace("\r\n", "\n")
     assert " ***** NEC ERROR - UNABLE TO READ INPUT FILE " in written
     assert str(deck) in written
 
