@@ -3721,7 +3721,28 @@ def _selftest(stdout) -> int:
     return 0 if passed else 1
 
 
-def configure_engine(argv: list[str], stdout) -> tuple[list[str], bool, int | None]:
+def _filename_basis(prog: str) -> str | None:
+    """The basis a copy/symlink NAME selects, or None for the plain spelling.
+
+    ``momwire-nec2c-<basis>`` — everything after ``nec2c-`` in the program's
+    basename, with a Windows ``.exe`` stripped first. ``momwire-nec2c`` bare
+    (no trailing ``-``) selects nothing; so does any name without the
+    ``nec2c-`` marker (``python -m momwire.portal``, a pytest runner, …).
+    Validation is the caller's: an unknown suffix must fail fast at the
+    probe, exactly like an unknown ``--basis``.
+    """
+    name = prog.replace("\\", "/").rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    if "nec2c-" not in name:
+        return None
+    suffix = name.split("nec2c-", 1)[1]
+    return suffix or None
+
+
+def configure_engine(
+    argv: list[str], stdout, prog: str | None = None
+) -> tuple[list[str], bool, int | None]:
     """Read the engine flags off the command line; return what is left.
 
     ``(rest, legacy_probe, code)`` — a non-``None`` ``code`` is an exit status
@@ -3741,6 +3762,17 @@ def configure_engine(argv: list[str], stdout) -> tuple[list[str], bool, int | No
     # arguments — two entries differing only in --basis are two engines. An
     # unknown basis fails FAST and nonzero so the -version probe surfaces the
     # mistake at configure time instead of a silent wrong default.
+    #
+    # Argument-free selection (momwire#528, from AE6TY's report that the
+    # wrapper spelling was the friction): hosts whose engine dialog speaks a
+    # FILENAME can select the basis by the NAME of the executable — a copy or
+    # symlink called ``momwire-nec2c-<basis>`` (everything after ``nec2c-``,
+    # Windows ``.exe`` stripped) IS that engine, no arguments needed. The
+    # ``MOMWIRE_NEC2C_BASIS`` environment variable is the fallback for hosts
+    # that pass environment instead. Precedence: an explicit ``--basis`` beats
+    # the filename beats the environment; every resolved choice still stamps
+    # the printout banner, and an unknown name from ANY of the three sources
+    # fails fast and nonzero at the probe, naming its source.
     global _active_basis, _active_basis_name, _cache_serving, _cache_stats_path
     _active_basis = _BASES["bspline"]  # per-invocation default, never sticky
     _active_basis_name = "bspline"
@@ -3752,6 +3784,7 @@ def configure_engine(argv: list[str], stdout) -> tuple[list[str], bool, int | No
     _cache_stats_path = None
     _reset_solver_cache()
     rest = list(argv)
+    explicit = False
     while "--basis" in rest or any(a.startswith("--basis=") for a in rest):
         if "--basis" in rest:
             k = rest.index("--basis")
@@ -3768,6 +3801,27 @@ def configure_engine(argv: list[str], stdout) -> tuple[list[str], bool, int | No
             return [], False, 3
         _active_basis = _BASES[name]
         _active_basis_name = name
+        explicit = True
+
+    if not explicit:
+        suffix = _filename_basis(sys.argv[0] if prog is None else prog)
+        env_name = os.environ.get("MOMWIRE_NEC2C_BASIS")
+        if suffix is not None:
+            name, source = suffix, "the executable name"
+        elif env_name:
+            name, source = env_name, "MOMWIRE_NEC2C_BASIS"
+        else:
+            name = None
+        if name is not None:
+            if name not in _BASES:
+                stdout.write(
+                    f"unknown basis {name!r} from {source}; "
+                    f"choices: {', '.join(sorted(_BASES))}\n"
+                )
+                stdout.flush()
+                return [], False, 3
+            _active_basis = _BASES[name]
+            _active_basis_name = name
 
     # --cache-stats PATH writes the measurement file (see `_write_cache_stats`)
     # and, on its own, turns the daemon into a COUNTER: every deck is solved
@@ -3873,7 +3927,9 @@ def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) -> int:
+def main(
+    argv: list[str] | None = None, stdin=None, stdout=None, stderr=None, prog=None
+) -> int:
     """The daemon. ``-version`` probes; otherwise read decks until stdin ends.
 
     One invocation is one process: :func:`configure_engine` reads the engine
@@ -3885,7 +3941,7 @@ def main(argv: list[str] | None = None, stdin=None, stdout=None, stderr=None) ->
     stdout = sys.stdout if stdout is None else stdout
     stderr = sys.stderr if stderr is None else stderr
 
-    argv, legacy_probe, code = configure_engine(list(argv), stdout)
+    argv, legacy_probe, code = configure_engine(list(argv), stdout, prog=prog)
     if code is not None:
         return code
 

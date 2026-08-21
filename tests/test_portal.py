@@ -2587,14 +2587,16 @@ def test_selftest_passes_and_reports(tmp_path, monkeypatch):
 # --- the --basis flag --------------------------------------------------------
 
 
-def _run_main(argv, deck=""):
+def _run_main(argv, deck="", prog=None):
     import io
 
     from momwire.portal import _portal as nec_portal
 
     out = io.StringIO()
     err = io.StringIO()
-    rc = nec_portal.main(argv, stdin=io.StringIO(deck), stdout=out, stderr=err)
+    rc = nec_portal.main(
+        argv, stdin=io.StringIO(deck), stdout=out, stderr=err, prog=prog
+    )
     return rc, out.getvalue(), err.getvalue()
 
 
@@ -4768,3 +4770,73 @@ def test_an_ex_between_execute_cards_re_arms_without_a_refill():
     between = between.split("--------- ANTENNA INPUT PARAMETERS")[0]
     assert "STRUCTURE IMPEDANCE LOADING" not in between
     assert "MATRIX TIMING" not in between
+
+
+# --- filename- and environment-selected basis (momwire#528) ------------------
+
+
+_SGC_DECK = (
+    "CE basis\n"
+    "GW 1 11 0. -5. 10. 0. 5. 10. 0.001\n"
+    "GE 0\nEX 0 1 6 0 1.\nFR 0 1 0 0 14.0 1\nXQ\nNX\n"
+)
+
+
+def test_filename_suffix_selects_the_basis():
+    """A copy named momwire-nec2c-<basis> IS that engine: the banner stamps
+    the suffix and the -version probe line stays byte-identical (SimNEC's
+    Execute must see the same probe whatever selected the physics)."""
+    from momwire.portal import PROBE_VERSION
+
+    rc, out, _ = _run_main(
+        ["-version"], prog="/opt/simnec/momwire-nec2c-sinusoidal-galerkin-converged"
+    )
+    assert rc == 0 and out == f"{PROBE_VERSION}\n"
+    rc, out, _ = _run_main(
+        [], deck=_SGC_DECK,
+        prog="/opt/simnec/momwire-nec2c-sinusoidal-galerkin-converged",
+    )
+    assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sgc" in out
+
+
+def test_filename_suffix_windows_exe_is_stripped():
+    rc, out, _ = _run_main(
+        [], deck=_SGC_DECK,
+        prog="C:\\SimNEC\\momwire-nec2c-sinusoidal-galerkin-converged.EXE",
+    )
+    assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sgc" in out
+
+
+def test_unknown_filename_suffix_fails_the_probe_fast():
+    rc, out, _ = _run_main(["-version"], prog="./momwire-nec2c-nope")
+    assert rc == 3 and "choices:" in out and "executable name" in out
+
+
+def test_explicit_basis_beats_the_filename():
+    rc, out, _ = _run_main(
+        ["--basis=sinusoidal-galerkin-converged"], deck=_SGC_DECK,
+        prog="./momwire-nec2c-bspline-d1",
+    )
+    assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sgc" in out
+
+
+def test_plain_name_and_module_spelling_select_nothing(monkeypatch):
+    monkeypatch.delenv("MOMWIRE_NEC2C_BASIS", raising=False)
+    for prog in ("/usr/local/bin/momwire-nec2c", "/x/momwire/portal/__main__.py"):
+        rc, out, _ = _run_main([], deck=_SGC_DECK, prog=prog)
+        assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1\n" in out, prog
+
+
+def test_env_var_selects_and_filename_beats_it(monkeypatch):
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sinusoidal-galerkin-converged")
+    rc, out, _ = _run_main([], deck=_SGC_DECK, prog="/usr/bin/momwire-nec2c")
+    assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sgc" in out
+    # the filename wins over the environment
+    rc, out, _ = _run_main([], deck=_SGC_DECK, prog="/usr/bin/momwire-nec2c-bspline")
+    assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1\n" in out
+
+
+def test_unknown_env_basis_fails_the_probe_fast(monkeypatch):
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "nope")
+    rc, out, _ = _run_main(["-version"], prog="/usr/bin/momwire-nec2c")
+    assert rc == 3 and "MOMWIRE_NEC2C_BASIS" in out
