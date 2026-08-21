@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from ._cards import Card, DeckError, parse_card
-from ._nec2_geometry import Nec2Structure, build_geometry
+from ._nec2_geometry import _SMIN, Nec2Structure, build_geometry
 from .model import (
     DeckModel,
     DeckWire,
@@ -978,6 +978,36 @@ class _Nec2Parser:
             for piece in structure.pieces
         )
         feeds, groups = self._feeds_and_groups(structure)
+        # momwire#489: GE's SIGN, at the one combination where ignoring it
+        # would serve a silently different answer than the oracle.  A negative
+        # GE declares the plane while asking for NO ground-contact current
+        # expansion, and nec2c's two readings of a grounded quarter-wave
+        # vertical differ wildly (GE 1: 39.8+23.3j; GE -1: 57-4012j).
+        # momwire's contact machinery interpolates unconditionally — the GE 1
+        # treatment — so a GE -1 deck whose wire actually stands in the plane
+        # under a ground refuses by name instead.  The contact test is
+        # nec2c's own (conect): |z| within _SMIN of the end's segment length.
+        # GE -1 with every wire clear of the plane serves as before (the sign
+        # then moves printout connection columns only), as does GE -1 in free
+        # space, where no image exists to disagree about.
+        if structure.ground_plane_flag and not structure.ground_plane_interpolates:
+            grounded = any(
+                g is not None and g.environment.ground is not None for g in groups
+            ) or (not groups and self._ground is not None)
+            if grounded:
+                for w in structure.wires:
+                    tol = _SMIN * (w.length / w.n_seg)
+                    for p in (w.p1, w.p2):
+                        if abs(float(p[2])) <= tol:
+                            raise DeckError(
+                                f"GE -1 declares the ground plane without the "
+                                f"ground-contact current expansion, and wire "
+                                f"{w.tag}'s end stands in the plane "
+                                f"(z = {float(p[2]):g}); this engine serves "
+                                f"the interpolated (GE 1) contact only — "
+                                f"write GE 1, or lift the wire clear of the "
+                                f"plane"
+                            )
         return DeckModel(
             wires=wires,
             feeds=feeds,

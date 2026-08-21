@@ -2150,6 +2150,35 @@ def test_cards_refused_by_name(mnemonic):
     assert str(exc.value) == _REFUSED_BY_NAME[mnemonic]
 
 
+GROUNDED_VERTICAL = (
+    "CE v\nGW 1 21 0 0 {z0} 0 0 {z1} .001\nGE {ge}\n{gn}"
+    "EX 0 1 1 0 1.\nFR 0 1 0 0 30.\nXQ\nNX\n"
+)
+
+
+def _vertical(ge: int, z0: float = 0.0, z1: float = 2.5, gn: str = "GN 1\n") -> str:
+    return GROUNDED_VERTICAL.format(ge=ge, z0=z0, z1=z1, gn=gn)
+
+
+def test_ge_minus_one_with_ground_contact_refuses_by_name():
+    """momwire#489: nec2c reads GE's sign as the ground-contact expansion
+    switch (GE 1: 39.8+23.3j vs GE -1: 57-4012j on this structure) while
+    momwire interpolates unconditionally — the one combination that would
+    serve a silently different answer refuses instead, naming the wire."""
+    with pytest.raises(DeckError) as exc:
+        parse(_vertical(-1))
+    assert "GE -1" in str(exc.value) and "wire 1" in str(exc.value)
+
+
+def test_ge_sign_refusal_fires_only_at_the_divergent_combination():
+    """The refusal is exactly as wide as the divergence: interpolated
+    contact (GE 1), a GE -1 structure standing clear of the plane, and
+    GE -1 contact in free space (no image to disagree about) all parse."""
+    assert parse(_vertical(1)) is not None
+    assert parse(_vertical(-1, z0=1.0, z1=3.5)) is not None
+    assert parse(_vertical(-1, gn="")) is not None
+
+
 def test_sy_refuses_by_name_before_its_symbolic_fields_tokenize():
     """momwire#486: a real 4nec2 ``SY`` card carries symbolic fields
     (``FREQ=146``), which the tokenizer cannot convert — so the by-name
