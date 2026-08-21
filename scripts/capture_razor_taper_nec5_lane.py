@@ -53,6 +53,16 @@ The bar, in the shape the twin claim can honestly hold (momwire#316's
   0.05 ohm in dR and dX, on `fat`; on `ward` the same bar in dR, with dX
   recorded (the eligibility rule's documented conservatism at a radius step
   costs it there).
+
+RADIUS CAVEAT (2026-08-17, momwire#405): the 0.05-ohm constancy bar is a
+thin-wire calibration. The #398 section-9 floor measurement found the
+residual RADIUS-DEPENDENT on a genuinely fat free-space dipole (a = 1e-2,
+a/lambda ~ 4.7e-4): 0.0293 -> 0.0715 ohm from Ntot 12 to 96, a 2.4x
+monotone walk against the thin ladders' 0.0007-ohm spread. The gated
+rungs here stay inside the bar because the ladder stops at N = 200
+(Delta/a floor above); a future fat-radius grounded lane must budget the
+drift, not inherit this bar. Details: docs/razor-solver.md, the
+"thin-wire statement" addendum.
 """
 
 from __future__ import annotations
