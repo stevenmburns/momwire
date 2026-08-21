@@ -2150,6 +2150,17 @@ def test_cards_refused_by_name(mnemonic):
     assert str(exc.value) == _REFUSED_BY_NAME[mnemonic]
 
 
+def test_sy_refuses_by_name_before_its_symbolic_fields_tokenize():
+    """momwire#486: a real 4nec2 ``SY`` card carries symbolic fields
+    (``FREQ=146``), which the tokenizer cannot convert — so the by-name
+    refusal must fire before field conversion, or the generic
+    NON-NUMERICAL CHARACTER error outruns the sentence that names the
+    card (exactly what the xnec2c corpus's four SY decks used to raise)."""
+    with pytest.raises(DeckError) as exc:
+        parse("CE sy deck\nSY FREQ=146, HALF=300/FREQ/4\nXQ\nNX\n")
+    assert str(exc.value) == _REFUSED_BY_NAME["SY"]
+
+
 def test_the_refusal_table_is_the_pages_table():
     """§#cards-refused-by-name, as a set: nothing in this dialect is accepted
     and silently ignored."""

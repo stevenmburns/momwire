@@ -806,6 +806,15 @@ class _Nec2Parser:
 
     def feed(self, text: str) -> None:
         for line in text.splitlines():
+            head = line.strip().replace(",", " ").split()
+            if head and (message := _REFUSED_BY_NAME.get(head[0].upper())) is not None:
+                # By-name refusals fire BEFORE the tokenizer converts fields
+                # (#486): SY's fields are 4nec2 symbolic expressions, so the
+                # generic NON-NUMERICAL CHARACTER error would otherwise outrun
+                # the sentence that names the card — same reason the network
+                # contiguity guard runs before field reads.  `card()` keeps
+                # its own roster check for callers that arrive with a Card.
+                raise DeckError(message)
             card = parse_card(line)
             if card is None:
                 continue
