@@ -34,6 +34,9 @@ deck is the #233 investigation's — a free-space dipole, L = 5 m, NS = 41,
 """
 
 import numpy as np
+import platform
+import sys
+
 import pytest
 
 from momwire.sinusoidal import SinusoidalSolver
@@ -572,6 +575,12 @@ def test_galerkin_serves_the_extended_kernel_under_sommerfeld_ground():
 ACCEL_AGREEMENT = 1e-13
 _CONDITIONING_HEADROOM = 20.0
 
+# The ratio needs an absolute floor: on macOS ARM (PR #529's new CI lane) the
+# reduced kernel's own C++-vs-numpy worst can land an order tighter than on
+# x86, and a 26x ratio between two agreements that are BOTH under 3e-10 is
+# not a conditioning failure. Genuine blowups are orders above this floor.
+_CONDITIONING_FLOOR = 1e-9
+
 # The image build of a fixture that carries no ground of its own runs against a
 # plane just under it — clear of the wire by far more than the 1e-6·L contact
 # tolerance, so the geometry and the gating are unchanged, and at the
@@ -835,7 +844,7 @@ def test_cpp_ek_far_image_conditioning_tracks_the_reduced_kernel(ground_z):
 
     reduced = _worst(False)
     extended = _worst(True)
-    assert extended < _CONDITIONING_HEADROOM * reduced, (
+    assert extended < max(_CONDITIONING_HEADROOM * reduced, _CONDITIONING_FLOOR), (
         f"EK {extended:.3e} vs reduced {reduced:.3e}"
     )
 
@@ -1433,7 +1442,7 @@ def test_cpp_ek_refl_far_image_conditioning_tracks_the_reduced_kernel(ground_z):
 
     reduced = _worst(False)
     extended = _worst(True)
-    assert extended < _CONDITIONING_HEADROOM * reduced, (
+    assert extended < max(_CONDITIONING_HEADROOM * reduced, _CONDITIONING_FLOOR), (
         f"EK {extended:.3e} vs reduced {reduced:.3e}"
     )
 
@@ -1657,6 +1666,13 @@ _EK_OFF_REFL_PIN = [
 ]
 
 
+@pytest.mark.skipif(
+    not (sys.platform == "linux" and platform.machine() in ("x86_64", "AMD64")),
+    reason="the pin is a bit-capture of the x86-64/GCC contraction; other FP "
+    "environments (macOS ARM clang, PR #529) contract the same source "
+    "differently and the byte claim is meaningless there — the relative "
+    "gates in this file carry the physics on every platform",
+)
 def test_ek_off_refl_tensor_is_unmoved_by_the_new_kernel():
     """Byte-level armor for the reduced Fresnel tail. #259 edits the file the
     reduced kernel lives in, so pin its output exactly rather than relatively:

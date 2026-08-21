@@ -747,6 +747,11 @@ print(vm("VmHWM:") - rss0, polys.shape[0], geom["seg_l"].shape[0])
 """
 
 
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="reads the child's /proc VmHWM — linux memory plumbing, no "
+    "/proc on macOS (PR #529); the banding it gates is platform-free",
+)
 def test_sommerfeld_remainder_transient_is_slab_bounded():
     """The remainder phase must stay inside the kernel's band-slab bound.
 

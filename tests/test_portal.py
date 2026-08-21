@@ -4793,7 +4793,8 @@ def test_filename_suffix_selects_the_basis():
     )
     assert rc == 0 and out == f"{PROBE_VERSION}\n"
     rc, out, _ = _run_main(
-        [], deck=_SGC_DECK,
+        [],
+        deck=_SGC_DECK,
         prog="/opt/simnec/momwire-nec2c-sinusoidal-galerkin-converged",
     )
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sgc" in out
@@ -4801,7 +4802,8 @@ def test_filename_suffix_selects_the_basis():
 
 def test_filename_suffix_windows_exe_is_stripped():
     rc, out, _ = _run_main(
-        [], deck=_SGC_DECK,
+        [],
+        deck=_SGC_DECK,
         prog="C:\\SimNEC\\momwire-nec2c-sinusoidal-galerkin-converged.EXE",
     )
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sgc" in out
@@ -4814,7 +4816,8 @@ def test_unknown_filename_suffix_fails_the_probe_fast():
 
 def test_explicit_basis_beats_the_filename():
     rc, out, _ = _run_main(
-        ["--basis=sinusoidal-galerkin-converged"], deck=_SGC_DECK,
+        ["--basis=sinusoidal-galerkin-converged"],
+        deck=_SGC_DECK,
         prog="./momwire-nec2c-bspline-d1",
     )
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sgc" in out
