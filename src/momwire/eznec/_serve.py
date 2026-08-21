@@ -266,9 +266,11 @@ import numpy as np
 
 from ..bspline import BSplineSolver
 from ..deck._cards import tokenize
+from .. import _ground_spec
 from ..deck._nec5 import (
     Nec5Deck,
     Nec5FarFieldRequest,
+    Nec5FreeSpace,
     Nec5Ground,
     Nec5MininecGround,
     Nec5NearFieldRequest,
@@ -447,6 +449,18 @@ _NEAR_FIELD_EVIDENCE = {
     "mininec": "capture 0107 prints EZ 6.6673E+02 V/m at the origin and an "
     "image gives 2.34E+02",
 }
+_REFUSE_BURIED_WIRE = (
+    "wire {tag} runs below the ground plane (min z = {zmin:g} m) - buried "
+    "wires are not served: momwire models wires at or above the interface, "
+    "and this deck's ground card puts a conducting medium below z = 0 - "
+    "raise the wire to the surface, or model in free space (GN -1)"
+)
+_REFUSE_IN_PLANE_WIRE = (
+    "wire {tag} lies in the ground plane (both ends at z = 0) - a horizontal "
+    "wire IN a conducting interface is degenerate - raise it above the "
+    "plane, or stand a wire END on the plane instead (ground contact is "
+    "served)"
+)
 _REFUSE_NO_EX = "this deck carries no EX card - nothing drives the structure"
 _REFUSE_NO_FR = "this deck carries no FR card - there is no frequency to solve at"
 _REFUSE_NO_REQUEST = (
@@ -498,6 +512,9 @@ def refusal(deck: Nec5Deck) -> str | None:
         return drive
     if deck.frequency_mhz is None or deck.frequency_mhz <= 0.0:
         return _REFUSE_NO_FR
+    geometry = _geometry_refusal(deck)
+    if geometry is not None:
+        return geometry
     for request in deck.requests:
         if isinstance(request, Nec5NearFieldRequest):
             near = _near_field_refusal(deck, request)
@@ -507,6 +524,36 @@ def refusal(deck: Nec5Deck) -> str | None:
             return _REFUSE_RP_RANGE
     if not deck.requests:
         return _REFUSE_NO_REQUEST
+    return None
+
+
+def _geometry_refusal(deck: Nec5Deck) -> str | None:
+    """``None`` when every wire can stand over this deck's ground, the
+    sentence when one cannot.
+
+    Two shapes, both of which the solver would refuse at construction — the
+    seam names them so the printout carries a capability statement instead of
+    the ``INTERNAL ERROR`` frame (momwire#525). Below-plane wires are a real
+    capability gap: the licensed engine SERVES buried radials (momwire#524
+    is the capability issue), so that sentence must read as "not served
+    here", never as a deck error. In-plane wires are degenerate over any
+    conducting ground and the engine-side answer is to move them.
+
+    Free space is exempt: z < 0 is legal geometry with no ground under it.
+    The tolerance is the solver's own (`_ground_spec.ground_touch_tol`,
+    1e-6 of each wire's length) so the seam refuses exactly what the solver
+    would refuse — never more, never less.
+    """
+    if deck.ground is None or isinstance(deck.ground, Nec5FreeSpace):
+        return None
+    for wire in deck.wires:
+        pl = np.array([wire.end1, wire.end2], dtype=float)
+        tol = _ground_spec.ground_touch_tol(pl)
+        zmin = float(pl[:, 2].min())
+        if zmin < -tol:
+            return _REFUSE_BURIED_WIRE.format(tag=wire.tag, zmin=zmin)
+        if abs(pl[0, 2]) <= tol and abs(pl[1, 2]) <= tol:
+            return _REFUSE_IN_PLANE_WIRE.format(tag=wire.tag)
     return None
 
 
