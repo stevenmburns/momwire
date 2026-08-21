@@ -371,17 +371,28 @@ ETA0 = 376.730_313_668
 # (E_theta = 2.7098E-15 -> VERTC -999.99 but SENSE still LINEAR, because
 # E_phi is large). Grammar doc §4.14.
 #
-# ``_FIELD_FLOOR2`` has a third consumer since momwire#403, and it is a
-# deliberate DEPARTURE from nec2c: a field component under the floor is
-# zeroed before its magnitude/phase columns print, where the oracle prints
+# ``_PRINTED_DUST_FLOOR2`` (momwire#403, split from ``_FIELD_FLOOR2`` by
+# momwire#480) is a deliberate DEPARTURE from nec2c: a value under the floor
+# is zeroed before its magnitude/phase columns print, where the oracle prints
 # its own rounding dust raw. The dust's digits are the angle of zero — they
 # move with process history at the ULP level, which is nondeterminism in a
-# printout two of which are asserted byte-identical. Nothing downstream can
-# read anything out of 1e-21 volts but noise, and the differential lane
-# never compares E columns against the oracle (only gains, with the -999.99
-# floor rows skipped), so the departure is invisible everywhere except in
-# the printout becoming deterministic.
+# printout two of which are asserted byte-identical. Two print paths carry
+# it, and both test the PRINTED unit directly (V/m or A/m in the near-field
+# table, amps in the connection-point rows) — there is no ``raw2`` rescale on
+# these paths, so this floor is in a different basis from ``_FIELD_FLOOR2``
+# and its value is derived separately: ~9 orders under the weakest legitimate
+# corpus reading on each path (1e-10 V/m vs readings ~1e-1; 1e-10 A vs the
+# gyrator's ~1e-7 phantom row). The split exists so a retune arising on the
+# RP side — a ``raw2`` convention change, a nec2c parity fix — cannot move
+# this bar in a basis where that reasoning does not apply; the coupling test
+# in ``test_portal_shared.py`` pins both numbers so any retune has to say
+# which floor it means. Nothing downstream can read anything out of 1e-21
+# volts but noise, and the differential lane never compares these columns
+# against the oracle (only gains, with the -999.99 floor rows skipped), so
+# the departure is invisible everywhere except in the printout becoming
+# deterministic.
 _FIELD_FLOOR2 = 1.0e-20
+_PRINTED_DUST_FLOOR2 = 1.0e-20
 _GAIN_FLOOR2 = 1.0e-20
 _GAIN_FLOOR_DB = -999.99
 
@@ -3206,11 +3217,11 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: dict) -> list[str]
         # (test_portal_differential.py has no E-column; test_portal.py's
         # cross-engine check floors a dead component at 1e-4 of the row's
         # live one, five orders above this bar).
-        if fx.real * fx.real + fx.imag * fx.imag <= _FIELD_FLOOR2:
+        if fx.real * fx.real + fx.imag * fx.imag <= _PRINTED_DUST_FLOOR2:
             fx = 0j
-        if fy.real * fy.real + fy.imag * fy.imag <= _FIELD_FLOOR2:
+        if fy.real * fy.real + fy.imag * fy.imag <= _PRINTED_DUST_FLOOR2:
             fy = 0j
-        if fz.real * fz.real + fz.imag * fz.imag <= _FIELD_FLOOR2:
+        if fz.real * fz.real + fz.imag * fz.imag <= _PRINTED_DUST_FLOOR2:
             fz = 0j
         out.append(fmt_near_field_row(point, fx, fy, fz))
     out.append(_NEAR_FIELD_TIME)
@@ -3282,7 +3293,10 @@ def _network_lines(solver: DeckSolver, result: dict, group_index: int) -> list[s
         # the printed unit (amps); the weakest legitimate connection current
         # in the corpus is ~1e-7 A (the ex6 gyrator's phantom row), three
         # orders above it.
-        if current.real * current.real + current.imag * current.imag <= _FIELD_FLOOR2:
+        if (
+            current.real * current.real + current.imag * current.imag
+            <= _PRINTED_DUST_FLOOR2
+        ):
             current = 0j
         out.append(
             fmt_aip_row(
