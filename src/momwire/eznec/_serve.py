@@ -370,6 +370,12 @@ _REFUSE_NE = (
     "so a near field answered here would have no printed form to be gated "
     "against"
 )
+_REFUSE_NH = (
+    "NH (near magnetic field) is not served at this seam yet: it parses as "
+    "NE's twin (momwire#513, capture 0111) but the NEAR MAGNETIC FIELDS "
+    "block has never been rendered here, so it refuses beside NE until the "
+    "near-field rung lands"
+)
 _REFUSE_NO_EX = "this deck carries no EX card - nothing drives the structure"
 _REFUSE_NO_FR = "this deck carries no FR card - there is no frequency to solve at"
 _REFUSE_NO_REQUEST = (
@@ -419,7 +425,7 @@ def refusal(deck: Nec5Deck) -> str | None:
         return _REFUSE_NO_FR
     for request in deck.requests:
         if isinstance(request, Nec5NearFieldRequest):
-            return _REFUSE_NE
+            return _REFUSE_NH if request.magnetic else _REFUSE_NE
         if isinstance(request, Nec5FarFieldRequest) and request.range_m != 0.0:
             return _REFUSE_RP_RANGE
     if not deck.requests:

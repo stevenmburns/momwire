@@ -23,9 +23,11 @@ dialect fact here comes from captured console I/O, captured printouts and
 the published Users Manual.  Nothing in this module was learned from, or
 describes, the engine's internals.
 
-Scope is exactly the **fourteen observed mnemonics** — ``GW``, ``GE``,
+Scope is exactly the **fifteen observed mnemonics** — ``GW``, ``GE``,
 ``GN``, ``GD``, ``EX``, ``LD``, ``TL``, ``NT``, ``FR``, ``PQ``, ``RP``,
-``XQ``, ``NE``, ``EN`` — plus the ``CM``/``CE`` comment framing.  Everything
+``XQ``, ``NE``, ``NH``, ``EN`` — plus the ``CM``/``CE`` comment framing.
+(``NH`` is the fifteenth: capture sitting 4 falsified the study-era premise
+that EZNEC never emits it — momwire#513, capture 0111.)  Everything
 else refuses BY NAME.  This module reads a deck and records what it said; it
 solves nothing and renders nothing (those are the seam's other units).
 """
@@ -280,17 +282,21 @@ class Nec5FarFieldRequest:
 
 @dataclass(frozen=True)
 class Nec5NearFieldRequest:
-    """``NE`` — near electric field, rectangular coordinates.
+    """``NE`` / ``NH`` — near electric or magnetic field, rectangular.
 
-    One capture, at EZNEC's defaults: ``NE 0,1,1,1,0.,0.,0.,0.,0.,0.``, a
-    single point at the origin.  All ten fields are recorded.  ``NH`` (near
-    magnetic field) has never been emitted and refuses by name.
+    Both cards are EZNEC's (momwire#513): ``NE`` arrived first (one capture
+    at the defaults, ``NE 0,1,1,1,0.,0.,0.,0.,0.,0.``), and capture sitting 4
+    falsified the premise that ``NH`` is never emitted — it costs one radio
+    button in the Near Field Analysis dialog (capture 0111, antennaknobs
+    PR #970), and its field layout is ``NE``'s.  All ten fields are
+    recorded; :attr:`magnetic` is which card wrote them.
     """
 
     coordinates: int
     counts: tuple[int, int, int]
     origin: Point
     step: Point
+    magnetic: bool = False
 
 
 @dataclass(frozen=True)
@@ -346,8 +352,10 @@ class Nec5Deck:
 # The vocabulary
 # --------------------------------------------------------------------------
 
-# The fourteen mnemonics observed across the 49 captures (capture study,
-# "Card vocabulary"), plus the CM/CE comment framing.  Anything outside this
+# The fifteen mnemonics observed across the capture corpus — fourteen from
+# the original 49-capture study plus NH, which capture sitting 4 measured off
+# one radio button (momwire#513, capture 0111) — plus the CM/CE comment
+# framing.  Anything outside this
 # set refuses; the table below gives the ones a reader might plausibly send
 # a reason of their own, and everything else falls through to the generic
 # by-name refusal in `_Nec5Parser.card`.
@@ -368,6 +376,7 @@ _VOCABULARY = frozenset(
         "RP",
         "XQ",
         "NE",
+        "NH",
         "EN",
     }
 )
@@ -400,11 +409,6 @@ _REFUSED_BY_NAME = MappingProxyType(
         "which models wires only",
         "SC": "SC (surface patch continuation) is not part of this engine's nec5 "
         "dialect, which models wires only",
-        # Request cards EZNEC has never emitted.  NH is named explicitly
-        # because it is the near-field card's twin and the likeliest guess.
-        "NH": "NH (near magnetic field) has never been emitted by EZNEC and is not "
-        "part of this engine's nec5 dialect; NE (near electric field) is the near-"
-        "field card this seam serves",
         "CP": "CP (coupling request) is not part of this engine's nec5 dialect",
         "PL": "PL (plot request) is not part of this engine's nec5 dialect",
         "WG": "WG (NGF write request) is not part of this engine's nec5 dialect",
@@ -444,6 +448,7 @@ _MIN_FIELDS = MappingProxyType(
         "PQ": 1,
         "RP": 8,
         "NE": 10,
+        "NH": 10,
     }
 )
 
@@ -807,11 +812,18 @@ class _Nec5Parser:
         )
 
     def _ne(self, card: Card) -> None:
+        """``NE`` and ``NH`` — one field layout, one handler, one flag.
+
+        Capture 0111 (momwire#513) pinned ``NH`` as ``NE``'s exact twin: the
+        Near Field Analysis dialog's E/H radio button picks the mnemonic and
+        nothing else about the card moves.
+        """
         coordinates = card.i(0)
         if coordinates != 0:
             raise DeckError(
-                f"NE coordinate system {coordinates} (spherical) is not part of this "
-                f"engine's nec5 dialect; rectangular (0) is the form EZNEC emits"
+                f"{card.mnemonic} coordinate system {coordinates} (spherical) is "
+                f"not part of this engine's nec5 dialect; rectangular (0) is the "
+                f"form EZNEC emits"
             )
         self.requests.append(
             Nec5NearFieldRequest(
@@ -819,6 +831,7 @@ class _Nec5Parser:
                 counts=(max(card.i(1), 1), max(card.i(2), 1), max(card.i(3), 1)),
                 origin=(card.f(4), card.f(5), card.f(6)),
                 step=(card.f(7), card.f(8), card.f(9)),
+                magnetic=card.mnemonic == "NH",
             )
         )
 
@@ -886,8 +899,8 @@ class _Nec5Parser:
         if card.mnemonic not in _VOCABULARY:
             raise DeckError(
                 f"{card.mnemonic} is not a card in this engine's nec5 dialect, whose "
-                f"vocabulary is the fourteen mnemonics EZNEC emits: GW, GE, GN, GD, "
-                f"EX, LD, TL, NT, FR, PQ, RP, XQ, NE, EN"
+                f"vocabulary is the fifteen mnemonics EZNEC emits: GW, GE, GN, GD, "
+                f"EX, LD, TL, NT, FR, PQ, RP, XQ, NE, NH, EN"
             )
         minimum = _MIN_FIELDS.get(card.mnemonic)
         if minimum is not None and (written := len(card.values)) < minimum:
@@ -909,6 +922,7 @@ class _Nec5Parser:
             "FR": self._fr,
             "RP": self._rp,
             "NE": self._ne,
+            "NH": self._ne,
             "PQ": self._pq,
         }.get(card.mnemonic)
         if handler is not None:
