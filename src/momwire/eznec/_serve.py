@@ -12,11 +12,12 @@ and with rung 3 the GROUND is finished: all four cards the dialect writes —
 ``GN -1`` free space, ``GN 1`` perfect ground, ``GN 0`` / ``GN 2`` Sommerfeld
 finite ground and the bare ``GD`` MININEC-type ground — plus one
 ``EX 0``/``EX 4`` source at a node, ``LD 4`` fixed impedances, node-addressed
-``TL``/``NT`` networks, and the ``RP 0`` / ``XQ`` / ``PQ 0`` requests.
-Everything above them — phased multi-``EX`` drive, the near field, a table
-carrying ``TL`` and ``NT`` at once — refuses BY NAME through :func:`refusal`,
-because a seam that answers a question it has no gate for is worse than one
-that says so.
+``TL`` and ``NT`` networks — separately and, since #504 U3, together in one
+``NETWORK DATA`` table — and the ``RP 0`` / ``XQ`` / ``PQ 0`` requests.
+Everything above them — phased multi-``EX`` drive, the near field, a mixed
+table whose deck INTERLEAVES the two card kinds — refuses BY NAME through
+:func:`refusal`, because a seam that answers a question it has no gate for is
+worse than one that says so.
 
 Courtesy stance, the arc's throughout: every NEC-5 fact below was measured
 off captured decks and captured printouts under ``tests/fixtures/eznec/``,
@@ -184,6 +185,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..bspline import BSplineSolver
+from ..deck._cards import tokenize
 from ..deck._nec5 import (
     Nec5Deck,
     Nec5FarFieldRequest,
@@ -290,10 +292,12 @@ _NODE_EPS = 1e-6
 # person looking at EZNEC's viewer.  U1's catch-all stub stays behind them all
 # for the genuinely unforeseen.
 
-_REFUSE_MIXED_NETWORKS = (
-    "this deck carries TL and NT cards together; the NETWORK DATA table has "
-    "one heading per card type and no captured printout shows what a table "
-    "carrying both looks like, so the layout is refused rather than guessed"
+_REFUSE_MIXED_ORDER = (
+    "this deck writes an NT card before a TL card; a mixed NETWORK DATA table "
+    "is served in the order every captured mixed deck writes it - every TL "
+    "card, then every NT card, one sub-table each - and no captured printout "
+    "says which sub-table an interleaved deck heads with, or which order its "
+    "STRUCTURE EXCITATION DATA connection points print in"
 )
 _REFUSE_TWO_CUTS = (
     "{first} and {second} address a node where {count} wires meet, which is "
@@ -336,19 +340,23 @@ def refusal(deck: Nec5Deck) -> str | None:
     the request — so a deck that is out of scope in several ways names the
     reason a reader would fix first.  It is the ladder's own shape, and every
     rung that lands moves decks DOWN it rather than changing it: 0022 used to
-    name its ``GN 0`` and named its ``NE`` once the ground rung landed, and
-    with the ``GD`` rung the three mixed-card decks (0000, 0023, 0025) stop
-    naming their ground and name their TL-and-NT table, which is now the first
-    rung they fall through and the one a reader would actually have to fix.
+    name its ``GN 0`` and named its ``NE`` once the ground rung landed, and the
+    three mixed-card decks (0000, 0023, 0025) named their ground, then their
+    TL-and-NT table, and now name nothing at all.
 
-    There is no ground refusal left to put first.  All four cards this dialect
-    writes are served — ``GN -1``, ``GN 1``, ``GN 0``/``GN 2`` and the bare
-    ``GD`` — so the body below opens on the cards, and "grounds first" is kept
-    written down as the rule a fifth ground card would land under rather than
-    as a description of a line that is still there.
+    There is no ground refusal left to put first, and no mixed-table refusal
+    either.  All four ground cards this dialect writes are served — ``GN -1``,
+    ``GN 1``, ``GN 0``/``GN 2`` and the bare ``GD`` — and a table carrying both
+    card kinds is served in the layout the three mixed captures print.  What is
+    left on that rung is an ORDER: every captured deck writes all of its ``TL``
+    cards before any of its ``NT`` cards, both readings of the sub-table rule
+    agree while that holds, and a deck that interleaves them separates the two
+    readings with nothing to pick between them.  So "grounds first" survives as
+    the rule a fifth ground card would land under rather than as a description
+    of a line that is still there.
     """
-    if deck.transmission_lines and deck.networks:
-        return _REFUSE_MIXED_NETWORKS
+    if deck.transmission_lines and deck.networks and _interleaves_networks(deck):
+        return _REFUSE_MIXED_ORDER
     if not deck.sources:
         return _REFUSE_NO_EX
     if len(deck.sources) > 1:
@@ -363,6 +371,26 @@ def refusal(deck: Nec5Deck) -> str | None:
     if not deck.requests:
         return _REFUSE_NO_REQUEST
     return None
+
+
+def _interleaves_networks(deck: Nec5Deck) -> bool:
+    """Does this deck write an ``NT`` card BEFORE a ``TL`` card?
+
+    Read off the deck's own text rather than off the model, and it has to be:
+    :class:`~momwire.deck._nec5.Nec5Deck` keeps its two card kinds in two
+    tuples, which is the right shape for everything else this seam does with
+    them and the one shape that cannot answer this question.  The card images
+    are already the printout's source of truth for the echo, so reading them
+    again here is the same reading applied to the same file.
+    """
+    kinds = [
+        card.mnemonic
+        for card in tokenize(deck.source_text)
+        if card.mnemonic in ("TL", "NT")
+    ]
+    if "TL" not in kinds or "NT" not in kinds:
+        return False
+    return kinds.index("NT") < len(kinds) - 1 - kinds[::-1].index("TL")
 
 
 class ServeRefusal(Exception):
@@ -578,14 +606,20 @@ class _Mesh:
 def _network_ends(deck: Nec5Deck):
     """Every ``TL``/``NT`` endpoint, card by card, end A before end B.
 
-    Card order is the deck's: no deck that reaches here writes both kinds
-    (the three that do stand over a ``GD`` ground and refuse a rung earlier,
-    and a mixed deck under a served ground refuses for its table layout), so
-    lines-then-networks IS the order they were read in.  The order is not
-    decoration — the
-    ``STRUCTURE EXCITATION DATA`` block prints its connection points in
-    exactly this discovery order, a point named twice printed once (0028's
-    six rows against its five cards).
+    Lines-then-networks, and since #504 U3 that is a MEASURED order rather than
+    a vacuous one.  It used to be true by default — no deck that reached here
+    wrote both kinds — and the three that do now reach it, so the claim was
+    checked against them instead: 0000's two ``TL`` and one ``NT`` print four
+    connection points, 0023's four and one print six, 0025's four and three
+    print eight, and all three blocks are in this order to the row.  Every
+    captured mixed deck writes its ``TL`` cards first, so the deck's own card
+    order and this one are the same order; a deck that interleaves them refuses
+    in :func:`refusal` rather than pick which one this becomes.
+
+    The order is not decoration.  The ``STRUCTURE EXCITATION DATA`` block
+    prints its connection points in exactly this discovery order, a point named
+    twice printed once (0028's six rows against its five cards, and 0025's
+    eight against its seven).
     """
     for card in (*deck.transmission_lines, *deck.networks):
         yield card.end_a

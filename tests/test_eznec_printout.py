@@ -227,6 +227,36 @@ def _pattern_row(line: str) -> PatternRow:
     )
 
 
+def _network_row(row: str) -> NetworkRow | LineRow:
+    """One ``NETWORK DATA`` row, in whichever of the two forms it is.
+
+    A ``TL`` row ends in a word (STRAIGHT / CROSSED) where an ``NT`` row ends
+    in a number, which is the whole of the difference: the four addresses and
+    the six cells before it are the same columns.  Read off the row itself
+    rather than off which sub-table it came from, so a mixed table's two runs
+    need no bookkeeping to tell apart.
+    """
+    fields = row.split()
+    crossed = fields[-1] if fields[-1][-1].isalpha() else None
+    values = [float(v) for v in fields[4 : 10 if crossed else None]]
+    address = (int(fields[0]), int(fields[1]), int(fields[2]), int(fields[3]))
+    if crossed:
+        return LineRow(
+            *address,
+            z0=values[0],
+            length_m=values[1],
+            shunt_a=complex(values[2], values[3]),
+            shunt_b=complex(values[4], values[5]),
+            crossed=crossed == "CROSSED",
+        )
+    return NetworkRow(
+        *address,
+        y11=complex(values[0], values[1]),
+        y12=complex(values[2], values[3]),
+        y22=complex(values[4], values[5]),
+    )
+
+
 def _power_budget(lines: list[str], start: int) -> PowerBudget:
     values = {}
     for line in _rows(lines, start):
@@ -270,36 +300,16 @@ def extract(text: str) -> RunData:
     networks: tuple[NetworkRow | LineRow, ...] = ()
     if (at := _section(lines, "- - - NETWORK DATA - - -")) is not None:
         rows = []
-        for row in _rows(lines, at + 5):
-            fields = row.split()
-            # A ``TL`` row ends in a word (STRAIGHT / CROSSED) where an ``NT``
-            # row ends in a number, which is the whole of the difference: the
-            # four addresses and the six cells before it are the same columns.
-            crossed = fields[-1] if fields[-1][-1].isalpha() else None
-            values = [float(v) for v in fields[4 : 10 if crossed else None]]
-            address = (
-                int(fields[0]),
-                int(fields[1]),
-                int(fields[2]),
-                int(fields[3]),
-            )
-            rows.append(
-                LineRow(
-                    *address,
-                    z0=values[0],
-                    length_m=values[1],
-                    shunt_a=complex(values[2], values[3]),
-                    shunt_b=complex(values[4], values[5]),
-                    crossed=crossed == "CROSSED",
-                )
-                if crossed
-                else NetworkRow(
-                    *address,
-                    y11=complex(values[0], values[1]),
-                    y12=complex(values[2], values[3]),
-                    y22=complex(values[4], values[5]),
-                )
-            )
+        # One heading, then one sub-table per run of same-kind rows, each with
+        # its own three column-header lines and separated by a single blank
+        # (0000/0023/0025, the mixed decks).  Walked as "while the next thing
+        # is a header block" so that a single-kind table is one turn of the
+        # same loop rather than a case of its own.
+        index = at + 2
+        while index < len(lines) and "- FROM -" in lines[index]:
+            block = _rows(lines, index + 3)
+            rows += [_network_row(row) for row in block]
+            index += 3 + len(block) + 1
         networks = tuple(rows)
 
     network_excitation: tuple[PortRow, ...] = ()
