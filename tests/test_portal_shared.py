@@ -369,16 +369,30 @@ def test_pattern_dust_prints_as_exact_zero(name):
 
 
 def _near_field_rows(text: str) -> list[list[str]]:
+    """The NEAR ELECTRIC/MAGNETIC FIELDS rows of a printout, scanned only
+    between that banner and its ``Near Field Compute Time`` terminator
+    (momwire#479): anchored the way ``_excitation_rows`` is, so no other
+    nine-token numeric table can drift into the gate, and an absent banner
+    yields no rows (which the callers assert on) instead of quietly
+    matching something else."""
     rows = []
+    in_block = False
     for ln in text.splitlines():
-        tok = ln.split()
-        if len(tok) != 9:
+        if "NEAR ELECTRIC FIELDS" in ln or "NEAR MAGNETIC FIELDS" in ln:
+            in_block = True
             continue
-        try:
-            float(tok[0])
-        except ValueError:
-            continue  # the header ("X"/"METERS" rows are 9 tokens too)
-        rows.append(tok)
+        if in_block:
+            if ln.startswith("    Near Field Compute Time"):
+                in_block = False
+                continue
+            tok = ln.split()
+            if len(tok) != 9:
+                continue
+            try:
+                float(tok[0])
+            except ValueError:
+                continue  # the column headers ("X"/"METERS") are 9 tokens too
+            rows.append(tok)
     return rows
 
 
