@@ -2263,9 +2263,15 @@ def test_a_cliff_mode_with_no_second_medium_still_prints_the_block():
     card. A cliff mode whose deck never sent a ``GD`` and never put the
     fields on its ``GN`` gets the block with four zeros in it — measured on
     the oracle, and the reason :func:`_far_field_ground_lines` renders a
-    missing record rather than skipping the block."""
+    missing record rather than skipping the block.
+
+    The probe deck is a FREE-SPACE cliff: since momwire#490 the grounded
+    no-medium cliff refuses by name (the oracle's own pattern table is NaN
+    there), so free space — where the oracle prints the zeros block and
+    real numbers, no image for the medium to steer — is where the
+    mode-not-card fact stays observable."""
     text = run_deck(
-        "CE cliff mode with no gd\nGW 1 9 0. 0. 0.5 0. 0. 5.0 0.001\nGE 1\nGN 1\n"
+        "CE cliff mode with no gd\nGW 1 9 0. 0. 0.5 0. 0. 5.0 0.001\nGE 0\n"
         "EX 0 1 1 0 1.\nFR 0 1 0 0 14.1 0\nRP 2 3 2 1001 0 0 30 90 1000\nXQ\n"
     )[0]
     assert "ERROR-NEC2C" not in text

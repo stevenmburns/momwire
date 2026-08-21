@@ -663,6 +663,25 @@ class _Nec2Parser:
                 f"RP mode {mode} is not supported by this engine "
                 f"(modes {', '.join(str(m) for m in sorted(_RP_MODES))} only)"
             )
+        # momwire#490: a cliff request over a ground with NO second medium
+        # stated.  An all-zero EPSR2/SIG2 pair is no medium, not a vacuum one
+        # (it is what a bare GN writes when it clears a GD), and the oracle's
+        # own pattern table is all-NaN in this state — measured 2026-08-21 on
+        # every route into it (no GD at all, empty GD, GD cleared by a later
+        # GN).  Serving the vacuum-image cliff momwire used to compute here
+        # was a confident wrong answer; the state gets a sentence instead.
+        # A cliff in FREE SPACE stays served: with no ground there is no
+        # image for the medium to steer, and the oracle prints the block and
+        # moves no number.
+        if mode != 0 and self._ground is not None:
+            second = self._second_medium
+            if second is None or (second.eps_r == 0.0 and second.sigma == 0.0):
+                raise DeckError(
+                    f"RP {mode} asks for a cliff pattern over a ground with "
+                    f"no second medium stated (an all-zero EPSR2/SIG2 pair "
+                    f"is no medium, not a vacuum one); state the far side "
+                    f"with a GD card, or use RP 0"
+                )
         return FarFieldRequest(
             mode=mode,
             n_theta=max(card.i(1), 1),
