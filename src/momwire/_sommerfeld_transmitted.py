@@ -154,8 +154,8 @@ _ZPRIME_MAX_LAMBDA_M = 0.25
 # Ladder sizing, measured on the FIVE SURFACES rather than phase 0's two
 # scalars — see `ladder_nodes` for the 1.5–2.3x that difference is worth and
 # why it is this unit's fourth inversion.
-_LADDER_PER_DECADE = 14.0
-_LADDER_PER_QUARTER = 6.0
+_LADDER_PER_DECADE = 18.0
+_LADDER_PER_QUARTER = 8.0
 _LADDER_MIN = 9
 
 # The observer lattice: log-spaced in R = √(ρ² + z²) and uniform in
