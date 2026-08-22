@@ -1094,10 +1094,18 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
     lam = 2.0 * np.pi / k2
     r1b_wl = _somm_r1_bucket_wl(min(float(r1_max) / lam, _SOMM_R1_CAP_LAMBDA))
     eps_b = _somm_eps_bucket(complex(eps_t))
-    key = (eps_b, k2, r1b_wl, float(omega), float(mu))
+    # The leading regime discriminator (momwire#553 U2): the below/below
+    # family tabulates a DIFFERENT surface family, over a different
+    # divide-out, on a lattice keyed to a different wavelength — and it
+    # keys on the same (eps_t, k2, r1, omega, mu). Without the tag the two
+    # regimes collide in this dict and whichever asked first would serve
+    # both. `_sommerfeld_below.get_grid_below` writes ("below", ...) keys
+    # into this same cache rather than forking it, so there is one FIFO
+    # bound and one eviction rule.
+    key = ("above", eps_b, k2, r1b_wl, float(omega), float(mu))
     grid = _GRID_CACHE.get(key)
     if grid is None:
-        nkey = (eps_b, r1b_wl)
+        nkey = ("above", eps_b, r1b_wl)
         master = _NORM_CACHE.get(nkey)
         if master is None:
             _evict_fifo(_NORM_CACHE, _NORM_CACHE_MAX)
