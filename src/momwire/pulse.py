@@ -17,6 +17,19 @@ between segments at all and the testing is a single point per row — so
 the gates are exactness of the PEC image twin and MONOTONE approach to
 `BSplineSolver`, never beating it.
 
+How low, and whose fault: this row's error is governed by Δ/a and not
+Δ/λ (the test below measures it), which is NOT a property of the pulse
+basis or of point matching. It is this module's choice to leave the
+charge as two POINT charges, where Harrington's own 1967 scheme spreads
+it over a half-shifted cell. `HarringtonSolver` is that scheme — same
+basis, same testing, same kernel, same feed, one ingredient different —
+and it converges O(1/N) with no Δ/a dependence at all, at ~1/64 the mesh
+on a thin wire (momwire#557). The two rows are kept side by side
+deliberately: the pair is the instrument that attributes the difference
+to the charge's SUPPORT, and this row is the one that costs no junction
+detection. Reach for `HarringtonSolver` — or the `pulse` roster name,
+which is it — for anything but that study.
+
 Formulation
 -----------
 One pulse per segment: I_n constant on segment n, carried along that
