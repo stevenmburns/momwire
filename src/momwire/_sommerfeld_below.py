@@ -97,7 +97,39 @@ _MAX_TAIL_PANELS = 4000
 # Cap on the R₁ a below/below grid will tabulate, in IN-MEDIUM wavelengths
 # λ_m = 2π/|k_m|. See `SommerfeldGridBelow` for why this is a product-regime
 # number and not the ±=+ family's 15λ.
-_SOMM_BELOW_R1_CAP_LAMBDA_M = 4.0
+#
+# 2, not 4, and the reason is a MEASUREMENT rather than a preference. The
+# grid → direct probe over the full served rectangle (R₁ ∈ [0, cap] × θ ∈
+# [1°, 90°], boundaries included, all six SPEC cells) puts a clean cliff at
+# exactly 2 λ_m — worst per R₁ band, over every cell and every θ band:
+#
+#   R₁ ∈ [0.0, 0.2) λ_m    5.8e-5
+#   R₁ ∈ [0.2, 1.0) λ_m    2.0e-4
+#   R₁ ∈ [1.0, 2.0) λ_m    1.6e-4
+#   R₁ ∈ [2.0, 4.0) λ_m    2.4e-3      ← 12x the rest
+#
+# The far annulus is 3-12x worse than everything inside it and would have
+# had to carry a pin 12x looser than the domain deserves. Densifying it
+# instead costs ~34 % more nodes for the steep band alone (Δθ 2.5° → 1.25°)
+# and ~75 % with the grazing band too, on a fill that is already ~85 s of
+# numpy — so the honest trade is the smaller domain, gated at 2e-4, with a
+# refusal by name past it rather than a loose pin over it. Densifying the
+# far annulus is a recorded follow-up for whoever needs the bigger domain,
+# and it wants the C++ twin first.
+#
+# What 2 λ_m buys at the SPEC soils: 20 m (A/7 MHz), 9.6 m (B/7), 36 m
+# (C/7), 7.7 / 5.0 / 12.7 m at 21 MHz. Buried radial screens live inside
+# that at HF; anything larger refuses and says so.
+_SOMM_BELOW_R1_CAP_LAMBDA_M = 2.0
+
+# Rows added past each end of a region's R₁ axis so that every IN-DOMAIN
+# query gets a centred 4x4 Lagrange stencil instead of the clamped
+# end-interval one. `SommerfeldGrid.eval` clips the stencil origin into
+# range, which turns a query in the last cell into the [2, 3] leg of the
+# cubic; measured on this family that is worth ~40x at the outer edge
+# (1.7e-5 against 4.6e-7 for the same point two cells further in). Two rows
+# per end is ~2 % of the node count and removes the edge as a special case.
+_SOMM_BELOW_PAD_ROWS = 2
 
 # The measured lattice (momwire#553 U2). Every number here came off a dense
 # per-point probe against `iv_surfaces_direct_below`, relative to each probe
@@ -782,10 +814,17 @@ class SommerfeldGridBelow(SommerfeldGrid):
         ]
 
         self._regions = []
+        pad = _SOMM_BELOW_PAD_ROWS
         for r0, r1, dr, th0, th1, dth in layout:
-            n_r = max(int(np.ceil((r1 - r0) / dr)) + 1, 4)
+            # Pad the R₁ axis past both ends (see `_SOMM_BELOW_PAD_ROWS`): a
+            # query anywhere in [r0, r1] then has two lattice rows on each
+            # side and gets the CENTRED leg of the cubic. The low end only
+            # pads where there is room — R₁ < 0 is not a geometry.
+            pad_lo = pad if r0 > 0.0 else 0
+            r_start = r0 - pad_lo * dr
+            n_r = max(int(np.ceil((r1 - r0) / dr)) + 1 + pad_lo + pad, 4)
             n_th = int(round((th1 - th0) / dth)) + 1
-            r_nodes = r0 + dr * np.arange(n_r)
+            r_nodes = r_start + dr * np.arange(n_r)
             th_nodes = np.radians(th0 + dth * np.arange(n_th))
             rr, tt = np.meshgrid(r_nodes, th_nodes, indexing="ij")
             surf = iv_surfaces_direct_below(
@@ -800,7 +839,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
             )
             self._regions.append(
                 {
-                    "r0": r0,
+                    "r0": r_start,
                     "dr": dr,
                     "n_r": n_r,
                     "th0": np.radians(th0),
