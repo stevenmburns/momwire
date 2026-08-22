@@ -213,12 +213,17 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
 
     The #504 U4 version of this docstring warned that the near-field rung would
     evict this tenant too and leave the gate needing a hand-edited deck.  It did
-    not: momwire#516 measured the near field under all four ground cards, found
-    that a finite half-space's cannot be answered here, and moved 0022's
-    sentence from the CARD to the GROUND under it rather than deleting it.  The
-    gate keeps a real capture, and it has six more waiting (0107, 0108, 0110,
-    0111, 0112, 0113) rather than none — which is the answer to a question a
-    docstring is allowed to have got wrong, as long as the next one says so.
+    not, twice over.  momwire#516 measured the near field under all four ground
+    cards, found that a finite half-space's could not be answered here, and
+    moved 0022's sentence from the CARD to the GROUND under it.  momwire#545
+    then landed the point evaluator that answers the finite half-space — and
+    0022 STILL refuses, because what its ``NE`` asks for is the field at
+    exactly (0, 0, 0), the base of its own monopole, where the composition is
+    singular and no sampling of it converges.  So the sentence moved once more,
+    from the ground to the POINT, and the gate still keeps a real capture with
+    two more waiting (0107, 0112).  Its four siblings (0108, 0110, 0111, 0113)
+    left the roster when #545 served them, which is what a rung landing looks
+    like from this side.
     """
     deck = tmp_path / "EZN5.NEC"
     deck.write_bytes((FIXTURE_DIR / capture("0022")["deck"]).read_bytes())
@@ -235,7 +240,7 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     assert written.index(stamp) < written.index(_ERROR_PREFIX)
     reason = written.rsplit(_ERROR_PREFIX, 1)[1].strip()
     assert reason.startswith(
-        "NE (near electric field) over a GN 0 finite ground is not served"
+        "NE (near electric field) asks for the field at (0, 0, 0) metres"
     )
     assert written == eznec.render_refusal(deck_text("0022"), reason)
 

@@ -18,12 +18,15 @@ drive: several ``EX 4`` cards at once, which is how this dialect spells an
 array, and since momwire#511 that drive may reach the structure THROUGH a
 network — a four-square is four set currents, and whether a ``TL`` hangs off
 it is the deck's business rather than the drive's.
-momwire#516 adds the NEAR field, ``NE`` and ``NH``, over the two grounds that
-can carry one — free space and ``GN 1`` — and refuses it over the other two by
-the GROUND's name rather than the card's ("One near field, two grounds that
-cannot have it", below).  Everything still above the rungs — a near field over
-a finite ground, a mixed table whose deck INTERLEAVES the two card kinds, the
-three multi-source shapes nothing has printed — refuses BY NAME through
+momwire#516 added the NEAR field, ``NE`` and ``NH``, over the two grounds that
+could carry one then — free space and ``GN 1`` — and momwire#545 finishes it:
+all four ground cards carry a near field, the two finite ones through the
+point evaluator :mod:`momwire._field_point` ("One near field, four grounds and
+one point", below).  What is left refuses the OBSERVATION POINT rather than the
+ground: the field at a contact-fed wire's base over a finite ground is singular
+and no sampling of it converges.  Everything still above the rungs — that one
+point, a mixed table whose deck INTERLEAVES the two card kinds, the three
+multi-source shapes nothing has printed — refuses BY NAME through
 :func:`refusal`, because a seam that answers a question it has no gate for is
 worse than one that says so.
 
@@ -171,52 +174,74 @@ previous run`` postamble that all four ``GN 0`` captures carry.  The engine
 announces ``Will compute Sommerfeld-ground tables`` from a stale cache check
 and then computes none, because this mode never wanted any.
 
-One near field, two grounds that cannot have it
------------------------------------------------
-``NE`` and ``NH`` are served over free space and over ``GN 1``, and refused
-by the GROUND's name over ``GN 0`` and over the bare ``GD``.  The matrix was
-measured (momwire#516, capture family 0107-0115, manifest
-``near_field_family``) rather than assumed, and it is NOT the split the
-sections above make.  There, ``GD`` and ``GN 0`` are two different grounds
-and the identity ``Z(GD) == Z(GN 1)`` is the rung's sharpest fact.  Here they
-are the SAME cell:
+One near field, four grounds and one point
+------------------------------------------
+``NE`` and ``NH`` are served over all four ground cards.  The matrix was
+measured (momwire#516's capture family 0107-0115, manifest
+``near_field_family``; momwire#545's routing) rather than assumed, and every
+served cell carries its own envelope, worst PRINTED cell of the whole table
+against the capture's, magnitude relative to that cell and phase in degrees:
 
-  ground     card       what happens          worst live cell against capture
-  ``GN -1``  ``NE``     served                1.9482 % / 0.30 deg (0115)
-  ``GN 1``   ``NE``     served                5.4488 % / 1.50 deg (0109)
-  ``GD``     ``NE``     refused by name       image is 2.85x low (0107)
-  ``GN 0``   ``NE/NH``  refused by name       image is 2.77x low (0112)
+  ground     card    capture   worst |cell|   worst phase   composition
+  ``GN -1``  ``NE``  0115         1.9482 %      0.30 deg    direct
+  ``GN 1``   ``NE``  0109         5.4488 %      1.50 deg    direct + image
+  ``GD``     ``NE``  0108         5.4526 %      1.23 deg    direct + C2·img + rem
+  ``GN 0``   ``NE``  0110         5.3076 %      1.26 deg    direct + C2·img + rem
+  ``GN 0``   ``NH``  0111         6.6992 %      0.33 deg    the same, curled
+  ``GN 0``   ``NE``  0113         1.8123 %      0.30 deg    direct + C2·img + rem
 
-The two served cells are ``_element_fields`` — the portal's mixed-potential
-readout, one owner per readout — over the elements alone or over the elements
-plus their geometric mirror.  Their numbers sit in the same family the
-impedance envelopes do, which is what says the near field is the same solve
-read out at a different place rather than a second one.
+Four spellings of one line.  ``direct`` is ``_element_fields`` — the portal's
+mixed-potential readout, one owner per readout; ``img`` is the geometric
+mirror of it; ``rem`` is :mod:`momwire._field_point`, which is the matrix
+fill's own azimuth combination of the four Sommerfeld interpolation surfaces
+kept as a VECTOR so that an observer can be a point in space rather than a
+wire element.  ``C2 = (ε̃−1)/(ε̃+1)``, and the whole thing is NEC's own
+decomposition of the half-space Green's function (theory manual eqs 136-147)
+read out at a point.  All six numbers sit in the family the impedance
+envelopes do, which is what says the near field is the same solve read out at
+a different place rather than a second one.
 
-The two refused cells are refused for a reason that is measured twice over.
-First, the engine's near field over a bare ``GD`` is its ``GN 0`` near field:
-0108 and 0110 are one grid over one medium with only the ground mnemonic
-changed and their tables agree to 4.4 % worst-cell, INCLUDING the ``EY``
-column that a vertical monopole's symmetry forbids — 1.7359E-02 against
-1.7342E-02, the same Sommerfeld interpolation dust in both, in a column a
-PEC image makes exactly zero.  So the MININEC-type ground reflects off its
-medium in the far field and SOLVES its near field in it, and the far-field
-rung's ``GD``/``GN 1`` identity says nothing about this table.
+The load-bearing finding is which MEDIUM each ground reads out in, and it is
+the same one momwire#516 measured — now the ROUTE rather than the evidence for
+a refusal.  The engine's near field over a bare ``GD`` is its ``GN 0`` near
+field: 0108 and 0110 are one grid over one medium with only the ground
+mnemonic changed and their tables agree to 4.4 % worst-cell, INCLUDING the
+``EY`` column that a vertical monopole's symmetry forbids — 1.7359E-02 against
+1.7342E-02, the same Sommerfeld interpolation dust in both, in a column a PEC
+image makes exactly zero.  So the MININEC-type ground reflects off its medium
+in the far field and SOLVES its near field in it, and the far-field rung's
+``GD``/``GN 1`` identity says nothing about this table.  :func:`_near_medium`
+is that sentence in code: ``GN 0``'s ε̃ comes off its own Sommerfeld solve and
+``GD``'s is folded from the deck's medium, because its solver never saw one.
+The seam reproduces the captures' own cross-agreement with its own numbers —
+1.54 % of table scale between the served 0108 and the served 0110, well inside
+the 4.4 % the two engine tables sit apart at.
 
-Second, momwire cannot answer either of them honestly.  Its Sommerfeld
-machinery (:mod:`momwire._field_ground`) is a matrix FILL: prepared per solve,
-replayed at observer sets that are wire elements with tangents, returning
-tangential projections between source and observer.  There is no evaluator for
-a vector field at a point in space over that ground, and building one is a
-solver change rather than a seam change.  What the seam CAN build is the PEC
-image of the solved currents, and it is not close: 0107's origin cell prints
-6.6673E+02 V/m against an image's 2.34E+02, 0112's 8.2521E+02 against 2.98E+02,
-0110's ``EZ`` at (1, 0, 2) 1.5290E+01 against 7.88E+00.  A factor of two is not
-an envelope, so the request refuses and says which card to change — which is
-the same discipline the divergent 0033/0034 are reported under rather than
-pinned.  The nec2 half of this tree reached the same conclusion from the other
-side and refuses ``NE``/``NH`` over its own finite grounds by name
-(``momwire.portal._portal._near_field_lines``, momwire#388).
+What is NOT served is one CELL, and it is a point rather than a ground.  0022,
+0107 and 0112 all ask for the field at exactly (0, 0, 0) — the base of a
+contact-fed monopole standing on a finite ground — and the composition there
+is SINGULAR: the image cancels the base node's continuity charge only by
+``1 − C2 = 2/(1 + ε̃)``, so a finite residual charge sits exactly at the
+observer.  The subdiv ladder there does not converge, it grows: 36.6 / 141 /
+298 / 588 / 978 / 1230 V/m at subdiv 1 / 4 / 8 / 16 / 32 / 64, while the engine
+prints 8.2521E+02 ∠162.15° for 0112 and 6.6673E+02 for 0107 — numbers that sit
+BETWEEN our subdiv-16 and subdiv-32 rungs, which is the sharpest way to say
+neither party has converged.  Printing a rung would publish an artefact of
+``_NEAR_FIELD_SUBDIV``; printing the engine's would tune a sampling constant
+against an oracle.  So :func:`_near_field_refusal` names the POINT — the card,
+the coordinate, the wire whose base it is — and says the near field is served
+at every point off the contact.  The ladders are gated in
+``tests/test_field_point.py`` as gates that FAIL IF FIXED: a ladder that
+converged would mean the composition changed and this sentence needs
+re-measuring.
+
+Over a PERFECT ground the same point is ordinary, which is why the refusal is
+finite-ground-only: ``C2 = 1`` there, the image cancels the contact charge
+EXACTLY, and there is no residual to diverge on.
+
+The nec2 half of this tree still refuses ``NE``/``NH`` over its own finite
+grounds by name (``momwire.portal._portal._near_field_lines``, momwire#388) —
+same evaluator, different seam, and a follow-up rather than a disagreement.
 
 The budget's own arithmetic
 ---------------------------
@@ -266,7 +291,7 @@ import numpy as np
 
 from ..bspline import BSplineSolver
 from ..deck._cards import tokenize
-from .. import _ground_spec
+from .. import _field_point, _ground_refl, _ground_spec
 from ..deck._nec5 import (
     Nec5Deck,
     Nec5FarFieldRequest,
@@ -421,34 +446,30 @@ _REFUSE_TWO_DRIVES_ONE_PORT = (
     "are one boundary condition written twice - no captured deck writes that, "
     "and this seam will not decide which of them wins"
 )
-# The near-field refusal names the GROUND and not the card, because the card
-# is served: free space and ``GN 1`` answer, and the two finite grounds do not.
-# Measured 2026-08-21 on the sitting-4 family (module docstring, "One near
-# field, two grounds that cannot have it").
-_REFUSE_NEAR_FIELD_GROUND = (
-    "{card} over {ground} is not served at this seam: NEC-5 evaluates the near "
-    "field of a finite half-space with a Sommerfeld integral at the observation "
-    "point, and momwire has no such evaluator - its Sommerfeld machinery fills a "
-    "matrix between wire elements and never answers at a point in space. The "
-    "best image this seam could build is wrong by a factor of two on the "
-    "captured tables ({evidence}), which is not an answer worth printing. The "
-    "same deck's FAR field, its currents, its charges and its impedance are all "
-    "served - delete the {card} card to get them"
+# The near-field refusal names the POINT.  Every ground carries a near field
+# since momwire#545; what does not is one CELL of one grid — an observation
+# point sitting exactly on a wire's ground contact over a finite ground, where
+# the composed field is singular and its own subdiv ladder diverges (module
+# docstring, "One near field, four grounds and one point").  The ladder's two
+# ENDS are quoted so the operator can see the divergence rather than take it on
+# trust; the whole ladder is measured on 0112 and gated, rung by rung, in
+# `tests/test_field_point.py`.
+_REFUSE_NEAR_FIELD_CONTACT = (
+    "{card} asks for the field at ({x:g}, {y:g}, {z:g}) metres, which is where "
+    "wire {tag} stands on this deck's finite ground - and the field AT a "
+    "contact-fed wire's base over a finite ground is singular. The image "
+    "cancels the base node's charge only by 2/(1+epsilon), so a finite "
+    "residual charge sits exactly at the observation point and the composed "
+    "field there grows without bound as the solved current is resampled - 36.6 "
+    "V/m at one sample per element, 1230 V/m at sixty-four. The engine's own "
+    "printed cell is its discretization's regularization of that same "
+    "singularity and sits INSIDE that ladder rather than at the end of it, so "
+    "this seam will not print a number that is an artifact of a sampling "
+    "constant. The same deck's FAR field, its currents, its charges and its "
+    "impedance are all served, and the near "
+    "field is served at every point off the contact - move the {card} card's "
+    "observation point off wire {tag}'s base"
 )
-_NEAR_FIELD_GROUND_NAMES = {
-    "sommerfeld": "a GN 0 finite ground",
-    "mininec": "the bare GD MININEC-type ground",
-}
-# One cell per ground, quoted in the refusal so the operator can see the size
-# of the gap rather than take it on trust.  Both are EZ, both are the strongest
-# cell of their own table, and both compare the capture against this seam's
-# best PEC-image reading of its own solved currents.
-_NEAR_FIELD_EVIDENCE = {
-    "sommerfeld": "capture 0112 prints EZ 8.2521E+02 V/m at the origin and an "
-    "image gives 2.98E+02",
-    "mininec": "capture 0107 prints EZ 6.6673E+02 V/m at the origin and an "
-    "image gives 2.34E+02",
-}
 _REFUSE_BURIED_WIRE = (
     "wire {tag} runs below the ground plane (min z = {zmin:g} m) - buried "
     "wires are not served: momwire models wires at or above the interface, "
@@ -481,12 +502,23 @@ def refusal(deck: Nec5Deck) -> str | None:
     the request — so a deck that is out of scope in several ways names the
     reason a reader would fix first.  It is the ladder's own shape, and every
     rung that lands moves decks DOWN it rather than changing it: 0022 named its
-    ``GN 0``, then its ``NE`` once the ground rung landed, and since
-    momwire#516 names BOTH — the card is served and the ground under it is not,
-    so the sentence has to carry the pair; the three mixed-card decks (0000,
-    0023, 0025) named their ground, then their TL-and-NT table, and now name
-    nothing at all; and 0031 named its ground, then its four ``EX`` cards, and
-    now names nothing either.
+    ``GN 0``, then its ``NE`` once the ground rung landed, then the PAIR once
+    momwire#516 measured which grounds could carry a near field, and since
+    momwire#545 names neither — the card is served, the ground under it is
+    served, and what is left is the single OBSERVATION POINT its ``NE`` asks
+    about, which is the base of its own monopole; the three mixed-card decks
+    (0000, 0023, 0025) named their ground, then their TL-and-NT table, and now
+    name nothing at all; and 0031 named its ground, then its four ``EX`` cards,
+    and now names nothing either.
+
+    That last move is the shape of a refusal shrinking rather than lifting.
+    momwire#545's evaluator gives every one of the four ground cards a near
+    field, so the near-field rung's sentence stopped being about a CAPABILITY
+    and became about a CELL: 0110 and 0022 are the same deck and the same
+    ground, and only the grid separates them (0110's five-by-five grid stands
+    off the wire and is served; 0022's single point is the contact node and is
+    not).  A refusal that names a point rather than a ground is one no rung can
+    land on — nothing converges there, on either side of the seam.
 
     There is no ground refusal left to put first, no mixed-table refusal and,
     since #504 U4, no plain multi-source one — and since momwire#511 no
@@ -557,36 +589,100 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
     return None
 
 
-def _near_field_refusal(deck: Nec5Deck, request: Nec5NearFieldRequest) -> str | None:
-    """``None`` when this deck's ground can carry a near field, the sentence when
-    it cannot.
-
-    Two of the four ground cards answer and two do not, and the split is not
-    the one the far-field rungs made.  There, ``GD`` and ``GN 0`` differ only
-    in which currents they start from and both end in a Fresnel-weighted
-    image; here they are the SAME refusal, because the engine evaluates both
-    of their near fields the same way and it is a way momwire has no evaluator
-    for.  The evidence for that is 0108 against 0110 — one grid, one medium,
-    only the ground mnemonic changed — whose tables agree to about 2 % in
-    every column INCLUDING the ``EY`` one that a vertical monopole's symmetry
-    forbids: 1.7359E-02 against 1.7342E-02, the same Sommerfeld interpolation
-    dust in both, where a PEC-image readout of the ``GD`` currents prints
-    exactly zero.  A ``GD`` reflects off its medium in the FAR field and
-    solves its near field in it.
-    """
-    if isinstance(deck.ground, Nec5MininecGround):
-        kind = "mininec"
-    elif isinstance(deck.ground, Nec5SommerfeldGround):
-        kind = "sommerfeld"
-    else:
-        return None
-    return _REFUSE_NEAR_FIELD_GROUND.format(
-        card="NH (near magnetic field)"
-        if request.magnetic
-        else "NE (near electric field)",
-        ground=_NEAR_FIELD_GROUND_NAMES[kind],
-        evidence=_NEAR_FIELD_EVIDENCE[kind],
+def _near_field_card(request: Nec5NearFieldRequest) -> str:
+    """``NE``/``NH`` spelled the way a refusal names it."""
+    return (
+        "NH (near magnetic field)" if request.magnetic else "NE (near electric field)"
     )
+
+
+def _grid_points(request: Nec5NearFieldRequest) -> np.ndarray:
+    """An ``NE``/``NH`` card's observation points, in the printout's own order.
+
+    ``NE 0,NX,NY,NZ,X1,Y1,Z1,DX,DY,DZ`` walks X fastest, then Y, then Z.  No
+    capture separates the Y nesting from the Z one — every captured grid is
+    ``NY = 1`` — so it was measured on the linux oracle (2026-08-21) at
+    ``NX = 2, NY = 3, NZ = 2``, and it is the same nesting the nec2 portal
+    measured off nec2c.  The points are in METRES and unnormalized.
+
+    One walk, two consumers: :func:`_near_field` prints these rows and
+    :func:`_near_field_refusal` asks whether any of them lands on a ground
+    contact.  A refusal that walked its own grid could refuse a point the
+    table never prints, or miss one it does.
+    """
+    n_x, n_y, n_z = request.counts
+    start = np.asarray(request.origin, dtype=float)
+    step = np.asarray(request.step, dtype=float)
+    return np.array(
+        [
+            start + np.array([ix, iy, iz]) * step
+            for iz in range(n_z)
+            for iy in range(n_y)
+            for ix in range(n_x)
+        ]
+    )
+
+
+def _contact_ends(deck: Nec5Deck) -> list[tuple[int, np.ndarray, float]]:
+    """``(tag, point, tolerance)`` for every wire END standing in the plane.
+
+    The tolerance is the SOLVER's own, per wire — `_ground_spec.
+    ground_touch_tol`, 1e-6 of the wire's length, the same spelling
+    :func:`_geometry_refusal` uses — so "this end stands on the ground" means
+    here exactly what it means to the basis that will grow an image off it.
+    """
+    ends: list[tuple[int, np.ndarray, float]] = []
+    for wire in deck.wires:
+        pl = np.array([wire.end1, wire.end2], dtype=float)
+        tol = _ground_spec.ground_touch_tol(pl)
+        for point in pl:
+            if abs(float(point[2])) <= tol:
+                ends.append((wire.tag, point, tol))
+    return ends
+
+
+def _near_field_refusal(deck: Nec5Deck, request: Nec5NearFieldRequest) -> str | None:
+    """``None`` when every requested point can be answered, the sentence when
+    one of them cannot.
+
+    All four ground cards carry a near field since momwire#545, so what is
+    refused here is not a ground but a CELL: an observation point sitting on
+    the ground CONTACT of a wire, over a finite ground.  The composition there
+    is singular — the image cancels the base node's continuity charge only by
+    ``1 − C₂ = 2/(1 + ε̃)``, so a finite residual charge sits exactly at the
+    observer — and its subdiv ladder diverges rather than converging (36.6 →
+    1230 V/m over subdiv 1 → 64, gated in ``tests/test_field_point.py``).  The
+    engine's own printed cell sits BETWEEN two of those rungs, which is what
+    says it is its discretization's regularization of the same singularity and
+    not a converged answer either.  Printing a rung would publish an artefact
+    of :data:`_NEAR_FIELD_SUBDIV`; printing the engine's would tune a sampling
+    constant against an oracle.  Both are forbidden, so the point refuses.
+
+    Exactly that and no more.  A point ON a wire away from the ground is not
+    refused (no capture asks, and the mixed-potential readout's own
+    regularization owns that cell); an elevated grid over a finite ground is
+    not refused (0113 is served); and NOTHING over ``GN 1`` or free space is
+    refused, because over a PERFECT ground the image cancels the contact
+    charge EXACTLY — ``C₂ = 1``, ``1 − C₂ = 0`` — and the singularity this
+    sentence is about is not there to find.  The corpus decides the scope of
+    anything wider.
+    """
+    if not isinstance(deck.ground, (Nec5MininecGround, Nec5SommerfeldGround)):
+        return None
+    contacts = _contact_ends(deck)
+    if not contacts:
+        return None
+    for point in _grid_points(request):
+        for tag, contact, tol in contacts:
+            if float(np.linalg.norm(point - contact)) <= tol:
+                return _REFUSE_NEAR_FIELD_CONTACT.format(
+                    card=_near_field_card(request),
+                    x=point[0],
+                    y=point[1],
+                    z=point[2],
+                    tag=tag,
+                )
+    return None
 
 
 def _drive_refusal(deck: Nec5Deck) -> str | None:
@@ -1997,6 +2093,42 @@ def _pattern(
 _NEAR_FIELD_SUBDIV = 8
 
 
+def _near_medium(
+    deck: Nec5Deck, solver: BSplineSolver, medium: GroundMedium | None
+) -> tuple[complex, complex] | None:
+    """``(ε̃, C₂)`` for the medium a near field is EVALUATED in, or ``None``
+    when the ground has no medium to evaluate in (free space, ``GN 1``).
+
+    Both finite cards land here and they arrive by different roads, which is
+    the whole content of the function.  ``GN 0`` solved IN its medium, so
+    `_solver_for` gave the solver a ``ground_eps`` and
+    :func:`~momwire._ground_spec.ground_config` — the one owner of ``C₂`` in
+    this tree — reads it straight back off the solve.  The bare ``GD`` solved
+    over a PERFECT image and its solver never saw the medium at all, so the
+    same call would hand back the PEC row (``eps_tilde=None``,
+    ``image_coefficient=1.0``): right for its CURRENTS (the ``Z ≡ GN 1``
+    identity) and wrong for its near field, which the engine solves in the
+    medium (module docstring, "One near field, four grounds and one point").
+    So ``GD``'s ε̃ is folded here from the deck's own medium instead, through
+    :func:`~momwire._ground_refl.eps_tilde` — the same function
+    ``ground_config`` would have called, given the same ``(εr, σ)`` — and
+    ``C₂`` is written out in the one expression ``ground_config`` writes it
+    in.  Two roads, one arithmetic; a ``GD`` near field that came back with
+    ``C₂ = 1`` and no remainder would be the aliasing bug, and it is gated as
+    one (``tests/test_field_point.py``).
+    """
+    if medium is None:
+        return None
+    config = _ground_spec.ground_config(solver, solver.omega)
+    if config is not None and config.mode == "compose":
+        assert config.eps_tilde is not None
+        return config.eps_tilde, complex(config.image_coefficient)
+    eps_t = _ground_refl.eps_tilde(
+        (medium.eps_r, medium.sigma), solver.omega, solver.eps
+    )
+    return eps_t, (eps_t - 1.0) / (eps_t + 1.0)
+
+
 def _near_field(
     request: Nec5NearFieldRequest,
     solver: BSplineSolver,
@@ -2004,28 +2136,41 @@ def _near_field(
     deck: Nec5Deck,
     mesh: _Mesh,
     wavelength: float,
+    medium: GroundMedium | None,
 ) -> NearFieldBlock:
-    """One ``NE``/``NH`` card's answer, over the two grounds that can have one.
+    """One ``NE``/``NH`` card's answer, over all four ground cards.
 
     The readout is the PORTAL's — ``_element_fields``, the mixed-potential
     form the nec2 front end already answers ``NE``/``NH`` with — for the same
-    reason the far-field readout is: one owner per readout.  What this
-    function owns is the grid, the image and the units.
+    reason the far-field readout is: one owner per readout.  The ground
+    REMAINDER at a point is :mod:`momwire._field_point`'s, for the same reason
+    again.  What this function owns is the grid, the composition and the units.
 
-    THE GRID.  ``NE 0,NX,NY,NZ,X1,Y1,Z1,DX,DY,DZ`` walks X fastest, then Y,
-    then Z.  No capture separates the Y nesting from the Z one — every
-    captured grid is ``NY = 1`` — so it was measured on the linux oracle
-    (2026-08-21) at ``NX = 2, NY = 3, NZ = 2``, and it is the same nesting the
-    nec2 portal measured off nec2c.  The points are printed in METRES and
-    unnormalized; the current and charge tables above them are normalized, and
-    mixing the two would put the whole grid 43 wavelengths-worth too close.
+    THE GRID is :func:`_grid_points`', shared with the refusal so that the
+    points a table prints and the points a refusal inspects are one list.
 
-    THE IMAGE.  Free space sums the elements alone; ``GN 1`` adds the
-    geometric mirror — the same image the far field uses, with the horizontal
-    moments flipped and the continuity charge NEGATED, which is one statement
-    twice over (reversing a horizontal current reverses dI/ds, and mirroring a
-    vertical one reverses the arc direction).  The two finite grounds never
-    reach here: :func:`_near_field_refusal` turned them away at the card.
+    THE COMPOSITION is one line with four spellings, and which one a deck gets
+    is its ground card's:
+
+      ``GN -1``  the elements alone
+      ``GN 1``   the elements plus their geometric mirror
+      ``GN 0``   ``direct + C₂·image + remainder``, ε̃ off the Sommerfeld solve
+      ``GD``     the same, ε̃ off the deck's medium (the currents are the
+                 PEC-image solve's; the near field is still in the medium)
+
+    The IMAGE is the same one the far field uses — the geometric mirror with
+    the horizontal moments flipped and the continuity charge NEGATED, which is
+    one statement twice over (reversing a horizontal current reverses dI/ds,
+    and mirroring a vertical one reverses the arc direction).  Over the two
+    finite grounds that image is scaled by ``C₂ = (ε̃−1)/(ε̃+1)`` and a smooth
+    REMAINDER is added to it, which is NEC's own decomposition of the
+    half-space Green's function (theory manual eqs 136-147) evaluated at a
+    point rather than between two wire elements.
+
+    The association is `_field_ground.FieldGround`'s ``"compose"`` contract and
+    not a style: the coefficient goes on the LEFT of the block and ``coef·img
+    + rem`` is associated before the outer sum, because that contract is about
+    float64 evaluation order.
 
     THE UNITS.  Volts and amps per metre at the point, PEAK, in whatever basis
     the deck's own ``EX`` card set — nothing is scaled.  EZNEC writes
@@ -2037,19 +2182,12 @@ def _near_field(
     out of the sum as a signed zero or as fill round-off, and the angle of a
     zero is not a number.  Floored at the portal's own bar and printed as
     ``0.0000E+00     0.00``, which is what the captures print in those columns
-    (0109's whole ``EY`` column, 0111's ``HZ``).
+    (0109's whole ``EY`` column, 0111's ``HZ``).  The engine's own finite-ground
+    tables print interpolation DUST in those columns instead (0110's ``EY`` at
+    1.7342E-02 of a 1.5E+01 table), which is why the served envelopes gate them
+    by magnitude and never by phase.
     """
-    n_x, n_y, n_z = request.counts
-    start = np.asarray(request.origin, dtype=float)
-    step = np.asarray(request.step, dtype=float)
-    points = np.array(
-        [
-            start + np.array([ix, iy, iz]) * step
-            for iz in range(n_z)
-            for iy in range(n_y)
-            for ix in range(n_x)
-        ]
-    )
+    points = _grid_points(request)
     k = 2.0 * math.pi / wavelength
     radius = min(piece.radius for piece in mesh.pieces)
     mid, moment, nodes, delta = solver.element_currents(
@@ -2057,17 +2195,30 @@ def _near_field(
     )
     elements = (mid, moment, nodes, delta)
     field = _element_fields(points, elements, k, radius, request.magnetic)
-    if isinstance(deck.ground, Nec5PerfectGround):
+    near = _near_medium(deck, solver, medium)
+    if isinstance(deck.ground, Nec5PerfectGround) or near is not None:
         mid_img, moment_img = _image_moments(mid, moment, 0.0)
         nodes_img = nodes.copy()
         nodes_img[:, 2] = -nodes[:, 2]
-        field = field + _element_fields(
+        image = _element_fields(
             points,
             (mid_img, moment_img, nodes_img, -delta),
             k,
             radius,
             request.magnetic,
         )
+        if near is None:
+            field = field + image
+        else:
+            eps_t, coef = near
+            evaluate = (
+                _field_point.reflected_h_field_at
+                if request.magnetic
+                else _field_point.reflected_field_at
+            )
+            remainder = evaluate(points, mid, moment, eps_t, 0.0, k, solver.omega)
+            np.multiply(coef, image, out=image)
+            field = field + (image + remainder)
 
     rows = []
     for point, value in zip(points, field, strict=True):
@@ -2253,7 +2404,7 @@ def serve(deck: Nec5Deck) -> RunData:
             efficiency_percent=(100.0 * p_radiated / p_in) if p_in > 0 else 0.0,
         ),
         near_fields=tuple(
-            _near_field(request, solver, coeffs, deck, mesh, wavelength)
+            _near_field(request, solver, coeffs, deck, mesh, wavelength, medium)
             for request in deck.requests
             if isinstance(request, Nec5NearFieldRequest)
         ),
