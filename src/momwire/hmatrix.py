@@ -49,6 +49,7 @@ from ._port_solution import PortSolution
 from . import _ground_mirror, _ground_refl, _potential_ground, _sommerfeld
 from ._bspline_kernels import (
     _ek_radius,
+    _refuse_complex_k,
     _seg_seg_full_moments_offedge,
     _seg_seg_reg_moments,
     _seg_seg_static_moments,
@@ -559,6 +560,11 @@ class HMatrixSolver(BSplineSolver):
         """
         if k is None:
             k = self.k
+        # HMatrixSolver has no medium concept (no per-segment medium, no
+        # in-medium admissibility, and a fused C++ assembler taking
+        # `double k`), so an in-medium k reaching here is a caller error,
+        # not a capability gap to paper over — momwire#553 unit 1.
+        _refuse_complex_k(k, "HMatrixSolver.zblock")
         ctx = self._context()
         # Reset the per-k same-edge cache when k changes.
         if getattr(self, "_hm_se_cache_k", None) != k:
@@ -1786,6 +1792,7 @@ class HMatrixSolver(BSplineSolver):
         """
         if self._hmatrix_unsupported() or self._swept_prefers_dense():
             return super().compute_impedance_swept(k_array)
+        _refuse_complex_k(k_array, "HMatrixSolver.compute_impedance_swept")
         k_array = np.asarray(k_array, dtype=float)
         n_ports = self._port_count()
         if n_ports == 1:
@@ -1863,6 +1870,7 @@ class HMatrixSolver(BSplineSolver):
         if self._hmatrix_unsupported() or self._swept_prefers_dense():
             yield from super()._port_solutions_swept(k_array)
             return
+        _refuse_complex_k(k_array, "HMatrixSolver._port_solutions_swept")
         with self._k_restored():
             for kk in np.asarray(k_array, dtype=float):
                 self._checkpoint()  # top of each frequency iteration
