@@ -72,7 +72,6 @@ from ._sommerfeld import (
     _bessel_j0_j1x,
     _d12,
     _evict_fifo,
-    _somm_eps_bucket,
     _somm_r1_bucket_wl,
     SommerfeldGrid,
 )
@@ -918,17 +917,49 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
 
     No normalized-master layer here (see `SommerfeldGridBelow`): the
     physical grid is what gets cached.
+
+    **The ε̃ ladder does NOT apply below, and this is the third appearance
+    of one inversion.** `_somm_eps_bucket` quantizes Im(ε̃) onto a 1 %
+    geometric ladder so a frequency sweep collapses to a few fills. Its
+    calibration is explicit that a relative Im perturbation δ moves the
+    ±=+ surfaces by only ~(0.08–0.14)·δ of scale, i.e. ≲7e-4 at the 0.5 %
+    worst offset — comfortably under that family's ~2e-3 interpolation bar.
+    Every word of that rests on the ±=+ premise that the remainder is a
+    small correction to direct + image.
+
+    Below the interface it is not, and the arithmetic inverts with it. The
+    surfaces carry e^{+j(k_p ρ + k_m h)} with k_m = k_p√ε̃, so a relative
+    Im shift δ moves the phase by ~½·δ·|k_m|R₁, which at the 2 λ_m cap is
+    ~½·δ·4π ≈ 6·δ — GROWING with R₁ instead of being damped by 0.1. At the
+    ladder's 0.4 % worst offset that is a ~2e-2 phase error, and because
+    the remainder carries the whole field out there (measured: 12×, 168×
+    direct+image at working range) it lands on the composed answer at the
+    same size. Measured at (B/7 MHz, R₁ = 1.31 λ_m, θ = 2.18°): grid built
+    at the bucketed ε̃ = 20 − 77.34644j against direct at the caller's
+    exact 20 − 77.03616j reads 5.98e-3 / 1.52e-2 / 4.13e-3 / 6.59e-3 per
+    surface, against 1.5e-6 … 5.7e-5 when both sides share one ε̃.
+
+    And it buys nothing here. ε̃ = ε_r − jσ/(ωε₀) is frequency-dependent,
+    so a sweep re-keys on ω anyway (this family has no normalized master to
+    amortize across frequencies), and a single deck is a single ε̃. So the
+    below family keys and FILLS on the caller's exact ε̃. The above/above
+    ladder in `_sommerfeld.get_grid` is untouched — its premise still holds
+    there.
+
+    `r1_max` is still bucketed up: the lattice spacing is fixed, so a grid
+    tabulated further out has node positions that coincide exactly with the
+    smaller one's and interpolates identically inside it.
     """
     k2 = float(k2)
+    eps_t = complex(eps_t)
     lam_m = 2.0 * np.pi / abs(k_medium(eps_t, k2))
     r1b_wl = _somm_r1_bucket_wl(min(float(r1_max) / lam_m, _SOMM_BELOW_R1_CAP_LAMBDA_M))
-    eps_b = _somm_eps_bucket(complex(eps_t))
-    key = ("below", eps_b, k2, r1b_wl, float(omega), float(mu))
+    key = ("below", eps_t, k2, r1b_wl, float(omega), float(mu))
     grid = _GRID_CACHE.get(key)
     if grid is None:
         _evict_fifo(_GRID_CACHE, _GRID_CACHE_MAX)
         grid = SommerfeldGridBelow(
-            eps_b, k2, r1b_wl * lam_m, omega=float(omega), mu=float(mu), health=health
+            eps_t, k2, r1b_wl * lam_m, omega=float(omega), mu=float(mu), health=health
         )
         _GRID_CACHE[key] = grid
     return grid
