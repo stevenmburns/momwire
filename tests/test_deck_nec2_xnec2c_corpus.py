@@ -76,20 +76,62 @@ def _cards(text: str):
     return out
 
 
-def _decks() -> dict[str, list]:
-    """Every corpus deck that writes a ``GX`` or a ``GR``, name -> cards."""
+def _decks() -> tuple[dict[str, list], tuple[str, ...]]:
+    """Every corpus deck that writes a ``GX`` or a ``GR``, name -> cards,
+    plus the names of any deck that would not tokenize at all.
+
+    The second return value exists because of how this module failed for
+    months.  It tokenizes at IMPORT, so a deck the reader cannot even
+    tokenize used to raise straight out of collection — and a collection
+    error is not a test failure: every test in the file errored at once,
+    none of them ran, and the only thing that could have said the corpus had
+    drifted (``test_the_corpus_is_the_one_this_module_measures``) was among
+    the casualties.  The lane was dark and looked, in a summary line, like
+    four errors in someone else's module.
+
+    So an unreadable deck is DATA here, not an exception, and
+    ``test_no_corpus_deck_is_unreadable`` turns it into one named failure
+    carrying its own remedy.  A dark lane is worse than a red one.
+    """
     if not CORPUS.is_dir():
-        return {}
-    found = {}
+        return {}, ()
+    found, unreadable = {}, []
     for path in sorted(CORPUS.glob("*.nec")):
-        cards = _cards(path.read_text())
+        try:
+            cards = _cards(path.read_text())
+        except DeckError:
+            unreadable.append(path.stem)
+            continue
         if any(c.mnemonic in ("GX", "GR") for c in cards):
             found[path.stem] = cards
-    return found
+    return found, tuple(unreadable)
 
 
-DECKS = _decks()
+DECKS, UNREADABLE = _decks()
 NAMES = tuple(DECKS)
+
+
+def test_no_corpus_deck_is_unreadable():
+    """Every deck in the corpus tokenizes, or this says which does not.
+
+    The known cause is 4nec2's ``SY`` card (symbolic variables): two decks in
+    the xnec2c tree write parametric expressions in their fields, which this
+    dialect does not read.  antennaknobs' importer does, and ships
+    ``scripts/expand_sy_deck.py`` to translate such a deck once into the
+    numbers it already meant — the corpus this census was recorded against
+    has been through it.
+
+    This test runs FIRST in the file on purpose: every count below is taken
+    over decks that tokenized, so if some did not, the census failures that
+    follow are downstream noise and this is the one to read.
+    """
+    assert not UNREADABLE, (
+        f"{len(UNREADABLE)} corpus deck(s) will not tokenize: "
+        f"{', '.join(UNREADABLE)}.\n"
+        f"If they carry 4nec2 SY cards, expand them in place with "
+        f"antennaknobs' scripts/expand_sy_deck.py --in-place; the recorded "
+        f"census assumes a corpus that has been through it."
+    )
 
 
 # The 18 decks #415 named as blocked by GX/GR alone.  Quoted verbatim from the
