@@ -68,7 +68,8 @@ The four inversions
 -------------------
 U2 recorded three ±=+ conveniences that invert below the interface because
 its remainder dominates. All three invert here too, for the stronger
-reason, and a FOURTH one turned up that U2 never had to price:
+reason, and a FOURTH one turned up that U2 never had to price — this one
+inside phase 0's own measurement:
 
 1. **Range caps refuse, never clamp.** `SommerfeldGrid.eval` freezes the
    surface amplitude past `r1_max` because out there the ±=+ remainder is a
@@ -78,16 +79,32 @@ reason, and a FOURTH one turned up that U2 never had to price:
    pooled against an of-scale maximum: the five surfaces span decades over
    the served rectangle and a pooled norm hides whichever one is small.
 3. **ε̃ is keyed EXACTLY.** `_somm_eps_bucket`'s 1 % ladder is calibrated on
-   the ±=+ premise; here ε̃ enters the divided-out phase through
-   k_m|z′| AND the whole amplitude.
-4. **The `scaled_to` frequency-reuse law inverts** — the fourth
-   appearance, and this family is where it finally bites for a reason the
-   below family never had to state. See `TransmittedGrid.scaled_to`: the
-   ±=+ law S = ω·μ·G(ε̃; R₁/λ, θ) needs ONE length scale to normalize
-   against. The transmitted surfaces have two — z′ in λ_m and (ρ, z) in
-   λ_p — whose ratio √ε̃ is itself frequency-dependent, so no rescaling of
-   one lattice can carry the other. Measured, not asserted, in
-   `tests/test_sommerfeld_transmitted.py::test_gu3_11_*`.
+   the ±=+ premise; here ε̃ enters the divided-out phase e^{−jk_m|z′|} that
+   the whole ladder architecture rests on, as well as the Fresnel amplitude.
+4. **THE LADDER CONSTANT ITSELF INVERTS.** Phase 0 measured ≈13 nodes per
+   quarter λ_m at 1e-3, cubic, and that number is the architecture's own
+   sizing rule — but it was measured on the two SCALARS V_T and U_T, and
+   what a phase-1 ladder tabulates is their DERIVATIVES. Every derivative
+   taken under the integral weights the integrand toward larger λ
+   (∂/∂ρ → −λJ₁, ∂/∂z′ → ×γ_m ~ λ) and therefore toward faster
+   z′-variation. Re-measured on the five surfaces over phase 0's own range
+   and observers — with this evaluator reproducing phase 0's scalar numbers
+   exactly, 9/13/17 against its ≤13/≤13/≤17 — the surfaces need 21/21/25.
+   1.5–2.3× the nodes for the same 1e-3, of which the of-scale-vs-relative
+   norm (inversion 2) accounts for only 17→21; the rest is the quantity.
+   Sizing this unit's ladder from the scalar constant would have served
+   ~1e-2 while reporting 1e-3, so `ladder_nodes` carries its own measured
+   rule. This is the one that BIT.
+
+Two more that did not bite, recorded because they were checked: the
+`scaled_to` frequency-reuse law has no analogue here for a reason rather
+than an absence (the ±=+ law needs ONE length to normalize against and the
+transmitted tabulation has two, the observer axes in λ_p and the z′ ladder
+in λ_m, whose ratio √ε̃ is itself frequency-dependent); and the R₁ → 0
+analytic-limit node has no transmitted twin, because a remainder runs into
+a finite static limit at the origin and the whole field does not — the
+transmitted surface carries the source's own 1/R² and 1/R³ near zone. That
+second one is why the radial axis is logarithmic; see `TransmittedGrid`.
 
 Health, not hope
 ----------------
@@ -913,7 +930,7 @@ class TransmittedGrid:
     def scaled_to(self, k2, omega, mu):
         raise NotImplementedError(
             "the transmitted grid has no normalized-master rescaling, and "
-            "this family is where that convenience finally has a reason "
+            "here that absence has a reason rather than an absence: "
             "rather than an absence: the +-=+ law S = omega*mu*G(eps_t; "
             "R1/lambda, theta) needs ONE length to normalize against, and "
             "the transmitted tabulation has two — the observer axes in "

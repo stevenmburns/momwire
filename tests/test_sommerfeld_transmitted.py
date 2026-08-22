@@ -1134,3 +1134,43 @@ def test_gu3_10_a_truncated_tail_is_not_a_graceful_degradation(record_property):
         "the Wynn fallback stopped being catastrophic — if that is real the "
         "budget can shrink, but measure it before believing it"
     )
+
+
+@pytest.mark.slow
+def test_gu3_10_the_contour_reports_its_own_health(record_property):
+    """Self-convergence, measured on the geometries the product brings.
+
+    The fine machine (Gauss-24, rtol 1e-11, detour 2.0) against the coarse
+    one (Gauss-16, rtol 1e-9, detour 1.2) at the same points. Phase 0's own
+    note is that this estimate is a conservative UPPER BOUND — where an
+    exact answer exists it read 5e-11 while the realized error was 1.4e-15 —
+    so it is quoted as a bound and never as the error.
+    """
+    health = below.Health()
+    for cell in ("A/7MHz", "B/7MHz", "C/21MHz"):
+        et, kp, om, km = medium(cell)
+        lam_p = 2.0 * np.pi / kp
+        for rw, thd, zp in (
+            (0.001, 45.0, -0.02),
+            (0.02, 0.5, -0.15),
+            (0.5, 5.0, -0.15),
+            (2.0, 30.0, -1.0),
+            (2.0, 0.1, -0.15),
+        ):
+            rr = rw * lam_p
+            trans._six_integrals_transmitted(
+                et,
+                kp,
+                max(rr * math.cos(math.radians(thd)), 0.0),
+                max(rr * math.sin(math.radians(thd)), 0.0),
+                zp,
+                1e-11,
+                health=health,
+                selfconv=True,
+                where=(cell, rw, thd, zp),
+            )
+    d = health.as_dict()
+    record_property("health", repr(d))
+    assert d["nonconvergent"] == 0, d
+    assert d["accelerated"] == 0, d
+    assert d["worst_selfconv"] < 1e-6, d
