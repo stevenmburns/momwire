@@ -116,10 +116,11 @@ def test_no_corpus_deck_is_unreadable():
 
     The known cause is 4nec2's ``SY`` card (symbolic variables): two decks in
     the xnec2c tree write parametric expressions in their fields, which this
-    dialect does not read.  antennaknobs' importer does, and ships
-    ``scripts/expand_sy_deck.py`` to translate such a deck once into the
-    numbers it already meant — the corpus this census was recorded against
-    has been through it.
+    dialect does not read.  antennaknobs' importer does, and exposes
+    ``antennaknobs.nec_import.resolve_sy(text)`` — deck text in, plain NEC-2
+    card text out — which is how the corpus this census was recorded against
+    was translated.  It is exact: full-precision values, not a reformat, so
+    an expanded deck is the same antenna to the bit.
 
     This test runs FIRST in the file on purpose: every count below is taken
     over decks that tokenized, so if some did not, the census failures that
@@ -128,8 +129,8 @@ def test_no_corpus_deck_is_unreadable():
     assert not UNREADABLE, (
         f"{len(UNREADABLE)} corpus deck(s) will not tokenize: "
         f"{', '.join(UNREADABLE)}.\n"
-        f"If they carry 4nec2 SY cards, expand them in place with "
-        f"antennaknobs' scripts/expand_sy_deck.py --in-place; the recorded "
+        f"If they carry 4nec2 SY cards, rewrite each in place through "
+        f"antennaknobs.nec_import.resolve_sy(path.read_text()); the recorded "
         f"census assumes a corpus that has been through it."
     )
 
@@ -265,7 +266,7 @@ def test_the_corpus_is_the_one_this_module_measures():
     corpus decks carry 4nec2 ``SY`` cards, ``_decks()`` tokenizes at import,
     and the resulting ``DeckError`` was a COLLECTION error, so every test in
     this module errored and none of them ran.  The decks are expanded now
-    (antennaknobs ``scripts/expand_sy_deck.py``); the lesson is that a census
+    (antennaknobs' ``nec_import.resolve_sy``); the lesson is that a census
     guard behind an import-time parse guards nothing.
     """
     assert len(list(CORPUS.glob("*.nec"))) == 82
