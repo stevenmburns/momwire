@@ -466,11 +466,23 @@ def _tail_below(f, a, rho, h, ref, rtol, gx, gw, max_panels=_MAX_TAIL_PANELS):
     return acc, parts, converged, accel
 
 
-def _run_contour(f, k_p, k_m, rho, h, rtol, depth, detour, gx, gw):
+def _run_contour(
+    f, k_p, k_m, rho, h, rtol, depth, detour, gx, gw, max_panels=_MAX_TAIL_PANELS
+):
+    """Head + tail for ONE contour. `h` is the TAIL'S DECAY LENGTH, not a
+    coordinate: the below/below integrand decays as e^{−γ_m h} with
+    h = |z| + |z′|, and `_sommerfeld_transmitted` reuses this machinery with
+    h = |z′| + z because e^{−γ_m|z′|−γ_p z} → e^{−λ(|z′|+z)} at large λ just
+    as surely. `max_panels` is the transmitted family's other handle: its
+    grazing rows need a bigger budget than any below/below geometry does,
+    and the default keeps this family's numbers bit-for-bit unchanged.
+    """
     a = 1.1 * max(abs(k_p), abs(k_m))
     marks = (k_p, abs(k_m.real))
     head, hp = _head(f, a, rho, marks, rtol, depth, detour, gx, gw)
-    tail, tp, conv, accel = _tail_below(f, a, rho, h, head, rtol, gx, gw)
+    tail, tp, conv, accel = _tail_below(
+        f, a, rho, h, head, rtol, gx, gw, max_panels=max_panels
+    )
     return head + tail, hp, tp, conv, accel
 
 
