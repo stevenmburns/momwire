@@ -47,14 +47,23 @@ evaluator. Today exactly one key is implemented:
 
     (source, observer)      surface family                      state
     ("above", "above")      reflected wave over (ρ, h = z+z′)   implemented
-    ("below", "below")      transmitted, both media             momwire#524
+    ("below", "below")      remainder over (ρ, h = |z|+|z′|)    momwire#524
     ("below", "above")      transmitted, upward                 momwire#524
     ("above", "below")      transmitted, downward               momwire#524
 
-The three unimplemented regimes raise `ValueError` naming themselves: their
-surfaces are the TRANSMITTED-field Sommerfeld families of momwire#524
-(its phases 1/3), a different integral family through different contours, not
-a sign flip of this one. A regime entry owns its whole answer — the grid it
+The three unimplemented regimes raise `ValueError` naming themselves, and they
+are not unimplemented for the same reason. The two CROSSING regimes carry the
+TRANSMITTED-field Sommerfeld families of momwire#524 (its phases 1/3) — a
+different integral family through different contours, not a sign flip of this
+one. The below/below regime is nearer than that sentence used to claim about
+it: momwire#553 U2 measured its kernel pair to BE `_sommerfeld._d12` with its
+arguments swapped, and built the family out — `_sommerfeld_below`, with its
+own contour (every fig-13/fig-14 landmark assumes a REAL decay-medium k, so
+none of them survive the swap), its own λ_m-keyed grid, and its own
+projection. What is missing here is not the surfaces but the composition: a
+point observer below the interface needs direct and image terms from a readout
+that does not exist below yet, which is momwire#524 phase 3.
+A regime entry owns its whole answer — the grid it
 needs, the surfaces it samples, and the combination that turns them into a
 vector — which is what makes "add a regime" an addition rather than a
 refactor.
@@ -234,9 +243,11 @@ _REGIMES: dict[tuple[str, str], _Regime] = {
         surfaces=None,
         combine=None,
         pending=(
-            "its field is carried by the TRANSMITTED-field Sommerfeld surfaces "
-            "of momwire#524 (phases 1/3), a different integral family through "
-            "different contours"
+            "its remainder surfaces DO exist — momwire#553 U2 built "
+            "`_sommerfeld_below` on the swapped `_d12` kernel pair and its own "
+            "contour — but a point observer below the interface also needs "
+            "direct and image terms, and that buried-deck readout is "
+            "momwire#524 phase 3"
         ),
     ),
     ("below", "above"): _Regime(
