@@ -39,8 +39,8 @@ Every deck takes exactly one of two paths:
   the capability — and, where there is one, the remedy. Nothing is served
   silently wrong; a refusal sentence is the contract that it never will be.
 
-As of 2026-08-21, 115 of the 122 EZNEC launches in our capture corpus serve;
-every one of the seven refusals is a named sentence.
+As of 2026-08-22, 119 of the 122 EZNEC launches in our capture corpus serve;
+the three refusals are one named sentence, about one observation point.
 
 ## What serves
 
@@ -57,7 +57,12 @@ every one of the seven refusals is a named sentence.
   transmission lines and non-radiating networks (`TL` / `NT`), including
   the mixed table layouts.
 - **Requests**: impedance runs (`PQ` / `XQ`), far-field patterns (`RP`),
-  and near fields (`NE` / `NH`) over free space and perfect ground.
+  and near fields (`NE` / `NH`) over **all four ground cards** — free space,
+  perfect ground, the Sommerfeld finite ground, and the MININEC-type `GD`
+  (whose near field the engine solves in the medium, and so does momwire).
+  The finite-ground tables ride a Sommerfeld point evaluator and sit within
+  a measured 2–6 % of the licensed engine's captured cells, the same
+  envelope class as the feedpoint impedances.
 
 ## What refuses, and why
 
@@ -68,9 +73,14 @@ capability statements rather than deck errors:
   are real NEC-5 capabilities momwire does not have yet; such decks refuse
   naming the wire and the depth. A wire lying *in* the interface refuses as
   the degenerate case it is.
-- **Near fields over the finite grounds** (`NE`/`NH` over `GN 0` or `GD`)
-  refuse naming the ground: momwire has no Sommerfeld near-field evaluator
-  yet, and the sentence says which card to change to get an answer.
+- **A near-field point on a wire's ground contact** (an `NE`/`NH` grid
+  point sitting exactly where a wire stands on a finite ground) refuses
+  naming the point: the field there is genuinely singular — a residual
+  charge sits exactly at the observer — and neither momwire's answer nor
+  the engine's converges under refinement, so printing either would be
+  publishing a sampling artifact. The sentence quotes the measured
+  divergence and says to move the observation point; the same grid one
+  step off the contact serves.
 - **Cards outside the emitted dialect** — surface patches, geometry
   generators (arcs, helices, catenaries), incident-wave excitation, load
   types other than `LD 4`, magnetic grounds — refuse naming the card.
