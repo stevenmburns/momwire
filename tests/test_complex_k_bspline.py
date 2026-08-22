@@ -300,13 +300,21 @@ def test_gu1_1_complex_k_bypasses_every_accelerator_flag(accel_spy):
 
 
 def test_gu1_1_complex_k_bypasses_the_ek_accelerator_flags(accel_spy, monkeypatch):
-    ek_names = (
+    """The three k-TAKING EK twins must stay idle in the medium...
+
+    ...while the k-FREE one keeps its C++ path, medium or not. That
+    asymmetry is the whole shape of the continuation: the static half of
+    the split carries no k (King & Smith §7.4), so it is served by the same
+    accelerated closed form at k_m as at k_0, and only the remainder
+    changes backend.
+    """
+    ek_k_names = (
         "seg_seg_reg_moments_bspline_swept_ek",
         "seg_seg_full_moments_bspline_ek",
         "seg_seg_full_moments_bspline_swept_ek",
-        "seg_seg_static_moments_bspline_uniform_ek",
     )
-    spy = _AccelSpy(_bk._acc, ek_names)
+    static_name = "seg_seg_static_moments_bspline_uniform_ek"
+    spy = _AccelSpy(_bk._acc, ek_k_names + (static_name,))
     monkeypatch.setattr(_bk, "_acc", spy)
     h, a = 0.12, 0.005
     km = MEDIA[WORST][2]
@@ -322,11 +330,10 @@ def test_gu1_1_complex_k_bypasses_the_ek_accelerator_flags(accel_spy, monkeypatc
     _seg_seg_full_moments_offedge_swept(
         lo_i, hi_i, lo_j, hi_j, a, np.array([km]), 2, 4, ek=pair
     )
-    assert {
-        n: c
-        for n, c in spy.counts.items()
-        if n != "seg_seg_static_moments_bspline_uniform_ek"
-    } == {n: 0 for n in ek_names if n != "seg_seg_static_moments_bspline_uniform_ek"}
+    assert [spy.counts[n] for n in ek_k_names] == [0, 0, 0], spy.counts
+    _seg_seg_static_moments(ends, a, 2, ek=WHOLE_BLOCK)
+    if _bk._HAVE_BSPLINE_STATIC_EK_ACCEL:
+        assert spy.counts[static_name] == 1, spy.counts
 
 
 # ======================================================================
