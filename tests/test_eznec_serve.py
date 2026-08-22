@@ -1,4 +1,5 @@
-"""Rung-1 to rung-4 physics, gated (#497 U4, #504 U1-U4, momwire#511, #516).
+"""Rung-1 to rung-4 physics, gated (#497 U4, #504 U1-U4, momwire#511, #516,
+#545).
 
 Three gates carry this unit, and the split between them is the point.
 
@@ -26,12 +27,18 @@ refusal that does not reach EZNEC's viewer reaches nobody.  With the ground
 cards finished there is nothing hand-edited left in the refusal tables: every
 deck in them is the capture verbatim, reaching its own card at last.
 
-Since momwire#516 there are seven of them rather than one, and they are all the
-same sentence: a near field over a finite ground.  A refusal roster that grows
-is worth a second look and this one survives it — nothing moved backwards, the
-corpus grew a family of decks asking a question this seam had never been asked,
-and two of its four cells answer.  What the sentence names is the GROUND, not
-the card, because the card is served over the other two.
+momwire#516 put seven of them in the table, all the same sentence: a near
+field over a finite ground.  momwire#545 lands the point evaluator that
+sentence said was missing, and the roster does not empty — it NARROWS to three,
+and what the sentence names is neither the card nor the ground but the
+OBSERVATION POINT.  0022, 0107 and 0112 ask for the field at the base of a
+contact-fed monopole over a finite ground, where the composition is singular
+and its own sampling ladder diverges (36.6 → 1230 V/m over subdiv 1 → 64,
+gated in ``test_field_point.py``); the engine's printed number there sits
+between two of those rungs and is its own discretization's regularization of
+the same singularity.  Serving either would publish a sampling constant, so
+the point refuses and the four grid decks over the same two grounds — 0108,
+0110, 0111, 0113 — are served with envelopes like everything else.
 
 **And one deck class that is gated by neither.**  #504 U3 landed a printout
 for every served capture that had one, which is what turned the U1/U2
@@ -109,6 +116,16 @@ SERVED_IDS = (
     "0109",
     "0114",
     "0115",
+    # momwire#545's four: the same family's FINITE-ground grids, served once
+    # the point evaluator landed.  0108 is a bare ``GD`` and 0110/0111/0113 are
+    # ``GN 0`` — two ``NE`` grids, the corpus's only ``NH``, and the elevated
+    # dipole.  Their decks' three siblings (0022, 0107, 0112) ask for one point
+    # instead of a grid and that point is a ground contact, which is the whole
+    # of what still refuses.
+    "0108",
+    "0110",
+    "0111",
+    "0113",
 )
 
 # The two PHASED captures — #504 U4's rung, and the corpus's only decks whose
@@ -183,10 +200,10 @@ SERVED_UNGATED_IDS = ("0037", "0039", "0040", "0041", "0042")
 # reported rather than pinned: a bar at 344 Ω would record the gap as normal.
 DIVERGENT_IDS = ("0033", "0034")
 
-# Every capture id this seam answers after momwire#516, pinned.  The ladder
-# number is 53 of 62 and the nine that are left are named in
-# :func:`test_the_corpus_ladder_stands_where_516_left_it`.
-SERVED_AFTER_516 = (
+# Every capture id this seam answers after momwire#545, pinned.  The ladder
+# number is 59 of 62 and the three that are left are named in
+# :func:`test_the_corpus_ladder_stands_where_545_left_it`.
+SERVED_AFTER_545 = (
     "0000",
     "0001",
     "0002",
@@ -234,13 +251,17 @@ SERVED_AFTER_516 = (
     "0047",
     "0048",
     # momwire#516's near-field family: nine decks over four grounds (manifest
-    # ``near_field_family``), of which three are served.  0109 is the ``GN 1``
-    # near field and 0115 the free-space one — the two grounds that can carry a
-    # near field at this seam — and 0114 is 0115's deck with its ``NE`` replaced
-    # by an ``RP``, the free-space pattern that is the control they are scored
-    # against.  The other six stand over a ``GD`` or a ``GN 0`` and refuse by
-    # the ground's name (gate 3).
+    # ``near_field_family``), of which momwire#545 serves seven.  0109 is the
+    # ``GN 1`` near field and 0115 the free-space one; 0114 is 0115's deck with
+    # its ``NE`` replaced by an ``RP``, the free-space pattern control they are
+    # scored against; 0108/0110/0111/0113 are the finite-ground grids the point
+    # evaluator unlocked.  The two that are missing here — 0107 and 0112 — ask
+    # for one point apiece and that point is a ground contact (gate 3).
+    "0108",
     "0109",
+    "0110",
+    "0111",
+    "0113",
     "0114",
     "0115",
     # momwire#511's four: the phased drive reaching the structure through a
@@ -282,6 +303,22 @@ SERVED_AFTER_516 = (
 #   0109  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (NE, none)   —
 #   0114  66.396 -45.480j      68.942 -30.099j    15.590   2.13/2.06   0.07
 #   0115  66.396 -45.480j      68.942 -30.099j    15.590   (NE, none)   —
+#   0108  35.571 - 1.4223j     36.499 + 2.0789j    3.622   (NE, none)   —
+#   0110  47.789 - 0.78525j    48.867 + 2.5635j    3.518   (NE, none)   —
+#   0111  47.789 - 0.78525j    48.867 + 2.5635j    3.518   (NH, none)   —
+#   0113  72.380 -58.548j      75.033 -43.681j    15.102   (NE, none)   —
+#
+# momwire#545's four, measured 2026-08-21 through ``serve()``.  Three of them
+# are the 10.3 m vertical for the fifth, sixth and seventh time: 0108 is the
+# ``GD`` spelling and lands on 0015/0020/0045's row to fifteen digits, 0110 and
+# 0111 are the ``GN 0`` spelling and land on 0021/0047's.  Which is the point
+# of quoting them rather than cross-referencing: routing a near field through
+# the point evaluator must not move the IMPEDANCE by a bit, and these rows say
+# it did not.  0113 is the one new solve, an elevated 20 m dipole over
+# 20/0.0303 earth at 14 MHz, and its 15.1 Ω sits in the free-space dipoles'
+# family (0010's 16.3, 0114/0115's 15.6) rather than in the verticals' — a
+# dipole 9.1 m up is barely loaded by the ground, so the feed-region offset
+# shows at its unloaded size.
 #
 # momwire#516's three, measured 2026-08-21.  0109 is the 10.3 m vertical AGAIN,
 # this time over a ``GN 1`` with an ``NE`` grid instead of a pattern, and its
@@ -349,7 +386,11 @@ Z_BAR = {
     "0046": 4.55,
     "0047": 4.40,
     "0048": 4.42,
+    "0108": 4.53,
     "0109": 4.53,
+    "0110": 4.40,
+    "0111": 4.40,
+    "0113": 18.88,
     "0114": 19.49,
     "0115": 19.49,
 }
@@ -466,7 +507,11 @@ CURRENT_BAR = {
     "0046": 0.0129,
     "0047": 0.0123,
     "0048": 0.0124,
+    "0108": 0.0129,
     "0109": 0.0128,
+    "0110": 0.0123,
+    "0111": 0.0123,
+    "0113": 0.0136,
     "0114": 0.0141,
     "0115": 0.0141,
 }
@@ -488,30 +533,46 @@ CHARGE_BAR = {
     "0046": 0.0778,
     "0047": 0.076,
     "0048": 0.077,
+    "0108": 0.0777,
     "0109": 0.0776,
+    "0110": 0.076,
+    "0111": 0.076,
+    "0113": 0.0482,
     "0114": 0.0493,
     "0115": 0.0493,
 }
 
 # The near-field envelopes, ``(relative magnitude, phase degrees)`` per capture.
-# Two captures, because two of the four ground cards can carry a near field at
-# this seam and the corpus writes one of each (:data:`NEAR_IDS`).
+# SIX captures since momwire#545 — one per ground card, plus the corpus's only
+# ``NH`` and the elevated dipole — where momwire#516 could measure two.
 #
-# Measured 2026-08-21 on this tree, worst LIVE cell of the whole table — every
-# magnitude and every phase compared, seventy-five cells on 0115 and fifty on
-# 0109, the other twenty-five of 0109's being the ``EY`` column both engines
-# kill exactly:
+# Measured on this tree, worst LIVE cell of the whole table: every magnitude
+# and every phase compared, seventy-five cells where no column is dead and
+# fifty where one is (a vertical monopole's ``EY``, or its ``HX``/``HZ``).
 #
-#   id    ground   worst |E| rel   worst phase   where the worst cell is
-#   0115  GN -1        1.9482 %       0.30 deg   EY at (0.3048, 0, 3.048)
-#   0109  GN 1         5.4488 %       1.50 deg   EX at (1, 0, 10)
+#   id    ground   card   worst |E| rel   worst phase   where the worst cell is
+#   0115  GN -1    NE         1.9482 %       0.30 deg   EY at (0.3048, 0, 3.048)
+#   0109  GN 1     NE         5.4488 %       1.50 deg   EX at (1, 0, 10)
+#   0108  GD       NE         5.4526 %       1.23 deg   EX at (1, 0, 10)
+#   0110  GN 0     NE         5.3076 %       1.26 deg   EX at (1, 0, 10)
+#   0111  GN 0     NH         6.6992 %       0.33 deg   HY at (1, 0, 10)
+#   0113  GN 0     NE         1.8123 %       0.30 deg   EY at (0.3048, 0, .6096)
 #
-# The bars are those plus 25 %.  The two numbers are not the same size and the
-# reason is geometry rather than the image: 0109's worst cell sits 1 m from a
-# wire that ENDS at 10.3 m, a third of a metre past the top of a monopole whose
-# current is tapering to zero there, which is the hardest place in the corpus
-# to ask either formulation about.  Its other forty-nine cells are inside 3 %.
-# 0115's grid never comes within half a metre of its dipole and reads flat.
+# The bars are those plus 25 %.  The first four rows read the SAME worst cell —
+# 1 m out from a wire that ENDS at 10.3 m, a third of a metre past the top of a
+# monopole whose current is tapering to zero there, which is the hardest place
+# in this corpus to ask either formulation about — and they read it at the same
+# size over three different grounds, which is what says the ground routing did
+# not add error of its own.  The two flat rows are the two grids that never
+# come within half a metre of their wire.
+#
+# The four finite-ground rows landed 2026-08-21 with momwire#545's routing and
+# they REPRODUCE the bench measurements ``test_field_point.py`` took on the
+# same compositions before ``serve()`` could reach them: 5.4533 / 5.3071 /
+# 6.7000 / 1.8126 % of cell there against 5.4526 / 5.3076 / 6.6992 / 1.8123 %
+# here, the difference being the ``E12.4`` cell these numbers are read back
+# out of.  Same route, same numbers; a serve-side reading that had drifted off
+# the bench would mean the routing composed something the bench did not.
 #
 # What the bar is NOT is a sampling artefact.  ``_NEAR_FIELD_SUBDIV`` was swept
 # 1/2/4/8/16/32 and these numbers stop moving at 8 (0115: 1.33 / 1.80 / 1.92 /
@@ -519,13 +580,57 @@ CHARGE_BAR = {
 # 5.5834 %), so what the bars hold is the B-spline-against-NEC-5 formulation
 # difference the impedance envelopes above hold, read out at a point in space.
 NEAR_BAR = {
+    "0108": (0.0682, 1.54),
     "0109": (0.0681, 1.88),
+    "0110": (0.0663, 1.58),
+    "0111": (0.0837, 0.41),
+    "0113": (0.0227, 0.38),
     "0115": (0.0244, 0.38),
 }
 
-# The two near-field captures this seam SERVES, which is one per ground card
-# that can carry one.  The other seven are refused by name (gate 3).
+# The near-field captures this seam SERVES — every one in the family whose grid
+# stays off the ground contact.  The other three are refused by the POINT (gate
+# 3).
 NEAR_IDS = tuple(sorted(NEAR_BAR))
+
+# A captured cell under this fraction of its own table's scale, in a column the
+# served side kills EXACTLY, is Sommerfeld interpolation dust rather than a
+# component.  Measured on the four finite-ground tables: 0.0219 % of scale in
+# 0108's and 0110's ``EY``, 0.2216 % in 0111's ``HX``, 0.0000 % in its ``HZ``.
+# The angle of that dust is a random number — 0110's ``EY`` phase disagrees
+# with ours by 46° and 0111's ``HX`` by 65°, which is what comparing the
+# arguments of two independent zeros looks like — so those cells are gated by
+# MAGNITUDE alone, on both sides, and no phase is compared.  The same bound
+# ``test_field_point.py`` uses for the same columns.
+NEAR_DUST_BOUND = 0.01
+
+# The served 0108 table against the served 0110 one — this seam's own
+# reproduction of the captures' ``GD`` ≡ ``GN 0`` near-field cross-agreement
+# (:func:`test_a_gd_near_field_is_the_gn_0_one_and_not_a_pec_image`), scored as
+# a distance in the complex plane relative to 0108's own table scale over the
+# two live columns.  Measured 2026-08-21: worst 1.5392 %, smallest 0.011782 %.
+#
+# The bar is the worst plus 25 %, and it is far inside the 4.4 % the two ENGINE
+# tables sit apart at — which is the expected shape: the two current solves
+# differ, the evaluation medium does not.
+#
+# The FLOOR is the gate the envelopes cannot be.  The two routes are genuinely
+# different solves, so no cell agrees exactly; a routing bug that handed 0108
+# the ``GN 0`` currents would collapse every distance to 0.0 and pass every
+# other bar in this file.  Set at three quarters of the measured smallest, so
+# it holds a real separation rather than the exact one.
+SERVED_CROSS_AGREEMENT_BAR = 0.0193
+SERVED_CROSS_AGREEMENT_FLOOR = 0.00009
+
+
+def _cell(row, index: int) -> complex:
+    """One printed near-field cell as a complex number.
+
+    The block stores magnitude and phase because that is what the printout
+    prints; a distance between two tables is a distance in the complex plane,
+    and comparing magnitudes alone would call two cells 180° apart identical.
+    """
+    return row.magnitudes[index] * np.exp(1j * math.radians(row.phases_deg[index]))
 
 
 @functools.lru_cache(maxsize=None)
@@ -912,17 +1017,26 @@ def test_the_near_field_table_sits_inside_its_measured_envelope(cid):
 
     A cell either side prints as an EXACT zero is not a small number and is not
     inside any relative bar; it is a component the geometry killed, and the two
-    engines have to kill the same ones.  Gated as an identity instead.
+    engines have to kill the same ones.  Gated as an identity instead — with
+    one exception, which is the finite grounds': over ``GN 0`` and ``GD`` the
+    engine leaves Sommerfeld interpolation DUST in the columns a vertical's
+    symmetry forbids, where the served side is exactly 0.0.  Those cells are
+    gated at :data:`NEAR_DUST_BOUND` on the captured side and at exact zero on
+    ours, and their phases are not compared: the angle of zero is not a number.
     """
     (want,) = extract(printout_text(cid)).near_fields
     (got,) = extract(served(cid)).near_fields
     assert got.magnetic == want.magnetic
     assert len(got.rows) == len(want.rows)
     magnitude_bar, phase_bar = NEAR_BAR[cid]
+    scale = max(max(row.magnitudes) for row in want.rows)
     for a, b in zip(want.rows, got.rows):
         assert a.point == b.point
         for index in range(3):
             wanted, served_ = a.magnitudes[index], b.magnitudes[index]
+            if served_ == 0.0 and 0.0 < wanted <= NEAR_DUST_BOUND * scale:
+                assert b.phases_deg[index] == 0.0
+                continue
             if wanted == 0.0 or served_ == 0.0:
                 assert (wanted, served_) == (0.0, 0.0), f"{cid} {a.point} {index}"
                 assert a.phases_deg[index] == b.phases_deg[index] == 0.0
@@ -1808,27 +1922,23 @@ def test_a_phased_drive_is_a_solve_and_not_a_scale():
 # rest of the network unit.  0031 left it with #504 U4, which serves its four
 # phased `EX 4` cards.
 #
-# momwire#516 puts SEVEN tenants in it where there was one, and every one of
-# them is a capture VERBATIM.  That is a refusal roster growing, which needs
-# saying plainly: the near-field errand went looking for a card this seam had
-# never answered, found that two of the four ground cards can carry it and two
-# cannot, and the two that cannot are the two most of the corpus stands over.
-# What changed is not the seam's reach — 0022 was refused before this rung and
-# is refused after it — but what the sentence can say, which went from "no rung
-# of this arc renders that block" to a named ground and a measured number.
+# momwire#516 put SEVEN tenants in it where there was one; momwire#545 leaves
+# THREE, and every one of them is still a capture VERBATIM.  The narrowing is
+# the whole shape of that unit: the near-field errand found that two of the
+# four ground cards could not be answered, the point evaluator answered them,
+# and what survives is not a ground at all — it is one CELL, the base of a
+# contact-fed monopole over a finite ground, where the composition is singular
+# and neither engine's number is converged.  0022, 0107 and 0112 are the three
+# decks in the corpus that ask for exactly that cell and nothing else.
 #
-# The rows are the four grounds' worth of near-field decks, keyed by what each
-# one's sentence has to NAME.  Every other refusal this seam can reach is a
-# shape no capture writes, and each is probed below by editing a capture deck
-# rather than by finding one.
+# The rows are keyed by what each one's sentence has to NAME: the card, the
+# coordinate, and the wire whose base the coordinate is.  Every other refusal
+# this seam can reach is a shape no capture writes, and each is probed below by
+# editing a capture deck rather than by finding one.
 REFUSALS = {
-    "0022": "NE (near electric field) over a GN 0 finite ground",
-    "0107": "NE (near electric field) over the bare GD MININEC-type ground",
-    "0108": "NE (near electric field) over the bare GD MININEC-type ground",
-    "0110": "NE (near electric field) over a GN 0 finite ground",
-    "0111": "NH (near magnetic field) over a GN 0 finite ground",
-    "0112": "NE (near electric field) over a GN 0 finite ground",
-    "0113": "NE (near electric field) over a GN 0 finite ground",
+    "0022": "NE (near electric field) asks for the field at (0, 0, 0) metres",
+    "0107": "NE (near electric field) asks for the field at (0, 0, 0) metres",
+    "0112": "NE (near electric field) asks for the field at (0, 0, 0) metres",
 }
 
 
@@ -1847,12 +1957,13 @@ def test_an_out_of_scope_capture_refuses_by_name_through_the_shell(
     nothing else, and it discards one whose stamp echo is missing as belonging
     to an earlier run.
 
-    Since momwire#516 there is no hand-edited deck anywhere in this gate and
-    there is no longer any prospect of running out of tenants — the note the
-    #504 U4 version of this docstring carried, warning that the near-field rung
-    would empty it.  The rung landed and filled it instead: the refusal moved
-    from the card to the GROUND under the card, so every finite-ground
-    near-field capture in the corpus is a tenant.
+    Since momwire#516 there is no hand-edited deck anywhere in this gate.  The
+    #504 U4 version of this docstring warned that the near-field rung would
+    empty the table; momwire#516 filled it instead, by moving the refusal from
+    the card to the GROUND, and momwire#545 has now moved it again — from the
+    ground to the POINT — which is a narrowing rather than an emptying.  Three
+    tenants, one sentence, and the sentence is about a cell that neither engine
+    can converge rather than about a capability either engine lacks.
     """
     deck = tmp_path / "EZN5.NEC"
     deck.write_bytes(_refusal_deck(cid))
@@ -1875,45 +1986,66 @@ def test_an_out_of_scope_capture_refuses_by_name_through_the_shell(
     assert "ANTENNA INPUT PARAMETERS" not in written
 
 
-def test_the_near_field_refusal_names_the_ground_and_not_the_card():
-    """Which card speaks for 0022 has moved twice, and this is the second move.
+def test_the_near_field_refusal_names_the_point_and_not_the_ground():
+    """Which card speaks for 0022 has moved three times, and this is the third.
 
     It named its ``GN 0`` while the ground was unserved, then its ``NE`` once
-    the ground rung landed and the request was the only thing left to fix.  Now
-    the request is served — over free space and over ``GN 1`` — and what is
-    left to fix is the ground again, so the ground is named again, this time
-    beside the card rather than instead of it.  A reader who deletes the ``NE``
-    gets a full printout; a reader who changes the ``GN 0`` to a ``GN 1`` gets
-    a near field.  Both are true and the sentence says so.
+    the ground rung landed, then the PAIR once momwire#516 measured which
+    grounds could carry a near field.  momwire#545 serves the card over the
+    ground, so neither is left to name and the sentence is about the one thing
+    that is: the OBSERVATION POINT its ``NE`` asks for, which is the base of
+    its own monopole.
+
+    Three things the sentence has to carry, because each sends the reader
+    somewhere different.  The CARD, so a reader knows which line to look at.
+    The COORDINATE, because the refusal is about that cell and not about the
+    deck — 0110 is the same wire, the same ground and the same card, and it is
+    served.  And the WIRE, because "move the point" is only actionable if the
+    reader knows what it has to move away from.
+
+    The remedy is the other half.  A near-field refusal used to say "delete the
+    NE card"; this one says the near field is served everywhere else, which is
+    a smaller thing to ask and a truer one.
     """
     reason = render(deck_text("0022")).split(" ***** NEC ERROR - ")[1]
-    assert reason.startswith("NE (near electric field) over a GN 0 finite ground")
-    assert "delete the NE (near electric field) card" in reason
-    # The two grounds get DIFFERENT names, which is the whole point of naming
-    # one: 0107 is the same wire, the same medium and the same request under a
-    # ``GD``, and its sentence has to send the reader to a different card.
-    mininec = render(deck_text("0107")).split(" ***** NEC ERROR - ")[1]
-    assert "the bare GD MININEC-type ground" in mininec
-    assert "GN 0" not in mininec
+    assert reason.startswith(
+        "NE (near electric field) asks for the field at (0, 0, 0) metres"
+    )
+    assert "where wire 1 stands on this deck's finite ground" in reason
+    assert "served at every point off the contact" in reason
+    assert "move the NE (near electric field) card's observation point" in reason
+    # The GROUND is not named, which is the move: 0107 is the same wire, the
+    # same medium and the same request under a ``GD`` instead of a ``GN 0``,
+    # and it gets the SAME sentence, because the ground is not what is wrong.
+    assert "GN 0" not in reason
+    assert "GD" not in reason
+    assert reason == render(deck_text("0107")).split(" ***** NEC ERROR - ")[1]
 
 
-def test_the_two_finite_grounds_refuse_and_the_two_others_serve():
+def test_the_near_field_matrix_is_the_measured_one():
     """The serving matrix, one deck per cell, on captures rather than probes.
 
-    ``GN -1`` (0115) and ``GN 1`` (0109) answer; ``GD`` (0107, 0108) and
-    ``GN 0`` (0110-0113, 0022) refuse.  The matrix is the whole finding of
-    momwire#516 and it does not follow from the far-field rungs: there ``GD``
-    and ``GN 0`` differ, because one solves in its medium and the other only
-    reflects off it, and here they are identical.
+    All four ground cards carry a near field: ``GN -1`` (0115), ``GN 1``
+    (0109), ``GD`` (0108) and ``GN 0`` (0110, 0111, 0113) all answer, which is
+    what momwire#545's point evaluator bought.  What refuses is the three decks
+    whose grid is the single point (0, 0, 0) over a finite ground — 0022 and
+    0112 under ``GN 0``, 0107 under ``GD`` — and they refuse by the POINT.
+
+    The pairing is what makes this a matrix rather than a list.  0022 and 0110
+    are the same deck under the same ground with different ``NE`` cards; 0107
+    and 0108 are that pair again under ``GD``.  One of each is served and the
+    other is not, so the line this gate draws is provably the grid's and not
+    the ground's.
     """
-    for cid in ("0109", "0115"):
+    for cid in ("0108", "0109", "0110", "0111", "0113", "0115"):
         assert "NEC ERROR" not in render(deck_text(cid)), cid
-    for cid in ("0022", "0107", "0108", "0110", "0111", "0112", "0113"):
+    for cid in ("0022", "0107", "0112"):
         assert "NEC ERROR" in render(deck_text(cid)), cid
 
 
 def test_a_gd_near_field_is_the_gn_0_one_and_not_a_pec_image():
-    """Why ``GD`` refuses, read straight off two captures.
+    """The finding that ROUTES ``GD``, read off two captures and then off two
+    served printouts.
 
     0108 and 0110 are ONE grid over ONE medium with only the ground mnemonic
     changed.  If a ``GD`` near field were the PEC-image readout its CURRENTS
@@ -1923,8 +2055,22 @@ def test_a_gd_near_field_is_the_gn_0_one_and_not_a_pec_image():
     against 1.7342E-02, the same Sommerfeld interpolation dust in both, where
     an image prints exactly zero.
 
-    This test is the evidence the refusal sentence quotes, kept where it can
-    fail if a future capture disagrees with it.
+    That was momwire#516's evidence for a refusal; momwire#545 makes it the
+    route, so the gate gains the serve side.  The two SERVED tables have to sit
+    close to each other in the same way, and closer than either sits to its own
+    capture: the currents underneath them are two different solves (0108's off
+    a PEC image, 0110's off a Sommerfeld fill) but the medium they are read out
+    in is identical.  Measured 1.54 % of table scale worst cell, against the
+    4.4 % the two engine tables sit apart at.
+
+    The FLOOR is the other half and it is the aliasing gate the envelopes
+    cannot be: a routing bug that gave 0108 the ``GN 0`` solve's currents would
+    print two identical tables and pass every bar in this file.  The two routes
+    never agree exactly, and this is where that is said.  (The bench half of
+    the same claim — on raw floats rather than through an ``E12.4`` cell, plus
+    the PEC-image anti-alias — lives in ``test_field_point.py``; this is the
+    serve-side statement, which is the one that says the ROUTING kept them
+    apart and not merely the evaluator.)
     """
     mininec = extract(printout_text("0108")).near_fields[0].rows
     sommerfeld = extract(printout_text("0110")).near_fields[0].rows
@@ -1933,45 +2079,103 @@ def test_a_gd_near_field_is_the_gn_0_one_and_not_a_pec_image():
         assert a.point == b.point
         for wanted, got in zip(a.magnitudes, b.magnitudes):
             assert abs(got - wanted) <= 0.05 * wanted
-    # The forbidden column, on the row the sentence quotes.
+    # The forbidden column, on the row momwire#516's finding quotes.
     assert mininec[0].magnitudes[1] == 1.7359e-02
     assert sommerfeld[0].magnitudes[1] == 1.7342e-02
 
+    # And the same claim on this seam's own two tables.
+    gd = extract(served("0108")).near_fields[0].rows
+    gn0 = extract(served("0110")).near_fields[0].rows
+    scale = max(max(row.magnitudes) for row in mininec)
+    distances = [
+        abs(_cell(a, index) - _cell(b, index)) / scale
+        for a, b in zip(gd, gn0)
+        for index in (0, 2)  # EX, EZ — EY is dead on both sides
+    ]
+    assert max(distances) <= SERVED_CROSS_AGREEMENT_BAR, (
+        f"worst live-cell distance {100 * max(distances):.4f} % of scale"
+    )
+    assert min(distances) >= SERVED_CROSS_AGREEMENT_FLOOR, (
+        f"smallest live-cell distance {100 * min(distances):.6f} % of scale — "
+        "the two routes have collapsed onto the same currents"
+    )
+    for row in gd + gn0:
+        assert row.magnitudes[1] == 0.0
 
-def test_nh_serves_and_refuses_on_the_same_grounds_ne_does():
+
+def test_nh_serves_on_every_ground_ne_does():
     """momwire#513's card, all the way through.
 
-    The corpus's only ``NH`` (0111) stands over a ``GN 0``, so it refuses —
-    and its sentence must name ``NH`` rather than ``NE``, because a reader
-    told the wrong card looks at the wrong line.  The SERVING half has no
-    capture at all, so it is probed the way this file probes every shape the
-    corpus does not write: by respelling ONE token of a capture that has
-    everything else right.  0111 with its ``GN 0`` replaced by 0109's ``GN 1``
-    is the perfect-ground probe; 0115 with its ``NE`` respelled ``NH`` is the
-    free-space one.  Neither probe touches a second thing — 0111's grid sits
-    over a base-fed vertical whose ``GE 1`` needs a ground plane under it, so
-    the free-space half has to be asked of a deck that was elevated already.
+    The corpus's only ``NH`` (0111) stands over a ``GN 0`` and is served since
+    momwire#545, through the curl of the same remainder its ``NE`` sibling adds
+    — so the magnetic half of the evaluator reaches the printout and not only
+    the bench.  The other two grounds have no ``NH`` capture at all, so they
+    are probed the way this file probes every shape the corpus does not write:
+    by respelling ONE token of a capture that has everything else right.  0111
+    with its ``GN 0`` replaced by 0109's ``GN 1`` is the perfect-ground probe;
+    0115 with its ``NE`` respelled ``NH`` is the free-space one.  Neither probe
+    touches a second thing — 0111's grid sits over a base-fed vertical whose
+    ``GE 1`` needs a ground plane under it, so the free-space half has to be
+    asked of a deck that was elevated already.  A third probe swaps 0111's
+    ``GN 0`` for the matching ``GD``, which is the fourth ground.
     """
-    reason = render(deck_text("0111")).split(" ***** NEC ERROR - ")[1]
-    assert reason.startswith("NH (near magnetic field) over a GN 0 finite ground")
-    assert "NE (near electric field)" not in reason
-
+    finite = render(deck_text("0111"))
     perfect = render(deck_text("0111").replace("GN 0,0,0,0,13.,.005,1.,0.", "GN 1"))
+    mininec = render(deck_text("0111").replace("GN 0,0,0,0,", "GD 0,0,0,0,"))
     free = render(deck_text("0115").replace("NE 0,5,1,5,", "NH 0,5,1,5,"))
-    for printout in (perfect, free):
+    for printout in (finite, perfect, mininec, free):
         assert "NEC ERROR" not in printout
         assert "- - - NEAR MAGNETIC FIELDS - - -" in printout
         assert "- - - NEAR ELECTRIC FIELDS - - -" not in printout
         assert "AMPS/M   DEGREES" in printout
         assert len(extract(printout).near_fields[0].rows) == 25
-    # The twin's own numbers on the vertical: a monopole's H is azimuthal, so a
-    # grid laid along the x axis reads HY alone and prints an exact zero in the
-    # two columns the geometry kills — which is what 0111's capture prints too,
-    # in its HZ column, over a ground this seam will not answer.
-    rows = extract(perfect).near_fields[0].rows
-    assert all(row.magnitudes[0] == row.magnitudes[2] == 0.0 for row in rows)
-    assert all(row.magnitudes[1] > 0.0 for row in rows)
-    assert all(row.phases_deg[0] == row.phases_deg[2] == 0.0 for row in rows)
+    # A monopole's H is azimuthal, so a grid laid along the x axis reads HY
+    # alone and this seam prints an exact zero in the two columns the geometry
+    # kills — over every ground, including the two whose remainder is a
+    # numerical curl.  0111's own capture prints an exact zero in its HZ column
+    # and interpolation dust in its HX (:data:`NEAR_DUST_BOUND`).
+    for printout in (finite, perfect, mininec):
+        rows = extract(printout).near_fields[0].rows
+        assert all(row.magnitudes[0] == row.magnitudes[2] == 0.0 for row in rows)
+        assert all(row.magnitudes[1] > 0.0 for row in rows)
+        assert all(row.phases_deg[0] == row.phases_deg[2] == 0.0 for row in rows)
+
+
+def test_the_near_field_refusal_is_the_point_s_and_not_the_deck_s():
+    """One deck, two ``NE`` cards, two answers — in both directions.
+
+    The controlled experiment the captures nearly write and do not quite: the
+    corpus pairs 0110 (a grid off the wire) with 0022/0112 (the contact point)
+    over ``GN 0``, so the two cells exist, but they arrive as two decks and a
+    reader could reasonably wonder whether something ELSE differs between them.
+    Here the deck is held fixed and only the ``NE`` card's origin moves.
+
+    0110's five-by-five grid pulled back to the single origin cell refuses; and
+    0112's single origin cell pushed out to (1, 0, 2) — one metre out and two
+    metres up, a point on 0110's own grid — is served.  So the refusal belongs
+    to the observation point, and a deck that refuses is one ``NE`` field away
+    from a deck that answers.
+    """
+    contact = "NE 0,1,1,1,0.,0.,0.,0.,0.,0."
+    grid = "NE 0,5,1,5,1.,0.,2.,1.,0.,2."
+
+    pulled_in = deck_text("0110").replace(grid, contact)
+    reason = _refused(pulled_in)
+    assert reason.startswith(
+        "NE (near electric field) asks for the field at (0, 0, 0) metres"
+    )
+
+    pushed_out = deck_text("0112").replace(contact, "NE 0,1,1,1,1.,0.,2.,0.,0.,0.")
+    printout = render(pushed_out)
+    assert "NEC ERROR" not in printout
+    (block,) = extract(printout).near_fields
+    ((row,),) = (block.rows,)
+    assert row.point == (1.0, 0.0, 2.0)
+    # And it is the served 0110 table's own cell at that point, to the byte:
+    # one deck, one solve, and the grid is only which points get printed.
+    (grid_block,) = extract(served("0110")).near_fields
+    (same,) = [r for r in grid_block.rows if r.point == (1.0, 0.0, 2.0)]
+    assert (row.magnitudes, row.phases_deg) == (same.magnitudes, same.phases_deg)
 
 
 def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
@@ -1990,8 +2194,8 @@ def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
         assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in text, cid
 
 
-def test_the_corpus_ladder_stands_where_516_left_it():
-    """The served-id SET, pinned — 55 of the 62 captured decks.
+def test_the_corpus_ladder_stands_where_545_left_it():
+    """The served-id SET, pinned — 59 of the 62 captured decks.
 
     A rung that lands moves decks across this line and a regression moves them
     back, and neither should be able to happen quietly: the set is written out
@@ -2005,24 +2209,30 @@ def test_the_corpus_ladder_stands_where_516_left_it():
     decks to 53 and all four of the new ones are served, so 48 of 49 became 52
     of 53 with nothing crossing the line in either direction.
 
-    momwire#516 moves BOTH, and it is the first rung in this arc whose fraction
-    goes DOWN.  That is what a capture errand aimed at an unanswered card is
-    supposed to do, and the number is worth reading rather than optimising: the
-    errand asked for the near field under all four ground cards (manifest
-    ``near_field_family``), two of them can be answered here and two cannot, and
-    the corpus now says so nine decks' worth instead of one deck's worth.
-    52 of 53 becomes 55 of 62.
+    momwire#516 moved BOTH, and it was the first rung in this arc whose
+    fraction went DOWN.  That is what a capture errand aimed at an unanswered
+    card is supposed to do: the errand asked for the near field under all four
+    ground cards (manifest ``near_field_family``), two of them could be
+    answered then and two could not, and the corpus said so nine decks' worth
+    instead of one deck's worth.  52 of 53 became 55 of 62.
 
-    The seven that are left are the SAME refusal, and it names a ground rather
-    than a card: NEC-5 evaluates the near field of a finite half-space at the
-    observation point with a Sommerfeld integral, and momwire's Sommerfeld
-    machinery fills a matrix between wire elements and has no evaluator at a
-    point in space.  0022 is among them and its sentence has moved for the
-    second time in this arc — ``GN 0``, then ``NE``, and now ``NE`` over its
-    ``GN 0`` — which is the shape a ladder is supposed to have even when the
-    rung it climbs is a measurement rather than a serving.
+    momwire#545 is the rung that answers the other two, and it moves the
+    numerator alone: 55 of 62 becomes 59 of 62.  The four that cross are
+    0108 (``GD``), 0110 and 0113 (``GN 0`` ``NE``) and 0111 (the corpus's only
+    ``NH``) — every finite-ground near-field deck whose grid stands off the
+    wire's ground contact.
 
-    What this number does NOT claim is that all 55 are right.  0033 and 0034
+    The three that are left are the SAME refusal and it names neither a card
+    nor a ground but a POINT: 0022, 0107 and 0112 each ask for the field at
+    exactly (0, 0, 0), the base of a contact-fed monopole over a finite
+    ground, where the composition is singular and the subdiv ladder diverges
+    (36.6 → 1230 V/m over subdiv 1 → 64) while the engine's own printed number
+    sits between two of the rungs.  0022's sentence has now moved three times
+    in this arc — ``GN 0``, then ``NE``, then the pair, and now the point —
+    which is the shape a ladder is supposed to have.  This one cannot move
+    again by serving: nothing converges there on either side of the seam.
+
+    What this number does NOT claim is that all 59 are right.  0033 and 0034
     are served, are in this set, and disagree with their captures by 275 and
     188 Ω (:data:`DIVERGENT_IDS`); the ladder counts decks that get an ANSWER
     rather than decks that get a pinned one, and that distinction is why the
@@ -2031,10 +2241,10 @@ def test_the_corpus_ladder_stands_where_516_left_it():
     served_ids = tuple(
         cid for cid, text in sorted(corpus().items()) if "NEC ERROR" not in text
     )
-    assert served_ids == SERVED_AFTER_516
-    assert len(served_ids) == 55
+    assert served_ids == SERVED_AFTER_545
+    assert len(served_ids) == 59
     refused = sorted(set(corpus()) - set(served_ids))
-    assert refused == ["0022", "0107", "0108", "0110", "0111", "0112", "0113"]
+    assert refused == ["0022", "0107", "0112"]
     # The 49 the ladder first counted still stand 48 of 49, which is what says
     # #511 and #516 added decks rather than moving any.
     assert len([cid for cid in served_ids if cid < "0049"]) == 48
