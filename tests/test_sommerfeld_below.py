@@ -160,6 +160,14 @@ def compose(eps_t, kp, omega, obs, src, p_hat, surfaces, dyad="mirror", sA=1.0, 
     return e_dir + a_m * e_img + s * e_rem
 
 
+# `record_property` values must be plain Python scalars or strings, never
+# numpy ones. execnet serializes each test report to the xdist controller and
+# its `_Serializer` has no dispatch for `np.float64` — the worker dies mid-
+# report and the run ends in an INTERNALERROR naming the test, with no
+# failure and no traceback pointing here. Serial runs never notice, because
+# nothing is serialized. Hence the `float(...)` on every value below.
+
+
 def rel(got, ref):
     got = np.asarray(got)
     ref = np.asarray(ref)
@@ -200,7 +208,7 @@ def test_gu2_1_surfaces_vs_the_phase0_prototype(cell, record_property):
         scale = max(abs(v) for v in ref.values())
         for k in KEYS:
             worst = max(worst, abs(got[k][i] - ref[k]) / scale)
-    record_property("worst_rel", worst)
+    record_property("worst_rel", float(worst))
     assert worst < G_U2_1_TOL, f"{cell}: worst rel {worst:.3e}"
 
 
@@ -364,7 +372,7 @@ def test_gu2_3_limits_land_on_the_prototype_at_small_r1(cell, record_property):
         scale = max(abs(v) for v in ref.values())
         for k in KEYS:
             worst = max(worst, abs(lim[k][i] - ref[k]) / scale)
-    record_property("worst_rel", worst)
+    record_property("worst_rel", float(worst))
     assert worst < G_U2_3_TOL, f"{cell}: worst rel {worst:.3e}"
 
 
@@ -679,9 +687,9 @@ def test_gu2_5_composed_field_vs_empymod(mline_scan, record_property):
     worst_all = max(r["errs"][WINNER] for r in mline_scan)
     well = [r for r in mline_scan if r["spread"] <= WELL_CONDITIONED_SPREAD]
     worst_well = max(r["errs"][WINNER] for r in well)
-    record_property("worst_all_grids", worst_all)
-    record_property("worst_well_conditioned", worst_well)
-    record_property("n_well_conditioned", len(well))
+    record_property("worst_all_grids", float(worst_all))
+    record_property("worst_well_conditioned", float(worst_well))
+    record_property("n_well_conditioned", int(len(well)))
     assert well, "no well-conditioned M-line grid in the goldens"
     assert worst_well < G_U2_5_TOL_WELL, f"well-conditioned worst {worst_well:.3e}"
     # Every remaining point is allowed its own grid's recorded oracle spread
@@ -765,7 +773,7 @@ def test_gu2_4_grid_matches_direct_and_the_goldens(small_below_grid, record_prop
     ref = below.iv_surfaces_direct_below(et, kp, r1, th, rtol=1e-9, omega=om)
     scale = np.max(np.abs(np.stack([ref[k] for k in KEYS])), axis=0)
     worst_grid = max(float(np.max(np.abs(got[k] - ref[k]) / scale)) for k in KEYS)
-    record_property("grid_vs_direct", worst_grid)
+    record_property("grid_vs_direct", float(worst_grid))
 
     # ... and the same direct evaluator against the OTHER implementation.
     rows = [r for r in gold.SURFACES["A/7MHz"] if r[0] * lam_m <= 0.58 * lam_m]
@@ -779,8 +787,8 @@ def test_gu2_4_grid_matches_direct_and_the_goldens(small_below_grid, record_prop
         sc = max(abs(v) for v in refg.values())
         for k in KEYS:
             worst_gold = max(worst_gold, abs(gdir[k][i] - refg[k]) / sc)
-    record_property("direct_vs_goldens", worst_gold)
-    record_property("health", health.as_dict())
+    record_property("direct_vs_goldens", float(worst_gold))
+    record_property("health", repr(health.as_dict()))
 
     assert worst_gold < G_U2_1_TOL, f"direct vs goldens {worst_gold:.3e}"
     assert worst_grid < G_U2_4_TOL, f"grid vs direct {worst_grid:.3e}"
