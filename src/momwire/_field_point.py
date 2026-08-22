@@ -51,18 +51,27 @@ evaluator. Today exactly one key is implemented:
     ("below", "above")      transmitted, upward                 momwire#524
     ("above", "below")      transmitted, downward               momwire#524
 
-The three unimplemented regimes raise `ValueError` naming themselves, and they
-are not unimplemented for the same reason. The two CROSSING regimes carry the
-TRANSMITTED-field Sommerfeld families of momwire#524 (its phases 1/3) — a
-different integral family through different contours, not a sign flip of this
-one. The below/below regime is nearer than that sentence used to claim about
-it: momwire#553 U2 measured its kernel pair to BE `_sommerfeld._d12` with its
-arguments swapped, and built the family out — `_sommerfeld_below`, with its
-own contour (every fig-13/fig-14 landmark assumes a REAL decay-medium k, so
-none of them survive the swap), its own λ_m-keyed grid, and its own
-projection. What is missing here is not the surfaces but the composition: a
+The three unimplemented regimes raise `ValueError` naming themselves, and none
+of the three is missing its SURFACES any more — all three families are built.
+What each refusal names is what is actually absent.
+
+The below/below regime: momwire#553 U2 measured its kernel pair to BE
+`_sommerfeld._d12` with its arguments swapped, and built the family out —
+`_sommerfeld_below`, with its own contour (every fig-13/fig-14 landmark
+assumes a REAL decay-medium k, so none of them survive the swap), its own
+λ_m-keyed grid, and its own projection. What is missing is the composition: a
 point observer below the interface needs direct and image terms from a readout
-that does not exist below yet, which is momwire#524 phase 3.
+that does not exist below yet.
+
+The two CROSSING regimes: momwire#553 U3 built `_sommerfeld_transmitted` —
+five surfaces (the transmitted family has a genuinely fifth one, ∂/∂z′, with
+no ±=+ analogue) over a z′ ladder, with above→below served as the reciprocity
+transpose of the same tables. What is missing there is not physics but
+CONTRACT. This module returns the ground REMAINDER and its caller adds direct
+and image; the transmitted integral is the ENTIRE field above a buried source,
+with nothing to add, so answering through this signature would double-count.
+Reconciling the two readouts is momwire#524 phase 3, and until then the
+crossing regimes are served by calling `_sommerfeld_transmitted` directly.
 A regime entry owns its whole answer — the grid it
 needs, the surfaces it samples, and the combination that turns them into a
 vector — which is what makes "add a regime" an addition rather than a
@@ -256,9 +265,15 @@ _REGIMES: dict[tuple[str, str], _Regime] = {
         surfaces=None,
         combine=None,
         pending=(
-            "its field is carried by the TRANSMITTED-field Sommerfeld surfaces "
-            "of momwire#524 (phases 1/3), a different integral family through "
-            "different contours"
+            "its transmitted surfaces DO exist — momwire#553 U3 built "
+            "`_sommerfeld_transmitted`, five surfaces over a z' ladder with "
+            "its own contour — but what is missing here is the CONTRACT, not "
+            "the physics: this entry point returns the ground REMAINDER and "
+            "its caller adds the direct and image terms, and the transmitted "
+            "integral has no such split (it is the entire field above a "
+            "buried source), so serving it through this signature would "
+            "double-count. Reconciling the two readouts is momwire#524 "
+            "phase 3; call `_sommerfeld_transmitted` directly meanwhile"
         ),
     ),
     ("above", "below"): _Regime(
@@ -267,9 +282,14 @@ _REGIMES: dict[tuple[str, str], _Regime] = {
         surfaces=None,
         combine=None,
         pending=(
-            "its field is carried by the TRANSMITTED-field Sommerfeld surfaces "
-            "of momwire#524 (phases 1/3), a different integral family through "
-            "different contours"
+            "its transmitted surfaces DO exist — momwire#553 U3 serves this "
+            "direction as the reciprocity transpose of the same tables "
+            "`_sommerfeld_transmitted` fills for ('below', 'above') — but as "
+            "in that regime what is missing is the CONTRACT: this entry point "
+            "returns the ground REMAINDER for its caller to compose, and the "
+            "transmitted integral is the whole field, with no direct or image "
+            "term to add. Reconciling the two readouts is momwire#524 phase 3; "
+            "call `_sommerfeld_transmitted` directly meanwhile"
         ),
     ),
 }
