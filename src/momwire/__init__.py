@@ -7,6 +7,7 @@ from ._capabilities import Capabilities
 # solution columns that one fill + one factorisation already produced.
 from ._port_solution import PortSolution
 from .bspline import BSplineSolver
+from .harrington import HarringtonSolver
 from .hmatrix import HMatrixSolver
 from .array_block import ArrayBlockSolver, LatticeFFTUnavailable
 from .pulse import PulseSolver
@@ -29,6 +30,7 @@ __all__ = [
     "ArrayBlockSolver",
     "RazorSolver",
     "PulseSolver",
+    "HarringtonSolver",
     "LatticeFFTUnavailable",
     "PortSolution",
     "Capabilities",

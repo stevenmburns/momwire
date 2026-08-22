@@ -442,3 +442,83 @@ Measured (2026-08-18), on this row's own Δ/a ≈ 1 floor (§5.3):
 Gates in `tests/test_pulse_ground.py` §5 and `tests/test_pulse_capabilities.py`.
 Follow-up 2 above (re-shaping `Remainder.evaluate`, the reason this section
 exists) is CLOSED by #398 unit 5; the rest of §7's list is unaffected.
+
+---
+
+## 9. The sequel (momwire#557, 2026-08-22): what ACCURACY cost
+
+§6 answered "what does a throwaway formulation cost when it reuses the
+shared layers." It did not ask what the same formulation costs when it also
+has to be *usable*, and the row it produced is not: `PulseSolver`'s error
+is governed by Δ/a rather than Δ/λ, so on a thin wire it needs ~64× the
+mesh of `BSplineSolver` to reach the same answer. `HarringtonSolver`
+(`src/momwire/harrington.py`) is the second build, and the delta between
+the two is the price of the accuracy.
+
+### 9.1 The defect was a charge model, not the basis or the testing
+
+Harrington (*Proc. IEEE* 55(2), Feb 1967) spreads the charge over a
+half-shifted **dual cell** — his (95)/(96)/(100) — and averages the
+Green's function over the source segment everywhere, his (99). The probe
+row put the whole charge at a POINT and observed it at another point,
+where only the reduced kernel's `a` keeps the self term finite. That single
+substitution is the whole Δ/a dependence, and `docs/pulse_basis_d0_nodal
+_charge.md` had predicted it two months earlier (variant 2, "~−700000/N j")
+and named the dual cell as "the correct fix — not implemented".
+
+Worth stating plainly because it cuts against the probe's own framing:
+**§6's 31 minutes bought a row whose physics was already documented as
+insufficient in this repo.** The gates it passed were real and remain
+green — the row converges, monotonically, to the right limit. They simply
+did not include an accuracy floor, because none of them compared the row
+to a sibling at a mesh a user would choose.
+
+### 9.2 What the second build reused
+
+The dual cell needed **zero new numerics**. `_seg_M0` already integrates
+the reduced kernel over an arbitrary segment (closed-form static moment +
+GL remainder), and a half-segment is a segment with `h/2`, so every cell
+average is that same call on a rebuilt piece geometry. Harrington's own
+Appendix ladder — the (126) closed form, the (129) series, the (135)
+multipole — is *not* implemented, and did not need to be: it is a 1967
+answer to "we have no quadrature layer," and its purpose here is served
+better by the layer that already exists. The resulting row converges
+faster than the ladder does (the test docstring's ratio improves down the
+ladder rather than sitting at 2×, because ψ is exact rather than two-term).
+
+That is the sharpest form of the §3 claim the first build could make:
+a formulation change deep enough to move the answer by three orders of
+magnitude touched **one method**, `_charge_stencil`, and no shared layer at
+all. The ground models came along untouched — the charge model is a
+source-side substitution, so PEC / refl-coef / Sommerfeld needed no code in
+the new file.
+
+### 9.3 What it did NOT get for free
+
+**Junction detection**, which §6 recorded as costing nothing. That finding
+was true of the nodal row and is not transferable: coincident endpoint
+POINT charges superpose by arithmetic, but dual cells have to be the same
+region at a shared node or they leave a spurious dipole layer there. Two
+cheaper cells were built and measured before the star cell was accepted:
+
+- charge spread inside its own segment (no adjacency needed): **diverges**,
+  error growing 201 Ω → 382 Ω over N = 25…801;
+- each wire truncating its own cell at a junction: a colinear split
+  disagrees with the unsplit wire by ~10%, and the disagreement **grows**
+  with refinement.
+
+So this row carries its own node map (union-find over structural knots,
+geometric matching only at wire ends) and `deck/_solver.py` grew a
+`_NO_JUNCTION_SPEC` tuple, because the junction fact had been welded to
+`_NATIVE_LOADING` while RazorSolver was the only class with either
+property. One shared-layer generalisation, forced by the second consumer —
+which is exactly the shape §4 predicted such generalisations would take.
+
+### 9.4 The two rows as an instrument
+
+They differ in one ingredient. Same basis, same testing, same kernel, same
+feed, same mesh — only the charge's support. On the thin deck at N = 64
+that ingredient is worth 172×, and the pair now measures a third axis
+beside the basis × testing matrix of Act V: **the support of the charge**.
+Neither row replaces the other, and `PulseSolver` keeps its name, its
+thesis and its gates.
