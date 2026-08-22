@@ -1111,3 +1111,123 @@ def test_gu2_9_deep_grazing_composed_field_grid_vs_direct(cell, record_property)
     # remainder pass.
     assert max_share > 1.0, f"{cell}: remainder never dominates (max {max_share:.3g})"
     assert worst < G_U2_9_TOL, f"{cell}: {worst:.3e} of total field at {worst_at}"
+
+
+# ======================================================================
+# G-U2-10 — the grid is filled at the CALLER'S eps_tilde
+# ======================================================================
+#
+# The third appearance of one inversion, and the one that actually shipped
+# a wrong number for a while. `_sommerfeld.get_grid` quantizes Im(eps_t)
+# onto a 1 % geometric ladder so a frequency sweep collapses to a few
+# fills; its calibration says a relative Im perturbation delta moves the
+# +-=+ surfaces by only ~(0.08-0.14)*delta of scale. `get_grid_below` was
+# written by copying that, and inherited an argument that does not hold
+# below.
+#
+# Below, the surfaces carry e^{+j(k_p rho + k_m h)} with k_m = k_p sqrt(eps_t),
+# so a relative Im shift delta moves the phase by ~0.5*delta*|k_m|*R1 --
+# GROWING with R1, ~6*delta at the 2 lambda_m cap, against the +-=+
+# family's 0.1*delta damping. Measured at (B/7 MHz, R1 = 1.31 lambda_m,
+# theta = 2.18 deg), grid at the bucketed eps vs direct at the caller's
+# exact eps: 5.98e-3 / 1.52e-2 / 4.13e-3 / 6.59e-3 per surface. With one
+# eps on both sides: 1.5e-6 ... 5.7e-5.
+#
+# This gate is the comparison that catches it: the grid comes from
+# `get_grid_below` (the cached path a caller uses), the reference from
+# `iv_surfaces_direct_below` at the caller's exact eps_t, and the eps
+# values are chosen to sit HALF A RUNG off the ladder, where a surviving
+# quantization would do its worst.
+
+
+def _half_rung_off_bucket(eps_r, im_magnitude_near):
+    """An eps_tilde whose Im sits exactly half a rung off the ±=+ ladder.
+
+    `_somm_eps_bucket` rounds log(-Im) to the nearest rung of a 1 % ladder,
+    so the worst case is a half rung — the value it would move furthest.
+    Building it here rather than hard-coding one keeps the gate honest if
+    the ladder step ever changes.
+    """
+    step = 1.0 + som._SOMM_EPS_IM_BUCKET
+    n = round(math.log(im_magnitude_near, step))
+    return complex(eps_r, -(step ** (n + 0.5)))
+
+
+def test_gu2_10_the_eps_ladder_would_have_moved_these():
+    """The gate below is only meaningful if its eps values are genuinely
+    off-ladder — assert that, so a future ladder change cannot quietly turn
+    G-U2-10 into a tautology."""
+    for eps_r, im_near in ((20.0, 77.0), (13.0, 12.8), (5.0, 2.57)):
+        eps = _half_rung_off_bucket(eps_r, im_near)
+        moved = som._somm_eps_bucket(eps)
+        assert moved != eps
+        shift = abs(moved.imag - eps.imag) / abs(eps.imag)
+        assert shift > 0.004, f"{eps} only shifts {shift:.2e}"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "eps_r,im_near,freq",
+    [(20.0, 77.0, 7e6), (13.0, 12.8, 7e6), (5.0, 2.57, 21e6)],
+)
+def test_gu2_10_cached_grid_matches_direct_at_the_exact_eps(
+    eps_r, im_near, freq, record_property
+):
+    """`get_grid_below` -> direct, both at the caller's exact eps_tilde, at
+    the disputed geometry class: deep grazing, R1 past one in-medium
+    wavelength, on eps values half a rung off the ±=+ ladder."""
+    eps = _half_rung_off_bucket(eps_r, im_near)
+    om = 2.0 * np.pi * freq
+    kp = om / C0
+    km = below.k_medium(eps, kp)
+    lam_m = 2.0 * np.pi / abs(km)
+
+    grid = below.get_grid_below(eps, kp, 2.0 * lam_m, om)
+    # The cached path must not have quantized anything away.
+    assert grid.eps_t == eps, f"grid filled at {grid.eps_t!r}, caller asked {eps!r}"
+
+    # The disputed coordinates class, plus a sweep across the far half of
+    # the served rectangle at grazing.
+    r1 = np.concatenate(
+        [
+            np.array([math.hypot(6.3, 0.24)]),
+            np.linspace(1.0 * lam_m, 1.98 * lam_m, 9),
+        ]
+    )
+    r1 = r1[r1 <= grid.r1_max]
+    th = np.concatenate(
+        [np.array([math.atan2(0.24, 6.3)]), np.radians(np.linspace(1.0, 5.0, 9))]
+    )[: r1.size]
+    got = grid.eval(r1, th)
+    ref = below.iv_surfaces_direct_below(eps, kp, r1, th, rtol=1e-9, omega=om)
+
+    worst = 0.0
+    for k in KEYS:
+        d = np.abs(ref[k])
+        live = d >= _RECT_FLOOR_REL * d.max()
+        worst = max(worst, float(np.max(np.abs(got[k] - ref[k])[live] / d[live])))
+    record_property("worst_per_surface", float(worst))
+    record_property("eps_t", repr(eps))
+    record_property("eps_bucket_would_be", repr(som._somm_eps_bucket(eps)))
+    assert worst < G_U2_4_PRODUCT_TOL, f"{eps}: {worst:.3e}"
+
+
+@pytest.mark.slow
+def test_gu2_10_two_close_eps_values_do_not_share_a_below_grid():
+    """Two ε̃ a ladder rung apart are two fills below, where above they
+    would be one. That is the whole cost of dropping the bucket, and it is
+    the behaviour being paid for — so it is asserted, not assumed."""
+    om = 2.0 * np.pi * 7e6
+    kp = om / C0
+    a = complex(20.0, -77.03616)
+    b = som._somm_eps_bucket(a)
+    assert b != a, "pick an eps the ladder actually moves"
+    som._GRID_CACHE.clear()
+    lam_m = 2.0 * np.pi / abs(below.k_medium(a, kp))
+    ga = below.get_grid_below(a, kp, 0.4 * lam_m, om)
+    gb = below.get_grid_below(b, kp, 0.4 * lam_m, om)
+    assert ga is not gb
+    assert ga.eps_t == a
+    assert gb.eps_t == b
+    assert below.get_grid_below(a, kp, 0.4 * lam_m, om) is ga
+    som._GRID_CACHE.clear()
