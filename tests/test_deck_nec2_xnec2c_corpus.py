@@ -153,7 +153,12 @@ _EXPECTED: dict[str, str | None] = {
     "2m_sqr_halo_stack": None,
     "2m_xpol_omni": None,
     "2m_xpol_omni_stack": None,
-    "40m-moxon": None,
+    # Served until the 2026-08-22 refresh, and the refusal is not this
+    # deck's fault: it carries NE/NH over its GN 2 ground, which this dialect
+    # still refuses although the engine has served near fields over every
+    # ground since momwire#545.  Recorded as the stale refusal it is, and
+    # tracked as momwire#560 — when that lands, this goes back to None.
+    "40m-moxon": "NH over a finite ground",
     "6-17m_bipyramid": None,
     "6-20m_fan": None,
     "6-20m_inv_cone": None,
@@ -208,11 +213,20 @@ def test_the_corpus_is_the_one_this_module_measures():
     checkout that grew or lost a deck must say so here rather than quietly
     change what every other test in this file means.
 
-    75 decks, of which 36 write a ``GX`` or a ``GR``.  #415's census reported
-    82 and 34; the surplus and the shortfall are both this checkout being a
-    different revision of the xnec2c tree, not a disagreement about the cards.
+    82 decks, of which 36 write a ``GX`` or a ``GR``.  Re-recorded 2026-08-22
+    against a refreshed checkout (it had been 75 and 36; #415's original census
+    reported 82 and 34).  The seven decks the refresh brought write neither
+    card, so the GX/GR slice and every expectation in ``_EXPECTED`` came
+    through unchanged except ``40m-moxon`` — see its entry.
+
+    This test could not fail for the whole period the counts were wrong: two
+    corpus decks carry 4nec2 ``SY`` cards, ``_decks()`` tokenizes at import,
+    and the resulting ``DeckError`` was a COLLECTION error, so every test in
+    this module errored and none of them ran.  The decks are expanded now
+    (antennaknobs ``scripts/expand_sy_deck.py``); the lesson is that a census
+    guard behind an import-time parse guards nothing.
     """
-    assert len(list(CORPUS.glob("*.nec"))) == 75
+    assert len(list(CORPUS.glob("*.nec"))) == 82
     assert len(NAMES) == 36
     assert set(NAMES) == set(_EXPECTED)
 
@@ -386,8 +400,22 @@ def test_40m_moxon_is_the_wild_witness_for_the_network_cell_exemption():
     refusal — which is what says the exemption holds outside the probes.
 
     It is also the only deck in this 36-deck slice where the two rules meet,
-    so if the exemption were wrong this is where the corpus would say so."""
-    model = parse((CORPUS / "40m-moxon.nec").read_text())
+    so if the exemption were wrong this is where the corpus would say so.
+
+    The deck also carries ``NE``/``NH`` over its ``GN 2`` ground, which this
+    dialect refuses although the engine has served near fields over every
+    ground since momwire#545 (tracked as momwire#560).  That is about the two
+    OBSERVATION cards and touches nothing this test measures, so they are
+    dropped here rather than losing the only wild witness there is — and the
+    drop is GATED below, so the day #560 lands this test fails and says to
+    stop trimming."""
+    text = (CORPUS / "40m-moxon.nec").read_text()
+    with pytest.raises(DeckError, match="NH over a finite ground"):
+        parse(text)
+    trimmed = "\n".join(
+        line for line in text.splitlines() if line.split()[:1] not in (["NE"], ["NH"])
+    )
+    model = parse(trimmed)
     built = build_geometry(geometry_cards("40m-moxon"))
     assert built.symmetry is not None, "the premise: the cell must still be live"
     assert [c.kind for c in model.networks] == ["TL", "TL", "TL"]
