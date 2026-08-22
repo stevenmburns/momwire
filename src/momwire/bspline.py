@@ -61,6 +61,7 @@ from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
     _ek_axis_groups,
+    _refuse_complex_k,
     _seg_seg_full_moments_offedge,
     _seg_seg_full_moments_offedge_swept,
     _seg_seg_reg_geometry,
@@ -2181,6 +2182,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         — only the moment CHUNK COUNT changes the wall-clock cost, never the
         answer.
         """
+        # `dtype=float` below would silently drop the imaginary part of an
+        # in-medium sweep. Unit 1 of momwire#553 widens the moment KERNELS,
+        # not the solver: this method also feeds `_assemble_Z`'s
+        # `float(self.eps)` prefactor seam and the C++ windowed assembler,
+        # neither of which has a medium. Refuse by name rather than truncate.
+        _refuse_complex_k(k_array, "the swept B-spline same-edge fill")
         k_array = np.asarray(k_array, dtype=float)
         n_k = k_array.shape[0]
         d = self.degree
@@ -3537,6 +3544,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         path computes both halves so a future quadrature change can't
         silently break symmetry.
         """
+        # The singular-enrichment fill is a SECOND kernel implementation —
+        # its own GL quadrature over the (u·log(u/h))-shaped basis, in C++
+        # (`assemble_Z_enrich`, `double k`) and in its numpy twin, plus
+        # three more image/remainder assemblers below. momwire#553 unit 1
+        # widens the polynomial moment kernels only, so complex k refuses
+        # here by name rather than reaching `float(self.k)` and dying as a
+        # TypeError that names nothing.
+        _refuse_complex_k(self.k, "the B-spline singular-enrichment fill")
         specs = self._enrichment_specs(
             geom, active_junction_indices=active_junction_indices
         )
@@ -4200,6 +4215,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
           `swept_mem_mb` dispatch instead of always materialising the full
           (d+1, d+1, N, N) moment tensor (issue #238).
         """
+        _refuse_complex_k(k_array, "BSplineSolver._port_solutions_swept")
         k_array = np.asarray(k_array, dtype=float)
         if self.use_singular_enrichment:
             with self._k_restored():
@@ -4493,6 +4509,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         solve, and it keeps the swept answer bit-comparable with the per-k
         `compute_impedance` it mirrors.
         """
+        _refuse_complex_k(k_array, "BSplineSolver.compute_impedance_swept")
         k_array = np.asarray(k_array, dtype=float)
         n_total = len(self.feeds) + len(self.junction_ports)
         if n_total == 1:
