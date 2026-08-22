@@ -13,7 +13,9 @@ Two flavours of same-edge moment integrals are exposed:
   * `_seg_seg_reg_moments`: smooth-kernel piece
         R_pq[i, j] = ∫∫ (s-α_i)^p (s'-A_j)^q · (exp(-jkR)-1)/(4π R) ds' ds
     by per-segment Gauss-Legendre quadrature on the bounded difference
-    (exp(-jkR) - 1)/R (limit -jk at R = 0).
+    (exp(-jkR) - 1)/R (limit -jk at R = 0 — with k COMPLEX too, see the
+    in-medium section below; the limit is the analytic continuation and the
+    magnitude bound is |k|, not k).
 
 The full moment is S_pq + R_pq on same-edge pairs; for cross-edge / cross-
 wire pairs (not in this first-cut single-wire scope) the unregularized
@@ -59,10 +61,14 @@ reduces it to exactly the pre-existing expression rather than to something
 that merely rounds to it. The static half's new O(a²) piece is one generated
 closed-form family, `D_ek_moment` — one integrand, never 1/R³ and 1/R⁵
 separately (see scripts/derive_bspline_static_moments.py for the
-cancellation this avoids). The remainder is bounded by ≈ 3.5k on R ≥ a, the
-same class as the reduced `(e^{-jkR}−1)/R → −jk` limit, and is resolved by
-the existing Gauss–Legendre rule at unchanged `n_qp` (measured: the EK
-remainder's quadrature error is within 2–8× the reduced remainder's).
+cancellation this avoids). The remainder is bounded by |k| on R ≥ a — in
+MODULUS, so the statement carries over verbatim to the complex k of the
+in-medium kernel below (momwire#553 U1 re-measured `sup_{R≥a} |4π·G_reg|/|k|`
+over Δ/a ∈ [0.5, 100]: **1.0000** for the reduced remainder and **1.0000**
+for the EK one, at real k₀ and at every #553 SPEC k_m; the pre-#553 note here
+said "≈ 3.5k", the same class, just loose). It is resolved by the existing
+Gauss–Legendre rule at unchanged `n_qp` (measured: the EK remainder's
+quadrature error is within 2–8× the reduced remainder's).
 
 Two honest limits, both measured (momwire#249 design §1.3, §3):
 
@@ -147,6 +153,138 @@ _HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL = _acc is not None and hasattr(
 _BSPLINE_ACCEL_MAX_D = 2
 
 MAX_D_SUPPORTED = 2
+
+
+# ----------------------------------------------------------------------
+# THE IN-MEDIUM KERNEL: complex k (momwire#553 unit 1)
+# ----------------------------------------------------------------------
+#
+# A segment pair buried in a lossy medium sees the same thin-wire kernel,
+# analytically continued to the medium's complex wavenumber
+# k_m = k₀·√ε̃, ε̃ = ε_r − jσ/(ωε₀). King & Smith (1981) eqs. (3.1)/(3.5)
+# state this outright for the tubular kernel: the functional form is
+# unchanged at complex k — no new terms appear — and their k = β − jα with
+# e^{+jωt} is momwire's convention already, so k_m enters where k stood.
+# What continues with it:
+#
+#   * the static extraction. King & Smith §7.4 (eqs. 4.1–4.5) puts the
+#     kernel's whole coincidence singularity in its REAL part, ~1/R, and
+#     that part is k-INDEPENDENT — so `_seg_seg_static_moments` and
+#     `D_ek_moment` are k-free closed forms that stay valid verbatim, and
+#     the complex-k content lives entirely in the smooth remainder's
+#     series 1/R − jk − k²R/2 + jk³R²/6 + … with complex coefficients.
+#     `_seg_seg_static_moments` therefore takes no k and needs no widening.
+#   * the small-argument expansions. There are none written out here: the
+#     remainder is evaluated as the single complex exponential, so the only
+#     "expansion" is IEEE's own `exp`.
+#   * the extended kernel. `_ek_factor`/`_ek_reg_extra`/`_ek_reg_kernel`
+#     are already written in terms of `kr = k·R` and `1j`, so they continue
+#     without a character changing (gated, not assumed).
+#
+# The named TRAP is King & Smith (3.20b,c): a lossy-medium kernel split
+# into e^{−αR}cos(βR)/R and e^{−αR}sin(βR)/R. Any code path carrying
+# cos(kR)/sin(kR) with a REAL k does NOT generalize by substituting |k|.
+# momwire's B-spline fill carries no such split (audited at #553 U1: zero
+# occurrences of a trig-of-kR spelling in `_bspline_kernels`,
+# `_bspline_static_moments`, `_bspline_ek_moments`), which is exactly why
+# the continuation is a dispatch change rather than a rewrite.
+#
+# DISPATCH RULE — `np.iscomplexobj(k)`, and nothing else.
+# One predicate for scalars and for swept k arrays alike (a Python
+# `complex`, a `np.complex128`, and a complex-dtype array all answer True;
+# a Python float, a `np.float64` and a float64 array all answer False), so
+# there is no second spelling to drift. A complex k routes to the numpy
+# twins, bypassing every `_HAVE_*` accelerator flag: the C++ kernels take
+# `double k` and would truncate. Real k is untouched — same branch, same
+# arithmetic, same bytes. A complex k whose imaginary part happens to be
+# zero takes the complex (numpy) path by dtype, not by value; it agrees
+# with the real path to rounding, and pinning bytes across dtypes is not
+# something this module promises anywhere.
+#
+# CONVENTION — asserted, never repaired. With e^{+jωt}, Im k ≤ 0 is what
+# makes e^{−jkR} decay; the opposite branch of the square root gives a
+# kernel that grows with distance. `_complex_k` raises rather than
+# conjugating, because the branch choice belongs where k_m is DERIVED from
+# ε̃ (the precedent is `_sommerfeld._d12`, which conjugates k1 at the point
+# of derivation). A conjugation here would silently rescue a caller that
+# built the wrong k and leave every other quantity on the wrong branch.
+#
+# QUADRATURE — `n_qp` does NOT escalate in the medium, and that is a
+# measurement (#553 U1 gate G-U1-7), not a hope. The GL rule's difficulty is
+# set by |k|·h, and at EQUAL |k|·h the in-medium remainder costs what the
+# free-space one costs: n_qp=4 relative error over |k|h ∈ [0.05, 5],
+# reduced kernel at Δ/a = 24, is 1.6e-04 → 2.3e-02 at real k₀ and
+# 1.6e-04 → 2.7e-02 at the worst SPEC k_m (soil B / 7 MHz, |k_m|/k₀ = 8.92)
+# — a spread of ≤1.15×, in both directions. The EK remainder is two to three
+# decades below that throughout (worst 3.4e-04 at |k|h = 5), so it never
+# sets the rule. What DOES change in the medium is h: a deck meshed against
+# the free-space wavelength runs at |k_m|h = |n|·|k₀|h — 8.9× the panel
+# phase at soil B / 7 MHz, i.e. ~0.70 rad on a 20-per-quarter-λ₀ mesh,
+# where n_qp=4 reads 2.5e-03 instead of 2.5e-04. That is the under-meshing
+# U4 fixes by judging segment length against λ_m; it is a MESHING defect,
+# not a quadrature-order one, and escalating n_qp here would paper over it.
+# (It also could not live here: `n_qp` sizes the k-INDEPENDENT geometry
+# `_seg_seg_reg_geometry` builds, which by design never sees k.)
+_IM_K_CONVENTION = "e^{+jwt} requires Im k <= 0 so that e^{-jkR} decays"
+
+
+def _complex_k(k):
+    """The complex-k dispatch predicate, plus the convention guard.
+
+    Returns True when `k` (scalar or array) is complex-typed, in which case
+    the caller must take the numpy path. Raises when any component has
+    Im k > 0 — the growing-exponential branch, which no kernel here will
+    evaluate.
+    """
+    if not np.iscomplexobj(k):
+        return False
+    if np.any(np.asarray(k).imag > 0.0):
+        raise ValueError(
+            f"complex k with Im k > 0: {_IM_K_CONVENTION}. Take the other "
+            "branch of k_m = k0*sqrt(eps_tilde) where k_m is derived (the "
+            "precedent is _sommerfeld._d12's conjugation of k1); this "
+            "kernel will not conjugate for you."
+        )
+    return True
+
+
+def _refuse_complex_k(k, what):
+    """Named refusal for the fill paths momwire#553 unit 1 does NOT widen.
+
+    Unit 1 continues the B-spline moment kernels' numpy twins to complex k
+    and nothing else. Every other assembler that could be handed a `k`
+    refuses by name here rather than truncating it to its real part, which
+    is what `float(k)` / `dtype=float` would have done.
+    """
+    if np.iscomplexobj(k):
+        raise ValueError(
+            f"{what} does not serve complex k (an in-medium wavenumber "
+            "k_m = k0*sqrt(eps_tilde)): momwire#553 unit 1 widens only the "
+            "B-spline moment kernels' numpy path."
+        )
+
+
+def _k_array_asarray(k_array):
+    """`np.asarray` for a swept-k vector that cannot silently truncate.
+
+    `np.asarray(k_array, dtype=float)` on a complex array does not raise —
+    numpy drops the imaginary part with a ComplexWarning that is a warning,
+    not an error, and warnings are filtered. That is the silent-truncation
+    class momwire#553 unit 1 kills: complex in, complex out (the numpy
+    swept twins serve it); real in, float64 out exactly as before.
+    """
+    if np.iscomplexobj(k_array):
+        return np.asarray(k_array, dtype=np.complex128)
+    return np.asarray(k_array, dtype=np.float64)
+
+
+def _k_scalar(k):
+    """One element of a swept-k vector, as the scalar the single-k entry
+    points take. `float` for a real k — the pre-#553 spelling and the same
+    value — `complex` for an in-medium one, where `float` would raise."""
+    if np.iscomplexobj(k):
+        return complex(k)
+    return float(k)
 
 
 def _normalize_row_radius(a, n_rows):
@@ -478,23 +616,29 @@ def _ek_reg_kernel(R, a, k):
 
 
 def _seg_seg_reg_moments_from_geometry(geo, k):
-    """Per-k smooth-kernel moment block from a `_seg_seg_reg_geometry` dict."""
+    """Per-k smooth-kernel moment block from a `_seg_seg_reg_geometry` dict.
+
+    `k` may be the in-medium complex wavenumber (momwire#553 unit 1); the
+    geometry dict is k-independent and so serves both. A complex k takes
+    the numpy branches below — the C++ twins are `double`-typed.
+    """
     R = geo["R"]
     wu_pow = geo["wu_pow"]
     N = geo["N"]
     n_qp = geo["n_qp"]
     ek = geo.get("ek")
+    in_medium = _complex_k(k)
     # Single-k case (the non-swept compute_impedance): the same streaming C++
     # kernel serves it with a length-1 k axis, which we squeeze back off. This
     # is the ~65% of a single d=2 solve that the numpy einsum below otherwise
     # dominates. Bit-close (different reduction order); numpy stays the fallback.
-    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None:
+    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None and not in_medium:
         return _acc.seg_seg_reg_moments_bspline_swept(
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
             np.ascontiguousarray(np.asarray([k], dtype=np.float64)),
         )[0]
-    if ek is not None and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL:
+    if ek is not None and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL and not in_medium:
         # The EK twin (momwire#270), same length-1 k axis. Whole-block
         # eligibility, as below — the C++ kernel takes no group labels.
         return _acc.seg_seg_reg_moments_bspline_swept_ek(
@@ -536,22 +680,25 @@ def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 <
     N = geo["N"]
     n_qp = geo["n_qp"]
     n_d = wu_pow.shape[0]
-    k_array = np.asarray(k_array, dtype=float)
+    # NOT `np.asarray(k_array, dtype=float)`: that silently discards the
+    # imaginary part of an in-medium sweep (momwire#553 unit 1).
+    k_array = _k_array_asarray(k_array)
     n_k = k_array.shape[0]
     ek = geo.get("ek")
+    in_medium = _complex_k(k_array)
 
     # Streaming C++ kernel: evaluates exp(-jkR) once per (iq, jr, k) and
     # accumulates straight into the (n_d, n_d) moment block, so it never
     # materializes the (chunk, N*n_qp, N*n_qp) phase intermediate this numpy
     # path has to chunk under max_chunk_bytes. Bit-close (different reduction
     # order) to the einsum below, which stays as the fallback.
-    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None:
+    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None and not in_medium:
         return _acc.seg_seg_reg_moments_bspline_swept(
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
             np.ascontiguousarray(k_array, dtype=np.float64),
         )
-    if ek is not None and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL:
+    if ek is not None and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL and not in_medium:
         # The EK twin (momwire#270). It streams the same way, so the EK sweep
         # no longer materializes the chunked phase intermediate either.
         return _acc.seg_seg_reg_moments_bspline_swept_ek(
@@ -631,16 +778,23 @@ def _seg_seg_full_moments_offedge(
     rather than the whole-block case.
     """
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
+    in_medium = _complex_k(k)
     gl_xi, gl_w = leggauss(n_qp)
     t01 = 0.5 * (gl_xi + 1.0)
     w01 = 0.5 * gl_w
 
-    accel_ok = _HAVE_BSPLINE_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D and ek is None
+    accel_ok = (
+        _HAVE_BSPLINE_ACCEL
+        and max_d <= _BSPLINE_ACCEL_MAX_D
+        and ek is None
+        and not in_medium
+    )
     accel_ok_ek = (
         ek is not None
         and ek.group_i is not None
         and ek.group_j is not None
         and _HAVE_BSPLINE_OFFEDGE_EK_ACCEL
+        and not in_medium
         # max_d=0 has no C++ template instantiation (only D in {1, 2} are
         # instantiated for either kernel flavour) — the reduced dispatch
         # above shares this floor too, just never exercises it: `ek is not
@@ -767,18 +921,22 @@ def _seg_seg_full_moments_offedge_swept(
     back to stacking single-k calls. A spec with unset group labels (or no
     C++ EK twin available) still falls back to that stack.
     """
-    k_array = np.asarray(k_array, dtype=np.float64)
+    # NOT `np.asarray(k_array, dtype=np.float64)` — see `_k_array_asarray`.
+    k_array = _k_array_asarray(k_array)
+    in_medium = _complex_k(k_array)
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
     accel_ok = (
         _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL
         and max_d <= _BSPLINE_ACCEL_MAX_D
         and ek is None
+        and not in_medium
     )
     accel_ok_ek = (
         ek is not None
         and ek.group_i is not None
         and ek.group_j is not None
         and _HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL
+        and not in_medium
         # Same max_d=0 floor as the single-k twin above.
         and 1 <= max_d <= _BSPLINE_ACCEL_MAX_D
     )
@@ -843,7 +1001,18 @@ def _seg_seg_full_moments_offedge_swept(
     return np.stack(
         [
             _seg_seg_full_moments_offedge(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, float(k), max_d, n_qp, ek=ek
+                seg_l_i,
+                seg_r_i,
+                seg_l_j,
+                seg_r_j,
+                a,
+                # `float(k)` pre-#553; `_k_scalar` returns the identical
+                # float for a real sweep and a `complex` for an in-medium
+                # one, where `float()` would raise TypeError.
+                _k_scalar(k),
+                max_d,
+                n_qp,
+                ek=ek,
             )
             for k in k_array
         ],
