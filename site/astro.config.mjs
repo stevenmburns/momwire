@@ -107,6 +107,7 @@ export default defineConfig({
             { label: "The nec2 deck dialect", slug: "reference/deck-grammar-nec2" },
             { label: "Running momwire as SimNEC's engine", slug: "reference/portal-usage" },
             { label: "Running momwire as EZNEC's NEC-5 engine", slug: "reference/eznec-nec5" },
+            { label: "Choosing an engine: cost, memory, accuracy", slug: "reference/choosing-an-engine" },
           ],
         },
         {
