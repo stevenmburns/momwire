@@ -24,6 +24,19 @@ subdiv ladder is gated to keep GROWING — a gate that FAILS IF FIXED, because
 a ladder that converged would mean the composition changed and U3's refusal
 sentence needs re-measuring.
 
+**The bare `GD` ground (momwire#545 U2).**  A MININEC-type ground solves its
+CURRENTS over a perfect image — the `Z ≡ GN 1` identity, gated on the
+impedance rungs elsewhere — but its NEAR FIELD in the medium: 0108 (`GD`)
+agrees with 0110 (`GN 0`) to 4.4 % worst-cell in the captures, symmetry-dead
+`EY` included.  So a `GD` deck's composition is the SAME `direct + C₂·image +
+remainder` this file already gates, with ε̃ taken from the deck's own medium
+rather than from the PEC row `_ground_spec.ground_config` necessarily returns
+for a `ground_z`-alone solver.  No new physics lands here — `_composed` grows
+one branch, and the new gates are an envelope (0108), a reproduction of the
+captures' own cross-agreement (0108 against 0110), an anti-aliasing gate that
+FAILS if a `GD` near field is ever composed as a plain PEC image, and the
+`GD` flavor of the singular-cell ladder (0107, `GD`'s own contact point).
+
 **The collapses and the identities.**  ε̃ → 1e16 collapses the pair
 ``C₂·image + remainder`` onto the plain PEC image; ε̃ = 1 makes the remainder
 exactly zero; the point dyad projected on an observer tangent reproduces the
@@ -46,8 +59,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from momwire import _field_point, _ground_spec, _sommerfeld
-from momwire.deck._nec5 import Nec5NearFieldRequest, parse_nec5
+from momwire import _field_point, _ground_refl, _ground_spec, _sommerfeld
+from momwire.deck._nec5 import Nec5MininecGround, Nec5NearFieldRequest, parse_nec5
 from momwire.eznec._serve import (
     SPEED_OF_LIGHT_MHZ_M,
     _NEAR_FIELD_SUBDIV,
@@ -96,6 +109,8 @@ DECKS = Path(FIXTURE_DIR) / "decks"
 #   0113     NE    EY        25        1.7964 %      1.8126 %    0.304 deg
 #   0113     NE    EZ        25        1.1156 %      1.5163 %    0.260 deg
 #   0111     NH    HY        25        1.0144 %      6.7000 %    0.328 deg
+#   0108     NE    EX        25        4.3732 %      5.4533 %    0.604 deg
+#   0108     NE    EZ        25        1.1693 %      2.3030 %    1.235 deg
 #
 # 0110's worst cell is EX at (1, 0, 10) — a third of a metre below the top of
 # a 10.3 m monopole and one metre out from it, the hardest place in this
@@ -104,11 +119,23 @@ DECKS = Path(FIXTURE_DIR) / "decks"
 # (0.3048, 0, 3.048), and 0111's is HY at (1, 0, 8).  Everything else in all
 # three tables is well inside.
 #
+# 0108 is `GD` (momwire#545 U2), its `NE` card identical to 0110's — same
+# grid, same worst cell (1, 0, 10) — but composed from the PEC-image solve's
+# currents evaluated in the deck's OWN medium rather than from a Sommerfeld
+# solve: `_composed` reads ε̃ from `_medium(deck.ground, wavelength)` for a
+# `Nec5MininecGround` deck instead of from `_ground_spec.ground_config`,
+# which would hand back the PEC row (`eps_tilde=None`) that a `ground_z`-alone
+# solver always constructs.  The envelope lands in the same class as 0110's
+# own, which is the point: two different current solves read out at the same
+# medium sit close together, and gate 3 below reproduces that agreement
+# directly rather than trusting this table's resemblance to say so.
+#
 # The bars are those worst readings plus 25 %.
 NEAR_POINT_BAR = {
     "0110": (0.0531, 1.58),
     "0113": (0.0225, 0.38),
     "0111": (0.0127, 0.41),
+    "0108": (0.0547, 1.54),
 }
 
 # The columns a live gate is drawn on, per capture.  The rest are
@@ -117,6 +144,7 @@ LIVE_COLUMNS = {
     "0110": (0, 2),  # EX, EZ — a vertical monopole makes EY exactly zero
     "0113": (0, 1, 2),  # the elevated dipole lights every column
     "0111": (1,),  # HY — the same symmetry kills HX and HZ
+    "0108": (0, 2),  # EX, EZ — same vertical, now over `GD`
 }
 
 # The columns whose true value is exactly zero, gated by MAGNITUDE alone.
@@ -135,14 +163,20 @@ LIVE_COLUMNS = {
 #   0110     EY        0.0219 %      0.0 (exact)
 #   0111     HX        0.2216 %      0.0 (exact)
 #   0111     HZ        0.0000 %      0.0 (exact)
+#   0108     EY        0.0219 %      0.0 (exact)
 #
 # — and the ANGLE of that dust is a random number.  0110's EY phase disagrees
 # with ours by 46 deg and 0111's HX by 65 deg, which is exactly what comparing
-# the arguments of two independent zeros looks like.  So the bar is the dust
-# bound, 1 % of table scale, applied to BOTH sides, and no phase is compared:
-# the angle of zero is not a number.
+# the arguments of two independent zeros looks like.  0108's EY phase
+# disagrees by the same 46.88 deg (its captured dust is 1.7359E-02 against
+# 0110's 1.7342E-02 — the two engine tables' own dust, not ours), which is the
+# same "angle of zero" observation one grid over: the GD and GN 0 currents
+# differ, but whatever residual their shared symmetry cannot kill lands at an
+# unrelated phase on both.  So the bar is the dust bound, 1 % of table scale,
+# applied to BOTH sides, and no phase is compared: the angle of zero is not a
+# number.
 DUST_BOUND = 0.01
-DEAD_COLUMNS = {"0110": (1,), "0111": (0, 2)}
+DEAD_COLUMNS = {"0110": (1,), "0111": (0, 2), "0108": (1,)}
 
 # The contact cell's subdiv ladder, measured 2026-08-21 (see
 # `test_the_contact_cell_ladder_does_not_converge_on_purpose`).
@@ -153,6 +187,44 @@ DEAD_COLUMNS = {"0110": (1,), "0111": (0, 2)}
 # The engine prints 8.2521E+02 ∠162.15 deg, which sits BETWEEN subdiv 16 and
 # subdiv 32.
 CONTACT_LADDER_SUBDIVS = (1, 4, 8, 16, 32, 64)
+
+# 0107 is 0112's deck under `GD` instead of `GN 0` — same single point at
+# (0, 0, 0), same singularity, now composed from the PEC-image solve's
+# currents read out in the medium (see
+# `test_the_gd_contact_cell_ladder_does_not_converge_on_purpose_either`).
+# Measured 2026-08-21:
+#
+#   subdiv     1       4        8        16       32       64
+#   |E| V/m  34.137 115.425  237.162  461.816  763.860  959.384
+#
+# The engine prints 6.6673E+02 for this cell's `EZ` component, which sits
+# BETWEEN subdiv 16 and subdiv 32 — the same pair of rungs 0112's engine
+# number sits between, though nothing about the composition guarantees that;
+# it was measured, not assumed.  Not pinned as a python constant, the same
+# discipline `CONTACT_LADDER_SUBDIVS`'s own rungs get above: printing a rung
+# would be publishing an artefact of `_NEAR_FIELD_SUBDIV`, so only the
+# structural properties (monotone, ≥3x spread, engine between subdiv 16 and
+# 32) are gated below.
+
+# 0108's own worst live cells against 0110's, both through `_composed` — the
+# seam's reproduction of the captures' 4.4 %-worst-cell cross-agreement
+# (momwire#516).  Measured 2026-08-21 over the live columns (EX, EZ):
+#
+#   column  worst distance of scale
+#   EX          1.5379 %
+#   EZ          0.7294 %
+#
+# well under the 4.4 % the captures themselves sit apart at — the currents
+# differ (PEC-image solve vs Sommerfeld solve) but the evaluation medium is
+# identical, so the two composed tables land closer to each other than either
+# does to its own capture.  The smallest live-cell distance measured is
+# 0.0121 % of scale.  That floor is the gate's other half: it is never
+# exactly zero, because the two current solves are genuinely different — a
+# routing bug that fed 0108 the SAME currents as 0110 (rather than its own
+# PEC-image solve) would collapse this distance to 0.0 identically, and the
+# floor bar catches that the envelope and alias gates do not.
+CROSS_AGREEMENT_BAR = 0.0192
+CROSS_AGREEMENT_FLOOR = 0.00009
 
 
 # --------------------------------------------------------------------------
@@ -165,9 +237,10 @@ def _solved(cid: str):
     """`(deck, mesh, solver, coeffs)` for one capture.
 
     The steps `_serve.serve` takes up to the point where it would read a
-    result out, spelled here because `serve()` itself refuses all five of this
-    file's decks — an ``NE``/``NH`` over a ``GN 0`` — until #545 U3 routes
-    them.  Cached because five of the eight gates below want the same solves.
+    result out, spelled here because `serve()` itself refuses every one of
+    this file's decks — an ``NE``/``NH`` over a ``GN 0`` or a bare ``GD`` —
+    until #545 U3 routes them.  Cached because eleven of the thirteen gates
+    below want the same solves.
     """
     deck = parse_nec5(next(DECKS.glob(f"{cid}_*.nec")).read_text())
     structure = structure_of(deck)
@@ -206,12 +279,28 @@ def _request_points(deck):
     )
 
 
-def _composed(cid, *, subdiv=_NEAR_FIELD_SUBDIV, sign=1.0, eps_t=None):
+def _composed(cid, *, subdiv=_NEAR_FIELD_SUBDIV, sign=1.0, eps_t=None, pec_alias=False):
     """``direct + C₂·image + sign·remainder`` at the capture's own grid.
 
     `sign` exists for the anti-regression gate and is +1 everywhere else;
-    `eps_t` overrides the deck's medium for the two collapse gates.  Returns
+    `eps_t` overrides the deck's medium for the two collapse gates.
+    `pec_alias` collapses the whole composition to ``direct + 1.0·image`` —
+    no medium, no remainder — the plain PEC image a `GD` near field must NOT
+    become (momwire#545 U2 gate 2, `test_the_gd_alias_...`).  Returns
     `(points, total, magnetic)`.
+
+    For a `Nec5MininecGround` (`GD`) deck, ε̃ does not come from
+    `_ground_spec.ground_config`: that function reads `solver.ground_eps`,
+    which `_solver_for` never sets for `GD` — it hands the solver the SAME
+    ``ground_z``-alone kwargs `GN 1` gets, the mechanical origin of the
+    ``Z ≡ GN 1`` identity — so `ground_config` would hand back the PEC row
+    (`eps_tilde=None`, `image_coefficient=1.0`).  That row is right for the
+    CURRENTS (the identity above) and wrong for the near field: `GD` solves
+    its near field IN THE MEDIUM (module docstring, "the bare `GD` ground").
+    ε̃ instead comes from `_medium(deck.ground, wavelength)` — the same
+    medium `_far_ground` reads for the pattern — folded by
+    `_ground_refl.eps_tilde`, the one function every other ground-consuming
+    solve already calls to do it.
     """
     deck, mesh, solver, coeffs = _solved(cid)
     request, points = _request_points(deck)
@@ -228,9 +317,20 @@ def _composed(cid, *, subdiv=_NEAR_FIELD_SUBDIV, sign=1.0, eps_t=None):
         points, (mid_img, moment_img, nodes_img, -delta), k, radius, magnetic
     )
 
-    config = _ground_spec.ground_config(solver, solver.omega)
+    if pec_alias:
+        return points, direct + block, magnetic
+
     if eps_t is None:
-        eps_t, coef = config.eps_tilde, config.image_coefficient
+        if isinstance(deck.ground, Nec5MininecGround):
+            wavelength = SPEED_OF_LIGHT_MHZ_M / float(deck.frequency_mhz)
+            medium = _medium(deck.ground, wavelength)
+            eps_t = _ground_refl.eps_tilde(
+                (medium.eps_r, medium.sigma), solver.omega, solver.eps
+            )
+            coef = (eps_t - 1.0) / (eps_t + 1.0)
+        else:
+            config = _ground_spec.ground_config(solver, solver.omega)
+            eps_t, coef = config.eps_tilde, config.image_coefficient
     else:
         eps_t = complex(eps_t)
         coef = (eps_t - 1.0) / (eps_t + 1.0)
@@ -258,10 +358,16 @@ def _captured(cid):
     )
 
 
-def _worst(cid, *, sign=1.0):
-    """`(worst magnitude of table scale, worst phase degrees)` over the live
-    columns' live cells."""
-    _, total, magnetic = _composed(cid, sign=sign)
+def _score(cid, total, magnetic):
+    """`(worst magnitude of table scale, worst phase degrees)` of an already-
+    composed `(total, magnetic)` pair against `cid`'s capture, over the live
+    columns' live cells.
+
+    Split out of `_worst` (momwire#545 U2) so the anti-aliasing gate can
+    score a composition that never went through `_composed` — the plain PEC
+    image has no `sign`, no `eps_t`, nothing `_worst`'s signature has a slot
+    for — without a parallel scoring loop.
+    """
     want_magnitude, want_phase, want_magnetic = _captured(cid)
     assert magnetic == want_magnetic
     scale = want_magnitude.max()
@@ -280,6 +386,13 @@ def _worst(cid, *, sign=1.0):
         worst_magnitude = max(worst_magnitude, float(error.max()))
         worst_phase = max(worst_phase, float(drift.max()))
     return worst_magnitude, worst_phase
+
+
+def _worst(cid, *, sign=1.0):
+    """`(worst magnitude of table scale, worst phase degrees)` over the live
+    columns' live cells."""
+    _, total, magnetic = _composed(cid, sign=sign)
+    return _score(cid, total, magnetic)
 
 
 # --------------------------------------------------------------------------
@@ -396,6 +509,39 @@ def test_the_contact_cell_ladder_does_not_converge_on_purpose():
     # The engine's own number sits inside the ladder rather than at its end,
     # which is the sharpest way to say neither party has converged.
     (block,) = extract(printout_text("0112")).near_fields
+    captured = block.rows[0].magnitudes[2]
+    assert rungs[3] < captured < rungs[4], (rungs, captured)
+
+
+def test_the_gd_contact_cell_ladder_does_not_converge_on_purpose_either():
+    """0107 is 0112's deck under `GD` instead of `GN 0` — the same single
+    grid point at (0, 0, 0), the same contact-fed base, now through the
+    PEC-image-solved-currents / in-medium composition U2 adds.
+
+    The singularity above does not care which ground supplied the currents:
+    the base node's continuity charge sits exactly at the observer either
+    way, and the image cancels it only by ``1 − C₂`` — a finite factor at a
+    point where the residual charge's own field is infinite.  The ladder
+    therefore grows here too (see the measured-table comment following
+    `CONTACT_LADDER_SUBDIVS` above for the rungs), and the engine's
+    printed 6.6673E+02 sits between the same pair of rungs (subdiv 16 and
+    subdiv 32) 0112's engine number sits between — measured, not assumed to
+    follow from that coincidence.
+
+    **This gate fails if the ladder is ever fixed**, the same signal
+    `test_the_contact_cell_ladder_does_not_converge_on_purpose` above sends
+    for `GN 0`: a `GD` ladder that converged would mean the composition
+    changed and U3's refusal sentence for this observation point needs
+    re-measuring on this ground too.
+    """
+    rungs = []
+    for subdiv in CONTACT_LADDER_SUBDIVS:
+        _, total, _ = _composed("0107", subdiv=subdiv)
+        rungs.append(float(np.linalg.norm(total[0])))
+    assert all(b > a for a, b in zip(rungs, rungs[1:])), rungs
+    assert rungs[-1] >= 3.0 * rungs[2], rungs
+
+    (block,) = extract(printout_text("0107")).near_fields
     captured = block.rows[0].magnitudes[2]
     assert rungs[3] < captured < rungs[4], (rungs, captured)
 
@@ -571,7 +717,93 @@ def test_the_finite_difference_curl_floor_is_measured_away_from_any_ground():
 
 
 # --------------------------------------------------------------------------
-# gate 5 — the regime registry
+# gate 5 — the bare `GD` ground (momwire#545 U2)
+# --------------------------------------------------------------------------
+
+
+def test_the_gd_alias_as_a_plain_pec_image_breaks_its_envelope():
+    """``direct + 1.0·image``, no medium, no remainder, must FAIL 0108's
+    envelope — the near-field twin of the far-field anti-aliasing gate.
+
+    The module docstring's own arithmetic is the shape of this bug: a `GD`
+    near field composed as though the ground were `GN 1` prints half the
+    field the medium actually has there (0107's origin cell 6.6673E+02
+    against an image's 2.34E+02, 0110's `EZ` at (1, 0, 2) 1.5290E+01 against
+    7.88E+00).  Composing 0108 the same wrong way reads 9.26 % of table scale
+    and 30.7° against bars of 5.47 % and 1.54° — the magnitude misses by
+    under 2x here (the grid's other cells dilute a factor-of-two singular
+    cell down), but the PHASE misses by a factor of twenty, because forcing
+    C₂ = 1 and dropping the remainder does not just scale the answer, it
+    removes the entire smooth part NEC's decomposition (theory manual eqs
+    136-147) puts there.
+
+    If this test ever passes, `_composed`'s `Nec5MininecGround` branch has
+    stopped reading the deck's medium somewhere and a `GD` near field is
+    landing on the PEC image again.
+    """
+    magnitude_bar, phase_bar = NEAR_POINT_BAR["0108"]
+    _, total, magnetic = _composed("0108", pec_alias=True)
+    worst_magnitude, worst_phase = _score("0108", total, magnetic)
+    assert worst_magnitude > magnitude_bar
+    assert worst_phase > phase_bar
+
+
+def test_the_gd_and_gn0_composed_tables_cross_agree_like_the_captures_do():
+    """0108's composed table (`GD`, PEC-image currents, in-medium eval)
+    against 0110's (`GN 0`, Sommerfeld currents, same eval) — the seam's own
+    reproduction of the captures' 4.4 %-worst-cell agreement (module
+    docstring, "One near field, two grounds that cannot have it"), not a
+    trust that resemblance in the measured-table comment implies it.
+
+    Both tables are read out at the SAME medium — 0108's `_composed` branch
+    and 0110's take the identical ε̃ path once the PEC-image/Sommerfeld
+    current split is behind them — so the two tables sit far closer to each
+    other (see `CROSS_AGREEMENT_BAR` above) than either sits to its own
+    capture.  `EY` is included at magnitude zero on both sides: the same
+    vertical-monopole symmetry kills it identically regardless of which
+    solve produced the currents underneath.
+
+    The floor half of the gate is the aliasing check this unit's OTHER
+    aliasing gate cannot see: composing 0108 with the wrong medium fails
+    LOUD (the envelope gate above), but a bug that fed 0108 `_composed`
+    0110's OWN currents — same medium, same evaluator, wrong solve — would
+    pass the envelope gate by definition (the tables would be identical) and
+    only this floor would notice.
+    """
+    _, total_gd, magnetic_gd = _composed("0108")
+    _, total_gn0, magnetic_gn0 = _composed("0110")
+    assert magnetic_gd == magnetic_gn0
+    assert magnetic_gd is False
+
+    want_magnitude, _, _ = _captured("0108")
+    scale = want_magnitude.max()
+    live = want_magnitude > 1e-4 * scale
+    distance = np.abs(total_gd - total_gn0) / scale
+
+    worst = 0.0
+    floor = None
+    for column in LIVE_COLUMNS["0108"]:
+        selected = live[:, column]
+        cell = distance[:, column][selected]
+        worst = max(worst, float(cell.max()))
+        floor = float(cell.min()) if floor is None else min(floor, float(cell.min()))
+    assert worst <= CROSS_AGREEMENT_BAR, (
+        f"worst live-cell distance {100 * worst:.4f} % of scale, "
+        f"bar {100 * CROSS_AGREEMENT_BAR:.4f} %"
+    )
+    assert floor >= CROSS_AGREEMENT_FLOOR, (
+        f"smallest live-cell distance {100 * floor:.6f} % of scale, "
+        f"floor {100 * CROSS_AGREEMENT_FLOOR:.6f} % — the two routes have "
+        "collapsed onto the same currents"
+    )
+
+    for column in DEAD_COLUMNS["0108"]:
+        assert np.abs(total_gd[:, column]).max() == 0.0
+        assert np.abs(total_gn0[:, column]).max() == 0.0
+
+
+# --------------------------------------------------------------------------
+# gate 6 — the regime registry
 # --------------------------------------------------------------------------
 
 
