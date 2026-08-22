@@ -1,15 +1,19 @@
 ---
 title: momwire
-description: A pure-Python method-of-moments antenna engine that stands in the engine slots of tools you already run — EZNEC Pro+ and SimNEC — with a five-act primer as supplemental reading.
+description: A pure-Python method-of-moments antenna engine — the solver behind the antennaknobs workbench, and a drop-in for the engine slots of tools you already run, EZNEC Pro+ and SimNEC — with a five-act primer as supplemental reading.
 template: splash
 hero:
   title: momwire
   tagline: A method-of-moments antenna engine you can read — and drop into the tools you already run. Decks in, printouts out, and every deck either serves or refuses by name.
   actions:
+    - text: Run it in antennaknobs
+      link: https://antennaknobs.dev/
+      icon: right-arrow
+      variant: primary
     - text: Run it as EZNEC's NEC-5 engine
       link: /reference/eznec-nec5/
       icon: right-arrow
-      variant: primary
+      variant: secondary
     - text: Run it inside SimNEC
       link: /reference/portal-usage/
       icon: right-arrow
@@ -17,14 +21,35 @@ hero:
     - text: momwire on GitHub
       link: https://github.com/stevenmburns/momwire
       icon: github
-      variant: minimal
+      variant: secondary
 ---
 
 import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
 
+## The workbench
+
+[antennaknobs](https://antennaknobs.dev/) is momwire's largest consumer and
+the reason most of this engine exists: a design workbench where antennas are
+Python objects you optimize, sweep and plot, with momwire answering every
+solve underneath. Everything on this site runs when you drag a knob in its
+browser simulator.
+
+<CardGrid>
+  <LinkCard
+    title="Turn the knobs live"
+    href="https://app.antennaknobs.dev/"
+    description="The browser simulator — drag a dipole's length and watch Z_in move, solved by momwire in the loop."
+  />
+  <LinkCard
+    title="antennaknobs docs"
+    href="https://antennaknobs.dev/"
+    description="The workbench built on momwire — designs as Python code, the solver guide, benchmarks and the validation story."
+  />
+</CardGrid>
+
 ## The portals
 
-momwire stands behind the external-engine mechanisms of two tools — no new
+momwire also stands behind the external-engine mechanisms of two tools — no new
 interface to learn, no files to convert. The host writes its deck, momwire
 answers in the host's own printout format, and any deck asking for something
 it does not serve gets a sentence naming the card, the wire, or the missing
@@ -102,18 +127,3 @@ and explains exactly what the engineering added.
   needs scale.
 - **Nothing typed from memory.** Figures regenerate from scripts in the
   repo; source permalinks are pinned to a tag and checked at build time.
-
-## The workbench
-
-<CardGrid>
-  <LinkCard
-    title="Turn the knobs live"
-    href="https://app.antennaknobs.dev/"
-    description="Everything on this site runs when you drag a knob in the browser simulator."
-  />
-  <LinkCard
-    title="antennaknobs docs"
-    href="https://antennaknobs.dev/"
-    description="The workbench built on momwire — designs as Python code, solver guide, benchmarks."
-  />
-</CardGrid>
