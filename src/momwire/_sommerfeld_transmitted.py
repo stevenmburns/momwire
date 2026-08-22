@@ -440,12 +440,14 @@ def divide_out_transmitted(k_p, k_m, rho, z, zp):
 
     The (ρ, z) half IS a choice and it was MEASURED against three
     alternatives, worst per-surface relative interpolation error along the
-    shipped log-R axis at Δln R = 0.106, soil A / 7 MHz, z′ = −0.05 m:
+    shipped log-R axis at Δln R = 0.168 — deliberately one step COARSER than
+    the shipped 0.10, so the candidates separate — soil A / 7 MHz,
+    z′ = −0.05 m:
 
-        divide-out                                θ=1°    θ=5°    θ=45°  θ=90°
-        e^{−j(k_m|z′| + k_p R)}/R      (shipped)  2.0e-3  1.2e-3  4.8e-4 1.0e-4
-        ... × (−1 + 3ja + 3a²), a=1/k_pR         2.9e-3  3.0e-3  1.8e-4 2.0e-4
-        ... × (1 − ja − a²)                       (worse than both, 2–20x)
+        divide-out                               θ=1°    θ=5°    θ=45°  θ=90°
+        e^{−j(k_m|z′| + k_p R)}/R     (shipped)  2.0e-3  1.2e-3  4.8e-4 1.0e-4
+        ... × (−1 + 3ja + 3a²), a=1/k_pR        2.9e-3  3.0e-3  1.8e-4 2.0e-4
+        ... × (1 − ja − a²)                      (worse than both, 2–20x)
 
     The near-field-polynomial candidates are the interesting losers. They
     collapse the table's dynamic range spectacularly — 1.2e+2 against
@@ -459,7 +461,8 @@ def divide_out_transmitted(k_p, k_m, rho, z, zp):
 
     A pure e^{−jk_m|z′|} with no observer-side factor at all was measured
     too and is far worse everywhere the origin is near: 2.6e+1 against
-    8.0e+0 on a uniform λ_p rectangle at soil A / 7 MHz.
+    8.0e+0 on a uniform λ_p rectangle at soil B / 7 MHz, and 5.4e-3 against
+    3.8e-3 out in the far field of soil A.
 
     Both consumers must pair with THIS factor: handing a surface the wrong g
     is a silent decade rather than an error, which is why every entry point
