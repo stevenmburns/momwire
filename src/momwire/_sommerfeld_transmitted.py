@@ -302,12 +302,19 @@ def _integrand_six_transmitted(lam, rho, z, zp, k_p, k_m, swap=False):
         e = 2.0 * np.exp(-g_p * abs(zp) - g_m * abs(z)) * lam
         d_z = +g_m
         d_zp = -g_p
-        zzk = g_m * g_m + k_m * k_m  # = λ², the observer medium's (∂²/∂z²+k²)
     else:
         e = 2.0 * np.exp(-g_m * abs(zp) - g_p * z) * lam
         d_z = -g_p
         d_zp = +g_m
-        zzk = g_p * g_p + k_p * k_p  # = λ²
+    # (∂²/∂z² + k²) → γ² + k² → λ² in EITHER medium, and it is written as
+    # λ² rather than as the sum. Not a shortcut: γ² + k² is a difference of
+    # two O(k²) numbers whose result is O(λ²), so at the bottom of the
+    # contour (λ ~ 1e-3, |k_m| ~ 0.6) it cancels away eleven digits — the
+    # swapped and unswapped spellings of the SAME quantity were measured
+    # 3.5e-11 apart before this line said λ². The prototype carries the sum
+    # and agrees to 5e-10 either way, which is how the cancellation was
+    # found rather than inherited.
+    zzk = lam * lam
     a = e / (k_m * k_m * g_p + k_p * k_p * g_m)  # the V_T kernel, (7f)
     u = e / (g_m + g_p)  # the U_T kernel, (7g)
     x = lam * rho

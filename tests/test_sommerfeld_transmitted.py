@@ -420,6 +420,49 @@ def test_gu3_3_the_ladder_rule_is_not_phase_zeros_scalar_rule():
 # ======================================================================
 
 
+def test_gu3_4_the_swapped_integrand_is_the_same_integral(record_property):
+    """Reciprocity at the INTEGRAND level, before any quadrature or dyad.
+
+    `_integrand_six_transmitted(swap=True)` builds the above→below stack
+    independently — source above carrying γ_p, observer below carrying γ_m,
+    with its own two derivative factors. Evaluated at the exchanged
+    geometry it must reproduce the unswapped stack EXACTLY, with indices 0
+    and 4 — the two z-derivatives, which are T_ρ^V and T_z^H — traded. That
+    trade is the same one `_combine_transmitted_transposed` performs on the
+    assembled dyad, so this is the algebra the transpose rests on, checked
+    one level below where the transpose lives.
+
+    Bit-exact, not near: with the verified (7f) the two are literally the
+    same expression, which is what phase 0's G1 measured at 0.0.
+    """
+    et, kp, om, km = medium("A/7MHz")
+    lam = np.linspace(1e-3, 4.0 * abs(km), 257).astype(np.complex128)
+    a_depth, b_height = 0.15, 1.7
+    up = trans._integrand_six_transmitted(lam, 6.0, b_height, -a_depth, kp, km)
+    down = trans._integrand_six_transmitted(
+        lam, 6.0, -a_depth, +b_height, kp, km, swap=True
+    )
+    order = [4, 1, 2, 3, 0, 5]
+    per_index = [
+        float(np.max(np.abs(down[i] - up[j]) / np.maximum(np.abs(up[j]), 1e-300)))
+        for i, j in enumerate(order)
+    ]
+    record_property("per_index_rel", repr([f"{v:.3e}" for v in per_index]))
+    assert max(per_index) == 0.0, (
+        f"the swapped stack is not the same integral: {per_index}"
+    )
+    # Index 1 is bit-exact only because `_integrand_six_transmitted` writes
+    # (d2/dz2 + k^2) as lambda^2 instead of gamma^2 + k^2. Spelled as the
+    # sum it is a difference of two O(k^2) numbers giving an O(lambda^2)
+    # answer, and the two media's spellings of the same quantity landed
+    # 3.5e-11 apart at the bottom of the contour. Asserted, so that a future
+    # edit "restoring" the textbook grouping is caught here rather than
+    # eleven digits down in a fill.
+    # ... and WITHOUT the 0<->4 trade it is a different thing, so the trade
+    # is carrying weight rather than decorating a tautology.
+    assert np.max(np.abs(down[0] - up[0])) > 0.0
+
+
 @pytest.mark.slow
 def test_gu3_4_the_transpose_is_the_dyad_transpose(record_property):
     """The by-construction half: the role exchange's BOOKKEEPING.
