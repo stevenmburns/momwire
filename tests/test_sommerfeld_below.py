@@ -40,6 +40,8 @@ by O(1). A scan whose losers stopped failing would mean the remainder had
 gone quiet, which is itself the failure.
 """
 
+import math
+
 import numpy as np
 import pytest
 
@@ -761,21 +763,43 @@ def small_below_grid():
 # once the domain was probed properly: at a 4 lambda_m cap the [2, 4) annulus
 # read 2.4e-3 against 1.6e-4 everywhere inside it, which is what drove the cap
 # down to 2 lambda_m (see `_SOMM_BELOW_R1_CAP_LAMBDA_M`).
-_R_BANDS = ((0.0, 0.2), (0.2, 1.0), (1.0, 1.5), (1.5, 2.0))
+_R_BANDS = ((0.0, 0.2), (0.2, 0.5), (0.5, 1.0), (1.0, 1.5), (1.5, 2.0))
 _TH_BANDS = ((1.0, 2.0), (2.0, 5.0), (5.0, 30.0), (30.0, 90.0))
+_RECT_FLOOR_REL = 1e-10
+# theta in [1, 5] deg at R1 in [0.5, 2] lambda_m: the geometry the product
+# brings, a 15 cm-deep radial pair read at rho 4-20 m. Graded on its own,
+# because it must never be inside the floor's skip set and it is the band
+# G-U2-9 then composes at.
+_PRODUCT_BANDS = frozenset(
+    (rb, tb) for rb in _R_BANDS for tb in _TH_BANDS if rb[0] >= 0.5 and tb[1] <= 5.0
+)
 
 
 def _rect_probe(grid, et, kp, om, lam_m, per_band, rng):
-    """grid -> direct over the FULL served rectangle, per band.
+    """grid -> direct over the FULL served rectangle, PER SURFACE, per band.
 
-    Boundaries are FORCED into the sample, not left to chance: theta at the
-    grazing floor exactly, theta = 90, R1 = 0 (the analytic-limit row) and
-    R1 = r1_max (the outermost cell). Those are the four places a 4x4
-    Lagrange stencil is most likely to be doing something other than what
-    the interior measurement suggests.
+    The metric is |grid_k - direct_k| / |direct_k| for each surface
+    separately, NOT the ±=+ house convention |grid_k - direct_k| divided by
+    the largest of the four at that point. Below the interface the four
+    surfaces span decades at a single point and the remainder is not a small
+    correction, so a surface that is small at a point still carries its own
+    share of the composed field; of-family normalisation would grade it
+    against a neighbour. (Measured, the two differ by ~2.5x here, not by
+    decades — but the stricter one is the one that means something.)
+
+    NAMED FLOOR: a surface is skipped at a point when |direct_k| falls below
+    `_RECT_FLOOR_REL` times that surface's own maximum over the band, i.e.
+    when it is a numerical zero and a relative error is meaningless. The
+    skipped fraction is returned so it can be seen to be small, and the
+    product band is reported separately so it can be seen NOT to be in the
+    skip set.
+
+    Boundaries are FORCED into the sample: theta at the grazing floor
+    exactly, theta = 90, R1 = 0 (the analytic-limit row) and R1 = r1_max.
     """
     th_min_deg = np.degrees(grid.th_min)
     out = {}
+    skipped = total = 0
     for rb in _R_BANDS:
         rlo, rhi = rb[0] * lam_m, min(rb[1] * lam_m, grid.r1_max)
         if rhi <= rlo:
@@ -791,13 +815,19 @@ def _rect_probe(grid, et, kp, om, lam_m, per_band, rng):
             tq = tq.ravel()
             got = grid.eval(rq, tq)
             ref = below.iv_surfaces_direct_below(et, kp, rq, tq, rtol=1e-9, omega=om)
-            scale = np.max(np.abs(np.stack([ref[k] for k in KEYS])), axis=0)
-            e = np.max(
-                np.abs(np.stack([got[k] - ref[k] for k in KEYS])) / scale[None, :],
-                axis=0,
-            )
-            out[(rb, tb)] = float(np.max(e))
-    return out
+            worst = 0.0
+            for k in KEYS:
+                d = np.abs(ref[k])
+                live = d >= _RECT_FLOOR_REL * d.max()
+                total += d.size
+                skipped += int((~live).sum())
+                if not live.any():
+                    continue
+                worst = max(
+                    worst, float(np.max(np.abs(got[k] - ref[k])[live] / d[live]))
+                )
+            out[(rb, tb)] = worst
+    return out, skipped, total
 
 
 @pytest.fixture(scope="module")
@@ -820,29 +850,47 @@ def full_below_grid(request):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("full_below_grid", ["B/7MHz", "A/21MHz"], indirect=True)
+@pytest.mark.parametrize(
+    "full_below_grid", ["B/7MHz", "A/21MHz", "C/21MHz"], indirect=True
+)
 def test_gu2_4_grid_matches_direct_over_the_whole_rectangle(
     full_below_grid, record_property
 ):
     """grid -> direct over R1 in [0, r1_max] x theta in [th_min, 90], edges
-    included, on the two stressor cells.
+    included, PER SURFACE, on the three stressor cells.
 
     This gate replaces an interior probe that ran to 0.6 lambda_m on one
-    cell and pinned 5e-3 off it. That pin was never wrong, but it was never
-    tested where the product actually reads either, and the [2, 4) lambda_m
-    annulus it did not cover was 12x worse than everything inside it. The
-    lesson is the pin has to be measured over the SERVED domain, so the
-    probe is now the served domain.
+    cell under of-family normalisation. Two things were wrong with that: it
+    did not cover the served domain, and it graded each surface against its
+    largest neighbour. Both are fixed here.
+
+    Two pins, because the domain is not uniform in what it owes anyone. The
+    PRODUCT band — deep grazing at working range, where G-U2-9 then composes
+    — is held to the same 1e-3 as the composition itself. The rest of the
+    rectangle, whose worst cell is the steep band at R1 ~ 0.5-1 lambda_m, is
+    held to 2e-3. Densifying that corner was measured and REJECTED: theta
+    2.5 -> 1.25 deg costs +44 % nodes and moves the grand worst from 5.27e-4
+    only to 4.29e-4, making one cell (C/21) worse. The residual is not
+    theta-resolution any more.
     """
     cell, grid, health, (et, kp, om, km, lam_m) = full_below_grid
-    bands = _rect_probe(grid, et, kp, om, lam_m, 3, np.random.default_rng(553))
+    bands, skipped, total = _rect_probe(
+        grid, et, kp, om, lam_m, 3, np.random.default_rng(553)
+    )
     for (rb, tb), w in sorted(bands.items()):
         record_property(f"R1[{rb[0]},{rb[1]})_th[{tb[0]},{tb[1]})", float(w))
     worst = max(bands.values())
-    record_property("worst", float(worst))
+    product = max(v for k, v in bands.items() if k in _PRODUCT_BANDS)
+    record_property("worst_per_surface", float(worst))
+    record_property("worst_product_band", float(product))
+    record_property("floor_skipped_frac", float(skipped) / float(total))
     record_property("nodes", int(sum(r["n_r"] * r["n_th"] for r in grid._regions)))
     record_property("health", repr(health.as_dict()))
     assert health.nonconvergent == 0, health.as_dict()
+    # The floor must stay a rounding detail, and must never swallow the
+    # product band — every product band reports a live number above.
+    assert skipped < 0.02 * total, f"{skipped}/{total} skipped by the floor"
+    assert product < G_U2_4_PRODUCT_TOL, f"{cell}: product band {product:.3e}"
     assert worst < G_U2_4_TOL, f"{cell}: full-rectangle worst {worst:.3e}"
 
 
@@ -884,22 +932,27 @@ def test_gu2_4_grid_matches_direct_and_the_goldens(small_below_grid, record_prop
     assert health.nonconvergent == 0, health.as_dict()
 
 
-# MEASURED over the FULL served rectangle -- R1 in [0, 2 lambda_m] x theta
-# in [1, 90] deg, boundaries forced into the sample, all six SPEC cells,
-# 784 points per cell. Worst per cell:
+# MEASURED over the FULL served rectangle, PER SURFACE (|g_k - d_k|/|d_k|)
+# -- R1 in [0, 2 lambda_m] x theta in [1, 90] deg, boundaries forced into
+# the sample, all six SPEC cells, 23,520 surface-points. Worst per cell:
 #
-#   A/7 1.45e-4   A/21 2.14e-4   B/7 1.46e-4
-#   B/21 1.38e-4  C/7  1.94e-4   C/21 1.01e-4
+#   A/7 1.64e-4   A/21 2.17e-4   B/7 5.27e-4
+#   B/21 2.71e-4  C/7  1.83e-4   C/21 2.62e-4
 #
-# and worst per band, over every cell, never above 2.14e-4 -- the domain is
-# uniform now, with no weak corner. (It was not before: at a 4 lambda_m cap
-# the [2, 4) annulus read 2.4e-3 while everything inside it read <= 2.0e-4.
-# That annulus is what the cap came down to exclude, and the R1-axis
-# padding is what removed the outer-edge stencil seam.)
+# Grand worst 5.27e-4, in R1 [0.5, 1.0) x theta [30, 90). PRODUCT band worst
+# 2.71e-4. Floor skipped 210/23520 = 0.89 %, none of it in a product band.
 #
-# Pinned at 1e-3, ~4.7x the worst -- five times tighter than the 5e-3 this
-# gate carried when its probe only reached 0.6 lambda_m on one cell.
-G_U2_4_TOL = 1e-3
+# The of-family metric this gate used to carry reads 2.14e-4 on the same
+# lattice, so per-surface costs a factor 2.5 -- not the decades an of-family
+# convention can hide when a family spans decades, but it is the honest one
+# and it is what is pinned.
+#
+# Densification was measured and rejected: steep band 2.5 -> 1.25 deg is
+# +44 % nodes (3520 -> 5056) and +30 % fill for grand worst 5.27e-4 ->
+# 4.29e-4, with C/21 getting WORSE (2.62e-4 -> 4.29e-4). The residual is no
+# longer theta-resolution-limited, so more theta nodes buy nothing.
+G_U2_4_PRODUCT_TOL = 1e-3
+G_U2_4_TOL = 2e-3
 
 
 @pytest.mark.slow
@@ -970,3 +1023,91 @@ def test_gu2_4_the_projection_reads_the_grid_and_the_direct_alike(
         obs, t_obs, src, t_src, GROUND_Z, kp, km, DirectSurfaces(et, kp, om)
     )
     assert rel(a, b) < G_U2_4_TOL
+
+
+# ======================================================================
+# G-U2-9 — the composed field at DEEP GRAZING, grid against direct
+# ======================================================================
+#
+# The class G-U2-5's M-line does not reach. The SPEC M-line sits at
+# theta = atan2(0.52..0.65, 1..10) = 3..33 deg and R1 <= ~2 lambda_m only on
+# the highest-loss soil; the geometry the product actually brings — a pair of
+# 15 cm-deep radials, hh = 0.30 m, read out to tens of metres — runs to
+# theta ~ 1-2 deg at R1 ~ 1-2 lambda_m, where the remainder is not merely
+# comparable to direct+image but many times it. A tabulation error there is a
+# TOTAL-FIELD error at the same size, which is why this gate scores against
+# the composed total and not against surface scale.
+#
+# Both sides compose identically and differ only in where the remainder's
+# surfaces come from: the shipped grid, or `iv_surfaces_direct_below`. So the
+# number below is tabulation accuracy expressed in the units the caller cares
+# about.
+
+G_U2_9_TOL = 1e-3
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cell", ["A/7MHz", "B/7MHz", "C/21MHz"])
+def test_gu2_9_deep_grazing_composed_field_grid_vs_direct(cell, record_property):
+    """A buried-radial pair at 15 cm, read from 4 m out to wherever the
+    grid's own floor or cap stops it."""
+    et, kp, om, km = medium(cell)
+    lam_m = 2.0 * np.pi / abs(km)
+    grid = below.SommerfeldGridBelow(et, kp, 2.0 * lam_m, rtol=1e-9, omega=om)
+    direct = DirectSurfaces(et, kp, om)
+
+    hh = 0.30  # two 15 cm depths
+    # Stay inside BOTH the grazing floor and the cap — the two named
+    # refusals, honoured here rather than tested here (G-U2-4 tests them).
+    rho_floor = hh / math.tan(grid.th_min)
+    rho_max = min(math.sqrt(max(grid.r1_max**2 - hh * hh, 0.0)), rho_floor)
+    assert rho_max > 4.0, f"{cell}: nothing served past 4 m (rho_max {rho_max:.2f})"
+    rhos = np.linspace(4.0, rho_max * 0.999, 8)
+
+    worst = 0.0
+    worst_at = None
+    min_share, max_share = np.inf, 0.0
+    for rho in rhos:
+        obs = np.array([float(rho), 0.0, -0.15])
+        src = np.array([0.0, 0.0, -0.15])
+        for p_hat in (np.array([1.0, 0.0, 0.0]), np.array([0.0, 0.0, 1.0])):
+            e_grid = compose(et, kp, om, obs, src, p_hat, grid)
+            e_dir = compose(et, kp, om, obs, src, p_hat, direct)
+            # remainder share, so a quiet remainder cannot make this pass
+            c1 = -1j * om * MU0 / (4.0 * np.pi)
+            rem = below.remainder_field_below(
+                obs[None, :],
+                src[None, :],
+                p_hat[None, :].astype(complex),
+                GROUND_Z,
+                kp,
+                km,
+                direct,
+            )[0]
+            di = fs_field(c1, km, p_hat, obs - src) + below.image_coefficient_below(
+                et
+            ) * image_field(c1, km, p_hat, obs, src)
+            share = float(np.max(np.abs(rem))) / max(float(np.max(np.abs(di))), 1e-300)
+            min_share = min(min_share, share)
+            max_share = max(max_share, share)
+            e = float(np.max(np.abs(e_grid - e_dir))) / max(
+                float(np.max(np.abs(e_dir))), 1e-300
+            )
+            if e > worst:
+                worst, worst_at = e, (float(rho), math.degrees(math.atan2(hh, rho)))
+    record_property("worst_of_total_field", float(worst))
+    record_property("worst_at_rho_theta", repr(worst_at))
+    record_property("min_remainder_share", float(min_share))
+    record_property("max_remainder_share", float(max_share))
+    record_property("rho_served_m", float(rho_max))
+    record_property(
+        "theta_deg_at_rho_max", float(math.degrees(math.atan2(hh, rho_max)))
+    )
+    # The class is only meaningful if the sweep actually REACHES remainder
+    # dominance. It does not start there — at the near end (rho = 4 m, R1
+    # well under a wavelength) direct+image still lead, and the share climbs
+    # with range. Requiring dominance at every point would have been
+    # requiring the wrong thing; requiring it nowhere would let a quiet
+    # remainder pass.
+    assert max_share > 1.0, f"{cell}: remainder never dominates (max {max_share:.3g})"
+    assert worst < G_U2_9_TOL, f"{cell}: {worst:.3e} of total field at {worst_at}"
