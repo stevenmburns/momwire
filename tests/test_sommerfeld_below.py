@@ -756,13 +756,102 @@ def small_below_grid():
     return grid, health, (et, kp, om, km, lam_m)
 
 
+# The R1 x theta bands the full-rectangle probe reports separately. A single
+# pooled worst hides which corner is weak, and this family's weak corner moved
+# once the domain was probed properly: at a 4 lambda_m cap the [2, 4) annulus
+# read 2.4e-3 against 1.6e-4 everywhere inside it, which is what drove the cap
+# down to 2 lambda_m (see `_SOMM_BELOW_R1_CAP_LAMBDA_M`).
+_R_BANDS = ((0.0, 0.2), (0.2, 1.0), (1.0, 1.5), (1.5, 2.0))
+_TH_BANDS = ((1.0, 2.0), (2.0, 5.0), (5.0, 30.0), (30.0, 90.0))
+
+
+def _rect_probe(grid, et, kp, om, lam_m, per_band, rng):
+    """grid -> direct over the FULL served rectangle, per band.
+
+    Boundaries are FORCED into the sample, not left to chance: theta at the
+    grazing floor exactly, theta = 90, R1 = 0 (the analytic-limit row) and
+    R1 = r1_max (the outermost cell). Those are the four places a 4x4
+    Lagrange stencil is most likely to be doing something other than what
+    the interior measurement suggests.
+    """
+    th_min_deg = np.degrees(grid.th_min)
+    out = {}
+    for rb in _R_BANDS:
+        rlo, rhi = rb[0] * lam_m, min(rb[1] * lam_m, grid.r1_max)
+        if rhi <= rlo:
+            continue
+        for tb in _TH_BANDS:
+            tlo = max(tb[0], th_min_deg)
+            rq = np.concatenate([[rlo, rhi], rng.uniform(rlo, rhi, per_band)])
+            tq = np.radians(
+                np.concatenate([[tlo, tb[1]], rng.uniform(tlo, tb[1], per_band)])
+            )
+            rq, tq = np.meshgrid(rq, tq, indexing="ij")
+            rq = np.clip(rq.ravel(), 0.0, grid.r1_max)
+            tq = tq.ravel()
+            got = grid.eval(rq, tq)
+            ref = below.iv_surfaces_direct_below(et, kp, rq, tq, rtol=1e-9, omega=om)
+            scale = np.max(np.abs(np.stack([ref[k] for k in KEYS])), axis=0)
+            e = np.max(
+                np.abs(np.stack([got[k] - ref[k] for k in KEYS])) / scale[None, :],
+                axis=0,
+            )
+            out[(rb, tb)] = float(np.max(e))
+    return out
+
+
+@pytest.fixture(scope="module")
+def full_below_grid(request):
+    """A below grid at the FULL cap, so the probe covers what the grid
+    serves rather than a comfortable interior patch."""
+    cell = request.param
+    et, kp, om, km = medium(cell)
+    lam_m = 2.0 * np.pi / abs(km)
+    health = below.Health()
+    grid = below.SommerfeldGridBelow(
+        et,
+        kp,
+        below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m,
+        rtol=1e-9,
+        omega=om,
+        health=health,
+    )
+    return cell, grid, health, (et, kp, om, km, lam_m)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("full_below_grid", ["B/7MHz", "A/21MHz"], indirect=True)
+def test_gu2_4_grid_matches_direct_over_the_whole_rectangle(
+    full_below_grid, record_property
+):
+    """grid -> direct over R1 in [0, r1_max] x theta in [th_min, 90], edges
+    included, on the two stressor cells.
+
+    This gate replaces an interior probe that ran to 0.6 lambda_m on one
+    cell and pinned 5e-3 off it. That pin was never wrong, but it was never
+    tested where the product actually reads either, and the [2, 4) lambda_m
+    annulus it did not cover was 12x worse than everything inside it. The
+    lesson is the pin has to be measured over the SERVED domain, so the
+    probe is now the served domain.
+    """
+    cell, grid, health, (et, kp, om, km, lam_m) = full_below_grid
+    bands = _rect_probe(grid, et, kp, om, lam_m, 3, np.random.default_rng(553))
+    for (rb, tb), w in sorted(bands.items()):
+        record_property(f"R1[{rb[0]},{rb[1]})_th[{tb[0]},{tb[1]})", float(w))
+    worst = max(bands.values())
+    record_property("worst", float(worst))
+    record_property("nodes", int(sum(r["n_r"] * r["n_th"] for r in grid._regions)))
+    record_property("health", repr(health.as_dict()))
+    assert health.nonconvergent == 0, health.as_dict()
+    assert worst < G_U2_4_TOL, f"{cell}: full-rectangle worst {worst:.3e}"
+
+
 @pytest.mark.slow
 def test_gu2_4_grid_matches_direct_and_the_goldens(small_below_grid, record_property):
     """The three-way. A grid checked only against a direct evaluator proves
     the two agree; `_sommerfeld`'s #161 addendum is the standing reminder
-    that they can agree on a mis-branched contour. So: grid vs direct at a
-    dense probe, AND direct vs the committed prototype goldens at every
-    lattice point inside the grid.
+    that they can agree on a mis-branched contour. So: grid vs direct, AND
+    direct vs the committed prototype goldens at the same points.
     """
     grid, health, (et, kp, om, km, lam_m) = small_below_grid
     rng = np.random.default_rng(553)
@@ -795,11 +884,22 @@ def test_gu2_4_grid_matches_direct_and_the_goldens(small_below_grid, record_prop
     assert health.nonconvergent == 0, health.as_dict()
 
 
-# MEASURED: the shipped lattice (0.01 lam_m inner / 0.05 lam_m outer radial,
-# 1 deg over [1, 30] deg, 2.5 deg over [30, 90]) reads 1.33e-4 on this
-# grid's 40-point probe, and 4.4e-5 (grazing band) / 2.7e-3 (steep band)
-# on the full 4-lambda_m spacing study. Pinned at 5e-3.
-G_U2_4_TOL = 5e-3
+# MEASURED over the FULL served rectangle -- R1 in [0, 2 lambda_m] x theta
+# in [1, 90] deg, boundaries forced into the sample, all six SPEC cells,
+# 784 points per cell. Worst per cell:
+#
+#   A/7 1.45e-4   A/21 2.14e-4   B/7 1.46e-4
+#   B/21 1.38e-4  C/7  1.94e-4   C/21 1.01e-4
+#
+# and worst per band, over every cell, never above 2.14e-4 -- the domain is
+# uniform now, with no weak corner. (It was not before: at a 4 lambda_m cap
+# the [2, 4) annulus read 2.4e-3 while everything inside it read <= 2.0e-4.
+# That annulus is what the cap came down to exclude, and the R1-axis
+# padding is what removed the outer-edge stencil seam.)
+#
+# Pinned at 1e-3, ~4.7x the worst -- five times tighter than the 5e-3 this
+# gate carried when its probe only reached 0.6 lambda_m on one cell.
+G_U2_4_TOL = 1e-3
 
 
 @pytest.mark.slow
@@ -827,7 +927,9 @@ def test_gu2_4_past_the_cap_refuses_instead_of_clamping(small_below_grid):
     a negligible tail whose amplitude may as well freeze. Below, this unit
     measured |remainder|/|direct+image| RISING through 1.2 at 1 λ_m, 29 at
     2 λ_m and 6.4e3 at 4 λ_m on soil A — past the tabulation the remainder
-    IS the field, so a frozen amplitude would be a fabrication."""
+    IS the field, so a frozen amplitude would be a fabrication. The cap
+    itself sits at 2 λ_m because that is where the tabulation was measured
+    accurate, not because the physics stops there."""
     grid, _, (et, kp, om, km, lam_m) = small_below_grid
     with pytest.raises(ValueError, match="past the tabulation"):
         grid.eval(np.array([grid.r1_max * 1.05]), np.array([0.6]))
