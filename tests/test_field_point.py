@@ -839,6 +839,50 @@ def test_the_three_buried_regimes_refuse_by_name(regime):
     assert "('above', 'above')" in message
 
 
+@pytest.mark.parametrize(
+    "regime, must_name",
+    [
+        (("below", "below"), ("momwire#553 U2", "_sommerfeld_below", "phase 3")),
+        (
+            ("below", "above"),
+            ("momwire#553 U3", "_sommerfeld_transmitted", "double-count"),
+        ),
+        (
+            ("above", "below"),
+            ("momwire#553 U3", "reciprocity transpose", "no direct or image"),
+        ),
+    ],
+)
+def test_a_pending_regime_names_what_is_actually_missing(regime, must_name):
+    """A refusal that is out of date is worse than a terse one.
+
+    All three buried families now HAVE their surfaces — U2 built the
+    below/below remainder, U3 the transmitted pair — so a sentence that still
+    said "a different integral family through different contours" would send
+    the next reader looking for work that is already done.  Each refusal has
+    to say where the surfaces live and what is genuinely absent: for
+    below/below the direct-and-image readout, for the two crossing regimes
+    the composition CONTRACT (this entry point returns a remainder; the
+    transmitted integral is the whole field).
+    """
+    source_medium, observer_medium = regime
+    with pytest.raises(ValueError) as excinfo:
+        _field_point.reflected_field_at(
+            np.array([[1.0, 0.0, 2.0]]),
+            np.array([[0.0, 0.0, 1.0]]),
+            np.array([[0.0, 0.0, 1.0 + 0j]]),
+            complex(13.0, -1.2),
+            0.0,
+            1.0,
+            3e8,
+            source_medium=source_medium,
+            observer_medium=observer_medium,
+        )
+    message = str(excinfo.value)
+    for phrase in must_name:
+        assert phrase in message, f"{regime}: refusal never says {phrase!r}"
+
+
 def test_an_unknown_medium_name_is_not_silently_the_default():
     """A typo in a medium name is a ValueError and not the reflected wave."""
     with pytest.raises(ValueError, match="unknown ground regime"):
