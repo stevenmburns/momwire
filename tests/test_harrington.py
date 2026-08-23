@@ -23,20 +23,24 @@ for a mirrored one.
 import numpy as np
 import pytest
 
-from momwire import BSplineSolver, HarringtonSolver, PulseSolver
+from momwire import HarringtonSolver, PulseSolver
 
-# The momwire#416 ladder deck, so the two pulse rows are measured on the
-# same specimen: a half-wave dipole at 0.95 resonance shortening, 20 mm
-# radius, 14 MHz.
-WAVELENGTH = 299.792458 / 14.0
-DIP_LEN = 0.5 * WAVELENGTH * 0.95
-DIP_RAD = 0.02
+# IMPORTED, not copied. The whole claim of this pair is that the two rows
+# differ in ONE ingredient, so they have to be measured on one specimen and
+# against one reference — and a byte-copy of test_pulse.py's deck leaves
+# that premise enforced by eyeball, which is exactly how a paired instrument
+# quietly stops being one. The house already imports across test modules
+# (test_eznec_networks, test_razor_production_lane); this is the case that
+# most needs it.
+from test_pulse import (  # noqa: E402
+    DIP_RAD,
+    DIP_LEN,
+    WAVELENGTH,
+    _dipole,
+    _z_reference,
+)
+
 DIP_H = 1.7
-REF_NSEGS = 400
-
-
-def _dipole(z=0.0):
-    return np.array([[0.0, -DIP_LEN / 2, z], [0.0, DIP_LEN / 2, z]])
 
 
 def _horizontal(z):
@@ -49,18 +53,6 @@ def _z(cls, n, radius=DIP_RAD, **kw):
         nsegs=n,
         wire_radius=radius,
         wavelength=WAVELENGTH,
-        **kw,
-    ).compute_impedance()
-    return complex(np.atleast_1d(z)[0])
-
-
-def _z_reference(radius=DIP_RAD, **kw):
-    z, _ = BSplineSolver(
-        wires=[_dipole()],
-        n_per_edge_per_wire=[[REF_NSEGS]],
-        wire_radius=radius,
-        wavelength=WAVELENGTH,
-        degree=2,
         **kw,
     ).compute_impedance()
     return complex(np.atleast_1d(z)[0])
@@ -405,3 +397,72 @@ def test_junctions_is_refused_by_name():
             wavelength=WAVELENGTH,
             junctions=[],
         )
+
+
+# --------------------------------------------------------------------------
+# 4. the node map's two rules, both of which used to be claims
+# --------------------------------------------------------------------------
+
+
+def test_nearly_coincident_ends_are_refused_not_silently_disconnected():
+    """Ends inside the deck layer's "same point" grid but outside this
+    formulation's joining tolerance REFUSE.
+
+    They used to be answered — as two separate charge cells, with the
+    junction current having nowhere to cross. Measured before the refusal:
+    a dipole split with a 5e-8 m gap read 137.2 + 4.7j against 131.7 − 4.1j
+    unsplit at N = 96, a 7.9% error that GROWS with refinement, and with
+    `junctions=` refused there was no way for a caller to say otherwise.
+
+    Nothing is served silently wrong: 5e-8 m is a thousand times finer than
+    the grid `deck/_polylines` fuses endpoints onto, so a transformed or
+    hand-assembled model lands in this window without doing anything odd.
+    """
+    p0 = np.array([0.0, -DIP_LEN / 2, 0.0])
+    mid = np.array([0.0, 0.0, 0.0])
+    gap = np.array([0.0, 5e-8, 0.0])
+    p1 = np.array([0.0, DIP_LEN / 2, 0.0])
+    with pytest.raises(ValueError, match="Make the two ends exactly equal"):
+        HarringtonSolver(
+            wires=[np.array([p0, mid]), np.array([mid + gap, p1])],
+            n_per_edge_per_wire=[[24], [24]],
+            wire_radius=DIP_RAD,
+            wavelength=WAVELENGTH,
+        ).compute_impedance()
+
+
+def test_a_chained_tolerance_is_refused_so_the_grouping_rule_cannot_diverge():
+    """The two node-map rules cannot disagree with razor, and here is why.
+
+    `_node_map` groups by first match against a group REPRESENTATIVE, which
+    is `razor._find_junctions`' rule and is deliberately non-transitive: with
+    A~B and B~C but A≁C, razor gives B's group and a separate C where a
+    transitive union-find merges all three. Holding both rules in one tree
+    would mean two solvers disagreeing about the same deck's CONNECTIVITY,
+    so this class walks razor's algorithm rather than something that
+    resembles it.
+
+    But the divergence is not merely avoided, it is UNREACHABLE — and that
+    is worth a test rather than a comment. Chaining needs |AB| and |BC| both
+    within `_JUNCTION_TOL`, so |AC| <= 2·_JUNCTION_TOL by the triangle
+    inequality, which lands strictly inside the near-coincident window
+    (_JUNCTION_TOL, _NEAR_COINCIDENT_TOL]. Every configuration in which the
+    two rules could differ is therefore refused before either rule runs.
+
+    So the refusal above is not only about junction current having nowhere
+    to cross; it also closes the one gap where this solver's connectivity
+    could have differed from its sibling's.
+    """
+    step = 6e-10  # A~B and B~C at 6e-10; A~C at 1.2e-9 — a chained tolerance
+    a = np.array([0.0, 0.0, 0.0])
+    with pytest.raises(ValueError, match="Make the two ends exactly equal"):
+        HarringtonSolver(
+            wires=[
+                np.array([a, a + [0.0, 1.0, 0.0]]),
+                np.array([a + [step, 0.0, 0.0], a + [step, 1.0, 0.0]]),
+                np.array([a + [2 * step, 0.0, 0.0], a + [2 * step, 1.0, 0.0]]),
+            ],
+            n_per_edge_per_wire=[[4], [4], [4]],
+            wire_radius=1e-3,
+            wavelength=WAVELENGTH,
+        ).compute_impedance()

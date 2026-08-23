@@ -59,7 +59,6 @@ from .._constants import C_LIGHT
 from ..array_block import ArrayBlockSolver
 from ..bspline import BSplineSolver
 from ..hmatrix import HMatrixSolver
-from ..harrington import HarringtonSolver
 from ..razor import RazorSolver
 from ..sinusoidal import SinusoidalSolver
 from ..sinusoidal_galerkin import SinusoidalGalerkinSolver
@@ -80,8 +79,8 @@ __all__ = [
 _C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 
 # The basis roster, spelled as antennaknobs' ``--basis`` names so one string
-# selects the same physics on either side of the portal.  Seven solver
-# FAMILIES, ten entries: three of the ten are a degree, a feed model and a
+# selects the same physics on either side of the portal.  Six solver
+# FAMILIES, nine entries: the extra three are a degree, a feed model and a
 # quadrature rule, not new code paths.  "bspline" is the degree-2 B-spline —
 # the default here as it is there.
 #
@@ -109,12 +108,6 @@ BASES = MappingProxyType(
         ),
         "razor": (RazorSolver, MappingProxyType({})),
         "razor-nec5": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
-        # The 1967 pulse row (momwire#557). `PulseSolver` — same basis,
-        # same testing, charge left as two point charges — is deliberately
-        # NOT here: it has never been a roster name, and putting it on one
-        # would newly offer a host dialog the row whose error is governed
-        # by Δ/a. It stays a library class for the study it exists for.
-        "pulse": (HarringtonSolver, MappingProxyType({})),
     }
 )
 
@@ -129,19 +122,6 @@ BASES = MappingProxyType(
 # rather than keeping its own list of which bases load natively — a second
 # list is a second thing to forget when a family is added here.
 _NATIVE_LOADING = (RazorSolver,)
-
-# Solver classes that take no `junctions` spec at all — not even `None`: it
-# is a bare kwarg name their constructors never declared, so the key must
-# stay out of `kwargs` entirely rather than being set and refused.
-#
-# This used to be read off `_NATIVE_LOADING`, which was correct only while
-# RazorSolver was the single class with either property. `HarringtonSolver`
-# (momwire#557) detects its junctions from the geometry exactly as razor
-# does, but loads through the deck-level port algebra like everyone else —
-# so the two facts are now separate tuples. Keeping them welded would have
-# meant claiming this row loads natively to buy the junction behaviour, and
-# the port algebra would have stopped stamping a Z_L that nothing else adds.
-_NO_JUNCTION_SPEC = (RazorSolver, HarringtonSolver)
 
 
 @dataclass(frozen=True)
@@ -584,7 +564,10 @@ def build_solver(
         # the Z_s bump directly through `lumped_loads`, at the exact knot
         # `_lumped_loads` reads off the mesh, so only genuine EX sites
         # become `feeds` — a load-only site would otherwise be a spurious
-        # zero-volt source with no row to add.
+        # zero-volt source with no row to add.  And this formulation takes
+        # no `junctions` spec at all (not even `None`: it is a bare kwarg
+        # name this constructor never declared), so the key stays out of
+        # `kwargs` entirely rather than being set and refused.
         feeds = [
             (polyline, arclength, _voltage(index))
             for index, (polyline, arclength) in enumerate(built_mesh.ports)
@@ -598,8 +581,6 @@ def build_solver(
             (polyline, arclength, _voltage(index))
             for index, (polyline, arclength) in enumerate(built_mesh.ports)
         ]
-
-    if not issubclass(solver_class, _NO_JUNCTION_SPEC):
         kwargs["junctions"] = [list(entry) for entry in built_mesh.junctions] or None
 
     solver = solver_class(
