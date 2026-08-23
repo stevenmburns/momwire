@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
@@ -497,3 +498,80 @@ def test_an_internal_crash_still_carries_the_comment_echo(tmp_path, monkeypatch)
     assert text.startswith(_printout.render_header(deck_text))
     assert "NEC ERROR - INTERNAL ERROR IN MOMWIRE ENGINE" in text
     assert "injected" in text
+
+
+# --------------------------------------------------------------------------
+# residency: one process for the whole corpus answers what 62 processes do
+# --------------------------------------------------------------------------
+
+# The order the corpus is served in. Seeded rather than freshly random so a
+# failure names an order a developer can replay: contamination between two
+# decks is a property of the PAIR and its direction, and a test that shuffles
+# differently every run reports it once and then hides it.
+RESIDENCY_SEED = 20260823
+
+
+def _strip_timing(text: str) -> str:
+    """The manifest's served-run normalization: the timing lines are wall
+    clock and mean nothing to a byte compare."""
+    return "\n".join(
+        line
+        for line in text.split("\n")
+        if "FILL=" not in line and not line.startswith(" RUN TIME =")
+    )
+
+
+@pytest.mark.slow
+def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
+    """**The gate momwire#532 turns on.**
+
+    EZNEC launches the engine once per deck and once per frequency point, so
+    every answer today comes out of a process that has solved nothing else.
+    The resident server #532 proposes would instead call :func:`_shell.main`
+    in a LOOP inside one process, and the whole ~1.3 s Windows saving is that
+    the loop never re-imports. That trade is only honest if the loop answers
+    what the spawns answer.
+
+    So: the cold side is one real child process per deck — today's model, and
+    the oracle. The warm side is the same corpus through THIS interpreter,
+    shuffled, forward and then reversed. The reverse pass is not redundant:
+    it inverts each deck's predecessor set, which is where an order-dependent
+    leak shows and a single forward sweep cannot see it.
+
+    ``test_eznec_serve.py`` already gates each cold answer against the
+    captured Windows engine, so warm-equals-cold gates warm transitively.
+    What is new here is only the residency claim, which is exactly the claim
+    #532 currently assumes rather than checks.
+
+    Marked slow: the cold side is 62 interpreter starts, which IS the cost the
+    issue exists to delete.
+    """
+    from momwire.eznec._shell import main
+
+    decks = sorted((FIXTURE_DIR / "decks").glob("*.nec"))
+    assert len(decks) > 50, "the corpus shrank; this gate is sized for all of it"
+
+    cold = {}
+    for index, deck in enumerate(decks):
+        out = tmp_path / f"cold-{index}.out"
+        assert run_engine([str(deck), str(out)]).returncode == 0, deck.name
+        cold[deck] = _strip_timing(out.read_text(errors="replace"))
+
+    order = list(decks)
+    random.Random(RESIDENCY_SEED).shuffle(order)
+
+    warm_out = tmp_path / "warm.out"
+    mismatches: list[str] = []
+    for label, sweep in (("forward", order), ("reverse", list(reversed(order)))):
+        for position, deck in enumerate(sweep):
+            code = main([str(deck), str(warm_out)])
+            served = _strip_timing(warm_out.read_text(errors="replace"))
+            if code != 0:
+                mismatches.append(f"{label}[{position}] {deck.name}: exit {code}")
+            elif served != cold[deck]:
+                mismatches.append(f"{label}[{position}] {deck.name}: printout differs")
+
+    assert not mismatches, (
+        f"{len(mismatches)} of {2 * len(decks)} resident answers differ from a "
+        f"process-per-deck run (seed {RESIDENCY_SEED}):\n  " + "\n  ".join(mismatches)
+    )
