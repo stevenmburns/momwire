@@ -183,16 +183,18 @@ def cpp_synth6(rho, h, k_p, k_m, rtol=1e-11, max_panels=4000):
 # with scipy relatively. The two are measured and pinned separately so the
 # distinction is on the record rather than assumed:
 #
-#   envelope-relative, whole domain   worst 5.6e-14  (J0), 5.6e-14 (J1/x)
-#   PURE relative, |J0| > 0.1*env     worst 8.0e-14  (J0), 1.5e-13 (J1)
-#   PURE relative, everywhere         worst 3.4e-12 at x = 11.7917, which is
-#                                     1.3e-4 from the fourth zero of J0 where
-#                                     |J0| = 3.1e-5, i.e. four decades under
-#                                     the envelope
+#   envelope-relative, whole domain   worst 6.8e-14  (J0), 7.0e-14 (J1/x)
+#   PURE relative, |J0| > 0.1*env     worst 5.6e-14  (J0), 1.5e-13 (J1)
+#   PURE relative, everywhere         worst 2.8e-12 at x = 11.7917, which is
+#                                     1.3e-4 from the FOURTH zero of J0, where
+#                                     |J0| = 3.1e-5 -- four decades under the
+#                                     envelope, i.e. inside the notch
 #
 # 60,001 real points x in [1e-6, 500] plus 60,000 complex with |Im x| <= 4.
-# Both gates pin at 1e-12: ~18x margin on the envelope-relative measure and
-# ~7x on the strict one.
+# Both gates pin at 1e-12: ~15x margin on the envelope-relative measure and
+# ~7x on the strict one. These last digits move by a factor of ~2 between
+# builds (GCC's inlining decides where the FMAs land), so the pins are set
+# an order of magnitude out, not at the measurement.
 
 G_568_1_TOL = 1e-12
 
@@ -362,11 +364,11 @@ def test_g5682_the_identity_survives_grazing_h(soil, record_property):
 # They follow the same adaptive decisions but are NOT bit-twins, so the pin
 # is a tolerance.
 #
-# MEASURED worst componentwise relative over the geometries below: 2.2e-14
-# (and 8.3e-15 on the coarse self-convergence machine, 3.8e-15 at NC = 1).
-# Pinned at 1e-9 -- the brief's bar, and ~45,000x the realized number, which
-# is the right kind of margin for a cross-build gate that must never be
-# re-tolerance-d in a hurry.
+# MEASURED worst componentwise relative over the geometries below: 1.4e-13
+# (and 1.1e-13 on the coarse self-convergence machine, 5.3e-14 at NC = 1).
+# Pinned at 1e-9 -- four decades over the realized number, which is the right
+# kind of margin for a cross-build gate that must never be re-tolerance-d in
+# a hurry.
 
 G_568_3_TOL = 1e-9
 
@@ -646,7 +648,7 @@ def test_g5685_the_ref_floor_terminates_on_the_absolute_bar(rho, h, record_prope
 # still exponentially small (measured 1.7e-8); (b) at h = 0 EXACTLY -- where
 # the tail is only conditionally convergent -- the accelerated answer is 2.8e-1
 # off the closed form at a 200-panel budget and 5.7e-2 at the full 4000, and
-# the C++ engine reproduces the numpy engine's wrong answer to 2.2e-14. That is
+# the C++ engine reproduces the numpy engine's wrong answer to 1.5e-14. That is
 # the port being FAITHFUL, not the port being accurate: the numpy engine has
 # the same cliff, and on this integrand Wynn's epsilon buys essentially nothing
 # over the raw truncation. `accel = True` should be read as "this is a
@@ -735,16 +737,24 @@ def test_g5686_the_engine_is_stateless_across_calls():
 
 
 def test_g5686_the_cpp_engine_beats_numpy(record_property):
-    """Informational, but pinned loosely so a catastrophic regression (a
-    stale header, an accidental O(n^2)) cannot pass unnoticed. The ratio is
-    5-9x on the reference box; the bar is 2x, which no working build misses.
+    """Informational, but pinned loosely so a catastrophic regression (an
+    accidental O(n^2), a dropped fast path) cannot pass unnoticed.
 
-    It is NOT an order of magnitude, and the reason is measured rather than
-    guessed: numpy's cost here is ufunc call overhead on 24-element arrays,
-    and the C++ cost is per-point transcendentals in the integrand. The
-    production integrands do more numpy calls per Gauss rule than this
-    synthetic one does, so U2/U3 should read a better ratio, and the real
-    prize is that C++ can run the (rho, h) grid under OpenMP at all.
+    MEASURED 17-20x single-threaded over the four PARITY_GEOMS on an i7-8550U
+    (19.3x aggregate, 77.4 ms of numpy against 4.0 ms of C++). The bar here is
+    2x: the ratio is machine- and load-dependent, this box throttles, and a
+    tight pin on a wall-clock number is how a suite starts flaking. Anything
+    that lands under 2x is not "a slow box", it is a broken build.
+
+    Where the win comes from, because it is not what one first guesses:
+    numpy's cost is dominated by ufunc CALL OVERHEAD on 24-element arrays --
+    ~20 ufunc dispatches per Gauss rule, at microseconds each -- while the C++
+    cost is per-point transcendentals in the integrand. The Bessel pair is
+    ~55-60% of the C++ side, which is why `_contour_engine_inline.h` carries a
+    real-argument specialization (the tail's abscissa is real by
+    construction). U2/U3 should read a similar or better ratio: the production
+    integrands make MORE numpy calls per Gauss rule than this synthetic one,
+    and only the C++ side can then run the (rho, h) grid under OpenMP.
     """
     _et, k_p, k_m, lam_m = medium("A", 7.0e6)
     rho, h = 1.0 * lam_m, 0.05 * lam_m
