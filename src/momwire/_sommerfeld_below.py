@@ -241,6 +241,55 @@ def k_medium(eps_t, k2):
     return complex(km)
 
 
+def lambda_medium(eps_t, k2):
+    """λ_m = 2π/|k_m|, the in-medium wavelength `k_medium` propagates at.
+
+    Equivalently λ_m = λ₀/|n|, with the refractive-index magnitude
+    |n| = |√ε̃| = [ε_r² + 3.23e8·(σ/f_MHz)²]^(1/4) — ε̃ = ε_r − jσ/(ωε₀),
+    f_MHz = f/1e6, the constant folding in ω = 2π·f_MHz·1e6 and ε₀. This
+    docstring is the ONE place that spelling lives; `k_medium` derives |n|
+    on its Im ≤ 0 branch and this is just its reciprocal-wavelength
+    reading, so nothing here re-derives ε̃ or re-picks a branch.
+
+    Why it matters, verbatim from #553 U1's G-U1-7 (`_bspline_kernels.py`):
+    GL quadrature cost is set by |k|·h, not by the medium as such — but a
+    deck meshed against λ₀ instead of λ_m runs its buried segments at
+    |k_m|h = |n|·|k₀|h, |n|× the panel phase the mesher meant to deliver.
+    That is a MESHING defect, not a quadrature one — `k_medium`/`_bspline_
+    kernels` never widen n_qp for it, and `segments_per_quarter_wavelength`
+    below is where the honesty about it lives instead.
+    """
+    return 2.0 * np.pi / abs(k_medium(eps_t, k2))
+
+
+def segments_per_quarter_wavelength(seg_lengths, eps_t, k2):
+    """How many segments of each given length would tile a quarter
+    in-medium wavelength — `auto_mesh`'s own "N per quarter-wave" density
+    (antennaknobs `builder.py`), read against λ_m instead of λ₀.
+
+    Advisory, and ONLY advisory: this never raises. NEC-5 itself serves
+    under-meshed buried decks — the seam rule forbids refusing what the
+    host serves — so under-meshing is not this module's call to block; a
+    caller (U5's serve path, the app's `auto_mesh`, a test) reads the
+    number back and decides what to do with it, and the arc's envelope
+    discipline (tolerances vs ladder limits) is where coarse-mesh honesty
+    actually lives. `seg_lengths` is an array-like of segment lengths in
+    metres; the return is the same shape, dimensionless, and NaN/inf on a
+    zero-length input rather than a raise.
+
+    A wire meshed at N segments per quarter FREE-SPACE wavelength
+    (h = λ₀/(4N)) reads here as N/|n| segments per quarter λ_m — under-
+    resolved by exactly the refractive index the free-space mesher never
+    knew about. At ε̃ → 1, |n| = 1 and this is the free-space reading
+    exactly (`_sommerfeld_below`'s ε̃ → 1 short circuit, `test_gu2_6_eps_
+    one_is_exactly_zero`, applies here too: no soil, no correction).
+    """
+    seg_lengths = np.asarray(seg_lengths, dtype=float)
+    lam_m = lambda_medium(eps_t, k2)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return 0.25 * lam_m / seg_lengths
+
+
 def _c1_moment(omega, mu):
     """C₁ = −jωμ/4π for a unit current moment Iℓ = 1.
 
