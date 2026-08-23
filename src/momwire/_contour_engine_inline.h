@@ -94,10 +94,19 @@ const int MW_TAIL_KEEP = 41;
 // The three kernels are TEMPLATED ON THE SCALAR (`double` or `cd`) and the
 // dispatcher takes the real path whenever Im x == 0. That is not a micro-
 // optimization: the tail runs along the real axis by construction and carries
-// the overwhelming majority of the panels, and the complex arithmetic in the
-// inner recurrences is a serial latency chain, not a throughput problem.
-// Measured on this box (200k points/branch): 373 / 1512 / 337 ns per point on
-// the complex path vs 48 / 246 / 74 ns on the real one.
+// the overwhelming majority of the panels, and the arithmetic in the inner
+// recurrences is a serial latency chain, not a throughput problem. Measured
+// on an i7-8550U, ns per evaluation (real path / complex path):
+//
+//     |x| = 1     24 / 58        (series)
+//     |x| = 7     48 / 103       (series)
+//     |x| = 10    80 / 222       (Miller)
+//     |x| = 24   122 / 311       (Miller)
+//     |x| = 30   132 / 356       (asymptotic, worst case: most P/Q terms)
+//     |x| = 300   62 / 227       (asymptotic)
+//
+// The Bessel pair is ~55-60% of the whole engine's cost on a production-like
+// contour, so these are the numbers that set the C++/numpy ratio.
 
 static inline bool mw_finite(const cd &z) {
     return std::isfinite(z.real()) && std::isfinite(z.imag());
