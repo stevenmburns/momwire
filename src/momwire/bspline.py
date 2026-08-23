@@ -50,6 +50,7 @@ multiplier row (the same treatment the retired TriangularSolver used).
 Feed: v_m = Φ_m(s_f), Z_drive = 1 / (v^T c).
 """
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -76,8 +77,11 @@ from . import _bspline_kernels
 from . import _ground_mirror
 from . import _ground_refl
 from . import _ground_spec
+from . import _medium_spec
 from . import _potential_ground
 from . import _sommerfeld
+from . import _sommerfeld_below
+from . import _sommerfeld_transmitted
 from . import _wire_loading
 from . import _wire_spec
 from ._accel import acc as _acc
@@ -323,10 +327,104 @@ _ENRICHMENT_EXTENDED_KERNEL_REFUSAL = (
     "expansion was never derived for the s^(-1/2) shapes "
     "(stevenmburns/momwire#249 follow-up C)"
 )
+# The Gauss order the buried fill's field-form blocks run at — see
+# `BSplineSolver._n_qp_buried_field` for the measurement that sets it.
+_N_QP_BURIED_FIELD = 6
+
 _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL = (
     "use_singular_enrichment + mixed per-wire radii together "
     "not supported yet — the enrichment kernels take a single "
     "radius (stevenmburns/momwire#147)"
+)
+
+# momwire#553 U5: what a BURIED deck may not reach, and the domain a buried
+# deck may not leave. Every one of these names the geometry AND the limit in
+# the same sentence, because the two buried Sommerfeld families refuse rather
+# than clamp — there is no negligible tail to freeze below the interface —
+# and a serve-time refusal with no numbers in it is not actionable.
+_BURIED_ENRICHMENT_REFUSAL = (
+    "use_singular_enrichment=True + a wire below the ground plane is not "
+    "served: the enrichment DOFs are a SECOND kernel implementation with "
+    "their own quadrature over the s^(-1/2) shapes, in C++ with a `double k` "
+    "and in a numpy twin, and neither carries an in-medium wavenumber or the "
+    "buried image and remainder blocks (momwire#553 U5 widens the polynomial "
+    "moment fill only). Solve the buried deck without singular enrichment"
+)
+_BURIED_EXTENDED_KERNEL_REFUSAL = (
+    "extended_kernel=True + a wire below the ground plane is not served: the "
+    "extended kernel's eligibility is a COAXIAL-AND-EQUAL-RADIUS grouping "
+    "scored across the whole geometry, and momwire#553 measured neither what "
+    "that grouping means for a pair spanning two media (the tube expansion's "
+    "O(a^2) term is written at one wavenumber) nor what the mirror labels "
+    "mean when the image of a buried source lands in the OTHER medium. "
+    "Solve the buried deck with extended_kernel=False, which is the default"
+)
+_BURIED_DENSE_BUDGET_REFUSAL = (
+    "a deck with buried wires is filled through the DENSE moment tensor and "
+    "this one does not fit: {n} segments need about {need:.0f} MB per tensor "
+    "against a swept_mem_mb budget of {budget} MB. The chunked fill+assemble "
+    "route (momwire#136) has no medium — its windowed C++ assembler takes a "
+    "`double k` and a `double eps` — so momwire#553 U5 routes buried decks to "
+    "the dense path and refuses rather than silently truncating the medium. "
+    "Raise swept_mem_mb, or mesh the deck coarser"
+)
+_BURIED_PAST_CAP_REFUSAL = (
+    "this deck's buried wires reach a below/below pair separation of "
+    "R1 = {r1:.6g} m ({wl:.3g} in-medium wavelengths), past the {cap:.6g} m "
+    "({capwl:g} in-medium wavelengths, lambda_m = {lam_m:.4g} m) the "
+    "below/below remainder is tabulated to. There is no honest clamp out "
+    "there: unlike the reflected-wave remainder above the interface, the "
+    "below/below remainder GROWS relative to the direct term with range "
+    "(measured 12x and 168x direct+image at working range, momwire#553 U2), "
+    "so freezing the surface amplitude would return a confident wrong "
+    "number. Shrink the buried structure, or densify the far annulus of the "
+    "below/below grid (a recorded follow-up, and it wants the C++ twin first)"
+)
+_BURIED_GRAZING_REFUSAL = (
+    "this deck's buried wires reach a below/below pair elevation of "
+    "theta = {th:.4g} deg, below the {floor:g} deg grazing floor the "
+    "below/below surfaces are tabulated from (the pair's two depths add to "
+    "{depth:.4g} m, and theta = atan2(depth sum, horizontal separation)). "
+    "Below the floor the surfaces carry the lateral wave's LOGARITHMIC "
+    "structure — measured drift 1.1 to 3.3 of scale between 2 and 0.05 deg — "
+    "which no uniform lattice resolves, and theta = 0 has no node at all "
+    "because h = 0 leaves the tail without its exponential decay. Bury the "
+    "wires deeper, shorten them, or wait for the log-spaced grazing band "
+    "(momwire#553 U2's recorded follow-up)"
+)
+_BURIED_CROSS_RANGE_REFUSAL = (
+    "this deck's cross-medium pairs reach an observer radius of R = {r:.6g} m "
+    "({wl:.3g} free-space wavelengths) about a buried source's ground "
+    "projection, past the {cap:.6g} m ({capwl:g} free-space wavelengths) the "
+    "transmitted family is tabulated to. The transmitted integral is the "
+    "WHOLE field above a buried source, not a remainder, so there is no "
+    "negligible tail to freeze and no honest clamp. Extending the log-R axis "
+    "is cheap and honest work (7 nodes per doubling of range); extrapolating "
+    "past it is not"
+)
+_BURIED_DEPTH_REFUSAL = (
+    "this deck buries a wire {d:.6g} m down, past the {cap:.6g} m "
+    "({capwl:g} in-medium wavelengths, lambda_m = {lam_m:.4g} m) the "
+    "transmitted family's z' ladder reaches. Beyond a quarter lambda_m the "
+    "two-ray (lambda_1/lambda_2 saddle) structure of the transmitted "
+    "integral returns and the single e^(-j k_m |z'|) divide-out the whole "
+    "ladder architecture rests on no longer flattens it (momwire#524 phase 0 "
+    "measured >33 nodes over the deep range at every soil, and a spherical-"
+    "phase divide is no better). Bury the wire shallower, or extend the "
+    "ladder — about 8 extra rungs per additional quarter lambda_m, each rung "
+    "a full (R, theta) fill"
+)
+_BURIED_CROSS_GRAZING_REFUSAL = (
+    "this deck's cross-medium pairs reach an observer elevation of "
+    "theta = {th:.4g} deg, below the {floor:.4g} deg this transmitted grid "
+    "can pay for. That floor is a COST law rather than a physics one: the "
+    "transmitted tail is panelled on the J0(lam rho) zeros and must reach "
+    "lam ~ 35/(z + |z'|), so a node costs about 16*cot(theta_true) panels, "
+    "and at this deck's range {r:.6g} m over a shallowest buried depth of "
+    "{depth:.6g} m the bottom row runs out of budget. A truncated tail here "
+    "does NOT degrade gracefully — the acceleration fallback was measured "
+    "4.5e+3 relative wrong — so it refuses. Raise the above-ground wires "
+    "clear of the plane, bury the wires deeper, or shrink the deck's extent"
 )
 
 
@@ -506,6 +604,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "extended_kernel+singular_enrichment": _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
             "per_wire_radius+singular_enrichment": _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
+            # momwire#553 U5 — a wire STRICTLY below a Sommerfeld interface
+            # is served; these four say what around it is not.
+            "buried+contact": _medium_spec.contact_with_buried_refusal(
+                "<contact>", "<buried>"
+            ),
+            "buried+singular_enrichment": _BURIED_ENRICHMENT_REFUSAL,
+            "buried+extended_kernel": _BURIED_EXTENDED_KERNEL_REFUSAL,
+            "buried+crossing": _medium_spec.crossing_refusal("<wire>", 0.0, 0.0, 0.0),
         },
     )
 
@@ -979,6 +1085,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # lifetime as the geometry cache; k-independent, so swept solves
         # reuse it across the whole frequency loop.
         self._cached_image_refl_prep: tuple | None = None
+        # Per-wire medium labels (momwire#553 U5): geometry plus the three
+        # ground kwargs, all frozen after __init__, so one answer per solver.
+        self._cached_wire_media: tuple | None = None
         # SommerfeldGrid lives in the module-level cache in
         # `_sommerfeld.get_grid` so it survives across solver instances.
 
@@ -1129,14 +1238,21 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     end_status[w] = j_idx
         gz = self.ground_z
         if gz is not None:
+            media = self._wire_media()
             for w_idx, pl in enumerate(self.wires_polylines):
                 tol = _ground_spec.ground_touch_tol(pl)
                 pl_arr = np.asarray(pl, dtype=np.float64)
-                if float(pl_arr[:, 2].min()) < gz - tol:
-                    raise ValueError(
-                        f"wire {w_idx} dips below the ground plane "
-                        f"(min z = {pl_arr[:, 2].min():.6g} < ground_z = {gz:g})"
-                    )
+                if media[w_idx] == _medium_spec.BELOW:
+                    # Strictly below the interface, in the lower medium
+                    # (momwire#553 U5). No end of it touches the plane, so it
+                    # has no ground contact to tag and no in-plane edge to
+                    # diagnose — both of those are questions about the
+                    # INTERFACE, and this wire never reaches it. What used to
+                    # stand here was the "dips below the ground plane" raise;
+                    # `_wire_media` is where the two geometries still refused
+                    # (crossing, and buried over a ground with no lower
+                    # medium) name themselves now.
+                    continue
                 z_at = np.abs(pl_arr[:, 2] - gz) <= tol
                 if np.any(z_at[:-1] & z_at[1:]):
                     raise ValueError(
@@ -1149,6 +1265,46 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if end_status[w_idx] == "free" and z_at[-1]:
                     end_status[w_idx] = "ground"
         return start_status, end_status
+
+    # ------------------------------------------------------------------
+    # Per-segment medium (momwire#553 U5)
+    # ------------------------------------------------------------------
+
+    def _lower_medium(self):
+        """Whether this solve's ground has a HALF-SPACE below the interface —
+        a medium with a wavenumber of its own, not just a boundary condition.
+
+        Exactly the Sommerfeld ground. `_ground_spec.ground_config` answers
+        the same question in its own vocabulary (`mode == "compose"`), but it
+        needs an ω to fold ε̃ at and this one is asked at geometry time.
+        """
+        return self.ground_eps is not None and self.ground_model == "sommerfeld"
+
+    def _wire_media(self):
+        """One `_medium_spec` label per wire, cached per instance.
+
+        Raises the crossing / no-lower-medium refusals by name. Geometry and
+        the three ground kwargs are all frozen after `__init__`, so this is
+        computed once.
+        """
+        cached = self._cached_wire_media
+        if cached is None:
+            cached = _medium_spec.wire_media(
+                self.wires_polylines,
+                self.ground_z,
+                lower_medium=self._lower_medium(),
+                pec=self.ground_eps is None,
+            )
+            self._cached_wire_media = cached
+        return cached
+
+    def _has_buried_wires(self):
+        """Whether any wire lies strictly below the interface."""
+        return _medium_spec.BELOW in self._wire_media()
+
+    def _below_segments(self, geom):
+        """`(n_segs,)` bool: this segment is in the lower medium."""
+        return _medium_spec.segment_media(self._wire_media(), geom["seg_offsets"])
 
     def _grounded_junctions(self):
         """Indices of junctions whose shared point lies in the ground plane.
@@ -1682,15 +1838,26 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         w_A, w_Phi = ground.weight_tables(prep=lambda: self._image_refl_prep(geom))
         return self._image_Z_weighted(J_img, supp_seg, polys, w_A, w_Phi)
 
-    def _image_Z_weighted(self, J_img, supp_seg, polys, w_A, w_Phi):
+    def _image_Z_weighted(self, J_img, supp_seg, polys, w_A, w_Phi, eps=None):
         """Weighted image assembly core: complex per-pair tables w_A on the
         A term and w_Phi on the charge term, through the C++
         `assemble_Z_bspline_weighted` kernel when available with the numpy
         einsum loop as the bit-exact fallback. Shared by the refl-coef
-        ground (Fresnel tables) and the Sommerfeld ground's exact-image
-        part (constant C2 tables)."""
+        ground (Fresnel tables), the Sommerfeld ground's exact-image part
+        (constant C2 tables) and — since momwire#553 U5 — the BURIED image,
+        whose constant tables carry A_m = (1 − ε̃)/(1 + ε̃) instead.
+
+        `eps` is the same seam `_assemble_Z` names: the buried image's Φ term
+        divides by ε̃_m = ε₀·ε̃, and a complex one takes the numpy branch by
+        force because the C++ kernel's signature is `double eps`."""
         d = self.degree
-        if _HAVE_BSPLINE_ASSEMBLE_W_ACCEL and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D:
+        eps_z = self.eps if eps is None else eps
+        in_medium = np.iscomplexobj(eps_z)
+        if (
+            _HAVE_BSPLINE_ASSEMBLE_W_ACCEL
+            and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and not in_medium
+        ):
             return _acc.assemble_Z_bspline_weighted(
                 np.ascontiguousarray(J_img, dtype=np.complex128),
                 np.ascontiguousarray(supp_seg, dtype=np.int64),
@@ -1698,7 +1865,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 np.ascontiguousarray(w_A, dtype=np.complex128),
                 np.ascontiguousarray(w_Phi, dtype=np.complex128),
                 float(self.omega),
-                float(self.eps),
+                float(eps_z),
                 float(self.mu),
                 int(d),
                 self._cancel_flag,
@@ -1731,7 +1898,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     Z_Phi += wPhi_blk * inner_Phi
 
         Z_A = 1j * self.omega * self.mu * Z_A
-        Z_Phi = Z_Phi / (1j * self.omega * self.eps)
+        Z_Phi = Z_Phi / (1j * self.omega * eps_z)
         return Z_A + Z_Phi
 
     def _ground_finite_Z(self, J_img, supp_seg, polys, geom, ground=None):
@@ -2293,7 +2460,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # Z assembly
     # ------------------------------------------------------------------
 
-    def _assemble_Z(self, J, supp_seg, polys, geom, td_all=None):
+    def _assemble_Z(self, J, supp_seg, polys, geom, td_all=None, eps=None):
         """Assemble the (n_basis, n_basis) complex Z matrix.
 
         Uses the templated C++ accelerator `assemble_Z_bspline` when
@@ -2305,6 +2472,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         derived from `geom["tangents"]`. The PEC image build passes its
         own (tx, ty, -tz)-modified table here so the same assembly fuses
         the image-current sign flip.
+
+        `eps` overrides the permittivity the Φ term divides by — the
+        `float(self.eps)` seam momwire#553 U5 finally lands. A BURIED pair
+        block's mixed potential is written in the LOWER medium: jωμ₀ still
+        multiplies the A term (μ_r = 1 is this arc's scope), and the Φ term
+        divides by ε̃_m = ε₀·ε̃ rather than by ε₀. A complex `eps` takes the
+        numpy branch by force — the C++ assembler's signature is `double
+        eps` and `float()` on a complex raises, which is the silent-
+        truncation class U1 killed one level down. `eps=None` is the
+        pre-#553 spelling, same branch and same bytes.
         """
         d = self.degree
         n_basis, n_wings, n_poly = polys.shape
@@ -2314,14 +2491,21 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             tangents = geom["tangents"]
             td_all = tangents @ tangents.T
 
-        if _HAVE_BSPLINE_ASSEMBLE_ACCEL and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D:
+        eps_z = self.eps if eps is None else eps
+        in_medium = np.iscomplexobj(eps_z)
+
+        if (
+            _HAVE_BSPLINE_ASSEMBLE_ACCEL
+            and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and not in_medium
+        ):
             return _acc.assemble_Z_bspline(
                 np.ascontiguousarray(J, dtype=np.complex128),
                 np.ascontiguousarray(supp_seg, dtype=np.int64),
                 np.ascontiguousarray(polys, dtype=np.float64),
                 np.ascontiguousarray(td_all, dtype=np.float64),
                 float(self.omega),
-                float(self.eps),
+                float(eps_z),
                 float(self.mu),
                 int(d),
                 self._cancel_flag,
@@ -2351,7 +2535,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     Z_Phi += inner_Phi
 
         Z_A = 1j * self.omega * self.mu * Z_A
-        Z_Phi = Z_Phi / (1j * self.omega * self.eps)
+        Z_Phi = Z_Phi / (1j * self.omega * eps_z)
         return Z_A + Z_Phi
 
     def _offedge_fallback_row_bytes(self, n_segs):
@@ -3704,8 +3888,503 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         }
 
     # ------------------------------------------------------------------
-    # Driver impedance
+    # The buried fill (momwire#553 U5)
     # ------------------------------------------------------------------
+
+    def _buried_medium(self):
+        """`(eps_t, eps_m, k_p, k_m, c2, a_m)` for a buried solve.
+
+        `eps_t` is the ground's RELATIVE ε̃(ω); `eps_m = ε₀·ε̃` is what the
+        lower medium's mixed potential divides its Φ term by. `c2` is the
+        ±=+ family's exact-image coefficient and `a_m` the ±=− family's,
+        `image_coefficient_below` — measured, not derived, and the negative
+        of `c2`, which is exactly the kind of coincidence a sign scan exists
+        to keep honest (`_sommerfeld_below.image_coefficient_below`).
+        """
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
+        k_p = float(self.k)
+        return (
+            eps_t,
+            self.eps * eps_t,
+            k_p,
+            _sommerfeld_below.k_medium(eps_t, k_p),
+            (eps_t - 1.0) / (eps_t + 1.0),
+            _sommerfeld_below.image_coefficient_below(eps_t),
+        )
+
+    def _n_qp_buried_field(self):
+        """Gauss order for the buried fill's THREE field-form blocks.
+
+        **This is momwire#553's fifth inversion, and it is a tolerance
+        inherited from "the remainder is small".** `n_qp_sommerfeld` is 3
+        because the ±=+ remainder is a smooth correction over a segment — no
+        near zone, nothing to resolve. Two of the three blocks here are
+        remainders and 3 would serve them. The CROSS block is not a remainder:
+        the transmitted integral is the WHOLE field, near zone and all, so the
+        quantity a cross pair integrates over a segment falls like 1/R³ and
+        3-point Gauss under-resolves it exactly where an above wire and a
+        buried wire come close — which on a buried radial screen is every
+        pair that matters.
+
+        Measured at ε̃ = 1, where the whole cross block must reproduce the
+        free-space mixed-potential block over the same pairs and the two
+        disagree only by quadrature and interpolation (worst entry, relative
+        to the block's largest):
+
+            deck                       q=3      q=4      q=6      q=8
+            10 m mono / 5 m radial,
+            3 + 2 segments           6.6e-3   3.1e-3   6.8e-4   6.8e-4
+            15 + 10 segments         3.9e-4   1.1e-5   1.0e-5   1.0e-5
+
+        — the floor in each row is the GRID's own interpolation error, which
+        the quadrature cannot go below, and q = 6 reaches it on both. Cost is
+        q² per pair on a table the grid fill already dwarfs, so the order is
+        set at the measurement rather than at the cheapest passing rung.
+
+        `n_qp_sommerfeld` still raises it if a caller asked for more: the
+        knob keeps meaning "at least this".
+        """
+        return max(int(self.n_qp_sommerfeld), _N_QP_BURIED_FIELD)
+
+    def _buried_nodes(self, geom, seg_idx):
+        """`(points, tangents, W)` for the field-form quadrature over a
+        SUBSET of segments — `_Z_sommerfeld_remainder`'s own node rule,
+        restricted, at `_n_qp_buried_field`'s order.
+
+        `W[p, i, q] = w_q·u_q^p` is the moment weight the basis polynomials
+        apply against, and the nodes are strictly interior to each segment,
+        which is what keeps a wire ending IN the plane off its own
+        singularity and what bounds every grid extent this fill sizes.
+        """
+        seg_l = geom["seg_l"][seg_idx]
+        seg_r = geom["seg_r"][seg_idx]
+        tang = geom["tangents"][seg_idx]
+        h = geom["h_per_seg"][seg_idx]
+        d = self.degree
+        q = self._n_qp_buried_field()
+        xg, wg = leggauss(q)
+        tq = 0.5 * (xg + 1.0)
+        nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
+        u_phys = h[:, None] * tq[None, :]
+        w_node = 0.5 * h[:, None] * wg[None, :]
+        W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
+        n = seg_l.shape[0]
+        return nodes.reshape(n * q, 3), np.repeat(tang, q, axis=0), W
+
+    def _field_galerkin_block(
+        self,
+        supp_seg,
+        polys,
+        proj_fn,
+        obs_idx,
+        src_idx,
+        obs,
+        t_obs,
+        W_obs,
+        src,
+        t_src,
+        W_src,
+    ):
+        """`Q[m, n]` — the FIELD-form Galerkin block of a projected pair
+        table, over a rectangular (observer segments × source segments)
+        subset.
+
+        `_Z_sommerfeld_remainder`'s einsum, generalized on both axes so the
+        below/below remainder and the two transmitted blocks consume the same
+        assembly. The caller supplies the projected table through
+        `proj_fn(obs, t_obs, src, t_src) -> (n_obs·q, n_src·q)`; everything
+        here is testing, not physics, so all three families share it and none
+        of them can drift on the moment convention.
+
+        The observer axis is banded exactly as the ±=+ fill bands it, so
+        nothing bigger than `(d+1, d+1, chunk, n_src)` is ever live.
+        """
+        d = self.degree
+        q = self._n_qp_buried_field()
+        n_obs = len(obs_idx)
+        n_src = len(src_idx)
+        n_basis = polys.shape[0]
+        Q = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        if n_obs == 0 or n_src == 0:
+            return Q
+        # Global segment index -> position on each axis; -1 means "not on
+        # this axis", which is how a wing that belongs to the other medium
+        # drops out of the block rather than being clamped into it.
+        n_seg_total = int(np.max(supp_seg)) + 1
+        pos_o = np.full(n_seg_total, -1, dtype=np.int64)
+        pos_o[obs_idx] = np.arange(n_obs)
+        pos_s = np.full(n_seg_total, -1, dtype=np.int64)
+        pos_s[src_idx] = np.arange(n_src)
+
+        chunk = max(1, (1 << 19) // max(n_src * q * q, 1))
+        for i0 in range(0, n_obs, chunk):
+            self._checkpoint()
+            i1 = min(i0 + chunk, n_obs)
+            proj = proj_fn(
+                obs[i0 * q : i1 * q],
+                t_obs[i0 * q : i1 * q],
+                src,
+                t_src,
+            )
+            fq = proj.reshape(i1 - i0, q, n_src, q)
+            Jc = np.einsum("piq,iqjr,Pjr->pPij", W_obs[:, i0:i1], fq, W_src)
+            for a in range(d + 1):
+                pm = pos_o[supp_seg[:, a]]
+                rows = np.nonzero((pm >= i0) & (pm < i1))[0]
+                if rows.size == 0:
+                    continue
+                pml = pm[rows] - i0
+                for b in range(d + 1):
+                    pn = pos_s[supp_seg[:, b]]
+                    cols = np.nonzero(pn >= 0)[0]
+                    if cols.size == 0:
+                        continue
+                    J_blk = Jc[:, :, pml[:, None], pn[cols][None, :]]
+                    Q[np.ix_(rows, cols)] += np.einsum(
+                        "mp,pPmn,nP->mn",
+                        polys[rows, a, :],
+                        J_blk,
+                        polys[cols, b, :],
+                    )
+        return Q
+
+    def _build_J_blocks_subset(self, geom, k, seg_idx, mirror_sources=False):
+        """`_build_J_blocks` / `_build_J_image_blocks` over a SUBSET of
+        segments, scattered back into a full `(d+1, d+1, N, N)` tensor whose
+        other entries stay zero.
+
+        Zeros are the pair MASK: a pair that belongs to another medium
+        contributes nothing to this block, and writing that as "the moment is
+        zero" rather than as a masked assembly keeps `_assemble_Z` and
+        `_image_Z_weighted` unmodified — the prefactors are global multipliers,
+        so a zero moment stays zero through both.
+
+        The subset is always a union of whole WIRES (media are labelled per
+        wire, `_medium_spec`), so each wire's same-edge overwrite lands on a
+        contiguous local slice and the analytic static + regularized split is
+        applied exactly where `_build_J_blocks` applies it.
+        """
+        d = self.degree
+        n_total = geom["n_segs_total"]
+        if seg_idx.size == 0:
+            # A FULLY buried deck has no above segments at all (the phase-0
+            # buried dipoles are exactly this), and an empty subset is a legal
+            # answer rather than a degenerate one: the class contributes
+            # nothing.
+            return np.zeros((d + 1, d + 1, n_total, n_total), dtype=np.complex128)
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        a_row = self._seg_radius(geom)[seg_idx]
+        src_l = seg_l[seg_idx]
+        src_r = seg_r[seg_idx]
+        if mirror_sources:
+            src_l = self._image_positions(src_l)
+            src_r = self._image_positions(src_r)
+        block = _seg_seg_full_moments_offedge(
+            seg_l[seg_idx],
+            seg_r[seg_idx],
+            src_l,
+            src_r,
+            a_row,
+            k,
+            d,
+            self.n_qp_pair,
+        )
+        if not mirror_sources:
+            # Same-edge overwrite, per edge of each subset wire. The image
+            # block never needs it: a segment and its own mirror are a
+            # distance 2·depth apart, which the off-edge quadrature resolves.
+            per_wire = geom["per_wire"]
+            seg_off = geom["seg_offsets"]
+            local_of = np.full(n_total, -1, dtype=np.int64)
+            local_of[seg_idx] = np.arange(len(seg_idx))
+            for w in range(len(per_wire)):
+                if local_of[seg_off[w]] < 0:
+                    continue
+                pw = per_wire[w]
+                ed_off = pw["edge_offsets"]
+                ed_arc = pw["edge_arc_edges"]
+                base = seg_off[w]
+                a_w = float(self._radius_per_wire[w])
+                for i_e in range(len(ed_off) - 1):
+                    lo = int(local_of[base + ed_off[i_e]])
+                    hi = lo + (ed_off[i_e + 1] - ed_off[i_e])
+                    sl = slice(lo, hi)
+                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
+                    A_reg = _seg_seg_reg_moments(
+                        ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair
+                    )
+                    block[:, :, sl, sl] = A_st + A_reg
+        J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=np.complex128)
+        J[:, :, seg_idx[:, None], seg_idx[None, :]] = block
+        return J
+
+    def _refuse_buried_out_of_scope(self, geom):
+        """The three solver configurations a buried deck may not reach.
+
+        Each one is a SECOND kernel that has no medium, not a tolerance:
+        refusing by name is the same discipline U1 applied one level down to
+        the fills it did not widen.
+        """
+        if self.use_singular_enrichment:
+            raise NotImplementedError(_BURIED_ENRICHMENT_REFUSAL)
+        if self.extended_kernel:
+            raise NotImplementedError(_BURIED_EXTENDED_KERNEL_REFUSAL)
+        n = int(geom["n_segs_total"])
+        if not self._dense_tensor_fits_budget(n):
+            raise NotImplementedError(
+                _BURIED_DENSE_BUDGET_REFUSAL.format(
+                    n=n,
+                    need=(self.degree + 1) ** 2 * n * n * 16 / (1 << 20),
+                    budget=self.swept_mem_mb,
+                )
+            )
+
+    def _buried_serve_plan(self, geom, a_idx, obs_a, obs_b, k_p, k_m):
+        """Grid extents for the three field-form blocks, or a named refusal.
+
+        Every extent is measured on the QUADRATURE NODES the fill will
+        actually query, not on segment endpoints. That is not an
+        optimisation: a wire standing in the plane has an endpoint AT the
+        interface, whose transmitted-grid radius about a buried source's
+        ground projection is zero, and the nodes are strictly interior, so
+        the node set is both the honest domain and a smaller one.
+
+        Nothing here clamps. Both buried families' `eval` already refuse
+        rather than freeze an amplitude — their remainder is not a negligible
+        tail and the transmitted surface is the whole field — so a geometry
+        past a cap has no answer to give, and the refusal is raised HERE,
+        before an 80-second grid fill, with the deck's own numbers and the
+        limit in the same sentence.
+        """
+        gz = self.ground_z
+        lam_p = 2.0 * np.pi / k_p
+        lam_m = 2.0 * np.pi / abs(k_m)
+        plan = {}
+
+        # --- below/below: R1 = |two depths added|, theta = atan2(h, rho) ---
+        d_b = gz - obs_b[:, 2]
+        dx = obs_b[:, 0][:, None] - obs_b[:, 0][None, :]
+        dy = obs_b[:, 1][:, None] - obs_b[:, 1][None, :]
+        rho = np.hypot(dx, dy)
+        hh = d_b[:, None] + d_b[None, :]
+        r1 = np.hypot(rho, hh)
+        r1_max = float(np.max(r1))
+        th_min = float(np.min(np.arctan2(hh, rho)))
+        cap = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
+        if r1_max > cap:
+            raise ValueError(
+                _BURIED_PAST_CAP_REFUSAL.format(
+                    r1=r1_max,
+                    wl=r1_max / lam_m,
+                    cap=cap,
+                    capwl=_sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M,
+                    lam_m=lam_m,
+                )
+            )
+        floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
+        if th_min < floor:
+            raise ValueError(
+                _BURIED_GRAZING_REFUSAL.format(
+                    th=math.degrees(th_min),
+                    floor=_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG,
+                    depth=float(np.min(d_b)) + float(np.min(d_b)),
+                )
+            )
+        plan["r1_below"] = r1_max
+
+        if a_idx.size == 0:
+            return plan
+
+        # --- above/above: the shipped sizing, over the above segments -----
+        plan["r1_above"] = _sommerfeld.max_image_distance(
+            geom["seg_l"][a_idx], geom["seg_r"][a_idx], gz
+        )
+
+        # --- cross-medium: observer polar radius about the SOURCE's ground
+        #     projection, and the source depth ladder -----------------------
+        z_a = obs_a[:, 2] - gz
+        cdx = obs_a[:, 0][:, None] - obs_b[:, 0][None, :]
+        cdy = obs_a[:, 1][:, None] - obs_b[:, 1][None, :]
+        crho = np.hypot(cdx, cdy)
+        r_obs = np.hypot(crho, z_a[:, None])
+        r_lo = float(np.min(r_obs))
+        r_hi = float(np.max(r_obs))
+        zp_lo = float(np.min(d_b))
+        zp_hi = float(np.max(d_b))
+
+        r_cap = _sommerfeld_transmitted._R_CAP_LAMBDA_P * lam_p
+        if r_hi > r_cap:
+            raise ValueError(
+                _BURIED_CROSS_RANGE_REFUSAL.format(
+                    r=r_hi,
+                    wl=r_hi / lam_p,
+                    cap=r_cap,
+                    capwl=_sommerfeld_transmitted._R_CAP_LAMBDA_P,
+                )
+            )
+        zp_cap = _sommerfeld_transmitted._ZPRIME_MAX_LAMBDA_M * lam_m
+        if zp_hi > zp_cap:
+            raise ValueError(
+                _BURIED_DEPTH_REFUSAL.format(
+                    d=zp_hi,
+                    cap=zp_cap,
+                    capwl=_sommerfeld_transmitted._ZPRIME_MAX_LAMBDA_M,
+                    lam_m=lam_m,
+                )
+            )
+        th_cross = float(np.min(np.arctan2(z_a[:, None], crho)))
+        # Against the domain the grid will HAVE, not the one asked for: r_max
+        # buckets up and that raises the floor (`grid_extent`).
+        _rmin_eff, r_hi_eff, th_floor = _sommerfeld_transmitted.grid_extent(
+            k_p, r_hi, zp_lo, r_min=r_lo
+        )
+        if th_cross < th_floor:
+            raise ValueError(
+                _BURIED_CROSS_GRAZING_REFUSAL.format(
+                    th=math.degrees(th_cross),
+                    floor=math.degrees(th_floor),
+                    r=r_hi_eff,
+                    depth=zp_lo,
+                )
+            )
+        plan["r_cross_max"] = r_hi
+        plan["r_cross_min"] = r_lo
+        plan["zp_min"] = zp_lo
+        plan["zp_max"] = zp_hi
+        return plan
+
+    def _compute_Z_operator_buried(self, geom, supp_seg, polys):
+        """The mixed-medium dense Z: per-segment media, three pair classes,
+        one matrix (momwire#553 U5).
+
+        A deck with buried wires is filled pair class by pair class, and the
+        classes are not variants of each other:
+
+        * **above/above** — the shipped composition, unchanged. Direct at k₀
+          through the mixed potential in air, minus `C₂·image + Q`.
+        * **below/below** — the same SHAPE in the lower medium and nothing
+          else shared. Direct at k_m through the mixed potential written in
+          the medium (jωμ₀ on A, 1/(jωε̃_m) on Φ — the `float(self.eps)` seam
+          this unit lands), minus `A_m·image + Q_below`, with the image
+          mirrored through the interface exactly as the ±=+ one is and
+          `A_m = (1 − ε̃)/(1 + ε̃)` in C₂'s place. The image of a below source
+          is ABOVE, and its interaction with a below observer is the k_m
+          direct kernel at the image distance — the phase-0 composition,
+          EQUATIONS.md §Regime 2.
+        * **cross-medium** — neither. The transmitted integral is the WHOLE
+          field across the interface: no direct term, no image term, no
+          mixed-potential prefactors, just `⟨E, testing⟩` subtracted like any
+          field-form block. Both directions are filled and their agreement is
+          the reciprocity gate.
+
+        The three field-form blocks (the two remainders and the transmitted
+        pair) all subtract, because a field's contribution to the EFIE
+        Galerkin matrix is `−⟨f, E⟩` and the mixed-potential block is that
+        same functional written out; the ±=+ path's single `Z -= (C₂·img + Q)`
+        is the same convention and this method keeps it verbatim.
+        """
+        below = self._below_segments(geom)
+        b_idx = np.nonzero(below)[0]
+        a_idx = np.nonzero(~below)[0]
+        eps_t, eps_m, k_p, k_m, c2, a_m = self._buried_medium()
+        gz = self.ground_z
+
+        self._refuse_buried_out_of_scope(geom)
+        obs_a, t_a, W_a = self._buried_nodes(geom, a_idx)
+        obs_b, t_b, W_b = self._buried_nodes(geom, b_idx)
+        plan = self._buried_serve_plan(geom, a_idx, obs_a, obs_b, k_p, k_m)
+
+        # --- the two direct blocks, each in its own medium -----------------
+        self._checkpoint()
+        Z = self._assemble_Z(
+            self._build_J_blocks_subset(geom, k_m, b_idx),
+            supp_seg,
+            polys,
+            geom,
+            eps=eps_m,
+        )
+        td_img = self._image_tangent_dot(geom["tangents"])
+        if a_idx.size:
+            self._checkpoint()
+            Z += self._assemble_Z(
+                self._build_J_blocks_subset(geom, k_p, a_idx), supp_seg, polys, geom
+            )
+            self._checkpoint()
+            Z -= self._image_Z_weighted(
+                self._build_J_blocks_subset(geom, k_p, a_idx, mirror_sources=True),
+                supp_seg,
+                polys,
+                c2 * td_img.astype(np.complex128),
+                np.full(td_img.shape, c2, dtype=np.complex128),
+            )
+        self._checkpoint()
+        Z -= self._image_Z_weighted(
+            self._build_J_blocks_subset(geom, k_m, b_idx, mirror_sources=True),
+            supp_seg,
+            polys,
+            a_m * td_img.astype(np.complex128),
+            np.full(td_img.shape, a_m, dtype=np.complex128),
+            eps=eps_m,
+        )
+        del td_img
+
+        # --- the three field-form blocks -----------------------------------
+        if a_idx.size:
+            grid_above = self._somm_grid(eps_t, plan["r1_above"])
+
+            def proj_aa(o, to, s, ts):
+                return _sommerfeld.remainder_field_proj(
+                    o, to, s, ts, gz, k_p, grid_above, cancel_flag=self._cancel_flag
+                )
+
+            Z -= self._field_galerkin_block(
+                supp_seg, polys, proj_aa, a_idx, a_idx, obs_a, t_a, W_a, obs_a, t_a, W_a
+            )
+
+        grid_below = _sommerfeld_below.get_grid_below(
+            eps_t, k_p, plan["r1_below"], self.omega, mu=self.mu
+        )
+
+        def proj_bb(o, to, s, ts):
+            return _sommerfeld_below.remainder_field_proj_below(
+                o, to, s, ts, gz, k_p, k_m, grid_below
+            )
+
+        Z -= self._field_galerkin_block(
+            supp_seg, polys, proj_bb, b_idx, b_idx, obs_b, t_b, W_b, obs_b, t_b, W_b
+        )
+
+        if a_idx.size:
+            grid_t = _sommerfeld_transmitted.get_grid_below_above(
+                eps_t,
+                k_p,
+                plan["r_cross_max"],
+                plan["zp_min"],
+                plan["zp_max"],
+                self.omega,
+                mu=self.mu,
+                r_min=plan["r_cross_min"],
+            )
+
+            def proj_ab(o, to, s, ts):
+                return _sommerfeld_transmitted.transmitted_field_proj_below_to_above(
+                    o, to, s, ts, gz, k_p, k_m, grid_t
+                )
+
+            def proj_ba(o, to, s, ts):
+                return _sommerfeld_transmitted.transmitted_field_proj_above_to_below(
+                    o, to, s, ts, gz, k_p, k_m, grid_t
+                )
+
+            Z -= self._field_galerkin_block(
+                supp_seg, polys, proj_ab, a_idx, b_idx, obs_a, t_a, W_a, obs_b, t_b, W_b
+            )
+            Z -= self._field_galerkin_block(
+                supp_seg, polys, proj_ba, b_idx, a_idx, obs_b, t_b, W_b, obs_a, t_a, W_a
+            )
+
+        return self._apply_loading(Z)
 
     def _dense_tensor_fits_budget(self, n_segs):
         """Whether one dense polynomial-moment tensor fits the memory budget."""
@@ -3725,6 +4404,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         peak on exactly the entry point the SimNEC portal and the array
         benchmarks drive (issue #235).
         """
+        if self.ground_z is not None and self._has_buried_wires():
+            # Per-segment media (momwire#553 U5). Structurally a different
+            # fill, not a flag inside this one: three pair classes, two
+            # wavenumbers, two permittivities and three field-form blocks.
+            # An all-above deck never reaches it, which is what keeps the
+            # shipped path byte-identical.
+            return self._compute_Z_operator_buried(geom, supp_seg, polys)
+
         dense_tensor_fits = self._dense_tensor_fits_budget(geom["n_segs_total"])
 
         self._checkpoint()  # after geometry/basis, before the J-block fill
