@@ -30,6 +30,20 @@ multi-source shapes nothing has printed — refuses BY NAME through
 :func:`refusal`, because a seam that answers a question it has no gate for is
 worse than one that says so.
 
+momwire#553 lands the BURIED wire, and with it a serve matrix rather than a
+rung: a wire strictly below a ``GN 0`` / ``GN 2`` interface is solved through
+the per-segment medium and the two buried Sommerfeld families, and **such a
+deck's IMPEDANCE, its CURRENTS and its CHARGES are served while every other
+output refuses by name** — its near field is momwire#524 phase 3 and its far
+field the transmitted far-zone asymptotics, neither of which this arc built.
+Three GEOMETRIES around it refuse too, and none of them says "buried wires
+are not served" any more: a wire with points on both sides of the interface
+(the crossing basis, phase 2); a buried wire over ``GN 1`` or a bare ``GD``,
+neither of which has a lower medium to bury it in; and a buried wire on a
+deck that also stands a wire END in the plane — the combination momwire#553
+measured itself out of, whose sentence quotes both banked phase-0 anchors as
+the numbers phase 2 has to meet.
+
 Courtesy stance, the arc's throughout: every NEC-5 fact below was measured
 off captured decks and captured printouts under ``tests/fixtures/eznec/``,
 and is cited by capture id.  No NEC-5 source, algorithm or internal
@@ -470,11 +484,94 @@ _REFUSE_NEAR_FIELD_CONTACT = (
     "field is served at every point off the contact - move the {card} card's "
     "observation point off wire {tag}'s base"
 )
-_REFUSE_BURIED_WIRE = (
-    "wire {tag} runs below the ground plane (min z = {zmin:g} m) - buried "
-    "wires are not served: momwire models wires at or above the interface, "
-    "and this deck's ground card puts a conducting medium below z = 0 - "
-    "raise the wire to the surface, or model in free space (GN -1)"
+# The buried rung LANDED with momwire#553: a wire strictly below a ``GN 0`` /
+# ``GN 2`` interface is served, through the per-segment medium and the two
+# buried Sommerfeld families.  What is left of the old sentence splits three
+# ways, and each of the three names a DIFFERENT missing thing rather than
+# repeating "buried wires are not served":
+#
+#   * a wire that CROSSES the interface (or stands an end in it from below) —
+#     the crossing basis, momwire#524 phase 2, with its banked anchor;
+#   * a buried wire over ``GN 1`` or a bare ``GD`` — no lower medium exists
+#     under either card, so there is nothing to bury the wire in;
+#   * the OUTPUTS a buried deck cannot answer — its near field (phase 3) and
+#     its far field (the transmitted far-zone asymptotics).
+#
+# Impedance, currents and charges serve.  That sentence is the serve matrix
+# and it is repeated in the module docstring.
+_REFUSE_BURIED_CROSSING = (
+    "wire {tag} crosses the ground interface (z runs {zmin:g} to {zmax:g} m "
+    "across z = 0) - a wire wholly below the interface is served over this "
+    "deck's ground card, and a wire wholly at or above it is served, but a "
+    "wire with points on BOTH sides is neither: current crossing the "
+    "interface is a boundary condition where the two media meet, not a "
+    "junction, and it needs the crossing basis momwire#524 phase 2 owns. "
+    "The gate that basis has to meet is already banked from this engine's "
+    "own printout - a 2 m buried vertical joined at z = 0 to a 10 m monopole "
+    "over eps_r 13 / sigma 0.005 S/m soil at 7 MHz prints 74.761 - 57.730j "
+    "ohm. Until then: leave the buried part DETACHED from the part above the "
+    "plane (a buried radial screen under a base-fed vertical is served that "
+    "way), or raise the whole wire clear of z = 0"
+)
+_REFUSE_BURIED_NO_MEDIUM = (
+    "wire {tag} runs below the ground plane (min z = {zmin:g} m) under a "
+    "{card} card, which has no lower medium to put it in: {why}. A buried "
+    "wire is served under GN 0 / GN 2, where the half-space below the "
+    "interface is a real medium with a wavenumber of its own - write the "
+    "finite-ground card, raise the wire to the surface, or model in free "
+    "space (GN -1)"
+)
+_WHY_NO_MEDIUM = {
+    "GN 1": (
+        "the field inside a perfect conductor is identically zero, so a wire "
+        "there is not buried, it is shorted out"
+    ),
+    "GD": (
+        "the MININEC-type ground solves its currents over a PERFECT image and "
+        "spends its medium entirely on the far field, so below the plane "
+        "there is a perfect conductor here too"
+    ),
+}
+_REFUSE_BURIED_WITH_CONTACT = (
+    "wire {cw} stands an END in the ground plane and wire {bw} is buried "
+    "below it, and that COMBINATION is not served though each half is. "
+    "momwire continues a contact wire's current into the ground as a scaled "
+    "IMAGE, which works only because nothing is ever inside the ground to "
+    "look at it - and a buried wire is exactly that. What a buried wire "
+    "should see is the contact current spreading in the lower medium, which "
+    "is the crossing physics momwire#524 phase 2 owns. The error is not "
+    "small and it is measured: at eps_tilde = 1, where the buried fill must "
+    "reproduce the free-space fill exactly, this deck class disagrees by 2.5 "
+    "RELATIVE on the contact basis and by 1e-8 on every other one, while the "
+    "same deck with the monopole lifted 1 m clear of the plane agrees to "
+    "1.0e-5 throughout. This engine's own printouts are banked as the gates "
+    "phase 2 has to meet - 92.130 - 70.141j ohm for a 10 m monopole over one "
+    "detached 5 m radial 15 cm down, 89.985 - 71.401j ohm for the four-"
+    "radial fan, both over eps_r 13 / sigma 0.005 S/m soil at 7 MHz. Until "
+    "then: raise the above-ground wire clear of z = 0 (an elevated feed over "
+    "a buried counterpoise is served), or model the buried structure alone"
+)
+_REFUSE_BURIED_NEAR_FIELD = (
+    "{card} asks for a field on a deck with a wire below the ground plane, "
+    "and a buried deck's near field is not served. The point evaluator "
+    "composes a direct term, an image term and a Sommerfeld remainder, and "
+    "which three of those a point gets depends on which side of the "
+    "interface it and the source are on - reconciling the two readouts (a "
+    "REMAINDER above, a WHOLE transmitted field across) is momwire#524 phase "
+    "3, and the three crossing regimes refuse by name until it lands. This "
+    "deck's IMPEDANCE, its CURRENTS and its CHARGES are all served: drop the "
+    "{card} card, or lift the wire above z = 0"
+)
+_REFUSE_BURIED_FAR_FIELD = (
+    "RP asks for the far field of a deck with a wire below the ground plane, "
+    "and a buried deck's radiation pattern is not served. The pattern of a "
+    "buried source is the transmitted field's FAR-ZONE asymptotics - a "
+    "saddle-point evaluation of the same integral, with its own lateral-wave "
+    "and critical-angle structure - and momwire#553 built the transmitted "
+    "family over a NEAR-zone tabulation only (2 free-space wavelengths of "
+    "range), so there is nothing here to take a limit of. This deck's "
+    "IMPEDANCE, its CURRENTS and its CHARGES are all served: drop the RP "
+    "card, or lift the wire above z = 0"
 )
 _REFUSE_IN_PLANE_WIRE = (
     "wire {tag} lies in the ground plane (both ends at z = 0) - a horizontal "
@@ -534,6 +631,21 @@ def refusal(deck: Nec5Deck) -> str | None:
     :func:`_drive_refusal`'s.  So "grounds first" survives as the rule a fifth
     ground card would land under rather than as a description of a line that is
     still there.
+
+    momwire#553's rung is the same shape again, and it is recorded here the
+    way #545's was.  The BURIED wire moves down the ladder rather than off
+    it: before it, ``GW 2,10,0.,0.,-0.15,…`` named its own geometry and
+    stopped; after it the same card is served, and what a buried deck can
+    still name is either a GEOMETRY around it (a wire crossing the interface,
+    a buried wire over a card with no lower medium, a buried wire sharing a
+    deck with a ground contact) or an OUTPUT it cannot answer (its near
+    field, its far field).  That last pair is the first time this seam's
+    refusal grammar has had to say "this deck is served, but not for THAT
+    number", which is why the serve matrix — impedance, currents, charges —
+    is written out in the module docstring rather than left implicit in the
+    order of the branches below.  The geometry rung goes on being checked
+    before the request rung, so a deck that is out of scope both ways still
+    names the geometry a reader would fix first.
     """
     if deck.transmission_lines and deck.networks and _interleaves_networks(deck):
         return _REFUSE_MIXED_ORDER
@@ -547,45 +659,104 @@ def refusal(deck: Nec5Deck) -> str | None:
     geometry = _geometry_refusal(deck)
     if geometry is not None:
         return geometry
+    buried = _has_buried_wire(deck)
     for request in deck.requests:
         if isinstance(request, Nec5NearFieldRequest):
+            if buried:
+                # THE SERVE MATRIX, in one branch: a buried deck's impedance,
+                # currents and charges serve and every other output refuses
+                # BY NAME. Near fields are momwire#524 phase 3, far fields
+                # the transmitted far-zone follow-up.
+                return _REFUSE_BURIED_NEAR_FIELD.format(card=_near_field_card(request))
             near = _near_field_refusal(deck, request)
             if near is not None:
                 return near
-        if isinstance(request, Nec5FarFieldRequest) and request.range_m != 0.0:
-            return _REFUSE_RP_RANGE
+        if isinstance(request, Nec5FarFieldRequest):
+            if buried:
+                return _REFUSE_BURIED_FAR_FIELD
+            if request.range_m != 0.0:
+                return _REFUSE_RP_RANGE
     if not deck.requests:
         return _REFUSE_NO_REQUEST
     return None
+
+
+def _has_buried_wire(deck: Nec5Deck) -> bool:
+    """Whether any wire lies STRICTLY below the plane, on the solver's own
+    per-wire tolerance. Read by the two output refusals, which are about the
+    deck rather than about a card."""
+    if deck.ground is None or isinstance(deck.ground, Nec5FreeSpace):
+        return False
+    for wire in deck.wires:
+        pl = np.array([wire.end1, wire.end2], dtype=float)
+        tol = _ground_spec.ground_touch_tol(pl)
+        if float(pl[:, 2].max()) < -tol:
+            return True
+    return False
 
 
 def _geometry_refusal(deck: Nec5Deck) -> str | None:
     """``None`` when every wire can stand over this deck's ground, the
     sentence when one cannot.
 
-    Two shapes, both of which the solver would refuse at construction — the
-    seam names them so the printout carries a capability statement instead of
-    the ``INTERNAL ERROR`` frame (momwire#525). Below-plane wires are a real
-    capability gap: the licensed engine SERVES buried radials (momwire#524
-    is the capability issue), so that sentence must read as "not served
-    here", never as a deck error. In-plane wires are degenerate over any
-    conducting ground and the engine-side answer is to move them.
+    Since momwire#553 a wire STRICTLY below a ``GN 0`` / ``GN 2`` interface
+    is served — the solver labels it with the lower medium and fills its
+    pairs through the two buried Sommerfeld families — so what this function
+    refuses is no longer "below the plane". It is three narrower things, and
+    each names what is actually missing rather than restating the geometry:
 
-    Free space is exempt: z < 0 is legal geometry with no ground under it.
-    The tolerance is the solver's own (`_ground_spec.ground_touch_tol`,
-    1e-6 of each wire's length) so the seam refuses exactly what the solver
-    would refuse — never more, never less.
+    * a wire with points on BOTH sides of the interface, which needs the
+      crossing basis momwire#524 phase 2 owns (a buried wire whose end stands
+      IN the plane is this case, not the buried one: the tolerance decides,
+      and it is the solver's own);
+    * a buried wire under ``GN 1`` or a bare ``GD``, neither of which has a
+      lower medium at all — momwire solves both over a PERFECT image, so
+      below the plane is a perfect conductor and there is nothing to bury a
+      wire in;
+    * an in-plane wire, degenerate over any conducting ground, unchanged.
+
+    Free space is exempt on all three: z < 0 is legal geometry with no
+    interface under it. The tolerance is the solver's own
+    (`_ground_spec.ground_touch_tol`, 1e-6 of each wire's length) so the seam
+    refuses exactly what the solver would refuse — never more, never less,
+    and in particular the seam and the solver agree wire for wire about which
+    side of the line "an end in the plane" falls on.
     """
     if deck.ground is None or isinstance(deck.ground, Nec5FreeSpace):
         return None
+    sommerfeld = isinstance(deck.ground, Nec5SommerfeldGround)
+    card = "GD" if isinstance(deck.ground, Nec5MininecGround) else "GN 1"
     for wire in deck.wires:
         pl = np.array([wire.end1, wire.end2], dtype=float)
         tol = _ground_spec.ground_touch_tol(pl)
         zmin = float(pl[:, 2].min())
+        zmax = float(pl[:, 2].max())
         if zmin < -tol:
-            return _REFUSE_BURIED_WIRE.format(tag=wire.tag, zmin=zmin)
+            if zmax >= -tol:
+                return _REFUSE_BURIED_CROSSING.format(
+                    tag=wire.tag, zmin=zmin, zmax=zmax
+                )
+            if not sommerfeld:
+                return _REFUSE_BURIED_NO_MEDIUM.format(
+                    tag=wire.tag, zmin=zmin, card=card, why=_WHY_NO_MEDIUM[card]
+                )
+            continue
         if abs(pl[0, 2]) <= tol and abs(pl[1, 2]) <= tol:
             return _REFUSE_IN_PLANE_WIRE.format(tag=wire.tag)
+    buried = [
+        w.tag
+        for w in deck.wires
+        if float(np.array([w.end1, w.end2], dtype=float)[:, 2].max())
+        < -_ground_spec.ground_touch_tol(np.array([w.end1, w.end2], dtype=float))
+    ]
+    if buried:
+        contacts = [
+            w.tag
+            for w in deck.wires
+            if _ground_spec.contact_ends([np.array([w.end1, w.end2], dtype=float)], 0.0)
+        ]
+        if contacts:
+            return _REFUSE_BURIED_WITH_CONTACT.format(cw=contacts[0], bw=buried[0])
     return None
 
 
