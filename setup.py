@@ -140,10 +140,25 @@ else:
     ]
     extra_link_args = ["-fopenmp", "-lpthread", "-lmvec"]
 
+# The inline headers `_accelerators.cpp` pulls in. setuptools rebuilds an
+# object file only when a listed source or DEPENDENCY is newer than it, and a
+# header it has never been told about is neither: without this list, editing
+# `_contour_engine_inline.h` and re-running `build_ext --inplace` prints
+# "copying build/lib.../_accelerators...so" and silently re-installs the OLD
+# binary. That is a measurement hazard, not just an inconvenience — momwire#568
+# spent a benchmark round comparing a stale .so against numpy and read a 6x
+# speedup where the current code had 19x. Every new inline header belongs here.
+_ACCEL_HEADERS = [
+    "src/momwire/_bspline_static_moments_inline.h",
+    "src/momwire/_bspline_ek_moments_inline.h",
+    "src/momwire/_contour_engine_inline.h",
+]
+
 ext_modules = [
     Pybind11Extension(
         "momwire._accelerators",
         ["src/momwire/_accelerators.cpp"],
+        depends=_ACCEL_HEADERS,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
     ),
