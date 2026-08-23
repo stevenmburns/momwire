@@ -215,7 +215,33 @@ _PAD_ROWS = 2
 # axis would have to keep going; going lower is cheap (10 nodes per e-fold)
 # but it is a serve decision, so it refuses by name rather than clamping onto
 # a node that does not exist.
+#
+# momwire#553 U5 is that serve decision, and it took the extension rather than
+# the refusal: a buried radial under a base-fed vertical puts the monopole's
+# lowest quadrature node a few millimetres above the radial's ground
+# projection, so R runs three e-folds under this default on the ×1 anchor and
+# five on the ×8 rung. `r_min` is therefore a CONSTRUCTOR ARGUMENT with this
+# as its default, bucketed DOWN to whole `_R_STEP_LOG` steps of it so that
+# every extended lattice's nodes coincide exactly with the default one's — the
+# same coincidence `r_max`'s bucket exploits, in the other direction.
+#
+# What that costs and what it buys, measured on the anchor cell (soil A /
+# 7 MHz, |z'| = 0.15 m, `test_gu5_transmitted_extended_r_min_interpolates`):
+# 10 nodes per e-fold, and worst per-surface relative interpolation error
+# against direct evaluation over R ∈ [5e-4, 0.043] m is 1.2e-6 — three
+# decades INSIDE the 5.8e-4 the shipped domain carries, because at a fixed
+# source depth the observer's R → 0 limit is not a near zone at all: the true
+# separation is bounded below by |z'|, the field is finite there, and the
+# divided-out surface goes to zero linearly in R. The 1/R² near zone the
+# refusal names is the |z'| → 0 corner, which the z' ladder floors separately.
 _R_MIN_LAMBDA_P = 0.001
+
+# How far below `_R_MIN_LAMBDA_P` an extension may be asked for, in AIR
+# wavelengths. 1e-6 λ_p is 4.3e-5 m at 7 MHz — six e-folds, 60 extra rows —
+# and it is a COST bound, not an accuracy one: the measurement above holds
+# because |z'| bounds the true separation, and a caller that wants lower still
+# is really telling this family that its z' is about to go to zero too.
+_R_MIN_FLOOR_LAMBDA_P = 1e-6
 
 # The serve cap, in AIR wavelengths: 85.7 m at 7 MHz, 28.6 m at 21 MHz. The
 # cap is a serve-domain decision and NOT a cost knob — the log axis makes
@@ -753,6 +779,7 @@ class TransmittedGrid:
         omega=None,
         mu=_MU0,
         health=None,
+        r_min=None,
     ):
         from ._sommerfeld import _C_LIGHT
 
@@ -766,7 +793,7 @@ class TransmittedGrid:
         self.lam_p = lam_p
         self.lam_m = lam_m
 
-        self.r_min = _R_MIN_LAMBDA_P * lam_p
+        self.r_min = r_min_bucket(r_min, lam_p)
         self.r_cap = _R_CAP_LAMBDA_P * lam_p
         self.r_max = min(max(float(r_max), 4.0 * self.r_min), self.r_cap)
 
@@ -950,6 +977,44 @@ class TransmittedGrid:
         )
 
 
+def r_min_bucket(r_min, lam_p):
+    """The inner end of the log-R axis, snapped DOWN to a whole `_R_STEP_LOG`
+    step of the default `_R_MIN_LAMBDA_P·λ_p`.
+
+    `None` (or anything at or above the default) gives the default back
+    unchanged, so every pre-U5 grid keeps its exact lattice. Anything smaller
+    lands on `default·exp(−m·Δln R)` for an integer m ≥ 1: the extended axis's
+    nodes then coincide EXACTLY with the default axis's, which is what makes
+    an extension a longer table rather than a different one — and what lets
+    the cache key carry m instead of a float that never repeats.
+
+    Below `_R_MIN_FLOOR_LAMBDA_P·λ_p` it raises rather than extending: see
+    that constant for why the bound is a cost one.
+    """
+    default = _R_MIN_LAMBDA_P * lam_p
+    if r_min is None:
+        return default
+    r_min = float(r_min)
+    if r_min >= default:
+        return default
+    floor = _R_MIN_FLOOR_LAMBDA_P * lam_p
+    if r_min < floor:
+        raise ValueError(
+            f"the transmitted grid was asked to tabulate down to R = "
+            f"{r_min:.6g} m, past the extension floor {floor:.6g} m "
+            f"({_R_MIN_FLOOR_LAMBDA_P:g} free-space wavelengths). Extending "
+            f"the log axis costs {1.0 / _R_STEP_LOG:.0f} rows per e-fold and "
+            "the measurement behind it (per-surface interpolation error "
+            "1.2e-6 over the extended decade) rests on the SOURCE DEPTH "
+            "bounding the true separation from below, so an observer this "
+            "close to a source's ground projection is really a shallow-|z'| "
+            "geometry: deepen the source, raise the observer, or refuse the "
+            "pair"
+        )
+    steps = math.ceil(math.log(default / r_min) / _R_STEP_LOG)
+    return default * math.exp(-steps * _R_STEP_LOG)
+
+
 def grazing_floor(r_max, zp_min):
     """The θ floor, in radians, that keeps every node inside the tail budget.
 
@@ -975,6 +1040,26 @@ def grazing_floor(r_max, zp_min):
     cot_max = _MAX_TAIL_PANELS_T / _TAIL_PANELS_PER_COT
     s = 1.0 / cot_max - abs(float(zp_min)) / float(r_max)
     return float(math.asin(min(max(s, 0.0), 1.0)))
+
+
+def grid_extent(k2, r_max, zp_min, r_min=None):
+    """`(r_min, r_max, th_min)` a `TransmittedGrid` would actually tabulate
+    for this request — the two bucketings and the grazing floor, WITHOUT the
+    fill.
+
+    A serve-time caller has to check its geometry against the domain it will
+    get, and the domain it will get is not the domain it asked for: `r_max`
+    buckets UP (which RAISES the grazing floor, since the floor solves the
+    tail-cost law at the outermost bottom-row node) and `r_min` buckets DOWN.
+    Checking against the request instead of against the answer would let a
+    geometry pass the serve check and then be refused from inside an
+    80-second fill, with a message about a grid rather than about the deck.
+    """
+    lam_p = 2.0 * np.pi / float(k2)
+    rb = _somm_r1_bucket_wl(min(float(r_max) / lam_p, _R_CAP_LAMBDA_P)) * lam_p
+    rmin = r_min_bucket(r_min, lam_p)
+    rmax = min(max(rb, 4.0 * rmin), _R_CAP_LAMBDA_P * lam_p)
+    return rmin, rmax, grazing_floor(rmax, zp_min)
 
 
 def _deeper_than_ladder_message(zp_top, lam_m):
@@ -1007,7 +1092,16 @@ def _outside_ladder_message(lo, hi, zp_min, zp_max, lam_m):
 
 
 def get_grid_below_above(
-    eps_t, k2, r_max, zp_min, zp_max, omega, mu=_MU0, rtol=1e-9, health=None
+    eps_t,
+    k2,
+    r_max,
+    zp_min,
+    zp_max,
+    omega,
+    mu=_MU0,
+    rtol=1e-9,
+    health=None,
+    r_min=None,
 ):
     """Cached `TransmittedGrid`, sharing `_sommerfeld`'s grid cache.
 
@@ -1036,11 +1130,15 @@ def get_grid_below_above(
     eps_t = complex(eps_t)
     lam_p = 2.0 * np.pi / k2
     rb_wl = _somm_r1_bucket_wl(min(float(r_max) / lam_p, _R_CAP_LAMBDA_P))
+    # `r_min` buckets DOWN onto the default lattice's own log steps, so the
+    # key carries a repeatable number rather than a float that never recurs.
+    r_min_b = r_min_bucket(r_min, lam_p)
     key = (
         "below-above",
         eps_t,
         k2,
         rb_wl,
+        r_min_b,
         float(abs(zp_min)),
         float(abs(zp_max)),
         float(omega),
@@ -1059,6 +1157,7 @@ def get_grid_below_above(
             omega=float(omega),
             mu=float(mu),
             health=health,
+            r_min=r_min_b,
         )
         _GRID_CACHE[key] = grid
     return grid
@@ -1119,6 +1218,97 @@ def _require_transmitted_grid(grid, who):
             "different divide-out, and the transmitted family has five and "
             "is the whole field"
         )
+
+
+def _combine_transmitted_proj(surf, g, dhx, dhy, t_obs, t_src, transposed):
+    """The (7a)–(7e) combination kept as a PAIR TABLE rather than summed:
+    `[m, n] = t̂_m · D(r_m, r_n) · t̂_n`, `(n_obs, n_src)` complex.
+
+    The same algebra `_combine_transmitted` / `_combine_transmitted_transposed`
+    run, with the source moment read as the source TANGENT and the observer
+    projection applied instead of a sum — the shape a Galerkin fill needs
+    (`_sommerfeld_below.remainder_field_proj_below` is the below family's own
+    twin of this, and `_sommerfeld.remainder_field_proj` the ±=+ one). Written
+    here, next to the two vector spellings, so the fifth surface's placement
+    is decided in ONE file: `transposed` swaps T_ρ^V with T_z^H and nothing
+    else, which is the whole content of the reciprocity transpose.
+    """
+    cph = t_src[None, :, 0] * dhx + t_src[None, :, 1] * dhy
+    sph = t_src[None, :, 0] * dhy - t_src[None, :, 1] * dhx
+    pz = t_src[None, :, 2]
+
+    if transposed:
+        e_rho = g * (pz * surf["TzH"] + cph * surf["TrhoH"])
+        e_z = g * (pz * surf["TzV"] + cph * surf["TrhoV"])
+    else:
+        e_rho = g * (pz * surf["TrhoV"] + cph * surf["TrhoH"])
+        e_z = g * (pz * surf["TzV"] + cph * surf["TzH"])
+    e_phi = g * sph * surf["TphiH"]
+
+    return (
+        t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
+        + t_obs[:, 1][:, None] * (dhy * e_rho + dhx * e_phi)
+        + t_obs[:, 2][:, None] * e_z
+    )
+
+
+def transmitted_field_proj_below_to_above(
+    obs, t_obs, src, t_src, ground_z, k_p, k_m, grid
+):
+    """Projected transmitted table `t̂_m · D · t̂_n` for observers ABOVE the
+    interface and sources BELOW it: `(n_obs, n_src)` complex.
+
+    The WHOLE field per unit source moment, not a remainder — a Galerkin fill
+    consuming this must not add a direct or an image term to it, which is the
+    contract difference `_field_point`'s crossing regimes still refuse over.
+    """
+    _require_transmitted_grid(grid, "transmitted_field_proj_below_to_above")
+    rho, zz, zp, r_obs, theta, dhx, dhy = _crossing_geometry(
+        obs, src, ground_z, grid, "transmitted_field_proj_below_to_above"
+    )
+    surf = grid.eval(r_obs, theta, zp)
+    g = divide_out_transmitted(k_p, k_m, rho, zz, zp)
+    return _combine_transmitted_proj(
+        surf,
+        g,
+        dhx,
+        dhy,
+        np.asarray(t_obs, dtype=float),
+        np.asarray(t_src, dtype=float),
+        transposed=False,
+    )
+
+
+def transmitted_field_proj_above_to_below(
+    obs, t_obs, src, t_src, ground_z, k_p, k_m, grid
+):
+    """Projected transmitted table for observers BELOW the interface and
+    sources ABOVE it: `(n_obs, n_src)` complex.
+
+    The reciprocity TRANSPOSE of `transmitted_field_proj_below_to_above` over
+    the SAME tables, read at the same (R, θ, z′) — the above point supplies R
+    and θ, the below point supplies z′ — with the dyad transposed and the
+    horizontal direction still taken from the below point to the above one.
+    Any disagreement with the upward direction's transpose is a BUG, not a
+    tolerance, and it is gated as an identity.
+    """
+    _require_transmitted_grid(grid, "transmitted_field_proj_above_to_below")
+    # The geometry table comes back as (above, below) = (source, observer), so
+    # every pair-shaped array transposes into this call's (n_obs, n_src).
+    rho, zz, zp, r_obs, theta, dhx, dhy = _crossing_geometry(
+        src, obs, ground_z, grid, "transmitted_field_proj_above_to_below"
+    )
+    surf = grid.eval(r_obs, theta, zp)
+    g = divide_out_transmitted(k_p, k_m, rho, zz, zp)
+    return _combine_transmitted_proj(
+        {k: v.T for k, v in surf.items()},
+        g.T,
+        dhx.T,
+        dhy.T,
+        np.asarray(t_obs, dtype=float),
+        np.asarray(t_src, dtype=float),
+        transposed=True,
+    )
 
 
 def transmitted_field_below_to_above(obs, src, src_moment, ground_z, k_p, k_m, grid):
