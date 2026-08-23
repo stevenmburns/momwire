@@ -50,6 +50,8 @@ from momwire import _sommerfeld_below as below
 from momwire._ground_mirror import MIRROR, mirror_positions, mirror_tangents
 
 import golden_below_below_524 as gold
+from test_complex_k_bspline import MEDIA as _U1_MEDIA
+from test_complex_k_bspline import WORST as _U1_WORST
 
 EPS0 = 8.8541878128e-12
 MU0 = som._MU0
@@ -1231,3 +1233,104 @@ def test_gu2_10_two_close_eps_values_do_not_share_a_below_grid():
     assert gb.eps_t == b
     assert below.get_grid_below(a, kp, 0.4 * lam_m, om) is ga
     som._GRID_CACHE.clear()
+
+
+# ======================================================================
+# G-U4-1 — the in-medium meshing rule: lambda_medium and
+# segments_per_quarter_wavelength (momwire#553 unit 4)
+# ======================================================================
+#
+# `lambda_medium` has no arithmetic of its own past `k_medium`, and
+# `segments_per_quarter_wavelength` has none past `lambda_medium` — so
+# there is nothing to oracle here beyond (a) the SPEC soils reproducing
+# the refractive-index magnitudes phase 0's own numbers imply, pinned as
+# anti-regression, (b) the identity chain staying exact, (c) the U1
+# G-U1-7 cross-link never quietly drifting, and (d) the eps_tilde -> 1
+# short circuit reading as no correction at all.
+
+# |n| = |k_m|/k_p at every SPEC soil x frequency (scratch/524-phase0/
+# SPEC.md), computed once via `medium()` above and frozen as numbers. B is
+# the SPEC's own stressor and its 7 MHz cell is momwire#553 U1's G-U1-7
+# pin (8.9213, `test_complex_k_bspline.py`); A and C bracket it.
+N_INDEX_PINNED = {
+    "A/7MHz": 4.27452,
+    "A/21MHz": 3.69951,
+    "B/7MHz": 8.92132,
+    "B/21MHz": 5.70512,
+    "C/7MHz": 2.37083,
+    "C/21MHz": 2.25227,
+}
+
+
+@pytest.mark.parametrize("cell", sorted(N_INDEX_PINNED))
+def test_gu4_1_the_refractive_index_matches_the_spec_table(cell):
+    """|n| computed from the SPEC soil at each cell must match the pinned
+    phase-0 table value — the anti-regression half of this gate."""
+    et, kp, om, km = medium(cell)
+    n_index = abs(km) / kp
+    assert n_index == pytest.approx(N_INDEX_PINNED[cell], rel=1e-4)
+
+
+@pytest.mark.parametrize("cell", sorted(N_INDEX_PINNED))
+def test_gu4_1_lambda_medium_is_exactly_two_pi_over_k_m(cell):
+    """`lambda_medium(eps_t, k2)` ≡ 2*pi/|k_medium(eps_t, k2)| — exact, not
+    approximately: it is the ONE spelling of the in-medium wavelength and
+    must never drift from the wavenumber it is derived from."""
+    et, kp, om, km = medium(cell)
+    lam_m = below.lambda_medium(et, kp)
+    assert lam_m == pytest.approx(2.0 * np.pi / abs(km), rel=1e-12)
+
+
+def test_gu4_1_eps_tilde_one_is_neutral():
+    """eps_tilde -> 1 is no soil at all: lambda_m must equal lambda_0
+    exactly, and the diagnostic must read back the same segment density a
+    free-space mesher already delivers -- no correction to undo (the same
+    short circuit `test_gu2_6_eps_one_is_exactly_zero` gates for the field
+    itself)."""
+    kp = 2.0 * np.pi * 7e6 / C0
+    lam0 = 2.0 * np.pi / kp
+    assert below.lambda_medium(1.0, kp) == pytest.approx(lam0, rel=1e-12)
+    seg_lengths = np.array([lam0 / 80.0, lam0 / 40.0, lam0 / 20.0])
+    got = below.segments_per_quarter_wavelength(seg_lengths, 1.0, kp)
+    np.testing.assert_allclose(got, 0.25 * lam0 / seg_lengths, rtol=1e-12)
+
+
+def test_gu4_1_the_diagnostic_reports_and_never_raises():
+    """Advice, not a refusal: NEC-5 itself serves under-meshed buried
+    decks (the seam rule forbids refusing what the host serves), so a
+    degenerate zero-length segment reports as inf rather than raising --
+    there is no exception path in `segments_per_quarter_wavelength` at
+    all."""
+    et, kp, om, km = medium("C/21MHz")
+    got = below.segments_per_quarter_wavelength(np.array([0.0, 1.0]), et, kp)
+    assert np.isinf(got[0])
+    assert got[1] > 0.0
+
+
+# ======================================================================
+# G-U4-2 — the G-U1-7 cross-link: this unit's rule and momwire#553 U1's
+# measured defect bracket must never quietly disagree
+# ======================================================================
+
+
+def test_gu4_2_the_diagnostic_matches_u1s_measured_under_mesh_factor():
+    """U1's G-U1-7 measured the meshing defect this unit fixes: at soil
+    B / 7 MHz a deck meshed against lambda_0 runs its in-medium kernel at
+    |n| = 8.9213 times the panel phase it meant to deliver
+    (`test_complex_k_bspline.test_gu1_7_the_free_space_mesh_is_the_
+    defect_u4_fixes`). The (k0, eps_tilde, k_m) triple is IMPORTED from
+    that unit's own pinned MEDIA table, not re-measured here -- this
+    test's only job is to fail the day the two units' readings of the
+    same SPEC cell drift apart, not to re-derive either one."""
+    k0, et, km = _U1_MEDIA[_U1_WORST]
+    assert below.k_medium(et, k0) == pytest.approx(km, rel=1e-12)
+    n_index = abs(km) / k0
+    assert n_index == pytest.approx(8.9213, rel=1e-4)
+
+    lam0 = 2.0 * np.pi / k0
+    h_lam0_mesh = lam0 / 80.0  # 20 segments per quarter lambda_0
+    n_per_quarter_m = float(below.segments_per_quarter_wavelength(h_lam0_mesh, et, k0))
+    # 20-per-quarter-lambda_0 reads |n|x UNDER the lambda_m rule: the
+    # diagnostic reports 20/|n| segments per quarter lambda_m, not 20.
+    assert 20.0 / n_per_quarter_m == pytest.approx(n_index, rel=1e-4)
+    assert n_per_quarter_m == pytest.approx(20.0 / 8.9213, rel=1e-4)
