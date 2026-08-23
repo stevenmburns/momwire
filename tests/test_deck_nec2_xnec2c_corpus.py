@@ -40,6 +40,7 @@ to run it.
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -57,13 +58,54 @@ CORPUS = Path(
     os.environ.get(CORPUS_ENV) or Path.home() / "antennas" / "xnec2c" / "examples"
 )
 
-pytestmark = pytest.mark.skipif(
-    not CORPUS.is_dir(),
-    reason=(
+# The xnec2c revision every count in this module was recorded against.
+# momwire does not vendor the corpus and cannot pin it, so the revision is
+# recorded rather than enforced — and a checkout at a DIFFERENT revision
+# skips with both hashes named instead of failing.
+#
+# That distinction is the whole reason this constant exists.  A census is a
+# statement about one revision of someone else's tree; "your checkout is a
+# different revision" is not a defect in momwire, and a lane that goes red
+# on arrival for everyone whose clone is newer teaches people to ignore it.
+# Drift WITHIN the recorded revision is still a hard failure, which is the
+# case the census guard is actually for.
+CENSUS_REVISION = "0124325"
+
+
+def _corpus_revision() -> str | None:
+    """The corpus checkout's short HEAD, or None if it is not a git tree."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(CORPUS), "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):  # pragma: no cover - defensive
+        return None
+    return out.stdout.strip() or None
+
+
+CORPUS_REVISION = _corpus_revision() if CORPUS.is_dir() else None
+
+if not CORPUS.is_dir():
+    _skip_reason = (
         f"the xnec2c example corpus is not at {CORPUS} — set ${CORPUS_ENV} to a "
         f"checkout's examples/ directory to run these"
-    ),
-)
+    )
+elif CORPUS_REVISION is not None and not CENSUS_REVISION.startswith(
+    CORPUS_REVISION[:7]
+):
+    _skip_reason = (
+        f"the corpus at {CORPUS} is xnec2c {CORPUS_REVISION}; every count in "
+        f"this module was recorded against {CENSUS_REVISION}. Check that "
+        f"revision out to run these, or re-record the census against yours "
+        f"(the counts are in test_the_corpus_is_the_one_this_module_measures)"
+    )
+else:
+    _skip_reason = ""
+
+pytestmark = pytest.mark.skipif(bool(_skip_reason), reason=_skip_reason)
 
 
 def _cards(text: str):
@@ -256,7 +298,8 @@ def test_the_corpus_is_the_one_this_module_measures():
     checkout that grew or lost a deck must say so here rather than quietly
     change what every other test in this file means.
 
-    82 decks, of which 36 write a ``GX`` or a ``GR``.  Re-recorded 2026-08-22
+    xnec2c ``0124325``: 82 decks, of which 36 write a ``GX`` or a ``GR``.
+    Re-recorded 2026-08-22
     against a refreshed checkout (it had been 75 and 36; #415's original census
     reported 82 and 34).  The seven decks the refresh brought write neither
     card, so the GX/GR slice and every expectation in ``_EXPECTED`` came
