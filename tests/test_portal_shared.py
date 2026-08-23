@@ -30,6 +30,7 @@ import importlib.util
 import io
 import json
 import os
+import random
 import re
 import shutil
 import signal
@@ -744,6 +745,94 @@ def test_the_control_a_fresh_server_has_nothing_to_serve(runtime, tmp_path):
     assert tally["hits"] == 0, tally
     assert tally["decks_rendered"] == 1, "a fresh server counts from zero"
     assert len(server_pids(runtime)) == 2, "the second server never started"
+
+
+# --------------------------------------------------------------------------
+# warm vs cold: the corpus down ONE server that has already seen the others
+# --------------------------------------------------------------------------
+
+# The order the corpus is served in. Seeded rather than freshly random so a
+# failure names an order a developer can replay: contamination between two
+# decks is a property of the PAIR and its direction, and a test that shuffles
+# differently every run reports it once and then hides it.
+WARM_ORDER_SEED = 20260823
+
+
+def _warm_order() -> list[str]:
+    order = list(ALL_NAMES)
+    random.Random(WARM_ORDER_SEED).shuffle(order)
+    return order
+
+
+@pytest.mark.parametrize("cache", (False, True), ids=("nocache", "cache"))
+def test_a_warm_server_answers_every_deck_exactly_as_a_cold_one(
+    runtime, tmp_path, cache
+):
+    """**The gate the resident model actually needs.**
+
+    ``test_every_fixture_deck_answers_exactly_what_the_stock_engine_answers``
+    is the byte oracle at full corpus width, but its ``runtime`` fixture is
+    per-test: every deck there meets a server that has solved NOTHING else.
+    That is the one arrangement a resident engine never runs in. SimNEC holds
+    one server across a session, and EZNEC's NEC-5 lane spawns per frequency
+    against whatever the last point left behind — so every real answer comes
+    off a server carrying state from decks this one has never heard of.
+
+    Here the whole corpus goes down ONE server, each deck on its OWN client
+    invocation (that is the process model), and each answer is gated against
+    the cold stock printout. Then the same corpus goes down the SAME server in
+    reverse: pass one asks "does what came before change this answer", pass two
+    asks it again with every deck's predecessor set inverted, which is where an
+    order-dependent leak shows and a single forward sweep cannot see it.
+
+    The ``cache`` lane is the one with something to leak — ``--cache`` keeps a
+    solver ACROSS decks, keyed by operator identity, so a key that collides
+    where the operators differ serves deck A's solver to deck B and the
+    printout is wrong rather than slow. The ``nocache`` lane is the control:
+    it gates the module-level state that survives a connection regardless.
+
+    Mismatches are collected rather than raised at the first, because which
+    decks fail and in which pass IS the diagnosis.
+    """
+    stats = tmp_path / "stats.json"
+    flags = ("--cache-stats", str(stats)) + (("--cache",) if cache else ())
+
+    order = _warm_order()
+    cold = {name: stock(fixture_deck(name)) for name in order}
+
+    mismatches: list[str] = []
+    for label, sweep in (("forward", order), ("reverse", list(reversed(order)))):
+        for position, name in enumerate(sweep):
+            served = run_client(runtime, fixture_deck(name), *flags)
+            if served.returncode != 0:
+                mismatches.append(
+                    f"{label}[{position}] {name}: exit {served.returncode}"
+                )
+                continue
+            if not same_printout(served.stdout, cold[name]):
+                mismatches.append(f"{label}[{position}] {name}: printout differs")
+
+    assert not mismatches, (
+        f"{len(mismatches)} of {2 * len(order)} warm answers differ from cold "
+        f"(seed {WARM_ORDER_SEED}):\n  " + "\n  ".join(mismatches)
+    )
+
+    # One server, or the decks were not sharing state and the test proved
+    # nothing about sharing it.
+    assert len(server_pids(runtime)) == 1, "the corpus did not share one server"
+
+    # Derived, not the deck count: `resident_two_decks` carries TWO framed
+    # decks on purpose, so the corpus renders more decks than it has files.
+    framed = sum(
+        len(re.findall(r"(?im)^\s*(?:NX|EN)\b", fixture_deck(n))) for n in order
+    )
+    tally = json.loads(stats.read_text())
+    assert tally["decks_rendered"] == 2 * framed, tally
+    if cache:
+        # Without this the lane is vacuous: a cache that never served is a
+        # cache that was never gated, and every answer above would be a fresh
+        # solve wearing a warm server's clothes.
+        assert tally["hits"] > 0, f"--cache never served across decks: {tally}"
 
 
 # --------------------------------------------------------------------------
