@@ -46,6 +46,7 @@ from scipy.sparse.linalg import splu
 
 from .bspline import BSplineSolver, _SplineBasis, _EK_SAME_EDGE, _ek_slice
 from ._port_solution import PortSolution
+
 from . import _ground_mirror, _ground_refl, _potential_ground, _sommerfeld
 from ._bspline_kernels import (
     _ek_radius,
@@ -65,6 +66,22 @@ from ._aca import (
 from ._quadrature import leggauss
 
 from ._accel import acc as _acc
+
+# momwire#553 U5 — the fast operator has no medium. Named here rather than
+# inside the guard so `capabilities` and the tests quote one sentence.
+_BURIED_FAST_OPERATOR_REFUSAL = (
+    "{who}: this deck has a wire below the ground plane, and the fast "
+    "operator has no per-segment medium. Admissibility is a purely "
+    "geometric distance test with no notion of which side of the interface "
+    "a cluster is on; the fused near/far block kernels take a `double k` and "
+    "would truncate the in-medium k_m = k0*sqrt(eps_tilde) to its real part; "
+    "and the Sommerfeld composition is carried as ONE global low-rank "
+    "remainder over ONE grid, where a buried deck needs three blocks over "
+    "three grids (momwire#553 U5). BSplineSolver serves the deck through its "
+    "dense fill - this class deliberately does NOT fall back to it, because "
+    "it exists for decks the dense fill cannot hold, and a silent fallback "
+    "on a buried array is an out-of-memory rather than a slow answer"
+)
 
 _HAVE_OFFEDGE_BLOCK_ACCEL = _acc is not None and hasattr(
     _acc, "bspline_assemble_offedge_block"
@@ -565,6 +582,7 @@ class HMatrixSolver(BSplineSolver):
         # `double k`), so an in-medium k reaching here is a caller error,
         # not a capability gap to paper over — momwire#553 unit 1.
         _refuse_complex_k(k, "HMatrixSolver.zblock")
+        self._refuse_buried_fast_operator("HMatrixSolver.zblock")
         ctx = self._context()
         # Reset the per-k same-edge cache when k changes.
         if getattr(self, "_hm_se_cache_k", None) != k:
@@ -1006,6 +1024,7 @@ class HMatrixSolver(BSplineSolver):
             tol = self.aca_tol
         if k is None:
             k = self.k
+        self._refuse_buried_fast_operator("HMatrixSolver.build_hmatrix")
         part = self.build_partition(eta=eta, leaf_size=leaf_size)
         ctx = self._context()
         n = ctx["n_basis"]
@@ -1539,8 +1558,29 @@ class HMatrixSolver(BSplineSolver):
         low-rank remainder term — docs/sommerfeld-everywhere-plan.md
         Phase 3). Falls back to the dense path only for singular
         enrichment (its image reaction isn't implemented; the constructor
-        already forbids enrichment + ground)."""
+        already forbids enrichment + ground).
+
+        A BURIED wire is NOT on that list and does not fall back either — it
+        refuses, in `zblock` and in `build_hmatrix`, by name. Falling back
+        would be the wrong kindness: this class exists for decks too large
+        for the dense fill, so a silent dense route on a buried array is an
+        out-of-memory rather than a slow answer (momwire#553 U5)."""
         return self.use_singular_enrichment
+
+    def _refuse_buried_fast_operator(self, who):
+        """The fast operator has no medium — momwire#553 U5.
+
+        U1 put `_refuse_complex_k` on every fill it did not widen, and that
+        guard reads the wavenumber it is handed. A buried deck hands this
+        class a REAL k₀ and a geometry whose lower half needs k_m, so the
+        wavenumber guard cannot see it: the tell is the geometry, and the
+        refusal has to be spelled here. Nothing about the H-matrix carries a
+        per-segment medium — admissibility is a purely geometric distance
+        test, the fused near/far block kernels take a `double k`, and the
+        Sommerfeld remainder is ONE global low-rank term over one grid.
+        """
+        if self.ground_z is not None and self._has_buried_wires():
+            raise NotImplementedError(_BURIED_FAST_OPERATOR_REFUSAL.format(who=who))
 
     def _build_operator(self):
         """Build the fast operator the constrained solve runs GMRES on. The
