@@ -307,6 +307,15 @@ def test_refl_coef_contact_refusal_names_the_end_that_touches():
 
 
 def test_below_plane_rejected_bspline():
+    """A wire from z = -0.5 to z = H over a PEC plane is out of scope twice
+    over, and momwire#553 U5 changed which half it names first.
+
+    It CROSSES the interface, which is the crossing basis momwire#524 phase 2
+    owns and would still be refused over a Sommerfeld ground; and it would
+    have nowhere to be buried under a PEC plane even if it did not cross. The
+    geometry a reader would fix first is the crossing, so that is the
+    sentence — and it quotes the banked anchor phase 2 has to meet.
+    """
     wires = [np.array([(0.0, 0.0, -0.5), (0.0, 0.0, H)])]
     s = BSplineSolver(
         wires=wires,
@@ -317,7 +326,7 @@ def test_below_plane_rejected_bspline():
         ground_z=0.0,
         feeds=FEED,
     )
-    with pytest.raises(ValueError, match="below the ground plane"):
+    with pytest.raises(ValueError, match="crosses the ground interface"):
         s.compute_impedance()
 
 
