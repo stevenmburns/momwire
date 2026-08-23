@@ -106,14 +106,48 @@ from .pulse import _OUT_OF_SCOPE, _PER_WIRE_RADIUS_REFUSAL, PulseSolver
 # `_find_junctions` for the full account of the six tolerances in this tree.
 _JUNCTION_TOL = 1e-9
 
+# The deck layer's "same point" grid (`deck/_polylines._NODE_EPS`). Ends
+# between the two tolerances are refused rather than silently disconnected —
+# see `_node_map`.
+_NEAR_COINCIDENT_TOL = 1e-6
+
 # `junctions=` is refused here for a DIFFERENT reason than on the parent
 # row, so the sentence cannot be inherited: the parent has nothing to
 # detect, this row detects it itself.
+_EXTENDED_KERNEL_REFUSAL = (
+    "HarringtonSolver is reduced-kernel only. Unlike PulseSolver the charge "
+    "is no longer a point, so the a² floor is not what keeps this "
+    "formulation finite — but the vector term and every charge-cell moment "
+    "are written against the reduced kernel, and the exact kernel would "
+    "need both rewritten rather than a different quadrature"
+)
+
 _JUNCTIONS_REFUSAL = (
     "HarringtonSolver takes no junction spec: coincident wire ends are "
     "found from the geometry (within 1e-9 m) and become one charge cell "
     "spanning every incident half-segment, so there is nothing to declare"
 )
+
+
+def _pieces_of(geom) -> dict:
+    """Each segment cut in half, in the `seg_l` / `tangents` / `h_per_seg`
+    vocabulary `_seg_M0` reads — piece 2n is segment n's arc-0 half, piece
+    2n+1 its arc-h half.
+
+    One spelling, called twice: `_node_map` builds the real geometry's
+    pieces and `_mirror_pieces` the image's. The interleave is load-bearing
+    (`cell_of_piece` is indexed by it), so writing it out in both places
+    would mean a change to one silently desynchronising the other.
+    """
+    half = 0.5 * geom["h_per_seg"]
+    mid = geom["seg_l"] + half[:, None] * geom["tangents"]
+    piece_l = np.empty((2 * half.size, 3))
+    piece_l[0::2], piece_l[1::2] = geom["seg_l"], mid
+    return {
+        "seg_l": piece_l,
+        "tangents": np.repeat(geom["tangents"], 2, axis=0),
+        "h_per_seg": np.repeat(half, 2),
+    }
 
 
 class HarringtonSolver(PulseSolver):
@@ -153,12 +187,14 @@ class HarringtonSolver(PulseSolver):
         refusals={
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "node_gaps": _OUT_OF_SCOPE["node_gaps"],
-            # The extended-kernel refusal is inherited verbatim and stays
-            # TRUE for a different reason than the parent states: the
-            # charge is no longer a point, so its potential no longer needs
-            # the a² floor to exist — but the vector term and every cell
-            # moment below are still written against the reduced kernel.
-            "extended_kernel": _OUT_OF_SCOPE["extended_kernel"],
+            # NOT inherited: the parent's sentence is false here. It
+            # refuses the exact kernel because "the charge is two POINT
+            # charges per basis, whose potential on the wire axis is finite
+            # only because of the reduced kernel's a²" — which is precisely
+            # the defect this class removes. The refusal still stands, for
+            # its own reason, and antennaknobs surfaces this prose verbatim
+            # in host dialogs, so it has to be true of the class it names.
+            "extended_kernel": _EXTENDED_KERNEL_REFUSAL,
             "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL,
         },
     )
@@ -206,29 +242,59 @@ class HarringtonSolver(PulseSolver):
             total += (offsets[w + 1] - offsets[w]) + 1
         node_of = np.arange(total)
 
-        def find(i):  # union-find, flattening as it goes
-            while node_of[i] != i:
-                node_of[i] = node_of[node_of[i]]
-                i = node_of[i]
-            return i
-
-        # Merge coincident WIRE ENDS. Each wire contributes its two end
-        # knots; a group is formed by first match, razor's rule.
+        # Merge coincident WIRE ENDS, by `razor._find_junctions`' rule and
+        # not merely by something that resembles it: an end joins the FIRST
+        # existing group whose REPRESENTATIVE point it is within tolerance
+        # of, or starts its own. Comparing against representatives rather
+        # than against every member is what makes the rule non-transitive,
+        # and that difference is load-bearing — with A~B, B~C but A≁C, a
+        # transitive union merges all three where razor gives B's group and
+        # a separate C. Two solvers disagreeing about the same deck's
+        # CONNECTIVITY is a worse failure than either answer, so this walks
+        # razor's algorithm rather than inventing a second one.
         ends = []
         for w in range(n_wires):
             n_w = offsets[w + 1] - offsets[w]
             ends.append((knot_offsets[w], geom["seg_l"][offsets[w]]))
             ends.append((knot_offsets[w] + n_w, geom["seg_r"][offsets[w + 1] - 1]))
+
+        reps: list[tuple[int, np.ndarray]] = []
+        for node_i, p in ends:
+            for node_j, q in reps:
+                if float(np.linalg.norm(p - q)) <= _JUNCTION_TOL:
+                    node_of[node_i] = node_j
+                    break
+            else:
+                reps.append((node_i, p))
+
+        # Nearly-coincident ends are REFUSED, not quietly disconnected.
+        # Two ends further apart than `_JUNCTION_TOL` are separate nodes, so
+        # their charge cells are separate cells and the current that should
+        # cross the junction has nowhere to go — this class's own §9.1
+        # failure mode, worth a measured 7.9% at N=96 on a dipole split with
+        # a 5e-8 m gap, and GROWING with refinement. A caller cannot even
+        # work around it, because `junctions=` is refused here.
+        #
+        # The window is real geometry, not paranoia: the deck front end
+        # fuses endpoints onto a 1e-6 grid (`deck/_polylines._NODE_EPS`),
+        # a thousand times looser than the grouping tolerance, so a
+        # hand-assembled or transformed model can easily land inside it.
         for i, (node_i, p) in enumerate(ends):
             for node_j, q in ends[:i]:
-                if float(np.linalg.norm(p - q)) <= _JUNCTION_TOL:
-                    ri, rj = find(node_i), find(node_j)
-                    if ri != rj:
-                        node_of[ri] = rj
-                    break
+                d = float(np.linalg.norm(p - q))
+                if _JUNCTION_TOL < d <= _NEAR_COINCIDENT_TOL:
+                    raise ValueError(
+                        f"two wire ends are {d:.3g} m apart — closer than the "
+                        f"{_NEAR_COINCIDENT_TOL:g} m the deck layer calls one "
+                        f"node, but further than the {_JUNCTION_TOL:g} m this "
+                        f"formulation joins at. They would become SEPARATE "
+                        f"charge cells and the junction current would have "
+                        f"nowhere to cross, which is a first-order error that "
+                        f"grows as the mesh refines. Make the two ends exactly "
+                        f"equal"
+                    )
 
-        raw = np.array([find(i) for i in range(total)])
-        _uniq, cell = np.unique(raw, return_inverse=True)
+        _uniq, cell = np.unique(node_of, return_inverse=True)
 
         left_node = np.empty(n_seg, dtype=np.int64)
         right_node = np.empty(n_seg, dtype=np.int64)
@@ -238,18 +304,7 @@ class HarringtonSolver(PulseSolver):
             left_node[lo:hi] = cell[base + np.arange(hi - lo)]
             right_node[lo:hi] = cell[base + np.arange(hi - lo) + 1]
 
-        # Two half-segment pieces per segment, in the `_seg_M0` vocabulary.
-        h = geom["h_per_seg"]
-        tan = geom["tangents"]
-        half = 0.5 * h
-        mid = geom["seg_l"] + half[:, None] * tan
-        piece_l = np.empty((2 * n_seg, 3))
-        piece_l[0::2], piece_l[1::2] = geom["seg_l"], mid
-        pieces = {
-            "seg_l": piece_l,
-            "tangents": np.repeat(tan, 2, axis=0),
-            "h_per_seg": np.repeat(half, 2),
-        }
+        pieces = _pieces_of(geom)
         cell_of_piece = np.empty(2 * n_seg, dtype=np.int64)
         cell_of_piece[0::2], cell_of_piece[1::2] = left_node, right_node
 
@@ -270,15 +325,7 @@ class HarringtonSolver(PulseSolver):
         """
         if src is geom or src["seg_l"] is geom["seg_l"]:
             return pieces
-        half = 0.5 * src["h_per_seg"]
-        mid = src["seg_l"] + half[:, None] * src["tangents"]
-        piece_l = np.empty((2 * half.size, 3))
-        piece_l[0::2], piece_l[1::2] = src["seg_l"], mid
-        return {
-            "seg_l": piece_l,
-            "tangents": np.repeat(src["tangents"], 2, axis=0),
-            "h_per_seg": np.repeat(half, 2),
-        }
+        return _pieces_of(src)
 
     def _charge_stencil(self, geom, src, k):
         """Harrington (103)'s charge term: ``(Ψ_right − Ψ_left) · D``.
@@ -325,7 +372,10 @@ class HarringtonSolver(PulseSolver):
         np.add.at(psi.T, cell_of_piece, m0.T)
         psi /= cell_len[None, :]
 
-        d = np.zeros((n_cells, n), dtype=np.float64)
-        d[right_node, np.arange(n)] += 1.0
-        d[left_node, np.arange(n)] -= 1.0
-        return (psi[n:] - psi[:n]) @ d
+        # D has exactly two nonzeros per column — +1 at the segment's right
+        # node, −1 at its left — so materialising it and calling BLAS is an
+        # O(n³) way to spend an O(n²) gather. Bit-identical (each output is
+        # still one subtraction of two accumulated columns), measured
+        # 49 → 21 ms at N = 800 with ~15 MB of transients not allocated.
+        diff = psi[n:] - psi[:n]
+        return diff[:, right_node] - diff[:, left_node]

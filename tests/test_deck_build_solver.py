@@ -81,10 +81,8 @@ def mesh_of(text: str):
 
 
 def test_every_basis_builds_the_same_model():
-    """All seven solver families construct from one deck, under the ten
-    names the roster takes (momwire#432 added ``razor`` / ``razor-nec5``;
-    momwire#557 added ``pulse``, which is `HarringtonSolver` — the 1967
-    scheme — and NOT the nodal-charge `PulseSolver` beside it)."""
+    """All six solver families construct from one deck, under the nine
+    names the roster takes (momwire#432 added ``razor`` / ``razor-nec5``)."""
     model = parse(DIPOLE)
     families = set()
     for name, (solver_class, _kwargs) in BASES.items():
@@ -92,7 +90,7 @@ def test_every_basis_builds_the_same_model():
         assert isinstance(built.solver, solver_class)
         assert built.basis == name
         families.add(solver_class)
-    assert len(families) == 7
+    assert len(families) == 6
 
 
 def test_the_default_basis_is_the_degree_2_bspline():

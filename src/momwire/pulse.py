@@ -27,8 +27,7 @@ and it converges O(1/N) with no Δ/a dependence at all, at ~1/64 the mesh
 on a thin wire (momwire#557). The two rows are kept side by side
 deliberately: the pair is the instrument that attributes the difference
 to the charge's SUPPORT, and this row is the one that costs no junction
-detection. Reach for `HarringtonSolver` — or the `pulse` roster name,
-which is it — for anything but that study.
+detection. Reach for `HarringtonSolver` for anything but that study.
 
 Formulation
 -----------
