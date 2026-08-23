@@ -228,7 +228,7 @@ _PAD_ROWS = 2
 # What that costs and what it buys, measured on the anchor cell (soil A /
 # 7 MHz, |z'| = 0.15 m, `test_gu5_transmitted_extended_r_min_interpolates`):
 # 10 nodes per e-fold, and worst per-surface relative interpolation error
-# against direct evaluation over R ∈ [5e-4, 0.043] m is 1.2e-6 — three
+# against direct evaluation over R ∈ [5e-4, 0.043] m is 3.3e-6 — two
 # decades INSIDE the 5.8e-4 the shipped domain carries, because at a fixed
 # source depth the observer's R → 0 limit is not a near zone at all: the true
 # separation is bounded below by |z'|, the field is finite there, and the
@@ -1005,7 +1005,7 @@ def r_min_bucket(r_min, lam_p):
             f"({_R_MIN_FLOOR_LAMBDA_P:g} free-space wavelengths). Extending "
             f"the log axis costs {1.0 / _R_STEP_LOG:.0f} rows per e-fold and "
             "the measurement behind it (per-surface interpolation error "
-            "1.2e-6 over the extended decade) rests on the SOURCE DEPTH "
+            "3.3e-6 over the extended decade) rests on the SOURCE DEPTH "
             "bounding the true separation from below, so an observer this "
             "close to a source's ground projection is really a shallow-|z'| "
             "geometry: deepen the source, raise the observer, or refuse the "

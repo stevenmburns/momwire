@@ -626,7 +626,7 @@ def test_gu5_6_the_extended_r_min_interpolates(record_property):
             if abs(b) > 0:
                 worst = max(worst, abs(a - b) / abs(b))
     record_property("extended_r_min_worst_rel", float(worst))
-    assert worst < 1e-4, f"the extended log axis does not interpolate: {worst:.3e}"
+    assert worst < 1e-5, f"the extended log axis does not interpolate: {worst:.3e}"
 
 
 # ======================================================================
