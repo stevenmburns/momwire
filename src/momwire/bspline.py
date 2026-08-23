@@ -4283,6 +4283,29 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Galerkin matrix is `−⟨f, E⟩` and the mixed-potential block is that
         same functional written out; the ±=+ path's single `Z -= (C₂·img + Q)`
         is the same convention and this method keeps it verbatim.
+
+        **The fifth inversion lives in that last sentence.** "The
+        mixed-potential block is that same functional written out" is true up
+        to an integration-by-parts BOUNDARY TERM `[f_m·Φ_n]` at each end of a
+        basis's support, and momwire has always mixed the two forms — MP for
+        direct and image, field-form for the remainder — because every basis
+        that vanishes at its own ends makes that term identically zero. A
+        ground CONTACT basis does not vanish there. The shipped path gets away
+        with it because its field-form block is a small REMAINDER, so a
+        boundary term on a small block is a small error; this fill's
+        cross-medium block is the WHOLE interaction between the two media, and
+        the same term is O(1) of it. Measured at ε̃ = 1, where the entire
+        buried fill must reproduce the free-space fill exactly: 2.5 relative
+        on the contact basis and 1e-8 on every other one, unmoved by
+        quadrature order, against 1.0e-5 everywhere once the above wire is
+        lifted clear of the plane. That is why `_medium_spec` refuses a
+        ground contact and a buried wire on the same deck, and it is the same
+        shape as the arc's other four inversions: a ±=+ convenience whose
+        licence is "the remainder is small", used where nothing is a
+        remainder. Undoing it wants the transmitted family's scalar
+        POTENTIALS, so the cross block can be written mixed-potential like its
+        neighbours — a recorded follow-up, and momwire#524 phase 2 removes the
+        contact fiction outright.
         """
         below = self._below_segments(geom)
         b_idx = np.nonzero(below)[0]

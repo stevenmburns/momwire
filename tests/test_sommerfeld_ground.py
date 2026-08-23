@@ -60,13 +60,46 @@ def test_ground_model_validation():
         BSplineSolver(**kw, ground_eps=(10, 0.002), ground_model="sommerfeld")
 
 
-def test_wires_below_ground_rejected():
+@pytest.mark.slow
+def test_wires_below_ground_are_SERVED_over_sommerfeld():
+    """momwire#553 U5 moved this one from a refusal to an answer.
+
+    Since momwire#151 a wire under the plane was rejected at geometry build
+    under EVERY ground model, because there was no lower medium anywhere in
+    the tree. There is one now — but only under `sommerfeld`, which is the
+    only ground that carries an eps_tilde and therefore a k_m. So the
+    Sommerfeld row serves the deck (through the below/below direct, image and
+    remainder blocks) and the other rows keep the refusal, with a sentence
+    that now names WHICH card has no lower medium instead of naming the
+    geometry.
+    """
     kw = dict(GEOMS[("dipole", 0.2)])
     z_top = max(p[2] for wire in kw["wires"] for p in wire)
     s = BSplineSolver(**kw, ground_z=z_top + 1.0, **SOMM)
-    # Rejected at geometry build since #151 (every ground model).
-    with pytest.raises(ValueError, match="below the ground plane"):
+    z, _ = s.compute_impedance()
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert z.real > 0.0
+
+
+@pytest.mark.parametrize(
+    "ground,needle",
+    [
+        ({}, "PERFECTLY CONDUCTING"),
+        (
+            {"ground_eps": SOMM["ground_eps"], "ground_model": "refl-coef"},
+            "plane-wave boundary condition",
+        ),
+    ],
+    ids=["pec", "refl-coef"],
+)
+def test_wires_below_a_ground_with_no_lower_medium_are_still_rejected(ground, needle):
+    kw = dict(GEOMS[("dipole", 0.2)])
+    z_top = max(p[2] for wire in kw["wires"] for p in wire)
+    s = BSplineSolver(**kw, ground_z=z_top + 1.0, **ground)
+    with pytest.raises(ValueError) as exc:
         s.compute_impedance()
+    assert needle in str(exc.value)
+    assert "ground_model='sommerfeld'" in str(exc.value)
 
 
 def test_default_model_is_refl_coef():
