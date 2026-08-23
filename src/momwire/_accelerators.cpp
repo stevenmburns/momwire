@@ -22,6 +22,13 @@
 // wired in by #270 unit 1). Pulls in the J header itself; the duplicate
 // include above is harmless (`#pragma once`) and kept for legibility.
 #include "_bspline_ek_moments_inline.h"
+// The shared adaptive-contour engine (momwire#568 unit 1): the C++ twin of
+// `_sommerfeld_below`'s head + tail machinery, templated on the integrand.
+// Header-only, reentrant, allocation-free -- U2/U3 instantiate it with their
+// own integrands under OpenMP with the GIL released. The bindings at the end
+// of this file are TEST instantiations only; nothing in the production Python
+// dispatch calls them.
+#include "_contour_engine_inline.h"
 
 namespace py = pybind11;
 
@@ -6253,6 +6260,166 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
 }
 
 
+// --------------------------------------------------------------------------
+// momwire#568 unit 1 -- test instantiations of the shared contour engine.
+//
+// These exist so `tests/test_contour_engine_568.py` can gate the engine and
+// its complex Bessel pair from Python BEFORE any production fill rides on
+// them. Nothing in momwire's dispatch calls into this block; U2 (below fills)
+// and U3 (transmitted fills) will instantiate `mw_contour::run_contour` with
+// their own integrands and never go through these entry points.
+// --------------------------------------------------------------------------
+
+namespace mw568 {
+using mw_contour::cd;
+
+// (a) The Sommerfeld identity's integrand,
+//
+//     f(lam) = J0(lam rho) e^{-gamma h} lam / gamma,   gamma = sqrt(lam^2 - k^2)
+//
+// whose contour integral is exactly e^{-jkR}/R with R = sqrt(rho^2 + h^2).
+// Same branch point, same oscillatory tail, same exponential decay as the
+// production integrands -- but with an analytic answer to gate against.
+//
+// The principal sqrt (Re gamma >= 0) is the right branch for the engine's
+// FIRST-quadrant head: under e^{+j omega t} the cut runs downward from +k, an
+// upward detour never crosses it, and at lam = 0 the signed-zero imaginary
+// part of `lam*lam - k*k` lands sqrt on +j k -- the outgoing plane wave.
+struct SommIdentity {
+    double rho;
+    double h;
+    cd k;
+    void operator()(const cd &lam, cd *out) const {
+        const cd g = std::sqrt(lam * lam - k * k);
+        cd j0, j1x;
+        mw_contour::bessel_j0_j1x(lam * rho, j0, j1x);
+        out[0] = j0 * std::exp(-g * h) * lam / g;
+    }
+};
+
+// (b) A vector-valued (NC = 6) synthetic integrand with a Python twin in the
+// test file, so numpy `_run_contour` and this engine can be run on the SAME
+// mathematics and compared. Deliberately NOT the production kernel: it has
+// the production shape (a gamma-decay factor, both Bessel pieces, components
+// spanning several decades so the vector max-norm test is exercised) with a
+// pole-free rational weight instead of the Sommerfeld D-pair, so U2 is free
+// to write the real integrand however it likes.
+struct Synth6 {
+    double rho;
+    double h;
+    double k_p;
+    cd k_m;
+    void operator()(const cd &lam, cd *out) const {
+        const cd gm = std::sqrt(lam * lam - k_m * k_m);
+        const cd e = std::exp(-gm * h);
+        const cd x = lam * rho;
+        cd b0, b1x;
+        mw_contour::bessel_j0_j1x(x, b0, b1x);
+        const cd w = cd(1.0, 0.0) / (gm + lam + k_p);
+        const cd l2 = lam * lam;
+        out[0] = w * e * b0 * lam;
+        out[1] = w * e * (b1x - b0) * l2;
+        out[2] = -(w * e * b1x * x * gm * lam);
+        out[3] = -(w * e * b1x * l2);
+        out[4] = w * e * b0;
+        out[5] = w * e * (b0 + 2.0 * b1x) * lam * gm;
+    }
+};
+
+// Shared argument checking + raw Gauss-rule pointers.
+static void gauss_view(const py::array_t<double, py::array::c_style |
+                                                     py::array::forcecast> &gx,
+                       const py::array_t<double, py::array::c_style |
+                                                     py::array::forcecast> &gw,
+                       const double **gxp, const double **gwp, int *ng) {
+    if (gx.ndim() != 1 || gw.ndim() != 1)
+        throw std::runtime_error("gx / gw must be 1-D");
+    if (gx.shape(0) != gw.shape(0))
+        throw std::runtime_error("gx and gw must have the same length");
+    if (gx.shape(0) < 1) throw std::runtime_error("empty Gauss rule");
+    *gxp = gx.data();
+    *gwp = gw.data();
+    *ng = static_cast<int>(gx.shape(0));
+}
+}  // namespace mw568
+
+// Complex J0(x) and J1(x)/x, exposed for direct gating against
+// scipy.special.jv. Accepts a 1-D complex array, returns (j0, j1x).
+static py::tuple bessel_j0_j1x_complex(
+    py::array_t<std::complex<double>,
+                py::array::c_style | py::array::forcecast> x) {
+    if (x.ndim() != 1) throw std::runtime_error("x must be 1-D");
+    const py::ssize_t n = x.shape(0);
+    py::array_t<std::complex<double>> j0(n), j1x(n);
+    const std::complex<double> *xp = x.data();
+    std::complex<double> *j0p = j0.mutable_data();
+    std::complex<double> *j1p = j1x.mutable_data();
+    {
+        py::gil_scoped_release release;
+        for (py::ssize_t i = 0; i < n; ++i)
+            mw_contour::bessel_j0_j1x(xp[i], j0p[i], j1p[i]);
+    }
+    return py::make_tuple(j0, j1x);
+}
+
+// The Sommerfeld-identity contour: NC = 1. `use_k_m` picks which wavenumber
+// the INTEGRAND is built on; the head's `a` and its branch-point marks always
+// come from the (k_p, k_m) pair, exactly as `_run_contour` computes them.
+static py::tuple contour_engine_sommerfeld_identity(
+    double rho, double h, double k_p, std::complex<double> k_m, bool use_k_m,
+    double rtol, int depth, double detour,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gx,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gw,
+    int max_panels) {
+    const double *gxp;
+    const double *gwp;
+    int ng;
+    mw568::gauss_view(gx, gw, &gxp, &gwp, &ng);
+    std::complex<double> val;
+    mw_contour::ContourHealth hh;
+    {
+        py::gil_scoped_release release;
+        mw568::SommIdentity f;
+        f.rho = rho;
+        f.h = h;
+        f.k = use_k_m ? k_m : std::complex<double>(k_p, 0.0);
+        hh = mw_contour::run_contour<1>(f, k_p, k_m, rho, h, rtol, depth,
+                                        detour, gxp, gwp, ng, max_panels, &val);
+    }
+    return py::make_tuple(val, hh.head_panels, hh.tail_panels, hh.converged,
+                          hh.accel);
+}
+
+// The NC = 6 synthetic twin. Returns (values (6,), head_panels, tail_panels,
+// converged, accel) -- the same five things `_run_contour` returns.
+static py::tuple contour_engine_synth6(
+    double rho, double h, double k_p, std::complex<double> k_m, double rtol,
+    int depth, double detour,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gx,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gw,
+    int max_panels) {
+    const double *gxp;
+    const double *gwp;
+    int ng;
+    mw568::gauss_view(gx, gw, &gxp, &gwp, &ng);
+    py::array_t<std::complex<double>> out(6);
+    std::complex<double> *op = out.mutable_data();
+    mw_contour::ContourHealth hh;
+    {
+        py::gil_scoped_release release;
+        mw568::Synth6 f;
+        f.rho = rho;
+        f.h = h;
+        f.k_p = k_p;
+        f.k_m = k_m;
+        hh = mw_contour::run_contour<6>(f, k_p, k_m, rho, h, rtol, depth,
+                                        detour, gxp, gwp, ng, max_panels, op);
+    }
+    return py::make_tuple(out, hh.head_panels, hh.tail_panels, hh.converged,
+                          hh.accel);
+}
+
+
 PYBIND11_MODULE(_accelerators, m) {
     // Phase 2: raised by the long kernels when their cancel_flag is tripped;
     // the _accel.py wrappers remap it to momwire.SolveAborted.
@@ -6689,4 +6856,39 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"),
           py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0);
+
+    // momwire#568 unit 1: the shared contour engine's TEST entry points. The
+    // engine itself is header-only (`_contour_engine_inline.h`); these three
+    // exist so the Python suite can gate it before U2/U3 ride on it.
+    m.attr("contour_engine_568") = true;
+    m.def("bessel_j0_j1x_complex", &bessel_j0_j1x_complex,
+          "(J0(x), J1(x)/x) at COMPLEX x -- the C++ twin of "
+          "_sommerfeld._bessel_j0_j1x, with the same |x| < 1e-6 series switch. "
+          "Ascending series below |x| = 8, Miller's normalized downward "
+          "recurrence to |x| = 25, Hankel P/Q asymptotics above. Takes a 1-D "
+          "complex array, returns two arrays of the same length.",
+          py::arg("x"));
+    m.def("contour_engine_sommerfeld_identity",
+          &contour_engine_sommerfeld_identity,
+          "Test instantiation of the shared adaptive-contour engine (NC = 1) "
+          "on the Sommerfeld-identity integrand J0(lam rho) e^{-gamma h} "
+          "lam/gamma, whose contour integral is exactly e^{-jkR}/R with "
+          "R = sqrt(rho^2 + h^2). `use_k_m` selects which wavenumber the "
+          "integrand is built on; the head's `a` and branch-point marks always "
+          "come from the (k_p, k_m) pair as _run_contour computes them. "
+          "Returns (value, head_panels, tail_panels, converged, accel).",
+          py::arg("rho"), py::arg("h"), py::arg("k_p"), py::arg("k_m"),
+          py::arg("use_k_m"), py::arg("rtol"), py::arg("depth"),
+          py::arg("detour"), py::arg("gx"), py::arg("gw"),
+          py::arg("max_panels"));
+    m.def("contour_engine_synth6", &contour_engine_synth6,
+          "Test instantiation of the shared adaptive-contour engine at NC = 6 "
+          "on a synthetic vector integrand whose Python twin lives in "
+          "tests/test_contour_engine_568.py, so the numpy engine and this one "
+          "can be run on the same mathematics and compared. Returns "
+          "(values (6,), head_panels, tail_panels, converged, accel) -- the "
+          "same five things _sommerfeld_below._run_contour returns.",
+          py::arg("rho"), py::arg("h"), py::arg("k_p"), py::arg("k_m"),
+          py::arg("rtol"), py::arg("depth"), py::arg("detour"), py::arg("gx"),
+          py::arg("gw"), py::arg("max_panels"));
 }
