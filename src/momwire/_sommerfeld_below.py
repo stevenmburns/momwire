@@ -59,10 +59,12 @@ tell a converged answer from a lucky one.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
 
+from ._accel import acc as _acc
 from ._sommerfeld import (
     _GRID_CACHE,
     _GRID_CACHE_MAX,
@@ -170,6 +172,68 @@ _SOMM_BELOW_TH_MIN_DEG = 1.0
 
 _GX, _GW = np.polynomial.legendre.leggauss(_GAUSS_N)
 _GXC, _GWC = np.polynomial.legendre.leggauss(_GAUSS_N_COARSE)
+
+
+# ---------------------------------------------------------------------------
+# The C++ twins (momwire#568 unit 2)
+# ---------------------------------------------------------------------------
+#
+# Everything below this line in the module is numpy, unchanged, and stays the
+# REFERENCE. `_accelerators` carries a twin of the contour driver (the six
+# integrals at a batch of (ρ, h), OpenMP across nodes on U1's shared engine)
+# and a twin of the point projection; where a twin exists it is preferred and
+# the numpy body is the fallback, following the `_bspline_kernels` pattern.
+#
+# ITS OWN capability flag, deliberately NOT `contour_engine_568`: a .so built
+# at U1 exports the engine's test entry points but none of these symbols, and
+# a shared flag would have it claim a contract it cannot serve.
+_HAVE_BELOW_FILLS_ACCEL = _acc is not None and bool(
+    getattr(_acc, "below_fills_568", False)
+)
+
+# The tests' handle on the dispatch — the parity gates have to drive BOTH
+# machines inside one process, and a cross-process env var cannot do that.
+# `MOMWIRE_BELOW_FORCE_NUMPY` is the same switch for a whole run (a timing
+# comparison, a bisect); `monkeypatch.setattr(below, "_FORCE_NUMPY", True)` is
+# the same switch for one test. `_use_below_accel` reads both at CALL time, so
+# neither is baked in at import.
+_FORCE_NUMPY = bool(os.environ.get("MOMWIRE_BELOW_FORCE_NUMPY"))
+
+
+def _use_below_accel():
+    """True when the below/below fills should ride the C++ contour engine."""
+    return _HAVE_BELOW_FILLS_ACCEL and not _FORCE_NUMPY
+
+
+def _six_below_accel(k_p, k_m, rho, h, rtol, selfconv):
+    """`below_six_integrals_batch` with this module's machines filled in.
+
+    Both rules, both depths and both detours are arguments rather than
+    constants on the C++ side, so the fine machine and the coarse
+    self-convergence twin are the same call — exactly as `_run_contour` takes
+    them here. The rtol pair is computed HERE, not there: `min(rtol, 1e-11)`
+    and its ×100 coarse partner are `_six_integrals_below`'s own spelling and
+    belong next to it.
+    """
+    rtol_fine = min(rtol, 1e-11)
+    return _acc.below_six_integrals_batch(
+        float(k_p),
+        complex(k_m),
+        np.ascontiguousarray(rho, dtype=float),
+        np.ascontiguousarray(h, dtype=float),
+        rtol_fine,
+        _ADAPT_DEPTH,
+        _DETOUR,
+        _GX,
+        _GW,
+        bool(selfconv),
+        rtol_fine * 100.0,
+        _ADAPT_DEPTH_COARSE,
+        _DETOUR_COARSE,
+        _GXC,
+        _GWC,
+        _MAX_TAIL_PANELS,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +629,18 @@ def _six_integrals_below(
     k_p = float(k2)
     k_m = k_medium(eps_t, k_p)
 
+    if _use_below_accel():
+        vals, tp, hp, conv, accel, sconv = _six_below_accel(
+            k_p, k_m, np.array([rho]), np.array([h]), rtol, selfconv
+        )
+        if health is not None:
+            health.note(where, int(tp[0]), int(hp[0]), bool(conv[0]), bool(accel[0]))
+            if selfconv:
+                health.note_selfconv(
+                    where if where is not None else (rho, h), float(sconv[0])
+                )
+        return vals[0]
+
     def f(lam):
         return _integrand_six_below(lam, rho, h, k_p, k_m)
 
@@ -591,6 +667,70 @@ def _six_integrals_below(
         if health is not None:
             health.note_selfconv(where if where is not None else (rho, h), rel)
     return fine
+
+
+def _six_integrals_below_many(
+    eps_t, k2, rho, h, rtol=1e-11, health=None, selfconv=False, where=None
+):
+    """`_six_integrals_below` over parallel (ρ, h) arrays; returns (n, 6).
+
+    The grid fill's hot loop, and the only place in this module where the
+    parallelism is worth taking: one node's contour is completely independent
+    of every other, and a fill is thousands of them. With the accelerator it
+    is one C++ call — OpenMP across nodes, the GIL released, U1's engine
+    (allocation-free, no mutable static) on each thread. Without it, it is
+    EXACTLY the per-point Python loop it replaces, calling the same
+    `_six_integrals_below`, in the same order.
+
+    Everything that is not quadrature stays on this side: the ε̃ = 1 short
+    circuit (exact zeros, one `zero_kernel` bump per node, as the per-point
+    spelling gives), the (ρ, h) domain raise with its own words, and the
+    `Health` bookkeeping, which is applied in node order so `worst_selfconv_at`
+    lands on the same node either way.
+    """
+    eps_t = complex(eps_t)
+    rho = np.ascontiguousarray(rho, dtype=float).ravel()
+    h = np.ascontiguousarray(h, dtype=float).ravel()
+    n = rho.size
+    if where is None:
+        where = [None] * n
+
+    if not _use_below_accel():
+        out = np.empty((n, 6), dtype=np.complex128)
+        for i in range(n):
+            out[i] = _six_integrals_below(
+                eps_t,
+                k2,
+                rho[i],
+                h[i],
+                rtol,
+                health=health,
+                selfconv=selfconv,
+                where=where[i],
+            )
+        return out
+
+    for i in range(n):
+        r, hh = float(rho[i]), float(h[i])
+        if r < 0 or hh < 0 or (r == 0.0 and hh == 0.0):
+            raise ValueError(f"need rho, h >= 0 and R1 > 0, got {(r, hh)!r}")
+    if eps_t == 1.0:
+        if health is not None:
+            health.zero_kernel += n
+        return np.zeros((n, 6), dtype=np.complex128)
+
+    k_p = float(k2)
+    k_m = k_medium(eps_t, k_p)
+    vals, tp, hp, conv, accel, sconv = _six_below_accel(
+        k_p, k_m, rho, h, rtol, selfconv
+    )
+    if health is not None:
+        for i in range(n):
+            health.note(where[i], int(tp[i]), int(hp[i]), bool(conv[i]), bool(accel[i]))
+            if selfconv:
+                w = where[i] if where[i] is not None else (float(rho[i]), float(h[i]))
+                health.note_selfconv(w, float(sconv[i]))
+    return vals
 
 
 # ---------------------------------------------------------------------------
@@ -766,18 +906,20 @@ def iv_surfaces_direct_below(
         r1 = R1f[nz]
         rho = np.maximum(r1 * np.cos(thf[nz]), 0.0)
         h = np.maximum(r1 * np.sin(thf[nz]), 0.0)
-        six = np.empty((nz.size, 6), dtype=np.complex128)
-        for i in range(nz.size):
-            six[i] = _six_integrals_below(
-                eps_t,
-                k_p,
-                rho[i],
-                h[i],
-                rtol,
-                health=health,
-                selfconv=selfconv,
-                where=(float(r1[i]), float(thf[nz][i])),
-            )
+        # The R₁ > 0 rows, and ONLY those: the R₁ = 0 row above is the
+        # analytic `_limits_r1_zero_below` closed form, which is cheaper than
+        # the call that would dispatch it.
+        thnz = thf[nz]
+        six = _six_integrals_below_many(
+            eps_t,
+            k_p,
+            rho,
+            h,
+            rtol,
+            health=health,
+            selfconv=selfconv,
+            where=[(float(r1[i]), float(thnz[i])) for i in range(nz.size)],
+        )
         v_rr, v_zz, v_rz, v_r1, v, u = six.T
         cm = _c1_moment(omega, mu)
         km2 = k_m * k_m
@@ -1053,9 +1195,19 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     returned a number; the near-interface case (a wire crossing the
     interface, contact) is momwire#524 phase 3, not something to absorb.
 
-    numpy only. The C++ `remainder_field_proj_batch` takes a `double k`
-    and cannot carry a complex wavenumber; widening it is a recorded
-    follow-up, not this unit's work.
+    C++ TWIN (momwire#568 unit 2). This used to read "numpy only: the C++
+    `remainder_field_proj_batch` takes a `double k` and cannot carry a complex
+    wavenumber". It now has `remainder_field_proj_batch_below` beside it — a
+    TWIN rather than a widening of the ±=+ kernel, because the two divide-outs
+    are not the same expression: above/above divides out e^{−jkR₁}/R₁, a
+    function of R₁ alone, and this family divides out the two-leg blend, which
+    depends on θ. Widening in place would have put that choice inside the ±=+
+    family's hottest inner loop for a family that does not need it; the ±=+
+    path keeps its bytes instead.
+
+    The twin serves only a real tabulation. A duck-typed `eval`-able (the
+    tests' direct-surface stand-in) has no `_regions` to flatten and takes the
+    numpy body, which is also what keeps the grid-vs-direct gates honest.
     """
     obs = np.asarray(obs, dtype=float)
     src = np.asarray(src, dtype=float)
@@ -1077,6 +1229,30 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
             f"{float(np.min(d_src)):.6g} (a non-positive depth is a point on "
             "or above the interface — that geometry is momwire#524 phase 3)"
         )
+
+    if _use_below_accel() and getattr(grid, "_regions", None) is not None:
+        from ._sommerfeld import grid_cpp_args
+
+        out, mx_r1, mn_th, mx_th = _acc.remainder_field_proj_batch_below(
+            obs,
+            t_obs,
+            src,
+            t_src,
+            float(ground_z),
+            float(k_p),
+            complex(k_m),
+            float(grid.th_min),
+            *grid_cpp_args(grid),
+        )
+        # The three domain refusals are NOT transcribed into C++. The kernel
+        # reports the query's extremes and they go straight back through
+        # `SommerfeldGridBelow.eval`, which raises in its own words — one copy
+        # of that prose, and no way for the two paths to disagree about which
+        # geometries are served. Two points; the interpolation it also does is
+        # discarded and costs microseconds.
+        if obs.shape[0] and src.shape[0]:
+            grid.eval(np.array([mx_r1, mx_r1]), np.array([mn_th, mx_th]))
+        return out
 
     th_src = np.hypot(t_src[:, 0], t_src[:, 1])
     safe_t = th_src > 1e-12
