@@ -98,13 +98,21 @@ import numpy as np
 from ._capabilities import Capabilities
 from .pulse import _OUT_OF_SCOPE, _PER_WIRE_RADIUS_REFUSAL, PulseSolver
 
-# Absolute tolerance for calling two wire ends one node. Deliberately the
-# same 1e-9 `razor._JUNCTION_TOL` uses, and carrying the same caveat: the
-# deck front end fuses endpoints on a 1e-6 grid (`deck/_polylines._NODE_EPS`),
-# a thousand times looser and a different algorithm, so this agrees with the
-# rest of the tree by convention rather than by construction. See razor's
-# `_find_junctions` for the full account of the six tolerances in this tree.
-_JUNCTION_TOL = 1e-9
+# Absolute tolerance for calling two wire ends one node — IMPORTED from
+# razor rather than re-typed as the same number, because this row walks
+# razor's grouping algorithm (see `_node_map`) and two solvers that must
+# agree about connectivity should not be able to disagree about the number
+# that decides it. There are six disagreeing tolerances across three
+# algorithms in this tree already; unifying them is a deliberate future
+# decision, and this is one fewer site for it to find.
+#
+# The caveat travels with the value: the deck front end fuses endpoints onto
+# a 1e-6 grid (`deck/_polylines._NODE_EPS`), a thousand times looser and a
+# different algorithm, so agreement with the rest of the tree is by
+# convention rather than construction. `razor._find_junctions` carries the
+# full account; `_node_map` refuses the gap between the two rather than
+# answering across it.
+from .razor import _JUNCTION_TOL
 
 # The deck layer's "same point" grid (`deck/_polylines._NODE_EPS`). Ends
 # between the two tolerances are refused rather than silently disconnected —
