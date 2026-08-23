@@ -31,9 +31,13 @@ vs. array geometry:
 | Arrays of identical / few-shape elements (loop/bowtie arrays, LPDA) | **`arrayblock`** | element-aware block-low-rank; near-linear scaling, 7–12× faster than the NEC-2 lineage on large arrays |
 | Cross-checking against NEC-5 behaviour | **`razor-nec5`** | the formulation twin — rides the licensed engine's own convergence path (below) |
 | Telling basis effects from testing effects | **`sinusoidal-galerkin`** | same basis as `sinusoidal`, variational testing — the attribution instrument of [Act V](/act-5/the-fourth-cell/) |
+| Buried radials, screens, buried fed elements | **`bspline`** — the only engine with the below-interface fill | serves impedance/currents/charges over the Sommerfeld ground; every other engine refuses buried decks by name (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
 
 The same picks hold with a ground in play — the ground model changes what
-a solve *costs*, not which engine wins it.
+a solve *costs*, not which engine wins it. One exception is capability,
+not cost: wires below the interface are a `bspline`-only capability today,
+and a buried deck's first solve pays a table-build of a minute or two
+(momwire#568 tracks the accelerated fills).
 
 :::caution
 `arrayblock` / `hmatrix` only win at moderate-to-high segment counts on

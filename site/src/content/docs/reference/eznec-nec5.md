@@ -69,10 +69,35 @@ the three refusals are one named sentence, about one observation point.
 The refusals are part of the product, and the interesting ones are honest
 capability statements rather than deck errors:
 
-- **Wires below the ground interface** — buried radials and buried screens
-  are real NEC-5 capabilities momwire does not have yet; such decks refuse
-  naming the wire and the depth. A wire lying *in* the interface refuses as
-  the degenerate case it is.
+- **Buried wires now serve — with measured edges.** Wires strictly below
+  the interface over the Sommerfeld ground get **impedance, currents and
+  charges**: detached buried radials and screens, buried fed elements, and
+  elevated feeds over buried counterpoises. Validation is deliberately
+  engine-independent below ground — the NEC family's buried-conductor
+  weakness is documented publicly (LLNL-TR-490316; corroborated in our
+  licensed materials, details in private notes) — so the gates are exact
+  identities (the lossless-limit collapse onto free space at 4×10⁻¹⁵, the
+  deep-burial limit onto the infinite-medium solve) plus, on the
+  radial/counterpoise classes where the reference engine's convergence
+  ladders are clean, ladder-limit agreement at the half-percent class with
+  the buried-coupling differential matching to ~1 mΩ. Two honest notes: a
+  deck's first buried solve builds its below-interface Sommerfeld tables
+  (about a minute or two today — the accelerated fills are momwire#568),
+  and the refusals below are the map of where the capability ends.
+- **What a buried deck still refuses, each by name with its measurement**:
+  a wire **crossing** the interface (the crossing physics is #524 phase 2,
+  and the refusal quotes the three banked reference anchors it must meet);
+  a **ground-contact wire combined with buried wires** (the fill's
+  boundary term is O(1) on a contact basis — measured 2.5 relative at the
+  lossless-limit identity, against 10⁻⁵ with the feed lifted clear; an
+  elevated feed over a buried counterpoise serves, and momwire#567 is the
+  lift); **`NE`/`NH` on decks with buried wires** (#524 phase 3);
+  **`RP` on decks with buried wires** (the far-zone transmitted
+  asymptotics, momwire#570); buried wires over the perfect ground or `GD`
+  (no lower medium to be in); sources deeper or pairs farther than the
+  tabulated domains (the sentence states the limit and its extension
+  cost). A wire lying *in* the interface refuses as the degenerate case
+  it is.
 - **A near-field point on a wire's ground contact** (an `NE`/`NH` grid
   point sitting exactly where a wire stands on a finite ground) refuses
   naming the point: the field there is genuinely singular — a residual
