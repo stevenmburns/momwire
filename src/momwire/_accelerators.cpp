@@ -6420,6 +6420,409 @@ static py::tuple contour_engine_synth6(
 }
 
 
+// --------------------------------------------------------------------------
+// momwire#568 unit 2 -- the below/below family ON the shared contour engine.
+//
+// This is the first PRODUCTION rider on `_contour_engine_inline.h`: the six
+// lambda-integrands of `_sommerfeld_below._integrand_six_below`, its
+// `_six_integrals_below` driver (fine machine plus the optional coarse
+// self-convergence twin), and the projected remainder table
+// `remainder_field_proj_below`. The numpy spellings stay exactly as they are
+// and remain the references; these are twins, gated at tolerance in
+// tests/test_below_fills_568.py.
+//
+// The OpenMP region is the PER-POINT loop of `iv_surfaces_direct_below`: one
+// (rho, h) node's contour is completely independent of every other, the
+// engine is allocation-free and has no mutable static (U1's reentrancy
+// contract), and a grid fill is thousands of nodes whose costs differ by an
+// order of magnitude between the steep and grazing bands -- hence `dynamic`
+// scheduling rather than `static`.
+// --------------------------------------------------------------------------
+
+namespace mw568_below {
+using mw_contour::cd;
+
+static const cd MW_BJ(0.0, 1.0);
+
+// `_sommerfeld._gamma`: (lam^2 - k^2)^{1/2} with vertical cuts running DOWN
+// from +k and UP from -k. Transcribed as the two-sqrt product, NOT collapsed
+// to sqrt(lam^2 - k^2): the collapsed form has its cut on the segment between
+// the branch points, and the whole legitimacy of the head's first-quadrant
+// detour is that it crosses neither of the vertical ones. The spelling IS the
+// branch choice.
+static inline cd gamma_cut(const cd &lam, const cd &k) {
+    return std::sqrt(-MW_BJ * (lam - k)) * std::sqrt(MW_BJ * (lam + k));
+}
+
+// `_sommerfeld._d12(lam, k1, k2)` -- NEC eqs 154-155 (the 2s of eqs 141-142
+// are inside). The below family calls it SWAPPED, (k1, k2) = (k_p, k_m), so
+// the GROUND sits in the decay slot: `_d12` builds its kernels around
+// gamma_2 = gamma(k2) as the decay gamma and k1 as the other medium, and that
+// swapped reading IS the below/below D-pair (measured at 0.0 relative
+// difference against the #524 phase-0 prototype's independent generalized
+// form). `g2` is returned because the integrand needs gamma_m itself.
+static inline void d12(const cd &lam, const cd &k1, const cd &k2, cd &d1,
+                       cd &d2, cd &g2) {
+    const cd g1 = gamma_cut(lam, k1);
+    g2 = gamma_cut(lam, k2);
+    const cd k1s = k1 * k1;
+    const cd k2s = k2 * k2;
+    d1 = 2.0 / (g1 + g2) - 2.0 * k2s / (g2 * (k1s + k2s));
+    d2 = 2.0 / (k1s * g2 + k2s * g1) - 2.0 / (g2 * (k1s + k2s));
+}
+
+// `_integrand_six_below`, term for term and in its order:
+//
+//   0: d2 V/drho^2      [D2 e^{-gamma_m h} lam^3 (J1/x - J0)]
+//   1: d2 V/dz^2        [D2 gamma_m^2 e^{-gamma_m h} J0 lam]
+//   2: d2 V/drho dz     [-D2 gamma_m e^{-gamma_m h} J1 lam^2]   <- the +/-=- sign
+//   3: (1/rho) dV/drho  [-D2 e^{-gamma_m h} (J1/x) lam^3]
+//   4: V                [D2 e^{-gamma_m h} J0 lam]
+//   5: U                [D1 e^{-gamma_m h} J0 lam]
+//
+// INDEX 2 IS THE WHOLE OF THE SIGN STORY and the one line of this file that a
+// mutation test exists for. h = |z + z'| with z + z' < 0 below the interface,
+// so d/dz e^{-gamma_m|z + z'|} = +gamma_m e where the +/-=+ case gets
+// -gamma_2 e; with dJ0/drho = -lam J1 the product lands at -D2 gamma_m J1 lam^2,
+// the NEGATIVE of `_sommerfeld._integrand_six`'s index 2. Every other
+// component is identical between the families once the kernel pair is the
+// swapped one -- which is what `test_gu2_1_the_integrand_z_derivative_flips_
+// and_nothing_else_does` asserts on the numpy side and what
+// `test_g5686_the_index_2_sign_is_load_bearing` asserts on this one.
+//
+// Bessel form only: there is no Hankel twin here, because there is no fig-14
+// contour here.
+struct SixBelow {
+    double rho;
+    double h;
+    cd k_p;
+    cd k_m;
+    void operator()(const cd &lam, cd *out) const {
+        cd d1, d2, g_m;
+        d12(lam, k_p, k_m, d1, d2, g_m);
+        const cd e = std::exp(-g_m * h);
+        const cd x = lam * rho;
+        cd b0, b1x;
+        mw_contour::bessel_j0_j1x(x, b0, b1x);
+        const cd l2 = lam * lam;
+        const cd l3 = l2 * lam;
+        const cd common = d2 * e;
+        out[0] = common * (b1x - b0) * l3;
+        out[1] = common * g_m * g_m * b0 * lam;
+        out[2] = -(common * g_m * (b1x * x) * l2);
+        out[3] = -(common * b1x * l3);
+        out[4] = common * b0 * lam;
+        out[5] = d1 * e * b0 * lam;
+    }
+};
+
+// What one node of `_six_integrals_below` produces: the six values plus
+// everything `Health.note` / `Health.note_selfconv` are handed on the numpy
+// side. `selfconv` is -1.0 when the coarse machine was not asked for, so the
+// Python layer can tell "not measured" from "measured zero".
+struct SixResult {
+    cd val[6];
+    int head_panels;
+    int tail_panels;
+    bool converged;
+    bool accel;
+    double selfconv;
+};
+
+// One node: the fine contour, then optionally the coarse self-convergence
+// twin (Gauss-16, rtol x100, a shallower detour -- `_six_integrals_below`'s
+// `selfconv=True` branch). The componentwise relative spread is the numpy
+// spelling exactly: max over components of |fine - coarse| / max(|fine|, 1e-300).
+static void six_below_one(double rho, double h, double k_p, const cd &k_m,
+                          double rtol_fine, int depth, double detour,
+                          const double *gx, const double *gw, int ng,
+                          bool selfconv, double rtol_coarse, int depth_coarse,
+                          double detour_coarse, const double *gxc,
+                          const double *gwc, int ngc, int max_panels,
+                          SixResult &r) {
+    SixBelow f;
+    f.rho = rho;
+    f.h = h;
+    f.k_p = cd(k_p, 0.0);
+    f.k_m = k_m;
+    const mw_contour::ContourHealth hh = mw_contour::run_contour<6>(
+        f, k_p, k_m, rho, h, rtol_fine, depth, detour, gx, gw, ng, max_panels,
+        r.val);
+    r.head_panels = hh.head_panels;
+    r.tail_panels = hh.tail_panels;
+    r.converged = hh.converged;
+    r.accel = hh.accel;
+    r.selfconv = -1.0;
+    if (selfconv) {
+        cd coarse[6];
+        mw_contour::run_contour<6>(f, k_p, k_m, rho, h, rtol_coarse,
+                                   depth_coarse, detour_coarse, gxc, gwc, ngc,
+                                   max_panels, coarse);
+        double worst = 0.0;
+        for (int c = 0; c < 6; ++c) {
+            const double scale = std::max(std::abs(r.val[c]), 1e-300);
+            const double rel = std::abs(r.val[c] - coarse[c]) / scale;
+            if (rel > worst) worst = rel;
+        }
+        r.selfconv = worst;
+    }
+}
+
+// The below/below twin of `somm_proj::proj_one` (see the comment on
+// `remainder_field_proj_batch_below` for why it is a twin and not a widening).
+// Same 4x4 Lagrange stencil, same eqs 143-147 dyad algebra; three things are
+// the below family's own:
+//
+//   * `hh` is the two DEPTHS added, (ground_z - oz) + (ground_z - sz), so a
+//     wrong-side endpoint cannot quietly produce a plausible h (the Python
+//     layer raises on it before this is ever reached);
+//   * `g` is `divide_out_below`'s two-leg blend e^{-j(k_p rho + k_m hh)}/R1,
+//     which needs a COMPLEX in-medium wavenumber -- the exact reason
+//     `remainder_field_proj_below` could not ride the `double k` kernel;
+//   * theta is clamped into [th_min, pi/2], the below grid's own grazing
+//     floor, not into [0, pi/2].
+//
+// The query's (R1, theta) are handed back so the caller can let
+// `SommerfeldGridBelow.eval` raise the refusals in its own words; nothing in
+// this file transcribes those messages.
+static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
+                                double ground_z, double k_p, const cd &k_m,
+                                double ox, double oy, double oz, double tox,
+                                double toy, double toz, double sx, double sy,
+                                double sz, double sux, double suy,
+                                double sthsrc, double stzsrc, double &r1_out,
+                                double &th_out) {
+    const double dx = ox - sx;
+    const double dy = oy - sy;
+    const double rho = std::hypot(dx, dy);
+    const double hh = (ground_z - oz) + (ground_z - sz);
+    const double r1 = std::sqrt(rho * rho + hh * hh);
+
+    // --- inline SommerfeldGridBelow.eval(r1, theta) ---
+    double theta = std::atan2(hh, rho);
+    r1_out = r1;
+    th_out = theta;
+    if (theta < th_min) theta = th_min;
+    else if (theta > G.half_pi) theta = G.half_pi;
+    const double r1c = r1 > G.r1_max ? G.r1_max : r1;
+    const int reg = (r1c <= G.r_break)
+                        ? (theta <= G.th_split ? 0 : 1)
+                        : (r1c <= G.r_near ? (theta <= G.th_split ? 2 : 3)
+                                           : (theta <= G.th_split ? 4 : 5));
+    const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
+    const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
+    int i0 = (int)std::floor(fr) - 1;
+    int j0 = (int)std::floor(ft) - 1;
+    if (i0 < 0) i0 = 0; else if (i0 > G.nR[reg] - 4) i0 = (int)G.nR[reg] - 4;
+    if (j0 < 0) j0 = 0; else if (j0 > G.nTh[reg] - 4) j0 = (int)G.nTh[reg] - 4;
+    double wr[4], wt[4];
+    somm_proj::lagrange4(fr - i0, wr);
+    somm_proj::lagrange4(ft - j0, wt);
+    const cd *V = G.vptr[reg];
+    const py::ssize_t nth = G.nTh[reg], nr = G.nR[reg];
+    cd surf[4];
+    for (int s = 0; s < 4; ++s) {
+        const cd *plane = V + (py::ssize_t)s * nr * nth;
+        cd acc(0.0, 0.0);
+        for (int i = 0; i < 4; ++i) {
+            const cd *row = plane + (py::ssize_t)(i0 + i) * nth + j0;
+            cd rs = row[0] * wt[0] + row[1] * wt[1] + row[2] * wt[2] +
+                    row[3] * wt[3];
+            acc += rs * wr[i];
+        }
+        surf[s] = acc;
+    }
+    const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2], IphiH = surf[3];
+
+    // --- projection (eqs 143-147), over `divide_out_below`'s g ---
+    const cd g = std::exp(-MW_BJ * (cd(k_p * rho, 0.0) + k_m * hh)) / r1;
+    const bool safe_r = rho > G.tiny;
+    const double inv_rho = safe_r ? 1.0 / rho : 0.0;
+    const double dhx = safe_r ? dx * inv_rho : sux;
+    const double dhy = safe_r ? dy * inv_rho : suy;
+    const double cphi = sux * dhx + suy * dhy;
+    const double sphi = sux * dhy - suy * dhx;
+    const cd e_rho = g * (stzsrc * IrhoV + sthsrc * cphi * IrhoH);
+    const cd e_phi = g * (sthsrc * sphi * IphiH);
+    const cd e_z = g * (stzsrc * IzV - sthsrc * cphi * IrhoV);
+    return tox * (dhx * e_rho - dhy * e_phi) +
+           toy * (dhy * e_rho + dhx * e_phi) + toz * e_z;
+}
+}  // namespace mw568_below
+
+// `_six_integrals_below` over parallel (rho, h) arrays: the (n, 6) table plus
+// everything `Health` records, OpenMP across nodes with the GIL released.
+//
+// The wavenumbers arrive DERIVED (k_p real, k_m complex on the Im <= 0 branch)
+// rather than as eps~, so the branch choice stays in `k_medium` where it is
+// written down once; the eps~ == 1 short circuit and the (rho, h) domain
+// raise likewise stay in Python, because they are exact and their words are
+// part of the contract.
+//
+// Returns (values (n, 6), tail_panels (n,), head_panels (n,), converged (n,),
+// accelerated (n,), selfconv (n,)) -- selfconv is -1.0 where the coarse
+// machine was not run.
+static py::tuple below_six_integrals_batch(
+    double k_p, std::complex<double> k_m,
+    py::array_t<double, py::array::c_style | py::array::forcecast> rho,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h,
+    double rtol_fine, int depth, double detour,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gx,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gw,
+    bool selfconv, double rtol_coarse, int depth_coarse, double detour_coarse,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gxc,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gwc,
+    int max_panels) {
+    auto rb = rho.unchecked<1>();
+    auto hb = h.unchecked<1>();
+    const py::ssize_t n = rb.shape(0);
+    if (hb.shape(0) != n)
+        throw std::invalid_argument("rho and h must have the same length");
+    const double *gxp, *gwp, *gxcp, *gwcp;
+    int ng, ngc;
+    mw568::gauss_view(gx, gw, &gxp, &gwp, &ng);
+    mw568::gauss_view(gxc, gwc, &gxcp, &gwcp, &ngc);
+
+    py::array_t<std::complex<double>> vals({n, py::ssize_t(6)});
+    py::array_t<int> tail(n), head(n);
+    py::array_t<bool> conv(n), accel(n);
+    py::array_t<double> sconv(n);
+    auto vb = vals.mutable_unchecked<2>();
+    int *tp = tail.mutable_data();
+    int *hp = head.mutable_data();
+    bool *cp = conv.mutable_data();
+    bool *ap = accel.mutable_data();
+    double *sp = sconv.mutable_data();
+    const mw_contour::cd km(k_m);
+
+    {
+        py::gil_scoped_release release;
+        // `dynamic`: a grazing node (theta ~ 1 deg) costs an order of
+        // magnitude more tail panels than a steep one, and a grid fill's
+        // nodes arrive sorted by region -- static scheduling would hand one
+        // thread the whole grazing band.
+        #pragma omp parallel for schedule(dynamic)
+        for (py::ssize_t i = 0; i < n; ++i) {
+            mw568_below::SixResult r;
+            mw568_below::six_below_one(
+                rb(i), hb(i), k_p, km, rtol_fine, depth, detour, gxp, gwp, ng,
+                selfconv, rtol_coarse, depth_coarse, detour_coarse, gxcp, gwcp,
+                ngc, max_panels, r);
+            for (int c = 0; c < 6; ++c) vb(i, c) = r.val[c];
+            tp[i] = r.tail_panels;
+            hp[i] = r.head_panels;
+            cp[i] = r.converged;
+            ap[i] = r.accel;
+            sp[i] = r.selfconv;
+        }
+    }
+    return py::make_tuple(vals, tail, head, conv, accel, sconv);
+}
+
+// `remainder_field_proj_below` in C++: obs/t_obs (M,3), src/t_src (S,3),
+// returns ((M,S) complex, max R1, min theta, max theta).
+//
+// A TWIN of `remainder_field_proj_batch`, not a widening of it, and that was a
+// decision rather than an accident. Widening the shipped kernel to carry a
+// complex wavenumber would have put a branch (or a second carrier expression)
+// inside the +/-=+ family's hottest inner loop -- ~90 % of an above/above
+// Sommerfeld solve -- for a family that does not need it, and the two carriers
+// are not the same expression even when k_m happens to be real: above/above
+// divides out e^{-jk R1}/R1, a function of R1 alone, while the below family
+// divides out the two-leg blend e^{-j(k_p rho + k_m hh)}/R1, which depends on
+// theta. The +/-=+ path therefore keeps its bytes, literally: not one token of
+// `proj_one` moved.
+//
+// The three refusals (`R1` past the tabulation, theta under the grazing floor,
+// theta past pi/2) are NOT transcribed here. The kernel reports the query's
+// extremes and the Python layer feeds them straight back to
+// `SommerfeldGridBelow.eval`, which raises in its own words -- so there is
+// exactly one copy of that prose and no way for the two paths to drift on
+// which geometries they serve.
+static py::tuple remainder_field_proj_batch_below(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_src,
+    double ground_z, double k_p, std::complex<double> k_m, double th_min,
+    double r1_max, double r_break, double th_split, double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals) {
+    using somm_proj::cd;
+    auto ob = obs.unchecked<2>();
+    auto tob = t_obs.unchecked<2>();
+    auto sb = src.unchecked<2>();
+    auto tsb = t_src.unchecked<2>();
+    if (ob.shape(1) != 3 || tob.shape(1) != 3 || sb.shape(1) != 3 ||
+        tsb.shape(1) != 3)
+        throw std::runtime_error("obs/src/tangent arrays must have shape (*, 3)");
+    if (ob.shape(0) != tob.shape(0) || sb.shape(0) != tsb.shape(0))
+        throw std::runtime_error("points and tangents must have matching length");
+
+    const py::ssize_t M = ob.shape(0);
+    const py::ssize_t S = sb.shape(0);
+    somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
+        reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
+        reg_vals);
+
+    py::array_t<std::complex<double>> out({M, S});
+    auto out_m = out.mutable_unchecked<2>();
+    const cd km(k_m);
+
+    // Per-observer-row extremes, reduced serially afterwards: a `reduction`
+    // clause on min/max is OpenMP 3.1 and this file stays portable to MSVC's
+    // classic /openmp.
+    std::vector<double> row_r1(M > 0 ? M : 1, 0.0);
+    std::vector<double> row_thlo(M > 0 ? M : 1, 0.5 * M_PI);
+    std::vector<double> row_thhi(M > 0 ? M : 1, 0.0);
+
+    {
+        py::gil_scoped_release release;
+        std::vector<double> sx(S), sy(S), sz(S), ux(S), uy(S), thsrc(S), tzsrc(S);
+        for (py::ssize_t nn = 0; nn < S; ++nn) {
+            sx[nn] = sb(nn, 0);
+            sy[nn] = sb(nn, 1);
+            sz[nn] = sb(nn, 2);
+            somm_proj::tangent_decomp(tsb(nn, 0), tsb(nn, 1), tsb(nn, 2), ux[nn],
+                                      uy[nn], thsrc[nn], tzsrc[nn]);
+        }
+
+        #pragma omp parallel for schedule(static)
+        for (py::ssize_t m = 0; m < M; ++m) {
+            const double ox = ob(m, 0), oy = ob(m, 1), oz = ob(m, 2);
+            const double tox = tob(m, 0), toy = tob(m, 1), toz = tob(m, 2);
+            double rmax = 0.0, tlo = 0.5 * M_PI, thi = 0.0;
+            for (py::ssize_t nn = 0; nn < S; ++nn) {
+                double r1q, thq;
+                out_m(m, nn) = mw568_below::proj_one_below(
+                    G, th_min, ground_z, k_p, km, ox, oy, oz, tox, toy, toz,
+                    sx[nn], sy[nn], sz[nn], ux[nn], uy[nn], thsrc[nn], tzsrc[nn],
+                    r1q, thq);
+                if (r1q > rmax) rmax = r1q;
+                if (thq < tlo) tlo = thq;
+                if (thq > thi) thi = thq;
+            }
+            row_r1[m] = rmax;
+            row_thlo[m] = tlo;
+            row_thhi[m] = thi;
+        }
+    }
+
+    double mx_r1 = 0.0, mn_th = 0.5 * M_PI, mx_th = 0.0;
+    for (py::ssize_t m = 0; m < M; ++m) {
+        if (row_r1[m] > mx_r1) mx_r1 = row_r1[m];
+        if (row_thlo[m] < mn_th) mn_th = row_thlo[m];
+        if (row_thhi[m] > mx_th) mx_th = row_thhi[m];
+    }
+    return py::make_tuple(out, mx_r1, mn_th, mx_th);
+}
+
+
 PYBIND11_MODULE(_accelerators, m) {
     // Phase 2: raised by the long kernels when their cancel_flag is tripped;
     // the _accel.py wrappers remap it to momwire.SolveAborted.
@@ -6891,4 +7294,41 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("rho"), py::arg("h"), py::arg("k_p"), py::arg("k_m"),
           py::arg("rtol"), py::arg("depth"), py::arg("detour"), py::arg("gx"),
           py::arg("gw"), py::arg("max_panels"));
+
+    // momwire#568 unit 2: the below/below fills on that engine. Its OWN
+    // capability flag, deliberately not `contour_engine_568` — a .so built at
+    // U1 exports the engine's test entry points and would otherwise claim to
+    // carry U2's contract too, handing `_sommerfeld_below` a missing symbol
+    // instead of the graceful numpy fallback the guard exists to give.
+    m.attr("below_fills_568") = true;
+    m.def("below_six_integrals_batch", &below_six_integrals_batch,
+          "The six below/below lambda-integrals at each (rho[i], h[i]) — the "
+          "C++ twin of _sommerfeld_below._six_integrals_below, on the shared "
+          "contour engine, OpenMP across nodes with the GIL released. k_p is "
+          "the free-space wavenumber (real) and k_m the in-medium one (complex, "
+          "Im <= 0); both arrive derived so the branch choice stays in "
+          "`k_medium`. `selfconv` additionally runs the coarse machine and "
+          "reports the componentwise relative spread. Returns (values (n, 6), "
+          "tail_panels, head_panels, converged, accelerated, selfconv), the "
+          "last being -1.0 where the coarse machine was not run.",
+          py::arg("k_p"), py::arg("k_m"), py::arg("rho"), py::arg("h"),
+          py::arg("rtol_fine"), py::arg("depth"), py::arg("detour"),
+          py::arg("gx"), py::arg("gw"), py::arg("selfconv"),
+          py::arg("rtol_coarse"), py::arg("depth_coarse"),
+          py::arg("detour_coarse"), py::arg("gxc"), py::arg("gwc"),
+          py::arg("max_panels"));
+    m.def("remainder_field_proj_batch_below", &remainder_field_proj_batch_below,
+          "Interpolated + projected below/below remainder table — the complex-"
+          "wavenumber TWIN of remainder_field_proj_batch (which carries a "
+          "`double k` and a divide-out that depends on R1 alone). Same grid "
+          "flattening after (ground_z, k_p, k_m, th_min); hh is the two depths "
+          "added and g is divide_out_below's two-leg blend. Returns ((M, S) "
+          "complex, max R1, min theta, max theta) — the query extremes so the "
+          "caller can let SommerfeldGridBelow.eval raise the refusals in its "
+          "own words.",
+          py::arg("obs"), py::arg("t_obs"), py::arg("src"), py::arg("t_src"),
+          py::arg("ground_z"), py::arg("k_p"), py::arg("k_m"), py::arg("th_min"),
+          py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
+          py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
+          py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"));
 }
