@@ -54,6 +54,28 @@ can hand back a zero-length panel that reads as convergence (the +1e-9
 nudge); and one Gauss rule must never leap many e-foldings of e^{−λh} (the
 1.5/h panel cap). `Health` counts what actually happened so a caller can
 tell a converged answer from a lucky one.
+
+C++ twins (momwire#568 unit 2)
+------------------------------
+Everything in this module is numpy and stays that way — the numpy spellings
+are the REFERENCES, and the gates against their C++ twins are tolerances,
+never bytes. What has a twin, behind the single `below_fills_568` capability
+flag (`_use_below_accel`):
+
+    _six_integrals_below        below_six_integrals_batch
+    iv_surfaces_direct_below    its per-point loop, through the same batch —
+                                THIS is where the OpenMP region lives
+    remainder_field_proj_below  remainder_field_proj_batch_below
+
+`divide_out_below` and the R₁ → 0 limits stay numpy: closed forms costing
+less than the call that would dispatch them. So does everything that is a
+CONTRACT rather than arithmetic — the ε̃ = 1 short circuit, the (ρ, h) domain
+raise, the `Health` bookkeeping and `SommerfeldGridBelow.eval`'s three
+refusals — so each of those messages and counters has exactly one home.
+
+Measured on an i7-8550U: one contour node 7–14× the numpy one, a whole
+`iv_surfaces_direct_below` batch ~18× with OpenMP across nodes on top of that,
+and the slow below/below ladder 392.9 s → 23.0 s at unchanged memory.
 """
 
 from __future__ import annotations

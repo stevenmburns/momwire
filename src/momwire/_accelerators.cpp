@@ -6437,6 +6437,25 @@ static py::tuple contour_engine_synth6(
 // contract), and a grid fill is thousands of nodes whose costs differ by an
 // order of magnitude between the steep and grazing bands -- hence `dynamic`
 // scheduling rather than `static`.
+//
+// STACK. U1 measured ~25 kB per `run_contour` at NC = 6 (a ~10 kB
+// `wynn_epsilon` frame plus ~0.6 kB per `adaptive_segment` level at depth 16);
+// the fine and coarse machines run in sequence, not nested, so that figure is
+// the peak per thread and nothing here relies on a large default. Verified by
+// running a 64x64 selfconv fill at OMP_NUM_THREADS=8 under OMP_STACKSIZE of
+// 128K, 256K and 512K: all three identical to the last bit, none faulted.
+//
+// MEASURED on an i7-8550U, one contour node against the numpy driver at
+// rtol 1e-9 (soil A, 7 MHz, geometries in lambda_m):
+//
+//     (rho, h) = (0.3, 0.2)      13.8 ms ->  1.59 ms    8.7x
+//                (1.0, 0.05)     47.4 ms ->  4.11 ms   11.5x
+//                (2.0, 0.5)      18.9 ms ->  1.32 ms   14.3x
+//                (0.02, 0.01)    19.7 ms ->  2.96 ms    6.7x
+//                (1.0, 0.017)   113.4 ms ->  9.40 ms   12.1x   (deep grazing)
+//
+// and end to end, `tests/test_sommerfeld_below.py -m slow -n 2` on this box:
+// 392.9 s -> 23.0 s (17.1x), MAXRSS 107 MB -> 108 MB.
 // --------------------------------------------------------------------------
 
 namespace mw568_below {
