@@ -2741,6 +2741,63 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             sampled.append(Ire + 1j * Iim)
         return sampled
 
+    def current_slopes(self, coeffs, s_array=None):
+        """Per-wire ``dI/ds`` — the solved current's arc-length derivative.
+
+        The twin of :meth:`currents_at_knots`, with the same signature and
+        the same two calling conventions as
+        :meth:`~momwire.bspline.BSplineSolver.current_slopes`: a list of 1-D
+        complex arrays, one per wire in ``wires_polylines`` order, at the mesh
+        knots (``s_array=None``) or at the per-wire arc positions given,
+        clipped into the wire's own arc range.
+
+        **Why it exists** (momwire#497, and momwire#603 for this family): the
+        linear charge density a NEC printout reports is ``q = -(1/jw)·dI/ds``
+        at each element's centre.  The EZNEC seam reads it through this
+        method, and until it existed here that seam could not run on this
+        family at all — every deck that reached the readout died on a missing
+        attribute rather than on anything about the physics.
+
+        Here it is not merely exact, it is trivial.  A tent expansion IS the
+        piecewise-linear interpolant of its own knot currents, so on the
+        segment between two knots the current is a straight line and ``dI/ds``
+        is the CONSTANT rise over run.  Nothing is differenced that was not
+        already a difference: this is the same "differentiated in the basis
+        rather than around it" argument the B-spline twin makes, at the one
+        degree where the two readings coincide.
+
+        The derivative therefore JUMPS at a knot, and a sample taken exactly
+        on one has to pick a side.  This picks the span to the RIGHT, and the
+        left span at the final knot — which is what scipy's ``BSpline``
+        derivative does at ``degree == 1``, so a caller cannot tell the two
+        implementations apart by their tie-break either.  As over there, the
+        honest thing to ask for is element CENTRES, and that is what the seam
+        asks for.
+        """
+        coeffs = np.asarray(coeffs)
+        per_wire = self._build_geometry()["per_wire"]
+        knot_currents = self.currents_at_knots(coeffs)
+
+        out = []
+        for w_idx, pw in enumerate(per_wire):
+            arc = pw["arc_at_knot"]
+            # One constant per segment, and the whole of the derivative.
+            slope = np.diff(knot_currents[w_idx]) / np.diff(arc)
+            s_eval = (
+                arc if s_array is None else np.asarray(s_array[w_idx], dtype=np.float64)
+            )
+            if s_eval.shape[0] == 0:
+                out.append(np.zeros(0, dtype=np.complex128))
+                continue
+            s_eval = np.clip(s_eval, arc[0], arc[-1])
+            # `side="right"` is the right-hand span; the clip puts the final
+            # knot back on the last one.
+            span = np.clip(
+                np.searchsorted(arc, s_eval, side="right") - 1, 0, slope.shape[0] - 1
+            )
+            out.append(np.asarray(slope[span], dtype=np.complex128))
+        return out
+
     # ------------------------------------------------------------------
     # swept solve
 

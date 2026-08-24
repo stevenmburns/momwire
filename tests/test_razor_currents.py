@@ -72,6 +72,98 @@ def test_knot_currents_basics():
 
 
 # --------------------------------------------------------------------------
+# 1b. current slopes — dI/ds, the charge-density readout (momwire#603 U2)
+# --------------------------------------------------------------------------
+def test_current_slopes_are_the_knot_differences_exactly():
+    """A tent expansion IS the piecewise-linear interpolant of its own knot
+    currents, so on every segment dI/ds is the constant rise over run — and
+    that is not an approximation of the derivative, it is the derivative.
+
+    Gated as an EXACT identity rather than a tolerance: anything else would
+    mean the readout and the basis disagree about what the solved current is.
+    """
+    solver = _bd1_single()
+    _z, coeffs = solver.compute_impedance()
+    arc = solver._build_geometry()["per_wire"][0]["arc_at_knot"]
+    (cur,) = solver.currents_at_knots(coeffs)
+    expected = np.diff(cur) / np.diff(arc)
+
+    centres = 0.5 * (arc[:-1] + arc[1:])
+    (slopes,) = solver.current_slopes(coeffs, [centres])
+    assert slopes.shape == centres.shape
+    assert np.array_equal(slopes, expected)
+
+    # Telescoping: the derivative integrated over the wire is the current it
+    # gained end to end, which for a free-ended dipole is zero both sides.
+    assert (expected * np.diff(arc)).sum() == pytest.approx(cur[-1] - cur[0], abs=1e-18)
+
+
+def test_current_slopes_pick_the_same_side_of_a_knot_as_the_bspline_twin():
+    """The derivative JUMPS at a knot, so a sample taken on one has to choose.
+
+    `BSplineSolver.current_slopes` inherits scipy's choice — the span to the
+    RIGHT, and the left span at the final knot. This asks that a caller
+    cannot tell the two implementations apart by their tie-break, by running
+    the razor knot currents back through scipy at degree 1 and comparing.
+    """
+    from scipy.interpolate import BSpline
+
+    solver = _bd1_single()
+    _z, coeffs = solver.compute_impedance()
+    arc = solver._build_geometry()["per_wire"][0]["arc_at_knot"]
+    (cur,) = solver.currents_at_knots(coeffs)
+
+    # The same piecewise-linear function, as a clamped degree-1 spline.
+    knots = np.concatenate(([arc[0]], arc, [arc[-1]]))
+    scipy_slope = BSpline(knots, cur, 1, extrapolate=False).derivative(1)
+
+    (at_knots,) = solver.current_slopes(coeffs)
+    assert at_knots.shape == arc.shape
+    assert np.allclose(at_knots, scipy_slope(arc), rtol=0, atol=1e-12)
+
+    centres = 0.5 * (arc[:-1] + arc[1:])
+    (at_centres,) = solver.current_slopes(coeffs, [centres])
+    assert np.allclose(at_centres, scipy_slope(centres), rtol=0, atol=1e-12)
+
+
+def test_current_slopes_clip_into_the_wire_and_serve_every_piece():
+    """The contract the EZNEC seam calls with: one array per wire, sampled at
+    that piece's own element centres, positions outside the wire clipped in
+    rather than extrapolated — `BSplineSolver.current_slopes`' contract, on a
+    multi-wire structure so the per-wire indexing is exercised.
+    """
+    solver = RazorSolver(
+        wires=[
+            np.array([_point(0.0), _point(BD1_LEN / 2)]),
+            np.array([_point(BD1_LEN / 2), _point(BD1_LEN)]),
+        ],
+        n_per_edge_per_wire=[[6], [4]],
+        junctions=[[(0, "end"), (1, "start")]],
+        feeds=[(0, BD1_LEN / 4, 1 + 0j)],
+        **BD1_KW,
+    )
+    _z, coeffs = solver.compute_impedance()
+    per_wire = solver._build_geometry()["per_wire"]
+
+    centres = [
+        0.5 * (pw["arc_at_knot"][:-1] + pw["arc_at_knot"][1:]) for pw in per_wire
+    ]
+    slopes = solver.current_slopes(coeffs, centres)
+    assert [s.shape[0] for s in slopes] == [6, 4]
+    assert all(s.dtype == np.complex128 for s in slopes)
+
+    # Off both ends of wire 0 -> the first and last segment's own constants.
+    # `s_array` carries one entry per wire, exactly as the B-spline twin
+    # indexes it, so the untested wire still has to be named.
+    edge, _ = solver.current_slopes(coeffs, [np.array([-5.0, 1e3]), np.array([])])
+    inside, _ = solver.current_slopes(coeffs, [centres[0][[0, -1]], np.array([])])
+    assert np.array_equal(edge, inside)
+
+    # An empty request is an empty answer, not an error.
+    assert solver.current_slopes(coeffs, [np.array([]), np.array([])])[0].shape == (0,)
+
+
+# --------------------------------------------------------------------------
 # 2. split-identity currents — the sign gate
 # --------------------------------------------------------------------------
 def test_split_identity_currents():
