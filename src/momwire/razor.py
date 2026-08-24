@@ -853,6 +853,25 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     "overlap on that one segment — split it in two)"
                 )
 
+        if self._declared_junctions is not None:
+            # momwire#522's guardrail, which BSplineSolver and SinusoidalSolver
+            # have run since that issue. Razor and harrington only started
+            # accepting a spec in momwire#590 step 3b, so they were the two
+            # spellings it did not cover -- a wrong wire index welds ends that
+            # sit nowhere near each other and produces a well-posed WRONG model
+            # that converges cleanly, which is the #518 postmortem exactly.
+            #
+            # Calling the existing check rather than writing a second one: its
+            # tolerance is scale-aware (1e-3 of the shortest terminal segment,
+            # floored at 1e-5 m so the deck front's node grid can never fire
+            # it), and a flat threshold picked here would be both a seventh
+            # "same point" number and a worse-calibrated one.
+            _wire_spec.check_junction_coincidence(
+                self.wires_polylines,
+                self.n_per_edge_per_wire,
+                canonical_groups(self._declared_junctions),
+            )
+
         # ---- wire loading, the house API (momwire#427) -------------------
         # Two kinds, one equation. DISTRIBUTED series impedance Z'_w(ω)
         # [Ω/m] is spelled exactly as `BSplineSolver` / `SinusoidalSolver` /

@@ -347,3 +347,72 @@ def test_every_junction_capable_solver_now_reads_the_same_spec():
         solver(**kw, junctions=[])
         # ...and infers the same thing when told nothing.
         solver(**kw)
+
+
+# ----------------------------------------------------------------------
+# momwire#522's coincidence guard reaches all four spellings
+# ----------------------------------------------------------------------
+
+_FOUR = [BSplineSolver, SinusoidalSolver, RazorSolver, HarringtonSolver]
+
+
+@pytest.mark.parametrize("solver", _FOUR)
+def test_declared_ends_that_do_not_coincide_refuse(solver):
+    """`_wire_spec.check_junction_coincidence` (momwire#522, the #518
+    postmortem) has guarded bspline and sinusoidal since that issue. Razor and
+    harrington only began accepting a spec in momwire#590 step 3b, so they were
+    the two spellings it did not cover.
+
+    The failure it exists for is not loud: a wrong wire index welds ends that
+    sit nowhere near each other, and the result is a well-posed WRONG model
+    that converges cleanly. #518 filed one as a solver bias.
+    """
+    far = [
+        np.array([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0]]),
+        np.array([[0.0, 5.0, 0.0], [0.25, 5.0, 0.0]]),
+    ]
+    with pytest.raises(ValueError, match="do not coincide"):
+        solver(
+            wires=far,
+            n_per_edge_per_wire=[[6], [6]],
+            wavelength=1.0,
+            wire_radius=0.001,
+            junctions=[[(0, "start"), (1, "start")]],
+        )
+
+
+@pytest.mark.parametrize("solver", _FOUR)
+def test_the_deck_grids_own_fuzz_is_still_declarable(solver):
+    """The guard's tolerance contract, now that four solvers share it.
+
+    `deck/_polylines` quantises endpoints onto a 1e-6 m grid, which can leave
+    ~1.8e-6 m of Euclidean fuzz between ends it calls one node.
+    `_JUNCTION_COINCIDENCE_FLOOR` is 1e-5 precisely so that can never fire.
+    A tighter threshold -- 1e-6 say -- would reject the decks the guard exists
+    to protect, so this is gated rather than left to the constant's comment.
+    """
+    fuzzed = [
+        np.array([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0]]),
+        np.array([[0.0, 1.8e-6, 0.0], [0.0, 0.25, 0.0]]),
+    ]
+    s = solver(
+        wires=fuzzed,
+        n_per_edge_per_wire=[[6], [6]],
+        wavelength=1.0,
+        wire_radius=0.001,
+        junctions=[[(0, "start"), (1, "start")]],
+    )
+    assert s is not None
+
+
+@pytest.mark.parametrize("solver", _FOUR)
+def test_inference_is_never_put_through_the_guard(solver):
+    """What inference finds is coincident to 1e-9 by construction, so a
+    geometry that solves with no `junctions=` must keep solving."""
+    s = solver(
+        wires=_joined(),
+        n_per_edge_per_wire=[[6], [6]],
+        wavelength=1.0,
+        wire_radius=0.001,
+    )
+    assert s is not None
