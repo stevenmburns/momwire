@@ -521,6 +521,21 @@ def _strip_timing(text: str) -> str:
     )
 
 
+def _dump(name: str, label: str, position: int, warm: str, cold: str) -> None:
+    """Diagnostic tap, modelled on ``MOMWIRE_403_DUMP``: a residency mismatch
+    only reproduces with a process history behind it, which is exactly where
+    no debugger reaches. Point the env var at a directory and every mismatch
+    drops its (warm, cold) pair there for offline diffing."""
+    root = os.environ.get("MOMWIRE_532_DUMP")
+    if not root:
+        return
+    out = Path(root)
+    out.mkdir(parents=True, exist_ok=True)
+    stem = f"{name}-{label}{position}"
+    (out / f"{stem}.warm.txt").write_text(warm)
+    (out / f"{stem}.cold.txt").write_text(cold)
+
+
 @pytest.mark.slow
 def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
     """**The gate momwire#532 turns on.**
@@ -570,6 +585,7 @@ def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
                 mismatches.append(f"{label}[{position}] {deck.name}: exit {code}")
             elif served != cold[deck]:
                 mismatches.append(f"{label}[{position}] {deck.name}: printout differs")
+                _dump(deck.name, label, position, served, cold[deck])
 
     assert not mismatches, (
         f"{len(mismatches)} of {2 * len(decks)} resident answers differ from a "
