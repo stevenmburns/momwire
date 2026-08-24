@@ -36,7 +36,7 @@ import numpy as np
 import pytest
 
 from momwire import BSplineSolver
-from momwire.deck._nec5 import Nec5MininecGround, Nec5PerfectGround, parse_nec5
+from momwire.deck._nec5 import parse_nec5
 from momwire.eznec import _serve
 from momwire.eznec._shell import render
 from momwire.razor import RazorSolver
@@ -283,76 +283,22 @@ UNSERVED = (
 )
 
 
-def razor_solver_for(deck, mesh, wavelength, medium):
-    """``_solver_for``'s call with a ``RazorSolver`` on the end of it.
-
-    Stands in for momwire#603 U3, which makes the basis selectable at the
-    seam and assembles the per-family kwargs in ONE place shared with
-    ``momwire.deck.build_solver``.  Until then the seam constructs
-    ``BSplineSolver`` by name, and the only way to gate what U1 unblocked is
-    to spell the razor construction here.  U3 deletes this.
-
-    Razor takes no ``junctions`` (it detects them) and no ``degree`` (the
-    razor-blade rule is defined against the tent), and it refuses
-    ``node_gaps`` by the kwarg's PRESENCE rather than its value — passing
-    ``None`` still raises.
-    """
-    radii = [piece.radius for piece in mesh.pieces]
-    kwargs: dict[str, object] = {}
-    if isinstance(deck.ground, (Nec5PerfectGround, Nec5MininecGround)):
-        kwargs["ground_z"] = 0.0
-    elif medium is not None:
-        kwargs.update(
-            ground_z=0.0,
-            ground_eps=(medium.eps_r, medium.sigma),
-            ground_model="sommerfeld",
-        )
-    if mesh.gaps:
-        kwargs["node_gaps"] = [(s.piece, s.end, 0j) for s in mesh.gaps]
-    return RazorSolver(
-        wires=[piece.points for piece in mesh.pieces],
-        n_per_edge_per_wire=[[piece.n_elements] for piece in mesh.pieces],
-        feeds=[(s.piece, s.arclength, 0j) for s in mesh.feeds],
-        wire_radius=radii[0] if len(set(radii)) == 1 else radii,
-        wavelength=wavelength,
-        nec5_quadrature=True,
-        **kwargs,  # type: ignore[arg-type]
-    )
-
-
-@pytest.fixture
-def razor_seam(monkeypatch):
-    """Drive the whole seam with razor-nec5, mesh and solver both."""
-    build_mesh = _serve.build_mesh
-    monkeypatch.setattr(
-        _serve,
-        "build_mesh",
-        lambda deck, structure, **kw: build_mesh(
-            deck, structure, solver_class=RazorSolver
-        ),
-    )
-    monkeypatch.setattr(_serve, "_solver_for", razor_solver_for)
-
-
 @pytest.mark.parametrize("cid", CAPTURE_IDS)
-def test_razor_nec5_serves_every_capture_but_the_fifteen_named(cid, razor_seam):
+def test_razor_nec5_serves_every_capture_but_the_fifteen_named(cid):
     """11 of 62 before U1, 47 after, and the other 15 refuse by name.
 
-    The unit's headline gate.  A deck that starts serving belongs in neither
-    list and should be taken OUT of :data:`UNSERVED`; a deck that stops is a
+    The unit's headline gate, driven through the real seam since U3 made the
+    basis selectable.  A deck that starts serving belongs in neither list and
+    should be taken OUT of :data:`UNSERVED`; a deck that stops is a
     regression this catches by name rather than by count.
+
+    Every unserved deck comes back as a PRINTOUT carrying a ``NEC ERROR``
+    line, never as an exception — which is the whole point of routing the
+    capability refusals through :func:`~momwire.eznec._serve.serve` rather
+    than letting a constructor raise into EZNEC's face.
     """
-    if cid in REFUSED_UNDER_BSPLINE_TOO:
-        # These three refuse at the seam, not at the solver: they reach a
-        # printout and it carries the engine's own error line.
-        assert "NEC ERROR" in render(deck_text(cid))
-        return
-    if cid in UNSERVED:
-        with pytest.raises((NotImplementedError, ValueError)):
-            render(deck_text(cid))
-        return
-    text = render(deck_text(cid))
-    assert "NEC ERROR" not in text
+    text = render(deck_text(cid), basis="razor-nec5")
+    assert ("NEC ERROR" in text) == (cid in UNSERVED)
 
 
 FLOAT = re.compile(r"-?\d\.\d+E[-+]\d+")
@@ -380,7 +326,7 @@ ACCURACY_IDS = ("0010", "0012", "0017", "0019")
 
 
 @pytest.mark.parametrize("cid", ACCURACY_IDS)
-def test_razor_nec5_lands_on_the_licensed_engine_it_is_a_twin_of(cid, razor_seam):
+def test_razor_nec5_lands_on_the_licensed_engine_it_is_a_twin_of(cid):
     """0.01 %, not the 2–6 % a different formulation costs.
 
     This is the payoff and it is also the sharpest check on the spelling: a
@@ -389,13 +335,13 @@ def test_razor_nec5_lands_on_the_licensed_engine_it_is_a_twin_of(cid, razor_seam
     across the whole corpus the served decks sit a median 0.00 % and a worst
     0.03 % away; these four are pinned so the claim has a gate.
     """
-    served = input_impedance(render(deck_text(cid)))
+    served = input_impedance(render(deck_text(cid), basis="razor-nec5"))
     reference = input_impedance(printout_text(cid))
     assert reference is not None and served is not None
     assert abs(served - reference) / abs(reference) < 1e-3
 
 
-def test_the_w7el_triple_still_answers_series_where_it_must(razor_seam):
+def test_the_w7el_triple_still_answers_series_where_it_must():
     """Config C is 70 % from config A, and a lost junction sign hides that.
 
     ``2,3`` and ``3,-1`` name the two sides of ONE port, so their EMFs add in
@@ -405,7 +351,7 @@ def test_the_w7el_triple_still_answers_series_where_it_must(razor_seam):
     reproduces the pair through the delta-gap spelling.
     """
     z = {
-        cid: input_impedance(render(deck_text(cid)))
+        cid: input_impedance(render(deck_text(cid), basis="razor-nec5"))
         for cid in ("0012", "0014", "0016", "0017")
     }
     assert z["0012"] == z["0014"] == z["0016"]  # one point, two tags, one answer
@@ -414,7 +360,7 @@ def test_the_w7el_triple_still_answers_series_where_it_must(razor_seam):
 
 
 @pytest.mark.parametrize("cid", ACCURACY_IDS)
-def test_the_current_table_is_not_printed_180_degrees_out(cid, razor_seam):
+def test_the_current_table_is_not_printed_180_degrees_out(cid):
     """The one error an impedance cannot see.
 
     A globally flipped port cancels between the drive and the readout, so Z
@@ -422,7 +368,7 @@ def test_the_current_table_is_not_printed_180_degrees_out(cid, razor_seam):
     turn.  Read on the largest currents in the table, where a phase is
     meaningful.
     """
-    served = _wire_currents(render(deck_text(cid)))
+    served = _wire_currents(render(deck_text(cid), basis="razor-nec5"))
     reference = _wire_currents(printout_text(cid))
     assert len(served) == len(reference) and served
     pairs = sorted(zip(reference, served), key=lambda p: -abs(p[0]))[:5]

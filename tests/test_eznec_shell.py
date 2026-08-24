@@ -489,7 +489,7 @@ def test_an_internal_crash_still_carries_the_comment_echo(tmp_path, monkeypatch)
     deck_text = deck.read_text(encoding="latin-1")
     out = tmp_path / "NEC5.OUT"
 
-    def boom(deck_path, printout_path):
+    def boom(deck_path, printout_path, **kwargs):
         raise RuntimeError("injected")
 
     monkeypatch.setattr(_shell, "run", boom)

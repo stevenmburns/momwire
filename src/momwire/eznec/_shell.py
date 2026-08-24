@@ -103,8 +103,14 @@ def write_printout(printout_path: Path, text: str) -> None:
         handle.write(text)
 
 
-def render(text: str) -> str:
+def render(text: str, *, basis: str = _serve.BASIS) -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
+
+    ``basis`` picks which momwire formulation answers it (momwire#603 U3) and
+    is passed straight to :func:`~momwire.eznec._serve.serve`, whose default
+    is the one every committed printout is gated against.  A name the roster
+    does not know, and a basis this deck's own geometry cannot be hosted by,
+    both come back through gate 3 below as a refusal naming the basis.
 
     Three gates in order, and each of them names the thing that stopped it:
 
@@ -126,13 +132,18 @@ def render(text: str) -> str:
     except DeckError as exc:
         return _printout.render_refusal(text, str(exc))
     try:
-        data = _serve.serve(deck)
+        data = _serve.serve(deck, basis=basis)
     except _serve.ServeRefusal as exc:
         return _printout.render_refusal(text, str(exc))
     return _printout.render_printout(deck, data)
 
 
-def run(deck_path: str | Path, printout_path: str | Path) -> str:
+def run(
+    deck_path: str | Path,
+    printout_path: str | Path,
+    *,
+    basis: str = _serve.BASIS,
+) -> str:
     """Serve one deck: read it, render a printout, write the printout.
 
     Returns the text written, which is the whole of what this process
@@ -150,14 +161,21 @@ def run(deck_path: str | Path, printout_path: str | Path) -> str:
     if text is None:
         printout = _printout.render_refusal(None, f"UNABLE TO READ INPUT FILE {deck}")
     else:
-        printout = render(text)
+        printout = render(text, basis=basis)
 
     write_printout(out, printout)
     return printout
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, basis: str = _serve.BASIS) -> int:
     """The process entry point.  Returns 0.  Always returns 0.
+
+    ``basis`` is not a command line flag and must not become one: the real
+    engine takes two positional paths and nothing else, and EZNEC sends
+    exactly those.  It is here so that ONE frozen executable can be built per
+    formulation (momwire#593) — the entry script names the basis, the process
+    answers every deck in it, and EZNEC's engine-path setting is what
+    chooses.
 
     Argument errors go to stdout and write no printout — that is what the real
     engine does, and it is the one case where writing a file would be wrong:
@@ -179,7 +197,7 @@ def main(argv: list[str] | None = None) -> int:
 
     deck_path, printout_path = args
     try:
-        run(deck_path, printout_path)
+        run(deck_path, printout_path, basis=basis)
     except Exception as exc:  # noqa: BLE001 - the last line of defence
         # A traceback on stderr would be invisible (EZNEC captures neither
         # stderr nor the exit code), and a missing file would be read as a
