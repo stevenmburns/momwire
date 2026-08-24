@@ -476,7 +476,7 @@ class FieldGround:
         prep = self.pair_weights() if tables is None else tables()
         return prep.weights(self.eps_tilde).project
 
-    def image_field(self, obs_rows=None) -> tuple:
+    def image_field(self, obs_rows=None, cos_shape="cos") -> tuple:
         """The image field tensor `(Φ_const, Φ_sin, Φ_cos)` for one
         observer band, already carrying whichever per-pair weight this
         ground says — but NOT `image_coefficient`, which the caller applies
@@ -486,12 +486,24 @@ class FieldGround:
         dyad-weighted ground goes through the Fresnel build, everything
         else through the plain mirrored-source one. Both are the solver's
         own evaluators, called here rather than chosen there.
+
+        `cos_shape` names the third source shape, exactly as `remainder`
+        below and as `_field_components_bcast` documents it. The image block
+        is SUBTRACTED from the direct block, so the two have to be built in
+        the same shape set; passing it here is what lets a `cos-1` fill stay
+        consistent across direct, image and remainder (momwire#606).
         """
         if self._weighted:
             return self._solver._field_tensor_image_refl(
-                self._geom, self._k, obs_rows=obs_rows, ground=self
+                self._geom,
+                self._k,
+                obs_rows=obs_rows,
+                ground=self,
+                cos_shape=cos_shape,
             )
-        return self._solver._field_tensor_image(self._geom, self._k, obs_rows=obs_rows)
+        return self._solver._field_tensor_image(
+            self._geom, self._k, obs_rows=obs_rows, cos_shape=cos_shape
+        )
 
     def remainder(self, cos_shape="cos") -> Remainder | None:
         """The remainder operator, or `None` for a ground that has none

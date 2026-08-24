@@ -96,6 +96,34 @@ _CONTACT_TINY = 1e-30
 # Measured crossover on Kaby Lake R / OpenBLAS-pthreads ≈ 60.
 _DENSE_ASSEMBLY_THRESHOLD = 60
 
+# kΔ below which `_assemble_Z` switches to the well-scaled shape set
+# {1, sin kξ, cos kξ − 1} instead of NEC's literal {1, sin kξ, cos kξ}
+# (stevenmburns/momwire#606).
+#
+# The two are the same fill in exact arithmetic. In float64 the literal one
+# forms `Φ_c @ M_A + Φ_co @ M_C` where A ≈ −C and Φ_co → Φ_c as k → 0, so an
+# O((kΔ)²) answer comes out of O(1) terms: a relative error of ~8ε/(kΔ)²,
+# measured at exactly that scaling over four decades on the #606 deck.
+#
+# The threshold is set where that error crosses ~1e-9, because 1e-9 is where
+# the OTHER factor starts to matter: an electrically tiny structure carries
+# cond(Z) ≳ 1e7 (measured 8.6e7 on the #606 deck), and 1e-9 × 1e8 is a
+# percent. Solving 8ε/(kΔ)² = 1e-9 gives kΔ = 1.3e-3; rounded to 1.5e-3.
+#
+# Deliberately NOT set at the merely-visible boundary. A half-wave dipole at
+# N=801 sits at kΔ = 3.8e-3 and carries the 1.2e-10 fill error #203 measured
+# and accepted; its cond is ~1e4, so that error is worth 1e-6 in the answer
+# and the literal spelling is fine. Pulling such a deck onto the well-scaled
+# path would cost it the C++ kernel — 70 % of a single-k solve at N ≳ 80 —
+# to fix digits nothing was reading.
+#
+# Above the threshold nothing changes: the literal path keeps NEC's spelling
+# and the C++ kernels, and is bit-identical to the pre-#606 fill. Below it the
+# well-scaled path costs the accelerator (the kernels transcribe literal-cos
+# only), which is affordable exactly where it is engaged — electrically tiny
+# structures are small-N by construction.
+_WELL_SCALED_KD = 1.5e-3
+
 # Complex entries per observer chunk of the Sommerfeld remainder evaluator
 # (`_field_tensor_sommerfeld_remainder`): the grid interpolation's block is
 # (rows, N·n_qp_sommerfeld), so this caps it at 8 MB whatever the mesh.
@@ -186,6 +214,31 @@ def _sin_minus_arg(u):
         * (1.0 - u2 / 20.0 * (1.0 - u2 / 42.0 * (1.0 - u2 / 72.0 * (1.0 - u2 / 110.0))))
     )
     return np.where(np.abs(u) < 0.1, series, np.sin(u) - u)
+
+
+def _recip_sin_gap(kd):
+    """1/sin(kΔ) − 1/(2 sin(kΔ/2)) to full relative precision (momwire#606).
+
+    This difference is the whole of `A + C` on a neighbour entry, and on the
+    ground-junction extension that reuses the same shape. Both terms are
+    O(1/kΔ) and they agree to O(kΔ), so the literal subtraction returns an
+    answer of size ~kΔ/8 out of terms of size 1/kΔ — a relative error of
+    ~8ε/(kΔ)², which is 44000 % at kΔ = 1e-5 (issue #606's ladder).
+
+    The half-angle identity sin kΔ = 2 sin(kΔ/2) cos(kΔ/2) collapses it to
+
+        1/sin kΔ − 1/(2 sin(kΔ/2))
+            = [1/cos(kΔ/2) − 1] / (2 sin(kΔ/2))
+            = sin²(kΔ/4) / (sin(kΔ/2) cos(kΔ/2))
+
+    in which no term is larger than the answer, so it is correct to a
+    relative ε at every kΔ this solver meets. Same trick, and same reason, as
+    `_sin_minus_arg` and `_asinh_minus_arg` above: never subtract two things
+    that are about to agree.
+    """
+    kd = np.asarray(kd, dtype=float)
+    s4 = np.sin(0.25 * kd)
+    return s4 * s4 / (np.sin(0.5 * kd) * np.cos(0.5 * kd))
 
 
 def _asinh_minus_arg(x):
@@ -1034,10 +1087,20 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         C → 1; N± neighbour: C/A = −cos(kΔ/2)), so `σA + B·sin kξ + σC·cos kξ`
         evaluates a quantity of size ~(kΔ)²/8 from terms of size 1 — a
         relative error of ~ε·8/(kΔ)², which is 1.2e-10 at N=801 on the
-        half-wave dipole and grows like N² (stevenmburns/momwire#203). Adding
-        the two float64 coefficients here is correctly rounded *to the sum*,
-        so every consumer that evaluates the basis gets the cancellation done
-        once, in the one place where it is exact.
+        half-wave dipole and grows like N² (stevenmburns/momwire#203).
+
+        `AC` is built from a per-branch CLOSED FORM, never from `A + C`
+        (stevenmburns/momwire#606). Adding the two float64 coefficients is
+        correctly rounded *to the sum*, but the sum of two rounded values is
+        not the rounded value of the sum: `A` and `C` are each O(1) carrying
+        an absolute ~ε, so their float sum carries ~ε absolute against a true
+        value of O((kΔ)²). That is a relative error of 1 % at kΔ = 2.1e-4 and
+        44000 % at kΔ = 1e-5 — the summed spelling has no correct digits in
+        the regime it exists to serve. Each branch instead uses an identity
+        in which no term is larger than the answer: `_recip_sin_gap` for the
+        neighbour and ground-extension entries, the D-collected numerator for
+        the interior self entry, and a sum-to-product `cos(kΔ/2) − cos(kΔ)`
+        for the free-end entries. All three are exact to a relative ε.
 
         Writing the entries directly into seg-major position during the
         main per-basis loop (instead of building a list-of-lists `basis`
@@ -1102,6 +1165,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cos_kd = np.cos(kd_arr)
         sin_kd_2 = np.sin(0.5 * kd_arr)
         cos_kd_2 = np.cos(0.5 * kd_arr)
+        sin_kd_4 = np.sin(0.25 * kd_arr)
+        # 1/sin(kΔ) − 1/(2 sin(kΔ/2)), cancellation-free (#606). This IS
+        # `A + C` on every neighbour entry (up to its a·Q factor) and on the
+        # ground-junction extension, which is the same shape folded back.
+        recip_gap = _recip_sin_gap(kd_arr)
         # P-sum atoms: (1-cos(kd_j))/sin(kd_j) * a_const for N⁻; flip sign
         # for N⁺.
         P_minus_atom = (1.0 - cos_kd) / sin_kd * a_const
@@ -1153,6 +1221,27 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         A_i0_arr = np.full(n_segs, -1.0)
         B_i0_arr = a_const * (Q_minus_arr + Q_plus_arr) * sin_kd_2 / sin_kd_safe
         C_i0_arr = a_const * (Q_minus_arr - Q_plus_arr) * cos_kd_2 / sin_kd_safe
+        # `A + C` on the interior self entry, cancellation-free (#606).
+        # A = −1 and C → 1 as k → 0, so the literal sum is a 1−1 subtraction
+        # returning O((kΔ)²) — 44000 % wrong at kΔ = 1e-5. Substituting
+        # C = a(Q⁻−Q⁺)/(2 sin(kΔ/2)) and the interior Q's, then collecting
+        # over the common denominator D, every surviving term carries an
+        # explicit sin²(kΔ/4) or S² factor and the O(1) pieces are gone:
+        #
+        #   A + C = [4a²S·sin²(kΔ/4) − 2a·ΔP·sin²(kΔ/4)
+        #            − 2·S·C₂·P⁻P⁺ + 2a·ΔP·S²] / D
+        #
+        # with S = sin(kΔ/2), C₂ = cos(kΔ/2), ΔP = P⁻ − P⁺. Numerator and
+        # denominator are O((kΔ)³) and O(kΔ), giving the O((kΔ)²) answer at
+        # a relative ε instead of an absolute one.
+        _dP = P_minus_arr - P_plus_arr
+        _s4sq = sin_kd_4 * sin_kd_4
+        AC_i0_arr = (
+            4.0 * a_const * a_const * sin_kd_2 * _s4sq
+            - 2.0 * a_const * _dP * _s4sq
+            - 2.0 * sin_kd_2 * cos_kd_2 * P_minus_arr * P_plus_arr
+            + 2.0 * a_const * _dP * sin_kd_2 * sin_kd_2
+        ) / D_safe
 
         # Only-plus / only-minus / isolated branches: skip the work
         # entirely when none of them apply (the common case).
@@ -1192,6 +1281,22 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             C_i0_arr = np.where(only_minus, C_e2, C_i0_arr)
             C_i0_arr = np.where(iso, C_iso, C_i0_arr)
             # A_i0 = -1 in every branch — no patch needed.
+            #
+            # `A + C` on the same three branches, cancellation-free (#606).
+            # With A = −1 and C = (cos(kΔ/2) ± a·Q·sin(kΔ/2))/cos(kΔ), the
+            # O(1) part of the sum is cos(kΔ/2) − cos(kΔ), which the
+            # sum-to-product identity turns into 2·sin(3kΔ/4)·sin(kΔ/4) —
+            # explicitly O((kΔ)²), no subtraction. The Q-terms are already
+            # O((kΔ)²) themselves (Q_e ~ (1−cos kΔ)/… ), so nothing here is
+            # bigger than the answer.
+            _cos_gap_e = 2.0 * np.sin(0.75 * kd_arr) * sin_kd_4
+            AC_e1 = (_cos_gap_e + a_const * Q_plus_e1 * sin_kd_2) / denom_x_safe
+            AC_e2 = (_cos_gap_e - a_const * Q_minus_e2 * sin_kd_2) / denom_x_safe
+            # Isolated (Eq 64): A + C = 1/cos(kΔ/2) − 1 = 2sin²(kΔ/4)/cos(kΔ/2).
+            AC_iso = 2.0 * _s4sq / cos_kd_2_safe
+            AC_i0_arr = np.where(only_plus, AC_e1, AC_i0_arr)
+            AC_i0_arr = np.where(only_minus, AC_e2, AC_i0_arr)
+            AC_i0_arr = np.where(iso, AC_iso, AC_i0_arr)
         # `both` mask is unused: the interior formula already lives there.
         del both
 
@@ -1207,16 +1312,21 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # continuous through-plane current.
         # (the ground "neighbour" is the segment itself, so the neighbour
         # a-constant is its own — works for scalar and per-segment alike)
+        # The extension's own A/C pair is the neighbour shape, so its
+        # contribution to `A + C` is the same `recip_gap` identity (#606) —
+        # not the difference of the two patches applied above.
         if ground_minus.any():
             Qg = np.where(ground_minus, Q_minus_arr, 0.0)
             A_i0_arr = A_i0_arr + a_const * Qg / sin_kd_safe
             B_i0_arr = B_i0_arr - a_const * Qg / (2.0 * cos_kd_2)
             C_i0_arr = C_i0_arr - a_const * Qg / (2.0 * sin_kd_2)
+            AC_i0_arr = AC_i0_arr + a_const * Qg * recip_gap
         if ground_plus.any():
             Qg = np.where(ground_plus, Q_plus_arr, 0.0)
             A_i0_arr = A_i0_arr - a_const * Qg / sin_kd_safe
             B_i0_arr = B_i0_arr - a_const * Qg / (2.0 * cos_kd_2)
             C_i0_arr = C_i0_arr + a_const * Qg / (2.0 * sin_kd_2)
+            AC_i0_arr = AC_i0_arr - a_const * Qg * recip_gap
 
         # Build the flat entry arrays. Three blocks (self, N⁻, N⁺), each
         # produced with one set of vectorized array ops:
@@ -1233,12 +1343,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         nm_A = a_nm * nm_Q / sin_kd[nm_seg]
         nm_B = a_nm * nm_Q / (2.0 * cos_kd_2[nm_seg])
         nm_C = -a_nm * nm_Q / (2.0 * sin_kd_2[nm_seg])
+        # A + C = a·Q·[1/sin(kΔ) − 1/(2 sin(kΔ/2))] — the identity, not the
+        # subtraction (#606).
+        nm_AC = a_nm * nm_Q * recip_gap[nm_seg]
 
         # N⁺ neighbour entries (Eqs 46-48).
         np_Q = Q_plus_arr[np_basis]
         np_A = -a_np * np_Q / sin_kd[np_seg]
         np_B = a_np * np_Q / (2.0 * cos_kd_2[np_seg])
         np_C = a_np * np_Q / (2.0 * sin_kd_2[np_seg])
+        np_AC = -a_np * np_Q * recip_gap[np_seg]
 
         # Concatenate the three blocks and sort by seg-target to get CSR.
         # Within-seg ordering is unconstrained — every downstream consumer
@@ -1252,6 +1366,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         all_A = np.concatenate([A_i0_arr, nm_A, np_A]).astype(np.complex128)
         all_B = np.concatenate([B_i0_arr, nm_B, np_B]).astype(np.complex128)
         all_C = np.concatenate([C_i0_arr, nm_C, np_C]).astype(np.complex128)
+        all_AC = np.concatenate([AC_i0_arr, nm_AC, np_AC]).astype(np.complex128)
         # Self entries have σ=+1; neighbour σ comes from geometry.
         self_sigma = np.ones(n_segs, dtype=np.int8)
         all_sigma = np.concatenate([self_sigma, nm_sigma, np_sigma])
@@ -1269,7 +1384,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "A": A_ord,
             "B": all_B[order],
             "C": C_ord,
-            "AC": A_ord + C_ord,
+            "AC": all_AC[order],
             "sigma": all_sigma[order],
         }
         self._cached_basis = (geom, k, a_key, seg_view)
@@ -1310,7 +1425,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return np.zeros(n_eval, dtype=np.complex128)
         # Precompute trig at each eval point.
         sin_ks = np.sin(self.k * eval_s)
-        cos_ks = np.cos(self.k * eval_s)
+        # cos(kξ) − 1 = −2sin²(kξ/2), to a relative ε rather than an absolute
+        # one — the literal subtraction loses everything below (kξ)²/2 (#606).
+        _half_ks = np.sin(0.5 * self.k * eval_s)
+        cosm1_ks = -2.0 * _half_ks * _half_ks
         # Ragged-gather expansion: for each eval i with `lengths[i]` entries,
         # produce that many entry-level rows. `entry_eval_idx` maps each row
         # back to its source eval; `entry_global` gathers from `seg_view`.
@@ -1324,13 +1442,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         within = np.arange(n_entries, dtype=np.int64) - np.repeat(cum_starts, lengths)
         entry_global = np.repeat(starts_at, lengths) + within
         jb = seg_view["jbasis"][entry_global]
-        A_e = seg_view["A"][entry_global]
+        AC_e = seg_view["AC"][entry_global]
         B_e = seg_view["B"][entry_global]
         C_e = seg_view["C"][entry_global]
         sigma_e = seg_view["sigma"][entry_global]
         sin_e = sin_ks[entry_eval_idx]
-        cos_e = cos_ks[entry_eval_idx]
-        contrib = alpha[jb] * (sigma_e * A_e + B_e * sin_e + sigma_e * C_e * cos_e)
+        cosm1_e = cosm1_ks[entry_eval_idx]
+        # σ·AC + B·sin kξ + σC·(cos kξ − 1) — the well-scaled spelling of
+        # σA + B·sin kξ + σC·cos kξ (#606). Identical in exact arithmetic;
+        # here it is the one whose terms are not larger than its answer.
+        contrib = alpha[jb] * (sigma_e * AC_e + B_e * sin_e + sigma_e * C_e * cosm1_e)
         I_out = np.zeros(n_eval, dtype=np.complex128)
         np.add.at(I_out, entry_eval_idx, contrib)
         return I_out
@@ -1340,12 +1461,28 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # ------------------------------------------------------------------
 
     def _field_tensor(
-        self, geom, k, src_centers=None, src_tangents=None, obs_rows=None
+        self,
+        geom,
+        k,
+        src_centers=None,
+        src_tangents=None,
+        obs_rows=None,
+        cos_shape="cos",
     ):
         """Tangential-field tensor Φ of shape (3, N, N) where
         Φ[0, m, n] = ŝ_m · E^const_n(at center of m's surface),
         Φ[1, m, n] = ŝ_m · E^sin_n(at center of m's surface),
         Φ[2, m, n] = ŝ_m · E^cos_n(at center of m's surface).
+
+        `cos_shape` selects the third shape exactly as
+        `_field_components_bcast` documents: `"cos"` (the literal NEC shape)
+        or `"cos-1"` (the well-scaled `cos kξ − 1`, momwire#205/#606). The
+        C++ kernels transcribe the literal-cos closed forms ONLY, so a
+        `"cos-1"` request takes the numpy reference path below regardless of
+        accelerator availability — stated as a branch here rather than left
+        to the kernel, which would otherwise hand back literal-cos tables for
+        a folded-shape request (the same silent-wrong-answer trap momwire#246
+        closed on the EK payload).
 
         The source's local frame is centered on segment n with z-axis
         along n's natural tangent. The "sin"/"cos" sources are
@@ -1402,7 +1539,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # scalar radius. It is dispatched first, and separately, so the EK-OFF
         # marshalling below is untouched by it (which is what keeps the
         # default bit-exact; see the #233 off-path armor).
-        if _HAVE_FIELD_TENSOR_EK and self.extended_kernel:
+        literal_cos = cos_shape == "cos"
+        if _HAVE_FIELD_TENSOR_EK and self.extended_kernel and literal_cos:
             gx, gw = self._leggauss_cached(self.n_qp_const)
             # Both tables are indexed by SOURCE segment, and the image build
             # mirrors the source geometry without reordering it, so the same
@@ -1448,7 +1586,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # solve reaches this branch only when the accelerator is unavailable —
         # in which case it takes the numpy reference path below, same as an
         # EK-OFF solve would.
-        if _HAVE_FIELD_TENSOR and not self.extended_kernel:
+        if _HAVE_FIELD_TENSOR and not self.extended_kernel and literal_cos:
             gx, gw = self._leggauss_cached(self.n_qp_const)
 
             def _call(rows, a):
@@ -1488,6 +1626,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             k,
             src_centers=src_c,
             src_tangents=src_t,
+            cos_shape=cos_shape,
             **self._obs_window_kwargs(geom, obs_rows),
         )
         td = cm["td"]
@@ -1842,9 +1981,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         obs_centers=None,
         obs_tangents=None,
         obs_radius=None,
+        cos_shape="cos",
     ):
         """Pure-numpy unprojected field tables behind `_field_tensor`'s
         fallback path (Eqs 76-79 of the NEC2 Theory Manual).
+
+        `cos_shape` is forwarded to `_field_components_bcast` unchanged —
+        see its docstring for the two shapes and what each is for.
 
         Observers default to the geometry's segment centres (collocation).
         A Galerkin test caller (`SinusoidalGalerkinSolver`) overrides
@@ -1926,6 +2069,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             src_c=src_c[None, :, :],  # (1, N, 3)
             src_t=src_t[None, :, :],  # (1, N, 3)
             src_hh=h_n[None, :],  # (1, N)
+            cos_shape=cos_shape,
             ek=ek,
         )
 
@@ -2771,17 +2915,25 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         src_t_img = _ground_mirror.mirror_tangents(seg_t)
         return src_c_img, src_t_img
 
-    def _field_tensor_image(self, geom, k, obs_rows=None):
+    def _field_tensor_image(self, geom, k, obs_rows=None, cos_shape="cos"):
         """Field tensor for image sources at PEC ground. The image keeps the
         same per-segment half-length and basis shape; only the source center
         is mirrored and the source tangent z-component is flipped.
 
         `obs_rows` forwards `_field_tensor`'s observer band: the mirror is a
         SOURCE-side transform, so the band means the same rows here.
+        `cos_shape` likewise forwards unchanged — the mirror does not touch
+        the source SHAPE, so the image block must be built in whichever shape
+        set the direct block used or the two cannot be added (#606).
         """
         src_c_img, src_t_img = self._image_source_centers_tangents(geom)
         return self._field_tensor(
-            geom, k, src_centers=src_c_img, src_tangents=src_t_img, obs_rows=obs_rows
+            geom,
+            k,
+            src_centers=src_c_img,
+            src_tangents=src_t_img,
+            obs_rows=obs_rows,
+            cos_shape=cos_shape,
         )
 
     def _image_refl_prep(self, geom):
@@ -2850,7 +3002,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             geom["seg_centers"], geom["seg_tangents"], self.ground_z, obs_rows
         )
 
-    def _field_tensor_image_refl(self, geom, k, obs_rows=None, ground=None):
+    def _field_tensor_image_refl(
+        self, geom, k, obs_rows=None, ground=None, cos_shape="cos"
+    ):
         """Fresnel-weighted image field tensor for the `ground_eps` finite
         ground (NEC IPERF=0 reflection-coefficient approximation).
 
@@ -2926,10 +3080,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Sommerfeld image blocks already ride #245's kernel through
         # `_field_tensor_image` (Sommerfeld's is that PEC tensor times the
         # scalar C₂; see `_assemble_Z`).
+        # The fused kernels transcribe the literal-cos closed forms, so a
+        # `cos-1` request takes the numpy reference below (#606) — same rule,
+        # and same reason, as `_field_tensor`'s `literal_cos` gate.
+        literal_cos = cos_shape == "cos"
         if (
             _HAVE_FIELD_TENSOR_EK_REFL
             and self.extended_kernel
             and ground.standard_fresnel
+            and literal_cos
         ):
             seg_h = geom["seg_h"]
             gx, gw = self._leggauss_cached(self.n_qp_const)
@@ -2992,6 +3151,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             _HAVE_FIELD_TENSOR_REFL
             and not self.extended_kernel
             and ground.standard_fresnel
+            and literal_cos
         ):
             # Fused C++ path: Eqs 76-79 field components + the Fresnel
             # dyad projection in one pass, with rho_v/rho_h computed
@@ -3042,6 +3202,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             k,
             src_centers=src_c_img,
             src_tangents=src_t_img,
+            cos_shape=cos_shape,
             **self._obs_window_kwargs(geom, obs_rows),
         )
         # `_image_refl_band` already built the specular tables at this
@@ -3335,10 +3496,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         blk = slice(seg_view["starts"][i], seg_view["starts"][i + 1])
         sig = seg_view["sigma"][blk]
         s = sgn * 0.5 * geom["seg_h"][i]
+        # Well-scaled spelling (#606): σA + B·sin kξ + σC·cos kξ rewritten as
+        # σ·AC + B·sin kξ + σC·(cos kξ − 1), with cos kξ − 1 = −2sin²(kξ/2) so
+        # neither the coefficient sum nor the trig term is a subtraction of
+        # two quantities about to agree.
+        half = np.sin(0.5 * k * s)
         val = (
-            sig * seg_view["A"][blk]
+            sig * seg_view["AC"][blk]
             + seg_view["B"][blk] * np.sin(k * s)
-            + sig * seg_view["C"][blk] * np.cos(k * s)
+            - sig * seg_view["C"][blk] * 2.0 * half * half
         )
         return seg_view["jbasis"][blk], val
 
@@ -3741,7 +3907,38 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_idx_arr = np.repeat(np.arange(N, dtype=np.int64), starts[1:] - starts[:-1])
         j_idx_arr = seg_view["jbasis"]
         sigma_arr = seg_view["sigma"]
-        A_eff = sigma_arr * seg_view["A"]
+        # Which shape set this fill is written in (#606). The switch is one
+        # decision made here and carried to every block — direct, image and
+        # remainder — because the image tensor is SUBTRACTED from the direct
+        # one and the remainder is added to it: mixing spellings between them
+        # would not be a loss of accuracy but a different operator.
+        #
+        #   literal :  Φ_c @ σA  + Φ_s @ B + Φ_co @ σC
+        #   scaled  :  Φ_c @ σAC + Φ_s @ B + Φ_d  @ σC ,  Φ_d = Φ(cos kξ − 1)
+        #
+        # identical in exact arithmetic (AC = A + C, Φ_d = Φ_co − Φ_c), and
+        # the second is the one whose terms are not larger than its answer.
+        # `Φ_d` has to come from its own closed form, not from the difference
+        # of two computed tensors — that subtraction reintroduces the same
+        # ε·‖Φ_c‖ the reformulation exists to remove, and `Φ_d @ σC` is 84 %
+        # of the fill at kΔ = 2.1e-4, not a correction term.
+        #
+        # The point-matched EXTENDED kernel is literal-cos only — momwire#246
+        # left the folded EKSCX forms unwired, and its guard raises rather
+        # than quietly serving the wrong shape. So an EK-on solve keeps the
+        # literal path at every kΔ: unfixed here, not newly broken (it gets
+        # exactly the answer it got before #606), and refusing instead would
+        # turn a working-if-degraded configuration into a crash. Tracked as
+        # the #606 follow-up.
+        kd_min = float(np.min(k * np.asarray(geom["seg_h"], dtype=np.float64)))
+        cos_shape = (
+            "cos-1"
+            if kd_min < _WELL_SCALED_KD and not self.extended_kernel
+            else "cos"
+        )
+        A_eff = sigma_arr * (
+            seg_view["A"] if cos_shape == "cos" else seg_view["AC"]
+        )
         B_eff = seg_view["B"]
         C_eff = sigma_arr * seg_view["C"]
         if N < _DENSE_ASSEMBLY_THRESHOLD:
@@ -3773,7 +3970,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # which the bands replay instead of rebuilding (momwire#357 item
         # 1). O(N), and it dies with `fg` at the end of this fill.
         fg = _field_ground.field_ground_for(self, geom, k, self.omega)
-        somm_rem = None if fg is None else fg.remainder()
+        somm_rem = None if fg is None else fg.remainder(cos_shape=cos_shape)
 
         # Below the dense-M threshold the whole fill is one chunk, budget or
         # no budget. Two reasons, and the first alone would settle it:
@@ -3801,7 +3998,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self._checkpoint()  # per observer chunk of the fill
             i1 = min(i0 + chunk, N)
             rows = (i0, i1)
-            Phi_c, Phi_s, Phi_co = self._field_tensor(geom, k, obs_rows=rows)
+            Phi_c, Phi_s, Phi_co = self._field_tensor(
+                geom, k, obs_rows=rows, cos_shape=cos_shape
+            )
             if fg is not None:
                 # Image ground: subtract the sub-assembly built from the
                 # image field tensor. The image source's mirrored geometry +
@@ -3837,7 +4036,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     # rows it is on rather than shown them. Its
                     # observer-independent half was prepared once above
                     # (#357 item 1).
-                    Phi_i = list(fg.image_field(obs_rows=rows))
+                    Phi_i = list(fg.image_field(obs_rows=rows, cos_shape=cos_shape))
                     S = somm_rem.replay(
                         obs_centers=seg_c[i0:i1],
                         obs_tangents=seg_t[i0:i1],
@@ -3858,7 +4057,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         Pi -= Si
                     del S
                 else:
-                    Phi_i = fg.image_field(obs_rows=rows)
+                    Phi_i = fg.image_field(obs_rows=rows, cos_shape=cos_shape)
                 Phi_c -= Phi_i[0]
                 Phi_s -= Phi_i[1]
                 Phi_co -= Phi_i[2]
@@ -3951,7 +4150,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_segs = geom["n_segs"]
         rows = np.repeat(np.arange(n_segs, dtype=np.int64), starts[1:] - starts[:-1])
         cols = seg_view["jbasis"]
-        i_center = seg_view["sigma"] * (seg_view["A"] + seg_view["C"])
+        i_center = seg_view["sigma"] * seg_view["AC"]  # not A + C (#606)
         # Each (seg, basis) pair is unique in seg_view (see _basis_coefs),
         # so plain fancy-index subtraction is exact.
         G[rows, cols] -= z_seg[rows] * i_center
@@ -4018,11 +4217,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         s = seg_view["starts"][feed_seg]
         e = seg_view["starts"][feed_seg + 1]
+        # `AC`, not `A + C`: the sum of the two rounded coefficients has no
+        # correct digits below kΔ ≈ 1e-4 (#606), and this current IS the
+        # admittance the port algebra reads — the fill being well-scaled buys
+        # nothing if the readout throws the digits away again.
         return complex(
             (
                 alpha[seg_view["jbasis"][s:e]]
                 * seg_view["sigma"][s:e]
-                * (seg_view["A"][s:e] + seg_view["C"][s:e])
+                * seg_view["AC"][s:e]
             ).sum()
         )
 

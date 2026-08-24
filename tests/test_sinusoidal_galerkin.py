@@ -3211,8 +3211,20 @@ _203_N = 401  # fine enough for the cancellation to bite, cheap enough to gate
 
 def _basis_eval_errors(sim):
     """(literal, folded) relative error of the basis evaluation over every
-    support entry × test node, against an 80-bit evaluation of the same float64
-    coefficients — so this measures the SPELLING, not the coefficients."""
+    support entry × test node — each spelling against an 80-bit evaluation of
+    ITS OWN formula, so this measures the SPELLING, not the coefficients.
+
+    Each arm carries its own reference on purpose (stevenmburns/momwire#606).
+    Before #606 both spellings were functions of the same stored `A` and `C`,
+    so one reference served both. `AC` is now an independent closed form —
+    the true `A + C` to a relative ε, where the float sum `A + C` carries an
+    absolute ε against an O((kΔ)²) answer — so an 80-bit evaluation of the
+    literal expression is no longer the quantity the folded one is trying to
+    reproduce. Scoring the folded arm against it would charge the folded
+    spelling for the literal coefficients' error, which is the error #606
+    removed. Asking each expression how well it evaluates itself is the
+    question this helper's name has always claimed to answer.
+    """
     geom = sim._build_geometry()
     k = sim.k
     view = sim._basis_coefs(geom, k)
@@ -3222,20 +3234,29 @@ def _basis_eval_errors(sim):
     xi = (hh[:, None] * gx[None, :])[m_of_entry]
     sig = view["sigma"].astype(np.complex128)
     sigA, B, sigC = sig * view["A"], view["B"], sig * view["C"]
+    sigAC = sig * view["AC"]
 
     literal = (
         sigA[:, None] + B[:, None] * np.sin(k * xi) + sigC[:, None] * np.cos(k * xi)
     )
-    folded = _basis_value((sig * view["AC"])[:, None], B[:, None], sigC[:, None], k, xi)
+    folded = _basis_value(sigAC[:, None], B[:, None], sigC[:, None], k, xi)
+
     kl, xl = np.longdouble(k), xi.astype(np.longdouble)
-    exact = (
-        sigA.astype(np.clongdouble)[:, None]
-        + B.astype(np.clongdouble)[:, None] * np.sin(kl * xl)
-        + sigC.astype(np.clongdouble)[:, None] * np.cos(kl * xl)
+    Bl = B.astype(np.clongdouble)[:, None]
+    sigCl = sigC.astype(np.clongdouble)[:, None]
+    exact_literal = (
+        sigA.astype(np.clongdouble)[:, None] + Bl * np.sin(kl * xl)
+        + sigCl * np.cos(kl * xl)
+    )
+    halfl = np.sin(0.5 * kl * xl)
+    exact_folded = (
+        sigAC.astype(np.clongdouble)[:, None]
+        + Bl * np.sin(kl * xl)
+        - 2.0 * sigCl * (halfl * halfl)
     )
     return (
-        _rel_matrix_delta(literal, np.asarray(exact, dtype=np.complex128)),
-        _rel_matrix_delta(folded, np.asarray(exact, dtype=np.complex128)),
+        _rel_matrix_delta(literal, np.asarray(exact_literal, dtype=np.complex128)),
+        _rel_matrix_delta(folded, np.asarray(exact_folded, dtype=np.complex128)),
     )
 
 
