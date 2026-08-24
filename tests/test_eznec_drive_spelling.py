@@ -98,10 +98,12 @@ def test_no_capture_hands_razor_a_piece_the_cut_invented(cid):
 def test_only_the_two_apexes_still_ask_razor_for_a_node_gap():
     """K = 2 is a through-current path and becomes a delta gap; K >= 3 is not.
 
-    A five-wire apex has no unambiguous branch pair for a delta-gap voltage
-    to drive, momwire refuses one there by name, and so this seam keeps the
-    node port for it — which leaves exactly the two decks momwire#603 U4 is
-    about, and no others.
+    At a K >= 3 apex an ARCLENGTH cannot say which of the node's K-1
+    through-current tents the gap sits in, so ``feeds`` cannot spell it and
+    this seam keeps the node port — which leaves exactly the two decks
+    momwire#603 U4 is about, and no others.  Not a statement that the source
+    has no meaning there: NEC-5 serves 0013's ``EX 4,5,-1``, and the address
+    names the branch through its favored tag.
     """
     needing = [cid for cid in CAPTURE_IDS if mesh_for(cid, RazorSolver)[1].gaps]
     assert needing == ["0013", "0033"]
