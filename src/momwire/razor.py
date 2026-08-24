@@ -405,10 +405,22 @@ _OUT_OF_SCOPE = {
     "defined against the tent (degree-1) expansion. Use "
     "BSplineSolver(degree=...) for higher-order bases with Galerkin testing",
     "junction_ports": "junction ports are not supported: a junction basis is "
-    "already a through-current unknown, and a source at a K>=3 junction has no "
-    "unambiguous branch pair to drive",
-    "node_gaps": "node gaps are not supported yet — the delta-gap feed lands "
-    "in a whole testing row here, so a gap is not a local basis edit",
+    "already a through-current unknown, so a port that adds one would be a "
+    "second unknown for one current",
+    # NOT a statement that this formulation cannot carry a series EMF at a
+    # node. It carries one wherever K <= 2 and has since the beginning: the
+    # source is a `feeds` delta gap on the knot, which `_feed_knots` snaps to
+    # the junction's own through-current tent, and momwire#603 U1 measured it
+    # against the same source spelled as a CUT plus a node gap -- bit for bit
+    # on the impedance and on every knot current, from either side of the
+    # joint. What is missing is the K >= 3 PORT, and the basis for it is not
+    # missing at all: `_junction_wings` already yields K-1 through-current
+    # tents at a K-way node (four of them at 0013's five-wire apex). See
+    # `_feed_basis_indices` for what remains, which is a port and not a basis.
+    "node_gaps": "node gaps are not supported: a series EMF at a K <= 2 node "
+    "is served as a `feeds` delta gap on that knot, which is the same source "
+    "in this basis, and the K >= 3 port this kwarg would carry is not built "
+    "yet (momwire#603 U4)",
 }
 
 # The one geometry both served finite grounds refuse. Checked in __init__
@@ -1283,12 +1295,23 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for i, (w, arc, _v) in enumerate(self.feeds):
             basis, k_ends = self._snap_to_knot(geom, w, arc)
             if k_ends >= 3:
+                # The ambiguity is real and it is THIS spelling's: `feeds`
+                # names an arclength on a wire, and an arclength cannot say
+                # which of the K-1 through-current tents at the node the EMF
+                # sits in. It is not a statement that the source has no
+                # meaning at a K >= 3 node — NEC-5 serves one (0013's
+                # `EX 4,5,-1` at a five-wire apex) and the dialect that
+                # writes it names the branch, because "NEC-5 attaches an
+                # inserted source not AT a junction but on the wire next to
+                # it, named by the tag" (`momwire.deck._nec5.Nec5Node`). A
+                # kwarg that carries the branch is what momwire#603 U4 is
+                # about; the tents themselves are already built.
                 raise NotImplementedError(
                     f"feeds[{i}]: the source snaps to a junction where "
-                    f"{k_ends} wire ends meet, and a delta-gap voltage there "
-                    "is ambiguous — it would have to name which pair of "
-                    "branches it drives. Feed an interior knot, or model the "
-                    "source on a short bridge wire off the junction."
+                    f"{k_ends} wire ends meet, and an ARCLENGTH cannot name "
+                    "which of that node's branches the gap sits in. Feed an "
+                    "interior knot, or model the source on a short bridge "
+                    "wire off the junction."
                 )
             idx.append(basis)
         return idx
