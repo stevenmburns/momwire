@@ -6891,16 +6891,26 @@ static py::tuple remainder_field_proj_batch_below(
 // fine and coarse machines in sequence rather than nested. Nothing here needs
 // a large default; keep `OMP_STACKSIZE` at or above ~256 kB.
 //
-// MEASURED on an i7-8550U, one contour node against the numpy driver at
-// rtol 1e-9 (soil A, 7 MHz, |z'| = 0.15 m unless noted):
+// MEASURED on an i7-8550U at OMP_NUM_THREADS=1 (the suite pins its xdist
+// workers there), one contour node against the numpy driver at rtol 1e-9,
+// soil A / 7 MHz, |z'| = 0.15 m unless noted:
 //
-//     (R/lam_p, theta) = (0.01, 45 deg)    6.7 ms ->  0.63 ms   10.6x
-//                        (0.5,  5 deg)    28.7 ms ->  2.14 ms   13.4x
-//                        (2.0,  30 deg)   12.4 ms ->  1.02 ms   12.2x
-//                        (2.0,  0.1 deg) 322.5 ms -> 20.4  ms   15.8x  (grazing)
+//     (R/lam_p, theta) = (0.01,  45 deg)    15.6 ms ->  0.85 ms   18.4x
+//                        (0.5,    5 deg)    31.9 ms ->  1.91 ms   16.7x
+//                        (2.0,   30 deg)     5.9 ms ->  0.55 ms   10.7x
+//                        (2.0,  0.1 deg)   747.6 ms -> 41.0  ms   18.2x  (grazing)
+//                        (2.0, 0.02 deg)  1511.8 ms -> 76.9  ms   19.7x  (past the
+//                                                                  panel budget)
 //
-// and end to end, `tests/test_sommerfeld_transmitted.py -m slow -n 2` on this
-// box: 446.0 s -> 30.6 s (14.6x).
+// The grazing end is the BEST case, which is the useful shape: cost there is
+// almost all tail panels and a tail panel is almost all Bessel, where U1's
+// real-abscissa kernels are furthest ahead of scipy's complex ones.
+//
+// End to end, `tests/test_sommerfeld_transmitted.py -m slow -n 2` on this box:
+// 446.0 s -> 30.3 s (14.7x), MAXRSS 116 MB -> 116 MB. The residual is now
+// dominated by `test_gu3_10_a_truncated_tail_is_not_a_graceful_degradation`
+// (14.3 s of the 30.3), which drives `_tail_below` directly at 80,000 panels
+// and never reaches this code at all.
 // --------------------------------------------------------------------------
 
 namespace mw568_trans {
@@ -7215,6 +7225,51 @@ static inline cd proj_one_transmitted(const TGridView &G, double ground_z,
            to[1] * (dhy * e_rho + dhx * e_phi) + to[2] * e_z;
 }
 }  // namespace mw568_trans
+
+// `_integrand_six_transmitted` POINTWISE at a list of complex lambda: (n, 6).
+//
+// Not on any product path -- the integrand is only ever called from inside the
+// engine. It exists because the two mutations this unit is most exposed to are
+// invisible to an INTEGRATED gate:
+//
+//   * index 1 spelled `g_p*g_p + k_p*k_p` instead of `lam*lam` moves the
+//     integrand by ~1e-5 relative at the bottom of the contour (lam ~ 1e-3,
+//     |k_m| ~ 0.6, eleven digits of cancellation) and the integral by ~3.5e-11
+//     -- under any parity pin an integrated gate can honestly carry;
+//   * index 4 collapsed onto index 0 is a whole surface, but the two agree
+//     wherever gamma_m happens to track gamma_p, so a gate has to be READ at
+//     lambda where they do not.
+//
+// Both are named mutation gates in tests/test_transmitted_fills_568.py, and
+// both read this entry point at chosen lambda rather than hoping an integral
+// notices.
+static py::array_t<std::complex<double>> transmitted_integrand_six(
+    py::array_t<std::complex<double>,
+                py::array::c_style | py::array::forcecast> lam,
+    double rho, double z, double zp, double k_p, std::complex<double> k_m,
+    bool swap) {
+    if (lam.ndim() != 1) throw std::runtime_error("lam must be 1-D");
+    const py::ssize_t n = lam.shape(0);
+    py::array_t<std::complex<double>> out({n, py::ssize_t(6)});
+    auto ob = out.mutable_unchecked<2>();
+    const std::complex<double> *lp = lam.data();
+    {
+        py::gil_scoped_release release;
+        mw568_trans::SixTransmitted f;
+        f.rho = rho;
+        f.z = z;
+        f.zp = zp;
+        f.k_p = k_p;
+        f.k_m = k_m;
+        f.swap = swap;
+        for (py::ssize_t i = 0; i < n; ++i) {
+            mw_contour::cd v[6];
+            f(lp[i], v);
+            for (int c = 0; c < 6; ++c) ob(i, c) = v[c];
+        }
+    }
+    return out;
+}
 
 // `_six_integrals_transmitted` over parallel (rho, z, z') arrays: the (n, 6)
 // table plus everything `Health` records, OpenMP across nodes with the GIL
@@ -7949,6 +8004,15 @@ PYBIND11_MODULE(_accelerators, m) {
     // `_sommerfeld_transmitted` a missing symbol instead of the graceful numpy
     // fallback the guard exists to give.
     m.attr("transmitted_fills_568") = true;
+    m.def("transmitted_integrand_six", &transmitted_integrand_six,
+          "The six transmitted lambda-integrands POINTWISE at complex lam — "
+          "the C++ twin of _sommerfeld_transmitted._integrand_six_transmitted, "
+          "stacked (n, 6) in that function's order. Not on any product path; "
+          "it exists so the two mutations an INTEGRATED gate cannot see — "
+          "index 1 spelled gamma^2 + k^2 rather than lam^2, and index 4 "
+          "collapsed onto index 0 — can be read at chosen lam.",
+          py::arg("lam"), py::arg("rho"), py::arg("z"), py::arg("zp"),
+          py::arg("k_p"), py::arg("k_m"), py::arg("swap") = false);
     m.def("transmitted_six_integrals_batch", &transmitted_six_integrals_batch,
           "The six transmitted lambda-integrals at each (rho[i], z[i], zp[i]) "
           "— the C++ twin of _sommerfeld_transmitted._integrand_six_transmitted "
