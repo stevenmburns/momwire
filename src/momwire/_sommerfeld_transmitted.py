@@ -115,14 +115,51 @@ their `h` argument is the TAIL'S DECAY LENGTH — |z| + |z′| for two points
 below, |z′| + z for a crossing pair — since the transmitted integrand
 decays as e^{−γ_m|z′|−γ_p z} and both γ → λ. The below/below numbers are
 pinned bit-for-bit against that rename.
+
+C++ twins (momwire#568 unit 3)
+------------------------------
+Everything in this module is numpy and stays that way — the numpy spellings
+are the REFERENCES, and the gates against their C++ twins are tolerances,
+never bytes. What has a twin, behind the single `transmitted_fills_568`
+capability flag (`_use_transmitted_accel`):
+
+    _six_integrals_transmitted        transmitted_six_integrals_batch
+    t_surfaces_direct                 its per-point loop, through the same
+                                      batch — THIS is where the OpenMP region
+                                      lives, and it is the arc's biggest
+                                      single cluster
+    transmitted_field_proj_*          transmitted_field_proj_batch, ONE kernel
+                                      for both directions with `transposed`
+                                      swapping T_ρ^V and T_z^H
+
+`divide_out_transmitted`, `ladder_nodes`, `grazing_floor` and the two VECTOR
+combiners (`_combine_transmitted`, `_combine_transmitted_transposed`) stay
+numpy: closed forms or fully-vectorized pair algebra costing less than the
+call that would dispatch them, and the vector spellings have no per-pair
+consumer — `bspline`'s Galerkin fill reads the PROJECTED table. So does
+everything that is a CONTRACT rather than arithmetic — the side-of-interface
+refusals, the `Health` bookkeeping and `TransmittedGrid.eval`'s four
+refusals — so each of those messages and counters has exactly one home.
+
+The tail budget is the thing a reader of this section must not lose: a
+truncated transmitted tail is not a graceful degradation (4.5e+3 relative,
+measured), so `Health.nonconvergent` is contract on BOTH paths and the C++
+batch reports `converged` per node for the Python layer to tally in node
+order.
+
+Measured on an i7-8550U: one contour node 10–16× the numpy one (the grazing
+end, where the tail runs thousands of panels, is the best case), and the
+slow transmitted ladder 446.0 s → 30.6 s at unchanged memory.
 """
 
 from __future__ import annotations
 
 import math
+import os
 
 import numpy as np
 
+from ._accel import acc as _acc
 from ._sommerfeld import (
     _GRID_CACHE,
     _GRID_CACHE_MAX,
@@ -288,6 +325,72 @@ _TAIL_PANELS_PER_COT = 16.0
 
 
 # ---------------------------------------------------------------------------
+# The C++ twins (momwire#568 unit 3)
+# ---------------------------------------------------------------------------
+#
+# Everything below this line in the module is numpy, unchanged, and stays the
+# REFERENCE. `_accelerators` carries a twin of the contour driver (the six
+# integrals at a batch of (ρ, z, z′), OpenMP across nodes on U1's shared
+# engine) and a twin of the pair projection; where a twin exists it is
+# preferred and the numpy body is the fallback, following the
+# `_bspline_kernels` pattern and U2's below/below precedent exactly.
+#
+# ITS OWN capability flag, deliberately neither `contour_engine_568` nor
+# `below_fills_568`: a .so built at U1 or U2 exports those symbols but none of
+# these, and a shared flag would have it claim a contract it cannot serve.
+_HAVE_TRANSMITTED_FILLS_ACCEL = _acc is not None and bool(
+    getattr(_acc, "transmitted_fills_568", False)
+)
+
+# The tests' handle on the dispatch — the parity gates have to drive BOTH
+# machines inside one process, and a cross-process env var cannot do that.
+# `MOMWIRE_TRANSMITTED_FORCE_NUMPY` is the same switch for a whole run (a
+# timing comparison, a bisect); `monkeypatch.setattr(trans, "_FORCE_NUMPY",
+# True)` is the same switch for one test. `_use_transmitted_accel` reads both
+# at CALL time, so neither is baked in at import.
+_FORCE_NUMPY = bool(os.environ.get("MOMWIRE_TRANSMITTED_FORCE_NUMPY"))
+
+
+def _use_transmitted_accel():
+    """True when the transmitted fills should ride the C++ contour engine."""
+    return _HAVE_TRANSMITTED_FILLS_ACCEL and not _FORCE_NUMPY
+
+
+def _six_transmitted_accel(k_p, k_m, rho, z, zp, swap, rtol, selfconv):
+    """`transmitted_six_integrals_batch` with this module's machines filled in.
+
+    Both rules, both depths and both detours are arguments rather than
+    constants on the C++ side, so the fine machine and the coarse
+    self-convergence twin are the same call — exactly as `_run_contour` takes
+    them here. The rtol pair is computed HERE, not there: `min(rtol, 1e-11)`
+    and its ×100 coarse partner are `_six_integrals_transmitted`'s own
+    spelling and belong next to it. So is `_MAX_TAIL_PANELS_T`, which is this
+    family's budget and not the engine's default.
+    """
+    rtol_fine = min(rtol, 1e-11)
+    return _acc.transmitted_six_integrals_batch(
+        float(k_p),
+        complex(k_m),
+        np.ascontiguousarray(rho, dtype=float),
+        np.ascontiguousarray(z, dtype=float),
+        np.ascontiguousarray(zp, dtype=float),
+        bool(swap),
+        rtol_fine,
+        _ADAPT_DEPTH,
+        _DETOUR,
+        _GX,
+        _GW,
+        bool(selfconv),
+        rtol_fine * 100.0,
+        _ADAPT_DEPTH_COARSE,
+        _DETOUR_COARSE,
+        _GXC,
+        _GWC,
+        _MAX_TAIL_PANELS_T,
+    )
+
+
+# ---------------------------------------------------------------------------
 # The integrand stack
 # ---------------------------------------------------------------------------
 
@@ -359,6 +462,41 @@ def _integrand_six_transmitted(lam, rho, z, zp, k_p, k_m, swap=False):
     )
 
 
+def _check_transmitted_sides(rho, z, zp, swap):
+    """The convention guards, by name — the ONE home for this prose.
+
+    The SOURCE must be strictly on its own side of the interface (`swap`
+    exchanges which side that is) and the observer on the other side, at or
+    beyond it.
+
+    The asymmetry in that sentence is not sloppiness, it is the geometry.
+    `_sommerfeld_below` refuses θ → 0 because h = |z| + |z′| → 0 there strips
+    the tail of its e^{−λh} decay entirely. The transmitted tail decays as
+    e^{−λ(|z′| + z)} and the SOURCE leg alone is enough: an observer ON the
+    interface still has |z′| > 0 holding the tail down, and the transmitted
+    field is continuous across z = 0. So z = 0 is a legitimate limit and is
+    tabulated, while a SOURCE on the interface is the crossing/contact
+    geometry of momwire#524 phase 3 and refuses.
+
+    Split out of `_six_integrals_transmitted` so the batch driver can run it
+    per node, in node order, before the C++ call — these words are contract
+    and the two paths must refuse the same geometries with the same message.
+    """
+    if rho < 0.0:
+        raise ValueError(f"need rho >= 0, got {rho!r}")
+    above, below_ = (zp, z) if swap else (z, zp)
+    if not above >= 0.0 or not below_ < 0.0:
+        raise ValueError(
+            "the transmitted family needs the source STRICTLY on one side of "
+            "the interface (z = 0) and the observer at or beyond the other: "
+            f"got above-side height {above!r}, below-side height {below_!r}. "
+            "The observer may sit ON the interface — the source leg alone "
+            "keeps the tail decaying and the field is continuous there — but "
+            "a SOURCE on the interface is the crossing/contact geometry of "
+            "momwire#524 phase 3, and its tail has no decay at all"
+        )
+
+
 def _six_integrals_transmitted(
     eps_t,
     k2,
@@ -373,18 +511,11 @@ def _six_integrals_transmitted(
 ):
     """The six transmitted λ-integrals at one (ρ, z, z′); returns (6,) complex.
 
-    Convention guards, by name: the SOURCE must be strictly on its own side
-    of the interface (`swap` exchanges which side that is) and the observer
-    on the other side, at or above it.
-
-    The asymmetry in that sentence is not sloppiness, it is the geometry.
-    `_sommerfeld_below` refuses θ → 0 because h = |z| + |z′| → 0 there
-    strips the tail of its e^{−λh} decay entirely. The transmitted tail
-    decays as e^{−λ(|z′| + z)} and the SOURCE leg alone is enough: an
-    observer ON the interface still has |z′| > 0 holding the tail down, and
-    the transmitted field is continuous across z = 0. So z = 0 is a
-    legitimate limit and is tabulated, while a SOURCE on the interface is
-    the crossing/contact geometry of momwire#524 phase 3 and refuses.
+    Convention guards, by name, in `_check_transmitted_sides`: the SOURCE
+    must be strictly on its own side of the interface (`swap` exchanges which
+    side that is) and the observer on the other side, at or above it. An
+    observer ON the interface is legitimate and tabulated; a SOURCE on it is
+    momwire#524 phase 3.
 
     The contour is `_sommerfeld_below`'s, unchanged. Its tail takes a DECAY
     LENGTH, and the transmitted integrand's is |z′| + z: both γ → λ at large
@@ -399,19 +530,26 @@ def _six_integrals_transmitted(
     k_m = k_medium(eps_t, k_p)
     if k_m.imag > 0.0:  # pragma: no cover - k_medium already enforces it
         raise AssertionError(f"Im k_m must be <= 0 under e^(+j omega t), got {k_m!r}")
-    if rho < 0.0:
-        raise ValueError(f"need rho >= 0, got {rho!r}")
-    above, below_ = (zp, z) if swap else (z, zp)
-    if not above >= 0.0 or not below_ < 0.0:
-        raise ValueError(
-            "the transmitted family needs the source STRICTLY on one side of "
-            "the interface (z = 0) and the observer at or beyond the other: "
-            f"got above-side height {above!r}, below-side height {below_!r}. "
-            "The observer may sit ON the interface — the source leg alone "
-            "keeps the tail decaying and the field is continuous there — but "
-            "a SOURCE on the interface is the crossing/contact geometry of "
-            "momwire#524 phase 3, and its tail has no decay at all"
+    _check_transmitted_sides(rho, z, zp, swap)
+
+    if _use_transmitted_accel():
+        vals, tp, hp, conv, accel, sconv = _six_transmitted_accel(
+            k_p,
+            k_m,
+            np.array([rho]),
+            np.array([z]),
+            np.array([zp]),
+            swap,
+            rtol,
+            selfconv,
         )
+        if health is not None:
+            health.note(where, int(tp[0]), int(hp[0]), bool(conv[0]), bool(accel[0]))
+            if selfconv:
+                health.note_selfconv(
+                    where if where is not None else (rho, z, zp), float(sconv[0])
+                )
+        return vals[0]
 
     def f(lam):
         return _integrand_six_transmitted(lam, rho, z, zp, k_p, k_m, swap=swap)
@@ -451,6 +589,92 @@ def _six_integrals_transmitted(
         if health is not None:
             health.note_selfconv(where if where is not None else (rho, z, zp), rel)
     return fine
+
+
+def _six_integrals_transmitted_many(
+    eps_t,
+    k2,
+    rho,
+    z,
+    zp,
+    rtol=1e-11,
+    health=None,
+    selfconv=False,
+    where=None,
+    swap=False,
+):
+    """`_six_integrals_transmitted` over parallel (ρ, z, z′) arrays; (n, 6).
+
+    `t_surfaces_direct`'s hot loop, and the only place in this module where
+    the parallelism is worth taking: one node's contour is completely
+    independent of every other, and a fill is thousands of them. With the
+    accelerator it is one C++ call — OpenMP across nodes, the GIL released,
+    U1's engine (allocation-free, no mutable static) on each thread. Without
+    it, it is EXACTLY the per-point Python loop it replaces, calling the same
+    `_six_integrals_transmitted`, in the same order.
+
+    The scheduling is `dynamic` on the C++ side and that matters more here
+    than it did for the below family: the tail cost runs as cot θ_true, so
+    the bottom row of a (ln R, θ) fill costs thousands of panels per node
+    where the top row costs tens, and the nodes arrive sorted by row.
+
+    Everything that is not quadrature stays on this side: the
+    side-of-interface refusals with their own words, applied per node IN NODE
+    ORDER so the two paths refuse the same geometry first, and the `Health`
+    bookkeeping, likewise in node order so `worst_selfconv_at` lands on the
+    same node either way. `Health.nonconvergent` in particular is contract
+    rather than decoration in this family — a truncated tail was measured
+    4.5e+3 relative wrong — so `converged` comes back per node and is tallied
+    here rather than being collapsed into a single flag in C++.
+    """
+    eps_t = complex(eps_t)
+    rho = np.ascontiguousarray(rho, dtype=float).ravel()
+    z = np.ascontiguousarray(z, dtype=float).ravel()
+    zp = np.ascontiguousarray(zp, dtype=float).ravel()
+    n = rho.size
+    if z.size != n or zp.size != n:
+        raise ValueError(
+            f"rho, z and zp must have the same length, got {(n, z.size, zp.size)!r}"
+        )
+    if where is None:
+        where = [None] * n
+
+    if not _use_transmitted_accel():
+        out = np.empty((n, 6), dtype=np.complex128)
+        for i in range(n):
+            out[i] = _six_integrals_transmitted(
+                eps_t,
+                k2,
+                rho[i],
+                z[i],
+                zp[i],
+                rtol,
+                health=health,
+                selfconv=selfconv,
+                where=where[i],
+                swap=swap,
+            )
+        return out
+
+    k_p = float(k2)
+    k_m = k_medium(eps_t, k_p)
+    if k_m.imag > 0.0:  # pragma: no cover - k_medium already enforces it
+        raise AssertionError(f"Im k_m must be <= 0 under e^(+j omega t), got {k_m!r}")
+    for i in range(n):
+        _check_transmitted_sides(float(rho[i]), float(z[i]), float(zp[i]), swap)
+
+    vals, tp, hp, conv, accel, sconv = _six_transmitted_accel(
+        k_p, k_m, rho, z, zp, swap, rtol, selfconv
+    )
+    if health is not None:
+        for i in range(n):
+            health.note(where[i], int(tp[i]), int(hp[i]), bool(conv[i]), bool(accel[i]))
+            if selfconv:
+                w = where[i]
+                if w is None:
+                    w = (float(rho[i]), float(z[i]), float(zp[i]))
+                health.note_selfconv(w, float(sconv[i]))
+    return vals
 
 
 # ---------------------------------------------------------------------------
@@ -566,20 +790,21 @@ def t_surfaces_direct(
     zf = z_b.ravel()
     pf = zp_b.ravel()
 
-    six = np.empty((rf.size, 6), dtype=np.complex128)
-    for i in range(rf.size):
-        six[i] = _six_integrals_transmitted(
-            eps_t,
-            k_p,
-            rf[i],
-            zf[i],
-            pf[i],
-            rtol,
-            health=health,
-            selfconv=selfconv,
-            where=(float(rf[i]), float(zf[i]), float(pf[i])),
-            swap=swap,
-        )
+    # The per-point loop, through `_six_integrals_transmitted_many` — one C++
+    # call with OpenMP across nodes where the accelerator is live, and exactly
+    # this loop, in this order, where it is not.
+    six = _six_integrals_transmitted_many(
+        eps_t,
+        k_p,
+        rf,
+        zf,
+        pf,
+        rtol,
+        health=health,
+        selfconv=selfconv,
+        where=[(float(rf[i]), float(zf[i]), float(pf[i])) for i in range(rf.size)],
+        swap=swap,
+    )
     v_rz, v_zzk, v_rr, v_r1, v_rzp, u = six.T
     cm = _c1_moment(omega, mu)
     phase = 1.0 / divide_out_transmitted(k_p, k_m, rf, zf, pf)
@@ -1168,19 +1393,13 @@ def get_grid_below_above(
 # ---------------------------------------------------------------------------
 
 
-def _crossing_geometry(above_pts, below_pts, ground_z, grid, what):
-    """(ρ, z, z′, R, θ, d̂) for a crossing pair, with both sides checked.
+def _check_crossing_sides(above_pts, below_pts, ground_z, what):
+    """The two endpoint refusals for a crossing pair set, by name.
 
-    `d̂` is the horizontal unit vector from the BELOW point's ground
-    projection to the ABOVE point's, in BOTH directions of travel — the
-    surfaces are tabulated with the below point as the source. ρ → 0
-    degenerates the azimuth and any horizontal direction serves there
-    (T_ρ^H(90°) = −T_φ^H); a point source is a complex MOMENT with no
-    direction of its own, so (1, 0) serves, exactly as `_field_point` does
-    for the same cell.
+    Split out of `_crossing_geometry` so the C++ projection twin can run them
+    without building the pair tables it is about to replace: these words are
+    contract and there is exactly one copy of them.
     """
-    above_pts = np.asarray(above_pts, dtype=float)
-    below_pts = np.asarray(below_pts, dtype=float)
     z = above_pts[:, 2] - ground_z
     depth = ground_z - below_pts[:, 2]
     if z.size and float(np.min(z)) < 0.0:
@@ -1195,6 +1414,23 @@ def _crossing_geometry(above_pts, below_pts, ground_z, grid, what):
             f"{float(np.min(depth)):.6g} (a non-positive depth is a point on "
             "or above the interface — that geometry is momwire#524 phase 3)"
         )
+    return z, depth
+
+
+def _crossing_geometry(above_pts, below_pts, ground_z, grid, what):
+    """(ρ, z, z′, R, θ, d̂) for a crossing pair, with both sides checked.
+
+    `d̂` is the horizontal unit vector from the BELOW point's ground
+    projection to the ABOVE point's, in BOTH directions of travel — the
+    surfaces are tabulated with the below point as the source. ρ → 0
+    degenerates the azimuth and any horizontal direction serves there
+    (T_ρ^H(90°) = −T_φ^H); a point source is a complex MOMENT with no
+    direction of its own, so (1, 0) serves, exactly as `_field_point` does
+    for the same cell.
+    """
+    above_pts = np.asarray(above_pts, dtype=float)
+    below_pts = np.asarray(below_pts, dtype=float)
+    z, depth = _check_crossing_sides(above_pts, below_pts, ground_z, what)
     dx = above_pts[:, 0][:, None] - below_pts[None, :, 0]
     dy = above_pts[:, 1][:, None] - below_pts[None, :, 1]
     rho = np.hypot(dx, dy)
@@ -1252,6 +1488,65 @@ def _combine_transmitted_proj(surf, g, dhx, dhy, t_obs, t_src, transposed):
     )
 
 
+def _proj_accel(
+    above, t_above, below_pts, t_below, ground_z, k_p, k_m, grid, transposed
+):
+    """`transmitted_field_proj_batch` on an (above, below) pair set.
+
+    Returns the `(n_above, n_below)` table in ROLE order; the downward caller
+    transposes it into its own `(n_obs, n_src)`. One C++ kernel serves both
+    directions, with `transposed` swapping T_ρ^V and T_z^H — if it were two
+    kernels the reciprocity gate would be comparing two ports rather than a
+    transpose against itself.
+
+    THE FOUR REFUSALS ARE NOT TRANSCRIBED INTO C++. The kernel reports the
+    query's extremes in R, θ and |z′| and they go straight back through
+    `TransmittedGrid.eval`, which raises in its own words — one copy of that
+    prose, and no way for the two paths to disagree about which geometries
+    are served. Two points; the interpolation it also does is discarded and
+    costs microseconds. That matters more in this family than in the
+    remainder ones: every one of those four is a REFUSAL rather than a clamp
+    precisely because the transmitted surface is the whole field, so a path
+    that quietly clamped would return a confident wrong number.
+    """
+    out, r_lo, r_hi, th_lo, th_hi, zp_lo, zp_hi = _acc.transmitted_field_proj_batch(
+        above,
+        t_above,
+        below_pts,
+        t_below,
+        float(ground_z),
+        float(k_p),
+        complex(k_m),
+        bool(transposed),
+        float(grid.lnr0),
+        float(grid.dlnr),
+        float(grid.th0),
+        float(grid.dth),
+        float(grid.lnz0),
+        float(grid.dlnz),
+        float(grid.r_max),
+        grid._vals,
+    )
+    if above.shape[0] and below_pts.shape[0]:
+        grid.eval(
+            np.array([r_lo, r_hi]),
+            np.array([th_lo, th_hi]),
+            np.array([-zp_lo, -zp_hi]),
+        )
+    return out
+
+
+def _proj_accel_live(grid):
+    """True when this grid can be handed to the C++ projection twin.
+
+    A duck-typed `eval`-able (the tests' direct-surface stand-in) has no
+    `_vals` to flatten and takes the numpy body — which is also what keeps
+    the three-way grid → direct → goldens gates honest, since the direct side
+    must not share the grid side's interpolation code.
+    """
+    return _use_transmitted_accel() and getattr(grid, "_vals", None) is not None
+
+
 def transmitted_field_proj_below_to_above(
     obs, t_obs, src, t_src, ground_z, k_p, k_m, grid
 ):
@@ -1261,8 +1556,31 @@ def transmitted_field_proj_below_to_above(
     The WHOLE field per unit source moment, not a remainder — a Galerkin fill
     consuming this must not add a direct or an image term to it, which is the
     contract difference `_field_point`'s crossing regimes still refuse over.
+
+    C++ TWIN (momwire#568 unit 3): `transmitted_field_proj_batch`, which
+    inlines `_crossing_geometry`, `TransmittedGrid.eval`,
+    `divide_out_transmitted` and `_combine_transmitted_proj` with no
+    intermediates. The endpoint refusals and the grid's four domain refusals
+    stay here.
     """
     _require_transmitted_grid(grid, "transmitted_field_proj_below_to_above")
+    if _proj_accel_live(grid):
+        above = np.asarray(obs, dtype=float)
+        below_pts = np.asarray(src, dtype=float)
+        _check_crossing_sides(
+            above, below_pts, ground_z, "transmitted_field_proj_below_to_above"
+        )
+        return _proj_accel(
+            above,
+            np.asarray(t_obs, dtype=float),
+            below_pts,
+            np.asarray(t_src, dtype=float),
+            ground_z,
+            k_p,
+            k_m,
+            grid,
+            transposed=False,
+        )
     rho, zz, zp, r_obs, theta, dhx, dhy = _crossing_geometry(
         obs, src, ground_z, grid, "transmitted_field_proj_below_to_above"
     )
@@ -1291,8 +1609,30 @@ def transmitted_field_proj_above_to_below(
     horizontal direction still taken from the below point to the above one.
     Any disagreement with the upward direction's transpose is a BUG, not a
     tolerance, and it is gated as an identity.
+
+    C++ TWIN (momwire#568 unit 3): the SAME kernel the upward direction
+    reads, with `transposed=True`. It returns its table in role order, so the
+    transpose here is the same `.T` the numpy body applies to the pair-shaped
+    arrays — the identity is not re-implemented, it is re-read.
     """
     _require_transmitted_grid(grid, "transmitted_field_proj_above_to_below")
+    if _proj_accel_live(grid):
+        above = np.asarray(src, dtype=float)
+        below_pts = np.asarray(obs, dtype=float)
+        _check_crossing_sides(
+            above, below_pts, ground_z, "transmitted_field_proj_above_to_below"
+        )
+        return _proj_accel(
+            above,
+            np.asarray(t_src, dtype=float),
+            below_pts,
+            np.asarray(t_obs, dtype=float),
+            ground_z,
+            k_p,
+            k_m,
+            grid,
+            transposed=True,
+        ).T
     # The geometry table comes back as (above, below) = (source, observer), so
     # every pair-shaped array transposes into this call's (n_obs, n_src).
     rho, zz, zp, r_obs, theta, dhx, dhy = _crossing_geometry(

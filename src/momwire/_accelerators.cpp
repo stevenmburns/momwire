@@ -6842,6 +6842,597 @@ static py::tuple remainder_field_proj_batch_below(
 }
 
 
+// --------------------------------------------------------------------------
+// momwire#568 unit 3 -- the TRANSMITTED family on the shared contour engine.
+//
+// The second production rider on `_contour_engine_inline.h`, and the arc's
+// biggest cluster: the six lambda-integrands of
+// `_sommerfeld_transmitted._integrand_six_transmitted`, its
+// `_six_integrals_transmitted` driver (fine machine plus the optional coarse
+// self-convergence twin), the per-point loop of `t_surfaces_direct` -- THIS is
+// where the OpenMP region lives -- and the projected pair table behind
+// `transmitted_field_proj_below_to_above` / `_above_to_below`. The numpy
+// spellings stay exactly as they are and remain the references; these are
+// twins, gated at tolerance in tests/test_transmitted_fills_568.py.
+//
+// FOUR THINGS ARE THIS FAMILY'S OWN and none of them is cosmetic:
+//
+//   * TWO gammas, not the below family's single swapped `_d12` pair. The
+//     transmitted integrand's two exponential legs sit in DIFFERENT media, so
+//     `gamma_cut` is called at k_p and at k_m and both survive into the
+//     Fresnel denominators k_m^2 gamma_p + k_p^2 gamma_m and gamma_m + gamma_p.
+//   * Index 1 is spelled `lam^2`, NEVER `gamma_p^2 + k_p^2`. See the comment
+//     on it below; it is a measured eleven-digit cancellation, not a taste.
+//   * Index 4 (d2 V_T/drho dz') is why the family has FIVE surfaces. The two
+//     legs carry different gamma, so d/dz' is not -d/dz and index 4 is not a
+//     multiple of index 0. It must not collapse onto index 0.
+//   * `swap` builds the above->below twin (source ABOVE carrying gamma_p,
+//     observer BELOW carrying gamma_m). It exists to GATE the reciprocity
+//     transpose; the product path serves above->below as a transpose over the
+//     same tables and never asks for it.
+//
+// THE TAIL BUDGET IS A CLIFF, NOT A SOFT LANDING. The transmitted tail must
+// reach lam ~ 35/h, panelled on the J0(lam rho) zero lattice pi/rho, so it
+// costs ~12 cot(theta_true) panels; `_MAX_TAIL_PANELS_T` is 6000 and the
+// grazing floor is SOLVED from that law at 16 panels per cot. When the budget
+// runs out `tail_below` falls back to Wynn epsilon, and on this family that
+// fallback was measured 4.5e+3 RELATIVE wrong -- three and a half decades,
+// silently, with `converged = False` as the only tell. So this block reports
+// `converged` per node exactly as the numpy driver does and the Python layer
+// tallies it into `Health.nonconvergent`, which the fill gates assert at zero.
+// A C++ path that ever returned an unconverged answer unflagged would be the
+// worst defect available in this unit.
+//
+// The cot-theta cost law is KEPT. The lateral-wave asymptotic branch that
+// would delete it changes the cost/serve model, and #568 promises answer
+// neutrality: each panel gets cheaper, the panel COUNT does not move.
+//
+// STACK. Same envelope U2 measured: ~25 kB per `run_contour` at NC = 6, the
+// fine and coarse machines in sequence rather than nested. Nothing here needs
+// a large default; keep `OMP_STACKSIZE` at or above ~256 kB.
+//
+// MEASURED on an i7-8550U, one contour node against the numpy driver at
+// rtol 1e-9 (soil A, 7 MHz, |z'| = 0.15 m unless noted):
+//
+//     (R/lam_p, theta) = (0.01, 45 deg)    6.7 ms ->  0.63 ms   10.6x
+//                        (0.5,  5 deg)    28.7 ms ->  2.14 ms   13.4x
+//                        (2.0,  30 deg)   12.4 ms ->  1.02 ms   12.2x
+//                        (2.0,  0.1 deg) 322.5 ms -> 20.4  ms   15.8x  (grazing)
+//
+// and end to end, `tests/test_sommerfeld_transmitted.py -m slow -n 2` on this
+// box: 446.0 s -> 30.6 s (14.6x).
+// --------------------------------------------------------------------------
+
+namespace mw568_trans {
+using mw_contour::cd;
+
+// `_sommerfeld._gamma` is SHARED with U2 rather than re-transcribed
+// (`mw568_below::gamma_cut`): it is the two-sqrt product
+// sqrt(-j(lam - k)) sqrt(j(lam + k)), and the spelling IS the branch choice --
+// vertical cuts running DOWN from +k and UP from -k, neither of which the
+// head's first-quadrant detour crosses. Two copies of that could drift; one
+// cannot. This family calls it TWICE per evaluation, at k_p and at k_m,
+// because its two exponential legs live in different media.
+
+// `_integrand_six_transmitted`, term for term and in its order:
+//
+//   0: d2 V_T/drho dz     [a (-lam J1) d_z]
+//   1: (d2/dz2 + k_p^2)V_T [a lam^2 J0]
+//   2: d2 V_T/drho^2      [a lam^2 (J1/x - J0)]
+//   3: (1/rho) dV_T/drho  [-a lam^2 (J1/x)]
+//   4: d2 V_T/drho dz'    [a (-lam J1) d_zp]
+//   5: U_T                [u J0]
+//
+// with a = 2 lam e / (k_m^2 gamma_p + k_p^2 gamma_m) the (7f) V_T kernel and
+// u = 2 lam e / (gamma_m + gamma_p) the (7g) U_T one, e the two-leg
+// exponential. All five derivatives are ANALYTIC under the integral sign
+// (d/drho J0 = -lam J1, d2/drho2 via the Bessel ODE identity, d/dz -> x(-g_p),
+// d/dz' -> x(+g_m)) -- never a differenced interpolant, which is the
+// LLNL-TR-490316 rule the phase-0 comment records.
+//
+// INDEX 1 IS SPELLED lam^2 AND THAT IS LOAD-BEARING. (d2/dz2 + k^2) is
+// gamma^2 + k^2 in either medium, and gamma^2 + k^2 is a difference of two
+// O(k^2) numbers whose result is O(lam^2): at the bottom of the contour
+// (lam ~ 1e-3, |k_m| ~ 0.6) it cancels away ELEVEN digits. The swapped and
+// unswapped spellings of the same quantity were measured 3.5e-11 apart before
+// the numpy line said lam^2. Writing `g_p*g_p + k_p*k_p` here would not fail
+// loudly; it would quietly cost a grazing gate. `test_g56812_index_1_is_
+// lambda_squared_not_gamma_squared_plus_k_squared` is the mutation gate.
+//
+// INDEX 4 IS THE FIFTH SURFACE. d/dz' multiplies by +gamma_m where d/dz
+// multiplies by -gamma_p, and the two are different functions of lam, so
+// index 4 is NOT a multiple of index 0 and T_z^H is not -cos(phi) T_rho^V.
+// That collapse is a +-=+ identity that does not survive here; the #553 arc
+// gated it hardest because the licensed engine departs from the phase-0
+// prototype on exactly this component by O(1), with empymod siding with the
+// prototype.
+struct SixTransmitted {
+    double rho;
+    double z;
+    double zp;
+    double k_p;
+    cd k_m;
+    bool swap;
+    void operator()(const cd &lam, cd *out) const {
+        const cd kp(k_p, 0.0);
+        const cd g_p = mw568_below::gamma_cut(lam, kp);
+        const cd g_m = mw568_below::gamma_cut(lam, k_m);
+        const double azp = std::fabs(zp);
+        cd e, d_z, d_zp;
+        if (swap) {
+            // Source ABOVE at z' > 0 carrying gamma_p, observer BELOW at
+            // z < 0 carrying gamma_m: the same integral with the legs
+            // exchanged, which is the reciprocity identity phase 0 measured
+            // at 0.0 relative.
+            e = 2.0 * std::exp(-g_p * azp - g_m * std::fabs(z)) * lam;
+            d_z = g_m;
+            d_zp = -g_p;
+        } else {
+            e = 2.0 * std::exp(-g_m * azp - g_p * z) * lam;
+            d_z = -g_p;
+            d_zp = g_m;
+        }
+        const cd zzk = lam * lam;  // NOT g^2 + k^2 -- see the note above
+        const double kp2 = k_p * k_p;
+        const cd a = e / (k_m * k_m * g_p + kp2 * g_m);  // (7f)
+        const cd u = e / (g_m + g_p);                    // (7g)
+        const cd x = lam * rho;
+        cd b0, b1x;
+        mw_contour::bessel_j0_j1x(x, b0, b1x);
+        const cd j1 = b1x * x;
+        const cd dr = -(lam * j1);  // d/drho J0 = -lam J1
+        out[0] = a * dr * d_z;
+        out[1] = a * zzk * b0;
+        out[2] = a * lam * lam * (b1x - b0);
+        out[3] = a * (-(lam * lam * b1x));
+        out[4] = a * dr * d_zp;
+        out[5] = u * b0;
+    }
+};
+
+// What one node of `_six_integrals_transmitted` produces: the six values plus
+// everything `Health.note` / `Health.note_selfconv` are handed on the numpy
+// side. `selfconv` is -1.0 when the coarse machine was not asked for, so the
+// Python layer can tell "not measured" from "measured zero".
+struct SixResultT {
+    cd val[6];
+    int head_panels;
+    int tail_panels;
+    bool converged;
+    bool accel;
+    double selfconv;
+};
+
+// One node: the fine contour, then optionally the coarse self-convergence
+// twin (Gauss-16, rtol x100, a shallower detour).
+//
+// `h_decay = |z'| + |z|` is the TAIL'S DECAY LENGTH, not a coordinate: both
+// gammas go to lam at large lam, so e^{-g_m|z'| - g_p z} -> e^{-lam(|z'|+z)}
+// exactly as the below family's e^{-g_m h} -> e^{-lam h}. That one argument is
+// the whole of the sharing with U2's contour, and `max_panels` is the other
+// handle -- this family's grazing rows need 6000 where any below/below
+// geometry is done in a few hundred.
+static void six_transmitted_one(double rho, double z, double zp, double k_p,
+                                const cd &k_m, bool swap, double rtol_fine,
+                                int depth, double detour, const double *gx,
+                                const double *gw, int ng, bool selfconv,
+                                double rtol_coarse, int depth_coarse,
+                                double detour_coarse, const double *gxc,
+                                const double *gwc, int ngc, int max_panels,
+                                SixResultT &r) {
+    SixTransmitted f;
+    f.rho = rho;
+    f.z = z;
+    f.zp = zp;
+    f.k_p = k_p;
+    f.k_m = k_m;
+    f.swap = swap;
+    const double h_decay = std::fabs(zp) + std::fabs(z);
+    const mw_contour::ContourHealth hh = mw_contour::run_contour<6>(
+        f, k_p, k_m, rho, h_decay, rtol_fine, depth, detour, gx, gw, ng,
+        max_panels, r.val);
+    r.head_panels = hh.head_panels;
+    r.tail_panels = hh.tail_panels;
+    r.converged = hh.converged;
+    r.accel = hh.accel;
+    r.selfconv = -1.0;
+    if (selfconv) {
+        cd coarse[6];
+        mw_contour::run_contour<6>(f, k_p, k_m, rho, h_decay, rtol_coarse,
+                                   depth_coarse, detour_coarse, gxc, gwc, ngc,
+                                   max_panels, coarse);
+        double worst = 0.0;
+        for (int c = 0; c < 6; ++c) {
+            const double scale = std::max(std::abs(r.val[c]), 1e-300);
+            const double rel = std::abs(r.val[c] - coarse[c]) / scale;
+            if (rel > worst) worst = rel;
+        }
+        r.selfconv = worst;
+    }
+}
+
+// `TransmittedGrid`'s tabulation, flattened for the inner loop.
+//
+// NOT `somm_proj::GridView`, and not a widening of it. That view is built for
+// the +-=+ / +-=- REMAINDER grids: four surfaces, four-or-six (R1, theta)
+// REGIONS selected by (r_break, th_split, r_near), and a LINEAR radial axis
+// per region. The transmitted tabulation is one uniform lattice in
+// (ln R, theta) -- logarithmic, because the transmitted surface is the whole
+// field and carries the source's own 1/R^2 near zone, so there is no finite
+// R1 -> 0 limit node the way the remainder families have -- with FIVE surfaces
+// and a third axis, the log|z'| ladder. Bending `build_grid_view` around a
+// different region model, a different axis law, a different surface count and
+// an extra dimension would have made one struct serve two unrelated layouts;
+// this is the small honest one.
+struct TGridView {
+    const cd *vals;  // (n_zp, 5, n_r, n_th), C-contiguous
+    py::ssize_t n_zp, n_r, n_th;
+    double lnr0, dlnr, th0, dth, lnz0, dlnz;
+    double tiny, half_pi;
+};
+
+// `TransmittedGrid.eval`'s interpolation, WITHOUT its four refusals: cubic
+// Lagrange in ln R and theta, and -- when the ladder has more than one rung --
+// cubic in ln|z'| on the divided-out surfaces, which is phase 0's measured
+// scheme. The refusals stay in Python; see the comment on
+// `transmitted_field_proj_batch`.
+static inline void tgrid_eval(const TGridView &G, double R, double theta,
+                              double azp, cd *surf) {
+    const double fr = (std::log(std::max(R, 1e-300)) - G.lnr0) / G.dlnr;
+    int i0 = (int)std::floor(fr) - 1;
+    if (i0 < 0) i0 = 0;
+    else if (i0 > (int)G.n_r - 4) i0 = (int)G.n_r - 4;
+    double thc = theta;
+    if (thc < 0.0) thc = 0.0;
+    else if (thc > G.half_pi) thc = G.half_pi;
+    const double ft = (thc - G.th0) / G.dth;
+    int j0 = (int)std::floor(ft) - 1;
+    if (j0 < 0) j0 = 0;
+    else if (j0 > (int)G.n_th - 4) j0 = (int)G.n_th - 4;
+    double wr[4], wt[4];
+    somm_proj::lagrange4(fr - i0, wr);
+    somm_proj::lagrange4(ft - j0, wt);
+
+    const py::ssize_t nth = G.n_th, nr = G.n_r;
+    const py::ssize_t plane = nr * nth;       // one surface at one rung
+    const py::ssize_t rung = 5 * plane;       // all five at one rung
+
+    if (G.n_zp == 1) {
+        for (int s = 0; s < 5; ++s) {
+            const cd *V = G.vals + (py::ssize_t)s * plane;
+            cd acc(0.0, 0.0);
+            for (int i = 0; i < 4; ++i) {
+                const cd *row = V + (py::ssize_t)(i0 + i) * nth + j0;
+                const cd rs = row[0] * wt[0] + row[1] * wt[1] + row[2] * wt[2] +
+                              row[3] * wt[3];
+                acc += rs * wr[i];
+            }
+            surf[s] = acc;
+        }
+        return;
+    }
+
+    const double fz = (std::log(std::max(azp, 1e-300)) - G.lnz0) / G.dlnz;
+    int k0 = (int)std::floor(fz) - 1;
+    if (k0 < 0) k0 = 0;
+    else if (k0 > (int)G.n_zp - 4) k0 = (int)G.n_zp - 4;
+    double wz[4];
+    somm_proj::lagrange4(fz - k0, wz);
+    for (int s = 0; s < 5; ++s) {
+        cd acc(0.0, 0.0);
+        for (int k = 0; k < 4; ++k) {
+            const cd *V = G.vals + (py::ssize_t)(k0 + k) * rung +
+                          (py::ssize_t)s * plane;
+            cd sub(0.0, 0.0);
+            for (int i = 0; i < 4; ++i) {
+                const cd *row = V + (py::ssize_t)(i0 + i) * nth + j0;
+                const cd rs = row[0] * wt[0] + row[1] * wt[1] + row[2] * wt[2] +
+                              row[3] * wt[3];
+                sub += rs * wr[i];
+            }
+            acc += sub * wz[k];
+        }
+        surf[s] = acc;
+    }
+}
+
+// One (above, below) pair: `_crossing_geometry` + `TransmittedGrid.eval` +
+// `divide_out_transmitted` + `_combine_transmitted_proj`, with no
+// intermediates.
+//
+// The geometry is ALWAYS built from the above point and the below point, in
+// that role order, whichever way the field is travelling: R and theta are the
+// ABOVE point's polar coordinates about the below point's ground projection,
+// |z'| is the below point's depth, and (dhx, dhy) is the horizontal direction
+// from the BELOW point to the ABOVE one in BOTH directions of travel. That
+// last one is the single silent sign error available in this family -- the
+// surfaces are tabulated with the below point as the source and sin(phi) is
+// ODD, so reading d-hat from source-minus-observer would flip T_phi^H on one
+// of the two directions only.
+//
+// `transposed` swaps T_rho^V with T_z^H and NOTHING else. That is the entire
+// content of "above->below is the reciprocity transpose": the dyad's 2x2
+// horizontal block is already symmetric, so transposing exchanges exactly the
+// vertical source's radial row with the horizontal source's vertical row --
+// which is the FIFTH surface, and why a four-surface family could not have
+// served both directions. E_z's horizontal row therefore reads T_z^H (or
+// T_rho^V when transposed) and never -cos(phi) T_rho^V; that collapse is a
+// +-=+ identity and it does not hold here.
+//
+// `to`/`ts` are the OBSERVER's and SOURCE's tangents, so the caller supplies
+// them in travel order while the geometry stays in role order. The query's
+// (R, theta, |z'|) go back to the caller so `TransmittedGrid.eval` can raise
+// the four refusals in its own words; nothing here transcribes that prose.
+static inline cd proj_one_transmitted(const TGridView &G, double ground_z,
+                                      double k_p, const cd &k_m,
+                                      double ax, double ay, double az,
+                                      double bx, double by, double bz,
+                                      const double *to, const double *ts,
+                                      bool transposed, double &r_out,
+                                      double &th_out, double &zp_out) {
+    const double z = az - ground_z;         // the above point's height, >= 0
+    const double depth = ground_z - bz;     // the below point's depth, > 0
+    const double dx = ax - bx;
+    const double dy = ay - by;
+    const double rho = std::hypot(dx, dy);
+    const double r_obs = std::hypot(rho, z);
+    const double theta = std::atan2(z, rho);
+    r_out = r_obs;
+    th_out = theta;
+    zp_out = depth;
+
+    cd surf[5];
+    tgrid_eval(G, r_obs, theta, depth, surf);
+    const cd TrhoV = surf[0], TzV = surf[1], TrhoH = surf[2], TphiH = surf[3],
+             TzH = surf[4];
+
+    // `divide_out_transmitted`: two legs, because the transmitted ray has two
+    // -- |z'| straight up through the ground at k_m, then the rest of the way
+    // through the AIR at the real k_p over the true separation R, with the 1/R
+    // spherical spreading every point-source field carries.
+    const double dz = z + depth;
+    const double rr = std::sqrt(rho * rho + dz * dz);
+    const cd g = std::exp(-mw568_below::MW_BJ * (k_m * depth + cd(k_p * rr, 0.0))) / rr;
+
+    const bool safe_r = rho > G.tiny;
+    const double inv_rho = safe_r ? 1.0 / rho : 0.0;
+    const double dhx = safe_r ? dx * inv_rho : 1.0;
+    const double dhy = safe_r ? dy * inv_rho : 0.0;
+    const double cph = ts[0] * dhx + ts[1] * dhy;
+    const double sph = ts[0] * dhy - ts[1] * dhx;
+    const double pz = ts[2];
+
+    cd e_rho, e_z;
+    if (transposed) {
+        e_rho = g * (pz * TzH + cph * TrhoH);
+        e_z = g * (pz * TzV + cph * TrhoV);
+    } else {
+        e_rho = g * (pz * TrhoV + cph * TrhoH);
+        e_z = g * (pz * TzV + cph * TzH);
+    }
+    const cd e_phi = g * (sph * TphiH);
+    return to[0] * (dhx * e_rho - dhy * e_phi) +
+           to[1] * (dhy * e_rho + dhx * e_phi) + to[2] * e_z;
+}
+}  // namespace mw568_trans
+
+// `_six_integrals_transmitted` over parallel (rho, z, z') arrays: the (n, 6)
+// table plus everything `Health` records, OpenMP across nodes with the GIL
+// released. This is `t_surfaces_direct`'s per-point loop -- the fill's hot
+// loop and the arc's biggest single cluster.
+//
+// The wavenumbers arrive DERIVED (k_p real, k_m complex on the Im <= 0 branch)
+// rather than as eps~, so the branch choice stays in `k_medium` where it is
+// written down once; the side-of-interface validation -- which RAISES BY NAME,
+// and whose asymmetry (an observer may sit ON the interface, a SOURCE may not)
+// is the geometry rather than sloppiness -- likewise stays in Python, because
+// it is exact and its words are contract.
+//
+// Returns (values (n, 6), tail_panels (n,), head_panels (n,), converged (n,),
+// accelerated (n,), selfconv (n,)) -- selfconv is -1.0 where the coarse
+// machine was not run. `converged` is the one a caller must not drop: see the
+// Wynn note at the top of this block.
+static py::tuple transmitted_six_integrals_batch(
+    double k_p, std::complex<double> k_m,
+    py::array_t<double, py::array::c_style | py::array::forcecast> rho,
+    py::array_t<double, py::array::c_style | py::array::forcecast> z,
+    py::array_t<double, py::array::c_style | py::array::forcecast> zp,
+    bool swap, double rtol_fine, int depth, double detour,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gx,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gw,
+    bool selfconv, double rtol_coarse, int depth_coarse, double detour_coarse,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gxc,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gwc,
+    int max_panels) {
+    auto rb = rho.unchecked<1>();
+    auto zb = z.unchecked<1>();
+    auto pb = zp.unchecked<1>();
+    const py::ssize_t n = rb.shape(0);
+    if (zb.shape(0) != n || pb.shape(0) != n)
+        throw std::invalid_argument("rho, z and zp must have the same length");
+    const double *gxp, *gwp, *gxcp, *gwcp;
+    int ng, ngc;
+    mw568::gauss_view(gx, gw, &gxp, &gwp, &ng);
+    mw568::gauss_view(gxc, gwc, &gxcp, &gwcp, &ngc);
+
+    py::array_t<std::complex<double>> vals({n, py::ssize_t(6)});
+    py::array_t<int> tail(n), head(n);
+    py::array_t<bool> conv(n), accel(n);
+    py::array_t<double> sconv(n);
+    auto vb = vals.mutable_unchecked<2>();
+    int *tp = tail.mutable_data();
+    int *hp = head.mutable_data();
+    bool *cp = conv.mutable_data();
+    bool *ap = accel.mutable_data();
+    double *sp = sconv.mutable_data();
+    const mw_contour::cd km(k_m);
+
+    {
+        py::gil_scoped_release release;
+        // `dynamic`, and on this family it matters more than it did on U2's.
+        // The tail cost runs as cot(theta_true), so the bottom row of a
+        // (ln R, theta) fill costs THOUSANDS of panels per node where the top
+        // row costs tens -- a two-decade spread inside one call, arriving
+        // sorted by row. Static scheduling would hand one thread the whole
+        // grazing band and the fill would take as long as its slowest chunk.
+        #pragma omp parallel for schedule(dynamic)
+        for (py::ssize_t i = 0; i < n; ++i) {
+            mw568_trans::SixResultT r;
+            mw568_trans::six_transmitted_one(
+                rb(i), zb(i), pb(i), k_p, km, swap, rtol_fine, depth, detour,
+                gxp, gwp, ng, selfconv, rtol_coarse, depth_coarse,
+                detour_coarse, gxcp, gwcp, ngc, max_panels, r);
+            for (int c = 0; c < 6; ++c) vb(i, c) = r.val[c];
+            tp[i] = r.tail_panels;
+            hp[i] = r.head_panels;
+            cp[i] = r.converged;
+            ap[i] = r.accel;
+            sp[i] = r.selfconv;
+        }
+    }
+    return py::make_tuple(vals, tail, head, conv, accel, sconv);
+}
+
+// The projected transmitted pair table in C++: `above`/`t_above` (A, 3),
+// `below`/`t_below` (B, 3), returning ((A, B) complex, min R, max R, min
+// theta, max theta, min |z'|, max |z'|).
+//
+// ONE kernel serves BOTH directions of travel. The geometry is in ROLE order
+// (above, below) either way -- it has to be, because the surfaces are
+// tabulated with the below point as the source and the horizontal direction
+// runs from the below point to the above one in both directions -- and
+// `transposed` is what turns the upward dyad into the downward one, by
+// swapping T_rho^V with T_z^H. The caller transposes the (A, B) table into its
+// own (n_obs, n_src) when the observer is the below point. Two entry points
+// reading one kernel is exactly the "above->below is the same integral" claim
+// expressed in code: if it were two kernels the identity gate would be gating
+// two ports against each other rather than a transpose against itself.
+//
+// `t_above` / `t_below` are the RAW tangents, not decomposed the way
+// `somm_proj::tangent_decomp` decomposes the +-=+ family's: this family's
+// combination reads t.d-hat and t x d-hat|_z and t_z directly, with no
+// magnitude/direction split, because a complex moment has no direction to
+// normalize (and the tangent is handed straight through as one).
+//
+// THE FOUR REFUSALS ARE NOT TRANSCRIBED HERE -- past `r_max`, under `r_min`,
+// theta outside the tabulated band, |z'| off the ladder. The kernel reports
+// the query's extremes and the Python layer feeds them straight back to
+// `TransmittedGrid.eval`, which raises in its own words. One copy of that
+// prose, and no way for the two paths to drift on which geometries they serve.
+// It matters more here than it did on U2: every one of those four is a REFUSAL
+// rather than a clamp precisely because the transmitted surface is the whole
+// field and there is no negligible tail to freeze, so a C++ path that quietly
+// clamped instead would return a confident wrong number rather than an error.
+static py::tuple transmitted_field_proj_batch(
+    py::array_t<double, py::array::c_style | py::array::forcecast> above,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_above,
+    py::array_t<double, py::array::c_style | py::array::forcecast> below,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_below,
+    double ground_z, double k_p, std::complex<double> k_m, bool transposed,
+    double lnr0, double dlnr, double th0, double dth, double lnz0, double dlnz,
+    double r_max,
+    py::array_t<std::complex<double>,
+                py::array::c_style | py::array::forcecast> grid_vals) {
+    auto ab = above.unchecked<2>();
+    auto tab = t_above.unchecked<2>();
+    auto bb = below.unchecked<2>();
+    auto tbb = t_below.unchecked<2>();
+    if (ab.shape(1) != 3 || tab.shape(1) != 3 || bb.shape(1) != 3 ||
+        tbb.shape(1) != 3)
+        throw std::runtime_error("point/tangent arrays must have shape (*, 3)");
+    if (ab.shape(0) != tab.shape(0) || bb.shape(0) != tbb.shape(0))
+        throw std::runtime_error("points and tangents must have matching length");
+    auto gv = grid_vals.unchecked<4>();
+    if (gv.shape(1) != 5)
+        throw std::runtime_error(
+            "the transmitted grid must have five surfaces per rung");
+
+    mw568_trans::TGridView G;
+    G.vals = grid_vals.data();
+    G.n_zp = gv.shape(0);
+    G.n_r = gv.shape(2);
+    G.n_th = gv.shape(3);
+    if (G.n_r < 4 || G.n_th < 4 || (G.n_zp != 1 && G.n_zp < 4))
+        throw std::runtime_error("the transmitted grid is too small for a cubic");
+    G.lnr0 = lnr0;
+    G.dlnr = dlnr;
+    G.th0 = th0;
+    G.dth = dth;
+    G.lnz0 = lnz0;
+    G.dlnz = dlnz;
+    G.tiny = 1e-12 * r_max;
+    G.half_pi = 0.5 * M_PI;
+
+    const py::ssize_t A = ab.shape(0);
+    const py::ssize_t B = bb.shape(0);
+    py::array_t<std::complex<double>> out({A, B});
+    auto out_m = out.mutable_unchecked<2>();
+    const mw_contour::cd km(k_m);
+
+    // Per-above-row extremes, reduced serially afterwards: a min/max
+    // `reduction` clause is OpenMP 3.1 and this file stays portable to MSVC's
+    // classic /openmp.
+    const py::ssize_t AA = A > 0 ? A : 1;
+    std::vector<double> row_rlo(AA, std::numeric_limits<double>::infinity());
+    std::vector<double> row_rhi(AA, 0.0);
+    std::vector<double> row_thlo(AA, 0.5 * M_PI);
+    std::vector<double> row_thhi(AA, 0.0);
+    std::vector<double> row_zlo(AA, std::numeric_limits<double>::infinity());
+    std::vector<double> row_zhi(AA, 0.0);
+
+    {
+        py::gil_scoped_release release;
+        #pragma omp parallel for schedule(static)
+        for (py::ssize_t a = 0; a < A; ++a) {
+            const double ax = ab(a, 0), ay = ab(a, 1), az = ab(a, 2);
+            const double ta[3] = {tab(a, 0), tab(a, 1), tab(a, 2)};
+            double rlo = std::numeric_limits<double>::infinity(), rhi = 0.0;
+            double tlo = 0.5 * M_PI, thi = 0.0;
+            double zlo = std::numeric_limits<double>::infinity(), zhi = 0.0;
+            for (py::ssize_t b = 0; b < B; ++b) {
+                const double tb[3] = {tbb(b, 0), tbb(b, 1), tbb(b, 2)};
+                // Travel order: the observer's tangent is the above one going
+                // up and the below one coming down; the geometry stays in
+                // role order either way.
+                const double *to = transposed ? tb : ta;
+                const double *ts = transposed ? ta : tb;
+                double rq, thq, zq;
+                out_m(a, b) = mw568_trans::proj_one_transmitted(
+                    G, ground_z, k_p, km, ax, ay, az, bb(b, 0), bb(b, 1),
+                    bb(b, 2), to, ts, transposed, rq, thq, zq);
+                if (rq < rlo) rlo = rq;
+                if (rq > rhi) rhi = rq;
+                if (thq < tlo) tlo = thq;
+                if (thq > thi) thi = thq;
+                if (zq < zlo) zlo = zq;
+                if (zq > zhi) zhi = zq;
+            }
+            row_rlo[a] = rlo;
+            row_rhi[a] = rhi;
+            row_thlo[a] = tlo;
+            row_thhi[a] = thi;
+            row_zlo[a] = zlo;
+            row_zhi[a] = zhi;
+        }
+    }
+
+    double mn_r = std::numeric_limits<double>::infinity(), mx_r = 0.0;
+    double mn_th = 0.5 * M_PI, mx_th = 0.0;
+    double mn_z = std::numeric_limits<double>::infinity(), mx_z = 0.0;
+    for (py::ssize_t a = 0; a < A; ++a) {
+        if (row_rlo[a] < mn_r) mn_r = row_rlo[a];
+        if (row_rhi[a] > mx_r) mx_r = row_rhi[a];
+        if (row_thlo[a] < mn_th) mn_th = row_thlo[a];
+        if (row_thhi[a] > mx_th) mx_th = row_thhi[a];
+        if (row_zlo[a] < mn_z) mn_z = row_zlo[a];
+        if (row_zhi[a] > mx_z) mx_z = row_zhi[a];
+    }
+    if (!std::isfinite(mn_r)) mn_r = 0.0;
+    if (!std::isfinite(mn_z)) mn_z = 0.0;
+    return py::make_tuple(out, mn_r, mx_r, mn_th, mx_th, mn_z, mx_z);
+}
+
+
 PYBIND11_MODULE(_accelerators, m) {
     // Phase 2: raised by the long kernels when their cancel_flag is tripped;
     // the _accel.py wrappers remap it to momwire.SolveAborted.
@@ -7350,4 +7941,52 @@ PYBIND11_MODULE(_accelerators, m) {
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
           py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"));
+
+    // momwire#568 unit 3: the transmitted fills on that engine. Its OWN
+    // capability flag, deliberately neither `contour_engine_568` nor
+    // `below_fills_568` — a .so built at U1 or U2 exports those symbols and
+    // would otherwise claim to carry U3's contract too, handing
+    // `_sommerfeld_transmitted` a missing symbol instead of the graceful numpy
+    // fallback the guard exists to give.
+    m.attr("transmitted_fills_568") = true;
+    m.def("transmitted_six_integrals_batch", &transmitted_six_integrals_batch,
+          "The six transmitted lambda-integrals at each (rho[i], z[i], zp[i]) "
+          "— the C++ twin of _sommerfeld_transmitted._integrand_six_transmitted "
+          "under _six_integrals_transmitted's driver, on the shared contour "
+          "engine, OpenMP across nodes with the GIL released. k_p is the "
+          "free-space wavenumber (real) and k_m the in-medium one (complex, "
+          "Im <= 0); both arrive derived so the branch choice stays in "
+          "`k_medium`. `swap` builds the above->below twin (the reciprocity "
+          "gate, not the product path). The tail's decay length is |zp| + |z|. "
+          "`selfconv` additionally runs the coarse machine and reports the "
+          "componentwise relative spread. Returns (values (n, 6), tail_panels, "
+          "head_panels, converged, accelerated, selfconv), the last being -1.0 "
+          "where the coarse machine was not run. `converged` is contract, not "
+          "decoration: a truncated transmitted tail was measured 4.5e+3 "
+          "relative wrong, so a caller must tally it.",
+          py::arg("k_p"), py::arg("k_m"), py::arg("rho"), py::arg("z"),
+          py::arg("zp"), py::arg("swap"), py::arg("rtol_fine"), py::arg("depth"),
+          py::arg("detour"), py::arg("gx"), py::arg("gw"), py::arg("selfconv"),
+          py::arg("rtol_coarse"), py::arg("depth_coarse"),
+          py::arg("detour_coarse"), py::arg("gxc"), py::arg("gwc"),
+          py::arg("max_panels"));
+    m.def("transmitted_field_proj_batch", &transmitted_field_proj_batch,
+          "Interpolated + projected transmitted pair table — the C++ twin of "
+          "_sommerfeld_transmitted's two projection entry points, ONE kernel "
+          "for both directions of travel. The geometry is always in ROLE order "
+          "(above, below) and `transposed` swaps T_rho^V with T_z^H, which is "
+          "the whole content of the reciprocity transpose; the caller "
+          "transposes the (A, B) table into its own (n_obs, n_src) when the "
+          "observer is the below point. The grid arrives as one (n_zp, 5, n_r, "
+          "n_th) table plus its three axis origins/steps — a single uniform "
+          "(ln R, theta) lattice over a log|z'| ladder, not the remainder "
+          "families' region model. Returns ((A, B) complex, min R, max R, min "
+          "theta, max theta, min |z'|, max |z'|) — the query extremes, so the "
+          "caller can let TransmittedGrid.eval raise its four refusals in its "
+          "own words.",
+          py::arg("above"), py::arg("t_above"), py::arg("below"),
+          py::arg("t_below"), py::arg("ground_z"), py::arg("k_p"),
+          py::arg("k_m"), py::arg("transposed"), py::arg("lnr0"),
+          py::arg("dlnr"), py::arg("th0"), py::arg("dth"), py::arg("lnz0"),
+          py::arg("dlnz"), py::arg("r_max"), py::arg("grid_vals"));
 }
