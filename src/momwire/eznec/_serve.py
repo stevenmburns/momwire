@@ -54,18 +54,24 @@ The basis, and why it is the one
 ``BSplineSolver`` at the repo's own default configuration — ``degree=2``,
 ``feed_model="point"``, no extended kernel, no enrichment — which is what
 ``momwire.deck.build_solver``'s ``"bspline"`` entry constructs and what the
-portal solves every NEC-2 deck with.  The family is not a free choice: NEC-5
-addresses NODES, and ``node_gaps`` (momwire#305, the apex-feed arc) is the
-only port momwire has AT a node.  The sinusoidal family has none and cannot
-stand at this seam.
+portal solves every NEC-2 deck with.
+
+The family used to be no choice at all, and that claim was wrong.  NEC-5
+addresses NODES and ``node_gaps`` (momwire#305, the apex-feed arc) is the only
+port momwire has AT a node — but a node where a through-current path runs is
+also a knot, and a delta gap on that knot is the same series EMF (below, "Two
+spellings of a series EMF").  Only a K >= 3 apex genuinely needs the node
+port.  So :func:`build_mesh` takes the solver class and spells the drive for
+it (momwire#603 U1), and the ``razor`` family — the NEC-5 formulation twin,
+which has no node gaps — reaches this seam.
 
 Three drive spellings, and the address picks between them
 ---------------------------------------------------------
 * a node where two or more wire ends meet — including the two halves of a
   wire this module CUT because a card addressed a node inside it — is a
-  junction, and the source is a ``node_gaps`` series EMF named through the
-  favored wire's end (0013's ``EX 4,5,-1``, the five-wire apex; 0010's
-  ``EX 4,1,6``, six segments into an eleven-segment dipole);
+  junction, and the source is a series EMF named through the favored wire's
+  end (0013's ``EX 4,5,-1``, the five-wire apex; 0010's ``EX 4,1,6``, six
+  segments into an eleven-segment dipole);
 * a wire end standing IN the ground plane is momwire's ground-contact feed
   — a delta gap at arclength 0 on the grounded piece, the idiom
   ``tests/test_contact_nec5_lane.py`` already gates against this engine's
@@ -73,6 +79,32 @@ Three drive spellings, and the address picks between them
 * a FREE wire end is refused.  There is no through-current path at a lone
   conductor end for a series EMF to sit in, momwire says so at the
   constructor, and no captured deck asks for one.
+
+Two spellings of a series EMF, and the BASIS picks between them
+---------------------------------------------------------------
+The first of those three is one source with two discretizations, and which
+one a deck gets is the only thing the solver class decides here.  A basis
+carrying ``node_gaps`` gets the node port, and the wire is CUT wherever a
+card addressed a node inside it so that port has the two wire ends it needs.
+A basis without them gets a ``feeds`` delta gap on the knot itself — the
+wire's own interior knot, uncut, or the junction's through-current unknown
+where K = 2 ends meet — and no cut anywhere.
+
+Neither is the true one.  They differ by whether the expansion is clamped on
+each side of the node or runs continuously through it: 2.03 % on a 5 m dipole
+at 30 MHz under degree-2 B-splines, the same class as the basis envelope this
+seam already reports against the licensed engine.  What is NOT a matter of
+taste is that the cut costs something — a node one element from a wire's end
+leaves a one-segment polyline, which carries no tent, which ``RazorSolver``
+refuses outright, and which no basis wanted.
+
+Measured over the 62 committed captures: razor-nec5 served 11 under the cut
+and serves 47 without it, and on the 42 that carry a printout its input
+impedance sits a median 0.00 % and a worst 0.03 % from the licensed engine's
+own — which is the twin doing what it is for.  The remaining 15 are four
+named things and no drive spelling: 5 whose ``GW`` declares a genuine
+one-segment wire, 5 ground contact over a finite ground, 3 that bspline
+refuses too, and the 2 five-wire apexes, which keep the node port.
 
 The address picks the spelling one card at a time, and neither #504 U4 nor
 momwire#511 changes that: a phased deck is several cards each picking its own,
@@ -1063,10 +1095,17 @@ def structure_of(deck: Nec5Deck) -> Structure:
 class _Piece:
     """One momwire polyline: a run of one ``GW``'s elements.
 
-    A ``GW`` is one piece unless a card addressed a node INSIDE it, in which
-    case it is cut there — a series EMF at a node needs the node to be a wire
-    END on both sides, which is the same forcing ``momwire.deck._polylines``
-    applies for a node gap.
+    A ``GW`` is one piece unless a card addressed a node INSIDE it AND the
+    basis spells a series EMF as a ``node_gaps`` port, in which case it is cut
+    there — that port needs the node to be a wire END on both sides, which is
+    the same forcing ``momwire.deck._polylines`` applies for a node gap.
+
+    The cut is the NODE-GAP spelling's alone (:func:`build_mesh`, "Two ways to
+    spell one series EMF").  A basis without node gaps drives the same node as
+    a delta gap at an interior knot of the WHOLE wire, and cutting for it would
+    be worse than pointless: a cut that lands one element from a wire's end
+    manufactures a one-segment polyline, which carries no tent and which
+    ``RazorSolver`` refuses at its constructor.
     """
 
     tag: int
@@ -1101,10 +1140,12 @@ class _Site:
     """
 
     at: Nec5Node
-    # "gap" (a delta gap on a grounded wire end) or "node" (a series node gap)
+    # "gap" (a ``feeds`` delta gap) or "node" (a ``node_gaps`` series EMF).
+    # Which one a through-current node becomes is the BASIS's choice, not the
+    # deck's — see :func:`build_mesh`, "Two ways to spell one series EMF".
     spelling: str
     piece: int
-    end: str  # "start" | "end"
+    end: str  # "start" | "end" | "interior"
     # +1 when momwire's port quantities are already in NEC's direction: the
     # current the deck's EX drives flows along the favored wire's own
     # end-1 -> end-2 sense.  A node gap named through a wire's END sees the
@@ -1112,6 +1153,18 @@ class _Site:
     # the only thing standing between a served current table and one printed
     # 180 degrees out.
     sign: float
+    # Where along :attr:`piece` a "gap" spelling sits, in metres from that
+    # piece's first point.  Unread by "node", which names an END and not a
+    # length.  Decided here rather than in :func:`_solver_for` because an
+    # interior gap is the one site whose arclength is not one of the two ends.
+    arclength: float = 0.0
+    # A gap between a grounded wire END and the plane.  It shares no column
+    # with anything: momwire gives each end standing at a grounded point a
+    # tent of ITS OWN (`RazorSolver._feed_knots`), because the gap a source
+    # there occupies is between the plane and that one wire, so there is no
+    # branch pair left to name.  The other two gap sites sit on a knot INSIDE
+    # the structure, where a second address is the far side of one port.
+    contact: bool = False
     index: int = -1
     column: int = -1
     weight: float = 0.0
@@ -1172,7 +1225,9 @@ def _addressed_nodes(deck: Nec5Deck) -> dict[int, set[int]]:
     return at
 
 
-def build_mesh(deck: Nec5Deck, structure: Structure) -> _Mesh:
+def build_mesh(
+    deck: Nec5Deck, structure: Structure, *, solver_class: type = BSplineSolver
+) -> _Mesh:
     """The deck's wires as momwire polylines, with one port per address.
 
     A ``GW`` is NOT chained onto its neighbours even where two of them share
@@ -1181,15 +1236,48 @@ def build_mesh(deck: Nec5Deck, structure: Structure) -> _Mesh:
     junction's KCL row carries the current across, and the deck's own node
     structure survives into the mesh, which is the whole point of a dialect
     that addresses nodes.
+
+    Two ways to spell one series EMF
+    --------------------------------
+    A ``GW`` IS cut where a card addressed a node inside it — but only for a
+    basis whose ports include ``node_gaps``, which is the one thing
+    ``solver_class`` decides here (momwire#603 U1).  The cut exists solely to
+    manufacture the two wire ends that port needs, and it is not free: a node
+    addressed one element from a wire's end leaves a one-segment polyline,
+    which carries no tent at all and which ``RazorSolver`` refuses outright.
+
+    A basis without node gaps spells the same series EMF as a ``feeds`` delta
+    gap at that node's own interior knot, on the WHOLE uncut wire.  Neither
+    spelling is the true one and the seam does not have to choose: they are
+    two discretizations of one source, differing by whether the expansion is
+    clamped on each side of the node or runs continuously through it.  On a
+    5 m dipole at 30 MHz with 10 elements, fed at the centre, degree-2
+    B-splines answer 80.320 + 44.899j cut and 79.117 + 46.321j whole — 2.03 %,
+    the same class as the 2–6 % basis envelope this seam already reports
+    against the licensed engine, and a difference confined to the two basis
+    ends the cut adds.
+
+    The choice is read off the solver's own :class:`~momwire._capabilities.
+    Capabilities` row rather than a list kept here, for the reason that module
+    exists: a second list is a second thing to forget when a family is added.
+    ``momwire.deck._solver``'s ``_NATIVE_LOADING`` is the same shape one axis
+    over — a per-family spelling of a port, decided where the family is known.
     """
     mesh = _Mesh()
+    node_gaps = bool(solver_class.capabilities.node_gaps)
     addressed = _addressed_nodes(deck)
     piece_of_node: dict[tuple[int, int], tuple[int, str]] = {}
+    # (tag, node) -> (piece, metres along it), for an addressed node STRICTLY
+    # inside a piece.  Only the delta-gap spelling leaves one there; under the
+    # node-gap spelling the cut has already turned every one into a piece end.
+    inside_piece: dict[tuple[int, int], tuple[int, float]] = {}
 
     for wire, points in zip(structure.wires, structure.points, strict=True):
         last = wire.segment_count
-        inside = sorted(k for k in addressed.get(wire.tag, ()) if 0 < k < last)
-        bounds = [0, *inside, last]
+        addressed_inside = sorted(
+            k for k in addressed.get(wire.tag, ()) if 0 < k < last
+        )
+        bounds = [0, *addressed_inside, last] if node_gaps else [0, last]
         for a, b in zip(bounds[:-1], bounds[1:], strict=True):
             index = len(mesh.pieces)
             mesh.pieces.append(
@@ -1208,6 +1296,17 @@ def build_mesh(deck: Nec5Deck, structure: Structure) -> _Mesh:
             # later piece win at a cut.
             piece_of_node[(wire.tag, a)] = (index, "start")
             piece_of_node.setdefault((wire.tag, b), (index, "end"))
+            for k in addressed_inside:
+                if a < k < b:
+                    inside_piece[(wire.tag, k)] = (
+                        index,
+                        float(
+                            np.linalg.norm(
+                                np.asarray(points[k], dtype=float)
+                                - np.asarray(points[a], dtype=float)
+                            )
+                        ),
+                    )
             for element in range(b - a):
                 mesh.element_of.append((index, element))
 
@@ -1224,16 +1323,44 @@ def build_mesh(deck: Nec5Deck, structure: Structure) -> _Mesh:
             ends_at.setdefault(_node_key(point), []).append((index, which))
     for key in sorted(ends_at):
         if len(ends_at[key]) >= 2:
-            mesh.junctions.append(sorted(ends_at[key]))
+            mesh.junctions.append(sorted(ends_at[key], key=_canonical_end))
 
     # -- one site per addressed node ---------------------------------------
     for tag, nodes in sorted(addressed.items()):
         for node in sorted(nodes):
-            site = _site_for(structure, mesh, piece_of_node, tag, node)
+            site = _site_for(
+                structure,
+                mesh,
+                piece_of_node,
+                inside_piece,
+                tag,
+                node,
+                node_gaps=node_gaps,
+            )
             site.index = len(mesh.sites)
             mesh.sites.append(site)
     _assign_columns(mesh)
     return mesh
+
+
+def _canonical_end(end: tuple[int, str]) -> tuple[int, int]:
+    """momwire's own order for the ends of one junction — wire, then start.
+
+    ``momwire._junction_rule.canonical_groups`` is the owner of this rule and
+    documents what rides on it: a junction's FIRST end is the one detection
+    would have found first, and :meth:`RazorSolver._junction_wings` calls that
+    end "side A" — the branch +1 A of the junction's through current flows
+    IN along.  :func:`_assign_columns` needs that to sign a delta gap driven
+    at the junction, so the seam sorts by momwire's key rather than by the
+    tuple's own order, in which ``"end"`` sorts before ``"start"``.
+
+    The two orders differ only where ONE piece brings both of its ends to one
+    node — a wire closed into a loop — which no capture writes.  Sorting the
+    momwire way regardless is free: a declared spec goes through
+    ``canonical_groups`` on the way in, so the solver reorders anything else
+    to this anyway, and agreeing by construction beats agreeing by accident.
+    """
+    return (end[0], 0 if end[1] == "start" else 1)
 
 
 def _assign_columns(mesh: _Mesh) -> None:
@@ -1258,6 +1385,19 @@ def _assign_columns(mesh: _Mesh) -> None:
     declared side's — which is the ``-sign`` below, and which comes out as
     two EQUAL deck-convention currents whenever the two wires run through the
     node (the 0017 case) and two opposite ones when they meet head to head.
+
+    A delta gap driven AT that junction — the same two addresses under a basis
+    without node gaps — shares its column the same way and for the same
+    reason, but reads its weight off the junction instead of off the order the
+    addresses arrived in.  There is one through-current unknown at the node
+    and momwire orients it once: ``+1 A`` flows IN along the junction's first
+    end and OUT along the other (:meth:`RazorSolver._junction_wings`, "side
+    A"), whoever names it.  So the deck's ``+1`` is ``-sign`` on side A and
+    ``+sign`` on side B — the same two numbers the node spelling reaches,
+    since ``sign`` is ``+1`` at a ``start`` and ``-1`` at an ``end`` — and
+    which end is side A is :func:`_canonical_end`, not arrival order.  A
+    ground CONTACT gap is exempt and shares nothing: momwire gives each end
+    standing at a grounded point a tent of its own (:attr:`_Site.contact`).
     """
     junction_of = {
         member: index
@@ -1266,16 +1406,30 @@ def _assign_columns(mesh: _Mesh) -> None:
     }
     declared: dict[int, _Site] = {}
     for site in mesh.sites:
-        if site.spelling == "gap":
-            site.column, site.weight = len(mesh.feeds), site.sign
+        junction = None if site.contact else junction_of.get((site.piece, site.end))
+        if junction is not None and site.spelling == "gap":
+            site.weight = (
+                -site.sign
+                if mesh.junctions[junction][0] == (site.piece, site.end)
+                else site.sign
+            )
+        else:
+            site.weight = site.sign
+        if junction is None:
+            # Its own knot, and its own column: a ground contact, or a delta
+            # gap at a node this wire alone passes through.
+            site.column = len(mesh.feeds)
             mesh.feeds.append(site)
             continue
-        junction = junction_of[(site.piece, site.end)]
         first = declared.get(junction)
         if first is None:
             declared[junction] = site
-            site.column, site.weight = len(mesh.gaps), site.sign
-            mesh.gaps.append(site)
+            if site.spelling == "gap":
+                site.column = len(mesh.feeds)
+                mesh.feeds.append(site)
+            else:
+                site.column = len(mesh.gaps)
+                mesh.gaps.append(site)
             continue
         members = mesh.junctions[junction]
         if len(members) != 2:
@@ -1286,7 +1440,9 @@ def _assign_columns(mesh: _Mesh) -> None:
                     count=len(members),
                 )
             )
-        site.column, site.weight = first.column, -site.sign
+        site.column = first.column
+        if site.spelling == "node":
+            site.weight = -site.sign
     # momwire orders its ports [gap feeds..., junction ports..., node gaps...]
     # and this seam declares no junction ports, so a node gap's column is its
     # place in that list offset by the feeds.  Applied here rather than at the
@@ -1313,14 +1469,70 @@ def _transform(mesh: _Mesh) -> np.ndarray:
     return t
 
 
+def _interior_site(
+    structure: Structure,
+    mesh: _Mesh,
+    inside: tuple[int, float],
+    tag: int,
+    node: int,
+) -> _Site:
+    """A series EMF at a node INSIDE a piece, as a delta gap on that piece.
+
+    Reached only under the delta-gap spelling, because the node-gap spelling
+    cut the wire here and left no node inside a piece to reach
+    (:func:`build_mesh`, "Two ways to spell one series EMF").
+
+    The sign is ``+1`` and there is no case to pick between: the deck's port
+    current is the one flowing along the favored wire's own end-1 → end-2
+    direction, momwire's delta gap drives the knot's tent in the direction of
+    increasing arc length, and on an uncut ``GW`` those are the same
+    direction.  That is the same ``+1`` the node-gap spelling reaches by
+    another route — its cut hands the address to the LATER piece's ``start``,
+    whose sigma is ``+1`` — so the two spellings agree on the sign as well as
+    on the source.
+
+    The node must be one this wire alone passes through.  Its degree counts
+    ELEMENT ends (:meth:`Structure.unknown_count`), so an untouched interior
+    node has exactly two; anything more is another wire's end landing on it,
+    which the cut used to weld and a delta gap does not.  Serving that as a
+    gap would model a T-junction as an unconnected wire — a well-posed WRONG
+    answer — so it refuses instead.  No captured deck writes one: all 78
+    addressed interior nodes in the corpus have degree 2.
+    """
+    piece_index, arclength = inside
+    point = structure.points[structure.index_of(tag)][node]
+    degree = structure.degree[_node_key(point)]
+    if degree != 2:
+        raise ServeRefusal(
+            f"{tag},{Nec5Node(tag, node).written} addresses a node INSIDE "
+            f"wire {tag} where {degree // 2} more element ends meet; this "
+            f"basis spells a series EMF as a delta gap, which drives one "
+            f"wire's own knot and would leave the others unconnected"
+        )
+    return _Site(
+        at=Nec5Node(tag=tag, node=node),
+        spelling="gap",
+        piece=piece_index,
+        end="interior",
+        sign=1.0,
+        arclength=arclength,
+    )
+
+
 def _site_for(
     structure: Structure,
     mesh: _Mesh,
     piece_of_node: dict[tuple[int, int], tuple[int, str]],
+    inside_piece: dict[tuple[int, int], tuple[int, float]],
     tag: int,
     node: int,
+    *,
+    node_gaps: bool,
 ) -> _Site:
     """Which momwire port a ``(favored tag, node)`` address becomes."""
+    inside = inside_piece.get((tag, node))
+    if inside is not None:
+        return _interior_site(structure, mesh, inside, tag, node)
     where = piece_of_node.get((tag, node))
     if where is None:  # pragma: no cover - the parser bounds-checks the node
         raise ServeRefusal(f"no wire piece carries node {node} of tag {tag}")
@@ -1340,10 +1552,22 @@ def _site_for(
             )
         return _Site(
             at=Nec5Node(tag=tag, node=node),
-            spelling="node",
+            # A K = 2 node is a through-current path, and a basis without node
+            # gaps drives it as a delta gap on the junction's own through-
+            # current unknown — the same port the interior case reaches, and
+            # measured to be the same port: a 12 m dipole at 30 MHz split into
+            # two 6-element pieces and driven at the joint answers the uncut
+            # 12-element wire driven at its middle knot to the last ulp (2e-16
+            # in the impedance, 7e-16 across all thirteen knot currents), and
+            # the two ways to NAME the joint answer each other bit for bit.
+            # K >= 3 stays a node gap: momwire refuses a delta gap
+            # there ("a delta-gap voltage there is ambiguous — it would have
+            # to name which pair of branches it drives"), and so it must.
+            spelling="node" if node_gaps or meeting >= 3 else "gap",
             piece=piece_index,
             end=which,
             sign=1.0 if which == "start" else -1.0,
+            arclength=0.0 if which == "start" else piece.length,
         )
     if grounded:
         return _Site(
@@ -1352,6 +1576,8 @@ def _site_for(
             piece=piece_index,
             end=which,
             sign=1.0,
+            arclength=0.0 if which == "start" else piece.length,
+            contact=True,
         )
     raise ServeRefusal(
         f"{tag},{Nec5Node(tag, node).written} addresses a FREE end of wire "
@@ -1435,19 +1661,13 @@ def _solver_for(
     branch above it would be ``GN 0``, which is 34 % wrong in R.
     """
     radii = [piece.radius for piece in mesh.pieces]
-    feeds = [
-        (
-            site.piece,
-            # Arclength 0 is the grounded end of the piece that starts there.
-            # The "end" spelling is the mirror case — a wire whose END stands
-            # in the plane — which no capture writes; it is here because
-            # leaving it out would be a silent wrong feed rather than a
-            # missing one.
-            0.0 if site.end == "start" else mesh.pieces[site.piece].length,
-            0j,
-        )
-        for site in mesh.feeds
-    ]
+    # Arclength 0 is the grounded end of the piece that starts there; the "end"
+    # spelling is the mirror case — a wire whose END stands in the plane —
+    # which no capture writes, and which is served because leaving it out would
+    # be a silent wrong feed rather than a missing one.  A site INSIDE a piece
+    # is neither, and it is why the arclength is decided at the site rather
+    # than re-derived from `end` here (momwire#603 U1).
+    feeds = [(site.piece, site.arclength, 0j) for site in mesh.feeds]
     gaps = [(site.piece, site.end, 0j) for site in mesh.gaps]
 
     ground: dict[str, object] = {}
