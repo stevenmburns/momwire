@@ -10,6 +10,11 @@ from .bspline import BSplineSolver
 from .harrington import HarringtonSolver
 from .hmatrix import HMatrixSolver
 from .array_block import ArrayBlockSolver, LatticeFFTUnavailable
+
+# The element-grouping rule the array solver partitions by (#932), exported for
+# consumers that must ask "is this an array?" before choosing a solver — one
+# spelling of the geometry rule rather than a drifting copy.
+from .array_block import wire_to_element
 from .pulse import PulseSolver
 from .razor import RazorSolver
 from .sinusoidal import SinusoidalSolver
@@ -39,4 +44,5 @@ __all__ = [
     "accelerated",
     "wire_internal_impedance",
     "insulation_inductance",
+    "wire_to_element",
 ]

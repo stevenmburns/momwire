@@ -15,6 +15,7 @@ from momwire.array_block import (
     cache_stats,
     element_groups,
     reset_array_caches,
+    wire_to_element,
 )
 
 
@@ -141,6 +142,42 @@ def test_single_structure_is_one_element():
     assert part.n_elem == 1
     assert part.n_shapes == 1
     assert part.sizes.tolist() == [part.n_basis]
+
+
+# ---- the public grouping rule (#932) ----------------------------------------
+
+
+def test_wire_to_element_is_public():
+    """Promoted from `_wire_to_element` (#932): a consumer choosing a solver
+    asks the same question the partition does, and must not have to reach
+    into a private to ask it."""
+    import momwire
+
+    assert "wire_to_element" in momwire.__all__
+    assert momwire.wire_to_element is wire_to_element
+
+
+def test_wire_to_element_groups_bare_polylines():
+    """The public promise is that it answers from geometry alone — no solver,
+    no builder metadata. Two two-wire vees, far apart, are two elements."""
+    vee_a = [
+        np.array([[0.0, 0.0, 0.0], [0.0, 1.0, 2.0]]),
+        np.array([[0.0, 0.0, 0.0], [0.0, -1.0, 2.0]]),
+    ]
+    vee_b = [pl + np.array([0.0, 40.0, 0.0]) for pl in vee_a]
+    wire_elem, n_elem = wire_to_element(vee_a + vee_b)
+    assert n_elem == 2
+    assert wire_elem.tolist() == [0, 0, 1, 1]
+
+
+def test_wire_to_element_private_alias_still_resolves():
+    """antennaknobs pins momwire exactly and still imports the old name; its
+    call site swallows ImportError, so a premature deletion would degrade the
+    solver recommendation in silence rather than failing. Delete this test
+    with the alias when AK#932 closes."""
+    from momwire.array_block import _wire_to_element
+
+    assert _wire_to_element is wire_to_element
 
 
 # ---- P1: block decomposition + matvec ---------------------------------------

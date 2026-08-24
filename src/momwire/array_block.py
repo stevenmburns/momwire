@@ -151,7 +151,7 @@ def _basis_to_wire(supp_seg, wire_basis_global):
     return b2w
 
 
-def _wire_to_element(wires_polylines, tol=1e-6):
+def wire_to_element(wires_polylines, tol=1e-6):
     """Group polylines into electrically connected elements by shared anchors.
 
     Two polylines belong to the same element when any of their anchor points
@@ -162,6 +162,11 @@ def _wire_to_element(wires_polylines, tol=1e-6):
     Returns (wire_elem, n_elem) where `wire_elem[w]` is the element id of wire
     `w`, with element ids assigned in order of first appearance (so wire 0 is
     always in element 0).
+
+    Public (#932) because callers outside momwire ask the same question this
+    solver does — "is this geometry an array, and of how many elements?" — and
+    a second spelling of the rule would drift from the one the partition
+    actually uses. Takes bare polylines, so it answers without a solver.
     """
     n_w = len(wires_polylines)
     parent = list(range(n_w))
@@ -200,6 +205,13 @@ def _wire_to_element(wires_polylines, tol=1e-6):
             label_of_root[r] = len(label_of_root)
         wire_elem[w] = label_of_root[r]
     return wire_elem, len(label_of_root)
+
+
+# Pre-#932 spelling. antennaknobs pins momwire exactly, so its call site keeps
+# importing this name until that pin moves; deleting it now would not fail
+# loudly there (the import sits inside a `try/except Exception` that degrades
+# the solver recommendation to None in silence). Delete once AK#932 closes.
+_wire_to_element = wire_to_element
 
 
 def _element_segment_groups(geom, wire_elem, n_elem):
@@ -328,7 +340,7 @@ def element_groups(sim, tol=1e-6):
     )
     n_basis = supp_seg.shape[0]
     b2w = _basis_to_wire(supp_seg, wire_basis_global)
-    wire_elem, n_elem = _wire_to_element(sim.wires_polylines, tol=tol)
+    wire_elem, n_elem = wire_to_element(sim.wires_polylines, tol=tol)
     elem_of_basis = wire_elem[b2w]
     groups = [
         np.sort(np.nonzero(elem_of_basis == e)[0].astype(np.int64))
