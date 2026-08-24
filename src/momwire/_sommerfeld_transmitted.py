@@ -147,9 +147,10 @@ measured), so `Health.nonconvergent` is contract on BOTH paths and the C++
 batch reports `converged` per node for the Python layer to tally in node
 order.
 
-Measured on an i7-8550U: one contour node 10–16× the numpy one (the grazing
-end, where the tail runs thousands of panels, is the best case), and the
-slow transmitted ladder 446.0 s → 30.6 s at unchanged memory.
+Measured on an i7-8550U: one contour node 11–20× the numpy one (the grazing
+end, where the tail runs thousands of panels, is the BEST case — cost there
+is almost all Bessel), and the slow transmitted ladder 446.0 s → 30.3 s at
+unchanged memory (116 MB).
 """
 
 from __future__ import annotations
