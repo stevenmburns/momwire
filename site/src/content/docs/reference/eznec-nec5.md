@@ -6,17 +6,28 @@ description: The momwire.eznec portal serves EZNEC Pro+'s external-engine slot i
 EZNEC Pro+ can drive an external NEC-5 console engine: it writes a deck
 (`EZN5.NEC`), launches the engine with two positional arguments, and reads
 the printout (`NEC5.OUT`) back for every display it draws. momwire ships
-that process:
+that process.
 
-```bash
-pip install momwire
-python -m momwire.eznec EZN5.NEC NEC5.OUT
-```
+## Setting it up
 
-The invocation is exactly EZNEC's own — positional, cwd-relative, no flags —
-so the engine slots into the external-engine mechanism as-is. EZNEC's
-interface, models and displays stay EZNEC's; the electromagnetics become
-momwire's.
+1. Download
+   [`momwire-eznec-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-eznec-windows.zip)
+   from the latest release.
+2. Unzip it anywhere. **Keep the folder together** — the exe needs the
+   `_internal` runtime beside it, and a lone copied-out `.exe` is the one way
+   a correct download still fails.
+3. Point EZNEC's external-engine path at `momwire-eznec.exe` inside that
+   folder.
+
+That is the whole installation. No Python, no environment, nothing on PATH.
+EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
+become momwire's.
+
+One launch costs on the order of a second — the frozen interpreter's import
+cost. (The one-file packaging that re-extracts on every launch was measured
+at 17 s and rejected.) A long SWR sweep is therefore slower through the
+frozen exe than through the licensed engine's 18–37 ms launches; the
+per-point economics, not the physics, are the current gap.
 
 :::caution[Not a supported configuration]
 No part of EZNEC knows momwire exists, and nothing here has been reviewed or
@@ -123,20 +134,22 @@ sub-percent level, and the in-house NEC-5 formulation twin
 (`razor-nec5`) rides the licensed engine's own convergence path at the
 0.01 % level — the receipts behind the word "emulates".
 
-## The packaged Windows executable
+## From a source checkout
 
-For pointing EZNEC's engine path at without a Python environment, every
-release ships a frozen build:
-[`momwire-eznec-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-eznec-windows.zip).
-Unzip it anywhere, keep the folder together (the exe needs the `_internal`
-runtime beside it), and point EZNEC's external-engine path at
-`momwire-eznec.exe` inside. It is the same `momwire.eznec` module frozen
-with PyInstaller, gated in CI to produce byte-identical printouts to the
-`python -m momwire.eznec` spelling above — which remains the supported form
-wherever a Python environment is at hand.
+The executable is the `momwire.eznec` module frozen with PyInstaller, and
+CI gates the two against each other: the same deck through either route
+produces byte-identical printouts. So if you already have a Python
+environment, the module is there:
 
-One launch costs on the order of a second (the frozen interpreter's import
-cost; the one-file packaging that re-extracts on every launch was measured
-at 17 s and rejected). A long SWR sweep is therefore slower through the
-frozen exe than through the licensed engine's 18–37 ms launches — the
-per-point economics, not the physics, are the current gap.
+```bash
+pip install momwire
+python -m momwire.eznec EZN5.NEC NEC5.OUT
+```
+
+The arguments are exactly EZNEC's own — positional, cwd-relative, no flags.
+This spelling is for running decks by hand, scripting a corpus, or working
+on momwire itself. **It cannot be selected from EZNEC's engine dialog**,
+which is a file picker and wants a path to an executable; reaching it from
+EZNEC means writing a `.bat` wrapper, and a wrapper between the host and the
+engine is where host-side misconfiguration turns into broken-pipe symptoms
+that read as crashes. Use the packaged exe for that job.
