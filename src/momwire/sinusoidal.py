@@ -38,6 +38,8 @@ Scope (deliberately narrow):
 from collections import namedtuple
 from dataclasses import dataclass
 
+import warnings
+
 import numpy as np
 import scipy.linalg
 import scipy.sparse
@@ -3926,19 +3928,35 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # The point-matched EXTENDED kernel is literal-cos only — momwire#246
         # left the folded EKSCX forms unwired, and its guard raises rather
         # than quietly serving the wrong shape. So an EK-on solve keeps the
-        # literal path at every kΔ: unfixed here, not newly broken (it gets
-        # exactly the answer it got before #606), and refusing instead would
-        # turn a working-if-degraded configuration into a crash. Tracked as
-        # the #606 follow-up.
+        # literal path at every kΔ: unfixed, not newly broken (it gets exactly
+        # the answer it got before #606), and refusing would turn a
+        # working-if-degraded configuration into a crash.
+        #
+        # But it does NOT get to be silent about it. A silent fallback here is
+        # the same failure #246's guard exists to prevent, one level up: the
+        # caller asked for a regime this fill cannot serve accurately and would
+        # otherwise be handed a number with no digits in it and no signal. The
+        # warning is the signal, and `_WELL_SCALED_KD` is in it so the reader
+        # can see how far into the bad regime the deck sits.
         kd_min = float(np.min(k * np.asarray(geom["seg_h"], dtype=np.float64)))
-        cos_shape = (
-            "cos-1"
-            if kd_min < _WELL_SCALED_KD and not self.extended_kernel
-            else "cos"
-        )
-        A_eff = sigma_arr * (
-            seg_view["A"] if cos_shape == "cos" else seg_view["AC"]
-        )
+        want_well_scaled = kd_min < _WELL_SCALED_KD
+        if want_well_scaled and self.extended_kernel:
+            warnings.warn(
+                "momwire: this deck sits at kΔ = "
+                f"{kd_min:.2e}, below the {_WELL_SCALED_KD:.1e} threshold "
+                "where SinusoidalSolver's literal {1, sin kξ, cos kξ} fill "
+                "loses ~8ε/(kΔ)² relative to cancellation (momwire#606), but "
+                "extended_kernel=True has no well-scaled path — the "
+                "point-matched EKSCX forms are literal-cos only (momwire#246). "
+                "Serving the literal fill: the feed impedance may be wrong by "
+                "percent and the N-ladder may not converge. Re-run with "
+                "extended_kernel=False for the corrected fill, or use a "
+                "sibling basis (bspline, razor).",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+        cos_shape = "cos-1" if want_well_scaled and not self.extended_kernel else "cos"
+        A_eff = sigma_arr * (seg_view["A"] if cos_shape == "cos" else seg_view["AC"])
         B_eff = seg_view["B"]
         C_eff = sigma_arr * seg_view["C"]
         if N < _DENSE_ASSEMBLY_THRESHOLD:

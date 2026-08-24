@@ -254,9 +254,21 @@ def test_the_two_shape_sets_are_the_same_operator():
 # real parts of order 1, so magnitude is the whole of the comparison.
 _NEC2C_DRIVEN_WIRE = np.array(
     [
-        4.1938e-02, 1.1951e-01, 1.9420e-01, 2.6792e-01, 3.4128e-01,
-        4.1463e-01, 4.8827e-01, 5.6249e-01, 6.3762e-01, 7.1408e-01,
-        7.9249e-01, 8.7389e-01, 9.6075e-01, 1.0359e00, 9.8754e-01,
+        4.1938e-02,
+        1.1951e-01,
+        1.9420e-01,
+        2.6792e-01,
+        3.4128e-01,
+        4.1463e-01,
+        4.8827e-01,
+        5.6249e-01,
+        6.3762e-01,
+        7.1408e-01,
+        7.9249e-01,
+        8.7389e-01,
+        9.6075e-01,
+        1.0359e00,
+        9.8754e-01,
     ]
 )
 _DRIVE = -404675.9j  # the deck's EX 0 voltage
@@ -310,3 +322,52 @@ def test_the_loop_pathology_is_still_reproduced():
 
     assert loop.min() > 100.0 * source, (loop.min(), source)
     assert np.abs(loop - 2.2e2).max() / 2.2e2 < 0.05, loop
+
+
+# ----------------------------------------------------------------------
+# The one regime the fix does not reach, and how it says so
+# ----------------------------------------------------------------------
+def test_extended_kernel_at_low_kd_warns_instead_of_going_quiet():
+    """`extended_kernel=True` has no well-scaled path (momwire#246 left the
+    folded EKSCX forms unwired), so it keeps the literal fill at every kΔ.
+
+    That is a known limit, not a regression — the EK solve gets exactly what
+    it got before #606. What it must NOT do is go quiet: handing back a
+    percent-wrong impedance with no signal is the same failure #246's own
+    guard exists to prevent, one level up. This gate is what stops a future
+    reader from "simplifying" the warning away.
+    """
+    import warnings as _w
+
+    fseg = 14
+    text = _DECK.format(n1=15, fmhz=0.0005, fseg=fseg)
+    built = build_solver(parse(text), basis="sinusoidal")
+    built.solver.extended_kernel = True
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        built.solver.compute_port_solution()
+
+    msgs = [str(x.message) for x in caught if issubclass(x.category, RuntimeWarning)]
+    assert any("606" in m and "extended_kernel" in m for m in msgs), msgs
+
+
+def test_no_warning_where_the_literal_fill_is_the_right_answer():
+    """The warning has to be specific to the bad regime or it is noise.
+
+    Above the threshold the literal fill IS the accurate one, EK or not.
+    """
+    import warnings as _w
+
+    built = build_solver(
+        parse(_DECK.format(n1=15, fmhz=5.0, fseg=14)), basis="sinusoidal"
+    )
+    built.solver.extended_kernel = True
+
+    with _w.catch_warnings(record=True) as caught:
+        _w.simplefilter("always")
+        built.solver.compute_port_solution()
+
+    assert not [str(x.message) for x in caught if "606" in str(x.message)], [
+        str(x.message) for x in caught
+    ]
