@@ -50,6 +50,30 @@ _PORTAL_GROUP_FILES = (
 )
 
 
+# Modules whose SLOW tests share one expensive module-scoped fixture.
+#
+# Module scope is per-PROCESS, and every xdist worker is its own process — so
+# when loadgroup scatters a module's tests across workers, each worker builds
+# that module's fixture from scratch. These two build ladders whose own
+# docstrings advertise the cost ("Measured ~75 s, which is why every test that
+# reads it is `slow`"), and the duplication was visible in the durations: both
+# parametrizations of `test_the_ground_adds_no_cross_formulation_gap` paying a
+# full setup, 60.9 s + 60.5 s in one module and 38.3 s + 37.8 s in the other.
+#
+# Measured before this grouping: the two files together ran 102.4 s at `-n 2`
+# against 97.6 s at `-n 1` — single-worker was FASTER despite zero parallelism,
+# because the duplicated fixture build cost more than the parallelism saved.
+#
+# ONE GROUP PER MODULE, deliberately, keyed on the file stem rather than a
+# single shared name: the point is to stop a module's fixture being built once
+# per worker, NOT to serialise these modules against each other. A shared group
+# would pin ~200 s of setup onto one worker and make it the critical path.
+_FIXTURE_GROUP_FILES = (
+    "test_razor_sommerfeld_ground.py",
+    "test_razor_refl_coef_ground.py",
+)
+
+
 # tryfirst is LOAD-BEARING (momwire#403). xdist's worker hook rewrites each
 # grouped item's nodeid to "id@group" in its own pytest_collection_modifyitems,
 # and that hook runs BEFORE a conftest's plain hookimpl — so a group marker
@@ -65,3 +89,5 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(_pytest.mark.xdist_group("memgate"))
         elif item.path.name in _PORTAL_GROUP_FILES:
             item.add_marker(_pytest.mark.xdist_group("portal"))
+        elif item.path.name in _FIXTURE_GROUP_FILES:
+            item.add_marker(_pytest.mark.xdist_group(item.path.stem))
