@@ -244,3 +244,69 @@ def test_the_two_shape_sets_are_the_same_operator():
     scaled = _Pc @ M_AC + _Ps @ M_B + Pd @ M_C
     rel = np.linalg.norm(scaled - literal) / np.linalg.norm(literal)
     assert rel < 1e-12, rel
+
+
+# ----------------------------------------------------------------------
+# The currents, not just the port scalar
+# ----------------------------------------------------------------------
+# nec2c 1.3's CURRENTS AND LOCATION table for the same 500 Hz deck, driven
+# wire only (tag 1, segments 1-15). The imaginary parts are ~1e-10 against
+# real parts of order 1, so magnitude is the whole of the comparison.
+_NEC2C_DRIVEN_WIRE = np.array(
+    [
+        4.1938e-02, 1.1951e-01, 1.9420e-01, 2.6792e-01, 3.4128e-01,
+        4.1463e-01, 4.8827e-01, 5.6249e-01, 6.3762e-01, 7.1408e-01,
+        7.9249e-01, 8.7389e-01, 9.6075e-01, 1.0359e00, 9.8754e-01,
+    ]
+)
+_DRIVE = -404675.9j  # the deck's EX 0 voltage
+
+
+def _segment_centre_currents(n1=15, fmhz=0.0005):
+    """Current at every segment CENTRE — the quantity nec2c tabulates."""
+    fseg = max(1, int(round(n1 * 14 / 15)))
+    s = build_solver(
+        parse(_DECK.format(n1=n1, fmhz=fmhz, fseg=fseg)), basis="sinusoidal"
+    ).solver
+    sol = s.compute_port_solution()
+    alpha = sol.coeffs[:, 0] * _DRIVE
+    n = sol.basis.geom["n_segs"]
+    return s._evaluate_basis_at_points(
+        sol.basis.seg_view, np.arange(n, dtype=np.int64), np.zeros(n), alpha
+    )
+
+
+def test_driven_wire_currents_match_nec2c():
+    """The port scalar is one number; the current distribution is the solve.
+
+    `_feed_segment_current` was not the only readout summing `A + C` —
+    `_currents_at` and the node-value evaluation did too, so a fix that only
+    moved the impedance would leave the printed currents wrong. Pre-#606 this
+    wire sat a flat 6.2 % below nec2c; the bar here is 1e-3, which that could
+    not have passed.
+    """
+    got = np.abs(_segment_centre_currents()[:15])
+    rel = np.abs(got - _NEC2C_DRIVEN_WIRE) / _NEC2C_DRIVEN_WIRE
+    assert rel.max() < 1e-3, (rel.max(), got)
+
+
+def test_the_loop_pathology_is_still_reproduced():
+    """The twin's job is to reproduce NEC-2, defects included.
+
+    W7EL's model puts ~220 A in the loop off a ~1 A source — quadrature error
+    in the line integral of grad(phi), NEC-2's own defect and the thing the
+    model was built to show. A "fix" that quietly cured it would mean this
+    family had stopped being the NEC-2 twin, which is a worse outcome than
+    the impedance bug. The loop current is a discretization artifact, so the
+    bar is loose: same order, same sign of the effect, within 5 %.
+
+    Sign is deliberately not compared. momwire traverses the closed loop in
+    the opposite direction from nec2c's per-wire GW order, so every loop
+    segment reads exactly 180 degrees out — a convention, uniform across all
+    sixteen, not a disagreement about the physics.
+    """
+    loop = np.abs(_segment_centre_currents()[15:])
+    source = abs(_segment_centre_currents()[13])
+
+    assert loop.min() > 100.0 * source, (loop.min(), source)
+    assert np.abs(loop - 2.2e2).max() / 2.2e2 < 0.05, loop
