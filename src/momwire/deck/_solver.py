@@ -154,8 +154,9 @@ def port_kwargs(
     decides is which KEYS exist, never what they hold.
 
     ``junctions`` is withheld from a :data:`_NATIVE_LOADING` family, and the
-    reason is not that the constructor lacks the parameter: razor and
-    harrington have both declared one since momwire#590 step 3b.  It is that
+    reason is not that the constructor cannot take one: razor and harrington
+    have both accepted a spec since momwire#590 step 3b — razor as a declared
+    parameter, harrington by intercepting it out of ``**kwargs``.  It is that
     a DECLARED spec replaces geometric detection wholesale, and neither front
     end's list is the whole truth about the geometry.  Both filter to groups
     of two or more ends — ``_polylines`` at its ``len(ends) >= 2``, the NEC-5
