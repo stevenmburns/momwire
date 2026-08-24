@@ -265,6 +265,12 @@ class _Nec2Parser:
 
         self._loads: list[tuple[int, float, LoadSpec]] = []
         self._loaded: set[tuple[int, int]] = set()
+        # What each loaded element carries, for the cell rule's restatement
+        # test (momwire#471). `_loaded` answers "is this taken", which the
+        # double-load refusal needs; this answers "taken by WHAT", which
+        # deciding whether a copy-addressed card is a redundant restatement
+        # or a genuine disagreement needs. Same keys, cleared together.
+        self._load_spec_at: dict[tuple[int, int], LoadSpec] = {}
         self._global_conductivity: float | None = None
         self._wire_conductivity: dict[int, float] = {}
         self._wire_insulation: dict[int, tuple[float, float]] = {}
@@ -379,7 +385,7 @@ class _Nec2Parser:
         return LoadSpec("fixed", r=r, x=x)
 
     def _cell_rule(
-        self, pairs: tuple[tuple[int, int], ...]
+        self, pairs: tuple[tuple[int, int], ...], spec: LoadSpec | None = None
     ) -> tuple[tuple[int, int], ...]:
         """The segments an ``LD`` card really reaches (spec
         ``#the-symmetric-cell``).
@@ -402,15 +408,34 @@ class _Nec2Parser:
         honoured, and the message says what NEC does so a reader
         cross-checking against it is not surprised.
 
-        It costs one corpus deck, measured (momwire#415 unit 4, and stated
-        here rather than in the earlier claim that it cost none):
-        ``1MHz_tower`` writes one ``LD`` per tower leg under a ``GR 3 4``, so
-        three of its four cards address copies.  NEC drops those three onto
-        exactly the segments it then replicates the surviving card onto, so
-        its printout is the one-card form's to every digit — the drop is real
-        and invisible at once, which is the case for refusing rather than
-        against it.  Both forms are committed under
-        ``tests/fixtures/nec2_symmetry/``.
+        The one exception is a RESTATEMENT (momwire#471).  ``1MHz_tower``
+        writes one ``LD`` per tower leg under a ``GR 3 4``, so three of its
+        four cards address copies — and NEC drops those three onto exactly
+        the segments it then replicates the surviving card onto, so its
+        printout is the one-card form's to every digit (oracle: **50.61 −
+        j1.6296** either way; both forms are committed under
+        ``tests/fixtures/nec2_symmetry/``).  When the copy-addressed card
+        says precisely what the replication already said, the deck MEANS what
+        NEC computes and there is nothing to refuse over: it is one loading
+        written twice, not a card we failed to express.  Such a card is
+        dropped, exactly as NEC drops it.
+
+        The equality is CHECKED, never assumed, and both halves must hold:
+        every dropped address is already loaded, and the value there equals
+        this card's.  A copy card that disagrees still refuses — NEC silently
+        prefers the cell's value, which is the silent-wrong class this
+        refusal exists for.
+
+        Two limits, both deliberate:
+
+        * ORDER matters, per-card.  The cell card must have been read first;
+          a pathological copy-card-first deck still refuses, because at that
+          point nothing has been loaded to restate.  Deferring the whole
+          decision to the execute card (the MININEC gate's shape) would lift
+          this, and is the alternative if a real deck ever needs it.
+        * ``LD 5`` conductivity does not participate — it reaches this method
+          with no ``spec`` and so keeps the plain refusal.  The widening is
+          scoped to what was measured.
 
         With the symmetry dead — the usual feed wire or mast after the ``GX``,
         and all but four of the 36 corpus decks that use these cards — this is
@@ -418,6 +443,8 @@ class _Nec2Parser:
         """
         applied, dropped = self.structure.under_the_cell_rule(pairs)
         if not dropped:
+            return applied
+        if spec is not None and self._restates_the_replication(dropped, spec):
             return applied
         symmetry = self.structure.symmetry
         assert symmetry is not None  # nothing is dropped without a live cell
@@ -433,6 +460,29 @@ class _Nec2Parser:
             f"explicit GW cards"
         )
 
+    def _restates_the_replication(
+        self, dropped: tuple[tuple[int, int], ...], spec: LoadSpec
+    ) -> bool:
+        """Is every dropped address ALREADY loaded with exactly ``spec``?
+
+        The momwire#471 predicate, kept whole in one place because both
+        halves are load-bearing and the failure modes differ.  "Already
+        loaded" alone would serve a copy card that CONTRADICTS the cell —
+        the case NEC resolves silently in the cell's favour, which is the
+        silent-wrong class the refusal exists to catch.  "Values equal"
+        alone is meaningless without knowing the segment was reached.
+
+        ``LoadSpec`` is a frozen dataclass, so ``==`` is field-wise and
+        exact — no tolerance.  Two cards that differ in the last bit of a
+        resistance are not restating each other, and the deck should say
+        which it means.
+        """
+        for wire, seg in dropped:
+            piece_index, elem = self.structure.element_of(wire, seg)
+            if self._load_spec_at.get((piece_index, elem)) != spec:
+                return False
+        return True
+
     def _ld(self, card: Card) -> None:
         ldtyp = card.i(0)
         if ldtyp == -1:
@@ -441,6 +491,7 @@ class _Nec2Parser:
             # too, but IS's insulation (a different card) never does.
             self._loads = []
             self._loaded = set()
+            self._load_spec_at = {}
             self._global_conductivity = None
             self._wire_conductivity = {}
             return
@@ -472,7 +523,7 @@ class _Nec2Parser:
         # byte-identical to omitting the card is not refused for a rule it
         # cannot trip — and after the expansion limit, which counts the card
         # AS WRITTEN (see `_LD_EXPAND_MAX`).
-        for wire, seg in self._cell_rule(pairs):
+        for wire, seg in self._cell_rule(pairs, spec):
             piece_index, elem = self.structure.element_of(wire, seg)
             key = (piece_index, elem)
             if key in self._loaded:
@@ -482,6 +533,7 @@ class _Nec2Parser:
                     "segment is not merged"
                 )
             self._loaded.add(key)
+            self._load_spec_at[key] = spec
             _, arclength = self.structure.resolve_of(wire, seg)
             self._loads.append((piece_index, arclength, spec))
 

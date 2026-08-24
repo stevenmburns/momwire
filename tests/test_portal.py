@@ -4878,3 +4878,101 @@ def test_every_basis_ships_as_a_named_entry_point():
     assert set(BASES) == {nec_portal._filename_basis(n) for n in named}, (
         "roster and scripts table out of lockstep"
     )
+
+
+# --------------------------------------------------------------------------
+# momwire#439: a load-only site on a natively-loading basis
+# --------------------------------------------------------------------------
+
+#: A load that is NOT on the fed segment. That separation is the whole
+#: trigger: `_sites()` merges a load and a feed on one segment into a single
+#: `PortSite`, so the plan and the solver's feed list stay the same length
+#: and nothing goes wrong. Split them and only the natively-loading bases
+#: diverge.
+_LOAD_ONLY_DECK = (
+    "CE a load away from the feed\n"  # no issue number: the portal echoes CE
+    "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
+    "GE 0\n"
+    "LD 0 1 3 3 50. 1.e-6 0.\n"
+    "EX 0 1 5 0 1.\n"
+    "FR 0 1 0 0 30. 0\n"
+    "XQ\n"
+    "NX\n"
+)
+
+
+@pytest.fixture
+def restore_active_basis():
+    """Put `_active_basis` back after a test selects one.
+
+    `main(["--basis", X])` writes a MODULE-LEVEL `_active_basis`, and the
+    reset that its own comment calls "per-invocation, never sticky" lives
+    inside main()'s argv parsing. `run_deck()` does not go through that — it
+    calls `deck_frame()` and reads the global as it stands. So a test that
+    selects a basis leaks it into every later test that reaches for
+    `run_deck`, and those tests silently answer under someone else's basis.
+
+    That is how these gates first turned `test_portal_differential` red:
+    seven load-carrying fixtures solved under razor instead of bspline. The
+    leak is momwire's rather than this file's, but a test that trips it
+    should clean up after itself either way.
+    """
+    from momwire.portal import _portal as _p
+
+    was = (_p._active_basis, _p._active_basis_name)
+    yield
+    _p._active_basis, _p._active_basis_name = was
+
+
+@pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
+def test_a_load_only_site_on_a_native_loading_basis_refuses_by_name(
+    basis, restore_active_basis
+):
+    """momwire#439 was an `IndexError: list index out of range` from inside
+    `_port_signs` — a traceback naming nothing the deck's author could act on.
+
+    RazorSolver refuses the port-algebra route's zero-volt gap and takes its
+    loads through `lumped_loads`, so a load-only site gets a `PortSite` with
+    no feed behind it: `plan.n_ports` counts it, `compute_port_solution()`
+    does not, and indexing one list by the other walks off the end.
+
+    SERVING it needs the load-stamping algebra to special-case these solvers,
+    which the issue puts out of its own scope. This gates the refusal only —
+    but the refusal has to carry the two things a traceback did not: what is
+    wrong, and what to do instead.
+    """
+    _, out, err = _run_main(["--basis", basis], deck=_LOAD_ONLY_DECK)
+    text = out + err
+    assert "momwire#439" in text
+    assert "load-only site" in text
+    assert "IndexError" not in text, "the traceback must not reach the user"
+    # Both escape routes are named, and both are true — see the two tests
+    # below, which are what stops this message from being folklore.
+    assert "fed segment" in text
+    assert "--basis bspline" in text
+
+
+def test_the_439_refusal_names_a_basis_that_really_serves_it(restore_active_basis):
+    """The advice half of the message above, checked rather than asserted.
+
+    A refusal that recommends a workaround is making a claim about another
+    code path, and that claim rots silently. `bspline` stamps loads as ports,
+    so it has a feed per site and the deck solves.
+    """
+    _, out, err = _run_main(["--basis", "bspline"], deck=_LOAD_ONLY_DECK)
+    assert "IMPEDANCE" in out, err
+    assert "momwire#439" not in (out + err)
+
+
+def test_the_439_refusal_names_a_geometry_that_really_serves_it(restore_active_basis):
+    """The other half: moving the load ONTO the fed segment merges the two
+    into one `PortSite`, so the lists stay the same length and razor solves.
+
+    This is also the boundary of the defect — it is the SEPARATION that
+    trips it, not loads-under-razor in general.
+    """
+    merged = _LOAD_ONLY_DECK.replace("LD 0 1 3 3", "LD 0 1 5 5")
+    assert merged != _LOAD_ONLY_DECK
+    _, out, err = _run_main(["--basis", "razor"], deck=merged)
+    assert "IMPEDANCE" in out, err
+    assert "momwire#439" not in (out + err)
