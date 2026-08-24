@@ -709,6 +709,75 @@ def test_g56814_the_batch_refuses_in_node_order():
     assert "0.0" in msgs[0], msgs[0]
 
 
+G_580_TOL = 1e-9
+
+
+@pytest.mark.parametrize(
+    "swap,z,zp,served",
+    [
+        (False, 0.0, -0.15, True),  # observer on it, source below: serve
+        (False, 0.5, 0.0, False),  # source on it, observer above: refuse
+        (True, 0.0, 0.15, True),  # observer on it, source above: serve
+        (True, -0.5, 0.0, False),  # source on it, observer below: refuse
+    ],
+    ids=[
+        "unswapped-observer-on-interface",
+        "unswapped-source-on-interface",
+        "swapped-observer-on-interface",
+        "swapped-source-on-interface",
+    ],
+)
+def test_g580_interface_permissiveness_follows_the_role_not_the_side(
+    swap, z, zp, served
+):
+    """momwire#580: `zp` is the source and `z` the observer in BOTH branches.
+
+    `swap` exchanges the SIDE each sits on, not the role each plays, so the
+    permissiveness has to travel with the role: an observer may sit ON the
+    interface (its source leg still holds the tail down), a source may never
+    (momwire#524 phase 3, no tail decay at all). Written as a pair of side
+    slots instead, the guard read the roles off the sign of the coordinate
+    and inverted itself under `swap` — serving the one geometry the refusal
+    exists to catch and refusing a tabulated one.
+
+    All four rows in ONE table, and the SERVE rows carry their weight —
+    measured against three mutations rather than assumed:
+
+    * the shipped guard before this fix: the two swapped rows fail;
+    * the half-fix (source strictness corrected, observer left strict under
+      `swap`): only `swapped-observer-on-interface` fails, so a table of
+      refusals alone would have called that repair done;
+    * #580's own suggestion, "flip the comparison under `swap`" while keeping
+      the side slots: all four pass — that spelling is this one in different
+      clothing, not the mirror-inversion the issue feared.
+    """
+    et, kp, om, km, lam_p = medium("A/7MHz")
+    rho = 1.0
+    if not served:
+        msgs = []
+        for use_numpy in (True, False):
+            ctx = force_numpy() if use_numpy else None
+            if ctx:
+                ctx.__enter__()
+            try:
+                with pytest.raises(ValueError, match="STRICTLY on one side") as e:
+                    trans._six_integrals_transmitted(
+                        et, kp, rho, z, zp, 1e-9, swap=swap
+                    )
+                msgs.append(str(e.value))
+            finally:
+                if ctx:
+                    ctx.__exit__()
+        assert msgs[0] == msgs[1], msgs
+        return
+
+    got = trans._six_integrals_transmitted(et, kp, rho, z, zp, 1e-9, swap=swap)
+    with force_numpy():
+        ref = trans._six_integrals_transmitted(et, kp, rho, z, zp, 1e-9, swap=swap)
+    assert np.all(np.isfinite(got)), got
+    assert cwise(got, ref) < G_580_TOL, f"{cwise(got, ref):.3e}"
+
+
 # ======================================================================
 # G-568-15 — the five surfaces and the health counters
 # ======================================================================
