@@ -6889,7 +6889,14 @@ static py::tuple remainder_field_proj_batch_below(
 //
 // STACK. Same envelope U2 measured: ~25 kB per `run_contour` at NC = 6, the
 // fine and coarse machines in sequence rather than nested. Nothing here needs
-// a large default; keep `OMP_STACKSIZE` at or above ~256 kB.
+// a large default; keep `OMP_STACKSIZE` at or above ~256 kB. Verified by
+// filling a 1085-node grid at OMP_NUM_THREADS of 1, 4 and 8 under
+// OMP_STACKSIZE of 128K, 256K and 512K: all nine runs BIT-IDENTICAL (same
+// SHA-256 over the value table) and none faulted. The thread count buys 4.2x
+// on top of the per-node figure below (0.63 s -> 0.15 s at 8 threads) wherever
+// threads are available; the test suite pins its xdist workers to
+// OMP_NUM_THREADS=1, so the slow-lane numbers below are the per-node speedup
+// alone with none of that in them.
 //
 // MEASURED on an i7-8550U at OMP_NUM_THREADS=1 (the suite pins its xdist
 // workers there), one contour node against the numpy driver at rtol 1e-9,
