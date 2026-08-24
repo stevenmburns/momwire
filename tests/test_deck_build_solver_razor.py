@@ -23,6 +23,9 @@ Gates, in the order the issue asked for:
    `V_gap = (1 + Z·Y)^-1 V_source` the portal and PR #431's Thevenin gate
    use), razor's translated answer converges to it with N. Measured, not
    asserted at a guessed rate: pinned at the measured level with margin.
+   Run twice — once on an `LD 4` ladder of this file's own, and once on the
+   portal fixture `dipole_load_ld0`'s geometry, which is where momwire#588's
+   measured bar against nec2c comes from.
 3. **Refusals.** A deck needing what razor refuses reaches razor's own
    refusal message through `build_solver`, not a bare `KeyError` /
    `TypeError` — contact over a finite ground, and a `node_gaps` deck (built
@@ -31,6 +34,10 @@ Gates, in the order the issue asked for:
    construction; `test_every_basis_builds_the_same_model` in
    `test_deck_build_solver.py` is extended (not rewritten) to count the new
    family.
+5. **Port spaces** (momwire#588). Razor is the one family whose port count is
+   not the deck's, so `build_solver` renumbers the plan onto the rows it
+   actually built. The gate is that the two plans and the bridge between them
+   agree with the matrix; the portal's end of it is in `test_portal.py`.
 """
 
 from __future__ import annotations
@@ -43,6 +50,16 @@ from momwire.deck.model import DeckModel, DeckWire
 from momwire.razor import RazorSolver
 
 C_LIGHT = 299_792_458.0
+
+LOADED_DIPOLE = """CE dipole with series RLC load
+GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001
+GE 0
+LD 0 1 3 3 50. 1.e-6 0.
+EX 0 1 5 0 1.
+FR 0 1 0 0 30. 0
+XQ
+NX
+"""
 
 DIPOLE = """CM a dipole
 CE
@@ -364,6 +381,62 @@ def test_the_translation_converges_to_the_port_algebra_route():
     assert gaps[-1] < 1.0  # measured 0.30 Ω
 
 
+def _portal_fixture_deck(nsegs: int) -> str:
+    """`tests/fixtures/nec_portal/dipole_load_ld0.deck` at N segments.
+
+    Same wire, same frequency, same load, and the load pinned to the PHYSICAL
+    position segment 3 of 9 put it at rather than to a segment number, so the
+    ladder refines one antenna instead of walking a load along it.
+    """
+    load_arc = (3 - 0.5) * 5.0 / 9.0
+    load_seg = max(1, min(nsegs, round(load_arc * nsegs / 5.0 + 0.5)))
+    feed_seg = (nsegs + 1) // 2
+    if load_seg == feed_seg:
+        load_seg = max(1, load_seg - 1)
+    return f"""CE dipole with series RLC load N={nsegs}
+GW 1 {nsegs} 0. 0. -2.5 0. 0. 2.5 0.001
+GE 0
+LD 0 1 {load_seg} {load_seg} 50. 1.e-6 0.
+EX 0 1 {feed_seg} 0 1.
+FR 0 1 0 0 30. 0
+XQ
+NX
+"""
+
+
+@pytest.mark.slow
+def test_the_two_routes_converge_on_the_fixtures_own_geometry():
+    """The evidence behind momwire#588's measured bar.
+
+    The gate above uses an `LD 4` of 40 - 120j; the portal fixture
+    `dipole_load_ld0` uses an `LD 0` of 50 Ω + j188.5 at 30 MHz, which is a
+    much harder load — comparable to the antenna's own reactance and a third
+    of the way along it — and the fixture meshes it at NINE segments. There
+    the two routes are 57 Ω apart, and razor reads 22.9 % from the committed
+    nec2c capture where bspline reads 1.79 %.
+
+    This is what says that spread is the mesh. Refine the same antenna and
+    the two routes converge on EACH OTHER, and the number they converge to
+    (~160 + 200j) is about 8 % from the oracle's own nine-segment answer of
+    144.06 + 188.89j. So at N = 9 all three are in different places and the
+    two that share a refinement path agree; nothing here is a defect in the
+    load-only service, which `test_portal.py` gates exactly instead.
+    """
+    ns = (9, 19, 41, 81, 161, 321)
+    gaps = []
+    for nsegs in ns:
+        model = parse(_portal_fixture_deck(nsegs))
+        z_razor, _ = build_solver(model, basis="razor").solver.compute_impedance()
+        z_bspline = _stamp(build_solver(model, basis="bspline"))
+        gaps.append(abs(z_razor - z_bspline))
+
+    # Measured 2026-08-24: [56.94, 19.46, 14.04, 5.16, 2.44, 1.16] — a ~49x
+    # fall, monotone from N=19 on, and the far end is 0.7 % of |Z|.
+    assert gaps[0] > 20.0  # the fixture's own mesh IS the coarse end
+    assert gaps[-1] < gaps[0] / 20.0
+    assert gaps[-1] < 3.0  # measured 1.16 Ω
+
+
 # ---------------------------------------------------------------------------
 # gate 3: refusals reach razor's own message through build_solver
 # ---------------------------------------------------------------------------
@@ -452,3 +525,49 @@ def test_the_refusals_are_not_bare_key_or_type_errors():
         pass
     else:
         pytest.fail("expected a refusal")
+
+
+def test_the_plan_a_built_solver_hands_back_is_in_the_solvers_own_port_space():
+    """momwire#588's whole mechanism, in one deck.
+
+    `PortPlan` says indices into `sites` ARE solver port indices, and
+    `prepare_mesh` cannot make that true: it builds one plan per structure,
+    before a basis has been chosen, and a `_NATIVE_LOADING` basis gives a
+    load-only site no row of its own. So the same integer meant two things,
+    which is momwire#439's `IndexError` and #588's dimension mismatch.
+
+    `build_solver` now closes the gap where it is visible — it knows both the
+    plan and the matrix it just built — and hands back three things: the plan
+    in the solver's space, the plan in the deck's, and the bridge between
+    them, built from the same flags the `feeds` list was filtered by so the
+    two cannot drift.
+    """
+    model = parse(LOADED_DIPOLE)
+
+    # Every other family: one port per site, in order, and the two plans are
+    # the SAME OBJECT rather than an equal copy — nothing was renumbered.
+    plain = build_solver(model, basis="bspline")
+    assert plain.ports is plain.deck_ports
+    assert plain.site_to_solver_port == tuple(range(len(plain.ports.sites)))
+    assert len(plain.solver.feeds) == len(plain.ports.sites)
+
+    # Razor: the load-only site has no row of its own, so the two plans part.
+    razor = build_solver(model, basis="razor")
+    assert razor.site_to_solver_port == (None, 0)
+    assert razor.deck_ports.n_ports == 2
+    assert razor.ports.n_ports == 1 == len(razor.solver.feeds)
+    # The solver-space plan addresses the matrix: one site, the fed one, and
+    # a feed index that is a row of `y` rather than a row of the deck.
+    (site,) = razor.ports.sites
+    assert site.feed is not None and site.load is None
+    assert razor.ports.feed_ports == (0,)
+    assert razor.ports.n_ports == razor.solver.compute_port_solution().y.shape[0]
+    # The load is not lost — it is on the fill, which is why it has no port,
+    # and `load_ports` says so in the one way an int cannot.
+    assert razor.ports.load_ports == (None,)
+    assert razor.ports.loaded_ports() == ()
+    assert razor.solver.lumped_loads
+    # The deck's own plan is untouched, and still counts the site the cards
+    # cut: that is what a message about the DECK has to say.
+    assert razor.deck_ports.load_ports == (0,)
+    assert [s.load for s in razor.deck_ports.sites].count(None) == 1

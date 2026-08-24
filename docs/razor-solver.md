@@ -490,19 +490,39 @@ contract) — without it the load's watts would fall into `p_radiated` by
 subtraction and the printed `EFFICIENCY` would read a lossy antenna as a
 good one.
 
-**A remaining portal-side gap, not in this class.** The portal's
-`_port_signs` assumes every `PortPlan` site (every `EX` AND every `LD`) has
-a matching `RazorSolver.feeds` entry — true for a driven site, and true for
-a site that is both fed and loaded (`_sites()` merges the two into one
-`PortSite`, see "A load-only site is not a port here" above) — but a
-LOAD-ONLY site on a segment no `EX` drives never reaches `feeds` at all
-(it is baked straight into `lumped_loads`), so `_port_signs` indexes past
-the end of the list on that one deck shape. Still a portal-side follow-up:
-momwire#433 taught the STAMP and the BUDGET about native loading, which is
-the half that was silently wrong; what remains is the port-COUNT half —
-`plan.n_ports` counts a load-only site that this family's `feeds` (and
-therefore its Y matrix) does not — and repairing it changes nothing in this
-module either.
+**The port-count half, closed portal-side (momwire#588).** momwire#433
+taught the STAMP and the BUDGET about native loading; what remained was
+counting. `plan.n_ports` counts a load-only site that this family's `feeds`
+— and therefore its Y matrix — does not, so a deck port index and a solver
+port index were the same integer for every other family and silently
+different for this one. That was momwire#439's `IndexError` out of
+`_port_signs`, and PR #586's refusal in its place.
+
+It is now served, and nothing in this module changed to serve it. The fix
+is `deck._solver.in_solver_ports`, which renumbers the plan onto the rows
+`build_solver` just built: `BuiltSolver.ports` is in the SOLVER's port
+space, `BuiltSolver.deck_ports` is in the deck's, and
+`site_to_solver_port` is the bridge. Past that point there is one kind of
+index in circulation, so no consumer has to know which space it was handed.
+For every other family the two plans are the same object.
+
+The served answer is the fill's, unaltered: on
+`tests/fixtures/nec_portal/dipole_load_ld0.deck` the portal prints
+`126.60 + 137.29j`, which is this class's own `compute_impedance()` to the
+printed digits. That is 22.9 % from the committed nec2c capture
+(`144.06 + 188.89j`) where `bspline` is 1.79 % — a NINE-SEGMENT
+cross-formulation spread, not a service defect: refine the same antenna and
+the two routes converge on each other (57 → 1.2 Ω over N = 9…321) at
+about `160 + 200j`, some 8 % from the oracle's own nine-segment answer.
+
+Three committed portal fixtures refused before this and serve now, including
+`catalog_multiband_trap_dipole` — a trap dipole with a load-only site on
+each side of its feed, which is the deck shape the issue was filed about.
+`NT`/`TL` endpoints renumber with everything else: on a network deck with a
+load-only site ahead of the far endpoint, this family and the port-algebra
+route converge on one drive point (30 → 2.4 Ω over N = 11…81), which is what
+says the reducer was handed the rows it meant rather than a plausible
+wrong pair.
 
 Gates: `tests/test_deck_build_solver_razor.py` — a battery of eight decks
 (free dipole, `LD 4` mid-element, `LD 5` copper, a `GN 1` base-fed contact

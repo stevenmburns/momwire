@@ -1930,33 +1930,15 @@ def _port_signs(built, model) -> np.ndarray:
     the walk direction (``_polylines.py`` computes it and keeps it), so it is
     recovered here from the geometry: the polyline edge the port sits on
     against the model wire the plan says the port belongs to.
+
+    ``built.ports`` is the plan in the SOLVER's port space (momwire#588), so
+    the congruence this builds is square with the ``Y`` it is applied to and
+    site ``k`` is feed ``k`` — both of which were true only by coincidence
+    while a load-only site on a natively-loading basis was refused.
     """
     signs = np.ones(built.ports.n_ports)
     polylines = built.solver.wires_polylines
     feeds = built.solver.feeds
-    if len(feeds) < len(built.ports.sites):
-        # momwire#439. This indexes `solver.feeds` by the DECK's port plan,
-        # and the two lists are the same length for every solver family in
-        # `deck.BASES` except the natively-loading one: RazorSolver refuses
-        # the port-algebra route's zero-volt gap and takes a load through its
-        # own `lumped_loads` kwarg, so a load-only site — an `LD` whose
-        # segment carries no `EX` — gets a `PortSite` with no feed behind it.
-        # `plan.n_ports` counts it and `compute_port_solution()` does not.
-        #
-        # Serving this needs the load-stamping algebra to special-case those
-        # solvers, which is the issue's own scope note and not this guard.
-        # What this replaces is an `IndexError: list index out of range` out
-        # of the middle of a solve: a refusal the user can act on instead of
-        # a traceback that names nothing.
-        raise PortalError(
-            f"this basis carries loads natively, so a load-only site (an LD "
-            f"on a segment with no EX) has no port behind it: the deck plans "
-            f"{len(built.ports.sites)} ports but the solver built "
-            f"{len(feeds)} — momwire#439. Put the load on the fed segment, "
-            f"where the two merge into one site and this basis solves it, "
-            f"or run the deck on a basis that stamps loads as ports "
-            f"(--basis bspline)"
-        )
     for index, site in enumerate(built.ports.sites):
         polyline = np.asarray(polylines[feeds[index][0]], dtype=float)
         arclength = feeds[index][1]
@@ -2033,6 +2015,10 @@ class DeckSolver:
         self._mesh = prepare_mesh(self.model)
 
         built = self._build(seed, seed_ek, seed_env)
+        # The SOLVER's plan, not the deck's: this class does port algebra on
+        # `Y`, so every index it holds has to address a row of it. The two
+        # differ only for a natively-loading basis with a load-only site,
+        # where the deck plans a port the fill carries instead (momwire#588).
         plan = built.ports
         self.plan = plan
         self.n_ports = plan.n_ports
@@ -2106,6 +2092,18 @@ class DeckSolver:
         y_solver, coeffs = _y_and_port_coeffs(built.solver)
         fill_ms = int(round((time.perf_counter() - started) * 1000.0))
         signs = _port_signs(built, self.model)
+        if signs.shape[0] != y_solver.shape[0]:
+            # The congruence below is `y * signs[:, None] * signs[None, :]`,
+            # and numpy would BROADCAST a mis-sized `signs` rather than
+            # complain — a length-1 vector against an N×N Y is a silent
+            # global scale, not an error. That is the shape momwire#439 wore
+            # (an IndexError only because `_port_signs` walked off a list
+            # first) and what momwire#588's renumbering is for, so the
+            # agreement is checked once per fill rather than trusted.
+            raise PortalError(
+                f"port-space mismatch: the plan says {signs.shape[0]} ports "
+                f"and the solver built {y_solver.shape[0]} — momwire#588"
+            )
         return {
             "solver": built.solver,
             "wavelength": built.wavelength,
