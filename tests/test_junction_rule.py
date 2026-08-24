@@ -159,17 +159,56 @@ def _joined():
 
 
 @pytest.mark.parametrize("solver", [BSplineSolver, SinusoidalSolver])
-def test_omitting_junctions_on_touching_wires_refuses(solver):
-    """The defect this whole issue is about: coincident ends with no
-    `junctions=` used to be solved as disconnected, silently, while razor and
-    harrington joined the same geometry."""
-    with pytest.raises(ValueError) as exc:
-        solver(wires=_joined(), n_per_edge_per_wire=[[6], [6]], wavelength=1.0)
-    msg = str(exc.value)
-    # Names the geometry, the consequence, and BOTH ways out.
-    assert "SEPARATE" in msg
-    assert "(0, 'start'), (1, 'start')" in msg
-    assert "junctions=[]" in msg
+def test_touching_wires_are_joined_without_being_told(solver):
+    """momwire#590 step 3: the default is inference, not refusal.
+
+    Step 2 refused here, to count who relied on the old silent-disconnect
+    behaviour. The answer was one test, and that test was itself a latent bug,
+    so the default flipped.
+    """
+    s = solver(wires=_joined(), n_per_edge_per_wire=[[6], [6]], wavelength=1.0)
+    assert len(s.junctions) == 1
+    assert sorted(s.junctions[0]) == [(0, "start"), (1, "start")]
+
+
+@pytest.mark.parametrize("solver", [BSplineSolver, SinusoidalSolver])
+def test_inferring_the_junction_gives_the_same_answer_as_declaring_it(solver):
+    """The claim the flip rests on, in impedance rather than in bookkeeping.
+
+    If these ever diverge, inference is not reproducing what a caller writing
+    the junction out by hand would get, and the default is lying.
+    """
+    kw = dict(
+        wires=_joined(),
+        n_per_edge_per_wire=[[8], [8]],
+        wavelength=1.0,
+        wire_radius=0.001,
+        feed_wire_index=0,
+        feed_arclength=0.125,
+    )
+    inferred, _ = solver(**kw).compute_impedance()
+    declared, _ = solver(
+        **kw, junctions=[[(0, "start"), (1, "start")]]
+    ).compute_impedance()
+    assert complex(inferred) == complex(declared)
+
+
+@pytest.mark.parametrize("solver", [BSplineSolver, SinusoidalSolver])
+def test_an_empty_list_still_means_deliberately_apart(solver):
+    """The escape has to keep working, and it has to keep MEANING something:
+    disconnected wires must not silently become joined now that the default
+    infers. Their impedances differ, which is the whole point."""
+    kw = dict(
+        wires=_joined(),
+        n_per_edge_per_wire=[[8], [8]],
+        wavelength=1.0,
+        wire_radius=0.001,
+        feed_wire_index=0,
+        feed_arclength=0.125,
+    )
+    apart, _ = solver(**kw, junctions=[]).compute_impedance()
+    joined, _ = solver(**kw).compute_impedance()
+    assert complex(apart) != complex(joined)
 
 
 @pytest.mark.parametrize("solver", [BSplineSolver, SinusoidalSolver])
@@ -212,3 +251,37 @@ def test_a_single_wire_never_trips():
     bent = [np.array([[-0.25, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.25, 0.0]])]
     s = BSplineSolver(wires=bent, n_per_edge_per_wire=[[6, 6]], wavelength=1.0)
     assert s.junctions == []
+
+
+def test_a_closed_loop_infers_its_own_self_junction():
+    """A loop is one wire whose two ends coincide, so inference has to join a
+    wire to ITSELF — the one shape a "junctions connect different wires"
+    reading would miss, and loops are common antennas.
+
+    Gated in impedance, not just in the junction list: left open, the same
+    geometry is a folded-back dipole with a completely different Z.
+    """
+    side = 0.25
+    loop = np.array(
+        [[0, 0, 0], [side, 0, 0], [side, side, 0], [0, side, 0], [0, 0, 0]],
+        dtype=float,
+    )
+    kw = dict(
+        wires=[loop],
+        n_per_edge_per_wire=[[6, 6, 6, 6]],
+        wavelength=1.0,
+        wire_radius=0.001,
+        feed_wire_index=0,
+        feed_arclength=0.125,
+    )
+    s = BSplineSolver(**kw)
+    assert s.junctions == [[(0, "start"), (0, "end")]]
+
+    closed, _ = s.compute_impedance()
+    declared, _ = BSplineSolver(
+        **kw, junctions=[[(0, "start"), (0, "end")]]
+    ).compute_impedance()
+    assert complex(closed) == complex(declared)
+
+    open_ended, _ = BSplineSolver(**kw, junctions=[]).compute_impedance()
+    assert complex(open_ended) != complex(closed)

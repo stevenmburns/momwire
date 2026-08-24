@@ -58,7 +58,7 @@ import scipy.linalg
 import scipy.sparse
 from scipy.interpolate import BSpline
 
-from ._junction_rule import coincident_end_groups, undeclared_junctions_message
+from ._junction_rule import coincident_end_groups
 from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
@@ -950,16 +950,24 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._auto_active_junctions = None
 
         self.junctions = []
-        # momwire#590 step 2: coincident wire ends with no `junctions=` are
-        # silently solved as DISCONNECTED here, while RazorSolver and
-        # HarringtonSolver detect and join the same geometry. One deck, two
-        # answers, no diagnostic -- refuse instead. `junctions=[]` is the
-        # explicit escape and is deliberately NOT caught: omitting the
-        # argument is a mistake, passing an empty list is a statement.
+        # momwire#590 step 3: coincident wire ends ARE a junction unless the
+        # caller says otherwise. That is what the geometry means, what NEC
+        # does, and what RazorSolver and HarringtonSolver already did -- this
+        # solver used to solve the same wires APART, silently, which is a wrong
+        # answer rather than a coarse one.
+        #
+        # `junctions=[]` remains the escape: omitting the argument is now a
+        # request to infer, passing an empty list is a statement that the wires
+        # really are meant to be disconnected.
+        #
+        # Wire-to-wire connectivity only. A lone end resting in the ground
+        # plane is NOT inferred into a 1-entry grounded junction here, because
+        # ground contact is a separate question (#151) with its own tolerance,
+        # and inferring it would change grounded decks that read correctly
+        # today. Razor does infer it, so that asymmetry survives step 3
+        # deliberately -- see #590.
         if junctions is None:
-            _undeclared = coincident_end_groups(self.wires_polylines)
-            if _undeclared:
-                raise ValueError(undeclared_junctions_message(_undeclared))
+            junctions = coincident_end_groups(self.wires_polylines)
         if junctions is not None:
             for j, jw in enumerate(junctions):
                 # A 1-entry group is legal (issue #172): as a plain junction
