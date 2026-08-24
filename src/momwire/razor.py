@@ -363,7 +363,7 @@ from ._kernel_moments import (
     _static_axis_moments,
     _static_axis_moments_ek,
 )
-from ._junction_rule import JUNCTION_TOL, grouped
+from ._junction_rule import JUNCTION_TOL, canonical_groups, grouped
 from ._port_solution import PortSolution, _SweptPortSolutions
 from ._quadrature import leggauss
 
@@ -404,9 +404,6 @@ _OUT_OF_SCOPE = {
     "degree": "RazorSolver has no degree: the razor-blade testing rule is "
     "defined against the tent (degree-1) expansion. Use "
     "BSplineSolver(degree=...) for higher-order bases with Galerkin testing",
-    "junctions": "RazorSolver takes no junction spec: junctions are detected "
-    "from the geometry (coincident wire ends), so listing them is either "
-    "redundant or a disagreement with the mesh",
     "junction_ports": "junction ports are not supported: a junction basis is "
     "already a through-current unknown, and a source at a K>=3 junction has no "
     "unambiguous branch pair to drive",
@@ -696,6 +693,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         *,
         wires,
         n_per_edge_per_wire=None,
+        junctions=None,
         nsegs=101,
         wire_radius=0.0005,
         extended_kernel=False,
@@ -777,6 +775,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if not wires:
             raise ValueError("wires must be non-empty")
         self.wires_polylines = [np.asarray(w, dtype=float) for w in wires]
+        # None means infer from the geometry (momwire#590 step 3b). A list
+        # overrides it -- most usefully by declaring FEWER junctions than
+        # the geometry has, which is how a caller says two coincident ends
+        # are deliberately apart. That case was previously inexpressible
+        # here, and it is the whole reason the old refusal was wrong to
+        # call a spec "either redundant or a disagreement with the mesh":
+        # a deliberate disagreement is a legitimate model.
+        self._declared_junctions = (
+            None if junctions is None else [list(g) for g in junctions]
+        )
         for i, pl in enumerate(self.wires_polylines):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
@@ -1026,7 +1034,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # to be spelled here and a second time by hand in `harrington.py`.
         # Label and point order are unchanged, so the grouping and the
         # reference side A of every junction tent are what they always were.
-        groups = grouped(labels, points, _JUNCTION_TOL)
+        if self._declared_junctions is None:
+            groups = grouped(labels, points, _JUNCTION_TOL)
+        else:
+            groups = canonical_groups(self._declared_junctions)
         out = []
         for g in groups:
             grounded = any(e in grounded_ends for e in g)

@@ -263,9 +263,12 @@ def test_distinct_endpoints_are_fine():
         # refused inside it is a GEOMETRY (contact over a finite ground),
         # not a kwarg.
         {"degree": 2},
-        # Junctions are DETECTED, never declared: an explicit spec is either
-        # redundant with the mesh or disagrees with it.
-        {"junctions": [[(0, "end"), (1, "start")]]},
+        # `junctions` is NOT here since momwire#590 step 3b. The old refusal
+        # said a spec was "either redundant with the mesh or disagrees with
+        # it" — true, and the disagreement is the point: declaring FEWER
+        # junctions than the geometry has is how a caller says two coincident
+        # ends are deliberately apart, and no other spelling said it. See
+        # tests/test_junction_rule.py.
         {"junction_ports": [(0, 1.0)]},
         # `extended_kernel` is NOT here since momwire#398 D1: the taper study
         # identified the NEC-5 binary as extended-kernel everywhere, so the

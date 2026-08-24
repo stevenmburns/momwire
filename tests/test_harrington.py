@@ -385,12 +385,29 @@ def test_refl_coef_and_sommerfeld_both_run_and_move_the_answer():
     assert abs(out[0] - out[1]) > 0.1, "sommerfeld must differ from refl-coef"
 
 
-def test_junctions_is_refused_by_name():
-    """Refused for a different reason than the parent's, so a different
-    sentence: this row detects junctions rather than having nothing to
-    detect."""
-    with pytest.raises(NotImplementedError, match="found from the geometry"):
-        HarringtonSolver(
+def test_junctions_is_accepted_and_not_forwarded_to_the_parent():
+    """momwire#590 step 3b: this row now takes a junction spec.
+
+    It used to refuse one, on the grounds that coincident ends are found from
+    the geometry so there is nothing to declare. That is true of AGREEING with
+    the geometry and false of disagreeing with it -- a caller wanting two
+    coincident ends left apart had no way to say so.
+
+    The parent (PulseSolver) still refuses `junctions=` for its own and
+    still-valid reason: its basis has no junction unknown to constrain. So the
+    spec must be intercepted here, never forwarded.
+    """
+    s = HarringtonSolver(
+        wires=[_dipole()],
+        nsegs=8,
+        wire_radius=DIP_RAD,
+        wavelength=WAVELENGTH,
+        junctions=[],
+    )
+    assert s._declared_junctions == []
+
+    with pytest.raises(NotImplementedError, match="no junction"):
+        PulseSolver(
             wires=[_dipole()],
             nsegs=8,
             wire_radius=DIP_RAD,
@@ -411,8 +428,10 @@ def test_nearly_coincident_ends_are_refused_not_silently_disconnected():
     They used to be answered — as two separate charge cells, with the
     junction current having nowhere to cross. Measured before the refusal:
     a dipole split with a 5e-8 m gap read 137.2 + 4.7j against 131.7 − 4.1j
-    unsplit at N = 96, a 7.9% error that GROWS with refinement, and with
-    `junctions=` refused there was no way for a caller to say otherwise.
+    unsplit at N = 96, a 7.9% error that GROWS with refinement.
+
+    Since momwire#590 step 3b a caller CAN say otherwise -- the refusal now
+    names `junctions=` as the second route, and the test below takes it.
 
     Nothing is served silently wrong: 5e-8 m is a thousand times finer than
     the grid `deck/_polylines` fuses endpoints onto, so a transformed or
@@ -429,6 +448,42 @@ def test_nearly_coincident_ends_are_refused_not_silently_disconnected():
             wire_radius=DIP_RAD,
             wavelength=WAVELENGTH,
         ).compute_impedance()
+
+
+def test_the_near_coincident_refusal_now_names_a_route_that_works():
+    """The refusal names two remedies, so the two have to agree.
+
+    Before momwire#590 step 3b it named one -- "make the two ends exactly
+    equal" -- because `junctions=` was refused here. It now offers the spec as
+    well, and a refusal that named a route which did not work, or worked
+    differently, would be worse than the one-route version it replaced.
+
+    Same geometry, same feed, both remedies applied: closing the 5e-8 m gap,
+    versus leaving it and declaring the two ends one node.
+    """
+    p0 = np.array([0.0, -DIP_LEN / 2, 0.0])
+    mid = np.array([0.0, 0.0, 0.0])
+    gap = np.array([0.0, 5e-8, 0.0])
+    p1 = np.array([0.0, DIP_LEN / 2, 0.0])
+    kw = dict(
+        n_per_edge_per_wire=[[24], [24]],
+        wire_radius=DIP_RAD,
+        wavelength=WAVELENGTH,
+        feed_wire_index=0,
+        feed_arclength=DIP_LEN / 4,
+    )
+    # Remedy 1: exactly equal ends, joined by the tolerance.
+    closed, _ = HarringtonSolver(
+        wires=[np.array([p0, mid]), np.array([mid, p1])], **kw
+    ).compute_impedance()
+    # Remedy 2: the gap stays, the caller declares the node.
+    declared, _ = HarringtonSolver(
+        wires=[np.array([p0, mid]), np.array([mid + gap, p1])],
+        junctions=[[(0, "end"), (1, "start")]],
+        **kw,
+    ).compute_impedance()
+    rel = abs(complex(declared) - complex(closed)) / abs(complex(closed))
+    assert rel < 1e-4, f"{declared} vs {closed} — {rel:.2e}"
 
 
 def test_a_chained_tolerance_is_refused_so_the_grouping_rule_cannot_diverge():

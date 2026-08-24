@@ -113,7 +113,7 @@ from .pulse import _OUT_OF_SCOPE, _PER_WIRE_RADIUS_REFUSAL, PulseSolver
 # full account; `_node_map` refuses the gap between the two rather than
 # answering across it.
 from ._junction_rule import JUNCTION_TOL as _JUNCTION_TOL
-from ._junction_rule import coincident_groups
+from ._junction_rule import canonical_groups, coincident_groups
 
 # The deck layer's "same point" grid (`deck/_polylines._NODE_EPS`). Ends
 # between the two tolerances are refused rather than silently disconnected —
@@ -129,12 +129,6 @@ _EXTENDED_KERNEL_REFUSAL = (
     "formulation finite — but the vector term and every charge-cell moment "
     "are written against the reduced kernel, and the exact kernel would "
     "need both rewritten rather than a different quadrature"
-)
-
-_JUNCTIONS_REFUSAL = (
-    "HarringtonSolver takes no junction spec: coincident wire ends are "
-    "found from the geometry (within 1e-9 m) and become one charge cell "
-    "spanning every incident half-segment, so there is nothing to declare"
 )
 
 
@@ -209,9 +203,20 @@ class HarringtonSolver(PulseSolver):
     )
 
     def __init__(self, **kwargs):
-        if "junctions" in kwargs:
-            raise NotImplementedError(_JUNCTIONS_REFUSAL)
+        # momwire#590 step 3b. This used to refuse `junctions=` on the grounds
+        # that coincident ends are found from the geometry "so there is
+        # nothing to declare". True of AGREEING with the geometry, false of
+        # disagreeing with it: two coincident ends a caller wants left apart
+        # were inexpressible here, and every other solver could say it.
+        #
+        # Intercepted rather than forwarded: the PARENT (PulseSolver) refuses
+        # `junctions=` for a different and still-valid reason -- its basis has
+        # no junction unknown to constrain at all.
+        junctions = kwargs.pop("junctions", None)
         super().__init__(**kwargs)
+        self._declared_junctions = (
+            None if junctions is None else [list(g) for g in junctions]
+        )
         self._cached_cells = None
 
     # ------------------------------------------------------------------
@@ -264,9 +269,18 @@ class HarringtonSolver(PulseSolver):
             ends.append((knot_offsets[w], geom["seg_l"][offsets[w]]))
             ends.append((knot_offsets[w] + n_w, geom["seg_r"][offsets[w + 1] - 1]))
 
-        rep = coincident_groups([p for _node, p in ends], _JUNCTION_TOL)
-        for i, (node_i, _p) in enumerate(ends):
-            node_of[node_i] = ends[rep[i]][0]
+        if self._declared_junctions is None:
+            rep = coincident_groups([p for _node, p in ends], _JUNCTION_TOL)
+            for i, (node_i, _p) in enumerate(ends):
+                node_of[node_i] = ends[rep[i]][0]
+        else:
+            # `ends` is indexed 2w / 2w+1 for wire w's start / end, which is
+            # the same (wire, end) vocabulary `junctions=` speaks.
+            for g in canonical_groups(self._declared_junctions):
+                members = [2 * w + (0 if e == "start" else 1) for w, e in g]
+                head = ends[members[0]][0]
+                for m in members:
+                    node_of[ends[m][0]] = head
 
         # Nearly-coincident ends are REFUSED, not quietly disconnected.
         # Two ends further apart than `_JUNCTION_TOL` are separate nodes, so
@@ -280,8 +294,13 @@ class HarringtonSolver(PulseSolver):
         # fuses endpoints onto a 1e-6 grid (`deck/_polylines._NODE_EPS`),
         # a thousand times looser than the grouping tolerance, so a
         # hand-assembled or transformed model can easily land inside it.
+        # Ends that ended up as one node are past this question, however they
+        # got there -- joined by the tolerance, or joined because the caller
+        # said so. Only ends still SEPARATE can fall in the bad window.
         for i, (node_i, p) in enumerate(ends):
             for node_j, q in ends[:i]:
+                if node_of[node_i] == node_of[node_j]:
+                    continue
                 d = float(np.linalg.norm(p - q))
                 if _JUNCTION_TOL < d <= _NEAR_COINCIDENT_TOL:
                     raise ValueError(
@@ -292,7 +311,8 @@ class HarringtonSolver(PulseSolver):
                         f"charge cells and the junction current would have "
                         f"nowhere to cross, which is a first-order error that "
                         f"grows as the mesh refines. Make the two ends exactly "
-                        f"equal"
+                        f"equal, or pass `junctions=` naming them as one node "
+                        f"(momwire#590)"
                     )
 
         _uniq, cell = np.unique(node_of, return_inverse=True)
