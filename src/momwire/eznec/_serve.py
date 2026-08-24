@@ -1669,7 +1669,11 @@ def _solver_for(
     solver_class: type = BSplineSolver,
     basis_kwargs: Mapping[str, object] = MappingProxyType({}),
 ):
-    """The constructed solver, one port per declared cut.
+    """The constructed solver, one port per declared site.
+
+    A "cut" until momwire#603 U1, which is no longer the word: under the
+    delta-gap spelling nothing is cut, and the ports are a ground contact, an
+    interior knot and a junction's through-current knot.
 
     Two kwargs carry the deck's ports and momwire orders their rows
     ``[gap feeds…, junction ports…, node gaps…]`` — the order
