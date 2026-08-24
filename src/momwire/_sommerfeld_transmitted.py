@@ -482,15 +482,32 @@ def _check_transmitted_sides(rho, z, zp, swap):
     Split out of `_six_integrals_transmitted` so the batch driver can run it
     per node, in node order, before the C++ call — these words are contract
     and the two paths must refuse the same geometries with the same message.
+
+    The permissiveness follows the ROLE, not the side (momwire#580). `zp` is
+    always the source and `z` always the observer — `swap` exchanges which
+    SIDE each of them occupies, not which of them is which, exactly as
+    `_integrand_six_transmitted` spells it: "source ABOVE at z′ > 0 carrying
+    γ_p, observer BELOW at z < 0 carrying γ_m". Writing the guard as a pair
+    of side slots (a permissive `>= 0` one and a strict `< 0` one) instead
+    read the roles off the sign of the coordinate, so under `swap` it served
+    a source ON the interface — the one geometry with no tail decay at all,
+    which `_MAX_TAIL_PANELS_T` can only report as `converged = False`.
     """
     if rho < 0.0:
         raise ValueError(f"need rho >= 0, got {rho!r}")
-    above, below_ = (zp, z) if swap else (z, zp)
-    if not above >= 0.0 or not below_ < 0.0:
+    # Strict for the source, at-or-on for the observer, on whichever side
+    # `swap` puts each. NaN fails both spellings and so still refuses.
+    if swap:
+        ok = zp > 0.0 and z <= 0.0
+    else:
+        ok = zp < 0.0 and z >= 0.0
+    if not ok:
+        src_side, obs_side = ("above", "below") if swap else ("below", "above")
         raise ValueError(
             "the transmitted family needs the source STRICTLY on one side of "
             "the interface (z = 0) and the observer at or beyond the other: "
-            f"got above-side height {above!r}, below-side height {below_!r}. "
+            f"got source z′ {zp!r} (strictly {src_side}) and observer z "
+            f"{z!r} (at or {obs_side}). "
             "The observer may sit ON the interface — the source leg alone "
             "keeps the tail decaying and the field is continuous there — but "
             "a SOURCE on the interface is the crossing/contact geometry of "
