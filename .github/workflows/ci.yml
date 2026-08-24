@@ -7,6 +7,40 @@ on:
     branches: [main]
 
 jobs:
+  # Which lanes are worth running for this diff. A docs- or site-only PR
+  # cannot break the solvers, and PR #600 -- one markdown file -- burned
+  # sixteen runner-minutes proving it.
+  #
+  # The guard is on the STEPS below, never on the jobs, and never on the
+  # workflow's own `on:` paths. `lint`, `test`, `test-pynec` and `test-slow`
+  # are REQUIRED checks: a workflow filtered out at the `on:` level never
+  # reports them at all, and branch protection then waits for a result that
+  # can never arrive. A job that runs and does nothing reports success in
+  # about fifteen seconds, which is the whole point and costs nothing to be
+  # certain about.
+  #
+  # `lint` is deliberately NOT guarded -- ruff runs over the repo in six
+  # seconds and a docs PR can still carry a Python snippet.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          # Everything, minus the paths that cannot change what a solver
+          # answers. A PR touching BOTH docs and code matches `**` on its
+          # code files and runs the full lanes, which is the safe direction.
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!site/**'
+              - '!**/*.md'
+              - '!LICENSE'
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -26,6 +60,7 @@ jobs:
       - run: ruff format --check
 
   test:
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -34,13 +69,16 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        if: needs.changes.outputs.code == 'true'
         with:
           key: ${{ github.job }}-${{ runner.os }}
       - run: pip install --upgrade pip
+        if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
       # step. Installed HERE rather than left to build isolation so that
       # `--no-build-isolation` below can find them.
       - run: pip install "setuptools>=61.0" wheel pybind11
+        if: needs.changes.outputs.code == 'true'
       # The extension is ONE 8,063-line translation unit at -O3, and compiling
       # it costs 57-70 s in every job that installs the package -- five of
       # them, on every PR. `cache: pip` above caches downloaded WHEELS, not
@@ -67,6 +105,7 @@ jobs:
       # push run on main after merge populates the shared scope, and PRs after
       # that read it.
       - run: pip install -e .[test] --no-build-isolation
+        if: needs.changes.outputs.code == 'true'
         env:
           CC: ccache gcc
           CXX: ccache g++
@@ -81,6 +120,7 @@ jobs:
       # the occurrence burns its own evidence — three did before this step
       # existed (PR #460, the #415 arc twice, PR #474).
       - run: pytest tests/ -m "not slow and not memgate"
+        if: needs.changes.outputs.code == 'true'
         env:
           MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
       - name: Upload byte-oracle mismatch dumps (momwire#464)
@@ -92,6 +132,7 @@ jobs:
           if-no-files-found: ignore
 
   test-macos:
+    needs: changes
     # The platform Ward runs SimNEC on (momwire#527/#528): the suite must
     # pass where the portal's real users live, not only where wheels build.
     # Same lane as `test` (fast marker subset); slow/memgate stay linux-only.
@@ -108,19 +149,24 @@ jobs:
         # wheels workflow uses.
         run: brew install libomp
       - uses: hendrikmuhs/ccache-action@v1.2
+        if: needs.changes.outputs.code == 'true'
         with:
           key: ${{ github.job }}-${{ runner.os }}
       - run: pip install --upgrade pip
+        if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
       # step. Installed HERE rather than left to build isolation so that
       # `--no-build-isolation` below can find them.
       - run: pip install "setuptools>=61.0" wheel pybind11
+        if: needs.changes.outputs.code == 'true'
       # Same reasoning as the `test` job; Apple clang rather than gcc.
       - run: pip install -e .[test] --no-build-isolation
+        if: needs.changes.outputs.code == 'true'
         env:
           CC: ccache clang
           CXX: ccache clang++
       - run: pytest tests/ -m "not slow and not memgate"
+        if: needs.changes.outputs.code == 'true'
         env:
           MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
       - name: Upload byte-oracle mismatch dumps (momwire#464)
@@ -132,6 +178,7 @@ jobs:
           if-no-files-found: ignore
 
   test-slow:
+    needs: changes
     # The slow-marked tests are the solver-regression pins (M3/M4 reference
     # constants, near-open collapse, section-6 oracle, EK brute-force sweep)
     # — until #219 NO lane ran them, so week-old pins had never executed in
@@ -147,21 +194,27 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        if: needs.changes.outputs.code == 'true'
         with:
           key: ${{ github.job }}-${{ runner.os }}
       - run: pip install --upgrade pip
+        if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
       # step. Installed HERE rather than left to build isolation so that
       # `--no-build-isolation` below can find them.
       - run: pip install "setuptools>=61.0" wheel pybind11
+        if: needs.changes.outputs.code == 'true'
       # Same reasoning as the `test` job.
       - run: pip install -e .[test] --no-build-isolation
+        if: needs.changes.outputs.code == 'true'
         env:
           CC: ccache gcc
           CXX: ccache g++
       - run: pytest tests/ -m "slow and not memgate"
+        if: needs.changes.outputs.code == 'true'
 
   test-memgate:
+    needs: changes
     # Residency/budget certification gates (#400): tracemalloc peaks and
     # byte-budget checks. These pin actual measured allocations, which drift
     # ~5% under CI's allocator noise — cheap to run, but not worth the
@@ -170,7 +223,9 @@ jobs:
     # cycle. Must NOT run on pull_request: the `if` below is the enforcement
     # (this workflow's own `pull_request` trigger would otherwise start it).
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -178,23 +233,29 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        if: needs.changes.outputs.code == 'true'
         with:
           key: ${{ github.job }}-${{ runner.os }}
       - run: pip install --upgrade pip
+        if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
       # step. Installed HERE rather than left to build isolation so that
       # `--no-build-isolation` below can find them.
       - run: pip install "setuptools>=61.0" wheel pybind11
+        if: needs.changes.outputs.code == 'true'
       # Same reasoning as the `test` job.
       - run: pip install -e .[test] --no-build-isolation
+        if: needs.changes.outputs.code == 'true'
         env:
           CC: ccache gcc
           CXX: ccache g++
       # -n0: memory-certification gates measure peak RSS and cannot share a
       # box with concurrent workers; this lane opts out of addopts' xdist.
       - run: pytest tests/ -m memgate -n0
+        if: needs.changes.outputs.code == 'true'
 
   test-pynec:
+    needs: changes
     # Validate that the PyNEC backend agrees with momwire
     # (tests/test_pynec_backend.py). PyNEC is no longer compiled here — it's
     # installed as a prebuilt wheel from the python-necpp fork's GitHub Release
@@ -211,23 +272,28 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        if: needs.changes.outputs.code == 'true'
         with:
           key: ${{ github.job }}-${{ runner.os }}
       - run: pip install --upgrade pip
+        if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
       # step. Installed HERE rather than left to build isolation so that
       # `--no-build-isolation` below can find them.
       - run: pip install "setuptools>=61.0" wheel pybind11
+        if: needs.changes.outputs.code == 'true'
       # Same build + test deps as the plain lane (no fastapi — the web server
       # was retired); PyNEC is added from the fork's wheel in the next step.
       # Same ccache reasoning as the `test` job -- this lane is the starkest
       # case of it: 69 s of install for 3 s of tests.
       - run: pip install -e .[test] --no-build-isolation
+        if: needs.changes.outputs.code == 'true'
         env:
           CC: ccache gcc
           CXX: ccache g++
 
       - name: Install pynec-accel from the python-necpp release wheel
+        if: needs.changes.outputs.code == 'true'
         # --no-index so the ONLY candidate is the fork's wheel — never upstream
         # PyNEC on PyPI, which lacks our BLAS/OpenMP work and doesn't load on
         # the target machines. (The fork's distribution is `pynec-accel`; the
@@ -237,3 +303,4 @@ jobs:
           pip install pynec-accel --no-index \
             --find-links https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.6
       - run: pytest tests/test_pynec_backend.py -v
+        if: needs.changes.outputs.code == 'true'
