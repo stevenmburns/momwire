@@ -80,6 +80,19 @@ Three drive spellings, and the address picks between them
   conductor end for a series EMF to sit in, momwire says so at the
   constructor, and no captured deck asks for one.
 
+The address picks the spelling one card at a time, and neither #504 U4 nor
+momwire#511 changes that: a phased deck is several cards each picking its own,
+and 0031's four are four ground-contact feeds because all four verticals stand
+in the plane.  What the phased deck DOES change is the drive: with one source
+the card is a scale on a unit probe, with four it is a simultaneous boundary
+condition on four coupled ports and the volts that deliver them come out of a
+4x4 solve (:func:`_multi_drive_state`).  Put a network under it and the 4x4 is
+still a 4x4 — what moves is where its entries come from, because what an
+``EX 4`` fixes is the SOURCE current and a driven connection point's source
+current is not its structure current.  Two cards on ONE port would be a
+boundary condition written twice; both ways to write that — the same address
+twice, and the two sides of one cut — refuse by name.
+
 Two spellings of a series EMF, and the BASIS picks between them
 ---------------------------------------------------------------
 The first of those three is one source with two discretizations, and which
@@ -105,19 +118,6 @@ own — which is the twin doing what it is for.  The remaining 15 are four
 named things and no drive spelling: 5 whose ``GW`` declares a genuine
 one-segment wire, 5 ground contact over a finite ground, 3 that bspline
 refuses too, and the 2 five-wire apexes, which keep the node port.
-
-The address picks the spelling one card at a time, and neither #504 U4 nor
-momwire#511 changes that: a phased deck is several cards each picking its own,
-and 0031's four are four ground-contact feeds because all four verticals stand
-in the plane.  What the phased deck DOES change is the drive: with one source
-the card is a scale on a unit probe, with four it is a simultaneous boundary
-condition on four coupled ports and the volts that deliver them come out of a
-4x4 solve (:func:`_multi_drive_state`).  Put a network under it and the 4x4 is
-still a 4x4 — what moves is where its entries come from, because what an
-``EX 4`` fixes is the SOURCE current and a driven connection point's source
-current is not its structure current.  Two cards on ONE port would be a
-boundary condition written twice; both ways to write that — the same address
-twice, and the two sides of one cut — refuse by name.
 
 Two conventions, and the one matrix between them
 ------------------------------------------------
