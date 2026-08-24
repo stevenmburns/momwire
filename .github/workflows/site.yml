@@ -1,0 +1,79 @@
+name: Site
+
+# The primer site is built and deployed by deploy-docs.yml, which runs on a
+# TAG. Nothing built it on a pull request, so a broken MDX file, a bad
+# frontmatter key or a dangling import passed CI green and surfaced at the
+# next release — mixed in with whatever else that tag carried (momwire#562).
+# Every site change up to this workflow was verified by someone remembering
+# to run the build locally; that was the check, it just wasn't wired to
+# anything.
+#
+# ITS OWN WORKFLOW rather than a job inside ci.yml, which is what #562
+# suggested. A path filter in Actions is a workflow-level trigger, and
+# ci.yml has to keep running for every change, so a job there could only be
+# path-gated by hand-diffing against a base SHA — which needs either a
+# third-party action (this repo pins first-party ones only) or arithmetic
+# with its own edge cases (`github.event.before` is all zeros on a new
+# branch). The native primitive lives here.
+#
+# CONSEQUENCE, deliberately accepted: a paths-filtered workflow reports NO
+# status at all on a PR that does not touch site/. So this job must NOT be
+# added to main's required status checks (today: lint, test, test-pynec,
+# test-slow) — a required check that never reports blocks every unrelated PR
+# forever. If it is ever wanted as a required check, convert it to an
+# always-running job that short-circuits internally first.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "scripts/check_site_permalinks.py"
+      - ".github/workflows/site.yml"
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "scripts/check_site_permalinks.py"
+      - ".github/workflows/site.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # Matches site/Dockerfile's `node:22-bookworm-slim` build stage, so
+          # this lane fails on what the deploy would fail on rather than on a
+          # version skew of its own.
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      # `npm ci`, not `npm install`: the lockfile is committed and the deploy
+      # image builds from it, so CI must go red on a lockfile that no longer
+      # satisfies package.json instead of quietly resolving something else.
+      - name: Install site dependencies
+        working-directory: site
+        run: npm ci
+
+      # `npm run build` is `astro check && astro build`. The check half is
+      # what catches a dangling import, a bad frontmatter key or a broken MDX
+      # file — the class of failure this workflow exists for. The build half
+      # is ~5 s warm; the cost of this lane is almost entirely the install.
+      - name: Build the primer site
+        working-directory: site
+        run: npm run build
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      # Free now that we are here, and until this workflow existed it only
+      # ever ran at deploy time: site/permalinks.json pins every line-anchored
+      # source link to a release tag, and a refactor between releases can
+      # strand the prose silently. Stdlib + git only; it fetches the tag
+      # itself when the checkout is shallow.
+      - name: Check pinned source permalinks
+        run: python scripts/check_site_permalinks.py
