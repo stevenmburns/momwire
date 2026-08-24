@@ -51,6 +51,7 @@ from . import (
     _wire_loading,
     _wire_spec,
 )
+from ._junction_rule import coincident_end_groups, undeclared_junctions_message
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
@@ -555,6 +556,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.n_qp_const = n_qp_const
 
         self.junctions = []
+        # momwire#590 step 2: coincident wire ends with no `junctions=` are
+        # silently solved as DISCONNECTED here, while RazorSolver and
+        # HarringtonSolver detect and join the same geometry. One deck, two
+        # answers, no diagnostic -- refuse instead. `junctions=[]` is the
+        # explicit escape and is deliberately NOT caught: omitting the
+        # argument is a mistake, passing an empty list is a statement.
+        if junctions is None:
+            _undeclared = coincident_end_groups(self.wires_polylines)
+            if _undeclared:
+                raise ValueError(undeclared_junctions_message(_undeclared))
         if junctions is not None:
             for j, jw in enumerate(junctions):
                 # 1-entry groups are legal (issue #172's scope item 2): as a

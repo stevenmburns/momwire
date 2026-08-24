@@ -75,6 +75,49 @@ def coincident_groups(points, tol: float = JUNCTION_TOL) -> list[int]:
     return rep
 
 
+def coincident_end_groups(wires_polylines, tol: float = JUNCTION_TOL) -> list[list]:
+    """Groups of TWO OR MORE coincident wire ends, as `(wire, end)` labels.
+
+    The question "does this geometry contain a junction?", asked of bare
+    polylines. Lone ends are dropped, so an empty result means every wire end
+    stands alone and there is no connectivity to declare.
+
+    Ends are enumerated in razor's order — first wire first, `start` before
+    `end` within a wire — so a group here is spelled exactly as the
+    corresponding `junctions=` entry would be, and can be handed straight back
+    to the caller in a message.
+    """
+    labels, points = [], []
+    for i, pl in enumerate(wires_polylines):
+        labels.append((i, "start"))
+        points.append(pl[0])
+        labels.append((i, "end"))
+        points.append(pl[-1])
+    return [g for g in grouped(labels, points, tol) if len(g) >= 2]
+
+
+def undeclared_junctions_message(groups) -> str:
+    """The refusal text for coincident ends nobody declared.
+
+    Names the geometry, the consequence, and BOTH ways out — declaring the
+    node, or saying the separation is deliberate. A refusal that names only
+    one route is how a caller ends up working around the guard instead of
+    answering it.
+    """
+    spelled = ", ".join(
+        "[" + ", ".join(f"({w}, {e!r})" for w, e in g) + "]" for g in groups
+    )
+    n_ends = sum(len(g) for g in groups)
+    return (
+        f"{n_ends} wire ends coincide in {len(groups)} place(s), but no "
+        f"`junctions=` was given. They would be solved as electrically "
+        f"SEPARATE wires: no KCL row at the node, and no current crossing it, "
+        f"which is a wrong answer rather than a coarse one. Pass "
+        f"`junctions=[{spelled}]` to declare the node(s), or `junctions=[]` to "
+        f"say the wires really are meant to be disconnected."
+    )
+
+
 def grouped(labels, points, tol: float = JUNCTION_TOL) -> list[list]:
     """`coincident_groups` bucketed into label groups, in creation order.
 

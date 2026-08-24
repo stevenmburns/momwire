@@ -58,6 +58,7 @@ import scipy.linalg
 import scipy.sparse
 from scipy.interpolate import BSpline
 
+from ._junction_rule import coincident_end_groups, undeclared_junctions_message
 from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
@@ -949,6 +950,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._auto_active_junctions = None
 
         self.junctions = []
+        # momwire#590 step 2: coincident wire ends with no `junctions=` are
+        # silently solved as DISCONNECTED here, while RazorSolver and
+        # HarringtonSolver detect and join the same geometry. One deck, two
+        # answers, no diagnostic -- refuse instead. `junctions=[]` is the
+        # explicit escape and is deliberately NOT caught: omitting the
+        # argument is a mistake, passing an empty list is a statement.
+        if junctions is None:
+            _undeclared = coincident_end_groups(self.wires_polylines)
+            if _undeclared:
+                raise ValueError(undeclared_junctions_message(_undeclared))
         if junctions is not None:
             for j, jw in enumerate(junctions):
                 # A 1-entry group is legal (issue #172): as a plain junction

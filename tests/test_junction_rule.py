@@ -10,10 +10,13 @@ rewrite to union-find would destroy.
 """
 
 import numpy as np
+import pytest
 
 from momwire._junction_rule import JUNCTION_TOL, coincident_groups, grouped
+from momwire.bspline import BSplineSolver
 from momwire.harrington import HarringtonSolver
 from momwire.razor import RazorSolver
+from momwire.sinusoidal import SinusoidalSolver
 
 
 def _pt(x):
@@ -140,3 +143,72 @@ def test_a_closed_loop_groups_its_own_two_ends():
     loop = np.array([[0.0, 0.0, 0.0], [0.3, 0.0, 0.0], [0.0, 0.0, 0.0]])
     rep = coincident_groups([loop[0], loop[-1]])
     assert rep == [0, 0]
+
+
+# ----------------------------------------------------------------------
+# The tripwire (momwire#590 step 2)
+# ----------------------------------------------------------------------
+
+
+def _joined():
+    """Two wires sharing a node — a junction by anyone's reading."""
+    return [
+        np.array([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0]]),
+        np.array([[0.0, 0.0, 0.0], [0.0, 0.25, 0.0]]),
+    ]
+
+
+@pytest.mark.parametrize("solver", [BSplineSolver, SinusoidalSolver])
+def test_omitting_junctions_on_touching_wires_refuses(solver):
+    """The defect this whole issue is about: coincident ends with no
+    `junctions=` used to be solved as disconnected, silently, while razor and
+    harrington joined the same geometry."""
+    with pytest.raises(ValueError) as exc:
+        solver(wires=_joined(), n_per_edge_per_wire=[[6], [6]], wavelength=1.0)
+    msg = str(exc.value)
+    # Names the geometry, the consequence, and BOTH ways out.
+    assert "SEPARATE" in msg
+    assert "(0, 'start'), (1, 'start')" in msg
+    assert "junctions=[]" in msg
+
+
+@pytest.mark.parametrize("solver", [BSplineSolver, SinusoidalSolver])
+def test_an_explicit_empty_list_is_a_statement_not_a_mistake(solver):
+    """`junctions=[]` is the escape and must NOT trip. Omitting the argument
+    is an oversight; passing an empty list is a caller saying the wires really
+    are meant to be disconnected."""
+    s = solver(
+        wires=_joined(), n_per_edge_per_wire=[[6], [6]], wavelength=1.0, junctions=[]
+    )
+    assert s.junctions == []
+
+
+@pytest.mark.parametrize("solver", [BSplineSolver, SinusoidalSolver])
+def test_declaring_the_junction_passes(solver):
+    s = solver(
+        wires=_joined(),
+        n_per_edge_per_wire=[[6], [6]],
+        wavelength=1.0,
+        junctions=[[(0, "start"), (1, "start")]],
+    )
+    assert len(s.junctions) == 1
+
+
+@pytest.mark.parametrize("solver", [BSplineSolver, SinusoidalSolver])
+def test_wires_that_do_not_touch_are_unaffected(solver):
+    """No coincident ends, no refusal — the tripwire must not tax the common
+    case of genuinely separate elements (an array, a Yagi)."""
+    apart = [
+        np.array([[0.0, 0.0, 0.0], [0.25, 0.0, 0.0]]),
+        np.array([[0.0, 1.0, 0.0], [0.25, 1.0, 0.0]]),
+    ]
+    s = solver(wires=apart, n_per_edge_per_wire=[[6], [6]], wavelength=1.0)
+    assert s.junctions == []
+
+
+def test_a_single_wire_never_trips():
+    """One polyline with interior vertices is a bend, not a junction — its
+    ends are its own two ends and they do not coincide."""
+    bent = [np.array([[-0.25, 0.0, 0.0], [0.0, 0.0, 0.0], [0.0, 0.25, 0.0]])]
+    s = BSplineSolver(wires=bent, n_per_edge_per_wire=[[6, 6]], wavelength=1.0)
+    assert s.junctions == []
