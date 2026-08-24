@@ -46,7 +46,7 @@ rather than the absolute numbers are what is pinned.
     deck                   nec2c                 momwire
     =====================  ====================  ==========================
     1MHz_tower              50.61 - j1.6296      29.7616 + j138.4419
-    1MHz_tower_dropped      50.61 - j1.6296      refused by name
+    1MHz_tower_dropped      50.61 - j1.6296      29.7616 + j138.4419
     1MHz_tower_expanded     50.61 - j1.6295      29.7616 + j138.4419
     (no LD at all)           0.001692 + j12.007   0.0018139 + j12.0296
     =====================  ====================  ==========================
@@ -55,12 +55,15 @@ rather than the absolute numbers are what is pinned.
 per leg, three of them addressing copies OUTSIDE the cell.  Its oracle row is
 the headline of this file: NEC drops those three in silence and then replicates
 the cell's load onto the same three segments, so the printout is
-``1MHz_tower``'s to every digit.  The drop is real and the deck's author cannot
-see it, which is why unit 3 refuses the form; it is also, on this deck,
-unobservable, which is why the refusal costs a corpus deck that NEC answers
-correctly.  The refusal is asserted below; the two oracle rows are what says
-what it costs, and are recorded here rather than turned into an assertion
-about two literals.
+``1MHz_tower``'s to every digit.
+
+Unit 3 refused that form, on the ground that a silent drop is a defect worth
+naming.  momwire#471 serves it instead, and the middle column above is why:
+the three dropped cards say exactly what the replication already said, so the
+deck MEANS what NEC computes and there is nothing left to warn about.  The
+equality is checked per card rather than assumed — a copy card carrying a
+DIFFERENT value still refuses, because that is the case where NEC's silence
+loses the author's intent.  All three properties are asserted below.
 
 The two engines are far apart on the LOADED tower — the unloaded structure
 agrees to 0.2 %, and each leg's +j534 ohm inductor drives the four-leg
@@ -267,15 +270,68 @@ def test_the_tower_as_written_equals_its_all_copies_loaded_expansion():
     )
 
 
-def test_the_towers_own_ld_set_refuses_by_name():
+def test_the_towers_own_ld_set_now_answers_the_cell_forms_number():
     """``1MHz_tower_dropped`` is the corpus deck verbatim: four ``LD`` cards,
-    three of them addressing copies.  NEC drops those three without a word;
-    this engine says so and stops."""
+    three of them addressing copies.
+
+    THIS TEST USED TO PIN A REFUSAL.  momwire#471 replaced it deliberately —
+    the refusal was not wrong about NEC, it was wrong about this deck.  NEC
+    drops those three cards onto exactly the segments it then replicates the
+    surviving one onto, so the four cards together ARE the replication and
+    the deck means precisely what NEC computes.  Refusing a deck we can
+    answer exactly is a refusal that costs a user a correct answer.
+
+    Gated at the ANSWER rather than at the load list, which is the stronger
+    statement and the form #415 asks for: the corpus deck and the one-card
+    cell form must reach the same driving point, not merely the same
+    bookkeeping.  The oracle behind both is nec2c's 50.61 - j1.6296, equal
+    for the two forms to every printed digit.
+    """
+    assert parse(body("1MHz_tower_dropped")).wires == parse(body("1MHz_tower")).wires
+    assert driving_point(body("1MHz_tower_dropped")) == driving_point(
+        body("1MHz_tower")
+    )
+
+
+def test_a_copy_card_that_disagrees_with_the_cell_still_refuses():
+    """The half of momwire#471 that is still a refusal, and the reason the
+    widening checks equality instead of assuming it.
+
+    Move ONE of the three copy cards off the cell's value and the deck stops
+    being a restatement: NEC would silently keep the cell's 85 uH and discard
+    the 95 uH the author wrote, which is the silent-wrong class this rule
+    exists to catch.  A widening that only asked "is this segment already
+    loaded" would serve this and answer a different antenna.
+    """
+    text = body("1MHz_tower_dropped")
+    disagreeing = text.replace("LD 0 9 1 1 0. 8.5E-5 0.", "LD 0 9 1 1 0. 9.5E-5 0.", 1)
+    assert disagreeing != text, "the fixture's LD spelling moved"
     with pytest.raises(DeckError) as exc:
-        parse(body("1MHz_tower_dropped"))
-    message = str(exc.value)
-    assert "outside the GX/GR symmetric cell" in message
-    assert "the cell is segments 1-42 of 168" in message
+        parse(disagreeing)
+    assert "outside the GX/GR symmetric cell" in str(exc.value)
+
+
+def test_a_copy_card_before_its_cell_card_still_refuses():
+    """The documented ORDER limit of momwire#471, pinned so it stays a
+    decision rather than becoming a surprise.
+
+    The restatement test runs per card against what has already been loaded,
+    so the cell card must come first.  Reverse the ``LD`` block and the first
+    card read addresses a copy with nothing yet to restate — refused.  NEC
+    itself does not care about the order; lifting this would mean deferring
+    the whole decision to the execute card, the way the MININEC gate does,
+    and no corpus deck has asked for it.
+    """
+    text = body("1MHz_tower_dropped")
+    lines = text.splitlines()
+    lds = [ln for ln in lines if ln.startswith("LD ")]
+    assert len(lds) == 4, lds
+    keep = [ln for ln in lines if not ln.startswith("LD ")]
+    cut = max(i for i, ln in enumerate(keep) if ln.startswith(("GE", "GR")))
+    reversed_deck = "\n".join(keep[: cut + 1] + lds[::-1] + keep[cut + 1 :])
+    with pytest.raises(DeckError) as exc:
+        parse(reversed_deck)
+    assert "outside the GX/GR symmetric cell" in str(exc.value)
 
 
 def test_the_unloaded_tower_agrees_with_the_oracle():

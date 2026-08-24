@@ -1933,9 +1933,33 @@ def _port_signs(built, model) -> np.ndarray:
     """
     signs = np.ones(built.ports.n_ports)
     polylines = built.solver.wires_polylines
+    feeds = built.solver.feeds
+    if len(feeds) < len(built.ports.sites):
+        # momwire#439. This indexes `solver.feeds` by the DECK's port plan,
+        # and the two lists are the same length for every solver family in
+        # `deck.BASES` except the natively-loading one: RazorSolver refuses
+        # the port-algebra route's zero-volt gap and takes a load through its
+        # own `lumped_loads` kwarg, so a load-only site — an `LD` whose
+        # segment carries no `EX` — gets a `PortSite` with no feed behind it.
+        # `plan.n_ports` counts it and `compute_port_solution()` does not.
+        #
+        # Serving this needs the load-stamping algebra to special-case those
+        # solvers, which is the issue's own scope note and not this guard.
+        # What this replaces is an `IndexError: list index out of range` out
+        # of the middle of a solve: a refusal the user can act on instead of
+        # a traceback that names nothing.
+        raise PortalError(
+            f"this basis carries loads natively, so a load-only site (an LD "
+            f"on a segment with no EX) has no port behind it: the deck plans "
+            f"{len(built.ports.sites)} ports but the solver built "
+            f"{len(feeds)} — momwire#439. Put the load on the fed segment, "
+            f"where the two merge into one site and this basis solves it, "
+            f"or run the deck on a basis that stamps loads as ports "
+            f"(--basis bspline)"
+        )
     for index, site in enumerate(built.ports.sites):
-        polyline = np.asarray(polylines[built.solver.feeds[index][0]], dtype=float)
-        arclength = built.solver.feeds[index][1]
+        polyline = np.asarray(polylines[feeds[index][0]], dtype=float)
+        arclength = feeds[index][1]
         lengths = np.linalg.norm(np.diff(polyline, axis=0), axis=1)
         edge = int(np.searchsorted(np.cumsum(lengths), arclength, side="left"))
         edge = min(edge, len(lengths) - 1)

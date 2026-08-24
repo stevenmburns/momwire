@@ -204,8 +204,15 @@ ISSUE_18 = (
 # What each GX/GR deck does through `momwire.deck.parse` today: ``None`` for
 # served, otherwise a substring the refusal must name.  Every refusal here is
 # for something OTHER than GX/GR — the two cards themselves refuse nothing any
-# more — except ``1MHz_tower``, whose refusal is unit 3's cell rule and is the
-# one entry in this table that is about the feature under test.
+# more, and since momwire#471 neither does the cell rule on this corpus.
+#
+# ``1MHz_tower`` was that table's one entry about the feature under test, and
+# it flipped to served in #471: its four LD cards (tags 3, 6, 9, 12 under a
+# GR 3 4) are exactly the replication the in-cell card produces, so the deck
+# means precisely what NEC computes and the restatement is dropped rather
+# than refused.  The equality is checked per card, not assumed — a copy card
+# that DISAGREES with the cell still refuses, which is the silent-wrong class
+# the rule exists for.  Gated in `test_deck_nec2_symmetry.py`.
 #
 # Five decks moved from refused to served in momwire#456 phase C, when the
 # dialect learned to read TL: ``2m_Lindenblad`` (four lines), ``40m-moxon``
@@ -227,7 +234,7 @@ _EXPECTED: dict[str, str | None] = {
     "1MHz_3x_helisphere": "GA (wire arc)",
     "1MHz_4x_helisphere": "GA (wire arc)",
     "1MHz_helivert": "GH (helix)",
-    "1MHz_tower": "outside the GX/GR symmetric cell",
+    "1MHz_tower": None,
     "23cm_helix+radials": "GH (helix)",
     "2m_1to4l-gp_on_pole": None,
     "2m_1to4l-horiz_gp_on_pole": None,
@@ -351,25 +358,30 @@ def test_every_gx_gr_deck_is_served_or_refuses_for_a_recorded_reason(name):
     assert expected in str(exc.value), f"{name}: refused for {exc.value}"
 
 
-def test_thirteen_of_the_issues_eighteen_go_from_refused_to_accepted():
+def test_fourteen_of_the_issues_eighteen_go_from_refused_to_accepted():
     """The reconciliation against #415's own claim, stated as a number.
 
-    The issue said all 18 "would go straight from refused to accepted".  Five
-    do not, and none of the five is about ``GX``/``GR``: four carry a ``GN 0``
-    radial ground SCREEN, which the census's mnemonic intersection could not
-    see because the screen is a FIELD of a served card; and ``1MHz_tower``
-    trips unit 3's out-of-cell ``LD`` refusal.
+    The issue said all 18 "would go straight from refused to accepted".  Four
+    do not, and none of the four is about ``GX``/``GR``: each carries a ``GN
+    0`` radial ground SCREEN, which the census's mnemonic intersection could
+    not see because the screen is a FIELD of a served card.
+
+    Was THIRTEEN until momwire#471.  ``1MHz_tower`` was the fourteenth and
+    the only one held back by ``GX``/``GR`` itself — unit 3's out-of-cell
+    ``LD`` refusal — and #471 served it by recognising that its three
+    copy-addressed cards restate the in-cell card's replication exactly.  So
+    the remaining shortfall is now entirely the ground screen, which is the
+    honest reading of what #415 got wrong.
     """
     assert set(ISSUE_18) <= set(NAMES)
     served = [n for n in ISSUE_18 if _EXPECTED[n] is None]
-    assert len(served) == 13
+    assert len(served) == 14
     blocked = {n: _EXPECTED[n] for n in ISSUE_18 if _EXPECTED[n] is not None}
     assert blocked == {
         "10-30m-box": "radial ground screen",
         "10-30m_bipyramid": "radial ground screen",
         "T12m-H24m": "radial ground screen",
         "T20m-H18m": "radial ground screen",
-        "1MHz_tower": "outside the GX/GR symmetric cell",
     }
 
 
