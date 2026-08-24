@@ -58,6 +58,7 @@ folded in the pattern TILT column.
 from __future__ import annotations
 
 import functools
+import inspect
 import math
 import re
 import subprocess
@@ -2650,9 +2651,20 @@ def test_the_basis_is_the_house_default():
     ``momwire.deck.build_solver``'s default entry constructs and what the
     portal answers every NEC-2 deck with.  Recorded as a gate because a
     silent change of basis would move every number in every printout this
-    seam writes and break nothing else."""
+    seam writes and break nothing else.
+
+    Since momwire#603 U3 the basis is a `serve(deck, basis=...)` argument and
+    this is its DEFAULT.  The degree is no longer named beside it: the roster
+    entry carries a family's extra kwargs and ``bspline``'s is empty, so what
+    has to hold is that the class this seam reaches for by default really
+    does default to the degree the captures were gated at."""
+    from momwire.deck._solver import BASES
+
     assert _serve.BASIS == "bspline"
-    assert _serve._DEGREE == 2
+    solver_class, basis_kwargs = BASES[_serve.BASIS]
+    assert solver_class is BSplineSolver
+    assert dict(basis_kwargs) == {}
+    assert inspect.signature(BSplineSolver).parameters["degree"].default == 2
 
 
 def test_every_refusal_sentence_survives_the_printout_s_own_codec():

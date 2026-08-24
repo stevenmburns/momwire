@@ -332,6 +332,8 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from types import MappingProxyType
+from collections.abc import Mapping
 
 import numpy as np
 
@@ -363,6 +365,7 @@ from ..deck._nec5 import (
 # the dialect's own, and hands the semantics a record with its fields already
 # in NEC's order.
 from ..deck._networks import card_branches, port_name
+from ..deck._solver import _NATIVE_LOADING, basis_entry, port_kwargs
 from ..deck.model import NetworkCard
 from ..networks import Driven, Network, NetworkReducer, PortOnWire
 
@@ -430,10 +433,16 @@ SPEED_OF_LIGHT_MHZ_M = 299.8
 # with the wavelength taken at SPEED_OF_LIGHT_MHZ_M.
 EPSC_CONDUCTIVITY_FACTOR = 59.96
 
-# The basis, spelled as `momwire.deck.build_solver` spells it.  Recorded as a
-# name so a reader of a served printout can ask what solved it.
+# The DEFAULT basis, spelled as `momwire.deck.build_solver` spells it, and
+# since momwire#603 U3 a default rather than the only one: `serve(deck,
+# basis=...)` takes any name in `momwire.deck._solver.BASES` the deck's own
+# geometry can be hosted by.  This one stays the default because every
+# committed printout in `tests/fixtures/eznec/printouts` is byte-gated
+# against it — a silent change here would move every number in every one of
+# them and break nothing else.  No degree sits beside it any more: the roster
+# entry carries that (`BASES["bspline-d1"]`), and `BSplineSolver`'s own
+# default is the 2 this seam wants.
 BASIS = "bspline"
-_DEGREE = 2
 
 # Node fusion grid, metres — `momwire.deck._polylines._NODE_EPS`, the same
 # tolerance the nec2 front end decides "these two wires touch" with.  By the
@@ -1631,14 +1640,49 @@ def _medium(ground: Nec5Ground, wavelength: float) -> GroundMedium | None:
     return GroundMedium(eps_r=ground.eps_r, sigma=sigma, eps_c=eps_c)
 
 
+def _ground_kwargs(deck: Nec5Deck, medium: GroundMedium | None) -> dict[str, object]:
+    """The three ground kwargs, and which of them appear.
+
+    Its own function because :func:`_check_basis_can_host` has to ask the one
+    question this answers — is the solver being handed a ``ground_eps``? —
+    and asking it by re-deriving the branch would be two spellings of one
+    condition, which is how a refusal comes to fire on a deck it was never
+    about (a ``GD`` gets a PERFECT image here, so a wire end in ITS plane is
+    contact over a PEC plane and every basis serves it).
+    """
+    if isinstance(deck.ground, (Nec5PerfectGround, Nec5MininecGround)):
+        return {"ground_z": 0.0}
+    if medium is not None:
+        return {
+            "ground_z": 0.0,
+            "ground_eps": (medium.eps_r, medium.sigma),
+            "ground_model": "sommerfeld",
+        }
+    return {}
+
+
 def _solver_for(
-    deck: Nec5Deck, mesh: _Mesh, wavelength: float, medium: GroundMedium | None
-) -> BSplineSolver:
+    deck: Nec5Deck,
+    mesh: _Mesh,
+    wavelength: float,
+    medium: GroundMedium | None,
+    solver_class: type = BSplineSolver,
+    basis_kwargs: Mapping[str, object] = MappingProxyType({}),
+):
     """The constructed solver, one port per declared cut.
 
     Two kwargs carry the deck's ports and momwire orders their rows
     ``[gap feeds…, junction ports…, node gaps…]`` — the order
-    :func:`_assign_columns` already wrote down.
+    :func:`_assign_columns` already wrote down.  WHICH of them the family
+    takes is ``momwire.deck._solver.port_kwargs``' to decide and not this
+    module's (momwire#603 U3): the roster's differences are refusals by the
+    presence of a keyword rather than by its value, so a seam that spelled
+    its own rule here would be a second copy of a list that has to stay
+    exactly the first one.  ``basis_kwargs`` is the roster entry's own —
+    ``degree`` for ``bspline-d1``, ``nec5_quadrature`` for ``razor-nec5`` —
+    which is why no degree is named here: ``BSplineSolver``'s default IS the
+    2 this seam wants, and passing it explicitly is what a family without a
+    degree axis refuses.
 
     Three ground kwargs carry the environment, and which of them appear is the
     whole of the difference between the rungs.  ``GN 1`` is ``ground_z``
@@ -1669,26 +1713,17 @@ def _solver_for(
     feeds = [(site.piece, site.arclength, 0j) for site in mesh.feeds]
     gaps = [(site.piece, site.end, 0j) for site in mesh.gaps]
 
-    ground: dict[str, object] = {}
-    if isinstance(deck.ground, (Nec5PerfectGround, Nec5MininecGround)):
-        ground["ground_z"] = 0.0
-    elif medium is not None:
-        ground = {
-            "ground_z": 0.0,
-            "ground_eps": (medium.eps_r, medium.sigma),
-            "ground_model": "sommerfeld",
-        }
+    ground = _ground_kwargs(deck, medium)
 
-    return BSplineSolver(
+    return solver_class(
         wires=[piece.points for piece in mesh.pieces],
         n_per_edge_per_wire=[[piece.n_elements] for piece in mesh.pieces],
         feeds=feeds,
-        junctions=mesh.junctions or None,
-        node_gaps=gaps or None,
-        degree=_DEGREE,
         wire_radius=radii[0] if len(set(radii)) == 1 else radii,
         wavelength=wavelength,
+        **port_kwargs(solver_class, junctions=mesh.junctions, node_gaps=gaps),
         **ground,  # type: ignore[arg-type]
+        **basis_kwargs,
     )
 
 
@@ -2651,19 +2686,102 @@ def _average_gain(gain, thetas, d_theta, d_phi, n_phi) -> tuple[float, float]:
 # --------------------------------------------------------------------------
 
 
-def serve(deck: Nec5Deck) -> RunData:
+def _check_basis_can_host(
+    mesh: _Mesh,
+    ground: Mapping[str, object],
+    basis: str,
+    solver_class: type,
+) -> None:
+    """Refuse BY NAME what this basis cannot do with this deck.
+
+    Every sentence here is a refusal momwire would raise anyway, moved
+    forward one step so it arrives as a printout rather than as the internal
+    error :func:`~momwire.eznec._shell.main` writes when nothing has a
+    sentence.  The prose is not written here: it is read off the solver's own
+    :class:`~momwire._capabilities.Capabilities` row, which exists so a
+    consumer stops keeping its own copy of what each family serves.
+
+    Three things a capture actually asks for and some basis cannot give:
+
+    * a NODE GAP, which only a K >= 3 apex still needs after momwire#603 U1
+      (0013 and 0033) and which the razor family has none of;
+    * ground CONTACT over a finite ground, which razor refuses on the
+      geometry every base-fed vertical over ``GN 0``/``GD`` writes;
+    * a one-segment ``GW``, which the razor family refuses because a lone
+      segment carries no tent (momwire#608) — the only one of the three with
+      no capability cell to read, so it is asked of the roster by the shape
+      of the deck instead.
+    """
+    if mesh.gaps and not solver_class.capabilities.node_gaps:
+        site = mesh.gaps[0]
+        raise ServeRefusal(
+            f"{site.at.tag},{site.at.written} needs a series source AT a node "
+            f"where {len(mesh.junctions[0]) if mesh.junctions else 0} wires "
+            f"meet, and basis {basis!r} has no node port: "
+            f"{solver_class.capabilities.refusal('node_gaps')}"
+        )
+
+    # A contact site over a ground the solver is given a MEDIUM for — the
+    # `ground_eps` key and nothing else, because that key is exactly what
+    # separates the two finite rungs from the two that solve over a perfect
+    # image (:func:`_ground_kwargs`).
+    if "ground_eps" in ground and any(site.contact for site in mesh.sites):
+        reason = solver_class.capabilities.refusal("contact", "sommerfeld")
+        if reason is not None:
+            site = next(site for site in mesh.sites if site.contact)
+            raise ServeRefusal(
+                f"{site.at.tag},{site.at.written} stands a wire END in a "
+                f"FINITE ground plane and basis {basis!r} does not serve "
+                f"that: {reason}"
+            )
+
+    thin = [piece.tag for piece in mesh.pieces if piece.n_elements < 2]
+    if thin and issubclass(solver_class, _NATIVE_LOADING):
+        raise ServeRefusal(
+            f"wire {thin[0]} is one segment long and basis {basis!r} needs at "
+            f"least two to carry a basis function on it (momwire#608); this "
+            f"deck declares {len(thin)} such GW card"
+            f"{'s' if len(thin) > 1 else ''}"
+        )
+
+
+def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     """Solve one rung-1 deck and return everything its printout reports.
+
+    ``basis`` is one of ``momwire.deck._solver.BASES`` — the same names
+    antennaknobs' ``--basis`` takes and the same ones the nec2 front end
+    resolves, so a deck asked for the same physics through either seam is
+    asked for it by the same word (momwire#603 U3).  The default is the one
+    this seam shipped with and every committed printout is gated against.
 
     Raises :class:`ServeRefusal` for a deck :func:`refusal` passed but the
     translation cannot stand behind; call :func:`refusal` first for the
-    cheap, card-level answer.
+    cheap, card-level answer.  A basis that cannot host THIS deck refuses
+    here too, by name, through the same channel — a printout that says which
+    basis could not do what is worth more than a traceback EZNEC discards.
     """
     reason = refusal(deck)
     if reason is not None:
         raise ServeRefusal(reason)
 
+    try:
+        solver_class, basis_kwargs = basis_entry(basis)
+    except ValueError as exc:
+        raise ServeRefusal(str(exc)) from None
+    if not hasattr(solver_class, "current_slopes"):
+        # Asked of the CLASS rather than kept as a list of which families
+        # have one, because the list would be the second thing to update.
+        # The three sinusoidal entries are what this catches today; razor
+        # was here too until momwire#603 U2 gave it one.
+        raise ServeRefusal(
+            f"basis {basis!r} cannot answer this dialect: its printout "
+            f"carries a CHARGE DENSITY table, q = -(1/jw)*dI/ds is read "
+            f"from the basis through current_slopes, and this family has "
+            f"no such method to read it from"
+        )
+
     structure = structure_of(deck)
-    mesh = build_mesh(deck, structure)
+    mesh = build_mesh(deck, structure, solver_class=solver_class)
     by_address = {site.at: site for site in mesh.sites}
     for load in deck.loads:
         by_address[load.at].load += load.impedance
@@ -2676,8 +2794,9 @@ def serve(deck: Nec5Deck) -> RunData:
     omega = 2.0 * math.pi * frequency * 1e6
 
     medium = _medium(deck.ground, wavelength)
+    _check_basis_can_host(mesh, _ground_kwargs(deck, medium), basis, solver_class)
     cards = _cards(deck, structure, mesh)
-    solver = _solver_for(deck, mesh, wavelength, medium)
+    solver = _solver_for(deck, mesh, wavelength, medium, solver_class, basis_kwargs)
     solution = solver.compute_port_solution()
     state = _port_state(deck, mesh, cards, solution.y, wavelength)
     # Back across T: the structure is driven by the SOLVER's gap EMFs, which

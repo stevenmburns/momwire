@@ -49,7 +49,7 @@ polyline arrays rather than a fresh rounding of the same walk.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
@@ -89,12 +89,12 @@ _C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 # ``docs/razor-solver.md``. "razor-nec5" is the quadrature-lane variant
 # (momwire#316): same class, `nec5_quadrature=True`, the same "one class,
 # one extra kwarg" shape `bspline-d1` set for a degree axis. RazorSolver's
-# translation differs from every sibling's in two ways `build_solver` has to
-# know about (see below): it takes no `junctions` spec (detected from the
-# geometry) and it serves a lumped load as its own `lumped_loads` kwarg
-# rather than as a deck-level port-algebra site, which is why it is keyed by
-# CLASS in `_NATIVE_LOADING` rather than threaded through `basis_kwargs`
-# here — a future razor variant inherits the translation for free.
+# translation differs from every sibling's in two ways both dialect front
+# ends have to know about (`port_kwargs`): it is given no `junctions` spec,
+# and it serves a lumped load as its own `lumped_loads` kwarg rather than as
+# a deck-level port-algebra site, which is why it is keyed by CLASS in
+# `_NATIVE_LOADING` rather than threaded through `basis_kwargs` here — a
+# future razor variant inherits the translation for free.
 BASES = MappingProxyType(
     {
         "bspline": (BSplineSolver, MappingProxyType({})),
@@ -123,6 +123,54 @@ BASES = MappingProxyType(
 # rather than keeping its own list of which bases load natively — a second
 # list is a second thing to forget when a family is added here.
 _NATIVE_LOADING = (RazorSolver,)
+
+
+def basis_entry(basis: str) -> tuple[type, Mapping[str, Any]]:
+    """:data:`BASES`\\ ``[basis]``, or a ``ValueError`` that lists what is known.
+
+    Both dialect front ends resolve a ``--basis`` name and both owe the same
+    sentence when it is not one; this is that one place (momwire#603 U3).
+    """
+    try:
+        return BASES[basis]
+    except KeyError:
+        known = ", ".join(repr(name) for name in BASES)
+        raise ValueError(f"unknown basis {basis!r}; known bases: {known}") from None
+
+
+def port_kwargs(
+    solver_class: type,
+    *,
+    junctions: Any = None,
+    node_gaps: Any = None,
+    lumped_loads: Any = None,
+) -> dict[str, Any]:
+    """The port and topology kwargs ``solver_class`` takes, and only those.
+
+    One owner for a rule the nec2 front end and the NEC-5 one both need and
+    neither should keep a copy of (momwire#603 U3).  Every entry is a refusal
+    by PRESENCE and not by value — ``RazorSolver`` raises on a ``node_gaps=``
+    it was handed even when what it was handed is ``None`` — so what this
+    decides is which KEYS exist, never what they hold.
+
+    ``junctions`` is withheld from a :data:`_NATIVE_LOADING` family, and the
+    reason is not that the constructor lacks the parameter: razor and
+    harrington have both declared one since momwire#590 step 3b.  It is that
+    a DECLARED spec replaces geometric detection wholesale, and neither front
+    end's list is the whole truth about the geometry.  Both filter to groups
+    of two or more ends — ``_polylines`` at its ``len(ends) >= 2``, the NEC-5
+    seam at its own — so both leave out the one-member group at a LONE
+    GROUNDED wire end, which detection keeps as that end's own contact tent.
+    Hand either list over and a base-fed monopole silently loses its ground.
+    """
+    kwargs: dict[str, Any] = {}
+    if node_gaps:
+        kwargs["node_gaps"] = node_gaps
+    if lumped_loads:
+        kwargs["lumped_loads"] = lumped_loads
+    if not issubclass(solver_class, _NATIVE_LOADING):
+        kwargs["junctions"] = junctions or None
+    return kwargs
 
 
 @dataclass(frozen=True)
@@ -587,11 +635,7 @@ def build_solver(
     Raises ``ValueError`` for an unknown basis, a model with no wires, and a
     port set the geometry cannot host.
     """
-    try:
-        solver_class, basis_kwargs = BASES[basis]
-    except KeyError:
-        known = ", ".join(repr(name) for name in BASES)
-        raise ValueError(f"unknown basis {basis!r}; known bases: {known}") from None
+    solver_class, basis_kwargs = basis_entry(basis)
 
     if group is None:
         group = _first_armed_group(model)
@@ -634,45 +678,40 @@ def build_solver(
     radii = list(built_mesh.radii)
     wire_radius = radii[0] if len(set(radii)) == 1 else radii
 
-    kwargs: dict[str, Any] = {}
-    if built_mesh.node_gap_members:
-        kwargs["node_gaps"] = [
-            (polyline, end, complex(volts))
-            for (polyline, end), (_w, _v, volts) in zip(
-                built_mesh.node_gap_members, model.node_gaps
-            )
-        ]
-    if extended_kernel:
-        kwargs["extended_kernel"] = True
-
+    node_gaps = [
+        (polyline, end, complex(volts))
+        for (polyline, end), (_w, _v, volts) in zip(
+            built_mesh.node_gap_members, model.node_gaps
+        )
+    ]
+    loads = None
     if issubclass(solver_class, _NATIVE_LOADING):
         # A load-only site needs no port of its own here: the fill carries
         # the Z_s bump directly through `lumped_loads`, at the exact knot
         # `_lumped_loads` reads off the mesh, so only genuine EX sites
         # become `feeds` — a load-only site would otherwise be a spurious
-        # zero-volt source with no row to add.  And this formulation takes
-        # no `junctions` spec at all (not even `None`: it is a bare kwarg
-        # name this constructor never declared), so the key stays out of
-        # `kwargs` entirely rather than being set and refused.
+        # zero-volt source with no row to add.
         _has_port = [
             plan.sites[index].feed is not None or plan.sites[index].network
             for index in range(len(built_mesh.ports))
         ]
-        feeds = [
-            (polyline, arclength, _voltage(index))
-            for index, (polyline, arclength) in enumerate(built_mesh.ports)
-            if _has_port[index]
-        ]
         loads = _lumped_loads(plan.sites, built_mesh.ports, frequency_mhz * 1e6)
-        if loads:
-            kwargs["lumped_loads"] = loads
     else:
-        feeds = [
-            (polyline, arclength, _voltage(index))
-            for index, (polyline, arclength) in enumerate(built_mesh.ports)
-        ]
         _has_port = [True] * len(built_mesh.ports)
-        kwargs["junctions"] = [list(entry) for entry in built_mesh.junctions] or None
+    feeds = [
+        (polyline, arclength, _voltage(index))
+        for index, (polyline, arclength) in enumerate(built_mesh.ports)
+        if _has_port[index]
+    ]
+
+    kwargs = port_kwargs(
+        solver_class,
+        junctions=[list(entry) for entry in built_mesh.junctions],
+        node_gaps=node_gaps,
+        lumped_loads=loads,
+    )
+    if extended_kernel:
+        kwargs["extended_kernel"] = True
 
     solver = solver_class(
         wires=list(built_mesh.polylines),
