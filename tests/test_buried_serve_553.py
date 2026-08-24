@@ -840,6 +840,12 @@ def test_gu5_9_the_four_radial_anchor_refuses_the_same_way():
     s = BSplineSolver(
         wires=wires,
         n_per_edge_per_wire=npe,
+        # The four radials all start at (0, 0, -depth) — one buried node, so
+        # one junction. Left undeclared until momwire#590's tripwire surfaced
+        # it, they were solved as four DISCONNECTED wires; this assertion never
+        # noticed because it only reads the refusal message. The monopole's own
+        # end is 15 cm above at (0, 0, 0) and is correctly not a member.
+        junctions=[[(1, "start"), (2, "start"), (3, "start"), (4, "start")]],
         feeds=[(0, 4.3333333333, 1 + 0j)],
         wavelength=WL7,
         wire_radius=0.001,
