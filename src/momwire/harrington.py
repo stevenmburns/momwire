@@ -95,6 +95,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from . import _wire_spec
 from ._capabilities import Capabilities
 from .pulse import _OUT_OF_SCOPE, _PER_WIRE_RADIUS_REFUSAL, PulseSolver
 
@@ -217,6 +218,24 @@ class HarringtonSolver(PulseSolver):
         self._declared_junctions = (
             None if junctions is None else [list(g) for g in junctions]
         )
+        if self._declared_junctions is not None:
+            # momwire#522's guardrail, which BSplineSolver and SinusoidalSolver
+            # have run since that issue. Razor and harrington only started
+            # accepting a spec in momwire#590 step 3b, so they were the two
+            # spellings it did not cover -- a wrong wire index welds ends that
+            # sit nowhere near each other and produces a well-posed WRONG model
+            # that converges cleanly, which is the #518 postmortem exactly.
+            #
+            # Calling the existing check rather than writing a second one: its
+            # tolerance is scale-aware (1e-3 of the shortest terminal segment,
+            # floored at 1e-5 m so the deck front's node grid can never fire
+            # it), and a flat threshold picked here would be both a seventh
+            # "same point" number and a worse-calibrated one.
+            _wire_spec.check_junction_coincidence(
+                self.wires_polylines,
+                self.n_per_edge_per_wire,
+                canonical_groups(self._declared_junctions),
+            )
         self._cached_cells = None
 
     # ------------------------------------------------------------------
