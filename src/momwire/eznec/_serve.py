@@ -1407,42 +1407,41 @@ def _assign_columns(mesh: _Mesh) -> None:
     declared: dict[int, _Site] = {}
     for site in mesh.sites:
         junction = None if site.contact else junction_of.get((site.piece, site.end))
-        if junction is not None and site.spelling == "gap":
-            site.weight = (
-                -site.sign
-                if mesh.junctions[junction][0] == (site.piece, site.end)
-                else site.sign
-            )
-        else:
-            site.weight = site.sign
-        if junction is None:
-            # Its own knot, and its own column: a ground contact, or a delta
-            # gap at a node this wire alone passes through.
-            site.column = len(mesh.feeds)
-            mesh.feeds.append(site)
-            continue
-        first = declared.get(junction)
-        if first is None:
-            declared[junction] = site
-            if site.spelling == "gap":
-                site.column = len(mesh.feeds)
-                mesh.feeds.append(site)
-            else:
-                site.column = len(mesh.gaps)
-                mesh.gaps.append(site)
-            continue
-        members = mesh.junctions[junction]
-        if len(members) != 2:
-            raise ServeRefusal(
-                _REFUSE_TWO_CUTS.format(
-                    first=f"{first.at.tag},{first.at.written}",
-                    second=f"{site.at.tag},{site.at.written}",
-                    count=len(members),
-                )
-            )
-        site.column = first.column
+        first = declared.get(junction) if junction is not None else None
+
+        # The weight, decided once and in one place.
         if site.spelling == "node":
-            site.weight = -site.sign
+            # momwire's sigma at the end that named the cut — and the far side
+            # of a cut already declared is minus it, by KCL.
+            site.weight = site.sign if first is None else -site.sign
+        elif junction is None:
+            # A ground contact, or a delta gap at a node this wire alone
+            # passes through: its own knot, driven in its own direction.
+            site.weight = site.sign
+        else:
+            # A delta gap ON a junction, whose single through-current unknown
+            # momwire orients once regardless of who names it.
+            side_a = mesh.junctions[junction][0] == (site.piece, site.end)
+            site.weight = -site.sign if side_a else site.sign
+
+        # The column, likewise: a second address at one junction shares the
+        # first's, and everything else opens its own.
+        if first is not None:
+            if len(mesh.junctions[junction]) != 2:
+                raise ServeRefusal(
+                    _REFUSE_TWO_CUTS.format(
+                        first=f"{first.at.tag},{first.at.written}",
+                        second=f"{site.at.tag},{site.at.written}",
+                        count=len(mesh.junctions[junction]),
+                    )
+                )
+            site.column = first.column
+            continue
+        if junction is not None:
+            declared[junction] = site
+        ports = mesh.feeds if site.spelling == "gap" else mesh.gaps
+        site.column = len(ports)
+        ports.append(site)
     # momwire orders its ports [gap feeds..., junction ports..., node gaps...]
     # and this seam declares no junction ports, so a node gap's column is its
     # place in that list offset by the feeds.  Applied here rather than at the
