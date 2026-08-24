@@ -246,9 +246,9 @@ def test_the_point_matched_fill_follows_the_object_not_the_strings(monkeypatch):
         calls["built"] += 1
         return real_factory(*a, **kw)
 
-    def spy_image(self, obs_rows=None):
+    def spy_image(self, obs_rows=None, cos_shape="cos"):
         calls["image"] += 1
-        return real_image(self, obs_rows=obs_rows)
+        return real_image(self, obs_rows=obs_rows, cos_shape=cos_shape)
 
     def spy_replay(self, *a, **kw):
         calls["replay"] += 1
