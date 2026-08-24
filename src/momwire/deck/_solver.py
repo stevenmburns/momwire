@@ -49,7 +49,8 @@ polyline arrays rather than a fresh rounding of the same walk.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Sequence
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any
 
@@ -159,13 +160,23 @@ class PortPlan:
     momwire's own port order ([gap feeds…, junction ports…, node ports…]);
     :attr:`node_gap_ports` names those rows so a consumer never has to
     reconstruct the offset.
+
+    That first sentence is a CLAIM, and :func:`prepare_mesh` cannot make it
+    true on its own: it builds one plan per structure, before a basis has been
+    chosen, and a :data:`_NATIVE_LOADING` basis gives a load-only site no row
+    of its own.  :func:`in_solver_ports` is what makes it true — every plan
+    reachable from a :class:`BuiltSolver` has been through it.  The plan
+    :attr:`PreparedMesh.ports` hands out is the DECK's, where a site is a site
+    whatever the basis turns out to be.
     """
 
     sites: tuple[PortSite, ...]
     # Solver port index per model feed / load / node gap, parallel to
-    # DeckModel.feeds, .loads and .node_gaps.
+    # DeckModel.feeds, .loads and .node_gaps.  A load entry is None when the
+    # basis carries that load on the fill instead of at a port, which is the
+    # one case a model card has no row behind it at all (momwire#588).
     feed_ports: tuple[int, ...]
-    load_ports: tuple[int, ...]
+    load_ports: tuple[int | None, ...]
     node_gap_ports: tuple[int, ...]
     # One drive vector over the full port set per execute group, None where
     # the model's group is None (an execute card that ran nothing).
@@ -194,6 +205,67 @@ class PortPlan:
         )
 
 
+def in_solver_ports(plan: PortPlan, has_port: Sequence[bool]) -> PortPlan:
+    """``plan`` renumbered onto the rows the SOLVER actually built.
+
+    ``has_port[k]`` says whether plan site ``k`` became a row of the solver's
+    own matrix.  It is False in exactly one case — a load-only site on a
+    :data:`_NATIVE_LOADING` basis, whose ``LD`` the fill carries through
+    ``lumped_loads`` instead — and True everywhere else, where this returns
+    ``plan`` UNTOUCHED and costs nothing but the ``all()``.
+
+    Renumbering rather than leaving the caller to translate is deliberate.
+    A deck port index and a solver port index are the same integer for eight
+    of the nine families in :data:`BASES` and differ for the ninth, so a
+    consumer that mixes the two spaces is right on every deck it is likely to
+    be tested against and wrong on the one that matters (momwire#439's
+    ``IndexError``, momwire#588's dimension mismatch).  There is no way to
+    read the difference off an index, so the fix is to stop having two kinds
+    of index in circulation: past this function there is one space, the
+    solver's, and :class:`PortPlan`'s docstring is true by construction.
+
+    Node gaps keep their place after the sites — that is momwire's port order,
+    not a choice made here — but the offset shrinks with the sites ahead of
+    them.  A feed and a network endpoint always have a row (they are what
+    ``has_port`` is built from), so only :attr:`PortPlan.load_ports` can come
+    back carrying ``None``.
+    """
+    if all(has_port):
+        return plan
+    bridge: list[int | None] = []
+    kept: list[int] = []
+    for index, flag in enumerate(has_port):
+        if flag:
+            bridge.append(len(kept))
+            kept.append(index)
+        else:
+            bridge.append(None)
+    n_gaps = len(plan.node_gap_ports)
+
+    def _feed(port: int) -> int:
+        mapped = bridge[port]
+        if mapped is None:  # pragma: no cover - has_port is built from these
+            raise AssertionError(f"port {port} drives but has no solver row")
+        return mapped
+
+    return replace(
+        plan,
+        sites=tuple(plan.sites[index] for index in kept),
+        feed_ports=tuple(_feed(port) for port in plan.feed_ports),
+        load_ports=tuple(bridge[port] for port in plan.load_ports),
+        node_gap_ports=tuple(len(kept) + k for k in range(n_gaps)),
+        voltages=tuple(
+            None
+            if drive is None
+            else tuple([drive[index] for index in kept] + list(drive[len(bridge) :]))
+            for drive in plan.voltages
+        ),
+        network_ports=tuple(
+            (_feed(port_a), _feed(port_b)) for port_a, port_b in plan.network_ports
+        ),
+    )
+
+
 @dataclass(frozen=True)
 class BuiltSolver:
     """A constructed solver and the plan that reads its ports.
@@ -207,7 +279,21 @@ class BuiltSolver:
     """
 
     solver: Any
+    # The plan in the SOLVER's port space — `ports.n_ports` is the number of
+    # rows `compute_port_solution().y` has, and every index in it addresses
+    # one. This is `deck_ports` put through `in_solver_ports`, and it is the
+    # plan every consumer of a built solver wants.
     ports: PortPlan
+    # The plan in the DECK's, where a site is a site whatever basis reads it:
+    # one entry per position the cards cut a gap at, which is what a message
+    # about the deck has to count. The two are the same object for every
+    # family but the natively-loading one (momwire#588).
+    deck_ports: PortPlan
+    # Solver port index per DECK site, or None where the site has no port in
+    # the solver's own matrix — the bridge between the two plans above, built
+    # beside the `feeds` comprehension it has to agree with rather than
+    # re-derived by a consumer.
+    site_to_solver_port: tuple[int | None, ...]
     basis: str
     frequency_mhz: float
     wavelength: float
@@ -568,10 +654,14 @@ def build_solver(
         # no `junctions` spec at all (not even `None`: it is a bare kwarg
         # name this constructor never declared), so the key stays out of
         # `kwargs` entirely rather than being set and refused.
+        _has_port = [
+            plan.sites[index].feed is not None or plan.sites[index].network
+            for index in range(len(built_mesh.ports))
+        ]
         feeds = [
             (polyline, arclength, _voltage(index))
             for index, (polyline, arclength) in enumerate(built_mesh.ports)
-            if plan.sites[index].feed is not None or plan.sites[index].network
+            if _has_port[index]
         ]
         loads = _lumped_loads(plan.sites, built_mesh.ports, frequency_mhz * 1e6)
         if loads:
@@ -581,6 +671,7 @@ def build_solver(
             (polyline, arclength, _voltage(index))
             for index, (polyline, arclength) in enumerate(built_mesh.ports)
         ]
+        _has_port = [True] * len(built_mesh.ports)
         kwargs["junctions"] = [list(entry) for entry in built_mesh.junctions] or None
 
     solver = solver_class(
@@ -595,9 +686,21 @@ def build_solver(
         **_ground(environment),
         **basis_kwargs,
     )
+    # Renumber onto the rows that were just built, from the same flags the
+    # `feeds` list was filtered by, so the plan cannot drift from the matrix
+    # it describes.
+    solver_plan = in_solver_ports(plan, _has_port)
+    bridge: list[int | None] = []
+    next_port = 0
+    for flag in _has_port:
+        bridge.append(next_port if flag else None)
+        next_port += int(flag)
+
     return BuiltSolver(
         solver=solver,
-        ports=plan,
+        ports=solver_plan,
+        deck_ports=plan,
+        site_to_solver_port=tuple(bridge),
         basis=basis,
         frequency_mhz=float(frequency_mhz),
         wavelength=_C_LIGHT / (frequency_mhz * 1e6),

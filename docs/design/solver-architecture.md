@@ -1290,12 +1290,14 @@ exactly like every other roster entry, through the one shared
 the portal" paragraph is left in place above, uncorrected, as the record of
 what was true at #432's landing; this section is the update).
 
-One narrower portal-side gap surfaced by this unit is tracked as its own
+One narrower portal-side gap surfaced by this unit was tracked as its own
 issue rather than folded in here: **#439**, `_port_signs` indexing
 `solver.feeds` by `PortPlan.sites` — true for a driven site, and true for a
 site that is both fed and loaded, but not for a load-only site razor bakes
 straight into `lumped_loads` rather than the port-algebra route every other
-family takes (`docs/razor-solver.md`'s "A remaining portal-side gap").
+family takes. Refused by PR #586 and served by **#588**, which renumbers the
+plan onto the rows `build_solver` built (`deck._solver.in_solver_ports`;
+`docs/razor-solver.md`'s "The port-count half, closed portal-side").
 
 **Which sibling spelling.** Two exist: `BSplineSolver`'s batched-swept
 version (a fully batched fast path whose per-k core is NOT

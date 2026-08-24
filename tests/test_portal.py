@@ -3154,18 +3154,16 @@ def test_require_lattice_fft_names_the_unmet_gate_on_a_single_pair():
 # rank-9 item closes it: `_y_and_port_coeffs` drives razor exactly like every
 # other family now.
 #
-# Known gap (filed as its own follow-up issue, #439, not fixed here):
-# `_port_signs` assumes every `PortPlan` site has a
-# matching `RazorSolver.feeds` entry, which holds for a driven site and for
-# a site that is BOTH fed and loaded (`_sites()` merges the two into one
-# `PortSite`), but not for a LOAD-ONLY site on a DIFFERENT segment from
-# every `EX` — razor bakes that one straight into `lumped_loads`
-# (`docs/razor-solver.md` "A load-only site is not a port here"), so it
-# never reaches `RazorSolver.feeds` at all, and `_port_signs` indexes past
-# the end of the list. The load-and-ground deck below sidesteps it by
-# loading the FED segment (a legal, documented razor configuration in its
-# own right — `docs/razor-solver.md`'s "Z_driven identity"), which is what
-# the gate below actually exercises end to end.
+# A load-only site — an `LD` on a DIFFERENT segment from every `EX` — is the
+# one case where razor's port count is not the deck's, because it bakes that
+# load straight into `lumped_loads` (`docs/razor-solver.md`, "A load-only
+# site is not a port here") and gives it no row. That was #439's `IndexError`
+# out of `_port_signs`, then #586's refusal, and is served as of momwire#588
+# (`build_solver` renumbers the plan onto the rows it built); the gates for it
+# are near the end of this file. The deck below loads the FED segment, where
+# `_sites()` merges the two cards into one `PortSite` and no renumbering
+# arises — razor's documented "Z_driven identity" case, which is what the gate
+# below exercises end to end.
 
 
 def _razor_solver(**kwargs):
@@ -3275,13 +3273,11 @@ def test_razor_basis_answers_a_deck_with_a_load_and_a_ground(basis):
 # structurally zero here.  The two gates below pin the impedance side and the
 # power side; the sibling comparison pins the agreement that was silently lost.
 #
-# All three load the FED segment, which is not a taste: a load-only site on a
-# DIFFERENT segment from every `EX` never reaches `RazorSolver.feeds`, and
-# `_port_signs` indexes past the end of that list — the pre-existing #439 gap
-# recorded above, unchanged by momwire#433 and not fixed here.  A driven-segment
-# load is razor's documented `Z_driven = Z_unloaded + Z_L` case
+# All three load the FED segment, which is not a taste: a driven-segment load
+# is razor's documented `Z_driven = Z_unloaded + Z_L` case
 # (`docs/razor-solver.md`), which makes the expected impedance EXACT rather
-# than approximate, so it is the sharper gate anyway.
+# than approximate.  The load-only spelling — served since momwire#588 — has
+# no closed form to check against and is gated on its own terms further down.
 
 _RAZOR_LD_R = 50.0
 _RAZOR_LD_DECK = (
@@ -4924,55 +4920,262 @@ def restore_active_basis():
     _p._active_basis, _p._active_basis_name = was
 
 
+def _aip_z(text: str, table: int = 0, row: int = 0) -> complex:
+    """The impedance one ANTENNA INPUT PARAMETERS row printed."""
+    entry = aip_tables(text)[table][row]
+    return complex(float(entry[6]), float(entry[7]))
+
+
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
-def test_a_load_only_site_on_a_native_loading_basis_refuses_by_name(
+def test_a_load_only_site_on_a_native_loading_basis_is_served(
     basis, restore_active_basis
 ):
-    """momwire#439 was an `IndexError: list index out of range` from inside
-    `_port_signs` — a traceback naming nothing the deck's author could act on.
+    """momwire#588. This was momwire#439's `IndexError: list index out of
+    range` from inside `_port_signs`, then PR #586's refusal in its place;
+    it is now an answer.
 
     RazorSolver refuses the port-algebra route's zero-volt gap and takes its
     loads through `lumped_loads`, so a load-only site gets a `PortSite` with
-    no feed behind it: `plan.n_ports` counts it, `compute_port_solution()`
-    does not, and indexing one list by the other walks off the end.
+    no row of its own: the deck plans two ports and the solver builds one.
+    Both numbers were always right — what was missing was the renumbering
+    between them, which `build_solver` now does once
+    (`deck._solver.in_solver_ports`) so that no consumer has to know which
+    space an index it is holding came from.
 
-    SERVING it needs the load-stamping algebra to special-case these solvers,
-    which the issue puts out of its own scope. This gates the refusal only —
-    but the refusal has to carry the two things a traceback did not: what is
-    wrong, and what to do instead.
+    The bar is exact rather than a tolerance, and deliberately so. The
+    physics here is the fill's, and the fill's own loaded answer is already
+    gated (`test_deck_build_solver_razor.py`'s route-equivalence ladder,
+    which uses this very geometry off the driven segment). What #588 added is
+    BOOKKEEPING, so what this asks is whether the portal reproduces the
+    solver's own answer — no tolerance to pick, and a mis-mapped port cannot
+    hide inside one.
     """
+    from momwire.deck import build_solver, parse
+
     _, out, err = _run_main(["--basis", basis], deck=_LOAD_ONLY_DECK)
-    text = out + err
-    assert "momwire#439" in text
-    assert "load-only site" in text
-    assert "IndexError" not in text, "the traceback must not reach the user"
-    # Both escape routes are named, and both are true — see the two tests
-    # below, which are what stops this message from being folklore.
-    assert "fed segment" in text
-    assert "--basis bspline" in text
-
-
-def test_the_439_refusal_names_a_basis_that_really_serves_it(restore_active_basis):
-    """The advice half of the message above, checked rather than asserted.
-
-    A refusal that recommends a workaround is making a claim about another
-    code path, and that claim rots silently. `bspline` stamps loads as ports,
-    so it has a feed per site and the deck solves.
-    """
-    _, out, err = _run_main(["--basis", "bspline"], deck=_LOAD_ONLY_DECK)
     assert "IMPEDANCE" in out, err
     assert "momwire#439" not in (out + err)
+    assert "IndexError" not in (out + err)
+
+    built = build_solver(parse(_LOAD_ONLY_DECK), basis=basis)
+    assert built.deck_ports.n_ports == 2 and built.ports.n_ports == 1
+    assert built.site_to_solver_port == (None, 0)
+    direct, _ = built.solver.compute_impedance()
+    # Printed to five significant figures, so that is the comparison.
+    assert _aip_z(out) == pytest.approx(complex(direct), rel=1e-4)
 
 
-def test_the_439_refusal_names_a_geometry_that_really_serves_it(restore_active_basis):
-    """The other half: moving the load ONTO the fed segment merges the two
-    into one `PortSite`, so the lists stay the same length and razor solves.
+def test_the_load_only_site_really_puts_the_load_on_the_fill(restore_active_basis):
+    """Served is not the same as heard.
 
-    This is also the boundary of the defect — it is the SEPARATION that
-    trips it, not loads-under-razor in general.
+    A load-only site whose `LD` fell on the floor would print a perfectly
+    plausible number — the unloaded dipole's — and satisfy every shape gate
+    in this file. So the served answer is checked against the deck with the
+    `LD` card REMOVED, and it has to differ by more than rounding: this
+    `LD 0` is 50 Ω + j188.5 at 30 MHz, and it moves the drive point by tens
+    of ohms.
     """
+    without = "\n".join(
+        line for line in _LOAD_ONLY_DECK.splitlines() if not line.startswith("LD ")
+    )
+    _, loaded, err_a = _run_main(["--basis", "razor"], deck=_LOAD_ONLY_DECK)
+    _, bare, err_b = _run_main(["--basis", "razor"], deck=without + "\n")
+    assert "IMPEDANCE" in loaded, err_a
+    assert "IMPEDANCE" in bare, err_b
+    # Measured 2026-08-24: 126.602 + 137.289j loaded, 78.809 + 33.063j bare.
+    assert abs(_aip_z(loaded) - _aip_z(bare)) > 10.0
+
+
+def test_a_load_only_site_does_not_shift_the_drive_onto_another_port(
+    restore_active_basis,
+):
+    """The silent half of the defect, which one feed cannot expose.
+
+    With a single feed a stale deck-space index either lands on the one row
+    there is or walks off the end, so the old failure was loud. Put a
+    load-only site BETWEEN two feeds and it stops being: the deck plans ports
+    [load, feed A, feed B] and the solver builds [feed A, feed B], so an
+    un-renumbered feed A addresses feed B's row and the two sources swap
+    without a word. The drive voltages here are deliberately unequal, and the
+    tags name the rows, so a swap changes both printed impedances.
+    """
+    deck = (
+        "CE two feeds around a load\n"
+        "GW 1 11 0. 0. -2.5 0. 0. 2.5 0.001\n"
+        "GE 0\n"
+        "LD 0 1 3 3 50. 1.e-6 0.\n"
+        "EX 0 1 6 0 1.\n"
+        "EX 0 1 9 0 0.25\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+        "NX\n"
+    )
+    import numpy as np
+
+    from momwire.deck import build_solver, parse
+
+    built = build_solver(parse(deck), basis="razor")
+    # The load site really does sort ahead of both feeds — otherwise this
+    # deck is not testing what it claims to.
+    assert built.site_to_solver_port == (None, 0, 1)
+    assert built.ports.feed_ports == (0, 1)
+
+    _, out, err = _run_main(["--basis", "razor"], deck=deck)
+    rows = aip_tables(out)[0]
+    assert [row[1] for row in rows] == ["6", "9"], err
+
+    y = built.solver.compute_port_solution().y
+    v = np.array([1.0, 0.25], dtype=np.complex128)
+    i = y @ v
+    for index, row in enumerate(rows):
+        expected = v[index] / i[index]
+        assert complex(float(row[6]), float(row[7])) == pytest.approx(
+            expected, rel=1e-4
+        ), f"row {index} (segment {row[1]}) reads the wrong port"
+
+
+def test_the_served_razor_answer_sits_where_a_coarse_mesh_puts_it(
+    restore_active_basis,
+):
+    """The measured bar against the oracle, and why it is the size it is.
+
+    `dipole_load_ld0` is the committed fixture `_LOAD_ONLY_DECK` was written
+    from, and its nec2c capture reads 144.06 + 188.89j. Under razor the deck
+    now answers 126.60 + 137.29j — 22.9 % away, where `bspline` on the same
+    fixture is 1.79 % (`test_portal_differential`'s row).
+
+    That spread is the MESH, not the service. Nine segments is coarse for a
+    half-wave dipole carrying a +j188 Ω load a third of the way along it, and
+    the two bases disagree about a coarse mesh in the direction they always
+    do: on the UNLOADED version of this geometry they already sit 28 % apart
+    in reactance (78.809 + 33.063j against 79.524 + 46.003j) while agreeing
+    to 0.9 % in resistance. Refine it and they converge on each other and
+    AWAY from the oracle's own nine-segment number, both landing near
+    160 + 200j — which is `test_the_two_routes_converge_on_the_fixtures_own
+    _geometry` in `test_deck_build_solver_razor.py`, the evidence this
+    tolerance rests on rather than an eyeballed pin.
+
+    So the bar here is deliberately loose and deliberately two-sided: it
+    catches a wrong port, a dropped load or a lost sign, and it does not
+    pretend a nine-segment cross-formulation agreement that no one measured.
+    """
+    _, out, err = _run_main(["--basis", "razor"], deck=_LOAD_ONLY_DECK)
+    assert "IMPEDANCE" in out, err
+    ours = _aip_z(out)
+    theirs = _aip_z(fixture_out("dipole_load_ld0"))
+    assert theirs == pytest.approx(144.06 + 188.89j, rel=1e-4)
+    # Measured 2026-08-24: 22.93 %. Pinned with margin above and a floor
+    # below, because collapsing onto the oracle would mean the load stopped
+    # reaching the fill and the fixture's own bspline row would say so.
+    assert 0.05 < abs(ours - theirs) / abs(theirs) < 0.30, f"{ours} vs {theirs}"
+
+
+#: Every committed fixture whose deck plans more ports than razor builds —
+#: found by walking the corpus, not by memory. Two of them are the one-load
+#: shape the gates above use; `catalog_multiband_trap_dipole` is a real trap
+#: dipole with a load-only site on EACH side of the feed, which is the shape
+#: momwire#588 was filed about ("a trap on a parasitic element") and the one
+#: that puts a renumbering error between two ports rather than after them.
+_LOAD_ONLY_FIXTURES = (
+    "catalog_multiband_trap_dipole",
+    "dipole_load_ld0",
+    "dipole_load_ld4",
+)
+
+
+@pytest.mark.parametrize("name", _LOAD_ONLY_FIXTURES)
+@pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
+def test_every_load_only_fixture_in_the_corpus_serves_under_razor(
+    name, basis, restore_active_basis
+):
+    """The corpus half of momwire#588, and the one that would notice a
+    renumbering that is right for one load and wrong for two.
+
+    Each of these refused outright before this issue. What is asked of each
+    is what is asked of `_LOAD_ONLY_DECK`: the printout is a printout, and
+    the impedance it prints is the directly-built solver's own — the portal
+    contributes bookkeeping here and nothing else, so an exact comparison is
+    available and a tolerance would only hide a swapped row.
+    """
+    from momwire.deck import build_solver, parse
+
+    deck = (FIXTURE_DIR / f"{name}.deck").read_text()
+    rc, out, err = _run_main(["--basis", basis], deck=deck)
+    assert rc == 0 and "ERROR-NEC2C" not in out, err
+
+    built = build_solver(parse(deck), basis=basis)
+    assert None in built.site_to_solver_port, f"{name} is not a load-only deck"
+    assert built.ports.n_ports < built.deck_ports.n_ports
+    direct, _ = built.solver.compute_impedance()
+    assert _aip_z(out) == pytest.approx(complex(direct), rel=1e-4)
+
+
+_NETWORK_LOAD_ONLY = """CE a network and a load-only site
+GW 1 {n} 0. 0. -2.5 0. 0. 2.5 0.001
+GE 0
+LD 0 1 {ld} {ld} 50. 1.e-6 0.
+NT 1 {a} 1 {b} 0. 0.02 0. -0.01 0. 0.02
+EX 0 1 {a} 0 1.
+FR 0 1 0 0 30. 0
+XQ
+NX
+"""
+
+
+def test_a_network_and_a_load_only_site_agree_with_the_port_algebra_route(
+    restore_active_basis,
+):
+    """The other consumer of the renumbering, and the one with the furthest
+    to fall if it is wrong.
+
+    `NT`/`TL` endpoints are ports too, and `PortPlan.network_ports` names
+    them — so a load-only site ahead of a network endpoint shifts the
+    endpoint's row exactly as it shifts a feed's, and the reducer stamps a
+    two-port admittance across whichever rows it is handed. Nothing about a
+    wrongly-stamped network is loud: it solves, it prints, and it prints a
+    plausible impedance for a different circuit.
+
+    So the check is convergence against the route that does not renumber at
+    all. `bspline` gives the load its own port and stamps it in the port
+    algebra; razor bakes it into the fill and renumbers around it. Two
+    different treatments of the load AND two different port spaces, and they
+    have to meet in the same place as the mesh refines.
+    """
+    gaps = []
+    for nsegs, load, end_a, end_b in ((11, 3, 6, 9), (21, 5, 11, 17), (81, 17, 41, 65)):
+        deck = _NETWORK_LOAD_ONLY.format(n=nsegs, ld=load, a=end_a, b=end_b)
+        _, razor, err_a = _run_main(["--basis", "razor"], deck=deck)
+        _, bspline, err_b = _run_main(["--basis", "bspline"], deck=deck)
+        assert "NETWORK DATA" in razor, err_a
+        assert "NETWORK DATA" in bspline, err_b
+        # Two tokenised tables on a network deck — the excitation data at the
+        # connection points, then ANTENNA INPUT PARAMETERS. Pinned so that a
+        # printout which grows a third cannot silently redirect this to it.
+        assert len(aip_tables(razor)) == len(aip_tables(bspline)) == 2
+        gaps.append(abs(_aip_z(razor, table=-1) - _aip_z(bspline, table=-1)))
+
+    # Measured 2026-08-24: [29.61, 18.73, 2.44] on a drive point near
+    # 58 - 72j. A stale deck-space index for the NT's far end would not
+    # converge at all — it would stamp the network onto the wrong row and
+    # stay there.
+    assert gaps[-1] < gaps[0] / 5.0, gaps
+    assert gaps[-1] < 6.0, gaps  # measured 2.44 Ω
+
+
+def test_a_load_on_the_fed_segment_still_merges_into_one_site(restore_active_basis):
+    """The boundary, kept from #586's gates: it is the SEPARATION of the two
+    cards that used to trip the defect, not loads-under-razor in general.
+
+    Moving the load ONTO the fed segment merges them into a single
+    `PortSite`, which needs no renumbering at all — so this is the row of the
+    truth table where `in_solver_ports` returns the plan untouched.
+    """
+    from momwire.deck import build_solver, parse
+
     merged = _LOAD_ONLY_DECK.replace("LD 0 1 3 3", "LD 0 1 5 5")
     assert merged != _LOAD_ONLY_DECK
+    built = build_solver(parse(merged), basis="razor")
+    assert built.ports is built.deck_ports
+    assert built.site_to_solver_port == (0,)
     _, out, err = _run_main(["--basis", "razor"], deck=merged)
     assert "IMPEDANCE" in out, err
-    assert "momwire#439" not in (out + err)
