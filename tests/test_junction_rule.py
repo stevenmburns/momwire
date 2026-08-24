@@ -285,3 +285,65 @@ def test_a_closed_loop_infers_its_own_self_junction():
 
     open_ended, _ = BSplineSolver(**kw, junctions=[]).compute_impedance()
     assert complex(open_ended) != complex(closed)
+
+
+# ----------------------------------------------------------------------
+# The override reaches razor and harrington (momwire#590 step 3b)
+# ----------------------------------------------------------------------
+
+
+def test_razor_declared_junctions_match_what_it_would_have_inferred():
+    """Agreeing with the geometry must be a no-op, byte for byte.
+
+    If declaring the junctions a deck already has changed razor's answer, the
+    override would be a trap: callers who pass what the front end computed
+    would silently get something other than the inferred solve.
+    """
+    kw = dict(wires=_joined(), n_per_edge_per_wire=[[6], [6]], wavelength=1.0)
+    inferred = RazorSolver(**kw)._find_junctions()
+    declared = RazorSolver(
+        **kw, junctions=[[(1, "start"), (0, "start")]]
+    )._find_junctions()
+    # Note the declaration is deliberately written in the WRONG order --
+    # canonicalisation is what makes it match.
+    assert declared == inferred
+
+
+@pytest.mark.parametrize("solver", [RazorSolver, HarringtonSolver])
+def test_the_override_can_disagree_with_the_geometry(solver):
+    """The case that was inexpressible before, and the whole reason the old
+    refusals were wrong: two coincident ends the caller wants left APART.
+
+    Razor's refusal called a spec "either redundant or a disagreement with the
+    mesh". A deliberate disagreement is a legitimate model, and until step 3b
+    neither of these solvers could state one.
+    """
+    kw = dict(
+        wires=_joined(),
+        n_per_edge_per_wire=[[8], [8]],
+        wavelength=1.0,
+        wire_radius=0.001,
+        feed_wire_index=0,
+        feed_arclength=0.125,
+    )
+    joined, _ = solver(**kw).compute_impedance()
+    apart, _ = solver(**kw, junctions=[]).compute_impedance()
+    assert complex(joined) != complex(apart)
+
+
+def test_every_junction_capable_solver_now_reads_the_same_spec():
+    """The point of #590, stated once: one geometry, one `junctions=`, and
+    four solvers that agree about connectivity whichever way they are told.
+
+    PulseSolver is absent on purpose -- its basis has no junction unknown to
+    constrain, so it is the documented exception rather than an oversight.
+    """
+    kw = dict(wires=_joined(), n_per_edge_per_wire=[[6], [6]], wavelength=1.0)
+    spec = [[(0, "start"), (1, "start")]]
+    for solver in (BSplineSolver, SinusoidalSolver, RazorSolver, HarringtonSolver):
+        # Accepts the spec...
+        solver(**kw, junctions=spec)
+        # ...and accepts the escape.
+        solver(**kw, junctions=[])
+        # ...and infers the same thing when told nothing.
+        solver(**kw)

@@ -96,6 +96,24 @@ def coincident_end_groups(wires_polylines, tol: float = JUNCTION_TOL) -> list[li
     return [g for g in grouped(labels, points, tol) if len(g) >= 2]
 
 
+def canonical_groups(declared) -> list[list]:
+    """A caller's `junctions=` put into the order detection would have used.
+
+    Ends sort first-wire-first with `start` before `end`, and groups sort by
+    their earliest member — which is exactly the order `coincident_end_groups`
+    produces, because a group's representative is its earliest end.
+
+    That equivalence is the point: declaring the junctions a geometry already
+    has must give byte-identical output to letting them be inferred, so the
+    override is a way to DISAGREE with the geometry (usually by declaring
+    fewer), never an accidental change of answer when you agree with it.
+    """
+    key = lambda e: (int(e[0]), 0 if e[1] == "start" else 1)  # noqa: E731
+    groups = [sorted((int(w), str(end)) for w, end in g) for g in declared]
+    groups = [sorted(g, key=key) for g in groups]
+    return sorted(groups, key=lambda g: key(g[0]) if g else (-1, -1))
+
+
 def grouped(labels, points, tol: float = JUNCTION_TOL) -> list[list]:
     """`coincident_groups` bucketed into label groups, in creation order.
 
