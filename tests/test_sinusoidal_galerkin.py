@@ -3245,7 +3245,8 @@ def _basis_eval_errors(sim):
     Bl = B.astype(np.clongdouble)[:, None]
     sigCl = sigC.astype(np.clongdouble)[:, None]
     exact_literal = (
-        sigA.astype(np.clongdouble)[:, None] + Bl * np.sin(kl * xl)
+        sigA.astype(np.clongdouble)[:, None]
+        + Bl * np.sin(kl * xl)
         + sigCl * np.cos(kl * xl)
     )
     halfl = np.sin(0.5 * kl * xl)
