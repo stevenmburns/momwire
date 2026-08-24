@@ -1504,7 +1504,7 @@ def _interior_site(
     if degree != 2:
         raise ServeRefusal(
             f"{tag},{Nec5Node(tag, node).written} addresses a node INSIDE "
-            f"wire {tag} where {degree // 2} more element ends meet; this "
+            f"wire {tag} where {degree - 2} more element ends meet; this "
             f"basis spells a series EMF as a delta gap, which drives one "
             f"wire's own knot and would leave the others unconnected"
         )
