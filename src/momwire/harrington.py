@@ -112,7 +112,8 @@ from .pulse import _OUT_OF_SCOPE, _PER_WIRE_RADIUS_REFUSAL, PulseSolver
 # convention rather than construction. `razor._find_junctions` carries the
 # full account; `_node_map` refuses the gap between the two rather than
 # answering across it.
-from .razor import _JUNCTION_TOL
+from ._junction_rule import JUNCTION_TOL as _JUNCTION_TOL
+from ._junction_rule import coincident_groups
 
 # The deck layer's "same point" grid (`deck/_polylines._NODE_EPS`). Ends
 # between the two tolerances are refused rather than silently disconnected —
@@ -250,30 +251,22 @@ class HarringtonSolver(PulseSolver):
             total += (offsets[w + 1] - offsets[w]) + 1
         node_of = np.arange(total)
 
-        # Merge coincident WIRE ENDS, by `razor._find_junctions`' rule and
-        # not merely by something that resembles it: an end joins the FIRST
-        # existing group whose REPRESENTATIVE point it is within tolerance
-        # of, or starts its own. Comparing against representatives rather
-        # than against every member is what makes the rule non-transitive,
-        # and that difference is load-bearing — with A~B, B~C but A≁C, a
-        # transitive union merges all three where razor gives B's group and
-        # a separate C. Two solvers disagreeing about the same deck's
-        # CONNECTIVITY is a worse failure than either answer, so this walks
-        # razor's algorithm rather than inventing a second one.
+        # Merge coincident WIRE ENDS by the shared rule (`_junction_rule`,
+        # momwire#590 step 1). This block used to walk razor's algorithm by
+        # hand, with a comment explaining that two solvers disagreeing about
+        # the same deck's CONNECTIVITY is a worse failure than either answer —
+        # so the copy was deliberate, and deleting it in favour of one spelling
+        # is that comment taken at its word. The non-transitive first-match
+        # semantics it warned about is now stated once, where it is executed.
         ends = []
         for w in range(n_wires):
             n_w = offsets[w + 1] - offsets[w]
             ends.append((knot_offsets[w], geom["seg_l"][offsets[w]]))
             ends.append((knot_offsets[w] + n_w, geom["seg_r"][offsets[w + 1] - 1]))
 
-        reps: list[tuple[int, np.ndarray]] = []
-        for node_i, p in ends:
-            for node_j, q in reps:
-                if float(np.linalg.norm(p - q)) <= _JUNCTION_TOL:
-                    node_of[node_i] = node_j
-                    break
-            else:
-                reps.append((node_i, p))
+        rep = coincident_groups([p for _node, p in ends], _JUNCTION_TOL)
+        for i, (node_i, _p) in enumerate(ends):
+            node_of[node_i] = ends[rep[i]][0]
 
         # Nearly-coincident ends are REFUSED, not quietly disconnected.
         # Two ends further apart than `_JUNCTION_TOL` are separate nodes, so

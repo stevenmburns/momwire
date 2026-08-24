@@ -363,12 +363,18 @@ from ._kernel_moments import (
     _static_axis_moments,
     _static_axis_moments_ek,
 )
+from ._junction_rule import JUNCTION_TOL, grouped
 from ._port_solution import PortSolution, _SweptPortSolutions
 from ._quadrature import leggauss
 
-# Two wire endpoints this close are a junction, not a coincidence. The same
-# tolerance the caller-facing geometry helpers use for "same point".
-_JUNCTION_TOL = 1e-9
+# Two wire endpoints this close are a junction, not a coincidence. The rule
+# and the value both live in `_junction_rule` now (momwire#590 step 1); this
+# name is kept because it is what the docstrings in this module cite.
+#
+# The comment that used to sit here claimed this was "the same tolerance the
+# caller-facing geometry helpers use for 'same point'". It is not — momwire#429
+# correction 2 caught that, and `_junction_rule`'s docstring says what is true.
+_JUNCTION_TOL = JUNCTION_TOL
 
 # Working-array budget for the chunked fills, in complex128 elements
 # (~32 MB per temporary). The fill's inner tensor is
@@ -1008,20 +1014,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         about a plane they share.
         """
         grounded_ends = self._ground_ends()
-        ends = []
+        labels, points = [], []
         for i, pl in enumerate(self.wires_polylines):
-            ends.append((i, "start", pl[0]))
-            ends.append((i, "end", pl[-1]))
+            labels.append((i, "start"))
+            points.append(pl[0])
+            labels.append((i, "end"))
+            points.append(pl[-1])
 
-        groups, points = [], []
-        for w, kind, p in ends:
-            for g, q in enumerate(points):
-                if float(np.linalg.norm(p - q)) <= _JUNCTION_TOL:
-                    groups[g].append((w, kind))
-                    break
-            else:
-                groups.append([(w, kind)])
-                points.append(p)
+        # The rule itself is `_junction_rule.grouped` (momwire#590 step 1) —
+        # first match against group REPRESENTATIVES, non-transitively. It used
+        # to be spelled here and a second time by hand in `harrington.py`.
+        # Label and point order are unchanged, so the grouping and the
+        # reference side A of every junction tent are what they always were.
+        groups = grouped(labels, points, _JUNCTION_TOL)
         out = []
         for g in groups:
             grounded = any(e in grounded_ends for e in g)
