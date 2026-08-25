@@ -1,0 +1,569 @@
+"""momwire#510 — is the grazing floor the interpolation grid's θ resolution?
+
+Where experiments 1 and 3 left it
+---------------------------------
+The floor is in the finite ground (``GN 1`` is exact at 1.09e-4 λ), it is
+keyed to h/λ and not h/Δ, it gets WORSE under mesh refinement, and it is the
+HORIZONTAL wire in the grazing zone rather than the grazing feedpoint — a lone
+vertical whose bottom segment grazes is exact.  Read together that says
+catastrophic cancellation in the *numerical* ground: the same cancellation
+over a closed-form image is exact, so it is the evaluation that fails, not the
+physics.
+
+``probe_contact_direct_remainder.py`` split that evaluation into two axes at
+CONTACT and found the integration tolerance SATURATED (rtol 1e-7 through 1e-13
+all give the same residual) with the whole ~0.003 Ω shift belonging to the
+INTERPOLATION.  Contact is a different regime, so the split has to be asked
+again here — but the grid's own layout comment already names the premise this
+deck breaks::
+
+    # The grazing band (region 0) keeps the 0.01-lambda spacing: there the
+    # layer variable h = R1 sin(theta) stretches it out in R1, no physical
+    # deck queries small R1 at grazing (two points at grazing-small R1 means
+    # both are ON the plane — radial screens, which are refused) ...
+
+0033 **is** an elevated radial screen and it is **not** refused.  And the
+premise's mechanism fails for it specifically: the layer variable
+h = R₁·sinθ is what "stretches out in R₁" for a general pair, but for two
+points that both sit at a fixed grazing height it is PINNED at z_s + z_o
+however large R₁ grows.  It does not stretch.
+
+What this measures
+------------------
+``--mode theta`` is pure geometry against the shipped grid — no solver, no
+binary.  For 0033's own mesh it walks every source/observer pair, computes the
+(R₁, θ) that pair hands the grid, and asks the grid ITSELF (constructed at
+this deck's ε̃, k and extent, so the numbers are the shipped lattice's and not
+a re-derivation) which θ cell each query lands in.  If the queries pile into
+the first cell, the cubic stencil is interpolating a function of h across a
+cell whose h-span is orders of magnitude wider than the h being asked about.
+
+``--mode direct`` is the decisive one: swap the interpolated grid for direct
+evaluation and re-run 0033 against the binary at several heights.  If the
+error collapses, the floor is the interpolation lattice — a keying defect with
+a fix, the same shape momwire#443 already fixed once for the contact boundary
+layer — and #510 stops being a refuse-only formulation limit.  If it does not,
+the integration or the formulation underneath is next.
+
+``--mode reflcoef`` partitions what is left.  ``refl-coef`` and ``sommerfeld``
+share the image fold and differ only by the remainder Q, so forcing the seam's
+ground kwargs to refl-coef — one monkeypatch on ``_serve._ground_kwargs``,
+everything else about the deck, drive, mesh and route held — asks whether the
+error lives in the shared half.  The deck route has no card for it (``GN 0``
+maps to sommerfeld and should), which is why it is patched rather than
+spelled.  refl-coef is outside its own documented 0.1-0.5 λ validity window
+down here, so its ABSOLUTE error is not evidence of anything; what is evidence
+is whether it tracks sommerfeld.
+
+WHAT IT MEASURED (2026-08-25)
+-----------------------------
+``--mode theta`` — 0033's own mesh, 325 pairs, against the shipped lattice:
+
+  h/λ            1.09e-4    1e-3    3e-3    1e-2    3e-2     1e-1
+  median θ (deg)   0.115   1.058   3.171   10.46   23.66       54
+  in first cell    64.6 %  64.6 %  64.6 %  43.1 %     0 %      0 %
+  razor err%      171.86   44.18    3.91    0.06    0.00     0.01
+
+The grazing band's θ cell is **10°** (region 0, R₁ < 0.2 λ) and 5° beyond it,
+and at the native height the MEDIAN query sits at 0.115° — 87× inside the
+first cell.  The error tracks how deep into that first cell the queries fall,
+which is exactly what an interpolation-resolution failure looks like.
+
+``--mode direct`` — and it is NOT that.  With the lattice removed entirely and
+the surfaces evaluated directly at rtol 1e-11:
+
+  h/λ        grid err%   direct err%
+  1.09e-4      435.18       435.23    bspline
+  1.09e-4      171.86       172.08    razor-nec5
+  1e-3          44.18        44.19    razor-nec5
+  3e-3           3.91         3.91    razor-nec5
+  1e-2           0.06         0.06    razor-nec5
+
+Identical to three figures.  **The interpolation lattice is exonerated, and so
+is the integration tolerance** (direct evaluation IS the fill function, swept
+at a tolerance two decades past production).  A textbook-looking resolution
+story measured out — the surfaces are evidently smooth enough in θ near zero
+that a cubic across 10° carries them.
+
+``--mode reflcoef`` — and refl-coef does NOT track sommerfeld here, which is
+where this parts company with #624's contact finding.  They separate, and the
+gap grows exactly as the error does (razor-nec5, |Z_somm − Z_refl|): 10.0 Ω at
+1e-2 λ, 22.9 at 3e-3, 71.9 at 1e-3, 176.3 at 1.09e-4.  Since the two differ
+only by the remainder Q, that gap IS Q's contribution.
+
+The sharpest form, and the one to work from — the GROUND CORRECTION,
+Z(``GN 0``) − Z(``GN 1``), which is what the finite ground is worth on top of
+a perfect image.  razor-nec5 over ``GN 1`` reproduces the binary to 0.00 % at
+every height, so the binary's own PEC answer is a common baseline both sides
+share exactly:
+
+  h/λ       true (binary)        momwire (razor)      overshoot
+  1e-2      1.577  +0.670j       1.582  +0.739j        1.02x
+  3e-3      3.084  +8.700j       3.391 +13.009j        1.46x
+  1e-3      4.473 +20.397j       9.065 +63.307j        3.06x
+  1.09e-4  13.900 +61.346j      82.971+144.743j        2.65x
+
+**momwire over-computes the finite-ground correction by up to ~3× at grazing
+and is exact at 1e-2 λ.**  Backing refl-coef's undershoot out, Q is worth
+176 Ω at the native height where it should be worth 71 Ω.
+
+So the defect is in **how Q is scaled or folded into the system, not in
+computing it** — its evaluation is verified correct by ``--mode direct`` and
+its contribution is 2.5× too large anyway.  That is a bounded, well-localized
+target rather than a formulation dead end.  It also rhymes with #624's
+row-halving suspicion (a model-independent scale factor on a near-plane row)
+without contradicting experiment 3: different geometric trigger and different
+symptom, possibly one defect family.
+
+(bspline's overshoot column is not readable the same way — its own ~5 % basis
+error rides on a correction that is only 1.7 Ω at 1e-2 λ, which is what makes
+that row 4.77×.  razor's column is the clean one, and it is clean precisely
+because razor over PEC is exact.)
+
+Runs the binary in ``--mode direct`` / ``--mode reflcoef``, so: antennaknobs
+venv, ``NEC5_EXE`` set.
+
+    NEC5_EXE=~/antennas/NEC5-downloads/nec5-linux/nec5cl \
+        /home/smburns/antennas/antennaknobs/.venv/bin/python \
+        scripts/probe_grazing_ground_path.py --mode theta
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+import numpy as np
+
+from momwire import _sommerfeld
+from probe_grazing_height_floor import (
+    FREQ_MHZ,
+    N_SEG,
+    RADIAL_LEN,
+    SOIL,
+    TRUNKS,
+    VERT_LEN,
+    WL,
+    deck,
+    momwire_z,
+)
+
+EPS0 = 8.8541878128e-12
+
+# The heights the two earlier probes bracket the floor with.
+THETA_HEIGHTS = (1.09e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1)
+DIRECT_HEIGHTS = (1.09e-4, 1e-3, 3e-3, 1e-2)
+
+
+def medium_eps_t() -> complex:
+    """``GN 0 ... 13. .005`` as the complex ε̃ the grid is keyed on."""
+    omega = 2.0 * np.pi * FREQ_MHZ * 1e6
+    return SOIL[0] - 1j * SOIL[1] / (omega * EPS0)
+
+
+def node_points(h: float) -> np.ndarray:
+    """Every mesh node of 0033 at radial height ``h``.
+
+    Segment CENTRES would be the more faithful query set, but the pair
+    geometry this mode is about — R₁ and θ of a source/observer pair — is set
+    by the heights and the horizontal separation, and nodes and centres span
+    the same ranges of both.  Nodes are what the deck states, so nodes are
+    what is walked.
+    """
+    pts = [(0.0, 0.0, h + i * VERT_LEN / N_SEG) for i in range(N_SEG + 1)]
+    for ux, uy in ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)):
+        for i in range(1, N_SEG + 1):
+            s = i * RADIAL_LEN / N_SEG
+            pts.append((ux * s, uy * s, h))
+    return np.array(pts)
+
+
+def pair_queries(pts: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """(R₁, θ) for every ordered pair, in the grid's own convention.
+
+    R₁ is source to the IMAGE of the observer — the distance the half-space
+    surfaces are tabulated against — and θ is that ray's angle above the
+    interface, so a pair of points at a common grazing height gives
+    R₁ ≈ horizontal separation and θ ≈ (z_s + z_o)/R₁.
+    """
+    d = pts[:, None, :2] - pts[None, :, :2]
+    rho = np.hypot(d[..., 0], d[..., 1])
+    zsum = pts[:, None, 2] + pts[None, :, 2]
+    r1 = np.hypot(rho, zsum)
+    theta = np.arcsin(np.clip(zsum / np.maximum(r1, 1e-300), 0.0, 1.0))
+    iu = np.triu_indices(len(pts), k=1)
+    return r1[iu], theta[iu]
+
+
+def grid_for(h: float):
+    """The shipped grid this deck's solve would build, so the θ lattice read
+    below is the real one rather than a re-derivation of the layout rules."""
+    k2 = 2.0 * np.pi / WL
+    pts = node_points(h)
+    r1, _ = pair_queries(pts)
+    return _sommerfeld.get_grid(
+        medium_eps_t(), k2, float(r1.max()), omega=k2 * 299792458.0
+    )
+
+
+def theta_cells(grid) -> list[tuple[float, float, float, float]]:
+    """(r0, r1, θ0, Δθ) of each region, in metres and degrees."""
+    out = []
+    for reg in grid._regions:
+        r_lo = float(reg["r0"])
+        r_hi = r_lo + float(reg["dr"]) * (int(reg["n_r"]) - 1)
+        out.append(
+            (
+                r_lo,
+                r_hi,
+                float(np.degrees(reg["th0"])),
+                float(np.degrees(reg["dth"])),
+            )
+        )
+    return out
+
+
+def mode_theta() -> list[dict]:
+    print("0033's mesh — every pair's (R1, theta) against the shipped lattice")
+    print(f"lambda = {WL:.2f} m, soil eps_r={SOIL[0]} sigma={SOIL[1]}\n")
+
+    rows = []
+    for hw in THETA_HEIGHTS:
+        h = hw * WL
+        pts = node_points(h)
+        r1, theta = pair_queries(pts)
+        th_deg = np.degrees(theta)
+        grid = grid_for(h)
+        cells = theta_cells(grid)
+        # The coarsest first-cell width any query actually lands in: each
+        # region owns an R1 band, so a query's cell is its band's.
+        first = []
+        for rr, tt in zip(r1, th_deg):
+            widths = [
+                dth for (r0, r1e, th0, dth) in cells if r0 - 1e-9 <= rr <= r1e + 1e-9
+            ]
+            first.append(min(widths) if widths else float("nan"))
+        first = np.array(first)
+        inside = np.isfinite(first) & (th_deg < first)
+        print(f"h/lambda = {hw:<9.3g}  h = {h:.5g} m   ({len(r1)} pairs)")
+        print("   grid theta cells (deg), by R1 band:")
+        for r0, r1e, th0, dth in cells:
+            print(
+                f"      R1 {r0 / WL:>7.4f} .. {r1e / WL:<7.4f} lambda   "
+                f"theta0 {th0:>4.1f}  dtheta {dth:.3f}"
+            )
+        print(
+            f"   queried theta: min {th_deg.min():.4g} deg, "
+            f"median {np.median(th_deg):.4g}, max {th_deg.max():.4g}"
+        )
+        print(
+            f"   pairs inside their band's FIRST theta cell: "
+            f"{inside.sum()} / {len(r1)}  ({100.0 * inside.mean():.1f} %)\n"
+        )
+        rows.append(
+            dict(
+                h_over_wl=hw,
+                h=h,
+                n_pairs=int(len(r1)),
+                theta_min_deg=float(th_deg.min()),
+                theta_median_deg=float(np.median(th_deg)),
+                theta_max_deg=float(th_deg.max()),
+                frac_in_first_cell=float(inside.mean()),
+                cells=[list(c) for c in cells],
+            )
+        )
+    return rows
+
+
+class DirectGrid:
+    """:class:`SommerfeldGrid`'s query contract, answered without a lattice.
+
+    Lifted from ``probe_contact_direct_remainder.py`` — same contract, same
+    memoization — and carrying the attributes the remainder path reads.  The
+    cache is exact, not an approximation: a deck's obs/src halves repeat their
+    (R₁, θ) bit-for-bit.
+    """
+
+    def __init__(self, eps_t, k2, r1_max, omega, mu, rtol):
+        self.eps_t = complex(eps_t)
+        self.k2 = float(k2)
+        self.r1_max = float(r1_max)
+        self.r_near = float(r1_max)
+        self.omega = float(omega)
+        self.mu = float(mu)
+        self.rtol = float(rtol)
+        self._cache: dict[tuple[float, float], tuple[complex, ...]] = {}
+        self.calls = 0
+        self.misses = 0
+
+    def eval(self, R1, theta):
+        r_b, th_b = np.broadcast_arrays(
+            np.asarray(R1, dtype=float), np.asarray(theta, dtype=float)
+        )
+        shape = r_b.shape
+        r_f = r_b.ravel()
+        th_f = np.clip(th_b.ravel(), 0.0, 0.5 * np.pi)
+        self.calls += r_f.size
+        keys = [(float(a), float(b)) for a, b in zip(r_f, th_f)]
+        fresh = sorted({kk for kk in keys if kk not in self._cache})
+        if fresh:
+            self.misses += len(fresh)
+            surf = _sommerfeld.iv_surfaces_direct(
+                self.eps_t,
+                self.k2,
+                np.array([kk[0] for kk in fresh]),
+                np.array([kk[1] for kk in fresh]),
+                rtol=self.rtol,
+                omega=self.omega,
+                mu=self.mu,
+            )
+            for i, kk in enumerate(fresh):
+                self._cache[kk] = tuple(surf[s][i] for s in _sommerfeld._SURF_KEYS)
+        out = np.empty((len(_sommerfeld._SURF_KEYS), r_f.size), dtype=np.complex128)
+        for i, kk in enumerate(keys):
+            out[:, i] = self._cache[kk]
+        return {
+            key: out[s].reshape(shape) for s, key in enumerate(_sommerfeld._SURF_KEYS)
+        }
+
+
+class MaskedAcc:
+    """The accelerator module with only its GRID-consuming kernels hidden.
+
+    Both remainder kernels are selected by ``hasattr``, so masking those two
+    names routes the remainder — and only the remainder — through the numpy
+    body that calls ``grid.eval``, leaving the rest of the fill accelerated.
+    """
+
+    _HIDDEN = ("sommerfeld_remainder_bspline_Q", "remainder_field_proj_batch")
+
+    def __init__(self, acc):
+        self._acc = acc
+
+    def __getattr__(self, name):
+        if name in MaskedAcc._HIDDEN:
+            raise AttributeError(name)
+        return getattr(self._acc, name)
+
+
+def with_direct_grid(fn, rtol: float):
+    """Run ``fn`` with every solver's Sommerfeld grid replaced by direct
+    evaluation.
+
+    ``_sommerfeld.get_grid`` is the single funnel — bspline reaches it through
+    ``_somm_grid`` and razor through ``_potential_ground`` — so one patch
+    covers both trunks whatever route the seam takes to build them.
+    """
+    from momwire import bspline
+
+    # `_potential_ground` — razor's route — holds no `_acc` of its own: it
+    # reaches the kernels through `_sommerfeld.remainder_field_proj`, so
+    # masking `_sommerfeld`'s covers both trunks.  It still picks up the
+    # patched grid, because `get_grid` is looked up on the module per call.
+    saved_get = _sommerfeld.get_grid
+    saved = {m: m._acc for m in (bspline, _sommerfeld)}
+    grids: list[DirectGrid] = []
+
+    def _direct(eps_t, k2, r1_max, omega, mu=_sommerfeld._MU0, cancel_flag=0):
+        g = DirectGrid(eps_t, k2, r1_max, omega, mu, rtol)
+        grids.append(g)
+        return g
+
+    _sommerfeld.get_grid = _direct
+    for mod, acc in saved.items():
+        if acc is not None:
+            mod._acc = MaskedAcc(acc)
+    try:
+        return fn(), grids
+    finally:
+        _sommerfeld.get_grid = saved_get
+        for mod, acc in saved.items():
+            mod._acc = acc
+
+
+def mode_direct(rtol: float) -> list[dict]:
+    exe = Path(os.path.expanduser(os.environ.get("NEC5_EXE", "")))
+    if not exe.is_file():
+        raise SystemExit(f"NEC5_EXE not found: {exe}")
+    sys.path.insert(0, str(Path.home() / "antennas/antennaknobs/scripts"))
+    from antennaknobs.engines.nec5 import NEC5Engine
+    from bench_nec5_walk_why import make_dipole
+
+    captures = Path(
+        os.environ.get("GRAZING_CAPTURES", "/tmp/claude-1000/510-grazing-captures")
+    )
+    captures.mkdir(parents=True, exist_ok=True)
+    eng = NEC5Engine(make_dipole(20), ground=None, capture_dir=captures)
+
+    print("0033 against the binary, shipped grid vs direct evaluation")
+    print(f"direct rtol = {rtol:g}; lambda = {WL:.2f} m\n")
+    hdr = (
+        f"{'h/lambda':>10} {'trunk':>11} | {'nec5cl':>21} | "
+        f"{'grid':>21} {'err%':>8} | {'direct':>21} {'err%':>8} | {'calls':>8}"
+    )
+    print(hdr)
+    print("-" * len(hdr))
+
+    rows = []
+    for hw in DIRECT_HEIGHTS:
+        text = deck(hw * WL)
+        z_ref = complex(eng.run_deck(text)[0][0][2])
+        for trunk in TRUNKS:
+            z_grid = momwire_z(text, trunk)
+            (z_dir, grids) = with_direct_grid(lambda: momwire_z(text, trunk), rtol)
+            calls = sum(g.misses for g in grids)
+            e_g = 100.0 * abs(z_grid - z_ref) / abs(z_ref) if z_grid else float("nan")
+            e_d = 100.0 * abs(z_dir - z_ref) / abs(z_ref) if z_dir else float("nan")
+            print(
+                f"{hw:>10.3g} {trunk:>11} | "
+                f"{z_ref.real:>10.4f}{z_ref.imag:>+10.4f}j | "
+                f"{z_grid.real:>10.4f}{z_grid.imag:>+10.4f}j {e_g:>8.2f} | "
+                f"{z_dir.real:>10.4f}{z_dir.imag:>+10.4f}j {e_d:>8.2f} | {calls:>8}",
+                flush=True,
+            )
+            rows.append(
+                dict(
+                    h_over_wl=hw,
+                    trunk=trunk,
+                    z_ref=[z_ref.real, z_ref.imag],
+                    z_grid=[z_grid.real, z_grid.imag],
+                    z_direct=[z_dir.real, z_dir.imag],
+                    err_grid_pct=e_g,
+                    err_direct_pct=e_d,
+                    direct_evals=calls,
+                )
+            )
+    return rows
+
+
+def mode_reflcoef() -> list[dict]:
+    """Does the error live in the half refl-coef and sommerfeld SHARE?
+
+    The seam has no card for refl-coef and should not grow one — ``GN 0`` is
+    a Sommerfeld ground and serving it as anything else would be a lie. So
+    the ground kwargs are patched for the length of one solve, which holds
+    the deck, the drive, the mesh and the whole route fixed and moves exactly
+    one thing.
+    """
+    from momwire.eznec import _serve
+
+    exe = Path(os.path.expanduser(os.environ.get("NEC5_EXE", "")))
+    if not exe.is_file():
+        raise SystemExit(f"NEC5_EXE not found: {exe}")
+    sys.path.insert(0, str(Path.home() / "antennas/antennaknobs/scripts"))
+    from antennaknobs.engines.nec5 import NEC5Engine
+    from bench_nec5_walk_why import make_dipole
+
+    captures = Path(
+        os.environ.get("GRAZING_CAPTURES", "/tmp/claude-1000/510-grazing-captures")
+    )
+    captures.mkdir(parents=True, exist_ok=True)
+    eng = NEC5Engine(make_dipole(20), ground=None, capture_dir=captures)
+
+    saved = _serve._ground_kwargs
+
+    def _as_refl(deck_, medium):
+        kw = saved(deck_, medium)
+        if kw.get("ground_model") == "sommerfeld":
+            kw = dict(kw, ground_model="refl-coef")
+        return kw
+
+    print("0033 against the binary — sommerfeld vs refl-coef, everything")
+    print("else held (same deck, drive, mesh, seam route)\n")
+    print("refl-coef is outside its own 0.1-0.5 lambda window down here, so")
+    print("its absolute error proves nothing; whether it TRACKS does.\n")
+    hdr = (
+        f"{'h/lambda':>10} {'trunk':>11} | {'nec5cl':>21} | "
+        f"{'sommerfeld':>21} {'err%':>8} | {'refl-coef':>21} {'err%':>8} | "
+        f"{'|somm-refl|':>11}"
+    )
+    print(hdr)
+    print("-" * len(hdr))
+
+    rows = []
+    for hw in DIRECT_HEIGHTS:
+        text = deck(hw * WL)
+        z_ref = complex(eng.run_deck(text)[0][0][2])
+        z_pec = complex(eng.run_deck(deck(hw * WL, pec=True))[0][0][2])
+        for trunk in TRUNKS:
+            z_s = momwire_z(text, trunk)
+            _serve._ground_kwargs = _as_refl
+            try:
+                z_r = momwire_z(text, trunk)
+            finally:
+                _serve._ground_kwargs = saved
+            if z_s is None or z_r is None:
+                continue
+            e_s = 100.0 * abs(z_s - z_ref) / abs(z_ref)
+            e_r = 100.0 * abs(z_r - z_ref) / abs(z_ref)
+            print(
+                f"{hw:>10.3g} {trunk:>11} | "
+                f"{z_ref.real:>10.4f}{z_ref.imag:>+10.4f}j | "
+                f"{z_s.real:>10.4f}{z_s.imag:>+10.4f}j {e_s:>8.2f} | "
+                f"{z_r.real:>10.4f}{z_r.imag:>+10.4f}j {e_r:>8.2f} | "
+                f"{abs(z_s - z_r):>11.4f}",
+                flush=True,
+            )
+            rows.append(
+                dict(
+                    h_over_wl=hw,
+                    trunk=trunk,
+                    z_ref=[z_ref.real, z_ref.imag],
+                    z_pec_ref=[z_pec.real, z_pec.imag],
+                    z_sommerfeld=[z_s.real, z_s.imag],
+                    z_reflcoef=[z_r.real, z_r.imag],
+                    err_sommerfeld_pct=e_s,
+                    err_reflcoef_pct=e_r,
+                    gap=abs(z_s - z_r),
+                    d_true=[(z_ref - z_pec).real, (z_ref - z_pec).imag],
+                    d_momwire=[(z_s - z_pec).real, (z_s - z_pec).imag],
+                    overshoot=abs(z_s - z_pec) / abs(z_ref - z_pec),
+                )
+            )
+
+    # The sharpest form of the question. razor-nec5 over `GN 1` reproduces the
+    # binary to 0.00 % at every height (experiment 1), so the binary's own PEC
+    # answer is a legitimate common baseline and the GROUND CORRECTION — what
+    # the finite ground is worth on top of a perfect image — can be compared
+    # directly instead of through two absolute impedances.
+    print("\n\nthe ground correction itself: Z(GN 0) - Z(GN 1)\n")
+    hdr2 = (
+        f"{'h/lambda':>10} {'trunk':>11} | {'true (binary)':>21} | "
+        f"{'momwire':>21} | {'overshoot':>9}"
+    )
+    print(hdr2)
+    print("-" * len(hdr2))
+    for row in rows:
+        dt = complex(*row["d_true"])
+        dm = complex(*row["d_momwire"])
+        print(
+            f"{row['h_over_wl']:>10.3g} {row['trunk']:>11} | "
+            f"{dt.real:>10.4f}{dt.imag:>+10.4f}j | "
+            f"{dm.real:>10.4f}{dm.imag:>+10.4f}j | {row['overshoot']:>8.2f}x"
+        )
+    return rows
+
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--mode", choices=("theta", "direct", "reflcoef"), default="theta")
+    p.add_argument("--rtol", type=float, default=1e-11)
+    p.add_argument("--out", default=None)
+    args = p.parse_args()
+
+    if args.mode == "theta":
+        rows = mode_theta()
+    elif args.mode == "direct":
+        rows = mode_direct(args.rtol)
+    else:
+        rows = mode_reflcoef()
+    if args.out:
+        Path(args.out).write_text(json.dumps(rows, indent=2))
+        print(f"\nwrote {args.out}")
+
+
+if __name__ == "__main__":
+    main()
