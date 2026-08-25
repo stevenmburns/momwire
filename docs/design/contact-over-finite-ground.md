@@ -37,6 +37,14 @@ on two, and the two refusals cite each other's mechanism.
 | `RazorSolver` | served | refused (`_CONTACT_OVER_FINITE_REFUSAL`) | refused (same) |
 | `PulseSolver` | refused | refused | refused |
 
+> **The table above is the state this study OPENED with, 2026-08-18, and is
+> kept as written.** Two decisions have since moved it: D3 refused the whole
+> refl-coef column on every trunk that served it (stage 1), and D6 served
+> razor's sommerfeld cell (stage 3, momwire#624). The current state is that
+> every solver but `PulseSolver` serves contact over sommerfeld, no solver
+> serves it over refl-coef, and `RazorSolver`'s row no longer differs from
+> `BSplineSolver`'s.
+
 So the honest framing of momwire#282 today is **not** "add a capability". It
 is:
 
@@ -1146,7 +1154,7 @@ no change to any PEC result.
 **Still refused after Stage 2:** as Stage 1, minus nothing. Stage 2 improves
 an answer; it does not open a row.
 
-### Stage 3 — razor's grounded tent over a finite ground
+### Stage 3 — razor's grounded tent over a finite ground *(DONE, momwire#624)*
 
 **Content.** §5.5's experiment first, as a spike, with a written go/no-go.
 If go: restore the plane-reference term, keep the image wing at coefficient
@@ -1161,6 +1169,19 @@ golden unmoved.
 **Still refused after Stage 3:** contact under refl-coef on razor, unless the
 same term repairs it (it should, by construction — but measure); pulse;
 mid-span touchdown; screens at contact.
+
+> **What actually happened — see the Stage 3 record at the end of this
+> document.** The go/no-go came back GO, and the plan above is wrong in its
+> conditional: the term was *not* restored, because measuring it is what
+> killed it. No `PotentialGround` operation was needed and the row-halving
+> was not settled, only narrowed. The gates listed here were all met, by the
+> solver as it already stood. The refl-coef caveat is also wrong — that row
+> stays refused by D3 on every trunk, and the term could not have repaired
+> it, since coefficient 0 is flattest under refl-coef too.
+>
+> Kept unedited above because the shape of the miss is the useful part: this
+> plan was written from a code reading that was correct about the arithmetic
+> and wrong about its consequence, and it looked specific enough to schedule.
 
 ### Stage 4 *(optional, antennaknobs-side)* — the lumped base termination
 
@@ -1183,21 +1204,28 @@ is 1 for the refl-coef ground too; the "spurious contact charge" is the
 direct-field trunk's 1/Δ node charge, which razor's doublet does not have;
 and the binary announces coefficient-1 continuation over every ground.
 
-Proposed replacement, if §5.5's hypothesis survives — stating what razor
-actually lacks:
+That replacement was written and shipped in stage 1, stating what razor was
+argued to lack — the `(1 − w_Φ)·M0` term. **It is gone entirely as of
+momwire#624**, and the reason is worth keeping here rather than only in the
+git history: the sentence was accurate about the arithmetic and wrong about
+what followed from it. The term the fill drops is real; restoring it does not
+improve the answer, and no scale for it is self-consistent (Stage 3 record,
+below). A refusal that names a mechanism is more persuasive than one that
+does not, and this one was persuasive for eight months on the strength of an
+argument nobody had measured.
 
-> ground CONTACT over a finite ground is refused on this solver: a grounded
-> row takes the plane as its potential reference, which is exact only over a
-> perfect conductor. Over a finite ground the plane is not an equipotential,
-> and the folded scalar potential there is (1 − w_Φ)·M0 rather than zero — a
-> term this fill drops. The grounded tent's image wing is correct as it
-> stands and must NOT be weighted: charge conservation fixes the basis's
-> continuation coefficient at 1 over every ground (momwire#282 is the
-> direct-field trunk's account of what weighting it costs). Use
-> `BSplineSolver`, which serves contact over `ground_model="sommerfeld"`, or
-> raise the wire clear of the plane.
+The whole class is worth naming, because the tree has now produced two:
+**a refusal whose prose is a diagnosis rather than an observation is a
+hypothesis wearing a uniform.** Stage 1 already corrected this refusal's
+prose once, on exactly that ground (the old wording was wrong three ways
+about its own mechanism). The corrected wording was more careful and still
+wrong — it said "Restoring the dropped term is a hypothesis, not a
+diagnosis", which was honest, and then went on refusing as though it were a
+diagnosis. The lesson is not "write better refusals": it is that a refusal
+resting on an unmeasured mechanism should carry an expiry — an issue number
+and an experiment — rather than a mechanism.
 
-And a **new** refusal for Stage 1's refl-coef withdrawal, on both trunks:
+What remains is Stage 1's refl-coef withdrawal, on every trunk:
 
 > ground CONTACT under `ground_model="refl-coef"` is refused: the
 > reflection-coefficient ground's Φ-term weight is a specular-angle
@@ -1217,7 +1245,7 @@ And a **new** refusal for Stage 1's refl-coef withdrawal, on both trunks:
 | **D3** | **Refuse refl-coef at contact?** It is a silently wrong default answer (§3.6) and refusing it removes a capability users may be relying on. Options: refuse / warn / leave and document. | Stage 1; user-visible |
 | **D4** | **Is the near-PEC grid floor (§3.7) worth its own issue?** It breaks the ε̃ → ∞ gate at contact and is a shared-layer accuracy defect, not a contact defect. It may matter for high-σ clearance work too. | Stage 1's limit gates; possibly a separate unit |
 | **D5** | **How much is 2.6 Ω of missing ground-loss resistance worth?** On a full-size 40 Ω monopole it is ~6 points of efficiency (90.1 % against 96.5 %). On the short loaded verticals this audience builds it is much larger. If the answer is "a lot", Stage 2 moves ahead of Stage 1's polish. | Stage 2's priority |
-| **D6** | **Does razor need contact over finite grounds at all?** bspline serves it. Razor's value is the NEC-5 twin claim, which at contact is measured (§3.5) to be the thing in question. Stage 3 is a consistency argument, not a capability argument. | Stage 3's existence |
+| **D6** | **Does razor need contact over finite grounds at all?** ~~bspline serves it. Razor's value is the NEC-5 twin claim, which at contact is measured (§3.5) to be the thing in question. Stage 3 is a consistency argument, not a capability argument.~~ **ANSWERED YES, momwire#624 (2026-08-25)** — and the question went stale before it was answered: when it was written, razor was one formulation inside momwire and the EZNEC seam had one basis, so serving contact bought a second internal opinion. momwire#593/#603 made `razor-nec5` an executable a user points EZNEC at, at which point a base-fed vertical over real ground refusing is a capability question and not a consistency one. See the Stage 3 record. | Stage 3's existence |
 | **D7** | **Is model (b) an antennaknobs deliverable?** §2.3(b) says it is the model most users want and proves nothing about momwire. It is also the only one of the four that a user can act on. | Stage 4 |
 
 ---
@@ -1227,10 +1255,20 @@ And a **new** refusal for Stage 1's refl-coef withdrawal, on both trunks:
 * **Why momwire's contact answer misses the binary's by 2.6–3.3 Ω over poor
   soil.** §5.4 narrows it to three candidates and rules out the
   interpolation grid, but does not close it.
-* **Whether §4.3's diagnosis of razor is right.** It is a reading of the
-  code plus a physical argument, not a measurement. §5.5 is the measurement.
+* ~~**Whether §4.3's diagnosis of razor is right.** It is a reading of the
+  code plus a physical argument, not a measurement. §5.5 is the
+  measurement.~~ **ANSWERED NO** (momwire#624). §5.5 ran. The dropped term
+  is real; restoring it makes the binary comparison worse at full strength
+  and fails the stubbed ladder at every scale. The arithmetic in §4.3 is
+  correct and the conclusion drawn from it is not.
 * **Whether razor's grounded-row halving survives a finite ground.** The
-  identity it rests on is a PEC identity. Not measured here.
+  identity it rests on is a PEC identity. Still not measured directly —
+  momwire#624 reached it only by elimination. The restored term's accuracy
+  argmin sat near 0.4 rather than the ~0.5 a pure halving error predicts,
+  and the stubbed ladder then showed the term is not mis-scaled at all, so
+  the halving is neither confirmed nor cleared. What IS measured is the
+  residual it would have to explain: 0.21–0.55 Ω of contact-node
+  self-inconsistency over a finite ground, against 0.002 Ω at PEC.
 * **What NEC-5 does at the contact node.** Only what it printed is recorded:
   that it continues the current to the image, over every ground, and that the
   result converges and recovers PEC at C₂'s rate. No inference beyond that
@@ -1669,3 +1707,127 @@ unchanged, so stage 2's verdict and the #282 pins are unaffected.)*
 Unchanged from stage 1 — stage 2 improved understanding, not capability.
 Contact on razor (both finite grounds); contact on pulse; contact under
 refl-coef, on every trunk; mid-span touchdown; radial screens.
+
+---
+
+## Stage 3 record — 2026-08-25
+
+**momwire#624. D6 answered YES; §4.3's diagnosis answered NO.** Razor serves
+ground contact over the Sommerfeld ground. The plane-reference term this
+study proposed as the fix is *not* part of it, and that is the finding.
+
+### What §5.5 asked for, and what it returned
+
+§5.5 said: implement `(1 − w_Φ)·M0(plane)` behind a flag, keep the image wing
+at coefficient 1, measure against bspline on the §3.5 decks plus PEC
+bit-identity, and measure the row-halving separately. Two spikes ran it
+(`b16d67e`, `e38c77b`); both scripts are kept, at
+`scripts/spike_contact_plane_reference.py` and
+`scripts/spike_contact_stub_ladder.py`.
+
+**PEC bit-identity: passed**, at every rung, as `==` rather than `approx` —
+at PEC there is no `w_Φ` table, so the term's branch never runs and the
+arithmetic is untouched rather than augmented by a zero.
+
+**The parity gate passed, and it did not need the term.** With the term OFF —
+i.e. what lifting the refusal alone would give — razor's residual against the
+binary's printed shift is bounded and saturating on all five grounds, and is
+already competitive with the row that ships:
+
+| ground | razor OFF, N = 61 | bspline, N = 61 |
+|---|---|---|
+| sea | **0.005** | 0.201 |
+| very good | 0.405 | 0.116 |
+| average | 1.397 | 1.236 |
+| poor | 3.384 | 3.309 |
+| dielectric | 4.332 | 4.346 |
+
+**The term makes it worse.** At full strength, poor soil goes 3.384 → 3.906 Ω.
+A swept coefficient has an argmin near 0.4 on every lossy ground at every
+mesh (poor 3.375 → 2.058), which is a real and repeatable shape — one
+coefficient, soil-independent — but a fitted coefficient is not a derivation.
+
+### The discriminator, and why the fit died
+
+The obvious next move was to ask *why* 0.4. Two candidates: the row halving
+(a PEC identity a weighted image does not satisfy, predicting ≈ 2×) and the
+Sommerfeld remainder (under `mode == "compose"` the term reconstructs the
+plane potential from the weighted exact-image half only, leaving out `Q`).
+
+Half of that needed no experiment. `T2`'s `M0c` is the reduced-kernel moments
+times `w_Φ` and nothing else, and `rem_fn` is used only in the `Q` FIELD term
+*after* `T2` is assembled — so under refl-coef the term IS the whole folded
+plane potential and under sommerfeld it is missing the remainder's, by
+construction. But that predicts a **soil-dependent** deficit and the measured
+argmin did not vary with soil, pointing instead at a model-independent scale.
+
+The experiment §5.5 implied — sweep the coefficient under refl-coef against
+the binary — **cannot be run as written**: refl-coef at contact sits ~26 Ω
+from the binary (52.006+21.505j against 26.643+10.767j, average soil,
+N = 21), which is exactly the model error D3 withdrew that row for, and it
+dwarfs the ~3 Ω the term is worth. Fitting a 5 Ω knob to close a 26 Ω model
+gap measures the gap.
+
+So the reference had to go and the instrument became **self-consistency**:
+§3.8's ladder B, momwire against momwire, replacing the contacting element
+with a vanishing grounded stub. Shrinking the stub does not change the
+antenna, so a self-consistent contact node must give an h-independent answer.
+Two stage-2 corrections are built in and neither is optional — the feed goes
+on the RADIATOR (fed at the shrinking base, the ladder measures the delta-gap
+source model instead: 53 Ω out at a 0.1 mm stub), and the mesh above the stub
+is held FIXED on the original knots (re-meshing every rung drifts the PEC
+control 2.5 Ω, a mesh artefact with no contact node in it). Held fixed, the
+PEC control is flat to 2.15e-3 Ω, which is the harness certifying itself.
+
+**Coefficient 0 is flattest on every row, by an order of magnitude, on both
+soils and both ground models.** At 0.4 the ladder slides 42.18+25.82j →
+33.58+16.50j as the stub shrinks, converging back onto the coefficient-0
+answer: the term's contribution evaporates with the contacting element. The
+term is not mis-scaled — no scale makes it self-consistent — and the deficit
+is not `Q` either, since refl-coef and sommerfeld behave alike.
+
+### What shipped
+
+The refusal, deleted. The bar is **D1's, literally**:
+`tests/test_razor_contact_finite_ground.py` imports `_ENVELOPE`,
+`_DIEL_ENVELOPE` and `_DIEL_FLATNESS` from `test_contact_nec5_lane` rather
+than restating them, so razor passes the constants bspline ships under and
+re-deriving one moves both. Measured maxima 1.3996 (avg) and 3.3931 (poor)
+against pins of 1.5 and 4.0.
+
+Where the two trunks differ in SHAPE, that is stated rather than forged.
+razor's residual grows-then-flattens on every ground, including the two where
+bspline's decays, so razor's high-|ε̃| rows do not take bspline's decay bar:
+`sea` is pinned on level only and says out loud that it is still growing;
+`vgood` gets an envelope with the saturation check. This is D2's own
+reasoning applied across trunks instead of across grounds — one bar shape
+would be a lie on half the table.
+
+Two rows are worth reading as physics rather than as gates. On **sea water**
+razor is twenty times closer to the binary than bspline (0.008 against
+0.161 Ω), which is what being NEC-5's own formulation is for. On the
+**lossless dielectric** the two land within 0.01 Ω of each other (4.3376
+against 4.3410) — two different bases with two different testing schemes
+agreeing that closely on the size of a limit difference is the strongest
+evidence yet that §5.4's gap belongs to neither trunk.
+
+### What Stage 3 leaves, and it is a better thing than it removes
+
+At coefficient 0 the finite-ground stub ladders spread **0.21–0.55 Ω** where
+the PEC control holds 0.002. So the contact node *is* internally inconsistent
+over a finite ground, by about half an ohm — and that is a residual with a
+**target**, on an instrument needing no licensed binary and no capture, which
+is precisely what Stage 3 did not have going in. It is pinned by
+`test_the_contact_node_is_self_consistent_to_under_an_ohm`.
+
+Note carefully that this is **not** §5.4's 2.6–3.3 Ω. That gap is shared with
+bspline, is largest over a ground that cannot dissipate, and survives every
+candidate stage 2 tested. The half-ohm here is razor's own and is the smaller,
+sharper question.
+
+### What is still refused after stage 3
+
+Contact under **refl-coef**, on every trunk — D3, unchanged, and razor now
+reaches it through `_ground_spec`'s own scan and sentence rather than a copy.
+Contact on **pulse**. **Mid-span touchdown**. **Radial screens** at contact.
+Razor's line is gone from this list.
