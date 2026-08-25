@@ -67,10 +67,24 @@ being enforced by a constraint row — an interior-knot tent is exactly the
 K=2 junction tent of a wire split at that knot
 (`tests/test_razor_junctions.py` pins the split identity at 1e-9 relative).
 
-A wire with a single segment cannot take part in a junction (its two
-junction tents would overlap on that one segment) and is refused, as is a
-delta-gap feed that snaps to a K≥3 junction — the branch pair it would drive
-is ambiguous.
+That identity is also the answer for a wire with a SINGLE segment, which
+this solver refused outright until momwire#608 on the grounds that "its two
+junction tents would overlap on that one segment". They do share it, and
+that is not a degeneracy: two tents on one segment are that segment's two
+Lagrange bases, which is what every interior segment of every wire already
+carries. Split a wire at its first knot and the piece that falls out is a
+one-segment wire junctioned at one end; split it at two adjacent knots and
+the middle piece is one junctioned at both. The split identity applies
+unchanged to each, so both reproduce the unsplit wire to solver precision
+(`tests/test_razor_one_segment_wire.py`, measured ~1e-14). What is still
+refused is a one-segment wire whose ends meet nothing at all — no wire, no
+ground plane. That one really does carry no basis, so it holds no current
+and a solve including it is bit-identical to one that omits it; the licensed
+engine drops it the same way, silently, and this solver says so instead.
+
+A delta-gap feed that snaps to a K≥3 junction is refused too — the branch
+pair it would drive is ambiguous, and `node_gaps` is the spelling that names
+it (momwire#603 U4).
 
 ## The PEC ground, and ground contact (momwire#398 units 2-3)
 

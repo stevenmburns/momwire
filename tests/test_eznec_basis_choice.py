@@ -133,7 +133,6 @@ def test_a_family_with_no_current_slopes_refuses_by_name():
     "cid, fragment",
     [
         ("0021", "FINITE ground plane"),  # ground contact — #603 U5
-        ("0011", "one segment long"),  # a one-segment GW — momwire#608
     ],
 )
 def test_what_razor_cannot_host_is_named_in_the_printout(cid, fragment):
@@ -161,6 +160,13 @@ def test_what_razor_cannot_host_is_named_in_the_printout(cid, fragment):
 #   arrayblock  57 + 2 RAISED — momwire#609, a broadcast bug on a deck that
 #               carries junctions and node gaps at once.  Recorded as it is
 #               rather than papered over; when #609 lands this becomes 59.
+#
+#   razor       49 -> 54 with momwire#608, which narrowed a refusal that used
+#               to read "one segment" to what it should always have read,
+#               "one segment and junctioned at neither end".  The five it
+#               gained declare 74 one-segment ``GW``s between them and every
+#               one of those is junctioned at one end or both.  The remaining
+#               five are ground contact over a finite ground (#603 U5).
 SERVE_MATRIX = {
     "bspline": 59,
     "bspline-d1": 59,
@@ -169,8 +175,8 @@ SERVE_MATRIX = {
     "sinusoidal": 0,
     "sinusoidal-galerkin": 0,
     "sinusoidal-galerkin-converged": 0,
-    "razor": 49,
-    "razor-nec5": 49,
+    "razor": 54,
+    "razor-nec5": 54,
 }
 
 

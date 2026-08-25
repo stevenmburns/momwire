@@ -271,22 +271,24 @@ def test_the_junction_gap_is_signed_off_side_a_and_not_arrival_order():
 # --------------------------------------------------------------------------
 # the corpus reaches razor
 
-# What each capture razor-nec5 still cannot serve is refused BY, all four of
-# them named and none of them a drive spelling.  Written out rather than
-# counted so that a deck moving between rows is a diff.
-ONE_SEGMENT_WIRE = ("0011", "0029", "0030", "0034", "0035")
+# What each capture razor-nec5 still cannot serve is refused BY, both of them
+# named and neither a drive spelling.  Written out rather than counted so that
+# a deck moving between rows is a diff.
 CONTACT_OVER_FINITE_GROUND = ("0021", "0047", "0048", "0110", "0111")
 # The near-field point at the base of a contact-fed monopole, which the seam
 # refuses under EVERY basis (`test_eznec_serve.py`'s module docstring).
 REFUSED_UNDER_BSPLINE_TOO = ("0022", "0107", "0112")
 # The five-wire apexes (0013, 0033) were here until momwire#603 U4 gave razor
-# the node-gap port; they serve now.
-UNSERVED = ONE_SEGMENT_WIRE + CONTACT_OVER_FINITE_GROUND + REFUSED_UNDER_BSPLINE_TOO
+# the node-gap port; they serve now.  So do the five that declare a genuine
+# one-segment ``GW`` (0011, 0029, 0030, 0034, 0035): momwire#608 narrowed that
+# refusal to the wire it is actually true of, one junctioned at neither end,
+# and the corpus has none.
+UNSERVED = CONTACT_OVER_FINITE_GROUND + REFUSED_UNDER_BSPLINE_TOO
 
 
 @pytest.mark.parametrize("cid", CAPTURE_IDS)
-def test_razor_nec5_serves_every_capture_but_the_fifteen_named(cid):
-    """11 of 62 before U1, 49 after U4, and the other 13 refuse by name.
+def test_razor_nec5_serves_every_capture_but_the_eight_named(cid):
+    """11 of 62 before U1, 49 after U4, 54 after #608, and 8 refuse by name.
 
     The unit's headline gate, driven through the real seam since U3 made the
     basis selectable.  A deck that starts serving belongs in neither list and
