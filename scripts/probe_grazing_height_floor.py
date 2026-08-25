@@ -146,6 +146,7 @@ def deck(
     n_seg: int = N_SEG,
     pec: bool = False,
     soil: tuple[float, float] = SOIL,
+    radial_len: float = RADIAL_LEN,
 ) -> str:
     """0033, translated to radial height ``h``.
 
@@ -158,7 +159,12 @@ def deck(
     top = h + VERT_LEN
     wires = [f"GW 1,{n_seg},0.,0.,{_num(h)},0.,0.,{_num(top)},{_num(RADIUS)}"]
     for tag, (dx, dy) in enumerate(
-        ((RADIAL_LEN, 0.0), (0.0, RADIAL_LEN), (-RADIAL_LEN, 0.0), (0.0, -RADIAL_LEN)),
+        (
+            (radial_len, 0.0),
+            (0.0, radial_len),
+            (-radial_len, 0.0),
+            (0.0, -radial_len),
+        ),
         start=2,
     ):
         wires.append(
