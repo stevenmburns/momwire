@@ -12,6 +12,7 @@ rewrite to union-find would destroy.
 import numpy as np
 import pytest
 
+from momwire import _wire_spec
 from momwire._junction_rule import JUNCTION_TOL, coincident_groups, grouped
 from momwire.bspline import BSplineSolver
 from momwire.harrington import HarringtonSolver
@@ -416,3 +417,69 @@ def test_inference_is_never_put_through_the_guard(solver):
         wire_radius=0.001,
     )
     assert s is not None
+
+
+# --------------------------------------------------------------------------
+# the spec normaliser itself (momwire#429 rank 8)
+
+
+def _two_touching_wires():
+    return [
+        np.array([[0.0, -1.0, 0.0], [0.0, 0.0, 0.0]]),
+        np.array([[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+    ]
+
+
+def test_the_normaliser_infers_what_the_geometry_says():
+    """``None`` is a request to infer; the answer is the detected grouping."""
+    wires = _two_touching_wires()
+    got = _wire_spec.normalize_junctions(None, wires, [[2], [2]])
+    assert got == [[(0, "end"), (1, "start")]]
+
+
+def test_the_normaliser_keeps_an_empty_list_empty():
+    """An empty list is a STATEMENT — these wires are meant to be apart —
+    and is the one input that must not be replaced by the inference."""
+    wires = _two_touching_wires()
+    assert _wire_spec.normalize_junctions([], wires, [[2], [2]]) == []
+
+
+def test_the_normaliser_coerces_the_member_tuple():
+    """A wire index arrives as whatever the caller had; it leaves as an int,
+    because a member tuple is a dict KEY downstream and ``np.int64(0)`` and
+    ``0`` are not the same key everywhere they are used."""
+    wires = _two_touching_wires()
+    got = _wire_spec.normalize_junctions(
+        [[(np.int64(0), "end"), (1, "start")]], wires, [[2], [2]]
+    )
+    assert got == [[(0, "end"), (1, "start")]]
+    assert all(type(w) is int for group in got for w, _e in group)
+
+
+@pytest.mark.parametrize(
+    "spec, message",
+    [
+        ([[]], "need >= 1 wire-end"),
+        ([[(2, "start")]], r"wire_idx 2 out of range \[0, 2\)"),
+        ([[(0, "END")]], "end must be 'start' or 'end'"),
+    ],
+)
+def test_the_normaliser_refuses_a_malformed_spec(spec, message):
+    """One owner for the sentence too.  These used to be two copies, and the
+    copies had drifted: one said ``need >= 1 wire-end``, the other the same
+    with ``, got 0`` on the end."""
+    with pytest.raises(ValueError, match=message):
+        _wire_spec.normalize_junctions(spec, _two_touching_wires(), [[2], [2]])
+
+
+@pytest.mark.parametrize("solver", (BSplineSolver, SinusoidalSolver))
+def test_both_consumers_now_raise_the_same_sentence(solver):
+    """The extraction's user-visible effect, and its whole risk: the two
+    constructors are answering from one place, so they answer alike."""
+    with pytest.raises(ValueError, match=r"junction 0: need >= 1 wire-end"):
+        solver(
+            wires=_two_touching_wires(),
+            n_per_edge_per_wire=[[2], [2]],
+            junctions=[[]],
+            wavelength=10.0,
+        )

@@ -58,7 +58,6 @@ import scipy.linalg
 import scipy.sparse
 from scipy.interpolate import BSpline
 
-from ._junction_rule import coincident_end_groups
 from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
@@ -949,48 +948,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # block consistently. None means "ignore auto-selection".
         self._auto_active_junctions = None
 
-        self.junctions = []
-        # momwire#590 step 3: coincident wire ends ARE a junction unless the
-        # caller says otherwise. That is what the geometry means, what NEC
-        # does, and what RazorSolver and HarringtonSolver already did -- this
-        # solver used to solve the same wires APART, silently, which is a wrong
-        # answer rather than a coarse one.
-        #
-        # `junctions=[]` remains the escape: omitting the argument is now a
-        # request to infer, passing an empty list is a statement that the wires
-        # really are meant to be disconnected.
-        #
-        # Wire-to-wire connectivity only. A lone end resting in the ground
-        # plane is NOT inferred into a 1-entry grounded junction here, because
-        # ground contact is a separate question (#151) with its own tolerance,
-        # and inferring it would change grounded decks that read correctly
-        # today. Razor does infer it, so that asymmetry survives step 3
-        # deliberately -- see #590.
-        if junctions is None:
-            junctions = coincident_end_groups(self.wires_polylines)
-        if junctions is not None:
-            for j, jw in enumerate(junctions):
-                # A 1-entry group is legal (issue #172): as a plain junction
-                # it enforces I_end = 0 through the KCL row — numerically a
-                # free end — and as a junction PORT it is the natural form
-                # of a lone-conductor-end attachment.
-                if len(jw) < 1:
-                    raise ValueError(f"junction {j}: need >= 1 wire-end")
-                normalized = []
-                for w, end in jw:
-                    if not (0 <= w < n_w):
-                        raise ValueError(
-                            f"junction {j}: wire_idx {w} out of range [0, {n_w})"
-                        )
-                    if end not in ("start", "end"):
-                        raise ValueError(
-                            f"junction {j}: end must be 'start' or 'end', got {end!r}"
-                        )
-                    normalized.append((int(w), end))
-                self.junctions.append(normalized)
-            _wire_spec.check_junction_coincidence(
-                self.wires_polylines, self.n_per_edge_per_wire, self.junctions
-            )
+        # momwire#429 rank 8: the spec, its inference and its validation are
+        # `_wire_spec.normalize_junctions` -- one owner, because a node-gap
+        # port names a MEMBER of a group and every family has to agree with
+        # every other about what the members are.
+        self.junctions = _wire_spec.normalize_junctions(
+            junctions, self.wires_polylines, self.n_per_edge_per_wire
+        )
 
         # Junction ports (issue #172): junction groups promoted to network
         # ports. Each entry is (junction_index, voltage) — a plain int means
