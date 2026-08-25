@@ -434,21 +434,47 @@ def test_seam_ineligible_pairs_are_bit_identical_to_the_reduced_fill():
         assert np.array_equal(got[key], val), key
 
 
-@pytest.mark.parametrize(
-    "ek,cos_shape",
-    [
-        (_EKPairs(np.array([1e-3]), None), "cos"),
-        ((np.array([1e-3]), np.array([0]), np.array([0])), "cos-1"),
-    ],
-)
-def test_seam_refuses_the_mismatched_payload(ek, cos_shape):
+def test_seam_refuses_the_mismatched_payload():
     """Before momwire#246 the EK branch early-returned whatever `cos_shape`
     said, so `ek=` with the folded shape was silently served literal-cos EK
-    tables. Both crossed combinations now raise and name the issue."""
+    tables.
+
+    ONE crossed combination is left to refuse (momwire#614). The pair-rule
+    payload with the LITERAL shape is still unwired and still wrong: the
+    `_EKPairs` route is reduced-plus-delta, and its delta is derived for the
+    folded shape, so handing it `cos` would serve a mismatched pair of halves.
+
+    The other crossing — the point-matched `(src_a, ind1, ind2)` triple with
+    `cos-1` — is no longer a mismatch. #614 rearranged EKSCX's own tables into
+    the folded shape, so the per-end IND contract serves it directly and the
+    refusal that used to stand here would now be refusing a working path.
+    """
     sim = _solver()
     H, z, a, panels = next(iter(_probes()))
     with pytest.raises(NotImplementedError, match="246"):
-        _coaxial_tables(sim, H, z, a, cos_shape=cos_shape, ek=ek)
+        _coaxial_tables(
+            sim, H, z, a, cos_shape="cos", ek=_EKPairs(np.array([1e-3]), None)
+        )
+
+
+def test_point_matched_ek_now_serves_the_folded_shape():
+    """The counterpart: what #614 opened. The point-matched triple with
+    `cos-1` must return tables rather than raise, and they must not be the
+    literal-cos ones wearing a different name."""
+    sim = _solver()
+    H, z, a, panels = next(iter(_probes()))
+    triple = (np.array([1e-3]), np.array([0]), np.array([0]))
+    folded = _coaxial_tables(sim, H, z, a, cos_shape="cos-1", ek=triple)
+    literal = _coaxial_tables(sim, H, z, a, cos_shape="cos", ek=triple)
+    assert not np.array_equal(folded["Ez_cos"], literal["Ez_cos"])
+    # `Erho_cos` is NOT compared: `_probes()` is coaxial, where the ρ
+    # projection vanishes identically and both tables are a signed zero. The
+    # folded ρ table is exercised on a geometry that has a ρ component in
+    # `tests/test_low_k_basis_606.py::test_ek_folded_tables_reproduce_cos_minus_const`.
+    #
+    # the shapes the fold does not touch are untouched
+    for key in ("Ez_const", "Erho_const", "Ez_sin", "Erho_sin"):
+        assert np.array_equal(folded[key], literal[key]), key
 
 
 # ---------------------------------------------------------------------------

@@ -325,118 +325,138 @@ def test_the_loop_pathology_is_still_reproduced():
 
 
 # ----------------------------------------------------------------------
-# The one regime the fix does not reach, and how it says so
+# The extended kernel, which #614 brought onto the well-scaled path
 # ----------------------------------------------------------------------
-def test_extended_kernel_at_low_kd_warns_instead_of_going_quiet():
-    """`extended_kernel=True` has no well-scaled path (momwire#246 left the
-    folded EKSCX forms unwired), so it keeps the literal fill at every kΔ.
-
-    That is a known limit, not a regression — the EK solve gets exactly what
-    it got before #606. What it must NOT do is go quiet: handing back a
-    percent-wrong impedance with no signal is the same failure #246's own
-    guard exists to prevent, one level up. This gate is what stops a future
-    reader from "simplifying" the warning away.
-    """
-    import warnings as _w
-
-    fseg = 14
-    text = _DECK.format(n1=15, fmhz=0.0005, fseg=fseg)
-    built = build_solver(parse(text), basis="sinusoidal")
-    built.solver.extended_kernel = True
-
-    with _w.catch_warnings(record=True) as caught:
-        _w.simplefilter("always")
-        built.solver.compute_port_solution()
-
-    msgs = [str(x.message) for x in caught if issubclass(x.category, RuntimeWarning)]
-    assert any("606" in m and "extended_kernel" in m for m in msgs), msgs
+_LD_EXTENDED = np.finfo(np.longdouble).eps < np.finfo(np.float64).eps
 
 
-def test_no_warning_where_the_literal_fill_is_the_right_answer():
-    """The warning has to be specific to the bad regime or it is noise.
-
-    Above the threshold the literal fill IS the accurate one, EK or not.
-    """
-    import warnings as _w
-
+def _zin_ek(fmhz, n1=15, extended_kernel=False):
+    fseg = max(1, int(round(n1 * 14 / 15)))
     built = build_solver(
-        parse(_DECK.format(n1=15, fmhz=5.0, fseg=14)), basis="sinusoidal"
+        parse(_DECK.format(n1=n1, fmhz=fmhz, fseg=fseg)), basis="sinusoidal"
     )
-    built.solver.extended_kernel = True
-
-    with _w.catch_warnings(record=True) as caught:
-        _w.simplefilter("always")
-        built.solver.compute_port_solution()
-
-    assert not [str(x.message) for x in caught if "606" in str(x.message)], [
-        str(x.message) for x in caught
-    ]
+    built.solver.extended_kernel = extended_kernel
+    return 1.0 / built.solver.compute_port_solution().y[0, 0]
 
 
-# ----------------------------------------------------------------------
-# The subclass rebuild that used to throw the fix away
-# ----------------------------------------------------------------------
-def test_junction_port_view_carries_the_closed_form_ac():
-    """`SinusoidalGalerkinSolver` extends the inherited basis view with
-    junction-port columns, and used to publish `A_ord + C_ord` for the whole
-    concatenation.
+@pytest.mark.parametrize("fmhz", [0.0005, 0.005, 0.05])
+def test_extended_kernel_takes_the_well_scaled_path(fmhz):
+    """#606 shipped with an EK carve-out: EKSCX was literal-cos only, so an
+    EK-on solve kept the broken fill and merely warned about it.
 
-    That did two wrong things at once: it gave the port entries the float sum
-    whose relative error is 8ε/(kΔ)², and it OVERWROTE the closed-form `AC`
-    the inherited view had already computed for every ordinary entry. So a
-    junction-port solve lost the whole of #606's coefficient fix while a
-    portless one kept it — the kind of divergence between two spellings of
-    one solver that is worse than either answer being wrong.
-
-    The port entries are the N⁻ shape exactly (`A = q/sin kΔ`,
-    `C = −q/(2 sin(kΔ/2))`), so the same identity closes them.
+    #614 closed that by rearranging EKSCX's OWN tables rather than building a
+    second kernel, so EK-on must now land where EK-off lands. The two are not
+    required to be bit-equal — the extended kernel is a real O((a/Δ)²)
+    correction — only to agree to far better than the 6.79 % the carve-out
+    used to cost.
     """
-    from momwire.sinusoidal import _recip_sin_gap
-    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
+    off = _zin_ek(fmhz, extended_kernel=False)
+    on = _zin_ek(fmhz, extended_kernel=True)
+    r_ref, x_ref = _NEC2C[fmhz]
+    assert abs(on.imag - x_ref) / abs(x_ref) < 1e-3, on
+    assert abs(on.real - r_ref) / abs(r_ref) < 1e-3, on
+    assert abs(on.imag - off.imag) / abs(off.imag) < 1e-6, (on, off)
 
-    # A tee: three wires meeting at the origin, so there is a junction to port.
-    lam = 22.0
-    arm = 0.2 * lam
-    wires = [
-        np.array([[0.0, 0.0, 4.0], [arm, 0.0, 4.0]]),
-        np.array([[0.0, 0.0, 4.0], [-arm, 0.0, 4.0]]),
-        np.array([[0.0, 0.0, 4.0], [0.0, arm, 4.0]]),
-    ]
-    common = dict(wires=wires, nsegs=9, wavelength=lam, wire_radius=0.0005)
 
-    plain = SinusoidalGalerkinSolver(**common)
-    ported = SinusoidalGalerkinSolver(junction_ports=[(0, 1.0)], **common)
+def test_ek_folded_tables_reproduce_cos_minus_const():
+    """The equivalence gate: `cos-1` is the same operator, not a new one.
 
-    g_plain = plain._build_geometry()
-    g_port = ported._build_geometry()
-    v_plain = plain._basis_coefs(g_plain, plain.k)
-    v_port = ported._basis_coefs(g_port, ported.k)
+    At a kΔ where the NUMERICAL difference is still accurate, the algebraic
+    folded tables must reproduce it. This is the gate that would catch a sign
+    or a dropped term in the rearrangement — the kind of error that, on an
+    O((a/R)²) quantity, otherwise lands inside every physics tolerance in the
+    suite while being wrong.
+    """
+    from momwire.sinusoidal import SinusoidalSolver
 
-    # The port view must not be publishing the float sum for everything.
-    assert not np.array_equal(v_port["AC"], v_port["A"] + v_port["C"])
-
-    # Ordinary entries keep the inherited closed form: the port view's first
-    # entries are the base view's, in the same CSR order.
-    n_base = v_plain["AC"].size
-    base_slice = np.argsort(np.argsort(v_port["jbasis"], kind="stable"))
-    assert v_port["AC"].size > n_base  # ports really were added
-    # every entry whose basis index is an ordinary one must match the
-    # closed-form identity rather than the float sum
-    del base_slice
-    ordinary = v_port["jbasis"] < g_port["n_segs"]
-    lit = (v_port["A"] + v_port["C"])[ordinary]
-    got = v_port["AC"][ordinary]
-    assert np.allclose(got, lit, rtol=1e-8), "sane kΔ: the two still agree"
-    assert not np.array_equal(got, lit), "but not by being the same expression"
-
-    # And the port columns themselves close by the N⁻ identity.
-    port = ~ordinary
-    assert port.any()
-    kd = ported.k * np.asarray(g_port["seg_h"], dtype=float)
-    seg_of = np.repeat(
-        np.arange(g_port["n_segs"], dtype=np.int64), np.diff(v_port["starts"])
+    ys = np.linspace(-0.4, 0.4, 3)
+    wire = np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])
+    a = 0.02
+    s = SinusoidalSolver(
+        wires=[wire], nsegs=6, wavelength=22.0, wire_radius=a, extended_kernel=True
     )
-    q = v_port["A"][port] * np.sin(kd[seg_of[port]])
-    assert np.allclose(
-        v_port["AC"][port], q * _recip_sin_gap(kd[seg_of[port]]), rtol=1e-12
-    )
+    geom = s._build_geometry()
+    k = s.k
+    seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
+    rvec = seg_c[:, None, :] - seg_c[None, :, :]
+    z = np.einsum("...d,...d->...", rvec, seg_t[None, :, :])
+    rho_v = rvec - z[..., None] * seg_t[None, :, :]
+    rho = np.sqrt((rho_v**2).sum(-1) + a * a)
+    H = np.broadcast_to(0.5 * np.asarray(geom["seg_h"])[None, :], z.shape)
+    i1, i2 = s._ek_gating(geom)
+    i1 = np.broadcast_to(i1, z.shape)
+    i2 = np.broadcast_to(i2, z.shape)
+
+    lit = s._extended_kernel_fields(k, H, z, rho, a, i1, i2, cos_shape="cos")
+    fold = s._extended_kernel_fields(k, H, z, rho, a, i1, i2, cos_shape="cos-1")
+
+    for name in ("Ez", "Erho"):
+        ref = lit[f"{name}_cos"] - lit[f"{name}_const"]
+        got = fold[f"{name}_cos"]
+        rel = np.linalg.norm(got - ref) / np.linalg.norm(ref)
+        assert rel < 1e-9, (name, rel)
+
+    # The other four tables are not the folded shape's business at all.
+    for name in ("Erho_const", "Ez_const", "Erho_sin", "Ez_sin"):
+        assert np.array_equal(lit[name], fold[name]), name
+
+
+@pytest.mark.skipif(
+    not _LD_EXTENDED,
+    reason="no 80-bit longdouble on this platform - the reference does not exist",
+)
+def test_ek_rho_gap_closed_form_does_not_cancel():
+    """`_ek_rho_cos1_gap` is #614's one genuinely new closed form, so it gets
+    the treatment `_recip_sin_gap` got in #606.
+
+    The literal combination it replaces is O(1) terms summing to an O((kΔ)²)
+    answer: it floors out around 3e-13 absolute and has no correct digits by
+    kΔ ≈ 1e-6. A spelling that has actually removed the cancellation gives the
+    SAME answer in float64 and in 80-bit at every kΔ — that flatness is the
+    property, and it is what the literal one cannot do.
+    """
+    from momwire.sinusoidal import SinusoidalSolver
+
+    ys = np.linspace(-0.4, 0.4, 3)
+    wire = np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])
+    a = 0.02
+    seen = []
+    for wl in (22.0, 2.2e3, 2.2e5, 2.2e7):
+        s = SinusoidalSolver(
+            wires=[wire], nsegs=6, wavelength=wl, wire_radius=a, extended_kernel=True
+        )
+        geom = s._build_geometry()
+        k = s.k
+        seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
+        rvec = seg_c[:, None, :] - seg_c[None, :, :]
+        z = np.einsum("...d,...d->...", rvec, seg_t[None, :, :])
+        rho_v = rvec - z[..., None] * seg_t[None, :, :]
+        rho = np.sqrt((rho_v**2).sum(-1) + a * a)
+        H = np.broadcast_to(0.5 * np.asarray(geom["seg_h"])[None, :], z.shape)
+        z2, z1 = H - z, -(H + z)
+        rh = np.broadcast_to(rho, z.shape)
+        b = np.broadcast_to(a, z.shape)
+        ind = np.zeros(z.shape, dtype=np.int8)
+
+        x64 = s._ek_rho_cos1_gap(k, z1, z2, rho, rh, b, ind, ind, False)
+        xld = s._ek_rho_cos1_gap(
+            np.longdouble(k),
+            z1.astype(np.longdouble),
+            z2.astype(np.longdouble),
+            rho.astype(np.longdouble),
+            rh.astype(np.longdouble),
+            b.astype(np.longdouble),
+            ind,
+            ind,
+            False,
+        )
+        ref = np.asarray(xld, dtype=np.complex128)
+        rel = np.linalg.norm(x64 - ref) / np.linalg.norm(ref)
+        kd = k * float(np.asarray(geom["seg_h"]).min())
+        seen.append((kd, rel, np.abs(x64).max()))
+        assert rel < 1e-14, (kd, rel)
+
+    # The answer really is O((kΔ)²) — each decade of k costs two of |X|, so
+    # the flatness above is stability across a range, not a constant table.
+    for (kd_a, _, mag_a), (kd_b, _, mag_b) in zip(seen, seen[1:]):
+        assert mag_b < mag_a * 1e-2, (kd_a, mag_a, kd_b, mag_b)
