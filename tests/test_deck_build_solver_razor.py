@@ -442,7 +442,16 @@ def test_the_two_routes_converge_on_the_fixtures_own_geometry():
 # ---------------------------------------------------------------------------
 
 
-def test_contact_over_finite_ground_refuses():
+def test_contact_over_a_finite_ground_now_builds_through_the_deck_front_end():
+    """momwire#624 inverted this test, and the deck route is worth its own.
+
+    A `GN 2` deck reaches razor through `build_solver`, which is a different
+    path from the constructor call `test_razor_ground_contact.py` exercises:
+    the dialect has to translate the ground, discover the grounded end and
+    hand razor a `ground_eps` — and while the refusal stood, none of that was
+    ever reached on this basis. So the assert flips rather than the test
+    being deleted: what used to raise now builds and solves.
+    """
     text = """CM base fed over a finite ground
 CE
 GW 1 20 0. 0. 0. 0. 0. 5. 1.E-3
@@ -454,9 +463,36 @@ XQ
 NX
 """
     model = parse(text)
-    with pytest.raises(
-        NotImplementedError, match="ground CONTACT over a finite ground"
-    ):
+    built = build_solver(model, basis="razor")
+    z, _ = built.solver.compute_impedance()
+    z = complex(np.atleast_1d(z)[0])
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert z.real > 0.0, f"a passive base-fed vertical came back as {z}"
+
+
+def test_contact_under_refl_coef_still_refuses_through_the_deck_front_end():
+    """D3's row, which momwire#624 did NOT lift, on the same deck.
+
+    `GN 2` is the Sommerfeld spelling and builds above; the reflection-
+    coefficient ground at zero clearance is refused on every trunk because
+    the MODEL fails there, and razor now reaches that refusal through
+    `_ground_spec`'s shared sentence rather than a razor-owned copy. Same
+    geometry, same soil, one card different — which is what makes this pair
+    a boundary rather than two unrelated assertions.
+    """
+    model = parse(
+        """CM base fed over a finite ground
+CE
+GW 1 20 0. 0. 0. 0. 0. 5. 1.E-3
+GE 1
+GN 0 0 0 0 13. 0.005
+EX 0 1 1 0 1. 0.
+FR 0 1 0 0 14.1
+XQ
+NX
+"""
+    )
+    with pytest.raises(NotImplementedError, match="momwire#282"):
         build_solver(model, basis="razor")
 
 
