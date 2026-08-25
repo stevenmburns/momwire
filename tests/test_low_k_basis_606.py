@@ -371,3 +371,72 @@ def test_no_warning_where_the_literal_fill_is_the_right_answer():
     assert not [str(x.message) for x in caught if "606" in str(x.message)], [
         str(x.message) for x in caught
     ]
+
+
+# ----------------------------------------------------------------------
+# The subclass rebuild that used to throw the fix away
+# ----------------------------------------------------------------------
+def test_junction_port_view_carries_the_closed_form_ac():
+    """`SinusoidalGalerkinSolver` extends the inherited basis view with
+    junction-port columns, and used to publish `A_ord + C_ord` for the whole
+    concatenation.
+
+    That did two wrong things at once: it gave the port entries the float sum
+    whose relative error is 8ε/(kΔ)², and it OVERWROTE the closed-form `AC`
+    the inherited view had already computed for every ordinary entry. So a
+    junction-port solve lost the whole of #606's coefficient fix while a
+    portless one kept it — the kind of divergence between two spellings of
+    one solver that is worse than either answer being wrong.
+
+    The port entries are the N⁻ shape exactly (`A = q/sin kΔ`,
+    `C = −q/(2 sin(kΔ/2))`), so the same identity closes them.
+    """
+    from momwire.sinusoidal import _recip_sin_gap
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
+
+    # A tee: three wires meeting at the origin, so there is a junction to port.
+    lam = 22.0
+    arm = 0.2 * lam
+    wires = [
+        np.array([[0.0, 0.0, 4.0], [arm, 0.0, 4.0]]),
+        np.array([[0.0, 0.0, 4.0], [-arm, 0.0, 4.0]]),
+        np.array([[0.0, 0.0, 4.0], [0.0, arm, 4.0]]),
+    ]
+    common = dict(wires=wires, nsegs=9, wavelength=lam, wire_radius=0.0005)
+
+    plain = SinusoidalGalerkinSolver(**common)
+    ported = SinusoidalGalerkinSolver(junction_ports=[(0, 1.0)], **common)
+
+    g_plain = plain._build_geometry()
+    g_port = ported._build_geometry()
+    v_plain = plain._basis_coefs(g_plain, plain.k)
+    v_port = ported._basis_coefs(g_port, ported.k)
+
+    # The port view must not be publishing the float sum for everything.
+    assert not np.array_equal(v_port["AC"], v_port["A"] + v_port["C"])
+
+    # Ordinary entries keep the inherited closed form: the port view's first
+    # entries are the base view's, in the same CSR order.
+    n_base = v_plain["AC"].size
+    base_slice = np.argsort(np.argsort(v_port["jbasis"], kind="stable"))
+    assert v_port["AC"].size > n_base  # ports really were added
+    # every entry whose basis index is an ordinary one must match the
+    # closed-form identity rather than the float sum
+    del base_slice
+    ordinary = v_port["jbasis"] < g_port["n_segs"]
+    lit = (v_port["A"] + v_port["C"])[ordinary]
+    got = v_port["AC"][ordinary]
+    assert np.allclose(got, lit, rtol=1e-8), "sane kΔ: the two still agree"
+    assert not np.array_equal(got, lit), "but not by being the same expression"
+
+    # And the port columns themselves close by the N⁻ identity.
+    port = ~ordinary
+    assert port.any()
+    kd = ported.k * np.asarray(g_port["seg_h"], dtype=float)
+    seg_of = np.repeat(
+        np.arange(g_port["n_segs"], dtype=np.int64), np.diff(v_port["starts"])
+    )
+    q = v_port["A"][port] * np.sin(kd[seg_of[port]])
+    assert np.allclose(
+        v_port["AC"][port], q * _recip_sin_gap(kd[seg_of[port]]), rtol=1e-12
+    )
