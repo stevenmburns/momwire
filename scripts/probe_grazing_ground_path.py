@@ -120,6 +120,39 @@ error rides on a correction that is only 1.7 Ω at 1e-2 λ, which is what makes
 that row 4.77×.  razor's column is the clean one, and it is clean precisely
 because razor over PEC is exact.)
 
+``--mode soil`` — and the scale factor is NOT one number.  |Δ_mw / Δ_true| for
+razor-nec5 across the five golden half-spaces:
+
+  h/λ        sea    vgood     avg    poor    diel      arg spread
+  1e-2      1.066   1.025   1.019   0.978   0.997      0.0 .. 2.0 deg
+  3e-3      2.048   1.482   1.456   1.661   0.889     -8.8 .. 7.8
+  1e-3      5.455   3.183   3.063   3.261   1.946    -77.7 .. 12.3
+  1.09e-4   4.436   3.033   2.652   3.232  61.188    -45.8 .. 1.9
+
+Two readings, and the first is a control: **at 1e-2 λ the correction is right
+on all five half-spaces** (0.98-1.07, phase ≤ 2°), so the floor is a property
+of HEIGHT and not of any one soil.
+
+Below it the overshoot is **soil-DEPENDENT** — 2.65× to 4.44× across the four
+real soils at the native height, with the phase wandering −16° to −57°.  A
+single real constant does not describe that, so **row-halving is ruled out as
+the mechanism** and the analogy to #624 does not carry.  It was worth testing
+and it is dead.
+
+What replaces it is a better lead: **the lossless dielectric is catastrophic**
+— 61× at the native height, against 2.6-4.4× for soils that conduct.  It is
+also the one half-space whose true correction has a NEGATIVE real part
+(−5.288 + 7.670j: a lossless dielectric lowers the resistance relative to a
+perfect image).  momwire answers 110.7 + 559.2j to that.
+
+That signature is momwire#282 stage 2's, from the contact side: its
+half-space sweep found the contact discrepancy PEAKING over a lossless
+dielectric (4.36 Ω at ε_r ≈ 2.5) and falling monotonically as the ground
+became conductive, which is what killed "the missing resistance is a loss
+term".  Same qualitative shape here, two decades larger.  Suggestive, not
+proven — the two were measured on different geometries at different heights,
+and nothing here has walked the σ axis.
+
 Runs the binary in ``--mode direct`` / ``--mode reflcoef``, so: antennaknobs
 venv, ``NEC5_EXE`` set.
 
@@ -156,6 +189,11 @@ EPS0 = 8.8541878128e-12
 # The heights the two earlier probes bracket the floor with.
 THETA_HEIGHTS = (1.09e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1)
 DIRECT_HEIGHTS = (1.09e-4, 1e-3, 3e-3, 1e-2)
+
+# The soil sweep's rungs: two deep inside the broken zone, one on the shoulder
+# and one clean, so a soil-independent ratio can be told from a soil-dependent
+# one at each depth rather than only at the worst.
+SOIL_HEIGHTS = (1.09e-4, 1e-3, 3e-3, 1e-2)
 
 
 def medium_eps_t() -> complex:
@@ -547,9 +585,98 @@ def mode_reflcoef() -> list[dict]:
     return rows
 
 
+def mode_soil() -> list[dict]:
+    """Is the overshoot a model-INDEPENDENT scale factor?
+
+    The reflcoef mode measured the ground correction Z(``GN 0``) − Z(``GN 1``)
+    overshooting by up to ~3x on average soil.  A scale factor that is the
+    same across five very different half-spaces is a scaling defect; one that
+    tracks ε̃ is a physics term with the wrong weight.  That is the question
+    #624's spike asked from the contact side and answered "model-independent"
+    — here it is asked at grazing, where the symptom is 100x bigger.
+
+    The COMPLEX ratio is what is read, not its magnitude.  A pure scale factor
+    is real: if Δ_momwire / Δ_true sits at (say) 2.6 + 0j on every soil, the
+    correction is being multiplied by a constant.  If its phase wanders with
+    the soil, it is not one number and row-halving is the wrong suspect.
+
+    razor-nec5 only.  bspline's ~5 % basis error rides on the same correction
+    and contaminates the ratio (its 1e-2 λ row came out 4.77x on a 1.7 Ω
+    correction), and razor's column is exact over ``GN 1`` at every height,
+    which is what makes the PEC baseline a shared one.
+    """
+    exe = Path(os.path.expanduser(os.environ.get("NEC5_EXE", "")))
+    if not exe.is_file():
+        raise SystemExit(f"NEC5_EXE not found: {exe}")
+    sys.path.insert(0, str(Path.home() / "antennas/antennaknobs/scripts"))
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
+    from antennaknobs.engines.nec5 import NEC5Engine
+    from bench_nec5_walk_why import make_dipole
+    from golden_contact_nec5 import GROUND_EPS
+
+    captures = Path(
+        os.environ.get("GRAZING_CAPTURES", "/tmp/claude-1000/510-grazing-captures")
+    )
+    captures.mkdir(parents=True, exist_ok=True)
+    eng = NEC5Engine(make_dipole(20), ground=None, capture_dir=captures)
+
+    print("the ground correction Z(GN 0) - Z(GN 1) across five half-spaces")
+    print("razor-nec5; the PEC baseline is soil-independent and exact\n")
+    print("a model-INDEPENDENT scale factor is a REAL ratio, constant in soil;")
+    print("a mis-weighted physics term tracks eps~ and wanders in phase.\n")
+
+    rows = []
+    for hw in SOIL_HEIGHTS:
+        z_pec = complex(eng.run_deck(deck(hw * WL, pec=True))[0][0][2])
+        print(f"h/lambda = {hw:<9.3g}   Z(GN 1) = {z_pec.real:.4f}{z_pec.imag:+.4f}j")
+        hdr = (
+            f"   {'soil':>6} {'eps_r':>7} {'sigma':>8} | {'true':>20} | "
+            f"{'momwire':>20} | {'ratio':>18} {'|.|':>7} {'arg':>8}"
+        )
+        print(hdr)
+        print("   " + "-" * (len(hdr) - 3))
+        for name, soil in GROUND_EPS.items():
+            text = deck(hw * WL, soil=soil)
+            z_ref = complex(eng.run_deck(text)[0][0][2])
+            z_mw = momwire_z(text, "razor-nec5")
+            if z_mw is None:
+                continue
+            d_true = z_ref - z_pec
+            d_mw = z_mw - z_pec
+            ratio = d_mw / d_true if abs(d_true) > 0 else complex("nan")
+            print(
+                f"   {name:>6} {soil[0]:>7.1f} {soil[1]:>8.5g} | "
+                f"{d_true.real:>9.4f}{d_true.imag:>+9.4f}j | "
+                f"{d_mw.real:>9.4f}{d_mw.imag:>+9.4f}j | "
+                f"{ratio.real:>8.3f}{ratio.imag:>+8.3f}j "
+                f"{abs(ratio):>7.3f} {np.degrees(np.angle(ratio)):>7.1f}d",
+                flush=True,
+            )
+            rows.append(
+                dict(
+                    h_over_wl=hw,
+                    soil=name,
+                    eps_r=soil[0],
+                    sigma=soil[1],
+                    z_pec=[z_pec.real, z_pec.imag],
+                    z_ref=[z_ref.real, z_ref.imag],
+                    z_mw=[z_mw.real, z_mw.imag],
+                    d_true=[d_true.real, d_true.imag],
+                    d_momwire=[d_mw.real, d_mw.imag],
+                    ratio=[ratio.real, ratio.imag],
+                    ratio_mag=abs(ratio),
+                    ratio_arg_deg=float(np.degrees(np.angle(ratio))),
+                )
+            )
+        print()
+    return rows
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--mode", choices=("theta", "direct", "reflcoef"), default="theta")
+    p.add_argument(
+        "--mode", choices=("theta", "direct", "reflcoef", "soil"), default="theta"
+    )
     p.add_argument("--rtol", type=float, default=1e-11)
     p.add_argument("--out", default=None)
     args = p.parse_args()
@@ -558,8 +685,10 @@ def main() -> None:
         rows = mode_theta()
     elif args.mode == "direct":
         rows = mode_direct(args.rtol)
-    else:
+    elif args.mode == "reflcoef":
         rows = mode_reflcoef()
+    else:
+        rows = mode_soil()
     if args.out:
         Path(args.out).write_text(json.dumps(rows, indent=2))
         print(f"\nwrote {args.out}")
