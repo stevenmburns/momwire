@@ -340,6 +340,7 @@ from .sinusoidal import (
     _N_QP_EK_DELTA,
     SinusoidalSolver,
     _SegmentBasis,
+    _recip_sin_gap,
     _sin_minus_arg,
 )
 
@@ -584,10 +585,19 @@ def _basis_value(sigAC, B, sigC, k, xi):
     no term is larger than the result. In the literal spelling σA and σC·cos
     are O(1) and cancel to O((kΔ)²/8), which costs ε·8/(kΔ)² relative — 3e-13
     at N=41 but 1.2e-10 at N=801 and rising like N², because the basis is
-    normalized to its own segment-centre current A+C. Here the σ(A+C) sum is
-    pre-computed in `_basis_coefs` (correctly rounded to the sum) and
-    cos kξ − 1 is spelled −2sin²(kξ/2), so both cancellations happen where
-    they are exact and f comes out to full relative precision.
+    normalized to its own segment-centre current A+C. Here σ(A+C) is supplied
+    by `_basis_coefs` and cos kξ − 1 is spelled −2sin²(kξ/2), so both
+    cancellations happen where they are exact and f comes out to full relative
+    precision.
+
+    `AC` is a per-branch CLOSED FORM, not the float sum `A + C`
+    (stevenmburns/momwire#606). It used to be that sum, described here as
+    "correctly rounded to the sum" — true, and not enough: the sum of two
+    rounded values is not the rounded value of the sum, and with A and C each
+    O(1) carrying an absolute ε against an O((kΔ)²) answer the summed spelling
+    is 1 % wrong at kΔ = 2.1e-4 and has no correct digits at all by 1e-5. This
+    function was always the accurate SPELLING; #606 is what made the
+    coefficient it is handed accurate too.
 
     Every argument broadcasts: callers supply coefficient columns and an arc
     array in whatever pairing they already hold.
@@ -1322,7 +1332,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         kd = k * seg_h
         atom = (1.0 - np.cos(kd)) / np.sin(kd) * a_const
 
-        segs, bases, A, B, C, sig = [], [], [], [], [], []
+        segs, bases, A, B, C, AC, sig = [], [], [], [], [], [], []
         for p, (j_idx, _v) in enumerate(self.junction_ports):
             members = self._junction_members(geom, j_idx)
             m_seg = np.array([m for m, _s in members], dtype=np.int64)
@@ -1339,6 +1349,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             A.append(q / np.sin(kd[m_seg]))
             B.append(q / (2.0 * np.cos(0.5 * kd[m_seg])))
             C.append(-q / (2.0 * np.sin(0.5 * kd[m_seg])))
+            # A + C = q·[1/sin(kΔ) − 1/(2 sin(kΔ/2))], the N⁻ identity exactly
+            # (momwire#606). Same closed form, because these ARE that shape.
+            AC.append(q * _recip_sin_gap(kd[m_seg]))
             sig.append(m_sig)
 
         starts = base_view["starts"]
@@ -1348,6 +1361,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         all_A = np.concatenate([base_view["A"]] + A).astype(np.complex128)
         all_B = np.concatenate([base_view["B"]] + B).astype(np.complex128)
         all_C = np.concatenate([base_view["C"]] + C).astype(np.complex128)
+        all_AC = np.concatenate([base_view["AC"]] + AC).astype(np.complex128)
         all_sigma = np.concatenate([base_view["sigma"]] + sig)
 
         order = np.argsort(all_seg, kind="stable")
@@ -1356,15 +1370,25 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         A_ord, C_ord = all_A[order], all_C[order]
         # A + C on the port entries cancels exactly as it does on an ordinary
         # N⁻ extension — C_m/A_m = −cos(kΔ_m/2) — so the port columns carry
-        # the #203 pre-sum too, and every consumer can read `AC` without
+        # the same closed form, and every consumer can read `AC` without
         # asking whether the entry is a port's.
+        #
+        # CARRIED, not recomputed (momwire#606). This view used to publish
+        # `A_ord + C_ord`, which did two wrong things at once: it gave the
+        # port entries the float sum whose relative error is 8ε/(kΔ)², and —
+        # because the concatenation covers the base entries too — it threw
+        # away the closed-form `AC` the inherited view had already computed
+        # for every ORDINARY entry. A junction-port solve therefore lost the
+        # whole of #606's coefficient fix, silently, while a portless one
+        # kept it. Concatenating `base_view["AC"]` is what keeps the two
+        # spellings of this solver the same solver.
         return {
             "starts": new_starts,
             "jbasis": all_basis[order],
             "A": A_ord,
             "B": all_B[order],
             "C": C_ord,
-            "AC": A_ord + C_ord,
+            "AC": all_AC[order],
             "sigma": all_sigma[order],
         }
 
@@ -1607,9 +1631,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         than the answer. The literal spelling subtracts two O(1) numbers to
         get an O((kΔ)²/8) one — ε·8/(kΔ)² relative, 1.2e-10 at N=801 — and
         `w_entry` multiplies the whole free-space fill, so that error lands
-        on G at full strength. `AC` is pre-summed in `_basis_coefs` and
-        `cos kξ − 1` is spelled as −2sin²(kξ/2), so both cancellations are
-        done where they are exact.
+        on G at full strength. `AC` comes from `_basis_coefs`' per-branch
+        closed forms — not a float `A + C`, which carries an absolute ε
+        against an O((kΔ)²) answer (momwire#606) — and `cos kξ − 1` is
+        spelled as −2sin²(kξ/2), so both cancellations are done where they
+        are exact.
         """
         N = geom["n_segs"]
         seg_c = geom["seg_centers"]  # (N, 3)
@@ -3391,9 +3417,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         `AC` the centre readout already reads. Drive and readout are then the
         same functional, which is the duality the class docstring states; the
         1/Δ_m of the segment model is absent because the source no longer
-        spreads. `AC` rather than `A + C` for the #203 discipline: the two are
-        bit-identical (`AC` is stored as that sum), but one spelling of the
-        pair keeps every consumer folded by construction.
+        spreads. `AC` rather than `A + C` for the #203 discipline — and since
+        momwire#606 the two are no longer even equal: `AC` is a per-branch
+        closed form, while the float sum loses 8ε/(kΔ)² relative and has no
+        correct digits below kΔ ≈ 1e-5. What was a stylistic preference for
+        one spelling of the pair is now the difference between a right and a
+        wrong drive vector.
 
         Junction port p: the source is an EMF in the infinitesimal lead
         between the port terminal and the node, so testing it against basis

@@ -1043,7 +1043,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 the flat per-segment arrays below.
             seg_view["jbasis"][k]     → which basis contributes entry k.
             seg_view["A"/"B"/"C"][k]  → that basis's coefficient on seg.
-            seg_view["AC"][k]         → A + C, pre-summed (see below).
+            seg_view["AC"][k]         → A + C, in closed form (see below).
             seg_view["sigma"][k]      → σ sign relative to NEC arc.
 
         `AC` is A + C — the entry's current at the segment CENTRE, and the
@@ -2095,16 +2095,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (momwire#205):
 
         `"cos"`
-            I = cos kξ, the literal NEC shape. The point-matched solver's
-            contract, and the default.
+            I = cos kξ, the literal NEC shape, and the default. NOT "the
+            point-matched contract" any more (momwire#606): the point-matched
+            fill takes it above `_WELL_SCALED_KD` and the folded shape below,
+            so `cos_shape` is now a per-FILL decision on both families rather
+            than a per-family one.
         `"cos-1"`
-            I = cos kξ − 1, the shape the Galerkin fill's coefficient product
-            actually pairs with σC once #203's fold is applied. Its field is
-            O((kΔ)²) of the const shape's, so taking the difference of the two
-            closed forms in float64 leaves ε·‖T_const‖ in it — which is the
-            reciprocity floor #205 exists to remove. The branch below gets the
-            same quantity out of a spelling in which no term is larger than
-            the answer.
+            I = cos kξ − 1, the shape a coefficient product actually pairs
+            with σC once #203's fold is applied. Its field is O((kΔ)²) of the
+            const shape's, so taking the difference of the two closed forms in
+            float64 leaves ε·‖T_const‖ in it — which is the reciprocity floor
+            #205 exists to remove. The branch below gets the same quantity out
+            of a spelling in which no term is larger than the answer.
+
+            Both families ask for it, for the same reason at different sizes:
+            Galerkin always (its coefficient product is written that way),
+            point-matched below the threshold where the literal spelling stops
+            having digits (#606).
 
         `ek` turns on NEC's EXTENDED thin-wire kernel, and its TYPE says which
         of the two kernels' extended paths is meant (momwire#246 §4). The two
