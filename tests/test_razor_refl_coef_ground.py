@@ -56,6 +56,17 @@ inverted-V's 12.6 Ω against `SinusoidalSolver` is a FREE-SPACE property of
 that solver on a bent three-anchor wire, unchanged by any ground — which is
 precisely why the gate is on the difference of the two columns and not on
 either column alone.
+
+That 12.6 Ω is now explained, and it is not ours (momwire#421). It is NEC-2's
+own: measured against `nec2c 1.3` on this geometry, our point-matched row
+tracks nec2c to 0.088-0.096 Ω at every included angle from 180° down to 60°
+— the same residual a straight wire shows — while nec2c and the other three
+formulations separate by the full 12.6 Ω. Nor does it converge away: at 90°
+the sibling formulations land within 0.27 Ω of each other by N=768 while the
+NEC-2 scheme turns around after N≈96 and walks the other way, ours with it.
+`SinusoidalGalerkinSolver` is the same basis on the same mesh and stays with
+the siblings, so the discriminator is the testing rule, exactly as #573 found
+around a loop. `tests/test_sinusoidal_bend_nec2_twin.py` pins it.
 """
 
 import numpy as np
