@@ -307,8 +307,57 @@ reproducer, |ΔZ|/|PEC image| in the near-diagonal band must tend to a constant
 as h → 0, and that constant must be |2/(ε̃+1)|.  No binary, no captured deck,
 six unknowns, milliseconds.
 
-Runs the binary in every mode but ``theta`` and ``matrix``, so: antennaknobs
-venv, ``NEC5_EXE`` set.
+``--mode nqp`` — **and that is the whole of #510.**
+
+Reading razor's assembly with the band named: the remainder Q rides the T1
+window and is integrated over each SOURCE SEGMENT with ``n_qp_sommerfeld``
+Gauss points, default **3**.  For a grazing horizontal pair the Q integrand
+has a spike of width ~2h where the observer sits over the source's image —
+h = 1.78 cm inside a 7.92 m segment, a relative width of 0.0022.  Three Gauss
+points cannot see a feature that narrow, and the spike sharpens as h → 0.
+That is exactly the band, and exactly the height dependence, ``--mode matrix``
+measured.
+
+It is consistent with every earlier elimination, which is what made it worth
+testing: the direct-grid bypass changed how each quadrature point's SURFACE is
+evaluated, not how many points there are, so exonerating the surfaces said
+nothing about the order.  And momwire#282 raising n_qp 3 → 12 at CONTACT moved
+its answer 0.03 Ω — which is why this was not tried sooner, and is not a
+counterexample: contact is a VERTICAL wire, its image is collinear, and there
+is no spike to miss.
+
+The near-diagonal band, |ΔZ|/|PEC image| against the 0.0392 limit:
+
+  n_qp              3       6      12      24      48      96
+  h/λ 1e-3     0.0620  0.0457  0.0469  0.0474  0.0475  0.0475
+  h/λ 1.09e-4  0.2357  0.0416  0.0419  0.0425  0.0433  0.0440
+
+The 4× excess is gone at n_qp = 6 and the band lands on bspline's value.
+
+End to end against the binary, razor-nec5 on 0033 — err % of |Z|:
+
+  h/λ        n_qp=3     12      24      48      96     192
+  1.09e-4    171.86  61.02   44.15   26.05    9.87    1.44
+  2e-4       239.54  31.86   19.18    7.74    1.32    0.08
+  5e-4       230.91  10.02    3.24    0.37    0.05    0.05
+  1e-3        44.18   2.52    0.28
+  3e-3         3.91   0.02    0.01
+  1e-2         0.06   0.01    0.01
+
+**171.86 % → 1.44 % at the captured height.**  0033 and 0034 have been
+"divergent" for want of Gauss points.  #510 is a quadrature-ORDER defect, it
+is entirely fixable, and nothing else in the elimination list has to be
+revisited.
+
+The order needed scales like the spike is narrow: h/Δ = 0.0103 wants ~48,
+h/Δ = 0.00225 wants ~192, so roughly **n_qp ≈ 0.4·Δ/h** — a keying rule of the
+same shape momwire#443 already applied to the grid's boundary layer.  Keying
+is the design point rather than a global raise: 192 points on every pair would
+be ruinous, and the spike exists only where an observer sits over a source
+segment's near-coincident image.
+
+Runs the binary in every mode but ``theta``, ``matrix`` and ``nqp``, so:
+antennaknobs venv, ``NEC5_EXE`` set.
 
     NEC5_EXE=~/antennas/NEC5-downloads/nec5-linux/nec5cl \
         /home/smburns/antennas/antennaknobs/.venv/bin/python \
@@ -1276,6 +1325,85 @@ def mode_matrix(heights) -> list[dict]:
     return rows
 
 
+def mode_nqp(values, heights) -> list[dict]:
+    """Is the near-diagonal band an UNDER-RESOLVED source quadrature?
+
+    Reading razor's assembly: the remainder Q rides the T1 window and is
+    integrated over each source segment with ``n_qp_sommerfeld`` Gauss points,
+    default 3.  For a grazing horizontal pair the Q integrand has a spike of
+    width ~h where the observer sits over the source's image — h = 1.78 cm in
+    a 7.92 m segment, h/delta = 0.0022.  Three Gauss points cannot resolve
+    that, and the spike sharpens as h -> 0, which is exactly the band and
+    exactly the height dependence ``--mode matrix`` measured.
+
+    It is consistent with every earlier elimination, which is what makes it
+    worth testing rather than merely plausible: the direct-grid bypass changed
+    how each quadrature point's SURFACE is evaluated, not how many points
+    there are, so exonerating the surfaces says nothing about this.
+
+    momwire#282's probe raised n_qp 3 -> 12 at CONTACT and moved the answer
+    0.03 ohm, which is why this was not tried sooner — but contact is a
+    vertical wire, where the image is collinear and there is no spike.
+
+    If the near-diagonal ratio converges toward bspline's ~0.05-0.07 as n_qp
+    rises, the defect is the quadrature order and the fix is to key it to
+    h/delta.  If it is flat, the order is innocent and the formulation is next.
+    """
+    from momwire import RazorSolver
+
+    orig_init = RazorSolver.__init__
+    forced = {"n": None}
+
+    def patched_init(self, *a, **kw):
+        if forced["n"] is not None:
+            kw["n_qp_sommerfeld"] = forced["n"]
+        return orig_init(self, *a, **kw)
+
+    RazorSolver.__init__ = patched_init
+
+    eps_t = medium_eps_t()
+    predicted = abs(2.0 / (eps_t + 1.0))
+    print("razor's Q source quadrature order, on the one-wire reproducer")
+    print(f"quasi-static limit |2/(eps~+1)| = {predicted:.5f}")
+    print("bspline's same band sits at ~0.05 / 0.074 at every height\n")
+
+    rows = []
+    try:
+        for hw in heights or (1e-3, 1.09e-4):
+            print(f"h/lambda = {hw:.3g}   (h/delta = {hw * WL / (RADIAL_LEN / 5):.4g})")
+            hdr = f"   {'n_qp':>5} | {'|dZ|/|PEC image| band 0':>24} {'band 1':>9}"
+            print(hdr)
+            print("   " + "-" * (len(hdr) - 3))
+            free = wire_deck(hw * WL).replace(
+                f"GN 0,0,0,0,{_num(13.0)},{_num(0.005)},1.,0.", "GN -1"
+            )
+            for nq in values or (3, 6, 12, 24, 48, 96):
+                forced["n"] = int(nq)
+                z_f = _capture_Z(free, "razor-nec5")
+                z_p = _capture_Z(wire_deck(hw * WL, pec=True), "razor-nec5")
+                z_g = _capture_Z(wire_deck(hw * WL, soil=(13.0, 0.005)), "razor-nec5")
+                forced["n"] = None
+                if z_f is None or z_p is None or z_g is None:
+                    continue
+                dz, img, n = z_g - z_p, z_p - z_f, z_p.shape[0]
+                band = [
+                    float(np.mean([abs(dz[i, i + d]) for i in range(n - d)]))
+                    / max(
+                        float(np.mean([abs(img[i, i + d]) for i in range(n - d)])),
+                        1e-300,
+                    )
+                    for d in (0, 1)
+                ]
+                print(f"   {nq:>5} | {band[0]:>24.4f} {band[1]:>9.4f}")
+                rows.append(
+                    dict(h_over_wl=hw, n_qp=int(nq), band0=band[0], band1=band[1])
+                )
+            print()
+    finally:
+        RazorSolver.__init__ = orig_init
+    return rows
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -1290,6 +1418,7 @@ def main() -> None:
             "cond",
             "wire",
             "matrix",
+            "nqp",
         ),
         default="theta",
     )
@@ -1328,6 +1457,11 @@ def main() -> None:
         rows = mode_reflcoef()
     elif args.mode == "soil":
         rows = mode_soil()
+    elif args.mode == "nqp":
+        rows = mode_nqp(
+            tuple(args.values) if args.values else None,
+            tuple(args.heights) if args.heights else None,
+        )
     elif args.mode == "matrix":
         rows = mode_matrix(tuple(args.heights) if args.heights else None)
     elif args.mode == "wire":
