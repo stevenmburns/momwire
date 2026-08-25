@@ -157,9 +157,13 @@ def test_what_razor_cannot_host_is_named_in_the_printout(cid, fragment):
 # basis (a near-field point at a contact, `test_eznec_serve.py`), so 59 is
 # what "serves the corpus" means here.
 #
-#   arrayblock  57 + 2 RAISED — momwire#609, a broadcast bug on a deck that
-#               carries junctions and node gaps at once.  Recorded as it is
-#               rather than papered over; when #609 lands this becomes 59.
+#   arrayblock  57 + 2 RAISED until momwire#609, which is now 59 and no
+#               raises — parity with bspline.  The two were never a refusal:
+#               `_shape_classes` called four verticals one shape on segment
+#               geometry alone, two of them cut mid-wire by an `LD` and so
+#               carrying 9 bases against the others' 7, and the 9x9 block
+#               went at a 7-basis element.  The bases are in the signature
+#               now.
 #
 #   razor       49 -> 54 with momwire#608, which narrowed a refusal that used
 #               to read "one segment" to what it should always have read,
@@ -171,7 +175,7 @@ SERVE_MATRIX = {
     "bspline": 59,
     "bspline-d1": 59,
     "hmatrix": 59,
-    "arrayblock": 57,
+    "arrayblock": 59,
     "sinusoidal": 0,
     "sinusoidal-galerkin": 0,
     "sinusoidal-galerkin-converged": 0,
@@ -189,15 +193,13 @@ def test_the_roster_is_the_one_the_matrix_was_measured_over():
 def test_each_basis_serves_what_it_was_measured_to_serve(basis):
     """The serve matrix, one basis at a time (#603 U6's seed).
 
-    ``momwire#609`` is the one basis that still RAISES rather than refusing,
-    on two decks; it is allowed for here by name so that a new raise anywhere
-    else is a failure rather than a silently absorbed one.
+    NO basis raises. ``arrayblock`` did, on two decks, until momwire#609 —
+    and the allowance that used to sit here by name is gone with it, so a
+    raise anywhere is now a failure rather than a silently absorbed one.
+    That also moved arrayblock 57 -> 59, which is parity with ``bspline``:
+    the two decks it dropped were the crash, not a refusal.
     """
-    served = raised = 0
+    served = 0
     for cid in CAPTURE_IDS:
-        try:
-            served += "NEC ERROR" not in render(deck_text(cid), basis=basis)
-        except ValueError:
-            raised += 1
+        served += "NEC ERROR" not in render(deck_text(cid), basis=basis)
     assert served == SERVE_MATRIX[basis]
-    assert raised == (2 if basis == "arrayblock" else 0)
