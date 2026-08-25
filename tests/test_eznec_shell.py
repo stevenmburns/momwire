@@ -540,14 +540,20 @@ def _dump(name: str, label: str, position: int, warm: str, cold: str) -> None:
 @pytest.mark.xfail(
     strict=False,
     reason=(
-        "momwire#578: the eznec printout is not reproducible — 92.5% unfloored "
-        "printed dust and its phase (the #403/#480 _PRINTED_DUST_FLOOR2 the "
-        "eznec seam never received), 7.2% a polarisation SENSE label decided by "
-        "the sign bit of zero, 0.3% the arbitrary phase of a singular network "
-        "row. NOT strict: with no process history behind it this passes, which "
-        "is precisely the condition the gate exists to defeat — 12 of the 19 "
-        "decks also diverge on OMP_NUM_THREADS alone, with no residency in it "
-        "at all. Un-xfail when #578 lands; this is its regression test."
+        "momwire#578, PARTLY landed and so still not strict. The pattern "
+        "table is reproducible now: its printed dust is floored in this "
+        "seam's own derived units and the SENSE label is tied to the axial "
+        "ratio the row actually prints, which took the corpus from 583 "
+        "moving E-field columns and 46 flipping polarisation labels to zero "
+        "of each, measured across all 62 decks at OMP_NUM_THREADS 1 vs 8. "
+        "What is left is the NETWORK table, and only in 0017/0018: 5 dust "
+        "columns and a WIRE LOSS at 1e-54 that want the same treatment in "
+        "their own units, plus 2 lines of the singular row whose phase is "
+        "undetermined (|v| ~ 1e+25) and whose disposition — floor or refuse "
+        "— is the open half of the issue. Those 8 lines move with thread "
+        "count and not with process history, so THIS gate passes today; it "
+        "stays non-strict until the issue closes rather than being flipped "
+        "on a pass it does not yet fully earn."
     ),
 )
 def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
