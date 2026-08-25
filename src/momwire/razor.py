@@ -649,6 +649,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
+    # momwire#624 SPIKE ONLY. See __init__ for what these do. Never True on a
+    # shipped path; the harness in scripts/spike_contact_plane_reference.py
+    # sets and restores them around a measurement. TWO flags, because the
+    # experiment is exactly "what does the restored term change?" — one
+    # admits the geometry, the other adds the term, and holding the first
+    # while toggling the second is the measurement.
+    _spike_contact = False
+    _spike_plane_reference = False
+
     # momwire#396: free space and all three grounds — the PEC image
     # (momwire#398 unit 2), the reflection-coefficient ground (unit 4) and
     # the Sommerfeld ground (unit 5) — for wires standing clear of the
@@ -730,6 +739,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             raise TypeError(f"RazorSolver got unexpected keyword argument(s): {bad}")
 
         self._cancel = cancel
+        # ---- momwire#624 SPIKE ONLY — not public API, not a capability ----
+        # docs/design/contact-over-finite-ground.md §5.5. Setting these on an
+        # instance BEFORE construction is impossible, so the spike harness
+        # sets the CLASS attributes for the duration of a measurement.
+        # `_spike_contact` lets a contact-over-finite-ground model construct;
+        # `_spike_plane_reference` restores the plane-reference term §4.3 says
+        # the T2 drop discards. Both default False, so every shipped path —
+        # and every existing gate — is untouched. Delete with the spike.
+        self._spike_contact = type(self)._spike_contact
+        self._spike_plane_reference = type(self)._spike_plane_reference
         self._checkpoint()
 
         self.wavelength = float(wavelength)
@@ -796,7 +815,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Validates the geometry against the plane (and is re-read at
         # basis-build time for the grounded ends themselves).
         grounded_ends = self._ground_ends()
-        if grounded_ends and self.ground_eps is not None:
+        if grounded_ends and self.ground_eps is not None and not self._spike_contact:
             where = ", ".join(f"wire {w} {kind}" for w, kind in sorted(grounded_ends))
             raise NotImplementedError(
                 f"{where} lies in the ground plane: {_CONTACT_OVER_FINITE_REFUSAL}"
@@ -2546,6 +2565,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         M0c, _ = self._seg_moments_from_prepared(
             sources["t2_chunks"], geom, k, prepared["n_cent"], need_m1=False
         )
+        grounded = prepared["grounded"]
+        # momwire#624 spike: the plane rows BEFORE the weight, which is the
+        # only thing the restored term needs that weighting destroys.
+        plane_unweighted = None
+        if self._spike_plane_reference and w_Phi_fn is not None and grounded.size:
+            plane_unweighted = M0c[s_a[grounded]].copy()
         if w_Phi_fn is not None:
             n_cent = prepared["n_cent"]
             step = max(1, _WEIGHTED_CHUNK_ELEMS // max(1, prepared["n_seg"]))
@@ -2555,7 +2580,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 _w_A_unused, w_Phi = w_Phi_fn(c0, c1)
                 M0c[c0:c1] *= w_Phi
         dM0 = M0c[s_b] - M0c[s_a]  # (row, source segment)
-        grounded = prepared["grounded"]
         if grounded.size:
             # A grounded row's testing path starts AT the plane, where the
             # folded scalar potential is identically zero: a point in the
@@ -2566,6 +2590,31 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # the plane this formulation's potential reference, the discrete
             # form of Φ = 0 on a perfect conductor.
             dM0[grounded] = M0c[s_b[grounded]]
+            if plane_unweighted is not None:
+                # ---- momwire#624 SPIKE ONLY (§4.3, §5.5) -----------------
+                # Over a FINITE ground the two blocks' plane terms are no
+                # longer the same number: this block's has been scaled by
+                # w_Φ and the real block's has not, so the pair of drops
+                # discards (1 − w_Φ)·M0(plane) instead of zero.
+                #
+                # This is the IMAGE block — the ground, and therefore the
+                # weight, exists only here (`_assemble_Z_from_prepared`
+                # passes `ground=` to the image call alone) — and the caller
+                # spells the fold `Z = real − image`. So adding the term
+                # HERE lands it on the assembled matrix with the minus the
+                # physics wants, and nothing has to be threaded into the
+                # real block, which has no w_Φ to compute it with.
+                #
+                #   M0c[s_a] is w_Φ·M0(plane) after the loop above, so
+                #   plane_unweighted − M0c[s_a] IS (1 − w_Φ)·M0(plane)
+                #
+                # with no second weight lookup and no assumption about how
+                # w_Φ is indexed. At PEC `w_Phi_fn` is None and none of this
+                # runs, so the PEC path is untouched arithmetic, not merely
+                # an added zero.
+                dM0[grounded] += float(self._spike_plane_reference) * (
+                    plane_unweighted - M0c[s_a[grounded]]
+                )
         T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
 
         tans, wts = prepared["tans"], prepared["wts"]
