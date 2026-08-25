@@ -193,11 +193,67 @@ no captured deck meets the pole — it is a diagnostic pointer, not a user
 symptom.
 
 Runs the binary in ``--mode direct`` / ``--mode reflcoef``, so: antennaknobs
-venv, ``NEC5_EXE`` set.
+``--radial-lens`` — the pole MOVES with geometry.  |err| in Ω at the native
+height, razor-nec5, scanning ε_r at four radial lengths:
+
+  eps_r      1.8    2.2    2.6    3.0    3.4    4.0     5.0     6.5     8.0
+  L=20      21.5   29.4   36.1   41.9   46.9   53.4    62.1    72.0    79.5
+  L=30      61.5   89.4  117.2  145.5  175.2  223.7   322.8   557.7  1087.4
+  L=39.6   171.8  330.0  695.7 2480.3 1442.3  565.6   300.7   184.2   133.5
+  L=60     332.5  209.0  139.0   76.4   15.2  208.2  4217.2   948.2   640.5
+
+So it is not one ε_r: L = 39.6 peaks near 3.0, L = 60 near 5.0, and L = 20/30
+show no peak below 8 at all.  A coefficient singularity would sit at one ε̃
+whatever the antenna is.  At L = 60, ε_r = 5 the solved impedance reaches
+3600 + 2678j — an ANTI-RESONANCE, an open circuit where the antenna has no
+business having one.
+
+``--mode cond`` — **and it is NOT a singular matrix.**  Conditioning of what
+``scipy.linalg.solve`` actually inverts, at the native height, L = 39.6:
+
+  eps_r      1.8    2.2    2.6    2.9    3.0    3.1    3.2    3.6    4.0    5.0     8.0    13.0
+  razor cond 442.2  180.7  109.3  84.23  78.33  73.26  68.88  60.23  66.81  82.95   126.2  1410
+  razor |err| 171.8  330.0  695.7 1650.9 2480.3 3343.9 2797.1  939.6  565.6  300.7   133.5  63.9
+  bspl cond  113.8  119.0  119.6  119.9  120.0  120.1  120.2  128.6  143.5  172.4   221.4  256.4
+
+The correlation is **inverse**: razor's operator is at its BEST conditioned
+(cond 73, σ_min 136) exactly where the error is WORST, and at its worst
+(cond 1410) where the error is smallest (63.9 Ω).  bspline's is smooth and
+featureless throughout.  So the matrix is fine and its ENTRIES are wrong —
+the anti-resonance is not rank loss, and ill-conditioning joins the
+interpolation, the integration tolerance and row-halving on the list of
+things this is not.
+
+``--mode wire`` — **the minimal reproducer.**  ONE horizontal wire, 39.624 m,
+five segments, driven at node 2: no junction, no screen, no vertical.
+
+  h/λ        eps_r 2.5   3.0   3.1    5.0    13.0     (razor |err|, Ω)
+  1e-2            0.23  0.20  0.22   0.26    0.27
+  1e-3           33.0  39.7  40.9   57.1    79.7
+  1.09e-4       599.6 753.7 783.0 1283.9  3281.7
+
+It reproduces completely — clean at 1e-2 λ (ratio 0.996-1.005), broken below.
+**The reproducer drops from 24 unknowns to 6**, which makes entry-by-entry
+diagnosis tractable and gives any fix a unit test that runs in milliseconds.
+It also confirms experiment 3's reading from the smallest possible model: the
+horizontal wire alone is sufficient, the screen and the junction are not part
+of the mechanism.
+
+Two cautions this reproducer raises.  The wire is a far more sensitive object
+than 0033 — Z over ``GN 1`` at 1e-2 λ is 0.0395 − 1035.2j, a real part of
+0.04 Ω, so the ground correction dwarfs the PEC answer and bspline's own basis
+error is amplified with it (bspline is 35-39 Ω out even at the clean rung, and
+its column here is not readable as basis-independent evidence).  And razor
+UNDERSHOOTS here at 1e-3 (ratio 0.73-0.83) where on 0033 it overshot 3.06× —
+so the error's SIGN is geometry-dependent, which is a third reason no single
+scale factor describes it.
+
+Runs the binary in every mode but ``theta``, so: antennaknobs venv,
+``NEC5_EXE`` set.
 
     NEC5_EXE=~/antennas/NEC5-downloads/nec5-linux/nec5cl \
         /home/smburns/antennas/antennaknobs/.venv/bin/python \
-        scripts/probe_grazing_ground_path.py --mode theta
+        scripts/probe_grazing_ground_path.py --mode wire
 """
 
 from __future__ import annotations
@@ -214,11 +270,13 @@ from momwire import _sommerfeld
 from probe_grazing_height_floor import (
     FREQ_MHZ,
     N_SEG,
-    RADIAL_LEN,
+    RADIAL_LEN,  # noqa: F401  (re-exported for --radial-lens' default)
+    RADIUS,
     SOIL,
     TRUNKS,
     VERT_LEN,
     WL,
+    _num,
     deck,
     momwire_z,
 )
@@ -729,6 +787,7 @@ def mode_axis(
     heights: tuple[float, ...] | None = None,
     trunks: tuple[str, ...] = ("razor-nec5",),
     hold_eps: float = 5.0,
+    radial_len: float = RADIAL_LEN,
 ) -> list[dict]:
     """The overshoot along ONE half-space axis, with the other held.
 
@@ -775,8 +834,13 @@ def mode_axis(
 
     rows = []
     for hw in heights or AXIS_HEIGHTS:
-        z_pec = complex(eng.run_deck(deck(hw * WL, pec=True))[0][0][2])
-        print(f"h/lambda = {hw:<9.3g}   Z(GN 1) = {z_pec.real:.4f}{z_pec.imag:+.4f}j")
+        z_pec = complex(
+            eng.run_deck(deck(hw * WL, pec=True, radial_len=radial_len))[0][0][2]
+        )
+        print(
+            f"h/lambda = {hw:<9.3g}  radial {radial_len:g} m  "
+            f"Z(GN 1) = {z_pec.real:.4f}{z_pec.imag:+.4f}j"
+        )
         hdr = (
             f"   {'eps_r':>7} {'sigma':>9} {'tan_d':>9} {'trunk':>11} | "
             f"{'true':>20} | {'momwire':>20} | {'|ratio|':>9} {'arg':>7} | "
@@ -785,7 +849,7 @@ def mode_axis(
         print(hdr)
         print("   " + "-" * (len(hdr) - 3))
         for eps_r, sigma in cases:
-            text = deck(hw * WL, soil=(eps_r, sigma))
+            text = deck(hw * WL, soil=(eps_r, sigma), radial_len=radial_len)
             z_ref = complex(eng.run_deck(text)[0][0][2])
             d_true = z_ref - z_pec
             tan_d = sigma / (omega * EPS0 * eps_r)
@@ -811,6 +875,7 @@ def mode_axis(
                         sigma=sigma,
                         tan_delta=tan_d,
                         trunk=trunk,
+                        radial_len=radial_len,
                         z_pec=[z_pec.real, z_pec.imag],
                         d_true=[d_true.real, d_true.imag],
                         d_momwire=[d_mw.real, d_mw.imag],
@@ -823,11 +888,221 @@ def mode_axis(
     return rows
 
 
+def mode_cond(
+    values: tuple[float, ...] | None,
+    heights: tuple[float, ...] | None,
+    radial_len: float,
+) -> list[dict]:
+    """Is the eps_r pole a SINGULAR MATRIX?
+
+    The radial-length scan moved the pole (39.6 m -> eps_r ~ 3.0, 60 m ->
+    ~5.0) and at 60 m the solved impedance reaches 3600 + 2678j, which is an
+    ANTI-RESONANCE — an open circuit where the antenna has no business having
+    one.  A moving, geometry-dependent anti-resonance in one basis only is
+    what a spurious internal resonance looks like: the assembled operator
+    losing rank at a particular (geometry, eps~) pair.
+
+    So this reads the conditioning directly, and it reads it at the SOLVE
+    rather than at any one assembly method.  Hooking ``_assemble_Z`` per class
+    was tried first and is wrong twice over: razor reaches its solve through
+    more than one assembly path so the hook never fired, and bspline's
+    ``_assemble_Z`` returns a partial block whose conditioning came out
+    identical (522.6) at every ε_r, which is the tell that it is not the
+    matrix being inverted.  ``scipy.linalg.solve`` is where the real operator
+    passes, whatever route built it, so that is what is wrapped — and the
+    worst-conditioned call of each solve is the one reported.
+
+    bspline is carried as the control because it has no pole across this
+    window — if its conditioning is flat where razor's spikes, the finding is
+    razor's operator and not the physics of a half-space at eps~ ~ 3.
+    """
+    exe = Path(os.path.expanduser(os.environ.get("NEC5_EXE", "")))
+    if not exe.is_file():
+        raise SystemExit(f"NEC5_EXE not found: {exe}")
+    sys.path.insert(0, str(Path.home() / "antennas/antennaknobs/scripts"))
+    import scipy.linalg
+
+    from antennaknobs.engines.nec5 import NEC5Engine
+    from bench_nec5_walk_why import make_dipole
+
+    captures = Path(
+        os.environ.get("GRAZING_CAPTURES", "/tmp/claude-1000/510-grazing-captures")
+    )
+    captures.mkdir(parents=True, exist_ok=True)
+    eng = NEC5Engine(make_dipole(20), ground=None, capture_dir=captures)
+
+    seen: dict[str, list] = {}
+    current = {"trunk": None}
+    orig_solve = scipy.linalg.solve
+
+    def patched_solve(a, b, *args, **kw):
+        arr = np.asarray(a)
+        if current["trunk"] and arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
+            sv = np.linalg.svd(arr, compute_uv=False)
+            seen.setdefault(current["trunk"], []).append(
+                (float(sv[0] / sv[-1]), float(sv[-1]), int(sv.size))
+            )
+        return orig_solve(a, b, *args, **kw)
+
+    scipy.linalg.solve = patched_solve
+    saved = {"scipy": orig_solve}
+
+    print("conditioning of the assembled operator across the eps_r pole")
+    print(f"radial {radial_len:g} m; cond and sigma_min of what the solve inverts\n")
+    rows = []
+    try:
+        for hw in heights or (1.09e-4,):
+            z_pec = complex(
+                eng.run_deck(deck(hw * WL, pec=True, radial_len=radial_len))[0][0][2]
+            )
+            print(
+                f"h/lambda = {hw:<9.3g}   Z(GN 1) = {z_pec.real:.4f}{z_pec.imag:+.4f}j"
+            )
+            hdr = (
+                f"   {'eps_r':>7} {'trunk':>11} {'N':>4} | {'cond':>12} "
+                f"{'sigma_min':>12} | {'|err| ohm':>11}"
+            )
+            print(hdr)
+            print("   " + "-" * (len(hdr) - 3))
+            for eps_r in values or EPSR_SWEEP:
+                text = deck(hw * WL, soil=(eps_r, 1e-5), radial_len=radial_len)
+                z_ref = complex(eng.run_deck(text)[0][0][2])
+                for trunk in ("razor-nec5", "bspline"):
+                    seen.pop(trunk, None)
+                    current["trunk"] = trunk
+                    z_mw = momwire_z(text, trunk)
+                    current["trunk"] = None
+                    if z_mw is None or not seen.get(trunk):
+                        continue
+                    cond, smin, n = max(seen[trunk], key=lambda t: t[0])
+                    err = abs((z_mw - z_pec) - (z_ref - z_pec))
+                    print(
+                        f"   {eps_r:>7.2f} {trunk:>11} {n:>4} | {cond:>12.4g} "
+                        f"{smin:>12.4g} | {err:>11.4f}",
+                        flush=True,
+                    )
+                    rows.append(
+                        dict(
+                            h_over_wl=hw,
+                            eps_r=eps_r,
+                            trunk=trunk,
+                            radial_len=radial_len,
+                            n_unknowns=n,
+                            cond=cond,
+                            sigma_min=smin,
+                            abs_err=err,
+                        )
+                    )
+            print()
+    finally:
+        scipy.linalg.solve = saved["scipy"]
+    return rows
+
+
+def wire_deck(h, *, n_seg=5, pec=False, soil=SOIL, length=RADIAL_LEN):
+    """ONE horizontal wire at height ``h``, driven at an interior node.
+
+    The smallest thing that could carry the defect.  Experiment 3 said the
+    trigger is a horizontal wire in the grazing zone and not the junction or
+    the feedpoint, so a single radial with no vertical, no junction and no
+    screen should either reproduce or exonerate that reading.
+
+    Driven at node 2 rather than an end, because a free wire END carries no
+    basis function and the binary refuses it by name (``SORVT1: ERROR -
+    Voltage source specified where there is no basis function``).
+    """
+    gn = "GN 1,0,0,0" if pec else f"GN 0,0,0,0,{_num(soil[0])},{_num(soil[1])},1.,0."
+    return (
+        "CM momwire#510 — one horizontal wire, grazing\n"
+        f"CM h = {h:.6g} m = {h / WL:.4g} wavelengths, L = {length:g} m\nCE\n"
+        f"GW 1,{n_seg},0.,0.,{_num(h)},{_num(length)},0.,{_num(h)},{_num(RADIUS)}\n"
+        "GE 1,-1\n"
+        f"FR 0,1,0,0,{_num(FREQ_MHZ)}\n" + gn + "\nEX 0,1,2,0,1.414214,0.\nXQ 0\nEN\n"
+    )
+
+
+def mode_wire(values, heights) -> list[dict]:
+    """Does ONE horizontal wire reproduce the defect?
+
+    Everything so far has been measured on 0033 — five wires, a junction, a
+    screen.  If a single grazing horizontal wire carries the same signature,
+    the reproducer drops from 24 unknowns to 6, the remaining diagnosis
+    becomes entry-by-entry tractable, and any fix gets a unit test that runs
+    in milliseconds.  If it does NOT, the screen or the junction is part of
+    the mechanism after all and experiment 3's reading needs qualifying.
+    """
+    exe = Path(os.path.expanduser(os.environ.get("NEC5_EXE", "")))
+    if not exe.is_file():
+        raise SystemExit(f"NEC5_EXE not found: {exe}")
+    sys.path.insert(0, str(Path.home() / "antennas/antennaknobs/scripts"))
+    from antennaknobs.engines.nec5 import NEC5Engine
+    from bench_nec5_walk_why import make_dipole
+
+    captures = Path(
+        os.environ.get("GRAZING_CAPTURES", "/tmp/claude-1000/510-grazing-captures")
+    )
+    captures.mkdir(parents=True, exist_ok=True)
+    eng = NEC5Engine(make_dipole(20), ground=None, capture_dir=captures)
+
+    print("ONE horizontal wire, no junction, no screen, no vertical")
+    print(f"L = {RADIAL_LEN} m, a = {RADIUS} m, driven at node 2\n")
+    rows = []
+    for hw in heights or (1.09e-4, 1e-3, 1e-2):
+        z_pec = complex(eng.run_deck(wire_deck(hw * WL, pec=True))[0][0][2])
+        print(f"h/lambda = {hw:<9.3g}   Z(GN 1) = {z_pec.real:.4f}{z_pec.imag:+.4f}j")
+        hdr = (
+            f"   {'eps_r':>7} {'trunk':>11} | {'true':>20} | {'momwire':>20} | "
+            f"{'|ratio|':>9} {'arg':>7} | {'|err|':>10}"
+        )
+        print(hdr)
+        print("   " + "-" * (len(hdr) - 3))
+        for eps_r in values or (2.5, 3.0, 3.1, 5.0, 13.0):
+            text = wire_deck(hw * WL, soil=(eps_r, 1e-5))
+            z_ref = complex(eng.run_deck(text)[0][0][2])
+            d_true = z_ref - z_pec
+            for trunk in TRUNKS:
+                z_mw = momwire_z(text, trunk)
+                if z_mw is None:
+                    continue
+                d_mw = z_mw - z_pec
+                ratio = d_mw / d_true if abs(d_true) > 0 else complex("nan")
+                print(
+                    f"   {eps_r:>7.2f} {trunk:>11} | "
+                    f"{d_true.real:>9.4f}{d_true.imag:>+9.4f}j | "
+                    f"{d_mw.real:>9.4f}{d_mw.imag:>+9.4f}j | "
+                    f"{abs(ratio):>9.3f} {np.degrees(np.angle(ratio)):>6.1f}d | "
+                    f"{abs(d_mw - d_true):>10.4f}",
+                    flush=True,
+                )
+                rows.append(
+                    dict(
+                        h_over_wl=hw,
+                        eps_r=eps_r,
+                        trunk=trunk,
+                        d_true=[d_true.real, d_true.imag],
+                        d_momwire=[d_mw.real, d_mw.imag],
+                        ratio_mag=abs(ratio),
+                        abs_err=abs(d_mw - d_true),
+                    )
+                )
+        print()
+    return rows
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument(
         "--mode",
-        choices=("theta", "direct", "reflcoef", "soil", "sigma", "epsr"),
+        choices=(
+            "theta",
+            "direct",
+            "reflcoef",
+            "soil",
+            "sigma",
+            "epsr",
+            "cond",
+            "wire",
+        ),
         default="theta",
     )
     p.add_argument("--rtol", type=float, default=1e-11)
@@ -848,6 +1123,11 @@ def main() -> None:
     # well clear of it is what separates "loss damps a pole" from "loss damps
     # the shared grazing error".
     p.add_argument("--hold-eps", type=float, default=5.0)
+    # Does the eps_r ~ 3.1 pole MOVE with geometry? An algebraic singularity
+    # in a coefficient sits at one eps_r whatever the antenna is; a spurious
+    # guided resonance tracks the radial length. Accepts several lengths and
+    # runs the whole eps_r scan at each.
+    p.add_argument("--radial-lens", type=float, nargs="+", default=None)
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
@@ -860,14 +1140,28 @@ def main() -> None:
         rows = mode_reflcoef()
     elif args.mode == "soil":
         rows = mode_soil()
-    else:
-        rows = mode_axis(
-            args.mode,
-            values=tuple(args.values) if args.values else None,
-            hold_eps=args.hold_eps,
-            heights=tuple(args.heights) if args.heights else None,
-            trunks=tuple(args.trunks),
+    elif args.mode == "wire":
+        rows = mode_wire(
+            tuple(args.values) if args.values else None,
+            tuple(args.heights) if args.heights else None,
         )
+    elif args.mode == "cond":
+        rows = mode_cond(
+            tuple(args.values) if args.values else None,
+            tuple(args.heights) if args.heights else None,
+            (args.radial_lens or [RADIAL_LEN])[0],
+        )
+    else:
+        rows = []
+        for rl in args.radial_lens or [RADIAL_LEN]:
+            rows += mode_axis(
+                args.mode,
+                values=tuple(args.values) if args.values else None,
+                hold_eps=args.hold_eps,
+                heights=tuple(args.heights) if args.heights else None,
+                trunks=tuple(args.trunks),
+                radial_len=rl,
+            )
     if args.out:
         Path(args.out).write_text(json.dumps(rows, indent=2))
         print(f"\nwrote {args.out}")
