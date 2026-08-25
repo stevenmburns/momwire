@@ -145,13 +145,52 @@ also the one half-space whose true correction has a NEGATIVE real part
 (−5.288 + 7.670j: a lossless dielectric lowers the resistance relative to a
 perfect image).  momwire answers 110.7 + 559.2j to that.
 
-That signature is momwire#282 stage 2's, from the contact side: its
-half-space sweep found the contact discrepancy PEAKING over a lossless
-dielectric (4.36 Ω at ε_r ≈ 2.5) and falling monotonically as the ground
-became conductive, which is what killed "the missing resistance is a loss
-term".  Same qualitative shape here, two decades larger.  Suggestive, not
-proven — the two were measured on different geometries at different heights,
-and nothing here has walked the σ axis.
+``--mode sigma`` / ``--mode epsr`` — the two ORTHOGONAL axes, because the five
+golden soils confound them (``diel`` is the least conductive AND least dense,
+``sea`` both the most).  Absolute error in the ground correction, |Δ_mw −
+Δ_true| in Ω, razor-nec5 at the native height:
+
+  sigma       0     1e-6    1e-5    1e-4    3e-4    1e-3    3e-3    1e-2    1e-1
+  eps_r 5   300.2   300.3   300.7   279.8   205.8   136.3   120.4   117.1   116.3
+  eps_r 20   26.6    26.6    26.9    29.3    35.0    54.1    86.7   111.2   116.2
+
+  eps_r    1.05    1.5     2.5     3.0    3.10    3.6      5      13      20     81
+  |err|   18.95  96.71  563.58 2480.3  3343.9  939.6  300.7   63.92  26.85  67.53
+
+**Two separate things, and the controls separate them.**
+
+*One:* a **shared, soil-independent grazing defect** — both σ sweeps converge
+on the SAME ~116 Ω plateau once the ground conducts (tan δ ≳ 5), from opposite
+directions.  Across the four lossy golden soils the ABSOLUTE error is 82-136 Ω
+while the true correction varies 23-63 Ω, so it is an ADDITIVE error that
+barely depends on the half-space — not a multiplicative one.  That is a
+sharper statement than the soil mode's ratio column supports on its own, and
+it is a second reason row-halving is the wrong suspect: a mis-scaled row would
+give error ∝ Δ_true.
+
+*Two:* a **razor-specific resonance in ε_r at ≈ 3.1**, at deep grazing with
+low loss.  Resolved finely, and it is a pole, not a bump:
+
+  eps_r    2.60    2.80    2.90    3.00    3.05    3.10    3.20    3.40    3.60
+  razor   695.7  1171.9  1650.9  2480.3  3002.4  3343.9  2797.1  1442.3   939.6
+   arg    -44.1   -46.5   -53.2   -69.3   -84.1  -104.1  -142.2  -170.5  -177.6
+  bspline  99.3   109.6   114.3   118.7   120.7   122.8   126.7   133.8   140.3
+
+A magnitude peak with a ~135° PHASE SWEEP through it, in razor alone; bspline
+walks smoothly 99 → 140 Ω across the same window with no feature at all.  That
+reads as a spurious pole in razor's ASSEMBLY, and ``--mode direct --eps-r 3.0``
+confirms it is not the Sommerfeld evaluation: grid 2466.91 % against direct
+2470.40 %, so the one-soil exoneration above survives its worst corner.
+
+**Correcting the reading this probe reached one run earlier.**  The ε_r = 5
+σ-sweep's monotone fall (300 → 116 Ω) looked like momwire#282 stage 2's "a
+loss term must vanish with σ" shape.  It is not: ε_r = 5 sits on the
+resonance's SHOULDER, and what σ damps there is the pole.  Clear of it at
+ε_r = 20 the trend REVERSES (26.6 → 116 Ω).  So #282's σ resemblance is not
+confirmed, and the earlier note claiming it was is superseded by the
+orthogonal sweep.  ε_r ≈ 3 is also outside real ground (5-81), which is why
+no captured deck meets the pole — it is a diagnostic pointer, not a user
+symptom.
 
 Runs the binary in ``--mode direct`` / ``--mode reflcoef``, so: antennaknobs
 venv, ``NEC5_EXE`` set.
@@ -194,6 +233,16 @@ DIRECT_HEIGHTS = (1.09e-4, 1e-3, 3e-3, 1e-2)
 # and one clean, so a soil-independent ratio can be told from a soil-dependent
 # one at each depth rather than only at the worst.
 SOIL_HEIGHTS = (1.09e-4, 1e-3, 3e-3, 1e-2)
+
+# The two ORTHOGONAL half-space axes, momwire#282 stage 2's shape.  The five
+# golden soils confound σ with ε_r — `diel` is both the least conductive and
+# the least dense, `sea` both the most — so neither can be read off them.
+# `sigma` holds ε_r at poor soil's 5.0 and walks the conductivity through five
+# decades; `epsr` holds σ small enough that the loss tangent stays ≲ 0.1
+# everywhere on the sweep and walks the permittivity.
+SIGMA_SWEEP = (0.0, 1e-6, 1e-5, 1e-4, 3e-4, 1e-3, 3e-3, 1e-2, 3e-2, 1e-1)
+EPSR_SWEEP = (1.05, 1.2, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 8.0, 13.0, 20.0, 40.0, 81.0)
+AXIS_HEIGHTS = (1.09e-4, 1e-3, 1e-2)
 
 
 def medium_eps_t() -> complex:
@@ -422,7 +471,7 @@ def with_direct_grid(fn, rtol: float):
             mod._acc = acc
 
 
-def mode_direct(rtol: float) -> list[dict]:
+def mode_direct(rtol: float, soil: tuple[float, float] = SOIL) -> list[dict]:
     exe = Path(os.path.expanduser(os.environ.get("NEC5_EXE", "")))
     if not exe.is_file():
         raise SystemExit(f"NEC5_EXE not found: {exe}")
@@ -437,7 +486,8 @@ def mode_direct(rtol: float) -> list[dict]:
     eng = NEC5Engine(make_dipole(20), ground=None, capture_dir=captures)
 
     print("0033 against the binary, shipped grid vs direct evaluation")
-    print(f"direct rtol = {rtol:g}; lambda = {WL:.2f} m\n")
+    print(f"direct rtol = {rtol:g}; lambda = {WL:.2f} m")
+    print(f"soil: eps_r = {soil[0]}, sigma = {soil[1]}\n")
     hdr = (
         f"{'h/lambda':>10} {'trunk':>11} | {'nec5cl':>21} | "
         f"{'grid':>21} {'err%':>8} | {'direct':>21} {'err%':>8} | {'calls':>8}"
@@ -447,7 +497,7 @@ def mode_direct(rtol: float) -> list[dict]:
 
     rows = []
     for hw in DIRECT_HEIGHTS:
-        text = deck(hw * WL)
+        text = deck(hw * WL, soil=soil)
         z_ref = complex(eng.run_deck(text)[0][0][2])
         for trunk in TRUNKS:
             z_grid = momwire_z(text, trunk)
@@ -672,23 +722,152 @@ def mode_soil() -> list[dict]:
     return rows
 
 
+def mode_axis(
+    which: str,
+    *,
+    values: tuple[float, ...] | None = None,
+    heights: tuple[float, ...] | None = None,
+    trunks: tuple[str, ...] = ("razor-nec5",),
+    hold_eps: float = 5.0,
+) -> list[dict]:
+    """The overshoot along ONE half-space axis, with the other held.
+
+    The soil mode found the ground correction overshooting 2.6-4.4x on the
+    four conducting soils and 61x on the lossless dielectric, which resembles
+    momwire#282 stage 2's contact discrepancy — single-peaked in ε_r, falling
+    monotonically in σ.  But the five golden soils confound the two axes
+    (``diel`` is the least conductive AND the least dense; ``sea`` is both the
+    most), so the resemblance cannot be read off them.  These are #282's own
+    two orthogonal sweeps, asked at grazing.
+
+    A LOSS story has to vanish with σ.  If the overshoot is largest at σ = 0
+    and falls monotonically as the ground becomes conductive, the resemblance
+    is real and #282's stage-2 record is machinery rather than analogy.  If it
+    is flat in σ and structured in ε_r alone, the two findings only look
+    alike.
+
+    The loss tangent is printed because it, not σ, is what says whether a
+    half-space is "lossy" at a given frequency: at 1.832 MHz average soil's
+    tan δ is 3.8 and the lossless dielectric's is 0.039, which is the gap the
+    soil mode was actually straddling.
+    """
+    exe = Path(os.path.expanduser(os.environ.get("NEC5_EXE", "")))
+    if not exe.is_file():
+        raise SystemExit(f"NEC5_EXE not found: {exe}")
+    sys.path.insert(0, str(Path.home() / "antennas/antennaknobs/scripts"))
+    from antennaknobs.engines.nec5 import NEC5Engine
+    from bench_nec5_walk_why import make_dipole
+
+    captures = Path(
+        os.environ.get("GRAZING_CAPTURES", "/tmp/claude-1000/510-grazing-captures")
+    )
+    captures.mkdir(parents=True, exist_ok=True)
+    eng = NEC5Engine(make_dipole(20), ground=None, capture_dir=captures)
+
+    omega = 2.0 * np.pi * FREQ_MHZ * 1e6
+    if which == "sigma":
+        cases = [(hold_eps, s) for s in (values or SIGMA_SWEEP)]
+        print(f"sigma axis at eps_r = {hold_eps} — a LOSS term must vanish with sigma")
+    else:
+        cases = [(e, 1e-5) for e in (values or EPSR_SWEEP)]
+        print("eps_r axis at sigma = 1e-5 — loss tangent <= 0.1 throughout")
+    print(f"ground correction Z(GN 0) - Z(GN 1), {', '.join(trunks)}\n")
+
+    rows = []
+    for hw in heights or AXIS_HEIGHTS:
+        z_pec = complex(eng.run_deck(deck(hw * WL, pec=True))[0][0][2])
+        print(f"h/lambda = {hw:<9.3g}   Z(GN 1) = {z_pec.real:.4f}{z_pec.imag:+.4f}j")
+        hdr = (
+            f"   {'eps_r':>7} {'sigma':>9} {'tan_d':>9} {'trunk':>11} | "
+            f"{'true':>20} | {'momwire':>20} | {'|ratio|':>9} {'arg':>7} | "
+            f"{'|err|':>10}"
+        )
+        print(hdr)
+        print("   " + "-" * (len(hdr) - 3))
+        for eps_r, sigma in cases:
+            text = deck(hw * WL, soil=(eps_r, sigma))
+            z_ref = complex(eng.run_deck(text)[0][0][2])
+            d_true = z_ref - z_pec
+            tan_d = sigma / (omega * EPS0 * eps_r)
+            for trunk in trunks:
+                z_mw = momwire_z(text, trunk)
+                if z_mw is None:
+                    continue
+                d_mw = z_mw - z_pec
+                ratio = d_mw / d_true if abs(d_true) > 0 else complex("nan")
+                print(
+                    f"   {eps_r:>7.2f} {sigma:>9.3g} {tan_d:>9.3g} {trunk:>11} | "
+                    f"{d_true.real:>9.4f}{d_true.imag:>+9.4f}j | "
+                    f"{d_mw.real:>9.4f}{d_mw.imag:>+9.4f}j | "
+                    f"{abs(ratio):>9.3f} {np.degrees(np.angle(ratio)):>6.1f}d | "
+                    f"{abs(d_mw - d_true):>10.4f}",
+                    flush=True,
+                )
+                rows.append(
+                    dict(
+                        axis=which,
+                        h_over_wl=hw,
+                        eps_r=eps_r,
+                        sigma=sigma,
+                        tan_delta=tan_d,
+                        trunk=trunk,
+                        z_pec=[z_pec.real, z_pec.imag],
+                        d_true=[d_true.real, d_true.imag],
+                        d_momwire=[d_mw.real, d_mw.imag],
+                        ratio_mag=abs(ratio),
+                        ratio_arg_deg=float(np.degrees(np.angle(ratio))),
+                        abs_err=abs(d_mw - d_true),
+                    )
+                )
+        print()
+    return rows
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument(
-        "--mode", choices=("theta", "direct", "reflcoef", "soil"), default="theta"
+        "--mode",
+        choices=("theta", "direct", "reflcoef", "soil", "sigma", "epsr"),
+        default="theta",
     )
     p.add_argument("--rtol", type=float, default=1e-11)
+    # `--mode direct`'s first run was on average soil alone, and the eps_r
+    # axis then found a 2480 ohm peak at eps_r = 3 with no loss in it. An
+    # exoneration measured at one half-space does not cover that one, so the
+    # soil is settable and the peak gets asked the same question.
+    p.add_argument("--eps-r", type=float, default=None)
+    p.add_argument("--sigma", type=float, default=1e-5)
+    # Axis-mode overrides, for resolving a feature the default lattice only
+    # samples: the eps_r sweep found a 2480 ohm spike between its 2.5 and 4.0
+    # rungs and how SHARP that spike is decides whether it reads as a pole.
+    p.add_argument("--values", type=float, nargs="+", default=None)
+    p.add_argument("--heights", type=float, nargs="+", default=None)
+    p.add_argument("--trunks", nargs="+", default=["razor-nec5"])
+    # Which eps_r the sigma axis holds. Default 5.0 is poor soil's, which sits
+    # on the SHOULDER of razor's eps_r ~ 3.1 spike -- so a second sigma sweep
+    # well clear of it is what separates "loss damps a pole" from "loss damps
+    # the shared grazing error".
+    p.add_argument("--hold-eps", type=float, default=5.0)
     p.add_argument("--out", default=None)
     args = p.parse_args()
 
     if args.mode == "theta":
         rows = mode_theta()
     elif args.mode == "direct":
-        rows = mode_direct(args.rtol)
+        soil = SOIL if args.eps_r is None else (args.eps_r, args.sigma)
+        rows = mode_direct(args.rtol, soil)
     elif args.mode == "reflcoef":
         rows = mode_reflcoef()
-    else:
+    elif args.mode == "soil":
         rows = mode_soil()
+    else:
+        rows = mode_axis(
+            args.mode,
+            values=tuple(args.values) if args.values else None,
+            hold_eps=args.hold_eps,
+            heights=tuple(args.heights) if args.heights else None,
+            trunks=tuple(args.trunks),
+        )
     if args.out:
         Path(args.out).write_text(json.dumps(rows, indent=2))
         print(f"\nwrote {args.out}")
