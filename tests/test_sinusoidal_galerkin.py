@@ -2988,7 +2988,26 @@ def test_sommerfeld_fill_streams_the_remainder(monkeypatch):
 # M5b corrections used to amplify by ~40×, comes in at 2e-17. One gate covers
 # both; see the #203 section at the bottom for the before/after table.
 
-SPARSE_ASSEMBLY_AGREEMENT = 1e-15  # measured 1.1e-16 - 1.5e-16 on this set
+# Dense-vs-sparse assembly agreement. This measures REASSOCIATION, not
+# arithmetic: the two paths reduce the same contributions in different orders
+# (a dense zgemm whose k-blocking BLAS picks off the operand shape, against a
+# CSC matmul summing each column's nonzeros in storage order).
+#
+# The bar was 1e-15, on a measured 1.1e-16 - 1.5e-16. That was under the
+# floor: `SinusoidalSolver._assemble_Z`'s own comment records dense-path
+# reassociation at 8.6e-15 relative on this codebase, so 1e-15 was pinning a
+# quantity whose documented spread is an order LARGER than the bar. It held
+# only because the particular values kept it small, and it stopped holding on
+# macOS (Accelerate, not OpenBLAS) at 1.037e-14 the moment momwire#606's
+# closed-form `AC` moved the port columns by ~4e-15 — which is an accuracy
+# IMPROVEMENT: against an 80-bit reference the float sum `A + C` carries
+# 3.66e-15 relative on these entries and the closed form 1.66e-16.
+#
+# Set from the documented reassociation scale instead: one decade above the
+# 8.6e-15 figure. Measured spread across this set after #606 is 4e-21 to
+# 4e-18 on Linux, so there is still four orders of headroom for a real
+# regression to land in.
+SPARSE_ASSEMBLY_AGREEMENT = 1e-13
 # How far either spelling sits from the EXACT product of the same float64
 # contributions — a different quantity from the gate above (which is how far
 # they sit from each other) and a looser one, because it grows with mesh:
