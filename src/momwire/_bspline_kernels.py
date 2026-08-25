@@ -415,8 +415,27 @@ def _ek_axis_groups(seg_l, seg_r, tangents, seg_a, tol=1e-6):
       IND = 2 (bend, radius step,       agrees where both ends are reduced;
                K ≥ 3 junction)          strictly MORE conservative on the
                                         cross-arm pairs NEC still extends
-                                        (~1 % of Z at Δ/a = 2, and O(h) in
-                                        the refinement limit — #249 §4.3)
+                                        (≤ 0.27 % of Z at Δ/a = 2, MEASURED
+                                        — momwire#272)
+
+    #249 §4.3 estimated that last cost at "~1 % at Δ/a = 2, and O(h) in the
+    refinement limit". momwire#272 measured it by forcing this function to a
+    single label — which extends EVERY pair, strictly more than NEC's per-end
+    gating does — and diffing against the shipped rule, so the reading is an
+    upper bound with no cross-solver noise in it (the straight-wire control
+    reads 0.00000 %, by construction: nothing is declined there). Both halves
+    of the estimate came back changed:
+
+      the size    ≤ 0.27 % (bent) / 0.21 % (K=3) at Δ/a = 2, four times inside
+                  the 1 % the estimate named, and falling to 0.004 % by Δ/a = 25
+      the order   O(a), NOT O(h). Refining six-fold at FIXED radius — the only
+                  sweep in which h moves and a/λ does not — moves the bound by
+                  a few percent of itself, while the radius sweep moves it
+                  60-fold. The cost is set by how fat the wire is, not by how
+                  finely it is meshed, and it cannot be refined away.
+
+    The practical reading is unchanged, and better: the rule is vindicated at
+    any radius a thin-wire code is valid for. Only the variable was wrong.
 
     seg_l, seg_r: (N, 3) segment endpoints. tangents: (N, 3) unit tangents.
     seg_a: (N,) per-segment radii. Returns an (N,) int64 label array; every

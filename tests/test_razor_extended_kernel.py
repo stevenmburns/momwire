@@ -190,8 +190,10 @@ def test_d_the_taper_deck_holds_the_bar_in_dr_and_is_recorded_in_dx():
     Nine radius STEPS separate this from the `fat` control, and momwire's
     eligibility rule declines to extend ACROSS a step (it extends only
     coaxial EQUAL-radius pairs) where NEC still extends some cross-arm pairs
-    at an `IND = 2` junction — strictly more conservative, and O(h) in the
-    refinement limit (#249 §4.3). That conservatism is what the dX spread
+    at an `IND = 2` junction — strictly more conservative, and worth ≤ 0.27 %
+    of Z at Δ/a = 2 (momwire#272 measured it; the O(h) the #249 §4.3 estimate
+    named is wrong — the cost is O(a) and does not refine away). That
+    conservatism is what the dX spread
     measures, so it is recorded at its measured level rather than gated at a
     bar the rule cannot hold, and the reduced row's own dX (0.340) is carried
     beside it so the comparison is not lost.
