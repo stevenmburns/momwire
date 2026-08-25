@@ -38,7 +38,6 @@ Scope (deliberately narrow):
 from collections import namedtuple
 from dataclasses import dataclass
 
-import warnings
 
 import numpy as np
 import scipy.linalg
@@ -1829,11 +1828,126 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         g1p = gp * zz
         return gz, g1p, gz / rhx, g1p / rhx, gp * rhx, np.zeros_like(gz)
 
-    def _extended_kernel_fields(self, k, H, z_eval, rho_eval, src_a, ind1, ind2):
+    def _ek_rho_cos1_gap(self, k, z1, z2, rhx, rh, b, ind1, ind2, swap):
+        """`X = Ψ(z₂) − Ψ(z₁)` for EKSCX's ρ-tables, cancellation-free (#614).
+
+        `Ψ(ζ) = ζ·G2P + G2 + G3` on the six values `_ek_end_gxx`/`_ek_end_gx`
+        return, and `X` is the combination EKSCX's `Erho_cos` and
+        `Erho_const` differ by:
+
+            Erho_cos − Erho_const
+                = −con·[ X + D·(cos kH − 1) + (z₂G2₂ + z₁G2₁)·sin(kH)·k ]
+
+        `X` is O((kΔ)²) — it has to be, since cos kξ → 1 makes the cos-shape
+        ρ-field the const-shape one — but the literal combination is a sum of
+        O(1) terms and bottoms out at ε: measured 8.8e-16 relative at
+        kΔ = 1.9e-8, i.e. no correct digits, and floored at ~3e-13 absolute
+        from kΔ = 1.9e-6 down. This is its closed form.
+
+        The derivation, per END. With `r² = ζ² + rh²` the three returns group
+        so that the `rh` powers cancel:
+
+            Ψ = [r²·g2pᴸ + g2ᴸ + 2rh²·gzp_t] / rh
+              = gz·[ (1 − c1) + t1·(c3 + 5·c2) ] / rh
+
+        and both brackets collapse exactly: `1 − c1 = −j·kr`, while
+
+            c3 + 5c2 = (6 + j·kr)kr² − 15c1 + 15c1 − 5kr² = kr²·c1
+
+        leaving, since `gz·kr = k·e^{−jkr}`,
+
+            Ψ_IRA0 = k·e^{−jkr}·(−j + t1·kr·c1) / rh.
+
+        The other two arms fall out of the same algebra:
+
+            Ψ_IRA1 = −½·b·k²·e^{−jkr} / r      (0.5c2 − 1.5c1 = −½kr²)
+            Ψ_GX   = −j·k·e^{−jkr} / rhx       (the b → 0 limit)
+
+        Only the `−j·k·e^{−jkr}` term is O(k) rather than O(k²), so only its
+        difference between the two ends needs care — and there the exponential
+        difference is spelled `e^{−jkr₁}·(e^{−jk(r₂−r₁)} − 1)` through
+        `_expm1_neg_j`, with
+
+            r₂ − r₁ = (z₂² − z₁²)/(r₁ + r₂) = −4·H·z/(r₁ + r₂)
+
+        so neither the exponential nor the square-root difference is a
+        subtraction of two quantities about to agree.
+
+        That leading term always carries the `rhx` denominator, on every arm
+        that has one: `IRA1` replaces `IRA0` exactly when `swap` is set, and
+        `swap` is exactly when `rh` and `rhx` differ — so an `IRA0` end always
+        has `rh == rhx`, and a `GX` end uses `rhx` by NEC's own choice
+        (f.3195-3207). The two ends can therefore share one radius.
+        """
+        z1 = np.asarray(z1)
+        z2 = np.asarray(z2)
+        # GX/IRA0 radius (they coincide wherever both can occur; see above).
+        r1 = np.sqrt(z1 * z1 + rhx * rhx)
+        r2 = np.sqrt(z2 * z2 + rhx * rhx)
+        e1 = np.exp(-1j * k * r1)
+        e2 = np.exp(-1j * k * r2)
+
+        ext1 = ind1 != 2
+        ext2 = ind2 != 2
+        # Which ends carry the O(k) leading term at all: everything but IRA1.
+        lead1 = ~(ext1 & swap)
+        lead2 = ~(ext2 & swap)
+
+        # (z₂² − z₁²)/(r₁ + r₂) — exact, and free of the sqrt subtraction.
+        dr = (z2 * z2 - z1 * z1) / (r1 + r2)
+        both = lead1 & lead2
+        # Paired: one stable expm1. Otherwise at most one term survives, so
+        # the plain difference is already at the answer's size.
+        d_lead_paired = e1 * _expm1_neg_j(k * dr)
+        d_lead_plain = np.where(lead2, e2, 0.0) - np.where(lead1, e1, 0.0)
+        d_lead = np.where(both, d_lead_paired, d_lead_plain)
+        out = -1j * k * d_lead / rhx
+
+        # The O(k²) remainder, per end, on whichever arm that end took.
+        def _q(zz, rr, ee, ext):
+            r2_ = rr * rr
+            c1 = 1.0 + 1j * k * rr
+            t1 = 0.25 * (b * b) * (rh * rh) / (r2_ * r2_)
+            q_ira0 = (k * k) * rr * t1 * c1 * ee / rh
+            q_ira1 = -0.5 * b * (k * k) * ee / rr
+            q = np.where(swap, q_ira1, q_ira0)
+            return np.where(ext, q, np.zeros_like(q))
+
+        # IRA1's own radius is built on `rh`, not `rhx`; they differ only
+        # where `swap`, which is exactly where IRA1 is the arm.
+        r1h = np.where(swap, np.sqrt(z1 * z1 + rh * rh), r1)
+        r2h = np.where(swap, np.sqrt(z2 * z2 + rh * rh), r2)
+        e1h = np.where(swap, np.exp(-1j * k * r1h), e1)
+        e2h = np.where(swap, np.exp(-1j * k * r2h), e2)
+        out = out + _q(z2, r2h, e2h, ext2) - _q(z1, r1h, e1h, ext1)
+        return out
+
+    def _extended_kernel_fields(
+        self, k, H, z_eval, rho_eval, src_a, ind1, ind2, cos_shape="cos"
+    ):
         """NEC's EKSCX (f.3170-3234) — the extended-kernel field tables.
 
         Drop-in replacement for the reduced-kernel body of
         `_field_components_bcast`, returning the same six per-shape tables.
+
+        `cos_shape` picks the third source shape exactly as
+        `_field_components_bcast` documents. `"cos-1"` (momwire#614) is NOT a
+        second kernel: it is the SAME G-quantities rearranged, because the
+        folded shape is `cos kξ − 1` and EKSCX's own `cos` and `const` tables
+        already carry both halves. Subtracting them ALGEBRAICALLY leaves only
+        terms that are explicitly O((kΔ)²) —
+
+            Ez:   (g1₂+g1₁)·ss·k, (g1p₂−g1p₁)·(cs−1),
+                  k²(1−bk2)·int_G0, bk2·d_gzz
+            Erho: X, D·(cs−1), (z₂G2₂+z₁G2₁)·ss·k
+
+        — where `cs − 1` is spelled `−2sin²(kH/2)` and `X` comes from
+        `_ek_rho_cos1_gap`'s closed form. Subtracting them NUMERICALLY does
+        not work and is the trap this route exists to avoid: measured on a
+        fat-wire deck, `(|cos|+|const|)/|cos−const|` is 4.3e8 at kΔ = 1.9e-4
+        and 1.4e16 at 1.9e-8, so the difference of the two computed tables has
+        no digits left exactly where the folded shape is wanted.
+
         `H` is the source HALF length, `z_eval` the observer's axial
         coordinate in the source frame, `rho_eval` the a-regularized radial
         distance (NEC's RHX out of EFLD), `src_a` the SOURCE segment's radius
@@ -1841,6 +1955,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         regularizes with), and `ind1`/`ind2` the per-end gating codes from
         `_ek_gating`, broadcastable against the source axis.
         """
+        if cos_shape not in ("cos", "cos-1"):
+            raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
         # f.3186-3192: order the two lengths so RH is the larger. When the
         # observation point falls inside the source conductor the roles trade
         # and IRA is set; every downstream use of RH — including the INTX
@@ -1929,6 +2045,24 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         bk2 = 0.25 * bk * bk
         d_gzz = gzz_2 - gzz_1  # named: `bk2 * (…)` would otherwise elide (#392)
         ez_const = -con * (g1p_2 - g1p_1 + k * k * (1.0 - bk2) * int_G0 - bk2 * d_gzz)
+        if cos_shape == "cos-1":
+            # The folded shape, algebraically (momwire#614). `cs - 1` is the
+            # only place a subtraction could hide, and it is spelled as its
+            # half-angle square; every other term already carries an explicit
+            # k², k·ss or bk2 factor.
+            half_h = np.sin(0.5 * k * H)
+            cs_m1 = -2.0 * half_h * half_h
+            ez_cos = -con * (
+                (g1_2 + g1_1) * ss * k
+                + (g1p_2 - g1p_1) * cs_m1
+                - k * k * (1.0 - bk2) * int_G0
+                + bk2 * d_gzz
+            )
+            d_g2p = z2 * g2p_2 - z1 * g2p_1 + g2_2 - g2_1
+            x_gap = self._ek_rho_cos1_gap(
+                k, z1, z2, rhx, rh, b, ind1, ind2, swap if any_swap else False
+            )
+            erho_cos = -con * (x_gap + d_g2p * cs_m1 + (z2 * g2_2 + z1 * g2_1) * ss * k)
         return {
             "Erho_const": erho_const,
             "Ez_const": ez_const,
@@ -2170,16 +2304,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     )
                 ek_pairs = ek
             else:
-                if cos_shape != "cos":
-                    raise NotImplementedError(
-                        "the point-matched extended kernel (per-end IND "
-                        "gating) serves cos_shape='cos' only; pass "
-                        "_EKPairs(src_a, eligible) for the folded Galerkin "
-                        "shape (momwire#246)"
-                    )
+                # Both shapes since momwire#614: EKSCX's folded tables are the
+                # same G-quantities rearranged, so the per-end IND contract
+                # serves `cos-1` without the pair-rule payload. (Before #614
+                # this raised — right at the time, since the only folded route
+                # then known went through `_EKPairs`.)
                 src_a, ind1, ind2 = ek
                 tables = self._extended_kernel_fields(
-                    k, H, z_eval, rho_eval, src_a, ind1, ind2
+                    k, H, z_eval, rho_eval, src_a, ind1, ind2, cos_shape=cos_shape
                 )
                 tables["td"] = td
                 tables["rho_proj_factor"] = rho_proj_factor
@@ -3896,37 +4028,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # ε·‖Φ_c‖ the reformulation exists to remove, and `Φ_d @ σC` is 84 %
         # of the fill at kΔ = 2.1e-4, not a correction term.
         #
-        # The point-matched EXTENDED kernel is literal-cos only — momwire#246
-        # left the folded EKSCX forms unwired, and its guard raises rather
-        # than quietly serving the wrong shape. So an EK-on solve keeps the
-        # literal path at every kΔ: unfixed, not newly broken (it gets exactly
-        # the answer it got before #606), and refusing would turn a
-        # working-if-degraded configuration into a crash.
-        #
-        # But it does NOT get to be silent about it. A silent fallback here is
-        # the same failure #246's guard exists to prevent, one level up: the
-        # caller asked for a regime this fill cannot serve accurately and would
-        # otherwise be handed a number with no digits in it and no signal. The
-        # warning is the signal, and `_WELL_SCALED_KD` is in it so the reader
-        # can see how far into the bad regime the deck sits.
+        # The EXTENDED kernel is included since momwire#614: EKSCX's folded
+        # tables are the same G-quantities rearranged, so the per-end IND
+        # contract serves `cos-1` too and the switch is purely about kΔ.
+        # (#606 shipped with an EK carve-out and a warning; both went away
+        # with the limit they described.)
         kd_min = float(np.min(k * np.asarray(geom["seg_h"], dtype=np.float64)))
-        want_well_scaled = kd_min < _WELL_SCALED_KD
-        if want_well_scaled and self.extended_kernel:
-            warnings.warn(
-                "momwire: this deck sits at kΔ = "
-                f"{kd_min:.2e}, below the {_WELL_SCALED_KD:.1e} threshold "
-                "where SinusoidalSolver's literal {1, sin kξ, cos kξ} fill "
-                "loses ~8ε/(kΔ)² relative to cancellation (momwire#606), but "
-                "extended_kernel=True has no well-scaled path — the "
-                "point-matched EKSCX forms are literal-cos only (momwire#246). "
-                "Serving the literal fill: the feed impedance may be wrong by "
-                "percent and the N-ladder may not converge. Re-run with "
-                "extended_kernel=False for the corrected fill, or use a "
-                "sibling basis (bspline, razor).",
-                RuntimeWarning,
-                stacklevel=3,
-            )
-        cos_shape = "cos-1" if want_well_scaled and not self.extended_kernel else "cos"
+        cos_shape = "cos-1" if kd_min < _WELL_SCALED_KD else "cos"
         A_eff = sigma_arr * (seg_view["A"] if cos_shape == "cos" else seg_view["AC"])
         B_eff = seg_view["B"]
         C_eff = sigma_arr * seg_view["C"]
