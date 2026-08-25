@@ -460,7 +460,15 @@ NX
         build_solver(model, basis="razor")
 
 
-def test_a_node_gaps_deck_refuses():
+def test_a_node_gap_on_a_free_end_refuses_by_naming_the_geometry():
+    """momwire#603 U4 turned this from a FAMILY refusal into a SITE one.
+
+    Razor served no node gap at all when this test was written, so a lone
+    wire's start refused with "node gaps are not supported". It serves them
+    now, and this deck is still wrong — the named end is nobody's junction,
+    so there is no through-current path for a series EMF to sit in. The
+    refusal says that instead, which is the thing the caller can act on.
+    """
     # The nec2 dialect never emits `node_gaps`; build the model directly, as
     # a NEC-5 dialect's edge-source translation would.
     model = DeckModel(
@@ -473,7 +481,7 @@ def test_a_node_gaps_deck_refuses():
         ),
         node_gaps=((0, 0, 1 + 0j),),
     )
-    with pytest.raises(NotImplementedError, match="node_gaps"):
+    with pytest.raises(ValueError, match="not a member of any junction group"):
         build_solver(model, basis="razor", frequency_mhz=30.0)
 
 
@@ -521,7 +529,7 @@ def test_the_refusals_are_not_bare_key_or_type_errors():
     )
     try:
         build_solver(model, basis="razor", frequency_mhz=30.0)
-    except NotImplementedError:
+    except (NotImplementedError, ValueError):
         pass
     else:
         pytest.fail("expected a refusal")

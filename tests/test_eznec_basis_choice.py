@@ -130,7 +130,6 @@ def test_a_family_with_no_current_slopes_refuses_by_name():
 @pytest.mark.parametrize(
     "cid, fragment",
     [
-        ("0013", "has no node port"),  # the five-wire apex — #603 U4
         ("0021", "FINITE ground plane"),  # ground contact — #603 U5
         ("0011", "one segment long"),  # a one-segment GW — momwire#608
     ],
@@ -168,8 +167,8 @@ SERVE_MATRIX = {
     "sinusoidal": 0,
     "sinusoidal-galerkin": 0,
     "sinusoidal-galerkin-converged": 0,
-    "razor": 47,
-    "razor-nec5": 47,
+    "razor": 49,
+    "razor-nec5": 49,
 }
 
 

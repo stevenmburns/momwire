@@ -444,6 +444,19 @@ EPSC_CONDUCTIVITY_FACTOR = 59.96
 # default is the 2 this seam wants.
 BASIS = "bspline"
 
+# The families that keep the CUT spelling of a series EMF, and the whole of
+# why: their committed printouts are byte-gated against it.  Moving them
+# would move 122 files by about 2 % (:func:`build_mesh`, "Two ways to spell
+# one series EMF") — a decision about republished numbers, not about physics,
+# and not this seam's to take quietly.  `HMatrixSolver` and
+# `ArrayBlockSolver` are B-spline SUBCLASSES sharing that fill, so one
+# `issubclass` names all three and a fourth cannot be forgotten.
+#
+# Everything else gets the delta gap, which is the better spelling wherever
+# nothing is pinned to the other: it cuts no wire, invents no one-segment
+# polyline, and needs a node port only at a K >= 3 apex.
+_CUT_SPELLING = (BSplineSolver,)
+
 # Node fusion grid, metres — `momwire.deck._polylines._NODE_EPS`, the same
 # tolerance the nec2 front end decides "these two wires touch" with.  By the
 # time a deck exists its coincident ends are already exactly equal (EZNEC
@@ -1266,14 +1279,17 @@ def build_mesh(
     against the licensed engine, and a difference confined to the two basis
     ends the cut adds.
 
-    The choice is read off the solver's own :class:`~momwire._capabilities.
-    Capabilities` row rather than a list kept here, for the reason that module
-    exists: a second list is a second thing to forget when a family is added.
-    ``momwire.deck._solver``'s ``_NATIVE_LOADING`` is the same shape one axis
-    over — a per-family spelling of a port, decided where the family is known.
+    Which family cuts is :data:`_CUT_SPELLING`, and it is NOT read off
+    ``capabilities.node_gaps`` — that was momwire#603 U1's key and U4 proved
+    it a coincidence, the same "one integer meaning two things" defect
+    momwire#588 was.  "Has a node-gap port" and "wants the cut" happened to
+    name the same four families on the day U1 was written.  They stopped:
+    ``RazorSolver`` gained the port for the K >= 3 apex (U4) and still wants
+    the delta gap everywhere else, because the cut is what manufactures the
+    one-segment polylines it refuses.
     """
     mesh = _Mesh()
-    node_gaps = bool(solver_class.capabilities.node_gaps)
+    cut = issubclass(solver_class, _CUT_SPELLING)
     addressed = _addressed_nodes(deck)
     piece_of_node: dict[tuple[int, int], tuple[int, str]] = {}
     # (tag, node) -> (piece, metres along it), for an addressed node STRICTLY
@@ -1286,7 +1302,7 @@ def build_mesh(
         addressed_inside = sorted(
             k for k in addressed.get(wire.tag, ()) if 0 < k < last
         )
-        bounds = [0, *addressed_inside, last] if node_gaps else [0, last]
+        bounds = [0, *addressed_inside, last] if cut else [0, last]
         for a, b in zip(bounds[:-1], bounds[1:], strict=True):
             index = len(mesh.pieces)
             mesh.pieces.append(
@@ -1344,7 +1360,7 @@ def build_mesh(
                 inside_piece,
                 tag,
                 node,
-                node_gaps=node_gaps,
+                node_gaps=cut,
             )
             site.index = len(mesh.sites)
             mesh.sites.append(site)

@@ -254,7 +254,6 @@ def test_razor_ground_contact_is_served_at_a_wire_end():
     "cell,kwarg",
     [
         ("junction_ports", {"junction_ports": [0]}),
-        ("node_gaps", {"node_gaps": [(0, "end", 1.0 + 0j)]}),
     ],
 )
 def test_razor_out_of_scope_kwargs_refuse(cell, kwarg):
@@ -337,10 +336,13 @@ def test_razor_served_row_is_every_ground_plus_loading_radii_and_the_kernel():
     assert not any(
         [
             c.junction_ports,
-            c.node_gaps,
             c.singular_enrichment,
         ]
     )
+    # momwire#603 U4 filled this cell: the K-1 through-current tents were
+    # always built, only the port that drives one was missing.
+    assert c.node_gaps
+    assert c.refusal("node_gaps") is None
 
 
 # --------------------------------------------------------------------------
