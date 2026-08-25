@@ -140,7 +140,13 @@ def _num(x: float) -> str:
     return f"{float(x):.8E}"
 
 
-def deck(h: float, *, n_seg: int = N_SEG, pec: bool = False) -> str:
+def deck(
+    h: float,
+    *,
+    n_seg: int = N_SEG,
+    pec: bool = False,
+    soil: tuple[float, float] = SOIL,
+) -> str:
     """0033, translated to radial height ``h``.
 
     The structure above the radial plane is unchanged: the vertical keeps its
@@ -159,7 +165,7 @@ def deck(h: float, *, n_seg: int = N_SEG, pec: bool = False) -> str:
             f"GW {tag},{n_seg},0.,0.,{_num(h)},"
             f"{_num(dx)},{_num(dy)},{_num(h)},{_num(RADIUS)}"
         )
-    gn = "GN 1,0,0,0" if pec else f"GN 0,0,0,0,{_num(SOIL[0])},{_num(SOIL[1])},1.,0."
+    gn = "GN 1,0,0,0" if pec else f"GN 0,0,0,0,{_num(soil[0])},{_num(soil[1])},1.,0."
     return (
         "CM momwire#510 — elevated radial system, grazing-height sweep\n"
         f"CM h = {h:.6g} m = {h / WL:.4g} wavelengths\nCE\n"
