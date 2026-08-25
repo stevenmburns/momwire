@@ -271,29 +271,37 @@ def test_the_junction_gap_is_signed_off_side_a_and_not_arrival_order():
 # --------------------------------------------------------------------------
 # the corpus reaches razor
 
-# What each capture razor-nec5 still cannot serve is refused BY, both of them
-# named and neither a drive spelling.  Written out rather than counted so that
-# a deck moving between rows is a diff.
-CONTACT_OVER_FINITE_GROUND = ("0021", "0047", "0048", "0110", "0111")
-# The near-field point at the base of a contact-fed monopole, which the seam
-# refuses under EVERY basis (`test_eznec_serve.py`'s module docstring).
-REFUSED_UNDER_BSPLINE_TOO = ("0022", "0107", "0112")
-# The five-wire apexes (0013, 0033) were here until momwire#603 U4 gave razor
-# the node-gap port; they serve now.  So do the five that declare a genuine
-# one-segment ``GW`` (0011, 0029, 0030, 0034, 0035): momwire#608 narrowed that
-# refusal to the wire it is actually true of, one junctioned at neither end,
-# and the corpus has none.
-UNSERVED = CONTACT_OVER_FINITE_GROUND + REFUSED_UNDER_BSPLINE_TOO
+# What razor-nec5 still cannot serve, written out rather than counted so that
+# a deck moving between rows is a diff.  There is ONE row left and it is not
+# razor's: the near-field point at the base of a contact-fed monopole, which
+# the seam refuses under EVERY basis (`test_eznec_serve.py`'s module
+# docstring).
+REFUSED_UNDER_EVERY_BASIS = ("0022", "0107", "0112")
+# Emptied rows, kept as history because each one is a refusal that turned out
+# to be narrower than it read:
+#   the five-wire apexes (0013, 0033) — momwire#603 U4 gave razor the node-gap
+#     port and they serve;
+#   the five declaring a genuine one-segment ``GW`` (0011, 0029, 0030, 0034,
+#     0035) — momwire#608 narrowed that refusal to the wire it is actually
+#     true of, one junctioned at neither end, and the corpus has none;
+#   CONTACT OVER A FINITE GROUND (0021, 0047, 0048, 0110, 0111) — momwire#624
+#     measured what the refusal protected and served the row.
+UNSERVED = REFUSED_UNDER_EVERY_BASIS
 
 
 @pytest.mark.parametrize("cid", CAPTURE_IDS)
-def test_razor_nec5_serves_every_capture_but_the_eight_named(cid):
-    """11 of 62 before U1, 49 after U4, 54 after #608, and 8 refuse by name.
+def test_razor_nec5_serves_every_capture_but_the_three_named(cid):
+    """11 of 62 before U1, 49 after U4, 54 after #608, 59 after #624.
 
     The unit's headline gate, driven through the real seam since U3 made the
     basis selectable.  A deck that starts serving belongs in neither list and
     should be taken OUT of :data:`UNSERVED`; a deck that stops is a
     regression this catches by name rather than by count.
+
+    The three that remain are not razor's limit — every basis in the roster
+    refuses them, for what their ``NE`` card asks for rather than for
+    anything about a formulation. So razor's own list is EMPTY, which is
+    what momwire#635's parity gate now states as an equality.
 
     Every unserved deck comes back as a PRINTOUT carrying a ``NEC ERROR``
     line, never as an exception — which is the whole point of routing the
