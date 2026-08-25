@@ -162,14 +162,31 @@ def sockets(room: str) -> list[str]:
     return sorted(n for n in os.listdir(room) if n.endswith(".sock"))
 
 
-def run_client(room: str, decks: str = "", *args: str, timeout: float = 300.0):
+def run_client(
+    room: str,
+    decks: str = "",
+    *args: str,
+    timeout: float = 300.0,
+    env: dict[str, str] | None = None,
+    argv: list[str] | None = None,
+):
+    """One client run. ``env`` overlays the inherited environment (a ``None``
+    value unsets a name), and ``argv`` replaces the command — the two knobs the
+    momwire#628 gates need, since the bug was about basis sources that are
+    neither flags nor decks."""
+    room_env = {**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": room}
+    for name, value in (env or {}).items():
+        if value is None:
+            room_env.pop(name, None)
+        else:
+            room_env[name] = value
     return subprocess.run(
-        [*CLIENT_ARGV, *args],
+        [*(argv or CLIENT_ARGV), *args],
         input=decks,
         capture_output=True,
         text=True,
         timeout=timeout,
-        env={**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": room},
+        env=room_env,
     )
 
 
@@ -667,6 +684,191 @@ def test_the_key_carries_the_version_and_the_interpreter(monkeypatch):
     monkeypatch.undo()
     monkeypatch.setattr(sys, "executable", "/nowhere/python3")
     assert client.config_key([], 900.0) != baseline
+
+
+# --- the engine is all three sources, not just the flag (momwire#628) -------
+#
+# `configure_engine` resolves a basis from an explicit `--basis`, from the
+# executable's NAME, and from `MOMWIRE_NEC2C_BASIS`, in that order. Only the
+# first is on the command line, and the command line is all `config_key` can
+# see — so the other two used to be invisible to the socket identity: two
+# clients that had chosen different engines collided on ONE server and the
+# loser was answered under the other's physics, with a banner naming it.
+# `resolve_engine` spells the choice as a flag before anything hashes or
+# spawns, which is what these gates hold.
+
+
+def test_the_clients_basis_roster_is_the_engines_own():
+    """Duplicated because the client may not import momwire — the same trade
+    `probe_version` makes — so it has to be pinned against the original. A
+    basis added to the engine and not here would be REFUSED by the client of
+    an engine that supports it, which is why this is a failure and not a
+    comment."""
+    assert list(client.BASIS_NAMES) == sorted(nec_portal._BASES)
+    assert client._CHOICES == ", ".join(sorted(nec_portal._BASES))
+
+
+@pytest.mark.parametrize(
+    "prog,expected",
+    [
+        # The bare command names no basis, exactly as plain `momwire-nec2c`
+        # does — `shared` is this sibling's name, not a solver.
+        ("momwire-nec2c-shared", None),
+        ("/opt/venv/bin/momwire-nec2c-shared", None),
+        # Its own spelling.
+        ("momwire-nec2c-shared-razor", "razor"),
+        ("momwire-nec2c-shared-sinusoidal-galerkin", "sinusoidal-galerkin"),
+        # The STOCK spelling, which the #528 docs teach: a user who copies
+        # this command to that name has named a basis, and serving them the
+        # default instead is the silent wrong answer #628 is about.
+        ("momwire-nec2c-razor", "razor"),
+        # Windows, and the names that select nothing.
+        ("C:\\Program Files\\momwire-nec2c-shared-razor.exe", "razor"),
+        ("momwire-nec2c", None),
+        ("python", None),
+        # Validation is the caller's, here as in `_portal._filename_basis`.
+        ("momwire-nec2c-shared-nope", "nope"),
+    ],
+)
+def test_the_executable_name_selects_the_basis_the_way_the_stock_engine_does(
+    prog, expected
+):
+    assert client.filename_basis(prog) == expected
+
+
+def test_the_three_sources_keep_the_engines_own_precedence(monkeypatch):
+    """`--basis` beats the filename beats the environment — `configure_engine`'s
+    order, which the client now has to reproduce because it resolves first."""
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "hmatrix")
+    flag, error = client.resolve_engine(
+        ["--basis", "razor"], prog="momwire-nec2c-shared-sinusoidal"
+    )
+    assert error is None and flag == ["--basis", "razor"]
+
+    name, error = client.resolve_engine([], prog="momwire-nec2c-shared-sinusoidal")
+    assert error is None and name == ["--basis", "sinusoidal"]
+
+    env, error = client.resolve_engine([], prog="momwire-nec2c-shared")
+    assert error is None and env == ["--basis", "hmatrix"]
+
+    monkeypatch.delenv("MOMWIRE_NEC2C_BASIS")
+    none, error = client.resolve_engine([], prog="momwire-nec2c-shared")
+    assert error is None and none == []
+
+
+@pytest.mark.parametrize(
+    "engine,prog,env,source",
+    [
+        ([], "momwire-nec2c-shared", "nope", "MOMWIRE_NEC2C_BASIS"),
+        ([], "momwire-nec2c-shared-nope", None, "the executable name"),
+        (["--basis", "nope"], "momwire-nec2c-shared", None, "--basis"),
+    ],
+)
+def test_an_unknown_basis_from_any_source_is_refused_naming_it(
+    monkeypatch, engine, prog, env, source
+):
+    """The stock engine promises a typo from ANY of the three fails fast and
+    nonzero at the probe, naming its source. That promise was false here on
+    all three counts — the client answered `-version` locally without ever
+    looking — and a typo that survived the probe became a socket whose server
+    could not start."""
+    if env is None:
+        monkeypatch.delenv("MOMWIRE_NEC2C_BASIS", raising=False)
+    else:
+        monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", env)
+    _engine, error = client.resolve_engine(list(engine), prog=prog)
+    assert error is not None
+    assert "nope" in error and source in error
+    assert "razor" in error, "the refusal has to say what the choices are"
+
+
+def test_a_basis_chosen_by_environment_or_name_is_a_different_server(monkeypatch):
+    """The identity gap itself, at the hash. Both routes had produced the SAME
+    digest as no selection at all, which is what put two engines on one
+    socket."""
+    monkeypatch.delenv("MOMWIRE_NEC2C_BASIS", raising=False)
+    plain, _error = client.resolve_engine([], prog="momwire-nec2c-shared")
+    baseline = client.config_key(plain, 900.0)
+
+    named, _error = client.resolve_engine([], prog="momwire-nec2c-shared-razor")
+    assert client.config_key(named, 900.0) != baseline
+
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "razor")
+    from_env, _error = client.resolve_engine([], prog="momwire-nec2c-shared")
+    assert client.config_key(from_env, 900.0) != baseline
+
+    # ...and the two routes to ONE engine are one server, like `--basis=X` and
+    # `--basis X` before them.
+    assert client.config_key(from_env, 900.0) == client.config_key(named, 900.0)
+    flagged, _error = client.resolve_engine(["--basis", "razor"])
+    assert client.config_key(flagged, 900.0) == client.config_key(named, 900.0)
+
+
+@pytest.mark.parametrize("first,second", [("razor", None), (None, "razor")])
+def test_two_clients_choosing_by_environment_do_not_share_one_server(
+    runtime, first, second
+):
+    """momwire#628's reproduction, both orderings — whoever spawns first used
+    to decide the physics for both. The second ordering is the worse one: the
+    client that ASKED for razor was the one silently downgraded, and neither
+    transcript carried a hint, because the banner names whatever actually
+    answered rather than what was requested."""
+    deck = fixture_deck("dipole_free_space")
+    one = run_client(runtime, deck, env={"MOMWIRE_NEC2C_BASIS": first})
+    two = run_client(runtime, deck, env={"MOMWIRE_NEC2C_BASIS": second})
+    assert (one.returncode, two.returncode) == (0, 0), (one.stderr, two.stderr)
+
+    for run, want in ((one, first), (two, second)):
+        assert ("+razor" in run.stdout) is (want == "razor"), (
+            f"a client that asked for {want!r} was answered by another engine"
+        )
+    assert len(sockets(runtime)) == 2, "two engines shared one server"
+
+
+def test_a_basis_chosen_by_the_executable_name_reaches_the_server(runtime, tmp_path):
+    """The #528 idiom on this sibling. It used to select NOTHING — the client
+    never read `argv[0]`, and the server's own is `python -m momwire.portal`,
+    so a user who copied the command to a named-engine spelling got bspline in
+    silence."""
+    link = tmp_path / "momwire-nec2c-shared-sinusoidal"
+    link.symlink_to(Path(client.__file__))
+    deck = fixture_deck("dipole_free_space")
+
+    named = run_client(runtime, deck, argv=[sys.executable, str(link)])
+    assert named.returncode == 0, named.stderr
+    assert "+sin" in named.stdout
+    assert same_printout(named.stdout, stock(deck, ["--basis", "sinusoidal"]))
+
+    bare = run_client(runtime, deck)
+    assert "+sin" not in bare.stdout, "the bare command must select nothing"
+    assert len(sockets(runtime)) == 2
+
+
+def test_the_server_is_told_its_basis_rather_than_inheriting_it(monkeypatch):
+    """The point of resolving in the CLIENT rather than widening the hash.
+
+    The server inherits its spawner's environment (`_spawn_server` passes no
+    `env=`), so before #628 a basis chosen that way reached the server only by
+    inheritance — invisible to the socket name, and therefore to every later
+    client that found the socket already listening. Resolved into a flag, it
+    rides the spawn command instead, where the identity can see it and where
+    `configure_engine` takes it as EXPLICIT and never consults the
+    environment at all.
+    """
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "razor")
+    engine, error = client.resolve_engine([], prog="momwire-nec2c-shared")
+    assert error is None
+
+    command = client._server_command("/tmp/x.sock", engine, 900.0, "/tmp/x.log")
+    assert command[-2:] == ["--basis", "razor"]
+
+    # And the engine's own parser reads that command as an explicit choice,
+    # which is what makes the inherited environment irrelevant to the server.
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sinusoidal")
+    with nec_portal.engine_scope():
+        rest, _legacy, code = nec_portal.configure_engine(list(engine), io.StringIO())
+        assert (code, rest) == (None, [])
+        assert nec_portal._active_basis_name == "razor"
 
 
 def test_a_runtime_directory_owned_by_somebody_else_is_refused(monkeypatch, tmp_path):

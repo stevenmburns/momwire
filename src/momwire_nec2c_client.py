@@ -39,6 +39,15 @@ it. The winning client spawns the server with those same flags, so no
 preamble protocol is needed and a client and its server cannot disagree about
 what they are.
 
+"What the command line says it is" is made literally true by
+:func:`resolve_engine`, which runs first: a basis chosen by the executable's
+NAME or by ``MOMWIRE_NEC2C_BASIS`` — the other two sources
+``configure_engine`` honours — becomes an ordinary ``--basis`` flag before
+anything hashes or spawns. Without that step those two routes were invisible
+to the hash, so clients that had chosen different engines collided on one
+socket and the loser was served the other's physics with a banner naming it
+(momwire#628).
+
 POSIX only. The transport is an AF_UNIX socket; Windows CPython gained
 ``AF_UNIX`` only in 3.12 and the spawn/lock discipline here has never been run
 there, so the client refuses on one line rather than half-working.
@@ -57,6 +66,34 @@ _LEGACY_PROBE_VERSION = "nec2c.ae6ty.9.1"
 
 # Flags that take a value; everything else that survives is a bare flag.
 _VALUE_FLAGS = ("--basis", "--cache-stats", "--idle-timeout")
+
+# The basis roster, duplicated rather than imported — importing
+# ``momwire.deck.BASES`` would cost the NumPy start-up this module exists to
+# avoid, the same trade ``probe_version`` makes for the version string. The
+# duplication is a one-way link stated as a FAILURE rather than a comment:
+# ``tests/test_portal_shared.py`` asserts this tuple is exactly
+# ``sorted(momwire.deck.BASES)``, so a basis added there and not here fails
+# the suite instead of reaching a user as "unknown basis" from an engine that
+# supports it.
+BASIS_NAMES = (
+    "arrayblock",
+    "bspline",
+    "bspline-d1",
+    "hmatrix",
+    "razor",
+    "razor-nec5",
+    "sinusoidal",
+    "sinusoidal-galerkin",
+    "sinusoidal-galerkin-converged",
+)
+
+# Spelt as the stock engine spells it: `', '.join(sorted(_BASES))`.
+_CHOICES = ", ".join(BASIS_NAMES)
+
+# The filename marker `_portal._filename_basis` reads for the stock engine,
+# and the segment that tells this sibling apart from it.
+_FILENAME_MARKER = "nec2c-"
+_SHARED_SEGMENT = "shared"
 
 # The server outlives its last client by this long. 900 s covers a coffee
 # break between two SimNEC sessions — the retyped-value case #379 is about —
@@ -137,6 +174,87 @@ def split_argv(argv: list[str]) -> tuple[list[str], bool, bool, float]:
             engine.append(arg)
         index += 1
     return engine, want_version, want_selftest, idle_timeout
+
+
+def filename_basis(prog: str) -> str | None:
+    """The basis a COPY or SYMLINK of this command selects by its own name.
+
+    momwire#528's idiom, as this sibling has to spell it. The stock engine
+    reads everything after ``nec2c-``, but that marker is already inside this
+    command's own name — ``momwire-nec2c-shared`` — so a bare copy would
+    otherwise resolve the basis ``"shared"``. The ``shared`` segment is
+    therefore consumed when it is the whole suffix (selecting nothing, exactly
+    as a plain ``momwire-nec2c`` does) and stripped when it leads one:
+
+    ==============================  ==========
+    ``momwire-nec2c-shared``        ``None``
+    ``momwire-nec2c-shared-razor``  ``razor``
+    ``momwire-nec2c-razor``         ``razor``
+    ``momwire-nec2c``               ``None``
+    ==============================  ==========
+
+    The third row is deliberate rather than incidental: it is the name the
+    #528 docs teach, so a user who copies THIS command to it has named a
+    basis, and answering them under the default instead would be the silent
+    wrong answer momwire#628 is about. Validation is the caller's, as it is
+    for the stock engine — an unknown suffix must fail fast at the probe.
+    """
+    name = prog.replace("\\", "/").rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    if _FILENAME_MARKER not in name:
+        return None
+    suffix = name.split(_FILENAME_MARKER, 1)[1]
+    if suffix == _SHARED_SEGMENT:
+        return None
+    if suffix.startswith(f"{_SHARED_SEGMENT}-"):
+        suffix = suffix[len(_SHARED_SEGMENT) + 1 :]
+    return suffix or None
+
+
+def resolve_engine(
+    engine: list[str], prog: str | None = None
+) -> tuple[list[str], str | None]:
+    """``(engine, error)`` — the engine flags with the basis SPELT OUT.
+
+    ``configure_engine`` resolves a basis from three sources, in the order
+    explicit ``--basis`` > executable name > ``MOMWIRE_NEC2C_BASIS``. Only the
+    first of those is on the command line, and the command line is all
+    :func:`config_key` can see — so before momwire#628 two clients that chose
+    different engines by the other two routes hashed to ONE socket and the
+    loser was answered under an engine it never asked for, banner and all.
+
+    Resolving here fixes that at the root rather than at the hash: the basis
+    becomes an ordinary ``--basis`` flag, so it lands in the socket identity
+    and in ``_server_command`` together, and the server stops depending on
+    inherited environment to know what it is. That is what makes this module's
+    "a client and its server cannot disagree about what they are" true.
+
+    The name is checked against :data:`BASIS_NAMES` for the same reason the
+    stock engine checks it at configure time: a typo must fail fast and
+    nonzero at the ``-version`` probe, where SimNEC surfaces it, rather than
+    become a socket nobody can serve and a spawn that times out. This is the
+    ONE opinion the client has about the engine's command line, and it has it
+    because it already had to parse ``--basis`` to hash it.
+    """
+    if "--basis" in engine:
+        index = engine.index("--basis")
+        name = engine[index + 1] if index + 1 < len(engine) else ""
+        if name not in BASIS_NAMES:
+            return engine, f"unknown --basis {name!r}; choices: {_CHOICES}"
+        return engine, None
+
+    suffix = filename_basis(sys.argv[0] if prog is None else prog)
+    env_name = os.environ.get("MOMWIRE_NEC2C_BASIS")
+    if suffix is not None:
+        name, source = suffix, "the executable name"
+    elif env_name:
+        name, source = env_name, "MOMWIRE_NEC2C_BASIS"
+    else:
+        return engine, None
+    if name not in BASIS_NAMES:
+        return engine, f"unknown basis {name!r} from {source}; choices: {_CHOICES}"
+    return [*engine, "--basis", name], None
 
 
 def config_key(engine: list[str], idle_timeout: float) -> str:
@@ -471,6 +589,18 @@ def _write_all(fd: int, data: bytes) -> None:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     engine, want_version, want_selftest, idle_timeout = split_argv(argv)
+
+    # Before ANY of the three exits below, because all three depend on it: the
+    # probe must refuse a typo'd basis the way the stock engine does, the
+    # selftest must run under the engine that was asked for, and the socket
+    # identity must carry it. Refused on stdout with 3, as `configure_engine`
+    # refuses — this is the same configure-time moment, and SimNEC reads it
+    # from the same channel.
+    engine, error = resolve_engine(engine)
+    if error is not None:
+        sys.stdout.write(f"{error}\n")
+        sys.stdout.flush()
+        return 3
 
     if want_version:
         # Answered here, never by a spawn: SimNEC probes at configure time and

@@ -332,7 +332,23 @@ interpreter, and the engine flags, under `$XDG_RUNTIME_DIR/momwire-portal/`
 (or `/tmp/momwire-portal-<uid>/` where that is unset). That is the same *two
 entries are two engines* rule the flags already carried: two portal-dialog
 entries differing only in `--basis` get two servers, and a crew of sixteen
-clients configured alike get **one**. So the crew arithmetic above inverts —
+clients configured alike get **one**.
+
+All three spellings of the basis count, not just the flag: a basis chosen by
+the executable's name or by `MOMWIRE_NEC2C_BASIS` is resolved before the hash
+is taken, so it picks out its own server exactly as `--basis` does. The
+shared command reads its own name the way the stock one does, with its own
+`shared` segment consumed rather than mistaken for a solver:
+
+```bash
+ln -s "$(which momwire-nec2c-shared)" ~/bin/momwire-nec2c-shared-razor
+momwire-nec2c-shared-razor -version    # a razor server, and only razor decks
+```
+
+`momwire-nec2c-razor` works as a link name too — the spelling the named
+commands above teach — and a bare `momwire-nec2c-shared` selects nothing, so
+it stays the default engine. A name matching no solver fails the `-version`
+probe loudly, naming its source, exactly as the stock command does. So the crew arithmetic above inverts —
 one interpreter, one ~90 MB floor, one `--cache` warmed by every crew member
 at once instead of sixteen cold ones, and one thread-pool budget, since
 solves are serialised across connections.
