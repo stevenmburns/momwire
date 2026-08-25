@@ -196,9 +196,26 @@ SERVED_UNGATED_IDS = ("0037", "0039", "0040", "0041", "0042")
 # solve rather than at this seam — 0033 answers 25.550 − 83.466j over a
 # perfect image, 25.659 − 128.65j at 1 m and 16.103 − 234.55j at 5 m, so the
 # height dependence is steep and the 1.8 cm answer is the outlier of its own
-# family.  That is momwire#151/#157 territory (a Sommerfeld grid asked about a
-# horizontal wire 1e-4 λ up), it is not fixable inside this package, and it is
-# reported rather than pinned: a bar at 344 Ω would record the gap as normal.
+# family.
+#
+# WHAT THAT PARAGRAPH GOT WRONG, and momwire#510 measured (2026-08-25).  It
+# said this was momwire#151/#157 territory and "not fixable inside this
+# package".  Both halves are false.  The cause is razor's Sommerfeld
+# remainder being integrated over each source segment at a FLAT order 3: at
+# 1.09e-4 λ an observer sits nearly over a source segment's image and the
+# remainder carries a spike of width ~R_min inside a 7.9 m segment, which
+# three Gauss points cannot see.  With the order keyed to `len / R_min`
+# (`razor._remainder_qp`) razor-nec5 answers this deck 1.44 % from the
+# licensed binary against 171.86 % before, and every rung of the height sweep
+# from 1e-1 λ down to 1.09e-4 is within 1.44 %.  The elimination trail is in
+# antennaknobs `scratch/510-grazing/`.
+#
+# The gate below still stands because it is measured at the DEFAULT basis,
+# and bspline is a separate and unfinished story: the same keying takes it
+# from 435 % to ~14 % at this height but leaves a residual 10-34 % at the
+# rungs above, which is not the same defect and is not this fix's.  So the
+# seam's default still disagrees with these two captures, still on purpose,
+# and for a reason that is now known rather than attributed.
 DIVERGENT_IDS = ("0033", "0034")
 
 # Every capture id this seam answers after momwire#545, pinned.  The ladder
@@ -2301,11 +2318,19 @@ def test_the_elevated_radial_systems_disagree_with_their_captures_on_purpose(cid
     only 1e-4 λ off a Sommerfeld plane is a statement about the ground model
     rather than about the basis.
 
-    And the STRUCTURE is right, which is what puts the finding outside this
+    And the STRUCTURE is right, which is what put the finding outside this
     package: the counting rule, the geometry columns and the whole printout
     layout pass their own gates on these two decks.  What is left is momwire's
-    finite-ground solve at grazing height (``docs/refl-coef-ground-plan.md``,
-    momwire#151/#157), reached through kwargs this seam only passes on.
+    finite-ground solve at grazing height, reached through kwargs this seam
+    only passes on.
+
+    Since momwire#510 that solve is HALF fixed and this gate is measured at
+    the half that is not.  razor-nec5 now answers 0033 within 1.44 % of the
+    licensed binary (the remainder's source quadrature is keyed to grazing
+    height instead of flat at order 3); bspline, which is what ``served``
+    uses, is not, and its residual is a different defect.  So this still
+    fails if the DEFAULT basis closes, which is still the conversation the
+    failure should start — but it no longer says the gap is unfixable.
     """
     want = extract(printout_text(cid)).sources[0].impedance
     got = extract(served(cid)).sources[0].impedance

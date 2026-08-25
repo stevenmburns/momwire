@@ -525,6 +525,103 @@ def test_the_quadrature_order_is_converged():
 
 
 # --------------------------------------------------------------------------
+# 3b. the grazing-height keying (momwire#510)
+# --------------------------------------------------------------------------
+# The convergence claim above holds where this unit gates and fails below it.
+# `dipole@0.04` is 0.04 λ up; capture 0033 is 1.09e-4 λ up, and there three
+# points put the served impedance 171.86 % from the licensed binary against
+# 1.44 % at order 192. What breaks is the premise, not the arithmetic: when an
+# observer sits nearly over a source segment's IMAGE the remainder carries a
+# spike of width ~R_min, and it is no longer smooth on the scale of a segment.
+_GRAZE = 39.624  # one of 0033's radials, in metres
+_GRAZE_WL = 299792458.0 / 1.832e6
+
+
+def _flat_wire(h):
+    """0033's radial alone, `h` metres up — the six-unknown reproducer the
+    arc minimised to (antennaknobs `scratch/510-grazing/`)."""
+    return dict(
+        wires=[np.array([[0.0, 0.0, h], [_GRAZE, 0.0, h]])],
+        n_per_edge_per_wire=[[5]],
+        wire_radius=1.294e-3,
+        wavelength=_GRAZE_WL,
+        nec5_quadrature=True,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+        feeds=[(0, _GRAZE / 5.0, 1.0 + 0j)],
+    )
+
+
+def test_the_grazing_key_leaves_an_ordinary_deck_alone():
+    """A deck with nothing near the plane keeps the kwarg's own order.
+
+    This is the property that lets the keying ship without moving a single
+    shipped gate: the clip is a max-with-base, so every ratio below 1 returns
+    `base` EXACTLY and the fill is the arithmetic it always was. Asserted on
+    the geometry this unit already gates rather than on a contrived one.
+    """
+    from momwire.razor import _remainder_qp
+
+    g = _dipole(0.04)
+    seg = np.linspace(g["wires"][0][0], g["wires"][0][1], 49)
+    obs = 0.5 * (seg[:-1] + seg[1:])
+    assert _remainder_qp(obs, seg[:-1], seg[1:], 0.0, 3) == 3
+    assert _remainder_qp(obs, seg[:-1], seg[1:], 0.0, 8) == 8
+
+
+def test_the_grazing_key_raises_the_order_where_the_spike_is():
+    """...and at 0033's height it raises it, by the ratio the spike sets.
+
+    `len / R_min` is ~223 on this geometry, so the rule asks for ~223 and the
+    cap hands back 192 — the order measured to bring 0033 from 171.86 % to
+    1.44 % against the binary.
+    """
+    from momwire.razor import _REMAINDER_QP_CAP, _remainder_qp
+
+    h = 1.778e-2
+    seg = np.linspace([0.0, 0.0, h], [_GRAZE, 0.0, h], 6)
+    obs = 0.5 * (seg[:-1] + seg[1:])
+    assert _remainder_qp(obs, seg[:-1], seg[1:], 0.0, 3) == _REMAINDER_QP_CAP
+
+
+def test_a_grazing_wire_is_converged_in_the_remainder_order():
+    """The physics gate, and it needs no binary — which is the point.
+
+    Every external reference this arc has gives an IMPEDANCE for a whole deck;
+    CI has none of them. What CI can ask is SELF-CONSISTENCY: if the keying
+    picks a sufficient order, then raising the floor to the cap by hand must
+    not move the answer. Before the keying these differ by 170 % of |Z|; after
+    it they agree, because both land on the same keyed order.
+
+    Gated at 1 % rather than at a bit pin: the claim is convergence.
+    """
+    kw = _flat_wire(1.778e-2)
+    z_keyed, _ = RazorSolver(**kw).compute_impedance()
+    z_forced, _ = RazorSolver(**kw, n_qp_sommerfeld=192).compute_impedance()
+    rel = abs(z_keyed - z_forced) / abs(z_forced)
+    assert rel < 1e-2, f"grazing wire not converged: {rel:.3%} ({z_keyed:.4f})"
+
+    # And the keying is what is doing it: capped back to 3 by hand — the
+    # pre-#510 behaviour — the same deck is a different answer entirely.
+    # Measured 46.4 % of |Z| on this reproducer; gated at 25 % because the
+    # claim is "a different answer", not that number. (The cap is read at call
+    # time precisely so this gate can move it; as a default argument it would
+    # bind at import and this assertion would silently compare two identical
+    # solves — which is exactly what it did when first written.)
+    from momwire import razor as _razor
+
+    saved = _razor._REMAINDER_QP_CAP
+    try:
+        _razor._REMAINDER_QP_CAP = 3
+        z_flat, _ = RazorSolver(**kw).compute_impedance()
+    finally:
+        _razor._REMAINDER_QP_CAP = saved
+    moved = abs(z_flat - z_forced) / abs(z_forced)
+    assert moved > 0.25, f"order-3 answer only {moved:.1%} away — keying inert?"
+
+
+# --------------------------------------------------------------------------
 # 4. the fill reads the object, not the strings
 # --------------------------------------------------------------------------
 def test_the_razor_fill_follows_the_object_not_the_strings(monkeypatch):
