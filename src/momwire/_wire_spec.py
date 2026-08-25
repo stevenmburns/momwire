@@ -158,3 +158,79 @@ def normalize_junctions(junctions, wires_polylines, n_per_edge_per_wire):
         out.append(members)
     check_junction_coincidence(wires_polylines, n_per_edge_per_wire, out)
     return out
+
+
+def normalize_node_gaps(node_gaps, junctions, n_wires, *, junction_ports=()):
+    """The `node_gaps=` spec → a validated `[(wire, "start"|"end", volts)]`.
+
+    A series EMF at a node, addressed by ONE member of the junction group it
+    sits at: the gap is between that member and every other member of the
+    group, which is the shape NEC's ``EX`` card writes and the only shape it
+    can write (momwire#315 proposes a two-set partition for the fan-dipole
+    feed that ``EX`` cannot express; this is the degenerate case of it).
+
+    Every rule below is formulation-independent — it is about the SPEC and
+    the topology, not about any basis — which is why it is here rather than
+    in a solver (momwire#603 U4, on momwire#429 rank 8's normalised
+    ``junctions``).  What a family cannot share is the port's COLUMN: the
+    named member's current expressed in that family's own junction unknowns.
+    Give that a method on the solver and everything else is this function.
+
+    ``junction_ports`` is the junction indices already carrying a shunt port
+    (momwire#172); a family with no such port passes nothing.
+    """
+    out = []
+    if node_gaps is None:
+        return out
+    end_to_junction = {}
+    for j, group in enumerate(junctions):
+        for member in group:
+            end_to_junction[member] = j
+    seen_members, seen_junctions = set(), set()
+    ported = set(junction_ports)
+    for i, entry in enumerate(node_gaps):
+        if len(entry) != 3:
+            raise ValueError(
+                f"node_gaps[{i}]: expected (wire_index, 'start'|'end',"
+                f" voltage), got {entry!r}"
+            )
+        wire, end, volts = entry
+        if not (0 <= wire < n_wires):
+            raise ValueError(
+                f"node_gaps[{i}]: wire_index {wire} out of range [0, {n_wires})"
+            )
+        if end not in ("start", "end"):
+            raise ValueError(
+                f"node_gaps[{i}]: end must be 'start' or 'end', got {end!r}"
+            )
+        member = (int(wire), end)
+        j_idx = end_to_junction.get(member)
+        if j_idx is None:
+            raise ValueError(
+                f"node_gaps[{i}]: wire {wire} {end!r} is not a member "
+                "of any junction group — a series node gap lives at a "
+                "junction; for a feed inside a wire use feeds="
+            )
+        if len(junctions[j_idx]) < 2:
+            raise ValueError(
+                f"node_gaps[{i}]: junction {j_idx} has a single member "
+                "— there is no through-current path to be in series "
+                "with (a lone-end attachment is junction_ports=)"
+            )
+        if member in seen_members:
+            raise ValueError(f"node_gaps[{i}]: wire {wire} {end!r} listed twice")
+        if j_idx in seen_junctions:
+            raise ValueError(
+                f"node_gaps[{i}]: junction {j_idx} already carries a "
+                "node gap — one series gap per junction"
+            )
+        if j_idx in ported:
+            raise ValueError(
+                f"node_gaps[{i}]: junction {j_idx} is also a junction "
+                "port — the shunt (#172) and series (#305) ports of "
+                "one node cannot be driven together yet"
+            )
+        seen_members.add(member)
+        seen_junctions.add(j_idx)
+        out.append((int(wire), end, complex(volts)))
+    return out

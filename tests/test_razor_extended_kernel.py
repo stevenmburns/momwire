@@ -629,9 +629,9 @@ def test_capabilities_declare_the_kernel_and_carry_no_refusal_for_it():
     assert "extended_kernel" not in caps.refusals
     # the rest of the row is unchanged
     assert caps.junction_ports is False
-    assert caps.node_gaps is False
+    assert caps.node_gaps is True  # momwire#603 U4 filled this cell
     assert "junction_ports" in caps.refusals
-    assert "node_gaps" in caps.refusals
+    assert "node_gaps" not in caps.refusals
 
 
 def test_the_kernel_moments_closed_form_matches_its_integrand():

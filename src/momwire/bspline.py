@@ -998,62 +998,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # current, both orientations agree); at degree ≥ 3 it names which
         # arm the gap separates, NEC-5's tag/segment/end addressing. Ports
         # order [feeds..., junction_ports..., node_gaps...].
-        self.node_gaps = []
-        if node_gaps is not None:
-            end_to_junction = {}
-            for j, jw in enumerate(self.junctions):
-                for member in jw:
-                    end_to_junction[member] = j
-            seen_members = set()
-            seen_junctions = set()
-            ported = {j for j, _v in self.junction_ports}
-            for i, g in enumerate(node_gaps):
-                if len(g) != 3:
-                    raise ValueError(
-                        f"node_gaps[{i}]: expected (wire_index, 'start'|'end',"
-                        f" voltage), got {g!r}"
-                    )
-                w_i, end_i, v_i = g
-                if not (0 <= w_i < n_w):
-                    raise ValueError(
-                        f"node_gaps[{i}]: wire_index {w_i} out of range [0, {n_w})"
-                    )
-                if end_i not in ("start", "end"):
-                    raise ValueError(
-                        f"node_gaps[{i}]: end must be 'start' or 'end', got {end_i!r}"
-                    )
-                member = (int(w_i), end_i)
-                j_idx = end_to_junction.get(member)
-                if j_idx is None:
-                    raise ValueError(
-                        f"node_gaps[{i}]: wire {w_i} {end_i!r} is not a member "
-                        "of any junction group — a series node gap lives at a "
-                        "junction; for a feed inside a wire use feeds="
-                    )
-                if len(self.junctions[j_idx]) < 2:
-                    raise ValueError(
-                        f"node_gaps[{i}]: junction {j_idx} has a single member "
-                        "— there is no through-current path to be in series "
-                        "with (a lone-end attachment is junction_ports=)"
-                    )
-                if member in seen_members:
-                    raise ValueError(
-                        f"node_gaps[{i}]: wire {w_i} {end_i!r} listed twice"
-                    )
-                if j_idx in seen_junctions:
-                    raise ValueError(
-                        f"node_gaps[{i}]: junction {j_idx} already carries a "
-                        "node gap — one series gap per junction"
-                    )
-                if j_idx in ported:
-                    raise ValueError(
-                        f"node_gaps[{i}]: junction {j_idx} is also a junction "
-                        "port — the shunt (#172) and series (#305) ports of "
-                        "one node cannot be driven together yet"
-                    )
-                seen_members.add(member)
-                seen_junctions.add(j_idx)
-                self.node_gaps.append((int(w_i), end_i, complex(v_i)))
+        # momwire#603 U4: the spec and its validation are
+        # `_wire_spec.normalize_node_gaps` — every rule in it is about the
+        # SPEC and the topology, not about this basis.  What stays here is
+        # the port's column (`_node_gap_columns`), which is the one part a
+        # family cannot share.
+        self.node_gaps = _wire_spec.normalize_node_gaps(
+            node_gaps,
+            self.junctions,
+            n_w,
+            junction_ports=[j for j, _v in self.junction_ports],
+        )
 
         # `compute_impedance(...)` and `currents_at_knots(coeffs)` both call
         # `_build_geometry()` + `_build_basis_polynomials(geom)` from scratch

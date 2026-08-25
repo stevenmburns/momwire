@@ -344,3 +344,127 @@ def test_identical_elements_hide_the_asymmetry():
     dipoles identical and the razor matrix comes out symmetric to machine
     precision, so this geometry says nothing about reciprocity either way."""
     assert _asym(20, HALF) < 1e-12
+
+
+# --------------------------------------------------------------------------
+# the series node gap at a junction (momwire#603 U4)
+
+
+def _star(k, nseg=4):
+    """`k` wires leaving one node, coplanar and evenly spread."""
+    node = np.array([0.0, 0.0, 0.0])
+    wires = [
+        np.array([node, np.array([np.cos(t), np.sin(t), 0.0]) * 2.0])
+        for t in (2 * np.pi * i / k for i in range(k))
+    ]
+    return wires, [[nseg]] * k
+
+
+@pytest.mark.parametrize("k", (2, 3, 5))
+def test_the_node_gap_port_reads_the_current_into_the_named_wire(k):
+    """The port column, checked against the currents it claims to report.
+
+    This formulation's junction unknowns are K-1 PAIR tents, so the port is
+    a one-hot for every member but the group's FIRST — whose current is
+    minus the sum of all of them, because it carries whatever the others do
+    not.  Both rows are asserted against `currents_at_knots`, which knows
+    nothing about ports.
+    """
+    wires, npe = _star(k)
+    for member in range(k):
+        s = RazorSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            feeds=[],
+            node_gaps=[(member, "start", 1.0 + 0j)],
+            wire_radius=1e-3,
+            wavelength=20.0,
+        )
+        sol = s.compute_port_solution()
+        knots = s.currents_at_knots(sol.coeffs[:, 0])
+        # every wire leaves the node by its start, so arc direction IS
+        # "out of the node into this wire" — the port's own quantity.
+        into_named = np.asarray(knots[member])[0]
+        assert sol.port_currents[0, 0] == pytest.approx(into_named, rel=1e-12)
+        # and KCL: what leaves along the named wire arrives along the others
+        others = sum(np.asarray(knots[w])[0] for w in range(k) if w != member)
+        assert into_named + others == pytest.approx(0.0, abs=1e-14 * abs(into_named))
+
+
+def test_a_two_wire_node_gap_is_the_delta_gap_on_the_same_knot():
+    """K = 2 has two spellings and they must be one source.
+
+    momwire#603 U1 put a `feeds` delta gap on the junction knot and measured
+    it against the CUT-plus-node-gap spelling of the B-spline row.  U4 gives
+    this row the node gap itself, so the two spellings now exist side by side
+    HERE — and a series EMF between the node and one of two wires is the same
+    EMF as a gap in the through path, up to which way it is read.
+    """
+    wires, npe = _star(2, nseg=6)
+    common = dict(wire_radius=1e-3, wavelength=20.0, nec5_quadrature=True)
+    gap = RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feeds=[],
+        node_gaps=[(1, "start", 1.0 + 0j)],
+        **common,
+    )
+    feed = RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feeds=[(1, 0.0, 1.0 + 0j)],
+        **common,
+    )
+    z_gap = 1.0 / gap.compute_port_solution().y[0, 0]
+    z_feed = 1.0 / feed.compute_port_solution().y[0, 0]
+    assert abs(z_gap) == pytest.approx(abs(z_feed), rel=1e-12)
+
+
+def test_a_node_gap_needs_a_through_path_and_says_so():
+    wires, npe = _star(3)
+    with pytest.raises(ValueError, match="not a member of any junction group"):
+        RazorSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            feeds=[],
+            node_gaps=[(0, "end", 1.0 + 0j)],  # the far tip, nobody's junction
+            wire_radius=1e-3,
+            wavelength=20.0,
+        )
+
+
+def test_one_series_gap_per_junction_here_too():
+    wires, npe = _star(4)
+    with pytest.raises(ValueError, match="one series gap per junction"):
+        RazorSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            feeds=[],
+            node_gaps=[(0, "start", 1.0 + 0j), (1, "start", 1.0 + 0j)],
+            wire_radius=1e-3,
+            wavelength=20.0,
+        )
+
+
+def test_a_node_gap_only_model_needs_no_gap_feed():
+    """0013's `EX 4,5,-1` is the whole of that deck's drive: an apex feed and
+    no gap feed anywhere.  An empty `feeds` used to be a constructor error."""
+    wires, npe = _star(5)
+    s = RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feeds=[],
+        node_gaps=[(4, "start", 1.0 + 0j)],
+        wire_radius=1e-3,
+        wavelength=20.0,
+    )
+    assert s.feed_wire_index is None
+    assert s.compute_port_solution().y.shape == (1, 1)
+    with pytest.raises(ValueError, match="no ports"):
+        RazorSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            feeds=[],
+            wire_radius=1e-3,
+            wavelength=20.0,
+        )

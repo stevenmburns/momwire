@@ -407,20 +407,6 @@ _OUT_OF_SCOPE = {
     "junction_ports": "junction ports are not supported: a junction basis is "
     "already a through-current unknown, so a port that adds one would be a "
     "second unknown for one current",
-    # NOT a statement that this formulation cannot carry a series EMF at a
-    # node. It carries one wherever K <= 2 and has since the beginning: the
-    # source is a `feeds` delta gap on the knot, which `_feed_knots` snaps to
-    # the junction's own through-current tent, and momwire#603 U1 measured it
-    # against the same source spelled as a CUT plus a node gap -- bit for bit
-    # on the impedance and on every knot current, from either side of the
-    # joint. What is missing is the K >= 3 PORT, and the basis for it is not
-    # missing at all: `_junction_wings` already yields K-1 through-current
-    # tents at a K-way node (four of them at 0013's five-wire apex). See
-    # `_feed_basis_indices` for what remains, which is a port and not a basis.
-    "node_gaps": "node gaps are not supported: a series EMF at a K <= 2 node "
-    "is served as a `feeds` delta gap on that knot, which is the same source "
-    "in this basis, and the K >= 3 port this kwarg would carry is not built "
-    "yet (momwire#603 U4)",
 }
 
 # The one geometry both served finite grounds refuse. Checked in __init__
@@ -668,8 +654,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # gated against the binary's own mixed-radius `GW` decks), plus the
     # EXTENDED KERNEL (momwire#398 D1 — the taper study identified the
     # reference as extended-kernel everywhere, so the twin needs it on fat
-    # wire; module docstring, "The extended kernel"). No junction_ports /
-    # node_gaps / enrichment: the rest of the row is refused, reusing
+    # wire; module docstring, "The extended kernel"), plus SERIES NODE GAPS
+    # (momwire#603 U4 — the K−1 through-current tents were always built here,
+    # only the port that drives one was missing). No junction_ports /
+    # enrichment: the rest of the row is refused, reusing
     # `_OUT_OF_SCOPE`'s prose (built at __init__ from unsupported kwargs)
     # and `_CONTACT_OVER_FINITE_REFUSAL` for the one geometry the finite
     # grounds refuse (a combination of named arguments rather than a stray
@@ -679,7 +667,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wire_loading=True,
         extended_kernel=True,
         junction_ports=False,
-        node_gaps=False,
+        node_gaps=True,
         per_wire_radius=True,
         singular_enrichment=False,
         refusals={
@@ -696,7 +684,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "contact+refl-coef": _CONTACT_OVER_FINITE_REFUSAL,
             "contact+sommerfeld": _CONTACT_OVER_FINITE_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
-            "node_gaps": _OUT_OF_SCOPE["node_gaps"],
         },
     )
 
@@ -706,6 +693,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wires,
         n_per_edge_per_wire=None,
         junctions=None,
+        node_gaps=None,
         nsegs=101,
         wire_radius=0.0005,
         extended_kernel=False,
@@ -884,6 +872,26 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 canonical_groups(self._declared_junctions),
             )
 
+        # ---- series node gaps (momwire#603 U4) ---------------------------
+        # The SPEC is `_wire_spec.normalize_node_gaps`, shared with the
+        # B-spline row: every rule in it is about the spec and the topology,
+        # not about a basis.  Validated here rather than at first solve so a
+        # malformed gap is a constructor error like every sibling's.
+        groups = self._find_junctions()
+        self.node_gaps = _wire_spec.normalize_node_gaps(
+            node_gaps, [list(g["ends"]) for g in groups], len(self.wires_polylines)
+        )
+        grounded_members = {end for g in groups if g["grounded"] for end in g["ends"]}
+        for i, (w_i, end_i, _v) in enumerate(self.node_gaps):
+            if (w_i, end_i) in grounded_members:
+                raise ValueError(
+                    f"node_gaps[{i}]: wire {w_i} {end_i!r} stands in the "
+                    "ground plane, and a grounded end's tent is already the "
+                    "series path between that wire and the plane (momwire#151"
+                    " grounds the node through the image) — drive it with "
+                    "feeds= at that end instead"
+                )
+
         # ---- wire loading, the house API (momwire#427) -------------------
         # Two kinds, one equation. DISTRIBUTED series impedance Z'_w(ω)
         # [Ω/m] is spelled exactly as `BSplineSolver` / `SinusoidalSolver` /
@@ -914,8 +922,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 raise ValueError(f"feed_wire_index {feed_wire_index} out of range")
             self.feeds = [(int(feed_wire_index), feed_arclength, 1.0 + 0.0j)]
         else:
-            if len(feeds) == 0:
-                raise ValueError("feeds must contain at least one entry")
+            # An EMPTY list is legal once there is a second kind of port
+            # (momwire#603 U4): a deck whose only source is a series EMF at
+            # an apex -- 0013's `EX 4,5,-1` -- has no gap feed at all, and
+            # inventing one would be a spurious second port. What must not
+            # happen is a solve with NO port, and that is the check below,
+            # which sees both kinds.
             norm = []
             for i, f in enumerate(feeds):
                 if len(f) != 3:
@@ -932,8 +944,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     (int(w_i), None if arc_i is None else float(arc_i), complex(v_i))
                 )
             self.feeds = norm
-        self.feed_wire_index = self.feeds[0][0]
-        self.feed_arclength = self.feeds[0][1]
+        if not self.feeds and not self.node_gaps:
+            raise ValueError(
+                "no ports: give at least one feeds= gap or one node_gaps= series EMF"
+            )
+        # The single-feed convenience attributes, and None when there is no
+        # gap feed to describe — a node-gap-only model is a legal shape since
+        # momwire#603 U4 and these two were never more than a shorthand for
+        # `feeds[0]`.
+        self.feed_wire_index = self.feeds[0][0] if self.feeds else None
+        self.feed_arclength = self.feeds[0][1] if self.feeds else None
 
         self.z = None
         self._cached_geometry = None
@@ -1315,6 +1335,63 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
             idx.append(basis)
         return idx
+
+    def _port_columns(self, geom):
+        """``(n_basis_total, n_ports)`` — every port's drive AND readout vector.
+
+        Ports run ``[gap feeds..., node gaps...]``, the order
+        :class:`~momwire._port_solution.PortSolution` documents (this row
+        declares no junction ports, so the middle block is empty).
+
+        A GAP FEED is a one-hot: its delta gap sits inside exactly one
+        testing path, so the whole voltage lands in that one row and the
+        current read back is that one coefficient.
+
+        A NODE GAP is not, and that is the whole of what momwire#603 U4 had
+        to work out.  This formulation's junction unknowns are K−1 PAIR
+        tents — tent ``t`` carries +1 A in along the group's first end and
+        out along end ``t+1`` (:meth:`_junction_wings`) — so the current
+        from the node into member ``ends[j]`` is::
+
+            j >= 1   +c[j-1]                 (one-hot)
+            j == 0   -(c[0] + ... + c[K-2])  (dense, over every tent)
+
+        which is KCL: the first end carries whatever the others do not.  No
+        sigma appears — the wings already carry it — and both rows were
+        measured against :meth:`currents_at_knots` on a three-wire star with
+        one wire joining by its ``end`` and two by their ``start``.
+
+        The B-spline row's column is a sigma-signed one-hot on the named
+        member's OWN directional basis, which is why this cannot be shared
+        and the spec around it can (``_wire_spec.normalize_node_gaps``).
+        """
+        idx = self._feed_basis_indices(geom)
+        n_ports = len(idx) + len(self.node_gaps)
+        cols = np.zeros((geom["n_basis_total"], n_ports), dtype=np.float64)
+        for j, m_j in enumerate(idx):
+            cols[m_j, j] = 1.0
+        if not self.node_gaps:
+            return cols
+        where = {
+            member: (jn, pos)
+            for jn in geom["junctions"]
+            for pos, member in enumerate(jn["ends"])
+        }
+        for p, (w_i, end_i, _v) in enumerate(self.node_gaps):
+            jn, pos = where[(int(w_i), end_i)]
+            column = len(idx) + p
+            if pos == 0:
+                cols[jn["bases"], column] = -1.0
+            else:
+                cols[jn["bases"][pos - 1], column] = 1.0
+        return cols
+
+    def _port_voltages(self):
+        """The configured drive of every port, in :meth:`_port_columns` order."""
+        return np.array(
+            [v for _, _, v in self.feeds] + [v for _, _, v in self.node_gaps],
+            dtype=np.complex128,
+        )
 
     def _snap_to_knot(self, geom, w, arc):
         """``(basis index, ends at that knot)`` for one site on wire `w`.
@@ -2548,19 +2625,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z = self._assemble_Z(geom, self.k)
         self.z = Z
 
-        idx = self._feed_basis_indices(geom)
-        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
+        cols = self._port_columns(geom)
         # NEC-5's EX at a knot: the delta gap sits inside exactly one
-        # testing path, so the whole voltage lands in that one row.
-        rhs = np.zeros(geom["n_basis_total"], dtype=np.complex128)
-        for m_i, v_i in zip(idx, voltages):
-            rhs[m_i] += v_i
+        # testing path, so the whole voltage lands in that one row.  A node
+        # gap spreads over its junction's tents instead (`_port_columns`).
+        rhs = cols @ self._port_voltages()
 
         self._checkpoint()
         coeffs = scipy.linalg.solve(Z, rhs)
-        feed_currents = np.array([coeffs[m] for m in idx], dtype=np.complex128)
-        z_per_feed = voltages / feed_currents
-        return (z_per_feed[0] if len(self.feeds) == 1 else z_per_feed), coeffs
+        voltages = self._port_voltages()
+        port_currents = cols.T @ coeffs
+        z_per_port = voltages / port_currents
+        n_ports = cols.shape[1]
+        return (z_per_port[0] if n_ports == 1 else z_per_port), coeffs
 
     def compute_y_matrix(self):
         """Short-circuit admittance matrix [Y_sc] at the configured feeds.
@@ -2647,15 +2724,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z = self._assemble_Z_from_prepared(geom, prepared, self.k, self.c * self.k)
         self.z = Z
 
-        idx = self._feed_basis_indices(geom)
-        n_ports = len(idx)
-        B = np.zeros((geom["n_basis_total"], n_ports), dtype=np.complex128)
-        for j, m_j in enumerate(idx):
-            B[m_j, j] = 1.0
+        cols = self._port_columns(geom)
 
         self._checkpoint()
-        X = scipy.linalg.solve(Z, B)
-        Y = X[idx, :]
+        X = scipy.linalg.solve(Z, cols.astype(np.complex128))
+        Y = cols.T @ X
         return PortSolution(
             y=Y,
             coeffs=X,
@@ -3001,19 +3074,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._checkpoint()
         prepared = self._assemble_Z_prepare(geom)
 
-        idx = self._feed_basis_indices(geom)
-        voltages = np.array([v for _, _, v in self.feeds], dtype=np.complex128)
-        rhs = np.zeros(geom["n_basis_total"], dtype=np.complex128)
-        for m_i, v_i in zip(idx, voltages):
-            rhs[m_i] += v_i
+        cols = self._port_columns(geom)
+        rhs = cols @ self._port_voltages()
 
-        feed_currents = np.empty((k_array.shape[0], len(idx)), dtype=np.complex128)
+        voltages = self._port_voltages()
+        feed_currents = np.empty((k_array.shape[0], cols.shape[1]), dtype=np.complex128)
         for i, k in enumerate(k_array):
             self._checkpoint()
             k = float(k)
             Z = self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
             coeffs = scipy.linalg.solve(Z, rhs)
-            feed_currents[i] = coeffs[idx]
+            feed_currents[i] = cols.T @ coeffs
 
         z_per_feed = voltages[None, :] / feed_currents
         return z_per_feed[:, 0] if len(self.feeds) == 1 else z_per_feed

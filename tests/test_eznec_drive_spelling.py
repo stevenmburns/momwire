@@ -21,7 +21,7 @@ and razor answers a junction-knot gap and an interior-knot gap to the last
 ulp.
 
 **The corpus reaches razor.**  62 committed captures, 11 served under the cut
-and 47 without it, with every one of the remaining 15 named — and on the 42
+and 49 without it, with every one of the remaining 13 named — and on the 42
 carrying a printout, razor-nec5's input impedance lands a median 0.00 % from
 the licensed engine's own.
 """
@@ -272,22 +272,18 @@ def test_the_junction_gap_is_signed_off_side_a_and_not_arrival_order():
 # them named and none of them a drive spelling.  Written out rather than
 # counted so that a deck moving between rows is a diff.
 ONE_SEGMENT_WIRE = ("0011", "0029", "0030", "0034", "0035")
-APEX_NODE_GAP = ("0013", "0033")
 CONTACT_OVER_FINITE_GROUND = ("0021", "0047", "0048", "0110", "0111")
 # The near-field point at the base of a contact-fed monopole, which the seam
 # refuses under EVERY basis (`test_eznec_serve.py`'s module docstring).
 REFUSED_UNDER_BSPLINE_TOO = ("0022", "0107", "0112")
-UNSERVED = (
-    ONE_SEGMENT_WIRE
-    + APEX_NODE_GAP
-    + CONTACT_OVER_FINITE_GROUND
-    + REFUSED_UNDER_BSPLINE_TOO
-)
+# The five-wire apexes (0013, 0033) were here until momwire#603 U4 gave razor
+# the node-gap port; they serve now.
+UNSERVED = ONE_SEGMENT_WIRE + CONTACT_OVER_FINITE_GROUND + REFUSED_UNDER_BSPLINE_TOO
 
 
 @pytest.mark.parametrize("cid", CAPTURE_IDS)
 def test_razor_nec5_serves_every_capture_but_the_fifteen_named(cid):
-    """11 of 62 before U1, 47 after, and the other 15 refuse by name.
+    """11 of 62 before U1, 49 after U4, and the other 13 refuse by name.
 
     The unit's headline gate, driven through the real seam since U3 made the
     basis selectable.  A deck that starts serving belongs in neither list and
@@ -304,6 +300,28 @@ def test_razor_nec5_serves_every_capture_but_the_fifteen_named(cid):
 
 
 FLOAT = re.compile(r"-?\d\.\d+E[-+]\d+")
+
+
+def test_the_five_wire_apex_lands_on_the_licensed_engine(razor_seam=None):
+    """momwire#603 U4's gate, and the sharpest one in this file.
+
+    0013 drives ``EX 4,5,-1`` — a series source at the node where four
+    sloping radials and a vertical meet.  It is the ONE apex capture with a
+    trustworthy reference: 0033 is in ``test_eznec_serve.DIVERGENT_IDS``,
+    sitting in a 275 ohm gap of its own (momwire#510, Sommerfeld at grazing
+    wire height), so it is served here and pinned nowhere.
+
+    razor-nec5 is the licensed engine's formulation twin, so the bar is the
+    twin's and not a basis envelope: it lands where the engine lands, while
+    the B-spline row — a different discretization of the same source on a
+    six-segment radial — sits 20 % away.
+    """
+    reference = input_impedance(printout_text("0013"))
+    served = input_impedance(render(deck_text("0013"), basis="razor-nec5"))
+    bspline = input_impedance(render(deck_text("0013")))
+    assert reference == pytest.approx(55.621 + 8.273j, abs=1e-3)
+    assert abs(served - reference) / abs(reference) < 1e-4
+    assert abs(bspline - reference) / abs(reference) > 0.15
 
 
 def input_impedance(text: str) -> complex | None:
