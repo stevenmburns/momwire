@@ -328,9 +328,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     #
     # momwire#282 stage 1 withdrew one combination inside the served ground
     # column: ground CONTACT under `ground_model="refl-coef"`. Same key,
-    # same prose and same reasoning as `BSplineSolver`'s — contact is not a
-    # declared axis anywhere, so it is a combination key on the pattern
-    # `RazorSolver` set with `"contact+finite_ground"`.
+    # same prose and same reasoning as `BSplineSolver`'s and `RazorSolver`'s
+    # — contact is not a declared axis anywhere, so it is a combination key.
+    # momwire#624 left this the ONLY contact refusal in the tree: razor's
+    # broader `"contact+finite_ground"`, which was the pattern this comment
+    # used to point at, went when its Sommerfeld half was served.
     capabilities = Capabilities(
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,

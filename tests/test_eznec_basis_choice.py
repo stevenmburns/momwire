@@ -132,25 +132,28 @@ def test_a_family_with_no_current_slopes_refuses_by_name():
     assert "current_slopes" in text
 
 
-@pytest.mark.parametrize(
-    "cid, fragment",
-    [
-        ("0021", "FINITE ground plane"),  # ground contact — #603 U5
-    ],
-)
-def test_what_razor_cannot_host_is_named_in_the_printout(cid, fragment):
-    """Each of the three is a refusal momwire would raise anyway.
+def test_razor_now_hosts_the_deck_it_used_to_name_a_refusal_for():
+    """0021 stands a wire end in a finite ground plane, and is SERVED.
 
-    Moved one step forward so it arrives as a printout: the shell's last line
-    of defence would otherwise write ``INTERNAL ERROR IN MOMWIRE ENGINE`` and
-    a Python exception name, which tells a ham nothing about their model.
-    The prose is the solver's own ``capabilities`` row where there is a cell
-    for it, not a second copy kept here.
+    This test used to assert the opposite, and the inversion is momwire#624:
+    the refusal it pinned — "ground CONTACT over a finite ground" — was
+    lifted after §5.5's experiment measured what it protected. The reason to
+    keep a test here rather than delete one is that a refusal arriving as a
+    PRINTOUT is the seam's own property, independent of which refusals exist:
+    the shell's last line of defence would otherwise write ``INTERNAL ERROR
+    IN MOMWIRE ENGINE`` and a Python exception name, which tells a ham
+    nothing about their model. So the surviving claim is the seam's, on the
+    deck that used to exercise it.
+
+    ``test_eznec_serve.py`` owns the printout's numbers; what is checked here
+    is only that the deck comes back as an ANSWER, with a real impedance in
+    it, and with neither the old refusal nor a leaked traceback.
     """
-    text = render(deck_text(cid), basis="razor-nec5")
-    assert fragment in text
+    text = render(deck_text("0021"), basis="razor-nec5")
+    assert "NEC ERROR" not in text
     assert "INTERNAL ERROR" not in text
-    assert "razor-nec5" in text
+    assert "FINITE ground plane" not in text
+    assert "ANTENNA INPUT PARAMETERS" in text
 
 
 # --------------------------------------------------------------------------
@@ -163,19 +166,30 @@ def test_what_razor_cannot_host_is_named_in_the_printout(cid, fragment):
 # machinery: ``capabilities.refusals`` says what a solver CLAIMS it will not
 # do, and nothing checked what it actually does, deck by deck.
 #
-# Measured over all 62 committed captures at momwire 0.39.0, and re-measured
-# on top of momwire#609.  Three causes account for every refusal in the corpus
-# and NOTHING RAISES AT ALL, which is a smaller thing to say than the first
-# measurement could: ``arrayblock`` was 57 + 2 RAISED, and #609 makes it 59
-# and silent, which is parity with ``bspline``.  The two decks were never a
-# refusal — ``_shape_classes`` called four verticals one shape on segment
-# geometry alone, two of them cut mid-wire by an ``LD`` and so carrying 9
-# bases against the others' 7, and the 9x9 block went at a 7-basis element.
+# Measured over all 62 committed captures at momwire 0.39.0 and re-measured
+# TWICE since, once per capability that landed.  **Every basis outside the
+# sinusoidal family now accepts all 59, and nothing raises at all** — the
+# strongest and simplest form this table has had, and it was reached in two
+# deliberate steps rather than by drift:
 #
-# That re-measure is this gate's first firing, and it is the shape the gate
-# was built for: #609 landed while this was in review, the walk named 0116 and
-# 0117 as decks arrayblock now accepts, and the table had to be restated
-# rather than a count quietly agreeing.
+#   momwire#609 — ``arrayblock`` was 57 + 2 RAISED.  ``_shape_classes`` called
+#     four verticals one shape on segment geometry alone, two of them cut
+#     mid-wire by an ``LD`` and so carrying 9 bases against the others' 7, and
+#     the 9x9 block went at a 7-basis element.  The two decks were never a
+#     refusal, and the walk named 0116 and 0117 the day the fix landed.
+#
+#   momwire#624 — ``razor`` and ``razor-nec5`` were 54, refusing ground
+#     CONTACT over a finite ground on 0021/0047/0048/0110/0111.  That refusal
+#     was lifted after §5.5's experiment measured what it was protecting: the
+#     residual is bounded and saturating, inside the very envelope pins
+#     ``BSplineSolver``'s contact row already ships under, and on sea water
+#     razor is twenty times closer to the binary than bspline is.
+#
+# Both were caught by this gate rather than absorbed, which is what it is for.
+# #624 fired it HARDER than #609 did: ``CONTACT_OVER_A_FINITE_GROUND`` read
+# its prose out of the capabilities roster, so removing that row broke this
+# module's IMPORT rather than one assert.  A blunt failure, but it arrives
+# before any measurement runs and it cannot be mistaken for a flake.
 
 SERVED = None
 
@@ -185,14 +199,6 @@ SERVED = None
 # "serves the corpus" means.  The sentence itself is owned by
 # ``test_eznec_serve.py`` — a fragment is enough here to tell the causes apart.
 NEAR_FIELD_AT_A_CONTACT = "asks for the field at (0, 0, 0) metres"
-
-# momwire#624, and the whole of razor's asymmetry: five decks stand a wire end
-# in a finite ground plane.  Not a COPY of the prose — this IS the solver's own
-# capabilities row, so a refusal that keeps firing on the same decks for a
-# different reason cannot pass by matching a fragment kept here.
-CONTACT_OVER_A_FINITE_GROUND = RazorSolver.capabilities.refusals[
-    "contact+finite_ground"
-]
 
 # The dialect prints a CHARGE DENSITY table and reads it off the basis; the
 # three sinusoidal entries have no ``current_slopes`` to read it from, so they
@@ -224,23 +230,23 @@ def _row(refusals=()):
     return row
 
 
-# Three shapes cover all 62 — it was four before #609 — and naming them is what
-# makes the table's intent survive a re-baseline: a deck that MOVES between
-# shapes is a one-line diff, and a shape that changes membership is a one-line
-# diff.  A shape whose last deck leaves goes with it, as ``NOT_ARRAYBLOCK`` did.
+# TWO shapes cover all 62 now — four before #609, three before #624 — and
+# naming them is what makes the table's intent survive a re-baseline: a deck
+# that MOVES between shapes is a one-line diff, and a shape that changes
+# membership is a one-line diff.  A shape whose last deck leaves goes with it,
+# as ``NOT_ARRAYBLOCK`` and then ``NOT_RAZOR`` both did.
 EVERY_BASIS = _row()
-NOT_RAZOR = _row(dict.fromkeys(("razor", "razor-nec5"), CONTACT_OVER_A_FINITE_GROUND))
 # Including the sinusoidal three, which is an ORDERING fact worth having
 # written down: these decks are refused for what they ASK FOR before any basis
 # is asked whether it can host them, so their cells say the near field rather
 # than ``current_slopes``.
 NO_BASIS = _row(dict.fromkeys(BASES, NEAR_FIELD_AT_A_CONTACT))
 
-# 59/59 for every basis outside the razor family, 54/59 for razor, and the
-# asymmetry is exactly the five NOT_RAZOR decks with exactly one cause.
-# razor's 49 -> 54 was momwire#608, which narrowed a refusal that used to read
-# "one segment" to what it should always have read, "one segment and junctioned
-# at neither end".
+# 59/59 for every basis outside the sinusoidal family, with no asymmetry left
+# to record.  razor's road here was 49 -> 54 (momwire#608, which narrowed a
+# refusal that used to read "one segment" to what it should always have read,
+# "one segment and junctioned at neither end") -> 59 (momwire#624, ground
+# contact over a finite ground).
 ACCEPTS = {
     "0000": EVERY_BASIS,
     "0001": EVERY_BASIS,
@@ -263,7 +269,7 @@ ACCEPTS = {
     "0018": EVERY_BASIS,
     "0019": EVERY_BASIS,
     "0020": EVERY_BASIS,
-    "0021": NOT_RAZOR,
+    "0021": EVERY_BASIS,
     "0022": NO_BASIS,
     "0023": EVERY_BASIS,
     "0024": EVERY_BASIS,
@@ -289,13 +295,13 @@ ACCEPTS = {
     "0044": EVERY_BASIS,
     "0045": EVERY_BASIS,
     "0046": EVERY_BASIS,
-    "0047": NOT_RAZOR,
-    "0048": NOT_RAZOR,
+    "0047": EVERY_BASIS,
+    "0048": EVERY_BASIS,
     "0107": NO_BASIS,
     "0108": EVERY_BASIS,
     "0109": EVERY_BASIS,
-    "0110": NOT_RAZOR,
-    "0111": NOT_RAZOR,
+    "0110": EVERY_BASIS,
+    "0111": EVERY_BASIS,
     "0112": NO_BASIS,
     "0113": EVERY_BASIS,
     "0114": EVERY_BASIS,
@@ -325,8 +331,7 @@ def test_the_table_covers_every_capture_and_every_basis():
     for cid, row in ACCEPTS.items():
         assert set(row) == set(BASES), cid
     shapes = (
-        ("EVERY_BASIS", EVERY_BASIS, 54),
-        ("NOT_RAZOR", NOT_RAZOR, 5),
+        ("EVERY_BASIS", EVERY_BASIS, 59),
         ("NO_BASIS", NO_BASIS, 3),
     )
     for name, shape, count in shapes:
@@ -340,35 +345,36 @@ def test_the_table_covers_every_capture_and_every_basis():
         assert ACCEPTS[cid][basis] is not SERVED
 
 
-def test_razor_accepts_a_strict_subset_of_what_bspline_accepts():
-    """The asymmetry is one-directional, and this says so about the TABLE.
+def test_every_basis_that_answers_at_all_accepts_the_same_59():
+    """Serving parity, as an equality — which is what #635 was asking for.
 
-    Stated against the expectation rather than against a walk of the corpus,
-    deliberately: a re-baseline that INVERTS the relationship has to delete
-    this test rather than absorb it into a new set of numbers.  Anything razor
-    serves, bspline serves; there are zero decks the other way; and every deck
-    in the gap carries the same one reason, which is #624.  Closing that takes
-    the difference to the empty set, at which point the two lines below stop
-    holding and the table wants re-baselining to "both accept all 59" — a
-    stronger and simpler statement, and one worth arriving at on purpose.
+    The predecessor of this test asserted ``razor < bspline`` and said in its
+    own docstring what would happen when momwire#624 closed: "the two lines
+    below stop holding and the table wants re-baselining to *both accept all
+    59* — a stronger and simpler statement, and one worth arriving at on
+    purpose".  #624 landed and that is this test.  The subset form is GONE
+    rather than weakened to ``<=``, because a subset claim that is really an
+    equality invites the gap to reopen unnoticed on the slack side.
+
+    So the corpus now divides in two, not three: the sinusoidal family, which
+    cannot read a CHARGE DENSITY table off its basis and refuses everything,
+    and every other basis, which accepts the same 59.  ``hmatrix``,
+    ``arrayblock`` and the razor family are their own solvers rather than
+    bspline variants — three different bases and two different testing
+    schemes — so their agreeing on the accept SET is a measurement, not a
+    tautology, and it is the property "we accept the same decks" names.
     """
-    razor, bspline = _accepted_by("razor"), _accepted_by("bspline")
-    assert razor < bspline
-    assert len(razor) == 54 and len(bspline) == 59
-    assert bspline - razor == {"0021", "0047", "0048", "0110", "0111"}
-    for cid in bspline - razor:
-        assert ACCEPTS[cid]["razor"] == CONTACT_OVER_A_FINITE_GROUND
-    # The two entries of a family are one formulation and differ only in a
-    # quadrature rule or a degree, so they accept the same decks.  A split
-    # inside a family is a finding of its own.
-    assert razor == _accepted_by("razor-nec5")
-    # And since momwire#609 the corpus divides in three: the razor family at
-    # 54, the sinusoidal family at 0, and EVERYTHING ELSE at the same 59 —
-    # ``hmatrix`` and ``arrayblock`` are their own solvers rather than bspline
-    # variants, so their agreeing here is a measurement and not a tautology.
-    for basis in ("bspline-d1", "hmatrix", "arrayblock"):
+    bspline = _accepted_by("bspline")
+    assert len(bspline) == 59
+    for basis in ("bspline-d1", "hmatrix", "arrayblock", "razor", "razor-nec5"):
         assert _accepted_by(basis) == bspline, basis
     assert all(not _accepted_by(basis) for basis in _SINUSOIDAL)
+    # The three the whole roster refuses are the corpus's own, not any
+    # formulation's: 62 - 59, and they are the near-field cell.
+    refused_by_all = set(CAPTURE_IDS) - bspline
+    assert refused_by_all == {"0022", "0107", "0112"}
+    for cid in refused_by_all:
+        assert set(ACCEPTS[cid].values()) == {NEAR_FIELD_AT_A_CONTACT}
 
 
 @pytest.mark.slow

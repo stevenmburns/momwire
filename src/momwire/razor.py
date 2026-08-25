@@ -430,47 +430,35 @@ _OUT_OF_SCOPE = {
 }
 
 
-# The one geometry both served finite grounds refuse. Checked in __init__
-# (it is a combination of named arguments, not a stray kwarg, so
-# `_OUT_OF_SCOPE` cannot carry it) and quoted by `capabilities.refusals`.
+# momwire#624 removed `_CONTACT_OVER_FINITE_REFUSAL` from this module. A
+# grounded end over the SOMMERFELD ground is served here now, and what is
+# left refused is the row `_ground_spec` owns for every solver that has one:
+# contact under `refl-coef`, withdrawn from the whole tree by momwire#282
+# stage 1's D3 because the MODEL is wrong at zero clearance (stock nec2c
+# prints 175 - 779j Ω on the same deck). Razor reaches that refusal through
+# the same `_ground_spec.contact_ends` scan and the same prose as
+# `BSplineSolver` and `SinusoidalSolver`, so there is one sentence for it in
+# the tree rather than a fourth copy.
 #
-# The PROSE was corrected by momwire#282 stage 1 (2026-08-18) and the
-# refusal itself was not: this solver refuses exactly what it refused
-# before, on the same condition, in the same place.
-# `docs/design/contact-over-finite-ground.md` §4.3 read the fill and found
-# the old wording wrong on its own mechanism three ways — `_ground_spec`
-# assigns `image_coefficient = 1` to the reflection-coefficient ground too,
-# so coefficient 1 is not the tell for PEC; the "spurious contact charge"
-# is the DIRECT-FIELD trunk's 1/Δ point charge (momwire#282's own
-# pathology), while razor's grounded row carries a bounded DOUBLET (−1/h on
-# the real segment, +1/h on its image, `_fill`'s own note) and no point
-# charge at all; and the licensed binary announces coefficient-1
-# continuation at contact over EVERY ground, in printed output, so weighting
-# the wing would depart from the reference rather than approach it. What the
-# study argues razor actually lacks — the plane-reference term the T2 drop
-# discards — is a reading of the code plus a physical argument, not a
-# measurement, so it is stated below as what stage 3 will TEST, not as what
-# is known.
-_CONTACT_OVER_FINITE_REFUSAL = (
-    "ground CONTACT over a finite ground is refused: a grounded row takes "
-    "the plane as its potential reference, which is exact only over a "
-    "perfect conductor. Over a finite ground the plane is not an "
-    "equipotential — the folded scalar potential there is (1 - w_Phi)*M0 "
-    "rather than zero — and this fill drops that term. The grounded tent's "
-    "image wing is correct as it stands and must NOT be weighted: charge "
-    "conservation fixes the BASIS's continuation coefficient at 1 over "
-    "every ground, whatever the GROUND MODEL's image coefficient is "
-    "(momwire#282 is the direct-field trunk's account of what weighting it "
-    "costs — a 1/Delta point charge at the contact node, which this "
-    "formulation's doublet does not have). Restoring the dropped term is a "
-    "hypothesis, not a diagnosis: see "
-    "docs/design/contact-over-finite-ground.md 4.3 and its stage 3. Either "
-    "use BSplineSolver, which serves contact over "
-    "ground_model='sommerfeld', or raise the wire clear of the plane (both "
-    "finite grounds are served there — refl-coef in its 0.1-0.5 lambda "
-    "validity window, sommerfeld at any height), or drop ground_eps for "
-    "the PEC image"
-)
+# What the old refusal claimed, and what measuring it found. Its text named
+# a real asymmetry — over a finite ground the T2 drop discards
+# (1 - w_Phi)*M0(plane) rather than zero (§4.3) — and offered restoring that
+# term as the fix, explicitly as "a hypothesis, not a diagnosis". §5.5's
+# experiment ran under momwire#624 and the hypothesis did not survive it:
+# the term makes the binary comparison WORSE at full strength, and on the
+# stubbed ladder — the instrument that needs no reference — coefficient 0 is
+# flattest everywhere, so no scale for it is self-consistent. `_fill_T2`'s
+# grounded branch carries the measurement.
+#
+# The refusal was therefore not protecting a defect the term would repair.
+# What it was costing is five of the 62 EZNEC captures and the most common
+# HF model there is, a base-fed vertical over real ground, on an engine a
+# user points EZNEC at. Serving it puts razor on bspline's bar (D1): a
+# residual that is BOUNDED and saturating rather than diverging, pinned by
+# an envelope with the saturation checked. Measured at N = 61 against the
+# binary's own printed shift, razor is 0.005 Ω on sea water where bspline is
+# 0.201, and 3.384 Ω on poor soil where bspline is 3.309 — the same row,
+# not a worse one.
 
 
 def _remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap=None):
@@ -722,15 +710,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
-    # momwire#624 SPIKE ONLY. See __init__ for what these do. Never True on a
-    # shipped path; the harness in scripts/spike_contact_plane_reference.py
-    # sets and restores them around a measurement. TWO flags, because the
-    # experiment is exactly "what does the restored term change?" — one
-    # admits the geometry, the other adds the term, and holding the first
-    # while toggling the second is the measurement.
-    _spike_contact = False
-    _spike_plane_reference = False
-
     # momwire#396: free space and all three grounds — the PEC image
     # (momwire#398 unit 2), the reflection-coefficient ground (unit 4) and
     # the Sommerfeld ground (unit 5) — for wires standing clear of the
@@ -743,12 +722,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # reference as extended-kernel everywhere, so the twin needs it on fat
     # wire; module docstring, "The extended kernel"), plus SERIES NODE GAPS
     # (momwire#603 U4 — the K−1 through-current tents were always built here,
-    # only the port that drives one was missing). No junction_ports /
-    # enrichment: the rest of the row is refused, reusing
-    # `_OUT_OF_SCOPE`'s prose (built at __init__ from unsupported kwargs)
-    # and `_CONTACT_OVER_FINITE_REFUSAL` for the one geometry the finite
-    # grounds refuse (a combination of named arguments rather than a stray
-    # kwarg).
+    # only the port that drives one was missing), plus GROUND CONTACT over
+    # the Sommerfeld ground (momwire#624 — §5.5's experiment measured the
+    # residual bounded and on bspline's own bar, so the refusal that stood
+    # here went). No junction_ports / enrichment: the rest of the row is
+    # refused, reusing `_OUT_OF_SCOPE`'s prose (built at __init__ from
+    # unsupported kwargs).
+    #
+    # `contact+finite_ground` and `contact+sommerfeld` are GONE from this
+    # roster rather than answered None, which is the honest spelling: a key
+    # that is absent says "not a refusal here", and a key mapping to prose
+    # says "refused, and here is why". What remains is the one combination
+    # the whole tree refuses, under the one spelling a caller holding a deck
+    # actually has — it knows which ground it asked for, not the abstraction
+    # "finite_ground".
     capabilities = Capabilities(
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
@@ -758,18 +745,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         per_wire_radius=True,
         singular_enrichment=False,
         refusals={
-            "contact+finite_ground": _CONTACT_OVER_FINITE_REFUSAL,
-            # The same refusal under the two spellings a consumer holding a
-            # concrete deck actually has (momwire#282 stage 1). A caller
-            # knows which ground it asked for, not the abstraction
-            # "finite_ground", and once `BSplineSolver` and
-            # `SinusoidalSolver` declare `"contact+refl-coef"` a row that
-            # answered None to that question would be reading as SERVED on
-            # the one solver that has refused it since #398. Aliases, not
-            # new refusals: the constructor check is unchanged and still
-            # fires on `ground_eps` alone.
-            "contact+refl-coef": _CONTACT_OVER_FINITE_REFUSAL,
-            "contact+sommerfeld": _CONTACT_OVER_FINITE_REFUSAL,
+            "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
         },
     )
@@ -812,16 +788,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             raise TypeError(f"RazorSolver got unexpected keyword argument(s): {bad}")
 
         self._cancel = cancel
-        # ---- momwire#624 SPIKE ONLY — not public API, not a capability ----
-        # docs/design/contact-over-finite-ground.md §5.5. Setting these on an
-        # instance BEFORE construction is impossible, so the spike harness
-        # sets the CLASS attributes for the duration of a measurement.
-        # `_spike_contact` lets a contact-over-finite-ground model construct;
-        # `_spike_plane_reference` restores the plane-reference term §4.3 says
-        # the T2 drop discards. Both default False, so every shipped path —
-        # and every existing gate — is untouched. Delete with the spike.
-        self._spike_contact = type(self)._spike_contact
-        self._spike_plane_reference = type(self)._spike_plane_reference
         self._checkpoint()
 
         self.wavelength = float(wavelength)
@@ -887,12 +853,22 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
         # Validates the geometry against the plane (and is re-read at
         # basis-build time for the grounded ends themselves).
-        grounded_ends = self._ground_ends()
-        if grounded_ends and self.ground_eps is not None and not self._spike_contact:
-            where = ", ".join(f"wire {w} {kind}" for w, kind in sorted(grounded_ends))
-            raise NotImplementedError(
-                f"{where} lies in the ground plane: {_CONTACT_OVER_FINITE_REFUSAL}"
-            )
+        self._ground_ends()
+        # momwire#282 stage 1's D3, the row every solver with a refl-coef
+        # ground refuses: contact under `refl-coef` is a MODEL failure at zero
+        # clearance and not an implementation one, so it is refused here on
+        # exactly the scan `BSplineSolver` and `SinusoidalSolver` use and with
+        # exactly their sentence. momwire#624 lifted the SOMMERFELD half of
+        # what this block used to refuse — see the module note above
+        # `_remainder_qp` for what measuring §4.3's hypothesis found.
+        if self.ground_eps is not None and self.ground_model == "refl-coef":
+            touching = _ground_spec.contact_ends(self.wires_polylines, self.ground_z)
+            if touching:
+                where = ", ".join(f"wire {w} {kind}" for w, kind in touching)
+                raise NotImplementedError(
+                    f"{where} lies in the ground plane: "
+                    f"{_ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL}"
+                )
 
         n_w = len(self.wires_polylines)
         # Per-wire conductor radius (stevenmburns/momwire#147), spelled
@@ -2647,12 +2623,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         M0c, _ = self._seg_moments_from_prepared(
             sources["t2_chunks"], geom, k, prepared["n_cent"], need_m1=False
         )
-        grounded = prepared["grounded"]
-        # momwire#624 spike: the plane rows BEFORE the weight, which is the
-        # only thing the restored term needs that weighting destroys.
-        plane_unweighted = None
-        if self._spike_plane_reference and w_Phi_fn is not None and grounded.size:
-            plane_unweighted = M0c[s_a[grounded]].copy()
         if w_Phi_fn is not None:
             n_cent = prepared["n_cent"]
             step = max(1, _WEIGHTED_CHUNK_ELEMS // max(1, prepared["n_seg"]))
@@ -2662,6 +2632,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 _w_A_unused, w_Phi = w_Phi_fn(c0, c1)
                 M0c[c0:c1] *= w_Phi
         dM0 = M0c[s_b] - M0c[s_a]  # (row, source segment)
+        grounded = prepared["grounded"]
         if grounded.size:
             # A grounded row's testing path starts AT the plane, where the
             # folded scalar potential is identically zero: a point in the
@@ -2671,32 +2642,36 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # therefore exact rather than approximate — and it is what makes
             # the plane this formulation's potential reference, the discrete
             # form of Φ = 0 on a perfect conductor.
+            #
+            # **Over a FINITE ground the drop is NOT exact, and it stays.**
+            # This block's plane term has been scaled by w_Φ above and the
+            # real block's has not, so the pair of drops discards
+            # (1 − w_Φ)·M0(plane) rather than zero. The study's §4.3 read
+            # that as the defect behind razor's contact refusal and §5.5
+            # named the experiment; momwire#624 ran it, and the term does
+            # not survive its own instrument:
+            #
+            #   * on the STUBBED LADDER — momwire against momwire, no binary,
+            #     a self-consistent contact node must give an h-independent
+            #     answer — coefficient 0 is flattest on every row by an order
+            #     of magnitude, on both soils and BOTH ground models. At 0.4
+            #     the ladder slides 42.18+25.82j → 33.58+16.50j as the stub
+            #     shrinks, converging back onto the coefficient-0 answer: the
+            #     term's contribution evaporates with the contacting element,
+            #     so no SCALE makes it self-consistent;
+            #   * against the binary it is worse at full strength (poor soil
+            #     3.384 → 3.906 Ω at N = 61). One coefficient ≈ 0.4 is the
+            #     argmin at a fixed mesh on every lossy ground, but that is a
+            #     fit at one mesh, not a derivation, and the ladder above is
+            #     the instrument that needs no reference.
+            #
+            # So the reference the plane gives this row is kept as it stands.
+            # What the ladder DOES leave is a residual with a target: the
+            # finite-ground ladders spread 0.21-0.55 Ω where PEC holds 0.002,
+            # so the contact node is internally inconsistent over a finite
+            # ground by about half an ohm. `test_razor_contact_finite_ground`
+            # pins that, and it is the thing to attack next — not this term.
             dM0[grounded] = M0c[s_b[grounded]]
-            if plane_unweighted is not None:
-                # ---- momwire#624 SPIKE ONLY (§4.3, §5.5) -----------------
-                # Over a FINITE ground the two blocks' plane terms are no
-                # longer the same number: this block's has been scaled by
-                # w_Φ and the real block's has not, so the pair of drops
-                # discards (1 − w_Φ)·M0(plane) instead of zero.
-                #
-                # This is the IMAGE block — the ground, and therefore the
-                # weight, exists only here (`_assemble_Z_from_prepared`
-                # passes `ground=` to the image call alone) — and the caller
-                # spells the fold `Z = real − image`. So adding the term
-                # HERE lands it on the assembled matrix with the minus the
-                # physics wants, and nothing has to be threaded into the
-                # real block, which has no w_Φ to compute it with.
-                #
-                #   M0c[s_a] is w_Φ·M0(plane) after the loop above, so
-                #   plane_unweighted − M0c[s_a] IS (1 − w_Φ)·M0(plane)
-                #
-                # with no second weight lookup and no assumption about how
-                # w_Φ is indexed. At PEC `w_Phi_fn` is None and none of this
-                # runs, so the PEC path is untouched arithmetic, not merely
-                # an added zero.
-                dM0[grounded] += float(self._spike_plane_reference) * (
-                    plane_unweighted - M0c[s_a[grounded]]
-                )
         T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
 
         tans, wts = prepared["tans"], prepared["wts"]

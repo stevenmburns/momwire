@@ -331,8 +331,21 @@ def test_razor_served_row_is_every_ground_plus_loading_radii_and_the_kernel():
     assert c.refusal("wire_loading") is None
     assert c.refusal("per_wire_radius") is None
     assert c.refusal("extended_kernel") is None
-    assert c.refusal("contact", "finite_ground") == c.refusals["contact+finite_ground"]
-    assert "momwire#282" in c.refusal("contact", "finite_ground")
+    # momwire#624: contact over the SOMMERFELD ground is served, so the
+    # `contact+finite_ground` and `contact+sommerfeld` keys are ABSENT rather
+    # than answering prose — an absent key is this roster's spelling for "not
+    # a refusal here", which is why it is asserted as None and not merely
+    # left unmentioned.
+    assert c.refusal("contact", "finite_ground") is None
+    assert c.refusal("contact", "sommerfeld") is None
+    # What remains is D3's row, refused across the whole tree because the
+    # MODEL fails at zero clearance, and it is `_ground_spec`'s one sentence
+    # rather than a razor-owned copy of it.
+    assert c.refusal("contact", "refl-coef") == c.refusals["contact+refl-coef"]
+    assert "momwire#282" in c.refusal("contact", "refl-coef")
+    assert c.refusal("contact", "refl-coef") == BSplineSolver.capabilities.refusal(
+        "contact", "refl-coef"
+    )
     assert not any(
         [
             c.junction_ports,
