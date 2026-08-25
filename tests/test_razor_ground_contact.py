@@ -403,19 +403,34 @@ def test_contact_over_a_finite_ground_is_refused_citing_282():
         assert np.isfinite(z.real) and np.isfinite(z.imag)
 
 
-def test_the_composing_ground_refuses_contact_for_the_same_reason():
-    """momwire#398 unit 5 moved this test's claim, and the move is the
-    point.
+def test_the_composing_ground_serves_contact_and_refl_coef_still_does_not():
+    """This test's claim has now moved THREE times, and each move is a
+    measurement rather than a change of mind.
 
-    Unit 4's version read "`ground_model='sommerfeld'` is refused on its
+    momwire#398 unit 4 read "`ground_model='sommerfeld'` is refused on its
     own terms — the composition — whether or not anything touches the
-    plane". Unit 5 serves the composition, so what is left is the SAME
-    contact refusal the folding finite ground gets, for the same #282
-    reason: the composing ground's image coefficient is C₂, not 1, so a
-    grounded tent's lower wing is no more its own exact image over
-    Sommerfeld than over Fresnel. A ground unit that had quietly let
-    contact through here would be mismodelling exactly the class of
-    antenna (the monopole) this solver's contact work exists for.
+    plane". Unit 5 served the composition, and what was left was a contact
+    refusal shared with the folding finite ground: the composing ground's
+    image coefficient is C₂, not 1, so a grounded tent's lower wing is no
+    more its own exact image over Sommerfeld than over Fresnel.
+
+    momwire#624 measured that argument instead of reasoning about it, and
+    it does not hold up as a reason to REFUSE. The study's §4.3 diagnosis
+    — that the T2 drop discards (1 − w_Φ)·M0(plane) and restoring it is
+    the fix — was run behind a flag under §5.5 and the restored term made
+    the binary comparison worse at full strength and failed the stubbed
+    ladder at every scale. What the row actually does over a finite ground
+    is what D1 already accepted from `BSplineSolver`: a residual that is
+    bounded and saturating, 0.005 Ω from the binary's own printed shift on
+    sea water against bspline's 0.201, and 3.384 against 3.309 on poor
+    soil. `test_razor_contact_finite_ground.py` is that measurement as a
+    gate.
+
+    What stays refused is D3's row, which is a statement about the MODEL
+    and not about this solver: refl-coef at zero clearance is wrong in the
+    reference implementation too (stock nec2c prints 175 − 779j Ω on the
+    same monopole). So the pair below is the whole of the new boundary —
+    same geometry, same soil, two ground models, one served and one not.
     """
     mono = [np.array([[0.0, 0.0, 0.0], [0.0, 0.0, MONO_LEN]])]
     clear = [np.array([[2.0, -2.0, 4.0], [2.0, 2.0, 4.0]])]
@@ -427,16 +442,29 @@ def test_the_composing_ground_refuses_contact_for_the_same_reason():
         ground_model="sommerfeld",
     )
 
-    with pytest.raises(NotImplementedError, match="momwire#282") as exc:
-        RazorSolver(wires=mono, n_per_edge_per_wire=[[8]], **somm)
-    assert "wire 0 start" in str(exc.value)
-
-    # ...and the deck that does NOT touch is served, so the refusal is the
-    # geometry's and not the ground model's.
     z, _ = RazorSolver(
-        wires=clear, n_per_edge_per_wire=[[8]], **somm
+        wires=mono, n_per_edge_per_wire=[[8]], **somm
     ).compute_impedance()
     assert np.isfinite(z.real) and np.isfinite(z.imag)
+    assert z.real > 0.0  # a passive antenna, not a sign-flipped fold
+
+    # The same wire under refl-coef is still refused, by D3, and the
+    # sentence is `_ground_spec`'s own rather than a copy kept in razor.
+    with pytest.raises(NotImplementedError, match="momwire#282") as exc:
+        RazorSolver(
+            wires=mono,
+            n_per_edge_per_wire=[[8]],
+            **{**somm, "ground_model": "refl-coef"},
+        )
+    assert "wire 0 start" in str(exc.value)
+
+    # ...and the deck that does NOT touch is served under both, so that
+    # refusal is the geometry's and not the ground model's alone.
+    for model in ("sommerfeld", "refl-coef"):
+        z, _ = RazorSolver(
+            wires=clear, n_per_edge_per_wire=[[8]], **{**somm, "ground_model": model}
+        ).compute_impedance()
+        assert np.isfinite(z.real) and np.isfinite(z.imag)
 
 
 # --------------------------------------------------------------------------
