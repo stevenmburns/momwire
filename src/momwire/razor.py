@@ -321,9 +321,14 @@ finite ground stays refused with a message rather than silently
 mismodelled, as do the contacts that are not a wire end in the plane (an
 interior anchor touching down, an edge lying in the plane, a wire dipping
 below it). Only wire ENDS junction: a wire end touching another wire's
-interior is not a contact here. A wire with a single segment cannot take
-part in a junction (its two junction tents would overlap on one segment)
-and is refused. The extended kernel adds no combination hole of its own:
+interior is not a contact here. A wire with a single segment is served
+wherever either of its ends meets something — another wire, or the ground
+plane — because such an end carries a tent, and two of them sharing one
+segment are the two Lagrange bases an interior segment already carries.
+Splitting a wire so that a one-segment piece falls out therefore reproduces
+the unsplit wire exactly (momwire#608). One whose ends meet NOTHING is
+refused: it carries no basis at all and would scatter nothing. The extended
+kernel adds no combination hole of its own:
 every capability this class serves — all three grounds, contact, junctions,
 loading, mixed radii, both quadrature lanes, swept solves — is served with
 it on, and each is gated with it on.
@@ -844,15 +849,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 raise ValueError(f"wire {i}: every edge needs >= 1 segment")
             self.n_per_edge_per_wire.append(npe)
 
-        for i, npe in enumerate(self.n_per_edge_per_wire):
-            if sum(npe) < 2:
-                raise ValueError(
-                    f"wire {i}: needs >= 2 segments to have an interior knot "
-                    "(a one-segment wire carries no tent, and if it were "
-                    "junctioned at both ends its two junction tents would "
-                    "overlap on that one segment — split it in two)"
-                )
-
         if self._declared_junctions is not None:
             # momwire#522's guardrail, which BSplineSolver and SinusoidalSolver
             # have run since that issue. Razor and harrington only started
@@ -878,6 +874,52 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # not about a basis.  Validated here rather than at first solve so a
         # malformed gap is a constructor error like every sibling's.
         groups = self._find_junctions()
+
+        # ---- the one-segment wire (momwire#608) --------------------------
+        # A one-segment wire used to be refused outright, on the grounds that
+        # it "carries no tent" and that two junction tents "would overlap on
+        # that one segment".  The second half was simply wrong: a wire
+        # junctioned at both ends carries one tent per junction, and two tents
+        # sharing a segment is what every INTERIOR segment of every wire
+        # already is — they are that segment's two Lagrange bases.  The
+        # refusal cost the EZNEC corpus five decks (74 one-segment polylines
+        # across them, every one junctioned at one end or both).
+        #
+        # What is true is the FIRST half, and only for a wire junctioned at
+        # NEITHER end: it carries no basis at all, so it holds no current, and
+        # a solve including it is bit-identical to one that omits it.  That is
+        # not razor's quirk — the licensed engine counts the same wire as an
+        # element and gives it no unknown either, and prints the same
+        # impedance with and without it.  Reproducing that silently is the one
+        # thing this class will not do: the caller declared a scatterer and
+        # would get a scatterer-free answer with nothing said.  So the wire is
+        # refused, and the message says which wire and what to do about it.
+        #
+        # This check is also the ONLY one the empty model needs, which is why
+        # `_build_geometry` no longer carries a second. It used to raise "no
+        # unknowns: every wire needs >= 2 segments" on `n_interior == 0`,
+        # counting the interior knots and not the junction tents — so it
+        # refused a closed triangle of three one-segment wires, which has no
+        # interior knot anywhere and three perfectly good tents. A model with
+        # no basis at all is exactly a model whose every wire is one segment
+        # and unjoined, so the loop below is that check, per wire and with a
+        # wire index in the message.
+        joined = {end for g in groups for end in g["ends"]}
+        for i, npe in enumerate(self.n_per_edge_per_wire):
+            if sum(npe) > 1:
+                continue
+            if (i, "start") in joined or (i, "end") in joined:
+                continue
+            raise ValueError(
+                f"wire {i}: a one-segment wire junctioned at neither end "
+                "carries no basis — it would hold no current and scatter "
+                "nothing, and the solve would be identical to one without it "
+                "(split it in two, or drop it). A one-segment wire whose end "
+                "meets something is fine, whether that is another wire or the "
+                "ground plane: the tent such an end carries is the basis an "
+                "interior segment carries."
+            )
+
         self.node_gaps = _wire_spec.normalize_node_gaps(
             node_gaps, [list(g["ends"]) for g in groups], len(self.wires_polylines)
         )
@@ -1215,8 +1257,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ]
         )
         n_interior = int(basis_offsets[-1])
-        if n_interior == 0:
-            raise ValueError("no unknowns: every wire needs >= 2 segments")
 
         groups = self._find_junctions()
         j_seg, j_rise, j_sigma = [], [], []

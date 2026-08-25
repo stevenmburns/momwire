@@ -108,13 +108,19 @@ each side of the node or runs continuously through it: 2.03 % on a 5 m dipole
 at 30 MHz under degree-2 B-splines, the same class as the basis envelope this
 seam already reports against the licensed engine.  What is NOT a matter of
 taste is that the cut costs something — a node one element from a wire's end
-leaves a one-segment polyline, which carries no tent, which ``RazorSolver``
-refuses outright, and which no basis wanted.
+leaves a one-segment polyline, which no basis wanted.  (It is no longer a
+REFUSAL: ``RazorSolver`` serves a one-segment wire junctioned at either end
+since momwire#608.  The cut still buys nothing there, and the uncut wire is
+still the better-conditioned spelling.)
 
-Measured over the 62 committed captures: razor-nec5 served 11 under the cut
-and serves 47 without it, and on the 42 that carry a printout its input
-impedance sits a median 0.00 % and a worst 0.03 % from the licensed engine's
-own.
+Measured over the 62 committed captures: razor-nec5 served 11 under the cut,
+47 once U1 stopped cutting for it, and 54 since momwire#608 stopped refusing
+a one-segment ``GW`` that is junctioned.  49 of those 54 carry a printout to
+compare against, and its input impedance sits a median 0.004 % from the
+licensed engine's own — worst 0.03 % over the 47 outside
+``test_eznec_serve.DIVERGENT_IDS``, and 176 %/208 % on the two inside it
+(0033 and 0034, the elevated radial systems every basis gets wrong at
+h/lambda = 1.09e-4; momwire#510).
 
 **That number is REPRODUCTION and not accuracy, and nothing here should be
 read as saying otherwise.**  ``RazorSolver``'s own docstring is the contract:
@@ -128,10 +134,9 @@ So on a six-segment radial the B-spline row's 20 % DIFFERENCE from the engine
 is a difference and not an error, and it may well be the closer of the two to
 the converged answer.  What the agreement does prove is that THIS SEAM's
 translation is right — the drive spelling, the arclength, the sign, the port
-— because none of those can be wrong by 0.00 %.  The remaining 15 are four
-named things and no drive spelling: 5 whose ``GW`` declares a genuine
-one-segment wire, 5 ground contact over a finite ground, 3 that bspline
-refuses too, and the 2 five-wire apexes, which keep the node port.
+— because none of those can be wrong by 0.004 %.  The remaining 8 are two
+named things and no drive spelling: 5 ground contact over a finite ground,
+and 3 that bspline refuses too.
 
 Two conventions, and the one matrix between them
 ------------------------------------------------
@@ -1140,8 +1145,10 @@ class _Piece:
     spell one series EMF").  A basis without node gaps drives the same node as
     a delta gap at an interior knot of the WHOLE wire, and cutting for it would
     be worse than pointless: a cut that lands one element from a wire's end
-    manufactures a one-segment polyline, which carries no tent and which
-    ``RazorSolver`` refuses at its constructor.
+    manufactures a one-segment polyline, which no basis asked for.  Such a
+    piece is served (momwire#608 — a junctioned one-segment wire carries the
+    tents an interior segment carries), so this is a conditioning preference
+    now and not a refusal.
     """
 
     tag: int
@@ -1280,7 +1287,7 @@ def build_mesh(
     ``solver_class`` decides here (momwire#603 U1).  The cut exists solely to
     manufacture the two wire ends that port needs, and it is not free: a node
     addressed one element from a wire's end leaves a one-segment polyline,
-    which carries no tent at all and which ``RazorSolver`` refuses outright.
+    which every basis can host (momwire#608) and none of them wanted.
 
     A basis without node gaps spells the same series EMF as a ``feeds`` delta
     gap at that node's own interior knot, on the WHOLE uncut wire.  Neither
@@ -1299,8 +1306,8 @@ def build_mesh(
     momwire#588 was.  "Has a node-gap port" and "wants the cut" happened to
     name the same four families on the day U1 was written.  They stopped:
     ``RazorSolver`` gained the port for the K >= 3 apex (U4) and still wants
-    the delta gap everywhere else, because the cut is what manufactures the
-    one-segment polylines it refuses.
+    the delta gap everywhere else, because the cut manufactures one-segment
+    polylines — which it now hosts (momwire#608) and still has no use for.
     """
     mesh = _Mesh()
     cut = issubclass(solver_class, _CUT_SPELLING)
@@ -2741,10 +2748,18 @@ def _check_basis_can_host(
       (0013 and 0033) and which the razor family has none of;
     * ground CONTACT over a finite ground, which razor refuses on the
       geometry every base-fed vertical over ``GN 0``/``GD`` writes;
-    * a one-segment ``GW``, which the razor family refuses because a lone
-      segment carries no tent (momwire#608) — the only one of the three with
-      no capability cell to read, so it is asked of the roster by the shape
-      of the deck instead.
+    * an INERT one-segment ``GW`` — one junctioned at neither end, which the
+      razor family refuses because it carries no basis and would scatter
+      nothing (momwire#608) — the only one of the three with no capability
+      cell to read, so it is asked of the roster by the shape of the deck
+      instead.
+
+    That third rule used to refuse EVERY one-segment ``GW``, and cost this
+    seam five captures.  A one-segment wire that meets another wire at one
+    end or both carries the junction tents an interior segment carries, so it
+    is served; :func:`_inert_pieces` is the narrowed question, and
+    ``test_eznec_one_segment_wire.py`` gates it against what ``RazorSolver``
+    itself refuses rather than trusting two copies of one rule to stay equal.
     """
     if mesh.gaps and not solver_class.capabilities.node_gaps:
         site = mesh.gaps[0]
@@ -2769,14 +2784,47 @@ def _check_basis_can_host(
                 f"that: {reason}"
             )
 
-    thin = [piece.tag for piece in mesh.pieces if piece.n_elements < 2]
-    if thin and issubclass(solver_class, _NATIVE_LOADING):
+    inert = _inert_pieces(mesh, ground)
+    if inert and issubclass(solver_class, _NATIVE_LOADING):
         raise ServeRefusal(
-            f"wire {thin[0]} is one segment long and basis {basis!r} needs at "
-            f"least two to carry a basis function on it (momwire#608); this "
-            f"deck declares {len(thin)} such GW card"
-            f"{'s' if len(thin) > 1 else ''}"
+            f"wire {mesh.pieces[inert[0]].tag} is one segment long and meets "
+            f"no other wire at either end, so basis {basis!r} has no basis "
+            f"function to put on it and it would scatter nothing "
+            f"(momwire#608); this deck declares {len(inert)} such GW card"
+            f"{'s' if len(inert) > 1 else ''}"
         )
+
+
+def _inert_pieces(mesh: _Mesh, ground: dict) -> list[int]:
+    """Indices of the pieces ``RazorSolver`` cannot put a basis on.
+
+    A one-segment polyline carries no interior knot, so its only possible
+    bases are junction tents — one per end that meets something.  An end
+    meets something if it is in a junction group, or if it stands in the
+    ground plane, where the grounded tent's lower wing is its own image.  A
+    one-segment piece with neither is inert: it holds no current, and a solve
+    including it is bit-identical to one that omits it.
+
+    The ground question is asked with ``_ground_spec.ground_touch_tol``, which
+    is the tolerance ``RazorSolver._ground_ends`` asks it with — the same
+    function, not a second number that agrees today.
+    """
+    joined = {end for group in mesh.junctions for end in group}
+    gz = ground.get("ground_z")
+    return [
+        i
+        for i, piece in enumerate(mesh.pieces)
+        if piece.n_elements < 2
+        and (i, "start") not in joined
+        and (i, "end") not in joined
+        and not (
+            gz is not None
+            and any(
+                abs(float(point[2]) - gz) <= _ground_spec.ground_touch_tol(piece.points)
+                for point in piece.points
+            )
+        )
+    ]
 
 
 def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
