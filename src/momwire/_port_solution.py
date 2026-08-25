@@ -1,12 +1,23 @@
 """The public multi-port solve result (`stevenmburns/momwire#232`).
 
-Every solver family already builds one right-hand-side column per port, runs
-ONE fill and ONE factorisation over all of them, reads the port currents off
-the resulting columns — and then returns only the admittance matrix, dropping
-the columns on the floor. Consumers that need the columns (a NEC-protocol
-front end sending several `EX` sets against one geometry, a field evaluation
-that must not re-solve) were reaching into private per-family internals to get
-them back. `PortSolution` is what `compute_port_solution()` returns instead.
+A solver family that serves ports builds one right-hand-side column per port,
+runs ONE fill and ONE factorisation over all of them, reads the port currents
+off the resulting columns — and then used to return only the admittance
+matrix, dropping the columns on the floor. Consumers that need the columns (a
+NEC-protocol front end sending several `EX` sets against one geometry, a field
+evaluation that must not re-solve) were reaching into private per-family
+internals to get them back. `PortSolution` is what `compute_port_solution()`
+returns instead.
+
+Not EVERY family, and the difference is load-bearing (momwire#604 class 3).
+`compute_port_solution` is implemented by the six families the portal rosters
+— `BSplineSolver`, `HMatrixSolver`, `ArrayBlockSolver`, `SinusoidalSolver`,
+`SinusoidalGalerkinSolver`, `RazorSolver` — and NOT by `PulseSolver` or
+`HarringtonSolver`, which have neither it nor `_port_count`. That is exactly
+why the pulse family has no portal surface: rostering it IS implementing this
+method (momwire#564). A universal here would read as "any solver you have
+will answer this", which is the sentence that sends a caller at an
+`AttributeError`.
 """
 
 from __future__ import annotations

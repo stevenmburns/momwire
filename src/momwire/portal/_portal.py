@@ -248,11 +248,17 @@ from ..deck._nec2_geometry import _SMIN, build_geometry
 # drives either name exactly like every other roster entry, through the same
 # one-fill-all-ports call. Nothing razor-specific lives past this point — the
 # port algebra, the Y-matrix readout and the field evaluation are all the
-# shared code every basis rides. (One narrower gap remains and is tracked as
-# its own issue, #439: a deck-level LOAD-ONLY site on a segment no `EX`
-# drives has no matching `RazorSolver.feeds` entry, since razor bakes it
-# straight into `lumped_loads` instead of the port-algebra route every other
-# family takes — see `docs/razor-solver.md` "A remaining portal-side gap".)
+# shared code every basis rides — including the one case that used to be an
+# exception. A deck-level LOAD-ONLY site on a segment no `EX` drives has no
+# matching `RazorSolver.feeds` entry, since razor bakes it straight into
+# `lumped_loads` rather than taking the port-algebra route every other family
+# takes, so this family's port count was the deck's minus one. That was #439's
+# `IndexError` out of `_port_signs` and #586's refusal in its place; it is
+# SERVED as of #588, and nothing here changed to serve it —
+# `deck._solver.in_solver_ports` renumbers the plan onto the rows
+# `build_solver` actually built, so past that point there is one index space
+# and no consumer has to know which one it was handed. See
+# `docs/razor-solver.md`, "A load-only site is not a port here".
 _BANNER_SUFFIXES = {
     "bspline": "",
     "bspline-d1": "+bs1",
