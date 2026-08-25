@@ -1654,7 +1654,10 @@ def _element_fields(points, elements, k, radius, magnetic):
 
 
 def _polarisation(
-    e_theta: complex, e_phi: complex, floor_scale: float = 1.0
+    e_theta: complex,
+    e_phi: complex,
+    floor_scale: float = 1.0,
+    linear_below: float = 5.0e-5,
 ) -> tuple[float, float, str]:
     """``(axial_ratio, tilt_deg, sense)`` for one direction's polarisation
     ellipse — the AXIAL RATIO / TILT / SENSE columns.
@@ -1677,6 +1680,24 @@ def _polarisation(
     ``EX ... 1. 0.`` / ``EX ... 0. 1.`` gives ``δ = +90°`` at the zenith and
     nec2c prints ``AXIAL RATIO 1.0000 ... LEFT``
     (``dipole_rp_crossed_quadrature``), so positive ``sinδ`` is LEFT here.
+
+    ``linear_below`` is the bar under which the ratio PRINTS as zero, and it
+    is the caller's because the two doors print it to different widths — the
+    portal's ``{axial:12.4f}`` rounds to zero below 5e-5, the EZNEC seam's
+    ``{axial:11.5f}`` below 5e-6. Under it the row reads ``0.0000`` and the
+    sense is forced to ``LINEAR``, so the number column and the label cannot
+    contradict each other.
+
+    That is a rule, not a tolerance (momwire#578). The bar used to be a flat
+    ``1e-8``, which is BELOW where the ratio of a linear row actually lands:
+    ``sin δ`` there is the difference of two nearly-equal phases, so it moves
+    with thread count and process history, and 46 rows across the EZNEC
+    corpus flipped between ``LINEAR``, ``RIGHT`` and ``LEFT`` run to run —
+    every one of them printing an axial ratio of ``0.00000``. A user-visible
+    polarisation LABEL is not dust to be squinted past. Both oracles agree
+    with the rule and neither is being contradicted by it: across 662 nec2c
+    fixture rows and 13169 EZNEC capture rows, no row prints a zero axial
+    ratio beside a sense other than blank or ``LINEAR``.
     """
     a, b = abs(e_theta), abs(e_phi)
     raw2 = floor_scale * floor_scale
@@ -1699,7 +1720,7 @@ def _polarisation(
         return 0.0, tilt, "LINEAR"
     ratio = math.sqrt(minor2 / major2)
     sin_d = math.sin(math.radians(delta))
-    if ratio < 1e-8:
+    if ratio < linear_below:
         return 0.0, tilt, "LINEAR"
     return (
         ratio if sin_d >= 0 else -ratio,

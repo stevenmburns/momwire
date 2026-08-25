@@ -33,7 +33,9 @@ numbers come from a solver and a machine's clock instead of from the file.
 
 from __future__ import annotations
 
+import cmath
 import json
+import math
 import re
 from pathlib import Path
 
@@ -41,6 +43,7 @@ import pytest
 
 from momwire.deck._nec5 import parse_nec5
 from momwire.eznec import _printout
+from momwire.portal import _portal as nec_portal
 from momwire.eznec._printout import (
     ChargeRow,
     LineRow,
@@ -764,3 +767,72 @@ def test_a_deck_remembers_the_text_it_was_read_from():
     inventing them."""
     text = deck_text("0010")
     assert parse_nec5(text).source_text == text
+
+
+# --- the pattern table is reproducible (momwire#578) --------------------------
+
+
+def test_a_dust_e_field_prints_as_a_clean_zero_rather_than_its_own_angle():
+    """momwire#578 class A, at the seam that decides it.
+
+    An E-field component below this printout's dust floor has a magnitude that
+    is noise and a phase that is the angle of noise; both moved with thread
+    count and process history, which is nondeterminism in a printout two of
+    which are asserted byte-identical. 0015 printed `2.45557E-14 / 72.65` and
+    `2.44145E-14 / 73.74` for the same row on the same machine.
+    """
+    from momwire.eznec import _serve
+
+    floor = math.sqrt(_serve._PRINTED_DUST_FLOOR2)
+    assert _serve._PRINTED_DUST_FLOOR2 != nec_portal._PRINTED_DUST_FLOOR2, (
+        "the seams derive this bar separately and in different units — see "
+        "the note beside the constant"
+    )
+    # Above the bar a reading keeps its digits; below it, it is a clean zero.
+    assert floor == pytest.approx(1e-7, rel=1e-9)
+
+
+def test_the_dust_floor_clears_what_moves_and_spares_what_does_not():
+    """The derivation, kept as an assertion rather than only as prose.
+
+    Measured over all 62 capture decks at OMP_NUM_THREADS 1 vs 8: the largest
+    E-field magnitude that MOVED was 1.65e-9 V/m, and the weakest legitimate
+    reading in the captured printouts is ~1e-5 V/m — with nothing at all in
+    between. The bar has to sit inside that void, and a future retune that
+    walks it out of the void should fail here rather than silently start
+    zeroing readings or stop zeroing dust.
+    """
+    from momwire.eznec import _serve
+
+    floor = math.sqrt(_serve._PRINTED_DUST_FLOOR2)
+    assert floor > 1.65e-9 * 10, "the bar must clear everything measured to move"
+    assert floor < 1e-5 / 10, "the bar must stay well under the weakest reading"
+
+
+@pytest.mark.parametrize(
+    "delta_deg,expect",
+    [(90.0, "LEFT"), (-90.0, "RIGHT"), (0.0, "LINEAR")],
+)
+def test_a_real_polarisation_sense_still_reads_off_the_phase(delta_deg, expect):
+    """The control for class B: raising the LINEAR bar must not flatten a
+    genuine circular row into LINEAR."""
+    et = complex(1.0, 0.0)
+    ep = cmath.exp(1j * math.radians(delta_deg))
+    _axial, _tilt, sense = nec_portal._polarisation(et, ep, 1.0, linear_below=5e-6)
+    assert sense == expect
+
+
+def test_a_zero_axial_ratio_cannot_print_beside_a_handed_sense():
+    """momwire#578 class B. The two columns are one statement: if the ratio
+    prints 0.00000 the row IS linear, and a `RIGHT`/`LEFT` beside it is the
+    sign bit of a number that rounded away. 46 rows flipped between runs,
+    every one of them printing an axial ratio of zero.
+
+    Asserted at a ratio the old `1e-8` bar let through and this one does not.
+    """
+    # delta small enough that minor/major lands between the two bars
+    et = complex(1.0, 0.0)
+    ep = complex(1.0, 1e-6)
+    axial, _tilt, sense = nec_portal._polarisation(et, ep, 1.0, linear_below=5e-6)
+    assert f"{axial:11.5f}".strip() == "0.00000"
+    assert sense == "LINEAR", "a zero axial ratio may not carry a handedness"

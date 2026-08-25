@@ -404,6 +404,7 @@ from ..portal._portal import (
     _image_moments,
     _polarisation,
 )
+
 from ._printout import (
     ENVIRONMENT_FINITE_GROUND,
     ENVIRONMENT_FREE_SPACE,
@@ -422,6 +423,36 @@ from ._printout import (
     RunData,
     WireCurrentRow,
 )
+
+# The printed-dust floor for THIS seam, and its own number — the portal's
+# ``_PRINTED_DUST_FLOOR2`` is not imported on purpose (momwire#578). That
+# constant's 1e-20 was derived ~9 orders under the weakest legitimate reading
+# in the NEC-2 near-field table's units, and this printout is not in those
+# units: 0015's moving dust reads 9.6e-11 V/m, whose square clears 1e-20 by
+# 8%. Importing it would be exactly the retune-across-bases the portal's own
+# note warns off ("a bar in a basis where that reasoning does not apply").
+#
+# Derived here instead, by measurement over all 62 capture decks rendered at
+# OMP_NUM_THREADS 1 and 8:
+#
+#   the largest E-field magnitude that MOVES between the two   1.65e-09 V/m
+#   the weakest legitimate reading in the captured printouts   ~1e-05 V/m
+#
+# and between those two the corpus is EMPTY — no capture prints a pattern
+# E-field anywhere in (1e-9, 1e-5), a four-decade void. The bar sits in the
+# middle of it on a log scale: 1e-7 V/m is 60x above everything measured to
+# move and 100x below the weakest reading anyone could want. Squared, because
+# the test is on |E|^2 and avoids a sqrt per cell.
+#
+# Like the portal's, this is a deliberate departure: under the bar the value
+# is zeroed before its magnitude AND phase columns print, where the reference
+# engine prints its own rounding dust raw. The digits being dropped are the
+# angle of zero, and two printouts of one deck are asserted byte-identical.
+_PRINTED_DUST_FLOOR2 = 1.0e-14
+
+# The bar under which this printout's ``{axial:11.5f}`` axial-ratio column
+# rounds to zero, so the SENSE column beside it must read LINEAR.
+_AXIAL_PRINTS_ZERO = 5.0e-6
 
 __all__ = [
     "BASIS",
@@ -2513,7 +2544,19 @@ def _pattern(
                 et = 0j
             if ep == 0:
                 ep = 0j
-            axial, tilt, sense = _polarisation(et, ep, floor_scale)
+            # ...and a component that is merely dust is zeroed outright, for
+            # the same reason one decimal further down: its magnitude and its
+            # phase are both noise, and they move with thread count and
+            # process history (momwire#578, class A — 92.5% of the moving
+            # lines). Done BEFORE `_polarisation` so the ellipse is formed
+            # from what the row actually prints.
+            if et.real * et.real + et.imag * et.imag <= _PRINTED_DUST_FLOOR2:
+                et = 0j
+            if ep.real * ep.real + ep.imag * ep.imag <= _PRINTED_DUST_FLOOR2:
+                ep = 0j
+            axial, tilt, sense = _polarisation(
+                et, ep, floor_scale, linear_below=_AXIAL_PRINTS_ZERO
+            )
             rows.append(
                 PatternRow(
                     theta_deg=float(thetas[i]),
