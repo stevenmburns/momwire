@@ -370,6 +370,7 @@ from ._kernel_moments import (
 )
 from ._junction_rule import JUNCTION_TOL, canonical_groups, grouped
 from ._port_solution import PortSolution, _SweptPortSolutions
+from . import _quadrature
 from ._quadrature import leggauss
 
 # Two wire endpoints this close are a junction, not a coincidence. The rule
@@ -504,50 +505,20 @@ def _remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap=None):
     ``cap`` is served MORE accurately than before but not to the binary — see
     ``docs/`` and the arc's record.  Per-segment orders would remove that
     coupling and are the follow-up, not this change.
+
+    The rule itself is ``_quadrature.remainder_qp`` — a statement about
+    GEOMETRY, not about razor's formulation, and momwire#631 found bspline
+    needs the identical one.  This wrapper is what keeps razor's own cap and
+    constant the things that decide razor's order.
     """
     # Read at CALL time, not bound as a default: a default argument captures
     # the module constant when this function is defined, which silently makes
     # the cap unpatchable — and the gate that pins the pre-#510 behaviour has
     # to be able to move it.
     cap = _REMAINDER_QP_CAP if cap is None else cap
-
-    src_l = np.asarray(src_l, dtype=float)
-    src_r = np.asarray(src_r, dtype=float)
-    obs = np.asarray(obs_pts, dtype=float)
-    if src_l.size == 0 or obs.size == 0:
-        return int(base)
-
-    # The mirror of each source segment, which is what an observer's distance
-    # to the remainder's singular ridge is measured against.
-    mir_l, mir_r = src_l.copy(), src_r.copy()
-    mir_l[:, 2] = 2.0 * ground_z - src_l[:, 2]
-    mir_r[:, 2] = 2.0 * ground_z - src_r[:, 2]
-
-    d = mir_r - mir_l
-    dd = np.einsum("ij,ij->i", d, d)
-    lengths = np.linalg.norm(src_r - src_l, axis=1)
-
-    worst = 0.0
-    # Per source segment rather than one (n_obs, n_src, 3) array: the observer
-    # axis is razor's testing-path quadrature points, so the dense form is
-    # n_basis·n_path·n_src·3 and would be hundreds of MB on a large deck for a
-    # number that is only used to pick an integer.
-    for j in range(src_l.shape[0]):
-        if lengths[j] <= 0.0:
-            continue
-        ap = obs - mir_l[j]
-        if dd[j] > 0.0:
-            t = np.clip(ap @ d[j] / dd[j], 0.0, 1.0)
-            closest = mir_l[j] + t[:, None] * d[j]
-        else:
-            closest = np.broadcast_to(mir_l[j], obs.shape)
-        r_min = float(np.min(np.linalg.norm(obs - closest, axis=1)))
-        if r_min <= 0.0:
-            return int(cap)
-        worst = max(worst, float(lengths[j]) / r_min)
-
-    need = int(np.ceil(_REMAINDER_QP_C * worst)) if worst > 0.0 else 0
-    return int(min(max(int(base), need), int(cap)))
+    return _quadrature.remainder_qp(
+        obs_pts, src_l, src_r, ground_z, base, cap, _REMAINDER_QP_C
+    )
 
 
 @dataclass(frozen=True)
