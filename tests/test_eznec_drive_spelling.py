@@ -23,7 +23,10 @@ ulp.
 **The corpus reaches razor.**  62 committed captures, 11 served under the cut
 and 49 without it, with every one of the remaining 13 named — and on the 42
 carrying a printout, razor-nec5's input impedance lands a median 0.00 % from
-the licensed engine's own.
+the licensed engine's own.  That is REPRODUCTION, not accuracy: razor is the
+engine's twin and inherits its discretization error by design, so nothing in
+this file claims it is the better answer (see ``_serve``'s module docstring,
+"Two spellings of a series EMF").  It is a gate on the TRANSLATION.
 """
 
 from __future__ import annotations
@@ -314,7 +317,11 @@ def test_the_five_wire_apex_lands_on_the_licensed_engine(razor_seam=None):
     razor-nec5 is the licensed engine's formulation twin, so the bar is the
     twin's and not a basis envelope: it lands where the engine lands, while
     the B-spline row — a different discretization of the same source on a
-    six-segment radial — sits 20 % away.
+    six-segment radial — sits 20 % away.  Which of the two is nearer the
+    CONVERGED answer this test does not say and must not be read as saying:
+    a six-segment radial is deep in the regime where NEC-5's own O(1/N) walk
+    is largest.  The gate is that the twin reproduces its reference, which
+    is what makes it a check on the apex PORT.
     """
     reference = input_impedance(printout_text("0013"))
     served = input_impedance(render(deck_text("0013"), basis="razor-nec5"))
@@ -347,13 +354,21 @@ ACCURACY_IDS = ("0010", "0012", "0017", "0019")
 
 @pytest.mark.parametrize("cid", ACCURACY_IDS)
 def test_razor_nec5_lands_on_the_licensed_engine_it_is_a_twin_of(cid):
-    """0.01 %, not the 2–6 % a different formulation costs.
+    """The twin reproduces its reference to four figures.
 
-    This is the payoff and it is also the sharpest check on the spelling: a
-    delta gap at the wrong arc length, or on the wrong knot, or with the
-    wrong sign, does not land on the reference to four figures.  Measured
-    across the whole corpus the served decks sit a median 0.00 % and a worst
-    0.03 % away; these four are pinned so the claim has a gate.
+    NOT a claim that it is more accurate than the B-spline row.  Razor
+    inherits NEC-5's discretization error on purpose, and NEC-5's is worst
+    at the coarse meshes this corpus writes (20–42 segments per wavelength,
+    against an O(1/N) impedance walk), so the two rows differ by more than
+    either differs from the truth and this file does not say which is
+    nearer it.
+
+    What it IS: the sharpest available check on the translation.  A delta
+    gap at the wrong arclength, on the wrong knot, or with the wrong sign
+    does not land on ANY reference to four figures, so 0.00 % gates the
+    seam's spelling in a way no envelope bar can.  Measured across the
+    corpus the served decks sit a median 0.00 % and a worst 0.03 % away;
+    these four are pinned so the claim has a gate.
     """
     served = input_impedance(render(deck_text(cid), basis="razor-nec5"))
     reference = input_impedance(printout_text(cid))

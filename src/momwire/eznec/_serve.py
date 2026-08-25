@@ -114,7 +114,21 @@ refuses outright, and which no basis wanted.
 Measured over the 62 committed captures: razor-nec5 served 11 under the cut
 and serves 47 without it, and on the 42 that carry a printout its input
 impedance sits a median 0.00 % and a worst 0.03 % from the licensed engine's
-own — which is the twin doing what it is for.  The remaining 15 are four
+own.
+
+**That number is REPRODUCTION and not accuracy, and nothing here should be
+read as saying otherwise.**  ``RazorSolver``'s own docstring is the contract:
+it is "deliberately a *twin*, not an improvement — the scheme's
+discretization error is NEC-5's".  Agreeing with the licensed engine to four
+figures means it inherits that engine's answer INCLUDING its error, and the
+engine's known weakness is exactly the regime these captures live in: the
+razor-blade testing rule walks its impedance slowly, O(1/N) (momwire#890,
+antennaknobs#896), and the corpus meshes at 20–42 segments per wavelength.
+So on a six-segment radial the B-spline row's 20 % DIFFERENCE from the engine
+is a difference and not an error, and it may well be the closer of the two to
+the converged answer.  What the agreement does prove is that THIS SEAM's
+translation is right — the drive spelling, the arclength, the sign, the port
+— because none of those can be wrong by 0.00 %.  The remaining 15 are four
 named things and no drive spelling: 5 whose ``GW`` declares a genuine
 one-segment wire, 5 ground contact over a finite ground, 3 that bspline
 refuses too, and the 2 five-wire apexes, which keep the node port.

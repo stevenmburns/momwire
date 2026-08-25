@@ -95,7 +95,9 @@ def test_the_seam_takes_a_basis_and_answers_in_it():
 
     Three DIFFERENT numbers from three formulations of one antenna, which is
     the whole of what "selectable" has to mean.  razor-nec5 is the twin, so
-    it is the one that lands on the licensed engine's 79.948 + 29.919j.
+    it is the one that REPRODUCES the licensed engine's 79.948 + 29.919j —
+    a statement about which reference it tracks, not about which of the
+    three is nearest the converged answer.
     """
     deck = parse_nec5(deck_text("0010"))
     z = {
