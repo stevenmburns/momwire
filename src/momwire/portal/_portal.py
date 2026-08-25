@@ -291,6 +291,7 @@ __all__ = [
     "LEGACY_PROBE_VERSION",
     "PROBE_VERSION",
     "deck_frame",
+    "engine_scope",
     "main",
     "render_deck",
     "run_deck",
@@ -3604,7 +3605,15 @@ def deck_frame(body: str, terminator: str = "NX") -> tuple[list[str], list[str]]
 
 def run_deck(body: str) -> tuple[str, str]:
     """(stdout, stderr) for a single deck run against a fresh process: the
-    start-up banner, the deck's frame, and whatever went to stderr."""
+    start-up banner, the deck's frame, and whatever went to stderr.
+
+    "A fresh process" is the shape of the output, not a promise about state:
+    this takes no argv and resets nothing, so it answers under whatever engine
+    the last :func:`configure_engine` — i.e. the last :func:`main` — left
+    selected in THIS process, and stamps that basis on the banner it prints.
+    One invocation is one process by design, so mixing the two exported entry
+    points is the odd case; :func:`engine_scope` is how to bound it (#587).
+    """
     out, err = deck_frame(body)
     return (
         "\n".join([*_banner_lines(), *out]) + "\n",
@@ -3798,6 +3807,11 @@ def configure_engine(
     would have them — so it must be called ONCE per process. The shared
     server depends on that literally: a per-connection call would empty the
     cross-deck cache the server exists to hold warm.
+
+    Reset on entry and never on exit, for that same reason: there is no
+    earlier invocation to hand the process back to. A caller that does run
+    this twice in one process — tests, near enough always — bounds the inner
+    one with :func:`engine_scope` (#587).
     """
     # --basis rides the necCommand line itself: SimNEC launches engines via
     # `sh -c <command>` / `cmd.exe /c`, so the portal-dialog string can carry
@@ -3904,6 +3918,54 @@ def configure_engine(
     return argv, legacy_probe, None
 
 
+@contextlib.contextmanager
+def engine_scope():
+    """Bound one engine invocation, so a nested one cannot contaminate it.
+
+    :func:`configure_engine` resets the invocation state on entry and never
+    puts it back, and that is the DESIGN rather than an oversight: one
+    invocation is one process, so every deck of a SimNEC session is meant to
+    run under the basis chosen at launch, and the cross-deck cache is meant to
+    stay warm for the whole session. Nothing on the resident path wants a
+    per-deck reset — :func:`deck_frame` re-establishing the basis would break
+    the session contract the daemon depends on.
+
+    What that contract costs is the odd case: a caller who runs
+    :func:`configure_engine` (or :func:`main`) MORE THAN ONCE in one process
+    leaks the later invocation's engine into everything that follows, because
+    the earlier one has nothing to be restored to. That is a test pattern
+    rather than a production one, and it is not hypothetical — it is how seven
+    load-carrying fixtures in ``test_portal_differential`` went red during
+    momwire#586, each passing alone and failing in the suite, once a gate
+    selected a basis that REFUSES what the default serves (#587).
+
+    This is the supported way to bound it, in place of a hand-rolled
+    snapshot::
+
+        with engine_scope():
+            main(["--basis", "razor"], stdin=deck, stdout=out)
+        # the basis, the cache flags and the cache are as they were
+
+    The cache is emptied on exit rather than restored, for the same reason
+    ``configure_engine`` empties it on entry: entries built inside the scope
+    carry the scoped basis in their key, so they could not be served outside
+    it anyway and would only occupy the cap.
+    """
+    global _active_basis, _active_basis_name, _cache_serving, _cache_stats_path
+
+    saved = (_active_basis, _active_basis_name, _cache_serving, _cache_stats_path)
+    try:
+        yield
+    finally:
+        (
+            _active_basis,
+            _active_basis_name,
+            _cache_serving,
+            _cache_stats_path,
+        ) = saved
+        _reset_solver_cache()
+
+
 def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
     """The banner, then decks off ``stdin`` until it ends. The protocol itself.
 
@@ -3977,6 +4039,11 @@ def main(
     One invocation is one process: :func:`configure_engine` reads the engine
     off the command line once, then :func:`resident_loop` speaks the protocol
     on the process's own stdin/stdout for as long as SimNEC keeps it.
+
+    So the engine this selects is process-global and outlives the call: a
+    SECOND ``main()`` in one process is not isolated from the first, and
+    neither is a :func:`run_deck` that follows one. Wrap the call in
+    :func:`engine_scope` when it has to be (#587).
     """
     argv = sys.argv[1:] if argv is None else argv
     stdin = sys.stdin if stdin is None else stdin

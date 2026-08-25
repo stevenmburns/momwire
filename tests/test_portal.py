@@ -2892,6 +2892,90 @@ def test_bspline_d1_answer_differs_from_the_default_degree():
     assert abs(x_d1 - x_d2) / abs(x_d2) > 0.05, (x_d1, x_d2)
 
 
+# --- the engine is per INVOCATION, and `engine_scope` is how to bound one ----
+#
+# momwire#587. `configure_engine` resets the basis and the cache flags on entry
+# and never on exit, which is the session contract rather than a leak: one
+# invocation is one process, so every deck of a SimNEC session runs under the
+# basis chosen at launch and the cross-deck cache stays warm across all of them.
+# The price is that a SECOND `main()` in one process is not isolated from the
+# first — a test pattern, not a production one, but it cost seven red fixtures
+# in `test_portal_differential` during momwire#586. These three gates pin both
+# halves: the contract, and the context manager that bounds it.
+
+_SCOPE_DIPOLE = (
+    "CE engine scope\n"
+    "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
+    "GE 0\n"
+    "EX 0 1 5 0 1.\n"
+    "FR 0 1 0 0 30. 0\n"
+    "XQ\n"
+)
+
+
+def test_the_basis_main_selects_outlives_the_call_within_one_invocation():
+    """The DESIGN, pinned so a well-meant per-deck reset cannot land quietly.
+
+    `main(["--basis", X])` configures the process, not the call: the resident
+    daemon reads `--basis` once at launch and every deck of the session is
+    meant to answer under it, which is exactly why `deck_frame` must NOT
+    re-establish the basis per deck. A `run_deck` that follows a `main` in the
+    same process therefore answers — and stamps its banner — under the basis
+    that `main` selected, not under the shipped default."""
+    with nec_portal.engine_scope():
+        _rc, _out, _err = _run_main(["--basis", "razor"], deck=_SCOPE_DIPOLE + "NX\n")
+        after, _err = run_deck(_SCOPE_DIPOLE)
+    assert "VERSION:nec2c.ae6ty.momwire.9.1+razor" in after, (
+        "a run_deck following main() answered under some other engine — the "
+        "session contract says it inherits the one main() configured"
+    )
+
+
+def test_engine_scope_puts_the_basis_back_for_whatever_follows():
+    """The remedy, from both sides: the scope does not disturb what it wraps,
+    and nothing it selects escapes it. Asserted on the banner because that is
+    what a caller can see — the printout has to name the physics that made
+    it."""
+    before, _err = run_deck(_SCOPE_DIPOLE)
+    assert "+razor" not in before, "the suite arrived here with a basis selected"
+
+    with nec_portal.engine_scope():
+        _rc, _out, _err = _run_main(["--basis", "razor"], deck=_SCOPE_DIPOLE + "NX\n")
+        assert nec_portal._active_basis_name == "razor"
+
+    assert nec_portal._active_basis_name == "bspline"
+    after, _err = run_deck(_SCOPE_DIPOLE)
+    assert "+razor" not in after, "the scoped basis leaked past the block"
+    assert body_lines(before) == body_lines(after), (
+        "the same deck answered differently either side of the scope"
+    )
+
+
+def test_engine_scope_restores_the_cache_flags_and_drops_what_it_filled(tmp_path):
+    """The basis is not the only invocation state `configure_engine` resets —
+    the two cache flags are reset for the same reason, so a scope that put
+    only the basis back would still let `--cache` and `--cache-stats` escape.
+
+    The cache CONTENTS are emptied rather than restored on exit, which is the
+    conservative half: an entry built under the scoped basis carries it in the
+    operator key, so it could never be served outside the scope anyway and
+    would only occupy the cap."""
+    stats = tmp_path / "cache.json"
+    assert not nec_portal._cache_serving and nec_portal._cache_stats_path is None
+
+    with nec_portal.engine_scope():
+        _rc, _out, _err = _run_main(
+            ["--cache", "--cache-stats", str(stats)], deck=_SCOPE_DIPOLE + "NX\n"
+        )
+        assert nec_portal._cache_serving
+        assert nec_portal._cache_stats_path == str(stats)
+        assert nec_portal._solver_cache, "nothing was cached, so nothing is proven"
+
+    assert not nec_portal._cache_serving
+    assert nec_portal._cache_stats_path is None
+    assert not nec_portal._solver_cache
+
+
 # --- hmatrix / arrayblock (issue #830): the large-array accelerators --------
 
 # These two entries are NOT a physics axis: HMatrixSolver and ArrayBlockSolver
@@ -3471,19 +3555,22 @@ def _relative(a: complex, b: complex) -> float:
 
 
 @pytest.fixture
-def restore_basis():
-    """`--basis` is a process-global (`_active_basis`), set by `main` and never
-    reset by `run_deck` — the ordering hazard `cache_reset` documents. A test
-    that asks for an alternate basis puts it back, so it cannot decide what a
-    later test's `run_deck`/`printout` call solves with."""
-    from momwire.portal import _portal as nec_portal
+def scoped_engine():
+    """A test that selects an engine puts it back, via momwire's own scope.
 
-    saved = (nec_portal._active_basis, nec_portal._active_basis_name)
-    yield
-    nec_portal._active_basis, nec_portal._active_basis_name = saved
+    The basis and the two cache flags are per INVOCATION and `main` sets them
+    for the rest of the process — the session contract, not a leak, since one
+    invocation is one process for the daemon this engine actually serves.  A
+    test suite is the odd caller that runs `main` many times over, so a test
+    that asks for an alternate basis cannot be allowed to decide what a later
+    test's `run_deck` / `printout` call solves with.  `engine_scope` is the
+    supported way to bound that (momwire#587); this file hand-rolled the
+    snapshot in two places before it existed."""
+    with nec_portal.engine_scope():
+        yield
 
 
-def test_the_ek_card_moves_the_impedance_on_a_fat_wire(restore_basis):
+def test_the_ek_card_moves_the_impedance_on_a_fat_wire(scoped_engine):
     """The card is no longer advisory: same deck, one card, a different answer.
 
     Asserted on the DEFAULT basis as well as the NEC-closest one, because the
@@ -3499,7 +3586,7 @@ def test_the_ek_card_moves_the_impedance_on_a_fat_wire(restore_basis):
         assert shift >= 0.02, f"{basis}: EK moved the impedance by only {shift:.3%}"
 
 
-def test_the_ek_answer_is_momwires_own_extended_kernel_solve(restore_basis):
+def test_the_ek_answer_is_momwires_own_extended_kernel_solve(scoped_engine):
     """Which extended kernel — the identity behind the number.
 
     A deck through the portal under `--basis sinusoidal` must be the same solve
@@ -3528,7 +3615,7 @@ def test_the_ek_answer_is_momwires_own_extended_kernel_solve(restore_basis):
         )
 
 
-def test_the_fat_wire_ek_pair_tracks_nec2c_on_both_sides_of_the_card(restore_basis):
+def test_the_fat_wire_ek_pair_tracks_nec2c_on_both_sides_of_the_card(scoped_engine):
     """The card's physics, against the reference engine rather than ourselves.
 
     Both kernels are held at the differential harness's ordinary 5 % bar, and
@@ -3603,7 +3690,7 @@ def test_two_groups_of_one_deck_under_two_kernels_get_two_operators():
 @pytest.mark.parametrize(
     "basis", ["sinusoidal-galerkin", "sinusoidal-galerkin-converged"]
 )
-def test_a_galerkin_basis_serves_an_ek_deck(basis, restore_basis):
+def test_a_galerkin_basis_serves_an_ek_deck(basis, scoped_engine):
     """The un-refusal (momwire 0.27.0), on the class of deck that reaches it
     in real life.
 
@@ -3692,7 +3779,9 @@ def cache_reset(serving: bool = True) -> None:
     follows. A fresh-subprocess comparison after such a test would then diff
     two different physics — an ordering hazard, not a cache bug (it predates
     the cache; the subprocess-identity tests are just the first to be sensitive
-    to it)."""
+    to it). This pins the start of a cache test either way; the test that
+    SELECTS a basis is the one that has to bound it, with the ``scoped_engine``
+    fixture over momwire's own ``engine_scope`` (momwire#587)."""
     nec_portal._active_basis = nec_portal._BASES["bspline"]
     nec_portal._cache_serving = serving
     nec_portal._cache_stats_path = None
@@ -4243,12 +4332,9 @@ def test_the_operator_key_carries_the_basis():
     future in-process basis switch cannot serve the wrong physics."""
     deck = nec_portal.parse_deck(CACHE_BASE)
     default = nec_portal._operator_key(deck)
-    original = nec_portal._active_basis
-    try:
+    with nec_portal.engine_scope():
         nec_portal._active_basis = nec_portal._BASES["sinusoidal"]
         assert nec_portal._operator_key(deck) != default
-    finally:
-        nec_portal._active_basis = original
     assert nec_portal._operator_key(deck) == default
 
 
@@ -4897,29 +4983,6 @@ _LOAD_ONLY_DECK = (
 )
 
 
-@pytest.fixture
-def restore_active_basis():
-    """Put `_active_basis` back after a test selects one.
-
-    `main(["--basis", X])` writes a MODULE-LEVEL `_active_basis`, and the
-    reset that its own comment calls "per-invocation, never sticky" lives
-    inside main()'s argv parsing. `run_deck()` does not go through that — it
-    calls `deck_frame()` and reads the global as it stands. So a test that
-    selects a basis leaks it into every later test that reaches for
-    `run_deck`, and those tests silently answer under someone else's basis.
-
-    That is how these gates first turned `test_portal_differential` red:
-    seven load-carrying fixtures solved under razor instead of bspline. The
-    leak is momwire's rather than this file's, but a test that trips it
-    should clean up after itself either way.
-    """
-    from momwire.portal import _portal as _p
-
-    was = (_p._active_basis, _p._active_basis_name)
-    yield
-    _p._active_basis, _p._active_basis_name = was
-
-
 def _aip_z(text: str, table: int = 0, row: int = 0) -> complex:
     """The impedance one ANTENNA INPUT PARAMETERS row printed."""
     entry = aip_tables(text)[table][row]
@@ -4927,9 +4990,7 @@ def _aip_z(text: str, table: int = 0, row: int = 0) -> complex:
 
 
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
-def test_a_load_only_site_on_a_native_loading_basis_is_served(
-    basis, restore_active_basis
-):
+def test_a_load_only_site_on_a_native_loading_basis_is_served(basis, scoped_engine):
     """momwire#588. This was momwire#439's `IndexError: list index out of
     range` from inside `_port_signs`, then PR #586's refusal in its place;
     it is now an answer.
@@ -4965,7 +5026,7 @@ def test_a_load_only_site_on_a_native_loading_basis_is_served(
     assert _aip_z(out) == pytest.approx(complex(direct), rel=1e-4)
 
 
-def test_the_load_only_site_really_puts_the_load_on_the_fill(restore_active_basis):
+def test_the_load_only_site_really_puts_the_load_on_the_fill(scoped_engine):
     """Served is not the same as heard.
 
     A load-only site whose `LD` fell on the floor would print a perfectly
@@ -4987,7 +5048,7 @@ def test_the_load_only_site_really_puts_the_load_on_the_fill(restore_active_basi
 
 
 def test_a_load_only_site_does_not_shift_the_drive_onto_another_port(
-    restore_active_basis,
+    scoped_engine,
 ):
     """The silent half of the defect, which one feed cannot expose.
 
@@ -5035,7 +5096,7 @@ def test_a_load_only_site_does_not_shift_the_drive_onto_another_port(
 
 
 def test_the_served_razor_answer_sits_where_a_coarse_mesh_puts_it(
-    restore_active_basis,
+    scoped_engine,
 ):
     """The measured bar against the oracle, and why it is the size it is.
 
@@ -5086,7 +5147,7 @@ _LOAD_ONLY_FIXTURES = (
 @pytest.mark.parametrize("name", _LOAD_ONLY_FIXTURES)
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
 def test_every_load_only_fixture_in_the_corpus_serves_under_razor(
-    name, basis, restore_active_basis
+    name, basis, scoped_engine
 ):
     """The corpus half of momwire#588, and the one that would notice a
     renumbering that is right for one load and wrong for two.
@@ -5123,7 +5184,7 @@ NX
 
 
 def test_a_network_and_a_load_only_site_agree_with_the_port_algebra_route(
-    restore_active_basis,
+    scoped_engine,
 ):
     """The other consumer of the renumbering, and the one with the furthest
     to fall if it is wrong.
@@ -5162,7 +5223,7 @@ def test_a_network_and_a_load_only_site_agree_with_the_port_algebra_route(
     assert gaps[-1] < 6.0, gaps  # measured 2.44 Ω
 
 
-def test_a_load_on_the_fed_segment_still_merges_into_one_site(restore_active_basis):
+def test_a_load_on_the_fed_segment_still_merges_into_one_site(scoped_engine):
     """The boundary, kept from #586's gates: it is the SEPARATION of the two
     cards that used to trip the defect, not loads-under-razor in general.
 
