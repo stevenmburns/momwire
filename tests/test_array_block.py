@@ -85,6 +85,88 @@ def test_identical_elements_one_shape():
     assert part.shape_of_elem.tolist() == [0, 0, 0]
 
 
+# --- the BASES are part of the shape, not just the segments (momwire#609) ---
+#
+# `shape_blocks[sid]` is applied as the self-block of every element of shape
+# `sid` — in `_apply`, in `dense`, and in the block-Jacobi preconditioner — so
+# a shape class is a claim that those blocks are IDENTICAL. Segment geometry
+# does not establish that: a junction or a node gap changes an element's basis
+# set while leaving every segment midpoint and radius where it was.
+
+
+def _cut_vertical(x, cut, nseg=9, half=2.0):
+    """One vertical, meshed uniformly in `nseg`, cut into two polylines at
+    segment `cut`. The segment midpoints do not depend on `cut`; the bases
+    do."""
+    z = np.linspace(-half, half, nseg + 1)
+    return (
+        [
+            np.array([[x, 0.0, z[0]], [x, 0.0, z[cut]]]),
+            np.array([[x, 0.0, z[cut]], [x, 0.0, z[nseg]]]),
+        ],
+        [[cut], [nseg - cut]],
+    )
+
+
+def _uncut_vertical(x, nseg=9, half=2.0):
+    return [np.array([[x, 0.0, -half], [x, 0.0, half]])], [[nseg]]
+
+
+def _verticals(specs):
+    wires, nspe = [], []
+    for w, n in specs:
+        wires += w
+        nspe += n
+    return BSplineSolver(
+        wires=wires,
+        degree=2,
+        n_per_edge_per_wire=nspe,
+        wavelength=22.0,
+        wire_radius=0.001,
+        feeds=[(0, None, 1.0)],
+    )
+
+
+def test_a_cut_element_is_not_the_same_shape_as_an_uncut_translate():
+    """momwire#609's condition, minimised off the dialect.
+
+    An `LD` card mid-wire cuts a vertical into two polylines, which adds a
+    junction and changes the basis count — 9 against the uncut sibling's 7 in
+    the deck that found this. Every segment midpoint and radius is identical,
+    so the segment-only signature called all four verticals one shape and the
+    9x9 block was handed to a 7-basis element.
+    """
+    part = element_groups(_verticals([_cut_vertical(-6.0, 3), _uncut_vertical(6.0)]))
+    assert part.n_elem == 2
+    assert len(set(part.sizes.tolist())) == 2, "the premise: the counts differ"
+    assert part.n_shapes == 2, "a cut element shares no shape with an uncut one"
+
+
+def test_the_junction_position_splits_a_shape_even_at_equal_basis_count():
+    """The half that nothing downstream would have caught.
+
+    Two verticals cut at segment 3 and at segment 6 have the same segment
+    midpoints, the same radii, and — by symmetry — the same NUMBER of bases.
+    A merge here is therefore dimensionally consistent: `np.stack(groups)`
+    gets its rectangle, the preconditioner's broadcast fits, and the wrong
+    self-block is applied in silence. Only the basis LAYOUT distinguishes
+    them, which is why it is in the signature.
+    """
+    part = element_groups(_verticals([_cut_vertical(-6.0, 3), _cut_vertical(6.0, 6)]))
+    assert part.n_elem == 2
+    assert len(set(part.sizes.tolist())) == 1, "the premise: the counts agree"
+    assert part.n_shapes == 2, "same count, different bases — two shapes"
+
+
+def test_genuine_translates_still_share_one_shape():
+    """The control. The signature gained terms; it must not have gained a
+    reason to split elements that really are translates, or the accelerator
+    quietly degrades to one dense block per element."""
+    part = element_groups(_verticals([_cut_vertical(-6.0, 3), _cut_vertical(6.0, 3)]))
+    assert part.n_elem == 2 and part.n_shapes == 1
+    assert part.shape_of_elem.tolist() == [0, 0]
+
+
 def test_distinct_lengths_distinct_shapes():
     """Two long + two short dipoles, interleaved → two shape classes that
     track length, not position."""

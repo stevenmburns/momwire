@@ -288,8 +288,8 @@ class ArrayPartition:
         )
 
 
-def _shape_classes(geom, seg_groups, seg_a, tol=1e-6):
-    """Cluster elements into geometric shape classes (translation-invariant).
+def _shape_classes(geom, seg_groups, seg_a, groups, supp_seg, polys, tol=1e-6):
+    """Cluster elements into shape classes whose self-blocks are IDENTICAL.
 
     Each element's signature is its segment midpoints recentred on the element
     centroid, sorted lexicographically and rounded to `tol`. Two elements are
@@ -303,18 +303,69 @@ def _shape_classes(geom, seg_groups, seg_a, tol=1e-6):
     same canonical order: two geometric translates whose wires carry
     different radii have different impedance blocks, so they must not share
     a shape class (stevenmburns/momwire#147).
+
+    The BASES join it too, and for the same reason (momwire#609). Segment
+    geometry does not determine how many basis functions an element carries,
+    nor where they sit: a junction or a node gap changes the basis set while
+    leaving every segment midpoint and radius exactly where it was. Two
+    verticals meshed alike, one of them cut mid-wire by an `LD` card, are
+    translates by the segment signature alone and are NOT the same shape —
+    they carried 9 and 7 bases in the deck that found this.
+
+    That mattered two ways, and the quiet one is worse:
+
+    * ``shape_blocks[sid]`` is used as the self-block of every element of
+      shape ``sid`` (``_apply``, ``dense``, the block-Jacobi preconditioner).
+      A merge across different basis COUNTS is caught — by a broadcast error
+      in `_BlockJacobiAugPrecond.solve`, which is how #609 surfaced, or by
+      ``np.stack(groups)`` in the lattice-FFT path, which needs a rectangle.
+    * A merge at EQUAL count is not caught at all. Two elements alike in
+      everything but WHERE the node gap falls have the same basis count and
+      different self-blocks, so the wrong block would be applied silently and
+      the answer would come back plausible. That is the failure this refuses.
+
+    So a basis contributes its SUPPORT, expressed in the element's own
+    canonical segment order — the ranks, not the global indices, so the term
+    is translation-invariant like the rest of the signature. Support structure
+    is enough: the polynomial coefficients over a support are fixed by the
+    segment geometry and radii, which the signature already carries to `tol`.
+    The coefficients themselves deliberately do NOT go in. They are float64
+    computed from absolute coordinates, so two true translates disagree in the
+    last ULP, and hashing them split every translated pair — an accelerator
+    that silently degrades to one dense block per element.
+
+    Padded wings carry an all-zero polynomial row (`_build_basis_polynomials`
+    fills `polys_m[:n_actual]` and leaves the rest zero) and are dropped, so a
+    basis truncated at a clamped end does not read as one supported on segment
+    0. A live wing whose coefficients happened to vanish exactly would be
+    dropped too; that can only split a class, never merge two, so it costs
+    speed and cannot cost an answer.
     """
     seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+    supp_seg = np.asarray(supp_seg)
+    polys = np.asarray(polys)
     sigs = []
-    for segs in seg_groups:
+    for segs, bases in zip(seg_groups, groups):
+        segs = np.asarray(segs)
         mids = 0.5 * (seg_l[segs] + seg_r[segs])
         mids = mids - mids.mean(axis=0)
         key = np.round(mids / tol).astype(np.int64)
         order = np.lexsort((key[:, 2], key[:, 1], key[:, 0]))
+        # Global segment -> its rank in THIS element's canonical order, so a
+        # basis's support is named the same way on every translate.
+        rank = np.full(seg_l.shape[0], -1, dtype=np.int64)
+        rank[segs[order]] = np.arange(segs.size, dtype=np.int64)
+        rows = []
+        for b in np.asarray(bases, dtype=np.int64):
+            live = np.nonzero(np.any(polys[b] != 0.0, axis=1))[0]
+            local = np.sort(rank[supp_seg[b][live]])
+            rows.append(local.tobytes())
         sigs.append(
             key[order].tobytes()
             + bytes(str(key.shape), "ascii")
             + np.asarray(seg_a[segs], dtype=np.float64)[order].tobytes()
+            + b"||"
+            + b"//".join(sorted(rows))
         )
     label_of_sig = {}
     shape_of_elem = np.empty(len(seg_groups), dtype=np.int64)
@@ -335,9 +386,7 @@ def element_groups(sim, tol=1e-6):
     degenerate behaviour, just no array structure to exploit.
     """
     geom = sim._build_geometry()
-    supp_seg, _polys, _kcl_A, _wk, wire_basis_global = sim._build_basis_polynomials(
-        geom
-    )
+    supp_seg, polys, _kcl_A, _wk, wire_basis_global = sim._build_basis_polynomials(geom)
     n_basis = supp_seg.shape[0]
     b2w = _basis_to_wire(supp_seg, wire_basis_global)
     wire_elem, n_elem = wire_to_element(sim.wires_polylines, tol=tol)
@@ -347,7 +396,15 @@ def element_groups(sim, tol=1e-6):
         for e in range(n_elem)
     ]
     seg_groups = _element_segment_groups(geom, wire_elem, n_elem)
-    shape_of_elem = _shape_classes(geom, seg_groups, sim._seg_radius(geom), tol=tol)
+    shape_of_elem = _shape_classes(
+        geom,
+        seg_groups,
+        sim._seg_radius(geom),
+        groups,
+        supp_seg,
+        polys,
+        tol=tol,
+    )
     return ArrayPartition(
         n_basis, elem_of_basis, groups, wire_elem, seg_groups, shape_of_elem
     )
