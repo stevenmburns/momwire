@@ -248,8 +248,67 @@ UNDERSHOOTS here at 1e-3 (ratio 0.73-0.83) where on 0033 it overshot 3.06× —
 so the error's SIGN is geometry-dependent, which is a third reason no single
 scale factor describes it.
 
-Runs the binary in every mode but ``theta``, so: antennaknobs venv,
-``NEC5_EXE`` set.
+``--mode matrix`` — **the finding, and it needs no binary at all.**
+
+Reciprocity first, and it is clean: ‖Z − Zᵀ‖/‖Z‖ sits at 1e-15 to 1e-17 for
+both trunks, at every height, over PEC and over ``GN 0`` alike.  No asymmetry
+bug.
+
+Then WHERE the ground correction lives, |ΔZ| averaged by |i−j|:
+
+  razor-nec5     |i-j| = 0      1       2       3
+  h/λ = 1e-2            13.2    5.4    1.03    0.145
+  h/λ = 1e-3            62.8   34.5   0.915   0.0958
+  h/λ = 1.09e-4        439     235    0.873   0.11
+
+The correction blows up **only in the near-diagonal band** — 33× on the
+diagonal and 43× on the first off-diagonal between 1e-2 and 1.09e-4 λ — while
+**every entry at |i−j| ≥ 2 is height-independent**.  Whatever is wrong is in
+the self and nearest-neighbour ground terms, the ones where a source and its
+own image nearly coincide (R₁ → 2h).
+
+That growth is not by itself an error: a horizontal wire close to a dielectric
+genuinely has a large near-field coupling to it.  What settles it is the
+LIMIT, which is computable from momwire's own machinery.  As h → 0 the
+near-diagonal correction is the incomplete cancellation of an antiparallel
+image — PEC images a horizontal current at exactly −1, a half-space at −Γ — so
+
+    |ΔZ| / |PEC image term|  ->  |1 − Γ| = |2/(ε̃ + 1)|
+
+and the PEC image term is measurable without any reference at all, as
+Z(``GN 1``) − Z(``GN -1``).  For average soil at 1.832 MHz, ε̃ = 13 − 49.06j
+and the limit is **0.0392**:
+
+  |ΔZ| / |PEC image|, bands 0 / 1 / 2
+  h/λ         bspline                    razor-nec5
+  1e-2        0.0603  0.0785  0.0411     0.0656  0.0813  0.0292
+  1e-3        0.0498  0.0728  0.0399     0.0620  0.0716  0.0201
+  1.09e-4     0.0484  0.0740  0.0408     0.2357  0.2537  0.0192
+
+**bspline is height-STABLE and razor is not.**  bspline holds ~0.05/0.074/0.041
+at all three heights — converging to a constant, as the physics requires — and
+razor tracks it down to 1e-3 and then jumps 4× at the last height, to 0.236 and
+0.254, exactly where the quasi-static limit is most valid.
+
+The absolute agreement with 0.0392 is only approximate (bspline sits within a
+factor ~2, which is what a leading-order estimate is worth), and the finding
+does not rest on it.  It rests on razor's own ratio MOVING 0.062 → 0.236
+between two heights where it should be settling to a constant, on a band whose
+neighbours are height-independent, in a basis whose sibling does settle.
+
+So the defect is named as precisely as this arc can name it without reading
+the assembly: **razor's self and nearest-neighbour finite-ground entries carry
+about 4× too much of the perfect-image term at deep grazing.**  The surfaces
+are right, the medium is right, the matrix is well conditioned and symmetric,
+and bspline's identical band converges.
+
+And it hands the fix a **reference-free acceptance test**: on the one-wire
+reproducer, |ΔZ|/|PEC image| in the near-diagonal band must tend to a constant
+as h → 0, and that constant must be |2/(ε̃+1)|.  No binary, no captured deck,
+six unknowns, milliseconds.
+
+Runs the binary in every mode but ``theta`` and ``matrix``, so: antennaknobs
+venv, ``NEC5_EXE`` set.
 
     NEC5_EXE=~/antennas/NEC5-downloads/nec5-linux/nec5cl \
         /home/smburns/antennas/antennaknobs/.venv/bin/python \
@@ -1089,6 +1148,134 @@ def mode_wire(values, heights) -> list[dict]:
     return rows
 
 
+def _capture_Z(text, trunk):
+    """The matrix ``scipy.linalg.solve`` actually inverts for this deck.
+
+    Wrapping the solve rather than any assembly method, for the reason
+    `mode_cond` records: razor reaches its solve by more than one assembly
+    path and bspline's `_assemble_Z` returns a partial block.
+    """
+    import scipy.linalg
+
+    grabbed = []
+    orig = scipy.linalg.solve
+
+    def patched(a, b, *args, **kw):
+        arr = np.asarray(a)
+        if arr.ndim == 2 and arr.shape[0] == arr.shape[1]:
+            grabbed.append(arr.copy())
+        return orig(a, b, *args, **kw)
+
+    scipy.linalg.solve = patched
+    try:
+        momwire_z(text, trunk)
+    finally:
+        scipy.linalg.solve = orig
+    return max(grabbed, key=lambda m: m.shape[0]) if grabbed else None
+
+
+def mode_matrix(heights) -> list[dict]:
+    """Read the ground-correction matrix itself, on the one-wire reproducer.
+
+    Two checks, both self-contained — no binary, no reference implementation,
+    which matters because every external reference this arc has (the licensed
+    engine, the PEC baseline) gives an IMPEDANCE and not a matrix.
+
+    RECIPROCITY.  A reciprocal medium gives a symmetric operator.  razor's
+    testing is razor-blade rather than Galerkin so its Z need not be symmetric
+    by construction, which is exactly why the PEC column is carried: whatever
+    asymmetry the formulation has is visible there, at every height, and what
+    matters is whether the FINITE-ground column departs from it as h -> 0.
+
+    LOCALISATION.  |dZ_ij| binned by |i-j| says which pairs carry the ground
+    correction.  For a horizontal wire over a half-space the correction should
+    fall off with separation; a correction that is flat or rising in |i-j| is
+    a coupling that does not decay, which is what an error in the grazing
+    limit would look like.
+    """
+    # The quasi-static image coefficient. As h -> 0 the near-diagonal ground
+    # correction is the INCOMPLETE cancellation of an antiparallel image: PEC
+    # images a horizontal current at -1 exactly, a half-space at -Gamma, so
+    # dZ is proportional to (1 - Gamma) times whatever the PEC image itself
+    # contributes. In the near field that Gamma is the static (eps~-1)/(eps~+1),
+    # so the predicted ratio is 2/(eps~+1) -- 0.0392 for average soil at
+    # 1.832 MHz. The PEC image term is measurable without any reference:
+    # Z(GN 1) - Z(GN -1), momwire's own free-space and perfect-image
+    # machinery, both of which razor reproduces exactly.
+    eps_t = medium_eps_t()
+    predicted = abs(2.0 / (eps_t + 1.0))
+
+    print("the ground-correction matrix on the one-wire reproducer")
+    print(f"L = {RADIAL_LEN} m, 5 segments, driven at node 2")
+    print(f"eps~ = {eps_t:.4g}; quasi-static |1 - Gamma| = {predicted:.5f}\n")
+    rows = []
+    for hw in heights or (1e-2, 1e-3, 1.09e-4):
+        print(f"h/lambda = {hw:.3g}")
+        for trunk in TRUNKS:
+            free = wire_deck(hw * WL).replace(
+                f"GN 0,0,0,0,{_num(13.0)},{_num(0.005)},1.,0.", "GN -1"
+            )
+            z_f = _capture_Z(free, trunk)
+            z_p = _capture_Z(wire_deck(hw * WL, pec=True), trunk)
+            z_g = _capture_Z(wire_deck(hw * WL, soil=(13.0, 0.005)), trunk)
+            if z_p is None or z_g is None or z_p.shape != z_g.shape:
+                print(f"   {trunk}: no comparable matrix")
+                continue
+            dz = z_g - z_p
+
+            def asym(m):
+                return float(np.linalg.norm(m - m.T) / max(np.linalg.norm(m), 1e-300))
+
+            n = z_p.shape[0]
+            prof = []
+            for d in range(n):
+                idx = [(i, i + d) for i in range(n - d)]
+                prof.append(
+                    float(np.mean([abs(dz[i, j]) for i, j in idx])) if idx else 0.0
+                )
+            print(
+                f"   {trunk:>11} N={n:<3} "
+                f"asym(PEC) {asym(z_p):.3e}  asym(GN0) {asym(z_g):.3e}  "
+                f"asym(dZ) {asym(dz):.3e}  |dZ|/|Z_pec| "
+                f"{np.linalg.norm(dz) / np.linalg.norm(z_p):.4f}"
+            )
+            print(
+                "                 |dZ| by |i-j|: " + "  ".join(f"{v:.3g}" for v in prof)
+            )
+            rows_extra = None
+            if z_f is not None and z_f.shape == z_p.shape:
+                img = z_p - z_f  # what the PERFECT image alone contributes
+                band = [
+                    (
+                        float(np.mean([abs(dz[i, i + d]) for i in range(n - d)])),
+                        float(np.mean([abs(img[i, i + d]) for i in range(n - d)])),
+                    )
+                    for d in range(min(3, n))
+                ]
+                rows_extra = [(a / b if b else None) for a, b in band]
+                print(
+                    "                 |dZ|/|PEC image|: "
+                    + "  ".join("nan" if r is None else f"{r:.4f}" for r in rows_extra)
+                    + f"   (quasi-static predicts {predicted:.4f})"
+                )
+            rows.append(
+                dict(
+                    h_over_wl=hw,
+                    trunk=trunk,
+                    n=n,
+                    asym_pec=asym(z_p),
+                    asym_gn0=asym(z_g),
+                    asym_dz=asym(dz),
+                    dz_rel=float(np.linalg.norm(dz) / np.linalg.norm(z_p)),
+                    dz_profile=prof,
+                    dz_over_image=rows_extra,
+                    quasistatic_predicted=predicted,
+                )
+            )
+        print()
+    return rows
+
+
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -1102,6 +1289,7 @@ def main() -> None:
             "epsr",
             "cond",
             "wire",
+            "matrix",
         ),
         default="theta",
     )
@@ -1140,6 +1328,8 @@ def main() -> None:
         rows = mode_reflcoef()
     elif args.mode == "soil":
         rows = mode_soil()
+    elif args.mode == "matrix":
+        rows = mode_matrix(tuple(args.heights) if args.heights else None)
     elif args.mode == "wire":
         rows = mode_wire(
             tuple(args.values) if args.values else None,
