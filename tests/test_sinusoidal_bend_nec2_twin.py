@@ -163,3 +163,75 @@ def test_the_same_basis_under_galerkin_testing_is_clean():
     sin = _z(SinusoidalSolver, 90.0, n)
     assert abs(sg - bs) < 1.0, (sg, bs)
     assert abs(sg - sin) > 8.0, (sg, sin)
+
+
+# ----------------------------------------------------------------------
+# The refinement audit — why the gap is not a meshing or feed artefact
+# ----------------------------------------------------------------------
+# A cross-solver gap that grows with N is exactly the shape a REFINEMENT
+# artefact takes, so these two controls exist before the conclusion does.
+# Both were run at review, and both clear it.
+#
+# The mesh itself is clean: at every N both edges get exactly n//2 segments
+# of identical length (4.0686 m), dmin == dmax, nothing stuck at a coarser
+# rung. nec2c meshed exactly the requested counts at every rung too (24, 48,
+# 96, 192, 384, 768), feeding tag 1 segment n//2 throughout.
+#
+# The FEED, however, is genuinely not the same object across these solvers:
+#
+#   SinusoidalSolver   a segment delta gap, snapped to the segment whose
+#                      CENTRE is nearest the requested arclength — so on an
+#                      equal-armed vee it sits 0.5 segments from the apex and
+#                      that distance HALVES with every refinement.
+#   BSplineSolver      a point feed at the requested arclength exactly — on
+#                      this deck the apex itself, fixed for every N.
+#
+# That difference cannot be removed (the point-matched model has no
+# sub-segment feed), so it is controlled for instead.
+
+
+def test_the_straight_wire_converges_for_every_formulation():
+    """Control 1: the moving feed does not, by itself, cause divergence.
+
+    The point-matched feed sits half a segment from the wire midpoint at
+    EVERY N here too, so if that moving delta gap were what drives the bend
+    result, it would drive one here. It does not — measured 0.311 → 0.005 Ω
+    from N=24 to N=768, all four formulations landing on −319.0 Ω.
+    """
+    gaps = []
+    for n in (24, 96, 384):
+        sin = _z(SinusoidalSolver, 180.0, n)
+        sg = _z(SinusoidalGalerkinSolver, 180.0, n)
+        gaps.append(abs(sin - sg))
+    assert gaps[-1] < gaps[0], gaps
+    assert gaps[-1] < 0.1, gaps
+
+
+def test_the_gap_survives_feeding_every_solver_at_the_same_point():
+    """Control 2: it is not the feed POSITION either.
+
+    Pin `feed_arclength` to the point-matched solver's own feed — the centre
+    of the segment it would have chosen — so the siblings are driven exactly
+    where it is driven, instead of at the apex. The gap is unmoved: measured
+    8.2 / 10.5 / 14.8 Ω at N = 24 / 96 / 384, against 8.2 / 10.5 / 14.8 with
+    the default feeds. Matching the feed point moves the siblings by ~0.2 Ω,
+    not by 12.
+    """
+    n = 96
+    s = SinusoidalSolver(
+        wires=[_invvee(90.0)],
+        n_per_edge_per_wire=[[n // 2, n // 2]],
+        wire_radius=RADIUS,
+        wavelength=WL,
+    )
+    g = s._build_geometry()
+    h = np.asarray(g["seg_h"])
+    fs = g["feed_seg"]
+    arc = float(np.cumsum(h)[fs] - 0.5 * h[fs])
+
+    sin = _z(SinusoidalSolver, 90.0, n, feed_arclength=arc)
+    sg = _z(SinusoidalGalerkinSolver, 90.0, n, feed_arclength=arc)
+    bs = _z(BSplineSolver, 90.0, n, degree=2, feed_arclength=arc)
+
+    assert abs(sg - bs) < 1.5, (sg, bs)  # siblings still agree
+    assert abs(sin - sg) > 8.0, (sin, sg)  # and the gap is still there
