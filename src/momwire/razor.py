@@ -402,6 +402,20 @@ _CHUNK_ELEMS = 2_000_000
 # on it, which `tests/test_razor_refl_coef_ground.py` pins directly.
 _WEIGHTED_CHUNK_ELEMS = _CHUNK_ELEMS // 12
 
+# momwire#510: the ceiling the grazing-height keying below may raise the
+# Sommerfeld remainder's source order to, and the constant in the rule.
+#
+# The rule is one Gauss point per closest-approach distance along the source
+# segment — `n_qp ≈ len / R_min`, with `R_min` the nearest an observer comes
+# to that segment's MIRROR. Measured against the licensed binary on capture
+# 0033 (a 39.624 m radial 1.778 cm over average soil, so len/R_min ≈ 223):
+# order 3 is 171.86 % out, 48 is 26.05 %, 96 is 9.87 % and 192 is 1.44 %.
+# The two rungs either side agree on the constant — len/R_min = 48.4 needs
+# ~48 and 121 needs ~96-192 — so C = 1.0 is what the measurement says and
+# not a fitted number.
+_REMAINDER_QP_C = 1.0
+_REMAINDER_QP_CAP = 192
+
 # Constructor kwargs the sibling solvers accept that this formulation
 # deliberately does not, with the reason each is refused. Anything else
 # unexpected is a caller typo and stays a TypeError.
@@ -413,6 +427,7 @@ _OUT_OF_SCOPE = {
     "already a through-current unknown, so a port that adds one would be a "
     "second unknown for one current",
 }
+
 
 # The one geometry both served finite grounds refuse. Checked in __init__
 # (it is a combination of named arguments, not a stray kwarg, so
@@ -455,6 +470,84 @@ _CONTACT_OVER_FINITE_REFUSAL = (
     "validity window, sommerfeld at any height), or drop ground_eps for "
     "the PEC image"
 )
+
+
+def _remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap=None):
+    """The Sommerfeld remainder's source order, keyed to grazing height.
+
+    momwire#510.  ``field_windows`` lays a single Gauss rule of one order over
+    every source segment, and the constructor's default of 3 rests on the
+    remainder field being "smooth on the scale of a segment" — true wherever
+    this unit was gated (its hardest deck is a dipole 0.04 λ up) and false at
+    grazing.  When an observer sits almost directly over a source segment's
+    IMAGE, the projected remainder has a spike of width ~R_min in a segment of
+    length ``len``, and three points cannot see a feature of relative width
+    R_min/len.  On capture 0033 that ratio is 1/223 and the served impedance
+    was 171.86 % from the binary; at order 192 it is 1.44 %.
+
+    So the order is keyed to the geometry the same way momwire#443 keyed the
+    interpolation grid to its boundary layer: ``ceil(C · len / R_min)``, with
+    ``R_min`` the nearest any observer comes to the segment's mirror, clipped
+    below by ``base`` and above by ``cap``.
+
+    Two properties matter as much as the rule.
+
+    **A deck with nothing grazing is bit-identical.**  Every ratio comes out
+    below 1 and the clip returns ``base`` exactly, so the order is the number
+    it always was and no shipped gate moves.  That is why the keying is a
+    max-with-base rather than a replacement.
+
+    **The cap is a real limit, not a formality.**  The order is one scalar for
+    the whole fill, so a single grazing pair raises it for every source
+    segment; the cap is what stops one wire in a large model multiplying the
+    remainder's cost without bound.  A deck grazing enough to need more than
+    ``cap`` is served MORE accurately than before but not to the binary — see
+    ``docs/`` and the arc's record.  Per-segment orders would remove that
+    coupling and are the follow-up, not this change.
+    """
+    # Read at CALL time, not bound as a default: a default argument captures
+    # the module constant when this function is defined, which silently makes
+    # the cap unpatchable — and the gate that pins the pre-#510 behaviour has
+    # to be able to move it.
+    cap = _REMAINDER_QP_CAP if cap is None else cap
+
+    src_l = np.asarray(src_l, dtype=float)
+    src_r = np.asarray(src_r, dtype=float)
+    obs = np.asarray(obs_pts, dtype=float)
+    if src_l.size == 0 or obs.size == 0:
+        return int(base)
+
+    # The mirror of each source segment, which is what an observer's distance
+    # to the remainder's singular ridge is measured against.
+    mir_l, mir_r = src_l.copy(), src_r.copy()
+    mir_l[:, 2] = 2.0 * ground_z - src_l[:, 2]
+    mir_r[:, 2] = 2.0 * ground_z - src_r[:, 2]
+
+    d = mir_r - mir_l
+    dd = np.einsum("ij,ij->i", d, d)
+    lengths = np.linalg.norm(src_r - src_l, axis=1)
+
+    worst = 0.0
+    # Per source segment rather than one (n_obs, n_src, 3) array: the observer
+    # axis is razor's testing-path quadrature points, so the dense form is
+    # n_basis·n_path·n_src·3 and would be hundreds of MB on a large deck for a
+    # number that is only used to pick an integer.
+    for j in range(src_l.shape[0]):
+        if lengths[j] <= 0.0:
+            continue
+        ap = obs - mir_l[j]
+        if dd[j] > 0.0:
+            t = np.clip(ap @ d[j] / dd[j], 0.0, 1.0)
+            closest = mir_l[j] + t[:, None] * d[j]
+        else:
+            closest = np.broadcast_to(mir_l[j], obs.shape)
+        r_min = float(np.min(np.linalg.norm(obs - closest, axis=1)))
+        if r_min <= 0.0:
+            return int(cap)
+        worst = max(worst, float(lengths[j]) / r_min)
+
+    need = int(np.ceil(_REMAINDER_QP_C * worst)) if worst > 0.0 else 0
+    return int(min(max(int(base), need), int(cap)))
 
 
 @dataclass(frozen=True)
@@ -641,6 +734,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         between orders 3 and 8 on the hardest deck this unit gates (a
         dipole 0.04 λ up, where the remainder is worth 22 Ω), in
         `tests/test_razor_sommerfeld_ground.py`.
+
+        **Since momwire#510 this is a FLOOR, not the order.** The
+        smoothness claim above holds down to about 1e-2 λ and fails below
+        it: when an observer sits nearly over a source segment's image the
+        remainder carries a spike of width ~R_min, and at capture 0033's
+        1.09e-4 λ three points put the served impedance 171.86 % from the
+        binary. `_remainder_qp` keys the actual order to `len / R_min` and
+        clips it below by this kwarg, so a deck with nothing near the plane
+        is bit-identical and a grazing one is not.
     cancel: optional :class:`~momwire._cancel.CancelToken`; polled at the
         phase boundaries (after geometry, between the fill chunks, before
         the dense solve).
@@ -2555,11 +2657,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # `n_moment=2` is the tent: ∫Λ and ∫τΛ, from which the same
                 # two combinations the reduced-kernel moments take (M1/h on
                 # a rising wing, M0 − M1/h on a falling one) fall out below.
+                # momwire#510: the order is keyed to grazing height rather
+                # than taken flat from the kwarg. A deck with nothing near the
+                # plane gets `self.n_qp_sommerfeld` exactly and is unchanged.
                 rem_fn = remainder.field_windows(
                     (sources["obs_pts"], sources["obs_tans"]),
                     (sources["src_l"], sources["src_r"], sources["src_t"]),
                     n_moment=2,
-                    n_qp=self.n_qp_sommerfeld,
+                    n_qp=_remainder_qp(
+                        sources["obs_pts"],
+                        sources["src_l"],
+                        sources["src_r"],
+                        self.ground_z,
+                        self.n_qp_sommerfeld,
+                    ),
                 )
 
         M0c, _ = self._seg_moments_from_prepared(
