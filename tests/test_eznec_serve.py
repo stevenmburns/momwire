@@ -40,13 +40,14 @@ the same singularity.  Serving either would publish a sampling constant, so
 the point refuses and the four grid decks over the same two grounds — 0108,
 0110, 0111, 0113 — are served with envelopes like everything else.
 
-**And one deck class that is gated by neither.**  #504 U3 landed a printout
-for every served capture that had one, which is what turned the U1/U2
-liveness gates into structure gates and envelope pins — except on 0033/0034,
-where the numbers arrived and DISAGREED, far outside the family (see
-:data:`DIVERGENT_IDS`).  Their layout is gated like everything else and their
-physics is not pinned at all, because a bar drawn round a 275 Ω gap would be
-recording the gap as normal rather than as the finding it is.
+**And one deck class that took two issues to pin.**  #504 U3 landed a
+printout for every served capture that had one, which is what turned the
+U1/U2 liveness gates into structure gates and envelope pins — except on
+0033/0034 (:data:`GRAZING_IDS`), where the numbers arrived and DISAGREED by
+275 and 188 Ω, far outside the family.  Those two were left unpinned on
+purpose for an arc, because a bar drawn round a 275 Ω gap would have recorded
+the gap as normal rather than as the finding it was.  momwire#510 and #631
+closed it; they now carry envelopes like everything else.
 
 The manifest's normalizations for a served run are applied on the way in and
 nowhere else: CRLF to LF and the ``SOMMPD.NEX`` cache blocks at the reader
@@ -210,13 +211,16 @@ SERVED_UNGATED_IDS = ("0037", "0039", "0040", "0041", "0042")
 # from 1e-1 λ down to 1.09e-4 is within 1.44 %.  The elimination trail is in
 # antennaknobs `scratch/510-grazing/`.
 #
-# The gate below still stands because it is measured at the DEFAULT basis,
-# and bspline is a separate and unfinished story: the same keying takes it
-# from 435 % to ~14 % at this height but leaves a residual 10-34 % at the
-# rungs above, which is not the same defect and is not this fix's.  So the
-# seam's default still disagrees with these two captures, still on purpose,
-# and for a reason that is now known rather than attributed.
-DIVERGENT_IDS = ("0033", "0034")
+# AND THE DEFAULT BASIS, which is what `served` uses, was a SECOND and
+# different defect — momwire#631, measured the same day.  bspline's grazing
+# error was two under-resolved quadratures, not one: the exact-image block as
+# well as the remainder.  A horizontal edge's own image is the same arc
+# translated by -2h, so that block is the same-edge kernel at
+# a_eff = sqrt(a^2 + 4h^2) — closed form, no order to key — and with it and
+# the remainder keying together the seam's default now answers these two
+# captures within 12.3 and 5.2 Ω.  The gate below is the envelope that
+# replaced the on-purpose disagreement.
+GRAZING_IDS = ("0033", "0034")
 
 # Every capture id this seam answers after momwire#545, pinned.  The ladder
 # number is 59 of 62 and the three that are left are named in
@@ -253,7 +257,7 @@ SERVED_AFTER_545 = (
     "0029",
     "0030",
     *PHASED_IDS,  # 0031-0032
-    *DIVERGENT_IDS,  # 0033-0034
+    *GRAZING_IDS,  # 0033-0034
     "0035",
     "0036",
     "0037",  # )
@@ -895,7 +899,7 @@ def mask(text: str, drive: tuple[int, ...] = (2, 3)) -> str:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cid", SERVED_IDS + DIVERGENT_IDS)
+@pytest.mark.parametrize("cid", SERVED_IDS + GRAZING_IDS)
 def test_a_served_printout_is_the_capture_wherever_it_is_not_a_solved_number(cid):
     """The unit's whole shape, fifteen times over.
 
@@ -983,7 +987,7 @@ def test_the_counting_rule_reproduces_every_captured_count(cid):
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("cid", SERVED_IDS + DIVERGENT_IDS)
+@pytest.mark.parametrize("cid", SERVED_IDS + GRAZING_IDS)
 def test_the_current_table_s_geometry_columns_are_the_captured_ones(cid):
     """Segment centres and lengths, compared as NUMBERS rather than bytes.
 
@@ -1211,7 +1215,7 @@ def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
     )
 
 
-@pytest.mark.parametrize("cid", SERVED_IDS + DIVERGENT_IDS)
+@pytest.mark.parametrize("cid", SERVED_IDS + GRAZING_IDS)
 def test_a_lossless_deck_radiates_everything_it_is_given(cid):
     """Every wire here is a perfect conductor and this dialect has no
     conductivity card, so INPUT = RADIATED, WIRE LOSS = 0 and EFFICIENCY reads
@@ -2250,11 +2254,12 @@ def test_the_corpus_ladder_stands_where_545_left_it():
     which is the shape a ladder is supposed to have.  This one cannot move
     again by serving: nothing converges there on either side of the seam.
 
-    What this number does NOT claim is that all 59 are right.  0033 and 0034
-    are served, are in this set, and disagree with their captures by 275 and
-    188 Ω (:data:`DIVERGENT_IDS`); the ladder counts decks that get an ANSWER
-    rather than decks that get a pinned one, and that distinction is why the
-    envelope tables are written out separately.
+    What this number does NOT claim is that all 59 are right.  The ladder
+    counts decks that get an ANSWER rather than decks that get a pinned one,
+    and that distinction is why the envelope tables are written out
+    separately — 0033 and 0034 (:data:`GRAZING_IDS`) spent an arc inside this
+    count while disagreeing with their captures by 275 and 188 Ω, and are
+    pinned at 12.3 and 5.2 only since momwire#510 and #631.
     """
     served_ids = tuple(
         cid for cid, text in sorted(corpus().items()) if "NEC ERROR" not in text
@@ -2290,9 +2295,9 @@ def test_the_ungated_rung_one_captures_still_serve(cid):
     )
 
 
-@pytest.mark.parametrize("cid", DIVERGENT_IDS)
-def test_the_elevated_radial_systems_disagree_with_their_captures_on_purpose(cid):
-    """The finding, written down as a gate so it cannot be pinned by accident.
+@pytest.mark.parametrize("cid", GRAZING_IDS)
+def test_the_elevated_radial_systems_are_pinned_now_that_they_close(cid):
+    """The envelope that replaced an on-purpose disagreement.
 
     0033 and 0034 are the two decks whose printouts landed with #504 U3 and
     whose numbers did not fit anything: 275 Ω and 188 Ω of impedance against a
@@ -2302,47 +2307,65 @@ def test_the_elevated_radial_systems_disagree_with_their_captures_on_purpose(cid
     at 1.832 MHz — with everything but the vertical standing 1.778 cm above a
     ``GN 0`` earth, 1.09e-4 of the 163.6 m wavelength.
 
-    Three things are asserted and each one is load-bearing.
+    For an arc this test asserted the gap was LARGE, deliberately, so that
+    nobody could quietly widen an envelope until it covered a defect — and so
+    that a fix would fail it and force the fixer to come back and pin the real
+    number.  momwire#510 and #631 are that fix and this is that pin.
 
-    The gap is REAL and large, so nobody quietly widens an envelope until it
-    covers this; if a fix lands, this test fails and the fixer has to come back
-    and pin the new number properly, which is exactly the conversation the
-    failure should start.
+    What closed it, in two halves that are different defects.  #510: razor's
+    Sommerfeld remainder was integrated over each source segment at a flat
+    order 3, and at grazing an observer sits nearly over a source segment's
+    image where the remainder carries a spike three points cannot see.  #631:
+    the DEFAULT basis needed that keying too AND a second thing — its
+    exact-image block was quadratured on the premise that "the image is always
+    far enough from the original", which grazing breaks.  A horizontal edge's
+    own image is the same arc translated by -2h, so that block is the
+    same-edge kernel at ``a_eff = sqrt(a^2 + 4h^2)``: closed form, exact, no
+    order to key.  Neither half alone was enough — measured 152 % and 306 %
+    against the licensed binary on the one-wire reproducer, and 0.62 % with
+    both.
 
-    The two decks agree with EACH OTHER about the antenna, roughly.  0033
-    meshes it in five segments a wire and 0034 in a 44-wire taper down to 1.8 cm
-    elements, and they are the same physical model; the captures answer 38.791
-    − 49.583j and 40.730 − 43.452j, 7 Ω apart, and this seam answers 45.325 +
-    225.59j and 91.615 + 137.87j, which is 100 Ω apart.  The engine is mesh-
-    insensitive here and this seam is not, and a mesh sensitivity that appears
-    only 1e-4 λ off a Sommerfeld plane is a statement about the ground model
-    rather than about the basis.
-
-    And the STRUCTURE is right, which is what put the finding outside this
-    package: the counting rule, the geometry columns and the whole printout
-    layout pass their own gates on these two decks.  What is left is momwire's
-    finite-ground solve at grazing height, reached through kwargs this seam
-    only passes on.
-
-    Since momwire#510 that solve is HALF fixed and this gate is measured at
-    the half that is not.  razor-nec5 now answers 0033 within 1.44 % of the
-    licensed binary (the remainder's source quadrature is keyed to grazing
-    height instead of flat at order 3); bspline, which is what ``served``
-    uses, is not, and its residual is a different defect.  So this still
-    fails if the DEFAULT basis closes, which is still the conversation the
-    failure should start — but it no longer says the gap is unfixable.
+    Three things are pinned, and the last one is the one that mattered.
     """
     want = extract(printout_text(cid)).sources[0].impedance
     got = extract(served(cid)).sources[0].impedance
-    assert abs(got - want) > 100.0, (
-        f"{cid}: served {got} against captured {want} — if this closed, "
-        "measure the new offset and give the deck a real envelope pin"
+    # Measured 12.297 Ω on 0033 and 5.244 on 0034, against 275 and 188 before.
+    # The bar is per-deck rather than one number because 0033's five-segment
+    # mesh is the coarser model and honestly carries more of bspline's own
+    # basis error; both sit inside the family's own 0.05-19.5 Ω span only for
+    # 0034, so 0033 gets a bar that says what it is.
+    bar = {"0033": 15.0, "0034": 8.0}[cid]
+    assert abs(got - want) < bar, (
+        f"{cid}: served {got} against captured {want}, "
+        f"{abs(got - want):.3f} Ω apart (bar {bar})"
     )
-    # The captures agree with each other about the antenna; the seam does not.
-    captured = [extract(printout_text(k)).sources[0].impedance for k in DIVERGENT_IDS]
-    served_z = [extract(served(k)).sources[0].impedance for k in DIVERGENT_IDS]
+
+    # The pattern peak: DIRECTION exact — it was already exact before the fix
+    # and a formulation change does not get to move it — and the LEVEL now
+    # inside the family's own band. Measured 0.280 dB on 0033, 0.080 on 0034.
+    (pw,) = extract(printout_text(cid)).patterns
+    (pg,) = extract(served(cid)).patterns
+    bw = max(pw.rows, key=lambda row: row.total_db)
+    bg = max(pg.rows, key=lambda row: row.total_db)
+    assert (bg.theta_deg, bg.phi_deg) == (bw.theta_deg, bw.phi_deg)
+    assert abs(bg.total_db - bw.total_db) < 0.4, (
+        f"{cid}: peak {bg.total_db:.2f} dB against captured {bw.total_db:.2f}"
+    )
+
+    # THE ONE THAT NAMED THE DEFECT. 0033 meshes this antenna in five segments
+    # a wire and 0034 in a 44-wire taper down to 1.8 cm elements; they are the
+    # same physical model, the engine answers them 6.43 Ω apart, and this seam
+    # used to answer them 100 Ω apart. A mesh sensitivity that appears only
+    # 1e-4 λ off a Sommerfeld plane was a statement about the ground solve
+    # rather than about the basis, and it is what the arc chased. The seam now
+    # answers them 0.646 Ω apart — tighter than the captures themselves.
+    served_z = [extract(served(k)).sources[0].impedance for k in GRAZING_IDS]
+    captured = [extract(printout_text(k)).sources[0].impedance for k in GRAZING_IDS]
     assert abs(captured[0] - captured[1]) < 10.0
-    assert abs(served_z[0] - served_z[1]) > 50.0
+    assert abs(served_z[0] - served_z[1]) < 2.0, (
+        f"the two meshes disagree by {abs(served_z[0] - served_z[1]):.3f} Ω — "
+        "the grazing mesh sensitivity is back"
+    )
 
 
 def test_the_favored_wire_carries_physics_at_a_five_wire_junction():

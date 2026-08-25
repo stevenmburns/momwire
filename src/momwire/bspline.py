@@ -79,6 +79,7 @@ from . import _ground_refl
 from . import _ground_spec
 from . import _medium_spec
 from . import _potential_ground
+from . import _quadrature
 from . import _sommerfeld
 from . import _sommerfeld_below
 from . import _sommerfeld_transmitted
@@ -216,6 +217,30 @@ def _evict_fifo(cache: dict, limit: int) -> None:
 # information — the all-None spec is the kernel layer's spelling for "the
 # whole block is eligible".
 _EK_SAME_EDGE = _EK(a=None, group_i=None, group_j=None)
+
+# momwire#631. A horizontal edge's own PEC image is the SAME arc translated
+# by -2h in z, so its moment block is the same-edge kernel at an effective
+# radius sqrt(a^2 + 4h^2) — exactly, with no quadrature order to key. Off-edge
+# quadrature at `n_qp_pair` only agrees with that closed form while the image
+# stays far compared with a segment; measured against a 256-point reference on
+# a 39.6 m radial, max relative error over the block:
+#
+#   delta/2h     0.76      7.57      69.4
+#   n_qp_pair=4  3.8e-06   4.2e-02   1.6e+00
+#   closed form  7.5e-09   1.3e-06   5.0e-06
+#
+# so the analytic block is better everywhere and the off-edge rule collapses
+# above delta/2h ~ 1. The threshold is set an octave below where the shipped
+# rule starts to lose figures, which keeps every non-grazing deck on exactly
+# the arithmetic it had (the two agree to ~1e-6 at the crossover, far below
+# any tolerance the suite pins) while catching the grazing regime whole.
+_NEAR_IMAGE_DELTA_OVER_2H = 0.5
+
+# momwire#631, the remainder half. Same rule and same constants razor took in
+# momwire#510 — `_quadrature.remainder_qp` owns the arithmetic; these are
+# bspline's own clip, so patching one trunk's cap never moves the other's.
+_REMAINDER_QP_CAP = 192
+_REMAINDER_QP_C = 1.0
 
 
 def _ek_slice(ek, rows=None, cols=None):
@@ -1520,11 +1545,127 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """t_m · t_image_n with t_image_n = (t_n_x, t_n_y, -t_n_z)."""
         return tangents @ _ground_mirror.mirror_tangents(tangents).T
 
+    def _remainder_qp(self, seg_l, seg_r, gz, cap=None):
+        """This fill's Sommerfeld remainder order, keyed to grazing height.
+
+        momwire#631's second half. The closed-form near-image block fixes the
+        EXACT image; the remainder Q is a Sommerfeld integral with no closed
+        form, so it needs the order rule razor took in momwire#510 — and the
+        cross that named this defect showed neither half is sufficient alone
+        (image-only left 152 %, remainder-only 306 %, both 0.62 %).
+
+        Observers are the remainder's own Gauss nodes at the BASE order.
+        They are strictly interior to their segments, which is what keeps a
+        wire ENDING in the plane from reading as zero distance to its own
+        mirror and pinning the order at the cap: contact is a legitimate
+        geometry here (the basis handles it) and is not what this rule is
+        about. Taking them at the base order rather than at the order being
+        chosen also keeps the observer set independent of the answer.
+        """
+        cap = _REMAINDER_QP_CAP if cap is None else cap
+        xg, _ = leggauss(int(self.n_qp_sommerfeld))
+        tq = 0.5 * (xg + 1.0)
+        nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
+        return _quadrature.remainder_qp(
+            nodes.reshape(-1, 3),
+            seg_l,
+            seg_r,
+            gz,
+            self.n_qp_sommerfeld,
+            cap,
+            _REMAINDER_QP_C,
+        )
+
+    def _near_image_edge_blocks(self, geom):
+        """Edges whose own image is a NEAR, PARALLEL translate of themselves.
+
+        momwire#631. For a HORIZONTAL edge at height h over `ground_z` the
+        mirror is the same arc translated by -2h in z: `mirror_tangents` flips
+        only the z component and that component is zero, so the image runs the
+        same way at a constant perpendicular offset. The separation of the
+        point at arc s on the edge from the point at s' on its image is then
+
+            R^2 = (s - s')^2 + (2h)^2       (+ a^2 for the tube)
+
+        which is exactly what `J_static_moment` and `_seg_seg_reg_geometry`
+        integrate, both of which take `a` as nothing but that constant offset.
+        So the image block IS the same-edge block at
+
+            a_eff = sqrt(a^2 + 4h^2)
+
+        and the analytic static + regularised split `_build_J_blocks` uses on
+        the diagonal serves it unchanged — no order to key, and no premise
+        about the image being far.
+
+        Only SELF-edge blocks qualify, and only horizontal ones. A vertical
+        edge's image is collinear with it rather than offset (ground contact,
+        which the EK path already treats), and a tilted edge's image is
+        neither parallel nor constantly offset, so neither reduces to this
+        kernel. Cross-edge image pairs are a different geometry again.
+
+        Yields `(slice, arc, a_eff)` per eligible edge, empty when the deck
+        has no grazing horizontal run — in which case nothing downstream
+        deviates by so much as a bit from what it did before #631.
+        """
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        per_wire = geom["per_wire"]
+        seg_off = geom["seg_offsets"]
+        gz = self.ground_z
+        out = []
+        for w in range(len(per_wire)):
+            pw = per_wire[w]
+            ed_off = pw["edge_offsets"]
+            ed_arc = pw["edge_arc_edges"]
+            base = seg_off[w]
+            a_w = float(self._radius_per_wire[w])
+            for i_e in range(len(ed_off) - 1):
+                sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
+                z = np.concatenate([seg_l[sl, 2], seg_r[sl, 2]])
+                arc = np.asarray(ed_arc[i_e], dtype=np.float64)
+                h = float(z[0]) - gz
+                # Horizontal means every endpoint of the run shares one
+                # height; `a_w` is the scale that decides what "flat" means,
+                # since a deviation below the tube radius is not a tilt this
+                # kernel can tell from none.
+                if not np.allclose(z - gz, h, rtol=0.0, atol=max(a_w, 1e-12)):
+                    continue
+                # Strictly ABOVE the plane. h == 0 is ground contact, not a
+                # near image; h < 0 is a BURIED wire, whose image lands in the
+                # other medium and whose blocks are built by the momwire#553
+                # machinery rather than here — the arc identity would still
+                # hold geometrically, but nothing in this arc measured it
+                # there, so it is not claimed.
+                if h <= 0.0:
+                    continue
+                two_h = 2.0 * h
+                delta = float(np.min(np.diff(arc)))
+                if delta <= _NEAR_IMAGE_DELTA_OVER_2H * two_h:
+                    continue  # image still far compared with a segment
+                out.append((sl, arc, float(np.sqrt(a_w * a_w + two_h * two_h))))
+        return out
+
+    def _near_image_analytic_block(self, arc, a_eff, k):
+        """The closed-form near-image moment block for one horizontal edge.
+
+        The extended kernel is deliberately NOT applied. EK scores image
+        eligibility against the mirrored source geometry
+        (`_ek_axis_labels(mirror=True)`), and a horizontal wire — whose image
+        is parallel but offset rather than coaxial — is not eligible, so the
+        off-edge fill this replaces carries no EK on these pairs either.
+        """
+        d = self.degree
+        return _seg_seg_static_moments(
+            arc, a_eff, max_d=d, ek=None
+        ) + _seg_seg_reg_moments(arc, a_eff, k, max_d=d, n_qp=self.n_qp_pair, ek=None)
+
     def _build_J_image_blocks(self, geom, k, ground=None):
         """Build the J moment tensor with j-segments mirrored across the
-        ground plane. The image is always far enough from the original
-        that the analytic same-edge static + reg split doesn't apply — full
-        off-edge quadrature handles every (i, j) pair uniformly.
+        ground plane. Off-edge quadrature handles every (i, j) pair
+        uniformly, EXCEPT the self-edge block of a horizontal edge whose
+        image has come close enough to break that rule — momwire#631, see
+        `_near_image_edge_blocks` — which is overwritten with the analytic
+        static + reg split at the image's effective radius.
 
         The mirrored source geometry comes from the ground object's
         `image_geometry()` (momwire#398 unit 1) — the mirror map is the
@@ -1547,7 +1688,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # source side is the MIRRORED geometry, so eligibility is scored
         # against it (`mirror=True`): a vertical monopole is coaxial with
         # its own image and extends, a horizontal wire is not and does not.
-        return _seg_seg_full_moments_offedge(
+        J = _seg_seg_full_moments_offedge(
             seg_l,
             seg_r,
             seg_l_img,
@@ -1558,6 +1699,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.n_qp_pair,
             ek=self._ek_spec(geom, mirror=True) if self.extended_kernel else None,
         )
+        for sl, arc, a_eff in self._near_image_edge_blocks(geom):
+            J[:, :, sl, sl] = self._near_image_analytic_block(arc, a_eff, k)
+        return J
 
     def _image_refl_prep(self, geom):
         """The CACHE over `_potential_ground.specular_prep`: k-independent
@@ -1933,7 +2077,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
 
         d = self.degree
-        q = self.n_qp_sommerfeld
+        q = self._remainder_qp(seg_l, seg_r, gz)  # momwire#631
         xg, wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)
         nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
@@ -2099,8 +2243,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return Q_pe, Q_ep, Q_ee
 
         # Polynomial-side nodes + u^p moment weights, exactly as
-        # _Z_sommerfeld_remainder (n_qp_sommerfeld order).
-        q = self.n_qp_sommerfeld
+        # _Z_sommerfeld_remainder — including its momwire#631 keying, so the
+        # enrichment cross-blocks are sampled at the same order as the
+        # polynomial block they sit beside rather than at a stale default.
+        q = self._remainder_qp(seg_l, seg_r, gz)
         xg, wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)
         nodes_p = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
@@ -2685,10 +2831,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ground scope). Observer-row chunks of the mirrored-source
         full-kernel moments feed the weighted windowed assembler with
         scale = -1 (the seams' `Z - image` convention). Image pairs are
-        never singular (`_build_J_image_blocks` docstring), so there is
-        no same-edge correction pass. The complex weights serve all three
-        grounds: PEC (mirror tangent dot / ones), refl-coef (Fresnel
-        dyad / image charge), Sommerfeld exact image (constant C2).
+        never singular, but momwire#631 found they are not always FAR
+        either: a horizontal edge at grazing height sits a fraction of a
+        segment from its own image, and off-edge quadrature at
+        `n_qp_pair` loses that block entirely (measured 1.6 relative at
+        delta/2h = 69). So there is a near-image correction pass after
+        the sweep, the image-side twin of the free-space same-edge fixup
+        — see `_near_image_edge_blocks`. The complex weights serve all
+        three grounds: PEC (mirror tangent dot / ones), refl-coef
+        (Fresnel dyad / image charge), Sommerfeld exact image
+        (constant C2).
 
         Weights arrive as `weights_fn(i0, i1) -> (w_A, w_Phi)`, called once
         per observer chunk for WINDOWS of shape (i1-i0, n_segs) aligned with
@@ -2788,6 +2940,55 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 self._cancel_flag,
             )
             del J_chunk, w_A_win, w_Phi_win  # (#338)
+
+        # Near-image fixup (momwire#631), the image-side twin of the
+        # free-space same-edge fixup in `_compute_Z_dense_chunked`: the sweep
+        # above added the off-edge block for every pair, and for a horizontal
+        # edge whose image has come close that block is the one thing
+        # off-edge quadrature cannot do at this order. Accumulate the
+        # DIFFERENCE, so the pairs it does not name keep exactly the
+        # arithmetic they had rather than merely the same value.
+        for sl, arc, a_eff in self._near_image_edge_blocks(geom):
+            self._checkpoint()  # per near-image correction block
+            J_edge = _seg_seg_full_moments_offedge(
+                seg_l[sl],
+                seg_r[sl],
+                seg_l_img[sl],
+                seg_r_img[sl],
+                a_row[sl],
+                k,
+                d,
+                self.n_qp_pair,
+                ek=_ek_slice(ek, rows=sl, cols=sl),
+            )
+            corr = self._near_image_analytic_block(arc, a_eff, k) - J_edge
+            del J_edge  # same lifetime discipline as the sweep above (#338)
+            w_A_win, w_Phi_win = weights_fn(sl.start, sl.stop)
+            e_idx = np.nonzero(((supp_c >= sl.start) & (supp_c < sl.stop)).any(axis=1))[
+                0
+            ].astype(np.int64)
+            _acc.assemble_Z_bspline_weighted_windowed(
+                np.ascontiguousarray(corr, dtype=np.complex128),
+                supp_c,
+                polys_c,
+                # `weights_fn` hands back whole rows; this block's j-window is
+                # its own columns, so both tables are narrowed to match.
+                np.ascontiguousarray(w_A_win[:, sl], dtype=np.complex128),
+                np.ascontiguousarray(w_Phi_win[:, sl], dtype=np.complex128),
+                e_idx,
+                e_idx,
+                int(sl.start),
+                int(sl.stop),
+                int(sl.start),
+                int(sl.stop),
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                complex(-1.0),
+                Z,
+                self._cancel_flag,
+            )
+            del corr, w_A_win, w_Phi_win  # (#338)
 
     # ------------------------------------------------------------------
     # Distributed series wire loading (stevenmburns/momwire#131)
@@ -5079,6 +5280,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     self.n_qp_pair,
                     ek=ek_img,
                 )
+                # Near-image blocks (momwire#631), the image-side twin of the
+                # same-edge overwrite this loop already does above: a
+                # horizontal edge at grazing height sits a fraction of a
+                # segment from its own image, where off-edge quadrature at
+                # `n_qp_pair` loses the block. Same closed form, built per k
+                # through the same swept reg twin. Without this the swept
+                # route answered a grazing deck 194 % away from what
+                # `compute_impedance` answered for it.
+                for sl, arc, a_eff in self._near_image_edge_blocks(geom):
+                    A_st_ni = _seg_seg_static_moments(arc, a_eff, max_d=d, ek=None)
+                    reg_ni = _seg_seg_reg_geometry(
+                        arc, a_eff, max_d=d, n_qp=self.n_qp_pair, ek=None
+                    )
+                    J_img[:, :, :, sl, sl] = A_st_ni[
+                        None
+                    ] + _seg_seg_reg_moments_from_geometry_swept(reg_ni, ks)
                 # In-place fold (issue #333 part 2): `Z = Z - ...` held the
                 # old stack, the image stack, and the difference — three
                 # (chunk, n_basis, n_basis) complex stacks at the sweep's

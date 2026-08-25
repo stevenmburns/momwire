@@ -840,3 +840,226 @@ def test_sommerfeld_remainder_transient_is_slab_bounded():
         f"headroom) — the full (d+1)^2 N^2 moment tensor is back "
         f"({dense_mb:.0f} MiB)"
     )
+
+
+# ---------------------------------------------------------------------------
+# The grazing near image (momwire#631)
+# ---------------------------------------------------------------------------
+#
+# bspline's grazing error was TWO under-resolved quadratures, and the cross
+# that named it showed neither half is sufficient alone: on a 39.6 m radial at
+# h/lambda = 1.09e-4, n = 16, over `GN 0` against the licensed binary, keying
+# the image order alone left 152 %, the remainder order alone 306 %, and both
+# 0.62 %. The first half needs no order at all — a horizontal edge's own image
+# is the SAME arc translated by -2h, so its block is the same-edge kernel at
+# a_eff = sqrt(a^2 + 4h^2), exactly. These gates are all reference-free; CI has
+# no binary, and every external reference this arc produced is a whole-deck
+# impedance.
+
+_GRAZE_L = 39.624  # m, capture 0033's radial
+_GRAZE_WL = 163.6422  # m, 1.832 MHz
+_GRAZE_A = 0.001294  # m
+
+
+def _grazing_wire(h, n_seg=16, **overrides):
+    """One horizontal wire at height `h`, fed at its centre."""
+    kw = dict(
+        wires=[[[0.0, 0.0, h], [_GRAZE_L, 0.0, h]]],
+        n_per_edge_per_wire=[[n_seg]],
+        feeds=[(0, _GRAZE_L / 2.0, 1.0 + 0j)],
+        junctions=None,
+        wire_radius=_GRAZE_A,
+        wavelength=_GRAZE_WL,
+        ground_z=0.0,
+    )
+    kw.update(overrides)
+    return kw
+
+
+def test_the_near_image_block_is_the_same_edge_kernel_at_a_eff(monkeypatch):
+    """The identity the whole fix rests on, checked against brute force.
+
+    `J_static_moment` integrates 1/sqrt((s-s')^2 + a^2) and
+    `_seg_seg_reg_geometry` builds R the same way, so in both `a` is nothing
+    but the constant perpendicular offset between the two arcs. For a
+    horizontal edge and its mirror that offset is exactly 2h. If that reading
+    is right the closed form must reproduce a high-order off-edge evaluation
+    of the same block; if it is wrong — a sign, a factor of two, the arc
+    running backwards — this is where it shows.
+
+    The brute-force reference needs order 256, which only the numpy fallback
+    can do (the C++ kernel refuses n_qp > 8 for scratch-buffer size), so the
+    accelerators are switched off for the reference alone.
+    """
+    from momwire import _bspline_kernels as bk
+
+    h = 1.09e-4 * _GRAZE_WL
+    s = BSplineSolver(**_grazing_wire(h))
+    geom = s._build_geometry()
+    blocks = s._near_image_edge_blocks(geom)
+    assert len(blocks) == 1, f"expected one horizontal edge, got {len(blocks)}"
+    sl, arc, a_eff = blocks[0]
+    assert a_eff == pytest.approx(np.hypot(_GRAZE_A, 2.0 * h), rel=1e-12)
+
+    proposed = s._near_image_analytic_block(arc, a_eff, s.k)
+
+    monkeypatch.setattr(bk, "_HAVE_BSPLINE_ACCEL", False)
+    monkeypatch.setattr(bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+    truth = bk._seg_seg_full_moments_offedge(
+        seg_l[sl],
+        seg_r[sl],
+        s._image_positions(seg_l[sl]),
+        s._image_positions(seg_r[sl]),
+        _GRAZE_A,
+        s.k,
+        s.degree,
+        256,
+    )
+    rel = np.abs(proposed - truth).max() / np.abs(truth).max()
+    assert rel < 1e-4, f"closed form is not the image block: {rel:.3e}"
+
+    # ...and this is the thing the shipped order could NOT do: the same block
+    # at n_qp_pair = 4 is off by O(1). Measured 1.6 here; gated at 0.5 because
+    # the claim is "the default rule has lost the block", not that number.
+    shipped = bk._seg_seg_full_moments_offedge(
+        seg_l[sl],
+        seg_r[sl],
+        s._image_positions(seg_l[sl]),
+        s._image_positions(seg_r[sl]),
+        _GRAZE_A,
+        s.k,
+        s.degree,
+        4,
+    )
+    lost = np.abs(shipped - truth).max() / np.abs(truth).max()
+    assert lost > 0.5, f"off-edge order 4 only {lost:.3e} out — gate is inert"
+
+
+def test_an_ordinary_deck_has_no_near_image_block():
+    """The property that lets this ship without moving a shipped gate.
+
+    Nothing is claimed unless a horizontal edge's image has come closer than
+    half a segment, so an ordinary deck keeps exactly the arithmetic it had —
+    both the near-image fixup and the remainder keying are no-ops on it.
+    """
+    s = BSplineSolver(**dict(GEOMS[("dipole", 0.2)], ground_z=0.0))
+    geom = s._build_geometry()
+    assert s._near_image_edge_blocks(geom) == []
+    seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+    assert s._remainder_qp(seg_l, seg_r, 0.0) == s.n_qp_sommerfeld
+
+
+def test_a_vertical_grazing_wire_is_not_claimed():
+    """Scope guard: only HORIZONTAL edges reduce to this kernel.
+
+    A vertical wire's image is collinear with it rather than parallel and
+    offset, so `a_eff` would be meaningless there — and experiment 3 of the
+    #510 arc measured that a lone grazing vertical is already exact, so
+    claiming it could only do harm. A tilted edge is neither case.
+    """
+    h = 1.09e-4 * _GRAZE_WL
+    for wire in (
+        [[0.0, 0.0, h], [0.0, 0.0, h + 20.0]],  # vertical
+        [[0.0, 0.0, h], [_GRAZE_L, 0.0, h + 5.0]],  # tilted
+    ):
+        s = BSplineSolver(**_grazing_wire(h, wires=[wire]))
+        assert s._near_image_edge_blocks(s._build_geometry()) == [], wire
+
+
+def test_a_grazing_wire_is_insensitive_to_the_pair_order():
+    """The image half's physics gate, and it needs no binary.
+
+    With the block computed in closed form the answer must stop caring about
+    `n_qp_pair` — that knob no longer touches these pairs. Before the fix the
+    same deck moved 195 % -> 80 % of |Z| between orders 4 and 8 against the
+    binary; the two momwire answers differed by more than half of |Z|.
+    """
+    kw = _grazing_wire(1.09e-4 * _GRAZE_WL)
+    z4, _ = BSplineSolver(**kw, n_qp_pair=4).compute_impedance()
+    z8, _ = BSplineSolver(**kw, n_qp_pair=8).compute_impedance()
+    rel = abs(z4 - z8) / abs(z8)
+    assert rel < 1e-3, f"still order-sensitive over PEC: {rel:.3%}"
+
+
+def test_a_grazing_wire_converges_under_mesh_refinement():
+    """#631's own symptom, gated directly: the answer must SETTLE.
+
+    The issue was filed on "bspline's finite-ground answer gets worse with
+    refinement" — 13.97 -> 83.60 % over N = 5..25 against the binary. CI has
+    no binary, but divergence is visible without one: successive refinements
+    must move the answer less, not more.
+    """
+    somm = dict(ground_eps=(13.0, 0.005), ground_model="sommerfeld")
+    zs = [
+        BSplineSolver(
+            **_grazing_wire(1.09e-4 * _GRAZE_WL, n_seg=n), **somm
+        ).compute_impedance()[0]
+        for n in (8, 16, 32)
+    ]
+    step1 = abs(zs[1] - zs[0]) / abs(zs[1])
+    step2 = abs(zs[2] - zs[1]) / abs(zs[2])
+    assert step2 < step1, (
+        f"not converging: {step1:.3%} then {step2:.3%} ({zs[0]:.3f}, "
+        f"{zs[1]:.3f}, {zs[2]:.3f})"
+    )
+    assert step2 < 0.05, f"refinement step still {step2:.3%} of |Z|"
+
+
+def test_the_grazing_remainder_order_is_keyed_and_matters():
+    """The remainder half, the same self-consistency razor's #510 gate uses.
+
+    If the keying picks a sufficient order, forcing the floor to the cap by
+    hand must not move the answer; and capped back to the pre-#631 default the
+    same deck must be a different answer entirely, or the keying is inert.
+    The cap is read at CALL time precisely so this gate can move it — as a
+    default argument it would bind at import and this would silently compare
+    two identical solves.
+    """
+    from momwire import bspline as _bs
+
+    somm = dict(ground_eps=(13.0, 0.005), ground_model="sommerfeld")
+    kw = _grazing_wire(1.09e-4 * _GRAZE_WL, **somm)
+    z_keyed, _ = BSplineSolver(**kw).compute_impedance()
+    z_forced, _ = BSplineSolver(**kw, n_qp_sommerfeld=192).compute_impedance()
+    rel = abs(z_keyed - z_forced) / abs(z_forced)
+    assert rel < 1e-2, f"grazing remainder not converged: {rel:.3%}"
+
+    saved = _bs._REMAINDER_QP_CAP
+    try:
+        _bs._REMAINDER_QP_CAP = 3
+        z_flat, _ = BSplineSolver(**kw).compute_impedance()
+    finally:
+        _bs._REMAINDER_QP_CAP = saved
+    moved = abs(z_flat - z_forced) / abs(z_forced)
+    assert moved > 0.25, f"order-3 answer only {moved:.1%} away — keying inert?"
+
+
+def test_the_fast_solvers_do_not_have_the_near_image_fix_yet():
+    """The scope line of momwire#631, written down so it cannot rot.
+
+    `HMatrixSolver` and `ArrayBlockSolver` reach the image by their own
+    routes — `_zblock_image_refl` for near blocks and a fused ACA twin for far
+    ones — neither of which is the dense/chunked/swept fill the near-image
+    correction lives in. They were already wrong on a grazing deck before
+    #631; what changed is that `BSplineSolver` is now right, so the two
+    disagree instead of agreeing wrongly.
+
+    `test_fast_solvers_match_dense` keeps them honest on an ordinary deck at
+    ACA/GMRES tolerance, and that is where they are supported. This gate is
+    the other half of that sentence: at grazing they are NOT, by a margin
+    nobody could mistake for tolerance (measured 194 % over PEC and 407 % over
+    `GN 0`), and if it ever closes the fixer should come back and turn this
+    into a real agreement pin — the same bargain the eznec seam's grazing
+    decks were held to.
+    """
+    kw = _grazing_wire(1.09e-4 * _GRAZE_WL)
+    z_dense, _ = BSplineSolver(**kw).compute_impedance()
+    for cls in (HMatrixSolver, ArrayBlockSolver):
+        z_fast, _ = cls(**kw).compute_impedance()
+        rel = abs(z_fast - z_dense) / abs(z_dense)
+        assert rel > 0.5, (
+            f"{cls.__name__} now agrees with the dense route at grazing "
+            f"({rel:.2%}) — momwire#631's near-image correction has reached "
+            f"it, so pin the agreement instead of this divergence"
+        )
