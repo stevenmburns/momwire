@@ -198,9 +198,16 @@ def filename_basis(prog: str) -> str | None:
     basis, and answering them under the default instead would be the silent
     wrong answer momwire#628 is about. Validation is the caller's, as it is
     for the stock engine — an unknown suffix must fail fast at the probe.
+
+    Casefolded, and an empty suffix returned as ``""`` rather than ``None``,
+    because those are `_solver.basis_from_program_name`'s rules and this copy
+    exists only because the client may not import momwire. A COPY is the thing
+    that drifts, so what it copies is the whole rule: a Windows rename to
+    ``Momwire-Nec2c-Razor.exe`` names razor, and ``momwire-nec2c-`` names a
+    basis it failed to spell.
     """
-    name = prog.replace("\\", "/").rsplit("/", 1)[-1]
-    if name.lower().endswith(".exe"):
+    name = prog.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    if name.endswith(".exe"):
         name = name[:-4]
     if _FILENAME_MARKER not in name:
         return None
@@ -209,7 +216,7 @@ def filename_basis(prog: str) -> str | None:
         return None
     if suffix.startswith(f"{_SHARED_SEGMENT}-"):
         suffix = suffix[len(_SHARED_SEGMENT) + 1 :]
-    return suffix or None
+    return suffix
 
 
 def resolve_engine(

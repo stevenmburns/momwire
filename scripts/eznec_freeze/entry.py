@@ -19,7 +19,8 @@ This is momwire#528's spelling, not a second one — the same rule, through the
 same owner (`basis_from_program_name`), with ``eznec-`` as the marker where
 the portal uses ``nec2c-``.  So **a copy you make yourself works**: rename or
 copy the exe to ``momwire-eznec-<basis>.exe`` beside its ``_internal`` and
-that basis is what answers.
+that basis is what answers — in whatever casing Explorer or the user gave the
+name, because the match is casefolded and Windows filenames are.
 
 An unknown suffix must not fall back to the default silently — that is
 momwire#628's failure, an engine answering as a formulation nobody asked
@@ -40,13 +41,22 @@ MARKER = "eznec-"
 def basis_for(prog: str) -> str:
     """The basis this program name selects, defaulting to the seam's own.
 
-    Returns the SUFFIX unvalidated when there is one: `_shell.render` resolves
-    it through `basis_entry` and turns an unknown name into a printed
-    ``NEC ERROR`` naming the basis and listing the known ones, which is the
-    only channel EZNEC reads.  Validating here could only turn that into a
-    traceback on a stream nobody sees.
+    Returns the SUFFIX unvalidated whenever the name carries the marker, and
+    the default only when it does not.  The EMPTY suffix of a name ending at
+    the marker (``momwire-eznec.exe`` copied to ``momwire-eznec-.exe``) is a
+    suffix and travels as one: it asked for a basis and named none, so it must
+    reach the refusal rather than be rounded off to the default — `or` here
+    would have made that name serve bs2 silently.
+
+    Unvalidated because the refusal is not this module's to write: `_serve.serve`
+    resolves the name through `basis_entry` and raises `ServeRefusal` carrying
+    its sentence, and `_shell.render` catches that and prints it as the
+    ``NEC ERROR`` line naming the basis and listing the known ones — the only
+    channel EZNEC reads.  Validating here could only turn that into a traceback
+    on a stream nobody sees.
     """
-    return basis_from_program_name(prog, MARKER) or _serve.BASIS
+    suffix = basis_from_program_name(prog, MARKER)
+    return _serve.BASIS if suffix is None else suffix
 
 
 if __name__ == "__main__":

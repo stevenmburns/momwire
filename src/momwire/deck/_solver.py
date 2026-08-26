@@ -139,13 +139,26 @@ def basis_entry(basis: str) -> tuple[type, Mapping[str, Any]]:
 
 
 def basis_from_program_name(prog: str, marker: str) -> str | None:
-    """The basis a copy/symlink NAME selects, or ``None`` for the plain one.
+    """The basis a copy/symlink NAME selects, or ``None`` when it names none.
 
     ``<anything><marker><basis>`` — everything after ``marker`` in the
-    program's basename, with a Windows ``.exe`` stripped first.  A name ending
-    at the marker (no suffix) selects nothing, and so does a name without the
-    marker at all: ``python -m momwire.portal``, a pytest runner, a bare
-    ``momwire-nec2c``.
+    program's basename, with a Windows ``.exe`` stripped first.  ``None`` —
+    "this name asks for nothing, serve the default" — is returned for a name
+    without the marker at all: ``python -m momwire.portal``, a pytest runner,
+    a bare ``momwire-nec2c``.
+
+    CASEFOLDED, marker and suffix together, because the names this reads are
+    Windows FILENAMES: ``Momwire-Eznec-Razor-Nec5.exe`` is the same file as
+    the lowercase spelling there, both front ends invite the user to copy and
+    rename, and a marker that only matched one casing would hand that copy
+    ``None`` and serve the default under a name that asked for the twin —
+    momwire#628's failure reached by a rename.  ``marker`` must therefore be
+    given casefolded; every basis in :data:`BASES` is lowercase already.
+
+    A name ending AT the marker (``momwire-eznec-``) returns the empty string,
+    not ``None``: it asked for a basis and supplied none, which is a typo to
+    be refused by name, not a request for the default.  ``basis_entry`` is
+    what says so, at each front end's own refusal channel.
 
     Validation is deliberately NOT done here.  The two front ends fail an
     unknown suffix in different places — the nec2c side at its `-version`
@@ -159,12 +172,12 @@ def basis_from_program_name(prog: str, marker: str) -> str | None:
     by one route and keyed by another, and the symptom was an engine silently
     answering as a formulation nobody asked for.
     """
-    name = prog.replace("\\", "/").rsplit("/", 1)[-1]
-    if name.lower().endswith(".exe"):
+    name = prog.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    if name.endswith(".exe"):
         name = name[:-4]
     if marker not in name:
         return None
-    return name.split(marker, 1)[1] or None
+    return name.split(marker, 1)[1]
 
 
 def port_kwargs(

@@ -32,7 +32,12 @@ import pytest
 from momwire import BSplineSolver
 from momwire.array_block import ArrayBlockSolver
 from momwire.deck._nec5 import parse_nec5
-from momwire.deck._solver import BASES, basis_entry, port_kwargs
+from momwire.deck._solver import (
+    BASES,
+    basis_entry,
+    basis_from_program_name,
+    port_kwargs,
+)
 from momwire.eznec import _serve
 from momwire.eznec._shell import render
 from momwire.razor import RazorSolver
@@ -154,6 +159,115 @@ def test_razor_now_hosts_the_deck_it_used_to_name_a_refusal_for():
     assert "INTERNAL ERROR" not in text
     assert "FINITE ground plane" not in text
     assert "ANTENNA INPUT PARAMETERS" in text
+
+
+# --------------------------------------------------------------------------
+# the executable NAME is the choice (momwire#593)
+
+# EZNEC owns the command line — two positional paths, nothing else — so the
+# basis cannot be a flag and rides on the filename instead.  That makes
+# `basis_from_program_name` a piece of the SHIPPED contract rather than a
+# helper, and until now nothing in the PR lane touched it through the
+# ``eznec-`` marker at all: `test_portal.py` covers the ``nec2c-`` one, and
+# the frozen bundle's smoke gate runs only post-merge, on Windows.
+#
+# The two edges here are the ones that fail SILENTLY, which is why they are
+# tests and not a comment.  A Windows filename is case-insensitive, so
+# `Momwire-Eznec-Razor-Nec5.exe` is the SAME FILE the README tells the user
+# to make; matching the marker case-sensitively gave it ``None`` and served
+# the default under a name asking for the twin.  And a name ending at the
+# marker asked for a basis and spelt none, which is a typo to refuse, not a
+# request for the default — ``suffix or None`` turned it into one.
+
+
+def _entry_module():
+    """`scripts/eznec_freeze/entry.py`, which is not in a package.
+
+    Loaded by path, as `test_portal_shared.py` loads the capture script: it
+    is the frozen exe's ``__main__`` and PyInstaller wants a file, so there
+    is nothing to import it as.
+    """
+    import importlib.util
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parent.parent / "scripts" / "eznec_freeze" / "entry.py"
+    )
+    spec = importlib.util.spec_from_file_location("eznec_freeze_entry", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize(
+    "prog,expected",
+    [
+        # No marker: the plain spelling, a module run, a pytest runner.
+        ("momwire-eznec", None),
+        ("momwire-eznec.exe", None),
+        ("python", None),
+        ("/usr/bin/python3.12", None),
+        # The shipped pair, and the paths they arrive as.
+        ("momwire-eznec-razor-nec5", "razor-nec5"),
+        ("momwire-eznec-razor-nec5.exe", "razor-nec5"),
+        ("C:\\Users\\ham\\momwire-eznec\\momwire-eznec-razor-nec5.exe", "razor-nec5"),
+        ("/opt/momwire-eznec/momwire-eznec-hmatrix", "hmatrix"),
+        # Windows filenames are case-insensitive and the user renames by hand.
+        ("Momwire-Eznec-Razor-Nec5.exe", "razor-nec5"),
+        ("MOMWIRE-EZNEC-RAZOR-NEC5.EXE", "razor-nec5"),
+        ("C:\\Program Files\\Momwire-EZNEC-Bspline.Exe", "bspline"),
+        # A typo is a name, not the default: both of these must reach a
+        # refusal, so both must come back as a suffix.
+        ("momwire-eznec-", ""),
+        ("momwire-eznec-.exe", ""),
+        ("momwire-eznec-rzaor", "rzaor"),
+    ],
+)
+def test_the_eznec_marker_reads_the_basis_off_the_filename(prog, expected):
+    assert basis_from_program_name(prog, "eznec-") == expected
+
+
+@pytest.mark.parametrize(
+    "prog,expected",
+    [
+        ("momwire-nec2c", None),
+        ("momwire-nec2c-razor", "razor"),
+        ("C:\\SimNEC\\Momwire-Nec2c-Sinusoidal-Galerkin.EXE", "sinusoidal-galerkin"),
+        ("momwire-nec2c-", ""),
+    ],
+)
+def test_one_owner_means_the_nec2c_marker_obeys_the_same_rule(prog, expected):
+    """The rule is about executable names, not about which front end asks."""
+    assert basis_from_program_name(prog, "nec2c-") == expected
+
+
+@pytest.mark.parametrize(
+    "prog,expected",
+    [
+        ("momwire-eznec.exe", _serve.BASIS),
+        ("python", _serve.BASIS),
+        ("Momwire-Eznec-Razor-Nec5.exe", "razor-nec5"),
+        ("momwire-eznec-", ""),
+        ("momwire-eznec-rzaor.exe", "rzaor"),
+    ],
+)
+def test_the_frozen_entry_point_defaults_only_when_no_basis_was_named(prog, expected):
+    assert _entry_module().basis_for(prog) == expected
+
+
+@pytest.mark.parametrize("prog", ["momwire-eznec-", "momwire-eznec-rzaor.exe"])
+def test_a_name_that_matches_no_basis_refuses_in_the_printout(prog):
+    """The README's promise, end to end: not a silent fallback, a refusal.
+
+    Through `render` because that is the frozen exe's whole body — the basis
+    `basis_for` returns is handed straight to it — and because the printout
+    is the only channel EZNEC reads.
+    """
+    basis = _entry_module().basis_for(prog)
+    text = render(deck_text("0010"), basis=basis)
+    assert "NEC ERROR" in text
+    assert f"unknown basis {basis!r}" in text
+    assert "ANTENNA INPUT PARAMETERS" not in text
 
 
 # --------------------------------------------------------------------------
