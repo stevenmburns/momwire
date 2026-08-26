@@ -138,6 +138,35 @@ def basis_entry(basis: str) -> tuple[type, Mapping[str, Any]]:
         raise ValueError(f"unknown basis {basis!r}; known bases: {known}") from None
 
 
+def basis_from_program_name(prog: str, marker: str) -> str | None:
+    """The basis a copy/symlink NAME selects, or ``None`` for the plain one.
+
+    ``<anything><marker><basis>`` — everything after ``marker`` in the
+    program's basename, with a Windows ``.exe`` stripped first.  A name ending
+    at the marker (no suffix) selects nothing, and so does a name without the
+    marker at all: ``python -m momwire.portal``, a pytest runner, a bare
+    ``momwire-nec2c``.
+
+    Validation is deliberately NOT done here.  The two front ends fail an
+    unknown suffix in different places — the nec2c side at its `-version`
+    probe, the EZNEC side as a printed refusal, because EZNEC reads the file
+    and nothing else — and both want the sentence :func:`basis_entry` gives.
+
+    One owner because there are now two markers (momwire#528 spelled
+    ``nec2c-``, momwire#593 adds ``eznec-``) and the rule is not "what does
+    each front end feel like doing", it is one rule about executable names.
+    A second copy is the thing that drifts: momwire#628 was a basis resolved
+    by one route and keyed by another, and the symptom was an engine silently
+    answering as a formulation nobody asked for.
+    """
+    name = prog.replace("\\", "/").rsplit("/", 1)[-1]
+    if name.lower().endswith(".exe"):
+        name = name[:-4]
+    if marker not in name:
+        return None
+    return name.split(marker, 1)[1] or None
+
+
 def port_kwargs(
     solver_class: type,
     *,

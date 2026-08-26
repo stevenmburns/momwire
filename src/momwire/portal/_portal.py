@@ -197,7 +197,7 @@ from ..deck._networks import build_reducer, card_branches, live_cards
 # because "the fill already carries Z_L" and "the port algebra must stamp Z_L"
 # are the same fact asked from two directions, and a budget that guessed
 # separately would be exactly the disagreement momwire#433 found.
-from ..deck._solver import _NATIVE_LOADING
+from ..deck._solver import _NATIVE_LOADING, basis_from_program_name
 
 # The NEC-level view of a deck's geometry: the flat wire list after every
 # GM/GS transform and both connection passes, carrying the TAGS and the
@@ -3803,13 +3803,7 @@ def _filename_basis(prog: str) -> str | None:
     Validation is the caller's: an unknown suffix must fail fast at the
     probe, exactly like an unknown ``--basis``.
     """
-    name = prog.replace("\\", "/").rsplit("/", 1)[-1]
-    if name.lower().endswith(".exe"):
-        name = name[:-4]
-    if "nec2c-" not in name:
-        return None
-    suffix = name.split("nec2c-", 1)[1]
-    return suffix or None
+    return basis_from_program_name(prog, "nec2c-")
 
 
 def configure_engine(

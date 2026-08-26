@@ -23,6 +23,44 @@ That is the whole installation. No Python, no environment, nothing on PATH.
 EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
 become momwire's.
 
+## Choosing the formulation
+
+The bundle carries two engines, and the choice is the engine PATH you set:
+
+```text
+momwire-eznec.exe             the default — degree-2 B-spline (bs2)
+momwire-eznec-razor-nec5.exe  the NEC-5 formulation twin
+```
+
+They accept the same models — measured, deck by deck, on the whole captured
+corpus — and answer in different formulations. `razor-nec5` is the tent basis
+with razor-blade path testing NEC-5 itself uses, so it is the one that
+reproduces the licensed engine most closely: on a free-space dipole it prints
+79.947 + 29.922j where the licensed engine prints 79.948 + 29.919j, and the
+default B-spline prints 85.073 + 45.369j. None of those is "wrong" — the
+first tracks the reference, the third is momwire's own basis converging on
+its own terms — but if you came here to run NEC-5, the twin is the one that
+does.
+
+**Making another.** The basis rides on the *filename*: everything after
+`eznec-` selects it, a Windows `.exe` stripped first. So a copy you make
+yourself works — rename a copy to `momwire-eznec-<basis>.exe`, beside the
+same `_internal`, and that basis answers. This is the same rule the
+[SimNEC portal's](/reference/portal-usage/) `momwire-nec2c-<basis>` commands
+use, with one owner behind both. The bundle ships two rather than all nine
+only to keep the download small; the other seven are a copy away:
+
+```text
+bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5
+sinusoidal  sinusoidal-galerkin  sinusoidal-galerkin-converged
+```
+
+The three sinusoidal families cannot answer this dialect — its printout
+carries a `CHARGE DENSITY` table they have no basis to read it from — and say
+so by name in the printout rather than failing quietly. A filename matching
+no basis does the same: it refuses, names itself and lists what exists, so a
+typo can never be served as the default.
+
 One launch costs on the order of a second — the frozen interpreter's import
 cost. (The one-file packaging that re-extracts on every launch was measured
 at 17 s and rejected.) A long SWR sweep is therefore slower through the
@@ -125,10 +163,11 @@ capability statements rather than deck errors:
 
 ## What answers underneath
 
-The solver behind the portal is momwire's default degree-2 B-spline engine —
-the same physics as [the SimNEC portal's](/reference/portal-usage/) default,
-where the full nine-engine roster and the cross-basis validation workflow
-are documented. On the models where we hold a licensed NEC-5 reference, the
+The solver behind the portal is whichever of the two bundled engines you
+pointed EZNEC at, defaulting to momwire's degree-2 B-spline — the same
+physics as [the SimNEC portal's](/reference/portal-usage/) default, where the
+full nine-engine roster and the cross-basis validation workflow are
+documented. On the models where we hold a licensed NEC-5 reference, the
 portal's printouts agree with the engine's element for element at the
 sub-percent level, and the in-house NEC-5 formulation twin
 (`razor-nec5`) rides the licensed engine's own convergence path at the
