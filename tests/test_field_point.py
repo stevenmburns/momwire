@@ -588,8 +588,8 @@ def test_the_engine_disagrees_with_itself_about_the_singular_cell():
     what follows is not run-to-run noise.  0107 is that same antenna over the
     same physical ground, ε_r 13 and σ 0.005, spelled ``GD`` instead: same
     soil, same geometry, same observation point.  It prints 6.6673E+02 where
-    the others print 8.2521E+02 — a **24 % disagreement, and 6.6°of phase,
-    produced by a change of CARD SPELLING alone.**
+    the others print 8.2521E+02 — **158 V/m apart, 19 % of the larger, plus
+    6.6° of phase, produced by a change of CARD SPELLING alone.**
 
     A converged field cannot depend on which card names the ground.  So the
     printed cell is each spelling's own regularization of the same
