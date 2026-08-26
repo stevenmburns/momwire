@@ -13,7 +13,7 @@ What is NOT here, and why
 -------------------------
 The unit's brief named the two phase-0 ANCHOR decks — a 10 m contact
 monopole over one buried radial (92.130 − 70.141j ohm printed) and over a
-four-radial fan (89.985 − 71.401j) — as its serve gates. They refuse, and
+four-radial fan (90.051 − 70.731j) — as its serve gates. They refuse, and
 `test_gu5_9_*` is that refusal. The reason is `G-U5-3`'s own measurement:
 both decks stand a wire END in the plane, and momwire's buried fill cannot
 hold a ground CONTACT and a buried wire at the same time. See
@@ -40,6 +40,7 @@ import time
 
 import numpy as np
 import pytest
+from golden_buried_anchor_nec5 import ANCHOR_FOUR_RADIAL, ANCHOR_LONE_RADIAL
 
 from momwire import (
     RazorSolver,
@@ -916,7 +917,7 @@ def test_gu5_9_the_lone_radial_anchor_refuses_naming_both_gates():
     msg = str(exc.value)
     assert "stands an END in the ground plane" in msg
     assert "92.130 - 70.141j" in msg
-    assert "89.985 - 71.401j" in msg
+    assert "90.051 - 70.731j" in msg
     assert "phase 2" in msg
 
 
@@ -1003,8 +1004,8 @@ def test_gu5_11_the_grids_are_shared_across_a_ladder(record_property):
 # ======================================================================
 # G-U5-12 — the two banked anchors, as GATES rather than as strings
 #
-# Until momwire#567's scoping pass, 92.130 - 70.141j and 89.985 - 71.401j
-# existed in this repo only as substrings: three copies of refusal prose in
+# Until momwire#567's scoping pass, the two anchor numbers existed in this
+# repo only as substrings: three copies of refusal prose in
 # src and four tests asserting that the prose still contains them. Nothing
 # ever compared an impedance to them, so landing the contact+buried fix
 # would not have satisfied them and nobody would have noticed.
@@ -1016,14 +1017,14 @@ def test_gu5_11_the_grids_are_shared_across_a_ladder(record_property):
 # itself is a gate that cannot be forgotten.
 # ======================================================================
 
-# Our licensed NEC-5 engine's printout for the two phase-0 ANCHOR decks,
-# both over eps_r 13 / sigma 0.005 S/m soil at 7 MHz, 10 m contact monopole
-# fed at segment 7 of 15, detached 5 m radials 15 cm down. These are the
-# numbers `_medium_spec._REFUSE_CONTACT_WITH_BURIED` and
+# The anchors themselves — our licensed NEC-5 engine's printout for the two
+# phase-0 ANCHOR decks — are imported at the top of this file from
+# `golden_buried_anchor_nec5`, which `scripts/capture_buried_anchor_nec5.py`
+# regenerates from the banked cards (momwire#567 phase 0 re-ran the engine
+# and found the fan bank was a transcription 0.67 ohm off the printout).
+# These are the numbers `_medium_spec._REFUSE_CONTACT_WITH_BURIED` and
 # `eznec._serve._REFUSE_BURIED_WITH_CONTACT` print; the binding is gated
 # below so the constants and the prose cannot drift apart.
-ANCHOR_LONE_RADIAL = 92.130 - 70.141j
-ANCHOR_FOUR_RADIAL = 89.985 - 71.401j
 
 # PROVISIONAL, in absolute ohms, and it should be re-derived rather than
 # inherited. 4.0 is `test_contact_nec5_lane._ENVELOPE["poor"]` — the loosest

@@ -112,7 +112,7 @@ _REFUSE_CONTACT_WITH_BURIED = (
     "lift the same monopole 1 m clear of the plane and the whole fill agrees "
     "to 1.0e-5. Two banked gates are waiting for phase 2 to land this: our "
     "licensed NEC-5 engine prints 92.130 - 70.141j ohm for that lone-radial "
-    "deck and 89.985 - 71.401j ohm for the four-radial fan, both at eps_r 13 "
+    "deck and 90.051 - 70.731j ohm for the four-radial fan, both at eps_r 13 "
     "/ sigma 0.005 S/m and 7 MHz. Until then: raise the above-ground wire "
     "clear of the interface (an elevated feed over a buried counterpoise is "
     "served), or solve the buried structure on its own"
