@@ -43,38 +43,40 @@ algorithm**, not because it is more correct. It inherits that engine's
 discretization error along with its answers, and NEC-5's razor-blade testing
 rule is known to walk its impedance slowly — O(1/N).
 
-Measured on a 0.476 λ dipole in free space, ten mesh densities, against the
-licensed engine:
+**A note on segment counts, because it is the opposite of the NEC-2 habit.**
+NEC-5's basis is the tent, so its unknowns *and its sources* live at knots,
+not at segment centres. An odd segment count leaves no knot at a dipole's
+centre and therefore cannot feed it there — the source lands half a segment
+off. Use **even** counts for a centre-fed dipole in this dialect; "odd
+segments" is a NEC-2 convention, where sources sit at segment centres.
 
-| segments | licensed NEC-5 | B-spline (bs2) | razor-nec5 | \|razor − NEC-5\| |
+Measured on a 0.476 λ dipole in free space, even meshes, all three engines
+fed at the centre knot:
+
+| segments | licensed NEC-5 | bs2 | razor-nec5 | \|razor − NEC-5\| |
 |---|---|---|---|---|
-| 5 | 64.22 − 91.78j | 68.14 − 28.81j | 64.23 − 91.74j | **0.041** |
-| 21 | 67.06 − 35.66j | 67.92 − 28.59j | 67.06 − 35.62j | **0.037** |
-| 61 | 67.51 − 30.68j | 67.86 − 28.37j | 67.52 − 30.64j | **0.037** |
-| 161 | 67.68 − 29.28j | 67.84 − 28.23j | 67.68 − 29.24j | **0.037** |
+| 4 | 56.118 − 108.593j | 69.359 − 28.486j | 56.120 − 108.554j | **0.039** |
+| 20 | 66.667 − 35.880j | 68.045 − 28.481j | 66.670 − 35.841j | **0.038** |
+| 60 | 67.469 − 30.695j | 67.912 − 28.318j | 67.472 − 30.657j | **0.038** |
+| 160 | 67.670 − 29.281j | 67.867 − 28.208j | 67.673 − 29.243j | **0.038** |
 
-The twin tracks the reference to 0.04 Ω at *every* density — flat, not
+The twin tracks the reference to 0.038 Ω at *every* density — flat, not
 improving, which is what a twin looks like.
 
 That says nothing about which is nearer the truth, so the second measurement
-asks each basis about **itself**: even segment counts, the feed on the centre
-knot, each basis scored against its own N = 320 answer. (The licensed engine
-cannot join this one — on a plain `GW` it is segment-fed whichever card you
-use, `EX 4` at a node returning the same impedance as `EX 0` at that index to
-0.002 Ω — which is exactly why the table above had to be segment-fed.)
+asks each basis about **itself**: same even meshes and knot feed, each basis
+scored against its own N = 320 answer.
 
 | segments | bs2 error | razor-nec5 error |
 |---|---|---|
 | 4 | 1.54 Ω | 80.63 Ω |
-| 6 | 0.74 Ω | 41.36 Ω |
 | 20 | 0.39 Ω | 7.16 Ω |
 | 60 | 0.18 Ω | 1.91 Ω |
 | 240 | 0.025 Ω | 0.17 Ω |
 
 Both converge. At matched mesh the B-spline basis is 20–50× nearer its own
-limit, which is the O(1/N) walk of razor-blade testing showing up as a cost
-in segments: razor needs roughly 240 segments to reach the accuracy bs2 has
-at 20.
+limit — razor needs roughly 240 segments to reach the accuracy bs2 has at 20,
+which is the O(1/N) walk priced in segments.
 
 Neither is "converged at coarse mesh" — bs2 is still 1.5 Ω out at four
 segments. The difference is how fast the error comes down, not whether it is

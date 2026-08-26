@@ -10,51 +10,60 @@ does to its OWN answer as the mesh refines.
 
 Measured 2026-08-26 on a 0.476 lambda dipole, free space, N = 5..161:
 
-  * razor-nec5 sits 0.037-0.041 ohm from the licensed engine at EVERY
-    density. Flat, not improving — which is what a twin looks like.
-  * the licensed engine moves 39.89 ohm from N=5 to N=9 and is STILL moving
-    0.29 ohm per step at N=161, the O(1/N) walk of razor-blade testing.
-  * bs2 moves 0.11 ohm on that first step and 0.03 at the last: it is
-    essentially converged at five segments.
-  * and the licensed column walks TOWARD the B-spline one — reactance
-    -91.78 -> -29.28 while bs2 holds near -28.2.
+The twin's agreement with the licensed engine is inheritance of a
+discretization error, not evidence of correctness. See the two ladders
+below for what that means in segments.
 
-So on this antenna bs2 at 5 segments is nearer the converged answer than
-NEC-5 at 161, and the twin's agreement at coarse mesh is inheritance of a
-discretization error rather than evidence of correctness.
+THE FEED MUST BE AT A KNOT, AND THAT DECIDES THE PARITY
+------------------------------------------------------
+NEC-5's basis is the TENT, so its unknowns — and its sources — live at KNOTS,
+not at segment centres. Measured, not assumed: `RazorSolver` returns the
+IDENTICAL impedance for a feed requested at knot 2, at the mid-segment wire
+centre, and at knot 3 (64.2253-91.7383j at N=5, all three), because it snaps
+to a knot. `BSplineSolver` does not snap — the same three requests give
+75.1897-31.6745j, 68.1410-28.8074j and 75.1897-31.6745j.
 
-TWO LADDERS, BECAUSE THEY ASK DIFFERENT QUESTIONS
-------------------------------------------------
-`main()` is the THREE-ENGINE ladder and it must be SEGMENT-fed: `EX` names a
-segment, so only an odd count centres the source, and an even count would
-feed the binary half a segment off-centre. That is not a preference — the
-licensed engine cannot express a knot feed on a plain `GW` at all. Measured:
-`EX 4` at node 10 returns the same impedance as `EX 0` at segment 10 to
-0.002 ohm (66.6660-35.8780j against 66.6670-35.8796j, N=20). So this ladder
-measures FAITHFULNESS — does the twin reproduce the reference — and nothing
-else.
+So an ODD segment count has no knot at a dipole's centre and CANNOT feed it
+there: the source lands half a segment off. "Use odd segments for a
+centre-fed dipole" is a NEC-2 convention, where sources sit at segment
+centres; NEC-5 inverts it.
 
-`knot_ladder()` is the TWO-BASIS ladder and it is KNOT-fed, even N, each
-basis scored against its OWN N=320 answer. No binary, because the binary
-cannot be knot-fed, and that is the point: this is the fair basis-vs-basis
-comparison, and it measures CONVERGENCE.
+An earlier version of this probe ran an all-odd ladder and therefore compared
+bs2 fed at the wire's centre against razor and the binary fed at a knot half
+a segment away — a feed-position difference read as a basis difference. It
+was wrong at coarse mesh, where the offset is a large fraction of the
+antenna: |bs2 - nec5| read 63 ohm at N=5 where the corrected N=6 row reads
+41.8. Beyond N ~ 20 the two ladders agree (7.1 against 7.5 at N ~ 20, 1.06
+against 1.09 at N ~ 160).
 
-  segments   bs2 error   razor-nec5 error
+Everything below is EVEN N with the centre knot fed, all three engines.
+
+  N     licensed NEC-5      bs2                 |razor-n5|   |bs2-n5|
+    4   56.118 -108.593j    69.359 -28.486j       0.039        81.19
+   20   66.667  -35.880j    68.045 -28.481j       0.038         7.53
+  160   67.670  -29.281j    67.867 -28.208j       0.038         1.09
+
+The twin tracks the reference to 0.038 ohm at EVERY density — flat, not
+improving, which is what a twin looks like and says nothing about accuracy.
+
+WHICH CONVERGES FASTER
+----------------------
+`knot_ladder()` scores each basis against ITS OWN N=320 answer, the only way
+to ask the question without nominating one as the truth:
+
+  segments   bs2 error   razor error
       4       1.54          80.63
-      6       0.74          41.36
      20       0.39           7.16
-     60       0.18           1.91
     240       0.025          0.17
 
 Both converge. At a matched mesh the B-spline basis is 20-50x nearer its own
 limit — razor needs ~240 segments for the accuracy bs2 has at 20, the O(1/N)
 walk of razor-blade testing priced in segments.
 
-And NEITHER is converged at a coarse mesh. An earlier draft of this probe
-said bs2 was "essentially converged at five segments" on the strength of its
-small STEP sizes; that conflated step with error. bs2's steps are ~0.1 ohm
-but its cumulative error at four segments is 1.54 ohm. Small steps, many of
-them.
+NEITHER is converged at a coarse mesh. An earlier draft said bs2 was
+"essentially converged at five segments" from its small STEP sizes; that
+conflated step with error. bs2's steps are ~0.1 ohm and its cumulative error
+at four segments is 1.54 ohm. Small steps, many of them.
 
 FEED PARITY, CONTROLLED
 -----------------------
@@ -72,7 +81,7 @@ from __future__ import annotations
 import pathlib
 import re
 
-import numpy as np
+import numpy as np  # noqa: F401  (used by the local imports below)
 
 _NUM = re.compile(r"[-+]?\d+\.\d+E[-+]\d+")
 
@@ -80,7 +89,7 @@ FREQ_MHZ = 14.0
 WL = 299792458.0 / (FREQ_MHZ * 1e6)
 LEN = 10.18946  # the free-space floor study's dipole, ~0.476 lambda
 RAD = 1.0e-3
-NS = (5, 9, 15, 21, 31, 45, 61, 91, 121, 161)
+NS = (4, 6, 10, 20, 40, 60, 120, 160)  # EVEN: the centre must be a KNOT
 
 
 def deck(n):
@@ -90,16 +99,44 @@ def deck(n):
         f"GW 1 {n} {p0[0]:.6E} {p0[1]:.6E} {p0[2]:.6E} "
         f"{p1[0]:.6E} {p1[1]:.6E} {p1[2]:.6E} {RAD:.6E}\n"
         "GE 0\n"
-        f"EX 0 1 {n // 2 + 1} 2 1.000000E+00 0.000000E+00\n"
+        f"EX 0 1 {n // 2} 2 1.000000E+00 0.000000E+00\n"
         f"FR 0 1 0 0 {FREQ_MHZ:.6E} 0.000000E+00\nXQ 0\nEN\n"
     )
 
 
 def momwire_z(n, basis):
-    from momwire.deck import build_solver, parse
+    """Direct constructors, feed pinned to the centre knot by ARCLENGTH.
 
-    built = build_solver(parse(deck(n), dialect="nec2"), basis=basis)
-    z, _ = built.solver.compute_impedance()
+    NOT the deck route, deliberately.  For even N no segment CENTRE coincides
+    with the centre knot — segment K's centre is (K-0.5)*h, the knot is
+    (n/2)*h — so an `EX` card lands equidistant between two knots and the
+    snap is a tie.  momwire's deck translation and the binary break that tie
+    the OTHER WAY from each other, which at N=4 is a quarter wave apart and
+    reads as a 94 ohm formulation difference that is nothing of the kind
+    (razor 91.423-195.648j through the deck against 56.120-108.555j through
+    the constructor, where the binary says 56.118-108.593j).
+
+    `feed_arclength` names the knot with no tie to break, so momwire is
+    asked directly and only the binary goes through a deck.  The deck
+    tie-break divergence is real and filed separately; it is not what this
+    probe is measuring.
+    """
+    from momwire import BSplineSolver, RazorSolver
+
+    wires = [np.array([[0.0, -LEN / 2, 0.0], [0.0, LEN / 2, 0.0]])]
+    common = dict(wires=wires, wire_radius=RAD, wavelength=WL, feed_arclength=LEN / 2)
+    if basis == "bspline":
+        z, _ = BSplineSolver(
+            **common,
+            n_per_edge_per_wire=[[n]],
+            degree=2,
+            feed_model="point",
+            feed_wire_index=0,
+        ).compute_impedance()
+    else:
+        z, _ = RazorSolver(
+            **common, n_per_edge_per_wire=[[n]], nec5_quadrature=True
+        ).compute_impedance()
     return complex(np.atleast_1d(z)[0])
 
 
@@ -164,8 +201,6 @@ def parity_control():
     solvers are built directly here.  It is the check that the all-odd ladder
     above is measuring convergence and not a feed-placement artifact.
     """
-    import numpy as np
-
     from momwire import BSplineSolver, RazorSolver
 
     wires = [np.array([[0.0, -LEN / 2, 0.0], [0.0, LEN / 2, 0.0]])]
@@ -198,8 +233,6 @@ def knot_ladder():
     answer, which is the only way to ask "which converges faster" without
     nominating one of them as the truth.
     """
-    import numpy as np
-
     from momwire import BSplineSolver, RazorSolver
 
     wires = [np.array([[0.0, -LEN / 2, 0.0], [0.0, LEN / 2, 0.0]])]
