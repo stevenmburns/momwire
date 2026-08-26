@@ -31,6 +31,7 @@ since lifted the port half of that for a PEC ground — report §14 — but the
 contact defect and the finite grounds are untouched, so the scope stands.)
 """
 
+import functools
 import json
 
 import numpy as np
@@ -155,7 +156,11 @@ def test_feed_model_option_reproduces_section_6():
             )[0]
         )
         z_gal = complex(
-            np.atleast_1d(SinusoidalGalerkinSolver(**kw).compute_impedance()[0])[0]
+            np.atleast_1d(
+                SinusoidalGalerkinSolver(
+                    **kw, feed_model="segment"
+                ).compute_impedance()[0]
+            )[0]
         )
         z_bs2 = complex(
             np.atleast_1d(BSplineSolver(**kw, degree=2).compute_impedance()[0])[0]
@@ -206,8 +211,12 @@ def test_section_6_mirrors_with_the_oracle_on_the_segment_gap():
 
         z_bs2_seg = _z(BSplineSolver(**kw, degree=2, feed_model="segment"))
         z_bs2_pt = _z(BSplineSolver(**kw, degree=2))
-        z_gal_c = _z(SinusoidalGalerkinSolver(**kw))
-        z_gal_v = _z(SinusoidalGalerkinSolver(**kw, feed_readout="variational"))
+        z_gal_c = _z(SinusoidalGalerkinSolver(**kw, feed_model="segment"))
+        z_gal_v = _z(
+            SinusoidalGalerkinSolver(
+                **kw, feed_model="segment", feed_readout="variational"
+            )
+        )
         z_gal_pt = _z(SinusoidalGalerkinSolver(**kw, feed_model="point"))
 
         r_matched = _rel(z_gal_v, z_bs2_seg)
@@ -358,7 +367,9 @@ def test_feed_matched_payoff_is_the_pinned_m3_ratio():
                     (
                         SinusoidalSolver
                         if scheme == "coll"
-                        else SinusoidalGalerkinSolver
+                        else functools.partial(
+                            SinusoidalGalerkinSolver, feed_model="segment"
+                        )
                     )(**factory(n)).compute_impedance()[0]
                 )[0]
             )
@@ -410,7 +421,9 @@ def test_m3_payoff_is_unmoved_by_a_fully_feed_matched_reference_family():
                     (
                         SinusoidalSolver
                         if scheme == "coll"
-                        else SinusoidalGalerkinSolver
+                        else functools.partial(
+                            SinusoidalGalerkinSolver, feed_model="segment"
+                        )
                     )(**factory(n)).compute_impedance()[0]
                 )[0]
             )
@@ -579,7 +592,7 @@ def test_all_four_columns_share_one_mesh():
     n = {}
     for label, s in (
         ("coll", SinusoidalSolver(**kw)),
-        ("gal", SinusoidalGalerkinSolver(**kw)),
+        ("gal", SinusoidalGalerkinSolver(**kw, feed_model="segment")),
         ("ptgap", SinusoidalGalerkinSolver(**kw, feed_model="point")),
     ):
         n[label] = s._build_geometry()["n_segs"]
