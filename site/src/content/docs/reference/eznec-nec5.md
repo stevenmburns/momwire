@@ -23,6 +23,12 @@ That is the whole installation. No Python, no environment, nothing on PATH.
 EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
 become momwire's.
 
+One launch costs on the order of a second — the frozen interpreter's import
+cost. (The one-file packaging that re-extracts on every launch was measured
+at 17 s and rejected.) A long SWR sweep is therefore slower through the
+frozen exe than through the licensed engine's 18–37 ms launches; the
+per-point economics, not the physics, are the current gap.
+
 ## Choosing the formulation
 
 The bundle carries two engines, and the choice is the engine PATH you set:
@@ -60,22 +66,22 @@ momwire through this seam, the licensed engine on the same deck text:
 | 60 | 67.469 − 30.695j | 67.777 − 28.586j | 67.467 − 30.693j | **0.003** |
 | 160 | 67.670 − 29.281j | 67.796 − 28.340j | 67.668 − 29.280j | **0.003** |
 
-The twin tracks the reference to 0.003 Ω at *every* density — flat, not
-improving, which is what a twin looks like.
+The twin tracks the reference to 0.003 Ω from 20 segments up and 0.007 Ω at
+the coarsest rung — flat, not improving, which is what a twin looks like.
 
 That says nothing about which is nearer the truth, so the second measurement
-asks each basis about **itself**: same even meshes and knot feed, each basis
-scored against its own N = 320 answer.
+asks each basis about **itself**: the same decks through the same seam, each
+basis scored against **its own N = 160 answer** — the finest rung of the
+table above, so every number here can be read off it.
 
 | segments | bs2 error | razor-nec5 error |
 |---|---|---|
-| 4 | 2.81 Ω | 80.11 Ω |
+| 4 | 2.81 Ω | 80.14 Ω |
 | 20 | 0.82 Ω | 6.67 Ω |
 | 60 | 0.25 Ω | 1.43 Ω |
 
-Both converge, scored against each basis's own N = 160 answer. At matched
-mesh the B-spline basis is 6–28× nearer its own limit, which is the O(1/N)
-walk of razor-blade testing priced in segments.
+Both converge. At matched mesh the B-spline basis is 5.8–28× nearer its own
+limit, which is the O(1/N) walk of razor-blade testing priced in segments.
 
 Neither is "converged at coarse mesh" — bs2 is still 2.8 Ω out at four
 segments. The difference is how fast the error comes down, not whether it is
@@ -104,13 +110,8 @@ The three sinusoidal families cannot answer this dialect — its printout
 carries a `CHARGE DENSITY` table they have no basis to read it from — and say
 so by name in the printout rather than failing quietly. A filename matching
 no basis does the same: it refuses, names itself and lists what exists, so a
-typo can never be served as the default.
-
-One launch costs on the order of a second — the frozen interpreter's import
-cost. (The one-file packaging that re-extracts on every launch was measured
-at 17 s and rejected.) A long SWR sweep is therefore slower through the
-frozen exe than through the licensed engine's 18–37 ms launches; the
-per-point economics, not the physics, are the current gap.
+typo can never be served as the default. The match is case-insensitive, as
+Windows filenames are, so `Momwire-EZNEC-Razor-Nec5.exe` is the twin too.
 
 :::caution[Not a supported configuration]
 No part of EZNEC knows momwire exists, and nothing here has been reviewed or
