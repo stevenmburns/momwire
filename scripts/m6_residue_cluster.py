@@ -164,9 +164,7 @@ def solve(column: str, kw: dict) -> complex:
     if column == "coll":
         z, _ = SinusoidalSolver(**kw).compute_impedance()
     elif column == "gal":
-        z, _ = SinusoidalGalerkinSolver(
-            **kw, feed_model="segment"
-        ).compute_impedance()
+        z, _ = SinusoidalGalerkinSolver(**kw, feed_model="segment").compute_impedance()
     elif column == "ptgap":
         z, _ = SinusoidalGalerkinSolver(**kw, feed_model="point").compute_impedance()
     elif column == "bs2":
