@@ -48,6 +48,19 @@ SOIL_A = (13.0, 0.005)
 F7 = 7e6
 WL7 = C0 / F7
 
+# The ELEVATED deck's own scale: what the ε̃ → 1 collapse reads when every
+# basis vanishes at its own support ends and the two testing conventions
+# therefore agree. It is the threshold of `test_gu5_3_eps_one_*` and the
+# verdict threshold of the contact tripwire below, and it is one constant so
+# that the two cannot drift apart.
+_ELEVATED_COLLAPSE_REL = 5e-5
+
+# The contact deck's measured band is 2.3–2.5 across quadrature orders 3, 4,
+# 6 and 8 (see the tripwire's docstring). 2.0 is ~15 % under the low end —
+# the house CI-margin rule — so ordinary run-to-run variation cannot fire the
+# tripwire while any real movement of the boundary term does.
+_CONTACT_TERM_FLOOR = 2.0
+
 
 # ----------------------------------------------------------------------
 # decks
@@ -338,19 +351,32 @@ def test_gu5_3_eps_one_collapses_the_cross_block_onto_free_space(record_property
     z_mp, t_ab, t_ba = _cross_blocks(s)
     worst = float(np.max(np.abs(z_mp + t_ab + t_ba)) / np.max(np.abs(z_mp)))
     record_property("cross_vs_mixed_potential_rel", worst)
-    assert worst < 5e-5, f"the cross block is not the free-space block: {worst:.3e}"
+    assert worst < _ELEVATED_COLLAPSE_REL, (
+        f"the cross block is not the free-space block: {worst:.3e}"
+    )
 
 
 @pytest.mark.slow
 def test_gu5_3_a_ground_contact_breaks_that_collapse_by_o_one(record_property):
     """The measurement that refuses contact + buried, kept as a gate that
-    FAILS IF FIXED: if this ever drops to the elevated deck's 1e-5, the
+    FAILS IF FIXED: if this ever drops to the elevated deck's own scale, the
     boundary term has been dealt with and the refusal should come out.
 
     The disagreement is entirely on the CONTACT basis — every other basis
     row agrees to 1e-8 — and it does not move with quadrature order (3, 4,
     6 and 8 all read 2.3–2.5), which is what says it is a boundary term and
-    not a resolution problem."""
+    not a resolution problem.
+
+    THREE BANDS, BECAUSE `> 1.0` WAS A LIE
+    --------------------------------------
+    The trigger was `assert worst > 1.0` until momwire#567's scoping pass
+    priced what that let through: the 2.3–2.5 band lived in prose and in the
+    refusal strings, never in an assertion, so a fix that took the boundary
+    term from 2.5 to 1.2 shipped GREEN while the contact row was still wrong
+    by 120 %. The bands below separate the three verdicts that number can
+    carry — dealt with, moved, unchanged — and only the first of them says
+    the refusal may come out.
+    """
     s = BSplineSolver(**{**contact_deck(), "ground_eps": (1.0, 0.0)})
     # The deck REFUSES (test_gu5_9_*), which is the point — the measurement
     # that refuses it has to reach past the refusal to stay honest, so the
@@ -373,7 +399,25 @@ def test_gu5_3_a_ground_contact_breaks_that_collapse_by_o_one(record_property):
     others = float(np.max(rest) / scale)
     record_property("contact_basis_rel", worst)
     record_property("every_other_basis_rel", others)
-    assert worst > 1.0, f"the contact boundary term vanished: {worst:.3e}"
+    if worst < _ELEVATED_COLLAPSE_REL:
+        pytest.fail(
+            f"the contact boundary term is now dealt with at the ELEVATED "
+            f"deck's own scale ({worst:.3e} < {_ELEVATED_COLLAPSE_REL:.0e}): "
+            "the contact+buried refusal should come out — test_gu5_9_*, and "
+            "its three copies in src (_medium_spec.py, eznec/_serve.py, and "
+            "bspline.py's capability string) — and this gate should be "
+            "replaced by the G-U5-12 anchor serve gates, which arm the "
+            "moment it does"
+        )
+    if worst <= _CONTACT_TERM_FLOOR:
+        pytest.fail(
+            f"the contact boundary term MOVED but is not at the elevated "
+            f"deck's scale ({worst:.3e}, was 2.3–2.5 across quadrature "
+            f"orders 3/4/6/8): do NOT lift the refusal on this. A fill that "
+            "halves the term still leaves the contact row wrong by O(1), "
+            "which is the ship-it-green hole momwire#567 found in the old "
+            "`> 1.0` trigger. Find what moved it first"
+        )
     assert others < 1e-2, f"the break is not localized on one basis: {others:.3e}"
 
 
