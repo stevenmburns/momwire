@@ -35,9 +35,11 @@ NAME = "momwire-eznec"
 # adds ~9.5 MB uncompressed; all nine would roughly double a 52 MB download
 # to ship the SEVEN others, engines almost nobody picks from a file dialog,
 # three of which (the sinusoidal family) refuse every deck in this dialect
-# for want of `current_slopes`.  So the bundle carries the PAIR the parity
-# work was about — the default and the NEC-5 twin — and the README says how
-# to make any other, which is a copy.
+# because their delta gap lands on a segment centre and every deck here
+# drives a node (momwire#611 — it used to be `current_slopes`, until that
+# landed and the real obstruction turned out to be one layer down).  So the
+# bundle carries the PAIR the parity work was about — the default and the
+# NEC-5 twin — and the README says how to make any other, which is a copy.
 SHIPPED_VARIANTS = ("razor-nec5",)
 
 
@@ -167,9 +169,10 @@ def main() -> int:
         "  bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5\n"
         "  sinusoidal  sinusoidal-galerkin  sinusoidal-galerkin-converged\n"
         "\n"
-        "(The three sinusoidal families cannot answer this dialect — its\n"
-        "printout carries a CHARGE DENSITY table they have no basis to read\n"
-        "it from — and will say so, by name, in the printout.)\n"
+        "(The three sinusoidal families cannot answer this dialect — every\n"
+        "deck in it drives a node, and their delta gap lands on the nearest\n"
+        "segment centre instead — and will say so, by name, in the\n"
+        "printout.)\n"
         "\n"
         "A name that matches no basis is not a silent fallback: it refuses,\n"
         "names itself, and lists the bases that exist.\n"

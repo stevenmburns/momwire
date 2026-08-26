@@ -194,6 +194,28 @@ _NODE_GAPS_REFUSAL = (
     "BSplineSolver, which both do)"
 )
 
+# `_build_geometry` resolves a `feeds` arclength to the nearest segment
+# CENTRE, so a caller that names a knot is answered half a segment away
+# without anything being raised (momwire#611).  There is no constructor
+# refusal to reuse this from, because the snap is not an error in this
+# family's own terms: the segment gap IS the point gap at the only
+# resolution collocation has (`_reject_point_feed_model`, momwire#212).
+# What it is not is the KNOT gap a node-addressing dialect asks for, and
+# under point matching there is no such thing to offer instead — the drive
+# would be E_app at a match point with the source a delta there, and δ·δ is
+# not a number.  So this refusal is PERMANENT for this class, and the
+# Galerkin subclass overrides it with its own (momwire#648), because there
+# the pairing exists and only the plumbing is missing.
+_KNOT_FEEDS_REFUSAL = (
+    "knot feeds are not served by SinusoidalSolver: a delta gap in this "
+    "family lands on the nearest segment CENTRE, so a source named at a "
+    "knot is solved half a segment away from where it was asked for. "
+    "Point matching admits no gap at a knot to offer instead — the drive "
+    "is the applied field sampled AT a match point and a zero-width gap "
+    "there is a delta, so the pairing is undefined (momwire#212). Use "
+    "BSplineSolver or RazorSolver, whose gaps land on the knot named"
+)
+
 
 def _sin_minus_arg(u):
     """sin(u) − u to full relative precision.
@@ -326,6 +348,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # Per-wire radii are served (momwire#147); singular enrichment doesn't
     # exist on this family (no kwarg — same TypeError shape as node_gaps).
     #
+    # `knot_feeds` is the axis with no raise behind it (momwire#611): the
+    # snap to a segment centre is silent, which is exactly why the row has
+    # to carry it. See `_KNOT_FEEDS_REFUSAL`.
+    #
     # momwire#282 stage 1 withdrew one combination inside the served ground
     # column: ground CONTACT under `ground_model="refl-coef"`. Same key,
     # same prose and same reasoning as `BSplineSolver`'s and `RazorSolver`'s
@@ -339,11 +365,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         extended_kernel=True,
         junction_ports=False,
         node_gaps=False,
+        knot_feeds=False,
         per_wire_radius=True,
         singular_enrichment=False,
         refusals={
             "junction_ports": _JUNCTION_PORTS_REFUSAL,
             "node_gaps": _NODE_GAPS_REFUSAL,
+            "knot_feeds": _KNOT_FEEDS_REFUSAL,
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
         },
     )
@@ -1382,32 +1410,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (n_eval,) complex128
         """
         n_eval = eval_seg.shape[0]
-        if n_eval == 0:
-            return np.zeros(0, dtype=np.complex128)
-        starts = seg_view["starts"]
-        starts_at = starts[eval_seg]  # (n_eval,)
-        lengths = starts[eval_seg + 1] - starts_at  # entries per eval
-        n_entries = int(lengths.sum())
-        if n_entries == 0:
+        gathered = self._basis_entry_gather(seg_view, eval_seg)
+        if gathered is None:
             return np.zeros(n_eval, dtype=np.complex128)
+        entry_eval_idx, entry_global = gathered
         # Precompute trig at each eval point.
         sin_ks = np.sin(self.k * eval_s)
         # cos(kξ) − 1 = −2sin²(kξ/2), to a relative ε rather than an absolute
         # one — the literal subtraction loses everything below (kξ)²/2 (#606).
         _half_ks = np.sin(0.5 * self.k * eval_s)
         cosm1_ks = -2.0 * _half_ks * _half_ks
-        # Ragged-gather expansion: for each eval i with `lengths[i]` entries,
-        # produce that many entry-level rows. `entry_eval_idx` maps each row
-        # back to its source eval; `entry_global` gathers from `seg_view`.
-        entry_eval_idx = np.repeat(np.arange(n_eval, dtype=np.int64), lengths)
-        # within-segment offset of each entry within its eval's block:
-        # arange(n_entries) - cumulative-start-per-eval-block
-        cum_starts = np.empty(n_eval, dtype=np.int64)
-        cum_starts[0] = 0
-        if n_eval > 1:
-            np.cumsum(lengths[:-1], out=cum_starts[1:])
-        within = np.arange(n_entries, dtype=np.int64) - np.repeat(cum_starts, lengths)
-        entry_global = np.repeat(starts_at, lengths) + within
         jb = seg_view["jbasis"][entry_global]
         AC_e = seg_view["AC"][entry_global]
         B_e = seg_view["B"][entry_global]
@@ -1422,6 +1434,88 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         I_out = np.zeros(n_eval, dtype=np.complex128)
         np.add.at(I_out, entry_eval_idx, contrib)
         return I_out
+
+    @staticmethod
+    def _basis_entry_gather(seg_view, eval_seg):
+        """CSR expansion of an evaluation set: which entries each point sums.
+
+        Returns ``(entry_eval_idx, entry_global)`` — one row per (eval point,
+        supporting basis entry) pair, mapping back to the point and forward
+        into `seg_view`'s flat arrays — or ``None`` when there is nothing to
+        sum (no points, or no entry on any of their segments).
+
+        Pure index arithmetic, and shared by the value and the SLOPE
+        evaluators because it is the same walk over the same support
+        (momwire#611). The two differ only in the shape they put on each
+        entry, which is the whole of what a derivative changes; keeping one
+        gather means a change to the support cannot reach one reader and
+        miss the other.
+        """
+        n_eval = eval_seg.shape[0]
+        if n_eval == 0:
+            return None
+        starts = seg_view["starts"]
+        starts_at = starts[eval_seg]  # (n_eval,)
+        lengths = starts[eval_seg + 1] - starts_at  # entries per eval
+        n_entries = int(lengths.sum())
+        if n_entries == 0:
+            return None
+        # For each eval i with `lengths[i]` entries, produce that many
+        # entry-level rows. `entry_eval_idx` maps each row back to its source
+        # eval; `entry_global` gathers from `seg_view`.
+        entry_eval_idx = np.repeat(np.arange(n_eval, dtype=np.int64), lengths)
+        # within-segment offset of each entry within its eval's block:
+        # arange(n_entries) - cumulative-start-per-eval-block
+        cum_starts = np.empty(n_eval, dtype=np.int64)
+        cum_starts[0] = 0
+        if n_eval > 1:
+            np.cumsum(lengths[:-1], out=cum_starts[1:])
+        within = np.arange(n_entries, dtype=np.int64) - np.repeat(cum_starts, lengths)
+        entry_global = np.repeat(starts_at, lengths) + within
+        return entry_eval_idx, entry_global
+
+    def _evaluate_basis_slope_at_points(self, seg_view, eval_seg, eval_s, alpha):
+        """Vectorized ``Σ_j α_j · f'_{j, seg}(s_local)`` — the derivative twin
+        of :meth:`_evaluate_basis_at_points`, same arguments, same shape out.
+
+        Differentiating the well-scaled shape set {1, sin kξ, cos kξ − 1}
+        term by term,
+
+            f  = σ(A+C) + B·sin kξ + σC·(cos kξ − 1)
+            f' = k·[ B·cos kξ − σC·sin kξ ]
+
+        and the constant shape's coefficient — `AC`, the one momwire#606 had
+        to rebuild in a per-branch closed form because A ≈ −C to O((kΔ)²)
+        made the float sum worthless below kΔ ≈ 1e-4 — DIFFERENTIATES AWAY.
+        So the cancellation that governs the value's accuracy is simply not
+        in this expression: no term here is larger than the answer, and no
+        well-scaled respelling is needed to keep it. Measured against a
+        central difference of :meth:`currents_at_knots` on a dipole at
+        N = 11…641 and k·Δ from 2.9e-1 down to 4.9e-8, the agreement is flat
+        at ~1e-11 relative — the difference quotient's own floor — with no
+        walk in either N or k·Δ (`test_sinusoidal_current_slopes.py`).
+
+        ``cos kξ`` is evaluated literally rather than as ``1 + (cos kξ − 1)``:
+        it tends to 1, not to 0, so there is nothing to cancel and the
+        rearrangement would only cost an operation.
+        """
+        n_eval = eval_seg.shape[0]
+        gathered = self._basis_entry_gather(seg_view, eval_seg)
+        if gathered is None:
+            return np.zeros(n_eval, dtype=np.complex128)
+        entry_eval_idx, entry_global = gathered
+        sin_ks = np.sin(self.k * eval_s)
+        cos_ks = np.cos(self.k * eval_s)
+        jb = seg_view["jbasis"][entry_global]
+        B_e = seg_view["B"][entry_global]
+        C_e = seg_view["C"][entry_global]
+        sigma_e = seg_view["sigma"][entry_global]
+        sin_e = sin_ks[entry_eval_idx]
+        cos_e = cos_ks[entry_eval_idx]
+        contrib = alpha[jb] * self.k * (B_e * cos_e - sigma_e * C_e * sin_e)
+        out = np.zeros(n_eval, dtype=np.complex128)
+        np.add.at(out, entry_eval_idx, contrib)
+        return out
 
     # ------------------------------------------------------------------
     # Field of elementary current segments (Eqs 76-79)
@@ -4642,3 +4736,117 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             np.add.at(I_out, all_target, all_weight * I_evals)
             sampled.append(I_out)
         return sampled
+
+    def _slope_eval_points(self, geom, w_idx, sv):
+        """``(segment, ξ)`` per sample on wire `w_idx`, with the knot
+        tie-break :meth:`current_slopes` documents.
+
+        Arc is clipped into the wire's own range and the containing span is
+        `searchsorted(..., side="right") - 1`, so a sample sitting exactly on
+        an interior knot takes the span to its RIGHT and the final knot falls
+        back to the span on its left. `RazorSolver.current_slopes` picks the
+        same two, and at ``degree == 1`` so does scipy's `BSpline` derivative
+        — which is what lets the three families' readouts be compared without
+        first asking which side each one chose.
+        """
+        seg_h = geom["seg_h"]
+        first = geom["wire_first"][w_idx]
+        last = geom["wire_last"][w_idx]
+        n_w_segs = last - first + 1
+        wire_h = seg_h[first : last + 1]
+        arc_at_knot = np.concatenate([[0.0], np.cumsum(wire_h)])
+        sv = np.clip(np.asarray(sv, dtype=np.float64), 0.0, float(arc_at_knot[-1]))
+        seg_in_wire = np.clip(
+            np.searchsorted(arc_at_knot, sv, side="right") - 1, 0, n_w_segs - 1
+        )
+        xi = (sv - arc_at_knot[seg_in_wire]) - 0.5 * wire_h[seg_in_wire]
+        return first + seg_in_wire, xi
+
+    def current_slopes(self, coeffs, s_array=None):
+        """Per-wire ``dI/ds`` — the solved current's arc-length derivative.
+
+        The twin of :meth:`currents_at_knots`, with the same signature and
+        the same two calling conventions as
+        :meth:`~momwire.bspline.BSplineSolver.current_slopes` and
+        :meth:`~momwire.razor.RazorSolver.current_slopes`: a list of 1-D
+        complex arrays, one per wire in ``wires_polylines`` order, at the mesh
+        knots (``s_array=None``) or at the per-wire arc positions given,
+        clipped into the wire's own arc range.
+
+        **Why it exists** (momwire#497, and momwire#611 for this family): the
+        linear charge density a NEC printout reports is ``q = -(1/jω)·dI/ds``
+        at each element's centre, and the EZNEC seam reads it through this
+        method rather than differencing two current samples.  Until it existed
+        here, every family in this branch of the roster refused that dialect
+        on a missing attribute.
+
+        Here the derivative is CLOSED FORM and exact: the basis is
+        ``{1, sin kξ, cos kξ}`` per segment, so ``dI/ds`` is another
+        combination of the same three coefficients rather than anything
+        differenced — see :meth:`_evaluate_basis_slope_at_points` for the
+        expression and for why it is better conditioned at small k·Δ than the
+        value it differentiates.
+
+        ``ξ`` is measured from a segment's centre and increases with the
+        wire's own arc, so ``dI/dξ`` IS ``dI/ds`` — no chain rule and no
+        re-signing.  A junction neighbour's σ = −1 is a coefficient sign
+        inside the shape, not a reversal of the coordinate, and it is carried
+        by the same term that carries it in the value (momwire#203).
+
+        A sample taken exactly on a knot has to pick a side, and this picks
+        the span to the RIGHT — the left span at the final knot — which is
+        `RazorSolver.current_slopes`' tie-break and scipy's at ``degree ==
+        1``, so a caller cannot tell the three implementations apart by their
+        choice.  On THIS family the choice is unobservable anyway, and that
+        is worth saying because it is not true of either twin: NEC-2's basis
+        matches the current AND its derivative at every segment junction
+        (Eqs 43-64), so ``dI/ds`` is CONTINUOUS across an interior knot here
+        — measured at 5e-10 of the peak slope, on meshes from N = 11 to 161
+        and across a two-wire junction whose segment lengths differ 3:7.  A
+        razor tent expansion jumps 27-53 % at the same knots, because
+        piecewise-linear current has piecewise-constant slope.  Same readout,
+        same contract, genuinely different smoothness: the charge density
+        this family reports is continuous where razor's is a staircase, and
+        a consumer comparing two printouts is comparing that too.
+
+        The seam asks for element CENTRES regardless, which is the honest
+        thing to ask for on any of the three.
+        """
+        alpha = np.asarray(coeffs)
+        geom = self._build_geometry()
+        seg_view = self._basis_coefs(geom, self.k)
+        seg_h = geom["seg_h"]
+        n_wires = len(self.wires_polylines)
+
+        if s_array is None:
+            # Every knot of every wire, in the same per-wire layout
+            # `currents_at_knots` returns.
+            s_array = []
+            for w_idx in range(n_wires):
+                first = geom["wire_first"][w_idx]
+                last = geom["wire_last"][w_idx]
+                s_array.append(
+                    np.concatenate([[0.0], np.cumsum(seg_h[first : last + 1])])
+                )
+
+        # One batched evaluation for the whole structure: the per-wire walk
+        # only decides WHERE, which keeps the trig and the scatter-add single
+        # calls however many wires there are.
+        segs, xis, offsets = [], [], [0]
+        for w_idx in range(n_wires):
+            seg, xi = self._slope_eval_points(geom, w_idx, s_array[w_idx])
+            segs.append(seg)
+            xis.append(xi)
+            offsets.append(offsets[-1] + seg.shape[0])
+        if offsets[-1] == 0:
+            return [np.zeros(0, dtype=np.complex128) for _ in range(n_wires)]
+        flat = self._evaluate_basis_slope_at_points(
+            seg_view,
+            np.concatenate(segs).astype(np.int64),
+            np.concatenate(xis),
+            alpha,
+        )
+        return [
+            np.asarray(flat[offsets[i] : offsets[i + 1]], dtype=np.complex128)
+            for i in range(n_wires)
+        ]

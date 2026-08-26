@@ -122,9 +122,12 @@ bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5
 sinusoidal  sinusoidal-galerkin  sinusoidal-galerkin-converged
 ```
 
-The three sinusoidal families cannot answer this dialect — its printout
-carries a `CHARGE DENSITY` table they have no basis to read it from — and say
-so by name in the printout rather than failing quietly. A filename matching
+The three sinusoidal families cannot answer this dialect — every deck in it
+drives a NODE, and their delta gap lands on the nearest segment CENTRE
+instead, half a segment from where the source was named — and say so by name
+in the printout rather than answering about a different antenna. The reason
+differs between them: point matching has no pairing for a gap at a knot at
+all, while the two Galerkin entries admit one and simply do not spell it yet. A filename matching
 no basis does the same: it refuses, names itself and lists what exists, so a
 typo can never be served as the default. The match is case-insensitive, as
 Windows filenames are, so `Momwire-EZNEC-Razor-Nec5.exe` is the twin too.

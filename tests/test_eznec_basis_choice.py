@@ -40,8 +40,8 @@ from momwire.deck._solver import (
 )
 from momwire.eznec import _serve
 from momwire.eznec._shell import render
+from momwire.pulse import PulseSolver
 from momwire.razor import RazorSolver
-from momwire.sinusoidal import SinusoidalSolver
 from test_eznec_printout import MANIFEST, deck_text
 
 CAPTURE_IDS = tuple(entry["id"] for entry in MANIFEST["captures"])
@@ -124,17 +124,53 @@ def test_an_unknown_basis_refuses_in_the_printout_rather_than_raising():
     assert "unknown basis 'rzaor'" in text
 
 
-def test_a_family_with_no_current_slopes_refuses_by_name():
+def test_the_charge_table_gate_is_asked_of_the_class():
     """The dialect prints a CHARGE DENSITY table and reads it off the basis.
 
-    The three sinusoidal entries have no ``current_slopes``; razor had none
-    either until #603 U2 gave it one.  Asked of the class rather than kept as
-    a list of which families qualify — a list is the second thing to update.
+    Razor had no ``current_slopes`` until #603 U2 and the sinusoidal family
+    had none until #611; both gates were this one.  The check survives its
+    last tenant on purpose — it is asked of the CLASS rather than kept as a
+    list of which families qualify, so a family that arrives without the
+    method refuses instead of dying on an attribute error.  ``PulseSolver``
+    is the standing example: no ``current_slopes``, and the issue that would
+    give it one (#611 step 4) has to decide what the column MEANS first,
+    because a pulse's charge is two point charges at the segment ends and
+    there is no density at a centre to print.
     """
-    assert not hasattr(SinusoidalSolver, "current_slopes")
-    text = render(deck_text("0010"), basis="sinusoidal")
-    assert "NEC ERROR" in text
-    assert "current_slopes" in text
+    for cls, _kwargs in BASES.values():
+        assert hasattr(cls, "current_slopes"), cls
+    assert not hasattr(PulseSolver, "current_slopes")
+
+
+def test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name():
+    """#611 moved this refusal one layer down, and the move is the point.
+
+    It used to read "no ``current_slopes``", and that sentence went stale the
+    day the method landed.  What outlives it is the DRIVE: every deck in this
+    dialect names a node, and this family resolves a ``feeds`` arclength to
+    the nearest segment CENTRE — half a segment away, silently.  Were the
+    charge-table gate the only one, all three entries would have started
+    serving well-formed printouts about a source in the wrong place.
+
+    The two reasons are different and both are asserted, because a caller who
+    reads "not supported" and a caller who reads "not yet wired up" do
+    different things next.  The point-matched entry's is permanent (there is
+    no collocation pairing for a gap at a knot, #212); the Galerkin pair's is
+    plumbing (#648).
+    """
+    point, galerkin = "does not place a gap there", "not yet served"
+    for basis, expect in (
+        ("sinusoidal", "Point matching admits no gap at a knot"),
+        ("sinusoidal-galerkin", "not yet served"),
+        ("sinusoidal-galerkin-converged", "not yet served"),
+    ):
+        text = render(deck_text("0010"), basis=basis)
+        assert "NEC ERROR" in text, basis
+        assert point in text, basis
+        assert expect in text, basis
+        # The refusal that USED to fire must not still be the one talking.
+        assert "no such method to read it from" not in text, basis
+    assert galerkin not in render(deck_text("0010"), basis="sinusoidal")
 
 
 def test_razor_now_hosts_the_deck_it_used_to_name_a_refusal_for():
@@ -314,11 +350,19 @@ SERVED = None
 # ``test_eznec_serve.py`` — a fragment is enough here to tell the causes apart.
 NEAR_FIELD_AT_A_CONTACT = "asks for the field at (0, 0, 0) metres"
 
-# The dialect prints a CHARGE DENSITY table and reads it off the basis; the
-# three sinusoidal entries have no ``current_slopes`` to read it from, so they
-# refuse the whole corpus.  Named above by
-# ``test_a_family_with_no_current_slopes_refuses_by_name``.
-NO_CURRENT_SLOPES = "has no such method to read it from"
+# Every deck in this dialect drives a NODE, and the sinusoidal family puts a
+# delta gap at the nearest segment CENTRE instead — so all three entries still
+# refuse the whole corpus, and the reason is now the DRIVE rather than the
+# charge table (momwire#611).  The prose differs between the point-matched
+# entry and the Galerkin pair; the fragment below is the part they share, and
+# ``test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name`` above is what
+# tells the two apart.
+#
+# This is the second sentence in this cell, not the first: it used to read
+# "no ``current_slopes``", which stopped being true when #611 added the
+# method.  A refusal that outlives its own reason is the failure mode this
+# per-deck record exists to make visible.
+NO_KNOT_FEEDS = "does not place a gap there"
 
 # The cells that RAISE rather than refuse — EMPTY since momwire#609, and kept
 # as its own statement rather than deleted with its last tenant.  The
@@ -339,7 +383,7 @@ def _row(refusals=()):
     row's floor rather than three entries each shape below repeats.
     """
     row = dict.fromkeys(BASES, SERVED)
-    row.update(dict.fromkeys(_SINUSOIDAL, NO_CURRENT_SLOPES))
+    row.update(dict.fromkeys(_SINUSOIDAL, NO_KNOT_FEEDS))
     row.update(refusals)
     return row
 

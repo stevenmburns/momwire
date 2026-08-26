@@ -742,6 +742,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         extended_kernel=True,
         junction_ports=False,
         node_gaps=True,
+        knot_feeds=True,
         per_wire_radius=True,
         singular_enrichment=False,
         refusals={
