@@ -32,6 +32,21 @@ spelling are two different questions, and an earlier draft of the docs
 labelled the seam numbers with the knot ladder's reference. Whichever is
 quoted, the caption has to name the route AND the rung.
 
+WHERE THE LAST OHM LIVES (measured 2026-08-26, `parity_limits()`)
+-----------------------------------------------------------------
+At N=160 the bs2 and razor columns sit ~1.05 ohm apart (the run prints
+1.0531). Extrapolated, the two FORMULATIONS' limits agree to 0.08-0.21 ohm
+(three-point geometric vs two-point Richardson — razor's measured ratio is
+0.56, not O(1/N)'s clean 0.5, so the model matters at this scale). So of
+that ohm, ~0.96 is razor still descending the O(1/N) path the licensed
+engine shares, ~0.13 is bs2's own remaining tail, and only the fraction-of-
+an-ohm remainder is formulation. The same run answers the tooling question: the
+feed pinned at the exact centre lands ON a knot at even N and MID-SEGMENT at
+odd N, and bs2's two extrapolated limits differ by 0.009 ohm — the knot-feed
+machinery is not what separates the bases. One deck, free space; momwire#449
+carries the residual's attribution (the C1-basis feed-kink hypothesis and
+the anchor-sensitivity alternative this measurement illustrates).
+
 THE FEED MUST BE AT A KNOT, AND THAT DECIDES THE PARITY
 ------------------------------------------------------
 NEC-5's basis is the TENT, so its unknowns — and its sources — live at KNOTS.
@@ -259,6 +274,81 @@ def parity_control():
         )
 
 
+def parity_limits():
+    """The parity control taken to its limits, which is where it bites.
+
+    Two questions off one ladder pair, feed pinned at the exact centre so
+    even N puts it ON a knot and odd N puts it MID-SEGMENT (a plain
+    polynomial span, no knot in sight):
+
+    1. Is any of the bs2-vs-razor residual the knot-feed tooling?  A tooling
+       artifact would move the odd ladder's limit; measured, bs2's two limits
+       differ by 0.009 ohm.
+    2. Where does the ~1.05 ohm between the columns at N=160 live?  The two
+       formulations' extrapolated limits agree to 0.08-0.21 ohm, so at any
+       practical mesh the spread is mostly razor still descending the O(1/N)
+       path the licensed engine shares (the twin rides its trajectory to
+       0.003-0.007 ohm).
+
+    Two extrapolations, because razor's measured increment ratio is 0.56
+    rather than O(1/N)'s exact 0.5: the two-point Richardson 2*Z(2N) - Z(N),
+    and a three-point geometric fit on the complex increments.  For bs2 the
+    Richardson is an over-correction — its order is faster — which only
+    strengthens the null result in (1): the correction it exaggerates still
+    moves nothing.
+    """
+    from momwire import BSplineSolver, RazorSolver
+
+    wires = [np.array([[0.0, -LEN / 2, 0.0], [0.0, LEN / 2, 0.0]])]
+    common = dict(wires=wires, wire_radius=RAD, wavelength=WL, feed_arclength=LEN / 2)
+
+    def zb(n):
+        z, _ = BSplineSolver(
+            **common,
+            n_per_edge_per_wire=[[n]],
+            degree=2,
+            feed_model="point",
+            feed_wire_index=0,
+        ).compute_impedance()
+        return complex(z)
+
+    def zr(n):
+        z, _ = RazorSolver(
+            **common, n_per_edge_per_wire=[[n]], nec5_quadrature=True
+        ).compute_impedance()
+        return complex(z)
+
+    def geometric(z1, z2, z3):
+        # Limit of a complex sequence whose increments shrink geometrically:
+        # z3 + d2*q/(1-q) with q = d2/d1.  Exact where Richardson assumes 0.5.
+        d1, d2 = z2 - z1, z3 - z2
+        q = d2 / d1
+        return z3 + d2 * q / (1 - q)
+
+    print("\n--- parity limits: both parities to N=320/321, extrapolated ---")
+    print(f"{'N':>4}  {'parity':>5}  {'bs2':>22}  {'razor-nec5':>22}")
+    b, r = {}, {}
+    for n in (80, 81, 160, 161, 320, 321):
+        b[n], r[n] = zb(n), zr(n)
+        print(
+            f"{n:>4}  {'odd' if n % 2 else 'even':>5}  "
+            f"{b[n].real:10.4f}{b[n].imag:+10.4f}j  "
+            f"{r[n].real:10.4f}{r[n].imag:+10.4f}j"
+        )
+    b_even = 2 * b[320] - b[160]
+    b_odd = 2 * b[321] - b[161]
+    r_rich = 2 * r[320] - r[160]
+    r_geom = geometric(r[80], r[160], r[320])
+    print(f"bs2 limit, even (feed on the knot) : {b_even:.4f}")
+    print(f"bs2 limit, odd (feed mid-segment)  : {b_odd:.4f}")
+    print(f"  parity shift of the bs2 limit    : {abs(b_even - b_odd):.4f} ohm")
+    print(f"razor limit, two-point Richardson  : {r_rich:.4f}")
+    print(f"razor limit, three-point geometric : {r_geom:.4f}")
+    print(f"  bs2(even) - razor, Richardson    : {abs(b_even - r_rich):.4f} ohm")
+    print(f"  bs2(even) - razor, geometric     : {abs(b_even - r_geom):.4f} ohm")
+    print(f"  spread at N=160, for comparison  : {abs(b[160] - r[160]):.4f} ohm")
+
+
 def knot_ladder():
     """Even N, feed on the centre KNOT, each basis against its own limit.
 
@@ -342,6 +432,7 @@ if __name__ == "__main__":
     seam_ladder()
     knot_ladder()
     parity_control()
+    parity_limits()
     if nec5_exe():
         main()
     else:

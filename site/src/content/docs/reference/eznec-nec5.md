@@ -87,11 +87,27 @@ Neither is "converged at coarse mesh" — bs2 is still 2.8 Ω out at four
 segments. The difference is how fast the error comes down, not whether it is
 there.
 
+**Where the last ohm actually lives** (measured 2026-08-26; `parity_limits()`
+in the probe script is the receipt). Extrapolate both ladders and the two
+formulations nearly meet: razor-nec5's limit lands 0.08–0.21 Ω from bs2's,
+depending on the extrapolation model. Of the roughly one ohm between the
+bases at N = 160 (0.95 Ω through this seam, 1.05 Ω on the probe's direct
+ladder), almost all is the twin still descending the O(1/N) path it shares
+with the licensed engine, and only the fraction-of-an-ohm remainder is
+formulation. The same run settles a tooling question: with the feed
+pinned at the exact centre, bs2's limit is the same whether that centre is a
+knot (even N) or the middle of a span (odd N) — 0.009 Ω apart — so the
+knot-feed machinery is not what separates the bases. One deck, free space;
+but on it, the second table sharpens: the default is not merely nearer *its
+own* limit, it is nearer the limit the two formulations share.
+
 So: pick the **twin** when you want what NEC-5 *would have said* — checking a
 published NEC-5 number, or matching a NEC-5 workflow. Pick the **default**
-when you want momwire's own best answer. Neither is the accurate one in
-general, and a disagreement between them is a difference of formulation, not
-one of them being wrong.
+when you want momwire's own best answer. When they disagree at a practical
+mesh, neither is broken: most of the gap is the twin's inherited
+discretization, shrinking as O(1/N), and what remains — a fraction of an ohm
+on the deck above — is formulation. A disagreement is information about the
+mesh before it is information about either engine.
 
 **Making another.** The basis rides on the *filename*: everything after
 `eznec-` selects it, a Windows `.exe` stripped first. So a copy you make
