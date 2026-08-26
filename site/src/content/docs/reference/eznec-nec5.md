@@ -54,19 +54,31 @@ licensed engine:
 | 161 | 67.68 − 29.28j | 67.84 − 28.23j | 67.68 − 29.24j | **0.037** |
 
 The twin tracks the reference to 0.04 Ω at *every* density — flat, not
-improving, which is what a twin looks like. Now read the same runs as how far
-each engine moved its own answer per refinement step:
+improving, which is what a twin looks like.
 
-| step | NEC-5 moves | bs2 moves |
+That says nothing about which is nearer the truth, so the second measurement
+asks each basis about **itself**: even segment counts, the feed on the centre
+knot, each basis scored against its own N = 320 answer. (The licensed engine
+cannot join this one — on a plain `GW` it is segment-fed whichever card you
+use, `EX 4` at a node returning the same impedance as `EX 0` at that index to
+0.002 Ω — which is exactly why the table above had to be segment-fed.)
+
+| segments | bs2 error | razor-nec5 error |
 |---|---|---|
-| 5 → 9 | 39.89 Ω | **0.11 Ω** |
-| 21 → 31 | 2.66 Ω | **0.10 Ω** |
-| 121 → 161 | 0.29 Ω | **0.03 Ω** |
+| 4 | 1.54 Ω | 80.63 Ω |
+| 6 | 0.74 Ω | 41.36 Ω |
+| 20 | 0.39 Ω | 7.16 Ω |
+| 60 | 0.18 Ω | 1.91 Ω |
+| 240 | 0.025 Ω | 0.17 Ω |
 
-The B-spline basis is essentially converged at five segments. NEC-5 and its
-twin start 63 Ω away in reactance and are still moving at 161 segments —
-**toward** the B-spline answer. On this antenna, bs2 at 5 segments is nearer
-the converged result than NEC-5 at 161.
+Both converge. At matched mesh the B-spline basis is 20–50× nearer its own
+limit, which is the O(1/N) walk of razor-blade testing showing up as a cost
+in segments: razor needs roughly 240 segments to reach the accuracy bs2 has
+at 20.
+
+Neither is "converged at coarse mesh" — bs2 is still 1.5 Ω out at four
+segments. The difference is how fast the error comes down, not whether it is
+there.
 
 So: pick the **twin** when you want what NEC-5 *would have said* — checking a
 published NEC-5 number, or matching a NEC-5 workflow. Pick the **default**

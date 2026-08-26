@@ -23,32 +23,48 @@ So on this antenna bs2 at 5 segments is nearer the converged answer than
 NEC-5 at 161, and the twin's agreement at coarse mesh is inheritance of a
 discretization error rather than evidence of correctness.
 
-WHY ALL-ODD N, AND WHY THAT IS NOT A THUMB ON THE SCALE
--------------------------------------------------------
-`EX` names a SEGMENT, so only an odd segment count puts the source at the
-wire's centre; an even count would feed the BINARY half a segment off-centre
-and corrupt the reference column. The ladder is therefore all-odd, one wire,
-one feed point, all three engines.
+TWO LADDERS, BECAUSE THEY ASK DIFFERENT QUESTIONS
+------------------------------------------------
+`main()` is the THREE-ENGINE ladder and it must be SEGMENT-fed: `EX` names a
+segment, so only an odd count centres the source, and an even count would
+feed the binary half a segment off-centre. That is not a preference — the
+licensed engine cannot express a knot feed on a plain `GW` at all. Measured:
+`EX 4` at node 10 returns the same impedance as `EX 0` at segment 10 to
+0.002 ohm (66.6660-35.8780j against 66.6670-35.8796j, N=20). So this ladder
+measures FAITHFULNESS — does the twin reproduce the reference — and nothing
+else.
 
-That is a choice, so it was CONTROLLED rather than assumed — `parity_control`
-below reruns the two momwire bases at both parities with the feed pinned to
-the exact centre, which the direct constructor allows and a deck cannot ask
-for. Measured:
+`knot_ladder()` is the TWO-BASIS ladder and it is KNOT-fed, even N, each
+basis scored against its OWN N=320 answer. No binary, because the binary
+cannot be knot-fed, and that is the point: this is the fair basis-vs-basis
+comparison, and it measures CONVERGENCE.
 
-  * bs2 is parity-INSENSITIVE: 0.35 ohm between N=5 and N=6, 0.025 ohm
-    between 161 and 160. Its flatness is not an odd-N artifact.
-  * razor-nec5 is strongly parity-SENSITIVE at coarse mesh: 22 ohm between
-    N=5 (-91.74j) and N=6 (-69.65j), the two parities converging together
-    only by N ~ 45.
+  segments   bs2 error   razor-nec5 error
+      4       1.54          80.63
+      6       0.74          41.36
+     20       0.39           7.16
+     60       0.18           1.91
+    240       0.025          0.17
 
-The second is the same phenomenon from another angle — the tent basis with
-razor-blade testing cares a great deal where the feed sits in the mesh, and
-the B-spline basis barely notices — and it is WHY the twin tracks the binary
-at odd N: it inherits that sensitivity along with everything else.
+Both converge. At a matched mesh the B-spline basis is 20-50x nearer its own
+limit — razor needs ~240 segments for the accuracy bs2 has at 20, the O(1/N)
+walk of razor-blade testing priced in segments.
 
-Run:
-  NEC5_EXE=~/antennas/NEC5-downloads/nec5-linux/nec5cl \
-      /home/smburns/antennas/antennaknobs/.venv/bin/python <this>
+And NEITHER is converged at a coarse mesh. An earlier draft of this probe
+said bs2 was "essentially converged at five segments" on the strength of its
+small STEP sizes; that conflated step with error. bs2's steps are ~0.1 ohm
+but its cumulative error at four segments is 1.54 ohm. Small steps, many of
+them.
+
+FEED PARITY, CONTROLLED
+-----------------------
+`parity_control` reruns both momwire bases at both parities with the feed
+pinned to the exact centre. bs2 is parity-INSENSITIVE (0.35 ohm between N=5
+and N=6, 0.025 between 161 and 160), so its behaviour is not a feed-placement
+artifact. razor-nec5 is strongly parity-SENSITIVE at coarse mesh (22 ohm
+between N=5 and N=6, the parities converging only by N ~ 45) — the same
+phenomenon the ladders measure, seen from another angle, and why the twin
+tracks the binary at odd N: it inherits that sensitivity too.
 """
 
 from __future__ import annotations
@@ -174,6 +190,52 @@ def parity_control():
         )
 
 
+def knot_ladder():
+    """Even N, feed on the centre KNOT, each basis against its own limit.
+
+    The binary is absent by necessity, not by choice — see the module
+    docstring.  What is scored is each basis's distance from ITS OWN N=320
+    answer, which is the only way to ask "which converges faster" without
+    nominating one of them as the truth.
+    """
+    import numpy as np
+
+    from momwire import BSplineSolver, RazorSolver
+
+    wires = [np.array([[0.0, -LEN / 2, 0.0], [0.0, LEN / 2, 0.0]])]
+    common = dict(wires=wires, wire_radius=RAD, wavelength=WL, feed_arclength=LEN / 2)
+
+    def zb(n):
+        z, _ = BSplineSolver(
+            **common,
+            n_per_edge_per_wire=[[n]],
+            degree=2,
+            feed_model="point",
+            feed_wire_index=0,
+        ).compute_impedance()
+        return complex(z)
+
+    def zr(n):
+        z, _ = RazorSolver(
+            **common, n_per_edge_per_wire=[[n]], nec5_quadrature=True
+        ).compute_impedance()
+        return complex(z)
+
+    ref_b, ref_r = zb(320), zr(320)
+    print("\n--- knot-fed, even N, each basis against its OWN N=320 answer ---")
+    print(
+        f"reference:  bs2 {ref_b.real:.4f}{ref_b.imag:+.4f}j   "
+        f"razor {ref_r.real:.4f}{ref_r.imag:+.4f}j"
+    )
+    print(f"{'N':>4}  {'bs2 err':>9}  {'razor err':>10}  {'|bs2-razor|':>11}")
+    for n in (4, 6, 8, 10, 12, 16, 20, 28, 40, 60, 80, 120, 160, 240):
+        b, r = zb(n), zr(n)
+        print(
+            f"{n:>4}  {abs(b - ref_b):9.4f}  {abs(r - ref_r):10.4f}  {abs(b - r):11.4f}"
+        )
+
+
 if __name__ == "__main__":
     main()
+    knot_ladder()
     parity_control()
