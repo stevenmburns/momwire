@@ -358,7 +358,7 @@ import numpy as np
 
 from ..bspline import BSplineSolver
 from ..deck._cards import tokenize
-from .. import _field_point, _ground_refl, _ground_spec
+from .. import _field_point, _ground_refl, _ground_spec, _medium_spec
 from ..deck._nec5 import (
     Nec5Deck,
     Nec5FarFieldRequest,
@@ -666,17 +666,7 @@ _REFUSE_BURIED_NEAR_FIELD = (
     "deck's IMPEDANCE, its CURRENTS and its CHARGES are all served: drop the "
     "{card} card, or lift the wire above z = 0"
 )
-_REFUSE_BURIED_FAR_FIELD = (
-    "RP asks for the far field of a deck with a wire below the ground plane, "
-    "and a buried deck's radiation pattern is not served. The pattern of a "
-    "buried source is the transmitted field's FAR-ZONE asymptotics - a "
-    "saddle-point evaluation of the same integral, with its own lateral-wave "
-    "and critical-angle structure - and momwire#553 built the transmitted "
-    "family over a NEAR-zone tabulation only (2 free-space wavelengths of "
-    "range), so there is nothing here to take a limit of. This deck's "
-    "IMPEDANCE, its CURRENTS and its CHARGES are all served: drop the RP "
-    "card, or lift the wire above z = 0"
-)
+_REFUSE_BURIED_FAR_FIELD = _medium_spec.buried_far_field_refusal()
 _REFUSE_IN_PLANE_WIRE = (
     "wire {tag} lies in the ground plane (both ends at z = 0) - a horizontal "
     "wire IN a conducting interface is degenerate - raise it above the "
