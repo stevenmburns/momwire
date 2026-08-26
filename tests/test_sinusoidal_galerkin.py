@@ -800,11 +800,49 @@ M3_GATE_RATIO = {
 # `test_k2_pre_asymptotic_error_maximum_is_not_quadrature`.
 M3_MONOTONE_FROM = {"dipole": 11, "vee": 11, "k2_junction": 21, "k3_star": 11}
 
+# The payoff gates below score Galerkin TESTING against collocation, which
+# requires both sides to carry the same SOURCE — one axis at a time, the
+# discipline the whole instrument exists to keep. `SinusoidalSolver` hard-codes
+# NEC's segment gap and can take no other: the zero-width gap has no
+# collocation RHS at all (momwire#212), so the matching has to happen on the
+# Galerkin side.
+#
+# That naming became load-bearing with momwire#654, which flipped this class's
+# default to the point gap. Before it, "gal" inherited the segment gap and the
+# match was a coincidence of defaults; report §17 named exactly this as "the
+# substantive blocker on ever flipping `feed_model`'s default — the M3/M4
+# payoff gates score SinusoidalGalerkinSolver against SinusoidalSolver, which
+# hard-codes NEC's segment gap, so flipping only the Galerkin default would
+# make errColl/errGal compare two feed models". It is spelled out here so the
+# comparison is a stated control rather than an inherited accident, and
+# `test_the_payoff_schemes_carry_a_matched_feed_model` below fails if it drifts.
+_MATCHED_FEED = {"feed_model": "segment"}
+
 _SCHEMES = {
-    "gal": lambda kw: SinusoidalGalerkinSolver(**kw),
+    "gal": lambda kw: SinusoidalGalerkinSolver(**kw, **_MATCHED_FEED),
     "coll": lambda kw: SinusoidalSolver(**kw),
     "bspl": lambda kw: BSplineSolver(**kw, degree=2),
 }
+
+
+def test_the_payoff_schemes_carry_a_matched_feed_model():
+    """errColl/errGal must compare ONE axis, and this is what holds it to that.
+
+    `SinusoidalSolver` has no `feed_model` — NEC's segment gap is the only
+    source point matching admits — so "matched" means the Galerkin scheme names
+    that same source. Asserted against the constructed solvers rather than
+    against `_MATCHED_FEED`, so replacing the constant with the wrong value
+    fails here too.
+    """
+    kw = M3_GEOMETRIES["dipole"](11)
+    gal, coll = _SCHEMES["gal"](kw), _SCHEMES["coll"](kw)
+    assert gal.feed_model == "segment"
+    # The collocation side carries the attribute too — it accepts the kwarg in
+    # order to REFUSE "point" by name (`_reject_point_feed_model`) — so what
+    # matters is that the two values agree, not that one is absent.
+    assert coll.feed_model == "segment"
+    # And the class default is NOT what supplies it (momwire#654).
+    assert SinusoidalGalerkinSolver(**kw).feed_model == "point"
 
 
 @functools.lru_cache(maxsize=None)
@@ -907,8 +945,12 @@ def test_k2_pre_asymptotic_error_maximum_is_not_quadrature():
     # ...and it is discretization, not an under-resolved integral.
     for n in coarse:
         z1 = _m3_z("gal", "k2_junction", n)
+        # `_MATCHED_FEED` because the comparison is coarse-vs-fine QUADRATURE
+        # with everything else held: `_m3_z` builds its side through
+        # `_SCHEMES["gal"]`, so a bare construction here would carry the class
+        # default instead and measure the feed model (momwire#654).
         z2 = SinusoidalGalerkinSolver(
-            **_m3_k2(n, n_qp_test=32, n_qp_near=32)
+            **_m3_k2(n, n_qp_test=32, n_qp_near=32), **_MATCHED_FEED
         ).compute_impedance()[0]
         assert abs(z2 - z1) / abs(z1) < 1e-6, (
             f"N={n}: 4× quadrature moved Z by {abs(z2 - z1) / abs(z1):.2e} — the "
@@ -2151,18 +2193,28 @@ def test_impedance_swept_matches_per_k(readout):
 
 
 @pytest.mark.parametrize("n", [21, 41, 81])
-def test_gap_feed_readout_is_not_its_drives_dual(n):
-    """The measured cost of keeping NEC's centre-current readout.
+def test_the_SEGMENT_gap_readout_is_not_its_drives_dual(n):
+    """The measured cost of keeping NEC's centre-current readout — under the
+    SEGMENT gap, which is the only source model that has such a cost.
 
     Y symmetry is exact iff the readout functional IS the drive functional.
-    The Galerkin delta-gap drive integrates E_app = V/Δ over the feed
-    segment, so its dual is the gap-AVERAGED current; the default readout is
-    the centre current. Measured asymmetry (see the section header): 6.7e-05
-    / 2.4e-05 / 6.5e-06 at N = 21/41/81 — an O(h) effect that decays, and one
-    the point-matched solver has slightly MORE of on the same wires.
+    The segment-gap Galerkin drive integrates E_app = V/Δ over the feed
+    segment, so its dual is the gap-AVERAGED current, while the default
+    readout is the centre current. Measured asymmetry (see the section
+    header): 6.7e-05 / 2.4e-05 / 6.5e-06 at N = 21/41/81 — an O(h) effect
+    that decays, and one the point-matched solver has slightly MORE of on the
+    same wires.
 
     `feed_readout="variational"` closes it to ~1e-12, which is the proof that
     the residue is the readout convention and nothing in the fill.
+
+    The feed model is named rather than inherited, and the test is named for
+    it, because momwire#654 made the point gap this class's default and the
+    point-gap drive column IS the centre-evaluation functional — so under the
+    default there is no residue to measure and this test's own title would be
+    false. That case is `test_point_gap_readouts_coincide` below; this one is
+    the segment gap's, and both are worth keeping because the trade is what
+    #654 decided to stop charging users by default.
     """
 
     def asym(cls, **kw):
@@ -2172,8 +2224,10 @@ def test_gap_feed_readout_is_not_its_drives_dual(n):
         Y = np.asarray(Y)
         return np.linalg.norm(Y - Y.T) / np.linalg.norm(Y)
 
-    a_centre = asym(SinusoidalGalerkinSolver)
-    a_var = asym(SinusoidalGalerkinSolver, feed_readout="variational")
+    a_centre = asym(SinusoidalGalerkinSolver, feed_model="segment")
+    a_var = asym(
+        SinusoidalGalerkinSolver, feed_model="segment", feed_readout="variational"
+    )
     a_coll = asym(SinusoidalSolver)
     assert a_var < 1e-10, f"the dual pairing is not reciprocal: {a_var:.3e}"
     assert 1e-6 < a_centre < 2e-4, a_centre
@@ -2275,7 +2329,9 @@ def test_point_gap_readouts_coincide(n):
     point = [z(feed_model="point", feed_readout=r) for r in ("centre", "variational")]
     np.testing.assert_allclose(point[0], point[1], rtol=1e-14)
 
-    segment = [z(feed_readout=r) for r in ("centre", "variational")]
+    segment = [
+        z(feed_model="segment", feed_readout=r) for r in ("centre", "variational")
+    ]
     spread = np.abs(segment[0] - segment[1]).max() / np.abs(segment[1]).max()
     assert spread > 1e-5, spread
 

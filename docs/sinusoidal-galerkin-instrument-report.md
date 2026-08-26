@@ -1330,3 +1330,58 @@ cross-basis shift bar over that ground, its symmetry ratio and its own
 a → 0 collapse — with the acceptance seam mirrored in
 `tests/test_extended_kernel.py`; the derivation replays in
 `scripts/derive_galerkin_ek_delta.py`.
+
+
+## 18. Addendum (2026-08-26): the default flipped — `feed_model="point"` (momwire#654)
+
+§16 landed the point gap "as an option, with the default unchanged". §17 then
+named the substantive blocker on ever changing that: the M3/M4 payoff gates
+score `SinusoidalGalerkinSolver` against `SinusoidalSolver`, which hard-codes
+NEC's segment gap, so flipping only the Galerkin default would make
+`errColl/errGal` compare two feed models rather than two testings. The remedy
+§16 proposed — give the point-matched solver a matching gap — was refuted in
+§17: the object does not exist, because the zero-width gap has no collocation
+RHS at all.
+
+momwire#654 flips the default anyway, and the reason §17's blocker does not
+stop it is that the blocker was never about the *default*. It is about whether
+the payoff comparison NAMES its control. It now does:
+`tests/test_sinusoidal_galerkin.py` carries `_MATCHED_FEED = {"feed_model":
+"segment"}`, both M3 and M4 dispatch through `_SCHEMES` which applies it, and
+`test_the_payoff_schemes_carry_a_matched_feed_model` fails if that drifts —
+including if the constant itself is given the wrong value. The one-axis-at-a-
+time discipline is now structural rather than a property of a default, which
+is strictly stronger than what §17 was protecting.
+
+### What it cost, measured rather than estimated
+
+Flipped and run: **31 of 6315 tests moved**. Not scattered — every one is a
+test whose subject is this axis or the payoff comparison:
+
+| what | where |
+|---|---|
+| M3/M4 payoff gates | `_SCHEMES["gal"]` now names the control; 10 tests |
+| readout duality | `test_the_SEGMENT_gap_readout_is_not_its_drives_dual` (renamed — its premise IS the segment gap), `test_point_gap_readouts_coincide`'s contrast half |
+| the EK arc | `_ladder_deck`, `_s2_z`, `_gd_shift` hold the feed model; the bspline branches of the latter two already did, because bspline's own default is the point gap |
+| the NEC-2 twin | `_z` holds it for the Galerkin sibling — "the gap is the bend" only reads if the source is held |
+| pinned constants | the stepped-EK no-code-path-touched pin |
+
+Every fix is the same shape: name the source that was being inherited. None
+re-baselined a recorded number — §6, §15, §16 and §17's run records stand
+exactly as measured, which is what holding the control rather than the default
+buys.
+
+### Why `"point"` is the right default
+
+Not a refinement of `"segment"` but a better answer: 2.8e-7 / 1.3e-7 from
+`BSplineSolver` at N=161/321 against 2.5e-4 / 1.5e-4 (§6/§15); exactly self-dual
+under `feed_readout="centre"`, so that knob stops having consequences at gap
+feeds (§16); up to 992× tighter cross-basis agreement on the antennaknobs#478
+class (momwire#213).
+
+And the lane `"segment"` was thought to serve — NEC/EZNEC compatibility — was
+never this class's to serve. `SinusoidalSolver` is NEC's formulation entire:
+same basis, same point matching, same segment gap. Galerkin-with-a-segment-gap
+reproduces NEC's reactance *walk*, because the walk comes from the source, but
+not NEC's formulation. It is a control, and #654 stops shipping it as a
+default to users who did not ask for one.

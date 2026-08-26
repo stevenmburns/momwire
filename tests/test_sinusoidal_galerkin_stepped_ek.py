@@ -117,7 +117,14 @@ def test_ek_on_uniform_radius_answer_is_unchanged_from_the_pre_unit_value():
     is not a property this tree has (the momwire#249 lesson).
     """
     kw = _two_wire([1.0e-2, 1.0e-2])
-    z, _ = SinusoidalGalerkinSolver(extended_kernel=True, **kw).compute_impedance()
+    # `feed_model="segment"` because this is a NO-CODE-PATH-TOUCHED pin: it
+    # only means anything with every other axis held where it was when the
+    # number was recorded. momwire#654 moved this class's default to the point
+    # gap, which is a different SOURCE and so legitimately a different answer —
+    # exactly the kind of change this pin must not absorb silently.
+    z, _ = SinusoidalGalerkinSolver(
+        extended_kernel=True, feed_model="segment", **kw
+    ).compute_impedance()
     assert z == pytest.approx(
         209.4439774792844 + 79.14170016358155j, abs=0.0, rel=1e-10
     )

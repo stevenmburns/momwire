@@ -567,6 +567,13 @@ _DIPOLE_W = [np.array([[0.0, 0.0, -LEN / 2], [0.0, 0.0, LEN / 2]])]
 
 
 def _ladder_deck(cls, radius, **kw):
+    # This module varies the extended KERNEL, so every other axis is held —
+    # the feed model included, at NEC's segment gap, which is what every
+    # number recorded in these docstrings was measured with. The bspline
+    # branch has always named it (its own default is the point gap); since
+    # momwire#654 flipped this class's default too, the Galerkin side has to
+    # name it as well or the comparison moves two axes at once.
+    kw.setdefault("feed_model", "segment")
     return cls(
         wires=_DIPOLE_W,
         n_per_edge_per_wire=[[NS]],
@@ -2332,8 +2339,9 @@ _S2_GROUNDS = {
 def _s2_z(deck, ground, cls, ek):
     kw = dict(_S2_DECKS[deck], wavelength=LAM_NEC, extended_kernel=ek)
     kw.update(_S2_GROUNDS[ground])
+    kw["feed_model"] = "segment"  # held; see `_ladder_deck` (momwire#654)
     if cls is BSplineSolver:
-        kw.update(degree=2, feed_model="segment")
+        kw.update(degree=2)
     z, _ = cls(**kw).compute_impedance()
     return complex(z)
 
@@ -2720,8 +2728,9 @@ def _gd_decks(radius):
 
 def _gd_shift(name, radius, cls=SinusoidalGalerkinSolver):
     kw = dict(_gd_decks(radius)[name], feed_arclength=1.0, wavelength=_GD_LAM)
+    kw["feed_model"] = "segment"  # held; see `_ladder_deck` (momwire#654)
     if cls is BSplineSolver:
-        kw.update(degree=2, feed_model="segment")
+        kw.update(degree=2)
     off, _ = cls(**kw).compute_impedance()
     on, _ = cls(**kw, extended_kernel=True).compute_impedance()
     return complex(on) - complex(off)

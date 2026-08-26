@@ -65,6 +65,17 @@ def _invvee(included_deg):
 
 
 def _z(cls, included_deg, n, **extra):
+    # `SinusoidalGalerkinSolver` carries NEC's SEGMENT gap throughout this
+    # module. Its rows are scored against `SinusoidalSolver` — the same basis
+    # on the same mesh, differing only in the TESTING — and that reading is
+    # only clean while the source is held: with a different feed model in the
+    # sibling, "the gap is the bend" would be measuring the bend plus the
+    # feed. `SinusoidalSolver` can carry no other source (the zero-width gap
+    # has no collocation RHS, momwire#212), so the naming happens here, and it
+    # happens at all because momwire#654 moved this class's default to the
+    # point gap.
+    if cls is SinusoidalGalerkinSolver:
+        extra.setdefault("feed_model", "segment")
     z, _ = cls(
         wires=[_invvee(included_deg)],
         n_per_edge_per_wire=[[n // 2, n // 2]],
