@@ -2382,7 +2382,13 @@ def test_the_variational_readout_costs_the_m3_payoff_on_k3_star():
     fine = (241, 321)
 
     def both_readouts(n):
-        s = SinusoidalGalerkinSolver(**_m3_k3(n))
+        # `_MATCHED_FEED`: this re-runs M3's payoff, so it inherits M3's
+        # control — errColl comes from `SinusoidalSolver`, which carries NEC's
+        # segment gap and can carry no other. It is doubly load-bearing here,
+        # because the two readouts COINCIDE under the point gap (momwire#654's
+        # whole point, `test_point_gap_readouts_coincide`): left bare, this
+        # test would compare a readout knob against itself and read 1.000.
+        s = SinusoidalGalerkinSolver(**_m3_k3(n), **_MATCHED_FEED)
         geom = s._build_geometry()
         G, seg_view = s._assemble_Z(geom, s.k)
         U = s._drive_columns(geom, seg_view, s.k)

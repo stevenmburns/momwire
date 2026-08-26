@@ -152,11 +152,21 @@ COLUMN_LABEL = {
 
 
 def solve(column: str, kw: dict) -> complex:
-    """Driving-point impedance of one geometry on one column."""
+    """Driving-point impedance of one geometry on one column.
+
+    `gal` and `ptgap` are the same class and differ ONLY in the feed model —
+    that is what the pair is for — so both name theirs. `gal` NAMES the
+    segment gap rather than inheriting it, because momwire#654 made the point
+    gap the class default: left bare, `gal` would silently become `ptgap` and
+    every contrast this report is built on would read as zero. It nearly did;
+    the slow lane caught it.
+    """
     if column == "coll":
         z, _ = SinusoidalSolver(**kw).compute_impedance()
     elif column == "gal":
-        z, _ = SinusoidalGalerkinSolver(**kw).compute_impedance()
+        z, _ = SinusoidalGalerkinSolver(
+            **kw, feed_model="segment"
+        ).compute_impedance()
     elif column == "ptgap":
         z, _ = SinusoidalGalerkinSolver(**kw, feed_model="point").compute_impedance()
     elif column == "bs2":
