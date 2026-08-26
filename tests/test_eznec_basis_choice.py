@@ -297,6 +297,29 @@ ACCEPTS = {
     "0046": EVERY_BASIS,
     "0047": EVERY_BASIS,
     "0048": EVERY_BASIS,
+    # The seven models promoted out of the antennaknobs capture area.
+    # Eighteen decks, every one accepted by every basis that answers at
+    # all — which is what a coverage batch SHOULD look like arriving, and
+    # is why they are worth having: a corpus that only grows by decks the
+    # roster already handles stops being able to surprise it.
+    "0059": EVERY_BASIS,
+    "0060": EVERY_BASIS,
+    "0063": EVERY_BASIS,
+    "0064": EVERY_BASIS,
+    "0067": EVERY_BASIS,
+    "0068": EVERY_BASIS,
+    "0069": EVERY_BASIS,
+    "0070": EVERY_BASIS,
+    "0075": EVERY_BASIS,
+    "0076": EVERY_BASIS,
+    "0077": EVERY_BASIS,
+    "0078": EVERY_BASIS,
+    "0079": EVERY_BASIS,
+    "0080": EVERY_BASIS,
+    "0081": EVERY_BASIS,
+    "0082": EVERY_BASIS,
+    "0083": EVERY_BASIS,
+    "0084": EVERY_BASIS,
     "0107": NO_BASIS,
     "0108": EVERY_BASIS,
     "0109": EVERY_BASIS,
@@ -331,7 +354,7 @@ def test_the_table_covers_every_capture_and_every_basis():
     for cid, row in ACCEPTS.items():
         assert set(row) == set(BASES), cid
     shapes = (
-        ("EVERY_BASIS", EVERY_BASIS, 59),
+        ("EVERY_BASIS", EVERY_BASIS, 77),
         ("NO_BASIS", NO_BASIS, 3),
     )
     for name, shape, count in shapes:
@@ -365,7 +388,7 @@ def test_every_basis_that_answers_at_all_accepts_the_same_59():
     tautology, and it is the property "we accept the same decks" names.
     """
     bspline = _accepted_by("bspline")
-    assert len(bspline) == 59
+    assert len(bspline) == 77
     for basis in ("bspline-d1", "hmatrix", "arrayblock", "razor", "razor-nec5"):
         assert _accepted_by(basis) == bspline, basis
     assert all(not _accepted_by(basis) for basis in _SINUSOIDAL)

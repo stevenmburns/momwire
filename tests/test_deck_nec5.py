@@ -68,14 +68,25 @@ EN
 # -- gate 1: the corpus -----------------------------------------------------
 
 
-def test_the_corpus_is_all_62_captures():
+def test_the_corpus_is_all_80_captures():
     """The gate is only a gate if it is the whole corpus.
 
     49 until momwire#511 landed the four decks that are BOTH phased and
-    networked (0116/0117/0120/0121), and 53 until momwire#516 landed the nine
-    of the near-field errand (0107-0115).
+    networked (0116/0117/0120/0121), 53 until momwire#516 landed the nine of
+    the near-field errand (0107-0115), and 62 until the seven models below
+    were PROMOTED out of the antennaknobs capture area.
+
+    Those seven were captured in the 2026-08-20 sitting and then sat in
+    `scratch/eznec-capture/` for five days because promotion is a separate
+    step from capture and nothing failed while it was skipped. The handoff
+    doc for the NEXT sitting duly listed them as uncaptured — reading this
+    corpus rather than the capture index — and they were nearly re-captured
+    on a second trip to the machine. Hence this sentence: the capture area
+    is the source of record for what EXISTS, and this corpus is the source of
+    record for what is GATED, and the gap between them is invisible from
+    either side alone.
     """
-    assert len(CORPUS) == 62
+    assert len(CORPUS) == 80
 
 
 @pytest.mark.parametrize("path", CORPUS, ids=lambda p: p.stem)
@@ -119,6 +130,15 @@ def test_the_corpus_census_reproduces_the_published_weights():
     ``GD``, four more ``GN 0``, one more ``GN 1``, two more ``GN -1`` — and one
     of the nine (0114) is an ``RP``, the free-space control 0115's ``NE`` is
     scored against.
+
+    The seven PROMOTED models are the third, and they move it the way a
+    broad-coverage batch should rather than the way an errand does: eighteen
+    decks, no near field at all, and every ground column growing at once
+    (``GN 0`` +10, ``GN -1`` +4, ``GD`` +4).  These are bundled EZNEC models
+    — a quad, two Yagis, a W8JK, a Field Day dipole, an N4PC loop and K5RP —
+    so they are the first corpus addition motivated by MODEL VARIETY instead
+    of by a card, and the ``GN 0``/``GD`` pairs among them are the same
+    antenna captured under both finite-ground spellings.
     """
     grounds = Counter()
     ge = Counter()
@@ -139,11 +159,11 @@ def test_the_corpus_census_reproduces_the_published_weights():
         ge[(parsed.ge_flag, parsed.ge_second)] += 1
         requests[type(parsed.requests[0]).__name__] += 1
 
-    assert grounds == {"GD": 26, "GN -1": 18, "GN 0": 12, "GN 1": 6}
-    assert ge == {(1, -1): 44, (0, -1): 18}
+    assert grounds == {"GD": 30, "GN -1": 22, "GN 0": 22, "GN 1": 6}
+    assert ge == {(1, -1): 58, (0, -1): 22}
     assert requests == {
-        Nec5FarFieldRequest.__name__: 29,
-        Nec5ExecuteRequest.__name__: 24,
+        Nec5FarFieldRequest.__name__: 38,
+        Nec5ExecuteRequest.__name__: 33,
         Nec5NearFieldRequest.__name__: 9,
     }
     # Eight ``NE`` and ONE ``NH``: the fifteenth mnemonic costs one radio

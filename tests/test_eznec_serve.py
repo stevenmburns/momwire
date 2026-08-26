@@ -225,7 +225,7 @@ GRAZING_IDS = ("0033", "0034")
 # Every capture id this seam answers after momwire#545, pinned.  The ladder
 # number is 59 of 62 and the three that are left are named in
 # :func:`test_the_corpus_ladder_stands_where_545_left_it`.
-SERVED_AFTER_545 = (
+SERVED_CORPUS_IDS = (
     "0000",
     "0001",
     "0002",
@@ -272,6 +272,32 @@ SERVED_AFTER_545 = (
     "0046",
     "0047",
     "0048",
+    # The seven bundled models PROMOTED out of the antennaknobs capture area,
+    # where they had sat since the 2026-08-20 sitting: a 15m quad, a back-yard
+    # inverted vee, an NBS Yagi, a W8JK, a Field Day Special, a K5RP and an
+    # N4PC loop.  Eighteen decks, nine models captured twice apiece — one
+    # ``XQ`` and one ``RP``, the Src Dat / FF Plot pair the capture ritual
+    # takes — and all eighteen serve.  The first corpus addition motivated by
+    # model VARIETY rather than by an unanswered card, which is why they land
+    # here in a block instead of beside a rung.
+    "0059",
+    "0060",
+    "0063",
+    "0064",
+    "0067",
+    "0068",
+    "0069",
+    "0070",
+    "0075",
+    "0076",
+    "0077",
+    "0078",
+    "0079",
+    "0080",
+    "0081",
+    "0082",
+    "0083",
+    "0084",
     # momwire#516's near-field family: nine decks over four grounds (manifest
     # ``near_field_family``), of which momwire#545 serves seven.  0109 is the
     # ``GN 1`` near field and 0115 the free-space one; 0114 is 0115's deck with
@@ -2203,11 +2229,11 @@ def test_the_near_field_refusal_is_the_point_s_and_not_the_deck_s():
 def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
     """U1's catch-all is now a backstop and not a behaviour.
 
-    Every one of the 62 captured decks comes back either solved or refused by
+    Every one of the 80 captured decks comes back either solved or refused by
     a sentence that names its card, so the stub reason — which said only that
     the dialect was unserved — must appear nowhere.
     """
-    assert len(corpus()) == 62
+    assert len(corpus()) == 80
     assert sorted(entry["deck"] for entry in MANIFEST["captures"]) == sorted(
         f"decks/{path.name}" for path in (FIXTURE_DIR / "decks").glob("*.nec")
     )
@@ -2216,8 +2242,8 @@ def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
         assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in text, cid
 
 
-def test_the_corpus_ladder_stands_where_545_left_it():
-    """The served-id SET, pinned — 59 of the 62 captured decks.
+def test_the_corpus_ladder_is_77_of_80():
+    """The served-id SET, pinned — 77 of the 80 captured decks.
 
     A rung that lands moves decks across this line and a regression moves them
     back, and neither should be able to happen quietly: the set is written out
@@ -2244,6 +2270,14 @@ def test_the_corpus_ladder_stands_where_545_left_it():
     ``NH``) — every finite-ground near-field deck whose grid stands off the
     wire's ground contact.
 
+    The PROMOTION of seven bundled models moves the denominator by the largest
+    step this ladder has taken — 62 to 80 — and all eighteen decks are served,
+    so 59 of 62 becomes 77 of 80 with nothing crossing the line.  That is the
+    healthy shape for a coverage batch: these were captured for model VARIETY
+    rather than to chase an unanswered card, so a rung that moved the
+    NUMERATOR here would have meant the corpus was selecting for what already
+    worked.
+
     The three that are left are the SAME refusal and it names neither a card
     nor a ground but a POINT: 0022, 0107 and 0112 each ask for the field at
     exactly (0, 0, 0), the base of a contact-fed monopole over a finite
@@ -2264,8 +2298,8 @@ def test_the_corpus_ladder_stands_where_545_left_it():
     served_ids = tuple(
         cid for cid, text in sorted(corpus().items()) if "NEC ERROR" not in text
     )
-    assert served_ids == SERVED_AFTER_545
-    assert len(served_ids) == 59
+    assert served_ids == SERVED_CORPUS_IDS
+    assert len(served_ids) == 77
     refused = sorted(set(corpus()) - set(served_ids))
     assert refused == ["0022", "0107", "0112"]
     # The 49 the ladder first counted still stand 48 of 49, which is what says
