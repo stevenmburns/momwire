@@ -76,10 +76,23 @@ class Capabilities(NamedTuple):
     extended_kernel: bool
     junction_ports: bool
     node_gaps: bool
-    knot_feeds: bool
     per_wire_radius: bool
     singular_enrichment: bool
     refusals: Mapping[str, str]
+    # Out of order, and after `refusals`, because a NamedTuple default has to
+    # come last — and it needs a default. Every other field is required, which
+    # is the right discipline for a row that shipped complete; `knot_feeds`
+    # arrived afterwards (momwire#611), and a required field would have broken
+    # every declaration already written, including the ~200-line prototype the
+    # design doc's §0.2 definition-of-done builds with an EMPTY row. That test
+    # is the one this module is measured against, so the field bends to it.
+    #
+    # False is the safe default and the honest one: the empty row means "every
+    # axis refused", and a family that does place a gap where it was named
+    # loses nothing by saying so. The other direction would let a family that
+    # silently snaps be served by a node-addressing consumer, which is the
+    # exact failure momwire#611 existed to close.
+    knot_feeds: bool = False
 
     def _served(self, cell: str) -> bool:
         if cell in ("pec", "refl-coef", "sommerfeld"):
