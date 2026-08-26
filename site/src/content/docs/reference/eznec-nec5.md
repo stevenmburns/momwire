@@ -34,13 +34,45 @@ momwire-eznec-razor-nec5.exe  the NEC-5 formulation twin
 
 They accept the same models — measured, deck by deck, on the whole captured
 corpus — and answer in different formulations. `razor-nec5` is the tent basis
-with razor-blade path testing NEC-5 itself uses, so it is the one that
-reproduces the licensed engine most closely: on a free-space dipole it prints
-79.947 + 29.922j where the licensed engine prints 79.948 + 29.919j, and the
-default B-spline prints 85.073 + 45.369j. None of those is "wrong" — the
-first tracks the reference, the third is momwire's own basis converging on
-its own terms — but if you came here to run NEC-5, the twin is the one that
-does.
+with razor-blade path testing NEC-5 itself uses.
+
+### Reproduction is not accuracy
+
+The twin agrees with the licensed engine **because it runs the same
+algorithm**, not because it is more correct. It inherits that engine's
+discretization error along with its answers, and NEC-5's razor-blade testing
+rule is known to walk its impedance slowly — O(1/N).
+
+Measured on a 0.476 λ dipole in free space, ten mesh densities, against the
+licensed engine:
+
+| segments | licensed NEC-5 | B-spline (bs2) | razor-nec5 | \|razor − NEC-5\| |
+|---|---|---|---|---|
+| 5 | 64.22 − 91.78j | 68.14 − 28.81j | 64.23 − 91.74j | **0.041** |
+| 21 | 67.06 − 35.66j | 67.92 − 28.59j | 67.06 − 35.62j | **0.037** |
+| 61 | 67.51 − 30.68j | 67.86 − 28.37j | 67.52 − 30.64j | **0.037** |
+| 161 | 67.68 − 29.28j | 67.84 − 28.23j | 67.68 − 29.24j | **0.037** |
+
+The twin tracks the reference to 0.04 Ω at *every* density — flat, not
+improving, which is what a twin looks like. Now read the same runs as how far
+each engine moved its own answer per refinement step:
+
+| step | NEC-5 moves | bs2 moves |
+|---|---|---|
+| 5 → 9 | 39.89 Ω | **0.11 Ω** |
+| 21 → 31 | 2.66 Ω | **0.10 Ω** |
+| 121 → 161 | 0.29 Ω | **0.03 Ω** |
+
+The B-spline basis is essentially converged at five segments. NEC-5 and its
+twin start 63 Ω away in reactance and are still moving at 161 segments —
+**toward** the B-spline answer. On this antenna, bs2 at 5 segments is nearer
+the converged result than NEC-5 at 161.
+
+So: pick the **twin** when you want what NEC-5 *would have said* — checking a
+published NEC-5 number, or matching a NEC-5 workflow. Pick the **default**
+when you want momwire's own best answer. Neither is the accurate one in
+general, and a disagreement between them is a difference of formulation, not
+one of them being wrong.
 
 **Making another.** The basis rides on the *filename*: everything after
 `eznec-` selects it, a Windows `.exe` stripped first. So a copy you make
