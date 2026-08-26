@@ -84,7 +84,6 @@ BASIS_NAMES = (
     "razor-nec5",
     "sinusoidal",
     "sinusoidal-galerkin",
-    "sinusoidal-galerkin-converged",
 )
 
 # Spelt as the stock engine spells it: `', '.join(sorted(_BASES))`.
