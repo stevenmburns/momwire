@@ -348,27 +348,6 @@ _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
 )
 
-# NOT the base class's sentence, and the difference is the whole of
-# momwire#648.  `SinusoidalSolver` refuses a knot feed because point
-# matching has no pairing for one — a permanent fact about collocation.
-# Here the pairing EXISTS: the Galerkin test integral collapses a delta at
-# a knot to the drive column −V·f_i(s₀), which is the same mechanism that
-# makes `feed_model="point"` admissible on this class and a node source
-# drivable at all (`_node_cut_vectors`, momwire#177/#192).  What is missing
-# is only the spelling: `feeds` is resolved by the INHERITED
-# `_build_geometry`, which knows one grid and it is the segment centres.
-# So this row is False today and the reason is plumbing, not formulation —
-# and the refusal says which, because a caller who reads "not supported"
-# and a caller who reads "not yet wired up" do different things next.
-_KNOT_FEEDS_REFUSAL = (
-    "knot feeds are not yet served by SinusoidalGalerkinSolver: the "
-    "Galerkin test integral admits a delta gap at a knot — it collapses to "
-    "the drive column -V*f_i(s0) — but `feeds` is still resolved to the "
-    "nearest segment CENTRE by the inherited geometry, so a source named "
-    "at a knot would be solved half a segment away. Tracked as "
-    "momwire#648; until it lands use BSplineSolver or RazorSolver"
-)
-
 # Reused by `_refuse_junction_port_solve` (the raises) and
 # `capabilities.refusals` below — one message per combination, not a copy
 # in each.
@@ -931,8 +910,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     capabilities = SinusoidalSolver.capabilities._replace(
         junction_ports=True,
         node_gaps=True,
+        knot_feeds=True,
         refusals={
-            "knot_feeds": _KNOT_FEEDS_REFUSAL,
             "junction_ports+finite_ground": _JUNCTION_PORTS_FINITE_GROUND_REFUSAL,
             "junction_ports+mixed_radii": _JUNCTION_PORTS_MIXED_RADII_REFUSAL,
             "contact+refl-coef": SinusoidalSolver.capabilities.refusals[
@@ -3504,7 +3483,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             s, e = starts[fseg], starts[fseg + 1]
             sig = seg_view["sigma"][s:e]
             if self.feed_model == "point":
-                col = -(sig * seg_view["AC"][s:e])
+                # -f_i(s0), evaluated at the gap's own position rather than at
+                # the segment's centre (momwire#648). `feed_xi` is 0 for every
+                # caller that names a segment centre — the NEC-2 front end
+                # always does — so this is bit-identical there: sin(0) = 0 and
+                # cos(0) − 1 = 0 leave σ·AC, the expression this branch used to
+                # be. A caller that names a KNOT gets ±h/2 and the other two
+                # shapes carry the difference.
+                col = -_basis_value(
+                    sig * seg_view["AC"][s:e],
+                    seg_view["B"][s:e],
+                    sig * seg_view["C"][s:e],
+                    k,
+                    float(geom["feed_xi"][j]),
+                )
             else:
                 hm = float(h[fseg])
                 int_f = sig * seg_view["AC"][s:e] * hm + sig * seg_view["C"][s:e] * (
@@ -3566,8 +3558,18 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         n0 = len(self.feeds) + len(self.junction_ports)
         return np.array(
             [
-                self._feed_segment_current(alpha, seg_view, fi)
-                for fi in geom["feed_segs"]
+                # `feed_xi` under the point gap only: the drive column is the
+                # evaluation functional AT the gap, so the readout has to be
+                # the same point or Y stops being symmetric (momwire#648). The
+                # segment gap spreads over the whole segment and its centre
+                # readout is the NEC convention, unmoved.
+                self._feed_segment_current(
+                    alpha,
+                    seg_view,
+                    fi,
+                    float(geom["feed_xi"][j]) if self.feed_model == "point" else 0.0,
+                )
+                for j, fi in enumerate(geom["feed_segs"])
             ]
             + [alpha[N + p] for p in range(len(self.junction_ports))]
             + [-(U[:, n0 + p] @ alpha) for p in range(len(self.node_ports))],

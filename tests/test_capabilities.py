@@ -760,27 +760,28 @@ def test_the_off_roster_families_declare_the_snap_they_document(solver_class):
     assert _knot_feed_asymmetry(solver_class) > 1e-3
 
 
-def test_every_family_that_snaps_says_why_and_no_two_say_the_same_thing():
-    """The refusal prose is per-CLASS, not per-axis, and that is deliberate.
+def test_the_TESTING_is_what_separates_the_two_sinusoidal_families_here():
+    """Same basis, same mesh, opposite `knot_feeds` — and the axis is testing.
 
-    `SinusoidalSolver` cannot ever place a gap at a knot — collocation has no
-    pairing for one (#212) — while `SinusoidalGalerkinSolver` merely does not
-    place one yet, because its test integral admits the delta and only the
-    inherited geometry is in the way (#648).  Same cell, same value, opposite
-    prognoses; a reader who cannot tell them apart cannot decide whether to
-    wait or to switch bases.
+    `SinusoidalGalerkinSolver` serves a knot gap because its pairing
+    ⟨f_i, E_app⟩ collapses a delta at any point to the drive column −V·f_i(s₀)
+    (momwire#648 made it evaluate there rather than at the segment centre it
+    used to snap to). `SinusoidalSolver` cannot, ever: the match points ARE
+    the segment centres, so a delta at a knot point-samples to nothing in
+    every row and the RHS is the unexcited problem (momwire#177).
+
+    So the refusal survives on exactly one of the two, and its sentence has to
+    name the right failure — a reader told "δ·δ is undefined" (which is
+    `feed_model="point"`'s problem, #212, a different thing) goes looking for
+    a regularization that #212 §17 already ran to its dead end. Zero rows are
+    not a regularization problem; they are the absence of an excitation, which
+    is also why this one is permanent.
     """
     point = SinusoidalSolver.capabilities.refusal("knot_feeds")
-    galerkin = SinusoidalGalerkinSolver.capabilities.refusal("knot_feeds")
-    assert point and galerkin and point != galerkin
-    # The point-matched sentence must name the RIGHT failure: a gap at a knot
-    # point-samples to nothing (momwire#177), which is not the delta-on-a-
-    # match-point pairing problem (#212). Told the latter, a reader goes
-    # looking for a regularization that #212 §17 already exhausted.
+    assert point
     assert "point-samples to nothing" in point and "#177" in point
     assert "undefined" not in point
-    assert "not yet" in galerkin
-    assert "#648" in galerkin
-    # And the served families say nothing at all, which is what None means.
-    assert BSplineSolver.capabilities.refusal("knot_feeds") is None
-    assert RazorSolver.capabilities.refusal("knot_feeds") is None
+    # The Galerkin family and every tent-basis family now say nothing at all,
+    # which is what None means.
+    for cls in (SinusoidalGalerkinSolver, BSplineSolver, RazorSolver):
+        assert cls.capabilities.refusal("knot_feeds") is None, cls

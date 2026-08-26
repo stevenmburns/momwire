@@ -35,6 +35,7 @@ Scope (deliberately narrow):
     independently, with no inter-wire junction entries.
 """
 
+import math
 from collections import namedtuple
 from dataclasses import dataclass
 
@@ -968,7 +969,21 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # whose center is closest to the requested arclength (default:
         # midpoint of the wire). Primary feed kept as `feed_seg` for
         # back-compat with single-feed callers / fields.
+        #
+        # `feed_xi` is what is LEFT OVER — the requested arclength's offset
+        # from that segment's centre, in metres, signed along the wire's arc.
+        # A caller that names a segment centre gets 0 and nothing changes; a
+        # caller that names a KNOT gets ±h/2 (momwire#648).
+        #
+        # The distinction only reaches the fill under `feed_model="point"`,
+        # and that is not an implementation limit but what the two source
+        # models ARE: a segment gap is E_app spread over one segment, so its
+        # position is that segment and there is no sub-segment offset to
+        # honour. A zero-width gap is a point, and a point can be anywhere.
+        # `SinusoidalGalerkinSolver._drive_columns` reads this; the segment
+        # branch and the whole point-matched family ignore it.
         feed_segs = []
+        feed_xi = []
         for w_f, arc_req, _v in self.feeds:
             first = wire_first_seg[w_f]
             last = wire_last_seg[w_f]
@@ -976,9 +991,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             feed_arc_centers = np.cumsum(feed_h_w) - 0.5 * feed_h_w
             total_arc = float(np.sum(feed_h_w))
             feed_arc = arc_req if arc_req is not None else 0.5 * total_arc
-            feed_segs.append(
-                first + int(np.argmin(np.abs(feed_arc_centers - feed_arc)))
-            )
+            feed_arc = min(max(feed_arc, 0.0), total_arc)
+            pick = int(np.argmin(np.abs(feed_arc_centers - feed_arc)))
+            feed_segs.append(first + pick)
+            feed_xi.append(float(feed_arc - feed_arc_centers[pick]))
         # None with feeds=[] — legal only under junction-port drive (#172).
         feed_seg = feed_segs[0] if feed_segs else None
 
@@ -1066,6 +1082,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "wire_last": wire_last_seg,
             "feed_seg": feed_seg,
             "feed_segs": feed_segs,
+            "feed_xi": feed_xi,
             "ground_minus": ground_minus,
             "ground_plus": ground_plus,
             # Junctions whose node lies in the ground plane: their members are
@@ -4422,10 +4439,18 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
         return float(per_wire.sum()), per_wire
 
-    def _feed_segment_current(self, alpha, seg_view, feed_seg):
-        """Current at centre of a feed segment. I(s_local=0) = Σ_j α_j · σ_j ·
-        (A_jn + C_jn) over bases j whose support includes `feed_seg`
-        (sin(k·0)=0 so B drops out).
+    def _feed_segment_current(self, alpha, seg_view, feed_seg, xi=0.0):
+        """Current at a point on a feed segment, `xi` metres from its centre.
+
+        At the centre (``xi = 0``, every caller before momwire#648) this is
+        I(s_local=0) = Σ_j α_j · σ_j · (A_jn + C_jn) over bases j whose
+        support includes `feed_seg` — sin(k·0) = 0 drops B and cos(k·0) − 1
+        drops the third shape, leaving the one coefficient. Off the centre the
+        other two shapes come back and the full three-term value is evaluated.
+
+        `xi` exists so the readout can follow a point gap that does not sit at
+        a segment centre: under ``feed_model="point"`` the drive column IS this
+        functional, and Y is symmetric only while the two stay the same point.
         """
         s = seg_view["starts"][feed_seg]
         e = seg_view["starts"][feed_seg + 1]
@@ -4433,11 +4458,21 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # correct digits below kΔ ≈ 1e-4 (#606), and this current IS the
         # admittance the port algebra reads — the fill being well-scaled buys
         # nothing if the readout throws the digits away again.
+        sig = seg_view["sigma"][s:e]
+        amp = alpha[seg_view["jbasis"][s:e]]
+        if xi == 0.0:
+            return complex((amp * sig * seg_view["AC"][s:e]).sum())
+        # cos(kξ) − 1 spelled as −2sin²(kξ/2), the same well-scaled shape set
+        # the fill and `_basis_value` use (#203/#606).
+        half = math.sin(0.5 * self.k * xi)
         return complex(
             (
-                alpha[seg_view["jbasis"][s:e]]
-                * seg_view["sigma"][s:e]
-                * seg_view["AC"][s:e]
+                amp
+                * (
+                    sig * seg_view["AC"][s:e]
+                    + seg_view["B"][s:e] * math.sin(self.k * xi)
+                    - 2.0 * sig * seg_view["C"][s:e] * half * half
+                )
             ).sum()
         )
 

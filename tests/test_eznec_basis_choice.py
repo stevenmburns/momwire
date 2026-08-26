@@ -147,29 +147,27 @@ def test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name():
 
     It used to read "no ``current_slopes``", and that sentence went stale the
     day the method landed.  What outlives it is the DRIVE: every deck in this
-    dialect names a node, and this family resolves a ``feeds`` arclength to
-    the nearest segment CENTRE — half a segment away, silently.  Were the
-    charge-table gate the only one, all three entries would have started
-    serving well-formed printouts about a source in the wrong place.
+    dialect names a node, and the point-matched family resolves a ``feeds``
+    arclength to the nearest segment CENTRE — half a segment away, silently.
+    Were the charge-table gate the only one, it would have started serving a
+    well-formed printout about a source in the wrong place.
 
-    The two reasons are different and both are asserted, because a caller who
-    reads "not supported" and a caller who reads "not yet wired up" do
-    different things next.  The point-matched entry's is permanent (there is
-    no collocation pairing for a gap at a knot, #212); the Galerkin pair's is
-    plumbing (#648).
+    ONE entry refuses now, not three, and the shrinking is the arc: momwire#654
+    made the zero-width point gap this family's default and momwire#648 made
+    that gap land at the arclength it was given, so ``sinusoidal-galerkin``
+    serves the corpus.  What is left is the TESTING, and it is permanent — the
+    match points ARE the segment centres, so a delta at a knot point-samples
+    to nothing in every row and the RHS is the unexcited problem (momwire#177).
+    The Galerkin pairing has no such trouble because it tests against a
+    continuous ``f_i``, on which the same delta collapses to −V·f_i(s₀).
     """
-    point, galerkin = "does not place a gap there", "not yet served"
-    for basis, expect in (
-        ("sinusoidal", "Point matching admits no gap at a knot"),
-        ("sinusoidal-galerkin", "not yet served"),
-    ):
-        text = render(deck_text("0010"), basis=basis)
-        assert "NEC ERROR" in text, basis
-        assert point in text, basis
-        assert expect in text, basis
-        # The refusal that USED to fire must not still be the one talking.
-        assert "no such method to read it from" not in text, basis
-    assert galerkin not in render(deck_text("0010"), basis="sinusoidal")
+    text = render(deck_text("0010"), basis="sinusoidal")
+    assert "NEC ERROR" in text
+    assert "does not place a gap there" in text
+    assert "Point matching admits no gap at a knot" in text
+    # Neither refusal that USED to fire may still be the one talking.
+    assert "no such method to read it from" not in text
+    assert "not yet served" not in text
 
 
 def test_razor_now_hosts_the_deck_it_used_to_name_a_refusal_for():
@@ -352,15 +350,18 @@ NEAR_FIELD_AT_A_CONTACT = "asks for the field at (0, 0, 0) metres"
 # Every deck in this dialect drives a NODE, and the sinusoidal family puts a
 # delta gap at the nearest segment CENTRE instead — so all three entries still
 # refuse the whole corpus, and the reason is now the DRIVE rather than the
-# charge table (momwire#611).  The prose differs between the point-matched
-# entry and the Galerkin pair; the fragment below is the part they share, and
-# ``test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name`` above is what
-# tells the two apart.
+# charge table (momwire#611), and it is now the POINT-MATCHED entry's alone.
 #
-# This is the second sentence in this cell, not the first: it used to read
-# "no ``current_slopes``", which stopped being true when #611 added the
-# method.  A refusal that outlives its own reason is the failure mode this
-# per-deck record exists to make visible.
+# This is the third sentence in this cell and the record of the arc is worth
+# reading in one place.  It began as "no ``current_slopes``" — which stopped
+# being true the day momwire#611 added the method.  #611 replaced it with the
+# drive, which was true of all three sinusoidal entries then.  momwire#654 made
+# the zero-width point gap the Galerkin default and momwire#648 made that gap
+# land where it was named, so two of the three entries left this floor
+# entirely and the third has no successor sentence waiting: point matching
+# admits no gap at a knot at all.  A refusal that outlives its own reason is
+# the failure mode this per-deck record exists to make visible, and it has now
+# caught the same cell twice.
 NO_KNOT_FEEDS = "does not place a gap there"
 
 # The cells that RAISE rather than refuse — EMPTY since momwire#609, and kept
@@ -372,17 +373,26 @@ NO_KNOT_FEEDS = "does not place a gap there"
 # checks it, so a new raise anywhere fails here rather than being absorbed.
 RAISED = frozenset()
 
-_SINUSOIDAL = ("sinusoidal", "sinusoidal-galerkin")
+# The K >= 3 apex decks reach a refusal one step EARLIER than the knot drive:
+# a five-wire apex needs a series source at the node itself, `_check_basis_can_host`
+# asks for `node_gaps` before it asks where a delta gap would land, and the
+# point-matched family has no node-gap treatment at all.  Two causes, one
+# entry, and which fires is a property of the DECK — which is exactly what
+# momwire#635 made this record per-deck to be able to say.
+NO_NODE_GAPS = "has no node-gap treatment"
+
+_POINT_MATCHED = ("sinusoidal",)
 
 
 def _row(refusals=()):
     """One row over the WHOLE roster: every basis to its cause, or to SERVED.
 
-    The sinusoidal three refuse every deck in the corpus, so they are the
-    row's floor rather than three entries each shape below repeats.
+    ``sinusoidal`` refuses every deck in the corpus, so it is the row's floor
+    rather than an entry each shape below repeats.  It used to be three
+    entries; ``sinusoidal-galerkin`` joined the served set in momwire#648.
     """
     row = dict.fromkeys(BASES, SERVED)
-    row.update(dict.fromkeys(_SINUSOIDAL, NO_KNOT_FEEDS))
+    row.update(dict.fromkeys(_POINT_MATCHED, NO_KNOT_FEEDS))
     row.update(refusals)
     return row
 
@@ -393,6 +403,11 @@ def _row(refusals=()):
 # membership is a one-line diff.  A shape whose last deck leaves goes with it,
 # as ``NOT_ARRAYBLOCK`` and then ``NOT_RAZOR`` both did.
 EVERY_BASIS = _row()
+# 0013 and 0033, the two five-wire apexes.  Every basis that carries a node
+# port serves them — including `sinusoidal-galerkin`, which is why momwire#611
+# wanted it here and momwire#648 delivered it — and the one that does not
+# refuses for that rather than for the drive.
+APEX = _row({"sinusoidal": NO_NODE_GAPS})
 # Including the sinusoidal three, which is an ORDERING fact worth having
 # written down: these decks are refused for what they ASK FOR before any basis
 # is asked whether it can host them, so their cells say the near field rather
@@ -418,7 +433,7 @@ ACCEPTS = {
     "0010": EVERY_BASIS,
     "0011": EVERY_BASIS,
     "0012": EVERY_BASIS,
-    "0013": EVERY_BASIS,
+    "0013": APEX,
     "0014": EVERY_BASIS,
     "0015": EVERY_BASIS,
     "0016": EVERY_BASIS,
@@ -438,7 +453,7 @@ ACCEPTS = {
     "0030": EVERY_BASIS,
     "0031": EVERY_BASIS,
     "0032": EVERY_BASIS,
-    "0033": EVERY_BASIS,
+    "0033": APEX,
     "0034": EVERY_BASIS,
     "0035": EVERY_BASIS,
     "0036": EVERY_BASIS,
@@ -511,7 +526,8 @@ def test_the_table_covers_every_capture_and_every_basis():
     for cid, row in ACCEPTS.items():
         assert set(row) == set(BASES), cid
     shapes = (
-        ("EVERY_BASIS", EVERY_BASIS, 77),
+        ("EVERY_BASIS", EVERY_BASIS, 75),
+        ("APEX", APEX, 2),
         ("NO_BASIS", NO_BASIS, 3),
     )
     for name, shape, count in shapes:
@@ -536,21 +552,34 @@ def test_every_basis_that_answers_at_all_accepts_the_same_59():
     rather than weakened to ``<=``, because a subset claim that is really an
     equality invites the gap to reopen unnoticed on the slack side.
 
-    So the corpus now divides in two, not three: the sinusoidal family, which
-    cannot read a CHARGE DENSITY table off its basis and refuses everything,
-    and every other basis, which accepts the same 59.  ``hmatrix``,
-    ``arrayblock`` and the razor family are their own solvers rather than
-    bspline variants — three different bases and two different testing
-    schemes — so their agreeing on the accept SET is a measurement, not a
-    tautology, and it is the property "we accept the same decks" names.
+    So the corpus divides in two: ``sinusoidal``, which refuses everything,
+    and every other basis, which accepts the same 77.  ``hmatrix``,
+    ``arrayblock``, the razor family and now ``sinusoidal-galerkin`` are their
+    own solvers rather than bspline variants — three different bases and three
+    different testing schemes — so their agreeing on the accept SET is a
+    measurement, not a tautology, and it is the property "we accept the same
+    decks" names.
+
+    ``sinusoidal-galerkin`` joined the accepting side in momwire#648, and it is
+    the strongest reading this gate has carried: it shares a BASIS with the one
+    entry that refuses and shares nothing else with the ones it now agrees
+    with.  The dividing line in this dialect is the TESTING, and the accept set
+    is where that shows up as an equality rather than an argument.
     """
     bspline = _accepted_by("bspline")
     assert len(bspline) == 77
-    for basis in ("bspline-d1", "hmatrix", "arrayblock", "razor", "razor-nec5"):
+    for basis in (
+        "bspline-d1",
+        "hmatrix",
+        "arrayblock",
+        "razor",
+        "razor-nec5",
+        "sinusoidal-galerkin",
+    ):
         assert _accepted_by(basis) == bspline, basis
-    assert all(not _accepted_by(basis) for basis in _SINUSOIDAL)
+    assert all(not _accepted_by(basis) for basis in _POINT_MATCHED)
     # The three the whole roster refuses are the corpus's own, not any
-    # formulation's: 62 - 59, and they are the near-field cell.
+    # formulation's: 80 - 77, and they are the near-field cell.
     refused_by_all = set(CAPTURE_IDS) - bspline
     assert refused_by_all == {"0022", "0107", "0112"}
     for cid in refused_by_all:
