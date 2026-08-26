@@ -1,0 +1,9 @@
+CE both wires point at the apex; the charge needs no re-signing
+GW 1 4 -0.2 0. 0. 0. 0. 0. .0005
+GW 2 4 0.2 0. 0. 0. 0. 0. .0005
+GE 0
+EX 0 1 2 0 1.
+FR 0 1 0 0 300. 0
+PQ 0 0 0 0
+XQ
+NX

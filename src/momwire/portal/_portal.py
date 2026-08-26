@@ -535,6 +535,21 @@ _CURRENTS_TABLE_HEADER = (
     "    MAGN        PHASE",
 )
 
+# The charge block, byte for byte out of the oracle. Its indents and column
+# spacing are NOT the currents table's — 34/37 against 27/34, "SEG CENTER"
+# against "SEGM CENTER", "SEG" against "SEGM" over LENGTH — so it is written
+# out rather than derived from the currents header (momwire#652). The DATA
+# rows share the currents row's format exactly, which is why `fmt_current_row`
+# serves both.
+_CHARGE_HEADER = "                                  ------ CHARGE DENSITIES ------"
+_CHARGE_NOTE = "                                     DISTANCES IN WAVELENGTHS"
+_CHARGE_TABLE_HEADER = (
+    "   SEG   TAG    COORDINATES OF SEG CENTER     SEG          CHARGE DENSITY"
+    " (COULOMBS/METER)",
+    "   No:   No:     X         Y         Z       LENGTH     REAL      IMAGINARY"
+    "     MAGN       PHASE",
+)
+
 _POWER_HEADER = "                               ---------- POWER BUDGET ---------"
 
 # A network loss this far under the input power is the RESIDUAL, not a
@@ -932,6 +947,56 @@ class PrintControl:
 
 
 @dataclass(frozen=True)
+class ChargePrintControl:
+    """One ``PQ`` card: whether a run prints ``CHARGE DENSITIES``, and which
+    rows (momwire#652).
+
+    A sibling of :class:`PrintControl` rather than a reuse of it, because the
+    two cards agree on less than they look like they do. Measured against the
+    oracle (``5b4az.ae6ty.1.23``) on a 5-segment dipole, form by form:
+
+    *no ``PQ`` card at all*
+        no charge table. The report is OFF by default, which is the opposite
+        of ``PT``'s table and the reason this class defaults to absent rather
+        than to a permissive row.
+    ``PQ -1``
+        suppressed. The same flag ``PT`` suppresses on — and the only negative
+        one that does: ``PQ -2`` PRINTS, so "negative suppresses" is wrong even
+        though the card's documented default state is "negative".
+    ``PQ -2`` / ``PQ 0`` / ``PQ 1`` / ``PQ 2``
+        the full table.
+    ``PQ <flag> <tag> <first> <last>`` with a real range
+        restricted to that range, for EVERY flag that prints — ``PQ 0 1 2 4``
+        and ``PQ 1 1 2 4`` both print segments 2-4. This is where the two
+        cards genuinely part company: the same shape on ``PT`` prints NOTHING
+        (momwire#655), so :attr:`restricted` here cannot be ``PrintControl``'s.
+        An all-zero range is "no restriction", as it is on ``PT``.
+
+    It is a persistent TOGGLE, like ``PT`` and for the same reason: measured
+    over two ``FR``/``XQ`` pairs, one ``PQ 0`` ahead of both prints two charge
+    blocks, and a ``PQ -1`` between them prints one.
+    """
+
+    flag: int
+    tag: int = 0
+    first: int = 0
+    last: int = 0
+
+    @classmethod
+    def from_card(cls, card: Card) -> ChargePrintControl:
+        return cls(card.i(0), card.i(1), card.i(2), card.i(3))
+
+    @property
+    def prints(self) -> bool:
+        return self.flag != -1
+
+    @property
+    def restricted(self) -> bool:
+        """True whenever a printing card carries a real range — any flag."""
+        return self.prints and bool(self.first or self.last)
+
+
+@dataclass(frozen=True)
 class Multiprocessing:
     """One ``MP`` card: the ae6ty engine's multicore hint. Echoed, then ignored.
 
@@ -1035,6 +1100,11 @@ class ExecuteGroup:
     # reason, and because ``PT`` is a TOGGLE: ``dipole_pt_toggle`` suppresses
     # the first run's table and restores the second's from one deck.
     pt: PrintControl | None = None
+    # The ``PQ`` card in force when this group fired — per group, and a toggle,
+    # for exactly ``PT``'s reasons above. ``None`` is "no card seen", which is
+    # the OFF state: unlike ``PT``'s table, the charge report does not exist
+    # until a card asks for it (momwire#652).
+    pq: ChargePrintControl | None = None
     # EK in force when this group fired. HONOURED since issue #849 (momwire
     # 0.26.0): the solver this group is answered from is built with
     # `extended_kernel=True`, the same O(a²) on-axis tube expansion NEC's card
@@ -1158,6 +1228,7 @@ def parse_deck(body: str) -> PortalDeck:
     sources: list[tuple[int, int, complex]] = []
     multiprocessing: Multiprocessing | None = None
     print_control: PrintControl | None = None
+    charge_control: ChargePrintControl | None = None
     sources_stale = False
 
     for line in body.splitlines():
@@ -1185,6 +1256,8 @@ def parse_deck(body: str) -> PortalDeck:
             multiprocessing = Multiprocessing.from_card(card)
         elif card.mnemonic == "PT":
             print_control = PrintControl.from_card(card)
+        elif card.mnemonic == "PQ":
+            charge_control = ChargePrintControl.from_card(card)
         elif card.mnemonic == "EX":
             # NEC RETAINS the excitation across an execute card: a re-run
             # with no new EX re-drives the previous set (dipole_ek_rearm's
@@ -1212,6 +1285,7 @@ def parse_deck(body: str) -> PortalDeck:
                     report=None if card.mnemonic == "XQ" else card,
                     mp=multiprocessing,
                     pt=print_control,
+                    pq=charge_control,
                     ek=armed.extended_kernel,
                     refilled_partial=armed.refilled_partial,
                     environment=armed.environment,
@@ -2399,6 +2473,10 @@ class DeckSolver:
 
         coeffs = entry["X"] @ (entry["signs"] * v_gap)
         seg_currents = self._segment_currents(entry["solver"], coeffs)
+        # omega from the operator's own wavelength, not from the deck's MHz
+        # field: the two agree, and this is the one the solve ran at.
+        omega = 2.0 * math.pi * C_LIGHT / float(entry["wavelength"])
+        seg_charges = self._segment_charges(entry["solver"], coeffs, omega)
 
         p_in = 0.5 * float(
             sum((volts * np.conj(i_source[p])).real for p, _s, volts in driven)
@@ -2448,6 +2526,7 @@ class DeckSolver:
             if reducer is not None
             else [],
             "segment_currents": seg_currents,
+            "segment_charges": seg_charges,
             "coeffs": coeffs,
             "solver": entry["solver"],
             "p_in": p_in,
@@ -2479,30 +2558,25 @@ class DeckSolver:
         """
         return result["solver"].element_currents(result["coeffs"], subdiv=subdiv)
 
-    def _segment_currents(self, solver, coeffs) -> np.ndarray:
-        """Per NEC segment (global order), the midpoint current signed along
-        the deck's own p1→p2 direction.
+    def _element_match(self, solver):
+        """``(nearest, dirs)`` — which momwire ELEMENT answers each NEC segment.
 
-        momwire walks the translated polylines in its own direction, so a
-        segment the walker traversed backwards carries the opposite current
-        sign; the dot product against the deck wire's direction puts every
-        segment back on NEC's convention.
+        Geometry only: no coefficients, so both readouts that need the map
+        (`_segment_currents` and `_segment_charges`) share one walk and one
+        set of tie-breaks rather than two copies that can drift apart on a
+        crossed deck.
         """
-        knot_currents = solver.currents_at_knots(coeffs)
-        mids, dirs, vals = [], [], []
+        mids, dirs = [], []
         for w_idx, polyline in enumerate(solver.wires_polylines):
             parts = []
             for i, n_e in enumerate(solver.n_per_edge_per_wire[w_idx]):
                 seg = np.linspace(polyline[i], polyline[i + 1], n_e + 1)
                 parts.append(seg if i == 0 else seg[1:])
             knots = np.vstack(parts)
-            cur = np.asarray(knot_currents[w_idx])
             mids.append(0.5 * (knots[1:] + knots[:-1]))
             dirs.append(knots[1:] - knots[:-1])
-            vals.append(0.5 * (cur[1:] + cur[:-1]))
         mids = np.concatenate(mids, axis=0)
         dirs = np.concatenate(dirs, axis=0)
-        vals = np.concatenate(vals, axis=0)
 
         wanted = np.array([s.centre for s in self.segments])
         wanted_dir = np.array([s.direction for s in self.segments])
@@ -2523,12 +2597,70 @@ class DeckSolver:
         fallback = ~np.isfinite(cost).any(axis=1)
         cost[fallback] = d2[fallback]
         nearest = np.argmin(cost, axis=1)
+        return nearest, dirs
+
+    def _element_values(self, solver, per_wire):
+        """Flatten a per-wire, per-KNOT array into one value per element, as
+        the mean of the element's two end knots — momwire's own element
+        convention, and the one `_segment_currents` has always used."""
+        vals = []
+        for w_idx in range(len(solver.wires_polylines)):
+            v = np.asarray(per_wire[w_idx])
+            vals.append(0.5 * (v[1:] + v[:-1]))
+        return np.concatenate(vals, axis=0)
+
+    def _segment_currents(self, solver, coeffs) -> np.ndarray:
+        """Per NEC segment (global order), the midpoint current signed along
+        the deck's own p1→p2 direction.
+
+        momwire walks the translated polylines in its own direction, so a
+        segment the walker traversed backwards carries the opposite current
+        sign; the dot product against the deck wire's direction puts every
+        segment back on NEC's convention.
+        """
+        nearest, dirs = self._element_match(solver)
+        vals = self._element_values(solver, solver.currents_at_knots(coeffs))
         out = np.empty(len(self.segments), dtype=np.complex128)
         for i, seg in enumerate(self.segments):
             j = nearest[i]
             sign = 1.0 if float(np.dot(dirs[j], seg.direction)) >= 0 else -1.0
             out[i] = sign * vals[j]
         return out
+
+    def _segment_charges(self, solver, coeffs, omega: float) -> np.ndarray:
+        """Per NEC segment, the linear charge density at its centre, C/m
+        (momwire#652).
+
+        ``q = −(1/jω)·dI/ds``, read off the basis through `current_slopes`
+        rather than differenced around it — momwire#497's argument, and the
+        same quantity the NEC-5 seam prints.
+
+        **No re-signing, and that is not an oversight.** `_segment_currents`
+        has to flip an element the walker traversed backwards, because the
+        current is a vector component and NEC names its direction. The charge
+        density is a SCALAR and the traversal cancels inside it: on a backwards
+        element momwire reports both ``I → −I`` and ``s → −s``, so ``dI/ds`` —
+        and therefore ``q`` — is the number it already was. Measured on a deck
+        that forces the case (two wires written TOWARD a shared apex, so
+        chaining must reverse one): every segment's charge matches the oracle
+        in sign, tag 1 negative-real and tag 2 positive-real, with magnitudes
+        inside the cross-basis gap the currents table already carries.
+
+        That is a statement about the WALKER, not about the deck. Writing a
+        wire backwards in the deck reverses the ``EX`` drive it carries, which
+        negates the whole solution — the oracle negates identically, and
+        `test_pq_a_reversed_deck_negates_the_charge_the_way_the_oracle_does`
+        pins the pair rather than asserting an invariance that is not there.
+        """
+        nearest, _dirs = self._element_match(solver)
+        centres = []
+        for w_idx in range(len(solver.wires_polylines)):
+            arc = _wire_arc_at_knot(solver, w_idx)
+            centres.append(0.5 * (arc[:-1] + arc[1:]))
+        slopes = solver.current_slopes(coeffs, centres)
+        flat = np.concatenate([np.asarray(s) for s in slopes], axis=0)
+        charges = -flat / (1j * omega)
+        return np.asarray([charges[nearest[i]] for i in range(len(self.segments))])
 
 
 # --------------------------------------------------------------------------
@@ -3277,6 +3409,42 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: dict) -> list[str]
     return out
 
 
+def _wire_arc_at_knot(solver, w_idx: int) -> np.ndarray:
+    """Cumulative arc length at every knot of one meshed wire, metres.
+
+    Built from the same knot walk `_element_match` uses, so the arc positions
+    handed to `current_slopes` name the same elements the segment map matched
+    (momwire#652). A polyline wire accumulates across its edges, which is why
+    this is a cumulative sum rather than an even division of the whole.
+    """
+    polyline = solver.wires_polylines[w_idx]
+    parts = []
+    for i, n_e in enumerate(solver.n_per_edge_per_wire[w_idx]):
+        seg = np.linspace(polyline[i], polyline[i + 1], n_e + 1)
+        parts.append(seg if i == 0 else seg[1:])
+    knots = np.vstack(parts)
+    step = np.linalg.norm(np.diff(knots, axis=0), axis=1)
+    return np.concatenate([[0.0], np.cumsum(step)])
+
+
+def _charge_segments(
+    pq: ChargePrintControl | None, solver: DeckSolver
+) -> list[_Segment]:
+    """The ``CHARGE DENSITIES`` rows a ``PQ`` card leaves standing.
+
+    Deliberately not `_printed_segments`: the range is addressed the same way,
+    but WHICH cards restrict is not the same question — ``PQ`` restricts on any
+    printing flag, ``PT`` only on flag 0 (and does something else entirely on
+    the others, momwire#655). Sharing the walk would have meant sharing that,
+    and the two were measured separately for exactly this reason.
+    """
+    if pq is None or not pq.restricted:
+        return solver.segments
+    first = solver.global_segment(*solver.structure.locate(pq.tag, pq.first))
+    last = solver.global_segment(*solver.structure.locate(pq.tag, pq.last))
+    return [s for s in solver.segments if first <= s.number <= last]
+
+
 def _printed_segments(pt: PrintControl | None, solver: DeckSolver) -> list[_Segment]:
     """The CURRENTS AND LOCATION rows a ``PT`` card leaves standing.
 
@@ -3474,6 +3642,24 @@ def _run_block(
                     seg.centre / wavelength,
                     float(np.linalg.norm(seg.direction)) / wavelength,
                     complex(currents[seg.number - 1]),
+                )
+            )
+    # CHARGE DENSITIES sits between the currents table and the power budget,
+    # with two blanks on each side — the oracle's order (momwire#652). It is
+    # OFF unless a `PQ` card asked for it, which is the opposite default from
+    # the table above, so the guard is "a card said print" and not "no card
+    # said suppress".
+    if group.pq is not None and group.pq.prints:
+        charges = result["segment_charges"]
+        out += ["", "", _CHARGE_HEADER, _CHARGE_NOTE, "", *_CHARGE_TABLE_HEADER]
+        for seg in _charge_segments(group.pq, solver):
+            out.append(
+                fmt_current_row(
+                    seg.number,
+                    seg.tag,
+                    seg.centre / wavelength,
+                    float(np.linalg.norm(seg.direction)) / wavelength,
+                    complex(charges[seg.number - 1]),
                 )
             )
     pad = " " * 31

@@ -1312,14 +1312,32 @@ card.
 | negative (`-1` default) | suppress the charge-density report |
 | `0` or greater | print a charge-density report, optionally restricted to `I2`–`I4` |
 
-momwire's printout has no charge-density report to suppress, so the
-suppression form is a no-op: `PQ -1` (and any other negative flag) parses and
-changes nothing. A nonnegative flag is a *request* for the report this
-engine does not produce, and refuses:
+Served in every form since momwire#652. The table is printed between
+`CURRENTS AND LOCATION` and the power budget, one row per segment, in
+coulombs per metre.
 
-```text
-PQ <n> requests a charge-density report this engine does not produce; PQ -1 (suppress) is the only form served
-```
+The flag does not read the way the field name suggests, and the forms were
+measured rather than inferred from `PT`:
+
+| form | effect |
+|---|---|
+| *(no `PQ` card)* | no charge table — the report is OFF by default |
+| `PQ -1` | suppress |
+| `PQ -2`, `PQ 0`, `PQ 1`, `PQ 2` | print |
+| any printing flag with `I2`–`I4` set | print only that range |
+
+So `-1` suppresses but `-2` prints: "negative suppresses" is the wrong
+reading even though the card's documented default state is negative. The
+range is addressed the way an `EX` card addresses a segment — tag-relative,
+with `tag = 0` meaning absolute segment numbers — and an all-zero range is
+"no restriction" rather than "no rows". `PQ` is a persistent toggle, held
+across execute cards until another `PQ` moves it.
+
+Note the range restricts on **any** printing flag, which is where `PQ` and
+`PT` genuinely differ; do not read one card's behaviour off the other.
+
+The quantity is `q = −(1/jω)·dI/ds` at each segment's centre, read off the
+basis through `current_slopes` rather than differenced around it.
 
 ## MP — multiprocessing hint
 
@@ -1435,7 +1453,6 @@ unrecognised NEC card '<XX>'
 | `IS` | `F2 ≠ 0` | `IS with a conductive sheath (F2 != 0) is not modelled by this engine — the insulation jacket is a lossless dielectric; set the sheath conductivity to 0` |
 | `IS` | partial-wire range | `IS: insulation on a partial-wire segment range — per-wire specs cover whole wires only` |
 | `IS` | jacket inside the conductor | `IS: insulation whose outer radius does not exceed the wire's conductor radius` |
-| `PQ` | `I1 >= 0` | `PQ <n> requests a charge-density report this engine does not produce; PQ -1 (suppress) is the only form served` |
 | `MP` | fractional field | `MP field <k> must be an integer, not <v>` |
 | `GW` | `NS < 1` | `segment count must be >= 1, got <n>` |
 | `GW` | radius ≤ 0 | `GW with a non-positive radius announces a tapered wire (GW + GC continuation), which is not part of this engine's nec2 dialect` |

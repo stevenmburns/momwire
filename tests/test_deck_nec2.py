@@ -1029,15 +1029,19 @@ def test_pq_negative_parses_and_solves_identically_to_no_pq_at_all():
     assert with_pq == without_pq
 
 
-def test_pq_nonnegative_refuses_the_missing_charge_report():
-    """§#pq--charge-print-control: ``I1 >= 0`` is a print REQUEST, and this
-    engine produces no charge-density report to print."""
-    with pytest.raises(DeckError) as exc:
-        parse(BODY + "PQ 0\nXQ\nNX\n")
-    assert str(exc.value) == (
-        "PQ 0 requests a charge-density report this engine does not produce; "
-        "PQ -1 (suppress) is the only form served"
-    )
+@pytest.mark.parametrize("flag", ["-2", "-1", "0", "1", "2"])
+def test_pq_is_accepted_in_every_form_and_changes_no_physics(flag):
+    """§#pq--charge-print-control, inverted by momwire#652.
+
+    This test used to assert that ``I1 >= 0`` REFUSES, because the engine had
+    no charge-density report to print. It has one now, so the refusal is gone
+    and what is left is the property that survives it: ``PQ`` selects what is
+    PRINTED and moves nothing in the model. Which is also why the parsed deck
+    records no ``PQ`` state at all — the portal reads the card itself, the way
+    it reads ``PT`` (``momwire.portal._portal.ChargePrintControl``), and the
+    forms are gated there against the oracle.
+    """
+    assert parse(BODY + f"PQ {flag}\nXQ\nNX\n") == parse(BODY + "XQ\nNX\n")
 
 
 def test_mp_is_recorded_per_group_and_changes_nothing():

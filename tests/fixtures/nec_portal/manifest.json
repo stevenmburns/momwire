@@ -3,6 +3,13 @@
   "timing_canonicalized": true,
   "decks": [
     {
+      "name": "apex_pq_reversed_walk",
+      "returncode": 253,
+      "deck_sha256": "dacf5371e2ae826a922fcc71e65305ee2d5a473472af14e9d326c8daddaa83e2",
+      "out_sha256": "3d9f2ad435f7ef1a6fdd90e9f3ede258446b89d461c73401f97a23a68424dad7",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
       "name": "catalog_beams_moxon",
       "returncode": 253,
       "deck_sha256": "cfc7979671af3e4a373ffd6658db7073a75617d9f4a7e115d63a5340229b4937",
@@ -241,6 +248,34 @@
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     },
     {
+      "name": "dipole_pq_absent",
+      "returncode": 253,
+      "deck_sha256": "ccc5dd17a2328d7246c0e0d4cf07078772d409c8fd2c92ef43b1fafd3ab9dbcd",
+      "out_sha256": "4764e81878c6b5dc371c55a97a1d2afb4f897dd0a527f2a53728fcebf6fe7342",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "dipole_pq_charges",
+      "returncode": 253,
+      "deck_sha256": "ed4c019cb4d91e577f9be4fed8fcbc962d5312fe9b77cf92bc184831ee577684",
+      "out_sha256": "ae7c67d46bbb16e89954f3ec7fdff88cd95f1bac6c5d53f22d3f47169f16b0ef",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "dipole_pq_segment_range",
+      "returncode": 253,
+      "deck_sha256": "f47cf93762ecdfa9307658fd7ecf32b65d0a1b943968a73be8e585577b97b992",
+      "out_sha256": "a12714fdf1d127e04423dd94a9f3ae3126c20883e05f66abca32f3d71da4364e",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "dipole_pq_toggle",
+      "returncode": 253,
+      "deck_sha256": "8ae83358ad767bd07d91d6f03dbc94558e18505bae9d294e842626c16849fe64",
+      "out_sha256": "676d3298b2ff92b2c9baa8da8ddf3b0ed91e50439155d6d1df31b1b1f5c21840",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
       "name": "dipole_pt_segment_range",
       "returncode": 253,
       "deck_sha256": "7c089b2c255a33debdc93b17cf97d04b5b0f8dd2affcd964b5027c672eb882ca",
@@ -422,5 +457,6 @@
       "out_sha256": "0e581ca25b9ae2fd5e32477afbc894f0278a8a2a54d20e06e9e497dd60c2e9da",
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     }
-  ]
+  ],
+  "oracle_version_note": "The five *_pq_* / apex_pq_* decks were captured on 5b4az.ae6ty.1.23 (momwire#652); everything else on 1.17. Verified equivalent: 1.23 reproduces every committed 1.17 fixture byte for byte apart from the VERSION banner, which `body_lines` drops, and one uncanonicalized wall-clock line (momwire#656)."
 }

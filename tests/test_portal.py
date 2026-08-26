@@ -1685,6 +1685,126 @@ def currents_tables(text: str) -> list[list[list[str]]]:
     return tables
 
 
+def charge_tables(text: str) -> list[list[list[str]]]:
+    """The CHARGE DENSITIES rows, tokenised, one list per table.
+
+    `currents_tables`' twin, and separate from it because both tables end with
+    the same ``No: No: X`` header line — one walk keyed on that alone would
+    splice the charge rows onto the currents table of the same run.
+    """
+    tables: list[list[list[str]]] = []
+    collecting = False
+    in_charge = False
+    for line in text.splitlines():
+        parts = line.split()
+        if parts[1:3] == ["CHARGE", "DENSITIES"]:
+            tables.append([])
+            collecting, in_charge = False, True
+            continue
+        if parts[1:4] == ["CURRENTS", "AND", "LOCATION"]:
+            collecting, in_charge = False, False
+            continue
+        if in_charge and parts[:3] == ["No:", "No:", "X"]:
+            collecting = True
+            continue
+        if not collecting:
+            continue
+        if len(parts) != 10:
+            collecting = False
+            continue
+        tables[-1].append(parts)
+    return tables
+
+
+# ---------------------------------------------------------------------------
+# PQ — the charge-density report (momwire#652)
+# ---------------------------------------------------------------------------
+#
+# Every claim below was measured against the oracle before it was implemented,
+# because PQ's semantics are NOT PT's and the family resemblance is a trap: the
+# report is OFF by default where PT's table is on, `-2` PRINTS where a reader
+# expects "negative suppresses", and a range restricts on ANY printing flag
+# where PT's does something else entirely (momwire#655).
+
+
+def test_pq_absent_means_no_charge_table_at_all():
+    """The default is OFF, which is the opposite of the currents table's.
+
+    The control deck matters more than it looks: every other PQ test asserts a
+    table appears, and all of them would still pass if the report were printed
+    unconditionally.
+    """
+    for text in (printout("dipole_pq_absent"), fixture_out("dipole_pq_absent")):
+        assert "CHARGE DENSITIES" not in text
+        assert "CURRENTS AND LOCATION" in text
+
+
+def test_pq_prints_the_charge_table_where_the_oracle_does():
+    """Same count, same rows, same segment and tag numbering."""
+    ours = charge_tables(printout("dipole_pq_charges"))
+    theirs = charge_tables(fixture_out("dipole_pq_charges"))
+    assert len(ours) == len(theirs) == 1
+    assert [(r[0], r[1]) for r in ours[0]] == [(r[0], r[1]) for r in theirs[0]]
+    assert len(ours[0]) == 9
+
+
+def test_pq_minus_two_prints_and_minus_one_suppresses():
+    """ "Negative suppresses" is the wrong reading, and this is what says so.
+
+    ``PQ -2`` prints; ``PQ -1`` suppresses. The card's documented default
+    state is negative, which makes the wrong reading an easy one — and it
+    would have made ``dipole_pq_toggle`` print zero tables instead of one.
+    The deck also holds the toggle across two execute cards, so the second
+    run's silence is the ``PQ -1`` between them and not a per-run default.
+    """
+    for text in (printout("dipole_pq_toggle"), fixture_out("dipole_pq_toggle")):
+        assert text.count("CHARGE DENSITIES") == 1
+        assert text.count("ANTENNA INPUT PARAMETERS") == 2
+
+
+def test_pq_restricts_on_a_NONZERO_flag_where_pt_does_not():
+    """``PQ 1 2 1 3`` prints tag 2's segments 1-3 — global 10 to 12.
+
+    Two things at once, and both are PQ's own. The addressing is EX's, so an
+    absolute reading would print 1-3 and still look plausible. And the FLAG is
+    1, not 0: the same shape on ``PT`` is read as "no restriction" today
+    (momwire#655 measures the oracle emptying the table instead), so a PQ
+    written by copying PT's `restricted` would print all 18 rows here.
+    """
+    ours = charge_tables(printout("dipole_pq_segment_range"))
+    theirs = charge_tables(fixture_out("dipole_pq_segment_range"))
+    assert len(ours) == len(theirs) == 1
+    for rows in (ours[0], theirs[0]):
+        assert [(r[0], r[1]) for r in rows] == [("10", "2"), ("11", "2"), ("12", "2")]
+
+
+def test_pq_a_reversed_deck_negates_the_charge_the_way_the_oracle_does():
+    """The walker-reversal case, and what it does and does not claim.
+
+    ``apex_pq_reversed_walk`` writes both wires TOWARD the shared apex, so
+    chaining them into polylines must traverse one backwards. `_segment_charges`
+    applies no re-signing there — the density is a scalar and ``I → −I`` with
+    ``s → −s`` cancels inside ``dI/ds`` — and this is the gate on that: every
+    row's SIGN matches the oracle's, tag 1 negative-real and tag 2 positive.
+
+    It is not a claim that the printed charge is independent of how the deck is
+    written. Reversing a wire reverses the ``EX`` drive it carries and negates
+    the whole solution; the oracle negates identically. What is pinned here is
+    that momwire and the oracle agree about which of those two things is
+    happening.
+    """
+    ours = charge_tables(printout("apex_pq_reversed_walk"))[0]
+    theirs = charge_tables(fixture_out("apex_pq_reversed_walk"))[0]
+    assert len(ours) == len(theirs) == 8
+    for a, b in zip(ours, theirs):
+        assert (a[0], a[1]) == (b[0], b[1])
+        for col in (6, 7):  # REAL, IMAGINARY
+            assert float(a[col]) * float(b[col]) > 0, (a, b)
+    # ...and the two tags carry opposite sign, which is the physics the
+    # re-signing question was about rather than a property of the walk.
+    assert float(ours[0][6]) < 0 < float(ours[-1][6])
+
+
 def test_pt_minus_one_removes_the_whole_currents_section():
     """Not just the rows: the banner, the note, the blank and both column
     headers go too — which is why ``dipole_pt_toggle`` has one CURRENTS AND

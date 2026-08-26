@@ -548,6 +548,70 @@ def _synthetic_decks() -> dict[str, str]:
         "XQ\n"
     )
 
+    # PQ, the charge-density report (momwire#652). Four decks, one per form
+    # the card actually has, because PQ's semantics are NOT PT's and were
+    # measured rather than assumed: the report is OFF until a card asks
+    # (`dipole_pq_absent` is the control), `-1` suppresses while `-2` PRINTS,
+    # a real range restricts on ANY printing flag — which is exactly where it
+    # parts company with PT (momwire#655) — and the card is a persistent
+    # TOGGLE across execute cards like PT is.
+    decks["dipole_pq_absent"] = (
+        "CE no pq card: no charge table at all\n" + _DIPOLE_GW + "GE 0\n"
+        "FR 0 1 0 0 30. 1\n"
+        "EX 0 1 5 0 1.\n"
+        "XQ\n"
+    )
+    decks["dipole_pq_charges"] = (
+        "CE pq prints the charge density table\n" + _DIPOLE_GW + "GE 0\n"
+        "FR 0 1 0 0 30. 1\n"
+        "EX 0 1 5 0 1.\n"
+        "PQ 0 0 0 0\n"
+        "XQ\n"
+    )
+    # `-2` prints and `-1` suppresses, so "negative suppresses" is wrong even
+    # though the card's documented default state is negative. Both forms in
+    # one deck, and the toggle held across the two execute cards.
+    decks["dipole_pq_toggle"] = (
+        "CE pq -2 prints and pq -1 suppresses, across two runs\n"
+        + _DIPOLE_GW
+        + "GW 2 9 1.0 0. -2.5 1.0 0. 2.5 0.001\n"
+        "GE 0\n"
+        "FR 0 1 0 0 30. 1\n"
+        "EX 0 1 5 0 1.\n"
+        "PQ -2 0 0 0\n"
+        "XQ\n"
+        "PQ -1 0 0 0\n"
+        "EX 0 2 5 0 1.\n"
+        "XQ\n"
+    )
+    # The range, on a NONZERO flag — the form PT reads as "no restriction" and
+    # PQ reads as a range. Tag-relative addressing, so tag 2 segments 1-3 are
+    # global 10-12.
+    decks["dipole_pq_segment_range"] = (
+        "CE pq limits the charge table to one tag, on flag 1\n"
+        + _DIPOLE_GW
+        + "GW 2 9 1.0 0. -2.5 1.0 0. 2.5 0.001\n"
+        "GE 0\n"
+        "EX 0 1 5 0 1.\n"
+        "FR 0 1 0 0 30. 1\n"
+        "PQ 1 2 1 3\n"
+        "XQ\n"
+    )
+    # The walker-reversal case: both wires written TOWARD the shared apex, so
+    # chaining must traverse one backwards. The charge needs no re-signing
+    # there (a scalar; I -> -I and s -> -s cancel), and this deck is what says
+    # so against the oracle rather than by derivation.
+    decks["apex_pq_reversed_walk"] = (
+        "CE both wires point at the apex; the charge needs no re-signing\n"
+        "GW 1 4 -0.2 0. 0. 0. 0. 0. .0005\n"
+        "GW 2 4 0.2 0. 0. 0. 0. 0. .0005\n"
+        "GE 0\n"
+        "EX 0 1 2 0 1.\n"
+        "FR 0 1 0 0 300. 0\n"
+        "PQ 0 0 0 0\n"
+        "XQ\n"
+    )
+
     # PT's other live form: `PT 0 <tag> <first> <last>` keeps the table but
     # prints only those segments. The addressing is EX's — tag-relative, with
     # tag 0 meaning absolute segment numbers — so tag 2 segments 1-3 are global
@@ -996,7 +1060,14 @@ PORTAL_CARDS = frozenset(
 # corpus carries a hand-authored fixture for each because the xnec2c corpus's
 # single biggest geometry blocker was `GR`. Catalog decks are still massaged
 # down to `PORTAL_CARDS` — `nec_export` writes no `GX`/`GR` either way.
-FIXTURE_CARDS = PORTAL_CARDS | {"GX", "GR"}
+#
+# `PQ` joins them for the same reason and with the same caveat (momwire#652).
+# The engine serves the card and the corpus carries five hand-authored decks
+# for it, but nothing here has seen NECSource WRITE one — so it stays out of
+# `PORTAL_CARDS`, which would be claiming something about SimNEC's exporter
+# that has not been measured. Move it up if a captured SimNEC deck ever
+# carries one.
+FIXTURE_CARDS = PORTAL_CARDS | {"GX", "GR", "PQ"}
 
 
 def _to_portal_dialect(deck: str) -> str:

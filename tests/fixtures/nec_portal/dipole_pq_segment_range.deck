@@ -1,0 +1,9 @@
+CE pq limits the charge table to one tag, on flag 1
+GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001
+GW 2 9 1.0 0. -2.5 1.0 0. 2.5 0.001
+GE 0
+EX 0 1 5 0 1.
+FR 0 1 0 0 30. 1
+PQ 1 2 1 3
+XQ
+NX
