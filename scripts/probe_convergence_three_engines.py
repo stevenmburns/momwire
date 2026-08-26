@@ -8,11 +8,29 @@ razor-nec5 is its formulation TWIN, so agreeing is faithfulness by
 construction and says nothing about accuracy. The point is what each engine
 does to its OWN answer as the mesh refines.
 
-Measured 2026-08-26 on a 0.476 lambda dipole, free space, N = 5..161:
+Measured 2026-08-26 on a 0.476 lambda dipole, free space, N = 4..160 (the
+ladders are EVEN-N; see the parity section below for why).
 
 The twin's agreement with the licensed engine is inheritance of a
-discretization error, not evidence of correctness. See the two ladders
-below for what that means in segments.
+discretization error, not evidence of correctness. See the ladders below
+for what that means in segments.
+
+WHICH LADDER PRODUCED WHICH PUBLISHED NUMBER
+--------------------------------------------
+There are two self-convergence ladders here and they are NOT interchangeable,
+because they reach the solvers by different routes:
+
+  `seam_ladder()`  — through `parse_nec5` + `_serve.serve`, the route the
+                     EZNEC drop-in takes, scored against each basis's own
+                     N=160 rung.  THIS is what the bundle README and
+                     `reference/eznec-nec5` print.
+  `knot_ladder()`  — the solvers built directly, scored against N=320.
+
+They disagree by about 2x at the coarse end (bs2 2.81 vs 1.54 ohm at N=4)
+and that is not noise: a different reference rung and a different feed
+spelling are two different questions, and an earlier draft of the docs
+labelled the seam numbers with the knot ladder's reference. Whichever is
+quoted, the caption has to name the route AND the rung.
 
 THE FEED MUST BE AT A KNOT, AND THAT DECIDES THE PARITY
 ------------------------------------------------------
@@ -41,23 +59,40 @@ THE LADDER
    20   66.667  -35.880j    67.739 -29.155j       0.0031       6.81
   160   67.670  -29.281j    67.796 -28.340j       0.0029       0.95
 
-The twin reproduces the licensed engine to 0.003 ohm at EVERY density —
-flat, not improving, which is what a twin looks like and says nothing about
-accuracy.
+The twin reproduces the licensed engine to 0.003 ohm from N=20 up and 0.007
+at the coarsest rung — flat, not improving, which is what a twin looks like
+and says nothing about accuracy.
 
 WHICH CONVERGES FASTER
 ----------------------
-`knot_ladder()` scores each basis against ITS OWN N=320 answer, the only way
-to ask the question without nominating one as the truth:
+Both ladders score each basis against ITS OWN converged answer, the only way
+to ask the question without nominating one as the truth.
 
-  segments   bs2 error   razor error
-      4       1.54          80.63
-     20       0.39           7.16
-    240       0.025          0.17
+`seam_ladder()`, through the drop-in's own route, against each basis's N=160
+rung — the numbers the README and the site page print:
 
-Both converge. At a matched mesh the B-spline basis is 20-50x nearer its own
-limit — razor needs ~240 segments for the accuracy bs2 has at 20, the O(1/N)
-walk of razor-blade testing priced in segments.
+  segments   bs2 error   razor error   ratio
+      4       2.8102        80.1436    28.5x
+     20       0.8167         6.6736     8.2x
+     60       0.2466         1.4279     5.8x
+
+`knot_ladder()`, solvers built directly, against N=320:
+
+  segments   bs2 error   razor error   ratio
+      4       1.5433        80.6298    52x
+     20       0.3860         7.1554    18x
+    240       0.0249         0.1693     6.8x
+
+Both converge. At a matched mesh the B-spline basis is 5.8-52x nearer its own
+limit, the O(1/N) walk of razor-blade testing priced in segments. The ratio
+SHRINKS with N in both ladders, so the coarse end is where the choice of basis
+is worth the most.
+
+An earlier draft said "razor needs ~240 segments for the accuracy bs2 has at
+20". It does not: on the knot ladder razor is already at 0.1693 by N=240
+against bs2's 0.3860 at N=20, and interpolating its own rows (0.4815 at 160,
+0.1693 at 240) puts the crossing near N=200 — the right order of magnitude,
+the wrong rung, and only checkable because the row is printed.
 
 NEITHER is converged at a coarse mesh. An earlier draft said bs2 was
 "essentially converged at five segments" from its small STEP sizes; that
@@ -77,10 +112,11 @@ tracks the binary at odd N: it inherits that sensitivity too.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
 
-import numpy as np  # noqa: F401  (used by the local imports below)
+import numpy as np
 
 from momwire.deck._nec5 import parse_nec5
 from momwire.eznec import _serve
@@ -124,13 +160,25 @@ def momwire_z(n, basis):
     return _serve.serve(parse_nec5(deck(n)), basis=basis).sources[0].impedance
 
 
+def nec5_exe():
+    """The licensed binary from ``NEC5_EXE``, or ``None`` — it is OPTIONAL.
+
+    Read through here rather than as ``os.environ[...]`` at the point of use:
+    every function in this file except `main` is binary-free, and a bare
+    KeyError on the first row used to kill the whole script before either
+    self-convergence ladder — the ones the shipped docs quote — printed
+    anything at all.
+    """
+    path = os.environ.get("NEC5_EXE")
+    return os.path.expanduser(path) if path else None
+
+
 def nec5_z(n):
     """Z from the binary's PRINTED voltage and current — V/I, nothing else."""
-    import os
     import subprocess
     import tempfile
 
-    exe = os.path.expanduser(os.environ["NEC5_EXE"])
+    exe = nec5_exe()
     with tempfile.TemporaryDirectory(prefix="nec5conv_") as td:
         (pathlib.Path(td) / "m.nec").write_text(deck(n))
         subprocess.run(
@@ -154,8 +202,7 @@ def nec5_z(n):
 
 
 def main():
-    import pathlib as _p  # noqa: F401
-
+    """The licensed comparison — the ONE lane that needs ``NEC5_EXE``."""
     rows = []
     for n in NS:
         z5 = nec5_z(n)
@@ -182,8 +229,10 @@ def parity_control():
     """Both momwire bases at both parities, feed pinned to the exact centre.
 
     The deck route cannot express this — `EX` names a segment — so the
-    solvers are built directly here.  It is the check that the all-odd ladder
-    above is measuring convergence and not a feed-placement artifact.
+    solvers are built directly here.  It is the check that the even-N ladders
+    above are measuring convergence and not a feed-placement artifact: they
+    are all-even BECAUSE the tent basis feeds at knots, and a ladder whose
+    parity is fixed cannot tell the two apart on its own.
     """
     from momwire import BSplineSolver, RazorSolver
 
@@ -252,7 +301,51 @@ def knot_ladder():
         )
 
 
+def seam_ladder():
+    """The SEAM route, each basis against its own N=160 rung.
+
+    Same route and same decks as `main`'s momwire columns — `parse_nec5` into
+    `_serve.serve` — with the licensed column left out, which is what makes it
+    runnable without the binary.  Its reference is the finest rung of the
+    published ladder rather than a further-out N: the table a reader sees ends
+    at 160, and scoring against a rung nobody printed is a number they cannot
+    check.  `knot_ladder` asks the same question the other way, further out and
+    through the constructors; the two differ by about 2x at the coarse end and
+    the docs must say which they quote.
+    """
+    zb = {n: momwire_z(n, "bspline") for n in NS}
+    zr = {n: momwire_z(n, "razor-nec5") for n in NS}
+    ref = NS[-1]
+    print(f"\n--- seam route, even N, each basis against its OWN N={ref} rung ---")
+    print(
+        f"reference:  bs2 {zb[ref].real:.4f}{zb[ref].imag:+.4f}j   "
+        f"razor {zr[ref].real:.4f}{zr[ref].imag:+.4f}j"
+    )
+    print(
+        f"{'N':>4}  {'bs2':>22}  {'razor-nec5':>22}  {'bs2 err':>9}  {'razor err':>10}"
+    )
+    for n in NS:
+        b, r = zb[n], zr[n]
+        print(
+            f"{n:>4}  {b.real:10.4f}{b.imag:+10.4f}j  {r.real:10.4f}{r.imag:+10.4f}j  "
+            f"{abs(b - zb[ref]):9.4f}  {abs(r - zr[ref]):10.4f}"
+        )
+
+
 if __name__ == "__main__":
-    main()
+    # The binary-free lanes FIRST and unconditionally.  Two of the three
+    # ladders need no licensed engine, they are the ones the bundle README and
+    # the site page quote, and a reader without the binary has to be able to
+    # reproduce what is published — which the old order made impossible by
+    # dying in `main` before any of them printed a row.
+    seam_ladder()
     knot_ladder()
     parity_control()
+    if nec5_exe():
+        main()
+    else:
+        print(
+            "\nNEC5_EXE unset: skipping the licensed-engine ladder. "
+            "The self-convergence ladders above need no binary; set NEC5_EXE "
+            "to the nec5cl path to add the licensed column."
+        )
