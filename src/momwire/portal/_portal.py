@@ -438,7 +438,7 @@ def _banner_lines() -> tuple:
     """The process banner, with the basis recorded in the version tail.
 
     The default basis keeps the exact historical banner (fixture-pinned);
-    a non-default one appends its suffix (`+sg` / `+sgc`) so a session
+    a non-default one appends its suffix (`+sg` / `+razor5`) so a session
     transcript records which physics answered. Only the PRINTOUT banner —
     the `-version` probe line never changes, since SimNEC Double-parses it.
     """
