@@ -4,7 +4,7 @@ Usage::
 
     python scripts/eznec_freeze/smoke.py dist/momwire-eznec/momwire-eznec[.exe]
 
-Three gates, derived from the seam's own contract (momwire#497 U1):
+Four gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the frozen exe's printout must
    equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
@@ -16,28 +16,63 @@ Three gates, derived from the seam's own contract (momwire#497 U1):
    gated; EZNEC launches once per frequency point, so this number is the
    sweep economics (real engine baseline 18–37 ms; one-dir momwire measured
    ~1.3 s on the sitting-4 box).
-4. **Every shipped variant answers in the basis its NAME claims**
-   (momwire#593).  The basis rides on the filename, so this is the gate that
-   makes the bundle's shape a fact rather than an intention — a missing
-   variant fails here, and so does one that silently serves the default.
+4. **Every shipped variant is PRESENT and answers, in the basis its NAME
+   claims** (momwire#593).  The basis rides on the filename, so this is the
+   gate that makes the bundle's shape a fact rather than an intention.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
 CONSISTENT because the banner names whatever actually ran.  Nothing in a
 printout can reveal it, so it has to be caught here, by comparing each exe
-against the module RUN IN THE BASIS THE NAME ASKS FOR — and, so a wrong
-answer cannot pass by coincidence, on a deck where the bases disagree.
+against the module RUN IN THE BASIS THE NAME ASKS FOR.
+
+That comparison has two blind spots, and gate 4 closes both rather than
+trusting it alone:
+
+* **A refusal is byte-equal too.**  Ask a sinusoidal-named copy and both
+  sides print the same ``NEC ERROR``; byte identity then proves the filename
+  was honoured and NOTHING about serving.  So every variant must additionally
+  come back a SOLVE.
+* **A build that shipped no variant at all passes vacuously**, because a
+  glob loop over zero copies runs zero comparisons.  So the set found beside
+  the exe is checked against ``build.py``'s own ``SHIPPED_VARIANTS`` — the
+  list that made them — and a missing one is a named failure.
+
+The anti-coincidence check (a variant must differ from the DEFAULT's answer,
+so a wrong engine behind a right filename cannot pass by accident) is scoped
+to the bases that actually differ on the probe deck.  Several bases render
+0010 identically — bspline, hmatrix and arrayblock are one answer here — and
+requiring those to differ failed a copy that was serving exactly its name.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+HERE = Path(__file__).resolve().parent
+REPO = HERE.parents[1]
 FIXTURES = REPO / "tests" / "fixtures" / "eznec" / "decks"
+
+
+def _shipped_variants() -> tuple[str, ...]:
+    """``build.py``'s list, read from the file whose copy loop makes them.
+
+    Imported by path because ``scripts/`` is not a package, and imported at
+    all rather than restated because a second list is what regresses: the
+    copy loop and the presence gate have to be the same fact, or the gate
+    certifies the shape it was told about instead of the one that shipped.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "eznec_freeze_build", HERE / "build.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.SHIPPED_VARIANTS
+
 
 # Two serving decks spanning the seam's range — a bare-wire rung-1 model and
 # a network-heavy feed system — plus the standing refusal (NE over GN 0).
@@ -45,11 +80,22 @@ SERVE_IDS = ("0010_dipole-in-free-space", "0000_cardioid-l-network-feed")
 REFUSE_ID = "0022_vertical-over-real-ground"
 
 # Gate 4's deck.  0010 is a free-space dipole every basis hosts and on which
-# they DISAGREE — bspline answers 85.073+45.369j where razor-nec5 answers
-# 79.948+29.919j, the licensed engine's own number.  A variant that ignored
-# its filename and served the default would match the wrong column by ~16 ohm
-# and be caught; on a deck where the bases agreed it would pass.
+# the two SHIPPED bases disagree — bspline answers 85.073+45.369j where
+# razor-nec5 answers 79.948+29.919j, the licensed engine's own number.  A
+# razor-nec5 exe that ignored its filename and served the default would match
+# the wrong column by ~16 ohm and be caught.
+#
+# Deliberately the same deck as ``SERVE_IDS[0]`` is NOT relied on: gate 4
+# renders its own default-basis reference below rather than reading gate 1's
+# output file, so moving either list cannot silently disarm the comparison.
 BASIS_DECK = "0010_dipole-in-free-space"
+
+# What a printout looks like when it is an ANSWER rather than a refusal.
+# Both directions are needed: the refusal frame is what the seam prints when
+# a basis cannot host the deck, and its absence alone would also be satisfied
+# by a truncated file.
+SOLVED = "ANTENNA INPUT PARAMETERS"
+REFUSED = "NEC ERROR"
 
 
 def run(cmd: list[str], out: Path) -> float:
@@ -109,10 +155,35 @@ def main() -> int:
     else:
         print(f"ok   {REFUSE_ID}: refusal reached the printout, launch {elapsed:.2f} s")
 
-    # gate 4 — every variant beside the exe answers in its own basis
-    for variant in sorted(exe.parent.glob(f"{exe.stem}-*{exe.suffix}")):
-        basis = variant.stem.split("-", 2)[2]
-        deck = FIXTURES / f"{BASIS_DECK}.nec"
+    # gate 4 — every shipped variant is there, and answers in its own basis
+    deck = FIXTURES / f"{BASIS_DECK}.nec"
+
+    # The default's answer on this deck, rendered HERE through the module's
+    # own default path rather than borrowed from gate 1's file: it is the
+    # reference both halves of gate 4 measure against, and a reference that
+    # exists by coincidence is a gate that disarms itself when a list moves.
+    default_out = work / f"{BASIS_DECK}.default.module.out"
+    run(
+        [sys.executable, "-m", "momwire.eznec", str(deck), str(default_out)],
+        default_out,
+    )
+    default = default_out.read_bytes()
+
+    # Keyed off the exe's OWN stem, so the marker's hyphen count is the exe's
+    # business and not this loop's: `momwire-eznec` -> `razor-nec5`, and a
+    # rename of the bundle does not silently reslice the basis.
+    variants = {
+        v.stem[len(exe.stem) + 1 :]: v
+        for v in sorted(exe.parent.glob(f"{exe.stem}-*{exe.suffix}"))
+    }
+    for basis in _shipped_variants():
+        if basis not in variants:
+            print(f"FAIL {exe.stem}-{basis}{exe.suffix}: shipped variant is MISSING")
+            failures += 1
+
+    # Every copy present is checked, not just the shipped ones: making one is
+    # the documented mechanism, so a copy in the folder is a variant to gate.
+    for basis, variant in variants.items():
         v_out = work / f"{BASIS_DECK}.{basis}.frozen.out"
         m_out = work / f"{BASIS_DECK}.{basis}.module.out"
         run([str(variant), str(deck), str(v_out)], v_out)
@@ -127,12 +198,25 @@ def main() -> int:
             ],
             m_out,
         )
-        if v_out.read_bytes() != m_out.read_bytes():
+        frozen, module = v_out.read_bytes(), m_out.read_bytes()
+        printout = frozen.decode("latin-1")
+        if frozen != module:
             print(f"FAIL {variant.name}: does not answer in basis {basis!r}")
             failures += 1
-        elif v_out.read_bytes() == (work / f"{BASIS_DECK}.frozen.out").read_bytes():
+        elif REFUSED in printout or SOLVED not in printout:
+            print(f"FAIL {variant.name}: {basis!r} REFUSED this deck, it did not serve")
+            failures += 1
+        elif module != default and frozen == default:
             print(f"FAIL {variant.name}: answered as the DEFAULT, not {basis!r}")
             failures += 1
+        elif module == default:
+            # Not a pass by coincidence but a deck that cannot tell these two
+            # apart: several bases render 0010 identically.  The name is
+            # honoured — byte identity above says so — and the ANSWER is
+            # simply not evidence either way.
+            print(
+                f"ok   {variant.name}: answers in {basis!r} (== default on this deck)"
+            )
         else:
             print(f"ok   {variant.name}: answers in {basis!r}, distinct from default")
 
