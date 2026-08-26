@@ -773,7 +773,13 @@ def test_every_family_that_snaps_says_why_and_no_two_say_the_same_thing():
     point = SinusoidalSolver.capabilities.refusal("knot_feeds")
     galerkin = SinusoidalGalerkinSolver.capabilities.refusal("knot_feeds")
     assert point and galerkin and point != galerkin
-    assert "undefined" in point and "not yet" in galerkin
+    # The point-matched sentence must name the RIGHT failure: a gap at a knot
+    # point-samples to nothing (momwire#177), which is not the delta-on-a-
+    # match-point pairing problem (#212). Told the latter, a reader goes
+    # looking for a regularization that #212 §17 already exhausted.
+    assert "point-samples to nothing" in point and "#177" in point
+    assert "undefined" not in point
+    assert "not yet" in galerkin
     assert "#648" in galerkin
     # And the served families say nothing at all, which is what None means.
     assert BSplineSolver.capabilities.refusal("knot_feeds") is None

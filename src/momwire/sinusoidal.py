@@ -200,20 +200,39 @@ _NODE_GAPS_REFUSAL = (
 # refusal to reuse this from, because the snap is not an error in this
 # family's own terms: the segment gap IS the point gap at the only
 # resolution collocation has (`_reject_point_feed_model`, momwire#212).
+#
 # What it is not is the KNOT gap a node-addressing dialect asks for, and
-# under point matching there is no such thing to offer instead — the drive
-# would be E_app at a match point with the source a delta there, and δ·δ is
-# not a number.  So this refusal is PERMANENT for this class, and the
-# Galerkin subclass overrides it with its own (momwire#648), because there
-# the pairing exists and only the plumbing is missing.
+# under point matching there is nothing to offer instead.  TWO DIFFERENT
+# failures live here and it is worth keeping them apart, because only one
+# of them is this cell's:
+#
+#   * a zero-width gap AT a match point — `feed_model="point"` on this
+#     class — is δ(s_m − s₀) with s₀ = s_m, so δ·δ and the pairing is
+#     undefined.  That is `_reject_point_feed_model`'s (momwire#212).
+#   * a zero-width gap at a KNOT is not at a match point at all: the match
+#     points ARE the segment centres and a knot is a segment boundary, so
+#     E_app(s_m) = V·δ(s_m − s₀) = 0 in EVERY row and the RHS is the
+#     unexcited problem.  That is momwire#177's observation — the one
+#     `SinusoidalGalerkinSolver._node_cut_vectors` quotes as "point-samples
+#     to nothing at any collocation point" — and it is this cell's.
+#
+# Either way the refusal is PERMANENT for this class, but a reader who is
+# told δ·δ will go looking for a regularization, and #212 §17 already ran
+# every one of those to its dead end.  Zero rows are not a regularization
+# problem; they are the absence of an excitation.
+#
+# The Galerkin subclass overrides this with its own (momwire#648), because
+# its pairing collapses the same delta to −V·f_i(s₀) and only the plumbing
+# is missing.
 _KNOT_FEEDS_REFUSAL = (
     "knot feeds are not served by SinusoidalSolver: a delta gap in this "
     "family lands on the nearest segment CENTRE, so a source named at a "
     "knot is solved half a segment away from where it was asked for. "
-    "Point matching admits no gap at a knot to offer instead — the drive "
-    "is the applied field sampled AT a match point and a zero-width gap "
-    "there is a delta, so the pairing is undefined (momwire#212). Use "
-    "BSplineSolver or RazorSolver, whose gaps land on the knot named"
+    "Point matching admits no gap at a knot to offer instead — the match "
+    "points are the segment centres, so a delta at a knot point-samples to "
+    "nothing in every row and the RHS is the unexcited problem "
+    "(momwire#177). Use BSplineSolver or RazorSolver, whose gaps land on "
+    "the knot named"
 )
 
 
