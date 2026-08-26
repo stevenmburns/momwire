@@ -22,6 +22,13 @@ inversion — a field-form/mixed-potential boundary term whose licence is "the
 remainder is small") and G-U5-3 for the 2.5-relative-against-1.0e-5 contrast
 that priced it.
 
+The anchors' NUMBERS are nonetheless gated, at `G-U5-12`, as xfails that arm
+themselves the day the refusal comes out. momwire#567's scoping pass found
+that the two decks were only ever asserted as SUBSTRINGS of refusal prose:
+landing the fix would not have satisfied them, and the FAILS-IF-FIXED gate
+at G-U5-3 was loose enough to pass a fix that left the contact row wrong by
+120 %. Both of those are closed here.
+
 The engine-referenced gate that remains is the FULLY buried one, and it did
 not come out where the brief expected either: see `G-U5-8`, which records
 the disagreement as a measurement and pins momwire against three
@@ -35,6 +42,7 @@ import numpy as np
 import pytest
 
 from momwire import (
+    RazorSolver,
     _ground_refl,
     _medium_spec,
     _sommerfeld_below,
@@ -128,10 +136,44 @@ def buried_dipole(n=11, length=1.0, depth=0.15, vertical=True, eps=SOIL_A, free=
 
 def contact_deck(depth=0.15):
     """The phase-0 lone-radial ANCHOR: a contact monopole over a buried
-    radial. Refused — see the module docstring."""
+    radial. Refused — see the module docstring.
+
+    Provenance, against the sentence the refusals print: a 10 m monopole
+    standing 10 → 0 (its lower end IN the plane, which is the contact), one
+    DETACHED 5 m radial 15 cm down, eps_r 13 / sigma 0.005 S/m, 7 MHz. The
+    feed arclength 4.3333 m is the centre of segment 7 of 15, i.e. the
+    engine deck's `EX 4,1,7`.
+    """
     return dict(
         wires=[np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)]), _radial(depth=depth)],
         n_per_edge_per_wire=[[15], [10]],
+        feeds=[(0, 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+
+
+def fan_deck(depth=0.15):
+    """The phase-0 four-radial ANCHOR: `contact_deck`'s monopole over a fan
+    of four detached radials, same soil and same feed site."""
+    wires = [np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)])]
+    npe = [[15]]
+    for direction in ((1, 0), (0, 1), (-1, 0), (0, -1)):
+        wires.append(_radial(depth=depth, direction=direction))
+        npe.append([10])
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        # The four radials all start at (0, 0, -depth) — one buried node, so
+        # one junction. Left undeclared until momwire#590's tripwire surfaced
+        # it, they were solved as four DISCONNECTED wires; the refusal test
+        # never noticed because it only reads the refusal message. The
+        # monopole's own end is 15 cm above at (0, 0, 0) and is correctly not
+        # a member.
+        junctions=[[(1, "start"), (2, "start"), (3, "start"), (4, "start")]],
         feeds=[(0, 4.3333333333, 1 + 0j)],
         wavelength=WL7,
         wire_radius=0.001,
@@ -861,6 +903,9 @@ def test_gu5_8_the_engine_current_tables_disagree_and_that_is_recorded(
 
 # ======================================================================
 # G-U5-9 — the anchors, and the refusal that costs the unit its two decks
+#
+# The refusal is what these tests read. The anchors' NUMBERS are gated at
+# G-U5-12, which arms itself the moment the refusal comes out.
 # ======================================================================
 
 
@@ -876,27 +921,7 @@ def test_gu5_9_the_lone_radial_anchor_refuses_naming_both_gates():
 
 
 def test_gu5_9_the_four_radial_anchor_refuses_the_same_way():
-    wires = [np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)])]
-    npe = [[15]]
-    for direction in ((1, 0), (0, 1), (-1, 0), (0, -1)):
-        wires.append(_radial(direction=direction))
-        npe.append([10])
-    s = BSplineSolver(
-        wires=wires,
-        n_per_edge_per_wire=npe,
-        # The four radials all start at (0, 0, -depth) — one buried node, so
-        # one junction. Left undeclared until momwire#590's tripwire surfaced
-        # it, they were solved as four DISCONNECTED wires; this assertion never
-        # noticed because it only reads the refusal message. The monopole's own
-        # end is 15 cm above at (0, 0, 0) and is correctly not a member.
-        junctions=[[(1, "start"), (2, "start"), (3, "start"), (4, "start")]],
-        feeds=[(0, 4.3333333333, 1 + 0j)],
-        wavelength=WL7,
-        wire_radius=0.001,
-        ground_z=0.0,
-        ground_eps=SOIL_A,
-        ground_model="sommerfeld",
-    )
+    s = BSplineSolver(**fan_deck())
     with pytest.raises(ValueError, match="stands an END in the ground plane"):
         s.compute_impedance()
 
@@ -973,3 +998,111 @@ def test_gu5_11_the_grids_are_shared_across_a_ladder(record_property):
     record_property("cold_s", cold)
     record_property("warm_s", warm)
     assert warm < 0.5 * cold, f"the second rung re-filled a grid: {warm:.1f}s"
+
+
+# ======================================================================
+# G-U5-12 — the two banked anchors, as GATES rather than as strings
+#
+# Until momwire#567's scoping pass, 92.130 - 70.141j and 89.985 - 71.401j
+# existed in this repo only as substrings: three copies of refusal prose in
+# src and four tests asserting that the prose still contains them. Nothing
+# ever compared an impedance to them, so landing the contact+buried fix
+# would not have satisfied them and nobody would have noticed.
+#
+# These gates close that. They go through the FRONT DOOR — no seeded media,
+# no reached-past refusal — so today they hit the refusal and xfail, and the
+# day the refusal comes out they score the deck against the engine without
+# anyone editing this file. That is the whole design: a gate that arms
+# itself is a gate that cannot be forgotten.
+# ======================================================================
+
+# Our licensed NEC-5 engine's printout for the two phase-0 ANCHOR decks,
+# both over eps_r 13 / sigma 0.005 S/m soil at 7 MHz, 10 m contact monopole
+# fed at segment 7 of 15, detached 5 m radials 15 cm down. These are the
+# numbers `_medium_spec._REFUSE_CONTACT_WITH_BURIED` and
+# `eznec._serve._REFUSE_BURIED_WITH_CONTACT` print; the binding is gated
+# below so the constants and the prose cannot drift apart.
+ANCHOR_LONE_RADIAL = 92.130 - 70.141j
+ANCHOR_FOUR_RADIAL = 89.985 - 71.401j
+
+# PROVISIONAL, in absolute ohms, and it should be re-derived rather than
+# inherited. 4.0 is `test_contact_nec5_lane._ENVELOPE["poor"]` — the loosest
+# bar momwire's shipped ground-CONTACT row already lives under, on a plain
+# contact monopole with nothing buried. These decks carry that same contact
+# node PLUS a cross-medium block that does not exist yet, so nothing here
+# can be argued tighter than the contact node's own worst shipped miss, and
+# the number is deliberately not imported: re-deriving the contact lane's
+# envelope should NOT silently move this one. momwire#567 phase 0 measures
+# what agreement is actually achievable; this holds the slot until it does.
+ANCHOR_ENVELOPE_OHM = 4.0
+
+# What each trunk refuses these decks with TODAY, and they are not the same
+# refusal. BSplineSolver has the momwire#553 buried fill and declines only
+# the contact+buried COMBINATION. RazorSolver has no buried fill at all — a
+# wire under `ground_z` is a geometry error there — so its row is a gate on
+# a second, larger gap, and lifting momwire#567 alone will not arm it.
+_TRUNK_REFUSAL = {
+    "bspline": (
+        BSplineSolver,
+        "stands an END in the ground plane",
+        "the contact+buried combination is refused — momwire#567",
+    ),
+    "razor": (
+        RazorSolver,
+        "dips below the ground plane",
+        "razor has no buried fill at all, so a wire under ground_z is a "
+        "geometry error there; momwire#567 alone will not arm this row",
+    ),
+}
+
+_ANCHOR_DECK = {
+    "lone-radial": (contact_deck, ANCHOR_LONE_RADIAL),
+    "four-radial": (fan_deck, ANCHOR_FOUR_RADIAL),
+}
+
+
+def test_gu5_12_the_anchor_constants_are_the_numbers_the_refusals_print():
+    """The constants above and the copies of refusal prose in src are four
+    spellings of two numbers. This is the only test that ties them."""
+    from momwire.eznec import _serve
+
+    for anchor in (ANCHOR_LONE_RADIAL, ANCHOR_FOUR_RADIAL):
+        printed = f"{anchor.real:.3f} - {abs(anchor.imag):.3f}j"
+        assert printed in _medium_spec._REFUSE_CONTACT_WITH_BURIED
+        assert printed in _serve._REFUSE_BURIED_WITH_CONTACT
+
+
+@pytest.mark.parametrize("trunk", sorted(_TRUNK_REFUSAL))
+@pytest.mark.parametrize("deck", sorted(_ANCHOR_DECK))
+def test_gu5_12_the_anchor_deck_answers_what_the_engine_printed(
+    trunk, deck, record_property
+):
+    """The serve gate the two anchors never had.
+
+    It is NOT marked slow, because today it costs a refusal and nothing
+    else. When momwire#567 arms it, each row becomes a full buried solve
+    (~50 s at this scale, G-U5-11) and the marker has to go on then — that
+    is a deliberate item for whoever lifts the refusal, not an oversight
+    here.
+    """
+    solver, refusal, why = _TRUNK_REFUSAL[trunk]
+    build, anchor = _ANCHOR_DECK[deck]
+    try:
+        z, _ = solver(**build()).compute_impedance()
+    except ValueError as exc:
+        assert refusal in str(exc), (
+            f"{trunk} no longer refuses the {deck} anchor with the sentence "
+            f"this gate keys on — it says {str(exc)[:160]!r}. Either the "
+            "deck now serves (delete the try/except and let the anchor "
+            "comparison stand) or the refusal was reworded"
+        )
+        pytest.xfail(f"{trunk} refuses the {deck} anchor: {why}")
+    miss = abs(z - anchor)
+    record_property("momwire_Z", f"{z:.4f}")
+    record_property("engine_Z", f"{anchor:.4f}")
+    record_property("anchor_miss_ohm", float(miss))
+    assert miss <= ANCHOR_ENVELOPE_OHM, (
+        f"{trunk} answers {z:.4f} on the {deck} anchor where the engine "
+        f"prints {anchor:.4f} — {miss:.4f} ohm apart, outside the "
+        f"provisional {ANCHOR_ENVELOPE_OHM:g} ohm envelope"
+    )
