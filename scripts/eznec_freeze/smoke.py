@@ -171,9 +171,12 @@ def main() -> int:
 
     # Keyed off the exe's OWN stem, so the marker's hyphen count is the exe's
     # business and not this loop's: `momwire-eznec` -> `razor-nec5`, and a
-    # rename of the bundle does not silently reslice the basis.
+    # rename of the bundle does not silently reslice the basis.  Casefolded
+    # for the same reason `basis_from_program_name` is — this loop has to read
+    # the name the way the exe reads it, or a `Momwire-Eznec-Razor-Nec5.exe`
+    # that serves correctly is failed here for a casing the exe ignored.
     variants = {
-        v.stem[len(exe.stem) + 1 :]: v
+        v.stem[len(exe.stem) + 1 :].casefold(): v
         for v in sorted(exe.parent.glob(f"{exe.stem}-*{exe.suffix}"))
     }
     for basis in _shipped_variants():
@@ -200,14 +203,20 @@ def main() -> int:
         )
         frozen, module = v_out.read_bytes(), m_out.read_bytes()
         printout = frozen.decode("latin-1")
-        if frozen != module:
+        # momwire#628's own shape first, because it is the most specific
+        # reading of the same bytes: an exe that matched the default's answer
+        # on a deck where the named basis does NOT is an engine that ignored
+        # its filename, and saying so beats saying "differs from the module".
+        # Guarded by `module != default` because that is what makes the deck
+        # able to tell them apart at all.
+        if module != default and frozen == default:
+            print(f"FAIL {variant.name}: answered as the DEFAULT, not {basis!r}")
+            failures += 1
+        elif frozen != module:
             print(f"FAIL {variant.name}: does not answer in basis {basis!r}")
             failures += 1
         elif REFUSED in printout or SOLVED not in printout:
             print(f"FAIL {variant.name}: {basis!r} REFUSED this deck, it did not serve")
-            failures += 1
-        elif module != default and frozen == default:
-            print(f"FAIL {variant.name}: answered as the DEFAULT, not {basis!r}")
             failures += 1
         elif module == default:
             # Not a pass by coincidence but a deck that cannot tell these two
