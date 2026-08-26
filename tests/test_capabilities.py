@@ -13,6 +13,10 @@ against code, not trusted on their own.
 import numpy as np
 import pytest
 
+from momwire.deck._solver import BASES
+from momwire.harrington import HarringtonSolver
+from momwire.pulse import PulseSolver
+
 from momwire import (
     ArrayBlockSolver,
     BSplineSolver,
@@ -53,6 +57,7 @@ _FAKE = Capabilities(
     extended_kernel=False,
     junction_ports=False,
     node_gaps=False,
+    knot_feeds=True,
     per_wire_radius=True,
     singular_enrichment=False,
     refusals={
@@ -679,3 +684,97 @@ def test_hmatrix_inherits_bspline_capabilities():
 
 def test_array_block_inherits_bspline_capabilities():
     assert ArrayBlockSolver.capabilities is BSplineSolver.capabilities
+
+
+# --------------------------------------------------------------------------
+# 7. knot_feeds — the one axis that fails SILENTLY, so it is MEASURED
+# --------------------------------------------------------------------------
+#
+# Every other cell in this module is cross-checked against a raise: ask for
+# the thing, catch the refusal, match it to `capabilities.refusal(cell)`.
+# `knot_feeds` has no raise behind it (momwire#611).  A family that resolves
+# a `feeds` arclength to the nearest segment CENTRE does not complain — it
+# answers half a segment away — so a declaration checked against "does it
+# raise" would be checked against nothing at all.
+#
+# The probe is formulation-independent, which is what lets one loop cover
+# nine roster entries and two off-roster families that share no basis, no
+# testing and no port model.  Drive the centre KNOT of an even-segment
+# dipole: the structure is symmetric about that knot, so |I| comes out
+# symmetric about it if and only if the gap landed there.  Read through
+# `currents_at_knots`, which every family has.
+#
+# Measured separation is twelve orders of magnitude — the honest families sit
+# at ~1e-14 (round-off) and the snapping ones at ~2e-2 to ~1e-1 — so the two
+# thresholds below are nowhere near each other and nothing sits between them.
+#
+# This is also where both knot_feeds refusals' ROUTE is executed (momwire#604
+# class (2)): each of them sends the caller at "BSplineSolver or RazorSolver",
+# and the True branch below is the demonstration that those two land a gap
+# where it was asked for. `test_refusals_name_working_routes.py` scans RAISED
+# messages and these are surfaced through `capabilities.refusal()` instead, so
+# the check belongs here, with the axis it is about.
+
+_KNOT_FED_WIRE = [(0.0, -0.25, 0.0), (0.0, 0.25, 0.0)]
+_KNOT_FED_NSEGS = 12  # EVEN, so the wire's midpoint IS an interior knot
+_KNOT_FED_ARC = 0.25  # that knot, metres from the first anchor
+
+
+def _knot_feed_asymmetry(solver_class, **kwargs):
+    """max||I| − |I| reversed| / max|I| for a dipole driven at its centre knot."""
+    solver = solver_class(
+        wires=[_KNOT_FED_WIRE],
+        nsegs=_KNOT_FED_NSEGS,
+        wavelength=WAVELENGTH,
+        wire_radius=5e-4,
+        feeds=[(0, _KNOT_FED_ARC, 1.0 + 0.0j)],
+        **kwargs,
+    )
+    _z, alpha = solver.compute_impedance()
+    mag = np.abs(np.asarray(solver.currents_at_knots(alpha)[0]))
+    return float(np.max(np.abs(mag - mag[::-1])) / np.max(mag))
+
+
+@pytest.mark.parametrize("basis", sorted(BASES))
+def test_knot_feeds_declaration_matches_where_the_gap_actually_lands(basis):
+    solver_class, basis_kwargs = BASES[basis]
+    asymmetry = _knot_feed_asymmetry(solver_class, **basis_kwargs)
+    if solver_class.capabilities.knot_feeds:
+        assert asymmetry < 1e-10, (basis, asymmetry)
+    else:
+        # Not merely "some asymmetry": the gap is a WHOLE half-segment off,
+        # which on this mesh is a percent-level distortion of the current.
+        assert asymmetry > 1e-3, (basis, asymmetry)
+
+
+@pytest.mark.parametrize("solver_class", [PulseSolver, HarringtonSolver])
+def test_the_off_roster_families_declare_the_snap_they_document(solver_class):
+    """`PulseSolver._feed_basis_indices` says it in prose — "a delta gap lands
+    on a segment and not on a knot, the opposite snap from the tent-basis
+    solvers" — and `HarringtonSolver` inherits it.  Neither is in `BASES`, so
+    neither can reach a seam today; the row is still checked, because the
+    reason to declare a capability is that someone will read it before the
+    roster changes rather than after.
+    """
+    assert not solver_class.capabilities.knot_feeds
+    assert _knot_feed_asymmetry(solver_class) > 1e-3
+
+
+def test_every_family_that_snaps_says_why_and_no_two_say_the_same_thing():
+    """The refusal prose is per-CLASS, not per-axis, and that is deliberate.
+
+    `SinusoidalSolver` cannot ever place a gap at a knot — collocation has no
+    pairing for one (#212) — while `SinusoidalGalerkinSolver` merely does not
+    place one yet, because its test integral admits the delta and only the
+    inherited geometry is in the way (#648).  Same cell, same value, opposite
+    prognoses; a reader who cannot tell them apart cannot decide whether to
+    wait or to switch bases.
+    """
+    point = SinusoidalSolver.capabilities.refusal("knot_feeds")
+    galerkin = SinusoidalGalerkinSolver.capabilities.refusal("knot_feeds")
+    assert point and galerkin and point != galerkin
+    assert "undefined" in point and "not yet" in galerkin
+    assert "#648" in galerkin
+    # And the served families say nothing at all, which is what None means.
+    assert BSplineSolver.capabilities.refusal("knot_feeds") is None
+    assert RazorSolver.capabilities.refusal("knot_feeds") is None

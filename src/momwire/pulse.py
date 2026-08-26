@@ -286,6 +286,7 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         extended_kernel=False,
         junction_ports=False,
         node_gaps=False,
+        knot_feeds=False,
         per_wire_radius=False,
         singular_enrichment=False,
         refusals={

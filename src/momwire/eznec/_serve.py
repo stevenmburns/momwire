@@ -2785,10 +2785,13 @@ def _check_basis_can_host(
     :class:`~momwire._capabilities.Capabilities` row, which exists so a
     consumer stops keeping its own copy of what each family serves.
 
-    Three things a capture actually asks for and some basis cannot give:
+    Four things a capture actually asks for and some basis cannot give:
 
     * a NODE GAP, which only a K >= 3 apex still needs after momwire#603 U1
       (0013 and 0033) and which the razor family has none of;
+    * a gap ON THE KNOT the deck named, which the sinusoidal family does not
+      place — it snaps to the nearest segment centre — and which is the only
+      one of the four whose absence is otherwise SILENT (momwire#611);
     * ground CONTACT over a finite ground, which razor refuses on the
       geometry every base-fed vertical over ``GN 0``/``GD`` writes;
     * an INERT one-segment ``GW`` — one junctioned at neither end, which the
@@ -2811,6 +2814,23 @@ def _check_basis_can_host(
             f"where {len(mesh.junctions[0]) if mesh.junctions else 0} wires "
             f"meet, and basis {basis!r} has no node port: "
             f"{solver_class.capabilities.refusal('node_gaps')}"
+        )
+
+    # Every delta gap this seam writes sits on a KNOT — an interior knot, a
+    # junction's through-current knot, or a grounded wire end at arclength 0
+    # — because that is what a node address means in this dialect.  A family
+    # that resolves a `feeds` arclength to the nearest segment CENTRE answers
+    # half a segment away and raises nothing (momwire#611), which is the one
+    # failure shape a refusal-by-name exists to prevent: the printout would
+    # be well-formed, plausible, and about a different antenna.  Measured
+    # before it was closed: 75 of the 77 servable captures would have moved,
+    # every one of them by exactly 0.500 h.
+    if mesh.feeds and not solver_class.capabilities.knot_feeds:
+        site = mesh.feeds[0]
+        raise ServeRefusal(
+            f"{site.at.tag},{site.at.written} puts a series source AT a node, "
+            f"and basis {basis!r} does not place a gap there: "
+            f"{solver_class.capabilities.refusal('knot_feeds')}"
         )
 
     # A contact site over a ground the solver is given a MEDIUM for — the

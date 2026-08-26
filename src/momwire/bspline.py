@@ -622,6 +622,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         extended_kernel=True,
         junction_ports=True,
         node_gaps=True,
+        knot_feeds=True,
         per_wire_radius=True,
         singular_enrichment=True,
         refusals={

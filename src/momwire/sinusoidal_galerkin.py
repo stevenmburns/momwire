@@ -348,6 +348,27 @@ _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
 )
 
+# NOT the base class's sentence, and the difference is the whole of
+# momwire#648.  `SinusoidalSolver` refuses a knot feed because point
+# matching has no pairing for one — a permanent fact about collocation.
+# Here the pairing EXISTS: the Galerkin test integral collapses a delta at
+# a knot to the drive column −V·f_i(s₀), which is the same mechanism that
+# makes `feed_model="point"` admissible on this class and a node source
+# drivable at all (`_node_cut_vectors`, momwire#177/#192).  What is missing
+# is only the spelling: `feeds` is resolved by the INHERITED
+# `_build_geometry`, which knows one grid and it is the segment centres.
+# So this row is False today and the reason is plumbing, not formulation —
+# and the refusal says which, because a caller who reads "not supported"
+# and a caller who reads "not yet wired up" do different things next.
+_KNOT_FEEDS_REFUSAL = (
+    "knot feeds are not yet served by SinusoidalGalerkinSolver: the "
+    "Galerkin test integral admits a delta gap at a knot — it collapses to "
+    "the drive column -V*f_i(s0) — but `feeds` is still resolved to the "
+    "nearest segment CENTRE by the inherited geometry, so a source named "
+    "at a knot would be solved half a segment away. Tracked as "
+    "momwire#648; until it lands use BSplineSolver or RazorSolver"
+)
+
 # Reused by `_refuse_junction_port_solve` (the raises) and
 # `capabilities.refusals` below — one message per combination, not a copy
 # in each.
@@ -872,6 +893,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # DIVERGENCE, not an unimplemented feature — see
     # `_EK_STEPPED_RADIUS_JUNCTION_REFUSAL`.
     #
+    # `knot_feeds` stays False — the axis is inherited unchanged — but its
+    # PROSE does not: `_KNOT_FEEDS_REFUSAL` here says "not yet plumbed"
+    # where the base says "no such pairing exists" (momwire#611/#655).
+    #
     # `refusals` REPLACES rather than extends, so the base's entries have to
     # be carried across by hand: the contact/refl-coef withdrawal
     # (momwire#282 stage 1) is inherited behaviour — this class's
@@ -883,6 +908,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         junction_ports=True,
         node_gaps=True,
         refusals={
+            "knot_feeds": _KNOT_FEEDS_REFUSAL,
             "junction_ports+finite_ground": _JUNCTION_PORTS_FINITE_GROUND_REFUSAL,
             "junction_ports+mixed_radii": _JUNCTION_PORTS_MIXED_RADII_REFUSAL,
             "contact+refl-coef": SinusoidalSolver.capabilities.refusals[

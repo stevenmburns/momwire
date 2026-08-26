@@ -2,8 +2,8 @@
 
 Stage 0 of `docs/design/solver-architecture.md` §1.4: the axes a solver
 serves — grounds, wire loading, the extended kernel, junction ports, node
-gaps, per-wire radii, singular enrichment — had leaked out of momwire as
-antennaknobs' hand-curated `_GROUND_EPS_SOLVERS` / `_WIRE_LOADING_SOLVERS`
+gaps, knot feeds, per-wire radii, singular enrichment — had leaked out of
+momwire as antennaknobs' hand-curated `_GROUND_EPS_SOLVERS` / `_WIRE_LOADING_SOLVERS`
 tuples. Each solver now carries one `capabilities` class attribute so a
 consumer reads the declaration instead of maintaining its own copy. The
 declaration DESCRIBES; it enforces nothing — every constructor / solve-time
@@ -31,6 +31,7 @@ _AXES = (
     "extended_kernel",
     "junction_ports",
     "node_gaps",
+    "knot_feeds",
     "per_wire_radius",
     "singular_enrichment",
 )
@@ -49,11 +50,25 @@ class Capabilities(NamedTuple):
     """One solver's declared row of the capability matrix.
 
     `grounds` is the subset of ``{"pec", "refl-coef", "sommerfeld"}`` the
-    solver serves — free space is universal and not listed. The six
+    solver serves — free space is universal and not listed. The seven
     booleans are the other axes. `refusals` maps a cell name, or an "a+b"
     combination key, to the reason prose already carried by that solver's
     own refusal (a constructor or solve-time raise) — referenced from
     there, not duplicated here.
+
+    `knot_feeds` is the odd one, because it is the only axis a solver can
+    fail SILENTLY (momwire#611). Every family resolves a ``feeds``
+    arclength onto a grid of its own: the B-spline family integrates the
+    delta at the arclength itself, `RazorSolver._snap_to_knot` moves it to
+    the nearest knot, and the sinusoidal and pulse families move it to the
+    nearest segment CENTRE. A consumer that addresses NODES — the NEC-5
+    dialect is the one in tree — asks for a knot, and the last of those
+    three answers half a segment away without raising anything. So the cell
+    is True when a gap lands on the knot grid the caller named and False
+    when it lands on the segment-centre grid instead; a family that snaps
+    is not broken, it is answering a different question, and this is the
+    axis that says so out loud. `test_capabilities.py` measures the
+    declaration against a symmetry probe rather than trusting it.
     """
 
     grounds: frozenset[str]
@@ -61,6 +76,7 @@ class Capabilities(NamedTuple):
     extended_kernel: bool
     junction_ports: bool
     node_gaps: bool
+    knot_feeds: bool
     per_wire_radius: bool
     singular_enrichment: bool
     refusals: Mapping[str, str]
