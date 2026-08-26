@@ -164,6 +164,43 @@ def buried_no_medium_refusal(w, zmin, ground_z, *, pec):
     return template.format(w=w, zmin=zmin, gz=ground_z)
 
 
+_REFUSE_BURIED_FAR_FIELD = (
+    "RP asks for the far field of a deck with a wire below the ground plane, "
+    "and a buried deck's radiation pattern is not served. The pattern of a "
+    "buried source is the transmitted field's FAR-ZONE asymptotics - a "
+    "saddle-point evaluation of the same integral, with its own lateral-wave "
+    "and critical-angle structure - and momwire#553 built the transmitted "
+    "family over a NEAR-zone tabulation only (2 free-space wavelengths of "
+    "range), so there is nothing here to take a limit of (momwire#570). "
+    "This deck's IMPEDANCE, its CURRENTS and its CHARGES are all served: "
+    "drop the RP "
+    "card, or lift the wire above z = 0"
+)
+
+
+def buried_far_field_refusal():
+    """The buried-radiation-pattern sentence — read by BOTH front ends.
+
+    It lives here rather than in either dialect because the obstruction is
+    the PHYSICS's and not the printout's: momwire#553 tabulated the
+    transmitted family over a near-zone range only, so neither seam has a
+    far-zone limit to take and neither can acquire one without the other.
+    Two copies of that sentence would be two sentences to keep equal, which
+    is the defect momwire#567 found in a pair of banked impedances.
+
+    The NEC-5 seam has refused this since momwire#553; the NEC-2 portal
+    SERVED it — summing the upper medium's wavenumber with a
+    Fresnel-reflected image, so a buried element contributed as though it
+    radiated in air from a point underground.  That printed a plausible
+    pattern rather than failing: -20.55 dB at theta 60 and -25.72 dB at 75
+    for a 5 m wire 0.5 m under a ``GN 2`` interface at 14 MHz, only the
+    grazing sample floored to -999.99, and a POWER BUDGET claiming 100 %
+    efficiency for a wire dissipating in soil.  momwire#570 is where the
+    real answer is tracked.
+    """
+    return _REFUSE_BURIED_FAR_FIELD
+
+
 def wire_media(polylines, ground_z, *, lower_medium, pec):
     """One label per wire — `ABOVE` or `BELOW` — or a named `ValueError`.
 
