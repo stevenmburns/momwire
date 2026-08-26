@@ -356,6 +356,45 @@ is the design point rather than a global raise: 192 points on every pair would
 be ruinous, and the spike exists only where an observer sits over a source
 segment's near-coincident image.
 
+WHAT THE RE-RUN MEASURED (2026-08-26 — main, #630 and #633 both in)
+-------------------------------------------------------------------
+Everything above was measured at ``n_qp_sommerfeld = 3``: no mode here passes
+a quadrature kwarg, so the same invocations on a main that carries the
+remainder keying ask whether round 5's two leftover findings were separate
+defects or #510 at its worst half-spaces.  They were #510.
+
+``--mode epsr --heights 1.09e-4`` over the fine window — **the razor-only
+ε_r ≈ 3.1 pole is DEAD.**  |err| Ω, pre → post:
+
+  eps_r          2.5     2.9     3.0    3.05     3.1     3.2     3.6    13.0
+  pre          563.6  1650.9  2480.3  3002.4  3343.9  2797.1   939.6    63.9
+  post         0.155   0.195   0.204   0.208   0.213   0.220   0.251   0.620
+
+No magnitude peak, no phase sweep: ratio 0.986–1.004, arg −0.0° to +0.5°,
+monotone across the whole window.  The worst geometry ``--radial-lens`` found
+(L = 60, ε_r 5, the 3600+2678j anti-resonance) goes 4217.2 → 19.8 Ω against a
+true correction of 142+296j.
+
+``--mode sigma`` (hold-eps 5 and 20) / ``--mode soil`` — **the ~116 Ω
+plateau is DEAD.**  Both σ sweeps sit at 0.34–1.96 Ω across five decades of
+conductivity where they used to converge on ~116 from opposite directions;
+the soil mode's ratio column reads 0.983–0.988 on vgood/avg/poor/diel (diel
+was 61×).
+
+**What survives is sea water alone**: at σ = 5 (tan δ ≈ 2000) the correction
+still overshoots — 1.637 (+8.5°), a 15.6 Ω miss on a 23.4 Ω Δ_true at the
+native height — easing to 1.247 at 1e-3 λ and clean (0.973) by 3e-3.  Both σ
+sweeps show its onset: ≤ 1.03 Ω through σ = 3e-2, then 1.9 Ω at σ = 0.1 and
+climbing.  Geometry-only keying (``len/R_min``) cannot see the image
+sharpening at skin-depth scale, which is the shape of the hypothesis filed as
+**momwire#647**.  It is a residual, not the plateau: the plateau was
+soil-INDEPENDENT, this is σ-monotone on one soil.
+
+Also banked in #647: post-fix the ratio sits at 0.983–0.988 — a uniform
+~1.3 % UNDERSHOOT of the correction — on nearly every half-space and height.
+Far inside every envelope; noted for whoever chases the last fraction of an
+ohm.
+
 Runs the binary in every mode but ``theta``, ``matrix`` and ``nqp``, so:
 antennaknobs venv, ``NEC5_EXE`` set.
 
