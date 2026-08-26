@@ -313,6 +313,114 @@
       "printout": "printouts/0048_vertical-over-real-ground.out"
     },
     {
+      "id": "0059",
+      "title": "Back yard inverted vee",
+      "deck": "decks/0059_back-yard-inverted-vee.nec",
+      "printout": "printouts/0059_back-yard-inverted-vee.out"
+    },
+    {
+      "id": "0060",
+      "title": "Back yard inverted vee",
+      "deck": "decks/0060_back-yard-inverted-vee.nec",
+      "printout": "printouts/0060_back-yard-inverted-vee.out"
+    },
+    {
+      "id": "0063",
+      "title": "15m Quad (Ant Book p. 12-2)",
+      "deck": "decks/0063_15m-quad-ant-book-p-12-2.nec",
+      "printout": "printouts/0063_15m-quad-ant-book-p-12-2.out"
+    },
+    {
+      "id": "0064",
+      "title": "15m Quad (Ant Book p. 12-2)",
+      "deck": "decks/0064_15m-quad-ant-book-p-12-2.nec",
+      "printout": "printouts/0064_15m-quad-ant-book-p-12-2.out"
+    },
+    {
+      "id": "0067",
+      "title": "NBS Yagi (ANT. BOOK p. 18-7)",
+      "deck": "decks/0067_nbs-yagi-ant-book-p-18-7.nec",
+      "printout": "printouts/0067_nbs-yagi-ant-book-p-18-7.out"
+    },
+    {
+      "id": "0068",
+      "title": "NBS Yagi (ANT. BOOK p. 18-7)",
+      "deck": "decks/0068_nbs-yagi-ant-book-p-18-7.nec",
+      "printout": "printouts/0068_nbs-yagi-ant-book-p-18-7.out"
+    },
+    {
+      "id": "0069",
+      "title": "W8JK with 0.1 - wavelength sp.",
+      "deck": "decks/0069_w8jk-with-0-1-wavelength-sp.nec",
+      "printout": "printouts/0069_w8jk-with-0-1-wavelength-sp.out"
+    },
+    {
+      "id": "0070",
+      "title": "W8JK with 0.1 - wavelength sp.",
+      "deck": "decks/0070_w8jk-with-0-1-wavelength-sp.nec",
+      "printout": "printouts/0070_w8jk-with-0-1-wavelength-sp.out"
+    },
+    {
+      "id": "0075",
+      "title": "Field Day Special (Jun 84 QST)",
+      "deck": "decks/0075_field-day-special-jun-84-qst.nec",
+      "printout": "printouts/0075_field-day-special-jun-84-qst.out"
+    },
+    {
+      "id": "0076",
+      "title": "Field Day Special (Jun 84 QST)",
+      "deck": "decks/0076_field-day-special-jun-84-qst.nec",
+      "printout": "printouts/0076_field-day-special-jun-84-qst.out"
+    },
+    {
+      "id": "0077",
+      "title": "Field Day Special (Jun 84 QST)",
+      "deck": "decks/0077_field-day-special-jun-84-qst.nec",
+      "printout": "printouts/0077_field-day-special-jun-84-qst.out"
+    },
+    {
+      "id": "0078",
+      "title": "Field Day Special (Jun 84 QST)",
+      "deck": "decks/0078_field-day-special-jun-84-qst.nec",
+      "printout": "printouts/0078_field-day-special-jun-84-qst.out"
+    },
+    {
+      "id": "0079",
+      "title": "K5RP",
+      "deck": "decks/0079_k5rp.nec",
+      "printout": "printouts/0079_k5rp.out"
+    },
+    {
+      "id": "0080",
+      "title": "K5RP",
+      "deck": "decks/0080_k5rp.nec",
+      "printout": "printouts/0080_k5rp.out"
+    },
+    {
+      "id": "0081",
+      "title": "N4PC Loop (CQ, Dec. 1990)",
+      "deck": "decks/0081_n4pc-loop-cq-dec-1990.nec",
+      "printout": "printouts/0081_n4pc-loop-cq-dec-1990.out"
+    },
+    {
+      "id": "0082",
+      "title": "N4PC Loop (CQ, Dec. 1990)",
+      "deck": "decks/0082_n4pc-loop-cq-dec-1990.nec",
+      "printout": "printouts/0082_n4pc-loop-cq-dec-1990.out"
+    },
+    {
+      "id": "0083",
+      "title": "N4PC Loop (CQ, Dec. 1990)",
+      "deck": "decks/0083_n4pc-loop-cq-dec-1990.nec",
+      "printout": "printouts/0083_n4pc-loop-cq-dec-1990.out"
+    },
+    {
+      "id": "0084",
+      "title": "N4PC Loop (CQ, Dec. 1990)",
+      "deck": "decks/0084_n4pc-loop-cq-dec-1990.nec",
+      "printout": "printouts/0084_n4pc-loop-cq-dec-1990.out"
+    },
+    {
       "id": "0107",
       "title": "Vertical over real ground",
       "deck": "decks/0107_vertical-over-real-ground.nec",
