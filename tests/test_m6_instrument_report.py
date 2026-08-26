@@ -523,7 +523,13 @@ def test_point_gap_drive_is_self_dual():
     # The floor is the FILL's reciprocity floor (8.3e-12, momwire#182 M2), not
     # the port algebra's; the default delta gap sits at ~1e-5 here.
     assert asym < 1e-9, asym
-    Y_gap = SinusoidalGalerkinSolver(**two_feeds).compute_y_matrix()
+    # The contrast is the SEGMENT gap, named rather than inherited: momwire#654
+    # made the point gap this class's default, so a bare construction here
+    # would compare the point gap against itself and the strict `>` below
+    # would be measuring nothing but round-off.
+    Y_gap = SinusoidalGalerkinSolver(
+        **two_feeds, feed_model="segment"
+    ).compute_y_matrix()
     assert abs(Y_gap - Y_gap.T).max() / abs(Y_gap).max() > asym
 
 

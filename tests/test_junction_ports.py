@@ -885,7 +885,7 @@ def test_sg_node_port_is_invariant_under_swapping_the_gap_sides(whisker):
 # --- G5b clause 2: mixed gap + port Y symmetry ---------------------------
 
 
-def _m5b_mixed_y_solver(feed_readout):
+def _m5b_mixed_y_solver(feed_readout, **over):
     """A dipole cut into three, gap-fed on the first third and node-ported at
     BOTH interior nodes — a genuine 3-port with a gap feed in it."""
     ys = [-L_DIP / 2, -L_DIP / 6, L_DIP / 6, L_DIP / 2]
@@ -895,7 +895,7 @@ def _m5b_mixed_y_solver(feed_readout):
         feeds=[(0, L_DIP / 8, 1.0 + 0j)],
         junctions=[[(0, "end"), (1, "start")], [(1, "end"), (2, "start")]],
         node_ports=[(0, (0,), 0.5 + 0j), (1, (0,), -0.5 + 0j)],
-        wavelength=WAVELENGTH, feed_readout=feed_readout,
+        wavelength=WAVELENGTH, feed_readout=feed_readout, **over,
     )  # fmt: skip
 
 
@@ -930,7 +930,13 @@ def test_sg_node_port_full_mixed_y_symmetry_inherits_the_m5_amendment():
     """
     asym = {}
     for ro in ("centre", "variational"):
-        Y = _m5b_mixed_y_solver(ro).compute_y_matrix()
+        # The amendment M5 recorded is the SEGMENT gap's: its drive integrates
+        # E_app over the feed segment, so the centre readout is not its dual.
+        # Named rather than inherited since momwire#654 — under the point-gap
+        # default the drive IS the centre functional and there is no O(h) gap
+        # left to carry, which is that change's whole point and would empty
+        # this test rather than fail it honestly.
+        Y = _m5b_mixed_y_solver(ro, feed_model="segment").compute_y_matrix()
         asym[ro] = np.linalg.norm(Y - Y.T) / np.linalg.norm(Y)
     assert asym["variational"] < 1e-10, asym
     assert 1e-5 < asym["centre"] < 1e-3, asym

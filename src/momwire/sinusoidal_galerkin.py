@@ -688,12 +688,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         Which SOURCE a delta-gap feed applies (junction and node ports are
         unaffected — both are zero-width by construction).
 
-        ``"segment"`` (default) is NEC's and the point-matched sibling's:
-        E_app = V/Δ_m spread over the whole feed segment, so refining the
-        mesh shrinks the source. ``"point"`` is `BSplineSolver`'s zero-width
-        gap, E_app = V·δ(s − s0) at the feed segment's centre; the Galerkin
-        test integral collapses on the delta and the drive column is
-        −V·f_i(s0), i.e. the basis-evaluation vector σ(A+C).
+        ``"point"`` (default since momwire#654) is `BSplineSolver`'s
+        zero-width gap, E_app = V·δ(s − s0); the Galerkin test integral
+        collapses on the delta and the drive column is −V·f_i(s0), i.e. the
+        basis-evaluation vector σ(A+C). ``"segment"`` is NEC's and the
+        point-matched sibling's: E_app = V/Δ_m spread over the whole feed
+        segment, so refining the mesh shrinks the source.
 
         The source model is a third instrument axis, not a refinement of the
         first two (momwire#182 M5, report §6): on the canonical dipole the
@@ -705,11 +705,35 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         gap feeds in it is symmetric to the fill's own reciprocity floor
         under either readout, with none of the M3 payoff traded.
 
-        `"segment"` stays the default because flipping it re-baselines every
-        pinned M2–M4 number (report §16 inventories which), so adoption is a
-        decision to take deliberately per model rather than a silent change
-        of what this solver means. See §6 and §12 follow-up 5 of
-        `docs/sinusoidal-galerkin-instrument-report.md`.
+        **Why `"point"` is the default** (momwire#654). It is not a
+        refinement of `"segment"` but a better answer to the same question:
+        the point gap sits 2.8e-7 / 1.3e-7 from `BSplineSolver` at N=161/321
+        against the segment gap's 2.5e-4 / 1.5e-4, it is exactly self-dual
+        under the default `feed_readout="centre"` so the readout knob stops
+        having consequences at gap feeds, and antennaknobs measures up to
+        992× tighter cross-basis agreement with it on the antennaknobs#478
+        class (momwire#213).
+
+        `"segment"` was the default until #654, for one reason: flipping it
+        re-baselines pinned numbers. It stopped being a good reason once the
+        cost was measured rather than estimated — 31 of 6315 tests, every one
+        of them a test whose SUBJECT is this axis or the payoff comparison,
+        and each fixed by NAMING the source it was silently inheriting. What
+        `"segment"` is still for is the matched control: the M3/M4 payoff
+        gates score this class against `SinusoidalSolver`, which can carry no
+        other source (momwire#212), so those comparisons name it explicitly
+        (`_MATCHED_FEED` in `tests/test_sinusoidal_galerkin.py`, gated by
+        `test_the_payoff_schemes_carry_a_matched_feed_model`). That is what
+        report §17 called "the substantive blocker on ever flipping
+        `feed_model`'s default" — real, and answered by making the control
+        explicit rather than by leaving a default to imply it.
+
+        NEC-2 REPRODUCTION is not this class's job and never was:
+        `SinusoidalSolver` is NEC's formulation — same basis, same point
+        matching, same segment gap — and `tests/test_sinusoidal_bend_nec2_twin.py`
+        is named for it. Galerkin-with-a-segment-gap is neither NEC nor the
+        converged answer; it is a control. See §6, §12 follow-up 5, §16 and
+        §17 of `docs/sinusoidal-galerkin-instrument-report.md`.
 
     `extended_kernel`
         NEC's EK card for this basis (momwire#246). False — the default —
@@ -929,7 +953,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         near_factor=0.5,
         near_correction=True,
         feed_readout="centre",
-        feed_model="segment",
+        feed_model="point",
         node_ports=None,
         node_gaps=None,
         **kwargs,
@@ -3414,7 +3438,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """Unit-voltage Galerkin excitation column per port, (N+P, n_ports),
         ordered [gap feeds…, junction ports…, node ports…].
 
-        Gap feed j, `feed_model="segment"` (default): b_i = -∫ f_i(s)·ŝ·E^app(s)
+        Gap feed j, `feed_model="segment"`: b_i = -∫ f_i(s)·ŝ·E^app(s)
         ds with the delta-gap applied field E^app = 1/Δ_m along +ŝ_m on feed
         segment m and zero elsewhere, so only that segment's support entries
         contribute:
@@ -3436,8 +3460,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         below moves on it; it is folded because leaving one consumer of the
         pair unfolded is how the defect comes back.
 
-        Gap feed j, `feed_model="point"`: E^app = δ(s − s0) at the feed
-        segment's CENTRE, so the test integral collapses on the delta and the
+        Gap feed j, `feed_model="point"` (the default since momwire#654):
+        E^app = δ(s − s0) at the feed segment's CENTRE, so the test integral
+        collapses on the delta and the
         column is just -f_i(s0) = -σ(A+C) — sin(k·0) = 0 kills the B shape and
         cos(k·0) − 1 kills the third, leaving the one folded coefficient
         `AC` the centre readout already reads. Drive and readout are then the
