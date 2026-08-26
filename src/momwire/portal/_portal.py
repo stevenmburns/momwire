@@ -3797,11 +3797,13 @@ def _filename_basis(prog: str) -> str | None:
     """The basis a copy/symlink NAME selects, or None for the plain spelling.
 
     ``momwire-nec2c-<basis>`` — everything after ``nec2c-`` in the program's
-    basename, with a Windows ``.exe`` stripped first. ``momwire-nec2c`` bare
-    (no trailing ``-``) selects nothing; so does any name without the
-    ``nec2c-`` marker (``python -m momwire.portal``, a pytest runner, …).
-    Validation is the caller's: an unknown suffix must fail fast at the
-    probe, exactly like an unknown ``--basis``.
+    basename, case-insensitively, with a Windows ``.exe`` stripped first.
+    ``momwire-nec2c`` bare (no trailing ``-``) selects nothing, and so does
+    any name without the ``nec2c-`` marker (``python -m momwire.portal``, a
+    pytest runner, …). A name ending AT the marker returns ``""``, which is
+    an unknown basis rather than no basis. Validation is the caller's: an
+    unknown suffix must fail fast at the probe, exactly like an unknown
+    ``--basis``.
     """
     return basis_from_program_name(prog, "nec2c-")
 
