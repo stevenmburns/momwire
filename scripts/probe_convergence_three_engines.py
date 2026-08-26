@@ -97,7 +97,8 @@ the wrong rung, and only checkable because the row is printed.
 NEITHER is converged at a coarse mesh. An earlier draft said bs2 was
 "essentially converged at five segments" from its small STEP sizes; that
 conflated step with error. bs2's steps are ~0.1 ohm and its cumulative error
-at four segments is 1.54 ohm. Small steps, many of them.
+at four segments is 1.54 ohm on the knot ladder, 2.81 through the seam.
+Small steps, many of them.
 
 FEED PARITY, CONTROLLED
 -----------------------

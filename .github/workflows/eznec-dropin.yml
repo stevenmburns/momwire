@@ -43,7 +43,11 @@ jobs:
       - run: pip install . "pyinstaller>=6.10,<7"
       - run: python scripts/eznec_freeze/build.py
       # The gate: frozen exe vs `python -m momwire.eznec`, byte-identical on
-      # serving decks (CRLF included), refusal frame present on a refused one.
+      # serving decks (CRLF included), refusal frame present on a refused one,
+      # and every variant build.py shipped present beside it and SERVING the
+      # basis its filename names (momwire#593). This is the only lane that
+      # runs the drop-in as a program at all, so the filename mechanism is
+      # gated here or nowhere.
       - run: python scripts/eznec_freeze/smoke.py dist/momwire-eznec/momwire-eznec.exe
       - name: Zip the bundle
         shell: pwsh
