@@ -42,8 +42,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Which pushes are worth a wheel matrix. Docs- and site-only merges to
+  # main used to pay the full matrices for artifacts nothing consumes from
+  # a docs commit. Anything that is NOT a branch push — a tag, a manual
+  # dispatch — hard-passes through the `|| 'true'` fallback: a RELEASE
+  # build must never hinge on a diff a filter might fail to compute (the
+  # exe-ships-only-on-a-tag trap, from the other side). Keep the filter
+  # identical to ci.yml's `changes` job.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code || 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!site/**'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!scripts/probe_*.py'
+
   build_wheels:
     name: wheels ${{ matrix.os }}
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -248,6 +277,8 @@ jobs:
 
   make_sdist:
     name: sdist
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
