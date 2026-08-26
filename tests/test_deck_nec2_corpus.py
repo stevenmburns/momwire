@@ -263,8 +263,10 @@ def test_corpus_is_the_whole_reference_set():
     idiom decks, which this module covers for free in the half that matters to
     it — ``GN``/``GD`` retention, where the two readers must agree that a
     ``GN`` resets the four second-medium slots a ``GD`` writes; 60 since
-    momwire#487 U2 added the cliff-at-zero deck with the serving flip."""
-    assert len(CORPUS) == 60
+    momwire#487 U2 added the cliff-at-zero deck with the serving flip; 65
+    since momwire#652 captured the five ``PQ`` charge-report decks (one per
+    form the card has, plus the reversed-walk apex)."""
+    assert len(CORPUS) == 65
 
 
 # The corpus is 47 clean exported decks: measured, not one of them has an

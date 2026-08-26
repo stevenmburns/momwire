@@ -569,9 +569,10 @@ def test_the_support_matrix_covers_the_whole_corpus():
     # plus the two `GX`/`GR` fixtures of momwire#415, plus the three network
     # decks momwire#456 phase C un-retired and the four it captured, plus the
     # seven momwire#487 captured for the MININEC-type ground idiom and the
-    # cliff-at-zero deck U2 added to them. The count is written out so a deck
-    # that quietly stops being measured shows up here.
-    assert len(SUPPORTED) == 60
+    # cliff-at-zero deck U2 added to them, plus the five momwire#652 captured
+    # for the `PQ` charge report. The count is written out so a deck that
+    # quietly stops being measured shows up here.
+    assert len(SUPPORTED) == 65
 
 
 @pytest.mark.parametrize(("marker", "deck"), sorted(UNSUPPORTED.items()))

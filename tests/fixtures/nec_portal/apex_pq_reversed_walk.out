@@ -1,0 +1,131 @@
+
+
+
+                               __________________________________________
+                              |                                          |
+                              |  NUMERICAL ELECTROMAGNETICS CODE (nec2c) |
+                              |   Translated to 'C' in Double Precision  |
+                              |__________________________________________|
+
+VERSION:5b4az.ae6ty.1.23
+
+
+
+                               ---------------- COMMENTS ----------------
+                               both wires point at the apex; the charge needs no re-signing
+
+
+
+                               -------- STRUCTURE SPECIFICATION --------
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+  WIRE                                                                                 SEG FIRST  LAST  TAG
+   No:        X1         Y1         Z1         X2         Y2         Z2       RADIUS   No:   SEG   SEG  No:
+     1    -0.20000    0.00000    0.00000    0.00000    0.00000    0.00000    0.00050     4     1     4    1
+     2     0.20000    0.00000    0.00000    0.00000    0.00000    0.00000    0.00050     4     5     8    2
+
+     TOTAL SEGMENTS USED: 8   SEGMENTS IN A SYMMETRIC CELL: 8   SYMMETRY FLAG: 0
+
+
+                               ---------- SEGMENTATION DATA ----------
+                                        COORDINATES IN METERS
+                            I+ AND I- INDICATE THE SEGMENTS BEFORE AND AFTER I
+
+   SEG    COORDINATES OF SEGM CENTER     SEGM    ORIENTATION ANGLES    WIRE    CONNECTION DATA   TAG
+   No:       X         Y         Z      LENGTH     ALPHA      BETA    RADIUS    I-     I    I+   No:
+     1   -0.1750    0.0000    0.0000    0.0500    0.0000    0.0000    0.0005     0     1     2     1
+     2   -0.1250    0.0000    0.0000    0.0500    0.0000    0.0000    0.0005     1     2     3     1
+     3   -0.0750    0.0000    0.0000    0.0500    0.0000    0.0000    0.0005     2     3     4     1
+     4   -0.0250    0.0000    0.0000    0.0500    0.0000    0.0000    0.0005     3     4    -8     1
+     5    0.1750    0.0000    0.0000    0.0500    0.0000  180.0000    0.0005     0     5     6     2
+     6    0.1250    0.0000    0.0000    0.0500    0.0000  180.0000    0.0005     5     6     7     2
+     7    0.0750    0.0000    0.0000    0.0500    0.0000  180.0000    0.0005     6     7     8     2
+     8    0.0250    0.0000    0.0000    0.0500    0.0000  180.0000    0.0005     7     8    -4     2
+
+
+
+  DATA CARD No:   1 EX   0     1     2     0  1.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+  DATA CARD No:   2 FR   0     1     0     0  3.00000E+02  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+  DATA CARD No:   3 PQ   0     0     0     0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+  DATA CARD No:   4 XQ   0     0     0     0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+
+                               --------- FREQUENCY --------
+                                FREQUENCY : 3.0000E+02 MHz
+                                WAVELENGTH: 9.9933E-01 Mtr
+
+                        APPROXIMATE INTEGRATION EMPLOYED FOR SEGMENTS 
+                        THAT ARE MORE THAN 1.000 WAVELENGTHS APART
+
+
+                          ------ STRUCTURE IMPEDANCE LOADING ------
+                                 THIS STRUCTURE IS NOT LOADED
+
+
+                            -------- ANTENNA ENVIRONMENT --------
+                            FREE SPACE
+
+
+                             ---------- MATRIX TIMING ----------
+                               FILL: 0 msec  FACTOR: 0 msec
+
+
+                        --------- ANTENNA INPUT PARAMETERS ---------
+  TAG   SEG       VOLTAGE (VOLTS)         CURRENT (AMPS)         IMPEDANCE (OHMS)        ADMITTANCE (MHOS)     POWER
+  No:   No:     REAL      IMAGINARY     REAL      IMAGINARY     REAL      IMAGINARY    REAL       IMAGINARY   (WATTS)
+    1     2  1.0000E+00  0.0000E+00  5.2495E-04  2.5549E-03  7.7162E+01 -3.7555E+02  5.2495E-04  2.5549E-03  2.6247E-04
+
+
+                           -------- CURRENTS AND LOCATION --------
+                                  DISTANCES IN WAVELENGTHS
+
+   SEG  TAG    COORDINATES OF SEGM CENTER     SEGM    ------------- CURRENT (AMPS) -------------
+   No:  No:       X         Y         Z      LENGTH     REAL      IMAGINARY    MAGN        PHASE
+     1    1   -0.1751    0.0000    0.0000   0.05003  2.0885E-04  1.0009E-03  1.0224E-03   78.213
+     2    1   -0.1251    0.0000    0.0000   0.05003  5.2495E-04  2.5549E-03  2.6083E-03   78.389
+     3    1   -0.0751    0.0000    0.0000   0.05003  7.4118E-04  2.9182E-03  3.0108E-03   75.749
+     4    1   -0.0250    0.0000    0.0000   0.05003  8.5279E-04  2.9194E-03  3.0414E-03   73.716
+     5    2    0.1751    0.0000    0.0000   0.05003 -2.0766E-04 -5.5556E-04  5.9310E-04 -110.495
+     6    2    0.1251    0.0000    0.0000   0.05003 -5.2283E-04 -1.4595E-03  1.5503E-03 -109.709
+     7    2    0.0751    0.0000    0.0000   0.05003 -7.3941E-04 -2.1721E-03  2.2945E-03 -108.799
+     8    2    0.0250    0.0000    0.0000   0.05003 -8.5211E-04 -2.6698E-03  2.8025E-03 -107.701
+
+
+                                  ------ CHARGE DENSITIES ------
+                                     DISTANCES IN WAVELENGTHS
+
+   SEG   TAG    COORDINATES OF SEG CENTER     SEG          CHARGE DENSITY (COULOMBS/METER)
+   No:   No:     X         Y         Z       LENGTH     REAL      IMAGINARY     MAGN       PHASE
+     1    1   -0.1751    0.0000    0.0000   0.05003 -2.0091E-11  4.0394E-12  2.0493E-11  168.632
+     2    1   -0.1251    0.0000    0.0000   0.05003 -1.0083E-11  2.8142E-12  1.0468E-11  164.405
+     3    1   -0.0751    0.0000    0.0000   0.05003 -1.1152E-12  1.7603E-12  2.0838E-12  122.356
+     4    1   -0.0250    0.0000    0.0000   0.05003  1.2810E-12  5.9624E-13  1.4130E-12   24.959
+     5    2    0.1751    0.0000    0.0000   0.05003  1.0975E-11 -4.0197E-12  1.1688E-11  -20.116
+     6    2    0.1251    0.0000    0.0000   0.05003  8.5689E-12 -2.8120E-12  9.0185E-12  -18.168
+     7    2    0.0751    0.0000    0.0000   0.05003  6.5002E-12 -1.7686E-12  6.7365E-12  -15.221
+     8    2    0.0250    0.0000    0.0000   0.05003  4.0115E-12 -6.0996E-13  4.0576E-12   -8.646
+
+
+                               ---------- POWER BUDGET ---------
+                               INPUT POWER   =  2.6247E-04 Watts
+                               RADIATED POWER=  2.6247E-04 Watts
+                               STRUCTURE LOSS=  0.0000E+00 Watts
+                               NETWORK LOSS  =  0.0000E+00 Watts
+                               EFFICIENCY    =  100.00 Percent
+
+
+
+  DATA CARD No:   5 NX   0     0     0     0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+
+                               __________________________________________
+                              |                                          |
+                              |  NUMERICAL ELECTROMAGNETICS CODE (nec2c) |
+                              |   Translated to 'C' in Double Precision  |
+                              |__________________________________________|
+
+VERSION:5b4az.ae6ty.1.23
+
+ERROR-NEC2C: nec2c: Error reading input file - aborting

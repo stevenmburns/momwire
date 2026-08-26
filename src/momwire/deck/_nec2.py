@@ -790,18 +790,14 @@ class _Nec2Parser:
         """``PQ`` — charge-density print control (spec ``#pq--charge-print-
         control``).
 
-        ``I1`` (``IPTFLQ``) negative *suppresses* the charge report — the
-        default state, and a no-op here since this engine's printout never
-        had a charge report to suppress.  Nonnegative is a *request* to
-        print one, which this engine does not produce.
+        Accepted in every form since momwire#652, which gave this engine the
+        ``CHARGE DENSITIES`` report the card asks for.  The card selects what
+        is PRINTED and changes nothing about the solve, so the deck model
+        records nothing: the portal reads the card itself, the way it reads
+        ``PT`` (see ``momwire.portal._portal.ChargePrintControl``, which
+        carries the measured form-by-form semantics).
         """
-        flag = card.i(0)
-        if flag < 0:
-            return
-        raise DeckError(
-            f"PQ {flag} requests a charge-density report this engine does "
-            f"not produce; PQ -1 (suppress) is the only form served"
-        )
+        return None
 
     def _multiprocessing_card(self, card: Card) -> tuple[int, int]:
         """``MP`` — advisory, and read strictly: NEC's integer-field reader
