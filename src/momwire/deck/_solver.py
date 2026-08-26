@@ -81,9 +81,11 @@ _C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 
 # The basis roster, spelled as antennaknobs' ``--basis`` names so one string
 # selects the same physics on either side of the portal.  Six solver
-# FAMILIES, nine entries: the extra three are a degree, a feed model and a
-# quadrature rule, not new code paths.  "bspline" is the degree-2 B-spline —
-# the default here as it is there.
+# FAMILIES, eight entries: the extra two are a degree and a quadrature rule,
+# not new code paths.  It was nine until momwire#654 collapsed the two
+# Galerkin spellings into one — the third extra was a FEED MODEL, and a menu
+# with two spellings of one dish is what that issue was about.  "bspline" is
+# the degree-2 B-spline — the default here as it is there.
 #
 # "razor" (momwire#432) is the NEC-5 formulation twin — see
 # ``docs/razor-solver.md``. "razor-nec5" is the quadrature-lane variant
