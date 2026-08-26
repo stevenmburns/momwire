@@ -650,7 +650,7 @@ _REFUSE_BURIED_WITH_CONTACT = (
     "same deck with the monopole lifted 1 m clear of the plane agrees to "
     "1.0e-5 throughout. This engine's own printouts are banked as the gates "
     "phase 2 has to meet - 92.130 - 70.141j ohm for a 10 m monopole over one "
-    "detached 5 m radial 15 cm down, 89.985 - 71.401j ohm for the four-"
+    "detached 5 m radial 15 cm down, 90.051 - 70.731j ohm for the four-"
     "radial fan, both over eps_r 13 / sigma 0.005 S/m soil at 7 MHz. Until "
     "then: raise the above-ground wire clear of z = 0 (an elevated feed over "
     "a buried counterpoise is served), or model the buried structure alone"

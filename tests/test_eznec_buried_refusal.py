@@ -147,7 +147,7 @@ def test_a_contact_wire_plus_a_buried_wire_refuses_with_both_anchors():
     assert r is not None
     assert "stands an END in the ground plane" in r
     assert "92.130 - 70.141j" in r
-    assert "89.985 - 71.401j" in r
+    assert "90.051 - 70.731j" in r
     assert "phase 2" in r
     assert "elevated feed over a buried counterpoise is served" in r
 
