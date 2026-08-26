@@ -122,12 +122,13 @@ bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5
 sinusoidal  sinusoidal-galerkin
 ```
 
-The sinusoidal families cannot answer this dialect — every deck in it
-drives a NODE, and their delta gap lands on the nearest segment CENTRE
-instead, half a segment from where the source was named — and say so by name
-in the printout rather than answering about a different antenna. The reason
-differs between them: point matching has no pairing for a gap at a knot at
-all, while the two Galerkin entries admit one and simply do not spell it yet. A filename matching
+`sinusoidal` cannot answer this dialect — every deck in it drives a NODE, and
+under point matching the match points are the segment centres, so a delta at a
+node point-samples to nothing in every row and there is no excitation left to
+solve. It says so by name in the printout rather than answering about a
+different antenna. `sinusoidal-galerkin` has no such trouble: its test
+integral collapses the same delta to a well-defined drive, and it serves the
+corpus alongside the B-spline and razor families. A filename matching
 no basis does the same: it refuses, names itself and lists what exists, so a
 typo can never be served as the default. The match is case-insensitive, as
 Windows filenames are, so `Momwire-EZNEC-Razor-Nec5.exe` is the twin too.

@@ -2336,21 +2336,32 @@ def test_point_gap_readouts_coincide(n):
     assert spread > 1e-5, spread
 
     # The identity behind it, on an arbitrary current vector rather than on a
-    # solved one: the drive column IS the centre-evaluation functional.
+    # solved one: the drive column IS the evaluation functional AT THE GAP.
+    #
+    # "at the gap" and not "at the segment centre" since momwire#648, and this
+    # deck is where the distinction shows: `_two_feed_dipole` names arclengths
+    # that are not segment centres, so `feed_xi` is non-zero and the readout
+    # has to be asked for the same point the drive was built at. Before #648
+    # the gap was snapped onto the centre and the two spellings coincided by
+    # construction; now they coincide because both name the same position.
     s = SinusoidalGalerkinSolver(
         **_two_feed_dipole(n=n, wavelength=WL, feed_model="point")
     )
     geom = s._build_geometry()
     seg_view = s._basis_coefs(geom, s.k)
     U = s._drive_columns(geom, seg_view, s.k)
+    assert any(xi != 0.0 for xi in geom["feed_xi"]), (
+        "this deck no longer exercises an off-centre gap, so the identity "
+        "below is back to being true by construction"
+    )
     rng = np.random.default_rng(0)
     alpha = rng.standard_normal(geom["n_segs"]) + 1j * rng.standard_normal(
         geom["n_segs"]
     )
     for j, fseg in enumerate(geom["feed_segs"]):
         dual = -(U[:, j] @ alpha)
-        centre = s._feed_segment_current(alpha, seg_view, fseg)
-        assert abs(dual - centre) <= 1e-14 * abs(centre), (j, dual, centre)
+        at_gap = s._feed_segment_current(alpha, seg_view, fseg, geom["feed_xi"][j])
+        assert abs(dual - at_gap) <= 1e-14 * abs(at_gap), (j, dual, at_gap)
 
 
 @pytest.mark.slow

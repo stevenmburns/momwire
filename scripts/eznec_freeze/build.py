@@ -34,10 +34,10 @@ NAME = "momwire-eznec"
 # Two, not the whole eight-name roster, and the reason is the zip.  Each copy
 # adds ~9.5 MB uncompressed; all eight would roughly double a 52 MB download
 # to ship the others, engines almost nobody picks from a file dialog,
-# two of which (the sinusoidal family) refuse every deck in this dialect
-# because their delta gap lands on a segment centre and every deck here
-# drives a node (momwire#611 — it used to be `current_slopes`, until that
-# landed and the real obstruction turned out to be one layer down).  So the
+# one of which (`sinusoidal`) refuses every deck in this dialect, because
+# every deck here drives a node and point matching has no excitation for a
+# source at one (momwire#611/#648 — it was first read as `current_slopes`,
+# then as the feed grid, and is really the testing).  So the
 # bundle carries the PAIR the parity work was about — the default and the
 # NEC-5 twin — and the README says how to make any other, which is a copy.
 SHIPPED_VARIANTS = ("razor-nec5",)
@@ -169,10 +169,9 @@ def main() -> int:
         "  bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5\n"
         "  sinusoidal  sinusoidal-galerkin\n"
         "\n"
-        "(The sinusoidal families cannot answer this dialect — every\n"
-        "deck in it drives a node, and their delta gap lands on the nearest\n"
-        "segment centre instead — and will say so, by name, in the\n"
-        "printout.)\n"
+        "(`sinusoidal` cannot answer this dialect — every deck in it drives\n"
+        "a node, and point matching has no excitation for a source at one —\n"
+        "and will say so, by name, in the printout.)\n"
         "\n"
         "A name that matches no basis is not a silent fallback: it refuses,\n"
         "names itself, and lists the bases that exist.\n"
