@@ -31,6 +31,16 @@ from momwire.deck._nec5 import parse_nec5
 from momwire.eznec._serve import refusal
 from momwire.eznec._shell import render
 
+# The anchors, their envelope and the printed-Z reader all live somewhere
+# else already; two copies of 92.130 - 70.141j would be two numbers to keep
+# equal, which is the defect momwire#567 found in the first place.
+from test_buried_serve_553 import (
+    ANCHOR_ENVELOPE_OHM,
+    ANCHOR_FOUR_RADIAL,
+    ANCHOR_LONE_RADIAL,
+)
+from test_eznec_drive_spelling import input_impedance
+
 GN0 = "GN 0,0,0,0,13.,.005"
 
 
@@ -224,3 +234,59 @@ def test_a_slight_standoff_above_the_plane_serves():
     """1 cm above ground is a legal elevated radial, not a refusal."""
     out = render(deck(0.01, "1,-1", GN0))
     assert "NEC ERROR" not in out
+
+
+# ----------------------------------------------------------------------
+# the two banked anchors, through the DECK route
+# ----------------------------------------------------------------------
+#
+# `test_buried_serve_553`'s G-U5-12 gates the same two decks at the solver
+# API. This is the route a user actually takes, and it can drift from the
+# solver's on its own — a wrong feed segment or a mis-mapped GN card would
+# leave the solver gate green. The constants are imported rather than
+# restated so there is one place to move them.
+
+
+def fan_deck_text():
+    """The four-radial anchor as cards. The radials share (0, 0, -.15), so
+    the deck route joins them itself and no junction is declared here."""
+    radials = "".join(
+        f"GW {i + 2},10,0.,0.,-.15,{5.0 * dx:g},{5.0 * dy:g},-.15,.001\n"
+        for i, (dx, dy) in enumerate(((1, 0), (0, 1), (-1, 0), (0, -1)))
+    )
+    return (
+        "CM four-radial anchor\n"
+        "CE\n"
+        "GW 1,15,0.,0.,10.,0.,0.,0.,.001\n"
+        f"{radials}"
+        "GE 1,-1\n"
+        "FR 0,1,0,0,7.\n"
+        f"{GN0}\n"
+        "EX 4,1,7,0,1.,0.\n"
+        "PQ 0\nXQ 0\nEN\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "text,anchor",
+    [
+        (lambda: deck(-0.15, "1,-1", GN0), ANCHOR_LONE_RADIAL),
+        (fan_deck_text, ANCHOR_FOUR_RADIAL),
+    ],
+    ids=["lone-radial", "four-radial"],
+)
+def test_the_anchor_deck_answers_what_the_engine_printed(text, anchor):
+    """Self-arming, the same shape G-U5-12 has: today the deck route prints
+    a ``NEC ERROR`` and there is no impedance row to read, so the gate
+    checks the refusal is still the contact+buried one and xfails. The day
+    the refusal lifts, ``ANTENNA INPUT PARAMETERS`` appears and the gate
+    scores it — with no edit here."""
+    out = render(text())
+    z = input_impedance(out)
+    if z is None:
+        assert "stands an END in the ground plane" in out
+        pytest.xfail("the deck route refuses this anchor today — momwire#567")
+    assert abs(z - anchor) <= ANCHOR_ENVELOPE_OHM, (
+        f"the deck route answers {z:.4f} where the engine prints "
+        f"{anchor:.4f} — {abs(z - anchor):.4f} ohm apart"
+    )
