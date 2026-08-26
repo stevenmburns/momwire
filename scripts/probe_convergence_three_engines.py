@@ -23,6 +23,29 @@ So on this antenna bs2 at 5 segments is nearer the converged answer than
 NEC-5 at 161, and the twin's agreement at coarse mesh is inheritance of a
 discretization error rather than evidence of correctness.
 
+WHY ALL-ODD N, AND WHY THAT IS NOT A THUMB ON THE SCALE
+-------------------------------------------------------
+`EX` names a SEGMENT, so only an odd segment count puts the source at the
+wire's centre; an even count would feed the BINARY half a segment off-centre
+and corrupt the reference column. The ladder is therefore all-odd, one wire,
+one feed point, all three engines.
+
+That is a choice, so it was CONTROLLED rather than assumed — `parity_control`
+below reruns the two momwire bases at both parities with the feed pinned to
+the exact centre, which the direct constructor allows and a deck cannot ask
+for. Measured:
+
+  * bs2 is parity-INSENSITIVE: 0.35 ohm between N=5 and N=6, 0.025 ohm
+    between 161 and 160. Its flatness is not an odd-N artifact.
+  * razor-nec5 is strongly parity-SENSITIVE at coarse mesh: 22 ohm between
+    N=5 (-91.74j) and N=6 (-69.65j), the two parities converging together
+    only by N ~ 45.
+
+The second is the same phenomenon from another angle — the tent basis with
+razor-blade testing cares a great deal where the feed sits in the mesh, and
+the B-spline basis barely notices — and it is WHY the twin tracks the binary
+at odd N: it inherits that sensitivity along with everything else.
+
 Run:
   NEC5_EXE=~/antennas/NEC5-downloads/nec5-linux/nec5cl \
       /home/smburns/antennas/antennaknobs/.venv/bin/python <this>
@@ -118,5 +141,39 @@ def main():
         )
 
 
+def parity_control():
+    """Both momwire bases at both parities, feed pinned to the exact centre.
+
+    The deck route cannot express this — `EX` names a segment — so the
+    solvers are built directly here.  It is the check that the all-odd ladder
+    above is measuring convergence and not a feed-placement artifact.
+    """
+    import numpy as np
+
+    from momwire import BSplineSolver, RazorSolver
+
+    wires = [np.array([[0.0, -LEN / 2, 0.0], [0.0, LEN / 2, 0.0]])]
+    common = dict(wires=wires, wire_radius=RAD, wavelength=WL, feed_arclength=LEN / 2)
+    print("\n--- parity control: feed at the EXACT centre in both parities ---")
+    print(f"{'N':>4}  {'parity':>5}  {'bs2':>22}  {'razor-nec5':>22}")
+    for n in (5, 6, 21, 20, 45, 44, 161, 160):
+        zb, _ = BSplineSolver(
+            **common,
+            n_per_edge_per_wire=[[n]],
+            degree=2,
+            feed_model="point",
+            feed_wire_index=0,
+        ).compute_impedance()
+        zr, _ = RazorSolver(
+            **common, n_per_edge_per_wire=[[n]], nec5_quadrature=True
+        ).compute_impedance()
+        zb, zr = complex(zb), complex(zr)
+        print(
+            f"{n:>4}  {'odd' if n % 2 else 'even':>5}  "
+            f"{zb.real:10.4f}{zb.imag:+10.4f}j  {zr.real:10.4f}{zr.imag:+10.4f}j"
+        )
+
+
 if __name__ == "__main__":
     main()
+    parity_control()
