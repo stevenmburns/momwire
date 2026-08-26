@@ -103,8 +103,9 @@ numerically open. **The choice is not a coin flip** (measured 2026-08-18):
 On the models where we hold a licensed reference, `razor-nec5` rides the
 licensed engine's own convergence path at the 0.01 % level — it converges
 *along* NEC-5's trajectory, not merely to its endpoint. The refusal
-boundary (no EK, no node gaps, no contact over finite grounds, no K≥3
-ports) is documented in
+boundary — down to K≥3 junction ports alone, now that node gaps
+(momwire#603), the extended kernel, and contact over finite grounds
+(momwire#624) are all served — is documented in
 [`docs/razor-solver.md`](https://github.com/stevenmburns/momwire/blob/main/docs/razor-solver.md),
 each with a named message at construction.
 
