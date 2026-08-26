@@ -16,6 +16,17 @@ Three gates, derived from the seam's own contract (momwire#497 U1):
    gated; EZNEC launches once per frequency point, so this number is the
    sweep economics (real engine baseline 18–37 ms; one-dir momwire measured
    ~1.3 s on the sitting-4 box).
+4. **Every shipped variant answers in the basis its NAME claims**
+   (momwire#593).  The basis rides on the filename, so this is the gate that
+   makes the bundle's shape a fact rather than an intention — a missing
+   variant fails here, and so does one that silently serves the default.
+
+Gate 4 exists because momwire#628 was exactly that bug on the other route:
+a copy named for one engine served another, and the printout was internally
+CONSISTENT because the banner names whatever actually ran.  Nothing in a
+printout can reveal it, so it has to be caught here, by comparing each exe
+against the module RUN IN THE BASIS THE NAME ASKS FOR — and, so a wrong
+answer cannot pass by coincidence, on a deck where the bases disagree.
 """
 
 from __future__ import annotations
@@ -32,6 +43,13 @@ FIXTURES = REPO / "tests" / "fixtures" / "eznec" / "decks"
 # a network-heavy feed system — plus the standing refusal (NE over GN 0).
 SERVE_IDS = ("0010_dipole-in-free-space", "0000_cardioid-l-network-feed")
 REFUSE_ID = "0022_vertical-over-real-ground"
+
+# Gate 4's deck.  0010 is a free-space dipole every basis hosts and on which
+# they DISAGREE — bspline answers 85.073+45.369j where razor-nec5 answers
+# 79.948+29.919j, the licensed engine's own number.  A variant that ignored
+# its filename and served the default would match the wrong column by ~16 ohm
+# and be caught; on a deck where the bases agreed it would pass.
+BASIS_DECK = "0010_dipole-in-free-space"
 
 
 def run(cmd: list[str], out: Path) -> float:
@@ -90,6 +108,33 @@ def main() -> int:
         failures += 1
     else:
         print(f"ok   {REFUSE_ID}: refusal reached the printout, launch {elapsed:.2f} s")
+
+    # gate 4 — every variant beside the exe answers in its own basis
+    for variant in sorted(exe.parent.glob(f"{exe.stem}-*{exe.suffix}")):
+        basis = variant.stem.split("-", 2)[2]
+        deck = FIXTURES / f"{BASIS_DECK}.nec"
+        v_out = work / f"{BASIS_DECK}.{basis}.frozen.out"
+        m_out = work / f"{BASIS_DECK}.{basis}.module.out"
+        run([str(variant), str(deck), str(v_out)], v_out)
+        run(
+            [
+                sys.executable,
+                "-c",
+                "import sys;from momwire.eznec._shell import main;"
+                f"sys.exit(main(sys.argv[1:], basis={basis!r}))",
+                str(deck),
+                str(m_out),
+            ],
+            m_out,
+        )
+        if v_out.read_bytes() != m_out.read_bytes():
+            print(f"FAIL {variant.name}: does not answer in basis {basis!r}")
+            failures += 1
+        elif v_out.read_bytes() == (work / f"{BASIS_DECK}.frozen.out").read_bytes():
+            print(f"FAIL {variant.name}: answered as the DEFAULT, not {basis!r}")
+            failures += 1
+        else:
+            print(f"ok   {variant.name}: answers in {basis!r}, distinct from default")
 
     if failures:
         print(f"{failures} smoke failure(s)")
