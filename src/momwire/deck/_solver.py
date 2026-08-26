@@ -102,11 +102,16 @@ BASES = MappingProxyType(
         "hmatrix": (HMatrixSolver, MappingProxyType({})),
         "arrayblock": (ArrayBlockSolver, MappingProxyType({})),
         "sinusoidal": (SinusoidalSolver, MappingProxyType({})),
+        # ONE Galerkin name (momwire#654). It used to be two, differing only
+        # in `feed_model`, which is a choice a portal user has no way to make
+        # and no reason to be handed: the point gap is better on every axis
+        # that was measured, and it is now this class's default, so the plain
+        # name binds nothing and means it. The flag survives for the callers
+        # who genuinely choose — antennaknobs' web panel renders it, and the
+        # payoff gates name `"segment"` as their matched control — but a
+        # roster entry is a menu item, and this menu had two spellings of one
+        # dish with no way to tell them apart from the outside.
         "sinusoidal-galerkin": (SinusoidalGalerkinSolver, MappingProxyType({})),
-        "sinusoidal-galerkin-converged": (
-            SinusoidalGalerkinSolver,
-            MappingProxyType({"feed_model": "point"}),
-        ),
         "razor": (RazorSolver, MappingProxyType({})),
         "razor-nec5": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
     }

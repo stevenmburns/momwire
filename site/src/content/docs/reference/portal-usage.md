@@ -77,9 +77,8 @@ momwire-nec2c                                # the default — degree-2 B-spline
 momwire-nec2c-bspline-d1                     # the same physics at degree 1 (tent basis)
 momwire-nec2c-razor-nec5                     # the NEC-5 formulation twin, NEC-5 quadrature
 momwire-nec2c-razor                          # the same twin with Gauss-Legendre quadrature
-momwire-nec2c-sinusoidal                     # closest to NEC-2's own formulation
+momwire-nec2c-sinusoidal                     # NEC-2's own formulation
 momwire-nec2c-sinusoidal-galerkin            # the same basis, tested variationally
-momwire-nec2c-sinusoidal-galerkin-converged  # for near-open, high-Q feeds
 momwire-nec2c-hmatrix                        # same physics, hierarchical (ACA) solve
 momwire-nec2c-arrayblock                     # same physics, element-block/FFT solve
 ```

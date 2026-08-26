@@ -31,10 +31,10 @@ NAME = "momwire-eznec"
 # filename (`entry.py`), so a copy is a working engine and costs one stub
 # rather than a second 117 MB runtime.
 #
-# Two, not the whole nine-name roster, and the reason is the zip.  Each copy
-# adds ~9.5 MB uncompressed; all nine would roughly double a 52 MB download
-# to ship the SEVEN others, engines almost nobody picks from a file dialog,
-# three of which (the sinusoidal family) refuse every deck in this dialect
+# Two, not the whole eight-name roster, and the reason is the zip.  Each copy
+# adds ~9.5 MB uncompressed; all eight would roughly double a 52 MB download
+# to ship the others, engines almost nobody picks from a file dialog,
+# two of which (the sinusoidal family) refuse every deck in this dialect
 # because their delta gap lands on a segment centre and every deck here
 # drives a node (momwire#611 — it used to be `current_slopes`, until that
 # landed and the real obstruction turned out to be one layer down).  So the
@@ -167,9 +167,9 @@ def main() -> int:
         "Known bases:\n"
         "\n"
         "  bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5\n"
-        "  sinusoidal  sinusoidal-galerkin  sinusoidal-galerkin-converged\n"
+        "  sinusoidal  sinusoidal-galerkin\n"
         "\n"
-        "(The three sinusoidal families cannot answer this dialect — every\n"
+        "(The sinusoidal families cannot answer this dialect — every\n"
         "deck in it drives a node, and their delta gap lands on the nearest\n"
         "segment centre instead — and will say so, by name, in the\n"
         "printout.)\n"

@@ -162,7 +162,6 @@ def test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name():
     for basis, expect in (
         ("sinusoidal", "Point matching admits no gap at a knot"),
         ("sinusoidal-galerkin", "not yet served"),
-        ("sinusoidal-galerkin-converged", "not yet served"),
     ):
         text = render(deck_text("0010"), basis=basis)
         assert "NEC ERROR" in text, basis
@@ -373,7 +372,7 @@ NO_KNOT_FEEDS = "does not place a gap there"
 # checks it, so a new raise anywhere fails here rather than being absorbed.
 RAISED = frozenset()
 
-_SINUSOIDAL = ("sinusoidal", "sinusoidal-galerkin", "sinusoidal-galerkin-converged")
+_SINUSOIDAL = ("sinusoidal", "sinusoidal-galerkin")
 
 
 def _row(refusals=()):

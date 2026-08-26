@@ -266,7 +266,6 @@ _BANNER_SUFFIXES = {
     "arrayblock": "+ab",
     "sinusoidal": "+sin",
     "sinusoidal-galerkin": "+sg",
-    "sinusoidal-galerkin-converged": "+sgc",
     "razor": "+razor",
     "razor-nec5": "+razor5",
 }
@@ -3770,7 +3769,7 @@ def _selftest(stdout) -> int:
     # decks (with and without the card) preserves the session-survival half of
     # the old gate — a traceback on either would cost its NX sentinel.
     galerkin = _alt(
-        "sinusoidal-galerkin-converged",
+        "sinusoidal-galerkin",
         _SELFTEST_DECKS[0] + _SELFTEST_DECKS[0].replace("EK\n", ""),
     )
     sentinels = sum(
@@ -3782,7 +3781,7 @@ def _selftest(stdout) -> int:
         galerkin.returncode == 0
         and not any(ln.split()[:1] == ["ERROR:"] for ln in galerkin.stdout.splitlines())
         and sentinels == 2
-        and "+sgc" in galerkin.stdout
+        and "+sg" in galerkin.stdout
         and galerkin.stdout.count("ANTENNA INPUT PARAMETERS") == 2
     )
     for name, ok in checks.items():

@@ -119,10 +119,10 @@ only to keep the download small; the other seven are a copy away:
 
 ```text
 bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5
-sinusoidal  sinusoidal-galerkin  sinusoidal-galerkin-converged
+sinusoidal  sinusoidal-galerkin
 ```
 
-The three sinusoidal families cannot answer this dialect — every deck in it
+The sinusoidal families cannot answer this dialect — every deck in it
 drives a NODE, and their delta gap lands on the nearest segment CENTRE
 instead, half a segment from where the source was named — and say so by name
 in the printout rather than answering about a different antenna. The reason
