@@ -64,14 +64,16 @@ capability. Nothing is ever served silently wrong.
   <LinkCard
     title="momwire as SimNEC's engine"
     href="/reference/portal-usage/"
-    description="A drop-in nec2c: nine solvers, one command each, cross-basis validation from SimNEC's own dialog."
+    description="A drop-in nec2c: eight solvers, one command each, cross-basis validation from SimNEC's own dialog."
   />
 </CardGrid>
 
-What answers underneath is one engine with nine formulations — B-splines,
-sinusoids, pulses, and the razor-blade-tested tent basis of NEC-5's own
-class — sharing one kernel, so any deck can be cross-checked across bases
-with one command. On the models where we hold licensed references, the
+What answers underneath is one engine with eight selectable formulations
+over six solver families — B-splines, sinusoids point-matched and tested
+variationally, and the razor-blade-tested tent basis of NEC-5's own class —
+sharing one kernel, so any deck can be cross-checked across bases with one
+command. (A pulse basis is in the library too, as the primer's Act I builds
+one, but it is not on the roster and no front end can select it.) On the models where we hold licensed references, the
 default engine agrees at the sub-percent level, and the in-house NEC-5
 formulation twin rides the licensed engine's own convergence path at the
 0.01 % level. Where it disagrees or cannot answer, it says so by name:

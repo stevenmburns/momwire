@@ -114,8 +114,8 @@ mesh before it is information about either engine.
 yourself works — rename a copy to `momwire-eznec-<basis>.exe`, beside the
 same `_internal`, and that basis answers. This is the same rule the
 [SimNEC portal's](/reference/portal-usage/) `momwire-nec2c-<basis>` commands
-use, with one owner behind both. The bundle ships two rather than all nine
-only to keep the download small; the other seven are a copy away:
+use, with one owner behind both. The bundle ships two rather than all eight
+only to keep the download small; the other six are a copy away:
 
 ```text
 bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5
@@ -154,8 +154,8 @@ Every deck takes exactly one of two paths:
   the capability — and, where there is one, the remedy. Nothing is served
   silently wrong; a refusal sentence is the contract that it never will be.
 
-As of 2026-08-22, 119 of the 122 EZNEC launches in our capture corpus serve;
-the three refusals are one named sentence, about one observation point.
+As of 2026-08-26, 77 of the 80 EZNEC captures in our corpus serve; the three
+refusals are one named sentence, about one observation point.
 
 ## What serves
 
@@ -232,7 +232,7 @@ capability statements rather than deck errors:
 The solver behind the portal is whichever of the two bundled engines you
 pointed EZNEC at, defaulting to momwire's degree-2 B-spline — the same
 physics as [the SimNEC portal's](/reference/portal-usage/) default, where the
-full nine-engine roster and the cross-basis validation workflow are
+full eight-engine roster and the cross-basis validation workflow are
 documented. On the models where we hold a licensed NEC-5 reference, the
 portal's printouts agree with the engine's element for element at the
 sub-percent level, and the in-house NEC-5 formulation twin

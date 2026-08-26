@@ -92,11 +92,14 @@ with a fixed precedence — an explicit `--basis <name>` flag beats the
 filename, and the filename beats a `MOMWIRE_NEC2C_BASIS` environment
 variable; the plain `momwire-nec2c` with neither is the default.
 
-Four axes live in that list. `sinusoidal` and the two Galerkin entries are
+Four axes live in that list. `sinusoidal` and `sinusoidal-galerkin` are
 the **fidelity** ladder: the three-term basis point-matched with NEC's own
 delta-gap source answers "does this reproduce NEC-2's behaviour, mesh walk
-and all", and the Galerkin variants and the B-spline default answer "what
-does a better-converged basis say". There is no `sinusoidal-converged`: a
+and all", and the Galerkin entry and the B-spline default answer "what
+does a better-converged basis say". There was a second Galerkin name until
+momwire#654: it differed only in its feed model, which is not a choice a
+portal dialog can put to you meaningfully, and the better of the two is now
+the plain name's default. There is no `sinusoidal-converged`: a
 zero-width gap has no collocation right-hand side, so the flag does not offer
 a name the solver refuses. `bspline-d1` is the **degree** axis — the same
 B-spline physics at degree 1, so pairing it with the default is the cheapest
@@ -136,7 +139,7 @@ reference](/reference/deck-grammar-nec2/#ek--extended-thin-wire-kernel).
 **Two portal entries differing only in `--basis` give you cross-basis
 validation inside SimNEC itself.** Switch engines from the dialog and watch
 whether the answer holds. The printout banner records which physics answered
-(`VERSION:nec2c.ae6ty.momwire.9.1+sgc`), and a mistyped basis fails the
+(`VERSION:nec2c.ae6ty.momwire.9.1+sg`), and a mistyped basis fails the
 version probe loudly at configure time rather than serving the default.
 
 ### When the dialog is a file picker
