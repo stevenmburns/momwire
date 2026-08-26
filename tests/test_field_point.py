@@ -24,6 +24,34 @@ subdiv ladder is gated to keep GROWING — a gate that FAILS IF FIXED, because
 a ladder that converged would mean the composition changed and U3's refusal
 sentence needs re-measuring.
 
+*And the reference has no answer either*, which is the half worth reaching
+for first because it costs one comparison and none of our own modelling:
+0022 and 0112 print the same cell to every digit under ``GN 0``, while 0107
+— the same antenna, the same soil, the same point, spelled ``GD`` — prints
+158 V/m less, 19 % of the larger.  A converged field cannot depend on which
+card names the ground, so each printed cell is that spelling's own
+regularization of the same singularity.
+
+**Why the refusal takes the whole run, and why nothing is printed in the
+cell's place** (decided 2026-08-25).  Three alternatives were considered and
+all three lose to a plain refusal, for one reason: **the consumer's parser is
+not ours.**  EZNEC reads ``NEC5.OUT`` and we do not know what its reader
+tolerates, so a sentinel magnitude (``-999.9``), a blank field, a ``NaN`` or
+a row of asterisks are all bets that a foreign parser will notice a value it
+was never specified to receive — and the failure mode of losing that bet is
+a plotted artefact presented as data, which is exactly what the refusal
+exists to prevent.  Omitting the row loses that bet differently: the printed
+row count would stop matching ``NX*NY*NZ``.
+
+The cost of refusing is real and is recorded here rather than discovered
+later: the refusal fires on the DECK, so a grid that happens to include the
+contact point loses its other cells too.  Measured on 0110's served 5x1x5
+grid, moved so its first cell lands on the contact — one bad cell refuses
+the run and 24 good field points go with it.  No capture exercises that
+shape (every captured grid either stands clear or is the single bad point),
+which is why it had not been noticed.  The remedy a user has is to move the
+grid, which for a mixed grid means moving all of its points, not one.
+
 **The bare `GD` ground (momwire#545 U2).**  A MININEC-type ground solves its
 CURRENTS over a perfect image — the `Z ≡ GN 1` identity, gated on the
 impedance rungs elsewhere — but its NEAR FIELD in the medium: 0108 (`GD`)
@@ -544,6 +572,47 @@ def test_the_gd_contact_cell_ladder_does_not_converge_on_purpose_either():
     (block,) = extract(printout_text("0107")).near_fields
     captured = block.rows[0].magnitudes[2]
     assert rungs[3] < captured < rungs[4], (rungs, captured)
+
+
+def test_the_engine_disagrees_with_itself_about_the_singular_cell():
+    """The cheapest proof that the printed cell is not an answer, and the
+    only one in this file that needs neither a ladder nor a momwire number.
+
+    Both gates above argue non-convergence by bracketing the engine's printed
+    value inside OUR refinement ladder.  That is sound, but it leans on our
+    own composition being right.  The captures carry a stronger statement
+    that leans on nothing of ours: **the engine contradicts itself.**
+
+    0022 and 0112 are the same deck under the same ``GN 0`` card, and they
+    print the same number to every digit — so the cell is deterministic, and
+    what follows is not run-to-run noise.  0107 is that same antenna over the
+    same physical ground, ε_r 13 and σ 0.005, spelled ``GD`` instead: same
+    soil, same geometry, same observation point.  It prints 6.6673E+02 where
+    the others print 8.2521E+02 — a **24 % disagreement, and 6.6°of phase,
+    produced by a change of CARD SPELLING alone.**
+
+    A converged field cannot depend on which card names the ground.  So the
+    printed cell is each spelling's own regularization of the same
+    singularity, and that is established here from the captures alone.
+
+    This is the argument to reach for when explaining the refusal, because it
+    costs one comparison and no modelling: whatever momwire does at this
+    point, the reference does not have an answer to match.
+    """
+    same_card = []
+    for cid in ("0022", "0112"):
+        (block,) = extract(printout_text(cid)).near_fields
+        same_card.append((block.rows[0].magnitudes[2], block.rows[0].phases_deg[2]))
+    assert same_card[0] == same_card[1], same_card
+
+    (gd_block,) = extract(printout_text("0107")).near_fields
+    gd_mag = gd_block.rows[0].magnitudes[2]
+    gn_mag = same_card[0][0]
+    # 19 % of the larger value.  The bar is set well under the measured
+    # split rather than just under it: what this gate defends is "the two
+    # spellings do not agree", and a threshold hugging 0.192 would start
+    # reporting on the size of the disagreement instead.
+    assert abs(gd_mag - gn_mag) / gn_mag > 0.10, (gd_mag, gn_mag)
 
 
 # --------------------------------------------------------------------------
