@@ -1,9 +1,10 @@
 ---
 title: "Choosing an engine: cost, memory, accuracy"
-description: Which of momwire's nine engines to pick — the selection matrix, runtime and memory behaviour, the ground-cost ladder, and where each formulation earns its place.
+description: Which of momwire's eight engines to pick — the selection matrix, runtime and memory behaviour, the ground-cost ladder, and where each formulation earns its place.
 ---
 
-Nine engines answer through one kernel, and every one of them is reachable
+Eight engines over six solver families answer through one kernel, and
+every one of them is reachable
 by name — as a `--basis` argument, as its own `momwire-nec2c-<basis>`
 command in [SimNEC's dialog](/reference/portal-usage/), or as the solver
 behind [EZNEC's engine slot](/reference/eznec-nec5/) (which serves the
@@ -31,11 +32,11 @@ vs. array geometry:
 | Arrays of identical / few-shape elements (loop/bowtie arrays, LPDA) | **`arrayblock`** | element-aware block-low-rank; near-linear scaling, 7–12× faster than the NEC-2 lineage on large arrays |
 | Cross-checking against NEC-5 behaviour | **`razor-nec5`** | the formulation twin — rides the licensed engine's own convergence path (below) |
 | Telling basis effects from testing effects | **`sinusoidal-galerkin`** | same basis as `sinusoidal`, variational testing — the attribution instrument of [Act V](/act-5/the-fourth-cell/) |
-| Buried radials, screens, buried fed elements | **`bspline`** — the only engine with the below-interface fill | serves impedance/currents/charges over the Sommerfeld ground; every other engine refuses buried decks by name (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
+| Buried radials, screens, buried fed elements | **`bspline`** (or `bspline-d1`) — the dense B-spline pair carries the below-interface fill | serves impedance/currents/charges over the Sommerfeld ground; every other engine refuses buried decks by name, the compressed pair included — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
 
 The same picks hold with a ground in play — the ground model changes what
 a solve *costs*, not which engine wins it. One exception is capability,
-not cost: wires below the interface are a `bspline`-only capability today,
+not cost: wires below the interface are a dense-B-spline capability today,
 and a buried deck's first solve pays a table-build of a minute or two
 (momwire#568 tracks the accelerated fills).
 
@@ -126,10 +127,12 @@ entirely, which is exactly why they exist for large problems.
 
 Every engine solves a thin-wire equation; the `EK` card's O(a²) tube
 correction matters below Δ/a ≈ 3 and costs about 1.0–1.3× the reduced
-solve. Five of the six families serve it (everything but the razor twins,
-which are reduced-kernel *by design* — their comparison target tests on
-the wire axis). On ordinary thin wire, leave it off: it changes the answer
-by less than the mesh does.
+solve. **All six families serve it** — the razor twins were the last
+holdout, reduced-kernel by design until momwire#603 gave them the tube
+correction too. One narrow refusal survives: `sinusoidal-galerkin` declines
+`EK` on a deck where two wires of different radii meet at a junction,
+measured divergent rather than merely inaccurate there. On ordinary thin
+wire, leave it off: it changes the answer by less than the mesh does.
 
 ## The workbench view
 
