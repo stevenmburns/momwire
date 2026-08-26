@@ -33,6 +33,11 @@ jobs:
           # Everything, minus the paths that cannot change what a solver
           # answers. A PR touching BOTH docs and code matches `**` on its
           # code files and runs the full lanes, which is the safe direction.
+          # `scripts/probe_*.py` are hand-run measurement instruments — no
+          # test imports one, and `lint` (unguarded) still reads them.
+          # Keep this filter identical to the `changes` jobs in wheels.yml
+          # and eznec-dropin.yml — three copies of one rule, and a copy is
+          # the thing that drifts.
           filters: |
             code:
               - '**'
@@ -40,6 +45,7 @@ jobs:
               - '!site/**'
               - '!**/*.md'
               - '!LICENSE'
+              - '!scripts/probe_*.py'
 
   lint:
     runs-on: ubuntu-latest

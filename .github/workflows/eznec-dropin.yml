@@ -27,8 +27,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The canary exists for changes that can REACH the frozen bundle; a docs-
+  # or site-only merge cannot, and used to pay a Windows freeze + smoke to
+  # prove it. Anything that is NOT a branch push — a tag, a dispatch —
+  # hard-passes through the `|| 'true'` fallback: the release build rides
+  # tags and must never hinge on a diff a filter might fail to compute.
+  # Keep the filter identical to ci.yml's `changes` job. Note build.py and
+  # entry.py stay INSIDE the filter (only probes and prose are outside):
+  # this lane is their gate.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code || 'true' }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+      - uses: dorny/paths-filter@v3
+        id: filter
+        if: github.event_name == 'push' && github.ref_type == 'branch'
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!docs/**'
+              - '!site/**'
+              - '!**/*.md'
+              - '!LICENSE'
+              - '!scripts/probe_*.py'
+
   freeze:
     name: freeze + smoke (windows)
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
