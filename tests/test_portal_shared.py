@@ -726,8 +726,18 @@ def test_the_clients_basis_roster_is_the_engines_own():
         ("C:\\Program Files\\momwire-nec2c-shared-razor.exe", "razor"),
         ("momwire-nec2c", None),
         ("python", None),
+        # Windows filenames are case-insensitive and a copy is renamed by
+        # hand, so the match is casefolded — the owner's rule, which this
+        # duplicate exists to copy WHOLE rather than in half.
+        ("C:\\SimNEC\\Momwire-Nec2c-Shared-Razor.EXE", "razor"),
+        ("Momwire-Nec2c-Shared", None),
         # Validation is the caller's, here as in `_portal._filename_basis`.
         ("momwire-nec2c-shared-nope", "nope"),
+        # A name ending AT the marker named a basis and failed to spell it.
+        # `""` and not `None`: `resolve_engine` refuses an unknown basis by
+        # name, and rounding this to "no basis" serves the default instead.
+        ("momwire-nec2c-", ""),
+        ("momwire-nec2c-shared-", ""),
     ],
 )
 def test_the_executable_name_selects_the_basis_the_way_the_stock_engine_does(
