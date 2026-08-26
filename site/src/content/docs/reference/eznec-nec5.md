@@ -50,17 +50,17 @@ centre and therefore cannot feed it there — the source lands half a segment
 off. Use **even** counts for a centre-fed dipole in this dialect; "odd
 segments" is a NEC-2 convention, where sources sit at segment centres.
 
-Measured on a 0.476 λ dipole in free space, even meshes, all three engines
-fed at the centre knot:
+Measured on a 0.476 λ dipole in free space, even meshes, one deck per rung —
+momwire through this seam, the licensed engine on the same deck text:
 
 | segments | licensed NEC-5 | bs2 | razor-nec5 | \|razor − NEC-5\| |
 |---|---|---|---|---|
-| 4 | 56.118 − 108.593j | 69.359 − 28.486j | 56.120 − 108.554j | **0.039** |
-| 20 | 66.667 − 35.880j | 68.045 − 28.481j | 66.670 − 35.841j | **0.038** |
-| 60 | 67.469 − 30.695j | 67.912 − 28.318j | 67.472 − 30.657j | **0.038** |
-| 160 | 67.670 − 29.281j | 67.867 − 28.208j | 67.673 − 29.243j | **0.038** |
+| 4 | 56.118 − 108.593j | 67.645 − 31.146j | 56.116 − 108.586j | **0.007** |
+| 20 | 66.667 − 35.880j | 67.739 − 29.155j | 66.665 − 35.877j | **0.003** |
+| 60 | 67.469 − 30.695j | 67.777 − 28.586j | 67.467 − 30.693j | **0.003** |
+| 160 | 67.670 − 29.281j | 67.796 − 28.340j | 67.668 − 29.280j | **0.003** |
 
-The twin tracks the reference to 0.038 Ω at *every* density — flat, not
+The twin tracks the reference to 0.003 Ω at *every* density — flat, not
 improving, which is what a twin looks like.
 
 That says nothing about which is nearer the truth, so the second measurement
@@ -69,16 +69,15 @@ scored against its own N = 320 answer.
 
 | segments | bs2 error | razor-nec5 error |
 |---|---|---|
-| 4 | 1.54 Ω | 80.63 Ω |
-| 20 | 0.39 Ω | 7.16 Ω |
-| 60 | 0.18 Ω | 1.91 Ω |
-| 240 | 0.025 Ω | 0.17 Ω |
+| 4 | 2.81 Ω | 80.11 Ω |
+| 20 | 0.82 Ω | 6.67 Ω |
+| 60 | 0.25 Ω | 1.43 Ω |
 
-Both converge. At matched mesh the B-spline basis is 20–50× nearer its own
-limit — razor needs roughly 240 segments to reach the accuracy bs2 has at 20,
-which is the O(1/N) walk priced in segments.
+Both converge, scored against each basis's own N = 160 answer. At matched
+mesh the B-spline basis is 6–28× nearer its own limit, which is the O(1/N)
+walk of razor-blade testing priced in segments.
 
-Neither is "converged at coarse mesh" — bs2 is still 1.5 Ω out at four
+Neither is "converged at coarse mesh" — bs2 is still 2.8 Ω out at four
 segments. The difference is how fast the error comes down, not whether it is
 there.
 

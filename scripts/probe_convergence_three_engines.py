@@ -16,35 +16,34 @@ below for what that means in segments.
 
 THE FEED MUST BE AT A KNOT, AND THAT DECIDES THE PARITY
 ------------------------------------------------------
-NEC-5's basis is the TENT, so its unknowns — and its sources — live at KNOTS,
-not at segment centres. Measured, not assumed: `RazorSolver` returns the
-IDENTICAL impedance for a feed requested at knot 2, at the mid-segment wire
-centre, and at knot 3 (64.2253-91.7383j at N=5, all three), because it snaps
-to a knot. `BSplineSolver` does not snap — the same three requests give
-75.1897-31.6745j, 68.1410-28.8074j and 75.1897-31.6745j.
+NEC-5's basis is the TENT, so its unknowns — and its sources — live at KNOTS.
+Measured, not assumed: `RazorSolver` returns the IDENTICAL impedance for a
+feed requested at knot 2, at the mid-segment wire centre, and at knot 3
+(64.2253-91.7383j at N=5, all three), because it snaps to a knot.
+`BSplineSolver` does not snap — the same three give 75.1897-31.6745j,
+68.1410-28.8074j and 75.1897-31.6745j.
 
-So an ODD segment count has no knot at a dipole's centre and CANNOT feed it
-there: the source lands half a segment off. "Use odd segments for a
-centre-fed dipole" is a NEC-2 convention, where sources sit at segment
-centres; NEC-5 inverts it.
+So an ODD segment count has no knot at a dipole's centre and cannot feed it
+there. "Odd segments for a centre-fed dipole" is a NEC-2 convention, where
+sources sit at segment CENTRES; NEC-5 inverts it. This ladder is even-N with
+`EX` naming the centre knot, and both the binary and the seam map `EX seg K`
+to knot K — verified index by index at N=4:
 
-An earlier version of this probe ran an all-odd ladder and therefore compared
-bs2 fed at the wire's centre against razor and the binary fed at a knot half
-a segment away — a feed-position difference read as a basis difference. It
-was wrong at coarse mesh, where the offset is a large fraction of the
-antenna: |bs2 - nec5| read 63 ohm at N=5 where the corrected N=6 row reads
-41.8. Beyond N ~ 20 the two ladders agree (7.1 against 7.5 at N ~ 20, 1.06
-against 1.09 at N ~ 160).
+  EX seg   binary                seam (razor-nec5)
+     1     91.4170 -195.7123j    91.4128 -195.6994j
+     2     56.1179 -108.5930j    56.1162 -108.5864j   <- the centre
+     3     91.4170 -195.7123j    91.4128 -195.6994j
 
-Everything below is EVEN N with the centre knot fed, all three engines.
+THE LADDER
+----------
+  N     licensed NEC-5      bs2 (seam)          |razor-n5|  |bs2-n5|
+    4   56.118 -108.593j    67.645 -31.146j       0.0069      78.30
+   20   66.667  -35.880j    67.739 -29.155j       0.0031       6.81
+  160   67.670  -29.281j    67.796 -28.340j       0.0029       0.95
 
-  N     licensed NEC-5      bs2                 |razor-n5|   |bs2-n5|
-    4   56.118 -108.593j    69.359 -28.486j       0.039        81.19
-   20   66.667  -35.880j    68.045 -28.481j       0.038         7.53
-  160   67.670  -29.281j    67.867 -28.208j       0.038         1.09
-
-The twin tracks the reference to 0.038 ohm at EVERY density — flat, not
-improving, which is what a twin looks like and says nothing about accuracy.
+The twin reproduces the licensed engine to 0.003 ohm at EVERY density —
+flat, not improving, which is what a twin looks like and says nothing about
+accuracy.
 
 WHICH CONVERGES FASTER
 ----------------------
@@ -83,6 +82,9 @@ import re
 
 import numpy as np  # noqa: F401  (used by the local imports below)
 
+from momwire.deck._nec5 import parse_nec5
+from momwire.eznec import _serve
+
 _NUM = re.compile(r"[-+]?\d+\.\d+E[-+]\d+")
 
 FREQ_MHZ = 14.0
@@ -98,46 +100,28 @@ def deck(n):
         "CM convergence study\nCE\n"
         f"GW 1 {n} {p0[0]:.6E} {p0[1]:.6E} {p0[2]:.6E} "
         f"{p1[0]:.6E} {p1[1]:.6E} {p1[2]:.6E} {RAD:.6E}\n"
-        "GE 0\n"
+        "GE 0,-1\n"
         f"EX 0 1 {n // 2} 2 1.000000E+00 0.000000E+00\n"
         f"FR 0 1 0 0 {FREQ_MHZ:.6E} 0.000000E+00\nXQ 0\nEN\n"
     )
 
 
 def momwire_z(n, basis):
-    """Direct constructors, feed pinned to the centre knot by ARCLENGTH.
+    """Through the NEC-5 SEAM — the same route the EZNEC drop-in takes.
 
-    NOT the deck route, deliberately.  For even N no segment CENTRE coincides
-    with the centre knot — segment K's centre is (K-0.5)*h, the knot is
-    (n/2)*h — so an `EX` card lands equidistant between two knots and the
-    snap is a tie.  momwire's deck translation and the binary break that tie
-    the OTHER WAY from each other, which at N=4 is a quarter wave apart and
-    reads as a 94 ohm formulation difference that is nothing of the kind
-    (razor 91.423-195.648j through the deck against 56.120-108.555j through
-    the constructor, where the binary says 56.118-108.593j).
+    This is the whole point of the probe: not "what can these solvers do if
+    hand-built", but "what does the shipping portal answer for this deck".
+    So momwire is asked exactly as EZNEC asks it, through `parse_nec5` and
+    `_serve.serve`, on the SAME deck text the binary is handed.
 
-    `feed_arclength` names the knot with no tie to break, so momwire is
-    asked directly and only the binary goes through a deck.  The deck
-    tie-break divergence is real and filed separately; it is not what this
-    probe is measuring.
+    An earlier version routed momwire through `parse(text, dialect="nec2")`
+    instead. That is a different front end with a different convention — it
+    maps `EX seg K` to knot K-1 where the NEC-5 dialect maps it to knot K —
+    and the mismatch read as a 94 ohm formulation difference at N=4 that was
+    nothing of the kind. The lesson is that "the deck front end" is two front
+    ends, and the one the portal uses is the one worth measuring.
     """
-    from momwire import BSplineSolver, RazorSolver
-
-    wires = [np.array([[0.0, -LEN / 2, 0.0], [0.0, LEN / 2, 0.0]])]
-    common = dict(wires=wires, wire_radius=RAD, wavelength=WL, feed_arclength=LEN / 2)
-    if basis == "bspline":
-        z, _ = BSplineSolver(
-            **common,
-            n_per_edge_per_wire=[[n]],
-            degree=2,
-            feed_model="point",
-            feed_wire_index=0,
-        ).compute_impedance()
-    else:
-        z, _ = RazorSolver(
-            **common, n_per_edge_per_wire=[[n]], nec5_quadrature=True
-        ).compute_impedance()
-    return complex(np.atleast_1d(z)[0])
+    return _serve.serve(parse_nec5(deck(n)), basis=basis).sources[0].impedance
 
 
 def nec5_z(n):
