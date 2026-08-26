@@ -33,11 +33,11 @@ NAME = "momwire-eznec"
 #
 # Two, not the whole nine-name roster, and the reason is the zip.  Each copy
 # adds ~9.5 MB uncompressed; all nine would roughly double a 52 MB download
-# to ship six engines almost nobody picks from a file dialog, three of which
-# (the sinusoidal family) refuse every deck in this dialect for want of
-# `current_slopes`.  So the bundle carries the PAIR the parity work was
-# about — the default and the NEC-5 twin — and the README says how to make
-# any other, which is a copy.
+# to ship the SEVEN others, engines almost nobody picks from a file dialog,
+# three of which (the sinusoidal family) refuse every deck in this dialect
+# for want of `current_slopes`.  So the bundle carries the PAIR the parity
+# work was about — the default and the NEC-5 twin — and the README says how
+# to make any other, which is a copy.
 SHIPPED_VARIANTS = ("razor-nec5",)
 
 
@@ -128,18 +128,19 @@ def main() -> int:
         "       20       66.67 -  35.88j     67.74 - 29.16j\n"
         "      160       67.67 -  29.28j     67.80 - 28.34j\n"
         "\n"
-        "razor-nec5 tracks the licensed column to 0.003 ohm at EVERY row --\n"
-        "flat, not improving, which is what a twin looks like.\n"
+        "razor-nec5 tracks the licensed column to 0.003 - 0.007 ohm at every\n"
+        "row -- flat, not improving, which is what a twin looks like.\n"
         "\n"
         "Which is nearer the truth is a different question, asked by scoring\n"
-        "each basis against ITS OWN converged answer (reference at 320):\n"
+        "each basis against ITS OWN answer at the finest mesh above, N = 160,\n"
+        "through this same engine:\n"
         "\n"
         "    segments   bs2 error   razor-nec5 error\n"
-        "        4       2.81 ohm      80.11 ohm\n"
+        "        4       2.81 ohm      80.14 ohm\n"
         "       20       0.82 ohm       6.67 ohm\n"
         "       60       0.25 ohm       1.43 ohm\n"
         "\n"
-        "Both converge; at a matched mesh the B-spline basis is 6-28x nearer\n"
+        "Both converge; at a matched mesh the B-spline basis is 5.8-28x nearer\n"
         "its own limit.  Neither is converged at a coarse mesh -- bs2 is\n"
         "still 2.8 ohm out at four segments -- the difference is how fast the\n"
         "error falls.\n"
