@@ -74,6 +74,37 @@ _FIXTURE_GROUP_FILES = (
 )
 
 
+# Modules that render the 80-deck EZNEC capture corpus.
+#
+# `test_eznec_serve.corpus()` / `served()` are `lru_cache`d, and that cache is
+# per-PROCESS — so when loadgroup scatters these modules across workers, each
+# worker re-renders the decks it needs.  Unlike `_FIXTURE_GROUP_FILES` the
+# expensive thing here is shared BETWEEN modules (`test_eznec_reproducibility`
+# imports `corpus` from `test_eznec_serve`), so one group per module would
+# still pay one full render per module.  Hence a single shared group.
+#
+# Measured: the two bar tests in `test_eznec_reproducibility` were charged
+# 33.7 s + 32.6 s scattered, against 11.29 s + 0.04 s in one process — the
+# second is a cache hit.  All ten files together run 39.7 s in ONE process
+# against 178.4 s attributed across workers.
+#
+# The `_FIXTURE_GROUP_FILES` note warns that a shared group can pin ~200 s onto
+# one worker and become the critical path.  Measured here it is 40 s, against
+# a ~96 s ideal-parallel remainder for everything else, so it is not.
+_EZNEC_CORPUS_GROUP_FILES = (
+    "test_eznec_serve.py",
+    "test_eznec_reproducibility.py",
+    "test_eznec_drive_spelling.py",
+    "test_eznec_networks.py",
+    "test_eznec_one_segment_wire.py",
+    "test_eznec_shell.py",
+    "test_eznec_printout.py",
+    "test_eznec_basis_choice.py",
+    "test_eznec_buried_refusal.py",
+    "test_razor_nec5_corpus.py",
+)
+
+
 # tryfirst is LOAD-BEARING (momwire#403). xdist's worker hook rewrites each
 # grouped item's nodeid to "id@group" in its own pytest_collection_modifyitems,
 # and that hook runs BEFORE a conftest's plain hookimpl — so a group marker
@@ -91,3 +122,5 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(_pytest.mark.xdist_group("portal"))
         elif item.path.name in _FIXTURE_GROUP_FILES:
             item.add_marker(_pytest.mark.xdist_group(item.path.stem))
+        elif item.path.name in _EZNEC_CORPUS_GROUP_FILES:
+            item.add_marker(_pytest.mark.xdist_group("eznec_corpus"))
