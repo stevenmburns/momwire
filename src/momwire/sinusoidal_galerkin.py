@@ -3484,12 +3484,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             sig = seg_view["sigma"][s:e]
             if self.feed_model == "point":
                 # -f_i(s0), evaluated at the gap's own position rather than at
-                # the segment's centre (momwire#648). `feed_xi` is 0 for every
-                # caller that names a segment centre — the NEC-2 front end
-                # always does — so this is bit-identical there: sin(0) = 0 and
-                # cos(0) − 1 = 0 leave σ·AC, the expression this branch used to
-                # be. A caller that names a KNOT gets ±h/2 and the other two
-                # shapes carry the difference.
+                # the segment's centre (momwire#648). A caller that names a
+                # KNOT gets `feed_xi` = ±h/2 and the other two shapes carry
+                # the difference; a caller that names a segment CENTRE gets 0
+                # and this is bit-identical to the expression the branch used
+                # to be, σ·AC, since sin(0) = 0 and cos(0) − 1 = 0.
+                #
+                # Bit-identical for the NEC-2 front end, which builds that
+                # arclength the way `_build_geometry` does. NOT for a caller
+                # that spells the same centre by another route: antennaknobs
+                # sums whole edge lengths and halves the last one, which
+                # differs from `cumsum(h) − h/2` in the last bits, so `feed_xi`
+                # comes out at ULP scale rather than at zero — measured
+                # −2.7e-15 m on a 10 m wire at N=41, ξ/h ≈ 1e-14. That is
+                # accurate, not identical: the shapes are evaluated at the
+                # position asked for, and the O(kξ) the other two terms pick
+                # up is 1e-14 of the column. See tests/test_feed_snap_623.py,
+                # which measures what tracking a gap that finely is worth.
                 col = -_basis_value(
                     sig * seg_view["AC"][s:e],
                     seg_view["B"][s:e],
