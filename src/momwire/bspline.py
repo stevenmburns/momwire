@@ -1294,9 +1294,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         The scope is what the phase-2 adjudication validated, refused by
         name past it:
 
-        * exactly TWO members per crossing junction (one wire per side) —
-          the fan (a monopole over a buried radial screen joined at the
-          node) is the recorded next widening;
+        * exactly ONE above member per crossing junction, N ≥ 1 below
+          members — the node fan (a monopole over a buried radial screen
+          risen to the node, momwire#524 fan widening). Multiple above
+          members share the interface corner between above tents, a pair
+          class no adjudicator has measured;
         * ONE wire radius across the deck — the radius rule
           ρ_eff = √(ρ² + a²) is the corner's regularization and a
           per-pair radius has no pinned convention;
@@ -1318,12 +1320,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if not crossing:
             return ()
         for j_idx in crossing:
-            if len(self.junctions[j_idx]) != 2:
+            n_above = sum(
+                1 for w, _e in self.junctions[j_idx] if media[w] == _medium_spec.ABOVE
+            )
+            if n_above != 1:
                 raise NotImplementedError(
-                    "crossing junction with more than two members: the "
-                    "crossing serve joins ONE above wire to ONE below wire "
-                    "at the interface (momwire#524 phase 2); the node fan "
-                    "is a recorded widening, not yet served"
+                    "crossing junction with more than one above member: the "
+                    "crossing serve joins ONE above wire to N below wires "
+                    "at the interface (momwire#524 fan widening); the "
+                    "above-tent × above-tent interface corner has no "
+                    "measured convention"
                 )
         if len(self.junctions) != len(crossing):
             raise NotImplementedError(

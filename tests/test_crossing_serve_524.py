@@ -146,15 +146,63 @@ def test_g524_1_detached_buried_screen_is_untouched():
 # ----------------------------------------------------------------------
 
 
-def test_g524_2_node_fan_refused_by_name():
-    build = crossing_deck()
-    build["wires"] = build["wires"] + [
-        np.array([(0.0, 0.0, -2.0), (0.3, 0.0, -0.1), (0.0, 0.0, 0.0)])
+def fan_rise_deck(n_radials=4, depth=0.15, **override):
+    """The connected radial screen, rise-spelled (momwire#524 fan
+    widening): `contact_deck`'s monopole junction-joined at the node to
+    N radials that each run at depth and RISE to the surface. The N rise
+    segments are geometrically coincident on (0,0,−depth) → (0,0,0) —
+    legal thin-wire geometry (mutual ≡ self at ρ = 0 under the
+    ρ_eff = √(ρ² + a²) regularization), and the spelling the free-space
+    junction machinery solves identically for the ε̃ = 1 adjudicator.
+    Feed = arclength 4.3333 on the 10 → 0 monopole (EX 4,1,7 — the trap:
+    an improvised feed at 10 − 4.333 is silently ~50 Ω wrong)."""
+    dirs = ((1, 0), (0, 1), (-1, 0), (0, -1))[:n_radials]
+    wires = [
+        np.array([(5.0 * dx, 5.0 * dy, -depth), (0.0, 0.0, -depth), (0.0, 0.0, 0.0)])
+        for dx, dy in dirs
     ]
-    build["n_per_edge_per_wire"] = build["n_per_edge_per_wire"] + [[3, 2]]
-    build["junctions"] = [[(0, "end"), (1, "start"), (2, "end")]]
+    npe = [[10, 2] for _ in dirs]
+    mono_i = len(wires)
+    wires.append(np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)]))
+    npe.append([15])
+    build = dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        junctions=[[(i, "end") for i in range(n_radials)] + [(mono_i, "end")]],
+        feeds=[(mono_i, 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    build.update(override)
+    return build
+
+
+def test_g524_2_node_fan_is_served_n4_labeling():
+    """The fan widening's labeling test: one above member, four below
+    members — the crossing junction labels, every member is exempted in
+    `wire_media`, and the scope check passes."""
+    s = BSplineSolver(**fan_rise_deck())
+    media = s._wire_media()
+    assert media == (_medium_spec.BELOW,) * 4 + (_medium_spec.ABOVE,)
+    assert s._crossing_junctions() == (0,)
+    assert s._grounded_junction_ends() == frozenset(
+        [(0, "end"), (1, "end"), (2, "end"), (3, "end"), (4, "end")]
+    )
+
+
+def test_g524_2_two_above_members_refused_by_name():
+    """The widening is 1 above × N below ONLY: a second above member
+    puts an above-tent × above-tent interface corner on the deck, a pair
+    class no adjudicator has measured."""
+    build = crossing_deck()
+    build["wires"] = build["wires"] + [np.array([(0.0, 0.0, 0.0), (3.0, 0.0, 5.0)])]
+    build["n_per_edge_per_wire"] = build["n_per_edge_per_wire"] + [[5]]
+    build["junctions"] = [[(0, "end"), (1, "start"), (2, "start")]]
     s = BSplineSolver(**build)
-    with pytest.raises(NotImplementedError, match="more than two members"):
+    with pytest.raises(NotImplementedError, match="more than one above member"):
         s._crossing_junctions()
 
 
