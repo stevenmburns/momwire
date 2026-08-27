@@ -231,6 +231,26 @@ jobs:
         if: needs.changes.outputs.code == 'true'
         env:
           MOMWIRE_532_DUMP: ${{ github.workspace }}/677-dumps
+      # The gate is XFAIL, so a divergence leaves the job GREEN and the
+      # artifact silent -- and an artifact nobody is told about only helps
+      # someone who already suspected there was something to look at. Say it
+      # out loud instead, on the run page and in the job summary.
+      - name: Flag a captured residency divergence (momwire#677)
+        if: always()
+        run: |
+          if [ -n "$(ls -A 677-dumps 2>/dev/null)" ]; then
+            n=$(ls -1 677-dumps | wc -l)
+            echo "::warning::momwire#677 REPRODUCED: $n dump file(s) captured. Download the momwire-677-dumps artifact -- this is the evidence the issue is waiting on."
+            {
+              echo "### momwire#677 reproduced on this run"
+              echo
+              echo "\`$n\` dump file(s) in the \`momwire-677-dumps\` artifact:"
+              echo
+              ls -1 677-dumps | sed 's/^/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "momwire#677 did not reproduce on this run."
+          fi
       - name: Upload residency mismatch dumps (momwire#677)
         if: always()
         uses: actions/upload-artifact@v4
