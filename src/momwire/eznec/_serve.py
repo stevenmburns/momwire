@@ -38,7 +38,8 @@ output refuses by name** — its near field is momwire#524 phase 3 and its far
 field the transmitted far-zone asymptotics, neither of which this arc built.
 Three GEOMETRIES around it refuse too, and none of them says "buried wires
 are not served" any more: a wire with points on both sides of the interface
-(the crossing basis, phase 2); a buried wire over ``GN 1`` or a bare ``GD``,
+(served by the native API's crossing basis since momwire#524 phase 2, not
+yet adopted by this seam); a buried wire over ``GN 1`` or a bare ``GD``,
 neither of which has a lower medium to bury it in; and a buried wire on a
 deck that also stands a wire END in the plane — the combination momwire#553
 measured itself out of, whose sentence quotes both banked phase-0 anchors as
@@ -608,7 +609,10 @@ _REFUSE_NEAR_FIELD_CONTACT = (
 # repeating "buried wires are not served":
 #
 #   * a wire that CROSSES the interface (or stands an end in it from below) —
-#     the crossing basis, momwire#524 phase 2, with its banked anchor;
+#     served by the native API's crossing basis since momwire#524 phase 2,
+#     not yet adopted by this seam (the engine's own crossing prints were
+#     adjudicated a different experiment, so adoption is a documentation
+#     decision, not a gate);
 #   * a buried wire over ``GN 1`` or a bare ``GD`` — no lower medium exists
 #     under either card, so there is nothing to bury the wire in;
 #   * the OUTPUTS a buried deck cannot answer — its near field (phase 3) and
@@ -620,15 +624,20 @@ _REFUSE_BURIED_CROSSING = (
     "wire {tag} crosses the ground interface (z runs {zmin:g} to {zmax:g} m "
     "across z = 0) - a wire wholly below the interface is served over this "
     "deck's ground card, and a wire wholly at or above it is served, but a "
-    "wire with points on BOTH sides is neither: current crossing the "
-    "interface is a boundary condition where the two media meet, not a "
-    "junction, and it needs the crossing basis momwire#524 phase 2 owns. "
-    "The gate that basis has to meet is already banked from this engine's "
-    "own printout - a 2 m buried vertical joined at z = 0 to a 10 m monopole "
-    "over eps_r 13 / sigma 0.005 S/m soil at 7 MHz prints 74.761 - 57.730j "
-    "ohm. Until then: leave the buried part DETACHED from the part above the "
-    "plane (a buried radial screen under a base-fed vertical is served that "
-    "way), or raise the whole wire clear of z = 0"
+    "wire touching BOTH sides is neither, on this seam. momwire's native "
+    "API serves interface-crossing current since momwire#524 phase 2 - a "
+    "below wire ENDING in the plane, junction-joined there to an above "
+    "wire - and this seam has not adopted that serve yet: adopting it "
+    "means deciding which engine printouts are comparable, and the "
+    "adjudication measured that they are NOT - the engine's crossing "
+    "junction is two contact ends plus a point-electrode sink (its own "
+    "printed junction currents violate its AGARD condition divergently), "
+    "so its crossing prints are a different experiment from the exact-EM "
+    "answer, documented as a convention difference rather than gated "
+    "against. Until the seam adopts the serve: leave the buried part "
+    "DETACHED from the part above the plane (a buried radial screen under "
+    "a base-fed vertical is served that way), raise the whole wire clear "
+    "of z = 0, or model through the native API"
 )
 _REFUSE_BURIED_NO_MEDIUM = (
     "wire {tag} runs below the ground plane (min z = {zmin:g} m) under a "
@@ -812,10 +821,12 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
     refuses is no longer "below the plane". It is three narrower things, and
     each names what is actually missing rather than restating the geometry:
 
-    * a wire with points on BOTH sides of the interface, which needs the
-      crossing basis momwire#524 phase 2 owns (a buried wire whose end stands
-      IN the plane is this case, not the buried one: the tolerance decides,
-      and it is the solver's own);
+    * a wire with points on BOTH sides of the interface — served by the
+      native API's crossing basis since momwire#524 phase 2 (as the split
+      spelling: a below wire ending in the plane, junction-joined to an
+      above wire), not yet adopted by this seam; a buried GW whose end
+      stands IN the plane is this case here, not the buried one — the
+      tolerance decides, and it is the solver's own;
     * a buried wire under ``GN 1`` or a bare ``GD``, neither of which has a
       lower medium at all — momwire solves both over a PERFECT image, so
       below the plane is a perfect conductor and there is nothing to bury a

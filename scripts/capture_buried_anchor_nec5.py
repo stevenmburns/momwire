@@ -60,6 +60,43 @@ ANCHOR_DECKS = {
     ),
 }
 
+# The momwire#524 phase-0/phase-2 CROSSING refinement ladder, verbatim (a
+# 2 m buried vertical junction-joined at z = 0 to the 10 m monopole, fed at
+# 4.333 m, soil A, ×1..×8 mesh rungs; EX lands on the segment whose center
+# is nearest the feed height). These are captured FOR THE RECORD, not as
+# gates: the 2026-08-26 adjudication measured that the engine's crossing
+# junction is two contact ends plus a point-electrode sink (its printed
+# junction currents violate its own AGARD condition divergently, ~√n, with
+# a KCL deficit of 1.55 → 2.23 A into the interface point along exactly
+# this ladder), so its crossing prints are a DIFFERENT EXPERIMENT from the
+# exact-EM crossing serve momwire ships (soil-A answer 138.77 − 102.99j,
+# mesh-stable, `test_crossing_serve_524`). Never gate the serve against
+# these numbers; the ladder is kept because the divergence pattern itself
+# is the adjudication evidence.
+_CROSSING_RUNGS = {
+    1: (4, 15, 7),
+    2: (8, 30, 13),
+    3: (12, 45, 20),
+    4: (16, 60, 26),
+    5: (20, 75, 33),
+    8: (32, 120, 52),
+}
+
+
+def _crossing_deck(nb, na, feed_seg):
+    return (
+        "CM momwire#524 crossing rung\nCE\n"
+        f"GW 1,{nb},0.,0.,-2.,0.,0.,0.,.001\n"
+        f"GW 2,{na},0.,0.,0.,0.,0.,10.,.001\n"
+        "GE 1,-1\nFR 0,1,0,0,7.\nGN 0,0,0,0,13.,.005\n"
+        f"EX 4,2,{feed_seg},0,1.,0.\nPQ 0\nXQ 0\nEN\n"
+    )
+
+
+CROSSING_DECKS = {
+    f"crossing-x{m}": _crossing_deck(*rung) for m, rung in _CROSSING_RUNGS.items()
+}
+
 
 def main() -> None:
     from antennaknobs.engines.nec5 import NEC5Engine
@@ -79,7 +116,13 @@ def main() -> None:
         anchors[name] = z
         print(f"{name:>12}: nec5 prints {z:.4f}")
 
-    _write_golden(anchors)
+    crossing: dict[str, complex] = {}
+    for name, deck in CROSSING_DECKS.items():
+        z = complex(eng.run_deck(deck)[0][0][2])
+        crossing[name] = z
+        print(f"{name:>12}: nec5 prints {z:.4f}  (convention record, not a gate)")
+
+    _write_golden(anchors, crossing)
 
 
 def _lit(z: complex) -> str:
@@ -87,7 +130,7 @@ def _lit(z: complex) -> str:
     return f"{z.real:.4f} {sign} {abs(z.imag):.4f}j"
 
 
-def _write_golden(anchors: dict[str, complex]) -> None:
+def _write_golden(anchors: dict[str, complex], crossing: dict[str, complex]) -> None:
     lines = [
         '"""NEC-5 printed impedances for the two momwire#567 ANCHOR decks —',
         "the contact-plus-buried serve gates banked while the deck class",
@@ -123,6 +166,20 @@ def _write_golden(anchors: dict[str, complex]) -> None:
     lines.append("")
     lines.append(f"ANCHOR_LONE_RADIAL = {_lit(anchors['lone-radial'])}")
     lines.append(f"ANCHOR_FOUR_RADIAL = {_lit(anchors['four-radial'])}")
+    lines += [
+        "",
+        "# The momwire#524 crossing refinement ladder, FOR THE RECORD ONLY:",
+        "# the engine's crossing junction was adjudicated 2026-08-26 as two",
+        "# contact ends plus a point-electrode sink (its printed junction",
+        "# currents violate its own AGARD condition divergently along this",
+        "# ladder), so these prints are a different experiment from the",
+        "# exact-EM crossing serve (soil-A answer 138.77 - 102.99j,",
+        "# test_crossing_serve_524). NEVER gate the crossing serve on them.",
+        "CROSSING_ENGINE_PRINTS = {",
+    ]
+    for name, z in crossing.items():
+        lines.append(f'    "{name}": {_lit(z)},')
+    lines.append("}")
     GOLDEN.write_text("\n".join(lines) + "\n")
     print(f"\nwrote {GOLDEN}")
 

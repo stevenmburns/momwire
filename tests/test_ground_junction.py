@@ -310,11 +310,12 @@ def test_below_plane_rejected_bspline():
     """A wire from z = -0.5 to z = H over a PEC plane is out of scope twice
     over, and momwire#553 U5 changed which half it names first.
 
-    It CROSSES the interface, which is the crossing basis momwire#524 phase 2
-    owns and would still be refused over a Sommerfeld ground; and it would
-    have nowhere to be buried under a PEC plane even if it did not cross. The
-    geometry a reader would fix first is the crossing, so that is the
-    sentence — and it quotes the banked anchor phase 2 has to meet.
+    It CROSSES the interface mid-span, which is refused even over a
+    Sommerfeld ground (the crossing serve, momwire#524 phase 2, takes the
+    SPLIT spelling: a below wire ending in the plane, junction-joined to
+    an above wire); and it would have nowhere to be buried under a PEC
+    plane even if it did not cross. The geometry a reader would fix first
+    is the crossing, so that is the sentence.
     """
     wires = [np.array([(0.0, 0.0, -0.5), (0.0, 0.0, H)])]
     s = BSplineSolver(

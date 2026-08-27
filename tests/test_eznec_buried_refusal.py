@@ -9,8 +9,10 @@ buried Sommerfeld families — so the old single sentence ("buried wires are
 not served") is gone and what replaced it is four narrower ones, each naming
 a DIFFERENT missing thing:
 
-* a wire with points on BOTH sides of the interface — the crossing basis,
-  momwire#524 phase 2, with its banked anchor quoted;
+* a wire with points on BOTH sides of the interface — served natively
+  since momwire#524 phase 2, not yet adopted by this seam, and the
+  sentence names the native serve and the adjudicated convention
+  difference instead of quoting the engine's crossing print as a gate;
 * a buried wire over ``GN 1`` or a bare ``GD`` — neither card has a lower
   medium at all, and the sentence says which;
 * a buried wire on a deck that ALSO stands a wire end in the plane — the
@@ -96,7 +98,12 @@ def test_the_old_sentence_is_gone():
 # ----------------------------------------------------------------------
 
 
-def test_a_crossing_wire_refuses_naming_phase_two_and_its_anchor():
+def test_a_crossing_wire_refuses_naming_the_native_serve():
+    """The seam still refuses interface-crossing decks — including the
+    split-junction spelling the native API serves since momwire#524
+    phase 2 — and the sentence now points at that serve and at the
+    adjudicated convention difference instead of quoting the engine's
+    crossing print as a waiting gate."""
     text = (
         "CM crossing probe\n"
         "CE\n"
@@ -111,8 +118,10 @@ def test_a_crossing_wire_refuses_naming_phase_two_and_its_anchor():
     r = why(text)
     assert r is not None
     assert "crosses the ground interface" in r
-    assert "phase 2" in r
-    assert "74.761 - 57.730j" in r
+    assert "momwire#524 phase 2" in r
+    assert "different experiment" in r
+    assert "native API" in r
+    assert "74.761" not in r
     assert "INTERNAL ERROR" not in r
 
 

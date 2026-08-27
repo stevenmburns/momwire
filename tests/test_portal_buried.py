@@ -10,7 +10,9 @@ That is momwire#553's product and the first test here is its tripwire.
 
 **What refuses, and why each sentence is different.**  ``GN 0`` and ``GN 1``
 carry no lower medium to put a wire in; a wire with points on both sides of
-the interface needs the crossing basis (momwire#524 phase 2); a deck that
+the interface is refused here (momwire's native API serves the split
+crossing spelling since momwire#524 phase 2; this portal has not adopted
+it); a deck that
 stands a wire END in the plane AND buries another hits the contact/buried
 combination momwire#553 U5 measured itself out of; ``NE``/``NH`` over any
 finite ground is momwire#524 phase 3.
