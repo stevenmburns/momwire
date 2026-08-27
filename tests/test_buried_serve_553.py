@@ -1032,16 +1032,37 @@ def test_gu5_11_the_grids_are_shared_across_a_ladder(record_property):
 # `eznec._serve._REFUSE_BURIED_WITH_CONTACT` print; the binding is gated
 # below so the constants and the prose cannot drift apart.
 
-# PROVISIONAL, in absolute ohms, and it should be re-derived rather than
-# inherited. 4.0 is `test_contact_nec5_lane._ENVELOPE["poor"]` — the loosest
-# bar momwire's shipped ground-CONTACT row already lives under, on a plain
-# contact monopole with nothing buried. These decks carry that same contact
-# node PLUS a cross-medium block that does not exist yet, so nothing here
-# can be argued tighter than the contact node's own worst shipped miss, and
-# the number is deliberately not imported: re-deriving the contact lane's
-# envelope should NOT silently move this one. momwire#567 phase 0 measures
-# what agreement is actually achievable; this holds the slot until it does.
-ANCHOR_ENVELOPE_OHM = 4.0
+# RE-DERIVED 2026-08-27 (momwire#524 phase 2 P3, probe35 on the canonical
+# decks). What the adjudicated composition actually achieves against these
+# anchors, per spelling of the cross block:
+#
+#   shipped grid ≡ complete M+bnd (the by-parts identity, measured 0.01 Ω
+#   apart):                             lone 46.57 Ω    fan 141.49 Ω
+#   continuation-consistent M-only
+#   (all end terms omitted, matching
+#   the shipped contact columns):       lone 12.91 Ω    fan  17.16 Ω
+#   (fan M+hub ≡ M to the digit — the radial hub's by-parts terms cancel
+#   through its KCL row, as derived)
+#
+# The M-only numbers reproduce momwire#567 phase 0's B(drop) misses to the
+# printed digit on DESIGNED kernels, so the residual is not quadrature: it
+# is the contact current SPREADING into the soil, a real current these
+# decks have no conductor for. The engine models it as a point stake — the
+# same fiction the crossing adjudication measured violating its own AGARD
+# condition — so a sub-ohm parity target against these prints does not
+# exist for ANY consistent spelling, and the deck class stays refused
+# rather than served 13-17 ohm wrong. The served alternative is the RISE
+# respelling (give the spreading current its conductor: the radial rises
+# to the surface and junction-joins the monopole — the crossing serve,
+# `test_crossing_serve_524`), whose answer is banked in
+# `scratch/524-phase2/results/probe36-rise-spelling.json` as a documented
+# convention difference, never gated against these prints.
+#
+# The envelope below therefore stays at the continuation spelling's
+# ceiling: if a future arc arms the anchor comparison, 18.0 is what the
+# adjudicated composition actually achieves (M-only, both decks), and
+# anything tighter needs new physics, not new quadrature.
+ANCHOR_ENVELOPE_OHM = 18.0
 
 # What each trunk refuses these decks with TODAY. Since momwire#651 routed
 # razor's buried readings through `_medium_spec.wire_media`, BOTH trunks
