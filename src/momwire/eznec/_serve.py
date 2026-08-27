@@ -113,14 +113,26 @@ REFUSAL: ``RazorSolver`` serves a one-segment wire junctioned at either end
 since momwire#608.  The cut still buys nothing there, and the uncut wire is
 still the better-conditioned spelling.)
 
-Measured over the 62 committed captures: razor-nec5 served 11 under the cut,
-47 once U1 stopped cutting for it, and 54 since momwire#608 stopped refusing
-a one-segment ``GW`` that is junctioned.  49 of those 54 carry a printout to
-compare against, and its input impedance sits a median 0.004 % from the
-licensed engine's own — worst 0.03 % over the 47 outside
-``test_eznec_serve.DIVERGENT_IDS``, and 176 %/208 % on the two inside it
-(0033 and 0034, the elevated radial systems every basis gets wrong at
-h/lambda = 1.09e-4; momwire#510).
+Measured over the committed captures: razor-nec5 served 11 under the cut,
+47 once U1 stopped cutting for it, 54 since momwire#608 stopped refusing a
+one-segment ``GW`` that is junctioned, and 59 since momwire#624 lifted the
+ground-contact refusal.  It serves 77 today, and that last rung is the corpus
+growing under it (62 decks to 80) rather than the solver climbing.
+
+72 of those 77 carry a printout to compare against, and the input impedance
+sits a median 0.004 % from the licensed engine's own — unchanged across the
+growth, and 63 of the 70 outside ``test_eznec_serve.GRAZING_IDS`` are inside
+0.05 %.  The worst is 2.15 %, and the tail is not scattered: 0021, 0047,
+0048, 0110 and 0111 are the five ground-CONTACT decks momwire#624 let razor
+serve at all, four of them landing on the same 2.148 %.  Serving a deck that
+used to be refused is what moved this number, which is the trade #624 made
+with its eyes open (see ``razor.py``, "the refusal was not protecting a
+defect the term would repair").
+
+``GRAZING_IDS`` is 0033 and 0034, the elevated radial systems every basis got
+wrong at h/lambda = 1.09e-4 (momwire#510).  They read 176 %/208 % when that
+issue was open; momwire#510 and momwire#631 landed, and they are 1.5 % and
+0.8 % now.
 
 **That number is REPRODUCTION and not accuracy, and nothing here should be
 read as saying otherwise.**  ``RazorSolver``'s own docstring is the contract:
@@ -432,8 +444,9 @@ from ._printout import (
 # 8%. Importing it would be exactly the retune-across-bases the portal's own
 # note warns off ("a bar in a basis where that reasoning does not apply").
 #
-# Derived here instead, by measurement over all 62 capture decks rendered at
-# OMP_NUM_THREADS 1 and 8:
+# Derived here instead, by measurement over all 80 capture decks rendered at
+# OMP_NUM_THREADS 1 and 8 (62 decks when first derived; re-derived at 80 and
+# both readings held):
 #
 #   the largest E-field magnitude that MOVES between the two   1.65e-09 V/m
 #   the weakest legitimate reading in the captured printouts   ~1e-05 V/m
@@ -544,13 +557,13 @@ _REFUSE_ZERO_LENGTH_LINE = (
 _REFUSE_MIXED_DRIVE_KINDS = (
     "this deck carries {count} EX cards writing BOTH kinds - {voltages} EX 0 "
     "(a set voltage) and {currents} EX 4 (a set current); a multi-source drive "
-    "is served only where every card sets a CURRENT, which is what both "
-    "captured multi-EX decks write, and a mixed drive has no printed row "
-    "anywhere to be gated against"
+    "is served only where every card sets a CURRENT, which is what all "
+    "sixteen captured multi-EX decks write, and a mixed drive has no printed "
+    "row anywhere to be gated against"
 )
 _REFUSE_MULTI_EX_VOLTAGE = (
     "this deck carries {count} EX 0 cards; a multi-VOLTAGE drive is not served "
-    "at this seam - none of the 49 captured decks writes one, so nothing says "
+    "at this seam - none of the 80 captured decks writes one, so nothing says "
     "what the engine prints for it"
 )
 _REFUSE_DUPLICATE_EX = (

@@ -67,7 +67,7 @@ from captured input/output of our own licensed installations — conclusions
 from observed bytes, never from anyone's source.
 
 The rest of the tree — the solvers, the grounds, the network core, the
-nine-engine roster — carries none of these fingerprints. A reader of
+eight-engine roster — carries none of these fingerprints. A reader of
 `momwire.bspline` cannot tell EZNEC exists.
 
 Two corollaries the seam modules obey:
@@ -93,9 +93,14 @@ was available and refused:
   that as a test that *fails the day the numbers move* — forcing a
   re-measure and a decision — rather than a correction factor that would
   quietly track the incumbent.
-- **Refuse-by-name instead of guessing.** Seven of the 122 corpus launches
-  refuse today, every one with a sentence naming the card, the wire, or the
-  missing capability, and where there is one, the remedy. A refusal is the
+- **Refuse-by-name instead of guessing.** Three of the 80 corpus decks
+  refuse on every engine in the roster today — 0022, 0107 and 0112, each
+  asking for the field at the base of a contact-fed monopole, where the
+  composition is singular on both sides of the seam — and one engine, the
+  point-matched `sinusoidal`, declines the whole corpus, because every deck
+  in this dialect drives a node and that formulation places no gap there.
+  Every one of those is a sentence naming the card, the wire, or the missing
+  capability, and where there is one, the remedy. A refusal is the
   contract that nothing is ever served silently wrong — and the refusal
   roster is itself gated, including a must-refuse fixture built from a
   once-accepted buggy geometry (#522).

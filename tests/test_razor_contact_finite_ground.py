@@ -23,8 +23,9 @@ survive:
   onto the coefficient-0 answer. No SCALE for the term is self-consistent.
 
 So the refusal was not protecting a defect that a term would repair, and what
-it was costing was five of the 62 EZNEC captures and the most common HF model
-there is. This file is the row it opened, gated.
+it was costing was five of the EZNEC captures — 0021, 0047, 0048, 0110 and
+0111, five of the 62 the corpus held then and five of 80 now — and the most
+common HF model there is. This file is the row it opened, gated.
 
 THE BAR IS D1'S, LITERALLY
 --------------------------

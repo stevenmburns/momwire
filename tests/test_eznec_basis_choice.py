@@ -9,8 +9,9 @@ call rather than two lists that have to stay equal.
 
 The gates here are about the choice, not about any one basis's physics:
 
-**Nothing moves for the default.**  Gated where it can be seen — the 122
-captures round-tripping byte for byte in ``test_eznec_printout.py``.  Two of
+**Nothing moves for the default.**  Gated where it can be seen — the 75
+printout-carrying captures round-tripping byte for byte in
+``test_eznec_printout.py``.  Two of
 this module's asserts are about the mechanism of that: the roster's
 ``bspline`` entry carries no ``degree``, and it does not need to.
 
@@ -313,9 +314,10 @@ def test_a_name_that_matches_no_basis_refuses_in_the_printout(prog):
 # machinery: ``capabilities.refusals`` says what a solver CLAIMS it will not
 # do, and nothing checked what it actually does, deck by deck.
 #
-# Measured over all 62 committed captures at momwire 0.39.0 and re-measured
-# TWICE since, once per capability that landed.  **Every basis outside the
-# sinusoidal family now accepts all 59, and nothing raises at all** — the
+# Measured over all 62 committed captures at momwire 0.39.0, re-measured TWICE
+# since — once per capability that landed — and re-measured a third time when
+# the corpus itself grew from 62 decks to 80.  **Every basis outside the
+# sinusoidal family now accepts all 77, and nothing raises at all** — the
 # strongest and simplest form this table has had, and it was reached in two
 # deliberate steps rather than by drift:
 #
@@ -397,8 +399,9 @@ def _row(refusals=()):
     return row
 
 
-# TWO shapes cover all 62 now — four before #609, three before #624 — and
-# naming them is what makes the table's intent survive a re-baseline: a deck
+# THREE shapes cover all 80 now — four before #609, three before #624, two
+# after it, and three again once the apex row split off.  Naming them is what
+# makes the table's intent survive a re-baseline: a deck
 # that MOVES between shapes is a one-line diff, and a shape that changes
 # membership is a one-line diff.  A shape whose last deck leaves goes with it,
 # as ``NOT_ARRAYBLOCK`` and then ``NOT_RAZOR`` both did.
@@ -414,11 +417,13 @@ APEX = _row({"sinusoidal": NO_NODE_GAPS})
 # than ``current_slopes``.
 NO_BASIS = _row(dict.fromkeys(BASES, NEAR_FIELD_AT_A_CONTACT))
 
-# 59/59 for every basis outside the sinusoidal family, with no asymmetry left
+# 77/77 for every basis outside the sinusoidal family, with no asymmetry left
 # to record.  razor's road here was 49 -> 54 (momwire#608, which narrowed a
 # refusal that used to read "one segment" to what it should always have read,
 # "one segment and junctioned at neither end") -> 59 (momwire#624, ground
-# contact over a finite ground).
+# contact over a finite ground) -> 77, and that last rung is the only one the
+# SOLVER did not climb: the corpus grew under it, 62 decks to 80, and all
+# eighteen arrivals were served on the day they landed.
 ACCEPTS = {
     "0000": EVERY_BASIS,
     "0001": EVERY_BASIS,

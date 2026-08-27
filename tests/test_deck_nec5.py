@@ -108,7 +108,7 @@ def test_every_captured_deck_parses(path: Path):
 
 
 def test_the_corpus_census_reproduces_the_published_weights():
-    """Parsing all 62 decks recovers the scored matrix's own counts.
+    """Parsing all 80 decks recovers the scored matrix's own counts.
 
     "Parses without error" is a weak gate on its own: a front-end that read
     every ``GD`` as a ``GN 0`` would pass it while being 34 % wrong in R on
