@@ -1302,9 +1302,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         * ONE wire radius across the deck — the radius rule
           ρ_eff = √(ρ² + a²) is the corner's regularization and a
           per-pair radius has no pinned convention;
-        * no OTHER junction on the deck — the complete spelling's
-          by-parts machinery completes every value-1 end on an axis, and
-          only the crossing node's completion is measured.
+        * OTHER junctions only wholly BELOW and off the plane — the
+          buried hub (one rise + N radials joined at depth, the screen's
+          other spelling). Its by-parts end terms cancel through the
+          hub's own KCL row (probe35: fan M+hub ≡ M to the digit), and
+          the hub ≡ N-rises gate holds the two spellings of the same
+          screen together. An above-side or in-plane other junction
+          stays refused: only the below axis's completion machinery has
+          that cancellation measured.
         """
         media = self._wire_media()
         if _medium_spec.BELOW not in media or not self.junctions:
@@ -1331,13 +1336,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     "above-tent × above-tent interface corner has no "
                     "measured convention"
                 )
-        if len(self.junctions) != len(crossing):
-            raise NotImplementedError(
-                "a deck with a crossing junction and OTHER junctions is "
-                "not served: the complete crossing spelling completes "
-                "every value-1 end on its axes, and only the crossing "
-                "node's completion is measured (momwire#524 phase 2)"
-            )
+        for j_idx, jw in enumerate(self.junctions):
+            if j_idx in crossing:
+                continue
+            if j_idx in grounded or any(media[w] != _medium_spec.BELOW for w, _e in jw):
+                raise NotImplementedError(
+                    "a deck with a crossing junction and an above-side or "
+                    "in-plane OTHER junction is not served: the complete "
+                    "crossing spelling completes every value-1 end on its "
+                    "axes, and only the below axis's completions (the "
+                    "crossing node and the buried hub) are measured "
+                    "(momwire#524 phase 2)"
+                )
         radii = np.asarray(self._radius_per_wire, dtype=float)
         if float(radii.max()) - float(radii.min()) > 0.0:
             raise NotImplementedError(
