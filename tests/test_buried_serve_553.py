@@ -220,7 +220,12 @@ def test_gu5_1_free_space_never_invents_an_interface():
     assert not s._has_buried_wires()
 
 
-def test_gu5_1_a_crossing_wire_refuses_naming_phase_two():
+def test_gu5_1_a_crossing_wire_refuses_naming_the_served_spelling():
+    """A mid-span crossing wire still refuses — and since momwire#524
+    phase 2 landed the crossing serve, the sentence names the SPLIT
+    spelling that serves instead of quoting the engine's crossing print
+    as a waiting gate (that print was adjudicated a different
+    experiment)."""
     wires = [np.array([(0.0, 0.0, -2.0), (0.0, 0.0, 3.0)])]
     s = BSplineSolver(
         wires=wires,
@@ -235,9 +240,10 @@ def test_gu5_1_a_crossing_wire_refuses_naming_phase_two():
     with pytest.raises(ValueError) as exc:
         s._wire_media()
     msg = str(exc.value)
-    assert "crosses the ground interface" in msg
-    assert "phase 2" in msg
-    assert "74.761" in msg and "57.730" in msg
+    assert "crosses the ground interface mid-span" in msg
+    assert "momwire#524" in msg
+    assert "split the wire AT the interface" in msg
+    assert "74.761" not in msg
 
 
 def test_gu5_1_an_end_in_the_plane_from_below_is_crossing_not_buried():

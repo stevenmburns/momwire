@@ -55,3 +55,19 @@ ANCHOR_DECKS = {
 
 ANCHOR_LONE_RADIAL = 92.1300 - 70.1410j
 ANCHOR_FOUR_RADIAL = 90.0510 - 70.7310j
+
+# The momwire#524 crossing refinement ladder, FOR THE RECORD ONLY:
+# the engine's crossing junction was adjudicated 2026-08-26 as two
+# contact ends plus a point-electrode sink (its printed junction
+# currents violate its own AGARD condition divergently along this
+# ladder), so these prints are a different experiment from the
+# exact-EM crossing serve (soil-A answer 138.77 - 102.99j,
+# test_crossing_serve_524). NEVER gate the crossing serve on them.
+CROSSING_ENGINE_PRINTS = {
+    "crossing-x1": 74.7610 - 57.7300j,
+    "crossing-x2": 69.1090 - 50.8330j,
+    "crossing-x3": 70.8580 - 51.6780j,
+    "crossing-x4": 69.0170 - 50.0150j,
+    "crossing-x5": 70.0380 - 50.7170j,
+    "crossing-x8": 68.8820 - 49.7330j,
+}
