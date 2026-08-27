@@ -857,7 +857,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
         # Validates the geometry against the plane (and is re-read at
-        # basis-build time for the grounded ends themselves).
+        # basis-build time for the grounded ends themselves). The buried
+        # readings run first: they need the ground attributes above, which
+        # bare `__new__` probes of the scan itself never set.
+        self._refuse_buried_geometry()
         self._ground_ends()
         # momwire#282 stage 1's D3, the row every solver with a refl-coef
         # ground refuses: contact under `refl-coef` is a MODEL failure at zero
@@ -1076,52 +1079,25 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # ------------------------------------------------------------------
     # geometry
 
-    def _ground_ends(self):
-        """Which wire ENDS lie in the ground plane; everything else refused.
+    def _refuse_buried_geometry(self):
+        """The construction-time buried readings, through `_medium_spec`.
 
-        Returns the frozen set of ``(wire_index, "start" | "end")`` whose
-        anchor is in the plane — empty in free space. A member of that set
-        is a grounded end, and gets the grounded tent
-        (:meth:`_junction_wings`) whose lower wing is its own image.
+        Routed through the shared `_medium_spec.wire_media` so BOTH trunks
+        refuse buried geometry with the SAME sentences (momwire#651): it
+        raises the crossing, the no-lower-medium and the contact+buried
+        refusals by their shared names. Whatever it labels BELOW — a wholly
+        buried DETACHED wire over a Sommerfeld ground, which `BSplineSolver`
+        serves — is a legal deck razor cannot fill yet, and that gap gets
+        razor's own sentence here.
 
-        The geometries that are NOT ground contact, and stay refused:
-
-        * a wire with points BELOW `ground_z` goes through the shared
-          `_medium_spec.wire_media` reading first (momwire#651), so BOTH
-          trunks refuse buried geometry with the SAME sentences: a wire
-          crossing the interface gets the named crossing refusal (with the
-          momwire#524 phase-2 anchor), a buried wire over a PEC or
-          refl-coef ground gets the no-lower-medium sentence, and a ground
-          contact combined with a buried wire gets the momwire#553 U5
-          combination sentence. What survives that reading — a wholly
-          buried DETACHED wire over a Sommerfeld ground, which
-          `BSplineSolver` serves — is refused here with razor's own-gap
-          sentence: razor has no buried fill yet;
-        * an EDGE lying in the plane (both its anchors at `ground_z`) is
-          degenerate over a conducting ground: the edge coincides with its
-          own image, so the fold cancels it and it carries no independent
-          current. `ValueError`, `BSplineSolver`'s wording again;
-        * an INTERIOR anchor in the plane is a wire that touches down
-          mid-span. That is real physics — the knot there would carry its
-          ordinary tent AND a second unknown for the current leaving into
-          the plane — but it is a second basis change on top of this one
-          and is not written, so `NotImplementedError`.
-
-        A straight edge takes its minimum z at an anchor, so scanning the
-        anchors sees every contact there is.
-
-        The touch tolerance is `_ground_spec.ground_touch_tol`'s: 1e-6 of
-        the wire's polyline length, loose enough for deck-import float
-        noise at z=0 and far tighter than any deliberate stand-off.
+        Called from ``__init__`` only: this is validation of the frozen
+        geometry-plus-ground state, not part of the `_ground_ends` scan the
+        basis build re-asks (and which bare ``__new__`` probes call without
+        the ground attributes this reading needs).
         """
         gz = self.ground_z
         if gz is None:
-            return frozenset()
-        # The buried readings go through _medium_spec so both trunks say
-        # the same sentences (momwire#651). It raises the crossing, the
-        # no-lower-medium and the contact+buried refusals by their shared
-        # names; whatever it labels BELOW is a legal deck razor cannot
-        # fill yet, and that gap gets razor's own sentence.
+            return
         media = _medium_spec.wire_media(
             self.wires_polylines,
             gz,
@@ -1144,6 +1120,41 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 "wire clear of the plane. Razor consuming the basis-agnostic "
                 "buried tables is momwire#651's continuation"
             )
+
+    def _ground_ends(self):
+        """Which wire ENDS lie in the ground plane; everything else refused.
+
+        Returns the frozen set of ``(wire_index, "start" | "end")`` whose
+        anchor is in the plane — empty in free space. A member of that set
+        is a grounded end, and gets the grounded tent
+        (:meth:`_junction_wings`) whose lower wing is its own image.
+
+        The geometries that are NOT ground contact, and stay refused:
+
+        * a wire with points BELOW `ground_z` is refused at construction by
+          `_refuse_buried_geometry` (momwire#651) — the shared
+          `_medium_spec` sentences, or razor's own buried-fill gap — so no
+          such wire reaches this scan;
+        * an EDGE lying in the plane (both its anchors at `ground_z`) is
+          degenerate over a conducting ground: the edge coincides with its
+          own image, so the fold cancels it and it carries no independent
+          current. `ValueError`, `BSplineSolver`'s wording again;
+        * an INTERIOR anchor in the plane is a wire that touches down
+          mid-span. That is real physics — the knot there would carry its
+          ordinary tent AND a second unknown for the current leaving into
+          the plane — but it is a second basis change on top of this one
+          and is not written, so `NotImplementedError`.
+
+        A straight edge takes its minimum z at an anchor, so scanning the
+        anchors sees every contact there is.
+
+        The touch tolerance is `_ground_spec.ground_touch_tol`'s: 1e-6 of
+        the wire's polyline length, loose enough for deck-import float
+        noise at z=0 and far tighter than any deliberate stand-off.
+        """
+        gz = self.ground_z
+        if gz is None:
+            return frozenset()
         touching = set()
         for i, pl in enumerate(self.wires_polylines):
             tol = _ground_spec.ground_touch_tol(pl)
