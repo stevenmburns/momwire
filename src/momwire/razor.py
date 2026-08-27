@@ -340,6 +340,7 @@ import numpy as np
 import scipy.linalg
 
 from . import (
+    _feed_snap,
     _ground_refl,
     _ground_spec,
     _medium_spec,
@@ -1565,7 +1566,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         target = arc if arc is not None else arc_at_knot[-1] / 2.0
         knots = self._feed_knots(geom, w)
         arcs = np.array([a for a, _b, _k in knots])
-        pick = int(np.argmin(np.abs(arcs - target)))
+        pick, _margin = _feed_snap.snap(
+            arcs,
+            target,
+            total_arc=float(arc_at_knot[-1]),
+            family=type(self).__name__,
+            what="site",
+            wire=w,
+        )
         _a, basis, k_ends = knots[pick]
         return int(basis), int(k_ends)
 

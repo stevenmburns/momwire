@@ -45,6 +45,7 @@ import scipy.linalg
 import scipy.sparse
 
 from . import (
+    _feed_snap,
     _field_ground,
     _ground_mirror,
     _ground_refl,
@@ -992,7 +993,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             total_arc = float(np.sum(feed_h_w))
             feed_arc = arc_req if arc_req is not None else 0.5 * total_arc
             feed_arc = min(max(feed_arc, 0.0), total_arc)
-            pick = int(np.argmin(np.abs(feed_arc_centers - feed_arc)))
+            pick, _margin = _feed_snap.snap(
+                feed_arc_centers,
+                feed_arc,
+                total_arc=total_arc,
+                family=type(self).__name__,
+                wire=w_f,
+            )
             feed_segs.append(first + pick)
             feed_xi.append(float(feed_arc - feed_arc_centers[pick]))
         # None with feeds=[] — legal only under junction-port drive (#172).
