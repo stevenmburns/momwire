@@ -1457,6 +1457,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     knots.append((arc, jn["bases"][e_i], 1))
                 else:
                     knots.append((arc, jn["bases"][0], len(jn["ends"])))
+        # In ARC ORDER (momwire#672). The interior knots are built in it and
+        # the junction and grounded ends are appended, so a wire whose START
+        # is a junction reported that knot last. `_snap_to_knot` runs argmin
+        # over this list and uses the INDEX, which is invisible wherever one
+        # knot is plainly nearest and decisive at a tie — and left the index
+        # a property of how the list was built rather than of the geometry.
+        # The same two physical knots then read as (9, 10) when a bent wire
+        # is one polyline and (9, 0) when it is two, so any rule phrased on
+        # the index named different sites in two spellings of one antenna.
+        knots.sort(key=lambda knot: knot[0])
         return knots
 
     def _feed_basis_indices(self, geom):
