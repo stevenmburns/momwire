@@ -89,7 +89,29 @@ magnitude cheaper at equal accuracy. That, not a benchmark sprint, is why
 
 ## The razor twins: which lane
 
-### `pulse` is the honest slow one
+`razor` and `razor-nec5` are one solver class offered as two names, the
+way `bspline`/`bspline-d1` are one class on two degrees. Both test the
+tent expansion with NEC-5's razor-blade rule; they differ only in the
+quadrature bound to the one path integral the public manual leaves
+numerically open. **The choice is not a coin flip** (measured 2026-08-18):
+
+| | `razor-nec5` | `razor` (converged GL quadrature) |
+| --- | --- | --- |
+| Role | Interactive lane | Convergence / certification lane |
+| Speed | Sub-second to N≈300–400 free, N≈200–400 grounded; 2–4× behind `bspline` beyond that | 12–80× slower than `bspline`; over a second even at N=100 under any ground |
+| Memory | Same order as the other dense bases | Exceeds an 8 GB working set by N≈800 grounded / N≈1600 free |
+| Use for | Ordinary solves, A/B checks against NEC-5 behaviour | Convergence ladders, certification against NEC-5 printouts |
+
+On the models where we hold a licensed reference, `razor-nec5` rides the
+licensed engine's own convergence path at the 0.01 % level — it converges
+*along* NEC-5's trajectory, not merely to its endpoint. The refusal
+boundary — down to K≥3 junction ports alone, now that node gaps
+(momwire#603), the extended kernel, and contact over finite grounds
+(momwire#624) are all served — is documented in
+[`docs/razor-solver.md`](https://github.com/stevenmburns/momwire/blob/main/docs/razor-solver.md),
+each with a named message at construction.
+
+## `pulse`: the honest slow one
 
 `pulse` is `HarringtonSolver` — a pulse (piecewise-constant) current basis
 with point matching, which is the scheme every other engine on this list was
@@ -117,28 +139,6 @@ no junction ports, no node gaps, no extended kernel, and one scalar radius.
 The EZNEC drop-in does not offer it at all — that dialect drives a *node*, and
 this family puts its gap at the nearest segment centre, so it refuses every
 deck there for the same reason `sinusoidal` does.
-
-`razor` and `razor-nec5` are one solver class offered as two names, the
-way `bspline`/`bspline-d1` are one class on two degrees. Both test the
-tent expansion with NEC-5's razor-blade rule; they differ only in the
-quadrature bound to the one path integral the public manual leaves
-numerically open. **The choice is not a coin flip** (measured 2026-08-18):
-
-| | `razor-nec5` | `razor` (converged GL quadrature) |
-| --- | --- | --- |
-| Role | Interactive lane | Convergence / certification lane |
-| Speed | Sub-second to N≈300–400 free, N≈200–400 grounded; 2–4× behind `bspline` beyond that | 12–80× slower than `bspline`; over a second even at N=100 under any ground |
-| Memory | Same order as the other dense bases | Exceeds an 8 GB working set by N≈800 grounded / N≈1600 free |
-| Use for | Ordinary solves, A/B checks against NEC-5 behaviour | Convergence ladders, certification against NEC-5 printouts |
-
-On the models where we hold a licensed reference, `razor-nec5` rides the
-licensed engine's own convergence path at the 0.01 % level — it converges
-*along* NEC-5's trajectory, not merely to its endpoint. The refusal
-boundary — down to K≥3 junction ports alone, now that node gaps
-(momwire#603), the extended kernel, and contact over finite grounds
-(momwire#624) are all served — is documented in
-[`docs/razor-solver.md`](https://github.com/stevenmburns/momwire/blob/main/docs/razor-solver.md),
-each with a named message at construction.
 
 ## Memory
 
