@@ -254,12 +254,19 @@ def test_the_port_solution_roster_is_what_the_docstring_says():
     already builds one right-hand-side column per port ... `PortSolution` is
     what `compute_port_solution()` returns instead."
 
-    Two of the eight exported families do not have the method at all, which
-    is momwire#604's class (3) — a universal over a roster that has since
-    grown an exception, the same shape `PortPlan`'s "Indices into `sites` ARE
-    solver port indices" had. It is load-bearing rather than cosmetic: it is
-    exactly why the pulse family has no portal surface (momwire#564), so the
-    sentence denied the existence of the gap that issue is open about.
+    Two of the eight exported families did not have the method at all, which
+    was momwire#604's class (3) — a universal over a roster that had grown an
+    exception, the same shape `PortPlan`'s "Indices into `sites` ARE solver
+    port indices" had. It was load-bearing rather than cosmetic: it was
+    exactly why the pulse family had no portal surface (momwire#564), so the
+    sentence denied the existence of the gap that issue was open about.
+
+    momwire#564 closed it by implementing the method rather than by editing
+    the sentence, so `does_not` is EMPTY now and the universal is true. The
+    empty set is kept as its own statement rather than deleted with its last
+    tenant — the same shape as `test_eznec_basis_choice.RAISED` — because
+    "no exported family lacks a portal surface" is the claim, and a family
+    arriving without one has to fail here rather than be absorbed.
 
     Pinned as a roster rather than as prose, so the next family to gain or
     lose the method has to come here and say so.
@@ -269,12 +276,14 @@ def test_the_port_solution_roster_is_what_the_docstring_says():
     serves = {
         "ArrayBlockSolver",
         "BSplineSolver",
+        "HarringtonSolver",
         "HMatrixSolver",
+        "PulseSolver",
         "RazorSolver",
         "SinusoidalGalerkinSolver",
         "SinusoidalSolver",
     }
-    does_not = {"HarringtonSolver", "PulseSolver"}
+    does_not = set()
 
     exported = {n for n in dir(momwire) if n.endswith("Solver")}
     assert serves | does_not == exported, (
@@ -287,6 +296,5 @@ def test_the_port_solution_roster_is_what_the_docstring_says():
         cls = getattr(momwire, name)
         assert not hasattr(cls, "compute_port_solution"), (
             f"{name} grew compute_port_solution — good, but "
-            "`_port_solution`'s docstring and momwire#564 both name it as a "
-            "family that lacks one"
+            "`_port_solution`'s docstring names it as a family that lacks one"
         )

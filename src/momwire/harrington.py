@@ -97,7 +97,12 @@ import numpy as np
 
 from . import _wire_spec
 from ._capabilities import Capabilities
-from .pulse import _OUT_OF_SCOPE, _PER_WIRE_RADIUS_REFUSAL, PulseSolver
+from .pulse import (
+    _OUT_OF_SCOPE,
+    _PER_WIRE_RADIUS_REFUSAL,
+    _WIRE_LOADING_REFUSAL,
+    PulseSolver,
+)
 
 # Absolute tolerance for calling two wire ends one node — IMPORTED from
 # razor rather than re-typed as the same number, because this row walks
@@ -200,7 +205,13 @@ class HarringtonSolver(PulseSolver):
             # its own reason, and antennaknobs surfaces this prose verbatim
             # in host dialogs, so it has to be true of the class it names.
             "extended_kernel": _EXTENDED_KERNEL_REFUSAL,
-            "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL,
+            # `{cls}` substituted with THIS class, not the parent's name
+            # (momwire#564). The parent's sentence is true of this row as
+            # written — the bar is unwritten for the pulse basis and this
+            # class does not change the basis — but the class it named was
+            # wrong, and antennaknobs renders this prose verbatim.
+            "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL.format(cls="HarringtonSolver"),
+            "wire_loading": _WIRE_LOADING_REFUSAL.format(cls="HarringtonSolver"),
         },
     )
 
@@ -351,6 +362,109 @@ class HarringtonSolver(PulseSolver):
 
         self._cached_cells = (left_node, right_node, pieces, cell_of_piece)
         return self._cached_cells
+
+    # ------------------------------------------------------------------
+    # field readout
+
+    def current_slopes(self, coeffs, s_array=None):
+        """Per-wire ``dI/ds`` — read off THIS row's charge cells (momwire#611).
+
+        The same signature as
+        :meth:`~momwire.bspline.BSplineSolver.current_slopes` and its
+        siblings: a list of 1-D complex arrays, one per wire in
+        ``wires_polylines`` order, at the mesh knots (``s_array=None``) or at
+        the per-wire arc positions given.
+
+        **Why this row has one and the parent does not.**  The quantity a NEC
+        printout wants is the linear charge density ``q = -(1/jw)*dI/ds``, and
+        on a pulse basis the current is piecewise CONSTANT — so ``dI/ds`` is
+        zero inside every segment and a delta at every node.  The two rows
+        differ in exactly what they then do with that delta, which is the one
+        ingredient the pair exists to isolate: `PulseSolver` leaves it a POINT
+        charge, so it has no density anywhere and deliberately has no such
+        method (its absence is what both seams refuse on);
+        Harrington (103) spreads each node's charge uniformly over that node's
+        dual CELL, so the density is a real piecewise-constant function and
+        this reads it.
+
+        It is read off `_node_map`, not re-derived.  The cells here ARE the
+        cells `_charge_stencil` integrated over — same node merging, same
+        ``L_j`` including the half-length cell at a free wire end — so the
+        density reported is the one the matrix was filled with, and a change
+        to the cell rule cannot move one without moving the other.
+
+        Node j's charge is Kirchhoff's sum over the bases that meet there,
+        ``Q_j = (sum_n D[j,n] I_n) / (jw)`` with ``D = +1`` where node j is
+        segment n's arc-h end and ``-1`` at its arc-0 end — the parent's own
+        convention, and `_charge_stencil`'s ``D``.  Dividing by ``L_j`` and
+        folding the ``-1/jw`` back out gives the slope this returns,
+        ``-(sum_n D[j,n] I_n) / L_j``, which on a plain wire is the forward
+        difference ``(I_n - I_{n-1}) / L_j``.
+
+        **The tie-break is a MEAN here, and not the house tie-break.**  A cell
+        is centred on a knot and bounded by the two neighbouring segment
+        CENTRES, so this family's charge grid is staggered half a segment from
+        its current grid.  Sampling at knots (the default) therefore lands in
+        the middle of a cell and is a plain lookup.  Sampling at segment
+        centres — which is exactly what the portal's charge column asks for —
+        lands on EVERY cell boundary at once, and the sibling families' "take
+        the span to the right" would then shift the whole column half a cell
+        and destroy the symmetry of a symmetric antenna.  The mean of the two
+        cells meeting at the sample is the symmetric reading, and on a uniform
+        mesh it is the centred difference ``(I_{n+1} - I_{n-1}) / 2h``.
+
+        That the reading is STATED rather than looked up is a property of
+        where the caller sampled, not of the formulation, and it is the same
+        honesty `currents_at_knots` already applies to this basis's current.
+        """
+        coeffs = np.asarray(coeffs)
+        geom = self._build_geometry()
+        left_node, right_node, pieces, cell_of_piece = self._node_map(geom)
+
+        n_cells = int(cell_of_piece.max()) + 1
+        lengths = np.zeros(n_cells)
+        np.add.at(lengths, cell_of_piece, pieces["h_per_seg"])
+        net = np.zeros(n_cells, dtype=np.complex128)
+        np.add.at(net, right_node, coeffs)
+        np.add.at(net, left_node, -coeffs)
+        cell_slope = -net / lengths
+
+        offsets = geom["seg_offsets"]
+        out = []
+        for w_idx in range(len(geom["per_wire"])):
+            lo, hi = offsets[w_idx], offsets[w_idx + 1]
+            arc = geom["per_wire"][w_idx]["arc_at_knot"]
+            # Cell c_i is knot i's, so there are n_seg + 1 of them per wire,
+            # bounded by the segment centres between them.
+            ids = np.concatenate([left_node[lo:hi], right_node[hi - 1 : hi]])
+            here = cell_slope[ids]
+
+            if s_array is None:
+                out.append(here)  # a knot sits at its own cell's middle
+                continue
+
+            # Linear interpolation between the CELL CENTRES, which are the
+            # knots -- the same rule `currents_at_knots` already uses to
+            # continuise this basis's staircase, applied to its derivative.
+            #
+            # This is where the mean lives, and it is deliberately not spelt
+            # as one. Detecting "the sample IS a boundary" by comparing floats
+            # is a cliff: the portal builds its own segment-centre array and a
+            # last-ulp difference from `geom`'s flips the answer from the mean
+            # of two cells to one of them alone, which at a driven segment is
+            # the whole discontinuity wide. Measured before this was
+            # interpolation: sampling a 401-segment dipole at a literal 5.0
+            # when the solver's own centre is 4.999999999999982 read a
+            # one-sided cell and reported a charge 0.23 of peak where the
+            # symmetric answer is zero.
+            #
+            # Interpolating gives the same two readings that mattered -- a
+            # knot returns its own cell exactly, a segment centre sits midway
+            # between two knots and returns their mean -- and moves
+            # continuously in between, so a last-ulp offset costs an ulp.
+            s = np.clip(np.asarray(s_array[w_idx], dtype=float), arc[0], arc[-1])
+            out.append(np.interp(s, arc, here.real) + 1j * np.interp(s, arc, here.imag))
+        return out
 
     def _mirror_pieces(self, geom, src, pieces):
         """`pieces` rebuilt on whichever source geometry `src` describes.

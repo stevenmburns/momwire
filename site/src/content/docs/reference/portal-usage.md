@@ -81,6 +81,7 @@ momwire-nec2c-sinusoidal                     # NEC-2's own formulation
 momwire-nec2c-sinusoidal-galerkin            # the same basis, tested variationally
 momwire-nec2c-hmatrix                        # same physics, hierarchical (ACA) solve
 momwire-nec2c-arrayblock                     # same physics, element-block/FFT solve
+momwire-nec2c-pulse                          # Harrington's pulse basis, point-matched
 ```
 
 The mechanism is the *name*: everything after `nec2c-` in the executable's

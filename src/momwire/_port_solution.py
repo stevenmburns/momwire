@@ -9,15 +9,23 @@ evaluation that must not re-solve) were reaching into private per-family
 internals to get them back. `PortSolution` is what `compute_port_solution()`
 returns instead.
 
-Not EVERY family, and the difference is load-bearing (momwire#604 class 3).
-`compute_port_solution` is implemented by the six families the portal rosters
-— `BSplineSolver`, `HMatrixSolver`, `ArrayBlockSolver`, `SinusoidalSolver`,
-`SinusoidalGalerkinSolver`, `RazorSolver` — and NOT by `PulseSolver` or
-`HarringtonSolver`, which have neither it nor `_port_count`. That is exactly
-why the pulse family has no portal surface: rostering it IS implementing this
-method (momwire#564). A universal here would read as "any solver you have
-will answer this", which is the sentence that sends a caller at an
-`AttributeError`.
+EVERY exported family implements it, as of momwire#564 — and that sentence is
+worth stating carefully, because it was false for a year and the previous
+version of this paragraph is why. `PulseSolver` and `HarringtonSolver` had
+neither this method nor `_port_count`, which is exactly why the pulse family
+had no portal surface: `momwire.portal`'s `_y_and_port_coeffs` calls it
+unconditionally, so momwire#559's roster entry raised `AttributeError` on
+EVERY deck, and an escaping exception is not a refusal — it takes the daemon
+down mid-frame while the host waits on a sentinel that never comes. Rostering
+the family WAS implementing this method.
+
+So the universal is true now, and it is still not safe to write as one: a
+family arrives without it, not with it. `test_refusals_name_working_routes.
+test_the_port_solution_roster_is_what_the_docstring_says` pins the roster
+class by class in both directions, so the next family to gain or lose the
+method has to come here and say so rather than quietly widening or narrowing
+this sentence (momwire#604 class 3, whose whole subject is universals over a
+roster that has grown an exception).
 """
 
 from __future__ import annotations

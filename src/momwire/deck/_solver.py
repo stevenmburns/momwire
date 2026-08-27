@@ -59,6 +59,7 @@ import numpy as np
 from .._constants import C_LIGHT
 from ..array_block import ArrayBlockSolver
 from ..bspline import BSplineSolver
+from ..harrington import HarringtonSolver
 from ..hmatrix import HMatrixSolver
 from ..razor import RazorSolver
 from ..sinusoidal import SinusoidalSolver
@@ -116,6 +117,17 @@ BASES = MappingProxyType(
         "sinusoidal-galerkin": (SinusoidalGalerkinSolver, MappingProxyType({})),
         "razor": (RazorSolver, MappingProxyType({})),
         "razor-nec5": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
+        # The pulse family, and ONE name for it (momwire#564), on momwire#654's
+        # rule: a roster entry is a menu item, so it should be the dish worth
+        # ordering. `HarringtonSolver` and `PulseSolver` are the same basis and
+        # the same testing differing in one ingredient — where the charge
+        # lives — and that ingredient is the whole difference between O(1/N)
+        # convergence and an error governed by Delta/a. `PulseSolver`'s own
+        # docstring says "reach for HarringtonSolver for anything but that
+        # study"; a portal user picking from a dialog is not doing the study,
+        # and has no way to say which they meant. The pair stays reachable as
+        # a library import, which is where the study lives.
+        "pulse": (HarringtonSolver, MappingProxyType({})),
     }
 )
 

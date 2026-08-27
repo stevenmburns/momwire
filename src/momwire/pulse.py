@@ -180,6 +180,8 @@ not a capability). Everything else is refused through `capabilities` and
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy as np
 import scipy.linalg
 
@@ -187,6 +189,7 @@ from . import _ground_spec, _potential_ground, _wire_spec
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
+from ._port_solution import PortSolution, _SweptPortSolutions
 from ._quadrature import leggauss
 
 # The reduced-kernel segment moment ∫ g dl' has no shared home in momwire —
@@ -202,11 +205,30 @@ from ._kernel_moments import _axis_frame, _static_axis_moments
 # points) and would otherwise be one huge allocation.
 _CHUNK_ELEMS = 2_000_000
 
+# The one sentence behind all three wire-loading kwargs, and behind the
+# `wire_loading` cell in both classes' `capabilities.refusals` — one message,
+# not four copies drifting apart.
+_WIRE_LOADING_REFUSAL = (
+    "{cls} does not serve wire loading: an `LD 5` wire conductivity or an "
+    "`LD 6` insulation is a distributed surface impedance, and this "
+    "formulation has no term for one. Nothing structural is in the way — on "
+    "a pulse row it would be a diagonal bump, Z_mm += Z_s*h_m — but it is "
+    "unwritten and unmeasured, and an unmeasured term is not a capability. "
+    "Use BSplineSolver or SinusoidalSolver for a loaded wire"
+)
+
 # Constructor kwargs the sibling solvers accept that this formulation
 # deliberately does not, with the reason each is refused. Anything else
 # unexpected is a caller typo and stays a TypeError.
+#
+# `{cls}` is substituted with the CONSTRUCTED class at the raise site
+# (momwire#564). These sentences reach a user two ways — as the exception and
+# as `capabilities.refusals`, which antennaknobs renders verbatim in host
+# dialogs — and `HarringtonSolver` is a `PulseSolver` subclass, so a hardcoded
+# name here told a Harrington caller about a class they had not asked for.
+# Sentences that describe the FAMILY rather than one row carry no placeholder.
 _OUT_OF_SCOPE = {
-    "degree": "PulseSolver has no degree: the pulse expansion IS the "
+    "degree": "{cls} has no degree: the pulse expansion IS the "
     "degree-0 basis, and point matching is defined against it. Use "
     "BSplineSolver(degree=...) for higher-order bases with Galerkin testing",
     "junctions": "PulseSolver takes no junction spec: coincident wire ends "
@@ -219,22 +241,77 @@ _OUT_OF_SCOPE = {
     "node_gaps": "node gaps are not supported: this formulation's delta gap "
     "is a whole segment's testing row, so a gap at a node is not a local "
     "basis edit here",
-    "extended_kernel": "PulseSolver is reduced-kernel only, and not by "
+    "extended_kernel": "{cls} is reduced-kernel only, and not by "
     "preference: the charge is two POINT charges per basis, whose potential "
     "on the wire axis is finite only because of the reduced kernel's a². "
     "The exact kernel would need a different charge model, not a different "
     "quadrature",
+    # momwire#564 scope item 2. `capabilities.wire_loading` has said False
+    # since momwire#396, but no sentence went with it: a deck carrying an
+    # `LD 5` (wire conductivity) or `LD 6` (insulation) reaches
+    # `build_solver`, which spells them as these three kwargs, and they fell
+    # through to the caller-typo `TypeError` below. That is not a refusal —
+    # the portal's frame catches `ValueError` / `NotImplementedError` and
+    # writes a `NEC ERROR` line, and a `TypeError` escapes it, killing the
+    # daemon mid-frame while SimNEC waits on an `NX` sentinel that never
+    # comes.
+    #
+    # The reason is the ground-contact reason, in the same words: this is an
+    # unwritten bar rather than a wall. A surface impedance on a pulse row is
+    # structurally a diagonal bump — Z_mm += Z_s·h_m, one term, no new
+    # geometry — but nothing has measured it against a family that serves the
+    # axis, and an unmeasured term is not a capability.
+    "wire_conductivity": _WIRE_LOADING_REFUSAL,
+    "insulation_radius": _WIRE_LOADING_REFUSAL,
+    "insulation_eps_r": _WIRE_LOADING_REFUSAL,
 }
+
+# NO `current_slopes` on this class, deliberately, and its ABSENCE is the
+# refusal (momwire#564). `q = -(1/jw)*dI/ds` is what a NEC charge column
+# reports; this row leaves each jump as a POINT charge (see "the CHARGE
+# carries every jump" above), so `dI/ds` is a delta comb rather than a
+# function and there is no density anywhere to sample — not a
+# badly-conditioned one, none. `HarringtonSolver` spreads each node's charge
+# over that node's dual cell and therefore HAS one, which is why the portal
+# roster's `pulse` entry is that class.
+#
+# Absence rather than a raising stub because both seams gate on presence:
+# `eznec._serve` checks `hasattr(solver_class, "current_slopes")` and turns a
+# miss into a printout refusal naming the basis, and a stub would defeat that
+# and reach the caller as an exception instead. Returning zeros would be
+# worse than either — an all-zero charge column is a wrong report, not an
+# empty one — and returning the twin's reading would put HarringtonSolver's
+# charge model under this class's name, erasing the one ingredient the pair
+# exists to measure (momwire#557).
 
 # Reused by the wire_radius scalar-only check in __init__ (momwire#147) and by
 # `capabilities.refusals` below — one message, not a copy in each.
 _PER_WIRE_RADIUS_REFUSAL = (
-    "wire_radius must be a scalar for PulseSolver; per-wire radii "
+    "wire_radius must be a scalar for {cls}; per-wire radii "
     "(momwire#147) are not supported by this formulation probe"
 )
 
 
-class PulseSolver(_ElementCurrents, _Cancelable):
+@dataclass(frozen=True)
+class _PulseBasis:
+    """Opaque `PortSolution.basis` payload for the pulse family.
+
+    The per-solve context needed to read a coefficient column: the geometry
+    tables and the wavenumber they were built at.  There is no segment view
+    to carry — a pulse coefficient IS the segment current in amperes, so the
+    readout is an index rather than a basis evaluation, which is why this
+    handle is one field shorter than the sinusoidal families' `_SegmentBasis`.
+
+    Private on purpose: momwire#232 hands consumers an OPAQUE handle, not an
+    interface.  Nothing outside this family should unpack it, and nothing
+    here promises it survives the next solve.
+    """
+
+    geom: dict
+    k: float
+
+
+class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Piecewise-constant (pulse) current basis, point-matched.
 
     See the module docstring for the formulation. One unknown per segment,
@@ -292,8 +369,11 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         refusals={
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "node_gaps": _OUT_OF_SCOPE["node_gaps"],
-            "extended_kernel": _OUT_OF_SCOPE["extended_kernel"],
-            "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL,
+            "extended_kernel": _OUT_OF_SCOPE["extended_kernel"].format(
+                cls="PulseSolver"
+            ),
+            "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL.format(cls="PulseSolver"),
+            "wire_loading": _WIRE_LOADING_REFUSAL.format(cls="PulseSolver"),
         },
     )
 
@@ -317,12 +397,15 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         cancel=None,
         **unsupported,
     ):
+        cls = type(self).__name__
         for name in unsupported:
             if name in _OUT_OF_SCOPE:
-                raise NotImplementedError(f"{name}: {_OUT_OF_SCOPE[name]}")
+                raise NotImplementedError(
+                    f"{name}: {_OUT_OF_SCOPE[name].format(cls=cls)}"
+                )
         if unsupported:
             bad = ", ".join(sorted(unsupported))
-            raise TypeError(f"PulseSolver got unexpected keyword argument(s): {bad}")
+            raise TypeError(f"{cls} got unexpected keyword argument(s): {bad}")
 
         self._cancel = cancel
         self._checkpoint()
@@ -336,7 +419,7 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         # scalar, so the wire count is immaterial here (any sequence —
         # even length-1 — is refused, exactly as before).
         _radii, uniform = _wire_spec.normalize_wire_radius(
-            wire_radius, 1, per_wire_refusal=_PER_WIRE_RADIUS_REFUSAL
+            wire_radius, 1, per_wire_refusal=_PER_WIRE_RADIUS_REFUSAL.format(cls=cls)
         )
         self.wire_radius = uniform
 
@@ -747,6 +830,55 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         where the asymmetry lives: point matching tests the vector term at
         one point per row, so only the charge term is reciprocal by
         construction.
+
+        Implemented as ``compute_port_solution().y`` (momwire#564), which is
+        the house rule for every family that serves ports: the two entry
+        points cannot drift apart because there is only one of them.
+        """
+        return self.compute_port_solution().y
+
+    def _port_count(self):
+        """Ports `compute_port_solution` returns — the configured gap feeds
+        and nothing else.
+
+        This family has no junction ports and no node gaps to append (both
+        are in `_OUT_OF_SCOPE`, refused by PRESENCE at construction), so the
+        feed list IS the port list and the count needs no solve.
+        """
+        return len(self.feeds)
+
+    def compute_port_solution(self) -> PortSolution:
+        """Solve every port from ONE fill and ONE factorisation (momwire#564).
+
+        Returns a `PortSolution` carrying `y` (the admittance matrix
+        `compute_y_matrix()` now reads off this call), `coeffs` — column j is
+        the pulse-coefficient solution for a 1 V drive at port j with the
+        others shorted — the per-port current readout `port_currents`, and
+        the opaque `basis` handle. Ports are the configured gap feeds, in
+        order; nothing follows them on this family.
+
+        **`y` and `port_currents` are the same array, and here that is not
+        just a convention.** On a pulse basis the coefficient IS the segment
+        current in amperes (module docstring, "I_n constant on segment n"),
+        so the port readout is a row selection out of `coeffs` rather than a
+        basis evaluation — `Y = coeffs[idx, :]` and there is no second
+        expression of it to disagree.
+
+        Drive convention is the delta gap the module docstring derives: the
+        testing row already carries its own `h_m`, so column j's right-hand
+        side is a bare 1 at port j's segment rather than the `-1/h_j` the
+        sinusoidal family's Eq 187 needs. A caller who wants the
+        coefficients for an arbitrary excitation forms `coeffs @ V` with V
+        in volts, with no second fill.
+
+        Grounds ride exactly as they do for `compute_impedance`; there are no
+        extra preconditions. `basis` is stable across the ports of this one
+        solution and NOT across solves.
+
+        Without this method the pulse family had no portal surface at all —
+        `momwire.portal`'s `_y_and_port_coeffs` calls it unconditionally, so
+        a roster entry without it raised `AttributeError` on EVERY deck, and
+        an escaping exception is not a refusal (momwire#559, #564).
         """
         geom = self._build_geometry()
         self._checkpoint()
@@ -754,12 +886,38 @@ class PulseSolver(_ElementCurrents, _Cancelable):
         self.z = Z
 
         idx = self._feed_basis_indices(geom)
+        # Column j: drive port j with V = 1 (RHS = 1 at port j's segment, 0
+        # elsewhere). Stack all N and let LAPACK do one LU + N back-subs.
         B = np.zeros((geom["n_basis"], len(idx)), dtype=np.complex128)
         for j, m_j in enumerate(idx):
             B[m_j, j] = 1.0
 
         self._checkpoint()
-        return scipy.linalg.solve(Z, B)[idx, :]
+        coeffs = scipy.linalg.solve(Z, B)
+        Y = coeffs[idx, :]
+        return PortSolution(
+            y=Y,
+            coeffs=coeffs,
+            port_currents=Y,  # the same object: the readout IS the Y matrix
+            basis=_PulseBasis(geom=geom, k=self.k),
+        )
+
+    def _port_solutions_swept(self, k_array):
+        """Per-k `PortSolution` generator behind `compute_y_matrix_swept` and
+        `compute_port_solution_swept` (momwire#252's contract).
+
+        A plain loop over `compute_port_solution` — this family has no
+        batched assembly to preserve, so the per-k core IS the single-k entry
+        point and the swept Y cannot drift from the stacked single-k Y by so
+        much as an ulp. The geometry build is already cached on the instance,
+        and `_assemble_Z` takes its `omega` from the `k` it is passed, so
+        nothing but the frequency triple has to move per step.
+        """
+        with self._k_restored():
+            for kk in np.asarray(k_array, dtype=float):
+                self._checkpoint()  # top of each frequency iteration
+                self._set_k(kk)
+                yield self.compute_port_solution()
 
     # ------------------------------------------------------------------
     # field readout
