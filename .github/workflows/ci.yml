@@ -216,7 +216,52 @@ jobs:
         env:
           CC: ccache gcc
           CXX: ccache g++
-      - run: pytest tests/ -m "slow and not memgate"
+      # `not crossgate`: the crossing-serve eps1 certification solves are
+      # ALSO marked slow (so fast lanes and wheel smoke exclude them for
+      # free) and run in their own merge-to-main lane below — the PR slow
+      # lane keeps the soil-A crossing anchor pin (test_g524_4), which is
+      # the per-PR regression guard for the crossing fill.
+      - run: pytest tests/ -m "slow and not memgate and not crossgate"
+        if: needs.changes.outputs.code == 'true'
+
+  test-crossgate:
+    needs: changes
+    # Crossing-serve eps1 certification (momwire#524): the collapse
+    # adjudicators re-solve multi-minute crossing decks against independent
+    # free-space truths. Same reasoning as test-memgate: certification, not
+    # an edit-loop guard — runs once on push to main so a regression is
+    # caught right after merge instead of on every review cycle. Must NOT
+    # run on pull_request: the `if` below is the enforcement.
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.changes.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: hendrikmuhs/ccache-action@v1.2
+        if: needs.changes.outputs.code == 'true'
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
+      - run: pip install --upgrade pip
+        if: needs.changes.outputs.code == 'true'
+      # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
+      # step. Installed HERE rather than left to build isolation so that
+      # `--no-build-isolation` below can find them.
+      - run: pip install "setuptools>=61.0" wheel pybind11
+        if: needs.changes.outputs.code == 'true'
+      # Same reasoning as the `test` job.
+      - run: pip install -e .[test] --no-build-isolation
+        if: needs.changes.outputs.code == 'true'
+        env:
+          CC: ccache gcc
+          CXX: ccache g++
+      # Inherits addopts' xdist (-n auto): unlike memgate these gates
+      # measure impedances, not memory peaks, and parallelize fine.
+      - run: pytest tests/ -m crossgate
         if: needs.changes.outputs.code == 'true'
 
   test-memgate:
