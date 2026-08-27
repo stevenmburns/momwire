@@ -226,6 +226,48 @@ def test_g524_4_soil_a_crossing_anchor(record_property):
 
 
 @pytest.mark.slow
+def test_g524_6_rise_deck_eps1_collapse(record_property):
+    """The P3 rise class through the same adjudicator: an above wire
+    ENDING at the node (σ_aσ_b = +1, the orientation-carried corner
+    sign's other branch) joined to a BENT below wire (15 cm rise + 5 m
+    horizontal radial). At ε̃ = 1 the deck is one bent free-space wire
+    solved independently by the shipped fill (measured 0.0019 Ω apart).
+    This is the gate that catches an orientation-blind corner — that
+    bug wrecked this deck to 10−1007j while leaving every
+    starts-at-node deck untouched."""
+    pts = np.array(
+        [(5.0, 0.0, -0.15), (0.0, 0.0, -0.15), (0.0, 0.0, 0.0), (0.0, 0.0, 10.0)]
+    )
+    z_truth, _ = BSplineSolver(
+        wires=[pts],
+        n_per_edge_per_wire=[[10, 2, 15]],
+        feeds=[(0, 5.0 + 0.15 + 10.0 - 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+    ).compute_impedance()
+    rise = np.array([(5.0, 0.0, -0.15), (0.0, 0.0, -0.15), (0.0, 0.0, 0.0)])
+    mono = np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)])
+    z, _ = BSplineSolver(
+        wires=[rise, mono],
+        n_per_edge_per_wire=[[10, 2], [15]],
+        junctions=[[(0, "end"), (1, "end")]],
+        feeds=[(1, 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        ground_z=0.0,
+        ground_eps=(1.0, 0.0),
+        ground_model="sommerfeld",
+    ).compute_impedance()
+    record_property("momwire_Z", f"{z:.4f}")
+    record_property("free_space_truth", f"{z_truth:.4f}")
+    assert abs(z - z_truth) <= 0.05, (
+        f"the rise-deck ε̃ = 1 solve answers {z:.4f} where the free-space "
+        f"bent-wire truth is {z_truth:.4f} — {abs(z - z_truth):.4f} ohm "
+        "apart; check the corner's orientation sign first"
+    )
+
+
+@pytest.mark.slow
 def test_g524_5_eps1_collapse_reproduces_free_space(record_property):
     """probe29's adjudicator through the production path: at ε̃ = 1 the
     interface vanishes and the crossing deck IS a free-space 12 m wire,
