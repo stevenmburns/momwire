@@ -221,8 +221,47 @@ jobs:
       # free) and run in their own merge-to-main lane below — the PR slow
       # lane keeps the soil-A crossing anchor pin (test_g524_4), which is
       # the per-PR regression guard for the crossing fill.
+      #
+      # The residency gate (#532) diverges on 0116/0117 out of a RESIDENT
+      # process, on runners and not on any machine we can reproduce it on
+      # (#677). It is non-strict, so it reports and moves on — which means
+      # the occurrence leaves nothing behind unless we ask it to. Same
+      # reasoning, and the same shape, as the byte-oracle dumps in the `test`
+      # job: an unreproducible failure that discards its own evidence costs
+      # a whole CI cycle to learn nothing from.
       - run: pytest tests/ -m "slow and not memgate and not crossgate"
         if: needs.changes.outputs.code == 'true'
+        env:
+          MOMWIRE_532_DUMP: ${{ github.workspace }}/677-dumps
+      # The gate is XFAIL, so a divergence leaves the job GREEN and the
+      # artifact silent -- and an artifact nobody is told about only helps
+      # someone who already suspected there was something to look at. Say it
+      # out loud instead, on the run page and in the job summary. This is
+      # also why the upload below is `if: always()` and not `failure()`,
+      # which would never fire.
+      - name: Flag a captured residency divergence (momwire#677)
+        if: always()
+        run: |
+          if [ -n "$(ls -A 677-dumps 2>/dev/null)" ]; then
+            n=$(ls -1 677-dumps | wc -l)
+            echo "::warning::momwire#677 REPRODUCED: $n dump file(s) captured. Download the momwire-677-dumps artifact -- this is the evidence the issue is waiting on."
+            {
+              echo "### momwire#677 reproduced on this run"
+              echo
+              echo "\`$n\` dump file(s) in the \`momwire-677-dumps\` artifact:"
+              echo
+              ls -1 677-dumps | sed 's/^/- /'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "momwire#677 did not reproduce on this run."
+          fi
+      - name: Upload residency mismatch dumps (momwire#677)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: momwire-677-dumps
+          path: 677-dumps/
+          if-no-files-found: ignore
 
   test-crossgate:
     needs: changes
