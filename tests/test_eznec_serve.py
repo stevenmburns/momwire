@@ -689,7 +689,7 @@ def served(cid: str) -> str:
 
 @functools.lru_cache(maxsize=None)
 def corpus() -> dict[str, str]:
-    """Every one of the 49 captured decks, rendered once.
+    """Every one of the 80 captured decks, rendered once.
 
     Two gates read the whole corpus — the served-id ladder and the catch-all
     stub — and rendering it twice would double the slowest thing in this file
@@ -2288,7 +2288,7 @@ def test_the_corpus_ladder_is_77_of_80():
     which is the shape a ladder is supposed to have.  This one cannot move
     again by serving: nothing converges there on either side of the seam.
 
-    What this number does NOT claim is that all 59 are right.  The ladder
+    What this number does NOT claim is that all 77 are right.  The ladder
     counts decks that get an ANSWER rather than decks that get a pinned one,
     and that distinction is why the envelope tables are written out
     separately — 0033 and 0034 (:data:`GRAZING_IDS`) spent an arc inside this

@@ -795,12 +795,18 @@ def test_a_dust_e_field_prints_as_a_clean_zero_rather_than_its_own_angle():
 def test_the_dust_floor_clears_what_moves_and_spares_what_does_not():
     """The derivation, kept as an assertion rather than only as prose.
 
-    Measured over all 62 capture decks at OMP_NUM_THREADS 1 vs 8: the largest
-    E-field magnitude that MOVED was 1.65e-9 V/m, and the weakest legitimate
-    reading in the captured printouts is ~1e-5 V/m — with nothing at all in
-    between. The bar has to sit inside that void, and a future retune that
-    walks it out of the void should fail here rather than silently start
-    zeroing readings or stop zeroing dust.
+    Measured with the bar itself switched off, over all 80 capture decks at
+    OMP_NUM_THREADS 1 vs 8: the largest E-field magnitude that MOVED was
+    1.648e-9 V/m, and the weakest legitimate reading in the captured
+    printouts is 2.5e-5 V/m — with nothing at all in between. The bar has to
+    sit inside that void, and a future retune that walks it out of the void
+    should fail here rather than silently start zeroing readings or stop
+    zeroing dust.
+
+    Re-derived at 80 decks (the corpus was 62 when the bar was set) and both
+    ends held: the moving maximum landed on the same 1.648e-9, and the void
+    is still empty end to end. With the bar ON, nothing in the pattern tables
+    moves between the two thread counts at all.
     """
     from momwire.eznec import _serve
 

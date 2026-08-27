@@ -10,8 +10,9 @@ wire's end leaves a one-segment polyline it refuses outright.
 So :func:`~momwire.eznec._serve.build_mesh` now takes the solver class and
 reads ``capabilities.node_gaps`` off it.  Three gates carry the unit:
 
-**Nothing moves for bspline.**  Not tested here — it is tested by the 122
-captures still round-tripping byte for byte in ``test_eznec_printout.py``,
+**Nothing moves for bspline.**  Not tested here — it is tested by the 75
+printout-carrying captures still round-tripping byte for byte in
+``test_eznec_printout.py``,
 which is the only gate that could see a change and the reason the spelling is
 per-basis rather than replaced.
 
@@ -20,10 +21,10 @@ round: degree-2 B-splines answer within 2.03 % of themselves across the cut,
 and razor answers a junction-knot gap and an interior-knot gap to the last
 ulp.
 
-**The corpus reaches razor.**  62 committed captures, 11 served under the cut
-and 49 without it, with every one of the remaining 13 named — and on the 42
-carrying a printout, razor-nec5's input impedance lands a median 0.00 % from
-the licensed engine's own.  That is REPRODUCTION, not accuracy: razor is the
+**The corpus reaches razor.**  80 committed captures, 11 served under the cut
+and 77 without it, with every one of the remaining 3 named — and on the 72 of
+those 77 that carry a printout, razor-nec5's input impedance lands a median
+0.004 % from the licensed engine's own.  That is REPRODUCTION, not accuracy: razor is the
 engine's twin and inherits its discretization error by design, so nothing in
 this file claims it is the better answer (see ``_serve``'s module docstring,
 "Two spellings of a series EMF").  It is a gate on the TRANSLATION.

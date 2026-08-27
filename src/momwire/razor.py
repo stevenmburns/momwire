@@ -452,7 +452,8 @@ _OUT_OF_SCOPE = {
 # grounded branch carries the measurement.
 #
 # The refusal was therefore not protecting a defect the term would repair.
-# What it was costing is five of the 62 EZNEC captures and the most common
+# What it was costing is five of the EZNEC captures — 0021, 0047, 0048, 0110
+# and 0111, five of the 62 the corpus held then and five of 80 now — and the most common
 # HF model there is, a base-fed vertical over real ground, on an engine a
 # user points EZNEC at. Serving it puts razor on bspline's bar (D1): a
 # residual that is BOUNDED and saturating rather than diverging, pinned by

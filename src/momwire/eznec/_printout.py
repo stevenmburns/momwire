@@ -1078,8 +1078,15 @@ def _near_field(block: NearFieldBlock) -> list[str]:
     (linux oracle, 2026-08-21: an ``NE``-then-``RP`` deck prints the near
     field, then ``***** INPUT LINE 6 RP``, then the pattern, and the same
     deck with the cards swapped prints them the other way round).  No deck
-    EZNEC emits is that shape — all 62 captures write exactly one request
-    card — so the shape is recorded here rather than served.
+    EZNEC emits is that shape: across the 80 captures, 47 write exactly one
+    request card and the other 33 write NONE (the ``XQ`` half of the Src Dat
+    / FF Plot capture pair), and not one writes two.  So the shape is
+    recorded here rather than served.
+
+    Stated as "all 62 captures write exactly one request card" until the
+    destaling sweep, which was wrong about its own corpus in a way the
+    argument survives — the claim that matters is that none writes TWO, and
+    a deck writing none never raises the question of order either.
     """
     kind = "MAGNETIC" if block.magnetic else "ELECTRIC"
     letter = "H" if block.magnetic else "E"
