@@ -33,6 +33,8 @@ Convention gate: e^{+jωt}, ε̃ = ε_r − jσ/ωε₀, asserted at import.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from scipy.special import hankel1, hankel2
 
@@ -47,11 +49,35 @@ from ._sommerfeld_transmitted import (
     k_medium,
 )
 
+try:  # the C++ twin (momwire#680 U2) is optional; this walk is the reference
+    from . import _near_interface_accel as _nia
+except ImportError:  # pragma: no cover - pure-Python install
+    _nia = None
+
 KEYS = ("U", "V", "W", "dzW", "dzpV", "dzpW")
 _LAM_MULT = 8.0
 _RAY = np.exp(1j * np.pi / 4.0)
 _MAX_RAY_PANELS = 90
 _FAR_PAIR_KILL = 60.0
+
+# The twin's capability flag — its OWN symbol (`near_interface_680`), never a
+# shared one: a .so built at an earlier arc exports the #568 entries but not
+# this one, and a shared flag would claim a contract it cannot serve.
+_HAVE_NEAR_INTERFACE_ACCEL = _nia is not None and bool(
+    getattr(_nia, "near_interface_680", False)
+)
+
+# The tests' handle on the dispatch — parity gates drive BOTH machines inside
+# one process. `MOMWIRE_NEAR_INTERFACE_FORCE_NUMPY` is the whole-run switch (a
+# timing comparison, a bisect); `monkeypatch.setattr(ni, "_FORCE_NUMPY", True)`
+# is the per-test one. `_use_near_interface_accel` reads both at CALL time.
+_FORCE_NUMPY = bool(os.environ.get("MOMWIRE_NEAR_INTERFACE_FORCE_NUMPY"))
+
+
+def _use_near_interface_accel():
+    """The C++ walk twin serves when built and not forced off."""
+    return _HAVE_NEAR_INTERFACE_ACCEL and not _FORCE_NUMPY
+
 
 # --- convention gate (e^{+jωt}: the lossy k_m must make e^{−jk_m R} decay) --
 _kp_gate = 2.0 * np.pi / 42.831
@@ -199,6 +225,12 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     the memo is bit-identical to the unmemoized loop by construction.
     Keys are exact float tuples: no rounding, no tolerance, nothing to
     convention-gate.
+
+    The memo layer stays HERE even when the C++ twin serves (#680 U2): the
+    dedup happens first, and only the unique triples cross into
+    `near_interface_six_batch` (that list is also U3's parallel unit). The
+    numpy `six_point` walk below is the reference; the twin is gated
+    against it at 1e-12 RELATIVE, never bit.
     """
     rho_b, z_b, zp_b = np.broadcast_arrays(
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
@@ -209,9 +241,31 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     for _ in it:
         ix = it.multi_index
         key = (float(rho_b[ix]), float(z_b[ix]), float(zp_b[ix]))
-        got = memo.get(key)
-        if got is None:
-            got = memo[key] = six_point(
+        if key not in memo:
+            memo[key] = None  # first-appearance order, filled below
+    unique = list(memo)
+    if _use_near_interface_accel() and unique:
+        k_p = float(k2)
+        k_m = k_medium(complex(eps_t), k_p)
+        tri = np.asarray(unique, dtype=float).reshape(-1, 3)
+        vals = _nia.near_interface_six_batch(
+            k_p,
+            k_m,
+            np.ascontiguousarray(tri[:, 0]),
+            np.ascontiguousarray(tri[:, 1]),
+            np.ascontiguousarray(tri[:, 2]),
+            float(rtol),
+            float(lam_mult),
+            _ADAPT_DEPTH,
+            _DETOUR,
+            _GX,
+            _GW,
+        )
+        for key, row in zip(unique, vals):
+            memo[key] = row
+    else:
+        for key in unique:
+            memo[key] = six_point(
                 eps_t,
                 k2,
                 key[0],
@@ -220,7 +274,11 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
                 rtol=rtol,
                 lam_mult=lam_mult,
             )
-        out[(slice(None),) + ix] = got
+    it = np.nditer(rho_b, flags=["multi_index"])
+    for _ in it:
+        ix = it.multi_index
+        key = (float(rho_b[ix]), float(z_b[ix]), float(zp_b[ix]))
+        out[(slice(None),) + ix] = memo[key]
     return dict(zip(KEYS, out))
 
 

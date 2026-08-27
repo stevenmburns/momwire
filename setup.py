@@ -1,3 +1,4 @@
+import glob
 import os
 import sys
 import warnings
@@ -62,7 +63,7 @@ class OptionalBuildExt(build_ext):
     @staticmethod
     def _warn(exc):
         warnings.warn(
-            f"momwire._accelerators C++ extension failed to build ({exc!r}); "
+            f"a momwire C++ extension failed to build ({exc!r}); "
             "installing in pure-Python mode. The solver will work but run "
             "slower. Install a C++ toolchain (and on Linux, glibc>=2.28 with "
             "libmvec) for the accelerated path.",
@@ -140,6 +141,17 @@ else:
     ]
     extra_link_args = ["-fopenmp", "-lpthread", "-lmvec"]
 
+# The near-interface twin (momwire#680 U2) compiles against the vendored
+# scipy/xsf headers (extern/xsf, header-only), which are C++17. The main
+# `_accelerators` extension stays at gnu++11 untouched; only this second,
+# equally-optional extension gets the newer standard.
+if sys.platform == "win32":
+    _near_compile_args = extra_compile_args + ["/std:c++17"]
+else:
+    _near_compile_args = [
+        "-std=gnu++17" if a == "-std=gnu++11" else a for a in extra_compile_args
+    ]
+
 # The inline headers `_accelerators.cpp` pulls in. setuptools rebuilds an
 # object file only when a listed source or DEPENDENCY is newer than it, and a
 # header it has never been told about is neither: without this list, editing
@@ -154,12 +166,27 @@ _ACCEL_HEADERS = [
     "src/momwire/_contour_engine_inline.h",
 ]
 
+# Same staleness rationale for the near-interface twin: the contour engine
+# header AND every vendored xsf header are dependencies, or editing (or
+# re-vendoring) one silently re-installs the old binary.
+_NEAR_HEADERS = ["src/momwire/_contour_engine_inline.h"] + sorted(
+    glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True)
+)
+
 ext_modules = [
     Pybind11Extension(
         "momwire._accelerators",
         ["src/momwire/_accelerators.cpp"],
         depends=_ACCEL_HEADERS,
         extra_compile_args=extra_compile_args,
+        extra_link_args=extra_link_args,
+    ),
+    Pybind11Extension(
+        "momwire._near_interface_accel",
+        ["src/momwire/_near_interface_accel.cpp"],
+        depends=_NEAR_HEADERS,
+        include_dirs=["extern/xsf/include"],
+        extra_compile_args=_near_compile_args,
         extra_link_args=extra_link_args,
     ),
 ]

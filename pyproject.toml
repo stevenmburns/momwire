@@ -192,7 +192,7 @@ test-requires = "pytest pytest-xdist"
 # CI, not in a wheel smoke test). cibuildwheel runs this from a temp dir
 # against the installed wheel, so `import momwire` resolves to the wheel, not
 # src/.
-test-command = 'python -c "import momwire._accelerators; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not memgate"'
+test-command = 'python -c "import momwire._accelerators; import momwire._near_interface_accel; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL; from momwire import _near_interface as ni; assert ni._HAVE_NEAR_INTERFACE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py -m "not slow and not memgate"'
 
 [tool.cibuildwheel.linux]
 # glibc >= 2.28 ships libmvec; manylinux2014 (glibc 2.17) does NOT, so the
