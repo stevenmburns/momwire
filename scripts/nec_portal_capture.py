@@ -31,8 +31,28 @@ Usage
     python scripts/nec_portal_capture.py --check    # verify committed fixtures
 
 ``--check`` regenerates into a temporary directory and diffs against the
-committed tree, exiting non-zero on any drift.  That is the idempotency gate:
-re-running the capture must produce byte-identical fixtures.
+committed tree, exiting non-zero on any drift.  **Run it before a re-capture,
+and read the diff** — that is the whole ritual, and it is deliberately a
+MAINTAINER TOOL rather than a test.  It was a test once and could not be one
+honestly: CI never has the oracle binary (that is why the fixtures are
+committed), so it ran only on a developer box, and there it compared this
+corpus against whatever oracle BUILD happened to be installed.
+
+That last part is the thing to know before reading a drift report.  The oracle
+is deterministic run to run — the same binary regenerates all 65 decks bit for
+bit — so drift means one of two things, and they look identical here:
+
+* the capture script changed (real drift, the reason to run this), or
+* your binary is a different build from the corpus's own
+  ``manifest.json`` ``oracle_version`` (provenance, and not drift at all).
+
+Check the version first.  Across 1.17 and 1.23 the second case shows up as the
+``VERSION`` banner on every deck plus about sixteen lines of near-zero float
+dust in the network decks — signed zeros, a 1e-17 W network loss, one
+reciprocal-of-dust admittance in ``dipole_nt_all_zero``.  Re-capturing on a
+mismatched build silently re-baselines the whole corpus onto it, so pin the
+matching binary with ``--oracle`` / ``$NEC_PORTAL_ORACLE`` unless moving the
+baseline is what you actually mean to do.
 
 Determinism
 -----------
@@ -62,12 +82,43 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "nec_portal"
 MANIFEST_NAME = "manifest.json"
 
-# SimNEC 2/3 ships this build; its banner reports VERSION:5b4az.ae6ty.1.17,
-# which is what nec2/Execute.versionB ("5b4az\.ae6ty\.(.*)") matches.
-DEFAULT_ORACLE = Path(
-    "/home/smburns/.SimNEC/2/3/Examples/nec2c.ae6ty/bin/nec2c-ubuntu-x86"
-)
 ORACLE_ENV = "NEC_PORTAL_ORACLE"
+
+# SimNEC installs the oracle under ``~/.SimNEC/<major>/<minor>/Examples/…``,
+# and which ``<major>/<minor>`` that is depends on which SimNEC last ran.  This
+# was a hardcoded ``2/3`` path once; when the install moved on, the default
+# stopped resolving and every consumer read that as "no oracle installed"
+# rather than "looked in the wrong place" — a false negative that hid the
+# binary from the capture script and skipped its callers silently.  So the
+# newest install wins, discovered rather than asserted.  ``ORACLE_ENV`` and an
+# explicit ``--oracle`` still beat it, which is how you pin an OLDER build to
+# match the corpus's own ``oracle_version``.
+_ORACLE_GLOB = ".SimNEC/*/*/Examples/nec2c.ae6ty/bin/nec2c-ubuntu-x86"
+
+
+def _simnec_version_key(path: Path) -> tuple[int, int]:
+    """``(major, minor)`` of the ``.SimNEC/<major>/<minor>/`` above `path`.
+
+    A non-numeric component sorts below every numeric one rather than raising:
+    the point of discovery is to find something, and an unexpected directory
+    name should not be able to crash the lookup.
+    """
+    parts = path.parts
+    after = parts[parts.index(".SimNEC") + 1 :][:2]
+    return tuple(int(p) if p.isdigit() else -1 for p in after)  # type: ignore[return-value]
+
+
+def discover_oracle() -> Path | None:
+    """The newest installed oracle binary, or ``None`` when there is none."""
+    found = [
+        p
+        for p in Path.home().glob(_ORACLE_GLOB)
+        if p.is_file() and os.access(p, os.X_OK)
+    ]
+    return max(found, key=_simnec_version_key, default=None)
+
+
+DEFAULT_ORACLE = discover_oracle()
 
 # Per-deck wall-clock ceiling and the concurrency cap.  This box has 16 GB and
 # the oracle is a dense-matrix solver: never run more than two at once.
@@ -1181,7 +1232,17 @@ class OracleMissing(RuntimeError):
 
 def find_oracle(explicit: str | None = None) -> Path:
     """Locate the oracle binary, or raise :class:`OracleMissing` with advice."""
-    candidate = Path(explicit or os.environ.get(ORACLE_ENV) or DEFAULT_ORACLE)
+    chosen = explicit or os.environ.get(ORACLE_ENV) or DEFAULT_ORACLE
+    if chosen is None:
+        raise OracleMissing(
+            "SimNEC oracle binary not found or not executable: no install "
+            f"under ~/{_ORACLE_GLOB}\n"
+            f"Set {ORACLE_ENV}=/path/to/nec2c-ubuntu-x86 (it ships with SimNEC\n"
+            "under .SimNEC/<major>/<minor>/Examples/nec2c.ae6ty/bin/).\n"
+            "The committed fixtures under tests/fixtures/nec_portal/ exist so\n"
+            "that CI never needs this binary — only regeneration does."
+        )
+    candidate = Path(chosen)
     if not candidate.is_file() or not os.access(candidate, os.X_OK):
         raise OracleMissing(
             f"SimNEC oracle binary not found or not executable: {candidate}\n"
@@ -1352,7 +1413,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--oracle",
         default=None,
-        help=f"path to the oracle binary (default: ${ORACLE_ENV} or {DEFAULT_ORACLE})",
+        help=(
+            f"path to the oracle binary (default: ${ORACLE_ENV}, else the "
+            f"newest install under ~/{_ORACLE_GLOB}"
+            + (f"; found {DEFAULT_ORACLE})" if DEFAULT_ORACLE else "; none found)")
+        ),
     )
     parser.add_argument(
         "--out-dir",
