@@ -17,8 +17,6 @@ import hashlib
 import importlib.util
 import json
 import re
-import subprocess
-import sys
 from pathlib import Path
 
 import pytest
@@ -225,45 +223,23 @@ def test_resident_transcript_exits_on_stdin_eof():
 
 
 # --------------------------------------------------------------------------
-# the oracle itself (skipped unless the binary is installed)
+# the capture script's own error path (no binary needed)
 # --------------------------------------------------------------------------
 
-try:
-    _ORACLE: Path | None = CAPTURE.find_oracle()
-except CAPTURE.OracleMissing:
-    _ORACLE = None
-
-needs_oracle = pytest.mark.skipif(
-    _ORACLE is None,
-    reason="SimNEC oracle binary not installed (fixtures are committed instead)",
-)
-
-
-# The other half of what regeneration needs. Ten of the 44 decks are
-# antennaknobs catalog designs run through its `nec_export` (capture script,
-# `_catalog_decks`), and momwire does not depend on antennaknobs — so on a
-# momwire-only environment the corpus cannot be REBUILT, only used. That is
-# the whole point of committing it (#846 phase III), and it is stated as a
-# skip rather than left to fail: `--check` exits 3 with the reason, and a
-# green run here means the corpus really did regenerate byte-identically.
-needs_catalog = pytest.mark.skipif(
-    importlib.util.find_spec("antennaknobs") is None,
-    reason="the catalog_* third of the corpus is exported from antennaknobs",
-)
-
-
-@pytest.mark.oracle_binary
-@needs_oracle
-@needs_catalog
-def test_capture_is_idempotent():
-    """`--check` regenerates the corpus and must find zero drift."""
-    proc = subprocess.run(
-        [sys.executable, str(CAPTURE_SCRIPT), "--check"],
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    assert proc.returncode == 0, proc.stderr
+# There is deliberately NO test here that regenerates the corpus and diffs it.
+# `nec_portal_capture.py --check` does that, and it is a MAINTAINER TOOL rather
+# than a gate: it cannot run in CI (no oracle binary, by design — that is why
+# the fixtures are committed at all), and as a test it could only ever run on
+# a machine holding the exact oracle BUILD the corpus was captured with.  On
+# any other build it reported provenance as drift and advised re-running the
+# capture — which would have re-baselined all 65 decks onto whatever binary
+# happened to be installed.
+#
+# What that test uniquely covered was rot in the capture script itself, and
+# that is self-revealing at the only moment it matters: a re-capture is a
+# deliberate act whose diff gets read.  Everything about whether the COMMITTED
+# corpus is trustworthy — hand-edited bytes, orphans, uncanonicalised timings,
+# missing sections, deck legality — is gated above, without the binary.
 
 
 def test_missing_oracle_fails_with_a_clear_message(tmp_path):
