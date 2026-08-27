@@ -75,8 +75,16 @@ def test_the_detector_is_silent_without_its_tap(monkeypatch):
 
 
 def test_the_pick_is_the_argmin_whatever_the_tap_says(monkeypatch):
-    """The module reports and changes nothing. Pinned because the whole point
-    of step 1 is that it is safe to land before the contract is decided."""
+    """Away from a tie the pick is `argmin`, and the tap never moves it —
+    turning the diagnostic on must not change an answer.
+
+    AT a tie it is the smaller arclength instead (momwire#672 made that
+    sayable by putting razor's knots in arc order). On an ascending grid the
+    two agree, because `argmin` already returns the first occurrence — which
+    is why every target below still matches `argmin`, ties included. The
+    rule earns its keep on the NEAR-ties, where the distances differ by
+    rounding and `argmin` follows the noise instead of the geometry;
+    `test_a_near_tie_goes_to_the_smaller_arclength` covers that."""
     grid = np.array([0.25, 0.75, 1.25, 1.75])
     for tap in ("1", None):
         if tap:
@@ -132,3 +140,22 @@ def test_the_bar_still_sits_in_the_void_the_suite_leaves():
     # And under the deliberate straddle in tests/test_feed_snap_623.py, which
     # asks for both sides of a tie on purpose and is not confused.
     assert _feed_snap.AMBIGUITY_TOL_FRAC < 2.0e-10
+
+
+def test_a_near_tie_goes_to_the_smaller_arclength(monkeypatch):
+    """The case the rule exists for, and the one `argmin` gets wrong.
+
+    Two sites the same distance away to within rounding, arranged so the
+    FARTHER-by-a-crumb one is the smaller arclength. `argmin` follows the
+    crumb and takes the larger; the rule takes the smaller, and keeps taking
+    it whichever way the crumb falls — which is what lets two spellings of
+    one antenna resolve the same tie the same way (momwire#672).
+    """
+    monkeypatch.delenv(_feed_snap._TAP, raising=False)
+    crumb = 1e-15
+    grid = np.array([1.0, 2.0])
+    target = 1.5 + crumb  # nearer to 2.0 by a crumb; 1.0 is the smaller arc
+    assert int(np.argmin(np.abs(grid - target))) == 1
+    pick, margin = _feed_snap.snap(grid, target, total_arc=2.0, family="T")
+    assert margin <= _feed_snap.AMBIGUITY_TOL_FRAC * 2.0
+    assert pick == 0, "the rule must not follow the crumb"

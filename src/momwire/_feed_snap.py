@@ -84,27 +84,39 @@ def snap(grid, target, *, total_arc, family, what="feed", wire=None):
 
     `grid` is the family's own site arclengths along one wire; `margin` is the
     gap between the best and second-best distances in metres, `inf` when the
-    grid holds one point. The pick is `argmin` and is NEVER changed by this
-    module — it reports, and #623 step 2 decides what the contract does.
+    grid holds one point. Away from a tie the pick is `argmin`; inside the
+    `AMBIGUITY_TOL_FRAC` bar it is the smaller arclength, stated rather than
+    left to the rounding in the grid (#623, and #672 for why it can be).
     """
     arcs = np.asarray(grid, dtype=float)
     if arcs.size == 0:
         raise ValueError(f"{family}: no {what} sites on wire {wire}")
     dist = np.abs(arcs - target)
-    pick = int(np.argmin(dist))
     if arcs.size == 1:
-        return pick, float("inf")
-    best, second = np.partition(dist, 1)[:2]
-    margin = float(second - best)
+        return 0, float("inf")
+    order = np.argsort(dist, kind="stable")
+    near, next_ = int(order[0]), int(order[1])
+    margin = float(dist[next_] - dist[near])
+    # Inside the bar the two sites are the same distance away to within the
+    # grid's own rounding, so `argmin` is choosing on noise. State the rule
+    # instead: the SMALLER ARCLENGTH wins. Every grid handed here ascends —
+    # the sinusoidal and pulse centres by `cumsum` construction, razor's
+    # knots since momwire#672 sorted them — so that is the lower index, and
+    # it is a property of the geometry rather than of the order a list was
+    # built in. It was not sayable before #672: the same two knots read as
+    # (9, 10) with a bend authored as one wire and (9, 0) as two, so this
+    # rule would have named different sites in two spellings of one antenna.
+    pick = min(near, next_) if margin <= AMBIGUITY_TOL_FRAC * total_arc else near
     if os.environ.get(_TAP):
         _record(family, what, wire, target, margin, total_arc, arcs.size)
         if margin <= AMBIGUITY_TOL_FRAC * total_arc:
             where = "" if wire is None else f" on wire {wire}"
             warnings.warn(
                 f"{family}: the {what} arclength {target:.12g}{where} falls "
-                f"between two sites this basis can carry. The pick is decided "
-                f"by rounding in the grid, and the two answers put the site "
-                f"half a cell apart. See stevenmburns/momwire#623.",
+                f"between two sites this basis can carry, so the "
+                f"smaller-arclength rule chose. The two sit half a cell "
+                f"apart — if that matters here, name a site on this basis's "
+                f"own grid. See stevenmburns/momwire#623.",
                 AmbiguousSite,
                 stacklevel=3,
             )
