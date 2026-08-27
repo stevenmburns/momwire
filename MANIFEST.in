@@ -5,3 +5,7 @@
 # v0.25.0 tag when _bspline_ek_moments_inline.h, #270, was missing here).
 # The glob keeps the NEXT generated header from repeating that.
 include src/momwire/*.h
+
+# The vendored scipy/xsf headers the near-interface twin (#680 U2) compiles
+# against — a source build from the sdist needs the whole tree.
+graft extern/xsf

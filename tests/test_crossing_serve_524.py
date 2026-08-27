@@ -330,7 +330,13 @@ def test_g524_3_triple_memo_is_bit_identical_and_dedups(monkeypatch):
     (ρ, z, z′) triple once per call, and a cache hit is the SAME floats
     — bit-identical to the unmemoized loop by construction. A symmetric
     deck's cross mesh repeats triples IEEE-exactly (the 4-radial fan is
-    exactly 4.00× duplicated, probe40), which is what this buys."""
+    exactly 4.00× duplicated, probe40), which is what this buys.
+
+    Forced onto the numpy walk: the counting monkeypatch and the
+    bit-equality assertions are statements about the REFERENCE path (the
+    C++ twin routes around `six_point` entirely and is gated at 1e-12
+    relative, never bit, in test_near_interface_accel_680)."""
+    monkeypatch.setattr(_near_interface, "_FORCE_NUMPY", True)
     k = 2.0 * np.pi / WL7
     rho = np.array([[0.3, 0.5, 0.3], [0.3, 0.5, 0.3]])
     z = np.array([[0.2], [0.4]]) * np.ones((1, 3))
