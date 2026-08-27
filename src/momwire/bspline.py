@@ -4376,7 +4376,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
             )
 
-    def _buried_serve_plan(self, geom, a_idx, obs_a, obs_b, k_p, k_m):
+    def _buried_serve_plan(self, geom, a_idx, obs_a, obs_b, k_p, k_m, crossing=False):
         """Grid extents for the three field-form blocks, or a named refusal.
 
         Every extent is measured on the QUADRATURE NODES the fill will
@@ -4392,6 +4392,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         past a cap has no answer to give, and the refusal is raised HERE,
         before an 80-second grid fill, with the deck's own numbers and the
         limit in the same sentence.
+
+        `crossing=True` skips the cross-medium section entirely: a crossing
+        deck's cross pair is `_crossing_fill`'s designed DIRECT evaluation —
+        no transmitted grid is ever built — so its θ-floor cost law must not
+        refuse the deck (a node-graded crossing mesh routinely puts
+        quadrature nodes fractions of a millimetre below the plane, which is
+        exactly the grazing geometry the grid can't pay for and the designed
+        evaluator doesn't care about).
         """
         gz = self.ground_z
         lam_p = 2.0 * np.pi / k_p
@@ -4436,6 +4444,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         plan["r1_above"] = _sommerfeld.max_image_distance(
             geom["seg_l"][a_idx], geom["seg_r"][a_idx], gz
         )
+
+        if crossing:
+            return plan
 
         # --- cross-medium: observer polar radius about the SOURCE's ground
         #     projection, and the source depth ladder -----------------------
@@ -4556,7 +4567,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._refuse_buried_out_of_scope(geom)
         obs_a, t_a, W_a = self._buried_nodes(geom, a_idx)
         obs_b, t_b, W_b = self._buried_nodes(geom, b_idx)
-        plan = self._buried_serve_plan(geom, a_idx, obs_a, obs_b, k_p, k_m)
+        plan = self._buried_serve_plan(
+            geom,
+            a_idx,
+            obs_a,
+            obs_b,
+            k_p,
+            k_m,
+            crossing=bool(a_idx.size and self._crossing_junctions()),
+        )
 
         # --- the two direct blocks, each in its own medium -----------------
         self._checkpoint()

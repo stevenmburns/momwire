@@ -280,6 +280,29 @@ def test_g524_2_mixed_radii_refused_by_name():
 # ----------------------------------------------------------------------
 
 
+def test_g524_2_node_graded_fan_plans_without_the_cross_grid():
+    """A crossing deck never builds the transmitted grid — its cross pair
+    is the designed DIRECT evaluation — so the θ-floor cost law must not
+    refuse it. The probe38 grading ladder found the g2-rung fan refused
+    at θ = 0.129° for a grid the path never queries (quadrature nodes
+    0.84 mm below the plane)."""
+    build = fan_rise_deck()
+    build["n_per_edge_per_wire"] = [[20, 6] for _ in range(4)] + [[30]]
+    s = BSplineSolver(**build)
+    geom = s._build_geometry()
+    below = s._below_segments(geom)
+    b_idx = np.nonzero(below)[0]
+    a_idx = np.nonzero(~below)[0]
+    _eps_t, _eps_m, k_p, k_m, _c2, _a_m = s._buried_medium()
+    obs_a, _t, _w = s._buried_nodes(geom, a_idx)
+    obs_b, _t, _w = s._buried_nodes(geom, b_idx)
+    plan = s._buried_serve_plan(geom, a_idx, obs_a, obs_b, k_p, k_m, crossing=True)
+    assert "r1_above" in plan and "r1_below" in plan
+    assert "r_cross_max" not in plan
+    with pytest.raises(ValueError, match="COST law"):
+        s._buried_serve_plan(geom, a_idx, obs_a, obs_b, k_p, k_m)
+
+
 def test_g524_3_eps1_kernel_identity():
     """At ε̃ = 1: U_T = k²V_T = e^{−jkR}/R exactly and W ≡ ∂zW ≡ 0 —
     the transmitted family collapses to the free-space kernel (pinned at
@@ -384,4 +407,30 @@ def test_g524_5_eps1_collapse_reproduces_free_space(record_property):
         f"the ε̃ = 1 crossing solve answers {z:.4f} where the free-space "
         f"single-wire truth is {z_truth:.4f} — {abs(z - z_truth):.4f} ohm "
         "apart; the complete composition no longer collapses"
+    )
+
+
+@pytest.mark.slow
+def test_g524_7_fan_eps1_collapse(record_property):
+    """The fan widening's adjudicator (probe38): at ε̃ = 1 the 4-rise fan
+    deck IS a free-space 5-wire junction deck, solved independently by
+    the native junction machinery (KCL row, shipped free-space fill).
+    This is the gate that validates the N-tent corner bookkeeping — the
+    N (above × below) interface corners, the below × below tent corners
+    at R = a, and the N² bnd cross-terms the self completion emits."""
+    build = fan_rise_deck(ground_eps=(1.0, 0.0))
+    truth = {
+        k: v
+        for k, v in build.items()
+        if k not in ("ground_z", "ground_eps", "ground_model")
+    }
+    z_truth, _ = BSplineSolver(**truth).compute_impedance()
+    z, _ = BSplineSolver(**build).compute_impedance()
+    record_property("momwire_Z", f"{z:.4f}")
+    record_property("free_space_truth", f"{z_truth:.4f}")
+    assert abs(z - z_truth) <= 0.05, (
+        f"the ε̃ = 1 fan solve answers {z:.4f} where the free-space "
+        f"5-wire junction truth is {z_truth:.4f} — {abs(z - z_truth):.4f} "
+        "ohm apart; check the N-tent corner bookkeeping (the below × below "
+        "self-completion corners first)"
     )
