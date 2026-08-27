@@ -241,16 +241,22 @@ def cross_complete_block(s, geom, A, B):
         t_ab += c1 * sign * np.outer(FdA_w @ te["V"], fv)
 
     # The designed corner: node tents against each other through V at
-    # R = a exactly. Sign structural (+), never re-picked per medium. It
-    # is the INTERFACE corner, so it applies only to end pairs that BOTH
-    # stand in the plane — an end elsewhere (the P3 fan's below-hub
-    # junction) carries its by-parts terms above but no corner.
+    # R = a exactly. The sign is STRUCTURAL and orientation-carried:
+    # −σ_test·σ_src·c1·V(a), which is +c1·V(a) on the deck class the
+    # adjudication calibrated it on (above arm STARTING at the node,
+    # σ_a σ_b = −1) and flips with the wires' parametrization — an
+    # orientation-blind + wrecks a monopole spelled top-down into the
+    # node (measured: 10−1007j on the P3 rise deck, the −1000j
+    # truncation-class signature). Never re-pick per MEDIUM. It is the
+    # INTERFACE corner, so it applies only to end pairs that BOTH stand
+    # in the plane — an end elsewhere (the P3 fan's below-hub junction)
+    # carries its by-parts terms above but no corner.
     a_wire = float(s._radius_per_wire[0])
     v_corner = None
-    for pt_a, _sig_a, fv_a in A["ends"]:
+    for pt_a, sig_a, fv_a in A["ends"]:
         if abs(pt_a[2] - gz) > 1e-12:
             continue
-        for pt_b, _sig_b, fv_b in B["ends"]:
+        for pt_b, sig_b, fv_b in B["ends"]:
             if abs(pt_b[2] - gz) > 1e-12:
                 continue
             if v_corner is None:
@@ -259,7 +265,7 @@ def cross_complete_block(s, geom, A, B):
                         eps_t, k_p, a_wire, 0.0, 0.0, rtol=_CORNER_RTOL
                     )[1]
                 )
-            t_ab += (c1 * v_corner) * np.outer(fv_a, fv_b)
+            t_ab += (-sig_a * sig_b * c1 * v_corner) * np.outer(fv_a, fv_b)
     return t_ab
 
 
