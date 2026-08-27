@@ -674,11 +674,12 @@ _REFUSE_BURIED_WITH_CONTACT = (
     "engine carries the spreading current as a point-electrode stake, the "
     "same fiction its own junction currents violate. No honest sub-ohm "
     "serve of this class exists in either convention, so it stays refused "
-    "rather than answered wrong. Respell the radial to RISE to the surface "
-    "and join the monopole at z = 0 (momwire's native API serves that "
-    "crossing junction), raise the above-ground wire clear of z = 0 (an "
-    "elevated feed over a buried counterpoise is served), or model the "
-    "buried structure alone"
+    "rather than answered wrong. Respell the radial - or the whole screen "
+    "of them - to RISE to the surface and join the monopole at z = 0 "
+    "(momwire's native API serves that crossing junction for one above "
+    "wire over N below wires, buried-hub spelling included), raise the "
+    "above-ground wire clear of z = 0 (an elevated feed over a buried "
+    "counterpoise is served), or model the buried structure alone"
 )
 _REFUSE_BURIED_NEAR_FIELD = (
     "{card} asks for a field on a deck with a wire below the ground plane, "

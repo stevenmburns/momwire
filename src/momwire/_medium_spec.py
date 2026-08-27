@@ -130,11 +130,13 @@ _REFUSE_CONTACT_WITH_BURIED = (
     "physics. There is no honest sub-ohm serve of this deck class in "
     "either convention, so it stays refused rather than answered wrong. "
     "Serve it by giving the spreading current its conductor: respell the "
-    "radial to RISE to the surface and junction-join the monopole at "
-    "z = 0 - that crossing junction is served (momwire#524 phase 2) - or "
-    "raise the above-ground wire clear of the interface (an elevated feed "
-    "over a buried counterpoise is served), or solve the buried structure "
-    "on its own"
+    "radial - or the whole SCREEN of them - to RISE to the surface and "
+    "junction-join the monopole at z = 0; that crossing junction is served "
+    "for one above wire over N below wires (momwire#524 phase 2, fan "
+    "widening), including the screen's buried-hub spelling (one rise, N "
+    "radials joined at depth). Or raise the above-ground wire clear of "
+    "the interface (an elevated feed over a buried counterpoise is "
+    "served), or solve the buried structure on its own"
 )
 
 
