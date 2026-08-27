@@ -185,7 +185,7 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.linalg
 
-from . import _ground_spec, _potential_ground, _wire_spec
+from . import _feed_snap, _ground_spec, _potential_ground, _wire_spec
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -619,9 +619,14 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
             target = arc if arc is not None else arc_at_knot[-1] / 2.0
             centres = 0.5 * (arc_at_knot[:-1] + arc_at_knot[1:])
-            idx.append(
-                int(geom["seg_offsets"][w] + np.argmin(np.abs(centres - target)))
+            pick, _margin = _feed_snap.snap(
+                centres,
+                target,
+                total_arc=float(arc_at_knot[-1]),
+                family=type(self).__name__,
+                wire=w,
             )
+            idx.append(int(geom["seg_offsets"][w] + pick))
         return idx
 
     # ------------------------------------------------------------------
