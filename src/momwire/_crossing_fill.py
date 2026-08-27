@@ -241,13 +241,24 @@ def cross_complete_block(s, geom, A, B):
         t_ab += c1 * sign * np.outer(FdA_w @ te["V"], fv)
 
     # The designed corner: node tents against each other through V at
-    # R = a exactly. Sign structural (+), never re-picked per medium.
+    # R = a exactly. Sign structural (+), never re-picked per medium. It
+    # is the INTERFACE corner, so it applies only to end pairs that BOTH
+    # stand in the plane — an end elsewhere (the P3 fan's below-hub
+    # junction) carries its by-parts terms above but no corner.
     a_wire = float(s._radius_per_wire[0])
-    v_corner = complex(
-        _near_interface.six_point(eps_t, k_p, a_wire, 0.0, 0.0, rtol=_CORNER_RTOL)[1]
-    )
+    v_corner = None
     for pt_a, _sig_a, fv_a in A["ends"]:
+        if abs(pt_a[2] - gz) > 1e-12:
+            continue
         for pt_b, _sig_b, fv_b in B["ends"]:
+            if abs(pt_b[2] - gz) > 1e-12:
+                continue
+            if v_corner is None:
+                v_corner = complex(
+                    _near_interface.six_point(
+                        eps_t, k_p, a_wire, 0.0, 0.0, rtol=_CORNER_RTOL
+                    )[1]
+                )
             t_ab += (c1 * v_corner) * np.outer(fv_a, fv_b)
     return t_ab
 

@@ -4523,9 +4523,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         shape as the arc's other four inversions: a ±=+ convenience whose
         licence is "the remainder is small", used where nothing is a
         remainder. Undoing it wants the transmitted family's scalar
-        POTENTIALS, so the cross block can be written mixed-potential like its
-        neighbours — a recorded follow-up, and momwire#524 phase 2 removes the
-        contact fiction outright.
+        POTENTIALS, so the cross block can be written mixed-potential like
+        its neighbours — and on a deck with a CROSSING junction that is now
+        exactly what happens: the crossing branch below fills the cross pair
+        with `_crossing_fill`'s complete designed mixed-potential spelling,
+        boundary terms, corner and all (momwire#524 phase 2, adjudicated
+        2026-08-26). The contact-plus-buried refusal itself still stands
+        while P3 re-scores its anchors under the same machinery.
         """
         below = self._below_segments(geom)
         b_idx = np.nonzero(below)[0]
