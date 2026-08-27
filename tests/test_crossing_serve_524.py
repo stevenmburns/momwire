@@ -1,0 +1,252 @@
+"""momwire#524 phase 2 — the crossing serve (G-524).
+
+A wholly-below wire whose end stands in the ground plane, junction-joined
+there to an above wire, is SERVED: the cross pair is filled with the
+complete designed mixed-potential spelling on graded axes
+(`_crossing_fill`), the self families get their missing by-parts
+bnd + corner content, and continuity of current through the node plus the
+AGARD slope condition emerge from the fill with no constraint row and no
+merged dof (split ≡ merged ≡ V-constrained, measured to the digit).
+
+The serve gate is momwire's OWN evidence, adjudicated 2026-08-26:
+
+* mesh stability — Δ(crossing − mono) moves 0.02 Ω between the g1/g2
+  interface-graded meshes (138.7671−102.9889j → 138.7691−102.9893j);
+* the ε̃ = 1 collapse — at ground_eps = 1 the interface vanishes and the
+  crossing deck IS a free-space 12 m wire, reproduced to 0.0124 Ω
+  (0.002 %) through a corner telescoping of magnitude ~204,000;
+* the high-σ collapse — the crossing answer falls onto the shipped
+  contact-mono column exactly as σ → ∞ (|Δ| 86 → 2.8 across
+  σ = 0.005 → 5 S/m), which is the one limit where the contact fiction
+  is physical.
+
+The licensed engine's crossing print (74.761 − 57.730j Ω on the g-class
+deck) is a DIFFERENT EXPERIMENT, not a miss: its own printed junction
+currents violate its AGARD condition divergently (I(0⁻) antiphase, ~√n
+growth, ~2 A KCL deficit into the interface point), so its junction is
+two contact ends plus a point-electrode sink. It is documented here and
+NEVER gated against — the house rule about cross-formulation agreement.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from momwire import _medium_spec, _near_interface
+from momwire.bspline import BSplineSolver
+
+from test_buried_serve_553 import SOIL_A, WL7
+
+A_WIRE = 0.001
+
+# The interface-graded meshes the phase-2 probes banked (probe18 GRADES):
+# vertices walk toward z = 0 so the node segments shrink without the
+# uniform-mesh blow-up the graded ladder measured.
+_GRADES = {
+    1: dict(
+        below=([-2.0, -0.5, -0.1], [3, 2, 2]), above=([0.1, 0.5, 10.0], [2, 2, 19])
+    ),
+    2: dict(
+        below=([-2.0, -0.5, -0.1, -0.025], [3, 2, 3, 2]),
+        above=([0.025, 0.1, 0.5, 10.0], [2, 3, 2, 19]),
+    ),
+}
+
+# Banked by probe27 (session 5) and re-measured through this production
+# path: the soil-A exact-EM crossing answer, mesh-stable g1 -> g2.
+CROSSING_G1 = 138.7671 - 102.9889j
+CROSSING_G2 = 138.7691 - 102.9893j
+
+
+def crossing_deck(level=1, **override):
+    g = _GRADES[level]
+    below_pts = np.array([(0.0, 0.0, z) for z in g["below"][0] + [0.0]])
+    above_pts = np.array([(0.0, 0.0, z) for z in [0.0] + g["above"][0]])
+    build = dict(
+        wires=[below_pts, above_pts],
+        n_per_edge_per_wire=[g["below"][1], g["above"][1]],
+        junctions=[[(0, "end"), (1, "start")]],
+        feeds=[(1, 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    build.update(override)
+    return build
+
+
+# ----------------------------------------------------------------------
+# G-524-1 — the served spelling labels; everything else refuses by name
+# ----------------------------------------------------------------------
+
+
+def test_g524_1_junction_spelling_is_served():
+    s = BSplineSolver(**crossing_deck())
+    assert s._wire_media() == (_medium_spec.BELOW, _medium_spec.ABOVE)
+    assert s._crossing_junctions() == (0,)
+
+
+def test_g524_1_midspan_crossing_still_refuses_naming_the_spelling():
+    wires = [np.array([(0.0, 0.0, -2.0), (0.0, 0.0, 3.0)])]
+    s = BSplineSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[10]],
+        feeds=[(0, 2.5, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    with pytest.raises(ValueError) as exc:
+        s._wire_media()
+    msg = str(exc.value)
+    assert "crosses the ground interface mid-span" in msg
+    assert "split the wire AT the interface" in msg
+    assert "declare the junction" in msg
+
+
+def test_g524_1_touching_end_without_a_junction_still_refuses():
+    """The exemption is the JUNCTION's, not the geometry's: a lone below
+    wire with its end in the plane and no partner above it is still the
+    crossing refusal (a bare interface touchdown has no declared
+    continuation). N.B. omitting `junctions` on the two-wire deck does
+    NOT reach this case — coincident wire ends are auto-detected as a
+    junction, and that deck IS the served spelling."""
+    build = crossing_deck()
+    build["wires"] = [build["wires"][0]]
+    build["n_per_edge_per_wire"] = [build["n_per_edge_per_wire"][0]]
+    build.pop("junctions")
+    build["feeds"] = [(0, 1.0, 1 + 0j)]
+    s = BSplineSolver(**build)
+    with pytest.raises(ValueError, match="crosses the ground interface"):
+        s._wire_media()
+
+
+def test_g524_1_detached_buried_screen_is_untouched():
+    """The momwire#553 serve class must not route through the crossing
+    fill: a detached buried wire has no crossing junction."""
+    build = crossing_deck()
+    build["wires"] = [
+        np.array([(0.0, 0.0, -0.5), (5.0, 0.0, -0.5)]),
+        np.array([(0.0, 0.0, 1.0), (0.0, 0.0, 11.0)]),
+    ]
+    build["n_per_edge_per_wire"] = [[5], [10]]
+    build.pop("junctions")
+    s = BSplineSolver(**build)
+    assert s._wire_media() == (_medium_spec.BELOW, _medium_spec.ABOVE)
+    assert s._crossing_junctions() == ()
+
+
+# ----------------------------------------------------------------------
+# G-524-2 — scope refusals, each by name
+# ----------------------------------------------------------------------
+
+
+def test_g524_2_node_fan_refused_by_name():
+    build = crossing_deck()
+    build["wires"] = build["wires"] + [
+        np.array([(0.0, 0.0, -2.0), (0.3, 0.0, -0.1), (0.0, 0.0, 0.0)])
+    ]
+    build["n_per_edge_per_wire"] = build["n_per_edge_per_wire"] + [[3, 2]]
+    build["junctions"] = [[(0, "end"), (1, "start"), (2, "end")]]
+    s = BSplineSolver(**build)
+    with pytest.raises(NotImplementedError, match="more than two members"):
+        s._crossing_junctions()
+
+
+def test_g524_2_other_junctions_refused_by_name():
+    build = crossing_deck()
+    build["wires"] = [
+        build["wires"][0],
+        np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 5.0)]),
+        np.array([(0.0, 0.0, 5.0), (0.0, 0.0, 10.0)]),
+    ]
+    build["n_per_edge_per_wire"] = [build["n_per_edge_per_wire"][0], [12], [11]]
+    build["junctions"] = [
+        [(0, "end"), (1, "start")],
+        [(1, "end"), (2, "start")],
+    ]
+    s = BSplineSolver(**build)
+    with pytest.raises(NotImplementedError, match="OTHER junctions"):
+        s._crossing_junctions()
+
+
+def test_g524_2_mixed_radii_refused_by_name():
+    build = crossing_deck(wire_radius=[0.001, 0.002])
+    s = BSplineSolver(**build)
+    with pytest.raises(NotImplementedError, match="radius rule"):
+        s._crossing_junctions()
+
+
+# ----------------------------------------------------------------------
+# G-524-3 — the designed kernel's own identity pin (cheap, machine class)
+# ----------------------------------------------------------------------
+
+
+def test_g524_3_eps1_kernel_identity():
+    """At ε̃ = 1: U_T = k²V_T = e^{−jkR}/R exactly and W ≡ ∂zW ≡ 0 —
+    the transmitted family collapses to the free-space kernel (pinned at
+    2.2e-16 by the derivation's probe ledger, gated at 1e-12 here)."""
+    k = 2.0 * np.pi / WL7
+    for rho, z, zp in ((A_WIRE, 0.0, 0.0), (0.3, 0.2, -0.4), (0.0, 1.0, -0.5)):
+        six = _near_interface.six_point(1.0, k, rho, z, zp, rtol=1e-12)
+        R = np.hypot(rho, z - zp)
+        g = np.exp(-1j * k * R) / R
+        assert abs(six[0] - g) <= 1e-12 * abs(g)
+        assert abs(k * k * six[1] - g) <= 1e-12 * abs(g)
+        assert abs(six[2]) <= 1e-12 * abs(g)
+        assert abs(six[3]) <= 1e-12 * abs(g) / max(R, A_WIRE)
+
+
+# ----------------------------------------------------------------------
+# G-524-4 / G-524-5 — the serve gates (slow lane)
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.slow
+def test_g524_4_soil_a_crossing_anchor(record_property):
+    """The adjudicated soil-A crossing answer through the production path,
+    against probe27's banked number. The envelope is the g1↔g2 mesh
+    movement (0.021 Ω), NOT an engine comparison — the engine's
+    74.761 − 57.730j crossing print is a different experiment (see the
+    module docstring) and is deliberately absent here."""
+    z, _ = BSplineSolver(**crossing_deck(1)).compute_impedance()
+    record_property("momwire_Z", f"{z:.4f}")
+    record_property("banked_Z", f"{CROSSING_G1:.4f}")
+    assert abs(z - CROSSING_G1) <= 0.05, (
+        f"crossing serve answers {z:.4f} on the g1 adjudication deck where "
+        f"the banked exact-EM answer is {CROSSING_G1:.4f} — "
+        f"{abs(z - CROSSING_G1):.4f} ohm apart (mesh envelope 0.021 ohm; "
+        "NEVER re-gate this against the engine's crossing print)"
+    )
+
+
+@pytest.mark.slow
+def test_g524_5_eps1_collapse_reproduces_free_space(record_property):
+    """probe29's adjudicator through the production path: at ε̃ = 1 the
+    interface vanishes and the crossing deck IS a free-space 12 m wire,
+    solved independently by the shipped free-space fill. The corner the
+    composition must telescope through is ~204,000 in magnitude; passing
+    at the 0.05 Ω class is the arithmetic being RIGHT where truth is
+    known (measured 0.0124 Ω, 0.002 %)."""
+    g = _GRADES[1]
+    pts = [(0.0, 0.0, z) for z in g["below"][0] + [0.0] + g["above"][0]]
+    z_truth, _ = BSplineSolver(
+        wires=[np.array(pts)],
+        n_per_edge_per_wire=[g["below"][1] + g["above"][1]],
+        feeds=[(0, 2.0 + 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+    ).compute_impedance()
+    z, _ = BSplineSolver(**crossing_deck(1, ground_eps=(1.0, 0.0))).compute_impedance()
+    record_property("momwire_Z", f"{z:.4f}")
+    record_property("free_space_truth", f"{z_truth:.4f}")
+    assert abs(z - z_truth) <= 0.05, (
+        f"the ε̃ = 1 crossing solve answers {z:.4f} where the free-space "
+        f"single-wire truth is {z_truth:.4f} — {abs(z - z_truth):.4f} ohm "
+        "apart; the complete composition no longer collapses"
+    )
