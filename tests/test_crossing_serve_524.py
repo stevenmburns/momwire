@@ -26,6 +26,17 @@ currents violate its AGARD condition divergently (I(0⁻) antiphase, ~√n
 growth, ~2 A KCL deficit into the interface point), so its junction is
 two contact ends plus a point-electrode sink. It is documented here and
 NEVER gated against — the house rule about cross-formulation agreement.
+
+THE FAN WIDENING (session 8) serves 1 above × N below, and its soil-A
+answers are RECORDS, not anchors: the composition past K = 2 carries a
+node-mesh convergence class (see `test_g524_7`), which lossy transmitted
+kernels amplify — the 4-rise fan moved 7.48 Ω between the base and
+node-graded meshes at soil A (base 143.9327−26.2135j, graded
+142.6822−33.5867j; hub spelling 140.9839−43.6025j — a DIFFERENT
+structure, 17.6 Ω away; probe38,
+scratch/524-phase2/results/probe38-fan-widening.json). Until the K > 2
+convergence-rate follow-up lands there is no soil-A anchor gate for the
+fan class; the correctness gates are the ε̃ = 1 collapses.
 """
 
 from __future__ import annotations
