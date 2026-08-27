@@ -189,23 +189,38 @@ def six_point(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
 
 def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     """Broadcast wrapper over `six_point`. Accepts z′ = 0 and z = 0
-    exactly (no clamp); refuses only R = 0. Returns dict over `KEYS`."""
+    exactly (no clamp); refuses only R = 0. Returns dict over `KEYS`.
+
+    Duplicate (ρ, z, z′) triples are evaluated ONCE per call (ε̃, k₂,
+    rtol are fixed inside a call, so the triple determines the value):
+    a symmetric deck's cross mesh repeats triples IEEE-exactly — the
+    4-radial fan's is exactly 4.00× duplicated (probe40's census,
+    momwire#680 U1) — and a cache hit returns the very same floats, so
+    the memo is bit-identical to the unmemoized loop by construction.
+    Keys are exact float tuples: no rounding, no tolerance, nothing to
+    convention-gate.
+    """
     rho_b, z_b, zp_b = np.broadcast_arrays(
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
     )
     out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
+    memo = {}
     it = np.nditer(rho_b, flags=["multi_index"])
     for _ in it:
         ix = it.multi_index
-        out[(slice(None),) + ix] = six_point(
-            eps_t,
-            k2,
-            float(rho_b[ix]),
-            float(z_b[ix]),
-            float(zp_b[ix]),
-            rtol=rtol,
-            lam_mult=lam_mult,
-        )
+        key = (float(rho_b[ix]), float(z_b[ix]), float(zp_b[ix]))
+        got = memo.get(key)
+        if got is None:
+            got = memo[key] = six_point(
+                eps_t,
+                k2,
+                key[0],
+                key[1],
+                key[2],
+                rtol=rtol,
+                lam_mult=lam_mult,
+            )
+        out[(slice(None),) + ix] = got
     return dict(zip(KEYS, out))
 
 

@@ -325,6 +325,40 @@ def test_g524_2_node_graded_fan_plans_without_the_cross_grid():
         s._buried_serve_plan(geom, a_idx, obs_a, obs_b, k_p, k_m)
 
 
+def test_g524_3_triple_memo_is_bit_identical_and_dedups(monkeypatch):
+    """momwire#680 U1: `designed_tables` evaluates each exact
+    (ρ, z, z′) triple once per call, and a cache hit is the SAME floats
+    — bit-identical to the unmemoized loop by construction. A symmetric
+    deck's cross mesh repeats triples IEEE-exactly (the 4-radial fan is
+    exactly 4.00× duplicated, probe40), which is what this buys."""
+    k = 2.0 * np.pi / WL7
+    rho = np.array([[0.3, 0.5, 0.3], [0.3, 0.5, 0.3]])
+    z = np.array([[0.2], [0.4]]) * np.ones((1, 3))
+    zp = -0.15
+    calls = []
+    real = _near_interface.six_point
+
+    def counting(eps_t, k2, r, zz, zzp, **kw):
+        calls.append((r, zz, zzp))
+        return real(eps_t, k2, r, zz, zzp, **kw)
+
+    monkeypatch.setattr(_near_interface, "six_point", counting)
+    tables = _near_interface.designed_tables(4.0 - 0.5j, k, rho, z, zp, rtol=1e-8)
+    # 6 mesh cells but 4 unique triples per z-row × 2 rows = 4 evaluations
+    # per row: (0.3, z) and (0.5, z) each once.
+    assert len(calls) == 4
+    assert len(set(calls)) == 4
+    for i, r in ((0, 0.3), (1, 0.5), (2, 0.3)):
+        for row, zz in ((0, 0.2), (1, 0.4)):
+            ref = real(4.0 - 0.5j, k, r, zz, zp, rtol=1e-8)
+            for kk, key_name in enumerate(_near_interface.KEYS):
+                got = tables[key_name][row, i]
+                assert got == ref[kk], (key_name, row, i)
+    # The duplicated columns are the SAME floats, not merely close.
+    for key_name in _near_interface.KEYS:
+        assert np.array_equal(tables[key_name][:, 0], tables[key_name][:, 2])
+
+
 def test_g524_3_eps1_kernel_identity():
     """At ε̃ = 1: U_T = k²V_T = e^{−jkR}/R exactly and W ≡ ∂zW ≡ 0 —
     the transmitted family collapses to the free-space kernel (pinned at
