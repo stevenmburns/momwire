@@ -36,7 +36,14 @@ node-graded meshes at soil A (base 143.9327−26.2135j, graded
 structure, 17.6 Ω away; probe38,
 scratch/524-phase2/results/probe38-fan-widening.json). Until the K > 2
 convergence-rate follow-up lands there is no soil-A anchor gate for the
-fan class; the correctness gates are the ε̃ = 1 collapses.
+fan class; the correctness gates are the ε̃ = 1 collapses, which run in
+the merge-to-main `crossgate` lane (multi-minute certification solves,
+the memgate reasoning) while the PR slow lane keeps `test_g524_4` as the
+per-PR crossing regression pin. The HUB spelling's collapse is a banked
+record (0.2194 Ω, probe38) with no gate of its own: its only unique
+content — the hub-tent by-parts terms — was measured to contribute
+exactly zero to the digit (probe39), and everything else it would
+exercise, `test_g524_7` already does.
 """
 
 from __future__ import annotations
@@ -357,6 +364,7 @@ def test_g524_4_soil_a_crossing_anchor(record_property):
 
 
 @pytest.mark.slow
+@pytest.mark.crossgate
 def test_g524_6_rise_deck_eps1_collapse(record_property):
     """The P3 rise class through the same adjudicator: an above wire
     ENDING at the node (σ_aσ_b = +1, the orientation-carried corner
@@ -399,6 +407,7 @@ def test_g524_6_rise_deck_eps1_collapse(record_property):
 
 
 @pytest.mark.slow
+@pytest.mark.crossgate
 def test_g524_5_eps1_collapse_reproduces_free_space(record_property):
     """probe29's adjudicator through the production path: at ε̃ = 1 the
     interface vanishes and the crossing deck IS a free-space 12 m wire,
@@ -426,6 +435,7 @@ def test_g524_5_eps1_collapse_reproduces_free_space(record_property):
 
 
 @pytest.mark.slow
+@pytest.mark.crossgate
 def test_g524_7_fan_eps1_collapse(record_property):
     """The fan widening's adjudicator (probe38): at ε̃ = 1 the 4-rise fan
     deck IS a free-space 5-wire junction deck, solved independently by
@@ -454,30 +464,4 @@ def test_g524_7_fan_eps1_collapse(record_property):
         f"5-wire junction truth is {z_truth:.4f} — {abs(z - z_truth):.4f} "
         "ohm apart (measured 0.2269 on this mesh, a node-mesh convergence "
         "class); a jump past this envelope is bookkeeping, not convergence"
-    )
-
-
-@pytest.mark.slow
-def test_g524_8_hub_eps1_collapse(record_property):
-    """The buried-hub spelling through the same adjudicator: one rise +
-    4 radials joined at the hub, a below-side OTHER junction with its own
-    KCL row. probe38/39 banked 0.2194 Ω on this mesh — the SAME
-    convergence class as the fan (the hub-tent by-parts terms contribute
-    exactly zero: probe39's stripped solve reproduced this answer to the
-    digit), so the envelope matches `test_g524_7`'s."""
-    build = hub_deck(ground_eps=(1.0, 0.0))
-    truth = {
-        k: v
-        for k, v in build.items()
-        if k not in ("ground_z", "ground_eps", "ground_model")
-    }
-    z_truth, _ = BSplineSolver(**truth).compute_impedance()
-    z, _ = BSplineSolver(**build).compute_impedance()
-    record_property("momwire_Z", f"{z:.4f}")
-    record_property("free_space_truth", f"{z_truth:.4f}")
-    assert abs(z - z_truth) <= 0.30, (
-        f"the ε̃ = 1 hub solve answers {z:.4f} where the free-space "
-        f"6-wire junction truth is {z_truth:.4f} — {abs(z - z_truth):.4f} "
-        "ohm apart (measured 0.2194, the fan's node-mesh convergence "
-        "class); a jump past this envelope is bookkeeping"
     )

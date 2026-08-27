@@ -117,6 +117,15 @@ Issues = "https://github.com/stevenmburns/momwire/issues"
 testpaths = ["tests"]
 markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
+    # Crossing-serve certification solves (momwire#524): the eps1-collapse
+    # adjudicator gates, each a multi-minute designed-evaluator solve. Like
+    # memgate they earn their keep on merge to main, not per PR iteration —
+    # the PR slow lane keeps the soil-A anchor pin (test_g524_4) and the
+    # fast scope/refusal rows. UNLIKE memgate these are also marked `slow`,
+    # so every existing `not slow` spelling (fast lanes, wheel smoke)
+    # excludes them without edits; the test-slow lane subtracts them
+    # explicitly and the crossgate lane selects them with `-m crossgate`.
+    "crossgate: crossing-serve eps1 certification solves (merge-to-main lane)",
     # Certification gates on memory residency/budget — tracemalloc peaks and
     # byte-budget arithmetic checked against a live allocation (issue #400).
     # These earn their keep on merge to main, not on every PR iteration or
