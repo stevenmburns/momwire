@@ -46,6 +46,13 @@ bit — so drift means one of two things, and they look identical here:
 * your binary is a different build from the corpus's own
   ``manifest.json`` ``oracle_version`` (provenance, and not drift at all).
 
+``manifest.json``'s ``oracle_version_note`` is where that comparison is
+written down, and it is HAND-MAINTAINED: this script does not emit it, so a
+regenerate drops it.  That is correct after a deliberate re-baseline onto one
+build — the note describes a mixed corpus and a re-baseline ends the mixture —
+and wrong every other time, so re-add it if you regenerate for any other
+reason.
+
 Check the version first.  Across 1.17 and 1.23 the second case shows up as the
 ``VERSION`` banner on every deck plus about sixteen lines of near-zero float
 dust in the network decks — signed zeros, a 1e-17 W network loss, one
