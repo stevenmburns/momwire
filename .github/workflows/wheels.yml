@@ -314,8 +314,19 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           # Auto-generate the release body from the PR titles between tags
-          # (same notes antennaknobs releases get). Only fills the body when
-          # the release is first created — re-runs never clobber edits.
+          # (same notes antennaknobs releases get). THIS JOB IS THE ONLY ONE
+          # IN THE REPO THAT MAY ASK — eznec-dropin.yml attaches to the same
+          # release and deliberately does not, because a second asker appends
+          # a second copy of the changelog (#662). tests/test_release_notes.py
+          # holds that to one.
+          #
+          # It does NOT "only fill an empty body", which the old comment here
+          # claimed: the action passes the existing body back and GitHub
+          # pre-pends it to the freshly generated notes. So re-running this
+          # job on an already-released tag doubles the body too, and any
+          # hand-edit survives only as the first half. Re-run it only against
+          # a release whose body you are willing to see prefixed to a new
+          # copy of the notes.
           generate_release_notes: true
           files: |
             dist/*.whl
