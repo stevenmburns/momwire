@@ -206,7 +206,7 @@ def test_g524_2_two_above_members_refused_by_name():
         s._crossing_junctions()
 
 
-def test_g524_2_other_junctions_refused_by_name():
+def test_g524_2_above_side_other_junction_refused_by_name():
     build = crossing_deck()
     build["wires"] = [
         build["wires"][0],
@@ -219,8 +219,53 @@ def test_g524_2_other_junctions_refused_by_name():
         [(1, "end"), (2, "start")],
     ]
     s = BSplineSolver(**build)
-    with pytest.raises(NotImplementedError, match="OTHER junctions"):
+    with pytest.raises(NotImplementedError, match="OTHER junction"):
         s._crossing_junctions()
+
+
+def hub_deck(n_radials=4, depth=0.15, **override):
+    """The screen's OTHER spelling: one rise carrying the node, N radials
+    junction-joined to it at a buried hub (0, 0, −depth) — the same
+    physical structure as `fan_rise_deck` (probe35: hub by-parts terms
+    cancel through the hub's own KCL row)."""
+    dirs = ((1, 0), (0, 1), (-1, 0), (0, -1))[:n_radials]
+    wires = [
+        np.array([(5.0 * dx, 5.0 * dy, -depth), (0.0, 0.0, -depth)]) for dx, dy in dirs
+    ]
+    npe = [[10] for _ in dirs]
+    rise_i = len(wires)
+    wires.append(np.array([(0.0, 0.0, -depth), (0.0, 0.0, 0.0)]))
+    npe.append([2])
+    mono_i = rise_i + 1
+    wires.append(np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)]))
+    npe.append([15])
+    build = dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        junctions=[
+            [(i, "end") for i in range(n_radials)] + [(rise_i, "start")],
+            [(rise_i, "end"), (mono_i, "end")],
+        ],
+        feeds=[(mono_i, 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    build.update(override)
+    return build
+
+
+def test_g524_2_buried_hub_other_junction_is_served():
+    """The below-side interior junction (the buried hub) passes scope:
+    the crossing junction is the rise↔monopole node, the hub is an
+    allowed wholly-below OTHER junction with its own KCL row."""
+    s = BSplineSolver(**hub_deck())
+    media = s._wire_media()
+    assert media == (_medium_spec.BELOW,) * 5 + (_medium_spec.ABOVE,)
+    assert s._crossing_junctions() == (1,)
+    assert s._grounded_junction_ends() == frozenset([(4, "end"), (5, "end")])
 
 
 def test_g524_2_mixed_radii_refused_by_name():
