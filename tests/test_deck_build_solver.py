@@ -90,7 +90,7 @@ def test_every_basis_builds_the_same_model():
         assert isinstance(built.solver, solver_class)
         assert built.basis == name
         families.add(solver_class)
-    assert len(families) == 6
+    assert len(families) == 7
 
 
 def test_the_default_basis_is_the_degree_2_bspline():

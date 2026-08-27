@@ -29,16 +29,42 @@ portal's ``_BASES`` is a total comprehension over the same mapping, so a name
 added without a banner-suffix decision raises ``KeyError`` at import and takes
 this module's collection down with it — also a failure, and a louder one.
 
-**Why the bar is a band and not digits.**  Eight roster entries over six
+**Why the bar is a band and not digits.**  Nine roster entries over seven
 formulations, and they are meant to disagree in the third digit — that is what
-having a roster is FOR.  Measured across the eight on this deck: R 62.7-65.1
-ohms, X -72.2 to -55.6 ohms, broadside gain 2.03-2.11 dBi.  The bounds below
-are wide enough that a legitimate seventh formulation clears them without
-anyone re-baselining, and narrow enough that the ways an end-to-end solve goes
-wrong while still printing a table — a mis-mapped port, an unexcited RHS, a
-silent collapse to a different basis's answer — land nowhere near them.  Value
-agreement between bases is not this file's question; it is
-``test_portal_differential.py``'s.
+having a roster is FOR.  Measured across the eight fast-converging entries on
+this deck: R 62.7-65.1 ohms, X -72.2 to -55.6 ohms, broadside gain 2.03-2.11
+dBi.  The bounds below are wide enough that a legitimate new formulation
+clears them without anyone re-baselining, and narrow enough that the ways an
+end-to-end solve goes wrong while still printing a table — a mis-mapped port,
+an unexcited RHS, a silent collapse to a different basis's answer — land
+nowhere near them.  Value agreement between bases is not this file's question;
+it is ``test_portal_differential.py``'s.
+
+**And why ``pulse`` has a band of its own** (momwire#564).  It does not clear
+the shared one on THIS deck: 11 segments on a half-wave dipole is Delta/a =
+909, and the pulse family's error is the one every other row on the roster
+was chosen to avoid.  It answers 81.8 + 63.8j where the other eight sit near
+64 - 55j — a reactance of the wrong SIGN, which is exactly what the shared
+band is shaped to catch, so widening the band to admit it would cost the gate
+the failure it is best at.
+
+Giving it its own band would be a shrug if it stopped there, so it does not:
+``test_the_pulse_entry_is_off_the_shared_band_by_convergence_not_by_plumbing``
+refines the same deck and requires the answer to walk INTO the shared band.
+Measured here, R / X against ``bspline``'s converged 64.02 - 54.81j:
+
+|   N | Delta/a | ``pulse``          |
+|-----|---------|--------------------|
+|  11 |     909 | 81.82 + 63.82j     |
+|  41 |     244 | 68.22 - 25.55j     |
+| 101 |      99 | 65.62 - 43.52j     |
+| 401 |      25 | 64.36 - 52.22j     |
+
+Monotone in both parts, which is a plumbing statement and not an accuracy one:
+a mis-mapped port or an unexcited RHS does not converge onto the other eight
+as the mesh refines, it stays wrong.  The gain never leaves the shared band at
+any of those meshes (2.16 down to 2.11), so the radiating half of the chain is
+pinned by the shared bound throughout.
 """
 
 from __future__ import annotations
@@ -124,6 +150,17 @@ def _pattern_gains(text: str) -> list[float]:
     return gains
 
 
+# (R low, R high, X low, X high) for the impedance the deck above must print.
+# The gain band is NOT per basis: every entry radiates like a half-wave dipole
+# at every mesh measured, so a formulation that misses it has a broken field
+# readout rather than a coarse mesh, and that is worth refusing for all nine.
+_SHARED_BAND = (30.0, 150.0, -150.0, 50.0)
+# `pulse`'s own, and the module docstring is the argument for it -- 11
+# segments is Delta/a = 909 on this wire, and the row converges onto the
+# shared band from here (the test below requires it to).
+_BANDS = {"pulse": (60.0, 100.0, 20.0, 100.0)}
+
+
 @pytest.mark.parametrize("basis", sorted(BASES))
 def test_every_rostered_basis_answers_a_deck_end_to_end(basis, scoped_engine):
     """The gate: each name in `deck.BASES`, driven through `main` as SimNEC
@@ -153,8 +190,9 @@ def test_every_rostered_basis_answers_a_deck_end_to_end(basis, scoped_engine):
 
     # 4. The port solve produced a dipole's impedance, not a table of noise.
     z = _aip_impedance(out)
-    assert 30.0 < z.real < 150.0, f"{basis}: R = {z.real}"
-    assert -150.0 < z.imag < 50.0, f"{basis}: X = {z.imag}"
+    r_lo, r_hi, x_lo, x_hi = _BANDS.get(basis, _SHARED_BAND)
+    assert r_lo < z.real < r_hi, f"{basis}: R = {z.real}"
+    assert x_lo < z.imag < x_hi, f"{basis}: X = {z.imag}"
 
     # 5. And the currents behind it radiate like one — the half of the chain
     #    an impedance alone cannot see.  2.15 dBi is the ideal half-wave
@@ -162,6 +200,39 @@ def test_every_rostered_basis_answers_a_deck_end_to_end(basis, scoped_engine):
     gains = _pattern_gains(out)
     assert len(gains) == 1, f"{basis}: expected one pattern row, got {len(gains)}"
     assert 1.5 < gains[0] < 2.6, f"{basis}: broadside gain = {gains[0]} dBi"
+
+
+def test_the_pulse_entry_is_off_the_shared_band_by_convergence_not_by_plumbing(
+    scoped_engine,
+):
+    """The price of `pulse` having a band of its own, paid here.
+
+    A per-basis band is a licence to be different, and on its own it cannot
+    tell "this formulation converges more slowly" from "this entry is wired up
+    wrong".  Refinement can: discretization error shrinks with the mesh and a
+    mis-mapped port does not.  So the same deck at 401 segments — Delta/a = 25
+    rather than 909 — has to land inside the band every OTHER entry clears at
+    11, with no allowance of its own.
+
+    401 costs 0.6 s, which is what buys the strong form of the statement; the
+    docstring's table is the rest of the ladder.
+    """
+    fine = _ROSTER_DECK.replace("GW 1 11 ", "GW 1 401 ").replace(
+        "EX 0 1 6 0 1.", "EX 0 1 201 0 1."
+    )
+    rc, out, err = _run("pulse", fine)
+    assert rc == 0 and err == "", (rc, err)
+    assert "NEC ERROR" not in out
+
+    z = _aip_impedance(out)
+    r_lo, r_hi, x_lo, x_hi = _SHARED_BAND
+    assert r_lo < z.real < r_hi, f"refined R = {z.real}"
+    assert x_lo < z.imag < x_hi, f"refined X = {z.imag}"
+
+    # And it moved TOWARD the others rather than merely into the band: the
+    # coarse answer is on the far side of the shared band's ceiling.
+    coarse = _aip_impedance(_run("pulse")[1])
+    assert coarse.imag > x_hi > z.imag, (coarse.imag, z.imag)
 
 
 def test_the_banner_suffixes_tell_the_roster_entries_apart():

@@ -13,6 +13,7 @@ import numpy as np
 import pytest
 
 from momwire import PulseSolver
+from momwire.harrington import HarringtonSolver
 
 WAVELENGTH = 10.0
 
@@ -128,18 +129,53 @@ def test_pulse_per_wire_radius_refuses():
     "cell,kwarg",
     [
         ("wire_loading", {"wire_conductivity": 1e7}),
-        ("singular_enrichment", {"use_singular_enrichment": True}),
+        ("insulation", {"insulation_radius": 1e-3}),
     ],
 )
-def test_pulse_unsupported_kwargs_are_typeerrors(cell, kwarg):
-    # Not in `_OUT_OF_SCOPE` at all, so it is a caller-typo TypeError — but
-    # capabilities still declares the cell refused, with a generated reason.
+def test_a_wire_load_is_refused_by_name_and_not_as_a_caller_typo(cell, kwarg):
+    """momwire#564 scope item 2: these three kwargs used to fall through.
+
+    `capabilities.wire_loading` has said False since momwire#396, but no
+    sentence went with it, so `build_solver` spelling an `LD 5` / `LD 6` as
+    `wire_conductivity=` / `insulation_radius=` reached the caller-typo
+    `TypeError` at the bottom of `__init__`.  That is not a refusal: the
+    portal's frame catches `ValueError` / `NotImplementedError` and writes a
+    `NEC ERROR` line, and a `TypeError` goes straight through it, killing the
+    daemon while the host waits on a sentinel that never arrives.
+
+    So the exception TYPE is the assertion here, not an implementation
+    detail — and the sentence has to name the class the caller actually
+    constructed, which for a `HarringtonSolver` is not `PulseSolver`.
+    """
     wires, npe = _wire()
-    assert PulseSolver.capabilities.refusal(cell)
-    with pytest.raises(TypeError):
-        PulseSolver(
-            wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, **kwarg
-        )
+    for cls in (PulseSolver, HarringtonSolver):
+        with pytest.raises(NotImplementedError) as exc:
+            cls(wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, **kwarg)
+        assert cls.__name__ in str(exc.value)
+        assert "does not serve wire loading" in str(exc.value)
+    # The declared cell and the raised sentence are the same prose, per class.
+    assert PulseSolver.capabilities.refusal("wire_loading")
+    assert "PulseSolver" in PulseSolver.capabilities.refusal("wire_loading")
+    assert "HarringtonSolver" in HarringtonSolver.capabilities.refusal("wire_loading")
+
+
+def test_a_genuine_typo_is_still_a_typeerror():
+    """The other half: `_OUT_OF_SCOPE` must not become a catch-all.
+
+    A name nothing in the tree spells is a caller mistake, and turning it into
+    a polite refusal would hide it.  The class name is still the constructed
+    one, which is the whole of the naming fix.
+    """
+    wires, npe = _wire()
+    for cls in (PulseSolver, HarringtonSolver):
+        with pytest.raises(TypeError) as exc:
+            cls(
+                wires=wires,
+                n_per_edge_per_wire=npe,
+                wavelength=WAVELENGTH,
+                use_singular_enrichment=True,
+            )
+        assert str(exc.value).startswith(f"{cls.__name__} got unexpected keyword")
 
 
 def test_pulse_served_row_is_three_grounds_and_nothing_else():

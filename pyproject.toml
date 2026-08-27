@@ -106,6 +106,7 @@ momwire-nec2c-sinusoidal = "momwire.portal:main"
 momwire-nec2c-sinusoidal-galerkin = "momwire.portal:main"
 momwire-nec2c-razor = "momwire.portal:main"
 momwire-nec2c-razor-nec5 = "momwire.portal:main"
+momwire-nec2c-pulse = "momwire.portal:main"
 
 [project.urls]
 Homepage = "https://github.com/stevenmburns/momwire"

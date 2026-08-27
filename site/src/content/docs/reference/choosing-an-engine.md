@@ -1,9 +1,9 @@
 ---
 title: "Choosing an engine: cost, memory, accuracy"
-description: Which of momwire's eight engines to pick — the selection matrix, runtime and memory behaviour, the ground-cost ladder, and where each formulation earns its place.
+description: Which of momwire's nine engines to pick — the selection matrix, runtime and memory behaviour, the ground-cost ladder, and where each formulation earns its place.
 ---
 
-Eight engines over six solver families answer through one kernel, and
+Nine engines over seven solver families answer through one kernel, and
 every one of them is reachable
 by name — as a `--basis` argument, as its own `momwire-nec2c-<basis>`
 command in [SimNEC's dialog](/reference/portal-usage/), or as the solver
@@ -32,6 +32,7 @@ vs. array geometry:
 | Arrays of identical / few-shape elements (loop/bowtie arrays, LPDA) | **`arrayblock`** | element-aware block-low-rank; near-linear scaling, 7–12× faster than the NEC-2 lineage on large arrays |
 | Cross-checking against NEC-5 behaviour | **`razor-nec5`** | the formulation twin — rides the licensed engine's own convergence path (below) |
 | Telling basis effects from testing effects | **`sinusoidal-galerkin`** | same basis as `sinusoidal`, variational testing — the attribution instrument of [Act V](/act-5/the-fourth-cell/) |
+| Reading a textbook scheme against the modern ones | **`pulse`** | Harrington's 1967 pulse expansion, point-matched — the oldest thin-wire MoM there is, and the slowest-converging engine here by a wide margin (below) |
 | Buried radials, screens, buried fed elements | **`bspline`** (or `bspline-d1`) — the dense B-spline pair carries the below-interface fill | serves impedance/currents/charges over the Sommerfeld ground; every other engine refuses buried decks by name, the compressed pair included — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
 
 The same picks hold with a ground in play — the ground model changes what
@@ -87,6 +88,35 @@ magnitude cheaper at equal accuracy. That, not a benchmark sprint, is why
 `bspline` d=2 is the default in every portal and every host.
 
 ## The razor twins: which lane
+
+### `pulse` is the honest slow one
+
+`pulse` is `HarringtonSolver` — a pulse (piecewise-constant) current basis
+with point matching, which is the scheme every other engine on this list was
+chosen to improve on. It is here because reading a modern answer against the
+classical one is worth being able to do without leaving the roster, not
+because it competes: it converges at O(1/N) where degree-2 B-splines converge
+far faster, so it wants a mesh several times finer for the same figure.
+
+Measured on a 10 m dipole at 14 MHz against `bspline`'s converged
+64.02 − 54.81j Ω:
+
+| Segments | Δ/a | `pulse` |
+| --- | --- | --- |
+| 11 | 909 | 81.82 + 63.82j |
+| 41 | 244 | 68.22 − 25.55j |
+| 101 | 99 | 65.62 − 43.52j |
+| 401 | 25 | 64.36 − 52.22j |
+
+At the segment counts a host dialog defaults to, that is a *visibly*
+different answer, and it is the formulation's own error rather than a defect
+— pick it when that is what you want to see, and `bspline` otherwise.
+
+It also serves less: no wire loading (an `LD 5` or `LD 6` is refused by name),
+no junction ports, no node gaps, no extended kernel, and one scalar radius.
+The EZNEC drop-in does not offer it at all — that dialect drives a *node*, and
+this family puts its gap at the nearest segment centre, so it refuses every
+deck there for the same reason `sinusoidal` does.
 
 `razor` and `razor-nec5` are one solver class offered as two names, the
 way `bspline`/`bspline-d1` are one class on two degrees. Both test the

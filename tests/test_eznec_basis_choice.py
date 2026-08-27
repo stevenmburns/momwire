@@ -41,6 +41,7 @@ from momwire.deck._solver import (
 )
 from momwire.eznec import _serve
 from momwire.eznec._shell import render
+from momwire.harrington import HarringtonSolver
 from momwire.pulse import PulseSolver
 from momwire.razor import RazorSolver
 from test_eznec_printout import MANIFEST, deck_text
@@ -133,14 +134,23 @@ def test_the_charge_table_gate_is_asked_of_the_class():
     last tenant on purpose — it is asked of the CLASS rather than kept as a
     list of which families qualify, so a family that arrives without the
     method refuses instead of dying on an attribute error.  ``PulseSolver``
-    is the standing example: no ``current_slopes``, and the issue that would
-    give it one (#611 step 4) has to decide what the column MEANS first,
-    because a pulse's charge is two point charges at the segment ends and
-    there is no density at a centre to print.
+    is the standing example, and it stayed one through momwire#564: the pulse
+    family joined the roster, and it joined as ``HarringtonSolver``, which
+    spreads each node's charge over that node's dual CELL and so HAS a density
+    to report.  ``PulseSolver`` leaves the same charge as two POINT charges at
+    the segment ends, has no density at a centre to print, and therefore still
+    has no ``current_slopes`` — #611 step 4's question, answered by the two
+    formulations rather than by a convention.
+
+    Which makes the pair the sharpest form this gate has had: two classes, one
+    a subclass of the other, differing in the charge's SUPPORT alone, and the
+    method's presence following that difference exactly.
     """
     for cls, _kwargs in BASES.values():
         assert hasattr(cls, "current_slopes"), cls
     assert not hasattr(PulseSolver, "current_slopes")
+    assert hasattr(HarringtonSolver, "current_slopes")
+    assert issubclass(HarringtonSolver, PulseSolver)
 
 
 def test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name():
@@ -316,8 +326,8 @@ def test_a_name_that_matches_no_basis_refuses_in_the_printout(prog):
 #
 # Measured over all 62 committed captures at momwire 0.39.0, re-measured TWICE
 # since — once per capability that landed — and re-measured a third time when
-# the corpus itself grew from 62 decks to 80.  **Every basis outside the
-# sinusoidal family now accepts all 77, and nothing raises at all** — the
+# the corpus itself grew from 62 decks to 80.  **Every basis outside the two
+# point-matched entries now accepts all 77, and nothing raises at all** — the
 # strongest and simplest form this table has had, and it was reached in two
 # deliberate steps rather than by drift:
 #
@@ -349,10 +359,12 @@ SERVED = None
 # ``test_eznec_serve.py`` — a fragment is enough here to tell the causes apart.
 NEAR_FIELD_AT_A_CONTACT = "asks for the field at (0, 0, 0) metres"
 
-# Every deck in this dialect drives a NODE, and the sinusoidal family puts a
-# delta gap at the nearest segment CENTRE instead — so all three entries still
-# refuse the whole corpus, and the reason is now the DRIVE rather than the
-# charge table (momwire#611), and it is now the POINT-MATCHED entry's alone.
+# Every deck in this dialect drives a NODE, and a point-matched family puts a
+# delta gap at the nearest segment CENTRE instead — so those entries refuse the
+# whole corpus, and the reason is the DRIVE rather than the charge table
+# (momwire#611).  It was the sinusoidal family's three entries, then one; it is
+# two again since momwire#564 put `pulse` on the roster, and the second one
+# arrived from a different formulation entirely.
 #
 # This is the third sentence in this cell and the record of the arc is worth
 # reading in one place.  It began as "no ``current_slopes``" — which stopped
@@ -377,21 +389,36 @@ RAISED = frozenset()
 
 # The K >= 3 apex decks reach a refusal one step EARLIER than the knot drive:
 # a five-wire apex needs a series source at the node itself, `_check_basis_can_host`
-# asks for `node_gaps` before it asks where a delta gap would land, and the
-# point-matched family has no node-gap treatment at all.  Two causes, one
-# entry, and which fires is a property of the DECK — which is exactly what
+# asks for `node_gaps` before it asks where a delta gap would land, and neither
+# point-matched entry has a node-gap treatment at all.  Two causes, one entry,
+# and which fires is a property of the DECK — which is exactly what
 # momwire#635 made this record per-deck to be able to say.
-NO_NODE_GAPS = "has no node-gap treatment"
+#
+# The fragment is the SEAM's framing rather than either family's prose, and
+# momwire#564 is why: `_check_basis_can_host` writes "basis 'x' has no node
+# port: " and then finishes the sentence out of that family's own
+# `capabilities.refusal('node_gaps')`, so the tail is different for
+# `sinusoidal` and for `pulse` while the cause is the same one.  Keying on a
+# tail would have recorded two causes where there is one — and it would have
+# read as a real divergence to whoever met it next.
+NO_NODE_GAPS = "has no node port"
 
-_POINT_MATCHED = ("sinusoidal",)
+# TWO entries now (momwire#564): `pulse` is `HarringtonSolver`, whose feed
+# lands at the nearest segment CENTRE exactly as `SinusoidalSolver`'s does —
+# `capabilities.knot_feeds` is False on both — so this dialect, every deck of
+# which drives a NODE, refuses the whole corpus on both, for one reason.  The
+# floor is a property of the FEED grid, not of the charge or of the testing,
+# and the two families that share it share nothing else.
+_POINT_MATCHED = ("sinusoidal", "pulse")
 
 
 def _row(refusals=()):
     """One row over the WHOLE roster: every basis to its cause, or to SERVED.
 
-    ``sinusoidal`` refuses every deck in the corpus, so it is the row's floor
-    rather than an entry each shape below repeats.  It used to be three
-    entries; ``sinusoidal-galerkin`` joined the served set in momwire#648.
+    The point-matched entries refuse every deck in the corpus, so they are the
+    row's floor rather than entries each shape below repeats.  It used to be
+    the sinusoidal family's three; ``sinusoidal-galerkin`` joined the served
+    set in momwire#648, and ``pulse`` joined the floor in momwire#564.
     """
     row = dict.fromkeys(BASES, SERVED)
     row.update(dict.fromkeys(_POINT_MATCHED, NO_KNOT_FEEDS))
@@ -408,16 +435,16 @@ def _row(refusals=()):
 EVERY_BASIS = _row()
 # 0013 and 0033, the two five-wire apexes.  Every basis that carries a node
 # port serves them — including `sinusoidal-galerkin`, which is why momwire#611
-# wanted it here and momwire#648 delivered it — and the one that does not
-# refuses for that rather than for the drive.
-APEX = _row({"sinusoidal": NO_NODE_GAPS})
+# wanted it here and momwire#648 delivered it — and the ones that do not
+# refuse for that rather than for the drive.
+APEX = _row(dict.fromkeys(_POINT_MATCHED, NO_NODE_GAPS))
 # Including the sinusoidal three, which is an ORDERING fact worth having
 # written down: these decks are refused for what they ASK FOR before any basis
 # is asked whether it can host them, so their cells say the near field rather
 # than ``current_slopes``.
 NO_BASIS = _row(dict.fromkeys(BASES, NEAR_FIELD_AT_A_CONTACT))
 
-# 77/77 for every basis outside the sinusoidal family, with no asymmetry left
+# 77/77 for every basis outside the two point-matched entries, with no asymmetry left
 # to record.  razor's road here was 49 -> 54 (momwire#608, which narrowed a
 # refusal that used to read "one segment" to what it should always have read,
 # "one segment and junctioned at neither end") -> 59 (momwire#624, ground
@@ -557,8 +584,8 @@ def test_every_basis_that_answers_at_all_accepts_the_same_59():
     rather than weakened to ``<=``, because a subset claim that is really an
     equality invites the gap to reopen unnoticed on the slack side.
 
-    So the corpus divides in two: ``sinusoidal``, which refuses everything,
-    and every other basis, which accepts the same 77.  ``hmatrix``,
+    So the corpus divides in two: the point-matched entries, which refuse
+    everything, and every other basis, which accepts the same 77.  ``hmatrix``,
     ``arrayblock``, the razor family and now ``sinusoidal-galerkin`` are their
     own solvers rather than bspline variants — three different bases and three
     different testing schemes — so their agreeing on the accept SET is a

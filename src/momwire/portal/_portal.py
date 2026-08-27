@@ -273,6 +273,7 @@ _BANNER_SUFFIXES = {
     "sinusoidal-galerkin": "+sg",
     "razor": "+razor",
     "razor-nec5": "+razor5",
+    "pulse": "+pulse",
 }
 # ONE roster, read one way (#846 phase III). The portal and the dialect used
 # to keep parallel tables spelt to match (momwire#359); as siblings in one
