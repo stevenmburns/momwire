@@ -74,6 +74,7 @@ from ._bspline_kernels import (
 from ._quadrature import leggauss
 
 from . import _bspline_kernels
+from . import _crossing_fill
 from . import _ground_mirror
 from . import _ground_refl
 from . import _ground_spec
@@ -1258,9 +1259,88 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 self.ground_z,
                 lower_medium=self._lower_medium(),
                 pec=self.ground_eps is None,
+                crossing_ends=self._grounded_junction_ends(),
             )
             self._cached_wire_media = cached
         return cached
+
+    def _grounded_junction_ends(self):
+        """The `(wire, "start"|"end")` pairs that participate in a junction
+        whose shared point lies IN the ground plane — the crossing-junction
+        exemption `_medium_spec.wire_media` keys on (momwire#524 phase 2).
+
+        Pure geometry: no media labels yet (the labels are what this
+        feeds). Which of those junctions actually SPAN the interface, and
+        whether the deck is inside the crossing serve's scope, is
+        `_crossing_junctions`' question, asked after the labels exist.
+        """
+        gz = self.ground_z
+        if gz is None or not self.junctions:
+            return frozenset()
+        ends = set()
+        for jw in self.junctions:
+            w, end = jw[0]
+            pl = self.wires_polylines[w]
+            pt = pl[0] if end == "start" else pl[-1]
+            if abs(pt[2] - gz) <= _ground_spec.ground_touch_tol(pl):
+                ends.update(jw)
+        return frozenset((w, e) for w, e in ends)
+
+    def _crossing_junctions(self):
+        """Indices of junctions that CROSS the interface — grounded
+        junctions joining an ABOVE wire to a BELOW wire — after checking
+        the deck against the crossing serve's scope (momwire#524 phase 2).
+
+        The scope is what the phase-2 adjudication validated, refused by
+        name past it:
+
+        * exactly TWO members per crossing junction (one wire per side) —
+          the fan (a monopole over a buried radial screen joined at the
+          node) is the recorded next widening;
+        * ONE wire radius across the deck — the radius rule
+          ρ_eff = √(ρ² + a²) is the corner's regularization and a
+          per-pair radius has no pinned convention;
+        * no OTHER junction on the deck — the complete spelling's
+          by-parts machinery completes every value-1 end on an axis, and
+          only the crossing node's completion is measured.
+        """
+        media = self._wire_media()
+        if _medium_spec.BELOW not in media or not self.junctions:
+            return ()
+        grounded = self._grounded_junctions()
+        crossing = []
+        for j_idx, jw in enumerate(self.junctions):
+            if j_idx not in grounded:
+                continue
+            sides = {media[w] for w, _e in jw}
+            if len(sides) == 2:
+                crossing.append(j_idx)
+        if not crossing:
+            return ()
+        for j_idx in crossing:
+            if len(self.junctions[j_idx]) != 2:
+                raise NotImplementedError(
+                    "crossing junction with more than two members: the "
+                    "crossing serve joins ONE above wire to ONE below wire "
+                    "at the interface (momwire#524 phase 2); the node fan "
+                    "is a recorded widening, not yet served"
+                )
+        if len(self.junctions) != len(crossing):
+            raise NotImplementedError(
+                "a deck with a crossing junction and OTHER junctions is "
+                "not served: the complete crossing spelling completes "
+                "every value-1 end on its axes, and only the crossing "
+                "node's completion is measured (momwire#524 phase 2)"
+            )
+        radii = np.asarray(self._radius_per_wire, dtype=float)
+        if float(radii.max()) - float(radii.min()) > 0.0:
+            raise NotImplementedError(
+                "crossing serve with per-wire radii: the radius rule "
+                "rho_eff = sqrt(rho^2 + a^2) regularizes the corner with "
+                "ONE wire radius, and a mixed-radius convention is not "
+                "pinned (momwire#524 phase 2)"
+            )
+        return tuple(crossing)
 
     def _has_buried_wires(self):
         """Whether any wire lies strictly below the interface."""
@@ -4518,7 +4598,24 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             supp_seg, polys, proj_bb, b_idx, b_idx, obs_b, t_b, W_b, obs_b, t_b, W_b
         )
 
-        if a_idx.size:
+        if a_idx.size and self._crossing_junctions():
+            # The crossing serve (momwire#524 phase 2): the cross pair is
+            # the COMPLETE designed mixed-potential spelling on graded
+            # axes — every value is a direct contour evaluation, so there
+            # is no grid and no interpolation to exclude the corner. The
+            # transpose is reciprocity, measured on the adjudication decks
+            # rather than assumed. The self families get their missing
+            # by-parts bnd + corner content on the same axes; continuity
+            # through the node and the AGARD slope condition then emerge
+            # from the fill with no constraint row and no merged dof.
+            self._checkpoint()
+            ax_a = _crossing_fill.axis_data(self, geom, a_idx)
+            ax_b = _crossing_fill.axis_data(self, geom, b_idx)
+            t_ab = _crossing_fill.cross_complete_block(self, geom, ax_a, ax_b)
+            Z -= t_ab
+            Z -= t_ab.T
+            Z += _crossing_fill.self_completions(self, geom, ax_b, ax_a)
+        elif a_idx.size:
             grid_t = _sommerfeld_transmitted.get_grid_below_above(
                 eps_t,
                 k_p,

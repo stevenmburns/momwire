@@ -15,10 +15,16 @@ Three labels and nothing else
   ABOVE and is the ground-CONTACT case momwire#151 already serves; the tol is
   the solver's own so this layer and the contact tagging cannot disagree.
 * ``BELOW`` — every polyline point STRICTLY below the plane by more than that
-  tolerance. Detached buried wires and fed buried wires are both this.
-* refused — anything else. A wire with points on both sides, and a buried
-  wire whose end stands IN the plane, are the same case: current crossing the
-  interface, which needs the crossing basis momwire#524 phase 2 owns.
+  tolerance. Detached buried wires and fed buried wires are both this. Since
+  momwire#524 phase 2, so is a wholly-below wire whose plane-touching ANCHOR
+  is a crossing-junction member (`crossing_ends`): its current reaches the
+  interface through the crossing junction the solver owns, and the matching
+  contact end above is exempt from the contact-with-buried refusal for the
+  same reason.
+* refused — anything else. A wire with points on both sides of the plane
+  crosses it mid-span, and where it pierces would be momwire's guess: the
+  served spelling is the SPLIT one, a below wire ending in the plane joined
+  there to an above wire.
 
 There is no per-SEGMENT crossing to worry about after that, which is the point
 of labelling per WIRE: a wire that is wholly on one side has every segment on
@@ -45,26 +51,36 @@ ABOVE = "above"
 BELOW = "below"
 
 
-# The waiting gate for phase 2, banked from the momwire#524 phase-0 capture
-# campaign. Quoted in the refusal so the sentence names a NUMBER the crossing
-# basis has to meet rather than an open-ended "later".
-CROSSING_ANCHOR = "74.761 - 57.730j ohm"
+# The engine's print for the phase-0 crossing deck (a 2 m buried vertical
+# joined at z = 0 to a 10 m monopole over eps_r 13 / sigma 0.005 S/m soil at
+# 7 MHz). Once the waiting gate for phase 2; ADJUDICATED 2026-08-26 as a
+# DIFFERENT EXPERIMENT, not a target: the engine's junction there is two
+# independent contact ends plus a point-electrode sink (its own printed
+# junction currents violate its AGARD condition divergently, with a KCL
+# deficit of ~2 A vanishing into the interface point), while the crossing
+# serve's exact-EM answer for the same deck is 138.77 - 102.99j ohm, with
+# continuity and the AGARD slope emerging from the fill. The two conventions
+# collapse onto each other exactly where the contact fiction becomes
+# physical (sigma -> inf) and only there. Kept for the record and for the
+# convention-difference documentation; NEVER gate the crossing serve
+# against it (the house rule: never gate cross-formulation agreement).
+ENGINE_CROSSING_PRINT = "74.761 - 57.730j ohm"
 
 _REFUSE_CROSSING = (
-    "wire {w} crosses the ground interface (polyline z runs {zmin:.6g} to "
-    "{zmax:.6g} across ground_z = {gz:g}): momwire serves wires wholly at or "
-    "above the interface and wires STRICTLY below it, and a wire with points "
-    "on both sides - including a buried wire with an END standing in the "
-    "plane - is neither. Current crossing the interface needs the crossing "
-    "basis momwire#524 phase 2 owns: the two media meet along the wire, so "
-    "the continuity of current there is a boundary condition, not a "
-    "junction. The gate phase 2 has to meet is already banked - the phase-0 "
-    "crossing anchor (a 2 m buried vertical joined at z = 0 to a 10 m "
-    "monopole over eps_r 13 / sigma 0.005 S/m soil at 7 MHz) is "
-    "{anchor} from our licensed NEC-5 engine's printout. Until then: leave "
-    "the buried part DETACHED from the part above the plane (a buried radial "
-    "screen under a base-fed vertical is served that way, momwire#553), or "
-    "raise the whole wire clear of the interface"
+    "wire {w} crosses the ground interface mid-span (polyline z runs "
+    "{zmin:.6g} to {zmax:.6g} across ground_z = {gz:g}): momwire serves "
+    "wires wholly at or above the interface, wires strictly below it, and "
+    "current CROSSING it only through a crossing junction (momwire#524 "
+    "phase 2): split the wire AT the interface into a below wire whose end "
+    "stands in the plane and an above wire starting there, and declare the "
+    "junction between them - that deck is served, with continuity of "
+    "current and the interface slope condition emerging from the fill "
+    "itself. A single polyline with points on both sides is not, because "
+    "which point the wire pierces the plane at would be momwire's guess "
+    "where it must be the model's statement. Alternatively leave the "
+    "buried part DETACHED (a buried radial screen under a base-fed "
+    "vertical is served that way, momwire#553), or raise the whole wire "
+    "clear of the interface"
 )
 
 _REFUSE_BURIED_PEC = (
@@ -152,10 +168,8 @@ def contact_with_buried_refusal(contact_wire, buried_wire):
 
 
 def crossing_refusal(w, zmin, zmax, ground_z):
-    """The interface-crossing sentence for wire `w`."""
-    return _REFUSE_CROSSING.format(
-        w=w, zmin=zmin, zmax=zmax, gz=ground_z, anchor=CROSSING_ANCHOR
-    )
+    """The mid-span interface-crossing sentence for wire `w`."""
+    return _REFUSE_CROSSING.format(w=w, zmin=zmin, zmax=zmax, gz=ground_z)
 
 
 def buried_no_medium_refusal(w, zmin, ground_z, *, pec):
@@ -201,12 +215,21 @@ def buried_far_field_refusal():
     return _REFUSE_BURIED_FAR_FIELD
 
 
-def wire_media(polylines, ground_z, *, lower_medium, pec):
+def wire_media(polylines, ground_z, *, lower_medium, pec, crossing_ends=()):
     """One label per wire — `ABOVE` or `BELOW` — or a named `ValueError`.
 
     `lower_medium` is True exactly when the solve's ground carries a medium
     below the interface (`ground_model='sommerfeld'` with a `ground_eps`);
     `pec` picks which of the two no-lower-medium sentences a buried wire gets.
+
+    `crossing_ends` is the crossing-junction exemption (momwire#524 phase 2):
+    the `(wire, "start"|"end")` pairs that participate in a junction whose
+    shared point lies IN the ground plane. A wholly-below wire whose
+    plane-touching anchor is such a junction member is `BELOW` — its current
+    reaches the interface through the crossing junction the caller owns —
+    and a contact end that is such a member is exempt from the
+    contact-with-buried refusal for the same reason. A caller with no
+    crossing basis (razor) passes nothing and keeps the refusals verbatim.
 
     Over free space (`ground_z is None`) every wire is `ABOVE`: z < 0 is legal
     geometry with no interface under it, and this layer must not invent one.
@@ -214,6 +237,7 @@ def wire_media(polylines, ground_z, *, lower_medium, pec):
     if ground_z is None:
         return tuple(ABOVE for _ in polylines)
     gz = float(ground_z)
+    crossing_ends = frozenset(crossing_ends)
     labels = []
     for w, pl in enumerate(polylines):
         pl_arr = np.asarray(pl, dtype=np.float64)
@@ -223,19 +247,46 @@ def wire_media(polylines, ground_z, *, lower_medium, pec):
         if zmin >= gz - tol:
             labels.append(ABOVE)
             continue
-        if zmax >= gz - tol:
+        if zmax >= gz - tol and not _is_crossing_below(
+            pl_arr, w, gz, tol, crossing_ends
+        ):
             raise ValueError(crossing_refusal(w, zmin, zmax, gz))
         if not lower_medium:
             raise ValueError(buried_no_medium_refusal(w, zmin, gz, pec=pec))
         labels.append(BELOW)
     labels = tuple(labels)
     if BELOW in labels:
-        contacts = _ground_spec.contact_ends(polylines, gz)
+        contacts = [
+            c
+            for c in _ground_spec.contact_ends(polylines, gz)
+            if c not in crossing_ends
+        ]
         if contacts:
             raise ValueError(
                 contact_with_buried_refusal(contacts[0][0], labels.index(BELOW))
             )
     return labels
+
+
+def _is_crossing_below(pl_arr, w, gz, tol, crossing_ends):
+    """Whether wire `w` is a legitimate crossing-junction BELOW wire: it
+    touches the plane ONLY at anchor(s), nothing pokes above, and every
+    touching anchor is an exempted junction member."""
+    z = pl_arr[:, 2]
+    if float(z.max()) > gz + tol:
+        return False
+    touch_start = abs(float(z[0]) - gz) <= tol
+    touch_end = abs(float(z[-1]) - gz) <= tol
+    if not (touch_start or touch_end):
+        return False
+    interior = z[1:-1]
+    if interior.size and float(interior.max()) >= gz - tol:
+        return False
+    if touch_start and (w, "start") not in crossing_ends:
+        return False
+    if touch_end and (w, "end") not in crossing_ends:
+        return False
+    return True
 
 
 def segment_media(labels, seg_offsets):
