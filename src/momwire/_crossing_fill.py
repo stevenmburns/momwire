@@ -20,9 +20,15 @@ the AGARD slope condition then EMERGE from the fill's own physics: the
 node needs no constraint row and no merged dof (split ≡ merged ≡
 V-constrained, measured to the digit on the adjudication decks).
 
-The corner term's sign is STRUCTURAL: +c1·V(a) against the value-1 tents,
-calibrated once on the soil-A adjudication deck and never re-picked per
-medium (the high-σ ladder pinned its medium-independence).
+The corner term's sign is STRUCTURAL and ORIENTATION-CARRIED:
+−σ_test·σ_src·c1·V(a) against the value-1 tents (σ = −1 at a wire's
+start, +1 at its end), calibrated once on the soil-A adjudication deck
+and never re-picked per medium (the high-σ ladder pinned its
+medium-independence). With the fan widening the below axis carries N
+node tents: the corner loop emits one σ-carried term per
+(above-tent × below-tent) pair, and the self completion's corner emits
+the below×below tent pairs at R = a — all at the ONE crossing node the
+scope allows, which is what keeps the single V(a) evaluation honest.
 
 Scope guards this module inherits from the derivation:
 
@@ -259,6 +265,10 @@ def cross_complete_block(s, geom, A, B):
         for pt_b, sig_b, fv_b in B["ends"]:
             if abs(pt_b[2] - gz) > 1e-12:
                 continue
+            # One V(a) serves every pair only because every in-plane
+            # value-1 end stands at the ONE crossing node the scope
+            # allows — assert that, don't assume it.
+            assert np.hypot(pt_a[0] - pt_b[0], pt_a[1] - pt_b[1]) < 1e-9
             if v_corner is None:
                 v_corner = complex(
                     _near_interface.six_point(
