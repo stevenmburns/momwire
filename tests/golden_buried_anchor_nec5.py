@@ -56,6 +56,16 @@ ANCHOR_DECKS = {
 ANCHOR_LONE_RADIAL = 92.1300 - 70.1410j
 ANCHOR_FOUR_RADIAL = 90.0510 - 70.7310j
 
+# ANCHOR_FOUR_RADIAL is the engine's DETACHED-STAKE convention:
+# its radials stop 15 cm down and a point-electrode fiction
+# carries the current across. momwire's served spelling of the
+# same screen is the CONNECTED fan (radials rise to the node, or
+# join a buried hub - momwire#524 fan widening), which is a
+# different physical deck with its own banked soil-A answer
+# (scratch/524-phase2/results/probe38-fan-widening.json). The
+# two are a documented convention difference, never a parity
+# target in either direction.
+
 # The momwire#524 crossing refinement ladder, FOR THE RECORD ONLY:
 # the engine's crossing junction was adjudicated 2026-08-26 as two
 # contact ends plus a point-electrode sink (its printed junction
