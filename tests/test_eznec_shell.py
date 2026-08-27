@@ -33,6 +33,7 @@ from pathlib import Path
 import pytest
 
 import momwire.eznec as eznec
+from eznec_reproducibility import blank_undefined
 from momwire.eznec._shell import ARGUMENT_ERROR_INPUT, ARGUMENT_ERROR_OUTPUT
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "eznec"
@@ -512,12 +513,26 @@ RESIDENCY_SEED = 20260823
 
 
 def _strip_timing(text: str) -> str:
-    """The manifest's served-run normalization: the timing lines are wall
-    clock and mean nothing to a byte compare."""
-    return "\n".join(
-        line
-        for line in text.split("\n")
-        if "FILL=" not in line and not line.startswith(" RUN TIME =")
+    """The two normalizations this comparison makes, and nothing else.
+
+    The timing lines are wall clock and mean nothing to a byte compare. And
+    :func:`eznec_reproducibility.blank_undefined` blanks the four printed
+    quantities the seam does not claim to reproduce (momwire#578) — a
+    quotient whose divisor is zero to sixteen decades, the imaginary part of
+    a cancellation an ``NT`` card pinned real, the phase of a dust magnitude,
+    and a wire loss that is the sum of nothing. Each bar sits in a measured
+    void; ``tests/test_eznec_reproducibility.py`` holds them there.
+
+    Applied to BOTH sides, so it can only narrow what is asserted. It touches
+    56 lines in 6 of the 80 decks, every one of them carrying an open stub or
+    a dead wire.
+    """
+    return blank_undefined(
+        "\n".join(
+            line
+            for line in text.split("\n")
+            if "FILL=" not in line and not line.startswith(" RUN TIME =")
+        )
     )
 
 
@@ -537,26 +552,6 @@ def _dump(name: str, label: str, position: int, warm: str, cold: str) -> None:
 
 
 @pytest.mark.slow
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "momwire#578, PARTLY landed and so still not strict. The pattern "
-        "table is reproducible now: its printed dust is floored in this "
-        "seam's own derived units and the SENSE label is tied to the axial "
-        "ratio the row actually prints, which took the corpus from 583 "
-        "moving E-field columns and 46 flipping polarisation labels to zero "
-        "of each, measured across all 80 decks at OMP_NUM_THREADS 1 vs 8 "
-        "(583 and 46 were the counts at 62 decks, before the promotion). "
-        "What is left is the NETWORK table, and only in 0017/0018: 5 dust "
-        "columns and a WIRE LOSS at 1e-54 that want the same treatment in "
-        "their own units, plus 2 lines of the singular row whose phase is "
-        "undetermined (|v| ~ 1e+25) and whose disposition — floor or refuse "
-        "— is the open half of the issue. Those 8 lines move with thread "
-        "count and not with process history, so THIS gate passes today; it "
-        "stays non-strict until the issue closes rather than being flipped "
-        "on a pass it does not yet fully earn."
-    ),
-)
 def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
     """**The gate momwire#532 turns on.**
 
@@ -568,8 +563,8 @@ def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
     what the spawns answer.
 
     So: the cold side is one real child process per deck — today's model, and
-    the oracle. The warm side is the same corpus through THIS interpreter,
-    shuffled, forward and then reversed. The reverse pass is not redundant:
+    the oracle. The warm side is the same corpus, across all 80 decks, through
+    THIS interpreter, shuffled, forward and then reversed. The reverse pass is not redundant:
     it inverts each deck's predecessor set, which is where an order-dependent
     leak shows and a single forward sweep cannot see it.
 
