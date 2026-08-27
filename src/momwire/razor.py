@@ -342,6 +342,7 @@ import scipy.linalg
 from . import (
     _ground_refl,
     _ground_spec,
+    _medium_spec,
     _potential_ground,
     _wire_loading,
     _wire_spec,
@@ -591,8 +592,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         plane — ground CONTACT, the grounded-end tent whose lower wing is
         its own image (momwire#398 unit 3, and the module docstring for the
         physics) — which is what the vertical/monopole class needs. A wire
-        that dips below the plane, has an edge lying in it, or touches it at
-        an interior anchor is refused instead.
+        with points below the plane is refused through the shared
+        `_medium_spec` sentences (momwire#651) — crossing, no-lower-medium,
+        contact+buried — or with razor's own buried-fill gap sentence; an
+        edge lying in the plane or an interior-anchor touchdown is refused
+        by name here.
     ground_eps: complex relative permittivity ε̃ (Im ≤ 0 for a passive
         ground in momwire's e^{+jωt} convention) or an `(eps_r, sigma)`
         tuple with sigma in S/m, for the NEC `GN 0` style
@@ -1080,11 +1084,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         is a grounded end, and gets the grounded tent
         (:meth:`_junction_wings`) whose lower wing is its own image.
 
-        The three geometries that are NOT ground contact, and stay refused:
+        The geometries that are NOT ground contact, and stay refused:
 
-        * a wire that dips BELOW `ground_z` is a geometry error — there is
-          no such antenna — and raises `ValueError`, the same reading and
-          the same wording `BSplineSolver._wire_endpoint_status` gives it;
+        * a wire with points BELOW `ground_z` goes through the shared
+          `_medium_spec.wire_media` reading first (momwire#651), so BOTH
+          trunks refuse buried geometry with the SAME sentences: a wire
+          crossing the interface gets the named crossing refusal (with the
+          momwire#524 phase-2 anchor), a buried wire over a PEC or
+          refl-coef ground gets the no-lower-medium sentence, and a ground
+          contact combined with a buried wire gets the momwire#553 U5
+          combination sentence. What survives that reading — a wholly
+          buried DETACHED wire over a Sommerfeld ground, which
+          `BSplineSolver` serves — is refused here with razor's own-gap
+          sentence: razor has no buried fill yet;
         * an EDGE lying in the plane (both its anchors at `ground_z`) is
           degenerate over a conducting ground: the edge coincides with its
           own image, so the fold cancels it and it carries no independent
@@ -1105,15 +1117,36 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         gz = self.ground_z
         if gz is None:
             return frozenset()
+        # The buried readings go through _medium_spec so both trunks say
+        # the same sentences (momwire#651). It raises the crossing, the
+        # no-lower-medium and the contact+buried refusals by their shared
+        # names; whatever it labels BELOW is a legal deck razor cannot
+        # fill yet, and that gap gets razor's own sentence.
+        media = _medium_spec.wire_media(
+            self.wires_polylines,
+            gz,
+            lower_medium=(
+                self.ground_eps is not None and self.ground_model == "sommerfeld"
+            ),
+            pec=self.ground_eps is None,
+        )
+        if _medium_spec.BELOW in media:
+            w = media.index(_medium_spec.BELOW)
+            zmin = float(np.asarray(self.wires_polylines[w])[:, 2].min())
+            raise ValueError(
+                f"wire {w} lies wholly below the ground plane (min z = "
+                f"{zmin:.6g} < ground_z = {gz:g}), and RazorSolver has no "
+                "buried fill: the momwire#553 buried serve (direct + image "
+                "+ Sommerfeld-remainder blocks in the lower medium) is "
+                "written for BSplineSolver's testing side only. A detached "
+                "buried wire is a LEGAL deck - solve it with BSplineSolver, "
+                "which serves buried ground since momwire#553, or raise the "
+                "wire clear of the plane. Razor consuming the basis-agnostic "
+                "buried tables is momwire#651's continuation"
+            )
         touching = set()
         for i, pl in enumerate(self.wires_polylines):
             tol = _ground_spec.ground_touch_tol(pl)
-            zmin = float(pl[:, 2].min())
-            if zmin < gz - tol:
-                raise ValueError(
-                    f"wire {i} dips below the ground plane "
-                    f"(min z = {zmin:.6g} < ground_z = {gz:g})"
-                )
             at = np.abs(pl[:, 2] - gz) <= tol
             if np.any(at[:-1] & at[1:]):
                 raise ValueError(

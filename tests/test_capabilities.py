@@ -249,7 +249,7 @@ def test_razor_ground_contact_is_served_at_a_wire_end():
         RazorSolver(
             wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, ground_z=0.0
         )
-    with pytest.raises(ValueError, match="dips below the ground plane"):
+    with pytest.raises(ValueError, match="runs below the ground plane"):
         RazorSolver(
             wires=wires, n_per_edge_per_wire=npe, wavelength=WAVELENGTH, ground_z=1.0
         )

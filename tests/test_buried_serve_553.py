@@ -1037,11 +1037,12 @@ def test_gu5_11_the_grids_are_shared_across_a_ladder(record_property):
 # what agreement is actually achievable; this holds the slot until it does.
 ANCHOR_ENVELOPE_OHM = 4.0
 
-# What each trunk refuses these decks with TODAY, and they are not the same
-# refusal. BSplineSolver has the momwire#553 buried fill and declines only
-# the contact+buried COMBINATION. RazorSolver has no buried fill at all — a
-# wire under `ground_z` is a geometry error there — so its row is a gate on
-# a second, larger gap, and lifting momwire#567 alone will not arm it.
+# What each trunk refuses these decks with TODAY. Since momwire#651 routed
+# razor's buried readings through `_medium_spec.wire_media`, BOTH trunks
+# refuse the anchor decks with the SAME shared contact+buried sentence.
+# Razor's own buried fill is still missing (its own-gap sentence covers the
+# wholly-buried DETACHED decks bspline serves), so arming razor's row needs
+# both momwire#567 and the momwire#651 continuation.
 _TRUNK_REFUSAL = {
     "bspline": (
         BSplineSolver,
@@ -1050,9 +1051,10 @@ _TRUNK_REFUSAL = {
     ),
     "razor": (
         RazorSolver,
-        "dips below the ground plane",
-        "razor has no buried fill at all, so a wire under ground_z is a "
-        "geometry error there; momwire#567 alone will not arm this row",
+        "stands an END in the ground plane",
+        "the shared contact+buried sentence (momwire#651); razor's own "
+        "buried fill is still missing, so momwire#567 alone will not arm "
+        "this row",
     ),
 }
 
@@ -1107,3 +1109,78 @@ def test_gu5_12_the_anchor_deck_answers_what_the_engine_printed(
         f"prints {anchor:.4f} — {miss:.4f} ohm apart, outside the "
         f"provisional {ANCHOR_ENVELOPE_OHM:g} ohm envelope"
     )
+
+
+# ======================================================================
+# momwire#651 — razor refuses buried geometry with the SHARED sentences
+# ======================================================================
+
+
+def _fed_crossing_deck():
+    return dict(
+        wires=[np.array([(0.0, 0.0, -2.0), (0.0, 0.0, 3.0)])],
+        n_per_edge_per_wire=[[10]],
+        feeds=[(0, 2.5, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+
+
+def _detached_buried_deck(**ground):
+    return dict(
+        wires=[_mono(11.0, 1.0), _radial(depth=0.5)],
+        n_per_edge_per_wire=[[15], [10]],
+        feeds=[(0, 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        ground_z=0.0,
+        **ground,
+    )
+
+
+_PARITY_DECKS = {
+    "crossing": _fed_crossing_deck,
+    "contact-with-buried": contact_deck,
+    "buried-under-pec": _detached_buried_deck,
+    "buried-under-refl-coef": lambda: _detached_buried_deck(
+        ground_eps=SOIL_A, ground_model="refl-coef"
+    ),
+}
+
+
+def _refusal_message(solver, build):
+    """The sentence the trunk says, at whichever stage it fires — razor
+    refuses at construction, bspline at its (lazy) media reading."""
+    with pytest.raises(ValueError) as exc:
+        s = solver(**build)
+        s._wire_media()
+    return str(exc.value)
+
+
+@pytest.mark.parametrize("case", sorted(_PARITY_DECKS))
+def test_651_the_two_trunks_refuse_buried_geometry_identically(case):
+    """momwire#651: crossing, contact+buried and no-lower-medium decks are
+    refused by BOTH trunks with byte-identical `_medium_spec` sentences.
+    The one legitimate divergence — the wholly-buried DETACHED deck bspline
+    serves — is the next test's."""
+    build = _PARITY_DECKS[case]()
+    assert _refusal_message(BSplineSolver, build) == _refusal_message(
+        RazorSolver, build
+    )
+
+
+def test_651_razors_own_gap_sentence_names_the_serving_trunk():
+    """The detached buried deck is LEGAL — bspline labels it and serves.
+    Razor's refusal must say the gap is razor's own, name the trunk that
+    serves the deck, and point at the momwire#651 continuation."""
+    build = _detached_buried_deck(ground_eps=SOIL_A, ground_model="sommerfeld")
+    assert _medium_spec.BELOW in BSplineSolver(**build)._wire_media()
+    with pytest.raises(ValueError) as exc:
+        RazorSolver(**build)
+    msg = str(exc.value)
+    assert "RazorSolver has no buried fill" in msg
+    assert "BSplineSolver" in msg
+    assert "momwire#651" in msg

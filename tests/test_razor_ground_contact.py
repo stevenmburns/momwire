@@ -336,13 +336,13 @@ def test_the_contact_deck_residual_decays_instead_of_holding(name, sharp_lane):
 def test_geometries_that_are_not_a_grounded_end_are_refused():
     """Contact is a wire END in the plane; the other three are refused.
 
-    Two `ValueError`s (geometry errors — there is no such antenna, and no
-    such independent current) and one `NotImplementedError` (real physics
+    Two `ValueError`s — the interface-crossing wire now says the SHARED
+    `_medium_spec` sentence (momwire#651), the in-plane edge says
+    `BSplineSolver`'s wording — and one `NotImplementedError` (real physics
     that would need a second unknown at a knot that already carries a tent).
-    The wording of the first two is `BSplineSolver`'s, deliberately.
     """
     kw = dict(wire_radius=RAD, wavelength=WL, nsegs=6, ground_z=0.0)
-    with pytest.raises(ValueError, match="dips below the ground plane"):
+    with pytest.raises(ValueError, match="crosses the ground interface"):
         RazorSolver(wires=[np.array([[0.0, 0.0, 1.0], [0.0, 0.0, -1.0]])], **kw)
     with pytest.raises(ValueError, match="edge lying in the ground plane"):
         RazorSolver(wires=[np.array([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]])], **kw)
