@@ -102,13 +102,35 @@ jobs:
       # runs the drop-in as a program at all, so the filename mechanism is
       # gated here or nowhere.
       - run: python scripts/eznec_freeze/smoke.py dist/momwire-eznec/momwire-eznec.exe
+      # One name, computed once, used by the zip, the upload, and (on tags)
+      # the release job's download. A tag keeps the canonical name the
+      # release job asks for by name; anything else is a rehearsal build and
+      # says so.
+      #
+      # The name is carried by the ZIP FILE and not only by the artifact,
+      # because the artifact name exists solely in the Actions UI: download
+      # it and what lands on disk is the inner zip. If only the artifact were
+      # renamed, an unzipped rehearsal bundle would be indistinguishable from
+      # a release download at exactly the moment someone runs the exe. The
+      # repo is public, so run artifacts are downloadable by anyone -- the
+      # name is the only thing standing between a passer-by and a
+      # self-signed binary that looks official.
+      - name: Name the bundle
+        shell: pwsh
+        run: |
+          $base = if ($env:GITHUB_REF_TYPE -eq 'tag') { 'momwire-eznec-windows' } else { 'momwire-eznec-windows-SELFSIGNED-rehearsal' }
+          "BUNDLE=$base" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Zip the bundle
         shell: pwsh
-        run: Compress-Archive -Path dist/momwire-eznec -DestinationPath momwire-eznec-windows.zip
+        run: Compress-Archive -Path dist/momwire-eznec -DestinationPath "$env:BUNDLE.zip"
+      # Rehearsal bundles expire in a week: they exist to be fetched off a
+      # test run while that run is topical, not to accumulate a 90-day shelf
+      # of self-signed executables.
       - uses: actions/upload-artifact@v7
         with:
-          name: momwire-eznec-windows
-          path: momwire-eznec-windows.zip
+          name: ${{ env.BUNDLE }}
+          path: ${{ env.BUNDLE }}.zip
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 7 }}
 
   release:
     # Attach the zip to the same GitHub Release wheels.yml creates. Both
