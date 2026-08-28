@@ -50,11 +50,12 @@ exercise, `test_g524_7` already does.
 from __future__ import annotations
 
 import re
+import warnings
 
 import numpy as np
 import pytest
 
-from momwire import _medium_spec, _near_interface
+from momwire import _crossing_fill, _medium_spec, _near_interface
 from momwire.bspline import BSplineSolver
 
 from test_buried_serve_553 import SOIL_A, WL7, contact_deck
@@ -756,3 +757,148 @@ def test_g698_the_served_crossing_decks_still_earn_their_exemption():
     assert BSplineSolver(**crossing_deck())._crossing_junctions() == (0,)
     assert BSplineSolver(**fan_rise_deck())._crossing_junctions() == (0,)
     assert BSplineSolver(**hub_deck())._crossing_junctions() == (1,)
+
+
+# ======================================================================
+# G-696 — the node-mesh advisory: say when a crossing node's REGION is
+# unresolved for the #674 class, and stay quiet when it is not
+# ======================================================================
+#
+# The physics is measured in the G-674 gates; what is gated HERE is the
+# reporting. The one design claim worth pinning is the choice of
+# quantity: the advisory reads the FINEST mesh within reach of the node,
+# not the segment touching it, because the touching segment does not
+# predict the error (a feed gap in front of a graded chain is a resolved
+# node). See `_crossing_fill`'s constants for the two-deck calibration.
+#
+# These run without solving: the advisory reads geometry only, and the
+# decks it reads are the ones the G-674 gates solve.
+
+
+def _arms(build):
+    s = BSplineSolver(**build)
+    return s._crossing_node_members(s._crossing_junctions(), s._wire_media())
+
+
+def gap_then_graded_deck(**override):
+    """The shape that broke the first spelling of this advisory: a 50 mm
+    ungraded feed gap at the node, with a chain graded to 6.25 mm right
+    behind it. Transcribed from antennaknobs' buried-radial vertical in
+    its FIXED state, whose soil-A answer moves 0.115 ohm across an 8x
+    sweep of that gap — a resolved node wearing a coarse first segment."""
+    build = fan_rise_deck_graded("n2", **override)
+    mono_i = len(build["wires"]) - 1
+    build["wires"] = list(build["wires"])
+    build["n_per_edge_per_wire"] = [list(n) for n in build["n_per_edge_per_wire"]]
+    # Only the ABOVE arm differs from the banked graded rung: its grading
+    # now sits BEHIND a 50 mm ungraded gap at the node instead of running
+    # all the way in. The rises stay at the n2 rung, as they are on the
+    # antennaknobs deck this is transcribed from.
+    build["wires"][mono_i] = np.array(
+        [(0.0, 0.0, 10.0), (0.0, 0.0, 0.15), (0.0, 0.0, 0.05), (0.0, 0.0, 0.0)]
+    )
+    build["n_per_edge_per_wire"][mono_i] = [15, 16, 1]
+    return build
+
+
+def test_g696_1_the_gated_quantity_is_the_resolved_scale_not_the_touching_segment():
+    """The design claim. On the gap-then-graded arm the touching segment
+    is 50 mm while the node region resolves to 6.25 mm — an 8x spread
+    inside ONE arm. Gating the touching segment would fire here; gating
+    the resolved scale does not."""
+    above = [a for a in _arms(gap_then_graded_deck()) if a.side == "above"]
+    assert len(above) == 1
+    assert above[0].h_adjacent == pytest.approx(0.050, rel=1e-12)
+    assert above[0].h_resolved == pytest.approx(0.00625, rel=1e-12)
+
+
+def test_g696_2_every_crossing_member_is_reported_once():
+    """One above member and N below members, per the fan widening's own
+    scope — the advisory sees the whole node, not just the above arm."""
+    arms = _arms(fan_rise_deck(n_radials=4))
+    assert len(arms) == 5
+    assert sorted(a.side for a in arms) == ["above"] + ["below"] * 4
+
+
+def test_g696_3_the_base_fan_warns_and_names_the_above_arm():
+    """The coarse anchor: the deck #674 measured at 0.2269 ohm (eps~=1)
+    and 7.48 ohm of soil-A mesh move. Its above arm is a single 667 mm
+    edge that never resolves, so it must warn and name that arm."""
+    with pytest.warns(_crossing_fill.CoarseCrossingNode) as rec:
+        worst = _crossing_fill.warn_coarse_node(_arms(fan_rise_deck()))
+    assert worst.h_resolved == pytest.approx(10.0 / 15.0, rel=1e-12)
+    assert worst.side == "above"
+    msg = str(rec[0].message)
+    assert "666.7 mm" in msg and "above member" in msg
+    assert "momwire#674" in msg and "momwire#696" in msg
+
+
+@pytest.mark.parametrize(
+    "deck,why",
+    [
+        (fan_rise_deck_graded, "the banked FAN_SOIL_A_N2 rung, 0.0001 ohm off"),
+        (gap_then_graded_deck, "a feed gap in front of a graded chain"),
+    ],
+)
+def test_g696_4_resolved_nodes_are_silent(deck, why):
+    """Both converged shapes stay quiet. The second is the regression
+    that the first spelling of this advisory got wrong: it gated the
+    touching segment, fired on a deck measured fine, and needed its bar
+    threaded through a 50-75 mm window to avoid doing so."""
+    build = deck() if deck is gap_then_graded_deck else deck("n2")
+    arms = _arms(build)
+    assert max(a.h_resolved for a in arms) == pytest.approx(0.00625, rel=1e-9)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", _crossing_fill.CoarseCrossingNode)
+        assert _crossing_fill.warn_coarse_node(arms) is not None, why
+
+
+def test_g696_5_the_bar_sits_on_674s_own_graded_rungs():
+    """Not a number split between two anchors: the bar IS #674's coarsest
+    graded rung (25 mm, 0.0036 ohm at eps~=1) and 4x its converged recipe
+    rung (6.25 mm, 0.0001 ohm)."""
+    assert _crossing_fill.NODE_H_BAR == 0.025
+    assert _crossing_fill.NODE_H_BAR == pytest.approx(4 * 0.00625, rel=1e-12)
+
+
+@pytest.mark.parametrize("reach", [0.06, 0.15, 0.5, 1.0])
+def test_g696_6_the_verdict_is_insensitive_to_the_reach(reach, monkeypatch):
+    """The reason for gating the resolved scale rather than threading a
+    needle: over a 17x span of the reach parameter, both calibration
+    decks land on the same side every time. The earlier spelling flipped
+    on a 20% move of its threshold."""
+    monkeypatch.setattr(_crossing_fill, "NODE_REACH", reach)
+    coarse = max(a.h_resolved for a in _arms(fan_rise_deck()))
+    fine = max(a.h_resolved for a in _arms(gap_then_graded_deck()))
+    assert coarse > _crossing_fill.NODE_H_BAR
+    assert fine <= _crossing_fill.NODE_H_BAR
+
+
+def test_g696_7_a_single_coarse_edge_cannot_escape_by_being_longer_than_the_reach():
+    """The first edge always counts however long it is. The base fan's
+    above arm is one 667 mm edge — longer than the reach — and must not
+    read as 'nothing measured' and slip through."""
+    (above,) = [a for a in _arms(fan_rise_deck()) if a.side == "above"]
+    assert above.h_resolved == pytest.approx(10.0 / 15.0, rel=1e-12)
+    assert _crossing_fill.NODE_REACH < 10.0 / 15.0
+
+
+def test_g696_8_the_advisory_never_refuses_and_never_remeshes():
+    """Advisory ONLY: the deck is the deck. A coarse node is a legitimate
+    thing to ask for — every rung of a convergence ladder but the last is
+    one — so this path must not raise, and must not touch the mesh."""
+    s = BSplineSolver(**fan_rise_deck())
+    before = [list(npe) for npe in s.n_per_edge_per_wire]
+    with pytest.warns(_crossing_fill.CoarseCrossingNode):
+        _crossing_fill.warn_coarse_node(
+            s._crossing_node_members(s._crossing_junctions(), s._wire_media())
+        )
+    assert [list(npe) for npe in s.n_per_edge_per_wire] == before
+
+
+def test_g696_9_an_empty_deck_reports_nothing_and_stays_quiet():
+    """No crossing junction, no advice — and `None` back rather than a
+    raise, so a diagnostic caller can read it unconditionally."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _crossing_fill.warn_coarse_node([]) is None

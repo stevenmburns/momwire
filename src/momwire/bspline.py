@@ -1417,6 +1417,49 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """`(n_segs,)` bool: this segment is in the lower medium."""
         return _medium_spec.segment_media(self._wire_media(), geom["seg_offsets"])
 
+    def _crossing_node_members(self, crossing, media):
+        """A `_crossing_fill.NodeArm` per member of every crossing junction.
+
+        Each arm is walked OUTWARD from the shared point, edge by edge,
+        until the walk passes `_crossing_fill.NODE_REACH`. Two lengths
+        come back per arm: the finest segment length seen inside that
+        reach (`h_resolved`, what the advisory gates) and the length of
+        the segment actually touching the node (`h_adjacent`).
+
+        They are gated separately because the touching segment does not
+        predict the error — a 50 mm feed gap in front of a chain graded
+        to 6 mm is a resolved node, while a single 667 mm tent is not,
+        and node-adjacent h reads those 13x apart when their errors are
+        ~200x apart. `_crossing_fill`'s constants carry the measurement.
+
+        The first edge always counts, however long it is: an arm made of
+        one coarse edge must not read as "unmeasured" and escape.
+        """
+        reach = _crossing_fill.NODE_REACH
+        out = []
+        for j_idx in crossing:
+            for w, end in self.junctions[j_idx]:
+                pl = self.wires_polylines[w]
+                npe = self.n_per_edge_per_wire[w]
+                # Edge indices ordered from the node outward.
+                order = (
+                    range(len(npe)) if end == "start" else range(len(npe) - 1, -1, -1)
+                )
+                h_resolved = h_adjacent = None
+                walked = 0.0
+                for e in order:
+                    if walked > 0.0 and walked >= reach:
+                        break
+                    length = float(np.linalg.norm(pl[e + 1] - pl[e]))
+                    h = length / int(npe[e])
+                    if h_adjacent is None:
+                        h_adjacent = h
+                    h_resolved = h if h_resolved is None else min(h_resolved, h)
+                    walked += length
+                side = "above" if media[w] == _medium_spec.ABOVE else "below"
+                out.append(_crossing_fill.NodeArm(h_resolved, h_adjacent, w, end, side))
+        return out
+
     def _grounded_junctions(self):
         """Indices of junctions whose shared point lies in the ground plane.
 
@@ -4693,7 +4736,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             supp_seg, polys, proj_bb, b_idx, b_idx, obs_b, t_b, W_b, obs_b, t_b, W_b
         )
 
-        if a_idx.size and self._crossing_junctions():
+        crossing = self._crossing_junctions() if a_idx.size else ()
+        if crossing:
+            # The node-mesh advisory (momwire#696) goes first, because
+            # this is the one place per fill where the crossing serve
+            # actually engages: the plan site above asks the same question
+            # before the deck is committed to the crossing path.
+            _crossing_fill.warn_coarse_node(
+                self._crossing_node_members(crossing, self._wire_media())
+            )
             # The crossing serve (momwire#524 phase 2): the cross pair is
             # the COMPLETE designed mixed-potential spelling on graded
             # axes. Near / corner-adjacent pairs are direct contour
