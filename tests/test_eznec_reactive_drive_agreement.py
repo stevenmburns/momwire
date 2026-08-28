@@ -69,6 +69,23 @@ Nothing is gated against the engine's numbers here: they are recorded as
 context and the gates hold momwire's own values against DRIFT, which is the
 house rule for a cross-engine comparison whose two ladders have not met.
 
+**The tree already said this, and the measurement below is the loud version
+of it.**  ``_check_basis_can_host`` refuses, by name, any family that would
+resolve one of this seam's ``feeds`` arclengths to the nearest segment
+CENTRE (momwire#611), and its comment carries the reason — *"that is what a
+node address means in this dialect"* — with the corpus measurement behind
+it: 75 of the 77 servable captures would have moved, every one of them by
+exactly 0.500 h.  momwire#703 proposed making that same half-element move
+deliberately, on the main path.  What the corpus could not say is how MUCH
+0.500 h is worth, because it is resonant: G-703-4 below prices it at 13.65 Ω
+where |Z| ≈ 968 and 0.24 Ω where |Z| ≈ 103.
+
+Also related: momwire#673 wants the mirror capability cell (``centre_feeds``
+— nothing declares that a family cannot place a gap at a segment centre).
+That axis is the NEC-2 dialect's, which addresses centres; this dialect
+addresses nodes, so nothing here becomes a consumer of it and #673 is
+untouched by these gates.
+
 Courtesy: every engine fact above is a printed impedance or a printed current
 table off runs of the licensed binary.  No source, algorithm or internal
 structure is described or relied on.
