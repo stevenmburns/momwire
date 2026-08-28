@@ -43,10 +43,12 @@ Scope guards this module inherits from the derivation:
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 from numpy.polynomial.legendre import leggauss
 
-from . import _near_interface
+from . import _aca, _near_interface
 from ._sommerfeld_transmitted import _c1_moment
 
 _TILT_TOL = 1e-12
@@ -54,29 +56,63 @@ _CROSS_RTOL = 1e-9
 _CORNER_RTOL = 1e-10
 _GX8, _GW8 = leggauss(8)
 
+# The #688 admissibility split: far (admissible) segment blocks are evaluated
+# on COARSER axes and through the low-rank ACA pass; near / corner-adjacent
+# blocks keep the dense graded axes and the designed direct evaluation
+# unconditionally. The coarse knobs are the banked density-ladder combo
+# (far Gauss 6->4, panels G8->G4, growth x2->x4: <= 3e-4 ohm movement on the
+# adjudication decks against gate envelopes 100x wider) — safe HERE because
+# the split never lets a near pair see them; a GLOBAL default drop would
+# need the deeper-deck ladder the #688 comment calls for. Segments meeting
+# at the crossing node have box distance 0 and are inadmissible by
+# construction, so every corner-adjacent pair stays dense-direct.
+_ADM_ETA = 1.0
+_ACA_TOL = 1e-7
+# leaf=3 measured as the knee (2026-08-27 ladder): leaf=4 leaves an extra
+# dense ring (~7-10% more evaluations); leaf<=2 pushes coarse axes onto
+# close non-touching pairs — at leaf=1 that costs three orders of block
+# parity (1e-9 -> 1e-6 relative), and at leaf=2 it moved the g1
+# adjudication anchor's fourth printed decimal (138.7670 vs the banked
+# 138.7671). leaf=3 keeps every banked print to the digit.
+_CLUSTER_LEAF_SEGS = 3
+_FAR_Q = 4
+_FAR_GROWTH = 4.0
+# ACA only where sampling undercuts the full coarse product: rank-r
+# sampling costs ~(rows+cols)·(m+n) designed points across the four
+# kernels (measured ranks 6-8), so a block must have m·n well past
+# that to win. Below the guard, direct coarse evaluation is cheaper
+# AND memo-dedups against its mirror blocks.
+_ACA_COST_GUARD = 48.0
+_GX4, _GW4 = leggauss(4)
+_CROSS_KEYS = ("U", "V", "W", "dzW")
 
-def _graded_u(h, toward_end, a):
-    """Quadrature (u, w) on [0, h], log-graded (a-scale, doubling) toward
-    u = h (`toward_end='hi'`) or u = 0 (`'lo'`); Gauss-8 per panel. The
-    grading is what lets the ln(a)-class end integrals actually converge
-    instead of being truncated by segment-scale Gauss."""
+# The whole-run dense-direct switch (a timing comparison, a bisect); parity
+# tests drive both paths in-process by calling the two entries directly.
+_FORCE_DENSE = bool(os.environ.get("MOMWIRE_CROSSING_FORCE_DENSE"))
+
+
+def _graded_u(h, toward_end, a, growth=2.0, gx=_GX8, gw=_GW8):
+    """Quadrature (u, w) on [0, h], log-graded (a-scale, `growth`-factored)
+    toward u = h (`toward_end='hi'`) or u = 0 (`'lo'`); Gauss-`len(gx)` per
+    panel. The grading is what lets the ln(a)-class end integrals actually
+    converge instead of being truncated by segment-scale Gauss."""
     edges = [0.0]
     step = a
     while edges[-1] + step < h:
         edges.append(edges[-1] + step)
-        step *= 2.0
+        step *= growth
     edges.append(h)
     e = np.array(edges)
     if toward_end == "hi":
         e = h - e[::-1]
     mid = 0.5 * (e[:-1] + e[1:])
     half = 0.5 * (e[1:] - e[:-1])
-    u = (mid[:, None] + half[:, None] * _GX8[None, :]).ravel()
-    w = (half[:, None] * _GW8[None, :]).ravel()
+    u = (mid[:, None] + half[:, None] * gx[None, :]).ravel()
+    w = (half[:, None] * gw[None, :]).ravel()
     return u, w
 
 
-def axis_data(s, geom, seg_idx):
+def axis_data(s, geom, seg_idx, coarse=False):
     """Everything one axis of the crossing blocks needs: quadrature nodes,
     per-node tangents and weights, per-basis value/derivative samples, and
     the signed wire-end table for the by-parts terms.
@@ -85,9 +121,13 @@ def axis_data(s, geom, seg_idx):
     every other segment keeps the buried fill's own Gauss order. The ends
     table keeps only ends where some basis has nonzero value (value-1
     junction/contact tents); free ends carry no basis and drop out.
+
+    `coarse=True` builds the far-block variant of the same axis (the #688
+    density knobs); it exists only for admissible blocks and must never be
+    fed to the ends/corner terms.
     """
     d = s.degree
-    q = s._n_qp_buried_field()
+    q = _FAR_Q if coarse else s._n_qp_buried_field()
     xg, wg = leggauss(q)
     tq = 0.5 * (xg + 1.0)
     gz = float(s.ground_z)
@@ -111,7 +151,12 @@ def axis_data(s, geom, seg_idx):
         touch_lo = abs(sl[2] - gz) < tol
         touch_hi = abs(sr[2] - gz) < tol
         if touch_lo or touch_hi:
-            u, w = _graded_u(h, "lo" if touch_lo else "hi", a_wire)
+            if coarse:
+                u, w = _graded_u(
+                    h, "lo" if touch_lo else "hi", a_wire, _FAR_GROWTH, _GX4, _GW4
+                )
+            else:
+                u, w = _graded_u(h, "lo" if touch_lo else "hi", a_wire)
         else:
             u = h * tq
             w = 0.5 * h * wg
@@ -177,14 +222,18 @@ def axis_data(s, geom, seg_idx):
         Fd=Fd,
         ends=ends,
         n_basis=n_basis,
+        segof=segof,
     )
 
 
-def _tables(s, eps_t, k_p, rho, z, zp, rtol):
+def _tables(s, eps_t, k_p, rho, z, zp, rtol, memo=None):
     """Designed tables with the deck's wire radius folded in, z relative
-    to the interface."""
+    to the interface. `memo` extends the exact-triple dedup across calls
+    (one fill = one memo; ε̃, k₂, rtol fixed for its lifetime)."""
     a_wire = float(s._radius_per_wire[0])
-    return _near_interface.radius_tables(eps_t, k_p, rho, z, zp, a_wire, rtol=rtol)
+    return _near_interface.radius_tables(
+        eps_t, k_p, rho, z, zp, a_wire, rtol=rtol, memo=memo
+    )
 
 
 def cross_complete_block(s, geom, A, B):
@@ -217,6 +266,20 @@ def cross_complete_block(s, geom, A, B):
     s_w2 = FdA_w @ W @ (FB_w * tzB).T
     s_phi = -FdA_w @ V @ FdB_w.T
     t_ab = c1 * (s_u + s_zz + s_w1 + s_w2 + s_phi)
+    t_ab += _ends_and_corner(s, A, B, eps_t, k_p, c1, gz)
+    return t_ab
+
+
+def _ends_and_corner(s, A, B, eps_t, k_p, c1, gz, memo=None):
+    """The by-parts end terms + the designed corner, on the DENSE axes —
+    linear in axis size, so the admissibility split never touches them
+    (and the corner must never see coarse axes or a low-rank pass; its
+    V(a) rides `six_point` at `_CORNER_RTOL`, outside any memo)."""
+    t_ab = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
+    _txA, _tyA, tzA = A["t"].T
+    FA_w = A["F"] * A["w"]
+    FdA_w = A["Fd"] * A["w"]
+    FdB_w = B["Fd"] * B["w"]
 
     # The by-parts boundary terms — test-side Φ (BT), source-side W and Φ
     # (SW, SQ) — each an end against the other axis's line, radius folded.
@@ -230,6 +293,7 @@ def cross_complete_block(s, geom, A, B):
             np.full_like(rho_e, max(pt[2] - gz, 0.0)),
             B["nodes"][:, 2] - gz,
             _CROSS_RTOL,
+            memo=memo,
         )
         t_ab += c1 * sign * np.outer(fv, FdB_w @ te["V"])
     for pt, sign, fv in B["ends"]:
@@ -242,6 +306,7 @@ def cross_complete_block(s, geom, A, B):
             A["nodes"][:, 2] - gz,
             np.full_like(rho_e, pt[2] - gz),
             _CROSS_RTOL,
+            memo=memo,
         )
         t_ab += -c1 * sign * np.outer((FA_w * tzA) @ te["W"], fv)
         t_ab += c1 * sign * np.outer(FdA_w @ te["V"], fv)
@@ -276,6 +341,201 @@ def cross_complete_block(s, geom, A, B):
                     )[1]
                 )
             t_ab += (-sig_a * sig_b * c1 * v_corner) * np.outer(fv_a, fv_b)
+    return t_ab
+
+
+def _row_weights(ax, ii):
+    """The four per-basis row-weight matrices of one axis, restricted to
+    the point subset `ii`: (F·w·t̂x, F·w·t̂y, F·w·t̂z, F′·w)."""
+    tx, ty, tz = ax["t"][ii].T
+    Fw = ax["F"][:, ii] * ax["w"][ii]
+    Fdw = ax["Fd"][:, ii] * ax["w"][ii]
+    return Fw * tx, Fw * ty, Fw * tz, Fdw
+
+
+def _sandwich_dense(A, B, iA, iB, K, k2sq):
+    """The five-term M+SW+SQ (main) sandwich over dense kernel matrices
+    restricted to (iA, iB) — the same term order as the reference fill."""
+    P1, P2, P3, P4 = _row_weights(A, iA)
+    Q1, Q2, Q3, Q4 = _row_weights(B, iB)
+    return (
+        P1 @ K["U"] @ Q1.T
+        + P2 @ K["U"] @ Q2.T
+        + P3 @ (k2sq * K["V"] - K["dzW"]) @ Q3.T
+        + P3 @ K["W"] @ Q4.T
+        + P4 @ K["W"] @ Q3.T
+        - P4 @ K["V"] @ Q4.T
+    )
+
+
+def _axis_segment_tree(geom, seg_idx, leaf):
+    """Cluster tree over one axis's SEGMENTS (boxes = segment endpoints).
+    Cluster indices are positions into `seg_idx`; returns (tree, seg_idx
+    as an array) so callers can map back to global segment ids."""
+    idx = np.asarray(seg_idx, dtype=np.int64)
+    lo = np.minimum(geom["seg_l"][idx], geom["seg_r"][idx])
+    hi = np.maximum(geom["seg_l"][idx], geom["seg_r"][idx])
+    tree = _aca.build_cluster_tree(np.arange(idx.size), lo, hi, leaf)
+    return tree, idx
+
+
+def cross_complete_block_split(s, geom, a_idx, b_idx, A, B):
+    """`cross_complete_block` through the #688 admissibility split.
+
+    The (above segments × below segments) product is partitioned by the
+    standard box rule (`_aca.build_block_tree`, η = 1): inadmissible
+    blocks — every pair meeting the crossing node among them, since
+    touching boxes have distance 0 — are evaluated dense-direct on the
+    dense graded axes, batched into ONE designed-tables call so the
+    exact-triple memo and the C++ batch keep their full scope.
+    Admissible far blocks are evaluated on the coarse axes and through
+    `_aca.aca_partial`, one factorization per kernel {U, V, W, ∂zW},
+    sampling designed rows/columns through a shared cache (one designed
+    evaluation serves all four kernels at that row/column).
+
+    The by-parts end terms and the corner (−σσ′·c1·V(a)) ride the dense
+    axes direct, always — they are linear in axis size and the corner
+    routes through neither coarse axes nor the low-rank pass."""
+    if _FORCE_DENSE:
+        return cross_complete_block(s, geom, A, B)
+
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = s._buried_medium()
+    gz = float(s.ground_z)
+    c1 = _c1_moment(s.omega, s.mu)
+    k2sq = k_p * k_p
+
+    tree_a, seg_a = _axis_segment_tree(geom, a_idx, _CLUSTER_LEAF_SEGS)
+    tree_b, seg_b = _axis_segment_tree(geom, b_idx, _CLUSTER_LEAF_SEGS)
+    far, near = _aca.build_block_tree(tree_a, tree_b, _ADM_ETA)
+
+    t_main = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
+    memo = {}  # one fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here)
+
+    if far:
+        Ac = axis_data(s, geom, a_idx, coarse=True)
+        Bc = axis_data(s, geom, b_idx, coarse=True)
+
+    # ---- direct blocks: near pairs on the dense axes + small far blocks
+    # on the coarse axes (sampling a small block costs more than its full
+    # coarse product), ALL in one batched designed evaluation so the
+    # exact-triple memo dedups across every block — a symmetric screen's
+    # mirrored blocks are the same triples.
+    direct, far_aca = [], []
+    for cs, ct in near:
+        iA = np.flatnonzero(np.isin(A["segof"], seg_a[cs.indices]))
+        iB = np.flatnonzero(np.isin(B["segof"], seg_b[ct.indices]))
+        if iA.size and iB.size:
+            direct.append((A, B, iA, iB))
+    for cs, ct in far:
+        iA = np.flatnonzero(np.isin(Ac["segof"], seg_a[cs.indices]))
+        iB = np.flatnonzero(np.isin(Bc["segof"], seg_b[ct.indices]))
+        if iA.size == 0 or iB.size == 0:
+            continue
+        if iA.size * iB.size > _ACA_COST_GUARD * (iA.size + iB.size):
+            far_aca.append((iA, iB))
+        else:
+            direct.append((Ac, Bc, iA, iB))
+
+    if direct:
+        specs, rho_cat, z_cat, zp_cat = [], [], [], []
+        for AX, BX, iA, iB in direct:
+            pa, pb = AX["nodes"][iA], BX["nodes"][iB]
+            rho = np.hypot(
+                pa[:, 0][:, None] - pb[:, 0][None, :],
+                pa[:, 1][:, None] - pb[:, 1][None, :],
+            )
+            specs.append((AX, BX, iA, iB, rho.shape))
+            rho_cat.append(rho.ravel())
+            z_cat.append(np.repeat(pa[:, 2] - gz, iB.size))
+            zp_cat.append(np.tile(pb[:, 2] - gz, iA.size))
+        tab = _tables(
+            s,
+            eps_t,
+            k_p,
+            np.concatenate(rho_cat),
+            np.concatenate(z_cat),
+            np.concatenate(zp_cat),
+            _CROSS_RTOL,
+            memo=memo,
+        )
+        off = 0
+        for AX, BX, iA, iB, shp in specs:
+            nel = shp[0] * shp[1]
+            K = {kk: tab[kk][off : off + nel].reshape(shp) for kk in _CROSS_KEYS}
+            off += nel
+            t_main += _sandwich_dense(AX, BX, iA, iB, K, k2sq)
+
+    # ---- large far blocks: coarse axes, low-rank ACA per kernel. The
+    # row/column samples ride the SAME memo — identical matrices in
+    # mirrored blocks pick identical pivots, so their samples dedup.
+    for iA, iB in far_aca:
+        pa, pb = Ac["nodes"][iA], Bc["nodes"][iB]
+        zA, zB = pa[:, 2] - gz, pb[:, 2] - gz
+        rho = np.hypot(
+            pa[:, 0][:, None] - pb[:, 0][None, :],
+            pa[:, 1][:, None] - pb[:, 1][None, :],
+        )
+        m, n = iA.size, iB.size
+        rows, cols = {}, {}
+
+        def _row6(i, rho=rho, zA=zA, zB=zB, rows=rows, n=n):
+            if i not in rows:
+                te = _tables(
+                    s,
+                    eps_t,
+                    k_p,
+                    rho[i],
+                    np.full(n, zA[i]),
+                    zB,
+                    _CROSS_RTOL,
+                    memo=memo,
+                )
+                rows[i] = np.stack([te[kk] for kk in _CROSS_KEYS])
+            return rows[i]
+
+        def _col6(j, rho=rho, zA=zA, zB=zB, cols=cols, m=m):
+            if j not in cols:
+                te = _tables(
+                    s,
+                    eps_t,
+                    k_p,
+                    rho[:, j],
+                    zA,
+                    np.full(m, zB[j]),
+                    _CROSS_RTOL,
+                    memo=memo,
+                )
+                cols[j] = np.stack([te[kk] for kk in _CROSS_KEYS])
+            return cols[j]
+
+        Kf = {}
+        for ki, kk in enumerate(_CROSS_KEYS):
+            Kf[kk] = _aca.aca_partial(
+                lambda i, ki=ki: _row6(i)[ki],
+                lambda j, ki=ki: _col6(j)[ki],
+                m,
+                n,
+                tol=_ACA_TOL,
+            )
+        P1, P2, P3, P4 = _row_weights(Ac, iA)
+        Q1, Q2, Q3, Q4 = _row_weights(Bc, iB)
+
+        def _lr(P, kk, Q, Kf=Kf):
+            Uf, Vf = Kf[kk]
+            return (P @ Uf) @ (Vf @ Q.T)
+
+        t_main += (
+            _lr(P1, "U", Q1)
+            + _lr(P2, "U", Q2)
+            + k2sq * _lr(P3, "V", Q3)
+            - _lr(P3, "dzW", Q3)
+            + _lr(P3, "W", Q4)
+            + _lr(P4, "W", Q3)
+            - _lr(P4, "V", Q4)
+        )
+
+    t_ab = c1 * t_main
+    t_ab += _ends_and_corner(s, A, B, eps_t, k_p, c1, gz, memo=memo)
     return t_ab
 
 
