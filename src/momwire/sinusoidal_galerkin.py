@@ -896,9 +896,22 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # DIVERGENCE, not an unimplemented feature — see
     # `_EK_STEPPED_RADIUS_JUNCTION_REFUSAL`.
     #
-    # `knot_feeds` stays False — the axis is inherited unchanged — but its
-    # PROSE does not: `_KNOT_FEEDS_REFUSAL` here says "not yet plumbed"
-    # where the base says "no such pairing exists" (momwire#611/#655).
+    # `knot_feeds` is True since momwire#648: under `feed_model="point"` —
+    # this class's default since momwire#654 — the gap lands at the arclength
+    # it was NAMED, with the remainder carried in `feed_xi`, rather than
+    # snapping to the nearest segment centre the way the base does. That is
+    # what let this family serve the NEC-5 seam, which gates on the cell
+    # (`eznec/_serve.py`, the `mesh.feeds and not capabilities.knot_feeds`
+    # refusal). §7 of `tests/test_capabilities.py` measures it rather than
+    # trusting it: the centre-knot probe reads ~1e-14 here.
+    #
+    # A consequence worth stating, because the row does not show it: the
+    # base's `_KNOT_FEEDS_REFUSAL` is UNREACHABLE from this class.
+    # `Capabilities.refusal` returns a reason only for a cell the solver does
+    # not serve, and this one serves it — so `refusal("knot_feeds")` is None
+    # here. There is no `_KNOT_FEEDS_REFUSAL` in this module and there should
+    # not be one; the prose lives in `sinusoidal.py` for the family that
+    # actually snaps.
     #
     # `refusals` REPLACES rather than extends, so the base's entries have to
     # be carried across by hand: the contact/refl-coef withdrawal
