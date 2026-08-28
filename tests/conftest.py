@@ -124,3 +124,70 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(_pytest.mark.xdist_group(item.path.stem))
         elif item.path.name in _EZNEC_CORPUS_GROUP_FILES:
             item.add_marker(_pytest.mark.xdist_group("eznec_corpus"))
+
+
+# --------------------------------------------------------------------------
+# Test time-budget guardrail (ported from antennaknobs' #393 hook)
+# --------------------------------------------------------------------------
+# The PR lane decides how many edit->signal turns an hour this repo supports,
+# and #692's marker pass got it to 2:31 by moving 403 integration tests to a
+# push-only lane. Nothing kept it there: the count held across the next two
+# merges because those authors marked their new tests, not because anything
+# checked. This is the check.
+#
+# An unmarked test whose CALL phase breaches the ceiling gets named in a loud
+# terminal section. It reports by default and does not fail, because absolute
+# call times drift with hardware and a gate that reddens on a busy laptop is
+# a gate people learn to ignore; set MOMWIRE_ENFORCE_TIME_BUDGET=1 (CI, once
+# the numbers are calibrated) to also fail the run.
+#
+# The four exempt markers are the four lanes that are not the edit loop.
+# `integration` is exempt for a reason worth stating: it is the one marker
+# here that is NOT about duration — 306 of #692's 403 integration tests run
+# under 3 s. A test can be exempt because it is slow OR because it is not an
+# edit-loop guard, and those are different claims.
+TIME_BUDGET_CEILING_S = float(os.environ.get("MOMWIRE_TIME_BUDGET_CEILING_S", "5.0"))
+_TIME_BUDGET_EXEMPT_MARKERS = ("slow", "memgate", "crossgate", "integration")
+_time_budget_offenders: list[tuple[str, float]] = []
+
+
+def _is_xdist_worker(config) -> bool:
+    return hasattr(config, "workerinput")
+
+
+def pytest_runtest_logreport(report):
+    # Under xdist this fires on the workers AND on the controller, which is
+    # handed every worker's reports — so the controller's list is the whole
+    # run and the summary below (controller-only) sees all of it.
+    if report.when != "call" or report.duration <= TIME_BUDGET_CEILING_S:
+        return
+    if any(m in report.keywords for m in _TIME_BUDGET_EXEMPT_MARKERS):
+        return
+    _time_budget_offenders.append((report.nodeid, report.duration))
+
+
+def pytest_terminal_summary(terminalreporter):
+    if not _time_budget_offenders:
+        return
+    tr = terminalreporter
+    tr.section("test time-budget guardrail", sep="!", red=True, bold=True)
+    tr.line(
+        f"{len(_time_budget_offenders)} unmarked test(s) over the "
+        f"{TIME_BUDGET_CEILING_S:.0f}s ceiling:"
+    )
+    for nodeid, dur in sorted(_time_budget_offenders, key=lambda x: -x[1]):
+        tr.line(f"  {dur:6.2f}s  {nodeid}")
+    tr.line(
+        "Fix: make it faster, or mark it — `slow` (push lane), `integration` "
+        "(crosses a process/socket/CLI/printout seam), `crossgate`/`memgate` "
+        "(certification). See the pyproject markers."
+    )
+
+
+def pytest_sessionfinish(session, exitstatus):
+    # Controller only: a worker's exitstatus does not reach the caller, and
+    # the controller is where the whole run's offenders are.
+    if _is_xdist_worker(session.config):
+        return
+    if _time_budget_offenders and os.environ.get("MOMWIRE_ENFORCE_TIME_BUDGET"):
+        session.exitstatus = _pytest.ExitCode.TESTS_FAILED
