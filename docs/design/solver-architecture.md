@@ -1524,6 +1524,37 @@ the extended kernel, and rewriting `docs/razor-solver.md` accordingly — is
 §6.13/D1, deliberately not done here: this unit's `fat` envelope pins on
 `razor`/`bs1` are the PRE-EK record that unit will revisit.
 
+**The bs2 deep-tail stall, attributed and closed (momwire#449,
+2026-08-28).** The ladder tables above show `bs2-ek` winning every
+practical rung and then stalling near ~0.5 Ω while `bs1-ek` runs on — the
+observation #449 demanded be attributed before any "use bs1-ek for
+convergence work" guidance became durable. The attribution is now measured:
+the stall is the **C1 constraint at the fed knot** — the deck's only
+C1-constrained non-smooth feature, since the section boundaries are
+separate wires with declared junctions (C0 by construction: value-1
+directional bases + one KCL row, slopes free) and every rung already feeds
+at a mesh knot (a knot's C1 grants curvature freedom where the delta-gap
+feature demands slope freedom). Splitting the fed section AT the feed and
+driving the junction with a series node gap (momwire#305's third spelling —
+also the shape NEC-5's own `EX` end code writes, so it is feed-matched to
+the anchor) converges the tail through the stall: 0.047 Ω at N=200 against
+NEC-5's Richardson anchor, `bs1-ek`'s best class at half the density, where
+the banked matched-feed row sits at 0.532 and drifting. Standing gate:
+`test_g449_fed_knot_c0_unstalls_the_bs2_tail`. The sibling demonstration
+(same day, the C1-kink study in the antennaknobs repo): tying slopes across
+the soil-air interface's physical charge jump costs ~15 Ω and ~400× in rung
+movement — same mechanism, bigger dose; the crossing serve's mandatory
+split-at-interface is why buried decks never see it. **Practical guidance,
+revised**: at working densities `bs2-ek` remains the most accurate row;
+deep-ladder certification work uses the split + `node_gaps` spelling (pass
+`feeds=[]` explicitly — omitting it engages the legacy default feed).
+Knot multiplicity (per-knot C0 inside one wire) is the RECORDED escalation
+if a second consumer appears — deliberately not built: one consumer, a
+served spelling, and a basis-core change would be scope without need. A
+globally-C0 quadratic basis variant was considered and rejected (dof
+doubling; re-admits the node-checkerboard family the sinusoidal
+loop-pathology study documented).
+
 ### 6.13 The extended kernel on razor (momwire#398 D1, 2026-08-18)
 
 **The maintainer's decision, 2026-08-18: give `RazorSolver` the extended
