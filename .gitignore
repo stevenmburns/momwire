@@ -13,3 +13,4 @@ dist/
 # available externally. Don't track any local copies.
 docs/nec2_theory_manual.pdf
 docs/nec2_theory_manual.txt
+.coverage
