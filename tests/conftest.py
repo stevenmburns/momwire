@@ -184,7 +184,14 @@ def pytest_runtest_logreport(report):
     # Under xdist this fires on the workers AND on the controller, which is
     # handed every worker's reports — so the controller's list is the whole
     # run and the summary below (controller-only) sees all of it.
-    if report.when != "call" or report.duration <= TIME_BUDGET_CEILING_S:
+    # Collect above the LOWER of the two. Normally that is the soft ceiling
+    # and this reads as you expect, but keying it to the soft one alone means
+    # a tuned `HARD < SOFT` silently disables the hard gate — nothing reaches
+    # the check because nothing was collected. Found by a malformed test of
+    # this very hook, which is the good way to find it.
+    if report.when != "call" or report.duration <= min(
+        TIME_BUDGET_CEILING_S, TIME_BUDGET_HARD_CEILING_S
+    ):
         return
     if any(m in report.keywords for m in _TIME_BUDGET_EXEMPT_MARKERS):
         return
