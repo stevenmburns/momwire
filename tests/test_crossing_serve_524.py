@@ -74,6 +74,10 @@ _GRADES = {
 
 # Banked by probe27 (session 5) and re-measured through this production
 # path: the soil-A exact-EM crossing answer, mesh-stable g1 -> g2.
+# Through #692's near-density default the g1 production print is
+# 138.7670 − 102.9889j (1e-4 from this adjudicated bank, envelope 0.05);
+# g2 is unchanged to the digit. The bank stays the dense-quadrature
+# adjudication.
 CROSSING_G1 = 138.7671 - 102.9889j
 CROSSING_G2 = 138.7691 - 102.9893j
 
@@ -263,13 +267,15 @@ _FAN_GRADES = {
     ),
 }
 
-# Banked by the #674 study (probe3, split lane = the production path):
-# the soil-A 4-rise fan CONVERGED under matched node grading — n2 print
-# 142.1922 − 36.4711j, n2→n3 movement 0.0059 Ω (observed order 3.4,
-# Richardson Z* 142.1918 − 36.4771j), far-mesh doubling 0.022 Ω,
-# dense-vs-split ≤ 5e-4. The base-mesh 143.9327 − 26.2135j record stands
-# in probe38's JSON as the uncoverged-mesh print, never a gate.
-FAN_SOIL_A_N2 = 142.1922 - 36.4711j
+# Banked by the #674 study (probe3, split lane = the production path)
+# and RE-BANKED through #692's near-density default (moved 4e-4): the
+# soil-A 4-rise fan CONVERGED under matched node grading. The #674
+# study's dense-near measurements — n2→n3 movement 0.0059 Ω, observed
+# order 3.4, Richardson Z* 142.1918 − 36.4771j, far-mesh doubling
+# 0.022 Ω, dense-vs-split ≤ 5e-4 — stand as the convergence evidence
+# (post-flip n2→n3 is 0.0060). The base-mesh 143.9327 − 26.2135j record
+# stands in probe38's JSON as the unconverged-mesh print, never a gate.
+FAN_SOIL_A_N2 = 142.1923 - 36.4707j
 
 
 def fan_rise_deck_graded(rung="n2", **override):
@@ -554,8 +560,9 @@ def test_g524_7_fan_eps1_collapse(record_property):
     assert abs(z - z_truth) <= 0.30, (
         f"the ε̃ = 1 fan solve answers {z:.4f} where the free-space "
         f"5-wire junction truth is {z_truth:.4f} — {abs(z - z_truth):.4f} "
-        "ohm apart (measured 0.2269 on this mesh, a node-mesh convergence "
-        "class); a jump past this envelope is bookkeeping, not convergence"
+        "ohm apart (measured 0.2268 on this mesh through #692's near "
+        "density, a node-mesh convergence class); a jump past this "
+        "envelope is bookkeeping, not convergence"
     )
 
 
