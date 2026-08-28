@@ -765,6 +765,39 @@ def test_knot_feeds_declaration_matches_where_the_gap_actually_lands(basis):
         assert asymmetry > 1e-3, (basis, asymmetry)
 
 
+def test_sg_knot_feeds_describes_the_point_gap_the_roster_can_build():
+    """momwire#686. `Capabilities` is a CLASS attribute, so every cell is a
+    statement about the class — but this one is only true per INSTANCE.
+
+    `knot_feeds=True` holds under `feed_model="point"` (the default since
+    momwire#654), where `feed_xi` carries the remainder. Under
+    `feed_model="segment"` the same class snaps to a segment centre, and the
+    class attribute still says True. Measured here rather than argued, on §7's
+    own probe, so the gap is on the record as a number.
+
+    It is not reachable through the seam, and that is the invariant this
+    pins: `serve(deck, *, basis)` takes a basis NAME and no solver kwargs, and
+    momwire#654 collapsed the roster to ONE Galerkin entry binding no
+    `feed_model`. A future roster edit re-adding a `"segment"` spelling would
+    hand `eznec/_serve.py`'s `knot_feeds` gate an instance the cell does not
+    describe — the exact failure momwire#611 exists to prevent."""
+    cls, kwargs = BASES["sinusoidal-galerkin"]
+    assert cls.capabilities.knot_feeds is True
+
+    # (1) the roster cannot construct the snapping instance
+    assert "feed_model" not in kwargs, (
+        "a roster entry binding feed_model would let the NEC-5 seam build an "
+        "instance `knot_feeds=True` does not describe (momwire#686)"
+    )
+    assert not any("feed_model" in kw for _c, kw in BASES.values())
+
+    # (2) and the instance it does not describe really does snap
+    point = _knot_feed_asymmetry(cls, feed_model="point")
+    segment = _knot_feed_asymmetry(cls, feed_model="segment")
+    assert point < 1e-10, point
+    assert segment > 1e-3, segment
+
+
 @pytest.mark.parametrize("solver_class", [PulseSolver, HarringtonSolver])
 def test_the_off_roster_families_declare_the_snap_they_document(solver_class):
     """`PulseSolver._feed_basis_indices` says it in prose — "a delta gap lands
