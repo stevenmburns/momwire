@@ -567,6 +567,24 @@ def test_sg_extended_kernel_accepted():
     )
 
 
+def test_sg_knot_feeds_carries_no_refusal_because_it_serves_the_cell():
+    """momwire#685. The declaration comment used to claim this class overrode
+    `_KNOT_FEEDS_REFUSAL` with its own "not yet plumbed" prose. It does not,
+    and cannot: `knot_feeds` has been True here since momwire#648, and
+    `Capabilities.refusal` returns a reason only for a cell the solver does
+    NOT serve. So the base's prose is unreachable from this class.
+
+    Pinned because the failure mode is a reader believing the comment and
+    "restoring" a refusal that would take this family back off the NEC-5
+    seam, which gates on exactly this cell."""
+    assert SinusoidalGalerkinSolver.capabilities.knot_feeds is True
+    assert SinusoidalGalerkinSolver.capabilities.refusal("knot_feeds") is None
+    assert "knot_feeds" not in SinusoidalGalerkinSolver.capabilities.refusals
+    # The base is the family that snaps, and it keeps the prose.
+    assert SinusoidalSolver.capabilities.knot_feeds is False
+    assert SinusoidalSolver.capabilities.refusal("knot_feeds")
+
+
 # --------------------------------------------------------------------------
 # 5. BSplineSolver — everything served, three `use_singular_enrichment`
 #    combination refusals (all at CONSTRUCTION)
