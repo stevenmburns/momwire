@@ -49,13 +49,15 @@ exercise, `test_g524_7` already does.
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 
 from momwire import _medium_spec, _near_interface
 from momwire.bspline import BSplineSolver
 
-from test_buried_serve_553 import SOIL_A, WL7
+from test_buried_serve_553 import SOIL_A, WL7, contact_deck
 
 A_WIRE = 0.001
 
@@ -621,3 +623,136 @@ def test_g674_2_soil_a_fan_anchor(record_property):
         f"{abs(z - FAN_SOIL_A_N2):.4f} ohm apart (node axis 0.0059, "
         "far-mesh axis 0.022; NEVER re-gate against the engine print)"
     )
+
+
+# ----------------------------------------------------------------------
+# G-698 — the crossing exemption is EARNED, not granted by geometry
+#
+# `_grounded_junction_ends` silences `_medium_spec.wire_media`'s
+# contact+buried refusal for every junction whose shared point sits in the
+# plane. momwire#698: a junction that does not actually CROSS still got
+# that silence, and `_crossing_junctions` then declined the deck, so it
+# fell through to the OLD field-form transmitted block and was SERVED —
+# the contact basis's O(1) boundary term unaccounted for, which is the one
+# configuration the refusal exists to prevent. Measured on main @ 202e0f6:
+# the one-member spelling answered 86.9322 − 23.8620j, 46.57 Ω from the
+# engine's 92.130 − 70.141j and worse than the refusal prose's own
+# recorded 13–17 Ω best-consistent-spelling gap.
+# ----------------------------------------------------------------------
+
+
+_CONTACT_SENTENCE = re.escape("stands an END in the ground plane (ground CONTACT)")
+
+
+def test_g698_one_member_junction_at_the_contact_end_still_refuses():
+    """The issue's repro: a one-member group declared at the contact end
+    of the lone-radial anchor. One wire end cannot join two media, so it
+    can never be the crossing junction the exemption is for."""
+    build = dict(contact_deck())
+    build["junctions"] = [[(0, "end")]]
+    s = BSplineSolver(**build)
+    with pytest.raises(ValueError, match=_CONTACT_SENTENCE):
+        s.compute_impedance()
+
+
+def test_g698_the_one_member_bypass_refuses_at_the_media_reading():
+    """WHERE it refuses is the fix's design decision: the member-count
+    test is a pure-geometry NECESSARY condition, so it lives in
+    `_grounded_junction_ends` and the deck refuses at exactly the point
+    the undeclared deck does — no fill is planned, no grid is built."""
+    build = dict(contact_deck())
+    build["junctions"] = [[(0, "end")]]
+    s = BSplineSolver(**build)
+    assert s._grounded_junction_ends() == frozenset()
+    with pytest.raises(ValueError, match=_CONTACT_SENTENCE):
+        s._wire_media()
+
+
+@pytest.mark.parametrize("junctions", [None, [[(0, "start")]], [[(0, "end")]]])
+def test_g698_the_controls_all_refuse_the_same_way(junctions):
+    """The repro and the two controls the issue recorded beside it, in one
+    row each and refusing with ONE sentence: the undeclared deck and the
+    one-member group at the deck's OTHER (top, out-of-plane) end were
+    already refused on main, and the contact-end spelling — the bypass —
+    now joins them instead of answering."""
+    build = dict(contact_deck())
+    if junctions is not None:
+        build["junctions"] = junctions
+    with pytest.raises(ValueError, match=_CONTACT_SENTENCE):
+        BSplineSolver(**build)._wire_media()
+
+
+def test_g698_a_one_member_junction_off_the_plane_stays_legal():
+    """momwire#172 is not narrowed: only the crossing-exemption EFFECT of
+    a one-member group changes. A lone group at a free end of an
+    all-above deck still solves (its KCL row pins I_end = 0, which is
+    numerically the free end it already was)."""
+    s = BSplineSolver(
+        wires=[np.array([(0.0, 0.0, 1.0), (0.0, 0.0, 11.0)])],
+        n_per_edge_per_wire=[[15]],
+        junctions=[[(0, "end")]],
+        feeds=[(0, 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    assert s._wire_media() == (_medium_spec.ABOVE,)
+    z, _ = s.compute_impedance()
+    assert z.real > 0
+
+
+def _stranded_grounded_junction_deck():
+    """Two ABOVE wires meeting at a shared point IN the plane, plus a
+    detached buried radial: a 2-member grounded junction that cannot
+    cross (both members above), so the geometric exemption is granted and
+    never earned. The whole class momwire#698's belt-and-braces closes —
+    the member count alone would let this one through."""
+    return dict(
+        wires=[
+            np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 10.0)]),
+            np.array([(0.0, 0.0, 0.0), (5.0, 0.0, 3.0)]),
+            np.array([(1.0, 0.0, -0.15), (6.0, 0.0, -0.15)]),
+        ],
+        n_per_edge_per_wire=[[15], [8], [10]],
+        junctions=[[(0, "start"), (1, "start")]],
+        feeds=[(0, 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+
+
+def test_g698_an_all_above_grounded_junction_does_not_earn_the_exemption():
+    """The belt-and-braces (2): the labels say both members are ABOVE, so
+    `_crossing_junctions` never validates the junction and the contact
+    ends it exempted are stranded on the field-form block. Refused with
+    the contact+buried sentence rather than served.
+
+    This one refuses LATER than the repro above — at the first
+    `_crossing_junctions` call, which the buried fill makes before it
+    plans any grid — because "does this junction cross" is a MEDIA
+    question and the exemption set is built before the labels exist."""
+    s = BSplineSolver(**_stranded_grounded_junction_deck())
+    assert s._grounded_junction_ends() == frozenset([(0, "start"), (1, "start")])
+    assert s._wire_media() == (
+        _medium_spec.ABOVE,
+        _medium_spec.ABOVE,
+        _medium_spec.BELOW,
+    )
+    with pytest.raises(ValueError, match=_CONTACT_SENTENCE):
+        s._crossing_junctions()
+    with pytest.raises(ValueError, match=_CONTACT_SENTENCE):
+        s.compute_impedance()
+
+
+def test_g698_the_served_crossing_decks_still_earn_their_exemption():
+    """The audit must not fire on the decks it shares a function with:
+    every contact end of the served crossing and fan spellings IS a
+    member of a validated crossing junction."""
+    assert BSplineSolver(**crossing_deck())._crossing_junctions() == (0,)
+    assert BSplineSolver(**fan_rise_deck())._crossing_junctions() == (0,)
+    assert BSplineSolver(**hub_deck())._crossing_junctions() == (1,)
