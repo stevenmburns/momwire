@@ -146,7 +146,32 @@ def pytest_collection_modifyitems(config, items):
 # here that is NOT about duration — 306 of #692's 403 integration tests run
 # under 3 s. A test can be exempt because it is slow OR because it is not an
 # edit-loop guard, and those are different claims.
+# TWO thresholds, because a report nobody reads stops working and a gate that
+# reddens on a busy laptop is a gate people learn to ignore.
+#
+#   CEILING (5 s)      REPORTS. The suite carries 24 unmarked tests over it
+#                      today — #692's convergence ladders, left in the lane on
+#                      purpose. Naming them every run beats rediscovering them.
+#   HARD_CEILING (20 s) FAILS, always, no opt-in. Nothing has to be remembered
+#                      for the case that actually matters: a genuinely new slow
+#                      test cannot land whether or not anyone read the report.
+#
+# 20 s and not 10 s, which is where this nearly landed. The worst unmarked test
+# measures 9.44 s / 9.47 s on two runs here — reproducible, and a 10 s gate
+# looks like it clears. It does not: this repo's own `test` job took 2m36s and
+# 4m03s on two runs of the SAME commit, a 1.55x runner spread, which puts that
+# test at ~14.6 s on a slow runner. A hard gate must sit above the worst case
+# times the observed variance, not above the best measurement — otherwise it
+# reddens when nothing is wrong, and a gate people learn to ignore is worse
+# than no gate.
+#
+# The gap between the two is the point. Call times drift with load, so a 2 s
+# test can touch 5 s on a busy machine and get REPORTED; reaching 20 s means
+# something genuinely changed.
 TIME_BUDGET_CEILING_S = float(os.environ.get("MOMWIRE_TIME_BUDGET_CEILING_S", "5.0"))
+TIME_BUDGET_HARD_CEILING_S = float(
+    os.environ.get("MOMWIRE_TIME_BUDGET_HARD_CEILING_S", "20.0")
+)
 _TIME_BUDGET_EXEMPT_MARKERS = ("slow", "memgate", "crossgate", "integration")
 _time_budget_offenders: list[tuple[str, float]] = []
 
@@ -176,7 +201,15 @@ def pytest_terminal_summary(terminalreporter):
         f"{TIME_BUDGET_CEILING_S:.0f}s ceiling:"
     )
     for nodeid, dur in sorted(_time_budget_offenders, key=lambda x: -x[1]):
-        tr.line(f"  {dur:6.2f}s  {nodeid}")
+        over_hard = " <-- OVER HARD CEILING" if dur > TIME_BUDGET_HARD_CEILING_S else ""
+        tr.line(f"  {dur:6.2f}s  {nodeid}{over_hard}")
+    if _over_hard_ceiling():
+        tr.line("")
+        tr.line(
+            f"FAILING: {len(_over_hard_ceiling())} test(s) over the "
+            f"{TIME_BUDGET_HARD_CEILING_S:.0f}s HARD ceiling. This is not "
+            f"advisory."
+        )
     tr.line(
         "Fix: make it faster, or mark it — `slow` (push lane), `integration` "
         "(crosses a process/socket/CLI/printout seam), `crossgate`/`memgate` "
@@ -184,10 +217,18 @@ def pytest_terminal_summary(terminalreporter):
     )
 
 
+def _over_hard_ceiling() -> list[tuple[str, float]]:
+    return [x for x in _time_budget_offenders if x[1] > TIME_BUDGET_HARD_CEILING_S]
+
+
 def pytest_sessionfinish(session, exitstatus):
     # Controller only: a worker's exitstatus does not reach the caller, and
     # the controller is where the whole run's offenders are.
     if _is_xdist_worker(session.config):
         return
-    if _time_budget_offenders and os.environ.get("MOMWIRE_ENFORCE_TIME_BUDGET"):
+    if _over_hard_ceiling():
+        session.exitstatus = _pytest.ExitCode.TESTS_FAILED
+    elif _time_budget_offenders and os.environ.get("MOMWIRE_ENFORCE_TIME_BUDGET"):
+        # Opt-in strict mode: fail on the SOFT ceiling too, for whenever the
+        # 24-test debt is paid down and the tighter standard can be held.
         session.exitstatus = _pytest.ExitCode.TESTS_FAILED
