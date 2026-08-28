@@ -75,6 +75,7 @@ def _errors(text: str) -> list[str]:
     return [ln.strip() for ln in text.splitlines() if ln.strip().startswith("ERROR:")]
 
 
+@pytest.mark.integration
 def test_a_buried_deck_still_serves_its_impedance(scoped_engine):
     """momwire#553's product, and the thing the RP refusal must not cost.
 
@@ -87,6 +88,7 @@ def test_a_buried_deck_still_serves_its_impedance(scoped_engine):
     assert "ANTENNA INPUT PARAMETERS" in out
 
 
+@pytest.mark.integration
 def test_rp_on_a_buried_deck_refuses_and_names_the_issue(scoped_engine):
     """The row this file exists for (momwire#570).
 
@@ -119,6 +121,7 @@ def test_rp_on_a_buried_deck_refuses_and_names_the_issue(scoped_engine):
     assert "-999.99" not in out
 
 
+@pytest.mark.integration
 def test_rp_over_a_sommerfeld_ground_serves_when_nothing_is_buried(scoped_engine):
     """The control, and the reason the refusal is keyed on BURIED rather than
     on the ground kind.
@@ -134,6 +137,7 @@ def test_rp_over_a_sommerfeld_ground_serves_when_nothing_is_buried(scoped_engine
     assert "RADIATION PATTERNS" in out
 
 
+@pytest.mark.integration
 def test_a_buried_deck_over_a_ground_with_no_lower_medium_refuses_first(scoped_engine):
     """``GN 0`` has nowhere to put the wire, and that refusal outranks the
     report card's — the deck never reaches a fill, so there is no far field to
@@ -146,6 +150,7 @@ def test_a_buried_deck_over_a_ground_with_no_lower_medium_refuses_first(scoped_e
     assert "momwire#570" not in message
 
 
+@pytest.mark.integration
 def test_the_refusal_is_reported_and_the_nx_sentinel_still_lands(scoped_engine):
     """The daemon contract (grammar doc §2, §10.1): a refused deck is a
     REPORT, and the sentinel is emitted whether the deck ran or not.  An

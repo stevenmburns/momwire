@@ -108,6 +108,7 @@ def run_engine(args, *, cwd=None, stdin=subprocess.DEVNULL, input=None):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_header_matches_the_captured_printout_byte_for_byte(cid):
     """Every capture that shipped a printout gates its own header.
@@ -119,6 +120,7 @@ def test_header_matches_the_captured_printout_byte_for_byte(cid):
     assert eznec.render_header(deck_text(cid)) == header_prefix(cid)
 
 
+@pytest.mark.integration
 def test_the_two_named_gates_have_different_comment_blocks():
     """0043 and 0010 differ in title AND launch timestamp — so a header that
     matched both cannot be replaying one fixture's bytes.
@@ -131,12 +133,14 @@ def test_the_two_named_gates_have_different_comment_blocks():
     assert eznec.render_header(deck_text("0010")) == header_prefix("0010")
 
 
+@pytest.mark.integration
 def test_the_echo_carries_the_launch_stamp_and_the_title():
     header = eznec.render_header(deck_text("0043"))
     assert "EZNEC Pro/2+ v. 7.0.4  2026-08-20 08:14:05" in header
     assert "Vertical over real ground" in header
 
 
+@pytest.mark.integration
 def test_a_five_card_comment_block_echoes_six_lines():
     """``CE`` echoes too, as its own blank line — five ``CM`` cards, six lines.
 
@@ -150,6 +154,7 @@ def test_a_five_card_comment_block_echoes_six_lines():
     assert cards[-1] == ""
 
 
+@pytest.mark.integration
 def test_every_echoed_line_is_padded_to_the_observed_width():
     """The echo field is 103 columns wide including trailing blanks, and an
     empty ``CM`` prints as 103 spaces rather than as an empty line."""
@@ -162,6 +167,7 @@ def test_every_echoed_line_is_padded_to_the_observed_width():
     assert echoed[1] == " " * 103
 
 
+@pytest.mark.integration
 def test_the_header_stops_before_the_structure_heading():
     header = eznec.render_header(deck_text("0043"))
     assert _STRUCTURE not in header
@@ -169,6 +175,7 @@ def test_the_header_stops_before_the_structure_heading():
     assert printout_text("0043").startswith(header)
 
 
+@pytest.mark.integration
 def test_the_header_is_written_with_lf_endings():
     assert "\r" not in eznec.render_header(deck_text("0043"))
 
@@ -178,6 +185,7 @@ def test_the_header_is_written_with_lf_endings():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_a_refusal_is_the_header_then_one_error_line():
     deck = deck_text("0043")
     refusal = eznec.render_refusal(deck, eznec.STUB_REFUSAL)
@@ -202,6 +210,7 @@ def test_a_refusal_with_no_deck_has_no_comment_box():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     """The fault-injection table's three obligations at once: the file is
     written, the stamp echo is in it, and the refusal sits AFTER the echo.
@@ -247,6 +256,7 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     assert written == eznec.render_refusal(deck_text("0022"), reason)
 
 
+@pytest.mark.integration
 def test_the_printout_bytes_are_crlf_all_the_way_down(tmp_path):
     """momwire#512: EZNEC refuses an LF-only printout, behind a popup blaming
     a file that never existed ("Output file NEC.OUT is present, but was
@@ -274,6 +284,7 @@ def test_the_printout_bytes_are_crlf_all_the_way_down(tmp_path):
         assert b"\r\n" in raw, cid
 
 
+@pytest.mark.integration
 def test_paths_resolve_against_the_working_directory(tmp_path):
     """EZNEC passes bare filenames and a cwd of the engine's own directory."""
     (tmp_path / "EZN5.NEC").write_bytes(
@@ -289,6 +300,7 @@ def test_paths_resolve_against_the_working_directory(tmp_path):
     assert written.startswith(header_prefix("0010"))
 
 
+@pytest.mark.integration
 def test_a_path_with_spaces_needs_no_quoting_in_argv(tmp_path):
     """EZNEC quotes both paths on the command line; the shell unquotes them
     before argv, so the engine must not try to unquote anything itself."""
@@ -309,6 +321,7 @@ def test_a_path_with_spaces_needs_no_quoting_in_argv(tmp_path):
     )
 
 
+@pytest.mark.integration
 def test_garbage_deck_bytes_still_leave_a_printout(tmp_path):
     """Line noise is not a crash: the engine has nothing to echo, so it says
     so in the only channel there is and exits 0 like everything else."""
@@ -324,6 +337,7 @@ def test_garbage_deck_bytes_still_leave_a_printout(tmp_path):
     assert _ERROR_PREFIX in written
 
 
+@pytest.mark.integration
 def test_a_missing_deck_still_leaves_a_printout_naming_it(tmp_path):
     """Deleting the output on a read failure would send EZNEC down the
     "try a different location" path and blame the user's installation."""
@@ -339,6 +353,7 @@ def test_a_missing_deck_still_leaves_a_printout_naming_it(tmp_path):
     assert str(deck) in written
 
 
+@pytest.mark.integration
 def test_a_directory_in_place_of_a_deck_is_a_read_failure(tmp_path):
     out = tmp_path / "NEC5.OUT"
 
@@ -348,6 +363,7 @@ def test_a_directory_in_place_of_a_deck_is_a_read_failure(tmp_path):
     assert " ***** NEC ERROR - UNABLE TO READ INPUT FILE " in out.read_text()
 
 
+@pytest.mark.integration
 def test_one_argument_prints_the_observed_error_and_writes_nothing(tmp_path):
     """`NEC5CL_x13.exe deck.nec` prints exactly this line and exits 0.  There
     is no output path to write a printout to, so none is written."""
@@ -361,6 +377,7 @@ def test_one_argument_prints_the_observed_error_and_writes_nothing(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["EZN5.NEC"]
 
 
+@pytest.mark.integration
 def test_no_arguments_errors_on_stdout_rather_than_prompting(tmp_path):
     """The real engine prompts on the console device here; that path is
     deliberately not implemented, and stdin is still never read."""
@@ -371,6 +388,7 @@ def test_no_arguments_errors_on_stdout_rather_than_prompting(tmp_path):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.integration
 def test_more_than_two_arguments_is_an_unresolved_command_line(tmp_path):
     deck = tmp_path / "EZN5.NEC"
     deck.write_bytes(b"CM x\nCE\nEN\n")
@@ -382,6 +400,7 @@ def test_more_than_two_arguments_is_an_unresolved_command_line(tmp_path):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["EZN5.NEC"]
 
 
+@pytest.mark.integration
 def test_an_internal_failure_still_reports_in_the_printout(tmp_path, monkeypatch):
     """The last line of defence, exercised in process: an unexpected exception
     becomes a ``NEC ERROR`` line rather than a traceback nobody can see."""
@@ -413,6 +432,7 @@ def _serve(tmp_path, name, **kwargs):
     return proc, out.read_bytes()
 
 
+@pytest.mark.integration
 def test_a_deck_on_stdin_changes_nothing(tmp_path):
     """Same argv, empty stdin vs stdin carrying a whole deck: same printout,
     same stdout, same exit 0.  The portal's protocol is not this one."""
@@ -426,6 +446,7 @@ def test_a_deck_on_stdin_changes_nothing(tmp_path):
     assert quiet_bytes == noisy_bytes
 
 
+@pytest.mark.integration
 def test_stdin_is_left_entirely_unread(tmp_path):
     """Proved at the file offset: a child's stdin fd is a dup of the one
     handed to it, so the two SHARE a kernel offset.  If the engine had read a
@@ -459,6 +480,7 @@ def test_the_package_is_shipped():
     assert '"momwire.eznec"' in setup_py.read_text()
 
 
+@pytest.mark.integration
 def test_every_path_exits_zero(tmp_path):
     """One test that says the rule out loud: served, refused, unreadable,
     mis-invoked — EZNEC ignores the status in all four, so it is always 0."""
@@ -480,6 +502,7 @@ def test_every_path_exits_zero(tmp_path):
     ] * len(invocations)
 
 
+@pytest.mark.integration
 def test_an_internal_crash_still_carries_the_comment_echo(tmp_path, monkeypatch):
     """A refusal without the stamp echo is one EZNEC discards as stale, so
     even the last-ditch internal-error printout must echo the deck's CM
@@ -551,6 +574,7 @@ def _dump(name: str, label: str, position: int, warm: str, cold: str) -> None:
     (out / f"{stem}.cold.txt").write_text(cold)
 
 
+@pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.xfail(
     strict=False,

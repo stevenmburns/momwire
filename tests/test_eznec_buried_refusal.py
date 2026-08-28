@@ -87,6 +87,7 @@ def test_a_buried_wire_under_gn0_is_no_longer_refused_for_being_buried():
     assert why(text) is None
 
 
+@pytest.mark.integration
 def test_the_old_sentence_is_gone():
     text = deck(-0.15, "1,-1", GN0, mono_bottom="1.")
     out = render(text)
@@ -161,6 +162,7 @@ def test_a_contact_wire_plus_a_buried_wire_refuses_with_both_anchors():
     assert "elevated feed over a buried counterpoise is served" in r
 
 
+@pytest.mark.integration
 def test_ground_contact_alone_still_serves():
     contact = (
         "CM contact control\n"
@@ -227,6 +229,7 @@ def test_an_above_ground_deck_still_gets_its_near_and_far_fields():
 # ----------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_in_plane_wire_refuses_by_name_not_internal_error():
     r = reason(deck(0.0, "1,-1", GN0))
     assert "wire 2" in r
@@ -234,11 +237,13 @@ def test_in_plane_wire_refuses_by_name_not_internal_error():
     assert "INTERNAL ERROR" not in r
 
 
+@pytest.mark.integration
 def test_free_space_serves_the_same_wires():
     out = render(deck(-0.15, "0,-1", "GN -1"))
     assert "NEC ERROR" not in out
 
 
+@pytest.mark.integration
 def test_a_slight_standoff_above_the_plane_serves():
     """1 cm above ground is a legal elevated radial, not a refusal."""
     out = render(deck(0.01, "1,-1", GN0))
@@ -276,6 +281,7 @@ def fan_deck_text():
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "text,anchor",
     [

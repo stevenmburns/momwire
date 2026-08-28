@@ -457,6 +457,7 @@ def extract(text: str) -> RunData:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_every_captured_printout_round_trips_byte_for_byte(cid):
     """The unit's whole contract, fifty-seven times over.
@@ -470,6 +471,7 @@ def test_every_captured_printout_round_trips_byte_for_byte(cid):
     assert rendered == captured
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_the_allocation_is_the_square_of_the_unknown_count(cid):
     """``ALLOCATE CM:`` is unknowns² on all fifty-seven captures — 100 = 10²,
@@ -490,6 +492,7 @@ def test_the_allocation_is_the_square_of_the_unknown_count(cid):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_the_card_echo_reproduces_the_card_as_written_not_as_parsed():
     """0044 asks for ``RP 0,181,1,1000,…``; 0010 asks for ``RP 0,1,361,1000,…``.
 
@@ -508,6 +511,7 @@ def test_the_card_echo_reproduces_the_card_as_written_not_as_parsed():
         assert any(line.startswith(expected) for line in rendered.split("\n"))
 
 
+@pytest.mark.integration
 def test_the_terminator_is_echoed_after_the_results():
     """``EN`` keeps the line number it would have had at the top of the file
     and prints at the BOTTOM, after everything the run produced."""
@@ -521,6 +525,7 @@ def test_the_terminator_is_echoed_after_the_results():
     assert lines[en].startswith(" ***** INPUT LINE 10  EN")
 
 
+@pytest.mark.integration
 def test_a_ground_plane_deck_prints_the_interpolation_note():
     """``GE 1,-1`` (0019) adds two sentences between the geometry echo and the
     counts; ``GE 0,-1`` (0010) adds neither."""
@@ -535,6 +540,7 @@ def test_a_ground_plane_deck_prints_the_interpolation_note():
     assert "GROUND PLANE SPECIFIED" not in free
 
 
+@pytest.mark.integration
 def test_a_finite_ground_environment_prints_its_medium_under_the_banner():
     """0047's four-line block, verbatim, and the two constants it turns on.
 
@@ -601,6 +607,7 @@ def test_a_cache_block_is_dropped_with_the_blank_line_that_opens_it():
     assert drop_sommpd_blocks("HEAD\n\nTAIL") == "HEAD\n\nTAIL"
 
 
+@pytest.mark.integration
 def test_the_captures_still_carry_their_cache_blocks_on_disk():
     """The normalization is a READER's, not an edit: the committed bytes are
     the engine's own, cache reports and all.
@@ -624,6 +631,7 @@ def test_the_captures_still_carry_their_cache_blocks_on_disk():
         assert marker not in printout_text(cid)
 
 
+@pytest.mark.integration
 def test_a_null_gain_row_prints_a_blank_sense_column():
     """-999.99 with an empty SENSE, and an ordinary row with ``LINEAR`` in the
     same columns — the blank is a value, so it is carried as one."""
@@ -640,6 +648,7 @@ def test_a_null_gain_row_prints_a_blank_sense_column():
     assert body[1][64:72] == "  LINEAR"
 
 
+@pytest.mark.integration
 def test_the_network_tables_keep_the_deck_s_signed_address():
     """0012 writes the connection as ``3,-1`` and 0016 as ``2,3``.  The
     printed segment numbers differ (``3   -10`` against ``2     9``) and the
@@ -654,6 +663,7 @@ def test_the_network_tables_keep_the_deck_s_signed_address():
     assert a.sources[0].impedance == b.sources[0].impedance
 
 
+@pytest.mark.integration
 def test_the_two_pattern_forms_differ_only_in_the_trailer():
     """``XNDA`` 1001 (0013) closes with the average-gain pair; ``XNDA`` 1000
     (0010) closes with nothing.  Same columns, same row format."""
@@ -667,6 +677,7 @@ def test_the_two_pattern_forms_differ_only_in_the_trailer():
     assert len(two_d.rows) == 361
 
 
+@pytest.mark.integration
 def test_the_loaded_captures_print_a_blank_reactance_cell():
     """All four W7EL captures carry ``LD 4,4,n,0,1.E+10,0.`` and print the
     IMPEDANCE REAL cell only; the IMAGINARY cell is blank where the card
@@ -679,12 +690,14 @@ def test_the_loaded_captures_print_a_blank_reactance_cell():
         assert {row.kind for row in loads} == {"FIXED IMPEDANCE"}
 
 
+@pytest.mark.integration
 def test_the_unloaded_captures_say_so_in_one_line():
     for cid in ("0010", "0013", "0019", "0021", "0035", "0043", "0044", "0047", "0048"):
         assert extract(printout_text(cid)).loads == ()
         assert "THIS STRUCTURE IS NOT LOADED" in printout_text(cid)
 
 
+@pytest.mark.integration
 def test_the_charge_block_answers_pq_and_matches_the_current_block():
     """``PQ 0`` is in all fifty-seven decks and all fifty-seven printouts carry
     the block, one charge row per current row, at the same segment centres."""
@@ -696,6 +709,7 @@ def test_the_charge_block_answers_pq_and_matches_the_current_block():
         ]
 
 
+@pytest.mark.integration
 def test_the_printout_is_written_with_lf_endings():
     rendered = render_printout(
         parse_nec5(deck_text("0019")), extract(printout_text("0019"))
@@ -704,6 +718,7 @@ def test_the_printout_is_written_with_lf_endings():
     assert rendered.endswith(" RUN TIME =     0.000\n")
 
 
+@pytest.mark.integration
 def test_the_near_field_block_sits_between_the_budget_and_the_patterns():
     """Section order, on the seven captures that carry one.
 
@@ -718,6 +733,7 @@ def test_the_near_field_block_sits_between_the_budget_and_the_patterns():
         assert "- - - RADIATION PATTERNS - - -" not in text
 
 
+@pytest.mark.integration
 def test_the_two_near_field_mnemonics_differ_in_three_words_and_nothing_else():
     """0111 against 0110 — the same deck, the same grid, ``NE`` respelled ``NH``.
 
@@ -745,6 +761,7 @@ def test_the_two_near_field_mnemonics_differ_in_three_words_and_nothing_else():
     assert folded == electric
 
 
+@pytest.mark.integration
 def test_the_near_field_points_are_metres_and_the_current_table_is_not():
     """The one geometry column in the printout that is NOT wavelength-normalized.
 
@@ -761,6 +778,7 @@ def test_the_near_field_points_are_metres_and_the_current_table_is_not():
     assert data.currents[0].center[2] == pytest.approx(0.515 / data.wavelength_m, 1e-3)
 
 
+@pytest.mark.integration
 def test_a_deck_remembers_the_text_it_was_read_from():
     """The renderer echoes card images, so the parsed deck carries its own
     source; a deck built by hand without one echoes no cards rather than

@@ -155,6 +155,7 @@ def driving_point(text: str) -> complex:
     return _SOLVED[text]
 
 
+@pytest.mark.integration
 def test_the_fixture_set_is_the_one_this_module_measures():
     """Both quartets, and nothing claimed that is not on disk."""
     on_disk = {p.stem for p in FIXTURE_DIR.glob("*.deck")}
@@ -167,6 +168,7 @@ def test_the_fixture_set_is_the_one_this_module_measures():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", ("k9ay_nt_cell", "k9ay_tl_cell", "k9ay_nt_copy"))
 def test_the_cell_decks_really_do_reach_ge_with_a_live_cell(name):
     """The premise, stated rather than assumed: without a live symmetry at
@@ -241,6 +243,7 @@ def test_a_network_may_address_the_image_tags_a_load_may_not(name):
     assert card.end_b[1] == pytest.approx(cell_card.end_b[1], abs=1e-12)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NAMES)
 def test_no_cell_guard_fires_on_any_of_the_eight(name):
     """§#the-cell-rule: the exemption is documented BEHAVIOUR, not an accident
@@ -264,6 +267,7 @@ def test_no_cell_guard_fires_on_any_of_the_eight(name):
 Z_TOL = 0.005
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NAMES)
 def test_every_fixture_answers_the_oracle_impedance(name):
     """The answer-level gate the parser unit staged, one deck at a time.
@@ -280,6 +284,7 @@ def test_every_fixture_answers_the_oracle_impedance(name):
     assert abs(z - oracle) / abs(oracle) <= Z_TOL, f"{name}: {z} vs {oracle}"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cell,naive", (NT_QUARTET[:2], TL_QUARTET[:2]))
 def test_the_cell_and_naive_answers_are_the_same_number(cell, naive):
     """§#the-cell-rule at the answer: EXACTLY equal, not merely close.
@@ -294,6 +299,7 @@ def test_the_cell_and_naive_answers_are_the_same_number(cell, naive):
     assert driving_point(body(cell)) == driving_point(body(naive))
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cell,expanded", (NT_QUARTET[::2], TL_QUARTET[::2]))
 def test_the_replicated_reading_is_a_different_antenna_at_the_answer(cell, expanded):
     """The falsifier, at the answer.  An engine that grew a cell rule for

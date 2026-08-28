@@ -925,6 +925,7 @@ def mask(text: str, drive: tuple[int, ...] = (2, 3)) -> str:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", SERVED_IDS + GRAZING_IDS)
 def test_a_served_printout_is_the_capture_wherever_it_is_not_a_solved_number(cid):
     """The unit's whole shape, fifteen times over.
@@ -948,6 +949,7 @@ def test_a_served_printout_is_the_capture_wherever_it_is_not_a_solved_number(cid
     )
 
 
+@pytest.mark.integration
 def test_the_shell_writes_the_served_printout_and_still_exits_zero(tmp_path):
     """Through the real process, the way EZNEC launches it: two positional
     paths, nothing on stdin, exit 0, and a full result file on disk."""
@@ -974,6 +976,7 @@ def test_the_shell_writes_the_served_printout_and_still_exits_zero(tmp_path):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", GATED_IDS)
 def test_the_counting_rule_reproduces_every_captured_count(cid):
     """``Σ max(degree − 1, 0)`` over the fused nodes, on every printout.
@@ -1013,6 +1016,7 @@ def test_the_counting_rule_reproduces_every_captured_count(cid):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", SERVED_IDS + GRAZING_IDS)
 def test_the_current_table_s_geometry_columns_are_the_captured_ones(cid):
     """Segment centres and lengths, compared as NUMBERS rather than bytes.
@@ -1040,6 +1044,7 @@ def test_the_current_table_s_geometry_columns_are_the_captured_ones(cid):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", SERVED_IDS)
 def test_the_feedpoint_impedance_sits_inside_its_measured_envelope(cid):
     """|Z_served − Z_captured| against a per-capture bar (see the table above).
@@ -1054,6 +1059,7 @@ def test_the_feedpoint_impedance_sits_inside_its_measured_envelope(cid):
     assert abs(got - want) <= Z_BAR[cid], f"{cid}: served {got}, captured {want}"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", sorted(NEAR_BAR))
 def test_the_near_field_table_sits_inside_its_measured_envelope(cid):
     """Every live cell of a served ``NE``/``NH`` table, magnitude and phase.
@@ -1096,6 +1102,7 @@ def test_the_near_field_table_sits_inside_its_measured_envelope(cid):
             assert drift <= phase_bar, f"{cid} {a.point} column {index}: {drift} deg"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", sorted(PEAK_BAR))
 def test_the_pattern_peak_lands_where_the_capture_puts_it(cid):
     """The peak DIRECTION is exact on all six patterned captures; the peak
@@ -1134,6 +1141,7 @@ _ELEVATION_NULLS = {
 }
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", sorted(_ELEVATION_NULLS))
 def test_the_finite_ground_elevation_cut_agrees_at_every_printed_angle(cid):
     """All 181 rows of the ``RP 0`` cut, not just its peak.
@@ -1179,6 +1187,7 @@ def test_the_finite_ground_elevation_cut_agrees_at_every_printed_angle(cid):
     assert worst <= PATTERN_BAR, f"{cid}: worst row {worst:.4f} dB"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", SERVED_IDS)
 def test_the_current_and_charge_tables_sit_inside_their_measured_envelopes(cid):
     """Every element's current AND its charge density, against the capture.
@@ -1222,6 +1231,7 @@ def test_the_current_and_charge_tables_sit_inside_their_measured_envelopes(cid):
         assert abs(wrap) <= 45.0
 
 
+@pytest.mark.integration
 def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
     """0010's ``EX 4 … 1.414214,0.`` prints its drive back EXACTLY, and the
     rest of the row is that drive times the driving-point impedance.
@@ -1241,6 +1251,7 @@ def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", SERVED_IDS + GRAZING_IDS)
 def test_a_lossless_deck_radiates_everything_it_is_given(cid):
     """Every wire here is a perfect conductor and this dialect has no
@@ -1282,6 +1293,7 @@ def _with_ground(cid: str, card: str) -> str:
     return text.replace("GN 0,0,0,0,13.,.005,1.,0.", card)
 
 
+@pytest.mark.integration
 def test_the_gn_two_spelling_is_the_same_ground_and_still_echoes_its_own_card():
     """``GN 2`` is the NEC-4-compatible spelling of ``GN 0`` and the dialect
     records which one arrived rather than normalizing it away.
@@ -1303,6 +1315,7 @@ def test_the_gn_two_spelling_is_the_same_ground_and_still_echoes_its_own_card():
     assert differ[0][1].startswith(" ***** INPUT LINE  2  GN   2")
 
 
+@pytest.mark.integration
 def test_a_negative_conductivity_field_is_the_imaginary_part_itself():
     """``GN 0,…,-12.84,…`` and ``GN 0,…,.005,…`` are ONE ground at 7 MHz.
 
@@ -1348,6 +1361,7 @@ def test_a_negative_conductivity_field_is_the_imaginary_part_itself():
         assert (a.vert_db, a.hor_db, a.total_db) == (b.vert_db, b.hor_db, b.total_db)
 
 
+@pytest.mark.integration
 def test_the_engine_writes_no_sommerfeld_cache_and_reads_none(tmp_path):
     """``SOMMPD.NEX`` is inert at this seam: not read, not written, not made.
 
@@ -1386,6 +1400,7 @@ def test_the_engine_writes_no_sommerfeld_cache_and_reads_none(tmp_path):
     assert mask(outputs[0].decode("latin-1")) == mask(outputs[1].decode("latin-1"))
 
 
+@pytest.mark.integration
 def test_the_served_printout_carries_no_cache_preamble_of_its_own():
     """The other half of the same rule, read off the bytes.
 
@@ -1412,6 +1427,7 @@ def test_the_served_printout_carries_no_cache_preamble_of_its_own():
     assert served("0047").count("FINITE GROUND.  SOMMERFELD SOLUTION") == 1
 
 
+@pytest.mark.integration
 def test_the_epsilon_c_constant_is_the_engine_s_own_and_not_the_si_fold():
     """``εc = εr − j·σ·λ·59.96``, measured off the printed cell.
 
@@ -1476,6 +1492,7 @@ def _run(text: str):
     return _serve.serve(parse_nec5(text))
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", sorted(_GD_CARDS))
 def test_a_bare_gd_is_the_perfect_ground_solve_wearing_another_card(cid):
     """The rung's headline identity, on both geometry classes, at ``==``.
@@ -1522,6 +1539,7 @@ def test_a_bare_gd_is_the_perfect_ground_solve_wearing_another_card(cid):
     assert worst > 5.0, f"{cid}: patterns only {worst:.2f} dB apart"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", sorted(_GD_CARDS))
 def test_a_bare_gd_is_not_the_sommerfeld_solve_of_the_same_medium(cid):
     """The other half of the identity, and the trap it exists to kill.
@@ -1558,6 +1576,7 @@ def _environment_block(text: str) -> list[str]:
     return lines[start:end]
 
 
+@pytest.mark.integration
 def test_the_two_finite_grounds_print_one_environment_block_byte_for_byte():
     """The banner lies, and the renderer lies with it.
 
@@ -1585,6 +1604,7 @@ def test_the_two_finite_grounds_print_one_environment_block_byte_for_byte():
     assert served_block[2].strip() == "FINITE GROUND.  SOMMERFELD SOLUTION"
 
 
+@pytest.mark.integration
 def test_the_two_finite_grounds_answer_patterns_that_differ_by_the_captured_amount():
     """One byte of deck, 178 rows of consequence — and the seam reproduces it.
 
@@ -1627,6 +1647,7 @@ def test_the_two_finite_grounds_answer_patterns_that_differ_by_the_captured_amou
     assert worst <= 0.025, f"worst row {worst:.4f} dB"
 
 
+@pytest.mark.integration
 def test_the_reflection_and_the_sommerfeld_spelling_are_one_far_field():
     """``GD`` names its far ground ``refl`` and ``GN 0`` names it
     ``sommerfeld``, and the two names reach the same arithmetic.
@@ -1663,6 +1684,7 @@ def test_the_reflection_and_the_sommerfeld_spelling_are_one_far_field():
     )
 
 
+@pytest.mark.integration
 def test_the_negative_conductivity_convention_is_read_off_the_gd_flag():
     """``GD 0,…,-38.9052,…`` and ``GD 0,…,.0303,…`` are ONE ground at 14 MHz.
 
@@ -1716,6 +1738,7 @@ def test_the_negative_conductivity_convention_is_read_off_the_gd_flag():
 # that is a SUM rather than a product, and a row that comes out negative.
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", PHASED_IDS)
 def test_every_phased_row_sits_inside_its_own_measured_envelope(cid):
     """All four of 0031's rows and both of 0032's, row by row.
@@ -1743,6 +1766,7 @@ def test_every_phased_row_sits_inside_its_own_measured_envelope(cid):
         )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", PHASED_IDS)
 def test_every_phased_row_prints_the_current_its_own_card_set(cid):
     """The drive constraint, to the byte, once per row.
@@ -1774,6 +1798,7 @@ def test_every_phased_row_prints_the_current_its_own_card_set(cid):
         assert (row.current.imag == 0.0) == (drive.imag == 0.0)
 
 
+@pytest.mark.integration
 def test_the_four_square_s_two_quadrature_elements_print_one_row_twice():
     """0031's tags 2 and 3 are the same row, and tags 1 and 4 are not.
 
@@ -1820,6 +1845,7 @@ def test_the_four_square_s_two_quadrature_elements_print_one_row_twice():
     assert abs(rows[0].impedance - rows[3].impedance) > 25.0
 
 
+@pytest.mark.integration
 def test_the_four_square_s_absorbing_element_stays_negative():
     """0031's tag-1 row prints NEGATIVE watts and negative ohms, and so does
     this seam's.
@@ -1850,6 +1876,7 @@ def test_the_four_square_s_absorbing_element_stays_negative():
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", PHASED_IDS)
 def test_the_phased_budget_is_the_sum_of_its_printed_rows(cid):
     """``INPUT POWER`` = Σ rows, to the printed digit, on both captures.
@@ -1872,6 +1899,7 @@ def test_the_phased_budget_is_the_sum_of_its_printed_rows(cid):
         assert data.power.radiated_power == pytest.approx(total, rel=2e-4)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", PHASED_IDS)
 def test_the_phased_azimuth_cut_agrees_at_every_printed_angle(cid):
     """All 361 rows of the ``RP 0`` azimuth cut, and the lobe rows twice.
@@ -1913,6 +1941,7 @@ def test_the_phased_azimuth_cut_agrees_at_every_printed_angle(cid):
     assert lobe <= AZIMUTH_LOBE_BAR[cid], f"{cid}: worst lobe row {lobe:.4f} dB"
 
 
+@pytest.mark.integration
 def test_a_phased_drive_is_a_solve_and_not_a_scale():
     """The rung's own mechanism, stated as the thing it is NOT.
 
@@ -1994,6 +2023,7 @@ def _refusal_deck(cid: str) -> bytes:
     return (FIXTURE_DIR / capture(cid)["deck"]).read_bytes()
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid,reason", sorted(REFUSALS.items()))
 def test_an_out_of_scope_capture_refuses_by_name_through_the_shell(
     cid, reason, tmp_path
@@ -2034,6 +2064,7 @@ def test_an_out_of_scope_capture_refuses_by_name_through_the_shell(
     assert "ANTENNA INPUT PARAMETERS" not in written
 
 
+@pytest.mark.integration
 def test_the_near_field_refusal_names_the_point_and_not_the_ground():
     """Which card speaks for 0022 has moved three times, and this is the third.
 
@@ -2070,6 +2101,7 @@ def test_the_near_field_refusal_names_the_point_and_not_the_ground():
     assert reason == render(deck_text("0107")).split(" ***** NEC ERROR - ")[1]
 
 
+@pytest.mark.integration
 def test_the_near_field_matrix_is_the_measured_one():
     """The serving matrix, one deck per cell, on captures rather than probes.
 
@@ -2091,6 +2123,7 @@ def test_the_near_field_matrix_is_the_measured_one():
         assert "NEC ERROR" in render(deck_text(cid)), cid
 
 
+@pytest.mark.integration
 def test_a_gd_near_field_is_the_gn_0_one_and_not_a_pec_image():
     """The finding that ROUTES ``GD``, read off two captures and then off two
     served printouts.
@@ -2151,6 +2184,7 @@ def test_a_gd_near_field_is_the_gn_0_one_and_not_a_pec_image():
         assert row.magnitudes[1] == 0.0
 
 
+@pytest.mark.integration
 def test_nh_serves_on_every_ground_ne_does():
     """momwire#513's card, all the way through.
 
@@ -2189,6 +2223,7 @@ def test_nh_serves_on_every_ground_ne_does():
         assert all(row.phases_deg[0] == row.phases_deg[2] == 0.0 for row in rows)
 
 
+@pytest.mark.integration
 def test_the_near_field_refusal_is_the_point_s_and_not_the_deck_s():
     """One deck, two ``NE`` cards, two answers — in both directions.
 
@@ -2226,6 +2261,7 @@ def test_the_near_field_refusal_is_the_point_s_and_not_the_deck_s():
     assert (row.magnitudes, row.phases_deg) == (same.magnitudes, same.phases_deg)
 
 
+@pytest.mark.integration
 def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
     """U1's catch-all is now a backstop and not a behaviour.
 
@@ -2242,6 +2278,7 @@ def test_the_stub_refusal_no_longer_answers_anything_in_the_corpus():
         assert "INTERNAL ERROR IN MOMWIRE ENGINE" not in text, cid
 
 
+@pytest.mark.integration
 def test_the_corpus_ladder_is_77_of_80():
     """The served-id SET, pinned — 77 of the 80 captured decks.
 
@@ -2307,6 +2344,7 @@ def test_the_corpus_ladder_is_77_of_80():
     assert len([cid for cid in served_ids if cid < "0049"]) == 48
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", SERVED_UNGATED_IDS)
 def test_the_ungated_rung_one_captures_still_serve(cid):
     """The five decks of the frequency-stepping session whose printouts are
@@ -2329,6 +2367,7 @@ def test_the_ungated_rung_one_captures_still_serve(cid):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", GRAZING_IDS)
 def test_the_elevated_radial_systems_are_pinned_now_that_they_close(cid):
     """The envelope that replaced an on-purpose disagreement.
@@ -2402,6 +2441,7 @@ def test_the_elevated_radial_systems_are_pinned_now_that_they_close(cid):
     )
 
 
+@pytest.mark.integration
 def test_the_favored_wire_carries_physics_at_a_five_wire_junction():
     """0013's apex is one geometric point that five ``GW`` cards name, and
     WHICH card names it changes the answer.
@@ -2457,6 +2497,7 @@ def _refused(text: str) -> str:
     return printout.rsplit(" ***** NEC ERROR - ", 1)[1].strip()
 
 
+@pytest.mark.integration
 def test_a_drive_that_mixes_the_two_ex_kinds_refuses_by_name():
     """One ``EX 0`` and one ``EX 4`` on the same deck.
 
@@ -2473,6 +2514,7 @@ def test_a_drive_that_mixes_the_two_ex_kinds_refuses_by_name():
     assert "1 EX 0 (a set voltage) and 1 EX 4 (a set current)" in reason
 
 
+@pytest.mark.integration
 def test_a_multi_voltage_drive_refuses_by_name():
     """Two ``EX 0`` cards.
 
@@ -2489,6 +2531,7 @@ def test_a_multi_voltage_drive_refuses_by_name():
     assert "multi-VOLTAGE drive is not served" in reason
 
 
+@pytest.mark.integration
 def test_a_phased_drive_through_a_network_is_served_now():
     """The refusal that used to live here, inverted — the same two edits to the
     same deck, expecting an answer.
@@ -2520,6 +2563,7 @@ def test_a_phased_drive_through_a_network_is_served_now():
         assert abs(rows[1].impedance - bare[1].impedance) > 5.0
 
 
+@pytest.mark.integration
 def test_two_ex_cards_at_one_address_refuse_by_name():
     """The same ``(tag, node)`` twice.
 
@@ -2534,6 +2578,7 @@ def test_two_ex_cards_at_one_address_refuse_by_name():
     assert "second generator in series across the same gap" in reason
 
 
+@pytest.mark.integration
 def test_two_ex_cards_on_the_two_sides_of_one_cut_refuse_by_name():
     """``1,6`` and ``2,-1`` at a node where wires 1 and 2 meet.
 
@@ -2559,6 +2604,7 @@ def test_two_ex_cards_on_the_two_sides_of_one_cut_refuse_by_name():
     assert "one boundary condition written twice" in reason
 
 
+@pytest.mark.integration
 def test_the_served_phased_shape_is_the_one_the_probes_all_left():
     """The control on the four refusals above: 0032 itself is SERVED.
 
@@ -2571,6 +2617,7 @@ def test_the_served_phased_shape_is_the_one_the_probes_all_left():
     assert "ANTENNA INPUT PARAMETERS" in served(_PROBE_BASE)
 
 
+@pytest.mark.integration
 def test_a_source_on_a_free_wire_end_refuses_rather_than_guessing():
     """Nothing carries current past a lone conductor end, so there is no path
     for a series source to sit in — momwire refuses one at its constructor and
@@ -2597,6 +2644,7 @@ def test_a_source_on_a_free_wire_end_refuses_rather_than_guessing():
 # exactly, and the `1.E+10` pin idiom doing the one thing it exists to do.
 
 
+@pytest.mark.integration
 def test_a_load_at_the_driven_node_adds_its_own_ohms_to_the_feedpoint():
     """An ``LD 4`` is an impedance in the port's own current path, so one
     stamped at the DRIVEN node is in series with the source and moves the
@@ -2610,6 +2658,7 @@ def test_a_load_at_the_driven_node_adds_its_own_ohms_to_the_feedpoint():
     assert loaded - bare == pytest.approx(complex(50.0, 25.0), abs=0.02)
 
 
+@pytest.mark.integration
 def test_the_pin_idiom_leaves_the_virtual_wire_carrying_nothing():
     """W7EL's own idiom, on a deck that has no network to need it yet.
 
@@ -2710,6 +2759,7 @@ def test_the_slope_readout_refuses_the_enriched_basis_rather_than_dropping_it():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_the_wavelength_is_nec_s_own_metre_megahertz_product():
     """299.8, not the SI c.  0019 prints ``WAVELENGTH= 4.2829E+01 METERS`` at
     7 MHz: 299.8/7 = 42.8286 rounds to that cell and 299792458/7e6 = 42.8275
@@ -2728,6 +2778,7 @@ def test_the_wavelength_is_nec_s_own_metre_megahertz_product():
         )
 
 
+@pytest.mark.integration
 def test_the_basis_is_the_house_default():
     """``bspline`` — ``BSplineSolver`` at degree 2, which is what
     ``momwire.deck.build_solver``'s default entry constructs and what the

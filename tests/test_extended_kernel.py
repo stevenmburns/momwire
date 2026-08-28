@@ -109,6 +109,7 @@ def test_extended_kernel_ladder_matches_nec2_ek_on(radius):
     assert _rel(z, z_on) < EK_ON_TOL, f"Δ/a={da}: {z} vs nec2c EK-ON {z_on}"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("radius", [0.1, 0.15, 0.3])
 def test_extended_kernel_carries_the_rungs_the_reduced_kernel_cannot(radius):
     """Below Δ/a ≈ 1.25 the reduced kernel is not merely imprecise — it answers

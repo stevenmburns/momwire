@@ -148,6 +148,7 @@ def test_the_seam_and_the_constructor_refuse_the_same_decks(name, text, inert):
         assert _razor_constructs(mesh, ground), name
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", CAPTURE_IDS)
 def test_no_capture_declares_an_inert_wire(cid):
     """And so the narrowing costs the corpus nothing.  Asked of the seam and
@@ -161,6 +162,7 @@ def test_no_capture_declares_an_inert_wire(cid):
 # --------------------------------------------------------------------------
 # 2. what the corpus actually declares
 # --------------------------------------------------------------------------
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", sorted(ONE_SEGMENT_CENSUS))
 def test_the_one_segment_census_is_the_one_the_narrowing_was_measured_over(cid):
     """Recorded so that a deck changing shape is a diff and not a silent
@@ -186,6 +188,7 @@ def test_the_one_segment_census_is_the_one_the_narrowing_was_measured_over(cid):
     assert (counts[2], counts[1], counts[0]) == (n_a, n_b, n_c)
 
 
+@pytest.mark.integration
 def test_the_five_decks_serve_and_name_no_refusal():
     """The headline, end to end through the shell: all five come back as
     printouts, none of them carrying a ``NEC ERROR``."""
@@ -195,6 +198,7 @@ def test_the_five_decks_serve_and_name_no_refusal():
         assert "INTERNAL ERROR" not in text, cid
 
 
+@pytest.mark.integration
 def test_an_inert_wire_still_comes_back_as_a_printout():
     """The refusal that survives goes through the seam's channel, naming the
     wire and the basis — never as an exception into EZNEC's face."""
@@ -205,6 +209,7 @@ def test_an_inert_wire_still_comes_back_as_a_printout():
     assert "meets no other wire at either end" in text
 
 
+@pytest.mark.integration
 def test_the_default_basis_hosts_the_inert_wire_it_refuses_for_razor():
     """The refusal is razor's basis and not the seam's opinion of the model:
     the same deck serves under the default."""

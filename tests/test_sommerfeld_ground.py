@@ -780,6 +780,7 @@ print(vm("VmHWM:") - rss0, polys.shape[0], geom["seg_l"].shape[0])
 """
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(
     sys.platform != "linux",
     reason="reads the child's /proc VmHWM — linux memory plumbing, no "

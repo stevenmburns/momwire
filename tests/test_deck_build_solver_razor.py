@@ -404,6 +404,7 @@ NX
 """
 
 
+@pytest.mark.integration
 @pytest.mark.slow
 def test_the_two_routes_converge_on_the_fixtures_own_geometry():
     """The evidence behind momwire#588's measured bar.

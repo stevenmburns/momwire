@@ -110,6 +110,7 @@ def test_the_manifest_and_the_files_on_disk_agree():
     assert len(list((FIXTURES / "printouts").glob("*.out"))) == PRINTOUTS
 
 
+@pytest.mark.integration
 def test_no_capture_writes_two_request_cards():
     """The claim ``_printout.py`` needs, gated instead of asserted in prose.
 

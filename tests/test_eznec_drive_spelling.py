@@ -60,6 +60,7 @@ def mesh_for(cid: str, solver_class: type):
 # the cut, and its absence
 
 
+@pytest.mark.integration
 def test_a_node_gap_basis_cuts_the_wire_and_a_delta_gap_basis_does_not():
     """0010 drives ``EX 4,1,6`` — six segments into an eleven-segment dipole.
 
@@ -86,6 +87,7 @@ def test_a_node_gap_basis_cuts_the_wire_and_a_delta_gap_basis_does_not():
     assert cut.gaps[0].weight == 1.0
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", CAPTURE_IDS)
 def test_no_capture_hands_razor_a_piece_the_cut_invented(cid):
     """One polyline per ``GW``, for every deck in the corpus.
@@ -99,6 +101,7 @@ def test_no_capture_hands_razor_a_piece_the_cut_invented(cid):
     assert [p.n_elements for p in mesh.pieces] == [w.segment_count for w in deck.wires]
 
 
+@pytest.mark.integration
 def test_only_the_two_apexes_still_ask_razor_for_a_node_gap():
     """K = 2 is a through-current path and becomes a delta gap; K >= 3 is not.
 
@@ -245,6 +248,7 @@ def test_razor_reads_a_k2_junction_knot_and_an_interior_knot_alike():
         )
 
 
+@pytest.mark.integration
 def test_the_junction_gap_is_signed_off_side_a_and_not_arrival_order():
     """0011 addresses both ends of one head-to-head join — ``4,1`` and ``5,20``.
 
@@ -290,6 +294,7 @@ REFUSED_UNDER_EVERY_BASIS = ("0022", "0107", "0112")
 UNSERVED = REFUSED_UNDER_EVERY_BASIS
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", CAPTURE_IDS)
 def test_razor_nec5_serves_every_capture_but_the_three_named(cid):
     """11 of 62 before U1, 49 after U4, 54 after #608, 59 after #624.
@@ -316,6 +321,7 @@ def test_razor_nec5_serves_every_capture_but_the_three_named(cid):
 FLOAT = re.compile(r"-?\d\.\d+E[-+]\d+")
 
 
+@pytest.mark.integration
 def test_the_five_wire_apex_lands_on_the_licensed_engine(razor_seam=None):
     """momwire#603 U4's gate, and the sharpest one in this file.
 
@@ -363,6 +369,7 @@ def input_impedance(text: str) -> complex | None:
 ACCURACY_IDS = ("0010", "0012", "0017", "0019")
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", ACCURACY_IDS)
 def test_razor_nec5_lands_on_the_licensed_engine_it_is_a_twin_of(cid):
     """The twin reproduces its reference to four figures.
@@ -387,6 +394,7 @@ def test_razor_nec5_lands_on_the_licensed_engine_it_is_a_twin_of(cid):
     assert abs(served - reference) / abs(reference) < 1e-3
 
 
+@pytest.mark.integration
 def test_the_w7el_triple_still_answers_series_where_it_must():
     """Config C is 70 % from config A, and a lost junction sign hides that.
 
@@ -405,6 +413,7 @@ def test_the_w7el_triple_still_answers_series_where_it_must():
     assert z["0017"] == pytest.approx(195.340 - 57.458j, abs=5e-3)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", ACCURACY_IDS)
 def test_the_current_table_is_not_printed_180_degrees_out(cid):
     """The one error an impedance cannot see.
