@@ -62,6 +62,7 @@ def test_the_point_matched_families_host_none_of_it():
     assert _served_by("pulse") == frozenset()
 
 
+@pytest.mark.integration
 @pytest.mark.slow
 def test_no_feed_or_load_on_the_nec5_corpus_is_ambiguous_under_razor(monkeypatch):
     """**The gate this module exists for.**

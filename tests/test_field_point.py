@@ -620,6 +620,7 @@ def test_the_engine_disagrees_with_itself_about_the_singular_cell():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_a_pec_limit_ground_collapses_onto_the_plain_image():
     """ε̃ → 1e16: ``C₂·image + remainder`` becomes the plain PEC image.
 
@@ -647,6 +648,7 @@ def test_a_pec_limit_ground_collapses_onto_the_plain_image():
     assert np.abs(total - pec).max() <= 1e-3 * np.abs(pec).max()
 
 
+@pytest.mark.integration
 def test_free_space_leaves_the_remainder_exactly_zero():
     """ε̃ = 1: the remainder is EXACTLY zero, and so is its curl.
 
@@ -669,6 +671,7 @@ def test_free_space_leaves_the_remainder_exactly_zero():
     assert np.count_nonzero(magnetic) == 0
 
 
+@pytest.mark.integration
 def test_the_point_dyad_and_the_fill_dyad_are_one_algebra():
     """The vector evaluator projected on an observer tangent IS
     `remainder_field_proj`.
@@ -738,6 +741,7 @@ def test_the_point_dyad_and_the_fill_dyad_are_one_algebra():
     assert np.abs(ours - fill).max() <= 1e-10 * np.abs(fill).max()
 
 
+@pytest.mark.integration
 def test_the_finite_difference_curl_floor_is_measured_away_from_any_ground():
     """The magnetic evaluator's own error, pinned without a ground in sight.
 

@@ -125,7 +125,7 @@ jobs:
       # Without this, a flake's assertion repr truncates both printouts and
       # the occurrence burns its own evidence — three did before this step
       # existed (PR #460, the #415 arc twice, PR #474).
-      - run: pytest tests/ -m "not slow and not memgate"
+      - run: pytest tests/ -m "not slow and not memgate and not integration"
         if: needs.changes.outputs.code == 'true'
         env:
           MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
@@ -142,6 +142,10 @@ jobs:
     # The platform Ward runs SimNEC on (momwire#527/#528): the suite must
     # pass where the portal's real users live, not only where wheels build.
     # Same lane as `test` (fast marker subset); slow/memgate stay linux-only.
+    # It KEEPS the integration tests the linux PR lane now excludes
+    # (momwire#692): those are the subprocess/socket/CLI tests, which is
+    # exactly where platforms differ, so dropping them here would leave
+    # the only macOS lane covering the least platform-sensitive code.
     #
     # NOT a PR gate (turnaround work, 2026-08-28), and the reason is what
     # this lane was actually FOR. #527's body reads as a macOS bug report; it
@@ -212,6 +216,37 @@ jobs:
           name: momwire-464-dumps-macos
           path: 464-dumps/
           if-no-files-found: ignore
+
+  test-integration:
+    needs: changes
+    # Tests that cross a process, a socket, a CLI, or the deck->printout seam
+    # (momwire#692). Classified by NATURE, not duration: 306 of the 403 marked
+    # functions run under 3 s and cost 80 s between them, but a socket test
+    # that finishes in 0.2 s is still not an edit-loop guard.
+    #
+    # Push-only for the same reason as test-slow: the PR lane decides how many
+    # edit->signal turns an hour this repo supports, and releases — not main —
+    # are the supported artifact. Measured on an 8-core box: the PR lane goes
+    # 4:17 -> 2:29, and this lane costs 2:02.
+    #
+    # `not slow` is load-bearing. A test can carry both markers, and without
+    # the exclusion this lane sweeps in the certification solves and runs
+    # 5:19 instead of 2:02.
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.changes.outputs.code == 'true'
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: hendrikmuhs/ccache-action@v1.2
+      - run: pip install --upgrade pip
+      - run: pip install "setuptools>=61.0" wheel pybind11
+      - run: pip install -e .[test] --no-build-isolation
+      - run: pytest tests/ -m "integration and not slow and not memgate"
 
   test-slow:
     needs: changes

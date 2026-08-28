@@ -70,6 +70,7 @@ def test_fixture_corpus_is_not_empty():
     assert len(NAMES) >= 20, f"suspiciously small corpus: {NAMES}"
 
 
+@pytest.mark.integration
 def test_manifest_matches_files_on_disk():
     """The manifest is the corpus index: no strays, no missing pairs."""
     on_disk_decks = {p.stem for p in FIXTURE_DIR.glob("*.deck")}
@@ -91,12 +92,14 @@ def test_manifest_names_are_sorted():
     assert list(NAMES) == sorted(NAMES)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("entry", MANIFEST["decks"], ids=lambda e: e["name"])
 def test_manifest_hashes_match_the_committed_bytes(entry):
     assert _sha256(_deck(entry["name"])) == entry["deck_sha256"]
     assert _sha256(_out(entry["name"])) == entry["out_sha256"]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NAMES)
 def test_every_out_has_the_banner(name):
     """Every printout opens with the version banner SimNEC checks."""
@@ -108,6 +111,7 @@ def test_every_out_has_the_banner(name):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NAMES)
 def test_every_out_has_a_structure_section(name):
     text = _out(name)
@@ -118,6 +122,7 @@ def test_every_out_has_a_structure_section(name):
     assert ("SEGMENTATION DATA" in text) is not quiet
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NAMES)
 def test_every_out_has_impedance_and_current_sections(name):
     text = _out(name)
@@ -125,12 +130,14 @@ def test_every_out_has_impedance_and_current_sections(name):
     assert "CURRENTS AND LOCATION" in text, f"{name}: no current section"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NAMES)
 def test_every_out_ends_a_run_with_the_nx_echo(name):
     """The end-of-run sentinel: nec2/Execute stops at the NX card echo."""
     assert NX_ECHO.search(_out(name)), f"{name}: no 'DATA CARD No: n NX' echo"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NAMES)
 def test_every_deck_is_portal_dialect_and_ends_with_nx(name):
     """Decks use only cards this engine's dialect serves, and terminate with NX.
@@ -150,6 +157,7 @@ def test_every_deck_is_portal_dialect_and_ends_with_nx(name):
         assert card in allowed, f"{name}: non-portal card {card!r} in deck"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NAMES)
 def test_timings_are_canonicalised(name):
     """Wall-clock fields are zeroed so the capture is reproducible."""
@@ -194,6 +202,7 @@ def _antenna_input_currents(text: str) -> list[list[tuple[float, float]]]:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_resident_transcript_frames_two_decks():
     """One process, two decks, each terminated by its own NX card.
 
@@ -215,6 +224,7 @@ def test_resident_transcript_frames_two_decks():
     assert first_cards[4:8] == [("1", "EX"), ("2", "FR"), ("3", "XQ"), ("4", "NX")]
 
 
+@pytest.mark.integration
 def test_resident_transcript_exits_on_stdin_eof():
     """Closing stdin after the last NX is what ends the resident process."""
     entry = next(e for e in MANIFEST["decks"] if e["name"] == "resident_two_decks")

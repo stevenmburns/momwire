@@ -100,6 +100,7 @@ def test_an_unknown_basis_names_the_ones_that_are_known():
 # the seam
 
 
+@pytest.mark.integration
 def test_the_seam_takes_a_basis_and_answers_in_it():
     """0010 is a free-space dipole every family below can host.
 
@@ -120,6 +121,7 @@ def test_the_seam_takes_a_basis_and_answers_in_it():
     assert _serve.serve(deck).sources[0].impedance == z[_serve.BASIS]
 
 
+@pytest.mark.integration
 def test_an_unknown_basis_refuses_in_the_printout_rather_than_raising():
     text = render(deck_text("0010"), basis="rzaor")
     assert "NEC ERROR" in text
@@ -153,6 +155,7 @@ def test_the_charge_table_gate_is_asked_of_the_class():
     assert issubclass(HarringtonSolver, PulseSolver)
 
 
+@pytest.mark.integration
 def test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name():
     """#611 moved this refusal one layer down, and the move is the point.
 
@@ -181,6 +184,7 @@ def test_the_sinusoidal_family_refuses_the_KNOT_DRIVE_by_name():
     assert "not yet served" not in text
 
 
+@pytest.mark.integration
 def test_razor_now_hosts_the_deck_it_used_to_name_a_refusal_for():
     """0021 stands a wire end in a finite ground plane, and is SERVED.
 
@@ -299,6 +303,7 @@ def test_the_frozen_entry_point_defaults_only_when_no_basis_was_named(prog, expe
     assert _entry_module().basis_for(prog) == expected
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("prog", ["momwire-eznec-", "momwire-eznec-rzaor.exe"])
 def test_a_name_that_matches_no_basis_refuses_in_the_printout(prog):
     """The README's promise, end to end: not a silent fallback, a refusal.
@@ -618,6 +623,7 @@ def test_every_basis_that_answers_at_all_accepts_the_same_59():
         assert set(ACCEPTS[cid].values()) == {NEAR_FIELD_AT_A_CONTACT}
 
 
+@pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("basis", sorted(BASES))
 def test_each_basis_accepts_exactly_the_decks_the_table_names(basis):

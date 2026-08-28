@@ -458,6 +458,7 @@ def _impedance(cid: str) -> complex:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", NETWORK_IDS)
 def test_a_served_network_printout_is_the_capture_wherever_it_is_not_solved(cid):
     """U4's structure gate, with two more tables under it.
@@ -477,6 +478,7 @@ def test_a_served_network_printout_is_the_capture_wherever_it_is_not_solved(cid)
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", NETWORK_IDS)
 def test_the_network_table_echoes_the_cards_exactly(cid):
     """The same bytes again, read back as numbers, so a failure says WHICH.
@@ -498,6 +500,7 @@ def test_the_network_table_echoes_the_cards_exactly(cid):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_the_two_spellings_of_one_node_answer_identically():
     """Config A against config B: ``3,-1`` and ``2,3`` are a true alias.
 
@@ -516,6 +519,7 @@ def test_the_two_spellings_of_one_node_answer_identically():
     assert abs(b - a) <= 1e-12 * abs(a), f"A {a}, B {b}"
 
 
+@pytest.mark.integration
 def test_config_c_puts_the_two_admittances_in_series_and_not_in_parallel():
     """The gate the whole unit was scoped around.
 
@@ -534,6 +538,7 @@ def test_config_c_puts_the_two_admittances_in_series_and_not_in_parallel():
     assert abs(c - a) > 0.5 * abs(Z_C - Z_A)
 
 
+@pytest.mark.integration
 def test_the_snapped_config_moves_the_load_a_whole_segment_off_the_junction():
     """0018: ``NT 2,2`` and ``NT 2,3``, a genuine element apart.
 
@@ -546,6 +551,7 @@ def test_the_snapped_config_moves_the_load_a_whole_segment_off_the_junction():
     assert abs(_impedance("0018") - Z_SNAP) <= Z_BAR["0018"]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", NETWORK_IDS)
 def test_the_feedpoint_impedance_sits_inside_its_measured_envelope(cid):
     """|Z_served − Z_captured| against the per-capture bar in the table above.
@@ -566,6 +572,7 @@ def test_the_feedpoint_impedance_sits_inside_its_measured_envelope(cid):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "cid,expected",
     [
@@ -601,6 +608,7 @@ def test_a_terminated_connection_point_reports_minus_one_over_its_admittance(
     )
 
 
+@pytest.mark.integration
 def test_the_two_sides_of_one_cut_carry_one_current():
     """0017's two connection points are the same cut, so their current is one
     number — and the capture agrees, printing 7.7427E-01 − 4.9839E-01j on both
@@ -620,6 +628,7 @@ def test_the_two_sides_of_one_cut_carry_one_current():
     assert wire_two.voltage == pytest.approx(2.0 * wire_three.voltage, rel=1e-9)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", NETWORK_IDS)
 def test_the_sign_tracking_end_index_follows_the_deck_and_nothing_else(cid):
     """The trailing index after ``TAG``/``SEG.``: 2 for a ``-1`` node, 1 for
@@ -657,6 +666,7 @@ def test_the_sign_tracking_end_index_follows_the_deck_and_nothing_else(cid):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_the_crossed_flag_reaches_the_network_solve_as_a_polarity():
     """0028's four feeders write ``-490.0875`` and the fifth ``+490.0875``.
 
@@ -689,6 +699,7 @@ def test_the_crossed_flag_reaches_the_network_solve_as_a_polarity():
     ]
 
 
+@pytest.mark.integration
 def test_the_phase_reversal_is_worth_the_whole_log_periodic():
     """Straighten 0028's four crossed feeders and the antenna changes species.
 
@@ -707,6 +718,7 @@ def test_the_phase_reversal_is_worth_the_whole_log_periodic():
     assert abs(straight - crossed) > 0.5 * abs(crossed)
 
 
+@pytest.mark.integration
 def test_a_zero_length_line_is_resolved_node_to_node():
     """0028's four crossed feeders all write ``0.`` for their length and the
     printout gives back 9.9764E-01, 7.9826E-01, 6.3831E-01 and 5.1090E-01.
@@ -726,6 +738,7 @@ def test_a_zero_length_line_is_resolved_node_to_node():
     ]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", sorted(CONNECTION_BAR))
 def test_the_line_ends_see_the_impedances_the_capture_reports(cid):
     """The two ``TL`` decks' antenna-side connection points, pinned.
@@ -751,6 +764,7 @@ def test_the_line_ends_see_the_impedances_the_capture_reports(cid):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", sorted(PEAK_BAR))
 def test_the_pattern_peak_and_shape_land_where_the_capture_puts_them(cid):
     """Level and shape, both by envelope — and the DIRECTION deliberately not.
@@ -777,6 +791,7 @@ def test_the_pattern_peak_and_shape_land_where_the_capture_puts_them(cid):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", NETWORK_IDS)
 def test_the_current_and_charge_tables_sit_inside_their_measured_envelopes(cid):
     """Every element's current and charge density, against the capture.
@@ -804,6 +819,7 @@ def test_the_current_and_charge_tables_sit_inside_their_measured_envelopes(cid):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", NETWORK_IDS)
 def test_the_budget_closes_the_way_the_engine_closes_it(cid):
     """``RADIATED = INPUT − NETWORK LOSS − WIRE LOSS``, and the line's own
@@ -854,6 +870,7 @@ def test_the_budget_closes_the_way_the_engine_closes_it(cid):
     assert abs(power.efficiency_percent - want.efficiency_percent) <= EFFICIENCY_BAR
 
 
+@pytest.mark.integration
 def test_the_two_decks_whose_source_stands_on_a_connection_point_read_200_percent():
     """0027 and 0028 against the other five, in one place, because a 200 %
     efficiency looks like a bug until you find the deck that explains it."""
@@ -873,6 +890,7 @@ def test_the_two_decks_whose_source_stands_on_a_connection_point_read_200_percen
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_the_deck_the_refusal_order_existed_for_now_falls_all_the_way_through():
     """0001 — the 4-square with six ``TL`` cards over a bare ``GD`` — used to
     be the deck the refusal ORDER existed for, and is now the deck that says
@@ -904,6 +922,7 @@ def test_the_deck_the_refusal_order_existed_for_now_falls_all_the_way_through():
     assert len(block.rows) == 361
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", MIXED_IDS)
 def test_a_deck_carrying_both_card_types_prints_two_sub_tables_under_one_heading(cid):
     """``TL`` and ``NT`` together: the layout, measured at last.
@@ -958,6 +977,7 @@ def test_a_deck_carrying_both_card_types_prints_two_sub_tables_under_one_heading
     assert lines and nets
 
 
+@pytest.mark.integration
 def test_a_deck_that_interleaves_the_two_card_kinds_refuses_by_name():
     """The one thing the mixed captures still cannot say.
 
@@ -988,6 +1008,7 @@ def test_a_deck_that_interleaves_the_two_card_kinds_refuses_by_name():
     assert "NEC ERROR" not in render(text)
 
 
+@pytest.mark.integration
 def test_two_addresses_at_a_five_wire_junction_refuse_rather_than_guess():
     """The two sides of ONE cut are served; two different cuts are not.
 
@@ -1090,6 +1111,7 @@ PHASED_NETWORK_LOBE_BAR = {"0117": 0.25, "0121": 0.34}
 _LOBE_FLOOR = 10.0
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", PHASED_NETWORK_IDS)
 def test_every_phased_network_row_sits_inside_its_own_measured_envelope(cid):
     """All four of 0116's rows and both of 0120's, row by row.
@@ -1112,6 +1134,7 @@ def test_every_phased_network_row_sits_inside_its_own_measured_envelope(cid):
         )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", PHASED_NETWORK_IDS)
 def test_every_phased_network_row_prints_the_current_its_own_card_set(cid):
     """The drive constraint, to the byte, once per row — and here it is a
@@ -1142,6 +1165,7 @@ def test_every_phased_network_row_prints_the_current_its_own_card_set(cid):
         assert (row.current.imag == 0.0) == (drive.imag == 0.0)
 
 
+@pytest.mark.integration
 def test_one_added_tl_card_is_worth_the_whole_four_square():
     """0117 IS 0031 with one ``TL`` card added, so the network's worth is a
     number both captures print.
@@ -1182,6 +1206,7 @@ def test_one_added_tl_card_is_worth_the_whole_four_square():
     )
 
 
+@pytest.mark.integration
 def test_one_added_ex_card_is_worth_the_whole_cardioid():
     """0121 IS 0000 with one ``EX`` card added, which is the same experiment
     from the other side.
@@ -1212,6 +1237,7 @@ def test_one_added_ex_card_is_worth_the_whole_cardioid():
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "cid,card,flipped",
     [
@@ -1241,6 +1267,7 @@ def test_reversing_one_drive_moves_the_ports_it_did_not_touch(cid, card, flipped
     assert abs(moved[0].impedance - base[0].impedance) > 20.0
 
 
+@pytest.mark.integration
 def test_the_networked_four_square_s_absorbing_element_stays_negative():
     """0116's tag-1 row prints −45.158 Ω and −45.158 W, and so does this seam's.
 
@@ -1271,6 +1298,7 @@ def test_the_networked_four_square_s_absorbing_element_stays_negative():
     )
 
 
+@pytest.mark.integration
 def test_the_cardioid_s_two_driven_connection_points_read_161_percent():
     """0120/0121 answer the question the brief for this unit asked: what
     happens when a driven site is ALSO a network connection point, twice.
@@ -1311,6 +1339,7 @@ def test_the_cardioid_s_two_driven_connection_points_read_161_percent():
         )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cid", PHASED_NETWORK_CUTS)
 def test_the_phased_network_azimuth_cut_agrees_at_every_printed_angle(cid):
     """All 361 rows, and the lobe rows twice — U4's two-bar treatment, on the
@@ -1336,6 +1365,7 @@ def test_the_phased_network_azimuth_cut_agrees_at_every_printed_angle(cid):
     assert lobe <= PHASED_NETWORK_LOBE_BAR[cid], f"{cid}: worst lobe row {lobe:.4f} dB"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("pair", [("0116", "0117"), ("0120", "0121")])
 def test_the_request_card_does_not_move_the_drive(pair):
     """0116/0117 and 0120/0121 are two decks each, differing only in ``XQ``
@@ -1351,6 +1381,7 @@ def test_the_request_card_does_not_move_the_drive(pair):
     assert [row.voltage for row in xq] == [row.voltage for row in rp]
 
 
+@pytest.mark.integration
 def test_the_composition_solves_the_drive_rather_than_asserting_it():
     """The sharpest statement gate 7 can make, and the only one that reaches
     past the printed cell.
@@ -1407,6 +1438,7 @@ def test_the_composition_solves_the_drive_rather_than_asserting_it():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_the_card_semantics_are_the_engine_s_and_not_a_second_copy():
     """What six real fields on a ``TL`` or an ``NT`` MEAN is written down once,
     in ``momwire.deck._networks``, and read from there here.

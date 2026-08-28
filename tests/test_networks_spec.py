@@ -465,6 +465,7 @@ def test_a_trap_at_resonance_gets_a_keyed_row_worth_zero_watts():
     assert eff == pytest.approx(1.0)
 
 
+@pytest.mark.integration
 def test_budget_key_is_independent_of_label_spelling():
     """The decisive gate (antennaknobs#956): the label strings the reducer
     emits are still frozen (byte-identical), but `.key` is not DERIVED from

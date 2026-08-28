@@ -552,6 +552,7 @@ UNSUPPORTED = {
 NX_ECHO = re.compile(r"^\s*DATA CARD No:\s+\d+ NX\b", re.MULTILINE)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", SUPPORTED)
 def test_supported_fixtures_run_clean(name):
     """No fixture may quietly fall back to the error path."""
@@ -575,6 +576,7 @@ def test_the_support_matrix_covers_the_whole_corpus():
     assert len(SUPPORTED) == 65
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("marker", "deck"), sorted(UNSUPPORTED.items()))
 def test_unsupported_cards_take_the_documented_error_path(marker, deck):
     """Refused by name, and still followed by the sentinel.
@@ -627,6 +629,7 @@ def test_port_impedances_and_currents_agree(name, pair):
             assert relative(z_a, z_b) <= tol, f"{where}: impedance {z_a} vs {z_b}"
 
 
+@pytest.mark.integration
 def test_the_short_loaded_dipole_only_disagrees_in_the_cancelled_reactance():
     """Justifies the 50 % widening above, so it cannot rot into a free pass.
 
@@ -649,6 +652,7 @@ def test_the_short_loaded_dipole_only_disagrees_in_the_cancelled_reactance():
     )
 
 
+@pytest.mark.integration
 def test_the_split_dipoles_low_z_ports_agree_tightly():
     """Justifies the 15 % widening: only the near-open port is loose.
 
@@ -731,6 +735,7 @@ def test_gd_moves_no_number_on_either_engine(name, base, pair):
         assert mine.currents == reference.currents, f"{name}: GD moved a current"
 
 
+@pytest.mark.integration
 def test_a_deck_prints_the_network_sections_exactly_when_it_has_networks():
     """The two network sections belong to the CARDS, both ways round.
 
@@ -753,6 +758,7 @@ def test_a_deck_prints_the_network_sections_exactly_when_it_has_networks():
             assert (banner in text) == bool(cards), f"{name}: {banner}"
 
 
+@pytest.mark.integration
 def test_the_network_blocks_agree_with_the_oracle_row_for_row():
     """The excitation block's own numbers, against nec2c's.
 
@@ -988,6 +994,7 @@ def test_pattern_polarisation_split_sums_to_the_total(name, pair):
             )
 
 
+@pytest.mark.integration
 def test_the_sense_column_is_what_makes_a_row_twelve_tokens():
     """The unknown-list item, resolved against both pattern fixtures.
 

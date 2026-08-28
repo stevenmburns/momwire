@@ -154,6 +154,7 @@ def load_tags(name: str) -> list[int]:
     ]
 
 
+@pytest.mark.integration
 def test_the_fixture_set_is_the_one_this_module_measures():
     """Every ``LD``-carrying deck in the fixture directory is measured here.
 
@@ -172,6 +173,7 @@ def test_the_fixture_set_is_the_one_this_module_measures():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_k9ay_declares_the_cell_nec2c_prints():
     """The corpus deck's own reflection: two wires, 13 segments, reflected in
     X=0 into 26 — and nec2c prints SEGMENTS IN A SYMMETRIC CELL: 13."""
@@ -190,6 +192,7 @@ def test_k9ay_lands_its_cell_load_on_the_image_too():
     assert load_tags("k9ay_orig_naive") == [2]
 
 
+@pytest.mark.integration
 def test_k9ay_as_written_equals_its_all_copies_loaded_expansion():
     """#415's transferable property, at the answer rather than at the model:
     the ``GX`` deck and the four-``GW`` deck that loads every copy are the
@@ -197,6 +200,7 @@ def test_k9ay_as_written_equals_its_all_copies_loaded_expansion():
     assert driving_point(body("k9ay_orig")) == driving_point(body("k9ay_orig_expanded"))
 
 
+@pytest.mark.integration
 def test_the_k9ay_naive_expansion_is_short_by_exactly_the_load():
     """The other half of the gate, and the reason the rule is worth the code:
     reading ``LD`` as if the structure were ordinary leaves the 470 ohms off
@@ -208,6 +212,7 @@ def test_the_k9ay_naive_expansion_is_short_by_exactly_the_load():
     assert written.imag == pytest.approx(naive.imag, abs=1e-9)
 
 
+@pytest.mark.integration
 def test_without_the_load_every_k9ay_form_agrees():
     """Delete the ``LD`` and the three decks are one deck, which is what
     isolates the whole effect to loading.  nec2c: 0.10161 + j514.86 for all
@@ -219,6 +224,7 @@ def test_without_the_load_every_k9ay_form_agrees():
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("name", "oracle"),
     [
@@ -238,6 +244,7 @@ def test_k9ay_agrees_with_the_oracle(name, oracle):
     assert abs(ours - oracle) / abs(oracle) <= 0.05, f"{ours} against {oracle}"
 
 
+@pytest.mark.integration
 def test_the_tower_declares_a_quarter_of_itself_as_the_cell():
     """``GR 3 4`` fires with 25 wires and 42 segments built, so the cell is
     that prefix and the three copies follow it contiguously."""
@@ -255,6 +262,7 @@ def test_the_towers_cell_load_lands_on_every_leg():
     assert load_tags("1MHz_tower_expanded") == [3, 6, 9, 12]
 
 
+@pytest.mark.integration
 def test_the_tower_as_written_equals_its_all_copies_loaded_expansion():
     """#415's property again, on the rotation rather than the reflection.
 
@@ -270,6 +278,7 @@ def test_the_tower_as_written_equals_its_all_copies_loaded_expansion():
     )
 
 
+@pytest.mark.integration
 def test_the_towers_own_ld_set_now_answers_the_cell_forms_number():
     """``1MHz_tower_dropped`` is the corpus deck verbatim: four ``LD`` cards,
     three of them addressing copies.
@@ -293,6 +302,7 @@ def test_the_towers_own_ld_set_now_answers_the_cell_forms_number():
     )
 
 
+@pytest.mark.integration
 def test_a_copy_card_that_disagrees_with_the_cell_still_refuses():
     """The half of momwire#471 that is still a refusal, and the reason the
     widening checks equality instead of assuming it.
@@ -311,6 +321,7 @@ def test_a_copy_card_that_disagrees_with_the_cell_still_refuses():
     assert "outside the GX/GR symmetric cell" in str(exc.value)
 
 
+@pytest.mark.integration
 def test_a_copy_card_before_its_cell_card_still_refuses():
     """The documented ORDER limit of momwire#471, pinned so it stays a
     decision rather than becoming a surprise.

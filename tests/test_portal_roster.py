@@ -161,6 +161,7 @@ _SHARED_BAND = (30.0, 150.0, -150.0, 50.0)
 _BANDS = {"pulse": (60.0, 100.0, 20.0, 100.0)}
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", sorted(BASES))
 def test_every_rostered_basis_answers_a_deck_end_to_end(basis, scoped_engine):
     """The gate: each name in `deck.BASES`, driven through `main` as SimNEC
@@ -202,6 +203,7 @@ def test_every_rostered_basis_answers_a_deck_end_to_end(basis, scoped_engine):
     assert 1.5 < gains[0] < 2.6, f"{basis}: broadside gain = {gains[0]} dBi"
 
 
+@pytest.mark.integration
 def test_the_pulse_entry_is_off_the_shared_band_by_convergence_not_by_plumbing(
     scoped_engine,
 ):

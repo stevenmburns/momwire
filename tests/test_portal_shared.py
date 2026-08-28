@@ -227,6 +227,7 @@ def same_printout(left: str, right: str) -> bool:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_the_client_imports_neither_momwire_nor_numpy():
     """The saving IS this import not happening.
 
@@ -286,6 +287,7 @@ def test_the_version_probe_is_the_stock_engines_answer():
     assert client.probe_version(legacy=True) == nec_portal.LEGACY_PROBE_VERSION
 
 
+@pytest.mark.integration
 def test_the_version_probe_answers_without_a_server(runtime):
     """SimNEC probes at configure time and at every engine start. A probe that
     spawned a server would put the cold start back in the one place a user
@@ -301,6 +303,7 @@ def test_the_version_probe_answers_without_a_server(runtime):
     assert sockets(runtime) == []
 
 
+@pytest.mark.integration
 def test_a_platform_without_af_unix_refuses_on_one_line(monkeypatch, capsys):
     """POSIX only, said out loud. Windows CPython gained ``AF_UNIX`` in 3.12
     and none of the spawn/lock discipline here has ever run there, so the
@@ -319,6 +322,7 @@ def test_a_platform_without_af_unix_refuses_on_one_line(monkeypatch, capsys):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", ALL_NAMES)
 def test_every_fixture_deck_answers_exactly_what_the_stock_engine_answers(
     runtime, name
@@ -348,6 +352,7 @@ def test_every_fixture_deck_answers_exactly_what_the_stock_engine_answers(
         assert NX_ECHO.search(served.stdout), "no sentinel — SimNEC blocks forever"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "name",
     (
@@ -414,6 +419,7 @@ def _near_field_rows(text: str) -> list[list[str]]:
     return rows
 
 
+@pytest.mark.integration
 def test_ne_dust_prints_as_exact_zero():
     """momwire#464's regression gate, sibling to the one above for the
     NEAR ELECTRIC/MAGNETIC FIELDS table: no E/H column may print the angle
@@ -494,6 +500,7 @@ def _excitation_rows(text: str) -> list[list[str]]:
     return rows
 
 
+@pytest.mark.integration
 def test_connection_point_dust_prints_as_exact_zero():
     """momwire#403's dust floor, third print path (the second was #477's
     near-field table): an OPEN network connection point has an analytically
@@ -536,6 +543,7 @@ def test_connection_point_dust_prints_as_exact_zero():
     assert open_rows[0][4:] == ["0.0000E+00"] * 7, open_rows[0]
 
 
+@pytest.mark.integration
 def test_two_decks_down_one_connection_frame_the_way_the_stock_loop_does(runtime):
     """The banner belongs to the CONNECTION here, not to the process — the
     server is already warm when SimNEC's engine starts. One connection must
@@ -549,6 +557,7 @@ def test_two_decks_down_one_connection_frame_the_way_the_stock_loop_does(runtime
     assert served.stdout.count("ANTENNA INPUT PARAMETERS") == 2
 
 
+@pytest.mark.integration
 def test_a_deck_arriving_by_shell_redirect_is_answered(runtime, tmp_path):
     """``momwire-nec2c-shared < dipole.nec`` — the documented command-line use,
     and the one case where stdin is a REGULAR FILE rather than a pipe.
@@ -573,6 +582,7 @@ def test_a_deck_arriving_by_shell_redirect_is_answered(runtime, tmp_path):
     assert same_printout(served.stdout, stock(source.read_text()))
 
 
+@pytest.mark.integration
 def test_en_ends_the_connection_and_the_server_serves_the_next_one(runtime):
     """``EN`` ends a run (#901), which for a shared engine must mean the
     CONNECTION and not the server: a standalone ``.nec`` file redirected in
@@ -588,6 +598,7 @@ def test_en_ends_the_connection_and_the_server_serves_the_next_one(runtime):
     assert len(server_pids(runtime)) == 1, "EN restarted the server"
 
 
+@pytest.mark.integration
 def test_a_bad_deck_costs_its_own_connection_nothing_and_the_server_nothing(runtime):
     """Residency, one level up. A deck that raises is reported and stepped
     over inside the connection, and the next connection is served by the same
@@ -602,6 +613,7 @@ def test_a_bad_deck_costs_its_own_connection_nothing_and_the_server_nothing(runt
     assert len(server_pids(runtime)) == 1
 
 
+@pytest.mark.integration
 def test_deck_warnings_go_to_the_server_log_not_back_down_the_socket(runtime):
     """Per-connection stderr is the server's, and there is nowhere honest to
     send it: ``NEC2Daemon`` never drains stderr (a full pipe buffer deadlocks
@@ -614,6 +626,7 @@ def test_deck_warnings_go_to_the_server_log_not_back_down_the_socket(runtime):
     assert "reducedField:2" in logs(runtime)
 
 
+@pytest.mark.integration
 def test_a_body_unterminated_at_eof_is_served_over_the_socket(runtime):
     """#458: the connection's end of input terminates the deck the way NEC's
     own reader does. Through the shared server the stream ends when the client
@@ -626,6 +639,7 @@ def test_a_body_unterminated_at_eof_is_served_over_the_socket(runtime):
     assert same_printout(served.stdout, stock(deck_ending_in_en("dipole_free_space")))
 
 
+@pytest.mark.integration
 def test_the_basis_flag_reaches_the_server_and_stamps_the_banner(runtime):
     """``--basis`` rides the portal-dialog command line, and the client keys
     the socket on it — so it must reach the server it names, and two entries
@@ -766,6 +780,7 @@ def test_the_three_sources_keep_the_engines_own_precedence(monkeypatch):
     assert error is None and none == []
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "engine,prog,env,source",
     [
@@ -792,6 +807,7 @@ def test_an_unknown_basis_from_any_source_is_refused_naming_it(
     assert "razor" in error, "the refusal has to say what the choices are"
 
 
+@pytest.mark.integration
 def test_a_basis_chosen_by_environment_or_name_is_a_different_server(monkeypatch):
     """The identity gap itself, at the hash. Both routes had produced the SAME
     digest as no selection at all, which is what put two engines on one
@@ -814,6 +830,7 @@ def test_a_basis_chosen_by_environment_or_name_is_a_different_server(monkeypatch
     assert client.config_key(flagged, 900.0) == client.config_key(named, 900.0)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("first,second", [("razor", None), (None, "razor")])
 def test_two_clients_choosing_by_environment_do_not_share_one_server(
     runtime, first, second
@@ -835,6 +852,7 @@ def test_two_clients_choosing_by_environment_do_not_share_one_server(
     assert len(sockets(runtime)) == 2, "two engines shared one server"
 
 
+@pytest.mark.integration
 def test_a_basis_chosen_by_the_executable_name_reaches_the_server(runtime, tmp_path):
     """The #528 idiom on this sibling. It used to select NOTHING — the client
     never read `argv[0]`, and the server's own is `python -m momwire.portal`,
@@ -854,6 +872,7 @@ def test_a_basis_chosen_by_the_executable_name_reaches_the_server(runtime, tmp_p
     assert len(sockets(runtime)) == 2
 
 
+@pytest.mark.integration
 def test_the_server_is_told_its_basis_rather_than_inheriting_it(monkeypatch):
     """The point of resolving in the CLIENT rather than widening the hash.
 
@@ -881,6 +900,7 @@ def test_the_server_is_told_its_basis_rather_than_inheriting_it(monkeypatch):
         assert nec_portal._active_basis_name == "razor"
 
 
+@pytest.mark.integration
 def test_a_runtime_directory_owned_by_somebody_else_is_refused(monkeypatch, tmp_path):
     """A socket in a directory this user does not own is a socket somebody
     else can pre-empt. The ``/tmp`` fallback is the exposed case (``$XDG_RUNTIME_DIR``
@@ -891,6 +911,7 @@ def test_a_runtime_directory_owned_by_somebody_else_is_refused(monkeypatch, tmp_
         client.runtime_dir()
 
 
+@pytest.mark.integration
 def test_an_over_long_socket_path_is_refused_by_the_client(monkeypatch, tmp_path):
     """``sun_path`` is 108 bytes, and a name that overruns it fails at
     ``bind()`` inside a DETACHED server — where the only symptom is a client
@@ -908,6 +929,7 @@ def test_an_over_long_socket_path_is_refused_by_the_client(monkeypatch, tmp_path
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_a_deck_solved_by_one_invocation_is_served_to_the_next(runtime, tmp_path):
     """**The issue.** ``--cache``'s main case is a value retyped minutes later,
     and a process that lives ~1 s can never see it: by the time the user
@@ -934,6 +956,7 @@ def test_a_deck_solved_by_one_invocation_is_served_to_the_next(runtime, tmp_path
     assert same_printout(second.stdout, stock(deck)), "a hit must answer fresh bytes"
 
 
+@pytest.mark.integration
 def test_the_control_a_fresh_server_has_nothing_to_serve(runtime, tmp_path):
     """The control the claim above needs: the hit came from the SERVER
     surviving, not from anything the client did. Same deck, same flags, a
@@ -976,6 +999,7 @@ def _warm_order() -> list[str]:
     return order
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("cache", (False, True), ids=("nocache", "cache"))
 def test_a_warm_server_answers_every_deck_exactly_as_a_cold_one(
     runtime, tmp_path, cache
@@ -1052,6 +1076,7 @@ def test_a_warm_server_answers_every_deck_exactly_as_a_cold_one(
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_sixteen_clients_at_once_start_exactly_one_server(runtime):
     """The spawn race, at crew width. SimNEC fires a whole crew at the same
     instant, into a directory with no server in it — every one of them fails
@@ -1087,6 +1112,7 @@ def test_sixteen_clients_at_once_start_exactly_one_server(runtime):
     assert "another server already owns" not in logs(runtime)
 
 
+@pytest.mark.integration
 def test_a_client_killed_mid_solve_costs_its_own_answer_and_nothing_else(runtime):
     """SimNEC ends a session with ``Process.destroy()`` — a kill, not an EOF —
     and with one engine behind a crew that kill must not be reachable from
@@ -1121,6 +1147,7 @@ def test_a_client_killed_mid_solve_costs_its_own_answer_and_nothing_else(runtime
     assert _alive(pid_before[0])
 
 
+@pytest.mark.integration
 def test_the_server_exits_after_its_idle_timeout_and_removes_its_socket(runtime):
     """Nobody comes back. A server that outlived every session would leave a
     90 MB process per engine configuration on a box whose owner never asked
@@ -1143,6 +1170,7 @@ def test_the_server_exits_after_its_idle_timeout_and_removes_its_socket(runtime)
     assert "idle 2s; exiting" in logs(runtime)
 
 
+@pytest.mark.integration
 def test_a_stale_socket_file_is_replaced_rather_than_waited_on(runtime):
     """A server killed with ``SIGKILL`` cannot unlink its own socket, so the
     next client meets a path that exists and answers nothing. Removing it is

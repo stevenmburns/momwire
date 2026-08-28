@@ -117,6 +117,12 @@ Issues = "https://github.com/stevenmburns/momwire/issues"
 testpaths = ["tests"]
 markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
+    # Crosses a process, a socket, a CLI, or the deck->printout seam
+    # (momwire#692). NATURE, not duration: a socket test that runs in 0.2 s
+    # is still an integration test and still belongs off the edit loop —
+    # 306 of the 335 marked run under 3 s and together cost only 80 s. The
+    # PR lane is edit-loop guards; this lane runs once on push to main.
+    "integration: crosses a process/socket/CLI/printout seam (push-to-main lane)",
     # Crossing-serve certification solves (momwire#524): the eps1-collapse
     # adjudicator gates, each a multi-minute designed-evaluator solve. Like
     # memgate they earn their keep on merge to main, not per PR iteration —
@@ -164,7 +170,8 @@ markers = [
 # so CI's test/test-slow lanes inherit the parallelism; the memgate lane
 # opts out with an explicit `-n0` (memory certification cannot share a
 # box), and the wheel-smoke jobs install pytest-xdist so the addopts parse.
-addopts = ["-m", "not slow and not memgate", "-n", "auto", "--dist", "loadgroup"]
+addopts = ["-m", "not slow and not memgate and not integration",
+           "-n", "auto", "--dist", "loadgroup"]
 # Put the project root on sys.path so the `validation` harness package (which
 # lives next to `tests/`, not under src/) is importable from the backend tests.
 pythonpath = ["."]

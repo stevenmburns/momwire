@@ -252,6 +252,7 @@ VERSION_NECD = re.compile(r"(NEC\d+\D.*)")
 OPTIONS_ENGINE_PIECE = re.compile(r"[a-zA-Z]*([0-9])+?(.*)")
 
 
+@pytest.mark.integration
 def test_version_probe_matches_executes_versionNECd_regex():
     """The honest identity (issue #828, Ward-sanctioned): the probe answers
     the versionNECd path, whose match sets no engine state — the engine enum,
@@ -278,6 +279,7 @@ def test_version_probe_matches_executes_versionNECd_regex():
     assert probe.startswith("NEC2momwire.")
 
 
+@pytest.mark.integration
 def test_legacy_probe_flag_answers_the_versionA_masquerade():
     """``--legacy-probe`` keeps the pre-#828 identity available for a SimNEC
     build that might predate versionNECd. That path Double-parses the tail
@@ -291,6 +293,7 @@ def test_legacy_probe_flag_answers_the_versionA_masquerade():
     assert tail.count(".") == 1 and float(tail) >= 1.23, tail
 
 
+@pytest.mark.integration
 def test_printout_banner_carries_the_momwire_identity():
     """The banner is not version-checked (the regexes are anchored and it is
     prefixed ``VERSION:``), so it stays fixture-pinned while the PROBE now
@@ -308,12 +311,14 @@ def test_printout_banner_carries_the_momwire_identity():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", REPRESENTATIVE)
 def test_section_walk_matches_the_oracle(name):
     ours, _err = run_deck(fixture_deck(name))
     assert section_walk(ours) == section_walk(fixture_out(name))
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", REPRESENTATIVE)
 def test_column_layout_matches_the_oracle(name):
     """Same lines, same columns — only the values inside them differ."""
@@ -330,6 +335,7 @@ def test_column_layout_matches_the_oracle(name):
         )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", REPRESENTATIVE)
 def test_nx_sentinel_is_byte_identical_modulo_the_card_ordinal(name):
     """The one line the Java side blocks on. Everything but the ordinal must
@@ -342,6 +348,7 @@ def test_nx_sentinel_is_byte_identical_modulo_the_card_ordinal(name):
     assert blank.sub("No: NX", ours.group(0)) == blank.sub("No: NX", theirs.group(0))
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", REPRESENTATIVE)
 def test_antenna_input_rows_are_eleven_tokens_with_the_current_at_4_and_5(name):
     ours = aip_tables(run_deck(fixture_deck(name))[0])
@@ -355,6 +362,7 @@ def test_antenna_input_rows_are_eleven_tokens_with_the_current_at_4_and_5(name):
             float(row[5])
 
 
+@pytest.mark.integration
 def test_quiet_mode_suppresses_the_segmentation_block():
     """`CE QQ 1` is ae6ty's quiet directive; the jar's own test deck used
     it (the fixture is its YY-free successor, #839)."""
@@ -365,6 +373,7 @@ def test_quiet_mode_suppresses_the_segmentation_block():
     assert "STRUCTURE SPECIFICATION" in quiet
 
 
+@pytest.mark.integration
 def test_reduced_field_is_the_only_thing_written_to_stderr():
     """NEC2Daemon never drains the child's stderr, so anything beyond the
     `CM FF` line risks filling the pipe buffer and deadlocking the UI."""
@@ -379,6 +388,7 @@ def test_reduced_field_is_the_only_thing_written_to_stderr():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_yy_card_is_no_longer_a_known_card():
     """Ward's YY directive is retired (#839: abandoned upstream, its only
     sender a dev benchmark). A deck carrying one now takes the same
@@ -390,6 +400,7 @@ def test_yy_card_is_no_longer_a_known_card():
     assert "    -YY" not in out
 
 
+@pytest.mark.integration
 def test_two_source_y_matrix_is_reciprocal():
     """Y12 == Y21 out of the multi-EX probe SimNEC actually writes. momwire's
     Galerkin operator is symmetric, so this is a self-consistency pin on the
@@ -406,6 +417,7 @@ def test_two_source_y_matrix_is_reciprocal():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_two_decks_through_one_loop_produce_two_frames():
     """NEC2Daemon.submit frames decks on stdin with NX and never restarts the
     process; the engine reprints its banner after each NX for the deck it
@@ -442,6 +454,7 @@ _EN_DIPOLE = (
 )
 
 
+@pytest.mark.integration
 def test_en_terminates_a_frame_and_ends_the_run():
     """#901: an unmodified .nec file — XQ then EN, no NX — redirected into the
     daemon must solve, echo EN as its own final data card the way genuine
@@ -462,6 +475,7 @@ def test_en_terminates_a_frame_and_ends_the_run():
     assert " EN " in last
 
 
+@pytest.mark.integration
 def test_en_after_an_nx_frame_echoes_and_exits_without_running():
     """EN arriving with an empty body (right after an NX frame) is echoed as
     card 1 of an empty deck and ends the run — nothing solves twice. Blank
@@ -491,6 +505,7 @@ def _canonical_printout(text: str) -> str:
     return module.canonicalize_timings(text)
 
 
+@pytest.mark.integration
 def test_unterminated_body_at_eof_solves_as_if_it_ended_with_en():
     """#458: end of input is a terminator. NEC's own card reader synthesizes
     an EN when stdin runs out mid-deck and runs what it has (seen live in the
@@ -512,6 +527,7 @@ def test_unterminated_body_at_eof_solves_as_if_it_ended_with_en():
     assert re.findall(r"DATA CARD No:\s+(\d+) (\w\w)", out)[-1] == ("4", "EN")
 
 
+@pytest.mark.integration
 def test_whitespace_only_residual_at_eof_runs_nothing():
     """The EOF terminator is for a deck, not for the blank lines a caller
     leaves behind after its last NX: a residual body with nothing in it must
@@ -671,6 +687,7 @@ def _first_tokens(text: str) -> list[str]:
     return [line.split()[0] for line in text.splitlines() if line.split()]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", ALL_NAMES)
 def test_no_clean_fixture_carries_a_token_0_error_line(name):
     """The corpus-wide half of the token-0 pin: a healthy deck must never
@@ -690,6 +707,7 @@ def test_no_clean_fixture_carries_a_token_0_error_line(name):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", REPRESENTATIVE)
 def test_no_clean_regenerated_printout_carries_a_token_0_error_line(name):
     """Same pin, our side: a handful of clean decks run back through this
@@ -699,6 +717,7 @@ def test_no_clean_regenerated_printout_carries_a_token_0_error_line(name):
     )
 
 
+@pytest.mark.integration
 def test_patch_antenna_refusal_shows_why_nothing_loaded():
     """Stand-in for the issue's live-session gate (no SimNEC on this box).
 
@@ -740,6 +759,7 @@ def test_patch_antenna_refusal_shows_why_nothing_loaded():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_antenna_input_row_is_internally_consistent():
     """V = I·Z and Y = I/V and P = ½·Re(V·I*), read off the row's own columns.
 
@@ -758,6 +778,7 @@ def test_antenna_input_row_is_internally_consistent():
             assert p == pytest.approx(0.5 * (v * i.conjugate()).real, rel=1e-3)
 
 
+@pytest.mark.integration
 def test_swapping_the_current_columns_is_caught():
     """A mutation reviewers will try. Transposing fields 4 and 5 keeps the row
     shape and keeps every token parseable — only the identities above notice.
@@ -788,6 +809,7 @@ def test_swapping_the_current_columns_is_caught():
     assert abs(i * z - v) > 1e-3 * abs(v)  # ...and still wrong
 
 
+@pytest.mark.integration
 def test_changing_a_section_header_is_caught():
     """The banner strings are what Execute's state machine arms on, so they
     are contract, not decoration."""
@@ -800,6 +822,7 @@ def test_changing_a_section_header_is_caught():
     assert section_walk(ours) != section_walk(fixture_out("dipole_free_space"))
 
 
+@pytest.mark.integration
 def test_free_space_dipole_impedance_is_in_the_oracles_neighbourhood():
     """A smoke bound, not the differential harness: momwire's B-spline basis
     and nec2c's pulse basis disagree by a few percent on a 9-segment dipole
@@ -814,6 +837,7 @@ def test_free_space_dipole_impedance_is_in_the_oracles_neighbourhood():
     )
 
 
+@pytest.mark.integration
 def test_loaded_deck_spends_power_in_the_load():
     """LD 0 is a series R+L in the segment's current path, so the budget must
     show a structure loss and an efficiency below 100%."""
@@ -839,6 +863,7 @@ def test_loaded_deck_spends_power_in_the_load():
 LAYOUT_NAMES = ANTENNA_NAMES
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", LAYOUT_NAMES)
 def test_every_fixture_matches_the_oracle_column_layout(name):
     """The score the unit reports: every committed oracle printout, line for
@@ -867,6 +892,7 @@ def test_every_fixture_matches_the_oracle_column_layout(name):
         )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", ANTENNA_NAMES)
 def test_every_fixture_walks_the_oracle_section_order(name):
     assert section_walk(printout(name)) == section_walk(fixture_out(name))
@@ -883,6 +909,7 @@ def _first_segment_row(text: str) -> list[str]:
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", GROUND_CONTACT_NAMES)
 def test_the_ground_contact_printout_says_the_ends_are_connected(name):
     """A wire END standing on the plane under a ``GE 1``, in both places the
@@ -914,6 +941,7 @@ def test_the_ground_contact_printout_says_the_ends_are_connected(name):
     )
 
 
+@pytest.mark.integration
 def test_the_interpolation_banner_is_the_positive_ge_flags_alone():
     """The other side of the same claim, over the whole corpus: the banner
     follows ``GE``'s SIGN and nothing else.
@@ -956,6 +984,7 @@ def structure_specification(text: str) -> list[str]:
     return out
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", REPLICATED_SPEC_NAMES)
 def test_gx_and_gr_never_echo_as_data_card_lines(name):
     """The half of the echo units 1-2 got right, on both engines.
@@ -979,6 +1008,7 @@ def test_gx_and_gr_never_echo_as_data_card_lines(name):
     assert total.search(printout(name)).group(1) == expected
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", REPLICATED_SPEC_NAMES)
 def test_the_gx_gr_structure_specification_reproduces_the_oracle(name):
     """``_structure_rows`` reproduces the oracle's replicated sections to the
@@ -994,6 +1024,7 @@ def test_the_gx_gr_structure_specification_reproduces_the_oracle(name):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 def test_rp_runs_the_group_and_the_trailing_xq_runs_nothing():
     """nec2c executes on reading RP, so the deck's own ``XQ`` is a bare echo.
 
@@ -1016,6 +1047,7 @@ def test_rp_runs_the_group_and_the_trailing_xq_runs_nothing():
     assert body[xq + 1] == lines[-1]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("name", "cards"),
     [
@@ -1029,6 +1061,7 @@ def test_near_field_cards_execute_too(name, cards):
     assert text.count("ANTENNA INPUT PARAMETERS") == 1
 
 
+@pytest.mark.integration
 def test_a_second_xq_after_a_fresh_ex_still_runs():
     """The no-op rule must not swallow a legitimate second group."""
     text = run_deck(fixture_deck("two_source_sensor_lines"))[0]
@@ -1056,6 +1089,7 @@ def pattern_rows(text: str) -> list[list[str]]:
     return rows
 
 
+@pytest.mark.integration
 def test_pattern_grid_follows_the_rp_card():
     """``RP 0 7 13 1001 0 0 30 30 1000``: 7 thetas x 13 phis, theta fastest."""
     rows = pattern_rows(run_deck(fixture_deck("dipole_rp_pattern"))[0])
@@ -1065,6 +1099,7 @@ def test_pattern_grid_follows_the_rp_card():
     assert float(rows[7][1]) == 30.0 and float(rows[7][0]) == 0.0
 
 
+@pytest.mark.integration
 def test_pattern_peak_gain_matches_the_engines_far_field():
     """The printout's gain is the workbench's gain.
 
@@ -1080,6 +1115,7 @@ def test_pattern_peak_gain_matches_the_engines_far_field():
     assert 1.9 <= peak <= 2.3, peak
 
 
+@pytest.mark.integration
 def test_a_pattern_null_prints_the_floor_and_blanks_the_sense_column():
     """Both come from nec2c's |E|^2 <= 1e-20 test, and both must agree.
 
@@ -1094,6 +1130,7 @@ def test_a_pattern_null_prints_the_floor_and_blanks_the_sense_column():
             assert floored == (len(row) == 11), f"{name}: {row}"
 
 
+@pytest.mark.integration
 def test_average_power_gain_is_about_unity_for_a_lossless_antenna():
     """A free-space dipole radiates everything it is fed, so the pattern
     averaged over 4*pi steradians has to come out near 1 — which is only true
@@ -1113,6 +1150,7 @@ def test_average_power_gain_is_about_unity_for_a_lossless_antenna():
         assert solid == (4.0 if name == "dipole_rp_pattern" else 2.0)
 
 
+@pytest.mark.integration
 def test_pattern_e_field_scales_with_the_requested_range():
     """RFLD is a real range, not decoration: doubling it halves every E field
     and moves the EXP(-JKR)/R line with it."""
@@ -1148,12 +1186,14 @@ def near_field_rows(text: str) -> list[list[str]]:
     return rows
 
 
+@pytest.mark.integration
 def test_near_field_grid_varies_x_fastest_then_y_then_z():
     rows = near_field_rows(run_deck(fixture_deck("dipole_ne_nearfield"))[0])
     points = [(float(r[0]), float(r[1]), float(r[2])) for r in rows]
     assert points == [(x, 0.0, z) for z in (-1.0, 0.0, 1.0) for x in (-1.0, 0.0, 1.0)]
 
 
+@pytest.mark.integration
 def test_near_field_off_the_conductor_tracks_the_oracle():
     """The claim the mixed-potential form is here to support.
 
@@ -1190,6 +1230,7 @@ def test_near_field_off_the_conductor_tracks_the_oracle():
         assert checked >= 6, f"{name}: only {checked} components compared"
 
 
+@pytest.mark.integration
 def test_near_field_on_the_conductor_is_documented_not_trusted():
     """The one place the near field does NOT track the oracle.
 
@@ -1209,6 +1250,7 @@ def test_near_field_on_the_conductor_is_documented_not_trusted():
     assert abs(float(row[8])) > 150.0  # ...at -180 degrees
 
 
+@pytest.mark.integration
 def test_a_pec_ground_doubles_the_near_field_sources():
     """A near-field grid over PEC ground must see the image, and it can only
     do that if the image's CHARGE is negated along with its current."""
@@ -1252,6 +1294,7 @@ NETWORK_FIXTURES = (
 )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NETWORK_FIXTURES)
 def test_every_network_fixture_answers(name):
     """No network deck may quietly fall back to the error path.
@@ -1267,6 +1310,7 @@ def test_every_network_fixture_answers(name):
     assert NX_ECHO.search(text), "no sentinel — SimNEC blocks forever"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", NETWORK_FIXTURES)
 def test_a_network_deck_prints_both_blocks_in_the_oracle_order(name):
     """`NETWORK DATA`, then the excitation block, then the antenna's own.
@@ -1289,6 +1333,7 @@ def test_a_network_deck_prints_both_blocks_in_the_oracle_order(name):
     assert at == sorted(at), f"{name}: blocks out of order"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     ("name", "kinds"),
     (
@@ -1319,6 +1364,7 @@ def test_the_network_table_header_re_emits_once_per_row_kind(name, kinds):
     assert block.count("ADMITTANCE MATRIX ELEMENTS") == kinds.count("NT")
 
 
+@pytest.mark.integration
 def test_the_network_table_addresses_global_segment_numbers():
     """`TL 1 5 2 5` prints as `1 5 2 14`.
 
@@ -1334,6 +1380,7 @@ def test_the_network_table_addresses_global_segment_numbers():
     assert row.split()[:4] == ["1", "5", "2", "14"]
 
 
+@pytest.mark.integration
 def test_the_crossed_line_prints_its_impedance_positive_and_says_so():
     """NEC spells a crossed line as a NEGATIVE z0 and echoes |z0| with the
     word `CROSSED` in the type column. The sign is a polarity, not an
@@ -1344,6 +1391,7 @@ def test_the_crossed_line_prints_its_impedance_positive_and_says_so():
     assert "4.5000E+02" in row and "-4.5000E+02" not in row
 
 
+@pytest.mark.integration
 def test_a_zero_length_line_prints_the_distance_it_resolved_to():
     """`TL 1 5 2 5 450. 0.` — F2 = 0 means "measure it", and the LENGTH column
     shows what was measured. The two connection segments' centres are the
@@ -1356,6 +1404,7 @@ def test_a_zero_length_line_prints_the_distance_it_resolved_to():
     assert "1.0000E+00" in row
 
 
+@pytest.mark.integration
 def test_the_excitation_block_reads_the_segment_current_not_the_sources():
     """At a driven connection point the two tables print the SAME segment and
     DIFFERENT currents, and the difference is what the network carried.
@@ -1376,6 +1425,7 @@ def test_the_excitation_block_reads_the_segment_current_not_the_sources():
     assert at_gap.split()[4:6] != at_source.split()[4:6], "the network carried nothing"
 
 
+@pytest.mark.integration
 def test_the_gyrator_idiom_delivers_one_amp():
     """The manufactured `EX 6`: 52 of the 457 models bundled with 4nec2 build
     an ideal current source out of a phantom wire, an ordinary `EX 0` volt on
@@ -1392,6 +1442,7 @@ def test_the_gyrator_idiom_delivers_one_amp():
     assert float(row.split()[5]) == pytest.approx(0.0, abs=1e-6)
 
 
+@pytest.mark.integration
 def test_an_antenna_only_deck_prints_neither_block():
     """The blocks are the network's, not the printout's furniture."""
     text = run_deck(fixture_deck("dipole_free_space"))[0]
@@ -1427,6 +1478,7 @@ def _aip_row_lines(text: str) -> list[str]:
     return rows
 
 
+@pytest.mark.integration
 def test_a_network_read_after_an_execute_card_is_scoped_to_the_groups_after_it():
     """Retention runs FORWARD from the card and not backward.
 
@@ -1451,6 +1503,7 @@ def test_a_network_read_after_an_execute_card_is_scoped_to_the_groups_after_it()
     )
 
 
+@pytest.mark.integration
 def test_the_group_before_the_network_card_reproduces_the_control_exactly():
     """And it reproduces it to the BYTE, which is the stronger claim.
 
@@ -1471,6 +1524,7 @@ def test_the_group_before_the_network_card_reproduces_the_control_exactly():
     assert ours == control
 
 
+@pytest.mark.integration
 def test_the_network_card_arms_the_next_execute_card_without_refilling():
     """An ``NT`` between two execute cards re-arms execution but rebuilds
     nothing: the oracle prints no FREQUENCY / LOADING / ENVIRONMENT / MATRIX
@@ -1484,6 +1538,7 @@ def test_the_network_card_arms_the_next_execute_card_without_refilling():
         assert banner not in after, f"the NT group refilled: {banner}"
 
 
+@pytest.mark.integration
 def test_a_network_card_after_the_execute_card_answers_without_it():
     """A card is retained from where it is READ, so a group that already ran
     is answered as though it were not there.
@@ -1514,6 +1569,7 @@ def test_a_network_card_after_the_execute_card_answers_without_it():
 MP_ADVISORY = "MP: multiProcessor 16 32"
 
 
+@pytest.mark.integration
 def test_mp_deck_runs_instead_of_being_refused():
     """The reason the card had to land: SimNEC appends MP on structure SIZE
     alone (``NECSource.constructNECFile``, once ``sum(Wire.numSegments)``
@@ -1524,6 +1580,7 @@ def test_mp_deck_runs_instead_of_being_refused():
     assert "ANTENNA INPUT PARAMETERS" in text
 
 
+@pytest.mark.integration
 def test_mp_echo_and_advisory_are_the_oracles_bytes():
     """Both lines the card produces, against the committed oracle printout.
 
@@ -1542,6 +1599,7 @@ def test_mp_echo_and_advisory_are_the_oracles_bytes():
     assert MP_ADVISORY in ours.splitlines()
 
 
+@pytest.mark.integration
 def test_mp_advisory_sits_between_the_environment_and_matrix_timing():
     """Its position — and the extra blank it carries — are the contract.
 
@@ -1560,6 +1618,7 @@ def test_mp_advisory_sits_between_the_environment_and_matrix_timing():
         assert "MATRIX TIMING" in lines[index + 4]
 
 
+@pytest.mark.integration
 def test_a_single_processor_mp_echoes_but_says_nothing():
     """``MP 1 32`` is still a card: it echoes, and prints no advisory. That
     threshold is why the corpus carries both forms."""
@@ -1570,6 +1629,7 @@ def test_a_single_processor_mp_echoes_but_says_nothing():
     assert any(" MP" in ln and "DATA CARD No:" in ln for ln in ours.splitlines())
 
 
+@pytest.mark.integration
 def test_mp_changes_nothing_but_the_card_lines():
     """The whole point of treating it as advisory, asserted rather than
     assumed: ``dipole_mp_multiprocessor`` IS ``dipole_free_space`` plus one
@@ -1601,6 +1661,7 @@ def test_mp_changes_nothing_but_the_card_lines():
         assert stripped(with_mp) == stripped(plain)
 
 
+@pytest.mark.integration
 def test_mp_reprints_once_per_matrix_rebuild():
     """An FR sweep rebuilds per frequency, and the advisory goes with it."""
     deck = fixture_deck("dipole_fr_sweep").replace(
@@ -1611,6 +1672,7 @@ def test_mp_reprints_once_per_matrix_rebuild():
     assert text.count(MP_ADVISORY) == 3
 
 
+@pytest.mark.integration
 def test_mp_is_not_an_arming_card():
     """Measured on the oracle: ``... XQ / MP 4 8 / XQ`` prints one block, not
     two. An MP alone does not make the next execute card a real run."""
@@ -1727,6 +1789,7 @@ def charge_tables(text: str) -> list[list[list[str]]]:
 # where PT's does something else entirely (momwire#655).
 
 
+@pytest.mark.integration
 def test_pq_absent_means_no_charge_table_at_all():
     """The default is OFF, which is the opposite of the currents table's.
 
@@ -1739,6 +1802,7 @@ def test_pq_absent_means_no_charge_table_at_all():
         assert "CURRENTS AND LOCATION" in text
 
 
+@pytest.mark.integration
 def test_pq_prints_the_charge_table_where_the_oracle_does():
     """Same count, same rows, same segment and tag numbering."""
     ours = charge_tables(printout("dipole_pq_charges"))
@@ -1748,6 +1812,7 @@ def test_pq_prints_the_charge_table_where_the_oracle_does():
     assert len(ours[0]) == 9
 
 
+@pytest.mark.integration
 def test_pq_minus_two_prints_and_minus_one_suppresses():
     """ "Negative suppresses" is the wrong reading, and this is what says so.
 
@@ -1762,6 +1827,7 @@ def test_pq_minus_two_prints_and_minus_one_suppresses():
         assert text.count("ANTENNA INPUT PARAMETERS") == 2
 
 
+@pytest.mark.integration
 def test_pq_restricts_on_a_NONZERO_flag_where_pt_does_not():
     """``PQ 1 2 1 3`` prints tag 2's segments 1-3 — global 10 to 12.
 
@@ -1778,6 +1844,7 @@ def test_pq_restricts_on_a_NONZERO_flag_where_pt_does_not():
         assert [(r[0], r[1]) for r in rows] == [("10", "2"), ("11", "2"), ("12", "2")]
 
 
+@pytest.mark.integration
 def test_pq_a_reversed_deck_negates_the_charge_the_way_the_oracle_does():
     """The walker-reversal case, and what it does and does not claim.
 
@@ -1805,6 +1872,7 @@ def test_pq_a_reversed_deck_negates_the_charge_the_way_the_oracle_does():
     assert float(ours[0][6]) < 0 < float(ours[-1][6])
 
 
+@pytest.mark.integration
 def test_pt_minus_one_removes_the_whole_currents_section():
     """Not just the rows: the banner, the note, the blank and both column
     headers go too — which is why ``dipole_pt_toggle`` has one CURRENTS AND
@@ -1814,6 +1882,7 @@ def test_pt_minus_one_removes_the_whole_currents_section():
         assert text.count("ANTENNA INPUT PARAMETERS") == 2
 
 
+@pytest.mark.integration
 def test_pt_minus_two_restores_the_table():
     """``PT`` is a toggle held across execute cards, not a per-run flag: the
     second run of ``dipole_pt_toggle`` prints the full 18-segment table."""
@@ -1822,6 +1891,7 @@ def test_pt_minus_two_restores_the_table():
     assert [len(t) for t in ours] == [len(t) for t in theirs] == [18]
 
 
+@pytest.mark.integration
 def test_pt_zero_limits_the_table_to_the_named_tags_segments():
     """``PT 0 2 1 3`` prints tag 2's segments 1-3 — global 10 to 12. The
     addressing is EX's, so an absolute reading would print 1-3 instead and
@@ -1833,6 +1903,7 @@ def test_pt_zero_limits_the_table_to_the_named_tags_segments():
         assert [(r[0], r[1]) for r in rows] == [("10", "2"), ("11", "2"), ("12", "2")]
 
 
+@pytest.mark.integration
 def test_an_all_zero_pt_range_prints_everything():
     """Measured on the oracle: ``PT 0 1 0 0`` and ``PT 0 2 0 0`` both print the
     whole table, so an empty range is "no restriction", not "no rows"."""
@@ -1843,6 +1914,7 @@ def test_an_all_zero_pt_range_prints_everything():
         assert len(currents_tables(run_deck(deck)[0])[0]) == 18
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("flag", [-2, 1, 2, 3])
 def test_the_other_pt_flags_print_the_ordinary_table(flag):
     """Stock NEC-2's receiving-pattern and normalised-current formats. This
@@ -1856,6 +1928,7 @@ def test_the_other_pt_flags_print_the_ordinary_table(flag):
     assert ours == plain
 
 
+@pytest.mark.integration
 def test_pt_is_not_an_arming_card():
     """It changes what a run prints, not what a run computes, so it cannot
     make a spent ``XQ`` into a fresh execution."""
@@ -1890,6 +1963,7 @@ GD_PAIRS = (
 )
 
 
+@pytest.mark.integration
 def test_gd_deck_runs_instead_of_being_refused():
     """The reason the card had to land: SimNEC's EZNEC-derived examples
     (``Cardioid (EZNEC).ssn``, ``4-square (EZNEC).ssn``) carry a ``GD`` and
@@ -1946,6 +2020,7 @@ MININEC_NEIGHBOUR_NAMES = (
 )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", MININEC_IDIOM_NAMES)
 def test_the_mininec_ground_fixtures_answer_plain_perfect_ground(name):
     """The flip, at the four forms of the idiom the corpus carries.
@@ -1971,6 +2046,7 @@ def test_the_mininec_ground_fixtures_answer_plain_perfect_ground(name):
     assert NX_ECHO.search(run_deck(fixture_deck(name))[0]), name
 
 
+@pytest.mark.integration
 def test_the_gp80_seam_deck_is_the_request_less_form_4nec2_actually_emits():
     """The artifact, and what the oracle does with it.
 
@@ -2002,6 +2078,7 @@ def test_the_gp80_seam_deck_is_the_request_less_form_4nec2_actually_emits():
     assert [float(v) for v in echo[0].split()[9:11]] == [13.0, 0.005]
 
 
+@pytest.mark.integration
 def test_the_gd_integer_field_does_not_change_the_oracles_answer():
     """``GD 2`` is ``GD 0``, at the bytes.
 
@@ -2021,6 +2098,7 @@ def test_the_gd_integer_field_does_not_change_the_oracles_answer():
     assert differing[0][0].split()[6:] == differing[0][1].split()[6:]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", MININEC_NEIGHBOUR_NAMES)
 def test_the_shapes_next_to_the_idiom_are_answered(name):
     """The idiom's edges, still where they were.
@@ -2042,6 +2120,7 @@ def test_the_shapes_next_to_the_idiom_are_answered(name):
     assert ("CLIFF" in fixture_out(name)) is reads_the_record, name
 
 
+@pytest.mark.integration
 def test_a_gn_card_resets_the_second_medium_a_gd_wrote():
     """The reset, at the answer rather than at the parser.
 
@@ -2072,6 +2151,7 @@ def test_a_gn_card_resets_the_second_medium_a_gd_wrote():
     assert [b.split()[4] for _a, b in differing] == ["GD", "GN"], differing
 
 
+@pytest.mark.integration
 def test_the_cliff_requests_read_the_record_the_rp0_decks_ignore():
     """The measurement the whole idiom turns on, on ONE geometry.
 
@@ -2106,6 +2186,7 @@ def test_the_cliff_requests_read_the_record_the_rp0_decks_ignore():
     assert "CLIFF" not in fixture_out("mininec_vertical_rp0")
 
 
+@pytest.mark.integration
 def test_the_cliff_at_zero_is_the_mininec_far_field_over_the_same_currents():
     """``mininec_vertical_rp3_cliff_at_zero`` — the request 4nec2's manual
     says its ``GN 3`` expands to, on the deck the idiom exists for.
@@ -2162,6 +2243,7 @@ def _pattern_gains(text: str) -> dict[tuple[float, float], float]:
     return gains
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("name", "_base"), GD_PAIRS)
 def test_gd_echo_is_the_oracles_bytes(name, _base):
     """The whole of the card's printed output, verbatim.
@@ -2178,6 +2260,7 @@ def test_gd_echo_is_the_oracles_bytes(name, _base):
     assert echo.split()[4] == "GD"
 
 
+@pytest.mark.integration
 def test_the_cliff_gd_echo_carries_all_four_reals_in_card_order():
     """``GD 0 0 0 0 5. .001 20. -2.`` -> EPSR2, SIG2, CLT, CHT, then zeros.
 
@@ -2195,6 +2278,7 @@ def test_the_cliff_gd_echo_carries_all_four_reals_in_card_order():
         assert [int(v) for v in echo.split()[5:9]] == [0, 0, 0, 0], echo
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("name", "_base"), GD_PAIRS)
 def test_gd_adds_no_line_to_the_antenna_environment_block(name, _base):
     """Probed for and not there — including under ``GN 2``, where a second
@@ -2209,6 +2293,7 @@ def test_gd_adds_no_line_to_the_antenna_environment_block(name, _base):
         assert "MEDIUM 2" not in block, block
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(("name", "base"), GD_PAIRS)
 def test_gd_changes_nothing_but_its_own_echo(name, base):
     """Asserted rather than assumed, exactly as ``MP`` is.
@@ -2237,6 +2322,7 @@ def test_gd_changes_nothing_but_its_own_echo(name, base):
         assert stripped(with_gd) == stripped(plain)
 
 
+@pytest.mark.integration
 def test_gd_is_not_an_arming_card():
     """Measured on the oracle: ``... XQ / GD 2 0 0 0 13. .005 0. 0. / XQ``
     prints one block, not two."""
@@ -2250,6 +2336,7 @@ def test_gd_is_not_an_arming_card():
     assert len(re.findall(r"DATA CARD No:\s+\d+ XQ", text)) == 2
 
 
+@pytest.mark.integration
 def test_the_comma_delimited_gd_simnec_sends_parses_like_the_spaced_form():
     """``NECSource`` writes the card comma-delimited — ``GD
     2,0,0,0,13.,.005,0.,0.`` is the literal Cardioid line. Measured identical
@@ -2267,6 +2354,7 @@ def test_the_comma_delimited_gd_simnec_sends_parses_like_the_spaced_form():
     assert "ERROR-NEC2C" not in commas
 
 
+@pytest.mark.integration
 def test_a_bare_gd_is_a_card_like_any_other():
     """The oracle echoes ``GD`` with four zero integers and six zero reals and
     runs the deck; nothing here may trip over the missing fields."""
@@ -2286,6 +2374,7 @@ _CLIFF_HEAD = (
 )
 
 
+@pytest.mark.integration
 def test_the_rp_modes_that_would_use_a_gd_are_still_refused():
     """The fidelity gate, narrowed by issue #802 to the modes still out.
 
@@ -2322,6 +2411,7 @@ def test_the_rp_modes_that_would_use_a_gd_are_still_refused():
     assert "FAR FIELD GROUND PARAMETERS" not in text
 
 
+@pytest.mark.integration
 def test_the_rp_cliff_modes_consume_the_gd_instead_of_refusing_it():
     """Issue #802: the two modes a ``GD`` is FOR now run.
 
@@ -2343,6 +2433,7 @@ def test_the_rp_cliff_modes_consume_the_gd_instead_of_refusing_it():
         assert "GROUND CONDUCTIVITY=      0.001 MHOS" in text, mode
 
 
+@pytest.mark.integration
 def test_the_second_medium_actually_moves_the_cliff_modes_gains():
     """Lifting the refusal is only worth it if the card now changes an answer.
 
@@ -2378,6 +2469,7 @@ def test_the_second_medium_actually_moves_the_cliff_modes_gains():
     assert linear != circular, "a linear and a circular cliff cannot agree everywhere"
 
 
+@pytest.mark.integration
 def test_a_cliff_mode_with_no_second_medium_still_prints_the_block():
     """``RDPAT`` prints FAR FIELD GROUND PARAMETERS on the MODE, not on the
     card. A cliff mode whose deck never sent a ``GD`` and never put the
@@ -2419,6 +2511,7 @@ def _pattern_rows(text: str) -> list[list[str]]:
     return rows
 
 
+@pytest.mark.integration
 def test_rfld_zero_drops_the_range_header_and_keeps_the_gain():
     """The gain-only form, against the same deck read out at 1000 m.
 
@@ -2550,6 +2643,7 @@ def test_a_bad_deck_reports_and_still_emits_the_sentinel(label, case):
     assert err == []
 
 
+@pytest.mark.integration
 def test_the_daemon_survives_a_bad_deck_and_runs_the_next_one():
     """Residency is the whole point: one broken deck must not end the process.
 
@@ -2652,6 +2746,7 @@ def test_the_console_script_target_resolves():
     assert callable(entry)
 
 
+@pytest.mark.integration
 def test_the_entry_point_runs_from_an_unrelated_cwd(tmp_path):
     """SimNEC launches the engine via ``sh -c`` with cwd=$HOME.
 
@@ -2693,6 +2788,7 @@ def test_the_entry_point_runs_from_an_unrelated_cwd(tmp_path):
     assert f"VERSION:{nec_portal.BANNER_VERSION}" in solve.stdout
 
 
+@pytest.mark.integration
 def test_selftest_passes_and_reports(tmp_path, monkeypatch):
     """`momwire-nec2c --selftest` is the deployment smoke for boxes with no
     checkout (the Windows live-session path): it must pass here, from an
@@ -2726,6 +2822,7 @@ def _run_main(argv, deck="", prog=None):
     return rc, out.getvalue(), err.getvalue()
 
 
+@pytest.mark.integration
 def test_basis_flag_unknown_name_fails_fast_and_nonzero():
     """A typo'd basis must fail the -version probe at configure time, not
     silently serve the default."""
@@ -2733,6 +2830,7 @@ def test_basis_flag_unknown_name_fails_fast_and_nonzero():
     assert rc == 3 and "choices:" in out
 
 
+@pytest.mark.integration
 def test_basis_flag_rides_the_version_probe():
     """SimNEC probes `<full command line> -version`; the probe line must be
     unchanged (Double-parsed by Execute) with any valid --basis present."""
@@ -2742,6 +2840,7 @@ def test_basis_flag_rides_the_version_probe():
     assert rc == 0 and out == f"{PROBE_VERSION}\n"
 
 
+@pytest.mark.integration
 def test_basis_flag_solves_and_stamps_the_banner():
     """The alternate basis answers a deck, and the PRINTOUT banner records
     which physics answered (+sg) — the -version line never does."""
@@ -2762,6 +2861,7 @@ def test_basis_flag_solves_and_stamps_the_banner():
     assert rows, "no AIP data row under the alternate basis"
 
 
+@pytest.mark.integration
 def test_default_basis_banner_is_unchanged():
     deck = (
         "CE basis\n"
@@ -2860,6 +2960,7 @@ def _aip_rows(text: str) -> list[list[float]]:
     return rows
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", _SIN_HARD_FIXTURES)
 def test_sinusoidal_basis_answers_the_hard_fixture_classes(name):
     import math
@@ -2877,6 +2978,7 @@ def test_sinusoidal_basis_answers_the_hard_fixture_classes(name):
     )
 
 
+@pytest.mark.integration
 def test_sinusoidal_basis_impedance_tracks_the_nec2c_fixture():
     """The point-matched sinusoidal basis is the closest of the roster to
     NEC-2's own formulation, so the free-space dipole's driving-point
@@ -2891,6 +2993,7 @@ def test_sinusoidal_basis_impedance_tracks_the_nec2c_fixture():
     assert abs(ours - theirs) / abs(theirs) < 0.05, f"{ours} vs {theirs}"
 
 
+@pytest.mark.integration
 def test_sinusoidal_basis_answer_differs_from_the_default_basis():
     """Disabled-path probe: every other +sin test would still pass if the
     ``_BASES`` entry silently served the default B-spline solver (its answer
@@ -2906,6 +3009,7 @@ def test_sinusoidal_basis_answer_differs_from_the_default_basis():
     assert abs(z_sin - z_default) / abs(z_default) > 0.003, (z_sin, z_default)
 
 
+@pytest.mark.integration
 def test_sinusoidal_basis_stamps_the_banner():
     deck = (
         "CE basis\n"
@@ -2918,6 +3022,7 @@ def test_sinusoidal_basis_stamps_the_banner():
     assert _aip_rows(out)
 
 
+@pytest.mark.integration
 def test_sinusoidal_has_no_converged_variant():
     """The zero-width point gap has no collocation RHS (momwire#212), so the
     flag must not offer a name the solver would refuse — same constraint the
@@ -2929,6 +3034,7 @@ def test_sinusoidal_has_no_converged_variant():
 # --- bspline-d1 (issue #821): the degree axis, same solver class -----------
 
 
+@pytest.mark.integration
 def test_bspline_d1_basis_flag_solves_and_stamps_the_banner():
     """`bspline-d1` is BSplineSolver with degree=1 bound — same public
     `compute_port_solution()` path as plain `bspline` (momwire#232; degree is
@@ -2950,6 +3056,7 @@ def test_bspline_d1_basis_flag_solves_and_stamps_the_banner():
     assert rows, "no AIP data row under the bspline-d1 basis"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "name",
     _SIN_HARD_FIXTURES,
@@ -2974,6 +3081,7 @@ def test_bspline_d1_basis_solves_hard_fixture_classes(name):
                 assert math.isfinite(float(tok)), f"{name}: non-finite token {tok!r}"
 
 
+@pytest.mark.integration
 def test_bspline_d1_free_space_impedance_within_loose_bound_of_committed_oracle():
     """The oracle fixture is nec2c's own answer (not ours) — the same "loose
     cross-engine smoke bound" style as the default-basis test at the top of
@@ -2997,6 +3105,7 @@ def test_bspline_d1_free_space_impedance_within_loose_bound_of_committed_oracle(
     assert abs(x_ours - x_theirs) / abs(x_theirs) < 0.15, (x_ours, x_theirs)
 
 
+@pytest.mark.integration
 def test_bspline_d1_answer_differs_from_the_default_degree():
     """Disabled-path probe: if `_build_engine` dropped the `{"degree": 1}`
     kwargs and served the default degree-2 solver, every other +bs1 test
@@ -3033,6 +3142,7 @@ _SCOPE_DIPOLE = (
 )
 
 
+@pytest.mark.integration
 def test_the_basis_main_selects_outlives_the_call_within_one_invocation():
     """The DESIGN, pinned so a well-meant per-deck reset cannot land quietly.
 
@@ -3051,6 +3161,7 @@ def test_the_basis_main_selects_outlives_the_call_within_one_invocation():
     )
 
 
+@pytest.mark.integration
 def test_engine_scope_puts_the_basis_back_for_whatever_follows():
     """The remedy, from both sides: the scope does not disturb what it wraps,
     and nothing it selects escapes it. Asserted on the banner because that is
@@ -3071,6 +3182,7 @@ def test_engine_scope_puts_the_basis_back_for_whatever_follows():
     )
 
 
+@pytest.mark.integration
 def test_engine_scope_restores_the_cache_flags_and_drops_what_it_filled(tmp_path):
     """The basis is not the only invocation state `configure_engine` resets —
     the two cache flags are reset for the same reason, so a scope that put
@@ -3234,6 +3346,7 @@ def test_the_dense_fallback_route_is_still_captured():
 _ACCEL_HARD_FIXTURES = _SIN_HARD_FIXTURES
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["hmatrix", "arrayblock"])
 @pytest.mark.parametrize("name", _ACCEL_HARD_FIXTURES)
 def test_the_accelerators_answer_the_hard_fixture_classes(name, basis):
@@ -3250,6 +3363,7 @@ def test_the_accelerators_answer_the_hard_fixture_classes(name, basis):
                 assert math.isfinite(float(tok)), f"{name}: non-finite token {tok!r}"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["hmatrix", "arrayblock"])
 def test_the_accelerators_agree_with_the_default_basis_and_the_oracle(basis):
     """Agreement, not difference, is the probe here: same physics as
@@ -3272,6 +3386,7 @@ def test_the_accelerators_agree_with_the_default_basis_and_the_oracle(basis):
     assert abs(z_ours - z_oracle) / abs(z_oracle) < 0.05, (z_ours, z_oracle)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis,suffix", [("hmatrix", "+hm"), ("arrayblock", "+ab")])
 def test_the_accelerators_stamp_the_banner(basis, suffix):
     deck = (
@@ -3285,6 +3400,7 @@ def test_the_accelerators_stamp_the_banner(basis, suffix):
     assert aip_tables(out)[0]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["hmatrix", "arrayblock"])
 def test_the_accelerators_ride_the_version_probe_unchanged(basis):
     from momwire.portal import PROBE_VERSION
@@ -3406,6 +3522,7 @@ def test_the_razor_shim_columns_are_the_one_volt_drive_coefficients():
     assert np.allclose(driven, alpha, rtol=1e-10, atol=0.0)
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "basis,suffix", [("razor", "+razor"), ("razor-nec5", "+razor5")]
 )
@@ -3442,6 +3559,7 @@ _RAZOR_LOAD_AND_GROUND_DECK = (
 )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
 def test_razor_basis_answers_a_deck_with_a_load_and_a_ground(basis):
     """The portal gap #432 left open — no live solve under either razor
@@ -3511,6 +3629,7 @@ def _one_aip(text: str) -> tuple[complex, complex]:
     return complex(row[2], row[3]), complex(row[4], row[5])
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5", "bspline"])
 def test_a_driven_segment_load_is_applied_exactly_once(basis):
     """`Z_loaded − Z_unloaded == Z_L`, on the native-loading bases and on a
@@ -3540,6 +3659,7 @@ def test_a_driven_segment_load_is_applied_exactly_once(basis):
     )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
 def test_the_razor_budget_charges_the_lumped_load_its_own_watts(basis):
     """The budget closes with the load's watts INSIDE the structure loss.
@@ -3568,6 +3688,7 @@ def test_the_razor_budget_charges_the_lumped_load_its_own_watts(basis):
     )
 
 
+@pytest.mark.integration
 def test_the_razor_budget_agrees_with_a_sibling_basis_on_a_loaded_deck():
     """The cross-basis agreement momwire#433 restores.
 
@@ -3591,6 +3712,7 @@ def test_the_razor_budget_agrees_with_a_sibling_basis_on_a_loaded_deck():
     assert abs(z_razor - z_sib) <= 0.05 * abs(z_sib), f"{z_razor} vs {z_sib}"
 
 
+@pytest.mark.integration
 def test_the_razor_budget_counts_wire_loss_and_the_load_as_separate_terms():
     """A deck that is BOTH lossy and loaded: the two dissipation terms are
     additive and neither swallows the other.
@@ -3690,6 +3812,7 @@ def scoped_engine():
         yield
 
 
+@pytest.mark.integration
 def test_the_ek_card_moves_the_impedance_on_a_fat_wire(scoped_engine):
     """The card is no longer advisory: same deck, one card, a different answer.
 
@@ -3706,6 +3829,7 @@ def test_the_ek_card_moves_the_impedance_on_a_fat_wire(scoped_engine):
         assert shift >= 0.02, f"{basis}: EK moved the impedance by only {shift:.3%}"
 
 
+@pytest.mark.integration
 def test_the_ek_answer_is_momwires_own_extended_kernel_solve(scoped_engine):
     """Which extended kernel — the identity behind the number.
 
@@ -3735,6 +3859,7 @@ def test_the_ek_answer_is_momwires_own_extended_kernel_solve(scoped_engine):
         )
 
 
+@pytest.mark.integration
 def test_the_fat_wire_ek_pair_tracks_nec2c_on_both_sides_of_the_card(scoped_engine):
     """The card's physics, against the reference engine rather than ourselves.
 
@@ -3758,6 +3883,7 @@ def test_the_fat_wire_ek_pair_tracks_nec2c_on_both_sides_of_the_card(scoped_engi
     assert 0.5 <= abs(ours) / abs(theirs) <= 2.0, f"{ours} vs {theirs}"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("card", ["EK", "EK 0", "EK 1", "EK 2", "EK -2"])
 def test_every_ek_field_but_minus_one_is_the_extended_kernel(card):
     """What the oracle actually does with the card's one field.
@@ -3776,6 +3902,7 @@ def test_every_ek_field_but_minus_one_is_the_extended_kernel(card):
     assert _first_z(out) == _first_z(_run_main([], deck=_fat_deck("EK"))[1])
 
 
+@pytest.mark.integration
 def test_ek_minus_one_is_the_reduced_kernel():
     """The other side of the same rule, and the no-card default with it."""
     z_bare = _first_z(_run_main([], deck=_fat_deck())[1])
@@ -3784,6 +3911,7 @@ def test_ek_minus_one_is_the_reduced_kernel():
     assert _first_z(out) == z_bare
 
 
+@pytest.mark.integration
 def test_two_groups_of_one_deck_under_two_kernels_get_two_operators():
     """`dipole_ek_rearm`'s shape, on a wire fat enough to show it.
 
@@ -3807,6 +3935,7 @@ def test_two_groups_of_one_deck_under_two_kernels_get_two_operators():
     assert _relative(first, second) >= 0.02, f"{first} vs {second}"
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["sinusoidal-galerkin"])
 def test_a_galerkin_basis_serves_an_ek_deck(basis, scoped_engine):
     """The un-refusal (momwire 0.27.0), on the class of deck that reaches it
@@ -3837,6 +3966,7 @@ def test_a_galerkin_basis_serves_an_ek_deck(basis, scoped_engine):
     assert _relative(z_ek, z_plain) >= 0.02, f"{z_ek} vs {z_plain}"
 
 
+@pytest.mark.integration
 def test_the_thin_wire_ek_fixtures_barely_move_and_move_towards_nec2c():
     """The armor's own measurement, kept next to the numbers that justify it.
 
@@ -3955,6 +4085,7 @@ def aip_impedances(text: str) -> list[tuple[str, str]]:
     return [(row[6], row[7]) for table in aip_tables(text) for row in table]
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", ANTENNA_NAMES)
 def test_a_second_pass_of_every_fixture_prints_what_the_first_did(name):
     """The identity gate, over the whole corpus: every fixture sent TWICE down
@@ -3983,6 +4114,7 @@ def test_a_second_pass_of_every_fixture_prints_what_the_first_did(name):
     assert nec_portal._cache_stats["misses"] <= half
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", ("dipole_free_space", "dipole_rp_pattern"))
 def test_a_served_deck_matches_a_genuinely_fresh_process(name):
     """And the served printout is not merely self-consistent: it is what a
@@ -4216,6 +4348,7 @@ GD_BASE = (
 )
 
 
+@pytest.mark.integration
 def test_a_gd_card_change_hits_the_cache_and_still_answers_fresh():
     moved = GD_BASE.replace("13.,.005", "80.,.01")
     assert moved != GD_BASE
@@ -4253,6 +4386,7 @@ def test_a_hit_rebinds_the_arriving_deck_onto_the_cached_solver():
     )
 
 
+@pytest.mark.integration
 def test_a_second_medium_change_through_a_warm_cache_moves_the_cliff_pattern():
     """The combined pin for #823 × #842. The cliff modes made the second
     medium load-bearing in the far field, and it is read through
@@ -4287,6 +4421,7 @@ def test_a_second_medium_change_through_a_warm_cache_moves_the_cliff_pattern():
     assert frame_lines(served) == fresh
 
 
+@pytest.mark.integration
 def test_a_cached_entry_is_re_sized_by_the_fills_it_grew():
     """An entry GROWS after it is stored — a sweep adds an `at()` fill per
     frequency — so the size taken at insertion drifts low exactly on the deck
@@ -4305,6 +4440,7 @@ def test_a_cached_entry_is_re_sized_by_the_fills_it_grew():
     assert nec_portal._cache_sizes[key] > at_insert
 
 
+@pytest.mark.integration
 def test_a_repeated_probe_skips_the_solve_it_paid_for():
     """The reason the feature exists. Measured at authoring time on
     `catalog_wire_w8jk`, the biggest committed deck (106 segments): 154 ms cold
@@ -4335,6 +4471,7 @@ def _bound_deck(z: float) -> str:
     )
 
 
+@pytest.mark.integration
 def test_the_cache_evicts_by_bytes_and_an_evicted_geometry_re_solves(monkeypatch):
     """The bound. The cap is patched to about two and a half entries rather
     than filling the shipped few hundred MB, because what needs proving is the
@@ -4370,6 +4507,7 @@ def test_the_cache_evicts_by_bytes_and_an_evicted_geometry_re_solves(monkeypatch
     assert body_lines(served) == body_lines(cold_render(_bound_deck(10.0)))
 
 
+@pytest.mark.integration
 def test_the_cache_evicts_the_least_RECENTLY_used_not_the_oldest(monkeypatch):
     """A knob returned to a value probed long ago is the hit this feature is
     for, so a re-used entry has to be young again. Without the reorder on a
@@ -4389,6 +4527,7 @@ def test_the_cache_evicts_the_least_RECENTLY_used_not_the_oldest(monkeypatch):
     assert middle not in nec_portal._solver_cache
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize(
     "refused",
     [
@@ -4431,6 +4570,7 @@ def test_a_refusal_after_a_hit_leaves_the_hit_entry_intact():
     assert body_lines(served) == body_lines(cold_render(CACHE_BASE))
 
 
+@pytest.mark.integration
 def test_the_cache_is_per_invocation_like_the_basis():
     """`main` empties the cache exactly where it re-reads `--basis`: engine
     state is per invocation, so a second call cannot be served from the
@@ -4444,6 +4584,7 @@ def test_the_cache_is_per_invocation_like_the_basis():
         assert len(nec_portal._solver_cache) == 1
 
 
+@pytest.mark.integration
 def test_the_operator_key_carries_the_basis():
     """One process has one `--basis`, so this can never differ between two live
     decks — the key carries it anyway so it cannot be read wrong, and so a
@@ -4557,6 +4698,7 @@ def test_cache_stats_alone_counts_the_hits_without_serving(monkeypatch, tmp_path
     assert (stats["entries"], stats["bytes"], stats["evictions"]) == (0, 0, 0)
 
 
+@pytest.mark.integration
 def test_a_dry_run_answers_exactly_what_a_stock_process_answers(tmp_path):
     """Counting may not perturb the physics: a dry-run deck is compared to the
     same deck through a process carrying no flags at all."""
@@ -4587,6 +4729,7 @@ def test_both_flags_together_count_the_real_cache(tmp_path):
     assert stats["entries"] == 1 and stats["bytes"] > 0
 
 
+@pytest.mark.integration
 def test_the_stats_file_is_rewritten_after_every_deck(tmp_path):
     """SimNEC ends a session with `Process.destroy()` — a kill, not an EOF — so
     a file written at exit is a file that never appears. It is written at every
@@ -4617,6 +4760,7 @@ def test_the_stats_file_is_rewritten_after_every_deck(tmp_path):
     assert len(deck_chunks(buffer.getvalue())) == 2
 
 
+@pytest.mark.integration
 def test_a_refused_deck_still_counts_in_the_stats_denominator(tmp_path):
     """The hit rate needs an honest denominator, and a refused deck is a deck
     the session sent. It moves no cache statistic — that is the #829 contract —
@@ -4631,6 +4775,7 @@ def test_a_refused_deck_still_counts_in_the_stats_denominator(tmp_path):
     assert (stats["hits"], stats["misses"]) == (0, 1)
 
 
+@pytest.mark.integration
 def test_the_cache_flags_ride_the_version_probe_unchanged():
     """SimNEC probes `<full command line> -version`, so every flag the portal
     dialog can carry has to leave that line alone."""
@@ -4644,6 +4789,7 @@ def test_the_cache_flags_ride_the_version_probe_unchanged():
         assert (rc, out) == (0, f"{nec_portal.PROBE_VERSION}\n"), argv
 
 
+@pytest.mark.integration
 def test_cache_stats_without_a_path_fails_fast_and_nonzero():
     """Same contract as an unknown `--basis`: a malformed portal-dialog line is
     caught by the configure-time probe, not by the first deck of a session."""
@@ -4756,6 +4902,7 @@ def test_nothing_outside_the_portal_imports_from_the_portal():
     )
 
 
+@pytest.mark.integration
 def test_importing_momwire_does_not_drag_in_the_portal():
     """The rule's runtime shadow, and the reason a user feels it.
 
@@ -4783,6 +4930,7 @@ def test_importing_momwire_does_not_drag_in_the_portal():
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", ALL_NAMES)
 def test_the_portal_and_the_dialect_agree_about_every_deck(name):
     """The proof obligation the double parse takes on.
@@ -4858,6 +5006,7 @@ GN_REARM_DECK = (
 )
 
 
+@pytest.mark.integration
 def test_a_gn_between_execute_cards_runs_a_second_group():
     """#933. The old ``GN`` branch ``continue``d before the arming test, so a
     ground card between two execute cards armed nothing and the second ``XQ``
@@ -4868,6 +5017,7 @@ def test_a_gn_between_execute_cards_runs_a_second_group():
     )
 
 
+@pytest.mark.integration
 def test_the_second_group_answers_over_the_ground_the_gn_card_named():
     """And it re-arms because the OPERATOR moved, not merely the printout: the
     environment block names the new ground and the impedance moves with it."""
@@ -4885,6 +5035,7 @@ def test_the_second_group_answers_over_the_ground_the_gn_card_named():
     assert (ground.real - free.real) / free.real > 0.1
 
 
+@pytest.mark.integration
 def test_the_gn_rearm_block_is_a_partial_refill():
     """The shape the oracle prints for it: LOADING / ENVIRONMENT / MATRIX
     TIMING, and NO FREQUENCY block — the operator was rebuilt, but the
@@ -4958,6 +5109,7 @@ def test_the_prefix_reparse_workaround_is_gone():
     assert source.count("parse_dialect(") == 1
 
 
+@pytest.mark.integration
 def test_the_gn_rearm_fixture_matches_the_oracle_section_walk():
     """The committed oracle capture of the same probe, section for section."""
     assert section_walk(printout("dipole_gn_rearm")) == section_walk(
@@ -4965,6 +5117,7 @@ def test_the_gn_rearm_fixture_matches_the_oracle_section_walk():
     )
 
 
+@pytest.mark.integration
 def test_an_ex_between_execute_cards_re_arms_without_a_refill():
     """The control. Moving the DRIVE re-arms — the second run is real — but
     the matrix is untouched, so the oracle prints no preamble at all and
@@ -4988,6 +5141,7 @@ _SG_DECK = (
 )
 
 
+@pytest.mark.integration
 def test_filename_suffix_selects_the_basis():
     """A copy named momwire-nec2c-<basis> IS that engine: the banner stamps
     the suffix and the -version probe line stays byte-identical (SimNEC's
@@ -5006,6 +5160,7 @@ def test_filename_suffix_selects_the_basis():
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sg" in out
 
 
+@pytest.mark.integration
 def test_filename_suffix_windows_exe_is_stripped():
     rc, out, _ = _run_main(
         [],
@@ -5015,11 +5170,13 @@ def test_filename_suffix_windows_exe_is_stripped():
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sg" in out
 
 
+@pytest.mark.integration
 def test_unknown_filename_suffix_fails_the_probe_fast():
     rc, out, _ = _run_main(["-version"], prog="./momwire-nec2c-nope")
     assert rc == 3 and "choices:" in out and "executable name" in out
 
 
+@pytest.mark.integration
 def test_explicit_basis_beats_the_filename():
     rc, out, _ = _run_main(
         ["--basis=sinusoidal-galerkin"],
@@ -5029,6 +5186,7 @@ def test_explicit_basis_beats_the_filename():
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1+sg" in out
 
 
+@pytest.mark.integration
 def test_plain_name_and_module_spelling_select_nothing(monkeypatch):
     monkeypatch.delenv("MOMWIRE_NEC2C_BASIS", raising=False)
     for prog in ("/usr/local/bin/momwire-nec2c", "/x/momwire/portal/__main__.py"):
@@ -5036,6 +5194,7 @@ def test_plain_name_and_module_spelling_select_nothing(monkeypatch):
         assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1\n" in out, prog
 
 
+@pytest.mark.integration
 def test_env_var_selects_and_filename_beats_it(monkeypatch):
     monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "sinusoidal-galerkin")
     rc, out, _ = _run_main([], deck=_SG_DECK, prog="/usr/bin/momwire-nec2c")
@@ -5045,6 +5204,7 @@ def test_env_var_selects_and_filename_beats_it(monkeypatch):
     assert rc == 0 and "VERSION:nec2c.ae6ty.momwire.9.1\n" in out
 
 
+@pytest.mark.integration
 def test_unknown_env_basis_fails_the_probe_fast(monkeypatch):
     monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "nope")
     rc, out, _ = _run_main(["-version"], prog="/usr/bin/momwire-nec2c")
@@ -5107,6 +5267,7 @@ def _aip_z(text: str, table: int = 0, row: int = 0) -> complex:
     return complex(float(entry[6]), float(entry[7]))
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
 def test_a_load_only_site_on_a_native_loading_basis_is_served(basis, scoped_engine):
     """momwire#588. This was momwire#439's `IndexError: list index out of
@@ -5144,6 +5305,7 @@ def test_a_load_only_site_on_a_native_loading_basis_is_served(basis, scoped_engi
     assert _aip_z(out) == pytest.approx(complex(direct), rel=1e-4)
 
 
+@pytest.mark.integration
 def test_the_load_only_site_really_puts_the_load_on_the_fill(scoped_engine):
     """Served is not the same as heard.
 
@@ -5165,6 +5327,7 @@ def test_the_load_only_site_really_puts_the_load_on_the_fill(scoped_engine):
     assert abs(_aip_z(loaded) - _aip_z(bare)) > 10.0
 
 
+@pytest.mark.integration
 def test_a_load_only_site_does_not_shift_the_drive_onto_another_port(
     scoped_engine,
 ):
@@ -5213,6 +5376,7 @@ def test_a_load_only_site_does_not_shift_the_drive_onto_another_port(
         ), f"row {index} (segment {row[1]}) reads the wrong port"
 
 
+@pytest.mark.integration
 def test_the_served_razor_answer_sits_where_a_coarse_mesh_puts_it(
     scoped_engine,
 ):
@@ -5262,6 +5426,7 @@ _LOAD_ONLY_FIXTURES = (
 )
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("name", _LOAD_ONLY_FIXTURES)
 @pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
 def test_every_load_only_fixture_in_the_corpus_serves_under_razor(
@@ -5301,6 +5466,7 @@ NX
 """
 
 
+@pytest.mark.integration
 def test_a_network_and_a_load_only_site_agree_with_the_port_algebra_route(
     scoped_engine,
 ):
@@ -5341,6 +5507,7 @@ def test_a_network_and_a_load_only_site_agree_with_the_port_algebra_route(
     assert gaps[-1] < 6.0, gaps  # measured 2.44 Ω
 
 
+@pytest.mark.integration
 def test_a_load_on_the_fed_segment_still_merges_into_one_site(scoped_engine):
     """The boundary, kept from #586's gates: it is the SEPARATION of the two
     cards that used to trip the defect, not loads-under-razor in general.

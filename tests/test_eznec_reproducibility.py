@@ -79,6 +79,7 @@ def _void(below: list[float], above: list[float], bar: float, name: str) -> None
     )
 
 
+@pytest.mark.integration
 def test_the_undefined_current_bar_sits_in_sixteen_empty_decades():
     """Rule 1. A network current either is a current or is the zero an open
     stub carries; the corpus has nothing in between."""
@@ -93,6 +94,7 @@ def test_the_undefined_current_bar_sits_in_sixteen_empty_decades():
     _void(dust, real, R.UNDEFINED_NETWORK_CURRENT, "UNDEFINED_NETWORK_CURRENT")
 
 
+@pytest.mark.integration
 def test_the_cancellation_bar_sits_in_six_empty_decades():
     """Rule 2. An imaginary part is either a reactance or the crumb of a
     cancellation an NT card made exactly real."""
@@ -109,6 +111,7 @@ def test_the_cancellation_bar_sits_in_six_empty_decades():
     _void(dust, real, R.CANCELLATION_CRUMB, "CANCELLATION_CRUMB")
 
 
+@pytest.mark.integration
 def test_the_wire_table_bar_sits_in_four_empty_decades():
     """Rule 3, on the axis that separates: magnitude as a fraction of the
     deck's OWN peak in the same table. Absolute magnitude does not — the
@@ -126,6 +129,7 @@ def test_the_wire_table_bar_sits_in_four_empty_decades():
     _void(dust, real, R.WIRE_TABLE_DUST, "WIRE_TABLE_DUST")
 
 
+@pytest.mark.integration
 def test_the_wire_loss_bar_sits_in_thirty_one_empty_decades():
     """Rule 4. Zeros are excluded from BOTH sides: 54 decks print an exact
     0.0000E+00 because their wires are lossless, which is an answer."""
@@ -145,6 +149,7 @@ def test_the_wire_loss_bar_sits_in_thirty_one_empty_decades():
     _void(dust, real, R.WIRE_LOSS_DUST, "WIRE_LOSS_DUST")
 
 
+@pytest.mark.integration
 def test_the_boundary_stays_narrow():
     """What it costs, as a number rather than as a promise.
 
@@ -203,6 +208,7 @@ def test_a_small_but_real_reactance_survives_the_crumb_rule():
     assert R.blank_undefined(text) == text
 
 
+@pytest.mark.integration
 @pytest.mark.slow
 def test_the_corpus_is_byte_identical_across_thread_counts_inside_the_boundary():
     """**The gate momwire#578 exists for.**
