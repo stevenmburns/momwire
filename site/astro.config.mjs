@@ -97,6 +97,7 @@ export default defineConfig({
           label: "Act V — The instrument",
           items: [
             { label: "The fourth cell", slug: "act-5/the-fourth-cell" },
+            { label: "The counterpoise question", slug: "act-5/counterpoise" },
           ],
         },
         {
