@@ -905,6 +905,18 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # refusal). §7 of `tests/test_capabilities.py` measures it rather than
     # trusting it: the centre-knot probe reads ~1e-14 here.
     #
+    # The cell is true PER INSTANCE, not per class (momwire#686). It holds
+    # under `feed_model="point"`; under `feed_model="segment"` this same class
+    # snaps to a segment centre and the class attribute still reads True. That
+    # gap cannot reach the NEC-5 seam — `serve(deck, *, basis)` takes a basis
+    # NAME and no solver kwargs, and momwire#654 collapsed the roster to ONE
+    # Galerkin entry binding no `feed_model` — so the declaration is honest
+    # for every path that reads it. The invariant is load-bearing rather than
+    # obvious, so `test_sg_knot_feeds_describes_the_point_gap_the_roster_can_
+    # build` pins it: a roster edit re-adding a `"segment"` spelling fails
+    # there rather than silently handing the seam an instance this cell does
+    # not describe.
+    #
     # A consequence worth stating, because the row does not show it: the
     # base's `_KNOT_FEEDS_REFUSAL` is UNREACHABLE from this class.
     # `Capabilities.refusal` returns a reason only for a cell the solver does
