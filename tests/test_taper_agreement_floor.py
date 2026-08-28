@@ -474,3 +474,88 @@ def test_kernel_identification_gate_actually_discriminates():
         "the reduced row would ALSO clear the bound — the gate would not "
         "discriminate reduced from extended"
     )
+
+
+# --------------------------------------------------------------------------
+# G-449 — the fed-knot C0 spelling un-stalls bs2's deep tail (momwire#449)
+# --------------------------------------------------------------------------
+
+
+def _ward_split_fed(n_per_sec):
+    """The ward deck with LOCAL C0 at the fed knot and nothing else
+    changed: the fed section split AT the feed into two half-wires, the
+    new 2-member junction declared, and the drive a series node gap —
+    momwire#305's third spelling, which is also the shape NEC-5's own
+    ``EX`` end code writes, so this row is feed-matched to the anchor.
+    ``feeds=[]`` is explicit and load-bearing: omitting it engages the
+    legacy default feed and silently double-drives the deck."""
+    wires, radii, junctions = _wires_of(_ward_sections())
+    fed = WARD_FED_SEC - 1
+    a, b = wires[fed][0], wires[fed][1]
+    mid = 0.5 * (a + b)
+    new_wires = (
+        list(wires[:fed])
+        + [np.stack([a, mid]), np.stack([mid, b])]
+        + list(wires[fed + 1 :])
+    )
+    new_radii = list(radii[:fed]) + [radii[fed]] * 2 + list(radii[fed + 1 :])
+    new_junctions = []
+    for j in junctions:
+        grp = []
+        for w, end in j:
+            if w == fed:
+                grp.append((fed, end) if end == "start" else (fed + 1, end))
+            else:
+                grp.append((w if w < fed else w + 1, end))
+        new_junctions.append(grp)
+    new_junctions.append([(fed, "end"), (fed + 1, "start")])
+    half = n_per_sec // 2
+    npe = (
+        [[n_per_sec]] * fed
+        + [[half], [half]]
+        + [[n_per_sec]] * (len(wires) - fed - 1)
+    )
+    return BSplineSolver(
+        degree=2,
+        extended_kernel=True,
+        wires=new_wires,
+        n_per_edge_per_wire=npe,
+        wire_radius=new_radii,
+        wavelength=WL,
+        feeds=[],
+        junctions=new_junctions,
+        node_gaps=[(fed, "end", 1.0 + 0j)],
+    )
+
+
+def test_g449_fed_knot_c0_unstalls_the_bs2_tail():
+    """momwire#449's delivered attribution, held as a standing gate: bs2's
+    ward-ladder stall at ~0.5 Ω was the C1 constraint at the FED KNOT —
+    the deck's only C1-constrained non-smooth feature (the nine section
+    boundaries are separate wires + junctions, C0 by construction, and
+    every rung feeds at a mesh knot already). Giving the basis slope
+    freedom at that one knot converges the tail through the stall:
+    measured 0.047 Ω at N=200 against NEC-5's Richardson anchor, where
+    the banked matched-feed bs2-ek row sits at 0.532 and drifting. The
+    0.15 bar is 3× the measured value and 3.5× under the stall — a miss
+    here means either the node-gap drive or the junction slope freedom
+    regressed. Knot multiplicity (per-knot C0 inside one wire) stays the
+    RECORDED escalation if a second consumer appears; this spelling is
+    the served answer (2026-08-28 maintainer decision on #449)."""
+    rows = {r[0]: r for r in TAPER_LADDERS["ward"]}
+    ns = sorted(rows)
+    z1, z2 = rows[ns[-2]][1], rows[ns[-1]][1]
+    anchor = z2 + (z2 - z1) / (ns[-1] / ns[-2] - 1.0)
+    z, _ = _ward_split_fed(200 // WARD_NSEC).compute_impedance()
+    z = complex(np.atleast_1d(z)[0])
+    d = abs(z - anchor)
+    stalled = abs(rows[200][5] - anchor)
+    assert d <= 0.15, (
+        f"split-fed bs2-ek answers {z:.4f} at N=200, {d:.4f} ohm from the "
+        f"NEC-5 anchor {anchor:.4f} (measured 0.047; the stalled banked row "
+        f"sits at {stalled:.4f}) — the fed-knot C0 spelling has regressed"
+    )
+    assert d < 0.5 * stalled, (
+        "the split-fed row no longer beats the stalled banked row — the "
+        "un-stall itself has regressed"
+    )
