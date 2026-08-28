@@ -27,19 +27,20 @@ growth, ~2 A KCL deficit into the interface point), so its junction is
 two contact ends plus a point-electrode sink. It is documented here and
 NEVER gated against — the house rule about cross-formulation agreement.
 
-THE FAN WIDENING (session 8) serves 1 above × N below, and its soil-A
-answers are RECORDS, not anchors: the composition past K = 2 carries a
-node-mesh convergence class (see `test_g524_7`), which lossy transmitted
-kernels amplify — the 4-rise fan moved 7.48 Ω between the base and
-node-graded meshes at soil A (base 143.9327−26.2135j, graded
-142.6822−33.5867j; hub spelling 140.9839−43.6025j — a DIFFERENT
-structure, 17.6 Ω away; probe38,
-scratch/524-phase2/results/probe38-fan-widening.json). Until the K > 2
-convergence-rate follow-up lands there is no soil-A anchor gate for the
-fan class; the correctness gates are the ε̃ = 1 collapses, which run in
-the merge-to-main `crossgate` lane (multi-minute certification solves,
-the memgate reasoning) while the PR slow lane keeps `test_g524_4` as the
-per-PR crossing regression pin. The HUB spelling's collapse is a banked
+THE FAN WIDENING (session 8) serves 1 above × N below. The composition
+past K = 2 carries a node-mesh convergence class (see `test_g524_7`),
+RESOLVED by the #674 study (scratch/674-study): the slow term is the
+ABOVE tent's interface-adjacent h (first order — rise-only grading
+doesn't move it), matched per-arm node grading restores ~2.6-order
+convergence, and the ε̃ = 1 residual extrapolates to zero (0.0004 Ω,
+two independent rung pairs). Lossy transmitted kernels amplify the
+class ~30× — the base-mesh soil-A prints (fan 143.9327−26.2135j; hub
+spelling 140.9839−43.6025j, a DIFFERENT structure; probe38) stay
+RECORDS, but the GRADED fan is converged and banked: `FAN_SOIL_A_N2`
+with its G-674 gates. The ε̃ = 1 collapses run in the merge-to-main
+`crossgate` lane (multi-minute certification solves, the memgate
+reasoning) while the PR slow lane keeps `test_g524_4` as the per-PR
+crossing regression pin. The HUB spelling's collapse is a banked
 record (0.2194 Ω, probe38) with no gate of its own: its only unique
 content — the hub-tent by-parts terms — was measured to contribute
 exactly zero to the digit (probe39), and everything else it would
@@ -239,6 +240,53 @@ def test_g524_2_above_side_other_junction_refused_by_name():
     s = BSplineSolver(**build)
     with pytest.raises(NotImplementedError, match="OTHER junction"):
         s._crossing_junctions()
+
+
+# The #674 study's per-arm node grading (probe18's geometric walk, at
+# the K = 5 node): vertices approach (0,0,0) on the rises from below and
+# the monopole from above, MATCHED across the interface, far mesh at
+# base. The study's verdict (scratch/674-study, probes 1-3): the K>2
+# composition error is the ABOVE tent's interface-adjacent h at first
+# order (rise-only grading leaves 0.2214 of the base 0.2269 Ω ε̃ = 1
+# residual; mono-only drops it to 0.0171), and matched grading restores
+# ~2.6-order convergence — n2 collapses the residual to 0.0001 Ω for a
+# base-mesh solve cost.
+_FAN_GRADES = {
+    # rung: rise (z-vertices −depth → 0, npe), mono (z-vertices 10 → 0, npe)
+    "n2": (
+        ([-0.15, -0.05, -0.0125, 0.0], [2, 2, 2]),
+        ([10.0, 0.5, 0.05, 0.0125, 0.0], [19, 2, 3, 2]),
+    ),
+    "n3": (
+        ([-0.15, -0.05, -0.0125, -0.0031, 0.0], [2, 2, 2, 2]),
+        ([10.0, 0.5, 0.05, 0.0125, 0.0031, 0.0], [19, 2, 3, 2, 2]),
+    ),
+}
+
+# Banked by the #674 study (probe3, split lane = the production path):
+# the soil-A 4-rise fan CONVERGED under matched node grading — n2 print
+# 142.1922 − 36.4711j, n2→n3 movement 0.0059 Ω (observed order 3.4,
+# Richardson Z* 142.1918 − 36.4771j), far-mesh doubling 0.022 Ω,
+# dense-vs-split ≤ 5e-4. The base-mesh 143.9327 − 26.2135j record stands
+# in probe38's JSON as the uncoverged-mesh print, never a gate.
+FAN_SOIL_A_N2 = 142.1922 - 36.4711j
+
+
+def fan_rise_deck_graded(rung="n2", **override):
+    """`fan_rise_deck` with the #674 matched per-arm node grading spliced
+    into the wire polylines. The monopole vertices only subdivide the
+    existing 10 → 0 line, so the EX 4,1,7 feed arclength is untouched."""
+    (rise_pts, rise_npe), (mono_pts, mono_npe) = _FAN_GRADES[rung]
+    build = fan_rise_deck(**override)
+    dirs = ((1, 0), (0, 1), (-1, 0), (0, -1))
+    build["wires"] = [
+        np.array([(5.0 * dx, 5.0 * dy, -0.15)] + [(0.0, 0.0, z) for z in rise_pts])
+        for dx, dy in dirs
+    ] + [np.array([(0.0, 0.0, z) for z in mono_pts])]
+    build["n_per_edge_per_wire"] = [[10] + list(rise_npe) for _ in dirs] + [
+        list(mono_npe)
+    ]
+    return build
 
 
 def hub_deck(n_radials=4, depth=0.15, **override):
@@ -488,7 +536,11 @@ def test_g524_7_fan_eps1_collapse(record_property):
     ladder with no plateau (a corner-sign error would miss by the ~1e5
     corner magnitude instead — the −1000j class). The gate holds the
     measured value with CI headroom; tightening it means GRADING the
-    node, not touching the corner loops."""
+    node, not touching the corner loops — which is exactly what the
+    #674 study did: `test_g674_1` runs this adjudicator on the graded
+    rung at a 60× tighter envelope. This BASE-mesh gate stays as the
+    ungraded pin (the two miss differently: a corner-loop defect moves
+    both, a grading-machinery defect only g674_1)."""
     build = fan_rise_deck(ground_eps=(1.0, 0.0))
     truth = {
         k: v
@@ -504,4 +556,61 @@ def test_g524_7_fan_eps1_collapse(record_property):
         f"5-wire junction truth is {z_truth:.4f} — {abs(z - z_truth):.4f} "
         "ohm apart (measured 0.2269 on this mesh, a node-mesh convergence "
         "class); a jump past this envelope is bookkeeping, not convergence"
+    )
+
+
+# ----------------------------------------------------------------------
+# G-674 — the K>2 node's convergence study, banked (momwire#674)
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.slow
+@pytest.mark.crossgate
+def test_g674_1_graded_fan_eps1_collapse(record_property):
+    """The #674 resolution of g524_7's 0.30-Ω caveat: matched per-arm
+    node grading (the n2 rung) collapses the K = 5 composition residual
+    to the MEASUREMENT FLOOR — 0.0001 Ω against the independently-solved
+    free-space truth (the admissibility split itself sits ~2e-4 from
+    dense on this mm-graded deck). The gate's 0.005 envelope is 50× the
+    measured value and still 60× tighter than g524_7 — a miss here with
+    g524_7 green means the grading machinery (vertex splicing, short-
+    segment quadrature), not the corner loops."""
+    build = fan_rise_deck_graded("n2", ground_eps=(1.0, 0.0))
+    truth = {
+        k: v
+        for k, v in build.items()
+        if k not in ("ground_z", "ground_eps", "ground_model")
+    }
+    z_truth, _ = BSplineSolver(**truth).compute_impedance()
+    z, _ = BSplineSolver(**build).compute_impedance()
+    record_property("momwire_Z", f"{z:.4f}")
+    record_property("free_space_truth", f"{z_truth:.4f}")
+    assert abs(z - z_truth) <= 0.005, (
+        f"the n2-graded ε̃ = 1 fan solve answers {z:.4f} where the "
+        f"free-space truth is {z_truth:.4f} — {abs(z - z_truth):.4f} ohm "
+        "apart (measured 0.0001 on this rung); the graded composition no "
+        "longer collapses"
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.crossgate
+def test_g674_2_soil_a_fan_anchor(record_property):
+    """The soil-A fan anchor the #674 study earned: the n2-graded deck's
+    142.1922 − 36.4711j, CONVERGED in the node axis (n2→n3 movement
+    0.0059 Ω at observed order 3.4; Richardson Z* 142.1918 − 36.4771j)
+    with the far-mesh doubling worth 0.022 Ω. The 0.05 envelope covers
+    both axes with the session-7 headroom. probe38's base-mesh
+    143.9327 − 26.2135j stands as the unconverged-mesh record — 12.6 Ω
+    away, all of it the node class the grading removed. NEVER re-gate
+    this against the engine's detached-stake 90.051 − 70.731j (a
+    different experiment, module docstring)."""
+    z, _ = BSplineSolver(**fan_rise_deck_graded("n2")).compute_impedance()
+    record_property("momwire_Z", f"{z:.4f}")
+    record_property("banked_Z", f"{FAN_SOIL_A_N2:.4f}")
+    assert abs(z - FAN_SOIL_A_N2) <= 0.05, (
+        f"the n2-graded soil-A fan answers {z:.4f} where the banked "
+        f"converged answer is {FAN_SOIL_A_N2:.4f} — "
+        f"{abs(z - FAN_SOIL_A_N2):.4f} ohm apart (node axis 0.0059, "
+        "far-mesh axis 0.022; NEVER re-gate against the engine print)"
     )
