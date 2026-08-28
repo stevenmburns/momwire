@@ -114,6 +114,19 @@ REFUSAL: ``RazorSolver`` serves a one-segment wire junctioned at either end
 since momwire#608.  The cut still buys nothing there, and the uncut wire is
 still the better-conditioned spelling.)
 
+The bspline half of that is the KNOT FEED, and it is worth naming because
+momwire#703 filed against this seam on the belief that it was not: the cut,
+the 2-member junction the cut manufactures, the empty ``feeds`` and the
+``node_gaps`` series EMF across the join ARE momwire#449's split-fed
+spelling, card for card, and have been the bspline drive here since
+momwire#603 U1.  What #703 proposed instead — splitting at the fed SEGMENT's
+centre rather than at the ADDRESSED NODE — is a half-element mis-location,
+worth 13.65 Ω on the insulated-base class (|Z| ~ 980) and 0.24 Ω on a
+resonant one.  The measurements that put the engine's own drive at the node,
+and the ladder showing the 15 Ω that issue reported to be mostly the engine's
+own x1 discretization error, are written up with the gates in
+``tests/test_eznec_reactive_drive_agreement.py``.
+
 Measured over the committed captures: razor-nec5 served 11 under the cut,
 47 once U1 stopped cutting for it, 54 since momwire#608 stopped refusing a
 one-segment ``GW`` that is junctioned, and 59 since momwire#624 lifted the
