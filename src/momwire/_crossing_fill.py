@@ -44,12 +44,178 @@ Scope guards this module inherits from the derivation:
 from __future__ import annotations
 
 import os
+import sys
+import warnings
+from typing import NamedTuple
 
 import numpy as np
 from numpy.polynomial.legendre import leggauss
 
 from . import _aca, _near_interface
 from ._sommerfeld_transmitted import _c1_moment
+
+
+class CoarseCrossingNode(UserWarning):
+    """A crossing junction's node region is unresolved for #674's class."""
+
+
+class NodeArm(NamedTuple):
+    """One member of a crossing junction, as the advisory reads it.
+
+    `h_resolved` is what the bar gates: the FINEST segment length within
+    `NODE_REACH` of the shared point. `h_adjacent` is the segment that
+    actually touches the node, carried alongside because it is what a
+    reader looks at first and the two can differ a lot (an ungraded feed
+    gap in front of a graded chain).
+    """
+
+    h_resolved: float
+    h_adjacent: float
+    wire: int
+    end: str
+    side: str
+
+
+# WHAT IS GATED, and why it is not the node-adjacent segment.
+#
+# The obvious quantity — the length of the segment touching the node —
+# does not predict the error, and the two decks this was calibrated on
+# say so directly:
+#
+#   #674 base fan     above arm edges [666.7] mm            7.48 ohm of
+#                     never resolves near the node          soil-A mesh move
+#
+#   antennaknobs      above arm edges [50, 6.25, 18.75,     ~0.04 ohm; an 8x
+#   buried-radial     75, 300, 1200, 487] mm — a feed       feed-gap sweep
+#   (graded, fixed)   gap in front of a graded chain,       moves the soil-A
+#                     resolved to 6.25 mm within 56 mm      answer 0.115 ohm
+#
+# Node-adjacent h reads those as 667 vs 50 mm — 13x — while their errors
+# differ by ~200x. A first-order class cannot do that, so node-adjacent h
+# is not the variable. What separates them is whether the arm RESOLVES to
+# the recipe scale anywhere near the node, which is exactly what #674's
+# grading recipe does and what its two ladders measure:
+#
+#     uniform node    order 1.0    75.0 mm  0.2269 ohm   (eps~=1,
+#                                  37.5 mm  0.1069        |fan - truth|)
+#                                  25.0 mm  0.0666
+#                                  18.8 mm  0.0475
+#     graded node     order ~2.6   25.00 mm 0.0036 ohm
+#                                   6.25 mm 0.0001
+#                                   1.56 mm 0.0000
+#
+# At the same 25 mm those regimes differ 18x in error. The regime is the
+# dominant variable; the millimetres are secondary. So the gated quantity
+# is the finest h within reach of the node, and on that quantity the two
+# decks read 667 mm vs 6.25 mm — 107x apart, with the bar comfortably
+# inside instead of threaded through a needle.
+#
+# On real soil the lossy transmitted kernels amplify the class ~30x: the
+# 4-rise fan moved 7.48 ohm base -> graded, and antennaknobs' catalog deck
+# sat 29 ohm of reactance off the converged answer for months while global
+# density sweeps to 4x moved it < 0.2 ohm. The bar matters most exactly
+# where it is hardest to see.
+#
+# 25 mm is #674's own coarsest GRADED rung (0.0036 ohm at eps~=1, ~0.1 ohm
+# scaled to soil) and 4x the 6.25 mm converged recipe rung. Above it a
+# node region is unresolved for this class; below it the class is at or
+# under the measurement floor.
+NODE_H_BAR = 0.025
+
+# How far from the shared point counts as "near the node". The recipe's
+# own reach: #674's grading spans geometric panels from ~6 mm out to the
+# design segment length, ~150 mm on the decks measured here.
+#
+# The classification is INSENSITIVE to this over a wide range — anything
+# from ~60 mm to ~1 m puts both calibration decks on the same sides (the
+# base fan's single 667 mm edge overlaps any window, and the antennaknobs
+# arm reaches 6.25 mm by 56 mm from the node). That is the point of
+# gating the resolved scale rather than the touching segment: the earlier
+# spelling of this advisory needed its threshold inside a 50-75 mm window
+# and flipped on a 20% move.
+NODE_REACH = 0.15
+
+# ABSOLUTE metres, both constants, deliberately: this class is the
+# interface corner's own resolution, not a wavelength fraction. Provenance
+# is two deck families at the 40 m band with one wire radius each, so a
+# deck far from that scale may read these as over- or under-eager. Known
+# limitation of the measurements behind them, not of the rule.
+
+# Attribution from #674 probe2, which is why the message names the worst
+# member rather than just the junction: rise-only grading left the
+# residual at 0.2214 (unchanged from base), while grading the ABOVE tent
+# alone dropped it to 0.0171. The dominant term is the above arm's
+# interface-adjacent resolution; rise-side pair content is secondary.
+_ABOVE_IS_DOMINANT = (
+    "the above arm's interface-adjacent mesh is the dominant term "
+    "(#674 probe2: grading the rises alone left the residual unmoved "
+    "at 0.2214 ohm; grading the above tent alone dropped it to 0.0171)"
+)
+
+
+# Point the warning at the CALLER'S deck, not at a line inside momwire —
+# an advisory that reports its own package's internals reads as an
+# internal bug. `skip_file_prefixes` (3.12+) walks out of momwire from
+# whatever entry point got here (compute_impedance, impedance_sweep,
+# far_field), which a fixed `stacklevel` cannot: those paths sit at
+# different depths. The 3.10/3.11 fallback is the depth of the
+# compute_impedance chain (warn -> _compute_Z_operator_buried ->
+# _compute_Z_operator -> compute_impedance -> caller), correct for the
+# common path and merely imprecise elsewhere — the message names the
+# wire and the mesh either way.
+_WARN_TARGET = (
+    {"skip_file_prefixes": (os.path.dirname(os.path.abspath(__file__)),)}
+    if sys.version_info >= (3, 12)
+    else {"stacklevel": 5}
+)
+
+
+def warn_coarse_node(arms):
+    """Warn when a crossing junction's node region is unresolved.
+
+    `arms` is an iterable of `NodeArm`. Returns the worst arm by
+    `h_resolved` (or None for a deck with no crossing junction), so a
+    caller — a test, a diagnostic — can read the number back whether or
+    not it crossed the bar.
+
+    ADVISORY ONLY. It never remeshes and never refuses: the deck is the
+    deck (banked prints, adjudication culture), and a coarse node is a
+    legitimate thing to ASK for — every rung of a convergence ladder but
+    the last is one. The knowledge of where and how much is ours; the
+    decision is the caller's.
+    """
+    worst = None
+    for a in arms:
+        if worst is None or a.h_resolved > worst.h_resolved:
+            worst = a
+    if worst is None or worst.h_resolved <= NODE_H_BAR:
+        return worst
+    gap = ""
+    if worst.h_adjacent > worst.h_resolved * 1.5:
+        gap = (
+            f" (its node-adjacent segment is {worst.h_adjacent * 1000:.1f} mm, "
+            f"but nothing within {NODE_REACH * 1000:.0f} mm of the node is "
+            f"finer than the figure above)"
+        )
+    warnings.warn(
+        f"crossing node: wire {worst.wire}'s {worst.end} is the {worst.side} "
+        f"member, and the finest mesh within {NODE_REACH * 1000:.0f} mm of "
+        f"the node is {worst.h_resolved * 1000:.1f} mm, above the "
+        f"{NODE_H_BAR * 1000:.0f} mm bar{gap}. This node carries a "
+        f"convergence class that is FIRST ORDER in the node mesh with no "
+        f"plateau (momwire#674), so a global density sweep will report it "
+        f"as converged while it is not — and on lossy soil the class "
+        f"amplifies ~30x. Grade the node instead: geometric panels toward "
+        f"the shared point, ~6 mm at the node growing to the design's own "
+        f"segment length away from it, spelled as extra VERTICES in the "
+        f"wire's polyline with per-edge counts in n_per_edge_per_wire so "
+        f"the grading cannot change junction topology. {_ABOVE_IS_DOMINANT}. "
+        f"Advisory: nothing is remeshed. See stevenmburns/momwire#696.",
+        CoarseCrossingNode,
+        **_WARN_TARGET,
+    )
+    return worst
+
 
 _TILT_TOL = 1e-12
 _CROSS_RTOL = 1e-9
