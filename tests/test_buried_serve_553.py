@@ -1036,35 +1036,38 @@ def test_gu5_11_the_grids_are_shared_across_a_ladder(record_property):
 # `eznec._serve._REFUSE_BURIED_WITH_CONTACT` print; the binding is gated
 # below so the constants and the prose cannot drift apart.
 
-# RE-DERIVED 2026-08-27 (momwire#524 phase 2 P3, probe35 on the canonical
-# decks), then CORRECTED 2026-08-28 by the momwire#706 erratum: probe35 fed
-# momwire at arclength 4.3333 against the engine's `EX 4,1,7`, which drives
-# the NODE at 4.6667 — half an element apart. The 2026-08-27 cells, at the
-# mismatched feed, were:
+# RE-DERIVED 2026-08-28 at the MATCHED feed (the momwire#706 correction:
+# both sides drive the 4.6667 node; the 2026-08-27 numbers, fed half an
+# element off, are void). The corrected cell grid on the x1 (15/10) mesh:
 #
-#   shipped grid ≡ complete M+bnd (the by-parts identity, measured 0.01 Ω
-#   apart):                             lone 46.57 Ω    fan 141.49 Ω
-#   continuation-consistent M-only:     lone 12.91 Ω    fan  17.16 Ω
+#   shipped (field-form) grid:          lone 51.43 Ω    fan 137.32 Ω
+#   continuation-consistent M-only:     lone  3.474 Ω   fan   4.976 Ω
+#   (M+bnd wrecks lone at 51.38; fan M+hub ≡ M to the digit — the hub's
+#   by-parts terms still cancel through its KCL row)
 #
-# At the MATCHED feed (both sides at 4.6667, same 15/10 mesh) the M-only
-# misses collapse to lone 3.474 Ω / fan 4.976 Ω, while the shipped cell
-# stays bad (~51 Ω — the boundary-term defect is real regardless). The
-# momwire side is one coarse mesh, not yet laddered: the full cell grid,
-# the envelope, and the refuse-or-serve decision are UNDER RE-DERIVATION —
-# momwire#567 (reopened) carries the plan. What survives the erratum: the
-# residual physics reading (the contact current SPREADING into the soil, a
-# real current these decks have no conductor for, carried by the engine as
-# a point stake — the fiction the crossing adjudication measured violating
-# its own AGARD condition), and the served RISE respelling (the radial
-# rises to the surface and junction-joins the monopole — the crossing
-# serve, `test_crossing_serve_524`), whose answer is banked in
+# And the LADDERS (momwire M-only x1–x6, engine EX 4,1,7m x1–x8 — the
+# same physical node every rung; scratch/567-phase3/results/, probes r4
+# and r5): converged-vs-converged the residual is lone 3.02 Ω (dR +0.08,
+# dX −3.02 — the converged resistances AGREE to 0.08 Ω; the entire
+# residual is reactive) and fan 6.26 Ω (dR +3.49, dX −5.20). That
+# structure — pure-X on lone, mixed R+X growing with collector count —
+# is a real spreading current's signature: the current these decks have
+# no conductor for, carried by the engine as a point stake (the fiction
+# the crossing adjudication measured violating its own AGARD condition).
+# β* re-fitted at the matched feed still does not transfer (lone
+# 0.4821+0.3619j vs fan 0.3597−0.0721j, no interface-family constant),
+# so no fixed source spelling closes it: the deck class stays refused
+# rather than served ~3–6 ohm wrong. The served alternative remains the
+# RISE respelling (`test_crossing_serve_524`), banked in
 # `scratch/524-phase2/results/probe36-rise-spelling.json` as a documented
 # convention difference, never gated against these prints.
 #
-# The envelope below is therefore the PRE-ERRATUM ceiling, kept only until
-# momwire#567's re-derivation replaces it; the refusal stays meanwhile, so
-# nothing scores against it today.
-ANCHOR_ENVELOPE_OHM = 18.0
+# The envelope is the x1-vs-x1 frame these gates score in (the anchors
+# are x1 prints; the engine's own tail sits 6.8 Ω from them — quote
+# ladders, never single rungs): worst matched-feed x1 miss 4.976 Ω plus
+# the ≥15–20 % CI-allocator margin. Anything tighter needs new physics,
+# not new quadrature.
+ANCHOR_ENVELOPE_OHM = 6.0
 
 # What each trunk refuses these decks with TODAY. Since momwire#651 routed
 # razor's buried readings through `_medium_spec.wire_media`, BOTH trunks
