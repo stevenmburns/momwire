@@ -58,14 +58,17 @@ _GX8, _GW8 = leggauss(8)
 
 # The #688 admissibility split: far (admissible) segment blocks are evaluated
 # on COARSER axes and through the low-rank ACA pass; near / corner-adjacent
-# blocks keep the dense graded axes and the designed direct evaluation
-# unconditionally. The coarse knobs are the banked density-ladder combo
-# (far Gauss 6->4, panels G8->G4, growth x2->x4: <= 3e-4 ohm movement on the
-# adjudication decks against gate envelopes 100x wider) — safe HERE because
-# the split never lets a near pair see them; a GLOBAL default drop would
-# need the deeper-deck ladder the #688 comment calls for. Segments meeting
+# blocks keep the designed direct evaluation unconditionally. The coarse
+# knobs are the banked density-ladder combo (far Gauss 6->4, panels G8->G4,
+# growth x2->x4: <= 3e-4 ohm movement on the adjudication decks against
+# gate envelopes 100x wider). Since #692's DEEPER-deck ladder (0.5 m and
+# 1.0 m rungs, base and node-graded meshes, worst soil movement 7e-4 ohm
+# with the graded eps1 collapse margins unmoved at the 1e-4 class) the
+# NEAR axes carry the same density by default — the _NEAR_* knobs below,
+# kept separate from _FAR_* so either side reverts alone. Segments meeting
 # at the crossing node have box distance 0 and are inadmissible by
-# construction, so every corner-adjacent pair stays dense-direct.
+# construction, so every corner-adjacent pair stays dense-direct — and the
+# corner V(a) itself routes through six_point, touching none of this.
 _ADM_ETA = 1.0
 _ACA_TOL = 1e-7
 # leaf=3 measured as the knee (2026-08-27 ladder): leaf=4 leaves an extra
@@ -77,6 +80,14 @@ _ACA_TOL = 1e-7
 _CLUSTER_LEAF_SEGS = 3
 _FAR_Q = 4
 _FAR_GROWTH = 4.0
+# The near/fine axes' density (#692): same values as _FAR_* today, banked
+# by the deeper-deck ladder (scratch/692-study in antennaknobs + the #692
+# comment). Reverting the near side alone = q 4->6 here and G4->G8/x4->x2
+# below; `_n_qp_buried_field`'s q=6 measurement stays authoritative for
+# the buried GRID fills, which never routed through these axes.
+_NEAR_Q = 4
+_NEAR_GROWTH = 4.0
+_NEAR_GX, _NEAR_GW = leggauss(4)
 # ACA only where sampling undercuts the full coarse product: rank-r
 # sampling costs ~(rows+cols)·(m+n) designed points across the four
 # kernels (measured ranks 6-8), so a block must have m·n well past
@@ -118,16 +129,20 @@ def axis_data(s, geom, seg_idx, coarse=False):
     the signed wire-end table for the by-parts terms.
 
     Segments touching the interface get log-graded panels toward it;
-    every other segment keeps the buried fill's own Gauss order. The ends
+    every other segment gets plain Gauss at the crossing fill's own
+    density (`_NEAR_Q` since #692 — the buried GRID fills keep
+    `_n_qp_buried_field`, which no longer routes through here). The ends
     table keeps only ends where some basis has nonzero value (value-1
     junction/contact tents); free ends carry no basis and drop out.
 
     `coarse=True` builds the far-block variant of the same axis (the #688
-    density knobs); it exists only for admissible blocks and must never be
-    fed to the ends/corner terms.
+    density knobs — numerically the same densities as near since #692,
+    kept a separate variant so either side's knobs revert alone); it
+    exists only for admissible blocks and must never be fed to the
+    ends/corner terms.
     """
     d = s.degree
-    q = _FAR_Q if coarse else s._n_qp_buried_field()
+    q = _FAR_Q if coarse else _NEAR_Q
     xg, wg = leggauss(q)
     tq = 0.5 * (xg + 1.0)
     gz = float(s.ground_z)
@@ -156,7 +171,14 @@ def axis_data(s, geom, seg_idx, coarse=False):
                     h, "lo" if touch_lo else "hi", a_wire, _FAR_GROWTH, _GX4, _GW4
                 )
             else:
-                u, w = _graded_u(h, "lo" if touch_lo else "hi", a_wire)
+                u, w = _graded_u(
+                    h,
+                    "lo" if touch_lo else "hi",
+                    a_wire,
+                    _NEAR_GROWTH,
+                    _NEAR_GX,
+                    _NEAR_GW,
+                )
         else:
             u = h * tq
             w = 0.5 * h * wg

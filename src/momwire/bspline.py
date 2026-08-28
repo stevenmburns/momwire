@@ -4179,6 +4179,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         `n_qp_sommerfeld` still raises it if a caller asked for more: the
         knob keeps meaning "at least this".
+
+        Since momwire#692 the CROSSING fill's axes no longer route through
+        this knob — its density ladder (shallow AND deep rungs) banked its
+        own `_NEAR_Q`/`_FAR_Q` in `_crossing_fill`. The q = 6 measurement
+        above stays authoritative for the three grid field-form blocks.
         """
         return max(int(self.n_qp_sommerfeld), _N_QP_BURIED_FIELD)
 
