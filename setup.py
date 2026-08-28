@@ -3,7 +3,7 @@ import os
 import sys
 import warnings
 
-from pybind11.setup_helpers import Pybind11Extension
+from pybind11.setup_helpers import ParallelCompile, Pybind11Extension
 from setuptools import setup
 from setuptools.command.build_ext import build_ext
 
@@ -164,6 +164,25 @@ _ACCEL_HEADERS = [
     "src/momwire/_bspline_static_moments_inline.h",
     "src/momwire/_bspline_ek_moments_inline.h",
     "src/momwire/_contour_engine_inline.h",
+    # The shared preamble of the split TUs (momwire#687): includes, the OpenMP
+    # simd declarations and the cancellation machinery. Every accelerator TU
+    # includes it, so an edit here must rebuild all of them -- the momwire#568
+    # stale-.so lesson, which is exactly why this list exists.
+    "src/momwire/_accel_common.h",
+    "src/momwire/_accel_somm_proj_inline.h",
+]
+
+# The accelerator's translation units (momwire#687). The monolith was one
+# ~8,000-line TU, so a one-line edit anywhere recompiled all of it; these are
+# cut along the sections' own boundaries and compile independently. The thin
+# `_accelerators.cpp` holds only PYBIND11_MODULE and calls each section's
+# `register_*`, so every kernel keeps internal linkage inside its own TU.
+_ACCEL_SOURCES = [
+    "src/momwire/_accelerators.cpp",
+    "src/momwire/_accel_bspline.cpp",
+    "src/momwire/_accel_sinusoidal.cpp",
+    "src/momwire/_accel_somm.cpp",
+    "src/momwire/_accel_mw568.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
@@ -173,10 +192,19 @@ _NEAR_HEADERS = ["src/momwire/_contour_engine_inline.h"] + sorted(
     glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True)
 )
 
+# Compile the accelerator's translation units concurrently (momwire#687). With
+# the old single-TU monolith this bought nothing; with five TUs it is what
+# makes a COLD build -- CI's first run, and every wheel-matrix job -- cheaper
+# rather than merely no worse, since splitting a TU adds total compiler work
+# (the shared preamble is parsed once per TU) even as it shrinks the
+# incremental edit. Honours NPY_NUM_BUILD_JOBS; defaults to the CPU count, and
+# `NPY_NUM_BUILD_JOBS=1` restores serial compilation for a constrained runner.
+ParallelCompile("NPY_NUM_BUILD_JOBS").install()
+
 ext_modules = [
     Pybind11Extension(
         "momwire._accelerators",
-        ["src/momwire/_accelerators.cpp"],
+        _ACCEL_SOURCES,
         depends=_ACCEL_HEADERS,
         extra_compile_args=extra_compile_args,
         extra_link_args=extra_link_args,
