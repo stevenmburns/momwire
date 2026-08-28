@@ -142,7 +142,37 @@ jobs:
     # The platform Ward runs SimNEC on (momwire#527/#528): the suite must
     # pass where the portal's real users live, not only where wheels build.
     # Same lane as `test` (fast marker subset); slow/memgate stay linux-only.
+    #
+    # NOT a PR gate (turnaround work, 2026-08-28), and the reason is what
+    # this lane was actually FOR. #527's body reads as a macOS bug report; it
+    # was not. AE6TY's SimNEC crashed on the portal's output on LINUX — the
+    # macOS side of it was that momwire would not run in the AE6TY
+    # development environment at all, so the crash could only be reproduced
+    # somewhere it could not be debugged. This lane exists to make momwire
+    # BUILD AND PASS on macOS so that debugging can happen there. That is
+    # enablement scaffolding, not a regression gate, and it does not need to
+    # block a review cycle.
+    #
+    # The numbers agree. Over 119 ci.yml runs (2026-08-25..27) it failed
+    # twice in 117, and BOTH were shared with the linux `test` job: zero
+    # macOS-specific catches, two bugs found twice, at 4:17 on the critical
+    # path that decides how many edit->signal turns an hour this repo
+    # supports.
+    #
+    # Kept on push (not deleted) because the statistics are the weak argument
+    # here and the mechanism is the strong one: the C++ accelerator is
+    # compiled per platform and `brew install libomp` above exists because
+    # OpenMP linkage is where the platforms genuinely differ. That class has
+    # bitten already — pynec-accel's vendored libgomp silently disabling the
+    # accelerator through a static-TLS clash — and a silent accelerator
+    # passes every assertion in this suite. Three clean days is not evidence
+    # it cannot happen. `wheels.yml` is the second net, running a macos-14
+    # cross-engine leg on every main push and every `v*` tag; it validates a
+    # WHEEL, though, not the suite, which is why this lane still earns a run.
     runs-on: macos-14
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -185,6 +215,17 @@ jobs:
 
   test-slow:
     needs: changes
+    # NOT a PR gate (turnaround work, 2026-08-28). Over 119 runs this was the
+    # most failure-prone job (3 of 117) and every failure was unique to it —
+    # but two of the three were momwire#677's residency divergence, a known
+    # CI-only issue whose gate #678 has since put back to non-strict, and the
+    # third was a stale expectation (#611's gal/bs2 gap assertion), not a
+    # shipped-behaviour regression. Forward-looking that is ~1 real catch per
+    # 75 PRs against 1.5 min added to every review cycle. It runs one merge
+    # later instead, where nobody is waiting on it.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      && needs.changes.outputs.code == 'true'
     # The slow-marked tests are the solver-regression pins (M3/M4 reference
     # constants, near-open collapse, section-6 oracle, EK brute-force sweep)
     # — until #219 NO lane ran them, so week-old pins had never executed in
