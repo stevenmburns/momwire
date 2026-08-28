@@ -1273,12 +1273,28 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         feeds). Which of those junctions actually SPAN the interface, and
         whether the deck is inside the crossing serve's scope, is
         `_crossing_junctions`' question, asked after the labels exist.
+
+        Groups with fewer than two members are skipped (momwire#698). A
+        one-member group is legal (momwire#172 — its KCL row pins
+        I_end = 0, and as a junction PORT it is a lone attachment), but one
+        wire end cannot join two media, so such a group can NEVER be the
+        crossing junction this exemption is granted for. Admitting it
+        handed a contact+buried deck a silent escape from
+        `_medium_spec.wire_media`'s refusal while `_crossing_junctions`
+        still declined it (one member never spans), dropping the deck onto
+        the field-form transmitted block — the O(1)-boundary-term
+        configuration the refusal exists to prevent. The count is the
+        cheapest NECESSARY condition for crossing and it is pure geometry,
+        so it belongs here; the SUFFICIENT condition needs labels and is
+        `_crossing_junctions`'.
         """
         gz = self.ground_z
         if gz is None or not self.junctions:
             return frozenset()
         ends = set()
         for jw in self.junctions:
+            if len(jw) < 2:
+                continue
             w, end = jw[0]
             pl = self.wires_polylines[w]
             pt = pl[0] if end == "start" else pl[-1]
@@ -1322,6 +1338,41 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             sides = {media[w] for w, _e in jw}
             if len(sides) == 2:
                 crossing.append(j_idx)
+
+        # The exemption audit (momwire#698), before the empty-crossing
+        # return because the escape it closes is exactly the empty case.
+        #
+        # `_grounded_junction_ends` grants its exemption on GEOMETRY — a
+        # junction whose shared point lies in the plane — and that
+        # exemption silences `_medium_spec.wire_media`'s contact+buried
+        # refusal. Only a junction that actually CROSSES earns the silence:
+        # the crossing fill is what carries the contact end's current into
+        # the lower medium, and a grounded junction that turned out not to
+        # span the interface (one member, or every member above it) leaves
+        # the deck on the field-form transmitted block with the contact
+        # basis's O(1) boundary term unaccounted for. So re-ask the refusal
+        # predicate here with the exemption narrowed from "touches the
+        # plane" to "validated as crossing".
+        #
+        # Here and not in `wire_media`: crossing-ness is a MEDIA question
+        # and the exemption set is computed before the labels exist. Here
+        # and not at the dispatch site: this is the single function both
+        # dispatch arms consult, and it already requires the ground attrs
+        # (`_wire_media`, `_grounded_junctions`), so it cannot fire on a
+        # bare `__new__` probe — the momwire#660 misplacement trap.
+        earned = {tuple(m) for j_idx in crossing for m in self.junctions[j_idx]}
+        stranded = [
+            c
+            for c in _ground_spec.contact_ends(self.wires_polylines, self.ground_z)
+            if c not in earned
+        ]
+        if stranded:
+            raise ValueError(
+                _medium_spec.contact_with_buried_refusal(
+                    stranded[0][0], media.index(_medium_spec.BELOW)
+                )
+            )
+
         if not crossing:
             return ()
         for j_idx in crossing:
