@@ -213,7 +213,7 @@ def six_point(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     return head + mid + tail
 
 
-def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
+def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
     """Broadcast wrapper over `six_point`. Accepts z′ = 0 and z = 0
     exactly (no clamp); refuses only R = 0. Returns dict over `KEYS`.
 
@@ -226,6 +226,14 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     Keys are exact float tuples: no rounding, no tolerance, nothing to
     convention-gate.
 
+    `memo` (momwire#688): an optional CALLER-OWNED dict extends the dedup
+    across calls — the crossing fill's admissibility split makes many
+    designed calls per fill (near batch, far-block samples), and a
+    symmetric deck repeats triples ACROSS those calls exactly as it does
+    within one. The caller must hold (ε̃, k₂, rtol) fixed for the memo's
+    lifetime — the key is the triple alone, exactly as within a call.
+    Filled entries are (6,) complex arrays; unfilled sentinel is None.
+
     The memo layer stays HERE even when the C++ twin serves (#680 U2): the
     dedup happens first, and only the unique triples cross into
     `near_interface_six_batch` (that list is also U3's parallel unit). The
@@ -236,14 +244,17 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
     )
     out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
-    memo = {}
+    if memo is None:
+        memo = {}
     it = np.nditer(rho_b, flags=["multi_index"])
+    unique = []
     for _ in it:
         ix = it.multi_index
         key = (float(rho_b[ix]), float(z_b[ix]), float(zp_b[ix]))
-        if key not in memo:
+        if memo.get(key) is None:
+            if key not in memo:
+                unique.append(key)
             memo[key] = None  # first-appearance order, filled below
-    unique = list(memo)
     if _use_near_interface_accel() and unique:
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
@@ -282,11 +293,12 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     return dict(zip(KEYS, out))
 
 
-def radius_tables(eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10):
+def radius_tables(eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10, memo=None):
     """`designed_tables` with the thin-wire offset folded in:
     ρ_eff = hypot(ρ, a) — the same-edge moments' R = √(Δz² + a²)
     convention extended to the cross family (the derivation's radius
     rule: every cross-family evaluation whose pair distance can reach
-    the a-scale carries the offset; at R ≫ a it is invisible)."""
+    the a-scale carries the offset; at R ≫ a it is invisible). `memo`
+    keys on the FOLDED ρ_eff (see `designed_tables`)."""
     rho_eff = np.hypot(np.asarray(rho, float), float(wire_radius))
-    return designed_tables(eps_t, k2, rho_eff, z, zp, rtol=rtol)
+    return designed_tables(eps_t, k2, rho_eff, z, zp, rtol=rtol, memo=memo)

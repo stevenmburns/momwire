@@ -4640,17 +4640,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if a_idx.size and self._crossing_junctions():
             # The crossing serve (momwire#524 phase 2): the cross pair is
             # the COMPLETE designed mixed-potential spelling on graded
-            # axes — every value is a direct contour evaluation, so there
-            # is no grid and no interpolation to exclude the corner. The
-            # transpose is reciprocity, measured on the adjudication decks
-            # rather than assumed. The self families get their missing
-            # by-parts bnd + corner content on the same axes; continuity
-            # through the node and the AGARD slope condition then emerge
-            # from the fill with no constraint row and no merged dof.
+            # axes. Near / corner-adjacent pairs are direct contour
+            # evaluations — no grid, no interpolation to exclude the
+            # corner — while admissible far blocks ride the #688
+            # admissibility split (coarse axes + low-rank ACA, parity-
+            # gated against the dense fill). The transpose is
+            # reciprocity, measured on the adjudication decks rather
+            # than assumed. The self families get their missing by-parts
+            # bnd + corner content on the dense axes; continuity through
+            # the node and the AGARD slope condition then emerge from
+            # the fill with no constraint row and no merged dof.
             self._checkpoint()
             ax_a = _crossing_fill.axis_data(self, geom, a_idx)
             ax_b = _crossing_fill.axis_data(self, geom, b_idx)
-            t_ab = _crossing_fill.cross_complete_block(self, geom, ax_a, ax_b)
+            t_ab = _crossing_fill.cross_complete_block_split(
+                self, geom, a_idx, b_idx, ax_a, ax_b
+            )
             Z -= t_ab
             Z -= t_ab.T
             Z += _crossing_fill.self_completions(self, geom, ax_b, ax_a)
