@@ -142,13 +142,17 @@ def contact_deck(depth=0.15):
     Provenance, against the sentence the refusals print: a 10 m monopole
     standing 10 → 0 (its lower end IN the plane, which is the contact), one
     DETACHED 5 m radial 15 cm down, eps_r 13 / sigma 0.005 S/m, 7 MHz. The
-    feed arclength 4.3333 m is the centre of segment 7 of 15, i.e. the
-    engine deck's `EX 4,1,7`.
+    feed arclength 4.6667 m is NODE 7 of 15, the engine deck's `EX 4,1,7`:
+    `EX 4,tag,k` drives the far NODE of segment k — arc k·h from the wire's
+    START — not the segment's centre (momwire#706; the measurement is
+    `test_eznec_reactive_drive_agreement.py`). Until 2026-08-28 this
+    builder fed at 4.3333 ("segment 7's centre"), half an element off, and
+    every anchor comparison inherited the offset.
     """
     return dict(
         wires=[np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)]), _radial(depth=depth)],
         n_per_edge_per_wire=[[15], [10]],
-        feeds=[(0, 4.3333333333, 1 + 0j)],
+        feeds=[(0, 4.6666666667, 1 + 0j)],
         wavelength=WL7,
         wire_radius=0.001,
         ground_z=0.0,
@@ -175,7 +179,7 @@ def fan_deck(depth=0.15):
         # monopole's own end is 15 cm above at (0, 0, 0) and is correctly not
         # a member.
         junctions=[[(1, "start"), (2, "start"), (3, "start"), (4, "start")]],
-        feeds=[(0, 4.3333333333, 1 + 0j)],
+        feeds=[(0, 4.6666666667, 1 + 0j)],
         wavelength=WL7,
         wire_radius=0.001,
         ground_z=0.0,
@@ -938,7 +942,7 @@ def test_gu5_9_a_contact_deck_with_no_buried_wire_still_serves():
     s = BSplineSolver(
         wires=[np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)])],
         n_per_edge_per_wire=[[15]],
-        feeds=[(0, 4.3333333333, 1 + 0j)],
+        feeds=[(0, 4.6666666667, 1 + 0j)],
         wavelength=WL7,
         wire_radius=0.001,
         ground_z=0.0,
@@ -1033,35 +1037,33 @@ def test_gu5_11_the_grids_are_shared_across_a_ladder(record_property):
 # below so the constants and the prose cannot drift apart.
 
 # RE-DERIVED 2026-08-27 (momwire#524 phase 2 P3, probe35 on the canonical
-# decks). What the adjudicated composition actually achieves against these
-# anchors, per spelling of the cross block:
+# decks), then CORRECTED 2026-08-28 by the momwire#706 erratum: probe35 fed
+# momwire at arclength 4.3333 against the engine's `EX 4,1,7`, which drives
+# the NODE at 4.6667 — half an element apart. The 2026-08-27 cells, at the
+# mismatched feed, were:
 #
 #   shipped grid ≡ complete M+bnd (the by-parts identity, measured 0.01 Ω
 #   apart):                             lone 46.57 Ω    fan 141.49 Ω
-#   continuation-consistent M-only
-#   (all end terms omitted, matching
-#   the shipped contact columns):       lone 12.91 Ω    fan  17.16 Ω
-#   (fan M+hub ≡ M to the digit — the radial hub's by-parts terms cancel
-#   through its KCL row, as derived)
+#   continuation-consistent M-only:     lone 12.91 Ω    fan  17.16 Ω
 #
-# The M-only numbers reproduce momwire#567 phase 0's B(drop) misses to the
-# printed digit on DESIGNED kernels, so the residual is not quadrature: it
-# is the contact current SPREADING into the soil, a real current these
-# decks have no conductor for. The engine models it as a point stake — the
-# same fiction the crossing adjudication measured violating its own AGARD
-# condition — so a sub-ohm parity target against these prints does not
-# exist for ANY consistent spelling, and the deck class stays refused
-# rather than served 13-17 ohm wrong. The served alternative is the RISE
-# respelling (give the spreading current its conductor: the radial rises
-# to the surface and junction-joins the monopole — the crossing serve,
-# `test_crossing_serve_524`), whose answer is banked in
+# At the MATCHED feed (both sides at 4.6667, same 15/10 mesh) the M-only
+# misses collapse to lone 3.474 Ω / fan 4.976 Ω, while the shipped cell
+# stays bad (~51 Ω — the boundary-term defect is real regardless). The
+# momwire side is one coarse mesh, not yet laddered: the full cell grid,
+# the envelope, and the refuse-or-serve decision are UNDER RE-DERIVATION —
+# momwire#567 (reopened) carries the plan. What survives the erratum: the
+# residual physics reading (the contact current SPREADING into the soil, a
+# real current these decks have no conductor for, carried by the engine as
+# a point stake — the fiction the crossing adjudication measured violating
+# its own AGARD condition), and the served RISE respelling (the radial
+# rises to the surface and junction-joins the monopole — the crossing
+# serve, `test_crossing_serve_524`), whose answer is banked in
 # `scratch/524-phase2/results/probe36-rise-spelling.json` as a documented
 # convention difference, never gated against these prints.
 #
-# The envelope below therefore stays at the continuation spelling's
-# ceiling: if a future arc arms the anchor comparison, 18.0 is what the
-# adjudicated composition actually achieves (M-only, both decks), and
-# anything tighter needs new physics, not new quadrature.
+# The envelope below is therefore the PRE-ERRATUM ceiling, kept only until
+# momwire#567's re-derivation replaces it; the refusal stays meanwhile, so
+# nothing scores against it today.
 ANCHOR_ENVELOPE_OHM = 18.0
 
 # What each trunk refuses these decks with TODAY. Since momwire#651 routed

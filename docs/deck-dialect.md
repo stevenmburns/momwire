@@ -63,6 +63,15 @@ second parser, not a second pipeline. Nothing NEC-2-specific may enter the
 model's vocabulary; `node_gaps` is already there because it is how NEC-5's
 segment-end sources will land.
 
+One addressing contrast between the dialects is worth naming because it cost
+a re-derivation (momwire#706): NEC-2's `EX` excites a SEGMENT and the port
+lands at that segment's centre, while the NEC-5/EZNEC dialect's `EX 4,tag,k`
+drives the far NODE of segment k — arclength k·h from the wire's start. The
+measurements pinning the node convention (engine current-table
+reconstruction, the `EX 4,1,N` sweep) live with the gates in
+`tests/test_eznec_reactive_drive_agreement.py`, and the eznec seam's module
+docstring (`src/momwire/eznec/_serve.py`) states the spelling.
+
 ## The mesh `build_solver` builds
 
 `DeckModel` describes conductors span by span; a solver wants each electrical

@@ -180,8 +180,11 @@ def fan_rise_deck(n_radials=4, depth=0.15, **override):
     legal thin-wire geometry (mutual ≡ self at ρ = 0 under the
     ρ_eff = √(ρ² + a²) regularization), and the spelling the free-space
     junction machinery solves identically for the ε̃ = 1 adjudicator.
-    Feed = arclength 4.3333 on the 10 → 0 monopole (EX 4,1,7 — the trap:
-    an improvised feed at 10 − 4.333 is silently ~50 Ω wrong)."""
+    Feed = arclength 4.3333 on the 10 → 0 monopole. NOT the engine's
+    `EX 4,1,7` — that card drives the far NODE at arc 4.6667 (momwire#706);
+    these gates are momwire-internal (both sides of every comparison feed
+    at 4.3333), so the banked prints stand. The old trap also stands: an
+    improvised feed at 10 − 4.333 is silently ~50 Ω wrong."""
     dirs = ((1, 0), (0, 1), (-1, 0), (0, -1))[:n_radials]
     wires = [
         np.array([(5.0 * dx, 5.0 * dy, -depth), (0.0, 0.0, -depth), (0.0, 0.0, 0.0)])
@@ -637,8 +640,10 @@ def test_g674_2_soil_a_fan_anchor(record_property):
 # the contact basis's O(1) boundary term unaccounted for, which is the one
 # configuration the refusal exists to prevent. Measured on main @ 202e0f6:
 # the one-member spelling answered 86.9322 − 23.8620j, 46.57 Ω from the
-# engine's 92.130 − 70.141j and worse than the refusal prose's own
-# recorded 13–17 Ω best-consistent-spelling gap.
+# engine's 92.130 − 70.141j and worse than the refusal prose's then-quoted
+# 13–17 Ω best-consistent-spelling gap. (Both figures predate the
+# momwire#706 feed correction — historical record, direction unaffected:
+# the shipped cell stays ~51 Ω wrong at the matched feed.)
 # ----------------------------------------------------------------------
 
 
