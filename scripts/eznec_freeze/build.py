@@ -17,6 +17,7 @@ One-file is disqualified, not merely slower.
 
 from __future__ import annotations
 
+import importlib.util
 import shutil
 import subprocess
 import sys
@@ -41,6 +42,20 @@ NAME = "momwire-eznec"
 # bundle carries the PAIR the parity work was about — the default and the
 # NEC-5 twin — and the README says how to make any other, which is a copy.
 SHIPPED_VARIANTS = ("razor-nec5",)
+
+
+def _load_sign():
+    """Import the sibling ``sign`` module by path.
+
+    By path for the same reason smoke.py imports THIS file by path: scripts/
+    is not a package.  Called from inside ``main()`` rather than imported at
+    module level because smoke.py exec's this module to read
+    SHIPPED_VARIANTS, and reading a list must not drag in signing.
+    """
+    spec = importlib.util.spec_from_file_location("eznec_freeze_sign", HERE / "sign.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def main() -> int:
@@ -77,14 +92,43 @@ def main() -> int:
         print(f"ERROR: no {NAME} executable in {bundle}", file=sys.stderr)
         return 1
 
+    # Sign BEFORE the copy loop, not after.  Authenticode covers PE contents
+    # and NOT the filename, so a copy of a signed exe is itself validly
+    # signed -- one signtool call therefore ships every variant signed, which
+    # matters when a cloud-HSM CA meters signing operations.
+    #
+    # Scope, so the README's claim stays honest: this signs the LAUNCHER.
+    # In one-dir the Python payload lives in _internal/ and is outside the
+    # signed bytes, so the signature attests who shipped the stub, not that
+    # the engine beside it is untouched.  One-file would cover both and is
+    # disqualified on the 17 s vs 1.3 s launch measurement above.
+    signer = _load_sign()
+    signed = signer.sign_if_configured([exe])
+
     # One copy per shipped variant.  `shutil.copy2` and not a symlink or hard
     # link: the zip is unpacked on Windows, where neither survives the round
     # trip through Compress-Archive and Explorer, and a link that arrives as a
     # 0-byte stub is a broken engine that looks like a present one.
+    variants = []
     for basis in SHIPPED_VARIANTS:
         variant = exe.with_name(f"{NAME}-{basis}{exe.suffix}")
         shutil.copy2(exe, variant)
+        variants.append(variant)
         print(f"variant: {variant.name}")
+
+    # Assert what the pre-copy ordering CLAIMS, rather than trusting it: a
+    # variant that silently arrived unsigned is precisely the failure that
+    # ordering exists to prevent, and nothing downstream would notice it.
+    if signed:
+        for variant in variants:
+            if not signer.has_signature(variant):
+                print(
+                    f"ERROR: {variant.name} carries no signature; the copy "
+                    "did not inherit it",
+                    file=sys.stderr,
+                )
+                return 1
+        print(f"signature present on all {len(variants) + 1} executables")
 
     # A provenance note inside the bundle: which momwire this is, and where
     # the drop-in's serve/refuse contract is documented.

@@ -71,6 +71,29 @@ jobs:
       # Install momwire from this checkout (builds the MSVC accelerator, same
       # toolchain path the wheels take) plus the freezer.
       - run: pip install . "pyinstaller>=6.10,<7"
+      # Self-signed REHEARSAL signing: exercises the whole signing path --
+      # signtool discovery, sign-before-copy, the copy-inherits-signature
+      # assertion, and a smoke gate running against signed bytes -- with no
+      # certificate and no money. MOMWIRE_SIGN_ALLOW_UNTRUSTED is what makes
+      # it passable at all: a self-signed cert cannot chain to a trusted root,
+      # so `signtool verify /pa` must fail here by construction.
+      #
+      # NEVER ON A TAG, deliberately. A self-signed signature on a public
+      # release is WORSE than none: users see "Unknown Publisher" either way,
+      # and an untrusted-root signature reads as tampering to some AV
+      # heuristics. So tags keep shipping unsigned until a real certificate
+      # lands, at which point this step is REPLACED -- not merely un-gated --
+      # by one that opens the real key, and dropping ALLOW_UNTRUSTED turns the
+      # chain check back into a gate.
+      - name: Rehearsal signing certificate (self-signed, never on tags)
+        if: github.ref_type != 'tag'
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire eznec rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
+          "MOMWIRE_SIGN_SHA1=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOMWIRE_SIGN_ALLOW_UNTRUSTED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # Signs when the step above exported a thumbprint; a tag build finds
+      # MOMWIRE_SIGN_SHA1 unset and builds unsigned, exactly as before.
       - run: python scripts/eznec_freeze/build.py
       # The gate: frozen exe vs `python -m momwire.eznec`, byte-identical on
       # serving decks (CRLF included), refusal frame present on a refused one,
