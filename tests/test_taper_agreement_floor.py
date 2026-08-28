@@ -511,9 +511,7 @@ def _ward_split_fed(n_per_sec):
     new_junctions.append([(fed, "end"), (fed + 1, "start")])
     half = n_per_sec // 2
     npe = (
-        [[n_per_sec]] * fed
-        + [[half], [half]]
-        + [[n_per_sec]] * (len(wires) - fed - 1)
+        [[n_per_sec]] * fed + [[half], [half]] + [[n_per_sec]] * (len(wires) - fed - 1)
     )
     return BSplineSolver(
         degree=2,
