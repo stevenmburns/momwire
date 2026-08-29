@@ -120,11 +120,27 @@ def has_signature(path: Path) -> bool:
 
 
 def _identity_args() -> list[str]:
-    """How signtool should find the private key.
+    """How signtool should find the private key -- the one CA-specific stanza.
 
-    The one CA-specific stanza.  A cloud-HSM provider replaces this with
-    ``["/dlib", <provider dll>, "/dmdf", <metadata json>]``.
+    Two modes, chosen by which variable is set:
+
+    ``MOMWIRE_SIGN_METADATA``
+        Azure Artifact Signing.  The key never leaves the service, so there
+        is no thumbprint and nothing in the local store; signtool reaches it
+        through the dlib named by ``MOMWIRE_SIGN_DLIB`` and a metadata file
+        naming the account, the certificate profile, and the REGION endpoint.
+        A region/endpoint mismatch surfaces as 403 plus a SignerSign()
+        failure, not as anything mentioning regions.
+    ``MOMWIRE_SIGN_SHA1``
+        A certificate in the Windows store -- the self-signed rehearsal, or
+        a hardware token.
+
+    Azure wins when both are set, so a tag build cannot accidentally sign
+    with a rehearsal certificate left in the environment.
     """
+    metadata = os.environ.get("MOMWIRE_SIGN_METADATA")
+    if metadata:
+        return ["/dlib", os.environ["MOMWIRE_SIGN_DLIB"], "/dmdf", metadata]
     return ["/sha1", os.environ["MOMWIRE_SIGN_SHA1"]]
 
 
@@ -138,7 +154,7 @@ def sign(paths: list[Path]) -> None:
 
     signtool = find_signtool()
     timestamp = os.environ.get("MOMWIRE_SIGN_TIMESTAMP_URL", DEFAULT_TIMESTAMP_URL)
-    thumbprint = os.environ["MOMWIRE_SIGN_SHA1"]
+    thumbprint = os.environ.get("MOMWIRE_SIGN_SHA1")
     cmd = [
         str(signtool),
         "sign",
@@ -154,7 +170,7 @@ def sign(paths: list[Path]) -> None:
         *_identity_args(),
         *(str(p) for p in paths),
     ]
-    printable = ["<thumbprint>" if a == thumbprint else a for a in cmd]
+    printable = ["<thumbprint>" if thumbprint and a == thumbprint else a for a in cmd]
     print("+", " ".join(printable), flush=True)
     if subprocess.run(cmd).returncode != 0:
         raise SigningError("signtool sign failed")
@@ -192,9 +208,11 @@ def _verify(signtool: Path, paths: list[Path]) -> None:
 
 
 def sign_if_configured(paths: list[Path]) -> bool:
-    """Sign when a thumbprint is configured; otherwise say so and skip."""
-    if not os.environ.get("MOMWIRE_SIGN_SHA1"):
-        print("unsigned build (MOMWIRE_SIGN_SHA1 unset)")
+    """Sign when an identity is configured; otherwise say so and skip."""
+    if not (
+        os.environ.get("MOMWIRE_SIGN_METADATA") or os.environ.get("MOMWIRE_SIGN_SHA1")
+    ):
+        print("unsigned build (neither MOMWIRE_SIGN_METADATA nor _SHA1 set)")
         return False
     sign(paths)
     return True
