@@ -98,6 +98,11 @@ validation = [
 [project.scripts]
 momwire-nec2c = "momwire.portal:main"
 momwire-nec2c-shared = "momwire_nec2c_client:main"
+# The EZNEC leg's thin client (momwire#532 / #718 phase 2): same argv contract
+# as the engine (two positional paths), forwards to the resident
+# `python -m momwire.eznec --serve` daemon; the basis rides on a copy's own
+# filename past the `eznec-` marker, exactly as the frozen twins spell it.
+momwire-eznec-client = "momwire_eznec_client:main"
 # The named engines (momwire#528): every basis as its own command, so a
 # filename-only host dialog (SimNEC's, and Windows generally — no symlinks
 # needed) selects the solver by pointing at the right name. No code behind

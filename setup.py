@@ -254,6 +254,13 @@ setup(
     # than part of the package on purpose: its whole value is that running it
     # imports neither `momwire` nor NumPy, and a module inside the package
     # would import `momwire/__init__.py` to get there.
-    py_modules=["momwire_nec2c_client"],
+    py_modules=[
+        "momwire_nec2c_client",
+        # Its mechanics (#718 phase 2): the shared finding-the-server module
+        # both thin clients import — same stdlib-only rule, same reason.
+        "momwire_serve_client",
+        # The EZNEC leg's thin client (momwire#532), same top-level rule.
+        "momwire_eznec_client",
+    ],
     package_dir={"": "src/"},
 )
