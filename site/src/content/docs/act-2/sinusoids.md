@@ -111,11 +111,16 @@ import numpy as np
 from momwire import SinusoidalSolver
 
 wire = np.array([[0.0, -5.291, 0.0], [0.0, 5.291, 0.0]])
-solver = SinusoidalSolver(wires=[wire], nsegs=5, wavelength=22.0,
-                          wire_radius=0.0005,
-                          feed_wire_index=0, feed_arclength=5.291)  # 1 V at the center
+solver = SinusoidalSolver(
+    wires=[wire],
+    nsegs=5,
+    wavelength=22.0,
+    wire_radius=0.0005,
+    feed_wire_index=0,
+    feed_arclength=5.291,
+)  # 1 V at the center
 Z, alpha = solver.compute_impedance()
-print(f"N=5:  Z_in = {Z.real:.1f} {Z.imag:+.1f}j ohms")   # 70.4 -20.7j — five segments!
+print(f"N=5:  Z_in = {Z.real:.1f} {Z.imag:+.1f}j ohms")  # 70.4 -20.7j — five segments!
 ```
 
 If the sinusoidal basis is this good on a straight dipole, why does momwire lean

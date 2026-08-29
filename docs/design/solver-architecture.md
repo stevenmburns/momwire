@@ -207,10 +207,19 @@ where the memory budgets and the bit-frozen oracles live.
 *class names*:
 
 ```python
-_GROUND_EPS_SOLVERS   = ("BSplineSolver", "HMatrixSolver", "ArrayBlockSolver",
-                         "SinusoidalSolver", "SinusoidalGalerkinSolver")
-_WIRE_LOADING_SOLVERS = ("BSplineSolver", "HMatrixSolver", "ArrayBlockSolver",
-                         "SinusoidalSolver")   # Galerkin DELIBERATELY absent
+_GROUND_EPS_SOLVERS = (
+    "BSplineSolver",
+    "HMatrixSolver",
+    "ArrayBlockSolver",
+    "SinusoidalSolver",
+    "SinusoidalGalerkinSolver",
+)
+_WIRE_LOADING_SOLVERS = (
+    "BSplineSolver",
+    "HMatrixSolver",
+    "ArrayBlockSolver",
+    "SinusoidalSolver",
+)  # Galerkin DELIBERATELY absent
 ```
 
 plus `_extended_kernel_refusal()`, which encodes one solver-kwarg

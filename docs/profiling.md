@@ -91,9 +91,9 @@ profiling script:
 ```python
 import pyitt
 
+
 @pyitt.task
-def my_workload():
-    ...
+def my_workload(): ...
 ```
 
 See `scripts/pyitt_smoke.py` for a minimal end-to-end example that

@@ -67,12 +67,20 @@ from momwire import BSplineSolver
 
 # NVIS dipole a tenth of a wavelength up — where Fresnel was wrong
 wire = np.array([[-5.291, 0.0, 0.1 * 22.0], [5.291, 0.0, 0.1 * 22.0]])
-solver = BSplineSolver(wires=[wire], nsegs=21, wavelength=22.0, wire_radius=0.0005,
-                       degree=2, ground_z=0.0, ground_eps=(13.0, 0.005),
-                       ground_model="sommerfeld",       # <- pay full price, get it right
-                       feed_wire_index=0, feed_arclength=5.291)
+solver = BSplineSolver(
+    wires=[wire],
+    nsegs=21,
+    wavelength=22.0,
+    wire_radius=0.0005,
+    degree=2,
+    ground_z=0.0,
+    ground_eps=(13.0, 0.005),
+    ground_model="sommerfeld",  # <- pay full price, get it right
+    feed_wire_index=0,
+    feed_arclength=5.291,
+)
 Z, _ = solver.compute_impedance()
-print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")   # ~53 -6j — vs Fresnel's 47 -3j
+print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")  # ~53 -6j — vs Fresnel's 47 -3j
 ```
 
 ## Act III, closed

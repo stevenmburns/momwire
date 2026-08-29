@@ -64,11 +64,19 @@ from momwire import BSplineSolver
 
 # horizontal dipole, 0.2 lambda up, over average ground
 wire = np.array([[-5.291, 0.0, 0.2 * 22.0], [5.291, 0.0, 0.2 * 22.0]])
-solver = BSplineSolver(wires=[wire], nsegs=21, wavelength=22.0, wire_radius=0.0005,
-                       degree=2, ground_z=0.0, ground_eps=(13.0, 0.005),  # <- real dirt
-                       feed_wire_index=0, feed_arclength=5.291)
+solver = BSplineSolver(
+    wires=[wire],
+    nsegs=21,
+    wavelength=22.0,
+    wire_radius=0.0005,
+    degree=2,
+    ground_z=0.0,
+    ground_eps=(13.0, 0.005),  # <- real dirt
+    feed_wire_index=0,
+    feed_arclength=5.291,
+)
 Z, _ = solver.compute_impedance()
-print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")   # ~70 +3j — vs 66 +18j over PEC
+print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")  # ~70 +3j — vs 66 +18j over PEC
 ```
 
 For the low-antenna case — a receiving loop on the grass, a Beverage, an NVIS
@@ -88,9 +96,13 @@ So momwire **refuses** it. Ask for a ground-mounted vertical — the base at
 error rather than a number:
 
 ```python
-BSplineSolver(wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.35]])],
-              nsegs=21, wavelength=21.41, ground_z=0.0,
-              ground_eps=(13.0, 0.005))   # <- NotImplementedError
+BSplineSolver(
+    wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.35]])],
+    nsegs=21,
+    wavelength=21.41,
+    ground_z=0.0,
+    ground_eps=(13.0, 0.005),
+)  # <- NotImplementedError
 ```
 
 This is not momwire being fussy where other codes cope. Run the same deck
@@ -103,10 +115,18 @@ now it says so instead.
 The fix is one argument, and it is the argument the error names:
 
 ```python
-solver = BSplineSolver(wires=[wire], nsegs=21, wavelength=21.41, wire_radius=0.005,
-                       degree=2, ground_z=0.0, ground_eps=(13.0, 0.005),
-                       ground_model="sommerfeld",      # <- exact at the plane
-                       feed_wire_index=0, feed_arclength=0.0)
+solver = BSplineSolver(
+    wires=[wire],
+    nsegs=21,
+    wavelength=21.41,
+    wire_radius=0.005,
+    degree=2,
+    ground_z=0.0,
+    ground_eps=(13.0, 0.005),
+    ground_model="sommerfeld",  # <- exact at the plane
+    feed_wire_index=0,
+    feed_arclength=0.0,
+)
 ```
 
 Chapter 10's Sommerfeld solve is exact right down to the interface, and it is

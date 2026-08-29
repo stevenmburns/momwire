@@ -37,11 +37,11 @@ Ports are numbered `[feeds…, junction_ports…, node_gaps…]`, and that is th
 order every port readout is in.
 
 ```python
-sol = solver.compute_port_solution()      # one fill, one factorisation
-sol.y                                     # (n_ports, n_ports) short-circuit Y
-sol.coeffs                                # (n_dof, n_ports) — column j is the
-                                          #   solution for 1 V at port j
-sol.port_currents                         # the same matrix as `y`, asserted
+sol = solver.compute_port_solution()  # one fill, one factorisation
+sol.y  # (n_ports, n_ports) short-circuit Y
+sol.coeffs  # (n_dof, n_ports) — column j is the
+#   solution for 1 V at port j
+sol.port_currents  # the same matrix as `y`, asserted
 ```
 
 `compute_y_matrix()` is `compute_port_solution().y`, so the two cannot drift.
@@ -75,8 +75,8 @@ EN
 """
 built = build_solver(parse(deck), basis="bspline")
 y = built.solver.compute_port_solution().y
-port = built.ports.feed_ports[0]          # the solver row this EX card drives
-print(f"Z = {1.0 / y[port, port]:.1f} ohm")   # Z = 67.0-41.1j ohm
+port = built.ports.feed_ports[0]  # the solver row this EX card drives
+print(f"Z = {1.0 / y[port, port]:.1f} ohm")  # Z = 67.0-41.1j ohm
 ```
 
 `parse()` returns a dialect-neutral `DeckModel`; `build_solver()` maps it onto
@@ -101,7 +101,7 @@ swept caller translates once:
 ```python
 from momwire.deck import prepare_mesh
 
-mesh = prepare_mesh(model)                       # the polylines, the port plan
+mesh = prepare_mesh(model)  # the polylines, the port plan
 solvers = [build_solver(model, mesh=mesh, frequency_mhz=f) for f in sweep]
 ```
 
