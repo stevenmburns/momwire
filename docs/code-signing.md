@@ -14,16 +14,30 @@ long-tail document you open perhaps twice a decade.
 
 ## What signs, and when
 
-| Trigger | Certificate | Chain check | Bundle name |
-| --- | --- | --- | --- |
-| tag `v*` | Azure Artifact Signing | hard gate | `momwire-eznec-windows.zip` |
-| dispatch, `azure_sign=true` | Azure Artifact Signing | hard gate | `…-SIGNTEST.zip` |
-| anything else | throwaway self-signed | waived | `…-SELFSIGNED-rehearsal.zip` |
+The workflow decides `MOMWIRE_SIGN_MODE` (`azure` | `rehearsal`) **exactly
+once**, in its own step; every signing step, the credential scoping, the
+bundle name, and `build.py`'s own signed-or-fail post-condition key off that
+single value (the momwire#711 retro-review retired the five independently
+edited predicates this replaces).
+
+| Trigger | Mode | Chain check | Bundle name | Release attach |
+| --- | --- | --- | --- | --- |
+| pushed tag `v*` | azure | hard gate | `momwire-eznec-windows.zip` | yes |
+| dispatch, `azure_sign=true` | azure | hard gate | `…-SIGNTEST.zip` | no |
+| dispatch **on a tag ref** | azure | hard gate | `…-SIGNTEST.zip` | **no** — the release job requires a push event, so a signing test can never replace a published asset |
+| anything else | rehearsal | waived | `…-SELFSIGNED-rehearsal.zip` | no |
+
+A tag build **hard-requires working Azure signing** — there is no unsigned
+fallback, deliberately: the failure mode (expired client secret, Azure or TSA
+outage) is a red freeze job and a release without the drop-in zip, which is
+why the rotation ritual below ends with a proving dispatch.
 
 The rehearsal exists so the signing path is exercised on every push rather
-than once per release. It must never reach a tag: a self-signed signature on
-a public download is worse than none, because users get "Unknown Publisher"
-either way and an untrusted root reads as tampering to some AV heuristics.
+than once per release, and it timestamps against the same Microsoft TSA the
+release path uses — a red canary on that endpoint is news about the next
+release. It must never reach a tag: a self-signed signature on a public
+download is worse than none, because users get "Unknown Publisher" either way
+and an untrusted root reads as tampering to some AV heuristics.
 
 Signing happens **before** the `SHIPPED_VARIANTS` copy loop in `build.py`.
 Authenticode covers PE contents and not filenames, so one signing call ships
@@ -147,9 +161,11 @@ the step conditions have been edited wrongly.
 `msiexec /quiet` hung for nine minutes on `windows-latest` with no output and
 no failure (run 33229631979); it wants an interactive installer context a
 hosted runner does not provide. The dlib comes from the
-`Microsoft.ArtifactSigning.Client` NuGet package and .NET 8 from
-`actions/setup-dotnet`, with a five-minute step timeout so the next thing that
-stalls fails fast.
+`Microsoft.ArtifactSigning.Client` NuGet package — **version-pinned** in the
+workflow, because the install runs at tag time on the release critical path;
+bump the pin deliberately and re-prove with an `azure_sign` dispatch — and
+.NET 8 from `actions/setup-dotnet`, with a five-minute step timeout so the
+next thing that stalls fails fast.
 
 **Signatures that were valid go invalid within days.** The timestamp is
 missing. Artifact Signing leaf certificates are valid for **three days** by

@@ -80,6 +80,28 @@ jobs:
       # Install momwire from this checkout (builds the MSVC accelerator, same
       # toolchain path the wheels take) plus the freezer.
       - run: pip install . "pyinstaller>=6.10,<7"
+      # THE MODE, decided exactly once. Every signing step below, the secrets
+      # scope on the build step, the bundle name, and build.py's own
+      # post-condition (sign.py must have signed when the mode says signing
+      # happens) key off this one value. Before this step existed the same
+      # decision lived in five hand-complementary predicates, and the #711
+      # retro-review showed one mis-edited copy could produce a GREEN,
+      # canonically-named, UNSIGNED tag build with no detector.
+      #
+      #   azure     -- tags and azure_sign dispatches: the real certificate,
+      #                chain check as a HARD gate (ALLOW_UNTRUSTED never set).
+      #   rehearsal -- every other CI build: self-signed, chain check waived.
+      #
+      # There is deliberately NO unsigned mode on any CI path; local dev
+      # builds outside CI stay unsigned because neither identity variable is
+      # set there, and that is the one legitimate unsigned route.
+      - name: Decide the signing mode
+        shell: pwsh
+        env:
+          AZURE_SIGN: ${{ inputs.azure_sign }}
+        run: |
+          $mode = if ($env:GITHUB_REF_TYPE -eq 'tag' -or $env:AZURE_SIGN -eq 'true') { 'azure' } else { 'rehearsal' }
+          "MOMWIRE_SIGN_MODE=$mode" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # Self-signed REHEARSAL signing: exercises the whole signing path --
       # signtool discovery, sign-before-copy, the copy-inherits-signature
       # assertion, and a smoke gate running against signed bytes -- with no
@@ -87,20 +109,26 @@ jobs:
       # it passable at all: a self-signed cert cannot chain to a trusted root,
       # so `signtool verify /pa` must fail here by construction.
       #
-      # NEVER ON A TAG, deliberately. A self-signed signature on a public
-      # release is WORSE than none: users see "Unknown Publisher" either way,
+      # NEVER ON A TAG, deliberately: a self-signed signature on a public
+      # release is WORSE than none (users see "Unknown Publisher" either way,
       # and an untrusted-root signature reads as tampering to some AV
-      # heuristics. So tags keep shipping unsigned until a real certificate
-      # lands, at which point this step is REPLACED -- not merely un-gated --
-      # by one that opens the real key, and dropping ALLOW_UNTRUSTED turns the
-      # chain check back into a gate.
+      # heuristics). Tags take the REAL Azure path below -- since #711 a tag
+      # build hard-requires working Azure signing and there is no unsigned
+      # fallback; that trade is deliberate, and the failure mode (expired
+      # client secret, Azure/TSA outage => red freeze job, no zip attached)
+      # is documented in docs/code-signing.md alongside the rotation ritual.
+      #
+      # The rehearsal timestamps against the SAME TSA the release path uses,
+      # on purpose: a canary that goes red on that endpoint is news about the
+      # next release, not DigiCert-shaped noise (#711 retro-review).
       - name: Rehearsal signing certificate (self-signed, never on tags)
-        if: github.ref_type != 'tag' && !inputs.azure_sign
+        if: env.MOMWIRE_SIGN_MODE == 'rehearsal'
         shell: pwsh
         run: |
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire eznec rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
           "MOMWIRE_SIGN_SHA1=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "MOMWIRE_SIGN_ALLOW_UNTRUSTED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "MOMWIRE_SIGN_TIMESTAMP_URL=http://timestamp.acs.microsoft.com" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       # REAL signing -- Azure Artifact Signing.
       #
       # The key never leaves Azure, so there is no thumbprint and nothing in
@@ -115,25 +143,31 @@ jobs:
       # does not give it. Two explicit dependencies that complete in seconds
       # beat one bundled dependency that stalls silently.
       - uses: actions/setup-dotnet@v6
-        if: github.ref_type == 'tag' || inputs.azure_sign
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
         with:
           dotnet-version: '8.0'
-      - name: Install the Artifact Signing dlib (tags or sign test)
-        if: github.ref_type == 'tag' || inputs.azure_sign
+      - name: Install the Artifact Signing dlib (azure mode)
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
         shell: pwsh
         # Fail fast rather than stall to the job's 30-minute ceiling, which
         # is how the MSI attempt burned ten minutes saying nothing.
+        #
+        # The -Version pin: this chain runs at TAG TIME, on the release
+        # critical path, so a floating 'latest' would let an upstream package
+        # restructure (or registry outage) block a release. 1.0.128 is the
+        # version the 2026-08-29 azure_sign dispatches proved end-to-end;
+        # bump it deliberately, re-proving with a dispatch first.
         timeout-minutes: 5
         run: |
           $ProgressPreference = 'SilentlyContinue'
           Invoke-WebRequest -Uri https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -OutFile nuget.exe
-          & ./nuget.exe install Microsoft.ArtifactSigning.Client -x -OutputDirectory packages
+          & ./nuget.exe install Microsoft.ArtifactSigning.Client -Version 1.0.128 -x -OutputDirectory packages
           $dlib = Get-ChildItem packages -Recurse -Filter Azure.CodeSigning.Dlib.dll |
                   Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
           if (-not $dlib) { throw "x64 Azure.CodeSigning.Dlib.dll not found in Microsoft.ArtifactSigning.Client" }
           "MOMWIRE_SIGN_DLIB=$($dlib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Write the Artifact Signing metadata (tags or sign test)
-        if: github.ref_type == 'tag' || inputs.azure_sign
+      - name: Write the Artifact Signing metadata (azure mode)
+        if: env.MOMWIRE_SIGN_MODE == 'azure'
         shell: pwsh
         run: |
           # Endpoint MUST match the region the account and profile live in.
@@ -161,15 +195,22 @@ jobs:
           # THREE DAYS, so the timestamp is not hygiene here -- it is the
           # only thing keeping shipped signatures valid past this week.
           "MOMWIRE_SIGN_TIMESTAMP_URL=http://timestamp.acs.microsoft.com" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      # Signs when either identity is configured: Azure on tags, the
-      # self-signed rehearsal otherwise. With neither, this builds unsigned.
-      # Note MOMWIRE_SIGN_ALLOW_UNTRUSTED is set only by the rehearsal step,
-      # so a tag build gets the chain check as a HARD gate, for free.
+      # Signs per MOMWIRE_SIGN_MODE: Azure identity in azure mode, the
+      # self-signed rehearsal otherwise — and build.py FAILS if the mode
+      # promised a signature and none got attached, so a half-configured
+      # environment can never ship a green unsigned bundle.
+      # MOMWIRE_SIGN_ALLOW_UNTRUSTED is set only by the rehearsal step, so
+      # azure mode gets the chain check as a HARD gate, for free.
+      #
+      # The AZURE_* credentials are scoped to azure mode: a rehearsal canary
+      # runs the freezer (PyInstaller + this checkout's code) with EMPTY
+      # strings here, so ~every merge to main stops carrying a live
+      # code-signing credential it can never use (#711 retro-review).
       - run: python scripts/eznec_freeze/build.py
         env:
-          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_TENANT_ID || '' }}
+          AZURE_CLIENT_ID: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_ID || '' }}
+          AZURE_CLIENT_SECRET: ${{ env.MOMWIRE_SIGN_MODE == 'azure' && secrets.AZURE_CLIENT_SECRET || '' }}
       # The gate: frozen exe vs `python -m momwire.eznec`, byte-identical on
       # serving decks (CRLF included), refusal frame present on a refused one,
       # and every variant build.py shipped present beside it and SERVING the
@@ -190,13 +231,20 @@ jobs:
       # repo is public, so run artifacts are downloadable by anyone -- the
       # name is the only thing standing between a passer-by and a
       # self-signed binary that looks official.
+      # The canonical literal `momwire-eznec-windows` also appears in the
+      # release job below (download name + files:) — deliberately NOT plumbed
+      # through a job output: tests/test_release_notes.py pins the release
+      # job's literal as the public download contract, so the three sites
+      # cannot drift without a red test.
+      #
+      # Canonical requires ref_type == tag AND a push event: a dispatch run
+      # ON a tag ref is a signing test, not a release build, and must not
+      # produce release-look-alike bytes (#711 retro-review).
       - name: Name the bundle
         shell: pwsh
-        env:
-          AZURE_SIGN: ${{ inputs.azure_sign }}
         run: |
-          $base = if ($env:GITHUB_REF_TYPE -eq 'tag') { 'momwire-eznec-windows' }
-                  elseif ($env:AZURE_SIGN -eq 'true') { 'momwire-eznec-windows-SIGNTEST' }
+          $base = if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_EVENT_NAME -eq 'push') { 'momwire-eznec-windows' }
+                  elseif ($env:MOMWIRE_SIGN_MODE -eq 'azure') { 'momwire-eznec-windows-SIGNTEST' }
                   else { 'momwire-eznec-windows-SELFSIGNED-rehearsal' }
           "BUNDLE=$base" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Zip the bundle
@@ -218,7 +266,12 @@ jobs:
     # release for a fresh tag, re-run this job.
     name: attach drop-in to release
     needs: freeze
-    if: startsWith(github.ref, 'refs/tags/')
+    # The event guard enforces what the azure_sign input's description
+    # promises ("no tag, no release"): a workflow_dispatch run with a tag
+    # picked in the ref dropdown also satisfies startsWith(refs/tags/), and
+    # without the guard it would silently REPLACE the published release
+    # asset (#711 retro-review). Only a pushed tag releases.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
