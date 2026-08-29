@@ -62,6 +62,13 @@ class OptionalBuildExt(build_ext):
 
     @staticmethod
     def _warn(exc):
+        # The graceful path exists for sdist installs on unsupported
+        # platforms. A DEVELOPMENT build wants the opposite: `make build`
+        # sets MOMWIRE_REQUIRE_ACCEL=1 so a broken toolchain fails the lane
+        # instead of exiting 0 and leaving a stale in-place .so — the
+        # repo's documented measurement hazard (#716 review).
+        if os.environ.get("MOMWIRE_REQUIRE_ACCEL") == "1":
+            raise exc
         warnings.warn(
             f"a momwire C++ extension failed to build ({exc!r}); "
             "installing in pure-Python mode. The solver will work but run "
