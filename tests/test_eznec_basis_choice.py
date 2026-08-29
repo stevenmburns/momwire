@@ -303,6 +303,57 @@ def test_the_frozen_entry_point_defaults_only_when_no_basis_was_named(prog, expe
     assert _entry_module().basis_for(prog) == expected
 
 
+@pytest.mark.parametrize(
+    "prog,expected",
+    [
+        ("momwire-eznec-razor-nec5.exe", "razor-nec5"),
+        ("momwire-eznec.exe", _serve.BASIS),
+        # The empty suffix travels verbatim so the daemon refuses per-deck —
+        # the same no-rounding rule `basis_for` holds for the one-shot.
+        ("momwire-eznec-.exe", ""),
+    ],
+)
+def test_the_frozen_entry_serves_under_the_names_basis(monkeypatch, prog, expected):
+    """momwire#718 phase 3's prerequisite: the deployed bundle has no system
+    Python, so the daemon the native client spawns is the bundle's own exe —
+    an entry that can only one-shot leaves it nothing to spawn.  And the
+    filename rule rides along: a twin-named exe started with ``--serve``
+    serves its name's basis, not the default."""
+    seen = {}
+    monkeypatch.setattr(
+        "momwire.eznec._resident.serve_main",
+        lambda argv: seen.update(argv=argv) or 0,
+    )
+    assert _entry_module().run([prog, "--serve", "--socket", "S"]) == 0
+    assert seen["argv"] == ["--serve", "--socket", "S", "--basis", expected]
+
+
+def test_an_explicit_serve_basis_is_believed(monkeypatch):
+    """``--serve`` argv comes from our own machinery, never from EZNEC, so a
+    spawner that names ``--basis`` has spelt the choice explicitly and the
+    entry must not second-guess it from the filename."""
+    seen = {}
+    monkeypatch.setattr(
+        "momwire.eznec._resident.serve_main",
+        lambda argv: seen.update(argv=argv) or 0,
+    )
+    argv = ["--serve", "--socket", "S", "--basis", "hmatrix"]
+    assert _entry_module().run(["momwire-eznec-razor-nec5.exe", *argv]) == 0
+    assert seen["argv"] == argv
+
+
+def test_without_serve_the_entry_still_one_shots(monkeypatch):
+    """The EZNEC-facing path is untouched: two positional paths reach
+    `_shell.main` with the name's basis, exactly as before the dispatch."""
+    entry = _entry_module()
+    seen = {}
+    monkeypatch.setattr(
+        entry, "main", lambda argv, *, basis: seen.update(argv=argv, basis=basis) or 0
+    )
+    assert entry.run(["Momwire-Eznec-Razor-Nec5.exe", "deck.nec", "out.txt"]) == 0
+    assert seen == {"argv": ["deck.nec", "out.txt"], "basis": "razor-nec5"}
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("prog", ["momwire-eznec-", "momwire-eznec-rzaor.exe"])
 def test_a_name_that_matches_no_basis_refuses_in_the_printout(prog):

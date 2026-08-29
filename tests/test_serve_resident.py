@@ -303,6 +303,60 @@ def test_the_client_end_to_end_spawns_one_server_and_reuses_it(tmp_path, transpo
         shutil.rmtree(room, ignore_errors=True)
 
 
+@pytest.mark.integration
+def test_the_frozen_entry_file_serves_a_deck_warm(tmp_path, transport):
+    """momwire#718 phase 3's spawn target, proven as a process: the frozen
+    exe's ``__main__`` is `scripts/eznec_freeze/entry.py`, so the entry FILE,
+    run the way PyInstaller runs it and asked to ``--serve``, must come up
+    listening and answer a deck byte-identical to the one-shot.  Without this
+    the native client has nothing to spawn on a user's box."""
+    import shutil
+    import subprocess
+    import sys
+    import tempfile
+
+    entry = (
+        Path(__file__).resolve().parent.parent / "scripts" / "eznec_freeze" / "entry.py"
+    )
+    # A short private dir, not tmp_path — the sun_path rule the e2e above
+    # records.
+    room = Path(tempfile.mkdtemp(prefix="mw-entry-serve-"))
+    path = str(room / f"srv{mech.address_suffix(transport)}")
+    deck = _deck("0010")
+    expected = _expected_file_bytes(deck, tmp_path)
+
+    proc = subprocess.Popen(
+        [
+            sys.executable,
+            str(entry),
+            "--serve",
+            "--socket",
+            path,
+            "--idle-timeout",
+            "60",
+            "--log",
+            str(room / "srv.log"),
+        ],
+        env={**os.environ, mech.TRANSPORT_ENV: transport},
+        stdin=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 120
+        while True:
+            conn = mech.connect(path)
+            if conn is not None:
+                conn.close()
+                break
+            assert proc.poll() is None, "the entry daemon died before listening"
+            assert time.monotonic() < deadline, "the entry daemon never listened"
+            time.sleep(0.05)
+        assert _ask(path, deck.read_bytes()) == expected
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+        shutil.rmtree(room, ignore_errors=True)
+
+
 # --------------------------------------------------------------------------
 # the transport itself (#718 phase 2 unit 2)
 #
