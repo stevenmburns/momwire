@@ -27,6 +27,13 @@ momwire#628's failure, an engine answering as a formulation nobody asked
 for — and it must not raise either, because EZNEC reads the printout file and
 nothing else.  So it is resolved HERE, before any deck is read, and a bad name
 is handed to the shell as a basis it will refuse by name in the printout.
+
+The frozen exe is also the resident daemon (momwire#718 phase 3): in a
+deployed bundle there is no system Python, so the native client's only spawn
+target is the bundle's own exe, and ``--serve`` dispatches it exactly as
+``python -m momwire.eznec --serve`` does.  This is not a flag on the
+EZNEC-facing path — EZNEC's spelling, two quoted cwd-relative paths, can
+never produce it — it is machinery only the thin client speaks.
 """
 
 import sys
@@ -59,5 +66,27 @@ def basis_for(prog: str) -> str:
     return _serve.BASIS if suffix is None else suffix
 
 
+def run(argv: list[str]) -> int:
+    """One frozen exe, two duties, told apart by ``--serve``.
+
+    The filename rule holds on both paths: a twin-named copy started with
+    ``--serve`` must serve what its name claims, so when the spawner names no
+    ``--basis`` the name's basis rides in as the flag — verbatim, so the
+    empty suffix still reaches `serve_main` as the basis ``""`` and refuses
+    per-deck rather than serving the default.  A spawner that does say
+    ``--basis`` is believed: that argv came from our own machinery, never
+    from EZNEC, and the flag is its explicit spelling of the same choice.
+    """
+    basis = basis_for(argv[0])
+    rest = argv[1:]
+    if "--serve" in rest:
+        from momwire.eznec._resident import serve_main
+
+        if "--basis" not in rest:
+            rest = [*rest, "--basis", basis]
+        return serve_main(rest)
+    return main(rest, basis=basis)
+
+
 if __name__ == "__main__":
-    sys.exit(main(basis=basis_for(sys.argv[0])))
+    sys.exit(run(sys.argv))
