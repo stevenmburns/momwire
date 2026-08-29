@@ -1076,13 +1076,72 @@ static proc_t launch(const char *exe, char *const args[], const char *log_path,
             startup.hStdError = null_in;
         }
     }
-    if (detached) {
-        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
-    }
-
     memset(&info, 0, sizeof info);
-    if (!CreateProcessA(exe, command, NULL, NULL, TRUE, flags, NULL, NULL,
-                        &startup, &info)) {
+    if (detached) {
+        /* The daemon must not inherit ONE handle beyond the three std slots.
+         * `bInheritHandles = TRUE` alone duplicates EVERY inheritable handle
+         * in this process into the child -- including whatever pipes stand
+         * behind this launcher's own stdout/stderr -- and a 900 s daemon
+         * holding a duplicate of a pipe's write end means whoever launched
+         * THIS process reads EOF only when the daemon dies.  The first
+         * Windows canary hung its harness exactly there (the POSIX branch is
+         * immune: dup2 REPLACES fds 1 and 2, it does not add copies).
+         * PROC_THREAD_ATTRIBUTE_HANDLE_LIST is CreateProcess's spelling of
+         * `close_fds=True` -- inheritance restricted to the listed handles.
+         * The one-shot child stays on the plain path below: it inherits this
+         * launcher's std handles BY DESIGN, and it exits, so its extra
+         * duplicates die with it. */
+        HANDLE keep[3];
+        STARTUPINFOEXA extended;
+        SIZE_T attr_size = 0;
+        LPPROC_THREAD_ATTRIBUTE_LIST attrs;
+        int kept = 0;
+        int started;
+
+        keep[kept++] = startup.hStdInput;
+        keep[kept++] = startup.hStdOutput;
+        keep[kept++] = startup.hStdError;
+
+        InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
+        attrs = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attr_size);
+        if (attrs == NULL ||
+            !InitializeProcThreadAttributeList(attrs, 1, 0, &attr_size) ||
+            !UpdateProcThreadAttribute(attrs, 0,
+                                       PROC_THREAD_ATTRIBUTE_HANDLE_LIST, keep,
+                                       (SIZE_T)kept * sizeof(HANDLE), NULL,
+                                       NULL)) {
+            note("cannot restrict the daemon's handles: %s", os_error());
+            free(attrs);
+            CloseHandle(null_in);
+            if (log != INVALID_HANDLE_VALUE) {
+                CloseHandle(log);
+            }
+            return NO_PROC;
+        }
+        memset(&extended, 0, sizeof extended);
+        extended.StartupInfo = startup;
+        extended.StartupInfo.cb = sizeof extended;
+        extended.lpAttributeList = attrs;
+        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP |
+                EXTENDED_STARTUPINFO_PRESENT;
+
+        started = CreateProcessA(exe, command, NULL, NULL, TRUE, flags, NULL,
+                                 NULL, &extended.StartupInfo, &info);
+        if (!started) {
+            /* Before the attribute-list teardown, which may clobber it. */
+            note("cannot start %s: %s", exe, os_error());
+        }
+        DeleteProcThreadAttributeList(attrs);
+        free(attrs);
+        if (!started) {
+            CloseHandle(null_in);
+            if (log != INVALID_HANDLE_VALUE) {
+                CloseHandle(log);
+            }
+            return NO_PROC;
+        }
+    } else if (!CreateProcessA(exe, command, NULL, NULL, TRUE, flags, NULL,
+                               NULL, &startup, &info)) {
         note("cannot start %s: %s", exe, os_error());
         CloseHandle(null_in);
         if (log != INVALID_HANDLE_VALUE) {
