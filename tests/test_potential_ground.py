@@ -475,7 +475,7 @@ def test_the_dense_fill_follows_the_object_not_the_strings(monkeypatch):
         monkeypatch.setattr(
             _potential_ground,
             "potential_ground_for",
-            lambda *a, **kw: pec_ground,
+            lambda *a, **kw: pec_ground,  # noqa: B023 — monkeypatch stand-in; the patch is installed and the assertion below runs inside this same iteration.
         )
         assert np.array_equal(_Z(sim), Z_ref["pec"]), (
             f"(tensor_route={tensor_route}) the fill ignored the ground "

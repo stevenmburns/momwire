@@ -839,7 +839,7 @@ def test_gu3_7_the_above_above_family_never_enters_this_module(monkeypatch):
         monkeypatch.setattr(
             som,
             name,
-            lambda *a, **k: pytest.fail(f"the transmitted family called {name}"),
+            lambda *a, **k: pytest.fail(f"the transmitted family called {name}"),  # noqa: B023 — a fail-if-called guard; `name` only decorates the message, and a stale one would misname an already-failing test, not hide a pass.
         )
     trans.t_surfaces_direct(et, kp, 4.0, 1.0, -0.15, rtol=1e-9, omega=om)
 
