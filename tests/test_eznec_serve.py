@@ -76,7 +76,7 @@ from momwire.eznec._shell import render
 
 # The far-field readout the seam imports, imported here for the one gate that
 # is ABOUT that import: `refl` and `sommerfeld` are one branch of it.
-from momwire.portal._portal import Ground, _far_moments
+from momwire._far_readout import Ground, _far_moments
 from test_eznec_printout import (
     FIXTURE_DIR,
     GATED_IDS,
@@ -2816,9 +2816,15 @@ def test_every_refusal_sentence_survives_the_printout_s_own_codec():
 
 
 def test_the_module_never_reaches_for_a_second_far_field_implementation():
-    """The pattern readout is the portal's, by import: one owner for the
+    """The pattern readout has one owner, and since momwire#719 U1 it is a
+    neutral module neither dialect front end owns: one owner for the
     moments, the gain floor and the polarisation ellipse (the ranked
-    extraction backlog, momwire#429, is where that import is paid off)."""
+    extraction backlog, momwire#429, is the audit that ranked the old
+    portal-import as debt; U1 is where it was paid off). This flips the
+    boundary the pre-U1 gate pinned: it used to assert the honest
+    cross-import existed; now it asserts the import is gone and the neutral
+    one is there instead."""
     source = Path(_serve.__file__).read_text()
-    assert "from ..portal._portal import" in source
+    assert "from ..portal" not in source
+    assert "from .._far_readout import" in source
     assert "def _far_moments" not in source
