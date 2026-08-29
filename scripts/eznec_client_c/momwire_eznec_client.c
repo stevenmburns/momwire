@@ -1098,9 +1098,19 @@ static proc_t launch(const char *exe, char *const args[], const char *log_path,
         int kept = 0;
         int started;
 
+        /* Deduplicated: the daemon's hStdOutput and hStdError are the SAME
+         * log handle, and a handle listed twice makes CreateProcess refuse
+         * the whole list (ERROR_INVALID_PARAMETER) — the second canary's
+         * finding: the spawn failed outright and the ladder carried every
+         * launch at one-shot speed. */
         keep[kept++] = startup.hStdInput;
-        keep[kept++] = startup.hStdOutput;
-        keep[kept++] = startup.hStdError;
+        if (startup.hStdOutput != startup.hStdInput) {
+            keep[kept++] = startup.hStdOutput;
+        }
+        if (startup.hStdError != startup.hStdInput &&
+            startup.hStdError != startup.hStdOutput) {
+            keep[kept++] = startup.hStdError;
+        }
 
         InitializeProcThreadAttributeList(NULL, 1, 0, &attr_size);
         attrs = (LPPROC_THREAD_ATTRIBUTE_LIST)malloc(attr_size);
