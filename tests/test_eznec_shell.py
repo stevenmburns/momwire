@@ -576,24 +576,6 @@ def _dump(name: str, label: str, position: int, warm: str, cold: str) -> None:
 
 @pytest.mark.integration
 @pytest.mark.slow
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "momwire#677: 0116/0117, the 40-meter four-square arrays, answer "
-        "differently out of a RESIDENT process than out of a process per "
-        "deck — 4 of 160, forward and reverse. Reproduces on GitHub runners "
-        "and not locally (3 of 3 clean here), so it is a property of the "
-        "machine as well as of the corpus.\n\n"
-        "This gate was non-strict before for momwire#578's eight lines, and "
-        "was made strict when that closed. That was wrong: #578 measured and "
-        "bounded the THREAD-COUNT class, and this is PROCESS HISTORY — a "
-        "different axis, on different decks, that its boundary says nothing "
-        "about and its analysis never looked for. Two green CI runs on main "
-        "hid the difference. Non-strict again until #677 explains it, so the "
-        "gate reports rather than blocking every PR that lands on an unlucky "
-        "runner."
-    ),
-)
 def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
     """**The gate momwire#532 turns on.**
 
@@ -614,6 +596,15 @@ def test_one_process_answers_the_corpus_exactly_as_a_process_per_deck(tmp_path):
     captured Windows engine, so warm-equals-cold gates warm transitively.
     What is new here is only the residency claim, which is exactly the claim
     #532 currently assumes rather than checks.
+
+    This gate has caught one real leak: momwire#677. On GitHub runners (never
+    locally) 0116/0117 printed a ``NETWORK LOSS`` dust line cold and omitted
+    it warm — twenty of twenty dump pairs over five runs were that single
+    line, the sign of a lossless ``TL``'s exactly-zero loss crumb flipping
+    with process history. Fixed where it lived, in ``_serve``'s presence
+    floor (``_NETWORK_LOSS_DUST``), and the gate is strict again on that
+    record. If it trips afresh, the ci.yml dump step (``MOMWIRE_532_DUMP``)
+    captures the evidence — read the artifact before reaching for xfail.
 
     Marked slow: the cold side is 62 interpreter starts, which IS the cost the
     issue exists to delete.

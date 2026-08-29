@@ -836,13 +836,16 @@ def test_the_budget_closes_the_way_the_engine_closes_it(cid):
     The presence claim carries one exemption and momwire#511 is what found it.
     0116/0117 hang ONE lossless ``TL`` between two undriven points, so the sum
     is exactly zero and the engine's own crumb decided the sign: it printed
-    ``2.1316E-13 WATTS`` against a 1.1538E+02 input, this seam's crumb lands at
-    −3.6e-14, and no rule change reaches that.  The sign of a zero is not a
-    number (:data:`~test_eznec_serve._NETWORK_LOSS_DUST`, the same
-    normalization the structure gate applies).  What is still gated on those two
-    is everything else in the budget — the sum, the arithmetic and the
-    efficiency — and the presence claim itself everywhere the number means
-    anything, which is the other twenty-six.
+    ``2.1316E-13 WATTS`` against a 1.1538E+02 input, while this seam's crumb
+    moved with machine and process history (momwire#677: −3.6e-14 here,
+    +2.1316E-14 cold on GitHub runners, non-positive on the same runners out
+    of a resident process).  The sign of a zero is not a number, so since #677
+    the seam floors its own print decision on
+    :data:`momwire.eznec._serve._NETWORK_LOSS_DUST` and deterministically
+    omits the dust line the engine's crumb happened to earn — asserted below.
+    What is still gated on those two is everything else in the budget — the
+    sum, the arithmetic and the efficiency — and the presence claim itself
+    everywhere the number means anything, which is the other twenty-six.
     """
     data = extract(served(cid))
     power, want = data.power, extract(printout_text(cid)).power
@@ -854,6 +857,11 @@ def test_the_budget_closes_the_way_the_engine_closes_it(cid):
         # Including every capture that prints NO line: an ABSENT one is never
         # dust, so 0027 and 0028 keep the claim in full.
         assert (power.network_loss is None) == (captured_loss is None)
+    else:
+        # The #677 pin: at dust the seam's floor omits the line, whatever
+        # side of zero this machine's (or this process history's) crumb
+        # landed on.
+        assert power.network_loss is None
     loss = power.network_loss or -sum(row.power for row in data.network_excitation)
     assert loss == pytest.approx(
         -sum(row.power for row in data.network_excitation), rel=1e-4

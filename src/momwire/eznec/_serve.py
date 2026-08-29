@@ -481,6 +481,28 @@ _PRINTED_DUST_FLOOR2 = 1.0e-14
 # rounds to zero, so the SENSE column beside it must read LINEAR.
 _AXIAL_PRINTS_ZERO = 5.0e-6
 
+# The presence floor for the budget's ``NETWORK LOSS`` line — the one line in
+# the printout whose PRESENCE a solved number decides (momwire#677). NEC-5
+# prints it when ``-Σ(connection point powers)`` is positive; on a deck whose
+# only network is one lossless ``TL`` between undriven points (0116/0117, the
+# four-squares) that sum is exactly zero and the sign being tested is round-off
+# — the engine's own crumb reads +2.1316E-13 against an INPUT POWER of
+# 1.1538E+02 (eight ulps). This seam's crumb for the same decks measured
+# −3.6e-14 here, +2.1316E-14 cold on GitHub runners, and non-positive on the
+# same runners out of a RESIDENT process (twenty of twenty momwire#677 dump
+# pairs, five runs: the whole divergence was this line, present cold, absent
+# warm). The sign of a zero is not a number, so the print decision cannot
+# stand on it: below this bar (relative to INPUT POWER, same spelling as the
+# structure gate's mask) the line is deterministically omitted.
+#
+# The bar's void, measured by the serve gate when it derived the same number:
+# the dust is ~1.8e-15 of input power, the smallest REAL network loss in the
+# corpus is 0012's 36.714 W on 114.47 W (32 %) — six orders above the dust,
+# fifteen below the smallest reading that means anything. The captures that DO
+# print their own dust line (0116/0117) are normalized by the serve gate,
+# which drops sub-bar lines from both sides before comparing.
+_NETWORK_LOSS_DUST = 1e-9
+
 __all__ = [
     "BASIS",
     "EPSC_CONDUCTIVITY_FACTOR",
@@ -3000,7 +3022,8 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     # The budget's own arithmetic (module docstring): RADIATED is INPUT plus
     # what the connection points delivered, less the load's watts, and the
     # NETWORK LOSS line is the negative of the first sum — printed only when
-    # it is positive, which is 4 of the 6 captured network budgets.
+    # it clears the presence floor (``_NETWORK_LOSS_DUST``), which is 4 of
+    # the 6 captured network budgets.
     p_network = -sum(row.power for row in connections)
     p_radiated = p_in - p_network - p_load
 
@@ -3086,7 +3109,9 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             input_power=p_in,
             radiated_power=p_radiated,
             wire_loss=p_load,
-            network_loss=p_network if p_network > 0 else None,
+            network_loss=(
+                p_network if p_network > _NETWORK_LOSS_DUST * max(p_in, 1.0) else None
+            ),
             efficiency_percent=(100.0 * p_radiated / p_in) if p_in > 0 else 0.0,
         ),
         near_fields=tuple(
