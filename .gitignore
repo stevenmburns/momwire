@@ -8,6 +8,9 @@ dist/
 .venv/
 .pytest_cache/
 *.py~
+# A local eznec_freeze build leaves both beside the repo root.
+momwire-eznec-engine.spec
+smoke-out/
 
 # Vendored NEC2 theory manual — large binary + extracted plain text,
 # available externally. Don't track any local copies.
