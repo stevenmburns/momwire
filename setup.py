@@ -200,9 +200,7 @@ _NEAR_HEADERS = [
     # The shared branch cut (#714) -- this extension carries the third
     # call site, so an edit to it must rebuild this .so too.
     "src/momwire/_branch_cut_inline.h",
-] + sorted(
-    glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True)
-)
+] + sorted(glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True))
 
 # Compile the accelerator's translation units concurrently (momwire#687). With
 # the old single-TU monolith this bought nothing; with five TUs it is what
