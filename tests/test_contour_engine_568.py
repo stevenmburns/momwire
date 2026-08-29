@@ -451,7 +451,7 @@ def test_g5683_the_identity_path_agrees_with_numpy_too(record_property):
         rho, h = rho_wl * lam_m, h_wl * lam_m
 
         def f(lam):
-            return np_identity(lam, rho, h, k_m)
+            return np_identity(lam, rho, h, k_m)  # noqa: B023 — `f` is handed straight to `_run_contour` below, which integrates it and returns; it never outlives this iteration.
 
         ref, _, _, _, _ = below._run_contour(
             f,

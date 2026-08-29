@@ -149,7 +149,24 @@ def _spans(model: DeckModel, ports: tuple[tuple[int, float], ...]) -> list[_Span
                 if w == wire_index and e == edge
             }
 
-            def emit(first: int, last: int, port: int | None, a=a, b=b, n=n) -> None:
+            # `wire`/`wire_index`/`edge` are bound as defaults for the same
+            # reason `a`/`b`/`n` already are: `emit` closes over the enclosing
+            # loops' variables, and binding them at definition makes the
+            # capture explicit rather than late (B023). Every call site is
+            # inside this iteration, so this is a statement of intent, not a
+            # bug fix -- and it keeps B023 live for a closure that one day
+            # ISN'T called immediately.
+            def emit(
+                first: int,
+                last: int,
+                port: int | None,
+                a=a,
+                b=b,
+                n=n,
+                wire=wire,
+                wire_index=wire_index,
+                edge=edge,
+            ) -> None:
                 # An UNCUT edge keeps the model's own vertices; a cut one
                 # evaluates every boundary through `_point`, its own two
                 # ends included.  The distinction is not cosmetic:
