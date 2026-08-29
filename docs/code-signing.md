@@ -156,6 +156,56 @@ missing. Artifact Signing leaf certificates are valid for **three days** by
 design; RFC-3161 timestamping is what makes a signature outlive the cert, and
 `sign.py` treats it as mandatory rather than optional for that reason.
 
+## Smart App Control
+
+SAC is the thing this signature genuinely unlocks, as opposed to SmartScreen,
+which it does not. SAC trusts an app when Microsoft's cloud can confidently
+classify it as safe **or** when it is correctly signed by a CA in the Microsoft
+Trusted Root Program; unsigned or invalidly signed binaries are blocked
+outright. A valid signature lets an app run even before cloud reputation
+exists, which is exactly the position a low-volume release is in.
+
+Our chain satisfies the stated criteria, verified on a real Windows 11 client
+(build 26200) against the run-33230110713 bundle:
+
+| Criterion | Observed |
+| --- | --- |
+| Signature valid on Win11 client | `Status: Valid`, "Signature verified" |
+| CA in Microsoft Trusted Root Program | chains to Microsoft Identity Verification Root CA 2020 |
+| **RSA, not ECC** | RSA, 3072-bit |
+| Timestamped | Microsoft Public RSA Time Stamping Authority |
+
+**The RSA requirement is the trap.** SAC's signature check does not support
+ECC, so an otherwise perfectly valid ECC signature is silently untrusted.
+Artifact Signing issues RSA today; if that ever changes, or a different
+certificate profile is used, this is the thing to re-check first.
+
+### Why this is not covered by CI
+
+`windows-latest` is **Windows Server** (windows-2025-vs2026 at time of
+writing). Smart App Control is a Windows 11 *client* feature and does not
+exist on Server, so no CI run can exercise it — this is architectural, not a
+gap to be closed by a better workflow. GitHub offers no Windows 11 client
+runners.
+
+A developer machine usually cannot test it either. SAC only initialises on a
+**clean Windows 11 install**, starts in Evaluation mode, and Microsoft's
+service decides whether to move it to enforcement. Turning it off is one-way:
+re-enabling requires reinstalling Windows.
+
+Check the state before drawing any conclusion from a machine:
+
+```powershell
+(Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' `
+  -Name VerifiedAndReputablePolicyState).VerifiedAndReputablePolicyState
+# 0 = off   1 = enforcement   2 = evaluation
+```
+
+So the honest standing claim is that **the published criteria are verified,
+not that enforcement was observed**. Empirical confirmation needs a throwaway
+Windows 11 VM from a fresh ISO, with that registry value reading 1 or 2 before
+the test means anything.
+
 ## What signing does not fix
 
 Artifact Signing issues **no EV certificates**, and Microsoft states there is
