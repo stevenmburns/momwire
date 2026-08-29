@@ -157,7 +157,9 @@ def basis_entry(basis: str) -> tuple[type, Mapping[str, Any]]:
         raise ValueError(f"unknown basis {basis!r}; known bases: {known}") from None
 
 
-def basis_from_program_name(prog: str, marker: str) -> str | None:
+def basis_from_program_name(
+    prog: str, marker: str, *, consumed: str | None = None
+) -> str | None:
     """The basis a copy/symlink NAME selects, or ``None`` when it names none.
 
     ``<anything><marker><basis>`` — everything after ``marker`` in the
@@ -165,6 +167,13 @@ def basis_from_program_name(prog: str, marker: str) -> str | None:
     "this name asks for nothing, serve the default" — is returned for a name
     without the marker at all: ``python -m momwire.portal``, a pytest runner,
     a bare ``momwire-nec2c``.
+
+    ``consumed`` is a program's own trailing segment (``"engine"`` for the
+    frozen ``momwire-eznec-engine``), swallowed when it is the whole suffix
+    and stripped when it leads one, so the program's plain name selects
+    nothing and a renamed copy still names its basis.  The thin clients'
+    stdlib-only copy (`momwire_serve_client.filename_basis`) spelt this
+    first, for ``momwire-nec2c-shared``; one rule, restated at the owner.
 
     CASEFOLDED, marker and suffix together, because the names this reads are
     Windows FILENAMES: ``Momwire-Eznec-Razor-Nec5.exe`` is the same file as
@@ -196,7 +205,13 @@ def basis_from_program_name(prog: str, marker: str) -> str | None:
         name = name[:-4]
     if marker not in name:
         return None
-    return name.split(marker, 1)[1]
+    suffix = name.split(marker, 1)[1]
+    if consumed is not None:
+        if suffix == consumed:
+            return None
+        if suffix.startswith(f"{consumed}-"):
+            suffix = suffix[len(consumed) + 1 :]
+    return suffix
 
 
 def port_kwargs(

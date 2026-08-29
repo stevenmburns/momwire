@@ -44,6 +44,13 @@ from momwire.eznec._shell import main
 
 MARKER = "eznec-"
 
+# The frozen exe's own name once the native client takes the
+# ``momwire-eznec[-<basis>]`` names (momwire#718 phase 3): the bundle ships
+# ONE ``momwire-eznec-engine``, and this segment is consumed exactly as the
+# thin client consumes ``client`` — the plain name selects nothing, a renamed
+# copy still names its basis.
+ENGINE_SEGMENT = "engine"
+
 
 def basis_for(prog: str) -> str:
     """The basis this program name selects, defaulting to the seam's own.
@@ -62,7 +69,7 @@ def basis_for(prog: str) -> str:
     channel EZNEC reads.  Validating here could only turn that into a traceback
     on a stream nobody sees.
     """
-    suffix = basis_from_program_name(prog, MARKER)
+    suffix = basis_from_program_name(prog, MARKER, consumed=ENGINE_SEGMENT)
     return _serve.BASIS if suffix is None else suffix
 
 
@@ -76,6 +83,13 @@ def run(argv: list[str]) -> int:
     per-deck rather than serving the default.  A spawner that does say
     ``--basis`` is believed: that argv came from our own machinery, never
     from EZNEC, and the flag is its explicit spelling of the same choice.
+
+    The one-shot path takes the same machinery flag, LEADING only:
+    ``--basis <name> <deck> <printout>`` is how the native client's fallback
+    rung runs a twin through the bundle's single engine exe (momwire#718
+    phase 3 — the per-variant frozen stubs are what that client subsumes).
+    EZNEC's spelling cannot produce it, and after the flag the contract is
+    the untouched two positional paths.
     """
     basis = basis_for(argv[0])
     rest = argv[1:]
@@ -85,6 +99,8 @@ def run(argv: list[str]) -> int:
         if "--basis" not in rest:
             rest = [*rest, "--basis", basis]
         return serve_main(rest)
+    if len(rest) >= 2 and rest[0] == "--basis":
+        basis, rest = rest[1], rest[2:]
     return main(rest, basis=basis)
 
 

@@ -292,11 +292,39 @@ def test_one_owner_means_the_nec2c_marker_obeys_the_same_rule(prog, expected):
 @pytest.mark.parametrize(
     "prog,expected",
     [
+        # The segment alone is the program's own name: selects nothing.
+        ("momwire-eznec-engine", None),
+        ("momwire-eznec-engine.exe", None),
+        ("C:\\Users\\ham\\momwire-eznec\\Momwire-Eznec-Engine.EXE", None),
+        # Leading the suffix, it is stripped: a renamed copy names its basis.
+        ("momwire-eznec-engine-razor-nec5.exe", "razor-nec5"),
+        # Not the segment at all: untouched.
+        ("momwire-eznec-razor-nec5.exe", "razor-nec5"),
+        ("momwire-eznec-", ""),
+        # A trailing marker after the segment asked for a basis and spelt
+        # none — the typo-refusal rule survives the consumption.
+        ("momwire-eznec-engine-", ""),
+    ],
+)
+def test_a_consumed_segment_obeys_the_thin_clients_rule_at_the_owner(prog, expected):
+    """`momwire_serve_client.filename_basis` spelt ``consumed`` first (the
+    ``client`` segment); the owner restates it so the frozen engine exe
+    (momwire#718 phase 3, the ``engine`` segment) reads names the same way."""
+    assert basis_from_program_name(prog, "eznec-", consumed="engine") == expected
+
+
+@pytest.mark.parametrize(
+    "prog,expected",
+    [
         ("momwire-eznec.exe", _serve.BASIS),
         ("python", _serve.BASIS),
         ("Momwire-Eznec-Razor-Nec5.exe", "razor-nec5"),
         ("momwire-eznec-", ""),
         ("momwire-eznec-rzaor.exe", "rzaor"),
+        # The frozen exe's own phase-3 name selects nothing; a renamed copy
+        # still names its basis (the consumed ``engine`` segment).
+        ("momwire-eznec-engine.exe", _serve.BASIS),
+        ("Momwire-Eznec-Engine-Razor-Nec5.exe", "razor-nec5"),
     ],
 )
 def test_the_frozen_entry_point_defaults_only_when_no_basis_was_named(prog, expected):
@@ -351,6 +379,21 @@ def test_without_serve_the_entry_still_one_shots(monkeypatch):
         entry, "main", lambda argv, *, basis: seen.update(argv=argv, basis=basis) or 0
     )
     assert entry.run(["Momwire-Eznec-Razor-Nec5.exe", "deck.nec", "out.txt"]) == 0
+    assert seen == {"argv": ["deck.nec", "out.txt"], "basis": "razor-nec5"}
+
+
+def test_a_leading_basis_flag_one_shots_a_twin_through_the_engine(monkeypatch):
+    """The native client's fallback rung (momwire#718 phase 3): the bundle
+    ships ONE frozen engine exe, so a twin's one-shot rides the machinery
+    flag — leading only, and the two positional paths after it are the
+    untouched contract."""
+    entry = _entry_module()
+    seen = {}
+    monkeypatch.setattr(
+        entry, "main", lambda argv, *, basis: seen.update(argv=argv, basis=basis) or 0
+    )
+    argv = ["momwire-eznec-engine.exe", "--basis", "razor-nec5", "deck.nec", "out.txt"]
+    assert entry.run(argv) == 0
     assert seen == {"argv": ["deck.nec", "out.txt"], "basis": "razor-nec5"}
 
 
