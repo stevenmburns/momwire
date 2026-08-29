@@ -217,6 +217,7 @@ from ..deck._nec2_geometry import _SMIN, build_geometry
 # ends read their buried refusals from it, so neither seam can drift from
 # the other's sentence.
 from .. import _medium_spec
+from ..serve import Seam, run_session
 
 # The far-zone readout used to live in this module. momwire#719 U1 moved it
 # to ``momwire._far_readout`` — a neutral home neither dialect front end
@@ -3641,6 +3642,39 @@ def run_deck(body: str) -> tuple[str, str]:
 # --------------------------------------------------------------------------
 
 
+def _frame_chunks(body: str, terminator: str) -> tuple[str, str]:
+    """One deck's answer as the (stdout, stderr) chunks the stream writes —
+    :func:`deck_frame` joined exactly as :func:`resident_loop` always wrote
+    it, so the seam spelling cannot move a byte."""
+    out, err = deck_frame(body, terminator=terminator)
+    return "\n".join(out) + "\n", ("\n".join(err) + "\n" if err else "")
+
+
+def portal_seam() -> Seam:
+    """This dialect as a :class:`momwire.serve.Seam` (momwire#719 U4).
+
+    Built per call rather than held as a module constant so the callables
+    bind the CURRENT module attributes — the tests monkeypatch
+    :func:`deck_frame` and :func:`_banner_lines`, and a seam frozen at import
+    time would answer around the patch.
+
+    The frame vocabulary is the grammar's: ``NX`` answers and continues,
+    ``EN`` answers and ends the run, and EOF mid-body synthesizes an ``EN``
+    exactly as NEC's own card reader does (#458). The answer's error frame
+    (``ERROR:`` lines under an unconditional sentinel echo) is
+    :func:`render_deck`'s and :func:`deck_frame`'s, which is what keeps the
+    :class:`~momwire.serve.Seam` invariant — ``answer`` never raises.
+    """
+    return Seam(
+        name="nec2c",
+        greeting=lambda: list(_banner_lines()),
+        terminators=_TERMINATORS,
+        closing=frozenset({"EN"}),
+        eof_terminator="EN",
+        answer=_frame_chunks,
+    )
+
+
 _SELFTEST_DECKS = (
     # A free-space dipole, the two-source Y probe, a loaded parasitic pair,
     # and a grounded vertical carrying GD — the four deck shapes a live SimNEC
@@ -4001,45 +4035,17 @@ def resident_loop(stdin, stdout, stderr, solve_lock=None) -> int:
     ``solve_lock`` is a context manager held across the solve, and is how the
     server serialises decks arriving on different connections into one
     thread-pool budget; the stock daemon has one stream and passes nothing.
+
+    Since momwire#719 U4 the loop itself lives in
+    :func:`momwire.serve.run_session`, dialect-generic, and this function is
+    the portal's spelling of it — same rule as the #379 split one level up:
+    the only way to guarantee the served printout is byte-identical is for
+    every caller to run the SAME loop. The EOF rule rides along: NEC's card
+    reader synthesizes an ``EN`` when input runs out mid-deck and runs what
+    it has (#458, observed live in the #413 4nec2 capture); a body of
+    nothing but blank lines still runs nothing.
     """
-    lock = contextlib.nullcontext() if solve_lock is None else solve_lock
-
-    # The banner belongs to start-up; every later one trails an NX.
-    stdout.write("\n".join(_banner_lines()) + "\n")
-    stdout.flush()
-
-    body: list[str] = []
-    for line in stdin:
-        head = line.strip().upper().split()[:1]
-        if head not in (["NX"], ["EN"]):
-            body.append(line.rstrip("\n"))
-            continue
-        with lock:
-            out, err = deck_frame("\n".join(body), terminator=head[0])
-        stdout.write("\n".join(out) + "\n")
-        stdout.flush()
-        if err:
-            stderr.write("\n".join(err) + "\n")
-            stderr.flush()
-        if head == ["EN"]:
-            return 0
-        body = []
-    # EOF is a terminator too. NEC's card reader synthesizes an EN when input
-    # runs out mid-deck and runs what it has — observed live in the #413
-    # 4nec2 capture, where a bundled model ending at its NE card solved and
-    # echoed the synthesized card. Discarding it instead (the pre-#458
-    # behaviour) was invisible to every captured host: both read only the
-    # printout, so a dropped deck arrived as an empty answer blamed on the
-    # engine. A body of nothing but blank lines still runs nothing.
-    if any(ln.strip() for ln in body):
-        with lock:
-            out, err = deck_frame("\n".join(body), terminator="EN")
-        stdout.write("\n".join(out) + "\n")
-        stdout.flush()
-        if err:
-            stderr.write("\n".join(err) + "\n")
-            stderr.flush()
-    return 0
+    return run_session(portal_seam(), stdin, stdout, stderr, solve_lock)
 
 
 def main(

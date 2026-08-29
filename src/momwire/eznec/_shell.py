@@ -44,6 +44,7 @@ from pathlib import Path
 
 from ..deck import DeckError
 from ..deck._nec5 import parse_nec5
+from ..serve import Seam
 from . import _printout, _serve
 
 __all__ = [
@@ -51,6 +52,7 @@ __all__ = [
     "ARGUMENT_ERROR_OUTPUT",
     "main",
     "run",
+    "seam",
 ]
 
 # Observed verbatim: `NEC5CL_x13.exe deck.nec` with no second argument prints
@@ -219,7 +221,7 @@ def _report_internal_error(
     every failure path, and the deck is still on disk — EZNEC wrote it
     moments ago.
     """
-    reason = f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
+    reason = _internal_error_reason(exc)
     try:
         deck_text = read_deck(Path(deck_path))
         write_printout(Path(printout_path), _printout.render_refusal(deck_text, reason))
@@ -227,3 +229,50 @@ def _report_internal_error(
         # The output path itself is unwritable; there is no channel left, and
         # a non-zero exit would only be discarded. Stay quiet, stay zero.
         pass
+
+
+def _internal_error_reason(exc: BaseException) -> str:
+    """The one spelling of the last-ditch refusal line — :func:`main`'s
+    process-level catch and :func:`seam`'s answer-level catch must frame an
+    unforeseen failure identically, whichever transport carried the deck."""
+    return f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
+
+
+def seam(*, basis: str = _serve.BASIS) -> Seam:
+    """This dialect as a :class:`momwire.serve.Seam` (momwire#719 U4).
+
+    The eznec contract is the session loop's degenerate case: no greeting, no
+    frame vocabulary, the whole input is one body answered once — under
+    :func:`momwire.serve.run_session` that is an ``eof_terminator`` frame and
+    nothing else, a session of exactly one deck. The resident server the
+    #718 arc builds (momwire#532) hosts this seam one connection per deck and
+    returns ``answer``'s bytes; the frozen one-shot shell above is the same
+    contract spoken over argv and files, and both funnel through
+    :func:`render`, so the two transports cannot drift apart.
+
+    ``basis`` is the per-engine formulation exactly as :func:`main` takes it
+    (momwire#593: one frozen executable per formulation, the filename names
+    the basis) — a resident server hosting several engine variants holds one
+    seam per basis.
+
+    The :class:`~momwire.serve.Seam` invariant — ``answer`` never raises —
+    is kept the same way :func:`main` keeps exit 0: anything
+    :func:`render`'s three gates did not foresee comes back as the
+    ``NEC ERROR`` printout :func:`_internal_error_reason` frames, never as
+    an exception the transport has no channel for.
+    """
+
+    def answer(body: str, terminator: str) -> tuple[str, str]:
+        try:
+            return render(body, basis=basis), ""
+        except Exception as exc:  # noqa: BLE001 - the seam's last line of defence
+            return _printout.render_refusal(body, _internal_error_reason(exc)), ""
+
+    return Seam(
+        name="eznec",
+        greeting=lambda: [],
+        terminators=frozenset(),
+        closing=frozenset(),
+        eof_terminator="",
+        answer=answer,
+    )
