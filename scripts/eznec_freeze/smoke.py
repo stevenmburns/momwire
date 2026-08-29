@@ -170,6 +170,26 @@ def stop(room: Path) -> None:
     shutil.rmtree(room, ignore_errors=True)
 
 
+def _dump_room(room: Path) -> None:
+    """The runtime room's contents, printed for a red gate 6.
+
+    The room is private and removed in ``main``'s finally, so on CI this
+    print is the only surviving evidence.  It tells the two failures apart:
+    an EMPTY room means the daemon was never launched at all (the spawn
+    itself failed, client-side), while a ``.log`` with a traceback is a
+    daemon that launched and died saying why.
+    """
+    entries = sorted(room.iterdir()) if room.is_dir() else []
+    print(f"     runtime room: {[e.name for e in entries] or 'EMPTY'}")
+    for log in entries:
+        if log.suffix != ".log":
+            continue
+        text = log.read_text(errors="replace")
+        print(f"     -- {log.name} ({len(text)} chars) --")
+        for line in text.splitlines()[-40:]:
+            print(f"     {line}")
+
+
 def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     """Gates 6, 1, 2 and 4 against one bundle, in one runtime directory."""
     failures = 0
@@ -196,6 +216,7 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     spawns = listening(room)
     if answers[0] != expected or answers[1] != expected:
         print(f"FAIL {exe.name}: a resident launch differs from the module's printout")
+        _dump_room(room)
         failures += 1
     elif not spawns:
         # The ladder did the work and the printouts are perfect, which is
@@ -206,12 +227,14 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
             f"FAIL {exe.name}: no daemon was ever spawned — the fallback "
             "ladder carried both launches"
         )
+        _dump_room(room)
         failures += 1
     elif len(spawns) > 1:
         print(
             f"FAIL {exe.name}: {len(spawns)} daemons spawned where one "
             "warm server was the whole claim"
         )
+        _dump_room(room)
         failures += 1
     else:
         print(f"ok   {stem}: resident, one daemon, warm launch {warm:.3f} s")
