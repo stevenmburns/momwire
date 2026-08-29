@@ -1691,6 +1691,43 @@ def _port_signs(built, model) -> np.ndarray:
     return signs
 
 
+@dataclass(frozen=True)
+class GroupResult:
+    """The portal's solve product for ONE execute group at ONE frequency —
+    port currents, segment currents, and the power budget, all read off the
+    cached factorisation :meth:`DeckSolver.solve_group` filled.
+
+    The analog on the eznec seam is :class:`~momwire.eznec._printout.RunData`
+    — where issue #719's design converges the two seams' solve products.
+    ``solver`` is a deliberate temporary reach-through some consumers still
+    need for a walk (:meth:`DeckSolver.current_elements`,
+    :func:`_has_buried_wires`); U3 removes it.
+    """
+
+    driven: list[tuple[int, int, complex]]
+    v_gap: np.ndarray
+    v_applied: np.ndarray
+    i_port: np.ndarray
+    i_source: np.ndarray
+    network_points: list[tuple[int, int, int]]
+    segment_currents: np.ndarray
+    segment_charges: np.ndarray
+    coeffs: np.ndarray
+    solver: object
+    p_in: float
+    p_structure: float
+    p_network: float
+    p_radiated: float
+    efficiency: float
+    fill_ms: int
+    wavelength: float
+    # The environment this group ran under, so every readout below the solve
+    # reads the same half-space the fill did (#933).
+    ground: Ground
+    ground_z: float | None
+    second_medium: SecondMedium | None
+
+
 class DeckSolver:
     """momwire behind one deck: one geometry, one fill per frequency.
 
@@ -2034,9 +2071,10 @@ class DeckSolver:
 
     def solve_group(
         self, group: ExecuteGroup, freq_mhz: float, group_index: int | None = None
-    ) -> dict:
+    ) -> GroupResult:
         """One execute group at one frequency: port currents, segment
-        currents, and the power budget — all from the cached factorisation.
+        currents, and the power budget — all from the cached factorisation,
+        as a :class:`GroupResult`.
 
         The group's ``EK`` picks the operator (issue #849), so two groups of
         one deck under two kernels get two fills and two answers.
@@ -2152,38 +2190,34 @@ class DeckSolver:
             p_network = p_in - p_load - p_gap
             if abs(p_network) <= _NETWORK_LOSS_FLOOR * abs(p_in):
                 p_network = 0.0
-        return {
-            "driven": driven,
-            "v_gap": v_gap,
-            "v_applied": v_applied,
-            "i_port": i_port,
-            "i_source": i_source,
-            "network_points": self.network_connection_points(group_index)
+        return GroupResult(
+            driven=driven,
+            v_gap=v_gap,
+            v_applied=v_applied,
+            i_port=i_port,
+            i_source=i_source,
+            network_points=self.network_connection_points(group_index)
             if reducer is not None
             else [],
-            "segment_currents": seg_currents,
-            "segment_charges": seg_charges,
-            "coeffs": coeffs,
-            "solver": entry["solver"],
-            "p_in": p_in,
-            "p_structure": p_structure,
-            "p_network": p_network,
-            "p_radiated": p_rad,
-            "efficiency": (100.0 * p_rad / p_in) if p_in > 0 else 0.0,
-            "fill_ms": entry["fill_ms"],
-            "wavelength": entry["wavelength"],
-            # The environment this group ran under, so every readout below the
-            # solve reads the same half-space the fill did (#933).
-            "ground": group.ground,
-            "ground_z": (
-                group.environment.ground_z if group.environment.ground else None
-            ),
-            "second_medium": group.second_medium,
-        }
+            segment_currents=seg_currents,
+            segment_charges=seg_charges,
+            coeffs=coeffs,
+            solver=entry["solver"],
+            p_in=p_in,
+            p_structure=p_structure,
+            p_network=p_network,
+            p_radiated=p_rad,
+            efficiency=(100.0 * p_rad / p_in) if p_in > 0 else 0.0,
+            fill_ms=entry["fill_ms"],
+            wavelength=entry["wavelength"],
+            ground=group.ground,
+            ground_z=(group.environment.ground_z if group.environment.ground else None),
+            second_medium=group.second_medium,
+        )
 
     # -- field sources -----------------------------------------------------
 
-    def current_elements(self, result: dict, subdiv: int = 1):
+    def current_elements(self, result: GroupResult, subdiv: int = 1):
         """``(mid, moment, nodes, delta)`` for the whole structure — momwire's
         own ``element_currents``.
 
@@ -2192,7 +2226,7 @@ class DeckSolver:
         publicly, so the copy is gone and only the deck-direction re-signing
         below — which is NEC's convention, not momwire's — stays here.
         """
-        return result["solver"].element_currents(result["coeffs"], subdiv=subdiv)
+        return result.solver.element_currents(result.coeffs, subdiv=subdiv)
 
     def _element_match(self, solver):
         """``(nearest, dirs)`` — which momwire ELEMENT answers each NEC segment.
@@ -2829,7 +2863,7 @@ def _has_buried_wires(solver) -> bool:
 
 
 def _pattern_lines(
-    card: Card, solver: DeckSolver, result: dict, freq_mhz: float
+    card: Card, solver: DeckSolver, result: GroupResult, freq_mhz: float
 ) -> list[str]:
     """The RADIATION PATTERNS table for one ``RP 0`` / ``RP 2`` / ``RP 3``.
 
@@ -2859,7 +2893,7 @@ def _pattern_lines(
     # family over a near-zone range only, so there is no far-zone limit for
     # EITHER seam to take.  The NEC-5 seam has refused this since #553 and
     # reads the same string; momwire#570 tracks the real answer.
-    if _has_buried_wires(result["solver"]):
+    if _has_buried_wires(result.solver):
         raise PortalError(_medium_spec.buried_far_field_refusal())
 
     mode = card.i(0)
@@ -2870,9 +2904,9 @@ def _pattern_lines(
 
     thetas = theta0 + d_theta * np.arange(n_theta)
     phis = phi0 + d_phi * np.arange(n_phi)
-    wavelength = result["wavelength"]
+    wavelength = result.wavelength
     k = 2.0 * math.pi / wavelength
-    second = result["second_medium"]
+    second = result.second_medium
     mid, moment, _nodes, _delta = solver.current_elements(result)
     m_theta, m_phi = _far_moments(
         mid,
@@ -2880,8 +2914,8 @@ def _pattern_lines(
         k,
         np.radians(thetas),
         np.radians(phis),
-        result["ground"],
-        result["ground_z"],
+        result.ground,
+        result.ground_z,
         freq_mhz * 1e6,
         cliff=(mode, second) if mode in _CLIFF_KIND and second is not None else None,
     )
@@ -2892,7 +2926,7 @@ def _pattern_lines(
     prop = np.exp(-1j * k * rng) / rng if at_range else complex(1.0)
     e_theta = -1j * ETA0 * k / (4.0 * math.pi) * prop * m_theta
     e_phi = -1j * ETA0 * k / (4.0 * math.pi) * prop * m_phi
-    p_in = result["p_in"]
+    p_in = result.p_in
     norm = ETA0 * k * k / (8.0 * math.pi * p_in) if p_in > 0 else 0.0
     g_v = norm * np.abs(m_theta) ** 2
     g_h = norm * np.abs(m_phi) ** 2
@@ -3001,7 +3035,7 @@ def _average_gain_line(gain, thetas, d_theta, d_phi, n_phi) -> str:
     )
 
 
-def _near_field_lines(card: Card, solver: DeckSolver, result: dict) -> list[str]:
+def _near_field_lines(card: Card, solver: DeckSolver, result: GroupResult) -> list[str]:
     """The NEAR ELECTRIC / MAGNETIC FIELDS table for one ``NE``/``NH`` grid."""
     magnetic = card.mnemonic == "NH"
     n_x, n_y, n_z = (max(card.i(k), 1) for k in (1, 2, 3))
@@ -3016,13 +3050,13 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: dict) -> list[str]
             for ix in range(n_x)
         ]
     )
-    ground = result["ground"]
+    ground = result.ground
     if ground.kind in ("refl", "sommerfeld"):
         raise PortalError(
             f"{card.mnemonic} over a finite ground is not supported by this "
             f"engine (the near field of a Sommerfeld half-space is not an image)"
         )
-    k = 2.0 * math.pi / result["wavelength"]
+    k = 2.0 * math.pi / result.wavelength
     radius = solver._smallest_radius
     mid, moment, nodes, delta = solver.current_elements(
         result, subdiv=_NEAR_FIELD_SUBDIV
@@ -3033,7 +3067,7 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: dict) -> list[str]
         # flip) and NEGATES the charge, which is the same statement: reversing
         # a horizontal current reverses dI/ds, and mirroring a vertical one
         # reverses the arc direction.
-        ground_z = result["ground_z"]
+        ground_z = result.ground_z
         mid_img, moment_img = _image_moments(mid, moment, ground_z)
         nodes_img = nodes.copy()
         nodes_img[:, 2] = 2.0 * ground_z - nodes[:, 2]
@@ -3128,7 +3162,9 @@ def _printed_segments(pt: PrintControl | None, solver: DeckSolver) -> list[_Segm
     return [s for s in solver.segments if first <= s.number <= last]
 
 
-def _network_lines(solver: DeckSolver, result: dict, group_index: int) -> list[str]:
+def _network_lines(
+    solver: DeckSolver, result: GroupResult, group_index: int
+) -> list[str]:
     """The two network blocks, or nothing at all for an antenna-only group.
 
     ``NETWORK DATA`` first — one banner, then the rows grouped by KIND with
@@ -3145,7 +3181,7 @@ def _network_lines(solver: DeckSolver, result: dict, group_index: int) -> list[s
     the two rows print the same segment and different currents, and the
     difference is what the network carried.
     """
-    points = result["network_points"]
+    points = result.network_points
     if not points:
         return []
     live = live_cards(solver.model, solver.plan, group_index)
@@ -3157,8 +3193,8 @@ def _network_lines(solver: DeckSolver, result: dict, group_index: int) -> list[s
                 continue
             out.append(_network_row(solver, card))
     out += ["", "", _NETWORK_EXCITATION_HEADER, *_NETWORK_EXCITATION_TABLE_HEADER]
-    v_applied = result["v_applied"]
-    i_port = result["i_port"]
+    v_applied = result.v_applied
+    i_port = result.i_port
     for tag, segment, port in points:
         volts = complex(v_applied[port])
         current = complex(i_port[port])
@@ -3238,7 +3274,7 @@ def _run_block(
     group_index: int = 0,
 ) -> list[str]:
     result = solver.solve_group(group, freq_mhz, group_index)
-    wavelength = result["wavelength"]
+    wavelength = result.wavelength
     out: list[str] = []
     if group.refilled:
         out += [
@@ -3273,15 +3309,15 @@ def _run_block(
         out += ["", ""]
         out += [
             _MATRIX_TIMING_HEADER,
-            f"                               FILL: {result['fill_ms']} msec"
+            f"                               FILL: {result.fill_ms} msec"
             f"  FACTOR: 0 msec",
             "",
             "",
         ]
     out += _network_lines(solver, result, group_index)
     out += [_AIP_HEADER, *_AIP_TABLE_HEADER]
-    i_source = result["i_source"]
-    for port, global_seg, volts in result["driven"]:
+    i_source = result.i_source
+    for port, global_seg, volts in result.driven:
         current = i_source[port]
         impedance = volts / current if current != 0 else complex(0.0, 0.0)
         admittance = current / volts if volts != 0 else complex(0.0, 0.0)
@@ -3300,7 +3336,7 @@ def _run_block(
     suppressed = group.pt is not None and group.pt.suppressed
     if not suppressed:
         out += ["", "", _CURRENTS_HEADER, _CURRENTS_NOTE, "", *_CURRENTS_TABLE_HEADER]
-    currents = result["segment_currents"]
+    currents = result.segment_currents
     if not suppressed:
         for seg in _printed_segments(group.pt, solver):
             out.append(
@@ -3318,7 +3354,7 @@ def _run_block(
     # the table above, so the guard is "a card said print" and not "no card
     # said suppress".
     if group.pq is not None and group.pq.prints:
-        charges = result["segment_charges"]
+        charges = result.segment_charges
         out += ["", "", _CHARGE_HEADER, _CHARGE_NOTE, "", *_CHARGE_TABLE_HEADER]
         for seg in _charge_segments(group.pq, solver):
             out.append(
@@ -3335,11 +3371,11 @@ def _run_block(
         "",
         "",
         _POWER_HEADER,
-        f"{pad}INPUT POWER   ={result['p_in']:12.4E} Watts",
-        f"{pad}RADIATED POWER={result['p_radiated']:12.4E} Watts",
-        f"{pad}STRUCTURE LOSS={result['p_structure']:12.4E} Watts",
-        f"{pad}NETWORK LOSS  ={result['p_network']:12.4E} Watts",
-        f"{pad}EFFICIENCY    ={result['efficiency']:8.2f} Percent",
+        f"{pad}INPUT POWER   ={result.p_in:12.4E} Watts",
+        f"{pad}RADIATED POWER={result.p_radiated:12.4E} Watts",
+        f"{pad}STRUCTURE LOSS={result.p_structure:12.4E} Watts",
+        f"{pad}NETWORK LOSS  ={result.p_network:12.4E} Watts",
+        f"{pad}EFFICIENCY    ={result.efficiency:8.2f} Percent",
     ]
     if group.report is not None:
         report = group.report
