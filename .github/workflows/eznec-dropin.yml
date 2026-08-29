@@ -125,7 +125,7 @@ jobs:
           # best and a cached-credential 400 at worst.
           $meta = [ordered]@{
             Endpoint               = "https://wus2.codesigning.azure.net"
-            CodeSigningAccountName = "${{ vars.AZURE_SIGNING_ACCOUNT }}"
+            CodeSigningAccountName = "momwire"
             CertificateProfileName = "momwire-public-trust"
             ExcludeCredentials     = @(
               "ManagedIdentityCredential", "WorkloadIdentityCredential",
