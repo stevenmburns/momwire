@@ -1,5 +1,8 @@
 // Shared preamble for the split _accelerators translation units (momwire#687).
-// Generated from the monolith's lines 1-120; contents byte-identical.
+// Generated from the monolith's lines 1-120, then slimmed by the #710 review:
+// the kernel headers (`_bspline_*_moments_inline.h`, `_contour_engine_inline.h`)
+// moved into the TUs that use them, so editing one kernel no longer
+// ccache-misses all five TUs — per-TU staleness is the split's whole point.
 #pragma once
 
 // M_PI is not in the C++ standard. GCC/glibc define it unconditionally, but
@@ -17,24 +20,19 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
 #include <tuple>
 #include <vector>
 
-#include "_bspline_static_moments_inline.h"
-// The extended-thin-wire static correction D_pq^EK (momwire#249's codegen,
-// wired in by #270 unit 1). Pulls in the J header itself; the duplicate
-// include above is harmless (`#pragma once`) and kept for legibility.
-#include "_bspline_ek_moments_inline.h"
-// The shared adaptive-contour engine (momwire#568 unit 1): the C++ twin of
-// `_sommerfeld_below`'s head + tail machinery, templated on the integrand.
-// Header-only, reentrant, allocation-free -- U2/U3 instantiate it with their
-// own integrands under OpenMP with the GIL released. The bindings at the end
-// of this file are TEST instantiations only; nothing in the production Python
-// dispatch calls them.
-#include "_contour_engine_inline.h"
-
 namespace py = pybind11;
+
+// The per-section registration seam. Declared here so every section TU
+// compiles its definition against the same prototype the module TU calls —
+// a drift would otherwise surface only as an undefined-symbol link error
+// (or, for a forgotten call, not at all).
+void register_bspline(py::module_ &m);
+void register_sinusoidal(py::module_ &m);
+void register_somm(py::module_ &m);
+void register_mw568(py::module_ &m);
 
 // Ubuntu/glibc <cmath> headers don't carry `omp declare simd` markers for the
 // libmvec routines, so GCC's auto-vectorizer can't substitute the vectorized

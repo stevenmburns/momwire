@@ -1,5 +1,13 @@
 #include "_accel_common.h"
 
+#include "_bspline_static_moments_inline.h"
+// The extended-thin-wire static correction D_pq^EK (momwire#249's codegen,
+// wired in by #270 unit 1). Pulls in the J header itself; the duplicate
+// include above is harmless (`#pragma once`) and kept for legibility.
+// Included HERE and not in _accel_common.h: this TU is the only consumer,
+// and a codegen regeneration should rebuild one TU, not five.
+#include "_bspline_ek_moments_inline.h"
+
 // bspline section of the former _accelerators.cpp monolith (momwire#687).
 // Code below is byte-identical to the monolith's lines 121-3348.
 
