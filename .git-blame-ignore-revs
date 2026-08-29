@@ -7,15 +7,18 @@
 # GitHub's blame view honours this file automatically.
 
 # perf(build): split _accelerators.cpp into per-section translation units (#687)
-# The ~8,000-line monolith became five TUs. Every line moved verbatim; the only
-# authored lines are the per-section register_* wrappers and the headers'
-# preamble. Without this entry, blame on the accelerator's 98 issue-referenced
-# provenance comments would stop at the split.
+# The ~8,000-line monolith became five TUs. This is the LANDED (rebased) SHA,
+# set post-merge per the #710 review: the repo lands PRs by rebase, which
+# rewrites SHAs, and git silently ignores an unresolvable entry (exit 0, no
+# warning). Verify any edit with `git log -1 <sha>` on main first.
 #
-# POST-MERGE RITUAL (do not skip): this repo lands PRs by REBASE, which
-# rewrites the SHA — the branch SHA below will never exist on main, and git
-# silently ignores an unresolvable entry (exit 0, no warning), leaving the
-# file inert. Immediately after this PR merges, replace the SHA below with
-# the LANDED split commit's SHA (`git log --oneline main -- src/momwire/
-# _accel_bspline.cpp | tail -1`) in a follow-up commit.
-c1f6f7802c7ed87a7d27593fd8ed491276659ba5
+# HONEST SCOPE (measured 2026-08-29): ignore-revs reassigns blame only within
+# a file's OWN line history. Lines that MOVED into the new _accel_*.cpp TUs
+# have no in-file predecessor, so blame pins them to the split commit no
+# matter what this file says (even -C -C copy detection does not redirect
+# them); their provenance lives in each TU's header banner, which names the
+# monolith line range it carries, and in the monolith's pre-split history.
+# Lines that SURVIVED in _accelerators.cpp blame correctly on their own.
+# This entry earns its keep on the in-file edits the split made around them
+# and on any future in-place rewrite appended below.
+115a727640a1a921285ead6866f5e3db9ae954a9
