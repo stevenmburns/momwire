@@ -273,7 +273,23 @@ def publish_rendezvous(path: str, port: int) -> None:
             os.write(fd, f"{RENDEZVOUS_HOST}:{port}\n".encode("ascii"))
         finally:
             os.close(fd)
-        os.replace(tmp, path)
+        # Windows refuses to replace a file a reader currently holds open
+        # (their ordinary open lacks FILE_SHARE_DELETE), and a reader is a
+        # client mid-``read_rendezvous`` — a 64-byte read, microseconds.
+        # Retry briefly rather than fail the bind: the first canary run
+        # proved this is not theoretical (WinError 5 in the race gate).
+        # POSIX never takes the except.
+        import time
+
+        deadline = time.monotonic() + 2.0
+        while True:
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.005)
     except BaseException:
         try:
             os.unlink(tmp)

@@ -243,12 +243,19 @@ setup(
     cmdclass={"build_ext": OptionalBuildExt},
     # Listed explicitly rather than discovered: the list is short, and an
     # explicit one cannot silently ship a stray directory under src/.
+    # Enumerated, so tests/test_portal_shared.py::
+    # test_every_momwire_subpackage_is_shipped can hold this list to the
+    # tree: momwire.serve was created (#719 U4) without an entry here, every
+    # non-editable install lost the subpackage, and the first thing to
+    # notice was the Windows freeze canary two PRs later (#718 phase 2) —
+    # the editable dev install never sees this class of breakage.
     packages=[
         "momwire",
         "momwire.deck",
         "momwire.eznec",
         "momwire.networks",
         "momwire.portal",
+        "momwire.serve",
     ],
     # The `momwire-nec2c-shared` client (issue #379). A top-level MODULE rather
     # than part of the package on purpose: its whole value is that running it

@@ -44,7 +44,22 @@ def _expected_file_bytes(deck_path: Path, tmp_path: Path) -> bytes:
     return out.read_bytes()
 
 
-@pytest.fixture(params=[mech.UNIX, mech.TCP])
+_HAS_AF_UNIX = hasattr(socket, "AF_UNIX")
+
+
+@pytest.fixture(
+    params=[
+        pytest.param(
+            mech.UNIX,
+            marks=pytest.mark.skipif(
+                not _HAS_AF_UNIX,
+                reason="this build has no AF_UNIX (the first Windows canary's"
+                " finding); the TCP leg is the one that matters here",
+            ),
+        ),
+        mech.TCP,
+    ]
+)
 def transport(request, monkeypatch):
     """Both transports, selected the way a real deployment selects them.
 
@@ -342,14 +357,24 @@ def test_the_address_suffix_tells_the_two_transports_apart(monkeypatch, tmp_path
     """A directory can hold leftovers from a run in the other mode. The
     suffixes differ so a stale ``.sock`` can never be read as a rendezvous
     (nor a ``.port`` connected to as a socket)."""
-    monkeypatch.setenv("MOMWIRE_PORTAL_RUNTIME_DIR", str(tmp_path))
-    monkeypatch.setenv(mech.TRANSPORT_ENV, "unix")
-    assert mech.socket_path("k").endswith(".sock")
-    monkeypatch.setenv(mech.TRANSPORT_ENV, "tcp")
-    assert mech.socket_path("k").endswith(".port")
-    assert mech.address_suffix(mech.UNIX) != mech.address_suffix(mech.TCP)
-    with pytest.raises(ValueError, match="is not a transport"):
-        mech.address_suffix("carrier-pigeon")
+    import shutil
+    import tempfile
+
+    # A SHORT dir, not tmp_path: this asks for the unix-mode SPELLING, and
+    # pytest's nested tmp on the Windows runner already overruns sun_path.
+    room = tempfile.mkdtemp(prefix="mw-sfx-")
+    request_cleanup = lambda: shutil.rmtree(room, ignore_errors=True)  # noqa: E731
+    try:
+        monkeypatch.setenv("MOMWIRE_PORTAL_RUNTIME_DIR", room)
+        monkeypatch.setenv(mech.TRANSPORT_ENV, "unix")
+        assert mech.socket_path("k").endswith(".sock")
+        monkeypatch.setenv(mech.TRANSPORT_ENV, "tcp")
+        assert mech.socket_path("k").endswith(".port")
+        assert mech.address_suffix(mech.UNIX) != mech.address_suffix(mech.TCP)
+        with pytest.raises(ValueError, match="is not a transport"):
+            mech.address_suffix("carrier-pigeon")
+    finally:
+        request_cleanup()
 
 
 def test_the_sun_path_limit_is_a_unix_rule_only(monkeypatch, tmp_path):
@@ -568,6 +593,9 @@ def test_the_detached_spawn_uses_each_platforms_own_spelling(monkeypatch, tmp_pa
     monkeypatch.setattr(subprocess, "Popen", _Fake)
     log_path = str(tmp_path / "srv.log")
 
+    # Fake BOTH platforms: the ambient one differs between this box and the
+    # Windows canary, and each branch must be asserted everywhere.
+    monkeypatch.setattr(mech.os, "name", "posix")
     mech.spawn_server(["true"], log_path)
     assert seen["start_new_session"] is True
     assert "creationflags" not in seen

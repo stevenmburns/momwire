@@ -1226,6 +1226,33 @@ def test_the_stock_console_script_is_untouched():
     assert _console_scripts()["momwire-nec2c"] == "momwire.portal:main"
 
 
+def test_every_momwire_subpackage_is_shipped():
+    """setup.py enumerates packages, and an enumeration drifts: momwire.serve
+    was created (#719 U4) without an entry, every NON-editable install lost
+    the subpackage — both seams import it at load, so wheels and the frozen
+    exe died at import — and the editable dev install hid it until the
+    Windows freeze canary went red two PRs later (#718 phase 2). This gate
+    makes the tree the authority."""
+    import ast
+
+    src_root = REPO_ROOT / "src" / "momwire"
+    on_disk = {"momwire"} | {
+        "momwire." + str(init.parent.relative_to(src_root)).replace("/", ".")
+        for init in src_root.rglob("__init__.py")
+        if init.parent != src_root
+    }
+    setup = ast.parse((REPO_ROOT / "setup.py").read_text())
+    declared = None
+    for node in ast.walk(setup):
+        if isinstance(node, ast.keyword) and node.arg == "packages":
+            declared = {elt.value for elt in node.value.elts}
+    assert declared is not None, "setup.py no longer spells packages= as a list"
+    assert declared == on_disk, (
+        f"setup.py packages= disagrees with src/momwire: "
+        f"missing {sorted(on_disk - declared)}, stale {sorted(declared - on_disk)}"
+    )
+
+
 def test_the_client_module_is_shipped_as_a_top_level_module():
     """``py_modules``, not package members: the entry points must resolve
     without importing ``momwire/__init__.py``, and a wheel that shipped a
