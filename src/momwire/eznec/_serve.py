@@ -414,13 +414,13 @@ from ..deck._solver import _NATIVE_LOADING, basis_entry, port_kwargs
 from ..deck.model import NetworkCard
 from ..networks import Driven, Network, NetworkReducer, PortOnWire
 
-# The far-field readout is momwire's, and it has ONE owner: the portal's
-# NEC-2 front end already turns element currents into E(THETA)/E(PHI), the
-# gain columns and the polarisation ellipse, against a nec2c oracle and
-# hundreds of fixtures.  A second copy here would be a second thing to keep
-# right (the ranked extraction backlog, momwire#429, is where that copy would
-# be paid off); importing is the honest dependency until it is.
-from ..portal._portal import (
+# The far-field readout has ONE owner, and since momwire#719 U1 it is a
+# neutral module: element currents to E(THETA)/E(PHI), the gain columns and
+# the polarisation ellipse, tested against a nec2c oracle and hundreds of
+# fixtures — no longer the portal's alone to keep right, and no longer a
+# cross-seam import. (The ranked extraction backlog, momwire#429, is the
+# audit that named this reach as debt; U1 is where it was paid off.)
+from .._far_readout import (
     ETA0,
     Ground,
     _element_fields,
