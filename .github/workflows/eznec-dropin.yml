@@ -92,9 +92,63 @@ jobs:
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire eznec rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
           "MOMWIRE_SIGN_SHA1=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "MOMWIRE_SIGN_ALLOW_UNTRUSTED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      # Signs when the step above exported a thumbprint; a tag build finds
-      # MOMWIRE_SIGN_SHA1 unset and builds unsigned, exactly as before.
+      # REAL signing, tags only -- Azure Artifact Signing.
+      #
+      # The key never leaves Azure, so there is no thumbprint and nothing in
+      # the local store: signtool reaches it through a dlib plus a metadata
+      # file. The MSI is Microsoft's own client bundle and is used in
+      # preference to the NuGet dlib because it also carries the .NET 8
+      # runtime and VC redistributable the dlib loads -- dependencies we
+      # would otherwise be assuming the runner image happens to ship.
+      - name: Install the Artifact Signing client (tags)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://download.microsoft.com/download/70ad2c3b-761f-4aa9-a9de-e7405aa2b4c1/ArtifactSigningClientTools.msi" -OutFile ArtifactSigningClientTools.msi
+          Start-Process msiexec.exe -Wait -ArgumentList '/I ArtifactSigningClientTools.msi /quiet'
+          $dlib = Get-ChildItem 'C:\Program Files','C:\Program Files (x86)' -Recurse -Filter Azure.CodeSigning.Dlib.dll -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
+          if (-not $dlib) { throw "x64 Azure.CodeSigning.Dlib.dll not found after installing the client" }
+          "MOMWIRE_SIGN_DLIB=$($dlib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Write the Artifact Signing metadata (tags)
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          # Endpoint MUST match the region the account and profile live in.
+          # A mismatch surfaces as 403 plus a SignerSign() failure, saying
+          # nothing whatsoever about regions.
+          #
+          # ExcludeCredentials pins DefaultAzureCredential to the three
+          # AZURE_* variables below. Left unpinned it tries managed identity
+          # and the Azure CLI first, which on a hosted runner is latency at
+          # best and a cached-credential 400 at worst.
+          $meta = [ordered]@{
+            Endpoint               = "https://wus2.codesigning.azure.net"
+            CodeSigningAccountName = "${{ vars.AZURE_SIGNING_ACCOUNT }}"
+            CertificateProfileName = "momwire-public-trust"
+            ExcludeCredentials     = @(
+              "ManagedIdentityCredential", "WorkloadIdentityCredential",
+              "SharedTokenCacheCredential", "VisualStudioCredential",
+              "VisualStudioCodeCredential", "AzureCliCredential",
+              "AzurePowerShellCredential", "AzureDeveloperCliCredential",
+              "InteractiveBrowserCredential")
+          }
+          $meta | ConvertTo-Json | Out-File metadata.json -Encoding utf8
+          "MOMWIRE_SIGN_METADATA=$((Resolve-Path metadata.json).Path)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          # Microsoft's own TSA. Artifact Signing certificates are valid for
+          # THREE DAYS, so the timestamp is not hygiene here -- it is the
+          # only thing keeping shipped signatures valid past this week.
+          "MOMWIRE_SIGN_TIMESTAMP_URL=http://timestamp.acs.microsoft.com" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      # Signs when either identity is configured: Azure on tags, the
+      # self-signed rehearsal otherwise. With neither, this builds unsigned.
+      # Note MOMWIRE_SIGN_ALLOW_UNTRUSTED is set only by the rehearsal step,
+      # so a tag build gets the chain check as a HARD gate, for free.
       - run: python scripts/eznec_freeze/build.py
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
       # The gate: frozen exe vs `python -m momwire.eznec`, byte-identical on
       # serving decks (CRLF included), refusal frame present on a refused one,
       # and every variant build.py shipped present beside it and SERVING the
