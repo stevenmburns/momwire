@@ -254,9 +254,29 @@ exclude = ["site/figures/*.py"]
 
 [tool.ruff.lint]
 ignore = ["E741"]
+# B023 (function-uses-loop-variable) is opted into EXPLICITLY, not inherited:
+# it is not in ruff's default set at the pinned version, and adopting it by
+# upgrading ruff would drag in ~400 other rules at the same time.
+#
+# It is a MAY-escape warning, not a bug detector -- it fires whenever a
+# closure reads a loop variable, because it cannot prove the closure does not
+# outlive the iteration. Audited 2026-08-29 across all 26 findings then
+# present: every one was a closure consumed inside its own iteration, i.e.
+# zero real bugs. It is kept on anyway for the case it exists to catch --
+# closures stashed in a loop and called after it ends, where the loop variable
+# has moved on -- which no gate here would otherwise notice.
+extend-select = ["B023"]
 # Keep "imported but unused" as a warning instead of auto-stripping.
 # Without this, multi-pass edits (add imports first, then add code that
 # uses them) can have the import deleted between edits — by the editor's
 # format-on-save, the project's auto-fix hook, or a pre-commit run —
 # producing a broken next edit. Manual cleanup of unused imports is fine.
 unfixable = ["F401"]
+
+[tool.ruff.lint.per-file-ignores]
+# Bench and figure scripts build throwaway closures over sweep variables and
+# consume them on the next line; B023 there is pure noise. src/ and tests/ keep
+# the rule -- shipped code and the gates over it are where a late-binding
+# capture would actually cost something.
+"scripts/**" = ["B023"]
+"site/figures/**" = ["B023"]
