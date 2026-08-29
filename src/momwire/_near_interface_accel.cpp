@@ -57,14 +57,13 @@
 #include <stdexcept>
 
 #include "_contour_engine_inline.h"
+#include "_branch_cut_inline.h"
 #include "xsf/bessel.h"
 
 namespace py = pybind11;
 
 namespace mw680 {
 using mw_contour::cd;
-
-static const cd MW_BJ(0.0, 1.0);
 
 // The Python walk's fixed shape constants (`_near_interface`): the ray
 // direction e^{+j pi/4}, the panel budget, and the far-pair kill cap.
@@ -79,9 +78,10 @@ static const double MW_FAR_PAIR_KILL = 60.0;
 // the branch points, and the legitimacy of both the head's first-quadrant
 // detour and the rotated rays is that they cross neither of the vertical
 // ones. The spelling IS the branch choice.
-static inline cd gamma_cut(const cd &lam, const cd &k) {
-    return std::sqrt(-MW_BJ * (lam - k)) * std::sqrt(MW_BJ * (lam + k));
-}
+// One definition for all three call sites, across both extensions (#714).
+// The using-declaration makes the name a member of this namespace, so the
+// qualified `mw568_below::gamma_cut` calls below still resolve.
+using mw_branch::gamma_cut;
 
 // `_near_interface._core`: the six spectral factors x (2 E~ lam), WITHOUT
 // the Bessel factor. z' <= 0, so e^{-gamma_m|z'|} = e^{+gamma_m z'}.
