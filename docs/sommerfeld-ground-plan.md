@@ -167,9 +167,9 @@ happen automatically — same free ride the refl-coef path got.
 ## API sketch
 
 ```python
-BSplineSolver(..., ground_z=0.0,
-              ground_eps=(13, 0.005),
-              ground_model="refl-coef")  # default; "sommerfeld" opts in
+BSplineSolver(
+    ..., ground_z=0.0, ground_eps=(13, 0.005), ground_model="refl-coef"
+)  # default; "sommerfeld" opts in
 ```
 
 - `ground_model` is keyword-only, validated against

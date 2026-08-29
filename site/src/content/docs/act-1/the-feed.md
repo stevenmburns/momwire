@@ -117,10 +117,15 @@ import numpy as np
 from momwire import SinusoidalSolver
 
 wire = np.array([[0.0, -5.291, 0.0], [0.0, 5.291, 0.0]])
-solver = SinusoidalSolver(wires=[wire], nsegs=81, wavelength=22.0,
-                          wire_radius=0.0005,
-                          feed_wire_index=0, feed_arclength=5.291)  # 1 V gap at the center
-lams = np.linspace(18.0, 27.0, 46)                    # 46 frequencies
+solver = SinusoidalSolver(
+    wires=[wire],
+    nsegs=81,
+    wavelength=22.0,
+    wire_radius=0.0005,
+    feed_wire_index=0,
+    feed_arclength=5.291,
+)  # 1 V gap at the center
+lams = np.linspace(18.0, 27.0, 46)  # 46 frequencies
 Z = np.asarray(solver.compute_impedance_swept(2 * np.pi / lams)).ravel()
 ```
 

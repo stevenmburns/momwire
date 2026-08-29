@@ -151,11 +151,12 @@ bspline assembly path.
 momwire solvers currently take only `ground_z` (PEC image implied). Proposed:
 
 ```python
-BSplineSolver(..., ground_z=0.0,
-              ground_eps=None)   # None → PEC image (today's behavior);
-                                 # complex ε̃, or (eps_r, sigma) tuple →
-                                 # refl-coef weighted image (σ needs ω,
-                                 # which the solver already has per k)
+BSplineSolver(
+    ..., ground_z=0.0, ground_eps=None
+)  # None → PEC image (today's behavior);
+# complex ε̃, or (eps_r, sigma) tuple →
+# refl-coef weighted image (σ needs ω,
+# which the solver already has per k)
 ```
 
 Backwards compatible: `ground_eps=None` preserves every existing test.

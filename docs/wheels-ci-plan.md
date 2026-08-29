@@ -51,8 +51,15 @@ if sys.platform == "win32":
     extra_link_args = []
 else:
     extra_compile_args = [
-        "-O3", "-fopenmp", "-fopenmp-simd", "-mavx2", "-mfma",
-        "-fno-math-errno", "-g", "-fno-omit-frame-pointer", "-std=gnu++11",
+        "-O3",
+        "-fopenmp",
+        "-fopenmp-simd",
+        "-mavx2",
+        "-mfma",
+        "-fno-math-errno",
+        "-g",
+        "-fno-omit-frame-pointer",
+        "-std=gnu++11",
     ]
     extra_link_args = ["-fopenmp", "-lpthread", "-lmvec"]
 

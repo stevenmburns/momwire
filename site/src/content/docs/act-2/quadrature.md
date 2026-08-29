@@ -83,9 +83,16 @@ from momwire import BSplineSolver
 
 wire = np.array([[0.0, -5.291, 0.0], [0.0, 5.291, 0.0]])
 for nq in (2, 4, 8):
-    Z, _ = BSplineSolver(wires=[wire], nsegs=21, wavelength=22.0, wire_radius=0.0005,
-                         degree=2, n_qp_pair=nq,
-                         feed_wire_index=0, feed_arclength=5.291).compute_impedance()
+    Z, _ = BSplineSolver(
+        wires=[wire],
+        nsegs=21,
+        wavelength=22.0,
+        wire_radius=0.0005,
+        degree=2,
+        n_qp_pair=nq,
+        feed_wire_index=0,
+        feed_arclength=5.291,
+    ).compute_impedance()
     print(f"n_qp_pair={nq}:  {Z.real:.4f} {Z.imag:+.4f}j")
 # n_qp_pair=2:  69.6634 -18.3665j
 # n_qp_pair=4:  69.6635 -18.3652j

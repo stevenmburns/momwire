@@ -132,8 +132,9 @@ A second consumer inherits the *vocabulary* (`mode`, "compose", the
 trunk already uses (`_field_ground`, momwire#392):
 
 ```python
-def evaluate(self, obs_points, obs_tangents, src_seg_l, src_seg_r,
-             src_tangents) -> "(n_obs, n_src) complex":
+def evaluate(
+    self, obs_points, obs_tangents, src_seg_l, src_seg_r, src_tangents
+) -> "(n_obs, n_src) complex":
     """The smooth remainder FIELD, projected on the observer tangents."""
 ```
 

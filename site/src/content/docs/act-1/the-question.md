@@ -131,12 +131,19 @@ The machinery of the next two chapters, applied to this exact specimen
 import numpy as np
 from momwire import SinusoidalSolver
 
-wire = np.array([[0.0, -5.291, 0.0], [0.0, 5.291, 0.0]])  # the specimen, 10.582 m tip to tip
-solver = SinusoidalSolver(wires=[wire], nsegs=81, wavelength=22.0,
-                          wire_radius=0.0005,
-                          feed_wire_index=0, feed_arclength=5.291)  # 1 V gap at the center
+wire = np.array(
+    [[0.0, -5.291, 0.0], [0.0, 5.291, 0.0]]
+)  # the specimen, 10.582 m tip to tip
+solver = SinusoidalSolver(
+    wires=[wire],
+    nsegs=81,
+    wavelength=22.0,
+    wire_radius=0.0005,
+    feed_wire_index=0,
+    feed_arclength=5.291,
+)  # 1 V gap at the center
 Z, currents = solver.compute_impedance()
-print(f"Z_in = {Z.real:.1f} {Z.imag:+.1f}j ohms")   # Z_in = 69.6 -18.3j ohms
+print(f"Z_in = {Z.real:.1f} {Z.imag:+.1f}j ohms")  # Z_in = 69.6 -18.3j ohms
 ```
 
 That `feed_arclength=5.291` — half the wire's length — is the delta-gap feed

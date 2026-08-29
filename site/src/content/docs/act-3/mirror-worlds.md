@@ -61,11 +61,18 @@ from momwire import BSplineSolver
 # horizontal half-wave dipole, 0.3 lambda up, over perfect ground at z = 0
 h = 0.3 * 22.0
 wire = np.array([[-5.291, 0.0, h], [5.291, 0.0, h]])
-solver = BSplineSolver(wires=[wire], nsegs=21, wavelength=22.0, wire_radius=0.0005,
-                       degree=2, ground_z=0.0,          # <- the whole ground model
-                       feed_wire_index=0, feed_arclength=5.291)
+solver = BSplineSolver(
+    wires=[wire],
+    nsegs=21,
+    wavelength=22.0,
+    wire_radius=0.0005,
+    degree=2,
+    ground_z=0.0,  # <- the whole ground model
+    feed_wire_index=0,
+    feed_arclength=5.291,
+)
 Z, _ = solver.compute_impedance()
-print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")   # ~93 +5j — up from 70 in free space
+print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")  # ~93 +5j — up from 70 in free space
 ```
 
 One argument, one extra kernel term, and the dipole knows there's a floor.
@@ -95,11 +102,18 @@ from momwire import BSplineSolver
 
 # quarter-wave vertical, base ON the perfect ground at z = 0
 wire = np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.236]])
-solver = BSplineSolver(wires=[wire], nsegs=21, wavelength=22.0, wire_radius=0.0005,
-                       degree=2, ground_z=0.0,
-                       feed_wire_index=0, feed_arclength=0.1)  # drive the base
+solver = BSplineSolver(
+    wires=[wire],
+    nsegs=21,
+    wavelength=22.0,
+    wire_radius=0.0005,
+    degree=2,
+    ground_z=0.0,
+    feed_wire_index=0,
+    feed_arclength=0.1,
+)  # drive the base
 Z, _ = solver.compute_impedance()
-print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")   # ~34 -17j
+print(f"Z_in = {Z.real:.0f} {Z.imag:+.0f}j ohms")  # ~34 -17j
 ```
 
 Solve the equivalent free-space dipole (double the wire, feed the middle) and

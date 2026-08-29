@@ -87,11 +87,19 @@ import numpy as np
 from momwire import BSplineSolver
 
 wire = np.array([[0.0, -5.291, 0.0], [0.0, 5.291, 0.0]])
-solver = BSplineSolver(wires=[wire], nsegs=3, wavelength=22.0,
-                       wire_radius=0.0005, degree=2,
-                       feed_wire_index=0, feed_arclength=5.291)  # 1 V at the center
+solver = BSplineSolver(
+    wires=[wire],
+    nsegs=3,
+    wavelength=22.0,
+    wire_radius=0.0005,
+    degree=2,
+    feed_wire_index=0,
+    feed_arclength=5.291,
+)  # 1 V at the center
 Z, coeffs = solver.compute_impedance()
-print(f"d=2, N=3:  Z_in = {Z.real:.1f} {Z.imag:+.1f}j ohms")   # 69.9 -18.1j — three segments
+print(
+    f"d=2, N=3:  Z_in = {Z.real:.1f} {Z.imag:+.1f}j ohms"
+)  # 69.9 -18.1j — three segments
 ```
 
 Three quadratic segments, converged. But that innocent `compute_impedance` hides

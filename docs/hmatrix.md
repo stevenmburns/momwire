@@ -167,8 +167,9 @@ sim = HMatrixPySim(wires=[...], degree=1, aca_tol=1e-5, aca_eta=2.0)
 z, coeffs = sim.compute_impedance()
 
 # via the engine (selectable like any other pysim solver)
-eng = PysimEngine(builder, solver=HMatrixPySim,
-                  solver_kwargs={"degree": 1, "aca_tol": 1e-5})
+eng = PysimEngine(
+    builder, solver=HMatrixPySim, solver_kwargs={"degree": 1, "aca_tol": 1e-5}
+)
 z = eng.impedance()
 ```
 

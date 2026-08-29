@@ -106,8 +106,9 @@ GAP's rather than the equivalent dipole's whole gap, so a base-fed monopole
 returns exactly half its mirror model's impedance. A monopole is therefore
 
 ```python
-RazorSolver(wires=[[[0, 0, 0], [0, 0, 5.35]]], nsegs=48,
-            ground_z=0.0, feed_arclength=0.0)   # the base gap is the port
+RazorSolver(
+    wires=[[[0, 0, 0], [0, 0, 5.35]]], nsegs=48, ground_z=0.0, feed_arclength=0.0
+)  # the base gap is the port
 ```
 
 K wire ends meeting at one point in the plane get K tents, one each: the
@@ -123,9 +124,10 @@ image coefficient 1, i.e. PEC (momwire#282).
 of the plane, in either of momwire's two flavours:
 
 ```python
-RazorSolver(..., ground_z=0.0, ground_eps=(13.0, 0.005))            # GN 0
-RazorSolver(..., ground_z=0.0, ground_eps=(13.0, 0.005),
-            ground_model="sommerfeld")                              # GN 2
+RazorSolver(..., ground_z=0.0, ground_eps=(13.0, 0.005))  # GN 0
+RazorSolver(
+    ..., ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
+)  # GN 2
 ```
 
 **`"refl-coef"`** (the default) weights the image block per (observer,
