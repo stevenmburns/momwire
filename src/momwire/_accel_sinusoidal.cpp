@@ -593,9 +593,10 @@ sinusoidal_field_tensor_refl(
 // repaired it on both sides, so the scalar is GONE from this signature — the
 // arm now rides the same local `sw` the ordering does, which is the only
 // spelling in which the two cannot disagree at a knife-edge pair. Python
-// detects the new arity through the `ek_ira_per_pair` module attribute below;
-// a stale extension exports the symbols with the old arity and is refused
-// there rather than called wrongly.
+// detects the new arity through the `ek_ira_per_pair` module attribute (set
+// in `register_sinusoidal`, at the end of this file); a stale extension
+// exports the symbols with the old arity and is refused there rather than
+// called wrongly.
 //
 // Parallelism / staging follow `sinusoidal_field_tensor_impl` exactly: OpenMP
 // over observer rows, per-row scratch, and the same three stages (geometry +
@@ -2058,6 +2059,16 @@ sinusoidal_galerkin_far_fill_ek(
 
 
 void register_sinusoidal(py::module_ &m) {
+    // Capability flag, not a value (momwire#258). The two EKSCX entry points
+    // dropped their build-wide `want_swapped` argument when the IRA arm went
+    // per pair, and a STALE extension still exports both symbols under the
+    // old arity — so `hasattr` alone would hand the new caller a TypeError
+    // instead of the graceful numpy fallback the guards exist to give.
+    // `sinusoidal.py` requires this attribute before it claims either
+    // accelerator; an older build simply lacks it and takes the numpy
+    // reference, which carries the same per-pair fix. Set HERE, beside the
+    // bindings it vouches for (#710 review).
+    m.attr("ek_ira_per_pair") = true;
 
     m.def("sinusoidal_field_tensor", &sinusoidal_field_tensor,
           "Tangential field tensor for the NEC2 three-term basis. Returns "

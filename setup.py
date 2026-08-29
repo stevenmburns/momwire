@@ -90,7 +90,13 @@ if sys.platform == "win32":
     # neutralizes the `omp simd` directives under _MSC_VER, leaving /arch:AVX2
     # autovectorization to handle the inner loops. /arch:AVX2 matches the Linux
     # AVX2 baseline.
-    extra_compile_args = ["/O2", "/arch:AVX2", "/openmp:llvm", "/fp:fast"]
+    # /MP: MSVC's own parallel compile across the five TUs. Needed because
+    # pybind11's ParallelCompile below is a verified NO-OP here — it patches
+    # the distutils base Compiler.compile, and MSVC's compiler class overrides
+    # compile() in its own class dict, so the patch never runs. Without /MP
+    # the split would make Windows wheel builds strictly SLOWER than the
+    # monolith (five serial preamble parses) — the #710 review's finding.
+    extra_compile_args = ["/O2", "/arch:AVX2", "/openmp:llvm", "/fp:fast", "/MP"]
     extra_link_args = []
 elif sys.platform == "darwin":
     # Apple clang ships no OpenMP runtime and macOS has no libmvec, so this
@@ -199,6 +205,8 @@ _NEAR_HEADERS = ["src/momwire/_contour_engine_inline.h"] + sorted(
 # (the shared preamble is parsed once per TU) even as it shrinks the
 # incremental edit. Honours NPY_NUM_BUILD_JOBS; defaults to the CPU count, and
 # `NPY_NUM_BUILD_JOBS=1` restores serial compilation for a constrained runner.
+# GCC/clang only: MSVC's compiler class overrides the compile() this patches,
+# so on Windows the parallelism comes from /MP in extra_compile_args above.
 ParallelCompile("NPY_NUM_BUILD_JOBS").install()
 
 ext_modules = [

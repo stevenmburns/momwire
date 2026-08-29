@@ -85,13 +85,14 @@ jobs:
       # `--no-build-isolation` below can find them.
       - run: pip install "setuptools>=61.0" wheel pybind11
         if: needs.changes.outputs.code == 'true'
-      # The extension is ONE 8,063-line translation unit at -O3, and compiling
-      # it costs 57-70 s in every job that installs the package -- five of
-      # them, on every PR. `cache: pip` above caches downloaded WHEELS, not
-      # that compile, so it ran from scratch every time. Measured over the 60
-      # commits before this one: SIX touch `_accelerators.cpp` and all six are
-      # the single #568 arc, so nine PRs in ten recompiled identical C++ five
-      # times for nothing.
+      # The extension is five translation units (momwire#687 split the old
+      # 8,063-line monolith) compiled at -O3 in every job that installs the
+      # package -- five jobs, on every PR. `cache: pip` above caches
+      # downloaded WHEELS, not that compile, so it ran from scratch every
+      # time. Most PRs touch no accelerator C++ at all (measured pre-split:
+      # nine PRs in ten recompiled identical C++ five times for nothing), and
+      # the split means a PR that touches ONE section re-compiles one TU and
+      # ccache serves the rest.
       #
       # `--no-build-isolation` is not a second optimisation, it is what makes
       # the cache HIT AT ALL. Build isolation puts pybind11's headers under a

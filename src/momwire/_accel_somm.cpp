@@ -1,7 +1,10 @@
 #include "_accel_common.h"
 
 // somm section of the former _accelerators.cpp monolith (momwire#687).
-// Code below is byte-identical to the monolith's lines 5402-6272.
+// Code below is byte-identical to the monolith's lines 5402-6272, with ONE
+// exception: somm_proj (monolith 5846-5982) was hoisted verbatim into
+// _accel_somm_proj_inline.h — shared with the mw568 TU — and is pulled back
+// in by the mid-file #include below.
 
 namespace somm {
 
@@ -726,17 +729,6 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     }
     return Q;
 }
-
-
-// --------------------------------------------------------------------------
-// momwire#568 unit 1 -- test instantiations of the shared contour engine.
-//
-// These exist so `tests/test_contour_engine_568.py` can gate the engine and
-// its complex Bessel pair from Python BEFORE any production fill rides on
-// them. Nothing in momwire's dispatch calls into this block; U2 (below fills)
-// and U3 (transmitted fills) will instantiate `mw_contour::run_contour` with
-// their own integrands and never go through these entry points.
-// --------------------------------------------------------------------------
 
 
 void register_somm(py::module_ &m) {

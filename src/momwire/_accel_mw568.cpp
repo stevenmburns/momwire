@@ -1,8 +1,28 @@
 #include "_accel_common.h"
 #include "_accel_somm_proj_inline.h"
+// The shared adaptive-contour engine (momwire#568 unit 1): the C++ twin of
+// `_sommerfeld_below`'s head + tail machinery, templated on the integrand.
+// Header-only, reentrant, allocation-free -- U2/U3 instantiate it with their
+// own integrands under OpenMP with the GIL released. Included HERE and not in
+// _accel_common.h: this TU is the only consumer, and live engine work
+// (momwire#696) should rebuild one TU, not five.
+#include "_contour_engine_inline.h"
 
 // mw568 section of the former _accelerators.cpp monolith (momwire#687).
 // Code below is byte-identical to the monolith's lines 6273-7497.
+
+// --------------------------------------------------------------------------
+// momwire#568 unit 1 -- the shared contour engine's TEST instantiations live
+// in register_mw568 below (contour_engine_sommerfeld_identity /
+// contour_engine_synth6). They exist so `tests/test_contour_engine_568.py`
+// can gate the engine and its complex Bessel pair from Python BEFORE any
+// production fill rides on them; nothing in momwire's dispatch calls them.
+// U2 (below fills) and U3 (transmitted fills) instantiate
+// `mw_contour::run_contour` with their own integrands and never go through
+// those entry points. (Banner relocated from the somm TU tail by the #710
+// review — the section cut had stranded it above register_somm's PRODUCTION
+// bindings.)
+// --------------------------------------------------------------------------
 
 namespace mw568 {
 using mw_contour::cd;
@@ -1231,6 +1251,29 @@ static py::tuple transmitted_field_proj_batch(
 
 
 void register_mw568(py::module_ &m) {
+    // The three #568 capability flags, set HERE beside the bindings they
+    // vouch for (#710 review): `_sommerfeld_below` and
+    // `_sommerfeld_transmitted` gate on the flag ALONE, so flag and symbols
+    // must live in one TU or an edit here could leave a flag advertising a
+    // contract whose symbols are gone.
+    //
+    // momwire#568 unit 1: the shared contour engine's TEST entry points. The
+    // engine itself is header-only (`_contour_engine_inline.h`); these
+    // exist so the Python suite can gate it before U2/U3 ride on it.
+    m.attr("contour_engine_568") = true;
+    // momwire#568 unit 2: the below/below fills on that engine. Its OWN
+    // capability flag, deliberately not `contour_engine_568` — a .so built at
+    // U1 exports the engine's test entry points and would otherwise claim to
+    // carry U2's contract too, handing `_sommerfeld_below` a missing symbol
+    // instead of the graceful numpy fallback the guard exists to give.
+    m.attr("below_fills_568") = true;
+    // momwire#568 unit 3: the transmitted fills on that engine. Its OWN
+    // capability flag, deliberately neither `contour_engine_568` nor
+    // `below_fills_568` — a .so built at U1 or U2 exports those symbols and
+    // would otherwise claim to carry U3's contract too, handing
+    // `_sommerfeld_transmitted` a missing symbol instead of the graceful
+    // numpy fallback the guard exists to give.
+    m.attr("transmitted_fills_568") = true;
 
     m.def("bessel_j0_j1x_complex", &bessel_j0_j1x_complex,
           "(J0(x), J1(x)/x) at COMPLEX x -- the C++ twin of "
