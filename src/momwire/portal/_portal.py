@@ -227,6 +227,7 @@ from .. import _medium_spec
 # _far_moments`-style call sites already in the corpus (tests, scripts) keep
 # working unchanged.
 from .._far_readout import (
+    EPS0 as EPS0,
     ETA0 as ETA0,
     Ground as Ground,
     _FIELD_FLOOR2 as _FIELD_FLOOR2,
@@ -236,6 +237,7 @@ from .._far_readout import (
     _far_moments as _far_moments,
     _gain_db as _gain_db,
     _image_moments as _image_moments,
+    _phase_deg as _phase_deg,
     _polarisation as _polarisation,
 )
 
@@ -376,7 +378,9 @@ LEGACY_PROBE_VERSION = "nec2c.ae6ty.9.1"
 BANNER_VERSION = "nec2c.ae6ty.momwire.9.1"
 
 C_LIGHT = _C_LIGHT  # momwire#456: one owner, in `momwire._constants`
-EPS0 = 8.854_187_817e-12
+# EPS0's one owner is `momwire._far_readout` (imported above): the readout
+# needs it for the complex dielectric constant and so does this module's
+# ANTENNA ENVIRONMENT block — one spelling, not two (momwire#643).
 
 # ``_FIELD_FLOOR2`` (nec2c's ``RDPAT`` blank-column bar) moved to
 # ``momwire._far_readout`` with the far-zone readout (momwire#719 U1) and is
@@ -1426,10 +1430,6 @@ def fmt_near_field_row(point, fx, fy, fz) -> str:
         f"{abs(fy):13.4E}{_phase_deg(fy):8.2f}"
         f"{abs(fz):13.4E}{_phase_deg(fz):8.2f}"
     )
-
-
-def _phase_deg(value: complex) -> float:
-    return math.degrees(math.atan2(value.imag, value.real))
 
 
 def _loading_cell(value: float | None) -> str:

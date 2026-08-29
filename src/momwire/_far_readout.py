@@ -25,12 +25,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-# Free-space impedance and permittivity. ``EPS0`` is also spelt in
-# ``portal._portal`` (its ANTENNA ENVIRONMENT block needs its own copy for
-# the complex dielectric constant line) — the two are not imported from one
-# another so this module stays the moved cluster's dependency, not the
-# portal's; a single literal duplicated once is cheaper than the reverse
-# import it would take to avoid that.
+# Free-space impedance and permittivity. This module is ``EPS0``'s one
+# owner too: the portal's ANTENNA ENVIRONMENT block also needs it (the
+# complex dielectric constant line) and imports it from here through the
+# same compat block that re-exports the readout — a second spelling is the
+# thing that drifts (momwire#643).
 ETA0 = 376.730_313_668
 EPS0 = 8.854_187_817e-12
 
@@ -357,13 +356,11 @@ def _element_fields(points, elements, k, radius, magnetic):
 
 
 def _phase_deg(value: complex) -> float:
-    """COPIED, not imported, from ``portal._portal`` (mirrors that module's
-    own ``_series_rlc_impedance`` precedent). A two-line trig helper with no
-    dependencies of its own, shared with the printout's row formatters
-    (``fmt_pattern_row``, ``fmt_near_field_row``), which stay in the portal
-    because they format NEC's column layout rather than compute the field.
-    Duplicating one two-line function is cheaper than a reverse import for
-    it."""
+    """The one spelling of phase-in-degrees for the readout AND the portal's
+    row formatters (``fmt_pattern_row``, ``fmt_near_field_row``), which stay
+    in the portal because they format NEC's column layout rather than compute
+    the field — they import this back through the same compat block that
+    re-exports the readout."""
     return math.degrees(math.atan2(value.imag, value.real))
 
 
