@@ -18,7 +18,16 @@ on:
   push:
     branches: ["main"]
     tags: ["v*"]
-  workflow_dispatch: {}
+  # `azure_sign` exists so the REAL certificate can be proven on demand.
+  # Without it the Azure path's first execution would be a tag build, i.e.
+  # mid-release, with a GitHub Release already created and artifacts half
+  # attached. A dispatch costs nothing and is freely repeatable.
+  workflow_dispatch:
+    inputs:
+      azure_sign:
+        description: "Sign with the REAL Azure certificate (no tag, no release)"
+        type: boolean
+        default: false
 
 # Superseded main-push builds cancel; tag refs are unique groups, so a
 # release build can never be cancelled (the wheels.yml #220 rule).
@@ -86,7 +95,7 @@ jobs:
       # by one that opens the real key, and dropping ALLOW_UNTRUSTED turns the
       # chain check back into a gate.
       - name: Rehearsal signing certificate (self-signed, never on tags)
-        if: github.ref_type != 'tag'
+        if: github.ref_type != 'tag' && !inputs.azure_sign
         shell: pwsh
         run: |
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire eznec rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
@@ -100,8 +109,8 @@ jobs:
       # preference to the NuGet dlib because it also carries the .NET 8
       # runtime and VC redistributable the dlib loads -- dependencies we
       # would otherwise be assuming the runner image happens to ship.
-      - name: Install the Artifact Signing client (tags)
-        if: github.ref_type == 'tag'
+      - name: Install the Artifact Signing client (tags or sign test)
+        if: github.ref_type == 'tag' || inputs.azure_sign
         shell: pwsh
         run: |
           $ProgressPreference = 'SilentlyContinue'
@@ -111,8 +120,8 @@ jobs:
                   Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
           if (-not $dlib) { throw "x64 Azure.CodeSigning.Dlib.dll not found after installing the client" }
           "MOMWIRE_SIGN_DLIB=$($dlib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Write the Artifact Signing metadata (tags)
-        if: github.ref_type == 'tag'
+      - name: Write the Artifact Signing metadata (tags or sign test)
+        if: github.ref_type == 'tag' || inputs.azure_sign
         shell: pwsh
         run: |
           # Endpoint MUST match the region the account and profile live in.
@@ -171,8 +180,12 @@ jobs:
       # self-signed binary that looks official.
       - name: Name the bundle
         shell: pwsh
+        env:
+          AZURE_SIGN: ${{ inputs.azure_sign }}
         run: |
-          $base = if ($env:GITHUB_REF_TYPE -eq 'tag') { 'momwire-eznec-windows' } else { 'momwire-eznec-windows-SELFSIGNED-rehearsal' }
+          $base = if ($env:GITHUB_REF_TYPE -eq 'tag') { 'momwire-eznec-windows' }
+                  elseif ($env:AZURE_SIGN -eq 'true') { 'momwire-eznec-windows-SIGNTEST' }
+                  else { 'momwire-eznec-windows-SELFSIGNED-rehearsal' }
           "BUNDLE=$base" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Zip the bundle
         shell: pwsh
