@@ -385,6 +385,44 @@ def test_each_formulation_gets_its_own_warm_server(client_exe, tmp_path):
         shutil.rmtree(bundle, ignore_errors=True)
 
 
+@pytest.mark.integration
+@pytest.mark.slow
+def test_the_key_is_the_d2_digest_and_not_a_private_hash(client_exe, tmp_path):
+    """#718 D2 pins the key's SHAPE: sha256 first-16-hex over
+    ``eznec.<major>.<minor>``, the engine exe's resolved path, ``repr(900.0)``
+    and the basis, NUL-joined. Every other gate here only needs the key to
+    agree with itself, so a drifted vendored SHA-256 or a reordered hash
+    input would pass them all — but the key is observable as the address
+    FILENAME, so the recorded shape is checkable against the Python spelling
+    of the same digest. The twin's name, not the default's, so the basis
+    input's position is part of what is pinned."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(TWIN_NAME,))
+    room = _room()
+    deck = _deck(BASIS_DECK)
+    major, minor = mech.dist_version()
+    expected_key = mech.digest(
+        [
+            f"eznec.{major}.{minor}",
+            os.path.realpath(str(bundle / ENGINE_NAME)),
+            repr(900.0),
+            TWIN_BASIS,
+        ]
+    )
+    # The suffix the client's spawn pin chooses on this platform (unix on
+    # POSIX, tcp on Windows) — the same rule `choose_pin` spells in C.
+    suffix = mech.address_suffix(mech.TCP if os.name == "nt" else mech.UNIX)
+
+    try:
+        out = tmp_path / "key.out"
+        proc = _run(bundle, TWIN_NAME, [str(deck), str(out)], room)
+        assert proc.returncode == 0, proc.stderr
+        addresses = sorted(p.name for p in room.glob(f"*{suffix}"))
+        assert addresses == [f"{expected_key}{suffix}"], addresses
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
 # --------------------------------------------------------------------------
 # the ladder
 # --------------------------------------------------------------------------
