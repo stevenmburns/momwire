@@ -1,13 +1,24 @@
-"""Freeze the EZNEC drop-in with PyInstaller (one dir, one exe inside).
+"""Build the EZNEC drop-in bundle: native launchers plus one frozen engine.
 
 Run from the repo root, in an environment where momwire (this checkout) and
 pyinstaller are installed::
 
     python scripts/eznec_freeze/build.py
 
-Produces ``dist/momwire-eznec/`` containing ``momwire-eznec[.exe]`` and its
-``_internal`` runtime.  The bundle directory must be kept together — EZNEC's
-engine path points at the exe inside it.
+Produces ``dist/momwire-eznec/`` containing the EZNEC-facing launchers
+``momwire-eznec[-<basis>][.exe]``, the single frozen ``momwire-eznec-engine
+[.exe]`` they run, and that engine's ``_internal`` runtime.  The bundle
+directory must be kept together — a launcher spawns the engine BESIDE it, and
+the engine needs its runtime beside it in turn.
+
+Two programs and not one, since momwire#718 phase 3.  The launcher is
+`scripts/eznec_client_c/momwire_eznec_client.c`, ~31 KB of C that forwards a
+deck to a resident engine over the phase-2 wire protocol; the engine is
+`entry.py` frozen, and answers both as that resident daemon (``--serve``) and
+as the one-shot the launcher's fallback ladder runs.  The launch cost is the
+whole reason: the frozen one-shot pays ~1.3 s of interpreter and NumPy import
+on EVERY launch, EZNEC launches once per frequency point, and the licensed
+engine it stands in for launches in 18-37 ms.
 
 One-dir on purpose: Windows sitting 4 (antennaknobs, 2026-08-21) measured the
 one-file form at ~17 s per launch (the self-extract happens on EVERY launch,
@@ -26,20 +37,30 @@ from importlib.metadata import version
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+CLIENT_SOURCE = HERE.parent / "eznec_client_c"
+
+# The bundle directory and the DEFAULT launcher's name: what EZNEC's engine
+# path points at, and what a user's muscle memory already spells.
 NAME = "momwire-eznec"
 
+# The one frozen program, under the name its own entry point consumes
+# (`entry.py`'s ENGINE_SEGMENT, and the launcher's ENGINE_NAME).  PyInstaller
+# builds `dist/<engine name>/`; the directory is renamed to NAME below so the
+# bundle, the zip and the workflow keep the path they have always had.
+ENGINE_NAME = f"{NAME}-engine"
+
 # The bases that ship as their own executable (momwire#593).  The bundle is
-# ONE PyInstaller build plus COPIES of its exe: the basis rides on the
-# filename (`entry.py`), so a copy is a working engine and costs one stub
-# rather than a second 117 MB runtime.
+# ONE frozen engine plus COPIES of the native launcher: the basis rides on the
+# filename (`entry.py`, `momwire_eznec_client.c`), so a copy is a working
+# launcher and costs ~31 KB rather than a second 117 MB runtime.
 #
-# Two, not the whole eight-name roster, and the reason is the zip.  Each copy
-# adds ~9.5 MB uncompressed; all eight would roughly double a 52 MB download
-# to ship the others, engines almost nobody picks from a file dialog,
-# one of which (`sinusoidal`) refuses every deck in this dialect, because
-# every deck here drives a node and point matching has no excitation for a
-# source at one (momwire#611/#648 — it was first read as `current_slopes`,
-# then as the feed grid, and is really the testing).  So the
+# Two, not the whole eight-name roster — and since the phase-3 flip the reason
+# is no longer the zip, because eight ~31 KB copies would round to nothing in
+# a 52 MB download.  It is curation: the rest are engines almost nobody picks
+# from a file dialog, one of which (`sinusoidal`) refuses every deck in this
+# dialect, because every deck here drives a node and point matching has no
+# excitation for a source at one (momwire#611/#648 — it was first read as
+# `current_slopes`, then as the feed grid, and is really the testing).  So the
 # bundle carries the PAIR the parity work was about — the default and the
 # NEC-5 twin — and the README says how to make any other, which is a copy.
 SHIPPED_VARIANTS = ("razor-nec5",)
@@ -59,6 +80,38 @@ def _load_sign():
     return module
 
 
+def _build_client(destination: Path) -> int:
+    """Compile the native launcher straight into the bundle.
+
+    Through the shipped build scripts rather than a compiler line spelt here:
+    the flags and the version defines ARE part of what the launcher is (the
+    momwire version is a hash input for the server key, and -Werror is the
+    promise about buffers), and a second spelling of them would build a
+    different program from the one the tests gate.
+
+    ``PYTHON`` so both scripts read the version from the SAME install that is
+    about to be frozen — the launcher and the engine must agree about the key
+    or a bundle's two halves would never find each other's daemon.
+    """
+    env = {**os.environ, "PYTHON": sys.executable}
+    if os.name == "nt":
+        script = CLIENT_SOURCE / "build_msvc.bat"
+        # Through the command interpreter explicitly: CreateProcess does not
+        # execute a .bat itself, and a build that works locally and fails in
+        # CI on that distinction is the worst place to learn it.  cl.exe
+        # reaches PATH from the workflow's msvc-dev-cmd step.
+        cmd = [
+            os.environ.get("COMSPEC", "cmd.exe"),
+            "/c",
+            str(script),
+            str(destination),
+        ]
+    else:
+        cmd = [str(CLIENT_SOURCE / "build_cc.sh"), str(destination)]
+    print("+", " ".join(cmd), flush=True)
+    return subprocess.run(cmd, env=env).returncode
+
+
 def main() -> int:
     cmd = [
         sys.executable,
@@ -68,7 +121,7 @@ def main() -> int:
         "--onedir",
         "--console",
         "--name",
-        NAME,
+        ENGINE_NAME,
         # The C++ accelerator (momwire._accelerators) is imported inside a
         # try/except; collect the whole package so no lazily-reached module
         # is left out of the bundle.
@@ -87,10 +140,35 @@ def main() -> int:
     if result.returncode != 0:
         return result.returncode
 
+    # PyInstaller named the directory after the program; the BUNDLE keeps the
+    # name it has always had, so the zip layout, the workflow's
+    # `dist/momwire-eznec/...` paths and every published instruction survive
+    # the flip untouched.  Renaming the outer directory is safe because a
+    # one-dir exe finds `_internal` relative to ITSELF, never to a recorded
+    # path.
+    built = Path("dist") / ENGINE_NAME
     bundle = Path("dist") / NAME
-    exe = next(bundle.glob(f"{NAME}*"), None)
-    if exe is None or not exe.is_file():
-        print(f"ERROR: no {NAME} executable in {bundle}", file=sys.stderr)
+    if bundle.exists():
+        shutil.rmtree(bundle)
+    built.rename(bundle)
+
+    engine = next(bundle.glob(f"{ENGINE_NAME}*"), None)
+    if engine is None or not engine.is_file():
+        print(f"ERROR: no {ENGINE_NAME} executable in {bundle}", file=sys.stderr)
+        return 1
+
+    # The launcher, compiled into the bundle under the DEFAULT EZNEC-facing
+    # name.  Its suffix is the engine's: one OS, one spelling of "executable".
+    exe = bundle / f"{NAME}{engine.suffix}"
+    returncode = _build_client(exe)
+    if returncode != 0:
+        print(
+            f"ERROR: the native launcher did not build (exit {returncode})",
+            file=sys.stderr,
+        )
+        return returncode
+    if not exe.is_file():
+        print(f"ERROR: no {exe.name} in {bundle}", file=sys.stderr)
         return 1
 
     # Sign BEFORE the copy loop, not after.  Authenticode covers PE contents
@@ -98,13 +176,16 @@ def main() -> int:
     # signed -- one signtool call therefore ships every variant signed, which
     # matters when a cloud-HSM CA meters signing operations.
     #
-    # Scope, so the README's claim stays honest: this signs the LAUNCHER.
-    # In one-dir the Python payload lives in _internal/ and is outside the
-    # signed bytes, so the signature attests who shipped the stub, not that
-    # the engine beside it is untouched.  One-file would cover both and is
-    # disqualified on the 17 s vs 1.3 s launch measurement above.
+    # Both DISTINCT binaries and no more: the engine and the launcher are two
+    # programs, and every variant is a byte-for-byte copy of the launcher.
+    #
+    # Scope, so the README's claim stays honest: in one-dir the Python payload
+    # lives in _internal/ and is outside the signed bytes, so the engine's
+    # signature attests who shipped the loader, not that the runtime beside it
+    # is untouched.  One-file would cover both and is disqualified on the
+    # 17 s vs 1.3 s launch measurement above.
     signer = _load_sign()
-    signed = signer.sign_if_configured([exe])
+    signed = signer.sign_if_configured([engine, exe])
 
     # CI's post-condition: the workflow decides MOMWIRE_SIGN_MODE exactly
     # once, and this holds the build to it.  Without this check a
@@ -122,9 +203,11 @@ def main() -> int:
         )
         return 1
 
-    # One copy per shipped variant.  `shutil.copy2` and not a symlink or hard
-    # link: the zip is unpacked on Windows, where neither survives the round
-    # trip through Compress-Archive and Explorer, and a link that arrives as a
+    # One copy of the LAUNCHER per shipped variant — never of the engine: the
+    # basis rides on the launcher's filename, and the engine it spawns is told
+    # which basis by flag.  `shutil.copy2` and not a symlink or hard link: the
+    # zip is unpacked on Windows, where neither survives the round trip
+    # through Compress-Archive and Explorer, and a link that arrives as a
     # 0-byte stub is a broken engine that looks like a present one.
     variants = []
     for basis in SHIPPED_VARIANTS:
@@ -145,7 +228,9 @@ def main() -> int:
                     file=sys.stderr,
                 )
                 return 1
-        print(f"signature present on all {len(variants) + 1} executables")
+        # The engine and the default launcher were signed directly; the
+        # variants are the copies just asserted.
+        print(f"signature present on all {len(variants) + 2} executables")
 
     # A provenance note inside the bundle: which momwire this is, HOW it was
     # (or wasn't) signed, and where the drop-in's serve/refuse contract is
@@ -155,10 +240,10 @@ def main() -> int:
     # (#711 retro-review).
     if signed and os.environ.get("MOMWIRE_SIGN_METADATA"):
         signing_note = (
-            "SIGNING: the launcher executables are Authenticode-signed "
-            "(Azure Artifact Signing).\nThe signature covers the launchers "
-            "only; the Python payload in _internal/ is\noutside the signed "
-            "bytes."
+            "SIGNING: every executable in this folder is Authenticode-signed "
+            "(Azure\nArtifact Signing).  The signature covers those "
+            "executables; the Python\npayload in _internal/ is outside the "
+            "signed bytes."
         )
     elif signed and os.environ.get("MOMWIRE_SIGN_ALLOW_UNTRUSTED") == "1":
         signing_note = (
@@ -167,8 +252,8 @@ def main() -> int:
         )
     elif signed:
         signing_note = (
-            "SIGNING: the launcher executables are Authenticode-signed "
-            "(local certificate\nstore identity)."
+            "SIGNING: every executable in this folder is Authenticode-signed "
+            "(local\ncertificate store identity)."
         )
     else:
         signing_note = "SIGNING: this build is unsigned."
@@ -177,6 +262,7 @@ def main() -> int:
     labels.update(
         {f"{NAME}-{b}": "the NEC-5 formulation twin" for b in SHIPPED_VARIANTS}
     )
+    labels[ENGINE_NAME] = "the compute engine the launchers run"
     width = max(len(n) for n in labels) + len(exe.suffix)
     table = "\n".join(
         f"  {n + exe.suffix:<{width}}  {label}" for n, label in labels.items()
@@ -187,16 +273,29 @@ def main() -> int:
         "\n"
         f"{signing_note}\n"
         "\n"
-        "Point EZNEC's external-engine path at one of these, in this folder.\n"
-        "Keep the folder together: every exe needs the _internal runtime "
-        "beside it.\n"
+        "Point EZNEC's external-engine path at one of the LAUNCHERS below, in\n"
+        "this folder.  Keep the folder together: a launcher runs the engine\n"
+        "beside it, and the engine needs its _internal runtime beside IT.\n"
         "\n"
         f"{table}\n"
         "\n"
-        "WHICH ONE.  They accept the same models and answer in different\n"
-        "formulations.  The default is momwire's own degree-2 B-spline basis.\n"
-        "momwire-eznec-razor-nec5 is NEC-5's formulation TWIN — the tent basis\n"
-        "with razor-blade path testing NEC-5 itself uses.\n"
+        "Point EZNEC at a launcher, never at momwire-eznec-engine: the engine\n"
+        "is what the launchers run, and naming it directly gives up the warm\n"
+        "start below for nothing.\n"
+        "\n"
+        "WHY IT IS FAST.  A launcher keeps a warm engine RESIDENT — started on\n"
+        "the first calculation, retired after 15 idle minutes — so every launch\n"
+        "after the first costs milliseconds instead of the engine's own\n"
+        "start-up.  EZNEC launches the engine once per frequency point, so that\n"
+        "is most of a sweep.  If anything about the resident path fails, the\n"
+        "launcher runs the engine directly instead: the same answer, at the old\n"
+        "speed.\n"
+        "\n"
+        "WHICH ONE.  The launchers accept the same models and answer in\n"
+        "different formulations.  The default is momwire's own degree-2\n"
+        "B-spline basis.  momwire-eznec-razor-nec5 is NEC-5's formulation\n"
+        "TWIN — the tent basis with razor-blade path testing NEC-5 itself\n"
+        "uses.\n"
         "\n"
         "REPRODUCTION IS NOT ACCURACY.  The twin agrees with the licensed\n"
         "engine because it runs the same algorithm, not because it is more\n"
@@ -249,8 +348,9 @@ def main() -> int:
         "of an ohm of formulation.\n"
         "\n"
         "MAKING ANOTHER.  The basis rides on the FILENAME: everything after\n"
-        "'eznec-' selects it.  So copy an exe in this folder and rename the\n"
-        "copy to momwire-eznec-<basis>.exe and that basis is what answers.\n"
+        "'eznec-' selects it.  So copy a LAUNCHER in this folder — a few tens\n"
+        "of kilobytes, not the engine — rename the copy to\n"
+        "momwire-eznec-<basis>.exe, and that basis is what answers.\n"
         "Known bases:\n"
         "\n"
         "  bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5\n"
