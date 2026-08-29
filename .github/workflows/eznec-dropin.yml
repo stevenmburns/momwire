@@ -259,6 +259,50 @@ jobs:
           path: ${{ env.BUNDLE }}.zip
           retention-days: ${{ github.ref_type == 'tag' && 90 || 7 }}
 
+  # The resident server's transport, on the OS it was made Windows-capable
+  # for (#718 phase 2 unit 2). Everything the drop-in's fast path is built
+  # out of — the runtime directory, the address file, the obtain lock, the
+  # detached spawn — has a per-OS spelling, and two of those spellings
+  # (`msvcrt.locking`, DETACHED_PROCESS) exist only here: Linux CI can run
+  # the whole TCP transport through MOMWIRE_SERVE_TRANSPORT but it cannot
+  # run those, so an untested Windows leaf would surface as a drop-in that
+  # silently never goes resident.
+  #
+  # BOTH transports, because Windows is the one platform where the answer
+  # depends on the BUILD: newer CPythons have AF_UNIX and older ones do not,
+  # and a user's Python is not ours to choose. The first step takes whatever
+  # this runner's build autodetects; the second forces the loopback-TCP path
+  # regardless.
+  #
+  # A canary, never a gate: `github.ref_type != 'tag'` keeps it off the
+  # release path entirely, so a red run here can report Windows breakage
+  # without ever standing between a tag and its artifacts (the same reason
+  # the freeze job's smoke lives where it does).
+  resident-smoke:
+    name: resident transport smoke (windows)
+    needs: changes
+    if: needs.changes.outputs.code == 'true' && github.ref_type != 'tag'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      # python -m pip: on Windows pip.exe refuses to replace itself in-place.
+      - run: python -m pip install --upgrade pip
+      # Editable, so the tests import the checkout rather than a copy — and
+      # --no-build-isolation with the build deps installed first, which is
+      # what makes the MSVC accelerator build against this environment.
+      - run: pip install "setuptools>=61.0" wheel pybind11
+      - run: pip install -e ".[test]" --no-build-isolation
+      - name: The transport this build autodetects
+        run: pytest tests/test_serve_resident.py tests/test_serve_session.py -m "integration or slow or (not integration and not slow)" -q
+      - name: The loopback-TCP transport, forced
+        env:
+          MOMWIRE_SERVE_TRANSPORT: tcp
+        run: pytest tests/test_serve_resident.py tests/test_serve_session.py -m "integration or slow or (not integration and not slow)" -q
+
   release:
     # Attach the zip to the same GitHub Release wheels.yml creates. Both
     # workflows use softprops/action-gh-release, which updates an existing
