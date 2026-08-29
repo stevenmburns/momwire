@@ -1227,13 +1227,22 @@ def test_the_stock_console_script_is_untouched():
 
 
 def test_the_client_module_is_shipped_as_a_top_level_module():
-    """``py_modules``, not a package member: the entry point must resolve
-    without importing ``momwire/__init__.py``, and a wheel that shipped the
+    """``py_modules``, not package members: the entry points must resolve
+    without importing ``momwire/__init__.py``, and a wheel that shipped a
     console script without the module behind it would fail at the version
-    probe on a machine with no checkout."""
+    probe on a machine with no checkout. Since #718 phase 2 there are three
+    — the SimNEC client, the eznec client, and the mechanics module both
+    import — held to one rule."""
     source = (REPO_ROOT / "setup.py").read_text()
-    assert 'py_modules=["momwire_nec2c_client"]' in source
-    assert (REPO_ROOT / "src" / "momwire_nec2c_client.py").is_file()
+    start = source.index("py_modules=[")
+    py_modules = source[start : source.index("],", start)]
+    for name in (
+        "momwire_nec2c_client",
+        "momwire_serve_client",
+        "momwire_eznec_client",
+    ):
+        assert f'"{name}"' in py_modules, name
+        assert (REPO_ROOT / "src" / f"{name}.py").is_file()
 
 
 def test_the_client_entry_point_target_resolves():

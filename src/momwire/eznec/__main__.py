@@ -11,8 +11,12 @@ already unquoted, so a path with spaces needs nothing special here.
 Two deliberate omissions, both from the capture study (antennaknobs
 ``docs/status/2026-08-16-eznec-nec5-dialect-capture.md``):
 
-* **No flags.**  The real engine's ``-i``/``-o`` forms fail on their own
-  ("UNABLE TO OPEN FILE -i", exit 0) and EZNEC never sends them.
+* **No flags on the EZNEC-facing path.**  The real engine's ``-i``/``-o``
+  forms fail on their own ("UNABLE TO OPEN FILE -i", exit 0) and EZNEC never
+  sends them.  ``--serve`` below is not an exception to this: it is machinery
+  the thin client spawns (momwire#532, same shape as the portal's), and
+  EZNEC's own spelling — exactly two quoted cwd-relative paths — can never
+  produce it.
 * **No prompt loop.**  Given no arguments the real engine prompts for a
   filename, but reads the answer from the console device rather than stdin,
   so it cannot be scripted and EZNEC never takes that path.  This engine
@@ -26,7 +30,13 @@ displayed normal results).  Refusals live in the printout.
 
 from __future__ import annotations
 
+import sys
+
 from ._shell import main
 
 if __name__ == "__main__":  # pragma: no cover - process entry point
+    if "--serve" in sys.argv[1:]:
+        from ._resident import serve_main
+
+        raise SystemExit(serve_main(sys.argv[1:]))
     raise SystemExit(main())

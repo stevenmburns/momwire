@@ -58,6 +58,8 @@ from __future__ import annotations
 import os
 import sys
 
+import momwire_serve_client as _mech
+
 # The stock engine's two probe answers, reconstructed rather than imported —
 # importing them would cost the NumPy start-up this module exists to avoid.
 # Both shapes are pinned against ``_portal``'s own constants by
@@ -100,15 +102,10 @@ _SHARED_SEGMENT = "shared"
 # and bounds the idle cost of a forgotten server at one process.
 DEFAULT_IDLE_TIMEOUT = 900.0
 
-# How long a client waits for the server it (or a peer) started. A cold server
-# imports NumPy, SciPy and momwire before it can bind; a loaded box under a
-# 16-client burst can stretch that a long way, and waiting is always better
-# than SimNEC seeing an engine die at start-up.
-_SPAWN_TIMEOUT = 120.0
-
-# Poll interval while waiting for the socket to appear, in seconds.
-_POLL_MIN = 0.005
-_POLL_MAX = 0.05
+# The spawn wait and its connect-poll backoff moved to
+# ``momwire_serve_client`` with the obtain dance (#718 phase 2) — the "a cold
+# server imports NumPy before it can bind" rationale rides on
+# ``SPAWN_TIMEOUT`` there, shared with the eznec client.
 
 _PUMP_CHUNK = 65536
 
@@ -124,12 +121,7 @@ def probe_version(legacy: bool = False) -> str:
     """
     if legacy:
         return _LEGACY_PROBE_VERSION
-    try:
-        from importlib.metadata import version as _pkg_version
-
-        major, minor = _pkg_version("momwire").split(".")[:2]
-    except Exception:  # pragma: no cover - no installed metadata (source tree)
-        major, minor = "0", "0"
+    major, minor = _mech.dist_version()
     return f"NEC2momwire.{major}.{minor}"
 
 
@@ -206,17 +198,7 @@ def filename_basis(prog: str) -> str | None:
     ``Momwire-Nec2c-Razor.exe`` names razor, and ``momwire-nec2c-`` names a
     basis it failed to spell.
     """
-    name = prog.replace("\\", "/").rsplit("/", 1)[-1].casefold()
-    if name.endswith(".exe"):
-        name = name[:-4]
-    if _FILENAME_MARKER not in name:
-        return None
-    suffix = name.split(_FILENAME_MARKER, 1)[1]
-    if suffix == _SHARED_SEGMENT:
-        return None
-    if suffix.startswith(f"{_SHARED_SEGMENT}-"):
-        suffix = suffix[len(_SHARED_SEGMENT) + 1 :]
-    return suffix
+    return _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_SHARED_SEGMENT)
 
 
 def resolve_engine(
@@ -277,8 +259,6 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
     upgrade or a different venv is a different engine and must not be served
     by whatever is still resident from before.
     """
-    import hashlib
-
     pairs: list[tuple[str, str]] = []
     index = 0
     while index < len(engine):
@@ -291,7 +271,7 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
             index += 1
     pairs.sort()
 
-    material = "\0".join(
+    return _mech.digest(
         [
             probe_version(),
             os.path.realpath(sys.executable),
@@ -299,72 +279,17 @@ def config_key(engine: list[str], idle_timeout: float) -> str:
             *(f"{flag}={value}" for flag, value in pairs),
         ]
     )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
 
 
-def runtime_dir() -> str:
-    """The per-user directory holding sockets, lockfiles and server logs.
-
-    ``$XDG_RUNTIME_DIR`` first — it is the one directory the OS promises is
-    private to this user and cleaned at logout, which is what a socket wants.
-    Where it is unset (a bare ssh session, cron, macOS) fall back to
-    ``<tmp>/momwire-portal-<uid>``, created 0700 and REFUSED if it already
-    exists owned by somebody else: a socket in a world-writable directory is a
-    socket anyone can pre-empt.
-
-    ``$MOMWIRE_PORTAL_RUNTIME_DIR`` overrides both, which is how the tests get
-    an isolated server and how a user with an odd home can move it.
-    """
-    import tempfile
-
-    base = os.environ.get("MOMWIRE_PORTAL_RUNTIME_DIR")
-    if not base:
-        xdg = os.environ.get("XDG_RUNTIME_DIR")
-        if xdg and os.path.isdir(xdg):
-            base = os.path.join(xdg, "momwire-portal")
-        else:
-            base = os.path.join(tempfile.gettempdir(), f"momwire-portal-{os.getuid()}")
-    os.makedirs(base, mode=0o700, exist_ok=True)
-    info = os.stat(base)
-    if info.st_uid != os.getuid():
-        raise PermissionError(f"{base} is not owned by uid {os.getuid()}")
-    if info.st_mode & 0o077:
-        os.chmod(base, 0o700)
-    return base
-
-
-# ``sun_path`` is 108 bytes including the terminator on Linux (104 on the BSDs
-# and macOS); a name that overruns it fails at bind() inside a detached server,
-# where the only symptom the user sees is a client waiting for a socket that
-# never appears. Checked HERE, against the tighter of the two limits, so the
-# refusal names the real cause. The default directories are short by
-# construction — the only way to trip this is a long
-# ``$MOMWIRE_PORTAL_RUNTIME_DIR``.
-_SUN_PATH_MAX = 103
+runtime_dir = _mech.runtime_dir
 
 
 def socket_path(engine: list[str], idle_timeout: float) -> str:
-    path = os.path.join(runtime_dir(), f"{config_key(engine, idle_timeout)}.sock")
-    if len(os.fsencode(path)) > _SUN_PATH_MAX:
-        raise ValueError(
-            f"socket path is {len(os.fsencode(path))} bytes, over the "
-            f"{_SUN_PATH_MAX}-byte AF_UNIX limit: {path}. Set "
-            "MOMWIRE_PORTAL_RUNTIME_DIR to a shorter directory."
-        )
-    return path
+    return _mech.socket_path(config_key(engine, idle_timeout))
 
 
 def _connect(path: str):
-    """An open socket, or ``None`` if nothing is listening on ``path``."""
-    import socket
-
-    conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    try:
-        conn.connect(path)
-    except OSError:
-        conn.close()
-        return None
-    return conn
+    return _mech.connect(path)
 
 
 def _server_command(
@@ -386,97 +311,19 @@ def _server_command(
 
 
 def _spawn_server(path: str, engine: list[str], idle_timeout: float, log_path: str):
-    """Start the server detached: it must outlive the client that started it.
-
-    ``start_new_session`` puts it in its own session and process group, so the
-    terminal SIGINT (or SimNEC's ``Process.destroy()`` on the client) does not
-    reach it, and stdio goes to the log next to the socket — a server writing
-    to an inherited pipe would corrupt some other client's transcript the day
-    a deck warns.
-
-    The ``Popen`` handle comes back even though the child is detached: it is
-    the only way to tell "still importing NumPy" from "died at start-up", and
-    without it a misconfiguration is a client that waits out the whole spawn
-    timeout in silence.
-    """
-    import subprocess
-
-    log = open(log_path, "ab", buffering=0)
-    try:
-        return subprocess.Popen(
-            _server_command(path, engine, idle_timeout, log_path),
-            stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            close_fds=True,
-        )
-    finally:
-        log.close()
+    return _mech.spawn_server(
+        _server_command(path, engine, idle_timeout, log_path), log_path
+    )
 
 
 def _obtain(path: str, engine: list[str], idle_timeout: float, log_path: str):
-    """A connected socket, starting the server if nobody answers.
-
-    The fast path takes no lock at all: a live server answers ``connect`` and
-    that is the whole story. Only a failed connect enters the slow path, and
-    there the lockfile serialises the decision so a crew firing 16 clients at
-    once starts ONE server — the losers block on the lock, and by the time
-    they hold it the winner's server is already listening, so their retry is
-    the fast path again.
-
-    ``flock`` rather than an ``O_EXCL`` lockfile because the kernel drops a
-    flock when the holder dies: a client killed mid-spawn costs one retry, not
-    a wedged directory that every future client has to age out with a
-    heuristic. A socket file left behind by a server that died without
-    unlinking is detected here (connect refuses, the path exists) and removed
-    under the lock, which is the only place removing it is safe.
-    """
-    import fcntl
-    import time
-
-    conn = _connect(path)
-    if conn is not None:
-        return conn
-
-    lock_path = f"{path}.lock"
-    lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
-    try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        conn = _connect(path)
-        if conn is not None:
-            return conn
-        if os.path.exists(path):
-            os.unlink(path)
-        server = _spawn_server(path, engine, idle_timeout, log_path)
-
-        deadline = time.monotonic() + _SPAWN_TIMEOUT
-        delay = _POLL_MIN
-        while time.monotonic() < deadline:
-            conn = _connect(path)
-            if conn is not None:
-                return conn
-            status = server.poll()
-            if status is not None:
-                # One more try before believing it: a server that bound, was
-                # answered and exited between the connect above and this poll
-                # is a lost race, not a failure.
-                conn = _connect(path)
-                if conn is not None:
-                    return conn
-                raise ChildProcessError(
-                    f"the momwire portal server exited {status} without "
-                    f"answering {path}; see {log_path}"
-                )
-            time.sleep(delay)
-            delay = min(delay * 1.5, _POLL_MAX)
-        raise TimeoutError(
-            f"the momwire portal server did not answer {path} within "
-            f"{_SPAWN_TIMEOUT:g}s; see {log_path}"
-        )
-    finally:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
-        os.close(lock_fd)
+    """A connected socket, starting the server if nobody answers — the
+    lock-serialised dance, one owner: :func:`momwire_serve_client.obtain`
+    (#718 phase 2 moved it; the whole flock-not-O_EXCL rationale lives on
+    its docstring)."""
+    return _mech.obtain(
+        path, _server_command(path, engine, idle_timeout, log_path), log_path
+    )
 
 
 # Stop reading stdin once this much is queued for the socket. Backpressure

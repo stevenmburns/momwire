@@ -51,248 +51,53 @@ Failure modes, and where each one stops:
 
 from __future__ import annotations
 
-import errno
 import os
 import signal
-import socket
 import sys
-import threading
-import time
 
+from ..serve._server import ConnLog, serve_forever, take_value
 from ._portal import _SELFTEST_DECKS, configure_engine, resident_loop
 
-# The accept() poll. Nothing waits on it — it only bounds how long after the
-# idle deadline the process actually goes away.
-_ACCEPT_POLL = 0.25
 
-_LISTEN_BACKLOG = 64
-
-
-class _ConnLog:
-    """A connection's stderr, prefixed and pointed at the server log.
-
-    Per-connection because a log with 16 clients in it is unreadable without
-    knowing which said what, and a plain file object because this is a log:
-    losing a line to a full disk must never cost a solve.
-    """
-
-    def __init__(self, stream, prefix: str) -> None:
-        self._stream = stream
-        self._prefix = prefix
-
-    def write(self, text: str) -> int:
-        try:
-            for line in text.splitlines(True):
-                self._stream.write(f"{self._prefix}{line}")
-        except OSError:
-            pass
-        return len(text)
-
-    def flush(self) -> None:
-        try:
-            self._stream.flush()
-        except OSError:
-            pass
-
-
-def _take_value(argv: list[str], flag: str, default: str | None = None):
-    """Pull ``--flag VALUE`` (or ``--flag=VALUE``) out of ``argv``."""
-    rest: list[str] = []
-    value = default
-    index = 0
-    while index < len(argv):
-        arg = argv[index]
-        if arg == flag:
-            index += 1
-            value = argv[index] if index < len(argv) else default
-        elif arg.startswith(f"{flag}="):
-            value = arg.split("=", 1)[1]
-        else:
-            rest.append(arg)
-        index += 1
-    return value, rest
-
-
-class _Server:
-    """The accept loop and the idle clock. One instance is one process."""
-
-    def __init__(self, path: str, idle_timeout: float, log) -> None:
-        self.path = path
-        self.idle_timeout = idle_timeout
-        self.log = log
-        # ONE global solve lock — the budget, stated once (see module docstring).
-        self.solve_lock = threading.Lock()
-        self.state = threading.Lock()
-        self.active = 0
-        self.idle_since = time.monotonic()
-        self.served = 0
-        self.stopping = False
-
-    def note(self, text: str) -> None:
-        try:
-            self.log.write(f"{time.strftime('%Y-%m-%dT%H:%M:%S')} {text}\n")
-            self.log.flush()
-        except OSError:
-            pass
-
-    def _bind(self):
-        """Bind, or hand the path back to whoever already owns it.
-
-        The client only spawns under its lock and only after unlinking a dead
-        socket, so ``EADDRINUSE`` here means a peer server won a race the lock
-        was supposed to prevent. Losing gracefully (exit 0, touch nothing) is
-        the only safe answer: unlinking a live peer's socket would strand every
-        client already talking to it.
-        """
-        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        try:
-            listener.bind(self.path)
-        except OSError as exc:
-            listener.close()
-            if exc.errno != errno.EADDRINUSE:
-                # Anything else (a path over sun_path's 107 bytes, a read-only
-                # directory) is a configuration mistake, and the client is
-                # waiting on a socket that will never appear — so it must reach
-                # the log as itself, not as a bind retried against nothing.
-                raise
-            probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+def _connection(conn, number: int, log, solve_lock) -> None:
+    """One SimNEC connection: banner, decks, EOF — the portal seam's half of
+    :class:`momwire.serve._server.Server` (#718 phase 2 moved the accept
+    loop there; what stayed here is exactly what a dialect owns: the byte
+    wrapping and the session)."""
+    rx = tx = None
+    try:
+        rx = conn.makefile("r", encoding="utf-8", errors="replace")
+        tx = conn.makefile("w", encoding="utf-8", errors="replace", newline="\n")
+        resident_loop(rx, tx, ConnLog(log, f"[conn {number}] "), solve_lock)
+    finally:
+        for handle in (tx, rx):
+            if handle is None:
+                continue
             try:
-                probe.connect(self.path)
-            except OSError:
-                alive = False
-            else:
-                alive = True
-            finally:
-                probe.close()
-            if alive:
-                return None
-            os.unlink(self.path)
-            listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            listener.bind(self.path)
-        os.chmod(self.path, 0o600)
-        listener.listen(_LISTEN_BACKLOG)
-        return listener
-
-    def stop(self, *_args) -> None:
-        self.stopping = True
-
-    def run(self) -> int:
-        listener = self._bind()
-        if listener is None:
-            self.note(f"another server already owns {self.path}; exiting")
-            return 0
-        self.note(f"listening pid={os.getpid()} socket={self.path}")
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, self.stop)
-
-        listener.settimeout(_ACCEPT_POLL)
-        try:
-            while not self.stopping:
-                try:
-                    conn, _addr = listener.accept()
-                except TimeoutError:
-                    if self._idle_expired():
-                        self.note(f"idle {self.idle_timeout:g}s; exiting")
-                        break
-                    continue
-                except OSError as exc:
-                    self.note(f"accept failed: {exc!r}")
-                    break
-                with self.state:
-                    self.active += 1
-                    self.served += 1
-                    number = self.served
-                threading.Thread(
-                    target=self._serve, args=(conn, number), daemon=True
-                ).start()
-        finally:
-            # Unlink before closing: a client that connects in the window
-            # between the two gets a live server that is about to go, which its
-            # own stale-socket recovery handles; the reverse order can leave the
-            # path behind if the process is killed between them.
-            try:
-                os.unlink(self.path)
+                handle.close()
             except OSError:
                 pass
-            listener.close()
-        self.note(f"stopped after {self.served} connection(s)")
-        return 0
-
-    def _idle_expired(self) -> bool:
-        with self.state:
-            return (
-                self.active == 0
-                and time.monotonic() - self.idle_since >= self.idle_timeout
-            )
-
-    def _serve(self, conn, number: int) -> None:
-        """One connection: banner, decks, EOF. Never raises past here.
-
-        Every exception is this connection's problem alone — a client killed
-        mid-solve (SimNEC's ``Process.destroy()``) surfaces as a write failure
-        on the socket, and the server's job at that point is to drop the output
-        nobody is reading and go back to accepting.
-        """
-        rx = tx = None
-        try:
-            rx = conn.makefile("r", encoding="utf-8", errors="replace")
-            tx = conn.makefile("w", encoding="utf-8", errors="replace", newline="\n")
-            resident_loop(
-                rx, tx, _ConnLog(self.log, f"[conn {number}] "), self.solve_lock
-            )
-        except (BrokenPipeError, ConnectionResetError):
-            self.note(f"[conn {number}] client went away; output discarded")
-        except OSError as exc:
-            self.note(f"[conn {number}] socket error: {exc!r}")
-        except BaseException as exc:  # noqa: BLE001 - one bad deck is not the server
-            self.note(f"[conn {number}] handler failed: {type(exc).__name__}: {exc}")
-        finally:
-            for handle in (tx, rx):
-                if handle is None:
-                    continue
-                try:
-                    handle.close()
-                except OSError:
-                    pass
-            try:
-                conn.close()
-            except OSError:
-                pass
-            with self.state:
-                self.active -= 1
-                self.idle_since = time.monotonic()
 
 
 def serve_main(argv: list[str]) -> int:
     """``--serve``: configure the engine once, then answer sockets forever."""
     argv = [a for a in argv if a != "--serve"]
-    path, argv = _take_value(argv, "--socket")
-    log_path, argv = _take_value(argv, "--log")
-    idle_raw, argv = _take_value(argv, "--idle-timeout", "900")
+    path, argv = take_value(argv, "--socket")
+    log_path, argv = take_value(argv, "--log")
+    idle_raw, argv = take_value(argv, "--idle-timeout", "900")
 
-    if not path:
-        sys.stderr.write("--serve needs --socket PATH\n")
-        return 3
-    try:
-        idle_timeout = float(idle_raw)
-    except (TypeError, ValueError):
-        sys.stderr.write(f"--idle-timeout must be a number, not {idle_raw!r}\n")
-        return 3
-
-    log = open(log_path or f"{path}.log", "a", encoding="utf-8", errors="replace")
-    try:
+    def _configure(log):
         # ONCE per process. The engine flags are the server's identity — the
         # client hashed them into the socket name — so a second call could only
         # ever restate them, at the cost of the cache they were chosen for.
         rest, _legacy_probe, code = configure_engine(argv, log)
         if code is not None:
-            log.flush()
             return code
         if rest:
             log.write(f"unused server arguments: {rest}\n")
-        return _Server(path, idle_timeout, log).run()
-    finally:
-        log.close()
+        return None
+
+    return serve_forever(path, idle_raw, log_path, _connection, configure=_configure)
 
 
 def shared_selftest(argv: list[str], stdout=None) -> int:
