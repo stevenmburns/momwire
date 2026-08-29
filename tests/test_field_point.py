@@ -88,6 +88,7 @@ import numpy as np
 import pytest
 
 from momwire import _field_point, _ground_refl, _ground_spec, _sommerfeld
+from momwire._far_readout import _element_fields, _image_moments
 from momwire.deck._nec5 import Nec5MininecGround, Nec5NearFieldRequest, parse_nec5
 from momwire.eznec._serve import (
     SPEED_OF_LIGHT_MHZ_M,
@@ -100,7 +101,6 @@ from momwire.eznec._serve import (
     build_mesh,
     structure_of,
 )
-from momwire.portal._portal import _element_fields, _image_moments
 from test_eznec_printout import FIXTURE_DIR, extract, printout_text
 
 DECKS = Path(FIXTURE_DIR) / "decks"

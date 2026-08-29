@@ -17,7 +17,8 @@ documents it for the fill:
 
 with the direct and image terms coming from whichever readout owns them (the
 eznec seam and the nec2 portal both read them out of
-`portal._portal._element_fields`, one owner per readout) and the association
+`_far_readout._element_fields` (momwire#719 U1), one owner per readout) and
+the association
 discipline of `FieldGround.mode == "compose"` applying unchanged: the
 coefficient goes on the LEFT of the block, and `coef·img + rem` is associated
 before any outer sum.
@@ -337,7 +338,7 @@ def reflected_field_at(
 
     `src_mid` (S, 3) are source element midpoints and `src_moment` (S, 3)
     their complex current moments p = I·dl — the same pair
-    `portal._portal._element_fields` reads the direct field out of, so a
+    `_far_readout._element_fields` reads the direct field out of, so a
     consumer composes the two without resampling anything. `eps_t` is the
     complex relative permittivity ε̃ = εr − jσ/(ωε₀) (Im ≤ 0 for a passive
     ground, the e^{+jωt} convention this tree uses throughout), `ground_z` the
