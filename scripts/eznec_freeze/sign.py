@@ -4,11 +4,23 @@ Signing is OPT-IN and driven entirely by the environment, so an unconfigured
 build behaves exactly as it always has — unsigned, no signtool required, and
 runnable on a box (or a Linux runner) that has no Windows SDK at all:
 
+Two signing identities exist, and UNSET-BOTH IS THE OFF SWITCH — with
+neither variable set the build is unsigned and no signtool is required:
+
+``MOMWIRE_SIGN_METADATA``
+    Path to an Azure Artifact Signing metadata file (account, certificate
+    profile, region endpoint).  Requires ``MOMWIRE_SIGN_DLIB`` — the path to
+    ``Azure.CodeSigning.Dlib.dll`` from the Microsoft.ArtifactSigning.Client
+    NuGet package — and the three ``AZURE_*`` credential variables signtool's
+    dlib reads.  WINS over ``MOMWIRE_SIGN_SHA1`` when both are set, so a tag
+    build cannot accidentally sign with a rehearsal certificate left in the
+    environment.
 ``MOMWIRE_SIGN_SHA1``
     SHA-1 thumbprint of a code-signing certificate in the Windows certificate
-    store.  UNSET IS THE OFF SWITCH: no thumbprint, no signing.
+    store — the self-signed rehearsal, or a hardware token.
 ``MOMWIRE_SIGN_TIMESTAMP_URL``
-    RFC-3161 timestamp authority.  Defaults to DigiCert's.
+    RFC-3161 timestamp authority.  Defaults to DigiCert's; CI sets Microsoft's
+    on every path so the canary exercises the TSA the release depends on.
 ``MOMWIRE_SIGN_ALLOW_UNTRUSTED``
     ``1`` downgrades the ``signtool verify /pa`` chain check from a gate to a
     printed note.  This is for the SELF-SIGNED REHEARSAL only: a self-signed
@@ -18,14 +30,14 @@ runnable on a box (or a Linux runner) that has no Windows SDK at all:
 ``SIGNTOOL``
     Explicit path to ``signtool.exe``, skipping the Windows Kits search.
 
-Why the thumbprint seam and not a .pfx: since June 2023 the CA/Browser Forum
-baseline requires code-signing keys to live on FIPS-140-2 Level 2 hardware,
-so there is no importable key file to point at any more.  A store thumbprint
-is what both a hardware token and a self-signed rehearsal cert present, which
-is why the rehearsal exercises the real code path rather than a stand-in.
-A cloud-HSM CA (Azure Trusted Signing, DigiCert KeyLocker) identifies the key
-differently — ``/dlib`` plus a metadata file instead of ``/sha1`` — and that
-is the ONLY part that changes: swap `_identity_args()` and the rest holds.
+Why a store thumbprint and not a .pfx for the local seam: since June 2023 the
+CA/Browser Forum baseline requires code-signing keys to live on FIPS-140-2
+Level 2 hardware, so there is no importable key file to point at any more.  A
+store thumbprint is what both a hardware token and a self-signed rehearsal
+cert present, which is why the rehearsal exercises the real code path rather
+than a stand-in.  A cloud-HSM CA (Azure Artifact Signing here) identifies the
+key through ``/dlib`` plus a metadata file instead — `_identity_args()` is
+the one CA-specific stanza, and the rest holds for both.
 """
 
 from __future__ import annotations
@@ -100,18 +112,24 @@ def certificate_table_size(path: Path) -> int:
     actually get ATTACHED?  ``verify`` additionally judges the trust chain,
     which a self-signed rehearsal cert must fail by construction.
     """
-    data = path.read_bytes()
-    pe = struct.unpack_from("<I", data, 0x3C)[0]
-    if data[pe : pe + 4] != b"PE\0\0":
+    # Header reads only — everything needed sits within 176 bytes of the PE
+    # signature, and this primitive runs once per shipped executable, so
+    # slurping a multi-MB launcher per call would be all waste.
+    with path.open("rb") as f:
+        f.seek(0x3C)
+        pe = struct.unpack("<I", f.read(4))[0]
+        f.seek(pe)
+        head = f.read(176)
+    if head[:4] != b"PE\0\0":
         raise SigningError(f"not a PE image: {path}")
-    magic = struct.unpack_from("<H", data, pe + 24)[0]
+    magic = struct.unpack_from("<H", head, 24)[0]
     # Optional header: 24 bytes of standard fields, then 112 (PE32+) or 96
     # (PE32) more before the data directories begin.
-    ddir = pe + 24 + (112 if magic == 0x20B else 96)
-    n_dirs = struct.unpack_from("<I", data, ddir - 4)[0]
+    ddir = 24 + (112 if magic == 0x20B else 96)
+    n_dirs = struct.unpack_from("<I", head, ddir - 4)[0]
     if n_dirs < 5:  # index 4 is the certificate table; absent entirely
         return 0
-    _rva, size = struct.unpack_from("<II", data, ddir + 4 * 8)
+    _rva, size = struct.unpack_from("<II", head, ddir + 4 * 8)
     return size
 
 
@@ -140,15 +158,28 @@ def _identity_args() -> list[str]:
     """
     metadata = os.environ.get("MOMWIRE_SIGN_METADATA")
     if metadata:
-        return ["/dlib", os.environ["MOMWIRE_SIGN_DLIB"], "/dmdf", metadata]
+        dlib = os.environ.get("MOMWIRE_SIGN_DLIB")
+        if not dlib:
+            raise SigningError(
+                "MOMWIRE_SIGN_METADATA is set but MOMWIRE_SIGN_DLIB is not. "
+                "The Azure mode needs both: the dlib is "
+                "Azure.CodeSigning.Dlib.dll (x64) from the "
+                "Microsoft.ArtifactSigning.Client NuGet package."
+            )
+        return ["/dlib", dlib, "/dmdf", metadata]
     return ["/sha1", os.environ["MOMWIRE_SIGN_SHA1"]]
 
 
 def sign(paths: list[Path]) -> None:
     """Sign ``paths`` in one signtool invocation, then assert the result."""
     if sys.platform != "win32":
+        trigger = (
+            "MOMWIRE_SIGN_METADATA"
+            if os.environ.get("MOMWIRE_SIGN_METADATA")
+            else "MOMWIRE_SIGN_SHA1"
+        )
         raise SigningError(
-            "Authenticode signing was requested (MOMWIRE_SIGN_SHA1 is set) "
+            f"Authenticode signing was requested ({trigger} is set) "
             f"but this is {sys.platform}, not Windows."
         )
 
@@ -176,11 +207,12 @@ def sign(paths: list[Path]) -> None:
         raise SigningError("signtool sign failed")
 
     for path in paths:
-        if not has_signature(path):
+        size = certificate_table_size(path)
+        if size == 0:
             raise SigningError(
                 f"signtool reported success but {path} carries no signature"
             )
-        print(f"signed: {path.name} ({certificate_table_size(path)} cert bytes)")
+        print(f"signed: {path.name} ({size} cert bytes)")
 
     _verify(signtool, paths)
 

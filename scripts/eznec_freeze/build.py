@@ -18,6 +18,7 @@ One-file is disqualified, not merely slower.
 from __future__ import annotations
 
 import importlib.util
+import os
 import shutil
 import subprocess
 import sys
@@ -105,6 +106,22 @@ def main() -> int:
     signer = _load_sign()
     signed = signer.sign_if_configured([exe])
 
+    # CI's post-condition: the workflow decides MOMWIRE_SIGN_MODE exactly
+    # once, and this holds the build to it.  Without this check a
+    # half-configured environment (one mis-edited step condition upstream)
+    # would ship a green, canonically-named, UNSIGNED bundle — the fail-open
+    # the momwire#711 retro-review flagged.  Local builds never set the
+    # mode variable and stay legitimately unsigned.
+    mode = os.environ.get("MOMWIRE_SIGN_MODE")
+    if mode and not signed:
+        print(
+            f"ERROR: MOMWIRE_SIGN_MODE={mode} promises a signed build but no "
+            "signing identity reached build.py (neither MOMWIRE_SIGN_METADATA "
+            "nor MOMWIRE_SIGN_SHA1 is set)",
+            file=sys.stderr,
+        )
+        return 1
+
     # One copy per shipped variant.  `shutil.copy2` and not a symlink or hard
     # link: the zip is unpacked on Windows, where neither survives the round
     # trip through Compress-Archive and Explorer, and a link that arrives as a
@@ -130,8 +147,32 @@ def main() -> int:
                 return 1
         print(f"signature present on all {len(variants) + 1} executables")
 
-    # A provenance note inside the bundle: which momwire this is, and where
-    # the drop-in's serve/refuse contract is documented.
+    # A provenance note inside the bundle: which momwire this is, HOW it was
+    # (or wasn't) signed, and where the drop-in's serve/refuse contract is
+    # documented.  The signing line records what actually happened rather
+    # than what any label claims: the zip's name does not survive unzipping,
+    # so this is the only signing provenance that travels with the bytes
+    # (#711 retro-review).
+    if signed and os.environ.get("MOMWIRE_SIGN_METADATA"):
+        signing_note = (
+            "SIGNING: the launcher executables are Authenticode-signed "
+            "(Azure Artifact Signing).\nThe signature covers the launchers "
+            "only; the Python payload in _internal/ is\noutside the signed "
+            "bytes."
+        )
+    elif signed and os.environ.get("MOMWIRE_SIGN_ALLOW_UNTRUSTED") == "1":
+        signing_note = (
+            "SIGNING: SELF-SIGNED REHEARSAL signature (untrusted root) — "
+            "this is a CI test\nbuild, NOT a release download."
+        )
+    elif signed:
+        signing_note = (
+            "SIGNING: the launcher executables are Authenticode-signed "
+            "(local certificate\nstore identity)."
+        )
+    else:
+        signing_note = "SIGNING: this build is unsigned."
+
     labels = {NAME: "the default — degree-2 B-spline (bs2)"}
     labels.update(
         {f"{NAME}-{b}": "the NEC-5 formulation twin" for b in SHIPPED_VARIANTS}
@@ -143,6 +184,8 @@ def main() -> int:
     (bundle / "README.txt").write_text(
         f"momwire-eznec {version('momwire')} — momwire standing in for the "
         "NEC-5 console engine EZNEC Pro+ v7 launches.\n"
+        "\n"
+        f"{signing_note}\n"
         "\n"
         "Point EZNEC's external-engine path at one of these, in this folder.\n"
         "Keep the folder together: every exe needs the _internal runtime "
