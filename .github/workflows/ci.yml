@@ -299,13 +299,13 @@ jobs:
       # lane keeps the soil-A crossing anchor pin (test_g524_4), which is
       # the per-PR regression guard for the crossing fill.
       #
-      # The residency gate (#532) diverges on 0116/0117 out of a RESIDENT
-      # process, on runners and not on any machine we can reproduce it on
-      # (#677). It is non-strict, so it reports and moves on — which means
-      # the occurrence leaves nothing behind unless we ask it to. Same
-      # reasoning, and the same shape, as the byte-oracle dumps in the `test`
-      # job: an unreproducible failure that discards its own evidence costs
-      # a whole CI cycle to learn nothing from.
+      # The residency gate (#532) once diverged on 0116/0117 out of a
+      # RESIDENT process, on runners only (#677) — these dumps are what
+      # caught it: five runs, twenty pairs, one NETWORK LOSS dust line,
+      # fixed by the seam's presence floor. The gate is strict again; the
+      # dump tap STAYS, because the next process-history leak will also be
+      # runner-only and a failure that discards its own evidence costs a
+      # whole CI cycle to learn nothing from.
       - run: pytest tests/ -m "slow and not memgate and not crossgate"
         if: needs.changes.outputs.code == 'true'
         env:

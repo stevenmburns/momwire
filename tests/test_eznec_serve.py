@@ -775,19 +775,20 @@ _NUMBER = re.compile(r"[-+]?\d+\.\d+(?:[Ee][-+]?\d+)?")
 # 0117 hang ONE lossless ``TL`` between two undriven points, so the true sum is
 # exactly zero and what the engine actually tested the sign of was its own
 # round-off: it prints ``NETWORK LOSS  = 2.1316E-13 WATTS`` against an
-# ``INPUT POWER`` of 1.1538E+02, which is 1.8e-15 of it — eight ulps.  This seam
-# does the same arithmetic in a different order and its crumb lands at
-# −3.6e-14, on the other side of zero, so it omits the line.
+# ``INPUT POWER`` of 1.1538E+02, which is 1.8e-15 of it — eight ulps.
 #
-# Neither engine is wrong and no rule change would help: the sign of a zero is
-# not a number, which is exactly what the pattern TILT column's own
-# normalization already says.  So a ``NETWORK LOSS`` line worth less than
-# ``_NETWORK_LOSS_DUST`` of the run's ``INPUT POWER`` is dropped from BOTH sides
-# and the line's presence is gated everywhere else.  The floor sits six orders
-# above the dust and fifteen below the smallest REAL network loss in the corpus
-# (0012's 36.714 W on a 114.47 W input, 32 %), so nothing that means anything
-# can hide under it.
-_NETWORK_LOSS_DUST = 1e-9
+# Neither engine is wrong: the sign of a zero is not a number, which is exactly
+# what the pattern TILT column's own normalization already says.  The seam's
+# own crumb proved it — −3.6e-14 here, +2.1316E-14 cold on GitHub runners,
+# non-positive on the same runners out of a resident process, which was the
+# whole of momwire#677 — so since that issue the seam FLOORS its own print
+# decision on ``_serve._NETWORK_LOSS_DUST`` and never prints a dust line.  The
+# capture side still carries the engine's raw crumb, so this mask keeps
+# dropping sub-floor lines from BOTH sides, and the line's presence is gated
+# everywhere else.  The floor sits six orders above the dust and fifteen below
+# the smallest REAL network loss in the corpus (0012's 36.714 W on a 114.47 W
+# input, 32 %), so nothing that means anything can hide under it.
+_NETWORK_LOSS_DUST = _serve._NETWORK_LOSS_DUST
 
 # How many lines each table puts between its heading and its first row.
 #
