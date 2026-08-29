@@ -55,6 +55,10 @@ test = [
     "pytest-xdist",
     "matplotlib",
     "scikit-rf",
+    # tests/test_makefile_lanes.py YAML-parses ci.yml (the #716 review: its
+    # structural claim needs real parsing where test_release_notes' literal
+    # one-line claim can grep). Pure-python, tiny.
+    "pyyaml",
 ]
 # Optional third-party MoM solvers used by the comparator scripts in
 # scripts/. (PyNEC is installed separately from the python-necpp fork's
