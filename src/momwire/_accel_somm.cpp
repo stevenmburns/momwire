@@ -2,10 +2,12 @@
 #include "_branch_cut_inline.h"
 
 // somm section of the former _accelerators.cpp monolith (momwire#687).
-// Code below is byte-identical to the monolith's lines 5402-6272, with ONE
-// exception: somm_proj (monolith 5846-5982) was hoisted verbatim into
+// Code below is byte-identical to the monolith's lines 5402-6272, with TWO
+// exceptions: somm_proj (monolith 5846-5982) was hoisted verbatim into
 // _accel_somm_proj_inline.h — shared with the mw568 TU — and is pulled back
-// in by the mid-file #include below.
+// in by the mid-file #include below; and the local `gam` branch-cut helper
+// became the shared `mw_branch::gamma_cut` (#714), renaming its two call
+// sites in integrand_six.
 
 namespace somm {
 

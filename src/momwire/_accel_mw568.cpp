@@ -218,14 +218,10 @@ using mw_contour::cd;
 
 static const cd MW_BJ(0.0, 1.0);
 
-// `_sommerfeld._gamma`: (lam^2 - k^2)^{1/2} with vertical cuts running DOWN
-// from +k and UP from -k. Transcribed as the two-sqrt product, NOT collapsed
-// to sqrt(lam^2 - k^2): the collapsed form has its cut on the segment between
-// the branch points, and the whole legitimacy of the head's first-quadrant
-// detour is that it crosses neither of the vertical ones. The spelling IS the
-// branch choice.
-// One definition for all three call sites, across both extensions (#714).
-// The using-declaration makes the name a member of this namespace, so the
+// The branch cut: one definition for all three call sites, across both
+// extensions — the full rationale (the two-sqrt spelling IS the branch
+// choice) lives with the definition in _branch_cut_inline.h (#714). The
+// using-declaration makes the name a member of this namespace, so the
 // qualified `mw568_below::gamma_cut` calls below still resolve.
 using mw_branch::gamma_cut;
 
@@ -680,7 +676,9 @@ namespace mw568_trans {
 using mw_contour::cd;
 
 // `_sommerfeld._gamma` is SHARED with U2 rather than re-transcribed
-// (`mw568_below::gamma_cut`): it is the two-sqrt product
+// (`mw568_below::gamma_cut` — since #714 the definition itself lives in
+// _branch_cut_inline.h, one copy for both extensions): it is the two-sqrt
+// product
 // sqrt(-j(lam - k)) sqrt(j(lam + k)), and the spelling IS the branch choice --
 // vertical cuts running DOWN from +k and UP from -k, neither of which the
 // head's first-quadrant detour crosses. Two copies of that could drift; one

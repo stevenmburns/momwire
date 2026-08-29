@@ -72,15 +72,11 @@ using mw_contour::cd;
 static const int MW_MAX_RAY_PANELS = 90;
 static const double MW_FAR_PAIR_KILL = 60.0;
 
-// `_sommerfeld._gamma`: (lam^2 - k^2)^{1/2} with vertical cuts running DOWN
-// from +k and UP from -k. The two-sqrt product, NOT collapsed to
-// sqrt(lam^2 - k^2): the collapsed form has its cut on the segment between
-// the branch points, and the legitimacy of both the head's first-quadrant
-// detour and the rotated rays is that they cross neither of the vertical
-// ones. The spelling IS the branch choice.
-// One definition for all three call sites, across both extensions (#714).
-// The using-declaration makes the name a member of this namespace, so the
-// qualified `mw568_below::gamma_cut` calls below still resolve.
+// The branch cut: one definition for all three call sites, across both
+// extensions — the full rationale (the two-sqrt spelling IS the branch
+// choice; head detour and rotated rays cross neither vertical cut) lives
+// with the definition in _branch_cut_inline.h (#714). Calls in this
+// namespace are unqualified; the using-declaration binds them.
 using mw_branch::gamma_cut;
 
 // `_near_interface._core`: the six spectral factors x (2 E~ lam), WITHOUT
