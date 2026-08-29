@@ -1701,7 +1701,10 @@ class GroupResult:
     — where issue #719's design converges the two seams' solve products.
     ``solver`` is a deliberate temporary reach-through some consumers still
     need for a walk (:meth:`DeckSolver.current_elements`,
-    :func:`_has_buried_wires`); U3 removes it.
+    :func:`_has_buried_wires`, :func:`_network_lines`, :func:`_pattern_lines`,
+    :func:`_near_field_lines`); U3 removes the reach-through from
+    :func:`_run_block`'s own row building only — those four still take
+    ``solver`` directly, and splitting them is deliberately NOT this unit.
     """
 
     driven: list[tuple[int, int, complex]]
@@ -1726,6 +1729,45 @@ class GroupResult:
     ground: Ground
     ground_z: float | None
     second_medium: SecondMedium | None
+
+
+@dataclass(frozen=True)
+class AipRow:
+    """One ANTENNA INPUT PARAMETERS row's typed fields — exactly
+    :func:`fmt_aip_row`'s arguments."""
+
+    tag: int
+    segment: int
+    volts: complex
+    current: complex
+    impedance: complex
+    admittance: complex
+    power: float
+
+
+@dataclass(frozen=True)
+class SegRow:
+    """One CURRENTS AND LOCATION (or CHARGE DENSITIES) row's typed fields —
+    exactly :func:`fmt_current_row`'s arguments, which already serves both
+    tables."""
+
+    number: int
+    tag: int
+    centre_wl: np.ndarray
+    length_wl: float
+    value: complex
+
+
+@dataclass(frozen=True)
+class RunRecords:
+    """The compute half of one execute-group block — the portal's step toward
+    the eznec seam's :class:`~momwire.eznec._printout.RunData`. Rows are built
+    here so the render half touches no solver state for its own tables."""
+
+    result: GroupResult
+    aip_rows: tuple[AipRow, ...]
+    current_rows: tuple[SegRow, ...]
+    charge_rows: tuple[SegRow, ...] | None
 
 
 class DeckSolver:
@@ -3266,14 +3308,82 @@ def _network_row(solver: DeckSolver, card) -> str:
     )
 
 
-def _run_block(
+def _run_records(
+    solver: DeckSolver,
+    group: ExecuteGroup,
+    freq_mhz: float,
+    group_index: int,
+) -> RunRecords:
+    """The compute half of one execute-group block: one solve, then every
+    table's rows built as typed records — none of the formatting or presence
+    decisions the render half prints under."""
+    result = solver.solve_group(group, freq_mhz, group_index)
+    wavelength = result.wavelength
+    i_source = result.i_source
+    aip_rows = []
+    for port, global_seg, volts in result.driven:
+        current = i_source[port]
+        impedance = volts / current if current != 0 else complex(0.0, 0.0)
+        admittance = current / volts if volts != 0 else complex(0.0, 0.0)
+        power = 0.5 * (volts * np.conj(current)).real
+        aip_rows.append(
+            AipRow(
+                solver.segments[global_seg - 1].tag,
+                global_seg,
+                volts,
+                complex(current),
+                impedance,
+                admittance,
+                float(power),
+            )
+        )
+    # Built ALWAYS, even when `group.pt.suppressed` — the render half owns
+    # the presence decision, and building rows nobody prints is the price of
+    # a clean split.
+    currents = result.segment_currents
+    current_rows = [
+        SegRow(
+            seg.number,
+            seg.tag,
+            seg.centre / wavelength,
+            float(np.linalg.norm(seg.direction)) / wavelength,
+            complex(currents[seg.number - 1]),
+        )
+        for seg in _printed_segments(group.pt, solver)
+    ]
+    charge_rows: list[SegRow] | None = None
+    if group.pq is not None and group.pq.prints:
+        charges = result.segment_charges
+        charge_rows = [
+            SegRow(
+                seg.number,
+                seg.tag,
+                seg.centre / wavelength,
+                float(np.linalg.norm(seg.direction)) / wavelength,
+                complex(charges[seg.number - 1]),
+            )
+            for seg in _charge_segments(group.pq, solver)
+        ]
+    return RunRecords(
+        result=result,
+        aip_rows=tuple(aip_rows),
+        current_rows=tuple(current_rows),
+        charge_rows=None if charge_rows is None else tuple(charge_rows),
+    )
+
+
+def _render_run_block(
     deck: PortalDeck,
     solver: DeckSolver,
     group: ExecuteGroup,
     freq_mhz: float,
-    group_index: int = 0,
+    records: RunRecords,
+    group_index: int,
 ) -> list[str]:
-    result = solver.solve_group(group, freq_mhz, group_index)
+    """The render half of one execute-group block: the blank-line arithmetic
+    and section ordering, reading physics only off ``records`` — no compute
+    of its own."""
+    result = records.result
     wavelength = result.wavelength
     out: list[str] = []
     if group.refilled:
@@ -3316,36 +3426,25 @@ def _run_block(
         ]
     out += _network_lines(solver, result, group_index)
     out += [_AIP_HEADER, *_AIP_TABLE_HEADER]
-    i_source = result.i_source
-    for port, global_seg, volts in result.driven:
-        current = i_source[port]
-        impedance = volts / current if current != 0 else complex(0.0, 0.0)
-        admittance = current / volts if volts != 0 else complex(0.0, 0.0)
-        power = 0.5 * (volts * np.conj(current)).real
+    for row in records.aip_rows:
         out.append(
             fmt_aip_row(
-                solver.segments[global_seg - 1].tag,
-                global_seg,
-                volts,
-                complex(current),
-                impedance,
-                admittance,
-                float(power),
+                row.tag,
+                row.segment,
+                row.volts,
+                row.current,
+                row.impedance,
+                row.admittance,
+                row.power,
             )
         )
     suppressed = group.pt is not None and group.pt.suppressed
     if not suppressed:
         out += ["", "", _CURRENTS_HEADER, _CURRENTS_NOTE, "", *_CURRENTS_TABLE_HEADER]
-    currents = result.segment_currents
-    if not suppressed:
-        for seg in _printed_segments(group.pt, solver):
+        for row in records.current_rows:
             out.append(
                 fmt_current_row(
-                    seg.number,
-                    seg.tag,
-                    seg.centre / wavelength,
-                    float(np.linalg.norm(seg.direction)) / wavelength,
-                    complex(currents[seg.number - 1]),
+                    row.number, row.tag, row.centre_wl, row.length_wl, row.value
                 )
             )
     # CHARGE DENSITIES sits between the currents table and the power budget,
@@ -3354,16 +3453,11 @@ def _run_block(
     # the table above, so the guard is "a card said print" and not "no card
     # said suppress".
     if group.pq is not None and group.pq.prints:
-        charges = result.segment_charges
         out += ["", "", _CHARGE_HEADER, _CHARGE_NOTE, "", *_CHARGE_TABLE_HEADER]
-        for seg in _charge_segments(group.pq, solver):
+        for row in records.charge_rows:
             out.append(
                 fmt_current_row(
-                    seg.number,
-                    seg.tag,
-                    seg.centre / wavelength,
-                    float(np.linalg.norm(seg.direction)) / wavelength,
-                    complex(charges[seg.number - 1]),
+                    row.number, row.tag, row.centre_wl, row.length_wl, row.value
                 )
             )
     pad = " " * 31
@@ -3388,6 +3482,17 @@ def _run_block(
         # prints between the compute-time line and the trailing XQ echo.
         out += ["", "", *body, ""]
     return out
+
+
+def _run_block(
+    deck: PortalDeck,
+    solver: DeckSolver,
+    group: ExecuteGroup,
+    freq_mhz: float,
+    group_index: int = 0,
+) -> list[str]:
+    records = _run_records(solver, group, freq_mhz, group_index)
+    return _render_run_block(deck, solver, group, freq_mhz, records, group_index)
 
 
 def render_deck(body: str) -> tuple[list[str], list[str]]:
