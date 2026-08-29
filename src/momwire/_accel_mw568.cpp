@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_branch_cut_inline.h"
 #include "_accel_somm_proj_inline.h"
 // The shared adaptive-contour engine (momwire#568 unit 1): the C++ twin of
 // `_sommerfeld_below`'s head + tail machinery, templated on the integrand.
@@ -223,9 +224,10 @@ static const cd MW_BJ(0.0, 1.0);
 // the branch points, and the whole legitimacy of the head's first-quadrant
 // detour is that it crosses neither of the vertical ones. The spelling IS the
 // branch choice.
-static inline cd gamma_cut(const cd &lam, const cd &k) {
-    return std::sqrt(-MW_BJ * (lam - k)) * std::sqrt(MW_BJ * (lam + k));
-}
+// One definition for all three call sites, across both extensions (#714).
+// The using-declaration makes the name a member of this namespace, so the
+// qualified `mw568_below::gamma_cut` calls below still resolve.
+using mw_branch::gamma_cut;
 
 // `_sommerfeld._d12(lam, k1, k2)` -- NEC eqs 154-155 (the 2s of eqs 141-142
 // are inside). The below family calls it SWAPPED, (k1, k2) = (k_p, k_m), so

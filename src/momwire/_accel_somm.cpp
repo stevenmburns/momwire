@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_branch_cut_inline.h"
 
 // somm section of the former _accelerators.cpp monolith (momwire#687).
 // Code below is byte-identical to the monolith's lines 5402-6272, with ONE
@@ -215,9 +216,8 @@ static void hankel2_half(cd x, cd &b0, cd &b1x) {
 // ---- the six integrands and quadrature (ports of the Python names) -------
 
 // gamma(lam, k) = sqrt(-j(lam-k)) sqrt(j(lam+k)): NEC's vertical cuts.
-static inline cd gam(cd lam, cd k) {
-    return std::sqrt(-CI * (lam - k)) * std::sqrt(CI * (lam + k));
-}
+// One definition for all three call sites, across both extensions (#714).
+using mw_branch::gamma_cut;
 
 struct Six {
     cd v[6];
@@ -252,8 +252,8 @@ struct SommCtx {
 
 // The six lambda-integrands of NEC eqs 148-153 (= _integrand_six).
 static inline void integrand_six(const SommCtx &c, cd lam, cd out[6]) {
-    const cd g1 = gam(lam, c.k1);
-    const cd g2 = gam(lam, c.k2);
+    const cd g1 = gamma_cut(lam, c.k1);
+    const cd g2 = gamma_cut(lam, c.k2);
     const cd k1s = c.k1 * c.k1;
     const cd k2s = c.k2 * c.k2;
     const cd d1 = 2.0 / (g1 + g2) - 2.0 * k2s / (g2 * (k1s + k2s));

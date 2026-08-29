@@ -176,6 +176,7 @@ _ACCEL_HEADERS = [
     # stale-.so lesson, which is exactly why this list exists.
     "src/momwire/_accel_common.h",
     "src/momwire/_accel_somm_proj_inline.h",
+    "src/momwire/_branch_cut_inline.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -194,7 +195,12 @@ _ACCEL_SOURCES = [
 # Same staleness rationale for the near-interface twin: the contour engine
 # header AND every vendored xsf header are dependencies, or editing (or
 # re-vendoring) one silently re-installs the old binary.
-_NEAR_HEADERS = ["src/momwire/_contour_engine_inline.h"] + sorted(
+_NEAR_HEADERS = [
+    "src/momwire/_contour_engine_inline.h",
+    # The shared branch cut (#714) -- this extension carries the third
+    # call site, so an edit to it must rebuild this .so too.
+    "src/momwire/_branch_cut_inline.h",
+] + sorted(
     glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True)
 )
 
