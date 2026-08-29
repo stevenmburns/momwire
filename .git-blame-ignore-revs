@@ -1,0 +1,14 @@
+# Revisions that moved code without changing it. `git blame` skips these so a
+# line's blame lands on the commit that wrote its CONTENT, not the one that
+# relocated it.
+#
+# Use locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# GitHub's blame view honours this file automatically.
+
+# perf(build): split _accelerators.cpp into per-section translation units (#687)
+# The ~8,000-line monolith became five TUs. Every line moved verbatim; the only
+# authored lines are the per-section register_* wrappers and the headers'
+# preamble. Without this entry, blame on the accelerator's 98 issue-referenced
+# provenance comments would stop at the split.
+c1f6f7802c7ed87a7d27593fd8ed491276659ba5
