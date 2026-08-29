@@ -1,24 +1,41 @@
-"""Smoke-gate the frozen EZNEC drop-in against the unfrozen module.
+"""Smoke-gate the packaged EZNEC drop-in against the unfrozen module.
 
 Usage::
 
     python scripts/eznec_freeze/smoke.py dist/momwire-eznec/momwire-eznec[.exe]
 
-Four gates, derived from the seam's own contract (momwire#497 U1):
+The argument is a LAUNCHER — the native client EZNEC points at — and every
+gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-1. **Byte identity** — on decks that serve, the frozen exe's printout must
+Six gates, derived from the seam's own contract (momwire#497 U1):
+
+1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
-   wall-clock, so freezing may not change a single byte, CRLF included).
+   wall-clock, so packaging may not change a single byte, CRLF included).
 2. **The refusal frame travels** — a deck the seam refuses must still produce
    a printout carrying the ``NEC ERROR`` line, exit 0 (the file is the only
    channel EZNEC reads).
 3. **Launch cost, informational** — per-launch wall time is printed but not
    gated; EZNEC launches once per frequency point, so this number is the
-   sweep economics (real engine baseline 18–37 ms; one-dir momwire measured
-   ~1.3 s on the sitting-4 box).
+   sweep economics (real engine baseline 18–37 ms; the frozen one-shot
+   measured ~1.3 s on the sitting-4 box, which is what the launcher's warm
+   engine exists to beat).
 4. **Every shipped variant is PRESENT and answers, in the basis its NAME
    claims** (momwire#593).  The basis rides on the filename, so this is the
    gate that makes the bundle's shape a fact rather than an intention.
+5. **The engine is beside the launcher** — a bundle whose
+   ``momwire-eznec-engine`` is missing is a launcher with nothing to spawn,
+   and every other gate would still pass through the rung-4 refusal or not
+   at all.
+6. **Residency** — the launcher really goes resident: two launches, ONE
+   spawned daemon, both printouts still the module's.  This is the gate the
+   phase-3 flip exists for, and it is Windows's only verdict on the native
+   client, because `tests/test_eznec_client_c.py` proves the same shape with
+   sh-script engine shims that cannot run there.  Nothing in a printout can
+   reveal which rung produced it — rung 3 makes a byte-identical one by
+   construction — so this counts the daemon's own ``listening pid=`` lines:
+   none means the fallback ladder carried the run silently, which is a
+   FAILURE of this gate rather than a pass, and two means a double spawn.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -48,14 +65,24 @@ requiring those to differ failed a copy that was serving exactly its name.
 from __future__ import annotations
 
 import importlib.util
+import os
+import shutil
+import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 FIXTURES = REPO / "tests" / "fixtures" / "eznec" / "decks"
+
+# The one frozen program in the bundle — `build.py`'s ENGINE_NAME and the
+# client's ENGINE_NAME, restated here rather than imported because gate 5 is
+# about a FILE being there and a name read out of the thing being gated would
+# certify itself.
+ENGINE_STEM = "momwire-eznec-engine"
 
 
 def _shipped_variants() -> tuple[str, ...]:
@@ -98,9 +125,9 @@ SOLVED = "ANTENNA INPUT PARAMETERS"
 REFUSED = "NEC ERROR"
 
 
-def run(cmd: list[str], out: Path) -> float:
+def run(cmd: list[str], out: Path, env: dict[str, str] | None = None) -> float:
     started = time.perf_counter()
-    result = subprocess.run(cmd, capture_output=True, timeout=300)
+    result = subprocess.run(cmd, capture_output=True, timeout=300, env=env)
     elapsed = time.perf_counter() - started
     if result.returncode != 0:
         raise SystemExit(f"exit {result.returncode} from {cmd}: {result.stderr!r}")
@@ -109,24 +136,91 @@ def run(cmd: list[str], out: Path) -> float:
     return elapsed
 
 
-def main() -> int:
-    if len(sys.argv) != 2:
-        print(__doc__, file=sys.stderr)
-        return 2
-    exe = Path(sys.argv[1]).resolve()
-    if not exe.is_file():
-        print(f"ERROR: no such executable: {exe}", file=sys.stderr)
-        return 2
+def listening(room: Path) -> list[str]:
+    """Every ``listening pid=`` line a daemon in this room ever wrote.
 
-    work = Path("smoke-out")
-    work.mkdir(exist_ok=True)
+    One line per spawned daemon, so this counts SPAWNS across the whole smoke
+    run — which is what tells a warm reuse from a second server, and either of
+    those from the fallback ladder having quietly done all the work.
+    """
+    return [
+        line
+        for log in sorted(room.glob("*.log"))
+        for line in log.read_text(errors="replace").splitlines()
+        if "listening pid=" in line
+    ]
+
+
+def stop(room: Path) -> None:
+    """Ask every daemon this room started to go, by pid out of its own log.
+
+    The idle timeout would retire them in fifteen minutes anyway; this is so a
+    CI runner (or a developer's box) is not left hosting a 117 MB engine for
+    that quarter hour after a two-minute smoke.  SIGTERM is TerminateProcess
+    on Windows, which is the right blunt instrument for a process whose only
+    state is a socket.
+    """
+    for line in listening(room):
+        for word in line.split():
+            if word.startswith("pid="):
+                try:
+                    os.kill(int(word.split("=", 1)[1]), signal.SIGTERM)
+                except (OSError, ValueError):
+                    pass
+    shutil.rmtree(room, ignore_errors=True)
+
+
+def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
+    """Gates 6, 1, 2 and 4 against one bundle, in one runtime directory."""
     failures = 0
+
+    # gate 6 — the launcher goes RESIDENT.
+    #
+    # Run FIRST although it is listed last, because the spawn count is exact
+    # only while this room has seen a single launcher: gate 4 starts a SECOND
+    # daemon in it, the twin's, and this gate could then no longer tell a
+    # correct pair of servers from a double spawn.  The order costs nothing —
+    # what gates 1-3 then measure is the WARM launch, which is the number the
+    # sweep economics are actually made of.
+    stem = SERVE_IDS[0]
+    deck = FIXTURES / f"{stem}.nec"
+    module_out = work / f"{stem}.resident.module.out"
+    run([sys.executable, "-m", "momwire.eznec", str(deck), str(module_out)], module_out)
+    expected = module_out.read_bytes()
+    answers = []
+    warm = 0.0
+    for index in range(2):
+        out = work / f"{stem}.resident.{index}.out"
+        warm = run([str(exe), str(deck), str(out)], out, env=env)
+        answers.append(out.read_bytes())
+    spawns = listening(room)
+    if answers[0] != expected or answers[1] != expected:
+        print(f"FAIL {exe.name}: a resident launch differs from the module's printout")
+        failures += 1
+    elif not spawns:
+        # The ladder did the work and the printouts are perfect, which is
+        # exactly why this has to be a failure: the bundle would be correct
+        # and as slow as the thing phase 3 replaced, and nothing else here
+        # would say so.
+        print(
+            f"FAIL {exe.name}: no daemon was ever spawned — the fallback "
+            "ladder carried both launches"
+        )
+        failures += 1
+    elif len(spawns) > 1:
+        print(
+            f"FAIL {exe.name}: {len(spawns)} daemons spawned where one "
+            "warm server was the whole claim"
+        )
+        failures += 1
+    else:
+        print(f"ok   {stem}: resident, one daemon, warm launch {warm:.3f} s")
 
     for stem in SERVE_IDS:
         deck = FIXTURES / f"{stem}.nec"
         frozen_out = work / f"{stem}.frozen.out"
         module_out = work / f"{stem}.module.out"
-        elapsed = run([str(exe), str(deck), str(frozen_out)], frozen_out)
+        elapsed = run([str(exe), str(deck), str(frozen_out)], frozen_out, env=env)
         run(
             [sys.executable, "-m", "momwire.eznec", str(deck), str(module_out)],
             module_out,
@@ -134,7 +228,7 @@ def main() -> int:
         frozen = frozen_out.read_bytes()
         module = module_out.read_bytes()
         if frozen != module:
-            print(f"FAIL {stem}: frozen printout differs from the module's")
+            print(f"FAIL {stem}: bundle printout differs from the module's")
             failures += 1
         elif b"\r\n" not in frozen:
             print(f"FAIL {stem}: printout is not CRLF")
@@ -147,7 +241,7 @@ def main() -> int:
 
     deck = FIXTURES / f"{REFUSE_ID}.nec"
     refuse_out = work / f"{REFUSE_ID}.frozen.out"
-    elapsed = run([str(exe), str(deck), str(refuse_out)], refuse_out)
+    elapsed = run([str(exe), str(deck), str(refuse_out)], refuse_out, env=env)
     text = refuse_out.read_bytes().decode("latin-1")
     if "NEC ERROR" not in text:
         print(f"FAIL {REFUSE_ID}: refusal frame missing from the printout")
@@ -175,9 +269,16 @@ def main() -> int:
     # for the same reason `basis_from_program_name` is — this loop has to read
     # the name the way the exe reads it, or a `Momwire-Eznec-Razor-Nec5.exe`
     # that serves correctly is failed here for a casing the exe ignored.
+    #
+    # The ENGINE is excluded by name, not by luck: it sits in this folder
+    # under a name the glob matches, and `engine` is a segment its own entry
+    # point CONSUMES — read as a variant it would be gated as a basis called
+    # "engine", which the module run would refuse, failing the smoke over a
+    # bundle that is exactly right.
     variants = {
         v.stem[len(exe.stem) + 1 :].casefold(): v
         for v in sorted(exe.parent.glob(f"{exe.stem}-*{exe.suffix}"))
+        if v.stem.casefold() != ENGINE_STEM.casefold()
     }
     for basis in _shipped_variants():
         if basis not in variants:
@@ -189,7 +290,7 @@ def main() -> int:
     for basis, variant in variants.items():
         v_out = work / f"{BASIS_DECK}.{basis}.frozen.out"
         m_out = work / f"{BASIS_DECK}.{basis}.module.out"
-        run([str(variant), str(deck), str(v_out)], v_out)
+        run([str(variant), str(deck), str(v_out)], v_out, env=env)
         run(
             [
                 sys.executable,
@@ -228,6 +329,46 @@ def main() -> int:
             )
         else:
             print(f"ok   {variant.name}: answers in {basis!r}, distinct from default")
+
+    return failures
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print(__doc__, file=sys.stderr)
+        return 2
+    exe = Path(sys.argv[1]).resolve()
+    if not exe.is_file():
+        print(f"ERROR: no such executable: {exe}", file=sys.stderr)
+        return 2
+
+    work = Path("smoke-out")
+    work.mkdir(exist_ok=True)
+
+    # gate 5 — the engine is beside the launcher, and it is checked before
+    # anything is launched: a launcher with nothing to spawn still writes a
+    # printout on every path (rung 4's named refusal), so without this the
+    # bundle's most complete failure would surface as four confusing ones.
+    engine = exe.with_name(f"{ENGINE_STEM}{exe.suffix}")
+    if not engine.is_file():
+        print(f"FAIL {engine.name}: the engine is MISSING from this bundle")
+        print("1 smoke failure(s)")
+        return 1
+    print(f"ok   {engine.name}: the engine is beside the launcher")
+
+    # One private runtime directory for the whole run, and every daemon in it
+    # killed at the end.  Private because a smoke that used the real one would
+    # be answered by whatever a PREVIOUS run left warm — gate 6 would then
+    # count zero spawns and be right to fail, on a bundle that was fine — and
+    # because leaving a 117 MB engine resident in a CI runner's %LOCALAPPDATA%
+    # for its fifteen idle minutes is not this script's to do.  `mkdtemp`
+    # keeps the name short, which is what keeps the socket inside sun_path.
+    room = Path(tempfile.mkdtemp(prefix="mw-smoke-"))
+    env = {**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": str(room)}
+    try:
+        failures = _gates(exe, work, room, env)
+    finally:
+        stop(room)
 
     if failures:
         print(f"{failures} smoke failure(s)")
