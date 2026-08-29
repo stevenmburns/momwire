@@ -134,8 +134,8 @@ def driving_point(text: str) -> complex:
     solver = DeckSolver(deck)
     group = next(g for g in deck.groups if g is not None)
     result = solver.solve_group(group, group.freqs_mhz[0])
-    port, _segment, volts = result["driven"][0]
-    _SOLVED[text] = complex(volts / result["i_source"][port])
+    port, _segment, volts = result.driven[0]
+    _SOLVED[text] = complex(volts / result.i_source[port])
     return _SOLVED[text]
 
 

@@ -5078,11 +5078,11 @@ def test_the_deck_solver_fills_each_group_over_its_own_environment():
     free, ground = (
         solver.solve_group(group, group.freqs_mhz[0]) for group in deck.groups
     )
-    assert free["solver"] is not ground["solver"]
-    assert free["ground_z"] is None
-    assert ground["ground_z"] == 0.0
-    z_free = free["v_gap"][0] / free["i_port"][0]
-    z_ground = ground["v_gap"][0] / ground["i_port"][0]
+    assert free.solver is not ground.solver
+    assert free.ground_z is None
+    assert ground.ground_z == 0.0
+    z_free = free.v_gap[0] / free.i_port[0]
+    z_ground = ground.v_gap[0] / ground.i_port[0]
     assert z_free != z_ground
 
 
