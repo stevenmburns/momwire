@@ -101,24 +101,36 @@ jobs:
           $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=momwire eznec rehearsal (NOT a release certificate)" -CertStoreLocation Cert:\CurrentUser\My
           "MOMWIRE_SIGN_SHA1=$($cert.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "MOMWIRE_SIGN_ALLOW_UNTRUSTED=1" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      # REAL signing, tags only -- Azure Artifact Signing.
+      # REAL signing -- Azure Artifact Signing.
       #
       # The key never leaves Azure, so there is no thumbprint and nothing in
       # the local store: signtool reaches it through a dlib plus a metadata
-      # file. The MSI is Microsoft's own client bundle and is used in
-      # preference to the NuGet dlib because it also carries the .NET 8
-      # runtime and VC redistributable the dlib loads -- dependencies we
-      # would otherwise be assuming the runner image happens to ship.
-      - name: Install the Artifact Signing client (tags or sign test)
+      # file naming the account, profile and region.
+      #
+      # The dlib comes from NuGet and .NET 8 from setup-dotnet, deliberately
+      # NOT from Microsoft's ArtifactSigningClientTools.msi. The MSI bundles
+      # both and reads like the simpler option, but `msiexec /quiet` HUNG for
+      # nine minutes on windows-latest (run 33229631979) with no output and
+      # no failure -- it wants an interactive installer context the runner
+      # does not give it. Two explicit dependencies that complete in seconds
+      # beat one bundled dependency that stalls silently.
+      - uses: actions/setup-dotnet@v6
+        if: github.ref_type == 'tag' || inputs.azure_sign
+        with:
+          dotnet-version: '8.0'
+      - name: Install the Artifact Signing dlib (tags or sign test)
         if: github.ref_type == 'tag' || inputs.azure_sign
         shell: pwsh
+        # Fail fast rather than stall to the job's 30-minute ceiling, which
+        # is how the MSI attempt burned ten minutes saying nothing.
+        timeout-minutes: 5
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://download.microsoft.com/download/70ad2c3b-761f-4aa9-a9de-e7405aa2b4c1/ArtifactSigningClientTools.msi" -OutFile ArtifactSigningClientTools.msi
-          Start-Process msiexec.exe -Wait -ArgumentList '/I ArtifactSigningClientTools.msi /quiet'
-          $dlib = Get-ChildItem 'C:\Program Files','C:\Program Files (x86)' -Recurse -Filter Azure.CodeSigning.Dlib.dll -ErrorAction SilentlyContinue |
+          Invoke-WebRequest -Uri https://dist.nuget.org/win-x86-commandline/latest/nuget.exe -OutFile nuget.exe
+          & ./nuget.exe install Microsoft.ArtifactSigning.Client -x -OutputDirectory packages
+          $dlib = Get-ChildItem packages -Recurse -Filter Azure.CodeSigning.Dlib.dll |
                   Where-Object { $_.Directory.Name -eq 'x64' } | Select-Object -First 1
-          if (-not $dlib) { throw "x64 Azure.CodeSigning.Dlib.dll not found after installing the client" }
+          if (-not $dlib) { throw "x64 Azure.CodeSigning.Dlib.dll not found in Microsoft.ArtifactSigning.Client" }
           "MOMWIRE_SIGN_DLIB=$($dlib.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Write the Artifact Signing metadata (tags or sign test)
         if: github.ref_type == 'tag' || inputs.azure_sign
