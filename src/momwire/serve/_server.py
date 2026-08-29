@@ -10,9 +10,18 @@ as the ``connection`` callable, so the eznec daemon and the SimNEC daemon
 are the same server hosting different seams (momwire#532: the resident
 process this arc exists to build).
 
-Everything here is POSIX AF_UNIX today; the Windows transport (AF_UNIX
-where the build has it, loopback TCP where it does not) is the next unit of
-the #718 arc and lands inside this module so neither dialect sees it.
+Two transports since #718 phase 2 unit 2, and the choice is not made here:
+:func:`momwire_serve_client.transport` owns it, so the server binds what the
+client will look for by construction rather than by two rules that agree
+until they don't. AF_UNIX where the build has it; loopback TCP plus a
+rendezvous file where it does not. ``path`` stays the ADDRESS FILE in both
+modes — the socket itself, or the file the port is published in — so every
+log line, every ``--socket`` flag and the unlink-on-exit are unchanged.
+
+Importing the client's mechanics module from inside the package is the
+right way round: it is stdlib-only and dependency-free, this process has
+already paid for NumPy, and the alternative is a second copy of the
+transport rule living where a client can never see it drift.
 """
 
 from __future__ import annotations
@@ -25,11 +34,18 @@ import sys
 import threading
 import time
 
+import momwire_serve_client as _mech
+
 # The accept() poll. Nothing waits on it — it only bounds how long after the
 # idle deadline the process actually goes away.
 _ACCEPT_POLL = 0.25
 
 _LISTEN_BACKLOG = 64
+
+# How long the "does the published address already answer?" probe waits.
+# Loopback: a live peer answers in microseconds, and a blackholed address
+# must not hold a starting server past the client's spawn timeout.
+_PROBE_TIMEOUT = 1.0
 
 
 class ConnLog:
@@ -57,6 +73,25 @@ class ConnLog:
             self._stream.flush()
         except OSError:
             pass
+
+
+def _answers(address) -> bool:
+    """Is somebody accepting at this loopback ``(host, port)``?
+
+    The TCP mode's half of the unix path's "connect to the socket and see":
+    a refused connect is a dead server's leftovers, an accepted one is a
+    live peer that must not be disturbed.
+    """
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.settimeout(_PROBE_TIMEOUT)
+    try:
+        probe.connect(address)
+    except OSError:
+        return False
+    else:
+        return True
+    finally:
+        probe.close()
 
 
 def take_value(argv: list[str], flag: str, default: str | None = None):
@@ -111,7 +146,18 @@ class Server:
             pass
 
     def _bind(self):
-        """Bind, or hand the path back to whoever already owns it.
+        """Bind the address file, or hand it back to whoever already owns it.
+
+        Which transport is :func:`momwire_serve_client.transport`'s answer,
+        never a guess from the path's spelling: the client asked the same
+        function before it chose the name it is waiting on.
+        """
+        if _mech.transport() == _mech.TCP:
+            return self._bind_tcp()
+        return self._bind_unix()
+
+    def _bind_unix(self):
+        """Bind the socket, or hand the path back to whoever already owns it.
 
         The client only spawns under its lock and only after unlinking a dead
         socket, so ``EADDRINUSE`` here means a peer server won a race the lock
@@ -146,6 +192,46 @@ class Server:
             listener.bind(self.path)
         os.chmod(self.path, 0o600)
         listener.listen(_LISTEN_BACKLOG)
+        return listener
+
+    def _bind_tcp(self):
+        """Bind loopback, then publish the port at the rendezvous file.
+
+        The port is ephemeral (``bind(..., 0)``), so two servers can never
+        collide on it and there is no ``EADDRINUSE`` to read. What they CAN
+        collide on is the name a client looks the port up by — the rendezvous
+        file — so the same question is asked one level up, and answered the
+        same way: if the published address answers, a peer owns this key and
+        losing gracefully is the only safe answer; if it refuses, the file is
+        a dead server's litter and we claim it.
+
+        Listen BEFORE publishing, always: the file is the client's signal
+        that somebody is accepting, and publishing a port that is merely
+        bound would turn the fast path into a refused connect.
+
+        The check and the publish are not one atomic step, exactly as the
+        unix path's probe-then-unlink is not: what makes both safe is that
+        clients spawn only under the obtain lock. A server that loses this
+        race publishes over a peer, then idles out with nobody having ever
+        found it — one wasted process, no wrong answers.
+        """
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            # No SO_REUSEADDR: on an ephemeral port it would buy nothing, and
+            # on Windows SO_REUSEADDR lets a second bind STEAL a live port.
+            listener.bind((_mech.RENDEZVOUS_HOST, 0))
+            listener.listen(_LISTEN_BACKLOG)
+            published = _mech.read_rendezvous(self.path)
+            if published is not None and _answers(published):
+                listener.close()
+                return None
+            # ``os.replace`` puts the new address over the stale one in a
+            # single step, so no unlink is needed and no client ever finds
+            # the name missing.
+            _mech.publish_rendezvous(self.path, listener.getsockname()[1])
+        except BaseException:
+            listener.close()
+            raise
         return listener
 
     def stop(self, *_args) -> None:

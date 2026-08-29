@@ -114,6 +114,14 @@ def shared_selftest(argv: list[str], stdout=None) -> int:
     import subprocess
     import tempfile
 
+    import momwire_serve_client
+
+    # What the client will call its server's address file on THIS box — a
+    # ``.sock`` under AF_UNIX, a ``.port`` rendezvous under loopback TCP
+    # (#718 phase 2 unit 2). Asked rather than spelt, so the selftest cannot
+    # report "no server" on a transport it simply failed to look for.
+    suffix = momwire_serve_client.address_suffix()
+
     stdout = sys.stdout if stdout is None else stdout
     argv = [a for a in argv if a != "--shared-selftest"]
     room = tempfile.mkdtemp(prefix="momwire-portal-selftest-")
@@ -136,7 +144,7 @@ def shared_selftest(argv: list[str], stdout=None) -> int:
         checks["2 NX sentinels"] = _sentinels(first.stdout) == 2
         checks["client stderr quiet"] = first.stderr.strip() == ""
 
-        sockets = sorted(name for name in os.listdir(room) if name.endswith(".sock"))
+        sockets = sorted(n for n in os.listdir(room) if n.endswith(suffix))
         checks["one server socket"] = len(sockets) == 1
 
         second = _run("".join(_SELFTEST_DECKS[2:]))
@@ -147,12 +155,11 @@ def shared_selftest(argv: list[str], stdout=None) -> int:
             and second.stdout.count("ANTENNA INPUT PARAMETERS") == 2
         )
         checks["server survived both"] = (
-            sorted(name for name in os.listdir(room) if name.endswith(".sock"))
-            == sockets
+            sorted(n for n in os.listdir(room) if n.endswith(suffix)) == sockets
         )
     finally:
         for name in os.listdir(room):
-            if name.endswith(".sock"):
+            if name.endswith(suffix):
                 _terminate(os.path.join(room, name))
         shutil.rmtree(room, ignore_errors=True)
 
