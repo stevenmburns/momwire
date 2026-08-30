@@ -65,6 +65,62 @@ ENGINE_NAME = f"{NAME}-engine"
 # NEC-5 twin — and the README says how to make any other, which is a copy.
 SHIPPED_VARIANTS = ("razor-nec5",)
 
+# LLVM's OpenMP runtime.  Both Windows extensions (`_accelerators` and
+# `_near_interface_accel`) link it, because setup.py builds them with
+# `/openmp:llvm` — not `vcomp140.dll`, which is what a reader expects from MSVC
+# and is also a redistributable Windows knows about.  This one is neither a
+# system DLL nor something PyInstaller collects, so momwire#737 shipped two
+# phases of bundle in which the accelerator import simply failed and every
+# solve was pure Python.
+OPENMP_DLL = "libomp140.x86_64.dll"
+
+
+def _openmp_runtime() -> Path | None:
+    """The full path of the OpenMP runtime the built extensions actually load.
+
+    By IMPORTING the extension first and then asking the loader where the DLL
+    came from: that is the copy this build's `.pyd` resolves to, so what gets
+    bundled is what the engine will look for rather than the first file of that
+    name on PATH.  `GetModuleHandleW` does not load anything — it answers only
+    for a module already mapped into this process, which the import just did.
+
+    The PATH walk is the fallback for the case where the extension imported
+    without pulling the runtime in (a future build that links it lazily); a
+    build box with no copy at all gets None, and the caller refuses to ship.
+    """
+    import ctypes
+    import ctypes.util
+
+    try:
+        import momwire._accelerators  # noqa: F401
+    except ImportError as exc:
+        print(f"WARNING: {exc}; looking for {OPENMP_DLL} on PATH", file=sys.stderr)
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    # Explicit types: the default `c_int` restype truncates a 64-bit HMODULE,
+    # and a truncated handle answers with a wrong path or none at all.
+    kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+    kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    kernel32.GetModuleFileNameW.restype = ctypes.c_uint32
+    kernel32.GetModuleFileNameW.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+    ]
+    handle = kernel32.GetModuleHandleW(OPENMP_DLL)
+    if handle:
+        buffer = ctypes.create_unicode_buffer(32768)
+        if kernel32.GetModuleFileNameW(handle, buffer, len(buffer)):
+            return Path(buffer.value)
+
+    located = ctypes.util.find_library(OPENMP_DLL)
+    if located and Path(located).is_file():
+        return Path(located)
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if entry and (candidate := Path(entry) / OPENMP_DLL).is_file():
+            return candidate
+    return None
+
 
 def _load_sign():
     """Import the sibling ``sign`` module by path.
@@ -135,6 +191,34 @@ def main() -> int:
         "tkinter",
         str(HERE / "entry.py"),
     ]
+
+    # Windows only, and a hard failure there.  PyInstaller collects what the
+    # `.pyd`s declare through its own analysis on POSIX, but on Windows the
+    # OpenMP runtime is not a dependency it finds, and a build box that cannot
+    # produce the file would ship exactly the bundle momwire#737 is about — one
+    # that runs, answers correctly, and is 20x slow on the machines that lack a
+    # Visual Studio toolchain.  Refusing beats shipping that again.
+    #
+    # POSIX takes nothing: those wheels link the SYSTEM OpenMP runtime on
+    # purpose, so they share one runtime with pynec-accel rather than clashing
+    # (`src/momwire/_accel.py`'s docstring), and bundling one here would undo
+    # that for the frozen engine.
+    if os.name == "nt":
+        runtime = _openmp_runtime()
+        if runtime is None:
+            print(
+                f"ERROR: {OPENMP_DLL} is nowhere this build can see it; the "
+                "bundle would ship with a dead accelerator and every solve on "
+                "the pure-Python path (momwire#737)",
+                file=sys.stderr,
+            )
+            return 1
+        # Destination `.`, which a one-dir build resolves to `_internal/` —
+        # beside the collected `.pyd`s, which is where the loader looks first
+        # for an extension's dependencies.
+        cmd[-1:-1] = ["--add-binary", f"{runtime}{os.pathsep}."]
+        print(f"openmp runtime: {runtime}")
+
     print("+", " ".join(cmd), flush=True)
     result = subprocess.run(cmd)
     if result.returncode != 0:
