@@ -44,6 +44,16 @@
 #ifndef _WIN32
 #define _DEFAULT_SOURCE 1
 #define _POSIX_C_SOURCE 200809L
+#ifdef __APPLE__
+/* Darwin reads a bare _POSIX_C_SOURCE as "POSIX and nothing besides", and
+ * hides the BSD names this client is built out of: INADDR_LOOPBACK from
+ * <netinet/in.h> and flock/LOCK_EX/LOCK_UN from <sys/file.h>, ten -Werror
+ * errors deep in a file that compiles clean on glibc. _DARWIN_C_SOURCE is
+ * that platform's spelling of what _DEFAULT_SOURCE already says to glibc --
+ * one property, two spellings, which is the rule this header block follows
+ * everywhere else. (momwire#748) */
+#define _DARWIN_C_SOURCE 1
+#endif
 #endif
 
 #ifdef _WIN32
