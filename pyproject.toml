@@ -290,7 +290,20 @@ extend-select = ["B023"]
 # uses them) can have the import deleted between edits — by the editor's
 # format-on-save, the project's auto-fix hook, or a pre-commit run —
 # producing a broken next edit. Manual cleanup of unused imports is fine.
-unfixable = ["F401"]
+#
+# RUF100 for a sharper version of the same reason. Its fix deletes the WHOLE
+# comment, prose included, so `# noqa: B023 — consumed in this iteration`
+# loses the justification along with the suppression. Worse, it reads a
+# directive as dead whenever the rule it names is not CURRENTLY selected --
+# so a `--fix` run taken while auditing which rules to adopt deletes exactly
+# the annotations that are the argument for adopting them.
+#
+# That is not hypothetical here: 22 directives in this tree are reported
+# unused today (they name rules this repo has not selected), and every one is
+# marked `[*] fixable`. Listing RUF100 changes nothing about which rules run
+# -- it is not in `select` -- it only stops one `--fix` from erasing 22
+# explanations. antennaknobs carries the same pair for the same reason.
+unfixable = ["F401", "RUF100"]
 
 [tool.ruff.lint.per-file-ignores]
 # Bench and figure scripts build throwaway closures over sweep variables and

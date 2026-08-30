@@ -40,17 +40,18 @@ only, per-file-ignored under `scripts/` and `site/figures/`. antennaknobs also
 carries `BLE001`, `TID252` and `S310`; do not assume a directive style that
 works there passes here, or vice versa.
 
-### `RUF100` is not in `unfixable` here — and that is a live trap
+### `unfixable = ["F401", "RUF100"]` — leave both in
 
-`unfixable = ["F401"]`. antennaknobs also lists `RUF100`, for a reason that
-applies equally here: **RUF100's fix deletes the whole comment, prose
-included**, and it reads a rule's annotations as dead whenever that rule is
-not *currently* selected. There are **22** unused directives in this repo
-right now, all reported `[*] fixable`. Selecting RUF100 and running `--fix`
-would delete all 22 with their explanations.
+**RUF100's fix deletes the whole comment, prose included**, so
+`# noqa: B023 — consumed in this iteration` loses its justification along
+with its suppression. Worse, it reads a directive as dead whenever the rule
+it names is not *currently* selected — so a `--fix` run taken while auditing
+which rules to adopt deletes exactly the annotations that are the argument
+for adopting them.
 
-Adding `"RUF100"` to `unfixable` is a one-word change that alters no current
-behaviour (the rule is not selected) and removes the footgun. Worth doing.
+Not hypothetical: **22** directives in this tree are reported unused today
+(they name rules this repo has not selected). Before RUF100 was listed here
+they were all marked `[*] fixable`, i.e. one `--fix` from gone.
 
 When auditing directives, measure with **`--extend-select RUF100`**, never
 `--select RUF100` — the latter *replaces* the rule set, so every directive
