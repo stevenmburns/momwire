@@ -23,20 +23,44 @@ That is the whole installation. No Python, no environment, nothing on PATH.
 EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
 become momwire's.
 
-One launch costs on the order of a second — the frozen interpreter's import
-cost. (The one-file packaging that re-extracts on every launch was measured
-at 17 s and rejected.) A long SWR sweep is therefore slower through the
-frozen exe than through the licensed engine's 18–37 ms launches; the
-per-point economics, not the physics, are the current gap.
+### Launch economics
+
+EZNEC launches its external engine once per frequency point, so the launch
+cost *is* the sweep cost. What you point EZNEC at is a small native
+**launcher** that keeps a warm momwire engine resident — started on the
+first calculation, retired after fifteen idle minutes — so every launch
+after the first costs milliseconds instead of a Python start-up. Measured on
+one machine, same 50-point sweep of an 11-segment dipole, engines invoked
+exactly as EZNEC invokes them:
+
+| engine | per launch (median) | 50-point sweep |
+| --- | --- | --- |
+| momwire launcher, warm | 22 ms | 1.2 s |
+| licensed NEC-5 console engine | 23 ms | 6.9 s |
+| momwire's old one-shot exe | ~2 s | 103 s |
+
+Per launch the two are the same speed; over a sweep the resident engine is
+bounded (33–65 ms per point) where a process-per-point engine is erratic
+(13–500 ms), which is the whole of the sweep difference. The first
+calculation after a cold start, or after the idle retirement, pays the
+engine's start-up once (~5 s on that machine); if anything about the
+resident path ever fails, the launcher runs the engine directly instead —
+the same answer, at one-shot speed, never a broken engine.
 
 ## Choosing the formulation
 
-The bundle carries two engines, and the choice is the engine PATH you set:
+The bundle carries two launchers and the one engine they run, and the choice
+is the engine PATH you set:
 
 ```text
 momwire-eznec.exe             the default — degree-2 B-spline (bs2)
 momwire-eznec-razor-nec5.exe  the NEC-5 formulation twin
+momwire-eznec-engine.exe      the compute engine the launchers run
 ```
+
+Point EZNEC at a **launcher**, never at `momwire-eznec-engine.exe` — the
+engine answers correctly either way, but naming it directly gives up the
+warm start above for nothing.
 
 They accept the same models — measured, deck by deck, on the whole captured
 corpus — and answer in different formulations. `razor-nec5` is the tent basis
@@ -111,11 +135,13 @@ mesh before it is information about either engine.
 
 **Making another.** The basis rides on the *filename*: everything after
 `eznec-` selects it, a Windows `.exe` stripped first. So a copy you make
-yourself works — rename a copy to `momwire-eznec-<basis>.exe`, beside the
-same `_internal`, and that basis answers. This is the same rule the
+yourself works — copy a **launcher** (a couple of hundred kilobytes, not the
+engine), rename the copy to `momwire-eznec-<basis>.exe` in the same folder,
+and that basis answers. This is the same rule the
 [SimNEC portal's](/reference/portal-usage/) `momwire-nec2c-<basis>` commands
 use, with one owner behind both. The bundle ships two rather than all eight
-only to keep the download small; the other six are a copy away:
+because the pair is what the parity work was about; the other six are a copy
+away:
 
 ```text
 bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5
@@ -241,10 +267,11 @@ sub-percent level, and the in-house NEC-5 formulation twin
 
 ## From a source checkout
 
-The executable is the `momwire.eznec` module frozen with PyInstaller, and
-CI gates the two against each other: the same deck through either route
-produces byte-identical printouts. So if you already have a Python
-environment, the module is there:
+The bundle's engine is the `momwire.eznec` module frozen with PyInstaller
+(the launcher in front of it is a small C program speaking one socket
+protocol), and CI gates the routes against each other: the same deck through
+the launcher, the frozen engine, or the module produces byte-identical
+printouts. So if you already have a Python environment, the module is there:
 
 ```bash
 pip install momwire
