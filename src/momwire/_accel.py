@@ -11,7 +11,10 @@ in one place. The distinction that matters:
   the *system* OpenMP runtime rather than bundling one (so they share a single
   runtime with pynec-accel instead of clashing), so the usual cause is that the
   runtime is missing: ``apt install libgomp1`` on Linux, ``brew install libomp``
-  on macOS. The older failure — a static-TLS clash from a vendored libgomp
+  on macOS. Windows is the other shape — there the extensions link LLVM's
+  ``libomp140.x86_64.dll`` (``/openmp:llvm`` in setup.py), which is no system
+  DLL, so the wheel and the frozen bundle have to SHIP it (momwire#737). The
+  older failure — a static-TLS clash from a vendored libgomp
   (momwire < 0.2.2 or pynec-accel < 1.7.4.post1) loaded after another, failing
   with "cannot allocate memory in static TLS block" — is the other cause.
   Either way the fallback used to be invisible — this module makes it audible.
@@ -58,6 +61,22 @@ def _load():
                     "On macOS the accelerator links Homebrew's OpenMP runtime, "
                     "which the wheel does not bundle (so it can share one libomp "
                     "with pynec-accel); install it with `brew install libomp`."
+                )
+            elif sys.platform == "win32":
+                # NOT vcomp140.dll, which is what MSVC usually means and what
+                # Windows already redistributes: setup.py builds the extensions
+                # with /openmp:llvm, so they link LLVM's runtime, which is
+                # neither a system DLL nor something PyInstaller collects.
+                # momwire#737 shipped two EZNEC bundles without it.
+                hint = (
+                    "On Windows the accelerator links LLVM's OpenMP runtime, "
+                    "libomp140.x86_64.dll (the extensions are built with "
+                    "/openmp:llvm, so it is that and not vcomp140.dll); the "
+                    "wheel and the EZNEC bundle are expected to ship or find "
+                    "it. Reinstalling momwire is the first fix; failing that, "
+                    "the file comes with the Visual C++ LLVM OpenMP runtime "
+                    "(the LLVM/clang component of a Visual Studio install), "
+                    "and must sit beside the extension or on PATH."
                 )
             else:
                 hint = (

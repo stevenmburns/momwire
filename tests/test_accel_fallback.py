@@ -69,6 +69,18 @@ def test_warning_hint_is_platform_specific(monkeypatch):
     assert "static-TLS" in lin and "brew install libomp" not in lin
 
 
+def test_the_windows_hint_names_the_runtime_windows_actually_needs(monkeypatch):
+    # momwire#737: Windows used to fall through to the Linux branch and advise
+    # `apt install libgomp1`, on a box with no apt and a different missing
+    # file. The extensions are built with /openmp:llvm, so what is missing is
+    # LLVM's libomp140.x86_64.dll — the name a user has to be able to search
+    # for — and never the vcomp140.dll an MSVC build would suggest.
+    monkeypatch.setattr(sys, "platform", "win32")
+    win = _warn_message(monkeypatch)
+    assert "libomp140.x86_64.dll" in win
+    assert "apt install" not in win and "brew install" not in win
+
+
 def test_not_built_is_silent(monkeypatch):
     # Same import failure, but the extension was never built -> pure-Python is
     # the expected, unremarkable outcome; no warning.
