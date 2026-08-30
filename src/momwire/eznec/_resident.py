@@ -59,6 +59,48 @@ def _connection(conn, number: int, log, solve_lock, *, basis: str) -> None:
                 pass
 
 
+# The two compiled extensions, under the names their files carry, so a log
+# line names the thing to go looking for.  ONE line for both because they are
+# one fact to a user: either the fast path is live or every solve in this
+# process is the pure-Python one.
+_EXTENSIONS = ("_accelerators", "_near_interface_accel")
+
+# The affirmative spelling, restated where the gates can import it (smoke.py
+# greps a daemon's log for it).  It must NOT be a substring of the fallback
+# line, or a half-loaded process would read as a healthy one.
+ACCEL_OK = "accelerators: loaded"
+
+
+def accelerator_status() -> str:
+    """The one log line that says whether this daemon's fast path is live.
+
+    momwire#737: the Windows bundle shipped without `libomp140.x86_64.dll`, so
+    every deployed solve was pure Python and NOTHING said so — the fallback
+    warning goes to stderr, which EZNEC never shows.  "Was the accelerator
+    live" is the first question of every slowness report, so the daemon
+    answers it once, in the log, before it binds.
+
+    Imported at CALL time rather than at module import: the flags are read
+    from the modules that own them (and a test can move them), and this must
+    not reorder the daemon's own import graph.
+    """
+    from .. import _accel, _near_interface
+
+    live = (_accel.LOADED, _near_interface._HAVE_NEAR_INTERFACE_ACCEL)
+    missing = [name for name, ok in zip(_EXTENSIONS, live) if not ok]
+    if missing:
+        return f"accelerators: PURE-PYTHON FALLBACK ({', '.join(missing)} did not load)"
+    return f"{ACCEL_OK} ({', '.join(_EXTENSIONS)})"
+
+
+def _configure(log, argv: list[str]) -> None:
+    """The daemon's once-per-process log preamble; None to proceed."""
+    if argv:
+        log.write(f"unused server arguments: {argv}\n")
+    log.write(f"{accelerator_status()}\n")
+    return None
+
+
 def serve_main(argv: list[str]) -> int:
     """``--serve --socket PATH [--basis NAME] [--idle-timeout S] [--log P]``."""
     argv = [a for a in argv if a != "--serve"]
@@ -70,9 +112,10 @@ def serve_main(argv: list[str]) -> int:
     def connection(conn, number, log, solve_lock):
         _connection(conn, number, log, solve_lock, basis=basis)
 
-    def _configure(log):
-        if argv:
-            log.write(f"unused server arguments: {argv}\n")
-        return None
-
-    return serve_forever(path, idle_raw, log_path, connection, configure=_configure)
+    return serve_forever(
+        path,
+        idle_raw,
+        log_path,
+        connection,
+        configure=lambda log: _configure(log, argv),
+    )
