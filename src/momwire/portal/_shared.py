@@ -87,6 +87,15 @@ def serve_main(argv: list[str]) -> int:
     idle_raw, argv = take_value(argv, "--idle-timeout", "900")
 
     def _configure(log):
+        # "Was the accelerator live" is the first question of every slowness
+        # report (momwire#737/#740), so this daemon answers it in its own log
+        # before it binds, exactly as the eznec one does — one owner for the
+        # sentence, imported at CALL time because `_resident` pulls the whole
+        # eznec serve module in at import and this daemon's start-up cost is
+        # the thing it exists to amortise.
+        from ..eznec._resident import accelerator_status
+
+        log.write(f"{accelerator_status()}\n")
         # ONCE per process. The engine flags are the server's identity — the
         # client hashed them into the socket name — so a second call could only
         # ever restate them, at the cost of the cache they were chosen for.
