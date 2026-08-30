@@ -248,11 +248,21 @@ deliberate, not initial-version:
   wire axis"; the 2026-08-18 kernel identification showed that claim was
   half right and the half it got wrong was the kernel. See "The extended
   kernel" below.
-- **No C++ accelerator.** The formulation-comparison role this solver plays
-  needs correctness and a checkable derivation far more than it needs
-  throughput; every sibling solver's accelerator work also had to survive
-  bit-exact regression tests against a pure-numpy reference, which this
-  class does not yet have to pay for.
+- **The segment-moment fill is accelerated** (momwire#742), and nothing else
+  is. `_accel_razor.cpp` fuses `_seg_moments_prepare` and
+  `_seg_moments_from_prepared` into one tiled OpenMP kernel; every branch of
+  the fill funnels through that pair, so covering it covers free space, both
+  finite grounds, ground contact, loading and both quadrature lanes without
+  any of them gaining a branch. The pure-NumPy path stays the reference and
+  stays tested — it is what a build without the extension runs, and
+  `MOMWIRE_RAZOR_FORCE_NUMPY=1` (or `razor._FORCE_NUMPY`) selects it in a
+  build that has one. Agreement is TIGHT rather than bitwise: the kernel's
+  per-pair reduction is not `np.einsum`'s, so the two paths differ by about
+  two ulps of the matrix scale (measured 4.8e-16 in max|ΔZ|/max|Z|,
+  6.3e-14 in the solved impedance), and the repo's standing rule against
+  pinning cross-build bit equality applies. What the fill still does in
+  NumPy — the reflection-coefficient weight windows and the T1 contraction —
+  is now co-dominant with the kernel on a finite-ground deck.
 
 `RazorSolver` refuses `degree`, `junctions`, `junction_ports`, `node_gaps`
 and either finite ground on a deck that touches the plane, at construction
