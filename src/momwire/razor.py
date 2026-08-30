@@ -335,6 +335,7 @@ it on, and each is gated with it on.
 """
 
 from dataclasses import dataclass
+import os
 
 import numpy as np
 import scipy.linalg
@@ -356,6 +357,7 @@ from ._bspline_kernels import (
     _ek_radius,
     _ek_reg_extra,
 )
+from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -404,6 +406,27 @@ _CHUNK_ELEMS = 2_000_000
 # fill is elementwise on the observer axis, so the answer does not depend
 # on it, which `tests/test_razor_refl_coef_ground.py` pins directly.
 _WEIGHTED_CHUNK_ELEMS = _CHUNK_ELEMS // 12
+
+# The C++ segment-moment fill (momwire#742), and the two ways to turn it off.
+# The capability flag is the kernel's OWN symbol, never a shared one: a .so
+# built before this arc exports every other section's entries and not this,
+# and a shared flag would claim a contract it cannot serve.
+_HAVE_RAZOR_FILL_ACCEL = _acc is not None and bool(
+    getattr(_acc, "razor_fill_742", False)
+)
+
+# The tests' handle on the dispatch — the agreement gates drive BOTH machines
+# inside one process. `MOMWIRE_RAZOR_FORCE_NUMPY` is the whole-run switch (a
+# timing comparison, a bisect); `monkeypatch.setattr(razor, "_FORCE_NUMPY",
+# True)` is the per-test one. `_use_razor_fill_accel` reads both at CALL time,
+# so a fixture that flips either mid-solve is honoured by the next chunk.
+_FORCE_NUMPY = bool(os.environ.get("MOMWIRE_RAZOR_FORCE_NUMPY"))
+
+
+def _use_razor_fill_accel():
+    """The fused C++ moment fill serves when built and not forced off."""
+    return _HAVE_RAZOR_FILL_ACCEL and not _FORCE_NUMPY
+
 
 # momwire#510: the ceiling the grazing-height keying below may raise the
 # Sommerfeld remainder's source order to, and the constant in the rule.
@@ -510,6 +533,95 @@ def _remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap=None):
     return _quadrature.remainder_qp(
         obs_pts, src_l, src_r, ground_z, base, cap, _REMAINDER_QP_C
     )
+
+
+class _FusedMoments:
+    """The C++ fill's stand-in for a prepared moment chunk list (momwire#742).
+
+    `RazorSolver._seg_moments_prepare` returns one of these instead of the
+    ``(lo, hi, R, m0s, m1s, ekc)`` list when the accelerator is built, and
+    `_seg_moments_from_prepared` recognises it and calls the kernel. Every
+    caller in between — the T2 centroid block, the T1 row chunks, both source
+    sets, both quadrature lanes — only ever passes the token along, so this is
+    the whole dispatch surface.
+
+    What it holds is the ARGUMENTS of the fill, not its tables: the observers,
+    this source set's segment origins/tangents/lengths, the regularising
+    radius column, and the extended kernel's eligibility labels. All of that
+    is O(n_obs + n_seg); the tables it replaces are O(n_obs · n_seg · n_qp).
+    `a` is normalised to a ``(n_seg,)`` column here rather than in the kernel
+    because that is where the scalar-or-column convention is already written
+    down (`_seg_moments_prepare`'s docstring), and because a uniform column is
+    bit-for-bit the scalar in `a * a` (momwire#425).
+
+    The `geom` captured is the one PREPARE was handed, which over a ground is
+    the MIRRORED source set. That matters: the numpy path reads `seg_h` back
+    off the `geom` argument of `_seg_moments_from_prepared`, which callers
+    pass as the real geometry even for the image block. It agrees today only
+    because a mirror preserves segment lengths (`_image_sources`); binding the
+    source set here removes the coincidence rather than relying on it.
+    """
+
+    __slots__ = (
+        "obs",
+        "seg_p0",
+        "seg_t",
+        "seg_h",
+        "a",
+        "group_i",
+        "group_j",
+        "a_ek",
+        "xg",
+        "wg",
+    )
+
+    _EMPTY_I64 = np.empty(0, dtype=np.int64)
+    _EMPTY_F64 = np.empty(0, dtype=np.float64)
+
+    def __init__(self, obs, geom, a, ek, n_qp_source):
+        self.obs = obs
+        self.seg_p0 = geom["seg_p0"]
+        self.seg_t = geom["seg_t"]
+        self.seg_h = geom["seg_h"]
+        n_seg = self.seg_h.size
+        self.a = np.broadcast_to(np.asarray(a, dtype=float), (n_seg,)).copy()
+        if ek is None or ek.group_i is None or ek.group_j is None:
+            # Two empty label arrays are how the kernel spells "reduced
+            # kernel everywhere", which is `_ek_pair_mask`'s all-True case
+            # read from the other side.
+            self.group_i = self._EMPTY_I64
+            self.group_j = self._EMPTY_I64
+            self.a_ek = self._EMPTY_F64
+        else:
+            self.group_i = np.ascontiguousarray(ek.group_i, dtype=np.int64)
+            self.group_j = np.ascontiguousarray(ek.group_j, dtype=np.int64)
+            self.a_ek = np.broadcast_to(
+                np.asarray(_ek_radius(ek, self.a), dtype=float), (n_seg,)
+            ).copy()
+        self.xg, self.wg = leggauss(n_qp_source)
+
+    def evaluate(self, solver, k, *, need_m1, n_obs):
+        """Both halves of the split, at one wavenumber, in one kernel call."""
+        if n_obs != self.obs.shape[0]:
+            raise AssertionError(
+                f"prepared for {self.obs.shape[0]} observers, replayed at {n_obs}"
+            )
+        M0, M1 = _acc.razor_seg_moments(
+            self.obs,
+            self.seg_p0,
+            self.seg_t,
+            self.seg_h,
+            self.a,
+            self.xg,
+            self.wg,
+            float(k),
+            bool(need_m1),
+            self.group_i,
+            self.group_j,
+            self.a_ek,
+            solver._cancel_flag,
+        )
+        return M0, (M1 if need_m1 else None)
 
 
 @dataclass(frozen=True)
@@ -1766,7 +1878,24 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         off the extended kernel, and ``(mask, a_ek)`` on it — with `mask`
         itself None when EVERY pair of the chunk is eligible, the common case
         and the one a straight uniform wire is.
+
+        **With the C++ fill built** (momwire#742) this returns a
+        :class:`_FusedMoments` instead — the same opaque token to every caller,
+        since the only thing anyone does with it is hand it back to
+        :meth:`_seg_moments_from_prepared`. It carries the geometry rather
+        than the tables built from it, because the tables ARE the problem:
+        `R` alone is `n_obs · n_seg · n_qp_source` doubles and the chunk list
+        retains every chunk's at once, which is where razor's 52×-the-matrix
+        peak comes from. The kernel forms R one scalar at a time instead, so
+        the k-independent half has nothing left to cache and the split
+        degenerates — deliberately — to a geometry reference. What that costs
+        is the statics recomputed at every swept k (the same ~16 % this
+        method's caller prices for dropping the image cache); what it buys is
+        the whole O(N²·n_qp) transient, on both source sets.
         """
+        if _use_razor_fill_accel():
+            return _FusedMoments(obs, geom, a, ek, self.n_qp_source)
+
         seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
         n_seg = seg_h.size
         n_obs = obs.shape[0]
@@ -1833,7 +1962,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         gathered by the chunk's own mask rather than computed everywhere and
         selected, so an EK fill's transient stays proportional to the
         eligible pairs and a mostly-ineligible model costs almost nothing.
+
+        **The C++ fill (momwire#742) takes the whole method**, statics
+        included: what arrives then is a :class:`_FusedMoments`, and the two
+        halves of the split run together inside one kernel call. Nothing after
+        this line changes shape or meaning — the callers still get two
+        ``(n_obs, n_seg)`` complex planes — so the dispatch is exactly this
+        `isinstance` and nothing downstream has a branch.
         """
+        if isinstance(chunks, _FusedMoments):
+            return chunks.evaluate(self, k, need_m1=need_m1, n_obs=n_obs)
+
         seg_h = geom["seg_h"]
         n_seg = seg_h.size
         xg, wg = leggauss(self.n_qp_source)
