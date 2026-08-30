@@ -231,5 +231,26 @@ buys provenance, tamper-evidence, and enterprise WDAC/AppLocker acceptance —
 not a clean download dialog on day one. Only an EV certificate from a
 commercial CA does that.
 
+**Confirmed on a real client, 2026-08-30.** The signed SIGNTEST bundle (run
+33316824034), browser-downloaded and Explorer-extracted so it carried a
+Mark-of-the-Web, on Windows 11 with SAC off (`VerifiedAndReputablePolicyState`
+= 0):
+
+| Observed | Reading |
+| --- | --- |
+| "Windows protected your PC", **bypassable** via More info → Run anyway | SmartScreen, not SAC — SAC offers no override |
+| Publisher named: `C=US, S=OR, L=Portland, O=Steve Burns, CN=Steve Burns` | the signature is valid and Windows is reading it |
+
+So the warning is **reputation, not identity** — exactly what this section
+predicts, now measured rather than reasoned. The bundle README carries a
+FIRST RUN paragraph saying so in the user's words, because a user who meets an
+unexplained block screen may never reach the engine at all.
+
+Method note worth keeping: **the prompt firing is itself the proof that the
+MotW chain worked.** SmartScreen is keyed on the Mark-of-the-Web, so a run
+that produces the warning has demonstrated the download path that earlier
+sittings failed to achieve (`gh run download` applies no MotW, which is why
+their "no prompt appeared" measured nothing).
+
 The ~99 numpy and scipy `.pyd` files in the bundle ship unsigned. That is
 normal for PyPI wheels and matters only under enterprise policy.

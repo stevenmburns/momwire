@@ -357,6 +357,15 @@ def main() -> int:
         "\n"
         f"{signing_note}\n"
         "\n"
+        'FIRST RUN: Windows will show "Windows protected your PC", and you\n'
+        'have to click "More info" and then "Run anyway".  Nothing is wrong\n'
+        "with the download.  That screen is SmartScreen saying this file has no\n"
+        'REPUTATION yet — click "More info" and it names the publisher, because\n'
+        "the signature above is valid and Windows is reading it.  Reputation is\n"
+        "earned by download volume, so it fades with time and starts over with\n"
+        'each release; the certificate that would skip the wait outright ("EV")\n'
+        "is not one the signing service used here issues.\n"
+        "\n"
         "Point EZNEC's external-engine path at one of the LAUNCHERS below, in\n"
         "this folder.  Keep the folder together: a launcher runs the engine\n"
         "beside it, and the engine needs its _internal runtime beside IT.\n"
