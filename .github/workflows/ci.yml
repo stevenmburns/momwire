@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # On demand, for the lanes that do not run on a PR. `test-macos` is the
+  # only one, and it is the one whose findings otherwise arrive AFTER the
+  # merge that caused them (momwire#748: red on main for a day, because the
+  # branch that broke it could not have asked).
+  workflow_dispatch:
 
 jobs:
   # Which lanes are worth running for this diff. A docs- or site-only PR
@@ -175,8 +180,14 @@ jobs:
     # cross-engine leg on every main push and every `v*` tag; it validates a
     # WHEEL, though, not the suite, which is why this lane still earns a run.
     runs-on: macos-14
+    # Push-to-main as before, PLUS `workflow_dispatch` so a branch touching
+    # platform-shaped code (the C client, the serve transports) can buy the
+    # macOS verdict it needs without this becoming a PR gate for everyone.
+    # `gh workflow run ci.yml --ref <branch>` -- the same pre-merge pattern
+    # eznec-dropin.yml already provides for the Windows lane.
     if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      (github.event_name == 'workflow_dispatch'
+       || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
       && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v7
