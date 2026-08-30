@@ -175,10 +175,56 @@ def test_the_kernel_runs_and_forcing_numpy_stops_it(monkeypatch):
     s = RazorSolver(**CONFIGS["refl-coef-ground"])
     geom = s._build_geometry()
     prepared = s._assemble_Z_prepare(geom)
-    assert isinstance(prepared["t2_chunks"], list)
+    assert isinstance(prepared["t2_chunks"], _razor._PreparedChunks)
     s._assemble_Z_from_prepared(geom, prepared, s.k, s.omega)
     assert not calls, f"the forced-off fill still entered the kernel {calls} times"
     assert n_accel > 0
+
+
+@needs_accel
+def test_both_fills_integrate_the_source_set_they_were_PREPARED_with(monkeypatch):
+    """momwire#745: the lanes must agree for a reason, not by luck.
+
+    The C++ token binds the geometry prepare was handed; the numpy replay used
+    to read `seg_h` back off a `geom` argument that callers pass as the REAL
+    geometry even for the image block, whose chunks come from the MIRRORED
+    source set. Nothing caught it because `_image_sources` is a mirror and a
+    mirror preserves segment lengths -- so both readings gave the same number
+    and the agreement was an accident of the transform.
+
+    Hand prepare a source set with lengths of its OWN -- the hypothetical
+    mirror that did not preserve them -- and ask both lanes for the same
+    moments. Under the old spelling the numpy lane integrated one set of
+    lengths and the kernel the other; now neither can see anything but the set
+    it was prepared with.
+    """
+    s = RazorSolver(**CONFIGS["free-space"])
+    geom = s._build_geometry()
+    obs = geom["seg_p0"] + 0.5 * geom["seg_h"][:, None] * geom["seg_t"]
+    a = s._kernel_radius(geom)
+
+    # A source set that is NOT the solver's own geometry, differing in exactly
+    # the field the defect read off the wrong object.
+    src = dict(geom)
+    src["seg_h"] = geom["seg_h"] * 0.6
+
+    def moments(force_numpy):
+        with monkeypatch.context() as patch:
+            patch.setattr(_razor, "_FORCE_NUMPY", force_numpy)
+            token = s._seg_moments_prepare(obs, src, a)
+            return s._seg_moments_from_prepared(token, s.k, obs.shape[0])
+
+    M0_np, M1_np = moments(True)
+    M0_acc, M1_acc = moments(False)
+    assert np.allclose(M0_np, M0_acc, rtol=1e-11, atol=1e-13)
+    assert np.allclose(M1_np, M1_acc, rtol=1e-11, atol=1e-13)
+
+    # And the shortened lengths really are what both integrated -- without
+    # this the test would pass on two lanes that agreed on the WRONG set.
+    unshortened, _ = s._seg_moments_from_prepared(
+        s._seg_moments_prepare(obs, geom, a), s.k, obs.shape[0]
+    )
+    assert not np.allclose(M0_np, unshortened)
 
 
 @needs_accel
