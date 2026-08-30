@@ -61,14 +61,22 @@ def config_key(basis: str | None, idle_timeout: float) -> str:
     """One warm server per formulation per install — the identity rule the
     portal's client established (#379): momwire version, interpreter, basis
     and idle policy are the engine; anything resident under a different
-    reading must not answer."""
+    reading must not answer.
+
+    momwire#733: a name that selects nothing and a name that selects the
+    EMPTY suffix are different engines — the first spawns the default, the
+    second spawns a per-deck refusal — so ``basis or ""`` (collapsing both to
+    the same element) is wrong. ``"default"`` and ``f"basis={basis}"`` cannot
+    collide for any ``basis`` string, because only the second spelling can
+    ever start with ``"basis="``.
+    """
     major, minor = _mech.dist_version()
     return _mech.digest(
         [
             f"eznec.{major}.{minor}",
             os.path.realpath(sys.executable),
             f"{idle_timeout!r}",
-            basis or "",
+            "default" if basis is None else f"basis={basis}",
         ]
     )
 
@@ -88,7 +96,10 @@ def _server_command(
         "--log",
         log_path,
     ]
-    if basis:
+    if basis is not None:
+        # An empty ``basis`` (a name that selected the empty suffix) is a
+        # NAMED basis, not "no basis" — it must reach ``serve_main``'s own
+        # per-deck refusal, not round to the default engine (momwire#733).
         command += ["--basis", basis]
     return command
 
@@ -131,10 +142,12 @@ def _one_shot(deck_path: str, printout_path: str, basis: str | None) -> None:
     import subprocess
 
     command = [sys.executable, "-m", "momwire.eznec", deck_path, printout_path]
-    if basis:
+    if basis is not None:
         # The module entry has no basis flag (EZNEC's argv contract); the
         # frozen twin exes select it by NAME (#643), and this client's
-        # subprocess spelling is the -c equivalent of that entry.
+        # subprocess spelling is the -c equivalent of that entry. An empty
+        # ``basis`` is a NAMED (empty) basis and must travel verbatim to
+        # ``_shell.main``'s own refusal, not round to the default (#733).
         command = [
             sys.executable,
             "-c",
