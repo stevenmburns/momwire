@@ -724,10 +724,22 @@ static int runtime_dir(char *out, size_t cap)
  * resolved path rather than on an interpreter this program does not have.
  * Parity with the Python dev client is explicitly not wanted: they run
  * different engines and must never share a warm server.  Two C clients of
- * ONE bundle do share, and that is what this key is for. */
-static void config_key(const char *engine_resolved, const char *basis, char out[17])
+ * ONE bundle do share, and that is what this key is for.
+ *
+ * momwire#733: a name that selected NO basis and a name that selected the
+ * EMPTY suffix are different engines -- the first spawns the default, the
+ * second spawns a per-deck refusal -- so hashing the bare suffix collided
+ * them and whichever spawned first poisoned the other.  `named_basis` (not
+ * `basis` alone) is therefore the thing hashed: `"default"` when the name
+ * selected nothing, `"basis=" + basis` when it did (empty suffix included).
+ * The two spellings can never collide, for any `basis` string, because only
+ * the second one can ever begin with `"basis="`. */
+static void config_key(const char *engine_resolved, int named_basis,
+                       const char *basis, char out[17])
 {
     static const char nul = '\0';
+    static const char default_tag[] = "default";
+    static const char basis_prefix[] = "basis=";
     sha256_t hash;
     unsigned char digest[32];
     int i;
@@ -739,7 +751,12 @@ static void config_key(const char *engine_resolved, const char *basis, char out[
     sha256_update(&hash, &nul, 1);
     sha256_update(&hash, IDLE_TIMEOUT_REPR, strlen(IDLE_TIMEOUT_REPR));
     sha256_update(&hash, &nul, 1);
-    sha256_update(&hash, basis, strlen(basis));
+    if (named_basis) {
+        sha256_update(&hash, basis_prefix, strlen(basis_prefix));
+        sha256_update(&hash, basis, strlen(basis));
+    } else {
+        sha256_update(&hash, default_tag, strlen(default_tag));
+    }
     sha256_final(&hash, digest);
 
     for (i = 0; i < 8; i++) {
@@ -1444,7 +1461,7 @@ static int plan(setup_t *setup, const char *argv0)
     if (runtime_dir(runtime, sizeof runtime) != 0) {
         return -1;
     }
-    config_key(setup->engine_key, setup->basis, key);
+    config_key(setup->engine_key, setup->named_basis, setup->basis, key);
 
     if (snprintf(setup->unix_path, sizeof setup->unix_path, "%s%c%s%s", runtime,
                  DIR_SEP, key, UNIX_SUFFIX) >= (int)sizeof setup->unix_path ||
