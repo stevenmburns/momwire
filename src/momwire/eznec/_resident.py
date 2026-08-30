@@ -25,6 +25,7 @@ basis would only be a second spelling of the socket it arrived on.
 from __future__ import annotations
 
 import io
+import sys
 
 from ..serve import run_session
 from ..serve._server import ConnLog, serve_forever, take_value
@@ -70,6 +71,49 @@ _EXTENSIONS = ("_accelerators", "_near_interface_accel")
 # line, or a half-loaded process would read as a healthy one.
 ACCEL_OK = "accelerators: loaded"
 
+# The second Windows line's marker, exported for the same reason: smoke reads
+# the PATH out of the log by splitting on it.
+OMP_LINE = "openmp runtime: "
+
+# LLVM's OpenMP runtime — see `scripts/eznec_freeze/build.py`'s OPENMP_DLL for
+# why it is this and not `vcomp140.dll`.
+_OPENMP_DLL = "libomp140.x86_64.dll"
+
+
+def _omp_runtime_path() -> str | None:
+    """The full path of the OpenMP runtime THIS process actually mapped.
+
+    "Loaded" is not the whole question on Windows: a box with a copy in
+    System32 loads one either way, and System32 is on the loader's search path
+    unconditionally — no environment can take it off.  So the interesting fact
+    is WHICH copy answered, and only a full path says that.
+
+    `GetModuleHandleW` loads nothing; it answers for a module already mapped,
+    which the accelerator's import did.  The explicit `c_void_p` restype is the
+    truncation trap `build.py`'s `_openmp_runtime` documents: the default
+    `c_int` cuts a 64-bit HMODULE in half and the answer is then a wrong path
+    or none.  A seam of its own so the log line's SHAPE is testable off
+    Windows.
+    """
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetModuleHandleW.restype = ctypes.c_void_p
+    kernel32.GetModuleHandleW.argtypes = [ctypes.c_wchar_p]
+    kernel32.GetModuleFileNameW.restype = ctypes.c_uint32
+    kernel32.GetModuleFileNameW.argtypes = [
+        ctypes.c_void_p,
+        ctypes.c_wchar_p,
+        ctypes.c_uint32,
+    ]
+    handle = kernel32.GetModuleHandleW(_OPENMP_DLL)
+    if not handle:
+        return None
+    buffer = ctypes.create_unicode_buffer(32768)
+    if not kernel32.GetModuleFileNameW(handle, buffer, len(buffer)):
+        return None
+    return buffer.value
+
 
 def accelerator_status() -> str:
     """The one log line that says whether this daemon's fast path is live.
@@ -97,7 +141,14 @@ def _configure(log, argv: list[str]) -> None:
     """The daemon's once-per-process log preamble; None to proceed."""
     if argv:
         log.write(f"unused server arguments: {argv}\n")
-    log.write(f"{accelerator_status()}\n")
+    status = accelerator_status()
+    log.write(f"{status}\n")
+    # Windows only, and only when the fast path IS live: there "loaded" alone
+    # does not say the bundle is self-contained, because a copy in System32 or
+    # a Visual Studio tree serves an install that ships nothing.  A pure-Python
+    # process has no runtime to name and gets no second line.
+    if sys.platform == "win32" and status.startswith(ACCEL_OK):
+        log.write(f"{OMP_LINE}{_omp_runtime_path() or 'NOT MAPPED'}\n")
     return None
 
 

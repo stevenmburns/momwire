@@ -177,6 +177,45 @@ def test_the_daemon_logs_whether_its_accelerator_is_live(monkeypatch):
         assert "PURE-PYTHON FALLBACK" in text and named in text
 
 
+def test_only_windows_logs_where_its_openmp_runtime_came_from(monkeypatch):
+    """The Windows half of momwire#737's gate, pinned off Windows.
+
+    "Loaded" is not self-containment there: windows-latest keeps a copy of
+    ``libomp140.x86_64.dll`` in System32, which is on the loader's search path
+    unconditionally, so a bundle that ships nothing still loads one and looks
+    healthy on CI while a user's box falls back. The daemon therefore logs
+    WHICH copy answered, and smoke gate 7 requires that path to be inside the
+    bundle. ``_omp_runtime_path`` is a seam so the line's shape is testable
+    where there is no kernel32.
+    """
+    from momwire import _accel
+
+    log = io.StringIO()
+    _resident._configure(log, [])
+    assert _resident.OMP_LINE not in log.getvalue(), "the line is win32-only"
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    bundled = r"C:\Program Files\momwire-eznec\_internal\libomp140.x86_64.dll"
+    monkeypatch.setattr(_resident, "_omp_runtime_path", lambda: bundled)
+    log = io.StringIO()
+    _resident._configure(log, [])
+    assert f"{_resident.OMP_LINE}{bundled}" in log.getvalue()
+
+    # A NULL module handle: the extensions are loaded and nothing named the
+    # runtime, which the gate must read as unproven rather than as a path.
+    monkeypatch.setattr(_resident, "_omp_runtime_path", lambda: None)
+    log = io.StringIO()
+    _resident._configure(log, [])
+    assert f"{_resident.OMP_LINE}NOT MAPPED" in log.getvalue()
+
+    # Pure-Python has no runtime to name; the accelerator line already said
+    # everything, and a second line would only invite a false reading.
+    monkeypatch.setattr(_accel, "LOADED", False)
+    log = io.StringIO()
+    _resident._configure(log, [])
+    assert _resident.OMP_LINE not in log.getvalue()
+
+
 def test_an_idle_server_stops_itself_and_unlinks_its_socket(tmp_path, transport):
     """Both transports leave nothing behind: a socket file and a rendezvous
     file are the same litter to the next client, and the unlink that removes
