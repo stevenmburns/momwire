@@ -57,6 +57,11 @@ TWIN_NAME = "momwire-eznec-razor-nec5"
 TWIN_BASIS = "razor-nec5"
 ENGINE_NAME = "momwire-eznec-engine"
 
+# A name that asked for a basis and spelt none: the marker with nothing after
+# it. momwire#733's divergence case — this is a NAMED (empty) basis, distinct
+# from CLIENT_NAME's "no marker at all", and must key its own daemon.
+EMPTY_NAME = "momwire-eznec-"
+
 # smoke.py's gate-4 deck: a free-space dipole every basis hosts and on which
 # the two SHIPPED bases disagree — bspline answers 85.073+45.369j where
 # razor-nec5 answers 79.948+29.919j, the licensed engine's own number. A twin
@@ -387,16 +392,74 @@ def test_each_formulation_gets_its_own_warm_server(client_exe, tmp_path):
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_the_key_is_the_d2_digest_and_not_a_private_hash(client_exe, tmp_path):
+def test_a_named_empty_basis_never_shares_the_defaults_server(client_exe, tmp_path):
+    """momwire#733's divergence: the default (no marker) and a name that asked
+    for a basis and spelt none (the marker alone, ``momwire-eznec-``) are two
+    DIFFERENT engines — the first spawns the default formulation, the second
+    spawns a daemon that refuses every deck by name. Before the fix both
+    reduced to the same ``config_key`` element (the bare, empty suffix) and
+    shared ONE socket: whichever spawned first poisoned the other, silently
+    answering the empty-named copy or silently refusing the default.
+
+    The default runs FIRST so its daemon is the one that could have won the
+    shared socket under the old key; the empty-named copy runs second and
+    must still refuse under its OWN daemon rather than inherit the answer
+    already resident."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(CLIENT_NAME, EMPTY_NAME))
+    room = _room()
+    deck = _deck(BASIS_DECK)
+    default_expected = _oracle(deck, tmp_path)
+
+    try:
+        default_out = tmp_path / "divergence-default.out"
+        proc = _run(bundle, CLIENT_NAME, [str(deck), str(default_out)], room)
+        assert proc.returncode == 0, proc.stderr
+        default_text = default_out.read_bytes().decode("latin-1")
+        assert "ANTENNA INPUT PARAMETERS" in default_text
+        assert default_out.read_bytes() == default_expected
+
+        empty_out = tmp_path / "divergence-empty.out"
+        proc = _run(bundle, EMPTY_NAME, [str(deck), str(empty_out)], room)
+        assert proc.returncode == 0, proc.stderr
+        empty_text = empty_out.read_bytes().decode("latin-1")
+        assert "NEC ERROR" in empty_text
+        assert "ANTENNA INPUT PARAMETERS" not in empty_text
+
+        # One warm server per formulation, the empty suffix being a
+        # formulation that refuses — never one shared socket poisoning
+        # either printout.
+        assert len(_listening(room)) == 2, _listening(room)
+        assert len(sorted(room.glob("*.sock"))) == 2
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    "name, basis_element",
+    [
+        pytest.param(TWIN_NAME, f"basis={TWIN_BASIS}", id="named"),
+        pytest.param(CLIENT_NAME, "default", id="unnamed"),
+    ],
+)
+def test_the_key_is_the_d2_digest_and_not_a_private_hash(
+    client_exe, tmp_path, name, basis_element
+):
     """#718 D2 pins the key's SHAPE: sha256 first-16-hex over
     ``eznec.<major>.<minor>``, the engine exe's resolved path, ``repr(900.0)``
-    and the basis, NUL-joined. Every other gate here only needs the key to
-    agree with itself, so a drifted vendored SHA-256 or a reordered hash
-    input would pass them all — but the key is observable as the address
+    and the basis element, NUL-joined. Every other gate here only needs the
+    key to agree with itself, so a drifted vendored SHA-256 or a reordered
+    hash input would pass them all — but the key is observable as the address
     FILENAME, so the recorded shape is checkable against the Python spelling
-    of the same digest. The twin's name, not the default's, so the basis
-    input's position is part of what is pinned."""
-    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(TWIN_NAME,))
+    of the same digest.
+
+    The basis element is ``"default"`` for a name that selects nothing and
+    ``f"basis={suffix}"`` for a name that selects one — momwire#733's rule,
+    checked here for BOTH spellings so the digest test pins the element, not
+    just its presence."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(name,))
     room = _room()
     deck = _deck(BASIS_DECK)
     major, minor = mech.dist_version()
@@ -405,7 +468,7 @@ def test_the_key_is_the_d2_digest_and_not_a_private_hash(client_exe, tmp_path):
             f"eznec.{major}.{minor}",
             os.path.realpath(str(bundle / ENGINE_NAME)),
             repr(900.0),
-            TWIN_BASIS,
+            basis_element,
         ]
     )
     # The suffix the client's spawn pin chooses on this platform (unix on
@@ -414,7 +477,7 @@ def test_the_key_is_the_d2_digest_and_not_a_private_hash(client_exe, tmp_path):
 
     try:
         out = tmp_path / "key.out"
-        proc = _run(bundle, TWIN_NAME, [str(deck), str(out)], room)
+        proc = _run(bundle, name, [str(deck), str(out)], room)
         assert proc.returncode == 0, proc.stderr
         addresses = sorted(p.name for p in room.glob(f"*{suffix}"))
         assert addresses == [f"{expected_key}{suffix}"], addresses

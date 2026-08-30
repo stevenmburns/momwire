@@ -19,6 +19,7 @@ from __future__ import annotations
 import io
 import os
 import socket
+import sys
 import threading
 import time
 from pathlib import Path
@@ -183,6 +184,21 @@ def test_the_client_modules_import_stdlib_only():
         assert not offenders, f"{module.__name__}: {offenders}"
 
 
+def test_config_key_tells_a_named_empty_basis_from_no_basis_at_all():
+    """momwire#733's rule, at the unit the daemons are keyed by: ``basis=""``
+    (a name that asked for a basis and spelt none) and ``basis=None`` (a name
+    that asked for nothing) must hash to DIFFERENT keys — the old
+    ``basis or ""`` collapsed them into one socket, and the daemon that
+    spawned first silently answered for both. A third, ordinarily-named
+    basis is a third key, distinct from either."""
+    key_unnamed = eznec_client.config_key(None, eznec_client.DEFAULT_IDLE_TIMEOUT)
+    key_empty = eznec_client.config_key("", eznec_client.DEFAULT_IDLE_TIMEOUT)
+    key_named = eznec_client.config_key("razor-nec5", eznec_client.DEFAULT_IDLE_TIMEOUT)
+    assert key_empty != key_unnamed
+    assert key_empty != key_named
+    assert key_unnamed != key_named
+
+
 def test_the_client_falls_back_to_the_one_shot_when_no_server_can_start(
     monkeypatch, tmp_path
 ):
@@ -218,6 +234,29 @@ def test_the_last_ditch_printout_names_the_failure_and_still_exits_zero(
     assert "OSError" in text
 
 
+def test_a_named_empty_basis_reaches_rung_threes_refusal_not_the_default(
+    monkeypatch, tmp_path
+):
+    """momwire#733: a client copy named ``momwire-eznec-client-`` asked for a
+    basis and spelt none — the EMPTY suffix, not "no marker at all" — so it
+    must reach `_shell.main`'s own per-deck refusal on rung 3, never round to
+    the default engine's answer the way ``if basis:`` used to."""
+
+    def refuse(*args, **kwargs):
+        raise TimeoutError("no server for you")
+
+    monkeypatch.setattr(eznec_client, "_served_bytes", refuse)
+    deck = _deck("0010")
+    out = tmp_path / "client.out"
+    monkeypatch.setattr(
+        sys, "argv", [str(tmp_path / "momwire-eznec-client-"), str(deck), str(out)]
+    )
+    assert eznec_client.main(None) == 0
+    text = out.read_bytes().decode("latin-1")
+    assert "NEC ERROR" in text
+    assert "ANTENNA INPUT PARAMETERS" not in text
+
+
 def test_argument_errors_print_and_write_nothing(capsys, tmp_path):
     assert eznec_client.main([]) == 0
     assert eznec_client.ARGUMENT_ERROR_INPUT in capsys.readouterr().out
@@ -240,7 +279,6 @@ def test_the_client_end_to_end_spawns_one_server_and_reuses_it(tmp_path, transpo
     import shutil
     import signal
     import subprocess
-    import sys
     import tempfile
 
     # NOT under tmp_path: pytest's nested tmp directories can push the socket
@@ -312,7 +350,6 @@ def test_the_frozen_entry_file_serves_a_deck_warm(tmp_path, transport):
     the native client has nothing to spawn on a user's box."""
     import shutil
     import subprocess
-    import sys
     import tempfile
 
     entry = (
@@ -583,7 +620,6 @@ def test_the_obtain_lock_is_released_when_its_holder_dies(tmp_path):
     out with a heuristic. Nothing below ever unlocks anything.
     """
     import subprocess
-    import sys
 
     lock = str(tmp_path / "srv.sock.lock")
     holder = subprocess.Popen(
