@@ -535,6 +535,32 @@ def _remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap=None):
     )
 
 
+class _PreparedChunks:
+    """The numpy fill's chunk list, BOUND to the source set it was built from.
+
+    :class:`_FusedMoments` binds the geometry prepare was handed; this is the
+    same property for the other lane, and it exists so the two lanes agree for
+    a REASON rather than by luck (momwire#745). The numpy replay used to read
+    `seg_h` back off a `geom` argument its callers passed as the REAL geometry
+    even for the image block, whose chunks were prepared from the MIRRORED
+    source set. That agreed only because `_image_sources` mirrors — and a
+    mirror preserves segment lengths. Bind them here and the coincidence is
+    not load-bearing any more.
+
+    Iterable, because a chunk list is what every consumer wants and the
+    binding is the only thing being added.
+    """
+
+    __slots__ = ("chunks", "seg_h")
+
+    def __init__(self, chunks, seg_h):
+        self.chunks = chunks
+        self.seg_h = seg_h
+
+    def __iter__(self):
+        return iter(self.chunks)
+
+
 class _FusedMoments:
     """The C++ fill's stand-in for a prepared moment chunk list (momwire#742).
 
@@ -555,11 +581,11 @@ class _FusedMoments:
     bit-for-bit the scalar in `a * a` (momwire#425).
 
     The `geom` captured is the one PREPARE was handed, which over a ground is
-    the MIRRORED source set. That matters: the numpy path reads `seg_h` back
-    off the `geom` argument of `_seg_moments_from_prepared`, which callers
-    pass as the real geometry even for the image block. It agrees today only
-    because a mirror preserves segment lengths (`_image_sources`); binding the
-    source set here removes the coincidence rather than relying on it.
+    the MIRRORED source set. :class:`_PreparedChunks` binds the same thing for
+    the numpy lane (momwire#745), so neither path can read segment lengths off
+    a geometry that is not the source set it integrated — the agreement is a
+    property of both spellings now, not of `_image_sources` happening to
+    preserve lengths.
     """
 
     __slots__ = (
@@ -1937,9 +1963,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             u = tau[None, :, :] - u_r[:, :, None]
             R = np.sqrt(u * u + rho2[:, :, None])
             chunks.append((lo, hi, R, m0s, m1s, ekc))
-        return chunks
+        return _PreparedChunks(chunks, seg_h)
 
-    def _seg_moments_from_prepared(self, chunks, geom, k, n_obs, *, need_m1=True):
+    def _seg_moments_from_prepared(self, chunks, k, n_obs, *, need_m1=True):
         """Finish :meth:`_seg_moments_prepare`'s chunks at one wavenumber.
 
         Only the smooth remainder (exp(−jkR)−1)/(4πR) is computed here —
@@ -1973,7 +1999,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if isinstance(chunks, _FusedMoments):
             return chunks.evaluate(self, k, need_m1=need_m1, n_obs=n_obs)
 
-        seg_h = geom["seg_h"]
+        # The SOURCE set prepare was handed, off the token that carries it --
+        # never a geometry passed in beside it (momwire#745).
+        seg_h = chunks.seg_h
         n_seg = seg_h.size
         xg, wg = leggauss(self.n_qp_source)
         # Source quadrature in each segment's own local arc coordinate.
@@ -2043,9 +2071,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         observers lies on (`_ek_obs_labels_path`) and supplies the spec.
         """
         chunks = self._seg_moments_prepare(obs, geom, self._kernel_radius(geom), ek=ek)
-        return self._seg_moments_from_prepared(
-            chunks, geom, k, obs.shape[0], need_m1=need_m1
-        )
+        return self._seg_moments_from_prepared(chunks, k, obs.shape[0], need_m1=need_m1)
 
     # ------------------------------------------------------------------
     # assembly
@@ -2824,7 +2850,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
 
         M0c, _ = self._seg_moments_from_prepared(
-            sources["t2_chunks"], geom, k, prepared["n_cent"], need_m1=False
+            sources["t2_chunks"], k, prepared["n_cent"], need_m1=False
         )
         if w_Phi_fn is not None:
             n_cent = prepared["n_cent"]
@@ -2889,7 +2915,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Q = None if rem_fn is None else np.empty_like(T1)
         for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
             self._checkpoint()
-            M0, M1 = self._seg_moments_from_prepared(static, geom, k, n_obs_chunk)
+            M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
             mom_a = M1[:, s_a] / h_a[None, :]
             mom_b = M1[:, s_b] / h_b[None, :]
             if fall_a.size:
