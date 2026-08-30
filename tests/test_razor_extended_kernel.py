@@ -318,6 +318,15 @@ _EK_ENTRY_POINTS = (
 
 @pytest.fixture
 def ek_call_counts(monkeypatch):
+    # The counters watch the NUMPY fill's entry points, so the fill they
+    # watch is the one they are pointed at (momwire#742). With the C++
+    # moment kernel serving, the EK arithmetic these five names carry moves
+    # into the extension and every counter reads zero whatever the solver was
+    # asked for — the #822 hole exactly: a probe that cannot tell the paths
+    # apart gates nothing. The kernel path's own form of gate (b) is
+    # `test_a_ek_off_is_structurally_absent_from_the_kernel_call` below,
+    # which reads the labels the kernel is handed.
+    monkeypatch.setattr(_razor, "_FORCE_NUMPY", True)
     counts = {}
     for owner, attr in _EK_ENTRY_POINTS:
         counts[attr] = counts.get(attr, 0)
@@ -370,6 +379,64 @@ def test_a_the_counters_fire_when_ek_is_on(ek_call_counts):
     above pass vacuously."""
     _dipole(extended_kernel=True).compute_impedance()
     assert all(v > 0 for v in ek_call_counts.values()), ek_call_counts
+
+
+@pytest.mark.skipif(
+    not _razor._use_razor_fill_accel(),
+    reason="razor fill accelerator not built, or forced off for this run",
+)
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {},
+        {"nec5_quadrature": True},
+        {"ground_z": 0.0},
+        {"ground_z": 0.0, "ground_eps": (13.0, 5e-3)},
+        {"wire_conductivity": 5.8e7},
+    ],
+)
+def test_a_ek_off_is_structurally_absent_from_the_kernel_call(monkeypatch, kw):
+    """Gate (b) on the C++ path (momwire#742).
+
+    The kernel's EK is switched by the eligibility LABELS: empty group arrays
+    are how `_ek_pair_mask`'s "every pair, unconditionally" is spelled across
+    the seam, and `razor_seg_moments` never enters one line of extended-kernel
+    arithmetic when they are empty. So the structural claim on this path is a
+    claim about the arguments, and it is checkable from Python without
+    trusting the kernel's internals.
+    """
+    seen = []
+    original = _razor._acc.razor_seg_moments
+
+    def spy(*args, **kwargs):
+        seen.append((args[9].size, args[10].size, args[11].size))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(_razor._acc, "razor_seg_moments", spy)
+    _dipole(**kw).compute_impedance()
+    assert seen, "the kernel never ran — this build's dispatch is not wired"
+    assert all(sizes == (0, 0, 0) for sizes in seen), seen
+
+
+@pytest.mark.skipif(
+    not _razor._use_razor_fill_accel(),
+    reason="razor fill accelerator not built, or forced off for this run",
+)
+def test_a_the_kernel_label_probe_fires_when_ek_is_on(monkeypatch):
+    """The control for the probe above: EK ON must populate every label
+    array, or the gate passes vacuously on a build that silently lost the
+    extended kernel."""
+    seen = []
+    original = _razor._acc.razor_seg_moments
+
+    def spy(*args, **kwargs):
+        seen.append((args[9].size, args[10].size, args[11].size))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(_razor._acc, "razor_seg_moments", spy)
+    _dipole(extended_kernel=True).compute_impedance()
+    assert seen
+    assert all(all(s > 0 for s in sizes) for sizes in seen), seen
 
 
 # ==========================================================================
