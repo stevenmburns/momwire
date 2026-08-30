@@ -2,7 +2,7 @@
 // Generated from the monolith's lines 1-120, then slimmed by the #710 review:
 // the kernel headers (`_bspline_*_moments_inline.h`, `_contour_engine_inline.h`)
 // moved into the TUs that use them, so editing one kernel no longer
-// ccache-misses all five TUs — per-TU staleness is the split's whole point.
+// ccache-misses every TU — per-TU staleness is the split's whole point.
 #pragma once
 
 // M_PI is not in the C++ standard. GCC/glibc define it unconditionally, but
@@ -33,6 +33,7 @@ void register_bspline(py::module_ &m);
 void register_sinusoidal(py::module_ &m);
 void register_somm(py::module_ &m);
 void register_mw568(py::module_ &m);
+void register_razor(py::module_ &m);
 
 // Ubuntu/glibc <cmath> headers don't carry `omp declare simd` markers for the
 // libmvec routines, so GCC's auto-vectorizer can't substitute the vectorized

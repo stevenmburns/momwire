@@ -97,12 +97,12 @@ if sys.platform == "win32":
     # neutralizes the `omp simd` directives under _MSC_VER, leaving /arch:AVX2
     # autovectorization to handle the inner loops. /arch:AVX2 matches the Linux
     # AVX2 baseline.
-    # /MP: MSVC's own parallel compile across the five TUs. Needed because
+    # /MP: MSVC's own parallel compile across the accelerator's TUs. Needed because
     # pybind11's ParallelCompile below is a verified NO-OP here — it patches
     # the distutils base Compiler.compile, and MSVC's compiler class overrides
     # compile() in its own class dict, so the patch never runs. Without /MP
     # the split would make Windows wheel builds strictly SLOWER than the
-    # monolith (five serial preamble parses) — the #710 review's finding.
+    # monolith (one serial preamble parse per TU) — the #710 review's finding.
     extra_compile_args = ["/O2", "/arch:AVX2", "/openmp:llvm", "/fp:fast", "/MP"]
     extra_link_args = []
 elif sys.platform == "darwin":
@@ -197,6 +197,7 @@ _ACCEL_SOURCES = [
     "src/momwire/_accel_sinusoidal.cpp",
     "src/momwire/_accel_somm.cpp",
     "src/momwire/_accel_mw568.cpp",
+    "src/momwire/_accel_razor.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
@@ -210,7 +211,7 @@ _NEAR_HEADERS = [
 ] + sorted(glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True))
 
 # Compile the accelerator's translation units concurrently (momwire#687). With
-# the old single-TU monolith this bought nothing; with five TUs it is what
+# the old single-TU monolith this bought nothing; with the split it is what
 # makes a COLD build -- CI's first run, and every wheel-matrix job -- cheaper
 # rather than merely no worse, since splitting a TU adds total compiler work
 # (the shared preamble is parsed once per TU) even as it shrinks the

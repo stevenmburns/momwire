@@ -132,6 +132,11 @@ _CANCELLABLE_KERNELS = (
     "bspline_assemble_offedge_block_refl_ek",
     "sinusoidal_galerkin_far_fill",
     "somm_six_integrals_batch",
+    # The razor-blade formulation's fused moment fill (momwire#742). It polls
+    # between observer tiles, which is the only granularity that exists there:
+    # the whole fill is one call per (observer set, source set, k), so a
+    # cancelled razor solve reaches Python again only through this remap.
+    "razor_seg_moments",
 )
 
 
