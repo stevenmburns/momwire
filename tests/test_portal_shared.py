@@ -627,6 +627,28 @@ def test_deck_warnings_go_to_the_server_log_not_back_down_the_socket(runtime):
 
 
 @pytest.mark.integration
+def test_the_portal_daemon_logs_whether_its_accelerator_is_live(runtime):
+    """momwire#740, and momwire#737 before it: "was the accelerator live" is
+    the first question of every slowness report, and the answer has to be in
+    the log a real deployment leaves behind rather than on the stderr nobody
+    drains. The eznec daemon has said it since #739; this one has the same
+    `configure` hook and said nothing.
+
+    Asserted on a SPAWNED daemon, not a StringIO: the wording is pinned on the
+    eznec side already, so what is worth proving here is that a daemon this
+    client actually started writes it where a field diagnosis would go
+    looking. Either verdict passes -- a box without the extensions built is
+    not a failing box -- but it must have committed to one of them.
+    """
+    from momwire.eznec._resident import ACCEL_OK
+
+    served = run_client(runtime, fixture_deck("dipole_free_space"))
+    assert served.returncode == 0
+    text = logs(runtime)
+    assert ACCEL_OK in text or "PURE-PYTHON FALLBACK" in text, text
+
+
+@pytest.mark.integration
 def test_a_body_unterminated_at_eof_is_served_over_the_socket(runtime):
     """#458: the connection's end of input terminates the deck the way NEC's
     own reader does. Through the shared server the stream ends when the client
