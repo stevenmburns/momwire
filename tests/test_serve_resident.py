@@ -18,8 +18,10 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
 import socket
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -74,9 +76,42 @@ def transport(request, monkeypatch):
 
 
 @pytest.fixture
-def eznec_server(tmp_path, transport):
+def short_room():
+    """A private directory with a SHORT name, for anything that BINDS.
+
+    Not ``tmp_path``: an AF_UNIX address is 104 bytes on the BSDs including
+    the terminator (``momwire_serve_client.SUN_PATH_MAX``), and pytest's
+    per-test directory hangs off a root the PLATFORM chooses -- about 25
+    bytes here (``/tmp/pytest-of-<user>/pytest-<n>``), about 76 on macOS,
+    where ``$TMPDIR`` is ``/var/folders/<2>/<32>/T``. Add pytest's own
+    directory name (the test's, to 30 characters) and a macOS socket starts
+    30-odd bytes over a limit the Linux one clears with room to spare.
+
+    That is exactly the shape momwire#748 had: four binding tests red on
+    macOS and green on every other lane, for a whole day, because the only
+    lane that could see them runs after the merge.
+
+    ``mkdtemp`` and not ``tmp_path_factory``, which would re-root under the
+    same long basetemp. One fixture and not a ``mkdtemp`` per test because
+    the rule already had three ad-hoc spellings, and the two sites that
+    never got one are the two that broke.
+    """
+    room = Path(tempfile.mkdtemp(prefix="mw-"))
+    # If a platform ever hands us a long ``$TMPDIR`` too, say THAT, rather
+    # than leaving an ``AF_UNIX path too long`` to surface out of a server
+    # thread as a client waiting on a socket that never appears.
+    budget = mech.SUN_PATH_MAX - len(os.fsencode(str(room))) - 1
+    assert budget >= 32, f"{room} leaves only {budget} bytes for an address"
+    try:
+        yield room
+    finally:
+        shutil.rmtree(room, ignore_errors=True)
+
+
+@pytest.fixture
+def eznec_server(short_room, transport):
     """A live in-process eznec server on a private address."""
-    path = str(tmp_path / f"srv{mech.address_suffix(transport)}")
+    path = str(short_room / f"srv{mech.address_suffix(transport)}")
     log = io.StringIO()
 
     def connection(conn, number, log_stream, solve_lock):
@@ -220,11 +255,11 @@ def test_only_windows_logs_where_its_openmp_runtime_came_from(monkeypatch):
     assert _resident.OMP_LINE not in log.getvalue()
 
 
-def test_an_idle_server_stops_itself_and_unlinks_its_socket(tmp_path, transport):
+def test_an_idle_server_stops_itself_and_unlinks_its_socket(short_room, transport):
     """Both transports leave nothing behind: a socket file and a rendezvous
     file are the same litter to the next client, and the unlink that removes
     them is the same line."""
-    path = str(tmp_path / f"idle{mech.address_suffix(transport)}")
+    path = str(short_room / f"idle{mech.address_suffix(transport)}")
 
     def connection(conn, number, log_stream, solve_lock):  # pragma: no cover
         raise AssertionError("nothing connects in this test")
@@ -337,7 +372,9 @@ def test_argument_errors_print_and_write_nothing(capsys, tmp_path):
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_the_client_end_to_end_spawns_one_server_and_reuses_it(tmp_path, transport):
+def test_the_client_end_to_end_spawns_one_server_and_reuses_it(
+    tmp_path, short_room, transport
+):
     """The deployment claim, as a real process tree: two client invocations,
     one spawned server, both printouts byte-identical to the one-shot's.
 
@@ -346,18 +383,14 @@ def test_the_client_end_to_end_spawns_one_server_and_reuses_it(tmp_path, transpo
     separate processes here, and the point of the gate is that they agree
     about the transport without ever exchanging a word about it.
     """
-    import os
-    import shutil
     import signal
     import subprocess
-    import tempfile
 
-    # NOT under tmp_path: pytest's nested tmp directories can push the socket
-    # past sun_path (the client then falls back to the one-shot and the test
-    # would pass without testing residency — sockets == [] is that ladder
-    # working, not the server). A short private dir mirrors the portal
-    # selftest's spelling.
-    room = Path(tempfile.mkdtemp(prefix="mw-eznec-e2e-"))
+    # ``short_room`` and NOT tmp_path: an over-long socket makes the client
+    # fall back to the one-shot, and the test would then pass without ever
+    # testing residency — sockets == [] is that ladder working, not the
+    # server.
+    room = short_room
     env = {
         **os.environ,
         "MOMWIRE_PORTAL_RUNTIME_DIR": str(room),
@@ -409,26 +442,21 @@ def test_the_client_end_to_end_spawns_one_server_and_reuses_it(tmp_path, transpo
                             os.kill(int(word.split("=", 1)[1]), signal.SIGTERM)
                         except (OSError, ValueError):
                             pass
-        shutil.rmtree(room, ignore_errors=True)
 
 
 @pytest.mark.integration
-def test_the_frozen_entry_file_serves_a_deck_warm(tmp_path, transport):
+def test_the_frozen_entry_file_serves_a_deck_warm(tmp_path, short_room, transport):
     """momwire#718 phase 3's spawn target, proven as a process: the frozen
     exe's ``__main__`` is `scripts/eznec_freeze/entry.py`, so the entry FILE,
     run the way PyInstaller runs it and asked to ``--serve``, must come up
     listening and answer a deck byte-identical to the one-shot.  Without this
     the native client has nothing to spawn on a user's box."""
-    import shutil
     import subprocess
-    import tempfile
 
     entry = (
         Path(__file__).resolve().parent.parent / "scripts" / "eznec_freeze" / "entry.py"
     )
-    # A short private dir, not tmp_path — the sun_path rule the e2e above
-    # records.
-    room = Path(tempfile.mkdtemp(prefix="mw-entry-serve-"))
+    room = short_room
     path = str(room / f"srv{mech.address_suffix(transport)}")
     deck = _deck("0010")
     expected = _expected_file_bytes(deck, tmp_path)
@@ -468,7 +496,6 @@ def test_the_frozen_entry_file_serves_a_deck_warm(tmp_path, transport):
     finally:
         proc.terminate()
         proc.wait(timeout=10)
-        shutil.rmtree(room, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------
@@ -521,28 +548,20 @@ def test_an_explicit_unix_transport_never_falls_back_silently(monkeypatch, tmp_p
         mech.connect(str(tmp_path / "nothing.sock"))
 
 
-def test_the_address_suffix_tells_the_two_transports_apart(monkeypatch, tmp_path):
+def test_the_address_suffix_tells_the_two_transports_apart(monkeypatch, short_room):
     """A directory can hold leftovers from a run in the other mode. The
     suffixes differ so a stale ``.sock`` can never be read as a rendezvous
     (nor a ``.port`` connected to as a socket)."""
-    import shutil
-    import tempfile
-
-    # A SHORT dir, not tmp_path: this asks for the unix-mode SPELLING, and
-    # pytest's nested tmp on the Windows runner already overruns sun_path.
-    room = tempfile.mkdtemp(prefix="mw-sfx-")
-    request_cleanup = lambda: shutil.rmtree(room, ignore_errors=True)  # noqa: E731
-    try:
-        monkeypatch.setenv("MOMWIRE_PORTAL_RUNTIME_DIR", room)
-        monkeypatch.setenv(mech.TRANSPORT_ENV, "unix")
-        assert mech.socket_path("k").endswith(".sock")
-        monkeypatch.setenv(mech.TRANSPORT_ENV, "tcp")
-        assert mech.socket_path("k").endswith(".port")
-        assert mech.address_suffix(mech.UNIX) != mech.address_suffix(mech.TCP)
-        with pytest.raises(ValueError, match="is not a transport"):
-            mech.address_suffix("carrier-pigeon")
-    finally:
-        request_cleanup()
+    # ``short_room`` and not tmp_path: this asks for the unix-mode SPELLING,
+    # and pytest's nested tmp already overruns sun_path on two runners.
+    monkeypatch.setenv("MOMWIRE_PORTAL_RUNTIME_DIR", str(short_room))
+    monkeypatch.setenv(mech.TRANSPORT_ENV, "unix")
+    assert mech.socket_path("k").endswith(".sock")
+    monkeypatch.setenv(mech.TRANSPORT_ENV, "tcp")
+    assert mech.socket_path("k").endswith(".port")
+    assert mech.address_suffix(mech.UNIX) != mech.address_suffix(mech.TCP)
+    with pytest.raises(ValueError, match="is not a transport"):
+        mech.address_suffix("carrier-pigeon")
 
 
 def test_the_sun_path_limit_is_a_unix_rule_only(monkeypatch, tmp_path):
