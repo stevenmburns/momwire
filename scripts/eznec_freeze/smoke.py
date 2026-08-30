@@ -37,19 +37,29 @@ Seven gates, derived from the seam's own contract (momwire#497 U1):
    none means the fallback ladder carried the run silently, which is a
    FAILURE of this gate rather than a pass, and two means a double spawn.
 7. **Self-containment of the accelerator** (nt only) — the bundle carries
-   ``libomp140.x86_64.dll`` and the daemon reports its fast path LIVE with the
-   child's ``PATH`` cut back to the system directories.  momwire#737 shipped
-   for two phases without that DLL, so every deployed solve was pure Python
-   (15.6x at 201 segments, 20.8x at 401), and CI could not see it: the runner
-   has Visual Studio, so a toolchain copy on ``PATH`` rescued the import and
-   the bundle looked healthy.  Stripping ``PATH`` is what makes this gate able
-   to go RED on the runner — the launcher spawns the engine with the inherited
-   environment, so the daemon inherits the strip — and the daemon's own
-   ``accelerators:`` line is the positive observable, because warning-absence
-   is also what a rescued import looks like.  POSIX skips it and says why: the
-   Linux/macOS wheels link the SYSTEM OpenMP runtime on purpose (``_accel.py``
-   documents the shared-runtime reason), so self-containment is not the claim
-   there and PyInstaller collects the shared libraries itself.
+   ``libomp140.x86_64.dll`` AND the daemon loaded the bundle's own copy of it.
+   momwire#737 shipped two phases of bundle without that DLL, so every
+   deployed solve was pure Python (15.6x at 201 segments, 20.8x at 401).
+
+   The runner-vs-field asymmetry is the whole reason this gate has to name a
+   PATH.  windows-latest carries the runtime in ``System32`` (and a Visual
+   Studio toolchain carries more copies), and ``System32`` is on the loader's
+   search path unconditionally — no environment strips it — so on CI the
+   import is rescued and *every* observable short of the source says the
+   bundle is healthy: no warning, accelerators loaded, correct answers, full
+   speed.  The field box has no such copy, which is why a user met the
+   20x-slow bundle CI had signed off eight times.  So this gate reads the
+   daemon's ``openmp runtime:`` line and requires the path to resolve INSIDE
+   the bundle directory; a path under ``System32`` or a toolchain tree is a
+   named failure, not a pass.  The ``PATH`` strip stays as a belt (it does
+   remove toolchain directories, and the launcher spawns the engine with the
+   inherited environment so the daemon inherits it) — but the source check is
+   what makes the gate able to go RED on the runner.
+
+   POSIX skips it and says why: the Linux/macOS wheels link the SYSTEM OpenMP
+   runtime on purpose (``_accel.py`` documents the shared-runtime reason), so
+   self-containment is not the claim there and PyInstaller collects the
+   shared libraries itself.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -242,11 +252,11 @@ def _gate_self_contained(exe: Path, work: Path, room: Path) -> int:
         )
         return 0
 
-    # Imported, not restated: the daemon writes this marker and this gate reads
-    # it, and two spellings of one fact is how a gate ends up certifying
-    # nothing.  Local because the module import costs a NumPy load that the
-    # POSIX skip above has no reason to pay.
-    from momwire.eznec._resident import ACCEL_OK
+    # Imported, not restated: the daemon writes these markers and this gate
+    # reads them, and two spellings of one fact is how a gate ends up
+    # certifying nothing.  Local because the module import costs a NumPy load
+    # that the POSIX skip above has no reason to pay.
+    from momwire.eznec._resident import ACCEL_OK, OMP_LINE
 
     failures = 0
     bundle = exe.parent
@@ -287,9 +297,43 @@ def _gate_self_contained(exe: Path, work: Path, room: Path) -> int:
         _dump_room(room)
         failures += 1
     else:
-        print(f"ok   {exe.name}: accelerator live from the bundle's own files")
+        print(f"ok   {exe.name}: accelerator live")
+        failures += _openmp_source(bundle, room, OMP_LINE)
 
     return failures
+
+
+def _openmp_source(bundle: Path, room: Path, marker: str) -> int:
+    """WHICH copy of the runtime the daemon loaded — the gate's real verdict.
+
+    Inside the bundle or it does not count: the daemon exe lives there, so the
+    shipped copy resolves under the bundle directory (``_internal/`` included)
+    and every rescuing copy — System32, a Visual Studio tree — resolves
+    outside it.  ``normcase`` because Windows paths are case-insensitive and
+    the loader is free to answer in any casing it likes.
+    """
+    lines = log_lines(room, marker)
+    if not lines:
+        print(f"FAIL {marker.strip()} missing from the daemon's log")
+        return 1
+    where = lines[-1].split(marker, 1)[1].strip()
+    if where == "NOT MAPPED":
+        # Accelerators loaded and no OpenMP runtime is mapped: a future build
+        # that stopped linking one, which makes this gate's subject moot and
+        # its answer meaningless rather than green.
+        print(f"FAIL {OPENMP_DLL}: accelerators loaded but no runtime is mapped")
+        return 1
+    root = os.path.normcase(str(bundle.resolve()))
+    loaded = os.path.normcase(str(Path(where).resolve()))
+    if not loaded.startswith(root + os.sep):
+        print(
+            f"FAIL {OPENMP_DLL}: the engine loaded {where} — a copy from "
+            "OUTSIDE the bundle rescued the import, which is exactly what "
+            "hides this bug on a runner and not on a user's box"
+        )
+        return 1
+    print(f"ok   {OPENMP_DLL}: loaded from the bundle ({where})")
+    return 0
 
 
 def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
