@@ -113,13 +113,13 @@ crossgate:
 memgate:
 	$(PY) pytest tests/ -m memgate -n0
 
-# ci.yml `lint` job. CI pins ruff==0.15.21; the guard below makes a missing
+# ci.yml `lint` job. CI pins ruff==0.16.5; the guard below makes a missing
 # local ruff a clear one-liner instead of a mid-lane stack trace, and names
 # the pin so a version disagreement with CI has a first place to look.
 lint:
 	@$(PY) ruff --version >/dev/null 2>&1 || { \
 	  echo "ruff is not installed in $(PYTHON)'s environment."; \
-	  echo "CI pins it: pip install ruff==0.15.21   (ci.yml lint job)"; \
+	  echo "CI pins it: pip install ruff==0.16.5    (ci.yml lint job)"; \
 	  exit 1; }
 	$(PY) ruff check
 	$(PY) ruff format --check
