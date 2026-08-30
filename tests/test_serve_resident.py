@@ -149,6 +149,34 @@ def test_the_server_answers_deck_after_deck_warm(eznec_server, tmp_path):
     assert server.served - start == 3
 
 
+def test_the_daemon_logs_whether_its_accelerator_is_live(monkeypatch):
+    """momwire#737: the drop-in shipped for two phases with every solve on the
+    pure-Python path and nothing saying so — the fallback warning goes to
+    stderr, which EZNEC never shows.  The daemon states it in its own log
+    before it binds, and the line has to be readable BOTH ways: smoke gate 7
+    greps a Windows bundle's log for ``ACCEL_OK``, so a half-loaded process
+    must not carry that substring."""
+    from momwire import _accel, _near_interface
+
+    log = io.StringIO()
+    assert _resident._configure(log, []) is None
+    assert _resident.ACCEL_OK in log.getvalue()
+
+    for module, flag, named in (
+        (_accel, "LOADED", "_accelerators"),
+        (_near_interface, "_HAVE_NEAR_INTERFACE_ACCEL", "_near_interface_accel"),
+    ):
+        with monkeypatch.context() as patch:
+            patch.setattr(module, flag, False)
+            log = io.StringIO()
+            _resident._configure(log, [])
+            text = log.getvalue()
+        assert _resident.ACCEL_OK not in text
+        # Named, because "the fast path is off" is half a diagnosis: the two
+        # extensions are separate files with separate reasons to be missing.
+        assert "PURE-PYTHON FALLBACK" in text and named in text
+
+
 def test_an_idle_server_stops_itself_and_unlinks_its_socket(tmp_path, transport):
     """Both transports leave nothing behind: a socket file and a rendezvous
     file are the same litter to the next client, and the unlink that removes
@@ -388,6 +416,12 @@ def test_the_frozen_entry_file_serves_a_deck_warm(tmp_path, transport):
             assert time.monotonic() < deadline, "the entry daemon never listened"
             time.sleep(0.05)
         assert _ask(path, deck.read_bytes()) == expected
+        # And it said, in the log a real deployment leaves behind, whether its
+        # fast path was live (momwire#737).  Asserted on a SPAWNED daemon and
+        # not only in-process: the StringIO unit test above pins the line's
+        # wording, this pins that a daemon actually writes it where smoke gate
+        # 7 goes looking.
+        assert _resident.ACCEL_OK in (room / "srv.log").read_text()
     finally:
         proc.terminate()
         proc.wait(timeout=10)

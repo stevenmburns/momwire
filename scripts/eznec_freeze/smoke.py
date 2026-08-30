@@ -7,7 +7,7 @@ Usage::
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-Six gates, derived from the seam's own contract (momwire#497 U1):
+Seven gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
@@ -36,6 +36,20 @@ Six gates, derived from the seam's own contract (momwire#497 U1):
    construction — so this counts the daemon's own ``listening pid=`` lines:
    none means the fallback ladder carried the run silently, which is a
    FAILURE of this gate rather than a pass, and two means a double spawn.
+7. **Self-containment of the accelerator** (nt only) — the bundle carries
+   ``libomp140.x86_64.dll`` and the daemon reports its fast path LIVE with the
+   child's ``PATH`` cut back to the system directories.  momwire#737 shipped
+   for two phases without that DLL, so every deployed solve was pure Python
+   (15.6x at 201 segments, 20.8x at 401), and CI could not see it: the runner
+   has Visual Studio, so a toolchain copy on ``PATH`` rescued the import and
+   the bundle looked healthy.  Stripping ``PATH`` is what makes this gate able
+   to go RED on the runner — the launcher spawns the engine with the inherited
+   environment, so the daemon inherits the strip — and the daemon's own
+   ``accelerators:`` line is the positive observable, because warning-absence
+   is also what a rescued import looks like.  POSIX skips it and says why: the
+   Linux/macOS wheels link the SYSTEM OpenMP runtime on purpose (``_accel.py``
+   documents the shared-runtime reason), so self-containment is not the claim
+   there and PyInstaller collects the shared libraries itself.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -83,6 +97,12 @@ FIXTURES = REPO / "tests" / "fixtures" / "eznec" / "decks"
 # about a FILE being there and a name read out of the thing being gated would
 # certify itself.
 ENGINE_STEM = "momwire-eznec-engine"
+
+# LLVM's OpenMP runtime, which both Windows extensions link because setup.py
+# builds them with `/openmp:llvm`.  Restated here for gate 5's reason: read out
+# of `build.py`, a build that bundled the wrong file would certify its own
+# spelling and this gate would prove nothing.
+OPENMP_DLL = "libomp140.x86_64.dll"
 
 
 def _shipped_variants() -> tuple[str, ...]:
@@ -136,6 +156,16 @@ def run(cmd: list[str], out: Path, env: dict[str, str] | None = None) -> float:
     return elapsed
 
 
+def log_lines(room: Path, marker: str) -> list[str]:
+    """Every line carrying ``marker`` that a daemon in this room ever wrote."""
+    return [
+        line
+        for log in sorted(room.glob("*.log"))
+        for line in log.read_text(errors="replace").splitlines()
+        if marker in line
+    ]
+
+
 def listening(room: Path) -> list[str]:
     """Every ``listening pid=`` line a daemon in this room ever wrote.
 
@@ -143,12 +173,7 @@ def listening(room: Path) -> list[str]:
     run — which is what tells a warm reuse from a second server, and either of
     those from the fallback ladder having quietly done all the work.
     """
-    return [
-        line
-        for log in sorted(room.glob("*.log"))
-        for line in log.read_text(errors="replace").splitlines()
-        if "listening pid=" in line
-    ]
+    return log_lines(room, "listening pid=")
 
 
 def stop(room: Path) -> None:
@@ -188,6 +213,83 @@ def _dump_room(room: Path) -> None:
         print(f"     -- {log.name} ({len(text)} chars) --")
         for line in text.splitlines()[-40:]:
             print(f"     {line}")
+
+
+def _system_only_path() -> str:
+    """``PATH`` cut back to Windows' own directories.
+
+    Built from ``%SystemRoot%`` rather than spelt ``C:\\Windows``: a runner
+    whose system drive is not C: would otherwise get an empty PATH and fail
+    this gate for the wrong reason.  Everything else goes — a Visual Studio
+    toolchain's copy of the OpenMP runtime is exactly what must not be able to
+    rescue the import.
+    """
+    root = os.environ.get("SystemRoot") or r"C:\Windows"
+    return os.pathsep.join([str(Path(root) / "System32"), root])
+
+
+def _gate_self_contained(exe: Path, work: Path, room: Path) -> int:
+    """Gate 7 — the accelerator is live from the BUNDLE'S OWN files (nt only).
+
+    Its own room, so gate 6's spawn count stays exact: this launch starts a
+    second daemon (a different environment, and one it must start itself for
+    the log to exist at all).
+    """
+    if os.name != "nt":
+        print(
+            "skip gate 7: self-containment is an nt claim — the Linux/macOS "
+            "wheels link the SYSTEM OpenMP runtime on purpose"
+        )
+        return 0
+
+    # Imported, not restated: the daemon writes this marker and this gate reads
+    # it, and two spellings of one fact is how a gate ends up certifying
+    # nothing.  Local because the module import costs a NumPy load that the
+    # POSIX skip above has no reason to pay.
+    from momwire.eznec._resident import ACCEL_OK
+
+    failures = 0
+    bundle = exe.parent
+    # Both places a `--add-binary <dll>;.` can land in a one-dir build:
+    # PyInstaller 6 puts collected binaries in `_internal/`, and asserting on
+    # the layout rather than on one guess survives a PyInstaller that moves it.
+    found = sorted({*bundle.glob(OPENMP_DLL), *bundle.glob(f"_internal/{OPENMP_DLL}")})
+    if not found:
+        print(
+            f"FAIL {OPENMP_DLL}: not in the bundle — the engine is not self-contained"
+        )
+        failures += 1
+    else:
+        where = ", ".join(str(p.relative_to(bundle)) for p in found)
+        print(f"ok   {OPENMP_DLL}: in the bundle ({where})")
+
+    deck = FIXTURES / f"{SERVE_IDS[0]}.nec"
+    out = work / f"{SERVE_IDS[0]}.stripped-path.out"
+    env = {
+        **os.environ,
+        "MOMWIRE_PORTAL_RUNTIME_DIR": str(room),
+        "PATH": _system_only_path(),
+    }
+    run([str(exe), str(deck), str(out)], out, env=env)
+
+    status = log_lines(room, "accelerators:")
+    if not listening(room):
+        # No daemon, no log, no verdict: the ladder answered and this gate
+        # would otherwise pass by having measured nothing.
+        print(f"FAIL {exe.name}: no daemon spawned under a system-only PATH")
+        _dump_room(room)
+        failures += 1
+    elif not any(ACCEL_OK in line for line in status):
+        print(
+            f"FAIL {exe.name}: the engine fell back to pure Python under a "
+            f"system-only PATH — {status or ['no accelerator line at all']}"
+        )
+        _dump_room(room)
+        failures += 1
+    else:
+        print(f"ok   {exe.name}: accelerator live from the bundle's own files")
+
+    return failures
 
 
 def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
@@ -390,6 +492,15 @@ def main() -> int:
     env = {**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": str(room)}
     try:
         failures = _gates(exe, work, room, env)
+    finally:
+        stop(room)
+
+    # Gate 7 in a room of its own, for the reason gate 6 runs first: its launch
+    # is a THIRD daemon, and sharing the room above would make that gate's
+    # exact spawn count unreadable.
+    room = Path(tempfile.mkdtemp(prefix="mw-smoke-omp-"))
+    try:
+        failures += _gate_self_contained(exe, work, room)
     finally:
         stop(room)
 
