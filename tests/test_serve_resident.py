@@ -99,9 +99,14 @@ def short_room():
     room = Path(tempfile.mkdtemp(prefix="mw-"))
     # If a platform ever hands us a long ``$TMPDIR`` too, say THAT, rather
     # than leaving an ``AF_UNIX path too long`` to surface out of a server
-    # thread as a client waiting on a socket that never appears.
-    budget = mech.SUN_PATH_MAX - len(os.fsencode(str(room))) - 1
-    assert budget >= 32, f"{room} leaves only {budget} bytes for an address"
+    # thread as a client waiting on a socket that never appears. Asked only
+    # where AF_UNIX exists, because that is the only place the answer means
+    # anything: a TCP rendezvous is an ordinary file and `socket_path` says
+    # so, and a build without AF_UNIX failing this would be a red lane for a
+    # limit its sockets do not have.
+    if _HAS_AF_UNIX:
+        budget = mech.SUN_PATH_MAX - len(os.fsencode(str(room))) - 1
+        assert budget >= 32, f"{room} leaves only {budget} bytes for an address"
     try:
         yield room
     finally:
