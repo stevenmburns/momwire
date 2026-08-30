@@ -5,7 +5,8 @@
 //
 // The capability flags live INSIDE the register_* body that defines the
 // symbols they vouch for (ek_ira_per_pair in register_sinusoidal, the three
-// #568 flags in register_mw568) — flag and binding in one TU, so an edit
+// #568 flags in register_mw568, razor_fill_742 in register_razor) — flag and
+// binding in one TU, so an edit
 // cannot advertise a contract whose symbols moved out from under it
 // (#710 review; `_sommerfeld_below`/`_sommerfeld_transmitted` trust the
 // flag alone, with no hasattr backstop).
@@ -19,5 +20,6 @@ PYBIND11_MODULE(_accelerators, m) {
     register_sinusoidal(m);
     register_somm(m);
     register_mw568(m);
+    register_razor(m);
 }
 
