@@ -190,6 +190,10 @@ def test_only_windows_logs_where_its_openmp_runtime_came_from(monkeypatch):
     """
     from momwire import _accel
 
+    # Faked in BOTH directions, never read off the host: this test runs on the
+    # windows-latest canary too, where the real platform would make the
+    # absence assertion wrong (the phase-2 canary's test-portability lesson).
+    monkeypatch.setattr(sys, "platform", "linux")
     log = io.StringIO()
     _resident._configure(log, [])
     assert _resident.OMP_LINE not in log.getvalue(), "the line is win32-only"
