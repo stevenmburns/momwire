@@ -29,21 +29,26 @@ EZNEC launches its external engine once per frequency point, so the launch
 cost *is* the sweep cost. What you point EZNEC at is a small native
 **launcher** that keeps a warm momwire engine resident — started on the
 first calculation, retired after fifteen idle minutes — so every launch
-after the first costs milliseconds instead of a Python start-up. Measured on
-one machine, same 50-point sweep of an 11-segment dipole, engines invoked
-exactly as EZNEC invokes them:
+after the first costs milliseconds instead of a Python start-up. Measured
+**inside real EZNEC**, driven by hand on one machine — a 51-point SWR sweep
+of a back-yard dipole over real ground, every engine invocation timestamped:
 
-| engine | per launch (median) | 50-point sweep |
+| engine | 51-point SWR sweep | per point |
 | --- | --- | --- |
-| momwire launcher, warm | 22 ms | 1.2 s |
-| licensed NEC-5 console engine | 23 ms | 6.9 s |
-| momwire's old one-shot exe | ~2 s | 103 s |
+| momwire launcher, warm | **3.0 s** | 58 ms |
+| licensed NEC-5 console engine | 11.0 s | 215 ms |
 
-Per launch the two are the same speed; over a sweep the resident engine is
-bounded (33–65 ms per point) where a process-per-point engine is erratic
-(13–500 ms), which is the whole of the sweep difference. The first
-calculation after a cold start, or after the idle retirement, pays the
-engine's start-up once (~5 s on that machine); if anything about the
+3.7× on the sweep a user actually runs. Engine-side, the two are at parity —
+22 vs 23 ms per launch when invoked the way EZNEC invokes them — and about
+35 ms of every point is EZNEC's own per-point work, the same for either
+engine. The resident engine wins the sweep because it is bounded where a
+process-per-point engine is erratic (13–500 ms). For scale, the previous
+packaging (a frozen one-shot paying the Python import on every launch) took
+103 s on the same sweep, engine-side.
+
+The first calculation after a cold start, or after the idle retirement, pays
+the engine's start-up once (~5 s on that machine, with no progress shown —
+EZNEC displays nothing during an external-engine run); if anything about the
 resident path ever fails, the launcher runs the engine directly instead —
 the same answer, at one-shot speed, never a broken engine.
 
