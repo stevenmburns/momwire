@@ -750,6 +750,19 @@ M3_GEOMETRIES = {
 # then amplify it ~4×, which is why `vee.rich_sin_gal` is the one that moved
 # past 1e-5). Nothing about the physics changed; the solver stopped throwing
 # away five digits it had already computed.
+#
+# 2026-08-31 (momwire#743): the split of `n_qp_pair` moved FOUR entries here,
+# and the pattern is the point — `vee.bspline2_321`, `vee.rich_bspline2`,
+# `k2_junction.bspline2_321` and `k2_junction.rich_bspline2`. Every `sin_gal`
+# and `sin_coll` key reproduced to <= 2e-6, as they must: the sinusoidal
+# schemes do not take `n_qp_pair` at all, so a move there would have meant a
+# bug in this re-capture rather than in the old pins. `dipole` and `k3_star`
+# did not move either — the two decks that DID are the multi-wire ones, i.e.
+# the ones with cross-edge pairs, which is exactly the path #743 splits.
+#
+# The old values were again the ones carrying error: each is the q=4 print to
+# the digit, and q=8 sits 5.5x (vee) and 12x (k2_junction) closer to the q=16
+# reference at fixed mesh. Same story for M4's two movers below.
 M3_REFS = {
     "dipole": dict(
         sin_gal_321=69.639093 - 18.056307j,
@@ -762,18 +775,18 @@ M3_REFS = {
     "vee": dict(
         sin_gal_321=97.960292 - 61.297668j,
         sin_coll_321=97.947410 - 61.346335j,
-        bspline2_321=97.945040 - 61.306749j,
+        bspline2_321=97.945410 - 61.304418j,
         rich_sin_gal=97.934589 - 61.216983j,
         rich_sin_coll=97.934600 - 61.216284j,
-        rich_bspline2=97.930347 - 61.214625j,
+        rich_bspline2=97.929560 - 61.219593j,
     ),
     "k2_junction": dict(
         sin_gal_321=124.493250 + 0.392167j,
         sin_coll_321=124.479522 + 0.340718j,
-        bspline2_321=124.492289 + 0.367751j,
+        bspline2_321=124.493334 + 0.373246j,
         rich_sin_gal=124.513021 + 0.444108j,
         rich_sin_coll=124.513126 + 0.445724j,
-        rich_bspline2=124.514726 + 0.445185j,
+        rich_bspline2=124.513347 + 0.437900j,
     ),
     "k3_star": dict(
         sin_gal_321=13.438927 - 951.615918j,
@@ -1761,6 +1774,11 @@ def test_the_ground_adds_nothing_to_the_sin_bspline_gap(name, ground):
 # where it approximates the image-charge weighting through `ground_phi_mode`
 # and lands 1 Ω / 2% away from both sinusoidal schemes — a different model, not
 # a different discretization, so it cannot serve as a reference for this one.
+#
+# 2026-08-31 (momwire#743): `m4_monopole/pec`'s two `bspl` keys moved and the
+# other 52 entries reproduced to <= 3e-7. Both old values are the q=4 print to
+# the digit; q=8 sits 15x closer to the q=32 reference at fixed mesh (0.0011 vs
+# 0.0162 ohm). See M3_REFS' note above for the full pattern.
 
 M4_REFS = {
     ("m4_dipole", "pec"): dict(
@@ -1840,8 +1858,8 @@ M4_REFS = {
         rich_gal=74.957605 + 44.213649j,
         coll_161=74.913681 + 44.115541j,
         rich_coll=74.956952 + 44.202932j,
-        bspl_161=74.929388 + 44.141531j,
-        rich_bspl=74.962429 + 44.218677j,
+        bspl_161=74.930474 + 44.156590j,
+        rich_bspl=74.962185 + 44.215103j,
     ),
 }
 

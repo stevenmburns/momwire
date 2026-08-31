@@ -312,6 +312,14 @@ def test_free_space_thin_wire_would_not_pass_the_bar_by_accident():
 # Finest GATED rung's measured |residual|, pinned +25% (the shape momwire#398
 # unit 6 already ratified for razor's production lane: a decay claim plus a
 # floor at the tightest point actually measured, not a tuned number).
+#
+# Re-measured after the n_qp_pair split (momwire#743): the finest gated
+# residuals moved <= 1% (ward bs1-ek 0.6255 -> 0.6173, step2 bs1-ek
+# 0.5521 -> 0.5572, fat unchanged to 4 dp), leaving 19-21% headroom against
+# these bars. Deliberately NOT re-derived from the new prints — the bars are
+# #398's ratified numbers and their job is to catch regression, not to track
+# every re-capture. The coarse rungs moved far more (up to 0.40 ohm), which
+# is where quadrature error lives; see the golden table's own note.
 _FINEST_BAR = {
     ("ward", "bs1-ek"): 0.6255 * 1.25,
     ("ward", "bs2-ek"): 1.348 * 1.25,
