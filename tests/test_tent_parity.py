@@ -74,7 +74,12 @@ def test_d1_v_dipole_pinned():
         )
     ]
     z = _z(wires, 10)
-    z_pin = 53.636373 - 32.936517j
+    # momwire#743: cross-edge default 4 -> 8. Re-pinned, not relaxed — the
+    # cross-edge ladder at this mesh converges monotonically (steps 0.291,
+    # 0.111, 0.055, 0.031, 0.019, 0.013 for q=2..8), so q=8 sits ~10x closer
+    # to the quadrature limit than q=4 did. A V-dipole is all cross-edge
+    # pairs at the apex, which is why it moves at all.
+    z_pin = 53.632833 - 32.819371j
     assert abs(z - z_pin) <= RTOL * abs(z_pin), f"z={z}"
 
 
@@ -90,7 +95,9 @@ def test_d1_fandipole_k3_junctions_pinned():
     z, _ = _fandipole_two_band_sim(
         20, wavelength, solver_cls=BSplineSolver, degree=1
     ).compute_impedance()
-    z_pin = 60.319831 - 0.820675j
+    # momwire#743, as above: ladder steps 0.119 (q=4->6) and 0.044 (6->8),
+    # monotone, so the new value is the better one.
+    z_pin = 60.333917 - 0.658639j
     assert abs(z - z_pin) <= 10 * RTOL * abs(z_pin), f"z={z}"
 
 

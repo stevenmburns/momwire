@@ -450,7 +450,12 @@ class HMatrixSolver(BSplineSolver):
         ek = _EK_SAME_EDGE if self.extended_kernel else None
         sub_arc = ctx["edge_arc"][edge_id][lo : hi + 2]
         A_st = _seg_seg_static_moments(sub_arc, a, max_d=d, ek=ek)
-        A_reg = _seg_seg_reg_moments(sub_arc, a, k, max_d=d, n_qp=self.n_qp_pair, ek=ek)
+        # SAME-EDGE (momwire#743): follows n_qp_pair_same_edge, not the
+        # cross-edge knob. The offedge sites below keep self.n_qp_pair.
+        # Getting this wrong makes HMatrix disagree with dense.
+        A_reg = _seg_seg_reg_moments(
+            sub_arc, a, k, max_d=d, n_qp=self.n_qp_pair_same_edge, ek=ek
+        )
         blk = A_st + A_reg
         cache[key] = blk
         return blk
