@@ -2704,6 +2704,23 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ]
                 yield c0 + i, ks[i], same_edge_k
 
+    @staticmethod
+    def _same_edge_slices(geom):
+        """The segment ranges that form same-edge blocks, one per edge.
+
+        Same spelling as the overwrite loop in `_build_J_blocks`; factored out
+        so the pre-pass can ask what it is about to throw away before paying
+        for it (momwire#743)."""
+        per_wire = geom["per_wire"]
+        seg_off = geom["seg_offsets"]
+        out = []
+        for w in range(len(per_wire)):
+            ed_off = per_wire[w]["edge_offsets"]
+            base = seg_off[w]
+            for i_e in range(len(ed_off) - 1):
+                out.append(slice(base + ed_off[i_e], base + ed_off[i_e + 1]))
+        return out
+
     def _build_J_blocks(self, geom, k, same_edge_prep=None):
         """All polynomial moment integrals J_pq[i, j] for p, q ∈ {0..d} and
         every (i, j) global segment pair. Returns shape (d+1, d+1, N, N).
@@ -2728,13 +2745,34 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ek = self._ek_spec(geom) if self.extended_kernel else None
         ek_se = _EK_SAME_EDGE if self.extended_kernel else None
 
+        # Which segment ranges are about to be OVERWRITTEN by the analytic
+        # same-edge block. Collected before the pre-pass so a deck whose
+        # same-edge blocks tile the whole matrix can skip it entirely.
+        same_slices = (
+            [sl for sl, _A_st, _reg in same_edge_prep]
+            if same_edge_prep is not None
+            else self._same_edge_slices(geom)
+        )
+        n_total = int(seg_l.shape[0])
+
         # All-pairs full kernel (same a² regularization handles touching
         # segments at kink corners and at junctions to within ~1e-5 at
         # antenna scales; off-segment-pair accuracy is what GL is good at).
         # Per-observer-row radius under mixed per-wire radii.
-        J = _seg_seg_full_moments_offedge(
-            seg_l, seg_r, seg_l, seg_r, a_row, k, d, self.n_qp_pair, ek=ek
-        )  # (d+1, d+1, N, N) complex
+        #
+        # ...except when there is nothing to keep. This build is fused: every
+        # pair by GL, then same-edge blocks overwritten. On a SINGLE-EDGE deck
+        # the one same-edge block IS the whole matrix, so 100% of the pre-pass
+        # is discarded — measurably (|Z(n_qp_pair=8) - Z(n_qp_pair=4)| is
+        # bit-identical zero there) and expensively (momwire#743: 8.5-22% of
+        # the solve depending on how the kernel scales in n_qp). A dipole is a
+        # single-edge deck, so this is the commonest shape there is.
+        if len(same_slices) == 1 and same_slices[0] == slice(0, n_total):
+            J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=complex)
+        else:
+            J = _seg_seg_full_moments_offedge(
+                seg_l, seg_r, seg_l, seg_r, a_row, k, d, self.n_qp_pair, ek=ek
+            )  # (d+1, d+1, N, N) complex
 
         # Overwrite each same-edge block with analytic static + reg
         if same_edge_prep is None:
