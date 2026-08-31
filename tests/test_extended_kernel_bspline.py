@@ -1082,6 +1082,20 @@ def ek_call_counts(monkeypatch):
 # path too means zero calls now requires BOTH backends to be on C++, not just
 # one. `_ek_axis_groups` and `_ek_spec` are still always entered: unit 2
 # doesn't touch label computation, only what consumes the labels.
+def _has_offedge_work(deck):
+    """Whether a deck gives the off-edge kernel anything to do.
+
+    True when there is more than one edge (so there are cross-edge pairs), or
+    when there is a ground plane (image blocks route through the same kernel).
+    A single edge in free space has neither — and since momwire#759 the
+    pre-pass that would have been computed and then entirely overwritten is
+    not computed at all, so the off-edge entry points are legitimately never
+    reached on such a deck.
+    """
+    n_edges = sum(len(e) for e in deck["n_per_edge_per_wire"])
+    return n_edges > 1 or "ground_z" in deck
+
+
 _SAME_EDGE_ONLY_EK_ENTRY_POINTS = {"_ek_reg_extra", "D_ek_moment"}
 _DUAL_BACKEND_EK_ENTRY_POINTS = {"_ek_factor"}
 
@@ -1112,8 +1126,12 @@ def test_g7b_the_counters_fire_when_ek_is_on(
     cpp_offedge = (
         _bk._HAVE_BSPLINE_OFFEDGE_EK_ACCEL and _bk._HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL
     )
+    # "bend" rather than "free space", for the reason given in
+    # test_u1_ek_on_same_edge_is_served_by_cpp: `_ek_factor` is a dual-backend
+    # counter, so when the off-edge twins are forced to numpy this test needs a
+    # deck that actually HAS off-edge work (momwire#759).
     BSplineSolver(
-        **_G7_BSPLINE["free space"],
+        **_G7_BSPLINE["bend"],
         wavelength=LAM,
         degree=2,
         extended_kernel=True,
@@ -3187,8 +3205,14 @@ def test_u1_ek_on_same_edge_is_served_by_cpp(accel_spy, ek_call_counts, monkeypa
     # here.
     monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
     monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL", False)
+    # "bend", not "free space": the off-edge `_ek_factor` call below is this
+    # probe's scoping control, and a single-edge deck has no off-edge work for
+    # it to scope — since momwire#759 the discarded pre-pass is not computed at
+    # all, so the control would read zero for a reason that has nothing to do
+    # with what this test asserts. "bend" is one wire, two edges, free space:
+    # same EK path, genuine cross-edge pairs.
     BSplineSolver(
-        **_G7_BSPLINE["free space"],
+        **_G7_BSPLINE["bend"],
         wavelength=LAM,
         degree=2,
         extended_kernel=True,
@@ -3569,7 +3593,15 @@ def test_u2_ek_off_never_reaches_the_offedge_ek_entry_points(accel_spy, name):
     BSplineSolver(**_G7_BSPLINE[name], wavelength=LAM, degree=2).compute_impedance()
     assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] == 0
     assert accel_spy.counts["seg_seg_full_moments_bspline_swept_ek"] == 0
-    assert accel_spy.counts["seg_seg_full_moments_bspline"] > 0
+    # Vacuity guard: the zeros above mean nothing unless the non-EK off-edge
+    # path was actually entered. Which it is — except on a deck that has no
+    # off-edge work at all, where momwire#759 skips the pre-pass rather than
+    # computing it and overwriting every block. Asserted both ways so this
+    # stays a guard rather than becoming a tolerance.
+    if _has_offedge_work(_G7_BSPLINE[name]):
+        assert accel_spy.counts["seg_seg_full_moments_bspline"] > 0
+    else:
+        assert accel_spy.counts["seg_seg_full_moments_bspline"] == 0
 
 
 @pytestmark_u2
