@@ -122,13 +122,28 @@ DECK = (
 E1 = (10.5, 0.5, 15, 7)
 E2 = (21.25, 0.25, 21, 11)
 
-# The seam's own banked prints.  E1's is the number momwire#703 quotes as
-# "23.03 - 968.19j"; E2's is the resonant control it quotes as
-# "100.77 + 19.59j".
-Z_E1_X1 = complex(23.031871, -968.192987)
-Z_E1_X2 = complex(22.989300, -966.617100)
-Z_E1_X4 = complex(22.955300, -965.476300)
-Z_E2_X1 = complex(100.772931, 19.587015)
+# The seam's own banked prints, re-derived at the momwire#743 cross-edge
+# default.  All four previously held their q=4 print to the digit, and all
+# four move: q=8 sits 4-5.6x closer to the quadrature limit at fixed mesh
+# (E1 x1 0.8614 -> 0.2167 ohm from its q=64 value).  Only E1 x1 broke the
+# 0.5 bar, at 0.6447 - the other three moved 0.25-0.41 and would have gone
+# on quietly carrying the old default's integration error.
+#
+# These are re-banked AT THE SHIPPED DEFAULT rather than at converged
+# quadrature, unlike test_crossing_serve_524's anchors.  Different job: those
+# are convergence records and must encode the right answer, these gate what
+# the SERVE SEAM prints for a user, so they have to be taken through the same
+# path a user gets.
+#
+# momwire#703 quotes E1 as "23.03 - 968.19j" and E2 as "100.77 + 19.59j";
+# both quotes are the q=4 prints and stand as that issue's record.  For
+# context only, never a gate: the engine's own deepest rung (22.960 - 966.30j
+# at x19) is 1.2497 ohm from the new x1 print and was 1.8944 ohm from the old
+# one, so raising the order moved us TOWARD it.
+Z_E1_X1 = complex(23.009058, -967.548712)
+Z_E1_X2 = complex(22.973897, -966.212190)
+Z_E1_X4 = complex(22.944492, -965.208842)
+Z_E2_X1 = complex(100.775801, 19.837025)
 
 
 def served(top, bot, n, seg):
@@ -268,8 +283,9 @@ def test_g703_3_the_reactive_deck_print_is_banked():
     assert abs(z4 - Z_E1_X4) <= 0.5
 
     # The ladder is monotone in X and DECELERATING — momwire's x1 print is
-    # already within ~4.4 Ω of its own n=240 rung, which is why the x1 print
-    # is worth banking at all.
+    # already within ~3.9 Ω of its own n=240 rung (4.4 Ω before momwire#743;
+    # both prints moved, the gap closed), which is why the x1 print is worth
+    # banking at all.
     first, second = abs(z2 - z), abs(z4 - z2)
     assert z.imag < z2.imag < z4.imag
     assert second < first, (

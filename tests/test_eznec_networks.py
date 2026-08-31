@@ -869,8 +869,17 @@ def test_the_budget_closes_the_way_the_engine_closes_it(cid):
     assert power.radiated_power == pytest.approx(
         power.input_power - loss - power.wire_loss, rel=1e-4
     )
+    # Both sides are read back off the printout, at DIFFERENT precisions, so
+    # this comparison has a floor that has nothing to do with the physics.
+    # EFFICIENCY prints `:7.2f` (_printout.py, quantum 0.005); the two powers
+    # print with a 4-decimal mantissa, worth <= 1e-4 relative on their ratio,
+    # which is what `rel` covers. pytest.approx takes the LARGER of rel and
+    # abs rather than their sum, so `abs` has to carry both: 0.005 + 0.0031 at
+    # this magnitude. The gate was always narrower than its own inputs -
+    # before momwire#743 moved the numbers it read 31.21 against 31.2062 and
+    # passed only because the value happened to sit near the 2dp grid.
     assert power.efficiency_percent == pytest.approx(
-        100.0 * power.radiated_power / power.input_power, rel=1e-4
+        100.0 * power.radiated_power / power.input_power, rel=1e-4, abs=0.0081
     )
     # And the whole budget lands where the capture's did, by envelope: 0.29,
     # 0.66 and 0.58 percentage points on the three loaded configs, measured,
