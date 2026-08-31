@@ -274,8 +274,6 @@ def main():
                 continue
             if args.knob == "n_qp_sommerfeld" and deck not in SOMM_ONLY:
                 continue
-            if deck in SOMM_ONLY and args.knob != "n_qp_sommerfeld":
-                pass
             for nsegs in (int(x) for x in args.nsegs.split(",")):
                 rows = []
                 for q in LADDERS[args.knob]:
