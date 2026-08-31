@@ -220,6 +220,11 @@ SERVED_UNGATED_IDS = ("0037", "0039", "0040", "0041", "0042")
 # the remainder keying together the seam's default now answers these two
 # captures within 12.3 and 5.2 Ω.  The gate below is the envelope that
 # replaced the on-purpose disagreement.
+
+# Gains print at two decimals, so two directions whose levels differ by one
+# quantum are not distinguishable in the printout at all.
+_GAIN_PRINT_QUANTUM = 0.01
+
 GRAZING_IDS = ("0033", "0034")
 
 # Every capture id this seam answers after momwire#545, pinned.  The ladder
@@ -2414,14 +2419,37 @@ def test_the_elevated_radial_systems_are_pinned_now_that_they_close(cid):
         f"{abs(got - want):.3f} Ω apart (bar {bar})"
     )
 
-    # The pattern peak: DIRECTION exact — it was already exact before the fix
-    # and a formulation change does not get to move it — and the LEVEL now
-    # inside the family's own band. Measured 0.280 dB on 0033, 0.080 on 0034.
+    # The pattern peak: DIRECTION agreeing as closely as the printout can
+    # express it, and the LEVEL inside the family's own band. Measured
+    # 0.280 dB on 0033, 0.080 on 0034.
+    #
+    # Compared as PLATEAUX, not as two argmaxes. Gains print at 0.01 dB and
+    # this peak is flat across several samples on BOTH sides — 0034's served
+    # rows read -0.99 at theta = 66, 67 AND 68, the engine's read -0.91 at 66
+    # and 67 — so `max()` is picking among ties and its answer turns on row
+    # order, not on physics. Asserting the two argmaxes equal was therefore
+    # finer than its own inputs: it held until momwire#743 shifted the served
+    # level by less than one print quantum and moved which tied row won.
+    # Intersecting the plateaux says the thing that is actually true and
+    # actually checkable, and still fails on any real move off the peak.
     (pw,) = extract(printout_text(cid)).patterns
     (pg,) = extract(served(cid)).patterns
     bw = max(pw.rows, key=lambda row: row.total_db)
     bg = max(pg.rows, key=lambda row: row.total_db)
-    assert (bg.theta_deg, bg.phi_deg) == (bw.theta_deg, bw.phi_deg)
+
+    def _plateau(pattern, best):
+        """Directions indistinguishable from the peak at the printed 0.01 dB."""
+        return {
+            (row.theta_deg, row.phi_deg)
+            for row in pattern.rows
+            if best.total_db - row.total_db <= _GAIN_PRINT_QUANTUM
+        }
+
+    shared = _plateau(pg, bg) & _plateau(pw, bw)
+    assert shared, (
+        f"{cid}: served peak plateau {sorted(_plateau(pg, bg))} does not meet "
+        f"the captured one {sorted(_plateau(pw, bw))}"
+    )
     assert abs(bg.total_db - bw.total_db) < 0.4, (
         f"{cid}: peak {bg.total_db:.2f} dB against captured {bw.total_db:.2f}"
     )
