@@ -454,7 +454,7 @@ def test_m3_payoff_is_unmoved_by_a_fully_feed_matched_reference_family():
 @pytest.mark.slow
 @pytest.mark.parametrize(
     "design,gal_bs2,ptgap_bs2",
-    [("wire.lazy_h", 8.130e-3, 2.928e-5), ("wire.vbeam", 5.943e-3, 8.446e-6)],
+    [("wire.lazy_h", 8.100e-3, 7.087e-7), ("wire.vbeam", 5.951e-3, 4.980e-7)],
 )
 def test_near_open_collapse_survives_at_the_fine_rung(design, gal_bs2, ptgap_bs2):
     """§18 (momwire#213) — antennaknobs#478's class through the shipped option.
@@ -464,18 +464,32 @@ def test_near_open_collapse_survives_at_the_fine_rung(design, gal_bs2, ptgap_bs2
     asks is whether the collapse is a coarse-mesh coincidence. Pinned here at
     N=321 off the snapshot, where §13 read it:
 
-        wire.lazy_h   gal↔bs2 0.813 %   ptgap↔bs2 0.0029 %    278×
-        wire.vbeam    gal↔bs2 0.594 %   ptgap↔bs2 0.0008 %    704×
+        wire.lazy_h   gal↔bs2 0.813 %   ptgap↔bs2 0.0029 %      278×
+        wire.vbeam    gal↔bs2 0.594 %   ptgap↔bs2 0.0008 %      704×
+
+    Re-measured after the n_qp_pair split (momwire#743), which left the
+    MISMATCHED column alone and shrank the matched one ~40x:
+
+        wire.lazy_h   gal↔bs2 0.810 %   ptgap↔bs2 0.00007 %  11,429×
+        wire.vbeam    gal↔bs2 0.595 %   ptgap↔bs2 0.00005 %  11,951×
+
+    That asymmetry is itself the §5 claim restated: cross-edge under-
+    integration was contributing to the RESIDUAL between two schemes that
+    agree analytically once the feed model matches, so integrating properly
+    removes it — while the gal↔bs2 gap, which is a real feed-model
+    difference, does not move.
 
     N=641 (5130 / 5119 segments, ~2.5 min and 7 GiB) is the addendum's finest
-    rung and lives in the harness (`--near-open`), not in CI; it reads 992× and
-    374×, so the ≥100× asserted here is a floor the deep rung clears too.
+    rung and lives in the harness (`--near-open`), not in CI; it read 992× and
+    374× at the old default, so the ≥100× asserted here is a floor the deep
+    rung cleared even before the split widened it.
 
     The last block is §5's caveat, kept honest: the collapse is a statement
     about the DISAGREEMENT between schemes, not about the error. Every scheme's
     own 161→321 step is still 0.5-1.8 %, larger than any cross-scheme gap at
-    that rung and ≥100× the matched residual — so "expect the last percent to
-    be physical, and budget fine mesh" is untouched by the feed model.
+    that rung and now ~10,000× the matched residual — so "expect the last
+    percent to be physical, and budget fine mesh" is untouched by the feed
+    model, and more clearly so than before.
 
     ~18 s per design (36 s for the pair): four solves at each of two fine
     meshes, 2570 / 1290 segments.
@@ -489,12 +503,19 @@ def test_near_open_collapse_survives_at_the_fine_rung(design, gal_bs2, ptgap_bs2
 
     r_gal = _rel(fine["gal"], fine["bs2"])
     r_pt = _rel(fine["ptgap"], fine["bs2"])
-    # 5 % on the mismatched column; 10 % on the matched one, which is a
-    # difference of two ~4 kΩ impedances at the 1e-5 level and so carries
-    # correspondingly fewer digits. Both are far tighter than the 100× the
-    # verdict rests on.
+    # 5 % on the mismatched column; 50 % on the matched one. The matched
+    # column is a difference of two ~4 kΩ impedances and the n_qp_pair split
+    # (momwire#743) shrank it ~40x, from the 1e-5 level to 1e-7 — a few
+    # milliohms out of kilohms. The same absolute perturbation is therefore
+    # ~40x larger in RELATIVE terms than when the 10 % bar here was ratified,
+    # so keeping 10 % would be silently tightening the gate 40-fold on a
+    # near-cancellation. 50 % preserves the margin that was actually agreed
+    # (this tree's rule: >= 15-20 % against CI allocator variance) and still
+    # catches the only failure that matters — a feed_model that stopped
+    # taking effect lands ptgap on gal, four decades away. Both bars remain
+    # far tighter than the 100x the verdict rests on.
     assert abs(r_gal - gal_bs2) < 0.05 * gal_bs2, (design, r_gal)
-    assert abs(r_pt - ptgap_bs2) < 0.10 * ptgap_bs2, (design, r_pt)
+    assert abs(r_pt - ptgap_bs2) < 0.50 * ptgap_bs2, (design, r_pt)
     # The verdict, structurally: matching the feed model buys two decades or
     # better. (Also the no-op guard — a `feed_model` that stopped taking
     # effect would land `ptgap` on `gal` and read 1×.)
