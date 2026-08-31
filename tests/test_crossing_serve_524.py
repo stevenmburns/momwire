@@ -11,7 +11,12 @@ merged dof (split ≡ merged ≡ V-constrained, measured to the digit).
 The serve gate is momwire's OWN evidence, adjudicated 2026-08-26:
 
 * mesh stability — Δ(crossing − mono) moves 0.02 Ω between the g1/g2
-  interface-graded meshes (138.7671−102.9889j → 138.7691−102.9893j);
+  interface-graded meshes (138.7671−102.9889j → 138.7691−102.9893j).
+  Both prints are at the then-default n_qp_pair=4 and each carries
+  ~0.43 Ω of quadrature error (momwire#760); the claim survives because
+  it is about the DIFFERENCE between two meshes at one quadrature, and
+  the error is common to both. `CROSSING_G1` itself is re-banked at
+  converged quadrature below;
 * the ε̃ = 1 collapse — at ground_eps = 1 the interface vanishes and the
   crossing deck IS a free-space 12 m wire, reproduced to 0.0124 Ω
   (0.002 %) through a corner telescoping of magnitude ~204,000;
@@ -36,11 +41,13 @@ convergence, and the ε̃ = 1 residual extrapolates to zero (0.0004 Ω,
 two independent rung pairs). Lossy transmitted kernels amplify the
 class ~30× — the base-mesh soil-A prints (fan 143.9327−26.2135j; hub
 spelling 140.9839−43.6025j, a DIFFERENT structure; probe38) stay
-RECORDS, but the GRADED fan is converged and banked: `FAN_SOIL_A_N2`
-with its G-674 gates. The ε̃ = 1 collapses run in the merge-to-main
-`crossgate` lane (multi-minute certification solves, the memgate
-reasoning) while the PR slow lane keeps `test_g524_4` as the per-PR
-crossing regression pin. The HUB spelling's collapse is a banked
+RECORDS, and so does the study's own graded print: every #674 number
+was taken at a FIXED n_qp_pair=4, which momwire#760 measures 6.8 Ω
+from the quadrature limit. `FAN_SOIL_A_N2` is re-banked at converged
+quadrature and is the only one of them that is a gate. The ε̃ = 1
+collapses run in the merge-to-main `crossgate` lane (multi-minute
+certification solves, the memgate reasoning) while the PR slow lane
+keeps `test_g524_4` as the per-PR crossing regression pin. The HUB spelling's collapse is a banked
 record (0.2194 Ω, probe38) with no gate of its own: its only unique
 content — the hub-tent by-parts terms — was measured to contribute
 exactly zero to the digit (probe39), and everything else it would
@@ -55,7 +62,7 @@ import warnings
 import numpy as np
 import pytest
 
-from momwire import _crossing_fill, _medium_spec, _near_interface
+from momwire import _bspline_kernels, _crossing_fill, _medium_spec, _near_interface
 from momwire.bspline import BSplineSolver
 
 from test_buried_serve_553 import SOIL_A, WL7, contact_deck
@@ -75,13 +82,31 @@ _GRADES = {
     ),
 }
 
-# Banked by probe27 (session 5) and re-measured through this production
-# path: the soil-A exact-EM crossing answer, mesh-stable g1 -> g2.
-# Through #692's near-density default the g1 production print is
-# 138.7670 − 102.9889j (1e-4 from this adjudicated bank, envelope 0.05);
-# g2 is unchanged to the digit. The bank stays the dense-quadrature
-# adjudication.
-CROSSING_G1 = 138.7671 - 102.9889j
+# The soil-A exact-EM crossing answer, converged in the QUADRATURE axis
+# as well as the mesh axis (momwire#760).
+#
+# probe27 (session 5) banked 138.7671 - 102.9889j here, mesh-stable
+# g1 -> g2, and #692's near-density default reproduced it to 1e-4. Both
+# were taken at the then-default cross-edge quadrature of 4 — which is
+# also why they agree so exactly: the bank IS the q=4 print, and the
+# quadrature axis was never in the 0.05 envelope. Walking it at fixed
+# mesh: q=4 0.4333 / q=8 0.0929 / q=16 0.0087 / q=32 0.0003 ohm from the
+# limit, settled to 4 decimals by q=64 (q=64 -> 96 moves 0.0000).
+#
+# This deck is the mild member of the class #760 documents. It costs
+# ~0.4 ohm rather than the fan anchor's 6.8, and it recovers its rate by
+# q=32 instead of crawling at ~C/q — the crossing node here has no
+# coincident rises, which is the geometry that destroys the rate.
+CROSSING_G1 = 138.9619 - 102.6019j
+
+# As FAN_SOIL_A_N2_QP, for the same reason and past the same n_qp <= 8
+# accelerator cap (momwire#762). Costs ~1.4 s on this deck; the shipped
+# default of 8 lands 0.0929 ohm out, outside the 0.05 gate below.
+CROSSING_G1_QP = 64
+# The g2 mesh's q=4 print, kept as the other half of the mesh-movement
+# record above. Not a gate, and deliberately NOT re-banked: its only job
+# is the Δ against CROSSING_G1's q=4 print, which is why the pair has to
+# stay at one quadrature.
 CROSSING_G2 = 138.7691 - 102.9893j
 
 
@@ -273,15 +298,39 @@ _FAN_GRADES = {
     ),
 }
 
-# Banked by the #674 study (probe3, split lane = the production path)
-# and RE-BANKED through #692's near-density default (moved 4e-4): the
-# soil-A 4-rise fan CONVERGED under matched node grading. The #674
-# study's dense-near measurements — n2→n3 movement 0.0059 Ω, observed
-# order 3.4, Richardson Z* 142.1918 − 36.4771j, far-mesh doubling
-# 0.022 Ω, dense-vs-split ≤ 5e-4 — stand as the convergence evidence
-# (post-flip n2→n3 is 0.0060). The base-mesh 143.9327 − 26.2135j record
-# stands in probe38's JSON as the unconverged-mesh print, never a gate.
-FAN_SOIL_A_N2 = 142.1923 - 36.4707j
+# The soil-A 4-rise fan under matched node grading, converged in the
+# QUADRATURE axis as well as the mesh axis (momwire#760).
+#
+# The #674 study banked 142.1923 - 36.4707j here and called it converged
+# on the strength of its dense-near mesh measurements — n2->n3 movement
+# 0.0059 ohm, observed order 3.4, Richardson Z* 142.1918 - 36.4771j,
+# far-mesh doubling 0.022 ohm, dense-vs-split <= 5e-4. Every one of those
+# was taken at a FIXED n_qp_pair=4, so the 0.05 envelope was built from
+# two error axes out of three, and the missing one dominates: walking
+# cross-edge quadrature at fixed mesh puts q=4 **6.808 ohm** from the
+# limit. Mesh convergence at fixed quadrature converges to the wrong
+# limit; that is the whole lesson, and #674's Richardson extrapolated
+# within the wrong one.
+#
+# The ladder (numpy fallback past the accelerator's n_qp <= 8 cap, which
+# reproduces the C++ path BIT-IDENTICALLY at q=4 and q=8, so it is one
+# continuous measurement): q=4 6.808 / q=8 2.556 / q=16 0.698 /
+# q=32 0.105 / q=64 0.005 ohm from the limit, with q=128 -> 160 moving
+# 0.00001. The error falls as ~C/q with C ~ 33 — FIRST order in the
+# number of Gauss points, i.e. Gauss-Legendre has lost its rate on a
+# near-singular transmitted kernel, which is why brute order is needed
+# and why #762 (lift the cap by tiling) and #760 (a singularity-aware
+# rule) both exist.
+#
+# The old 143.9327 - 26.2135j base-mesh print stays a record, never a
+# gate, and now carries the same fixed-q=4 caveat.
+FAN_SOIL_A_N2 = 140.9358 - 43.1622j
+
+# Cross-edge quadrature order at which the anchor deck sits 0.005 ohm
+# from its limit — 10x inside the gate below. Past the accelerated
+# kernel's n_qp <= 8 refusal, so the anchor runs the numpy twin; ~6 s,
+# which is what this lane's multi-minute certification budget is for.
+FAN_SOIL_A_N2_QP = 64
 
 
 def fan_rise_deck_graded(rung="n2", **override):
@@ -446,20 +495,31 @@ def test_g524_3_eps1_kernel_identity():
 
 
 @pytest.mark.slow
-def test_g524_4_soil_a_crossing_anchor(record_property):
-    """The adjudicated soil-A crossing answer through the production path,
-    against probe27's banked number. The envelope is the g1↔g2 mesh
-    movement (0.021 Ω), NOT an engine comparison — the engine's
-    74.761 − 57.730j crossing print is a different experiment (see the
-    module docstring) and is deliberately absent here."""
-    z, _ = BSplineSolver(**crossing_deck(1)).compute_impedance()
+def test_g524_4_soil_a_crossing_anchor(record_property, monkeypatch):
+    """The adjudicated soil-A crossing answer, against probe27's number
+    re-derived at converged quadrature (momwire#760). The envelope covers
+    the g1<->g2 mesh movement (0.021 Ω) and the quadrature residual
+    (0.0003 Ω at the order used here), NOT an engine comparison — the
+    engine's 74.761 − 57.730j crossing print is a different experiment
+    (see the module docstring) and is deliberately absent here.
+
+    Runs on the numpy twin to get past the accelerator's n_qp <= 8 cap,
+    as `test_g674_2_soil_a_fan_anchor` does and for the same reason; the
+    two paths are bit-identical where both can run."""
+    for flag in (n for n in dir(_bspline_kernels) if n.startswith("_HAVE_")):
+        monkeypatch.setattr(_bspline_kernels, flag, False)
+    z, _ = BSplineSolver(
+        **crossing_deck(1), n_qp_pair=CROSSING_G1_QP
+    ).compute_impedance()
     record_property("momwire_Z", f"{z:.4f}")
     record_property("banked_Z", f"{CROSSING_G1:.4f}")
+    record_property("n_qp_pair", str(CROSSING_G1_QP))
     assert abs(z - CROSSING_G1) <= 0.05, (
-        f"crossing serve answers {z:.4f} on the g1 adjudication deck where "
-        f"the banked exact-EM answer is {CROSSING_G1:.4f} — "
-        f"{abs(z - CROSSING_G1):.4f} ohm apart (mesh envelope 0.021 ohm; "
-        "NEVER re-gate this against the engine's crossing print)"
+        f"crossing serve answers {z:.4f} on the g1 adjudication deck at "
+        f"n_qp_pair={CROSSING_G1_QP} where the banked exact-EM answer is "
+        f"{CROSSING_G1:.4f} — {abs(z - CROSSING_G1):.4f} ohm apart (mesh "
+        "envelope 0.021 ohm, quadrature 0.0003; NEVER re-gate this "
+        "against the engine's crossing print)"
     )
 
 
@@ -608,24 +668,39 @@ def test_g674_1_graded_fan_eps1_collapse(record_property):
 
 @pytest.mark.slow
 @pytest.mark.crossgate
-def test_g674_2_soil_a_fan_anchor(record_property):
-    """The soil-A fan anchor the #674 study earned: the n2-graded deck's
-    142.1922 − 36.4711j, CONVERGED in the node axis (n2→n3 movement
-    0.0059 Ω at observed order 3.4; Richardson Z* 142.1918 − 36.4771j)
-    with the far-mesh doubling worth 0.022 Ω. The 0.05 envelope covers
-    both axes with the session-7 headroom. probe38's base-mesh
-    143.9327 − 26.2135j stands as the unconverged-mesh record — 12.6 Ω
-    away, all of it the node class the grading removed. NEVER re-gate
-    this against the engine's detached-stake 90.051 − 70.731j (a
-    different experiment, module docstring)."""
-    z, _ = BSplineSolver(**fan_rise_deck_graded("n2")).compute_impedance()
+def test_g674_2_soil_a_fan_anchor(record_property, monkeypatch):
+    """The soil-A fan anchor, converged in all three axes: the n2-graded
+    deck's 140.9358 - 43.1622j at cross-edge quadrature 64, where it sits
+    0.005 ohm from its own limit against the 0.05 gate — the node axis
+    (n2->n3 0.0059 ohm) and far-mesh axis (0.022 ohm) the #674 study
+    measured, plus the quadrature axis that study held fixed at 4 and
+    never measured (momwire#760).
+
+    Running at 64 needs the numpy twin: the accelerated kernel refuses
+    n_qp > 8 (momwire#762, a cache-blocking constant rather than a real
+    limit). Bypassing it is the suite's established idiom and is sound
+    here for a reason worth stating — the two paths agree BIT-IDENTICALLY
+    at q=4 and q=8 on this very deck, so the twin is an oracle, not an
+    approximation.
+
+    What this must NOT be re-gated against, both of which are records:
+    #674's own 142.1923 - 36.4707j (6.8 ohm away — it is the q=4 print,
+    not a converged answer), and the engine's detached-stake
+    90.051 - 70.731j (a different experiment, module docstring)."""
+    for flag in (n for n in dir(_bspline_kernels) if n.startswith("_HAVE_")):
+        monkeypatch.setattr(_bspline_kernels, flag, False)
+    z, _ = BSplineSolver(
+        **fan_rise_deck_graded("n2"), n_qp_pair=FAN_SOIL_A_N2_QP
+    ).compute_impedance()
     record_property("momwire_Z", f"{z:.4f}")
     record_property("banked_Z", f"{FAN_SOIL_A_N2:.4f}")
+    record_property("n_qp_pair", str(FAN_SOIL_A_N2_QP))
     assert abs(z - FAN_SOIL_A_N2) <= 0.05, (
-        f"the n2-graded soil-A fan answers {z:.4f} where the banked "
-        f"converged answer is {FAN_SOIL_A_N2:.4f} — "
-        f"{abs(z - FAN_SOIL_A_N2):.4f} ohm apart (node axis 0.0059, "
-        "far-mesh axis 0.022; NEVER re-gate against the engine print)"
+        f"the n2-graded soil-A fan answers {z:.4f} at n_qp_pair="
+        f"{FAN_SOIL_A_N2_QP} where the banked converged answer is "
+        f"{FAN_SOIL_A_N2:.4f} — {abs(z - FAN_SOIL_A_N2):.4f} ohm apart "
+        "(node axis 0.0059, far-mesh 0.022, quadrature 0.005; NEVER "
+        "re-gate against #674's q=4 print or the engine print)"
     )
 
 
