@@ -269,6 +269,15 @@ def main() -> int:
     # is untouched.  One-file would cover both and is disqualified on the
     # 17 s vs 1.3 s launch measurement above.
     signer = _load_sign()
+    # TWO paths, BEFORE the variant copies below — so sign.py's own gates
+    # count 2 (`timestamped: all 2 signature(s) countersigned`, momwire#755).
+    # The "all N executables" line further down counts FILES, after the
+    # copies, and is therefore a different and larger number by design. The
+    # two do not disagree and must not be made to agree: the launcher
+    # variants are byte-identical copies of `exe` (verified on the v0.44.0
+    # release — momwire-eznec.exe and momwire-eznec-razor-nec5.exe share
+    # SHA256 111B8A48…, 192,768 bytes), so there are two DISTINCT signed
+    # artifacts across three shipped files.
     signed = signer.sign_if_configured([engine, exe])
 
     # CI's post-condition: the workflow decides MOMWIRE_SIGN_MODE exactly
@@ -313,7 +322,10 @@ def main() -> int:
                 )
                 return 1
         # The engine and the default launcher were signed directly; the
-        # variants are the copies just asserted.
+        # variants are the copies just asserted. FILES, not distinct
+        # binaries — this counts the far side of the variant copy, where
+        # sign.py's gates counted the near side. See the note at the
+        # `sign_if_configured` call above before reconciling the two.
         print(f"signature present on all {len(variants) + 2} executables")
 
     # A provenance note inside the bundle: which momwire this is, HOW it was
