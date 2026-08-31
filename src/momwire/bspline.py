@@ -2880,14 +2880,25 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the division, effectively 2x its own 16 bytes/elem). Measured in
         isolation via tracemalloc (fit across several (n_segs, chunk,
         n_qp) combinations): ~55-56 bytes/(pair-quadrature-point) at
-        n_qp=4, consistent with that accounting; 64 gives the arithmetic
-        below a safety margin over the measured coefficient without
-        shrinking the chunk more than the fit calls for.
+        n_qp=4.
+
+        RE-FITTED to 80 for momwire#743's `n_qp_pair=8` default. The old
+        64 was fitted at n_qp=4 only, and its error showed up as a
+        coefficient that was not scale-free: on the #347 gate deck the
+        measured transient/budget ratio ran 0.836 at n_qp=4 but 0.960 at
+        n_qp=8. **That q-dependence IS the under-pricing** — this model's
+        whole claim is that the transient goes as `n_qp^2 * n_segs *
+        chunk`, so if the constant were right the ratio would not care
+        what n_qp is. At 80 it does not: 0.716 at n_qp=4 against 0.725 at
+        n_qp=8. Re-fit that way rather than by widening the gate, which
+        would have hidden a real regression: at 64 the q=8 ratio cleared
+        the 1.1 bar locally and FAILED it on CI (1.14), whose allocation
+        behaviour sits ~19% above this box's.
         """
         if _bspline_kernels._HAVE_BSPLINE_ACCEL:
             return 0
         n_qp2 = self.n_qp_pair * self.n_qp_pair
-        bytes_per_pair_point = 64
+        bytes_per_pair_point = 80
         return n_qp2 * n_segs * bytes_per_pair_point
 
     def _compute_Z_dense_chunked(self, geom, k, supp_seg, polys, same_edge_prep=None):
