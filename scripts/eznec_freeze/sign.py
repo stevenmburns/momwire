@@ -27,6 +27,12 @@ neither variable set the build is unsigned and no signtool is required:
     certificate cannot chain to a trusted root, so /pa always fails, and
     without this the rehearsal could never pass.  Leave it unset for a real
     certificate — then a broken chain correctly fails the build.
+
+    It covers the CHAIN and nothing else.  The timestamp assertion runs on
+    every path, waiver or not (momwire#755): a missing countersignature is
+    not a fact about whether the certificate is trusted, and the rehearsal
+    exists precisely to exercise the parts of signing that a self-signed
+    certificate can still exercise.
 ``SIGNTOOL``
     Explicit path to ``signtool.exe``, skipping the Windows Kits search.
 
@@ -218,24 +224,84 @@ def sign(paths: list[Path]) -> None:
 
 
 def _verify(signtool: Path, paths: list[Path]) -> None:
-    """``signtool verify /pa`` — a gate, unless the rehearsal waives it."""
+    """Two questions about a signature, and only ONE of them is waivable.
+
+    ONE ``signtool verify /pa /v`` answers both, which is why they share a
+    call: the exit code carries the chain verdict, and the verbose output
+    carries the timestamp verdict, independently of it.
+
+    The chain is what ``MOMWIRE_SIGN_ALLOW_UNTRUSTED`` forgives, and it has
+    to: a self-signed rehearsal certificate cannot chain to a trusted root, so
+    ``/pa`` always fails there and the rehearsal could never pass.
+
+    The TIMESTAMP is a different question and the waiver was never meant to
+    reach it — this module's own docstring scopes it to "the ``signtool verify
+    /pa`` chain check" (momwire#755). Trusted Signing issues very short-lived
+    certificates (v0.44.0's leaf was valid 72 hours), so the RFC-3161
+    countersignature is the only thing keeping a shipped signature valid past
+    the end of the week. A build that stopped timestamping would sign, print
+    ``chain verified``, pass every check on the build day, and begin failing
+    Smart App Control about three days later on end-user machines, with
+    nothing in the log naming the cause.
+    """
     lenient = os.environ.get("MOMWIRE_SIGN_ALLOW_UNTRUSTED") == "1"
     cmd = [str(signtool), "verify", "/pa", "/v", *(str(p) for p in paths)]
     print("+", " ".join(cmd), flush=True)
-    if subprocess.run(cmd).returncode == 0:
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    output = (proc.stdout or "") + (proc.stderr or "")
+    print(output, end="", flush=True)
+
+    _assert_timestamped(output, paths)
+
+    if proc.returncode == 0:
         print("chain verified")
         return
     if lenient:
         print(
             "chain NOT verified — expected, MOMWIRE_SIGN_ALLOW_UNTRUSTED=1 "
             "(a self-signed rehearsal certificate has no trusted root). "
-            "The signature itself is attached and was asserted above."
+            "The signature itself is attached and was asserted above, and the "
+            "timestamp was asserted independently."
         )
         return
     raise SigningError(
         "signtool verify /pa failed. For a self-signed rehearsal set "
         "MOMWIRE_SIGN_ALLOW_UNTRUSTED=1; for a real certificate this is a "
         "genuine chain failure."
+    )
+
+
+# What signtool /v prints per file that carries a countersignature. Read from
+# the SAME run that produces the chain verdict, because signtool emits this
+# line even when the chain then fails — verified on the rehearsal path, whose
+# self-signed root always fails /pa and which still printed
+# "The signature is timestamped: Mon Aug 31 13:11:03 2026" for both binaries
+# (momwire#755, canary run 33395335907).
+_TIMESTAMPED_LINE = "the signature is timestamped:"
+
+
+def _assert_timestamped(output: str, paths: list[Path]) -> None:
+    """Every binary must carry an RFC-3161 countersignature. Not waivable.
+
+    Counted out of signtool's own verbose output rather than asked of
+    ``Get-AuthenticodeSignature``, which was the first attempt and is WRONG
+    here: PowerShell leaves ``TimeStamperCertificate`` empty when the signing
+    chain is untrusted, so it reported "no timestamp" for correctly stamped
+    rehearsal binaries. Whatever answers this has to answer it independently
+    of chain trust, and signtool's output does.
+    """
+    seen = output.lower().count(_TIMESTAMPED_LINE)
+    if seen >= len(paths):
+        print(f"timestamped: all {len(paths)} signature(s) countersigned")
+        return
+    raise SigningError(
+        f"signed WITHOUT an RFC-3161 timestamp: signtool reported {seen} "
+        f"timestamped signature(s) for {len(paths)} binaries. The signing "
+        "certificate is short-lived, so an unstamped signature verifies today "
+        "and starts failing Smart App Control when it expires — days later, "
+        "on users' machines. Check the TSA at MOMWIRE_SIGN_TIMESTAMP_URL was "
+        "reachable. NOT waivable by MOMWIRE_SIGN_ALLOW_UNTRUSTED, which "
+        "covers the chain only (momwire#755)."
     )
 
 
