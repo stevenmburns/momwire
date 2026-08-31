@@ -231,7 +231,10 @@ _EK_SAME_EDGE = _EK(a=None, group_i=None, group_j=None)
 #   closed form  7.5e-09   1.3e-06   5.0e-06
 #
 # so the analytic block is better everywhere and the off-edge rule collapses
-# above delta/2h ~ 1. The threshold is set an octave below where the shipped
+# above delta/2h ~ 1. (The measured row is at n_qp_pair=4, the default when
+# it was taken; momwire#743 moved that default to 8, which tightens the
+# off-edge row without touching the conclusion — the collapse above
+# delta/2h ~ 1 is the rule losing its premise, not losing quadrature order.) The threshold is set an octave below where the shipped
 # rule starts to lose figures, which keeps every non-grazing deck on exactly
 # the arithmetic it had (the two agree to ~1e-6 at the crossover, far below
 # any tolerance the suite pins) while catching the grazing regime whole.
@@ -2591,7 +2594,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         list of `(global_slice, A_static, ed_arc, a_w)`.
 
         The reg-kernel geometry itself — an `(N_e·n_qp, N_e·n_qp)` R table,
-        128·N_e² bytes at the default `n_qp_pair=4` — is deliberately NOT
+        128·N_e² bytes at the default `n_qp_pair_same_edge=4` — is NOT
         materialised here (issue #330): every swept caller holds this
         return value's list across the WHOLE sweep, so a retained R table
         per edge would be resident for the sweep's entire lifetime rather
