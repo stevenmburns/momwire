@@ -151,10 +151,20 @@ def test_the_cut_and_the_whole_wire_are_one_source_in_one_basis():
 
     The same physics twice: cut into two polylines with a node gap across the
     join, and whole with a delta gap at the same arc length.  They differ by
-    2.03 % — the expansion is clamped on each side of the node in one and
+    1.64 % — the expansion is clamped on each side of the node in one and
     runs through it in the other — which is the same class as the 2–6 %
     envelope this seam already reports against the licensed engine, and is
     what makes the spelling a per-basis choice rather than a correction.
+
+    That figure was 2.03 % until momwire#743 raised the cross-edge quadrature
+    default from 4 to 8, and the correction is instructive: the CUT deck has
+    cross-edge pairs across the join while the WHOLE one is a single edge with
+    none, so the old number bundled ~0.4 points of quadrature error at the cut
+    into what this docstring attributes entirely to the basis. The divergence
+    falls monotonically with cross-edge order — 2.032 / 1.734 / 1.638 % at
+    q = 4 / 6 / 8 — so ~1.64 % is the part that is really about the expansion.
+    `z_whole` does not move at all, which is the tell: a single-edge deck has
+    no cross-edge pairs to integrate.
     """
     wavelength, half = 299.792458 / 30.0, 2.5
     common = dict(wire_radius=0.001, wavelength=wavelength, degree=2)
@@ -180,9 +190,9 @@ def test_the_cut_and_the_whole_wire_are_one_source_in_one_basis():
     )
     z_cut = 1.0 / cut.compute_port_solution().y[0, 0]
     z_whole = 1.0 / whole.compute_port_solution().y[0, 0]
-    assert z_cut == pytest.approx(80.320 + 44.899j, abs=1e-3)
+    assert z_cut == pytest.approx(80.334 + 45.440j, abs=1e-3)
     assert z_whole == pytest.approx(79.117 + 46.321j, abs=1e-3)
-    assert abs(z_cut - z_whole) / abs(z_whole) == pytest.approx(0.0203, abs=5e-4)
+    assert abs(z_cut - z_whole) / abs(z_whole) == pytest.approx(0.0164, abs=5e-4)
 
 
 def test_razor_reads_a_k2_junction_knot_and_an_interior_knot_alike():
