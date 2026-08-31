@@ -512,9 +512,38 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         "variational")` rather than its default centre readout.
     junctions : list of [(wire_idx, "start"|"end"), ...] tuples, each entry
         one junction node where K wire endpoints meet.
-    n_qp_pair : Gauss-Legendre nodes per segment per axis for the smooth-
-        kernel piece of same-edge pairs and for all cross-edge / cross-wire
-        pairs (full kernel with a² regularization).
+    n_qp_pair : Gauss-Legendre nodes per segment per axis for CROSS-EDGE and
+        cross-wire pairs (full kernel with a² regularization). Default 8,
+        raised from 4 in momwire#743.
+
+        Two moment paths used to share this number and they want opposite
+        things. Cross-edge order is what a split straight wire and a
+        radius-step junction need, and it is free in memory because the C++
+        kernel streams — `seg_seg_full_moments_bspline_kernel` allocates
+        `J({NM, NM, N_i, N_j})`, with no `n_qp` in the shape. Same-edge order
+        is the entire memory cost and buys nothing. Measured as a known zero
+        (splitting a straight wire at a collinear anchor is geometrically a
+        no-op, so `|Z_split − Z_unsplit|` has an exact answer of 0):
+
+            N     qp=4              qp=8
+            18    0.761 Ω (0.557%)  0.198 Ω (0.145%)
+            30    0.450 Ω (0.329%)  0.112 Ω (0.082%)
+            60    0.216 Ω (0.158%)  0.048 Ω (0.035%)
+
+        8 is also the ceiling: the accelerated kernels carry a fixed
+        `n_qp² ≤ 64` scratch buffer and raise above it, so this default sits
+        exactly at the cap.
+    n_qp_pair_same_edge : the same, for SAME-EDGE pairs — the smooth-kernel
+        piece of a segment pair on one edge. Default 4, i.e. what
+        `n_qp_pair` meant for both paths before momwire#743.
+
+        Raising this is pure cost: `_seg_seg_reg_geometry` materialises one
+        edge's `(N_e·n_qp, N_e·n_qp)` R table, quadratic in BOTH, while the
+        answer does not move — `Re Z = 135.698155` bit-identical at 2, 4 and
+        8 on an N=400 single edge, where peak RSS goes 162 / 177 / 353 MB.
+        There is a saving available here (2 is bit-identical to 4 at N=400)
+        but it also governs #631's near-image analytic block, which has not
+        been measured at 2, so the default stays where it was.
     extended_kernel : NEC's EK card for this basis family (#249). False —
         the default, and what this solver did before #249 — is the reduced
         ("thin-wire") kernel: the source current is a filament on the wire
@@ -656,7 +685,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junctions=None,
         junction_ports=None,
         node_gaps=None,
-        n_qp_pair=4,
+        n_qp_pair=8,
+        n_qp_pair_same_edge=4,
         n_qp_source=16,
         extended_kernel=False,
         wavelength=22,
@@ -913,6 +943,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.feed_wire_index = self.feeds[0][0] if self.feeds else None
         self.feed_arclength = self.feeds[0][1] if self.feeds else None
         self.n_qp_pair = int(n_qp_pair)
+        self.n_qp_pair_same_edge = int(n_qp_pair_same_edge)
 
         # Singular basis enrichment at K≥`enrichment_min_k` junctions.
         # When enabled, adds ONE extra basis per (wire, end_pos) tuple at each
@@ -1848,7 +1879,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         d = self.degree
         return _seg_seg_static_moments(
             arc, a_eff, max_d=d, ek=None
-        ) + _seg_seg_reg_moments(arc, a_eff, k, max_d=d, n_qp=self.n_qp_pair, ek=None)
+        ) + _seg_seg_reg_moments(
+            arc, a_eff, k, max_d=d, n_qp=self.n_qp_pair_same_edge, ek=None
+        )
 
     def _build_J_image_blocks(self, geom, k, ground=None):
         """Build the J moment tensor with j-segments mirrored across the
@@ -2634,7 +2667,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_k = k_array.shape[0]
         d = self.degree
         nm = d + 1
-        n_qp = self.n_qp_pair
+        n_qp = self.n_qp_pair_same_edge
         ek = _EK_SAME_EDGE if self.extended_kernel else None
         sum_ne2 = sum((sl.stop - sl.start) ** 2 for sl, _A_st, _arc, _a in prep)
         max_ne2 = max(
@@ -2714,7 +2747,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
                     A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek_se)
                     A_reg = _seg_seg_reg_moments(
-                        ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair, ek=ek_se
+                        ed_arc[i_e],
+                        a_w,
+                        k,
+                        max_d=d,
+                        n_qp=self.n_qp_pair_same_edge,
+                        ek=ek_se,
                     )
                     J[:, :, sl, sl] = A_st + A_reg
         else:
@@ -2982,7 +3020,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
                     A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek_se)
                     reg_geo = _seg_seg_reg_geometry(
-                        ed_arc[i_e], a_w, max_d=d, n_qp=self.n_qp_pair, ek=ek_se
+                        ed_arc[i_e],
+                        a_w,
+                        max_d=d,
+                        n_qp=self.n_qp_pair_same_edge,
+                        ek=ek_se,
                     )
                     same_edge_prep.append((sl, A_st, reg_geo))
         for sl, A_st, reg in same_edge_prep:
@@ -4447,7 +4489,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     sl = slice(lo, hi)
                     A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
                     A_reg = _seg_seg_reg_moments(
-                        ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair
+                        ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge
                     )
                     block[:, :, sl, sl] = A_st + A_reg
         J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=np.complex128)
@@ -5423,7 +5465,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         tangents = geom["tangents"]
         N = seg_l.shape[0]
         nm = d + 1
-        n_qp = self.n_qp_pair
+        n_qp = self.n_qp_pair_same_edge
 
         # k-independent: same-edge static moments + O(N_e) geometry inputs,
         # image segments — all built once for the whole sweep (the
@@ -5540,7 +5582,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 for sl, arc, a_eff in self._near_image_edge_blocks(geom):
                     A_st_ni = _seg_seg_static_moments(arc, a_eff, max_d=d, ek=None)
                     reg_ni = _seg_seg_reg_geometry(
-                        arc, a_eff, max_d=d, n_qp=self.n_qp_pair, ek=None
+                        arc, a_eff, max_d=d, n_qp=self.n_qp_pair_same_edge, ek=None
                     )
                     J_img[:, :, :, sl, sl] = A_st_ni[
                         None

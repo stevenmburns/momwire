@@ -47,16 +47,92 @@ def test_d1_collinear_polyline(nsegs):
     z_straight, _ = BSplineSolver(
         wires=[straight], n_per_edge_per_wire=[[nsegs]], nsegs=nsegs, degree=1
     ).compute_impedance()
-    # Use n_qp_off=8 so the artificial cross-edge quadrature at the fake
-    # corner has the same precision as the analytic same-edge path.
+    # No n_qp_pair override any more. This comment used to read "use
+    # n_qp_off=8 so the artificial cross-edge quadrature at the fake corner
+    # has the same precision as the analytic same-edge path" — naming a
+    # parameter that no longer exists, and working around momwire#743 rather
+    # than reporting it. The DEFAULT is now 8 for cross-edge pairs, so the
+    # workaround is the shipped behaviour and the tolerance can tighten.
     z_bent, _ = BSplineSolver(
         wires=[polyline],
         n_per_edge_per_wire=[[nsegs // 2, nsegs // 2]],
         nsegs=nsegs,
         degree=1,
-        n_qp_pair=8,
     ).compute_impedance()
     assert abs(z_bent - z_straight) < 0.2
+
+
+def test_n_qp_pair_split_cross_edge_default_fixes_the_fictional_split():
+    """momwire#743. Splitting a straight wire at a COLLINEAR anchor is
+    geometrically a no-op — same knot vectors, multiplicity 1, C1 either way —
+    so |Z_split - Z_unsplit| has an exact known answer of zero and any residual
+    is pure quadrature error. It is the strongest instrument available here: a
+    quadrature family that is uniformly wrong still self-converges, but it
+    cannot fake a known zero.
+
+    The old shared default of 4 left 0.56% of Z on the table at N=18, which is
+    how an off-centre feed gets placed (antennaknobs merges collinear wires
+    into one polyline, so any design splitting a straight radiator lands here).
+    """
+    L = 0.485 * 20.0
+    h = L / 2
+    nsegs = 18
+
+    def z(split, **kw):
+        geom = (
+            dict(
+                wires=[[(0.0, 0.0, -h), (0.0, 0.0, 0.0), (0.0, 0.0, h)]],
+                n_per_edge_per_wire=[[nsegs // 2, nsegs // 2]],
+            )
+            if split
+            else dict(wires=[[(0.0, 0.0, -h), (0.0, 0.0, h)]])
+        )
+        zz, _ = BSplineSolver(
+            nsegs=nsegs,
+            wire_radius=5e-4,
+            wavelength=20.0,
+            degree=2,
+            feed_arclength=0.25 * L,
+            **geom,
+            **kw,
+        ).compute_impedance()
+        return zz
+
+    at_default = abs(z(True) - z(False))
+    at_old = abs(z(True, n_qp_pair=4) - z(False, n_qp_pair=4))
+
+    # The shipped default must be a large improvement, not a rounding one.
+    assert at_default < 0.25, at_default
+    assert at_old > 0.7, at_old
+    assert at_old / at_default > 3.0, (at_old, at_default)
+
+    # Back-compat: an explicit n_qp_pair=4 still reproduces the old numbers
+    # exactly, so this change cannot silently move a caller who pinned it.
+    assert abs(at_old - 0.7609) < 0.01, at_old
+
+
+def test_n_qp_pair_same_edge_is_the_memory_knob_and_moves_nothing():
+    """momwire#743's other half: same-edge order is the entire memory cost
+    (one edge's (N_e*n_qp, N_e*n_qp) R table, quadratic in both) and buys no
+    accuracy. Every pair on an unsplit single edge is same-edge, so the answer
+    must not depend on it — while cross-edge order, which streams in the C++
+    kernel, is what actually matters."""
+    common = dict(
+        wires=[[(0.0, 0.0, -4.85), (0.0, 0.0, 4.85)]],
+        nsegs=120,
+        wire_radius=5e-4,
+        wavelength=20.0,
+        degree=2,
+    )
+    zs = [
+        BSplineSolver(n_qp_pair_same_edge=q, **common).compute_impedance()[0]
+        for q in (2, 4, 8)
+    ]
+    span = max(abs(a - b) for a in zs for b in zs)
+    # Not asserted bit-identical: the same-edge SMOOTH-KERNEL piece does read
+    # this knob, so on a coarse mesh it moves a little (it IS bit-identical by
+    # N=400). The claim is that the movement is negligible.
+    assert span < 1e-2, (span, zs)
 
 
 def test_d1_v_dipole_smoke():
@@ -1081,8 +1157,8 @@ def test_bspline_d2_hentenna_singular_enrichment():
     # Pin n=81 to the recorded productized value (5e-3 Ω tolerance leaves
     # headroom for compiler/platform jitter but catches any constant-offset
     # drift much smaller than the prototype's value-spread to non-enriched).
-    assert abs(Rs[2] - 43.0866) < 5e-3, f"R(n=81)={Rs[2]}, expected ≈43.0866"
-    assert abs(Xs[2] - 38.8740) < 5e-3, f"X(n=81)={Xs[2]}, expected ≈38.8740"
+    assert abs(Rs[2] - 43.0838) < 5e-3, f"R(n=81)={Rs[2]}, expected ≈43.0838"
+    assert abs(Xs[2] - 38.9141) < 5e-3, f"X(n=81)={Xs[2]}, expected ≈38.9141"
 
     # Fit Z = Z_inf + C/N^p on the X component over n in {21, 41, 81}.
     # (X used to be R, but with the enrichment-orig sign fix the R
@@ -1171,8 +1247,8 @@ def test_bspline_d2_hentenna_enrichment_stable_variant():
     # raw-stable agreement so any future projection-coefficient drift fails
     # loudly. The tighter check is the raw-stable diff: 0.005 Ω covers
     # rounding noise but catches any sign / shape regression.
-    assert abs(z_stb.real - 43.0864) < 5e-3
-    assert abs(z_stb.imag - 38.8757) < 5e-3
+    assert abs(z_stb.real - 43.0834) < 5e-3
+    assert abs(z_stb.imag - 38.9175) < 5e-3
     assert abs(z_raw - z_stb) < 5e-3
 
     # (b) At d=1 the bubble subspace is empty → stable = raw bit-exact.
