@@ -108,6 +108,49 @@ def _split(nsegs):
     )
 
 
+def _split_uneven(nsegs):
+    """A collinear anchor placed OFF-CENTRE, with per-edge counts chosen so the
+    segment LENGTH is identical either side.
+
+    Still a known zero: same total mesh as `_straight`, same segment size
+    everywhere, only the edge decomposition differs. So this isolates unequal
+    EDGE EXTENT from unequal SEGMENT SIZE — the two things "graded" conflates.
+    """
+    h = L_DIPOLE / 2
+    k = max(1, nsegs // 6)  # 1:5 edge split, uniform segments throughout
+    z_anchor = -h + k * (L_DIPOLE / nsegs)
+    return dict(
+        wires=[[(0.0, 0.0, -h), (0.0, 0.0, z_anchor), (0.0, 0.0, h)]],
+        n_per_edge_per_wire=[[k, nsegs - k]],
+        nsegs=nsegs,
+        wire_radius=A_THIN,
+        feed_arclength=0.25 * L_DIPOLE,
+    )
+
+
+def _graded(nsegs):
+    """TRUE grading: edges of equal extent carrying very different segment
+    counts, so segment size steps hard across the anchors — the shape
+    momwire#674's per-arm grading produces, and the one the seven-class sweep
+    for #743 did not cover.
+
+    Not a known zero (the mesh genuinely differs from `_straight`), so this
+    deck is read by convergence RATE down the cross-edge ladder rather than by
+    an exact residual.
+    """
+    h = L_DIPOLE / 2
+    q = nsegs // 8
+    counts = [max(1, 5 * q), max(1, 2 * q), max(1, q)]  # 5:2:1 density steps
+    zs = [-h, -h + L_DIPOLE / 3, -h + 2 * L_DIPOLE / 3, h]
+    return dict(
+        wires=[[(0.0, 0.0, z) for z in zs]],
+        n_per_edge_per_wire=[counts],
+        nsegs=nsegs,
+        wire_radius=A_THIN,
+        feed_arclength=0.25 * L_DIPOLE,
+    )
+
+
 def _bent(nsegs):
     """A real corner: two equal arms at 90 degrees. Genuine cross-edge pairs
     at an angle, where the same-edge analytic path never applies."""
@@ -176,6 +219,8 @@ def _ek(nsegs):
 DECKS = {
     "straight": (_straight, "self"),
     "split": (_split, "known-zero"),
+    "split_uneven": (_split_uneven, "known-zero"),
+    "graded": (_graded, "self"),
     "bent": (_bent, "self"),
     "junction_radius_step": (_junction_radius_step, "self"),
     "near_ground_refl": (lambda n: _near_ground(n, "refl-coef"), "self"),
