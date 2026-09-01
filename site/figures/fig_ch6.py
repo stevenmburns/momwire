@@ -67,9 +67,11 @@ def _exact_self():
 
 
 def fig_quadrature():
-    """Error vs Gauss order: the far pair is nailed by 4 points; the self pair
-    crawls (hundreds), which is why momwire never brute-forces it — it uses 4
-    points for far pairs and precomputed static moments for the singular ones."""
+    """Error vs Gauss order: this far pair is nailed by 4 points; the self pair
+    crawls (hundreds), which is why momwire never brute-forces it — it uses
+    Gauss on the smooth pairs and precomputed static moments for the singular
+    ones. The marked default is 8, not the 4 this toy converges at: cross-edge
+    pairs that nearly touch need the margin (momwire#743/#760)."""
     ns = np.arange(2, 130, 2)
     exact_self = _exact_self()
     exact_far = _gauss_int(2.0, 256)
@@ -79,9 +81,9 @@ def fig_quadrature():
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
     ax.semilogy(ns, err_self, "-", color=RED, lw=2, label="self pair (naive Gauss)")
     ax.semilogy(ns, err_far, "-", color=CYAN, lw=2, label="far pair (naive Gauss)")
-    ax.axvline(4, color=GREEN, lw=1.2, ls=":")
-    ax.annotate("momwire: n_qp_pair = 4\nfor smooth far pairs", xy=(4, 1e-6),
-                xytext=(14, 3e-5), color=GREEN, fontsize=8.5,
+    ax.axvline(8, color=GREEN, lw=1.2, ls=":")
+    ax.annotate("momwire: n_qp_pair = 8\nfor cross-edge pairs", xy=(8, 1e-6),
+                xytext=(18, 3e-5), color=GREEN, fontsize=8.5,
                 arrowprops=dict(arrowstyle="->", color=GREEN, lw=1))
     ax.axhline(1e-12, color=AMBER, lw=1.2, ls="--")
     ax.annotate("self pair: precomputed static moments (exact, O(1))",
