@@ -423,9 +423,27 @@ _HAVE_RAZOR_FILL_ACCEL = _acc is not None and bool(
 _FORCE_NUMPY = bool(os.environ.get("MOMWIRE_RAZOR_FORCE_NUMPY"))
 
 
+# The fused T1 assembly (momwire#780), flagged on its OWN symbol for the same
+# reason `razor_fill_742` is: a .so built before this arc exports the moments
+# kernel and not this one.
+_HAVE_RAZOR_ASSEMBLE_ACCEL = _acc is not None and bool(
+    getattr(_acc, "razor_assemble_780", False)
+)
+
+
 def _use_razor_fill_accel():
     """The fused C++ moment fill serves when built and not forced off."""
     return _HAVE_RAZOR_FILL_ACCEL and not _FORCE_NUMPY
+
+
+def _use_razor_assemble_accel():
+    """The fused C++ T1 assembly, under the same two off-switches.
+
+    Both quadrature lanes go through it: `n_path` is the only thing that
+    differs between them (2 under `nec5_quadrature`, 2*`n_qp_path` under
+    Gauss-Legendre) and it is a loop bound inside the kernel, not a branch.
+    """
+    return _HAVE_RAZOR_ASSEMBLE_ACCEL and not _FORCE_NUMPY
 
 
 # momwire#510: the ceiling the grazing-height keying below may raise the
@@ -2907,6 +2925,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_path = prepared["n_path"]
         td_a, td_b = sources["td_a"], sources["td_b"]
         fall_a, fall_b = prepared["fall_a"], prepared["fall_b"]
+        # The kernel wants per-basis flags rather than the index arrays numpy
+        # fancy-indexes with; the branch then hoists out of its observer loop.
+        fall_mask_a = np.zeros(n_basis, dtype=bool)
+        fall_mask_b = np.zeros(n_basis, dtype=bool)
+        if fall_a.size:
+            fall_mask_a[fall_a] = True
+        if fall_b.size:
+            fall_mask_b[fall_b] = True
         # The wings' current directions, needed on their own only by the
         # weighted branch: the unweighted one has them fused into `td_a` /
         # `td_b`, which the weight window replaces wholesale.
@@ -2916,34 +2942,58 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
             self._checkpoint()
             M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
-            mom_a = M1[:, s_a] / h_a[None, :]
-            mom_b = M1[:, s_b] / h_b[None, :]
-            if fall_a.size:
-                mom_a[:, fall_a] = M0[:, s_a[fall_a]] - mom_a[:, fall_a]
-            if fall_b.size:
-                mom_b[:, fall_b] = M0[:, s_b[fall_b]] - mom_b[:, fall_b]
-            if w_A_fn is None:
-                t_out = tans[lo:hi].reshape(-1, 3)
-                integrand = (t_out @ td_a) * mom_a + (t_out @ td_b) * mom_b
+            if w_A_fn is None and _use_razor_assemble_accel():
+                # momwire#780: the gather, the falling-wing correction, the
+                # tangent contraction, the weighting and the path-point sum in
+                # ONE pass, so the (n_obs, n_basis) complex intermediate the
+                # numpy branch builds and immediately reduces is never formed.
+                # At n_path = 64 on a 200-segment deck that temporary is ~32 MB
+                # per chunk, and the assembly around it measured 52-76% of
+                # razor's wall time (both lanes, both grounds).
+                #
+                # Both lanes come through here. `n_path` is a loop bound in the
+                # kernel, not a branch: 2 under `nec5_quadrature`, 2*n_qp_path
+                # under Gauss-Legendre.
+                T1[lo:hi] = _acc.razor_assemble_t1(
+                    M0,
+                    M1,
+                    s_a,
+                    s_b,
+                    h_a,
+                    h_b,
+                    fall_mask_a,
+                    fall_mask_b,
+                    tans[lo:hi].reshape(-1, 3),
+                    td_a,
+                    td_b,
+                    wts[lo:hi].reshape(-1),
+                    n_path,
+                )
             else:
-                # The window's observer rows are this chunk's path points,
-                # which are rows [lo, hi) of the path table flattened by
-                # `n_path` — the same reshape the unweighted branch takes
-                # on `tans`.
-                w_A, _w_Phi_unused = w_A_fn(lo * n_path, hi * n_path)
-                wA_a = w_A[:, s_a] * sig_a[None, :]
-                wA_b = w_A[:, s_b] * sig_b[None, :]
-                integrand = wA_a * mom_a + wA_b * mom_b
-            integrand *= wts[lo:hi].reshape(-1)[:, None]
-            T1[lo:hi] = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
+                mom_a = M1[:, s_a] / h_a[None, :]
+                mom_b = M1[:, s_b] / h_b[None, :]
+                if fall_a.size:
+                    mom_a[:, fall_a] = M0[:, s_a[fall_a]] - mom_a[:, fall_a]
+                if fall_b.size:
+                    mom_b[:, fall_b] = M0[:, s_b[fall_b]] - mom_b[:, fall_b]
+                if w_A_fn is None:
+                    t_out = tans[lo:hi].reshape(-1, 3)
+                    integrand = (t_out @ td_a) * mom_a + (t_out @ td_b) * mom_b
+                else:
+                    # The window's observer rows are this chunk's path points,
+                    # which are rows [lo, hi) of the path table flattened by
+                    # `n_path` — the same reshape the unweighted branch takes
+                    # on `tans`.
+                    w_A, _w_Phi_unused = w_A_fn(lo * n_path, hi * n_path)
+                    wA_a = w_A[:, s_a] * sig_a[None, :]
+                    wA_b = w_A[:, s_b] * sig_b[None, :]
+                    integrand = wA_a * mom_a + wA_b * mom_b
+                integrand *= wts[lo:hi].reshape(-1)[:, None]
+                T1[lo:hi] = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
             if rem_fn is not None:
                 # The remainder rides the same window, and the same wing
-                # algebra one axis over: the moment axis carries ∫Λ and
-                # ∫τΛ of the projected field where `mom_a` / `mom_b` carry
-                # M0 and M1 of the kernel. σ multiplies afterwards for the
-                # same reason it does on w_A — the field is linear in the
-                # source tangent — and no jωμ / 1/jωε prefactor is applied
-                # at all, because F is already a field.
+                # algebra one axis over: the moment axis carries ∫Λ and ∫τΛ of
+                # the projected field where `mom_a` / `mom_b` carry M0 and M1.
                 f_mom = rem_fn(lo * n_path, hi * n_path)
                 rem_a = f_mom[:, s_a, 1] / h_a[None, :]
                 rem_b = f_mom[:, s_b, 1] / h_b[None, :]
@@ -2954,7 +3004,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 rem_int = rem_a * sig_a[None, :] + rem_b * sig_b[None, :]
                 rem_int *= wts[lo:hi].reshape(-1)[:, None]
                 Q[lo:hi] = rem_int.reshape(hi - lo, n_path, n_basis).sum(axis=1)
-
         block = 1j * omega * self.mu * T1 - T2 / (1j * omega * self.eps)
         if Q is None:
             return block

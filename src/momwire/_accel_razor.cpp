@@ -361,6 +361,137 @@ razor_seg_moments(
     return {M0, M1};
 }
 
+// ---------------------------------------------------------------------------
+// T1 assembly (momwire#780)
+//
+// The razor fill's other half. `razor_seg_moments` above already returns the
+// moments in C++; what followed in Python was the ASSEMBLY -- gather the two
+// wings' columns out of (M0, M1), apply the falling-wing correction, contract
+// each testing-path point's tangent with the source tangents, weight, and sum
+// over the path points. numpy spells that with a (n_obs, n_basis) complex
+// intermediate that is then reduced along a reshaped axis; at
+// n_path = 2*n_qp_path = 64 on a 200-segment deck that is a 32 MB temporary
+// per chunk, and it measured 52-76% of razor's wall time.
+//
+// ONE KERNEL SERVES BOTH QUADRATURE LANES. `n_path` enters only as the inner
+// loop bound -- 2 for `nec5_quadrature` (the two wing-centroid trapezoid
+// points) and 2*n_qp_path for the Gauss-Legendre lane. Nothing else differs:
+// `_testing_paths` already hands the fill `(pts, tans, wts)` shape-agnostically
+// and `_assemble_Z_source_block` contains no branch on the lane. Keeping it
+// that way is the point -- the two lanes cannot drift if they are one
+// implementation.
+//
+// Scope: the unweighted integrand, i.e. free space and any FOLDING ground
+// (PEC and the reflection-coefficient fold), which is `w_A_fn is None` on the
+// Python side. The finite-ground weighted branch keeps its numpy path for now;
+// it carries a per-chunk weight table this signature has no room for.
+//
+// Falling wings: `fall_a`/`fall_b` are per-basis flags, not per-pair, so the
+// branch is hoisted out of the observer loop.
+static py::array_t<std::complex<double>>
+razor_assemble_t1(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> M0,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> M1,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> s_a,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> s_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_a,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_b,
+    py::array_t<bool, py::array::c_style | py::array::forcecast> fall_a,
+    py::array_t<bool, py::array::c_style | py::array::forcecast> fall_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_out,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_a,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wts,
+    size_t n_path
+) {
+    auto m0 = M0.unchecked<2>();
+    auto m1 = M1.unchecked<2>();
+    auto sa = s_a.unchecked<1>();
+    auto sb = s_b.unchecked<1>();
+    auto ha = h_a.unchecked<1>();
+    auto hb = h_b.unchecked<1>();
+    auto fa = fall_a.unchecked<1>();
+    auto fb = fall_b.unchecked<1>();
+    auto to = t_out.unchecked<2>();
+    auto ta = td_a.unchecked<2>();
+    auto tb = td_b.unchecked<2>();
+    auto w = wts.unchecked<1>();
+
+    const size_t n_obs = static_cast<size_t>(m1.shape(0));
+    const size_t n_seg = static_cast<size_t>(m1.shape(1));
+    const size_t n_basis = static_cast<size_t>(sa.shape(0));
+
+    if (n_path == 0 || n_obs % n_path != 0) {
+        throw std::runtime_error(
+            "razor_assemble_t1: n_obs must be a whole number of testing-path "
+            "points (n_obs % n_path != 0)");
+    }
+    if (static_cast<size_t>(to.shape(0)) != n_obs ||
+        static_cast<size_t>(w.shape(0)) != n_obs) {
+        throw std::runtime_error(
+            "razor_assemble_t1: t_out and wts must have one row per observer");
+    }
+    if (to.shape(1) != 3 || ta.shape(0) != 3 || tb.shape(0) != 3) {
+        throw std::runtime_error("razor_assemble_t1: tangents must be 3-vectors");
+    }
+    if (static_cast<size_t>(ta.shape(1)) != n_basis ||
+        static_cast<size_t>(tb.shape(1)) != n_basis ||
+        static_cast<size_t>(sb.shape(0)) != n_basis) {
+        throw std::runtime_error(
+            "razor_assemble_t1: per-basis arrays disagree on n_basis");
+    }
+    for (size_t j = 0; j < n_basis; j++) {
+        if (sa(j) < 0 || static_cast<size_t>(sa(j)) >= n_seg ||
+            sb(j) < 0 || static_cast<size_t>(sb(j)) >= n_seg) {
+            throw std::runtime_error(
+                "razor_assemble_t1: wing segment index out of range");
+        }
+    }
+
+    const size_t n_rows = n_obs / n_path;
+    py::array_t<std::complex<double>> T1({n_rows, n_basis});
+    auto out = T1.mutable_unchecked<2>();
+
+    py::gil_scoped_release release;
+
+    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t r = 0; r < n_rows; r++) {
+        for (size_t j = 0; j < n_basis; j++) {
+            const size_t ja = static_cast<size_t>(sa(j));
+            const size_t jb = static_cast<size_t>(sb(j));
+            const double inv_ha = 1.0 / ha(j);
+            const double inv_hb = 1.0 / hb(j);
+            const bool fall_j_a = fa(j);
+            const bool fall_j_b = fb(j);
+            const double a0 = ta(0, j), a1 = ta(1, j), a2 = ta(2, j);
+            const double b0 = tb(0, j), b1 = tb(1, j), b2 = tb(2, j);
+
+            double acc_re = 0.0, acc_im = 0.0;
+            for (size_t p = 0; p < n_path; p++) {
+                const size_t o = r * n_path + p;
+
+                // mom_a = M1/h on a rising wing, M0 - M1/h on a falling one.
+                std::complex<double> ma = m1(o, ja) * inv_ha;
+                if (fall_j_a) ma = m0(o, ja) - ma;
+                std::complex<double> mb = m1(o, jb) * inv_hb;
+                if (fall_j_b) mb = m0(o, jb) - mb;
+
+                const double dot_a = to(o, 0) * a0 + to(o, 1) * a1 + to(o, 2) * a2;
+                const double dot_b = to(o, 0) * b0 + to(o, 1) * b1 + to(o, 2) * b2;
+                const double wo = w(o);
+
+                const double gre = dot_a * ma.real() + dot_b * mb.real();
+                const double gim = dot_a * ma.imag() + dot_b * mb.imag();
+                acc_re += wo * gre;
+                acc_im += wo * gim;
+            }
+            out(r, j) = std::complex<double>(acc_re, acc_im);
+        }
+    }
+    return T1;
+}
+
+
 void register_razor(py::module_ &m) {
     // The capability flag lives here, in the TU that defines the symbol it
     // vouches for (#710 review): a build carrying `razor_fill_742` carries
@@ -385,4 +516,23 @@ void register_razor(py::module_ &m) {
           py::arg("a"), py::arg("xg"), py::arg("wg"), py::arg("k"),
           py::arg("need_m1"), py::arg("group_i"), py::arg("group_j"),
           py::arg("a_ek"), py::arg("cancel_flag") = 0);
+
+    // momwire#780. Declared beside the moments kernel it pairs with.
+    m.attr("razor_assemble_780") = true;
+    m.def("razor_assemble_t1", &razor_assemble_t1,
+          "Fused T1 assembly for the razor-blade formulation (momwire#780). "
+          "Gathers both wings out of (M0, M1), applies the falling-wing "
+          "correction, contracts each testing-path point's tangent with the "
+          "source tangents, weights, and sums over the path points -- without "
+          "forming the (n_obs, n_basis) complex intermediate the numpy path "
+          "builds and immediately reduces. Returns T1 of shape "
+          "(n_obs / n_path, n_basis). `n_path` is the only thing that differs "
+          "between the two quadrature lanes (2 under nec5_quadrature, "
+          "2*n_qp_path under Gauss-Legendre), so one kernel serves both. "
+          "Unweighted integrand only: free space and folding grounds, i.e. "
+          "the `w_A_fn is None` branch.",
+          py::arg("M0"), py::arg("M1"), py::arg("s_a"), py::arg("s_b"),
+          py::arg("h_a"), py::arg("h_b"), py::arg("fall_a"), py::arg("fall_b"),
+          py::arg("t_out"), py::arg("td_a"), py::arg("td_b"), py::arg("wts"),
+          py::arg("n_path"));
 }
