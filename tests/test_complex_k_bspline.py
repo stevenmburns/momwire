@@ -202,6 +202,13 @@ _ACCEL_REDUCED_SYMBOLS = (
     "seg_seg_full_moments_bspline_swept",
 )
 
+# momwire#778 gave the PLAIN off-edge kernel a complex-k instantiation, so this
+# one entry point is now REACHED in the medium rather than bypassed. It is
+# spied separately from the tuple above precisely so the bypass gate keeps
+# asserting zero for everything else — had it simply been appended, the "every
+# accelerator stays idle" claim would have been weakened instead of split.
+_ACCEL_CPLX_SYMBOL = "seg_seg_full_moments_bspline_cplx"
+
 
 class _AccelSpy:
     """Counting proxy over the accelerator module (the #270 pattern)."""
@@ -281,10 +288,16 @@ def test_gu1_1_real_k_output_is_bit_identical_to_the_pre_553_dispatch(monkeypatc
         assert np.array_equal(g, r), f"entry point {i} moved"
 
 
-def test_gu1_1_complex_k_bypasses_every_accelerator_flag(accel_spy):
-    """The C++ twins take `double k`; a complex k must not reach one of
-    them (it would truncate silently). Every accelerated entry point, with
-    the flags at their shipped values."""
+def test_gu1_1_complex_k_bypasses_every_double_k_accelerator_flag(accel_spy):
+    """The `double k` C++ twins must not be reached in the medium — they
+    would truncate the wavenumber silently.
+
+    momwire#778 narrowed this gate rather than deleting it. The PLAIN off-edge
+    kernel now HAS a complex-k instantiation and is asserted separately below;
+    every entry point that still takes `double k` must stay at zero, which is
+    what this asserts. Widening the tuple instead would have let a future
+    complex-k leak into the swept or reg kernels pass unnoticed.
+    """
     h, a = 0.12, 0.005
     km = MEDIA[WORST][2]
     ends = np.arange(4) * h
@@ -294,9 +307,71 @@ def test_gu1_1_complex_k_bypasses_every_accelerator_flag(accel_spy):
     geo = _seg_seg_reg_geometry(ends, a, max_d=2, n_qp=4)
     _seg_seg_reg_moments_from_geometry(geo, km)
     _seg_seg_reg_moments_from_geometry_swept(geo, ks)
-    _seg_seg_full_moments_offedge(lo_i, hi_i, lo_j, hi_j, a, km, 2, 4)
     _seg_seg_full_moments_offedge_swept(lo_i, hi_i, lo_j, hi_j, a, ks, 2, 4)
     assert accel_spy.counts == dict.fromkeys(_ACCEL_REDUCED_SYMBOLS, 0)
+
+
+def test_gu1_1_complex_k_now_reaches_the_plain_offedge_accelerator(monkeypatch):
+    """momwire#778: the plain off-edge kernel's COMPLEX_K instantiation IS
+    taken in the medium, and the real-k entry point is NOT.
+
+    The pre-#778 gate spied only on a fixed tuple of `double k` symbols, so
+    once the complex twin existed that gate went vacuous for this path — it
+    asserted zero on names the call no longer used. This is the replacement
+    that actually watches the symbol the medium now dispatches to.
+    """
+    spy = _AccelSpy(_bk._acc, (_ACCEL_CPLX_SYMBOL, "seg_seg_full_moments_bspline"))
+    monkeypatch.setattr(_bk, "_acc", spy)
+    h, a = 0.12, 0.005
+    km = MEDIA[WORST][2]
+    lo_i, hi_i = _straight(3, h)
+    lo_j, hi_j = _straight(3, h, origin=(0.0, 0.4, 0.0))
+    _seg_seg_full_moments_offedge(lo_i, hi_i, lo_j, hi_j, a, km, 2, 4)
+    if _bk._HAVE_BSPLINE_OFFEDGE_CPLX_ACCEL:
+        assert spy.counts[_ACCEL_CPLX_SYMBOL] == 1, spy.counts
+    assert spy.counts["seg_seg_full_moments_bspline"] == 0, spy.counts
+
+
+def test_gu1_1_the_complex_offedge_accelerator_matches_its_numpy_twin(monkeypatch):
+    """momwire#778's continuation is exp(-jkR) = exp(Im(k)*R)*exp(-j*Re(k)*R),
+    a real scale factor — NOT the King & Smith (3.20b,c) |k| substitution.
+    Gated against the numpy twin the C++ path replaces, at an n_qp the old
+    ceiling would not have served."""
+    h, a = 0.12, 0.005
+    km = MEDIA[WORST][2]
+    lo_i, hi_i = _straight(6, h)
+    lo_j, hi_j = _straight(6, h, origin=(0.0, 0.4, 0.0))
+    for n_qp in (4, 8, 32):
+        got = _seg_seg_full_moments_offedge(lo_i, hi_i, lo_j, hi_j, a, km, 2, n_qp)
+        monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_CPLX_ACCEL", False)
+        ref = _seg_seg_full_moments_offedge(lo_i, hi_i, lo_j, hi_j, a, km, 2, n_qp)
+        monkeypatch.undo()
+        rel = np.abs(got - ref).max() / np.abs(ref).max()
+        assert rel < 1e-13, f"n_qp={n_qp}: relative {rel:.3e}"
+
+
+def test_gu1_1_the_complex_offedge_accelerator_refuses_the_growing_branch():
+    """Im k > 0 is the growing-exponential branch. The Python predicate raises
+    before dispatch, and the C++ entry point re-asserts it because a test can
+    reach that symbol directly."""
+    if not _bk._HAVE_BSPLINE_OFFEDGE_CPLX_ACCEL:
+        pytest.skip("no complex-k off-edge accelerator in this build")
+    h, a = 0.12, 0.005
+    lo_i, hi_i = _straight(3, h)
+    lo_j, hi_j = _straight(3, h, origin=(0.0, 0.4, 0.0))
+    gl_xi, gl_w = np.polynomial.legendre.leggauss(4)
+    with pytest.raises(RuntimeError, match="Im k > 0"):
+        _bk._acc.seg_seg_full_moments_bspline_cplx(
+            np.ascontiguousarray(lo_i, dtype=np.float64),
+            np.ascontiguousarray(hi_i, dtype=np.float64),
+            np.ascontiguousarray(lo_j, dtype=np.float64),
+            np.ascontiguousarray(hi_j, dtype=np.float64),
+            a * a,
+            complex(0.5, +0.1),
+            2,
+            np.ascontiguousarray(0.5 * (gl_xi + 1.0)),
+            np.ascontiguousarray(0.5 * gl_w),
+        )
 
 
 def test_gu1_1_complex_k_bypasses_the_ek_accelerator_flags(accel_spy, monkeypatch):

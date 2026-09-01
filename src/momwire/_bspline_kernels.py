@@ -152,6 +152,9 @@ _HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL = _acc is not None and hasattr(
 # Currently the C++ accelerator has explicit instantiations for D in {1, 2}.
 # Extend by adding `seg_seg_full_moments_bspline_kernel<3>(...)` and a switch
 # case in src/momwire/_accelerators.cpp.
+_HAVE_BSPLINE_OFFEDGE_CPLX_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_full_moments_bspline_cplx"
+)
 _BSPLINE_ACCEL_MAX_D = 2
 
 MAX_D_SUPPORTED = 2
@@ -844,11 +847,17 @@ def _seg_seg_full_moments_offedge(
     # is a shape the kernels do not serve, and the numpy path does
     # (momwire#769). Split from the rest so the warning can tell "the ceiling
     # moved this work" from "it was going to numpy anyway".
+    # momwire#778: a complex (in-medium) k is served by the plain off-edge
+    # kernel's COMPLEX_K instantiation, which factors exp(-jkR) into the real
+    # decay exp(Im(k)*R) times the existing real-lane sincos. Only the PLAIN
+    # kernel is widened so far — the EK and swept twins still take the numpy
+    # route, which is why `_shape_ok_ek` below keeps its `not in_medium`.
+    _cplx_ok = in_medium and _HAVE_BSPLINE_OFFEDGE_CPLX_ACCEL
     _shape_ok = (
         _HAVE_BSPLINE_ACCEL
         and max_d <= _BSPLINE_ACCEL_MAX_D
         and ek is None
-        and not in_medium
+        and (not in_medium or _cplx_ok)
     )
     _shape_ok_ek = (
         ek is not None
@@ -898,13 +907,21 @@ def _seg_seg_full_moments_offedge(
         )
 
     if accel_ok:
-        return _acc.seg_seg_full_moments_bspline(
+        # `float(k)` would silently truncate an in-medium wavenumber, which is
+        # the whole hazard class momwire#553 U1 named — so the complex branch
+        # is a different ENTRY POINT taking `complex(k)`, not a widened arg.
+        _fn = (
+            _acc.seg_seg_full_moments_bspline_cplx
+            if in_medium
+            else _acc.seg_seg_full_moments_bspline
+        )
+        return _fn(
             np.ascontiguousarray(seg_l_i, dtype=np.float64),
             np.ascontiguousarray(seg_r_i, dtype=np.float64),
             np.ascontiguousarray(seg_l_j, dtype=np.float64),
             np.ascontiguousarray(seg_r_j, dtype=np.float64),
             float(a) * float(a),
-            float(k),
+            complex(k) if in_medium else float(k),
             int(max_d),
             np.ascontiguousarray(t01, dtype=np.float64),
             np.ascontiguousarray(w01, dtype=np.float64),
