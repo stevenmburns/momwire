@@ -141,15 +141,43 @@ NODE_REACH = 0.15
 # deck far from that scale may read these as over- or under-eager. Known
 # limitation of the measurements behind them, not of the rule.
 
-# Attribution from #674 probe2, which is why the message names the worst
-# member rather than just the junction: rise-only grading left the
-# residual at 0.2214 (unchanged from base), while grading the ABOVE tent
-# alone dropped it to 0.0171. The dominant term is the above arm's
-# interface-adjacent resolution; rise-side pair content is secondary.
-_ABOVE_IS_DOMINANT = (
-    "the above arm's interface-adjacent mesh is the dominant term "
-    "(#674 probe2: grading the rises alone left the residual unmoved "
-    "at 0.2214 ohm; grading the above tent alone dropped it to 0.0171)"
+# WITHDRAWN (#760). This used to say "the above arm's interface-adjacent mesh
+# is the dominant term", on #674 probe2's rise-only 0.2214 ohm against
+# mono-only 0.0171. Re-derived across the quadrature axis that study held
+# fixed at n_qp_pair=4, the asymmetry is quadrature, not mesh:
+#
+#   n_qp_pair      mono-only      rise-only
+#       4            0.0171         0.2214     <- what the claim was built on
+#       8            0.0007         0.0540
+#      16            0.0003         0.0082
+#      32            0.0002         0.0001     <- no asymmetry left
+#
+# At converged quadrature both arms sit at ~1e-4 ohm, so there is no dominant
+# member to name. The message no longer attributes one.
+
+# What the node mesh is actually worth, per quadrature order, on the soil-A
+# fan: |base - fully graded|, against the far-mesh doubling on the same rung.
+#
+#   n_qp_pair    node grading    far-mesh x2
+#       4          10.4101         0.0215
+#       8           4.4967         0.0968     <- today's default
+#      16           1.5628         0.1182
+#      32           0.3025         0.1227
+#      64           0.0782         0.1224
+#
+# Two things follow, and the message says both. Grading the node IS worth
+# ~4.5 ohm at the shipped default, so the advice stands. But it is worth that
+# because coarse quadrature and a coarse node interact — the mesh term itself
+# is 0.08 ohm — so raising n_qp_pair is the other lever, and past q~16 it is
+# the bigger one. That lever did not exist when this warning was written: the
+# accelerated kernels refused n_qp > 8 until #762 tiled them.
+_RAISE_THE_ORDER = (
+    "grading is not the only lever, and past n_qp_pair ~ 16 it is not the "
+    "bigger one: most of what grading buys at the default order is quadrature "
+    "error, not mesh error (#760 — on the soil-A fan, grading moves the answer "
+    "4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR "
+    "mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the "
+    "accelerated path since #762"
 )
 
 
@@ -201,15 +229,15 @@ def warn_coarse_node(arms):
         f"crossing node: wire {worst.wire}'s {worst.end} is the {worst.side} "
         f"member, and the finest mesh within {NODE_REACH * 1000:.0f} mm of "
         f"the node is {worst.h_resolved * 1000:.1f} mm, above the "
-        f"{NODE_H_BAR * 1000:.0f} mm bar{gap}. This node carries a "
-        f"convergence class that is FIRST ORDER in the node mesh with no "
-        f"plateau (momwire#674), so a global density sweep will report it "
-        f"as converged while it is not — and on lossy soil the class "
-        f"amplifies ~30x. Grade the node instead: geometric panels toward "
+        f"{NODE_H_BAR * 1000:.0f} mm bar{gap}. At the default quadrature "
+        f"order this node is worth ~4.5 ohm on the soil-A fan and a global "
+        f"density sweep will report it as converged while it is not "
+        f"(momwire#674, re-derived in momwire#760). Grade the node: "
+        f"geometric panels toward "
         f"the shared point, ~6 mm at the node growing to the design's own "
         f"segment length away from it, spelled as extra VERTICES in the "
         f"wire's polyline with per-edge counts in n_per_edge_per_wire so "
-        f"the grading cannot change junction topology. {_ABOVE_IS_DOMINANT}. "
+        f"the grading cannot change junction topology. {_RAISE_THE_ORDER}. "
         f"Advisory: nothing is remeshed. See stevenmburns/momwire#696.",
         CoarseCrossingNode,
         **_WARN_TARGET,

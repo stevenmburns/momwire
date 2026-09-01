@@ -280,12 +280,26 @@ def test_g524_2_above_side_other_junction_refused_by_name():
 # The #674 study's per-arm node grading (probe18's geometric walk, at
 # the K = 5 node): vertices approach (0,0,0) on the rises from below and
 # the monopole from above, MATCHED across the interface, far mesh at
-# base. The study's verdict (scratch/674-study, probes 1-3): the K>2
-# composition error is the ABOVE tent's interface-adjacent h at first
-# order (rise-only grading leaves 0.2214 of the base 0.2269 Ω ε̃ = 1
+# base.
+#
+# THE STUDY'S VERDICT WAS RE-DERIVED IN #760 AND DID NOT SURVIVE. It read:
+# "the K>2 composition error is the ABOVE tent's interface-adjacent h at
+# first order (rise-only grading leaves 0.2214 of the base 0.2269 Ω ε̃ = 1
 # residual; mono-only drops it to 0.0171), and matched grading restores
-# ~2.6-order convergence — n2 collapses the residual to 0.0001 Ω for a
-# base-mesh solve cost.
+# ~2.6-order convergence". Every number there was measured at a fixed
+# n_qp_pair = 4, and on a crossing node the cross-edge quadrature error is
+# first order in that knob. Re-run across it:
+#
+#   - the ε̃ = 1 composition error is 0.0000 Ω at n_qp_pair = 32, on every
+#     rung of probe1's uniform ladder. There is no composition error; the
+#     "clean first order" ladder was measuring quadrature.
+#   - the above/rise asymmetry (0.0171 vs 0.2214) is 0.0002 vs 0.0001 at
+#     n_qp_pair = 32. Neither arm dominates.
+#
+# The GRADING still earns its place here, which is why this deck is
+# unchanged: at the shipped default it is worth ~4.5 Ω on the soil-A fan.
+# What it is not is a mesh convergence class — at n_qp_pair = 64 the same
+# grading is worth 0.08 Ω, less than the 0.12 Ω a far-mesh doubling moves.
 _FAN_GRADES = {
     # rung: rise (z-vertices −depth → 0, npe), mono (z-vertices 10 → 0, npe)
     "n2": (
@@ -901,9 +915,15 @@ def test_g696_2_every_crossing_member_is_reported_once():
 
 
 def test_g696_3_the_base_fan_warns_and_names_the_above_arm():
-    """The coarse anchor: the deck #674 measured at 0.2269 ohm (eps~=1)
-    and 7.48 ohm of soil-A mesh move. Its above arm is a single 667 mm
-    edge that never resolves, so it must warn and name that arm."""
+    """The coarse anchor. Its above arm is a single 667 mm edge that never
+    resolves, so it must warn and name that arm.
+
+    #674 measured this deck at 0.2269 ohm (eps~=1) and 7.48 ohm of soil-A
+    mesh move; #760 re-derived both across the quadrature axis that study
+    held at n_qp_pair=4 and neither survives as a MESH number — the eps~=1
+    residual is 0.0000 ohm at n_qp_pair=32. The deck still warns, and should:
+    at the shipped order the node is worth ~4.5 ohm. What changed is the
+    reason, which is why the message now cites #760 as well."""
     with pytest.warns(_crossing_fill.CoarseCrossingNode) as rec:
         worst = _crossing_fill.warn_coarse_node(_arms(fan_rise_deck()))
     assert worst.h_resolved == pytest.approx(10.0 / 15.0, rel=1e-12)
@@ -911,6 +931,10 @@ def test_g696_3_the_base_fan_warns_and_names_the_above_arm():
     msg = str(rec[0].message)
     assert "666.7 mm" in msg and "above member" in msg
     assert "momwire#674" in msg and "momwire#696" in msg
+    # The re-derivation is part of the claim now, not a footnote to it.
+    assert "momwire#760" in msg
+    # WITHDRAWN by #760: the message must no longer attribute a dominant arm.
+    assert "dominant term" not in msg
 
 
 @pytest.mark.parametrize(
