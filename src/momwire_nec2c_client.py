@@ -84,6 +84,7 @@ BASIS_NAMES = (
     "hmatrix",
     "pulse",
     "razor",
+    "razor-2p",
     "razor-nec5",
     "sinusoidal",
     "sinusoidal-galerkin",

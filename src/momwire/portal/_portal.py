@@ -296,6 +296,9 @@ _BANNER_SUFFIXES = {
     "sinusoidal": "+sin",
     "sinusoidal-galerkin": "+sg",
     "razor": "+razor",
+    "razor-2p": "+razor2p",
+    # Deprecated spelling of razor-2p; its banner suffix is kept as it shipped
+    # so an existing install's provenance strings do not change under it.
     "razor-nec5": "+razor5",
     "pulse": "+pulse",
 }
