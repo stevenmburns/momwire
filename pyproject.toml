@@ -114,6 +114,11 @@ momwire-nec2c-arrayblock = "momwire.portal:main"
 momwire-nec2c-sinusoidal = "momwire.portal:main"
 momwire-nec2c-sinusoidal-galerkin = "momwire.portal:main"
 momwire-nec2c-razor = "momwire.portal:main"
+momwire-nec2c-razor-2p = "momwire.portal:main"
+# Deprecated spelling of razor-2p, kept because it shipped. It classifies
+# correctly everywhere: SimNEC sniffs nec2c before nec5 and this name carries
+# both, and EZNEC takes engine class and path as explicit fields rather than
+# inferring from either. The rename is about the claim the name makes.
 momwire-nec2c-razor-nec5 = "momwire.portal:main"
 momwire-nec2c-pulse = "momwire.portal:main"
 

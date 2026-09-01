@@ -42,7 +42,10 @@ Gates, in the order the issue asked for:
 
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
+
 import pytest
 
 from momwire.deck import BASES, build_solver, parse
@@ -92,6 +95,53 @@ def test_razor_and_razor_nec5_are_in_the_roster():
     solver_class, kwargs = BASES["razor-nec5"]
     assert solver_class is RazorSolver
     assert dict(kwargs) == {"nec5_quadrature": True}
+
+
+def test_razor_2p_is_the_current_spelling_and_razor_nec5_an_alias():
+    """`razor-2p` names the RULE; `razor-nec5` is the deprecated spelling.
+
+    They must stay indistinguishable — same class, same kwargs — because the
+    old name shipped in the named entry points and in antennaknobs' CLI
+    roster, and an install that still says `razor-nec5` must keep getting
+    exactly what it got before.
+
+    The rename is about the claim the name makes, not about any host
+    mis-reading it: EZNEC takes engine class and path as explicit fields and
+    infers nothing from the name, and SimNEC sniffs nec2c before nec5 so
+    `momwire-nec2c-razor-nec5` always classified correctly.
+    """
+    two_p, kw_2p = BASES["razor-2p"]
+    alias, kw_alias = BASES["razor-nec5"]
+    assert two_p is alias is RazorSolver
+    assert dict(kw_2p) == dict(kw_alias) == {"nec5_quadrature": True}
+    # And both remain distinct from the Gauss-Legendre lane.
+    assert dict(BASES["razor"][1]) == {}
+
+
+def test_every_razor_lane_has_an_entry_point_and_a_banner_suffix():
+    """A roster name a filename-only host cannot select is not really served.
+
+    `_BANNER_SUFFIXES` already fails at import if a roster name is missing
+    (which is how `razor-2p` announced itself when it was added), so this
+    covers the other half: the console script, and the client's own copy of
+    the roster that `test_the_clients_basis_roster_is_the_engines_own` binds.
+    """
+    import tomllib
+
+    from momwire.portal._portal import _BANNER_SUFFIXES, basis_from_program_name
+    from momwire_nec2c_client import BASIS_NAMES
+
+    root = pathlib.Path(__file__).resolve().parent.parent
+    scripts = tomllib.loads((root / "pyproject.toml").read_text())["project"]["scripts"]
+    for name in ("razor", "razor-2p", "razor-nec5"):
+        assert name in _BANNER_SUFFIXES, name
+        assert name in BASIS_NAMES, name
+        script = f"momwire-nec2c-{name}"
+        assert script in scripts, f"{script} missing from [project.scripts]"
+        assert basis_from_program_name(script, "nec2c-") == name
+    # The suffixes must be distinct, or a printout cannot say which ran.
+    subset = {n: _BANNER_SUFFIXES[n] for n in ("razor", "razor-2p", "razor-nec5")}
+    assert len(set(subset.values())) == 3, subset
 
 
 def test_razor_nec5_binds_the_identified_quadrature():

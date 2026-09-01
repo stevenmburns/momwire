@@ -115,7 +115,38 @@ BASES = MappingProxyType(
         # roster entry is a menu item, and this menu had two spellings of one
         # dish with no way to tell them apart from the outside.
         "sinusoidal-galerkin": (SinusoidalGalerkinSolver, MappingProxyType({})),
+        # Two razor lanes, one class, differing ONLY in where the testing path
+        # is sampled: `razor` takes `n_qp_path` Gauss-Legendre nodes per wing,
+        # `razor-2p` takes NEC-5's identified two-point trapezoid at the wing
+        # centroids (momwire#316). `_path_nodes_per_wing` is, in its own words,
+        # "the one place the two lanes differ".
+        #
+        # `razor-2p` IS THE ONE TO REACH FOR, and the only one antennaknobs'
+        # engine picker offers. Measured on the ByDipole1 ladder, the two agree
+        # to within 3% of each other's self-convergence by N=384 having been 2x
+        # apart at N=12 — the Gauss-Legendre rule's advantage evaporates by
+        # N~192 — while costing ~10x the wall time (momwire#780). `razor` stays
+        # for convergence and certification work, where paying that is the
+        # point.
         "razor": (RazorSolver, MappingProxyType({})),
+        "razor-2p": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
+        # DEPRECATED spelling of `razor-2p`, kept because it shipped in the
+        # named entry points and in antennaknobs' CLI roster.
+        #
+        # The rename is about the CLAIM the name makes, not about any host
+        # mis-reading it: `razor-2p` describes the quadrature rule, where
+        # `razor-nec5` names another vendor's product and implies a special
+        # relationship the measurements do not support. The two lanes share a
+        # limit with bspline rather than tracking NEC-5 in particular — on the
+        # ByDipole1 ladder razor-2p and bs2 are 0.124 ohm apart at N=3072 and
+        # closing as N^-0.73 — so this lane is SLOWER than bspline, not
+        # specially agreeing with anything.
+        #
+        # No host is confused by the old spelling and none was claimed to be:
+        # EZNEC takes its engine class and path as explicit fields and infers
+        # nothing from the name, and SimNEC sniffs the path in the order nec2c,
+        # nec5, nec42 — `momwire-nec2c-razor-nec5` carries both tokens and
+        # `nec2c` wins ties, so it has always classified correctly.
         "razor-nec5": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
         # The pulse family, and ONE name for it (momwire#564), on momwire#654's
         # rule: a roster entry is a menu item, so it should be the dish worth
