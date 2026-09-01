@@ -271,7 +271,29 @@ seg_seg_reg_moments_bspline_swept_ek(
 // hand-rolled s00 / s10 / s01 / s11 accumulators achieved.
 //
 // n_qp <= 8 assumed (n_qp^2 <= 64 scratch buffer size).
-template<int D>
+// COMPLEX_K continues this kernel to an in-medium (lossy) wavenumber
+// k = k_re + j*k_im with Im k <= 0 (momwire#778). The continuation is a real
+// SCALE FACTOR, not a substitution:
+//
+//     exp(-jkR) = exp(k_im * R) * (cos(k_re*R) - j*sin(k_re*R))
+//                 ^^^^^^^^^^^^^ real, monotone in (0, 1] since k_im <= 0
+//
+// so the complex-k case is the real-k case with both trig arrays scaled by one
+// extra real exp() per point, and every loop below stays in real SIMD lanes.
+// That is the point: this kernel is fast BECAUSE its complex arithmetic is
+// hand-split into real arrays libmvec can vectorize, and a
+// std::complex<double> inner loop would give most of that back.
+//
+// THE TRAP (King & Smith 1981 eqs. 3.20b,c, recorded at momwire#553 U1): a
+// lossy-medium kernel split into e^{-aR}cos(bR)/R and e^{-aR}sin(bR)/R does
+// NOT generalize by substituting |k| for a real k. That audit found no such
+// spelling in the PYTHON modules; THIS kernel is exactly that spelling, which
+// was harmless only while it never served complex k. The factorization above
+// is the correct continuation; |k| is the wrong one.
+//
+// `if (COMPLEX_K)` rather than `if constexpr`: the build is -std=gnu++11, and
+// this is the idiom `if (EK)` already uses here. The branch folds at -O3.
+template<int D, bool COMPLEX_K>
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_bspline_kernel(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
@@ -280,6 +302,7 @@ seg_seg_full_moments_bspline_kernel(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
     double a_squared,
     double k,
+    double k_im,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
 ) {
@@ -364,6 +387,7 @@ seg_seg_full_moments_bspline_kernel(
             alignas(32) double cos_phases[BSPLINE_QR_TILE];
             alignas(32) double sin_phases[BSPLINE_QR_TILE];
             alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+            alignas(32) double decay[BSPLINE_QR_TILE];
             // wuwu[pP, t]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P for the
             // chunk's pairs, flattened with pP = p*NM + P. For D=2:
             // NMM*64 = 576 doubles = 4.5KB, fits comfortably in L1.
@@ -413,7 +437,7 @@ seg_seg_full_moments_bspline_kernel(
                     if (++r == n_qp) { r = 0; ++q; }
                 }
 
-                // Stage 1: phases = -k * R, then sincos via libmvec.
+                // Stage 1: phases = -k_re * R, then sincos via libmvec.
                 PYSIM_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     phases[t] = -k * R[t];
@@ -426,11 +450,30 @@ seg_seg_full_moments_bspline_kernel(
                 for (size_t t = 0; t < m; t++) {
                     sin_phases[t] = std::sin(phases[t]);
                 }
-                PYSIM_OMP_SIMD()
-                for (size_t t = 0; t < m; t++) {
-                    inv_R_4pi[t] = inv_4pi / R[t];
-                    G_re[t] = cos_phases[t] * inv_R_4pi[t];
-                    G_im[t] = sin_phases[t] * inv_R_4pi[t];
+                if (COMPLEX_K) {
+                    // exp(k_im * R) with k_im <= 0 — decaying, so no overflow,
+                    // and underflow to +0 at large R is the physical answer.
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        decay[t] = std::exp(k_im * R[t]);
+                    }
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        inv_R_4pi[t] = inv_4pi / R[t];
+                        const double sc = decay[t] * inv_R_4pi[t];
+                        G_re[t] = cos_phases[t] * sc;
+                        G_im[t] = sin_phases[t] * sc;
+                    }
+                } else {
+                    // Textually unchanged from the pre-#778 kernel so the
+                    // real-k path stays bit-identical — proven by rebuilding
+                    // and array_equal, not by reading (the #762 protocol).
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        inv_R_4pi[t] = inv_4pi / R[t];
+                        G_re[t] = cos_phases[t] * inv_R_4pi[t];
+                        G_im[t] = sin_phases[t] * inv_R_4pi[t];
+                    }
                 }
 
                 // Stage 2: NMM moment reductions, each a vectorizable sum over
@@ -2728,14 +2771,57 @@ seg_seg_full_moments_bspline(
 ) {
     switch (max_d) {
         case 1:
-            return seg_seg_full_moments_bspline_kernel<1>(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w);
+            return seg_seg_full_moments_bspline_kernel<1, false>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, gl_t, gl_w);
         case 2:
-            return seg_seg_full_moments_bspline_kernel<2>(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w);
+            return seg_seg_full_moments_bspline_kernel<2, false>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, gl_t, gl_w);
         default:
             throw std::runtime_error(
                 "seg_seg_full_moments_bspline: max_d must be 1 or 2 "
+                "(add an explicit template instantiation in _accelerators.cpp)");
+    }
+}
+
+
+// In-medium (complex-k) twin of the wrapper above (momwire#778). Takes the
+// wavenumber as a std::complex<double> and splits it at the boundary, so the
+// kernel itself never sees a complex type and its inner loops stay real.
+//
+// The Im k <= 0 convention is enforced on the PYTHON side (`_complex_k` raises
+// on the growing-exponential branch) before any call reaches here; a positive
+// Im k would silently produce exp(+|k_im|R) growth, so the guard is not
+// optional. Re-asserted here because this entry point is reachable directly
+// from a test.
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_bspline_cplx(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    std::complex<double> k,
+    int max_d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+) {
+    if (k.imag() > 0.0) {
+        throw std::runtime_error(
+            "seg_seg_full_moments_bspline_cplx: Im k > 0 is the growing "
+            "exponential branch; e^{+jwt} requires Im k <= 0 so e^{-jkR} decays");
+    }
+    switch (max_d) {
+        case 1:
+            return seg_seg_full_moments_bspline_kernel<1, true>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared,
+                k.real(), k.imag(), gl_t, gl_w);
+        case 2:
+            return seg_seg_full_moments_bspline_kernel<2, true>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared,
+                k.real(), k.imag(), gl_t, gl_w);
+        default:
+            throw std::runtime_error(
+                "seg_seg_full_moments_bspline_cplx: max_d must be 1 or 2 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -3409,6 +3495,18 @@ void register_bspline(py::module_ &m) {
           "Galerkin MoM. Returns J of shape (max_d+1, max_d+1, N_i, N_j) "
           "complex. Templated on max_d at compile time; currently "
           "instantiated for max_d in {1, 2}.",
+          py::arg("seg_l_i"), py::arg("seg_r_i"),
+          py::arg("seg_l_j"), py::arg("seg_r_j"),
+          py::arg("a_squared"), py::arg("k"),
+          py::arg("max_d"),
+          py::arg("gl_t"), py::arg("gl_w"));
+    m.def("seg_seg_full_moments_bspline_cplx",
+          &seg_seg_full_moments_bspline_cplx,
+          "In-medium (complex-k) twin of seg_seg_full_moments_bspline "
+          "(momwire#778). Same contract and same (max_d+1, max_d+1, N_i, N_j) "
+          "output, with k a complex wavenumber k_re + j*k_im, Im k <= 0. The "
+          "continuation is exp(-jkR) = exp(k_im*R) * exp(-j*k_re*R): one extra "
+          "real exp() per quadrature point, all loops still real-lane SIMD.",
           py::arg("seg_l_i"), py::arg("seg_r_i"),
           py::arg("seg_l_j"), py::arg("seg_r_j"),
           py::arg("a_squared"), py::arg("k"),
