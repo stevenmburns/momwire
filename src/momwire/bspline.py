@@ -87,6 +87,7 @@ from . import _sommerfeld_transmitted
 from . import _wire_loading
 from . import _wire_spec
 from ._accel import acc as _acc
+from ._accel import MAX_N_QP as _ACCEL_MAX_N_QP
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -946,6 +947,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.feed_wire_index = self.feeds[0][0] if self.feeds else None
         self.feed_arclength = self.feeds[0][1] if self.feeds else None
         self.n_qp_pair = int(n_qp_pair)
+        # momwire#769: the chunked and swept fills below go straight into the
+        # capped C++ pair kernels, so they have to ask the same question the
+        # per-block path asks. SILENT on purpose — construction does not know
+        # whether this deck will ever reach an off-edge kernel (a single-edge
+        # deck has not entered one since momwire#759), so the warning is left
+        # to the per-block path, which knows.
+        self._accel_serves_n_qp_pair = int(n_qp_pair) <= _ACCEL_MAX_N_QP
         self.n_qp_pair_same_edge = int(n_qp_pair_same_edge)
 
         # Singular basis enrichment at K≥`enrichment_min_k` junctions.
@@ -4924,6 +4932,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
             and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
             and not dense_tensor_fits
+            and self._accel_serves_n_qp_pair
         ):
             # Chunked fill+assemble: never materialises the full
             # (d+1, d+1, N, N) tensor (issue #136). Identical algebra to
@@ -4950,6 +4959,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if (
                 _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL
                 and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+                and self._accel_serves_n_qp_pair
             ):
                 # Chunked image subtraction — no (d+1, d+1, N, N) image
                 # tensor, no intermediate n_basis² matrix (issue #136), and
@@ -5486,6 +5496,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             and _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL
             and _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL
             and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and self._accel_serves_n_qp_pair
         )
 
     def _swept_batched_z_chunks(self, k_array, geom, supp_seg, polys):

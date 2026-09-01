@@ -1063,6 +1063,9 @@ class HMatrixSolver(BSplineSolver):
             _HAVE_OFFEDGE_BLOCK_ACCEL
             and self.degree <= _OFFEDGE_BLOCK_ACCEL_MAX_D
             and self.hmatrix_use_accel
+            # momwire#769: the off-edge block kernels carry the same capped
+            # scratch as the dense pair kernels.
+            and self._accel_serves_n_qp_pair
         )
 
         far_blocks = []
@@ -1421,8 +1424,10 @@ class HMatrixSolver(BSplineSolver):
         "twin present" rather than "EK off"). Every ArrayBlock coupling fill
         (`_coupling_aca`, `_build_lattice_operator`) comes through here, so
         they inherit the decision rather than repeating it."""
-        use_accel = use_accel and (
-            not self.extended_kernel or _HAVE_OFFEDGE_BLOCK_EK_ACCEL
+        use_accel = (
+            use_accel
+            and (not self.extended_kernel or _HAVE_OFFEDGE_BLOCK_EK_ACCEL)
+            and self._accel_serves_n_qp_pair
         )
         if use_accel:
             row_f, col_f, dense_f = self._offedge_block_evaluators(ctx, I, J, k)

@@ -20,8 +20,10 @@ in one place. The distinction that matters:
   Either way the fallback used to be invisible — this module makes it audible.
 
 Public attributes:
-    ``acc``     — the loaded ``_accelerators`` module, or ``None``.
-    ``LOADED``  — ``True`` iff the accelerator imported successfully.
+    ``acc``          — the loaded ``_accelerators`` module, or ``None``.
+    ``LOADED``       — ``True`` iff the accelerator imported successfully.
+    ``MAX_N_QP``     — the B-spline pair kernels' quadrature ceiling.
+    ``serves_n_qp()``— routing predicate for that ceiling; warns on fallback.
 """
 
 from __future__ import annotations
@@ -169,3 +171,53 @@ def _install_cancel_translation(mod) -> None:
 
 if acc is not None:
     _install_cancel_translation(acc)
+
+
+# ---------------------------------------------------------------------------
+# The quadrature ceiling (momwire#769)
+# ---------------------------------------------------------------------------
+#
+# The B-spline pair kernels carry L1-sized stack scratch and refuse n_qp above
+# what fits it. READ OFF THE EXTENSION rather than re-spelled here, so the
+# Python routing guard cannot drift from the kernels' real limit and so
+# momwire#762 — which tiles the qr loop and lifts the ceiling — changes one
+# `constexpr` in _accel_common.h and nothing on this side.
+#
+# The fallback for an older extension that predates the export is the value
+# every such build compiled in.
+MAX_N_QP: int = int(getattr(acc, "BSPLINE_MAX_N_QP", 8)) if acc is not None else 8
+
+
+def serves_n_qp(n_qp: int, what: str, *, eligible: bool = True) -> bool:
+    """True if the accelerated pair kernels can take this quadrature order.
+
+    False means "route to numpy", not "fail": the numpy path has no ceiling
+    and is what momwire#758's anchors were converged on. Before momwire#769
+    the kernels were simply called and raised, which turned a slow-but-correct
+    answer into an unhandled `RuntimeError` — on exactly the crossing/lossy-soil
+    class that needs the order (momwire#760).
+
+    `eligible` is what makes the warning mean something. A caller with complex
+    k, or an EK spec with no C++ twin, or a monkeypatched-off accelerator was
+    ALREADY taking numpy, and telling it about a quadrature ceiling it never
+    reached is noise — the repo's own complex-k and Sommerfeld truth references
+    call this with n_qp of 12, 64 and 256 for exactly that reason. So the
+    warning fires only when this ceiling is the thing that moved the work.
+
+    It does warn when it is: the cliff is real (numpy against threaded C++, on
+    work that is O(n_qp^2)) and a silent 100x is its own bug report.
+    `warnings` dedupes by call site, so a solve that falls back on every block
+    says so once.
+    """
+    if n_qp <= MAX_N_QP:
+        return True
+    if eligible:
+        warnings.warn(
+            f"n_qp={n_qp} exceeds the accelerated {what} kernel's ceiling of "
+            f"{MAX_N_QP}, so this fill takes the numpy path — correct, but much "
+            f"slower, and the cost grows as n_qp^2. Lifting the ceiling is "
+            f"momwire#762.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    return False

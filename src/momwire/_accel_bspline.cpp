@@ -300,8 +300,10 @@ seg_seg_full_moments_bspline_kernel(
         throw std::runtime_error("gl_t and gl_w must have matching length");
     }
     size_t n_qp_in = glt.shape(0);
-    if (n_qp_in > 8) {
-        throw std::runtime_error("n_qp > 8 not supported (scratch buffer size)");
+    if (n_qp_in > BSPLINE_MAX_N_QP) {
+        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
+                                 + " not supported (L1-sized stack scratch);"
+                                 " the caller should have taken the numpy path");
     }
 
     size_t N_i = sli.shape(0);
@@ -490,8 +492,10 @@ seg_seg_full_moments_bspline_swept_kernel(
         throw std::runtime_error("gl_t and gl_w must have matching length");
     }
     size_t n_qp = glt.shape(0);
-    if (n_qp > 8) {
-        throw std::runtime_error("n_qp > 8 not supported (scratch buffer size)");
+    if (n_qp > BSPLINE_MAX_N_QP) {
+        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
+                                 + " not supported (L1-sized stack scratch);"
+                                 " the caller should have taken the numpy path");
     }
 
     size_t N_i = sli.shape(0);
@@ -704,8 +708,10 @@ seg_seg_full_moments_bspline_kernel_ek(
         throw std::runtime_error("gl_t and gl_w must have matching length");
     }
     size_t n_qp_in = glt.shape(0);
-    if (n_qp_in > 8) {
-        throw std::runtime_error("n_qp > 8 not supported (scratch buffer size)");
+    if (n_qp_in > BSPLINE_MAX_N_QP) {
+        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
+                                 + " not supported (L1-sized stack scratch);"
+                                 " the caller should have taken the numpy path");
     }
 
     size_t N_i = sli.shape(0);
@@ -918,8 +924,10 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
         throw std::runtime_error("gl_t and gl_w must have matching length");
     }
     size_t n_qp = glt.shape(0);
-    if (n_qp > 8) {
-        throw std::runtime_error("n_qp > 8 not supported (scratch buffer size)");
+    if (n_qp > BSPLINE_MAX_N_QP) {
+        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
+                                 + " not supported (L1-sized stack scratch);"
+                                 " the caller should have taken the numpy path");
     }
 
     size_t N_i = sli.shape(0);
@@ -1922,8 +1930,10 @@ bspline_assemble_offedge_block_kernel(
     if (supp_I.shape(1) != NM || supp_J.shape(1) != NM) {
         throw std::runtime_error("support arrays must have shape (n, D+1)");
     }
-    if (n_qp > 8) {
-        throw std::runtime_error("n_qp > 8 not supported (scratch buffer size)");
+    if (n_qp > BSPLINE_MAX_N_QP) {
+        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
+                                 + " not supported (L1-sized stack scratch);"
+                                 " the caller should have taken the numpy path");
     }
 
     // Per-segment quadrature positions + lengths, precomputed once.
@@ -2273,8 +2283,10 @@ bspline_assemble_offedge_block_kernel_ek(
     if (supp_I.shape(1) != NM || supp_J.shape(1) != NM) {
         throw std::runtime_error("support arrays must have shape (n, D+1)");
     }
-    if (n_qp > 8) {
-        throw std::runtime_error("n_qp > 8 not supported (scratch buffer size)");
+    if (n_qp > BSPLINE_MAX_N_QP) {
+        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
+                                 + " not supported (L1-sized stack scratch);"
+                                 " the caller should have taken the numpy path");
     }
     if ((size_t)group_I.shape(0) != nSegI || (size_t)group_J.shape(0) != nSegJ) {
         throw std::runtime_error(
@@ -3241,6 +3253,10 @@ assemble_Z_enrich(
 
 
 void register_bspline(py::module_ &m) {
+
+    // Read by momwire._accel so the Python routing guard cannot drift from the
+    // kernels' real ceiling (momwire#769).
+    m.attr("BSPLINE_MAX_N_QP") = py::int_(BSPLINE_MAX_N_QP);
 
     m.def("seg_seg_reg_moments_bspline_swept",
           &seg_seg_reg_moments_bspline_swept,

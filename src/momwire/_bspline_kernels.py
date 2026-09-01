@@ -118,6 +118,7 @@ from ._bspline_static_moments import J_static_moment
 from ._quadrature import leggauss
 
 from ._accel import acc as _acc
+from ._accel import serves_n_qp as _serves_n_qp
 
 _HAVE_BSPLINE_ACCEL = _acc is not None and hasattr(_acc, "seg_seg_full_moments_bspline")
 _HAVE_BSPLINE_STATIC_ACCEL = _acc is not None and hasattr(
@@ -802,13 +803,17 @@ def _seg_seg_full_moments_offedge(
     t01 = 0.5 * (gl_xi + 1.0)
     w01 = 0.5 * gl_w
 
-    accel_ok = (
+    # `n_qp` belongs in these predicates for the same reason `max_d` does: it
+    # is a shape the kernels do not serve, and the numpy path does
+    # (momwire#769). Split from the rest so the warning can tell "the ceiling
+    # moved this work" from "it was going to numpy anyway".
+    _shape_ok = (
         _HAVE_BSPLINE_ACCEL
         and max_d <= _BSPLINE_ACCEL_MAX_D
         and ek is None
         and not in_medium
     )
-    accel_ok_ek = (
+    _shape_ok_ek = (
         ek is not None
         and ek.group_i is not None
         and ek.group_j is not None
@@ -821,6 +826,9 @@ def _seg_seg_full_moments_offedge(
         # max_d=0 on the accel-eligible branch until this one.
         and 1 <= max_d <= _BSPLINE_ACCEL_MAX_D
     )
+    _serves = _serves_n_qp(n_qp, "off-edge pair", eligible=_shape_ok or _shape_ok_ek)
+    accel_ok = _shape_ok and _serves
+    accel_ok_ek = _shape_ok_ek and _serves
     if (accel_ok or accel_ok_ek) and not np.ndim(a) == 0:
         # Mixed per-row radii on the C++ path: dispatch one call per
         # contiguous run of equal radius and stitch along the row axis.
@@ -944,13 +952,13 @@ def _seg_seg_full_moments_offedge_swept(
     k_array = _k_array_asarray(k_array)
     in_medium = _complex_k(k_array)
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
-    accel_ok = (
+    _shape_ok = (
         _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL
         and max_d <= _BSPLINE_ACCEL_MAX_D
         and ek is None
         and not in_medium
     )
-    accel_ok_ek = (
+    _shape_ok_ek = (
         ek is not None
         and ek.group_i is not None
         and ek.group_j is not None
@@ -959,6 +967,11 @@ def _seg_seg_full_moments_offedge_swept(
         # Same max_d=0 floor as the single-k twin above.
         and 1 <= max_d <= _BSPLINE_ACCEL_MAX_D
     )
+    _serves = _serves_n_qp(
+        n_qp, "swept off-edge pair", eligible=_shape_ok or _shape_ok_ek
+    )
+    accel_ok = _shape_ok and _serves
+    accel_ok_ek = _shape_ok_ek and _serves
     if (accel_ok or accel_ok_ek) and not np.ndim(a) == 0:
         bounds = np.flatnonzero(np.diff(a)) + 1
         starts = np.concatenate(([0], bounds))
