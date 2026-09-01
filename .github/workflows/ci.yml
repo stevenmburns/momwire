@@ -150,7 +150,7 @@ jobs:
           MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
       - name: Upload byte-oracle mismatch dumps (momwire#464)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: momwire-464-dumps
           path: 464-dumps/
@@ -236,7 +236,7 @@ jobs:
           MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
       - name: Upload byte-oracle mismatch dumps (momwire#464)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: momwire-464-dumps-macos
           path: 464-dumps/
@@ -358,7 +358,7 @@ jobs:
           fi
       - name: Upload residency mismatch dumps (momwire#677)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: momwire-677-dumps
           path: 677-dumps/
