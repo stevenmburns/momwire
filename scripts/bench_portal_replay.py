@@ -116,7 +116,7 @@ class Member:
             if self.proc.stdin is not None:
                 self.proc.stdin.close()
             self.proc.wait(timeout=10)
-        except Exception:
+        except Exception:  # noqa: BLE001 - teardown falls back to kill(); a bench must not die closing a child
             self.proc.kill()
 
 

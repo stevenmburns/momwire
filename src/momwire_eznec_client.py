@@ -194,12 +194,12 @@ def main(argv: list[str] | None = None) -> int:
         with open(printout_path, "wb") as handle:
             handle.write(answer)
         return 0
-    except Exception:
+    except Exception:  # noqa: BLE001 - the served lane is an optimisation; any failure falls through to one-shot
         pass
 
     try:
         _one_shot(deck_path, printout_path, basis)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - the printout is the only channel EZNEC reads; refuse in it, exit 0
         _last_ditch(
             printout_path,
             f"MOMWIRE ENGINE UNAVAILABLE - {type(exc).__name__}: {exc}",

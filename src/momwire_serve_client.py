@@ -110,7 +110,7 @@ def dist_version() -> tuple[str, str]:
         from importlib.metadata import version as _pkg_version
 
         major, minor = _pkg_version("momwire").split(".")[:2]
-    except Exception:  # pragma: no cover - no installed metadata (source tree)
+    except Exception:  # pragma: no cover - no installed metadata (source tree)  # noqa: BLE001 - a version probe must never be the thing that fails
         major, minor = "0", "0"
     return major, minor
 

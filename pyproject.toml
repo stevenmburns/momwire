@@ -284,7 +284,58 @@ ignore = ["E741"]
 # zero real bugs. It is kept on anyway for the case it exists to catch --
 # closures stashed in a loop and called after it ends, where the loop variable
 # has moved on -- which no gate here would otherwise notice.
-extend-select = ["B023"]
+extend-select = [
+  # B023 (function-uses-loop-variable) was the first entry here and is opted
+  # into EXPLICITLY, not inherited: it is not in ruff's default set at the
+  # pinned version. It is a MAY-escape warning, not a bug detector -- it fires
+  # whenever a closure reads a loop variable, because it cannot prove the
+  # closure does not outlive the iteration. Audited 2026-08-29 across all 26
+  # findings then present: every one was consumed inside its own iteration,
+  # i.e. zero real bugs. Kept for the case it exists to catch -- a closure
+  # stashed in a loop and called after it ends -- which no other gate here
+  # would notice.
+  "B023",
+  # Everything below arrived together (momwire#761 follow-up). The set is
+  # antennaknobs' `extend-select`, measured against THIS tree rather than
+  # copied: of its 74 codes, 66 report ZERO violations here and are armed as
+  # a group, plus BLE001 (8 sites, annotated in the same commit).
+  #
+  # Arming a zero-violation rule costs nothing today and converts a future
+  # regression from a review catch into a CI catch. It is also the cheap half
+  # of momwire#761: six of that issue's seven "must survive" keepers are
+  # BLE001 directives, dead ONLY because the rule was unselected. Selecting it
+  # makes them live suppressions and drops the reported dead count 24 -> 18
+  # with no edits to them at all.
+  #
+  # Seven of antennaknobs' 74 are deliberately NOT here, each needing real
+  # edits rather than a config line (counts measured at 3dfafc1):
+  #   B905   zip-strict            242   -- wants the runtime census AK ran
+  #   TID252 parent-relative       101 (40 sites) -- an architectural call,
+  #                                      not a latent bug; decide separately
+  #   RUF007 zip-instead-of-pairwise 49 -- rides with B905
+  #   DTZ005 datetime.now w/o tz      3
+  #   FLY002 static-join-to-f-string  3
+  #   SLOT001 no-slots-in-tuple-subclass 2
+  #   A002   builtin-argument-shadow    1
+  "BLE001",
+  "S310",
+  "FAST001", "FAST002", "FAST003",
+  "YTT101", "YTT102", "YTT103",
+  "YTT201", "YTT202", "YTT203", "YTT204",
+  "YTT301", "YTT302", "YTT303",
+  "A001", "A003", "A004", "A005", "A006",
+  "DTZ001", "DTZ002", "DTZ003", "DTZ004",
+  "DTZ006", "DTZ007", "DTZ011", "DTZ012", "DTZ901",
+  "T100",
+  "FA100", "FA102",
+  "INT001", "INT002", "INT003",
+  "LOG001", "LOG002", "LOG004", "LOG007", "LOG009", "LOG014", "LOG015",
+  "G001", "G002", "G003", "G004", "G010", "G101", "G201", "G202",
+  "Q000", "Q001", "Q002", "Q003", "Q004",
+  "SLOT000", "SLOT002",
+  "TID251", "TID253",
+  "TD001", "TD002", "TD003", "TD004", "TD005", "TD006", "TD007",
+]
 # Keep "imported but unused" as a warning instead of auto-stripping.
 # Without this, multi-pass edits (add imports first, then add code that
 # uses them) can have the import deleted between edits — by the editor's
