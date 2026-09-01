@@ -118,6 +118,7 @@ from ._bspline_static_moments import J_static_moment
 from ._quadrature import leggauss
 
 from ._accel import acc as _acc
+from ._accel import SAME_EDGE_MAX_N_QP as _SAME_EDGE_MAX_N_QP
 from ._accel import serves_n_qp as _serves_n_qp
 
 _HAVE_BSPLINE_ACCEL = _acc is not None and hasattr(_acc, "seg_seg_full_moments_bspline")
@@ -652,13 +653,31 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
     # kernel serves it with a length-1 k axis, which we squeeze back off. This
     # is the ~65% of a single d=2 solve that the numpy einsum below otherwise
     # dominates. Bit-close (different reduction order); numpy stays the fallback.
-    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None and not in_medium:
+    # The same-edge kernel keeps its OWN ceiling: momwire#762 tiled the six
+    # off-edge kernels, not this one, which takes R from a precomputed array
+    # and reduces through a nested wu*wu product rather than a flat wuwu row.
+    # Without this term `n_qp_pair_same_edge > 8` RAISED rather than falling
+    # back — the site momwire#769 missed, because its refusal is worded
+    # differently from the off-edge kernels' and a grep for those found it not.
+    _se_serves = _serves_n_qp(
+        n_qp,
+        "same-edge reg",
+        eligible=(_HAVE_BSPLINE_REG_SWEPT_ACCEL or _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL)
+        and not in_medium,
+        cap=_SAME_EDGE_MAX_N_QP,
+    )
+    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None and not in_medium and _se_serves:
         return _acc.seg_seg_reg_moments_bspline_swept(
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
             np.ascontiguousarray(np.asarray([k], dtype=np.float64)),
         )[0]
-    if ek is not None and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL and not in_medium:
+    if (
+        ek is not None
+        and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL
+        and not in_medium
+        and _se_serves
+    ):
         # The EK twin (momwire#270), same length-1 k axis. Whole-block
         # eligibility, as below — the C++ kernel takes no group labels.
         return _acc.seg_seg_reg_moments_bspline_swept_ek(
@@ -712,13 +731,31 @@ def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 <
     # materializes the (chunk, N*n_qp, N*n_qp) phase intermediate this numpy
     # path has to chunk under max_chunk_bytes. Bit-close (different reduction
     # order) to the einsum below, which stays as the fallback.
-    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None and not in_medium:
+    # The same-edge kernel keeps its OWN ceiling: momwire#762 tiled the six
+    # off-edge kernels, not this one, which takes R from a precomputed array
+    # and reduces through a nested wu*wu product rather than a flat wuwu row.
+    # Without this term `n_qp_pair_same_edge > 8` RAISED rather than falling
+    # back — the site momwire#769 missed, because its refusal is worded
+    # differently from the off-edge kernels' and a grep for those found it not.
+    _se_serves = _serves_n_qp(
+        n_qp,
+        "same-edge reg",
+        eligible=(_HAVE_BSPLINE_REG_SWEPT_ACCEL or _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL)
+        and not in_medium,
+        cap=_SAME_EDGE_MAX_N_QP,
+    )
+    if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None and not in_medium and _se_serves:
         return _acc.seg_seg_reg_moments_bspline_swept(
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
             np.ascontiguousarray(k_array, dtype=np.float64),
         )
-    if ek is not None and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL and not in_medium:
+    if (
+        ek is not None
+        and _HAVE_BSPLINE_REG_SWEPT_EK_ACCEL
+        and not in_medium
+        and _se_serves
+    ):
         # The EK twin (momwire#270). It streams the same way, so the EK sweep
         # no longer materializes the chunked phase intermediate either.
         return _acc.seg_seg_reg_moments_bspline_swept_ek(

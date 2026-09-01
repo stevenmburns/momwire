@@ -22,7 +22,8 @@ in one place. The distinction that matters:
 Public attributes:
     ``acc``          — the loaded ``_accelerators`` module, or ``None``.
     ``LOADED``       — ``True`` iff the accelerator imported successfully.
-    ``MAX_N_QP``     — the B-spline pair kernels' quadrature ceiling.
+    ``MAX_N_QP``     — the off-edge pair kernels' quadrature ceiling.
+    ``SAME_EDGE_MAX_N_QP`` — the same-edge reg kernel's, which is separate.
     ``serves_n_qp()``— routing predicate for that ceiling; warns on fallback.
 """
 
@@ -187,8 +188,19 @@ if acc is not None:
 # every such build compiled in.
 MAX_N_QP: int = int(getattr(acc, "BSPLINE_MAX_N_QP", 8)) if acc is not None else 8
 
+# The same-edge reg-moment kernel keeps a ceiling that momwire#762 did not
+# lift — it needs a different transformation from the six off-edge kernels.
+# Separate constant because it is a separate kernel with a separate limit;
+# collapsing them is how momwire#769 came to miss this path in the first
+# place.
+SAME_EDGE_MAX_N_QP: int = (
+    int(getattr(acc, "BSPLINE_SAME_EDGE_MAX_N_QP", 8)) if acc is not None else 8
+)
 
-def serves_n_qp(n_qp: int, what: str, *, eligible: bool = True) -> bool:
+
+def serves_n_qp(
+    n_qp: int, what: str, *, eligible: bool = True, cap: int | None = None
+) -> bool:
     """True if the accelerated pair kernels can take this quadrature order.
 
     False means "route to numpy", not "fail": the numpy path has no ceiling
@@ -209,12 +221,13 @@ def serves_n_qp(n_qp: int, what: str, *, eligible: bool = True) -> bool:
     `warnings` dedupes by call site, so a solve that falls back on every block
     says so once.
     """
-    if n_qp <= MAX_N_QP:
+    ceiling = MAX_N_QP if cap is None else cap
+    if n_qp <= ceiling:
         return True
     if eligible:
         warnings.warn(
             f"n_qp={n_qp} exceeds the accelerated {what} kernel's ceiling of "
-            f"{MAX_N_QP}, so this fill takes the numpy path — correct, but much "
+            f"{ceiling}, so this fill takes the numpy path — correct, but much "
             f"slower, and the cost grows as n_qp^2. Lifting the ceiling is "
             f"momwire#762.",
             RuntimeWarning,

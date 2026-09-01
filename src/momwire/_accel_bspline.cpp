@@ -89,8 +89,12 @@ seg_seg_reg_moments_bspline_swept_impl(
     }
 
     size_t n_pairs = n_qp * n_qp;
-    if (n_pairs > 64) {
-        throw std::runtime_error("n_qp too large (n_qp^2 must be <= 64)");
+    if (n_qp > BSPLINE_SAME_EDGE_MAX_N_QP) {
+        throw std::runtime_error("n_qp > "
+                                 + std::to_string(BSPLINE_SAME_EDGE_MAX_N_QP)
+                                 + " not supported on the same-edge reg kernel"
+                                 " (L1-sized stack scratch, not yet tiled);"
+                                 " the caller should have taken the numpy path");
     }
 
     const double inv_4pi = 1.0 / (4.0 * M_PI);
@@ -300,11 +304,6 @@ seg_seg_full_moments_bspline_kernel(
         throw std::runtime_error("gl_t and gl_w must have matching length");
     }
     size_t n_qp_in = glt.shape(0);
-    if (n_qp_in > BSPLINE_MAX_N_QP) {
-        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
-                                 + " not supported (L1-sized stack scratch);"
-                                 " the caller should have taken the numpy path");
-    }
 
     size_t N_i = sli.shape(0);
     size_t N_j = slj.shape(0);
@@ -349,93 +348,109 @@ seg_seg_full_moments_bspline_kernel(
         }
     }
 
+    // TILED OVER qr (momwire#762). The scratch stays [64] — an L1 blocking
+    // width, not a limit — and the qr range is walked in chunks of at most
+    // that, accumulating the moment sums across chunks before a single
+    // j_view write. Nothing carries state across quadrature pairs, so this is
+    // exact; and at n_qp <= 8 there is exactly ONE chunk spanning the whole
+    // range, so both the arithmetic and its order are unchanged and the
+    // output is bit-identical to the untiled kernel.
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
-            alignas(32) double R[64];
-            alignas(32) double inv_R_4pi[64];
-            alignas(32) double phases[64];
-            alignas(32) double cos_phases[64];
-            alignas(32) double sin_phases[64];
-            alignas(32) double G_re[64], G_im[64];
-            // wuwu[pP, qr]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P,
-            // flattened with pP = p*NM + P. For D=2: NMM*64 = 576 doubles = 4.5KB,
-            // fits comfortably in L1.
-            alignas(32) double wuwu[NMM * 64];
+            alignas(32) double R[BSPLINE_QR_TILE];
+            alignas(32) double inv_R_4pi[BSPLINE_QR_TILE];
+            alignas(32) double phases[BSPLINE_QR_TILE];
+            alignas(32) double cos_phases[BSPLINE_QR_TILE];
+            alignas(32) double sin_phases[BSPLINE_QR_TILE];
+            alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+            // wuwu[pP, t]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P for the
+            // chunk's pairs, flattened with pP = p*NM + P. For D=2:
+            // NMM*64 = 576 doubles = 4.5KB, fits comfortably in L1.
+            alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
+
+            double acc_re[NMM], acc_im[NMM];
+            for (int pP = 0; pP < NMM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
 
             const double *pi = &pos_i[i * n_qp * 3];
             const double *pj = &pos_j[j * n_qp * 3];
-            for (size_t q = 0; q < n_qp; q++) {
-                double pix = pi[q*3 + 0];
-                double piy = pi[q*3 + 1];
-                double piz = pi[q*3 + 2];
-                for (size_t r = 0; r < n_qp; r++) {
-                    double dx = pix - pj[r*3 + 0];
-                    double dy = piy - pj[r*3 + 1];
-                    double dz = piz - pj[r*3 + 2];
-                    R[q*n_qp + r] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
-                }
-            }
+            const double Li = len_i[i];
+            const double Lj = len_j[j];
+            const size_t n_pairs = n_qp * n_qp;
 
-            double Li = len_i[i];
-            double Lj = len_j[j];
-            size_t n_pairs = n_qp * n_qp;
+            for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
+                const size_t m = (n_pairs - base < BSPLINE_QR_TILE)
+                                     ? (n_pairs - base) : BSPLINE_QR_TILE;
 
-            // Build wuwu[pP, qr]: pP indexes the moment (p*NM + P), qr the
-            // quadrature pair (q*n_qp + r). The NM is a template constant so
-            // ui_pow[p] / uj_pow[P] arrays unroll.
-            for (size_t q = 0; q < n_qp; q++) {
-                double wi = glw(q) * Li;
-                double ui = glt(q) * Li;
-                double ui_pow[NM];
-                ui_pow[0] = 1.0;
-                for (int p = 1; p < NM; p++) ui_pow[p] = ui_pow[p-1] * ui;
-                for (size_t r = 0; r < n_qp; r++) {
-                    double wj = glw(r) * Lj;
-                    double uj = glt(r) * Lj;
-                    double uj_pow[NM];
+                // One division per chunk, then a running (q, r) walk: qr is
+                // q*n_qp + r by construction, so the chunk is contiguous.
+                size_t q = base / n_qp;
+                size_t r = base % n_qp;
+                for (size_t t = 0; t < m; t++) {
+                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
+                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
+                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
+                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+
+                    const double wi = glw(q) * Li;
+                    const double ui = glt(q) * Li;
+                    const double wj = glw(r) * Lj;
+                    const double uj = glt(r) * Lj;
+                    double ui_pow[NM], uj_pow[NM];
+                    ui_pow[0] = 1.0;
                     uj_pow[0] = 1.0;
-                    for (int P = 1; P < NM; P++) uj_pow[P] = uj_pow[P-1] * uj;
-                    double wij = wi * wj;
-                    size_t qr = q * n_qp + r;
-                    for (int p = 0; p < NM; p++) {
-                        for (int P = 0; P < NM; P++) {
-                            wuwu[(p * NM + P) * n_pairs + qr] = wij * ui_pow[p] * uj_pow[P];
+                    for (int e = 1; e < NM; e++) {
+                        ui_pow[e] = ui_pow[e-1] * ui;
+                        uj_pow[e] = uj_pow[e-1] * uj;
+                    }
+                    const double wij = wi * wj;
+                    for (int pp = 0; pp < NM; pp++) {
+                        for (int PP = 0; PP < NM; PP++) {
+                            wuwu[(pp * NM + PP) * m + t] = wij * ui_pow[pp] * uj_pow[PP];
                         }
                     }
+
+                    if (++r == n_qp) { r = 0; ++q; }
+                }
+
+                // Stage 1: phases = -k * R, then sincos via libmvec.
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    phases[t] = -k * R[t];
+                }
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    cos_phases[t] = std::cos(phases[t]);
+                }
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    sin_phases[t] = std::sin(phases[t]);
+                }
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    inv_R_4pi[t] = inv_4pi / R[t];
+                    G_re[t] = cos_phases[t] * inv_R_4pi[t];
+                    G_im[t] = sin_phases[t] * inv_R_4pi[t];
+                }
+
+                // Stage 2: NMM moment reductions, each a vectorizable sum over
+                // the chunk, carried in acc_* across chunks.
+                for (int pP = 0; pP < NMM; pP++) {
+                    double sr = acc_re[pP], si = acc_im[pP];
+                    const double *w_row = &wuwu[pP * m];
+                    PYSIM_OMP_SIMD(reduction(+:sr,si))
+                    for (size_t t = 0; t < m; t++) {
+                        sr += w_row[t] * G_re[t];
+                        si += w_row[t] * G_im[t];
+                    }
+                    acc_re[pP] = sr;
+                    acc_im[pP] = si;
                 }
             }
 
-            // Stage 1: phases = -k * R, then sincos via libmvec.
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                phases[qr] = -k * R[qr];
-            }
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                cos_phases[qr] = std::cos(phases[qr]);
-            }
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                sin_phases[qr] = std::sin(phases[qr]);
-            }
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                inv_R_4pi[qr] = inv_4pi / R[qr];
-                G_re[qr] = cos_phases[qr] * inv_R_4pi[qr];
-                G_im[qr] = sin_phases[qr] * inv_R_4pi[qr];
-            }
-
-            // Stage 2: NMM moment reductions, each a vectorizable sum over qr.
             for (int pP = 0; pP < NMM; pP++) {
-                double sr = 0.0, si = 0.0;
-                const double *w_row = &wuwu[pP * n_pairs];
-                PYSIM_OMP_SIMD(reduction(+:sr,si))
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    sr += w_row[qr] * G_re[qr];
-                    si += w_row[qr] * G_im[qr];
-                }
-                j_view(pP / NM, pP % NM, i, j) = std::complex<double>(sr, si);
+                j_view(pP / NM, pP % NM, i, j) =
+                    std::complex<double>(acc_re[pP], acc_im[pP]);
             }
         }
     }
@@ -492,11 +507,6 @@ seg_seg_full_moments_bspline_swept_kernel(
         throw std::runtime_error("gl_t and gl_w must have matching length");
     }
     size_t n_qp = glt.shape(0);
-    if (n_qp > BSPLINE_MAX_N_QP) {
-        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
-                                 + " not supported (L1-sized stack scratch);"
-                                 " the caller should have taken the numpy path");
-    }
 
     size_t N_i = sli.shape(0);
     size_t N_j = slj.shape(0);
@@ -540,91 +550,105 @@ seg_seg_full_moments_bspline_swept_kernel(
         }
     }
 
+    // TILED OVER qr (momwire#762), with the chunk OUTSIDE the k loop so the
+    // k-independent tables (R, 1/(4 pi R), wuwu) are still built once per
+    // chunk and reused across the whole sweep — tiling must not cost this
+    // kernel the very reuse it exists for. The first chunk assigns and later
+    // chunks accumulate, so at n_qp <= 8 (one chunk) the write is the same
+    // plain assignment it always was and the output is bit-identical.
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
-            alignas(32) double R[64];
-            alignas(32) double inv_R_4pi[64];
-            alignas(32) double phases[64];
-            alignas(32) double cos_phases[64];
-            alignas(32) double sin_phases[64];
-            alignas(32) double G_re[64], G_im[64];
-            alignas(32) double wuwu[NMM * 64];
+            alignas(32) double R[BSPLINE_QR_TILE];
+            alignas(32) double inv_R_4pi[BSPLINE_QR_TILE];
+            alignas(32) double phases[BSPLINE_QR_TILE];
+            alignas(32) double cos_phases[BSPLINE_QR_TILE];
+            alignas(32) double sin_phases[BSPLINE_QR_TILE];
+            alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+            alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
 
-            size_t n_pairs = n_qp * n_qp;
+            const size_t n_pairs = n_qp * n_qp;
             const double *pi = &pos_i[i * n_qp * 3];
             const double *pj = &pos_j[j * n_qp * 3];
+            const double Li = len_i[i];
+            const double Lj = len_j[j];
 
-            // k-independent: R table, 1/(4 pi R), and the moment weights.
-            for (size_t q = 0; q < n_qp; q++) {
-                double pix = pi[q*3 + 0], piy = pi[q*3 + 1], piz = pi[q*3 + 2];
-                for (size_t r = 0; r < n_qp; r++) {
-                    double dx = pix - pj[r*3 + 0];
-                    double dy = piy - pj[r*3 + 1];
-                    double dz = piz - pj[r*3 + 2];
-                    R[q*n_qp + r] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
-                }
-            }
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                inv_R_4pi[qr] = inv_4pi / R[qr];
-            }
+            bool first_chunk = true;
+            for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
+                const size_t m = (n_pairs - base < BSPLINE_QR_TILE)
+                                     ? (n_pairs - base) : BSPLINE_QR_TILE;
 
-            double Li = len_i[i];
-            double Lj = len_j[j];
-            for (size_t q = 0; q < n_qp; q++) {
-                double wi = glw(q) * Li;
-                double ui = glt(q) * Li;
-                double ui_pow[NM];
-                ui_pow[0] = 1.0;
-                for (int p = 1; p < NM; p++) ui_pow[p] = ui_pow[p-1] * ui;
-                for (size_t r = 0; r < n_qp; r++) {
-                    double wj = glw(r) * Lj;
-                    double uj = glt(r) * Lj;
-                    double uj_pow[NM];
+                // k-independent: R table, 1/(4 pi R), and the moment weights.
+                size_t q = base / n_qp;
+                size_t r = base % n_qp;
+                for (size_t t = 0; t < m; t++) {
+                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
+                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
+                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
+                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+
+                    const double wi = glw(q) * Li;
+                    const double ui = glt(q) * Li;
+                    const double wj = glw(r) * Lj;
+                    const double uj = glt(r) * Lj;
+                    double ui_pow[NM], uj_pow[NM];
+                    ui_pow[0] = 1.0;
                     uj_pow[0] = 1.0;
-                    for (int P = 1; P < NM; P++) uj_pow[P] = uj_pow[P-1] * uj;
-                    double wij = wi * wj;
-                    size_t qr = q * n_qp + r;
-                    for (int p = 0; p < NM; p++) {
-                        for (int P = 0; P < NM; P++) {
-                            wuwu[(p * NM + P) * n_pairs + qr] = wij * ui_pow[p] * uj_pow[P];
+                    for (int e = 1; e < NM; e++) {
+                        ui_pow[e] = ui_pow[e-1] * ui;
+                        uj_pow[e] = uj_pow[e-1] * uj;
+                    }
+                    const double wij = wi * wj;
+                    for (int pp = 0; pp < NM; pp++) {
+                        for (int PP = 0; PP < NM; PP++) {
+                            wuwu[(pp * NM + PP) * m + t] = wij * ui_pow[pp] * uj_pow[PP];
+                        }
+                    }
+
+                    if (++r == n_qp) { r = 0; ++q; }
+                }
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    inv_R_4pi[t] = inv_4pi / R[t];
+                }
+
+                // Per-k: only the exp(-jkR) phase changes.
+                for (size_t kk = 0; kk < n_k; kk++) {
+                    double k = ka(kk);
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        phases[t] = -k * R[t];
+                    }
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        cos_phases[t] = std::cos(phases[t]);
+                    }
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        sin_phases[t] = std::sin(phases[t]);
+                    }
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        G_re[t] = cos_phases[t] * inv_R_4pi[t];
+                        G_im[t] = sin_phases[t] * inv_R_4pi[t];
+                    }
+                    for (int pP = 0; pP < NMM; pP++) {
+                        double sr = 0.0, si = 0.0;
+                        const double *w_row = &wuwu[pP * m];
+                        PYSIM_OMP_SIMD(reduction(+:sr,si))
+                        for (size_t t = 0; t < m; t++) {
+                            sr += w_row[t] * G_re[t];
+                            si += w_row[t] * G_im[t];
+                        }
+                        std::complex<double> part(sr, si);
+                        if (first_chunk) {
+                            j_view(kk, pP / NM, pP % NM, i, j) = part;
+                        } else {
+                            j_view(kk, pP / NM, pP % NM, i, j) += part;
                         }
                     }
                 }
-            }
-
-            // Per-k: only the exp(-jkR) phase changes.
-            for (size_t kk = 0; kk < n_k; kk++) {
-                double k = ka(kk);
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    phases[qr] = -k * R[qr];
-                }
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    cos_phases[qr] = std::cos(phases[qr]);
-                }
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    sin_phases[qr] = std::sin(phases[qr]);
-                }
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    G_re[qr] = cos_phases[qr] * inv_R_4pi[qr];
-                    G_im[qr] = sin_phases[qr] * inv_R_4pi[qr];
-                }
-                for (int pP = 0; pP < NMM; pP++) {
-                    double sr = 0.0, si = 0.0;
-                    const double *w_row = &wuwu[pP * n_pairs];
-                    PYSIM_OMP_SIMD(reduction(+:sr,si))
-                    for (size_t qr = 0; qr < n_pairs; qr++) {
-                        sr += w_row[qr] * G_re[qr];
-                        si += w_row[qr] * G_im[qr];
-                    }
-                    j_view(kk, pP / NM, pP % NM, i, j) =
-                        std::complex<double>(sr, si);
-                }
+                first_chunk = false;
             }
         }
     }
@@ -708,11 +732,6 @@ seg_seg_full_moments_bspline_kernel_ek(
         throw std::runtime_error("gl_t and gl_w must have matching length");
     }
     size_t n_qp_in = glt.shape(0);
-    if (n_qp_in > BSPLINE_MAX_N_QP) {
-        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
-                                 + " not supported (L1-sized stack scratch);"
-                                 " the caller should have taken the numpy path");
-    }
 
     size_t N_i = sli.shape(0);
     size_t N_j = slj.shape(0);
@@ -760,117 +779,132 @@ seg_seg_full_moments_bspline_kernel_ek(
         }
     }
 
+    // TILED OVER qr (momwire#762) — kernel 1's transformation, with the EK
+    // factor stage inside the chunk. Eligibility is a property of the (i, j)
+    // SEGMENT pair, not of the quadrature sub-pair, so it is decided once
+    // outside the chunk loop and every chunk sees the same branch. One chunk
+    // at n_qp <= 8, so the output is bit-identical.
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
-            alignas(32) double R[64];
-            alignas(32) double inv_R_4pi[64];
-            alignas(32) double phases[64];
-            alignas(32) double cos_phases[64];
-            alignas(32) double sin_phases[64];
-            alignas(32) double G_re[64], G_im[64];
-            alignas(32) double wuwu[NMM * 64];
+            alignas(32) double R[BSPLINE_QR_TILE];
+            alignas(32) double inv_R_4pi[BSPLINE_QR_TILE];
+            alignas(32) double phases[BSPLINE_QR_TILE];
+            alignas(32) double cos_phases[BSPLINE_QR_TILE];
+            alignas(32) double sin_phases[BSPLINE_QR_TILE];
+            alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+            alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
+
+            double acc_re[NMM], acc_im[NMM];
+            for (int pP = 0; pP < NMM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
 
             const double *pi = &pos_i[i * n_qp * 3];
             const double *pj = &pos_j[j * n_qp * 3];
-            for (size_t q = 0; q < n_qp; q++) {
-                double pix = pi[q*3 + 0];
-                double piy = pi[q*3 + 1];
-                double piz = pi[q*3 + 2];
-                for (size_t r = 0; r < n_qp; r++) {
-                    double dx = pix - pj[r*3 + 0];
-                    double dy = piy - pj[r*3 + 1];
-                    double dz = piz - pj[r*3 + 2];
-                    R[q*n_qp + r] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
-                }
-            }
+            const double Li = len_i[i];
+            const double Lj = len_j[j];
+            const size_t n_pairs = n_qp * n_qp;
+            const bool eligible = (gi_v(i) == gj_v(j)) && (gi_v(i) >= 0);
 
-            double Li = len_i[i];
-            double Lj = len_j[j];
-            size_t n_pairs = n_qp * n_qp;
+            for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
+                const size_t m = (n_pairs - base < BSPLINE_QR_TILE)
+                                     ? (n_pairs - base) : BSPLINE_QR_TILE;
 
-            for (size_t q = 0; q < n_qp; q++) {
-                double wi = glw(q) * Li;
-                double ui = glt(q) * Li;
-                double ui_pow[NM];
-                ui_pow[0] = 1.0;
-                for (int p = 1; p < NM; p++) ui_pow[p] = ui_pow[p-1] * ui;
-                for (size_t r = 0; r < n_qp; r++) {
-                    double wj = glw(r) * Lj;
-                    double uj = glt(r) * Lj;
-                    double uj_pow[NM];
+                size_t q = base / n_qp;
+                size_t r = base % n_qp;
+                for (size_t t = 0; t < m; t++) {
+                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
+                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
+                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
+                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+
+                    const double wi = glw(q) * Li;
+                    const double ui = glt(q) * Li;
+                    const double wj = glw(r) * Lj;
+                    const double uj = glt(r) * Lj;
+                    double ui_pow[NM], uj_pow[NM];
+                    ui_pow[0] = 1.0;
                     uj_pow[0] = 1.0;
-                    for (int P = 1; P < NM; P++) uj_pow[P] = uj_pow[P-1] * uj;
-                    double wij = wi * wj;
-                    size_t qr = q * n_qp + r;
-                    for (int p = 0; p < NM; p++) {
-                        for (int P = 0; P < NM; P++) {
-                            wuwu[(p * NM + P) * n_pairs + qr] = wij * ui_pow[p] * uj_pow[P];
+                    for (int e = 1; e < NM; e++) {
+                        ui_pow[e] = ui_pow[e-1] * ui;
+                        uj_pow[e] = uj_pow[e-1] * uj;
+                    }
+                    const double wij = wi * wj;
+                    for (int pp = 0; pp < NM; pp++) {
+                        for (int PP = 0; PP < NM; PP++) {
+                            wuwu[(pp * NM + PP) * m + t] = wij * ui_pow[pp] * uj_pow[PP];
                         }
                     }
+
+                    if (++r == n_qp) { r = 0; ++q; }
                 }
-            }
 
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                phases[qr] = -k * R[qr];
-            }
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                cos_phases[qr] = std::cos(phases[qr]);
-            }
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                sin_phases[qr] = std::sin(phases[qr]);
-            }
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                inv_R_4pi[qr] = inv_4pi / R[qr];
-                G_re[qr] = cos_phases[qr] * inv_R_4pi[qr];
-                G_im[qr] = sin_phases[qr] * inv_R_4pi[qr];
-            }
-
-            // Eligibility is a property of the (i, j) SEGMENT pair, not of
-            // the quadrature sub-pair (numpy's `mask[:, None, :, None]`
-            // broadcast) — one branch here serves every (q, r) below.
-            bool eligible = (gi_v(i) == gj_v(j)) && (gi_v(i) >= 0);
-            if (eligible) {
-                // `_ek_factor`'s spelling, term by term: T1, T2, C1, C2,
-                // fac = T1*C2 - T2*C1 + 1, then G *= fac (complex).
                 PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    double Rq = R[qr];
-                    double r2 = Rq * Rq;
-                    double r4 = r2 * r2;
-                    double kr = k * Rq;
-                    double kr2 = kr * kr;
-                    double t1 = 0.25 * a4_ek / r4;
-                    double t2 = 0.5 * a2_ek / r2;
-                    double c1r = 1.0;
-                    double c1i = kr;
-                    double c2r = 3.0 * c1r - kr2;
-                    double c2i = 3.0 * c1i;
-                    double facr = t1 * c2r;
-                    double faci = t1 * c2i;
-                    facr = facr - t2 * c1r;
-                    faci = faci - t2 * c1i;
-                    facr = facr + 1.0;
-                    double gre = G_re[qr];
-                    double gim = G_im[qr];
-                    G_re[qr] = gre * facr - gim * faci;
-                    G_im[qr] = gre * faci + gim * facr;
+                for (size_t t = 0; t < m; t++) {
+                    phases[t] = -k * R[t];
+                }
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    cos_phases[t] = std::cos(phases[t]);
+                }
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    sin_phases[t] = std::sin(phases[t]);
+                }
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    inv_R_4pi[t] = inv_4pi / R[t];
+                    G_re[t] = cos_phases[t] * inv_R_4pi[t];
+                    G_im[t] = sin_phases[t] * inv_R_4pi[t];
+                }
+
+                // Eligibility is a property of the (i, j) SEGMENT pair, not of
+                // the quadrature sub-pair (numpy's `mask[:, None, :, None]`
+                // broadcast) — one branch here serves every (q, r) below.
+                bool eligible = (gi_v(i) == gj_v(j)) && (gi_v(i) >= 0);
+                if (eligible) {
+                    // `_ek_factor`'s spelling, term by term: T1, T2, C1, C2,
+                    // fac = T1*C2 - T2*C1 + 1, then G *= fac (complex).
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        double Rq = R[t];
+                        double r2 = Rq * Rq;
+                        double r4 = r2 * r2;
+                        double kr = k * Rq;
+                        double kr2 = kr * kr;
+                        double t1 = 0.25 * a4_ek / r4;
+                        double t2 = 0.5 * a2_ek / r2;
+                        double c1r = 1.0;
+                        double c1i = kr;
+                        double c2r = 3.0 * c1r - kr2;
+                        double c2i = 3.0 * c1i;
+                        double facr = t1 * c2r;
+                        double faci = t1 * c2i;
+                        facr = facr - t2 * c1r;
+                        faci = faci - t2 * c1i;
+                        facr = facr + 1.0;
+                        double gre = G_re[t];
+                        double gim = G_im[t];
+                        G_re[t] = gre * facr - gim * faci;
+                        G_im[t] = gre * faci + gim * facr;
+                    }
+                }
+
+                for (int pP = 0; pP < NMM; pP++) {
+                    double sr = acc_re[pP], si = acc_im[pP];
+                    const double *w_row = &wuwu[pP * m];
+                    PYSIM_OMP_SIMD(reduction(+:sr,si))
+                    for (size_t t = 0; t < m; t++) {
+                        sr += w_row[t] * G_re[t];
+                        si += w_row[t] * G_im[t];
+                    }
+                    acc_re[pP] = sr;
+                    acc_im[pP] = si;
                 }
             }
 
             for (int pP = 0; pP < NMM; pP++) {
-                double sr = 0.0, si = 0.0;
-                const double *w_row = &wuwu[pP * n_pairs];
-                PYSIM_OMP_SIMD(reduction(+:sr,si))
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    sr += w_row[qr] * G_re[qr];
-                    si += w_row[qr] * G_im[qr];
-                }
-                j_view(pP / NM, pP % NM, i, j) = std::complex<double>(sr, si);
+                j_view(pP / NM, pP % NM, i, j) =
+                    std::complex<double>(acc_re[pP], acc_im[pP]);
             }
         }
     }
@@ -924,11 +958,6 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
         throw std::runtime_error("gl_t and gl_w must have matching length");
     }
     size_t n_qp = glt.shape(0);
-    if (n_qp > BSPLINE_MAX_N_QP) {
-        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
-                                 + " not supported (L1-sized stack scratch);"
-                                 " the caller should have taken the numpy path");
-    }
 
     size_t N_i = sli.shape(0);
     size_t N_j = slj.shape(0);
@@ -975,123 +1004,135 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
         }
     }
 
+    // TILED OVER qr (momwire#762) — kernel 2's transformation (chunk outside
+    // the k loop, so R / 1/(4 pi R) / wuwu and the k-independent EK terms T1,
+    // T2 are still built once per chunk and reused across the sweep), with
+    // kernel 3's EK factor stage inside the per-k body. First chunk assigns,
+    // later chunks accumulate; one chunk at n_qp <= 8, so bit-identical.
     PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
-            alignas(32) double R[64];
-            alignas(32) double inv_R_4pi[64];
-            alignas(32) double phases[64];
-            alignas(32) double cos_phases[64];
-            alignas(32) double sin_phases[64];
-            alignas(32) double G_re[64], G_im[64];
-            alignas(32) double t1v[64], t2v[64];
-            alignas(32) double wuwu[NMM * 64];
+            alignas(32) double R[BSPLINE_QR_TILE];
+            alignas(32) double inv_R_4pi[BSPLINE_QR_TILE];
+            alignas(32) double phases[BSPLINE_QR_TILE];
+            alignas(32) double cos_phases[BSPLINE_QR_TILE];
+            alignas(32) double sin_phases[BSPLINE_QR_TILE];
+            alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+            alignas(32) double t1v[BSPLINE_QR_TILE], t2v[BSPLINE_QR_TILE];
+            alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
 
-            size_t n_pairs = n_qp * n_qp;
+            const size_t n_pairs = n_qp * n_qp;
             const double *pi = &pos_i[i * n_qp * 3];
             const double *pj = &pos_j[j * n_qp * 3];
+            const double Li = len_i[i];
+            const double Lj = len_j[j];
+            const bool eligible = (gi_v(i) == gj_v(j)) && (gi_v(i) >= 0);
 
-            for (size_t q = 0; q < n_qp; q++) {
-                double pix = pi[q*3 + 0], piy = pi[q*3 + 1], piz = pi[q*3 + 2];
-                for (size_t r = 0; r < n_qp; r++) {
-                    double dx = pix - pj[r*3 + 0];
-                    double dy = piy - pj[r*3 + 1];
-                    double dz = piz - pj[r*3 + 2];
-                    R[q*n_qp + r] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
-                }
-            }
-            PYSIM_OMP_SIMD()
-            for (size_t qr = 0; qr < n_pairs; qr++) {
-                inv_R_4pi[qr] = inv_4pi / R[qr];
-            }
+            bool first_chunk = true;
+            for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
+                const size_t m = (n_pairs - base < BSPLINE_QR_TILE)
+                                     ? (n_pairs - base) : BSPLINE_QR_TILE;
 
-            double Li = len_i[i];
-            double Lj = len_j[j];
-            for (size_t q = 0; q < n_qp; q++) {
-                double wi = glw(q) * Li;
-                double ui = glt(q) * Li;
-                double ui_pow[NM];
-                ui_pow[0] = 1.0;
-                for (int p = 1; p < NM; p++) ui_pow[p] = ui_pow[p-1] * ui;
-                for (size_t r = 0; r < n_qp; r++) {
-                    double wj = glw(r) * Lj;
-                    double uj = glt(r) * Lj;
-                    double uj_pow[NM];
+                size_t q = base / n_qp;
+                size_t r = base % n_qp;
+                for (size_t t = 0; t < m; t++) {
+                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
+                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
+                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
+                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+
+                    const double wi = glw(q) * Li;
+                    const double ui = glt(q) * Li;
+                    const double wj = glw(r) * Lj;
+                    const double uj = glt(r) * Lj;
+                    double ui_pow[NM], uj_pow[NM];
+                    ui_pow[0] = 1.0;
                     uj_pow[0] = 1.0;
-                    for (int P = 1; P < NM; P++) uj_pow[P] = uj_pow[P-1] * uj;
-                    double wij = wi * wj;
-                    size_t qr = q * n_qp + r;
-                    for (int p = 0; p < NM; p++) {
-                        for (int P = 0; P < NM; P++) {
-                            wuwu[(p * NM + P) * n_pairs + qr] = wij * ui_pow[p] * uj_pow[P];
+                    for (int e = 1; e < NM; e++) {
+                        ui_pow[e] = ui_pow[e-1] * ui;
+                        uj_pow[e] = uj_pow[e-1] * uj;
+                    }
+                    const double wij = wi * wj;
+                    for (int pp = 0; pp < NM; pp++) {
+                        for (int PP = 0; PP < NM; PP++) {
+                            wuwu[(pp * NM + PP) * m + t] = wij * ui_pow[pp] * uj_pow[PP];
+                        }
+                    }
+
+                    if (++r == n_qp) { r = 0; ++q; }
+                }
+                PYSIM_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    inv_R_4pi[t] = inv_4pi / R[t];
+                }
+                if (eligible) {
+                    // T1, T2: functions of R and a_ek alone, so they hoist out
+                    // of the k loop exactly as the same-edge swept twin's do.
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        double r2 = R[t] * R[t];
+                        double r4 = r2 * r2;
+                        t1v[t] = 0.25 * a4_ek / r4;
+                        t2v[t] = 0.5 * a2_ek / r2;
+                    }
+                }
+
+                for (size_t kk = 0; kk < n_k; kk++) {
+                    double k = ka(kk);
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        phases[t] = -k * R[t];
+                    }
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        cos_phases[t] = std::cos(phases[t]);
+                    }
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        sin_phases[t] = std::sin(phases[t]);
+                    }
+                    PYSIM_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        G_re[t] = cos_phases[t] * inv_R_4pi[t];
+                        G_im[t] = sin_phases[t] * inv_R_4pi[t];
+                    }
+                    if (eligible) {
+                        PYSIM_OMP_SIMD()
+                        for (size_t t = 0; t < m; t++) {
+                            double kr = k * R[t];
+                            double kr2 = kr * kr;
+                            double c1r = 1.0;
+                            double c1i = kr;
+                            double c2r = 3.0 * c1r - kr2;
+                            double c2i = 3.0 * c1i;
+                            double facr = t1v[t] * c2r;
+                            double faci = t1v[t] * c2i;
+                            facr = facr - t2v[t] * c1r;
+                            faci = faci - t2v[t] * c1i;
+                            facr = facr + 1.0;
+                            double gre = G_re[t];
+                            double gim = G_im[t];
+                            G_re[t] = gre * facr - gim * faci;
+                            G_im[t] = gre * faci + gim * facr;
+                        }
+                    }
+                    for (int pP = 0; pP < NMM; pP++) {
+                        double sr = 0.0, si = 0.0;
+                        const double *w_row = &wuwu[pP * m];
+                        PYSIM_OMP_SIMD(reduction(+:sr,si))
+                        for (size_t t = 0; t < m; t++) {
+                            sr += w_row[t] * G_re[t];
+                            si += w_row[t] * G_im[t];
+                        }
+                        std::complex<double> part(sr, si);
+                        if (first_chunk) {
+                            j_view(kk, pP / NM, pP % NM, i, j) = part;
+                        } else {
+                            j_view(kk, pP / NM, pP % NM, i, j) += part;
                         }
                     }
                 }
-            }
-
-            bool eligible = (gi_v(i) == gj_v(j)) && (gi_v(i) >= 0);
-            if (eligible) {
-                // T1, T2: functions of R and a_ek alone, so they hoist out
-                // of the k loop exactly as the same-edge swept twin's do.
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    double r2 = R[qr] * R[qr];
-                    double r4 = r2 * r2;
-                    t1v[qr] = 0.25 * a4_ek / r4;
-                    t2v[qr] = 0.5 * a2_ek / r2;
-                }
-            }
-
-            for (size_t kk = 0; kk < n_k; kk++) {
-                double k = ka(kk);
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    phases[qr] = -k * R[qr];
-                }
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    cos_phases[qr] = std::cos(phases[qr]);
-                }
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    sin_phases[qr] = std::sin(phases[qr]);
-                }
-                PYSIM_OMP_SIMD()
-                for (size_t qr = 0; qr < n_pairs; qr++) {
-                    G_re[qr] = cos_phases[qr] * inv_R_4pi[qr];
-                    G_im[qr] = sin_phases[qr] * inv_R_4pi[qr];
-                }
-                if (eligible) {
-                    PYSIM_OMP_SIMD()
-                    for (size_t qr = 0; qr < n_pairs; qr++) {
-                        double kr = k * R[qr];
-                        double kr2 = kr * kr;
-                        double c1r = 1.0;
-                        double c1i = kr;
-                        double c2r = 3.0 * c1r - kr2;
-                        double c2i = 3.0 * c1i;
-                        double facr = t1v[qr] * c2r;
-                        double faci = t1v[qr] * c2i;
-                        facr = facr - t2v[qr] * c1r;
-                        faci = faci - t2v[qr] * c1i;
-                        facr = facr + 1.0;
-                        double gre = G_re[qr];
-                        double gim = G_im[qr];
-                        G_re[qr] = gre * facr - gim * faci;
-                        G_im[qr] = gre * faci + gim * facr;
-                    }
-                }
-                for (int pP = 0; pP < NMM; pP++) {
-                    double sr = 0.0, si = 0.0;
-                    const double *w_row = &wuwu[pP * n_pairs];
-                    PYSIM_OMP_SIMD(reduction(+:sr,si))
-                    for (size_t qr = 0; qr < n_pairs; qr++) {
-                        sr += w_row[qr] * G_re[qr];
-                        si += w_row[qr] * G_im[qr];
-                    }
-                    j_view(kk, pP / NM, pP % NM, i, j) =
-                        std::complex<double>(sr, si);
-                }
+                first_chunk = false;
             }
         }
     }
@@ -1930,11 +1971,6 @@ bspline_assemble_offedge_block_kernel(
     if (supp_I.shape(1) != NM || supp_J.shape(1) != NM) {
         throw std::runtime_error("support arrays must have shape (n, D+1)");
     }
-    if (n_qp > BSPLINE_MAX_N_QP) {
-        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
-                                 + " not supported (L1-sized stack scratch);"
-                                 " the caller should have taken the numpy path");
-    }
 
     // Per-segment quadrature positions + lengths, precomputed once.
     std::vector<double> posI(nSegI * n_qp * 3), lenI(nSegI);
@@ -2004,49 +2040,64 @@ bspline_assemble_offedge_block_kernel(
                     // Moment tensor Jc[p][P] for this single segment pair.
                     std::complex<double> Jc[NM][NM];
                     {
-                        alignas(32) double R[64], G_re[64], G_im[64];
-                        alignas(32) double wuwu[(NM*NM) * 64];
-                        size_t n_pairs = n_qp * n_qp;
-                        for (size_t q = 0; q < n_qp; q++) {
-                            double pix = pi[q*3+0], piy = pi[q*3+1], piz = pi[q*3+2];
-                            for (size_t r = 0; r < n_qp; r++) {
-                                double dx = pix - pj[r*3+0];
-                                double dy = piy - pj[r*3+1];
-                                double dz = piz - pj[r*3+2];
-                                R[q*n_qp+r] = std::sqrt(dx*dx+dy*dy+dz*dz+a_squared);
-                            }
-                        }
-                        for (size_t q = 0; q < n_qp; q++) {
-                            double wi = glw(q) * Li, ui = glt(q) * Li;
-                            double uip[NM]; uip[0] = 1.0;
-                            for (int p = 1; p < NM; p++) uip[p] = uip[p-1]*ui;
-                            for (size_t r = 0; r < n_qp; r++) {
+                        // TILED OVER qr (momwire#762). `mm` and `tt` rather
+                        // than the usual m/t: this scope already has m and n
+                        // as the block's segment-pair indices.
+                        alignas(32) double R[BSPLINE_QR_TILE];
+                        alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+                        alignas(32) double wuwu[(NM*NM) * BSPLINE_QR_TILE];
+                        const size_t n_pairs = n_qp * n_qp;
+                        double acc_re[NM*NM], acc_im[NM*NM];
+                        for (int pP = 0; pP < NM*NM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
+
+                        for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
+                            const size_t mm = (n_pairs - base < BSPLINE_QR_TILE)
+                                                  ? (n_pairs - base) : BSPLINE_QR_TILE;
+                            size_t q = base / n_qp;
+                            size_t r = base % n_qp;
+                            for (size_t tt = 0; tt < mm; tt++) {
+                                double dx = pi[q*3+0] - pj[r*3+0];
+                                double dy = pi[q*3+1] - pj[r*3+1];
+                                double dz = pi[q*3+2] - pj[r*3+2];
+                                R[tt] = std::sqrt(dx*dx+dy*dy+dz*dz+a_squared);
+
+                                double wi = glw(q) * Li, ui = glt(q) * Li;
                                 double wj = glw(r) * Lj, uj = glt(r) * Lj;
-                                double ujp[NM]; ujp[0] = 1.0;
-                                for (int P = 1; P < NM; P++) ujp[P] = ujp[P-1]*uj;
+                                double uip[NM], ujp[NM];
+                                uip[0] = 1.0; ujp[0] = 1.0;
+                                for (int e = 1; e < NM; e++) {
+                                    uip[e] = uip[e-1]*ui;
+                                    ujp[e] = ujp[e-1]*uj;
+                                }
                                 double wij = wi*wj;
-                                size_t qr = q*n_qp + r;
                                 for (int p = 0; p < NM; p++)
                                     for (int P = 0; P < NM; P++)
-                                        wuwu[(p*NM+P)*n_pairs + qr] = wij*uip[p]*ujp[P];
+                                        wuwu[(p*NM+P)*mm + tt] = wij*uip[p]*ujp[P];
+
+                                if (++r == n_qp) { r = 0; ++q; }
                             }
-                        }
-                        PYSIM_OMP_SIMD()
-                        for (size_t qr = 0; qr < n_pairs; qr++) {
-                            double inv = inv_4pi / R[qr];
-                            double ph = -k * R[qr];
-                            G_re[qr] = std::cos(ph) * inv;
-                            G_im[qr] = std::sin(ph) * inv;
+                            PYSIM_OMP_SIMD()
+                            for (size_t tt = 0; tt < mm; tt++) {
+                                double inv = inv_4pi / R[tt];
+                                double ph = -k * R[tt];
+                                G_re[tt] = std::cos(ph) * inv;
+                                G_im[tt] = std::sin(ph) * inv;
+                            }
+                            for (int pP = 0; pP < NM*NM; pP++) {
+                                double sr_ = acc_re[pP], si_ = acc_im[pP];
+                                const double *w_row = &wuwu[pP * mm];
+                                PYSIM_OMP_SIMD(reduction(+:sr_,si_))
+                                for (size_t tt = 0; tt < mm; tt++) {
+                                    sr_ += w_row[tt]*G_re[tt];
+                                    si_ += w_row[tt]*G_im[tt];
+                                }
+                                acc_re[pP] = sr_;
+                                acc_im[pP] = si_;
+                            }
                         }
                         for (int pP = 0; pP < NM*NM; pP++) {
-                            double sr_ = 0.0, si_ = 0.0;
-                            const double *w_row = &wuwu[pP * n_pairs];
-                            PYSIM_OMP_SIMD(reduction(+:sr_,si_))
-                            for (size_t qr = 0; qr < n_pairs; qr++) {
-                                sr_ += w_row[qr]*G_re[qr];
-                                si_ += w_row[qr]*G_im[qr];
-                            }
-                            Jc[pP/NM][pP%NM] = std::complex<double>(sr_, si_);
+                            Jc[pP/NM][pP%NM] =
+                                std::complex<double>(acc_re[pP], acc_im[pP]);
                         }
                     }
 
@@ -2283,11 +2334,6 @@ bspline_assemble_offedge_block_kernel_ek(
     if (supp_I.shape(1) != NM || supp_J.shape(1) != NM) {
         throw std::runtime_error("support arrays must have shape (n, D+1)");
     }
-    if (n_qp > BSPLINE_MAX_N_QP) {
-        throw std::runtime_error("n_qp > " + std::to_string(BSPLINE_MAX_N_QP)
-                                 + " not supported (L1-sized stack scratch);"
-                                 " the caller should have taken the numpy path");
-    }
     if ((size_t)group_I.shape(0) != nSegI || (size_t)group_J.shape(0) != nSegJ) {
         throw std::runtime_error(
             "bspline_assemble_offedge_block_kernel_ek: group_I/group_J must "
@@ -2370,77 +2416,94 @@ bspline_assemble_offedge_block_kernel_ek(
                     // Moment tensor Jc[p][P] for this single segment pair.
                     std::complex<double> Jc[NM][NM];
                     {
-                        alignas(32) double R[64], G_re[64], G_im[64];
-                        alignas(32) double wuwu[(NM*NM) * 64];
-                        size_t n_pairs = n_qp * n_qp;
-                        for (size_t q = 0; q < n_qp; q++) {
-                            double pix = pi[q*3+0], piy = pi[q*3+1], piz = pi[q*3+2];
-                            for (size_t r = 0; r < n_qp; r++) {
-                                double dx = pix - pj[r*3+0];
-                                double dy = piy - pj[r*3+1];
-                                double dz = piz - pj[r*3+2];
-                                R[q*n_qp+r] = std::sqrt(dx*dx+dy*dy+dz*dz+a_squared);
-                            }
-                        }
-                        for (size_t q = 0; q < n_qp; q++) {
-                            double wi = glw(q) * Li, ui = glt(q) * Li;
-                            double uip[NM]; uip[0] = 1.0;
-                            for (int p = 1; p < NM; p++) uip[p] = uip[p-1]*ui;
-                            for (size_t r = 0; r < n_qp; r++) {
+                        // TILED OVER qr (momwire#762). `mm`/`tt` rather than
+                        // m/t: this scope already has m and n as the block's
+                        // segment-pair indices. Eligibility is a property of
+                        // the (smi, snj) pair, so it is the same for every
+                        // chunk.
+                        alignas(32) double R[BSPLINE_QR_TILE];
+                        alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+                        alignas(32) double wuwu[(NM*NM) * BSPLINE_QR_TILE];
+                        const size_t n_pairs = n_qp * n_qp;
+                        double acc_re[NM*NM], acc_im[NM*NM];
+                        for (int pP = 0; pP < NM*NM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
+
+                        for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
+                            const size_t mm = (n_pairs - base < BSPLINE_QR_TILE)
+                                                  ? (n_pairs - base) : BSPLINE_QR_TILE;
+                            size_t q = base / n_qp;
+                            size_t r = base % n_qp;
+                            for (size_t tt = 0; tt < mm; tt++) {
+                                double dx = pi[q*3+0] - pj[r*3+0];
+                                double dy = pi[q*3+1] - pj[r*3+1];
+                                double dz = pi[q*3+2] - pj[r*3+2];
+                                R[tt] = std::sqrt(dx*dx+dy*dy+dz*dz+a_squared);
+
+                                double wi = glw(q) * Li, ui = glt(q) * Li;
                                 double wj = glw(r) * Lj, uj = glt(r) * Lj;
-                                double ujp[NM]; ujp[0] = 1.0;
-                                for (int P = 1; P < NM; P++) ujp[P] = ujp[P-1]*uj;
+                                double uip[NM], ujp[NM];
+                                uip[0] = 1.0; ujp[0] = 1.0;
+                                for (int e = 1; e < NM; e++) {
+                                    uip[e] = uip[e-1]*ui;
+                                    ujp[e] = ujp[e-1]*uj;
+                                }
                                 double wij = wi*wj;
-                                size_t qr = q*n_qp + r;
                                 for (int p = 0; p < NM; p++)
                                     for (int P = 0; P < NM; P++)
-                                        wuwu[(p*NM+P)*n_pairs + qr] = wij*uip[p]*ujp[P];
+                                        wuwu[(p*NM+P)*mm + tt] = wij*uip[p]*ujp[P];
+
+                                if (++r == n_qp) { r = 0; ++q; }
                             }
-                        }
-                        PYSIM_OMP_SIMD()
-                        for (size_t qr = 0; qr < n_pairs; qr++) {
-                            double inv = inv_4pi / R[qr];
-                            double ph = -k * R[qr];
-                            G_re[qr] = std::cos(ph) * inv;
-                            G_im[qr] = std::sin(ph) * inv;
-                        }
-                        if (eligible) {
-                            // `_ek_factor`'s spelling, term by term: T1, T2,
-                            // C1, C2, fac = T1*C2 - T2*C1 + 1, G *= fac —
-                            // unit 2's off-edge twin, transcribed again.
                             PYSIM_OMP_SIMD()
-                            for (size_t qr = 0; qr < n_pairs; qr++) {
-                                double Rq = R[qr];
-                                double r2 = Rq * Rq;
-                                double r4 = r2 * r2;
-                                double kr = k * Rq;
-                                double kr2 = kr * kr;
-                                double t1 = 0.25 * a4_ek / r4;
-                                double t2 = 0.5 * a2_ek / r2;
-                                double c1r = 1.0;
-                                double c1i = kr;
-                                double c2r = 3.0 * c1r - kr2;
-                                double c2i = 3.0 * c1i;
-                                double facr = t1 * c2r;
-                                double faci = t1 * c2i;
-                                facr = facr - t2 * c1r;
-                                faci = faci - t2 * c1i;
-                                facr = facr + 1.0;
-                                double gre = G_re[qr];
-                                double gim = G_im[qr];
-                                G_re[qr] = gre * facr - gim * faci;
-                                G_im[qr] = gre * faci + gim * facr;
+                            for (size_t tt = 0; tt < mm; tt++) {
+                                double inv = inv_4pi / R[tt];
+                                double ph = -k * R[tt];
+                                G_re[tt] = std::cos(ph) * inv;
+                                G_im[tt] = std::sin(ph) * inv;
+                            }
+                            if (eligible) {
+                                // `_ek_factor`'s spelling, term by term: T1, T2,
+                                // C1, C2, fac = T1*C2 - T2*C1 + 1, G *= fac —
+                                // unit 2's off-edge twin, transcribed again.
+                                PYSIM_OMP_SIMD()
+                                for (size_t tt = 0; tt < mm; tt++) {
+                                    double Rq = R[tt];
+                                    double r2 = Rq * Rq;
+                                    double r4 = r2 * r2;
+                                    double kr = k * Rq;
+                                    double kr2 = kr * kr;
+                                    double t1 = 0.25 * a4_ek / r4;
+                                    double t2 = 0.5 * a2_ek / r2;
+                                    double c1r = 1.0;
+                                    double c1i = kr;
+                                    double c2r = 3.0 * c1r - kr2;
+                                    double c2i = 3.0 * c1i;
+                                    double facr = t1 * c2r;
+                                    double faci = t1 * c2i;
+                                    facr = facr - t2 * c1r;
+                                    faci = faci - t2 * c1i;
+                                    facr = facr + 1.0;
+                                    double gre = G_re[tt];
+                                    double gim = G_im[tt];
+                                    G_re[tt] = gre * facr - gim * faci;
+                                    G_im[tt] = gre * faci + gim * facr;
+                                }
+                            }
+                            for (int pP = 0; pP < NM*NM; pP++) {
+                                double sr_ = acc_re[pP], si_ = acc_im[pP];
+                                const double *w_row = &wuwu[pP * mm];
+                                PYSIM_OMP_SIMD(reduction(+:sr_,si_))
+                                for (size_t tt = 0; tt < mm; tt++) {
+                                    sr_ += w_row[tt]*G_re[tt];
+                                    si_ += w_row[tt]*G_im[tt];
+                                }
+                                acc_re[pP] = sr_;
+                                acc_im[pP] = si_;
                             }
                         }
                         for (int pP = 0; pP < NM*NM; pP++) {
-                            double sr_ = 0.0, si_ = 0.0;
-                            const double *w_row = &wuwu[pP * n_pairs];
-                            PYSIM_OMP_SIMD(reduction(+:sr_,si_))
-                            for (size_t qr = 0; qr < n_pairs; qr++) {
-                                sr_ += w_row[qr]*G_re[qr];
-                                si_ += w_row[qr]*G_im[qr];
-                            }
-                            Jc[pP/NM][pP%NM] = std::complex<double>(sr_, si_);
+                            Jc[pP/NM][pP%NM] =
+                                std::complex<double>(acc_re[pP], acc_im[pP]);
                         }
                     }
 
@@ -3257,6 +3320,7 @@ void register_bspline(py::module_ &m) {
     // Read by momwire._accel so the Python routing guard cannot drift from the
     // kernels' real ceiling (momwire#769).
     m.attr("BSPLINE_MAX_N_QP") = py::int_(BSPLINE_MAX_N_QP);
+    m.attr("BSPLINE_SAME_EDGE_MAX_N_QP") = py::int_(BSPLINE_SAME_EDGE_MAX_N_QP);
 
     m.def("seg_seg_reg_moments_bspline_swept",
           &seg_seg_reg_moments_bspline_swept,

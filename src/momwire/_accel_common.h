@@ -57,18 +57,46 @@ extern "C" double cos(double);
 extern "C" double sin(double);
 #endif
 
-// The B-spline pair kernels' quadrature ceiling, in ONE place.
+// The B-spline pair kernels' qr blocking width, in ONE place.
 //
-// The scratch arrays below are `[64]` (and `wuwu` is `[NMM * 64]`) because 64
-// doubles keeps a pair block in L1 — a cache-blocking constant, not an
-// arbitrary limit — so n_qp*n_qp must fit it. Six kernels enforce it; every one
-// of them reads this, and Python reads it back off the module as
-// `BSPLINE_MAX_N_QP` rather than re-spelling the number (momwire#769).
+// The scratch arrays are `[64]` (and `wuwu` is `[NMM * 64]`) because 64 doubles
+// keeps a pair block in L1 — a cache-blocking constant, not an arbitrary limit.
+// It used to double as a CEILING on n_qp, since n_qp*n_qp had to fit; six
+// kernels threw above it and the crossing/lossy-soil class that needs high
+// order could not be computed on the fast path at all (momwire#760).
 //
-// Raising it by growing the buffers is the WRONG fix and is measured as such in
-// momwire#762: tile the qr loop instead, at which point this becomes the tile
-// width and the ceiling goes away.
-constexpr size_t BSPLINE_MAX_N_QP = 8;
+// momwire#762 made it a tile width instead. Growing the buffers was the wrong
+// fix and is measured as such in that issue: at n_qp^2 = 4096 `wuwu` alone is
+// 295 KB, an order of magnitude past L1, and the fixed sizes are what the full
+// unroll and PYSIM_OMP_SIMD vectorization depend on. Nothing carries state
+// across quadrature pairs, so walking qr in chunks of this width is exact —
+// and at n_qp <= 8 it is ONE chunk, so the arithmetic and its order are
+// unchanged and the output is bit-identical to the untiled kernel.
+constexpr size_t BSPLINE_QR_TILE = 64;
+
+// The ceiling the Python routing guard reads (momwire#769). Since momwire#762
+// the pair kernels TILE the qr range, so there is no ceiling any more and this
+// says so: the guard's `n_qp <= MAX_N_QP` is then always true and no fill is
+// diverted. The constant and the export stay because the guard, its warning and
+// its drift test are the safety net for the NEXT kernel limit, and because
+// removing them would leave the routing decision spelled in two places again.
+// The OFF-EDGE pair kernels' ceiling, read by the Python routing guard
+// (momwire#769). All six are tiled as of momwire#762, so there is no ceiling
+// left and this says so: the guard's `n_qp <= MAX_N_QP` is then always true
+// and no off-edge fill is diverted. The constant and its export stay because
+// the guard, its warning and its drift test are the safety net for the next
+// kernel limit — and because the SAME-EDGE reg-moment kernel below still has
+// one.
+constexpr size_t BSPLINE_MAX_N_QP = static_cast<size_t>(-1);
+
+// The SAME-EDGE reg-moment kernel's ceiling, which momwire#762 did NOT lift.
+// That kernel takes R from a precomputed (N*n_qp, N*n_qp) array and reduces
+// through a nested wu(p,i,q)*wu(P,j,r) product rather than a flat wuwu row, so
+// it needs its own transformation rather than the one the six share. Until
+// then `n_qp_pair_same_edge` above this routes to numpy instead of raising —
+// it used to raise, with wording ("n_qp^2 must be <= 64") different enough
+// from the off-edge kernels' that momwire#769 missed the site entirely.
+constexpr size_t BSPLINE_SAME_EDGE_MAX_N_QP = 8;
 
 // Stringizing helpers so a token sequence can be turned into a _Pragma.
 #define PYSIM_STR_(x) #x
