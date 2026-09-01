@@ -57,10 +57,25 @@ When auditing directives, measure with **`--extend-select RUF100`**, never
 `--select RUF100` — the latter *replaces* the rule set, so every directive
 naming a now-unselected rule reads as unused.
 
-### `# noqa: E402` on the `sys.path` idiom is dead on arrival
+### `# noqa: E402` on the `sys.path` idiom — dead only in the INLINED form
 
-Ruff's E402 **already exempts imports that follow a `sys.path` mutation**, so
-the probe/script idiom needs no directive at all:
+Ruff's E402 exempts an import only when *every* statement above it is itself
+exempt: imports, the docstring, comments, dunder assignments, and `sys.path`
+mutations. The mutation does **not** confer the exemption on what follows — it
+is simply one more exempt statement. One ordinary assignment anywhere above the
+import ends it, and its position relative to the mutation is irrelevant.
+Measured 2026-09-01, identical under `ruff@0.15.21` and `ruff@0.16.5`:
+
+| shape | E402 |
+|---|---|
+| `sys.path.insert(0, str(Path(__file__)...))` then the import | exempt |
+| `HERE = Path(__file__).resolve().parent` **before** the mutation | **fires** |
+| the same assignment **after** the mutation, above the import | **fires** |
+| `__version__ = "1"` (dunder), then the mutation | exempt |
+| `sys.path.append(...)` | exempt |
+| ordinary `X = 1` then the import | fires (the case the rule is for) |
+
+So only the fully inlined head-of-file shape needs no directive:
 
 ```python
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
@@ -68,13 +83,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 from momwire import BSplineSolver  # exempt — no E402, no noqa needed
 ```
 
-E402 still fires for an import after ordinary code (`X = 1`), which is the case
-the rule is actually for. The exemption is **not version-dependent** — it reads
-identically under `ruff@0.15.21` and `ruff@0.16.5`.
+**The two repos sit on opposite sides of that line, so an audit does not
+transfer.** antennaknobs has 320 directives and *zero* dead, because its probes
+bind `HERE = Path(__file__).resolve().parent` first and that ends the exemption.
+Here the scripts inline the expression, so the directive really is a no-op — but
+only in those files. See antennaknobs' CLAUDE.md for that side of it.
 
 **Do not sweep `noqa: E402` by pattern.** Most are load-bearing: of the 35 lines
 carrying one (measured 2026-09-01), only 14 are dead, and the two sets do not
-overlap at all — deleting the other 21 turns the gate red.
+overlap at all — deleting the other 21 turns the gate red. Those 21 are live for
+a third reason again: they are deep mid-file imports
+(`tests/test_extended_kernel_bspline.py:657`,
+`tests/test_sinusoidal_galerkin.py:1241`) sitting after hundreds of lines of
+ordinary code, which is precisely what E402 exists to flag.
 
 **Any inventory of dead directives goes stale faster than it gets cleaned.**
 momwire#761 was filed against 22 (16 removable, 6 `non-enabled` keepers). While
