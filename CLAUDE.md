@@ -57,6 +57,35 @@ When auditing directives, measure with **`--extend-select RUF100`**, never
 `--select RUF100` — the latter *replaces* the rule set, so every directive
 naming a now-unselected rule reads as unused.
 
+### `# noqa: E402` on the `sys.path` idiom is dead on arrival
+
+Ruff's E402 **already exempts imports that follow a `sys.path` mutation**, so
+the probe/script idiom needs no directive at all:
+
+```python
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
+
+from momwire import BSplineSolver  # exempt — no E402, no noqa needed
+```
+
+E402 still fires for an import after ordinary code (`X = 1`), which is the case
+the rule is actually for. The exemption is **not version-dependent** — it reads
+identically under `ruff@0.15.21` and `ruff@0.16.5`.
+
+**Do not sweep `noqa: E402` by pattern.** Most are load-bearing: of the 34 lines
+carrying one (measured 2026-09-01), only 13 are dead, and the two sets do not
+overlap at all — deleting the other 21 turns the gate red. momwire#761 lists the
+13 by file and line.
+
+A dead directive is not always this idiom, either. `tests/test_harrington.py`
+has no `sys.path` call anywhere; its import is preceded only by a docstring and
+comments, so nothing triggers E402 there in the first place. Decide each site
+from the lines *above* the import, not from the directive on it.
+
+The **file-level** form is legitimate where it is earned:
+`validation/momwire_backend.py:99` carries `# ruff: noqa: E402` for six imports
+that must follow env-var setup, and RUF100 correctly never reports it.
+
 ## Building the C++ extension
 
 `make build`. setuptools has no per-object staleness check — it recompiles
