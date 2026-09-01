@@ -362,7 +362,7 @@ try:
     from importlib.metadata import version as _pkg_version
 
     _MAJ, _MIN = _pkg_version("momwire").split(".")[:2]
-except Exception:  # pragma: no cover - no installed metadata (source tree)
+except Exception:  # pragma: no cover - no installed metadata (source tree)  # noqa: BLE001 - a version probe must never be the thing that fails
     _MAJ, _MIN = "0", "0"
 PROBE_VERSION = f"NEC2momwire.{_MAJ}.{_MIN}"
 

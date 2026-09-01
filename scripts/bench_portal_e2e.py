@@ -139,7 +139,7 @@ class ResidentEngine:
             if self.proc.stdin is not None:
                 self.proc.stdin.close()
             self.proc.wait(timeout=10)
-        except Exception:
+        except Exception:  # noqa: BLE001 - teardown falls back to kill(); a bench must not die closing a child
             self.proc.kill()
 
 
@@ -180,7 +180,7 @@ def read_version(cmd: list[str]) -> str:
             cmd + ["-version"], capture_output=True, text=True, timeout=30
         ).stdout
         return out.splitlines()[0].strip() if out else ""
-    except Exception:
+    except Exception:  # noqa: BLE001 - an unreadable -version is a blank column, not a failed run
         return ""
 
 

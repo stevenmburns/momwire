@@ -93,7 +93,7 @@ def main() -> int:
             pass
         try:
             child.stdin.close()
-        except Exception:
+        except Exception:  # noqa: BLE001 - the child may already be gone; the shim's job is done either way
             pass
 
     threading.Thread(target=pump_in, daemon=True).start()
