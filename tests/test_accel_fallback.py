@@ -9,8 +9,12 @@ also pins that the right remediation hint is shown for each OS."""
 import sys
 import warnings
 
+import numpy as np
+import pytest
+
 import momwire
-from momwire import _accel
+from momwire import BSplineSolver, _accel
+from momwire import _bspline_kernels as _bk
 
 
 def _force_import_failure(monkeypatch):
@@ -93,3 +97,111 @@ def test_not_built_is_silent(monkeypatch):
 
     assert (mod, loaded) == (None, False)
     assert [w for w in caught if issubclass(w.category, RuntimeWarning)] == []
+
+
+# ---------------------------------------------------------------------------
+# momwire#769 — the quadrature ceiling routes to numpy instead of raising
+# ---------------------------------------------------------------------------
+#
+# Before #769 the capped C++ pair kernels were simply called and raised
+# `RuntimeError: n_qp > 8 not supported`. That turned a slow-but-correct answer
+# into an unhandled exception on exactly the crossing/lossy-soil class that
+# needs the order (#760), while #696 shipped a warning telling users to raise
+# the very knob that crashed.
+#
+# The deck below is BENT on purpose. A straight wire has one edge, so since #759
+# it never enters the off-edge kernel at all and would pass this file vacuously
+# — that deck-dependence is half of what #769 is about.
+
+
+def _bent(n_qp):
+    wire = np.array([[0.0, -5.0, 0.0], [0.0, 0.0, 0.0], [5.0, 0.0, 0.0]])
+    return BSplineSolver(
+        wires=[wire],
+        nsegs=12,
+        wavelength=22.0,
+        wire_radius=0.0005,
+        degree=2,
+        n_qp_pair=n_qp,
+        feed_wire_index=0,
+        feed_arclength=5.0,
+    )
+
+
+def test_max_n_qp_is_read_off_the_extension_not_respelled():
+    """The Python guard and the C++ kernels must not be able to disagree.
+
+    #762 lifts the ceiling by editing one `constexpr` in _accel_common.h; this
+    is what makes that edit sufficient. If the export ever disappears, the
+    getattr default silently takes over — so pin that the export exists.
+    """
+    from momwire import _accelerators
+
+    assert _accelerators.BSPLINE_MAX_N_QP == _accel.MAX_N_QP
+
+
+def test_serves_n_qp_is_a_predicate_about_the_ceiling():
+    assert _accel.serves_n_qp(_accel.MAX_N_QP, "off-edge pair") is True
+    with pytest.warns(RuntimeWarning, match="exceeds the accelerated"):
+        assert _accel.serves_n_qp(_accel.MAX_N_QP + 1, "off-edge pair") is False
+
+
+@pytest.mark.skipif(not _accel.LOADED, reason="no accelerator to fall back FROM")
+def test_over_the_ceiling_solves_instead_of_raising_and_says_so():
+    with pytest.warns(RuntimeWarning, match=r"exceeds the accelerated .*ceiling of 8"):
+        Z, _ = _bent(_accel.MAX_N_QP + 8).compute_impedance()
+    assert np.isfinite(Z.real) and np.isfinite(Z.imag)
+
+
+@pytest.mark.skipif(not _accel.LOADED, reason="no accelerator to fall back FROM")
+def test_at_the_ceiling_nothing_warns_and_the_fast_path_still_runs():
+    """The guard must not cost the accelerated path anything at legal orders."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        Z, _ = _bent(_accel.MAX_N_QP).compute_impedance()
+    assert np.isfinite(Z.real)
+
+
+@pytest.mark.skipif(not _accel.LOADED, reason="nothing to compare against")
+def test_the_fallback_really_is_the_numpy_path(monkeypatch):
+    """Falling back must land on the reference implementation, not somewhere
+    else that merely fails to raise. #758's converged anchors were banked on
+    the numpy path precisely because it reproduces the C++ one bit-identically
+    below the ceiling, so above it the two must be the SAME computation."""
+    over = _accel.MAX_N_QP + 8
+    with pytest.warns(RuntimeWarning):
+        Z_routed, _ = _bent(over).compute_impedance()
+
+    # No `pytest.warns` here, and that is the point: with the accelerator off
+    # the ceiling is not what moved the work, so this run is silent.
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    Z_numpy, _ = _bent(over).compute_impedance()
+
+    assert abs(Z_routed - Z_numpy) < 1e-9, (Z_routed, Z_numpy)
+
+
+@pytest.mark.skipif(not _accel.LOADED, reason="no accelerator to be ineligible for")
+def test_no_warning_when_the_ceiling_was_not_the_reason(monkeypatch):
+    """A caller already on numpy for another reason must not be told about a
+    ceiling it never reached.
+
+    This is not hypothetical: the repo's own complex-k and Sommerfeld truth
+    references call `_seg_seg_full_moments_offedge` with n_qp of 12, 64 and 256
+    precisely because they want the reference implementation. Warning there
+    trains people to ignore the warning that matters.
+    """
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_ACCEL", False)
+    monkeypatch.setattr(_bk, "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL", False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        _bent(_accel.MAX_N_QP + 8).compute_impedance()
+
+
+def test_the_eligibility_flag_is_what_gates_the_warning():
+    over = _accel.MAX_N_QP + 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        assert _accel.serves_n_qp(over, "off-edge pair", eligible=False) is False
+    with pytest.warns(RuntimeWarning):
+        assert _accel.serves_n_qp(over, "off-edge pair", eligible=True) is False

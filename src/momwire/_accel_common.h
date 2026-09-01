@@ -57,6 +57,19 @@ extern "C" double cos(double);
 extern "C" double sin(double);
 #endif
 
+// The B-spline pair kernels' quadrature ceiling, in ONE place.
+//
+// The scratch arrays below are `[64]` (and `wuwu` is `[NMM * 64]`) because 64
+// doubles keeps a pair block in L1 — a cache-blocking constant, not an
+// arbitrary limit — so n_qp*n_qp must fit it. Six kernels enforce it; every one
+// of them reads this, and Python reads it back off the module as
+// `BSPLINE_MAX_N_QP` rather than re-spelling the number (momwire#769).
+//
+// Raising it by growing the buffers is the WRONG fix and is measured as such in
+// momwire#762: tile the qr loop instead, at which point this becomes the tile
+// width and the ceiling goes away.
+constexpr size_t BSPLINE_MAX_N_QP = 8;
+
 // Stringizing helpers so a token sequence can be turned into a _Pragma.
 #define PYSIM_STR_(x) #x
 #define PYSIM_PRAGMA_(x) _Pragma(PYSIM_STR_(x))
