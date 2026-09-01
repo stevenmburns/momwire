@@ -3405,40 +3405,29 @@ def test_u2_offedge_ek_cpp_matches_numpy_swept(numpy_offedge, degree, radius_kin
 # the same way. Only both together pin `(gi == gj) && (gi >= 0)` exactly.
 
 
-# How close the ineligible-EK path must sit to the reduced kernel.
+# Why these gates can assert EXACT equality (momwire#781).
 #
-# It was `array_equal` until momwire#781. That is not something the source can
-# promise: the two kernels run TEXTUALLY IDENTICAL accumulation loops, but each
-# is `#pragma omp simd reduction(+:sr,si)`, and a reduction clause explicitly
-# LICENSES the compiler to reassociate the sum. The reduction tree therefore
-# depends on the vectorization factor chosen per function, and the two
-# functions differ in register pressure. x86-64 with -mavx2 -mfma happened to
-# pick the same shape for both, so exact equality held and was written down as
-# a gate; arm64 (macos-14) does not, and momwire#762's tiling changed the trip
-# count enough to expose it. Measured there: ONE ulp at the kernel (rel
-# 9.2e-17), 148-615 ulp after the assembler sums many kernel outputs
-# (rel 6.1e-14).
+# They could not, briefly. The reduced and EK kernels run textually identical
+# accumulation loops, but each carried `#pragma omp simd reduction(+:sr,si)`,
+# and a reduction clause LICENSES the compiler to reassociate the sum. The
+# reduction tree then follows the vectorization factor chosen per FUNCTION, and
+# the two functions differ in register pressure. x86-64 picked the same shape
+# for both; arm64 did not, and momwire#762's tiling changed the trip count
+# enough to expose it -- 1 ulp at the kernel, 148-615 ulp after the assembler.
 #
-# The gate's PURPOSE survives intact. It exists to catch a pair wrongly taking
-# the EK path (momwire#270 U2). That would move G by the EK factor itself --
-# T2 = 0.5*a^2/R^2, which is ~5e-3 relative on this geometry -- nine orders of
-# magnitude above the rounding floor below. The tolerance is set well under the
-# smallest defect it must catch and well over the arithmetic noise.
-_EK_REDUCTION_RTOL = 1e-12
-
-
-def _assert_reduces(got, ref, label):
-    """The ineligible-EK == reduced gate, to round-off rather than to the bit.
-
-    Reports `_bit_report`'s full detail on failure so a platform-specific
-    regression stays diagnosable from a CI log alone.
-    """
-    got = np.asarray(got)
-    ref = np.asarray(ref)
-    assert got.shape == ref.shape, _bit_report(got, ref, label)
-    den = np.abs(ref).max()
-    rel = (np.abs(got - ref).max() / den) if den else 0.0
-    assert rel <= _EK_REDUCTION_RTOL, _bit_report(got, ref, label)
+# The clause was measured worth -0.2%/+0.4% on the bspline fills (single
+# threaded, pinned, passive wait, min of 5 over 3 alternating rounds) -- i.e.
+# nothing -- so it was removed from _accel_bspline.cpp rather than weakening
+# these gates. Without it the compiler may not reassociate, both kernels sum in
+# source order, and exact equality is a property of the SOURCE instead of a
+# coincidence of one target's codegen. _accel_razor.cpp keeps its clause: worth
+# ~4.6% there, and it has no cross-kernel equality gate to protect.
+#
+# A tolerance would also have worked and is the wrong trade: it would have let
+# a genuine reassociation regression through for a benefit of zero percent.
+# `_bit_report` below stays, because it is what made this diagnosable without
+# an arm64 machine.
+_EK_ELIGIBLE_MIN_SEPARATION = 1e-6
 
 
 def _bit_report(got, ref, label):
@@ -3474,13 +3463,12 @@ def _bit_report(got, ref, label):
 def test_u2_the_reduction_gate_still_catches_an_eligible_pair(degree):
     """The tolerance in `_EK_REDUCTION_RTOL` must not have hollowed the gate.
 
-    momwire#781 relaxed the ineligible-EK reduction from `array_equal` to a
-    round-off tolerance, because the bit-equality was an x86 codegen accident
-    rather than a source guarantee. This is the red half of that change: flip
-    the labels so every pair IS eligible, and the SAME comparison must fail.
+    The gates above assert exact equality, which is only meaningful if an
+    actual gating bug would move the answer far more than rounding. This is the
+    red half: flip the labels so every pair IS eligible, and require the
+    difference to be enormous by comparison.
 
-    If this test ever passes, the tolerance has grown past the defect it exists
-    to detect and the gate above is decorative.
+    If this test ever fails, the reduction gates above have become decorative.
     """
     lo_i, hi_i, lo_j, hi_j, _gi, _gj = _u2_mixed_geo()
     a = 0.05
@@ -3504,10 +3492,10 @@ def test_u2_the_reduction_gate_still_catches_an_eligible_pair(degree):
         a,
     )
     rel = np.abs(eligible - reduced).max() / np.abs(reduced).max()
-    assert rel > _EK_REDUCTION_RTOL * 1e3, (
-        f"an all-eligible EK fill sits {rel:.3e} from the reduced kernel, "
-        f"within 1000x the gate's {_EK_REDUCTION_RTOL:.0e} tolerance — the "
-        "reduction gate can no longer see a gating bug"
+    assert rel > _EK_ELIGIBLE_MIN_SEPARATION, (
+        f"an all-eligible EK fill sits only {rel:.3e} from the reduced kernel; "
+        "the reduction gates above would not notice a pair wrongly taking the "
+        "EK path"
     )
 
 
@@ -3518,9 +3506,10 @@ def test_u2_all_ineligible_labels_reduce_to_the_reduced_kernel(degree):
     kernel: with `eligible` false the twin executes the exact same
     G_re/G_im/wuwu sequence the reduced kernel does.
 
-    Compared to round-off, not to the bit — see `_EK_REDUCTION_RTOL`. The old
-    docstring said "measured: 0.0 relative ON THIS BOX", which was the honest
-    caveat: it was an x86 observation, and arm64 shows 1 ulp (momwire#781)."""
+    Bit for bit. The old docstring said "measured: 0.0 relative ON THIS BOX",
+    which was the honest caveat — it WAS an x86 observation. momwire#781 made it
+    a source property by dropping the `omp simd reduction` clause that licensed
+    the compiler to reassociate differently per function."""
     lo_i, hi_i, lo_j, hi_j, _gi, _gj = _u2_mixed_geo()
     a = 0.05
     n_i, n_j = lo_i.shape[0], lo_j.shape[0]
@@ -3542,7 +3531,9 @@ def test_u2_all_ineligible_labels_reduce_to_the_reduced_kernel(degree):
         np.full(n_j, -1, dtype=np.int64),
         a,
     )
-    _assert_reduces(ineligible, reduced, f"u2 degree {degree}")
+    assert np.array_equal(ineligible, reduced), _bit_report(
+        ineligible, reduced, f"u2 degree {degree}"
+    )
 
 
 @pytestmark_u2
@@ -4052,10 +4043,13 @@ def test_u3_all_ineligible_labels_reduce_to_the_reduced_assembler(monkeypatch, d
     ek_out = dense_ek()
 
     sim_off, ctx_off, I2, J2 = _u3_mixed_block(degree=degree, extended_kernel=False)
-    _assert_reduces(I, I2, "swept I")
-    _assert_reduces(J, J2, "swept J")
+    assert np.array_equal(I, I2), _bit_report(I, I2, "swept I")
+    assert np.array_equal(J, J2), _bit_report(J, J2, "swept J")
     _, _, dense_reduced = sim_off._offedge_block_evaluators(ctx_off, I2, J2, sim_off.k)
-    _assert_reduces(ek_out, dense_reduced(), f"u3 degree {degree}")
+    _ref_dense = dense_reduced()
+    assert np.array_equal(ek_out, _ref_dense), _bit_report(
+        ek_out, _ref_dense, f"u3 degree {degree}"
+    )
 
 
 @pytestmark_u3

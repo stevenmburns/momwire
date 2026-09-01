@@ -284,7 +284,15 @@ razor_seg_moments(
                     double a0r = 0.0, a0i = 0.0, a1r = 0.0, a1i = 0.0;
 
                     if (!ek_pair) {
-                        PYSIM_OMP_SIMD(reduction(+ : a0r, a0i, a1r, a1i))
+                        // No `omp simd reduction` here, for the same reason as the bspline
+                        // kernels (momwire#781): the clause licenses reassociation, so the
+                        // reduction tree follows a per-function vectorization choice and
+                        // results stop being reproducible across targets. It measured ~4.6%
+                        // on razor (vs ~0% on bspline) and was still dropped: momwire#780 is
+                        // about to add accelerators here with cross-LANE equality
+                        // expectations (nec5 vs Gauss-Legendre sharing one kernel), and that
+                        // is exactly the shape this nondeterminism breaks. Revisit if the
+                        // 4.6% is ever worth more than reproducibility.
                         for (size_t q = 0; q < n_qp; q++) {
                             const double u = tq[q] - u_r;
                             const double R = std::sqrt(u * u + rho2);

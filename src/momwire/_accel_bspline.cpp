@@ -438,7 +438,17 @@ seg_seg_full_moments_bspline_kernel(
                 for (int pP = 0; pP < NMM; pP++) {
                     double sr = acc_re[pP], si = acc_im[pP];
                     const double *w_row = &wuwu[pP * m];
-                    PYSIM_OMP_SIMD(reduction(+:sr,si))
+                    // No `omp simd reduction` here (momwire#781): the clause LICENSES
+                    // reassociation, so the reduction tree follows whatever
+                    // vectorization factor the compiler picks per FUNCTION -- and the
+                    // reduced and EK kernels differ in register pressure. That made
+                    // their all-ineligible outputs disagree by 1 ulp on arm64 while
+                    // matching on x86-64, breaking the exact-reduction gates that
+                    // momwire#270 U2 relies on. Measured single-threaded (pinned,
+                    // passive wait, min of 5, 3 alternating rounds), the clause is
+                    // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
+                    // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
+                    // no cross-kernel equality gate to protect.
                     for (size_t t = 0; t < m; t++) {
                         sr += w_row[t] * G_re[t];
                         si += w_row[t] * G_im[t];
@@ -635,7 +645,17 @@ seg_seg_full_moments_bspline_swept_kernel(
                     for (int pP = 0; pP < NMM; pP++) {
                         double sr = 0.0, si = 0.0;
                         const double *w_row = &wuwu[pP * m];
-                        PYSIM_OMP_SIMD(reduction(+:sr,si))
+                        // No `omp simd reduction` here (momwire#781): the clause LICENSES
+                        // reassociation, so the reduction tree follows whatever
+                        // vectorization factor the compiler picks per FUNCTION -- and the
+                        // reduced and EK kernels differ in register pressure. That made
+                        // their all-ineligible outputs disagree by 1 ulp on arm64 while
+                        // matching on x86-64, breaking the exact-reduction gates that
+                        // momwire#270 U2 relies on. Measured single-threaded (pinned,
+                        // passive wait, min of 5, 3 alternating rounds), the clause is
+                        // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
+                        // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
+                        // no cross-kernel equality gate to protect.
                         for (size_t t = 0; t < m; t++) {
                             sr += w_row[t] * G_re[t];
                             si += w_row[t] * G_im[t];
@@ -892,7 +912,17 @@ seg_seg_full_moments_bspline_kernel_ek(
                 for (int pP = 0; pP < NMM; pP++) {
                     double sr = acc_re[pP], si = acc_im[pP];
                     const double *w_row = &wuwu[pP * m];
-                    PYSIM_OMP_SIMD(reduction(+:sr,si))
+                    // No `omp simd reduction` here (momwire#781): the clause LICENSES
+                    // reassociation, so the reduction tree follows whatever
+                    // vectorization factor the compiler picks per FUNCTION -- and the
+                    // reduced and EK kernels differ in register pressure. That made
+                    // their all-ineligible outputs disagree by 1 ulp on arm64 while
+                    // matching on x86-64, breaking the exact-reduction gates that
+                    // momwire#270 U2 relies on. Measured single-threaded (pinned,
+                    // passive wait, min of 5, 3 alternating rounds), the clause is
+                    // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
+                    // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
+                    // no cross-kernel equality gate to protect.
                     for (size_t t = 0; t < m; t++) {
                         sr += w_row[t] * G_re[t];
                         si += w_row[t] * G_im[t];
@@ -1119,7 +1149,17 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                     for (int pP = 0; pP < NMM; pP++) {
                         double sr = 0.0, si = 0.0;
                         const double *w_row = &wuwu[pP * m];
-                        PYSIM_OMP_SIMD(reduction(+:sr,si))
+                        // No `omp simd reduction` here (momwire#781): the clause LICENSES
+                        // reassociation, so the reduction tree follows whatever
+                        // vectorization factor the compiler picks per FUNCTION -- and the
+                        // reduced and EK kernels differ in register pressure. That made
+                        // their all-ineligible outputs disagree by 1 ulp on arm64 while
+                        // matching on x86-64, breaking the exact-reduction gates that
+                        // momwire#270 U2 relies on. Measured single-threaded (pinned,
+                        // passive wait, min of 5, 3 alternating rounds), the clause is
+                        // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
+                        // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
+                        // no cross-kernel equality gate to protect.
                         for (size_t t = 0; t < m; t++) {
                             sr += w_row[t] * G_re[t];
                             si += w_row[t] * G_im[t];
@@ -2086,7 +2126,17 @@ bspline_assemble_offedge_block_kernel(
                             for (int pP = 0; pP < NM*NM; pP++) {
                                 double sr_ = acc_re[pP], si_ = acc_im[pP];
                                 const double *w_row = &wuwu[pP * mm];
-                                PYSIM_OMP_SIMD(reduction(+:sr_,si_))
+                                // No `omp simd reduction` here (momwire#781): the clause LICENSES
+                                // reassociation, so the reduction tree follows whatever
+                                // vectorization factor the compiler picks per FUNCTION -- and the
+                                // reduced and EK kernels differ in register pressure. That made
+                                // their all-ineligible outputs disagree by 1 ulp on arm64 while
+                                // matching on x86-64, breaking the exact-reduction gates that
+                                // momwire#270 U2 relies on. Measured single-threaded (pinned,
+                                // passive wait, min of 5, 3 alternating rounds), the clause is
+                                // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
+                                // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
+                                // no cross-kernel equality gate to protect.
                                 for (size_t tt = 0; tt < mm; tt++) {
                                     sr_ += w_row[tt]*G_re[tt];
                                     si_ += w_row[tt]*G_im[tt];
@@ -2492,7 +2542,17 @@ bspline_assemble_offedge_block_kernel_ek(
                             for (int pP = 0; pP < NM*NM; pP++) {
                                 double sr_ = acc_re[pP], si_ = acc_im[pP];
                                 const double *w_row = &wuwu[pP * mm];
-                                PYSIM_OMP_SIMD(reduction(+:sr_,si_))
+                                // No `omp simd reduction` here (momwire#781): the clause LICENSES
+                                // reassociation, so the reduction tree follows whatever
+                                // vectorization factor the compiler picks per FUNCTION -- and the
+                                // reduced and EK kernels differ in register pressure. That made
+                                // their all-ineligible outputs disagree by 1 ulp on arm64 while
+                                // matching on x86-64, breaking the exact-reduction gates that
+                                // momwire#270 U2 relies on. Measured single-threaded (pinned,
+                                // passive wait, min of 5, 3 alternating rounds), the clause is
+                                // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
+                                // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
+                                // no cross-kernel equality gate to protect.
                                 for (size_t tt = 0; tt < mm; tt++) {
                                     sr_ += w_row[tt]*G_re[tt];
                                     si_ += w_row[tt]*G_im[tt];
