@@ -46,9 +46,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
 
-from golden_contact_nec5 import CONTACT_LADDERS, GROUND_EPS  # noqa: E402
+from golden_contact_nec5 import CONTACT_LADDERS, GROUND_EPS
 
-from momwire import BSplineSolver, _potential_ground  # noqa: E402
+from momwire import BSplineSolver, _potential_ground
 
 C = 299792458.0
 FREQ_MHZ = 14.0

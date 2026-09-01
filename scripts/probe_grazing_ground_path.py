@@ -417,7 +417,7 @@ from momwire import _sommerfeld
 from probe_grazing_height_floor import (
     FREQ_MHZ,
     N_SEG,
-    RADIAL_LEN,  # noqa: F401  (re-exported for --radial-lens' default)
+    RADIAL_LEN,
     RADIUS,
     SOIL,
     TRUNKS,

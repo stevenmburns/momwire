@@ -32,11 +32,11 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.dirname(__file__)) or ".", "tests")
 )
 
-from fixtures_refl_coef_geoms import GEOMS  # noqa: E402
-from golden_refl_coef_ground import GOLDEN  # noqa: E402
+from fixtures_refl_coef_geoms import GEOMS
+from golden_refl_coef_ground import GOLDEN
 
-from momwire import BSplineSolver, SinusoidalSolver  # noqa: E402
-from momwire._ground_refl import PHI_MODES  # noqa: E402
+from momwire import BSplineSolver, SinusoidalSolver
+from momwire._ground_refl import PHI_MODES
 
 WINDOW = (0.1, 0.2, 0.35, 0.5)  # acceptance window height fractions
 

@@ -21,9 +21,9 @@ sys.path.insert(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tests"),
 )
 
-from fixtures_refl_coef_geoms import GEOMS  # noqa: E402
+from fixtures_refl_coef_geoms import GEOMS
 
-from momwire import BSplineSolver  # noqa: E402
+from momwire import BSplineSolver
 
 N_FREQ = 41
 

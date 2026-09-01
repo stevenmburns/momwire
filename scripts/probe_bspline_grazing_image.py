@@ -138,7 +138,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from probe_grazing_height_floor import (  # noqa: E402
+from probe_grazing_height_floor import (
     FREQ_MHZ,
     RADIAL_LEN,
     RADIUS,
