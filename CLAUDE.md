@@ -57,6 +57,41 @@ When auditing directives, measure with **`--extend-select RUF100`**, never
 `--select RUF100` — the latter *replaces* the rule set, so every directive
 naming a now-unselected rule reads as unused.
 
+### `# noqa: E402` on the `sys.path` idiom is dead on arrival
+
+Ruff's E402 **already exempts imports that follow a `sys.path` mutation**, so
+the probe/script idiom needs no directive at all:
+
+```python
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tests"))
+
+from momwire import BSplineSolver  # exempt — no E402, no noqa needed
+```
+
+E402 still fires for an import after ordinary code (`X = 1`), which is the case
+the rule is actually for. The exemption is **not version-dependent** — it reads
+identically under `ruff@0.15.21` and `ruff@0.16.5`.
+
+**Do not sweep `noqa: E402` by pattern.** Most are load-bearing: of the 35 lines
+carrying one (measured 2026-09-01), only 14 are dead, and the two sets do not
+overlap at all — deleting the other 21 turns the gate red.
+
+**Any inventory of dead directives goes stale faster than it gets cleaned.**
+momwire#761 was filed against 22 (16 removable, 6 `non-enabled` keepers). While
+*this* note sat in review, #760/#762/#769 landed and took the tree to **24/17/7**
+— `tests/test_sign_timestamp_755.py:36` is a 14th dead E402 and
+`scripts/probe_quadrature_defaults.py:327` a 7th keeper. Hours, not weeks. Read
+the issue's file:line lists as of-a-date and re-measure before acting on one.
+
+A dead directive is not always this idiom, either. `tests/test_harrington.py`
+has no `sys.path` call anywhere; its import is preceded only by a docstring and
+comments, so nothing triggers E402 there in the first place. Decide each site
+from the lines *above* the import, not from the directive on it.
+
+The **file-level** form is legitimate where it is earned:
+`validation/momwire_backend.py:99` carries `# ruff: noqa: E402` for six imports
+that must follow env-var setup, and RUF100 correctly never reports it.
+
 ## Building the C++ extension
 
 `make build`. setuptools has no per-object staleness check — it recompiles
