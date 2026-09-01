@@ -3405,6 +3405,34 @@ def test_u2_offedge_ek_cpp_matches_numpy_swept(numpy_offedge, degree, radius_kin
 # the same way. Only both together pin `(gi == gj) && (gi >= 0)` exactly.
 
 
+def _bit_report(got, ref, label):
+    """Diagnostic for the exact-agreement gates (momwire#781).
+
+    `array_equal` says only True/False, which on a platform-specific failure
+    leaves you guessing whether the gap is one ulp or structural. This reports
+    the size and the shape of the disagreement so a CI log is actionable.
+    """
+    got = np.asarray(got)
+    ref = np.asarray(ref)
+    if got.shape != ref.shape:
+        return f"{label}: SHAPE {got.shape} vs {ref.shape}"
+    diff = np.abs(got - ref)
+    n_bad = int((diff != 0).sum())
+    if n_bad == 0:
+        return f"{label}: identical"
+    den = np.abs(ref).max()
+    rel = diff.max() / den if den else float("inf")
+    # ulp distance at the offending entry, on the real part's magnitude.
+    idx = np.unravel_index(int(np.argmax(diff)), diff.shape)
+    scale = max(abs(ref[idx].real), abs(ref[idx].imag), np.finfo(float).tiny)
+    ulps = diff[idx] / np.spacing(scale)
+    return (
+        f"{label}: {n_bad} of {diff.size} entries differ; "
+        f"max|d|={diff.max():.3e} rel={rel:.3e} ~{ulps:.1f} ulp at {idx}; "
+        f"got={got[idx]!r} ref={ref[idx]!r}"
+    )
+
+
 @pytestmark_u2
 @pytest.mark.parametrize("degree", [1, 2])
 def test_u2_all_ineligible_labels_reduce_to_the_reduced_kernel(degree):
@@ -3434,7 +3462,9 @@ def test_u2_all_ineligible_labels_reduce_to_the_reduced_kernel(degree):
         np.full(n_j, -1, dtype=np.int64),
         a,
     )
-    assert np.array_equal(ineligible, reduced), f"degree {degree}"
+    assert np.array_equal(ineligible, reduced), _bit_report(
+        ineligible, reduced, f"u2 degree {degree}"
+    )
 
 
 @pytestmark_u2
@@ -3944,9 +3974,14 @@ def test_u3_all_ineligible_labels_reduce_to_the_reduced_assembler(monkeypatch, d
     ek_out = dense_ek()
 
     sim_off, ctx_off, I2, J2 = _u3_mixed_block(degree=degree, extended_kernel=False)
-    assert np.array_equal(I, I2) and np.array_equal(J, J2)
+    assert np.array_equal(I, I2) and np.array_equal(J, J2), (
+        _bit_report(I, I2, "swept I") + " | " + _bit_report(J, J2, "swept J")
+    )
     _, _, dense_reduced = sim_off._offedge_block_evaluators(ctx_off, I2, J2, sim_off.k)
-    assert np.array_equal(ek_out, dense_reduced()), f"degree {degree}"
+    _ref_dense = dense_reduced()
+    assert np.array_equal(ek_out, _ref_dense), _bit_report(
+        ek_out, _ref_dense, f"u3 degree {degree}"
+    )
 
 
 @pytestmark_u3
