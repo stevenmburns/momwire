@@ -58,7 +58,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from momwire import SinusoidalGalerkinSolver, SinusoidalSolver  # noqa: E402
+from momwire import SinusoidalGalerkinSolver, SinusoidalSolver
 
 DEFAULT_LADDER = (101, 201, 401, 801, 1201, 1601, 2001, 2401)
 

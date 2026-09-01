@@ -21,7 +21,7 @@ from ._base import (
     ResultFieldSpec,
     ResultGroupSpec,
     SweepPolicy,
-)  # noqa: F401
+)
 
 _FEED_GAP = 0.01  # meters; half-gap, matches antenna_designer eps
 

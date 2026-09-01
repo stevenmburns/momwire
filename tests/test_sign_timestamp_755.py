@@ -33,7 +33,7 @@ sys.path.insert(
     0, str(Path(__file__).resolve().parent.parent / "scripts" / "eznec_freeze")
 )
 
-import sign as _sign  # noqa: E402
+import sign as _sign
 
 
 # Two files, and signtool prints the timestamp line once per file it stamped.

@@ -7,7 +7,7 @@ per-backend sweep helpers, since both call into the per-geometry modules.
 
 import pytest
 
-PyNEC = pytest.importorskip("PyNEC")  # noqa: F841
+PyNEC = pytest.importorskip("PyNEC")
 
 from validation import pynec_backend  # noqa: E402
 from validation.examples import REGISTRY as _EXAMPLES  # noqa: E402

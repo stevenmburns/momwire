@@ -32,7 +32,7 @@ from momwire import HarringtonSolver, PulseSolver
 # quietly stops being one. The house already imports across test modules
 # (test_eznec_networks, test_razor_production_lane); this is the case that
 # most needs it.
-from test_pulse import (  # noqa: E402
+from test_pulse import (
     DIP_RAD,
     DIP_LEN,
     WAVELENGTH,
