@@ -33,7 +33,7 @@ the difference brutally.
 
 Point a fixed quadrature rule at both and watch:
 
-![Relative error of the matrix entry versus number of Gauss-Legendre points per segment, log scale. The far pair drops to machine precision by 4 points. The self pair stays at ~100% error all the way to 130 points. Markers note momwire's n_qp_pair=4 for far pairs and precomputed static moments for the self pair.](../../../assets/figures/ch6-quadrature.svg)
+![Relative error of the matrix entry versus number of Gauss-Legendre points per segment, log scale. The far pair drops to machine precision by 4 points. The self pair stays at ~100% error all the way to 130 points. Markers note momwire's n_qp_pair=8 for cross-edge pairs and precomputed static moments for the self pair.](../../../assets/figures/ch6-quadrature.svg)
 
 The far pair is **nailed to machine precision by four points** — the integrand is
 smooth, and Gauss quadrature is exact for smooth things almost immediately. The
@@ -51,12 +51,16 @@ So momwire refuses to try. It splits the two cases and gives each what it needs
 ([`BSplineSolver`](https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/bspline.py#L173),
 constructor knobs `n_qp_pair` and the static-moment path):
 
-- **Far and near-but-not-touching pairs** get plain Gauss-Legendre with
-  `n_qp_pair = 4` nodes — from the memoized
+- **Far and near-but-not-touching pairs** get plain Gauss-Legendre — from the
+  memoized
   [`_quadrature.py`](https://github.com/stevenmburns/momwire/blob/v0.9.0/src/momwire/_quadrature.py)
-  (all thirty lines of it: `leggauss` is not free, so cache it). Four is
-  plenty, and the solver won't even let you go past eight — beyond that the
-  smooth integrand has nothing left to give.
+  (all thirty lines of it: `leggauss` is not free, so cache it). Since
+  [momwire#743](https://github.com/stevenmburns/momwire/issues/743) the order is
+  **two** knobs rather than one, because the two cases want different things:
+  `n_qp_pair = 8` for **cross-edge** pairs (two different edges), and
+  `n_qp_pair_same_edge = 4` for the smooth remainder of a **same-edge** pair.
+  Four is plenty for the far pair plotted above; it is not plenty for two edges
+  that nearly touch, and that margin is what the cross-edge default buys.
 - **Self and edge-sharing pairs** get the singular integral **precomputed
   analytically** as *static moments* — the integral of the `1/R` singularity
   against each pair of B-spline pieces, worked out once in closed form
@@ -73,9 +77,9 @@ this is why: the hard part of every matrix was already done, frequency-free.
 
 ## Run it yourself
 
-Because the smooth part is genuinely converged at four points and the singular
-part isn't integrated numerically at all, the `n_qp_pair` knob is nearly inert —
-which is exactly the sign of a quadrature scheme that has nothing left to prove:
+On a straight dipole this scheme has nothing left to prove. Since the knob was
+split, `n_qp_pair` there is not merely converged but **inert** — one edge means
+no cross-edge pairs at all:
 
 ```python
 import numpy as np
@@ -94,12 +98,47 @@ for nq in (2, 4, 8):
         feed_arclength=5.291,
     ).compute_impedance()
     print(f"n_qp_pair={nq}:  {Z.real:.4f} {Z.imag:+.4f}j")
-# n_qp_pair=2:  69.6634 -18.3665j
+# n_qp_pair=2:  69.6635 -18.3652j
 # n_qp_pair=4:  69.6635 -18.3652j
-# n_qp_pair=8:  69.6635 -18.3648j   — two-thousandths of an ohm across the range
+# n_qp_pair=8:  69.6635 -18.3652j   — bit-identical: no cross-edge pairs to integrate
 ```
 
+The knob that does move on this deck is the other one, and it moves by
+two-thousandths of an ohm across the whole range — swap `n_qp_pair=nq` for
+`n_qp_pair_same_edge=nq` above:
+
+```
+# n_qp_pair_same_edge=2:  69.6634 -18.3665j
+# n_qp_pair_same_edge=4:  69.6635 -18.3652j
+# n_qp_pair_same_edge=8:  69.6635 -18.3648j
+```
+
+## Where it is *not* inert
+
+A dipole is the easy case, and for a long time it was the only case anyone
+measured. On a **crossing junction at a lossy-soil interface** the cross-edge
+integrand is near-singular rather than smooth, and the error falls only as
+`C/q` with `C ≈ 33` — *first order* in the number of Gauss points, which is a
+**lost** convergence rate, not a slow one
+([momwire#760](https://github.com/stevenmburns/momwire/issues/760)). On the
+soil-A crossing fan:
+
+| `n_qp_pair` | Z | distance from the limit |
+|---:|---|---:|
+| 4 | 142.1923 − 36.4707j | 6.808 Ω |
+| 8 | 141.3991 − 40.6483j | 2.556 Ω |
+| 16 | 141.0601 − 42.4754j | 0.698 Ω |
+| 64 | 140.9366 − 43.1577j | 0.005 Ω |
+
+That class is why the cross-edge default moved from 4 to 8, and it is the one
+place the accelerated kernel's `n_qp² ≤ 64` scratch buffer binds — reaching the
+bottom row needs the numpy path today
+([momwire#762](https://github.com/stevenmburns/momwire/issues/762)). The honest
+summary is narrower than this chapter used to claim: the smooth-pair quadrature
+is as settled as the dipole makes it look *for smooth pairs*, and a near-singular
+cross-edge pair is not one.
+
 The matrix is now filled honestly — smooth where it can be, exact where it must
-be. Which raises the question this whole act has been circling: filled honestly
+be, and explicit about the one place the smooth rule strains. Which raises the question this whole act has been circling: filled honestly
 or not, how would you *know* the final answer is right? [Chapter 7](/act-2/validation/) is the
 cross-examination — convergence, the knee, and an independent engine.
