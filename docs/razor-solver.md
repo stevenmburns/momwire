@@ -658,3 +658,84 @@ constancy gate on a fat-radius deck (the #398 sharp lane's 0.05 Ω bar is
 calibrated on thin wires) must budget the drift rather than inherit the
 bar. Mechanism analysis — which kernel term carries the a-dependence —
 is optional follow-on, relevant if razor ever grows EK.
+
+### The outer path order (`n_qp_path`, momwire#754)
+
+**32 is derived, and the derivation kept it (2026-09-02, momwire#754).**
+`n_qp_path=32` entered in the original implementation (a361591) and was
+never re-derived. #754 measured three straight dipoles, found Z bit-identical
+from q=3-4 up to 48, and proposed 8 — while naming the gap in its own
+evidence: straight dipoles may not stress the outer integral, and the honest
+move is a sweep across the classes that do.
+
+`scripts/probe_razor_path_754.py` is that sweep — twelve decks over a 90°
+corner, a junction with a radius step, close-spaced elements at both catalog
+scales (the W8JK's 0.125 λ and the Moxon tail gap's 0.0125 λ), ground CONTACT
+over PEC and over Sommerfeld, the extended kernel, and graded/split meshes.
+Relative deviation from a converged q=128 reference (itself good to 9e-11):
+
+| deck (N=60) | q=4 | q=8 | q=16 | q=32 |
+|---|---|---|---|---|
+| `straight` | 4.8e-7 | 3.3e-7 | 2.4e-9 | 7.3e-9 |
+| `ek` | 6.2e-9 | 1.7e-11 | 8.9e-15 | 5.8e-16 |
+| `contact_pec` | 1.2e-7 | 6.9e-8 | 3.6e-10 | 8.3e-10 |
+| `junction_radius_step` | 1.1e-5 | 1.1e-6 | 1.4e-8 | 3.6e-11 |
+| `close_spaced` (0.0125 λ) | 3.7e-6 | 2.7e-6 | 4.3e-8 | 7.7e-8 |
+| `contact_somm` | 2.0e-5 | 1.7e-6 | 6.7e-8 | 8.9e-10 |
+| **`bent`** (90°) | **6.8e-4** | **1.0e-4** | **1.4e-6** | 2.2e-8 |
+
+#754's "converges at 3-4" reproduces exactly on the straight decks. It does
+not generalise: the corner at q=8 is four orders of magnitude worse than a
+straight dipole at the same rung. Applying #754's own rule — 2x margin over
+the largest q at which any deck still moves by more than 1e-6 relative —
+the binding cell is `bent` at N=60 (q=16), so the rule returns **32**.
+
+**The required order falls with the mesh, which is the finding worth
+keeping.** The same deck, down a mesh ladder:
+
+| `bent` | q=8 | q=16 | q=32 | rule returns |
+|---|---|---|---|---|
+| N=30 | 3.1e-4 | 2.1e-5 | 8.2e-7 | 32 |
+| N=60 | 1.0e-4 | 1.4e-6 | 2.2e-8 | 32 |
+| N=120 | 1.8e-5 | 7.2e-7 | 1.7e-9 | 32 |
+| N=240 | 1.6e-6 | 3.0e-8 | 3.6e-11 | 16 |
+| N=400 | 1.1e-6 | 1.3e-9 | 2.7e-11 | 16 |
+
+A default is applied blindly, including on the coarse meshes where it is
+least converged, so 32 is the honest constant. But every rung #754's own
+timing table quotes is N ≥ 400, where q=16 clears the bar with 2x margin —
+so a mesh-aware order, not a smaller constant, is the shape of a real
+saving. Dropping the constant to 8 is not: no hard-class deck is converged
+there at any mesh measured.
+
+**What the order costs** (quiet box, `OMP_NUM_THREADS=1`, median of 3, first
+loadavg 0.29; the rise across the table is the benchmark's own load):
+
+| rung | q=32 | q=16 | q=8 | two-point lane |
+|---|---|---|---|---|
+| free space N=400 | 3.757 s | 1.913 s (0.51x) | 0.997 s (0.27x) | 0.185 s (0.05x) |
+| free space N=1600 | 59.996 s | 30.794 s (0.51x) | 16.137 s (0.27x) | 3.221 s (0.05x) |
+| refl-coef ground N=800 | 35.720 s | 18.153 s (0.51x) | 9.411 s (0.26x) | 1.726 s (0.05x) |
+
+Cost is linear in the order, as #754 said. On `straight` at N=400 the answer
+is bit-identical across q=32/16/8, which is exactly why three straight
+dipoles made 8 look free.
+
+**Threading decides the #744 share, so measure it threaded (2026-09-02).**
+Profiling the finite-ground fill at N=801 under the timing protocol's
+`OMP_NUM_THREADS=1` puts the weight windows at 10.2% against the kernel's
+81.8% — but `razor_seg_moments` is `-fopenmp` and the NumPy windows are not,
+so pinning to one thread handicaps the kernel alone and understates the
+windows. Threaded on 8 cores, the same fill reads:
+
+| component | tottime | share |
+|---|---|---|
+| `razor_seg_moments` (fused C++ kernel) | 6.53 s | 50.6% |
+| weight windows (`_ground_refl`) | 3.67 s | 28.4% |
+| T1 `integrand` contraction (`_assemble_Z_source_block`) | 2.41 s | 18.7% |
+
+#744 scopes the windows **and** the contraction together: 47.1% here against
+its filed 0.19/(0.19+0.217) = 46.7%. The ratio reproduces; only the
+absolutes differ (#744's are per-chunk). Since #754 left `n_qp_path` at 32,
+the kernel's observation-point count did not change and #744 stands exactly
+as filed.

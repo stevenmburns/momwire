@@ -848,6 +848,26 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     n_qp_path: Gauss-Legendre order for the OUTER testing-path integral,
         per half-segment (T1 only; T2's path collapses to two endpoint
         evaluations). Ignored under `nec5_quadrature`.
+
+        **32 is derived, not a first cut (2026-09-02, momwire#754).**
+        `scripts/probe_razor_path_754.py` swept twelve decks across the
+        geometry classes that stress the outer integral hardest -- a 90
+        degree corner, a junction with a radius step, close-spaced elements
+        at both catalog scales, ground CONTACT over PEC and Sommerfeld, the
+        extended kernel, graded and split meshes -- scored against a
+        converged q=128 reference. #754 proposed 8, on the strength of three
+        straight dipoles; straight dipoles are simply the easy class. The
+        binding deck is the corner, which at N=60 is still 1.0e-4 relative
+        at q=8 and 1.4e-6 at q=16, four orders of magnitude worse than a
+        straight dipole at the same rung. Applying #754's own rule -- 2x
+        margin over the last q moving by more than 1e-6 relative -- returns
+        32, the value already here.
+
+        The order needed FALLS as the mesh refines (q=32 at N<=120, q=16 at
+        N>=240), so 32 is the coarse-mesh answer and a default is applied
+        blindly. A mesh-aware order, not a smaller constant, is the shape of
+        any real saving; the cost is linear in the order, so q=16 would
+        halve the fill on meshes that can take it.
     nec5_quadrature: evaluate ∫A·dl by NEC-5's own rule — the two-point
         trapezoid at the path-end centroids (every potential at element
         centroids, the classic mixed-potential idiom), identified by the
