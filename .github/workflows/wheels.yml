@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'push' && github.ref_type == 'branch'
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         if: github.event_name == 'push' && github.ref_type == 'branch'
         with:
@@ -111,13 +111,13 @@ jobs:
         # CIBW_BUILD env: an empty env value would OVERRIDE pyproject's
         # build spec instead of falling back to it.
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
-        uses: pypa/cibuildwheel@v4.1.1
+        uses: pypa/cibuildwheel@v4.2.0
       - name: Build wheels (single-Python canary — main pushes)
         # Post-merge compiler canary (all 3 red runs in 30 days were MSVC),
         # not a release: one Python per OS is enough signal at ~1/5 the
         # work (#220).
         if: "!(startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')"
-        uses: pypa/cibuildwheel@v4.1.1
+        uses: pypa/cibuildwheel@v4.2.0
         env:
           CIBW_BUILD: "cp312-*"
       - name: Assert libomp is NOT vendored into the macOS wheel
