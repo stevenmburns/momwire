@@ -637,6 +637,20 @@ _OUT_OF_SCOPE = {
 # medium, and contact plus buried — come out of `_medium_spec` with the same
 # sentences `BSplineSolver` raises, which is the point of routing both trunks
 # through it, so the row quotes those from there.
+# momwire#813 unit 2: a CHOPPED testing row — one whose T2 takes the knot as
+# an endpoint instead of a centroid — is the crossing arc's row, and that arc
+# declines the extended kernel for the same reason the below-plane fill does
+# (NEC's O(a^2) tube expansion was derived in free space, not in a medium, and
+# a chopped row's knot observer sits ON the interface where the eligibility
+# scan has no answer). Refused rather than labelled by guess.
+_CHOP_EK_REFUSAL = (
+    "razor's chopped testing rows (momwire#813) do not take the extended "
+    "kernel: the knot observer sits at the interface, where the "
+    "coaxial-and-equal-radius eligibility scan the pair rule reads has no "
+    "answer, and the crossing arc declines EK in a medium anyway "
+    "(momwire#812). Build the crossing fill with extended_kernel=False"
+)
+
 _BURIED_FILL_REFUSAL = (
     "RazorSolver has no "
     "buried fill: the momwire#553 buried serve (direct + image "
@@ -2772,7 +2786,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             np.add.at(Z, (idx, idx), z_l)
         return Z
 
-    def _assemble_Z_prepare(self, geom):
+    def _assemble_Z_prepare(self, geom, *, chop=None):
         """K-independent work for the razor-blade fill: stencils and moments.
 
         Everything `_assemble_Z_from_prepared` needs that does not depend on
@@ -2849,6 +2863,32 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         does not measure this — the numbers above come from the unit's
         report, and re-measuring is a ten-line script against
         `_seg_moments_prepare`.
+
+        **`chop` — T2 evaluated AT the node** (momwire#813 unit 2). Razor's
+        charge term differences the scalar potential between a testing
+        path's two CENTROIDS, which is every row this formulation has ever
+        filled. A row whose path is chopped at the interface does not have
+        two centroids: one of its endpoints IS the knot, and the crossing
+        assembly needs Φ(node) there. `chop` is the mapping
+        ``{row: "A" | "B"}`` naming those rows and which HALF survives, in
+        `_path_test_rows`' own vocabulary — ``"A"`` is centroid(A) → knot,
+        ``"B"`` is knot → centroid(B) — and it adds ONE observer set here:
+        the knot of each named row, prepared exactly as the centroids are,
+        against both source sets when there is an image.
+
+        `None` (the default) is every fill that exists today and builds
+        nothing: `prepared["t2_chop"]` is absent, `_assemble_Z_source_block`
+        takes no branch, and an unchopped row is bit-identical to what it
+        was before this argument existed. That is the gate
+        `tests/test_razor_t2_at_node_813.py` gets, on three anchors, rather
+        than an argument that it must be.
+
+        Two things it refuses rather than guesses. The extended kernel
+        (`_CHOP_EK_REFUSAL`): a knot observer sits ON the interface, where
+        the coaxial-and-equal-radius eligibility scan has no answer. And a
+        row that is already GROUNDED, whose T2 the fill rewrites for the
+        plane-is-the-reference reason below — two rules for one row's
+        endpoints is a silent contradiction, so it raises.
         """
         seg_t, seg_h = geom["seg_t"], geom["seg_h"]
         wing_seg, wing_sigma, wing_rise = (
@@ -2891,6 +2931,53 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ek_cent = None if src_lab is None else _EK(None, src_lab, src_lab)
         ek_cent_img = None if img_lab is None else _EK(None, src_lab, img_lab)
         t2_chunks = self._seg_moments_prepare(cent, geom, a_src, ek=ek_cent)
+
+        # --- the CHOPPED rows' second observation set: the knot itself
+        # (momwire#813 unit 2). Same producer, same source column, same
+        # k-independence — a knot is a point like a centroid — so this is one
+        # more `_seg_moments_prepare` and no new machinery. Absent entirely
+        # when nothing is chopped, which is what keeps every existing fill
+        # bit-identical rather than merely equal.
+        t2_chop = None
+        if chop:
+            if self.extended_kernel:
+                raise ValueError(_CHOP_EK_REFUSAL)
+            chop_rows = np.array(sorted(int(m) for m in chop), dtype=np.int64)
+            bad = np.intersect1d(chop_rows, geom["grounded_bases"])
+            if bad.size:
+                raise ValueError(
+                    f"row(s) {bad.tolist()} are both GROUNDED and chopped "
+                    "(momwire#813): a grounded row's T2 already drops its "
+                    "plane endpoint because the folded potential is zero "
+                    "there, and a chopped row replaces an endpoint with the "
+                    "knot -- two rules for one row's endpoints. Chop the "
+                    "crossing rows only"
+                )
+            sides = [str(chop[int(m)]) for m in chop_rows]
+            if any(s not in ("A", "B") for s in sides):
+                raise ValueError(
+                    f"chop sides must be 'A' or 'B' (momwire#813), got {sides}"
+                )
+            keep_a = np.array([s == "A" for s in sides])
+            knot_pts = self._knot_points(geom)[chop_rows]
+            t2_chop = {
+                "rows": chop_rows,
+                # True when the surviving half is centroid(A) -> knot, so the
+                # knot is the path's AFTER endpoint; False when it is
+                # knot -> centroid(B) and the knot is the BEFORE endpoint.
+                "keep_a": keep_a,
+                "n_obs": chop_rows.size,
+                "pts": knot_pts,
+                # Only ever handed to a w_Phi producer, which never reads a
+                # tangent (`PotentialGround.weight_windows`: "Both axes'
+                # tangents enter only through the A-term dyad"). The
+                # surviving wing's is the honest one to carry anyway.
+                "tans": np.where(
+                    keep_a[:, None],
+                    seg_t[s_a[chop_rows]],
+                    seg_t[s_b[chop_rows]],
+                ),
+            }
 
         # --- vector potential's observation set: the outer path, row-chunked.
         pts, tans, wts = self._testing_paths(geom)
@@ -2956,6 +3043,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "q_b": q_b,
             "n_cent": cent.shape[0],
             "t2_chunks": t2_chunks,
+            # `None` unless a caller named chopped rows; the block branches on
+            # it and on nothing else.
+            "t2_chop": t2_chop,
             "n_path": n_path,
             "tans": tans,
             "wts": wts,
@@ -2981,6 +3071,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 else None
             ),
         }
+        if t2_chop is not None:
+            # Keyed off `sources` in the block, exactly as `t2_chunks` is, so
+            # the real and mirrored source sets are served by one body.
+            prepared["t2_chop_chunks"] = self._seg_moments_prepare(
+                t2_chop["pts"], geom, a_src, ek=None
+            )
 
         if img_src is not None:
             mirror = img_src["mirror_tangents"]
@@ -2996,6 +3092,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 "t1_row_chunks": t1_row_chunks_img,
                 "weighted": weighted,
             }
+            if t2_chop is not None:
+                prepared["image"]["t2_chop_chunks"] = self._seg_moments_prepare(
+                    t2_chop["pts"], img_src, a_src, ek=None
+                )
             if weighted:
                 # What the ω-dependent half needs from the k-independent
                 # one: the two OBSERVER SETS the specular rays are drawn to
@@ -3369,7 +3469,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         q_a, q_b = prepared["q_a"], prepared["q_b"]
         n_basis = prepared["n_basis"]
 
-        w_A_fn = w_Phi_fn = rem_fn = None
+        w_A_fn = w_Phi_fn = rem_fn = w_Phi_knot_fn = None
         if ground is not None and ground.eps_tilde is not None:
             # Two observer sets, one source set. T2's observers ARE the
             # source set, which is what the producer's square default
@@ -3379,6 +3479,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 observers=(sources["obs_pts"], sources["obs_tans"]), sources=src
             )
             w_Phi_fn = ground.weight_windows(sources=src)
+            if prepared["t2_chop"] is not None:
+                # The chopped rows' knot observers have their own specular
+                # geometry -- a knot is not a centroid -- so they get their
+                # own window over the same source set. Only the Phi half is
+                # read; the tangents carried in are the surviving wing's and
+                # do not enter it.
+                w_Phi_knot_fn = ground.weight_windows(
+                    observers=(
+                        prepared["t2_chop"]["pts"],
+                        prepared["t2_chop"]["tans"],
+                    ),
+                    sources=src,
+                )
             remainder = ground.remainder()
             if remainder is not None:
                 # The composing ground's second term, over the SAME observer
@@ -3456,6 +3569,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # ground by about half an ohm. `test_razor_contact_finite_ground`
             # pins that, and it is the thing to attack next — not this term.
             dM0[grounded] = M0c[s_b[grounded]]
+        chop = prepared["t2_chop"]
+        if chop is not None:
+            # momwire#813 unit 2: a chopped row's path ends at the KNOT, so
+            # one of the two potentials differenced above is Phi(node) rather
+            # than Phi(centroid). Same moments, same source column, one
+            # different observer -- and the difference keeps its orientation,
+            # `after - before`, because that is what carries T2's sign.
+            M0k, _ = self._seg_moments_from_prepared(
+                sources["t2_chop_chunks"], k, chop["n_obs"], need_m1=False
+            )
+            if w_Phi_knot_fn is not None:
+                _w_A_unused, w_Phi_k = w_Phi_knot_fn(0, chop["n_obs"])
+                M0k = M0k * w_Phi_k
+            rows, keep_a = chop["rows"], chop["keep_a"]
+            # "A": centroid(A) -> knot, the knot is AFTER.
+            # "B": knot -> centroid(B), the knot is BEFORE.
+            dM0[rows] = np.where(
+                keep_a[:, None],
+                M0k - M0c[s_a[rows]],
+                M0c[s_b[rows]] - M0k,
+            )
         T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
 
         tans, wts = prepared["tans"], prepared["wts"]
