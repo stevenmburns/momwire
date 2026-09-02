@@ -690,16 +690,25 @@ class HMatrixSolver(BSplineSolver):
         fit. `J_static_moment` and `_seg_seg_reg_geometry` read the edge's ARC
         alone, so entry (i, j) of this block is the same number whatever
         sub-block asks for it. So build the whole edge once, cache it per
-        (edge, k), and let each sub-block gather the rectangle it needs. No
-        rectangular kernel, no alignment, and the value a sub-block reads
-        cannot depend on how the partition happened to cut.
+        edge for the current k, and let each sub-block gather the rectangle
+        it needs. No rectangular kernel, no alignment, and the value a
+        sub-block reads cannot depend on how the partition happened to cut.
+
+        The cache holds ONE k. `compute_impedance_swept` walks `_set_k` on
+        this same object, and a block is `(d+1)^2 N^2` complex per edge, so
+        keying on k would keep every frequency's blocks alive for the whole
+        sweep (measured 576 KiB per k at N = 64, degree 2). A new k drops
+        the old blocks; within one k every sub-block reads the same edge.
         """
-        key = (e, complex(k))
-        cached = self._cached_near_image_blocks.get(key)
-        if cached is None:
-            cached = self._near_image_analytic_block(arc, a_eff, k)
-            self._cached_near_image_blocks[key] = cached
-        return cached
+        kc = complex(k)
+        cached = self._cached_near_image_blocks
+        if cached is None or cached[0] != kc:
+            cached = (kc, {})
+            self._cached_near_image_blocks = cached
+        block = cached[1].get(e)
+        if block is None:
+            block = cached[1][e] = self._near_image_analytic_block(arc, a_eff, k)
+        return block
 
     def _apply_near_image_analytic(self, Jsub, seg_I, seg_J, k, geom):
         """Overwrite `Jsub`'s near-image entries with the closed form.
