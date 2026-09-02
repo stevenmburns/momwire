@@ -18,13 +18,21 @@ What this module gates:
     equality. Measured on this box across the ten configurations below, the
     worst deviations are
 
-        max|dZ| / max|Z|      4.8e-16   (about two ulps of the matrix scale)
-        entrywise |dZ|/|Z|    1.5e-12   (near-null entries, |Z| ~ 1e-3 ohm)
-        solved |dZin|/|Zin|   6.3e-14
+        max|dZ| / max|Z|      1.0e-16   (well under one ulp of the matrix scale)
+        solved |dZin|/|Zin|   3.9e-14
 
     and the bars below sit a decade or more above those, which is headroom
     for a different libm and a different FMA contraction on CI hardware
     rather than slack in the claim.
+
+    Both numbers came DOWN at momwire#799 (from 4.8e-16 and 6.3e-14), and
+    `Z_SCALE_BAR` came down with them. The two lanes had shared an unstable
+    spelling of the remainder, of the closed-form statics, and — the one that
+    mattered — of the axis frame's perpendicular offset, a difference of
+    near-equal terms in each. What they were bounding was not their reduction
+    orders but a per-lane ulp amplified by a cancellation. With all three
+    spelled cancellation-free there is nothing left between them but the
+    reduction order, which is what this bar was always meant to measure.
 
   * **the kernel actually runs.** The #822 lesson: a disabled-path probe that
     cannot tell the paths apart gates nothing. `test_the_kernel_runs_...`
@@ -110,8 +118,8 @@ CONFIGS = {
 }
 
 # See the module docstring for the measured deviations these sit above.
-Z_SCALE_BAR = 1e-14  # max|dZ| / max|Z|, measured worst 4.8e-16
-ZIN_REL_BAR = 1e-12  # |dZin| / |Zin|,   measured worst 6.3e-14
+Z_SCALE_BAR = 1e-15  # max|dZ| / max|Z|, measured worst 1.0e-16 (4.8e-16 pre-#799)
+ZIN_REL_BAR = 1e-12  # |dZin| / |Zin|,   measured worst 3.9e-14 (6.3e-14 pre-#799)
 
 
 def _both_ways(monkeypatch, kw, fn):

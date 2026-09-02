@@ -110,24 +110,44 @@ DECKS = {
     ),
 }
 
-# The bars are NOT the Linux numbers with a decade of headroom, and the reason
-# is the first thing this module learned on main: the post-merge macOS lane
-# (which a PR never runs) read 8.2e-13..8.4e-13 on the reduced deck's M0, on
-# EVERY medium and both `need_m1` settings, with the EK deck and both M1s
-# still passing. That is not the kernel. It is the libm seam under the
-# `exp(-jkR) - 1` cancellation: the thin reduced deck's near-self pairs sit at
-# kR ~ 1e-4, so a one-ulp disagreement between numpy's complex exp and the
-# kernel's exp*cos is amplified ~1e4 times by the subtraction of 1, and on
-# macOS the two lanes do not share a libm the way they do under glibc (where
-# they agree to 2.5e-16 / 1.8e-15). The fat EK deck's kR is ~1e3 larger and
-# the amplification is gone, which is why it passed unchanged. The per-medium
-# sensitivity is largest at SMALL |k| (soil C at 7 MHz: 2.8e-12 per ulp,
-# 20x soil B's), which the max-normalisation hides in the observed spread;
-# a runner two ulps apart would land near 5e-12. 1e-10 keeps the module's
-# stated headroom (~100x over the macOS reading) and sits three decades under
-# anything the solved impedance can feel.
-M0_BAR = 1e-10  # max|dM0| / max|M0|; Linux 2.5e-16, macOS 8.4e-13
-M1_BAR = 1e-10  # max|dM1| / max|M1|; Linux 1.8e-15, macOS passes (reduced-deck M1 read under the 1e-11 bar)
+# The bars were 1e-10, and how they got there is worth more than the number.
+#
+# On main this module's post-merge macOS lane (which a PR never runs) read
+# 8.2e-13..8.4e-13 on the reduced deck's M0, on EVERY medium and both
+# `need_m1` settings, where Linux read 2.5e-16 / 1.8e-15. momwire#798 widened
+# the bars to 1e-10 and recorded a mechanism: the libm seam under the
+# `exp(-jkR) - 1` cancellation, a one-ulp disagreement amplified ~1e4 times by
+# the subtraction of 1.
+#
+# **That attribution was wrong**, and momwire#799 is what proves it. With the
+# remainder spelled cancellation-free in both lanes, macOS still read
+# 8.150e-13..8.438e-13 — unchanged, and medium-INDEPENDENT, which a mechanism
+# scaling with per-medium |k| sensitivity could not be. A diagnostic run on
+# the CI macOS lane put the deviation at
+#
+#     real k      8.132e-13      complex k    8.138e-13
+#     k = 1e-30   8.131e-13      <- k-independent, so not the remainder
+#
+# all at the SAME entry, the self pair where |M0| is the matrix maximum, with
+# numpy's own libm measuring 1.0e-16..1.6e-16 against a 50-digit reference.
+# The real mechanism was `_axis_frame`'s `perp = |d|² - u_r²`, an EXACT
+# cancellation on a collinear deck that an FMA contraction resolves
+# differently in the two lanes, leaving a 1e-7 relative perturbation in a
+# `rho2` that every static moment takes a logarithm of. Both are fixed here;
+# only the second one was ever the macOS reading.
+#
+# Measured on this box across the six media, both branches, `need_m1` both
+# ways:
+#
+#     max|dM0| / max|M0|    1.0e-16   (was 2.5e-16)
+#     max|dM1| / max|M1|    2.9e-16   (was 1.8e-15)
+#
+# and the bars come down two orders past where #798 left them, to a decade
+# over the LINUX reading. They are set from Linux deliberately: a bar with
+# platform headroom baked in is a bar that cannot tell you your model of the
+# platform is wrong, which is precisely the service this one just performed.
+M0_BAR = 1e-15  # max|dM0| / max|M0|; measured 1.0e-16 (Linux), 2.5e-16 pre-#799
+M1_BAR = 1e-15  # max|dM1| / max|M1|; measured 2.9e-16 (Linux), 1.8e-15 pre-#799
 
 
 def _grab(name):

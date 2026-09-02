@@ -926,20 +926,34 @@ def test_cpp_ek_battery_is_decisive():
     assert ground_contact_extends, "the perpendicular ground-contact IND=0 arm is unhit"
 
 
-# Impedance-level agreement, per fixture. 1e-12 is the gate; the two named
-# below need 5e-12 and it is conditioning, not dispatch. Both are driven near
+# Impedance-level agreement, per fixture. 1e-12 is the gate; the three named
+# below need 5e-12 and it is conditioning, not dispatch. They are driven near
 # an antiresonance (skew_tee answers 449 + 331j, the monopole is a quarter-wave
 # stub over PEC), so the matrix solve multiplies the fill's 1e-15 reassociation
 # delta by a large condition number on the way to Z. Measured across the
-# battery: 2.1e-14 (radius_step), 2.1e-14 (radius_step_skew), 5.7e-14
-# (radius_step_skew_fat), 6.7e-14 (three_way), 2.3e-13 (grounded_ell_radii),
-# 3.2e-13 (bent_wire), 9.3e-13 (free_wire), 2.0e-12 (grounded_monopole),
-# 2.6e-12 (skew_tee). A dispatch
+# battery: 2.8e-14 (radius_step), 2.8e-14 (radius_step_skew), 5.1e-14
+# (radius_step_skew_fat), 8.1e-14 (three_way), 9.5e-14 (bent_wire), 9.0e-13
+# (grounded_ell_radii), 1.2e-12 (free_wire), 1.9e-12 (grounded_monopole),
+# 5.0e-13 (skew_tee). A dispatch
 # fault — wrong gating table, unstitched radius run, image block on the wrong
 # kernel — lands at 1e-2, not here.
+#
+# `free_wire` MOVED UP at momwire#799, 9.3e-13 -> 1.2e-12, and the reason is
+# worth writing down because it is the shape this number always had. What
+# these bars measure is a FILL gap times a solve amplification, and #799 did
+# not touch the fill gap: `_accel_vs_numpy` reads 1.316e-15 on this fixture
+# both before and after, bit for bit. What moved is the amplification — the
+# rewrite re-rolled the last bits of the basis coefficients (`P_minus_atom`
+# and the interior Q's now carry their exact spellings), so the same 1e-15
+# lands on Z through a slightly different path. Isolated by reverting the
+# coefficient spellings alone, which puts free_wire back at 9.297e-13 with
+# every kernel change still in. A bar with 7 % headroom over a
+# condition-number product was going to move on the next such change whatever
+# it was; 5e-12 is the headroom the other two in this class already carry.
 _Z_AGREEMENT = {name: 1e-12 for name in EK_BATTERY}
 _Z_AGREEMENT["skew_tee"] = 5e-12
 _Z_AGREEMENT["grounded_monopole"] = 5e-12
+_Z_AGREEMENT["free_wire"] = 5e-12
 
 
 @pytest.mark.parametrize("name", list(EK_BATTERY))

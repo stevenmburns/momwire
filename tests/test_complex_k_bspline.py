@@ -62,6 +62,7 @@ from momwire._bspline_kernels import (
     _seg_seg_reg_moments_from_geometry_swept,
     _seg_seg_static_moments,
 )
+from momwire._stable import expm1_neg_jkR
 from momwire.bspline import BSplineSolver
 from momwire.hmatrix import HMatrixSolver
 
@@ -547,7 +548,9 @@ def test_gu1_2_ek_trio_is_already_complex_clean():
     km = MEDIA[WORST][2]
     assert np.all(_ek_factor(R, 0.0, km) == 1.0)
     assert np.all(_ek_reg_extra(R, 0.0, km) == 0.0)
-    reduced = (np.exp(-1j * km * R) - 1.0) / (4 * np.pi * R)
+    # The reduced branch's own spelling — `expm1_neg_jkR`'s complex bracket
+    # since momwire#799, not the literal `exp(-jkR) - 1` this used to name.
+    reduced = expm1_neg_jkR(km, R) / (4 * np.pi * R)
     assert np.array_equal(_ek_reg_kernel(R, 0.0, km), reduced)
 
 

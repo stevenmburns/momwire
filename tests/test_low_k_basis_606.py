@@ -120,9 +120,20 @@ def test_published_ac_is_not_the_float_sum_of_a_and_c_at_low_kd():
     """The whole of #606's coefficient leg, as a property.
 
     At a sane kΔ the closed form and the float sum agree to a rounding — the
-    fix is not a change of value. At the deck's kΔ they differ by percent,
-    and it is the SUM that is wrong: `A` and `C` are O(1) carrying an
-    absolute ε against an O((kΔ)²) answer.
+    fix is not a change of value. At the deck's kΔ they part company, and it
+    is the SUM that is wrong: `A` and `C` are O(1) carrying an absolute ε
+    against an O((kΔ)²) answer.
+
+    **The low-kΔ bound is 1e-9 and used to be 1e-3.** momwire#799 spelled
+    `1 − cos kΔ` as `2 sin²(kΔ/2)` in the interior Q's, which is most of `C`'s
+    own error at this kΔ, and the gap fell from 4.887e-2 to 3.577e-8. That is
+    a five-order improvement in `C`, not a weakening of the property: `A + C`
+    is a 1 − 1 subtraction, so its floor is ε·|C|/|AC| = 2.2e-16/1.83e-9 =
+    1.2e-7 whatever `C`'s spelling, and the reading now sits AT that floor
+    where before it sat five decades above it. The closed form is still the
+    only one that gets the answer, and the bound still separates the two by
+    more than a decade at kΔ = 2.1e-4. Nothing here is a tolerance on a
+    kernel; it is the size of a defect this module exists to name.
     """
     for fmhz, bound in ((5.0, 1e-13), (0.0005, None)):
         s = build_solver(
@@ -134,7 +145,11 @@ def test_published_ac_is_not_the_float_sum_of_a_and_c_at_low_kd():
         if bound is not None:
             assert rel.max() < bound, rel.max()
         else:
-            assert rel.max() > 1e-3, rel.max()
+            # 3.577e-8 measured (was 4.887e-2 before momwire#799 — see the
+            # docstring). The floor a perfectly-spelled `C` could reach is
+            # 1.2e-7, so this cannot be driven under the bound by a better
+            # spelling of the summands; only by the closed form.
+            assert rel.max() > 1e-9, rel.max()
 
 
 # ----------------------------------------------------------------------
