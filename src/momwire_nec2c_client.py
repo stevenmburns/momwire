@@ -83,7 +83,6 @@ BASIS_NAMES = (
     "bspline-d1",
     "hmatrix",
     "pulse",
-    "razor",
     "razor-2p",
     "razor-nec5",
     "sinusoidal",

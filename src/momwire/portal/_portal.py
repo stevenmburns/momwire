@@ -269,7 +269,7 @@ from .._far_readout import (
 # iterative solve tolerance. `arrayblock` degrades to the parent H-matrix on
 # a deck with no repeated-block structure (momwire#143 `_degenerate_partition`)
 # rather than refusing, so both entries are safe on arbitrary decks.
-# `razor` / `razor-nec5` (momwire#432) are the NEC-5 formulation twin — a
+# `razor-2p` / `razor-nec5` (momwire#432) are the NEC-5 formulation twin — a
 # suffix is required the moment either name joins `deck.BASES` (this dict
 # comprehension is total over it), and both ARE working portal entries:
 # `RazorSolver.compute_port_solution()` (the sharing audit's #429 rank-9
@@ -295,7 +295,6 @@ _BANNER_SUFFIXES = {
     "arrayblock": "+ab",
     "sinusoidal": "+sin",
     "sinusoidal-galerkin": "+sg",
-    "razor": "+razor",
     "razor-2p": "+razor2p",
     # Deprecated spelling of razor-2p; its banner suffix is kept as it shipped
     # so an existing install's provenance strings do not change under it.
@@ -3991,7 +3990,7 @@ def engine_scope():
     snapshot::
 
         with engine_scope():
-            main(["--basis", "razor"], stdin=deck, stdout=out)
+            main(["--basis", "razor-2p"], stdin=deck, stdout=out)
         # the basis, the cache flags and the cache are as they were
 
     The cache is emptied on exit rather than restored, for the same reason

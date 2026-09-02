@@ -113,7 +113,6 @@ momwire-nec2c-hmatrix = "momwire.portal:main"
 momwire-nec2c-arrayblock = "momwire.portal:main"
 momwire-nec2c-sinusoidal = "momwire.portal:main"
 momwire-nec2c-sinusoidal-galerkin = "momwire.portal:main"
-momwire-nec2c-razor = "momwire.portal:main"
 momwire-nec2c-razor-2p = "momwire.portal:main"
 # Deprecated spelling of razor-2p, kept because it shipped. It classifies
 # correctly everywhere: SimNEC sniffs nec2c before nec5 and this name carries
