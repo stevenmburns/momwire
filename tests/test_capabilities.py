@@ -819,6 +819,102 @@ def test_sg_knot_feeds_describes_the_point_gap_the_roster_can_build():
     assert segment > 1e-3, segment
 
 
+# --------------------------------------------------------------------------
+# 7b. centre_feeds — the same probe with one number changed (momwire#673)
+# --------------------------------------------------------------------------
+#
+# `centre_feeds` fails silently for the same reason `knot_feeds` does, so it
+# is measured the same way: the mirror of the probe above, with the segment
+# count made ODD.
+#
+# That one change is what moves the target grid.  This wire is 0.5 m and the
+# feed arclength is its midpoint; at 12 segments that midpoint IS an interior
+# knot, and at 13 it is the CENTRE of the middle segment (0.25 / (0.5/13) =
+# 6.5) and no knot is within half a cell of it.  So the same symmetry
+# argument reads the other grid: |I| is symmetric about the midpoint if and
+# only if the gap landed at the centre it was named.
+#
+# Measured, and the two probes are exact complements — every family misses
+# exactly one of the two grids:
+#
+#     family                    odd (centre)   even (knot)
+#     bspline, bspline-d1       ~1e-14         ~1e-14      lands both, snaps never
+#     hmatrix, arrayblock       ~1e-14         ~1e-14
+#     sinusoidal-galerkin       ~4e-15         ~4e-15
+#     sinusoidal                ~1e-12         1.8e-01     snaps to the centre
+#     pulse, harrington         ~2e-15         1.7e-01
+#     razor-2p, razor-nec5      1.8e-01        2e-16       snaps to the knot
+#
+# The bars are the knot probe's, unchanged, because the separation is the
+# same twelve orders: nothing measured sits between 1e-10 and 1e-3.
+
+_CENTRE_FED_NSEGS = 13  # ODD, so the wire's midpoint is a segment CENTRE
+
+
+def _centre_feed_asymmetry(solver_class, **kwargs):
+    """§7's probe on an ODD mesh, where the midpoint is a segment centre."""
+    solver = solver_class(
+        wires=[_KNOT_FED_WIRE],
+        nsegs=_CENTRE_FED_NSEGS,
+        wavelength=WAVELENGTH,
+        wire_radius=5e-4,
+        feeds=[(0, _KNOT_FED_ARC, 1.0 + 0.0j)],
+        **kwargs,
+    )
+    _z, alpha = solver.compute_impedance()
+    mag = np.abs(np.asarray(solver.currents_at_knots(alpha)[0]))
+    return float(np.max(np.abs(mag - mag[::-1])) / np.max(mag))
+
+
+@pytest.mark.parametrize("basis", sorted(BASES))
+def test_centre_feeds_declaration_matches_where_the_gap_actually_lands(basis):
+    solver_class, basis_kwargs = BASES[basis]
+    asymmetry = _centre_feed_asymmetry(solver_class, **basis_kwargs)
+    if solver_class.capabilities.centre_feeds:
+        assert asymmetry < 1e-10, (basis, asymmetry)
+    else:
+        # A whole half-segment off, same as the knot probe's failing side.
+        assert asymmetry > 1e-3, (basis, asymmetry)
+
+
+@pytest.mark.parametrize("basis", sorted(BASES))
+def test_the_two_feed_axes_are_complements_not_duplicates(basis):
+    """Every family lands at least one of the two grids, and the one family
+    that snaps on each side is not the same family.
+
+    This is the claim that makes `centre_feeds` a separate axis rather than
+    `not knot_feeds`: `bspline` and `sinusoidal-galerkin` are True on BOTH,
+    because they never snap at all and land wherever they were named. A
+    single axis could not say that.
+    """
+    solver_class, basis_kwargs = BASES[basis]
+    caps = solver_class.capabilities
+    assert caps.knot_feeds or caps.centre_feeds, (
+        f"{basis} declares it lands on neither grid, which would mean a gap "
+        "it can never place where asked"
+    )
+    if caps.knot_feeds and caps.centre_feeds:
+        # The strong claim: it really does land both, so it snaps to neither.
+        assert _knot_feed_asymmetry(solver_class, **basis_kwargs) < 1e-10
+        assert _centre_feed_asymmetry(solver_class, **basis_kwargs) < 1e-10
+
+
+def test_razor_is_the_only_family_that_refuses_a_centre_gap():
+    """The roster-wide shape of momwire#673, pinned so a new row that snaps
+    to knots cannot arrive without either declaring it or failing here."""
+    snapping = {
+        basis
+        for basis, (cls, _kw) in BASES.items()
+        if not cls.capabilities.centre_feeds
+    }
+    assert snapping == {"razor-2p", "razor-nec5"}, snapping
+    for basis in snapping:
+        cls, _kw = BASES[basis]
+        assert cls.capabilities.refusal("centre_feeds"), (
+            f"{basis} refuses a centre gap without a declared reason"
+        )
+
+
 @pytest.mark.parametrize("solver_class", [PulseSolver, HarringtonSolver])
 def test_the_off_roster_families_declare_the_snap_they_document(solver_class):
     """`PulseSolver._feed_basis_indices` says it in prose — "a delta gap lands

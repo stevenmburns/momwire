@@ -917,6 +917,18 @@ class _RazorBasis:
     k: float
 
 
+# The `centre_feeds` refusal (momwire#673), one sentence so the raise in
+# `momwire.deck.build_solver` and the matrix row are the same words --
+# `tests/test_refusals_are_declared.py` checks exactly that.
+_CENTRE_FEEDS_REFUSAL = (
+    "RazorSolver places a gap at the nearest basis-carrying KNOT "
+    "(`_snap_to_knot`), so a feed named as a segment CENTRE -- which is the "
+    "grid the nec2 dialect addresses -- lands half a cell from where it was "
+    "named; build the solver directly with a parity-correct mesh if that is "
+    "what you want."
+)
+
+
 class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
@@ -1165,6 +1177,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junction_ports=False,
         node_gaps=True,
         knot_feeds=True,
+        # The mirror, and the one False in the roster (momwire#673).
+        # `_snap_to_knot` moves a gap to the nearest basis-carrying knot, so a
+        # site named as a segment CENTRE -- which is what the `nec2` dialect
+        # addresses -- lands half a cell from where it was named. That is not
+        # a defect: it is this family answering the node question well, and
+        # this cell is where it says it answers the centre question by moving
+        # the port instead. `bspline-d1` is a tent basis too and is True here,
+        # because the axis is where the port ENDS UP, not the accuracy once
+        # there.
+        centre_feeds=False,
         per_wire_radius=True,
         singular_enrichment=False,
         # Contact at a wire END is served over PEC (unit 3) and over the
@@ -1179,6 +1201,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         contact=True,
         refusals={
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
+            "centre_feeds": _CENTRE_FEEDS_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "singular_enrichment": SINGULAR_ENRICHMENT_NEVER.format(cls="RazorSolver"),
             "buried": _BURIED_FILL_REFUSAL,

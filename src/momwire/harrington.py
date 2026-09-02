@@ -196,6 +196,9 @@ class HarringtonSolver(PulseSolver):
         junction_ports=False,
         node_gaps=False,
         knot_feeds=False,
+        # momwire#673: the parent's centre snap, unchanged -- and it is the
+        # grid `nec2` names.
+        centre_feeds=True,
         per_wire_radius=False,
         singular_enrichment=False,
         # The parent's two geometry cells, unchanged: this class overrides

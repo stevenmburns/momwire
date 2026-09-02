@@ -453,6 +453,9 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junction_ports=False,
         node_gaps=False,
         knot_feeds=False,
+        # momwire#673: snaps to the segment CENTRE, which is the grid `nec2`
+        # addresses -- the mirror of its `knot_feeds` False.
+        centre_feeds=True,
         per_wire_radius=False,
         singular_enrichment=False,
         buried=False,

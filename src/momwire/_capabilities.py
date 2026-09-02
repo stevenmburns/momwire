@@ -45,6 +45,12 @@ _AXES = (
     "knot_feeds",
     "per_wire_radius",
     "singular_enrichment",
+    # APPENDED rather than slotted beside `knot_feeds`, though that is where it
+    # belongs by meaning (momwire#673).  `_combo_key` orders a combination key
+    # by `_AXES.index`, so inserting in the middle would re-spell any existing
+    # "a+b" key containing a later axis.  None exists today, which makes the
+    # insert look safe and would make the next one a silent rename.
+    "centre_feeds",
 )
 
 
@@ -61,7 +67,7 @@ class Capabilities(NamedTuple):
     """One solver's declared row of the capability matrix.
 
     `grounds` is the subset of ``{"pec", "refl-coef", "sommerfeld"}`` the
-    solver serves — free space is universal and not listed. The nine
+    solver serves — free space is universal and not listed. The ten
     booleans are the other axes. `refusals` maps a cell name, or an "a+b"
     combination key, to the reason prose already carried by that solver's
     own refusal (a constructor or solve-time raise) — referenced from
@@ -83,8 +89,8 @@ class Capabilities(NamedTuple):
     stay condition tokens: each is a shape a served deck can take, not
     something a solver is made of.
 
-    `knot_feeds` is the odd one, because it is the only axis a solver can
-    fail SILENTLY (momwire#611). Every family resolves a ``feeds``
+    `knot_feeds` and `centre_feeds` are the odd pair, because they are the
+    only axes a solver can fail SILENTLY (momwire#611, #673). Every family resolves a ``feeds``
     arclength onto a grid of its own: the B-spline family integrates the
     delta at the arclength itself, `RazorSolver._snap_to_knot` moves it to
     the nearest knot, and the sinusoidal and pulse families move it to the
@@ -96,6 +102,23 @@ class Capabilities(NamedTuple):
     is not broken, it is answering a different question, and this is the
     axis that says so out loud. `test_capabilities.py` measures the
     declaration against a symmetry probe rather than trusting it.
+
+    `centre_feeds` is that question asked the other way (momwire#673), and
+    the two are mirrors rather than opposites: it asks whether a gap lands
+    on the segment-CENTRE grid the caller named. The `nec2` dialect is the
+    consumer that addresses centres — `Nec2Structure.resolve` returns
+    ``(element + 0.5) * length / n_seg`` — so a family that snaps to knots
+    answers half a cell away there, silently, exactly as the centre-snapping
+    families do on the node-addressing side.
+
+    Both cells are True on most rows, which is not a contradiction: a family
+    that never snaps at all lands wherever it was named and satisfies both.
+    `RazorSolver` is the only False here (`_snap_to_knot`), and `bspline-d1`
+    is deliberately NOT in its class though both are tent bases — the axis is
+    WHERE THE PORT ENDS UP, not how accurate it is once there. d=1 places the
+    gap at the arclength it was given and pays for it in accuracy; razor puts
+    it somewhere else. Mesh quality has its own mechanism a layer up and it
+    is not a refusal.
     """
 
     grounds: frozenset[str]
@@ -120,6 +143,13 @@ class Capabilities(NamedTuple):
     # silently snaps be served by a node-addressing consumer, which is the
     # exact failure momwire#611 existed to close.
     knot_feeds: bool = False
+    # The mirror (momwire#673), declared beside the axis it mirrors, and
+    # defaulting False for the same reason: the empty row means "every axis
+    # refused", and a family that does place a gap where it was named loses
+    # nothing by saying so. The other direction would let a family that
+    # silently snaps be served by a CENTRE-addressing consumer, which is the
+    # `nec2` half of the failure momwire#611 closed on the node half.
+    centre_feeds: bool = False
     # The two GEOMETRY axes (momwire#792), on `knot_feeds`' precedent
     # and for the same reason: they arrived after every row was written, so
     # they need a default, so they come last. See THE ONE RULE above for why

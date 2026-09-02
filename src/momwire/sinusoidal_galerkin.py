@@ -945,6 +945,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         junction_ports=True,
         node_gaps=True,
         knot_feeds=True,
+        # momwire#673: under `feed_model="point"` the remainder rides in
+        # `feed_xi`, so the gap is placed where it was named on either grid.
+        centre_feeds=True,
         refusals={
             "junction_ports+finite_ground": _JUNCTION_PORTS_FINITE_GROUND_REFUSAL,
             "junction_ports+mixed_radii": _JUNCTION_PORTS_MIXED_RADII_REFUSAL,

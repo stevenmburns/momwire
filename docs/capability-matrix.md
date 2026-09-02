@@ -74,7 +74,7 @@ that serves both — and those are the `a+b` keys in the reasons below.
 
 ## The recorded reasons
 
-42 sentences across 70 declared cells, verbatim. A sentence shared by several rows is printed
+43 sentences across 71 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -201,6 +201,10 @@ renders in host dialogs.
 - `RazorSolver` `buried`
 
   > RazorSolver has no buried fill: the momwire#553 buried serve (direct + image + Sommerfeld-remainder blocks in the lower medium) is written for BSplineSolver's testing side only. A detached buried wire is a LEGAL deck - solve it with BSplineSolver, which serves buried ground since momwire#553, or raise the wire clear of the plane. Razor's own below-plane fill exists since momwire#812 (the lower-medium family behind `_SERVE_BELOW_PLANE`, wholly-below decks only); the crossing block on razor rows (momwire#813) and the roster flip (momwire#814) are what turn this cell True; the arc is momwire#651
+
+- `RazorSolver` `centre_feeds`
+
+  > RazorSolver places a gap at the nearest basis-carrying KNOT (`_snap_to_knot`), so a feed named as a segment CENTRE -- which is the grid the nec2 dialect addresses -- lands half a cell from where it was named; build the solver directly with a parity-correct mesh if that is what you want.
 
 - `RazorSolver` `junction_ports`
 

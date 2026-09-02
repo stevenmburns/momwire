@@ -693,6 +693,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junction_ports=True,
         node_gaps=True,
         knot_feeds=True,
+        # momwire#673: the B-spline family integrates the delta at the
+        # arclength itself and never snaps, so it lands on whichever grid the
+        # caller named -- both cells True, including at d=1.
+        centre_feeds=True,
         per_wire_radius=True,
         singular_enrichment=True,
         buried=True,
