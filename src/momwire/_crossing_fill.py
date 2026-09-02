@@ -582,6 +582,12 @@ def path_test_axis(n_basis, rows):
         ends.append((np.asarray(c_after, dtype=float), +1.0, e))
     n_pts = sum(x.shape[0] for x in nodes)
     return dict(
+        # The split lane rebuilds a COARSE axis with `axis_data`, which can
+        # only reconstruct a Galerkin axis from the context's basis — there
+        # is no coarse spelling of a testing path. This flag is how
+        # `cross_complete_block_split` refuses instead of silently testing
+        # its far blocks with the wrong functions (momwire#813).
+        path_tested=True,
         nodes=np.concatenate(nodes) if nodes else np.zeros((0, 3)),
         t=np.concatenate(tl) if tl else np.zeros((0, 3)),
         w=np.concatenate(wl) if wl else np.zeros(0),
@@ -603,16 +609,17 @@ def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None):
     )
 
 
-def cross_complete_block(ctx, A, B, *, corner=True):
-    """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
-    on designed kernels. Returns the full (n_basis, n_basis) block in the
-    subtracting field-block convention (`Z -= t_ab`; t_ba is the transpose
-    by reciprocity, measured, not assumed, by the phase-2 probes)."""
-    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
-    gz = float(ctx.ground_z)
-    c1 = _c1_moment(ctx.omega, ctx.mu)
-    k2sq = k_p * k_p
+def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz):
+    """The M + SW + SQ sandwich over (above axis A × below axis B), dense.
 
+    Split out of `cross_complete_block` so the REVERSED block (momwire#813)
+    can share it: the designed tables accept only z ≥ 0 ≥ z′, so the above
+    axis sits in the `z` slot whichever ROLE it plays, and the reversed main
+    sandwich is this same product transposed — measured exact to 3e-16 at
+    ε̃ = 1 and at soil A, which is what says no kernel swap is needed here
+    (`scratch/813-reversed-block/probe4_localise.py`).
+    """
+    k2sq = k_p * k_p
     dx = A["nodes"][:, 0][:, None] - B["nodes"][:, 0][None, :]
     dy = A["nodes"][:, 1][:, None] - B["nodes"][:, 1][None, :]
     rho = np.hypot(dx, dy)
@@ -632,7 +639,21 @@ def cross_complete_block(ctx, A, B, *, corner=True):
     s_w1 = (FA_w * tzA) @ W @ FdB_w.T
     s_w2 = FdA_w @ W @ (FB_w * tzB).T
     s_phi = -FdA_w @ V @ FdB_w.T
-    t_ab = c1 * (s_u + s_zz + s_w1 + s_w2 + s_phi)
+    return c1 * (s_u + s_zz + s_w1 + s_w2 + s_phi)
+
+
+def cross_complete_block(ctx, A, B, *, corner=True):
+    """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
+    on designed kernels. Returns the full (n_basis, n_basis) block in the
+    subtracting field-block convention (`Z -= t_ab`).
+
+    For GALERKIN rows the opposite block is this one's transpose. For
+    PATH-tested rows it is not, and `cross_complete_block_reversed` builds
+    it — see there for the one term that separates them."""
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    c1 = _c1_moment(ctx.omega, ctx.mu)
+    t_ab = _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz)
     t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, corner=corner)
     return t_ab
 
@@ -718,6 +739,155 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
     return t_ab
 
 
+# The SW end term's placement in the REVERSED block (momwire#813 step 1) —
+# the one thing the eps~ = 1 collapse cannot settle, because W is exactly 0
+# in a homogeneous medium and SW is the only end term that carries it.
+#
+# SETTLED by momwire#813's derivation (b), measured at 5312ca5: on the
+# junction tent's below wing at soil A, `s_w1 + SW` reproduces the direct
+# current-current form built from the dz′W table to 2.4e-8 with elementwise
+# ratio 1.000000, while `s_w1` alone is 29x off. So SW is the by-parts
+# REMNANT of the vertical-current coupling, not a source-end charge term —
+# and the by-parts that produced it runs along the BELOW axis, against the
+# ABOVE axis's t̂z. Both halves of that pairing are fixed by the geometry,
+# not by which side is testing.
+#
+# "by_parts" (default) keeps them paired: SW rides the BELOW axis's ends and
+#     contracts the ABOVE axis's t̂z, whichever side tests. The reversed
+#     block then reproduces `t_ab.T` EXACTLY — reciprocity comes out of the
+#     spelling rather than being assumed, which is the answer to the
+#     question this unit was sent to ask.
+# "by_role" is the other reading, kept for the record and for the contrast
+#     the gates measure: SW rides the SOURCE axis's ends and contracts the
+#     TEST axis's t̂z. Bit-identical to "by_parts" at eps~ = 1 (W = 0), and
+#     7.938e-04 of the block away at soil A — the number that made this a
+#     question before 5312ca5 answered it.
+SW_BY_PARTS = "by_parts"
+SW_BY_ROLE = "by_role"
+
+
+def _ends_and_corner_reversed(
+    ctx, P, Q, eps_t, k_p, c1, gz, memo=None, *, corner=True, sw_end=SW_BY_PARTS
+):
+    """`_ends_and_corner` for the REVERSED block: test axis P is BELOW, source
+    axis Q is ABOVE. Returns (P n_basis × Q n_basis).
+
+    Two assignments the forward block conflates, because there the test axis
+    IS the above axis:
+
+      * which table slot — the above axis goes in `z`, the below in `z′`,
+        always (`six_point` raises otherwise);
+      * which by-parts term — BT rides the TEST axis's ends, SW + SQ the
+        SOURCE axis's.
+
+    Every end term except SW is bit-identical to the forward block's
+    transpose in both media under either reading; SW is where they differ and
+    `sw_end` says which. The default pairs it with `s_w1` as its by-parts
+    partner (momwire#813 derivation (b), measured at 5312ca5), and under that
+    pairing the whole reversed block reproduces `t_ab.T` exactly.
+    """
+    t_ba = np.zeros((P["n_basis"], Q["n_basis"]), dtype=np.complex128)
+    _txP, _tyP, tzP = P["t"].T
+    _txQ, _tyQ, tzQ = Q["t"].T
+    FP_w = P["F"] * P["w"]
+    FdP_w = P["Fd"] * P["w"]
+    FQ_w = Q["F"] * Q["w"]
+    FdQ_w = Q["Fd"] * Q["w"]
+
+    # BT — the test axis's ends. P is below, so its z lands in the z′ slot
+    # (clamped at the plane, the mirror of the forward's `max(..., 0.0)`).
+    for pt, sign, fv in P["ends"]:
+        rho_e = np.hypot(Q["nodes"][:, 0] - pt[0], Q["nodes"][:, 1] - pt[1])
+        te = _tables(
+            ctx,
+            eps_t,
+            k_p,
+            rho_e,
+            Q["nodes"][:, 2] - gz,
+            np.full_like(rho_e, min(pt[2] - gz, 0.0)),
+            _CROSS_RTOL,
+            memo=memo,
+        )
+        t_ba += c1 * sign * np.outer(fv, FdQ_w @ te["V"])
+        if sw_end == SW_BY_PARTS:
+            # SW paired with s_w1 by the by-parts that produced it: on the
+            # BELOW axis's ends, contracting the ABOVE axis's t̂z (5312ca5).
+            t_ba += -c1 * sign * np.outer(fv, (FQ_w * tzQ) @ te["W"])
+
+    # SQ — the source axis's ends (+ SW under the rejected "by_role" reading).
+    for pt, sign, fv in Q["ends"]:
+        rho_e = np.hypot(P["nodes"][:, 0] - pt[0], P["nodes"][:, 1] - pt[1])
+        te = _tables(
+            ctx,
+            eps_t,
+            k_p,
+            rho_e,
+            np.full_like(rho_e, max(pt[2] - gz, 0.0)),
+            P["nodes"][:, 2] - gz,
+            _CROSS_RTOL,
+            memo=memo,
+        )
+        if sw_end == SW_BY_ROLE:
+            t_ba += -c1 * sign * np.outer((FP_w * tzP) @ te["W"], fv)
+        t_ba += c1 * sign * np.outer(FdP_w @ te["V"], fv)
+
+    if not corner:
+        return t_ba
+    # The corner is symmetric in the two ends' one-hots (−σσ′·c1·V(a)), so
+    # it is the forward's transposed and needs no orientation of its own.
+    a_wire = float(ctx.a_wire)
+    v_corner = None
+    for pt_p, sig_p, fv_p in P["ends"]:
+        if abs(pt_p[2] - gz) > 1e-12:
+            continue
+        for pt_q, sig_q, fv_q in Q["ends"]:
+            if abs(pt_q[2] - gz) > 1e-12:
+                continue
+            assert np.hypot(pt_p[0] - pt_q[0], pt_p[1] - pt_q[1]) < 1e-9
+            if v_corner is None:
+                v_corner = complex(
+                    _near_interface.six_point(
+                        eps_t, k_p, a_wire, 0.0, 0.0, rtol=_CORNER_RTOL
+                    )[1]
+                )
+            t_ba += (-sig_p * sig_q * c1 * v_corner) * np.outer(fv_p, fv_q)
+    return t_ba
+
+
+def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS):
+    """The block the other way round: BELOW test rows × ABOVE source columns.
+
+    `cross_complete_block` fills (above rows × below columns). bspline gets
+    the opposite block as that one's transpose, which Galerkin reciprocity
+    licenses; a PATH-tested fill cannot assume it, because the test
+    functional is no longer the basis (momwire#813).
+
+    So this builds it directly. `P` is the below axis and carries the rows
+    (razor's paths through `path_test_axis`, or `axis_data` for a Galerkin
+    check); `Q` is the above axis and carries the columns. Pass
+    `corner=False` for path-tested rows — the corner is a Galerkin by-parts
+    term (the momwire#651 probe: 1.9e5 added where razor's truth has none).
+
+    Measured on `crossing_deck(level=1)` at ε̃ = 1, against razor's own
+    free-space `Z[below rows, above cols]`: 6.56e-06 relative with the
+    elementwise ratio exactly 1 — the same interior class the forward block
+    reached (6.6e-6), on both quadrature lanes.
+
+    Reciprocity is then a RESULT rather than an assumption: with Galerkin
+    axes on both sides this reproduces `cross_complete_block`'s transpose
+    bit for bit, in both media, under the default `sw_end`. The rejected
+    `SW_BY_ROLE` spelling agrees at ε̃ = 1 and is 7.94e-4 away at soil A.
+    """
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    c1 = _c1_moment(ctx.omega, ctx.mu)
+    t_ba = _main_sandwich(ctx, Q, P, eps_t, k_p, c1, gz).T
+    t_ba += _ends_and_corner_reversed(
+        ctx, P, Q, eps_t, k_p, c1, gz, corner=corner, sw_end=sw_end
+    )
+    return t_ba
+
+
 def _row_weights(ax, ii):
     """The four per-basis row-weight matrices of one axis, restricted to
     the point subset `ii`: (F·w·t̂x, F·w·t̂y, F·w·t̂z, F′·w)."""
@@ -753,6 +923,30 @@ def _axis_segment_tree(geom, seg_idx, leaf):
     return tree, idx
 
 
+def _refuse_path_tested(*axes):
+    """The #688 split cannot serve a path-tested axis.
+
+    Its far blocks are evaluated on COARSE axes rebuilt by `axis_data` from
+    the context's basis. A path-test axis has no such spelling — razor's
+    testing paths are not a basis — so a coarse rebuild silently replaces
+    the test functions with the Galerkin tents on exactly the far blocks,
+    and the block comes back ~20% wrong with nothing raised (measured 2.04e-1
+    relative on `crossing_deck(level=1)`, in BOTH directions; Galerkin axes
+    on the same deck agree dense-to-split at 1.8e-18).
+
+    momwire#813 half 1 never met this because its gates are all dense. Half
+    2's masked assembly would have, so it refuses here rather than there.
+    """
+    for ax in axes:
+        if ax.get("path_tested"):
+            raise ValueError(
+                "the admissibility split cannot serve a path-tested axis: its "
+                "far blocks ride coarse axes rebuilt from the context's basis, "
+                "which silently substitutes Galerkin tents for the testing "
+                "paths (momwire#813). Use the dense entry point."
+            )
+
+
 def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True):
     """`cross_complete_block` through the #688 admissibility split.
 
@@ -772,10 +966,23 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True):
     routes through neither coarse axes nor the low-rank pass."""
     if _FORCE_DENSE:
         return cross_complete_block(ctx, A, B, corner=corner)
+    _refuse_path_tested(A, B)
 
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
+    memo = {}  # one fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here)
+    t_ab = _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo)
+    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner)
+    return t_ab
+
+
+def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
+    """The split fill's main sandwich over (above A × below B) — everything
+    `cross_complete_block_split` does except the ends and the corner.
+
+    Split out for the same reason as `_main_sandwich` (momwire#813): the
+    reversed block's main part is this product transposed."""
     k2sq = k_p * k_p
 
     tree_a, seg_a = _axis_segment_tree(ctx.geom, a_idx, _CLUSTER_LEAF_SEGS)
@@ -783,7 +990,6 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True):
     far, near = _aca.build_block_tree(tree_a, tree_b, _ADM_ETA)
 
     t_main = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
-    memo = {}  # one fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here)
 
     if far:
         Ac = axis_data(ctx, a_idx, coarse=True)
@@ -908,9 +1114,31 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True):
             - _lr(P4, "V", Q4)
         )
 
-    t_ab = c1 * t_main
-    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner)
-    return t_ab
+    return c1 * t_main
+
+
+def cross_complete_block_reversed_split(
+    ctx, p_idx, q_idx, P, Q, *, corner=True, sw_end=SW_BY_PARTS
+):
+    """`cross_complete_block_reversed` through the #688 admissibility split.
+
+    `p_idx` are the BELOW axis's segments (test rows), `q_idx` the ABOVE
+    axis's (source columns) — the same argument order as the axes. The main
+    sandwich is the forward split's, transposed; the ends follow the roles.
+    """
+    if _FORCE_DENSE:
+        return cross_complete_block_reversed(ctx, P, Q, corner=corner, sw_end=sw_end)
+    _refuse_path_tested(P, Q)
+
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    c1 = _c1_moment(ctx.omega, ctx.mu)
+    memo = {}
+    t_ba = _main_split(ctx, q_idx, p_idx, Q, P, eps_t, k_p, c1, gz, memo).T
+    t_ba += _ends_and_corner_reversed(
+        ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end
+    )
+    return t_ba
 
 
 def _g_of_r(k, R):

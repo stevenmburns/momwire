@@ -21,6 +21,33 @@ Measured 2026-09-02 on `crossing_deck(level=1)` (30 segments, 29 bases):
     a Galerkin by-parts term; on a path-tested row it adds 1.9e5 where
     razor's truth has none.
 
+Half 2 step (1), the REVERSED block (2026-09-03). The block above builds is
+above rows x below columns. The other one — BELOW rows (razor paths on the
+below wires) x ABOVE columns — is `cross_complete_block_reversed`. bspline
+gets it as `t_ab.T` by Galerkin reciprocity; a path-tested fill cannot assume
+that, so it is built and the reciprocity is MEASURED:
+
+  * eps~ = 1, path-tested rows vs razor's free-space Z[below, above]:
+    6.56e-06 relative, ratio exactly 1 — the same interior class the forward
+    block reached, on both quadrature lanes;
+  * the main sandwich is the forward's TRANSPOSED, exact to 3e-16 in both
+    media: the designed tables take the above axis in the `z` slot whichever
+    ROLE it plays, and no kernel swap is needed. What the reversed block
+    re-assigns is the BY-PARTS terms, by role: BT on the test axis's ends,
+    SW + SQ on the source's;
+  * every end term except SW is then bit-identical to the transpose in both
+    media. SW is the whole difference, and it is exactly 0 at eps~ = 1
+    because W = 0 in a homogeneous medium — which is why the eps~ = 1
+    collapse cannot settle it and #813 carried it as open derivation (b).
+    5312ca5 settled it by measurement: SW is the by-parts REMNANT of the
+    vertical-current coupling (`s_w1 + SW` reproduces the direct dz'W form to
+    2.4e-8; `s_w1` alone is 29x off), so it pairs with `s_w1` by geometry —
+    the BELOW axis's ends against the ABOVE axis's t_z — whichever side
+    tests. Under that pairing (`SW_BY_PARTS`, the default) the reversed block
+    reproduces `t_ab.T` bit for bit, so reciprocity comes OUT of the spelling
+    instead of being assumed. `SW_BY_ROLE` is the other reading, kept for the
+    contrast: 7.94e-04 of the block away at soil A.
+
 What this module does NOT do: assemble a razor-tested mixed-medium Z. That
 is #813's other half, and it needs razor's T2 evaluated AT the node (razor
 never does — see `test_the_sigma_trick_does_not_chop_the_path`), which is a
@@ -35,6 +62,7 @@ import pytest
 from momwire import RazorSolver
 from momwire import _crossing_fill as CF
 
+from test_buried_serve_553 import SOIL_A
 from test_crossing_serve_524 import crossing_deck
 
 BAR_INTERIOR = 1e-5  # measured 6.6e-6
@@ -204,3 +232,196 @@ def test_the_sigma_trick_does_not_chop_the_path(free_space):
         / np.abs(chopped[f["cols_below"]]).max()
     )
     assert rel > 0.1, rel  # measured 0.46: they are different objects
+
+
+# ======================================================================
+# The reversed block — below rows x above columns (#813 half 2, step 1)
+# ======================================================================
+BAR_REVERSED = 1e-5  # measured 6.5613e-06, the same class as BAR_INTERIOR
+BAR_LANES = 1e-12  # dense vs split on Galerkin axes: measured 3.3e-19
+
+
+def _reversed_setup(nec5_quadrature=False):
+    """The crossing deck on razor in free space, plus the axes of the
+    reversed block: razor's paths on the BELOW wire testing, the ABOVE
+    wire's tents sourcing."""
+    deck = crossing_deck(1)
+    fs = {
+        k: v
+        for k, v in deck.items()
+        if k not in ("ground_z", "ground_eps", "ground_model")
+    }
+    rs = RazorSolver(**fs, nec5_quadrature=nec5_quadrature, n_qp_path=8)
+    geom = rs._build_geometry()
+    Z = rs._assemble_Z_from_prepared(geom, rs._assemble_Z_prepare(geom), rs.k, rs.omega)
+    so = np.asarray(geom["seg_offsets"])
+    bo = np.asarray(geom["basis_offsets"])
+    return dict(
+        rs=rs,
+        geom=geom,
+        Z=Z,
+        b_idx=np.arange(so[0], so[1]),
+        a_idx=np.arange(so[1], so[2]),
+        bases_below=np.arange(bo[0], bo[1]),
+        bases_above=np.arange(bo[1], bo[2]),
+    )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("nec5_quadrature", (False, True))
+def test_the_reversed_block_is_razors_below_rows_at_eps_one(nec5_quadrature):
+    """The gate for step (1): with the plane's two sides swapped, the trunk
+    still reproduces razor's own free-space fill at eps~ = 1.
+
+    Both quadrature lanes, because the path axis is razor's observer set on
+    both sides of the comparison and must not enter the agreement.
+    """
+    f = _reversed_setup(nec5_quadrature)
+    ctx = f["rs"]._crossing_context(f["geom"], ground_eps=(1.0, 0.0))
+    P = CF.path_test_axis(
+        f["geom"]["n_basis_total"],
+        f["rs"]._path_test_rows(f["geom"], f["bases_below"]),
+    )
+    Q = CF.axis_data(ctx, f["a_idx"])
+    ref = f["Z"][np.ix_(f["bases_below"], f["bases_above"])]
+    got = -CF.cross_complete_block_reversed(ctx, P, Q, corner=False)[
+        np.ix_(f["bases_below"], f["bases_above"])
+    ]
+    rel = np.abs(got - ref).max() / np.abs(ref).max()
+    assert rel < BAR_REVERSED, rel
+    big = np.abs(ref) > 1e-3 * np.abs(ref).max()
+    ratio = got[big] / ref[big]
+    assert abs(np.median(ratio) - 1.0) < 1e-6  # no constant, no sign to absorb
+
+
+@pytest.mark.slow
+def test_the_main_sandwich_is_the_forward_transposed():
+    """No kernel swap: the designed tables take the ABOVE axis in the `z`
+    slot whichever role it plays, so the reversed main sandwich is the
+    forward's transpose exactly. Measured with the by-parts ends removed
+    (`corner=False` and the SW/SQ/BT terms subtracted) — what is left is the
+    sandwich, in both media."""
+    f = _reversed_setup()
+    for ground_eps in ((1.0, 0.0), SOIL_A):
+        ctx = f["rs"]._crossing_context(f["geom"], ground_eps=ground_eps)
+        A, B = CF.axis_data(ctx, f["a_idx"]), CF.axis_data(ctx, f["b_idx"])
+        et, _em, kp, _km, _c2, _am = ctx.medium
+        gz, c1 = float(ctx.ground_z), CF._c1_moment(ctx.omega, ctx.mu)
+        # The whole block, BIT for bit, under the reciprocity-carried SW.
+        # The ends are separately shown bit-equal to the transpose, so this
+        # pins the sandwich as the transpose too.
+        whole = CF.cross_complete_block_reversed(
+            ctx, B, A, corner=False, sw_end=CF.SW_BY_PARTS
+        )
+        assert np.array_equal(
+            whole, CF.cross_complete_block(ctx, A, B, corner=False).T
+        ), ground_eps
+        # The isolated main part agrees to roundoff — not bit, because
+        # `(main + ends) - ends` cancels where main is 0 and ends is not.
+        rev_main = whole - CF._ends_and_corner_reversed(
+            ctx, B, A, et, kp, c1, gz, corner=False, sw_end=CF.SW_BY_PARTS
+        )
+        fwd_main = CF._main_sandwich(ctx, A, B, et, kp, c1, gz)
+        d = np.abs(rev_main - fwd_main.T).max() / np.abs(fwd_main).max()
+        assert d < 1e-14, (ground_eps, d)
+
+
+@pytest.mark.slow
+def test_reciprocity_is_measured_not_assumed():
+    """`t_ba` vs `t_ab.T` on Galerkin axes, where reciprocity is the identity
+    bspline's fill already rides — so a correct reversed block must reproduce
+    the transpose there, and the SW placement is the one free choice.
+
+    The default `SW_BY_PARTS` reproduces it EXACTLY (bit, in both media),
+    which is the unit's answer: reciprocity holds for the path-tested block
+    once SW is paired with `s_w1` as 5312ca5 measured it. `SW_BY_ROLE` — SW
+    read as a source-side end term instead — agrees at eps~ = 1 (W = 0) and
+    is 7.94e-04 away at soil A. The number is pinned as a band so a move in
+    either direction is a finding rather than silent drift.
+    """
+    f = _reversed_setup()
+    seen = {}
+    for label, ground_eps in (("eps1", (1.0, 0.0)), ("soilA", SOIL_A)):
+        ctx = f["rs"]._crossing_context(f["geom"], ground_eps=ground_eps)
+        A, B = CF.axis_data(ctx, f["a_idx"]), CF.axis_data(ctx, f["b_idx"])
+        fwd = CF.cross_complete_block(ctx, A, B, corner=False).T
+        for sw in (CF.SW_BY_ROLE, CF.SW_BY_PARTS):
+            rev = CF.cross_complete_block_reversed(ctx, B, A, corner=False, sw_end=sw)
+            seen[(label, sw)] = np.abs(rev - fwd).max() / np.abs(fwd).max()
+    # The by-parts pairing: exact in both media.
+    assert seen[("eps1", CF.SW_BY_PARTS)] == 0.0
+    assert seen[("soilA", CF.SW_BY_PARTS)] == 0.0
+    # The rejected role reading: exact where W vanishes...
+    assert seen[("eps1", CF.SW_BY_ROLE)] == 0.0
+    # ...and 7.938e-04 away where it does not, as a band.
+    assert 5e-4 < seen[("soilA", CF.SW_BY_ROLE)] < 1.2e-3, seen
+
+
+@pytest.mark.slow
+def test_only_the_sw_end_term_separates_the_two_spellings():
+    """The whole reciprocity gap is one term. W is the only kernel that is 0
+    at eps~ = 1 and nonzero at soil, and SW is the only end term carrying
+    it — so the two spellings are bit-identical wherever W vanishes."""
+    f = _reversed_setup()
+    ctx1 = f["rs"]._crossing_context(f["geom"], ground_eps=(1.0, 0.0))
+    A1, B1 = CF.axis_data(ctx1, f["a_idx"]), CF.axis_data(ctx1, f["b_idx"])
+    a = CF.cross_complete_block_reversed(ctx1, B1, A1, sw_end=CF.SW_BY_ROLE)
+    b = CF.cross_complete_block_reversed(ctx1, B1, A1, sw_end=CF.SW_BY_PARTS)
+    assert np.array_equal(a, b)
+    # W is exactly zero there, which is WHY.
+    tb = CF._tables(
+        ctx1,
+        ctx1.medium.eps_t,
+        ctx1.medium.k_p,
+        np.array([0.3]),
+        np.array([1.5]),
+        np.array([-0.8]),
+        CF._CROSS_RTOL,
+    )
+    assert tb["W"][0] == 0 and tb["dzW"][0] == 0
+    # At soil it does not vanish, and neither does the difference.
+    ctx2 = f["rs"]._crossing_context(f["geom"], ground_eps=SOIL_A)
+    A2, B2 = CF.axis_data(ctx2, f["a_idx"]), CF.axis_data(ctx2, f["b_idx"])
+    c = CF.cross_complete_block_reversed(ctx2, B2, A2, sw_end=CF.SW_BY_ROLE)
+    d = CF.cross_complete_block_reversed(ctx2, B2, A2, sw_end=CF.SW_BY_PARTS)
+    assert not np.array_equal(c, d)
+
+
+@pytest.mark.slow
+def test_the_two_trunk_lanes_agree_on_galerkin_axes():
+    """Dense vs the #688 admissibility split, reversed, both media."""
+    f = _reversed_setup()
+    for ground_eps in ((1.0, 0.0), SOIL_A):
+        ctx = f["rs"]._crossing_context(f["geom"], ground_eps=ground_eps)
+        A, B = CF.axis_data(ctx, f["a_idx"]), CF.axis_data(ctx, f["b_idx"])
+        dense = CF.cross_complete_block_reversed(ctx, B, A)
+        split = CF.cross_complete_block_reversed_split(
+            ctx, f["b_idx"], f["a_idx"], B, A
+        )
+        rel = np.abs(dense - split).max() / np.abs(dense).max()
+        assert rel < BAR_LANES, (ground_eps, rel)
+
+
+def test_the_split_refuses_a_path_tested_axis():
+    """The trap this unit found and did not leave armed.
+
+    The split's far blocks ride COARSE axes rebuilt by `axis_data` from the
+    context's basis, and a testing path has no coarse spelling — so a
+    path-tested axis silently gets Galerkin tents on exactly those blocks.
+    Measured 2.04e-01 relative, in BOTH directions, on `crossing_deck(1)`.
+    It is pre-existing on the forward split (half 1's gates are all dense, so
+    nothing hit it) and it would have reached half 2's masked assembly.
+    """
+    f = _reversed_setup()
+    ctx = f["rs"]._crossing_context(f["geom"], ground_eps=(1.0, 0.0))
+    P = CF.path_test_axis(
+        f["geom"]["n_basis_total"],
+        f["rs"]._path_test_rows(f["geom"], f["bases_below"]),
+    )
+    Q = CF.axis_data(ctx, f["a_idx"])
+    assert P.get("path_tested") is True
+    assert not Q.get("path_tested")
+    with pytest.raises(ValueError, match="path-tested axis"):
+        CF.cross_complete_block_reversed_split(ctx, f["b_idx"], f["a_idx"], P, Q)
+    with pytest.raises(ValueError, match="path-tested axis"):
+        CF.cross_complete_block_split(ctx, f["a_idx"], f["b_idx"], P, Q)
