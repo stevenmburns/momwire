@@ -38,7 +38,8 @@ Scope guards this module inherits from the derivation:
     is the corner's regularization and a per-pair radius has no pinned
     convention yet.
 
-`bspline.BSplineSolver._compute_Z_operator_buried` is the only caller.
+`bspline.BSplineSolver._compute_Z_operator_buried` is the only caller today;
+it hands the fill a `CrossingContext` (below) rather than itself (momwire#801).
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ from typing import NamedTuple
 import numpy as np
 from numpy.polynomial.legendre import leggauss
 
-from . import _aca, _near_interface
+from . import _aca, _ground_refl, _near_interface, _sommerfeld_below
 from ._sommerfeld_transmitted import _c1_moment
 
 
@@ -74,6 +75,97 @@ class NodeArm(NamedTuple):
     wire: int
     end: str
     side: str
+
+
+# ---------------------------------------------------------------------------
+# What the fill takes from a solver, as data (momwire#801).
+#
+# The fill was written against `BSplineSolver` by address — eight attribute
+# reads and five geometry keys — and the G1-3 probe (momwire#651) found that
+# only ONE of them is bspline-shaped: `axis_data`'s reading of the basis as
+# per-segment polynomials. Everything after the axis dict consumes the dict
+# and physical scalars. So the solver is replaced by a `CrossingContext`, and
+# any formulation whose basis is piecewise-polynomial on the segments (a
+# degree-1 tent is `c0 + c1·u` on each of its two support segments) can
+# hand the fill what it needs without the fill knowing the formulation.
+#
+# What the context does NOT abstract: the fill tests with the basis it
+# expands with (axis A's `F`/`Fd` are the test rows), and its by-parts end
+# terms and corner are derived for value-1 tents standing at wire ends. A
+# formulation that tests differently (razor's path integrals) needs its own
+# test-side axis dict; that is the buried arc's next probe, not this seam.
+
+
+class BasisPolynomials(NamedTuple):
+    """The basis as per-segment polynomials in each segment's local arc
+    coordinate `u ∈ [0, h]` measured from `seg_l`.
+
+    `supp_seg[m, a]` is the global segment index of basis `m`'s `a`-th
+    support segment (rows zero-padded; a slot is live only if its polynomial
+    is nonzero — the padding trap `axis_data` guards); `polys[m, a, p]` is
+    the coefficient of `u**p`, `p ≤ degree`.
+    """
+
+    supp_seg: np.ndarray
+    polys: np.ndarray
+    degree: int
+
+
+class AxisGeometry(NamedTuple):
+    """The five geometry columns the fill reads, in global segment order."""
+
+    seg_l: np.ndarray  # (n_seg, 3) segment start points
+    seg_r: np.ndarray  # (n_seg, 3) segment end points
+    h: np.ndarray  # (n_seg,) segment lengths
+    tangents: np.ndarray  # (n_seg, 3) unit tangents seg_l → seg_r
+    seg_offsets: np.ndarray  # (n_wires + 1,) first global segment per wire
+
+
+class Medium(NamedTuple):
+    """`(eps_t, eps_m, k_p, k_m, c2, a_m)` for a buried solve — what
+    `BSplineSolver._buried_medium` returned, as a record with names."""
+
+    eps_t: complex  # the ground's RELATIVE ε̃(ω)
+    eps_m: complex  # ε₀·ε̃, what the lower medium's Φ term divides by
+    k_p: float  # free-space wavenumber
+    k_m: complex  # in-medium wavenumber, Im ≤ 0
+    c2: complex  # the ±=+ family's exact-image coefficient
+    a_m: complex  # the ±=− family's, `image_coefficient_below`
+
+
+def buried_medium(ground_eps, omega, eps, k):
+    """The `Medium` for a buried solve, from the ground spec and the
+    wavenumber alone. `c2` and `a_m` are measured, not derived, and the
+    negative of each other — exactly the kind of coincidence a sign scan
+    exists to keep honest (`_sommerfeld_below.image_coefficient_below`)."""
+    eps_t = _ground_refl.eps_tilde(ground_eps, omega, eps)
+    k_p = float(k)
+    return Medium(
+        eps_t,
+        eps * eps_t,
+        k_p,
+        _sommerfeld_below.k_medium(eps_t, k_p),
+        (eps_t - 1.0) / (eps_t + 1.0),
+        _sommerfeld_below.image_coefficient_below(eps_t),
+    )
+
+
+class CrossingContext(NamedTuple):
+    """Everything the crossing fill reads, and nothing else.
+
+    Built by the caller (`BSplineSolver._crossing_context`) from its own
+    state. `a_wire` is the deck's ONE wire radius — the scope guard in the
+    module docstring — and `ground_z` the interface height.
+    """
+
+    basis: BasisPolynomials
+    geom: AxisGeometry
+    medium: Medium
+    ground_z: float
+    a_wire: float
+    omega: float
+    mu: float
+    eps: float
 
 
 # WHAT IS GATED, and why it is not the node-adjacent segment.
@@ -317,7 +409,7 @@ def _graded_u(h, toward_end, a, growth=2.0, gx=_GX8, gw=_GW8):
     return u, w
 
 
-def axis_data(s, geom, seg_idx, coarse=False):
+def axis_data(ctx, seg_idx, coarse=False):
     """Everything one axis of the crossing blocks needs: quadrature nodes,
     per-node tangents and weights, per-basis value/derivative samples, and
     the signed wire-end table for the by-parts terms.
@@ -335,22 +427,23 @@ def axis_data(s, geom, seg_idx, coarse=False):
     exists only for admissible blocks and must never be fed to the
     ends/corner terms.
     """
-    d = s.degree
+    d = ctx.basis.degree
+    geom = ctx.geom
     q = _FAR_Q if coarse else _NEAR_Q
     xg, wg = leggauss(q)
     tq = 0.5 * (xg + 1.0)
-    gz = float(s.ground_z)
-    a_wire = float(s._radius_per_wire[0])
+    gz = float(ctx.ground_z)
+    a_wire = float(ctx.a_wire)
     tol = 1e-12
 
-    supp_seg, polys, *_ = s._build_basis_polynomials(geom)
+    supp_seg, polys = ctx.basis.supp_seg, ctx.basis.polys
     n_basis = polys.shape[0]
 
     nodes_l, t_l, w_l, u_l, segpos = [], [], [], [], []
     for g in seg_idx:
-        sl, sr = geom["seg_l"][g], geom["seg_r"][g]
-        h = geom["h_per_seg"][g]
-        tang = geom["tangents"][g]
+        sl, sr = geom.seg_l[g], geom.seg_r[g]
+        h = geom.h[g]
+        tang = geom.tangents[g]
         if abs(tang[2]) > _TILT_TOL and np.hypot(tang[0], tang[1]) > _TILT_TOL:
             raise NotImplementedError(
                 "crossing fill: tilted segments need the tilt tables — the "
@@ -410,7 +503,7 @@ def axis_data(s, geom, seg_idx, coarse=False):
     # Signed wire-end table: (point, sign, per-basis value there). σ = −1
     # at a wire's first segment's u = 0 end, +1 at its last segment's
     # u = h end — the by-parts orientation the derivation pinned.
-    seg_off = geom["seg_offsets"]
+    seg_off = geom.seg_offsets
     ends = []
     on_axis = set(int(g) for g in seg_idx)
     for w in range(len(seg_off) - 1):
@@ -418,11 +511,9 @@ def axis_data(s, geom, seg_idx, coarse=False):
         if first not in on_axis:
             continue
         for gseg, sign, u_end in ((first, -1.0, 0.0), (last, +1.0, None)):
-            hh = geom["h_per_seg"][gseg]
+            hh = geom.h[gseg]
             u = hh if u_end is None else 0.0
-            pt = geom["seg_l"][gseg] + (u / hh) * (
-                geom["seg_r"][gseg] - geom["seg_l"][gseg]
-            )
+            pt = geom.seg_l[gseg] + (u / hh) * (geom.seg_r[gseg] - geom.seg_l[gseg])
             fv = np.zeros(n_basis)
             for m in range(n_basis):
                 for a_ in range(supp_seg.shape[1]):
@@ -442,24 +533,24 @@ def axis_data(s, geom, seg_idx, coarse=False):
     )
 
 
-def _tables(s, eps_t, k_p, rho, z, zp, rtol, memo=None):
+def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None):
     """Designed tables with the deck's wire radius folded in, z relative
     to the interface. `memo` extends the exact-triple dedup across calls
     (one fill = one memo; ε̃, k₂, rtol fixed for its lifetime)."""
-    a_wire = float(s._radius_per_wire[0])
+    a_wire = float(ctx.a_wire)
     return _near_interface.radius_tables(
         eps_t, k_p, rho, z, zp, a_wire, rtol=rtol, memo=memo
     )
 
 
-def cross_complete_block(s, geom, A, B):
+def cross_complete_block(ctx, A, B):
     """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
     on designed kernels. Returns the full (n_basis, n_basis) block in the
     subtracting field-block convention (`Z -= t_ab`; t_ba is the transpose
     by reciprocity, measured, not assumed, by the phase-2 probes)."""
-    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = s._buried_medium()
-    gz = float(s.ground_z)
-    c1 = _c1_moment(s.omega, s.mu)
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    c1 = _c1_moment(ctx.omega, ctx.mu)
     k2sq = k_p * k_p
 
     dx = A["nodes"][:, 0][:, None] - B["nodes"][:, 0][None, :]
@@ -467,7 +558,7 @@ def cross_complete_block(s, geom, A, B):
     rho = np.hypot(dx, dy)
     z = np.broadcast_to((A["nodes"][:, 2] - gz)[:, None], rho.shape)
     zp = np.broadcast_to((B["nodes"][:, 2] - gz)[None, :], rho.shape)
-    tables = _tables(s, eps_t, k_p, rho, z, zp, _CROSS_RTOL)
+    tables = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL)
     U, V, W, dzW = tables["U"], tables["V"], tables["W"], tables["dzW"]
 
     wA, wB = A["w"], B["w"]
@@ -482,11 +573,11 @@ def cross_complete_block(s, geom, A, B):
     s_w2 = FdA_w @ W @ (FB_w * tzB).T
     s_phi = -FdA_w @ V @ FdB_w.T
     t_ab = c1 * (s_u + s_zz + s_w1 + s_w2 + s_phi)
-    t_ab += _ends_and_corner(s, A, B, eps_t, k_p, c1, gz)
+    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz)
     return t_ab
 
 
-def _ends_and_corner(s, A, B, eps_t, k_p, c1, gz, memo=None):
+def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     """The by-parts end terms + the designed corner, on the DENSE axes —
     linear in axis size, so the admissibility split never touches them
     (and the corner must never see coarse axes or a low-rank pass; its
@@ -502,7 +593,7 @@ def _ends_and_corner(s, A, B, eps_t, k_p, c1, gz, memo=None):
     for pt, sign, fv in A["ends"]:
         rho_e = np.hypot(pt[0] - B["nodes"][:, 0], pt[1] - B["nodes"][:, 1])
         te = _tables(
-            s,
+            ctx,
             eps_t,
             k_p,
             rho_e,
@@ -515,7 +606,7 @@ def _ends_and_corner(s, A, B, eps_t, k_p, c1, gz, memo=None):
     for pt, sign, fv in B["ends"]:
         rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
         te = _tables(
-            s,
+            ctx,
             eps_t,
             k_p,
             rho_e,
@@ -538,7 +629,7 @@ def _ends_and_corner(s, A, B, eps_t, k_p, c1, gz, memo=None):
     # INTERFACE corner, so it applies only to end pairs that BOTH stand
     # in the plane — an end elsewhere (the P3 fan's below-hub junction)
     # carries its by-parts terms above but no corner.
-    a_wire = float(s._radius_per_wire[0])
+    a_wire = float(ctx.a_wire)
     v_corner = None
     for pt_a, sig_a, fv_a in A["ends"]:
         if abs(pt_a[2] - gz) > 1e-12:
@@ -589,13 +680,13 @@ def _axis_segment_tree(geom, seg_idx, leaf):
     Cluster indices are positions into `seg_idx`; returns (tree, seg_idx
     as an array) so callers can map back to global segment ids."""
     idx = np.asarray(seg_idx, dtype=np.int64)
-    lo = np.minimum(geom["seg_l"][idx], geom["seg_r"][idx])
-    hi = np.maximum(geom["seg_l"][idx], geom["seg_r"][idx])
+    lo = np.minimum(geom.seg_l[idx], geom.seg_r[idx])
+    hi = np.maximum(geom.seg_l[idx], geom.seg_r[idx])
     tree = _aca.build_cluster_tree(np.arange(idx.size), lo, hi, leaf)
     return tree, idx
 
 
-def cross_complete_block_split(s, geom, a_idx, b_idx, A, B):
+def cross_complete_block_split(ctx, a_idx, b_idx, A, B):
     """`cross_complete_block` through the #688 admissibility split.
 
     The (above segments × below segments) product is partitioned by the
@@ -613,23 +704,23 @@ def cross_complete_block_split(s, geom, a_idx, b_idx, A, B):
     axes direct, always — they are linear in axis size and the corner
     routes through neither coarse axes nor the low-rank pass."""
     if _FORCE_DENSE:
-        return cross_complete_block(s, geom, A, B)
+        return cross_complete_block(ctx, A, B)
 
-    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = s._buried_medium()
-    gz = float(s.ground_z)
-    c1 = _c1_moment(s.omega, s.mu)
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    c1 = _c1_moment(ctx.omega, ctx.mu)
     k2sq = k_p * k_p
 
-    tree_a, seg_a = _axis_segment_tree(geom, a_idx, _CLUSTER_LEAF_SEGS)
-    tree_b, seg_b = _axis_segment_tree(geom, b_idx, _CLUSTER_LEAF_SEGS)
+    tree_a, seg_a = _axis_segment_tree(ctx.geom, a_idx, _CLUSTER_LEAF_SEGS)
+    tree_b, seg_b = _axis_segment_tree(ctx.geom, b_idx, _CLUSTER_LEAF_SEGS)
     far, near = _aca.build_block_tree(tree_a, tree_b, _ADM_ETA)
 
     t_main = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
     memo = {}  # one fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here)
 
     if far:
-        Ac = axis_data(s, geom, a_idx, coarse=True)
-        Bc = axis_data(s, geom, b_idx, coarse=True)
+        Ac = axis_data(ctx, a_idx, coarse=True)
+        Bc = axis_data(ctx, b_idx, coarse=True)
 
     # ---- direct blocks: near pairs on the dense axes + small far blocks
     # on the coarse axes (sampling a small block costs more than its full
@@ -665,7 +756,7 @@ def cross_complete_block_split(s, geom, a_idx, b_idx, A, B):
             z_cat.append(np.repeat(pa[:, 2] - gz, iB.size))
             zp_cat.append(np.tile(pb[:, 2] - gz, iA.size))
         tab = _tables(
-            s,
+            ctx,
             eps_t,
             k_p,
             np.concatenate(rho_cat),
@@ -697,7 +788,7 @@ def cross_complete_block_split(s, geom, a_idx, b_idx, A, B):
         def _row6(i, rho=rho, zA=zA, zB=zB, rows=rows, n=n):
             if i not in rows:
                 te = _tables(
-                    s,
+                    ctx,
                     eps_t,
                     k_p,
                     rho[i],
@@ -712,7 +803,7 @@ def cross_complete_block_split(s, geom, a_idx, b_idx, A, B):
         def _col6(j, rho=rho, zA=zA, zB=zB, cols=cols, m=m):
             if j not in cols:
                 te = _tables(
-                    s,
+                    ctx,
                     eps_t,
                     k_p,
                     rho[:, j],
@@ -751,7 +842,7 @@ def cross_complete_block_split(s, geom, a_idx, b_idx, A, B):
         )
 
     t_ab = c1 * t_main
-    t_ab += _ends_and_corner(s, A, B, eps_t, k_p, c1, gz, memo=memo)
+    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo)
     return t_ab
 
 
@@ -796,15 +887,15 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     return bnd, corner
 
 
-def self_completions(s, geom, ax_b, ax_a):
+def self_completions(ctx, ax_b, ax_a):
     """The self families' missing bnd + corner content, both media, on
     graded axes. Returned as the ADDITIVE Z correction (the fill's
     `Z -= image` convention already folded in: β_dir·(bnd+cor)(G_dir)
     − β_img·(bnd+cor)(G_img) per family)."""
-    _eps_t, eps_m, k_p, k_m, c2, a_m = s._buried_medium()
-    gz = float(s.ground_z)
-    a_wire = float(s._radius_per_wire[0])
-    omega, eps0 = s.omega, s.eps
+    _eps_t, eps_m, k_p, k_m, c2, a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    a_wire = float(ctx.a_wire)
+    omega, eps0 = ctx.omega, ctx.eps
     total = np.zeros((ax_b["n_basis"],) * 2, dtype=np.complex128)
     for ax, k, wgt, eps in ((ax_b, k_m, a_m, eps_m), (ax_a, k_p, c2, eps0)):
         bnd_dir, cor_dir = _bnd_and_corner(ax, k, a_wire, gz, mirror=False)

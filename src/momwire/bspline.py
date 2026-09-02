@@ -1540,6 +1540,29 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 out.append(_crossing_fill.NodeArm(h_resolved, h_adjacent, w, end, side))
         return out
 
+    def _crossing_context(self, geom, supp_seg, polys):
+        """What the crossing fill reads off this solver, as data
+        (momwire#801): the basis as per-segment polynomials, the five
+        geometry columns, the buried medium, and the four scalars. The
+        fill never sees the solver; any formulation with a
+        piecewise-polynomial basis can build the same record."""
+        return _crossing_fill.CrossingContext(
+            basis=_crossing_fill.BasisPolynomials(supp_seg, polys, self.degree),
+            geom=_crossing_fill.AxisGeometry(
+                geom["seg_l"],
+                geom["seg_r"],
+                geom["h_per_seg"],
+                geom["tangents"],
+                geom["seg_offsets"],
+            ),
+            medium=self._buried_medium(),
+            ground_z=float(self.ground_z),
+            a_wire=float(self._radius_per_wire[0]),
+            omega=self.omega,
+            mu=self.mu,
+            eps=self.eps,
+        )
+
     def _grounded_junctions(self):
         """Indices of junctions whose shared point lies in the ground plane.
 
@@ -4371,15 +4394,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         of `c2`, which is exactly the kind of coincidence a sign scan exists
         to keep honest (`_sommerfeld_below.image_coefficient_below`).
         """
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
-        k_p = float(self.k)
-        return (
-            eps_t,
-            self.eps * eps_t,
-            k_p,
-            _sommerfeld_below.k_medium(eps_t, k_p),
-            (eps_t - 1.0) / (eps_t + 1.0),
-            _sommerfeld_below.image_coefficient_below(eps_t),
+        return _crossing_fill.buried_medium(
+            self.ground_eps, self.omega, self.eps, self.k
         )
 
     def _n_qp_buried_field(self):
@@ -4898,14 +4914,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # the node and the AGARD slope condition then emerge from
             # the fill with no constraint row and no merged dof.
             self._checkpoint()
-            ax_a = _crossing_fill.axis_data(self, geom, a_idx)
-            ax_b = _crossing_fill.axis_data(self, geom, b_idx)
+            ctx = self._crossing_context(geom, supp_seg, polys)
+            ax_a = _crossing_fill.axis_data(ctx, a_idx)
+            ax_b = _crossing_fill.axis_data(ctx, b_idx)
             t_ab = _crossing_fill.cross_complete_block_split(
-                self, geom, a_idx, b_idx, ax_a, ax_b
+                ctx, a_idx, b_idx, ax_a, ax_b
             )
             Z -= t_ab
             Z -= t_ab.T
-            Z += _crossing_fill.self_completions(self, geom, ax_b, ax_a)
+            Z += _crossing_fill.self_completions(ctx, ax_b, ax_a)
         elif a_idx.size:
             grid_t = _sommerfeld_transmitted.get_grid_below_above(
                 eps_t,
