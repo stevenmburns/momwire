@@ -17,6 +17,19 @@ The two calls it reproduces are read off `nec2/Execute.testCommand` and
 On Unix the probe does **not** touch the child's environment. The
 `Examples/Utils` PATH prepend happens only on Windows.
 
+## The short one, for sending to someone
+
+`SimNECProbe.java` is the same two launches in under 50 lines, with no
+threads, no timeouts and no options, so a recipient can read the whole thing
+before running it. It prints the probe's exit code and stderr, then submits
+one dipole deck to the resident daemon and prints how that ended:
+
+```
+java SimNECProbe.java /absolute/path/to/momwire-nec2c-bspline
+```
+
+Everything below is the full driver, which exists for CI.
+
 ## Run it
 
 Java 11 or newer, no build step:
