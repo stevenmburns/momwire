@@ -30,7 +30,7 @@ port-algebra route's zero-volt gap and serves a load through its own
 the ``LoadSpec`` into the fill itself rather than leaving it on the plan for
 a consumer to stamp — :attr:`PortPlan.loaded_ports` still names the site (the
 plan does not change shape by basis), but nothing further needs doing with
-it when the basis is ``"razor"`` or ``"razor-nec5"``.
+it when the basis is ``"razor-2p"`` or ``"razor-nec5"``.
 
 **One geometry, every group.**  The port set is the union over every execute
 group, so a deck with two ``XQ`` cards under two different ``EX`` sets is one
@@ -88,16 +88,20 @@ _C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 # with two spellings of one dish is what that issue was about.  "bspline" is
 # the degree-2 B-spline — the default here as it is there.
 #
-# "razor" (momwire#432) is the NEC-5 formulation twin — see
-# ``docs/razor-solver.md``. "razor-nec5" is the quadrature-lane variant
+# `razor-2p` (momwire#432) is the NEC-5 formulation twin — see
+# ``docs/razor-solver.md``. "razor-nec5" is its deprecated spelling
 # (momwire#316): same class, `nec5_quadrature=True`, the same "one class,
-# one extra kwarg" shape `bspline-d1` set for a degree axis. RazorSolver's
-# translation differs from every sibling's in two ways both dialect front
-# ends have to know about (`port_kwargs`): it is given no `junctions` spec,
-# and it serves a lumped load as its own `lumped_loads` kwarg rather than as
-# a deck-level port-algebra site, which is why it is keyed by CLASS in
-# `_NATIVE_LOADING` rather than threaded through `basis_kwargs` here — a
-# future razor variant inherits the translation for free.
+# one extra kwarg" shape `bspline-d1` set for a degree axis. Plain `razor` —
+# the Gauss-Legendre testing-path lane of the same class — retired from this
+# roster at momwire#753; it is still reached by constructing
+# `RazorSolver(...)` directly, whose `nec5_quadrature` kwarg defaults to
+# `False`. RazorSolver's translation differs from every sibling's in two ways
+# both dialect front ends have to know about (`port_kwargs`): it is given no
+# `junctions` spec, and it serves a lumped load as its own `lumped_loads`
+# kwarg rather than as a deck-level port-algebra site, which is why it is
+# keyed by CLASS in `_NATIVE_LOADING` rather than threaded through
+# `basis_kwargs` here — a future razor variant inherits the translation for
+# free.
 BASES = MappingProxyType(
     {
         "bspline": (BSplineSolver, MappingProxyType({})),
@@ -115,20 +119,18 @@ BASES = MappingProxyType(
         # roster entry is a menu item, and this menu had two spellings of one
         # dish with no way to tell them apart from the outside.
         "sinusoidal-galerkin": (SinusoidalGalerkinSolver, MappingProxyType({})),
-        # Two razor lanes, one class, differing ONLY in where the testing path
-        # is sampled: `razor` takes `n_qp_path` Gauss-Legendre nodes per wing,
         # `razor-2p` takes NEC-5's identified two-point trapezoid at the wing
-        # centroids (momwire#316). `_path_nodes_per_wing` is, in its own words,
-        # "the one place the two lanes differ".
-        #
-        # `razor-2p` IS THE ONE TO REACH FOR, and the only one antennaknobs'
-        # engine picker offers. Measured on the ByDipole1 ladder, the two agree
-        # to within 3% of each other's self-convergence by N=384 having been 2x
-        # apart at N=12 — the Gauss-Legendre rule's advantage evaporates by
-        # N~192 — while costing ~10x the wall time (momwire#780). `razor` stays
-        # for convergence and certification work, where paying that is the
-        # point.
-        "razor": (RazorSolver, MappingProxyType({})),
+        # centroids (momwire#316); `_path_nodes_per_wing` names the rule. The
+        # other lane `RazorSolver` can take — `n_qp_path` Gauss-Legendre
+        # nodes per wing along the same testing path — was this roster's
+        # plain `razor` entry until momwire#753 retired it: the SAME class
+        # differing only in that sampling choice, measured at 20x the wall
+        # time (20.2 s vs 0.97 s at N=1600 free space) for a 0.001 ohm
+        # difference from `razor-2p` — not worth ordering, on momwire#654's
+        # rule that a roster entry is a menu item. It stays reachable for
+        # convergence and certification work by constructing
+        # `RazorSolver(...)` directly, whose `nec5_quadrature` kwarg
+        # defaults to `False`.
         "razor-2p": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
         # DEPRECATED spelling of `razor-2p`, kept because it shipped in the
         # named entry points and in antennaknobs' CLI roster.
