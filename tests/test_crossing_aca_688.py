@@ -45,7 +45,11 @@ def _deck_axes(build):
     below = s._below_segments(geom)
     b_idx = np.nonzero(below)[0]
     a_idx = np.nonzero(~below)[0]
-    return s, geom, a_idx, b_idx
+    # The fill takes a context, not the solver (momwire#801); build it the
+    # way `_compute_Z_operator_buried` does.
+    supp_seg, polys, *_ = s._build_basis_polynomials(geom)
+    ctx = s._crossing_context(geom, supp_seg, polys)
+    return s, ctx, a_idx, b_idx
 
 
 def test_g688_1_partition_is_total_and_corner_adjacent_stays_near():
@@ -53,9 +57,9 @@ def test_g688_1_partition_is_total_and_corner_adjacent_stays_near():
     every far block keeps a strictly positive box gap — so the segments
     meeting at the crossing node (gap 0) can only land near/dense. Also
     pins that the split has teeth: most of the fan deck's area is far."""
-    _s, geom, a_idx, b_idx = _deck_axes(fan_rise_deck())
-    tree_a, seg_a = cf._axis_segment_tree(geom, a_idx, cf._CLUSTER_LEAF_SEGS)
-    tree_b, seg_b = cf._axis_segment_tree(geom, b_idx, cf._CLUSTER_LEAF_SEGS)
+    _s, ctx, a_idx, b_idx = _deck_axes(fan_rise_deck())
+    tree_a, seg_a = cf._axis_segment_tree(ctx.geom, a_idx, cf._CLUSTER_LEAF_SEGS)
+    tree_b, seg_b = cf._axis_segment_tree(ctx.geom, b_idx, cf._CLUSTER_LEAF_SEGS)
     far, near = _aca.build_block_tree(tree_a, tree_b, cf._ADM_ETA)
     seen = np.zeros((len(seg_a), len(seg_b)), dtype=int)
     for cs, ct in far + near:
@@ -111,9 +115,9 @@ def test_g688_3_corner_routes_direct_at_corner_rtol(monkeypatch):
     six_point at (a, 0, 0) with _CORNER_RTOL — never through the memo,
     the coarse axes, or a low-rank factor. Kernels are stubbed to zeros
     so this costs nothing and asserts pure routing."""
-    s, geom, a_idx, b_idx = _deck_axes(fan_rise_deck())
-    A = cf.axis_data(s, geom, a_idx)
-    B = cf.axis_data(s, geom, b_idx)
+    _s, ctx, a_idx, b_idx = _deck_axes(fan_rise_deck())
+    A = cf.axis_data(ctx, a_idx)
+    B = cf.axis_data(ctx, b_idx)
 
     def zero_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=0.0, memo=None):
         shape = np.broadcast(
@@ -129,7 +133,7 @@ def test_g688_3_corner_routes_direct_at_corner_rtol(monkeypatch):
         return np.ones(6, dtype=np.complex128)
 
     monkeypatch.setattr(_near_interface, "six_point", spy_six)
-    cf.cross_complete_block_split(s, geom, a_idx, b_idx, A, B)
+    cf.cross_complete_block_split(ctx, a_idx, b_idx, A, B)
     assert corner_calls == [(A_WIRE, 0.0, 0.0, cf._CORNER_RTOL)]
 
 
@@ -147,11 +151,11 @@ def test_g688_4_split_matches_dense_on_the_adjudication_decks(record_property):
     with the integrated gates green is exactly the conditioning-defect
     signature this row exists to catch."""
     for name, build in (("g1", crossing_deck(1)), ("fan", fan_rise_deck())):
-        s, geom, a_idx, b_idx = _deck_axes(build)
-        A = cf.axis_data(s, geom, a_idx)
-        B = cf.axis_data(s, geom, b_idx)
-        dense = cf.cross_complete_block(s, geom, A, B)
-        split = cf.cross_complete_block_split(s, geom, a_idx, b_idx, A, B)
+        _s, ctx, a_idx, b_idx = _deck_axes(build)
+        A = cf.axis_data(ctx, a_idx)
+        B = cf.axis_data(ctx, b_idx)
+        dense = cf.cross_complete_block(ctx, A, B)
+        split = cf.cross_complete_block_split(ctx, a_idx, b_idx, A, B)
         rel = float(np.abs(split - dense).max() / np.abs(dense).max())
         record_property(f"{name}_block_rel", f"{rel:.3e}")
         assert rel <= 1e-6, (
@@ -183,11 +187,11 @@ def test_g688_5_dense_mesh_engages_low_rank_and_holds_parity(
     monkeypatch.setattr(_aca, "aca_partial", spy)
     build = fan_rise_deck()
     build["n_per_edge_per_wire"] = [[20, 6] for _ in range(4)] + [[30]]
-    s, geom, a_idx, b_idx = _deck_axes(build)
-    A = cf.axis_data(s, geom, a_idx)
-    B = cf.axis_data(s, geom, b_idx)
-    dense = cf.cross_complete_block(s, geom, A, B)
-    split = cf.cross_complete_block_split(s, geom, a_idx, b_idx, A, B)
+    _s, ctx, a_idx, b_idx = _deck_axes(build)
+    A = cf.axis_data(ctx, a_idx)
+    B = cf.axis_data(ctx, b_idx)
+    dense = cf.cross_complete_block(ctx, A, B)
+    split = cf.cross_complete_block_split(ctx, a_idx, b_idx, A, B)
     rel = float(np.abs(split - dense).max() / np.abs(dense).max())
     record_property("aca_blocks", str(len(ranks) // len(cf._CROSS_KEYS)))
     record_property("rank_max", str(max(ranks) if ranks else 0))
