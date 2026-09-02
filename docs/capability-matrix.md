@@ -200,7 +200,7 @@ renders in host dialogs.
 
 - `RazorSolver` `buried`
 
-  > RazorSolver has no buried fill: the momwire#553 buried serve (direct + image + Sommerfeld-remainder blocks in the lower medium) is written for BSplineSolver's testing side only. A detached buried wire is a LEGAL deck - solve it with BSplineSolver, which serves buried ground since momwire#553, or raise the wire clear of the plane. Razor consuming the basis-agnostic buried tables is momwire#651's continuation
+  > RazorSolver has no buried fill: the momwire#553 buried serve (direct + image + Sommerfeld-remainder blocks in the lower medium) is written for BSplineSolver's testing side only. A detached buried wire is a LEGAL deck - solve it with BSplineSolver, which serves buried ground since momwire#553, or raise the wire clear of the plane. Razor's own below-plane fill exists since momwire#812 (the lower-medium family behind `_SERVE_BELOW_PLANE`, wholly-below decks only); the crossing block on razor rows (momwire#813) and the roster flip (momwire#814) are what turn this cell True; the arc is momwire#651
 
 - `RazorSolver` `junction_ports`
 

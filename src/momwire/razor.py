@@ -337,6 +337,8 @@ it on, and each is gated with it on.
 from dataclasses import dataclass
 import os
 
+import math
+
 import numpy as np
 import scipy.linalg
 
@@ -346,6 +348,7 @@ from . import (
     _ground_spec,
     _medium_spec,
     _potential_ground,
+    _sommerfeld_below,
     _wire_loading,
     _wire_spec,
 )
@@ -447,6 +450,11 @@ _HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
 # reason: a .so built before #744 landed exports `razor_assemble_t1` and not
 # its weighted twin, and one symbol must never be read as vouching for the
 # other.
+# momwire#812 (razor buried, unit 1): serve a WHOLLY-below deck through the
+# lower-medium family. Off by default — the public refusal stands until unit 3
+# flips the capability cell — and flipped by the unit's own gates.
+_SERVE_BELOW_PLANE = False
+
 _HAVE_RAZOR_WEIGHTED_ACCEL = _acc is not None and bool(
     getattr(_acc, "razor_weighted_744", False)
 )
@@ -554,8 +562,11 @@ _BURIED_FILL_REFUSAL = (
     "written for BSplineSolver's testing side only. A detached "
     "buried wire is a LEGAL deck - solve it with BSplineSolver, "
     "which serves buried ground since momwire#553, or raise the "
-    "wire clear of the plane. Razor consuming the basis-agnostic "
-    "buried tables is momwire#651's continuation"
+    "wire clear of the plane. Razor's own below-plane fill exists since "
+    "momwire#812 (the lower-medium family behind `_SERVE_BELOW_PLANE`, "
+    "wholly-below decks only); the crossing block on razor rows "
+    "(momwire#813) and the roster flip (momwire#814) are what turn this "
+    "cell True; the arc is momwire#651"
 )
 
 
@@ -1232,6 +1243,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # is cached per geometry object and per mirror flag, exactly as
         # `BSplineSolver._ek_axis_labels` caches it.
         self.extended_kernel = bool(extended_kernel)
+        if getattr(self, "_below_plane", False) and self.extended_kernel:
+            # momwire#812: NEC's O(a²) tube expansion was derived in free
+            # space, not in a lossy medium; the below-plane fill declines it.
+            raise ValueError(
+                "razor's below-plane fill does not take the extended kernel: "
+                "NEC's O(a²) tube expansion was derived in free space, not in "
+                "a lossy medium (momwire#812)"
+            )
         self._cached_ek_groups = None
 
         if n_per_edge_per_wire is None:
@@ -1439,14 +1458,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ),
             pec=self.ground_eps is None,
         )
+        self._below_plane = False
         if _medium_spec.BELOW in media:
             w = media.index(_medium_spec.BELOW)
             zmin = float(np.asarray(self.wires_polylines[w])[:, 2].min())
-            raise ValueError(
-                f"wire {w} lies wholly below the ground plane (min z = "
-                f"{zmin:.6g} < ground_z = {gz:g}), and "
-                f"{_BURIED_FILL_REFUSAL}"
-            )
+            if not _SERVE_BELOW_PLANE:
+                raise ValueError(
+                    f"wire {w} lies wholly below the ground plane (min z = "
+                    f"{zmin:.6g} < ground_z = {gz:g}), and "
+                    f"{_BURIED_FILL_REFUSAL}"
+                )
+            # momwire#812, unit 1: the lower-medium family serves a deck that
+            # is wholly below the plane. Mixed media are unit 2's (the
+            # crossing block and the node row), and the extended kernel's
+            # tube expansion was never taken in a medium.
+            if _medium_spec.ABOVE in media:
+                raise ValueError(
+                    "razor serves a wholly-below deck (momwire#812) but not yet "
+                    "one that mixes above and below wires: the crossing block "
+                    "on razor rows is momwire#813"
+                )
+            self._below_plane = True
 
     def _ground_ends(self):
         """Which wire ENDS lie in the ground plane; everything else refused.
@@ -2882,6 +2914,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         reuse one `omega_array` without recomputing it) vary here; every
         other ingredient comes from `prepared` (`_assemble_Z_prepare`).
         """
+        if getattr(self, "_below_plane", False):
+            return self._assemble_Z_below_plane(geom, prepared, k, omega)
         Z = self._assemble_Z_source_block(geom, prepared, prepared, k, omega)
         image = prepared["image"]
         if image is not None:
@@ -2908,8 +2942,91 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
         return Z
 
+    def _assemble_Z_below_plane(self, geom, prepared, k, omega):
+        """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1
+        of the razor buried arc), in the lower-medium family:
+
+            Z = Z_direct(k_m, ε_m) − [ A_m·Z_image(k_m, ε_m) + Q_below ] + L
+
+        It is the composing ground's fold with the medium's numbers in it —
+        the kernel at `k_m = k₂·√ε̃` (the fused moments kernel takes a complex
+        k since momwire#796), Φ under `ε_m = ε₀·ε̃`, the image weighted by
+        `A_m = image_coefficient_below(ε̃)` THROUGH the windows (never applied
+        here: `BelowMediumGround` hands it over as C₂ is handed over), and the
+        below remainder in place of the above one. Nothing else in the fill
+        changes, which is the point: `_assemble_Z_source_block` is called
+        twice exactly as it is over a Sommerfeld ground, with `eps` and the
+        ground object swapped.
+
+        The two serve-plan refusals a buried grid can hit
+        (`_BURIED_PAST_CAP_REFUSAL`, `_BURIED_GRAZING_REFUSAL`) are asked
+        here, before any grid is filled, over segment endpoints and
+        centroids — the same R₁ = hypot(ρ, d + d′) and θ = atan2(d + d′, ρ)
+        `BSplineSolver._buried_serve_plan` asks over its nodes.
+        """
+        from .bspline import _BURIED_GRAZING_REFUSAL, _BURIED_PAST_CAP_REFUSAL
+
+        gz = float(self.ground_z)
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
+        ground = _potential_ground.BelowMediumGround(
+            self, geom, k, omega, eps_tilde=eps_t
+        )
+        k_m, eps_m = ground.k_m, ground.eps_m
+
+        # The plan's two refusals, over endpoints + centroids.
+        seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
+        pts = np.concatenate(
+            [
+                seg_p0,
+                seg_p0 + seg_h[:, None] * seg_t,
+                seg_p0 + 0.5 * seg_h[:, None] * seg_t,
+            ]
+        )
+        d = gz - pts[:, 2]
+        rho = np.hypot(
+            pts[:, 0][:, None] - pts[:, 0][None, :],
+            pts[:, 1][:, None] - pts[:, 1][None, :],
+        )
+        hh = d[:, None] + d[None, :]
+        r1_max = float(np.max(np.hypot(rho, hh)))
+        th_min = float(np.min(np.arctan2(hh, rho)))
+        lam_m = 2.0 * np.pi / abs(k_m)
+        cap = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
+        if r1_max > cap:
+            raise ValueError(
+                _BURIED_PAST_CAP_REFUSAL.format(
+                    r1=r1_max,
+                    wl=r1_max / lam_m,
+                    cap=cap,
+                    capwl=_sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M,
+                    lam_m=lam_m,
+                )
+            )
+        floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
+        if th_min < floor:
+            raise ValueError(
+                _BURIED_GRAZING_REFUSAL.format(
+                    th=math.degrees(th_min),
+                    floor=_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG,
+                    depth=2.0 * float(np.min(d)),
+                )
+            )
+
+        Z = self._assemble_Z_source_block(
+            geom, prepared, prepared, k_m, omega, eps=eps_m
+        )
+        Z -= self._assemble_Z_source_block(
+            geom, prepared, prepared["image"], k_m, omega, ground=ground, eps=eps_m
+        )
+        # Loading last and outside the fold, exactly as above.
+        if prepared["loading"] is not None:
+            self._apply_loading(
+                Z, prepared["loading"], _wire_loading.loading_for(self, omega, geom)
+            )
+        return Z
+
     def _assemble_Z_source_block(
-        self, geom, prepared, sources, k, omega, *, ground=None
+        self, geom, prepared, sources, k, omega, *, ground=None, eps=None
     ):
         """One source set's contribution to the razor-blade matrix.
 
@@ -3038,7 +3155,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     (sources["obs_pts"], sources["obs_tans"]),
                     (sources["src_l"], sources["src_r"], sources["src_t"]),
                     n_moment=2,
-                    n_qp=_remainder_qp(
+                    n_qp=self.n_qp_sommerfeld
+                    if ground.below
+                    else _remainder_qp(
                         sources["obs_pts"],
                         sources["src_l"],
                         sources["src_r"],
@@ -3235,7 +3354,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 rem_int = rem_a * sig_a[None, :] + rem_b * sig_b[None, :]
                 rem_int *= wts[lo:hi].reshape(-1)[:, None]
                 Q[lo:hi] = rem_int.reshape(hi - lo, n_path, n_basis).sum(axis=1)
-        block = 1j * omega * self.mu * T1 - T2 / (1j * omega * self.eps)
+        # `eps` is the medium's (momwire#812's lower medium hands ε_m); the
+        # default is the free-space ε₀ every other call passes implicitly.
+        eps_here = self.eps if eps is None else eps
+        block = 1j * omega * self.mu * T1 - T2 / (1j * omega * eps_here)
         if Q is None:
             return block
         # `C2·img + Q`, associated BEFORE the seam's single minus — the
