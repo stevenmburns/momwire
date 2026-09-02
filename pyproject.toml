@@ -191,9 +191,28 @@ addopts = ["-m", "not slow and not memgate and not integration",
 pythonpath = ["."]
 
 [tool.cibuildwheel]
-# Modern CPython only. requires-python is >=3.8, but 3.8/3.9 predate the
-# AVX2-baseline target; 3.10+ matches the "modern Linux/Windows" goal.
-build = "cp310-* cp311-* cp312-* cp313-* cp314-*"
+# Modern CPython only. requires-python is >=3.10, and 3.8/3.9 would predate
+# the AVX2-baseline target anyway; 3.10+ matches the "modern Linux/Windows"
+# goal.
+#
+# cp315 builds against the CPython 3.15.0rc1 that cibuildwheel 4.2.0 bundles.
+# The rc is ABI-frozen against the October final, so a wheel built now keeps
+# loading once 3.15.0 ships. The stack was ready before the interpreter:
+# pybind11 3.1.0 classifies 3.15, and numpy 2.5.2 / scipy 1.18.1 both publish
+# cp315, so nothing here waits on a dependency.
+#
+# One judgement call is baked in. PEP 831 turns frame pointers ON by default
+# in 3.15, and the flags live in BASECFLAGS specifically so they reach
+# third-party extensions through sysconfig -- this one included. So the cp315
+# wheel's codegen is not the cp314 wheel's: one general-purpose register
+# fewer on x86-64. CPython measures 1.5-1.9% geomean there (0.1-0.5% on
+# Apple silicon), but that is an INTERPRETER benchmark and says little about
+# these kernels, where the vector work sits in ymm registers that losing rbp
+# does not touch. Unmeasured here, deliberately shipped anyway: the profiling
+# it buys across the Python/C++ boundary is worth more than a sub-2% ceiling.
+# If a measurement ever says otherwise, setup.py can opt this extension out
+# with a trailing -fomit-frame-pointer (last flag wins under gcc and clang).
+build = "cp310-* cp311-* cp312-* cp313-* cp314-* cp315-*"
 # 64-bit glibc Linux + 64-bit Windows only. Skip musllinux (Alpine/musl has no
 # libmvec, and the -lmvec link in setup.py would fail), 32-bit, and PyPy.
 skip = "*-musllinux_* *_i686 *-win32 pp*"
