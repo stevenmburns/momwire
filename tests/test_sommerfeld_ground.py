@@ -1114,6 +1114,31 @@ def test_the_near_image_gather_does_not_depend_on_the_partition():
     assert np.array_equal(got, whole)
 
 
+def test_the_near_image_block_cache_holds_one_k():
+    """The fast solvers' near-image cache is bounded across a sweep.
+
+    `compute_impedance_swept` walks `_set_k` on ONE solver object, and an
+    edge's analytic block is `(d+1)^2 N^2` complex. A cache keyed on k would
+    keep every frequency's blocks alive for the whole sweep — measured 5
+    blocks, 2.9 MB, after a five-point sweep at N = 64 on momwire#634's first
+    cut. It must hold only the current k, and each swept answer must still
+    be the fresh-solver answer at that k (the eviction is not stale).
+    """
+    kw = _grazing_wire(1.09e-4 * _GRAZE_WL, n_seg=16)
+    s = HMatrixSolver(**kw)
+    s._swept_prefers_dense = lambda: False  # the block route, on purpose
+    ks = s.k * np.array([0.97, 1.0, 1.03])
+    z_swept = s.compute_impedance_swept(ks)
+    k_held, blocks = s._cached_near_image_blocks
+    assert k_held == complex(ks[-1])
+    assert list(blocks) == [0]
+    for kk, z in zip(ks, z_swept, strict=True):
+        fresh = HMatrixSolver(**kw)
+        fresh._set_k(kk)
+        z_fresh, _ = fresh.compute_impedance()
+        assert abs(z - z_fresh) <= 1e-9 * abs(z_fresh), f"k={kk}: {z} vs {z_fresh}"
+
+
 def test_the_near_image_overwrite_is_inert_off_grazing():
     """Nothing moves where there is no near image.
 

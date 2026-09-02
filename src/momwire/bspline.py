@@ -1141,7 +1141,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # which segments are on one. Both are properties of the deck
         # (and, for the blocks, of k), not of any partition.
         self._cached_near_image_spans: tuple | None = None
-        self._cached_near_image_blocks: dict = {}
+        self._cached_near_image_blocks: tuple | None = None  # (k, {edge: block})
         # Per-wire medium labels (momwire#553 U5): geometry plus the three
         # ground kwargs, all frozen after __init__, so one answer per solver.
         self._cached_wire_media: tuple | None = None
