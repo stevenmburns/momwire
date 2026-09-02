@@ -217,6 +217,50 @@ _WIRE_LOADING_REFUSAL = (
     "Use BSplineSolver or SinusoidalSolver for a loaded wire"
 )
 
+# The one sentence behind every NEVER cell in this family's two rows
+# (momwire#396 goal 3), appended to the cell-specific reason rather than
+# standing on its own: a reader owed a refusal is owed the mechanism first
+# and the policy second.
+#
+# It is a policy, and writing it down is the point. The other rows' empty
+# cells are unbuilt work — momwire#445 for the enrichment, a bar nobody has
+# written for the loading — and a consumer reading this matrix to plan
+# around should be able to tell "not yet" from "not ever". These four are
+# not ever.
+_REFERENCE_ROW = (
+    "this family is momwire's REFERENCE row - the pulse basis with point "
+    "matching, kept as written so a momwire number can be compared against "
+    "the formulation NEC-2 identifies with rather than against a better one "
+    "wearing its name (momwire#416, #557) - and it is deliberately NOT "
+    "extended: an axis the sibling families grew afterwards would change "
+    "the thing being measured. This cell is a NEVER, not a not-yet"
+)
+
+# The `knot_feeds` cell (momwire#611), which is the one axis in the matrix
+# that fails SILENTLY, so its reason has to name the silence. Reached only
+# through `capabilities.refusals` — there is no raise behind it, which is
+# exactly the problem the cell exists to state.
+_KNOT_FEEDS_REFUSAL = (
+    "{cls} does not place a gap on the knot a caller names: a `feeds` "
+    "arclength resolves to the nearest segment CENTRE, because a pulse row "
+    "IS a segment and there is no node unknown to drive. A node-addressing "
+    "consumer - the NEC-5 dialect is the one in tree - would be answered "
+    "half a segment away with nothing raised (momwire#611), which is why "
+    "this cell reads False and the seam refuses by name instead. "
+) + _REFERENCE_ROW
+
+# The `singular_enrichment` cell. Not `bspline.SINGULAR_ENRICHMENT_NOT_YET`,
+# which is a not-yet resting on momwire#445: on this family the answer does
+# not wait on that design question at all.
+_SINGULAR_ENRICHMENT_REFUSAL = (
+    "{cls} has no singular enrichment: the enrichment in tree (momwire#249) "
+    "is the B-spline family's junction basis, and a degree-0 expansion under "
+    "point matching has neither the knot vector it is written against nor "
+    "the Galerkin testing that integrates it. There is no "
+    "`use_singular_enrichment` keyword on this class, so asking for it is a "
+    "caller typo (a TypeError) rather than this sentence. "
+) + _REFERENCE_ROW
+
 # Constructor kwargs the sibling solvers accept that this formulation
 # deliberately does not, with the reason each is refused. Anything else
 # unexpected is a caller typo and stays a TypeError.
@@ -234,13 +278,18 @@ _OUT_OF_SCOPE = {
     "junctions": "PulseSolver takes no junction spec: coincident wire ends "
     "put their endpoint charges at the same point and superpose by "
     "arithmetic, so there is nothing to declare and nothing to detect",
-    "junction_ports": "junction ports are not supported: the pulse basis has "
-    "no junction unknown to drive — the current is per SEGMENT, so a source "
-    "at a node has no basis of its own. Feed a segment, or model the source "
-    "on a short bridge wire off the junction",
-    "node_gaps": "node gaps are not supported: this formulation's delta gap "
-    "is a whole segment's testing row, so a gap at a node is not a local "
-    "basis edit here",
+    # `{cls}`-substituted and carrying `_REFERENCE_ROW` since momwire#396
+    # goal 3. Both cells were generic before: `HarringtonSolver` declared
+    # them by quoting this dict, so its row named no class and gave no
+    # policy, and the capability matrix showed two of its NEVER cells with a
+    # sentence that could have been any solver's.
+    "junction_ports": "{cls} does not serve junction ports: the pulse basis "
+    "has no junction unknown to drive — the current is per SEGMENT, so a "
+    "source at a node has no basis of its own. Feed a segment, or model the "
+    "source on a short bridge wire off the junction. " + _REFERENCE_ROW,
+    "node_gaps": "{cls} does not serve node gaps: this formulation's delta "
+    "gap is a whole segment's testing row, so a gap at a node is not a local "
+    "basis edit here. " + _REFERENCE_ROW,
     "extended_kernel": "{cls} is reduced-kernel only, and not by "
     "preference: the charge is two POINT charges per basis, whose potential "
     "on the wire axis is finite only because of the reduced kernel's a². "
@@ -367,13 +416,19 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         per_wire_radius=False,
         singular_enrichment=False,
         refusals={
-            "junction_ports": _OUT_OF_SCOPE["junction_ports"],
-            "node_gaps": _OUT_OF_SCOPE["node_gaps"],
+            "junction_ports": _OUT_OF_SCOPE["junction_ports"].format(cls="PulseSolver"),
+            "node_gaps": _OUT_OF_SCOPE["node_gaps"].format(cls="PulseSolver"),
             "extended_kernel": _OUT_OF_SCOPE["extended_kernel"].format(
                 cls="PulseSolver"
             ),
             "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL.format(cls="PulseSolver"),
             "wire_loading": _WIRE_LOADING_REFUSAL.format(cls="PulseSolver"),
+            # momwire#396 goal 3: the two cells that had no sentence at all
+            # and fell through to `refusal()`'s generated one-liner.
+            "knot_feeds": _KNOT_FEEDS_REFUSAL.format(cls="PulseSolver"),
+            "singular_enrichment": _SINGULAR_ENRICHMENT_REFUSAL.format(
+                cls="PulseSolver"
+            ),
         },
     )
 

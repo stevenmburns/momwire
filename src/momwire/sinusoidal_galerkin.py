@@ -331,6 +331,7 @@ import scipy.spatial.distance
 from . import _field_ground, _ground_mirror, _wire_loading
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
+from .bspline import SINGULAR_ENRICHMENT_NOT_YET
 from ._port_solution import PortSolution
 from .sinusoidal import (
     _DENSE_ASSEMBLY_THRESHOLD,
@@ -932,6 +933,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # row reads as serving what the constructor refuses. `junction_ports`
     # and `node_gaps` are the two the base refused and this class does not,
     # so they are the two deliberately dropped.
+    #
+    # `singular_enrichment` is the third thing that has to be carried across,
+    # and it is the one the REPLACE semantics actually lost: the cell reads
+    # False on both classes for the same reason, and until momwire#396 goal 3
+    # this row answered it with `refusal()`'s generated one-liner while the
+    # base answered with the reason. Same sentence, this class's name in it
+    # (momwire#564) — the prose reaches antennaknobs' host dialogs verbatim.
     capabilities = SinusoidalSolver.capabilities._replace(
         junction_ports=True,
         node_gaps=True,
@@ -942,6 +950,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "contact+refl-coef": SinusoidalSolver.capabilities.refusals[
                 "contact+refl-coef"
             ],
+            "singular_enrichment": SINGULAR_ENRICHMENT_NOT_YET.format(
+                cls="SinusoidalGalerkinSolver"
+            ),
             "extended_kernel+stepped_radius_junction": (
                 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
             ),
