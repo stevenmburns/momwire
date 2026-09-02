@@ -1809,8 +1809,11 @@ def test_pq_snaps_the_symmetry_residual_so_every_process_prints_the_same_zero():
     `2.5492E-19` with phase `18.248` in the stock engine's own printout,
     `1.6824E-26` with phase `43.749` here, and neither reproducible across
     a BLAS thread count. Both portal oracles (served == stock, warm == cold)
-    reddened on it after momwire#808 moved the fill by 1e-12. Snapped at the
-    source below `_CHARGE_RESIDUAL_FLOOR`, it prints as the one zero.
+    reddened on it at a docs-only commit, two commits after momwire#808's
+    fill move had passed the same lane: a warm-vs-cold difference cannot
+    depend on what the values are, so no change triggered it and none needs
+    re-checking against it (momwire#809's class). Snapped at the source
+    below `_CHARGE_RESIDUAL_FLOOR`, it prints as the one zero.
     """
     rows = charge_tables(printout("dipole_pq_charges"))[0]
     centre = [r for r in rows if r[0] == "5"][0]
