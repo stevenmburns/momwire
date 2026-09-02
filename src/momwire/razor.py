@@ -460,6 +460,83 @@ _HAVE_RAZOR_WEIGHTED_ACCEL = _acc is not None and bool(
 )
 
 
+# ---------------------------------------------------------------------------
+# The outer testing-path order, derived from the mesh (momwire#800)
+# ---------------------------------------------------------------------------
+# What #754 measured (PR #795) is that 32 is the COARSE-mesh answer: on the
+# binding deck -- a 90 degree corner -- the order the outer integral needs
+# falls as the mesh refines, and every rung #754's own timing table quotes
+# sits where half of it would do.
+#
+#   bent   N=30   N=60   N=120  |  N=240  N=400
+#   need    32     32     32    |   16     16
+#   k*h    .102   .051   .0254  |  .0127  .0076
+#
+# WHAT THE SCALAR HAS TO BE, AND WHY IT IS NOT A DISTANCE RATIO
+# -------------------------------------------------------------
+# #800 proposed `h_max / d_min`, the longest half-segment over the shortest
+# inter-arm distance. That cannot work, and the reason is structural rather
+# than a matter of calibration: these decks refine SELF-SIMILARLY, so every
+# inter-segment distance scales with h and any ratio of two mesh-set lengths
+# is mesh-INVARIANT. Measured on `bent`, h_max/d_min is 0.6325 at N=30 and
+# 0.6325 at N=400, to four figures, for every neighbour exclusion tried.
+#
+# The two lengths a mesh does not set are the wavelength and the wire
+# radius, so the only candidates are `k*h_max` and `h_max/a`. That maps onto
+# the physics as two separate terms, which #800 conflated into one:
+#
+#   * the DECK's floor -- how fast a neighbouring conductor's kernel varies
+#     across a testing path -- is the h/d_min term, and it is exactly the
+#     part that does NOT move with the mesh. It is why `bent` (0.63) needs
+#     more than `straight` (0.50) at every mesh, and it is why a blind
+#     default has to serve the corner.
+#   * the MESH's saving is the phase variation across the path, k*h/2, which
+#     is what falls under refinement and what this rule reads.
+#
+# `k*h_max` over `h_max/a`, on the evidence of the `ek` deck: its radius
+# scales with the mesh (a = L/N/4), so h/a is pinned at 4.0 at every N and a
+# rule keyed on it could never grant that deck a fine-mesh saving, while
+# k*h_max falls 0.102 -> 0.0076 across the same ladder.
+#
+# WHERE THE SWITCH SITS
+# ---------------------
+# Between the corner's last coarse row (N=120, k*h = 0.0254, needs 32) and
+# its first fine one (N=240, k*h = 0.0127, needs 16). Those are a factor of
+# two apart, and the switch is their GEOMETRIC mean -- so the margin is
+# sqrt(2) on each side rather than tight against either. In segments per
+# wavelength that is about 350: coarser than that takes 32, finer takes 16.
+#
+# 32 remains the documented ceiling of what this returns, 16 the floor: no
+# deck in the bank is converged at q=8 on the corner at ANY mesh measured
+# (1.1e-6 relative at N=400, still over #754's 1e-6 bar), so there is no
+# evidence for a third rung and the rule does not invent one.
+PATH_ORDER_COARSE = 32
+PATH_ORDER_FINE = 16
+PATH_ORDER_KH_SWITCH = 0.018  # sqrt(0.0254 * 0.0127), the corner's own gap
+
+
+def derive_n_qp_path(k, wires_polylines, n_per_edge_per_wire):
+    """The outer testing-path order for this mesh — momwire#800.
+
+    A pure function of the geometry and the wavenumber, not of the segment
+    COUNT: two decks with the same electrical segment length get the same
+    order whatever their N, which is what lets `contact_pec` at N=240 (a
+    half-length arm, so k*h = 0.0063) sort with the fine meshes rather than
+    with its own segment count.
+
+    Returns `PATH_ORDER_FINE` or `PATH_ORDER_COARSE`; see the block comment
+    above for the calibration and for why the scalar is `k*h_max`.
+    """
+    h_max = 0.0
+    for pl, npe in zip(wires_polylines, n_per_edge_per_wire):
+        for e_idx in range(pl.shape[0] - 1):
+            edge_len = float(np.linalg.norm(pl[e_idx + 1] - pl[e_idx]))
+            h_max = max(h_max, edge_len / npe[e_idx])
+    if k * h_max <= PATH_ORDER_KH_SWITCH:
+        return PATH_ORDER_FINE
+    return PATH_ORDER_COARSE
+
+
 def _use_razor_fill_accel():
     """The fused C++ moment fill serves when built and not forced off."""
     return _HAVE_RAZOR_FILL_ACCEL and not _FORCE_NUMPY
@@ -976,6 +1053,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         per half-segment (T1 only; T2's path collapses to two endpoint
         evaluations). Ignored under `nec5_quadrature`.
 
+        **`None` (the default) means DERIVE it from the mesh
+        (momwire#800)**, the way `auto_mesh=None` derives a density; an
+        explicit integer is taken verbatim and reproduces the pre-#800
+        answer bit for bit. The derivation is `derive_n_qp_path`, whose
+        block comment carries the calibration: 32 below about 350 segments
+        per wavelength and 16 above it, because what #754 measured is that
+        32 is the COARSE-mesh answer and every rung its own timing table
+        quotes sits where 16 would do. Half the outer integral's cost on
+        exactly the meshes where razor's fill is felt.
+
+        The rest of this note is #754's derivation of the constant, which
+        stands as the coarse-mesh half of the answer.
+
         **32 is derived, not a first cut (2026-09-02, momwire#754).**
         `scripts/probe_razor_path_754.py` swept twelve decks across the
         geometry classes that stress the outer integral hardest -- a 90
@@ -1122,7 +1212,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         feed_wire_index=0,
         feed_arclength=None,
         feeds=None,
-        n_qp_path=32,
+        n_qp_path=None,
         n_qp_source=12,
         n_qp_sommerfeld=3,
         nec5_quadrature=False,
@@ -1177,11 +1267,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.k = 2 * np.pi / self.wavelength
         self.halfdriver = self.halfdriver_factor * self.wavelength / 4
 
-        self.n_qp_path = int(n_qp_path)
+        # `None` means DERIVE, resolved below once the mesh is known
+        # (momwire#800); an explicit integer is taken verbatim and reproduces
+        # the pre-#800 answer bit for bit. `n_qp_path` itself is assigned
+        # after the mesh resolution, not here.
+        self._n_qp_path_arg = None if n_qp_path is None else int(n_qp_path)
         self.n_qp_source = int(n_qp_source)
         self.n_qp_sommerfeld = int(n_qp_sommerfeld)
         self.nec5_quadrature = bool(nec5_quadrature)
-        if self.n_qp_path < 1 or self.n_qp_source < 1 or self.n_qp_sommerfeld < 1:
+        if self._n_qp_path_arg is not None and self._n_qp_path_arg < 1:
+            raise ValueError("n_qp_path, n_qp_source and n_qp_sommerfeld must be >= 1")
+        if self.n_qp_source < 1 or self.n_qp_sommerfeld < 1:
             raise ValueError("n_qp_path, n_qp_source and n_qp_sommerfeld must be >= 1")
 
         if not wires:
@@ -1276,6 +1372,18 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if any(v < 1 for v in npe):
                 raise ValueError(f"wire {i}: every edge needs >= 1 segment")
             self.n_per_edge_per_wire.append(npe)
+
+        # ---- the outer path order (momwire#800) --------------------------
+        # Resolved HERE rather than beside the other quadrature knobs,
+        # because deriving it needs the mesh and the mesh is only settled on
+        # the line above. An explicit integer never reaches the derivation.
+        self.n_qp_path = (
+            self._n_qp_path_arg
+            if self._n_qp_path_arg is not None
+            else derive_n_qp_path(
+                self.k, self.wires_polylines, self.n_per_edge_per_wire
+            )
+        )
 
         if self._declared_junctions is not None:
             # momwire#522's guardrail, which BSplineSolver and SinusoidalSolver
