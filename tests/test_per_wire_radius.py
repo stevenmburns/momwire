@@ -90,6 +90,8 @@ def _pynec_z(wires_nec, feed_tag):
 def test_uniform_array_bit_identical_to_scalar_dipole():
     z_s, alpha_s = _two_arm_dipole(0.0005, 21).compute_impedance()
     z_a, alpha_a = _two_arm_dipole([0.0005, 0.0005], 21).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_s == z_a
     np.testing.assert_array_equal(alpha_s, alpha_a)
 
@@ -97,6 +99,8 @@ def test_uniform_array_bit_identical_to_scalar_dipole():
 def test_uniform_array_bit_identical_to_scalar_junctions():
     z_s, alpha_s = _groundplane(0.0005, 9).compute_impedance()
     z_a, alpha_a = _groundplane([0.0005] * 5, 9).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_s == z_a
     np.testing.assert_array_equal(alpha_s, alpha_a)
 
@@ -224,6 +228,9 @@ def test_series_impedance_per_wire_radius_array():
         z_one = _wire_loading.series_impedance_per_wire(
             omega, rad, sigma[w : w + 1], None, None
         )
+        # momwire#809: NOT downstream of a solve. `series_impedance_per_wire` is
+        # closed form, so no BLAS path is involved and the sweep's concern does
+        # not reach here; exact equality is simply correct.
         assert z_arr[w] == z_one[0]
     with pytest.raises(ValueError, match="length-2"):
         _wire_loading.series_impedance_per_wire(
@@ -305,6 +312,8 @@ def _two_arm_dipole_bsp(radii, n, **kw):
 def test_bspline_uniform_array_bit_identical_to_scalar():
     z_s, alpha_s = _two_arm_dipole_bsp(0.0005, 15).compute_impedance()
     z_a, alpha_a = _two_arm_dipole_bsp([0.0005, 0.0005], 15).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_s == z_a
     np.testing.assert_array_equal(alpha_s, alpha_a)
 

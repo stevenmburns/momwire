@@ -708,4 +708,7 @@ def test_complex_eps_matches_the_tuple_spec():
     eps_t = _ground_refl.eps_tilde(LOSSY, sim.c * sim.k, sim.eps)
     z_a, _ = sim.compute_impedance()
     z_b = _solve(RazorSolver, "dipole@0.25", 10, ground_z=0.0, ground_eps=eps_t)
+    # momwire#809: fills measured BIT-IDENTICAL -- the tuple spec folds to
+    # the same eps_tilde the complex spec passes, so one matrix is built
+    # twice. Structural.
     assert z_a == z_b

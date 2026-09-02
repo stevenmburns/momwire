@@ -39,6 +39,39 @@ What this module gates:
     dispatching, so `test_the_kernel_actually_runs` counts entries during a
     real solve and asserts the forced-off twin counts zero.
 
+WHICH SIDE OF `solve` AN EXACT ASSERTION BELONGS ON (momwire#809)
+----------------------------------------------------------------
+The standard above is about builds. There is a second one, about the solve,
+and it is the reason this docstring is where the next person looks:
+
+    An `==` on a FILL is a claim. An `==` downstream of `solve` is a
+    lottery ticket.
+
+The razor fill is byte-repeatable -- same build, same process, same matrix at
+any thread count. The solved impedance is not: at N=199 a dipole's Zin moves
+7.5e-12 relative, 37616 ulp, between `OMP_NUM_THREADS=1` and `8`, with the
+fill hash identical at both. BLAS picks blocking and kernel by thread count,
+the reassociation follows, and the condition number does the rest. Nothing
+there is a bug; it is a property of every dense direct solve.
+
+So an assertion past `solve` holds only while two BLAS calls choose the same
+path -- until a runner has a different core count, a different library
+(OpenBLAS on Linux, Accelerate on macOS), or a different xdist pin. It can
+also pass by LUCK when the two sides' fills differ slightly and the LU rounds
+the difference away, which is what hid momwire#807 for months.
+
+The test is not "is this `==` passing" but "do the two sides build a
+bit-identical fill". If yes, the two solves run identical instructions on
+identical data and `==` is structural -- keep it exact, and say so next to it.
+If no, move the assertion onto the fill, which is the claim it was really
+making, and keep the impedance under a measured tolerance beneath it.
+
+momwire#809 swept all 33 such sites in this suite and every one measured
+bit-identical, so none moved; each carries a one-line verdict where it sits.
+Measure a new one the same way -- hash the matrix handed to
+`scipy.linalg.solve` / `lu_factor` (BEFORE the call: `overwrite_a=True`
+destroys it) on both sides -- rather than assuming, in either direction.
+
   * **the scope boundary holds.** The kernel serves the unweighted integrand
     only, i.e. `w_A_fn is None`. That boundary does not fall where a first
     reading suggests: `_assemble_Z` calls the block twice and only the IMAGE

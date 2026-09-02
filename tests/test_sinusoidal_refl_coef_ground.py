@@ -47,6 +47,8 @@ def test_free_space_default_kwarg_is_inert():
     kw = dict(GEOMS[("dipole", 0.2)])
     z_a, _ = SinusoidalSolver(**kw).compute_impedance()
     z_b, _ = SinusoidalSolver(**kw, ground_eps=None).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_a == z_b
 
 
@@ -58,6 +60,8 @@ def test_pec_ground_path_deterministic_and_inert_kwarg():
     kw = dict(GEOMS[("dipole", 0.2)])
     z_a, _ = SinusoidalSolver(**kw, ground_z=0.0).compute_impedance()
     z_b, _ = SinusoidalSolver(**kw, ground_z=0.0, ground_eps=None).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_a == z_b
 
 

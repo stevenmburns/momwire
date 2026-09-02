@@ -257,6 +257,8 @@ def test_what_the_refusal_is_protecting_against_is_real():
     with_floater._cached_geometry = None
     z_with, c_with = with_floater.compute_impedance()
     assert c_with.shape == c_lone.shape
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_with == z_lone
 
     two_seg = RazorSolver(

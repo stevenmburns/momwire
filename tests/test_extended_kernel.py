@@ -463,6 +463,8 @@ def test_extended_kernel_off_is_bit_identical_to_main(name, explicit):
     # both, and neither needs a recorded value to compare against.
     off = dict(extended_kernel=False) if explicit else {}
     z_x, _ = _armor_solver(name, **off).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z.real == z_x.real and z.imag == z_x.imag, name
 
 

@@ -64,6 +64,9 @@ def test_knot_currents_basics():
 
     arc = solver._build_geometry()["per_wire"][0]["arc_at_knot"]
     (sampled_at_knots,) = solver.currents_at_knots(coeffs, [arc])
+    # momwire#809: not a two-solve comparison at all -- both sides are views
+    # of ONE solve's coefficients, so there is no second BLAS path to differ.
+    # Exact equality is the right assertion here.
     assert np.array_equal(sampled_at_knots, cur[0])
 
     mid_arcs = 0.5 * (arc[:-1] + arc[1:])

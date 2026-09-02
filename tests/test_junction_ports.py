@@ -586,6 +586,8 @@ def test_free_end_equals_one_entry_junction_sinusoidal(cls):
             cls(**base, junctions=[[(0, "start")], [(0, "end")]]).compute_impedance()[0]
         )[0]
     )
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_junc == z_free
 
 
@@ -968,6 +970,8 @@ def test_sg_node_port_zero_volts_reproduces_the_plain_solve():
         wavelength=WAVELENGTH,
     )
     z_plain = complex(np.atleast_1d(plain.compute_impedance()[0])[0])
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_with == z_plain
 
 

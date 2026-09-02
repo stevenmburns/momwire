@@ -109,6 +109,8 @@ def test_default_model_is_refl_coef():
     z_explicit = _solve(
         "dipole", 0.2, ground_eps=(10.0, 0.002), ground_model="refl-coef"
     )
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_default == z_explicit
 
 
@@ -357,6 +359,8 @@ def test_somm_grid_shared_across_solver_instances():
     z2, _ = s2.compute_impedance()
     assert len(sm._GRID_CACHE) == 1
     assert next(iter(sm._GRID_CACHE.values())) is grid
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z1 == z2
 
 

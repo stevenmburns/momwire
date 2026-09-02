@@ -57,6 +57,8 @@ def test_free_space_unaffected_by_ground_params():
     kw = dict(GEOMS[("dipole", 0.2)])
     z_a, _ = BSplineSolver(**kw).compute_impedance()
     z_b, _ = BSplineSolver(**kw, ground_phi_mode="image").compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_a == z_b
 
 
