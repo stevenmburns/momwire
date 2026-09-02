@@ -158,6 +158,8 @@ def test_insulation_reactance_shift_and_direction():
 def test_lossless_default_bit_identical():
     z_default, c_default = _solver().compute_impedance()
     z_nan, c_nan = _solver(wire_conductivity=np.nan).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_nan == z_default
     np.testing.assert_array_equal(c_nan, c_default)
 
@@ -165,6 +167,8 @@ def test_lossless_default_bit_identical():
 def test_per_wire_sequence_matches_scalar():
     z_scalar, _ = _solver(wire_conductivity=SIGMA_CU).compute_impedance()
     z_seq, _ = _solver(wire_conductivity=[SIGMA_CU]).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_seq == z_scalar
 
 
@@ -273,6 +277,8 @@ def _ssolver(**kw):
 def test_sinusoidal_lossless_default_bit_identical():
     z_default, c_default = _ssolver().compute_impedance()
     z_nan, c_nan = _ssolver(wire_conductivity=np.nan).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_nan == z_default
     np.testing.assert_array_equal(c_nan, c_default)
 
@@ -407,6 +413,8 @@ def test_sg_lossless_default_bit_identical():
 
     z_default, c_default = s_default.compute_impedance()
     z_nan, c_nan = s_nan.compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_nan == z_default
     np.testing.assert_array_equal(c_nan, c_default)
 

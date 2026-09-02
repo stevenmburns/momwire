@@ -218,6 +218,8 @@ def test_no_token_result_unchanged():
     z_none, c_none = RazorSolver(
         wires=BD1_WIRE, nsegs=12, wavelength=BD1_WL, cancel=None
     ).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_default == z_none
     assert np.array_equal(c_default, c_none)
 

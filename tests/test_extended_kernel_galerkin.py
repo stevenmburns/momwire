@@ -1062,6 +1062,8 @@ def test_gb4_ek_off_is_bit_identical_to_the_default(name):
     z_off, c_off = SinusoidalGalerkinSolver(
         **kw, extended_kernel=False
     ).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_def == z_off, f"{name}: {z_def!r} vs {z_off!r}"
     assert np.array_equal(c_def, c_off)
 
@@ -2932,6 +2934,8 @@ def test_gd3_a_deck_without_a_split_node_is_bit_identical(name):
         z_off, c_off = SinusoidalGalerkinSolver(
             **kw, extended_kernel=True
         ).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_on == z_off, f"{name}: {z_on!r} vs {z_off!r}"
     assert np.array_equal(c_on, c_off)
 

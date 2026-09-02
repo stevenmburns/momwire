@@ -1258,6 +1258,9 @@ def test_bspline_d2_hentenna_enrichment_stable_variant():
     z1_stb, _ = BSplineSolver(
         degree=1, enrichment_variant="stable", **common
     ).compute_impedance()
+    # momwire#809: fills measured BIT-IDENTICAL. At d=1 the bubble subspace
+    # is empty, so `stable` assembles what `raw` does -- the `==` is that
+    # structural fact, not a solve-downstream coincidence.
     assert z1_raw == z1_stb
 
 
@@ -1334,6 +1337,8 @@ def test_bspline_d2_hentenna_enrichment_tikhonov_variant():
         tikhonov_lambda=1e6,
     ).compute_impedance()
     # (a) λ=0 → raw bit-exact
+    # momwire#809: fills measured BIT-IDENTICAL -- at lambda=0 Tikhonov
+    # assembles the raw matrix exactly, so this `==` is structural.
     assert z_raw == z_tik_zero
     # (b) λ→∞ → no-enrichment to ~1e-6 relative
     assert abs(z_tik_big - z_off) / abs(z_off) < 1e-6
@@ -1408,6 +1413,9 @@ def test_bspline_enrichment_auto_two_pass_selects_correctly():
     )
     z_h_auto, _ = sim_h_auto.compute_impedance()
     assert sim_h_auto._auto_active_junctions == []
+    # momwire#809: fills measured BIT-IDENTICAL. `auto` selected no junction
+    # (asserted above), so it assembles the enrichment-off matrix; the `==`
+    # is that fact and not a solve-downstream coincidence.
     assert z_h_auto == z_h_off
 
     # --- (b) Y-fixture ---
@@ -1450,6 +1458,10 @@ def test_bspline_enrichment_auto_two_pass_selects_correctly():
     )
     z_y_auto, _ = sim_y_auto.compute_impedance()
     assert sim_y_auto._auto_active_junctions == [1]
+    # momwire#809: fills measured BIT-IDENTICAL. `auto` runs TWO passes here
+    # -- a 130x130 probe, then the 133x133 enriched fill -- and it is the
+    # second that is compared, byte for byte the matrix `raw` builds.
+    # Structural, not luck.
     assert z_y_auto == z_y_raw
 
 
@@ -2234,6 +2246,8 @@ def test_bspline_ground_none_matches_free_space_bit_exact():
         degree=2,
         ground_z=None,
     ).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_no == z_none
 
 
@@ -2321,6 +2335,8 @@ def test_sinusoidal_ground_none_matches_free_space_bit_exact():
     z_none, _ = SinusoidalSolver(
         wires=[poly], n_per_edge_per_wire=[[40]], nsegs=40, ground_z=None
     ).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_no == z_none
 
 

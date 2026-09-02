@@ -178,6 +178,9 @@ def test_the_unweighted_path_is_untouched(monkeypatch):
     deck = _dipole(120)
     z_off = _solve(monkeypatch, deck, accel=False)
     z_on = _solve(monkeypatch, deck, accel=True)
+    # momwire#809: fills measured BIT-IDENTICAL -- free space builds no
+    # ground object, so the gate cannot fire and both sides assemble the
+    # same matrix.
     assert z_on == z_off, f"free space moved with the weighted gate: {z_on} vs {z_off}"
 
 

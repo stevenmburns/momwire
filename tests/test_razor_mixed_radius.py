@@ -171,6 +171,8 @@ def test_uniform_sequence_is_bit_identical_to_the_scalar(state, lane):
     kw = dict(GROUND_STATES[state], nsegs=24, wavelength=22.0, **lane)
     z_s, c_s = RazorSolver(wire_radius=1.0e-3, **kw).compute_impedance()
     z_a, c_a = RazorSolver(wire_radius=[1.0e-3], **kw).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_a == z_s
     np.testing.assert_array_equal(c_a, c_s)
 
@@ -382,6 +384,8 @@ def test_the_radius_column_is_chunk_invariant(monkeypatch):
     z_ref, c_ref = _razor("stepped", 24, 0.0).compute_impedance()
     monkeypatch.setattr(mod, "_CHUNK_ELEMS", 500)
     z_chunked, c_chunked = _razor("stepped", 24, 0.0).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_chunked == z_ref
     np.testing.assert_array_equal(c_chunked, c_ref)
 

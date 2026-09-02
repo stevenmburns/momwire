@@ -976,6 +976,8 @@ def test_g7_bspline_ek_off_is_bit_identical_to_the_default(name):
     kw = dict(_G7_BSPLINE[name], wavelength=LAM, degree=2)
     z_def, c_def = BSplineSolver(**kw).compute_impedance()
     z_off, c_off = BSplineSolver(**kw, extended_kernel=False).compute_impedance()
+    # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
+    # `==` is structural, not a solve-downstream lottery ticket.
     assert z_def == z_off, f"{name}: {z_def!r} vs {z_off!r}"
     assert np.array_equal(c_def, c_off)
 
