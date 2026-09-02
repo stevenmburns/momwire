@@ -1,0 +1,103 @@
+# SimNEC launch-shape check: drive the PyPI-installed portal entry point the
+# way SimNEC drives an engine (scripts/simnec_driver/SimNECDriver.java), on
+# the three desktops SimNEC runs on. Exists to reproduce, on a machine we can
+# see, the report "works from the terminal, SimNEC says NEC Failure Code".
+#
+# The PyPI legs install what a user installs (a wheel into a venv) rather
+# than this checkout, so a green run here says the RELEASED engine launches
+# under SimNEC's calling convention on that platform. The macOS leg runs with
+# and without Homebrew's libomp: the wheel does not vendor it, so a user
+# without it gets the numpy fallback and a warning on stderr, and stderr is
+# a pipe SimNEC never drains.
+#
+# Manual: `gh workflow run simnec-driver.yml --ref <branch>` (optionally
+# `-f momwire=momwire==0.45.0` to test another release).
+name: simnec-driver
+
+on:
+  workflow_dispatch:
+    inputs:
+      momwire:
+        description: "pip requirement for the engine under test"
+        default: momwire
+        type: string
+  pull_request:
+    paths:
+      - scripts/simnec_driver/**
+      - .github/workflows/simnec-driver.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/simnec_driver/**
+      - .github/workflows/simnec-driver.yml
+      - src/momwire/portal/**
+
+permissions:
+  contents: read
+
+jobs:
+  pypi:
+    name: pypi (${{ matrix.os }}${{ matrix.libomp == 'no' && ', no libomp' || '' }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            libomp: yes
+          - os: macos-14
+            libomp: no
+          - os: ubuntu-latest
+          - os: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install libomp (macOS OpenMP runtime)
+        if: matrix.libomp == 'yes'
+        run: brew install libomp
+      - name: Install the released engine into a venv
+        shell: bash
+        run: |
+          python -m venv "$RUNNER_TEMP/mw"
+          if [[ "$RUNNER_OS" == Windows ]]; then bin="$RUNNER_TEMP/mw/Scripts"; else bin="$RUNNER_TEMP/mw/bin"; fi
+          "$bin/python" -m pip install --upgrade pip
+          "$bin/python" -m pip install "${{ inputs.momwire || 'momwire' }}"
+          "$bin/python" -c "import momwire, importlib.metadata as m; print('momwire', m.version('momwire'), 'accelerated' if momwire.accelerated else 'NUMPY FALLBACK')"
+          ls "$bin" | grep momwire-nec2c
+          if [[ "$RUNNER_OS" == Windows ]]; then echo "ENGINE=$bin/momwire-nec2c-bspline.exe" >> "$GITHUB_ENV"; else echo "ENGINE=$bin/momwire-nec2c-bspline" >> "$GITHUB_ENV"; fi
+      - name: Drive it the way SimNEC does (all launch shapes)
+        if: runner.os != 'Windows'
+        run: bash scripts/simnec_driver/run_shapes.sh "$ENGINE"
+      - name: Drive it the way SimNEC does (cmd.exe route)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: java scripts/simnec_driver/SimNECDriver.java "$env:ENGINE" tests/fixtures/nec_portal/dipole_free_space.deck tests/fixtures/nec_portal/dipole_rp_pattern.deck --repeat 2
+
+  checkout:
+    name: this checkout (macos-14)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install libomp (macOS OpenMP runtime)
+        run: brew install libomp
+      - run: pip install --upgrade pip "setuptools>=61.0" wheel pybind11
+      - run: pip install . --no-build-isolation
+        env:
+          CC: clang
+          CXX: clang++
+      - name: Drive it the way SimNEC does (all launch shapes)
+        run: bash scripts/simnec_driver/run_shapes.sh "$(python -c 'import sys, os; print(os.path.join(os.path.dirname(sys.executable), "momwire-nec2c-bspline"))')"
