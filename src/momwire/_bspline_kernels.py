@@ -114,7 +114,7 @@ from collections import namedtuple
 import numpy as np
 
 from ._bspline_ek_moments import D_ek_moment
-from ._bspline_static_moments import J_static_moment
+from ._bspline_static_far import J_static_stable as J_static_moment
 from ._quadrature import leggauss
 from ._stable import expm1_neg_jkR as _expm1_neg_jkR
 
