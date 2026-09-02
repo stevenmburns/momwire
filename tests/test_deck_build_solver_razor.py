@@ -5,9 +5,12 @@ PR #431 gave `RazorSolver` its own loading kwargs — `wire_conductivity` /
 `lumped_loads=[(wire, arclength, Z)]` as its own spelling of a lumped load,
 because this formulation refuses the siblings' deck-level port algebra over
 a zero-volt gap. This module is the follow-up that PR filed: `build_solver`
-learns two roster entries (`"razor"`, and `"razor-nec5"` for the identified
-quadrature, momwire#316) and the LD-card translation into razor's native
-kwargs.
+learns two roster entries (`"razor-2p"`, and its deprecated spelling
+`"razor-nec5"`, both the identified quadrature, momwire#316) and the LD-card
+translation into razor's native kwargs. Plain `razor` — the Gauss-Legendre
+testing-path lane of the same class — retired from the roster at
+momwire#753; this file's gates still cover it by constructing `RazorSolver`
+directly (`_build_razor_gl`).
 
 Gates, in the order the issue asked for:
 
@@ -83,18 +86,49 @@ def _assert_close(a: complex, b: complex, rel: float = 1e-12) -> None:
     assert abs(a - b) <= rel * abs(b), f"{a!r} vs {b!r}: {abs(a - b) / abs(b):.3g} rel"
 
 
+def _build_razor_gl(model, **kwargs):
+    """The Gauss-Legendre testing-path lane, on the deck front end.
+
+    momwire#753 retired this lane's roster entry (plain `razor`); the deck
+    translation it exercised is IDENTICAL to `razor-2p`'s (same geometry,
+    loads, feeds — the two lanes differ only in `nec5_quadrature`, which the
+    translation never sets). So build through `razor-2p` and flip the flag
+    back: `RazorSolver.__init__` does nothing else with it (stored verbatim
+    at :attr:`RazorSolver.nec5_quadrature`, read only at fill/solve time), so
+    this reproduces exactly what constructing with `nec5_quadrature=False`
+    directly would.
+    """
+    built = build_solver(model, basis="razor-2p", **kwargs)
+    built.solver.nec5_quadrature = False
+    return built
+
+
 # ---------------------------------------------------------------------------
 # the roster entries
 # ---------------------------------------------------------------------------
 
 
-def test_razor_and_razor_nec5_are_in_the_roster():
-    solver_class, kwargs = BASES["razor"]
+def test_razor_2p_and_razor_nec5_are_in_the_roster():
+    solver_class, kwargs = BASES["razor-2p"]
     assert solver_class is RazorSolver
-    assert dict(kwargs) == {}
+    assert dict(kwargs) == {"nec5_quadrature": True}
     solver_class, kwargs = BASES["razor-nec5"]
     assert solver_class is RazorSolver
     assert dict(kwargs) == {"nec5_quadrature": True}
+
+
+def test_plain_razor_retired_from_the_roster_753():
+    """momwire#753: the Gauss-Legendre testing-path lane is the SAME class as
+    `razor-2p`, differing only in where the testing path is sampled — not a
+    second roster entry. It is reached by constructing `RazorSolver` directly,
+    whose `nec5_quadrature` kwarg defaults to `False` (the GL lane)."""
+    assert "razor" not in BASES
+    import inspect
+
+    default = (
+        inspect.signature(RazorSolver.__init__).parameters["nec5_quadrature"].default
+    )
+    assert default is False
 
 
 def test_razor_2p_is_the_current_spelling_and_razor_nec5_an_alias():
@@ -114,8 +148,9 @@ def test_razor_2p_is_the_current_spelling_and_razor_nec5_an_alias():
     alias, kw_alias = BASES["razor-nec5"]
     assert two_p is alias is RazorSolver
     assert dict(kw_2p) == dict(kw_alias) == {"nec5_quadrature": True}
-    # And both remain distinct from the Gauss-Legendre lane.
-    assert dict(BASES["razor"][1]) == {}
+    # And both remain distinct from the Gauss-Legendre lane, which retired
+    # from the roster at momwire#753 and is reached by construction instead
+    # (see test_plain_razor_retired_from_the_roster_753).
 
 
 def test_every_razor_lane_has_an_entry_point_and_a_banner_suffix():
@@ -133,23 +168,34 @@ def test_every_razor_lane_has_an_entry_point_and_a_banner_suffix():
 
     root = pathlib.Path(__file__).resolve().parent.parent
     scripts = tomllib.loads((root / "pyproject.toml").read_text())["project"]["scripts"]
-    for name in ("razor", "razor-2p", "razor-nec5"):
+    for name in ("razor-2p", "razor-nec5"):
         assert name in _BANNER_SUFFIXES, name
         assert name in BASIS_NAMES, name
         script = f"momwire-nec2c-{name}"
         assert script in scripts, f"{script} missing from [project.scripts]"
         assert basis_from_program_name(script, "nec2c-") == name
+    # Plain `razor` retired from the roster at momwire#753 — none of the
+    # three should still know its name.
+    assert "razor" not in _BANNER_SUFFIXES
+    assert "razor" not in BASIS_NAMES
+    assert "momwire-nec2c-razor" not in scripts
     # The suffixes must be distinct, or a printout cannot say which ran.
-    subset = {n: _BANNER_SUFFIXES[n] for n in ("razor", "razor-2p", "razor-nec5")}
-    assert len(set(subset.values())) == 3, subset
+    subset = {n: _BANNER_SUFFIXES[n] for n in ("razor-2p", "razor-nec5")}
+    assert len(set(subset.values())) == 2, subset
 
 
 def test_razor_nec5_binds_the_identified_quadrature():
     model = parse(DIPOLE)
-    plain = build_solver(model, basis="razor")
     n5q = build_solver(model, basis="razor-nec5")
-    assert plain.solver.nec5_quadrature is False
     assert n5q.solver.nec5_quadrature is True
+    # The Gauss-Legendre lane retired from the roster at momwire#753. Get it
+    # on the same translated geometry by flipping the flag `RazorSolver`
+    # reads only at fill/solve time — `__init__` does nothing else with it
+    # (see test_plain_razor_retired_from_the_roster_753) — rather than
+    # rebuilding the deck translation for a lane the roster no longer names.
+    plain = build_solver(model, basis="razor-2p")
+    plain.solver.nec5_quadrature = False
+    assert plain.solver.nec5_quadrature is False
     # Two different quadrature rules on the same deck; not required to
     # agree, only both required to solve.
     z_plain, _ = plain.solver.compute_impedance()
@@ -164,7 +210,7 @@ def test_razor_nec5_binds_the_identified_quadrature():
 
 def test_a_free_dipole():
     model = parse(DIPOLE)
-    built = build_solver(model, basis="razor")
+    built = _build_razor_gl(model)
     direct = RazorSolver(
         wires=[np.array([[-2.5, 0.0, 0.0], [2.5, 0.0, 0.0]])],
         nsegs=9,
@@ -180,7 +226,7 @@ def test_a_free_dipole():
 def test_ld4_mid_element():
     text = DIPOLE.replace("EX 0 1 5", "LD 4 1 3 3 50. 10.\nEX 0 1 5")
     model = parse(text)
-    built = build_solver(model, basis="razor")
+    built = _build_razor_gl(model)
     # Segment 3 of 9's centre, NEC's own rule: (k - 1/2) L / NS.
     load_arc = (3 - 0.5) * 5.0 / 9
     direct = RazorSolver(
@@ -195,14 +241,14 @@ def test_ld4_mid_element():
     zb, _ = direct.compute_impedance()
     _assert_close(za, zb)
     # And the load moved the answer — the gate is not vacuously true.
-    unloaded, _ = build_solver(parse(DIPOLE), basis="razor").solver.compute_impedance()
+    unloaded, _ = _build_razor_gl(parse(DIPOLE)).solver.compute_impedance()
     assert abs(za - unloaded) > 1.0
 
 
 def test_ld5_copper():
     text = DIPOLE.replace("EX 0 1 5", "LD 5 1 0 0 5.8E7\nEX 0 1 5")
     model = parse(text)
-    built = build_solver(model, basis="razor")
+    built = _build_razor_gl(model)
     direct = RazorSolver(
         wires=[np.array([[-2.5, 0.0, 0.0], [2.5, 0.0, 0.0]])],
         nsegs=9,
@@ -229,7 +275,7 @@ NX
 """
     model = parse(text)
     assert model.ground == "pec"
-    built = build_solver(model, basis="razor")
+    built = _build_razor_gl(model)
     feed_arc = (1 - 0.5) * 5.0 / 20
     direct = RazorSolver(
         wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.0]])],
@@ -257,7 +303,7 @@ XQ
 NX
 """
     model = parse(text)
-    built = build_solver(model, basis="razor")
+    built = _build_razor_gl(model)
     leg = float(np.hypot(2.0, 2.0))
     feed_arc = (1 - 0.5) * leg / 10
     direct = RazorSolver(
@@ -291,7 +337,7 @@ NX
 def test_finite_reflection_coefficient_ground():
     model = parse(_FINITE_GROUND_DIPOLE.format(code=0))
     assert model.ground == ("finite-fast", 13.0, 0.005)
-    built = build_solver(model, basis="razor")
+    built = _build_razor_gl(model)
     direct = RazorSolver(
         wires=[np.array([[-2.5, 0.0, 5.0], [2.5, 0.0, 5.0]])],
         nsegs=9,
@@ -309,7 +355,7 @@ def test_finite_reflection_coefficient_ground():
 def test_sommerfeld_ground():
     model = parse(_FINITE_GROUND_DIPOLE.format(code=2))
     assert model.ground == ("finite", 13.0, 0.005)
-    built = build_solver(model, basis="razor")
+    built = _build_razor_gl(model)
     direct = RazorSolver(
         wires=[np.array([[-2.5, 0.0, 5.0], [2.5, 0.0, 5.0]])],
         nsegs=9,
@@ -337,7 +383,7 @@ XQ
 NX
 """
     model = parse(text)
-    built = build_solver(model, basis="razor")
+    built = _build_razor_gl(model)
     feed_arc = (1 - 0.5) * 2.5 / 10
     direct = RazorSolver(
         wires=[
@@ -420,7 +466,7 @@ def test_the_translation_converges_to_the_port_algebra_route():
     gaps = []
     for nsegs in ns:
         model = parse(_loaded_dipole_deck(nsegs))
-        z_razor, _ = build_solver(model, basis="razor").solver.compute_impedance()
+        z_razor, _ = _build_razor_gl(model).solver.compute_impedance()
         z_bspline = _stamp(build_solver(model, basis="bspline"))
         gaps.append(abs(z_razor - z_bspline))
 
@@ -477,7 +523,7 @@ def test_the_two_routes_converge_on_the_fixtures_own_geometry():
     gaps = []
     for nsegs in ns:
         model = parse(_portal_fixture_deck(nsegs))
-        z_razor, _ = build_solver(model, basis="razor").solver.compute_impedance()
+        z_razor, _ = _build_razor_gl(model).solver.compute_impedance()
         z_bspline = _stamp(build_solver(model, basis="bspline"))
         gaps.append(abs(z_razor - z_bspline))
 
@@ -514,7 +560,7 @@ XQ
 NX
 """
     model = parse(text)
-    built = build_solver(model, basis="razor")
+    built = build_solver(model, basis="razor-2p")
     z, _ = built.solver.compute_impedance()
     z = complex(np.atleast_1d(z)[0])
     assert np.isfinite(z.real) and np.isfinite(z.imag)
@@ -544,7 +590,7 @@ NX
 """
     )
     with pytest.raises(NotImplementedError, match="momwire#282"):
-        build_solver(model, basis="razor")
+        build_solver(model, basis="razor-2p")
 
 
 def test_a_node_gap_on_a_free_end_refuses_by_naming_the_geometry():
@@ -569,10 +615,10 @@ def test_a_node_gap_on_a_free_end_refuses_by_naming_the_geometry():
         node_gaps=((0, 0, 1 + 0j),),
     )
     with pytest.raises(ValueError, match="not a member of any junction group"):
-        build_solver(model, basis="razor", frequency_mhz=30.0)
+        build_solver(model, basis="razor-2p", frequency_mhz=30.0)
 
 
-@pytest.mark.parametrize("basis", ["razor", "razor-nec5"])
+@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
 def test_extended_kernel_card_reaches_the_solver(basis):
     """An `EK` card arms the extended kernel on this class too (momwire#398 D1).
 
@@ -596,7 +642,7 @@ def test_extended_kernel_card_reaches_the_solver(basis):
 
 def test_a_deck_without_ek_stays_reduced():
     model = parse(DIPOLE)
-    built = build_solver(model, basis="razor")
+    built = build_solver(model, basis="razor-2p")
     assert built.extended_kernel is False
     assert built.solver.extended_kernel is False
 
@@ -615,7 +661,7 @@ def test_the_refusals_are_not_bare_key_or_type_errors():
         node_gaps=((0, 0, 1 + 0j),),
     )
     try:
-        build_solver(model, basis="razor", frequency_mhz=30.0)
+        build_solver(model, basis="razor-2p", frequency_mhz=30.0)
     except (NotImplementedError, ValueError):
         pass
     else:
@@ -647,7 +693,7 @@ def test_the_plan_a_built_solver_hands_back_is_in_the_solvers_own_port_space():
     assert len(plain.solver.feeds) == len(plain.ports.sites)
 
     # Razor: the load-only site has no row of its own, so the two plans part.
-    razor = build_solver(model, basis="razor")
+    razor = build_solver(model, basis="razor-2p")
     assert razor.site_to_solver_port == (None, 0)
     assert razor.deck_ports.n_ports == 2
     assert razor.ports.n_ports == 1 == len(razor.solver.feeds)

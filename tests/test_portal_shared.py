@@ -752,20 +752,20 @@ def test_the_clients_basis_roster_is_the_engines_own():
         ("momwire-nec2c-shared", None),
         ("/opt/venv/bin/momwire-nec2c-shared", None),
         # Its own spelling.
-        ("momwire-nec2c-shared-razor", "razor"),
+        ("momwire-nec2c-shared-razor-2p", "razor-2p"),
         ("momwire-nec2c-shared-sinusoidal-galerkin", "sinusoidal-galerkin"),
         # The STOCK spelling, which the #528 docs teach: a user who copies
         # this command to that name has named a basis, and serving them the
         # default instead is the silent wrong answer #628 is about.
-        ("momwire-nec2c-razor", "razor"),
+        ("momwire-nec2c-razor-2p", "razor-2p"),
         # Windows, and the names that select nothing.
-        ("C:\\Program Files\\momwire-nec2c-shared-razor.exe", "razor"),
+        ("C:\\Program Files\\momwire-nec2c-shared-razor-2p.exe", "razor-2p"),
         ("momwire-nec2c", None),
         ("python", None),
         # Windows filenames are case-insensitive and a copy is renamed by
         # hand, so the match is casefolded — the owner's rule, which this
         # duplicate exists to copy WHOLE rather than in half.
-        ("C:\\SimNEC\\Momwire-Nec2c-Shared-Razor.EXE", "razor"),
+        ("C:\\SimNEC\\Momwire-Nec2c-Shared-Razor-2p.EXE", "razor-2p"),
         ("Momwire-Nec2c-Shared", None),
         # Validation is the caller's, here as in `_portal._filename_basis`.
         ("momwire-nec2c-shared-nope", "nope"),
@@ -787,9 +787,9 @@ def test_the_three_sources_keep_the_engines_own_precedence(monkeypatch):
     order, which the client now has to reproduce because it resolves first."""
     monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "hmatrix")
     flag, error = client.resolve_engine(
-        ["--basis", "razor"], prog="momwire-nec2c-shared-sinusoidal"
+        ["--basis", "razor-2p"], prog="momwire-nec2c-shared-sinusoidal"
     )
-    assert error is None and flag == ["--basis", "razor"]
+    assert error is None and flag == ["--basis", "razor-2p"]
 
     name, error = client.resolve_engine([], prog="momwire-nec2c-shared-sinusoidal")
     assert error is None and name == ["--basis", "sinusoidal"]
@@ -826,7 +826,7 @@ def test_an_unknown_basis_from_any_source_is_refused_naming_it(
     _engine, error = client.resolve_engine(list(engine), prog=prog)
     assert error is not None
     assert "nope" in error and source in error
-    assert "razor" in error, "the refusal has to say what the choices are"
+    assert "razor-2p" in error, "the refusal has to say what the choices are"
 
 
 @pytest.mark.integration
@@ -838,37 +838,37 @@ def test_a_basis_chosen_by_environment_or_name_is_a_different_server(monkeypatch
     plain, _error = client.resolve_engine([], prog="momwire-nec2c-shared")
     baseline = client.config_key(plain, 900.0)
 
-    named, _error = client.resolve_engine([], prog="momwire-nec2c-shared-razor")
+    named, _error = client.resolve_engine([], prog="momwire-nec2c-shared-razor-2p")
     assert client.config_key(named, 900.0) != baseline
 
-    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "razor")
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "razor-2p")
     from_env, _error = client.resolve_engine([], prog="momwire-nec2c-shared")
     assert client.config_key(from_env, 900.0) != baseline
 
     # ...and the two routes to ONE engine are one server, like `--basis=X` and
     # `--basis X` before them.
     assert client.config_key(from_env, 900.0) == client.config_key(named, 900.0)
-    flagged, _error = client.resolve_engine(["--basis", "razor"])
+    flagged, _error = client.resolve_engine(["--basis", "razor-2p"])
     assert client.config_key(flagged, 900.0) == client.config_key(named, 900.0)
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("first,second", [("razor", None), (None, "razor")])
+@pytest.mark.parametrize("first,second", [("razor-2p", None), (None, "razor-2p")])
 def test_two_clients_choosing_by_environment_do_not_share_one_server(
     runtime, first, second
 ):
     """momwire#628's reproduction, both orderings — whoever spawns first used
     to decide the physics for both. The second ordering is the worse one: the
-    client that ASKED for razor was the one silently downgraded, and neither
-    transcript carried a hint, because the banner names whatever actually
-    answered rather than what was requested."""
+    client that ASKED for razor-2p was the one silently downgraded, and
+    neither transcript carried a hint, because the banner names whatever
+    actually answered rather than what was requested."""
     deck = fixture_deck("dipole_free_space")
     one = run_client(runtime, deck, env={"MOMWIRE_NEC2C_BASIS": first})
     two = run_client(runtime, deck, env={"MOMWIRE_NEC2C_BASIS": second})
     assert (one.returncode, two.returncode) == (0, 0), (one.stderr, two.stderr)
 
     for run, want in ((one, first), (two, second)):
-        assert ("+razor" in run.stdout) is (want == "razor"), (
+        assert ("+razor2p" in run.stdout) is (want == "razor-2p"), (
             f"a client that asked for {want!r} was answered by another engine"
         )
     assert len(sockets(runtime)) == 2, "two engines shared one server"
@@ -906,12 +906,12 @@ def test_the_server_is_told_its_basis_rather_than_inheriting_it(monkeypatch):
     `configure_engine` takes it as EXPLICIT and never consults the
     environment at all.
     """
-    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "razor")
+    monkeypatch.setenv("MOMWIRE_NEC2C_BASIS", "razor-2p")
     engine, error = client.resolve_engine([], prog="momwire-nec2c-shared")
     assert error is None
 
     command = client._server_command("/tmp/x.sock", engine, 900.0, "/tmp/x.log")
-    assert command[-2:] == ["--basis", "razor"]
+    assert command[-2:] == ["--basis", "razor-2p"]
 
     # And the engine's own parser reads that command as an explicit choice,
     # which is what makes the inherited environment irrelevant to the server.
@@ -919,7 +919,7 @@ def test_the_server_is_told_its_basis_rather_than_inheriting_it(monkeypatch):
     with nec_portal.engine_scope():
         rest, _legacy, code = nec_portal.configure_engine(list(engine), io.StringIO())
         assert (code, rest) == (None, [])
-        assert nec_portal._active_basis_name == "razor"
+        assert nec_portal._active_basis_name == "razor-2p"
 
 
 @pytest.mark.integration
