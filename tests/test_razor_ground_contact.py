@@ -27,7 +27,8 @@ Four gates, in the order they answer "is this the physics":
    `tests/golden_razor_contact_nec5.py` carries its printouts, captured by
    `scripts/capture_razor_contact_nec5_lane.py`.
 3. **the refusals** — contact is a wire END in the plane and nothing else
-   (test 8), and it is PEC-only (test 9).
+   (test 8); PEC and Sommerfeld serve it, refl-coef is refused (test 9,
+   momwire#282).
 4. **free space is not a ground** — a wire at z = 0 with `ground_z=None` has
    no plane to touch, and nothing about it changes (test 10).
 
