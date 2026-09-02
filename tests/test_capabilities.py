@@ -227,12 +227,16 @@ def test_razor_sommerfeld_ground_is_served():
 def test_razor_ground_contact_is_served_at_a_wire_end():
     """Ground CONTACT landed in unit 3, and the geometry refusals moved.
 
-    Not a capability cell (no solver declares "ground contact" as an axis),
-    so this pins the constructor's own behaviour rather than a declaration —
-    the honest boundary of what unit 3 shipped: a wire END in the plane is
-    served, a wire lying IN it or dipping BELOW it is not.
-    `tests/test_razor_ground_contact.py` carries the physics.
+    `contact` became a declared axis in momwire#396 goal 3 and razor's row
+    reads True, so the two halves are checkable together again; what this
+    still pins on its own is the BOUNDARY of the cell, which no declaration
+    carries: a wire END in the plane is served, a wire lying IN it or dipping
+    BELOW it is not. `tests/test_razor_ground_contact.py` carries the physics,
+    and `tests/test_refusals_are_declared.py` gates the third geometry against
+    the `buried` cell this deck's third case exercises.
     """
+    assert RazorSolver.capabilities.contact
+    assert RazorSolver.capabilities.refusal("contact") is None
     vertical = [np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 1.0)])]
     sim = RazorSolver(
         wires=vertical,
@@ -690,18 +694,35 @@ def test_bspline_enrichment_combinations_refused(cells, kwarg):
 
 
 # --------------------------------------------------------------------------
-# 6. HMatrixSolver / ArrayBlockSolver inherit BSplineSolver's row unchanged
-#    (the survey found no user-facing capability difference: enrichment
-#    just forces their dense-path fallback rather than being refused)
+# 6. HMatrixSolver / ArrayBlockSolver take BSplineSolver's row in every cell
+#    but ONE. The survey that put them on the parent's row whole found no
+#    user-facing difference — enrichment just forces their dense-path
+#    fallback rather than being refused — and it missed `buried`, which IS
+#    refused here and by name (momwire#553 U5).
 # --------------------------------------------------------------------------
 
 
-def test_hmatrix_inherits_bspline_capabilities():
-    assert HMatrixSolver.capabilities is BSplineSolver.capabilities
+def test_hmatrix_differs_from_bspline_in_the_buried_cell_alone():
+    """The accelerators exist for decks the dense fill cannot hold, so a
+    silent dense fallback on a buried array is an out-of-memory rather than a
+    slow answer — `_refuse_buried_fast_operator` says so. Inheriting the
+    parent's row told a consumer to send exactly that deck."""
+    c, b = HMatrixSolver.capabilities, BSplineSolver.capabilities
+    assert b.buried and not c.buried
+    assert c._replace(buried=True, refusals=b.refusals) == b
+    assert c.refusal("buried") == c.refusals["buried"]
+    assert "the fast operator has no per-segment medium" in c.refusal("buried")
+    # ...and everything the parent's row said around it is still said: the
+    # `_replace(refusals=...)` REPLACE trap is what lost the galerkin row a
+    # cell, so the merge is pinned rather than trusted.
+    assert set(b.refusals) < set(c.refusals)
+    assert all(c.refusals[k] == v for k, v in b.refusals.items())
 
 
-def test_array_block_inherits_bspline_capabilities():
-    assert ArrayBlockSolver.capabilities is BSplineSolver.capabilities
+def test_array_block_inherits_the_hmatrix_row():
+    """Same solve, same guard, a different structural decomposition — so no
+    override, and the row must be the one object rather than a copy."""
+    assert ArrayBlockSolver.capabilities is HMatrixSolver.capabilities
 
 
 # --------------------------------------------------------------------------

@@ -69,8 +69,14 @@ from ._accel import acc as _acc
 
 # momwire#553 U5 — the fast operator has no medium. Named here rather than
 # inside the guard so `capabilities` and the tests quote one sentence.
+#
+# The `{who}: ` naming the raising method moved OUT of this constant to the
+# raise site in momwire#396 goal 3, leaving the constant a per-deck preamble
+# plus a constant reason like every other geometry refusal in the tree — which
+# is what lets `capabilities.refusals["buried"]` be this string rather than a
+# copy of it. The raised message is unchanged.
 _BURIED_FAST_OPERATOR_REFUSAL = (
-    "{who}: this deck has a wire below the ground plane, and the fast "
+    "this deck has a wire below the ground plane, and the fast "
     "operator has no per-segment medium. Admissibility is a purely "
     "geometric distance test with no notion of which side of the interface "
     "a cluster is on; the fused near/far block kernels take a `double k` and "
@@ -298,6 +304,32 @@ class HMatrixSolver(BSplineSolver):
     resolve to the dense BSplineSolver path until later phases override them,
     so the class is usable and correct from the start.
     """
+
+    # momwire#396 goal 3: `BSplineSolver`'s row in every cell but ONE. This
+    # class used to inherit that row whole, on the survey's finding that
+    # enrichment merely forces a dense-path fallback here rather than being
+    # refused — true, and it missed the cell that is genuinely different.
+    # `_refuse_buried_fast_operator` refuses a buried deck by NAME, on
+    # purpose (a silent dense fallback on a buried array is an
+    # out-of-memory rather than a slow answer), while the inherited row said
+    # buried was served: a consumer reading the declaration was told to send
+    # exactly the deck this class raises on.
+    #
+    # `_replace(refusals=...)` REPLACES the mapping rather than merging it —
+    # the trap that lost `SinusoidalGalerkinSolver` a cell — so the parent's
+    # entries are spread in by hand, including the two ground rows that
+    # refuse buried before this guard is ever reached.
+    #
+    # `ArrayBlockSolver` inherits THIS row (no override): it is
+    # `HMatrixSolver`'s solve with a different structural decomposition and
+    # the same guard, on the same fills.
+    capabilities = BSplineSolver.capabilities._replace(
+        buried=False,
+        refusals={
+            **BSplineSolver.capabilities.refusals,
+            "buried": _BURIED_FAST_OPERATOR_REFUSAL,
+        },
+    )
 
     # ------------------------------------------------------------------
     # Shared, k-independent geometry/basis context
@@ -1590,7 +1622,7 @@ class HMatrixSolver(BSplineSolver):
         Sommerfeld remainder is ONE global low-rank term over one grid.
         """
         if self.ground_z is not None and self._has_buried_wires():
-            raise NotImplementedError(_BURIED_FAST_OPERATOR_REFUSAL.format(who=who))
+            raise NotImplementedError(f"{who}: {_BURIED_FAST_OPERATOR_REFUSAL}")
 
     def _build_operator(self):
         """Build the fast operator the constrained solve runs GMRES on. The

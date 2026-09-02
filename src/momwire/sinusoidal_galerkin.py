@@ -334,6 +334,7 @@ from ._bspline_kernels import _ek_axis_groups
 from .bspline import SINGULAR_ENRICHMENT_NOT_YET
 from ._port_solution import PortSolution
 from .sinusoidal import (
+    _BURIED_REFUSAL,
     _DENSE_ASSEMBLY_THRESHOLD,
     _EKPairs,
     _EULER_GAMMA,
@@ -953,6 +954,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "singular_enrichment": SINGULAR_ENRICHMENT_NOT_YET.format(
                 cls="SinusoidalGalerkinSolver"
             ),
+            # `buried` and `contact` are the base's, unchanged: this class
+            # inherits `_build_geometry`'s scan whole, so the deck it refuses
+            # and the sentence it refuses with are the base's too — only the
+            # class name in the prose differs (momwire#564). Carried across
+            # by hand for the same REPLACE reason as `contact+refl-coef`
+            # above.
+            "buried": _BURIED_REFUSAL.format(cls="SinusoidalGalerkinSolver"),
             "extended_kernel+stepped_radius_junction": (
                 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
             ),

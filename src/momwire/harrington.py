@@ -98,6 +98,8 @@ import numpy as np
 from . import _wire_spec
 from ._capabilities import Capabilities
 from .pulse import (
+    _BURIED_REFUSAL,
+    _GROUND_CONTACT_REFUSAL,
     _KNOT_FEEDS_REFUSAL,
     _OUT_OF_SCOPE,
     _PER_WIRE_RADIUS_REFUSAL,
@@ -196,7 +198,16 @@ class HarringtonSolver(PulseSolver):
         knot_feeds=False,
         per_wire_radius=False,
         singular_enrichment=False,
+        # The parent's two geometry cells, unchanged: this class overrides
+        # `_charge_stencil` and nothing else, so `_check_ground_clearance` is
+        # the parent's and refuses the same two decks. Only the class name in
+        # the prose differs (momwire#564) — a Harrington caller used to be
+        # handed a contact refusal that named PulseSolver.
+        buried=False,
+        contact=False,
         refusals={
+            "buried": _BURIED_REFUSAL.format(cls="HarringtonSolver"),
+            "contact": _GROUND_CONTACT_REFUSAL.format(cls="HarringtonSolver"),
             # `{cls}` substituted with THIS class, for the same momwire#564
             # reason the two cells below carry: these two used to quote the
             # parent's dict RAW, so a Harrington caller was handed a sentence

@@ -22,11 +22,22 @@ from __future__ import annotations
 
 from typing import Mapping, NamedTuple
 
-# The boolean axes, in declared field order: gives a combination key ("a+b")
-# one canonical spelling regardless of call order. A cell that names a
-# combination-only condition rather than a real axis (e.g. "finite_ground",
-# "mixed_radii") is not one of these, and sorts after every real axis.
+# The boolean axes, in LOGICAL order (not literal field order — a NamedTuple
+# default has to come last, so the three cells added after the row shipped are
+# declared at the end of the class and sit here where they belong): gives a
+# combination key ("a+b") one canonical spelling regardless of call order. A
+# cell that names a combination-only condition rather than a real axis (e.g.
+# "finite_ground", "mixed_radii") is not one of these, and sorts after every
+# real axis.
+#
+# The two GEOMETRY axes lead, and that is load-bearing rather than tidy: every
+# combination key already written down pairs one of them with something else
+# ("buried+contact", "buried+extended_kernel", "buried+crossing",
+# "contact+refl-coef"), and those spellings are what the rows and the tests
+# say. Putting them first is what keeps `_combo_key` producing them.
 _AXES = (
+    "buried",
+    "contact",
     "wire_loading",
     "extended_kernel",
     "junction_ports",
@@ -50,11 +61,27 @@ class Capabilities(NamedTuple):
     """One solver's declared row of the capability matrix.
 
     `grounds` is the subset of ``{"pec", "refl-coef", "sommerfeld"}`` the
-    solver serves — free space is universal and not listed. The seven
+    solver serves — free space is universal and not listed. The nine
     booleans are the other axes. `refusals` maps a cell name, or an "a+b"
     combination key, to the reason prose already carried by that solver's
     own refusal (a constructor or solve-time raise) — referenced from
     there, not duplicated here.
+
+    THE ONE RULE for what is an axis and what is a condition token: a
+    question about the DECK that a solver answers the same way for every
+    deck is an axis and gets a declared boolean; a question whose answer
+    depends on some other cell is a condition token and appears only inside
+    an "a+b" key. `buried` and `contact` are axes under that rule — "does
+    this family fill a wire below the interface", "does it stand a wire end
+    in the plane" — and they had to become ones, because `_served` reads an
+    undeclared token as SERVED and so a row could not say "refused, full
+    stop" about either no matter what it put in `refusals`: the entry was
+    unreachable from `refusal("buried")`. The alternative was a combination
+    key per ground on every row, which still could not answer the
+    single-cell question and would have spelled one refusal three times.
+    "crossing", "finite_ground", "mixed_radii" and "stepped_radius_junction"
+    stay condition tokens: each is a shape a served deck can take, not
+    something a solver is made of.
 
     `knot_feeds` is the odd one, because it is the only axis a solver can
     fail SILENTLY (momwire#611). Every family resolves a ``feeds``
@@ -93,18 +120,36 @@ class Capabilities(NamedTuple):
     # silently snaps be served by a node-addressing consumer, which is the
     # exact failure momwire#611 existed to close.
     knot_feeds: bool = False
+    # The two GEOMETRY axes (momwire#396 goal 3), on `knot_feeds`' precedent
+    # and for the same reason: they arrived after every row was written, so
+    # they need a default, so they come last. See THE ONE RULE above for why
+    # they are axes at all.
+    #
+    # False both, and again the safe direction is the honest one. `buried` is
+    # served by exactly one family (`BSplineSolver`, momwire#553) and refused
+    # by the other five plus the two accelerators, so False is also the
+    # common case; `contact` is the reverse, served by five and refused by
+    # the pulse family — but a row that forgets to declare either is a row
+    # nobody has checked against a deck, and defaulting to "served" would
+    # publish that omission as a capability.
+    buried: bool = False
+    contact: bool = False
 
     def _served(self, cell: str) -> bool:
         if cell in ("pec", "refl-coef", "sommerfeld"):
             return cell in self.grounds
         if cell in _AXES:
             return bool(getattr(self, cell))
-        # A condition token ("finite_ground", "mixed_radii", …) is not a
-        # capability — it carries meaning only through a declared "a+b"
-        # combination key. Treating an unknown token as refused would make
-        # every solver WITHOUT that combination key spuriously refuse it
+        # A condition token ("crossing", "finite_ground", "mixed_radii", …)
+        # is not a capability — it carries meaning only through a declared
+        # "a+b" combination key. Treating an unknown token as refused would
+        # make every solver WITHOUT that combination key spuriously refuse it
         # (BSplineSolver serves junction_ports over a finite ground and
         # declares no such key), so an unmatched condition is served.
+        #
+        # This is the rule "buried" and "contact" had to be promoted OUT of:
+        # both name something a family either does or does not do, so reading
+        # them as served-unless-paired made a row unable to refuse either.
         return True
 
     def refusal(self, *cells: str) -> str | None:

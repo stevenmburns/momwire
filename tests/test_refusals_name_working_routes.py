@@ -160,7 +160,23 @@ def _route_harrington_junctions_kwarg():
     ).compute_impedance()
 
 
+def _route_bspline_serves_the_buried_deck_hmatrix_refuses():
+    """`HMatrixSolver` refuses a buried deck rather than falling back, and
+    sends the caller to the dense B-spline fill (momwire#553 U5). The same
+    deck, on that route."""
+    BSplineSolver(
+        wires=[np.array([[-1.0, 0.0, -0.5], [1.0, 0.0, -0.5]])],
+        nsegs=6,
+        wavelength=WL,
+        wire_radius=1e-3,
+        ground_z=0.0,
+        ground_eps=13.0 - 1.0j,
+        ground_model="sommerfeld",
+    ).compute_impedance()
+
+
 ROSTER = {
+    "hmatrix.py::buried": _route_bspline_serves_the_buried_deck_hmatrix_refuses,
     "sinusoidal.py::junction_ports": _route_bspline_junction_ports,
     "sinusoidal.py::node_gaps->bspline": _route_bspline_node_gaps,
     "sinusoidal.py::node_gaps->galerkin": _route_galerkin_node_gaps,
@@ -194,6 +210,31 @@ _NAMES_A_ROUTE = re.compile(
 _SELF_NAMING = re.compile(r"got unexpected keyword argument")
 
 
+def _module_string_constants(tree):
+    """Module-level ``NAME = "..."`` bindings, folded concatenation included
+    (the parser makes `("a" "b")` one Constant, which is the house shape for
+    a long refusal).
+
+    A refusal's prose moving from inside its `raise` to a module constant is
+    the housekeeping momwire#396 goal 3 does everywhere — the matrix cell and
+    the raise then quote one sentence instead of two copies — and without
+    this the move would BLIND the scan below, which is the opposite of what
+    the move is for. `hmatrix.py`'s buried refusal is the first of them.
+    """
+    consts = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not (
+            isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+        ):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                consts[target.id] = node.value.value
+    return consts
+
+
 def _raised_route_naming_refusals():
     """(file, lineno) of every raise whose message names another route."""
     found = []
@@ -202,14 +243,16 @@ def _raised_route_naming_refusals():
             tree = ast.parse(f.read_text())
         except SyntaxError:  # pragma: no cover - a broken tree is its own bug
             continue
+        consts = _module_string_constants(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Raise) or node.exc is None:
                 continue
-            parts = [
-                n.value
-                for n in ast.walk(node.exc)
-                if isinstance(n, ast.Constant) and isinstance(n.value, str)
-            ]
+            parts = []
+            for n in ast.walk(node.exc):
+                if isinstance(n, ast.Constant) and isinstance(n.value, str):
+                    parts.append(n.value)
+                elif isinstance(n, ast.Name) and n.id in consts:
+                    parts.append(consts[n.id])
             msg = " ".join(" ".join(parts).split())
             if len(msg) < 20 or _SELF_NAMING.search(msg):
                 continue

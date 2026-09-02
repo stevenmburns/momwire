@@ -473,6 +473,28 @@ _OUT_OF_SCOPE = {
     "second unknown for one current",
 }
 
+# momwire#651's first half. Razor's buried refusal was raised inline in
+# `_refuse_buried_geometry` and appeared nowhere in the declared row, so
+# `capabilities.refusal("buried", "sommerfeld")` said None on the one deck
+# class this solver is certain to raise on. Named here so the row and the
+# raise are one sentence; the raised message is unchanged.
+#
+# This is the ONE buried reading that is razor's own. The other three — a
+# wire crossing the interface mid-span, a wire below a ground with no lower
+# medium, and contact plus buried — come out of `_medium_spec` with the same
+# sentences `BSplineSolver` raises, which is the point of routing both trunks
+# through it, so the row quotes those from there.
+_BURIED_FILL_REFUSAL = (
+    "RazorSolver has no "
+    "buried fill: the momwire#553 buried serve (direct + image "
+    "+ Sommerfeld-remainder blocks in the lower medium) is "
+    "written for BSplineSolver's testing side only. A detached "
+    "buried wire is a LEGAL deck - solve it with BSplineSolver, "
+    "which serves buried ground since momwire#553, or raise the "
+    "wire clear of the plane. Razor consuming the basis-agnostic "
+    "buried tables is momwire#651's continuation"
+)
+
 
 # momwire#624 removed `_CONTACT_OVER_FINITE_REFUSAL` from this module. A
 # grounded end over the SOMMERFELD ground is served here now, and what is
@@ -908,12 +930,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         knot_feeds=True,
         per_wire_radius=True,
         singular_enrichment=False,
+        # Contact at a wire END is served over PEC (unit 3) and over the
+        # Sommerfeld ground (momwire#624); what is refused inside that column
+        # is the refl-coef row below, which is a combination and not this
+        # cell. BURIED is momwire#651's first half: razor refuses it, has
+        # always refused it, and now says so — all four sentences the
+        # geometry scan can reach, three of them `_medium_spec`'s shared ones
+        # and reached through combination keys because they are the ground
+        # column and the mid-span crossing rather than this family's own gap.
+        buried=False,
+        contact=True,
         refusals={
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "singular_enrichment": SINGULAR_ENRICHMENT_NOT_YET.format(
                 cls="RazorSolver"
             ),
+            "buried": _BURIED_FILL_REFUSAL,
+            "buried+pec": _medium_spec.BURIED_PEC_REFUSAL,
+            "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
+            "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
+            "buried+crossing": _medium_spec.CROSSING_REFUSAL,
         },
     )
 
@@ -1273,14 +1310,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             zmin = float(np.asarray(self.wires_polylines[w])[:, 2].min())
             raise ValueError(
                 f"wire {w} lies wholly below the ground plane (min z = "
-                f"{zmin:.6g} < ground_z = {gz:g}), and RazorSolver has no "
-                "buried fill: the momwire#553 buried serve (direct + image "
-                "+ Sommerfeld-remainder blocks in the lower medium) is "
-                "written for BSplineSolver's testing side only. A detached "
-                "buried wire is a LEGAL deck - solve it with BSplineSolver, "
-                "which serves buried ground since momwire#553, or raise the "
-                "wire clear of the plane. Razor consuming the basis-agnostic "
-                "buried tables is momwire#651's continuation"
+                f"{zmin:.6g} < ground_z = {gz:g}), and "
+                f"{_BURIED_FILL_REFUSAL}"
             )
 
     def _ground_ends(self):

@@ -188,6 +188,31 @@ _JUNCTION_PORTS_REFUSAL = (
     "short bridge wire across the gap and gap-feed it"
 )
 
+# The `buried` cell for both classes in this family (momwire#396 goal 3).
+# `_build_geometry`'s scan raised the geometry line and no reason at all —
+# "wire 0 dips below the ground plane (min z = -1 < ground_z = 0)" — which
+# told a caller what it had drawn and nothing about why it was refused. The
+# sentence is appended there and declared here; the raise's geometry preamble
+# is unchanged.
+#
+# ONE cell and no combination keys, unlike `BSplineSolver`'s and
+# `RazorSolver`'s rows: this family's scan is coarser than
+# `_medium_spec.wire_media`. It asks only "is any point below the plane", so
+# a mid-span CROSSING and a buried wire under a ground with no lower medium
+# both arrive at this same sentence — and the sentence is true of all three,
+# because nothing in this formulation fills below the interface under any
+# ground.
+_BURIED_REFUSAL = (
+    "{cls} has no buried fill. The momwire#553 buried serve - a direct, an "
+    "image and a Sommerfeld-remainder block evaluated in the lower medium at "
+    "k_m = k0*sqrt(eps_tilde) - is written for BSplineSolver's testing side "
+    "only, and this family has no in-medium kernel at all: every fill here "
+    "takes the free-space wavenumber and reaches the ground through an image "
+    "or a reflection weight above the interface. A wire below the plane is a "
+    "LEGAL deck - solve it with BSplineSolver over ground_model='sommerfeld' "
+    "- or raise the wire clear of the plane"
+)
+
 # No node_gaps kwarg exists on this solver at all (unlike BSplineSolver /
 # SinusoidalGalerkinSolver) — passing one is a plain TypeError, not a
 # NotImplementedError, so there is no raise to reuse this from.
@@ -390,7 +415,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         knot_feeds=False,
         per_wire_radius=True,
         singular_enrichment=False,
+        # Contact at a wire END is served (`ground_minus` / `ground_plus`);
+        # the refl-coef row inside that column is the combination below.
+        # Buried is refused outright — see `_BURIED_REFUSAL`.
+        buried=False,
+        contact=True,
         refusals={
+            "buried": _BURIED_REFUSAL.format(cls="SinusoidalSolver"),
             "junction_ports": _JUNCTION_PORTS_REFUSAL,
             "node_gaps": _NODE_GAPS_REFUSAL,
             "knot_feeds": _KNOT_FEEDS_REFUSAL,
@@ -1045,7 +1076,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if float(pl_arr[:, 2].min()) < gz - tol:
                     raise ValueError(
                         f"wire {w_idx} dips below the ground plane "
-                        f"(min z = {pl_arr[:, 2].min():.6g} < ground_z = {gz:g})"
+                        f"(min z = {pl_arr[:, 2].min():.6g} < ground_z = "
+                        f"{gz:g}): " + _BURIED_REFUSAL.format(cls=type(self).__name__)
                     )
                 start_touch = abs(pl_arr[0, 2] - gz) <= tol
                 end_touch = abs(pl_arr[-1, 2] - gz) <= tol
