@@ -333,8 +333,15 @@ def test_the_prepared_token_holds_no_n_squared_table(monkeypatch):
     monkeypatch.setattr(_razor, "_FORCE_NUMPY", False)
     token = prepared_bytes(RazorSolver(**kw))
     new_bytes = sum(
-        getattr(token, slot).nbytes for slot in _razor._FusedMoments.__slots__
+        getattr(token, slot).nbytes
+        for slot in _razor._FusedMoments.__slots__
+        if isinstance(getattr(token, slot), np.ndarray)
     )
+    # `_numpy` (momwire#796) is the one non-array slot: the complex-k
+    # fallback's memo, which holds exactly the chunk list this gate exists to
+    # keep off the token. In the fused lane it must still be empty, so assert
+    # that rather than let a non-array slot quietly leave the accounting.
+    assert token._numpy is None
     assert new_bytes * 20 < ref_bytes, (new_bytes, ref_bytes)
 
 

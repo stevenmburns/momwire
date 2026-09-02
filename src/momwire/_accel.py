@@ -140,6 +140,10 @@ _CANCELLABLE_KERNELS = (
     # the whole fill is one call per (observer set, source set, k), so a
     # cancelled razor solve reaches Python again only through this remap.
     "razor_seg_moments",
+    # Its in-medium twin (momwire#796). Same kernel body, same tile-granular
+    # poll, so an aborted complex-k fill must remap the same way; listed with
+    # its sibling rather than left for the next hole-finding issue.
+    "razor_seg_moments_cplx",
 )
 
 

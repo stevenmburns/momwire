@@ -352,6 +352,7 @@ from . import (
 from .bspline import SINGULAR_ENRICHMENT_NOT_YET
 from ._bspline_kernels import (
     _EK,
+    _complex_k,
     _ek_axis_groups,
     _ek_factor,
     _ek_pair_mask,
@@ -432,9 +433,28 @@ _HAVE_RAZOR_ASSEMBLE_ACCEL = _acc is not None and bool(
 )
 
 
+# The in-medium (complex k) twin of the moment fill (momwire#796), on its OWN
+# symbol for the same reason the other two are: a .so built before #796 landed
+# exports `razor_seg_moments` and not `razor_seg_moments_cplx`, and the gate
+# below has to be able to tell rather than assume one implies the other.
+_HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
+    getattr(_acc, "razor_cplx_796", False)
+)
+
+
 def _use_razor_fill_accel():
     """The fused C++ moment fill serves when built and not forced off."""
     return _HAVE_RAZOR_FILL_ACCEL and not _FORCE_NUMPY
+
+
+def _use_razor_cplx_accel():
+    """The complex-k kernel serves when built and not forced off.
+
+    Read separately from `_use_razor_fill_accel`: a build can have the real-k
+    fill without this one, and that combination must take the numpy lane on a
+    complex k rather than the fused lane (momwire#796).
+    """
+    return _HAVE_RAZOR_CPLX_ACCEL and not _FORCE_NUMPY
 
 
 def _use_razor_assemble_accel():
@@ -640,6 +660,13 @@ class _FusedMoments:
         "a_ek",
         "xg",
         "wg",
+        # The complex-k fallback's memo (momwire#796). Deliberately the ONLY
+        # thing added to the token: the numpy lane it may have to build needs
+        # nothing this object is not already holding, so the fill's arguments
+        # stay the whole of its state and the #742 residency gate keeps its
+        # meaning. Empty unless a build without the complex kernel is asked
+        # for a complex k.
+        "_numpy",
     )
 
     _EMPTY_I64 = np.empty(0, dtype=np.int64)
@@ -666,14 +693,60 @@ class _FusedMoments:
                 np.asarray(_ek_radius(ek, self.a), dtype=float), (n_seg,)
             ).copy()
         self.xg, self.wg = leggauss(n_qp_source)
+        self._numpy = None
+
+    def _numpy_lane(self, solver):
+        """The numpy chunk list for this same source set, built once.
+
+        REBUILT from this token's own arrays rather than from retained
+        `geom`/`ek` references: everything the numpy prepare reads is already
+        here — the three geometry columns it takes off `geom`, and the EK
+        labels plus `a_ek`, which IS `_ek_radius(ek, a)` and so reconstructs
+        the `_EK` faithfully. Keeping it that way is what lets the token stay
+        the fill's arguments and nothing else (the #742 residency gate).
+
+        Only a complex k on a build WITHOUT the `_cplx` kernel reaches here,
+        so the O(n_obs·n_seg·n_qp) tables the fused lane exists to avoid are
+        formed only when there is no fused lane to take.
+        """
+        if self._numpy is None:
+            ek = None
+            if self.group_i.size and self.group_j.size:
+                ek = _EK(a=self.a_ek, group_i=self.group_i, group_j=self.group_j)
+            geom = {
+                "seg_p0": self.seg_p0,
+                "seg_t": self.seg_t,
+                "seg_h": self.seg_h,
+            }
+            self._numpy = solver._seg_moments_prepare_numpy(
+                self.obs, geom, self.a, ek=ek
+            )
+        return self._numpy
 
     def evaluate(self, solver, k, *, need_m1, n_obs):
-        """Both halves of the split, at one wavenumber, in one kernel call."""
+        """Both halves of the split, at one wavenumber, in one kernel call.
+
+        **The k-type gate (momwire#796).** A real k goes to the real-k kernel,
+        as it always has. A complex (in-medium) k goes to `_cplx` when the
+        build has it and to the numpy lane when it does not — never to
+        `float(k)`, which is the TypeError #796 was filed for. `_complex_k`
+        is the shared predicate and carries the Im k > 0 refusal, so the
+        growing-exponential branch raises `ValueError` here as well as at the
+        entry point.
+        """
         if n_obs != self.obs.shape[0]:
             raise AssertionError(
                 f"prepared for {self.obs.shape[0]} observers, replayed at {n_obs}"
             )
-        M0, M1 = _acc.razor_seg_moments(
+        if _complex_k(k):
+            if not _use_razor_cplx_accel():
+                return solver._seg_moments_from_prepared(
+                    self._numpy_lane(solver), k, n_obs, need_m1=need_m1
+                )
+            kernel, kval = _acc.razor_seg_moments_cplx, complex(k)
+        else:
+            kernel, kval = _acc.razor_seg_moments, float(k)
+        M0, M1 = kernel(
             self.obs,
             self.seg_p0,
             self.seg_t,
@@ -681,7 +754,7 @@ class _FusedMoments:
             self.a,
             self.xg,
             self.wg,
-            float(k),
+            kval,
             bool(need_m1),
             self.group_i,
             self.group_j,
@@ -1994,7 +2067,18 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if _use_razor_fill_accel():
             return _FusedMoments(obs, geom, a, ek, self.n_qp_source)
+        return self._seg_moments_prepare_numpy(obs, geom, a, ek=ek)
 
+    def _seg_moments_prepare_numpy(self, obs, geom, a, *, ek=None):
+        """The numpy lane's half of :meth:`_seg_moments_prepare`.
+
+        Split out (momwire#796) because it has a SECOND caller now: a
+        `_FusedMoments` handed a complex k by a build whose kernel is real-k
+        only falls back here, and that fallback cannot go through
+        `_seg_moments_prepare` itself — the accelerator branch at its head
+        would hand back another `_FusedMoments` and the fallback would be a
+        loop.
+        """
         seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
         n_seg = seg_h.size
         n_obs = obs.shape[0]
