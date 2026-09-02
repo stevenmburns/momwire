@@ -13,7 +13,9 @@ become one.  What EZNEC does give the user is a file picker for the engine
 path, so the choice rides on the filename:
 
     momwire-eznec.exe                 the default, degree-2 B-spline
-    momwire-eznec-razor-nec5.exe      the NEC-5 formulation twin
+    momwire-eznec-razor-2p.exe        the tent basis with razor-blade path
+                                      testing, at NEC-5's two-point rule
+    momwire-eznec-razor-nec5.exe      the deprecated spelling of razor-2p
 
 This is momwire#528's spelling, not a second one — the same rule, through the
 same owner (`basis_from_program_name`), with ``eznec-`` as the marker where
