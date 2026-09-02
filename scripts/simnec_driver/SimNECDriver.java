@@ -283,12 +283,22 @@ public class SimNECDriver {
         String err = drain(p.getErrorStream());
         if (!err.isEmpty()) note("stderr over the session (SimNEC never reads it; " + err.length() + " chars):\n" + indent(err));
 
-        // NEC2Daemon.destroy(): kill, then close the three streams.
+        // NEC2Daemon.destroy(): kill, then close the three streams. SimNEC's
+        // order is destroy, stdout, stdin. On Windows destroy() kills only
+        // cmd.exe and the engine underneath survives until its stdin closes,
+        // so here stdin is closed FIRST: this driver reads stdout on a thread,
+        // and a Windows close of a stream with a read pending waits for that
+        // read, which only ends when the engine does. SimNEC reads on the
+        // calling thread and does not have that pending read.
         p.destroy();
-        is.close();
         ps.close();
+        String tail = reader.next(timeoutSeconds);
+        while (tail != null && tail != LineReader.TIMEOUT) tail = reader.next(timeoutSeconds);
+        if (tail == null) ok("engine ended once stdin closed");
+        else fail("engine still holding stdout " + timeoutSeconds + " s after stdin closed");
+        is.close();
         boolean gone = p.waitFor(10, TimeUnit.SECONDS);
-        note("after destroy(): " + (gone ? "exited " + p.exitValue() + " (" + exitMeaning(p.exitValue()) + ")" : "still alive after 10 s"));
+        note("after destroy(): shell " + (gone ? "exited " + p.exitValue() + " (" + exitMeaning(p.exitValue()) + ")" : "still alive after 10 s"));
     }
 
     // nec2/Execute.partsMatch: "" is a one-field wildcard; parts may be longer than args.
