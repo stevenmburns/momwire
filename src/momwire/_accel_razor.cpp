@@ -662,31 +662,41 @@ static constexpr double RAZOR_REFL_TINY = 1e-30;
 // the arithmetic is unchanged, and the multi-step order is preserved
 // deliberately so the two paths agree to the bars rather than by luck.
 //
-// REFL-COEF ONLY, and that is a contract rather than a first cut. The
-// `mode == "compose"` (sommerfeld) window is the constant C2 on the same
-// mirrored tangent dot, and it would fuse here trivially -- but C2 reaches Z
-// THROUGH THE WINDOWS by design (`PotentialGround.image_coefficient`), and a
-// consumer that reads the attribute and applies it itself doubles the exact-
-// image half. `test_the_consumer_never_applies_the_image_coefficient_itself`
-// pins exactly that, with a ground that lies about its coefficient while its
-// weights stay honest, and it caught this kernel serving compose. So the
-// sommerfeld contraction stays on numpy until C2 can be routed without the
-// consumer reading it.
+// `kind` is the ground's own answer about which window it is, arriving as a
+// `FusedWindowRule` from `PotentialGround.fused_window_rule` (momwire#806) --
+// 0 is the stock Fresnel chain, 1 is `coefficient` times the mirrored tangent
+// dot, which is what a composing (sommerfeld) ground's window is.
 //
-// A ground whose weights are NOT the stock Fresnel pair -- the radial
-// screen's `standard_fresnel = False` row -- must never reach here either;
-// the Python gate refuses it rather than this function guessing.
+// The routing matters more than the arithmetic here, and #804 is why. That PR
+// fused the composing ground by reading `PotentialGround.image_coefficient` in
+// the FILL, which doubled the exact-image half: C2 reaches Z through the
+// windows by design, and no consumer may apply it itself.
+// `test_the_consumer_never_applies_the_image_coefficient_itself` caught it,
+// with a ground that lies about its coefficient while its weights stay honest.
+// So `coefficient` below is not read from any attribute by anyone downstream
+// of the ground -- it travels inside the rule, from the same `self` the
+// closure reads, and this kernel applies whatever it is handed.
+//
+// A ground whose weights are NOT the stock Fresnel pair -- the radial screen's
+// `standard_fresnel = False` row -- returns no rule at all, so it never
+// reaches here; the ground declines rather than this function guessing.
 static inline std::complex<double> razor_a_window(
+    int kind,
     double ox, double oy, double oz,     // observer centre
     double tx, double ty, double tz,     // observer tangent
     double sx, double sy, double sz,     // source centre (REAL, unmirrored)
     double ux, double uy, double uz,     // source tangent (REAL)
     double ground_z,
-    const std::complex<double> &eps_t
+    const std::complex<double> &eps_t,
+    const std::complex<double> &coefficient
 ) {
     // t_m . M t_n with M = diag(1, 1, -1) -- `_ground_mirror.mirror_tangents`
-    // is a pure z-flip, so the mirror is this one sign and no offset.
+    // is a pure z-flip, so the mirror is this one sign and no offset. Both
+    // rules need it; the constant-mirror rule needs nothing else.
     const double td_img = tx * ux + ty * uy - tz * uz;
+    if (kind == 1) {
+        return coefficient * td_img;
+    }
 
     // The specular ray: image midpoint (x_n, y_n, 2 z_g - z_n) to r_m.
     const double dx = ox - sx;
@@ -783,8 +793,10 @@ razor_assemble_t1_weighted(
     py::array_t<double, py::array::c_style | py::array::forcecast> src_t,
     py::array_t<double, py::array::c_style | py::array::forcecast> wts,
     size_t n_path,
+    int window_kind,
     std::complex<double> eps_t,
-    double ground_z
+    double ground_z,
+    std::complex<double> coefficient
 ) {
     auto m0 = M0.unchecked<2>();
     auto m1 = M1.unchecked<2>();
@@ -806,6 +818,11 @@ razor_assemble_t1_weighted(
     const size_t n_seg = static_cast<size_t>(m1.shape(1));
     const size_t n_basis = static_cast<size_t>(sa.shape(0));
 
+    if (window_kind != 0 && window_kind != 1) {
+        throw std::runtime_error(
+            "razor_assemble_t1_weighted: window_kind must be 0 (Fresnel) or "
+            "1 (constant times the mirrored tangent dot)");
+    }
     if (n_path == 0 || n_obs % n_path != 0) {
         throw std::runtime_error(
             "razor_assemble_t1_weighted: n_obs must be a whole number of "
@@ -884,13 +901,13 @@ razor_assemble_t1_weighted(
 
                 // `w_A[:, s_a] * sig_a`, one pair at a time.
                 const std::complex<double> wa =
-                    razor_a_window(ox, oy, oz, tx, ty, tz,
+                    razor_a_window(window_kind, ox, oy, oz, tx, ty, tz,
                                    acx, acy, acz, atx, aty, atz,
-                                   ground_z, eps_t) * sg_a;
+                                   ground_z, eps_t, coefficient) * sg_a;
                 const std::complex<double> wb =
-                    razor_a_window(ox, oy, oz, tx, ty, tz,
+                    razor_a_window(window_kind, ox, oy, oz, tx, ty, tz,
                                    bcx, bcy, bcz, btx, bty, btz,
-                                   ground_z, eps_t) * sg_b;
+                                   ground_z, eps_t, coefficient) * sg_b;
 
                 // `integrand = wA_a*mom_a + wA_b*mom_b`, then `*= wts`, then
                 // summed over the path -- the numpy order, kept.
@@ -977,18 +994,22 @@ void register_razor(py::module_ &m) {
           "A-term weight window -- formed inside the tile from the observer "
           "and source geometry, so the (n_obs_chunk, n_seg) window plane the "
           "numpy closure materialises is never built. "
-          "REFL-COEF ONLY: the specular_pair_tables -> fresnel_rho -> "
-          "a_term_weights chain, from eps_t and ground_z. A composing "
-          "(sommerfeld) ground is NOT served -- its C2 reaches Z through the "
-          "windows by design, and a consumer that applies the attribute "
-          "itself doubles the exact-image half. A ground whose weights are "
-          "not the stock Fresnel pair (standard_fresnel = False) must be "
-          "refused by the caller too. Returns T1 of shape "
-          "(n_obs / n_path, n_basis).",
+          "`window_kind` is the ground's own answer about which window it "
+          "is, carried in the FusedWindowRule that PotentialGround."
+          "fused_window_rule returns (momwire#806): 0 is the stock "
+          "specular_pair_tables -> fresnel_rho -> a_term_weights chain from "
+          "eps_t and ground_z, 1 is `coefficient` times the mirrored tangent "
+          "dot, which is a composing (sommerfeld) ground's window. The "
+          "coefficient travels in the rule rather than being read off the "
+          "ground by the caller -- C2 reaches Z through the windows by "
+          "design, and a fill that applies image_coefficient itself doubles "
+          "the exact-image half. A ground whose weights are not the stock "
+          "Fresnel pair (standard_fresnel = False) returns no rule and never "
+          "arrives here. Returns T1 of shape (n_obs / n_path, n_basis).",
           py::arg("M0"), py::arg("M1"), py::arg("s_a"), py::arg("s_b"),
           py::arg("h_a"), py::arg("h_b"), py::arg("fall_a"), py::arg("fall_b"),
           py::arg("sig_a"), py::arg("sig_b"), py::arg("obs_c"),
           py::arg("obs_t"), py::arg("src_c"), py::arg("src_t"),
-          py::arg("wts"), py::arg("n_path"), py::arg("eps_t"),
-          py::arg("ground_z"));
+          py::arg("wts"), py::arg("n_path"), py::arg("window_kind"),
+          py::arg("eps_t"), py::arg("ground_z"), py::arg("coefficient"));
 }

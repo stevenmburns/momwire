@@ -146,6 +146,8 @@ merely equivalent.
 
 from __future__ import annotations
 
+from typing import NamedTuple
+
 import numpy as np
 
 from . import _ground_mirror, _ground_refl, _ground_spec, _sommerfeld
@@ -508,6 +510,35 @@ class Remainder:
         )
 
 
+# The two windows a fused assembler can evaluate pair-by-pair, as tags on
+# `FusedWindowRule`. They are the ground's vocabulary, not the kernel's: a
+# ground answers WHICH window it is, and the kernel applies it.
+WINDOW_RULE_FRESNEL = 0
+WINDOW_RULE_CONSTANT_MIRROR = 1
+
+
+class FusedWindowRule(NamedTuple):
+    """The A-term window as a recipe, from `PotentialGround.fused_window_rule`.
+
+    One shape for both rules so a consumer forwards it without branching and
+    the kernel takes no optional argument:
+
+    * `WINDOW_RULE_FRESNEL` -- the stock chain from `eps_t` and `ground_z`;
+      `coefficient` is 1 and unread.
+    * `WINDOW_RULE_CONSTANT_MIRROR` -- `coefficient` times the mirrored
+      tangent dot; `eps_t` and `ground_z` are carried but unread.
+
+    `coefficient` is the ground's own, handed over deliberately so no consumer
+    reads `image_coefficient` itself. See `fused_window_rule` for why that
+    distinction is the entire content of momwire#806.
+    """
+
+    kind: int
+    eps_t: complex
+    ground_z: float
+    coefficient: complex
+
+
 class PotentialGround:
     """One solve's ground, in the mixed-potential trunk: which weights,
     which coefficient, which composition.
@@ -808,6 +839,65 @@ class PotentialGround:
             return w_A, w_Phi
 
         return refl_weights
+
+    def fused_window_rule(self) -> FusedWindowRule | None:
+        """The A-term window as a RULE a fused assembler can apply, or None.
+
+        `weight_windows` hands a consumer the window as a TABLE, already
+        evaluated. A fused kernel cannot take that -- materialising the
+        `(n_obs, n_src)` plane is the cost it exists to avoid -- so it needs
+        the same window as a recipe it can evaluate one pair at a time. This
+        is that recipe, and the two must stay the same window said twice.
+
+        **Why this is a method on the ground rather than the consumer reading
+        attributes** (momwire#806, and #804 is the cautionary tale). C2 reaches
+        Z THROUGH THE WINDOWS by design: `weight_windows` bakes
+        `image_coefficient` into what it returns, and no consumer may apply
+        that attribute itself. #804's first draft fused the composing ground by
+        reading `image_coefficient` in the fill, which doubled the exact-image
+        half -- exactly what
+        `test_the_consumer_never_applies_the_image_coefficient_itself` pins,
+        with a ground that lies about its coefficient while its weights stay
+        honest. That test caught it, and this method is the fix: the
+        coefficient is handed over BY THE GROUND, from the same `self` the
+        closure reads, so a lying wrapper delegates this method to the honest
+        inner object exactly as it delegates `weight_windows`. The consumer
+        forwards an opaque rule and never names the attribute.
+
+        `None` means "not fusable, take the closure", and it is the honest
+        answer for two grounds:
+
+        * **PEC** (`eps_tilde is None`), whose fold has no weighted branch to
+          fuse -- the unweighted assembler already serves it;
+        * **a ground whose weights are not the stock Fresnel pair**
+          (`standard_fresnel = False`, the radial-wire screen of architecture
+          doc 6.1), whose rho_v / rho_h are screen-modified. A rule naming
+          `FRESNEL` would be served with the stock chain and silently give a
+          wrong answer, so the screen declines to be a rule at all and keeps
+          the closure, which reads its own coefficient functions.
+        """
+        if self.eps_tilde is None:
+            return None
+        if self.mode == "compose":
+            # The window is the constant C2 on the mirrored tangent dot. The
+            # coefficient travels IN THE RULE, which is the whole point.
+            return FusedWindowRule(
+                kind=WINDOW_RULE_CONSTANT_MIRROR,
+                eps_t=complex(self.eps_tilde),
+                ground_z=float(self._solver.ground_z),
+                coefficient=complex(self.image_coefficient),
+            )
+        if not self.standard_fresnel:
+            return None
+        # The stock Fresnel chain. `coefficient` is 1 and unused by that rule;
+        # it is carried so the two rules are one shape and the kernel needs no
+        # optional argument.
+        return FusedWindowRule(
+            kind=WINDOW_RULE_FRESNEL,
+            eps_t=complex(self.eps_tilde),
+            ground_z=float(self._solver.ground_z),
+            coefficient=1.0 + 0.0j,
+        )
 
     # ------------------------------------------------------------------
     # the remainder

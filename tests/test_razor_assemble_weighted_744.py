@@ -23,27 +23,32 @@ columns each basis function reads rather than the whole plane, which is MORE
 window arithmetic (~2x, since each wing segment is referenced by about two
 basis functions) traded for the plane's memory traffic and for OpenMP.
 
-It serves exactly ONE ground: refl-coef. Two are refused, for different
-reasons, and both refusals are the interesting part of this module.
+WHICH GROUNDS IT SERVES, AND WHY THAT IS THE GROUND'S ANSWER TO GIVE
+--------------------------------------------------------------------
+Two: refl-coef, and the composing (sommerfeld) ground whose window is the
+constant C2 on the same mirrored tangent dot. The second was refused at first,
+and how it stopped being refused is the interesting part.
 
-A COMPOSING (sommerfeld) ground would fuse trivially -- its window is the
-constant C2 on the same mirrored tangent dot -- and an earlier draft of #744
-served it, for a measured 1.26x on that deck. It is refused because C2 reaches
-Z *through the windows* by design, and a fill that reads
-`PotentialGround.image_coefficient` and applies it itself doubles the exact-
-image half. `test_the_consumer_never_applies_the_image_coefficient_itself`
-pins that with a ground that lies about its coefficient while its weights stay
-honest, and it caught the draft. That win is still on the table; it needs C2
-routed without the consumer reading it, which is a change to the ground
-interface rather than to this kernel.
+An early draft served compose by reading `PotentialGround.image_coefficient`
+in the FILL. That doubled the exact-image half, because C2 reaches Z *through
+the windows* by design and no consumer may apply it itself.
+`test_the_consumer_never_applies_the_image_coefficient_itself` pins exactly
+that, with a ground that lies about its coefficient while its weights stay
+honest -- and it caught the draft. The fix is a routing change, not a
+re-derivation: `PotentialGround.fused_window_rule` hands the assembler the
+window as a RULE, coefficient included, from the same `self` the closure
+reads, so a lying wrapper delegates it to the honest inner object exactly as
+it delegates `weight_windows`. The fill forwards an opaque rule and names none
+of those attributes. That test must therefore keep passing UNCHANGED, which is
+what makes this routing rather than arithmetic.
 
-A ground whose per-pair weights are not the stock Fresnel pair is refused too
--- the radial-wire screen's `standard_fresnel = False` row (architecture doc
-6.1) reaches the same `a_term_weights` with screen-modified rho_v / rho_h, and
-a kernel that hard-codes the stock pair would serve it silently and WRONGLY.
-`test_a_non_fresnel_ground_is_refused` is that boundary, gated on the selector
-rather than on an answer, because the screen ground does not exist yet to
-produce one.
+A ground whose per-pair weights are not the stock Fresnel pair is still
+refused -- the radial-wire screen's `standard_fresnel = False` row
+(architecture doc 6.1) reaches the same `a_term_weights` with screen-modified
+rho_v / rho_h, and a rule naming the stock chain would serve it silently and
+WRONGLY. It declines to be a rule at all. `test_a_non_fresnel_ground_is_
+refused` is that boundary, gated on the rule rather than on an answer, because
+the screen ground does not exist yet to produce one.
 
 What this module gates:
 
@@ -74,6 +79,7 @@ import types
 import numpy as np
 import pytest
 
+from momwire import _potential_ground as _pg
 from momwire import razor as _razor
 from momwire.razor import RazorSolver
 
@@ -119,9 +125,8 @@ def _solve(monkeypatch, deck, *, accel, **kw):
 def test_both_grounds_and_lanes_agree_with_numpy(monkeypatch, lane, model, n):
     """Every configuration the kernel serves, against the numpy closure.
 
-    `sommerfeld` is parametrised here deliberately even though the gate
-    refuses it: flipping the flag on a ground the kernel does not serve must
-    be a no-op, and that is worth a bar rather than an assumption.
+    Both grounds fuse now, so both rows are live bars rather than one bar and
+    one no-op.
     """
     deck = _dipole(n, ground_model=model)
     kw = LANES[lane]
@@ -181,34 +186,76 @@ def test_the_unweighted_path_is_untouched(monkeypatch):
 # ----------------------------------------------------------------------
 
 
-def _ground(mode, *, eps_tilde=complex(13.0, -0.5), standard_fresnel=True):
-    """A stand-in carrying only the three attributes the selector reads."""
-    return types.SimpleNamespace(
-        mode=mode, eps_tilde=eps_tilde, standard_fresnel=standard_fresnel
+def _real_ground(
+    mode,
+    *,
+    eps_tilde=complex(13.0, -0.5),
+    standard_fresnel=True,
+    image_coefficient=1.0 + 0.0j,
+):
+    """A real `PotentialGround`, not a stand-in.
+
+    The rule is the ground's own answer now, so a SimpleNamespace would be
+    testing a stub rather than the interface. Only `ground_z` is read off the
+    solver, so that much is faked.
+    """
+    return _pg.PotentialGround(
+        types.SimpleNamespace(ground_z=0.0),
+        None,
+        1.0,
+        1.0,
+        mode=mode,
+        eps_tilde=eps_tilde,
+        image_coefficient=image_coefficient,
+        standard_fresnel=standard_fresnel,
     )
 
 
-def test_the_refl_coef_ground_is_served():
-    assert _razor._weighted_accel_serves(_ground("fold")) is True
+def test_the_refl_coef_ground_gets_the_fresnel_rule():
+    rule = _razor._weighted_window_rule(_real_ground("fold"))
+    assert rule is not None
+    assert rule.kind == _pg.WINDOW_RULE_FRESNEL
 
 
-def test_a_composing_ground_is_refused():
-    """C2 reaches Z through the WINDOWS, never through the consumer.
+def test_a_composing_ground_gets_the_constant_rule_carrying_its_coefficient():
+    """The routing fix, at the seam where it lives.
 
-    An earlier draft served this ground and doubled the exact-image half,
-    which `test_the_consumer_never_applies_the_image_coefficient_itself`
-    caught. The refusal is the fix, and it is pinned here so a later
-    optimisation cannot quietly undo it without also answering the C2
-    routing question.
+    The coefficient must arrive INSIDE the rule. If a later change reverts to
+    the fill reading `image_coefficient`, this still passes -- which is why
+    `test_the_consumer_never_applies_the_image_coefficient_itself` is the
+    other half of this gate and must stay green unchanged.
     """
-    assert _razor._weighted_accel_serves(_ground("compose")) is False
+    g = _real_ground("compose", image_coefficient=0.25 - 0.5j)
+    rule = _razor._weighted_window_rule(g)
+    assert rule is not None
+    assert rule.kind == _pg.WINDOW_RULE_CONSTANT_MIRROR
+    assert rule.coefficient == 0.25 - 0.5j
+
+
+def test_the_rule_comes_from_the_ground_not_the_attribute():
+    """A wrapper that lies about its coefficient while delegating everything
+    else must not change the rule -- the same shape the sommerfeld module's
+    lying-ground test uses, asserted here at the rule instead of at Z."""
+
+    class _Liar:
+        def __init__(self, inner):
+            self._inner = inner
+            self.image_coefficient = 2.0 * inner.image_coefficient
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    honest = _real_ground("compose", image_coefficient=0.25 - 0.5j)
+    liar = _Liar(honest)
+    assert liar.image_coefficient == 0.5 - 1.0j  # the lie is in place
+    assert _razor._weighted_window_rule(liar) == _razor._weighted_window_rule(honest)
 
 
 def test_free_space_and_pec_select_nothing():
     """No ground object, and a ground with no eps_tilde (PEC), are both the
-    unweighted branch -- the selector must not claim them."""
-    assert _razor._weighted_accel_serves(None) is False
-    assert _razor._weighted_accel_serves(_ground("fold", eps_tilde=None)) is False
+    unweighted branch -- neither may produce a rule."""
+    assert _razor._weighted_window_rule(None) is None
+    assert _razor._weighted_window_rule(_real_ground("fold", eps_tilde=None)) is None
 
 
 def test_a_non_fresnel_ground_is_refused():
@@ -221,5 +268,5 @@ def test_a_non_fresnel_ground_is_refused():
     a slow one. There is no such ground in the tree yet, which is exactly why
     this is gated on the selector and not on an impedance.
     """
-    screen = _ground("fold", standard_fresnel=False)
-    assert _razor._weighted_accel_serves(screen) is False
+    screen = _real_ground("fold", standard_fresnel=False)
+    assert _razor._weighted_window_rule(screen) is None

@@ -487,39 +487,27 @@ def _use_razor_weighted_accel():
     return _HAVE_RAZOR_WEIGHTED_ACCEL and not _FORCE_NUMPY
 
 
-def _weighted_accel_serves(ground):
-    """True when the fused weighted assembler may serve this ground.
+def _weighted_window_rule(ground):
+    """The fused weighted assembler's window, or None to keep numpy.
 
-    Exactly one ground qualifies: refl-coef, whose A-term window IS the
-    `specular_pair_tables` -> `fresnel_rho` -> `a_term_weights` chain the
-    kernel spells out. Two grounds are refused, for different reasons, and
-    both refusals are load-bearing:
+    A question the GROUND answers about itself (momwire#806). The fill used to
+    decide this by reading `ground.mode`, `ground.eps_tilde`,
+    `ground.standard_fresnel` and -- in #804's dropped draft --
+    `ground.image_coefficient`, which is exactly the reading that doubled the
+    exact-image half and that
+    `test_the_consumer_never_applies_the_image_coefficient_itself` exists to
+    catch. `PotentialGround.fused_window_rule` now hands over the window as a
+    rule, coefficient included, from the same `self` its closure reads; this
+    fill forwards it opaquely and names none of those attributes.
 
-    * **a COMPOSING (sommerfeld) ground.** Its window is the constant C2 on
-      the mirrored tangent dot and would fuse trivially -- but C2 reaches Z
-      *through the windows* by design (`PotentialGround.image_coefficient`),
-      and a fill that reads the attribute and applies it itself doubles the
-      exact-image half and nothing else.
-      `test_the_consumer_never_applies_the_image_coefficient_itself` pins
-      that with a ground that lies about its coefficient while its weights
-      stay honest -- and it caught this gate serving compose. The sommerfeld
-      contraction is a real win still on the table (~20% of that fill); it
-      needs C2 routed without the consumer reading it, which is a change to
-      the ground interface and not to this kernel.
-
-    * **a ground whose weights are not the stock Fresnel pair.** The
-      radial-wire screen (architecture doc 6.1) is a `weighted=True,
-      standard_fresnel=False` row whose rho_v / rho_h are screen-modified and
-      reach the SAME `a_term_weights` with different coefficients. The kernel
-      hard-codes the stock pair, so serving it would be a wrong answer rather
-      than a slow one. The numpy closure reads the ground's own functions and
-      keeps serving it correctly.
+    `None` covers free space (no ground object at all), PEC (no weighted
+    branch to fuse), and any ground that declines to be a rule -- today the
+    radial screen's `standard_fresnel = False` row, whose screen-modified
+    rho_v / rho_h the stock chain would silently get wrong.
     """
-    if ground is None or ground.eps_tilde is None:
-        return False
-    if ground.mode == "compose":
-        return False
-    return bool(getattr(ground, "standard_fresnel", False))
+    if ground is None:
+        return None
+    return ground.fused_window_rule()
 
 
 # momwire#510: the ceiling the grazing-height keying below may raise the
@@ -3129,19 +3117,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # weighted branch: the unweighted one has them fused into `td_a` /
         # `td_b`, which the weight window replaces wholesale.
         sig_a, sig_b = geom["wing_sigma"][:, 0], geom["wing_sigma"][:, 1]
-        # momwire#744: whether the fused weighted assembler serves this ground,
-        # decided ONCE per block rather than per chunk -- it is a property of
-        # the ground, not of the row window. False keeps the numpy closure.
-        w_fused = (
-            w_A_fn is not None
-            and _use_razor_weighted_accel()
-            and _weighted_accel_serves(ground)
+        # momwire#744, routed by #806: the window the fused weighted assembler
+        # will apply, asked ONCE per block rather than per chunk -- it is a
+        # property of the ground, not of the row window. None keeps the numpy
+        # closure. Every parameter the kernel needs travels inside the rule,
+        # so nothing below reads the ground's attributes.
+        w_rule = (
+            _weighted_window_rule(ground)
+            if (w_A_fn is not None and _use_razor_weighted_accel())
+            else None
         )
-        if w_fused:
-            w_eps_t = complex(ground.eps_tilde)
-            # The closure's own source for the plane height, not the solver
-            # attribute re-read, so the two cannot drift.
-            w_ground_z = float(ground._solver.ground_z)
 
         T1 = np.empty((n_basis, n_basis), dtype=np.complex128)
         Q = None if rem_fn is None else np.empty_like(T1)
@@ -3175,13 +3160,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     wts[lo:hi].reshape(-1),
                     n_path,
                 )
-            elif w_fused:
-                # momwire#744: the weighted twin of the branch above. The
-                # per-pair A-term window is formed INSIDE the tile from the
-                # same geometry the numpy closure reads, so the
-                # (n_obs_chunk, n_seg) window plane is never materialised --
-                # at N=801 over a refl-coef ground that plane and the
-                # contraction around it were 40% and 28% of the fill.
+            elif w_rule is not None:
+                # momwire#744, extended to the composing ground by #806: the
+                # weighted twin of the branch above. The per-pair A-term
+                # window is formed INSIDE the tile from the same geometry the
+                # numpy closure reads, so the (n_obs_chunk, n_seg) window
+                # plane is never materialised -- at N=801 over a refl-coef
+                # ground that plane and the contraction around it were 40%
+                # and 28% of the fill.
+                #
+                # WHICH window is the ground's own answer, arriving as a rule
+                # rather than as attributes this fill reads. That is the whole
+                # of #806: C2 reaches Z through the windows, and #804's draft
+                # doubled the exact-image half by reading the coefficient
+                # here.
                 #
                 # The observer rows are this chunk's path points, sliced out
                 # of the SAME arrays `w_A_fn` closes over, so the kernel and
@@ -3203,8 +3195,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     sources["src_t"],
                     wts[lo:hi].reshape(-1),
                     n_path,
-                    w_eps_t,
-                    w_ground_z,
+                    w_rule.kind,
+                    w_rule.eps_t,
+                    w_rule.ground_z,
+                    w_rule.coefficient,
                 )
             else:
                 mom_a = M1[:, s_a] / h_a[None, :]
