@@ -54,7 +54,9 @@ CLASSES = (
     PulseSolver,
 )
 
-# The seven declared booleans that are not geometry, in `_AXES` order.
+# The eight declared booleans that are not geometry, in `_AXES` order —
+# `centre_feeds` last because `_AXES` appends it (momwire#673); it was
+# missing from this tuple until momwire#821 made the column load-bearing.
 AXES = (
     "wire_loading",
     "extended_kernel",
@@ -63,6 +65,7 @@ AXES = (
     "knot_feeds",
     "per_wire_radius",
     "singular_enrichment",
+    "centre_feeds",
 )
 
 # The ground column, plus the two geometry axes that only mean anything once
@@ -147,7 +150,7 @@ def render() -> str:
         "",
         "## Axes",
         "",
-        "The seven declared booleans that describe the FORMULATION. Rows are",
+        "The eight declared booleans that describe the FORMULATION. Rows are",
         "classes, with the roster names that reach each one, because",
         "`HMatrixSolver` and `ArrayBlockSolver` are separate `--basis` entries",
         "over a row they inherit almost entirely from `BSplineSolver`.",

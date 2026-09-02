@@ -6,10 +6,13 @@ description: Which of momwire's nine engines to pick — the selection matrix, r
 Nine engines over seven solver families answer through one kernel, and
 every one of them is reachable
 by name — as a `--basis` argument, as its own `momwire-nec2c-<basis>`
-command in [SimNEC's dialog](/reference/portal-usage/), or as the solver
-behind [EZNEC's engine slot](/reference/eznec-nec5/) (which serves the
-default). This page is the engine-side answer to the question every host
-dialog raises: *which name, and what does it cost?*
+command in [SimNEC's dialog](/reference/portal-usage/) (all but the razor
+pair: a NEC-2 deck feeds a segment *centre* and razor places its gap at a
+knot, so that front door refuses it by name, momwire#821), or as the
+solver behind [EZNEC's engine slot](/reference/eznec-nec5/) (which serves
+the default, and is where razor lives). This page is the engine-side
+answer to the question every host dialog raises: *which name, and what
+does it cost?*
 
 The numbers here come from three standing benchmark studies — the
 [solver-selection benchmark](https://github.com/stevenmburns/antennaknobs/blob/main/docs/status/2026-06-25-solver-selection-benchmark.md)
@@ -110,12 +113,17 @@ than through `--basis` or a portal name.
 
 On the models where we hold a licensed reference, `razor-2p` rides the
 licensed engine's own convergence path at the 0.01 % level — it converges
-*along* NEC-5's trajectory, not merely to its endpoint. The refusal
-boundary — down to K≥3 junction ports alone, now that node gaps
-(momwire#603), the extended kernel, and contact over finite grounds
-(momwire#624) are all served — is documented in
-[`docs/razor-solver.md`](https://github.com/stevenmburns/momwire/blob/main/docs/razor-solver.md),
-each with a named message at construction.
+*along* NEC-5's trajectory, not merely to its endpoint. Node gaps
+(momwire#603), the extended kernel and contact over finite grounds
+(momwire#624) are all served now; what the row still refuses — K≥3 junction
+ports, buried wires and the crossing (the buried arc, momwire#812/#813, is
+lifting these), contact under the reflection-coefficient ground, and a feed
+named at a segment *centre*, which is why razor is not a nec2 engine
+(momwire#821) — is documented in
+[`docs/razor-solver.md`](https://github.com/stevenmburns/momwire/blob/main/docs/razor-solver.md)
+and in [the capability
+matrix](https://github.com/stevenmburns/momwire/blob/main/docs/capability-matrix.md),
+each with a named message.
 
 ## `pulse`: the honest slow one
 
