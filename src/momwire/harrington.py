@@ -214,7 +214,7 @@ class HarringtonSolver(PulseSolver):
             # that named no class and no policy. The prose is the parent's —
             # the mechanism is the pulse basis's and this class does not
             # change it — plus `_REFERENCE_ROW`, which is what makes both a
-            # NEVER rather than an unbuilt axis (momwire#396 goal 3).
+            # NEVER rather than an unbuilt axis (momwire#792).
             "junction_ports": _OUT_OF_SCOPE["junction_ports"].format(
                 cls="HarringtonSolver"
             ),
@@ -234,7 +234,7 @@ class HarringtonSolver(PulseSolver):
             # wrong, and antennaknobs renders this prose verbatim.
             "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL.format(cls="HarringtonSolver"),
             "wire_loading": _WIRE_LOADING_REFUSAL.format(cls="HarringtonSolver"),
-            # momwire#396 goal 3, the two cells that carried no sentence at
+            # momwire#792, the two cells that carried no sentence at
             # all here either. `knot_feeds` is the parent's snap, unchanged:
             # this class moves the CHARGE, not the feed grid.
             "knot_feeds": _KNOT_FEEDS_REFUSAL.format(cls="HarringtonSolver"),

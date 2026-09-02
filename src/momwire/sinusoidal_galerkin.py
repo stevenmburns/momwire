@@ -937,7 +937,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     #
     # `singular_enrichment` is the third thing that has to be carried across,
     # and it is the one the REPLACE semantics actually lost: the cell reads
-    # False on both classes for the same reason, and until momwire#396 goal 3
+    # False on both classes for the same reason, and until momwire#792
     # this row answered it with `refusal()`'s generated one-liner while the
     # base answered with the reason. Same sentence, this class's name in it
     # (momwire#564) — the prose reaches antennaknobs' host dialogs verbatim.

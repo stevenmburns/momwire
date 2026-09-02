@@ -71,7 +71,7 @@ from ._accel import acc as _acc
 # inside the guard so `capabilities` and the tests quote one sentence.
 #
 # The `{who}: ` naming the raising method moved OUT of this constant to the
-# raise site in momwire#396 goal 3, leaving the constant a per-deck preamble
+# raise site in momwire#792, leaving the constant a per-deck preamble
 # plus a constant reason like every other geometry refusal in the tree — which
 # is what lets `capabilities.refusals["buried"]` be this string rather than a
 # copy of it. The raised message is unchanged.
@@ -305,7 +305,7 @@ class HMatrixSolver(BSplineSolver):
     so the class is usable and correct from the start.
     """
 
-    # momwire#396 goal 3: `BSplineSolver`'s row in every cell but ONE. This
+    # momwire#792: `BSplineSolver`'s row in every cell but ONE. This
     # class used to inherit that row whole, on the survey's finding that
     # enrichment merely forces a dense-path fallback here rather than being
     # refused — true, and it missed the cell that is genuinely different.

@@ -218,7 +218,7 @@ _WIRE_LOADING_REFUSAL = (
 )
 
 # The one sentence behind every NEVER cell in this family's two rows
-# (momwire#396 goal 3), appended to the cell-specific reason rather than
+# (momwire#792), appended to the cell-specific reason rather than
 # standing on its own: a reader owed a refusal is owed the mechanism first
 # and the policy second.
 #
@@ -261,7 +261,7 @@ _SINGULAR_ENRICHMENT_REFUSAL = (
     "caller typo (a TypeError) rather than this sentence. "
 ) + _REFERENCE_ROW
 
-# The two GEOMETRY cells (momwire#396 goal 3), both raised by
+# The two GEOMETRY cells (momwire#792), both raised by
 # `_check_ground_clearance` and until now declared by neither row: the matrix
 # was silent about contact while the constructor refused it under every
 # ground, which is the contradiction `tests/test_refusals_are_declared.py`
@@ -309,8 +309,8 @@ _OUT_OF_SCOPE = {
     "junctions": "PulseSolver takes no junction spec: coincident wire ends "
     "put their endpoint charges at the same point and superpose by "
     "arithmetic, so there is nothing to declare and nothing to detect",
-    # `{cls}`-substituted and carrying `_REFERENCE_ROW` since momwire#396
-    # goal 3. Both cells were generic before: `HarringtonSolver` declared
+    # `{cls}`-substituted and carrying `_REFERENCE_ROW` since momwire#792.
+    # Both cells were generic before: `HarringtonSolver` declared
     # them by quoting this dict, so its row named no class and gave no
     # policy, and the capability matrix showed two of its NEVER cells with a
     # sentence that could have been any solver's.
@@ -439,7 +439,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # than restating it.
     #
     # `contact` and `buried` are False on BOTH rows in this family
-    # (momwire#396 goal 3). The grounds stay in `grounds` and mean what they
+    # (momwire#792). The grounds stay in `grounds` and mean what they
     # say: all three are served for wires standing CLEAR of the plane, which
     # is every deck this probe was written for. What the two cells withdraw
     # is the plane itself — an end IN it, and anything under it — and both
@@ -464,7 +464,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ),
             "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL.format(cls="PulseSolver"),
             "wire_loading": _WIRE_LOADING_REFUSAL.format(cls="PulseSolver"),
-            # momwire#396 goal 3: the two cells that had no sentence at all
+            # momwire#792: the two cells that had no sentence at all
             # and fell through to `refusal()`'s generated one-liner.
             "knot_feeds": _KNOT_FEEDS_REFUSAL.format(cls="PulseSolver"),
             "singular_enrichment": _SINGULAR_ENRICHMENT_REFUSAL.format(
