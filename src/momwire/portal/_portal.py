@@ -577,6 +577,20 @@ _POWER_HEADER = "                               ---------- POWER BUDGET --------
 # genuinely lossy shunt stubs report 21 % of the input power.
 _NETWORK_LOSS_FLOOR = 1e-9
 
+# A charge this far under the table's largest is the RESIDUAL of a value that
+# is zero by symmetry, not a charge: the centre segment of a centre-fed dipole
+# with an odd count carries dI/ds = 0 exactly, and reading it off the basis
+# returns the solve's round-off — printed to five figures WITH a phase, so
+# `2.5492E-19 ... 18.248` in one process and `1.6824E-26 ... 43.749` in the
+# next. The served == stock oracle and the warm == cold oracle both read that
+# as a different answer (main went red on `dipole_pq_charges` after
+# momwire#808 moved the fill by 1e-12 and the residual with it; the same
+# class as the two snaps above — never print the angle of zero). Measured:
+# the residual is 6e-9 of the table maximum in the stock engine's own printout
+# and 1e-15 here; a genuine charge is O(1) of it. Seven orders of clearance
+# on each side of the bar.
+_CHARGE_RESIDUAL_FLOOR = 1e-8
+
 # The two network blocks (momwire#456 phase C), byte for byte out of
 # dipole_tl_shunt_crossed.out — the one committed fixture that prints both row
 # kinds.  ``NETWORK DATA`` carries ONE banner and then a per-kind table header;
@@ -2375,7 +2389,16 @@ class DeckSolver:
         slopes = solver.current_slopes(coeffs, centres)
         flat = np.concatenate([np.asarray(s) for s in slopes], axis=0)
         charges = -flat / (1j * omega)
-        return np.asarray([charges[nearest[i]] for i in range(len(self.segments))])
+        table = np.asarray([charges[nearest[i]] for i in range(len(self.segments))])
+        # Snap the symmetry residual at the source (see `_CHARGE_RESIDUAL_FLOOR`):
+        # a charge under the floor is exactly 0+0j, which prints as
+        # `0.0000E+00` with phase `0.000` in every process.
+        scale = float(np.max(np.abs(table))) if table.size else 0.0
+        if scale > 0.0:
+            table = np.where(
+                np.abs(table) < _CHARGE_RESIDUAL_FLOOR * scale, 0.0 + 0.0j, table
+            )
+        return table
 
 
 # --------------------------------------------------------------------------
