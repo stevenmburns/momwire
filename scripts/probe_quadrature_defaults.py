@@ -216,6 +216,57 @@ def _ek(nsegs):
     )
 
 
+def _close_spaced(nsegs, frac):
+    """Two parallel dipoles a fraction of a wavelength apart.
+
+    The catalog's close-coupled decks carry two very different scales, and
+    only one of them is hard: `catalog_wire_w8jk` sets its driven pair
+    0.125 lambda apart, while `catalog_beams_moxon`'s TAIL GAP closes to
+    0.0102 lambda. The gap is what stresses the outer integral -- the kernel
+    varies fastest across a testing path when another conductor sits a
+    fraction of a segment away -- so both spacings are measured, and the
+    tight one is the class's representative.
+    """
+    h = L_DIPOLE / 2
+    d = frac * LAMBDA
+    half = nsegs // 2
+    return dict(
+        wires=[
+            [(0.0, -d / 2, -h), (0.0, -d / 2, h)],
+            [(0.0, d / 2, -h), (0.0, d / 2, h)],
+        ],
+        n_per_edge_per_wire=[half, half],
+        nsegs=nsegs,
+        wire_radius=A_THIN,
+        feed_wire_index=0,
+        feed_arclength=0.25 * L_DIPOLE,
+    )
+
+
+def _contact(nsegs, ground_model):
+    """A monopole whose lower END lies IN the plane -- razor's grounded-end
+    tent (momwire#398 unit 3), not a wire held above it like `_near_ground`.
+
+    Contact is its own quadrature class: the grounded tent's image wing
+    CONTINUES the real one through the interface, so the testing path runs
+    up to a boundary the free-space decks never touch. Supported over PEC
+    (`ground_z` alone) and over Sommerfeld; REFUSED over refl-coef
+    (momwire#282), which is why there is no `contact_refl` row -- the
+    "PEC-only" line in tests/test_razor_ground_contact.py's docstring
+    predates Sommerfeld contact and is stale.
+    """
+    kwargs = dict(
+        wires=[[(0.0, 0.0, 0.0), (0.0, 0.0, L_DIPOLE / 2)]],
+        nsegs=nsegs,
+        wire_radius=A_THIN,
+        feed_arclength=0.1 * (L_DIPOLE / 2),
+        ground_z=0.0,
+    )
+    if ground_model != "pec":
+        kwargs.update(ground_model=ground_model, ground_eps=13.0)
+    return kwargs
+
+
 DECKS = {
     "straight": (_straight, "self"),
     "split": (_split, "known-zero"),
@@ -226,10 +277,18 @@ DECKS = {
     "near_ground_refl": (lambda n: _near_ground(n, "refl-coef"), "self"),
     "near_ground_somm": (lambda n: _near_ground(n, "sommerfeld"), "self"),
     "ek": (_ek, "self"),
+    "close_spaced": (lambda n: _close_spaced(n, 0.0125), "self"),
+    "close_spaced_wide": (lambda n: _close_spaced(n, 0.125), "self"),
+    "contact_pec": (lambda n: _contact(n, "pec"), "self"),
+    "contact_somm": (lambda n: _contact(n, "sommerfeld"), "self"),
 }
 
 # Sommerfeld order only means anything on a Sommerfeld deck.
-SOMM_ONLY = ("near_ground_somm",)
+SOMM_ONLY = ("near_ground_somm", "contact_somm")
+
+# Ground CONTACT is a RazorSolver basis (the grounded-end tent); BSplineSolver
+# has no such continuation, so these rows would be refusals rather than data.
+RAZOR_ONLY = ("contact_pec", "contact_somm")
 
 
 def _solver(kind):
@@ -245,6 +304,11 @@ def solve(kind, deck, nsegs, knob, value, degree=2):
         # `degree` is BSplineSolver's alone; RazorSolver is the tent basis by
         # construction and rejects unknown kwargs with a TypeError.
         kwargs["degree"] = degree
+    else:
+        # Spelled out rather than left to the default: `n_qp_path` is IGNORED
+        # under the two-point lane, so a ladder run against it would be a
+        # column of identical numbers that looks exactly like convergence.
+        kwargs["nec5_quadrature"] = False
     kwargs[knob] = value
     t0 = time.perf_counter()
     z, _ = _solver(kind)(**kwargs).compute_impedance()
@@ -305,6 +369,12 @@ def main():
     )
     p.add_argument("--nsegs", default="18,30", help="comma-separated mesh sizes")
     p.add_argument("--controls", action="store_true")
+    p.add_argument(
+        "--ref-q",
+        type=int,
+        default=0,
+        help="reference order ABOVE the ladder; 0 uses the ladder's own top",
+    )
     args = p.parse_args()
 
     if args.controls:
@@ -319,6 +389,8 @@ def main():
                 continue
             if args.knob == "n_qp_sommerfeld" and deck not in SOMM_ONLY:
                 continue
+            if kind == "bspline" and deck in RAZOR_ONLY:
+                continue
             for nsegs in (int(x) for x in args.nsegs.split(",")):
                 rows = []
                 for q in LADDERS[args.knob]:
@@ -328,11 +400,30 @@ def main():
                         rows.append({"q": q, "error": f"{type(e).__name__}: {e}"})
                         continue
                     rows.append({"q": q, "re": z.real, "im": z.imag, "secs": secs})
-                ref = next((r for r in reversed(rows) if "re" in r), None)
+                ref = None
+                if args.ref_q:
+                    # A reference INSIDE the ladder makes the top rung's error
+                    # read as exactly zero and every rung below it read too
+                    # small. Solve a dedicated rung above the ladder instead.
+                    try:
+                        zr, _ = solve(kind, deck, nsegs, args.knob, args.ref_q)
+                        ref = {"re": zr.real, "im": zr.imag}
+                    except Exception as e:  # noqa: BLE001 — a refused reference is data
+                        print(
+                            json.dumps(
+                                {"kind": "ref-error", "deck": deck, "err": str(e)}
+                            ),
+                            flush=True,
+                        )
+                if ref is None:
+                    ref = next((r for r in reversed(rows) if "re" in r), None)
                 for r in rows:
                     if "re" in r and ref:
                         d = complex(r["re"] - ref["re"], r["im"] - ref["im"])
                         r["abs_dev_ohm"] = abs(d)
+                        mag = abs(complex(ref["re"], ref["im"]))
+                        if mag:
+                            r["rel_dev"] = abs(d) / mag
                     print(
                         json.dumps(
                             {
