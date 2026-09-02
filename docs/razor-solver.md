@@ -115,8 +115,11 @@ K wire ends meeting at one point in the plane get K tents, one each: the
 plane is one more branch there, so no through-path is distinguished and
 current may leave into the ground. What is refused: a wire dipping below
 the plane, an edge lying in it, an interior anchor touching down (split the
-wire there instead), and contact over a finite ground — the fold hard-codes
-image coefficient 1, i.e. PEC (momwire#282).
+wire there instead), and contact under `refl-coef` — which is the whole
+tree's row, momwire#282 stage 1 having withdrawn it from every solver.
+Contact over the SOMMERFELD ground is served (momwire#624); the fold's
+hard-coded image coefficient 1 was the argument for refusing both finite
+grounds, and #624 measured it — see "Scope" below.
 
 ## The finite grounds (momwire#398 units 4-5)
 
@@ -200,11 +203,13 @@ Two spellings, one equation:
   a wire off). `wire_loss_power(coeffs)` reads back the dissipated watts.
 - **Lumped** — `lumped_loads=[(wire_index, arclength, impedance), …]`, which
   is razor's own kwarg. The other solvers serve a lumped load as deck-level
-  port algebra over a `node_gaps` port, and this formulation refuses node
-  gaps; but a delta in `Z_s` at a knot collapses the integral above to a
-  single diagonal entry, so `Z_driven = Z_unloaded + Z_L` at the fed knot is
-  exact here rather than arranged. A load resolves to a knot through the
-  same snapping the feeds use, two loads at one knot are in series, and a
+  port algebra over a zero-volt `feeds` gap a consumer stamps afterwards,
+  which this formulation does not take (it is keyed by class in
+  `_NATIVE_LOADING`, not by any refusal — razor has served `node_gaps` since
+  momwire#603); but a delta in `Z_s` at a knot collapses the integral above
+  to a single diagonal entry, so `Z_driven = Z_unloaded + Z_L` at the fed
+  knot is exact here rather than arranged. A load resolves to a knot through
+  the same snapping the feeds use, two loads at one knot are in series, and a
   load at a K ≥ 3 junction is refused for the reason a source there is.
   `lumped_load_power(coeffs)` reads back each load's OWN watts,
   `½·Re(Z_L)·|I(knot)|²`, in the same `(total, per_load)` shape — a separate
