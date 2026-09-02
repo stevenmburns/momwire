@@ -250,7 +250,7 @@ _KNOT_FEEDS_REFUSAL = (
     "this cell reads False and the seam refuses by name instead. "
 ) + _REFERENCE_ROW
 
-# The `singular_enrichment` cell. Not `bspline.SINGULAR_ENRICHMENT_NOT_YET`,
+# The `singular_enrichment` cell. Not `bspline.SINGULAR_ENRICHMENT_NEVER`,
 # which is a not-yet resting on momwire#445: on this family the answer does
 # not wait on that design question at all.
 _SINGULAR_ENRICHMENT_REFUSAL = (

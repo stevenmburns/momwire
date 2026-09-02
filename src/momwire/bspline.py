@@ -381,15 +381,17 @@ _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL = (
 # decision any of those rows has taken. `{cls}` is substituted with the
 # declaring class (momwire#564) — these sentences reach a user verbatim
 # through `capabilities.refusals`.
-SINGULAR_ENRICHMENT_NOT_YET = (
-    "singular enrichment is not built for {cls}: the enrichment in tree "
-    "(`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof "
-    "carrying the s^(-1/2) edge shape, written against that family's knot "
-    "vector and integrated by its Galerkin testing. Where that dof fits a "
-    "formulation OTHER than that family is momwire#445's open design "
-    "question, so this cell is a NOT YET rather than a never. There is no "
-    "`use_singular_enrichment` keyword on this class at all, so asking for "
-    "it is a caller typo (a TypeError) rather than this sentence"
+SINGULAR_ENRICHMENT_NEVER = (
+    "singular enrichment is not built for {cls}, and will not be: the enrichment "
+    "in tree (`use_singular_enrichment`) is the B-spline family's junction basis — "
+    "an extra dof carrying the s^(-1/2) edge shape, written against that family's "
+    "knot vector and integrated by its Galerkin testing. It is kept as a "
+    "B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, "
+    "2026-09-02): it has not yet bought anything measurable, so it is not "
+    "extended to any other formulation and may be removed altogether later. "
+    "This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` "
+    "keyword on this class at all, so asking for it is a caller typo (a "
+    "TypeError) rather than this sentence"
 )
 
 # momwire#553 U5: what a BURIED deck may not reach, and the domain a buried

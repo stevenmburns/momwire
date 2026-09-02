@@ -208,7 +208,7 @@ renders in host dialogs.
 
 - `RazorSolver` `singular_enrichment`
 
-  > singular enrichment is not built for RazorSolver: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
+  > singular enrichment is not built for RazorSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
 
 - `SinusoidalGalerkinSolver` `buried`
 
@@ -228,7 +228,7 @@ renders in host dialogs.
 
 - `SinusoidalGalerkinSolver` `singular_enrichment`
 
-  > singular enrichment is not built for SinusoidalGalerkinSolver: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
+  > singular enrichment is not built for SinusoidalGalerkinSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
 
 - `SinusoidalSolver` `buried`
 
@@ -248,4 +248,4 @@ renders in host dialogs.
 
 - `SinusoidalSolver` `singular_enrichment`
 
-  > singular enrichment is not built for SinusoidalSolver: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
+  > singular enrichment is not built for SinusoidalSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
