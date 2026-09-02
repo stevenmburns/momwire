@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_stable_inline.h"
 
 // razor section of the accelerator (momwire#742): the razor-blade
 // formulation's segment-moment fill, fused and tiled.
@@ -87,13 +88,17 @@ static constexpr size_t RAZOR_SEG_TILE = 128;
 // scalar. `rho2` already carries the a² of the axis frame.
 static inline void razor_statics_reduced(double u_r, double rho2, double h,
                                          double *m0, double *m1) {
-    const double rho = std::sqrt(rho2);
     const double u0 = -u_r;
     const double u1 = h - u_r;
-    const double mm0 = std::asinh(u1 / rho) - std::asinh(u0 / rho);
+    const double r0 = std::sqrt(u0 * u0 + rho2);
+    const double r1 = std::sqrt(u1 * u1 + rho2);
+    // Both differences cancellation-free (momwire#799), `_stable_inline.h`
+    // and its numpy twin term for term. A far observer's u1 and u0 agree to
+    // h/|u_r|, which cost the literal asinh difference 1.2e-12 relative on an
+    // 801-segment thin dipole and moved the solved Z by 2.6e-11.
+    const double mm0 = stable_asinh_diff(u0, u1, rho2, r0, r1);
     *m0 = mm0;
-    *m1 = u_r * mm0 +
-          (std::sqrt(u1 * u1 + rho2) - std::sqrt(u0 * u0 + rho2));
+    *m1 = u_r * mm0 + stable_sqrt_diff(u0, u1, r0, r1);
 }
 
 // The extended (tubular) kernel's closed-form static moments —
@@ -106,20 +111,23 @@ static inline void razor_statics_ek(double u_r, double rho2, double h,
     const double a2 = a_ek * a_ek;
     const double a4 = a2 * a2;
     const double perp2 = rho2 - a2;
-    const double rho = std::sqrt(rho2);
     const double u0 = -u_r;
     const double u1 = h - u_r;
     const double r0 = std::sqrt(u0 * u0 + rho2);
     const double r1 = std::sqrt(u1 * u1 + rho2);
     const double c3 = 0.25 * a4 / rho2;
     const double c1 = 0.5 * a2 * perp2 / (rho2 * rho2);
-    const double p1 = std::asinh(u1 / rho) + c3 * u1 / (r1 * r1 * r1) - c1 * u1 / r1;
-    const double p0 = std::asinh(u0 / rho) + c3 * u0 / (r0 * r0 * r0) - c1 * u0 / r0;
-    const double mm0 = p1 - p0;
-    const double q1 = r1 + 0.5 * a2 / r1 - 0.25 * a4 / (r1 * r1 * r1);
-    const double q0 = r0 + 0.5 * a2 / r0 - 0.25 * a4 / (r0 * r0 * r0);
+    // P and Q differenced TERM BY TERM, so the leading asinh and R differences
+    // take their stable spellings and the two O(a²) corrections — which carry
+    // an explicit a²/R² and lose that much less — stay literal (momwire#799).
+    double mm0 = stable_asinh_diff(u0, u1, rho2, r0, r1);
+    mm0 = mm0 + c3 * (u1 / (r1 * r1 * r1) - u0 / (r0 * r0 * r0));
+    mm0 = mm0 - c1 * (u1 / r1 - u0 / r0);
+    double qd = stable_sqrt_diff(u0, u1, r0, r1);
+    qd = qd + 0.5 * a2 * (1.0 / r1 - 1.0 / r0);
+    qd = qd - 0.25 * a4 * (1.0 / (r1 * r1 * r1) - 1.0 / (r0 * r0 * r0));
     *m0 = mm0;
-    *m1 = u_r * mm0 + (q1 - q0);
+    *m1 = u_r * mm0 + qd;
 }
 
 // Fused segment moments at one wavenumber. Returns (M0, M1); M1 is a (0, 0)
@@ -333,16 +341,22 @@ razor_seg_moments_impl(
                             // exp(−jkR) − 1, then the complex-by-real divide
                             // numpy performs (Smith's algorithm collapses to
                             // a componentwise divide on a real denominator).
+                            //
+                            // Cancellation-free (momwire#799): the real part
+                            // is where the `- 1` bites, and `cos(kr) - 1` is
+                            // spelled `-2 sin²(kr/2)`. It costs nothing — the
+                            // loop wanted sin(kr) anyway, so cos+sin becomes
+                            // sin(kr/2)+sin(kr).
                             double nr, ni;
                             if (COMPLEX_K) {
                                 // exp(k_im*R), k_im <= 0: decaying, so no
                                 // overflow, and underflow to +0 at large R is
-                                // the physical answer. The `- 1` is NOT scaled.
-                                const double decay = std::exp(k_im * R);
-                                nr = decay * std::cos(kr) - 1.0;
-                                ni = -decay * std::sin(kr);
+                                // the physical answer. `expm1(a)·cos(y)` is
+                                // the decay half of the bracket; the trig half
+                                // is the real-k form below, unscaled.
+                                stable_expm1_neg_jkR(k_re, k_im, R, &nr, &ni);
                             } else {
-                                nr = std::cos(kr) - 1.0;
+                                nr = stable_cos_minus_one(kr);
                                 ni = -std::sin(kr);
                             }
                             const double rr = nr / R, ri = ni / R;
@@ -386,9 +400,10 @@ razor_seg_moments_impl(
                                 // extra = t1·(3jkR − (kR)²) − t2·(jkR)
                                 exr = t1 * (-3.0 * kri - kr2r) + t2 * kri;
                                 exi = t1 * (3.0 * kr - kr2i) - t2 * kr;
-                                const double decay = std::exp(kri);
-                                br = decay * std::cos(kr) - 1.0;
-                                bi = -decay * std::sin(kr);
+                                // The reduced branch's bracket, verbatim:
+                                // the EK remainder IS that object with NEC
+                                // Eq 89's factor on it (momwire#799).
+                                stable_expm1_neg_jkR(k_re, k_im, R, &br, &bi);
                             } else {
                                 const double kr2 = kr * kr;
                                 // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
@@ -400,7 +415,7 @@ razor_seg_moments_impl(
                                 // extra = t1·(3jkR − (kR)²) − t2·(jkR)
                                 exr = t1 * (-kr2);
                                 exi = t1 * (3.0 * kr) - t2 * kr;
-                                br = std::cos(kr) - 1.0;
+                                br = stable_cos_minus_one(kr);
                                 bi = -std::sin(kr);
                             }
                             const double nr = br * facr - bi * faci + exr;

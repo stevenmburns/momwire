@@ -374,6 +374,7 @@ from ._kernel_moments import (
     _static_axis_moments,
     _static_axis_moments_ek,
 )
+from ._stable import expm1_neg_jkR as _expm1_neg_jkR
 from ._junction_rule import JUNCTION_TOL, canonical_groups, grouped
 from ._port_solution import PortSolution, _SweptPortSolutions
 from . import _quadrature
@@ -2225,10 +2226,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for lo, hi, R, m0s, m1s, ekc in chunks:
             self._checkpoint()
             if ekc is None:
-                rem = (np.exp(-1j * k * R) - 1.0) / R
+                rem = _expm1_neg_jkR(k, R) / R
             else:
                 mask, a_ek = ekc
-                num = np.exp(-1j * k * R) - 1.0
+                num = _expm1_neg_jkR(k, R)
                 scalar_a = np.ndim(a_ek) == 0
                 if mask is None:
                     # `None` = every pair of this chunk is eligible, settled

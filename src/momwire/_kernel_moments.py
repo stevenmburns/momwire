@@ -28,6 +28,8 @@ not to a module) so that the consumers' import lines are a pure path change.
 
 import numpy as np
 
+from ._stable import asinh_diff, sqrt_diff
+
 
 def _axis_frame(obs, seg_p0, seg_t, a):
     """Project observation points onto every segment's axis.
@@ -70,12 +72,24 @@ def _static_axis_moments(u_r, rho2, seg_h):
 
     The radius enters only through `rho2`, so a per-segment or per-observer
     radius needs nothing here.
+
+    Both differences are spelled cancellation-free (momwire#799). A far
+    observer has u1 and u0 of the same sign and agreeing to h/|u_r|, so the
+    literal `asinh − asinh` returns m0 with a relative error of ε·|u_r|/h —
+    3.1e-13 on the 200-segment thin dipole, 1.2e-12 at 801 segments, and it
+    is the WHOLE of the 4.1e-13 / 2.6e-11 the solved Z moves by when this
+    function is fixed. m1 is worse still: `r1 − r0` is up to 1600× larger
+    than m1 itself on that deck, so the sum below is its own near-total
+    cancellation and the literal spelling reaches 1.9e-9 relative. The
+    rationalised `sqrt` difference alone is worth only 5.9e-15 on Z — it is
+    here because it is exact and free, not because it was visible.
     """
-    rho = np.sqrt(rho2)
     u0 = -u_r
     u1 = seg_h[None, :] - u_r
-    m0 = np.arcsinh(u1 / rho) - np.arcsinh(u0 / rho)
-    m1 = u_r * m0 + (np.sqrt(u1 * u1 + rho2) - np.sqrt(u0 * u0 + rho2))
+    r0 = np.sqrt(u0 * u0 + rho2)
+    r1 = np.sqrt(u1 * u1 + rho2)
+    m0 = asinh_diff(u0, u1, rho2, r0, r1)
+    m1 = u_r * m0 + sqrt_diff(u0, u1, rho2, r0, r1)
     return m0, m1
 
 
@@ -125,19 +139,24 @@ def _static_axis_moments_ek(u_r, rho2, seg_h, a):
     a2 = a * a
     a4 = a2 * a2
     perp2 = rho2_ - a2
-    rho = np.sqrt(rho2_)
     u0 = -u_r
     u1 = seg_h[None, :] - u_r
     r0 = np.sqrt(u0 * u0 + rho2_)
     r1 = np.sqrt(u1 * u1 + rho2_)
-    # P(u) = asinh(u/ρ) + a⁴u/(4ρ²R³) − a²·perp²·u/(2ρ⁴R)
+    # P(u) = asinh(u/ρ) + a⁴u/(4ρ²R³) − a²·perp²·u/(2ρ⁴R), differenced TERM BY
+    # TERM rather than as P(u1) − P(u0) (momwire#799). The leading asinh is the
+    # reduced kernel's own difference and cancels the same way — 2.1e-13 per
+    # entry and 4.1e-13 on Z at 200 segments on the EK deck. The two O(a²)
+    # corrections difference too, but they carry an explicit a²/R² and their
+    # loss is that much smaller, so they stay literal.
     c3 = 0.25 * a4 / rho2_
     c1 = 0.5 * a2 * perp2 / (rho2_ * rho2_)
-    p1 = np.arcsinh(u1 / rho) + c3 * u1 / (r1 * r1 * r1) - c1 * u1 / r1
-    p0 = np.arcsinh(u0 / rho) + c3 * u0 / (r0 * r0 * r0) - c1 * u0 / r0
-    m0 = p1 - p0
-    # Q(u) = R + a²/(2R) − a⁴/(4R³)
-    q1 = r1 + 0.5 * a2 / r1 - 0.25 * a4 / (r1 * r1 * r1)
-    q0 = r0 + 0.5 * a2 / r0 - 0.25 * a4 / (r0 * r0 * r0)
-    m1 = u_r * m0 + (q1 - q0)
+    m0 = asinh_diff(u0, u1, rho2_, r0, r1)
+    m0 = m0 + c3 * (u1 / (r1 * r1 * r1) - u0 / (r0 * r0 * r0))
+    m0 = m0 - c1 * (u1 / r1 - u0 / r0)
+    # Q(u) = R + a²/(2R) − a⁴/(4R³), differenced the same way.
+    qd = sqrt_diff(u0, u1, rho2_, r0, r1)
+    qd = qd + 0.5 * a2 * (1.0 / r1 - 1.0 / r0)
+    qd = qd - 0.25 * a4 * (1.0 / (r1 * r1 * r1) - 1.0 / (r0 * r0 * r0))
+    m1 = u_r * m0 + qd
     return m0, m1

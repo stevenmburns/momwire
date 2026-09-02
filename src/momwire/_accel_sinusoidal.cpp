@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_stable_inline.h"
 
 // sinusoidal section of the former _accelerators.cpp monolith (momwire#687).
 // Code below is byte-identical to the monolith's lines 3349-5401.
@@ -263,7 +264,13 @@ sinusoidal_field_tensor_impl(
                 double z_q = H * glt_v[q];
                 double dz_q = z_eval - z_q;
                 double r0_q = std::sqrt(rho_eval*rho_eval + dz_q*dz_q);
-                ph[base + 2 + q] = -k * r0_q;
+                // HALF phase (momwire#799). This slice of the table serves
+                // only the smooth remainder, whose real part is `cos − 1` =
+                // −2 sin²(y/2); the full-angle sine comes back from the same
+                // two values as 2 sin(y/2) cos(y/2), so nothing extra is
+                // evaluated. Same reconstruction idiom as `IX_H2`/`IX_H1` in
+                // the swept kernel below.
+                ph[base + 2 + q] = -0.5 * k * r0_q;
                 r0q_inv_a[n * n_qp + q] = 1.0 / r0_q;
             }
         }
@@ -325,23 +332,27 @@ sinusoidal_field_tensor_impl(
             double Erho_const_re = -pref_rho_const_im * rho_diff_im;
             double Erho_const_im =  pref_rho_const_im * rho_diff_re;
 
-            // u2, u1, int_inv_r0.  H - z_eval = -dz2;  -H - z_eval = -dz1.
-            double inv_rho_eval = 1.0 / rho_eval;
-            double u2 = -dz2 * inv_rho_eval;
-            double u1 = -dz1 * inv_rho_eval;
-            double int_inv_r0 = std::asinh(u2) - std::asinh(u1);
+            double inv_rho_eval = 1.0 / rho_eval;  // used by pref_rho below
+            // int_inv_r0.  H - z_eval = -dz2;  -H - z_eval = -dz1. Through
+            // `stable_asinh_diff` (momwire#799) — the literal difference of
+            // two O(log) asinh values loses ε·|asinh|·z/(2H) on a collinear
+            // deck's far pairs, 8.4e-13 at 801 segments.
+            double int_inv_r0 = stable_asinh_diff(-dz1, -dz2,
+                                                  rho_eval * rho_eval,
+                                                  r0_1, r0_2);
 
             // Quadrature for the smooth remainder of int_G0:
             //   reg(q) = (exp(-jk r0_q) - 1) / r0_q,   r0_q = sqrt(ρ² + (z - H gx[q])²)
             //   int_reg = H * Σ_q reg(q) * gw[q]
             double int_reg_re = 0.0, int_reg_im = 0.0;
             for (size_t q = 0; q < n_qp; q++) {
-                double cph_q = cphb[base + 2 + q];
-                double sph_q = sphb[base + 2 + q];
+                double hc_q = cphb[base + 2 + q];
+                double hs_q = sphb[base + 2 + q];
                 double inv_r0_q = r0q_inv_a[n * n_qp + q];
-                // (exp(jphase) - 1) / r0
-                double reg_re = (cph_q - 1.0) * inv_r0_q;
-                double reg_im = sph_q * inv_r0_q;
+                // (exp(jphase) - 1) / r0, cancellation-free (momwire#799):
+                // cos y − 1 = −2 sin²(y/2), sin y = 2 sin(y/2) cos(y/2).
+                double reg_re = (-2.0 * hs_q * hs_q) * inv_r0_q;
+                double reg_im = (2.0 * hs_q * hc_q) * inv_r0_q;
                 int_reg_re += reg_re * glw_v[q];
                 int_reg_im += reg_im * glw_v[q];
             }
@@ -922,7 +933,9 @@ sinusoidal_field_tensor_ek_impl(
                 double z_q = H * glt_v[q];
                 double dz_q = z_eval - z_q;
                 double r0_q = std::sqrt(rh*rh + dz_q*dz_q);
-                ph[base + 2 + q] = -k * r0_q;
+                // HALF phase, for the remainder's stable spelling below
+                // (momwire#799) — the reduced kernel's treatment verbatim.
+                ph[base + 2 + q] = -0.5 * k * r0_q;
                 r0q_inv_a[n * n_qp + q] = 1.0 / r0_q;
             }
         }
@@ -977,12 +990,16 @@ sinusoidal_field_tensor_ek_impl(
             // applies whenever EK is on, even when both ends fell back to GX.
             // Spelled as two divisions, matching the numpy `(H - z)/rh` and
             // `(-H - z)/rh`, rather than one reciprocal and two products.
-            double int_inv_r0 = std::asinh(g.z2 / g.rh) - std::asinh(g.z1 / g.rh);
+            const double rh2 = g.rh * g.rh;
+            const double rr2 = std::sqrt(rh2 + g.z2 * g.z2);
+            const double rr1 = std::sqrt(rh2 + g.z1 * g.z1);
+            double int_inv_r0 = stable_asinh_diff(g.z1, g.z2, rh2, rr1, rr2);
             double int_reg_re = 0.0, int_reg_im = 0.0;
             for (size_t q = 0; q < n_qp; q++) {
                 double inv_r0_q = r0q_inv_a[n * n_qp + q];
-                double reg_re = (cphb[base + 2 + q] - 1.0) * inv_r0_q;
-                double reg_im = sphb[base + 2 + q] * inv_r0_q;
+                double hc_q = cphb[base + 2 + q], hs_q = sphb[base + 2 + q];
+                double reg_re = (-2.0 * hs_q * hs_q) * inv_r0_q;
+                double reg_im = (2.0 * hs_q * hc_q) * inv_r0_q;
                 int_reg_re += reg_re * glw_v[q];
                 int_reg_im += reg_im * glw_v[q];
             }
@@ -1527,28 +1544,34 @@ galerkin_far_fill_impl(
                 double Erho_const_re = -pref_rho_const_im * rho_diff_im;
                 double Erho_const_im =  pref_rho_const_im * rho_diff_re;
 
-                double inv_rho_eval = 1.0 / rho_eval;
-                double u2 = -dz2 * inv_rho_eval;
-                double u1 = -dz1 * inv_rho_eval;
-                double int_inv_r0 = std::asinh(u2) - std::asinh(u1);
+                double inv_rho_eval = 1.0 / rho_eval;  // pref_rho, below
+                double int_inv_r0 = stable_asinh_diff(-dz1, -dz2,
+                                                      rho_eval * rho_eval,
+                                                      r0_1, r0_2);
 
                 double int_reg_re = 0.0, int_reg_im = 0.0;
                 for (size_t q = 0; q < n_qp; q++) {
                     // e^{−jkr_q} = e^{−jkr_ref}·(e^{−jkδ_q/2})², the node's
                     // own endpoint carrying the reference phase (#205). The
                     // half-angle is the one the folded shape needs below.
+                    // The remainder wants the HALF angle of r_q's phase, and
+                    // r_q = r_ref + δ_q makes that half angle exactly the SUM
+                    // of the two stored halves — an angle addition on values
+                    // already in the table, no new sincos (momwire#799). The
+                    // full angle used to be reconstructed here by squaring
+                    // each half and multiplying; stopping one step earlier is
+                    // strictly less arithmetic.
                     double cd = cphb[base + IX_DQ + q];
                     double sd = sphb[base + IX_DQ + q];
-                    double ed_re = cd * cd - sd * sd;
-                    double ed_im = 2.0 * cd * sd;
                     bool hi = gl_near2[q];
-                    double er = hi ? cph_2 : cph_1;
-                    double ei = hi ? sph_2 : sph_1;
-                    double cph_q = er * ed_re - ei * ed_im;
-                    double sph_q = er * ed_im + ei * ed_re;
+                    double hcr = hi ? ch2 : ch1;
+                    double hsr = hi ? sh2 : sh1;
+                    double hs_q = hsr * cd + hcr * sd;   // sin(y_q / 2)
+                    double hc_q = hcr * cd - hsr * sd;   // cos(y_q / 2)
                     double inv_r0_q = r0q_inv_a[n * n_qp + q];
-                    int_reg_re += (cph_q - 1.0) * inv_r0_q * glw_v[q];
-                    int_reg_im += sph_q * inv_r0_q * glw_v[q];
+                    // cos y − 1 = −2 sin²(y/2);  sin y = 2 sin(y/2) cos(y/2).
+                    int_reg_re += (-2.0 * hs_q * hs_q) * inv_r0_q * glw_v[q];
+                    int_reg_im += (2.0 * hs_q * hc_q) * inv_r0_q * glw_v[q];
                 }
                 int_reg_re *= H;
                 int_reg_im *= H;
