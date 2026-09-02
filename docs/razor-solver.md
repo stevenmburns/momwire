@@ -237,39 +237,57 @@ deliberate, not initial-version:
 
 - **Both finite grounds are served** for wires standing CLEAR of the plane
   — see the section above for what each is and how they are gated.
-- **Ground contact over a finite ground is out of scope**, over BOTH of
-  them, and stays refused citing momwire#282: the fold hard-codes image
-  coefficient 1, so the grounded-end tent's lower wing — which IS that
-  image — would take spurious contact charge. Over the Sommerfeld ground
-  the coefficient is C₂ rather than the Fresnel pair, and the argument is
-  unchanged: no weighting of the image block repairs a wrong basis
-  function.
+- **Ground contact over the SOMMERFELD ground is served** (momwire#624).
+  It was out of scope over both finite grounds, on a refusal that named a
+  real asymmetry — over a finite ground the T2 drop discards
+  `(1 - w_Phi)*M0(plane)` rather than zero — and offered restoring that
+  term as the fix, explicitly as a hypothesis rather than a diagnosis. #624
+  ran the experiment and the hypothesis did not survive it: the term makes
+  the binary comparison worse at full strength, and on the stubbed ladder
+  coefficient 0 is flattest everywhere, so the refusal was not protecting a
+  defect the term would repair. What is still refused is contact under
+  **`refl-coef`**, and that is the whole tree's row rather than this
+  family's: momwire#282 stage 1's D3 withdrew it from every solver because
+  the MODEL is wrong at zero clearance. `razor.py` reaches it through the
+  shared `_ground_spec.contact_ends` scan and the shared sentence, not a
+  copy of its own.
 - **The extended kernel is served** (momwire#398 D1) — `extended_kernel=True`,
   the house kwarg. It used to be refused, on the claim that "NEC-5's
   formulation is the comparison target, and its expansion is tested on the
   wire axis"; the 2026-08-18 kernel identification showed that claim was
   half right and the half it got wrong was the kernel. See "The extended
   kernel" below.
-- **The segment-moment fill is accelerated** (momwire#742), and nothing else
-  is. `_accel_razor.cpp` fuses `_seg_moments_prepare` and
-  `_seg_moments_from_prepared` into one tiled OpenMP kernel; every branch of
-  the fill funnels through that pair, so covering it covers free space, both
-  finite grounds, ground contact, loading and both quadrature lanes without
-  any of them gaining a branch. The pure-NumPy path stays the reference and
-  stays tested — it is what a build without the extension runs, and
+- **The fill is accelerated in four flagged pieces.** `_accel_razor.cpp`
+  fuses `_seg_moments_prepare` and `_seg_moments_from_prepared` into one
+  tiled OpenMP kernel (momwire#742); every branch of the fill funnels
+  through that pair, so covering it covers free space, both finite grounds,
+  ground contact, loading and both quadrature lanes without any of them
+  gaining a branch. Three more kernels landed on top, each behind its own
+  capability symbol so one never vouches for another: the complex-k twin of
+  the moment fill (momwire#796, which is what lets the below-plane family
+  run in a lossy medium), the fused T1 assembly (momwire#780) and its
+  WEIGHTED twin (momwire#744), which momwire#806 then extended from the
+  refl-coef ground to the composing one by handing the kernel the A-term
+  window as a RULE the ground answers with rather than attributes the fill
+  reads. The pure-NumPy path stays the reference and stays tested — it is
+  what a build without the extension runs, and
   `MOMWIRE_RAZOR_FORCE_NUMPY=1` (or `razor._FORCE_NUMPY`) selects it in a
   build that has one. Agreement is TIGHT rather than bitwise: the kernel's
   per-pair reduction is not `np.einsum`'s, so the two paths differ by about
   two ulps of the matrix scale (measured 4.8e-16 in max|ΔZ|/max|Z|,
   6.3e-14 in the solved impedance), and the repo's standing rule against
-  pinning cross-build bit equality applies. What the fill still does in
-  NumPy — the reflection-coefficient weight windows and the T1 contraction —
-  is now co-dominant with the kernel on a finite-ground deck.
+  pinning cross-build bit equality applies. The weight windows and the T1
+  contraction were co-dominant with the kernel on a finite-ground deck when
+  that was measured; they are what momwire#744 and momwire#806 have since
+  moved into the fused weighted assembler.
 
-`RazorSolver` refuses `degree`, `junctions`, `junction_ports`, `node_gaps`
-and either finite ground on a deck that touches the plane, at construction
-with a message explaining why, rather than silently mismodelling — a wrong
-answer here is worse than no answer.
+`RazorSolver` refuses `degree`, `junctions`, `junction_ports` and
+`refl-coef` on a deck that touches the plane, at construction with a message
+explaining why, rather than silently mismodelling — a wrong answer here is
+worse than no answer. `node_gaps` is NOT in that list any more (momwire#603
+gave this basis the node port off the through-current unknown its junction
+tents already carried) and neither is the Sommerfeld half of ground contact
+(momwire#624).
 
 ## The extended kernel (momwire#398 D1)
 
@@ -602,9 +620,18 @@ calibrated on thin wires) must budget the drift rather than inherit the
 bar. Mechanism analysis — which kernel term carries the a-dependence —
 is optional follow-on, relevant if razor ever grows EK.
 
-### The outer path order (`n_qp_path`, momwire#754)
+### The outer path order (`n_qp_path`, momwire#754, then momwire#800)
 
-**32 is derived, and the derivation kept it (2026-09-02, momwire#754).**
+**The default is DERIVED from the mesh (momwire#800), not a constant.**
+`n_qp_path=None` — the default since #800 — returns 32 below about 350
+segments per wavelength and 16 above it, on the `k*h_max` rule
+`razor.derive_n_qp_path` carries; an explicit integer is taken verbatim and
+reproduces the pre-#800 answer bit for bit. Everything below is #754's
+derivation of the constant, which stands as the COARSE-mesh half of that
+answer and is what #800 built on — read "the rule returns 32" as "32 is
+what the derivation returns there", not as "32 is what the solver always
+uses".
+
 `n_qp_path=32` entered in the original implementation (a361591) and was
 never re-derived. #754 measured three straight dipoles, found Z bit-identical
 from q=3-4 up to 48, and proposed 8 — while naming the gap in its own
@@ -644,12 +671,16 @@ keeping.** The same deck, down a mesh ladder:
 | N=240 | 1.6e-6 | 3.0e-8 | 3.6e-11 | 16 |
 | N=400 | 1.1e-6 | 1.3e-9 | 2.7e-11 | 16 |
 
-A default is applied blindly, including on the coarse meshes where it is
-least converged, so 32 is the honest constant. But every rung #754's own
-timing table quotes is N ≥ 400, where q=16 clears the bar with 2x margin —
-so a mesh-aware order, not a smaller constant, is the shape of a real
-saving. Dropping the constant to 8 is not: no hard-class deck is converged
-there at any mesh measured.
+A CONSTANT default is applied blindly, including on the coarse meshes where
+it is least converged, so 32 was the honest constant. But every rung #754's
+own timing table quotes is N ≥ 400, where q=16 clears the bar with 2x margin
+— so a mesh-aware order, not a smaller constant, is the shape of a real
+saving. **That is what momwire#800 then built**, and it is the default now;
+the switch sits at the geometric mean of the corner's own last-coarse and
+first-fine rungs (`k*h = 0.018`), so each side keeps a sqrt(2) margin.
+Dropping the constant to 8 was never the answer: no hard-class deck is
+converged there at any mesh measured, which is why "derive" has 16 as its
+floor and 32 as its ceiling rather than a third rung.
 
 **What the order costs** (quiet box, `OMP_NUM_THREADS=1`, median of 3, first
 loadavg 0.29; the rise across the table is the benchmark's own load):
@@ -679,9 +710,15 @@ windows. Threaded on 8 cores, the same fill reads:
 
 #744 scopes the windows **and** the contraction together: 47.1% here against
 its filed 0.19/(0.19+0.217) = 46.7%. The ratio reproduces; only the
-absolutes differ (#744's are per-chunk). Since #754 left `n_qp_path` at 32,
-the kernel's observation-point count did not change and #744 stands exactly
-as filed.
+absolutes differ (#744's are per-chunk). The profile above was taken at
+`n_qp_path=32`, which was the default when #754 closed; momwire#800 has
+since made the default DERIVE, and 801 segments is fine enough that any deck
+under about 2.29 lambda of total wire lands on 16 there (the rule is
+`k*h_max <= 0.018`). So the observation-point count these shares were
+measured at is not necessarily today's on the same deck, and the table
+should be read as the q=32 reading it is. What #744 scoped is unchanged,
+and #744 and #806 have since moved both of those terms into the fused
+weighted assembler.
 
 ## Below the plane (momwire#812, unit 1 of the razor buried arc)
 

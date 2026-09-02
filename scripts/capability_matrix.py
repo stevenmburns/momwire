@@ -40,9 +40,9 @@ DOC = pathlib.Path(__file__).resolve().parent.parent / "docs" / "capability-matr
 
 # Every class carrying a row, in the order the document reads best: the
 # B-spline family and its two accelerators, the two sinusoidal rows, the
-# NEC-5 twin, then the two reference rows. `PulseSolver` is last and is the
-# only one no `--basis` name reaches (momwire#654 gave the pulse family one
-# roster entry and it is the Harrington row).
+# razor-blade row, then the two reference rows. `PulseSolver` is last and is
+# the only one no `--basis` name reaches (momwire#654 gave the pulse family
+# one roster entry and it is the Harrington row).
 CLASSES = (
     BSplineSolver,
     HMatrixSolver,

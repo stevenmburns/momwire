@@ -277,9 +277,13 @@ def port_kwargs(
 
     One owner for a rule the nec2 front end and the NEC-5 one both need and
     neither should keep a copy of (momwire#603 U3).  Every entry is a refusal
-    by PRESENCE and not by value — ``RazorSolver`` raises on a ``node_gaps=``
-    it was handed even when what it was handed is ``None`` — so what this
-    decides is which KEYS exist, never what they hold.
+    by PRESENCE and not by value — ``HarringtonSolver`` raises
+    ``NotImplementedError`` on a ``node_gaps=`` it was handed even when what
+    it was handed is ``None``, and ``SinusoidalSolver`` answers the same
+    spelling with a ``TypeError`` — so what this decides is which KEYS exist,
+    never what they hold.  ``RazorSolver`` was the example here until
+    momwire#603 gave it the node port; it declares ``node_gaps`` now and
+    takes ``None`` without complaint.
 
     ``junctions`` is withheld from a :data:`_NATIVE_LOADING` family, and the
     reason is not that the constructor cannot take one: razor and harrington

@@ -195,10 +195,11 @@ DISTRIBUTED loading (`wire_conductivity`, `insulation_radius`,
 `insulation_eps_r`) is the siblings' API verbatim, over the same
 `_wire_loading` physics. LUMPED loads (`lumped_loads`, a sequence of
 ``(wire_index, arclength, impedance)``) are razor's own kwarg: the other
-rows serve a lumped load as port algebra over a `node_gaps` port, which
-this formulation refuses, but a delta in Z_s at a knot collapses the
-integral above to a single diagonal entry — so `Z_driven = Z_unloaded +
-Z_L` at the fed knot is exact here rather than arranged. `wire_loss_power`
+rows serve a lumped load as port algebra over a zero-volt gap a consumer
+stamps afterwards, which this formulation does not take, but a delta in
+Z_s at a knot collapses the integral above to a single diagonal entry — so
+`Z_driven = Z_unloaded + Z_L` at the fed knot is exact here rather than
+arranged. `wire_loss_power`
 reads back the DISTRIBUTED dissipated watts (like the siblings');
 `lumped_load_power` (momwire#433) reads back each load's own share.
 
@@ -316,9 +317,12 @@ wing segments, so each half's quadrature points inherit that wing's label.
 Scope
 -----
 Free space and all three grounds — PEC, reflection-coefficient and
-Sommerfeld — either kernel, one polyline per wire. Ground contact over a
-finite ground stays refused with a message rather than silently
-mismodelled, as do the contacts that are not a wire end in the plane (an
+Sommerfeld — either kernel, one polyline per wire. Ground contact is served
+over PEC and over the SOMMERFELD ground (momwire#624); what stays refused
+inside that column is contact under `refl-coef`, which is the whole tree's
+refusal rather than this family's (momwire#282 stage 1, `_ground_spec`).
+Refused too, with a message rather than silently
+mismodelled, are the contacts that are not a wire end in the plane (an
 interior anchor touching down, an edge lying in the plane, a wire dipping
 below it). Only wire ENDS junction: a wire end touching another wire's
 interior is not a contact here. A wire with a single segment is served
@@ -3689,10 +3693,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the coefficient AT a knot IS the current there, so `port_currents`
         (== `y`) is read straight off `coeffs` at the feed rows, with no
         separate readout function the way the segment-basis families need
-        one. Ports are the configured `feeds`, in order — this formulation
-        refuses `junction_ports` and `node_gaps` at construction, so there
-        is nothing after them (unlike the B-spline / sinusoidal-Galerkin
-        families, whose ports run feeds-then-junction-ports).
+        one. Ports run ``[gap feeds..., node gaps...]``, the order
+        :meth:`_port_columns` builds and :class:`PortSolution` documents —
+        this formulation refuses `junction_ports` at construction, so it is
+        the MIDDLE block that is empty here, not the tail (unlike the
+        B-spline / sinusoidal-Galerkin families, whose ports run
+        feeds-then-junction-ports-then-node-gaps). A node gap has been a
+        razor port since momwire#603 gave this basis the apex port it always
+        had the through-current unknown for.
 
         The fill is exactly `_assemble_Z`'s own composition — one
         k-independent `_assemble_Z_prepare` and one `_assemble_Z_from_prepared`

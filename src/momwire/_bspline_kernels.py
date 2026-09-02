@@ -5,10 +5,13 @@ Two flavours of same-edge moment integrals are exposed:
   * `_seg_seg_static_moments`: closed-form static-kernel piece
         S_pq[i, j] = ∫∫ (s-α_i)^p (s'-A_j)^q / (4π √((s-s')²+a²)) ds' ds
     for p, q ∈ {0, ..., max_d}, on every (i, j) pair of an edge's N segments.
-    The closed form (sympy-derived once and dumped to
-    `_bspline_static_moments.py`) handles the log singularity on the (i, i)
-    diagonal that Gauss-Legendre quadrature converges on only
-    logarithmically.
+    The closed form handles the log singularity on the (i, i) diagonal that
+    Gauss-Legendre quadrature converges on only logarithmically. It is
+    `_bspline_static_far.J_static_stable`, imported below under the name
+    `J_static_moment`: momwire#808 re-derived the same-edge family in a
+    cancellation-free grouping, so the sympy dump in
+    `_bspline_static_moments.py` is no longer what this kernel evaluates
+    (`_bspline_ek_moments` still builds on it).
 
   * `_seg_seg_reg_moments`: smooth-kernel piece
         R_pq[i, j] = ∫∫ (s-α_i)^p (s'-A_j)^q · (exp(-jkR)-1)/(4π R) ds' ds

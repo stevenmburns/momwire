@@ -168,10 +168,13 @@ trimmed multi-gigabyte transient peaks to near the resident matrix size.
 The compressed engines (`hmatrix`, `arrayblock`) skip the dense matrix
 entirely, which is exactly why they exist for large problems.
 
-These envelopes ride on `RazorSolver`'s outer path order (`n_qp_path=32`, so 64
-observation points per testing path), and that constant was re-derived and
-KEPT on 2026-09-02 (momwire#754) — so the N≈800 / N≈1600 figures stand
-rather than moving with it.
+These envelopes were measured at `RazorSolver`'s outer path order of 32 (so
+64 observation points per testing path), which was the default until
+momwire#800 made it DERIVE from the mesh on 2026-09-02. At the mesh
+densities in this section the derivation returns 16, halving the outer
+integral's cost — so the N≈800 / N≈1600 figures are the conservative
+reading rather than the current one. An explicit `n_qp_path=32` reproduces
+what they were measured at, bit for bit.
 
 ## The extended kernel, in one paragraph
 
