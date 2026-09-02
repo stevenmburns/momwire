@@ -464,7 +464,7 @@ def main() -> int:
         "momwire-eznec-<basis>.exe, and that basis is what answers.\n"
         "Known bases:\n"
         "\n"
-        "  bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5\n"
+        "  bspline  bspline-d1  hmatrix  arrayblock  razor-nec5\n"
         "  sinusoidal  sinusoidal-galerkin\n"
         "\n"
         "(`sinusoidal` cannot answer this dialect — every deck in it drives\n"

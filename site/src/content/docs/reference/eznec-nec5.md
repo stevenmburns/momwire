@@ -145,11 +145,11 @@ engine), rename the copy to `momwire-eznec-<basis>.exe` in the same folder,
 and that basis answers. This is the same rule the
 [SimNEC portal's](/reference/portal-usage/) `momwire-nec2c-<basis>` commands
 use, with one owner behind both. The bundle ships two rather than all eight
-because the pair is what the parity work was about; the other six are a copy
+because the pair is what the parity work was about; the other five are a copy
 away:
 
 ```text
-bspline  bspline-d1  hmatrix  arrayblock  razor  razor-nec5
+bspline  bspline-d1  hmatrix  arrayblock  razor-nec5
 sinusoidal  sinusoidal-galerkin
 ```
 

@@ -87,22 +87,28 @@ engine that converges at one-third the mesh is roughly an order of
 magnitude cheaper at equal accuracy. That, not a benchmark sprint, is why
 `bspline` d=2 is the default in every portal and every host.
 
-## The razor twins: which lane
+## The razor lane, and its certification twin
 
-`razor` and `razor-nec5` are one solver class offered as two names, the
-way `bspline`/`bspline-d1` are one class on two degrees. Both test the
-tent expansion with NEC-5's razor-blade rule; they differ only in the
-quadrature bound to the one path integral the public manual leaves
-numerically open. **The choice is not a coin flip** (measured 2026-08-18):
+`razor-2p` — `razor-nec5` is its deprecated spelling — tests the tent
+expansion with NEC-5's razor-blade rule at NEC-5's own identified two-point
+quadrature. It is the orderable member of `RazorSolver`. The class also
+takes Gauss-Legendre nodes along the same testing path, which was a second
+roster entry, plain `razor`, until momwire#753 retired it (decided
+2026-09-02): the two lanes are one class differing only in that sampling
+choice, and measured 2026-08-18, the GL lane cost 20x the wall time
+(20.2 s vs 0.97 s at N=1600 free space) for a 0.001 Ω difference from
+`razor-2p` — not worth ordering. The class stays; the GL lane is reached
+by constructing `RazorSolver(nec5_quadrature=False, ...)` directly rather
+than through `--basis` or a portal name.
 
-| | `razor-nec5` | `razor` (converged GL quadrature) |
+| | `razor-2p` / `razor-nec5` | GL quadrature (`RazorSolver` constructed directly) |
 | --- | --- | --- |
 | Role | Interactive lane | Convergence / certification lane |
 | Speed | Sub-second to N≈300–400 free, N≈200–400 grounded; 2–4× behind `bspline` beyond that | 12–80× slower than `bspline`; over a second even at N=100 under any ground |
 | Memory | Same order as the other dense bases | Exceeds an 8 GB working set by N≈800 grounded / N≈1600 free |
 | Use for | Ordinary solves, A/B checks against NEC-5 behaviour | Convergence ladders, certification against NEC-5 printouts |
 
-On the models where we hold a licensed reference, `razor-nec5` rides the
+On the models where we hold a licensed reference, `razor-2p` rides the
 licensed engine's own convergence path at the 0.01 % level — it converges
 *along* NEC-5's trajectory, not merely to its endpoint. The refusal
 boundary — down to K≥3 junction ports alone, now that node gaps
@@ -144,9 +150,10 @@ deck there for the same reason `sinusoidal` does.
 
 The dense bases form an N×N complex matrix: memory grows as **N²**, and a
 runaway segment count costs hundreds of megabytes before it costs minutes.
-Practical envelopes on an 8 GB working set: the plain-`razor`
-certification lane exceeds it by N≈800 grounded / N≈1600 free (the table
-above); the other dense bases reach further at the same N because their
+Practical envelopes on an 8 GB working set: the GL-quadrature certification
+lane (`RazorSolver` constructed directly with `nec5_quadrature=False` —
+off the `--basis` roster since momwire#753) exceeds it by N≈800 grounded /
+N≈1600 free (the table above); the other dense bases reach further at the same N because their
 peak was engineered down deliberately — the memory-release series
 (momwire 0.29.0's certified peaks, then the #318/#323 B-spline reductions)
 trimmed multi-gigabyte transient peaks to near the resident matrix size.
