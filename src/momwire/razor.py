@@ -1505,10 +1505,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # normalize/validate contract, same `_wire_loading` physics — so a
         # consumer swapping formulations passes the same dict. LUMPED loads
         # are razor's own kwarg, because the siblings serve a lumped load as
-        # deck-level port algebra over a `node_gaps` port (see
-        # `momwire.deck._solver`) and this formulation refuses node gaps:
-        # its delta gap lands in a whole testing ROW, so a gap is not a
-        # local basis edit. What razor can do instead is exact and cheaper —
+        # deck-level port algebra over a zero-volt `feeds` gap a consumer
+        # stamps afterwards (see `momwire.deck._solver`), which this
+        # formulation does not take: it is keyed by CLASS in
+        # `_NATIVE_LOADING` there, not by any refusal — razor has served
+        # `node_gaps` since momwire#603. What razor does instead is exact
+        # and cheaper —
         # a load at a knot is a delta in Z_s(l) sitting inside exactly one
         # testing path, i.e. one diagonal entry (`_loading_stencil`).
         #
