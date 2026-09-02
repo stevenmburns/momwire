@@ -73,6 +73,12 @@ endif
 # OptionalBuildExt otherwise downgrades toolchain errors to a warning (the
 # sdist graceful path), which locally means exit 0 and the suite silently
 # running a STALE .so — the repo's documented measurement hazard.
+#
+# It guards ONE way in, though: a compile that FAILS. It cannot see a compile
+# that never happened, which is what momwire#824 turned out to be — an edited
+# header absent from `depends=`, so build_ext recompiled nothing, relinked the
+# old object and exited 0. Both routes end at a stale .so and only this one
+# announces itself. tests/test_accel_header_deps.py covers the other.
 build:
 	$(BUILD_ENV) MOMWIRE_REQUIRE_ACCEL=1 $(PYTHON) setup.py build_ext --inplace
 

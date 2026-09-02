@@ -184,6 +184,19 @@ _ACCEL_HEADERS = [
     "src/momwire/_accel_common.h",
     "src/momwire/_accel_somm_proj_inline.h",
     "src/momwire/_branch_cut_inline.h",
+    # Both of these were MISSING until momwire#824, and the omission is what
+    # that issue actually was. The far static-moment header is included by
+    # _accel_bspline.cpp; the cross-lane stable spellings (#799) by three TUs.
+    # An edit to either recompiled nothing, `build_ext --inplace` reported
+    # success, and the OLD object was relinked and re-copied -- so the .so
+    # stopped matching its own source while every test that reads the source
+    # kept passing. #824 was read as a libm `pow` divergence for exactly this
+    # reason: it is reproducible, box-local (CI always builds cold, so CI
+    # cannot see it), and survives a `git checkout main`, because it is the
+    # BINARY that is stale and not the tree. tests/test_accel_header_deps.py
+    # now enforces the whole list against the sources' own #includes.
+    "src/momwire/_bspline_static_far_inline.h",
+    "src/momwire/_stable_inline.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
