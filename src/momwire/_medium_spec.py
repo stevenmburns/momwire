@@ -66,9 +66,18 @@ BELOW = "below"
 # against it (the house rule: never gate cross-formulation agreement).
 ENGINE_CROSSING_PRINT = "74.761 - 57.730j ohm"
 
-_REFUSE_CROSSING = (
-    "wire {w} crosses the ground interface mid-span (polyline z runs "
-    "{zmin:.6g} to {zmax:.6g} across ground_z = {gz:g}): momwire serves "
+# Each of the four geometry refusals below is a per-deck PREAMBLE naming the
+# offending wire and the numbers that made it offending, followed by a CONSTANT
+# reason. The split is what lets a `Capabilities` row declare the reason
+# (momwire#396 goal 3): a matrix cell is written before any deck exists, so it
+# can carry the second half and not the first, and `tests/
+# test_refusals_are_declared.py` gates every raise here as
+# preamble-plus-declared-reason. Before the split these were declared by
+# filling the placeholders with `("<wire>", 0.0, 0.0, 0.0)`, which read as
+# prose in an exception and as noise in a generated document.
+
+CROSSING_REFUSAL = (
+    "momwire serves "
     "wires wholly at or above the interface, wires strictly below it, and "
     "current CROSSING it only through a crossing junction (momwire#524 "
     "phase 2): split the wire AT the interface into a below wire whose end "
@@ -83,9 +92,13 @@ _REFUSE_CROSSING = (
     "clear of the interface"
 )
 
-_REFUSE_BURIED_PEC = (
-    "wire {w} runs below the ground plane (min z = {zmin:.6g} < ground_z = "
-    "{gz:g}) over a PERFECTLY CONDUCTING ground, which has no lower medium "
+_REFUSE_CROSSING = (
+    "wire {w} crosses the ground interface mid-span (polyline z runs "
+    "{zmin:.6g} to {zmax:.6g} across ground_z = {gz:g}): "
+) + CROSSING_REFUSAL
+
+BURIED_PEC_REFUSAL = (
+    "over a PERFECTLY CONDUCTING ground, which has no lower medium "
     "to put it in: the field inside a perfect conductor is identically zero, "
     "so a wire there is not buried, it is shorted out. A buried wire is "
     "served only under ground_model='sommerfeld' with a ground_eps, where "
@@ -94,9 +107,12 @@ _REFUSE_BURIED_PEC = (
     "above the plane, or give the solve a Sommerfeld ground"
 )
 
-_REFUSE_BURIED_REFL = (
-    "wire {w} runs below the ground plane (min z = {zmin:.6g} < ground_z = "
-    "{gz:g}) under ground_model='refl-coef', which has no lower medium to "
+_REFUSE_BURIED_PEC = (
+    "wire {w} runs below the ground plane (min z = {zmin:.6g} < ground_z = {gz:g}) "
+) + BURIED_PEC_REFUSAL
+
+BURIED_REFL_REFUSAL = (
+    "under ground_model='refl-coef', which has no lower medium to "
     "put it in: the reflection-coefficient ground is a plane-wave boundary "
     "condition applied on the UPPER half-space alone - it multiplies an "
     "image by a Fresnel coefficient and never solves the field inside the "
@@ -107,12 +123,15 @@ _REFUSE_BURIED_REFL = (
     "Raise the wire to or above the plane, or ask for the Sommerfeld ground"
 )
 
+_REFUSE_BURIED_REFL = (
+    "wire {w} runs below the ground plane (min z = {zmin:.6g} < ground_z = {gz:g}) "
+) + BURIED_REFL_REFUSAL
+
 
 # The one combination momwire#553 U5 measured itself OUT of, and the number
 # that measured it. See `contact_with_buried_refusal`.
-_REFUSE_CONTACT_WITH_BURIED = (
-    "wire {cw} stands an END in the ground plane (ground CONTACT) and wire "
-    "{bw} is buried below it: that COMBINATION is not served, though each "
+CONTACT_WITH_BURIED_REFUSAL = (
+    "that COMBINATION is not served, though each "
     "half is. momwire's contact model continues the wire's current into the "
     "ground as the C2-scaled IMAGE (momwire#151), which is a fiction that "
     "works because no observer is ever inside the ground to look at it - and "
@@ -140,6 +159,11 @@ _REFUSE_CONTACT_WITH_BURIED = (
     "the interface (an elevated feed over a buried counterpoise is "
     "served), or solve the buried structure on its own"
 )
+
+_REFUSE_CONTACT_WITH_BURIED = (
+    "wire {cw} stands an END in the ground plane (ground CONTACT) and wire "
+    "{bw} is buried below it: "
+) + CONTACT_WITH_BURIED_REFUSAL
 
 
 def contact_with_buried_refusal(contact_wire, buried_wire):

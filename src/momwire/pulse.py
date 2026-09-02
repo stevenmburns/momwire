@@ -261,6 +261,37 @@ _SINGULAR_ENRICHMENT_REFUSAL = (
     "caller typo (a TypeError) rather than this sentence. "
 ) + _REFERENCE_ROW
 
+# The two GEOMETRY cells (momwire#396 goal 3), both raised by
+# `_check_ground_clearance` and until now declared by neither row: the matrix
+# was silent about contact while the constructor refused it under every
+# ground, which is the contradiction `tests/test_refusals_are_declared.py`
+# was written to find. Named here so the row and the raise are one sentence.
+#
+# `{cls}` on the contact one is momwire#564's discipline applied to a site
+# that had missed it: `HarringtonSolver` decks were being told about
+# `PulseSolver`, a class the caller had not asked for.
+_GROUND_CONTACT_REFUSAL = (
+    "ground CONTACT is not supported by "
+    "{cls} — the fill would run, but no gate in this "
+    "probe measures it. Raise the wire, or use "
+    "BSplineSolver(ground_z=...), which carries the "
+    "grounded-end fold (momwire#151)"
+)
+
+# ONE cell and no combination keys, for the same reason as the sinusoidal
+# family's: this scan asks only "is any point below the plane", so a mid-span
+# CROSSING and a buried wire under a ground with no lower medium both arrive
+# here, and the sentence is true of all three.
+_BURIED_REFUSAL = (
+    "{cls} has no buried fill, under any ground. Every fill in this "
+    "formulation takes the free-space wavenumber and reaches the ground "
+    "through `PotentialGround` — an image, or a reflection weight, applied "
+    "on the UPPER half-space — so there is no in-medium kernel here for a "
+    "wire below the interface to be filled with. A buried wire is a LEGAL "
+    "deck: solve it with BSplineSolver over ground_model='sommerfeld' "
+    "(momwire#553), or raise the wire clear of the plane"
+)
+
 # Constructor kwargs the sibling solvers accept that this formulation
 # deliberately does not, with the reason each is refused. Anything else
 # unexpected is a caller typo and stays a TypeError.
@@ -406,6 +437,14 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # arriving through `PotentialGround` with no ground arithmetic in this
     # file. Everything else refused, reusing `_OUT_OF_SCOPE`'s prose rather
     # than restating it.
+    #
+    # `contact` and `buried` are False on BOTH rows in this family
+    # (momwire#396 goal 3). The grounds stay in `grounds` and mean what they
+    # say: all three are served for wires standing CLEAR of the plane, which
+    # is every deck this probe was written for. What the two cells withdraw
+    # is the plane itself — an end IN it, and anything under it — and both
+    # have been refused by `_check_ground_clearance` since the row shipped,
+    # with no declaration behind either.
     capabilities = Capabilities(
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=False,
@@ -415,6 +454,8 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         knot_feeds=False,
         per_wire_radius=False,
         singular_enrichment=False,
+        buried=False,
+        contact=False,
         refusals={
             "junction_ports": _OUT_OF_SCOPE["junction_ports"].format(cls="PulseSolver"),
             "node_gaps": _OUT_OF_SCOPE["node_gaps"].format(cls="PulseSolver"),
@@ -429,6 +470,8 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "singular_enrichment": _SINGULAR_ENRICHMENT_REFUSAL.format(
                 cls="PulseSolver"
             ),
+            "buried": _BURIED_REFUSAL.format(cls="PulseSolver"),
+            "contact": _GROUND_CONTACT_REFUSAL.format(cls="PulseSolver"),
         },
     )
 
@@ -590,19 +633,17 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for i, pl in enumerate(self.wires_polylines):
             tol = _ground_spec.ground_touch_tol(pl)
             zmin = float(pl[:, 2].min())
+            cls = type(self).__name__
             if zmin < gz - tol:
                 raise ValueError(
                     f"wire {i} dips below the ground plane "
-                    f"(min z = {zmin:.6g} < ground_z = {gz:g})"
+                    f"(min z = {zmin:.6g} < ground_z = {gz:g}): "
+                    + _BURIED_REFUSAL.format(cls=cls)
                 )
             if zmin <= gz + tol:
                 raise NotImplementedError(
                     f"wire {i} touches the ground plane (min z = {zmin:.6g}, "
-                    f"ground_z = {gz:g}): ground CONTACT is not supported by "
-                    "PulseSolver — the fill would run, but no gate in this "
-                    "probe measures it. Raise the wire, or use "
-                    "BSplineSolver(ground_z=...), which carries the "
-                    "grounded-end fold (momwire#151)"
+                    f"ground_z = {gz:g}): " + _GROUND_CONTACT_REFUSAL.format(cls=cls)
                 )
 
     def _build_geometry(self):

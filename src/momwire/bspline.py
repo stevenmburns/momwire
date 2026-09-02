@@ -675,6 +675,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # `RazorSolver` says its own contact refusal through
     # `"contact+finite_ground"`. The ground stays in `grounds`: refl-coef is
     # served, and is still the default, for wires clear of the plane.
+    #
+    # `buried` and `contact` are declared CELLS since momwire#396 goal 3, not
+    # condition tokens: this is the one family that fills a wire below the
+    # interface (momwire#553) and it stands a wire end in the plane
+    # (momwire#151), so both read True and the refusals around them are the
+    # combinations. Two of those combinations are the ground column itself —
+    # a PEC plane and a reflection-coefficient ground have no lower medium to
+    # be buried IN — and they were missing entirely: `refusal("buried",
+    # "pec")` answered None while `_medium_spec.wire_media` raised.
     capabilities = Capabilities(
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
@@ -684,19 +693,23 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         knot_feeds=True,
         per_wire_radius=True,
         singular_enrichment=True,
+        buried=True,
+        contact=True,
         refusals={
             "wire_loading+singular_enrichment": _ENRICHMENT_WIRE_LOADING_REFUSAL,
             "extended_kernel+singular_enrichment": _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
             "per_wire_radius+singular_enrichment": _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
             # momwire#553 U5 — a wire STRICTLY below a Sommerfeld interface
-            # is served; these four say what around it is not.
-            "buried+contact": _medium_spec.contact_with_buried_refusal(
-                "<contact>", "<buried>"
-            ),
+            # is served; these say what around it is not. The two ground rows
+            # come first: buried is a SOMMERFELD capability, and the other two
+            # grounds refuse it before any of the rest is reached.
+            "buried+pec": _medium_spec.BURIED_PEC_REFUSAL,
+            "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
+            "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "buried+singular_enrichment": _BURIED_ENRICHMENT_REFUSAL,
             "buried+extended_kernel": _BURIED_EXTENDED_KERNEL_REFUSAL,
-            "buried+crossing": _medium_spec.crossing_refusal("<wire>", 0.0, 0.0, 0.0),
+            "buried+crossing": _medium_spec.CROSSING_REFUSAL,
         },
     )
 
