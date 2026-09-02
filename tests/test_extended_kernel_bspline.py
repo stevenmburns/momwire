@@ -56,6 +56,7 @@ from momwire._bspline_kernels import (
     _seg_seg_reg_moments_from_geometry_swept,
     _seg_seg_static_moments,
 )
+from momwire._stable import expm1_neg_jkR
 
 # nec2c's CVEL at 30 MHz, matching the sinusoidal EK file's deck.
 LAM = 299.792458 / 30.0
@@ -632,10 +633,17 @@ def test_ek_spelling_reduces_to_the_reduced_kernel_exactly_at_zero_radius():
     # exactly 1.0 and `extra` exactly 0.0, and multiplying a complex by
     # (1 + 0j) and adding (0 + 0j) is the identity in IEEE — so the whole
     # remainder is bit-identical to what the EK-off branch computes.
+    #
+    # The reference is the reduced branch's OWN spelling, which since
+    # momwire#799 is `expm1_neg_jkR`'s bracket rather than the literal
+    # `exp(-jkR) - 1`. Writing the literal here would test that the EK branch
+    # reproduces an expression the repo no longer evaluates anywhere — the two
+    # differ by the 7e-11 the rewrite removed at kR = 1e-3, which is exactly
+    # the point.
     R = np.geomspace(1e-3, 10.0, 41)
     assert np.all(_ek_factor(R, 0.0, K) == 1.0)
     assert np.all(_ek_reg_extra(R, 0.0, K) == 0.0)
-    reduced = (np.exp(-1j * K * R) - 1.0) / (4 * np.pi * R)
+    reduced = expm1_neg_jkR(K, R) / (4 * np.pi * R)
     assert np.array_equal(_ek_reg_kernel(R, 0.0, K), reduced)
 
 
