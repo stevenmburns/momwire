@@ -739,3 +739,43 @@ its filed 0.19/(0.19+0.217) = 46.7%. The ratio reproduces; only the
 absolutes differ (#744's are per-chunk). Since #754 left `n_qp_path` at 32,
 the kernel's observation-point count did not change and #744 stands exactly
 as filed.
+
+## Below the plane (momwire#812, unit 1 of the razor buried arc)
+
+A deck whose wires lie **wholly below** the interface is filled in the
+lower-medium family — momwire#553's below serve read through this trunk's
+own vocabulary:
+
+    Z = Z_direct(k_m, ε_m) − [ A_m·Z_image(k_m, ε_m) + Q_below ] + L
+
+It is the composing ground's fold with three numbers swapped and one block
+substituted: the kernel at `k_m = k₂·√ε̃` (the fused moments kernel takes a
+complex k since momwire#796), Φ under `ε_m = ε₀·ε̃`, the image weighted by
+`A_m = image_coefficient_below(ε̃)` — the negative of C₂, measured not derived
+— reaching Z **through the windows** exactly as C₂ does, and the below
+remainder (`_sommerfeld_below`) in place of the above one. The whole unit is
+one ground object, `_potential_ground.BelowMediumGround` (whose `remainder()`
+is `RemainderBelow`), and `_assemble_Z_below_plane`, which calls the same
+`_assemble_Z_source_block` twice with `eps` and the ground swapped. Because
+`A_m` travels in the ground's `fused_window_rule` (momwire#806), the fused
+weighted assembly serves the family with no kernel work.
+
+Measured 2026-09-02 on the phase-0 buried dipole (`tests/test_razor_below_plane_812.py`):
+
+| gate | result |
+|---|---|
+| ε̃ = 1 collapse to the free-space wire | 2.2e-20 (vertical), 1.1e-19 (horizontal) |
+| razor vs bspline at soil A, N = 11 → 81 | 8.83 → 6.10 → 3.93 → 2.58 Ω, monotone (the O(1/N) razor-vs-Galerkin walk) |
+| two-point vs Gauss–Legendre lane, N = 41 | 0.0105 Ω |
+| fused vs numpy at complex k, both lanes | 4e-16 / 5e-15 |
+| above-plane decks (#762 protocol) | bit-identical |
+
+**It is behind the public refusal.** `_SERVE_BELOW_PLANE` is off by default
+and razor's `buried` capability cell stays False until unit 3 (momwire#814)
+flips it; a mixed above/below deck is refused by name as unit 2's
+(momwire#813, the crossing block and the node row on razor rows, which the
+test-side probe on momwire#651 designed); the extended kernel is declined
+below the plane. The serve-plan refusals a buried grid can hit (past the R₁
+cap, below the θ floor) are asked over segment endpoints and centroids before
+any grid is filled, the same R₁ and θ `BSplineSolver._buried_serve_plan` asks
+over its nodes.

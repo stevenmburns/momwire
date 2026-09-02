@@ -150,7 +150,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from . import _ground_mirror, _ground_refl, _ground_spec, _sommerfeld
+from . import _ground_mirror, _ground_refl, _ground_spec, _sommerfeld, _sommerfeld_below
 from ._quadrature import leggauss
 
 
@@ -510,6 +510,76 @@ class Remainder:
         )
 
 
+class RemainderBelow(Remainder):
+    """The below/below remainder (momwire#553's lower-medium family), in the
+    `Remainder` contract, for a consumer whose sources AND observers lie
+    below the interface (momwire#812).
+
+    Same `field_windows` shape, three substitutions: the grid is
+    `_sommerfeld_below.get_grid_below` (keyed by ε̃ and the FREE-SPACE k₂,
+    which derives k_m itself), the projection is
+    `remainder_field_proj_below` (which raises rather than clamps when a
+    point is not below the plane), and the grid radius is the largest
+    two-depth image distance over observer × source endpoints, which is what
+    `BSplineSolver._buried_serve_plan` sizes the same grid by. Sign
+    convention unchanged: the caller adds `A_m·img + Q` and takes one minus.
+
+    The order is NOT keyed to grazing height here: that keying is the
+    above-plane spike an observer sees over a source's image, and below the
+    plane the remainder is a smooth correction (`_n_qp_buried_field`'s
+    reasoning, the two remainder blocks of three), so the constructor's
+    `n_qp` is taken flat.
+    """
+
+    def field_windows(
+        self, observers, sources=None, *, n_moment=1, n_qp=_N_QP_REMAINDER
+    ):
+        if sources is None:
+            sources = self.source_segments()
+        seg_l, seg_r, src_t = sources
+        obs_p, obs_t = observers
+        solver = self._solver
+        gz = float(solver.ground_z)
+        k_p = float(self._k)
+        eps_t = complex(self._eps_tilde)
+        k_m = _sommerfeld_below.k_medium(eps_t, k_p)
+
+        # Grid radius: R₁ = hypot(ρ, d_obs + d_src) over observer points ×
+        # source ENDPOINTS (convex in the source parameter, so endpoints
+        # bound it), oversized the way `max_image_distance` oversizes.
+        ends = np.concatenate([seg_l, seg_r])
+        d_o = gz - obs_p[:, 2]
+        d_s = gz - ends[:, 2]
+        rho = np.hypot(
+            obs_p[:, 0][:, None] - ends[:, 0][None, :],
+            obs_p[:, 1][:, None] - ends[:, 1][None, :],
+        )
+        r1_max = float(np.max(np.hypot(rho, d_o[:, None] + d_s[None, :]))) * 1.001
+        grid = _sommerfeld_below.get_grid_below(
+            eps_t, k_p, r1_max, self._omega, mu=solver.mu
+        )
+
+        n_src = seg_l.shape[0]
+        xg, wg = leggauss(n_qp)
+        tq = 0.5 * (xg + 1.0)
+        span = seg_r - seg_l
+        nodes = seg_l[:, None, :] + tq[None, :, None] * span[:, None, :]
+        h = np.linalg.norm(span, axis=1)
+        u_phys = h[:, None] * tq[None, :]
+        w_node = 0.5 * h[:, None] * wg[None, :]
+        W = w_node[None] * u_phys[None] ** np.arange(n_moment)[:, None, None]
+        src = nodes.reshape(n_src * n_qp, 3)
+        t_src = np.repeat(src_t, n_qp, axis=0)
+
+        def field_moments(i0, i1):
+            proj = _sommerfeld_below.remainder_field_proj_below(
+                obs_p[i0:i1], obs_t[i0:i1], src, t_src, gz, k_p, k_m, grid
+            )
+            return np.einsum("ojq,pjq->ojp", proj.reshape(i1 - i0, n_src, n_qp), W)
+
+        return field_moments
+
+
 # The two windows a fused assembler can evaluate pair-by-pair, as tags on
 # `FusedWindowRule`. They are the ground's vocabulary, not the kernel's: a
 # ground answers WHICH window it is, and the kernel applies it.
@@ -623,6 +693,8 @@ class PotentialGround:
         "phi_mode",
         "standard_fresnel",
     )
+    # True on `BelowMediumGround` only: the lower-medium family (momwire#812).
+    below = False
 
     def __init__(
         self,
@@ -971,3 +1043,47 @@ def potential_ground_for(solver, geom, k, omega) -> PotentialGround | None:
         phi_mode=solver.ground_phi_mode if cfg.weighted else None,
         standard_fresnel=cfg.standard_fresnel,
     )
+
+
+class BelowMediumGround(PotentialGround):
+    """The lower medium as a `PotentialGround` (momwire#812): what a
+    consumer whose wires are wholly BELOW the interface composes with.
+
+    It is the composing ground with three numbers swapped and one block
+    substituted, which is the whole of momwire#553's below family read
+    through this trunk's vocabulary:
+
+    * the kernel wavenumber is `k_m = k₂·√ε̃` (the consumer passes it; the
+      object records it), and the Φ term divides by `eps_m = ε₀·ε̃`;
+    * `image_coefficient` is `A_m = image_coefficient_below(ε̃)` — measured,
+      not derived, and the negative of C₂ — reaching Z THROUGH the windows
+      exactly as C₂ does (`weight_windows` and `fused_window_rule` are
+      inherited unchanged, so #806's rule seam serves it with no kernel work);
+    * `remainder()` is `RemainderBelow`.
+
+    `mode` is `"compose"` because the composition contract is the same
+    (`A_m·img + Q` associated before the one minus). `below` is the tell a
+    consumer may branch on when it needs to.
+    """
+
+    __slots__ = ("k_m", "eps_m")
+    below = True
+
+    def __init__(self, solver, geom, k, omega, *, eps_tilde):
+        eps_t = complex(eps_tilde)
+        super().__init__(
+            solver,
+            geom,
+            k,
+            omega,
+            mode="compose",
+            eps_tilde=eps_t,
+            image_coefficient=_sommerfeld_below.image_coefficient_below(eps_t),
+        )
+        self.k_m = _sommerfeld_below.k_medium(eps_t, float(k))
+        self.eps_m = solver.eps * eps_t
+
+    def remainder(self) -> Remainder:
+        return RemainderBelow(
+            self._solver, self._geom, self.eps_tilde, self._k, self._omega
+        )
