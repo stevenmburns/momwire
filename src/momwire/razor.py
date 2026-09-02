@@ -460,6 +460,37 @@ _HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
 # flips the capability cell — and flipped by the unit's own gates.
 _SERVE_BELOW_PLANE = False
 
+# momwire#813, unit 2: serve a deck whose wires span the interface through a
+# crossing junction. Off by default on `_SERVE_BELOW_PLANE`'s precedent and
+# for the same reason -- razor's `buried` capability cell stays False until
+# unit 3 (momwire#814) flips it -- and flipped by the unit's own gates.
+_SERVE_CROSSING = False
+
+# The crossing blocks' axis density (momwire#813). Razor's cross rows are
+# PATH-tested and one of them ends AT the node, on the below wire's last
+# segment, whose by-parts integrand ~ 1/sqrt(a^2 + s^2) from s = 0 is carried
+# by `_crossing_fill._graded_u`'s a-scale panels. The trunk's shipped
+# defaults (growth 4.0, Gauss-4 per panel, `_NEAR_Q` = 4) are a GALERKIN
+# axis's setting and leave that row at 5.3e-5.
+#
+# The two error plateaus are separate, which is what makes this easy to
+# mis-measure: sweeping `q` alone leaves 5.3e-5 untouched at any order to 32,
+# and sweeping `panel_order` alone stops at 2.2e-6 at any growth. Measured on
+# the whole-matrix eps~ = 1 collapse, both quadrature lanes identical:
+#
+#   growth  panel   q  | crossing_deck(1)  fan_rise_deck()  (axis nodes)
+#      4.0      4   4  |      2.643e-05        2.649e-05     144 /  320
+#      2.0      8   8  |      1.909e-11        3.202e-09     320 /  768
+#      2.0      8  12  |      6.829e-13        7.254e-11     432 / 1000
+#      2.0     16  12  |      8.532e-13        7.171e-11     528 / 1304
+#
+# So (2.0, 8, 12) is the floor for both decks at 3x the shipped node count,
+# and 16-per-panel buys nothing over 8. The cost is the crossing blocks'
+# only, and only on a deck that HAS a crossing junction.
+_CROSSING_GROWTH = 2.0
+_CROSSING_PANEL_ORDER = 8
+_CROSSING_Q = 12
+
 _HAVE_RAZOR_WEIGHTED_ACCEL = _acc is not None and bool(
     getattr(_acc, "razor_weighted_744", False)
 )
@@ -1344,10 +1375,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
         # Validates the geometry against the plane (and is re-read at
-        # basis-build time for the grounded ends themselves). The buried
-        # readings run first: they need the ground attributes above, which
-        # bare `__new__` probes of the scan itself never set.
-        self._refuse_buried_geometry()
+        # basis-build time for the grounded ends themselves).
         self._ground_ends()
         # momwire#282 stage 1's D3, the row every solver with a refl-coef
         # ground refuses: contact under `refl-coef` is a MODEL failure at zero
@@ -1378,6 +1406,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._radius_per_wire, self._uniform_radius = _wire_spec.normalize_wire_radius(
             wire_radius, n_w
         )
+
+        # The buried readings, AFTER the radius normalisation: the crossing
+        # arm's scope check (`_crossing_junctions`) reads `_radius_per_wire`,
+        # because ONE wire radius across the deck is part of the crossing
+        # serve's validated scope (momwire#524 phase 2). They still need the
+        # ground attributes set above, which bare `__new__` probes of the
+        # scan itself never set.
+        self._refuse_buried_geometry()
         # The extended kernel (momwire#398 D1). Off is the default and is
         # structurally absent, not skipped: `_ek_labels` is never called, no
         # EK spec is built, and `_seg_moments_prepare` takes `ek=None` — the
@@ -1762,7 +1798,36 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return
         media = self._wire_media()
         self._below_plane = False
+        self._crossing = False
         if _medium_spec.BELOW in media:
+            # The MIXED deck first, because it is a different case and not a
+            # wholly-below one with an extra wire: its refusal must not claim
+            # the below-plane serve, which is itself behind a switch.
+            if _medium_spec.ABOVE in media:
+                if not _SERVE_CROSSING:
+                    raise ValueError(
+                        "this deck has wires on BOTH sides of the interface, "
+                        "joined at a crossing junction. Razor's crossing fill "
+                        "is momwire#813 and is not served yet; the "
+                        "below-plane family it stands on is momwire#812. "
+                        "Solve it with BSplineSolver, which serves the "
+                        "crossing junction since momwire#524 phase 2, or "
+                        "leave the buried part DETACHED"
+                    )
+                # momwire#813 unit 2. `_crossing_junctions` is the scope
+                # check -- one above member per crossing junction, one
+                # radius, other junctions wholly below -- and it raises the
+                # adjudication's own sentences past that scope.
+                if not self._crossing_junctions():
+                    raise ValueError(
+                        "this deck has wires on both sides of the interface "
+                        "but no junction crossing it: momwire serves current "
+                        "across the plane only through a crossing junction "
+                        "(momwire#524 phase 2), or with the buried part "
+                        "DETACHED"
+                    )
+                self._crossing = True
+                return
             w = media.index(_medium_spec.BELOW)
             zmin = float(np.asarray(self.wires_polylines[w])[:, 2].min())
             if not _SERVE_BELOW_PLANE:
@@ -1772,15 +1837,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     f"{_BURIED_FILL_REFUSAL}"
                 )
             # momwire#812, unit 1: the lower-medium family serves a deck that
-            # is wholly below the plane. Mixed media are unit 2's (the
-            # crossing block and the node row), and the extended kernel's
-            # tube expansion was never taken in a medium.
-            if _medium_spec.ABOVE in media:
-                raise ValueError(
-                    "razor serves a wholly-below deck (momwire#812) but not yet "
-                    "one that mixes above and below wires: the crossing block "
-                    "on razor rows is momwire#813"
-                )
+            # is wholly below the plane. The extended kernel's tube expansion
+            # was never taken in a medium.
             self._below_plane = True
 
     def _ground_ends(self):
@@ -3303,6 +3361,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         reuse one `omega_array` without recomputing it) vary here; every
         other ingredient comes from `prepared` (`_assemble_Z_prepare`).
         """
+        if getattr(self, "_crossing", False):
+            return self._assemble_Z_crossing(geom, k, omega)
         if getattr(self, "_below_plane", False):
             return self._assemble_Z_below_plane(geom, prepared, k, omega)
         Z = self._assemble_Z_source_block(geom, prepared, prepared, k, omega)
@@ -3511,6 +3571,178 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if prepared["loading"] is not None:
             self._apply_loading(
                 Z, prepared["loading"], _wire_loading.loading_for(self, omega, geom)
+            )
+        return Z
+
+    def _crossing_tents(self, geom):
+        """``[(basis, below_wing), ...]`` for every tent spanning the plane.
+
+        `below_wing` is 0 or 1 — which of the tent's two wings sits on a
+        BELOW segment — and is what every mask below keys on. A tent with
+        both wings in one medium is not here; it is an ordinary row of that
+        medium's fill.
+        """
+        media = self._wire_media()
+        seg_off = np.asarray(geom["seg_offsets"])
+        below_seg = set()
+        for w, label in enumerate(media):
+            if label == _medium_spec.BELOW:
+                below_seg.update(range(int(seg_off[w]), int(seg_off[w + 1])))
+        out = []
+        for m in range(geom["n_basis_total"]):
+            sides = [int(geom["wing_seg"][m, j]) in below_seg for j in (0, 1)]
+            if sides[0] != sides[1]:
+                out.append((m, 0 if sides[0] else 1))
+        return out
+
+    def _crossing_masked(self, geom, tents, keep):
+        """`(geometry, chop)` for ONE medium's fill.
+
+        Every crossing tent has the OTHER medium's wing switched off and its
+        testing path chopped at the node, so the fill returns that tent's
+        `keep`-side half-row and `keep`-side wing-column and nothing else.
+
+        The two must move together and that is not a convenience: zeroing a
+        wing's `wing_sigma` switches off both that half of the row's T1 (the
+        path's tangent is built from it, `_testing_paths`) and that wing of
+        the column's source tangent, while the chop is what moves T2's
+        endpoint to the node (momwire#813 unit 2). One without the other is
+        the trap `test_the_sigma_trick_does_not_chop_the_path` pins.
+
+        This is also why only the DIAGONAL blocks come from razor's own fill:
+        one flag cannot select an above-half row against a below-wing column,
+        so the two cross blocks have to come from the trunk, where the row
+        axis and the column axis are independent.
+        """
+        g = dict(geom)
+        g["wing_sigma"] = geom["wing_sigma"].copy()
+        chop = {}
+        for m, below_wing in tents:
+            off = below_wing if keep == _medium_spec.ABOVE else 1 - below_wing
+            g["wing_sigma"][m, off] = 0.0
+            # The surviving wing names the surviving half in
+            # `_path_test_rows`' vocabulary: wing 0 alive is centroid(A) ->
+            # knot ("A"), wing 1 alive is knot -> centroid(B) ("B").
+            chop[m] = "A" if off == 1 else "B"
+        return g, chop
+
+    def _crossing_path_axis(self, geom, tents, bases, keep):
+        """The path-test axis of one medium's rows: its own tents whole, plus
+        each crossing tent's `keep`-side half."""
+        recs = [r for m in bases for r in self._path_test_rows(geom, [m])]
+        for m, below_wing in tents:
+            alive = (1 - below_wing) if keep == _medium_spec.ABOVE else below_wing
+            recs += self._path_test_rows(geom, [m], halves="A" if alive == 0 else "B")
+        return _crossing_fill.path_test_axis(geom["n_basis_total"], recs)
+
+    def _assemble_Z_crossing(self, geom, k, omega):
+        """The razor-blade matrix of a deck that CROSSES the interface
+        (momwire#813 unit 2), as four masked terms indexed by (row HALF) x
+        (column WING):
+
+            M[R_a, C_a] += the above fill at k_p     (composing ground)
+            M[R_b, C_b] += the below fill at k_m     (momwire#812's family)
+            M[R_a, C_b] -= the trunk's cross block   (corner=False)
+            M[R_b, C_a] -= the trunk's REVERSED one  (momwire#832)
+
+        with every crossing tent in all four, so its (jn, jn) entry is the sum
+        of its four half-x-wing pieces and every other entry takes exactly one
+        term. Two identities make that partition exact rather than approximate,
+        and both are gated: a tent's column splits wing-linearly (1.45e-16 on
+        razor's own fill) and unit 2's two chopped halves partition its row
+        (2.90e-16).
+
+        `corner=False` on both trunk blocks: the corner is a Galerkin
+        by-parts term and a path-tested row has no by-parts to do (the
+        momwire#651 probe measured it adding 1.9e5 where razor's truth has
+        none). The SW end term stays, which is momwire#813's derivation (b) —
+        and note that the eps~ = 1 collapse this method is gated on CANNOT
+        see that choice, because W vanishes there. Soil is what reads it.
+
+        The axes are built at `_CROSSING_GROWTH` / `_CROSSING_PANEL_ORDER` /
+        `_CROSSING_Q` rather than the trunk's shipped defaults; that constant
+        block carries the ladder and the reason.
+
+        **No prepare/replay hoist.** This method builds its own two prepares
+        from `geom` and ignores the caller's, because the two masked
+        geometries are not the caller's one. A sweep therefore pays the
+        k-independent half per step on a crossing deck; making it a hoist is
+        a schedule change with its own measurement and is not this unit's.
+        """
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
+        tents = self._crossing_tents(geom)
+        media = self._wire_media()
+        seg_off = np.asarray(geom["seg_offsets"])
+        bas_off = np.asarray(geom["basis_offsets"])
+
+        def spans(off, label):
+            idx = [
+                np.arange(int(off[w]), int(off[w + 1]))
+                for w, m in enumerate(media)
+                if m == label
+            ]
+            return np.concatenate(idx) if idx else np.zeros(0, dtype=np.int64)
+
+        seg_a, seg_b = (
+            spans(seg_off, _medium_spec.ABOVE),
+            spans(seg_off, _medium_spec.BELOW),
+        )
+        bas_a, bas_b = (
+            spans(bas_off, _medium_spec.ABOVE),
+            spans(bas_off, _medium_spec.BELOW),
+        )
+
+        # --- the two same-medium fills, each on its own masked geometry
+        g_a, chop_a = self._crossing_masked(geom, tents, _medium_spec.ABOVE)
+        prep_a = self._assemble_Z_prepare(g_a, chop=chop_a)
+        Z_a = self._assemble_Z_source_block(g_a, prep_a, prep_a, k, omega)
+        if prep_a["image"] is not None:
+            ground_a = _potential_ground.potential_ground_for(self, g_a, k, omega)
+            Z_a -= self._assemble_Z_source_block(
+                g_a, prep_a, prep_a["image"], k, omega, ground=ground_a
+            )
+
+        g_b, chop_b = self._crossing_masked(geom, tents, _medium_spec.BELOW)
+        prep_b = self._assemble_Z_prepare(g_b, chop=chop_b)
+        ground_b = _potential_ground.BelowMediumGround(
+            self, g_b, k, omega, eps_tilde=eps_t
+        )
+        k_m, eps_m = ground_b.k_m, ground_b.eps_m
+        Z_b = self._assemble_Z_source_block(g_b, prep_b, prep_b, k_m, omega, eps=eps_m)
+        Z_b -= self._assemble_Z_source_block(
+            g_b, prep_b, prep_b["image"], k_m, omega, ground=ground_b, eps=eps_m
+        )
+
+        # --- the two cross blocks, through the trunk
+        ctx = self._crossing_context(geom, k=k, omega=omega)
+        axis_kw = dict(
+            growth=_CROSSING_GROWTH,
+            panel_order=_CROSSING_PANEL_ORDER,
+            q=_CROSSING_Q,
+        )
+        A = self._crossing_path_axis(geom, tents, bas_a, _medium_spec.ABOVE)
+        P = self._crossing_path_axis(geom, tents, bas_b, _medium_spec.BELOW)
+        ax_a = _crossing_fill.axis_data(ctx, seg_a, **axis_kw)
+        ax_b = _crossing_fill.axis_data(ctx, seg_b, **axis_kw)
+
+        jn = [m for m, _ in tents]
+        R_a = np.concatenate([bas_a, jn]).astype(np.int64)
+        R_b = np.concatenate([bas_b, jn]).astype(np.int64)
+        n = geom["n_basis_total"]
+        Z = np.zeros((n, n), dtype=np.complex128)
+        Z[np.ix_(R_a, R_a)] += Z_a[np.ix_(R_a, R_a)]
+        Z[np.ix_(R_b, R_b)] += Z_b[np.ix_(R_b, R_b)]
+        Z[np.ix_(R_a, R_b)] -= _crossing_fill.cross_complete_block(
+            ctx, A, ax_b, corner=False
+        )[np.ix_(R_a, R_b)]
+        Z[np.ix_(R_b, R_a)] -= _crossing_fill.cross_complete_block_reversed(
+            ctx, P, ax_a, corner=False
+        )[np.ix_(R_b, R_a)]
+
+        # Loading last and outside the assembly, as both siblings spell it.
+        if prep_a["loading"] is not None:
+            self._apply_loading(
+                Z, prep_a["loading"], _wire_loading.loading_for(self, omega, geom)
             )
         return Z
 
