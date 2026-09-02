@@ -77,6 +77,7 @@ Usage:
 import pathlib
 import shutil
 import subprocess
+import sys
 
 import sympy as sp
 from sympy.printing.cxx import CXX11CodePrinter
@@ -292,30 +293,99 @@ def format_outputs(paths):
     produces a diff that is pure line-wrapping. Best-effort: a missing ruff
     warns rather than failing the derivation that just cost minutes.
     """
+    argv = None
     ruff = shutil.which("ruff")
-    if ruff is None:
-        print("WARNING: ruff not on PATH — emitted files are UNFORMATTED")
+    if ruff is not None:
+        argv = [ruff, "format"]
+    else:
+        # ruff is normally installed INTO the venv rather than onto PATH here
+        # (the Makefile's lint lane runs `$(PYTHON) -m ruff`), so a bare
+        # `which` finds nothing and the outputs silently ship unformatted —
+        # which `--check` then reports as a spurious difference against the
+        # committed, formatted files. Ask the running interpreter before
+        # giving up.
+        probe = subprocess.run(
+            [sys.executable, "-m", "ruff", "--version"], capture_output=True
+        )
+        if probe.returncode == 0:
+            argv = [sys.executable, "-m", "ruff", "format"]
+    if argv is None:
+        print(
+            "WARNING: ruff not found on PATH or in this interpreter — "
+            "emitted files are UNFORMATTED"
+        )
         return
-    subprocess.run([ruff, "format", *[str(p) for p in paths]], check=True)
+    subprocess.run([*argv, *[str(p) for p in paths]], check=True)
 
 
-def main():
+ALL_OUTPUTS = (OUT_PATH_PY, OUT_PATH_H, OUT_PATH_EK_PY, OUT_PATH_EK_H)
+
+
+def generate(into):
+    """Emit all four outputs under `into`, returning them in ALL_OUTPUTS order."""
+    py = into / OUT_PATH_PY.name
+    h = into / OUT_PATH_H.name
+    ek_py = into / OUT_PATH_EK_PY.name
+    ek_h = into / OUT_PATH_EK_H.name
+
     print(f"Deriving J_pq^static for p, q ∈ {{0..{MAX_D}}} (this takes ~10s)…")
     entries = derive_all(MAX_D)
-    emit_py(entries, OUT_PATH_PY, MAX_D)
-    emit_h(entries, OUT_PATH_H, MAX_D)
-    print(f"Wrote {OUT_PATH_PY}")
-    print(f"Wrote {OUT_PATH_H}")
+    emit_py(entries, py, MAX_D)
+    emit_h(entries, h, MAX_D)
 
     print(f"Deriving D_pq^EK for p, q ∈ {{0..{MAX_D}}} (by parts, ~2s)…")
     ek_entries = derive_ek_all(MAX_D)
-    emit_ek_py(ek_entries, OUT_PATH_EK_PY, MAX_D)
-    emit_ek_h(ek_entries, OUT_PATH_EK_H, MAX_D)
-    print(f"Wrote {OUT_PATH_EK_PY}")
-    print(f"Wrote {OUT_PATH_EK_H}")
+    emit_ek_py(ek_entries, ek_py, MAX_D)
+    emit_ek_h(ek_entries, ek_h, MAX_D)
 
-    format_outputs([OUT_PATH_PY, OUT_PATH_EK_PY])
+    format_outputs([py, ek_py])
+    return (py, h, ek_py, ek_h)
+
+
+def check():
+    """`--check`: are the committed outputs what this script emits?
+
+    The four files are generated from ONE sympy run and two of them are C++
+    twins of the other two, so a hand edit to either lane is a divergence no
+    cross-lane test would necessarily catch — both lanes would have been
+    edited to agree with each other and with nothing else. momwire#808 is
+    what that class of drift looks like when it goes unnoticed.
+
+    Same shape as `scripts/capability_matrix.py --check`: derive into a
+    scratch directory, compare, exit non-zero on a difference and say which
+    file. `tests/test_bspline_static_far_808.py` pins the same four files by
+    hash, which is the version that runs without sympy installed; this is the
+    stronger check and the one to run after touching this script.
+    """
+    import filecmp
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh = generate(pathlib.Path(tmp))
+        bad = [
+            committed.name
+            for committed, new in zip(ALL_OUTPUTS, fresh)
+            if not (committed.exists() and filecmp.cmp(committed, new, shallow=False))
+        ]
+    if bad:
+        print("\nOUT OF DATE (or hand-edited):")
+        for name in bad:
+            print(f"  {name}")
+        print("\nRe-run without --check to regenerate, then update the hashes in")
+        print("tests/test_bspline_static_far_808.py.")
+        return 1
+    print("\nAll four generated files match a fresh derivation.")
+    return 0
+
+
+def main():
+    if "--check" in sys.argv[1:]:
+        return check()
+    generate(REPO_ROOT / "src" / "momwire")
+    for path in ALL_OUTPUTS:
+        print(f"Wrote {path}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

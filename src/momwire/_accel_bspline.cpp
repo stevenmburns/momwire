@@ -2,6 +2,7 @@
 #include "_stable_inline.h"
 
 #include "_bspline_static_moments_inline.h"
+#include "_bspline_static_far_inline.h"
 // The extended-thin-wire static correction D_pq^EK (momwire#249's codegen,
 // wired in by #270 unit 1). Pulls in the J header itself; the duplicate
 // include above is harmless (`#pragma once`) and kept for legibility.
@@ -2951,6 +2952,16 @@ seg_seg_full_moments_bspline_swept_ek(
 static double J_static_dispatch(int p, int q,
                                 double alpha, double beta,
                                 double A, double B, double a) {
+    // The closed forms below are sympy's, and they are the NEAR-field half
+    // (momwire#808): the value decays like h^5/D while every term in a
+    // four-corner closed form grows like D^5, so at 401 segments the (2, 2)
+    // moment between the two ends of an edge comes out 2.94e+01 relative --
+    // no correct digits. Past `BSPLINE_FAR_RATIO` the centred multipole
+    // series is the spelling instead, and it measures 3e-14 there. Same
+    // predicate, same truncation, same stepping as the numpy twin.
+    if (bspline_far_ratio(alpha, beta, A, B, a) <= BSPLINE_FAR_RATIO) {
+        return bspline_J_static_far(p, q, alpha, beta, A, B, a);
+    }
     int pq = p * 3 + q;
     switch (pq) {
         case 0: return J_static_pq_0_0(alpha, beta, A, B, a);
