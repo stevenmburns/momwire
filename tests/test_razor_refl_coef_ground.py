@@ -676,7 +676,24 @@ def test_the_default_ground_kwargs_are_inert():
 
 def test_complex_eps_matches_the_tuple_spec():
     """(eps_r, sigma) folds to ε̃ = εr − j·σ/(ω·ε₀) in the shared layer, so
-    handing that ε̃ directly must give the identical solve."""
+    handing that ε̃ directly must give the identical solve.
+
+    **At the solver's own ω, which is `c·k` and not `self.omega`.** Those two
+    are mathematically the same number and differ by one ulp, and
+    `_assemble_Z` deliberately uses the first — `_assemble_Z_from_prepared`'s
+    call site says why, in as many words: reading the stashed `self.omega`
+    "would cost this method the branch point's bit-for-bit answer over a
+    1-ULP omega drift". Folding the tuple at `self.omega` here therefore
+    handed the second solve an ε̃ one ulp from the one the first solve built
+    for itself, and this test's `==` was passing on the 3.6e-19 that
+    difference makes in the fill rounding away in a 9x9 LU.
+
+    It stopped rounding away on the macOS lane at momwire#799, one ulp out in
+    Zin, on a fill that had moved for unrelated reasons. Nothing about the
+    spec folding was wrong; the ω this test folded at was. Measured before
+    the fix: ε̃ at `self.omega` is -0x1.9adc08dcb3cb4p+2 against the solver's
+    own -0x1.9adc08dcb3cb6p+2.
+    """
     g = GEOMS["dipole@0.25"]
     sim = RazorSolver(
         wires=g["wires"],
@@ -688,7 +705,7 @@ def test_complex_eps_matches_the_tuple_spec():
     )
     from momwire import _ground_refl
 
-    eps_t = _ground_refl.eps_tilde(LOSSY, sim.omega, sim.eps)
+    eps_t = _ground_refl.eps_tilde(LOSSY, sim.c * sim.k, sim.eps)
     z_a, _ = sim.compute_impedance()
     z_b = _solve(RazorSolver, "dipole@0.25", 10, ground_z=0.0, ground_eps=eps_t)
     assert z_a == z_b
