@@ -6,9 +6,7 @@ difference of near-equal numbers wherever the phase is small. Computed
 literally, `exp(-jkR) - 1` at kR = 1e-3 returns its real part to an absolute
 epsilon rather than a relative one: the answer is -kR^2/2 ~ 6e-7 out of terms
 of size 1, so the relative error is eps/(kR^2/2) ~ 7e-11, and it grows as
-1/kR^2 as the mesh refines. momwire#798 is what that costs in practice — a
-cross-lane agreement bar that had to be widened to 1e-10 because two libms
-disagreeing by one ulp under the subtraction is amplified by 1e4.
+1/kR^2 as the mesh refines.
 
 The remedy is always the same and never a tolerance: spell the difference so
 that no term in it is larger than the answer. The siblings, which is the
@@ -28,6 +26,16 @@ table to consult before writing a new kernel:
     sqrt(u1^2+p^2) - sqrt(u0^2+p^2)   (u1^2-u0^2)/(r1+r0) `sqrt_diff` below
     sqrt(1 + x) - 1               x/(sqrt(1+x) + 1)
     cosh(x) - 1                   2 sinh^2(x/2)
+    |d|^2 - (d.t)^2               |d - (d.t)t|^2  `_kernel_moments._axis_frame`
+
+**The last row is the one that bit.** It is the only entry whose subtraction
+is EXACTLY zero rather than merely small -- a collinear pair has |d| = |d.t|
+-- so it is invisible to every check that compares one implementation against
+itself, and shows up only where two implementations round it differently. It
+cost 1e-7 relative in the `rho2` every static moment takes a logarithm of,
+and it was the whole of the 8.2e-13 cross-lane gap momwire#798 measured on
+macOS and attributed to the row at the top of this table. Removing the top
+row's cancellation did not move that number by a digit; removing this one did.
 
 **The complex bracket.** `expm1` alone only fixes the decay half of the
 remainder. With k = k_re + j*k_im, Im k <= 0, a = k_im*R and y = k_re*R,
@@ -146,9 +154,19 @@ def asinh_diff(u0, u1, rho2, r0, r1):
     the same identity as :func:`sqrt_diff`, applied to (r_i - u_i)(r_i + u_i)
     = rho^2. That branch is on the SIGN of u_i, so it is exact rather than a
     threshold.
+
+    The divisor is written `r_i + |u_i|`, which IS `r_i - u_i` wherever that
+    arm is selected (u_i < 0, and negation of a float is exact). `np.where`
+    evaluates both arms, and on the arm it discards `r_i - u_i` underflows to
+    0.0 once rho/|u_i| drops below sqrt(eps) -- a 1e-6 radius seen from 100 m
+    reaches it -- so the literal spelling raises a divide-by-zero warning for
+    a value that is then thrown away, and would raise for real under
+    `np.seterr(divide="raise")`. `r_i + |u_i|` is never zero. The C++ twin's
+    ternary short-circuits and so has no such arm, but it is spelled with
+    `fabs` too so the two lanes read the same.
     """
-    p0 = np.where(u0 >= 0.0, u0 + r0, rho2 / (r0 - u0))
-    p1 = np.where(u1 >= 0.0, u1 + r1, rho2 / (r1 - u1))
+    p0 = np.where(u0 >= 0.0, u0 + r0, rho2 / (r0 + np.abs(u0)))
+    p1 = np.where(u1 >= 0.0, u1 + r1, rho2 / (r1 + np.abs(u1)))
     du = u1 - u0
     num = du * (p1 + p0)
     return np.log1p(num / ((r1 + r0) * p0))

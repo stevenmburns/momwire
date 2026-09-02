@@ -48,12 +48,30 @@ def _axis_frame(obs, seg_p0, seg_t, a):
     for one carried by the OBSERVER. Only ``a * a`` is touched, so the
     scalar case is bit-for-bit what it always was and a uniform array is
     bit-for-bit the scalar (momwire#425).
+
+    **The perpendicular part is the vector's norm, not `|d|² − u_r²`**
+    (momwire#799). Those are the same number, and the second is the worst
+    cancellation in this repo: on a COLLINEAR pair the two terms are equal,
+    so the subtraction returns the rounding error of |d|² — up to ε·|d|²,
+    which is 2e-14 at 9.5 m — where the answer is 0. That is 1e-7 RELATIVE
+    in `rho2 = perp + a²` on a 5e-4 wire, and it is invisible until two
+    computations of it round differently: exactly what an FMA contraction
+    does, and what made this kernel's C++ and numpy lanes disagree by 8.2e-13
+    on arm64 while agreeing to 5e-18 on x86-64 (momwire#798 read that gap and
+    attributed it to the `exp(-jkR) − 1` cancellation; the amplification is
+    measurable and it is here instead).
+
+    `p = d − (d·t)t` is exactly the zero VECTOR on a collinear pair, in any
+    rounding and under any contraction, so `|p|²` is exactly 0.0 on both
+    lanes. Off-axis it is a plain sum of squares whose relative error is a
+    few ε, against the old form's ε·|d|²/|p|² = ε/sin²θ. The `np.maximum(…,
+    0.0)` clamp goes with it: a sum of squares has no negative branch to
+    guard.
     """
     d = obs[:, None, :] - seg_p0[None, :, :]
     u_r = np.einsum("psc,sc->ps", d, seg_t)
-    # The perpendicular part can go a few ulps negative for a truly
-    # collinear observation point; a² dominates it either way.
-    rho2 = np.maximum(np.einsum("psc,psc->ps", d, d) - u_r * u_r, 0.0) + a * a
+    perp_v = d - u_r[:, :, None] * seg_t[None, :, :]
+    rho2 = np.einsum("psc,psc->ps", perp_v, perp_v) + a * a
     return u_r, rho2
 
 

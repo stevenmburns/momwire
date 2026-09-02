@@ -41,10 +41,20 @@ improvement into a test failure. Rewriting both moves real-k output at the
 1e-12..1e-13 level, so it is a re-pin under the momwire#762 protocol and never
 a rider on a PR with another purpose.
 
-**A widened cross-lane bar is a symptom, not a fix.** momwire#798 widened the
-razor complex-k bars to 1e-10 because macOS read 8.4e-13 where Linux read
-2.5e-16: one ulp of libm disagreement, amplified ~1e4× by a subtraction of 1.
-With the cancellation gone the same bars measure 1.0e-16 (M0) and 2.9e-16
-(M1), because there is no amplification left for a platform to differ inside.
-When a bar has to move a decade to accommodate a platform, look at the
-spelling under it first.
+**A widened cross-lane bar is a symptom, not a fix — and it will also tell
+you when your diagnosis is wrong.** momwire#798 widened the razor complex-k
+bars to 1e-10 because macOS read 8.4e-13 where Linux read 2.5e-16, and
+attributed it to one ulp of libm disagreement amplified by the subtraction of
+1. Removing that subtraction did not move the macOS number at all. The
+deviation turned out to be *k-independent* — it reads 8.131e-13 at k = 1e-30 —
+and it was `_axis_frame`'s `perp = |d|² − u_r²`, an exact cancellation on any
+collinear pair that an FMA contraction resolves differently in two lanes,
+worth 1e-7 relative in the `rho2` every static moment takes a logarithm of.
+
+Two lessons, and the second is the expensive one. A bar set from the
+platform that fails is a bar that can never contradict your model of why it
+failed; set it from the platform that is clean and let the other one argue.
+And when a cancellation is *exactly* zero in exact arithmetic — not merely
+small — it is invisible in every check that compares one implementation
+against itself, and shows up only where two implementations round it
+differently.
