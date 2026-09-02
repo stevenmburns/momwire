@@ -1803,6 +1803,25 @@ def test_pq_absent_means_no_charge_table_at_all():
 
 
 @pytest.mark.integration
+def test_pq_snaps_the_symmetry_residual_so_every_process_prints_the_same_zero():
+    """The centre segment of a centre-fed odd-count dipole carries zero
+    charge by symmetry, and the basis returns the solve's round-off for it —
+    `2.5492E-19` with phase `18.248` in the stock engine's own printout,
+    `1.6824E-26` with phase `43.749` here, and neither reproducible across
+    a BLAS thread count. Both portal oracles (served == stock, warm == cold)
+    reddened on it after momwire#808 moved the fill by 1e-12. Snapped at the
+    source below `_CHARGE_RESIDUAL_FLOOR`, it prints as the one zero.
+    """
+    rows = charge_tables(printout("dipole_pq_charges"))[0]
+    centre = [r for r in rows if r[0] == "5"][0]
+    # Tokens: seg, tag, x, y, z, length, real, imag, magn, phase — the zero
+    # is asserted as the printed BYTES, since bytes are what the oracles read.
+    assert centre[6:10] == ["0.0000E+00", "0.0000E+00", "0.0000E+00", "0.000"], centre
+    # The neighbours are real charges and untouched.
+    assert all(float(r[8]) > 0.0 for r in rows if r[0] != "5")
+
+
+@pytest.mark.integration
 def test_pq_prints_the_charge_table_where_the_oracle_does():
     """Same count, same rows, same segment and tag numbering."""
     ours = charge_tables(printout("dipole_pq_charges"))
