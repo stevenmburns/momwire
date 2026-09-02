@@ -894,7 +894,20 @@ class HMatrixSolver(BSplineSolver):
         seg_r = ctx["seg_r"]
         h = ctx["geom"]["h_per_seg"]
         d = self.degree
-        q = self.n_qp_sommerfeld
+        gz_key = self.ground_z
+        # momwire#647: the SAME keying the dense route uses. This sampler
+        # took `self.n_qp_sommerfeld` raw, so the fast solvers ordered the
+        # remainder on the constructor default however close the deck came
+        # to the plane, while `BSplineSolver._Z_sommerfeld_remainder` keyed
+        # it on the grazing height (momwire#510 / #631). At h/lambda = 1.09e-4
+        # that left the two routes 1.27 apart AFTER momwire#634 corrected the
+        # image; raising `n_qp_sommerfeld` by hand closed it (7.7e-9 at 96),
+        # which is what said the residual was the ORDER and not the fill.
+        # `_remainder_qp` is inherited and reads only geometry, so this is
+        # the dense rule itself and not a second copy of it — and it is a
+        # max-with-base, so a deck with nothing grazing keeps the base order
+        # it always had and is bit-identical.
+        q = self._remainder_qp(seg_l, seg_r, gz_key)
         xg, wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)
         nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]

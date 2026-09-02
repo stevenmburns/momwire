@@ -1202,34 +1202,101 @@ def test_the_near_image_fix_reaches_the_sommerfeld_route_too():
         assert rel < 1e-6, f"{cls.__name__}: {rel:.3e}"
 
 
+# The bar for the fast solvers' Sommerfeld remainder against the dense route
+# at the DEFAULT order. Measured 2026-09-03 across h/lambda in {1.09e-4, 1e-3,
+# 1e-2, 1e-1} x n_seg in {16, 32} x five soils (sea 81/5, vgood, avg, poor,
+# diel): worst 5.5e-07, and most cells 1e-9..1e-7. Set ~18x over the worst.
+#
+# Deliberately NOT as tight as NEAR_IMAGE_AGREEMENT (1e-9): that one compares
+# two spellings of the same closed form, this one compares two quadrature
+# plumbings that now merely agree on the ORDER, so the residual is the
+# ACA/GMRES class rather than roundoff. It is still 100x tighter than the
+# supported tolerance (1e-3 in `test_fast_solvers_match_dense`) and six orders
+# below the defect it guards, which was 1.27.
+REMAINDER_KEYING_AGREEMENT = 1e-5
+
+
 @pytest.mark.slow
-def test_the_sommerfeld_remainder_order_is_not_keyed_on_the_fast_route():
-    """What momwire#634 does NOT fix, pinned the way #631 pinned #634.
+def test_the_sommerfeld_remainder_order_is_keyed_on_the_fast_route():
+    """momwire#647 Part A — the agreement pin its predecessor asked for.
 
-    With the near image corrected, the Sommerfeld route still disagrees with
-    dense at grazing on the DEFAULT quadrature order — measured 2.54 before
-    this fix and 1.27 after. Raising `n_qp_sommerfeld` closes it completely
-    (5.1e-3 at 48, 7.7e-9 at 96), so the residual is the REMAINDER's order,
-    not the image: the dense route keys that order to the grazing height
-    (`test_grazing_remainder_is_converged`) and the fast solvers' remainder
-    does not.
+    `HMatrixSolver._somm_nodes` took `self.n_qp_sommerfeld` raw, where
+    `BSplineSolver._Z_sommerfeld_remainder` keys the order on the grazing
+    height (momwire#510 / #631). So the fast solvers ordered the remainder on
+    the constructor default however close a deck came to the plane. With
+    momwire#634's near image in, that was the whole of the remaining
+    disagreement: 1.27 at h/lambda = 1.09e-4, and raising `n_qp_sommerfeld`
+    by hand closed it (5.1e-3 at 48, 7.7e-9 at 96), which is what identified
+    the ORDER as the variable.
 
-    A different mechanism in a different function; it did not fall out of the
-    image fix, and it is adjacent to momwire#647 (remainder keying). This gate
-    exists so the gap cannot rot, and should be turned into an agreement pin
-    when it closes — the same bargain this test's predecessor made.
+    Now keyed through the same inherited `_remainder_qp`, so this is the
+    dense rule itself rather than a second copy that could drift.
+
+    Measured before / after at the default order: 1.27 -> 7.7e-09.
     """
-    kw = _grazing_wire(
-        1.09e-4 * _GRAZE_WL,
-        ground_eps=(10.0, 0.002),
-        ground_model="sommerfeld",
+    for hl in (1.09e-4, 1e-3):
+        for ground_eps in ((81.0, 5.0), (10.0, 0.002), (2.5, 1e-05)):
+            kw = _grazing_wire(
+                hl * _GRAZE_WL,
+                ground_eps=ground_eps,
+                ground_model="sommerfeld",
+            )
+            z_dense, _ = BSplineSolver(**kw).compute_impedance()
+            for cls in (HMatrixSolver, ArrayBlockSolver):
+                z_fast, _ = cls(**kw).compute_impedance()
+                rel = abs(z_fast - z_dense) / abs(z_dense)
+                assert rel < REMAINDER_KEYING_AGREEMENT, (
+                    f"{cls.__name__} h/lambda={hl:.2e} eps={ground_eps}: {rel:.3e}"
+                )
+
+
+def test_the_two_routes_choose_the_same_remainder_order():
+    """The mechanism, read rather than inferred from the answer.
+
+    Both routes now call the SAME `_remainder_qp`, so the order they choose
+    must match deck for deck — including the decks where the keying does not
+    fire and both fall back to the base. Measured on this ladder: 3/3 where
+    nothing grazes, 8/8 at h/lambda = 1e-3, 70/70 at 1.09e-4.
+    """
+    somm = dict(ground_eps=(10.0, 0.002), ground_model="sommerfeld")
+    seen = []
+    for hl in (1.09e-4, 1e-3, 1e-2, 1e-1):
+        kw = _grazing_wire(hl * _GRAZE_WL, **somm)
+        fast = HMatrixSolver(**kw)
+        q_fast = int(fast._somm_nodes(fast._context())["q"])
+        dense = BSplineSolver(**kw)
+        g = dense._build_geometry()
+        q_dense = int(dense._remainder_qp(g["seg_l"], g["seg_r"], dense.ground_z))
+        assert q_fast == q_dense, (hl, q_fast, q_dense)
+        seen.append(q_fast)
+    # The keying must actually FIRE on this ladder, or the test above is
+    # passing for the wrong reason.
+    base = HMatrixSolver(**_grazing_wire(1e-1 * _GRAZE_WL, **somm)).n_qp_sommerfeld
+    assert seen[0] > base and seen[1] > base, seen
+    assert seen[-1] == base, seen
+
+
+def test_the_remainder_keying_is_inert_off_grazing():
+    """Nothing moves where nothing grazes, by construction.
+
+    `_quadrature.remainder_qp` is a max-with-base: every ratio comes out
+    below 1 on a deck with nothing near the plane, and the clip returns
+    `base` exactly — the order the fast route always used. That is why the
+    non-grazing decks are BIT-identical across momwire#647 (measured: dense,
+    HMatrix and ArrayBlock on a clear vertical, a high horizontal, and the
+    grazing ladder's own h/lambda = 1e-2 and 1e-1 rungs, all `array_equal`).
+    """
+    somm = dict(ground_eps=(10.0, 0.002), ground_model="sommerfeld")
+    clear = dict(
+        wires=[[[0.0, 0.0, 6.0], [12.0, 0.0, 6.0]]],
+        n_per_edge_per_wire=[[21]],
+        feeds=[(0, 6.0, 1.0 + 0j)],
+        junctions=None,
+        wire_radius=0.005,
+        wavelength=20.0,
+        ground_z=0.0,
+        **somm,
     )
-    z_dense, _ = BSplineSolver(**kw).compute_impedance()
-    for cls in (HMatrixSolver, ArrayBlockSolver):
-        z_fast, _ = cls(**kw).compute_impedance()
-        rel = abs(z_fast - z_dense) / abs(z_dense)
-        assert rel > 0.5, (
-            f"{cls.__name__} now agrees on the default order ({rel:.2%}) — "
-            f"the fast remainder has been keyed to the grazing height, so "
-            f"pin the agreement instead of this divergence"
-        )
+    for kw in (clear, _grazing_wire(1e-1 * _GRAZE_WL, **somm)):
+        s = HMatrixSolver(**kw)
+        assert int(s._somm_nodes(s._context())["q"]) == s.n_qp_sommerfeld
