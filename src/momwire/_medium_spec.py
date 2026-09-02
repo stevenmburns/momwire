@@ -69,7 +69,7 @@ ENGINE_CROSSING_PRINT = "74.761 - 57.730j ohm"
 # Each of the four geometry refusals below is a per-deck PREAMBLE naming the
 # offending wire and the numbers that made it offending, followed by a CONSTANT
 # reason. The split is what lets a `Capabilities` row declare the reason
-# (momwire#396 goal 3): a matrix cell is written before any deck exists, so it
+# (momwire#792): a matrix cell is written before any deck exists, so it
 # can carry the second half and not the first, and `tests/
 # test_refusals_are_declared.py` gates every raise here as
 # preamble-plus-declared-reason. Before the split these were declared by

@@ -209,7 +209,7 @@ renders in host dialogs.
 
 - `RazorSolver` `singular_enrichment`
 
-  > singular enrichment is not built for RazorSolver: the enrichment in tree (momwire#249) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
+  > singular enrichment is not built for RazorSolver: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
 
 - `SinusoidalGalerkinSolver` `buried`
 
@@ -229,7 +229,7 @@ renders in host dialogs.
 
 - `SinusoidalGalerkinSolver` `singular_enrichment`
 
-  > singular enrichment is not built for SinusoidalGalerkinSolver: the enrichment in tree (momwire#249) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
+  > singular enrichment is not built for SinusoidalGalerkinSolver: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
 
 - `SinusoidalSolver` `buried`
 
@@ -249,4 +249,4 @@ renders in host dialogs.
 
 - `SinusoidalSolver` `singular_enrichment`
 
-  > singular enrichment is not built for SinusoidalSolver: the enrichment in tree (momwire#249) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
+  > singular enrichment is not built for SinusoidalSolver: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. Where that dof fits a formulation OTHER than that family is momwire#445's open design question, so this cell is a NOT YET rather than a never. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence

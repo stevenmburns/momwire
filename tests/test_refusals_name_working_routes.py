@@ -216,7 +216,7 @@ def _module_string_constants(tree):
     a long refusal).
 
     A refusal's prose moving from inside its `raise` to a module constant is
-    the housekeeping momwire#396 goal 3 does everywhere — the matrix cell and
+    the housekeeping momwire#792 does everywhere — the matrix cell and
     the raise then quote one sentence instead of two copies — and without
     this the move would BLIND the scan below, which is the opposite of what
     the move is for. `hmatrix.py`'s buried refusal is the first of them.

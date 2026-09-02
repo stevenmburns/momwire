@@ -188,7 +188,7 @@ _JUNCTION_PORTS_REFUSAL = (
     "short bridge wire across the gap and gap-feed it"
 )
 
-# The `buried` cell for both classes in this family (momwire#396 goal 3).
+# The `buried` cell for both classes in this family (momwire#792).
 # `_build_geometry`'s scan raised the geometry line and no reason at all —
 # "wire 0 dips below the ground plane (min z = -1 < ground_z = 0)" — which
 # told a caller what it had drawn and nothing about why it was refused. The

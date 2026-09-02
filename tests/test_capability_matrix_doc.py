@@ -11,7 +11,7 @@ re-rendered the document itself would only pin this file against that one.
 The second is the property the document exists to have. `Capabilities.refusal`
 generates ``"<cell> is not supported by this solver"`` for a False cell with no
 `refusals` entry — a placeholder that says nothing a consumer can plan around,
-and momwire#396 goal 3 is the unit that cleared the nine of them the tree
+and momwire#792 is the unit that cleared the nine of them the tree
 carried. Nothing stops the tenth from arriving with the next False cell, so it
 is a gate and not a cleanup: every False cell in every row must have a recorded
 reason, and it must not be the generated one.

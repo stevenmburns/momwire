@@ -227,7 +227,7 @@ def test_razor_sommerfeld_ground_is_served():
 def test_razor_ground_contact_is_served_at_a_wire_end():
     """Ground CONTACT landed in unit 3, and the geometry refusals moved.
 
-    `contact` became a declared axis in momwire#396 goal 3 and razor's row
+    `contact` became a declared axis in momwire#792 and razor's row
     reads True, so the two halves are checkable together again; what this
     still pins on its own is the BOUNDARY of the cell, which no declaration
     carries: a wire END in the plane is served, a wire lying IN it or dipping

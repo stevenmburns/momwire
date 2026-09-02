@@ -120,7 +120,7 @@ class Capabilities(NamedTuple):
     # silently snaps be served by a node-addressing consumer, which is the
     # exact failure momwire#611 existed to close.
     knot_feeds: bool = False
-    # The two GEOMETRY axes (momwire#396 goal 3), on `knot_feeds`' precedent
+    # The two GEOMETRY axes (momwire#792), on `knot_feeds`' precedent
     # and for the same reason: they arrived after every row was written, so
     # they need a default, so they come last. See THE ONE RULE above for why
     # they are axes at all.

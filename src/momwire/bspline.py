@@ -368,7 +368,7 @@ _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL = (
 )
 
 # The sentence the OTHER families' `singular_enrichment` cell reads
-# (momwire#396 goal 3). It lives here because the enrichment is this
+# (momwire#792). It lives here because the enrichment is this
 # family's — the same reason `_ground_spec` owns the one contact-under-
 # refl-coef sentence the whole tree quotes — and it is imported by
 # `razor` and `sinusoidal` (and through the latter by
@@ -383,7 +383,7 @@ _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL = (
 # through `capabilities.refusals`.
 SINGULAR_ENRICHMENT_NOT_YET = (
     "singular enrichment is not built for {cls}: the enrichment in tree "
-    "(momwire#249) is the B-spline family's junction basis — an extra dof "
+    "(`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof "
     "carrying the s^(-1/2) edge shape, written against that family's knot "
     "vector and integrated by its Galerkin testing. Where that dof fits a "
     "formulation OTHER than that family is momwire#445's open design "
@@ -676,7 +676,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # `"contact+finite_ground"`. The ground stays in `grounds`: refl-coef is
     # served, and is still the default, for wires clear of the plane.
     #
-    # `buried` and `contact` are declared CELLS since momwire#396 goal 3, not
+    # `buried` and `contact` are declared CELLS since momwire#792, not
     # condition tokens: this is the one family that fills a wire below the
     # interface (momwire#553) and it stands a wire end in the plane
     # (momwire#151), so both read True and the refusals around them are the
