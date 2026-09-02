@@ -302,13 +302,25 @@ razor_seg_moments_impl(
                     const double dx = ox - sp0[js * 3 + 0];
                     const double dy = oy - sp0[js * 3 + 1];
                     const double dz = oz - sp0[js * 3 + 2];
-                    const double u_r = dx * stan[js * 3 + 0] +
-                                       dy * stan[js * 3 + 1] +
-                                       dz * stan[js * 3 + 2];
-                    double perp = dx * dx + dy * dy + dz * dz - u_r * u_r;
-                    // A truly collinear observer can drive this a few ulps
-                    // negative; a² dominates it either way.
-                    if (perp < 0.0) perp = 0.0;
+                    const double tx = stan[js * 3 + 0];
+                    const double ty = stan[js * 3 + 1];
+                    const double tz = stan[js * 3 + 2];
+                    const double u_r = dx * tx + dy * ty + dz * tz;
+                    // |d − (d·t)t|², NOT |d|² − u_r² (momwire#799). The two
+                    // are the same number and the second is a cancellation
+                    // that is EXACT on a collinear pair, so it returns the
+                    // rounding error of |d|² where the answer is 0 — and
+                    // whether it returns +0, +2e-14 or −2e-14 depends on
+                    // which products the compiler contracts into an FMA.
+                    // That is the whole of the 8.2e-13 this kernel and its
+                    // numpy twin disagreed by on arm64 while agreeing to
+                    // 5e-18 on x86-64. The perpendicular VECTOR is exactly
+                    // zero there under any contraction, so both lanes get
+                    // 0.0. No clamp: a sum of squares cannot be negative.
+                    const double px = dx - u_r * tx;
+                    const double py = dy - u_r * ty;
+                    const double pz = dz - u_r * tz;
+                    const double perp = px * px + py * py + pz * pz;
                     const double aa = sa[js];
                     const double rho2 = perp + aa * aa;
 

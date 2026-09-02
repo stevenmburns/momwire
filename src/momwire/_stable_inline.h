@@ -57,8 +57,11 @@ static inline double stable_sqrt_diff(double u0, double u1, double r0,
 // derivation is in `_stable.asinh_diff`.
 static inline double stable_asinh_diff(double u0, double u1, double rho2,
                                        double r0, double r1) {
-    const double p0 = (u0 >= 0.0) ? (u0 + r0) : (rho2 / (r0 - u0));
-    const double p1 = (u1 >= 0.0) ? (u1 + r1) : (rho2 / (r1 - u1));
+    // `r + |u|` rather than `r - u`: identical wherever this arm is taken
+    // (u < 0), and the numpy twin needs it because `np.where` evaluates the
+    // arm it discards. See `_stable.asinh_diff`.
+    const double p0 = (u0 >= 0.0) ? (u0 + r0) : (rho2 / (r0 + std::fabs(u0)));
+    const double p1 = (u1 >= 0.0) ? (u1 + r1) : (rho2 / (r1 + std::fabs(u1)));
     const double du = u1 - u0;
     const double num = du * (p1 + p0);
     return std::log1p(num / ((r1 + r0) * p0));
