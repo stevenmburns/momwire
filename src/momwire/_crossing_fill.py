@@ -92,8 +92,12 @@ class NodeArm(NamedTuple):
 # What the context does NOT abstract: the fill tests with the basis it
 # expands with (axis A's `F`/`Fd` are the test rows), and its by-parts end
 # terms and corner are derived for value-1 tents standing at wire ends. A
-# formulation that tests differently (razor's path integrals) needs its own
-# test-side axis dict; that is the buried arc's next probe, not this seam.
+# formulation that tests differently needs its own test-side axis dict --
+# and razor's is `path_test_axis` below (momwire#813), which spells the
+# razor-blade path integral in `axis_data`'s language so every block
+# function here serves it unchanged. Its rows also want the corner term OFF
+# (`corner=False`): the corner is a Galerkin by-parts term and a path-tested
+# row has no by-parts to do.
 
 
 class BasisPolynomials(NamedTuple):
@@ -153,9 +157,11 @@ def buried_medium(ground_eps, omega, eps, k):
 class CrossingContext(NamedTuple):
     """Everything the crossing fill reads, and nothing else.
 
-    Built by the caller (`BSplineSolver._crossing_context`) from its own
-    state. `a_wire` is the deck's ONE wire radius — the scope guard in the
-    module docstring — and `ground_z` the interface height.
+    Built by the caller from its own state — `BSplineSolver._crossing_context`
+    and, since momwire#813, `RazorSolver._crossing_context`, which spells its
+    tents as `BasisPolynomials` the same way. `a_wire` is the deck's ONE wire
+    radius — the scope guard in the module docstring — and `ground_z` the
+    interface height.
     """
 
     basis: BasisPolynomials

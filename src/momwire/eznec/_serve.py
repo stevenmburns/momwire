@@ -63,8 +63,10 @@ port momwire has AT a node — but a node where a through-current path runs is
 also a knot, and a delta gap on that knot is the same series EMF (below, "Two
 spellings of a series EMF").  Only a K >= 3 apex genuinely needs the node
 port.  So :func:`build_mesh` takes the solver class and spells the drive for
-it (momwire#603 U1), and the ``razor`` family — the NEC-5 formulation twin,
-which has no node gaps — reaches this seam.
+it (momwire#603 U1), and ``RazorSolver`` reaches this seam.  That unit then
+gave razor the node port itself, off the through-current unknown its junction
+tents already carried, so ``node_gaps`` is True on that row too and the K >= 3
+apex is served rather than refused.
 
 Three drive spellings, and the address picks between them
 ---------------------------------------------------------
@@ -2842,12 +2844,17 @@ def _check_basis_can_host(
     Four things a capture actually asks for and some basis cannot give:
 
     * a NODE GAP, which only a K >= 3 apex still needs after momwire#603 U1
-      (0013 and 0033) and which the razor family has none of;
+      (0013 and 0033) — no family that reaches this seam refuses one today,
+      momwire#603 having given razor the port as well, so the gate below
+      reads the row rather than naming a family;
     * a gap ON THE KNOT the deck named, which the sinusoidal family does not
       place — it snaps to the nearest segment centre — and which is the only
       one of the four whose absence is otherwise SILENT (momwire#611);
-    * ground CONTACT over a finite ground, which razor refuses on the
-      geometry every base-fed vertical over ``GN 0``/``GD`` writes;
+    * ground CONTACT over a finite ground.  The gate below asks the row,
+      and since momwire#624 lifted razor's refusal no family that reaches
+      this seam declares one: the tree's remaining contact refusal is
+      ``contact+refl-coef`` and this dialect's finite grounds are Sommerfeld
+      (:func:`_ground_kwargs`);
     * an INERT one-segment ``GW`` — one junctioned at neither end, which the
       razor family refuses because it carries no basis and would scatter
       nothing (momwire#608) — the only one of the three with no capability
