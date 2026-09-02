@@ -11,8 +11,9 @@ and the two NEC dialects do not agree about where that is:
 
 `RazorSolver` carries its sites on knots. So a NEC-5 deck is its natural
 corpus and a NEC-2 deck is not: a segment centre is exactly halfway between
-two knots, which is a tie by construction, and #623's tap counts 58 of them
-coming from the hand-written NEC-2 decks in `test_deck_build_solver_razor.py`.
+two knots, which is a tie by construction, and #623's tap counted 58 of them
+coming from the hand-written NEC-2 decks `test_deck_build_solver_razor.py`
+carried until momwire#821 retired razor from the nec2 front door.
 
 Measured here over the captures instead:
 

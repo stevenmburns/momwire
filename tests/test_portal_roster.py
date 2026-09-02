@@ -5,8 +5,8 @@ The NEC-2 dialect's roster-totality gate, and the sibling of
 seam and had no counterpart here.
 
 **The gap this closes.**  ``test_deck_build_solver`` only CONSTRUCTS each
-entry in ``momwire.deck.BASES``, and no portal test parametrized over that
-mapping, so nothing anywhere solved a deck through every rostered name.  A
+entry in ``momwire.deck.NEC2_BASES``, and no portal test parametrized over
+that mapping, so nothing anywhere solved a deck through every rostered name.  A
 basis could therefore be on the roster and answer nothing, and stay invisible
 until a user picked it in a SimNEC portal dialog.
 
@@ -21,17 +21,21 @@ still the failure shape, still uncaught.  A test that calls ``main`` is
 therefore enough to gate it — an escaping exception fails the test by
 existing, with no assertion needed to notice.
 
-**Why the parametrization is derived rather than listed.**  ``sorted(BASES)``
-means every future family pays for its own roster entry at the moment it
-claims one, which is the whole point: "on the roster" and "answers a deck"
-cannot drift apart again by anyone forgetting to extend a list here.  The
-portal's ``_BASES`` is a total comprehension over the same mapping, so a name
-added without a banner-suffix decision raises ``KeyError`` at import and takes
-this module's collection down with it — also a failure, and a louder one.
+**Why the parametrization is derived rather than listed.**
+``sorted(NEC2_BASES)`` means every future family pays for its own roster
+entry at the moment it claims one, which is the whole point: "on the roster"
+and "answers a deck" cannot drift apart again by anyone forgetting to extend
+a list here.  The portal's ``_BASES`` is a total comprehension over the same
+mapping, so a name added without a banner-suffix decision raises ``KeyError``
+at import and takes this module's collection down with it — also a failure,
+and a louder one.  It is the nec2 roster and not ``deck.BASES`` because razor
+is in the latter and refused at this seam by name (momwire#821): this dialect
+addresses segment centres, and razor cannot place a gap there.
 
-**Why the bar is a band and not digits.**  Nine roster entries over seven
+**Why the bar is a band and not digits.**  Seven roster entries over six
 formulations, and they are meant to disagree in the third digit — that is what
-having a roster is FOR.  Measured across the eight fast-converging entries on
+having a roster is FOR.  Measured (before momwire#821, razor's two names still
+among them) across the eight fast-converging entries on
 this deck: R 62.7-65.1 ohms, X -72.2 to -55.6 ohms, broadside gain 2.03-2.11
 dBi.  The bounds below are wide enough that a legitimate new formulation
 clears them without anyone re-baselining, and narrow enough that the ways an
@@ -73,7 +77,7 @@ import io
 
 import pytest
 
-from momwire.deck._solver import BASES
+from momwire.deck._solver import NEC2_BASES
 from momwire.portal import _portal as nec_portal
 from momwire.portal._portal import BANNER_VERSION
 
@@ -162,9 +166,9 @@ _BANDS = {"pulse": (60.0, 100.0, 20.0, 100.0)}
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", sorted(BASES))
+@pytest.mark.parametrize("basis", sorted(NEC2_BASES))
 def test_every_rostered_basis_answers_a_deck_end_to_end(basis, scoped_engine):
-    """The gate: each name in `deck.BASES`, driven through `main` as SimNEC
+    """The gate: each name in `deck.NEC2_BASES`, driven through `main` as SimNEC
     drives it, must answer this deck with a physical dipole.
     """
     rc, out, err = _run(basis)
@@ -244,6 +248,6 @@ def test_the_banner_suffixes_tell_the_roster_entries_apart():
     line it expected.  The empty suffix is the default basis's, and there is
     exactly one of those.
     """
-    suffixes = [nec_portal._BASES[name][2] for name in sorted(BASES)]
+    suffixes = [nec_portal._BASES[name][2] for name in sorted(NEC2_BASES)]
     assert len(set(suffixes)) == len(suffixes), suffixes
     assert suffixes.count("") == 1

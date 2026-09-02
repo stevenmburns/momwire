@@ -279,7 +279,7 @@ def test_the_eznec_marker_reads_the_basis_off_the_filename(prog, expected):
     "prog,expected",
     [
         ("momwire-nec2c", None),
-        ("momwire-nec2c-razor-2p", "razor-2p"),
+        ("momwire-nec2c-bspline-d1", "bspline-d1"),
         ("C:\\SimNEC\\Momwire-Nec2c-Sinusoidal-Galerkin.EXE", "sinusoidal-galerkin"),
         ("momwire-nec2c-", ""),
     ],

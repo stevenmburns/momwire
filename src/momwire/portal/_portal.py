@@ -192,12 +192,13 @@ from ..deck._networks import build_reducer, card_branches, live_cards
 
 # Which solver families take a deck's ``LD`` lumped load as their OWN
 # construction kwarg instead of as the port-algebra stamp every other family
-# shares (momwire#432 — razor today).  ``build_solver`` reads it to decide how
+# shares (momwire#432 — razor, which this front door no longer serves,
+# momwire#821; the tuple is the seam's).  ``build_solver`` reads it to decide how
 # to spell a load's translation; the power budget has to read the same tuple,
 # because "the fill already carries Z_L" and "the port algebra must stamp Z_L"
 # are the same fact asked from two directions, and a budget that guessed
 # separately would be exactly the disagreement momwire#433 found.
-from ..deck._solver import _NATIVE_LOADING, basis_from_program_name
+from ..deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
 
 # The NEC-level view of a deck's geometry: the flat wire list after every
 # GM/GS transform and both connection passes, carrying the TAGS and the
@@ -269,25 +270,21 @@ from .._far_readout import (
 # iterative solve tolerance. `arrayblock` degrades to the parent H-matrix on
 # a deck with no repeated-block structure (momwire#143 `_degenerate_partition`)
 # rather than refusing, so both entries are safe on arbitrary decks.
-# `razor-2p` / `razor-nec5` (momwire#432) are the NEC-5 formulation twin — a
-# suffix is required the moment either name joins `deck.BASES` (this dict
-# comprehension is total over it), and both ARE working portal entries:
-# `RazorSolver.compute_port_solution()` (the sharing audit's #429 rank-9
-# item) closed the gap #432 left as a follow-up, so `_y_and_port_coeffs`
-# drives either name exactly like every other roster entry, through the same
-# one-fill-all-ports call. Nothing razor-specific lives past this point — the
-# port algebra, the Y-matrix readout and the field evaluation are all the
-# shared code every basis rides — including the one case that used to be an
-# exception. A deck-level LOAD-ONLY site on a segment no `EX` drives has no
-# matching `RazorSolver.feeds` entry, since razor bakes it straight into
-# `lumped_loads` rather than taking the port-algebra route every other family
-# takes, so this family's port count was the deck's minus one. That was #439's
-# `IndexError` out of `_port_signs` and #586's refusal in its place; it is
-# SERVED as of #588, and nothing here changed to serve it —
-# `deck._solver.in_solver_ports` renumbers the plan onto the rows
-# `build_solver` actually built, so past that point there is one index space
-# and no consumer has to know which one it was handed. See
-# `docs/razor-solver.md`, "A load-only site is not a port here".
+# No razor name here (momwire#821). `razor-2p` / `razor-nec5` were portal
+# entries from momwire#432 (banner suffixes `+razor2p` / `+razor5`) until the
+# `centre_feeds` gate momwire#673 declared landed at the `nec2` seam: this
+# dialect addresses segment CENTRES, razor places its gap at the nearest
+# KNOT, and every parsed deck carries an `EX`, so `deck.build_solver` refuses
+# razor for every deck this front door can be handed. The roster the portal
+# reads is therefore `deck.NEC2_BASES`, the subset of `deck.BASES` whose
+# `capabilities.centre_feeds` is True; a razor name still resolves off a
+# copy's filename or `--basis` and is refused at configure time with the
+# family's declared reason (:func:`configure_engine`), so a host's `-version`
+# probe fails fast rather than every deck erroring. What razor's tenure here
+# left behind is shared code every basis rides: `deck._solver.in_solver_ports`
+# renumbers the plan onto the rows `build_solver` actually built (#588), and
+# the budget reads `_NATIVE_LOADING` (#433) — both are the seam's, and the
+# NEC-5 dialect that still serves razor uses them.
 _BANNER_SUFFIXES = {
     "bspline": "",
     "bspline-d1": "+bs1",
@@ -295,23 +292,21 @@ _BANNER_SUFFIXES = {
     "arrayblock": "+ab",
     "sinusoidal": "+sin",
     "sinusoidal-galerkin": "+sg",
-    "razor-2p": "+razor2p",
-    # Deprecated spelling of razor-2p; its banner suffix is kept as it shipped
-    # so an existing install's provenance strings do not change under it.
-    "razor-nec5": "+razor5",
     "pulse": "+pulse",
 }
 # ONE roster, read one way (#846 phase III). The portal and the dialect used
 # to keep parallel tables spelt to match (momwire#359); as siblings in one
-# package the portal simply reads ``momwire.deck.BASES`` and adds the only
-# column that is its own business — the banner suffix. The solve itself goes
-# through ``build_solver(model, basis=name)``, so the class and kwargs here
-# are used for nothing but the operator cache key; deriving them from the same
-# mapping the solve uses is what makes the key honest. A basis added to
-# ``deck.BASES`` without a suffix decision raises KeyError at import — the
-# one-way link stated as a failure, not a comment.
+# package the portal simply reads ``momwire.deck.NEC2_BASES`` — the names
+# that serve THIS dialect (momwire#821) — and adds the only column that is
+# its own business, the banner suffix. The solve itself goes through
+# ``build_solver(model, basis=name)``, so the class and kwargs here are used
+# for nothing but the operator cache key; deriving them from the same mapping
+# the solve uses is what makes the key honest. A basis added to
+# ``deck.NEC2_BASES`` without a suffix decision raises KeyError at import —
+# the one-way link stated as a failure, not a comment.
 _BASES = {
-    name: (cls, kwargs, _BANNER_SUFFIXES[name]) for name, (cls, kwargs) in BASES.items()
+    name: (cls, kwargs, _BANNER_SUFFIXES[name])
+    for name, (cls, kwargs) in NEC2_BASES.items()
 }
 _active_basis = _BASES["bspline"]
 # The same name, as ``momwire.deck.build_solver`` takes it.
@@ -446,7 +441,7 @@ def _banner_lines() -> tuple:
     """The process banner, with the basis recorded in the version tail.
 
     The default basis keeps the exact historical banner (fixture-pinned);
-    a non-default one appends its suffix (`+sg` / `+razor5`) so a session
+    a non-default one appends its suffix (`+sg` / `+bs1`) so a session
     transcript records which physics answered. Only the PRINTOUT banner —
     the `-version` probe line never changes, since SimNEC Double-parses it.
     """
@@ -1879,7 +1874,9 @@ class DeckSolver:
         self._lossy = any(w.material is not None for w in self.model.wires)
         # Whether this basis took the deck's ``LD`` loads INTO the fill rather
         # than leaving them for the port algebra (momwire#432's
-        # ``_NATIVE_LOADING``, razor today).  One ``--basis`` per process, and
+        # ``_NATIVE_LOADING`` — razor, which the nec2 front door no longer
+        # serves, momwire#821; kept because the tuple is the seam's and the
+        # two facts below must still agree).  One ``--basis`` per process, and
         # the basis is in the operator key, so this is a property of the whole
         # DeckSolver rather than of one cached entry.  It decides two things
         # that must agree: whether ``_load_impedances`` stamps Z_L at all, and
@@ -2924,8 +2921,8 @@ def _has_buried_wires(solver) -> bool:
     Asked of the solver rather than recomputed here: ``momwire._medium_spec``
     owns the ABOVE/BELOW question and the solver has already cached its
     answer.  A family with no buried concept refuses a below-interface deck
-    at FILL time — razor, the sinusoidal pair and the two accelerated entries
-    all do, each with its own sentence — so no such solver can reach a report
+    at FILL time — the sinusoidal pair and the two accelerated entries do,
+    each with its own sentence — so no such solver can reach a report
     card with a buried wire, and the absence of the method means "no" rather
     than "unknown".
     """
@@ -3864,6 +3861,30 @@ def _filename_basis(prog: str) -> str | None:
     return basis_from_program_name(prog, "nec2c-")
 
 
+def _basis_refusal(name: str, source: str) -> str:
+    """The probe-time line for a basis name this front door will not serve.
+
+    Two cases, told apart so the user can act on the right one. A name the
+    roster does not know at all is a typo, and the line lists the choices. A
+    name `deck.BASES` knows but `deck.NEC2_BASES` does not (razor, momwire#821)
+    is a real basis that cannot place a gap where this dialect names one, and
+    the line says so in the family's own declared words — the same sentence
+    `deck.build_solver` would raise on every deck — so a host that pointed at
+    a retired `momwire-nec2c-razor-*` copy learns why at the `-version` probe
+    rather than from an ERROR-NEC2C block per solve.
+    """
+    named = (
+        f"--basis {name!r}" if source == "--basis" else f"basis {name!r} from {source}"
+    )
+    if name in BASES:
+        cls, _kwargs = BASES[name]
+        return (
+            f"{named} does not serve the nec2 dialect, which addresses segment "
+            f"centres: {cls.capabilities.refusal('centre_feeds')}\n"
+        )
+    return f"unknown {named}; choices: {', '.join(sorted(_BASES))}\n"
+
+
 def configure_engine(
     argv: list[str], stdout, prog: str | None = None
 ) -> tuple[list[str], bool, int | None]:
@@ -3923,9 +3944,7 @@ def configure_engine(
             k = next(i for i, a in enumerate(rest) if a.startswith("--basis="))
             name = rest.pop(k).split("=", 1)[1]
         if name not in _BASES:
-            stdout.write(
-                f"unknown --basis {name!r}; choices: {', '.join(sorted(_BASES))}\n"
-            )
+            stdout.write(_basis_refusal(name, "--basis"))
             stdout.flush()
             return [], False, 3
         _active_basis = _BASES[name]
@@ -3943,10 +3962,7 @@ def configure_engine(
             name = None
         if name is not None:
             if name not in _BASES:
-                stdout.write(
-                    f"unknown basis {name!r} from {source}; "
-                    f"choices: {', '.join(sorted(_BASES))}\n"
-                )
+                stdout.write(_basis_refusal(name, source))
                 stdout.flush()
                 return [], False, 3
             _active_basis = _BASES[name]
@@ -4016,7 +4032,7 @@ def engine_scope():
     snapshot::
 
         with engine_scope():
-            main(["--basis", "razor-2p"], stdin=deck, stdout=out)
+            main(["--basis", "sinusoidal-galerkin"], stdin=deck, stdout=out)
         # the basis, the cache flags and the cache are as they were
 
     The cache is emptied on exit rather than restored, for the same reason

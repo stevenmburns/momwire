@@ -18,19 +18,24 @@ with no `ground_eps`; the other two grounds are `ground_model` values.
 ## Roster names
 
 What a `--basis` name selects. Several names share one class, differing
-only in a bound keyword, so they share its row.
+only in a bound keyword, so they share its row. The `nec2` column is
+`deck.NEC2_BASES`: the names the nec2 front door (`momwire.portal`, the
+`momwire-nec2c-*` commands) serves, which is exactly the `centre_feeds`
+column below — that dialect addresses segment centres, and a family
+that snaps to knots is refused there by name (momwire#821). The NEC-5
+dialect (`momwire.eznec`) addresses nodes and reads the whole roster.
 
-| `--basis`             | class                      | bound                  |
-| --------------------- | -------------------------- | ---------------------- |
-| `bspline`             | `BSplineSolver`            | —                      |
-| `bspline-d1`          | `BSplineSolver`            | `degree=1`             |
-| `hmatrix`             | `HMatrixSolver`            | —                      |
-| `arrayblock`          | `ArrayBlockSolver`         | —                      |
-| `sinusoidal`          | `SinusoidalSolver`         | —                      |
-| `sinusoidal-galerkin` | `SinusoidalGalerkinSolver` | —                      |
-| `razor-2p`            | `RazorSolver`              | `nec5_quadrature=True` |
-| `razor-nec5`          | `RazorSolver`              | `nec5_quadrature=True` |
-| `pulse`               | `HarringtonSolver`         | —                      |
+| `--basis`             | class                      | bound                  | `nec2` |
+| --------------------- | -------------------------- | ---------------------- | ------ |
+| `bspline`             | `BSplineSolver`            | —                      | yes    |
+| `bspline-d1`          | `BSplineSolver`            | `degree=1`             | yes    |
+| `hmatrix`             | `HMatrixSolver`            | —                      | yes    |
+| `arrayblock`          | `ArrayBlockSolver`         | —                      | yes    |
+| `sinusoidal`          | `SinusoidalSolver`         | —                      | yes    |
+| `sinusoidal-galerkin` | `SinusoidalGalerkinSolver` | —                      | yes    |
+| `razor-2p`            | `RazorSolver`              | `nec5_quadrature=True` | **no** |
+| `razor-nec5`          | `RazorSolver`              | `nec5_quadrature=True` | **no** |
+| `pulse`               | `HarringtonSolver`         | —                      | yes    |
 
 ## Axes
 
