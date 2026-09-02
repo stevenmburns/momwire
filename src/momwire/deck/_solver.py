@@ -746,6 +746,18 @@ def build_solver(
 
     Raises ``ValueError`` for an unknown basis, a model with no wires, and a
     port set the geometry cannot host.
+
+    It does NOT refuse a basis whose `capabilities.centre_feeds` is False,
+    though this function is the `nec2` seam and that dialect addresses
+    segment CENTRES. `RazorSolver` is that basis, and the refusal is filed
+    separately (from momwire#673) rather than landed here: every parsed nec2
+    deck carries feeds -- the parser refuses a deck with no EX card -- so the
+    gate would refuse razor for EVERY deck and retire the two shipped
+    `momwire-nec2c-razor-*` console scripts with it. That is a user-facing
+    decision, not a side effect of declaring a matrix cell. Until it is
+    taken, `_snap_to_knot` still moves a centre-named gap half a cell here,
+    and `RazorSolver.capabilities.centre_feeds` is where that is now written
+    down.
     """
     solver_class, basis_kwargs = basis_entry(basis)
 

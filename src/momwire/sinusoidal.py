@@ -408,6 +408,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junction_ports=False,
         node_gaps=False,
         knot_feeds=False,
+        # momwire#673: this family snaps to the segment CENTRE grid, which is
+        # exactly the grid `nec2` names -- so the axis it fails on the node
+        # side is the one it serves here. The two cells are mirrors, not
+        # opposites.
+        centre_feeds=True,
         per_wire_radius=True,
         singular_enrichment=False,
         # Contact at a wire END is served (`ground_minus` / `ground_plus`);
