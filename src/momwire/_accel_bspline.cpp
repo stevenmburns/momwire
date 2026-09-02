@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_stable_inline.h"
 
 #include "_bspline_static_moments_inline.h"
 // The extended-thin-wire static correction D_pq^EK (momwire#249's codegen,
@@ -121,7 +122,11 @@ seg_seg_reg_moments_bspline_swept_impl(
             alignas(32) double R[64];
             alignas(32) double inv_R_4pi[64];
             alignas(32) double phases[64];
-            alignas(32) double cos_phases[64];
+            // sin(phase/2), not cos(phase): this kernel forms the REMAINDER,
+            // so the only thing it ever wanted `cos` for was `cos − 1`, and
+            // that is `-2 sin²(phase/2)` (momwire#799). Same two transcendental
+            // stages as before, one of them at half the argument.
+            alignas(32) double half_phases[64];
             alignas(32) double sin_phases[64];
             alignas(32) double Gre[64];
             alignas(32) double Gim[64];
@@ -160,7 +165,7 @@ seg_seg_reg_moments_bspline_swept_impl(
                 }
                 PYSIM_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
-                    cos_phases[qr] = std::cos(phases[qr]);
+                    half_phases[qr] = std::sin(0.5 * phases[qr]);
                 }
                 PYSIM_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
@@ -188,8 +193,10 @@ seg_seg_reg_moments_bspline_swept_impl(
                         double exr = t1 * (0.0 - kr2);
                         double exi = t1 * (3.0 * kr);
                         exi = exi - t2 * kr;
-                        // phase = e^{-jkR} − 1 = (cos(-kR) − 1) + j sin(-kR).
-                        double pr = cos_phases[qr] - 1.0;
+                        // phase = e^{-jkR} − 1 = −2 sin²(kR/2) + j sin(-kR),
+                        // the reduced branch's bracket (momwire#799).
+                        double hp = half_phases[qr];
+                        double pr = -2.0 * hp * hp;
                         double pim = sin_phases[qr];
                         // num = phase·fac;  num += extra;  num /= 4πR.
                         double numr = pr * facr - pim * faci;
@@ -202,8 +209,9 @@ seg_seg_reg_moments_bspline_swept_impl(
                 } else {
                 PYSIM_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
-                    // exp(-j k R) - 1 = (cos(-kR) - 1) + j sin(-kR)
-                    Gre[qr] = (cos_phases[qr] - 1.0) * inv_R_4pi[qr];
+                    // exp(-j k R) - 1 = -2 sin²(kR/2) + j sin(-kR)
+                    double hp = half_phases[qr];
+                    Gre[qr] = (-2.0 * hp * hp) * inv_R_4pi[qr];
                     Gim[qr] = sin_phases[qr] * inv_R_4pi[qr];
                 }
                 }

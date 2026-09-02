@@ -60,6 +60,9 @@ from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
 from ._port_solution import PortSolution, _SweptPortSolutions
+from ._stable import asinh_diff
+from ._stable import expm1_neg_j as _expm1_neg_j
+from ._stable import expm1_neg_j_from_half as _expm1_neg_j_from_half
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
 _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
@@ -340,14 +343,6 @@ def _asinh_minus_arg(x):
         )
     )
     return np.where(np.abs(t) < 1.0, -series, -(np.sinh(t) - t))
-
-
-def _expm1_neg_j(w):
-    """e^{−jw} − 1, spelled so neither part cancels: the real part is
-    cos w − 1 = −2sin²(w/2), which the literal subtraction would compute to
-    an absolute ε rather than a relative one."""
-    half = np.sin(0.5 * w)
-    return (-2.0 * half * half) - 1j * np.sin(w)
 
 
 @dataclass(frozen=True)
@@ -1245,8 +1240,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # ground-junction extension, which is the same shape folded back.
         recip_gap = _recip_sin_gap(kd_arr)
         # P-sum atoms: (1-cos(kd_j))/sin(kd_j) * a_const for N⁻; flip sign
-        # for N⁺.
-        P_minus_atom = (1.0 - cos_kd) / sin_kd * a_const
+        # for N⁺. Spelled as its exact identity tan(kΔ/2) (momwire#799): the
+        # literal quotient computes a numerator of size kΔ²/2 out of terms of
+        # size 1, which is 1.9e-12 relative at the kΔ = 3.8e-3 of an
+        # 801-segment half-wave dipole and grows as 1/kΔ². Same argument, and
+        # the same regime, as `_recip_sin_gap` (momwire#606) two doors down.
+        P_minus_atom = (sin_kd_2 / cos_kd_2) * a_const
 
         # Per-basis P_minus[i] = Σ_{j ∈ N⁻(i)} atom[j], via scatter-sum on
         # the flat nm arrays. Same for P_plus[i] over N⁺.
@@ -1290,8 +1289,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # support anyway.
         D_safe = np.where(D != 0, D, 1.0)
         sin_kd_safe = np.where(sin_kd != 0, sin_kd, 1.0)
-        Q_minus_arr = (a_const * (1.0 - cos_kd) - P_plus_arr * sin_kd) / D_safe
-        Q_plus_arr = (a_const * (cos_kd - 1.0) - P_minus_arr * sin_kd) / D_safe
+        # 1 − cos kΔ = 2 sin²(kΔ/2), exactly (momwire#799). Both numerators
+        # are a difference of two O(a·kΔ²) terms, so the O(kΔ²) half arriving
+        # with only an ABSOLUTE ε would set the whole quotient's accuracy.
+        one_m_cos_kd = 2.0 * sin_kd_2 * sin_kd_2
+        Q_minus_arr = (a_const * one_m_cos_kd - P_plus_arr * sin_kd) / D_safe
+        Q_plus_arr = (-a_const * one_m_cos_kd - P_minus_arr * sin_kd) / D_safe
         A_i0_arr = np.full(n_segs, -1.0)
         B_i0_arr = a_const * (Q_minus_arr + Q_plus_arr) * sin_kd_2 / sin_kd_safe
         C_i0_arr = a_const * (Q_minus_arr - Q_plus_arr) * cos_kd_2 / sin_kd_safe
@@ -1328,14 +1331,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             denom_x_safe = np.where(denom_x != 0, denom_x, 1.0)
             qpe1_denom = a_const * sin_kd - P_plus_arr * cos_kd
             qpe1_denom_safe = np.where(qpe1_denom != 0, qpe1_denom, 1.0)
-            Q_plus_e1 = (cos_kd - 1.0) / qpe1_denom_safe
+            Q_plus_e1 = -one_m_cos_kd / qpe1_denom_safe
             B_e1 = (sin_kd_2 + a_const * Q_plus_e1 * cos_kd_2) / denom_x_safe
             C_e1 = (cos_kd_2 + a_const * Q_plus_e1 * sin_kd_2) / denom_x_safe
 
             # End segment with free end at end-2 (Eqs 58-61). X = 0.
             qme2_denom = a_const * sin_kd + P_minus_arr * cos_kd
             qme2_denom_safe = np.where(qme2_denom != 0, qme2_denom, 1.0)
-            Q_minus_e2 = (1.0 - cos_kd) / qme2_denom_safe
+            Q_minus_e2 = one_m_cos_kd / qme2_denom_safe
             B_e2 = (-sin_kd_2 + a_const * Q_minus_e2 * cos_kd_2) / denom_x_safe
             C_e2 = (cos_kd_2 - a_const * Q_minus_e2 * sin_kd_2) / denom_x_safe
 
@@ -2206,15 +2209,26 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # that the ρ-expansion of the axial term leaves behind. Unlike the
         # per-end substitutions this factor is NOT gated: it applies whenever
         # EK is on, even when both ends fell back to GX.
-        u2 = (H - z_eval) / rh
-        u1 = (-H - z_eval) / rh
-        int_inv_r0 = np.arcsinh(u2) - np.arcsinh(u1)
+        # `asinh_diff` on the ORDERED radius (momwire#799), the reduced
+        # tensor's treatment verbatim. `rh` is not `rho_eval`, so the two end
+        # distances are re-formed here rather than reused.
+        u2 = H - z_eval
+        u1 = -H - z_eval
+        rh2 = rh * rh
+        rr2 = np.sqrt(rh2 + u2 * u2)
+        rr1 = np.sqrt(rh2 + u1 * u1)
+        int_inv_r0 = asinh_diff(u1, u2, rh2, rr1, rr2)
         gx, gw = self._leggauss_cached(self.n_qp_const)
         z_qp = H[..., None] * gx
         dz_qp = z_eval[..., None] - z_qp
         r0_qp = np.sqrt(rh[..., None] ** 2 + dz_qp**2)
-        G0_qp = np.exp(-1j * k * r0_qp) / r0_qp
-        reg_qp = G0_qp - 1.0 / r0_qp
+        # (e^{-jkr} - 1)/r, NOT G0 - 1/r: the literal difference of two
+        # 1/r-sized terms returns its real part to an absolute ε, which is
+        # 1.1e-12 relative at kr = 8e-3 and grows as 1/(kr)² (momwire#799).
+        # Through the HALF phase, which is the form the C++ twin's phase table
+        # already holds — same spelling in both lanes, not merely the same
+        # value.
+        reg_qp = _expm1_neg_j_from_half(-0.5 * k * r0_qp) / r0_qp
         int_G0 = int_inv_r0 + np.einsum("...q,q->...", reg_qp, gw) * H
         bk = k * b
         bk2 = 0.25 * bk * bk
@@ -2556,15 +2570,24 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         #   ∫G_0 dz' = ∫ 1/r_0 dz'              (closed form, arcsinh)
         #            + ∫ (G_0 - 1/r_0) dz'      (regular: tends to -jk as r_0→0)
         # 1/r_0 closed form: ∫_{-H}^{+H} 1/√(ρ²+(z-z')²) dz' = arcsinh((H-z)/ρ) - arcsinh((-H-z)/ρ).
-        u2 = (H - z_eval) / rho_eval  # (M, N)
-        u1 = (-H - z_eval) / rho_eval
-        int_inv_r0 = np.arcsinh(u2) - np.arcsinh(u1)
+        # Through `asinh_diff` (momwire#799): on a collinear deck ρ is the wire
+        # radius and every non-neighbour pair has (H-z) and (-H-z) of the same
+        # sign and agreeing to 2H/z, so the literal difference of two O(log)
+        # asinh values costs ε·|asinh|·z/(2H) — 1.8e-13 at the far end of a
+        # 201-segment dipole, 8.4e-13 at 801. Same object, same helper, as
+        # razor's `_static_axis_moments` m0.
+        int_inv_r0 = asinh_diff(-dz1, -dz2, rho_eval * rho_eval, r0_1, r0_2)
         gx, gw = self._leggauss_cached(self.n_qp_const)
         z_qp = H[..., None] * gx  # S + (n_qp,)
         dz_qp = z_eval[..., None] - z_qp
         r0_qp = np.sqrt(rho_eval[..., None] ** 2 + dz_qp**2)
-        G0_qp = np.exp(-1j * k * r0_qp) / r0_qp
-        reg_qp = G0_qp - 1.0 / r0_qp
+        # (e^{-jkr} - 1)/r, NOT G0 - 1/r: the literal difference of two
+        # 1/r-sized terms returns its real part to an absolute ε, which is
+        # 1.1e-12 relative at kr = 8e-3 and grows as 1/(kr)² (momwire#799).
+        # Through the HALF phase, which is the form the C++ twin's phase table
+        # already holds — same spelling in both lanes, not merely the same
+        # value.
+        reg_qp = _expm1_neg_j_from_half(-0.5 * k * r0_qp) / r0_qp
         int_reg = np.einsum("...q,q->...", reg_qp, gw) * H
         int_G0 = int_inv_r0 + int_reg  # (M, N)
         Ez_const_boundary = (1.0 + 1j * k * r0_2) * dz2 * G0_2 / (r0_2 * r0_2) - (

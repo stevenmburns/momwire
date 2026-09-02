@@ -116,6 +116,7 @@ import numpy as np
 from ._bspline_ek_moments import D_ek_moment
 from ._bspline_static_moments import J_static_moment
 from ._quadrature import leggauss
+from ._stable import expm1_neg_jkR as _expm1_neg_jkR
 
 from ._accel import acc as _acc
 from ._accel import SAME_EDGE_MAX_N_QP as _SAME_EDGE_MAX_N_QP
@@ -629,11 +630,13 @@ def _ek_reg_kernel(R, a, k):
     At a = 0 this is the reduced `(e^{-jkR} − 1)/(4πR)` term by term, not
     merely to rounding: `fac` is exactly 1.0 and `extra` exactly 0.0.
     """
-    # Multi-step (momwire#205), same discipline as `_ek_factor`.
+    # Multi-step (momwire#205), same discipline as `_ek_factor`. The `- 1` is
+    # `_expm1_neg_jkR`'s bracket rather than a literal subtraction
+    # (momwire#799), which is the reduced branch's rewrite followed one for
+    # one — the EK remainder IS that object with a factor on it.
     fac = _ek_factor(R, a, k)
     extra = _ek_reg_extra(R, a, k)
-    phase = np.exp(-1j * k * R)
-    phase = phase - 1.0
+    phase = _expm1_neg_jkR(k, R)
     num = phase * fac
     num = num + extra
     return num / (4 * np.pi * R)
@@ -696,8 +699,10 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
         G_ek_block = G_ek.reshape(N, n_qp, N, n_qp)
         return np.einsum("piq,iqjr,Pjr->pPij", wu_pow, G_ek_block, wu_pow)
     # (exp(-jkR) - 1) / (4π R). At R = a small, this is bounded → -jk/(4π) in
-    # the a → 0, kR → 0 limit; no quadrature pathology.
-    G_reg = (np.exp(-1j * k * R) - 1.0) / (4 * np.pi * R)
+    # the a → 0, kR → 0 limit; no quadrature pathology. The remainder is
+    # spelled cancellation-free (momwire#799) — the literal subtraction returns
+    # its real part to an ABSOLUTE ε, which is 7e-11 relative at kR = 1e-3.
+    G_reg = _expm1_neg_jkR(k, R) / (4 * np.pi * R)
     G_block = G_reg.reshape(N, n_qp, N, n_qp)
     # J_reg[p, P, i, j] = sum_{q, r} wu_pow[p, i, q] G[i, q, j, r] wu_pow[P, j, r]
     return np.einsum("piq,iqjr,Pjr->pPij", wu_pow, G_block, wu_pow)
@@ -776,9 +781,7 @@ def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 <
     for c0 in range(0, n_k, chunk):
         kk = k_array[c0 : c0 + chunk]
         if ek is None:
-            G = (np.exp(-1j * kk[:, None, None] * R[None, :, :]) - 1.0) * inv4pi_R[
-                None, :, :
-            ]
+            G = _expm1_neg_jkR(kk[:, None, None], R[None, :, :]) * inv4pi_R[None, :, :]
         else:
             G = _ek_reg_kernel(R[None, :, :], a_ek, kk[:, None, None])
         G_block = G.reshape(kk.shape[0], N, n_qp, N, n_qp)

@@ -198,6 +198,7 @@ from ._quadrature import leggauss
 # row actually costs. That the import reaches into a SIBLING SOLVER and not
 # into a shared module is itself one of momwire#416's findings.
 from ._kernel_moments import _axis_frame, _static_axis_moments
+from ._stable import expm1_neg_jkR as _expm1_neg_jkR
 
 # Working-array budget for the chunked fills, in complex128 elements
 # (~32 MB per temporary), razor's constant and razor's reason: the moment
@@ -757,7 +758,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             m0s, _m1s = _static_axis_moments(u_r, rho2, seg_h)
             u = tau[None, :, :] - u_r[:, :, None]
             R = np.sqrt(u * u + rho2[:, :, None])
-            rem = (np.exp(-1j * k * R) - 1.0) / R
+            rem = _expm1_neg_jkR(k, R) / R
             out[lo:hi] = (m0s + np.einsum("psq,sq->ps", rem, wq)) / (4.0 * np.pi)
         return out
 

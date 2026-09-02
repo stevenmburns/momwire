@@ -1403,7 +1403,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         a_const = 1.0 / (np.log(2.0 / (k * a)) - _EULER_GAMMA)
         a_const = np.broadcast_to(np.asarray(a_const, dtype=float), (N,))
         kd = k * seg_h
-        atom = (1.0 - np.cos(kd)) / np.sin(kd) * a_const
+        # (1 − cos kΔ)/sin kΔ = tan(kΔ/2), exactly (momwire#799). The literal
+        # quotient's numerator is O(kΔ²) computed to an absolute ε — 1.9e-12
+        # relative at kΔ = 3.8e-3, growing as 1/kΔ². `sinusoidal.py`'s
+        # `P_minus_atom` is the same atom and takes the same spelling.
+        atom = np.tan(0.5 * kd) * a_const
 
         segs, bases, A, B, C, AC, sig = [], [], [], [], [], [], []
         for p, (j_idx, _v) in enumerate(self.junction_ports):
