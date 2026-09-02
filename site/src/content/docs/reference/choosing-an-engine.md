@@ -160,6 +160,11 @@ trimmed multi-gigabyte transient peaks to near the resident matrix size.
 The compressed engines (`hmatrix`, `arrayblock`) skip the dense matrix
 entirely, which is exactly why they exist for large problems.
 
+These envelopes ride on `razor`'s outer path order (`n_qp_path=32`, so 64
+observation points per testing path), and that constant was re-derived and
+KEPT on 2026-09-02 (momwire#754) — so the N≈800 / N≈1600 figures stand
+rather than moving with it.
+
 ## The extended kernel, in one paragraph
 
 Every engine solves a thin-wire equation; the `EK` card's O(a²) tube
