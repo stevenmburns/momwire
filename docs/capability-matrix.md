@@ -39,21 +39,21 @@ dialect (`momwire.eznec`) addresses nodes and reads the whole roster.
 
 ## Axes
 
-The seven declared booleans that describe the FORMULATION. Rows are
+The eight declared booleans that describe the FORMULATION. Rows are
 classes, with the roster names that reach each one, because
 `HMatrixSolver` and `ArrayBlockSolver` are separate `--basis` entries
 over a row they inherit almost entirely from `BSplineSolver`.
 
-| class                      | `--basis`                                                              | `wire_loading` | `extended_kernel` | `junction_ports` | `node_gaps` | `knot_feeds` | `per_wire_radius` | `singular_enrichment` |
-| -------------------------- | ---------------------------------------------------------------------- | -------------- | ----------------- | ---------------- | ----------- | ------------ | ----------------- | --------------------- |
-| `BSplineSolver`            | `bspline`, `bspline-d1 (degree=1)`                                     | yes            | yes               | yes              | yes         | yes          | yes               | yes                   |
-| `HMatrixSolver`            | `hmatrix`                                                              | yes            | yes               | yes              | yes         | yes          | yes               | yes                   |
-| `ArrayBlockSolver`         | `arrayblock`                                                           | yes            | yes               | yes              | yes         | yes          | yes               | yes                   |
-| `SinusoidalSolver`         | `sinusoidal`                                                           | yes            | yes               | **no**           | **no**      | **no**       | yes               | **no**                |
-| `SinusoidalGalerkinSolver` | `sinusoidal-galerkin`                                                  | yes            | yes               | yes              | yes         | yes          | yes               | **no**                |
-| `RazorSolver`              | `razor-2p (nec5_quadrature=True)`, `razor-nec5 (nec5_quadrature=True)` | yes            | yes               | **no**           | yes         | yes          | yes               | **no**                |
-| `HarringtonSolver`         | `pulse`                                                                | **no**         | **no**            | **no**           | **no**      | **no**       | **no**            | **no**                |
-| `PulseSolver`              | —                                                                      | **no**         | **no**            | **no**           | **no**      | **no**       | **no**            | **no**                |
+| class                      | `--basis`                                                              | `wire_loading` | `extended_kernel` | `junction_ports` | `node_gaps` | `knot_feeds` | `per_wire_radius` | `singular_enrichment` | `centre_feeds` |
+| -------------------------- | ---------------------------------------------------------------------- | -------------- | ----------------- | ---------------- | ----------- | ------------ | ----------------- | --------------------- | -------------- |
+| `BSplineSolver`            | `bspline`, `bspline-d1 (degree=1)`                                     | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
+| `HMatrixSolver`            | `hmatrix`                                                              | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
+| `ArrayBlockSolver`         | `arrayblock`                                                           | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
+| `SinusoidalSolver`         | `sinusoidal`                                                           | yes            | yes               | **no**           | **no**      | **no**       | yes               | **no**                | yes            |
+| `SinusoidalGalerkinSolver` | `sinusoidal-galerkin`                                                  | yes            | yes               | yes              | yes         | yes          | yes               | **no**                | yes            |
+| `RazorSolver`              | `razor-2p (nec5_quadrature=True)`, `razor-nec5 (nec5_quadrature=True)` | yes            | yes               | **no**           | yes         | yes          | yes               | **no**                | **no**         |
+| `HarringtonSolver`         | `pulse`                                                                | **no**         | **no**            | **no**           | **no**      | **no**       | **no**            | **no**                | yes            |
+| `PulseSolver`              | —                                                                      | **no**         | **no**            | **no**           | **no**      | **no**       | **no**            | **no**                | yes            |
 
 ## Grounds, contact and buried
 
