@@ -24,9 +24,11 @@ What this module gates:
         max|dM0| / max|M0|    2.5e-16
         max|dM1| / max|M1|    1.8e-15
 
-    and the bars clear those by 41x and 56x — headroom for a different libm
-    and a different FMA contraction on CI hardware rather than slack in the
-    claim.
+    and the bars sit at 1e-11 — not for slack, but because the post-merge
+    macOS lane measured 8.4e-13 on the reduced deck's M0 (the libm seam under
+    the `exp(-jkR) - 1` cancellation at kR ~ 1e-4; the note above the bars
+    has the mechanism), which a decade of headroom over the Linux numbers
+    did not cover.
 
   * **real k did not move.** The <false> instantiation is textually the
     pre-#796 loop; that it is also bit-identical after a rebuild is the #762
@@ -108,8 +110,21 @@ DECKS = {
     ),
 }
 
-M0_BAR = 1e-14  # max|dM0| / max|M0|, measured worst 2.5e-16
-M1_BAR = 1e-13  # max|dM1| / max|M1|, measured worst 1.8e-15
+# The bars are NOT the Linux numbers with a decade of headroom, and the reason
+# is the first thing this module learned on main: the post-merge macOS lane
+# (which a PR never runs) read 8.2e-13..8.4e-13 on the reduced deck's M0, on
+# EVERY medium and both `need_m1` settings, with the EK deck and both M1s
+# still passing. That is not the kernel. It is the libm seam under the
+# `exp(-jkR) - 1` cancellation: the thin reduced deck's near-self pairs sit at
+# kR ~ 1e-4, so a one-ulp disagreement between numpy's complex exp and the
+# kernel's exp*cos is amplified ~1e4 times by the subtraction of 1, and on
+# macOS the two lanes do not share a libm the way they do under glibc (where
+# they agree to 2.5e-16 / 1.8e-15). The fat EK deck's kR is ~1e3 larger and
+# the amplification is gone, which is why it passed unchanged. 1e-11 keeps a
+# decade over the macOS reading and sits four decades under anything the
+# solved impedance can feel.
+M0_BAR = 1e-11  # max|dM0| / max|M0|; Linux 2.5e-16, macOS 8.4e-13
+M1_BAR = 1e-11  # max|dM1| / max|M1|; Linux 1.8e-15 (macOS reduced-deck M1 unmeasured before this bar)
 
 
 def _grab(name):
@@ -188,13 +203,21 @@ def test_the_fused_complex_fill_agrees_with_the_numpy_lane(
     k = MEDIA[medium]
     ref0, ref1 = solver._seg_moments_from_prepared(chunks, k, n_obs, need_m1=need_m1)
     got0, got1 = solver._seg_moments_from_prepared(fused, k, n_obs, need_m1=need_m1)
+    # Measure both planes BEFORE asserting either, so a lane that misses one
+    # bar still reports the other (the macOS reading above had no M1 number
+    # because the M0 assertion fired first).
     d0 = float(np.abs(got0 - ref0).max() / np.abs(ref0).max())
-    assert d0 < M0_BAR, f"{branch}/{medium}: max|dM0|/max|M0| = {d0:.3e}"
     if need_m1:
         d1 = float(np.abs(got1 - ref1).max() / np.abs(ref1).max())
-        assert d1 < M1_BAR, f"{branch}/{medium}: max|dM1|/max|M1| = {d1:.3e}"
     else:
         assert got1 is None and ref1 is None
+        d1 = None
+    report = f"{branch}/{medium}: max|dM0|/max|M0| = {d0:.3e}"
+    if d1 is not None:
+        report += f", max|dM1|/max|M1| = {d1:.3e}"
+    assert d0 < M0_BAR, report
+    if d1 is not None:
+        assert d1 < M1_BAR, report
 
 
 @needs_cplx
