@@ -54,16 +54,35 @@ ENGINE_NAME = f"{NAME}-engine"
 # filename (`entry.py`, `momwire_eznec_client.c`), so a copy is a working
 # launcher and costs ~31 KB rather than a second 117 MB runtime.
 #
-# Two, not the whole eight-name roster — and since the phase-3 flip the reason
-# is no longer the zip, because eight ~31 KB copies would round to nothing in
-# a 52 MB download.  It is curation: the rest are engines almost nobody picks
-# from a file dialog, one of which (`sinusoidal`) refuses every deck in this
-# dialect, because every deck here drives a node and point matching has no
-# excitation for a source at one (momwire#611/#648 — it was first read as
-# `current_slopes`, then as the feed grid, and is really the testing).  So the
-# bundle carries the PAIR the parity work was about — the default and the
-# NEC-5 twin — and the README says how to make any other, which is a copy.
-SHIPPED_VARIANTS = ("razor-nec5",)
+# Three launchers, not the whole eight-name roster — and since the phase-3 flip
+# the reason is no longer the zip, because eight ~31 KB copies would round to
+# nothing in a 52 MB download.  It is curation: the rest are engines almost
+# nobody picks from a file dialog, one of which (`sinusoidal`) refuses every
+# deck in this dialect, because every deck here drives a node and point
+# matching has no excitation for a source at one (momwire#611/#648 — it was
+# first read as `current_slopes`, then as the feed grid, and is really the
+# testing).  So the bundle carries the default plus the razor class the parity
+# work was about, and the README says how to make any other, which is a copy.
+#
+# TWO SPELLINGS OF ONE BASIS, not two bases (momwire#817).  `razor-2p` is the
+# roster's long-term name and `razor-nec5` its deprecated spelling (#785/#794);
+# both resolve through `basis_from_program_name` to the same engine and answer
+# identically.  The deprecated one still ships because an EZNEC engine path is
+# a string a user typed once and forgot, and dropping the name would break
+# those installs silently — a launcher is ~31 KB, which is the cheapest
+# possible way to not do that.
+SHIPPED_VARIANTS = ("razor-2p", "razor-nec5")
+
+# What each shipped launcher is, one line for the README's table.  Keyed by
+# the SHIPPED_VARIANTS entry, so a variant added without a label fails the
+# build here rather than shipping an unlabelled row.
+# Kept SHORT: this is a table row in a plain-text README wrapped at ~70
+# columns, and the full description ("at NEC-5's two-point rule", and why the
+# deprecated spelling still ships) is two paragraphs down under WHICH ONE.
+VARIANT_LABELS = {
+    "razor-2p": "the tent basis with razor-blade path testing",
+    "razor-nec5": "the deprecated spelling of razor-2p",
+}
 
 # LLVM's OpenMP runtime.  Both Windows extensions (`_accelerators` and
 # `_near_interface_accel`) link it, because setup.py builds them with
@@ -277,7 +296,10 @@ def main() -> int:
     # variants are byte-identical copies of `exe` (verified on the v0.44.0
     # release — momwire-eznec.exe and momwire-eznec-razor-nec5.exe share
     # SHA256 111B8A48…, 192,768 bytes), so there are two DISTINCT signed
-    # artifacts across three shipped files.
+    # artifacts across FOUR shipped files since momwire#817 added the
+    # `razor-2p` launcher: three launchers plus the engine. The distinct
+    # count stays 2 however many variants ship, which is the whole point of
+    # copying a signed binary rather than signing each one.
     signed = signer.sign_if_configured([engine, exe])
 
     # CI's post-condition: the workflow decides MOMWIRE_SIGN_MODE exactly
@@ -354,10 +376,15 @@ def main() -> int:
     else:
         signing_note = "SIGNING: this build is unsigned."
 
+    # Per-variant, not one string for all of them (momwire#817).  The old
+    # spelling labelled every variant "the NEC-5 formulation twin", which was
+    # true of the one variant there was and would have been re-attached to
+    # `razor-2p` by a rename — exactly what #785 says not to do.  A name is
+    # described by what its class IS; the agreement with the licensed engine
+    # is a measured property, and it is reported further down under its own
+    # heading rather than folded into the name.
     labels = {NAME: "the default — degree-2 B-spline (bs2)"}
-    labels.update(
-        {f"{NAME}-{b}": "the NEC-5 formulation twin" for b in SHIPPED_VARIANTS}
-    )
+    labels.update({f"{NAME}-{b}": VARIANT_LABELS[b] for b in SHIPPED_VARIANTS})
     labels[ENGINE_NAME] = "the compute engine the launchers run"
     width = max(len(n) for n in labels) + len(exe.suffix)
     table = "\n".join(
@@ -404,11 +431,17 @@ def main() -> int:
         "\n"
         "WHICH ONE.  The launchers accept the same models and answer in\n"
         "different formulations.  The default is momwire's own degree-2\n"
-        "B-spline basis.  momwire-eznec-razor-nec5 is NEC-5's formulation\n"
-        "TWIN — the tent basis with razor-blade path testing NEC-5 itself\n"
-        "uses.\n"
+        "B-spline basis.  momwire-eznec-razor-2p is the tent basis with\n"
+        "razor-blade path testing at NEC-5's two-point rule — the same\n"
+        "formulation NEC-5 itself uses, which is why it agrees with the\n"
+        "licensed engine to the fraction of an ohm measured below.\n"
         "\n"
-        "REPRODUCTION IS NOT ACCURACY.  The twin agrees with the licensed\n"
+        "momwire-eznec-razor-nec5 is the DEPRECATED SPELLING of razor-2p.\n"
+        "It runs the same engine and answers identically; it still ships so\n"
+        "an EZNEC engine path typed once and forgotten keeps working.  New\n"
+        "setups should point at razor-2p.\n"
+        "\n"
+        "REPRODUCTION IS NOT ACCURACY.  razor-2p agrees with the licensed\n"
         "engine because it runs the same algorithm, not because it is more\n"
         "correct, and it inherits that engine's discretization error along\n"
         "with its answers.\n"
@@ -427,14 +460,14 @@ def main() -> int:
         "       20       66.67 -  35.88j     67.74 - 29.16j\n"
         "      160       67.67 -  29.28j     67.80 - 28.34j\n"
         "\n"
-        "razor-nec5 tracks the licensed column to 0.003 - 0.007 ohm at every\n"
+        "razor-2p tracks the licensed column to 0.003 - 0.007 ohm at every\n"
         "row -- flat, not improving, which is what a twin looks like.\n"
         "\n"
         "Which is nearer the truth is a different question, asked by scoring\n"
         "each basis against ITS OWN answer at the finest mesh above, N = 160,\n"
         "through this same engine:\n"
         "\n"
-        "    segments   bs2 error   razor-nec5 error\n"
+        "    segments   bs2 error   razor-2p error\n"
         "        4       2.81 ohm      80.14 ohm\n"
         "       20       0.82 ohm       6.67 ohm\n"
         "       60       0.25 ohm       1.43 ohm\n"

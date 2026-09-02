@@ -54,12 +54,14 @@ the same answer, at one-shot speed, never a broken engine.
 
 ## Choosing the formulation
 
-The bundle carries two launchers and the one engine they run, and the choice
+The bundle carries three launchers and the one engine they run, and the choice
 is the engine PATH you set:
 
 ```text
 momwire-eznec.exe             the default — degree-2 B-spline (bs2)
-momwire-eznec-razor-nec5.exe  the NEC-5 formulation twin
+momwire-eznec-razor-2p.exe    the tent basis with razor-blade path testing,
+                              at NEC-5's two-point rule
+momwire-eznec-razor-nec5.exe  the deprecated spelling of razor-2p
 momwire-eznec-engine.exe      the compute engine the launchers run
 ```
 
@@ -68,12 +70,18 @@ engine answers correctly either way, but naming it directly gives up the
 warm start above for nothing.
 
 They accept the same models — measured, deck by deck, on the whole captured
-corpus — and answer in different formulations. `razor-nec5` is the tent basis
-with razor-blade path testing NEC-5 itself uses.
+corpus — and answer in different formulations. `razor-2p` is the tent basis
+with razor-blade path testing at NEC-5's two-point rule — the formulation
+NEC-5 itself uses.
+
+`razor-nec5` is the **deprecated spelling** of the same basis (#785/#794). It
+runs the same engine and answers identically, and it still ships because an
+EZNEC engine path is a string typed once and forgotten; dropping the name
+would break those installs silently. Point new setups at `razor-2p`.
 
 ### Reproduction is not accuracy
 
-The twin agrees with the licensed engine **because it runs the same
+`razor-2p` agrees with the licensed engine **because it runs the same
 algorithm**, not because it is more correct. It inherits that engine's
 discretization error along with its answers, and NEC-5's razor-blade testing
 rule is known to walk its impedance slowly — O(1/N).
@@ -88,7 +96,7 @@ segments" is a NEC-2 convention, where sources sit at segment centres.
 Measured on a 0.476 λ dipole in free space, even meshes, one deck per rung —
 momwire through this seam, the licensed engine on the same deck text:
 
-| segments | licensed NEC-5 | bs2 | razor-nec5 | \|razor − NEC-5\| |
+| segments | licensed NEC-5 | bs2 | razor-2p | \|razor − NEC-5\| |
 |---|---|---|---|---|
 | 4 | 56.118 − 108.593j | 67.645 − 31.146j | 56.116 − 108.586j | **0.007** |
 | 20 | 66.667 − 35.880j | 67.739 − 29.155j | 66.665 − 35.877j | **0.003** |
@@ -103,7 +111,7 @@ asks each basis about **itself**: the same decks through the same seam, each
 basis scored against **its own N = 160 answer** — the finest rung of the
 table above, so every number here can be read off it.
 
-| segments | bs2 error | razor-nec5 error |
+| segments | bs2 error | razor-2p error |
 |---|---|---|
 | 4 | 2.81 Ω | 80.14 Ω |
 | 20 | 0.82 Ω | 6.67 Ω |
@@ -118,7 +126,7 @@ there.
 
 **Where the last ohm actually lives** (measured 2026-08-26; `parity_limits()`
 in the probe script is the receipt). Extrapolate both ladders and the two
-formulations nearly meet: razor-nec5's limit lands 0.08–0.21 Ω from bs2's,
+formulations nearly meet: razor-2p's limit lands 0.08–0.21 Ω from bs2's,
 depending on the extrapolation model. Of the roughly one ohm between the
 bases at N = 160 (0.95 Ω through this seam, 1.05 Ω on the probe's direct
 ladder), almost all is the twin still descending the O(1/N) path it shares
@@ -144,12 +152,12 @@ yourself works — copy a **launcher** (a couple of hundred kilobytes, not the
 engine), rename the copy to `momwire-eznec-<basis>.exe` in the same folder,
 and that basis answers. This is the same rule the
 [SimNEC portal's](/reference/portal-usage/) `momwire-nec2c-<basis>` commands
-use, with one owner behind both. The bundle ships two rather than all eight
-because the pair is what the parity work was about; the other five are a copy
+use, with one owner behind both. The bundle ships three rather than all eight
+because that is what the parity work was about; the other five are a copy
 away:
 
 ```text
-bspline  bspline-d1  hmatrix  arrayblock  razor-nec5
+bspline  bspline-d1  hmatrix  arrayblock  razor-2p  razor-nec5
 sinusoidal  sinusoidal-galerkin
 ```
 
@@ -266,8 +274,8 @@ physics as [the SimNEC portal's](/reference/portal-usage/) default, where the
 full eight-engine roster and the cross-basis validation workflow are
 documented. On the models where we hold a licensed NEC-5 reference, the
 portal's printouts agree with the engine's element for element at the
-sub-percent level, and the in-house NEC-5 formulation twin
-(`razor-nec5`) rides the licensed engine's own convergence path at the
+sub-percent level, and the in-house razor-blade formulation
+(`razor-2p`) rides the licensed engine's own convergence path at the
 0.01 % level — the receipts behind the word "emulates".
 
 ## From a source checkout
