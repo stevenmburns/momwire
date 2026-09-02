@@ -347,6 +347,7 @@ from . import (
     _ground_refl,
     _ground_spec,
     _medium_spec,
+    _crossing_fill,
     _potential_ground,
     _sommerfeld_below,
     _wire_loading,
@@ -3072,6 +3073,106 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 Z, prepared["loading"], _wire_loading.loading_for(self, omega, geom)
             )
         return Z
+
+    # ------------------------------------------------------------------
+    # the crossing trunk's view of this solver (momwire#813)
+    # ------------------------------------------------------------------
+
+    def _crossing_context(self, geom, k=None, omega=None, *, ground_eps=None):
+        """What `_crossing_fill` reads off this solver, as data (momwire#801):
+        razor's tents as per-segment polynomials, the five geometry
+        columns, the buried medium, and the four scalars.
+
+        The tent basis in `BasisPolynomials`' language is one line per wing:
+        `σ·u/h` on a rising wing (value 1 at the knot end), `σ·(1 − u/h)` on
+        a falling one, read straight off `wing_seg` / `wing_rise` /
+        `wing_sigma`. A wing with σ = 0 (a grounded tent's image side) is a
+        zero polynomial, which is the padding case `axis_data` guards.
+        Measured through the trunk against razor's own free-space fill at
+        ε̃ = 1 (momwire#651's probe): the interior cross block to 6.6e-6.
+
+        `ground_eps` overrides the solver's, so a gate can ask for the ε̃ = 1
+        collapse on a free-space solver whose geometry is the same.
+        """
+        k = self.k if k is None else k
+        omega = self.omega if omega is None else omega
+        eps_spec = self.ground_eps if ground_eps is None else ground_eps
+        n_basis = geom["n_basis_total"]
+        seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
+        wing_seg, wing_rise = geom["wing_seg"], geom["wing_rise"]
+        wing_sigma = geom["wing_sigma"]
+        supp = np.zeros((n_basis, 2), dtype=np.int64)
+        polys = np.zeros((n_basis, 2, 2))
+        for n in range(n_basis):
+            for j in range(2):
+                seg = int(wing_seg[n, j])
+                h = seg_h[seg]
+                sig = float(wing_sigma[n, j])
+                supp[n, j] = seg
+                if wing_rise[n, j]:
+                    polys[n, j] = (0.0, sig / h)
+                else:
+                    polys[n, j] = (sig, -sig / h)
+        return _crossing_fill.CrossingContext(
+            basis=_crossing_fill.BasisPolynomials(supp, polys, 1),
+            geom=_crossing_fill.AxisGeometry(
+                seg_p0,
+                seg_p0 + seg_h[:, None] * seg_t,
+                seg_h,
+                seg_t,
+                np.asarray(geom["seg_offsets"], dtype=np.int64),
+            ),
+            medium=_crossing_fill.buried_medium(eps_spec, omega, self.eps, k),
+            ground_z=0.0 if self.ground_z is None else float(self.ground_z),
+            a_wire=float(self._radius_per_wire[0]),
+            omega=omega,
+            mu=self.mu,
+            eps=self.eps,
+        )
+
+    def _path_test_rows(self, geom, rows, *, halves="both"):
+        """`_crossing_fill.path_test_axis` records for razor's testing paths.
+
+        One record per row in `rows` — the path's quadrature points, tangents
+        and weights from `_testing_paths`, the segment each point lies on,
+        and the two centroids the T2 term differences between. `halves`
+        selects the whole path (`"both"`), or one half of it with the KNOT
+        as the shared endpoint (`"A"`: centroid(A) → knot, `"B"`: knot →
+        centroid(B)) — how a row whose path crosses the plane is chopped at
+        it (momwire#813), since the trunk's tables take an observer on one
+        side only.
+        """
+        pts, tans, wts = self._testing_paths(geom)
+        q = pts.shape[1] // 2
+        seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
+        wing_seg = geom["wing_seg"]
+        cent = seg_p0 + 0.5 * seg_h[:, None] * seg_t
+        knot = self._knot_points(geom)
+        out = []
+        for m in rows:
+            s_a, s_b = int(wing_seg[m, 0]), int(wing_seg[m, 1])
+            if halves == "both":
+                sl = slice(0, 2 * q)
+                seg = np.concatenate([np.full(q, s_a), np.full(q, s_b)])
+                before, after = cent[s_a], cent[s_b]
+            elif halves == "A":
+                sl, seg, before, after = (
+                    slice(0, q),
+                    np.full(q, s_a),
+                    cent[s_a],
+                    knot[m],
+                )
+            elif halves == "B":
+                sl, seg, before, after = (
+                    slice(q, 2 * q),
+                    np.full(q, s_b),
+                    knot[m],
+                    cent[s_b],
+                )
+            else:
+                raise ValueError(f"halves must be 'both', 'A' or 'B', got {halves!r}")
+            out.append((m, pts[m, sl], tans[m, sl], wts[m, sl], seg, before, after))
+        return out
 
     def _assemble_Z_below_plane(self, geom, prepared, k, omega):
         """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1

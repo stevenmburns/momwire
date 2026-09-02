@@ -533,6 +533,60 @@ def axis_data(ctx, seg_idx, coarse=False):
     )
 
 
+def path_test_axis(n_basis, rows):
+    """An axis dict for PATH-tested rows (momwire#813): razor's razor-blade
+    testing spelled in `axis_data`'s own language, so every block function
+    here serves it unchanged.
+
+    `rows` is an iterable of ``(m, nodes, t, w, segof, c_before, c_after)``:
+    row `m`'s testing-path quadrature points ``(q, 3)``, their flow-direction
+    tangents ``(q, 3)``, weights ``(q,)``, the global segment each point lies
+    on ``(q,)``, and the path's two endpoints. The dict then reads
+
+      * ``F[m]`` = 1 on row m's own points and 0 elsewhere (the pulse),
+      * ``Fd`` = 0 (the pulse has no interior derivative),
+      * ``ends`` = ``(c_before, −1, e_m)`` and ``(c_after, +1, e_m)`` — the
+        T2 endpoints with razor's signs, ``e_m`` the one-hot row vector,
+
+    which makes the sandwich's ``F_A·t̂`` terms razor's T1 and the BT end term
+    razor's T2 = Φ(c_after) − Φ(c_before), and nothing else survives on the
+    test side. Measured against razor's own free-space fill at ε̃ = 1
+    (momwire#651's probe): interior rows 6.6e-6 relative with the elementwise
+    ratio exactly 1, the junction column 7.2e-9, the junction row's
+    chopped-at-the-node half 5.3e-5 with `corner=False`.
+
+    A row whose path crosses the plane (the crossing tent's) must be CHOPPED
+    at the plane by the caller, one record per half with the node as the
+    shared endpoint: the trunk's tables take an observer on one side only.
+    """
+    nodes, tl, wl, F, segof, ends = [], [], [], [], [], []
+    for m, pts, t, w, seg, c_before, c_after in rows:
+        pts = np.asarray(pts, dtype=float)
+        q = pts.shape[0]
+        nodes.append(pts)
+        tl.append(np.asarray(t, dtype=float))
+        wl.append(np.asarray(w, dtype=float))
+        f = np.zeros((n_basis, q))
+        f[m] = 1.0
+        F.append(f)
+        segof.append(np.asarray(seg, dtype=np.int64))
+        e = np.zeros(n_basis)
+        e[m] = 1.0
+        ends.append((np.asarray(c_before, dtype=float), -1.0, e))
+        ends.append((np.asarray(c_after, dtype=float), +1.0, e))
+    n_pts = sum(x.shape[0] for x in nodes)
+    return dict(
+        nodes=np.concatenate(nodes) if nodes else np.zeros((0, 3)),
+        t=np.concatenate(tl) if tl else np.zeros((0, 3)),
+        w=np.concatenate(wl) if wl else np.zeros(0),
+        F=np.concatenate(F, axis=1) if F else np.zeros((n_basis, 0)),
+        Fd=np.zeros((n_basis, n_pts)),
+        ends=ends,
+        n_basis=n_basis,
+        segof=np.concatenate(segof) if segof else np.zeros(0, dtype=np.int64),
+    )
+
+
 def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None):
     """Designed tables with the deck's wire radius folded in, z relative
     to the interface. `memo` extends the exact-triple dedup across calls
@@ -543,7 +597,7 @@ def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None):
     )
 
 
-def cross_complete_block(ctx, A, B):
+def cross_complete_block(ctx, A, B, *, corner=True):
     """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
     on designed kernels. Returns the full (n_basis, n_basis) block in the
     subtracting field-block convention (`Z -= t_ab`; t_ba is the transpose
@@ -573,11 +627,11 @@ def cross_complete_block(ctx, A, B):
     s_w2 = FdA_w @ W @ (FB_w * tzB).T
     s_phi = -FdA_w @ V @ FdB_w.T
     t_ab = c1 * (s_u + s_zz + s_w1 + s_w2 + s_phi)
-    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz)
+    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, corner=corner)
     return t_ab
 
 
-def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
+def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
     """The by-parts end terms + the designed corner, on the DENSE axes —
     linear in axis size, so the admissibility split never touches them
     (and the corner must never see coarse axes or a low-rank pass; its
@@ -629,6 +683,13 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     # INTERFACE corner, so it applies only to end pairs that BOTH stand
     # in the plane — an end elsewhere (the P3 fan's below-hub junction)
     # carries its by-parts terms above but no corner.
+    if not corner:
+        # A path-tested row (momwire#813): its in-plane endpoint is a plain
+        # potential evaluation at z = 0⁺ (the BT term above), and the corner
+        # is a Galerkin by-parts term it never had. Measured on momwire#651's
+        # probe: with the corner the razor node row is off by 1.9e5 where
+        # razor's own kernel has none; without it, 5e-5 (quadrature).
+        return t_ab
     a_wire = float(ctx.a_wire)
     v_corner = None
     for pt_a, sig_a, fv_a in A["ends"]:
@@ -686,7 +747,7 @@ def _axis_segment_tree(geom, seg_idx, leaf):
     return tree, idx
 
 
-def cross_complete_block_split(ctx, a_idx, b_idx, A, B):
+def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True):
     """`cross_complete_block` through the #688 admissibility split.
 
     The (above segments × below segments) product is partitioned by the
@@ -704,7 +765,7 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B):
     axes direct, always — they are linear in axis size and the corner
     routes through neither coarse axes nor the low-rank pass."""
     if _FORCE_DENSE:
-        return cross_complete_block(ctx, A, B)
+        return cross_complete_block(ctx, A, B, corner=corner)
 
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
@@ -842,7 +903,7 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B):
         )
 
     t_ab = c1 * t_main
-    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo)
+    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner)
     return t_ab
 
 
