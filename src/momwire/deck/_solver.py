@@ -88,8 +88,10 @@ _C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 # with two spellings of one dish is what that issue was about.  "bspline" is
 # the degree-2 B-spline — the default here as it is there.
 #
-# `razor-2p` (momwire#432) is the NEC-5 formulation twin — see
-# ``docs/razor-solver.md``. "razor-nec5" is its deprecated spelling
+# `razor-2p` (momwire#432) is RazorSolver — the tent basis with razor-blade
+# testing, the formulation NEC-5 identifies with; the measurements retreated
+# from calling it a twin (momwire#785) — see ``docs/razor-solver.md``.
+# "razor-nec5" is its deprecated spelling
 # (momwire#316): same class, `nec5_quadrature=True`, the same "one class,
 # one extra kwarg" shape `bspline-d1` set for a degree axis. Plain `razor` —
 # the Gauss-Legendre testing-path lane of the same class — retired from this
