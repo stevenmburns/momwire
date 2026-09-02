@@ -125,9 +125,41 @@ static inline void razor_statics_ek(double u_r, double rho2, double h,
 // Fused segment moments at one wavenumber. Returns (M0, M1); M1 is a (0, 0)
 // array when `need_m1` is false, which is how the caller spells "the scalar
 // potential only needs M0" without a second entry point.
+//
+// COMPLEX_K continues this kernel to an in-medium (lossy) wavenumber
+// k = k_re + j*k_im with Im k <= 0 (momwire#796) — the same door #778 opened
+// on bspline's off-edge kernel, which the block comment above
+// `seg_seg_full_moments_bspline_kernel` states in full. The core of it:
+//
+//     exp(-jkR) = exp(k_im * R) * (cos(k_re*R) - j*sin(k_re*R))
+//                 ^^^^^^^^^^^^^ real, monotone in (0, 1] since k_im <= 0
+//
+// so the trig stays in real lanes and picks up one extra real exp() per point.
+// The King & Smith trap #778 records applies here verbatim: substituting |k|
+// for a real k is NOT the continuation, and this kernel was exactly that
+// spelling while it only ever served real k.
+//
+// Razor's two branches do not transfer identically, which is the whole of the
+// difference from #778:
+//
+//   - REDUCED pairs integrate (exp(-jkR) - 1)/R. Only the trig is scaled; the
+//     `- 1` and the k-free statics are untouched.
+//   - EK pairs form C1 = 1 + jkR and C2 = 3*C1 - (kR)^2, which are genuinely
+//     complex in kR once k is: jkR contributes -Im(k)*R to the REAL part and
+//     (kR)^2 acquires an imaginary part. Those are spelled below term for term
+//     and in the same multi-step order as `_ek_factor` / `_ek_reg_extra` in
+//     `_bspline_kernels.py`, which are numpy-generic and already correct at
+//     complex k. Verified against them to 0.0 relative before this was written.
+//
+// `if (COMPLEX_K)` rather than `if constexpr`: the build is -std=gnu++11, and
+// this is the idiom `if (ek_pair)` already uses here. The branch folds at -O3,
+// and the <false> instantiation is textually the pre-#796 loop so the real-k
+// output stays bit-identical (proven by rebuild and array_equal, the #762
+// protocol, not by reading).
+template<bool COMPLEX_K>
 static std::pair<py::array_t<std::complex<double>>,
                  py::array_t<std::complex<double>>>
-razor_seg_moments(
+razor_seg_moments_impl(
     py::array_t<double, py::array::c_style | py::array::forcecast> obs,     // (n_obs, 3)
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_p0,  // (n_seg, 3)
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_t,   // (n_seg, 3)
@@ -135,7 +167,8 @@ razor_seg_moments(
     py::array_t<double, py::array::c_style | py::array::forcecast> a,       // (n_seg,)
     py::array_t<double, py::array::c_style | py::array::forcecast> xg,      // (n_qp,)
     py::array_t<double, py::array::c_style | py::array::forcecast> wg,      // (n_qp,)
-    double k,
+    double k_re,
+    double k_im,
     bool need_m1,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i, // (n_obs,) or ()
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j, // (n_seg,) or ()
@@ -296,12 +329,22 @@ razor_seg_moments(
                         for (size_t q = 0; q < n_qp; q++) {
                             const double u = tq[q] - u_r;
                             const double R = std::sqrt(u * u + rho2);
-                            const double kr = k * R;
+                            const double kr = k_re * R;
                             // exp(−jkR) − 1, then the complex-by-real divide
                             // numpy performs (Smith's algorithm collapses to
                             // a componentwise divide on a real denominator).
-                            const double nr = std::cos(kr) - 1.0;
-                            const double ni = -std::sin(kr);
+                            double nr, ni;
+                            if (COMPLEX_K) {
+                                // exp(k_im*R), k_im <= 0: decaying, so no
+                                // overflow, and underflow to +0 at large R is
+                                // the physical answer. The `- 1` is NOT scaled.
+                                const double decay = std::exp(k_im * R);
+                                nr = decay * std::cos(kr) - 1.0;
+                                ni = -decay * std::sin(kr);
+                            } else {
+                                nr = std::cos(kr) - 1.0;
+                                ni = -std::sin(kr);
+                            }
                             const double rr = nr / R, ri = ni / R;
                             a0r += rr * wqq[q];
                             a0i += ri * wqq[q];
@@ -320,21 +363,46 @@ razor_seg_moments(
                             const double R = std::sqrt(u * u + rho2);
                             const double r2 = R * R;
                             const double r4 = r2 * r2;
-                            const double kr = k * R;
-                            const double kr2 = kr * kr;
+                            const double kr = k_re * R;
                             const double t1 = 0.25 * a4 / r4;
                             const double t2 = 0.5 * a2 / r2;
-                            // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
-                            const double c1r = 1.0, c1i = kr;
-                            const double c2r = 3.0 * c1r - kr2, c2i = 3.0 * c1i;
-                            // fac = t1·C2 − t2·C1 + 1
-                            const double facr = t1 * c2r - t2 * c1r + 1.0;
-                            const double faci = t1 * c2i - t2 * c1i;
-                            // extra = t1·(3jkR − (kR)²) − t2·(jkR)
-                            const double exr = t1 * (-kr2);
-                            const double exi = t1 * (3.0 * kr) - t2 * kr;
-                            const double br = std::cos(kr) - 1.0;
-                            const double bi = -std::sin(kr);
+                            double facr, faci, exr, exi, br, bi;
+                            if (COMPLEX_K) {
+                                // kR is complex: jkR = −Im(k)R + j·Re(k)R, so
+                                // C1 picks up a REAL term, and (kR)² an
+                                // imaginary one. Term for term and in the same
+                                // multi-step order as `_ek_factor` /
+                                // `_ek_reg_extra`, which are the reference.
+                                const double kri = k_im * R;
+                                const double kr2r = kr * kr - kri * kri;
+                                const double kr2i = 2.0 * kr * kri;
+                                // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
+                                const double c1r = 1.0 - kri, c1i = kr;
+                                const double c2r = 3.0 * c1r - kr2r;
+                                const double c2i = 3.0 * c1i - kr2i;
+                                // fac = t1·C2 − t2·C1 + 1
+                                facr = t1 * c2r - t2 * c1r + 1.0;
+                                faci = t1 * c2i - t2 * c1i;
+                                // extra = t1·(3jkR − (kR)²) − t2·(jkR)
+                                exr = t1 * (-3.0 * kri - kr2r) + t2 * kri;
+                                exi = t1 * (3.0 * kr - kr2i) - t2 * kr;
+                                const double decay = std::exp(kri);
+                                br = decay * std::cos(kr) - 1.0;
+                                bi = -decay * std::sin(kr);
+                            } else {
+                                const double kr2 = kr * kr;
+                                // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
+                                const double c1r = 1.0, c1i = kr;
+                                const double c2r = 3.0 * c1r - kr2, c2i = 3.0 * c1i;
+                                // fac = t1·C2 − t2·C1 + 1
+                                facr = t1 * c2r - t2 * c1r + 1.0;
+                                faci = t1 * c2i - t2 * c1i;
+                                // extra = t1·(3jkR − (kR)²) − t2·(jkR)
+                                exr = t1 * (-kr2);
+                                exi = t1 * (3.0 * kr) - t2 * kr;
+                                br = std::cos(kr) - 1.0;
+                                bi = -std::sin(kr);
+                            }
                             const double nr = br * facr - bi * faci + exr;
                             const double ni = br * faci + bi * facr + exi;
                             const double rr = nr / R, ri = ni / R;
@@ -360,6 +428,66 @@ razor_seg_moments(
 
     return {M0, M1};
 }
+
+
+// The real-k entry — the only one razor's two quadrature lanes reach today.
+// Its <false> instantiation is textually the pre-#796 loop, so this call is
+// bit-identical to the kernel as it shipped.
+static std::pair<py::array_t<std::complex<double>>,
+                 py::array_t<std::complex<double>>>
+razor_seg_moments(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs,     // (n_obs, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_p0,  // (n_seg, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_t,   // (n_seg, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,   // (n_seg,)
+    py::array_t<double, py::array::c_style | py::array::forcecast> a,       // (n_seg,)
+    py::array_t<double, py::array::c_style | py::array::forcecast> xg,      // (n_qp,)
+    py::array_t<double, py::array::c_style | py::array::forcecast> wg,      // (n_qp,)
+    double k,
+    bool need_m1,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i, // (n_obs,) or ()
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j, // (n_seg,) or ()
+    py::array_t<double, py::array::c_style | py::array::forcecast> a_ek,     // (n_seg,) or ()
+    uintptr_t cancel_flag = 0
+) {
+    return razor_seg_moments_impl<false>(
+        obs, seg_p0, seg_t, seg_h, a, xg, wg,
+        k, 0.0, need_m1, group_i, group_j, a_ek, cancel_flag);
+}
+
+// The in-medium entry (momwire#796). Throws `std::invalid_argument` rather
+// than the `std::runtime_error` its #778 bspline twin throws, because #796
+// asks for the refusal to reach Python as a ValueError and pybind11 maps this
+// one there; the twin predates that ask and still raises RuntimeError.
+static std::pair<py::array_t<std::complex<double>>,
+                 py::array_t<std::complex<double>>>
+razor_seg_moments_cplx(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs,     // (n_obs, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_p0,  // (n_seg, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_t,   // (n_seg, 3)
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,   // (n_seg,)
+    py::array_t<double, py::array::c_style | py::array::forcecast> a,       // (n_seg,)
+    py::array_t<double, py::array::c_style | py::array::forcecast> xg,      // (n_qp,)
+    py::array_t<double, py::array::c_style | py::array::forcecast> wg,      // (n_qp,)
+    std::complex<double> k,
+    bool need_m1,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i, // (n_obs,) or ()
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j, // (n_seg,) or ()
+    py::array_t<double, py::array::c_style | py::array::forcecast> a_ek,     // (n_seg,) or ()
+    uintptr_t cancel_flag = 0
+) {
+    if (k.imag() > 0.0) {
+        throw std::invalid_argument(
+            "razor_seg_moments_cplx: Im k > 0 is the growing exponential "
+            "branch; e^{+jwt} requires Im k <= 0 so e^{-jkR} decays. Take the "
+            "other branch of k_m = k0*sqrt(eps_tilde); this kernel will not "
+            "conjugate for you.");
+    }
+    return razor_seg_moments_impl<true>(
+        obs, seg_p0, seg_t, seg_h, a, xg, wg,
+        k.real(), k.imag(), need_m1, group_i, group_j, a_ek, cancel_flag);
+}
+
 
 // ---------------------------------------------------------------------------
 // T1 assembly (momwire#780)
@@ -512,6 +640,24 @@ void register_razor(py::module_ &m) {
           ">= 0); pass empty arrays for the reduced kernel. a is the axis "
           "frame's regularising radius per SOURCE segment and a_ek the EK "
           "radius, both as (n_seg,) columns.",
+          py::arg("obs"), py::arg("seg_p0"), py::arg("seg_t"), py::arg("seg_h"),
+          py::arg("a"), py::arg("xg"), py::arg("wg"), py::arg("k"),
+          py::arg("need_m1"), py::arg("group_i"), py::arg("group_j"),
+          py::arg("a_ek"), py::arg("cancel_flag") = 0);
+
+    // momwire#796, on its OWN flag for the same reason `razor_fill_742` is:
+    // a .so built before this lands exports the real-k kernel and not this,
+    // and the Python gate must be able to tell the difference rather than
+    // assume one symbol implies the other.
+    m.attr("razor_cplx_796") = true;
+    m.def("razor_seg_moments_cplx", &razor_seg_moments_cplx,
+          "The in-medium (complex k) twin of razor_seg_moments (momwire#796). "
+          "Identical in shape and meaning; k is a complex wavenumber with "
+          "Im k <= 0, and exp(-jkR) is continued as the real scale factor "
+          "exp(Im(k) R) on the trig part, so the reduced branch's `- 1` and "
+          "the k-free statics are untouched while the EK branch's C1/C2 pick "
+          "up their terms in Im(k) R. Raises ValueError on Im k > 0, the "
+          "growing-exponential branch this kernel will not evaluate.",
           py::arg("obs"), py::arg("seg_p0"), py::arg("seg_t"), py::arg("seg_h"),
           py::arg("a"), py::arg("xg"), py::arg("wg"), py::arg("k"),
           py::arg("need_m1"), py::arg("group_i"), py::arg("group_j"),
