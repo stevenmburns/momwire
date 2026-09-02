@@ -620,6 +620,262 @@ razor_assemble_t1(
 }
 
 
+// `_ground_refl._TINY`. Both guards below are that constant, and it has to be
+// the same number: it is what decides whether a ray counts as vertical.
+static constexpr double RAZOR_REFL_TINY = 1e-30;
+
+// One pair's A-term weight window, formed in registers and dropped.
+//
+// This is `specular_ray_tables` -> `specular_pair_tables` -> `fresnel_rho` ->
+// `a_term_weights` for a SINGLE (observer, source segment) pair, in that order
+// and term for term. The numpy spelling of that chain builds nine
+// (n_obs_chunk, n_seg) float64 tables and three complex ones to produce a
+// table the assembler reads twice per basis function and throws away; here
+// each value is produced where it is consumed. That is the whole of #744 --
+// the arithmetic is unchanged, and the multi-step order is preserved
+// deliberately so the two paths agree to the bars rather than by luck.
+//
+// REFL-COEF ONLY, and that is a contract rather than a first cut. The
+// `mode == "compose"` (sommerfeld) window is the constant C2 on the same
+// mirrored tangent dot, and it would fuse here trivially -- but C2 reaches Z
+// THROUGH THE WINDOWS by design (`PotentialGround.image_coefficient`), and a
+// consumer that reads the attribute and applies it itself doubles the exact-
+// image half. `test_the_consumer_never_applies_the_image_coefficient_itself`
+// pins exactly that, with a ground that lies about its coefficient while its
+// weights stay honest, and it caught this kernel serving compose. So the
+// sommerfeld contraction stays on numpy until C2 can be routed without the
+// consumer reading it.
+//
+// A ground whose weights are NOT the stock Fresnel pair -- the radial
+// screen's `standard_fresnel = False` row -- must never reach here either;
+// the Python gate refuses it rather than this function guessing.
+static inline std::complex<double> razor_a_window(
+    double ox, double oy, double oz,     // observer centre
+    double tx, double ty, double tz,     // observer tangent
+    double sx, double sy, double sz,     // source centre (REAL, unmirrored)
+    double ux, double uy, double uz,     // source tangent (REAL)
+    double ground_z,
+    const std::complex<double> &eps_t
+) {
+    // t_m . M t_n with M = diag(1, 1, -1) -- `_ground_mirror.mirror_tangents`
+    // is a pure z-flip, so the mirror is this one sign and no offset.
+    const double td_img = tx * ux + ty * uy - tz * uz;
+
+    // The specular ray: image midpoint (x_n, y_n, 2 z_g - z_n) to r_m.
+    const double dx = ox - sx;
+    const double dy = oy - sy;
+    const double dz = oz + sz - 2.0 * ground_z;
+
+    // `np.hypot(dx, dy)`, then the norm accumulated (dx^2 + dy^2) + dz^2 --
+    // the association the numpy tile spells out, so the same rounding.
+    const double hyp = std::hypot(dx, dy);
+    double r = dx * dx;
+    r += dy * dy;
+    r += dz * dz;
+    r = std::sqrt(r);
+    if (r < RAZOR_REFL_TINY) {
+        r = RAZOR_REFL_TINY;  // np.maximum(., _TINY)
+    }
+    const double cos_th = dz / r;
+
+    // p_hat = (-dy, dx, 0)/hyp; a near-vertical ray has no incidence plane and
+    // falls back to x_hat. Harmless: rho_v = -rho_h at theta = 0 makes the
+    // dyad isotropic there.
+    double p_x, p_y;
+    if (hyp > RAZOR_REFL_TINY) {
+        const double inv_hyp = 1.0 / hyp;
+        p_x = -(dy * inv_hyp);
+        p_y = dx * inv_hyp;
+    } else {
+        p_x = 1.0;
+        p_y = 0.0;
+    }
+
+    const double tm_p = tx * p_x + ty * p_y;
+    const double tn_p = ux * p_x + uy * p_y;
+    const double P = tm_p * tn_p;
+
+    // `fresnel_rho`. Principal-branch sqrt has Im <= 0 for Im(eps_t) <= 0, the
+    // decaying-transmitted-wave branch, matching NEC.
+    const double sin2 = 1.0 - cos_th * cos_th;
+    const std::complex<double> root = std::sqrt(eps_t - sin2);
+    const std::complex<double> ec = eps_t * cos_th;
+    const std::complex<double> rho_v = (ec - root) / (ec + root);
+    const std::complex<double> rho_h = (cos_th - root) / (cos_th + root);
+
+    // `a_term_weights`.
+    return rho_v * (td_img - P) - rho_h * P;
+}
+
+// momwire#744: the WEIGHTED twin of `razor_assemble_t1`.
+//
+// `razor_assemble_t1` serves the unweighted integrand only -- free space and
+// the folding grounds -- and says so. The finite-ground weighted branch kept
+// its numpy path because it carries a per-pair weight table that signature has
+// no room for. This is that branch, with the table formed inside the tile
+// instead of passed into it.
+//
+// WHY THIS IS THE SAME KERNEL AND NOT A DIFFERENT ONE
+// ---------------------------------------------------
+// The two differ in exactly one factor. Unweighted contracts the observer
+// tangent against the source tangent, a REAL dot; weighted replaces that dot
+// wholesale with a COMPLEX per-pair window, which is why `td_a` / `td_b`
+// (which have sigma folded in) are absent here and `sig_a` / `sig_b` arrive on
+// their own. Everything around it -- the two-wing gather out of (M0, M1), the
+// falling-wing correction, the path weight, the sum over the path points -- is
+// the loop above, term for term.
+//
+// WHAT IS NEVER FORMED
+// --------------------
+// The numpy path builds the full (n_obs_chunk, n_seg) window plane and then
+// reads two columns of it per basis function. This computes the two columns it
+// needs and nothing else. That is ~2 windows per (observer, basis) against
+// n_seg per observer, i.e. MORE window arithmetic (each wing segment is
+// referenced by about two basis functions, so roughly 2x), traded for the
+// plane's memory traffic and for OpenMP. `_WEIGHTED_CHUNK_ELEMS` exists to
+// keep that plane's transient in the same class as an unweighted chunk's; it
+// still sets the chunking here, and is now a schedule number only.
+//
+// The numpy path stays as the reference and the fallback -- this is a gate,
+// not a replacement.
+static py::array_t<std::complex<double>>
+razor_assemble_t1_weighted(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> M0,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> M1,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> s_a,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> s_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_a,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_b,
+    py::array_t<bool, py::array::c_style | py::array::forcecast> fall_a,
+    py::array_t<bool, py::array::c_style | py::array::forcecast> fall_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> sig_a,
+    py::array_t<double, py::array::c_style | py::array::forcecast> sig_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_c,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_c,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wts,
+    size_t n_path,
+    std::complex<double> eps_t,
+    double ground_z
+) {
+    auto m0 = M0.unchecked<2>();
+    auto m1 = M1.unchecked<2>();
+    auto sa = s_a.unchecked<1>();
+    auto sb = s_b.unchecked<1>();
+    auto ha = h_a.unchecked<1>();
+    auto hb = h_b.unchecked<1>();
+    auto fa = fall_a.unchecked<1>();
+    auto fb = fall_b.unchecked<1>();
+    auto ga = sig_a.unchecked<1>();
+    auto gb = sig_b.unchecked<1>();
+    auto oc = obs_c.unchecked<2>();
+    auto ot = obs_t.unchecked<2>();
+    auto sc = src_c.unchecked<2>();
+    auto st = src_t.unchecked<2>();
+    auto w = wts.unchecked<1>();
+
+    const size_t n_obs = static_cast<size_t>(m1.shape(0));
+    const size_t n_seg = static_cast<size_t>(m1.shape(1));
+    const size_t n_basis = static_cast<size_t>(sa.shape(0));
+
+    if (n_path == 0 || n_obs % n_path != 0) {
+        throw std::runtime_error(
+            "razor_assemble_t1_weighted: n_obs must be a whole number of "
+            "testing-path points (n_obs % n_path != 0)");
+    }
+    if (static_cast<size_t>(oc.shape(0)) != n_obs ||
+        static_cast<size_t>(ot.shape(0)) != n_obs ||
+        static_cast<size_t>(w.shape(0)) != n_obs) {
+        throw std::runtime_error(
+            "razor_assemble_t1_weighted: obs_c, obs_t and wts must have one "
+            "row per observer");
+    }
+    if (oc.shape(1) != 3 || ot.shape(1) != 3 ||
+        sc.shape(1) != 3 || st.shape(1) != 3) {
+        throw std::runtime_error(
+            "razor_assemble_t1_weighted: centres and tangents must be "
+            "3-vectors");
+    }
+    if (static_cast<size_t>(sc.shape(0)) != n_seg ||
+        static_cast<size_t>(st.shape(0)) != n_seg) {
+        throw std::runtime_error(
+            "razor_assemble_t1_weighted: src_c and src_t must have one row per "
+            "source segment");
+    }
+    if (static_cast<size_t>(sb.shape(0)) != n_basis ||
+        static_cast<size_t>(ga.shape(0)) != n_basis ||
+        static_cast<size_t>(gb.shape(0)) != n_basis) {
+        throw std::runtime_error(
+            "razor_assemble_t1_weighted: per-basis arrays disagree on n_basis");
+    }
+    for (size_t j = 0; j < n_basis; j++) {
+        if (sa(j) < 0 || static_cast<size_t>(sa(j)) >= n_seg ||
+            sb(j) < 0 || static_cast<size_t>(sb(j)) >= n_seg) {
+            throw std::runtime_error(
+                "razor_assemble_t1_weighted: wing segment index out of range");
+        }
+    }
+
+    const size_t n_rows = n_obs / n_path;
+    py::array_t<std::complex<double>> T1({n_rows, n_basis});
+    auto out = T1.mutable_unchecked<2>();
+
+    py::gil_scoped_release release;
+
+    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t r = 0; r < n_rows; r++) {
+        for (size_t j = 0; j < n_basis; j++) {
+            const size_t ja = static_cast<size_t>(sa(j));
+            const size_t jb = static_cast<size_t>(sb(j));
+            const double inv_ha = 1.0 / ha(j);
+            const double inv_hb = 1.0 / hb(j);
+            const bool fall_j_a = fa(j);
+            const bool fall_j_b = fb(j);
+            const double sg_a = ga(j);
+            const double sg_b = gb(j);
+
+            // The two wing segments' geometry is per-basis, so it is hoisted
+            // out of the path-point loop exactly as the tangents are above.
+            const double acx = sc(ja, 0), acy = sc(ja, 1), acz = sc(ja, 2);
+            const double atx = st(ja, 0), aty = st(ja, 1), atz = st(ja, 2);
+            const double bcx = sc(jb, 0), bcy = sc(jb, 1), bcz = sc(jb, 2);
+            const double btx = st(jb, 0), bty = st(jb, 1), btz = st(jb, 2);
+
+            std::complex<double> acc(0.0, 0.0);
+            for (size_t p = 0; p < n_path; p++) {
+                const size_t o = r * n_path + p;
+
+                // mom_a = M1/h on a rising wing, M0 - M1/h on a falling one.
+                std::complex<double> ma = m1(o, ja) * inv_ha;
+                if (fall_j_a) ma = m0(o, ja) - ma;
+                std::complex<double> mb = m1(o, jb) * inv_hb;
+                if (fall_j_b) mb = m0(o, jb) - mb;
+
+                const double ox = oc(o, 0), oy = oc(o, 1), oz = oc(o, 2);
+                const double tx = ot(o, 0), ty = ot(o, 1), tz = ot(o, 2);
+
+                // `w_A[:, s_a] * sig_a`, one pair at a time.
+                const std::complex<double> wa =
+                    razor_a_window(ox, oy, oz, tx, ty, tz,
+                                   acx, acy, acz, atx, aty, atz,
+                                   ground_z, eps_t) * sg_a;
+                const std::complex<double> wb =
+                    razor_a_window(ox, oy, oz, tx, ty, tz,
+                                   bcx, bcy, bcz, btx, bty, btz,
+                                   ground_z, eps_t) * sg_b;
+
+                // `integrand = wA_a*mom_a + wA_b*mom_b`, then `*= wts`, then
+                // summed over the path -- the numpy order, kept.
+                acc += w(o) * (wa * ma + wb * mb);
+            }
+            out(r, j) = acc;
+        }
+    }
+    return T1;
+}
+
+
 void register_razor(py::module_ &m) {
     // The capability flag lives here, in the TU that defines the symbol it
     // vouches for (#710 review): a build carrying `razor_fill_742` carries
@@ -681,4 +937,31 @@ void register_razor(py::module_ &m) {
           py::arg("h_a"), py::arg("h_b"), py::arg("fall_a"), py::arg("fall_b"),
           py::arg("t_out"), py::arg("td_a"), py::arg("td_b"), py::arg("wts"),
           py::arg("n_path"));
+
+    // momwire#744, on its OWN flag for the same reason every kernel above is:
+    // a .so built before this lands exports the unweighted assembler and not
+    // this, and the Python gate must be able to tell rather than assume the
+    // #780 symbol implies this one.
+    m.attr("razor_weighted_744") = true;
+    m.def("razor_assemble_t1_weighted", &razor_assemble_t1_weighted,
+          "The WEIGHTED twin of razor_assemble_t1 (momwire#744). Same gather, "
+          "falling-wing correction, path weighting and path-point sum, with "
+          "the real tangent contraction replaced by the complex per-pair "
+          "A-term weight window -- formed inside the tile from the observer "
+          "and source geometry, so the (n_obs_chunk, n_seg) window plane the "
+          "numpy closure materialises is never built. "
+          "REFL-COEF ONLY: the specular_pair_tables -> fresnel_rho -> "
+          "a_term_weights chain, from eps_t and ground_z. A composing "
+          "(sommerfeld) ground is NOT served -- its C2 reaches Z through the "
+          "windows by design, and a consumer that applies the attribute "
+          "itself doubles the exact-image half. A ground whose weights are "
+          "not the stock Fresnel pair (standard_fresnel = False) must be "
+          "refused by the caller too. Returns T1 of shape "
+          "(n_obs / n_path, n_basis).",
+          py::arg("M0"), py::arg("M1"), py::arg("s_a"), py::arg("s_b"),
+          py::arg("h_a"), py::arg("h_b"), py::arg("fall_a"), py::arg("fall_b"),
+          py::arg("sig_a"), py::arg("sig_b"), py::arg("obs_c"),
+          py::arg("obs_t"), py::arg("src_c"), py::arg("src_t"),
+          py::arg("wts"), py::arg("n_path"), py::arg("eps_t"),
+          py::arg("ground_z"));
 }
