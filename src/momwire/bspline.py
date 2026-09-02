@@ -1136,6 +1136,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # lifetime as the geometry cache; k-independent, so swept solves
         # reuse it across the whole frequency loop.
         self._cached_image_refl_prep: tuple | None = None
+        # momwire#634: the near-image analytic edge blocks the fast
+        # solvers' sub-block fills gather from, and the spans that say
+        # which segments are on one. Both are properties of the deck
+        # (and, for the blocks, of k), not of any partition.
+        self._cached_near_image_spans: tuple | None = None
+        self._cached_near_image_blocks: dict = {}
         # Per-wire medium labels (momwire#553 U5): geometry plus the three
         # ground kwargs, all frozen after __init__, so one answer per solver.
         self._cached_wire_media: tuple | None = None

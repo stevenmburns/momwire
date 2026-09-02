@@ -656,6 +656,84 @@ class HMatrixSolver(BSplineSolver):
             Zb += self._loading_block(I, J)
         return Zb
 
+    # ------------------------------------------------------------------
+    # The near image on a horizontal edge (momwire#634)
+    # ------------------------------------------------------------------
+
+    def _near_image_edge_spans(self, geom):
+        """`_near_image_edge_blocks` as (start, stop, arc, a_eff) spans.
+
+        Memoised per geometry object: the block fills below ask this once per
+        sub-block, and the answer is a property of the deck alone.
+        """
+        if self.ground_z is None:
+            return []  # no plane, no image, nothing to correct
+        cached = self._cached_near_image_spans
+        if cached is not None and cached[0] is geom:
+            return cached[1]
+        spans = [
+            (int(sl.start), int(sl.stop), arc, a_eff)
+            for sl, arc, a_eff in self._near_image_edge_blocks(geom)
+        ]
+        self._cached_near_image_spans = (geom, spans)
+        return spans
+
+    def _near_image_edge_block_cached(self, e, arc, a_eff, k):
+        """One edge's whole `(d+1, d+1, N, N)` analytic near-image block.
+
+        The dense route builds this per edge and writes it in whole
+        (`_build_J_image_blocks`). A block solver cannot: its row and column
+        ranges are cluster ranges, which do not align with edge boundaries —
+        the obstacle momwire#634 records.
+
+        It dissolves once you notice the block does not have to be built to
+        fit. `J_static_moment` and `_seg_seg_reg_geometry` read the edge's ARC
+        alone, so entry (i, j) of this block is the same number whatever
+        sub-block asks for it. So build the whole edge once, cache it per
+        (edge, k), and let each sub-block gather the rectangle it needs. No
+        rectangular kernel, no alignment, and the value a sub-block reads
+        cannot depend on how the partition happened to cut.
+        """
+        key = (e, complex(k))
+        cached = self._cached_near_image_blocks.get(key)
+        if cached is None:
+            cached = self._near_image_analytic_block(arc, a_eff, k)
+            self._cached_near_image_blocks[key] = cached
+        return cached
+
+    def _apply_near_image_analytic(self, Jsub, seg_I, seg_J, k, geom):
+        """Overwrite `Jsub`'s near-image entries with the closed form.
+
+        momwire#634. `_zblock_image` / `_zblock_image_refl` integrate every
+        image pair at `n_qp_pair`, on the premise that the mirror always
+        separates the image from the original. At grazing that premise fails
+        — a segment's own image sits 2h away, 3.6 cm under a 2.48 m segment
+        on momwire#631's deck — and the two fast solvers kept the pre-#631
+        answer while the dense route was corrected (measured 79.7% apart over
+        PEC on that deck before this).
+
+        Any (observer, source) pair whose BOTH segments lie on one horizontal
+        near-image edge is replaced by that edge's analytic static + reg split
+        at `a_eff`, exactly as the dense route replaces the whole block. Pairs
+        that straddle edges, or that sit on a non-qualifying edge, keep the
+        quadrature fill.
+
+        Mutates and returns `Jsub`.
+        """
+        spans = self._near_image_edge_spans(geom)
+        if not spans:
+            return Jsub
+        for e, (s0, s1, arc, a_eff) in enumerate(spans):
+            ri = np.flatnonzero((seg_I >= s0) & (seg_I < s1))
+            ci = np.flatnonzero((seg_J >= s0) & (seg_J < s1))
+            if ri.size == 0 or ci.size == 0:
+                continue
+            full = self._near_image_edge_block_cached(e, arc, a_eff, k)
+            Jsub[:, :, ri[:, None], ci[None, :]] = full[
+                :, :, (seg_I[ri] - s0)[:, None], (seg_J[ci] - s0)[None, :]
+            ]
+        return Jsub
+
     def _zblock_image(self, I, J, k=None):
         """Return the PEC-image sub-block for the basis pair (I, J): the real
         test bases I reacting against the trial bases J mirrored across
@@ -708,6 +786,7 @@ class HMatrixSolver(BSplineSolver):
                 cols=seg_J,
             ),
         )
+        self._apply_near_image_analytic(Jsub, seg_I, seg_J, k, ctx["geom"])
         supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
         supp_J_local = np.vectorize(loc_of_J.__getitem__)(supp_seg[J])
         td_sub = tangents[seg_I] @ self._image_tangent_dot_cols(tangents[seg_J])
@@ -986,6 +1065,7 @@ class HMatrixSolver(BSplineSolver):
                 cols=seg_J,
             ),
         )
+        self._apply_near_image_analytic(Jsub, seg_I, seg_J, k, ctx["geom"])
         supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
         supp_J_local = np.vectorize(loc_of_J.__getitem__)(supp_seg[J])
         wA_sub, wPhi_sub = self._refl_weight_tables(ctx, seg_I, seg_J)

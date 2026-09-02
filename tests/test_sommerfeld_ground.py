@@ -1040,31 +1040,171 @@ def test_the_grazing_remainder_order_is_keyed_and_matters():
     assert moved > 0.25, f"order-3 answer only {moved:.1%} away — keying inert?"
 
 
-def test_the_fast_solvers_do_not_have_the_near_image_fix_yet():
-    """The scope line of momwire#631, written down so it cannot rot.
+# The bar for the fast solvers against the dense route at grazing. Measured
+# 2026-09-03 across h/lambda in {1.09e-4, 1e-3, 1e-2, 1e-1} x n_seg in
+# {16, 32, 64} x {PEC, refl-coef}: worst 1.8e-13, and 6.6e-14 on the ladder
+# below. The SUPPORTED tolerance for these solvers is ACA/GMRES — 1e-3 in
+# `test_fast_solvers_match_dense`, 1e-4 in the ground_eps twin — so this bar
+# is not a correctness claim beyond that; it is a regression detector, set
+# from the measurement with ~4 orders of margin because the near-image block
+# is now the SAME closed form on both routes, and anything that put the
+# quadrature fill back would land orders above it rather than just outside.
+NEAR_IMAGE_AGREEMENT = 1e-9
 
-    `HMatrixSolver` and `ArrayBlockSolver` reach the image by their own
-    routes — `_zblock_image_refl` for near blocks and a fused ACA twin for far
-    ones — neither of which is the dense/chunked/swept fill the near-image
-    correction lives in. They were already wrong on a grazing deck before
-    #631; what changed is that `BSplineSolver` is now right, so the two
-    disagree instead of agreeing wrongly.
 
-    `test_fast_solvers_match_dense` keeps them honest on an ordinary deck at
-    ACA/GMRES tolerance, and that is where they are supported. This gate is
-    the other half of that sentence: at grazing they are NOT, by a margin
-    nobody could mistake for tolerance (measured 194 % over PEC and 407 % over
-    `GN 0`), and if it ever closes the fixer should come back and turn this
-    into a real agreement pin — the same bargain the eznec seam's grazing
-    decks were held to.
+def test_the_fast_solvers_have_the_near_image_fix():
+    """momwire#634, and the other half of #631's scope line.
+
+    `HMatrixSolver` / `ArrayBlockSolver` reach the image by their own routes —
+    `_zblock_image` / `_zblock_image_refl` for near blocks, a fused ACA twin
+    for far ones — neither of which was the dense/chunked/swept fill #631's
+    near-image correction lives in, so at grazing they kept the pre-#631
+    answer while the dense route was corrected. This replaced
+    `test_the_fast_solvers_do_not_have_the_near_image_fix_yet`, which was
+    written to fail when the fix landed.
+
+    Measured on this ladder before the fix: 79.7 % / 24.3 % (PEC, n = 16/32)
+    and 45.2 % / 14.7 % (refl-coef). After: 6.6e-14 worst.
     """
-    kw = _grazing_wire(1.09e-4 * _GRAZE_WL)
+    for hl in (1.09e-4, 1e-3):
+        for n_seg in (16, 32):
+            for ground in ({}, {"ground_eps": (10.0, 0.002)}):
+                kw = _grazing_wire(hl * _GRAZE_WL, n_seg=n_seg, **ground)
+                z_dense, _ = BSplineSolver(**kw).compute_impedance()
+                for cls in (HMatrixSolver, ArrayBlockSolver):
+                    z_fast, _ = cls(**kw).compute_impedance()
+                    rel = abs(z_fast - z_dense) / abs(z_dense)
+                    assert rel < NEAR_IMAGE_AGREEMENT, (
+                        f"{cls.__name__} h/lambda={hl:.2e} n={n_seg} "
+                        f"{'refl-coef' if ground else 'PEC'}: {rel:.3e}"
+                    )
+
+
+def test_the_near_image_gather_does_not_depend_on_the_partition():
+    """The claim that dissolves momwire#634's stated obstacle.
+
+    H-matrix block boundaries do not align with edge boundaries, so the dense
+    route's whole-edge overwrite cannot be dropped in. It does not need to be:
+    `J_static_moment` and `_seg_seg_reg_geometry` read the edge's ARC alone,
+    so entry (i, j) of the near-image block is the same number whichever
+    sub-block asks for it. Checked directly — rectangular sub-blocks that
+    align with nothing, gathered back, must equal the whole-edge block the
+    dense route writes.
+    """
+    kw = _grazing_wire(1.09e-4 * _GRAZE_WL, n_seg=16)
+    s = HMatrixSolver(**kw)
+    ctx = s._context()
+    geom = ctx["geom"]
+    spans = s._near_image_edge_spans(geom)
+    assert len(spans) == 1, f"expected one near-image edge, got {len(spans)}"
+    s0, s1, arc, a_eff = spans[0]
+    whole = s._near_image_analytic_block(arc, a_eff, s.k)
+
+    n = s1 - s0
+    got = np.zeros_like(whole)
+    for r0, r1 in ((0, 3), (3, 4), (4, n)):
+        for c0, c1 in ((0, 1), (1, 7), (7, n)):
+            seg_I = np.arange(s0 + r0, s0 + r1)
+            seg_J = np.arange(s0 + c0, s0 + c1)
+            sub = np.zeros(
+                whole.shape[:2] + (seg_I.size, seg_J.size), dtype=whole.dtype
+            )
+            s._apply_near_image_analytic(sub, seg_I, seg_J, s.k, geom)
+            got[:, :, r0:r1, c0:c1] = sub
+    assert np.array_equal(got, whole)
+
+
+def test_the_near_image_overwrite_is_inert_off_grazing():
+    """Nothing moves where there is no near image.
+
+    `_near_image_edge_blocks` is empty for a deck with no grazing horizontal
+    run — a vertical, a high horizontal, an ungrounded deck — and the
+    overwrite then returns the quadrature fill untouched. That is why the
+    ordinary decks are BIT-identical across momwire#634 (measured: dense,
+    HMatrix and ArrayBlock on five such decks, all `array_equal`).
+    """
+    high = dict(
+        wires=[[[0.0, 0.0, 6.0], [12.0, 0.0, 6.0]]],
+        n_per_edge_per_wire=[[21]],
+        feeds=[(0, 6.0, 1.0 + 0j)],
+        junctions=None,
+        wire_radius=0.005,
+        wavelength=20.0,
+        ground_z=0.0,
+    )
+    for kw in (high, dict(high, ground_eps=(10.0, 0.002))):
+        s = HMatrixSolver(**kw)
+        geom = s._context()["geom"]
+        assert s._near_image_edge_spans(geom) == []
+        seg = np.arange(4)
+        before = np.arange(2 * 2 * 4 * 4, dtype=np.complex128).reshape(2, 2, 4, 4)
+        after = s._apply_near_image_analytic(before.copy(), seg, seg, s.k, geom)
+        assert np.array_equal(after, before)
+    # An ungrounded deck has no plane to mirror across at all.
+    free = HMatrixSolver(
+        wires=[[[0.0, 0.0, -5.0], [0.0, 0.0, 5.0]]],
+        n_per_edge_per_wire=[[21]],
+        feeds=[(0, 5.0, 1.0 + 0j)],
+        junctions=None,
+        wire_radius=0.005,
+        wavelength=20.0,
+    )
+    assert free._near_image_edge_spans(free._context()["geom"]) == []
+
+
+@pytest.mark.slow
+def test_the_near_image_fix_reaches_the_sommerfeld_route_too():
+    """The image half of the Sommerfeld route, isolated from its remainder.
+
+    Under `ground_model='sommerfeld'` the fast solvers build the exact image
+    as C2 x the PEC-image block, which is the same `_zblock_image` this fixes,
+    so the correction reaches that route too. It is only visible with the
+    remainder converged, because at the DEFAULT order the two routes disagree
+    for an unrelated reason — see the next test.
+
+    Measured at `n_qp_sommerfeld=96`: 1.17 (117 %) before, 7.7e-09 after.
+    """
+    kw = _grazing_wire(
+        1.09e-4 * _GRAZE_WL,
+        ground_eps=(10.0, 0.002),
+        ground_model="sommerfeld",
+        n_qp_sommerfeld=96,
+    )
+    z_dense, _ = BSplineSolver(**kw).compute_impedance()
+    for cls in (HMatrixSolver, ArrayBlockSolver):
+        z_fast, _ = cls(**kw).compute_impedance()
+        rel = abs(z_fast - z_dense) / abs(z_dense)
+        assert rel < 1e-6, f"{cls.__name__}: {rel:.3e}"
+
+
+@pytest.mark.slow
+def test_the_sommerfeld_remainder_order_is_not_keyed_on_the_fast_route():
+    """What momwire#634 does NOT fix, pinned the way #631 pinned #634.
+
+    With the near image corrected, the Sommerfeld route still disagrees with
+    dense at grazing on the DEFAULT quadrature order — measured 2.54 before
+    this fix and 1.27 after. Raising `n_qp_sommerfeld` closes it completely
+    (5.1e-3 at 48, 7.7e-9 at 96), so the residual is the REMAINDER's order,
+    not the image: the dense route keys that order to the grazing height
+    (`test_grazing_remainder_is_converged`) and the fast solvers' remainder
+    does not.
+
+    A different mechanism in a different function; it did not fall out of the
+    image fix, and it is adjacent to momwire#647 (remainder keying). This gate
+    exists so the gap cannot rot, and should be turned into an agreement pin
+    when it closes — the same bargain this test's predecessor made.
+    """
+    kw = _grazing_wire(
+        1.09e-4 * _GRAZE_WL,
+        ground_eps=(10.0, 0.002),
+        ground_model="sommerfeld",
+    )
     z_dense, _ = BSplineSolver(**kw).compute_impedance()
     for cls in (HMatrixSolver, ArrayBlockSolver):
         z_fast, _ = cls(**kw).compute_impedance()
         rel = abs(z_fast - z_dense) / abs(z_dense)
         assert rel > 0.5, (
-            f"{cls.__name__} now agrees with the dense route at grazing "
-            f"({rel:.2%}) — momwire#631's near-image correction has reached "
-            f"it, so pin the agreement instead of this divergence"
+            f"{cls.__name__} now agrees on the default order ({rel:.2%}) — "
+            f"the fast remainder has been keyed to the grazing height, so "
+            f"pin the agreement instead of this divergence"
         )
