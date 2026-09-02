@@ -178,12 +178,12 @@ def filename_basis(prog: str) -> str | None:
     therefore consumed when it is the whole suffix (selecting nothing, exactly
     as a plain ``momwire-nec2c`` does) and stripped when it leads one:
 
-    ==============================  ==========
-    ``momwire-nec2c-shared``        ``None``
-    ``momwire-nec2c-shared-razor``  ``razor``
-    ``momwire-nec2c-razor``         ``razor``
-    ``momwire-nec2c``               ``None``
-    ==============================  ==========
+    =================================  ==========
+    ``momwire-nec2c-shared``           ``None``
+    ``momwire-nec2c-shared-razor-2p``  ``razor-2p``
+    ``momwire-nec2c-razor-2p``         ``razor-2p``
+    ``momwire-nec2c``                  ``None``
+    =================================  ==========
 
     The third row is deliberate rather than incidental: it is the name the
     #528 docs teach, so a user who copies THIS command to it has named a
@@ -195,8 +195,8 @@ def filename_basis(prog: str) -> str | None:
     because those are `_solver.basis_from_program_name`'s rules and this copy
     exists only because the client may not import momwire. A COPY is the thing
     that drifts, so what it copies is the whole rule: a Windows rename to
-    ``Momwire-Nec2c-Razor.exe`` names razor, and ``momwire-nec2c-`` names a
-    basis it failed to spell.
+    ``Momwire-Nec2c-Razor-2p.exe`` names razor-2p, and ``momwire-nec2c-``
+    names a basis it failed to spell.
     """
     return _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_SHARED_SEGMENT)
 

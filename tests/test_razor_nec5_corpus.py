@@ -49,9 +49,9 @@ def _served_by(basis: str) -> frozenset[str]:
 def test_razor_hosts_exactly_what_the_default_basis_hosts():
     """Coverage, as a set rather than a count: a basis that lost one deck and
     gained another would read the same by count and is not the same claim."""
-    assert _served_by("razor") == _served_by("bspline")
+    assert _served_by("razor-2p") == _served_by("bspline")
     assert _served_by("razor-nec5") == _served_by("bspline")
-    assert len(_served_by("razor")) == 77
+    assert len(_served_by("razor-2p")) == 77
 
 
 def test_the_point_matched_families_host_none_of_it():
@@ -78,7 +78,7 @@ def test_no_feed_or_load_on_the_nec5_corpus_is_ambiguous_under_razor(monkeypatch
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", _feed_snap.AmbiguousSite)
         for entry in MANIFEST["captures"]:
-            render(deck_text(entry["id"]), basis="razor")
+            render(deck_text(entry["id"]), basis="razor-2p")
 
     snaps = list(_feed_snap._TALLY)
     assert snaps, "the corpus stopped reaching a snap at all"
