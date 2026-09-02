@@ -16,6 +16,7 @@ import pytest
 
 from momwire.deck import (
     BASES,
+    NEC2_BASES,
     DeckModel,
     Environment,
     LoadSpec,
@@ -80,17 +81,48 @@ def mesh_of(text: str):
 # ---------------------------------------------------------------------------
 
 
-def test_every_basis_builds_the_same_model():
-    """All six solver families construct from one deck, under the nine
-    names the roster takes (momwire#432 added ``razor`` / ``razor-nec5``)."""
+def test_every_nec2_basis_builds_the_same_model():
+    """Six solver families construct from one deck, under the seven names
+    the nec2 roster takes. Razor's two names are in ``BASES`` for the NEC-5
+    dialect and refused here (momwire#821, the test after this one)."""
     model = parse(DIPOLE)
     families = set()
-    for name, (solver_class, _kwargs) in BASES.items():
+    for name, (solver_class, _kwargs) in NEC2_BASES.items():
         built = build_solver(model, basis=name)
         assert isinstance(built.solver, solver_class)
         assert built.basis == name
         families.add(solver_class)
-    assert len(families) == 7
+    assert len(families) == 6
+    assert set(BASES) - set(NEC2_BASES) == {"razor-2p", "razor-nec5"}
+
+
+def test_the_nec2_roster_is_the_centre_feeds_column_of_the_matrix():
+    """`NEC2_BASES` is derived, not listed: exactly the `BASES` entries whose
+    class declares it lands a gap on the segment-centre grid this dialect
+    names. A new family that snaps to knots drops out of this front door by
+    declaring so, and one that lands centres joins it the same way."""
+    for name, (solver_class, _kwargs) in BASES.items():
+        assert (name in NEC2_BASES) is bool(solver_class.capabilities.centre_feeds)
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
+def test_a_centre_snapping_basis_refuses_a_fed_deck_by_name(basis):
+    """The `centre_feeds` gate momwire#673 declared and momwire#821 landed.
+
+    Every parsed nec2 deck carries an `EX`, so this refuses razor for every
+    deck the dialect can produce. The message ends with the family's own
+    declared sentence — `tests/test_refusals_are_declared.py`'s contract —
+    and names the feed that tripped it, so the caller can see it was the
+    deck's own `EX` and not a parser artefact.
+    """
+    from momwire.razor import RazorSolver
+
+    with pytest.raises(ValueError) as excinfo:
+        build_solver(parse(DIPOLE), basis=basis)
+    message = str(excinfo.value)
+    assert message.endswith(RazorSolver.capabilities.refusal("centre_feeds"))
+    assert f"basis {basis!r} does not place a gap there" in message
+    assert "names a segment CENTRE" in message
 
 
 def test_the_default_basis_is_the_degree_2_bspline():

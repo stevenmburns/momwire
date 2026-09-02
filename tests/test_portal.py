@@ -3176,10 +3176,10 @@ def test_the_basis_main_selects_outlives_the_call_within_one_invocation():
     that `main` selected, not under the shipped default."""
     with nec_portal.engine_scope():
         _rc, _out, _err = _run_main(
-            ["--basis", "razor-2p"], deck=_SCOPE_DIPOLE + "NX\n"
+            ["--basis", "sinusoidal-galerkin"], deck=_SCOPE_DIPOLE + "NX\n"
         )
         after, _err = run_deck(_SCOPE_DIPOLE)
-    assert "VERSION:nec2c.ae6ty.momwire.9.1+razor2p" in after, (
+    assert "VERSION:nec2c.ae6ty.momwire.9.1+sg" in after, (
         "a run_deck following main() answered under some other engine — the "
         "session contract says it inherits the one main() configured"
     )
@@ -3192,17 +3192,17 @@ def test_engine_scope_puts_the_basis_back_for_whatever_follows():
     what a caller can see — the printout has to name the physics that made
     it."""
     before, _err = run_deck(_SCOPE_DIPOLE)
-    assert "+razor2p" not in before, "the suite arrived here with a basis selected"
+    assert "+sg" not in before, "the suite arrived here with a basis selected"
 
     with nec_portal.engine_scope():
         _rc, _out, _err = _run_main(
-            ["--basis", "razor-2p"], deck=_SCOPE_DIPOLE + "NX\n"
+            ["--basis", "sinusoidal-galerkin"], deck=_SCOPE_DIPOLE + "NX\n"
         )
-        assert nec_portal._active_basis_name == "razor-2p"
+        assert nec_portal._active_basis_name == "sinusoidal-galerkin"
 
     assert nec_portal._active_basis_name == "bspline"
     after, _err = run_deck(_SCOPE_DIPOLE)
-    assert "+razor2p" not in after, "the scoped basis leaked past the block"
+    assert "+sg" not in after, "the scoped basis leaked past the block"
     assert body_lines(before) == body_lines(after), (
         "the same deck answered differently either side of the scope"
     )
@@ -3490,163 +3490,30 @@ def test_require_lattice_fft_names_the_unmet_gate_on_a_single_pair():
         nec_portal._y_and_port_coeffs(solver)
 
 
-# --- --basis razor-2p / razor-nec5: the NEC-5 formulation twin --------------
-#
-# #432 put razor on `deck.BASES`, but `RazorSolver` had no
-# `compute_port_solution()` — the portal's `_y_and_port_coeffs` (every basis
-# above goes through the ONE call, no per-family branch since #232) raised
-# `AttributeError` the moment a deck actually solved under either roster
-# name, which is why neither had a live gate here. The sharing audit's #429
-# rank-9 item closes it: `_y_and_port_coeffs` drives razor exactly like every
-# other family now.
-#
-# A load-only site — an `LD` on a DIFFERENT segment from every `EX` — is the
-# one case where razor's port count is not the deck's, because it bakes that
-# load straight into `lumped_loads` (`docs/razor-solver.md`, "A load-only
-# site is not a port here") and gives it no row. That was #439's `IndexError`
-# out of `_port_signs`, then #586's refusal, and is served as of momwire#588
-# (`build_solver` renumbers the plan onto the rows it built); the gates for it
-# are near the end of this file. The deck below loads the FED segment, where
-# `_sites()` merges the two cards into one `PortSite` and no renumbering
-# arises — razor's documented "Z_driven identity" case, which is what the gate
-# below exercises end to end.
-
-
-def _razor_solver(**kwargs):
-    """A 9-segment 5 m dipole on plain RazorSolver, fed at its centre — the
-    same shape `_sin_solver` builds, for the same shim comparison."""
-    import numpy as np
-    from momwire import RazorSolver
-
-    return RazorSolver(
-        wires=[np.array([[0.0, 0.0, -2.5], [0.0, 0.0, 2.5]])],
-        n_per_edge_per_wire=[[8]],
-        feeds=[(0, 2.5, 1.0)],
-        wavelength=nec_portal.C_LIGHT / 14.0e6,
-        wire_radius=0.001,
-        **kwargs,
-    )
-
-
-def test_the_razor_shim_reproduces_momwires_own_y_matrix():
-    import numpy as np
-
-    y_shim, _x = nec_portal._y_and_port_coeffs(_razor_solver())
-    y_lib = np.asarray(_razor_solver().compute_y_matrix(), dtype=np.complex128)
-    assert np.allclose(y_shim, y_lib, rtol=1e-10, atol=0.0)
-
-
-def test_the_razor_shim_columns_are_the_one_volt_drive_coefficients():
-    """Column j of X must be the solve momwire would do for a 1 V drive at
-    port j — the identity `solve_group` leans on to turn one fill into
-    every excitation (``coeffs = X @ V``)."""
-    import numpy as np
-
-    _y, x = nec_portal._y_and_port_coeffs(_razor_solver())
-    _z, alpha = _razor_solver().compute_impedance()
-    driven = x @ np.array([1.0 + 0.0j])
-    assert np.allclose(driven, alpha, rtol=1e-10, atol=0.0)
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize(
-    "basis,suffix", [("razor-2p", "+razor2p"), ("razor-nec5", "+razor5")]
-)
-def test_razor_basis_flag_solves_and_stamps_the_banner(basis, suffix):
-    deck = (
-        "CE razor basis\n"
-        "GW 1 11 0. -5. 10. 0. 5. 10. 0.001\n"
-        "GE 0\nEX 0 1 6 0 1.\nFR 0 1 0 0 14.0 1\nXQ\nNX\n"
-    )
-    rc, out, err = _run_main(["--basis", basis], deck=deck)
-    assert rc == 0 and err == ""
-    assert f"VERSION:nec2c.ae6ty.momwire.9.1{suffix}" in out
-    assert "ANTENNA INPUT PARAMETERS" in out
-    rows = _aip_rows(out)
-    assert rows, f"no AIP data row under --basis {basis}"
-    assert all(math.isfinite(v) for row in rows for v in row)
-
-
-# A deck exercising a LOAD and a GROUND together in one pass: a PEC ground
-# (`GN 1`, wire clear of the plane — the same geometry
-# `dipole_pec_ground.deck` uses) plus a series RLC load (`LD 0`) on the SAME
-# segment the `EX` card drives, so the site is one `RazorSolver` port that is
-# both fed and loaded (`docs/razor-solver.md`'s "Z_driven identity" case) —
-# legal today, and the case the requirement asks this gate to cover.
-_RAZOR_LOAD_AND_GROUND_DECK = (
-    "CE razor load and ground\n"
-    "GW 1 9 0. 0. 2.0 0. 0. 7.0 0.001\n"
-    "GE -1\n"
-    "GN 1\n"
-    "LD 0 1 5 5 50. 1.e-6 0.\n"
-    "EX 0 1 5 0 1.\n"
-    "FR 0 1 0 0 14.1 0\n"
-    "XQ\nNX\n"
-)
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
-def test_razor_basis_answers_a_deck_with_a_load_and_a_ground(basis):
-    """The portal gap #432 left open — no live solve under either razor
-    roster name — is closed by `RazorSolver.compute_port_solution` (the
-    sharing audit's #429 rank-9 item): both names answer a deck exercising
-    a load AND a ground in one pass, with finite AIP data."""
-    rc, out, err = _run_main(["--basis", basis], deck=_RAZOR_LOAD_AND_GROUND_DECK)
-    assert rc == 0 and err == ""
-    assert "ERROR-NEC2C" not in out, f"razor basis {basis} took the error path"
-    assert "ANTENNA INPUT PARAMETERS" in out
-    rows = _aip_rows(out)
-    assert rows, f"no AIP data row for the load+ground deck under {basis}"
-    assert all(math.isfinite(v) for row in rows for v in row)
-
-
 # --- the LD load is applied ONCE and paid for ONCE (momwire#433) --------------
 #
-# A `_NATIVE_LOADING` basis (razor) is handed the deck's `LD` cards as its own
-# `lumped_loads` kwarg, so Z_L is on the FILL's diagonal and the admittance the
-# portal solves against already carries it.  Two things followed from the
-# portal not knowing that:
-#
-#   * `_load_impedances` stamped Z_L a SECOND time through the port algebra
-#     (`1 + Z·Y`), so a fed-and-loaded site read `Z_unloaded + 2·Z_L` — a plain
-#     50 Ω `LD 4` measured 111.3 Ω against the sibling bases' 62.2 Ω;
-#   * the budget's dissipation terms were `p_load` (the external stamp) and
-#     `p_wire`, and `wire_loss_power` excludes lumped loads BY CONTRACT
-#     (`razor.py`: "components, not wire"), so once the stamp is gone there is
-#     no term left holding the load's watts and they would land in `p_rad` by
-#     subtraction — a resistor reported as radiation.
-#
-# `lumped_load_power` (momwire#433) is the missing term, and `p_load` is
-# structurally zero here.  The two gates below pin the impedance side and the
-# power side; the sibling comparison pins the agreement that was silently lost.
-#
-# All three load the FED segment, which is not a taste: a driven-segment load
-# is razor's documented `Z_driven = Z_unloaded + Z_L` case
-# (`docs/razor-solver.md`), which makes the expected impedance EXACT rather
-# than approximate.  The load-only spelling — served since momwire#588 — has
-# no closed form to check against and is gated on its own terms further down.
+# momwire#433 was razor's: a `_NATIVE_LOADING` basis is handed the deck's `LD`
+# cards as its own `lumped_loads` kwarg, so Z_L is on the FILL's diagonal, and
+# the portal stamped it a SECOND time through the port algebra (`1 + Z·Y`) —
+# a plain 50 Ω `LD 4` measured 111.3 Ω against the sibling bases' 62.2 Ω —
+# while the budget had no term holding the load's watts. Razor left this
+# front door at momwire#821 (the nec2 dialect addresses segment centres and
+# razor cannot place a gap there), and the razor gates went with it. What
+# stays is the identity the fix was measured against, on the port-algebra
+# route every remaining basis rides: a driven-segment load moves Z_in by
+# exactly Z_L, because the stamp is one entry and it is applied once.
 
-_RAZOR_LD_R = 50.0
-_RAZOR_LD_DECK = (
-    "CE razor fed-and-loaded dipole\n"
+_LD_R = 50.0
+_LD_DECK = (
+    "CE fed-and-loaded dipole\n"
     "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
     "GE 0\n"
-    f"LD 4 1 5 5 {_RAZOR_LD_R} 0.\n"
+    f"LD 4 1 5 5 {_LD_R} 0.\n"
     "EX 0 1 5 0 1.\n"
     "FR 0 1 0 0 14.0 0\n"
     "XQ\nNX\n"
 )
-_RAZOR_NO_LD_DECK = _RAZOR_LD_DECK.replace(f"LD 4 1 5 5 {_RAZOR_LD_R} 0.\n", "")
-
-
-def _budget(text: str) -> dict[str, float]:
-    """The printed POWER BUDGET block as a name → watts/percent mapping."""
-    return {
-        line.split("=")[0].strip(): float(line.split("=")[1].split()[0])
-        for line in text.splitlines()
-        if "=" in line and ("POWER" in line or "LOSS" in line or "EFFICIENCY" in line)
-    }
+_NO_LD_DECK = _LD_DECK.replace(f"LD 4 1 5 5 {_LD_R} 0.\n", "")
 
 
 def _one_aip(text: str) -> tuple[complex, complex]:
@@ -3656,20 +3523,18 @@ def _one_aip(text: str) -> tuple[complex, complex]:
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5", "bspline"])
+@pytest.mark.parametrize("basis", ["bspline", "sinusoidal-galerkin"])
 def test_a_driven_segment_load_is_applied_exactly_once(basis):
-    """`Z_loaded − Z_unloaded == Z_L`, on the native-loading bases and on a
-    port-algebra sibling alike.
+    """`Z_loaded − Z_unloaded == Z_L` on the port-algebra route.
 
-    On razor this is exact, not approximate: a lumped stamp is one diagonal
-    entry and the load sits on the fed knot, which is razor's own documented
-    `Z_driven = Z_unloaded + Z_L` identity.  Before momwire#433 the portal
-    stamped Z_L through the port algebra on TOP of the fill's own copy and
-    this delta read 2·Z_L.
+    A lumped stamp is one diagonal entry of the port algebra and the load sits
+    on the fed segment, so the delta is the load itself to the printout's own
+    resolution. This is the identity momwire#433's razor double-stamp was
+    caught against; the sibling half of that gate is what remains of it.
     """
-    rc, loaded, err = _run_main(["--basis", basis], deck=_RAZOR_LD_DECK)
+    rc, loaded, err = _run_main(["--basis", basis], deck=_LD_DECK)
     assert rc == 0 and err == "" and "ERROR-NEC2C" not in loaded
-    rc, bare, err = _run_main(["--basis", basis], deck=_RAZOR_NO_LD_DECK)
+    rc, bare, err = _run_main(["--basis", basis], deck=_NO_LD_DECK)
     assert rc == 0 and err == "" and "ERROR-NEC2C" not in bare
 
     _i_loaded, z_loaded = _one_aip(loaded)
@@ -3677,100 +3542,11 @@ def test_a_driven_segment_load_is_applied_exactly_once(basis):
     delta = z_loaded - z_bare
     # printed to five significant figures, so a 1e-4 relative bar is the
     # printout's own resolution and nothing looser.
-    assert delta.real == pytest.approx(_RAZOR_LD_R, rel=1e-4), (
-        f"{basis}: R moved by {delta.real} for a {_RAZOR_LD_R} Ω load"
+    assert delta.real == pytest.approx(_LD_R, rel=1e-4), (
+        f"{basis}: R moved by {delta.real} for a {_LD_R} Ω load"
     )
     assert abs(delta.imag) <= 1e-4 * abs(z_bare.imag), (
         f"{basis}: a purely resistive load moved X by {delta.imag}"
-    )
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
-def test_the_razor_budget_charges_the_lumped_load_its_own_watts(basis):
-    """The budget closes with the load's watts INSIDE the structure loss.
-
-    The deck is lossless wire and one resistor, so ``lumped_load_power`` is
-    the ONLY dissipation term and the whole structure loss must equal the
-    closed form ½·R_L·|I_port|² read off the printed AIP row — a number the
-    printout carries independently of the budget block.  Radiated is then the
-    remainder, and positive.
-    """
-    rc, out, err = _run_main(["--basis", basis], deck=_RAZOR_LD_DECK)
-    assert rc == 0 and err == "" and "ERROR-NEC2C" not in out
-    i_port, _z_in = _one_aip(out)
-    budget = _budget(out)
-
-    expected = 0.5 * _RAZOR_LD_R * abs(i_port) ** 2
-    assert budget["STRUCTURE LOSS"] == pytest.approx(expected, rel=2e-4), (
-        f"{basis}: structure loss {budget['STRUCTURE LOSS']} vs ½·R·|I|² = {expected}"
-    )
-    assert budget["RADIATED POWER"] == pytest.approx(
-        budget["INPUT POWER"] - budget["STRUCTURE LOSS"], rel=1e-3
-    )
-    assert budget["RADIATED POWER"] > 0.0
-    assert budget["EFFICIENCY"] == pytest.approx(
-        100.0 * budget["RADIATED POWER"] / budget["INPUT POWER"], rel=1e-2
-    )
-
-
-@pytest.mark.integration
-def test_the_razor_budget_agrees_with_a_sibling_basis_on_a_loaded_deck():
-    """The cross-basis agreement momwire#433 restores.
-
-    Two bases on one deck are two discretisations of one antenna, so their
-    budgets differ by the basis gap and nothing else — a few percent on nine
-    segments.  Before the fix razor read 55.1 % efficient where every sibling
-    read 19.6 %, because razor's load was applied twice and paid for once:
-    the deck it solved was not the deck the sibling solved.
-    """
-    rc, razor, err = _run_main(["--basis", "razor-2p"], deck=_RAZOR_LD_DECK)
-    assert rc == 0 and err == ""
-    rc, sibling, err = _run_main(["--basis", "bspline"], deck=_RAZOR_LD_DECK)
-    assert rc == 0 and err == ""
-
-    b_razor, b_sib = _budget(razor), _budget(sibling)
-    assert b_razor["EFFICIENCY"] == pytest.approx(b_sib["EFFICIENCY"], rel=0.15), (
-        f"razor {b_razor['EFFICIENCY']}% vs bspline {b_sib['EFFICIENCY']}%"
-    )
-    _i_razor, z_razor = _one_aip(razor)
-    _i_sib, z_sib = _one_aip(sibling)
-    assert abs(z_razor - z_sib) <= 0.05 * abs(z_sib), f"{z_razor} vs {z_sib}"
-
-
-@pytest.mark.integration
-def test_the_razor_budget_counts_wire_loss_and_the_load_as_separate_terms():
-    """A deck that is BOTH lossy and loaded: the two dissipation terms are
-    additive and neither swallows the other.
-
-    ``wire_loss_power`` excludes lumped loads by contract and
-    ``lumped_load_power`` excludes the metal, so the printed structure loss
-    must be their SUM: the load's closed-form ½·R_L·|I_port|² read off the AIP
-    row, plus a strictly positive copper remainder small beside a 50 Ω
-    resistor.  Neither term may swallow the other, and the remainder going to
-    zero would mean the ``LD 5`` never reached the fill.
-
-    This combination also crashed outright until momwire#433: ``LD 5`` and
-    ``LD 4`` together give a `RazorSolver` both a conductivity and a
-    ``lumped_loads`` entry, and ``wire_loss_power`` asked
-    ``_wire_loading.loading_for`` for the spec without handing over the
-    geometry the lumped-site resolution needs.
-    """
-    lossy = _RAZOR_LD_DECK.replace("GE 0\n", "GE 0\nLD 5 1 1 9 5.8E7\n")
-    rc, out, err = _run_main(["--basis", "razor-2p"], deck=lossy)
-    assert rc == 0 and err == "" and "ERROR-NEC2C" not in out
-    i_port, _z = _one_aip(out)
-    budget = _budget(out)
-    p_lumped = 0.5 * _RAZOR_LD_R * abs(i_port) ** 2
-    assert budget["STRUCTURE LOSS"] > p_lumped, (
-        "the copper term vanished: structure loss is exactly the load's watts"
-    )
-    p_wire = budget["STRUCTURE LOSS"] - p_lumped
-    assert 0.0 < p_wire < 0.02 * p_lumped, (
-        f"copper loss {p_wire} is not a small share beside a 50 Ω load"
-    )
-    assert budget["RADIATED POWER"] == pytest.approx(
-        budget["INPUT POWER"] - budget["STRUCTURE LOSS"], rel=1e-3
     )
 
 
@@ -5246,7 +5022,7 @@ def test_every_basis_ships_as_a_named_entry_point():
     import tomllib
     from pathlib import Path
 
-    from momwire.deck import BASES
+    from momwire.deck import BASES, NEC2_BASES
     from momwire.portal import _portal as nec_portal
 
     scripts = tomllib.loads(
@@ -5260,308 +5036,69 @@ def test_every_basis_ships_as_a_named_entry_point():
     for name, target in named.items():
         assert target == "momwire.portal:main", name
         suffix = nec_portal._filename_basis(name)
-        assert suffix in BASES, name
-    assert set(BASES) == {nec_portal._filename_basis(n) for n in named}, (
+        assert suffix in NEC2_BASES, name
+    assert set(NEC2_BASES) == {nec_portal._filename_basis(n) for n in named}, (
         "roster and scripts table out of lockstep"
     )
+    # The lockstep is with the nec2 roster, not the whole of `deck.BASES`:
+    # razor is in the latter and ships no nec2c command (momwire#821).
+    retired = set(BASES) - set(NEC2_BASES)
+    assert retired == {"razor-2p", "razor-nec5"}, retired
+    for name in retired:
+        assert f"momwire-nec2c-{name}" not in scripts, name
 
 
-# --------------------------------------------------------------------------
-# momwire#439: a load-only site on a natively-loading basis
-# --------------------------------------------------------------------------
-
-#: A load that is NOT on the fed segment. That separation is the whole
-#: trigger: `_sites()` merges a load and a feed on one segment into a single
-#: `PortSite`, so the plan and the solver's feed list stay the same length
-#: and nothing goes wrong. Split them and only the natively-loading bases
-#: diverge.
-_LOAD_ONLY_DECK = (
-    "CE a load away from the feed\n"  # no issue number: the portal echoes CE
-    "GW 1 9 0. 0. -2.5 0. 0. 2.5 0.001\n"
-    "GE 0\n"
-    "LD 0 1 3 3 50. 1.e-6 0.\n"
-    "EX 0 1 5 0 1.\n"
-    "FR 0 1 0 0 30. 0\n"
-    "XQ\n"
-    "NX\n"
-)
+# --- razor is not a nec2 basis (momwire#821) ---------------------------------
+#
+# The nec2 dialect addresses segment CENTRES and razor places its gap at the
+# nearest KNOT, so `deck.build_solver` refuses every deck this front door can
+# be handed (every parsed deck carries an `EX`). The portal reads that at
+# CONFIGURE time: a razor name — by flag, by a copy's filename, or from the
+# environment — fails the `-version` probe with the family's declared reason,
+# rather than accepting the name and erroring on every deck. The two console
+# scripts that used to carry the names are gone; a host still pointed at a
+# stale copy of one gets the same line.
 
 
-def _aip_z(text: str, table: int = 0, row: int = 0) -> complex:
-    """The impedance one ANTENNA INPUT PARAMETERS row printed."""
-    entry = aip_tables(text)[table][row]
-    return complex(float(entry[6]), float(entry[7]))
-
-
-@pytest.mark.integration
 @pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
-def test_a_load_only_site_on_a_native_loading_basis_is_served(basis, scoped_engine):
-    """momwire#588. This was momwire#439's `IndexError: list index out of
-    range` from inside `_port_signs`, then PR #586's refusal in its place;
-    it is now an answer.
+def test_a_razor_basis_is_refused_at_configure_time_with_its_reason(basis):
+    from momwire.razor import RazorSolver
 
-    RazorSolver refuses the port-algebra route's zero-volt gap and takes its
-    loads through `lumped_loads`, so a load-only site gets a `PortSite` with
-    no row of its own: the deck plans two ports and the solver builds one.
-    Both numbers were always right — what was missing was the renumbering
-    between them, which `build_solver` now does once
-    (`deck._solver.in_solver_ports`) so that no consumer has to know which
-    space an index it is holding came from.
-
-    The bar is exact rather than a tolerance, and deliberately so. The
-    physics here is the fill's, and the fill's own loaded answer is already
-    gated (`test_deck_build_solver_razor.py`'s route-equivalence ladder,
-    which uses this very geometry off the driven segment). What #588 added is
-    BOOKKEEPING, so what this asks is whether the portal reproduces the
-    solver's own answer — no tolerance to pick, and a mis-mapped port cannot
-    hide inside one.
-    """
-    from momwire.deck import build_solver, parse
-
-    _, out, err = _run_main(["--basis", basis], deck=_LOAD_ONLY_DECK)
-    assert "IMPEDANCE" in out, err
-    assert "momwire#439" not in (out + err)
-    assert "IndexError" not in (out + err)
-
-    built = build_solver(parse(_LOAD_ONLY_DECK), basis=basis)
-    assert built.deck_ports.n_ports == 2 and built.ports.n_ports == 1
-    assert built.site_to_solver_port == (None, 0)
-    direct, _ = built.solver.compute_impedance()
-    # Printed to five significant figures, so that is the comparison.
-    assert _aip_z(out) == pytest.approx(complex(direct), rel=1e-4)
+    out = io.StringIO()
+    with nec_portal.engine_scope():
+        rest, legacy, code = nec_portal.configure_engine(["--basis", basis], out)
+        assert code == 3 and rest == [] and legacy is False
+        # And the process was left on the default, not on a basis it refused.
+        assert nec_portal._active_basis_name == "bspline"
+    line = out.getvalue()
+    assert f"--basis {basis!r} does not serve the nec2 dialect" in line
+    assert line.rstrip("\n").endswith(
+        RazorSolver.capabilities.refusal("centre_feeds")
+    ), line
 
 
-@pytest.mark.integration
-def test_the_load_only_site_really_puts_the_load_on_the_fill(scoped_engine):
-    """Served is not the same as heard.
-
-    A load-only site whose `LD` fell on the floor would print a perfectly
-    plausible number — the unloaded dipole's — and satisfy every shape gate
-    in this file. So the served answer is checked against the deck with the
-    `LD` card REMOVED, and it has to differ by more than rounding: this
-    `LD 0` is 50 Ω + j188.5 at 30 MHz, and it moves the drive point by tens
-    of ohms.
-    """
-    without = "\n".join(
-        line for line in _LOAD_ONLY_DECK.splitlines() if not line.startswith("LD ")
-    )
-    _, loaded, err_a = _run_main(["--basis", "razor-2p"], deck=_LOAD_ONLY_DECK)
-    _, bare, err_b = _run_main(["--basis", "razor-2p"], deck=without + "\n")
-    assert "IMPEDANCE" in loaded, err_a
-    assert "IMPEDANCE" in bare, err_b
-    # Measured 2026-09-02 under `razor-2p`, the CLI's only lane since
-    # momwire#753 retired plain `razor`: 124.36 + 126.06j loaded,
-    # 77.672 + 23.22j bare (previously 126.602 + 137.289j / 78.809 + 33.063j
-    # under the retired GL lane, measured 2026-08-24 — the bookkeeping this
-    # gate checks is identical between the two quadrature lanes, so the bound
-    # below did not need to move, only the numbers it was measured against).
-    assert abs(_aip_z(loaded) - _aip_z(bare)) > 10.0
+def test_a_stale_razor_copy_is_refused_by_its_filename():
+    """`momwire-nec2c-razor-2p` shipped from v0.36.1 to v0.46.0; a host that
+    kept the copy gets the reason from the executable name, not a typo line."""
+    out = io.StringIO()
+    with nec_portal.engine_scope():
+        _rest, _legacy, code = nec_portal.configure_engine(
+            [], out, prog="C:\\SimNEC\\momwire-nec2c-razor-2p.exe"
+        )
+    assert code == 3
+    line = out.getvalue()
+    assert "basis 'razor-2p' from the executable name does not serve" in line
+    assert "segment centres" in line and "unknown" not in line
 
 
-@pytest.mark.integration
-def test_a_load_only_site_does_not_shift_the_drive_onto_another_port(
-    scoped_engine,
-):
-    """The silent half of the defect, which one feed cannot expose.
-
-    With a single feed a stale deck-space index either lands on the one row
-    there is or walks off the end, so the old failure was loud. Put a
-    load-only site BETWEEN two feeds and it stops being: the deck plans ports
-    [load, feed A, feed B] and the solver builds [feed A, feed B], so an
-    un-renumbered feed A addresses feed B's row and the two sources swap
-    without a word. The drive voltages here are deliberately unequal, and the
-    tags name the rows, so a swap changes both printed impedances.
-    """
-    deck = (
-        "CE two feeds around a load\n"
-        "GW 1 11 0. 0. -2.5 0. 0. 2.5 0.001\n"
-        "GE 0\n"
-        "LD 0 1 3 3 50. 1.e-6 0.\n"
-        "EX 0 1 6 0 1.\n"
-        "EX 0 1 9 0 0.25\n"
-        "FR 0 1 0 0 30. 0\n"
-        "XQ\n"
-        "NX\n"
-    )
-    import numpy as np
-
-    from momwire.deck import build_solver, parse
-
-    built = build_solver(parse(deck), basis="razor-2p")
-    # The load site really does sort ahead of both feeds — otherwise this
-    # deck is not testing what it claims to.
-    assert built.site_to_solver_port == (None, 0, 1)
-    assert built.ports.feed_ports == (0, 1)
-
-    _, out, err = _run_main(["--basis", "razor-2p"], deck=deck)
-    rows = aip_tables(out)[0]
-    assert [row[1] for row in rows] == ["6", "9"], err
-
-    y = built.solver.compute_port_solution().y
-    v = np.array([1.0, 0.25], dtype=np.complex128)
-    i = y @ v
-    for index, row in enumerate(rows):
-        expected = v[index] / i[index]
-        assert complex(float(row[6]), float(row[7])) == pytest.approx(
-            expected, rel=1e-4
-        ), f"row {index} (segment {row[1]}) reads the wrong port"
-
-
-@pytest.mark.integration
-def test_the_served_razor_answer_sits_where_a_coarse_mesh_puts_it(
-    scoped_engine,
-):
-    """The measured bar against the oracle, and why it is the size it is.
-
-    `dipole_load_ld0` is the committed fixture `_LOAD_ONLY_DECK` was written
-    from, and its nec2c capture reads 144.06 + 188.89j. Under `razor-2p` —
-    the CLI's only razor lane since momwire#753 retired plain `razor` — the
-    deck answers 124.36 + 126.06j — 27.7 % away, where `bspline` on the same
-    fixture is 1.79 % (`test_portal_differential`'s row). (Under the retired
-    GL lane, measured 2026-08-24: 126.60 + 137.29j — 22.9 % away; the
-    bookkeeping under test does not depend on the quadrature lane, only the
-    numbers measured against it do.)
-
-    That spread is the MESH, not the service. Nine segments is coarse for a
-    half-wave dipole carrying a +j188 Ω load a third of the way along it, and
-    the two bases disagree about a coarse mesh in the direction they always
-    do: on the UNLOADED version of this geometry they already sit 50 % apart
-    in reactance (77.672 + 23.22j against 79.524 + 46.003j) while agreeing
-    to 2.3 % in resistance. Refine it and they converge on each other and
-    AWAY from the oracle's own nine-segment number, both landing near
-    160 + 200j — which is `test_the_two_routes_converge_on_the_fixtures_own
-    _geometry` in `test_deck_build_solver_razor.py`, the evidence this
-    tolerance rests on rather than an eyeballed pin.
-
-    So the bar here is deliberately loose and deliberately two-sided: it
-    catches a wrong port, a dropped load or a lost sign, and it does not
-    pretend a nine-segment cross-formulation agreement that no one measured.
-    """
-    _, out, err = _run_main(["--basis", "razor-2p"], deck=_LOAD_ONLY_DECK)
-    assert "IMPEDANCE" in out, err
-    ours = _aip_z(out)
-    theirs = _aip_z(fixture_out("dipole_load_ld0"))
-    assert theirs == pytest.approx(144.06 + 188.89j, rel=1e-4)
-    # Measured 2026-09-02 under `razor-2p`: 27.72 % (previously 22.93 % under
-    # the GL lane, measured 2026-08-24 and retired at momwire#753). Pinned
-    # with margin above and a floor below, because collapsing onto the
-    # oracle would mean the load stopped reaching the fill and the fixture's
-    # own bspline row would say so.
-    assert 0.05 < abs(ours - theirs) / abs(theirs) < 0.30, f"{ours} vs {theirs}"
-
-
-#: Every committed fixture whose deck plans more ports than razor builds —
-#: found by walking the corpus, not by memory. Two of them are the one-load
-#: shape the gates above use; `catalog_multiband_trap_dipole` is a real trap
-#: dipole with a load-only site on EACH side of the feed, which is the shape
-#: momwire#588 was filed about ("a trap on a parasitic element") and the one
-#: that puts a renumbering error between two ports rather than after them.
-_LOAD_ONLY_FIXTURES = (
-    "catalog_multiband_trap_dipole",
-    "dipole_load_ld0",
-    "dipole_load_ld4",
-)
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("name", _LOAD_ONLY_FIXTURES)
-@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
-def test_every_load_only_fixture_in_the_corpus_serves_under_razor(
-    name, basis, scoped_engine
-):
-    """The corpus half of momwire#588, and the one that would notice a
-    renumbering that is right for one load and wrong for two.
-
-    Each of these refused outright before this issue. What is asked of each
-    is what is asked of `_LOAD_ONLY_DECK`: the printout is a printout, and
-    the impedance it prints is the directly-built solver's own — the portal
-    contributes bookkeeping here and nothing else, so an exact comparison is
-    available and a tolerance would only hide a swapped row.
-    """
-    from momwire.deck import build_solver, parse
-
-    deck = (FIXTURE_DIR / f"{name}.deck").read_text()
-    rc, out, err = _run_main(["--basis", basis], deck=deck)
-    assert rc == 0 and "ERROR-NEC2C" not in out, err
-
-    built = build_solver(parse(deck), basis=basis)
-    assert None in built.site_to_solver_port, f"{name} is not a load-only deck"
-    assert built.ports.n_ports < built.deck_ports.n_ports
-    direct, _ = built.solver.compute_impedance()
-    assert _aip_z(out) == pytest.approx(complex(direct), rel=1e-4)
-
-
-_NETWORK_LOAD_ONLY = """CE a network and a load-only site
-GW 1 {n} 0. 0. -2.5 0. 0. 2.5 0.001
-GE 0
-LD 0 1 {ld} {ld} 50. 1.e-6 0.
-NT 1 {a} 1 {b} 0. 0.02 0. -0.01 0. 0.02
-EX 0 1 {a} 0 1.
-FR 0 1 0 0 30. 0
-XQ
-NX
-"""
-
-
-@pytest.mark.integration
-def test_a_network_and_a_load_only_site_agree_with_the_port_algebra_route(
-    scoped_engine,
-):
-    """The other consumer of the renumbering, and the one with the furthest
-    to fall if it is wrong.
-
-    `NT`/`TL` endpoints are ports too, and `PortPlan.network_ports` names
-    them — so a load-only site ahead of a network endpoint shifts the
-    endpoint's row exactly as it shifts a feed's, and the reducer stamps a
-    two-port admittance across whichever rows it is handed. Nothing about a
-    wrongly-stamped network is loud: it solves, it prints, and it prints a
-    plausible impedance for a different circuit.
-
-    So the check is convergence against the route that does not renumber at
-    all. `bspline` gives the load its own port and stamps it in the port
-    algebra; razor bakes it into the fill and renumbers around it. Two
-    different treatments of the load AND two different port spaces, and they
-    have to meet in the same place as the mesh refines. The razor side rides
-    `razor-2p` — the CLI's only lane since momwire#753 retired plain `razor`
-    — but the renumbering under test is identical on both quadrature lanes.
-    """
-    gaps = []
-    for nsegs, load, end_a, end_b in ((11, 3, 6, 9), (21, 5, 11, 17), (81, 17, 41, 65)):
-        deck = _NETWORK_LOAD_ONLY.format(n=nsegs, ld=load, a=end_a, b=end_b)
-        _, razor, err_a = _run_main(["--basis", "razor-2p"], deck=deck)
-        _, bspline, err_b = _run_main(["--basis", "bspline"], deck=deck)
-        assert "NETWORK DATA" in razor, err_a
-        assert "NETWORK DATA" in bspline, err_b
-        # Two tokenised tables on a network deck — the excitation data at the
-        # connection points, then ANTENNA INPUT PARAMETERS. Pinned so that a
-        # printout which grows a third cannot silently redirect this to it.
-        assert len(aip_tables(razor)) == len(aip_tables(bspline)) == 2
-        gaps.append(abs(_aip_z(razor, table=-1) - _aip_z(bspline, table=-1)))
-
-    # Measured 2026-09-02 under `razor-2p`: [37.65, 19.81, 5.07] on a drive
-    # point near 58 - 72j (previously [29.61, 18.73, 2.44] under the retired
-    # GL lane, measured 2026-08-24). A stale deck-space index for the NT's
-    # far end would not converge at all — it would stamp the network onto
-    # the wrong row and stay there.
-    assert gaps[-1] < gaps[0] / 5.0, gaps
-    assert gaps[-1] < 6.0, gaps  # measured 5.07 Ω
-
-
-@pytest.mark.integration
-def test_a_load_on_the_fed_segment_still_merges_into_one_site(scoped_engine):
-    """The boundary, kept from #586's gates: it is the SEPARATION of the two
-    cards that used to trip the defect, not loads-under-razor in general.
-
-    Moving the load ONTO the fed segment merges them into a single
-    `PortSite`, which needs no renumbering at all — so this is the row of the
-    truth table where `in_solver_ports` returns the plan untouched.
-    """
-    from momwire.deck import build_solver, parse
-
-    merged = _LOAD_ONLY_DECK.replace("LD 0 1 3 3", "LD 0 1 5 5")
-    assert merged != _LOAD_ONLY_DECK
-    built = build_solver(parse(merged), basis="razor-2p")
-    assert built.ports is built.deck_ports
-    assert built.site_to_solver_port == (0,)
-    _, out, err = _run_main(["--basis", "razor-2p"], deck=merged)
-    assert "IMPEDANCE" in out, err
+def test_an_unknown_name_still_reads_as_a_typo():
+    """The two refusals are told apart: a name no roster knows lists the
+    choices, and the choices are the nec2 roster, razor not among them."""
+    out = io.StringIO()
+    with nec_portal.engine_scope():
+        _rest, _legacy, code = nec_portal.configure_engine(["--basis", "rzaor-2p"], out)
+    assert code == 3
+    line = out.getvalue()
+    assert line.startswith("unknown --basis 'rzaor-2p'; choices: ")
+    assert "razor" not in line.split("choices:")[1]
+    assert "sinusoidal-galerkin" in line

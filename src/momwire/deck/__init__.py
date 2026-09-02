@@ -42,6 +42,7 @@ from ._nec5 import (
 )
 from ._solver import (
     BASES,
+    NEC2_BASES,
     BuiltSolver,
     PortPlan,
     PortSite,
@@ -103,6 +104,7 @@ __all__ = [
     "PortPlan",
     "PortSite",
     "BASES",
+    "NEC2_BASES",
     # the card reader, for a consumer that must echo a deck as written
     "Card",
     "parse_card",

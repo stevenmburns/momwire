@@ -113,12 +113,11 @@ momwire-nec2c-hmatrix = "momwire.portal:main"
 momwire-nec2c-arrayblock = "momwire.portal:main"
 momwire-nec2c-sinusoidal = "momwire.portal:main"
 momwire-nec2c-sinusoidal-galerkin = "momwire.portal:main"
-momwire-nec2c-razor-2p = "momwire.portal:main"
-# Deprecated spelling of razor-2p, kept because it shipped. It classifies
-# correctly everywhere: SimNEC sniffs nec2c before nec5 and this name carries
-# both, and EZNEC takes engine class and path as explicit fields rather than
-# inferring from either. The rename is about the claim the name makes.
-momwire-nec2c-razor-nec5 = "momwire.portal:main"
+# No razor name here (momwire#821): the nec2 dialect addresses segment
+# centres and razor places gaps at knots, so `deck.build_solver` refuses every
+# nec2 deck under it. `momwire-nec2c-razor-2p` / `-razor-nec5` shipped from
+# v0.36.1 to v0.46.0 and are retired; razor is served by the NEC-5 dialect's
+# launchers (`momwire-eznec-razor-2p`, and the deprecated `-razor-nec5`).
 momwire-nec2c-pulse = "momwire.portal:main"
 
 [project.urls]

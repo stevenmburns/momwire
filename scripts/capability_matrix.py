@@ -23,7 +23,7 @@ import difflib
 import pathlib
 import sys
 
-from momwire.deck._solver import BASES
+from momwire.deck._solver import BASES, NEC2_BASES
 from momwire.harrington import HarringtonSolver
 from momwire.pulse import PulseSolver
 
@@ -123,16 +123,22 @@ def render() -> str:
         "## Roster names",
         "",
         "What a `--basis` name selects. Several names share one class, differing",
-        "only in a bound keyword, so they share its row.",
+        "only in a bound keyword, so they share its row. The `nec2` column is",
+        "`deck.NEC2_BASES`: the names the nec2 front door (`momwire.portal`, the",
+        "`momwire-nec2c-*` commands) serves, which is exactly the `centre_feeds`",
+        "column below — that dialect addresses segment centres, and a family",
+        "that snaps to knots is refused there by name (momwire#821). The NEC-5",
+        "dialect (`momwire.eznec`) addresses nodes and reads the whole roster.",
         "",
     ]
     lines += _table(
-        ["`--basis`", "class", "bound"],
+        ["`--basis`", "class", "bound", "`nec2`"],
         [
             [
                 f"`{name}`",
                 f"`{cls.__name__}`",
                 f"`{_kwargs_str(kw)}`" if kw else "—",
+                YES if name in NEC2_BASES else NO,
             ]
             for name, (cls, kw) in BASES.items()
         ],

@@ -134,8 +134,10 @@ BASES = MappingProxyType(
         # `RazorSolver(...)` directly, whose `nec5_quadrature` kwarg
         # defaults to `False`.
         "razor-2p": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
-        # DEPRECATED spelling of `razor-2p`, kept because it shipped in the
-        # named entry points and in antennaknobs' CLI roster.
+        # DEPRECATED spelling of `razor-2p`, kept because it shipped: in the
+        # EZNEC drop-in's launcher names (`momwire-eznec-razor-nec5`, which
+        # momwire#819 keeps beside the current spelling) and in antennaknobs'
+        # CLI roster.
         #
         # The rename is about the CLAIM the name makes, not about any host
         # mis-reading it: `razor-2p` describes the quadrature rule, where
@@ -146,11 +148,9 @@ BASES = MappingProxyType(
         # closing as N^-0.73 — so this lane is SLOWER than bspline, not
         # specially agreeing with anything.
         #
-        # No host is confused by the old spelling and none was claimed to be:
-        # EZNEC takes its engine class and path as explicit fields and infers
-        # nothing from the name, and SimNEC sniffs the path in the order nec2c,
-        # nec5, nec42 — `momwire-nec2c-razor-nec5` carries both tokens and
-        # `nec2c` wins ties, so it has always classified correctly.
+        # Neither razor name serves the `nec2` dialect (momwire#821): see
+        # `NEC2_BASES` below. Both stay in THIS roster because the NEC-5
+        # dialect (`momwire.eznec`) reads it and serves them.
         "razor-nec5": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
         # The pulse family, and ONE name for it (momwire#564), on momwire#654's
         # rule: a roster entry is a menu item, so it should be the dish worth
@@ -164,6 +164,23 @@ BASES = MappingProxyType(
         # a library import, which is where the study lives.
         "pulse": (HarringtonSolver, MappingProxyType({})),
     }
+)
+
+# The subset of `BASES` the `nec2` dialect serves (momwire#821).
+#
+# `Nec2Structure.resolve` addresses segment CENTRES — every `EX` card names
+# ``(element + 0.5) * length / n_seg`` — and the parser refuses a deck with no
+# `EX` card at all, so every nec2 deck that reaches `build_solver` carries a
+# centre-named feed. A family whose `capabilities.centre_feeds` is False
+# cannot place a gap there: `RazorSolver._snap_to_knot` moves it half a cell,
+# silently, and momwire#673 declared the cell so that #821 could refuse on it.
+# `build_solver` raises for such a family whenever ``model.feeds`` is
+# non-empty, which for this dialect is always; this mapping is the same fact
+# read at CONFIGURE time, so the nec2 portal and its thin client can refuse
+# the name at the `-version` probe rather than on every deck. The NEC-5
+# dialect addresses nodes and reads `BASES` itself — razor is served there.
+NEC2_BASES = MappingProxyType(
+    {name: entry for name, entry in BASES.items() if entry[0].capabilities.centre_feeds}
 )
 
 # Solver classes that take a lumped load as their own kwarg instead of the
@@ -744,22 +761,28 @@ def build_solver(
     cost that does not belong to the fill.  Passing a handle prepared for a
     different model raises.
 
-    Raises ``ValueError`` for an unknown basis, a model with no wires, and a
-    port set the geometry cannot host.
-
-    It does NOT refuse a basis whose `capabilities.centre_feeds` is False,
-    though this function is the `nec2` seam and that dialect addresses
-    segment CENTRES. `RazorSolver` is that basis, and the refusal is filed
-    separately (from momwire#673) rather than landed here: every parsed nec2
-    deck carries feeds -- the parser refuses a deck with no EX card -- so the
-    gate would refuse razor for EVERY deck and retire the two shipped
-    `momwire-nec2c-razor-*` console scripts with it. That is a user-facing
-    decision, not a side effect of declaring a matrix cell. Until it is
-    taken, `_snap_to_knot` still moves a centre-named gap half a cell here,
-    and `RazorSolver.capabilities.centre_feeds` is where that is now written
-    down.
+    Raises ``ValueError`` for an unknown basis, a model with no wires, a
+    port set the geometry cannot host, and -- this being the `nec2` seam,
+    whose dialect addresses segment CENTRES -- a fed model under a basis
+    whose `capabilities.centre_feeds` is False (momwire#673, landed at
+    momwire#821). `RazorSolver` is that basis: `_snap_to_knot` would move a
+    centre-named gap half a cell and answer for a different antenna, so the
+    seam declines by name instead, with the family's own declared reason.
+    Every parsed nec2 deck carries feeds (the parser refuses a deck with no
+    EX card), so this retires razor from the nec2 front door outright --
+    :data:`NEC2_BASES` is the roster that remains -- and that was a decision
+    taken, not a side effect: nobody wants razor on a nec2 deck, and the
+    NEC-5 dialect, which addresses the knots razor lives on, serves it.
     """
     solver_class, basis_kwargs = basis_entry(basis)
+
+    if model.feeds and not solver_class.capabilities.centre_feeds:
+        wire, arclength, _v = model.feeds[0]
+        raise ValueError(
+            f"a feed at arclength {arclength:g} on wire {wire} names a segment "
+            f"CENTRE, and basis {basis!r} does not place a gap there: "
+            f"{solver_class.capabilities.refusal('centre_feeds')}"
+        )
 
     if group is None:
         group = _first_armed_group(model)

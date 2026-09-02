@@ -427,142 +427,90 @@ two mixed-radius geometries × free space and `GN 1`
 `scripts/capture_razor_mixed_radius_nec5_lane.py`) — worst |ΔZ| 0.0586 Ω
 against a 0.20 Ω bar, offsets constant to 0.0211 Ω against 0.05 Ω.
 
-## The deck front end (momwire#432)
+## The deck front ends (momwire#432; the nec2 one retired at momwire#821)
 
-`momwire.deck.build_solver(model, basis="razor-2p")` — and `"razor-nec5"`,
-its deprecated spelling — construct this class from a parsed `nec2` deck
-(`momwire.deck.parse`) at the identified quadrature below. Both names are
-the same `RazorSolver`, in `momwire.deck.BASES` beside the other five
-families; both bind `nec5_quadrature=True`, the same "one class, one extra
-kwarg" shape `"bspline-d1"` uses for the degree axis. The other lane this
+Both dialect front ends read `momwire.deck.BASES`, where `"razor-2p"` — and
+`"razor-nec5"`, its deprecated spelling — bind this class at the identified
+quadrature below (`nec5_quadrature=True`, the same "one class, one extra
+kwarg" shape `"bspline-d1"` uses for the degree axis). The other lane this
 class can take — Gauss-Legendre nodes along the testing path,
-`nec5_quadrature=False` — was this roster's plain `razor` entry until
+`nec5_quadrature=False` — was the roster's plain `razor` entry until
 momwire#753 retired it as not worth ordering (measured 20x the wall time for
 a 0.001 Ω difference from `razor-2p`); it stays reachable by constructing
-`RazorSolver(...)` directly.
+`RazorSolver(...)` directly. Exactly one of the two front ends serves the
+razor names, and which one follows from where this class puts a gap.
 
-**Card translation.** `LD 0`/`LD 1`/`LD 4` (series RLC, parallel RLC, a
-fixed R+jX — `momwire.deck.model.LoadSpec`'s three `kind`s) become
-`lumped_loads=[(wire, arclength, Z)]`, `Z` evaluated at the build's own
-frequency via `LoadSpec.impedance`. There is no separate sweep case: a
-sweep already calls `build_solver` once per frequency step (the module
-docstring's "translate once, fill many times" — the geometry is prepared
-once and replayed, but a solver, and with it a load's `Z(ω)`, is an
-OPERATING POINT and is not), so evaluating per call already is the swept
-behaviour. `LD 5` and `IS` reach `wire_conductivity` /
-`insulation_radius` / `insulation_eps_r` exactly as they do for every
-sibling — this class takes that part of the loading API verbatim
-(momwire#427) — so the deck front end does nothing razor-specific for
-them at all.
+**The NEC-5 dialect (`momwire.eznec`) serves razor.** It writes a source at
+a NODE, and this class carries its sites on knots, so that dialect's grid is
+this family's own: `tests/test_razor_nec5_corpus.py` measures 77 of 80
+captures served (exactly the set `bspline` serves), 202 feed/load snaps and
+zero ambiguous ones. The EZNEC drop-in ships `momwire-eznec-razor-2p` (and
+the deprecated `-razor-nec5` spelling) as signed launchers (momwire#819);
+`tests/test_eznec_client_c.py` runs the twin end to end against the
+licensed engine's own printed number.
 
-**The knot a load lands on is the port-algebra route's own.** A load's
-`(wire, arclength)` is read off the mesh `to_polylines` already built to
-place every feed AND load site on an explicit knot, for every basis —
-the SAME walk the siblings' port-algebra route uses to decide where a
-`LD` card's zero-volt port goes. Razor's own knot-snapping
-(`feed_arclength` "snaps to the NEAREST KNOT THAT CARRIES A BASIS", see
-above) never has anything to snap TO here: the position handed to
-`lumped_loads` already IS a knot, so the two routes are comparable by
-construction rather than by a second, independent placement rule that
-could disagree with the first.
+**The nec2 dialect refuses razor by name (momwire#673 → #821).**
+`Nec2Structure.resolve` addresses segment CENTRES — every `EX` card names
+`(element + 0.5) * length / n_seg` — and `_snap_to_knot` would move that gap
+half a cell and answer for a different antenna, silently. momwire#673
+declared the cell (`capabilities.centre_feeds` is False on this row, and
+`tests/test_capabilities.py` measures the declaration with a symmetry probe
+rather than trusting it); momwire#821 landed the gate: `build_solver` raises
+whenever `model.feeds` is non-empty and the basis does not place centre
+gaps, ending with the sentence `capabilities.refusal("centre_feeds")`
+carries. Every parsed nec2 deck carries an `EX` (the parser refuses one
+without), so the gate retires razor from that front door outright rather
+than case by case: `deck.NEC2_BASES` — the `centre_feeds` column of
+`BASES` — is the roster the portal and its thin client read, the
+`momwire-nec2c-razor-2p` / `-razor-nec5` console scripts (shipped v0.36.1 to
+v0.46.0) are gone, and a razor name arriving by `--basis`, by a stale copy's
+filename or from `MOMWIRE_NEC2C_BASIS` fails the `-version` probe with that
+same sentence instead of erroring on every deck. The finer gate — refuse
+only a feed that does not already sit on a knot, which needs feed provenance
+the deck model does not carry — was the option not taken: nobody wants razor
+on a nec2 deck, and the dialect that addresses its grid serves it.
 
-**A load-only site is not a port here.** The siblings serve `LD` as a
-zero-volt, zero-impedance gap a caller stamps afterward
-(`PortPlan.loaded_ports()`); this formulation instead bakes the loaded
-impedance directly into the fill (`Z_driven = Z_unloaded + Z_L` at the fed
-knot is exact, per the section above), so a load-only site becomes ONLY a
-`lumped_loads` entry — no phantom zero-volt `feeds` entry alongside it, since
-a port this class does not need would be a fabricated drive point with
-nothing to answer for. A site that is BOTH fed and loaded keeps its real
-feed AND gets a `lumped_loads` entry at the same knot, which is the
-Z_driven identity's own case.
+**What razor's tenure at the nec2 seam built, and why it stays.** Three
+pieces of `momwire.deck._solver` were built for this family and are now the
+seam's, exercised through the NEC-5 dialect (`eznec/_serve.py` reads the
+same tuple):
 
-**What still refuses, and how.** `build_solver` does not special-case any
-of `node_gaps`, `extended_kernel` or ground CONTACT over a finite ground —
-constructing this class with any of them raises with exactly the message
-this page and `capabilities.refusals` already carry, because `build_solver`
-passes the same kwargs it always does and this class's own `**unsupported`
-dispatch does the refusing. The one kwarg `build_solver` DOES withhold is
-`junctions`: every sibling takes it (a geometry hint the mesh already
-computed), and this class takes no such argument at all — not even
-`None`, since it is not a declared parameter and any spelling of it lands
-in `**unsupported` — so the roster entry omits the keyword rather than
-passing a value that would refuse.
+- `_NATIVE_LOADING` (momwire#432): `LD 0`/`LD 1`/`LD 4` become
+  `lumped_loads=[(wire, arclength, Z)]`, `Z` evaluated at the build's own
+  frequency via `LoadSpec.impedance` (a sweep already builds once per step,
+  so per-call evaluation is the swept behaviour); `LD 5` and `IS` reach
+  `wire_conductivity` / `insulation_radius` / `insulation_eps_r` verbatim
+  as for every sibling (momwire#427); the one kwarg withheld is
+  `junctions`, which this class does not declare. The knot a load lands on
+  is the port-algebra route's own — read off the mesh `to_polylines` built
+  to place every site on an explicit knot — so razor's own snapping never
+  has anything to snap TO there.
+- The load-only rule: a load-only site is ONLY a `lumped_loads` entry, no
+  phantom zero-volt `feeds` entry beside it; a site both fed and loaded
+  keeps its feed and gets the entry at the same knot, which is the
+  `Z_driven = Z_unloaded + Z_L` identity's own case.
+- `in_solver_ports` (momwire#588): renumbers the plan onto the rows the
+  solver actually built — `BuiltSolver.ports` in the solver's port space,
+  `deck_ports` in the deck's, `site_to_solver_port` the bridge — so past
+  the seam there is one kind of index in circulation. For every other
+  family the two plans are the same object.
 
-**The portal (the sharing audit's #429 rank-9 item).**
-`compute_port_solution()` / `compute_port_solution_swept()` close the gap
-#432 left as a follow-up. Ports are the configured `feeds`, in order —
-`junction_ports` and `node_gaps` are both refused at
-construction, so there is nothing after them the way the B-spline /
-sinusoidal-Galerkin families' feeds-then-junction-ports order has. On a
-tent basis the coefficient AT a knot IS the current there, so
-`port_currents` (== `y`) is read straight off the solved `coeffs` at the
-feed rows — no separate per-port readout function the segment-basis
-families need. Both entry points assemble the fill through the module's
-own `_assemble_Z_prepare` / `_assemble_Z_from_prepared` split — the same
-one `compute_impedance_swept` / `compute_y_matrix_swept` already use — so
-`compute_y_matrix()` (now `compute_port_solution().y`) and the swept
-generator behind `compute_port_solution_swept()` share one code path with
-the single-k entry point rather than a second copy of the port algebra:
-`momwire.portal`'s Y-matrix-based deck runner (`_y_and_port_coeffs`) drives
-`--basis razor-2p` and `--basis razor-nec5` exactly like every other roster
-entry now, through the same one-fill-all-ports call.
+The portal's stamp and budget (momwire#433 — `_load_impedances` returning a
+structurally zero vector so the port algebra does not stamp Z_L a second
+time on top of the fill's copy, and `lumped_load_power` as the third
+dissipation term) still read `_NATIVE_LOADING`, because the two facts must
+agree wherever a native-loading family is served. The nec2-deck numbers
+those PRs measured (`126.60 + 137.29j` on `dipole_load_ld0`, the 57 → 1.2 Ω
+route convergence over N = 9…321) were facts about a route that no longer
+exists; they live in this section's git history.
 
-**The portal's load stamp, and its budget (momwire#433).** The portal knows
-this family loads natively — it reads `momwire.deck._solver._NATIVE_LOADING`,
-the same tuple `build_solver` keys the translation off — and acts on it
-twice. `_load_impedances` returns a structurally zero vector, so the port
-algebra does NOT stamp Z_L a second time on top of the fill's own copy: a
-fed-and-loaded site read `Z_unloaded + 2·Z_L` until this was fixed (+50 Ω on
-a plain 50 Ω `LD 4`, against every sibling basis's answer). And the power
-budget gains a third dissipation term, `lumped_load_power`, beside `p_load`
-(now identically zero here) and `p_wire` (which excludes lumped loads by
-contract) — without it the load's watts would fall into `p_radiated` by
-subtraction and the printed `EFFICIENCY` would read a lossy antenna as a
-good one.
-
-**The port-count half, closed portal-side (momwire#588).** momwire#433
-taught the STAMP and the BUDGET about native loading; what remained was
-counting. `plan.n_ports` counts a load-only site that this family's `feeds`
-— and therefore its Y matrix — does not, so a deck port index and a solver
-port index were the same integer for every other family and silently
-different for this one. That was momwire#439's `IndexError` out of
-`_port_signs`, and PR #586's refusal in its place.
-
-It is now served, and nothing in this module changed to serve it. The fix
-is `deck._solver.in_solver_ports`, which renumbers the plan onto the rows
-`build_solver` just built: `BuiltSolver.ports` is in the SOLVER's port
-space, `BuiltSolver.deck_ports` is in the deck's, and
-`site_to_solver_port` is the bridge. Past that point there is one kind of
-index in circulation, so no consumer has to know which space it was handed.
-For every other family the two plans are the same object.
-
-The served answer is the fill's, unaltered: on
-`tests/fixtures/nec_portal/dipole_load_ld0.deck` the portal prints
-`126.60 + 137.29j`, which is this class's own `compute_impedance()` to the
-printed digits. That is 22.9 % from the committed nec2c capture
-(`144.06 + 188.89j`) where `bspline` is 1.79 % — a NINE-SEGMENT
-cross-formulation spread, not a service defect: refine the same antenna and
-the two routes converge on each other (57 → 1.2 Ω over N = 9…321) at
-about `160 + 200j`, some 8 % from the oracle's own nine-segment answer.
-
-Three committed portal fixtures refused before this and serve now, including
-`catalog_multiband_trap_dipole` — a trap dipole with a load-only site on
-each side of its feed, which is the deck shape the issue was filed about.
-`NT`/`TL` endpoints renumber with everything else: on a network deck with a
-load-only site ahead of the far endpoint, this family and the port-algebra
-route converge on one drive point (30 → 2.4 Ω over N = 11…81), which is what
-says the reducer was handed the rows it meant rather than a plausible
-wrong pair.
-
-Gates: `tests/test_deck_build_solver_razor.py` — a battery of eight decks
-(free dipole, `LD 4` mid-element, `LD 5` copper, a `GN 1` base-fed contact
-monopole, a `GN 1` elevated inverted-V, both finite grounds, a mixed-radius
-two-wire deck) each checked against an independently-constructed
-`RazorSolver` to LU roundoff; a convergence ladder showing the translation's
-answer converges to the port-algebra route's own (`BSplineSolver`) with N;
-and the `node_gaps` / contact-over-finite-ground refusals surfacing through
-`build_solver` unchanged.
+Gates: `tests/test_deck_build_solver.py` (the nec2 roster IS the
+`centre_feeds` column, and razor refuses a fed deck with the declared
+sentence), `tests/test_razor_roster_names.py` (both names in `BASES`, in no
+nec2 table, no nec2c script), `tests/test_portal.py`'s momwire#821 block
+(probe-time refusal by flag and by a stale copy's filename, a typo still a
+typo), and `tests/test_refusals_are_declared.py` (the raise ends with the
+row's sentence).
 
 ## Twin-gate tests
 
@@ -613,14 +561,9 @@ and the `node_gaps` / contact-over-finite-ground refusals surfacing through
   against an independently reassembled operator, `coeffs @ V`
   superposition, feeds-in-order port ORDER, one fill and one factorisation
   per call, and the swept ω-boundary bit gate over a moving-ε̃ ground.
-  `tests/test_portal.py`'s `--basis razor-2p` / `--basis razor-nec5` battery
-  carries the portal end-to-end gate — a live deck with a load AND a
-  ground, both roster names, finite AIP data — plus the momwire#433 budget
-  gates: `Z_loaded − Z_unloaded == Z_L` exactly (the load applied once, not
-  twice), the printed `STRUCTURE LOSS` equalling the closed-form
-  `½·R_L·|I_port|²` on a lossless deck, wire loss and lumped loss as
-  separate additive terms on a `LD 5` + `LD 4` deck, and the efficiency
-  agreeing with a port-algebra sibling basis on one shared deck.
+  `tests/test_portal.py` no longer drives this class — razor left the nec2
+  front door at momwire#821 (the deck front ends, above); the end-to-end
+  lane is the NEC-5 dialect's, `tests/test_eznec_client_c.py`.
 - `tests/test_razor_nec5_twin.py` — the only file comparing against real
   NEC-5 printouts (LLNL-CODE-746721) rather than an in-Python instrument:
   pointwise tracking from N=24 up with per-N tolerances that shrink with N,
