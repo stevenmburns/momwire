@@ -367,6 +367,31 @@ _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL = (
     "radius (stevenmburns/momwire#147)"
 )
 
+# The sentence the OTHER families' `singular_enrichment` cell reads
+# (momwire#396 goal 3). It lives here because the enrichment is this
+# family's — the same reason `_ground_spec` owns the one contact-under-
+# refl-coef sentence the whole tree quotes — and it is imported by
+# `razor` and `sinusoidal` (and through the latter by
+# `sinusoidal_galerkin`) rather than copied into each.
+#
+# NOT YET, not never, and the distinction is the point of recording it: the
+# enrichment is a junction basis written against THIS family's knot vector
+# and its Galerkin testing, and what the same dof looks like under another
+# formulation's testing is an open design question (momwire#445), not a
+# decision any of those rows has taken. `{cls}` is substituted with the
+# declaring class (momwire#564) — these sentences reach a user verbatim
+# through `capabilities.refusals`.
+SINGULAR_ENRICHMENT_NOT_YET = (
+    "singular enrichment is not built for {cls}: the enrichment in tree "
+    "(momwire#249) is the B-spline family's junction basis — an extra dof "
+    "carrying the s^(-1/2) edge shape, written against that family's knot "
+    "vector and integrated by its Galerkin testing. Where that dof fits a "
+    "formulation OTHER than that family is momwire#445's open design "
+    "question, so this cell is a NOT YET rather than a never. There is no "
+    "`use_singular_enrichment` keyword on this class at all, so asking for "
+    "it is a caller typo (a TypeError) rather than this sentence"
+)
+
 # momwire#553 U5: what a BURIED deck may not reach, and the domain a buried
 # deck may not leave. Every one of these names the geometry AND the limit in
 # the same sentence, because the two buried Sommerfeld families refuse rather

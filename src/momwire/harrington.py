@@ -98,8 +98,10 @@ import numpy as np
 from . import _wire_spec
 from ._capabilities import Capabilities
 from .pulse import (
+    _KNOT_FEEDS_REFUSAL,
     _OUT_OF_SCOPE,
     _PER_WIRE_RADIUS_REFUSAL,
+    _SINGULAR_ENRICHMENT_REFUSAL,
     _WIRE_LOADING_REFUSAL,
     PulseSolver,
 )
@@ -195,8 +197,17 @@ class HarringtonSolver(PulseSolver):
         per_wire_radius=False,
         singular_enrichment=False,
         refusals={
-            "junction_ports": _OUT_OF_SCOPE["junction_ports"],
-            "node_gaps": _OUT_OF_SCOPE["node_gaps"],
+            # `{cls}` substituted with THIS class, for the same momwire#564
+            # reason the two cells below carry: these two used to quote the
+            # parent's dict RAW, so a Harrington caller was handed a sentence
+            # that named no class and no policy. The prose is the parent's —
+            # the mechanism is the pulse basis's and this class does not
+            # change it — plus `_REFERENCE_ROW`, which is what makes both a
+            # NEVER rather than an unbuilt axis (momwire#396 goal 3).
+            "junction_ports": _OUT_OF_SCOPE["junction_ports"].format(
+                cls="HarringtonSolver"
+            ),
+            "node_gaps": _OUT_OF_SCOPE["node_gaps"].format(cls="HarringtonSolver"),
             # NOT inherited: the parent's sentence is false here. It
             # refuses the exact kernel because "the charge is two POINT
             # charges per basis, whose potential on the wire axis is finite
@@ -212,6 +223,13 @@ class HarringtonSolver(PulseSolver):
             # wrong, and antennaknobs renders this prose verbatim.
             "per_wire_radius": _PER_WIRE_RADIUS_REFUSAL.format(cls="HarringtonSolver"),
             "wire_loading": _WIRE_LOADING_REFUSAL.format(cls="HarringtonSolver"),
+            # momwire#396 goal 3, the two cells that carried no sentence at
+            # all here either. `knot_feeds` is the parent's snap, unchanged:
+            # this class moves the CHARGE, not the feed grid.
+            "knot_feeds": _KNOT_FEEDS_REFUSAL.format(cls="HarringtonSolver"),
+            "singular_enrichment": _SINGULAR_ENRICHMENT_REFUSAL.format(
+                cls="HarringtonSolver"
+            ),
         },
     )
 

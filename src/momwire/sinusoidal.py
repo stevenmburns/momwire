@@ -54,6 +54,7 @@ from . import (
     _wire_loading,
     _wire_spec,
 )
+from .bspline import SINGULAR_ENRICHMENT_NOT_YET
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
@@ -394,6 +395,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "node_gaps": _NODE_GAPS_REFUSAL,
             "knot_feeds": _KNOT_FEEDS_REFUSAL,
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
+            "singular_enrichment": SINGULAR_ENRICHMENT_NOT_YET.format(
+                cls="SinusoidalSolver"
+            ),
         },
     )
 

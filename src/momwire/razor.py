@@ -349,6 +349,7 @@ from . import (
     _wire_loading,
     _wire_spec,
 )
+from .bspline import SINGULAR_ENRICHMENT_NOT_YET
 from ._bspline_kernels import (
     _EK,
     _ek_axis_groups,
@@ -910,6 +911,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         refusals={
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
+            "singular_enrichment": SINGULAR_ENRICHMENT_NOT_YET.format(
+                cls="RazorSolver"
+            ),
         },
     )
 
