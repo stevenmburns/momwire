@@ -298,7 +298,9 @@ public class SimNECDriver {
         else fail("engine still holding stdout " + timeoutSeconds + " s after stdin closed");
         is.close();
         boolean gone = p.waitFor(10, TimeUnit.SECONDS);
-        note("after destroy(): shell " + (gone ? "exited " + p.exitValue() + " (" + exitMeaning(p.exitValue()) + ")" : "still alive after 10 s"));
+        // The shell's exit here is the kill itself (143 for SIGTERM, 1 from
+        // TerminateProcess on Windows), not an engine verdict.
+        note("after destroy(): shell " + (gone ? "exited " + p.exitValue() : "still alive after 10 s"));
     }
 
     // nec2/Execute.partsMatch: "" is a one-field wildcard; parts may be longer than args.
