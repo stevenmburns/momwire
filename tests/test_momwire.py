@@ -3400,11 +3400,32 @@ def test_bspline_swept_fallback_hoist_chunked_under_budget(monkeypatch):
 def test_bspline_swept_fallback_hoist_chunking_bit_identical(monkeypatch):
     """Chunking the fallback hoist is pure re-batching (issue #263): a
     multi-chunk sweep must match the single-chunk (pre-#263 whole-sweep)
-    call to the last ulp, because each k's moment block is computed
-    independently of its chunk mates. The 1 MB budget splits the 32-point
-    sweep into two hoist chunks while the per-k (d+1,d+1,N,N) tensor
-    (~63 KB here) still fits, so the #238 dispatch — a genuinely different
-    assembly — stays on the same side for both solvers.
+    call, because each k's moment block is computed independently of its
+    chunk mates. The 1 MB budget splits the 32-point sweep into two hoist
+    chunks while the per-k (d+1,d+1,N,N) tensor (~63 KB here) still fits, so
+    the #238 dispatch — a genuinely different assembly — stays on the same
+    side for both solvers.
+
+    **To the last ulp on the accelerated arms; to a few ulps on the
+    numpy-einsum one, and the difference is BLAS.** The first two arms are
+    bit-identical on every platform — measured 0.0 on the macOS lane as well
+    as here. The third is not, and it cannot be: with the reg-swept
+    accelerator off, the inner contraction is
+    `np.einsum(..., optimize=True)`, which routes its pairwise steps through
+    `tensordot` and so through BLAS. The contraction PATH is chunk-independent
+    (checked: `[(0,1),(0,1)]` at both chunk sizes), but the operand SHAPES
+    carry the chunk width, and BLAS picks its blocking from the shapes. The
+    reassociation follows.
+
+    Measured on the macOS lane: 2.760e-17 relative, and — the part that
+    settles it — **the same 2.760e-17 with momwire#808's arithmetic disabled**,
+    i.e. it is a property of the arm and not of any change to the values it
+    contracts. Under glibc/OpenBLAS the two happen to coincide exactly, which
+    is why this read as bit-identical here for as long as it did.
+
+    So the exactness is kept where it is real and the third arm gets a bound
+    with its reason, rather than the whole test being loosened to the weakest
+    of the three. momwire#809 is the sweep for the rest of this class.
     """
     import momwire._bspline_kernels as kmod
     import momwire.bspline as bmod
@@ -3428,10 +3449,12 @@ def test_bspline_swept_fallback_hoist_chunking_bit_identical(monkeypatch):
     assert np.array_equal(y_base, y_multi)
 
     # The numpy-einsum inner path (builds without the reg-swept C++ kernel)
-    # must be per-k independent too.
+    # must be per-k independent too — but through BLAS, so to a few ulps
+    # rather than to the bit. See the docstring; 2.8e-17 measured on macOS,
+    # 0.0 under OpenBLAS. A real chunk-mate leak lands at 1e-2, not here.
     monkeypatch.setattr(kmod, "_HAVE_BSPLINE_REG_SWEPT_ACCEL", False)
     z_np_base, z_np_multi = pair("compute_impedance_swept")
-    assert np.array_equal(z_np_base, z_np_multi)
+    assert np.allclose(z_np_base, z_np_multi, rtol=1e-14, atol=0.0)
 
 
 def test_bspline_swept_batched_path_skips_fallback_hoist(monkeypatch):
