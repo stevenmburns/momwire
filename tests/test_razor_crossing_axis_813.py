@@ -67,9 +67,15 @@ from test_crossing_serve_524 import crossing_deck
 
 BAR_INTERIOR = 1e-5  # measured 6.6e-6
 BAR_COLUMN = 1e-7  # measured 7.2e-9
-BAR_ROW_HALF = (
-    1e-4  # measured 5.3e-5 (quadrature: 4-point source Gauss vs razor's 12 + statics)
-)
+# 1e-4, measured 5.3e-5. It IS quadrature, and NOT the source Gauss the first
+# version of this line named: the chopped half ends AT the node, on the below
+# wire's last segment, whose by-parts integrand ~ 1/sqrt(a^2 + s^2) from s = 0
+# is carried by `_graded_u`'s a-scale panels rather than by `_NEAR_Q`.
+# Measured across the source order 4 -> 32 this number reads 5.326e-5 then
+# 5.347e-5 and never moves again; it is `panel_order` and `q` TOGETHER that
+# reach 7.7e-11 (momwire#813, `axis_data`'s density knobs). Sizing a later bar
+# from the old reason would size it wrong, which is why this says so.
+BAR_ROW_HALF = 1e-4
 
 
 @pytest.fixture(scope="module")

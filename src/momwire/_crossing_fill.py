@@ -415,7 +415,7 @@ def _graded_u(h, toward_end, a, growth=2.0, gx=_GX8, gw=_GW8):
     return u, w
 
 
-def axis_data(ctx, seg_idx, coarse=False):
+def axis_data(ctx, seg_idx, coarse=False, *, growth=None, panel_order=None, q=None):
     """Everything one axis of the crossing blocks needs: quadrature nodes,
     per-node tangents and weights, per-basis value/derivative samples, and
     the signed wire-end table for the by-parts terms.
@@ -432,11 +432,35 @@ def axis_data(ctx, seg_idx, coarse=False):
     kept a separate variant so either side's knobs revert alone); it
     exists only for admissible blocks and must never be fed to the
     ends/corner terms.
+
+    **The three density knobs are overridable per axis** (momwire#813):
+    `growth` and `panel_order` are the graded panels' ratio and Gauss order
+    on interface-touching segments, `q` the plain Gauss order everywhere
+    else. `None` means the module constant this axis would have used, so a
+    caller that passes nothing gets exactly the axis it got before these
+    arguments existed — which is what keeps `BSplineSolver`'s crossing fill
+    bit-identical.
+
+    They exist because a PATH-tested row that ends AT the node needs a
+    finer axis than a Galerkin one does, and the two error plateaus are
+    separate: on razor's node row at `crossing_deck(1)`, `panel_order`
+    alone takes the residual 5.3e-5 → 2.2e-6 and no further at any
+    `growth`, and `q` alone leaves 5.3e-5 untouched — it is
+    `panel_order` = 8 AND `q` = 8 together that reach 7.7e-11. Sweeping
+    either alone reads as "converged" at the other's plateau, which is how
+    that residual came to be recorded as a property of the source Gauss.
     """
     d = ctx.basis.degree
     geom = ctx.geom
-    q = _FAR_Q if coarse else _NEAR_Q
+    if q is None:
+        q = _FAR_Q if coarse else _NEAR_Q
     xg, wg = leggauss(q)
+    if growth is None:
+        growth = _FAR_GROWTH if coarse else _NEAR_GROWTH
+    if panel_order is None:
+        gx, gw = (_GX4, _GW4) if coarse else (_NEAR_GX, _NEAR_GW)
+    else:
+        gx, gw = leggauss(panel_order)
     tq = 0.5 * (xg + 1.0)
     gz = float(ctx.ground_z)
     a_wire = float(ctx.a_wire)
@@ -459,19 +483,7 @@ def axis_data(ctx, seg_idx, coarse=False):
         touch_lo = abs(sl[2] - gz) < tol
         touch_hi = abs(sr[2] - gz) < tol
         if touch_lo or touch_hi:
-            if coarse:
-                u, w = _graded_u(
-                    h, "lo" if touch_lo else "hi", a_wire, _FAR_GROWTH, _GX4, _GW4
-                )
-            else:
-                u, w = _graded_u(
-                    h,
-                    "lo" if touch_lo else "hi",
-                    a_wire,
-                    _NEAR_GROWTH,
-                    _NEAR_GX,
-                    _NEAR_GW,
-                )
+            u, w = _graded_u(h, "lo" if touch_lo else "hi", a_wire, growth, gx, gw)
         else:
             u = h * tq
             w = 0.5 * h * wg
