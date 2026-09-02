@@ -429,12 +429,17 @@ against a 0.20 Ω bar, offsets constant to 0.0211 Ω against 0.05 Ω.
 
 ## The deck front end (momwire#432)
 
-`momwire.deck.build_solver(model, basis="razor")` — and `"razor-nec5"` for
-the identified quadrature below — construct this class from a parsed
-`nec2` deck (`momwire.deck.parse`). Both names are the same `RazorSolver`,
-in `momwire.deck.BASES` beside the other five families; `"razor-nec5"`
-binds `nec5_quadrature=True`, the same "one class, one extra kwarg" shape
-`"bspline-d1"` uses for the degree axis.
+`momwire.deck.build_solver(model, basis="razor-2p")` — and `"razor-nec5"`,
+its deprecated spelling — construct this class from a parsed `nec2` deck
+(`momwire.deck.parse`) at the identified quadrature below. Both names are
+the same `RazorSolver`, in `momwire.deck.BASES` beside the other five
+families; both bind `nec5_quadrature=True`, the same "one class, one extra
+kwarg" shape `"bspline-d1"` uses for the degree axis. The other lane this
+class can take — Gauss-Legendre nodes along the testing path,
+`nec5_quadrature=False` — was this roster's plain `razor` entry until
+momwire#753 retired it as not worth ordering (measured 20x the wall time for
+a 0.001 Ω difference from `razor-2p`); it stays reachable by constructing
+`RazorSolver(...)` directly.
 
 **Card translation.** `LD 0`/`LD 1`/`LD 4` (series RLC, parallel RLC, a
 fixed R+jX — `momwire.deck.model.LoadSpec`'s three `kind`s) become
@@ -500,7 +505,7 @@ one `compute_impedance_swept` / `compute_y_matrix_swept` already use — so
 generator behind `compute_port_solution_swept()` share one code path with
 the single-k entry point rather than a second copy of the port algebra:
 `momwire.portal`'s Y-matrix-based deck runner (`_y_and_port_coeffs`) drives
-`--basis razor` and `--basis razor-nec5` exactly like every other roster
+`--basis razor-2p` and `--basis razor-nec5` exactly like every other roster
 entry now, through the same one-fill-all-ports call.
 
 **The portal's load stamp, and its budget (momwire#433).** The portal knows
@@ -608,7 +613,7 @@ and the `node_gaps` / contact-over-finite-ground refusals surfacing through
   against an independently reassembled operator, `coeffs @ V`
   superposition, feeds-in-order port ORDER, one fill and one factorisation
   per call, and the swept ω-boundary bit gate over a moving-ε̃ ground.
-  `tests/test_portal.py`'s `--basis razor` / `--basis razor-nec5` battery
+  `tests/test_portal.py`'s `--basis razor-2p` / `--basis razor-nec5` battery
   carries the portal end-to-end gate — a live deck with a load AND a
   ground, both roster names, finite AIP data — plus the momwire#433 budget
   gates: `Z_loaded − Z_unloaded == Z_L` exactly (the load applied once, not

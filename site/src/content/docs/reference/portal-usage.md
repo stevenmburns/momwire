@@ -76,7 +76,6 @@ directly, no arguments and no wrapper scripts:
 momwire-nec2c                                # the default — degree-2 B-spline (bs2)
 momwire-nec2c-bspline-d1                     # the same physics at degree 1 (tent basis)
 momwire-nec2c-razor-nec5                     # the NEC-5 formulation twin, NEC-5 quadrature
-momwire-nec2c-razor                          # the same twin with Gauss-Legendre quadrature
 momwire-nec2c-sinusoidal                     # NEC-2's own formulation
 momwire-nec2c-sinusoidal-galerkin            # the same basis, tested variationally
 momwire-nec2c-hmatrix                        # same physics, hierarchical (ACA) solve
@@ -112,13 +111,19 @@ elements on a regular lattice become an FFT convolution over the element grid
 — and it degrades to the hierarchical solve on a deck with no repeated
 structure, so it is safe to leave on. Its answers must agree with `bspline`'s;
 if they do not, the deck is telling you about conditioning, not about basis.
-The two `razor` rows are the **twin** axis: NEC-5's own formulation — tent
-basis, razor-blade testing — rebuilt from its public description, with
-`razor-nec5` additionally carrying NEC-5's quadrature. On the models where we
-hold a licensed NEC-5 reference, `razor-nec5` rides its convergence path at
-the 0.01 % level, which makes it the reference lane for "what would NEC-5
-say" — while the B-spline default typically reaches the shared converged
-answer at coarser meshes than either.
+`razor-nec5` is the **twin** axis: NEC-5's own formulation — tent basis,
+razor-blade testing — rebuilt from its public description, at NEC-5's own
+identified quadrature. On the models where we hold a licensed NEC-5
+reference, `razor-nec5` rides its convergence path at the 0.01 % level,
+which makes it the reference lane for "what would NEC-5 say" — while the
+B-spline default typically reaches the shared converged answer at coarser
+meshes than it does. The class also takes Gauss-Legendre quadrature along
+the same testing path; that was a second command here, `momwire-nec2c-razor`,
+until momwire#753 retired it — the two rows differed only in that sampling
+choice, and the GL lane cost 20x the wall time for a 0.001 Ω difference at
+N=1600 free space, so it is no longer a menu item. It stays reachable as a
+library call (`RazorSolver(nec5_quadrature=False, ...)`), not as a command
+here.
 
 **On a tapered or stepped-radius wire, `sinusoidal` and
 `sinusoidal-galerkin` are NEC-2-identified, not NEC-5-accurate.** Both ride
@@ -344,11 +349,11 @@ shared command reads its own name the way the stock one does, with its own
 `shared` segment consumed rather than mistaken for a solver:
 
 ```bash
-ln -s "$(which momwire-nec2c-shared)" ~/bin/momwire-nec2c-shared-razor
-momwire-nec2c-shared-razor -version    # a razor server, and only razor decks
+ln -s "$(which momwire-nec2c-shared)" ~/bin/momwire-nec2c-shared-razor-2p
+momwire-nec2c-shared-razor-2p -version    # a razor-2p server, and only razor-2p decks
 ```
 
-`momwire-nec2c-razor` works as a link name too — the spelling the named
+`momwire-nec2c-razor-2p` works as a link name too — the spelling the named
 commands above teach — and a bare `momwire-nec2c-shared` selects nothing, so
 it stays the default engine. A name matching no solver fails the `-version`
 probe loudly, naming its source, exactly as the stock command does. So the crew arithmetic above inverts —
