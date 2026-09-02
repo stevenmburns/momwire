@@ -583,9 +583,12 @@ _NETWORK_LOSS_FLOOR = 1e-9
 # returns the solve's round-off — printed to five figures WITH a phase, so
 # `2.5492E-19 ... 18.248` in one process and `1.6824E-26 ... 43.749` in the
 # next. The served == stock oracle and the warm == cold oracle both read that
-# as a different answer (main went red on `dipole_pq_charges` after
-# momwire#808 moved the fill by 1e-12 and the residual with it; the same
-# class as the two snaps above — never print the angle of zero). Measured:
+# as a different answer (main went red on `dipole_pq_charges` at a docs-only
+# commit, two commits AFTER momwire#808's fill move had already passed the
+# same lane: the residual of a symmetry zero simply differs between two
+# processes of one build, and surfaced by luck — momwire#809's class, not a
+# triggering change. Same rule as the two snaps above: never print the angle
+# of zero). Measured:
 # the residual is 6e-9 of the table maximum in the stock engine's own printout
 # and 1e-15 here; a genuine charge is O(1) of it. Seven orders of clearance
 # on each side of the bar.
