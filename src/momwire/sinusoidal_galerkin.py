@@ -331,7 +331,7 @@ import scipy.spatial.distance
 from . import _field_ground, _ground_mirror, _wire_loading
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
-from .bspline import SINGULAR_ENRICHMENT_NOT_YET
+from .bspline import SINGULAR_ENRICHMENT_NEVER
 from ._port_solution import PortSolution
 from .sinusoidal import (
     _BURIED_REFUSAL,
@@ -951,7 +951,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "contact+refl-coef": SinusoidalSolver.capabilities.refusals[
                 "contact+refl-coef"
             ],
-            "singular_enrichment": SINGULAR_ENRICHMENT_NOT_YET.format(
+            "singular_enrichment": SINGULAR_ENRICHMENT_NEVER.format(
                 cls="SinusoidalGalerkinSolver"
             ),
             # `buried` and `contact` are the base's, unchanged: this class
