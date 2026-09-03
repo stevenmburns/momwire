@@ -427,14 +427,18 @@ def test_some_plausible_permittivity_puts_both_screens_on_their_figures(
             continue
         ran += 1
         record_property(f"eps{eps:g}_135ft_N30", f"{r135:.2f}")
-        miss = max(abs(r45 - FIG37_PLATEAU), abs(r135 - FIG36_PLATEAU_AT_30))
-        fits[eps] = miss
+        # Plain float: record_property values cross the xdist wire and
+        # execnet cannot serialise numpy scalars (the first dispatch run of
+        # this gate died with INTERNALERROR on both Linux and macOS for it).
+        fits[eps] = float(
+            max(abs(r45 - FIG37_PLATEAU), abs(r135 - FIG36_PLATEAU_AT_30))
+        )
     assert ran >= 2, (
         f"the band must have at least two members that serve both screens: {fits}"
     )
     best = min(fits, key=fits.get)
     record_property("best_eps_r", best)
-    record_property("best_joint_miss_ohm", fits[best])
+    record_property("best_joint_miss_ohm", float(fits[best]))
     assert fits[best] <= JOINT_BAR_AT_30, (
         f"no permittivity in {EPS_BAND} puts both BLE screens within "
         f"{JOINT_BAR_AT_30} ohm of their N = 30 figures at once (joint misses "
