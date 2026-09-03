@@ -81,8 +81,13 @@ _ROWS = {
     "ble45-n2": (lambda: ble_deck(2), None, None, 0.0751),
     "ble45-n15": (lambda: ble_deck(15), None, None, 0.2414),
 }
-# The fan and BLE rows ride with their degree-2 anchors' lane.
-_CROSSGATE = {"fan-n2", "ble45-n2", "ble45-n15"}
+# Every row rides the crossgate lane. The fan and BLE rows because their
+# degree-2 anchors do; the crossing and hub rows because solving BOTH degrees
+# at q = 64 / 32 costs 21-26 s on the g++ 11.4 box (momwire#839's machine),
+# past the default lane's 20 s time-budget ceiling, so they were a latent flake
+# there and on any loaded runner. This is a certification gate, and the
+# push-only lane is where those run.
+_CROSSGATE = set(_ROWS)
 
 
 def _solve(build, degree, nqp):
