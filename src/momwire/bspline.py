@@ -93,6 +93,12 @@ from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
 from ._port_solution import PortSolution, _SweptPortSolutions
 
+# Cross-edge quadrature defaults, resolved per deck by `BSplineSolver.n_qp_pair`.
+# Two constants because there are two fills; see that property for the
+# measurements and for why the buried order is not applied everywhere.
+DEFAULT_N_QP_PAIR = 8
+BURIED_N_QP_PAIR = 32
+
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_weighted"
@@ -733,7 +739,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junctions=None,
         junction_ports=None,
         node_gaps=None,
-        n_qp_pair=8,
+        n_qp_pair=None,
         n_qp_pair_same_edge=4,
         n_qp_source=16,
         extended_kernel=False,
@@ -990,14 +996,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # ports (feeds=[] with junction_ports, issue #172).
         self.feed_wire_index = self.feeds[0][0] if self.feeds else None
         self.feed_arclength = self.feeds[0][1] if self.feeds else None
-        self.n_qp_pair = int(n_qp_pair)
-        # momwire#769: the chunked and swept fills below go straight into the
-        # capped C++ pair kernels, so they have to ask the same question the
-        # per-block path asks. SILENT on purpose — construction does not know
-        # whether this deck will ever reach an off-edge kernel (a single-edge
-        # deck has not entered one since momwire#759), so the warning is left
-        # to the per-block path, which knows.
-        self._accel_serves_n_qp_pair = int(n_qp_pair) <= _ACCEL_MAX_N_QP
+        # `None` means "let the deck choose" — resolved lazily by the
+        # `n_qp_pair` property below, because whether this deck is buried is
+        # a GEOMETRY question and the wires are not walked yet here. An
+        # explicit value always wins and is never second-guessed.
+        self._n_qp_pair_arg = None if n_qp_pair is None else int(n_qp_pair)
+        self._n_qp_pair_resolved = None
         self.n_qp_pair_same_edge = int(n_qp_pair_same_edge)
 
         # Singular basis enrichment at K≥`enrichment_min_k` junctions.
@@ -1503,6 +1507,59 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 "pinned (momwire#524 phase 2)"
             )
         return tuple(crossing)
+
+    @property
+    def n_qp_pair(self):
+        """Cross-edge quadrature order, resolved from the deck when not given.
+
+        Two defaults because there are two FILLS, not because one knob means
+        two things. A deck with wires below the interface dispatches to
+        `_compute_Z_operator_buried`, which the comment there calls
+        "structurally a different fill, not a flag inside this one": three
+        pair classes, two wavenumbers, two permittivities. It gets its own
+        quadrature default for the same reason it gets its own code path.
+
+        Why 32 there (momwire#760). The buried/crossing class carries a large
+        quadrature CONSTANT — not, as #760 long recorded, a lost convergence
+        rate. Measured against a q=256 reference on main @ f729cb5, soil A,
+        degree 2:
+
+            deck                          q=8      q=32
+            antennaknobs hub (shipped)  0.1717    0.0047
+            crossing_deck(1)            0.0929    0.0003
+            hub_deck()                  0.0514    0.0001
+            fan (coincident rises)      2.5562    0.1049
+
+        Why NOT everywhere. On these decks the Sommerfeld evaluation
+        dominates and the order is free (+1-2% at steady state). In free
+        space it is the whole cost and it is O(n_qp^2): on a bent 400-segment
+        deck, 8 -> 32 is **4.8x**. A single-edge deck is unaffected either way
+        (since momwire#759 it never enters an off-edge kernel at all), which
+        is exactly why a straight-wire timing would have made this look free.
+
+        Resolution is lazy and cached: `_has_buried_wires()` walks the wires,
+        so it cannot be answered in `__init__`.
+        """
+        if self._n_qp_pair_arg is not None:
+            return self._n_qp_pair_arg
+        if self._n_qp_pair_resolved is None:
+            self._n_qp_pair_resolved = (
+                BURIED_N_QP_PAIR
+                if self.ground_z is not None and self._has_buried_wires()
+                else DEFAULT_N_QP_PAIR
+            )
+        return self._n_qp_pair_resolved
+
+    @property
+    def _accel_serves_n_qp_pair(self):
+        # momwire#769: the chunked and swept fills go straight into the capped
+        # C++ pair kernels, so they have to ask the same question the per-block
+        # path asks. SILENT on purpose — construction does not know whether
+        # this deck will ever reach an off-edge kernel (a single-edge deck has
+        # not entered one since momwire#759), so the warning is left to the
+        # per-block path, which knows. A property now, not an __init__ scalar,
+        # because the order it asks about is itself resolved from the deck.
+        return self.n_qp_pair <= _ACCEL_MAX_N_QP
 
     def _has_buried_wires(self):
         """Whether any wire lies strictly below the interface."""
