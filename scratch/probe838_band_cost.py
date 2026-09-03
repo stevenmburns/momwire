@@ -7,10 +7,11 @@ Two questions the design needs answered before it is chosen:
     stated R1-independent -- checked here), and what that does to a whole
     grid fill;
   * where the floor actually is. It is NOT set by convergence: it is set by
-    `_MAX_TAIL_PANELS`, and the way that cap is reached is silent -- the
-    contour stops at the cap, bumps `Health.nonconvergent`, and returns a
-    value anyway. This measures how wrong that value is, which is the number
-    that says whether the floor is 0.1 deg or lower.
+    `_MAX_TAIL_PANELS`. When this probe was written that cap was reached
+    SILENTLY -- the contour stopped, bumped `Health.nonconvergent`, and
+    returned a Wynn extrapolation anyway -- and measuring how wrong that
+    value is said whether the floor is 0.1 deg or lower. momwire#841 has
+    since made it a refusal by name, so those rows now read REFUSED.
 
     python scratch/probe838_band_cost.py
 """
@@ -98,23 +99,35 @@ def grid_cost(eps_t, lam_m):
 
 
 def floor_probe(eps_t, lam_m):
-    """The cap is silent. How wrong is a capped point?"""
+    """Where the floor sits, and what the cap does past it.
+
+    When this probe was written, reaching `_MAX_TAIL_PANELS` was SILENT: the
+    contour stopped, bumped `Health.nonconvergent`, and returned a Wynn
+    extrapolation anyway. The error column below is what justified making it
+    a refusal (momwire#841) -- 3.8e-09 just under the floor, 9.3e-04 an
+    octave below it -- so the rows past the floor now read REFUSED and the
+    lifted-cap reference is what they are refused against.
+    """
     print(f"cap _MAX_TAIL_PANELS = {below._MAX_TAIL_PANELS}")
     print(
-        f"{'theta':>7} {'6.4/tan':>8} {'panels':>7} {'nonconv':>8} {'rel vs lifted cap':>18}"
+        f"{'theta':>7} {'6.4/tan':>8} {'panels':>7} {'nonconv':>8} {'vs lifted cap':>22}"
     )
     orig = below._MAX_TAIL_PANELS
     for thd in (0.12, 0.10, 0.09, 0.08, 0.05, 0.023):
         h = below.Health()
-        a = below.iv_surfaces_direct_below(
-            eps_t,
-            K7,
-            np.array([lam_m]),
-            np.radians([thd]),
-            rtol=1e-9,
-            omega=OM7,
-            health=h,
-        )
+        refused = False
+        try:
+            a = below.iv_surfaces_direct_below(
+                eps_t,
+                K7,
+                np.array([lam_m]),
+                np.radians([thd]),
+                rtol=1e-9,
+                omega=OM7,
+                health=h,
+            )
+        except ValueError:
+            refused = True  # momwire#841; the counter still bumped
         try:
             below._MAX_TAIL_PANELS = 40000
             b = below.iv_surfaces_direct_below(
@@ -122,13 +135,16 @@ def floor_probe(eps_t, lam_m):
             )
         finally:
             below._MAX_TAIL_PANELS = orig
-        av = np.array([a[k][0] for k in _SURF_KEYS])
-        bv = np.array([b[k][0] for k in _SURF_KEYS])
-        rel = float(np.abs(av - bv).max() / np.abs(bv).max())
         d = h.as_dict()
+        if refused:
+            what = f"{'REFUSED (#841)':>22}"
+        else:
+            av = np.array([a[k][0] for k in _SURF_KEYS])
+            bv = np.array([b[k][0] for k in _SURF_KEYS])
+            what = f"{float(np.abs(av - bv).max() / np.abs(bv).max()):22.3e}"
         print(
             f"{thd:7.3f} {6.4 / np.tan(np.radians(thd)):8.0f} "
-            f"{d['max_tail_panels']:7d} {d['nonconvergent']:8d} {rel:18.3e}"
+            f"{d['max_tail_panels']:7d} {d['nonconvergent']:8d} {what}"
         )
 
 

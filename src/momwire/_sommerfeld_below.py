@@ -737,6 +737,50 @@ def _run_contour(
     return head + tail, hp, tp, conv, accel
 
 
+def _refuse_if_capped(conv, panels, rho, h, where=None):
+    """Refuse, by name, a contour that exhausted `_MAX_TAIL_PANELS`.
+
+    momwire#841. `_tail_below` stops at the panel budget, and when it does it
+    falls back to Wynn's epsilon and returns an EXTRAPOLATED value rather
+    than a raw truncation — which is why the degradation is graceful
+    (measured against the same point with the cap lifted to 40000: 3.8e-09 at
+    theta = 0.08 deg, 2.6e-06 at 0.05, 9.3e-04 at 0.023). Graceful is exactly
+    what made it dangerous: there is no theta at which the answer visibly
+    breaks, and `Health.nonconvergent` was the only signal, read by nobody.
+
+    Raised HERE and not in `_tail_below`, for two reasons. The C++ and numpy
+    dispatches both come back through this point carrying `conv`, so one copy
+    of the prose serves both — the same bargain `SommerfeldGridBelow.eval`
+    makes for the domain refusals. And `_sommerfeld_transmitted` reuses
+    `_tail_below`/`_run_contour` with a larger budget and DEPENDS on the Wynn
+    fallback for its grazing rows; raising down there would break a family
+    this issue is not about.
+
+    Nothing the below family serves reaches here: the grazing floor is
+    `_SOMM_BELOW_TH_MIN_DEG`, and at that floor the worst node over the SPEC
+    soils uses 3868 of 4000 panels (momwire#838). This fires for a query
+    BELOW the floor, or for a soil whose panel demand is worse than any
+    measured — which is the case that used to return a confident number.
+    """
+    if conv:
+        return
+    r1 = math.hypot(rho, h)
+    th_deg = math.degrees(math.atan2(h, rho))
+    raise ValueError(
+        f"the below/below contour exhausted its tail budget at theta = "
+        f"{th_deg:.4g} deg, R1 = {r1:.6g} (rho = {rho:.6g}, h = {h:.6g}): "
+        f"{panels} panels, the whole of _MAX_TAIL_PANELS = {_MAX_TAIL_PANELS}. "
+        f"The panel count grows as ~6.4/tan(theta), so this is a grazing "
+        f"limit: the tabulated floor is {_SOMM_BELOW_TH_MIN_DEG} deg, where "
+        f"the worst SPEC soil uses ~97 % of the budget. Past the cap the "
+        f"contour falls back to a Wynn extrapolation whose error grows from "
+        f"~4e-9 just under the floor to ~9e-4 an octave below it, so there "
+        f"is no honest value to return — raise the pair's depth sum relative "
+        f"to its horizontal separation, or refuse the geometry"
+        + (f" [at {where!r}]" if where is not None else "")
+    )
+
+
 def _six_integrals_below(
     eps_t, k2, rho, h, rtol=1e-11, health=None, selfconv=False, where=None
 ):
@@ -777,6 +821,7 @@ def _six_integrals_below(
                 health.note_selfconv(
                     where if where is not None else (rho, h), float(sconv[0])
                 )
+        _refuse_if_capped(bool(conv[0]), int(tp[0]), rho, h, where)
         return vals[0]
 
     def f(lam):
@@ -787,6 +832,7 @@ def _six_integrals_below(
     )
     if health is not None:
         health.note(where, tp, hp, conv, accel)
+    _refuse_if_capped(bool(conv), int(tp), rho, h, where)
     if selfconv:
         coarse, _, _, _, _ = _run_contour(
             f,
@@ -868,6 +914,14 @@ def _six_integrals_below_many(
             if selfconv:
                 w = where[i] if where[i] is not None else (float(rho[i]), float(h[i]))
                 health.note_selfconv(w, float(sconv[i]))
+    for i in range(n):
+        _refuse_if_capped(
+            bool(conv[i]),
+            int(tp[i]),
+            float(rho[i]),
+            float(h[i]),
+            None if where is None else where[i],
+        )
     return vals
 
 

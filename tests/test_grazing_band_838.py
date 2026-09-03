@@ -575,3 +575,117 @@ def test_the_far_zone_interpolates_to_the_bar():
                     worst, float((np.abs(G - R) / np.abs(R).max(axis=0)[None, :]).max())
                 )
     assert worst < FAR_BAR, f"{worst:.3e}"
+
+
+# ---------------------------------------------------------------------------
+# momwire#841 -- the tail cap refuses by name instead of extrapolating
+# ---------------------------------------------------------------------------
+#
+# `_tail_below` stops at `_MAX_TAIL_PANELS` and, when it does, falls back to
+# Wynn's epsilon and returns an EXTRAPOLATED value. That is why the failure
+# was graceful -- measured against the same point with the cap lifted to
+# 40000: 3.8e-09 at theta = 0.08 deg, 2.6e-06 at 0.05, 9.3e-04 at 0.023 --
+# and graceful is what made it dangerous. There is no theta at which the
+# answer visibly breaks, and `Health.nonconvergent` was the only signal.
+#
+# The ladder below is the one the floor was chosen from, so these gates and
+# `_SOMM_BELOW_TH_MIN_DEG` cannot drift apart.
+
+_TAIL_CAP_SERVED = (0.12, 0.10, 0.09)
+_TAIL_CAP_REFUSED = (0.08, 0.05, 0.023)
+
+
+def _direct_at(soil, f, th_deg, r1_over_lam=1.0, health=None):
+    eps_t, k2, om, lam_m = _deck(soil, f)
+    return below.iv_surfaces_direct_below(
+        eps_t,
+        k2,
+        np.array([r1_over_lam * lam_m]),
+        np.radians([th_deg]),
+        rtol=1e-9,
+        omega=om,
+        health=health,
+    )
+
+
+def test_the_tail_cap_refuses_by_name_below_the_floor():
+    """The measured ladder, pinned: converged at 0.09-0.12 deg, capped below.
+
+    0.09 deg is the last rung that converges on soil A at R1 = lambda_m (it
+    is NOT the floor -- across all SPEC soils 0.09 caps, which is why
+    `_SOMM_BELOW_TH_MIN_DEG` is 0.1). Both halves matter: a change that made
+    the contour cheaper would move the served rungs down and this gate would
+    say so.
+    """
+    for th_deg in _TAIL_CAP_SERVED:
+        got = _direct_at("A", 7e6, th_deg)
+        assert all(np.isfinite(got[k]).all() for k in _SURF_KEYS), th_deg
+    for th_deg in _TAIL_CAP_REFUSED:
+        with pytest.raises(ValueError, match="exhausted its tail budget"):
+            _direct_at("A", 7e6, th_deg)
+
+
+def test_the_cap_refusal_names_the_query_and_the_way_out():
+    """A refusal that does not say which knob to move is a crash with prose."""
+    with pytest.raises(ValueError) as exc:
+        _direct_at("A", 7e6, 0.05)
+    msg = str(exc.value)
+    for want in (
+        "theta = 0.05",  # the angle asked for
+        "R1 = ",  # and the separation
+        "_MAX_TAIL_PANELS",  # the budget it hit, by name
+        f"{below._MAX_TAIL_PANELS}",  # and its value
+        "6.4/tan",  # why it grows
+        f"{below._SOMM_BELOW_TH_MIN_DEG}",  # where the served domain stops
+        "raise the pair's depth sum",  # the way out
+    ):
+        assert want in msg, f"refusal does not mention {want!r}: {msg}"
+
+
+def test_the_health_counter_still_bumps_before_the_refusal():
+    """momwire#841 replaces a silent counter with a refusal; it does not
+    remove the counter. `scratch/probe838_band_cost.py` reads the panel count
+    off a refused point, which only works if `note` runs first."""
+    h = below.Health()
+    with pytest.raises(ValueError):
+        _direct_at("A", 7e6, 0.05, health=h)
+    d = h.as_dict()
+    assert d["nonconvergent"] == 1, d
+    assert d["max_tail_panels"] == below._MAX_TAIL_PANELS, d
+
+
+def test_both_dispatches_refuse_at_the_cap():
+    """One copy of the prose, reached from both routes. The C++ and numpy
+    contours both come back through `_six_integrals_below*` carrying `conv`,
+    which is why the refusal sits there and not in `_tail_below` -- and why
+    `_sommerfeld_transmitted`, which reuses `_tail_below` with a bigger
+    budget and DEPENDS on the Wynn fallback, is untouched."""
+    msgs = []
+    for use_numpy in (True, False):
+        ctx = force_numpy() if use_numpy else None
+        if ctx:
+            ctx.__enter__()
+        try:
+            with pytest.raises(ValueError) as exc:
+                _direct_at("A", 7e6, 0.05)
+            msgs.append(str(exc.value))
+        finally:
+            if ctx:
+                ctx.__exit__()
+    assert msgs[0] == msgs[1], msgs
+
+
+def test_the_floor_itself_is_untouched_by_the_refusal():
+    """Nothing the family serves may move. The refusal fires only after the
+    value is computed and never modifies it, so this is structural -- but the
+    floor is 97 % of the budget on the worst SPEC soil, which is close enough
+    that it is worth asserting rather than reasoning about."""
+    for soil in SOILS:
+        for f in FREQS:
+            for r1l in (0.05, 1.0, 2.0):
+                got = _direct_at(soil, f, below._SOMM_BELOW_TH_MIN_DEG, r1l)
+                assert all(np.isfinite(got[k]).all() for k in _SURF_KEYS), (
+                    soil,
+                    f,
+                    r1l,
+                )
