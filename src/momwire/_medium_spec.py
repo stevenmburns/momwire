@@ -246,6 +246,48 @@ def buried_far_field_refusal():
     return _REFUSE_BURIED_FAR_FIELD
 
 
+def port_grounded_junctions(grounded, crossing):
+    """The junctions at which a PORT is refused for the ground-stake reason:
+    the grounded ones, MINUS the validated crossing junctions (momwire#849).
+
+    Both trunks refuse a port at a grounded junction, and at a ground CONTACT
+    node both refusals are right: the plane is a conductor there, momwire#151
+    continues the wire's current into it as the C2-scaled image, and the
+    node's potential is pinned by that image — so there is nothing for a
+    series gap to be in series WITH, and nothing for a junction port to
+    drive that the image does not already hold.
+
+    A declared CROSSING node is not that node, and every clause fails
+    separately. There is no contact image at it — the crossing fill is what
+    carries the current across (momwire#524 phase 2) — razor already demotes
+    the group's grounded flag at basis build so the node takes the free-space
+    junction topology (momwire#813 repair 1), and no potential reference may
+    be taken there at all: each medium's (A, Phi) is its own gauge and the
+    transmitted V at z = 0 is not Phi(node-). So the ground-stake sentence is
+    a claim about a mechanism this deck does not have.
+
+    What follows is NOT the same for the two port kinds, which is why this
+    returns the junction set and each caller spends it differently:
+
+    * a **node gap** (momwire#305) is a series source addressed to the
+      polyline MEMBER, not to the node's KCL row, and a through tent's
+      chopped row is exactly the object that can carry one. It is served at
+      a crossing node, and it is the feed model NEC-5 expresses natively
+      (EX at the knot), which makes it the one spelling every engine we run
+      can share (antennaknobs#1108);
+    * a **junction port** drives the node's KCL row, and a crossing node's
+      KCL row is DROPPED — continuity emerges from the fill instead of from
+      a constraint row. There is no row to drive, so it stays refused, with
+      a sentence that says THAT rather than quoting the ground stake.
+
+    This narrows the two REFUSALS and nothing else. `_grounded_junctions`
+    itself is deliberately left alone: it is also what decides which KCL rows
+    exist, and moving a crossing node out of it would keep that row and
+    change the basis — a different change, and not this one.
+    """
+    return frozenset(grounded) - frozenset(crossing)
+
+
 def grounded_crossing_exemption(polylines, ground_z, groups):
     """The `(wire, "start"|"end")` pairs a grounded junction EXEMPTS from the
     refusals above — the crossing-junction exemption `wire_media` keys on

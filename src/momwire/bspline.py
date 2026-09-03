@@ -1623,8 +1623,26 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 row_of[j] = row
                 row += 1
         assert row == kcl_A.shape[0], (row, kcl_A.shape)
+        crossing = set(self._crossing_junctions())
         port_rows = []
         for j_idx, _v in self.junction_ports:
+            if j_idx in crossing:
+                # Refused for a REASON OF ITS OWN (momwire#849). A junction
+                # port drives the node's KCL row and a crossing node has
+                # none: it is dropped so that continuity through the
+                # interface emerges from the crossing fill instead of from a
+                # constraint row (momwire#524 phase 2). Quoting the ground
+                # stake here would be a claim about a contact image this
+                # deck does not have.
+                raise ValueError(
+                    f"junction {j_idx} crosses the interface, and a crossing "
+                    "node has no KCL row for a junction port to drive: its "
+                    "row is dropped so that continuity emerges from the "
+                    "crossing fill (momwire#524 phase 2). Drive the node with "
+                    "node_gaps= instead — a series EMF on one member's tent, "
+                    "which IS served here (momwire#849) and is the same feed "
+                    "model NEC-5 spells as EX at the knot"
+                )
             if j_idx in grounded:
                 raise ValueError(
                     f"junction {j_idx} is both grounded and a junction port — "
@@ -5091,7 +5109,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         volts = np.zeros(len(self.node_gaps), dtype=np.complex128)
         if not self.node_gaps:
             return cols, volts
-        grounded = self._grounded_junctions()
+        # The ground-stake refusal, minus the crossing nodes it does not
+        # describe (momwire#849 — `_medium_spec.port_grounded_junctions`
+        # carries the adjudication). A node gap is a series source on the
+        # polyline MEMBER, which is what a through tent's chopped row can
+        # carry; the crossing fill, not a contact image, is what takes the
+        # current across.
+        grounded = _medium_spec.port_grounded_junctions(
+            self._grounded_junctions(), self._crossing_junctions()
+        )
         end_to_junction = {}
         for j, jw in enumerate(self.junctions):
             for member in jw:

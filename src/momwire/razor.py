@@ -1543,7 +1543,23 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.node_gaps = _wire_spec.normalize_node_gaps(
             node_gaps, [list(g["ends"]) for g in groups], len(self.wires_polylines)
         )
-        grounded_members = {end for g in groups if g["grounded"] for end in g["ends"]}
+        # The demoted view, not the raw one (momwire#849). A declared
+        # crossing group's `grounded` flag is demoted at basis build
+        # (momwire#813 repair 1) so the node takes the free-space junction
+        # topology; this refusal has to read the SAME node, or razor would
+        # refuse a knot feed on a deck whose basis has no ground stake at
+        # that node at all. `_medium_spec.port_grounded_junctions` carries
+        # the adjudication, and the B-spline twin spends it the same way.
+        _crossing = (
+            set(self._crossing_junctions()) if self.ground_z is not None else set()
+        )
+        grounded_members = {
+            end
+            for j in _medium_spec.port_grounded_junctions(
+                {j for j, g in enumerate(groups) if g["grounded"]}, _crossing
+            )
+            for end in groups[j]["ends"]
+        }
         for i, (w_i, end_i, _v) in enumerate(self.node_gaps):
             if (w_i, end_i) in grounded_members:
                 raise ValueError(
