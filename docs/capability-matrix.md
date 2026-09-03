@@ -79,7 +79,7 @@ that serves both — and those are the `a+b` keys in the reasons below.
 
 ## The recorded reasons
 
-43 sentences across 71 declared cells, verbatim. A sentence shared by several rows is printed
+44 sentences across 72 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -202,6 +202,10 @@ renders in host dialogs.
 - `PulseSolver` `wire_loading`
 
   > PulseSolver does not serve wire loading: an `LD 5` wire conductivity or an `LD 6` insulation is a distributed surface impedance, and this formulation has no term for one. Nothing structural is in the way — on a pulse row it would be a diagonal bump, Z_mm += Z_s*h_m — but it is unwritten and unmeasured, and an unmeasured term is not a capability. Use BSplineSolver or SinusoidalSolver for a loaded wire
+
+- `RazorSolver` `buried+crossing_junction`
+
+  > this deck's wires cross the interface at a junction. Razor's crossing fill is momwire#813 and is not served yet; the below-plane family it stands on is momwire#812. Solve it with BSplineSolver, which serves the crossing junction since momwire#524 phase 2, or leave the buried part DETACHED
 
 - `RazorSolver` `buried`
 
