@@ -371,3 +371,74 @@ def test_the_45_ft_screen_survives_a_high_conductivity_soil():
     assert 2.0 < span < below._SOMM_BELOW_R1_CAP_LAMBDA_M, f"{span:.2f} lambda_m"
     r = _r_of(15, ground_eps=(EPS_R, hi_sigma))
     assert np.isfinite(r) and 5.0 < r < 100.0, r
+
+
+# ----------------------------------------------------------------------
+# The permittivity BAND (G1-A, 2026-09-03). The paper states sigma only.
+# Rather than assert one assumed eps_r, this gate asks the question the
+# measurement can actually answer: does SOME permittivity in the plausible
+# band for a 2e-3 S/m soil put BOTH screens on their figures at once, with no
+# member of the band breaking the shape? Measured (momwire#838, the G1-A
+# comment): at N = 30 and sigma 2e-3, 45 ft reads 31.53 / 28.51 / 27.94 over
+# eps_r 5 / 15 / 30 and 135 ft reads 29.72 / 30.52 / refused (eps_r 30 puts the
+# 135 ft screen past the 4 lambda_m cap). eps_r 5 puts
+# both within 0.6 ohm of the figures; the assumed 15 puts the 45 ft screen
+# 2.5 ohm low. The N = 113 separation goes 1.75 -> 5.51 ohm against the
+# measured 6.7 at eps_r 5.
+#
+# This does not adopt eps_r 5: envelopes come from the measurement, not from
+# what fits, and the site's permittivity is unknown. It records that the
+# model is consistent with the figures for a physically plausible soil and
+# fails if it stops being so anywhere in the band.
+# ----------------------------------------------------------------------
+
+EPS_BAND = (5.0, 15.0, 30.0)
+# Joint bar at N = 30: the figure reading error (+-1.0, momwire#838) plus a
+# model allowance of 1.5. The best band member measured 0.53 / 0.28 ohm off.
+JOINT_BAR_AT_30 = 2.5
+
+
+def _r_both_at_30(eps):
+    """(R_45ft, R_135ft) at N = 30 for this eps_r, or None where the 135 ft
+    screen refuses (the 4 lambda_m cap: lambda_m grows as |eps~| falls)."""
+    r45 = _r_of(30, ground_eps=(eps, SIGMA))
+    try:
+        r135 = _r_of(30, l_radial=L_RADIAL_135, ground_eps=(eps, SIGMA))
+    except ValueError:
+        return r45, None
+    return r45, r135
+
+
+@pytest.mark.crossgate
+def test_some_plausible_permittivity_puts_both_screens_on_their_figures(
+    record_property,
+):
+    fits = {}
+    ran = 0
+    for eps in EPS_BAND:
+        r45, r135 = _r_both_at_30(eps)
+        record_property(f"eps{eps:g}_45ft_N30", f"{r45:.2f}")
+        # Shape, every band member: off the 50 ohm scale at N = 2, then
+        # falling to the plateau.
+        r2 = _r_of(2, ground_eps=(eps, SIGMA))
+        assert r2 > FIG37_OFF_SCALE_AT_N2 > r45, (eps, r2, r45)
+        if r135 is None:
+            record_property(f"eps{eps:g}_135ft_N30", "refused (4 lambda_m cap)")
+            continue
+        ran += 1
+        record_property(f"eps{eps:g}_135ft_N30", f"{r135:.2f}")
+        miss = max(abs(r45 - FIG37_PLATEAU), abs(r135 - FIG36_PLATEAU_AT_30))
+        fits[eps] = miss
+    assert ran >= 2, (
+        f"the band must have at least two members that serve both screens: {fits}"
+    )
+    best = min(fits, key=fits.get)
+    record_property("best_eps_r", best)
+    record_property("best_joint_miss_ohm", fits[best])
+    assert fits[best] <= JOINT_BAR_AT_30, (
+        f"no permittivity in {EPS_BAND} puts both BLE screens within "
+        f"{JOINT_BAR_AT_30} ohm of their N = 30 figures at once (joint misses "
+        f"{ {k: round(v, 2) for k, v in fits.items()} }). The model has stopped "
+        "being consistent with the 1937 measurement for any plausible soil; "
+        "do NOT fix this by widening the band or adopting the best eps_r."
+    )
