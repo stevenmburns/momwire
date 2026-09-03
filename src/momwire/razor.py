@@ -466,6 +466,23 @@ _SERVE_BELOW_PLANE = False
 # unit 3 (momwire#814) flips it -- and flipped by the unit's own gates.
 _SERVE_CROSSING = False
 
+# The sentence a crossing deck gets while `_SERVE_CROSSING` is off. It is
+# ALSO the refusal razor's capability row declares for the
+# `buried+crossing_junction` cell below, and it must stay one object: the row promises the sentence a
+# refusal ends with, and antennaknobs' catalog gate
+# (`test_razor_2p_on_the_buried_decks_follows_its_capability_cell`) holds
+# razor to that promise on the bonded screen. Before antennaknobs#1109 the
+# catalog's node was never a declared junction, so razor refused at the
+# `buried` cell first and the declared crossing sentence (bspline's) was
+# never emitted; with the node declared, this is the sentence that fires.
+_CROSSING_NOT_SERVED_REFUSAL = (
+    "this deck's wires cross the interface at a junction. Razor's crossing "
+    "fill is momwire#813 and is not served yet; the below-plane family it "
+    "stands on is momwire#812. Solve it with BSplineSolver, which serves the "
+    "crossing junction since momwire#524 phase 2, or leave the buried part "
+    "DETACHED"
+)
+
 # The crossing blocks' axis density (momwire#813). Razor's cross rows are
 # PATH-tested and one of them ends AT the node, on the below wire's last
 # segment, whose by-parts integrand ~ 1/sqrt(a^2 + s^2) from s = 0 is carried
@@ -1260,6 +1277,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
+            # The DECLARED-junction case is its own cell (momwire#850): the
+            # mid-span probe above and a declared crossing junction are two
+            # refusals under one geometry word, and a row declares one
+            # sentence per cell. antennaknobs' catalog gate names this cell
+            # for its bonded screen.
+            "buried+crossing_junction": _CROSSING_NOT_SERVED_REFUSAL,
         },
     )
 
@@ -1812,14 +1835,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # serve's scope it raises the adjudication's own sentences.
             if self._crossing_junctions():
                 if not _SERVE_CROSSING:
-                    raise ValueError(
-                        "this deck's wires cross the interface at a junction. "
-                        "Razor's crossing fill is momwire#813 and is not "
-                        "served yet; the below-plane family it stands on is "
-                        "momwire#812. Solve it with BSplineSolver, which "
-                        "serves the crossing junction since momwire#524 "
-                        "phase 2, or leave the buried part DETACHED"
-                    )
+                    raise ValueError(_CROSSING_NOT_SERVED_REFUSAL)
                 self._crossing = True
                 return
             w = media.index(_medium_spec.BELOW)
