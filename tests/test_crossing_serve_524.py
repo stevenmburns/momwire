@@ -63,11 +63,32 @@ import numpy as np
 import pytest
 
 from momwire import _bspline_kernels, _crossing_fill, _medium_spec, _near_interface
-from momwire.bspline import BSplineSolver
+from momwire.bspline import DEFAULT_N_QP_PAIR, BSplineSolver
 
 from test_buried_serve_553 import SOIL_A, WL7, contact_deck
 
 A_WIRE = 0.001
+
+# Quadrature order for the ε̃ = 1 COLLAPSE adjudicators, pinned on both sides
+# of every one of them (momwire#760).
+#
+# Those tests compare a buried fill at ε̃ = 1 against a free-space truth, and
+# two of them build the truth by STRIPPING the ground keys off the same build
+# dict -- so before #760 both sides simply inherited one global default and the
+# match was automatic. It is not automatic any more: the buried fill resolves
+# its own, higher default, and stripping `ground_z` flips the truth side back
+# to the free-space one. Left implicit, three of the four adjudicators fail by
+# almost exactly the quadrature gap rather than by anything about the
+# composition (g524_5 missed by 0.0938 ohm, against the 0.0929 ohm this deck
+# moves between q=8 and converged).
+#
+# The collapse is a statement about COMPOSITION -- that the buried machinery
+# telescopes to the free-space answer when the interface vanishes -- and it is
+# only meaningful when both sides integrate the same way. Pinned at the
+# free-space default so the banked envelopes keep the meaning they were
+# measured with; the VALUE does not matter to the identity, the MATCH does.
+_COLLAPSE_N_QP = DEFAULT_N_QP_PAIR
+
 
 # The interface-graded meshes the phase-2 probes banked (probe18 GRADES):
 # vertices walk toward z = 0 so the node segments shrink without the
@@ -562,6 +583,7 @@ def test_g524_6_rise_deck_eps1_collapse(record_property):
         feeds=[(0, 5.0 + 0.15 + 10.0 - 4.3333333333, 1 + 0j)],
         wavelength=WL7,
         wire_radius=A_WIRE,
+        n_qp_pair=_COLLAPSE_N_QP,
     ).compute_impedance()
     rise = np.array([(5.0, 0.0, -0.15), (0.0, 0.0, -0.15), (0.0, 0.0, 0.0)])
     mono = np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)])
@@ -575,6 +597,7 @@ def test_g524_6_rise_deck_eps1_collapse(record_property):
         ground_z=0.0,
         ground_eps=(1.0, 0.0),
         ground_model="sommerfeld",
+        n_qp_pair=_COLLAPSE_N_QP,
     ).compute_impedance()
     record_property("momwire_Z", f"{z:.4f}")
     record_property("free_space_truth", f"{z_truth:.4f}")
@@ -602,8 +625,11 @@ def test_g524_5_eps1_collapse_reproduces_free_space(record_property):
         feeds=[(0, 2.0 + 4.3333333333, 1 + 0j)],
         wavelength=WL7,
         wire_radius=A_WIRE,
+        n_qp_pair=_COLLAPSE_N_QP,
     ).compute_impedance()
-    z, _ = BSplineSolver(**crossing_deck(1, ground_eps=(1.0, 0.0))).compute_impedance()
+    z, _ = BSplineSolver(
+        **crossing_deck(1, ground_eps=(1.0, 0.0), n_qp_pair=_COLLAPSE_N_QP)
+    ).compute_impedance()
     record_property("momwire_Z", f"{z:.4f}")
     record_property("free_space_truth", f"{z_truth:.4f}")
     assert abs(z - z_truth) <= 0.05, (
@@ -632,7 +658,7 @@ def test_g524_7_fan_eps1_collapse(record_property):
     rung at a 60× tighter envelope. This BASE-mesh gate stays as the
     ungraded pin (the two miss differently: a corner-loop defect moves
     both, a grading-machinery defect only g674_1)."""
-    build = fan_rise_deck(ground_eps=(1.0, 0.0))
+    build = fan_rise_deck(ground_eps=(1.0, 0.0), n_qp_pair=_COLLAPSE_N_QP)
     truth = {
         k: v
         for k, v in build.items()
@@ -667,7 +693,7 @@ def test_g674_1_graded_fan_eps1_collapse(record_property):
     measured value and still 60× tighter than g524_7 — a miss here with
     g524_7 green means the grading machinery (vertex splicing, short-
     segment quadrature), not the corner loops."""
-    build = fan_rise_deck_graded("n2", ground_eps=(1.0, 0.0))
+    build = fan_rise_deck_graded("n2", ground_eps=(1.0, 0.0), n_qp_pair=_COLLAPSE_N_QP)
     truth = {
         k: v
         for k, v in build.items()
