@@ -442,14 +442,30 @@ def test_the_fan_reads_the_floor_and_its_margin_is_soil_and_grading_invariant():
 def test_on_the_fan_it_is_the_r1_cap_that_soil_moves():
     """The other half of the same correction. Soil cannot move an angle, but
     it moves lambda_m, so what a wetter soil walks the fan into is the
-    below/below R1 CAP — 2.0x of margin at soil A, refused by eps_r 30 /
-    sigma 0.03. Derived from the live constants and the deck's own R1, never
-    from a recorded literal."""
+    below/below R1 CAP. Derived from the live constants and the deck's own
+    R1, never from a recorded literal.
+
+    momwire#838 part 2 doubled that cap (2 -> 4 lambda_m), and the visible
+    effect is here: eps_r 30 / sigma 0.03 used to be the refusing soil and
+    now SERVES at 2.12 lambda_m. The mechanism is unchanged and so is this
+    test's point -- it just takes a wetter soil to demonstrate it, so the
+    refusing case is sea water. Margin at soil A went 2.0x -> 4.0x with the
+    cap.
+    """
     cap_wl = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M
     r1, _th, lam_a, _rho = _below_extents(BSplineSolver(**fan_rise_deck()))
-    assert 1.5 < cap_wl / (r1 / lam_a) < 3.0, r1 / lam_a
+    assert 3.0 < cap_wl / (r1 / lam_a) < 6.0, r1 / lam_a
 
-    wet = complex(30.0, -0.03 / (2 * np.pi * 7.0e6 * EPS0))
+    # The old refusing soil is now inside the domain — that is what part 2
+    # bought, and asserting it keeps this test honest about which side of the
+    # cap each soil sits on.
+    damp = complex(30.0, -0.03 / (2 * np.pi * 7.0e6 * EPS0))
+    r1_d, _th_d, lam_d, _rho = _below_extents(
+        BSplineSolver(**fan_rise_deck(ground_eps=damp))
+    )
+    assert cap_wl / 2.0 < r1_d / lam_d < cap_wl, (r1_d / lam_d, cap_wl)
+
+    wet = complex(80.0, -5.0 / (2 * np.pi * 7.0e6 * EPS0))
     s = BSplineSolver(**fan_rise_deck(ground_eps=wet))
     r1_w, th_w, lam_w, _rho = _below_extents(s)
     assert th_w == pytest.approx(_th, abs=1e-9), "soil must not move the angle"
