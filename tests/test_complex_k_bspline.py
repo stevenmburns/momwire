@@ -574,8 +574,39 @@ G3_NQP = 12
 G3_N = 3
 G3_QUAD_KW = dict(epsabs=1e-14, epsrel=1e-12)
 
+# The PARITY gate's own tolerance (momwire#868). The truth gates above compare
+# against this reference at `rel <= 1e-13`, so they need every digit of it. The
+# thin-wire parity gate does not: it asks whether TWO relative errors (~7.5e-05
+# each) sit within a factor of 1.5 of each other, and the reference's own
+# precision cancels almost entirely out of that ratio.
+#
+# Measured across all six media, this tolerance moves the ratio by NOTHING at
+# four decimals (drift ~3e-08 relative on each error) and takes the worst
+# medium from 6.93 s to 1.72 s on a Linux dev box -- the whole parametrisation
+# from 26.3 s to 9.4 s. That matters because the same test measured 20.90 s on
+# the macOS runner and tripped the suite's 20 s HARD ceiling with all 6893
+# tests passing, i.e. it failed the lane on wall time alone.
+#
+# How safe: the ratio is 1.0062 on C/7MHz at EVERY tolerance tried, from
+# 1e-12 down to 1e-1 (0.80 s), because the reference's error is common to both
+# sides and cancels. So this value is not chosen to keep the GATE honest --
+# nothing in reach breaks it -- it is chosen to keep the `record_property`
+# values (`g3_thin_cplx` / `g3_thin_real`) worth banking, which is why it sits
+# at 1e-8 rather than at the cheapest setting that passes.
+#
+# The truth tolerance above is deliberately NOT loosened with it, and is worth
+# a word because a mutation of it does not fail anything: at Delta/a = 2 the
+# integrand is smooth enough that dblquad returns the same answer to every
+# digit whether asked for 1e-12 or 1e-4, at the same cost. It is the THIN
+# geometry (Delta/a = 24, a sharp 1/R peak) where the tolerance is binding on
+# cost at all, which is exactly why the split is between these two gates and
+# not between two arbitrary numbers.
+G3_QUAD_KW_PARITY = dict(epsabs=1e-10, epsrel=1e-8)
 
-def _brute_moment(o_i, t_i, h_i, o_j, t_j, h_j, p, q, a, k, subtract_static):
+
+def _brute_moment(
+    o_i, t_i, h_i, o_j, t_j, h_j, p, q, a, k, subtract_static, quad_kw=None
+):
     """∫₀^{h_i}∫₀^{h_j} u^p v^q · G(R) dv du by adaptive quadrature, real
     and imaginary parts separately. `G = (e^{−jkR} − 1)/(4πR)` when
     `subtract_static`, else `e^{−jkR}/(4πR)`. R² = |r_i(u) − r_j(v)|² + a²."""
@@ -588,12 +619,13 @@ def _brute_moment(o_i, t_i, h_i, o_j, t_j, h_j, p, q, a, k, subtract_static):
         val = (u**p) * (v**q) * num / (4.0 * np.pi * R)
         return val.real if part == 0 else val.imag
 
-    re, _ = dblquad(integrand, 0.0, h_i, 0.0, h_j, args=(0,), **G3_QUAD_KW)
-    im, _ = dblquad(integrand, 0.0, h_i, 0.0, h_j, args=(1,), **G3_QUAD_KW)
+    kw = G3_QUAD_KW if quad_kw is None else quad_kw
+    re, _ = dblquad(integrand, 0.0, h_i, 0.0, h_j, args=(0,), **kw)
+    im, _ = dblquad(integrand, 0.0, h_i, 0.0, h_j, args=(1,), **kw)
     return re + 1j * im
 
 
-def _brute_block(lo_i, hi_i, lo_j, hi_j, a, k, max_d, subtract_static):
+def _brute_block(lo_i, hi_i, lo_j, hi_j, a, k, max_d, subtract_static, quad_kw=None):
     n_i, n_j = lo_i.shape[0], lo_j.shape[0]
     out = np.zeros((max_d + 1, max_d + 1, n_i, n_j), dtype=np.complex128)
     for i in range(n_i):
@@ -616,6 +648,7 @@ def _brute_block(lo_i, hi_i, lo_j, hi_j, a, k, max_d, subtract_static):
                         a,
                         k,
                         subtract_static,
+                        quad_kw,
                     )
     return out
 
@@ -712,18 +745,46 @@ def test_gu1_3_the_thin_wire_residual_is_quadrature_not_the_continuation(
     real k = |k_m| on the same geometry. That is Gauss-Legendre truncation
     on the 1/R peak, k-independent to ~1%, not an error the continuation
     introduced.
+
+    Measured ratios across the six media are 1.0023 to 1.0162 against a gate
+    of 1.5, so this is a factor-30 margin on a ~1% effect -- which is why it
+    can afford `G3_QUAD_KW_PARITY` instead of the truth tolerance.
     """
     _k0, _et, km = MEDIA[medium]
     h, a = _g3_geometry(km, G3_DA_THIN)
     ends = np.arange(G3_N + 1) * h
     lo, hi = _straight(G3_N, h)
+    # `G3_QUAD_KW_PARITY`, not the truth tolerance: this gate compares two
+    # relative errors to each other, so the reference's own precision cancels
+    # out of the ratio. See that constant for the measurement and for why it
+    # matters (momwire#868).
     cplx = _rel(
         _seg_seg_reg_moments(ends, a, km, 2, G3_NQP_THIN),
-        _brute_block(lo, hi, lo, hi, a, km, 2, subtract_static=True),
+        _brute_block(
+            lo,
+            hi,
+            lo,
+            hi,
+            a,
+            km,
+            2,
+            subtract_static=True,
+            quad_kw=G3_QUAD_KW_PARITY,
+        ),
     )
     real = _rel(
         _seg_seg_reg_moments(ends, a, abs(km), 2, G3_NQP_THIN),
-        _brute_block(lo, hi, lo, hi, a, abs(km), 2, subtract_static=True),
+        _brute_block(
+            lo,
+            hi,
+            lo,
+            hi,
+            a,
+            abs(km),
+            2,
+            subtract_static=True,
+            quad_kw=G3_QUAD_KW_PARITY,
+        ),
     )
     record_property("g3_thin_cplx", cplx)
     record_property("g3_thin_real", real)
