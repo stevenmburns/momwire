@@ -2062,6 +2062,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Every grounded end that is NOT a crossing member keeps its contact
         # tent exactly as before, which is what `test_a_grounded_end_that_is_
         # not_a_crossing_member_is_untouched` holds.
+        #
+        # ONE CONSEQUENCE, NAMED SO IT IS NOT "FIXED" BACK. Dropping the flag
+        # also takes this node out of `grounded_bases`, so
+        # `_assemble_Z_source_block` no longer applies the plane-reference T2
+        # drop there — and that is intended, not fallout. The drop is the
+        # CONDUCTOR identity: the folded potential is identically zero on a
+        # PEC plane, so a grounded row's path may start there and lose that
+        # endpoint exactly. At a medium interface Φ is neither zero nor even
+        # single-valued across the two families — each family's (A, Φ) is its
+        # own gauge, and the trunk's transmitted V at z = 0 is NOT Φ(node⁻)
+        # (momwire#813 derivation (a)) — so no potential reference may be
+        # taken at a crossing node at all. That row's T2 comes from
+        # momwire#813 unit 2's evaluation AT the node instead, one family per
+        # chopped half.
         crossing = (
             set(self._crossing_junctions()) if self.ground_z is not None else set()
         )
@@ -3467,7 +3481,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             out.append((m, pts[m, sl], tans[m, sl], wts[m, sl], seg, before, after))
         return out
 
-    def _assemble_Z_below_plane(self, geom, prepared, k, omega):
+    def _assemble_Z_below_plane(self, geom, prepared, k, omega, *, plan_skip=None):
         """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1
         of the razor buried arc), in the lower-medium family:
 
@@ -3507,6 +3521,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 seg_p0 + 0.5 * seg_h[:, None] * seg_t,
             ]
         )
+        if plan_skip is not None and len(plan_skip):
+            # `plan_skip` is the DECLARED crossing nodes (momwire#813), and
+            # only those. A point sitting exactly in the interface has depth
+            # 0, so its pair with ITSELF has rho = 0 and d + d' = 0 and
+            # `atan2(0, 0)` reads 0 deg — below any floor, from a pair that
+            # is not a physical pair at all. That is a sampling artefact of a
+            # point the CROSSING block owns rather than a grazing geometry,
+            # and one nanometre lower the same deck fills without complaint
+            # (measured, `scratch/813-crossing-assembly-a/probe1_plane_end.py`).
+            #
+            # Keyed on the declared node and NEVER on "any point at depth 0":
+            # a wholly-below wire that merely touches the plane at an end
+            # which is not a crossing member has no crossing block to carry
+            # its current, and must keep refusing exactly as it does today.
+            # `test_a_plane_touching_end_that_is_not_a_crossing_member_still_
+            # refuses` is what holds that line.
+            skip = np.asarray(plan_skip, dtype=float).reshape(-1, 3)
+            keep = np.ones(pts.shape[0], dtype=bool)
+            for node in skip:
+                keep &= np.linalg.norm(pts - node[None, :], axis=1) > _JUNCTION_TOL
+            pts = pts[keep]
         d = gz - pts[:, 2]
         rho = np.hypot(
             pts[:, 0][:, None] - pts[:, 0][None, :],
