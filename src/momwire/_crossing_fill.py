@@ -1230,22 +1230,36 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
             p[..., 2] = 2.0 * gz - p[..., 2]
         return p
 
-    src = _mir(pts)
-    for ptE, sig, fvT in ax["ends"]:  # test ends (observation, unmirrored)
-        dr = src - np.asarray(ptE)[None, :]
-        R = np.sqrt(a_wire * a_wire + np.einsum("ij,ij->i", dr, dr))
-        bnd += -sig * np.outer(fvT, Fdw @ _g_of_r(k, R))
-    for ptEp, sigp, fvS in ax["ends"]:  # source ends (mirrored)
-        pe = _mir(np.asarray(ptEp))
-        dr = pts - pe[None, :]
-        R = np.sqrt(a_wire * a_wire + np.einsum("ij,ij->i", dr, dr))
-        bnd += -sigp * np.outer(Fdw @ _g_of_r(k, R), fvS)
-    for ptE, sig, fvT in ax["ends"]:
-        for ptEp, sigp, fvS in ax["ends"]:
-            pe = _mir(np.asarray(ptEp))
-            dr = np.asarray(ptE) - pe
-            R = np.sqrt(a_wire * a_wire + float(dr @ dr))
-            corner += sig * sigp * _g_of_r(k, R) * np.outer(fvT, fvS)
+    ends = ax["ends"]
+    if not ends:
+        return bnd, corner
+    # Every term below is a sum of outer products over the E wire ends, i.e.
+    # a rank-E product. Stacked, the three loops are two matmuls:
+    #   bnd    = -(FT^T diag(sig) Gt)  -(Gs^T diag(sig) FS)
+    #   corner =   FT^T (sig sig^T o G_ee) FS
+    # with FT / FS the (E, n) end-value rows, Gt / Gs the (E, n) end-to-node
+    # kernel rows folded through Fd*w, and G_ee the (E, E) end-to-end kernel.
+    # The old form built an n x n outer product PER end (and per end pair for
+    # the corner): O(E n^2 + E^2 n^2) numpy work, which is O(N^3)..O(N^4) in
+    # the radial count and was 60 % of a 60-radial BLE solve (16.7 s of 38.6).
+    # Same sums, different order of summation: read to scale, never to the bit.
+    ptE = np.array([np.asarray(e[0], dtype=float) for e in ends])  # (E, 3)
+    sig = np.array([float(e[1]) for e in ends])  # (E,)
+    fvT = np.array([np.asarray(e[2], dtype=np.complex128) for e in ends])  # (E, n)
+    src = _mir(pts)  # (P, 3) source nodes (mirrored for the image family)
+    pe = _mir(ptE)  # (E, 3) source ends (mirrored)
+    a2 = a_wire * a_wire
+    # test ends (unmirrored observation) against mirrored source nodes
+    d = src[None, :, :] - ptE[:, None, :]
+    Gt = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d))) @ Fdw.T  # (E, n)
+    # source ends (mirrored) against unmirrored observation nodes
+    d = pts[None, :, :] - pe[:, None, :]
+    Gs = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d))) @ Fdw.T  # (E, n)
+    bnd -= (sig[:, None] * fvT).T @ Gt
+    bnd -= Gs.T @ (sig[:, None] * fvT)
+    d = ptE[:, None, :] - pe[None, :, :]
+    Gee = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (E, E)
+    corner += (sig[:, None] * fvT).T @ Gee @ (sig[:, None] * fvT)
     return bnd, corner
 
 
