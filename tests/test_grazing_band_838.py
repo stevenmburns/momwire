@@ -27,11 +27,10 @@ import pytest
 
 sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 
-import golden_below_old_domain_838 as gold_old  # noqa: E402
-
 from momwire import _ground_refl  # noqa: E402
 from momwire import _sommerfeld_below as below  # noqa: E402
-from momwire._sommerfeld import _SURF_KEYS  # noqa: E402
+from momwire._sommerfeld import _SOMM_TH_SPLIT_DEG, _SURF_KEYS  # noqa: E402
+from momwire._sommerfeld import SommerfeldGrid  # noqa: E402
 from test_below_fills_568 import force_numpy  # noqa: E402
 
 C0 = 299792458.0
@@ -202,22 +201,82 @@ def test_both_dispatches_route_the_seam_the_same_way():
         assert rel < 1e-13, f"theta {thd}: dispatches disagree at {rel:.3e}"
 
 
-def test_the_old_domain_is_unmoved():
-    """Nothing that was already served moved. Off-node readings captured on
-    main `79911c5`, the commit before the band existed.
+def _legacy_eval(g, r1, th):
+    """The pre-momwire#838 routing, driven off THIS grid's own tables.
 
-    This is the gate that caught dtheta = 0.25 (it read 1.2e-07 at theta =
-    1 deg, where it must read zero), so it has been shown to bite rather
-    than merely being asserted to.
+    Before the band there were two theta bands per R1 zone, split at
+    `_SOMM_TH_SPLIT_DEG`, and those two are still here untouched as regions
+    1/2 (inner) and 4/5 (outer) — same node sets, same spacings, same fill
+    call. So replaying the old routing over them reproduces exactly what the
+    old grid returned, and comparing `eval` against it isolates the ONE thing
+    momwire#838 could have broken in the old domain: which region a query is
+    sent to, and with what local index.
+
+    Deliberately computed IN PROCESS rather than compared against committed
+    values. A golden captured on one box asserts bit-equality of the contour
+    fill across toolchains, which is not portable and not this unit's claim —
+    macOS reads ~1.7e-12 from Linux on these surfaces, and a golden here
+    reddened `test-macos` for exactly that reason (the momwire#839 class).
+    Both sides of this comparison are filled by the same box, so `==` means
+    what it says.
     """
-    for (soil, f), rows in gold_old.OLD_DOMAIN.items():
+    th_split = math.radians(_SOMM_TH_SPLIT_DEG)
+    r1 = np.atleast_1d(np.asarray(r1, dtype=float))
+    th = np.atleast_1d(np.asarray(th, dtype=float))
+    out = np.empty((len(_SURF_KEYS), r1.size), dtype=np.complex128)
+    for n in range(r1.size):
+        idx = (0 if r1[n] <= g.r_break else 3) + (1 if th[n] <= th_split else 2)
+        reg = g._regions[idx]
+        fr = (r1[n] - reg["r0"]) / reg["dr"]
+        ft = (th[n] - reg["th0"]) / reg["dth"]
+        i0 = int(np.clip(np.floor(fr) - 1, 0, reg["n_r"] - 4))
+        j0 = int(np.clip(np.floor(ft) - 1, 0, reg["n_th"] - 4))
+        wr = SommerfeldGrid._lagrange4(np.array([fr - i0]))[0]
+        wt = SommerfeldGrid._lagrange4(np.array([ft - j0]))[0]
+        block = reg["vals"][:, i0 : i0 + 4, j0 : j0 + 4]
+        out[:, n] = np.einsum("sij,i,j->s", block, wr, wt)
+    return {k: out[i] for i, k in enumerate(_SURF_KEYS)}
+
+
+def test_the_old_domain_is_unmoved():
+    """Nothing that was already served moved -- bit for bit.
+
+    Shown to bite rather than asserted to, by mutation. It catches the bug
+    this unit actually shipped in draft -- a non-dividing dtheta = 0.25
+    together with a non-strict band edge, which let a band whose last node
+    overshoots to 1.1 deg steal the theta = 1 deg query from the old band --
+    and it catches a plain misroute (the band claiming everything under
+    `_SOMM_TH_SPLIT_DEG`), which moves the first cells above 1 deg.
+
+    Note it does NOT fire on dtheta = 0.25 alone: the strict `<` added later
+    protects theta = 1 deg independently, and
+    `test_the_band_divides_the_interval_exactly` is what names that one. The
+    two gates cover different halves of the seam, which is why both are here.
+
+    Swept OFF-node on purpose, densely through the seam's own first cell and
+    across the 30 deg split -- a sweep that only landed on lattice nodes would
+    pass even if the stencil changed underneath it.
+    """
+    th_deg = np.concatenate(
+        [
+            np.linspace(1.0, 1.999, 40),  # the seam's first cell
+            np.linspace(2.0, 29.9, 60),
+            np.linspace(30.0, 89.9, 40),
+        ]
+    )
+    for soil, f in (("A", 7e6), ("C", 21e6)):
         g, *_ = _grid(soil, f)
-        for r_frac, th_deg, *vals in rows:
-            got = g.eval(np.array([r_frac * g.r1_max]), np.radians([th_deg]))
-            for k, want in zip(gold_old.KEYS, vals, strict=True):
-                assert complex(got[k][0]) == want, (
-                    f"{soil}/{f:g} R1/r1_max={r_frac} theta={th_deg}: {k} "
-                    f"moved, {got[k][0]!r} != {want!r}"
+        for r_frac in (0.02, 0.35, 0.68, 0.98):
+            r1 = np.full(th_deg.shape, r_frac * g.r1_max)
+            th = np.radians(th_deg)
+            got = g.eval(r1, th)
+            want = _legacy_eval(g, r1, th)
+            for k in _SURF_KEYS:
+                bad = np.nonzero(got[k] != want[k])[0]
+                assert bad.size == 0, (
+                    f"{soil}/{f:g} R1/r1_max={r_frac}: {k} moved at "
+                    f"theta = {th_deg[bad[:4]]} deg, first "
+                    f"{got[k][bad[0]]!r} != {want[k][bad[0]]!r}"
                 )
 
 
