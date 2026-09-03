@@ -99,12 +99,44 @@ def test_the_public_refusal_is_unchanged():
         RazorSolver(**deck(11))
 
 
-def test_a_mixed_deck_is_unit_two(serve_below):
-    """An above wire beside a below one is the crossing block on razor rows
-    (momwire#813), refused by name here rather than filled wrong."""
+def test_a_mixed_deck_with_no_crossing_junction_is_neither_unit(serve_below):
+    """An above wire beside a below one, DETACHED, is refused by name.
+
+    This test used to expect momwire#813's sentence, on the reading that any
+    mixed deck is the crossing block's. momwire#813 unit 2 had to separate
+    the two cases and they are not the same deck: these wires never meet, so
+    no crossing junction is declared, no crossing block would ever carry
+    current between them, and the deck is not #813's. Nor is it #812's, whose
+    fill is for a WHOLLY below deck. `BSplineSolver` serves it (momwire#553).
+
+    The crossing case keeps its own sentence, and
+    `test_a_crossing_deck_names_the_crossing_unit` below is what holds it —
+    added here so retiring the conflation does not retire the gate with it.
+    """
     kw = deck(11)
     kw["wires"] = [kw["wires"][0], np.array([(0.0, 0.0, 0.5), (0.0, 0.0, 1.5)])]
     kw["n_per_edge_per_wire"] = [[11], [11]]
+    with pytest.raises(ValueError, match="no junction crossing the interface"):
+        RazorSolver(**kw)
+
+
+def test_a_crossing_deck_names_the_crossing_unit(serve_below):
+    """The deck the previous test used to be about: wires that MEET at the
+    interface, so a crossing junction IS declared and momwire#813 is the unit
+    that will serve it.
+
+    `crossing_deck(1)` rather than a hand-built pair: the first draft of this
+    test put an above wire's end at z = 0 beside a buried horizontal wire and
+    got `contact+buried` instead, correctly — the two wires have to share the
+    node, not merely both touch the plane.
+    """
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from test_crossing_serve_524 import crossing_deck
+
+    kw = {k: v for k, v in crossing_deck(1).items() if k != "junctions"}
     with pytest.raises(ValueError, match="momwire#813"):
         RazorSolver(**kw)
 
