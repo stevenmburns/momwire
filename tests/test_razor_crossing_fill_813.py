@@ -23,10 +23,18 @@ it is:
     is why both decks are gated and not just the cheap one.
   * **the below/below grazing floor**, also on `crossing_deck(1)`: it is a
     single vertical line, so every below/below pair is coaxial (rho = 0) and
-    reads 90 deg. The fan carries that one too — its shallowest graded node
-    sits 1.9855e-05 m below the plane and its worst real pair is 1.7199 deg
-    against the 1 deg floor, which is 1.72x of margin and thin enough that
-    grading the node harder for soil should re-read it.
+    reads 90 deg. The fan carries that one — 1.72418 deg over its quadrature
+    nodes, 17.2x the floor's 0.1 deg (momwire#842 moved it from 1.0; the
+    margin gate reads the constant, not a literal).
+
+    The margin is NOT thin, and momwire#700 re-measured why the earlier note
+    here said it was. theta_min is `atan2(2d, span)` of the radial screen:
+    fixed depth, fixed extent. Grading the node moves the shallowest node 48x
+    (2.5e-3 m ungraded to 5.2e-5 m at rung n3) and moves theta_min by
+    nothing; soil moves lambda_m and cannot move an angle at all. What soil
+    DOES move on this deck is the below/below R1 CAP, whose margin is 2.0x
+    and which refuses the fan at eps_r 30 / sigma 0.03. The gates are in
+    `tests/test_crossing_exemption_audit_700.py`.
 
 `_SERVE_CROSSING` is off by default, so every test here turns it on
 explicitly; the roster flip is momwire#814's.
