@@ -127,6 +127,44 @@ Issues = "https://github.com/stevenmburns/momwire/issues"
 [tool.pytest.ini_options]
 # Only collect the project's own tests.
 testpaths = ["tests"]
+# momwire#845's far-mesh advisory is UNCONDITIONAL by measurement — it fires
+# once per `RazorSolver` construction, on both lanes, because no solve-free
+# property of a deck predicts the error it reports (corr(lambda/delta, |dZ|) =
+# +0.021 over the antennaknobs catalog). That is right for a user and useless
+# repeated across a suite that builds razor solvers hundreds of times: it took
+# the default lane from 3 warnings to 606, which does not weaken a gate but
+# does bury every other warning, and a warnings summary nobody can read is a
+# warnings summary nobody reads.
+#
+# Scoped to THIS advisory, never a blanket ignore. Everything else still
+# surfaces: measured before and after, the non-advisory categories come back
+# identical (CoarseCrossingNode 2, RuntimeWarning 1, IntegrationWarning 1) and
+# the total falls 606 -> 6.
+#
+# MATCHED BY MESSAGE, NOT BY CATEGORY, and that is not a style choice.
+# `ignore::momwire._razor_class.RazorFarMeshClass` makes pytest IMPORT momwire
+# while parsing filters, which lands before `conftest.pytest_configure` sets
+# `OMP_NUM_THREADS=1` on each xdist worker. The accelerator is built -fopenmp
+# and reads that variable at its first parallel region, so the early import
+# lets every worker open a full-width OpenMP pool: measured 681 s and 683 s on
+# two runs of this lane against 189 s without it, with 12 tests over the
+# Makefile's 20 s hard ceiling. That is the same contention this conftest's
+# docstring records at 486 s. The message form resolves no class, imports
+# nothing, and measures 189.4 s — indistinguishable from no filter.
+#
+# The cost is that this is coupled to the advisory's opening words: reword the
+# first line of `_razor_class.far_mesh_class_message` and it silently stops
+# matching. There is a comment there saying so. Note also that Python compiles
+# this regex with `re.I`, so a mutation check that only changes case proves
+# nothing — change a word.
+#
+# The nine tests in tests/test_razor_far_mesh_advisory_845.py are unaffected:
+# they assert inside `warnings.catch_warnings()` with their own
+# `simplefilter`, which overrides this for the duration, so the advisory stays
+# gated here even though it is silent everywhere else. Verified, not assumed.
+filterwarnings = [
+    "ignore:razor-2p is first order in the far mesh",
+]
 markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",
     # Crosses a process, a socket, a CLI, or the deck->printout seam

@@ -103,6 +103,15 @@ def far_mesh_class_message(cls: FarMeshClass = FAR_MESH_CLASS) -> str:
     Separate from the warning so a test can pin the message to
     `FAR_MESH_CLASS` rather than to a literal, and so a caller that wants the
     sentence for a report can have it without raising a warning.
+
+    THE FIRST LINE IS LOAD-BEARING. `pyproject.toml`'s pytest `filterwarnings`
+    silences this advisory across the suite by matching the opening words
+    ("razor-2p is first order in the far mesh"), NOT by category — matching by
+    category makes pytest import momwire while parsing filters, ahead of the
+    conftest's per-worker `OMP_NUM_THREADS` pin, which cost 681 s against 189 s
+    on the default lane. So rewording that opening phrase silently un-silences
+    ~600 warnings. Reword freely after it; if the opening must change, change
+    the filter in the same commit.
     """
     return (
         f"razor-2p is first order in the far mesh: its path (razor-blade) "
