@@ -65,7 +65,18 @@ from momwire import _crossing_fill as CF
 from test_buried_serve_553 import SOIL_A
 from test_crossing_serve_524 import crossing_deck
 
-BAR_INTERIOR = 1e-5  # measured 6.6e-6
+# 1e-5, measured 6.5613e-06 -- which is a two-knob PLATEAU of the trunk's
+# default axis density and not this block's accuracy. Swept properly
+# (momwire#836): the source order alone takes it to 1.0746e-07 and stops
+# there from q = 6 to 32; the graded panels alone move NOTHING at any order
+# or growth, because `_graded_u` fires only on segments touching the
+# interface and these bases exclude the junction; both together reach
+# 3.2e-16. The block's real agreement with razor's free-space truth is
+# machine precision. The bar stands where it is because it gates the
+# SHIPPED axis, which is the right thing for it to gate -- but a later bar
+# sized from "6.6e-6 is the interior class" would be sized against a
+# quadrature setting rather than a method.
+BAR_INTERIOR = 1e-5
 BAR_COLUMN = 1e-7  # measured 7.2e-9
 # 1e-4, measured 5.3e-5. It IS quadrature, and NOT the source Gauss the first
 # version of this line named: the chopped half ends AT the node, on the below
@@ -243,7 +254,14 @@ def test_the_sigma_trick_does_not_chop_the_path(free_space):
 # ======================================================================
 # The reversed block — below rows x above columns (#813 half 2, step 1)
 # ======================================================================
-BAR_REVERSED = 1e-5  # measured 6.5613e-06, the same class as BAR_INTERIOR
+# 1e-5, measured 6.5613e-06. "The same class as BAR_INTERIOR" is true and
+# is not the compliment it reads as: the two share a PLATEAU, digit for
+# digit at every density setting, and momwire#836's sweep shows both go to
+# machine precision (3.2e-16 reversed, 9.5e-16 forward) once the source
+# order and the panels move together. The lane sweep that originally stood
+# behind this number -- `nec5_quadrature` on/off -- is on razor's path side
+# and cannot see the trunk's axis at all, so it was not coverage.
+BAR_REVERSED = 1e-5
 BAR_LANES = 1e-12  # dense vs split on Galerkin axes: measured 3.3e-19
 
 
