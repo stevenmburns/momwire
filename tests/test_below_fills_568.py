@@ -639,12 +639,19 @@ def test_g5689_the_refusals_survive_the_dispatch(proj_grid, what, match):
     if what == "past_cap":
         obs = np.array([[5.0 * grid.r1_max, 0.0, -0.2]])
     elif what == "grazing":
-        # theta well under the 1 deg floor, R1 comfortably inside the cap: two
-        # 5 cm-deep points 10 m apart, which is the product geometry gone one
-        # step too shallow.
-        obs = np.array([[0.5 * grid.r1_max, 0.0, -0.05]])
-        src = np.array([[0.0, 0.0, -0.05]])
-        assert np.degrees(np.arctan2(0.1, 0.5 * grid.r1_max)) < 1.0
+        # theta well under the floor, R1 comfortably inside the cap. The
+        # depth here tracks `_SOMM_BELOW_TH_MIN_DEG`: momwire#838 lowered the
+        # floor from 1 deg to 0.1 deg, at which point the old 5 cm-deep pair
+        # (0.57 deg) became a SERVED geometry and this stopped testing a
+        # refusal at all. Asserted against the constant rather than a literal
+        # so the next move of the floor fails here loudly.
+        depth = 0.008
+        obs = np.array([[0.5 * grid.r1_max, 0.0, -depth]])
+        src = np.array([[0.0, 0.0, -depth]])
+        assert (
+            np.degrees(np.arctan2(2 * depth, 0.5 * grid.r1_max))
+            < below._SOMM_BELOW_TH_MIN_DEG
+        )
     elif what == "wrong_side":
         obs = np.array([[1.0, 0.0, +0.4]])
     else:

@@ -996,15 +996,25 @@ def test_gu2_4_past_the_cap_refuses_instead_of_clamping(small_below_grid):
 def test_gu2_4_below_the_grazing_floor_refuses(small_below_grid):
     """The lattice stops at a measured grazing floor and says so.
 
-    Between θ = 5° and θ = 0.05° at R₁ = 3.5 λ_m the surfaces move by 2.4
-    to 3.3 times their own scale, and the drift grows ~linearly in log θ —
-    a lateral-wave logarithm that no uniform lattice resolves and that has
-    no θ = 0 node at all (h = 0 kills the tail's exponential decay, leaving
-    a conditionally convergent integral this contour does not evaluate).
-    So the floor is a domain edge, named."""
+    Between θ = 5° and θ = 0.05° at R₁ = 3.5 λ_m the surfaces move by 2.4 to
+    3.3 times their own scale, growing ~linearly in log θ — the lateral
+    wave's logarithm — and there is no θ = 0 node at all (h = 0 kills the
+    tail's exponential decay, leaving a conditionally convergent integral
+    this contour does not evaluate). So the floor is a domain edge, named.
+
+    momwire#838 moved that edge from 1° to 0.1° with a third uniform θ band,
+    which is why the probe angle here is 0.05° and not 0.2°: 0.2° is now
+    SERVED (it is BLE 1937's 135 ft radial tip, at 0.21°, which is the point
+    of the band). What did not change is that the edge exists — below 0.1°
+    `_MAX_TAIL_PANELS` binds before the contour converges (momwire#841).
+
+    An earlier version of this docstring said the drift is something "no
+    uniform lattice resolves". That is true of a single GLOBAL Δθ and false
+    of a banded one; see the table beside `_SOMM_BELOW_DTH_BAND_DEG`."""
     grid, _, _ = small_below_grid
+    assert np.degrees(np.radians(0.05)) < below._SOMM_BELOW_TH_MIN_DEG
     with pytest.raises(ValueError, match="grazing floor"):
-        grid.eval(np.array([0.5 * grid.r1_max]), np.array([np.radians(0.2)]))
+        grid.eval(np.array([0.5 * grid.r1_max]), np.array([np.radians(0.05)]))
 
 
 @pytest.mark.slow

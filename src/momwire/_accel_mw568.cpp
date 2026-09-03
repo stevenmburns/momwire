@@ -357,6 +357,7 @@ static void six_below_one(double rho, double h, double k_p, const cd &k_m,
 // `SommerfeldGridBelow.eval` raise the refusals in its own words; nothing in
 // this file transcribes those messages.
 static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
+                                double th_band_hi,
                                 double ground_z, double k_p, const cd &k_m,
                                 double ox, double oy, double oz, double tox,
                                 double toy, double toz, double sx, double sy,
@@ -376,10 +377,19 @@ static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
     if (theta < th_min) theta = th_min;
     else if (theta > G.half_pi) theta = G.half_pi;
     const double r1c = r1 > G.r1_max ? G.r1_max : r1;
-    const int reg = (r1c <= G.r_break)
-                        ? (theta <= G.th_split ? 0 : 1)
-                        : (r1c <= G.r_near ? (theta <= G.th_split ? 2 : 3)
-                                           : (theta <= G.th_split ? 4 : 5));
+    // THREE theta bands per R1 zone since momwire#838, ordered (R1 zone) x
+    // (theta band) with theta fastest -- the layout SommerfeldGridBelow's
+    // constructor builds. NOT the parent's 2-band/3-zone scheme: six regions
+    // there means the momwire#159 far zone, which this family does not have
+    // (r_near == r1_max), so `th_band_hi` is passed in explicitly rather than
+    // inferred from reg_vals.size().
+    //
+    // STRICT `<` at the band edge, matching `SommerfeldGridBelow._interp`:
+    // theta == th_band_hi belongs to the OLD grazing band. The two bands'
+    // node at th_band_hi is the same fill, but `th_min + dth*n` need not
+    // reproduce it to the last bit.
+    const int band = theta < th_band_hi ? 0 : (theta <= G.th_split ? 1 : 2);
+    const int reg = (r1c <= G.r_break ? 0 : 3) + band;
     const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
     const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
     int i0 = (int)std::floor(fr) - 1;
@@ -516,6 +526,7 @@ static py::tuple remainder_field_proj_batch_below(
     py::array_t<double, py::array::c_style | py::array::forcecast> src,
     py::array_t<double, py::array::c_style | py::array::forcecast> t_src,
     double ground_z, double k_p, std::complex<double> k_m, double th_min,
+    double th_band_hi,
     double r1_max, double r_break, double th_split, double r_near,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
@@ -536,6 +547,14 @@ static py::tuple remainder_field_proj_batch_below(
 
     const py::ssize_t M = ob.shape(0);
     const py::ssize_t S = sb.shape(0);
+    // The below family is SIX regions exactly (2 R1 zones x 3 theta bands)
+    // since momwire#838. A four-region grid here is a stale
+    // momwire/_sommerfeld_below.py and would route into unpopulated tables.
+    if (reg_vals.size() != 6)
+        throw std::runtime_error(
+            "the below/below grid is six regions (2 R1 zones x 3 theta bands) "
+            "since momwire#838; got a different count, which means a stale "
+            "_sommerfeld_below.py");
     somm_proj::GridView G = somm_proj::build_grid_view(
         r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
         reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
@@ -571,7 +590,8 @@ static py::tuple remainder_field_proj_batch_below(
             for (py::ssize_t nn = 0; nn < S; ++nn) {
                 double r1q, thq;
                 out_m(m, nn) = mw568_below::proj_one_below(
-                    G, th_min, ground_z, k_p, km, ox, oy, oz, tox, toy, toz,
+                    G, th_min, th_band_hi, ground_z, k_p, km, ox, oy, oz, tox,
+                    toy, toz,
                     sx[nn], sy[nn], sz[nn], ux[nn], uy[nn], thsrc[nn], tzsrc[nn],
                     r1q, thq);
                 if (r1q > rmax) rmax = r1q;
@@ -1332,6 +1352,7 @@ void register_mw568(py::module_ &m) {
           "own words.",
           py::arg("obs"), py::arg("t_obs"), py::arg("src"), py::arg("t_src"),
           py::arg("ground_z"), py::arg("k_p"), py::arg("k_m"), py::arg("th_min"),
+          py::arg("th_band_hi"),
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
           py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"));

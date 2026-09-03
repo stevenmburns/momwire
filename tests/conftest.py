@@ -71,6 +71,19 @@ _PORTAL_GROUP_FILES = (
 _FIXTURE_GROUP_FILES = (
     "test_razor_sommerfeld_ground.py",
     "test_razor_refl_coef_ground.py",
+    # momwire#838: the sub-1 deg band costs ~2 s to fill, and this module
+    # warms it in a module-scoped fixture, so scattering it pays that once per
+    # WORKER. Same shape as the two above.
+    #
+    # `test_below_fills_568.py` is deliberately NOT here. Most of its gates
+    # never touch the band, so warming it in that module's fixture would make
+    # every shard pay a fill that only one gate needs. It leaves
+    # `test_g5689_an_in_domain_query_at_the_edges_is_served_not_refused` over
+    # the 5 s ceiling, which is accepted: that gate queries AT the grazing
+    # floor, so filling the band is the thing it is testing. The ceiling
+    # reports rather than fails, and this repo already carries 24 unmarked
+    # tests over it on purpose.
+    "test_grazing_band_838.py",
 )
 
 
