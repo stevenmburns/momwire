@@ -344,6 +344,15 @@ def warn_coarse_node(arms):
 
 
 _TILT_TOL = 1e-12
+
+# How far off `ground_z` a point may sit and still BE the interface.
+#
+# One number, used by two things that must agree: `axis_data`'s decision that
+# a segment touches the plane (and therefore gets graded panels), and
+# `_on_plane_side`'s decision that a wrong-side coordinate is the node rather
+# than a geometry error. They were separate literals until momwire#852, where
+# the second one did not exist at all.
+_PLANE_TOL = 1e-12
 _CROSS_RTOL = 1e-9
 _CORNER_RTOL = 1e-10
 _GX8, _GW8 = leggauss(8)
@@ -464,7 +473,7 @@ def axis_data(ctx, seg_idx, coarse=False, *, growth=None, panel_order=None, q=No
     tq = 0.5 * (xg + 1.0)
     gz = float(ctx.ground_z)
     a_wire = float(ctx.a_wire)
-    tol = 1e-12
+    tol = _PLANE_TOL
 
     supp_seg, polys = ctx.basis.supp_seg, ctx.basis.polys
     n_basis = polys.shape[0]
@@ -611,6 +620,52 @@ def path_test_axis(n_basis, rows):
     )
 
 
+def _on_plane_side(zrel, side, what):
+    """`z - ground_z` forced onto the side the designed tables require.
+
+    momwire#852. The node's own coordinate is built by segment accumulation,
+    so on a uniform rise it lands within an ulp or two of the plane on
+    EITHER side depending on the segment count -- 8, 9, 10, 14 and 16
+    segments put `hub_deck`'s rise top at +1.04e-17 while 11, 12, 13 and 20
+    put it at or below zero. `six_point` requires z >= 0 >= z', so half the
+    ladder used to die on a bare `need z >= 0 >= zp` three frames down, with
+    a message about an invariant rather than about the deck. Non-monotone in
+    the count, because it is a coincidence of floating-point placement and
+    not a resolution limit.
+
+    The rule, in three cases:
+
+      * on the required side (or exactly on the plane): passed through
+        UNCHANGED, so every deck that solves today keeps its bits;
+      * on the wrong side by less than `_PLANE_TOL`: that IS the interface,
+        snapped to exactly 0.0 and served;
+      * on the wrong side by `_PLANE_TOL` or more: a named refusal, because
+        an above axis carrying a genuinely buried end (or the reverse) is a
+        geometry error and clamping it would model something else silently.
+
+    The above side already had the middle case, as an unconditional
+    `max(..., 0.0)` with no tolerance and no refusal; this makes the two
+    sides one rule.
+    """
+    z = np.asarray(zrel, dtype=float)
+    wrong = z < 0.0 if side == "above" else z > 0.0
+    if np.any(wrong):
+        worst = float(np.max(np.abs(z[wrong])))
+        if worst >= _PLANE_TOL:
+            raise ValueError(
+                f"crossing fill: the {side} axis's {what} sits "
+                f"{worst:.6g} on the wrong side of ground_z, past the "
+                f"{_PLANE_TOL:g} tolerance that says a point IS the "
+                f"interface. The designed tables are derived for "
+                f"z >= 0 >= z', so there is no honest side to put this on: "
+                f"an {side} member must not cross the plane. Check the "
+                f"deck's crossing junction -- exactly one above member and "
+                f"the rest below (momwire#852)"
+            )
+        z = np.where(wrong, 0.0, z)
+    return z
+
+
 def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None):
     """Designed tables with the deck's wire radius folded in, z relative
     to the interface. `memo` extends the exact-triple dedup across calls
@@ -690,8 +745,8 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
             eps_t,
             k_p,
             rho_e,
-            np.full_like(rho_e, max(pt[2] - gz, 0.0)),
-            B["nodes"][:, 2] - gz,
+            _on_plane_side(np.full_like(rho_e, pt[2] - gz), "above", "end point"),
+            _on_plane_side(B["nodes"][:, 2] - gz, "below", "quadrature node"),
             _CROSS_RTOL,
             memo=memo,
         )
@@ -703,8 +758,8 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
             eps_t,
             k_p,
             rho_e,
-            A["nodes"][:, 2] - gz,
-            np.full_like(rho_e, pt[2] - gz),
+            _on_plane_side(A["nodes"][:, 2] - gz, "above", "quadrature node"),
+            _on_plane_side(np.full_like(rho_e, pt[2] - gz), "below", "end point"),
             _CROSS_RTOL,
             memo=memo,
         )
