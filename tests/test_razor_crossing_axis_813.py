@@ -176,11 +176,16 @@ def test_the_junction_column_is_the_below_wing_piece(free_space):
         np.abs(col_got - col_ref).max() / np.abs(f["Z"][f["rows_above"], jn]).max()
         < BAR_COLUMN
     )
-    # The node source-end terms contribute nothing to path-tested rows here.
+    # The node source-end terms contribute nothing to path-tested rows here
+    # — to roundoff against the column's Z scale (bit-identical on CI and
+    # Skylake; 2e-17 absolute on entries of 1.9e-9 on haswell-server, i.e.
+    # 8e-22 of the 2.5e4 scale, momwire#839). Same bar as the column itself.
     B_noend = dict(B)
     B_noend["ends"] = [e for e in B["ends"] if abs(e[0][2]) > 1e-9]
     t_noend = CF.cross_complete_block(f["ctx"], A, B_noend)
-    assert np.array_equal(t_ab[f["rows_above"], jn], t_noend[f["rows_above"], jn])
+    rows = f["rows_above"]
+    drop = np.abs(t_ab[rows, jn] - t_noend[rows, jn]).max()
+    assert drop / np.abs(f["Z"][rows, jn]).max() < BAR_COLUMN, drop
 
 
 def _razor_half_row(f, halves):
@@ -263,6 +268,14 @@ def test_the_sigma_trick_does_not_chop_the_path(free_space):
 # and cannot see the trunk's axis at all, so it was not coverage.
 BAR_REVERSED = 1e-5
 BAR_LANES = 1e-12  # dense vs split on Galerkin axes: measured 3.3e-19
+# momwire#839: fill claims are true to the precision the fill supports, not
+# to the bit. Three gates below asserted exact float equality and read
+# 1e-17..1e-21 misses on a third toolchain (haswell-server, g++ 11.4.0 on
+# `_near_interface_accel.cpp`; CI and Skylake's g++ 13.3 land the same
+# cancellations exact). Each bar keeps orders between the claim and the
+# reading it rejects.
+BAR_RECIPROCITY = 1e-12  # measured 0.0 (CI, Skylake), ~1e-17 (haswell); SW_BY_ROLE at soil A reads 7.9e-4
+BAR_W_ZERO = 1e-14  # W, dzW at eps~=1 against the table's own row scale: measured 0 / 3.9e-21 on a 2.0e1 row
 
 
 def _reversed_setup(nec5_quadrature=False):
@@ -356,12 +369,15 @@ def test_reciprocity_is_measured_not_assumed():
     bspline's fill already rides — so a correct reversed block must reproduce
     the transpose there, and the SW placement is the one free choice.
 
-    The default `SW_BY_PARTS` reproduces it EXACTLY (bit, in both media),
-    which is the unit's answer: reciprocity holds for the path-tested block
-    once SW is paired with `s_w1` as 5312ca5 measured it. `SW_BY_ROLE` — SW
-    read as a source-side end term instead — agrees at eps~ = 1 (W = 0) and
-    is 7.94e-04 away at soil A. The number is pinned as a band so a move in
-    either direction is a finding rather than silent drift.
+    The default `SW_BY_PARTS` reproduces it to roundoff in both media (bit
+    on CI and Skylake, ~1e-17 relative on haswell-server's g++ 11.4 build,
+    momwire#839), which is the unit's answer: reciprocity holds for the
+    path-tested block once SW is paired with `s_w1` as 5312ca5 measured it.
+    `SW_BY_ROLE` — SW read as a source-side end term instead — agrees at
+    eps~ = 1 (W = 0) and is 7.94e-04 away at soil A. The number is pinned as
+    a band so a move in either direction is a finding rather than silent
+    drift, and `BAR_RECIPROCITY` sits eight orders under it so the loosening
+    cannot admit the reading it rejects.
     """
     f = _reversed_setup()
     seen = {}
@@ -372,27 +388,36 @@ def test_reciprocity_is_measured_not_assumed():
         for sw in (CF.SW_BY_ROLE, CF.SW_BY_PARTS):
             rev = CF.cross_complete_block_reversed(ctx, B, A, corner=False, sw_end=sw)
             seen[(label, sw)] = np.abs(rev - fwd).max() / np.abs(fwd).max()
-    # The by-parts pairing: exact in both media.
-    assert seen[("eps1", CF.SW_BY_PARTS)] == 0.0
-    assert seen[("soilA", CF.SW_BY_PARTS)] == 0.0
-    # The rejected role reading: exact where W vanishes...
-    assert seen[("eps1", CF.SW_BY_ROLE)] == 0.0
-    # ...and 7.938e-04 away where it does not, as a band.
+    # The by-parts pairing: roundoff in both media (`seen` is already relative).
+    assert seen[("eps1", CF.SW_BY_PARTS)] <= BAR_RECIPROCITY, seen
+    assert seen[("soilA", CF.SW_BY_PARTS)] <= BAR_RECIPROCITY, seen
+    # The rejected role reading: roundoff where W vanishes...
+    assert seen[("eps1", CF.SW_BY_ROLE)] <= BAR_RECIPROCITY, seen
+    # ...and 7.938e-04 away where it does not, as a band — and explicitly
+    # still OUTSIDE the bar, so the bar can never quietly admit it.
     assert 5e-4 < seen[("soilA", CF.SW_BY_ROLE)] < 1.2e-3, seen
+    assert seen[("soilA", CF.SW_BY_ROLE)] > 1e8 * BAR_RECIPROCITY, seen
 
 
 @pytest.mark.slow
 def test_only_the_sw_end_term_separates_the_two_spellings():
-    """The whole reciprocity gap is one term. W is the only kernel that is 0
-    at eps~ = 1 and nonzero at soil, and SW is the only end term carrying
-    it — so the two spellings are bit-identical wherever W vanishes."""
+    """The whole reciprocity gap is one term. W is the only kernel that
+    vanishes at eps~ = 1 and is nonzero at soil, and SW is the only end
+    term carrying it — so the two spellings agree to roundoff wherever W
+    vanishes.
+
+    W's zero at eps~ = 1 is arithmetic CANCELLATION, not a structural zero:
+    it lands exactly on 0j on CI and Skylake and reads 3.9e-21 on
+    haswell-server's g++ 11.4 build (momwire#839), against table entries of
+    2.0e1 in the same row. The claim is the 20 orders, not the bit.
+    """
     f = _reversed_setup()
     ctx1 = f["rs"]._crossing_context(f["geom"], ground_eps=(1.0, 0.0))
     A1, B1 = CF.axis_data(ctx1, f["a_idx"]), CF.axis_data(ctx1, f["b_idx"])
     a = CF.cross_complete_block_reversed(ctx1, B1, A1, sw_end=CF.SW_BY_ROLE)
     b = CF.cross_complete_block_reversed(ctx1, B1, A1, sw_end=CF.SW_BY_PARTS)
-    assert np.array_equal(a, b)
-    # W is exactly zero there, which is WHY.
+    assert np.abs(a - b).max() <= BAR_W_ZERO * np.abs(a).max()
+    # W vanishes there (to roundoff), which is WHY.
     tb = CF._tables(
         ctx1,
         ctx1.medium.eps_t,
@@ -402,7 +427,12 @@ def test_only_the_sw_end_term_separates_the_two_spellings():
         np.array([-0.8]),
         CF._CROSS_RTOL,
     )
-    assert tb["W"][0] == 0 and tb["dzW"][0] == 0
+    row_scale = max(
+        float(np.abs(np.asarray(v)).max()) for v in tb.values() if np.ndim(v) >= 1
+    )
+    assert row_scale > 1.0, row_scale  # the scale the zero is read against
+    assert abs(tb["W"][0]) <= BAR_W_ZERO * row_scale, (tb["W"][0], row_scale)
+    assert abs(tb["dzW"][0]) <= BAR_W_ZERO * row_scale, (tb["dzW"][0], row_scale)
     # At soil it does not vanish, and neither does the difference.
     ctx2 = f["rs"]._crossing_context(f["geom"], ground_eps=SOIL_A)
     A2, B2 = CF.axis_data(ctx2, f["a_idx"]), CF.axis_data(ctx2, f["b_idx"])
