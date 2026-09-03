@@ -2908,6 +2908,40 @@ def _check_basis_can_host(
                 f"that: {reason}"
             )
 
+    # A BURIED wire under a ground the solver is given a MEDIUM for. Same
+    # `ground_eps` key as the contact check above, for the same reason: only a
+    # real lower half-space can have a wire IN it, and a `GD`/perfect image has
+    # none, so a wire below THAT plane is a different (and separately refused)
+    # geometry.
+    #
+    # Which cell to ask about is a geometry question this seam can answer, and
+    # it asks `_medium_spec` rather than re-deriving it: a junction whose
+    # shared point is in the plane, with two or more members and at least one
+    # reaching above it, is the DECLARED-crossing case and has its own
+    # sentence (momwire#850); anything else buried is the base `buried` cell.
+    # Two spellings of that test is how a refusal comes to fire on a deck it
+    # was never about, which is momwire#848's lesson in the trunk.
+    if "ground_eps" in ground and mesh.pieces:
+        gz = float(ground.get("ground_z", 0.0))
+        polylines = [piece.points for piece in mesh.pieces]
+        below = [
+            i
+            for i, pl in enumerate(polylines)
+            if float(pl[:, 2].min()) < gz - _ground_spec.ground_touch_tol(pl)
+        ]
+        if below:
+            crossing = _medium_spec.grounded_crossing_exemption(
+                polylines, gz, mesh.junctions
+            )
+            cells = ("buried", "crossing_junction") if crossing else ("buried",)
+            reason = solver_class.capabilities.refusal(*cells)
+            if reason is not None:
+                tag = mesh.pieces[below[0]].tag
+                raise ServeRefusal(
+                    f"wire {tag} runs below a FINITE ground plane and basis "
+                    f"{basis!r} does not serve that: {reason}"
+                )
+
     inert = _inert_pieces(mesh, ground)
     if inert and issubclass(solver_class, _NATIVE_LOADING):
         raise ServeRefusal(
