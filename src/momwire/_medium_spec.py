@@ -246,6 +246,66 @@ def buried_far_field_refusal():
     return _REFUSE_BURIED_FAR_FIELD
 
 
+def grounded_crossing_exemption(polylines, ground_z, groups):
+    """The `(wire, "start"|"end")` pairs a grounded junction EXEMPTS from the
+    refusals above — the crossing-junction exemption `wire_media` keys on
+    (momwire#524 phase 2), answered once here for both trunks (momwire#700).
+
+    `groups` is each junction's member list, and it is the ONLY thing the two
+    formulations differ by: `BSplineSolver` passes its DECLARED `junctions`,
+    `RazorSolver` passes the groups it DETECTS. Everything else about the
+    exemption is geometry, so it is written once — momwire#700 found the two
+    copies of it answering differently, and one copy cannot.
+
+    Two NECESSARY conditions, both pure geometry, because the labels this
+    feeds do not exist yet (the SUFFICIENT condition needs them and is
+    `_crossing_junctions`' #698 audit):
+
+    * **at least two members** (momwire#698) — one wire end cannot join two
+      media, so a lone grounded end can never be the crossing junction the
+      exemption is granted for;
+    * **at least one member reaching ABOVE the plane** (momwire#700) — a
+      junction every member of which is wholly at-or-below the interface has
+      no above side to cross TO, so it can never span it either. Without this
+      the exemption was granted to a WHOLLY-BELOW deck whose wires merely
+      meet in the plane: `wire_media`'s contact-with-buried refusal went
+      silent, `_crossing_junctions`' audit never ran (both its call sites sit
+      behind "the deck has an above segment"), and the deck was filled with
+      the grounded junction's KCL row DROPPED — 99.3 % of the current
+      arriving at the node vanishing into an interface with no conductor,
+      no contact image and no crossing block to carry it, against 5e-17 for
+      the identical topology half a metre lower.
+
+    Both conditions are cheap, and each is a fact about the junction rather
+    than about the fill, which is why they belong here and not at a dispatch
+    site.
+    """
+    if ground_z is None:
+        return frozenset()
+    gz = float(ground_z)
+
+    def _pl(w):
+        return np.asarray(polylines[w], dtype=np.float64)
+
+    ends = set()
+    for members in groups:
+        members = [(int(w), e) for w, e in members]
+        if len(members) < 2:
+            continue
+        w, end = members[0]
+        pl = _pl(w)
+        pt = pl[0] if end == "start" else pl[-1]
+        if abs(float(pt[2]) - gz) > _ground_spec.ground_touch_tol(pl):
+            continue
+        if not any(
+            float(_pl(m)[:, 2].max()) > gz + _ground_spec.ground_touch_tol(_pl(m))
+            for m, _e in members
+        ):
+            continue
+        ends.update(members)
+    return frozenset(ends)
+
+
 def wire_media(polylines, ground_z, *, lower_medium, pec, crossing_ends=()):
     """One label per wire — `ABOVE` or `BELOW` — or a named `ValueError`.
 
