@@ -2034,6 +2034,42 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_interior = int(basis_offsets[-1])
 
         groups = self._find_junctions()
+        # A DECLARED crossing junction is not a grounded one (momwire#813).
+        #
+        # `_find_junctions` marks a group grounded when its shared point lies
+        # in the plane, and `_junction_wings` then emits K contact tents
+        # rather than K-1 through tents — the right basis where the plane is
+        # a CONDUCTOR's boundary, because current genuinely leaves there and
+        # the image completes it. At a crossing node the plane is the
+        # boundary between two MEDIA and not a sink: a buried wire sheds
+        # current along its whole buried length through `k_m`, which
+        # momwire#812's fill already carries, and the interface point itself
+        # has zero measure. A contact tent there injects the base current
+        # into the soil AT A POINT — NEC-5's interface-node treatment, whose
+        # signature momwire#838 measured: the radial-count law goes flat and
+        # the engine reads the same connected or detached.
+        #
+        # So a crossing group takes the free-space topology: K ends, K-1
+        # through-current tents, no contact tent and no ghost wing. Demoting
+        # the flag HERE rather than in `_junction_wings` is what makes that
+        # one edit: `geom["junctions"]` is what `_feed_knots` and
+        # `grounded_bases` (the T2 plane-reference drop) both read, and all
+        # three have to agree that this node is not a potential reference.
+        # Demoting it in `_find_junctions` instead would recurse, since
+        # `_crossing_junctions` reaches `_wire_media` reaches
+        # `_grounded_junction_ends` reaches `_find_junctions`.
+        #
+        # Every grounded end that is NOT a crossing member keeps its contact
+        # tent exactly as before, which is what `test_a_grounded_end_that_is_
+        # not_a_crossing_member_is_untouched` holds.
+        crossing = (
+            set(self._crossing_junctions()) if self.ground_z is not None else set()
+        )
+        if crossing:
+            groups = [
+                dict(g, grounded=False) if j in crossing else g
+                for j, g in enumerate(groups)
+            ]
         j_seg, j_rise, j_sigma = [], [], []
         junctions, grounded_bases = [], []
         for group in groups:
