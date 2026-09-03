@@ -489,6 +489,29 @@ _SERVE_CROSSING = _SERVE_BURIED
 # catalog's node was never a declared junction, so razor refused at the
 # `buried` cell first and the declared crossing sentence (bspline's) was
 # never emitted; with the node declared, this is the sentence that fires.
+# momwire#846: N geometrically COINCIDENT segments give the tent basis N
+# identical columns, so the matrix is singular and the solve dies in LAPACK
+# with no idea what the deck was. Declared here and raised from the solve
+# entry points, not from the constructor: the FILL on such a deck is well
+# defined and momwire#813's collapse gates measure it (they compare matrices
+# and never solve, which is exactly why the singularity was invisible to them
+# until step 4 ran one). It is the SOLVE that has no answer.
+_BUNDLE_REFUSAL = (
+    "this deck spells a conductor as N geometrically COINCIDENT segments (a "
+    "bundle). Razor's tent basis puts one column per segment, so N coincident "
+    "segments are N identical columns and the matrix is singular by "
+    "construction -- at any mesh, in free space and in soil alike, and "
+    "whatever the quadrature. Razor has no bundle rule; BSplineSolver does "
+    "(momwire#524 phase 2's fan widening). Respell the bundle as ONE "
+    "conductor: a screen whose N radials meet at a buried HUB and rise to the "
+    "node on a single rise is the same antenna without the coincidence, and "
+    "razor serves it (antennaknobs' `buried_radial_vertical` is spelled that "
+    "way since antennaknobs#1108; its `bundle` variant is this deck). Or "
+    "solve the bundle with BSplineSolver, remembering that a bundle of N "
+    "coincident thin wires and one wire of the same radius are two "
+    "structures, never two meshes of one"
+)
+
 _CROSSING_NOT_SERVED_REFUSAL = (
     "this deck's wires cross the interface at a junction. Razor's crossing "
     "fill is momwire#813 and is not served yet; the below-plane family it "
@@ -1300,6 +1323,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     "buried+crossing_junction": _CROSSING_NOT_SERVED_REFUSAL,
                 }
             ),
+            # Not reachable through `refusal()`'s cell algebra: a bare
+            # condition token is SERVED unless it pairs into a combination
+            # key, and "does this family have a bundle rule" is an axis
+            # question rather than a combination (the promotion rule in
+            # `_capabilities._served`). Promoting it means declaring the axis
+            # on all eight rows against decks nobody has measured, which is
+            # the omission that rule exists to prevent, so it is declared here
+            # as prose and left as a question on momwire#846.
+            "bundle": _BUNDLE_REFUSAL,
             "buried+pec": _medium_spec.BURIED_PEC_REFUSAL,
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
@@ -4286,6 +4318,38 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # ------------------------------------------------------------------
     # solve
 
+    def _refuse_coincident_segments(self, geom):
+        """Refuse a bundle BY NAME before the solve dies in LAPACK
+        (momwire#846).
+
+        Called from the solve entry points and NOT from `_build_geometry` or
+        the assembly: the fill on such a deck is well defined and
+        momwire#813's collapse gates measure it against bspline's to 7.3e-11.
+        It is the solve that has no answer, so this is where the sentence
+        belongs.
+
+        The test is exact rather than tolerant — two segments with the same
+        pair of endpoints, rounded to nanometres. A bundle is authored as
+        coincident geometry, not arrived at by drift, and a tolerant test
+        would start refusing merely CLOSE conductors, which are a different
+        (and served) thing.
+        """
+        p0 = np.asarray(geom["seg_p0"], dtype=float)
+        p1 = p0 + np.asarray(geom["seg_h"], dtype=float)[:, None] * np.asarray(
+            geom["seg_t"], dtype=float
+        )
+        seen = {}
+        for i in range(p0.shape[0]):
+            a = tuple(np.round(p0[i], 9))
+            b = tuple(np.round(p1[i], 9))
+            key = (a, b) if a <= b else (b, a)
+            if key in seen:
+                raise ValueError(
+                    f"segments {seen[key]} and {i} run between the same two "
+                    f"points: {_BUNDLE_REFUSAL}"
+                )
+            seen[key] = i
+
     def compute_impedance(self):
         """Drive-point impedance(s) and the solved tent coefficients.
 
@@ -4307,6 +4371,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z = self._assemble_Z(geom, self.k)
         self.z = Z
 
+        self._refuse_coincident_segments(geom)
         cols = self._port_columns(geom)
         # NEC-5's EX at a knot: the delta gap sits inside exactly one
         # testing path, so the whole voltage lands in that one row.  A node
@@ -4410,6 +4475,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z = self._assemble_Z_from_prepared(geom, prepared, self.k, self.c * self.k)
         self.z = Z
 
+        self._refuse_coincident_segments(geom)
         cols = self._port_columns(geom)
 
         self._checkpoint()
@@ -4757,6 +4823,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         k_array = np.asarray(k_array, dtype=np.float64)
         geom = self._build_geometry()
+        self._refuse_coincident_segments(geom)
         self._checkpoint()
         prepared = self._assemble_Z_prepare(geom)
 
@@ -4804,6 +4871,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         k_array = np.asarray(k_array, dtype=np.float64)
         geom = self._build_geometry()
+        self._refuse_coincident_segments(geom)
         self._checkpoint()
         prepared = self._assemble_Z_prepare(geom)
         with self._k_restored():
