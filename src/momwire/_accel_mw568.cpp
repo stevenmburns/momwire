@@ -389,7 +389,11 @@ static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
     // node at th_band_hi is the same fill, but `th_min + dth*n` need not
     // reproduce it to the last bit.
     const int band = theta < th_band_hi ? 0 : (theta <= G.th_split ? 1 : 2);
-    const int reg = (r1c <= G.r_break ? 0 : 3) + band;
+    // THREE R1 zones since momwire#838 part 2: inner, near, and the far
+    // annulus above `r_near` (the old cap), which carries a finer theta
+    // lattice of its own.
+    const int zone = r1c <= G.r_break ? 0 : (r1c <= G.r_near ? 3 : 6);
+    const int reg = zone + band;
     const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
     const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
     int i0 = (int)std::floor(fr) - 1;
@@ -550,11 +554,11 @@ static py::tuple remainder_field_proj_batch_below(
     // The below family is SIX regions exactly (2 R1 zones x 3 theta bands)
     // since momwire#838. A four-region grid here is a stale
     // momwire/_sommerfeld_below.py and would route into unpopulated tables.
-    if (reg_vals.size() != 6)
+    if (reg_vals.size() != 9)
         throw std::runtime_error(
-            "the below/below grid is six regions (2 R1 zones x 3 theta bands) "
-            "since momwire#838; got a different count, which means a stale "
-            "_sommerfeld_below.py");
+            "the below/below grid is nine regions (3 R1 zones x 3 theta "
+            "bands) since momwire#838; got a different count, which means a "
+            "stale _sommerfeld_below.py");
     somm_proj::GridView G = somm_proj::build_grid_view(
         r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
         reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),

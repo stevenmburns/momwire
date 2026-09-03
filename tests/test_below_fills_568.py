@@ -510,6 +510,16 @@ def proj_grid():
     grid = below.SommerfeldGridBelow(
         et, kp, below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m, rtol=1e-9, omega=om
     )
+    # momwire#838 leaves the sub-1 deg band and the far annulus EMPTY until
+    # something asks for them, and the gates below deliberately ask for the
+    # most expensive cell there is: R1 at the cap AND theta at the grazing
+    # floor. Materializing that here rather than inside whichever test lands
+    # on it first keeps the time-budget guardrail measuring what each gate
+    # does -- it reads the CALL phase -- and this module's `_FIXTURE_GROUP`
+    # entry keeps xdist from paying it once per worker. Without it,
+    # `..._at_the_edges_is_served_not_refused` alone runs ~18 s, which on a
+    # 1.55x-slower runner is inside reach of the 20 s HARD ceiling.
+    grid._ensure_for(grid.r1_max, grid.th_min, 0.5 * np.pi)
     return grid, (et, kp, om, km, lam_m)
 
 
