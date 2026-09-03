@@ -21,6 +21,15 @@ That is how the residual came to be recorded in
 `test_razor_crossing_axis_813.BAR_ROW_HALF` as a property of the source
 Gauss, which it is not; the prose beside that bar is corrected in this change
 and this module is what holds the correction.
+
+**Which knob dominates is a property of the BLOCK, not of the trunk**, and
+that is why the fix is per-axis arguments rather than a new constant. On the
+INTERIOR and REVERSED blocks — whose bases exclude the junction, so
+`_graded_u`'s interface-touching panels barely enter — the dominance is the
+other way round entirely: the panels move nothing at all at any order or
+growth, the source order alone plateaus at 1.07e-07, and the two together
+reach 3.2e-16. Both structures are gated below, because a reader who
+generalises either one gets the other wrong.
 """
 
 from __future__ import annotations
@@ -165,3 +174,101 @@ def test_the_panel_order_alone_stops_at_its_own_plateau(fs):
 def test_both_together_reach_the_floor(fs):
     assert _node_row_rel(fs, growth=2.0, panel_order=8, q=8) < 1e-9
     assert _node_row_rel(fs, growth=2.0, panel_order=8, q=12) < 1e-11
+
+
+# ---------------------------------------------------------------------------
+# the OTHER structure: interior and reversed blocks, where panels are inert
+#
+# Found in momwire#832's review while checking whether `BAR_REVERSED` had been
+# swept against the trunk's density (it had not — the sweep was razor's
+# quadrature LANE, which is on razor's path side and cannot see this axis).
+# Reproduced here before being recorded.
+
+
+@pytest.fixture(scope="module")
+def interior(fs):
+    geom = fs["geom"]
+    bo = np.asarray(geom["basis_offsets"])
+    rs = fs["rs"]
+    Z = rs._assemble_Z_from_prepared(geom, rs._assemble_Z_prepare(geom), rs.k, rs.omega)
+    return dict(
+        b_below=np.arange(bo[0], bo[1]),
+        b_above=np.arange(bo[1], bo[2]),
+        Z=Z,
+    )
+
+
+# A CORNER of the block rather than all 22 above bases and their 22 segments:
+# the claim is about a plateau in the block's agreement, which every entry of
+# it shares, and the full block makes this the most expensive test in the file
+# by an order of magnitude. Six above segments, and the bases both of whose
+# wings lie inside them.
+_SEG_CAP = 6
+
+
+def _interior_blocks(fs, it, **kw):
+    """(reversed, forward) agreement against razor's free-space truth."""
+    rs, geom, ctx = fs["rs"], fs["geom"], fs["ctx"]
+    n = geom["n_basis_total"]
+    seg_a = fs["seg_above"][:_SEG_CAP]
+    inside = set(seg_a.tolist())
+    above = np.array(
+        [
+            m
+            for m in it["b_above"]
+            if all(int(geom["wing_seg"][m, j]) in inside for j in (0, 1))
+        ]
+    )
+    A = CF.path_test_axis(n, rs._path_test_rows(geom, above))
+    P = CF.path_test_axis(n, rs._path_test_rows(geom, it["b_below"]))
+    ax_a = CF.axis_data(ctx, seg_a, **kw)
+    ax_b = CF.axis_data(ctx, fs["seg_below"], **kw)
+    out = []
+    for blk, rows, cols in (
+        (
+            -CF.cross_complete_block_reversed(ctx, P, ax_a, corner=False),
+            it["b_below"],
+            above,
+        ),
+        (
+            -CF.cross_complete_block(ctx, A, ax_b, corner=False),
+            above,
+            it["b_below"],
+        ),
+    ):
+        ix = np.ix_(rows, cols)
+        ref = it["Z"][ix]
+        out.append(float(np.abs(blk[ix] - ref).max() / np.abs(ref).max()))
+    return out
+
+
+# `slow`, like `test_interior_rows_against_interior_columns` next door and for
+# the same reason: an interior x interior block over 22 above bases is the
+# expensive shape in this file, and these run it four times.
+
+
+@pytest.mark.slow
+def test_the_interior_blocks_plateau_is_two_knobs_not_one(fs, interior):
+    """The mirror image of the node row, in one test because the three claims
+    share the expensive part.
+
+    `_graded_u` fires only on segments touching the interface and these bases
+    exclude the junction, so the panels move nothing here — where on the node
+    row they are the knob that matters. The source order alone plateaus at
+    1.07e-07. Together they leave 6.5613e-06 by four orders, which is what
+    makes that number a property of the shipped density rather than of the
+    method, and what `BAR_INTERIOR` / `BAR_REVERSED` now say.
+    """
+    rev, fwd = _interior_blocks(fs, interior)
+    assert 5e-6 < rev < 8e-6 and 5e-6 < fwd < 8e-6, (rev, fwd)
+    # the two blocks are not independently 6.5e-6; they are the same number
+    assert rev == pytest.approx(fwd, rel=1e-6)
+
+    # panels alone: inert to the digits that matter
+    p_rev, p_fwd = _interior_blocks(fs, interior, growth=1.5, panel_order=12)
+    assert p_rev == pytest.approx(rev, rel=1e-4), (rev, p_rev)
+    assert p_fwd == pytest.approx(fwd, rel=1e-4), (fwd, p_fwd)
+
+    # both together: four orders off the plateau
+    b_rev, b_fwd = _interior_blocks(fs, interior, growth=1.5, panel_order=12, q=8)
+    assert b_rev < 1e-9 and b_fwd < 1e-9, (b_rev, b_fwd)
