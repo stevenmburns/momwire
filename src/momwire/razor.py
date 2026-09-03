@@ -3792,6 +3792,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         collapse this method is gated on cannot see that choice, because W
         vanishes there. Soil is what reads it.
         """
+        if self._loading_active or self.lumped_loads:
+            # Before any fill: the stencil is per-medium here and its cross
+            # terms are not derived, and `_medium_geometry` does not carry
+            # the keys `_loading_stencil` reads anyway.
+            raise NotImplementedError(
+                "wire loading on a crossing deck is not served "
+                "(momwire#813): the loading stencil is per-medium here and "
+                "its cross terms are not derived"
+            )
         tents = self._crossing_tents(geom)
         nodes = self._knot_points(geom)[[m for m, _ in tents]]
 
@@ -3842,12 +3851,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ctx, P, ax_a, corner=False
         )[np.ix_(rows_b, rows_a)]
 
-        if prep_a["loading"] is not None or prep_b["loading"] is not None:
-            raise NotImplementedError(
-                "wire loading on a crossing deck is not served (momwire#813): "
-                "the loading stencil is per-medium here and its cross terms "
-                "are not derived"
-            )
         return Z
 
     def _assemble_Z_source_block(
