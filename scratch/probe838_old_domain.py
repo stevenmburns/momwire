@@ -13,8 +13,12 @@ compare:
     git stash && python scratch/probe838_old_domain.py before.npz
     git stash pop && python scratch/probe838_old_domain.py after.npz --against before.npz
 
-`tests/golden_below_old_domain_838.py` is a compact subset of the `before`
-run at main 79911c5, committed so the comparison survives without an npz.
+The committed gate is `test_the_old_domain_is_unmoved`, which replays the
+pre-band routing over the SAME grid's tables in process rather than
+comparing against banked values -- a golden captured on one box would be
+asserting bit-equality of the contour fill across toolchains, which is not
+portable (macOS reads ~1.7e-12 from Linux here) and is not this unit's
+claim. This script is the cross-COMMIT check that motivated it.
 
 Sampled OFF-node deliberately: a sweep that only landed on lattice nodes
 would pass even if the interpolation stencil changed underneath it. The
