@@ -57,25 +57,34 @@ def _warnings_from(**kwargs):
     return [w.message for w in rec]
 
 
-def test_razor_2p_states_its_class_once():
-    """The razor-2p lane warns exactly once per construction."""
-    got = [
-        m
-        for m in _warnings_from(nec5_quadrature=True)
-        if isinstance(m, RazorFarMeshClass)
-    ]
+@pytest.mark.parametrize(
+    "lane", [{"nec5_quadrature": True}, {}], ids=["razor-2p", "razor-GL"]
+)
+def test_both_razor_lanes_state_the_class_once(lane):
+    """Exactly one advisory per construction, on EITHER razor lane.
+
+    The GL lane is in the gate deliberately. The first-order class belongs to
+    the path-TESTING rule that both lanes share (#845's probe 3 puts razor-GL
+    within 2 ohm of razor-2p at every mesh), so scoping the advisory to the
+    shipped `nec5_quadrature` roster entry would leave a lane that carries the
+    defect and says nothing about it -- and the caller who reaches GL is doing
+    convergence or certification work, i.e. the one who most needs the
+    statement. Parametrised rather than written once so removing either lane
+    fails here.
+    """
+    got = [m for m in _warnings_from(**lane) if isinstance(m, RazorFarMeshClass)]
     assert len(got) == 1, f"want exactly one advisory, got {len(got)}"
 
 
-def test_the_other_lanes_stay_silent():
+def test_bspline_stays_silent():
     """What makes the gate above mean anything.
 
-    If the advisory fired on every solver, "razor-2p warns" would be true and
+    If the advisory fired on every solver, "razor warns" would be true and
     uninformative. bspline is the converged engine the advisory POINTS AT, so
-    it warning here would be self-contradicting; the Gauss-Legendre razor lane
-    is deliberately silent (see the scoping comment in `RazorSolver.__init__`).
+    it warning here would be self-contradicting -- and it is the only solver
+    for which silence is now the correct behaviour, both razor lanes having
+    started to speak.
     """
-    assert not [m for m in _warnings_from() if isinstance(m, RazorFarMeshClass)]
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         BSplineSolver(**_deck(), degree=2)
@@ -142,6 +151,15 @@ def test_it_is_advisory_in_FACT_not_just_in_wording():
     mesh -- so an "advisory" that quietly bumped the segment count, or that
     refused a deck it disapproved of, fails here rather than in a user's
     convergence study.
+
+    THE TRAP, recorded because the first version of this test fell in it:
+    `nsegs` is NOT the mesh on this path. It keeps its constructor default of
+    101 whenever `n_per_edge_per_wire` is given, so `assert loud.nsegs ==
+    quiet.nsegs` compares 101 to 101, passing for every deck including one
+    that had been silently remeshed. What a covert remesh would have to move
+    is `n_per_edge_per_wire`, so that is what this asserts on -- and it pins
+    the literal value too, so an assertion that drifts onto something
+    constant fails instead of going quietly green.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("always")
@@ -153,10 +171,6 @@ def test_it_is_advisory_in_FACT_not_just_in_wording():
         z_quiet, _ = quiet.compute_impedance()
 
     assert complex(z_loud) == complex(z_quiet)
-    # The stored mesh spec, which is what a covert remesh would have to move.
-    # (`nsegs` is NOT the mesh on this path: it keeps its 101 default whenever
-    # `n_per_edge_per_wire` is given, so asserting on it would pass for any
-    # deck and prove nothing.)
     assert np.array_equal(
         np.asarray(loud.n_per_edge_per_wire), np.asarray(quiet.n_per_edge_per_wire)
     )

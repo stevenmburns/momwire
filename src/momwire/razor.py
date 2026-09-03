@@ -1458,18 +1458,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # antennaknobs catalog and none correlates with it (far segment
         # length, the obvious one, reads +0.021). See `_razor_class`.
         #
-        # Scoped to the `nec5_quadrature` lane because that is the shipped
-        # roster entry and the interactive default. The class itself belongs
-        # to the path-TESTING rule, which BOTH razor lanes share -- #845's
-        # probe 3 puts razor-GL within 2 ohm of razor-2p at every mesh -- so
-        # the Gauss-Legendre lane is equally affected and stays silent. That
-        # is defensible only because reaching it means constructing
+        # BOTH lanes, not just `nec5_quadrature`. The class belongs to the
+        # path-TESTING rule, which the two razor lanes share: #845's probe 3
+        # puts razor-GL within 2 ohm of razor-2p at every mesh, so the
+        # Gauss-Legendre lane is in the same first-order class and owes the
+        # same statement. An earlier draft scoped this to the shipped roster
+        # entry on the grounds that reaching GL means constructing
         # `RazorSolver` directly for convergence or certification work
-        # (momwire#753 retired it from the roster), which is the caller who
-        # least needs telling. If it ever becomes a menu item again, this
-        # condition is the line to revisit.
-        if self.nec5_quadrature:
-            _razor_class.warn_far_mesh_class()
+        # (momwire#753 retired it from the roster) -- but that caller is
+        # precisely the one who must be told, and a lane that warns about
+        # nothing while sharing the defect is the shape of silence #852 and
+        # #845 both turned up. So it is unconditional on the class, exactly as
+        # it is unconditional on the mesh.
+        _razor_class.warn_far_mesh_class()
 
         if not wires:
             raise ValueError("wires must be non-empty")
