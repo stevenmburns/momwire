@@ -97,6 +97,11 @@ _GRADES = {
 # ~0.4 ohm rather than the fan anchor's 6.8, and it recovers its rate by
 # q=32 instead of crawling at ~C/q — the crossing node here has no
 # coincident rises, which is the geometry that destroys the rate.
+# Its envelope is the NODE axis (g1<->g2) plus quadrature. The FAR mesh is
+# a third axis this print does not carry: scaling the far mesh moves degree
+# 2 by 0.36 ohm at x3 and 0.61 at x9 (G1-B, test_bspline_pair_g1b), so the
+# 0.05 gate below is a regression gate at the g1 far mesh, not a
+# far-mesh-converged answer.
 CROSSING_G1 = 138.9619 - 102.6019j
 
 # As FAN_SOIL_A_N2_QP, for the same reason and past the same n_qp <= 8
