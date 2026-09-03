@@ -1378,21 +1378,24 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         configuration the refusal exists to prevent. The count is the
         cheapest NECESSARY condition for crossing and it is pure geometry,
         so it belongs here; the SUFFICIENT condition needs labels and is
-        `_crossing_junctions`'.
+        `_crossing_junctions`'. A junction no member of which reaches ABOVE
+        the plane is skipped for the same shape of reason and by the same
+        argument (momwire#700): it has no above side to cross TO, so it can
+        never span the interface either, and admitting it handed a
+        WHOLLY-BELOW deck the exemption on a deck where nothing crosses.
+
+        The conditions themselves live in
+        `_medium_spec.grounded_crossing_exemption`, shared with
+        `RazorSolver._grounded_junction_ends` (momwire#700): the two trunks
+        differ only in where the junction GROUPS come from — declared here,
+        detected there — and momwire#700 is what two copies of the geometry
+        cost.
         """
-        gz = self.ground_z
-        if gz is None or not self.junctions:
+        if self.ground_z is None or not self.junctions:
             return frozenset()
-        ends = set()
-        for jw in self.junctions:
-            if len(jw) < 2:
-                continue
-            w, end = jw[0]
-            pl = self.wires_polylines[w]
-            pt = pl[0] if end == "start" else pl[-1]
-            if abs(pt[2] - gz) <= _ground_spec.ground_touch_tol(pl):
-                ends.update(jw)
-        return frozenset((w, e) for w, e in ends)
+        return _medium_spec.grounded_crossing_exemption(
+            self.wires_polylines, self.ground_z, self.junctions
+        )
 
     def _crossing_junctions(self):
         """Indices of junctions that CROSS the interface — grounded
@@ -4834,6 +4837,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._refuse_buried_out_of_scope(geom)
         obs_a, t_a, W_a = self._buried_nodes(geom, a_idx)
         obs_b, t_b, W_b = self._buried_nodes(geom, b_idx)
+        # Asked ONCE, and asked UNCONDITIONALLY (momwire#700). It used to sit
+        # inside `bool(a_idx.size and ...)` at the plan site and behind the
+        # same guard again below, so on a WHOLLY-below deck — no above
+        # segment — Python short-circuited both calls and momwire#698's
+        # exemption audit never ran at all. `_crossing_junctions` is a
+        # VALIDATION as much as a label (it is where a grounded junction that
+        # cannot cross gives its exemption back), and a validation behind a
+        # short-circuit is a validation that does not run. Razor asks it
+        # unconditionally in `_refuse_buried_geometry`, which is why the two
+        # trunks answered differently on the same deck.
+        crossing_j = self._crossing_junctions()
         plan = self._buried_serve_plan(
             geom,
             a_idx,
@@ -4841,7 +4855,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             obs_b,
             k_p,
             k_m,
-            crossing=bool(a_idx.size and self._crossing_junctions()),
+            crossing=bool(a_idx.size and crossing_j),
         )
 
         # --- the two direct blocks, each in its own medium -----------------
@@ -4904,7 +4918,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             supp_seg, polys, proj_bb, b_idx, b_idx, obs_b, t_b, W_b, obs_b, t_b, W_b
         )
 
-        crossing = self._crossing_junctions() if a_idx.size else ()
+        crossing = crossing_j if a_idx.size else ()
         if crossing:
             # The node-mesh advisory (momwire#696) goes first, because
             # this is the one place per fill where the crossing serve

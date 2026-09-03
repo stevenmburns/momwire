@@ -1642,22 +1642,22 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         this formulation (it carries the contact tent), but one wire end
         cannot join two media, so such a group can never be the crossing
         junction the exemption is granted for. Admitting it would hand a
-        contact+buried deck a silent escape from the refusal.
+        contact+buried deck a silent escape from the refusal. A group no
+        member of which reaches above the plane is skipped for the same
+        shape of reason (momwire#700).
+
+        Both conditions live in `_medium_spec.grounded_crossing_exemption`,
+        which is also what the B-spline twin calls: the DETECTED-vs-declared
+        group source is the only thing the two trunks may differ by here,
+        and momwire#700 is what happened when they differed by more.
         """
-        gz = self.ground_z
-        if gz is None:
+        if self.ground_z is None:
             return frozenset()
-        ends = set()
-        for group in self._find_junctions():
-            members = group["ends"]
-            if len(members) < 2:
-                continue
-            w, end = members[0]
-            pl = self.wires_polylines[w]
-            pt = pl[0] if end == "start" else pl[-1]
-            if abs(pt[2] - gz) <= _ground_spec.ground_touch_tol(pl):
-                ends.update(members)
-        return frozenset((w, e) for w, e in ends)
+        return _medium_spec.grounded_crossing_exemption(
+            self.wires_polylines,
+            self.ground_z,
+            (g["ends"] for g in self._find_junctions()),
+        )
 
     def _wire_media(self):
         """One `_medium_spec` label per wire, cached per instance.
