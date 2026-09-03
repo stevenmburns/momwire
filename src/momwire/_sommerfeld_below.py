@@ -183,14 +183,76 @@ _SOMM_BELOW_DTH_STEEP_DEG = 2.5
 #   R₁ = 1.0 λ_m   θ 2° → 0.05°   0.16 → 0.44
 #   R₁ = 3.5 λ_m   θ 2° → 0.05°   1.11 → 3.26
 #
-# — growth roughly linear in log θ, i.e. the lateral wave's logarithm. No
-# uniform lattice resolves that, and the cost of chasing it is ~6.4/tan θ
-# tail panels per node (R₁-independent: the panel lattice is π/ρ and the
-# tail must reach ~C/h). 1° costs ~380 panels and interpolates to 4.7e-4
-# with Δθ = 1°; that is where the measurement stops and therefore where the
-# grid stops. A log-spaced grazing band, or an asymptotic lateral-wave
-# branch, is the follow-up.
-_SOMM_BELOW_TH_MIN_DEG = 1.0
+# — growth roughly linear in log θ, i.e. the lateral wave's logarithm, and
+# the cost of chasing it is ~6.4/tan θ tail panels per node (R₁-independent:
+# the panel lattice is π/ρ and the tail must reach ~C/h; measured at 0.1°,
+# 3542 / 3574 / 3618 panels at R₁/λ_m = 0.2 / 1.0 / 2.0).
+#
+# An earlier reading of this block said "no uniform lattice resolves that"
+# and offered a log-spaced band or an asymptotic lateral-wave branch as the
+# follow-up. **That is true of a single GLOBAL Δθ and false of a banded
+# one** (momwire#838). This grid is already banded — a grazing band and a
+# steep band, split at `_SOMM_TH_SPLIT_DEG` — so the answer was a third
+# band, uniform like the other two, over [0.1°, 1°].
+#
+# Measured (`scratch/probe838_grazing_band.py`): 4-point Lagrange along each
+# candidate's own coordinate, scored against `iv_surfaces_direct_below` at a
+# COMMON set of 17 off-node queries, worst over soils A/B/C × R₁/λ_m ∈
+# {0.2, 1, 2} × the four surfaces. Scoring each lattice at its own cell
+# midpoints instead compares different points and flatters the log band.
+#
+#   nodes   uniform Δθ    worst rel   |   log (geometric)   worst rel
+#     4       0.300°       3.1e-07    |                      8.8e-04
+#     5       0.225°       9.9e-08    |                      3.6e-04
+#     7       0.150°       1.9e-08    |                      1.0e-04
+#    10       0.100°       3.9e-09    |                      2.2e-05
+#
+# Uniform wins by three to four orders at equal node count AND fewer panels
+# (log spacing puts its extra nodes at the small-θ end, which is where a
+# node is most expensive). At the band's own 4.7e-4 bar the log lattice is
+# the one that fails at four nodes.
+# Δθ must DIVIDE the band exactly. (1.0 − 0.1)/Δθ non-integral makes the
+# last node overshoot `th_band_hi` (0.25 gives nodes 0.1 … 1.1), the two
+# bands then share no node, and every old-domain cell at θ = 1° moves —
+# measured 1.2e-07 before this was caught. 0.225 = 0.9/4 is the five-node
+# rung of the table above.
+_SOMM_BELOW_DTH_BAND_DEG = 0.225
+_SOMM_BELOW_TH_BAND_HI_DEG = 1.0
+
+# The grazing floor, in degrees, below which the grid REFUSES.
+#
+# θ = 0 is h = 0: the tail loses its e^{−γ_m h} decay entirely and what is
+# left is a conditionally convergent integral this contour does not evaluate,
+# so there is no honest θ = 0 node to fill.
+#
+# What sets the floor is NOT convergence — it is `_MAX_TAIL_PANELS`, and the
+# cap is reached silently (the contour stops there, bumps
+# `Health.nonconvergent`, and returns the truncated value anyway; filed as
+# momwire#841).
+#
+# Worst tail panels over the SPEC soils A/B/C × 7/21 MHz × R₁/λ_m ∈
+# {0, 0.02, 0.05, 0.2, 1, 2} — the sweep matters, a single deck understates
+# this badly (soil A at 7 MHz alone reads 3542 at 0.1°, i.e. 90 %, where the
+# true worst is 96.7 % on soil C at 21 MHz):
+#
+#   0.15°   2603 / 4000   65.1 %   all converged
+#   0.12°   3237 / 4000   80.9 %   all converged
+#   0.10°   3868 / 4000   96.7 %   all converged      <- the floor
+#   0.09°   4000 / 4000  100.0 %   25 points CAPPED
+#
+# **0.1° is the last rung that converges on every SPEC soil**, so that is
+# where the floor goes and no lower. It serves every geometry momwire#838
+# asks for — BLE 1937's 45 ft tip is 0.64° and its 135 ft tip 0.21°.
+#
+# The margin is thin (3.3 %) and the failure past it is silent, so
+# `test_every_band_node_converges_under_the_panel_cap` asserts both the
+# convergence and the headroom on every band node. Below the floor, measured
+# against the same point with the cap lifted to 40000, the truncation is
+# benign for a while and then is not: 3.8e-09 at 0.08°, 2.6e-06 at 0.05°, and
+# 9.3e-04 at 0.023° — the NEC-5 Validation Manual screen's angle, explicitly
+# NOT served, and the first rung where the cap costs more than this band's own
+# interpolation bar.
+_SOMM_BELOW_TH_MIN_DEG = 0.1
 
 _GX, _GW = np.polynomial.legendre.leggauss(_GAUSS_N)
 _GXC, _GWC = np.polynomial.legendre.leggauss(_GAUSS_N_COARSE)
@@ -1028,18 +1090,45 @@ class SommerfeldGridBelow(SommerfeldGrid):
         dr_out = min(_SOMM_BELOW_DR_LAMBDA_M * lam_m, beat / 6.0)
         self.beat_binds = beat / 6.0 < _SOMM_BELOW_DR_LAMBDA_M * lam_m
         th0 = _SOMM_BELOW_TH_MIN_DEG
+        band_hi = _SOMM_BELOW_TH_BAND_HI_DEG
+        dthb = _SOMM_BELOW_DTH_BAND_DEG
         dthg = _SOMM_BELOW_DTH_GRAZE_DEG
         dths = _SOMM_BELOW_DTH_STEEP_DEG
+        self.th_band_hi = math.radians(band_hi)
+        self._th_split = math.radians(split)
+        # THREE θ bands per R₁ zone since momwire#838, not two. The sub-1°
+        # band is a SEPARATE region rather than a finer `dthg` over the whole
+        # grazing band, and that is forced rather than chosen: refining the
+        # existing band's Δθ moves its node set (0.1 + k·0.25 never lands on
+        # 2°), so every interpolated cell in the old domain would move. A
+        # separate region leaves the old two byte for byte and meets them at
+        # a shared node — the same seam the grid already has at `split`.
+        #
+        # Region order is (R₁ zone) × (θ band), θ fastest: 0-2 inner, 3-5
+        # outer. `eval` below and `proj_one_below` in `_accel_mw568.cpp`
+        # both index it that way; they are two copies of one layout, which
+        # is why the C++ side takes `th_band_hi` explicitly instead of
+        # inferring a band count from `len(reg_vals)`.
         layout = [
-            (0.0, self.r_break, dr_in, th0, split, dthg),
+            (0.0, self.r_break, dr_in, th0, band_hi, dthb),
+            (0.0, self.r_break, dr_in, band_hi, split, dthg),
             (0.0, self.r_break, dr_in, split, 90.0, dths),
-            (self.r_break, self.r1_max, dr_out, th0, split, dthg),
+            (self.r_break, self.r1_max, dr_out, th0, band_hi, dthb),
+            (self.r_break, self.r1_max, dr_out, band_hi, split, dthg),
             (self.r_break, self.r1_max, dr_out, split, 90.0, dths),
         ]
 
+        # The band regions (0 and 3) are filled LAZILY. They are ~320 nodes at
+        # ~48 ms each — 4.2x the whole rest of the grid — and a deck with
+        # nothing under 1 deg never reads them. Filling them eagerly made an
+        # existing below-grid test go 0.50 s -> 16.2 s in the xdist lane,
+        # where OpenMP is pinned to one thread per worker. Cost now falls
+        # only on the decks momwire#838 is for.
+        self._band_idx = (0, 3)
+        self._band_filled = False
         self._regions = []
         pad = _SOMM_BELOW_PAD_ROWS
-        for r0, r1, dr, th0, th1, dth in layout:
+        for ridx, (r0, r1, dr, th0, th1, dth) in enumerate(layout):
             # Pad the R₁ axis past both ends (see `_SOMM_BELOW_PAD_ROWS`): a
             # query anywhere in [r0, r1] then has two lattice rows on each
             # side and gets the CENTRED leg of the cubic. The low end only
@@ -1050,17 +1139,20 @@ class SommerfeldGridBelow(SommerfeldGrid):
             n_th = int(round((th1 - th0) / dth)) + 1
             r_nodes = r_start + dr * np.arange(n_r)
             th_nodes = np.radians(th0 + dth * np.arange(n_th))
-            rr, tt = np.meshgrid(r_nodes, th_nodes, indexing="ij")
-            surf = iv_surfaces_direct_below(
-                self.eps_t,
-                self.k2,
-                rr,
-                tt,
-                rtol=rtol,
-                omega=self.omega,
-                mu=self.mu,
-                health=health,
-            )
+            if ridx in (0, 3):
+                surf = None  # deferred; see `_ensure_band`
+            else:
+                rr, tt = np.meshgrid(r_nodes, th_nodes, indexing="ij")
+                surf = iv_surfaces_direct_below(
+                    self.eps_t,
+                    self.k2,
+                    rr,
+                    tt,
+                    rtol=rtol,
+                    omega=self.omega,
+                    mu=self.mu,
+                    health=health,
+                )
             self._regions.append(
                 {
                     "r0": r_start,
@@ -1069,9 +1161,27 @@ class SommerfeldGridBelow(SommerfeldGrid):
                     "th0": np.radians(th0),
                     "dth": np.radians(dth),
                     "n_th": n_th,
-                    "vals": np.stack([surf[key] for key in _SURF_KEYS]),
+                    # An unfilled band region carries a NaN table, not an
+                    # absent one: the C++ kernel takes every region up front
+                    # and would otherwise reject the shape. NaN rather than
+                    # zeros on purpose — the conservative theta bound in
+                    # `remainder_field_proj_below` means a query can never
+                    # route here unfilled, and if that reasoning is ever
+                    # wrong the answer must be visibly wrong rather than
+                    # plausibly zero.
+                    "vals": (
+                        np.full(
+                            (len(_SURF_KEYS), n_r, n_th), np.nan, dtype=np.complex128
+                        )
+                        if surf is None
+                        else np.stack([surf[key] for key in _SURF_KEYS])
+                    ),
+                    "r_nodes": r_nodes,
+                    "th_nodes": th_nodes,
                 }
             )
+        self._rtol = rtol
+        self._health = health
 
     def eval(self, R1, theta):
         """Interpolate the four below surfaces; REFUSES past `r1_max`.
@@ -1117,9 +1227,81 @@ class SommerfeldGridBelow(SommerfeldGrid):
                 "relative to its horizontal separation, or refuse the "
                 "geometry"
             )
-        return super().eval(
+        return self._interp(
             np.minimum(R1, self.r1_max), np.clip(theta, self.th_min, 0.5 * np.pi)
         )
+
+    def _ensure_band(self):
+        """Fill the sub-1 deg band's two regions, once, on first need.
+
+        Deferred because they cost ~4x the rest of the grid put together
+        (momwire#838) and most decks never graze that low. Idempotent, and
+        the values are exactly what an eager fill would have produced — the
+        node sets were fixed in the constructor, only the evaluation moved.
+        """
+        if self._band_filled:
+            return
+        for idx in self._band_idx:
+            reg = self._regions[idx]
+            rr, tt = np.meshgrid(reg["r_nodes"], reg["th_nodes"], indexing="ij")
+            surf = iv_surfaces_direct_below(
+                self.eps_t,
+                self.k2,
+                rr,
+                tt,
+                rtol=self._rtol,
+                omega=self.omega,
+                mu=self.mu,
+                health=self._health,
+            )
+            reg["vals"] = np.stack([surf[key] for key in _SURF_KEYS])
+        self._band_filled = True
+
+    def _interp(self, R1, theta):
+        """The parent's bicubic, over THIS family's three-θ-band layout.
+
+        Not `super().eval`: the parent routes on one θ split and reads a
+        six-region grid as the momwire#159 far zone, which this layout is
+        not. Overriding here rather than generalizing the parent keeps the
+        ±=+ family's routing byte for byte — measured, not assumed (the
+        golden ±=+ anchors are unmoved by momwire#838).
+        """
+        r_b, th_b = np.broadcast_arrays(R1, theta)
+        shape = r_b.shape
+        r_f = np.minimum(r_b.ravel(), self.r1_max)
+        th_f = th_b.ravel()
+
+        if th_f.size and float(np.min(th_f)) < self.th_band_hi:
+            self._ensure_band()
+
+        # (R₁ zone) × (θ band), θ fastest — the layout the constructor built.
+        # STRICT `<` at the band edge: θ = th_band_hi belongs to the OLD
+        # grazing band, which is what makes the old domain bit-identical
+        # there. The two bands' node at 1° is the same direct evaluation, but
+        # `th_min + Δθ·n` need not reproduce `th_band_hi` to the last bit, and
+        # a query landing on the fine band's copy would differ in low bits.
+        band = np.where(
+            th_f < self.th_band_hi, 0, np.where(th_f <= self._th_split, 1, 2)
+        )
+        region_of = np.where(r_f <= self.r_break, 0, 3) + band
+
+        out = np.empty((len(_SURF_KEYS), r_f.size), dtype=np.complex128)
+        for idx, reg in enumerate(self._regions):
+            sel = np.nonzero(region_of == idx)[0]
+            if sel.size == 0:
+                continue
+            fr = (r_f[sel] - reg["r0"]) / reg["dr"]
+            ft = (th_f[sel] - reg["th0"]) / reg["dth"]
+            i0 = np.clip(np.floor(fr).astype(int) - 1, 0, reg["n_r"] - 4)
+            j0 = np.clip(np.floor(ft).astype(int) - 1, 0, reg["n_th"] - 4)
+            wr = self._lagrange4(fr - i0)
+            wt = self._lagrange4(ft - j0)
+            ii = i0[:, None] + np.arange(4)[None, :]
+            jj = j0[:, None] + np.arange(4)[None, :]
+            block = reg["vals"][:, ii[:, :, None], jj[:, None, :]]
+            out[:, sel] = np.einsum("snij,ni,nj->sn", block, wr, wt)
+
+        return {key: out[s].reshape(shape) for s, key in enumerate(_SURF_KEYS)}
 
     def scaled_to(self, k2, omega, mu):
         raise NotImplementedError(
@@ -1255,17 +1437,30 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     if _use_below_accel() and getattr(grid, "_regions", None) is not None:
         from ._sommerfeld import grid_cpp_args
 
-        out, mx_r1, mn_th, mx_th = _acc.remainder_field_proj_batch_below(
-            obs,
-            t_obs,
-            src,
-            t_src,
-            float(ground_z),
-            float(k_p),
-            complex(k_m),
-            float(grid.th_min),
-            *grid_cpp_args(grid),
-        )
+        # The band regions fill lazily (momwire#838) and C++ takes every region
+        # table up front, so an unfilled band goes in as NaN. The ORDER below
+        # is what makes that safe: this pass only has to produce the query's
+        # extremes, `grid.eval` raises the domain refusals off them, and only a
+        # deck that is BOTH in-domain and actually grazing gets the band filled
+        # and the kernel re-run. A refused geometry never fills the band; a
+        # deck with nothing under `th_band_hi` never fills it either.
+        band_was_filled = grid._band_filled
+
+        def _run():
+            return _acc.remainder_field_proj_batch_below(
+                obs,
+                t_obs,
+                src,
+                t_src,
+                float(ground_z),
+                float(k_p),
+                complex(k_m),
+                float(grid.th_min),
+                float(grid.th_band_hi),
+                *grid_cpp_args(grid),
+            )
+
+        out, mx_r1, mn_th, mx_th = _run()
         # The three domain refusals are NOT transcribed into C++. The kernel
         # reports the query's extremes and they go straight back through
         # `SommerfeldGridBelow.eval`, which raises in its own words — one copy
@@ -1274,6 +1469,8 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
         # discarded and costs microseconds.
         if obs.shape[0] and src.shape[0]:
             grid.eval(np.array([mx_r1, mx_r1]), np.array([mn_th, mx_th]))
+            if grid._band_filled and not band_was_filled:
+                out, mx_r1, mn_th, mx_th = _run()
         return out
 
     th_src = np.hypot(t_src[:, 0], t_src[:, 1])
