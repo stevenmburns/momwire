@@ -34,6 +34,32 @@ itself rather than by solving twice: a full Gauss-Legendre solve of one
 repaired rung measures 113 s single-threaded against the two-point lane's
 22 s (and ~240 s under xdist worker pinning), which is real cost on a
 push-only lane for re-testing the same repair.
+
+## Two gates written for this and thrown away — the shape to avoid
+
+Kept because MUTATION-CHECKING is what caught both, and review did not. A
+gate that passes is not evidence it works; the evidence is that it fails
+when you break the thing it guards.
+
+* **The first-call spy.** The first "both lanes" gate wrapped `_tables`,
+  recorded the coordinates each lane passed, and stopped at the FIRST call.
+  It passed with the repair disabled — because the first call is the main
+  sandwich, and the offending coordinate is an END, several calls later. It
+  was watching the right function at the wrong moment. Replaced by reading
+  the ends directly out of `axis_data`, which is where they exist.
+
+* **The literal that stopped meaning anything** (momwire#553, same arc).
+  `test_gu5_6_a_buried_structure_past_the_below_cap_refuses` asserted a
+  refusal using a hard-coded 40 m radial. That was 2.0x the below/below R1
+  cap when the cap was 2 lambda_m and 0.998x of it after momwire#838 moved
+  the cap to 4 — so it stopped testing a refusal without going red. It
+  FAILED OPEN: still green, still asserting nothing. Its fix is the general
+  rule here — a gate about a threshold derives its input FROM that
+  threshold, so the next move of the constant carries it.
+
+The common shape: both gates ran, both were green, and neither was
+measuring the thing its name claimed. The cheap defence is to break the
+repair on purpose and confirm the gate notices.
 """
 
 import pathlib
