@@ -455,16 +455,30 @@ _HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
 # reason: a .so built before #744 landed exports `razor_assemble_t1` and not
 # its weighted twin, and one symbol must never be read as vouching for the
 # other.
+# momwire#814 (razor buried, unit 3): THE ONE CONSTANT THE FLIP MOVES.
+#
+# Three things have to change together for razor to serve buried decks — the
+# wholly-below family (momwire#812), the crossing family (momwire#813) and the
+# declared `buried` capability cell — and while they were three independent
+# `False`s the flip was three edits that could be made separately and land
+# half-done. A deck served by the fill while the row still declares a refusal
+# is the worst of the three states: consumers read the row, so the deck would
+# be refused by the roster and served by the solver at the same time.
+#
+# They are derived from one name instead. `tests/test_814_prep.py` holds the
+# derivation, so flipping this line is the whole flip and nothing else has to
+# be remembered.
+_SERVE_BURIED = False
+
 # momwire#812 (razor buried, unit 1): serve a WHOLLY-below deck through the
-# lower-medium family. Off by default — the public refusal stands until unit 3
-# flips the capability cell — and flipped by the unit's own gates.
-_SERVE_BELOW_PLANE = False
+# lower-medium family. Kept as its own NAME because the unit's gates
+# monkeypatch it by name and read it at call time; its VALUE is not its own.
+_SERVE_BELOW_PLANE = _SERVE_BURIED
 
 # momwire#813 unit 2: serve a deck whose wires span the interface through a
-# crossing junction. Off by default on `_SERVE_BELOW_PLANE`'s precedent and
-# for the same reason -- razor's `buried` capability cell stays False until
-# unit 3 (momwire#814) flips it -- and flipped by the unit's own gates.
-_SERVE_CROSSING = False
+# crossing junction. Same rule: its own name for the gates, its value from
+# `_SERVE_BURIED`.
+_SERVE_CROSSING = _SERVE_BURIED
 
 # The sentence a crossing deck gets while `_SERVE_CROSSING` is off. It is
 # ALSO the refusal razor's capability row declares for the
@@ -1265,24 +1279,37 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # geometry scan can reach, three of them `_medium_spec`'s shared ones
         # and reached through combination keys because they are the ground
         # column and the mid-span crossing rather than this family's own gap.
-        buried=False,
+        buried=_SERVE_BURIED,
         contact=True,
         refusals={
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
             "centre_feeds": _CENTRE_FEEDS_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "singular_enrichment": SINGULAR_ENRICHMENT_NEVER.format(cls="RazorSolver"),
-            "buried": _BURIED_FILL_REFUSAL,
+            # The two cells the flip RETIRES, and only these two. Both say
+            # "not served YET"; the other four below are real refusals that
+            # outlive momwire#814 — a PEC or refl-coef ground has no lower
+            # medium whatever razor can fill, a mid-span crossing is still
+            # momwire's guess where the model must speak, and contact+buried
+            # is momwire#567's measured scope decision for both trunks.
+            **(
+                {}
+                if _SERVE_BURIED
+                else {
+                    "buried": _BURIED_FILL_REFUSAL,
+                    "buried+crossing_junction": _CROSSING_NOT_SERVED_REFUSAL,
+                }
+            ),
             "buried+pec": _medium_spec.BURIED_PEC_REFUSAL,
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
-            # The DECLARED-junction case is its own cell (momwire#850): the
-            # mid-span probe above and a declared crossing junction are two
+            # `buried+crossing_junction` is declared ABOVE, with the other
+            # cell the flip retires. It is its own cell (momwire#850) because
+            # the mid-span probe and a DECLARED crossing junction are two
             # refusals under one geometry word, and a row declares one
-            # sentence per cell. antennaknobs' catalog gate names this cell
+            # sentence per cell; antennaknobs' catalog gate names this cell
             # for its bonded screen.
-            "buried+crossing_junction": _CROSSING_NOT_SERVED_REFUSAL,
         },
     )
 
