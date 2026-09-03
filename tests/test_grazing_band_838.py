@@ -101,6 +101,17 @@ def _warm_the_decks():
         g._ensure_band()
 
 
+def _stored_node(reg, i, j):
+    """The value the grid actually holds at lattice node (i, j)."""
+    return {k: complex(reg["vals"][si, i, j]) for si, k in enumerate(_SURF_KEYS)}
+
+
+def _node_index(axis0, step, value):
+    """Index of `value` on a uniform axis, or None if it is not a node."""
+    n = round((value - axis0) / step)
+    return n if abs(axis0 + step * n - value) <= 1e-12 * max(1.0, abs(value)) else None
+
+
 def test_the_band_divides_the_interval_exactly():
     """dtheta must divide [th_min, th_band_hi], or the bands share no node.
 
@@ -147,14 +158,29 @@ def test_theta_at_the_band_edge_routes_to_the_old_band():
     r_node = reg["r0"] + reg["dr"] * 6
     th = np.array([g.th_band_hi])
     got = g.eval(np.array([r_node]), th)
+    # Compared against the value the grid HOLDS at that node, not against a
+    # fresh `iv_surfaces_direct_below` call. The claim here is about routing
+    # and the stencil -- that both collapse onto one lattice point -- and a
+    # stored batch-filled node need not equal a fresh single-point evaluation
+    # of the same contour to the bit. It does on Linux and does NOT on macOS
+    # (~1.7e-14), which reddened `test-macos` when this was first written the
+    # other way. Third instance of the momwire#839 class in this arc.
+    i = _node_index(reg["r0"], reg["dr"], r_node)
+    j = _node_index(reg["th0"], reg["dth"], float(th[0]))
+    assert i is not None and j is not None, (i, j)
+    want = _stored_node(reg, i, j)
+    for k in _SURF_KEYS:
+        assert complex(got[k][0]) == want[k], (
+            f"{k}: theta = th_band_hi did not collapse onto the old band's "
+            f"node -- got {got[k][0]!r} vs stored {want[k]!r}"
+        )
+    # The physical claim, separately and to interpolation precision.
     ref = below.iv_surfaces_direct_below(
         eps_t, k2, np.array([r_node]), th, rtol=1e-9, omega=om
     )
+    scale = max(abs(complex(ref[k][0])) for k in _SURF_KEYS)
     for k in _SURF_KEYS:
-        assert complex(got[k][0]) == complex(ref[k][0]), (
-            f"{k}: theta = th_band_hi did not collapse onto the old band's "
-            f"node -- got {got[k][0]!r} vs {ref[k][0]!r}"
-        )
+        assert abs(complex(got[k][0]) - complex(ref[k][0])) / scale < 1e-9
 
     # The invariant that actually carries the seam: the new band's LAST theta
     # node and the old band's FIRST are the same float. Measured -- with
@@ -456,12 +482,18 @@ def test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward():
     # those disagree in the last bit, which reads as 2.2e-16 rather than 0.)
     th = np.array([g.th_band_hi])
     got = g.eval(np.array([g.r_near]), th)
-    ref = below.iv_surfaces_direct_below(
-        eps_t, k2, np.array([g.r_near]), th, rtol=1e-9, omega=om
-    )
+    # Against the NEAR zone's own stored node -- which is the claim (R1 =
+    # r_near routes inward and the stencil collapses), and unlike a fresh
+    # contour evaluation it is deterministic on every platform. See the note
+    # in `test_theta_at_the_band_edge_routes_to_the_old_band`.
+    i = _node_index(near["r0"], near["dr"], g.r_near)
+    j = _node_index(near["th0"], near["dth"], g.th_band_hi)
+    assert i is not None and j is not None, (i, j)
+    want = _stored_node(near, i, j)
     for k in _SURF_KEYS:
-        assert complex(got[k][0]) == complex(ref[k][0]), (
-            f"{k}: R1 = r_near did not collapse onto a shared node"
+        assert complex(got[k][0]) == want[k], (
+            f"{k}: R1 = r_near did not read the NEAR zone's node -- "
+            f"{got[k][0]!r} vs {want[k]!r}"
         )
 
     # And a query one ulp PAST r_near routes to the far zone, so the seam is
