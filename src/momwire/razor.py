@@ -353,6 +353,7 @@ from . import (
     _medium_spec,
     _crossing_fill,
     _potential_ground,
+    _razor_class,
     _sommerfeld_below,
     _wire_loading,
     _wire_spec,
@@ -1448,6 +1449,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             raise ValueError("n_qp_path, n_qp_source and n_qp_sommerfeld must be >= 1")
         if self.n_qp_source < 1 or self.n_qp_sommerfeld < 1:
             raise ValueError("n_qp_path, n_qp_source and n_qp_sommerfeld must be >= 1")
+        # razor-2p's far-mesh accuracy class, stated ONCE per construction
+        # (momwire#845). Emitted after the argument validation above so a
+        # deck that is going to be refused is refused rather than advised
+        # about, and before any geometry work so the advisory never depends
+        # on the mesh — it is unconditional by measurement, not by choice:
+        # every solve-free predictor of the error was measured over the
+        # antennaknobs catalog and none correlates with it (far segment
+        # length, the obvious one, reads +0.021). See `_razor_class`.
+        #
+        # Scoped to the `nec5_quadrature` lane because that is the shipped
+        # roster entry and the interactive default. The class itself belongs
+        # to the path-TESTING rule, which BOTH razor lanes share -- #845's
+        # probe 3 puts razor-GL within 2 ohm of razor-2p at every mesh -- so
+        # the Gauss-Legendre lane is equally affected and stays silent. That
+        # is defensible only because reaching it means constructing
+        # `RazorSolver` directly for convergence or certification work
+        # (momwire#753 retired it from the roster), which is the caller who
+        # least needs telling. If it ever becomes a menu item again, this
+        # condition is the line to revisit.
+        if self.nec5_quadrature:
+            _razor_class.warn_far_mesh_class()
 
         if not wires:
             raise ValueError("wires must be non-empty")
