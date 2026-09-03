@@ -612,10 +612,26 @@ def test_gu5_5_the_buried_wire_moves_the_answer(record_property):
 # ======================================================================
 
 
+def _past_the_below_cap_m():
+    """A radial length comfortably past the below/below R1 cap, DERIVED.
+
+    A radial of length L at depth d has its own far pair at
+    R1 = sqrt(L^2 + (2d)^2) ~ L, so "past the cap" is a statement about L in
+    in-medium wavelengths. Deriving it from the live constant rather than
+    recording a metre value is not decoration: this test used a literal
+    40.0 m, which was 4.0x the cap when the cap was 2 lambda_m and 0.998x of
+    it after momwire#838 part 2 moved the cap to 4 -- so it silently stopped
+    testing a refusal at all. 1.5x leaves room for the next move.
+    """
+    eps_t = _ground_refl.eps_tilde(SOIL_A, 2.0 * math.pi * F7, 8.8541878128e-12)
+    lam_m = _sommerfeld_below.lambda_medium(eps_t, 2.0 * math.pi / WL7)
+    return 1.5 * _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
+
+
 @pytest.mark.slow
 def test_gu5_6_a_buried_structure_past_the_below_cap_refuses():
     s = BSplineSolver(
-        wires=[_mono(), _radial(length=40.0)],
+        wires=[_mono(), _radial(length=_past_the_below_cap_m())],
         n_per_edge_per_wire=[[15], [20]],
         feeds=[(0, 5.0, 1 + 0j)],
         wavelength=WL7,
@@ -630,6 +646,23 @@ def test_gu5_6_a_buried_structure_past_the_below_cap_refuses():
     assert "below/below pair separation" in msg
     assert "in-medium wavelengths" in msg
     assert "no honest clamp" in msg
+
+    # ...and the deck this test used to use is now INSIDE the domain, so the
+    # gate says which side of the cap each length sits on rather than only
+    # exhibiting one. 40 m is 3.99 lambda_m at soil A: past the old 2, inside
+    # the current 4 (momwire#838 part 2).
+    served = BSplineSolver(
+        wires=[_mono(), _radial(length=40.0)],
+        n_per_edge_per_wire=[[15], [20]],
+        feeds=[(0, 5.0, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    z, _ = served.compute_impedance()
+    assert np.isfinite(z)
 
 
 @pytest.mark.slow
