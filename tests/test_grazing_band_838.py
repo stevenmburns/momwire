@@ -101,17 +101,6 @@ def _warm_the_decks():
         g._ensure_band()
 
 
-def _stored_node(reg, i, j):
-    """The value the grid actually holds at lattice node (i, j)."""
-    return {k: complex(reg["vals"][si, i, j]) for si, k in enumerate(_SURF_KEYS)}
-
-
-def _node_index(axis0, step, value):
-    """Index of `value` on a uniform axis, or None if it is not a node."""
-    n = round((value - axis0) / step)
-    return n if abs(axis0 + step * n - value) <= 1e-12 * max(1.0, abs(value)) else None
-
-
 def test_the_band_divides_the_interval_exactly():
     """dtheta must divide [th_min, th_band_hi], or the bands share no node.
 
@@ -157,24 +146,24 @@ def test_theta_at_the_band_edge_routes_to_the_old_band():
     reg = g._regions[4]  # outer R1 zone, old grazing band
     r_node = reg["r0"] + reg["dr"] * 6
     th = np.array([g.th_band_hi])
+    # Routing on the FILL STATE, which is exact and portable -- see the long
+    # note in `test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward`
+    # for why float equality is the wrong instrument for this question.
+    # Region 3 is the NEAR zone's sub-1 deg band and fills lazily; region 4
+    # is its old grazing band.
+    fresh = below.SommerfeldGridBelow(eps_t, k2, g.r1_max, omega=om)
+    fresh.eval(np.array([r_node]), th)
+    assert not fresh._regions[3]["filled"], (
+        "theta = th_band_hi routed into the sub-1 deg band; it belongs to the "
+        "OLD grazing band, which is what keeps the old domain unmoved there"
+    )
+    fresh.eval(np.array([r_node]), np.array([np.nextafter(g.th_band_hi, 0.0)]))
+    assert fresh._regions[3]["filled"], (
+        "one ulp below th_band_hi did not reach the sub-1 deg band, so the "
+        "band edge is not a boundary at all"
+    )
+
     got = g.eval(np.array([r_node]), th)
-    # Compared against the value the grid HOLDS at that node, not against a
-    # fresh `iv_surfaces_direct_below` call. The claim here is about routing
-    # and the stencil -- that both collapse onto one lattice point -- and a
-    # stored batch-filled node need not equal a fresh single-point evaluation
-    # of the same contour to the bit. It does on Linux and does NOT on macOS
-    # (~1.7e-14), which reddened `test-macos` when this was first written the
-    # other way. Third instance of the momwire#839 class in this arc.
-    i = _node_index(reg["r0"], reg["dr"], r_node)
-    j = _node_index(reg["th0"], reg["dth"], float(th[0]))
-    assert i is not None and j is not None, (i, j)
-    want = _stored_node(reg, i, j)
-    for k in _SURF_KEYS:
-        assert complex(got[k][0]) == want[k], (
-            f"{k}: theta = th_band_hi did not collapse onto the old band's "
-            f"node -- got {got[k][0]!r} vs stored {want[k]!r}"
-        )
-    # The physical claim, separately and to interpolation precision.
     ref = below.iv_surfaces_direct_below(
         eps_t, k2, np.array([r_node]), th, rtol=1e-9, omega=om
     )
@@ -480,28 +469,42 @@ def test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward():
     # (A "nice" angle like 45 deg is not a fair ask: the theta node is built
     # as radians(30 + 2.5*k) while `_interp` forms (theta - th0)/dth, and
     # those disagree in the last bit, which reads as 2.2e-16 rather than 0.)
+    # ROUTING IS ASSERTED ON THE FILL STATE, not on float equality.
+    #
+    # Three attempts at this gate compared values with `==` -- eval against a
+    # fresh contour solve, then eval against the stored node -- and both
+    # reddened `test-macos` while passing on Linux. The second one is the
+    # instructive failure: even reading a node back is only bit-exact if
+    # `(r_near - r0)/dr` lands exactly on an integer, so the cubic weights
+    # come out exactly [0,1,0,0]. That is a property of one platform's
+    # division, not of this grid. Bit-exactness is simply the wrong
+    # instrument for a routing question.
+    #
+    # The lazy fill gives an exact, integer-valued one instead: a region is
+    # materialized if and only if a query routes into it. theta =
+    # `th_band_hi` is band 1 (the old grazing band, by the strict `<`), so
+    # the far-zone region it would reach is 6 + 1 = 7.
     th = np.array([g.th_band_hi])
-    got = g.eval(np.array([g.r_near]), th)
-    # Against the NEAR zone's own stored node -- which is the claim (R1 =
-    # r_near routes inward and the stencil collapses), and unlike a fresh
-    # contour evaluation it is deterministic on every platform. See the note
-    # in `test_theta_at_the_band_edge_routes_to_the_old_band`.
-    i = _node_index(near["r0"], near["dr"], g.r_near)
-    j = _node_index(near["th0"], near["dth"], g.th_band_hi)
-    assert i is not None and j is not None, (i, j)
-    want = _stored_node(near, i, j)
-    for k in _SURF_KEYS:
-        assert complex(got[k][0]) == want[k], (
-            f"{k}: R1 = r_near did not read the NEAR zone's node -- "
-            f"{got[k][0]!r} vs {want[k]!r}"
-        )
-
-    # And a query one ulp PAST r_near routes to the far zone, so the seam is
-    # a real boundary rather than a decorative constant.
-    g.eval(np.array([np.nextafter(g.r_near, np.inf)]), th)
-    assert g._regions[6]["filled"], (
-        "a query just past r_near did not reach the far zone's band region"
+    fresh = below.SommerfeldGridBelow(eps_t, k2, g.r1_max, omega=om)
+    fresh.eval(np.array([fresh.r_near]), th)
+    assert not fresh._regions[7]["filled"], (
+        "R1 = r_near routed OUTWARD into the far annulus; it belongs to the "
+        "near zone, the way theta = th_band_hi belongs to the old grazing band"
     )
+    fresh.eval(np.array([np.nextafter(fresh.r_near, np.inf)]), th)
+    assert fresh._regions[7]["filled"], (
+        "a query one ulp past r_near did not reach the far zone, so the seam "
+        "is not a boundary at all"
+    )
+
+    # And the value is right, to interpolation precision rather than to the bit.
+    got = g.eval(np.array([g.r_near]), th)
+    ref = below.iv_surfaces_direct_below(
+        eps_t, k2, np.array([g.r_near]), th, rtol=1e-9, omega=om
+    )
+    scale = max(abs(complex(ref[k][0])) for k in _SURF_KEYS)
+    for k in _SURF_KEYS:
+        assert abs(complex(got[k][0]) - complex(ref[k][0])) / scale < 1e-9
 
 
 def test_both_dispatches_agree_across_the_r_near_seam():
