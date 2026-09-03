@@ -457,6 +457,16 @@ _HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
 # other.
 # momwire#814 (razor buried, unit 3): THE ONE CONSTANT THE FLIP MOVES.
 #
+# SHELVED, by decision (Steve, 2026-09-03; the record is on momwire#813 and
+# #814): razor-2p is the ABOVE-ground twin of licensed NEC-5, and the buried
+# and contact engine is BSplineSolver. We do not want to match NEC-5
+# underground (its interface node is a measured limitation, momwire#838), and
+# razor's first-order path testing (momwire#845) plus its 20-45x crossing-fill
+# cost make accurate underground work on it expensive before its located
+# soil residual (#813 step 4) is touched. Everything below stays built and
+# gated behind this constant; the sentences it declares say "by decision"
+# rather than "not yet". Flip it only with that decision reversed.
+#
 # Three things have to change together for razor to serve buried decks — the
 # wholly-below family (momwire#812), the crossing family (momwire#813) and the
 # declared `buried` capability cell — and while they were three independent
@@ -504,20 +514,22 @@ _BUNDLE_REFUSAL = (
     "whatever the quadrature. Razor has no bundle rule; BSplineSolver does "
     "(momwire#524 phase 2's fan widening). Respell the bundle as ONE "
     "conductor: a screen whose N radials meet at a buried HUB and rise to the "
-    "node on a single rise is the same antenna without the coincidence, and "
-    "razor serves it (antennaknobs' `buried_radial_vertical` is spelled that "
-    "way since antennaknobs#1108; its `bundle` variant is this deck). Or "
+    "node on a single rise is the same antenna without the coincidence "
+    "(antennaknobs' `buried_radial_vertical` is spelled that way since "
+    "antennaknobs#1108; its `bundle` variant is this deck), which "
+    "BSplineSolver serves. Or "
     "solve the bundle with BSplineSolver, remembering that a bundle of N "
     "coincident thin wires and one wire of the same radius are two "
     "structures, never two meshes of one"
 )
 
 _CROSSING_NOT_SERVED_REFUSAL = (
-    "this deck's wires cross the interface at a junction. Razor's crossing "
-    "fill is momwire#813 and is not served yet; the below-plane family it "
-    "stands on is momwire#812. Solve it with BSplineSolver, which serves the "
-    "crossing junction since momwire#524 phase 2, or leave the buried part "
-    "DETACHED"
+    "this deck's wires cross the interface at a junction, and razor does not "
+    "serve buried decks: by decision (2026-09-03, momwire#813/#814) razor-2p "
+    "is the above-ground twin of licensed NEC-5 and BSplineSolver is the "
+    "buried and contact engine (the crossing junction since momwire#524 "
+    "phase 2, measured against Brown-Lewis-Epstein 1937 on momwire#838). "
+    "Solve it with BSplineSolver, or leave the buried part DETACHED"
 )
 
 # The crossing blocks' axis density (momwire#813). Razor's cross rows are
@@ -744,11 +756,12 @@ _BURIED_FILL_REFUSAL = (
     "written for BSplineSolver's testing side only. A detached "
     "buried wire is a LEGAL deck - solve it with BSplineSolver, "
     "which serves buried ground since momwire#553, or raise the "
-    "wire clear of the plane. Razor's own below-plane fill exists since "
-    "momwire#812 (the lower-medium family behind `_SERVE_BELOW_PLANE`, "
-    "wholly-below decks only); the crossing block on razor rows "
-    "(momwire#813) and the roster flip (momwire#814) are what turn this "
-    "cell True; the arc is momwire#651"
+    "wire clear of the plane. Razor's own below-plane fill (momwire#812) and "
+    "crossing fill (momwire#813) exist behind `_SERVE_BURIED` and stay OFF "
+    "by decision (2026-09-03, momwire#813/#814): razor-2p is the "
+    "above-ground twin of licensed NEC-5, and underground the engine is "
+    "BSplineSolver and the reference is measurement (momwire#838); the "
+    "shelved arc is momwire#651"
 )
 
 
