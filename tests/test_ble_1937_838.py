@@ -92,14 +92,34 @@ sigma = 2e-4 (a decade worse soil) reads R(30) = 24.76 ohm and is REJECTED.
 So +-6 is wide enough to carry the stated assumptions and narrow enough
 that getting the ground wrong by a decade fails.
 
-WHY 45 FT AND NOT 135. momwire#838 part 2 is the R1 cap, and this is where
-it bites: the below/below remainder is tabulated to 2 lambda_m, and a
-screen's opposite tips are 2 x L apart. At BLE's sigma = 2e-3, lambda_m =
-22.81 m, so the cap is 45.6 m against this screen's 27.4 m diameter --
-comfortable. The 135 ft screen is 82.3 m across and refuses. The margin is
-soil-dependent, not fixed: the SAME 45 ft screen refuses at sigma = 2e-2
-(lambda_m 9.09 m, cap 18.2 m), which is worth knowing before part 2 picks a
-target.
+## Fig. 36, the 135 ft rung (momwire#838 part 2)
+
+That screen is 82.3 m across = 3.61 lambda_m at this soil, so it refused at
+the old 2 lambda_m below/below cap; part 2 moved the cap to 4 and it serves.
+
+    N          2      15      30      60     113
+    momwire  84.11  35.37   30.52   27.30   25.22
+    Fig. 36   >=50   34      30      26      24.3
+
+**Agreement here is markedly better than Fig. 37's** -- within 1.4 ohm at
+every rung, against the 45 ft series sitting ~4 ohm low. Both are gated at
+N = 2 / 15 / 30 with the same shape claims and the same +-6 envelope.
+
+ONE HONEST RESIDUAL, recorded rather than smoothed over. The measurement's
+whole point is that longer radials help: Fig. 36 and Fig. 37 separate by
+6.7 ohm at N = 113 (24.3 against 31), and momwire separates them by only
+1.75 (25.22 against 26.97). It reproduces the ORDERING and the crossing --
+the curves are within 0.1 ohm at N = 60 and the 135 ft screen is lower by
+N = 113 -- but it under-states how much the longer screen buys. Most of
+that is the 45 ft series being low rather than the 135 ft series being
+high. Not gated, because a gate on a 1.75-vs-6.7 residual would be pinning
+a known disagreement; recorded so the next person does not rediscover it.
+
+THE CAP IS SOIL-DEPENDENT, which is why it is expressed in lambda_m. The
+SAME 45 ft screen is 1.20 lambda_m at sigma = 2e-3 and 3.02 at sigma = 2e-2
+(lambda_m 22.81 m against 9.09 m) -- inside the old cap at one soil, past
+it at the other, without changing size. That is momwire#838 part 2's second
+target and it has its own gate below.
 """
 
 import sys
@@ -115,7 +135,8 @@ C0 = 299792458.0
 F_HZ = 3.0e6
 WL = C0 / F_HZ
 H_MAST = 21.4  # 77 deg
-L_RADIAL = 45 * 0.3048  # 13.716 m
+L_RADIAL = 45 * 0.3048  # 13.716 m (Fig. 37)
+L_RADIAL_135 = 135 * 0.3048  # 41.148 m (Fig. 36) -- needs momwire#838 part 2
 DEPTH = 6 * 0.0254  # 0.1524 m
 A_WIRE = 1.63e-3  # No. 8 copper, shared (see docstring)
 SIGMA = 2e-3
@@ -144,17 +165,28 @@ FIG37_PLATEAU = 31.0
 # low edge; a model wrong by a factor of 1.5 either way still fails.
 FIG37_ENVELOPE = 6.0
 
-# Banked, not gated (242 s). See the module docstring's ladder.
+# Banked, not gated (242 s each). See the module docstring's ladders.
 BANKED_R = {60: 27.401, 113: 26.972}
+BANKED_R_135 = {60: 27.297, 113: 25.216}
+
+# Fig. 36 (135 ft radials), read the same way as Fig. 37 in momwire#838:
+# >= 50 at N = 2, then 34 / 30 / 26 / 24.3 at N = 15 / 30 / 60 / 113.
+FIG36_PLATEAU_AT_30 = 30.0
 
 
-def ble_deck(n_radials, n_rad=10, n_far=19, **override):
-    """BLE's Fig. 37 geometry, hub-spelled with a graded node."""
+def ble_deck(n_radials, n_rad=10, n_far=19, l_radial=L_RADIAL, **override):
+    """BLE's geometry, hub-spelled with a graded node.
+
+    `l_radial` selects the figure: the default 45 ft is Fig. 37, and
+    `L_RADIAL_135` is Fig. 36 -- which only serves since momwire#838 part 2
+    moved the below/below R1 cap to 4 lambda_m (that screen is 82.3 m across,
+    3.61 lambda_m at this soil, and refused at the old 2 lambda_m).
+    """
     ang = 2.0 * np.pi * np.arange(n_radials) / n_radials
     wires = [
         np.array(
             [
-                (L_RADIAL * np.cos(a), L_RADIAL * np.sin(a), -DEPTH),
+                (l_radial * np.cos(a), l_radial * np.sin(a), -DEPTH),
                 (0.0, 0.0, -DEPTH),
             ]
         )
@@ -256,3 +288,86 @@ def test_the_ble_plateau_is_converged_in_quadrature():
     assert abs(hi - lo) < 0.05, (
         f"quadrature is not converged at the gated order: q=8 {lo:.4f} vs q=32 {hi:.4f}"
     )
+
+
+@pytest.mark.crossgate
+def test_ble_fig36_shape_against_the_1937_measurement():
+    """Fig. 36, the 135 ft rung -- the geometry momwire#838 part 2 unlocked.
+
+    This screen is 82.3 m across = 3.61 lambda_m at BLE's soil, so it
+    REFUSED at the old 2 lambda_m below/below cap and is the reason part 2
+    exists. Same reading method and the same shape claims as Fig. 37, with
+    the plateau envelope built the same way.
+
+    Measured ladder (q = 16, n_rad = 10, n_far = 19), against the figure:
+
+        N          2      15      30      60     113
+        momwire  84.11  35.37   30.52   27.30   25.22
+        Fig. 36   >=50   34      30      26      24.3
+        cost      1.4s   3.5s    5.6s   26.1s  246.6s
+
+    Agreement is markedly better than Fig. 37's -- within 1.4 ohm at every
+    rung, against the 45 ft series sitting ~4 ohm low. N = 60 and 113 are
+    banked in `BANKED_R_135`; the gate runs 2 / 15 / 30.
+    """
+    rungs = (2, 15, 30)
+    r = {n: _r_of(n, l_radial=L_RADIAL_135) for n in rungs}
+    assert r[2] > FIG37_OFF_SCALE_AT_N2, r
+    vals = [r[n] for n in rungs]
+    assert all(a > b for a, b in zip(vals, vals[1:], strict=False)), r
+    assert r[2] - r[30] >= 15.0, f"{r[2] - r[30]:.2f}"
+    assert abs(r[30] - FIG36_PLATEAU_AT_30) < FIG37_ENVELOPE, (
+        f"Fig. 36 at N = 30 is {r[30]:.2f} against the figure's "
+        f"~{FIG36_PLATEAU_AT_30} +-{FIG37_ENVELOPE}"
+    )
+
+
+@pytest.mark.crossgate
+def test_the_135_ft_screen_needs_the_part_2_cap():
+    """Why part 2 was needed at all, pinned rather than asserted in prose.
+
+    The 135 ft screen's opposite tips are 2 x 41.148 m apart, which is 3.61
+    in-medium wavelengths at BLE's soil -- past the 2 lambda_m the
+    below/below remainder used to be tabulated to, and comfortably inside
+    the 4 lambda_m it is tabulated to now.
+    """
+    from momwire import _ground_refl
+    from momwire import _sommerfeld_below as below
+
+    om = 2.0 * np.pi * F_HZ
+    k2 = 2.0 * np.pi * F_HZ / C0
+    eps_t = _ground_refl.eps_tilde((EPS_R, SIGMA), om, 8.8541878128e-12)
+    lam_m = below.lambda_medium(eps_t, k2)
+    span = 2.0 * L_RADIAL_135 / lam_m
+    assert 2.0 < span < below._SOMM_BELOW_R1_CAP_LAMBDA_M, (
+        f"the 135 ft screen spans {span:.2f} lambda_m; it must be past the "
+        f"old 2 lambda_m cap (or this gate proves nothing) and inside the "
+        f"current {below._SOMM_BELOW_R1_CAP_LAMBDA_M}"
+    )
+    # and it actually solves
+    assert np.isfinite(_r_of(2, l_radial=L_RADIAL_135))
+
+
+@pytest.mark.crossgate
+def test_the_45_ft_screen_survives_a_high_conductivity_soil():
+    """momwire#838 part 2's second target, and the reason the cap had to move
+    in LAMBDA_M rather than in metres.
+
+    lambda_m shrinks as conductivity rises, so a screen that is comfortably
+    inside the cap at one soil can refuse at another WITHOUT changing size.
+    BLE's own 45 ft screen is 1.20 lambda_m at sigma = 2e-3 and 3.02 at
+    sigma = 2e-2 -- past the old cap, inside the new one. This was measured
+    while building the Fig. 37 gate (a sigma sweep there hit the refusal),
+    and it is what put a soil axis into part 2's scope.
+    """
+    from momwire import _ground_refl
+    from momwire import _sommerfeld_below as below
+
+    om = 2.0 * np.pi * F_HZ
+    k2 = 2.0 * np.pi * F_HZ / C0
+    hi_sigma = 2e-2
+    eps_t = _ground_refl.eps_tilde((EPS_R, hi_sigma), om, 8.8541878128e-12)
+    span = 2.0 * L_RADIAL / below.lambda_medium(eps_t, k2)
+    assert 2.0 < span < below._SOMM_BELOW_R1_CAP_LAMBDA_M, f"{span:.2f} lambda_m"
+    r = _r_of(15, ground_eps=(EPS_R, hi_sigma))
+    assert np.isfinite(r) and 5.0 < r < 100.0, r

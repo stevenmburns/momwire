@@ -75,15 +75,15 @@ _FIXTURE_GROUP_FILES = (
     # warms it in a module-scoped fixture, so scattering it pays that once per
     # WORKER. Same shape as the two above.
     #
-    # `test_below_fills_568.py` is deliberately NOT here. Most of its gates
-    # never touch the band, so warming it in that module's fixture would make
-    # every shard pay a fill that only one gate needs. It leaves
-    # `test_g5689_an_in_domain_query_at_the_edges_is_served_not_refused` over
-    # the 5 s ceiling, which is accepted: that gate queries AT the grazing
-    # floor, so filling the band is the thing it is testing. The ceiling
-    # reports rather than fails, and this repo already carries 24 unmarked
-    # tests over it on purpose.
+    # `test_below_fills_568.py` joined them at momwire#838 part 2. Before the
+    # far annulus existed its one band-touching gate cost ~8 s and was left
+    # alone deliberately; with the cap at 4 lambda_m that same gate queries
+    # R1 at the cap AND theta at the floor -- the single most expensive cell
+    # in the grid -- and ran ~18 s, close enough to the 20 s HARD ceiling on
+    # a slow runner to matter. Its module fixture now warms that corner, and
+    # this entry is what stops the warm being paid once per worker.
     "test_grazing_band_838.py",
+    "test_below_fills_568.py",
 )
 
 

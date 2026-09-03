@@ -143,7 +143,61 @@ _MAX_TAIL_PANELS = 4000
 # What 2 λ_m buys at the SPEC soils: 20 m (A/7 MHz), 9.6 m (B/7), 36 m
 # (C/7), 7.7 / 5.0 / 12.7 m at 21 MHz. Buried radial screens live inside
 # that at HF; anything larger refuses and says so.
-_SOMM_BELOW_R1_CAP_LAMBDA_M = 2.0
+_SOMM_BELOW_R1_CAP_LAMBDA_M = 4.0
+
+# The inner/far break, in λ_m. Everything below it is the lattice the grid
+# had before momwire#838 part 2, byte for byte; the far annulus above it is
+# new, more finely resolved in θ, and filled LAZILY per θ band.
+#
+# The 2 λ_m cap above was NOT a radial-resolution limit, which is what the
+# follow-up note had been carried as. Measured one axis at a time over
+# R₁ ∈ [2, 4) λ_m (`scratch/probe838_r1_cap.py`):
+#
+#   R₁ axis, θ on a node      dr = 0.05 λ_m already reads 1.6e-5 / 4.9e-6 /
+#                             1.3e-5 (A/7, B/7, C/21). NOT the lever.
+#   θ axis, steep band        Δθ = 2.5° reads 1.5e-3 / 8.3e-4 / 2.0e-3 —
+#                             the 2.4e-3 cliff the old cap comment banked.
+#   θ axis, grazing band      Δθ = 1.0° also misses, on C/21 (5.9e-4).
+#
+# So θ is the whole of it, and the old comment already knew: it names
+# Δθ 2.5° → 1.25° as the fix and rejects it on COST, not effectiveness.
+# ("θ density is not the lever" is part 1's SUB-1° FLOOR finding, where
+# `_MAX_TAIL_PANELS` binds — a different question.)
+#
+# Far-zone lattice, and what it buys against the 2e-4 bar the inner domain
+# is gated at (worst over A/7, B/7, C/21):
+#
+#   steep  60° / 72 cells = 0.83333°    3.6e-5    5.5x
+#   graze  29° / 72 cells = 0.40278°    3.6e-5    5.5x
+#   band  0.9° /  4 cells = 0.225°      2.7e-5    7.4x   (unchanged)
+#
+# Δθ is spelled as a CELL COUNT, not a decimal, because part 1's rule is
+# that it must divide its band exactly — and neither 0.833 nor 0.4 does
+# (60/0.833 = 72.03, 29/0.4 = 72.5). A count cannot get that wrong.
+#
+# COST, per deck class (soil A at 7 MHz; construction itself is 0.62 s and
+# is unchanged by part 2, because none of this is filled at construction):
+#
+#   nothing past 2 λ_m, nothing under 1°   +0.00 s   pays NOTHING
+#   grazing, inner zones only (part 1)     +0.80 s
+#   far zone, steep θ only                 +0.34 s
+#   far zone AND grazing (BLE's 135 ft)    +0.86 s
+#
+# That first row is the point of deferring per θ BAND rather than per zone:
+# the far annulus is ~4× the panels of the whole rest of the grid and ~68 %
+# of that is its own sub-1° band, so a deck that reaches far but not low
+# skips the expensive part entirely.
+_SOMM_BELOW_R1_NEAR_CAP_LAMBDA_M = 2.0
+_SOMM_BELOW_FAR_STEEP_CELLS = 72
+_SOMM_BELOW_FAR_GRAZE_CELLS = 72
+
+# Regions the constructor leaves EMPTY, filled on first use. Both are
+# expensive and most decks never reach them: the sub-1 deg band in each R₁
+# zone (0, 3, 6) and the whole far annulus (6, 7, 8). Panels go as
+# 6.4/tan θ, so the far zone's own band alone is ~68 % of its panels from
+# ~5 % of its nodes — which is why the far zone is deferred per θ BAND and
+# not as a block. Nothing under 2 λ_m with nothing under 1° pays anything.
+_DEFERRED_REGIONS = frozenset({0, 3, 6, 7, 8})
 
 # Rows added past each end of a region's R₁ axis so that every IN-DOMAIN
 # query gets a centred 4x4 Lagrange stencil instead of the clamped
@@ -1083,7 +1137,10 @@ class SommerfeldGridBelow(SommerfeldGrid):
         beat = 2.0 * np.pi / max(abs(self.k_m - self.k2), 1e-30)
 
         self.r_break = _SOMM_BELOW_R_BREAK_LAMBDA_M * lam_m
-        self.r_near = self.r1_max  # no far zone: the whole grid is "near"
+        # Three R₁ zones since momwire#838 part 2: inner, near, and the far
+        # annulus [r_near, r1_max]. `r_near` is the old cap, so everything
+        # under it is the lattice this grid always had.
+        self.r_near = min(_SOMM_BELOW_R1_NEAR_CAP_LAMBDA_M * lam_m, self.r1_max)
         self.th_min = math.radians(_SOMM_BELOW_TH_MIN_DEG)
         split = _SOMM_TH_SPLIT_DEG
         dr_in = _SOMM_BELOW_DR_NEAR_LAMBDA_M * lam_m
@@ -1109,13 +1166,24 @@ class SommerfeldGridBelow(SommerfeldGrid):
         # both index it that way; they are two copies of one layout, which
         # is why the C++ side takes `th_band_hi` explicitly instead of
         # inferring a band count from `len(reg_vals)`.
+        # Far-annulus Δθ, from cell counts so it divides its band exactly.
+        dthg_far = (split - band_hi) / _SOMM_BELOW_FAR_GRAZE_CELLS
+        dths_far = (90.0 - split) / _SOMM_BELOW_FAR_STEEP_CELLS
+        # Region order is (R₁ zone) × (θ band), θ fastest: 0-2 inner,
+        # 3-5 near, 6-8 far. `_interp` here and `proj_one_below` in
+        # `_accel_mw568.cpp` are two copies of this one layout, which is why
+        # the C++ side takes `th_band_hi` explicitly rather than inferring a
+        # band count from `len(reg_vals)`.
         layout = [
             (0.0, self.r_break, dr_in, th0, band_hi, dthb),
             (0.0, self.r_break, dr_in, band_hi, split, dthg),
             (0.0, self.r_break, dr_in, split, 90.0, dths),
-            (self.r_break, self.r1_max, dr_out, th0, band_hi, dthb),
-            (self.r_break, self.r1_max, dr_out, band_hi, split, dthg),
-            (self.r_break, self.r1_max, dr_out, split, 90.0, dths),
+            (self.r_break, self.r_near, dr_out, th0, band_hi, dthb),
+            (self.r_break, self.r_near, dr_out, band_hi, split, dthg),
+            (self.r_break, self.r_near, dr_out, split, 90.0, dths),
+            (self.r_near, self.r1_max, dr_out, th0, band_hi, dthb),
+            (self.r_near, self.r1_max, dr_out, band_hi, split, dthg_far),
+            (self.r_near, self.r1_max, dr_out, split, 90.0, dths_far),
         ]
 
         # The band regions (0 and 3) are filled LAZILY. They are ~320 nodes at
@@ -1124,8 +1192,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
         # existing below-grid test go 0.50 s -> 16.2 s in the xdist lane,
         # where OpenMP is pinned to one thread per worker. Cost now falls
         # only on the decks momwire#838 is for.
-        self._band_idx = (0, 3)
-        self._band_filled = False
+        self._band_idx = (0, 3, 6)
         self._regions = []
         pad = _SOMM_BELOW_PAD_ROWS
         for ridx, (r0, r1, dr, th0, th1, dth) in enumerate(layout):
@@ -1139,8 +1206,8 @@ class SommerfeldGridBelow(SommerfeldGrid):
             n_th = int(round((th1 - th0) / dth)) + 1
             r_nodes = r_start + dr * np.arange(n_r)
             th_nodes = np.radians(th0 + dth * np.arange(n_th))
-            if ridx in (0, 3):
-                surf = None  # deferred; see `_ensure_band`
+            if ridx in _DEFERRED_REGIONS:
+                surf = None  # deferred; see `_fill_region`
             else:
                 rr, tt = np.meshgrid(r_nodes, th_nodes, indexing="ij")
                 surf = iv_surfaces_direct_below(
@@ -1176,6 +1243,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
                         if surf is None
                         else np.stack([surf[key] for key in _SURF_KEYS])
                     ),
+                    "filled": surf is not None,
                     "r_nodes": r_nodes,
                     "th_nodes": th_nodes,
                 }
@@ -1231,31 +1299,66 @@ class SommerfeldGridBelow(SommerfeldGrid):
             np.minimum(R1, self.r1_max), np.clip(theta, self.th_min, 0.5 * np.pi)
         )
 
-    def _ensure_band(self):
-        """Fill the sub-1 deg band's two regions, once, on first need.
+    def _fill_region(self, idx):
+        """Materialize one deferred region, once. Idempotent.
 
-        Deferred because they cost ~4x the rest of the grid put together
-        (momwire#838) and most decks never graze that low. Idempotent, and
-        the values are exactly what an eager fill would have produced — the
-        node sets were fixed in the constructor, only the evaluation moved.
+        The values are exactly what an eager fill would have produced: the
+        node sets were fixed in the constructor and only the evaluation
+        moved. What is deferred and why is `_DEFERRED_REGIONS`.
         """
-        if self._band_filled:
+        reg = self._regions[idx]
+        if reg["filled"]:
             return
+        rr, tt = np.meshgrid(reg["r_nodes"], reg["th_nodes"], indexing="ij")
+        surf = iv_surfaces_direct_below(
+            self.eps_t,
+            self.k2,
+            rr,
+            tt,
+            rtol=self._rtol,
+            omega=self.omega,
+            mu=self.mu,
+            health=self._health,
+        )
+        reg["vals"] = np.stack([surf[key] for key in _SURF_KEYS])
+        reg["filled"] = True
+
+    def _ensure_band(self):
+        """The sub-1 deg band, in every R₁ zone. Kept as a named entry point
+        because the momwire#838 part 1 gates and the C++ prefill both mean
+        exactly this set."""
         for idx in self._band_idx:
-            reg = self._regions[idx]
-            rr, tt = np.meshgrid(reg["r_nodes"], reg["th_nodes"], indexing="ij")
-            surf = iv_surfaces_direct_below(
-                self.eps_t,
-                self.k2,
-                rr,
-                tt,
-                rtol=self._rtol,
-                omega=self.omega,
-                mu=self.mu,
-                health=self._health,
-            )
-            reg["vals"] = np.stack([surf[key] for key in _SURF_KEYS])
-        self._band_filled = True
+            self._fill_region(idx)
+
+    @property
+    def _band_filled(self):
+        return all(self._regions[i]["filled"] for i in self._band_idx)
+
+    def _ensure_for(self, mx_r1, mn_th, mx_th):
+        """Fill every region a batch bounded by these extremes could touch.
+
+        The C++ kernel takes all nine tables up front and reports only the
+        query set's extremes, so this is deliberately CONSERVATIVE: R₁ zones
+        from the innermost up to the one holding `mx_r1`, crossed with every
+        θ band the interval [mn_th, mx_th] meets. A deck that stays inside
+        2 λ_m never materializes the far annulus; one with nothing under 1°
+        never materializes the band.
+        """
+        zones = [0]
+        if mx_r1 > self.r_break:
+            zones.append(3)
+        if mx_r1 > self.r_near:
+            zones.append(6)
+        bands = []
+        if mn_th < self.th_band_hi:
+            bands.append(0)
+        if mx_th >= self.th_band_hi and mn_th <= self._th_split:
+            bands.append(1)
+        if mx_th > self._th_split:
+            bands.append(2)
+        for z in zones:
+            for b in bands:
+                self._fill_region(z + b)
 
     def _interp(self, R1, theta):
         """The parent's bicubic, over THIS family's three-θ-band layout.
@@ -1271,9 +1374,6 @@ class SommerfeldGridBelow(SommerfeldGrid):
         r_f = np.minimum(r_b.ravel(), self.r1_max)
         th_f = th_b.ravel()
 
-        if th_f.size and float(np.min(th_f)) < self.th_band_hi:
-            self._ensure_band()
-
         # (R₁ zone) × (θ band), θ fastest — the layout the constructor built.
         # STRICT `<` at the band edge: θ = th_band_hi belongs to the OLD
         # grazing band, which is what makes the old domain bit-identical
@@ -1283,7 +1383,13 @@ class SommerfeldGridBelow(SommerfeldGrid):
         band = np.where(
             th_f < self.th_band_hi, 0, np.where(th_f <= self._th_split, 1, 2)
         )
-        region_of = np.where(r_f <= self.r_break, 0, 3) + band
+        zone = np.where(r_f <= self.r_break, 0, np.where(r_f <= self.r_near, 3, 6))
+        region_of = zone + band
+
+        # Materialize whatever this query actually reaches (momwire#838).
+        for idx in np.unique(region_of):
+            if not self._regions[idx]["filled"]:
+                self._fill_region(int(idx))
 
         out = np.empty((len(_SURF_KEYS), r_f.size), dtype=np.complex128)
         for idx, reg in enumerate(self._regions):
@@ -1437,14 +1543,15 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     if _use_below_accel() and getattr(grid, "_regions", None) is not None:
         from ._sommerfeld import grid_cpp_args
 
-        # The band regions fill lazily (momwire#838) and C++ takes every region
-        # table up front, so an unfilled band goes in as NaN. The ORDER below
-        # is what makes that safe: this pass only has to produce the query's
-        # extremes, `grid.eval` raises the domain refusals off them, and only a
-        # deck that is BOTH in-domain and actually grazing gets the band filled
-        # and the kernel re-run. A refused geometry never fills the band; a
-        # deck with nothing under `th_band_hi` never fills it either.
-        band_was_filled = grid._band_filled
+        # The sub-1 deg band and the whole far annulus fill lazily
+        # (momwire#838), and C++ takes every region table up front, so an
+        # unfilled region goes in as NaN. The ORDER below is what makes that
+        # safe: this pass only has to produce the query's EXTREMES, which are
+        # geometry and do not read a table; `grid.eval` then raises the domain
+        # refusals off them, and only a deck that is both in-domain and
+        # actually reaching gets the regions it touches filled and the kernel
+        # re-run. A refused geometry fills nothing.
+        filled_before = tuple(r["filled"] for r in grid._regions)
 
         def _run():
             return _acc.remainder_field_proj_batch_below(
@@ -1469,7 +1576,8 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
         # discarded and costs microseconds.
         if obs.shape[0] and src.shape[0]:
             grid.eval(np.array([mx_r1, mx_r1]), np.array([mn_th, mx_th]))
-            if grid._band_filled and not band_was_filled:
+            grid._ensure_for(mx_r1, mn_th, mx_th)
+            if tuple(r["filled"] for r in grid._regions) != filled_before:
                 out, mx_r1, mn_th, mx_th = _run()
         return out
 

@@ -255,7 +255,9 @@ def test_the_old_domain_is_unmoved():
 
     Swept OFF-node on purpose, densely through the seam's own first cell and
     across the 30 deg split -- a sweep that only landed on lattice nodes would
-    pass even if the stencil changed underneath it.
+    pass even if the stencil changed underneath it. R1 is swept as a fraction
+    of `r_near` (the old cap), which is what "the old domain" means once
+    part 2 moved `r1_max` out to 4 lambda_m.
     """
     th_deg = np.concatenate(
         [
@@ -266,8 +268,13 @@ def test_the_old_domain_is_unmoved():
     )
     for soil, f in (("A", 7e6), ("C", 21e6)):
         g, *_ = _grid(soil, f)
+        # Fractions of `r_near`, NOT of `r1_max`. momwire#838 part 2 doubled
+        # the cap to 4 lambda_m, and R1 past `r_near` = 2 lambda_m is the new
+        # far annulus -- domain that REFUSED before, so there is no old value
+        # of it to preserve. `r_near` is exactly the old cap, so this sweep is
+        # the old domain however the cap moves again later.
         for r_frac in (0.02, 0.35, 0.68, 0.98):
-            r1 = np.full(th_deg.shape, r_frac * g.r1_max)
+            r1 = np.full(th_deg.shape, r_frac * g.r_near)
             th = np.radians(th_deg)
             got = g.eval(r1, th)
             want = _legacy_eval(g, r1, th)
@@ -382,3 +389,154 @@ def test_ble_geometries_are_served():
         g.eval(r1, np.radians([th_deg]))
     with pytest.raises(ValueError, match="grazing floor"):
         g.eval(r1, np.radians([0.023]))
+
+
+# ---------------------------------------------------------------------------
+# momwire#838 part 2 -- the far annulus [2, 4) lambda_m
+# ---------------------------------------------------------------------------
+#
+# The cap was 2 lambda_m because the far annulus interpolated at 2.4e-3, 12x
+# worse than everything inside it. Measured one axis at a time
+# (`scratch/probe838_r1_cap.py`), that is entirely the THETA axis: dr = 0.05
+# lambda_m already reads 1.6e-5 out there, while the steep band at dtheta 2.5
+# reads 1.5e-3. So the far zone is the same lattice in R1 with a finer theta
+# one, and the cap moves to 4 lambda_m.
+
+# Worst measured over soils A/B/C at the far-zone lattice: 3.6e-5, against the
+# 2e-4 the inner domain is gated at. Set 4x over the measurement, still 5x
+# under the inner bar.
+FAR_BAR = 1.5e-4
+
+
+def _far_band_bounds(g, band):
+    """(lo, hi) in radians for one theta band, and its far-zone region."""
+    reg = g._regions[6 + band]
+    lo = reg["th0"]
+    return lo, lo + reg["dth"] * (reg["n_th"] - 1), reg
+
+
+def test_the_far_zone_dtheta_divides_its_band_exactly():
+    """Part 1's rule, applied to the two NEW far-zone lattices.
+
+    Spelled as cell counts in the source precisely so this cannot go wrong --
+    neither of the decimals originally proposed divides (60/0.833 = 72.03,
+    29/0.4 = 72.5). This gate is what keeps that true if someone edits the
+    counts into decimals later.
+    """
+    g, *_ = _grid("A", 7e6)
+    for band, hi_deg in ((1, below._SOMM_TH_SPLIT_DEG), (2, 90.0)):
+        lo, hi, reg = _far_band_bounds(g, band)
+        assert abs(hi - math.radians(hi_deg)) < 1e-12, (
+            f"far band {band} ends at {math.degrees(hi):.6f} deg, not {hi_deg}"
+        )
+        # and it meets the inner zone's band at the SAME theta nodes
+        inner = g._regions[3 + band]
+        assert reg["th0"] == inner["th0"], (band, reg["th0"], inner["th0"])
+
+
+def test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward():
+    """R1 = r_near belongs to the NEAR zone, the way theta = 1 deg belongs to
+    the old grazing band -- the same strict-inequality rule, on the other
+    axis. With R1 on a lattice row of both zones the bicubic collapses to a
+    node, so the reading must be the direct surface bit for bit.
+    """
+    g, eps_t, k2, om, lam_m = _grid("A", 7e6)
+    near, far = g._regions[4], g._regions[7]
+    # the shared boundary is a node of both R1 axes
+    assert any(
+        abs(near["r0"] + near["dr"] * i - g.r_near) < 1e-9 for i in range(near["n_r"])
+    )
+    assert any(
+        abs(far["r0"] + far["dr"] * i - g.r_near) < 1e-9 for i in range(far["n_r"])
+    )
+    # theta is `th_band_hi`, which is region 4's own `th0` -- so the stencil
+    # collapses EXACTLY on both axes and bit-identity is a fair thing to ask.
+    # (A "nice" angle like 45 deg is not a fair ask: the theta node is built
+    # as radians(30 + 2.5*k) while `_interp` forms (theta - th0)/dth, and
+    # those disagree in the last bit, which reads as 2.2e-16 rather than 0.)
+    th = np.array([g.th_band_hi])
+    got = g.eval(np.array([g.r_near]), th)
+    ref = below.iv_surfaces_direct_below(
+        eps_t, k2, np.array([g.r_near]), th, rtol=1e-9, omega=om
+    )
+    for k in _SURF_KEYS:
+        assert complex(got[k][0]) == complex(ref[k][0]), (
+            f"{k}: R1 = r_near did not collapse onto a shared node"
+        )
+
+    # And a query one ulp PAST r_near routes to the far zone, so the seam is
+    # a real boundary rather than a decorative constant.
+    g.eval(np.array([np.nextafter(g.r_near, np.inf)]), th)
+    assert g._regions[6]["filled"], (
+        "a query just past r_near did not reach the far zone's band region"
+    )
+
+
+def test_both_dispatches_agree_across_the_r_near_seam():
+    """numpy and C++ carry two copies of the three-zone routing."""
+    g, eps_t, k2, om, lam_m = _grid("A", 7e6)
+    k_m = below.k_medium(eps_t, k2)
+    t = np.array([[1.0, 0.0, 0.0]])
+    for r1_l, th_deg in (
+        (1.5, 45.0),
+        (1.999, 45.0),
+        (2.0, 45.0),
+        (2.001, 45.0),
+        (3.0, 45.0),
+        (3.6, 0.21),
+        (3.99, 5.0),
+    ):
+        R = r1_l * lam_m
+        rho, hh = R * math.cos(math.radians(th_deg)), R * math.sin(math.radians(th_deg))
+        obs = np.array([[0.0, 0.0, -0.5 * hh]])
+        src = np.array([[rho, 0.0, -0.5 * hh]])
+        cpp = below.remainder_field_proj_below(obs, t, src, t, 0.0, k2, k_m, g)
+        with force_numpy():
+            npy = below.remainder_field_proj_below(obs, t, src, t, 0.0, k2, k_m, g)
+        rel = abs(cpp[0, 0] - npy[0, 0]) / abs(npy[0, 0])
+        assert rel < 1e-13, f"R1 {r1_l} lam, theta {th_deg}: {rel:.3e}"
+
+
+def test_the_far_zone_is_deferred_until_something_reaches_it():
+    """Nothing under 2 lambda_m pays for the far annulus.
+
+    It is ~4x the panels of the whole rest of the grid, and 68 % of THAT is
+    its own sub-1 deg band (panels go as 6.4/tan theta), which is why it is
+    deferred per theta BAND rather than as a block.
+    """
+    g, eps_t, k2, om, lam_m = _grid("B", 7e6)
+    assert not any(g._regions[i]["filled"] for i in (6, 7, 8)), (
+        "the far annulus was filled at construction"
+    )
+    g.eval(np.array([1.0 * lam_m]), np.array([math.radians(45.0)]))
+    assert not any(g._regions[i]["filled"] for i in (6, 7, 8)), (
+        "an inner-domain query filled the far annulus"
+    )
+    g.eval(np.array([3.0 * lam_m]), np.array([math.radians(45.0)]))
+    assert g._regions[8]["filled"], "the far steep band was not filled on demand"
+    assert not g._regions[6]["filled"], (
+        "a steep far query filled the far zone's sub-1 deg band, which is 68 % "
+        "of its panels -- the deferral is per theta band, not per zone"
+    )
+
+
+@pytest.mark.slow
+def test_the_far_zone_interpolates_to_the_bar():
+    """The far annulus against the direct surfaces, at off-node points."""
+    worst = 0.0
+    for soil in SOILS:
+        for f in FREQS:
+            g, eps_t, k2, om, lam_m = _grid(soil, f)
+            r1 = np.linspace(2.05, 3.95, 11) * lam_m
+            for th_deg in (0.3, 2.0, 17.0, 45.0, 80.0):
+                th = np.radians(np.full(r1.shape, th_deg))
+                got = g.eval(r1, th)
+                ref = below.iv_surfaces_direct_below(
+                    eps_t, k2, r1, th, rtol=1e-9, omega=om
+                )
+                G = np.stack([got[k] for k in _SURF_KEYS])
+                R = np.stack([ref[k] for k in _SURF_KEYS])
+                worst = max(
+                    worst, float((np.abs(G - R) / np.abs(R).max(axis=0)[None, :]).max())
+                )
+    assert worst < FAR_BAR, f"{worst:.3e}"
