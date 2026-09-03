@@ -127,24 +127,56 @@ rebuild before trusting any local solve.
 ## Quadrature: `n_qp_pair` is not a converged default
 
 `n_qp_pair=4` entered in the first bspline commit ("straight-wire first cut")
-and has never been re-derived. It is exact for same-edge pairs and
-under-integrates cross-edge ones, which makes results depend on how a
-*straight* wire was subdivided. See momwire#743 for measurements.
+and has never been re-derived. It under-integrates *cross-edge* pairs, which
+makes results depend on how a *straight* wire was subdivided. See momwire#743
+for measurements. (It is near-exact, not exact, for same-edge pairs — see the
+accuracy note below.)
 
-To run `n_qp_pair > 8` (the C++ kernel refuses, on a compile-time stack-array
-size), block the extension before importing momwire:
+**There are two knobs and only one of them still has a ceiling.** Getting that
+backwards is how the workaround this section used to document outlived the
+refusal it was for.
 
-```python
-class _Block:
-    def find_spec(self, name, path=None, target=None):
-        if name.endswith("momwire._accelerators"):
-            raise ImportError("blocked")
-        return None
+| knob | pairs | ceiling | over it |
+|---|---|---|---|
+| `n_qp_pair` | cross-edge | **none** — `BSPLINE_MAX_N_QP` is literally `static_cast<size_t>(-1)`, so the C++ guard is always true (momwire#762 tiled the six off-edge kernels) | runs *accelerated*, silent |
+| `n_qp_pair_same_edge` | same-edge reg kernel, which #762 did **not** tile | `SAME_EDGE_MAX_N_QP` = **8** | `serves_n_qp()` **routes to numpy** with a `RuntimeWarning` naming the ceiling — correct, slower, cost grows as n_qp² |
 
+So **nothing refuses any more, on either knob.** The old `sys.meta_path`
+extension-blocker documented here was a workaround for a `RuntimeError: n_qp
+too large`, and momwire#769 replaced that raise with the fallback above. Its
+tests are `tests/test_accel_fallback.py`. Re-measured on `origin/main` @
+`9eda56f`, the accelerator loaded, on that file's own 12-segment decks — every
+order from 4 to 32 solves on both knobs and both decks:
 
-sys.meta_path.insert(0, _Block())
+```
+n_qp_pair            straight: 4..32  all Z = 70.19390 -18.58923j  (silent)
+                     bent:        4       Z = 31.33852-134.21518j
+                                  8..32   Z = 31.33854-134.21523j
+
+n_qp_pair_same_edge  straight:    8       Z = 70.19398 -18.58811j  accelerated
+                                  9       Z = 70.19399 -18.58802j  numpy, warns
+                                 32       Z = 70.19401 -18.58771j  numpy, warns
 ```
 
-Then assert `momwire._accel.LOADED is False`. The two paths agree to all
-printed digits at `n_qp_pair=8`, so pure Python is a sound oracle — at ~4x the
-memory and time per doubling of the order.
+**The same-edge drift above is not accuracy to be bought.** That knob is the
+*memory* cost — one edge's `(N_e*n_qp, N_e*n_qp)` R table, quadratic in both —
+and it buys nothing: every pair on an unsplit edge is same-edge, so the answer
+must not depend on it. It moves in the 6th digit here only because the same-edge
+*smooth-kernel* piece does read it, which on a coarse mesh shows; it is
+bit-identical by N=400. `test_n_qp_pair_same_edge_is_the_memory_knob_and_moves_nothing`
+holds that at a 1e-2 span. Raise the **cross-edge** knob for accuracy.
+
+**Measure the cross-edge knob on a BENT deck.** Since momwire#759 a straight
+wire has one edge and never enters the off-edge kernel at all, so `n_qp_pair`
+moves nothing there and a straight-wire sweep converges *vacuously* — the
+identical straight column above is that artefact, not evidence. The bent deck
+is where this section's first paragraph is visible: q=4 differs from the
+converged value in the 7th digit.
+
+To take the pure-Python path deliberately, do what `test_accel_fallback.py`
+does — monkeypatch the `_HAVE_*_ACCEL` flags in `momwire._bspline_kernels` —
+or just ask for a same-edge order above 8. The two paths agree to ~1e-9 at the
+ceiling, so numpy is a sound oracle. On a deck this small the fallback is cheap
+(single-shot: 0.005 s at q=8, 0.020 s at q=32), so **do not quote those
+figures as the cost** — the cliff `serves_n_qp` warns about needs a deck big
+enough for the same-edge fill to matter.
