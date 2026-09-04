@@ -29,6 +29,8 @@ entries, and asserting it was the first thing this file got wrong.
 
 from __future__ import annotations
 
+import pathlib
+
 import numpy as np
 import pytest
 
@@ -36,6 +38,7 @@ from momwire import (
     ArrayBlockSolver,
     BSplineSolver,
     HMatrixSolver,
+    RazorSolver,
     SinusoidalGalerkinSolver,
     SinusoidalSolver,
 )
@@ -101,12 +104,24 @@ def _find(axis_a, value_a, axis_b, value_b):
 
 
 def test_axis_sides_name_real_axes_and_kwarg_sides_are_marked():
-    """`axis_a` is always a compositional axis. `axis_b` is one only when
-    `b_is_axis`, which is how a consumer skips what it cannot render without
-    keeping a second list of exceptions."""
+    """Each side names a compositional axis exactly when its flag says so.
+
+    `axis_a` was ALWAYS an axis for the first six rows, and momwire#888 added
+    two where neither side is (`per_wire_radius`, `wire_loading`) — hence
+    `a_is_axis`. Both directions are asserted: a flag claiming "axis" must
+    name a real one, and a flag claiming "keyword" must NOT, so the marker
+    cannot be set carelessly in either direction.
+    """
+    DERIVED = ("ground_model", "wire_position")
     for c in COUPLINGS:
-        assert c.axis_a in AXIS_VALUES, c
-        assert c.value_a in AXIS_VALUES[c.axis_a], c
+        if c.a_is_axis:
+            assert c.axis_a in AXIS_VALUES or c.axis_a in DERIVED, c
+            if c.axis_a in AXIS_VALUES:
+                assert c.value_a in AXIS_VALUES[c.axis_a], c
+        else:
+            assert c.axis_a not in AXIS_VALUES, (
+                f"{c.axis_a} IS an axis — drop a_is_axis=False"
+            )
         if c.b_is_axis:
             assert c.axis_b in AXIS_VALUES or c.axis_b in (
                 "ground_model",
@@ -214,32 +229,207 @@ def test_the_stepped_radius_junction_refusal_needs_the_step():
     SinusoidalGalerkinSolver(**_junction_deck(1e-3))
 
 
+# ---- momwire#888: the singular-enrichment rows and ground contact ---------
+
+
+def _enrich_kw(**over):
+    """A one-wire deck with singular enrichment armed."""
+    return dict(
+        wires=[_mono()],
+        n_per_edge_per_wire=[[11]],
+        feeds=[(0, 6.0, 1 + 0j)],
+        wavelength=WL,
+        wire_radius=1e-3,
+        use_singular_enrichment=True,
+        **over,
+    )
+
+
+def test_the_extended_kernel_really_refuses_singular_enrichment():
+    """The row antennaknobs was missing, and the one that cost something.
+
+    With no served row to reference, that frontend hand-wrote its own
+    sentence citing momwire#271 where this refusal cites momwire#249 follow-up
+    C. The table cannot stop a downstream copy from existing; it can make
+    deleting the copy possible, which needs this row to be true.
+    """
+    c = _find_for(BSplineSolver, "kernel", "extended", "singular_enrichment", "True")
+    with pytest.raises(NotImplementedError) as exc:
+        BSplineSolver(**_enrich_kw(extended_kernel=True)).compute_impedance()
+    assert c.reason in str(exc.value)
+
+
+def test_mixed_per_wire_radii_really_refuse_singular_enrichment():
+    c = _find_for(
+        BSplineSolver, "per_wire_radius", "True", "singular_enrichment", "True"
+    )
+    kw = _enrich_kw()
+    kw["wires"] = [_mono(), _mono(9.0, 2.0)]
+    kw["n_per_edge_per_wire"] = [[9], [9]]
+    # The step is what the refusal is about: one radius everywhere is served.
+    kw["wire_radius"] = [1e-3, 2e-3]
+    with pytest.raises(NotImplementedError) as exc:
+        BSplineSolver(**kw).compute_impedance()
+    assert c.reason in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "loading",
+    [
+        pytest.param(dict(wire_conductivity=5.8e7), id="conductivity"),
+        pytest.param(
+            dict(insulation_radius=2e-3, insulation_eps_r=2.3), id="insulation"
+        ),
+    ],
+)
+def test_distributed_wire_loading_really_refuses_singular_enrichment(loading):
+    """Both spellings of "distributed loading", because the row names the
+    CONCEPT and either kwarg reaches it — a gate on only one would go green if
+    the other stopped refusing."""
+    c = _find_for(BSplineSolver, "wire_loading", "True", "singular_enrichment", "True")
+    with pytest.raises(NotImplementedError) as exc:
+        BSplineSolver(**_enrich_kw(**loading)).compute_impedance()
+    assert c.reason in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [
+        BSplineSolver,
+        HMatrixSolver,
+        ArrayBlockSolver,
+        SinusoidalSolver,
+        SinusoidalGalerkinSolver,
+        RazorSolver,
+    ],
+)
+def test_ground_contact_under_refl_coef_is_refused_by_all_six(cls):
+    """Every class the row names, constructed — the `applies_to` was MEASURED
+    and the measurement is what this preserves.
+
+    Declared in four modules, reaching six classes through inheritance. The
+    seventh class, `HarringtonSolver`, is deliberately NOT here: see the
+    companion test below.
+    """
+    c = _find_for(cls, "wire_position", "contact", "ground_model", "refl-coef")
+    with pytest.raises(NotImplementedError) as exc:
+        cls(
+            wires=[_mono(bottom=0.0)],
+            n_per_edge_per_wire=[[11]],
+            feeds=[(0, 5.0, 1 + 0j)],
+            wavelength=WL,
+            wire_radius=1e-3,
+            ground_z=0.0,
+            ground_eps=SOIL_A,
+            ground_model="refl-coef",
+        ).compute_impedance()
+    # Composed: the raise prefixes which wire end is in the plane.
+    assert c.reason in str(exc.value)
+
+
+def test_harrington_is_absent_from_the_contact_row_and_that_is_correct():
+    """The row is NOT universal, though all seven classes refuse the pair.
+
+    `HarringtonSolver` refuses `contact` OUTRIGHT, under every ground model —
+    a single-cell refusal, not a coupling. Listing it would tell a `pulse`
+    user the PAIRING is the problem and imply contact over Sommerfeld works,
+    which is false. Asserted by measuring both, because "all seven refuse it"
+    is true and is the wrong reason to add the seventh.
+    """
+    from momwire.harrington import HarringtonSolver
+
+    c = _find("wire_position", "contact", "ground_model", "refl-coef")
+    assert "HarringtonSolver" not in c.applies_to
+
+    caps = HarringtonSolver.capabilities
+    # Refuses contact on its own, and under a ground model the six SERVE.
+    assert caps.refusal("contact") is not None
+    assert caps.refusal("contact", "sommerfeld") is not None
+    # ...and the six do serve exactly those, which is what makes their
+    # refusal of the PAIR a coupling rather than a missing cell.
+    assert BSplineSolver.capabilities.refusal("contact") is None
+    assert BSplineSolver.capabilities.refusal("contact", "sommerfeld") is None
+
+
 def test_every_flat_entry_is_covered_by_a_construction_above():
     """A new row must arrive with a construction, not just a sentence.
 
-    Without this, adding an entry to COUPLINGS is free and unverified — which
-    is exactly the annotated-table failure the module exists to avoid.
+    THE CHECKLIST IS READ OUT OF THIS FILE'S OWN SOURCE, not maintained by
+    hand. That is a deliberate change (momwire#888): the previous version
+    compared COUPLINGS against a literal set written just above, so adding a
+    row AND adding its name to that set turned the test green with no
+    construction anywhere — which is exactly what happened while writing the
+    four #888 rows, and it went green. A gate whose passing condition is "the
+    author also edited the checklist" measures the author, not the code.
+
+    So the covered set is now derived by parsing every `_find_for(...)` CALL
+    SITE in this module: a row is covered iff some test in this file actually
+    looks it up in order to construct it. `_find_for` additionally asserts the
+    class it was handed is one the row's `applies_to` names, so a call site is
+    not merely a mention — it is bound to a construction and to the data.
+
+    Static rather than runtime because the suite runs under
+    `--dist loadgroup`: a session-global "what did we build" set is split
+    across xdist workers and would under-report, which is a gate that quietly
+    measures less than it claims.
     """
-    covered = {
-        ("testing", "point-matching", "feed_model", "point-gap"),
-        ("solve_strategy", "aca", "wire_position", "buried"),
-        ("solve_strategy", "element-block", "wire_position", "buried"),
-        ("kernel", "extended", "wire_position", "buried"),
-        ("kernel", "extended", "near_correction", "False"),
-        ("kernel", "extended", "junction_ports", "True"),
-    }
+    import ast
+
+    tree = ast.parse(pathlib.Path(__file__).read_text())
+    patterns = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_find_for"
+        ):
+            # A parametrized cell (`_find_for(cls, "solve_strategy", value,
+            # ...)`) is not a literal, so it reads as a WILDCARD here. That is
+            # sound: `_find` raises when no row matches, so the runtime call
+            # still proves the specific value exists — the wildcard only
+            # widens which declared row this call site can vouch for, and it
+            # cannot vouch for a row that no test looks up.
+            pat = tuple(
+                a.value
+                if isinstance(a, ast.Constant) and isinstance(a.value, str)
+                else None
+                for a in node.args[1:5]
+            )
+            assert len(pat) == 4, f"_find_for called with {len(pat)} cells"
+            patterns.append(pat)
+
     declared = {(c.axis_a, c.value_a, c.axis_b, c.value_b) for c in COUPLINGS}
+    covered = {
+        row
+        for row in declared
+        for pat in patterns
+        if all(p is None or p == v for p, v in zip(pat, row))
+    }
+    unused = [
+        pat
+        for pat in patterns
+        if not any(
+            all(p is None or p == v for p, v in zip(pat, row)) for row in declared
+        )
+    ]
     assert declared == covered, (
         "COUPLINGS changed without its construction gate: "
-        f"uncovered={sorted(declared - covered)} stale={sorted(covered - declared)}"
+        f"uncovered={sorted(declared - covered)}"
     )
+    assert not unused, f"construction for a row that no longer exists: {unused}"
 
 
 def test_every_reason_IS_the_module_constant_and_not_a_copy():
     """Identity, not equality. A table that retyped the prose would read as
     authoritative and drift the first time a refusal was reworded; holding the
     same object makes that impossible rather than unlikely."""
-    from momwire.bspline import _BURIED_EXTENDED_KERNEL_REFUSAL
+    from momwire._ground_spec import CONTACT_UNDER_REFL_COEF_REFUSAL
+    from momwire.bspline import (
+        _BURIED_EXTENDED_KERNEL_REFUSAL,
+        _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
+        _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
+        _ENRICHMENT_WIRE_LOADING_REFUSAL,
+    )
     from momwire.hmatrix import HMatrixSolver as _H
     from momwire.sinusoidal import _POINT_FEED_MODEL_REFUSAL
     from momwire.sinusoidal_galerkin import (
@@ -253,6 +443,14 @@ def test_every_reason_IS_the_module_constant_and_not_a_copy():
         ("kernel", "wire_position"): _BURIED_EXTENDED_KERNEL_REFUSAL,
         ("kernel", "near_correction"): _EK_NEAR_CORRECTION_REFUSAL,
         ("kernel", "junction_ports"): _EK_STEPPED_RADIUS_JUNCTION_REFUSAL,
+        # momwire#888
+        ("kernel", "singular_enrichment"): _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
+        (
+            "per_wire_radius",
+            "singular_enrichment",
+        ): _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
+        ("wire_loading", "singular_enrichment"): _ENRICHMENT_WIRE_LOADING_REFUSAL,
+        ("wire_position", "ground_model"): CONTACT_UNDER_REFL_COEF_REFUSAL,
     }
     for c in COUPLINGS:
         assert c.reason is want[(c.axis_a, c.axis_b)], (

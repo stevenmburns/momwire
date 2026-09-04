@@ -35,7 +35,13 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from .bspline import _BURIED_EXTENDED_KERNEL_REFUSAL
+from ._ground_spec import CONTACT_UNDER_REFL_COEF_REFUSAL
+from .bspline import (
+    _BURIED_EXTENDED_KERNEL_REFUSAL,
+    _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
+    _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
+    _ENRICHMENT_WIRE_LOADING_REFUSAL,
+)
 from .hmatrix import HMatrixSolver
 from .sinusoidal import _POINT_FEED_MODEL_REFUSAL
 from .sinusoidal_galerkin import (
@@ -54,12 +60,23 @@ class Coupling(NamedTuple):
 
     `b_is_axis` is False when `axis_b` names a constructor keyword rather than
     a compositional axis, so a consumer can skip what it cannot render without
-    keeping a second list of exceptions.
+    keeping a second list of exceptions. `a_is_axis` says the same about the
+    A side, and it exists because the original shape assumed A was ALWAYS an
+    axis — true of the first six rows and false of two added in momwire#888,
+    where NEITHER side is compositional (`per_wire_radius`, `wire_loading`).
+    Those are still inventory: the table records what momwire refuses, and
+    which of it a panel can draw is the panel's question, not this module's.
 
     `condition` is None for a flat refusal and a short phrase when the
     combination is refused only in a narrower case — carried verbatim to the
     consumer, because "refused" and "refused when X" are different sentences
     and collapsing them overstates the first.
+
+    `issue` is None when the refusal's own prose cites no issue — the
+    `wire_loading+singular_enrichment` row is the case. Inventing a plausible
+    citation there would be the same drift this table exists to stop, one
+    field over: a reader would follow the number to an issue that never
+    discussed the refusal.
 
     `applies_to` names the solver class(es) that actually raise this. It is
     NOT decoration: a coupling is per-class, and a consumer filtering by "can
@@ -75,7 +92,8 @@ class Coupling(NamedTuple):
     axis_b: str
     value_b: str
     reason: str
-    issue: str
+    issue: str | None
+    a_is_axis: bool = True
     b_is_axis: bool = True
     condition: str | None = None
     applies_to: tuple[str, ...] = ()
@@ -160,5 +178,92 @@ COUPLINGS: tuple[Coupling, ...] = (
         b_is_axis=False,
         condition="a radius step at the junction",
         applies_to=("SinusoidalGalerkinSolver",),
+    ),
+    # ---- singular enrichment, three rows (momwire#888) -------------------
+    #
+    # All three are BSplineSolver's alone: `use_singular_enrichment` is not a
+    # keyword the other families take at all, so an unattributed row would
+    # advise users about a control they do not have — the same
+    # mis-attribution `applies_to` was introduced for.
+    #
+    # The first of these is the row antennaknobs was missing, and the cost of
+    # its absence is on momwire#888: with no row to reference, that frontend
+    # hand-wrote its own sentence, citing momwire#271 where the refusal below
+    # cites momwire#249 follow-up C, and giving one reason where it gives
+    # three. The copy was authoritative-looking and wrong about its own
+    # source. That is the argument for this table, observed rather than
+    # predicted.
+    Coupling(
+        axis_a="kernel",
+        value_a="extended",
+        axis_b="singular_enrichment",
+        value_b="True",
+        reason=_ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
+        issue="momwire#249",
+        # Not an axis: `use_singular_enrichment` is a constructor keyword, so
+        # no panel can draw this as a cell of the product space.
+        b_is_axis=False,
+        applies_to=("BSplineSolver",),
+    ),
+    Coupling(
+        axis_a="per_wire_radius",
+        value_a="True",
+        # Neither side is an axis — see `a_is_axis`.
+        axis_b="singular_enrichment",
+        value_b="True",
+        reason=_ENRICHMENT_PER_WIRE_RADIUS_REFUSAL,
+        issue="momwire#147",
+        a_is_axis=False,
+        b_is_axis=False,
+        applies_to=("BSplineSolver",),
+    ),
+    Coupling(
+        axis_a="wire_loading",
+        value_a="True",
+        # Neither side is an axis — see `a_is_axis`.
+        axis_b="singular_enrichment",
+        value_b="True",
+        reason=_ENRICHMENT_WIRE_LOADING_REFUSAL,
+        # The refusal's prose cites nothing, so neither does this. See the
+        # `issue` docstring: a plausible-looking number would be worse than
+        # none, because it would be followed.
+        issue=None,
+        a_is_axis=False,
+        b_is_axis=False,
+        applies_to=("BSplineSolver",),
+    ),
+    # ---- ground contact under the reflection-coefficient model -----------
+    #
+    # The first row whose BOTH sides are DERIVED axes (`wire_position` and
+    # `ground_model` are computed by `axes_for`, not declared), so it belongs
+    # to a ground panel rather than a solver panel. Recorded here anyway: the
+    # table is the inventory, and where a consumer draws it is the consumer's
+    # question.
+    #
+    # `applies_to` MEASURED, not guessed, and the measurement changed the
+    # answer twice. It is declared in four modules but reaches SIX classes
+    # through inheritance (HMatrix and ArrayBlock get BSpline's). And it is
+    # NOT universal, though all seven classes refuse the pair: HarringtonSolver
+    # refuses `contact` OUTRIGHT, under every ground model, so for it this is a
+    # single-cell refusal and not a coupling at all. Listing it here would tell
+    # a `pulse` user the PAIRING is the problem and imply that contact over
+    # Sommerfeld would work, which is false. The six below all serve `contact`
+    # alone and refuse only this combination — verified by asking each class
+    # for `refusal("contact")` and `refusal("contact", "sommerfeld")`.
+    Coupling(
+        axis_a="wire_position",
+        value_a="contact",
+        axis_b="ground_model",
+        value_b="refl-coef",
+        reason=CONTACT_UNDER_REFL_COEF_REFUSAL,
+        issue="momwire#282",
+        applies_to=(
+            "BSplineSolver",
+            "HMatrixSolver",
+            "ArrayBlockSolver",
+            "SinusoidalSolver",
+            "SinusoidalGalerkinSolver",
+            "RazorSolver",
+        ),
     ),
 )
