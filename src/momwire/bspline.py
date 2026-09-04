@@ -1338,18 +1338,28 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 #
                 # Measured (N = 4, n_rad 10 -> 30, |dZ|/|Z|):
                 #
-                #   bare   at h = 1.02 mm (h/a 2.00)   5.81 %   <- admitted
-                #   COATED at h = 0.90 mm (h/a 1.76)   2.47 %   <- was refused
-                #   bare   at h = 0.90 mm (h/a 1.76)   5.81 %
+                #   deck                       h/a   h/a'   10->30  20->30
+                #   bare at h = 2a (old floor)  2.00   2.00   5.81 %  0.49 %
+                #   No.18 b = 1.76a at h = b    1.76   1.21   2.48 %  0.28 %
+                #   THIN  b = 1.05a at h = b    1.05   1.02   6.03 %  0.93 %
+                #   THIN  b = 1.10a at h = b    1.10   1.04   5.52 %  0.85 %
+                #   bare at h = b (1.76a)       1.76    --    5.81 %  0.71 %
                 #
-                # The coated deck BELOW the old floor is more than twice as
-                # mesh-stable as the bare deck the floor admitted, so refusing
-                # it was refusing the easier problem. The equivalent radius
-                # (momwire#874) enlarges the kernel's a, and the a^2-regularised
-                # kernel is better conditioned for it — the same thing that
-                # drives h/a' to 1.21 is what smooths the fill. Note also that
-                # the two bare rows are IDENTICAL: in this range the bare
-                # instability is not a function of h at all, it is the mesh.
+                # A THICK jacket is markedly more stable than the bare deck the
+                # old floor admitted, and the enlarged a' is why: the
+                # a^2-regularised kernel is better conditioned for it.
+                #
+                # THAT ARGUMENT DOES NOT CARRY THE THIN JACKET, and the thin
+                # rows are the ones that justify the bound. At b = 1.05a the
+                # equivalent radius is only 1.02a, so the kernel is essentially
+                # the bare one at h/a = 1.05 — and it is still no worse than
+                # bare at h/a = 2.00 (6.03 % against 5.81 %, and BETTER on
+                # dR/R: 1.68 % against 3.97 %). The reason is the pair of bare
+                # rows above, which are IDENTICAL at h/a 2.00 and 1.76: in this
+                # range the bare instability is not a function of h at all, it
+                # is the mesh. A bare-like kernel at h/a 1.05 therefore behaves
+                # like a bare-like kernel at h/a 2.00, which is what makes
+                # h >= b safe for any jacket rather than only a thick one.
                 #
                 # Same "both endpoints" shape as the in-plane refusal above, so
                 # a vertical whose base merely reaches the plane is untouched —
