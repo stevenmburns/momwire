@@ -1332,7 +1332,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # in-plane refusal above, so a vertical whose base merely
                 # reaches the plane is untouched — this is about an edge lying
                 # ALONGSIDE the interface, not one ending on it.
-                a_w = float(self._radius_per_wire[w_idx])
+                # The CONDUCTOR radius, not the kernel one. A jacket makes
+                # a' > a (momwire#865), and measuring the stand-off against
+                # a' would tighten this floor for coated wires on the
+                # strength of a quasi-static charge radius — which is not
+                # what the mesh-stability evidence behind h/a >= 2 measured.
+                a_w = float(self._conductor_radius_per_wire[w_idx])
                 h_edge = pl_arr[:, 2] - gz
                 low = (h_edge > tol) & (
                     h_edge < _surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a * a_w
@@ -1354,7 +1359,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         "is its radius plus its jacket, about "
                         f"{_surface_height.SURFACE_HEIGHT_CLASS.default_h_mm:.1f} "
                         "mm for No. 18 — or model it in the lower medium if "
-                        "it is genuinely buried. See "
+                        "it is genuinely buried. NOTE a thin-jacketed wire "
+                        "resting ON soil sits at h = b, its jacket's outer "
+                        "radius, which for No. 18 with a 0.4 mm wall is "
+                        "h/a = 1.76 — below this floor. That configuration "
+                        "is outside the serve today rather than served "
+                        "approximately. See "
                         f"{_surface_height.SURFACE_HEIGHT_CLASS.issue}"
                     )
                 # Advisory candidates: served, but inside the sensitive band.
