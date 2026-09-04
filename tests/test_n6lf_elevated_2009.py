@@ -148,6 +148,12 @@ import pytest
 
 from momwire import BSplineSolver
 
+# crossgate rows are ALSO slow, per pyproject's marker convention: the
+# default lane excludes `slow`, not `crossgate`, so a crossgate-only file
+# runs (guardrail-exempt) on every PR. This file's rows are certification
+# solves and belong on the push-to-main lanes.
+pytestmark = pytest.mark.slow
+
 FT = 0.3048
 IN = 0.0254
 WAVELENGTH = 299.792458e6 / 7.2e6
