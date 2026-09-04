@@ -58,6 +58,12 @@ from test_crossing_serve_524 import (
     hub_deck,
 )
 
+# crossgate rows are ALSO slow, per pyproject's marker convention: the
+# default lane excludes `slow`, not `crossgate`, so a crossgate-only file
+# runs (guardrail-exempt) on every PR. This file's rows are certification
+# solves and belong on the push-to-main lanes.
+pytestmark = pytest.mark.slow
+
 # The stated class: the two degrees agree within this at the anchor mesh.
 # 0.96 Ω is the measured worst case (crossing_g1); the AK catalog deck sits at
 # 0.55 and the BLE screens under 0.25.

@@ -131,6 +131,12 @@ sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent))
 
 from momwire import BSplineSolver  # noqa: E402
 
+# crossgate rows are ALSO slow, per pyproject's marker convention: the
+# default lane excludes `slow`, not `crossgate`, so a crossgate-only file
+# runs (guardrail-exempt) on every PR. This file's rows are certification
+# solves and belong on the push-to-main lanes.
+pytestmark = pytest.mark.slow
+
 C0 = 299792458.0
 F_HZ = 3.0e6
 WL = C0 / F_HZ
