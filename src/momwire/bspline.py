@@ -704,7 +704,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "kernel": ("reduced", "extended"),
             "quadrature": ("converged",),
             "solve_strategy": ("dense",),
-            "feed_model": ("segment-gap",),
+            # BOTH, default first. This row said ("segment-gap",) while the
+            # constructor has always defaulted to feed_model="point" and
+            # accepted either — so a consumer reading the row described a
+            # source this class does not use by default. antennaknobs' new
+            # composition line rendered exactly that: "segment gap" on a tab
+            # whose stock solve uses a point gap.
+            #
+            # DEFAULT FIRST is now the row's convention and is gated: the
+            # first declared value must be what the constructor picks when
+            # nothing is passed, so anything reading the row for "what does
+            # this solver do by default" gets the right answer.
+            "feed_model": ("point-gap", "segment-gap"),
         },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,

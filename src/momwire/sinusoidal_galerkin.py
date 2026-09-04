@@ -960,7 +960,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         axes={
             **SinusoidalSolver.capabilities.axes,
             "testing": ("galerkin",),
-            "feed_model": ("segment-gap", "point-gap"),
+            # Default first (see BSplineSolver's row): this class defaults
+            # to feed_model="point", so the point gap leads.
+            "feed_model": ("point-gap", "segment-gap"),
         },
         junction_ports=True,
         node_gaps=True,
