@@ -66,6 +66,7 @@ from momwire import (
     SinusoidalSolver,
 )
 from momwire._capabilities import AXIS_VALUES
+from momwire._capabilities import _combo_key
 from momwire._couplings import COUPLINGS
 
 WL = 42.83  # ~7 MHz
@@ -498,3 +499,89 @@ def test_every_row_names_a_real_solver_class_it_applies_to():
                 f"{c.axis_a}={c.value_a}: applies_to names {name!r}, "
                 "which is not a momwire solver class"
             )
+
+
+def test_no_row_UNDER_attributes_a_refusal_the_class_actually_raises():
+    """`applies_to` guards mis-attribution in BOTH directions.
+
+    A ONE-DIRECTIONAL GATE PASSES ON THE DIRECTION IN FRONT OF THE AUTHOR.
+    That is the general lesson and it is worth stating here because it cost
+    something three separate times in one day: this row set, the
+    `exposed`/`accepted` split downstream, and the coverage checklist above.
+    Each time the gate written was the one whose failure the author had just
+    imagined, and the mirror was left unguarded until a consumer tripped it.
+
+    Only the over-attribution half was being checked — "a backend is told
+    only about couplings that apply to IT" — and the missing half cost
+    something: the three singular-enrichment rows named `BSplineSolver`
+    alone, while `HMatrixSolver` and `ArrayBlockSolver` inherit that
+    `refusals` dict and raise identically. A downstream panel that greys a
+    control from the served rows therefore stopped greying it on the two
+    accelerators, and nothing here said so.
+
+    So: for every row, every class whose capabilities REFUSE that combination
+    must be named. Asked of the capability rather than by construction
+    because it is a question about the declared surface, and the construction
+    gates above already prove the declarations are true.
+    """
+    import momwire
+
+    classes = {
+        name: getattr(momwire, name)
+        for name in (
+            "BSplineSolver",
+            "HMatrixSolver",
+            "ArrayBlockSolver",
+            "SinusoidalSolver",
+            "SinusoidalGalerkinSolver",
+            "RazorSolver",
+        )
+    }
+    # The refusal KEY each row is about. Kept beside the row rather than
+    # derived from `axis_a`/`axis_b`, because the table's axis names are the
+    # panel's vocabulary and the dict's keys are momwire's.
+    keys = {
+        ("kernel", "singular_enrichment"): ("extended_kernel", "singular_enrichment"),
+        ("per_wire_radius", "singular_enrichment"): (
+            "per_wire_radius",
+            "singular_enrichment",
+        ),
+        ("wire_loading", "singular_enrichment"): (
+            "wire_loading",
+            "singular_enrichment",
+        ),
+        ("wire_position", "ground_model"): ("contact", "refl-coef"),
+    }
+    checked = 0
+    for c in COUPLINGS:
+        cells = keys.get((c.axis_a, c.axis_b))
+        if cells is None:
+            continue
+        for name, cls in classes.items():
+            # THE COMBO KEY, not `refusal(a, b)`. That method falls back to
+            # single-cell refusals, so `SinusoidalSolver` "refuses"
+            # extended_kernel+singular_enrichment only because it does not
+            # serve enrichment AT ALL — which is not a coupling and must not
+            # be attributed as one. Same distinction that keeps
+            # `HarringtonSolver` off the contact row.
+            refuses = _combo_key(cells) in cls.capabilities.refusals
+            # `HarringtonSolver` is excluded from the contact row on purpose
+            # (single-cell refusal, not a coupling) and is not in `classes`.
+            if refuses and name not in c.applies_to:
+                raise AssertionError(
+                    f"{c.axis_a}={c.value_a} x {c.axis_b}: {name} refuses this "
+                    f"and the row does not name it — applies_to={c.applies_to}"
+                )
+            checked += 1
+    assert checked >= 24, checked
+
+
+def test_the_bspline_family_shares_one_applies_to_tuple():
+    """One inherited `refusals` dict, one tuple. Three literals would be three
+    things to drift, and the drift is invisible until a consumer greys a
+    control on one class and not its subclass."""
+    rows = [c for c in COUPLINGS if c.axis_b == "singular_enrichment"]
+    assert len(rows) == 3
+    first = rows[0].applies_to
+    assert all(r.applies_to is first for r in rows)
+    assert first == ("BSplineSolver", "HMatrixSolver", "ArrayBlockSolver")

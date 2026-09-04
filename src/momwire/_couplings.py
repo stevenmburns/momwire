@@ -99,6 +99,11 @@ class Coupling(NamedTuple):
     applies_to: tuple[str, ...] = ()
 
 
+# The dense B-spline solver and its two accelerated subclasses. They share one
+# `refusals` dict by inheritance, so a refusal one of them raises, all three
+# raise — and a row naming only the parent under-attributes.
+_BSPLINE_FAMILY = ("BSplineSolver", "HMatrixSolver", "ArrayBlockSolver")
+
 COUPLINGS: tuple[Coupling, ...] = (
     # Point matching cannot take a zero-width gap: the drive is E_app sampled
     # AT a match point and the source is a delta there, so the pairing is
@@ -181,10 +186,17 @@ COUPLINGS: tuple[Coupling, ...] = (
     ),
     # ---- singular enrichment, three rows (momwire#888) -------------------
     #
-    # All three are BSplineSolver's alone: `use_singular_enrichment` is not a
-    # keyword the other families take at all, so an unattributed row would
-    # advise users about a control they do not have — the same
-    # mis-attribution `applies_to` was introduced for.
+    # `use_singular_enrichment` is not a keyword the other FAMILIES take at
+    # all, so an unattributed row would advise users about a control they do
+    # not have — the mis-attribution `applies_to` was introduced for.
+    #
+    # But it IS taken by the two accelerated B-spline subclasses, which
+    # inherit this refusals dict and genuinely raise. An earlier version of
+    # these rows named `BSplineSolver` alone, and a downstream panel stopped
+    # greying the control on `hmatrix` and `arrayblock` as a result.
+    # `applies_to` guards MIS-attribution in BOTH directions and only the
+    # over-attribution half was being checked; see the under-attribution gate
+    # in tests/test_couplings.py.
     #
     # The first of these is the row antennaknobs was missing, and the cost of
     # its absence is on momwire#888: with no row to reference, that frontend
@@ -203,7 +215,7 @@ COUPLINGS: tuple[Coupling, ...] = (
         # Not an axis: `use_singular_enrichment` is a constructor keyword, so
         # no panel can draw this as a cell of the product space.
         b_is_axis=False,
-        applies_to=("BSplineSolver",),
+        applies_to=_BSPLINE_FAMILY,
     ),
     Coupling(
         axis_a="per_wire_radius",
@@ -215,7 +227,7 @@ COUPLINGS: tuple[Coupling, ...] = (
         issue="momwire#147",
         a_is_axis=False,
         b_is_axis=False,
-        applies_to=("BSplineSolver",),
+        applies_to=_BSPLINE_FAMILY,
     ),
     Coupling(
         axis_a="wire_loading",
@@ -230,7 +242,7 @@ COUPLINGS: tuple[Coupling, ...] = (
         issue=None,
         a_is_axis=False,
         b_is_axis=False,
-        applies_to=("BSplineSolver",),
+        applies_to=_BSPLINE_FAMILY,
     ),
     # ---- ground contact under the reflection-coefficient model -----------
     #
