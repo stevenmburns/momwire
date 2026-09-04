@@ -374,6 +374,17 @@ _JUNCTION_PORTS_MIXED_RADII_REFUSAL = (
 # node — is refused rather than fixed. Reused by __init__'s raise below and
 # by `capabilities.refusals`, same one-message-per-combination idiom as the
 # two above and as BSplineSolver's `_ENRICHMENT_*_REFUSAL` trio (#396).
+# The kernel x near_correction coupling (momwire#246), hoisted for
+# `_couplings.py` on the same grounds as its neighbour below. No behaviour
+# change: the raise carries this string verbatim.
+_EK_NEAR_CORRECTION_REFUSAL = (
+    "extended_kernel=True requires near_correction=True on "
+    "SinusoidalGalerkinSolver: the extended kernel's delta is "
+    "resolved on the near-pair path, and M1 mode would leave the "
+    "self and node-sharing pairs on the far tier's rule "
+    "(momwire#246)"
+)
+
 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL = (
     "extended_kernel=True with a radius step at a junction is not "
     "implemented on SinusoidalGalerkinSolver: measured DIVERGENT, not "
@@ -1012,13 +1023,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             # because the near path overwrites them. M1 mode would ship the
             # cheap rule's answer there, which is not an approximation but a
             # wrong number (5× the answer at Δ/a = 6). Refuse the combination.
-            raise NotImplementedError(
-                "extended_kernel=True requires near_correction=True on "
-                "SinusoidalGalerkinSolver: the extended kernel's delta is "
-                "resolved on the near-pair path, and M1 mode would leave the "
-                "self and node-sharing pairs on the far tier's rule "
-                "(momwire#246)"
-            )
+            raise NotImplementedError(_EK_NEAR_CORRECTION_REFUSAL)
         if self.extended_kernel and self.junctions:
             # momwire#398 D2: a radius step AT a junction under EK is refused
             # at construction, not left to diverge at solve time — see

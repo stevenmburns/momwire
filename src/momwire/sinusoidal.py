@@ -362,6 +362,22 @@ class _SegmentBasis:
     k: float
 
 
+# The testing x feed_model coupling (momwire#212), hoisted out of the raise so
+# `_couplings.py` can reference the prose rather than retype it — the same shape
+# `bspline._BURIED_*_REFUSAL` and `_EK_STEPPED_RADIUS_JUNCTION_REFUSAL` already
+# use. No behaviour change: the raise below carries this string verbatim.
+_POINT_FEED_MODEL_REFUSAL = (
+    "feed_model='point' is not supported on SinusoidalSolver: a "
+    "zero-width gap has no collocation RHS — the drive is E_app "
+    "sampled AT a match point and the source is a delta there, so "
+    "the pairing is undefined (momwire#212). Under point matching "
+    "NEC's segment gap already is the zero-width gap at the mesh's "
+    "own resolution. For the zero-width source use "
+    "SinusoidalGalerkinSolver(feed_model='point'), whose test "
+    "integral is what makes a delta source admissible"
+)
+
+
 class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """NEC2's three-term (const + sin + cos) basis on each segment, with
     end-condition coefficients closed-form per Eqs 25-64.
@@ -798,16 +814,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         what "the basis" means — which would break the one-axis-at-a-time
         discipline the whole instrument exists to keep.
         """
-        raise NotImplementedError(
-            "feed_model='point' is not supported on SinusoidalSolver: a "
-            "zero-width gap has no collocation RHS — the drive is E_app "
-            "sampled AT a match point and the source is a delta there, so "
-            "the pairing is undefined (momwire#212). Under point matching "
-            "NEC's segment gap already is the zero-width gap at the mesh's "
-            "own resolution. For the zero-width source use "
-            "SinusoidalGalerkinSolver(feed_model='point'), whose test "
-            "integral is what makes a delta source admissible"
-        )
+        raise NotImplementedError(_POINT_FEED_MODEL_REFUSAL)
 
     def _normalize_junction_ports(self, junction_ports):
         """Validate `junction_ports=` into a list of (junction_index, voltage).
