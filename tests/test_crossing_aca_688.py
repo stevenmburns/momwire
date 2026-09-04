@@ -202,3 +202,111 @@ def test_g688_5_dense_mesh_engages_low_rank_and_holds_parity(
         f"the ACA-engaged split diverges from dense-direct: {rel:.3e} "
         "relative (measured 2.7e-7, gate 1e-5)"
     )
+
+
+# ----------------------------------------------------------------------
+# The support restriction inside the near blocks
+# ----------------------------------------------------------------------
+
+
+def _naive_sandwich(A, B, iA, iB, K, k2sq):
+    """`_sandwich_dense` before the support restriction: every basis row of
+    both axes, including the ones that are identically zero on these points."""
+    P1, P2, P3, P4 = cf._row_weights(A, iA)
+    Q1, Q2, Q3, Q4 = cf._row_weights(B, iB)
+    return (
+        P1 @ K["U"] @ Q1.T
+        + P2 @ K["U"] @ Q2.T
+        + P3 @ (k2sq * K["V"] - K["dzW"]) @ Q3.T
+        + P3 @ K["W"] @ Q4.T
+        + P4 @ K["W"] @ Q3.T
+        - P4 @ K["V"] @ Q4.T
+    )
+
+
+def _captured_near_blocks(build, limit=12):
+    """The (A, B, iA, iB, K, k2sq) tuples a real fill hands `_sandwich_dense`.
+
+    Replaying recorded arguments beats synthesising them: the row weights,
+    the point subsets and the kernel tables then have the shapes and the
+    sparsity the split actually produces, which is the whole subject here.
+    """
+    _s, ctx, a_idx, b_idx = _deck_axes(build)
+    A = cf.axis_data(ctx, a_idx)
+    B = cf.axis_data(ctx, b_idx)
+    grabbed = []
+
+    class _Enough(Exception):
+        """Stop the fill once we have our sample — the far-block ACA pass and
+        the ends are not the subject, and paying for them here would put this
+        row over the suite's unmarked time ceiling."""
+
+    real = cf._sandwich_dense
+
+    def spy(*args):
+        grabbed.append(args)
+        if len(grabbed) >= limit:
+            raise _Enough
+        return real(*args)
+
+    orig, cf._sandwich_dense = cf._sandwich_dense, spy
+    try:
+        cf.cross_complete_block_split(ctx, a_idx, b_idx, A, B)
+    except _Enough:
+        pass
+    finally:
+        cf._sandwich_dense = orig
+    assert grabbed, "the fan deck no longer routes any block dense-direct"
+    return grabbed
+
+
+def test_g688_6_the_support_restriction_is_exact_and_not_vacuous():
+    """Skipping the basis rows with no support on a block's points is an
+    EXACT restriction: those rows and columns of the block are identically
+    zero, and the contractions over the points are untouched, so the
+    surviving entries are the same products in the same order.
+
+    Gated at a tight relative tolerance rather than bit equality on purpose.
+    The two forms hand BLAS different GEMM shapes, and BLAS picks kernels by
+    shape and by build, so a bit-equality pin is the kind that goes red on
+    another machine's allocator for no physical reason. (It is in fact
+    bit-identical on this build, and the driving-point Z is bit-identical on
+    the #838 BLE decks and FAN_SOIL_A_N2 — measured, not pinned.)
+
+    The second half is the load-bearing one: it asserts the mask actually
+    DROPS rows. Without it a deck whose blocks happened to touch every basis
+    function would pass this test while proving nothing, and so would a
+    `_support_rows` that regressed to "every row".
+    """
+    # A coarsened fan: the subject is the restriction's algebra, not the
+    # deck, and the fill's accelerated path runs SINGLE-THREADED inside an
+    # xdist worker — the deck as written costs 6 s there against 1.4 s
+    # serial, which is how an honest 1.4 s row lands over the 5 s ceiling.
+    build = fan_rise_deck(n_radials=3, n_per_edge_per_wire=[[5, 2]] * 3 + [[8]])
+    dropped = []
+    for A, B, iA, iB, K, k2sq in _captured_near_blocks(build):
+        got = cf._sandwich_dense(A, B, iA, iB, K, k2sq)
+        want = _naive_sandwich(A, B, iA, iB, K, k2sq)
+        assert got.shape == want.shape
+        scale = np.abs(want).max()
+        assert np.abs(got - want).max() <= 1e-13 * scale, (
+            f"the support restriction changed the block: "
+            f"{np.abs(got - want).max() / scale:.3e} relative"
+        )
+        rows = cf._support_rows(A, iA)
+        cols = cf._support_rows(B, iB)
+        dropped.append((rows.size / got.shape[0], cols.size / got.shape[1]))
+        # every row outside the mask really is zero in the reference form
+        off = np.setdiff1d(np.arange(got.shape[0]), rows)
+        assert not np.any(want[off, :]), "a row outside the support was nonzero"
+
+    live_r = max(r for r, _ in dropped)
+    area = max(r * c for r, c in dropped)
+    # Measured on this deck: 0.15 of rows, 0.09 of block area. On the 60-radial
+    # BLE deck the same masks are 5-7 live rows of 695 — the coarse fan here has
+    # so few basis functions that one block can reach 60% of the COLUMNS, which
+    # is why the area, not the column count, is the statement worth gating.
+    assert live_r < 0.5 and area < 0.25, (
+        "the support mask is not dropping rows, so the exactness check above "
+        f"is vacuous: live {live_r:.2f} of rows, {area:.2f} of block area"
+    )

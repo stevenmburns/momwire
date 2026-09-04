@@ -955,21 +955,54 @@ def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS)
     return t_ba
 
 
-def _row_weights(ax, ii):
+def _row_weights(ax, ii, rows=None):
     """The four per-basis row-weight matrices of one axis, restricted to
-    the point subset `ii`: (F·w·t̂x, F·w·t̂y, F·w·t̂z, F′·w)."""
+    the point subset `ii` — and, when `rows` is given, to those basis rows
+    as well: (F·w·t̂x, F·w·t̂y, F·w·t̂z, F′·w)."""
     tx, ty, tz = ax["t"][ii].T
-    Fw = ax["F"][:, ii] * ax["w"][ii]
-    Fdw = ax["Fd"][:, ii] * ax["w"][ii]
+    sel = (slice(None), ii) if rows is None else np.ix_(rows, ii)
+    Fw = ax["F"][sel] * ax["w"][ii]
+    Fdw = ax["Fd"][sel] * ax["w"][ii]
     return Fw * tx, Fw * ty, Fw * tz, Fdw
+
+
+def _support_rows(ax, ii):
+    """The basis rows that can be nonzero over the point subset `ii`.
+
+    A B-spline basis function has local support, so over one cluster block's
+    handful of points almost every row of the weight matrices is identically
+    zero. `w` and `t̂` vary by POINT, not by row, so `F` and `Fd` are the only
+    row-varying factors and their union is an exact superset of the live rows
+    — never a guess. NaN compares unequal to zero, so a poisoned row stays in
+    and still propagates rather than being silently dropped.
+    """
+    return np.flatnonzero(
+        np.any(ax["F"][:, ii] != 0, axis=1) | np.any(ax["Fd"][:, ii] != 0, axis=1)
+    )
 
 
 def _sandwich_dense(A, B, iA, iB, K, k2sq):
     """The five-term M+SW+SQ (main) sandwich over dense kernel matrices
-    restricted to (iA, iB) — the same term order as the reference fill."""
-    P1, P2, P3, P4 = _row_weights(A, iA)
-    Q1, Q2, Q3, Q4 = _row_weights(B, iB)
-    return (
+    restricted to (iA, iB) — the same term order as the reference fill.
+
+    Only the basis rows with support on those points take part. The rest give
+    identically-zero rows and columns of the block, so skipping them is an
+    EXACT restriction rather than an approximation: the contractions over the
+    points are kept in full, and the surviving entries are the same products
+    summed in the same order. Measured bit-for-bit on the #838 BLE decks and
+    FAN_SOIL_A_N2 — but that is not pinned, because BLAS chooses kernels by
+    shape and by build, so a residual elsewhere would be reassociation in the
+    GEMM and not the algebra. The crossgate tolerances are the gate.
+
+    It earns the indirection: on the 60-radial BLE deck the live rows are 5-7
+    of 695, so the naive form spends ~99% of its flops multiplying zeros
+    (5.13e10 mults across the fill against 6.4e7 restricted), and the routine
+    was 63% of that deck family's wall at 113 radials."""
+    rA = _support_rows(A, iA)
+    rB = _support_rows(B, iB)
+    P1, P2, P3, P4 = _row_weights(A, iA, rA)
+    Q1, Q2, Q3, Q4 = _row_weights(B, iB, rB)
+    block = (
         P1 @ K["U"] @ Q1.T
         + P2 @ K["U"] @ Q2.T
         + P3 @ (k2sq * K["V"] - K["dzW"]) @ Q3.T
@@ -977,6 +1010,9 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq):
         + P4 @ K["W"] @ Q3.T
         - P4 @ K["V"] @ Q4.T
     )
+    out = np.zeros((A["F"].shape[0], B["F"].shape[0]), dtype=block.dtype)
+    out[np.ix_(rA, rB)] = block
+    return out
 
 
 def _axis_segment_tree(geom, seg_idx, leaf):
