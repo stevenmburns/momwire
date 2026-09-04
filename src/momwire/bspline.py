@@ -88,6 +88,7 @@ from . import _wire_loading
 from . import _wire_spec
 from ._accel import acc as _acc
 from ._accel import MAX_N_QP as _ACCEL_MAX_N_QP
+from . import _surface_height
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -1298,6 +1299,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 else:
                     end_status[w] = j_idx
         gz = self.ground_z
+        _low_stand_off = []  # (h_min, a) per near-ground wire, momwire#865
         if gz is not None:
             media = self._wire_media()
             for w_idx, pl in enumerate(self.wires_polylines):
@@ -1321,10 +1323,54 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         "(both endpoints at ground_z) — degenerate over a "
                         "conducting ground"
                     )
+                # The validity FLOOR for the low-stand-off class (momwire#865).
+                # A wire "on the surface" is served as the elevated family at
+                # an explicit small height, but only down to h/a = 2: at that
+                # ratio the mesh check already moves ~4 %, and below it the
+                # fill is answering about a conductor closer to the interface
+                # than its own radius. Same "both endpoints" shape as the
+                # in-plane refusal above, so a vertical whose base merely
+                # reaches the plane is untouched — this is about an edge lying
+                # ALONGSIDE the interface, not one ending on it.
+                a_w = float(self._radius_per_wire[w_idx])
+                h_edge = pl_arr[:, 2] - gz
+                low = (h_edge > tol) & (
+                    h_edge < _surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a * a_w
+                )
+                if np.any(low[:-1] & low[1:]):
+                    h_min = float(np.min(h_edge[low]))
+                    raise ValueError(
+                        f"wire {w_idx} runs at h = {h_min * 1e3:.3f} mm above "
+                        f"the interface, h/a = {h_min / a_w:.2f}, below the "
+                        f"h/a = "
+                        f"{_surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a:.0f} "
+                        "validity floor for the low-stand-off class. A "
+                        "conductor closer to the interface than twice its own "
+                        "radius is outside what this fill answers: the mesh "
+                        "check already moves "
+                        f"{_surface_height.SURFACE_HEIGHT_CLASS.mesh_move_pct_at_floor:.0f} "
+                        "% at the floor itself. Raise the wire — for a real "
+                        "insulated conductor lying on soil the honest height "
+                        "is its radius plus its jacket, about "
+                        f"{_surface_height.SURFACE_HEIGHT_CLASS.default_h_mm:.1f} "
+                        "mm for No. 18 — or model it in the lower medium if "
+                        "it is genuinely buried. See "
+                        f"{_surface_height.SURFACE_HEIGHT_CLASS.issue}"
+                    )
+                # Advisory candidates: served, but inside the sensitive band.
+                adv = (h_edge > tol) & (
+                    h_edge
+                    < _surface_height.SURFACE_HEIGHT_CLASS.advisory_h_over_a * a_w
+                )
+                if np.any(adv[:-1] & adv[1:]):
+                    _low_stand_off.append((float(np.min(h_edge[adv])), a_w))
                 if start_status[w_idx] == "free" and z_at[0]:
                     start_status[w_idx] = "ground"
                 if end_status[w_idx] == "free" and z_at[-1]:
                     end_status[w_idx] = "ground"
+        if _low_stand_off:
+            h_min, a_at = min(_low_stand_off)
+            _surface_height.warn_surface_height(h_min, a_at, len(_low_stand_off))
         return start_status, end_status
 
     # ------------------------------------------------------------------

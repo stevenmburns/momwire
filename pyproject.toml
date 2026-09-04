@@ -164,6 +164,12 @@ testpaths = ["tests"]
 # gated here even though it is silent everywhere else. Verified, not assumed.
 filterwarnings = [
     "ignore:razor-2p is first order in the far mesh",
+    # momwire#865's low-stand-off advisory, silenced the same way and for the
+    # same reason: by its OPENING WORDS, never by category. Matching a category
+    # makes pytest import momwire while parsing filters, ahead of the conftest's
+    # per-worker OMP_NUM_THREADS pin. The tests that assert this advisory catch
+    # it explicitly with `pytest.warns`, which a filter here does not block.
+    "ignore:a conductor lies within a few radii of the ground",
 ]
 markers = [
     "slow: tests that take more than a couple seconds (deselect with -m 'not slow')",

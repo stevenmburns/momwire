@@ -84,6 +84,12 @@ _FIXTURE_GROUP_FILES = (
     # this entry is what stops the warm being paid once per worker.
     "test_grazing_band_838.py",
     "test_below_fills_568.py",
+    # momwire#865: the surface-radial anchor's decks are Sommerfeld solves of
+    # 5.7 s (N = 4) to 35 s (N = 16), and its assertions share them through a
+    # module-level cache. Scattered, each worker re-solved: measured 282 s
+    # ungrouped against ~80 s of actual distinct work, with single tests
+    # reading 281 s purely from duplication. Same shape as the entries above.
+    "test_surface_radials_865.py",
 )
 
 
