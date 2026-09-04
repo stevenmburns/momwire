@@ -1324,47 +1324,86 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         "conducting ground"
                     )
                 # The validity FLOOR for the low-stand-off class (momwire#865).
-                # A wire "on the surface" is served as the elevated family at
-                # an explicit small height, but only down to h/a = 2: at that
-                # ratio the mesh check already moves ~4 %, and below it the
-                # fill is answering about a conductor closer to the interface
-                # than its own radius. Same "both endpoints" shape as the
-                # in-plane refusal above, so a vertical whose base merely
-                # reaches the plane is untouched — this is about an edge lying
-                # ALONGSIDE the interface, not one ending on it.
-                # The CONDUCTOR radius, not the kernel one. A jacket makes
-                # a' > a (momwire#865), and measuring the stand-off against
-                # a' would tighten this floor for coated wires on the
-                # strength of a quasi-static charge radius — which is not
-                # what the mesh-stability evidence behind h/a >= 2 measured.
+                # Two forms, because the evidence has two shapes:
+                #
+                #   bare wire:      h >= 2a
+                #   jacketed wire:  h >= b   (the jacket's OUTER radius)
+                #
+                # The bare bound is mesh stability. The jacketed one is
+                # physical and reads better than any ratio: the jacket may
+                # REST on the soil but not sink into it. At h = b the jacket
+                # exactly touches the interface; below it the jacket
+                # intersects the ground, which is a partly-buried wire and a
+                # different problem from a wire lying on top.
+                #
+                # Measured (N = 4, n_rad 10 -> 30, |dZ|/|Z|):
+                #
+                #   bare   at h = 1.02 mm (h/a 2.00)   5.81 %   <- admitted
+                #   COATED at h = 0.90 mm (h/a 1.76)   2.47 %   <- was refused
+                #   bare   at h = 0.90 mm (h/a 1.76)   5.81 %
+                #
+                # The coated deck BELOW the old floor is more than twice as
+                # mesh-stable as the bare deck the floor admitted, so refusing
+                # it was refusing the easier problem. The equivalent radius
+                # (momwire#874) enlarges the kernel's a, and the a^2-regularised
+                # kernel is better conditioned for it — the same thing that
+                # drives h/a' to 1.21 is what smooths the fill. Note also that
+                # the two bare rows are IDENTICAL: in this range the bare
+                # instability is not a function of h at all, it is the mesh.
+                #
+                # Same "both endpoints" shape as the in-plane refusal above, so
+                # a vertical whose base merely reaches the plane is untouched —
+                # this is about an edge lying ALONGSIDE the interface, not one
+                # ending on it.
+                #
+                # The CONDUCTOR radius, not the kernel one: measuring the
+                # stand-off against a' would tighten the bare bound on the
+                # strength of a quasi-static charge radius, which is not what
+                # the mesh evidence measured.
                 a_w = float(self._conductor_radius_per_wire[w_idx])
-                h_edge = pl_arr[:, 2] - gz
-                low = (h_edge > tol) & (
-                    h_edge < _surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a * a_w
+                jacket_b = None
+                if self.insulation_radius is not None and np.isfinite(
+                    self.insulation_radius[w_idx]
+                ):
+                    jacket_b = float(self.insulation_radius[w_idx])
+                h_floor = (
+                    jacket_b
+                    if jacket_b is not None
+                    else _surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a * a_w
                 )
+                h_edge = pl_arr[:, 2] - gz
+                low = (h_edge > tol) & (h_edge < h_floor)
                 if np.any(low[:-1] & low[1:]):
                     h_min = float(np.min(h_edge[low]))
+                    why = (
+                        (
+                            f"below b = {jacket_b * 1e3:.3f} mm, its jacket's "
+                            "OUTER radius. A jacketed wire may REST on the soil "
+                            "but not sink into it: at h = b the jacket exactly "
+                            "touches the interface, and below that the jacket "
+                            "intersects the ground, which is a partly-buried "
+                            "wire and a different problem. Lay it at h = b, or "
+                            "model it in the lower medium if it is genuinely "
+                            "buried"
+                        )
+                        if jacket_b is not None
+                        else (
+                            f"below the h/a = "
+                            f"{_surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a:.0f} "
+                            "validity floor for a BARE conductor, which is "
+                            "mesh stability rather than physics: the check "
+                            "moves "
+                            f"{_surface_height.SURFACE_HEIGHT_CLASS.mesh_move_pct_at_floor:.0f} "
+                            "% at the floor itself. Raise the wire, or give it "
+                            "the jacket it really has — an insulated conductor "
+                            "lying on soil is served down to h = b, and for "
+                            "No. 18 with a 0.4 mm wall that is h/a = 1.76, "
+                            "below this bare bound"
+                        )
+                    )
                     raise ValueError(
                         f"wire {w_idx} runs at h = {h_min * 1e3:.3f} mm above "
-                        f"the interface, h/a = {h_min / a_w:.2f}, below the "
-                        f"h/a = "
-                        f"{_surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a:.0f} "
-                        "validity floor for the low-stand-off class. A "
-                        "conductor closer to the interface than twice its own "
-                        "radius is outside what this fill answers: the mesh "
-                        "check already moves "
-                        f"{_surface_height.SURFACE_HEIGHT_CLASS.mesh_move_pct_at_floor:.0f} "
-                        "% at the floor itself. Raise the wire — for a real "
-                        "insulated conductor lying on soil the honest height "
-                        "is its radius plus its jacket, about "
-                        f"{_surface_height.SURFACE_HEIGHT_CLASS.default_h_mm:.1f} "
-                        "mm for No. 18 — or model it in the lower medium if "
-                        "it is genuinely buried. NOTE a thin-jacketed wire "
-                        "resting ON soil sits at h = b, its jacket's outer "
-                        "radius, which for No. 18 with a 0.4 mm wall is "
-                        "h/a = 1.76 — below this floor. That configuration "
-                        "is outside the serve today rather than served "
-                        "approximately. See "
+                        f"the interface, h/a = {h_min / a_w:.2f}, {why}. See "
                         f"{_surface_height.SURFACE_HEIGHT_CLASS.issue}"
                     )
                 # Advisory candidates: served, but inside the sensitive band.

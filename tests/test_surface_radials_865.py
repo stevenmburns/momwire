@@ -342,3 +342,78 @@ def test_the_advisory_quotes_the_committed_row_not_a_literal():
     assert "indicative rather than predictive" in text
     dense = surface_height_message(2.0 * A_18AWG, A_18AWG, 32)
     assert "indicative rather than predictive" not in dense
+
+
+# ---------------------------------------------------------------------------
+# The floor has TWO forms (momwire#874 follow-up)
+# ---------------------------------------------------------------------------
+#
+#   bare wire:      h >= 2a      (mesh stability)
+#   jacketed wire:  h >= b       (the jacket rests on the soil, does not sink)
+#
+# Measured, N = 4, n_rad 10 -> 30, |dZ|/|Z|:
+#
+#   bare   at h = 1.02 mm (h/a 2.00)   5.81 %   <- the bare floor admits this
+#   COATED at h = 0.90 mm (h/a 1.76)   2.47 %   <- and used to refuse THIS
+#   bare   at h = 0.90 mm (h/a 1.76)   5.81 %
+#
+# The coated deck below the old floor is more than twice as stable as the bare
+# deck the floor admitted. The two bare rows being identical is its own point:
+# in this range the bare instability is the MESH, not h.
+#
+# Metric note, so the record reads as one measurement: the 4 % in
+# `_surface_height` is dR/R; these are |dZ|/|Z| on the same deck, where the
+# same run gives 3.97 % as dR/R.
+
+_JACKET_B = 0.9e-3
+_JACKET_EPS = 3.0
+
+
+def _tiny_coated(h, b=_JACKET_B):
+    s = _tiny(h)
+    return BSplineSolver(
+        wires=s.wires_polylines,
+        n_per_edge_per_wire=[[2], [2]],
+        junctions=[[(0, "end"), (1, "start")]],
+        feeds=[(1, 0.05, 1 + 0j)],
+        wavelength=WAVELENGTH,
+        wire_radius=A_18AWG,
+        ground_z=0.0,
+        ground_eps=(EPS_R, SIGMA),
+        ground_model="sommerfeld",
+        insulation_radius=[b, np.nan],
+        insulation_eps_r=[_JACKET_EPS, np.nan],
+    )
+
+
+def test_a_jacketed_wire_is_served_where_a_bare_one_is_refused():
+    """h = b is below the bare h/a = 2 bound and is now served, because the
+    measurement says the coated deck there is the EASIER problem."""
+    h = _JACKET_B  # h/a = 1.76, under the bare floor
+    with pytest.raises(ValueError, match="validity floor for a BARE"):
+        _tiny(h).compute_impedance()
+    _tiny_coated(h).compute_impedance()  # must not raise
+
+
+def test_a_jacket_may_rest_on_the_soil_but_not_sink_into_it():
+    """Below h = b the jacket intersects the ground, which is a partly-buried
+    wire — refused, and the sentence says so in those words."""
+    with pytest.raises(ValueError, match="may REST on the soil but not sink"):
+        _tiny_coated(_JACKET_B * 0.9).compute_impedance()
+
+
+def test_the_bare_bound_is_unchanged_for_a_bare_wire():
+    """The relaxation is for jacketed wires only; nothing about a bare deck
+    moves, and its refusal still names mesh stability rather than physics."""
+    with pytest.raises(ValueError, match="mesh stability rather than physics"):
+        _tiny(1.5 * A_18AWG).compute_impedance()
+    _tiny(2.0 * A_18AWG).compute_impedance()  # exactly on it, still served
+
+
+def test_a_thicker_jacket_moves_the_floor_with_it():
+    """The jacketed bound is b itself, so it tracks the wire rather than being
+    a constant — a vacuity guard on `h_floor` actually reading the jacket."""
+    thick = 2.0e-3
+    _tiny_coated(thick, b=thick).compute_impedance()  # at h = b: served
+    with pytest.raises(ValueError, match="may REST on the soil"):
+        _tiny_coated(thick * 0.9, b=thick).compute_impedance()
