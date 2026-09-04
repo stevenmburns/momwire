@@ -67,6 +67,22 @@ def _buried_kw():
     )
 
 
+def _find_for(cls, axis_a, value_a, axis_b, value_b):
+    """The row, plus the check that binds the gate to the data.
+
+    A coupling is PER-CLASS, and the table's `applies_to` is the only place
+    that fact lives. This asserts the class the test actually constructs is
+    one the row names — so the data cannot drift from what the gate knows,
+    which is exactly how the field came to be missing in the first place.
+    """
+    c = _find(axis_a, value_a, axis_b, value_b)
+    assert cls.__name__ in c.applies_to, (
+        f"{cls.__name__} raises this coupling but the row names "
+        f"{c.applies_to} — applies_to is wrong or the gate is on the wrong class"
+    )
+    return c
+
+
 def _find(axis_a, value_a, axis_b, value_b):
     for c in COUPLINGS:
         if (c.axis_a, c.value_a, c.axis_b, c.value_b) == (
@@ -108,7 +124,9 @@ def test_axis_sides_name_real_axes_and_kwarg_sides_are_marked():
 
 
 def test_point_matching_really_refuses_the_point_gap():
-    c = _find("testing", "point-matching", "feed_model", "point-gap")
+    c = _find_for(
+        SinusoidalSolver, "testing", "point-matching", "feed_model", "point-gap"
+    )
     with pytest.raises(NotImplementedError) as exc:
         SinusoidalSolver(
             wires=[np.array([(0.0, 0.0, -5.0), (0.0, 0.0, 5.0)])],
@@ -124,7 +142,7 @@ def test_point_matching_really_refuses_the_point_gap():
     "cls,value", [(HMatrixSolver, "aca"), (ArrayBlockSolver, "element-block")]
 )
 def test_the_accelerated_assemblies_really_refuse_buried(cls, value):
-    c = _find("solve_strategy", value, "wire_position", "buried")
+    c = _find_for(cls, "solve_strategy", value, "wire_position", "buried")
     s = cls(**_buried_kw())
     with pytest.raises(NotImplementedError) as exc:
         s.build_hmatrix()
@@ -133,14 +151,16 @@ def test_the_accelerated_assemblies_really_refuse_buried(cls, value):
 
 
 def test_the_extended_kernel_really_refuses_buried():
-    c = _find("kernel", "extended", "wire_position", "buried")
+    c = _find_for(BSplineSolver, "kernel", "extended", "wire_position", "buried")
     with pytest.raises((NotImplementedError, ValueError)) as exc:
         BSplineSolver(**_buried_kw(), extended_kernel=True).compute_impedance()
     assert c.reason in str(exc.value)
 
 
 def test_the_extended_kernel_really_requires_the_near_correction():
-    c = _find("kernel", "extended", "near_correction", "False")
+    c = _find_for(
+        SinusoidalGalerkinSolver, "kernel", "extended", "near_correction", "False"
+    )
     with pytest.raises(NotImplementedError) as exc:
         SinusoidalGalerkinSolver(
             wires=[np.array([(0.0, 0.0, -5.0), (0.0, 0.0, 5.0)])],
@@ -181,7 +201,9 @@ def test_the_stepped_radius_junction_refusal_needs_the_step():
     and it would send a user to the wrong workaround. Uniform-radius junctions
     are the overwhelmingly common case and are untouched.
     """
-    c = _find("kernel", "extended", "junction_ports", "True")
+    c = _find_for(
+        SinusoidalGalerkinSolver, "kernel", "extended", "junction_ports", "True"
+    )
     assert c.condition, "the conditional entry lost its condition"
 
     with pytest.raises((NotImplementedError, ValueError)) as exc:
@@ -237,3 +259,21 @@ def test_every_reason_IS_the_module_constant_and_not_a_copy():
             f"{c.axis_a}={c.value_a} x {c.axis_b}: reason is a COPY, not the "
             "module constant"
         )
+
+
+def test_every_row_names_a_real_solver_class_it_applies_to():
+    """`applies_to` must be populated and must name importable classes.
+
+    An empty tuple would make the AK-side filter show a coupling to nobody;
+    a typo would make it show to nobody while looking populated. Both are the
+    silent-omission direction, so both fail here.
+    """
+    import momwire
+
+    for c in COUPLINGS:
+        assert c.applies_to, f"{c.axis_a}={c.value_a}: applies_to is empty"
+        for name in c.applies_to:
+            assert isinstance(getattr(momwire, name, None), type), (
+                f"{c.axis_a}={c.value_a}: applies_to names {name!r}, "
+                "which is not a momwire solver class"
+            )

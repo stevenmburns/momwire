@@ -19,6 +19,11 @@ whose description drifts from its refusal is worse than one that is
 undocumented, because it reads as authoritative. Two of the five needed their
 literal hoisted out of the `raise` first; three were already module constants.
 
+`inspect.signature` IS NOT THE CHECK for whether a class takes a keyword —
+kwargs reach the parent, so the signature reports `SinusoidalGalerkinSolver`
+as not taking `extended_kernel` while it plainly does. Construct the cell;
+that is what `applies_to` records and what the gate verifies.
+
 THE TABLE IS THE INVENTORY, NOT THE PANEL'S MENU. Two entries name a
 non-axis keyword (`near_correction`, and a stepped radius at a junction), so
 nothing can render them as a greyed-out cell today. They are here anyway,
@@ -55,6 +60,14 @@ class Coupling(NamedTuple):
     combination is refused only in a narrower case — carried verbatim to the
     consumer, because "refused" and "refused when X" are different sentences
     and collapsing them overstates the first.
+
+    `applies_to` names the solver class(es) that actually raise this. It is
+    NOT decoration: a coupling is per-class, and a consumer filtering by "can
+    this backend be configured to `value_a`" mis-attributes three of the six
+    rows below — it would tell a `bspline` user that the extended kernel
+    forbids `near_correction=False`, a keyword `BSplineSolver` does not have
+    (measured: TypeError, not a refusal). Filter on this field, never on
+    `value_a` reachability.
     """
 
     axis_a: str
@@ -65,6 +78,7 @@ class Coupling(NamedTuple):
     issue: str
     b_is_axis: bool = True
     condition: str | None = None
+    applies_to: tuple[str, ...] = ()
 
 
 COUPLINGS: tuple[Coupling, ...] = (
@@ -80,6 +94,9 @@ COUPLINGS: tuple[Coupling, ...] = (
         value_b="point-gap",
         reason=_POINT_FEED_MODEL_REFUSAL,
         issue="momwire#212",
+        # The point-matched class only. Its Galerkin subclass SERVES the point
+        # gap — that is the whole reason the pair exists.
+        applies_to=("SinusoidalSolver",),
     ),
     # An accelerated assembly has no per-segment medium, so choosing it gives
     # up buried geometry. Two entries rather than one with a value list: the
@@ -92,6 +109,7 @@ COUPLINGS: tuple[Coupling, ...] = (
         value_b="buried",
         reason=HMatrixSolver.capabilities.refusals["buried"],
         issue="momwire#553",
+        applies_to=("HMatrixSolver",),
     ),
     Coupling(
         axis_a="solve_strategy",
@@ -100,6 +118,9 @@ COUPLINGS: tuple[Coupling, ...] = (
         value_b="buried",
         reason=HMatrixSolver.capabilities.refusals["buried"],
         issue="momwire#553",
+        # The two rows exist BECAUSE the cells differ; naming both classes on
+        # each would undo that.
+        applies_to=("ArrayBlockSolver",),
     ),
     # The extended kernel's eligibility is a coaxial-and-equal-radius grouping
     # scored across the whole geometry, and nobody has measured what that
@@ -111,6 +132,7 @@ COUPLINGS: tuple[Coupling, ...] = (
         value_b="buried",
         reason=_BURIED_EXTENDED_KERNEL_REFUSAL,
         issue="momwire#553",
+        applies_to=("BSplineSolver",),
     ),
     # Not an axis pair: `near_correction` is a constructor keyword. Kept
     # because it is a real refused combination and the inventory is the point.
@@ -122,6 +144,7 @@ COUPLINGS: tuple[Coupling, ...] = (
         reason=_EK_NEAR_CORRECTION_REFUSAL,
         issue="momwire#246",
         b_is_axis=False,
+        applies_to=("SinusoidalGalerkinSolver",),
     ),
     # Conditional, and the condition is load-bearing: uniform-radius junctions
     # are untouched, which is the overwhelmingly common case. Stating this one
@@ -136,5 +159,6 @@ COUPLINGS: tuple[Coupling, ...] = (
         issue="momwire#398",
         b_is_axis=False,
         condition="a radius step at the junction",
+        applies_to=("SinusoidalGalerkinSolver",),
     ),
 )
