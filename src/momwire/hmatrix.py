@@ -324,6 +324,10 @@ class HMatrixSolver(BSplineSolver):
     # `HMatrixSolver`'s solve with a different structural decomposition and
     # the same guard, on the same fills.
     capabilities = BSplineSolver.capabilities._replace(
+        # Same physics as BSplineSolver, different assembly — which is the
+        # pair antennaknobs#1006 opens with: nothing in a name says these two
+        # are REQUIRED to agree numerically and differ only here.
+        axes={**BSplineSolver.capabilities.axes, "solve_strategy": ("aca",)},
         buried=False,
         refusals={
             **BSplineSolver.capabilities.refusals,

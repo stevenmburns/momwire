@@ -1290,6 +1290,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # actually has — it knows which ground it asked for, not the abstraction
     # "finite_ground".
     capabilities = Capabilities(
+        # Compositional row (antennaknobs#1006): NEC-5's formulation twin —
+        # a tent basis tested on PATH integrals between element centroids
+        # ("razor-blade"), which is its own value on the testing axis rather
+        # than a flavour of Galerkin. `nec5_quadrature=` is a kwarg, so both
+        # quadratures are reachable from this one class.
+        axes={
+            "basis": ("tent",),
+            "testing": ("path",),
+            "charge_support": ("basis-implied",),
+            "kernel": ("reduced", "extended"),
+            "quadrature": ("converged", "nec5"),
+            "solve_strategy": ("dense",),
+            "feed_model": ("node-port",),
+        },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
         extended_kernel=True,

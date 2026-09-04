@@ -694,6 +694,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # be buried IN — and they were missing entirely: `refusal("buried",
     # "pec")` answered None while `_medium_spec.wire_media` raised.
     capabilities = Capabilities(
+        # Compositional row (antennaknobs#1006). `degree=` is a kwarg, so
+        # this class IS both tent and quadratic — the set, not one value.
+        # `extended_kernel=` likewise gives it both kernels.
+        axes={
+            "basis": ("bspline-1", "bspline-2"),
+            "testing": ("galerkin",),
+            "charge_support": ("spline",),
+            "kernel": ("reduced", "extended"),
+            "quadrature": ("converged",),
+            "solve_strategy": ("dense",),
+            "feed_model": ("segment-gap",),
+        },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
         extended_kernel=True,

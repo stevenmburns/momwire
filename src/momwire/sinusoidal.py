@@ -402,6 +402,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # broader `"contact+finite_ground"`, which was the pattern this comment
     # used to point at, went when its Sommerfeld half was served.
     capabilities = Capabilities(
+        # Compositional row (antennaknobs#1006): NEC-2's three-term basis,
+        # point matched. The Galerkin sibling replaces `testing` only.
+        axes={
+            "basis": ("sinusoidal-3term",),
+            "testing": ("point-matching",),
+            "charge_support": ("basis-implied",),
+            "kernel": ("reduced", "extended"),
+            "quadrature": ("converged",),
+            "solve_strategy": ("dense",),
+            "feed_model": ("segment-gap",),
+        },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=True,
         extended_kernel=True,

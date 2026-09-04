@@ -54,6 +54,85 @@ _AXES = (
 )
 
 
+# --------------------------------------------------------------------------
+# THE COMPOSITIONAL AXES (antennaknobs#1006 G2-1).
+#
+# The booleans above say what a solver SERVES. These say what it is MADE OF,
+# which is a different question and the one a panel needs: a user choosing
+# between `bspline` and `hmatrix` cannot see from a name that the physics is
+# identical and only the solve strategy differs, and a user choosing
+# `sinusoidal-galerkin` over `sinusoidal` cannot see that the basis is the
+# same and only the testing changed. The roster names are, in effect, saved
+# presets over the product space below, which nobody had written down.
+#
+# VALUES ARE A SET PER SOLVER, NOT ONE VALUE. Several of these axes are
+# constructor kwargs rather than separate classes — `degree=`,
+# `nec5_quadrature=`, `extended_kernel=`, `feed_model=` — so a class row
+# declares WHICH VALUES IT CAN BE CONFIGURED TO, and a preset name picks one
+# point. Declaring a single value would have to lie about `BSplineSolver`,
+# which is both bspline-1 and bspline-2.
+#
+# This is DATA, deliberately: the module contract at the top of this file says
+# one NamedTuple plus one method, no validation machinery. Nothing here
+# validates a row against this vocabulary; it is the written-down spelling so
+# three consumers stop inventing their own, and a generated matrix can carry a
+# column per axis. A row that declares a value not listed here is a row that
+# found a value this comment has not caught up with.
+AXIS_VALUES: Mapping[str, tuple[str, ...]] = {
+    "basis": ("pulse", "tent", "bspline-1", "bspline-2", "sinusoidal-3term"),
+    "testing": ("point-matching", "galerkin", "path"),
+    "charge_support": ("point", "dual-cell", "spline", "basis-implied"),
+    "kernel": ("reduced", "extended"),
+    "quadrature": ("converged", "nec5"),
+    "solve_strategy": ("dense", "aca", "element-block"),
+    "feed_model": ("segment-gap", "point-gap", "node-port"),
+}
+
+# DERIVED AXES — in the vocabulary so it is complete, and deliberately NOT
+# fields a row restates. `ground_model` is `grounds` (plus the universal free
+# space); `wire_position` is the `buried` / `contact` pair. Both are already
+# declared, already served through to consumers, and already gated, so a row
+# repeating them would be a second source of truth for a fact this module
+# already holds — the drift shape momwire#568 records in another costume.
+#
+# Read them through `axes_for()` below, never by reaching for the booleans:
+# a recipe written in prose here would be that same second source of truth
+# the moment a consumer implemented it slightly differently.
+DERIVED_AXES: tuple[str, ...] = ("ground_model", "wire_position")
+
+
+def axes_for(row) -> dict[str, frozenset[str]]:
+    """Every axis of one row — declared union derived — as axis -> values.
+
+    THE single place the derived pair is computed. The generated matrix, its
+    drift test and antennaknobs' `/capabilities` all call this rather than
+    each deriving `ground_model` from `grounds` and `wire_position` from
+    `buried`/`contact` in their own way.
+
+    "free" and "above" are universal, exactly as free space is universal in
+    `grounds`: a solver that fills no wire below the interface and stands no
+    end in the plane still serves a wire in the air, and there is no cell to
+    declare for it. So both derived axes always carry at least one value even
+    on the empty prototype row, while the DECLARED axes of that row are simply
+    absent — which is the distinction a consumer needs, and why this returns
+    only the keys a row actually has rather than padding the vocabulary out
+    with empty sets.
+
+    A module-level function rather than a method, so the top-of-file contract
+    ("one NamedTuple plus ONE method") still reads true: `refusal` remains the
+    tuple's only public method, and this sits beside `_combo_key` as a helper
+    over the row.
+    """
+    out = {axis: frozenset(values) for axis, values in row.axes.items()}
+    out["ground_model"] = frozenset(("free",)) | frozenset(row.grounds)
+    out["wire_position"] = (
+        frozenset(("above",))
+        | (frozenset(("contact",)) if row.contact else frozenset())
+        | (frozenset(("buried",)) if row.buried else frozenset())
+    )
+    return out
+
+
 def _combo_key(cells) -> str:
     return "+".join(
         sorted(
@@ -164,6 +243,20 @@ class Capabilities(NamedTuple):
     # publish that omission as a capability.
     buried: bool = False
     contact: bool = False
+    # The compositional row (antennaknobs#1006 G2-1): axis name -> the values
+    # THIS solver class can be configured to, from `AXIS_VALUES` above. Last
+    # and defaulted for the same reason every field since `knot_feeds` is —
+    # a NamedTuple default has to come last, and the ~200-line prototype the
+    # design doc's §0.2 builds with an EMPTY row must keep working.
+    #
+    # An empty mapping means "this row has not been described compositionally
+    # yet", which is honestly different from every other default here: the
+    # booleans default to the SAFE direction (refused), because publishing an
+    # undeclared capability is the failure they guard. There is no unsafe
+    # direction for a description — a missing axis renders as unknown and
+    # nothing is claimed — so this one defaults to absent rather than to a
+    # guess, and a consumer must handle a row that says nothing.
+    axes: Mapping[str, tuple[str, ...]] = {}
 
     def _served(self, cell: str) -> bool:
         if cell in ("pec", "refl-coef", "sommerfeld"):

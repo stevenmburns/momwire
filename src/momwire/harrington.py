@@ -190,6 +190,17 @@ class HarringtonSolver(PulseSolver):
     """
 
     capabilities = Capabilities(
+        # Compositional row (antennaknobs#1006): identical to `PulseSolver`
+        # but for where the charge is supported — Harrington's dual cell.
+        axes={
+            "basis": ("pulse",),
+            "testing": ("point-matching",),
+            "charge_support": ("dual-cell",),
+            "kernel": ("reduced",),
+            "quadrature": ("converged",),
+            "solve_strategy": ("dense",),
+            "feed_model": ("segment-gap",),
+        },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=False,
         extended_kernel=False,

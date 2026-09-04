@@ -23,6 +23,7 @@ import difflib
 import pathlib
 import sys
 
+from momwire._capabilities import AXIS_VALUES, DERIVED_AXES, axes_for
 from momwire.deck._solver import BASES, NEC2_BASES
 from momwire.harrington import HarringtonSolver
 from momwire.pulse import PulseSolver
@@ -193,6 +194,58 @@ def render() -> str:
     # because the tree deliberately shares sentences across rows — one message,
     # not a copy in each — and printing four identical paragraphs would hide
     # exactly the property the sharing exists for.
+    # -- what each solver is MADE OF (antennaknobs#1006) ------------------
+    #
+    # The tables above say what a row SERVES. This one says what it is
+    # composed of, which is the question a panel needs and the one the
+    # roster names were silently carrying: `bspline` and `hmatrix` are
+    # identical physics differing in assembly, `sinusoidal` and its Galerkin
+    # sibling are one basis differing in testing, and nothing in either name
+    # says so.
+    #
+    # Values come from `axes_for()` — declared union derived — never from the
+    # booleans directly, so `ground_model` and `wire_position` are computed in
+    # exactly one place for this document, its drift test and antennaknobs'
+    # /capabilities alike.
+    axis_names = list(AXIS_VALUES) + list(DERIVED_AXES)
+    rows = []
+    for cls in CLASSES:
+        got = axes_for(cls.capabilities)
+        cells = []
+        for axis in axis_names:
+            vals = got.get(axis)
+            # A row that has not been described compositionally renders as an
+            # explicit gap, never as an empty cell: "no axes declared" and "no
+            # values on this axis" would otherwise look identical, and the
+            # first is a row nobody has written while the second is a claim.
+            cells.append("*not described*" if not vals else " / ".join(sorted(vals)))
+        rows.append([f"`{cls.__name__}`", *cells])
+    lines += [
+        "",
+        "## What each solver is made of",
+        "",
+        "The tables above are what a row SERVES. This is what it IS — the axes",
+        "antennaknobs#1006 named, so a panel can show that `bspline` and",
+        "`hmatrix` differ in assembly and nothing else, and that",
+        "`sinusoidal-galerkin` differs from `sinusoidal` in the testing alone.",
+        "",
+        "**A cell lists every value the class can be configured to, not one",
+        "value.** `degree=`, `nec5_quadrature=`, `extended_kernel=` and",
+        "`feed_model=` are constructor keywords rather than separate classes, so",
+        "one row is genuinely both `bspline-1` and `bspline-2`; a roster name is",
+        "a saved preset picking one point in this space.",
+        "",
+        f"`{'` / `'.join(DERIVED_AXES)}` are DERIVED from `grounds` and",
+        "`buried`/`contact` by `axes_for()` rather than restated per row, so",
+        "they cannot drift from the cells above. `free` and `above` are",
+        "universal on them for the same reason free space is not a ground cell.",
+        "",
+        "*not described* is a row carrying no compositional declaration at all —",
+        "a gap, not a claim of emptiness.",
+        "",
+    ]
+    lines += _table(["solver", *[f"`{a}`" for a in axis_names]], rows)
+
     sites: dict[str, list[str]] = {}
     for cls in CLASSES:
         for key, reason in sorted(cls.capabilities.refusals.items()):
