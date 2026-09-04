@@ -20,6 +20,7 @@ that test even if it technically works.
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import Mapping, NamedTuple
 
 # The boolean axes, in LOGICAL order (not literal field order — a NamedTuple
@@ -256,7 +257,12 @@ class Capabilities(NamedTuple):
     # direction for a description — a missing axis renders as unknown and
     # nothing is claimed — so this one defaults to absent rather than to a
     # guess, and a consumer must handle a row that says nothing.
-    axes: Mapping[str, tuple[str, ...]] = {}
+    # `MappingProxyType({})` rather than `{}`: a NamedTuple default is one
+    # object shared by every row that omits the field, so a bare `{}` is a
+    # shared mutable. Nothing mutates it and nothing is likely to, but the
+    # proxy makes that a guarantee instead of a convention — and this row is
+    # handed to consumers in two other repos.
+    axes: Mapping[str, tuple[str, ...]] = MappingProxyType({})
 
     def _served(self, cell: str) -> bool:
         if cell in ("pec", "refl-coef", "sommerfeld"):
