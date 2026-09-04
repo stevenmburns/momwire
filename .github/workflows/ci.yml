@@ -259,7 +259,8 @@ jobs:
     # 5:19 instead of 2:02.
     runs-on: ubuntu-latest
     if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      (github.event_name == 'workflow_dispatch'
+       || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
       && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v7
@@ -284,7 +285,8 @@ jobs:
     # 75 PRs against 1.5 min added to every review cycle. It runs one merge
     # later instead, where nobody is waiting on it.
     if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      (github.event_name == 'workflow_dispatch'
+       || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
       && needs.changes.outputs.code == 'true'
     # The slow-marked tests are the solver-regression pins (M3/M4 reference
     # constants, near-open collapse, section-6 oracle, EK brute-force sweep)
@@ -371,10 +373,13 @@ jobs:
     # free-space truths. Same reasoning as test-memgate: certification, not
     # an edit-loop guard — runs once on push to main so a regression is
     # caught right after merge instead of on every review cycle. Must NOT
-    # run on pull_request: the `if` below is the enforcement.
+    # run on pull_request: the `if` below is still the enforcement, and
+    # `workflow_dispatch` is not `pull_request` — a branch can BUY this lane
+    # deliberately without it becoming a gate everyone pays for.
     runs-on: ubuntu-latest
     if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      (github.event_name == 'workflow_dispatch'
+       || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
       && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v7
@@ -412,10 +417,12 @@ jobs:
     # attention cost on every PR iteration. Runs once, on push to main, so a
     # regression is caught right after merge instead of on every review
     # cycle. Must NOT run on pull_request: the `if` below is the enforcement
-    # (this workflow's own `pull_request` trigger would otherwise start it).
+    # (this workflow's own `pull_request` trigger would otherwise start it);
+    # `workflow_dispatch` is not `pull_request`, so buying it stays opt-in.
     runs-on: ubuntu-latest
     if: >-
-      github.event_name == 'push' && github.ref == 'refs/heads/main'
+      (github.event_name == 'workflow_dispatch'
+       || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
       && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v7
