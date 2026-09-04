@@ -25,6 +25,29 @@ the BODY of that message, not the whole of it. So:
 
 Equality against the raised string would have been wrong for two of the six
 entries, and asserting it was the first thing this file got wrong.
+
+A GATE WHOSE PASSING CONDITION IS THAT THE AUTHOR ALSO EDITED THE CHECKLIST
+MEASURES THE AUTHOR, NOT THE CODE. That is the general rule, and this file
+learned it the expensive way (momwire#888). The coverage gate below used to
+compare COUPLINGS against a literal set written a few lines above it, so
+adding a row AND adding its name to that set turned it green with no
+construction anywhere — which is exactly what happened while the four #888
+rows were being written, and it passed. Its name said "covered by a
+construction"; what it actually checked was that someone had typed the row
+twice.
+
+So the checklist is now derived from evidence the tests themselves leave: the
+`_find_for(...)` CALL SITES in this module, read out of its own source. A row
+counts as covered only if some test looks it up in order to build it, and
+`_find_for` separately asserts the class it was handed is one the row's
+`applies_to` names — so a call site is bound to a construction AND to the
+data, and neither can be satisfied by editing a list.
+
+Static parsing rather than a set recorded at runtime, which was the tempting
+repair and the wrong one: this suite runs under `--dist loadgroup`, so a
+module-global "what did we actually build" is split across xdist workers and
+under-reports — a gate quietly measuring less than it claims, which is the
+same family of failure one level up.
 """
 
 from __future__ import annotations
