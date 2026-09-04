@@ -898,11 +898,31 @@ class ArrayBlockSolver(HMatrixSolver):
     `compute_impedance` / `compute_y_matrix` overrides arrive in P2; until then
     they resolve to the dense `BSplineSolver` path via the base class.
 
+    CAPABILITIES: this class carried NO row of its own until
+    antennaknobs#1006, inheriting `HMatrixSolver`'s by plain attribute
+    lookup. That was invisible while the row said only what a solver
+    SERVES — the two serve the same things — and became wrong the moment it
+    also said what a solver is MADE OF, because it reported this solver's
+    assembly as ACA. Writing the axes down is what surfaced it, which is the
+    payoff antennaknobs#1006 predicted.
+
     On a mesh with no repeated-block structure to exploit (a single connected
     structure, or all-distinct element shapes) — or when one element is too
     large to densify — the solve degrades to the parent H-matrix instead of
     forcing the block decomposition (issue #143); see `_degenerate_partition`.
     """
+
+    # Inherits HMatrixSolver's row in every other respect — same basis, same
+    # testing, same served axes — and differs in the one cell this class
+    # exists for. Spelled as `_replace` on the parent for the same reason
+    # hmatrix and sinusoidal_galerkin are: a fresh `Capabilities(...)` here
+    # would copy the parent's refusal prose and then drift from it.
+    capabilities = HMatrixSolver.capabilities._replace(
+        axes={
+            **HMatrixSolver.capabilities.axes,
+            "solve_strategy": ("element-block",),
+        },
+    )
 
     def __init__(
         self,

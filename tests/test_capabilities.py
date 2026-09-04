@@ -13,6 +13,7 @@ against code, not trusted on their own.
 import numpy as np
 import pytest
 
+from momwire._capabilities import AXIS_VALUES, DERIVED_AXES, axes_for
 from momwire.deck._solver import BASES
 from momwire.harrington import HarringtonSolver
 from momwire.pulse import PulseSolver
@@ -25,6 +26,19 @@ from momwire import (
     RazorSolver,
     SinusoidalGalerkinSolver,
     SinusoidalSolver,
+)
+
+# Every class carrying a compositional row, for section 9. Kept beside the
+# imports rather than re-derived per test so adding a solver is one edit.
+_AXIS_CLASSES = (
+    BSplineSolver,
+    HMatrixSolver,
+    ArrayBlockSolver,
+    SinusoidalSolver,
+    SinusoidalGalerkinSolver,
+    RazorSolver,
+    HarringtonSolver,
+    PulseSolver,
 )
 
 WAVELENGTH = 10.0
@@ -702,14 +716,30 @@ def test_bspline_enrichment_combinations_refused(cells, kwarg):
 # --------------------------------------------------------------------------
 
 
-def test_hmatrix_differs_from_bspline_in_the_buried_cell_alone():
+def test_hmatrix_differs_from_bspline_in_the_buried_cell_and_the_solve_axis():
     """The accelerators exist for decks the dense fill cannot hold, so a
     silent dense fallback on a buried array is an out-of-memory rather than a
     slow answer — `_refuse_buried_fast_operator` says so. Inheriting the
-    parent's row told a consumer to send exactly that deck."""
+    parent's row told a consumer to send exactly that deck.
+
+    TWO cells now, not one. This test was `..._in_the_buried_cell_alone`
+    until antennaknobs#1006 added the compositional axes, and the rename is
+    the point rather than bookkeeping: `buried` is what this solver SERVES
+    differently, `solve_strategy` is what it IS differently, and a row that
+    describes both has two cells here where a row describing only the first
+    had one. The physics is still required to be identical — that is what
+    makes the pair worth having — so everything except those two is pinned
+    equal below.
+    """
     c, b = HMatrixSolver.capabilities, BSplineSolver.capabilities
     assert b.buried and not c.buried
-    assert c._replace(buried=True, refusals=b.refusals) == b
+    assert c.axes["solve_strategy"] == ("aca",)
+    assert b.axes["solve_strategy"] == ("dense",)
+    # ...and NOTHING else moves: same basis, same testing, same kernel.
+    assert {k: v for k, v in c.axes.items() if k != "solve_strategy"} == {
+        k: v for k, v in b.axes.items() if k != "solve_strategy"
+    }
+    assert c._replace(buried=True, refusals=b.refusals, axes=b.axes) == b
     assert c.refusal("buried") == c.refusals["buried"]
     assert "the fast operator has no per-segment medium" in c.refusal("buried")
     # ...and everything the parent's row said around it is still said: the
@@ -719,10 +749,24 @@ def test_hmatrix_differs_from_bspline_in_the_buried_cell_alone():
     assert all(c.refusals[k] == v for k, v in b.refusals.items())
 
 
-def test_array_block_inherits_the_hmatrix_row():
-    """Same solve, same guard, a different structural decomposition — so no
-    override, and the row must be the one object rather than a copy."""
-    assert ArrayBlockSolver.capabilities is HMatrixSolver.capabilities
+def test_array_block_takes_the_hmatrix_row_but_for_its_own_solve_strategy():
+    """Same guard, same served axes, a different structural decomposition.
+
+    This test asserted `is HMatrixSolver.capabilities` — one shared object,
+    no override — and was RIGHT while a row described only what a solver
+    serves: these two serve identically. It became wrong the moment the row
+    also described what a solver is MADE OF, because ArrayBlockSolver then
+    reported its assembly as ACA, which is the one thing it is not
+    (antennaknobs#1006). The class had carried no row of its own at all.
+
+    So: still the parent's row in every served cell, and its own value on
+    the axis the class exists for.
+    """
+    a, h = ArrayBlockSolver.capabilities, HMatrixSolver.capabilities
+    assert a is not h
+    assert a.axes["solve_strategy"] == ("element-block",)
+    assert h.axes["solve_strategy"] == ("aca",)
+    assert a._replace(axes=h.axes) == h  # every other cell, including refusals
 
 
 # --------------------------------------------------------------------------
@@ -953,3 +997,104 @@ def test_the_TESTING_is_what_separates_the_two_sinusoidal_families_here():
     # which is what None means.
     for cls in (SinusoidalGalerkinSolver, BSplineSolver, RazorSolver):
         assert cls.capabilities.refusal("knot_feeds") is None, cls
+
+
+# --------------------------------------------------------------------------
+# 9. The compositional axes (antennaknobs#1006). The generated matrix's
+#    `--check` already catches a row edit that skips regeneration; these
+#    catch the three things regeneration would happily render.
+# --------------------------------------------------------------------------
+
+
+def test_every_declared_axis_and_value_is_in_the_vocabulary():
+    """A typo renders as a column value rather than failing.
+
+    `AXIS_VALUES` is data with no validator behind it — deliberately, the
+    module contract forbids validation machinery — so this is where a row
+    declaring `"galerkin "` or `"bspline3"` is caught. Without it the matrix
+    would publish the typo and a panel would offer it as a choice.
+    """
+    for cls in _AXIS_CLASSES:
+        for axis, values in cls.capabilities.axes.items():
+            assert axis in AXIS_VALUES, f"{cls.__name__}: unknown axis {axis!r}"
+            assert values, f"{cls.__name__}: {axis} declared empty"
+            for v in values:
+                assert v in AXIS_VALUES[axis], (
+                    f"{cls.__name__}: {axis}={v!r} is not in the vocabulary "
+                    f"{AXIS_VALUES[axis]}"
+                )
+
+
+def test_no_row_restates_a_derived_axis():
+    """`ground_model` and `wire_position` come from `grounds` / `buried` /
+    `contact` through `axes_for`, and a row declaring one would be a second
+    source of truth that `axes_for` would then silently overwrite — the
+    worst combination, because the row would read as authoritative and have
+    no effect."""
+    for cls in _AXIS_CLASSES:
+        for axis in DERIVED_AXES:
+            assert axis not in cls.capabilities.axes, (
+                f"{cls.__name__} declares {axis}, which is derived"
+            )
+
+
+def test_axes_for_returns_declared_union_derived():
+    """The single derivation, checked on a real row and on the empty one."""
+    got = axes_for(BSplineSolver.capabilities)
+    assert got["basis"] == frozenset({"bspline-1", "bspline-2"})
+    assert got["ground_model"] == frozenset({"free", "pec", "refl-coef", "sommerfeld"})
+    assert got["wire_position"] == frozenset({"above", "contact", "buried"})
+
+    # The ~200-line prototype row of the design doc's §0.2: no declared axes
+    # at all, but the derived pair still answers, because "free" and "above"
+    # are universal. A consumer must be able to tell "not described" from
+    # "described as nothing", and this is that distinction.
+    empty = Capabilities(
+        grounds=frozenset(),
+        wire_loading=False,
+        extended_kernel=False,
+        junction_ports=False,
+        node_gaps=False,
+        per_wire_radius=False,
+        singular_enrichment=False,
+        refusals={},
+    )
+    bare = axes_for(empty)
+    assert set(bare) == set(DERIVED_AXES)
+    assert bare["ground_model"] == frozenset({"free"})
+    assert bare["wire_position"] == frozenset({"above"})
+
+
+def test_the_pairs_the_axes_exist_to_explain_differ_where_they_should():
+    """The claim antennaknobs#1006 opens with, as a gate — and the one place
+    it turns out to be an approximation.
+
+    Two of the three pairs differ in exactly the one axis the pair exists to
+    isolate. The sinusoidal pair differs in TWO, and that is not a
+    mis-declaration: `SinusoidalSolver` REFUSES `feed_model="point"`
+    (`_reject_point_feed_model`, momwire#212 — a zero-width gap sitting on a
+    match point is undefined for point-matched collocation) where the
+    Galerkin sibling serves it. So the second difference is FORCED by the
+    first rather than independent of it.
+
+    That is worth a gate rather than a footnote, because it is the first
+    measured coupling in the product space: the reachable values of
+    `feed_model` depend on `testing`, so a panel cannot treat the axes as
+    freely combinable controls. #1006 asks "which cells are reachable, and
+    why not the rest" — this is one answer, with a named reason.
+    """
+    for a, b, expected in (
+        (BSplineSolver, HMatrixSolver, {"solve_strategy"}),
+        (PulseSolver, HarringtonSolver, {"charge_support"}),
+        # Coupled, see the docstring — NOT {"testing"}.
+        (SinusoidalSolver, SinusoidalGalerkinSolver, {"testing", "feed_model"}),
+    ):
+        differ = {
+            k
+            for k in set(a.capabilities.axes) | set(b.capabilities.axes)
+            if a.capabilities.axes.get(k) != b.capabilities.axes.get(k)
+        }
+        assert differ == expected, (
+            f"{a.__name__} vs {b.__name__} differ in {sorted(differ)}, "
+            f"expected {sorted(expected)}"
+        )

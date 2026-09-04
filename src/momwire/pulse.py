@@ -447,6 +447,19 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # have been refused by `_check_ground_clearance` since the row shipped,
     # with no declaration behind either.
     capabilities = Capabilities(
+        # Compositional row (antennaknobs#1006): the pulse basis with the
+        # charge left where the basis puts it — two POINT charges per
+        # element. `HarringtonSolver` replaces `charge_support` only, which
+        # is the whole reason that pair exists.
+        axes={
+            "basis": ("pulse",),
+            "testing": ("point-matching",),
+            "charge_support": ("point",),
+            "kernel": ("reduced",),
+            "quadrature": ("converged",),
+            "solve_strategy": ("dense",),
+            "feed_model": ("segment-gap",),
+        },
         grounds=frozenset({"pec", "refl-coef", "sommerfeld"}),
         wire_loading=False,
         extended_kernel=False,

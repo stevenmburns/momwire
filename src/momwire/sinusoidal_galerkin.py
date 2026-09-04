@@ -942,6 +942,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # base answered with the reason. Same sentence, this class's name in it
     # (momwire#564) — the prose reaches antennaknobs' host dialogs verbatim.
     capabilities = SinusoidalSolver.capabilities._replace(
+        # Differs from SinusoidalSolver in the TESTING and nothing else,
+        # which is the whole point of the pair (antennaknobs#1006). The
+        # `feed_model=` kwarg is the axis the bespoke `sin-galerkin` panel
+        # hint was standing in for.
+        axes={
+            **SinusoidalSolver.capabilities.axes,
+            "testing": ("galerkin",),
+            "feed_model": ("segment-gap", "point-gap"),
+        },
         junction_ports=True,
         node_gaps=True,
         knot_feeds=True,

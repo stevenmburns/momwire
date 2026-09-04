@@ -77,6 +77,38 @@ that serves both — and those are the `a+b` keys in the reasons below.
 | `HarringtonSolver`         | yes   | yes         | yes          | **no**    | **no**   |
 | `PulseSolver`              | yes   | yes         | yes          | **no**    | **no**   |
 
+## What each solver is made of
+
+The tables above are what a row SERVES. This is what it IS — the axes
+antennaknobs#1006 named, so a panel can show that `bspline` and
+`hmatrix` differ in assembly and nothing else, and that
+`sinusoidal-galerkin` differs from `sinusoidal` in the testing alone.
+
+**A cell lists every value the class can be configured to, not one
+value.** `degree=`, `nec5_quadrature=`, `extended_kernel=` and
+`feed_model=` are constructor keywords rather than separate classes, so
+one row is genuinely both `bspline-1` and `bspline-2`; a roster name is
+a saved preset picking one point in this space.
+
+`ground_model` / `wire_position` are DERIVED from `grounds` and
+`buried`/`contact` by `axes_for()` rather than restated per row, so
+they cannot drift from the cells above. `free` and `above` are
+universal on them for the same reason free space is not a ground cell.
+
+*not described* is a row carrying no compositional declaration at all —
+a gap, not a claim of emptiness.
+
+| solver                     | `basis`               | `testing`      | `charge_support` | `kernel`           | `quadrature`     | `solve_strategy` | `feed_model`            | `ground_model`                      | `wire_position`          |
+| -------------------------- | --------------------- | -------------- | ---------------- | ------------------ | ---------------- | ---------------- | ----------------------- | ----------------------------------- | ------------------------ |
+| `BSplineSolver`            | bspline-1 / bspline-2 | galerkin       | spline           | extended / reduced | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above / buried / contact |
+| `HMatrixSolver`            | bspline-1 / bspline-2 | galerkin       | spline           | extended / reduced | converged        | aca              | segment-gap             | free / pec / refl-coef / sommerfeld | above / contact          |
+| `ArrayBlockSolver`         | bspline-1 / bspline-2 | galerkin       | spline           | extended / reduced | converged        | element-block    | segment-gap             | free / pec / refl-coef / sommerfeld | above / contact          |
+| `SinusoidalSolver`         | sinusoidal-3term      | point-matching | basis-implied    | extended / reduced | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above / contact          |
+| `SinusoidalGalerkinSolver` | sinusoidal-3term      | galerkin       | basis-implied    | extended / reduced | converged        | dense            | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
+| `RazorSolver`              | tent                  | path           | basis-implied    | extended / reduced | converged / nec5 | dense            | node-port               | free / pec / refl-coef / sommerfeld | above / contact          |
+| `HarringtonSolver`         | pulse                 | point-matching | dual-cell        | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
+| `PulseSolver`              | pulse                 | point-matching | point            | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
+
 ## The recorded reasons
 
 45 sentences across 73 declared cells, verbatim. A sentence shared by several rows is printed
