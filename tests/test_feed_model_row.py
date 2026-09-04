@@ -16,6 +16,14 @@ default, and this file makes both halves true by construction:
   * the FIRST declared value is what the constructor picks when nothing is
     passed.
 
+ORDER IS A SOURCE-LEVEL CONVENTION AND NOTHING MORE. `axes_for()` returns
+frozensets and every consumer renders them sorted — the capability matrix and
+antennaknobs' /capabilities alike — so declaration order does NOT reach anyone
+downstream. Lead with the default because it makes this file readable and this
+gate meaningful, but do not "fix" a consumer to read the default off position:
+by the time values reach one they are a set, and a consumer that wants the
+default should ask for it.
+
 CONSTRUCTED, NEVER INTROSPECTED. `inspect.signature` reports no `feed_model`
 at all for `HMatrixSolver`, `ArrayBlockSolver`, `RazorSolver` and
 `HarringtonSolver` — they take it through `**kwargs` or not at all — so a
