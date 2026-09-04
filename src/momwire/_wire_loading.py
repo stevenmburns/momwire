@@ -110,6 +110,55 @@ def insulation_inductance(radius, ins_radius, eps_r):
     return MU0 / (2.0 * np.pi) * (1.0 - 1.0 / eps_r) * np.log(ins_radius / radius)
 
 
+def equivalent_radius(radius, ins_radius, eps_r):
+    """Popovic-Nesic EQUIVALENT RADIUS of a dielectric-coated wire [m].
+
+        a' = a * (b/a) ** ((eps_r - 1) / eps_r),      a < a' < b
+
+    Popovic & Nesic, "Generalisation of the Concept of Equivalent Radius of
+    Thin Cylindrical Antennas", IEE Proc. 131 pt. H no. 3, 153-158 (1984).
+    The quasi-static reading of a coated wire is a PAIR: the kernel sees a
+    larger radius a' (which is where the coating's effect on the CHARGE, and
+    so on the capacitance, comes from), and a distributed series inductance
+
+        L = (mu0 / 2pi) * ln(a'/a)
+
+    puts back the inductance that enlarging the radius would otherwise
+    remove. `insulation_inductance` above is already exactly that L -- the
+    identity `ln(a'/a) = ((eps_r - 1)/eps_r) * ln(b/a)` makes King's
+    `(1 - 1/eps_r) * ln(b/a)` form and this one the same number -- so momwire
+    has carried the inductance half of the pair since momwire#131 and not the
+    radius half.
+
+    THE TWO HALVES DO DIFFERENT JOBS, measured on the Severns surface deck
+    (momwire#865) at N = 16, h = 1.6 mm, against 56.1 + 6.2j:
+
+        bare a          46.62 + 17.96j     dR -9.48   dX +11.76
+        a + L (today)   49.33 + 18.83j     dR -6.77   dX +12.63
+        a' + L          49.38 + 14.93j     dR -6.72   dX  +8.73
+
+    L raises R the right way and pushes X the WRONG way; the equivalent
+    radius leaves R alone and pulls X down. The surface-radial residual is
+    R-low / X-high, so the missing half is the one that fixes the half the
+    inductance cannot.
+
+    The RADIUS this returns is for the KERNEL only. Everything about the
+    metal -- skin-effect internal impedance, and any refusal that means "the
+    conductor" -- keeps the real `radius`, which is why the spec layer stores
+    both (`_conductor_radius_per_wire` beside `_radius_per_wire`).
+    """
+    if ins_radius <= radius:
+        raise ValueError(
+            f"insulation_radius ({ins_radius}) must exceed the conductor "
+            f"radius ({radius})"
+        )
+    if eps_r < 1.0:
+        raise ValueError(f"insulation_eps_r must be >= 1, got {eps_r}")
+    return float(radius) * (float(ins_radius) / float(radius)) ** (
+        (float(eps_r) - 1.0) / float(eps_r)
+    )
+
+
 def normalize_per_wire(value, n_wires, name):
     """None | scalar | length-n_wires sequence → None | (n_wires,) float array.
 
@@ -222,6 +271,36 @@ def configure_loading(
         solver.insulation_radius is not None
     )
 
+    # THE OTHER HALF OF THE COATED-WIRE PAIR (momwire#865).
+    #
+    # `_radius_per_wire` becomes the KERNEL radius, a' on every jacketed wire.
+    # `_conductor_radius_per_wire` keeps the metal's own a and is what the
+    # loading (skin effect, and the jacket's own L) is evaluated at — see
+    # `equivalent_radius` for why the pair is a pair.
+    #
+    # Done HERE rather than in each constructor so the four formulations
+    # cannot disagree about what a coated wire's radius means; it is the same
+    # argument that put the loading normalisation in this layer (momwire#428).
+    solver._conductor_radius_per_wire = np.array(solver._radius_per_wire, dtype=float)
+    if solver.insulation_radius is not None:
+        kernel_radius = np.array(solver._radius_per_wire, dtype=float)
+        for w in np.nonzero(np.isfinite(solver.insulation_radius))[0]:
+            kernel_radius[w] = equivalent_radius(
+                solver._conductor_radius_per_wire[w],
+                solver.insulation_radius[w],
+                solver.insulation_eps_r[w],
+            )
+        solver._radius_per_wire = kernel_radius
+        # The scalar fast path is keyed on every wire sharing one radius, and
+        # a jacket on SOME wires breaks that even when the conductors agreed.
+        # Leaving a stale `_uniform_radius` would hand the single-`a` C++
+        # kernels one wire's radius for the whole deck.
+        if getattr(solver, "_uniform_radius", None) is not None:
+            first = float(kernel_radius[0])
+            solver._uniform_radius = (
+                first if bool(np.all(kernel_radius == first)) else None
+            )
+
 
 def normalize_lumped_loads(value, n_wires):
     """`[(wire_index, arclength_or_None, impedance), ...]` → checked tuples.
@@ -296,7 +375,10 @@ def loading_for(solver, omega, geom=None):
     if solver._loading_active:
         z_wire = series_impedance_per_wire(
             omega,
-            solver._radius_per_wire,
+            # The CONDUCTOR radius, never the kernel one: skin effect is about
+            # the metal, and the jacket's L is defined against a rather than
+            # a' (momwire#865). `configure_loading` guarantees the attribute.
+            solver._conductor_radius_per_wire,
             solver.wire_conductivity,
             solver.insulation_radius,
             solver.insulation_eps_r,
