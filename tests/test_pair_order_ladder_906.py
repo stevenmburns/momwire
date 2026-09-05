@@ -348,17 +348,23 @@ def test_g906_8b_the_extended_kernel_still_refuses_a_ladder(spy):
     assert z_ek == z_ref, f"{z_ek!r} vs {z_ref!r}"
 
 
-def test_g906_8c_the_whole_fill_agrees_on_one_ladder(spy):
-    """The chunked fill adds every pair in a sweep and subtracts same-edge
-    blocks back, so both arms must have run the same quadrature.
+def test_g906_8c_every_pair_gets_ONE_order_however_the_fill_is_cut(spy):
+    """The invariant the chunked fill actually needs (momwire#920).
 
-    `_ladder_for_block` keys the guard on a block's LONGEST segment, so a
-    per-window resolution lets the sweep (which spans the whole mesh) drop the
-    order-4 tier while a correction window for one fine edge keeps it. This
-    deck is built to straddle exactly that: a finely meshed radiator whose own
-    edge is far under the ceiling, plus one 0.3-lambda segment that puts the
-    mesh far over it. `_fill_ladder` resolves once against the whole mesh, so
-    every window here must see the SAME empty ladder.
+    It adds every pair in a sweep and subtracts same-edge blocks back, so the
+    cancellation is exact only if a pair ran the same rule in both arms. The
+    guard used to be answered per BLOCK, which could not promise that: a sweep
+    window spanning a coarse segment dropped the order-4 tier while a
+    correction window for a fine edge kept it.
+
+    #907 patched that by resolving the guard once per fill, which kept the
+    promise at the price of a deck-wide cliff. #920 answers the guard PER PAIR
+    instead, so the promise holds for a better reason: a pair's order is a
+    function of the pair, and no two windows covering it can disagree however
+    the block is cut.
+
+    This deck is built to straddle: a 200-segment radiator far under the
+    ceiling plus one 0.3-lambda segment far over it.
     """
     fine = np.array([[0.0, -0.25, 0.0], [0.0, 0.25, 0.0]])
     coarse = np.array([[0.35, 0.0, 0.0], [0.35, 0.3, 0.0]])
@@ -375,16 +381,32 @@ def test_g906_8c_the_whole_fill_agrees_on_one_ladder(spy):
     k = s.k
     geom = s._build_geometry()
     seg_l, seg_r = geom["seg_l"], geom["seg_r"]
-    # the mesh trips the guard, so the whole fill must run untiered ...
-    assert s._fill_ladder(k, seg_l, seg_r, None) == ()
-    # ... even though the fine wire's own edge, taken alone, would not.
-    assert _ladder_for_block(
-        ((16.0, 4),), k, seg_l[:200], seg_r[:200], seg_l[:200], seg_r[:200]
-    ) == ((16.0, 4),)
-    z, _ = BSplineSolver(**deck).compute_impedance()
-    assert spy.counts[TIERED] == 0, spy.counts
-    z_flat, _ = BSplineSolver(**deck, pair_order_ladder=()).compute_impedance()
-    assert z == z_flat, f"{z!r} vs {z_flat!r}"
+
+    # The ladder now reaches the kernel intact — trimming it per fill is what
+    # #920 removed.
+    assert s._fill_ladder(k, seg_l, seg_r, None) == ((16.0, 4),)
+
+    # The whole-mesh orders are what every window must agree with.
+    ref = _pair_orders(seg_l, seg_r, seg_l, seg_r, k, s.n_qp_pair, ((16.0, 4),))
+    # ... and they are NOT uniform: this deck straddles, which is the point.
+    assert set(np.unique(ref)) == {4, 8}, np.unique(ref)
+
+    # Any sub-block, cut any way, reproduces its slice of that map.
+    for rows, cols in (
+        (slice(0, 60), slice(0, 60)),
+        (slice(150, 201), slice(0, 201)),
+        (slice(0, 201), slice(150, 201)),
+    ):
+        sub = _pair_orders(
+            seg_l[rows], seg_r[rows], seg_l[cols], seg_r[cols],
+            k, s.n_qp_pair, ((16.0, 4),),
+        )
+        assert np.array_equal(sub, ref[rows, cols]), (rows, cols)
+
+    # And the two fill ROUTES agree on Z, which is the cancellation itself.
+    z_chunked, _ = BSplineSolver(**deck).compute_impedance()
+    z_dense, _ = BSplineSolver(**{**deck, "swept_mem_mb": 4096}).compute_impedance()
+    assert abs(z_chunked - z_dense) < 1e-9, (z_chunked, z_dense)
 
 
 def test_g906_9_the_selector_is_the_one_the_study_binned_by():
@@ -431,6 +453,29 @@ def _buried_mixed_mesh_deck(**over):
     return d
 
 
+def _pair_orders(sli, sri, slj, srj, k, n_qp, ladder):
+    """The order every pair in a window actually runs at.
+
+    The tier is the highest whose ratio threshold the pair meets; a
+    phase-limited tier additionally needs the PAIR's own longest segment under
+    the kL ceiling (momwire#920). Mirrors what the C++ selector and the numpy
+    twin do per pair, so a window's orders can be compared against another
+    window's over the same pairs.
+    """
+    lad = _normalize_ladder(ladder, n_qp)
+    ratio = _pair_ratio(sli, sri, slj, srj)
+    li = np.linalg.norm(np.asarray(sri) - np.asarray(sli), axis=1)
+    lj = np.linalg.norm(np.asarray(srj) - np.asarray(slj), axis=1)
+    kl_ok = (np.maximum(li[:, None], lj[None, :]) * abs(k)) <= _bk._LADDER_PHASE_KL_CEILING
+    out = np.full(ratio.shape, int(n_qp))
+    for r, n in lad:
+        sel = ratio >= r
+        if n < _bk._LADDER_PHASE_LIMITED_BELOW:
+            sel = sel & kl_ok
+        out = np.where(sel, n, out)
+    return out
+
+
 def _ladders_seen(deck):
     """Every `ladder=` a fill hands the off-edge kernel, with the effective
     (post-guard) ladder each block would resolve for itself."""
@@ -459,25 +504,42 @@ def _ladders_seen(deck):
 
 @pytest.mark.filterwarnings("ignore:crossing node")
 def test_g921_one_fill_resolves_one_ladder_on_the_buried_path():
-    """momwire#921: the sweep and the same-edge correction it subtracts back
-    must have run the SAME quadrature on every pair.
+    """momwire#921 on the buried path, re-aimed by #920.
 
-    `corr = (A_st + A_reg) - J_edge` cancels only if both arms agree, and
-    before #907's `_fill_ladder` the buried path passed `pair_order_ladder`
-    raw — so on this deck the sweep resolved to ((2, 8),) and the correction
-    to ((2, 8), (16, 4)), leaving the difference in Z as an artefact of which
-    window happened to span the coarse segment.
+    The defect was that the sweep and the same-edge correction it subtracts
+    could run different quadrature on the same pair. #921 held the invariant
+    by resolving the guard once per fill; #920 holds it per pair, which is
+    stronger — it survives any windowing, including one that did not exist
+    when the fill was written.
+
+    So this no longer asserts that every window was HANDED the same ladder
+    (it is: the ladder now passes through untrimmed). It asserts that every
+    window covering a pair gives it the same ORDER, which is the property the
+    subtraction actually needs.
     """
+    s = BSplineSolver(**_buried_mixed_mesh_deck())
+    k = s.k
+    geom = s._build_geometry()
+    seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+    lad = s.pair_order_ladder
+    assert lad == ((2.0, 8), (16.0, 4))
+    assert s._fill_ladder(k, seg_l, seg_r, None) == lad
+
+    ref = _pair_orders(seg_l, seg_r, seg_l, seg_r, k, s.n_qp_pair, lad)
+    # The deck straddles: without the per-pair guard this map would collapse
+    # to a single order for the whole fill.
+    assert len(set(np.unique(ref))) > 1, np.unique(ref)
+
     _z, seen = _ladders_seen(_buried_mixed_mesh_deck())
     assert seen, "no off-edge kernel call — the deck stopped exercising the fill"
-    with_far = [(passed, eff) for passed, eff, far in seen if far]
-    assert with_far, "no window holds a far pair — the gate would be vacuous"
-    # One ladder handed out ...
-    assert len({p for p, _ in with_far}) == 1, seen
-    # ... and, because it was resolved against the whole subset, every window
-    # agrees on what survives the guard. This is the assertion that fails on
-    # the raw property.
-    assert len({e for _, e in with_far}) == 1, seen
+    # every window is handed the ladder intact ...
+    assert {p for p, _e, _f in seen} == {lad}, seen
+    # ... and its own slice of the order map matches the whole-mesh one.
+    for rows, cols in ((slice(0, 40), slice(0, 40)), (slice(0, 60), slice(40, 61))):
+        sub = _pair_orders(
+            seg_l[rows], seg_r[rows], seg_l[cols], seg_r[cols], k, s.n_qp_pair, lad
+        )
+        assert np.array_equal(sub, ref[rows, cols]), (rows, cols)
 
 
 @pytest.mark.filterwarnings("ignore:crossing node")
@@ -505,3 +567,97 @@ def test_g921_the_buried_hub_z_is_unchanged(record_property):
     record_property("z_hub", f"{z:.9f}")
     z_flat, _ = BSplineSolver(**hub_deck(pair_order_ladder=())).compute_impedance()
     assert abs(z - z_flat) < 1e-6, f"{z} vs {z_flat}"
+
+
+@pytest.mark.filterwarnings("ignore:crossing node")
+def test_g920_uniform_decks_are_bit_identical_and_never_split():
+    """The per-pair guard must be free where it changes nothing (#920).
+
+    A deck whose segments all answer the kL question the same way has no
+    straddle, so `_phase_split_needed` returns None, the block runs as ONE
+    call exactly as before, and the moments are bit-for-bit what the
+    block-level guard produced. That covers essentially every deck in the
+    catalog — the split exists for the mixed-mesh minority.
+
+    Asserted on the moments rather than on Z, because Z would hide a
+    difference under the solve's own conditioning.
+    """
+    sl, sr = _chain_deck(n=40)
+    for k in (K_REAL, K_CPLX):
+        assert _bk._phase_split_needed(LADDER, k, sl, sr, sl, sr) is None
+        got = _seg_seg_full_moments_offedge(sl, sr, sl, sr, 1e-3, k, 2, 32, ladder=LADDER)
+        # the same call with the guard already applied by the caller, which is
+        # what the fill did before #920
+        trimmed = _ladder_for_block(LADDER, k, sl, sr, sl, sr)
+        want = _seg_seg_full_moments_offedge(
+            sl, sr, sl, sr, 1e-3, k, 2, 32, ladder=trimmed
+        )
+        assert np.array_equal(got, want), k
+
+
+@pytest.mark.filterwarnings("ignore:crossing node")
+def test_g920_a_straddling_block_splits_and_matches_pair_by_pair():
+    """And where it DOES change something, it changes it exactly.
+
+    A block holding one over-ceiling segment is split by row/column index into
+    at most four sub-blocks. The split is exact rather than conservative
+    because the guard factorizes — a pair passes iff BOTH its segments do — so
+    the per-pair answer is the outer product of one per-row mask with itself.
+
+    The reference is built one sub-block at a time from the pair-order map, so
+    a bug in the split cannot hide behind the same bug in the reference.
+    """
+    sl, sr = _chain_deck(n=20)
+    sl = np.vstack([sl, [[0.0, 5.0, 0.0]]])
+    sr = np.vstack([sr, [[3.0, 5.0, 0.0]]])  # one segment far over the ceiling
+    k = K_REAL
+    split = _bk._phase_split_needed(LADDER, k, sl, sr, sl, sr)
+    assert split is not None
+    rows_ok, cols_ok = split
+    assert rows_ok.sum() == len(sl) - 1 and not rows_ok[-1]
+
+    got = _seg_seg_full_moments_offedge(sl, sr, sl, sr, 1e-3, k, 2, 32, ladder=LADDER)
+
+    want = np.empty_like(got)
+    for ri in (np.flatnonzero(rows_ok), np.flatnonzero(~rows_ok)):
+        for cj in (np.flatnonzero(cols_ok), np.flatnonzero(~cols_ok)):
+            if ri.size == 0 or cj.size == 0:
+                continue
+            trimmed = _ladder_for_block(LADDER, k, sl[ri], sr[ri], sl[cj], sr[cj])
+            want[:, :, ri[:, None], cj[None, :]] = _seg_seg_full_moments_offedge(
+                sl[ri], sr[ri], sl[cj], sr[cj], 1e-3, k, 2, 32, ladder=trimmed
+            )
+    assert np.array_equal(got, want)
+
+    # The old block-level answer differs — otherwise this gate is vacuous.
+    old = _seg_seg_full_moments_offedge(
+        sl, sr, sl, sr, 1e-3, k, 2, 32,
+        ladder=_ladder_for_block(LADDER, k, sl, sr, sl, sr),
+    )
+    assert not np.array_equal(got, old)
+
+
+@pytest.mark.filterwarnings("ignore:crossing node")
+@pytest.mark.parametrize("n_radials", [12, 24, 48])
+def test_g920_the_radial_screens_never_split(n_radials):
+    """The decks #920 must not disturb.
+
+    A buried screen is uniformly meshed, so every pair answers the kL question
+    the same way and the block never splits — which makes the fill the SAME
+    CODE PATH as before #920, not merely the same answer. That is the strongest
+    form of "bit-identical" available here and it costs no solve.
+
+    12/24/48 radials because the screen is the deck class the ladder was built
+    for (momwire#906) and the one #920 could most easily have broken.
+    """
+    s = BSplineSolver(**hub_deck(n_radials=n_radials))
+    geom = s._build_geometry()
+    seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+    lad = s.pair_order_ladder
+    assert lad == ((2.0, 8), (16.0, 4))
+    # the ladder reaches the kernel intact ...
+    assert s._fill_ladder(s.k, seg_l, seg_r, None) == lad
+    # ... and no pair disagrees with any other about the guard, so no split.
+    assert _bk._phase_split_needed(lad, s.k, seg_l, seg_r, seg_l, seg_r) is None
+    # which is the same thing the old block-level trim concluded.
+    assert _ladder_for_block(lad, s.k, seg_l, seg_r, seg_l, seg_r) == lad
