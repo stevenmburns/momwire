@@ -240,9 +240,7 @@ def _radial_dirs(n_radials):
     so that is a measurement rather than an expectation.
     """
     if n_radials < 1:
-        raise ValueError(
-            f"a radial screen needs at least one radial, got {n_radials}"
-        )
+        raise ValueError(f"a radial screen needs at least one radial, got {n_radials}")
     return [
         (
             math.cos(2.0 * math.pi * i / n_radials),

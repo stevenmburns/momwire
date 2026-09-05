@@ -26,14 +26,26 @@ N_PER = int(os.environ.get("N_PER", "100"))
 
 
 def deck(strut_segs=None, strut_len=0.3):
-    w = np.array([[0.0, 0.0, 0.0], [HALF, 0.0, 0.0], [HALF, HALF, 0.0],
-                  [0.0, HALF, 0.0], [0.0, 0.0, 0.0]])
+    w = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [HALF, 0.0, 0.0],
+            [HALF, HALF, 0.0],
+            [0.0, HALF, 0.0],
+            [0.0, 0.0, 0.0],
+        ]
+    )
     wires, npe = [w], [[N_PER] * 4]
     if strut_segs:
         wires.append(np.array([[0.0, 0.0, -0.4], [0.0, strut_len, -0.4]]))
         npe.append([strut_segs])
-    return dict(wires=wires, n_per_edge_per_wire=npe, feeds=[(0, 0.5, 1 + 0j)],
-                wavelength=LAM, wire_radius=RAD)
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        feeds=[(0, 0.5, 1 + 0j)],
+        wavelength=LAM,
+        wire_radius=RAD,
+    )
 
 
 def clock(d, reps=5):

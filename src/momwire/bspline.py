@@ -62,7 +62,6 @@ from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
     _ek_axis_groups,
-    _ladder_for_block,
     _normalize_ladder,
     _refuse_complex_k,
     _seg_seg_full_moments_offedge,
