@@ -382,12 +382,15 @@ def test_somm_r1_bucket_rounds_up_and_reuses():
 
 
 def test_somm_eps_bucket_ladder():
-    """Im(eps_t) rounds to the nearest rung of the geometric ladder (worst
-    offset half a step); Re is exact; nonstandard values pass through."""
+    """`_somm_eps_bucket`: Im(eps_t) rounds to the nearest rung of the
+    geometric ladder (worst offset half a step); Re is exact; nonstandard
+    values pass through. Since momwire#902 the grid cache serves a query
+    BETWEEN rungs as the blend of the bracketing pair (`_somm_eps_rungs`),
+    so the ladder is 10 % rather than 1 % — see `test_somm_eps_rungs_pair`."""
     from momwire import _sommerfeld as sm
 
     step = 1.0 + sm._SOMM_EPS_IM_BUCKET
-    assert sm._SOMM_EPS_IM_BUCKET == pytest.approx(0.01)  # the shipped default
+    assert sm._SOMM_EPS_IM_BUCKET == pytest.approx(0.10)  # the shipped default
     e = 10.0 - 1.26j
     b = sm._somm_eps_bucket(e)
     assert b.real == e.real
@@ -424,9 +427,10 @@ def test_somm_scaled_view_matches_direct_fill():
 
 
 def test_somm_grid_frequency_reuse_one_fill_per_rung():
-    """A band sweep pays one fill per eps-ladder rung, not one per
-    frequency — and the bucketed views still track the true-eps surfaces
-    within the grid accuracy bar (issue #159 phase 2)."""
+    """A band sweep pays one rung PAIR — two fills, on one shared lattice —
+    not one fill per frequency (issue #159 phase 2, blended since
+    momwire#902), and the blended views still track the true-eps surfaces
+    within the grid accuracy bar."""
     from momwire import _sommerfeld as sm
 
     eps0_im = 0.002 / (2.0 * np.pi * 28.4e6 * 8.8541878128e-12)  # sigma/(w*eps0)
@@ -451,12 +455,16 @@ def test_somm_grid_frequency_reuse_one_fill_per_rung():
         sm.SommerfeldGrid.__init__ = orig
         sm._GRID_CACHE.clear()
         sm._NORM_CACHE.clear()
-    assert len(fills) == 1  # every sweep point shared one master fill
+    assert len(fills) == 2  # every sweep point shared one rung PAIR
     assert len({id(v) for v in views}) == len(views)  # but distinct views
-    # normalized master: filled at the reference wavenumber, bucketed eps
-    eps_m, k_m = fills[0][0], fills[0][1]
-    assert k_m == pytest.approx(sm._K2_REF)
-    assert abs(eps_m.imag / -eps0_im - 1.0) < sm._SOMM_EPS_IM_BUCKET
+    # normalized masters: filled at the reference wavenumber, at the two
+    # rungs bracketing the sweep's Im, on ONE lattice (the demanding rung's)
+    lo, hi, _ = sm._somm_eps_rungs(10.0 - 1j * eps0_im)
+    assert {fills[0][0], fills[1][0]} == {lo, hi}
+    assert all(f[1] == pytest.approx(sm._K2_REF) for f in fills)
+    assert all(f[2] == fills[0][2] for f in fills)  # same r1 bucket
+    assert lo.imag / -eps0_im > 1.0 / (1.0 + sm._SOMM_EPS_IM_BUCKET)
+    assert hi.imag / -eps0_im < 1.0 + sm._SOMM_EPS_IM_BUCKET
     # end-to-end accuracy at the sweep edge (largest bucket offset): view
     # vs direct evaluation at the TRUE eps holds the grid bar
     w = 2.0 * np.pi * 28.45e6

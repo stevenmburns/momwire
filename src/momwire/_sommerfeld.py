@@ -122,20 +122,48 @@ _SOMM_TH_SPLIT_DEG = 30.0
 # lambda-proportional too, so one normalized master fill serves any
 # frequency via a coordinate scale plus one scalar multiply. The only true
 # frequency dependence left is eps_t = eps_r - j*sigma/(omega*eps0), whose
-# imaginary part drifts ~1/omega across a sweep — so Im(eps_t) is quantized
-# onto a geometric ladder (round to NEAREST rung, so the worst offset is
-# half a step) before keying the master cache. Measured sensitivity (dense
-# random points, three grounds): a relative Im perturbation delta moves the
-# surfaces by only ~(0.08-0.14)*delta of scale, so the 1% default step
-# (worst offset 0.5%) costs <= ~7e-4 — well under the grid's own ~2e-3
-# interpolation bar — while collapsing a band sweep from one fill per
-# frequency to one fill per ladder rung (a 3%-span sweep: 21 fills -> ~4;
-# a single-band 1% sweep: 1-2). Re(eps_t) does not move with frequency and
+# imaginary part drifts ~1/omega across a sweep — so Im(eps_t) is served from
+# a geometric LADDER of rungs (momwire#159 phase 2), and since momwire#902 a
+# query BETWEEN two rungs is the linear blend of the masters at both, filled
+# on ONE shared lattice, rather than the nearest rung alone:
+#
+#   step 1 % , nearest rung (before #902)   worst offset 0.5 %   error 2.0e-3
+#   step 10 %, blend of the bracketing pair  worst = midpoint     error 5.8e-4
+#   step 20 %, blend                         "                    error 2.2e-3
+#
+# (max over every lattice node, per surface relative to its own scale, soil
+# eps_r 20 / sigma 0.0303 at 14 MHz, r1 = 1 lambda — the #902 study.) The
+# blend's error is second order in the rung spacing where the snap's is first
+# order, so the 10 % ladder is 3.4x MORE accurate than the 1 % snap was and
+# needs a tenth of the rungs: a 2.5 % band (20 m) sits inside one rung pair
+# three times in four, and a sweep costs the pair's two fills at its first
+# point and nothing after — where the 1 % snap paid one fill per rung
+# crossing, five stalls of ~1.2 s spread through a 50-point sweep (that is
+# #902's symptom, inside EZNEC). Re(eps_t) does not move with frequency and
 # is ~8x more sensitive, so it is keyed exactly. Set the env override to 0
-# to disable the quantization (normalized reuse then still applies at
-# exactly-equal eps_t). Wide multi-octave sweeps still fill per rung — Im
-# genuinely changes several-fold there; that is physics, not caching.
-_SOMM_EPS_IM_BUCKET = float(os.environ.get("MOMWIRE_SOMM_EPS_IM_BUCKET") or "0.01")
+# to disable the ladder (exact fill per eps_t). Wide multi-octave sweeps
+# still fill per rung pair — Im genuinely changes several-fold there; that is
+# physics, not caching.
+#
+# The two masters of a pair share a lattice keyed at the pair's DEMANDING
+# rung (the larger |Im|, i.e. the larger |k1|: the near-interface layer 1/|k1|
+# and the lateral-wave beat 2 pi/|k1 - k2| both key the spacing DOWN as |k1|
+# grows), so the blend is elementwise on identical node sets and no
+# resampling error enters. A rung therefore has one master per pair it
+# belongs to, keyed (rung, lattice rung): a sweep that straddles a rung pays
+# four fills rather than three, once. That cost was preferred to resampling
+# the neighbour's master, which would put a second interpolation under the
+# blend.
+_SOMM_EPS_IM_BUCKET = float(os.environ.get("MOMWIRE_SOMM_EPS_IM_BUCKET") or "0.10")
+
+# The r1 bucket is taken with this much SLACK above the geometry's own r1/lambda
+# (momwire#902): a sweep moves r1/lambda upward with frequency, and a geometry
+# sitting just under a 1.25^n edge crossed it mid-band and refilled (Bydipole1
+# at 14.307 MHz, one of the five stalls). A grid tabulated to the next bucket
+# serves any smaller r1 with the same accuracy, so the only cost of the slack
+# is the occasional one-bucket-larger fill (measured +10 % at 1 -> 1.25 lambda),
+# and a sweep narrower than the slack never straddles an edge. Env override.
+_SOMM_R1_SWEEP_SLACK = float(os.environ.get("MOMWIRE_SOMM_R1_SWEEP_SLACK") or "0.05")
 
 # Reference scales the normalized masters are filled at (lambda_ref = 1).
 _K2_REF = 2.0 * np.pi
@@ -686,9 +714,23 @@ class SommerfeldGrid:
     """
 
     def __init__(
-        self, eps_t, k2, r1_max, rtol=1e-6, omega=None, mu=_MU0, cancel_flag=0
+        self,
+        eps_t,
+        k2,
+        r1_max,
+        rtol=1e-6,
+        omega=None,
+        mu=_MU0,
+        cancel_flag=0,
+        lattice_eps=None,
     ):
         self.eps_t = complex(eps_t)
+        # The eps the LATTICE is keyed to (spacings via |k1|); the surfaces are
+        # filled at `eps_t` regardless. A rung pair (momwire#902) fills both
+        # masters on the lattice of its more demanding rung so the blend is
+        # elementwise; a lattice keyed to a larger |k1| than the fill's own is
+        # always at least as fine, never coarser. None: the fill's own eps.
+        self.lattice_eps = self.eps_t if lattice_eps is None else complex(lattice_eps)
         self.k2 = float(k2)
         self.omega = k2 * _C_LIGHT if omega is None else float(omega)
         self.mu = float(mu)
@@ -697,7 +739,7 @@ class SommerfeldGrid:
         # larger than the far-pair cap (issue #157) that bounds fill cost.
         self.r1_max = min(max(float(r1_max), 0.35 * lam), _SOMM_R1_CAP_LAMBDA * lam)
 
-        k1 = self.k2 * np.sqrt(self.eps_t)
+        k1 = self.k2 * np.sqrt(self.lattice_eps)
         if k1.imag > 0:
             k1 = np.conj(k1)
         # Lateral-wave beat keying only matters while the interface wave
@@ -892,6 +934,7 @@ class SommerfeldGrid:
         factor = (float(omega) * float(mu)) / (self.omega * self.mu)
         g = object.__new__(SommerfeldGrid)
         g.eps_t = self.eps_t
+        g.lattice_eps = self.lattice_eps
         g.k2 = k2
         g.omega = float(omega)
         g.mu = float(mu)
@@ -910,6 +953,55 @@ class SommerfeldGrid:
                 "vals": reg["vals"] * factor,
             }
             for reg in self._regions
+        ]
+        return g
+
+    def blend(self, other, t, eps_t):
+        """(1 − t)·self + t·other on the SHARED lattice: the rung pair's
+        member for the exact `eps_t` between the two rungs (momwire#902).
+
+        Elementwise on the value tables, so the two grids must be the same
+        lattice — same regions, node counts and spacings — which is what
+        filling both members of a pair with `lattice_eps` set to the pair's
+        demanding rung guarantees. A mismatch is refused rather than
+        resampled: resampling would put a second interpolation under the
+        blend. The blend carries the exact eps_t it stands for, and the
+        lattice eps it was built on.
+        """
+        if len(self._regions) != len(other._regions):
+            raise ValueError("blend: the two grids are not one lattice")
+        for a, b in zip(self._regions, other._regions):
+            if (
+                a["n_r"] != b["n_r"]
+                or a["n_th"] != b["n_th"]
+                or a["r0"] != b["r0"]
+                or a["dr"] != b["dr"]
+                or a["th0"] != b["th0"]
+                or a["dth"] != b["dth"]
+            ):
+                raise ValueError("blend: the two grids are not one lattice")
+        t = float(t)
+        g = object.__new__(SommerfeldGrid)
+        g.eps_t = complex(eps_t)
+        g.lattice_eps = self.lattice_eps
+        g.k2 = self.k2
+        g.omega = self.omega
+        g.mu = self.mu
+        g.r1_max = self.r1_max
+        g.r_break = self.r_break
+        g.r_near = self.r_near
+        g._r0_fill = self._r0_fill
+        g._regions = [
+            {
+                "r0": a["r0"],
+                "dr": a["dr"],
+                "n_r": a["n_r"],
+                "th0": a["th0"],
+                "dth": a["dth"],
+                "n_th": a["n_th"],
+                "vals": (1.0 - t) * a["vals"] + t * b["vals"],
+            }
+            for a, b in zip(self._regions, other._regions)
         ]
         return g
 
@@ -1020,11 +1112,13 @@ def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid, cancel_flag=
 # (issue #159 phase 2):
 #
 #   _NORM_CACHE — the expensive artifacts: normalized masters filled at
-#     k2 = _K2_REF (lambda_ref = 1), keyed (eps_bucket, r1_wl_bucket).
-#     Frequency-independent: one fill serves a whole sweep.
-#   _GRID_CACHE — cheap physical-units views (`SommerfeldGrid.scaled_to`,
-#     a coordinate scale + one scalar multiply, ~sub-ms), keyed
-#     (eps_bucket, k2, r1_wl_bucket, omega, mu) so repeat solves at one
+#     k2 = _K2_REF (lambda_ref = 1), keyed (ladder rung, r1_wl_bucket,
+#     lattice rung). Frequency-independent: one rung PAIR serves a whole
+#     band sweep (momwire#902).
+#   _GRID_CACHE — cheap physical-units views (the pair's blend at the exact
+#     eps_t, then `SommerfeldGrid.scaled_to`: an elementwise blend, a
+#     coordinate scale and one scalar multiply, ~sub-ms), keyed
+#     (eps_t, k2, r1_wl_bucket, omega, mu) so repeat solves at one
 #     frequency return the identical object, as before.
 #
 # `r1_max` is bucketed UP in ~25% geometric steps (in wavelengths) before
@@ -1078,22 +1172,70 @@ def _somm_eps_bucket(eps_t: complex) -> complex:
     return complex(re, -(step**n))
 
 
+def _somm_eps_rungs(eps_t: complex):
+    """The ladder rungs bracketing Im(eps_t) and the blend weight: (lo, hi, t)
+    with Im(lo) ≤ Im(eps_t) ≤ Im(hi) in magnitude and
+    eps_t = (1 − t)·lo + t·hi in Im. On a rung, for a disabled ladder, or
+    for the nonstandard values `_somm_eps_bucket` passes through, lo == hi
+    == the exact value and t = 0: one master, no blend (momwire#902).
+    """
+    eps_t = complex(eps_t)
+    step = 1.0 + _SOMM_EPS_IM_BUCKET
+    re, im = eps_t.real, eps_t.imag
+    if step <= 1.0 or not (re > 0.0) or im >= 0.0:
+        return eps_t, eps_t, 0.0
+    x = math.log(-im, step)
+    n = math.floor(x)
+    lo_im, hi_im = step**n, step ** (n + 1)
+    # Float fuzz at an exact rung: read it as the rung, from either side.
+    if abs(-im - lo_im) <= 1e-12 * lo_im:
+        return complex(re, -lo_im), complex(re, -lo_im), 0.0
+    if abs(-im - hi_im) <= 1e-12 * hi_im:
+        return complex(re, -hi_im), complex(re, -hi_im), 0.0
+    t = (-im - lo_im) / (hi_im - lo_im)
+    return complex(re, -lo_im), complex(re, -hi_im), float(t)
+
+
+def _norm_master(rung, r1b_wl, lattice_eps, cancel_flag=0):
+    """The normalized master for one ladder rung on one lattice, cached in
+    `_NORM_CACHE` under (rung, r1 bucket, lattice rung). A cancelled fill
+    raises SolveAborted out of the constructor before the insert."""
+    nkey = ("above", rung, r1b_wl, lattice_eps)
+    master = _NORM_CACHE.get(nkey)
+    if master is None:
+        _evict_fifo(_NORM_CACHE, _NORM_CACHE_MAX)
+        master = SommerfeldGrid(
+            rung,
+            _K2_REF,
+            r1b_wl,  # lambda_ref = 1: wavelengths ARE physical units
+            omega=_K2_REF * _C_LIGHT,
+            mu=_MU0,
+            cancel_flag=cancel_flag,
+            lattice_eps=lattice_eps,
+        )
+        _NORM_CACHE[nkey] = master
+    return master
+
+
 def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
     """Cached `SommerfeldGrid` for (eps_t, k2, r1_max, omega, mu).
 
-    Two-level FIFO-bounded module cache: a frequency-independent
-    normalized master (filled once per (eps-bucket, r1-bucket)) plus a
-    cheap per-(k2, omega, mu) rescaled view — see the cache note above.
-    A cancelled fill raises SolveAborted out of the constructor before
-    either cache insert, so no partial grid is ever cached.
+    Two-level FIFO-bounded module cache: frequency-independent normalized
+    masters (filled once per (ladder rung, r1-bucket, lattice rung)) and a
+    cheap per-(eps_t, k2, omega, mu) view — the rung pair's blend at the
+    exact eps_t, rescaled — see the cache note above. A cancelled fill
+    raises SolveAborted out of the constructor before either cache insert,
+    so no partial grid is ever cached.
     """
     # Cap (in wavelengths, #157) before bucketing so every geometry beyond
     # the cap keys to the same capped grid instead of minting a distinct
-    # oversized cache entry.
+    # oversized cache entry; the sweep slack (#902) goes on before the cap.
     k2 = float(k2)
     lam = 2.0 * np.pi / k2
-    r1b_wl = _somm_r1_bucket_wl(min(float(r1_max) / lam, _SOMM_R1_CAP_LAMBDA))
-    eps_b = _somm_eps_bucket(complex(eps_t))
+    r1_wl = float(r1_max) / lam * (1.0 + _SOMM_R1_SWEEP_SLACK)
+    r1b_wl = _somm_r1_bucket_wl(min(r1_wl, _SOMM_R1_CAP_LAMBDA))
+    eps_t = complex(eps_t)
+    lo, hi, t = _somm_eps_rungs(eps_t)
     # The leading regime discriminator (momwire#553 U2): the below/below
     # family tabulates a DIFFERENT surface family, over a different
     # divide-out, on a lattice keyed to a different wavelength — and it
@@ -1101,23 +1243,16 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
     # regimes collide in this dict and whichever asked first would serve
     # both. `_sommerfeld_below.get_grid_below` writes ("below", ...) keys
     # into this same cache rather than forking it, so there is one FIFO
-    # bound and one eviction rule.
-    key = ("above", eps_b, k2, r1b_wl, float(omega), float(mu))
+    # bound and one eviction rule. The view is keyed on the EXACT eps_t
+    # when it is a blend and on the rung when it is one (momwire#902).
+    key = ("above", lo if lo == hi else eps_t, k2, r1b_wl, float(omega), float(mu))
     grid = _GRID_CACHE.get(key)
     if grid is None:
-        nkey = ("above", eps_b, r1b_wl)
-        master = _NORM_CACHE.get(nkey)
-        if master is None:
-            _evict_fifo(_NORM_CACHE, _NORM_CACHE_MAX)
-            master = SommerfeldGrid(
-                eps_b,
-                _K2_REF,
-                r1b_wl,  # lambda_ref = 1: wavelengths ARE physical units
-                omega=_K2_REF * _C_LIGHT,
-                mu=_MU0,
-                cancel_flag=cancel_flag,
-            )
-            _NORM_CACHE[nkey] = master
+        # The pair's lattice is its demanding rung's (the larger |Im|).
+        master = _norm_master(lo, r1b_wl, hi, cancel_flag)
+        if lo != hi:
+            other = _norm_master(hi, r1b_wl, hi, cancel_flag)
+            master = master.blend(other, t, eps_t)
         _evict_fifo(_GRID_CACHE, _GRID_CACHE_MAX)
         grid = master.scaled_to(k2, omega, mu)
         _GRID_CACHE[key] = grid
