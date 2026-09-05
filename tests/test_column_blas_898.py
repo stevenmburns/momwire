@@ -1,10 +1,11 @@
-"""momwire#898 — the column fill runs with the BLAS pool pinned to ONE
-thread, and releases it afterwards.
+"""momwire#898 — the column fill runs with the BLAS pool held to the
+PHYSICAL core count, never raised, and released afterwards.
 
 The defect was a timing one (the route ran 2× SLOWER at the default eight
 threads than at one, because OpenBLAS threads its small per-column gemm
-and then spins, stealing the next column's numpy and scipy work), but the
-gate here is deterministic: it reads the BLAS thread count from INSIDE the
+across the logical count and then spins on the hyperthread siblings of
+the core doing the next column's numpy and scipy work; 1, 2 and 4 threads
+all read the same on a 4c/8t box), but the gate here is deterministic: it reads the BLAS thread count from INSIDE the
 fill, through the same `threadpoolctl` the pin uses, and again after. A
 timing gate would be a statement about the box; this one is a statement
 about the code. The timing itself is probe4 (`scratch/893-study`), run on
@@ -34,13 +35,15 @@ def _blas_threads():
     ]
 
 
-def test_g898_1_column_fill_pins_blas_to_one_thread_and_releases(monkeypatch):
-    """Inside the column loop every BLAS reports one thread; after the
-    call every BLAS is back to what it was. Read through a spy on
-    `six_columns`, so the observation is made exactly where the gemm runs."""
+def test_g898_1_column_fill_holds_blas_to_physical_cores_and_releases(monkeypatch):
+    """Inside the column loop every BLAS reports at most the physical core
+    count and no more than it had; after the call every BLAS is back to
+    what it was. Read through a spy on `six_columns`, so the observation
+    is made exactly where the gemm runs."""
     before = _blas_threads()
     if not before:
         pytest.skip("no BLAS loaded that threadpoolctl can see")
+    want = min(ni._physical_cpu_count(), *before)
     seen, real = [], ni.six_columns
 
     def spy(*args, **kw):
@@ -53,8 +56,26 @@ def test_g898_1_column_fill_pins_blas_to_one_thread_and_releases(monkeypatch):
     z = np.array([[0.2], [1.0], [4.0]])
     ni.designed_tables(SOIL_A, K7, rho, z, -0.2)
     assert seen, "the column route did not serve"
-    assert all(all(n == 1 for n in counts) for counts in seen), seen
+    assert all(all(n == want for n in counts) for counts in seen), (seen, want)
     assert _blas_threads() == before
+
+
+def test_g898_1b_the_limit_never_raises_a_lower_pin(monkeypatch):
+    """A caller who already pinned BELOW physical (the served app, a bisect
+    at OPENBLAS_NUM_THREADS=1) keeps that inside the fill."""
+    if not _blas_threads():
+        pytest.skip("no BLAS loaded that threadpoolctl can see")
+    seen, real = [], ni.six_columns
+
+    def spy(*args, **kw):
+        seen.append(_blas_threads())
+        return real(*args, **kw)
+
+    monkeypatch.setattr(ni, "six_columns", spy)
+    monkeypatch.setattr(ni, "_ROUTE", "column")
+    with ThreadpoolController().limit(limits=1, user_api="blas"):
+        ni.designed_tables(SOIL_A, K7, 0.3, 0.2, -0.2)
+    assert seen and all(all(n == 1 for n in c) for c in seen), seen
 
 
 def test_g898_2_point_route_does_not_touch_the_pool(monkeypatch):
@@ -63,7 +84,7 @@ def test_g898_2_point_route_does_not_touch_the_pool(monkeypatch):
     for a bisect sees the pool untouched."""
     monkeypatch.setattr(ni, "_ROUTE", "point")
     calls = []
-    monkeypatch.setattr(ni, "_blas_single_thread", lambda: calls.append(1))
+    monkeypatch.setattr(ni, "_blas_physical_cores", lambda: calls.append(1))
     ni.designed_tables(SOIL_A, K7, 0.3, 0.2, -0.2)
     assert calls == []
 
