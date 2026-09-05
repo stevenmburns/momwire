@@ -829,6 +829,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (chunk=1 costs ~+75% on the worst shapes).
     """
 
+    # momwire#927. Class-level so they exist before any solve and on a deck
+    # that never reaches the surface-height check at all (free space, or a
+    # deck with nothing near the interface). `_surface_advisory` is the
+    # (h_min, a_at, count) summary the advisory is composed from;
+    # `_surface_advisory_emitted` keeps a cache-hit re-emission to once per
+    # solver, which is once per solve.
+    _surface_advisory = None
+    _surface_advisory_emitted = False
+
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
@@ -1620,7 +1629,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     end_status[w_idx] = "ground"
         if _low_stand_off:
             h_min, a_at = min(_low_stand_off)
-            _surface_height.warn_surface_height(h_min, a_at, len(_low_stand_off))
+            # Recorded as well as emitted (momwire#927). This runs only past
+            # `_build_basis_polynomials`'s `_BASIS_POLY_CACHE` hit, and that
+            # cache deliberately outlives the solver instance — so without a
+            # summary to re-emit from, a second solve of the same deck says
+            # nothing at all.
+            self._surface_advisory = (h_min, a_at, len(_low_stand_off))
+            _surface_height.warn_surface_height(*self._surface_advisory)
         return start_status, end_status
 
     # ------------------------------------------------------------------
@@ -2098,8 +2113,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # grounded junctions, #151); geometry alone no longer keys them.
             self.ground_z,
         )
-        cached_basis = _BASIS_POLY_CACHE.get(basis_key)
-        if cached_basis is not None:
+        cached_entry = _BASIS_POLY_CACHE.get(basis_key)
+        if cached_entry is not None:
+            cached_basis, cached_advisory = cached_entry
+            # momwire#927. The advisory is composed in `_wire_endpoint_status`,
+            # which this return skips — so a repeat solve of one deck used to
+            # be silent, and the advisory came back only when cache pressure
+            # evicted the entry. Re-emit it here from the summary stored with
+            # the basis.
+            #
+            # Once per SOLVER, not once per call: `_build_basis_polynomials`
+            # runs several times in a solve, and the engine wrapper builds one
+            # solver per `impedance()` — so this is exactly once per solve,
+            # which is what the cold path does.
+            if cached_advisory is not None and not self._surface_advisory_emitted:
+                self._surface_advisory_emitted = True
+                _surface_height.warn_surface_height(*cached_advisory)
             if cached_geom is geom:
                 self._cached_basis_polynomials = cached_basis
             return cached_basis
@@ -2251,7 +2280,19 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if cached_geom is geom:
             self._cached_basis_polynomials = result
         _evict_fifo(_BASIS_POLY_CACHE, _BASIS_POLY_CACHE_MAX)
-        _BASIS_POLY_CACHE[basis_key] = result
+        # The cache VALUE gains the advisory summary; the RETURN does not.
+        # Callers unpack this 5-tuple, and the cache is read and written only
+        # here, so the summary rides along without touching that contract.
+        #
+        # The flag is set only when there was something to emit. Setting it
+        # unconditionally would read as "this solver has emitted" on a solver
+        # that never did, and a later cache hit carrying a real summary would
+        # then be suppressed. Leaving it unset when the cold path DID emit is
+        # the opposite error and gives two advisories in one solve, so the
+        # guard is what makes "once per solve" true on both paths.
+        if self._surface_advisory is not None:
+            self._surface_advisory_emitted = True
+        _BASIS_POLY_CACHE[basis_key] = (result, self._surface_advisory)
         return result
 
     # ------------------------------------------------------------------
