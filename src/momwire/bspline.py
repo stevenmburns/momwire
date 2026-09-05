@@ -62,6 +62,7 @@ from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
     _ek_axis_groups,
+    _ladder_for_block,
     _normalize_ladder,
     _refuse_complex_k,
     _seg_seg_full_moments_offedge,
@@ -106,11 +107,36 @@ BURIED_N_QP_PAIR = 32
 # distance is >= 2 segment lengths takes order 8, >= 16 lengths order 4, the
 # rest the base order. Measured on the 654-segment buried screen: every
 # ladder tried reproduces uniform-32 Z to the printed digit while ~87 % of
-# the pairs run at order 4. Free space keeps NO ladder for now — not because
-# the thresholds differ there (the study says they do not) but because that
-# fill's pinned constants have not been re-run under one; flipping it is its
-# own measured change.
-DEFAULT_PAIR_ORDER_LADDER = ()
+# the pairs run at order 4.
+#
+# Free space (momwire#907) has ONE tier, not two: its base is already 8, so
+# the order-8 rung IS the base and only the order-4 rung is left. Three
+# consequences worth knowing before touching this:
+#
+#   * That sole tier is the phase-limited one, so `_ladder_for_block` drops
+#     it WHOLE — free space has no order-8 rung to fall back to — once a
+#     block's longest segment passes kL = 0.5 (L > lambda/12.57). The guard
+#     is per block and the free-space fill's block is the entire deck, so one
+#     coarse segment disables the ladder deck-wide: a 400-segment loop plus a
+#     single 0.3-lambda strut goes from 146,284 pairs served at order 4 to
+#     zero, and serves all 146,284 again once that strut is meshed at
+#     lambda/20. Conservative (it falls back to the shipped arithmetic, never
+#     to a wrong one) but abrupt; a per-PAIR guard would not have the cliff.
+#   * A deck coarse enough to trip the guard has too few segments for any
+#     pair to reach ratio 16 anyway, which is why the ceiling costs nothing
+#     on the decks measured: real meshes sit at kL 0.016-0.075.
+#   * The PEC-image fills (`_build_J_image_blocks`,
+#     `_accumulate_Z_image_chunked`) are deliberately NOT wired for a ladder.
+#     #906's study binned direct pair geometry, not image geometry, so a
+#     PEC-ground deck gets tiered direct blocks and untiered image ones —
+#     uneven, but both arms stay at the accuracy they already had.
+#
+# Movement from turning it on, free space, order 8: 3e-12 to 2e-11 absolute
+# on Z (relative 3e-14 to 1e-13), i.e. under the base order's own
+# discretization error by eleven orders of magnitude. On the yagi the tiered
+# answer is CLOSER to flat-32 than the untiered one (1.4e-12 against
+# 4.4e-12), so this is noise, not a bias.
+DEFAULT_PAIR_ORDER_LADDER = ((16.0, 4),)
 BURIED_PAIR_ORDER_LADDER = ((2.0, 8), (16.0, 4))
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
@@ -698,12 +724,19 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         whose centre distance over the longer segment meets a tier's ratio
         takes that tier's order; the rest pay `n_qp_pair`. Resolved from the
         deck like `n_qp_pair` when None: buried decks get
-        `BURIED_PAIR_ORDER_LADDER` = ((2, 8), (16, 4)), free-space decks get
-        no ladder (see the constants for why). Tiers at or above the base
-        order are dropped, so an explicit `n_qp_pair=8` under the buried
-        default leaves ((16, 4),). The per-block phase guard in
-        `_seg_seg_full_moments_offedge` drops the order-4 tier when the
-        longest segment passes kL = 0.5.
+        `BURIED_PAIR_ORDER_LADDER` = ((2, 8), (16, 4)), free-space decks
+        `DEFAULT_PAIR_ORDER_LADDER` = ((16, 4),) since momwire#907 — one tier
+        there, because the base order 8 already IS the order-8 rung. Tiers at
+        or above the base order are dropped, so an explicit `n_qp_pair=8`
+        under the buried default also leaves ((16, 4),). The per-block phase
+        guard in `_seg_seg_full_moments_offedge` drops the order-4 tier when
+        the longest segment passes kL = 0.5 — in free space that is the only
+        tier, so the guard disables the ladder for that block entirely.
+
+        Not every fill honours it: the PEC-image blocks are untiered on
+        purpose, and the extended kernel refuses a ladder outright (see
+        `_fill_ladder`, which is what a fill should ask rather than reading
+        this property directly).
 
         What it buys: on the 654-segment radial screen the two buried pair
         blocks went from 6.3 s to well under a second at the same Z, because
@@ -1823,6 +1856,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         refused — a ladder written for the buried 32 is still a valid wish
         under an explicit 8, just a shorter one. What survives is validated
         by the kernel module's `_normalize_ladder`.
+
+        This is the deck's WISH, not what a fill should hand the kernel:
+        `_fill_ladder` resolves the phase guard once against the whole mesh
+        and honours the extended kernel's refusal (momwire#907).
         """
         if self._pair_order_ladder_arg is not None:
             ladder = self._pair_order_ladder_arg
@@ -1832,6 +1869,41 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ladder = DEFAULT_PAIR_ORDER_LADDER
         base = self.n_qp_pair
         return _normalize_ladder(tuple((r, n) for r, n in ladder if n < base), base)
+
+    def _fill_ladder(self, k, seg_l, seg_r, ek):
+        """The pair-order ladder for a WHOLE fill, resolved once (momwire#907).
+
+        `_ladder_for_block` keys its phase guard on the block's LONGEST
+        segment, so resolving per window lets two windows covering the SAME
+        pair disagree. That is not cosmetic: the chunked fills add every pair
+        in a sweep and then subtract same-edge blocks back as
+        `corr = (A_st + A_reg) - J_edge`, and the cancellation is exact only
+        if both arms ran the same quadrature. A sweep window spanning one
+        coarse segment drops the order-4 tier while the correction window for
+        a finely meshed edge keeps it — measured on a 61-segment buried deck
+        as ((2, 8),) against ((2, 8), (16, 4)), over 33,738 far pairs on the
+        free-space twin.
+
+        Resolving against the whole mesh removes the disagreement by
+        construction rather than by care: no sub-block is longer than the
+        mesh, so a tier the mesh keeps is a tier every window keeps, and the
+        kernel's own per-block call is then idempotent on the result.
+
+        Empty under the extended kernel, whose coaxial factor the ladder has
+        not been measured against — the kernel refuses the combination
+        outright, so this is what keeps an EK deck from raising once free
+        space has a non-empty default.
+        """
+        if ek is not None:
+            return ()
+        return _ladder_for_block(
+            _normalize_ladder(self.pair_order_ladder, self.n_qp_pair),
+            k,
+            seg_l,
+            seg_r,
+            seg_l,
+            seg_r,
+        )
 
     @property
     def _accel_serves_n_qp_pair(self):
@@ -3218,7 +3290,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=complex)
         else:
             J = _seg_seg_full_moments_offedge(
-                seg_l, seg_r, seg_l, seg_r, a_row, k, d, self.n_qp_pair, ek=ek
+                seg_l,
+                seg_r,
+                seg_l,
+                seg_r,
+                a_row,
+                k,
+                d,
+                self.n_qp_pair,
+                ek=ek,
+                ladder=self._fill_ladder(k, seg_l, seg_r, ek),
             )  # (d+1, d+1, N, N) complex
 
         # Overwrite each same-edge block with analytic static + reg
@@ -3505,6 +3586,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             n_segs
         )
         chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
+        # momwire#907: ONE ladder for the whole fill. The same-edge correction
+        # below subtracts what this sweep added, so the two must agree on
+        # every pair's order; see `_fill_ladder` for why per-window resolution
+        # does not.
+        ladder = self._fill_ladder(k, seg_l, seg_r, ek)
         for i0 in range(0, n_segs, chunk):
             self._checkpoint()  # per observer chunk of the fill+assemble
             i1 = min(i0 + chunk, n_segs)
@@ -3518,6 +3604,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 d,
                 self.n_qp_pair,
                 ek=_ek_slice(ek, rows=slice(i0, i1)),
+                ladder=ladder,
             )
             _accumulate(J_chunk, i0, i1, 0, n_segs, _bases_touching(i0, i1), all_n)
             del J_chunk  # drop this window before the next one is built (#338)
@@ -3568,6 +3655,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 d,
                 self.n_qp_pair,
                 ek=_ek_slice(ek, rows=sl, cols=sl),
+                ladder=ladder,  # the sweep's, not this block's (#907)
             )
             corr = (A_st + A_reg) - J_edge
             del J_edge  # same lifetime discipline as the sweep above (#338)

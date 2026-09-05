@@ -8,6 +8,12 @@ CENTRE DISTANCE OVER THE LONGER SEGMENT and found order 8 at machine precision
 beyond two lengths and order 4 at 3e-14 beyond sixteen, for real and complex
 k alike; four ladders reproduced the uniform-32 Z to the printed digit.
 
+#906 turned the ladder on for buried decks only and #907 extended it to free
+space, where the base order is 8 and the sole tier is therefore ((16, 4),).
+The wiring is half the change: #906 passed `ladder=` from the buried subset
+path alone, so the free-space default was a dead letter until #907 plumbed
+the dense and chunked fills too.
+
 What these gates pin, in order:
 
 - G-906-1  the C++ tiered kernel matches its numpy twin (real k, complex k,
@@ -26,7 +32,11 @@ What these gates pin, in order:
            the base order are dropped.
 - G-906-7  the buried hub's Z is unmoved by the default ladder, and the
            tiered accelerator is what served it.
-- G-906-8  a bent free-space deck never reaches a tiered entry.
+- G-906-8  a bent free-space deck DOES reach a tiered entry, on both the
+           dense and the chunked fill (momwire#907 inverted this gate); 8b
+           the extended kernel still refuses a ladder and is bit-identical;
+           8c one fill resolves ONE ladder, so the sweep and the same-edge
+           correction it subtracts cannot land on different orders.
 """
 
 import sys
@@ -240,13 +250,19 @@ def test_g906_6_resolution_follows_the_deck():
         n_per_edge_per_wire=[[8, 8]],
         feeds=[(0, 0.5, 1 + 0j)],
     )
-    assert free.pair_order_ladder == DEFAULT_PAIR_ORDER_LADDER == ()
-    assert BSplineSolver(
-        wires=[np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]])],
-        n_per_edge_per_wire=[[8, 8]],
-        feeds=[(0, 0.5, 1 + 0j)],
-        pair_order_ladder=((16, 4),),
-    ).pair_order_ladder == ((16.0, 4),)
+    # momwire#907: free space has ONE tier, because its base order 8 already
+    # is the order-8 rung — the same tuple an explicit `n_qp_pair=8` leaves of
+    # the buried ladder, just arrived at from the other side.
+    assert free.pair_order_ladder == DEFAULT_PAIR_ORDER_LADDER == ((16.0, 4),)
+    assert (
+        BSplineSolver(
+            wires=[np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]])],
+            n_per_edge_per_wire=[[8, 8]],
+            feeds=[(0, 0.5, 1 + 0j)],
+            pair_order_ladder=(),
+        ).pair_order_ladder
+        == ()
+    )
 
 
 @pytest.mark.filterwarnings("ignore:crossing node")
@@ -260,15 +276,114 @@ def test_g906_7_the_buried_hub_z_is_unmoved_by_the_default_ladder(spy, record_pr
     assert abs(z_ladder - z_flat) < 1e-6, f"{z_ladder} vs {z_flat}"
 
 
-def test_g906_8_free_space_never_reaches_a_tiered_entry(spy):
-    s = BSplineSolver(
-        wires=[np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]])],
-        n_per_edge_per_wire=[[8, 8]],
-        feeds=[(0, 0.5, 1 + 0j)],
+def _free_bent_deck(n_per_edge=100, side=0.25, **over):
+    """A bent free-space deck meshed finely enough to have far pairs AND to
+    sit under the kL = 0.5 guard — the shape #907 turned the ladder on for."""
+    w = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [side, 0.0, 0.0],
+            [side, side, 0.0],
+            [0.0, side, 0.0],
+            [0.0, 0.0, 0.0],
+        ]
     )
+    d = dict(
+        wires=[w],
+        n_per_edge_per_wire=[[n_per_edge] * 4],
+        feeds=[(0, 0.5, 1 + 0j)],
+        wavelength=1.0,
+        wire_radius=1e-4,
+    )
+    d.update(over)
+    return d
+
+
+@pytest.mark.parametrize("chunked", [False, True], ids=["dense", "chunked"])
+def test_g906_8_free_space_now_reaches_a_tiered_entry(spy, chunked):
+    """momwire#907 inverted this gate. It used to pin that free space never
+    tiered; it now pins that it DOES, on both fills.
+
+    The inversion is the point. #906 wired `ladder=` into the buried subset
+    path only, so for a while flipping `DEFAULT_PAIR_ORDER_LADDER` changed
+    nothing at all while this gate — in its old form — went on passing and
+    said so. A gate that cannot tell "off" from "not plumbed" is the failure
+    this one exists to prevent, so it asserts the tiered entry is REACHED
+    rather than that some Z is unchanged.
+    """
+    deck = _free_bent_deck(**({"swept_mem_mb": 1} if chunked else {}))
+    s = BSplineSolver(**deck)
+    assert s.pair_order_ladder == ((16.0, 4),)
     s.compute_impedance()
-    assert spy.counts[PLAIN] >= 1, spy.counts
+    assert spy.counts[TIERED] >= 1, spy.counts
+    assert spy.counts[TIERED_CPLX] == 0, spy.counts
+
+
+def test_g906_8b_the_extended_kernel_still_refuses_a_ladder(spy):
+    """The kernel raises on ladder+EK, and `_fill_ladder` is what keeps a
+    free-space EK deck from ever meeting that refusal now that the default is
+    no longer empty.
+
+    The kernel's own comment justified the refusal with "the free-space default
+    ladder is empty", which is exactly the assumption #907 flipped, so without
+    the guard every extended-kernel deck raises.
+    """
+    deck = _free_bent_deck(n_per_edge=25)
+    s = BSplineSolver(**deck, extended_kernel=True)
+    geom = s._build_geometry()
+    ek = s._ek_spec(geom)
+    assert ek is not None
+    # The deck still WISHES for the ladder ...
+    assert s.pair_order_ladder == ((16.0, 4),)
+    # ... and the fill declines to ask for it, so the refusal is never reached.
+    assert s._fill_ladder(s.k, geom["seg_l"], geom["seg_r"], ek) == ()
+    z_ek, _ = s.compute_impedance()
+    # EK takes its own accelerator entry, so the plain counters stay at zero
+    # here; the tiered ones are the check that matters.
     assert spy.counts[TIERED] == spy.counts[TIERED_CPLX] == 0, spy.counts
+    z_ref, _ = BSplineSolver(
+        **deck, extended_kernel=True, pair_order_ladder=()
+    ).compute_impedance()
+    assert z_ek == z_ref, f"{z_ek!r} vs {z_ref!r}"
+
+
+def test_g906_8c_the_whole_fill_agrees_on_one_ladder(spy):
+    """The chunked fill adds every pair in a sweep and subtracts same-edge
+    blocks back, so both arms must have run the same quadrature.
+
+    `_ladder_for_block` keys the guard on a block's LONGEST segment, so a
+    per-window resolution lets the sweep (which spans the whole mesh) drop the
+    order-4 tier while a correction window for one fine edge keeps it. This
+    deck is built to straddle exactly that: a finely meshed radiator whose own
+    edge is far under the ceiling, plus one 0.3-lambda segment that puts the
+    mesh far over it. `_fill_ladder` resolves once against the whole mesh, so
+    every window here must see the SAME empty ladder.
+    """
+    fine = np.array([[0.0, -0.25, 0.0], [0.0, 0.25, 0.0]])
+    coarse = np.array([[0.35, 0.0, 0.0], [0.35, 0.3, 0.0]])
+    deck = dict(
+        wires=[fine, coarse],
+        n_per_edge_per_wire=[[200], [1]],
+        feeds=[(0, 0.25, 1 + 0j)],
+        wavelength=1.0,
+        wire_radius=1e-4,
+        swept_mem_mb=1,
+    )
+    s = BSplineSolver(**deck)
+    assert s.pair_order_ladder == ((16.0, 4),)
+    k = s.k
+    geom = s._build_geometry()
+    seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+    # the mesh trips the guard, so the whole fill must run untiered ...
+    assert s._fill_ladder(k, seg_l, seg_r, None) == ()
+    # ... even though the fine wire's own edge, taken alone, would not.
+    assert _ladder_for_block(
+        ((16.0, 4),), k, seg_l[:200], seg_r[:200], seg_l[:200], seg_r[:200]
+    ) == ((16.0, 4),)
+    z, _ = BSplineSolver(**deck).compute_impedance()
+    assert spy.counts[TIERED] == 0, spy.counts
+    z_flat, _ = BSplineSolver(**deck, pair_order_ladder=()).compute_impedance()
+    assert z == z_flat, f"{z!r} vs {z_flat!r}"
 
 
 def test_g906_9_the_selector_is_the_one_the_study_binned_by():
